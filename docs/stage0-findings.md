@@ -36,13 +36,13 @@ gaps below are reproduced on upstream.
 ## Results
 
 Instruction counts are core 0 + core 1; the instruction rate is for both cores together, as esp32sim
-reports it. Every run is deterministic: three runs of `tools/cryptobench` executed the same number of
-instructions to the instruction.
+reports it. Every run is deterministic: six runs of each `tools/cryptobench` build executed the same
+number of instructions to the instruction.
 
 | Run | esp32sim | Emulated | Wall | Instructions | Minsn/s | Outcome |
 |---|---|---|---|---|---|---|
-| `tools/cryptobench`, accelerators on | upstream | 60 s | 6.8–8.0 s | 701 273 795 + 6 232 262 | 89–104 | Every check passes; figures under "Speed" |
-| `tools/cryptobench`, accelerators off | upstream | 60 s | 28.0–31.0 s | 5 805 517 830 + 6 616 878 | 188–208 | Every check passes, and every result matches the accelerated build |
+| `tools/cryptobench`, accelerators on | upstream | 60 s | 7.0–9.5 s | 706 833 177 + 6 232 361 | 75–102 | Every check passes; figures under "Speed" |
+| `tools/cryptobench`, accelerators off | upstream | 60 s | 31.3–34.1 s | 6 176 704 088 + 6 645 135 | 181–198 | Every check passes, and every result matches the accelerated build |
 | `hello_world` with `CONFIG_SPIRAM=y`, `--psram-mb 4` | upstream | 3 s | 0.2 s | 9 544 727 + 5 041 174 | 86 | PSRAM found, tested and added to the heap (below) |
 | Release image, empty NVS, no card | with fix | 60 s | 1.6 s | 70 037 356 + 9 019 168 | 50 | Boots to its diagnostic runtime and stays up |
 | Release image, NVS naming a Bluetooth peer | with fix | 90 s | 76.0 s | 6 935 523 763 + 523 030 753 | 98 | Panics in the Bluetooth controller: 488 panics and resets in 90 s |
@@ -78,30 +78,35 @@ cache timing, and its accelerator models take whatever time they take.
 **CPU-bound code runs at 0.3 to 1.7 times real time; idle code runs far ahead of it.** Each
 benchmark phase lasts at least 100 ms of emulated time with the accelerators on, and was timed by the
 guest in emulated time and by the host in wall time from the console lines that open and close it
-(`tools/benchtime.py`). Three runs of each build; the ratio is the median, with the range in
-brackets. The machine was shared, which is what the occasional low outlier in a range is.
+(`tools/benchtime.py`). A phase's result is hashed after its clock stops and after its end line is
+out, so the hash is in neither time. Six runs of each build; the ratio is the median, with the range
+in brackets. Emulated times per operation are identical in every run. The wall times are not: the
+host's load average was 4.5 to 6.3 throughout, from other work, and the calibration loop, the same
+code in both builds, shows how much that moves a run (1.16 to 1.31 with the accelerators, 0.73 to
+1.32 without).
 
 | Phase | Accelerators on, per op | Emulated ÷ wall | Software, per op | Emulated ÷ wall |
 |---|---|---|---|---|
-| The calibration loop | 500.2 ms | 1.32 (0.67–1.32) | 500.2 ms | 1.32 (1.29–1.34) |
-| SHA-256, 1 KiB | 102 µs | 0.64 (0.57–0.66) | 522 µs | 1.64 (1.49–1.65) |
-| SHA-256, 16 KiB | 1.18 ms | 0.64 (0.61–0.65) | 7.84 ms | 1.49 (1.43–1.66) |
-| SHA-256, 64 KiB | 4.64 ms | 0.64 (0.59–0.65) | 31.3 ms | 1.56 (1.52–1.65) |
-| AES-128-CBC, 1 KiB | 81 µs | 0.55 (0.44–0.55) | 452 µs | 1.34 (1.30–1.38) |
-| AES-128-CBC, 16 KiB | 1.23 ms | 0.55 (0.51–0.56) | 7.23 ms | 1.37 (1.33–1.38) |
-| AES-128-CBC, 64 KiB | 5.04 ms | 0.56 (0.41–0.56) | 29.1 ms | 1.38 (1.35–1.40) |
-| P-256 key generation | 100.2 ms | 0.74 (0.61–0.74) | 98.2 ms | 0.97 (0.96–0.98) |
-| P-256 ECDH | 100.4 ms | 0.64 (0.63–0.76) | 98.2 ms | 0.99 (0.98–0.99) |
-| P-256 ECDSA sign | 110.0 ms | 0.76 (0.69–0.76) | 107.7 ms | 1.01 (0.99–1.01) |
-| P-256 ECDSA verify | 219.3 ms | 0.75 (0.68–0.77) | 215.1 ms | 1.00 (0.94–1.02) |
-| RSA-2048-size `x^65537 mod n`, a new modulus each time | 7.31 ms | 0.60 (0.58–0.60) | 61.5 ms | 1.28 (1.16–1.31) |
-| The same, one modulus reused | 0.29 ms | 0.36 (0.36–0.37) | 56.3 ms | 1.32 (1.15–1.34) |
-| RSA-2048-size, full 2048-bit exponent without CRT | 34.8 ms | 0.33 (0.33–0.34) | 2320 ms | 1.30 (1.27–1.32) |
+| The calibration loop | 500.2 ms | 1.29 (1.16–1.31) | 500.2 ms | 1.21 (0.73–1.32) |
+| SHA-256, 1 KiB | 102 µs | 0.63 (0.59–0.65) | 522 µs | 1.62 (1.46–1.64) |
+| SHA-256, 16 KiB | 1.18 ms | 0.63 (0.54–0.65) | 7.84 ms | 1.61 (1.41–1.65) |
+| SHA-256, 64 KiB | 4.64 ms | 0.63 (0.45–0.65) | 31.3 ms | 1.62 (1.40–1.65) |
+| AES-128-CBC, 1 KiB | 81 µs | 0.55 (0.53–0.55) | 452 µs | 1.33 (1.03–1.37) |
+| AES-128-CBC, 16 KiB | 1.22 ms | 0.54 (0.44–0.55) | 7.22 ms | 1.34 (1.05–1.35) |
+| AES-128-CBC, 64 KiB | 4.85 ms | 0.54 (0.52–0.55) | 28.9 ms | 1.32 (1.16–1.39) |
+| P-256 key generation | 100.2 ms | 0.73 (0.44–0.75) | 98.2 ms | 0.87 (0.68–0.98) |
+| P-256 ECDH | 100.4 ms | 0.74 (0.57–0.75) | 98.2 ms | 0.95 (0.77–0.98) |
+| P-256 ECDSA sign | 109.9 ms | 0.75 (0.73–0.77) | 107.5 ms | 0.97 (0.76–1.01) |
+| P-256 ECDSA verify | 219.2 ms | 0.72 (0.47–0.76) | 215.7 ms | 0.95 (0.85–1.00) |
+| RSA-2048-size `x^65537 mod n`, R² mod n recomputed each time, as for a new modulus | 7.31 ms | 0.59 (0.53–0.60) | 61.5 ms | 1.27 (1.16–1.31) |
+| The same, R² mod n kept from the first call | 0.29 ms | 0.37 (0.20–0.37) | 56.3 ms | 1.23 (1.16–1.28) |
+| RSA-2048-size, full 2048-bit exponent without CRT | 34.8 ms | 0.33 (0.19–0.34) | 2320 ms | 1.26 (0.88–1.32) |
 
 What that means for testing:
 
-- A test that keeps the CPU busy runs between a third of real time and nearly twice it. It is slower
-  where the firmware leans on an accelerator model, whose phases all sit between 0.33 and 0.76.
+- A test that keeps the CPU busy runs between a third of real time and 1.7 times it. It is slower
+  where the firmware leans on an accelerator model, whose phases all have medians between 0.33 and
+  0.75.
 - An image that mostly waits runs much faster: the release image idling did 60 s of emulated time
   in 1.6 s, because the emulator skips ahead while both cores wait for an interrupt.
 - An image in deep sleep runs faster still: the desk image did 2400 s in 10.9 s.
@@ -114,15 +119,19 @@ against NIST SP 800-38A F.2.1. ECDH is computed from both sides, ECDSA verify mu
 signature and reject a changed digest, and `x^65537 mod n` must match square-and-multiply; those are
 consistency checks through the same code. The independent check is the comparison between builds:
 inputs come from a fixed seed, every phase's result is hashed in software (FNV-1a), and the build with
-the accelerators and the build without print the same hash for every phase.
+the accelerators and the build without print the same hash for every phase, in each of the six pairs
+of runs (`tools/benchtime.py compare`). The exception is ECDSA verify, whose result is the return code
+the call check already tests.
 
 **Where the accelerators are used.** A trace of `esp_mpi_*` calls in the accelerated build shows the
 MPI multiplier in every P-256 phase: about 3 150 calls to `esp_mpi_mul_mpi_hw_op` per key generation,
 ECDH or signature, and about 6 300 per verification, each wrapped in enabling and disabling the
 peripheral. P-256 therefore uses the accelerator but costs the same with it as without it in this
-model, and its emulated ÷ wall ratio (0.64–0.76) has the same signature as the other accelerated
-phases. RSA uses the modular-exponentiation hardware, which the model makes eight times cheaper than
-software for a new modulus.
+model, and its emulated ÷ wall ratio (medians 0.72–0.75) has the same signature as the other
+accelerated phases. RSA uses the modular-exponentiation hardware, and that part is cheap: 0.29 ms per
+operation once R² mod n is known. With a new modulus, most of the 7.31 ms is computing R² mod n,
+which IDF v5.3.6 does in software (`components/mbedtls/port/bignum/esp_bignum.c:197-215`,
+`calculate_rinv`, through `mbedtls_mpi_mod_mpi`).
 
 **What a TLS handshake costs**, for a client verifying a two-certificate chain:
 
@@ -146,7 +155,10 @@ Either is affordable in a test.
 - *"P-256 does not use the accelerator".* It does, as the trace shows; it only costs the same.
 - *1.4 ms per RSA public operation.* That was an average over 8 calls with one modulus, of which only
   the first computed R² mod n. One verification under a new modulus costs 7.3 ms; with the modulus
-  reused, 0.29 ms.
+  reused, 0.29 ms. The same draft also credited the accelerator model with making a new-modulus
+  verification eight times cheaper than software, but most of that verification is software.
+- *AES-128-CBC on 64 KiB at 5.04 ms.* The result hash was computed inside the timed window; outside
+  it, 4.85 ms.
 
 ## Gaps
 
@@ -210,10 +222,12 @@ esp32sim --chip esp32 --board none --boot rom --console uart0 --flash-mb 4 --max
 - `sdspi` (`APP=sdspi`): `--max-seconds 10`.
 - `tools/deepsleep` (`APP=deepsleep`): `--max-seconds 60`.
 - `tools/cryptobench` (`APP=cryptobench`): `--max-seconds 60`, through
-  `python3 tools/benchtime.py OUT esp32sim ...` for wall times per phase, and with
+  `python3 tools/benchtime.py run OUT esp32sim ...` for wall times per phase; then
+  `python3 tools/benchtime.py summary OUT...` for medians and ranges over several runs. Add
   `--trace-fn esp_mpi_` to see the accelerator calls. For the software variant, build with
   `idf.py -B build-nohw -DSDKCONFIG=build-nohw/sdkconfig -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.nohw" build`;
-  its result hashes must equal the accelerated build's.
+  `python3 tools/benchtime.py compare OUT_ACCELERATED OUT_SOFTWARE` must report that all results
+  agree.
 
 The consumer's images, which are not in this repository, ran with `--flash-mb 4 --psram-mb 4` and
 `--flash-at` at `0x1000` (bootloader), `0x8000` (partition table), `0x10000` (otadata) and `0x20000`

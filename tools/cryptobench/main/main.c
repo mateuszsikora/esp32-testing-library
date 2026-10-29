@@ -1,15 +1,18 @@
 /* Emulated-time cost of the crypto a TLS client spends.
  *
- * Each phase prints `BENCH begin <name>` and `BENCH end <name>: ... result=<hash>`, so a host reading
- * the console can time the same phase in wall time (tools/benchtime.py). Every phase runs long
- * enough (at least 100 ms emulated with the accelerators) for that timing to mean something.
+ * Each phase prints `BENCH begin <name>` and `BENCH end <name>: ...`, so a host reading the console can
+ * time the same phase in wall time (tools/benchtime.py), then `BENCH result <name> <hash>`. The hash
+ * is computed after the phase's clock has stopped and after its end line is out, so neither the
+ * emulated nor the wall time includes it. Every phase runs long enough (at least 100 ms emulated with
+ * the accelerators) for the wall timing to mean something.
  *
  * What is checked, and how independently:
  * - every mbedTLS call: a failing call aborts the run instead of timing its error path;
  * - SHA-256 and AES-CBC against published vectors (FIPS 180-2, NIST SP 800-38A), multi-block;
  * - ECDH from both sides, ECDSA verify accepting its own signature and rejecting a changed digest,
  *   and x^65537 against square-and-multiply: consistency checks, through the same code;
- * - every phase's result, hashed in software (FNV-1a) and printed. Inputs come from a fixed seed,
+ * - every phase's result but ECDSA verify's, whose result is the return code CHECK already tests,
+ *   hashed in software (FNV-1a) and printed. Inputs come from a fixed seed,
  *   so a build with the accelerators and one without (sdkconfig.defaults.nohw) must print the same
  *   hashes: that comparison is the independent check of the accelerator models. */
 #include <stdio.h>
@@ -78,11 +81,16 @@ static void begin(const char *name) {
     c0 = esp_cpu_get_cycle_count();
     t0 = esp_timer_get_time();
 }
-static void end(int n, uint64_t result) {
+/* Stops the phase's clock and prints its timing at once: the host stamps this line. */
+static void end(int n) {
     int64_t us = esp_timer_get_time() - t0;
     uint32_t cycles = esp_cpu_get_cycle_count() - c0;
-    printf("BENCH end %s: %d x %.1f us, %lu cycles total, result=%016llx\n", phase, n,
-           (double)us / n, (unsigned long)cycles, (unsigned long long)result);
+    printf("BENCH end %s: %d x %.1f us, %lu cycles total\n", phase, n, (double)us / n,
+           (unsigned long)cycles);
+}
+/* After end(): the result's hash, computed outside the timed window. */
+static void result(uint64_t hash) {
+    printf("BENCH result %s %016llx\n", phase, (unsigned long long)hash);
 }
 
 static void from_hex(const char *hex, unsigned char *out, size_t len) {
@@ -101,7 +109,8 @@ void app_main(void) {
     begin("calibrate-10M-iterations");
     for (uint32_t i = 0; i < 10000000; i++)
         sink += i;
-    end(1, sink);
+    end(1);
+    result(sink);
 
     /* SHA-256 against FIPS 180-2: one block, two blocks, and a million bytes streamed. */
     unsigned char digest[32], want[32];
@@ -132,7 +141,8 @@ void app_main(void) {
         begin(name);
         for (int i = 0; i < sha_iters[s]; i++)
             CHECK(mbedtls_sha256(buf, sizes[s], digest, 0));
-        end(sha_iters[s], fnv(FNV0, digest, 32));
+        end(sha_iters[s]);
+        result(fnv(FNV0, digest, 32));
     }
 
     /* AES-128-CBC against NIST SP 800-38A F.2.1 (four blocks), then timed at three sizes: each pass
@@ -165,7 +175,8 @@ void app_main(void) {
             memset(iv, 0, sizeof iv);
             CHECK(mbedtls_aes_crypt_cbc(&aes, MBEDTLS_AES_ENCRYPT, sizes[s], iv, copy, buf));
         }
-        end(aes_iters[s], fnv(FNV0, buf, sizes[s]));
+        end(aes_iters[s]);
+        result(fnv(FNV0, buf, sizes[s]));
         CHECK(mbedtls_aes_setkey_dec(&aes, key, 128));
         memset(iv, 0, sizeof iv);
         CHECK(mbedtls_aes_crypt_cbc(&aes, MBEDTLS_AES_DECRYPT, sizes[s], iv, buf, buf));
@@ -185,23 +196,26 @@ void app_main(void) {
     begin("p256-keygen");
     for (int i = 0; i < 4; i++)
         CHECK(mbedtls_ecp_gen_keypair(&grp, &da, &qa, rng, NULL));
-    end(4, fnv_mpi(fnv_mpi(FNV0, &qa.MBEDTLS_PRIVATE(X)), &qa.MBEDTLS_PRIVATE(Y)));
+    end(4);
+    result(fnv_mpi(fnv_mpi(FNV0, &qa.MBEDTLS_PRIVATE(X)), &qa.MBEDTLS_PRIVATE(Y)));
     CHECK(mbedtls_ecp_gen_keypair(&grp, &db, &qb, rng, NULL));
     begin("p256-ecdh");
     for (int i = 0; i < 4; i++)
         CHECK(mbedtls_ecdh_compute_shared(&grp, &za, &qb, &da, rng, NULL));
-    end(4, fnv_mpi(FNV0, &za));
+    end(4);
+    result(fnv_mpi(FNV0, &za));
     CHECK(mbedtls_ecdh_compute_shared(&grp, &zb, &qa, &db, rng, NULL));
     EXPECT(mbedtls_mpi_cmp_mpi(&za, &zb) == 0, "ecdh shared secret equal from both sides");
     CHECK(mbedtls_sha256(buf, 1024, digest, 0));
     begin("p256-ecdsa-sign");
     for (int i = 0; i < 4; i++)
         CHECK(mbedtls_ecdsa_sign(&grp, &r, &s, &da, digest, 32, rng, NULL));
-    end(4, fnv_mpi(fnv_mpi(FNV0, &r), &s));
+    end(4);
+    result(fnv_mpi(fnv_mpi(FNV0, &r), &s));
     begin("p256-ecdsa-verify");
     for (int i = 0; i < 4; i++)
         CHECK(mbedtls_ecdsa_verify(&grp, digest, 32, &qa, &r, &s));
-    end(4, 4);
+    end(4); /* the result is each call's return code, which CHECK has tested */
     digest[0] ^= 1;
     EXPECT(mbedtls_ecdsa_verify(&grp, digest, 32, &qa, &r, &s) != 0, "ecdsa rejects a changed digest");
 
@@ -219,19 +233,22 @@ void app_main(void) {
     CHECK(mbedtls_mpi_fill_random(&x, 255, rng, NULL));
     CHECK(mbedtls_mpi_lset(&e, 65537));
     /* With the same modulus, mbedTLS computes R^2 mod n once and reuses it from `rr`. A TLS client
-     * verifies each certificate under a different modulus, so the first phase discards `rr` every
-     * time: that is the cost of one verification. The second keeps it. */
-    begin("rsa2048-public-e65537-new-modulus");
+     * verifies each certificate under a different modulus, so the first phase discards `rr` before
+     * every call, which costs what a new modulus costs: that is one verification. The second keeps
+     * it. On the ESP32, IDF computes R^2 mod n in software (esp_bignum.c, calculate_rinv). */
+    begin("rsa2048-public-e65537-fresh-rr");
     for (int i = 0; i < 20; i++) {
         mbedtls_mpi_free(&rr);
         mbedtls_mpi_init(&rr);
         CHECK(mbedtls_mpi_exp_mod(&y, &x, &e, &n, &rr));
     }
-    end(20, fnv_mpi(FNV0, &y));
-    begin("rsa2048-public-e65537-same-modulus");
+    end(20);
+    result(fnv_mpi(FNV0, &y));
+    begin("rsa2048-public-e65537-kept-rr");
     for (int i = 0; i < 400; i++)
         CHECK(mbedtls_mpi_exp_mod(&y, &x, &e, &n, &rr));
-    end(400, fnv_mpi(FNV0, &y));
+    end(400);
+    result(fnv_mpi(FNV0, &y));
     CHECK(mbedtls_mpi_copy(&check, &x));
     for (int i = 0; i < 16; i++) { /* x^(2^16) */
         CHECK(mbedtls_mpi_mul_mpi(&check, &check, &check));
@@ -242,9 +259,10 @@ void app_main(void) {
     EXPECT(mbedtls_mpi_cmp_mpi(&y, &check) == 0, "x^65537 mod n matches square-and-multiply");
     CHECK(mbedtls_mpi_fill_random(&e, 256, rng, NULL));
     begin("rsa2048-full-exponent-no-crt");
-    for (int i = 0; i < 2; i++)
+    for (int i = 0; i < 3; i++)
         CHECK(mbedtls_mpi_exp_mod(&y, &x, &e, &n, &rr));
-    end(2, fnv_mpi(FNV0, &y));
+    end(3);
+    result(fnv_mpi(FNV0, &y));
 
     printf("BENCH done, all checks passed\n");
 }
