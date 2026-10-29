@@ -1,0 +1,6 @@
+# ESP-IDF build output of the firmware under tools/
+tools/*/build*/
+tools/*/sdkconfig
+tools/*/sdkconfig.old
+tools/*/dependencies.lock
+tools/*/managed_components/
