@@ -35,19 +35,20 @@ gaps below are reproduced on upstream.
 
 ## Results
 
-Instruction counts are core 0 + core 1. Millions of instructions per second are for both cores
-together.
+Instruction counts are core 0 + core 1; the instruction rate is for both cores together, as esp32sim
+reports it. Every run is deterministic: three runs of `tools/cryptobench` executed the same number of
+instructions to the instruction.
 
-| Run | esp32sim | Emulated | Wall | Instructions | Outcome |
-|---|---|---|---|---|---|
-| `tools/cryptobench`, accelerators on | upstream | 30 s | 4.8 s | 553 116 320 + 3 299 916 | Every check passes; figures under "Speed" |
-| `tools/cryptobench`, accelerators off | upstream | 30 s | 7.7 s | 1 450 718 539 + 3 366 744 | Every check passes |
-| `hello_world` with `CONFIG_SPIRAM=y`, `--psram-mb 4` | upstream | 3 s | 0.2 s | 9 544 727 + 5 041 174 | PSRAM found, tested and added to the heap (below) |
-| Release image, empty NVS, no card | with fix | 60 s | 1.6 s | 70 037 356 + 9 019 168 | Boots to its diagnostic runtime and stays up |
-| Release image, NVS naming a Bluetooth peer | with fix | 90 s | 76.0 s | 6 935 523 763 + 523 030 753 | Panics in the Bluetooth controller: 488 panics and resets in 90 s |
-| The same, with `--ble` | with fix | 90 s | 3.1 s | 138 178 241 + 12 762 501 | No panic; 12 Bluetooth starts refused, retried with backoff |
-| Desk image, no card | with fix | 600 s | 5.9 s | 236 740 911 + 24 379 202 | RUNNING, SHUTDOWN at 180 s, SLEEP with a 2000 s timer |
-| Desk image, no card | with fix | 2400 s | 10.9 s | 236 740 911 + 24 379 202 | The same counts: nothing ran after SLEEP |
+| Run | esp32sim | Emulated | Wall | Instructions | Minsn/s | Outcome |
+|---|---|---|---|---|---|---|
+| `tools/cryptobench`, accelerators on | upstream | 60 s | 6.8–8.0 s | 701 273 795 + 6 232 262 | 89–104 | Every check passes; figures under "Speed" |
+| `tools/cryptobench`, accelerators off | upstream | 60 s | 28.0–31.0 s | 5 805 517 830 + 6 616 878 | 188–208 | Every check passes, and every result matches the accelerated build |
+| `hello_world` with `CONFIG_SPIRAM=y`, `--psram-mb 4` | upstream | 3 s | 0.2 s | 9 544 727 + 5 041 174 | 86 | PSRAM found, tested and added to the heap (below) |
+| Release image, empty NVS, no card | with fix | 60 s | 1.6 s | 70 037 356 + 9 019 168 | 50 | Boots to its diagnostic runtime and stays up |
+| Release image, NVS naming a Bluetooth peer | with fix | 90 s | 76.0 s | 6 935 523 763 + 523 030 753 | 98 | Panics in the Bluetooth controller: 488 panics and resets in 90 s |
+| The same, with `--ble` | with fix | 90 s | 3.1 s | 138 178 241 + 12 762 501 | 49 | No panic; 12 Bluetooth starts refused, retried with backoff |
+| Desk image, no card | with fix | 600 s | 5.9 s | 236 740 911 + 24 379 202 | 44 | RUNNING, SHUTDOWN at 180 s, SLEEP with a 2000 s timer |
+| Desk image, no card | with fix | 2400 s | 10.9 s | 236 740 911 + 24 379 202 | 24 | The same counts: nothing ran after SLEEP |
 
 What works on the classic chip:
 
@@ -56,12 +57,15 @@ What works on the classic chip:
   `esp_psram: Found 4MB PSRAM device`, `esp_psram: SPI SRAM memory test OK`,
   `esp_psram: Adding pool of 4096K of PSRAM memory to heap allocator`, and a minimum free heap of
   4 462 692 bytes. The release image logs at WARN only, so for it the evidence is the absence of the
-  warning IDF prints when PSRAM fails, and the fact that it runs.
+  warning IDF prints when PSRAM fails, and the fact that it runs with `--psram-mb 4`.
 - NVS reads, `app_main`, every task the release image starts.
 - The release image's power state machine: running with nothing answering, a shutdown, a modem
   power-off through its power key, deep sleep with a 2000 s timer.
 - The VHCI interception (`--ble`): Bluedroid starts against esp32sim's virtual controller instead
   of the controller blob.
+- The crypto accelerator models (SHA, AES, MPI) compute correct results: every phase of
+  `tools/cryptobench` hashes its result in software, and the hashes are identical with the
+  accelerators on and off (see "Speed").
 
 ## Speed
 
@@ -71,53 +75,78 @@ guest's own timer reports. So emulated time is not decoupled from the work done,
 in it are consistent with each other. They are not measurements of a board: esp32sim does not model
 cache timing, and its accelerator models take whatever time they take.
 
-**CPU-bound code runs at roughly real time; idle code runs far ahead of it.** Each benchmark phase
-was timed in emulated time by the guest and in wall time by the host, from the console lines that
-open and close it:
+**CPU-bound code runs at 0.3 to 1.7 times real time; idle code runs far ahead of it.** Each
+benchmark phase lasts at least 100 ms of emulated time with the accelerators on, and was timed by the
+guest in emulated time and by the host in wall time from the console lines that open and close it
+(`tools/benchtime.py`). Three runs of each build; the ratio is the median, with the range in
+brackets. The machine was shared, which is what the occasional low outlier in a range is.
 
-| Phase | Emulated per operation | Emulated ÷ wall |
-|---|---|---|
-| The calibration loop | 500.2 ms | 1.31 |
-| SHA-256 of 1 / 16 / 64 KiB, accelerator | 102 µs / 1.18 ms / 4.64 ms | 0.63–0.65 |
-| SHA-256 of 1 / 16 / 64 KiB, software | 522 µs / 7.84 ms / 31.3 ms | 1.49–1.65 |
-| AES-128-CBC of 1 / 16 / 64 KiB, accelerator | 81 µs / 1.22 ms / 4.85 ms | 0.39–0.55 |
-| AES-128-CBC of 1 / 16 / 64 KiB, software | 453 µs / 7.22 ms / 28.9 ms | 0.96–1.37 |
-| P-256 key generation, ECDH, ECDSA sign, ECDSA verify, accelerator | 100 / 100 / 110 / 219 ms | 0.74–0.78 |
-| The same, software | 98 / 98 / 108 / 216 ms | 0.99–1.01 |
-| RSA-2048-size `x^65537 mod n`, accelerator / software | 1.41 ms / 57.0 ms | 0.55 / 1.34 |
-| RSA-2048-size, full 2048-bit exponent without CRT, accelerator / software | 34.8 ms / 2318 ms | 0.34 / 1.33 |
+| Phase | Accelerators on, per op | Emulated ÷ wall | Software, per op | Emulated ÷ wall |
+|---|---|---|---|---|
+| The calibration loop | 500.2 ms | 1.32 (0.67–1.32) | 500.2 ms | 1.32 (1.29–1.34) |
+| SHA-256, 1 KiB | 102 µs | 0.64 (0.57–0.66) | 522 µs | 1.64 (1.49–1.65) |
+| SHA-256, 16 KiB | 1.18 ms | 0.64 (0.61–0.65) | 7.84 ms | 1.49 (1.43–1.66) |
+| SHA-256, 64 KiB | 4.64 ms | 0.64 (0.59–0.65) | 31.3 ms | 1.56 (1.52–1.65) |
+| AES-128-CBC, 1 KiB | 81 µs | 0.55 (0.44–0.55) | 452 µs | 1.34 (1.30–1.38) |
+| AES-128-CBC, 16 KiB | 1.23 ms | 0.55 (0.51–0.56) | 7.23 ms | 1.37 (1.33–1.38) |
+| AES-128-CBC, 64 KiB | 5.04 ms | 0.56 (0.41–0.56) | 29.1 ms | 1.38 (1.35–1.40) |
+| P-256 key generation | 100.2 ms | 0.74 (0.61–0.74) | 98.2 ms | 0.97 (0.96–0.98) |
+| P-256 ECDH | 100.4 ms | 0.64 (0.63–0.76) | 98.2 ms | 0.99 (0.98–0.99) |
+| P-256 ECDSA sign | 110.0 ms | 0.76 (0.69–0.76) | 107.7 ms | 1.01 (0.99–1.01) |
+| P-256 ECDSA verify | 219.3 ms | 0.75 (0.68–0.77) | 215.1 ms | 1.00 (0.94–1.02) |
+| RSA-2048-size `x^65537 mod n`, a new modulus each time | 7.31 ms | 0.60 (0.58–0.60) | 61.5 ms | 1.28 (1.16–1.31) |
+| The same, one modulus reused | 0.29 ms | 0.36 (0.36–0.37) | 56.3 ms | 1.32 (1.15–1.34) |
+| RSA-2048-size, full 2048-bit exponent without CRT | 34.8 ms | 0.33 (0.33–0.34) | 2320 ms | 1.30 (1.27–1.32) |
 
-So a test that keeps the CPU busy runs between a third of real time and one and a half times it,
-slower where the firmware leans on an accelerator model; an image that mostly waits runs much faster
-(the release image idling: 60 s emulated in 1.6 s), because the emulator skips ahead while both cores
-wait for an interrupt; and
-an image in deep sleep runs faster still (the desk image: 2400 s in 10.9 s). Tests must therefore
-measure timeouts in emulated time, never in wall time: a CPU-heavy scenario can take longer than it
-would on a board, and an idle one far less.
+What that means for testing:
 
-Three things the benchmark shows that an earlier draft of this note got wrong:
+- A test that keeps the CPU busy runs between a third of real time and nearly twice it. It is slower
+  where the firmware leans on an accelerator model, whose phases all sit between 0.33 and 0.76.
+- An image that mostly waits runs much faster: the release image idling did 60 s of emulated time
+  in 1.6 s, because the emulator skips ahead while both cores wait for an interrupt.
+- An image in deep sleep runs faster still: the desk image did 2400 s in 10.9 s.
+- So tests must measure timeouts in emulated time, never in wall time. A CPU-heavy scenario can
+  take longer than it would on a board, and an idle one far less.
 
-- **There is no fixed 1.2 ms floor.** An earlier run without any result checks showed 1.2 ms for
-  several operations and read it as a fixed granularity in the accelerator models. With every call
-  checked and every result verified, times grow with the data (SHA-256: 102 µs, 1.18 ms, 4.64 ms
-  for 1, 16 and 64 KiB). The 1.2 ms values were the real cost of those particular sizes.
-- **P-256 does not use the accelerator.** It costs the same with the MPI accelerator on and off, so
-  elliptic-curve operations run in software either way.
-- **RSA does.** The accelerator model makes `x^65537 mod n` forty times cheaper than software, which
-  is why RSA looked faster than ECDH.
+**What is checked.** Every mbedTLS call is checked, so no phase times an error path. SHA-256 is
+checked against the one-block, two-block and million-`a` vectors of FIPS 180-2, and AES-128-CBC
+against NIST SP 800-38A F.2.1. ECDH is computed from both sides, ECDSA verify must accept its own
+signature and reject a changed digest, and `x^65537 mod n` must match square-and-multiply; those are
+consistency checks through the same code. The independent check is the comparison between builds:
+inputs come from a fixed seed, every phase's result is hashed in software (FNV-1a), and the build with
+the accelerators and the build without print the same hash for every phase.
 
-**What a TLS handshake costs** with these figures, for a client verifying a two-certificate chain:
+**Where the accelerators are used.** A trace of `esp_mpi_*` calls in the accelerated build shows the
+MPI multiplier in every P-256 phase: about 3 150 calls to `esp_mpi_mul_mpi_hw_op` per key generation,
+ECDH or signature, and about 6 300 per verification, each wrapped in enabling and disabling the
+peripheral. P-256 therefore uses the accelerator but costs the same with it as without it in this
+model, and its emulated ÷ wall ratio (0.64–0.76) has the same signature as the other accelerated
+phases. RSA uses the modular-exponentiation hardware, which the model makes eight times cheaper than
+software for a new modulus.
 
-| Handshake | Steps | Emulated |
-|---|---|---|
-| ECDHE with an ECDSA chain | key generation 100 + ECDH 100 + ServerKeyExchange signature 219 + two certificates 2 × 219 | ≈ 857 ms |
-| The same, with a client certificate (mutual TLS) | + an ECDSA signature 110 | ≈ 967 ms |
-| ECDHE with an RSA chain | key generation 100 + ECDH 100 + three RSA verifications 3 × 1.4 | ≈ 204 ms |
+**What a TLS handshake costs**, for a client verifying a two-certificate chain:
+
+| Handshake | Steps | Accelerators on | Software |
+|---|---|---|---|
+| ECDHE with an ECDSA chain | key generation + ECDH + ServerKeyExchange signature + two certificates | 100 + 100 + 3 × 219 ≈ 857 ms | 98 + 98 + 3 × 215 ≈ 842 ms |
+| The same, with a client certificate (mutual TLS) | + an ECDSA signature | ≈ 967 ms | ≈ 950 ms |
+| ECDHE with an RSA chain | key generation + ECDH + three RSA verifications, each under a new modulus | 100 + 100 + 3 × 7.3 ≈ 222 ms | 98 + 98 + 3 × 61.5 ≈ 381 ms |
 
 About a second of emulated time for an ECDSA chain, and 1.1 to 1.3 s of wall time at the measured
-0.75; a fifth of that for an RSA chain. That is affordable in a test, but it is not free,
-and an ECDSA chain costs more than an RSA one here mainly because the RSA side is accelerated in the
-model.
+0.75; about a quarter of that for an RSA chain. An RSA chain is cheaper because RSA verification with
+e = 65537 is cheap in itself, as on real hardware; the accelerator model roughly halves it again.
+Either is affordable in a test.
+
+**What earlier drafts of this note got wrong**, each corrected by measuring:
+
+- *A fixed 1.2 ms floor in the accelerator models.* Read from a benchmark that checked no results.
+  Times grow with the data; 1.2 ms was the real cost of SHA-256 and AES on 16 KiB.
+- *"15 to 37 times faster than real time".* That measured idle cores. CPU-bound code runs at 0.3 to
+  1.7 times real time.
+- *"P-256 does not use the accelerator".* It does, as the trace shows; it only costs the same.
+- *1.4 ms per RSA public operation.* That was an average over 8 calls with one modulus, of which only
+  the first computed R² mod n. One verification under a new modulus costs 7.3 ms; with the modulus
+  reused, 0.29 ms.
 
 ## Gaps
 
@@ -144,9 +173,10 @@ first consumer's firmware.
    chip has no card model on its general-purpose SPI. esp32sim has an SD card model, wired only to the
    P4's SDMMC host.
 4. **Deep-sleep timer wake.** `tools/deepsleep` sleeps with a 5 s timer, and in a 60 s run it boots
-   once and never wakes. The desk image's runs agree: 600 s and 2400 s execute the same instruction
-   count. This is not a slow clock running late: the guest's slow-clock calibration reads 3 495 245,
-   which in IDF's Q13.19 format is 6.667 µs per cycle, the nominal 150 kHz.
+   once and never wakes, which rules out a timer running up to 12 times slow. The desk image's runs
+   agree: 600 s and 2400 s execute the same instruction count. The guest also calibrates its slow
+   clock to the nominal value (3 495 245 in IDF's Q13.19 format, 6.667 µs per cycle, 150 kHz), but
+   that is what the guest believes, not a measurement of the emulator's timer.
 5. **External attachment.** The consumer's GNSS UART reports no data and its modem UART has nothing
    on it: there is no way to put a process at the far end of a UART or a GPIO line from the stock
    CLI. Proposed in [mikroverk/esp32sim#325](https://github.com/mikroverk/esp32sim/issues/325).
@@ -154,8 +184,8 @@ first consumer's firmware.
    modem fitted, because the board's pull-down is not modelled, so the application believes a modem
    is powered and presses its power key. That belongs in esp32tl's board profile, not in the
    emulator.
-7. **Minor:** `rtc_clk_init: Bogus XTAL frequency: 8 MHz` at every boot. The slow clock is calibrated
-   correctly (gap 4), and nothing seen so far depends on the XTAL detection.
+7. **Minor:** `rtc_clk_init: Bogus XTAL frequency: 8 MHz` at every boot. The guest calibrates the
+   slow clock to its nominal value (gap 4), and nothing seen so far depends on the XTAL detection.
 
 ## Reproducing
 
@@ -179,6 +209,13 @@ esp32sim --chip esp32 --board none --boot rom --console uart0 --flash-mb 4 --max
   `--ble --trace-fn esp_bt_controller` to see the controller calls.
 - `sdspi` (`APP=sdspi`): `--max-seconds 10`.
 - `tools/deepsleep` (`APP=deepsleep`): `--max-seconds 60`.
-- `tools/cryptobench` (`APP=cryptobench`): `--max-seconds 30`. For the software variant, build with
-  `idf.py -B build-nohw -DSDKCONFIG=build-nohw/sdkconfig -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.nohw" build`.
-  Wall times per phase come from timing the console's `BENCH begin` and `BENCH end` lines on the host.
+- `tools/cryptobench` (`APP=cryptobench`): `--max-seconds 60`, through
+  `python3 tools/benchtime.py OUT esp32sim ...` for wall times per phase, and with
+  `--trace-fn esp_mpi_` to see the accelerator calls. For the software variant, build with
+  `idf.py -B build-nohw -DSDKCONFIG=build-nohw/sdkconfig -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.nohw" build`;
+  its result hashes must equal the accelerated build's.
+
+The consumer's images, which are not in this repository, ran with `--flash-mb 4 --psram-mb 4` and
+`--flash-at` at `0x1000` (bootloader), `0x8000` (partition table), `0x10000` (otadata) and `0x20000`
+(the application in `ota_0`), plus `--flash-at 0x9000=<nvs image>` for the runs that named a
+Bluetooth peer, the NVS image made with IDF's `nvs_partition_gen.py`.

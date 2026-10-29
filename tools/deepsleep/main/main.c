@@ -2,7 +2,7 @@
  * console shows a new boot about every 5 s, with the wake cause and the slow clock it slept on. */
 #include <stdio.h>
 #include "esp_attr.h"
-#include "esp_private/esp_clk.h"
+#include "esp_private/esp_clk.h" /* private IDF API, for the slow-clock calibration only; may move */
 #include "esp_sleep.h"
 #include "esp_timer.h"
 
