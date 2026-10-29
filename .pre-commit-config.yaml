@@ -1,0 +1,26 @@
+# Versions match the `dev` extra in pyproject.toml; bump them together.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-toml
+      - id: check-yaml
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.17.3
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v2.4.1
+    hooks:
+      - id: mypy
+        # The config lists the files to check; checking the whole tree each
+        # time keeps the hook and `make lint` in agreement.
+        pass_filenames: false
+        additional_dependencies:
+          - pytest>=8
+          - pytest-embedded~=2.9.3
+          - pytest-embedded-idf[serial]~=2.9.3
