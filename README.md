@@ -28,7 +28,8 @@ Building the validation firmware (`make firmware`) also needs Docker.
 | `make firmware` | Builds the validation firmware in the pinned ESP-IDF container |
 | `make test` | Runs `make setup`, then the pytest suite |
 | `make lint` | `ruff check`, `ruff format --check` and `mypy` |
-| `make hooks` | Installs the pre-commit hooks |
+| `make hooks` | Installs the pre-commit hooks (they run the tools from `.venv`) |
+| `make clean` | Removes `.venv` and tool caches; keeps the runner build and `.cache/` |
 
 After `make setup`, `.venv/bin/pytest` runs the tests directly.
 
@@ -43,4 +44,4 @@ After `make setup`, `.venv/bin/pytest` runs the tests directly.
 | `tests/` | The pytest suite |
 | `docs/` | The implementation plan and format specifications |
 
-See [docs/implementation-plan.md](docs/implementation-plan.md) for the design.
+See [docs/implementation-plan.md](https://github.com/mateuszsikora/esp32-testing-library/blob/main/docs/implementation-plan.md) for the design.

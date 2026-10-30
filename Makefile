@@ -8,8 +8,12 @@ BIN := $(VENV)/bin
 # checkout needs one command.
 setup: $(VENV)/.installed build-runner
 
+# --clear: a venv left behind by a failed run (say, created with too old a
+# Python) would otherwise keep its interpreter.
 $(VENV)/.installed: pyproject.toml
-	$(PYTHON) -m venv $(VENV)
+	@$(PYTHON) -c 'import sys; sys.exit(sys.version_info < (3, 11))' || \
+		{ echo "esp32tl needs Python 3.11 or newer; run with PYTHON=python3.11 (or newer)"; exit 1; }
+	$(PYTHON) -m venv --clear $(VENV)
 	$(BIN)/python -m pip install --upgrade pip
 	$(BIN)/python -m pip install -e '.[dev]'
 	touch $@
@@ -41,5 +45,7 @@ lint: $(VENV)/.installed
 hooks: $(VENV)/.installed
 	$(BIN)/pre-commit install
 
+# Keeps runner/target/ and .cache/: a cold runner build takes minutes and the
+# ROM ELFs come from the network.
 clean:
 	rm -rf $(VENV) build dist .mypy_cache .ruff_cache .pytest_cache

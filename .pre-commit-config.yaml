@@ -1,4 +1,3 @@
-# Versions match the `dev` extra in pyproject.toml; bump them together.
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
@@ -7,20 +6,25 @@ repos:
       - id: trailing-whitespace
       - id: check-toml
       - id: check-yaml
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.17.3
+  # ruff and mypy run from the venv that `make setup` creates, so their
+  # versions and mypy's view of the dependencies come from pyproject.toml only.
+  - repo: local
     hooks:
       - id: ruff-check
-        args: [--fix]
+        name: ruff check
+        entry: .venv/bin/ruff check --fix --force-exclude
+        language: system
+        types_or: [python, pyi]
       - id: ruff-format
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v2.4.1
-    hooks:
+        name: ruff format
+        entry: .venv/bin/ruff format --force-exclude
+        language: system
+        types_or: [python, pyi]
       - id: mypy
+        name: mypy
         # The config lists the files to check; checking the whole tree each
         # time keeps the hook and `make lint` in agreement.
+        entry: .venv/bin/mypy
+        language: system
+        types_or: [python, pyi]
         pass_filenames: false
-        additional_dependencies:
-          - pytest>=8
-          - pytest-embedded~=2.9.3
-          - pytest-embedded-idf[serial]~=2.9.3
