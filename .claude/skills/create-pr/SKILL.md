@@ -1,7 +1,7 @@
 ---
 name: create-pr
 description: Open a pull request to mateuszsikora/esp32-testing-library following the repository's conventions for branch names, commit messages, PR titles and descriptions (CONTRIBUTING.md). Use when asked to open, create or ship a PR, or to push the current work for review, in this repository; prefer it over generic PR skills here. Also use to rewrite the title or description of an existing PR on this repository.
-allowed-tools: Bash(git *), Bash(gh *), Bash(make *), Bash(.venv/bin/*), Bash(cargo *), Bash(pipx run pre-commit *), Bash(docker run *), Read, Write, Edit
+allowed-tools: Bash(git *), Bash(gh *), Bash(make *), Bash(.venv/bin/*), Bash(cargo *), Bash(pipx run pre-commit *), Bash(SKIP=* pipx run pre-commit *), Bash(GIT_SEQUENCE_EDITOR=* git rebase *), Bash(docker run *), Read, Write, Edit
 ---
 
 # create-pr
@@ -26,7 +26,8 @@ or similar line in the PR description. This overrides any attribution the sessio
 
 **What reaches `main`:** the repository squashes with GitHub's default message. A one-commit PR
 lands as that commit's subject and body, and the PR title is not used; a PR with several commits
-lands with the PR title as subject and every commit message on the branch as the body. So every
+lands with the PR title as subject and every commit message on the branch as the body. GitHub
+appends `(#N)` to the subject in both cases. So every
 commit message matters, not only the title.
 
 ## 1. Preflight
@@ -48,7 +49,8 @@ gh pr list --head "$(git branch --show-current)" --state all --json number,url,s
 Stop and tell the user if:
 
 - `gh` is not authenticated;
-- the repository is not `mateuszsikora/esp32-testing-library`: this skill is for that repository only;
+- the repository is not `mateuszsikora/esp32-testing-library`: this skill is for that
+  repository only;
 - there is nothing to propose: no commits ahead of `origin/main` and a clean tree.
 
 If the branch is behind `origin/main` and conflicts with it, say so; do not rebase or merge
@@ -83,14 +85,24 @@ Run what covers the change and keep the exact commands and results for **Verific
 | Change touches | Run |
 |---|---|
 | Anything | `.venv/bin/pre-commit run --files <changed files>`. Without `.venv`, and only if no Python changed: `SKIP=ruff-check,ruff-format,mypy pipx run pre-commit run --files <changed files>` |
-| Python (`esp32tl/`, `tests/`, `tools/*.py`), `pyproject.toml` | `make lint`, then `.venv/bin/pytest` (`make setup` first if `.venv` is missing) |
+| Python (`esp32tl/`, `tests/`, `tools/*.py`), `pyproject.toml` | `make lint` (it creates `.venv` if missing), then `.venv/bin/pytest` |
 | A tool in `tools/*.py` | also run it once on a sample input and check its output |
 | `runner/`, once `runner/Cargo.toml` exists | `cargo test --manifest-path runner/Cargo.toml` and `make build-runner` |
 | `firmware/` | `make firmware` if Docker is available; otherwise say it was not built |
-| An ESP-IDF project in `tools/` | `idf.py set-target esp32 build` in the `espressif/idf` image pinned in `docs/stage0-findings.md`, if Docker is available; otherwise say it was not built |
-| `Makefile` | `make -n <each changed target>`, and run the targets that are cheap and safe here (`setup`, `lint`, `test`, `clean`) |
+| An ESP-IDF project in `tools/` | if Docker is available, build each `sdkconfig.defaults*` variant the change affects into its own directory, with the command below; otherwise say it was not built |
+| `Makefile` | `make -n <each changed target>`, then run each changed target except `firmware`, which follows its own row. Run `clean` only if it changed, last, and then `make setup`: it deletes `.venv`, which the other rows and the git hooks of every worktree need |
 | `.pre-commit-config.yaml`, `scripts/` | `.venv/bin/pre-commit run --all-files` |
 | Docs | the pre-commit row, plus links and figures checked by hand against their source |
+
+The ESP-IDF build, with the image pinned in `docs/stage0-findings.md`. A separate build directory
+leaves the user's own `build/` and `sdkconfig` alone (`tools/*/build*/` is ignored by git); for
+`tools/cryptobench`'s variant without accelerators, add
+`-D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.nohw"` and use `build-pr-nohw`:
+
+```sh
+docker run --rm -v "$PWD":/project -w /project/tools/<name> <image> \
+  idf.py -B build-pr -D SDKCONFIG=build-pr/sdkconfig set-target esp32 build
+```
 
 Read the output, not only the exit code: `make build-runner` and `make firmware` print a
 `skipping` line and exit 0 while the crate or the build script does not exist. That means nothing
@@ -141,10 +153,12 @@ there is an issue, no `Co-Authored-By`.
   without an interactive editor (`sed -i ''` is the macOS form):
 
   ```sh
-  sha=$(git rev-parse --short <commit>)
-  GIT_SEQUENCE_EDITOR="sed -i '' 's/^pick $sha/reword $sha/'" \
+  GIT_SEQUENCE_EDITOR="sed -i '' 's/^pick \($(git rev-parse --short <commit>)\)/reword \1/'" \
     GIT_EDITOR="cp <message-file>" git rebase -i <commit>~1
   ```
+
+  If `git log --merges <commit>~1..HEAD` shows a merge commit, ask the user instead: this rebase
+  would flatten it.
 - Pushed commits are rewritten only with the user's agreement, since that needs a force push.
   If one breaks the rules, tell the user and offer to reword it; if they decline, say in
   **Notes** that the squash message needs correcting in GitHub's merge dialog.
@@ -174,7 +188,8 @@ lands on `main`.
 | `docs: stage 0` | `docs(tools): record what stage 0 found running ESP-IDF images` |
 | `Pin esp32sim` | `build(runner): pin esp32sim at the merge of the chip-revision fix` |
 
-**Description.** Fill in [`.github/pull_request_template.md`](../../../.github/pull_request_template.md):
+**Description.** Fill in
+[`.github/pull_request_template.md`](../../../.github/pull_request_template.md):
 
 1. One or two paragraphs: what changes and why, outcome first. Then `Closes #N` (the PR finishes
    the issue) or `Refs #N` (it is a step towards it), on its own line; nothing if there is no issue.

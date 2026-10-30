@@ -83,12 +83,12 @@ The repository merges by squashing, with GitHub's default squash message:
 
 - A pull request with one commit lands as that commit's message, subject and body; the pull
   request title is not used. Keep the title equal to the commit subject.
-- A pull request with several commits lands with the pull request title, plus `(#N)`, as the
-  subject, and every commit message on the branch, in order, as the body.
+- A pull request with several commits lands with the pull request title as the subject, and
+  every commit message on the branch, in order, as the body.
 
-Either way, every commit message on the branch ends up on `main`. Fix one that breaks these rules
-before the pull request is merged; whoever merges can also correct the squash message in GitHub's
-merge dialog.
+GitHub appends `(#N)` to the subject in both cases. Either way, every commit message on the
+branch ends up on `main`. Fix one that breaks these rules before the pull request is merged;
+whoever merges can also correct the squash message in GitHub's merge dialog.
 
 The title follows the commit subject rules above, with the same type as the branch name.
 
@@ -113,8 +113,8 @@ References: issues as `#N`, upstream as `mikroverk/esp32sim#N`, commits as 7-cha
 SHAs in prose and full SHAs in anything read by machine.
 
 Write plainly and precisely: measured claims with their numbers, no "comprehensive", "robust",
-"seamless" or "enhance", no emoji. If an earlier version of the pull request claimed something that turned out
-wrong, say so.
+"seamless" or "enhance", no emoji. If an earlier version of the pull request claimed something
+that turned out wrong, say so.
 
 ## Labels
 
