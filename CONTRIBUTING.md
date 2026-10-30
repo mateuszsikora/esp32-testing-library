@@ -5,7 +5,8 @@ descriptions, review comments) is written in English, whatever language the work
 
 ## Types and scopes
 
-Branch names, commit subjects and pull request titles share one type and one scope.
+Branch names, commit subjects and pull request titles share one type. Commit subjects and pull
+request titles add a scope when the change is about one part of the project.
 
 | Type | For |
 |---|---|
@@ -24,12 +25,12 @@ Branch names, commit subjects and pull request titles share one type and one sco
 | `firmware` | `firmware/`: validation firmware and its build |
 | `tools` | `tools/`: benchmarks and helpers outside the package |
 | `plan` | `docs/implementation-plan*.md` and other design documents |
-| `repo` | Makefile, `pyproject.toml`, hooks, CI, contributor docs, agent skills |
 
 Choose the type by what the change does for the project, not by which files it touches: a
-`Makefile` change that fixes a bug is `fix(repo)`. When a change spans several scopes, use the one
-it is about. A new scope is fine when it names a lasting part of the project; add it to this table
-in the same pull request.
+`Makefile` change that fixes a bug is `fix`, not `build`. When a change spans several scopes, use
+the one it is about. When no scope fits (the Makefile, packaging, hooks, CI, contributor docs),
+leave it out: `chore: ...`. A new scope is fine when it names a lasting part of the project; add
+it to this table in the same pull request.
 
 ## Branch names
 
@@ -54,15 +55,15 @@ from before it, and expected to carry the fix on the patch branch ...
 Refs #1
 ```
 
-Subject, `<type>(<scope>): <summary>`:
+Subject, `<type>(<scope>): <summary>`, or `<type>: <summary>` when no scope fits:
 
 - The summary is in the imperative mood and starts lowercase, except for proper names:
   "add", "pin", "record", not "added" or "adds".
 - 72 characters at most including the prefix, ideally under 60. No trailing period.
 - No issue number; the body carries it.
 - Says what changes for the project, not which files were touched:
-  `fix(repo): refuse a Python older than 3.11 before creating the venv`, not `chore: update Makefile`.
-- A change that breaks the public API or the recording format adds `!` after the scope,
+  `fix: refuse a Python older than 3.11 before creating the venv`, not `chore: update Makefile`.
+- A change that breaks the public API or the recording format adds `!` before the colon,
   `feat(harness)!: ...`, and explains the break in the body.
 
 Body (required unless the subject says everything):

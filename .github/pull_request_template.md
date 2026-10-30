@@ -1,5 +1,5 @@
 <!--
-Title: <type>(<scope>): <imperative summary>, at most 72 characters, no period.
+Title: <type>(<scope>): <imperative summary>, scope optional, at most 72 characters, no period.
 It becomes the squash commit subject on main. See CONTRIBUTING.md.
 Delete any section below that would be empty.
 -->

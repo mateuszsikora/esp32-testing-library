@@ -108,7 +108,7 @@ CONTRIBUTING.md), for example `feat/5-runner-crate-skeleton`. Its type is the sa
 ## 6. Commit
 
 If there are uncommitted changes that belong to this work, commit them following the commit
-message rules in CONTRIBUTING.md (`<type>(<scope>): <summary>`, body wrapped at 72, `Closes #N`
+message rules in CONTRIBUTING.md (`<type>(<scope>): <summary>` or `<type>: <summary>`, body wrapped at 72, `Closes #N`
 or `Refs #N` last, no `Co-Authored-By`):
 
 - Stage files by name. Never stage `.context/`, `.env*`, credentials, build output, or changes
@@ -128,7 +128,8 @@ Never force-push without the user's agreement; never push to `main`.
 
 ## 8. Write the title and description
 
-**Title.** `<type>(<scope>): <summary>`, types and scopes from CONTRIBUTING.md; the summary in
+**Title.** `<type>(<scope>): <summary>`, types and scopes from CONTRIBUTING.md, or
+`<type>: <summary>` when no scope fits (do not invent a catch-all scope); the summary in
 the imperative, starting lowercase; at most 72 characters in all; no issue number, no trailing
 period. It becomes the squash commit subject on `main`, so it says what changes for the
 project. For a single-commit branch, the commit subject is usually the right title.
@@ -136,7 +137,7 @@ project. For a single-commit branch, the commit subject is usually the right tit
 | Avoid | Prefer |
 |---|---|
 | `feat: runner crate` | `feat(runner): add the crate with a console-only link` |
-| `chore: update Makefile` | `fix(repo): refuse a Python older than 3.11 before creating the venv` |
+| `chore: update Makefile` | `fix: refuse a Python older than 3.11 before creating the venv` |
 | `fix(harness): fixes #12` | `fix(harness): keep the UART tap from dropping a frame's last byte` |
 | `docs: stage 0` | `docs(tools): record what stage 0 found running ESP-IDF images in esp32sim` |
 | `Pin esp32sim` | `build(runner): pin esp32sim at the merge of the chip-revision fix` |
@@ -168,7 +169,7 @@ predate the type/scope prefix):
 
 Before creating the PR, check the draft against this list:
 
-- [ ] Title has a type and scope from CONTRIBUTING.md, the type matches the branch, and it would
+- [ ] Title has a type (and a scope, if one fits) from CONTRIBUTING.md, the type matches the branch, and it would
       read well as a line in `git log` on `main`.
 - [ ] A reader who has not seen the conversation understands why the change exists.
 - [ ] Every claim in Verification was run in this session.
@@ -194,12 +195,13 @@ Labels follow from the scope and the paths touched:
 | `harness` (`esp32tl/`, `tests/`) | `area:harness` |
 | `runner` (`runner/`) | `area:runner` |
 | `firmware` (`firmware/`) | `area:firmware` |
-| `repo` touching `Makefile`, `pyproject.toml`, `.pre-commit-config.yaml`, `scripts/`, `.github/workflows/` | `area:ci` |
+| `Makefile`, `pyproject.toml`, `.pre-commit-config.yaml`, `scripts/`, `.github/workflows/` | `area:ci` |
 | type `docs` | `documentation` |
 | type `fix` | `bug` |
 | work in or for esp32sim / pytest-embedded upstream | `upstream` |
 
-Use only labels that exist (`gh label list`); do not create labels.
+A PR that matches no row gets no label. Use only labels that exist (`gh label list`); do not
+create labels.
 
 For an existing PR use `gh pr edit <N> --title ... --body-file ...` instead.
 
