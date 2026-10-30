@@ -3,11 +3,11 @@ PYTHON ?= python3
 override VENV := .venv
 BIN := $(VENV)/bin
 
-.PHONY: setup build-runner test-runner firmware test lint hooks clean
+.PHONY: setup build-runner rom-elf test-runner firmware test lint hooks clean
 
-# Python environment, then the runner. `make test` runs this first, so a clean
-# checkout needs one command.
-setup: $(VENV)/.installed build-runner
+# Python environment, the runner and the ROM ELF. `make test` runs this first,
+# so a clean checkout needs one command.
+setup: $(VENV)/.installed build-runner rom-elf
 
 # --clear: a venv left behind by a failed run (say, created with too old a
 # Python) would otherwise keep its interpreter.
@@ -18,6 +18,12 @@ $(VENV)/.installed: pyproject.toml
 	$(BIN)/python -m pip install --upgrade pip
 	$(BIN)/python -m pip install -e '.[dev]'
 	touch $@
+
+# The ESP32 mask ROM ELF, release 20241011 of espressif/esp-rom-elfs (plan M0),
+# from ~/.espressif when ESP-IDF has it, from GitHub otherwise. The script
+# checks the checksum on every run, so this target stays phony.
+rom-elf:
+	scripts/fetch-rom-elf
 
 # The runner crate (plan §4.2), against esp32sim pinned by revision in
 # runner/Cargo.toml. cargo's own cache in runner/target/ is the cache: esp32sim

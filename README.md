@@ -17,7 +17,11 @@ That one command needs:
   the first build.
 - Network access to GitHub. The runner depends on
   [esp32sim](https://github.com/mikroverk/esp32sim) as a git dependency pinned by revision,
-  because esp32sim is not on crates.io.
+  because esp32sim is not on crates.io. `make setup` also downloads the ESP32 mask ROM ELF
+  from [esp-rom-elfs](https://github.com/espressif/esp-rom-elfs) release `20241011` into
+  `.cache/`, unless an ESP-IDF install under `$IDF_TOOLS_PATH`, or `~/.espressif` when it is
+  unset, already has the same file. It checks the file with `sha256sum` or `shasum`, and
+  downloads it with `curl` and `tar`.
 
 Building the validation firmware (`make firmware`) also needs Docker.
 
@@ -25,8 +29,9 @@ Building the validation firmware (`make firmware`) also needs Docker.
 
 | Target | What it does |
 |---|---|
-| `make setup` | Creates `.venv`, installs `esp32tl` with its dev tools, builds the runner |
+| `make setup` | Creates `.venv`, installs `esp32tl` with its dev tools, builds the runner, puts the ROM ELF in `.cache/` |
 | `make build-runner` | Builds the runner crate only, into `runner/target/release/`; `RUNNER_PROFILE=dev` builds it without fat LTO, into `runner/target/debug/` |
+| `make rom-elf` | Puts `esp32_rev300_rom.elf` of esp-rom-elfs `20241011` at `.cache/esp-rom-elfs/20241011/`, checked by SHA-256 |
 | `make test-runner` | The runner's Rust unit tests, in `RUNNER_PROFILE` like `build-runner`; `RUNNER_PROFILE=dev` skips the fat-LTO link while iterating |
 | `make firmware` | Builds the validation firmware in the pinned ESP-IDF container |
 | `make test` | Runs `make setup`, then the runner's tests and the pytest suite |
