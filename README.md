@@ -83,8 +83,10 @@ in its id: `test_hello_world[esp32sim]`. `esp32sim`, the runner on the emulated 
 backend so far; `--esp32tl-backend NAME` limits the run to one. `console.expect` is
 pytest-embedded's `dut.expect`, with its arguments and its 30 s default timeout. Once the runner
 has exited, an expect that has not matched fails at once with pexpect's `EOF`, and the console
-ends with `esp32tl: the runner exited with code N`. A runner that exits with an error on its own
-fails the test at teardown, even when its expects passed. `board.app` is the `IdfApp` the runner
+ends with `esp32tl: the runner exited with code N`. The `EOF` carries that code and the runner's
+last output, which pytest-embedded's "Bytes in current buffer" no longer shows: pexpect empties its
+buffer at EOF. A runner that exits with an error on its own fails the test at teardown, even when
+its expects passed; the teardown says nothing when an expect has already reported the exit. `board.app` is the `IdfApp` the runner
 flashes; `dut.app` is pytest-embedded's base `App`, because the backend runs no service.
 
 The `app_path` marker names the ESP-IDF app, relative to the test file's directory, which is the

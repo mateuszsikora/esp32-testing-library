@@ -21,7 +21,7 @@ from pathlib import Path
 import pexpect
 from pytest_embedded.dut import Dut
 from pytest_embedded.log import DuplicateStdoutPopen, MessageQueue, PexpectProcess
-from pytest_embedded.utils import Meta
+from pytest_embedded.utils import Meta, remove_asci_color_code
 from pytest_embedded_idf.app import IdfApp
 
 # The checkout this package runs from, with an editable install (`make setup` makes one): the
@@ -128,22 +128,42 @@ class Esp32Sim:
         loop and has nearly always sent the runner's last lines on by then, but it is not waited
         for: they may miss `dut.log`, never the test's result. A runner that exited with an error
         of its own fails the test, even one whose expects all passed before it."""
+        # The runner handles no signal, so -SIGTERM and -SIGKILL are a signal's, and pass only when
+        # sent here. Judged by the code after the runner has stopped, not by whether it had
+        # stopped before: one that crashed just before the signal keeps its own code.
+        passing = {0}
         if self.process.returncode is None:
             # Not DuplicateStdoutPopen.terminate(), which closes the log before the signal.
             self.process.send_signal(signal.SIGTERM)
+            passing.add(-signal.SIGTERM)
         self._waiter.join(timeout=5)
         if self._waiter.is_alive():
             self.process.kill()
+            passing.add(-signal.SIGKILL)
             self._waiter.join()
         # pytest-embedded leaves it unannotated.
         self.process.close()  # type: ignore[no-untyped-call]
-        # Judged by the code, not by who stopped the runner: one that crashed just before the
-        # signal has its own code. The signals above are the only codes that are not the runner's.
         code = self.process.returncode
-        if code not in (0, -signal.SIGTERM, -signal.SIGKILL):
+        if code not in passing:
             raise BackendError(
                 f"the runner exited with code {code}; its output is in {self.dut.logfile}"
             )
+
+
+class RunnerExited(pexpect.EOF):
+    """The EOF that ends the stream at the end of the run. pexpect raises an EOF of its own from
+    it, and pytest-embedded its "Not found" one from that, so it is found in the chain:
+    `ended_on_runner_exit`."""
+
+
+def ended_on_runner_exit(error: BaseException) -> bool:
+    """Whether `error` came from an expect that read the end of the run."""
+    cause: BaseException | None = error
+    while cause is not None:
+        if isinstance(cause, RunnerExited):
+            return True
+        cause = cause.__cause__ or cause.__context__
+    return False
 
 
 # How much of the runner's last output the EOF of an expect carries: pytest-embedded's own message
@@ -152,23 +172,31 @@ EOF_TAIL_BYTES = 2048
 
 
 def end_stream_at_end_of_run(proc: PexpectProcess) -> None:
-    """Makes `proc` raise pexpect's `EOF` once it has read the end-of-run line, instead of
+    """Makes `proc` raise `RunnerExited` once it has read the end-of-run line, instead of
     reading an unchanging file until the expect times out. The EOF carries the runner's exit
-    code and the end of its output."""
+    code and the end of its output, whole lines without colour codes."""
     read = proc.read_nonblocking
     seen = b""
+    cut = False
     ended: str | None = None
 
     def read_nonblocking(size: int = 1, timeout: int = -1) -> bytes:
-        nonlocal seen, ended
+        nonlocal seen, cut, ended
         if ended is not None:
-            raise pexpect.EOF(ended)
+            raise RunnerExited(ended)
         data: bytes = read(size, timeout)
-        seen = (seen + data)[-EOF_TAIL_BYTES:]
+        seen += data
+        if len(seen) > EOF_TAIL_BYTES:
+            seen, cut = seen[-EOF_TAIL_BYTES:], True
         end = END_OF_RUN.search(seen)
         if end is not None:
-            tail = seen[: end.start()].decode(errors="replace")
-            ended = f"the runner exited with code {end[1].decode()}; its last output:\n{tail}"
+            tail = seen[: end.start()]
+            if cut:
+                tail = tail.partition(b"\n")[2]
+            ended = (
+                f"the runner exited with code {end[1].decode()}; its last output:\n"
+                + remove_asci_color_code(tail)
+            )
         return data
 
     proc.read_nonblocking = read_nonblocking  # type: ignore[method-assign]

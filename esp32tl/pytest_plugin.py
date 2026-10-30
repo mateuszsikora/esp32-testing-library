@@ -16,13 +16,12 @@ from collections.abc import Generator, Iterator
 from typing import NoReturn
 
 import pytest
-from pexpect import EOF
 from pytest_embedded.dut import Dut
 from pytest_embedded.log import MessageQueue
 from pytest_embedded.utils import Meta
 
 from esp32tl.backends import SERVICES
-from esp32tl.backends.esp32sim import BackendError, Esp32Sim
+from esp32tl.backends.esp32sim import BackendError, Esp32Sim, ended_on_runner_exit
 from esp32tl.interfaces.console import Console
 
 
@@ -85,7 +84,8 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         raise pytest.UsageError("--count is set: esp32tl runs one board in a test")
 
 
-# Set on a test whose call failed on an expect that read the runner's end (pexpect's EOF).
+# Set on a test whose call failed on an expect that read the runner's end: its error names the exit
+# code already.
 EXPECT_SAW_RUNNER_EXIT = pytest.StashKey[bool]()
 
 
@@ -94,7 +94,11 @@ def pytest_runtest_makereport(
     item: pytest.Item, call: pytest.CallInfo[None]
 ) -> Generator[None, pytest.TestReport, pytest.TestReport]:
     report = yield
-    if report.when == "call" and call.excinfo is not None and call.excinfo.errisinstance(EOF):
+    if (
+        report.when == "call"
+        and call.excinfo is not None
+        and ended_on_runner_exit(call.excinfo.value)
+    ):
         item.stash[EXPECT_SAW_RUNNER_EXIT] = True
     return report
 

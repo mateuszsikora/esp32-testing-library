@@ -6,15 +6,18 @@ multiprocessing manager for every session.
 
 import hashlib
 import json
+import re
 import shutil
 import time
 from pathlib import Path
+from typing import cast
 
 import pytest
 from esptool.bin_image import LoadFirmwareImage
+from pytest_embedded.log import PexpectProcess
 
 from esp32tl.backends import esp32sim
-from esp32tl.backends.esp32sim import BackendError
+from esp32tl.backends.esp32sim import BackendError, RunnerExited
 
 ROOT = Path(__file__).resolve().parent.parent
 HELLO_WORLD_BUILD = ROOT / "firmware" / "hello_world" / "build"
@@ -226,8 +229,10 @@ def test_runner_and_rom_paths_name_what_is_missing(
     assert esp32sim.rom_path() == tmp_path / "rom.elf"
 
 
+# $FAKE_EXIT KILL: killed by SIGKILL, as by the OOM killer.
 FAKE_RUNNER = """#!/bin/sh
 printf '%s' "$FAKE_OUTPUT"
+[ "$FAKE_EXIT" != KILL ] || kill -KILL $$
 exit "$FAKE_EXIT"
 """
 
@@ -288,11 +293,12 @@ def test_a_runner_that_fails_to_start_is_reported_once(
     )
 
 
+@pytest.mark.parametrize(("exit", "code"), [("1", "1"), ("KILL", "-9")])
 def test_a_runner_that_exits_with_an_error_fails_the_test(
-    fake_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+    fake_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch, exit: str, code: str
 ) -> None:
     monkeypatch.setenv("FAKE_OUTPUT", "Hello world!\n")
-    monkeypatch.setenv("FAKE_EXIT", "1")
+    monkeypatch.setenv("FAKE_EXIT", exit)
     # Waits for the runner's end, so that it has exited before the teardown.
     fake_runner.makepyfile(
         test_fake="""
@@ -305,7 +311,54 @@ def test_a_runner_that_exits_with_an_error_fails_the_test(
     )
     result = fake_runner.runpytest_subprocess("-p", "no:cacheprovider")
     result.assert_outcomes(passed=1, errors=1)
+    result.stdout.fnmatch_lines(
+        [f"*esp32sim: the runner exited with code {code}; its output is in *"]
+    )
+
+
+def test_an_eof_from_elsewhere_does_not_hide_the_runner_s_exit(
+    fake_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_OUTPUT", "Hello world!\n")
+    monkeypatch.setenv("FAKE_EXIT", "1")
+    fake_runner.makepyfile(
+        test_fake="""
+        import pexpect
+
+        def test_hello(console):
+            console.expect("Hello world!")
+            console.expect(pexpect.EOF)
+            raise pexpect.EOF("a host tool's end")
+        """
+    )
+    result = fake_runner.runpytest_subprocess("-p", "no:cacheprovider")
+    result.assert_outcomes(failed=1, errors=1)
     result.stdout.fnmatch_lines(["*esp32sim: the runner exited with code 1; its output is in *"])
+
+
+def test_the_eof_carries_the_runner_s_last_whole_lines_without_colour() -> None:
+    output = b"".join(b"\x1b[0;32mline %d\x1b[0m\n" % i for i in range(200))
+    output += b"\nesp32tl: the runner exited with code 0\n"
+    chunks = [output[at : at + 100] for at in range(0, len(output), 100)]
+
+    class Stream:
+        def read_nonblocking(self, size: int = 1, timeout: int = -1) -> bytes:
+            return chunks.pop(0)
+
+    stream = Stream()
+    esp32sim.end_stream_at_end_of_run(cast(PexpectProcess, stream))
+    for _ in range(len(chunks)):
+        stream.read_nonblocking()
+    with pytest.raises(RunnerExited) as raised:
+        stream.read_nonblocking()
+    head, tail = str(raised.value).split("\n", 1)
+    assert head == "the runner exited with code 0; its last output:"
+    lines = tail.splitlines()
+    # 2 KiB of output, from the first line that begins in it
+    assert re.fullmatch(r"line \d+", lines[0])
+    assert lines[-1] == "line 199"
+    assert all(re.fullmatch(r"line \d+", line) for line in lines)
+    assert len(tail) < esp32sim.EOF_TAIL_BYTES
 
 
 def copy_build(build: Path, to: Path) -> None:
