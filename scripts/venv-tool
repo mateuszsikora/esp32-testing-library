@@ -1,0 +1,11 @@
+#!/bin/sh
+# Runs a tool from this worktree's .venv for the pre-commit hooks. Git hooks are
+# shared by every worktree of a clone, so the worktree being committed from may
+# not have run `make setup` yet.
+tool=".venv/bin/$1"
+if [ ! -x "$tool" ]; then
+	echo "$tool not found: run make setup in this worktree" >&2
+	exit 1
+fi
+shift
+exec "$tool" "$@"

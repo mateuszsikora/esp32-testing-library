@@ -1,5 +1,6 @@
 PYTHON ?= python3
-VENV ?= .venv
+# Fixed: the pre-commit hooks run the tools from .venv.
+override VENV := .venv
 BIN := $(VENV)/bin
 
 .PHONY: setup build-runner firmware test lint hooks clean
@@ -12,7 +13,7 @@ setup: $(VENV)/.installed build-runner
 # Python) would otherwise keep its interpreter.
 $(VENV)/.installed: pyproject.toml
 	@$(PYTHON) -c 'import sys; sys.exit(sys.version_info < (3, 11))' || \
-		{ echo "esp32tl needs Python 3.11 or newer; run with PYTHON=python3.11 (or newer)"; exit 1; }
+		{ echo "esp32tl needs Python 3.11 or newer; run with PYTHON=python3.11 (or newer)" >&2; exit 1; }
 	$(PYTHON) -m venv --clear $(VENV)
 	$(BIN)/python -m pip install --upgrade pip
 	$(BIN)/python -m pip install -e '.[dev]'

@@ -12,19 +12,20 @@ repos:
     hooks:
       - id: ruff-check
         name: ruff check
-        entry: .venv/bin/ruff check --fix --force-exclude
+        entry: scripts/venv-tool ruff check --fix --force-exclude
         language: system
         types_or: [python, pyi]
       - id: ruff-format
         name: ruff format
-        entry: .venv/bin/ruff format --force-exclude
+        entry: scripts/venv-tool ruff format --force-exclude
         language: system
         types_or: [python, pyi]
       - id: mypy
         name: mypy
-        # The config lists the files to check; checking the whole tree each
-        # time keeps the hook and `make lint` in agreement.
-        entry: .venv/bin/mypy
+        # The config lists the files to check; checking the whole tree on
+        # every commit keeps the hook and `make lint` in agreement, and catches
+        # commits that change only the mypy config or the dependencies.
+        entry: scripts/venv-tool mypy
         language: system
-        types_or: [python, pyi]
         pass_filenames: false
+        always_run: true

@@ -33,6 +33,19 @@ Building the validation firmware (`make firmware`) also needs Docker.
 
 After `make setup`, `.venv/bin/pytest` runs the tests directly.
 
+`make` creates `.venv` with `python3`. To use another interpreter, pass it on every call or
+export it, for example `export PYTHON=python3.11`: when `pyproject.toml` changes, the next
+`make setup` recreates `.venv` from scratch with whatever `PYTHON` is then.
+
+## Pre-commit hooks
+
+`make hooks` installs the hooks for every worktree of the clone, because git keeps hooks in the
+shared `.git` directory. The ruff and mypy hooks run the tools from the `.venv` of the worktree
+you commit from, so run `make setup` in each worktree before its first commit.
+
+The installed hook also remembers the `.venv` of the worktree where `make hooks` ran. If that
+worktree is removed, run `make hooks` again from another one.
+
 ## Layout
 
 | Path | Contents |
