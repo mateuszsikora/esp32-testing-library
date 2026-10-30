@@ -106,7 +106,7 @@ jobs:
 
       - run: tar -tvf build/ci/firmware.tar
 
-      # Fetched once here rather than by all six test jobs at the same time.
+      # Fetched once here rather than by all the test jobs at the same time.
       - uses: actions/cache@v6
         with:
           path: .cache/esp-rom-elfs
