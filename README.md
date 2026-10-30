@@ -74,8 +74,8 @@ GitHub-hosted macOS runners have no Docker, so the work is split:
 | Job | Runs on | What it does |
 |---|---|---|
 | `firmware` | self-hosted Linux | `make firmware` and the ROM ELF, once per content of `firmware/`, the workflow and the `Makefile` |
-| `runner` | self-hosted Linux, `macos-latest` | `make build-runner test-runner`, once per revision of the runner's sources, its esp32sim pin and its toolchain |
-| `test` | self-hosted Linux, `macos-latest`; Python 3.11, 3.13, 3.14 | Unpacks the images, the runner and the ROM ELF (fetched once by `firmware`) and runs pytest; builds nothing |
+| `runner` | self-hosted Linux; `macos-latest` only when the repository is public | `make build-runner test-runner`, once per revision of the runner's sources, its esp32sim pin and its toolchain |
+| `test` | self-hosted Linux; `macos-latest` only when the repository is public; Python 3.11, 3.13, 3.14 | Unpacks the images, the runner and the ROM ELF (fetched once by `firmware`) and runs pytest; builds nothing |
 
 The build jobs hand their output to the test jobs through the Actions cache, as tarballs under
 `build/ci/`, keyed by what they were built from, the workflow and the `Makefile` included; a key
@@ -84,6 +84,9 @@ the test jobs of an older run can fail on a cache miss: re-run all jobs. A bad e
 `gh cache delete <key>` removes it.
 The `requires_docker` tests run only on the self-hosted Linux runner, which has Docker; on macOS
 they skip. The self-hosted runner is one machine, so its jobs queue one after another.
+While the repository is private, the macOS jobs do not run: minutes on GitHub-hosted runners are
+limited, and macOS ones count ten times. The workflow reads the repository's visibility, so they
+come back once it is public.
 
 ## Pre-commit hooks
 

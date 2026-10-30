@@ -3,6 +3,11 @@
 # self-hosted Linux runner, and the runner crate once per platform. The test
 # jobs then run only the runner and Python: they build nothing.
 #
+# The macOS jobs run only once the repository is public. While it is private,
+# minutes on GitHub-hosted runners are limited, and macOS ones count ten times;
+# github.event.repository.private drops macos from the platforms, so making
+# the repository public turns them back on with no change here.
+#
 # The builds reach the test jobs through the Actions cache, not as artifacts:
 # artifacts count against the account's storage quota, which is full, while
 # the cache has 10 GB per repository of its own. Each build job saves a tarball
@@ -101,7 +106,7 @@ jobs:
 
       - run: tar -tvf build/ci/firmware.tar
 
-      # Fetched once here rather than by all six test jobs at the same time.
+      # Fetched once here rather than by all the test jobs at the same time.
       - uses: actions/cache@v6
         with:
           path: .cache/esp-rom-elfs
@@ -113,12 +118,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - platform: linux
-            runs-on: [self-hosted, Linux, X64]
-          - platform: macos
-            runs-on: macos-latest
-    runs-on: ${{ matrix.runs-on }}
+        platform: ${{ fromJSON(github.event.repository.private && '["linux"]' || '["linux", "macos"]') }}
+    runs-on: ${{ matrix.platform == 'macos' && 'macos-latest' || fromJSON('["self-hosted", "Linux", "X64"]') }}
     timeout-minutes: 30
     # The same on both platforms; each adds its OS and architecture.
     outputs:
@@ -165,14 +166,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: [linux, macos]
+        platform: ${{ fromJSON(github.event.repository.private && '["linux"]' || '["linux", "macos"]') }}
         python: ["3.11", "3.13", "3.14"]
-        include:
-          - platform: linux
-            runs-on: [self-hosted, Linux, X64]
-          - platform: macos
-            runs-on: macos-latest
-    runs-on: ${{ matrix.runs-on }}
+    runs-on: ${{ matrix.platform == 'macos' && 'macos-latest' || fromJSON('["self-hosted", "Linux", "X64"]') }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
