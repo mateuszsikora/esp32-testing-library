@@ -5,12 +5,14 @@
     python3 tools/benchtime.py compare OUT_A OUT_B
 
 `run` executes an esp32sim command line, stamps every console line with the host's monotonic clock
-and writes the stamped console to OUT.
+and writes the stamped console to OUT. It exits with esp32sim's status, which is 0 for a run that
+stopped at `--max-seconds`; whether the benchmark finished is for `summary` and `compare` to check.
 
 `summary` reads one or more OUT files of the same build and prints, per phase, the emulated time per
 operation and emulated time over wall time: the best (largest) ratio first, then the median and the
 range. Load on the host can only lengthen a phase's wall time, never shorten it, so the best ratio is
-the one least disturbed by other work.
+the one least disturbed by other work. Runs of one build print identical emulated times, so it
+refuses files whose phases or times per operation differ: those are different builds.
 
 `compare` checks that two runs, typically the builds with and without the accelerators, ran the same
 phases and printed the same result hash for each; it exits 1 if they did not.
@@ -82,10 +84,16 @@ def summary(paths):
     for path, r in zip(paths, runs):
         if list(r) != names:
             sys.exit(f"{path}: its phases differ from {paths[0]}'s; summarise one build at a time")
+        for name in names:
+            if r[name][2] != runs[0][name][2]:
+                sys.exit(
+                    f"{path}: {name} took {r[name][2]} us per op, {paths[0]} {runs[0][name][2]} us;"
+                    " summarise one build at a time"
+                )
     print(f"{'phase':36s} {'per op':>12s} {'best':>6s} {'median':>7s} {'range':>11s}  results")
     for name in names:
         ratios = [r[name][0] / r[name][1] for r in runs if r[name][1] > 0]
-        per_op = statistics.median(r[name][2] for r in runs)
+        per_op = runs[0][name][2]
         hashes = {r[name][3] for r in runs}
         agree = "same" if len(hashes) == 1 else "DIFFER " + ",".join(sorted(hashes))
         if ratios:
@@ -97,20 +105,13 @@ def summary(paths):
 
 def compare(a, b):
     ra, rb = parse(a), parse(b)
-    missing = sorted(set(ra) ^ set(rb))
-    differ = [n for n in ra if n in rb and ra[n][3] != rb[n][3]]
-    for name in ra:
-        print(f"{name:36s} {ra[name][3]:>18s} {rb[name][3] if name in rb else 'missing':>18s}")
-    for name in rb:
-        if name not in ra:
-            print(f"{name:36s} {'missing':>18s} {rb[name][3]:>18s}")
-    if missing:
-        print("phases in one run only: " + ", ".join(missing))
-    if differ:
-        print("results differ: " + ", ".join(differ))
-    if not missing and not differ:
-        print("all results agree")
-    return 1 if missing or differ else 0
+    bad = 0
+    for name in list(ra) + [n for n in rb if n not in ra]:
+        ha, hb = (r[name][3] if name in r else "missing" for r in (ra, rb))
+        bad += ha != hb
+        print(f"{name:36s} {ha:>18s} {hb:>18s}{'' if ha == hb else '  DIFFER'}")
+    print(f"phases differing or missing: {bad}" if bad else "all results agree")
+    return 1 if bad else 0
 
 
 def main(argv):

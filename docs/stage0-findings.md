@@ -79,18 +79,26 @@ cache timing, and its accelerator models take whatever time they take.
 benchmark phase lasts at least 100 ms of emulated time with the accelerators on, and was timed by
 the guest in emulated time and by the host in wall time from the console lines that open and close
 it (`tools/benchtime.py`). A phase's result is hashed after its clock stops and after its end line
-is out, so the hash is in neither time. esp32sim does not model UART transmit time: a byte the guest
-writes reaches the host console at once
+is out, so the hash is in neither time. esp32sim does not model UART transmit time: the transmit
+side always reads as idle
 ([`esp-periph/src/uart.rs:1-2`](https://github.com/mikroverk/esp32sim/blob/2e36224d34decc2fc9d2bba5fa4c5fdf2171b0a6/esp-periph/src/uart.rs#L1-L2)),
-so a line's length does not delay its stamp in emulated time.
+so a line's length does not delay it. esp32sim passes the console to the host in batches, at least
+once every 65 536 cycles of core 0
+([`esp-soc/src/machine.rs:608`](https://github.com/mikroverk/esp32sim/blob/2e36224d34decc2fc9d2bba5fa4c5fdf2171b0a6/esp-soc/src/machine.rs#L608),
+[`:759`](https://github.com/mikroverk/esp32sim/blob/2e36224d34decc2fc9d2bba5fa4c5fdf2171b0a6/esp-soc/src/machine.rs#L759),
+[`:797`](https://github.com/mikroverk/esp32sim/blob/2e36224d34decc2fc9d2bba5fa4c5fdf2171b0a6/esp-soc/src/machine.rs#L797)),
+which is 0.41 ms of emulated time at 160 MHz. A line can reach the host up to that much emulated
+time after the guest printed it, so a phase measured between two stamps can come out up to 0.41 ms
+longer or shorter than it ran: about 0.4% of the shortest phase, SHA-256 on 1 KiB at 102 ms.
 
 Six runs of each build. Emulated times per operation are identical in every run of the same build.
 Between two builds of this benchmark in which a phase's own code did not change, its time still
 moved by up to 0.3%. Wall times vary more: the host's load average was 4.5 to 6.3 throughout, from
-other work. Load can only lengthen a phase's wall time, never shorten it, so the table gives the
-**best** ratio, the one least disturbed, then the median and the range. The calibration loop, the
-same code in both builds, shows why: its best ratios are 1.31 and 1.32, 1% apart, while its medians
-are 1.29 and 1.21.
+other work. Load can only lengthen the time a phase takes to run, never shorten it, so the table
+gives the **best** ratio, the one least disturbed, then the median and the range. The calibration
+loop, the same code in both builds, shows why: its best ratios are 1.31 and 1.32, 1% apart, while
+its medians are 1.29 and 1.21. A best ratio can still be slightly high: by up to about 0.4% from the
+console's batching, and by however late the host read the line that opened the phase.
 
 | Phase | Accelerators on, per op | Emulated ÷ wall: best, median (range) | Software, per op | Emulated ÷ wall: best, median (range) |
 |---|---|---|---|---|
@@ -170,6 +178,9 @@ halves it again. Either is affordable in a test.
 - *Medians of emulated ÷ wall.* Under load, a median understates the ratio, because load only
   lengthens wall time: the calibration loop's medians differed by 6% between two builds running the
   same code. The best ratio is now the headline, with the median and range beside it.
+- *Console lines reach the host the moment the guest writes them.* esp32sim passes them on in
+  batches, at least every 0.41 ms of emulated time, which moves a phase's measured length by about
+  0.4% at most.
 
 ## Gaps
 
