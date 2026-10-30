@@ -1,11 +1,17 @@
 # CI (plan M0, §6). GitHub-hosted macOS runners have no Docker, so the
 # validation firmware is built once, in the pinned ESP-IDF container on the
-# self-hosted Linux runner, and handed to the test jobs as an artifact. The
-# runner crate is built once per platform the same way. The test jobs then run
-# only the runner and Python: they build nothing.
+# self-hosted Linux runner, and the runner crate once per platform. The test
+# jobs then run only the runner and Python: they build nothing.
+#
+# The builds reach the test jobs through the Actions cache, not as artifacts:
+# artifacts count against the account's storage quota, which is full, while
+# the cache has 10 GB per repository of its own. Each build job saves a tarball
+# under a key it publishes as an output, and the test jobs restore that exact
+# key or fail. The key is also what keeps a build from running twice: a job
+# whose key is already cached builds nothing.
 #
 # The Linux jobs run on the self-hosted runner (hp600g1), which keeps the 7 GB
-# ESP-IDF image between runs; it is a single machine, so they queue one after
+# ESP-IDF image between runs. It is a single machine, so they queue one after
 # another there.
 name: CI
 
@@ -26,19 +32,24 @@ jobs:
   firmware:
     runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 30
+    outputs:
+      key: ${{ steps.key.outputs.key }}
     steps:
       - uses: actions/checkout@v7
 
       # firmware/build.sh holds the IDF tag, the container digest and the
       # project each image is built from, so a change to any of them, or to a
       # project kept under firmware/, is a new key.
+      - id: key
+        run: echo "key=firmware-${{ hashFiles('firmware/**') }}" >>"$GITHUB_OUTPUT"
+
       - id: cache
         uses: actions/cache@v6
         with:
-          path: ${{ runner.temp }}/firmware.tar
-          key: firmware-${{ hashFiles('firmware/**') }}
+          path: build/ci/firmware.tar
+          key: ${{ steps.key.outputs.key }}
 
-      # Only what pytest-embedded's IdfApp reads goes into the artifact: the
+      # Only what pytest-embedded's IdfApp reads goes into the tarball: the
       # files at the top of each build directory (flasher_args.json, the ELF,
       # the binaries, esp32tl-build.json, esp32tl-built), config/sdkconfig.json,
       # and the bootloader and partition table images. The object files stay
@@ -47,21 +58,16 @@ jobs:
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
           make firmware
+          mkdir -p build/ci
           {
             find firmware/*/build -maxdepth 1 -type f
             find firmware/*/build/config -maxdepth 1 -name sdkconfig.json
             find firmware/*/build/bootloader firmware/*/build/partition_table -maxdepth 1 \
               -type f \( -name '*.bin' -o -name '*.elf' \)
-          } >"$RUNNER_TEMP/firmware.list"
-          tar -cf "$RUNNER_TEMP/firmware.tar" -T "$RUNNER_TEMP/firmware.list"
+          } >build/ci/firmware.list
+          tar -cf build/ci/firmware.tar -T build/ci/firmware.list
 
-      - run: tar -tvf "$RUNNER_TEMP/firmware.tar"
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: firmware
-          path: ${{ runner.temp }}/firmware.tar
-          retention-days: 14
+      - run: tar -tvf build/ci/firmware.tar
 
   runner:
     strategy:
@@ -73,14 +79,30 @@ jobs:
           - platform: macos
             runs-on: macos-latest
     runs-on: ${{ matrix.runs-on }}
-    timeout-minutes: 60
+    timeout-minutes: 30
+    # The same on both platforms; each adds its OS and architecture.
+    outputs:
+      key: ${{ steps.key.outputs.key }}
     steps:
       - uses: actions/checkout@v7
+
+      # The runner's sources, its esp32sim pin (Cargo.toml and Cargo.lock),
+      # the toolchain and the profiles: one build per revision of any of them.
+      # A cold build takes under a minute, so cargo's target/ is not cached.
+      - id: key
+        run: echo "key=runner-${{ hashFiles('runner/rust-toolchain.toml', 'runner/Cargo.toml', 'runner/Cargo.lock', 'runner/src/**') }}" >>"$GITHUB_OUTPUT"
+
+      - id: cache
+        uses: actions/cache@v6
+        with:
+          path: build/ci/runner.tar
+          key: ${{ steps.key.outputs.key }}-${{ runner.os }}-${{ runner.arch }}
 
       # rustup then installs the toolchain runner/rust-toolchain.toml pins on
       # the first build. The hosted images have rustup; on the self-hosted
       # runner it is installed once and stays.
       - name: Install rustup if missing
+        if: steps.cache.outputs.cache-hit != 'true'
         run: |
           if ! command -v rustup >/dev/null 2>&1; then
             [ -x "$HOME/.cargo/bin/rustup" ] ||
@@ -89,28 +111,13 @@ jobs:
             echo "$HOME/.cargo/bin" >>"$GITHUB_PATH"
           fi
 
-      # esp32sim is built once per revision: the key changes with the pin in
-      # Cargo.toml and Cargo.lock, the toolchain, or the profiles. cargo
-      # rebuilds the runner crate itself on every run, because the checkout
-      # gives its sources a newer mtime than the cached build.
-      - uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git
-            runner/target
-          key: runner-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('runner/rust-toolchain.toml', 'runner/Cargo.toml', 'runner/Cargo.lock') }}
-
-      - run: make build-runner test-runner
-
-      - run: tar -cf "$RUNNER_TEMP/runner.tar" runner/target/release/esp32tl-runner
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: runner-${{ matrix.platform }}
-          path: ${{ runner.temp }}/runner.tar
-          retention-days: 14
+      # The tarball keeps the executable bit.
+      - name: Build and test the runner
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          make build-runner test-runner
+          mkdir -p build/ci
+          tar -cf build/ci/runner.tar runner/target/release/esp32tl-runner
 
   test:
     needs: [firmware, runner]
@@ -136,22 +143,23 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/cache/restore@v6
         with:
-          name: firmware
-          path: ${{ runner.temp }}/firmware
+          path: build/ci/firmware.tar
+          key: ${{ needs.firmware.outputs.key }}
+          fail-on-cache-miss: true
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/cache/restore@v6
         with:
-          name: runner-${{ matrix.platform }}
-          path: ${{ runner.temp }}/runner
+          path: build/ci/runner.tar
+          key: ${{ needs.runner.outputs.key }}-${{ runner.os }}-${{ runner.arch }}
+          fail-on-cache-miss: true
 
-      # The tarballs keep the paths and the runner's executable bit. With
-      # esp32tl-built in place, make has no image left to build.
+      # With esp32tl-built in place, make has no image left to build.
       - name: Unpack the firmware and the runner
         run: |
-          tar -xf "$RUNNER_TEMP/firmware/firmware.tar"
-          tar -xf "$RUNNER_TEMP/runner/runner.tar"
+          tar -xf build/ci/firmware.tar
+          tar -xf build/ci/runner.tar
           runner/target/release/esp32tl-runner --help
 
       - uses: actions/cache@v6

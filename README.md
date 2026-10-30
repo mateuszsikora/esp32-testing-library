@@ -73,10 +73,12 @@ GitHub-hosted macOS runners have no Docker, so the work is split:
 
 | Job | Runs on | What it does |
 |---|---|---|
-| `firmware` | self-hosted Linux | `make firmware`, cached by the contents of `firmware/`; publishes the images as the `firmware` artifact |
-| `runner` | self-hosted Linux, `macos-latest` | `make build-runner test-runner`, with esp32sim cached by toolchain, `Cargo.toml` and `Cargo.lock`; publishes the binary as `runner-linux` and `runner-macos` |
-| `test` | self-hosted Linux, `macos-latest`; Python 3.11, 3.13, 3.14 | Unpacks both artifacts, fetches the ROM ELF and runs pytest; builds nothing |
+| `firmware` | self-hosted Linux | `make firmware`, once per content of `firmware/` |
+| `runner` | self-hosted Linux, `macos-latest` | `make build-runner test-runner`, once per revision of the runner's sources, its esp32sim pin and its toolchain |
+| `test` | self-hosted Linux, `macos-latest`; Python 3.11, 3.13, 3.14 | Unpacks the images and the runner, fetches the ROM ELF and runs pytest; builds nothing |
 
+The build jobs hand their output to the test jobs through the Actions cache, as tarballs under
+`build/ci/`, keyed by what they were built from; a key already in the cache is not built again.
 The `requires_docker` tests run only on the self-hosted Linux runner, which has Docker; on macOS
 they skip. The self-hosted runner is one machine, so its jobs queue one after another.
 
