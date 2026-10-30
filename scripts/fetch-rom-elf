@@ -50,6 +50,7 @@ trap 'exit 143' TERM
 # place of ~/.espressif, not beside it.
 tools=${IDF_TOOLS_PATH:-${HOME:-}/.espressif}/tools/esp-rom-elfs
 pinned=$tools/$RELEASE/$ROM
+seen_pinned=
 for f in "$pinned" "$tools"/*/"$ROM"; do
 	if [ ! -f "$f" ] || { [ "$f" = "$pinned" ] && [ "${seen_pinned:-}" ]; }; then
 		continue
