@@ -192,7 +192,12 @@ first consumer's firmware.
    v3.0 is refused by its bootloader: `hello_world` with `CONFIG_ESP32_REV_MIN_3=y` resets 799 times
    in a 3 s run (`Image requires chip rev >= v3.0, but chip is v2.0`). Every module built on the
    ESP32-D0WD-V3 chip, such as the WROVER-E and WROOM-32E, is v3.x. Fixed in
-   [mikroverk/esp32sim#322](https://github.com/mikroverk/esp32sim/pull/322), not yet merged.
+   [mikroverk/esp32sim#322](https://github.com/mikroverk/esp32sim/pull/322), merged on 2026-10-29
+   as [`8c652151`](https://github.com/mikroverk/esp32sim/commit/8c652151dd5a521249a785ca147f20a9f8eda68f).
+   Rechecked on 2026-10-30 on upstream at that commit, with the same `nat.rs` change: the same
+   `hello_world` boots after one reset and reports v3.0, and the consumer's release image, empty NVS
+   and no card, executes 70 037 356 + 9 019 168 instructions in 60 s, the counts it has on the fix
+   build.
 2. **Bluetooth Classic.** Without `--ble`, `bt_spp_initiator` panics in the controller task
    (`StoreProhibited` at `0x19c` in `btdm_rom_ref_init`, called from `r_rw_pre_main`, called from
    `btdm_controller_task`): the classic chip's controller runs partly from mask ROM and expects ROM
