@@ -73,7 +73,7 @@ GitHub-hosted macOS runners have no Docker, so the work is split:
 
 | Job | Runs on | What it does |
 |---|---|---|
-| `firmware` | self-hosted Linux | `make firmware`, once per content of `firmware/` |
+| `firmware` | self-hosted Linux | `make firmware` and the ROM ELF, once per content of `firmware/`, the workflow and the `Makefile` |
 | `runner` | self-hosted Linux, `macos-latest` | `make build-runner test-runner`, once per revision of the runner's sources, its esp32sim pin and its toolchain |
 | `test` | self-hosted Linux, `macos-latest`; Python 3.11, 3.13, 3.14 | Unpacks the images, the runner and the ROM ELF (fetched once by `firmware`) and runs pytest; builds nothing |
 

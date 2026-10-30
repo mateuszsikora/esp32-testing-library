@@ -405,9 +405,9 @@ Goal: an unmodified `hello_world` prints through the runner into a pytest assert
   the self-hosted Linux runner builds every validation image in the `espressif/idf:v5.3.6`
   container (classic target) and hands it on through the Actions cache, keyed by IDF tag and
   example path; `test` jobs on self-hosted Linux and macOS restore it and run only the runner and
-  Python. (The cache, not an artifact: artifacts count against the account's storage quota.) Tests that need a container carry the
-  `requires_docker` marker and skip with that reason when Docker is absent. Python matrix 3.11,
-  3.13 and 3.14 (3.14 is what this machine runs).
+  Python. (The cache, not an artifact: artifacts count against the account's storage quota.)
+  Tests that need a container carry the `requires_docker` marker and skip with that reason when
+  Docker is absent. Python matrix 3.11, 3.13 and 3.14 (3.14 is what this machine runs).
 - `runner/`: builds against esp32sim at `8c65215`; `--board socket:` not yet wired, console on
   stdout. `make setup` builds it, cached by revision.
 - ROM ELF acquisition: `make setup` finds `~/.espressif/tools/esp-rom-elfs/*/esp32_rev300_rom.elf`

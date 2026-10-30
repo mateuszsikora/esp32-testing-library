@@ -67,8 +67,8 @@ jobs:
       # the binaries, esp32tl-build.json, esp32tl-built), config/sdkconfig.json,
       # and the bootloader and partition table images. The object files stay
       # behind. Before the tarball is cached for good, every image is checked
-      # for the files the tests need, the flash images flasher_args.json names
-      # among them.
+      # for the files the tests need: the flash images flasher_args.json names
+      # and the ELF project_description.json names among them.
       - name: Build the validation images
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
@@ -88,8 +88,10 @@ jobs:
           missing = []
           for build in sys.argv[2:]:
               flasher_args = json.loads(Path(build, "flasher_args.json").read_text())
+              description = json.loads(Path(build, "project_description.json").read_text())
               needed = ["esp32tl-built", "esp32tl-build.json", "flasher_args.json"]
               needed += ["config/sdkconfig.json", *flasher_args["flash_files"].values()]
+              needed += ["project_description.json", description["app_elf"]]
               missing += [f"{build}/{f}" for f in needed if f"{build}/{f}" not in listed]
           for path in missing:
               print(f"::error::{path} is missing from the tarball")
