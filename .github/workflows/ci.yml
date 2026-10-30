@@ -211,10 +211,9 @@ jobs:
 
       - run: .venv/bin/pytest
 
-  # `make lint` in full, clippy included. Clippy checks esp32sim in the check
-  # profile, which the runner job's release build does not produce, so it
-  # starts cold: 3 s on an M2 Pro with esp32sim already fetched. Not worth a
-  # cache.
+  # `make lint` in full, clippy included. The checkout removes runner/target/,
+  # so clippy checks esp32sim from scratch: 8 s on the self-hosted runner,
+  # fetching esp32sim included. Not worth a cache.
   lint:
     runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 15
