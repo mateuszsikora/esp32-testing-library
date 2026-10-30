@@ -25,8 +25,8 @@
 # The Linux jobs run on the self-hosted runner (hp600g1), which keeps the 7 GB
 # ESP-IDF image between runs. Every job that can runs there, even one that
 # needs nothing from it, such as lint: the repository is private, so minutes
-# on GitHub-hosted runners are limited. It is a single machine, so its jobs
-# queue one after another there.
+# on GitHub-hosted runners are limited. hp600g1 is a single machine, so its
+# jobs queue one after another there.
 name: CI
 
 on:
