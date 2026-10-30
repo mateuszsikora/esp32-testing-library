@@ -1,0 +1,11 @@
+CONFIG_IDF_TARGET="esp32"
+# The ESP32 default, which the first consumer's release image runs at too. Emulated times depend on
+# it, so it is pinned rather than inherited.
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_160=y
+CONFIG_ESP_TASK_WDT_EN=n
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
+# The accelerators are on by default on the ESP32; stated so the comparison with
+# sdkconfig.defaults.nohw is explicit.
+CONFIG_MBEDTLS_HARDWARE_MPI=y
+CONFIG_MBEDTLS_HARDWARE_SHA=y
+CONFIG_MBEDTLS_HARDWARE_AES=y
