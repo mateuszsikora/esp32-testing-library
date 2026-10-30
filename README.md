@@ -66,6 +66,20 @@ build only. Each build directory says how it was built in `esp32tl-build.json`, 
 `"container": null` for a local build. Switching between the two rebuilds from scratch. The tests
 accept a local build with a warning, and fail on one from a container other than the pinned one.
 
+## CI
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every pull request and on `main`.
+GitHub-hosted macOS runners have no Docker, so the work is split:
+
+| Job | Runs on | What it does |
+|---|---|---|
+| `firmware` | self-hosted Linux | `make firmware`, cached by the contents of `firmware/`; publishes the images as the `firmware` artifact |
+| `runner` | self-hosted Linux, `macos-latest` | `make build-runner test-runner`, with esp32sim cached by toolchain, `Cargo.toml` and `Cargo.lock`; publishes the binary as `runner-linux` and `runner-macos` |
+| `test` | self-hosted Linux, `macos-latest`; Python 3.11, 3.13, 3.14 | Unpacks both artifacts, fetches the ROM ELF and runs pytest; builds nothing |
+
+The `requires_docker` tests run only on the self-hosted Linux runner, which has Docker; on macOS
+they skip. The self-hosted runner is one machine, so its jobs queue one after another.
+
 ## Pre-commit hooks
 
 `make hooks` installs the hooks for every worktree of the clone, because git keeps hooks in the
