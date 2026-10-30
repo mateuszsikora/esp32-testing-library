@@ -210,3 +210,33 @@ jobs:
       - run: make PYTHON='${{ steps.python.outputs.python-path }}' .venv/.installed rom-elf
 
       - run: .venv/bin/pytest
+
+  # `make lint` in full, clippy included. Clippy checks esp32sim in the check
+  # profile, which the runner job's release build does not produce, so it
+  # starts cold: 3 s on an M2 Pro with esp32sim already fetched. Not worth a
+  # cache.
+  lint:
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      # The oldest Python esp32tl supports, which mypy and ruff target too.
+      - id: python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      # As in the runner job, which may have hit its cache and skipped this.
+      - name: Install rustup if missing
+        run: |
+          if ! command -v rustup >/dev/null 2>&1; then
+            [ -x "$HOME/.cargo/bin/rustup" ] ||
+              curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
+              sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
+            echo "$HOME/.cargo/bin" >>"$GITHUB_PATH"
+          fi
+
+      - run: make PYTHON='${{ steps.python.outputs.python-path }}' lint
