@@ -70,7 +70,7 @@ lint: $(VENV)/.installed
 hooks: $(VENV)/.installed
 	$(BIN)/pre-commit install
 
-# Keeps runner/target/ and .cache/: a cold runner build takes minutes and the
-# ROM ELFs come from the network.
+# Keeps runner/target/ and .cache/: the runner's build fetches esp32sim and
+# the ROM ELFs come from the network.
 clean:
 	rm -rf $(VENV) build dist .mypy_cache .ruff_cache .pytest_cache

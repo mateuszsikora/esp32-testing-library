@@ -66,6 +66,25 @@ build only. Each build directory says how it was built in `esp32tl-build.json`, 
 `"container": null` for a local build. Switching between the two rebuilds from scratch. The tests
 accept a local build with a warning, and fail on one from a container other than the pinned one.
 
+## CI
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every pull request and on `main`.
+GitHub-hosted macOS runners have no Docker, so the work is split:
+
+| Job | Runs on | What it does |
+|---|---|---|
+| `firmware` | self-hosted Linux | `make firmware` and the ROM ELF, once per content of `firmware/`, the workflow and the `Makefile` |
+| `runner` | self-hosted Linux, `macos-latest` | `make build-runner test-runner`, once per revision of the runner's sources, its esp32sim pin and its toolchain |
+| `test` | self-hosted Linux, `macos-latest`; Python 3.11, 3.13, 3.14 | Unpacks the images, the runner and the ROM ELF (fetched once by `firmware`) and runs pytest; builds nothing |
+
+The build jobs hand their output to the test jobs through the Actions cache, as tarballs under
+`build/ci/`, keyed by what they were built from, the workflow and the `Makefile` included; a key
+already in the cache is not built again. An entry unused for 7 days is evicted, so re-running only
+the test jobs of an older run can fail on a cache miss: re-run all jobs. A bad entry stays until
+`gh cache delete <key>` removes it.
+The `requires_docker` tests run only on the self-hosted Linux runner, which has Docker; on macOS
+they skip. The self-hosted runner is one machine, so its jobs queue one after another.
+
 ## Pre-commit hooks
 
 `make hooks` installs the hooks for every worktree of the clone, because git keeps hooks in the

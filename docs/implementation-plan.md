@@ -402,11 +402,12 @@ Goal: an unmodified `hello_world` prints through the runner into a pytest assert
 - Repository layout above, `pyproject.toml`, `ruff`, `mypy`, pre-commit,
   `make setup | build-runner | firmware | test`.
 - CI on GitHub Actions. GitHub-hosted macOS runners have no Docker, so: one `firmware` job on
-  ubuntu builds every validation image in the `espressif/idf:v5.3.6` container (classic target)
-  and publishes an artifact, cached by IDF tag and example path; `test` jobs on ubuntu and macOS
-  download it and run only the runner and Python. Tests that need a container carry the
-  `requires_docker` marker and skip with that reason when Docker is absent. Python matrix 3.11,
-  3.13 and 3.14 (3.14 is what this machine runs).
+  the self-hosted Linux runner builds every validation image in the `espressif/idf:v5.3.6`
+  container (classic target) and hands it on through the Actions cache, keyed by IDF tag and
+  example path; `test` jobs on self-hosted Linux and macOS restore it and run only the runner and
+  Python. (The cache, not an artifact: artifacts count against the account's storage quota.)
+  Tests that need a container carry the `requires_docker` marker and skip with that reason when
+  Docker is absent. Python matrix 3.11, 3.13 and 3.14 (3.14 is what this machine runs).
 - `runner/`: builds against esp32sim at `8c65215`; `--board socket:` not yet wired, console on
   stdout. `make setup` builds it, cached by revision.
 - ROM ELF acquisition: `make setup` finds `~/.espressif/tools/esp-rom-elfs/*/esp32_rev300_rom.elf`
@@ -585,9 +586,10 @@ a Bumble virtual link without the emulator. Then:
 | End-to-end, real board | the subset the capability table allows | pytest with `serial`, manual or self-hosted runner |
 | Determinism | same recording twice gives identical console output and identical tap | CI job diffing two runs; holds because of protocol rule 2. PPP data-phase tests are excluded: wall time is not repeatable by definition |
 
-CI matrix: firmware built once on ubuntu per IDF tag and published as an artifact; tests on
-ubuntu-latest and macos-latest with Python 3.11, 3.13 and 3.14; esp32sim built once per revision
-and cached; container-backed tests run on ubuntu only.
+CI matrix: firmware built once on the self-hosted Linux runner per IDF tag and handed on through
+the Actions cache; tests on self-hosted Linux and macos-latest with Python 3.11, 3.13 and 3.14;
+the runner built once per revision of its sources and esp32sim pin, and cached; container-backed
+tests run on Linux only.
 
 ## 7. Risks and what we do about them
 
@@ -596,8 +598,8 @@ and cached; container-backed tests run on ubuntu only.
 | #325 declined or stalled | The runner is the main path already; `BoardLink` is the only consumer of the protocol |
 | #325 accepted but ADC and route configuration stay outside the trait | The runner's *ext* half remains; proposed upstream in M10; documented as a permanent small crate if declined |
 | HCI transport never lands upstream | Bluetooth stays on the patch branch; everything else ships without it |
-| Fat-LTO release builds in CI are slow | Cache by esp32sim revision; a `dev` profile for local iteration |
-| No Docker on GitHub-hosted macOS runners | Firmware built on ubuntu and shared as an artifact; container tests marked `requires_docker` and skipped where absent |
+| Fat-LTO release builds in CI are slow | Measured in #8: a cold build takes 44 s on the self-hosted runner and 20 s on macos-latest; the runner binary is cached by revision, and a `dev` profile skips the 10 s fat-LTO re-link when iterating locally |
+| No Docker on GitHub-hosted macOS runners | Firmware built on the self-hosted Linux runner and shared through the Actions cache; container tests marked `requires_docker` and skipped where absent |
 | `pppd` in a container needs Docker locally | Documented prerequisite; the modem AT tests do not need it, only the PPP ones |
 | PPP under `--realtime` is slower and not repeatable | Only the data phase pays; the AT model and link conditions stay deterministic and run without `pppd` |
 | Wall-time to emulated-time stamping for `real` has no upstream design | Own design in M5, written before code; `clock: wall` recordings never compared with emulated ones |
