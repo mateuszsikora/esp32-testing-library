@@ -81,17 +81,22 @@ def test_hello_world(console):
 A test that uses `board`, or `console`, which needs it, runs once per backend, with the backend
 in its id: `test_hello_world[esp32sim]`. `esp32sim`, the runner on the emulated clock, is the only
 backend so far; `--esp32tl-backend NAME` limits the run to one. `console.expect` is
-pytest-embedded's `dut.expect`, with its arguments and its 30 s default timeout.
+pytest-embedded's `dut.expect`, with its arguments and its 30 s default timeout. Once the runner
+has exited, an expect that has not matched fails at once with pexpect's `EOF`, and the console
+ends with `esp32tl: the runner exited with code N`. A runner that exits with an error on its own
+fails the test at teardown, even when its expects passed. `board.app` is the `IdfApp` the runner
+flashes; `dut.app` is pytest-embedded's base `App`, because the backend runs no service.
 
 The `app_path` marker names the ESP-IDF app, relative to the test file's directory, which is the
 default; the backend runs the build in its `build/` directory, every file of `flasher_args.json`
-at its offset. pytest-embedded's `--embedded-services` and `--app-path` are refused for these
-tests, because esp32tl sets both per backend.
+at its offset. pytest-embedded's `--embedded-services`, `--app-path` and `--build-dir` are refused
+when a test uses `board`, because esp32tl sets them itself, and so is `--count` above 1: a test
+has one board.
 
 The runner and the ROM ELF are those `make setup` leaves in `runner/target/release/` and
 `.cache/`. `ESP32TL_RUNNER` and `ESP32TL_ROM` name others, for example the `RUNNER_PROFILE=dev`
-build in `runner/target/debug/`. A run stops after 300 emulated seconds if the test has not ended
-it before.
+build in `runner/target/debug/`. Without an editable install (`make setup` makes one), only those
+two find them. A run stops after 300 emulated seconds if the test has not ended it before.
 
 ## CI
 

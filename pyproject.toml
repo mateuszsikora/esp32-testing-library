@@ -20,10 +20,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# esptool is imported by the tests; it comes through pytest-embedded-idf[serial] too, which also
+# chooses its version.
 dev = [
+    "esptool",
     "mypy==2.4.1",
     "pre-commit>=4",
     "ruff==0.17.3",
+    "types-pexpect==4.9.0.20260518",
 ]
 
 [project.scripts]

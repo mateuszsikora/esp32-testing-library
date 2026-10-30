@@ -7,6 +7,7 @@ multiprocessing manager for every session.
 import hashlib
 import json
 import shutil
+import time
 from pathlib import Path
 
 import pytest
@@ -71,16 +72,46 @@ def test_backend_option_limits_the_parametrisation(pytester: pytest.Pytester) ->
 
 
 @pytest.mark.parametrize(
-    "option", [("--embedded-services", "esp"), ("--app-path", "firmware/hello_world")]
+    "option",
+    [
+        ("--embedded-services", "esp"),
+        ("--app-path", "firmware/hello_world"),
+        ("--build-dir", "elsewhere"),
+    ],
 )
 def test_pytest_embedded_options_are_refused_for_tests_with_a_board(
     pytester: pytest.Pytester, option: tuple[str, str]
 ) -> None:
     pytester.makepyfile("def test_one(board): pass\n\ndef test_two(): pass")
     result = pytester.runpytest_subprocess("-p", "no:cacheprovider", *option)
-    assert result.ret == pytest.ExitCode.INTERRUPTED
+    assert result.ret == pytest.ExitCode.USAGE_ERROR
+    result.stderr.fnmatch_lines(
+        [f"ERROR: {option[0]} is set: esp32tl chooses it for every test that uses `board`*"]
+    )
+    result.stdout.no_fnmatch_line("*Traceback*")
+
+
+def test_more_than_one_dut_is_refused(pytester: pytest.Pytester) -> None:
+    pytester.makepyfile("def test_one(board): pass")
+    result = pytester.runpytest_subprocess("-p", "no:cacheprovider", "--count", "2")
+    assert result.ret == pytest.ExitCode.USAGE_ERROR
+    result.stderr.fnmatch_lines(["ERROR: --count is set: esp32tl runs one board in a test"])
+
+
+def test_app_path_marker_needs_one_path(pytester: pytest.Pytester) -> None:
+    pytester.makepyfile(
+        """
+        import pytest
+
+        @pytest.mark.app_path
+        def test_bare(board):
+            pass
+        """
+    )
+    result = pytester.runpytest_subprocess("-p", "no:cacheprovider")
+    result.assert_outcomes(errors=1)
     result.stdout.fnmatch_lines(
-        [f"*UsageError: {option[0]} is set: esp32tl chooses it for every test that uses `board`*"]
+        ["test_app_path_marker_needs_one_path.py::test_bare: the app_path marker takes one path,*"]
     )
 
 
@@ -170,6 +201,69 @@ def test_runner_and_rom_paths_name_what_is_missing(
     (tmp_path / "runner").chmod(0o755)
     assert esp32sim.runner_path() == tmp_path / "runner"
     assert esp32sim.rom_path() == tmp_path / "rom.elf"
+
+
+FAKE_RUNNER = """#!/bin/sh
+printf '%s' "$FAKE_OUTPUT"
+exit "$FAKE_EXIT"
+"""
+
+
+@pytest.fixture
+def fake_runner(pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch) -> pytest.Pytester:
+    """A suite of one test, `console.expect("Hello world!")`, on an app with a fake build, run
+    by a fake runner that prints $FAKE_OUTPUT and exits with $FAKE_EXIT."""
+    runner = pytester.path / "runner"
+    runner.write_text(FAKE_RUNNER)
+    runner.chmod(0o755)
+    (pytester.path / "rom.elf").touch()
+    monkeypatch.setenv("ESP32TL_RUNNER", str(runner))
+    monkeypatch.setenv("ESP32TL_ROM", str(pytester.path / "rom.elf"))
+    fake_build(pytester.path)
+    pytester.makepyfile(
+        test_fake="""
+        def test_hello(console):
+            console.expect("Hello world!")
+        """
+    )
+    return pytester
+
+
+def test_expect_fails_at_once_when_the_runner_has_exited(
+    fake_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_OUTPUT", "Goodbye\n")
+    monkeypatch.setenv("FAKE_EXIT", "0")
+    started = time.monotonic()
+    result = fake_runner.runpytest_subprocess("-p", "no:cacheprovider")
+    # pytest-embedded's expect waits 30 s by default.
+    assert time.monotonic() - started < 15
+    result.assert_outcomes(failed=1)
+    result.stdout.fnmatch_lines(
+        ['E *EOF: Not found "Hello world!"', "*esp32tl: the runner exited with code 0"]
+    )
+
+
+def test_a_runner_that_exits_with_an_error_fails_the_test(
+    fake_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_OUTPUT", "Hello world!\n")
+    monkeypatch.setenv("FAKE_EXIT", "1")
+    # Waits for the runner's end, so that it has exited before the teardown.
+    fake_runner.makepyfile(
+        test_fake="""
+        import pexpect
+
+        def test_hello(console):
+            console.expect("Hello world!")
+            console.expect(pexpect.EOF)
+        """
+    )
+    result = fake_runner.runpytest_subprocess("-p", "no:cacheprovider")
+    result.assert_outcomes(passed=1, errors=1)
+    result.stdout.fnmatch_lines(
+        ["*esp32sim: the runner exited with code 1 before the test ended; its output is in *"]
+    )
 
 
 def copy_build(build: Path, to: Path) -> None:

@@ -5,13 +5,15 @@ It provides the `board` and `console` fixtures on top of pytest-embedded's class
 
 A test that uses `board` is parametrised over the backends by `pytest_generate_tests`, in one
 `metafunc.parametrize` over `board`, `embedded_services` and `app_path`, so that the three always
-travel together under one id. pytest-embedded's `--embedded-services` and `--app-path` are refused
-for such a test: an empty `embedded_services` parameter falls back to the command line, and a
-session started with `--embedded-services esp` would make the `esp32sim` case open a serial port.
-The app comes from the `app_path` marker instead.
+travel together under one id. pytest-embedded's `--embedded-services`, `--app-path` and
+`--build-dir` are refused when a test uses `board`: an empty `embedded_services` parameter falls
+back to the command line, and a session started with `--embedded-services esp` would make the
+`esp32sim` case open a serial port. The app comes from the `app_path` marker instead, its build
+from `build/` in it. `--count` above 1 is refused too: a test has one board.
 """
 
 from collections.abc import Iterator
+from typing import NoReturn
 
 import pytest
 from pytest_embedded.dut import Dut
@@ -43,16 +45,15 @@ def pytest_configure(config: pytest.Config) -> None:
 def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     if "board" not in metafunc.fixturenames:
         return
-    for option in ("embedded_services", "app_path"):
-        if metafunc.config.getoption(option, None):
-            flag = "--" + option.replace("_", "-")
-            raise pytest.UsageError(
-                f"{flag} is set: esp32tl chooses it for every test that uses `board`"
-                " (the backend through --esp32tl-backend, the app through the app_path marker)"
-            )
     app_path = metafunc.definition.path.parent
     marker = metafunc.definition.get_closest_marker("app_path")
     if marker is not None:
+        if len(marker.args) != 1 or marker.kwargs:
+            pytest.fail(
+                f"{metafunc.definition.nodeid}: the app_path marker takes one path,"
+                ' as in @pytest.mark.app_path("../firmware/hello_world")',
+                pytrace=False,
+            )
         app_path /= marker.args[0]
     chosen = metafunc.config.getoption("esp32tl_backend")
     backends = [chosen] if chosen else list(SERVICES)
@@ -64,6 +65,23 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     )
 
 
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Refuses the options esp32tl sets itself, when a test uses `board`. Here rather than in
+    pytest_generate_tests: raised there, a UsageError (or pytest.exit) is a collection error, with
+    a traceback through pluggy and exit code 2; here it is one line and exit code 4."""
+    if not any("board" in getattr(item, "fixturenames", ()) for item in items):
+        return
+    for option in ("embedded_services", "app_path", "build_dir"):
+        if config.getoption(option, None):
+            raise pytest.UsageError(
+                f"--{option.replace('_', '-')} is set: esp32tl chooses it for every test that uses"
+                " `board` (the backend through --esp32tl-backend, the app through the app_path"
+                " marker, the build in its build/ directory)"
+            )
+    if config.getoption("count", 1) != 1:
+        raise pytest.UsageError("--count is set: esp32tl runs one board in a test")
+
+
 @pytest.fixture
 def board(
     request: pytest.FixtureRequest, dut: Dut, app_path: str, msg_queue: MessageQueue, _meta: Meta
@@ -73,12 +91,19 @@ def board(
     try:
         backend = Esp32Sim(dut, app_path, msg_queue, _meta)
     except BackendError as error:
-        # from None: the message says it all, and the chained error would say it twice
-        raise pytest.fail.Exception(f"{Esp32Sim.name}: {error}", pytrace=False) from None
+        backend_failed(error)
     try:
         yield backend
     finally:
-        backend.close()
+        try:
+            backend.close()
+        except BackendError as error:
+            backend_failed(error)
+
+
+def backend_failed(error: BackendError) -> NoReturn:
+    # from None: the message says it all, and the chained error would say it twice
+    raise pytest.fail.Exception(f"{Esp32Sim.name}: {error}", pytrace=False) from None
 
 
 @pytest.fixture
