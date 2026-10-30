@@ -8,11 +8,11 @@
 and writes the stamped console to OUT. It exits with esp32sim's status, which is 0 for a run that
 stopped at `--max-seconds`; whether the benchmark finished is for `summary` and `compare` to check.
 
-`summary` reads one or more OUT files of the same build and prints, per phase, the emulated time per
-operation and emulated time over wall time: the best (largest) ratio first, then the median and the
-range. Load on the host can only lengthen a phase's wall time, never shorten it, so the best ratio is
-the one least disturbed by other work. Runs of one build print identical emulated times, so it
-refuses files whose phases or times per operation differ: those are different builds.
+`summary` reads one or more OUT files of the same build and prints, per phase, the emulated time
+per operation and emulated time over wall time: the best (largest) ratio first, then the median and
+the range. Load on the host can only lengthen a phase's wall time, never shorten it, so the best
+ratio is the one least disturbed by other work. Runs of one build print identical emulated times, so
+it refuses files whose phases or times per operation differ: those are different builds.
 
 `compare` checks that two runs, typically the builds with and without the accelerators, ran the same
 phases and printed the same result hash for each; it exits 1 if they did not.
@@ -36,7 +36,12 @@ def run(out, cmd):
     start = time.monotonic()
     lines = []
     proc = subprocess.Popen(
-        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace", bufsize=1
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        errors="replace",
+        bufsize=1,
     )
     for line in proc.stdout:
         lines.append((time.monotonic() - start, line.rstrip("\n")))
@@ -51,7 +56,10 @@ def run(out, cmd):
 
 
 def parse(path):
-    """The phases of one stamped console, in order: name -> (emulated s, wall s, per-op us, hash)."""
+    """The phases of one stamped console, in order.
+
+    name -> (emulated s, wall s, per-op us, hash)
+    """
     phases, begins, results, done = {}, {}, {}, False
     with open(path, errors="replace") as f:
         for line in f:
@@ -81,7 +89,7 @@ def parse(path):
 def summary(paths):
     runs = [parse(p) for p in paths]
     names = list(runs[0])
-    for path, r in zip(paths, runs):
+    for path, r in zip(paths, runs, strict=True):
         if list(r) != names:
             sys.exit(f"{path}: its phases differ from {paths[0]}'s; summarise one build at a time")
         for name in names:
@@ -97,7 +105,8 @@ def summary(paths):
         hashes = {r[name][3] for r in runs}
         agree = "same" if len(hashes) == 1 else "DIFFER " + ",".join(sorted(hashes))
         if ratios:
-            ratio = f"{max(ratios):6.2f} {statistics.median(ratios):7.2f} {min(ratios):5.2f}-{max(ratios):.2f}"
+            best, median, worst = max(ratios), statistics.median(ratios), min(ratios)
+            ratio = f"{best:6.2f} {median:7.2f} {worst:5.2f}-{best:.2f}"
         else:
             ratio = f"{'-':>6s} {'-':>7s} {'-':>11s}"
         print(f"{name:36s} {per_op:10.1f}us {ratio}  {agree}")
