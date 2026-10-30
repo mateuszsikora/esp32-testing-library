@@ -1,8 +1,8 @@
 /* Emulated-time cost of the crypto a TLS client spends.
  *
- * Each phase prints `BENCH begin <name>` and `BENCH end <name>: ...`, so a host reading the console can
- * time the same phase in wall time (tools/benchtime.py), then `BENCH result <name> <hash>`. The hash
- * is computed after the phase's clock has stopped and after its end line is out, so neither the
+ * Each phase prints `BENCH begin <name>` and `BENCH end <name>: ...`, so a host reading the console
+ * can time the same phase in wall time (tools/benchtime.py), then `BENCH result <name> <hash>`. The
+ * hash is computed after the phase's clock has stopped and its end line is out, so neither the
  * emulated nor the wall time includes it. Every phase runs long enough (at least 100 ms emulated with
  * the accelerators) for the wall timing to mean something.
  *
@@ -11,10 +11,11 @@
  * - SHA-256 and AES-CBC against published vectors (FIPS 180-2, NIST SP 800-38A), multi-block;
  * - ECDH from both sides, ECDSA verify accepting its own signature and rejecting a changed digest,
  *   and x^65537 against square-and-multiply: consistency checks, through the same code;
- * - every phase's result but ECDSA verify's, whose result is the return code CHECK already tests,
- *   hashed in software (FNV-1a) and printed. Inputs come from a fixed seed,
- *   so a build with the accelerators and one without (sdkconfig.defaults.nohw) must print the same
- *   hashes: that comparison is the independent check of the accelerator models. */
+ * - every phase's result, hashed in software (FNV-1a) and printed, except ECDSA verify's, whose
+ *   result is the return code CHECK already tests. Inputs come from a fixed seed, so a build with the
+ *   accelerators and one without (sdkconfig.defaults.nohw) must print the same hashes: that
+ *   comparison is the independent check of the accelerator models.
+ */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
