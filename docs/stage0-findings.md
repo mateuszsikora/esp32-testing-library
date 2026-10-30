@@ -192,7 +192,16 @@ first consumer's firmware.
    v3.0 is refused by its bootloader: `hello_world` with `CONFIG_ESP32_REV_MIN_3=y` resets 799 times
    in a 3 s run (`Image requires chip rev >= v3.0, but chip is v2.0`). Every module built on the
    ESP32-D0WD-V3 chip, such as the WROVER-E and WROOM-32E, is v3.x. Fixed in
-   [mikroverk/esp32sim#322](https://github.com/mikroverk/esp32sim/pull/322), not yet merged.
+   [mikroverk/esp32sim#322](https://github.com/mikroverk/esp32sim/pull/322), merged on 2026-10-29
+   as [`8c65215`](https://github.com/mikroverk/esp32sim/commit/8c652151dd5a521249a785ca147f20a9f8eda68f).
+   Rechecked on 2026-10-30 on upstream at that commit, with the same `nat.rs` change. In a 3 s run
+   the same `hello_world` resets once, the power-on reset (`rst:0x1 (POWERON_RESET)`), and reports
+   v3.0. The consumer's images execute exactly the instructions they do on the fix build in the
+   table above: the release image with empty NVS, 70 037 356 + 9 019 168 in 60 s; with NVS naming a
+   Bluetooth peer, 6 935 523 763 + 523 030 753 in 90 s, with the same 488 panics; the same with
+   `--ble`, 138 178 241 + 12 762 501; and the desk image, 236 740 911 + 24 379 202 in 600 s. The
+   commit also carries [mikroverk/esp32sim#300](https://github.com/mikroverk/esp32sim/pull/300),
+   which changes the virtual BLE controller; the `--ble` run is unaffected.
 2. **Bluetooth Classic.** Without `--ble`, `bt_spp_initiator` panics in the controller task
    (`StoreProhibited` at `0x19c` in `btdm_rom_ref_init`, called from `r_rw_pre_main`, called from
    `btdm_controller_task`): the classic chip's controller runs partly from mask ROM and expects ROM
@@ -237,7 +246,8 @@ esp32sim --chip esp32 --board none --boot rom --console uart0 --flash-mb 4 --max
   --flash-at 0x10000=$B/$APP.bin --elf $B/$APP.elf
 ```
 
-- `hello_world` built for v3.0: as above; 799 resets in the 3 s.
+- `hello_world` built for v3.0: as above; 799 resets in the 3 s on `2e36224`. From `8c65215` on it
+  boots (gap 1).
 - `hello_world` with PSRAM: add `--psram-mb 4`.
 - `bt_spp_initiator` (`APP=bt_spp_initiator_demo`): `--max-seconds 2`, once as is and once with
   `--ble --trace-fn esp_bt_controller` to see the controller calls.

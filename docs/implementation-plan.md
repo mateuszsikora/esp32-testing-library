@@ -48,8 +48,16 @@ Each item names the fact, where it was checked, and what changes.
 5. **PR #322 (chip revision v3.0) is not needed for any validation firmware.** The bootloader
    refuses an image only when it was built with `CONFIG_ESP32_REV_MIN_3=y`; IDF's default is
    `ESP32_REV_MIN_0`, and the examples in the Validation section use the default. *Amendment:* the
-   patch branch is not created until the first firmware that needs it is run (the first consumer's,
-   built for the WROVER-E). Milestones 0 to 7 pin upstream `main`.
+   patch branch is not created until the first firmware that needs it is run. Milestones 0 to 7 pin
+   upstream `main`. *Update, 2026-10-30:* #322 was merged as `8c65215`, which is now the pin. It
+   also brings mikroverk/esp32sim#300 (LL Privacy in the virtual BLE controller) and
+   mikroverk/esp32sim#307 (the roadmap, documentation only), and nothing else beyond the fix build
+   stage 0 used. On it, `hello_world` built with `CONFIG_ESP32_REV_MIN_3=y` boots on its power-on
+   reset and reports v3.0, and the first consumer's WROVER-E images execute the same instructions as
+   on the fix build in every configuration stage 0 ran them in: the release image with empty NVS,
+   and with NVS naming a Bluetooth peer with and without `--ble`, and the desk image. Those images
+   need no patch branch either. The branch is first needed for whichever of BT Classic (M8) and the
+   timer wake (M9) is declined upstream.
 
 6. **`pppos_client` is not in ESP-IDF.** It lives in `espressif/esp-protocols` under
    `components/esp_modem/examples/pppos_client`. The validation list stays, the build recipe fetches
@@ -289,7 +297,7 @@ One file per tap, `.jsonl`. Line 1 is the header:
 ```json
 {"esp32tl_recording": 1, "board": "esp32-devkitc", "interface": "uart.gnss",
  "source": "model:nmea", "clock": "emulated-fifo-write", "end": "hold",
- "app_sha256": "...", "tools": {"esp32tl": "0.1.0", "esp32sim": "2e36224"},
+ "app_sha256": "...", "tools": {"esp32tl": "0.1.0", "esp32sim": "8c652151dd5a521249a785ca147f20a9f8eda68f"},
  "created": "2026-10-29T18:00:00Z"}
 ```
 
@@ -399,7 +407,7 @@ Goal: an unmodified `hello_world` prints through the runner into a pytest assert
   download it and run only the runner and Python. Tests that need a container carry the
   `requires_docker` marker and skip with that reason when Docker is absent. Python matrix 3.11,
   3.13 and 3.14 (3.14 is what this machine runs).
-- `runner/`: builds against esp32sim at `2e36224`; `--board socket:` not yet wired, console on
+- `runner/`: builds against esp32sim at `8c65215`; `--board socket:` not yet wired, console on
   stdout. `make setup` builds it, cached by revision.
 - ROM ELF acquisition: `make setup` finds `~/.espressif/tools/esp-rom-elfs/*/esp32_rev300_rom.elf`
   or downloads release `20241011` of `espressif/esp-rom-elfs` (the release the spec's own test
@@ -552,7 +560,6 @@ a Bumble virtual link without the emulator. Then:
   wakes ends today in `Stop::Halted` at `max_cycles`, a normal end, so the test asserts on the
   wake-up itself (the post-wake console line) and treats a run that only halts as a failure;
   otherwise the unpatched emulator passes silently.
-- First use of the patch branch (and of PR #322 when the first consumer's image is run).
 
 ### M10. Upstreaming and stabilisation
 
@@ -604,7 +611,7 @@ and cached; container-backed tests run on ubuntu only.
 | Item | State |
 |---|---|
 | Python | 3.14.6 (`pytest-embedded` not installed yet) |
-| Rust | cargo 1.93.0 |
+| Rust | cargo 1.93.0, too old for esp32sim at the pin: `esp-soc/src/nat.rs` calls `AtomicUsize::try_update`, stable since Rust 1.95. Stage 0 and the pin's recheck renamed it to `fetch_update` locally; the runner needs a newer toolchain (#5) |
 | ESP-IDF | v5.5.5 at `~/esp/esp-idf`, xtensa toolchain present |
 | ROM ELFs | `~/.espressif/tools/esp-rom-elfs/20241011/esp32_rev300_rom.elf` present; newer releases `20260313` and `20260528` exist, `20241011` is pinned |
 | IDF examples | `hello_world`, `bt_spp_initiator`, `sd_card/sdspi`, `deep_sleep`, `controller_hci_uart_esp32` present; `pppos_client` is in esp-protocols |
