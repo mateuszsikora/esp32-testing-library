@@ -203,7 +203,13 @@ Labels follow from the scope and the paths touched:
 A PR that matches no row gets no label. Use only labels that exist (`gh label list`); do not
 create labels.
 
-For an existing PR use `gh pr edit <N> --title ... --body-file ...` instead.
+For an existing PR use `gh pr edit <N> --title ... --body-file ...` instead. If it fails with
+"Projects (classic) is being deprecated", which some `gh` versions do, use the REST API:
+
+```sh
+gh api -X PATCH repos/mateuszsikora/esp32-testing-library/pulls/<N> \
+  -f title="<title>" -F body=@<file>
+```
 
 ## 10. Report
 
