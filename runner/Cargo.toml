@@ -1,0 +1,40 @@
+[package]
+name = "esp32tl-runner"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Runs an unmodified ESP32 image in esp32sim with the esp32tl harness attached"
+publish = false
+# The real minimum, for a toolchain that ignores rust-toolchain.toml (one not
+# from rustup): esp-soc calls `AtomicUsize::try_update`, stable since 1.95.
+rust-version = "1.95"
+
+# esp32sim is not on crates.io, so its crates come from git, every one at the
+# same revision: 8c65215, the merge of mikroverk/esp32sim#322, from which images
+# built for chip revision v3.0 boot (plan §1, findings 3 and 5). This revision
+# is the project's esp32sim pin; changing it here changes it everywhere.
+[dependencies]
+esp32 = { git = "https://github.com/mikroverk/esp32sim", rev = "8c652151dd5a521249a785ca147f20a9f8eda68f" }
+esp-soc = { git = "https://github.com/mikroverk/esp32sim", rev = "8c652151dd5a521249a785ca147f20a9f8eda68f" }
+
+# For `Stop::CostModelLifecycle` in a test; neither crate above re-exports it.
+[dev-dependencies]
+emu-core = { git = "https://github.com/mikroverk/esp32sim", rev = "8c652151dd5a521249a785ca147f20a9f8eda68f" }
+
+# What tests run. Dependencies take their profile from here, not from esp32sim's
+# workspace, so this copies upstream's release profile: the emulator's speed
+# depends on it.
+[profile.release]
+opt-level = 3
+debug = 1
+lto = "fat"
+codegen-units = 1
+
+# For local iteration (`make build-runner RUNNER_PROFILE=dev`): fat LTO makes a
+# release build take minutes (plan §7). Optimised all the same, because an
+# unoptimised emulator is too slow to boot an image. Upstream builds and tests
+# only in release, so overflow checks and debug assertions stay off, as there.
+[profile.dev]
+opt-level = 3
+debug-assertions = false
+overflow-checks = false

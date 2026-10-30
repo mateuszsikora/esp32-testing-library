@@ -29,3 +29,11 @@ repos:
         language: system
         pass_filenames: false
         always_run: true
+      # In runner/, so rustup uses the toolchain runner/rust-toolchain.toml pins.
+      # Clippy stays in `make lint` only: it builds esp32sim, too slow for a hook.
+      - id: cargo-fmt
+        name: cargo fmt
+        entry: sh -c 'cd runner && cargo fmt'
+        language: system
+        files: ^runner/.*\.rs$
+        pass_filenames: false
