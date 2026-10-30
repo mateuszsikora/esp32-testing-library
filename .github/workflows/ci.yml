@@ -3,11 +3,6 @@
 # self-hosted Linux runner, and the runner crate once per platform. The test
 # jobs then run only the runner and Python: they build nothing.
 #
-# The macOS jobs run only once the repository is public. While it is private,
-# minutes on GitHub-hosted runners are limited, and macOS ones count ten times;
-# github.event.repository.private drops macos from the platforms, so making
-# the repository public turns them back on with no change here.
-#
 # The builds reach the test jobs through the Actions cache, not as artifacts:
 # artifacts count against the account's storage quota, which is full, while
 # the cache has 10 GB per repository of its own. Each build job saves a tarball
@@ -23,10 +18,13 @@
 # `gh cache delete <key>`.
 #
 # The Linux jobs run on the self-hosted runner (hp600g1), which keeps the 7 GB
-# ESP-IDF image between runs. Every job that can runs there, even one that
-# needs nothing from it, such as lint: the repository is private, so minutes
-# on GitHub-hosted runners are limited. hp600g1 is a single machine, so its
-# jobs queue one after another there.
+# ESP-IDF image between runs. It is a single machine, so its jobs queue one
+# after another there. While the repository is private, minutes on
+# GitHub-hosted runners are limited, and macOS ones count ten times: every job
+# that can runs on hp600g1, even one that needs nothing from it, such as lint,
+# and the macOS jobs do not run. github.event.repository.private drops macos
+# from the platforms, so making the repository public turns them back on with
+# no change here.
 name: CI
 
 on:
