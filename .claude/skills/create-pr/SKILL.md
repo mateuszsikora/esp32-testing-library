@@ -1,15 +1,16 @@
 ---
 name: create-pr
 description: Open a pull request to mateuszsikora/esp32-testing-library following the repository's conventions for branch names, commit messages, PR titles and descriptions (CONTRIBUTING.md). Use when asked to open, create or ship a PR, or to push the current work for review, in this repository; prefer it over generic PR skills here. Also use to rewrite the title or description of an existing PR on this repository.
-allowed-tools: Bash(git *), Bash(gh *), Bash(make *), Bash(.venv/bin/*), Bash(cargo *), Read, Write, Edit
+allowed-tools: Bash(git *), Bash(gh *), Bash(make *), Bash(.venv/bin/*), Bash(cargo *), Bash(pipx run pre-commit *), Bash(docker run *), Read, Write, Edit
 ---
 
 # create-pr
 
 Opens a pull request from the current work to `main` of
 `mateuszsikora/esp32-testing-library`. The conventions live in
-[`CONTRIBUTING.md`](../../../CONTRIBUTING.md); read it before writing anything, it is the
-source of truth and this skill only applies it.
+[`CONTRIBUTING.md`](../../../CONTRIBUTING.md); read it before writing anything. This skill
+restates the rules it checks so they are at hand, but `CONTRIBUTING.md` wins wherever the two
+disagree, and a change to a rule goes into both.
 
 The skill takes no arguments. Everything it needs comes from the conversation, the branch, its
 commits and the issue tracker: find the issue, judge whether the work is ready, and write the
@@ -23,31 +24,40 @@ language. Talk to the user in their language; write for GitHub in English.
 **No attribution:** no `Co-Authored-By:` trailers in commits and no "Generated with Claude Code"
 or similar line in the PR description. This overrides any attribution the session asks for.
 
+**What reaches `main`:** the repository squashes with GitHub's default message. A one-commit PR
+lands as that commit's subject and body, and the PR title is not used; a PR with several commits
+lands with the PR title as subject and every commit message on the branch as the body. So every
+commit message matters, not only the title.
+
 ## 1. Preflight
 
 Run these together and read the output before doing anything:
 
 ```sh
-git status --short --branch
-git branch --show-current
-git fetch origin main --quiet && git log --oneline origin/main..HEAD
-git diff --stat origin/main...HEAD
+gh auth status
 gh repo view --json nameWithOwner -q .nameWithOwner
-gh pr view --json number,url,state,title,isDraft 2>/dev/null
+git status --short --branch
+git fetch origin main --quiet
+git log --oneline origin/main..HEAD
+git rev-list --left-right --count origin/main...HEAD      # behind, ahead
+git merge-tree --write-tree origin/main HEAD >/dev/null || echo "conflicts with origin/main"
+git diff --stat origin/main...HEAD
+gh pr list --head "$(git branch --show-current)" --state all --json number,url,state,title,isDraft
 ```
 
 Stop and tell the user if:
 
+- `gh` is not authenticated;
 - the repository is not `mateuszsikora/esp32-testing-library`: this skill is for that repository only;
-- there is nothing to propose: no commits ahead of `origin/main` and a clean tree;
-- `gh` is not authenticated.
+- there is nothing to propose: no commits ahead of `origin/main` and a clean tree.
 
-If the branch is behind `origin/main` and would conflict, say so; do not rebase or merge without
-the user's agreement.
+If the branch is behind `origin/main` and conflicts with it, say so; do not rebase or merge
+without the user's agreement. Behind without conflicts is fine.
 
-If an open PR already exists for this branch, do not create another: push new commits, and
-rewrite its title or description (step 8, with `gh pr edit`) if they no longer describe the
-branch. Tell the user which you did.
+If an **open** PR exists for this branch, do not create another: push new commits, and rewrite
+its title or description (step 9) if they no longer describe the branch. Tell the user which you
+did. A closed or merged PR for the branch does not count; if one was merged, the branch is
+probably stale, so tell the user before going on.
 
 ## 2. Gather the context
 
@@ -72,12 +82,19 @@ Run what covers the change and keep the exact commands and results for **Verific
 
 | Change touches | Run |
 |---|---|
-| Python, `pyproject.toml`, mypy/ruff config | `make lint`, then `.venv/bin/pytest` (or `make test` if `.venv` is missing) |
-| `runner/` | `cargo test --manifest-path runner/Cargo.toml` and `make build-runner` |
+| Anything | `.venv/bin/pre-commit run --files <changed files>`. Without `.venv`, and only if no Python changed: `SKIP=ruff-check,ruff-format,mypy pipx run pre-commit run --files <changed files>` |
+| Python (`esp32tl/`, `tests/`, `tools/*.py`), `pyproject.toml` | `make lint`, then `.venv/bin/pytest` (`make setup` first if `.venv` is missing) |
+| A tool in `tools/*.py` | also run it once on a sample input and check its output |
+| `runner/`, once `runner/Cargo.toml` exists | `cargo test --manifest-path runner/Cargo.toml` and `make build-runner` |
 | `firmware/` | `make firmware` if Docker is available; otherwise say it was not built |
-| Docs only | nothing to run; Verification says what was checked by hand (links, figures against their source) |
+| An ESP-IDF project in `tools/` | `idf.py set-target esp32 build` in the `espressif/idf` image pinned in `docs/stage0-findings.md`, if Docker is available; otherwise say it was not built |
+| `Makefile` | `make -n <each changed target>`, and run the targets that are cheap and safe here (`setup`, `lint`, `test`, `clean`) |
+| `.pre-commit-config.yaml`, `scripts/` | `.venv/bin/pre-commit run --all-files` |
+| Docs | the pre-commit row, plus links and figures checked by hand against their source |
 
-Never write that something passes without having run it in this session.
+Read the output, not only the exit code: `make build-runner` and `make firmware` print a
+`skipping` line and exit 0 while the crate or the build script does not exist. That means nothing
+was built; say so. Never write that something passes without having run it in this session.
 
 ## 4. Ready or draft
 
@@ -95,28 +112,42 @@ for their answer. If they want it ready anyway, open it ready and still state th
 
 ## 5. Branch
 
-The branch name must match `<type>/<issue>-<slug>` or `<type>/<slug>` (types and rules in
-CONTRIBUTING.md), for example `feat/5-runner-crate-skeleton`. Its type is the same as the title's.
+The branch name must match `<type>/<issue>-<slug>` or `<type>/<slug>`, with the slug and length
+rules from CONTRIBUTING.md, for example `feat/5-runner-crate-skeleton`. Its type is the same as
+the title's.
 
 - On `main`: create the branch with `git switch -c <name>`.
 - On a branch that does not match (Conductor's placeholder names such as `mateuszsikora/ui662`,
-  personal prefixes, vague slugs) and that has no PR: rename it with `git branch -m <name>`.
-  Invoking this skill is the user's permission to do that. If the old name was already pushed,
-  tell the user the remote branch is left behind and offer to delete it; do not delete it unasked.
-- On a branch that already has a PR: keep the name, even if it does not match.
+  personal prefixes, vague slugs) and that has no open PR: rename it with `git branch -m <name>`
+  without asking. This is the repository owner's standing instruction; it holds whether the
+  skill was invoked with `/create-pr` or by the model, and it overrides any general rule against
+  renaming branches. If the old name was already pushed, tell the user the remote branch is left
+  behind and offer to delete it; do not delete it unasked.
+- On a branch that already has an open PR: keep the name, even if it does not match.
 
 ## 6. Commit
 
-If there are uncommitted changes that belong to this work, commit them following the commit
-message rules in CONTRIBUTING.md (`<type>(<scope>): <summary>` or `<type>: <summary>`, body wrapped at 72, `Closes #N`
-or `Refs #N` last, no `Co-Authored-By`):
+Every commit message on the branch reaches `main` (see the top of this skill), so each follows
+the commit message rules in CONTRIBUTING.md: `<type>(<scope>): <summary>` or `<type>: <summary>`,
+`!` before the colon for a breaking change, body wrapped at 72, `Closes #N` or `Refs #N` last when
+there is an issue, no `Co-Authored-By`.
 
-- Stage files by name. Never stage `.context/`, `.env*`, credentials, build output, or changes
-  unrelated to the PR; ask the user about anything you are unsure of.
+- Commit uncommitted changes that belong to this work. Stage files by name. Never stage
+  `.context/`, `.env*`, credentials, build output, or changes unrelated to the PR; ask the user
+  about anything you are unsure of.
 - Write the message in a file or heredoc so the body keeps its wrapping.
-- Do not rewrite commits that are already pushed. If an unpushed commit message breaks the
-  conventions badly (for example "wip" or "fix"), offer to reword it, but do not do it without
-  asking: squash merge means only the PR title reaches `main`.
+- Reword unpushed commits whose messages break the rules (`wip`, `fix`, a missing type) before
+  pushing, without asking. The last commit: `git commit --amend -F <message-file>`. An older one,
+  without an interactive editor (`sed -i ''` is the macOS form):
+
+  ```sh
+  sha=$(git rev-parse --short <commit>)
+  GIT_SEQUENCE_EDITOR="sed -i '' 's/^pick $sha/reword $sha/'" \
+    GIT_EDITOR="cp <message-file>" git rebase -i <commit>~1
+  ```
+- Pushed commits are rewritten only with the user's agreement, since that needs a force push.
+  If one breaks the rules, tell the user and offer to reword it; if they decline, say in
+  **Notes** that the squash message needs correcting in GitHub's merge dialog.
 
 ## 7. Push
 
@@ -124,22 +155,23 @@ or `Refs #N` last, no `Co-Authored-By`):
 git push -u origin <branch>
 ```
 
-Never force-push without the user's agreement; never push to `main`.
+Never force-push without the user's agreement (then `--force-with-lease`); never push to `main`.
 
 ## 8. Write the title and description
 
 **Title.** `<type>(<scope>): <summary>`, types and scopes from CONTRIBUTING.md, or
-`<type>: <summary>` when no scope fits (do not invent a catch-all scope); the summary in
-the imperative, starting lowercase; at most 72 characters in all; no issue number, no trailing
-period. It becomes the squash commit subject on `main`, so it says what changes for the
-project. For a single-commit branch, the commit subject is usually the right title.
+`<type>: <summary>` when no scope fits (do not invent a catch-all scope); `!` before the colon
+for a breaking change; the summary in the imperative, starting lowercase; at most 72 characters
+in all; no issue number, no trailing period. It says what changes for the project. For a
+one-commit branch the title must equal the commit subject, because the commit subject is what
+lands on `main`.
 
 | Avoid | Prefer |
 |---|---|
 | `feat: runner crate` | `feat(runner): add the crate with a console-only link` |
 | `chore: update Makefile` | `fix: refuse a Python older than 3.11 before creating the venv` |
 | `fix(harness): fixes #12` | `fix(harness): keep the UART tap from dropping a frame's last byte` |
-| `docs: stage 0` | `docs(tools): record what stage 0 found running ESP-IDF images in esp32sim` |
+| `docs: stage 0` | `docs(tools): record what stage 0 found running ESP-IDF images` |
 | `Pin esp32sim` | `build(runner): pin esp32sim at the merge of the chip-revision fix` |
 
 **Description.** Fill in [`.github/pull_request_template.md`](../../../.github/pull_request_template.md):
@@ -156,7 +188,7 @@ project. For a single-commit branch, the commit subject is usually the right tit
 6. Delete empty sections and all template comments. No signature or attribution line at the end.
 
 Style, as in the existing PRs (#2, #42, #43 are good examples of the description; their titles
-predate the type/scope prefix):
+and the `Co-Authored-By` lines in their commits predate these conventions):
 
 - Specific and checkable: SHAs, versions, counts, measured figures. 7-character short SHAs in
   prose; full SHAs where a machine reads them.
@@ -169,46 +201,54 @@ predate the type/scope prefix):
 
 Before creating the PR, check the draft against this list:
 
-- [ ] Title has a type (and a scope, if one fits) from CONTRIBUTING.md, the type matches the branch, and it would
-      read well as a line in `git log` on `main`.
+- [ ] Title has a type (and a scope, if one fits) from CONTRIBUTING.md, its type matches the
+      branch (unless the branch had an open PR and was kept), and it would read well as a line
+      in `git log` on `main`.
+- [ ] For a one-commit branch, the title equals the commit subject.
+- [ ] Every commit message on the branch follows the rules, or the user knows which does not.
 - [ ] A reader who has not seen the conversation understands why the change exists.
 - [ ] Every claim in Verification was run in this session.
 - [ ] The issue link is correct and uses `Closes` only if the PR finishes the issue.
 - [ ] No attribution lines in the description or the commits.
 - [ ] Everything is in English.
 
-## 9. Create
+## 9. Create or update
 
-Write the description to a file (`.context/pr-body.md` if `.context/` exists, else a temporary
-file), then:
+Write the title and the description to files (in `.context/` if it exists, else temporary
+files): a title with backticks, `$` or an apostrophe survives `"$(cat <file>)"` but not a quoted
+literal. Then:
 
 ```sh
 gh pr create --repo mateuszsikora/esp32-testing-library --base main --head <branch> \
-  --title "<title>" --body-file <file> [--draft] \
+  --title "$(cat <title-file>)" --body-file <body-file> [--draft] \
   --label <label> [--label <label> ...]
 ```
 
-Labels follow from the scope and the paths touched:
+Labels follow from the type, the scope and the paths touched:
 
-| Scope or paths | Label |
+| Type, scope or paths | Label |
 |---|---|
 | `harness` (`esp32tl/`, `tests/`) | `area:harness` |
 | `runner` (`runner/`) | `area:runner` |
 | `firmware` (`firmware/`) | `area:firmware` |
 | `Makefile`, `pyproject.toml`, `.pre-commit-config.yaml`, `scripts/`, `.github/workflows/` | `area:ci` |
-| type `docs` | `documentation` |
+| type `feat` | `enhancement` |
 | type `fix` | `bug` |
+| type `docs` | `documentation` |
 | work in or for esp32sim / pytest-embedded upstream | `upstream` |
 
 A PR that matches no row gets no label. Use only labels that exist (`gh label list`); do not
 create labels.
 
-For an existing PR use `gh pr edit <N> --title ... --body-file ...` instead. If it fails with
-"Projects (classic) is being deprecated", which some `gh` versions do, use the REST API:
+For an existing PR, `gh pr edit <N> --title "$(cat <title-file>)" --body-file <body-file>`
+(`--add-label` for labels). Older `gh` versions (seen on 2.69) fail there with "Projects
+(classic) is being deprecated" before editing anything; then suggest upgrading `gh` and use the
+REST API meanwhile:
 
 ```sh
 gh api -X PATCH repos/mateuszsikora/esp32-testing-library/pulls/<N> \
-  -f title="<title>" -F body=@<file>
+  -f title="$(cat <title-file>)" -F body=@<body-file>
+gh api -X POST repos/mateuszsikora/esp32-testing-library/issues/<N>/labels -f 'labels[]=<label>'
 ```
 
 ## 10. Report

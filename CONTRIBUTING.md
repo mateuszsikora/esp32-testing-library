@@ -71,17 +71,26 @@ Body (required unless the subject says everything):
 - Wrapped at 72 columns, plain prose, separated from the subject by a blank line.
 - Says why the change is needed and what it does differently; the diff already shows how.
 - Names the alternative that was rejected when the choice is not obvious.
-- Ends with `Closes #N` when the commit completes an issue, `Refs #N` otherwise.
+- When there is an issue, ends with `Closes #N` if the commit completes it, `Refs #N` otherwise.
 - No `Co-Authored-By:`, `Signed-off-by:` or "Generated with" lines.
 
 Follow-up commits on a branch (review fixes) follow the same rules and say what the review found,
 not "address review comments".
 
-## Pull request titles
+## Pull request titles, and what reaches `main`
 
-The repository merges by squashing, so the pull request title becomes the commit subject on
-`main`. It follows the commit subject rules above, with the same type as the branch name; GitHub
-appends `(#N)` on merge.
+The repository merges by squashing, with GitHub's default squash message:
+
+- A pull request with one commit lands as that commit's message, subject and body; the pull
+  request title is not used. Keep the title equal to the commit subject.
+- A pull request with several commits lands with the pull request title, plus `(#N)`, as the
+  subject, and every commit message on the branch, in order, as the body.
+
+Either way, every commit message on the branch ends up on `main`. Fix one that breaks these rules
+before the pull request is merged; whoever merges can also correct the squash message in GitHub's
+merge dialog.
+
+The title follows the commit subject rules above, with the same type as the branch name.
 
 ## Pull request descriptions
 
@@ -103,11 +112,13 @@ do, open questions) is opened as a draft, and the description says what is missi
 References: issues as `#N`, upstream as `mikroverk/esp32sim#N`, commits as 7-character short
 SHAs in prose and full SHAs in anything read by machine.
 
-Write plainly and precisely: measured claims with their numbers, no "comprehensive", "robust" or
-"seamless", no emoji. If an earlier version of the pull request claimed something that turned out
+Write plainly and precisely: measured claims with their numbers, no "comprehensive", "robust",
+"seamless" or "enhance", no emoji. If an earlier version of the pull request claimed something that turned out
 wrong, say so.
 
 ## Labels
 
-Every pull request gets the `area:*` labels for the parts it touches (`area:harness`,
-`area:runner`, `area:firmware`, `area:ci`), plus `documentation`, `bug` or `upstream` where they apply.
+A pull request gets the `area:*` labels for the parts it touches (`area:harness`, `area:runner`,
+`area:firmware`, `area:ci`), plus `enhancement` for `feat`, `bug` for `fix`, `documentation` for
+`docs`, and `upstream` for work in or with esp32sim or pytest-embedded. A pull request that matches
+none of these gets no label.
