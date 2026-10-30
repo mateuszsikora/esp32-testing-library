@@ -8,7 +8,14 @@
 # the cache has 10 GB per repository of its own. Each build job saves a tarball
 # under a key it publishes as an output, and the test jobs restore that exact
 # key or fail. The key is also what keeps a build from running twice: a job
-# whose key is already cached builds nothing.
+# whose key is already cached builds nothing. Each key hashes this file and
+# the Makefile as well as the sources, so a change to how a build is made or
+# packed is a new key too.
+#
+# A cache entry unused for 7 days is evicted. A test job re-run on its own
+# after that fails on the cache miss: re-run all jobs instead, which builds
+# again. A bad tarball saved under a key stays there until it is deleted:
+# `gh cache delete <key>`.
 #
 # The Linux jobs run on the self-hosted runner (hp600g1), which keeps the 7 GB
 # ESP-IDF image between runs. It is a single machine, so they queue one after
@@ -24,8 +31,11 @@ on:
 permissions:
   contents: read
 
+# A new push to a pull request cancels the run of the one before. On main every
+# commit gets its own group and its own run: a shared group would keep at most
+# one run waiting and cancel the others.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
@@ -34,6 +44,7 @@ jobs:
     timeout-minutes: 30
     outputs:
       key: ${{ steps.key.outputs.key }}
+      rom-elf-key: ${{ steps.key.outputs.rom-elf-key }}
     steps:
       - uses: actions/checkout@v7
 
@@ -41,7 +52,9 @@ jobs:
       # project each image is built from, so a change to any of them, or to a
       # project kept under firmware/, is a new key.
       - id: key
-        run: echo "key=firmware-${{ hashFiles('firmware/**') }}" >>"$GITHUB_OUTPUT"
+        run: |
+          echo "key=firmware-${{ hashFiles('firmware/**', 'Makefile', '.github/workflows/ci.yml') }}" >>"$GITHUB_OUTPUT"
+          echo "rom-elf-key=rom-elf-${{ hashFiles('scripts/fetch-rom-elf') }}" >>"$GITHUB_OUTPUT"
 
       - id: cache
         uses: actions/cache@v6
@@ -53,7 +66,9 @@ jobs:
       # files at the top of each build directory (flasher_args.json, the ELF,
       # the binaries, esp32tl-build.json, esp32tl-built), config/sdkconfig.json,
       # and the bootloader and partition table images. The object files stay
-      # behind.
+      # behind. Before the tarball is cached for good, every image is checked
+      # for the files the tests need, the flash images flasher_args.json names
+      # among them.
       - name: Build the validation images
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
@@ -65,9 +80,32 @@ jobs:
             find firmware/*/build/bootloader firmware/*/build/partition_table -maxdepth 1 \
               -type f \( -name '*.bin' -o -name '*.elf' \)
           } >build/ci/firmware.list
+          python3 - build/ci/firmware.list firmware/*/build <<'EOF'
+          import json, sys
+          from pathlib import Path
+
+          listed = set(Path(sys.argv[1]).read_text().splitlines())
+          missing = []
+          for build in sys.argv[2:]:
+              flasher_args = json.loads(Path(build, "flasher_args.json").read_text())
+              needed = ["esp32tl-built", "esp32tl-build.json", "flasher_args.json"]
+              needed += ["config/sdkconfig.json", *flasher_args["flash_files"].values()]
+              missing += [f"{build}/{f}" for f in needed if f"{build}/{f}" not in listed]
+          for path in missing:
+              print(f"::error::{path} is missing from the tarball")
+          sys.exit(1 if missing else 0)
+          EOF
           tar -cf build/ci/firmware.tar -T build/ci/firmware.list
 
       - run: tar -tvf build/ci/firmware.tar
+
+      # Fetched once here rather than by all six test jobs at the same time.
+      - uses: actions/cache@v6
+        with:
+          path: .cache/esp-rom-elfs
+          key: ${{ steps.key.outputs.rom-elf-key }}
+
+      - run: make rom-elf
 
   runner:
     strategy:
@@ -86,11 +124,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # The runner's sources, its esp32sim pin (Cargo.toml and Cargo.lock),
-      # the toolchain and the profiles: one build per revision of any of them.
-      # A cold build takes under a minute, so cargo's target/ is not cached.
+      # All of runner/ (target/ is not there after a checkout): the sources,
+      # the esp32sim pin in Cargo.toml and Cargo.lock, the toolchain, the
+      # profiles, and whatever else cargo reads. A cold build takes under a
+      # minute, so cargo's target/ is not cached.
       - id: key
-        run: echo "key=runner-${{ hashFiles('runner/rust-toolchain.toml', 'runner/Cargo.toml', 'runner/Cargo.lock', 'runner/src/**') }}" >>"$GITHUB_OUTPUT"
+        run: echo "key=runner-${{ hashFiles('runner/**', 'Makefile', '.github/workflows/ci.yml') }}" >>"$GITHUB_OUTPUT"
 
       - id: cache
         uses: actions/cache@v6
@@ -155,17 +194,19 @@ jobs:
           key: ${{ needs.runner.outputs.key }}-${{ runner.os }}-${{ runner.arch }}
           fail-on-cache-miss: true
 
-      # With esp32tl-built in place, make has no image left to build.
+      # A miss is no failure: `make rom-elf` downloads the ELF then.
+      - uses: actions/cache/restore@v6
+        with:
+          path: .cache/esp-rom-elfs
+          key: ${{ needs.firmware.outputs.rom-elf-key }}
+
+      # The images land in firmware/<image>/build/, where
+      # test_firmware_images.py reads them; esp32tl-built marks them finished.
       - name: Unpack the firmware and the runner
         run: |
           tar -xf build/ci/firmware.tar
           tar -xf build/ci/runner.tar
           runner/target/release/esp32tl-runner --help
-
-      - uses: actions/cache@v6
-        with:
-          path: .cache/esp-rom-elfs
-          key: rom-elf-${{ hashFiles('scripts/fetch-rom-elf') }}
 
       # `make setup` less build-runner: the runner came from the runner job.
       - run: make PYTHON='${{ steps.python.outputs.python-path }}' .venv/.installed rom-elf

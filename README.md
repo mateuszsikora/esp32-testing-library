@@ -75,10 +75,13 @@ GitHub-hosted macOS runners have no Docker, so the work is split:
 |---|---|---|
 | `firmware` | self-hosted Linux | `make firmware`, once per content of `firmware/` |
 | `runner` | self-hosted Linux, `macos-latest` | `make build-runner test-runner`, once per revision of the runner's sources, its esp32sim pin and its toolchain |
-| `test` | self-hosted Linux, `macos-latest`; Python 3.11, 3.13, 3.14 | Unpacks the images and the runner, fetches the ROM ELF and runs pytest; builds nothing |
+| `test` | self-hosted Linux, `macos-latest`; Python 3.11, 3.13, 3.14 | Unpacks the images, the runner and the ROM ELF (fetched once by `firmware`) and runs pytest; builds nothing |
 
 The build jobs hand their output to the test jobs through the Actions cache, as tarballs under
-`build/ci/`, keyed by what they were built from; a key already in the cache is not built again.
+`build/ci/`, keyed by what they were built from, the workflow and the `Makefile` included; a key
+already in the cache is not built again. An entry unused for 7 days is evicted, so re-running only
+the test jobs of an older run can fail on a cache miss: re-run all jobs. A bad entry stays until
+`gh cache delete <key>` removes it.
 The `requires_docker` tests run only on the self-hosted Linux runner, which has Docker; on macOS
 they skip. The self-hosted runner is one machine, so its jobs queue one after another.
 
