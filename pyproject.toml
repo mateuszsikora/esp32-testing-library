@@ -1,0 +1,59 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "esp32tl"
+version = "0.1.0"
+description = "Test unmodified ESP32 firmware through its wires, on the esp32sim emulator or a real board."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+# pytest-embedded declares no extras, so its services are separate packages
+# (plan §3, "Distribution"). The `serial` extra of pytest-embedded-idf pulls
+# pytest-embedded-serial-esp and, through it, pytest-embedded-serial.
+dependencies = [
+    "pytest>=8",
+    "pytest-embedded~=2.9.3",
+    "pytest-embedded-idf[serial]~=2.9.3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "mypy==2.4.1",
+    "pre-commit>=4",
+    "ruff==0.17.3",
+]
+
+[project.scripts]
+esp32tl = "esp32tl.cli:main"
+
+# esp32tl ships its own pytest plugin: pytest-embedded resolves
+# `--embedded-services` through a closed dictionary and cannot load a
+# third-party service (plan §1, finding 1).
+[project.entry-points.pytest11]
+esp32tl = "esp32tl.pytest_plugin"
+
+[tool.hatch.build.targets.wheel]
+packages = ["esp32tl"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["-ra", "--strict-markers"]
+filterwarnings = [
+    # pytest-embedded's `app_path` fixture records an XML attribute for every test.
+    "ignore:record_xml_attribute is an experimental feature:pytest.PytestExperimentalApiWarning",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["esp32tl", "tests"]

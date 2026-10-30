@@ -1,9 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# Downloads made by `make setup` (ROM ELFs and the like); never committed
+.cache/
+
+# Rust runner
+runner/target/
+
+# Firmware build output
+firmware/**/build/
+firmware/**/sdkconfig
+firmware/**/sdkconfig.old
+firmware/**/managed_components/
+
 # ESP-IDF build output of the firmware under tools/
 tools/*/build*/
 tools/*/sdkconfig
 tools/*/sdkconfig.old
 tools/*/dependencies.lock
 tools/*/managed_components/
-
-# Python bytecode
-__pycache__/
