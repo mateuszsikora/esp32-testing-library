@@ -62,7 +62,7 @@ python_version = "3.11"
 strict = true
 files = ["esp32tl", "tests"]
 
-# pytest-embedded ships no py.typed; its annotations are still worth checking against.
+# pytest-embedded and esptool ship no py.typed; their annotations are still worth checking against.
 [[tool.mypy.overrides]]
-module = ["pytest_embedded.*", "pytest_embedded_idf.*"]
+module = ["pytest_embedded.*", "pytest_embedded_idf.*", "esptool.*"]
 follow_untyped_imports = true

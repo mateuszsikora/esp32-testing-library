@@ -66,6 +66,33 @@ build only. Each build directory says how it was built in `esp32tl-build.json`, 
 `"container": null` for a local build. Switching between the two rebuilds from scratch. The tests
 accept a local build with a warning, and fail on one from a container other than the pinned one.
 
+## Writing a test
+
+```python
+import pytest
+
+pytestmark = pytest.mark.app_path("../firmware/hello_world")
+
+
+def test_hello_world(console):
+    console.expect("Hello world!")
+```
+
+A test that uses `board`, or `console`, which needs it, runs once per backend, with the backend
+in its id: `test_hello_world[esp32sim]`. `esp32sim`, the runner on the emulated clock, is the only
+backend so far; `--esp32tl-backend NAME` limits the run to one. `console.expect` is
+pytest-embedded's `dut.expect`, with its arguments and its 30 s default timeout.
+
+The `app_path` marker names the ESP-IDF app, relative to the test file's directory, which is the
+default; the backend runs the build in its `build/` directory, every file of `flasher_args.json`
+at its offset. pytest-embedded's `--embedded-services` and `--app-path` are refused for these
+tests, because esp32tl sets both per backend.
+
+The runner and the ROM ELF are those `make setup` leaves in `runner/target/release/` and
+`.cache/`. `ESP32TL_RUNNER` and `ESP32TL_ROM` name others, for example the `RUNNER_PROFILE=dev`
+build in `runner/target/debug/`. A run stops after 300 emulated seconds if the test has not ended
+it before.
+
 ## CI
 
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every pull request and on `main`.
