@@ -84,6 +84,9 @@ the test jobs of an older run can fail on a cache miss: re-run all jobs. A bad e
 `gh cache delete <key>` removes it.
 The `requires_docker` tests run only on the self-hosted Linux runner, which has Docker; on macOS
 they skip. The self-hosted runner is one machine, so its jobs queue one after another.
+While the repository is private, the macOS jobs do not run: minutes on GitHub-hosted runners are
+limited, and macOS ones count ten times. The workflow reads the repository's visibility, so they
+come back once it is public.
 
 ## Pre-commit hooks
 
