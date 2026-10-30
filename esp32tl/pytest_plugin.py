@@ -12,10 +12,11 @@ back to the command line, and a session started with `--embedded-services esp` w
 from `build/` in it. `--count` above 1 is refused too: a test has one board.
 """
 
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
 from typing import NoReturn
 
 import pytest
+from pexpect import EOF
 from pytest_embedded.dut import Dut
 from pytest_embedded.log import MessageQueue
 from pytest_embedded.utils import Meta
@@ -65,10 +66,12 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     )
 
 
+@pytest.hookimpl(trylast=True)
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    """Refuses the options esp32tl sets itself, when a test uses `board`. Here rather than in
-    pytest_generate_tests: raised there, a UsageError (or pytest.exit) is a collection error, with
-    a traceback through pluggy and exit code 2; here it is one line and exit code 4."""
+    """Refuses the options esp32tl sets itself, when a selected test uses `board`: last, after
+    -k and -m have deselected theirs. Here rather than in pytest_generate_tests: raised there, a
+    UsageError (or pytest.exit) is a collection error, with a traceback through pluggy and exit
+    code 2; here it is one line and exit code 4."""
     if not any("board" in getattr(item, "fixturenames", ()) for item in items):
         return
     for option in ("embedded_services", "app_path", "build_dir"):
@@ -82,12 +85,29 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         raise pytest.UsageError("--count is set: esp32tl runs one board in a test")
 
 
+# Set on a test whose call failed on an expect that read the runner's end (pexpect's EOF).
+EXPECT_SAW_RUNNER_EXIT = pytest.StashKey[bool]()
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_makereport(
+    item: pytest.Item, call: pytest.CallInfo[None]
+) -> Generator[None, pytest.TestReport, pytest.TestReport]:
+    report = yield
+    if report.when == "call" and call.excinfo is not None and call.excinfo.errisinstance(EOF):
+        item.stash[EXPECT_SAW_RUNNER_EXIT] = True
+    return report
+
+
 @pytest.fixture
 def board(
     request: pytest.FixtureRequest, dut: Dut, app_path: str, msg_queue: MessageQueue, _meta: Meta
 ) -> Iterator[Esp32Sim]:
     """The firmware in `app_path`, running on the backend this test is parametrised with."""
     assert request.param == Esp32Sim.name, request.param
+    if not isinstance(dut, Dut):
+        # `count` parametrised above 1 in the test: pytest-embedded made a dut per count.
+        pytest.fail("count is above 1: esp32tl runs one board in a test", pytrace=False)
     try:
         backend = Esp32Sim(dut, app_path, msg_queue, _meta)
     except BackendError as error:
@@ -98,7 +118,9 @@ def board(
         try:
             backend.close()
         except BackendError as error:
-            backend_failed(error)
+            # An expect that ended on the runner's exit has already reported it, with its code.
+            if not request.node.stash.get(EXPECT_SAW_RUNNER_EXIT, False):
+                backend_failed(error)
 
 
 def backend_failed(error: BackendError) -> NoReturn:

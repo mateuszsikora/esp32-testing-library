@@ -124,13 +124,11 @@ class Esp32Sim:
             log.write(f"\nesp32tl: the runner exited with code {code}\n")
 
     def close(self) -> None:
-        """Stops the runner, then the forwarding of its log, so that the forwarder has the
-        runner's last lines. A runner that had exited on its own with an error fails the test,
-        even one whose expects all passed before it."""
-        # Set by the waiting thread before it appends the end-of-run line, so a test that has read
-        # that line finds it set here.
-        exited = self.process.returncode is not None
-        if not exited:
+        """Stops the runner, then the forwarding of its log. The forwarder reads the log in a busy
+        loop and has nearly always sent the runner's last lines on by then, but it is not waited
+        for: they may miss `dut.log`, never the test's result. A runner that exited with an error
+        of its own fails the test, even one whose expects all passed before it."""
+        if self.process.returncode is None:
             # Not DuplicateStdoutPopen.terminate(), which closes the log before the signal.
             self.process.send_signal(signal.SIGTERM)
         self._waiter.join(timeout=5)
@@ -139,28 +137,38 @@ class Esp32Sim:
             self._waiter.join()
         # pytest-embedded leaves it unannotated.
         self.process.close()  # type: ignore[no-untyped-call]
-        if exited and self.process.returncode != 0:
+        # Judged by the code, not by who stopped the runner: one that crashed just before the
+        # signal has its own code. The signals above are the only codes that are not the runner's.
+        code = self.process.returncode
+        if code not in (0, -signal.SIGTERM, -signal.SIGKILL):
             raise BackendError(
-                f"the runner exited with code {self.process.returncode} before the test ended;"
-                f" its output is in {self.dut.logfile}"
+                f"the runner exited with code {code}; its output is in {self.dut.logfile}"
             )
+
+
+# How much of the runner's last output the EOF of an expect carries: pytest-embedded's own message
+# shows the pexpect buffer, which pexpect empties at EOF.
+EOF_TAIL_BYTES = 2048
 
 
 def end_stream_at_end_of_run(proc: PexpectProcess) -> None:
     """Makes `proc` raise pexpect's `EOF` once it has read the end-of-run line, instead of
-    reading an unchanging file until the expect times out."""
+    reading an unchanging file until the expect times out. The EOF carries the runner's exit
+    code and the end of its output."""
     read = proc.read_nonblocking
     seen = b""
-    ended = False
+    ended: str | None = None
 
     def read_nonblocking(size: int = 1, timeout: int = -1) -> bytes:
         nonlocal seen, ended
-        if ended:
-            raise pexpect.EOF("the runner has exited")
+        if ended is not None:
+            raise pexpect.EOF(ended)
         data: bytes = read(size, timeout)
-        # Enough of what came before for a line split across two reads.
-        seen = seen[-64:] + data
-        ended = END_OF_RUN.search(seen) is not None
+        seen = (seen + data)[-EOF_TAIL_BYTES:]
+        end = END_OF_RUN.search(seen)
+        if end is not None:
+            tail = seen[: end.start()].decode(errors="replace")
+            ended = f"the runner exited with code {end[1].decode()}; its last output:\n{tail}"
         return data
 
     proc.read_nonblocking = read_nonblocking  # type: ignore[method-assign]

@@ -98,6 +98,29 @@ def test_more_than_one_dut_is_refused(pytester: pytest.Pytester) -> None:
     result.stderr.fnmatch_lines(["ERROR: --count is set: esp32tl runs one board in a test"])
 
 
+def test_a_parametrised_count_above_one_is_refused(pytester: pytest.Pytester) -> None:
+    pytester.makepyfile(
+        """
+        import pytest
+
+        @pytest.mark.parametrize("count", [2], indirect=True)
+        def test_two_duts(board):
+            pass
+        """
+    )
+    result = pytester.runpytest_subprocess("-p", "no:cacheprovider")
+    result.assert_outcomes(errors=1)
+    result.stdout.fnmatch_lines(["*count is above 1: esp32tl runs one board in a test"])
+
+
+def test_options_are_allowed_when_no_selected_test_uses_board(pytester: pytest.Pytester) -> None:
+    pytester.makepyfile("def test_one(board): pass\n\ndef test_two(): pass")
+    result = pytester.runpytest_subprocess(
+        "-p", "no:cacheprovider", "-k", "test_two", "--app-path", "elsewhere"
+    )
+    result.assert_outcomes(passed=1, deselected=1)
+
+
 def test_app_path_marker_needs_one_path(pytester: pytest.Pytester) -> None:
     pytester.makepyfile(
         """
@@ -239,8 +262,29 @@ def test_expect_fails_at_once_when_the_runner_has_exited(
     # pytest-embedded's expect waits 30 s by default.
     assert time.monotonic() - started < 15
     result.assert_outcomes(failed=1)
+    # pexpect empties its buffer at EOF, so the runner's output comes with the EOF it caused.
     result.stdout.fnmatch_lines(
-        ['E *EOF: Not found "Hello world!"', "*esp32tl: the runner exited with code 0"]
+        [
+            "E *EOF: the runner exited with code 0; its last output:",
+            "E *Goodbye",
+            'E *EOF: Not found "Hello world!"',
+        ]
+    )
+
+
+def test_a_runner_that_fails_to_start_is_reported_once(
+    fake_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_OUTPUT", "esp32tl-runner: rom.elf: not an ELF file\n")
+    monkeypatch.setenv("FAKE_EXIT", "2")
+    result = fake_runner.runpytest_subprocess("-p", "no:cacheprovider")
+    # The expect's EOF names the exit code, so the teardown does not report it again.
+    result.assert_outcomes(failed=1)
+    result.stdout.fnmatch_lines(
+        [
+            "E *EOF: the runner exited with code 2; its last output:",
+            "E *esp32tl-runner: rom.elf: not an ELF file",
+        ]
     )
 
 
@@ -261,9 +305,7 @@ def test_a_runner_that_exits_with_an_error_fails_the_test(
     )
     result = fake_runner.runpytest_subprocess("-p", "no:cacheprovider")
     result.assert_outcomes(passed=1, errors=1)
-    result.stdout.fnmatch_lines(
-        ["*esp32sim: the runner exited with code 1 before the test ended; its output is in *"]
-    )
+    result.stdout.fnmatch_lines(["*esp32sim: the runner exited with code 1; its output is in *"])
 
 
 def copy_build(build: Path, to: Path) -> None:
