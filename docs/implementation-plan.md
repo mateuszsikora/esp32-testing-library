@@ -611,7 +611,7 @@ and cached; container-backed tests run on ubuntu only.
 | Item | State |
 |---|---|
 | Python | 3.14.6 (`pytest-embedded` not installed yet) |
-| Rust | cargo 1.93.0, too old for esp32sim at the pin: `esp-soc/src/nat.rs` calls `AtomicUsize::try_update`, stable since Rust 1.95. Stage 0 and the pin's recheck renamed it to `fetch_update` locally; the runner needs a newer toolchain (#5) |
+| Rust | cargo 1.93.0, too old for esp32sim at the pin: `esp-soc/src/nat.rs` calls `AtomicUsize::try_update`, stable since Rust 1.95. Stage 0 and the pin's recheck renamed it to `fetch_update` locally. The runner pins 1.99.1, the stable release it was first built with, in `runner/rust-toolchain.toml` (#5) |
 | ESP-IDF | v5.5.5 at `~/esp/esp-idf`, xtensa toolchain present |
 | ROM ELFs | `~/.espressif/tools/esp-rom-elfs/20241011/esp32_rev300_rom.elf` present; newer releases `20260313` and `20260528` exist, `20241011` is pinned |
 | IDF examples | `hello_world`, `bt_spp_initiator`, `sd_card/sdspi`, `deep_sleep`, `controller_hci_uart_esp32` present; `pppos_client` is in esp-protocols |

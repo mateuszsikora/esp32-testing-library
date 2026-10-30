@@ -1,0 +1,9 @@
+# The toolchain the runner was first built with (plan §8). esp32sim builds with
+# the latest stable in its CI and needs at least Rust 1.95: at the pinned
+# revision, esp-soc/src/nat.rs calls `AtomicUsize::try_update`, stable since
+# 1.95. rustup reads this file from the directory cargo runs in, not from
+# `--manifest-path`, so build from runner/ (the Makefile does).
+[toolchain]
+channel = "1.99.1"
+profile = "minimal"
+components = ["clippy", "rustfmt"]

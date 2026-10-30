@@ -12,10 +12,12 @@ make test
 That one command needs:
 
 - Python 3.11 or newer.
-- cargo (Rust), to build the runner crate in `runner/`.
+- Rust through [rustup](https://rustup.rs), to build the runner crate in `runner/`.
+  `runner/rust-toolchain.toml` pins the toolchain (Rust 1.99.1), and rustup installs it on
+  the first build.
 - Network access to GitHub. The runner depends on
   [esp32sim](https://github.com/mikroverk/esp32sim) as a git dependency pinned by revision,
-  because esp32sim is not on crates.io. A cold build of it takes minutes.
+  because esp32sim is not on crates.io.
 
 Building the validation firmware (`make firmware`) also needs Docker.
 
@@ -24,10 +26,11 @@ Building the validation firmware (`make firmware`) also needs Docker.
 | Target | What it does |
 |---|---|
 | `make setup` | Creates `.venv`, installs `esp32tl` with its dev tools, builds the runner |
-| `make build-runner` | Builds the runner crate only |
+| `make build-runner` | Builds the runner crate only, into `runner/target/release/`; `RUNNER_PROFILE=dev` builds it without fat LTO, into `runner/target/debug/` |
+| `make test-runner` | The runner's Rust unit tests, in `RUNNER_PROFILE` like `build-runner`; `RUNNER_PROFILE=dev` skips the fat-LTO link while iterating |
 | `make firmware` | Builds the validation firmware in the pinned ESP-IDF container |
-| `make test` | Runs `make setup`, then the pytest suite |
-| `make lint` | `ruff check`, `ruff format --check` and `mypy` |
+| `make test` | Runs `make setup`, then the runner's tests and the pytest suite |
+| `make lint` | `ruff check`, `ruff format --check` and `mypy`; `cargo fmt --check` and `cargo clippy` on the runner |
 | `make hooks` | Installs the pre-commit hooks (they run the tools from `.venv`) |
 | `make clean` | Removes `.venv` and tool caches; keeps the runner build and `.cache/` |
 

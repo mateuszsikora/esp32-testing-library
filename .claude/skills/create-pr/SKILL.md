@@ -87,7 +87,7 @@ Run what covers the change and keep the exact commands and results for **Verific
 | Anything | `.venv/bin/pre-commit run --files <changed files>`. Without `.venv`, and only if no Python changed: `SKIP=ruff-check,ruff-format,mypy pipx run pre-commit run --files <changed files>` |
 | Python (`esp32tl/`, `tests/`, `tools/*.py`), `pyproject.toml` | `make lint` (it creates `.venv` if missing), then `.venv/bin/pytest` |
 | A tool in `tools/*.py` | also run it once on a sample input and check its output |
-| `runner/`, once `runner/Cargo.toml` exists | `cargo test --manifest-path runner/Cargo.toml` and `make build-runner` |
+| `runner/` | `make test-runner` and `make build-runner`. Not `cargo --manifest-path runner/Cargo.toml` from the root: rustup takes the toolchain pinned in `runner/rust-toolchain.toml` only when cargo runs in `runner/` |
 | `firmware/` | `make firmware` if Docker is available; otherwise say it was not built |
 | An ESP-IDF project in `tools/` | if Docker is available, build each `sdkconfig.defaults*` variant the change affects into its own directory, with the command below; otherwise say it was not built |
 | `Makefile` | `make -n <each changed target>`, then run each changed target except `firmware`, which follows its own row. Run `clean` only if it changed, last, and then `make setup`: it deletes `.venv`, which the other rows and the git hooks of every worktree need |
@@ -104,9 +104,8 @@ docker run --rm -v "$PWD":/project -w /project/tools/<name> <image> \
   idf.py -B build-pr -D SDKCONFIG=build-pr/sdkconfig set-target esp32 build
 ```
 
-Read the output, not only the exit code: `make build-runner` and `make firmware` print a
-`skipping` line and exit 0 while the crate or the build script does not exist. That means nothing
-was built; say so. Never write that something passes without having run it in this session.
+Read the output, not only the exit code: `make firmware` prints a `skipping` line and exits 0
+while the build script does not exist. That means nothing was built; say so. Never write that something passes without having run it in this session.
 
 ## 4. Ready or draft
 
