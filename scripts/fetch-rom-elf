@@ -2,12 +2,15 @@
 # Puts the ESP32 mask ROM ELF the tests run on at
 # .cache/esp-rom-elfs/$RELEASE/$ROM (plan M0). Release 20241011 is pinned by
 # the checksum of the ELF itself: newer releases ship the same
-# esp32_rev300_rom.elf, so a copy from any release under ~/.espressif counts,
-# and one that differs is passed over. Without one, the release tarball is
-# downloaded from GitHub and checked against its own pinned checksum.
+# esp32_rev300_rom.elf, so a copy from any release under $IDF_TOOLS_PATH, or
+# ~/.espressif when that is unset, counts, and one that differs is passed
+# over. Without one, the release tarball is downloaded from GitHub and checked
+# against its own pinned checksum.
 #
-# Written for `make setup`; prints nothing when the ELF is already in place.
+# Written for `make setup`, but runs from any directory: .cache/ is always the
+# repository's. Prints nothing when the ELF is already in place.
 set -eu
+cd "$(dirname "$0")/.."
 
 RELEASE=20241011
 ROM=esp32_rev300_rom.elf
@@ -19,13 +22,16 @@ URL=https://github.com/espressif/esp-rom-elfs/releases/download/$RELEASE/$TARBAL
 dest_dir=.cache/esp-rom-elfs/$RELEASE
 dest=$dest_dir/$ROM
 
-sha256() {
-	if command -v sha256sum >/dev/null 2>&1; then
-		sha256sum "$1" | cut -d' ' -f1
-	else
-		shasum -a 256 "$1" | cut -d' ' -f1
-	fi
-}
+# Chosen before anything else: inside a test, a missing tool would only read
+# as a checksum that differs, and the script would go on to download.
+if command -v sha256sum >/dev/null 2>&1; then
+	sha256() { sha256sum "$1" | cut -d' ' -f1; }
+elif command -v shasum >/dev/null 2>&1; then
+	sha256() { shasum -a 256 "$1" | cut -d' ' -f1; }
+else
+	echo "fetch-rom-elf: needs sha256sum or shasum" >&2
+	exit 1
+fi
 
 if [ -f "$dest" ] && [ "$(sha256 "$dest")" = "$ROM_SHA256" ]; then
 	exit 0
@@ -34,12 +40,24 @@ fi
 mkdir -p "$dest_dir"
 tmp=$(mktemp -d "$dest_dir/.fetch.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT
+# dash, /bin/sh on Debian and Ubuntu, skips the EXIT trap when a signal ends
+# the script; exiting from the signal's own trap runs it.
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # The pinned release first, so that the message names it when it is there.
-# IDF_TOOLS_PATH is where ESP-IDF's installer puts its tools when set.
+# IDF_TOOLS_PATH is where ESP-IDF's installer puts its tools when set, in
+# place of ~/.espressif, not beside it.
 tools=${IDF_TOOLS_PATH:-${HOME:-}/.espressif}/tools/esp-rom-elfs
-for f in "$tools/$RELEASE/$ROM" "$tools"/*/"$ROM"; do
-	if [ -f "$f" ] && [ "$(sha256 "$f")" = "$ROM_SHA256" ]; then
+pinned=$tools/$RELEASE/$ROM
+for f in "$pinned" "$tools"/*/"$ROM"; do
+	if [ ! -f "$f" ] || { [ "$f" = "$pinned" ] && [ "${seen_pinned:-}" ]; }; then
+		continue
+	fi
+	[ "$f" = "$pinned" ] && seen_pinned=1
+	if [ "$(sha256 "$f")" != "$ROM_SHA256" ]; then
+		echo "fetch-rom-elf: $f differs from release $RELEASE's (SHA-256 $ROM_SHA256), skipped" >&2
+	else
 		# A copy, not a link: an ESP-IDF upgrade may remove the release it came from.
 		cp "$f" "$tmp/$ROM"
 		mv "$tmp/$ROM" "$dest"
@@ -48,7 +66,7 @@ for f in "$tools/$RELEASE/$ROM" "$tools"/*/"$ROM"; do
 	fi
 done
 
-echo "fetch-rom-elf: no $ROM of release $RELEASE under $tools; downloading $URL"
+echo "fetch-rom-elf: no $ROM matching release $RELEASE under $tools; downloading $URL"
 curl -fsSL --retry 3 -o "$tmp/$TARBALL" "$URL"
 got=$(sha256 "$tmp/$TARBALL")
 if [ "$got" != "$TARBALL_SHA256" ]; then

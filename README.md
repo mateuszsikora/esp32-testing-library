@@ -19,8 +19,9 @@ That one command needs:
   [esp32sim](https://github.com/mikroverk/esp32sim) as a git dependency pinned by revision,
   because esp32sim is not on crates.io. `make setup` also downloads the ESP32 mask ROM ELF
   from [esp-rom-elfs](https://github.com/espressif/esp-rom-elfs) release `20241011` into
-  `.cache/`, unless an ESP-IDF install under `~/.espressif` (or `$IDF_TOOLS_PATH`) already
-  has the same file; it also needs `curl` and `tar`.
+  `.cache/`, unless an ESP-IDF install under `$IDF_TOOLS_PATH`, or `~/.espressif` when it is
+  unset, already has the same file. It checks the file with `sha256sum` or `shasum`, and
+  downloads it with `curl` and `tar`.
 
 Building the validation firmware (`make firmware`) also needs Docker.
 
