@@ -41,15 +41,23 @@ build-runner:
 test-runner:
 	cd runner && cargo test --locked --profile $(RUNNER_PROFILE)
 
-# Validation firmware, built in the pinned ESP-IDF container (plan M0).
+# Validation firmware, built in the pinned ESP-IDF container (plan M0) into
+# firmware/<image>/build/. IDF_LOCAL=1 builds with the ESP-IDF of the calling
+# shell instead, for iteration; goldens come from the container build only.
+# An empty FIRMWARE_OUT is firmware/, whatever the calling shell exports:
+# the tests read the images there.
 firmware:
-	@if [ -x firmware/build.sh ]; then \
-		firmware/build.sh; \
-	else \
-		echo "firmware: firmware/build.sh does not exist yet, skipping"; \
-	fi
+	FIRMWARE_OUT= firmware/build.sh
 
-test: setup test-runner
+# The images the tests read, built only when missing; build.sh writes
+# esp32tl-built when a build finishes. The CI test jobs receive the images
+# from the firmware job, so they build nothing (and the macOS ones have no
+# Docker). `make firmware` rebuilds them.
+FIRMWARE_IMAGES := hello_world
+firmware/%/build/esp32tl-built:
+	FIRMWARE_OUT= firmware/build.sh $*
+
+test: setup test-runner $(FIRMWARE_IMAGES:%=firmware/%/build/esp32tl-built)
 	$(BIN)/pytest
 
 lint: $(VENV)/.installed

@@ -23,7 +23,12 @@ That one command needs:
   unset, already has the same file. It checks the file with `sha256sum` or `shasum`, and
   downloads it with `curl` and `tar`.
 
-Building the validation firmware (`make firmware`) also needs Docker.
+The tests also read the validation firmware, which `make test` builds when it is missing, so the
+first `make test` needs Docker as well: it pulls the ESP-IDF image and builds `hello_world`, a
+couple of minutes. Tests marked `requires_docker` need Docker too; without a reachable Docker
+daemon, pytest skips them and says why. The firmware build expects Docker Desktop or a rootful
+Docker Engine: under rootless Docker or Podman the files it writes belong to another uid, and
+SELinux in enforcing mode keeps the container from reading the repository.
 
 ## Make targets
 
@@ -33,17 +38,33 @@ Building the validation firmware (`make firmware`) also needs Docker.
 | `make build-runner` | Builds the runner crate only, into `runner/target/release/`; `RUNNER_PROFILE=dev` builds it without fat LTO, into `runner/target/debug/` |
 | `make rom-elf` | Puts `esp32_rev300_rom.elf` of esp-rom-elfs `20241011` at `.cache/esp-rom-elfs/20241011/`, checked by SHA-256 |
 | `make test-runner` | The runner's Rust unit tests, in `RUNNER_PROFILE` like `build-runner`; `RUNNER_PROFILE=dev` skips the fat-LTO link while iterating |
-| `make firmware` | Builds the validation firmware in the pinned ESP-IDF container |
-| `make test` | Runs `make setup`, then the runner's tests and the pytest suite |
+| `make firmware` | Builds the validation firmware in the pinned ESP-IDF container, into `firmware/<image>/build/` |
+| `make test` | Runs `make setup`, builds the validation images that are missing, then runs the runner's tests and the pytest suite |
 | `make lint` | `ruff check`, `ruff format --check` and `mypy`; `cargo fmt --check` and `cargo clippy` on the runner |
 | `make hooks` | Installs the pre-commit hooks (they run the tools from `.venv`) |
 | `make clean` | Removes `.venv` and tool caches; keeps the runner build and `.cache/` |
 
-After `make setup`, `.venv/bin/pytest` runs the tests directly.
+After `make setup` and `make firmware`, `.venv/bin/pytest` runs the tests directly.
 
 `make` creates `.venv` with `python3`. To use another interpreter, pass it on every call or
 export it, for example `export PYTHON=python3.11`: when `pyproject.toml` changes, the next
 `make setup` recreates `.venv` from scratch with whatever `PYTHON` is then.
+
+## Validation firmware
+
+`firmware/build.sh` (or `make firmware`) builds every validation image for the classic ESP32 in
+`espressif/idf:v5.3.6`, pinned by digest; `firmware/build.sh hello_world` builds one. For now the
+only image is ESP-IDF's own `examples/get-started/hello_world`, unmodified. Each lands in
+`firmware/<image>/build/`, the layout pytest-embedded's `IdfApp` reads, with the
+`flasher_args.json` that gives the flash offsets. `FIRMWARE_OUT=DIR` puts the images of
+`firmware/build.sh` under `DIR` instead; `make firmware` and `make test` always use `firmware/`.
+The first build pulls the image, 7 GB once unpacked.
+
+To iterate without the container, source the `export.sh` of a local ESP-IDF and run
+`IDF_LOCAL=1 firmware/build.sh`. That IDF need not be v5.3.6, so goldens come from the container
+build only. Each build directory says how it was built in `esp32tl-build.json`, with
+`"container": null` for a local build. Switching between the two rebuilds from scratch. The tests
+accept a local build with a warning, and fail on one from a container other than the pinned one.
 
 ## Pre-commit hooks
 
