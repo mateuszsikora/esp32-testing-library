@@ -41,6 +41,10 @@ packages = ["esp32tl"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = ["-ra", "--strict-markers"]
+# tests/conftest.py skips these where Docker is absent.
+markers = [
+    "requires_docker: needs a Docker daemon",
+]
 filterwarnings = [
     # pytest-embedded's `app_path` fixture records an XML attribute for every test.
     "ignore:record_xml_attribute is an experimental feature:pytest.PytestExperimentalApiWarning",
@@ -57,3 +61,8 @@ select = ["E", "W", "F", "I", "B", "UP", "SIM", "RUF"]
 python_version = "3.11"
 strict = true
 files = ["esp32tl", "tests"]
+
+# pytest-embedded ships no py.typed; its annotations are still worth checking against.
+[[tool.mypy.overrides]]
+module = ["pytest_embedded.*", "pytest_embedded_idf.*"]
+follow_untyped_imports = true

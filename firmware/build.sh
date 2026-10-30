@@ -1,0 +1,122 @@
+#!/bin/sh
+# Builds the validation firmware for the classic ESP32 (plan M0), each image
+# into $FIRMWARE_OUT/<image>/build/, the layout pytest-embedded's IdfApp reads:
+# flasher_args.json, which the backend turns into the runner's --flash-at
+# offsets, beside the ELF, the binaries and config/sdkconfig.json.
+# FIRMWARE_OUT is firmware/ by default.
+#
+#   firmware/build.sh [IMAGE...]     all images when none is named
+#
+# The build runs in ESP-IDF's container, pinned by digest. IDF_LOCAL=1 builds
+# with the ESP-IDF of the calling shell instead (export.sh sourced), for
+# iteration; goldens come from the container build only, because a local IDF
+# need not be the pinned one (plan §7). Every build directory records how it
+# was built in esp32tl-build.json, with "container": null for a local build.
+#
+# Builds are incremental. A build directory made the other way, or from
+# another project directory, is removed first: CMake refuses to reuse it.
+# esp32tl-built marks a build that finished. flasher_args.json cannot: CMake
+# writes it while configuring, before anything is compiled.
+set -eu
+
+IDF_VERSION=v5.3.6
+CONTAINER=espressif/idf:$IDF_VERSION@sha256:cee52f0c4fdaf088992a7a739f5993154e95cf1d3ab61c24f5b40e6d56a3a070
+IMAGES="hello_world"
+
+die() {
+	echo "firmware/build.sh: $*" >&2
+	exit 1
+}
+
+# The ESP-IDF project an image is built from.
+project_of() {
+	case $1 in
+	hello_world) echo "$IDF_PATH/examples/get-started/hello_world" ;;
+	esac
+}
+
+for image in "$@"; do
+	case " $IMAGES " in
+	*" $image "*) ;;
+	*) die "unknown image '$image'; the images are: $IMAGES" ;;
+	esac
+done
+[ $# -gt 0 ] || set -- $IMAGES
+
+# What the build needs is checked before anything is written. Docker creates
+# /.dockerenv in every container; without it, ESP32TL_CONTAINER was left set on
+# the host, and a build that took it for the container's would record a
+# container it never ran in.
+if [ -n "${ESP32TL_CONTAINER:-}" ]; then
+	[ -f /.dockerenv ] || die "ESP32TL_CONTAINER is set outside a container; unset it"
+	container="\"$ESP32TL_CONTAINER\""
+elif [ "${IDF_LOCAL:-}" = 1 ]; then
+	command -v idf.py >/dev/null 2>&1 && [ -n "${IDF_PATH:-}" ] ||
+		die "IDF_LOCAL=1 needs ESP-IDF in the environment: source \$IDF_PATH/export.sh first"
+	container=null
+else
+	command -v docker >/dev/null 2>&1 ||
+		die "needs Docker, or IDF_LOCAL=1 to build with a local ESP-IDF"
+	docker info >/dev/null 2>&1 ||
+		die "the Docker daemon is not reachable ('docker info' failed); is Docker running?"
+	container=
+fi
+
+# Before changing directory, so that a relative FIRMWARE_OUT is the caller's.
+out=${FIRMWARE_OUT:-$(dirname "$0")}
+mkdir -p "$out"
+out=$(cd "$out" && pwd -P)
+cd "$(dirname "$0")/.."
+
+# The host side: start the container, which runs this script again with
+# ESP32TL_CONTAINER naming its image and ESP32TL_HOST_OUT the host's path of
+# /out, for the messages.
+if [ -z "$container" ]; then
+	# The repository read-only, so a build cannot write into it except
+	# through /out. hello_world writes nothing into its project directory; a
+	# project under firmware/ that takes components from the component manager
+	# writes dependencies.lock and managed_components/ into its own, and needs
+	# that directory writable first. The host's uid owns what the build
+	# writes; HOME=/tmp gives that uid, unknown to the image, a writable home.
+	exec docker run --rm --init \
+		--user "$(id -u):$(id -g)" \
+		--env HOME=/tmp \
+		--env ESP32TL_CONTAINER="$CONTAINER" \
+		--env FIRMWARE_OUT=/out \
+		--env ESP32TL_HOST_OUT="$out" \
+		--volume "$PWD:/project:ro" \
+		--volume "$out:/out" \
+		--workdir /project \
+		"$CONTAINER" firmware/build.sh "$@"
+fi
+
+idf_version=$(idf.py --version | sed -n 's/^ESP-IDF //p')
+[ -n "$idf_version" ] || die "'idf.py --version' printed no ESP-IDF version"
+if [ "$container" = null ]; then
+	echo "firmware/build.sh: IDF_LOCAL=1, ESP-IDF $idf_version at $IDF_PATH; not for goldens, which come from the container ($IDF_VERSION)" >&2
+fi
+
+json_string() {
+	printf '"%s"' "$(printf '%s' "$1" | sed 's/[\\"]/\\&/g')"
+}
+
+for image in "$@"; do
+	project=$(project_of "$image")
+	build=$out/$image/build
+	shown=${ESP32TL_HOST_OUT:-$out}/$image/build
+	provenance=$(printf '{"idf_version": %s, "container": %s, "project": %s}' \
+		"$(json_string "$idf_version")" "$container" "$(json_string "$project")")
+	if [ -d "$build" ] && [ "$(cat "$build/esp32tl-build.json" 2>/dev/null)" != "$provenance" ]; then
+		echo "firmware/build.sh: $image: $shown was built another way, removing it"
+		rm -rf "$build"
+	fi
+	mkdir -p "$build"
+	rm -f "$build/esp32tl-built"
+	printf '%s\n' "$provenance" >"$build/esp32tl-build.json"
+	# sdkconfig in the build directory: the project directory may be ESP-IDF's
+	# own examples, or read-only.
+	idf.py -C "$project" -B "$build" -DSDKCONFIG="$build/sdkconfig" -DIDF_TARGET=esp32 build
+	[ -f "$build/flasher_args.json" ] || die "$image: the build wrote no flasher_args.json"
+	: >"$build/esp32tl-built"
+	echo "firmware/build.sh: $image built in $shown (ESP-IDF $idf_version)"
+done
