@@ -686,10 +686,10 @@ proposed for the issue, to be posted once agreed:
 
 ## 11. Amendments from the test-clock and network spike (2026-10-31)
 
-A spike ran the production release image of [stage 0](stage0-findings.md#inputs), unmodified, under esp32tl, with a modelled GNSS
-receiver and a simulated network, and turned up how tests should read and what the network takes.
-The decisions, with what they rejected and the measurements behind them, are in
-[`decisions/harness.md`](decisions/harness.md):
+A spike ran the production release image of [stage 0](stage0-findings.md#inputs), unmodified,
+under esp32tl, with a modelled GNSS receiver and a simulated network, and turned up how tests should
+read and what the network takes. The decisions, with what they rejected and the measurements behind
+them, are in [`decisions/harness.md`](decisions/harness.md):
 
 - [The board's clock is the test's](decisions/harness.md#the-boards-clock-is-the-tests-emulated-time-moves-only-while-the-test-waits):
   `board.power_on()`, `board.wait()`, `board.wait_until()`, `board.now`, and `console.expect`

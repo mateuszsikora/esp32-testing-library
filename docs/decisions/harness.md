@@ -652,8 +652,8 @@ the code.
 Measured on a spike on 2026-10-31, on the protocol as it is, with no runner change, only
 `--console both`: `nmea_reader` and the production release image of
 [stage 0](../stage0-findings.md#inputs) ran their tests on the held clock, 222 emulated seconds of
-the release image in 8 s of wall time, and two runs of the same
-test printed the same console line at the same emulated millisecond. `hello_world` and the four
+the release image in 8 s of wall time, and two runs of the same test printed the same console line
+at the same emulated millisecond. `hello_world` and the four
 `nmea_reader` tests of `tests/` needed `board.power_on()` added, and the `nmea_reader` ones lost
 their `source` marker ([below](#what-is-at-a-routes-far-end-is-what-the-test-does-with-it-before-power-on-not-a-marker)).
 
@@ -862,10 +862,10 @@ Status: decided (#64)
 
 The profile gets `[uart.gnss]`, UART2 with TX on GPIO 21 and RX on GPIO 22 at 9600 baud,
 `flash_mb = 4` and `psram_mb = 4`; the backend passes `psram_mb` to the runner as `--psram-mb`.
-LilyGO's [pin table for the T-A7670X ESP32](https://github.com/Xinyuan-LilyGO/LilyGO-T-A76XX/blob/main/docs/en/esp32/a7670-esp32/README.MD)
+LilyGO's [pin table for the T-A7670X ESP32](https://github.com/Xinyuan-LilyGO/LilyGO-T-A76XX/blob/63af963038e93c91baf39d89a3a736d6bc26ff13/docs/en/esp32/a7670-esp32/README.MD)
 gives GNSS TX and RX on GPIO 21 and 22 for the A7670G with GPS, whose L76K receiver is an external
 module, and its
-[`ExternalGPS_A7670G_Only`](https://github.com/Xinyuan-LilyGO/LilyGO-T-A76XX/blob/main/examples/ExternalGPS_A7670G_Only/ExternalGPS_A7670G_Only.ino)
+[`ExternalGPS_A7670G_Only`](https://github.com/Xinyuan-LilyGO/LilyGO-T-A76XX/blob/63af963038e93c91baf39d89a3a736d6bc26ff13/examples/ExternalGPS_A7670G_Only/ExternalGPS_A7670G_Only.ino)
 example opens it as `Serial2` at 9600 baud. The same document's product table gives an
 ESP32-WROVER-E with 4 MB of flash and 8 MB of PSRAM, of which the emulator models 4, the most the
 runner accepts. Firmware for the board may turn PSRAM on, as the production release image of
