@@ -133,7 +133,8 @@ stats: the run ended at 4.250000000 s (signal); 1 turn, 0 resets
   unrouted_rx_bytes 0, inputs_on_output 0, inputs_not_applied 0, rx_bytes_not_paced 0
 ```
 
-It lists the runner's warnings, one line each with its emulated time, the statistics per UART
+The first line names the test's [board profile](board-profiles-user.md#choosing-a-profile) and
+the pins the link watches. It lists the runner's warnings, one line each with its emulated time, the statistics per UART
 port, and the harness's error with its traceback when an interface raised. `the runner never
 connected` and `no stats: the link ended without them (the runner was killed, or died)` say what
 is missing. The same data is in the test's `esp32sim_link` user property, a JSON string with

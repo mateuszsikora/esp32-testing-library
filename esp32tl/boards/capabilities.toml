@@ -1,0 +1,18 @@
+# What each backend can put at the far end of a board's interfaces, and which of them it can tap
+# (plan §4.5; the table "Backends and what each can swap" of the specification, issue #1).
+# `console` is the firmware's UART0, which every board has; `uart` is every [uart.<role>] route
+# of a board profile. A source or a tap that a backend does not list here makes the `board`
+# fixture skip the test on that backend, with the reason.
+
+# The emulator: whatever is at the far end of a route is esp32tl's to choose.
+[esp32sim]
+console = { tap = true }
+uart = { sources = ["model", "replay", "real"], tap = true }
+
+# A real board: its on-board peripherals are soldered on, so only the real part answers, and only
+# the console can be tapped (finding 11). Every UART counts as on-board, also one wired to a
+# devkit's pins: driving an off-board one from the host is postponed (docs/decisions/harness.md).
+# The backend itself is not in esp32tl.backends.SERVICES yet (#25).
+[serial]
+console = { tap = true }
+uart = { sources = ["real"], tap = false }

@@ -263,6 +263,126 @@ output, which shows the edited image booted.
 **Rejected:** esptool's `save()`, because it lays the segments out again and raised
 `AttributeError` on this image with esptool 5.6.0.
 
+## Board profiles are TOML files in the package, checked key by key
+
+Status: decided (#13)
+
+A profile is `esp32tl/boards/<name>.toml`, read with the standard library's `tomllib` and checked
+by `esp32tl.boards.load`: required and unknown keys, integer ranges, the classic ESP32's GPIOs
+(a UART's TX not on the input-only 34 to 39), one route per UART and one use per GPIO. Every error
+names the file and the key. The profiles ship in the wheel, and a test names one with the
+`board_profile` marker; `esp32-devkitc` is the default because it carries every validation
+firmware (plan finding 12).
+
+**Rejected:** a schema library, because it would be a dependency for six keys, and its messages
+would not name the key the way a person writes it (`uart.gnss.tx`). Also rejected: a path to a
+profile file of the project's own in the marker, because no consumer needs it yet and it would fix
+how a relative path resolves before anyone has asked.
+
+## The LilyGO profile leaves out what the specification does not give
+
+Status: decided (#13)
+
+`lilygo-t-a7670g-r2.toml` holds the chip, the modem's UART (UART1, GPIO 26/27, 115200 baud) and its
+`pwrkey` and `ri` lines, all from the specification, and the pull-down on `ri` that stage 0 found
+([gap 6](../stage0-findings.md#gaps)); `flash_mb` and `psram_mb` are optional in the schema and
+absent here. `test_the_lilygo_profile_holds_only_what_the_specification_gives` compares the
+file's data whole.
+
+**Rejected:** `flash_mb = 4` and `psram_mb = 4`, as the plan's §4.5 sketch has them, because the
+specification gives neither and they would be written from memory, which it rules out.
+
+## The capability declaration is a TOML file beside the profiles, per interface kind
+
+Status: decided (#13)
+
+`esp32tl/boards/capabilities.toml` declares, per backend and per interface kind (`console`,
+`uart`), the sources a backend takes and whether it can tap. It declares `serial` with the
+specification's table (real only, only the console tapped) although `serial` is not in `SERVICES`
+yet, so that the skip has data to act on and #25 adds only the backend.
+
+**Rejected:** a dict beside `SERVICES` in `esp32tl/backends/__init__.py`, the "capabilities per
+interface" of plan §3's `Backend`, because the plan's §4.5 and issue #13 place the declaration
+beside the profiles, as data. Also rejected for now: declaring per interface of each profile
+(`uart.gnss`). The specification decides by where the part is: "only what is off the board can
+be modelled" on a real board, and the GNSS receiver of `esp32-devkitc` is wired to GPIO 4/5, not
+soldered on. Per kind, `serial` treats every UART as on-board, which matches plan M4 (the GNSS
+test skipped on `serial`): modelling an off-board part on a real board needs host-side hardware,
+which the specification puts "later"
+([postponed](#telling-on-board-from-off-board-interfaces-is-postponed)).
+
+## Telling on-board from off-board interfaces is postponed
+
+Status: postponed (#25)
+
+A profile does not say whether the part at the end of a route is soldered on or wired to the
+board, and the declaration does not distinguish them: on `serial`, every UART is real only. The
+distinction comes with a way to drive an off-board interface of a real board from the host.
+
+## A source or tap a backend cannot give skips its parameter at collection
+
+Status: decided (#13)
+
+The `source` and `tap` markers name what a test needs; `pytest_generate_tests` marks the
+parameter of each backend that cannot give it with `pytest.mark.skip(reason=...)`. pytest skips
+such an item before setting up any fixture.
+
+**Rejected:** `pytest.skip` in the `board` fixture, because `board` depends on pytest-embedded's
+`dut`, which for a backend running `esp,idf` opens the serial port before `board` runs. Also
+rejected: deciding from what the test body calls (`gnss.replay(...)`), because the body runs after
+the backend has started.
+
+## The closest source marker wins per interface
+
+Status: decided (#13)
+
+For each interface, the `source` marker closest to the test decides, as the closest `app_path`
+and `board_profile` do, so a test can override its module's source. Each class of a test class's
+MRO counts as a level of its own, the class before its bases: pytest puts a class's and its
+bases' markers on one node, bases first, which would make a subclass's `source` clash with its
+base's. Two `source` markers on the
+same test, class or module for one interface are a collection error, since neither is closer.
+`tap` markers add up over every level: a tap asks for more, never for something else.
+
+**Rejected:** refusing two `source` markers for one interface on any levels, because a module
+could then not set a default that one test changes.
+
+## Board markers that reach a test after collection read it are refused
+
+Status: decided (#13)
+
+`pytest_generate_tests` keeps what it read from each definition's `app_path`, `board_profile`,
+`source` and `tap` markers; `pytest_collection_modifyitems`, `trylast`, reads them again from
+each item and stops the run with a usage error where they differ. Marks of a
+`pytest.param(..., marks=...)`, and those a hook adds with `add_marker` to the item, its class or
+its module (marking tests by directory in a conftest is common), reach the item but not the definition, so a `source` there
+would never skip its backend: on a real board the test would run against the real part without a
+word, which the specification forbids. A marker a fixture adds at setup is too late for any check.
+
+**Rejected:** looking for the marker names in `item.callspec.marks` only, because that misses the
+hooks. Also rejected: reading the markers per item in the `board` fixture, or failing there,
+because by then pytest-embedded's fixtures have run, and for `serial` the port is open.
+
+## A profile reserves the console's UART and pins, not the flash pins
+
+Status: decided (#13)
+
+Every board has the `console` interface, UART0 on GPIO 1 and 3, so a route on UART0, or a route
+or a line on GPIO 1 or 3, is refused as a second use. GPIO 6 to 11 are accepted.
+
+**Rejected:** refusing GPIO 6 to 11, because which of them the SPI flash takes depends on the
+module and its flash mode, and a profile does not name its module.
+
+## A request no backend can give is a collection error
+
+Status: decided (#13)
+
+A `source` or `tap` marker that names an interface the profile lacks, or a source or tap that no
+declared backend gives, fails collection with the test's id.
+
+**Rejected:** skipping such a test on every backend, because a misspelt source (`"replya"`) would
+then pass the run as skipped, never as wrong.
+
 ## Console.write is postponed until the runner reads input
 
 Status: postponed (#51)

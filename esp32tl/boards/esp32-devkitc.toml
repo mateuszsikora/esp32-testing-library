@@ -1,0 +1,17 @@
+# A generic ESP32 module on a devkit (plan §4.5, finding 12). It carries every validation
+# firmware: its routes are ours to choose, because firmware/nmea_reader is this repository's own
+# and the ESP-IDF examples take their pins from sdkconfig.
+name = "esp32-devkitc"
+chip = "esp32"
+flash_mb = 4
+psram_mb = 0
+
+# GPIO 16 and 17 are avoided: on WROVER modules they belong to the PSRAM, and the same firmware
+# should run on both module families. If the route ever moves, avoid GPIO 12, which selects the
+# VDD_SDIO voltage and can stop the boot, and GPIO 15, which held low silences the ROM log on
+# U0TXD and with it the banner a console assertion may expect.
+[uart.gnss]
+port = 1
+tx = 4
+rx = 5                    # strapping pin (SDIO slave timing): a low level at boot is harmless here
+baud = 9600
