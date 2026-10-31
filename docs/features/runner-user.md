@@ -102,6 +102,7 @@ W the wall-clock seconds the run took after loading (one decimal), N the number 
 | 1 | the emulator stopped for any other reason | the stop line, then `esp32tl-runner: the emulator stopped before --max-seconds: STOP`, the stop with its fields |
 | 2 | a usage error | `esp32tl-runner: MESSAGE`, then `run esp32tl-runner --help for the usage` |
 | 2 | an input that cannot be loaded: no ROM found, a file that cannot be read, a ROM that is not an ELF, an image that does not fit in flash | `esp32tl-runner: MESSAGE`, no stop line |
+| 101 | a panic, in the runner or in esp32sim during the run | Rust's panic message, no stop line |
 
 The variants other than `Halted` are `MaxInsns`, `Breakpoint`, `Unimplemented`, `SwReset`,
 `Simcall`, `Ebreak`, `Watch`, `Exceptions`, `CostModel` and `CostModelLifecycle`. `SwReset` is

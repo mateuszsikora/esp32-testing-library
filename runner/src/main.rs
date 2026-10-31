@@ -17,6 +17,9 @@
 //! stop line. esp32sim exits 2 on a usage error too, but not on every bad input: it panics on a
 //! ROM ELF it cannot load.
 //!
+//! A panic, in the runner or in esp32sim during the run, exits 101 with Rust's panic message and
+//! no stop line.
+//!
 //! The runner installs no signal handler, so a signal ends the run where it is, without the stop
 //! line, and the process dies of it: a shell sees 128 + the signal's number, Python's `Popen` its
 //! negative. That is how a test run ends unless the test waited for the end of the run:
@@ -125,9 +128,10 @@ fn read(path: &Path) -> Result<Vec<u8>, String> {
 }
 
 /// esp32sim's ROM lookup: `$ESP32SIM_ROM_DIR`, then `~/.espressif/tools/esp-rom-elfs/*/`, newest
-/// release first, for runs by hand. As esp32sim has it, except that a candidate must be a file
-/// (esp32sim takes any path that exists) and `HOME` need not be valid UTF-8. The plan pins release `20241011`
-/// (M0), which this lookup does not prefer, so the esp32sim backend (#9) must pass `--rom`.
+/// release first, for runs by hand. As esp32sim has it, except that an entry of `esp-rom-elfs/`
+/// must hold the ROM as a file (esp32sim takes any path there that exists) and `HOME` need not be
+/// valid UTF-8. The plan pins release `20241011` (M0), which this lookup does not prefer, so the
+/// esp32sim backend (#9) must pass `--rom`.
 fn find_rom(name: &str) -> Option<PathBuf> {
     if let Some(p) = std::env::var_os("ESP32SIM_ROM_DIR")
         .map(|d| PathBuf::from(d).join(name))

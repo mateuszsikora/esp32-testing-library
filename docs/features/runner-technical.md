@@ -44,13 +44,12 @@ chip) and `esp-soc` (the machine, `Soc`, `Stop`). esp32sim lines below are at it
    the wall time and `m.reboots`. `Halted` exits 0; anything else prints the stop's `Debug` and
    exits 1.
 
-`find_rom(name)` follows esp32sim's lookup (`cli/src/lib.rs`, `find_rom`), with two differences: a
-candidate must be a file, where esp32sim takes any path that exists, and `HOME` is read with
-`var_os`, so it need not be valid UTF-8:
-`$ESP32SIM_ROM_DIR/name` if that is a file; otherwise every entry of
+`find_rom(name)` follows esp32sim's lookup (`cli/src/lib.rs`, `find_rom`), with two differences:
+an entry of `esp-rom-elfs/` must hold `name` as a file, where esp32sim takes any path there that
+exists, and `HOME` is read with `var_os`, so it need not be valid UTF-8. The lookup:
+`$ESP32SIM_ROM_DIR/name` if that is a file, as in esp32sim; otherwise every entry of
 `$HOME/.espressif/tools/esp-rom-elfs/`, sorted by path and tried last first, the first one with
-`name` in it as a file. No `HOME`, or no such directory,
-is no ROM. `name` is `<esp32::Esp32 as Soc>::ROM_ELF`, `esp32_rev300_rom.elf`.
+`name` in it as a file. No `HOME`, or no such directory, is no ROM. `name` is `<esp32::Esp32 as Soc>::ROM_ELF`, `esp32_rev300_rom.elf`.
 
 `stop_name` matches every `Stop` variant explicitly, with no catch-all arm, so a variant added
 upstream fails the build instead of being reported under another name.
@@ -72,8 +71,10 @@ The command line and the usage text: [runner-user.md](runner-user.md#run-an-imag
   - `esp32tl-runner: the emulator stopped before --max-seconds: {stop:?}`
 - Exit codes: 0 for `Stop::Halted`; 1 for any other stop; 2 for usage errors and inputs that
   cannot be loaded. esp32sim also exits 2 on a usage error, but panics (exit 101) on a ROM ELF it
-  cannot load. 0 and 1 follow the stop line; 2 comes
-  before the run starts, without it.
+  cannot load. 0 and 1 follow the stop line; 2 comes before the run starts, without it. A panic,
+  in the runner or in esp32sim during the run, exits 101 with Rust's panic message and no stop
+  line: `[profile.release]` does not set `panic = "abort"`. The backend reports it as any other
+  exit code.
 - Signals: none handled; `main` and `run` install no handler. A signal ends the process with its
   default action, wherever the run is, with no stop line and none of the codes above:
   `Popen.returncode` is minus the signal's number (`-15` for `SIGTERM`). `Esp32Sim.close` relies

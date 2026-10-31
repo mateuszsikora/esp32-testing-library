@@ -44,8 +44,10 @@ toolchain is linted before it is committed, not only in CI. Clippy compiles esp3
 metadata only (`--emit=dep-info,metadata`, plain `rustc`, `--cap-lints allow`): the API the
 runner is checked against, with no code generation and no lints of esp32sim's own. Measured on an
 M2 Pro: 0.16 to 0.17 s after a change to the runner, 2.3 to 3.2 s the first time in a worktree,
-whose `runner/target/` has no metadata yet. The network is not needed: `make setup`, which the
-hooks need anyway, has fetched esp32sim into `~/.cargo/git` before. `make lint` and CI's `lint`
+whose `runner/target/` has no metadata yet. A commit that changes no pin needs no network:
+`make setup`, which the hooks need anyway, has fetched esp32sim into `~/.cargo/git` before. A
+commit that bumps the esp32sim revision or the toolchain channel fetches the new one in the hook,
+once, as `make setup` would, and compiles it cold. `make lint` and CI's `lint`
 job still run clippy, so a commit made without the hooks is caught there.
 
 **Rejected:** keeping clippy out of the hooks, because a lint failure then shows up only in CI,
