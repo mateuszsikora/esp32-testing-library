@@ -11,7 +11,7 @@ Status: decided (#43)
 `8c652151dd5a521249a785ca147f20a9f8eda68f`, the merge of mikroverk/esp32sim#322. Beyond stage 0's
 fix build it brings mikroverk/esp32sim#300 (LL Privacy in the virtual BLE controller) and #307
 (roadmap documentation). On it, `hello_world` built for v3.0 boots after its power-on reset only,
-and every stage 0 run of the first consumer's images executes the same instructions as on the fix
+and every stage 0 run of the production images executes the same instructions as on the fix
 build. That revision in `runner/Cargo.toml` is the project's esp32sim pin.
 
 **Rejected:** upstream's head at the time, because it is one pull request further,

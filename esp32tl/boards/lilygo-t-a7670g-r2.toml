@@ -1,5 +1,5 @@
-# LilyGO T-A7670G R2. Only what the specification (issue #1) gives, taken from its first
-# consumer's firmware, and the pull-down on RI that stage 0 found; nothing from memory (plan §4.5,
+# LilyGO T-A7670G R2. Only what the specification (issue #1) gives, taken from firmware built
+# for the board, and the pull-down on RI that stage 0 found; nothing from memory (plan §4.5,
 # finding 12). The other pins, the flash and PSRAM sizes, and whether the board has a GNSS route
 # at all, wait for the vendor schematic.
 name = "lilygo-t-a7670g-r2"
