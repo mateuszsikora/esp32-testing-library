@@ -94,7 +94,12 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [make test-runner follows RUNNER_PROFILE](runner.md#make-test-runner-follows-runner_profile) | `runner.md` | decided (#45) |
 | [The runner looks for the ROM the way esp32sim does](runner.md#the-runner-looks-for-the-rom-the-way-esp32sim-does) | `runner.md` | decided (#45) |
 | [A Stop variant added upstream breaks the build](runner.md#a-stop-variant-added-upstream-breaks-the-build) | `runner.md` | decided (#45) |
-| [The socket board is postponed to M1](runner.md#the-socket-board-is-postponed-to-m1) | `runner.md` | postponed (#11) |
+| [The socket board is postponed to M1](runner.md#the-socket-board-is-postponed-to-m1) | `runner.md` | superseded (#11) |
+| [The socket board records, and the run loop does the socket work](runner.md#the-socket-board-records-and-the-run-loop-does-the-socket-work) | `runner.md` | decided (#11) |
+| [A signal sets a flag, and the socket never blocks longer than 20 ms](runner.md#a-signal-sets-a-flag-and-the-socket-never-blocks-longer-than-20-ms) | `runner.md` | decided (#11) |
+| [Writes go out at sync, at 64 KiB and after 20 wall milliseconds](runner.md#writes-go-out-at-sync-at-64-kib-and-after-20-wall-milliseconds) | `runner.md` | decided (#11) |
+| [The last messages of a run ignore the signal and get two seconds](runner.md#the-last-messages-of-a-run-ignore-the-signal-and-get-two-seconds) | `runner.md` | decided (#11) |
+| [A slice is at most latency long while no event is unacknowledged](runner.md#a-slice-is-at-most-latency-long-while-no-event-is-unacknowledged) | `runner.md` | decided (#11) |
 | [The runner reads the socket only in the peer's turn](runner.md#the-runner-reads-the-socket-only-in-the-peers-turn) | `runner.md` | decided (#53) |
 | [sync is sent only at the block point, and lateness is measured against it](runner.md#sync-is-sent-only-at-the-block-point-and-lateness-is-measured-against-it) | `runner.md` | decided (#53) |
 | [The run loop works in slices instead of BoardModel::next_deadline](runner.md#the-run-loop-works-in-slices-instead-of-boardmodelnext_deadline) | `runner.md` | decided (#53) |

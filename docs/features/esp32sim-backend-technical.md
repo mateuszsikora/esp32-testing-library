@@ -68,8 +68,8 @@ carries the tail: pytest-embedded's "Bytes in current buffer" is empty by then.
 3. `self.process.close()`: stops the forwarder and closes the log. The forwarder is not waited
    for, so the runner's last lines may be missing from `dut.log`; the result does not depend on
    them.
-4. Raises `BackendError` if `returncode` is not in `passing`. The runner handles no signal, so a
-   negative code is a signal's, and passes only when this method sent it. The code is judged after
+4. Raises `BackendError` if `returncode` is not in `passing`. Started without `--board`, the
+   runner handles no signal, so a negative code is a signal's, and passes only when this method sent it. The code is judged after
    the runner has stopped: a runner that crashed just before the signal keeps its own code.
 
 ## Schema

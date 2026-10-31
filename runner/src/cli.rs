@@ -1,6 +1,7 @@
 //! The command line. Flag names and value formats copy esp32sim's, so that switching to
 //! `esp32sim --board socket:PATH` once mikroverk/esp32sim#325 lands is a rename (plan §4.2).
 use std::path::PathBuf;
+use std::time::Duration;
 
 pub const USAGE: &str = "\
 usage: esp32tl-runner --chip esp32 --flash-at OFFSET=FILE... --max-seconds S [options]
@@ -13,9 +14,30 @@ usage: esp32tl-runner --chip esp32 --flash-at OFFSET=FILE... --max-seconds S [op
                         not the pinned 20241011: whoever runs the tests passes --rom)
   --flash-mb N          flash size in MiB: 1, 2, 4, 8 or 16 (default 4)
   --psram-mb N          PSRAM size in MiB, 0 or 4 (default 0)
+  --board socket:PATH   connect to the peer on the Unix socket PATH (docs/protocol.md);
+  --board tcp:HOST:PORT   or over TCP. Without --board the chip has nothing on its pins
+  --peer-timeout S      how long, in wall seconds, a turn of the peer may take before the
+                        run fails with exit code 4 (default 60; 0 waits for ever)
   --console stdout|socket|both   where UART0 goes (default stdout); socket and both need
-                        --board socket:, which comes later
+                        --board
 ";
+
+/// Where the peer is (protocol §1).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Board {
+    Socket(PathBuf),
+    /// `HOST:PORT`, as `TcpStream::connect` takes it.
+    Tcp(String),
+}
+
+impl std::fmt::Display for Board {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Board::Socket(path) => write!(f, "socket:{}", path.display()),
+            Board::Tcp(address) => write!(f, "tcp:{address}"),
+        }
+    }
+}
 
 /// Where the guest's UART0 console goes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -36,6 +58,9 @@ pub struct Opts {
     pub psram_mb: usize,
     pub max_seconds: f64,
     pub console: Console,
+    pub board: Option<Board>,
+    /// `None`: wait for ever.
+    pub peer_timeout: Option<Duration>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -61,6 +86,8 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Opts, Error> {
         psram_mb: 0,
         max_seconds: 0.0,
         console: Console::Stdout,
+        board: None,
+        peer_timeout: Some(Duration::from_secs(60)),
     };
     while let Some(flag) = args.next() {
         let mut value = || {
@@ -120,6 +147,22 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Opts, Error> {
                     }
                 };
             }
+            "--board" => opts.board = Some(board(&value()?)?),
+            "--peer-timeout" => {
+                let v = value()?;
+                // negative, not finite, too large for a Duration, or so small it rounds to 0,
+                // which would mean the opposite: a usage error
+                let seconds = v.parse::<f64>().ok();
+                opts.peer_timeout = match seconds.map(|s| (s, Duration::try_from_secs_f64(s))) {
+                    Some((0.0, _)) => None,
+                    Some((_, Ok(timeout))) if timeout > Duration::ZERO => Some(timeout),
+                    _ => {
+                        return Err(usage(format!(
+                            "--peer-timeout: expected a number of seconds, 0 for none, got {v:?}"
+                        )));
+                    }
+                };
+            }
             "-h" | "--help" => return Err(Error::Help),
             _ => return Err(usage(format!("unknown argument {flag:?}"))),
         }
@@ -137,7 +180,35 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Opts, Error> {
             "nothing to run: give the images with --flash-at OFFSET=FILE",
         ));
     }
+    if opts.console != Console::Stdout && opts.board.is_none() {
+        return Err(usage(
+            "--console socket and both send the console to the peer: they need --board",
+        ));
+    }
     Ok(opts)
+}
+
+/// `socket:PATH` or `tcp:HOST:PORT`.
+fn board(spec: &str) -> Result<Board, Error> {
+    let bad = || {
+        usage(format!(
+            "--board {spec}: expected socket:PATH or tcp:HOST:PORT"
+        ))
+    };
+    if let Some(path) = spec.strip_prefix("socket:") {
+        return if path.is_empty() {
+            Err(bad())
+        } else {
+            Ok(Board::Socket(PathBuf::from(path)))
+        };
+    }
+    let address = spec.strip_prefix("tcp:").ok_or_else(bad)?;
+    match address.rsplit_once(':') {
+        Some((host, port)) if !host.is_empty() && port.parse::<u16>().is_ok() => {
+            Ok(Board::Tcp(address.to_string()))
+        }
+        _ => Err(bad()),
+    }
 }
 
 /// `OFFSET=FILE`, the offset in hex with or without `0x`, as esp32sim reads it.

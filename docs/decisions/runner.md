@@ -95,11 +95,82 @@ another name.
 
 ## The socket board is postponed to M1
 
-Status: postponed (#11)
+Status: superseded (#11)
 
-`--console socket` and `--console both` are parsed but exit 2 until `--board socket:PATH` exists.
-The `console` socket message and forwarding `reset` to the peer come with it; until then the
-runner calls `reboot()` on `Stop::SwReset` and only reports the cause on stderr.
+`--console socket` and `--console both` were parsed but exited 2 until `--board socket:PATH`
+existed, and the runner only reported a reset's cause on stderr. #11 brought the socket board:
+see [The socket board records, and the run loop does the socket work](#the-socket-board-records-and-the-run-loop-does-the-socket-work).
+
+## The socket board records, and the run loop does the socket work
+
+Status: decided (#11)
+
+`SocketBoard` in `runner/src/socket_board.rs` implements `uses_uart_pins`, `uart_tx` and
+`gpio_output_at` only, and pushes what they report, with its bus cycle, into a log it shares with
+`Session` (`Rc<RefCell<Recorder>>`). `Session` turns the log into messages between slices, where
+it has the bus for `uart_cfg`, the drop warnings and the reset routes, and sends `reset` itself
+on `Stop::SwReset`. `--console socket` and `both` need `--board`, and the parser says so.
+
+**Rejected:** writing to the socket from the board callbacks, because they get no access to the
+bus and would block the emulator in the middle of an instruction on a peer that does not read.
+
+## A signal sets a flag, and the socket never blocks longer than 20 ms
+
+Status: decided (#11)
+
+With `--board`, `SIGTERM` and `SIGINT` go to signal-hook's `flag::register`, preceded by
+`flag::register_conditional_shutdown`, so the first signal only sets an `AtomicBool` and a second
+one exits at once with `128 + N`. The socket has a 20 ms read and write timeout (`POLL` in
+`runner/src/transport.rs`), after which `SocketLink` looks at the flag and at `--peer-timeout`.
+The handlers go in only after the connection, so a runner stuck connecting dies of a signal as
+before.
+
+**Rejected:** a flag-only handler around blocking reads, because with `SA_RESTART` a blocked read
+resumes after the signal and the backend's `SIGKILL` comes 5 s later. Also rejected: a self-pipe
+with `poll(2)`, because it needs `libc` or more of signal-hook for what a 20 ms timeout already
+does.
+
+## Writes go out at sync, at 64 KiB and after 20 wall milliseconds
+
+Status: decided (#11)
+
+`SocketLink` queues lines and writes them out at every `sync`, when 64 KiB are queued, and from
+`Link::idle` between slices once the oldest queued line has waited 20 ms of wall time. A coalesced
+`uart_tx` or `console` message is closed at the first slice boundary a character time after its
+last byte. When the peer reads cannot change what it reads, since outside its turn it only reads,
+so this costs no determinism.
+
+**Rejected:** writing only at `sync` and when the buffer fills, the first version, because a run
+with no turns (`quiet_until` and `latency` both `null`, as a GNSS replay has) then gave the peer
+the console only at the end of the run, and `--console socket` keeps it off stdout.
+
+## The last messages of a run ignore the signal and get two seconds
+
+Status: decided (#11)
+
+`Session::finish` calls `Link::closing` first: from then on a write no longer gives up on the
+signal flag, and gives up on a peer that does not read after 2 s (`TEARDOWN`), under the 5 s after
+which the backend sends `SIGKILL`. A write cut short keeps what it has not written, so the next
+one goes on from there instead of sending part of the stream twice.
+
+**Rejected:** letting the signal interrupt the last writes too, the first version, because after a
+`SIGTERM` any write that had to wait, even 20 ms, was abandoned and the peer got no `stats`. Also
+rejected: `--peer-timeout` as the limit, because its default of 60 s is past the backend's
+`SIGKILL`.
+
+## A slice is at most latency long while no event is unacknowledged
+
+Status: decided (#11)
+
+Besides the slice ends of protocol 6.1, `slice_end` caps a slice at `latency` while no event is
+unacknowledged ([protocol §11](../protocol.md#11-changes-from-the-plan), item 15): an event in the
+slice sets `B = t + latency`, and the callback that records it cannot stop `run`. It is slow with a
+small `latency`: `hello_world` runs at about 30 wall seconds per emulated second with a `latency`
+of 0, 0.3 with 1 µs and 0.1 without, on an M2 Pro.
+
+**Rejected:** slices of up to a millisecond only, because a request sent mid slice with the guest
+asleep in WFI would be seen only at the next millisecond, and an answer stamped `t + latency`
+would reach the chip up to that late.
 
 ## The runner reads the socket only in the peer's turn
 
@@ -159,9 +230,9 @@ Status: decided (#53)
 `SIGTERM` or `SIGINT` ends the slice in progress, sends the pending events and warnings and
 `stats` with `end: signal`, and exits 0. The backend's `board` teardown, before the `dut` is torn
 down, sends `SIGTERM`, reads the socket to end of file within a wall-time limit, waits, and sends
-`SIGKILL` only after 5 s ([protocol §9](../protocol.md#9-ending-a-run)). Today the runner handles
-no signal and dies of `SIGTERM`; `Esp32Sim.close` accepts both, the runner's side is #11 and
-reading the socket to end of file is #12.
+`SIGKILL` only after 5 s ([protocol §9](../protocol.md#9-ending-a-run)). The runner does this with
+`--board` since #11; the backend starts it without `--board`, so there it still handles no signal
+and dies of `SIGTERM`, and `Esp32Sim.close` accepts both. Reading the socket to end of file is #12.
 
 **Rejected:** a fixed turn cadence so that `stop` always arrives soon, because tests usually end
 between turns, when `console.expect` matches. Also rejected: leaving the end to pytest-embedded's

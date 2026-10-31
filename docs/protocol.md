@@ -188,7 +188,15 @@ starts a new one, when:
   (10 bit times, 8N1), when the baud is known. Two requests the firmware sends apart thus stay
   apart, and a recording made through the tap keeps each burst's own time;
 - the block point is reached: bytes written at or before `B` go out before the `sync`, later ones
-  start the next message.
+  start the next message;
+- the message holds 48 KiB, which keeps its line well under the 1 MiB limit.
+
+When the route's baud is known, a message whose next byte has not come one character time after
+its last goes out at the next slice boundary, at most a millisecond later: the next byte would
+start a new message anyway, and the peer does not wait for it. Without a baud the message stays
+open until another message is due. Messages outside the peer's turn reach the socket within about
+20 wall milliseconds, so a peer that reads between its turns (the console, a tap) sees them as
+they come.
 
 Message boundaries carry no meaning beyond the `t` of each message's first byte: they depend on the
 `--console` mode and on the peer's `latency` and `quiet_until`. Consumers (the matching engine, the
@@ -267,7 +275,8 @@ and the guest has run in between.
 Bytes the guest wrote to UART0, sent only with `--console socket` or `--console both`; by default
 the console goes to stdout, where pytest-embedded's `DuplicateStdoutPopen` reads it. Coalesced like
 `uart_tx`; a message also ends after a `\n`. Not an event: it has no `seq` and sets no block
-point.
+point. With UART0's TX pin in `watch` the same bytes go out as `uart_tx` too, and the two
+messages end together.
 
 ### 5.8 `warn` *ext*
 
@@ -316,8 +325,9 @@ where the run ended: the end of the last slice, or, after a `stop`, that turn's 
 says why: `max_seconds`, `stop`, `signal`, `emulator` (then also `stop`, the `Stop` variant's name,
 and `detail`, its `Debug` form), or `protocol_error` (then also `detail`). `inputs_not_applied`
 counts the queued input messages not yet applied when the run ended, and `rx_bytes_not_paced` the
-received bytes not yet paced into the chip, so `BoardLink` can tell a scenario that reached past
-the end of the run. `uart` has one entry per
+received bytes not yet paced into the chip, of `uart_rx` messages already applied (a message still
+in the queue counts in `inputs_not_applied` only), so `BoardLink` can tell a scenario that reached
+past the end of the run. `uart` has one entry per
 port that carried a watched route during the run, with the bytes each way and the drops by kind.
 `BoardLink` puts the counts in the test report next to the matching engine's unseen requests.
 
@@ -450,7 +460,12 @@ cycle, into state the run loop shares. The run loop runs the machine in slices: 
 `max_cycles` to the slice's end and calls `run`, which returns `Stop::Halted` there, as it does
 today at `--max-seconds`. A slice ends at the earliest of `B`, the next paced byte, the next
 queued input, the next whole emulated millisecond, and the end of the run, each converted to
-cycles (section 3). Between slices, where it has the bus, the runner:
+cycles (section 3). While no event is unacknowledged, so that `B` has no `latency` term yet, a
+slice is also at most `latency` long: an event in it sets `B = t + latency`, and the callback
+that records it cannot stop `run`, so a longer slice would carry the guest past that `B`. With a
+`latency` of `0` a slice is one bus cycle until the next event, which is slow: `hello_world`
+runs at about 30 wall seconds per emulated second on an M2 Pro, against 0.3 with a `latency` of
+1 µs and 0.1 with none. Between slices, where it has the bus, the runner:
 
 - compares the UART routes (`uart_cfg`);
 - delivers the bytes now due with `bus.periph.uart_pin_input`, after checking the route, the
@@ -470,7 +485,9 @@ or 5 bus cycles after it at the others. In nanoseconds `T − B` also holds the 
 to a whole bus cycle (section 3), under 4.2 ns, so it stays below 25 ns. Three consequences, all
 hidden from the peer:
 
-- the `sync` still says `t = B`; events in `(B, T]` go out after the peer's turn (section 4);
+- the `sync` still says `t = B`; events in `(B, T]` go out after the peer's turn (section 4). So
+  does an event in the cycle `run` stops at: it happens once the guest runs again, at `t ≥ B`,
+  `t = B` when `B` falls on a cycle;
 - an input stamped in `[B, T]` takes effect at `T`, less than one CPU cycle after its `t`;
   deterministic all the same, because the gap depends only on the run so far, not on the peer's
   speed;
@@ -523,7 +540,8 @@ the runner at or before its `t` (rule 1).
 | any other `Stop` (`esp-soc/src/soc.rs:9`: `MaxInsns`, `Breakpoint`, `Unimplemented`, `Simcall`, `Ebreak`, `Watch`, `Exceptions`, `CostModel`, `CostModelLifecycle`) | events not yet sent, `stats` with `end: emulator` and the variant, closes | 1 |
 | usage error, or an image or ROM that cannot be loaded | nothing on the socket (it may not be connected yet) | 2 |
 | protocol error by the peer: malformed or oversized line, unknown `type`, version or chip mismatch, late `t`, wrong `ack`, `quiet_until` not after the `sync`, a `baud` of `0`, a message the runner does not implement yet | `stats` with `end: protocol_error`, closes | 3 |
-| the peer is gone: the connection failed, the socket closed, a read or write failed, or the peer's turn took longer than `--peer-timeout` | nothing more | 4 |
+| the peer is gone: the connection failed, the socket closed, a read or write failed, the peer's turn took longer than `--peer-timeout`, or a write made no progress for that long (in or outside a turn) | nothing more | 4 |
+| a second `SIGTERM` or `SIGINT` | ends the process at once | 128 + the signal's number |
 
 Every run ends with one line on stderr naming the cause; a protocol error names the peer's
 address and the offending message. The first cause decides the exit code: a final `stats` that
@@ -542,10 +560,16 @@ end of file within a wall-time limit (#12), waits for the process, and sends `SI
 the runner has not exited within five wall seconds. It gets `stats` and the last warnings within
 one emulated millisecond. The runner then exits 0 rather than dying of the signal. The signal
 changes only where the run ends, not what happened before it, so determinism is unaffected.
-`SIGKILL` leaves no `stats`.
+`SIGKILL` leaves no `stats`. Once the run ends, a signal no longer interrupts the last writes;
+they get two wall seconds, then the runner gives up on a peer that does not read them. A second
+`SIGTERM` or `SIGINT` ends the process at once, with exit code 128 plus the signal's number, as a
+shell would report it. Before the connection is made a signal ends the process as it would any
+other.
 
 `--peer-timeout SECONDS` bounds, in wall time, how long the runner waits for the peer's turn to
-end (default 60; `0` waits for ever). A hung peer, say a model in another process, then fails the
+end, and how long a write may make no progress because the peer does not read (default 60; `0`
+waits for ever). For `tcp:` it also bounds each connection attempt, though not the name lookup
+before it. A hung peer, say a model in another process, then fails the
 run with code 4 instead of hanging a CI job. It acts only on that error path, so it cannot change a
 run that completes.
 
@@ -621,3 +645,9 @@ Section 4.1 of the plan is superseded by this document. What changed, and why:
 14. **`SIGTERM` ends a run with `stats`**, and **`--peer-timeout`** bounds a turn (section 9). The
     plan ended a run early only by `stop`, which waits for a turn that may never come, and let a
     hung peer hang the runner.
+15. **A slice is at most `latency` long while no event is unacknowledged** (6.1), found while
+    implementing #11. The slice ends listed before it are all known when a slice starts; the
+    `latency` term of `B` is not, since it comes from an event the guest has yet to produce.
+    Without this bound a request sent mid-slice, with the guest asleep in WFI waiting for the
+    answer, would be seen only at the next millisecond, and an answer stamped `t + latency`
+    would reach the chip up to that late.
