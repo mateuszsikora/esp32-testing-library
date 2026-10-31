@@ -4,17 +4,20 @@ The tests that run pytest inside pytest do it in a subprocess: pytest-embedded s
 multiprocessing manager for every session.
 """
 
+import gc
 import hashlib
 import json
 import re
 import shutil
 import time
+import warnings
 from pathlib import Path
 from typing import cast
 
 import pytest
 from esptool.bin_image import LoadFirmwareImage
-from pytest_embedded.log import PexpectProcess
+from pytest_embedded.log import MessageQueue, PexpectProcess
+from pytest_embedded.utils import Meta
 
 from esp32tl.backends import esp32sim
 from esp32tl.backends.esp32sim import BackendError, RunnerExited
@@ -381,6 +384,19 @@ def test_ended_on_runner_exit_stops_at_a_cycle() -> None:
     assert not esp32sim.ended_on_runner_exit(first)
     second.__cause__ = RunnerExited("end")
     assert esp32sim.ended_on_runner_exit(first)
+
+
+def test_a_runner_that_cannot_start_leaves_no_log_open(tmp_path: Path) -> None:
+    # Executable, but not a program: exec fails with ENOEXEC.
+    runner = tmp_path / "runner"
+    runner.write_text("not a program\n")
+    runner.chmod(0o755)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        with pytest.raises(OSError, match="Exec format error"):
+            esp32sim.RunnerPopen(cast(MessageQueue, None), [str(runner)], cast(Meta, None))
+        gc.collect()
+    assert [w for w in caught if issubclass(w.category, ResourceWarning)] == []
 
 
 def copy_build(build: Path, to: Path) -> None:

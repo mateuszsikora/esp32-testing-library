@@ -94,6 +94,20 @@ def runner_command(runner: Path, rom: Path, app: IdfApp, max_seconds: float) -> 
     return command
 
 
+class RunnerPopen(DuplicateStdoutPopen):
+    """A `DuplicateStdoutPopen` that closes its log when the runner cannot start: the parent
+    opens the log before it starts the process, and nothing else can close it then."""
+
+    def __init__(self, msg_queue: MessageQueue, cmd: list[str], meta: Meta) -> None:
+        try:
+            super().__init__(msg_queue, cmd, meta)
+        except OSError:
+            log = getattr(self, "_fw", None)
+            if log is not None:
+                log.close()
+            raise
+
+
 class Esp32Sim:
     """A run of the app in `app_path` in the runner, its console going to `dut`.
 
@@ -108,7 +122,7 @@ class Esp32Sim:
         self.app = load_app(app_path)
         command = runner_command(runner_path(), rom_path(), self.app, MAX_SECONDS)
         try:
-            self.process = DuplicateStdoutPopen(msg_queue, command, meta)
+            self.process = RunnerPopen(msg_queue, command, meta)
         except OSError as error:
             raise BackendError(f"cannot start {command[0]}: {error.strerror}") from error
         end_stream_at_end_of_run(dut.pexpect_proc)
