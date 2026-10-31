@@ -84,6 +84,7 @@ Run what covers the change and keep the exact commands and results for **Verific
 
 | Change touches | Run |
 |---|---|
+| Anything | `make docs-check`: every behaviour change carries its documentation (`AGENTS.md`, "Documentation contract"). On a failure, write the documents it names before going on; never push with `SKIP_DOCS_CHECK`. If you merge `origin/main` into the branch, run it again after the merge |
 | Anything | `.venv/bin/pre-commit run --files <changed files>`. Without `.venv`, and only if no Python changed: `SKIP=ruff-check,ruff-format,mypy pipx run pre-commit run --files <changed files>` |
 | Python (`esp32tl/`, `tests/`, `tools/*.py`), `pyproject.toml` | `make lint` (it creates `.venv` if missing), then `.venv/bin/pytest` |
 | A tool in `tools/*.py` | also run it once on a sample input and check its output |
@@ -92,7 +93,7 @@ Run what covers the change and keep the exact commands and results for **Verific
 | An ESP-IDF project in `tools/` | if Docker is available, build each `sdkconfig.defaults*` variant the change affects into its own directory, with the command below; otherwise say it was not built |
 | `Makefile` | `make -n <each changed target>`, then run each changed target except `firmware`, which follows its own row. Run `clean` only if it changed, last, and then `make setup`: it deletes `.venv`, which the other rows and the git hooks of every worktree need |
 | `.pre-commit-config.yaml`, `scripts/` | `.venv/bin/pre-commit run --all-files` |
-| Docs | the pre-commit row, plus links and figures checked by hand against their source |
+| Docs | the pre-commit row and `make docs-check` (it checks links and anchors), plus figures and claims checked by hand against their source: the check proves a document changed, not that it is true |
 
 The ESP-IDF build, with the image pinned in `docs/stage0-findings.md`. A separate build directory
 leaves the user's own `build/` and `sdkconfig` alone (`tools/*/build*/` is ignored by git); for
@@ -197,9 +198,12 @@ lands on `main`.
 3. `## Decisions`: each non-obvious choice in bold, then the alternative rejected and why.
 4. `## Verification`: the commands from step 3 and what they showed, with numbers where there
    are numbers. Say what was not verified and why.
-5. `## Notes`: deliberately out of scope (with issue numbers), follow-ups, anything that deserves
+5. `## Documentation`: tick the boxes of the template that hold, and name the documents the
+   change updates, or say why it needs none. Run `make docs-check` for the first box; never
+   tick it unrun.
+6. `## Notes`: deliberately out of scope (with issue numbers), follow-ups, anything that deserves
    a closer look. For a draft, what is missing before it is ready goes first.
-6. Delete empty sections and all template comments. No signature or attribution line at the end.
+7. Delete empty sections and all template comments. No signature or attribution line at the end.
 
 Style, as in the existing PRs (#2, #42, #43 are good examples of the description; their titles
 and the `Co-Authored-By` lines in their commits predate these conventions):
@@ -222,6 +226,7 @@ Before creating the PR, check the draft against this list:
 - [ ] Every commit message on the branch follows the rules, or the user knows which does not.
 - [ ] A reader who has not seen the conversation understands why the change exists.
 - [ ] Every claim in Verification was run in this session.
+- [ ] `make docs-check` passes, and Documentation names the documents this changes.
 - [ ] The issue link is correct and uses `Closes` only if the PR finishes the issue.
 - [ ] No attribution lines in the description or the commits.
 - [ ] Everything is in English.

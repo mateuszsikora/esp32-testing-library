@@ -20,6 +20,16 @@ Closes #
 
 -
 
+## Documentation
+
+<!-- AGENTS.md, "Documentation contract": a behaviour change lands its documentation here. Tick
+what holds; name the documents this changes, or say why none needed to. -->
+
+- [ ] `make docs-check` passes on this branch, after the latest merge of the base branch
+- [ ] The documents this changes say what is now true:
+- [ ] Removed behaviour is removed from the documentation too
+- [ ] No behaviour changes, so no documentation:
+
 ## Verification
 
 <!-- What you ran and what it showed: commands and results, not "tested locally". -->

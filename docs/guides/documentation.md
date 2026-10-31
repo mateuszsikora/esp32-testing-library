@@ -1,0 +1,205 @@
+# Writing documentation
+
+Every commit and pull request that changes behaviour lands its documentation in the same change.
+A behaviour change that leaves `docs/` untouched is incomplete, and removing behaviour removes its
+documentation too. Nothing generates the documentation except the decisions index: people and
+agents write it by hand. `make docs-check` only makes sure it cannot be forgotten.
+
+[`docs/README.md`](../README.md) says what lives where. This guide says how to write each kind of
+document, how the check works and what it cannot do.
+
+## The check
+
+```sh
+make docs-check                  # against main
+make docs-check BASE=origin/rel  # against another base, for a release branch
+```
+
+`scripts/check-docs.py` compares the work in progress with the merge base of `HEAD` and the
+default branch: `origin/main` if it exists, else `main`. `--base REF` (`BASE=` in make) names
+another. With neither found, it exits 2 and says so; it never falls back to some other branch.
+
+What counts as changed is the union of:
+
+- the commits since the merge base;
+- staged and unstaged changes;
+- untracked files that git does not ignore, so a new document counts before it is added.
+
+Renames count as a deletion and an addition (`--no-renames`), so deleting or moving an owned file
+is a change to its old path too.
+
+Test files are left out before any rule runs: `tests/test_*.py`, `*.test.*`, `*.spec.*`,
+`runner/src/**/tests.rs` and `runner/tests/`. They describe behaviour rather than change it. The
+runner's unit tests live in `tests.rs` files of their own for this reason, not in inline
+`mod tests { ... }` blocks.
+
+Files whose only change is a version bump are left out next: `uses: …@ref` in a workflow, `rev:`
+in `.pre-commit-config.yaml`, and the version of a dependency in `pyproject.toml`. Pins the
+documentation states are not filtered: the esp32sim revision, the Rust toolchain, the ESP-IDF image
+and the ROM release. If this filter fails, the check fails with it; it never passes instead.
+
+Each rule of the ownership map then says: if a changed path matches the source pattern and no
+changed path matches the documentation pattern, the check fails with the rule's message. The map
+is `RULES` in `scripts/check-docs.py`; [`docs/features/README.md`](../features/README.md) lists the
+same rules, and the check fails when the two differ. [`AGENTS.md`](../../AGENTS.md) restates them
+as "you changed X, update Y".
+
+The check also fails when:
+
+- a reference to `docs/decisions/` carries a line number (`ci.md:12`, `ci.md#L12`) instead of a
+  heading anchor;
+- a link or reference into `docs/` names a file that does not exist, or an anchor that is not a
+  heading of that file;
+- a `plan §N`, `plan §N.N` or `plan MN` reference in the code names no heading of
+  [`docs/implementation-plan.md`](../implementation-plan.md);
+- [`docs/decisions/README.md`](../decisions/README.md) is not what `scripts/decisions-index.py`
+  generates, or a decision file exists that the script does not list.
+
+It prints every failure as `✗ <message>` and exits 1.
+
+`SKIP_DOCS_CHECK=1 make docs-check` skips it, for local work only, such as a commit you know is
+followed by its documentation. CI never sets it, and the check ignores it when `CI` is set. CI runs
+it as the "Documentation contract" step on every pull request, against the pull request's base
+branch ([`docs/cicd.md`](../cicd.md)).
+
+It is not a pre-commit hook: it looks at the whole branch, so a hook would block a code-only commit
+whose documentation comes in the next commit of the same pull request.
+
+## Kinds of document
+
+### Feature, user side: `docs/features/<feature>-user.md`
+
+What someone using esp32tl can do, and what they see. No implementation detail: a reader who never
+opens the code can use the feature from this document alone.
+
+```markdown
+# <Feature>
+
+<One paragraph: what it is for, in the user's terms.>
+
+## <Task the user does>
+
+<Steps, the commands or code they write, the options and their defaults.>
+
+## <States or outcomes>
+
+<What they see in each case. Messages quoted verbatim, in code spans.>
+
+## See also
+```
+
+### Feature, technical side: `docs/features/<feature>-technical.md`
+
+How it works, for whoever changes it. Sections in this order; leave out any that does not apply.
+
+```markdown
+# <Feature>: how it works
+
+## Data flow
+<Who calls whom, what goes where, in order. Real module, class and function names.>
+
+## Schema
+<File and message formats this feature reads or writes, field by field.>
+
+## Interfaces
+<Command lines, fixtures, hooks, public functions: names, arguments, defaults.>
+
+## Configuration
+<Every environment variable and option, its default, who reads it.>
+
+## Failure modes
+<Every error message and exit code, verbatim, with its cause.>
+
+## Tests
+<Which test files cover what, and what is not covered.>
+
+## See also
+```
+
+### Invariants: `docs/invariants.md`
+
+Numbered rules about the domain that a test enforces. Each names the test that breaks when the rule
+does. A rule that code can break without any test failing is a note, not an invariant: put it in
+the owning technical document instead. Numbers are never reused; a rule that no longer holds is
+struck through with the reason, so references to it stay meaningful.
+
+### Decisions: `docs/decisions/<domain>.md`
+
+Why things are the way they are: alternatives that were rejected, and scope that was postponed. One
+`##` heading per decision; the heading says what was decided, not the question.
+
+```markdown
+## <What was decided, as a statement>
+
+Status: decided (#N)
+
+<What was decided and why, in a paragraph or two.>
+
+**Rejected:** <the alternative>, because <reason>.
+```
+
+`Status:` is the first line after the heading, and one of `decided`, `postponed` or `superseded`,
+followed by the pull request or issue in brackets. A superseded decision links to the one that
+replaced it, by anchor: `[…](runner.md#the-new-heading)`, never by line number, because lines move.
+
+The index, [`docs/decisions/README.md`](../decisions/README.md), is generated:
+
+```sh
+python3 scripts/decisions-index.py          # rewrite it
+python3 scripts/decisions-index.py --check  # fail if it is stale (make docs-check runs this)
+```
+
+A new domain is a new file plus an entry in `DOMAINS` in `scripts/decisions-index.py`; the check
+fails on a file the script does not list. Before deciding something, read the index: a stale or
+missing entry answers "no such decision" for one that exists, which is why the index is generated
+rather than kept by hand.
+
+### Guides: `docs/guides/<topic>.md`
+
+How to work on the repository: setting up, testing, writing documentation. They follow no template
+beyond a title and an opening paragraph that says who the guide is for.
+
+## Style
+
+The rules of [`CONTRIBUTING.md`](../../CONTRIBUTING.md) hold here too: plain and precise, measured
+claims with their numbers, no "comprehensive", "robust", "seamless" or "enhance". In addition:
+
+- Write what is true now. No roadmap: what is planned belongs in issues and in the
+  [implementation plan](../implementation-plan.md).
+- Real paths, real names, real defaults. Quote messages and command output verbatim.
+- Refer to this repository's code by path and symbol (`esp32tl/backends/esp32sim.py`,
+  `Esp32Sim.close`), not by line number. Lines in esp32sim are fine with the revision they hold at.
+- Where you are not sure, write `TODO(owner): <what is unknown>` rather than guessing.
+- Every document lives in one place. Link to it; do not restate it.
+
+## Agent tooling
+
+`AGENTS.md` carries the contract for every agent; `CLAUDE.md` is a symlink to it. It stays under
+about 23 KiB, because Codex stops reading it at its `project_doc_max_bytes` (32 KiB) without saying
+so: the reasoning goes into `docs/` and `AGENTS.md` links to it. `.claude/rules/documentation.md`
+restates the table for Claude Code when it edits a source file; Codex does not read `.claude/`, so
+`AGENTS.md` carries the same rules.
+
+Skills that open, review or merge pull requests carry the contract. `create-pr` runs
+`make docs-check` before pushing and fills the Documentation section of the description. A skill
+added later for any of those jobs does the same:
+
+- **opening a pull request:** run `make docs-check` before pushing, and fill the Documentation
+  section of the pull request template;
+- **reviewing:** a behaviour change without its documentation is a Major finding. Also check that
+  the documentation is now true, which the script cannot do;
+- **merging or shipping:** run `make docs-check` after merging the base branch in, never only
+  before: the merge changes what the branch changed.
+
+## Known limits
+
+- The check proves coverage, not correctness. Review owns the question "is the documentation now
+  true?".
+- A new file in a part of the map that lists files by name (`scripts/`, the runner's top level,
+  the protocol files) matches no rule, and nothing enforces its documentation. Whoever adds the
+  file adds it to the map. Under `esp32tl/`, rule F12 catches such files; nothing does elsewhere.
+- `pyproject.toml` has several owners (rule C7): the check accepts any of their documents, and
+  review checks that it was the right one.
+- Agent tooling (`.claude/**`, skills) restates normative files (`CONTRIBUTING.md`, this guide,
+  `AGENTS.md`) and goes stale silently. When a skill and a normative file disagree, the skill is
+  wrong.
