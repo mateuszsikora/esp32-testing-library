@@ -156,16 +156,16 @@ The command line and the usage text: [runner-user.md](runner-user.md#run-an-imag
 - Signals, without `--board`: none handled; `main` and `run` install no handler. A signal ends
   the process with its default action, wherever the run is, with no stop line and none of the
   codes above: `Popen.returncode` is minus the signal's number (`-15` for `SIGTERM`).
-  `Esp32Sim.close`, which starts the runner without `--board`, relies on that: it sends `SIGTERM`
-  to a runner still running at teardown, `SIGKILL` 5 s later, and accepts the matching negative
-  code ([esp32sim-backend-technical.md](esp32sim-backend-technical.md)).
 - Signals, with `--board`: once connected, `run_with_board` registers, for `SIGTERM` and
   `SIGINT`, signal-hook's `flag::register_conditional_shutdown` with status `128 + N` and then
   `flag::register` on one `AtomicBool`. The first signal only sets the flag, which the run loop
   reads before each slice and `SocketLink` after each blocked read or write of at most 20 ms;
   the run then ends as [the protocol, section 9](../protocol.md#9-ending-a-run) says, with
   `stats` and exit 0. A second one finds the flag set and exits the process at once with
-  `128 + N`, without `stats`. Before the connection, signals keep their default action.
+  `128 + N`, without `stats`. Before the connection, signals keep their default action. The
+  handlers are registered before the session sends its `hello`, so `Esp32Sim.close`, which starts
+  the runner with `--board`, waits for that `hello` before its `SIGTERM`, sends one only, and
+  passes exit code 0 alone ([esp32sim-backend-technical.md](esp32sim-backend-technical.md)).
 
 The flag names copy esp32sim's, so that the change to `esp32sim --board socket:` once
 mikroverk/esp32sim#325 lands is a rename ([plan, 4.2](../implementation-plan.md#42-runner-crate)).

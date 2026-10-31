@@ -126,17 +126,96 @@ itself could then hide a runner that crashed in the same test.
 
 ## Teardown passes only the signals it sent itself
 
-Status: decided (#51)
+Status: superseded (#12)
 
-`Esp32Sim.close` sends `SIGTERM`, waits 5 s, then sends `SIGKILL`, and fails the test on any exit
-code other than 0 and the signals it sent, even if every expect passed. It judges the code after
-the runner has stopped, so a runner that crashed just before the signal keeps its own code. The
-backend starts the runner without `--board`, where it handles no signal, so `-SIGTERM` and
-`-SIGKILL` always mean a signal. Teardown signals the
-runner before closing the log forwarder.
+`Esp32Sim.close` sent `SIGTERM`, waited 5 s, then sent `SIGKILL`, and passed exit code 0 and the
+signals it had sent, because the runner, started without `--board`, handled no signal. Since the
+backend starts it with `--board`, see
+[Teardown waits for the runner's hello, sends one SIGTERM and passes exit code 0 only](#teardown-waits-for-the-runners-hello-sends-one-sigterm-and-passes-exit-code-0-only).
 
-**Rejected:** passing any exit by `SIGTERM` or `SIGKILL`, because a runner killed from outside
-during a test, by the OOM killer for one, would go unreported once its expects had passed.
+## Teardown waits for the runner's hello, sends one SIGTERM and passes exit code 0 only
+
+Status: decided (#12)
+
+`Esp32Sim.close` waits up to 5 s for the runner's `hello`, sends `SIGTERM` once, reads the link
+to end of file, and sends `SIGKILL` only when the runner has not exited 5 s after the signal. The
+runner registers its signal handlers after it connects and before its `hello`; before that a
+`SIGTERM` kills it, which made every test that ended while the runner loaded its images fail on
+`-15`. A second `SIGTERM` kills it with 143, so the signal that `BoardLink`'s error sends and the
+teardown's are one. With `--board` the runner exits 0 on `SIGTERM`, so only 0 passes, and a
+killed runner fails the test even when its expects passed. It judges the code after the runner
+has stopped, so a runner that crashed just before the signal keeps its own code. Teardown signals
+the runner before closing the log forwarder.
+
+**Rejected:** passing `-SIGTERM` when the signal came before the `hello`, because that run has no
+`stats` and its code cannot be told from a kill from outside. Also rejected: a fixed delay before
+the signal, because loading the images takes as long as it takes. Also rejected, as in #51:
+passing any exit by a signal, because a runner killed from outside during a test, by the OOM
+killer for one, would go unreported once its expects had passed.
+
+## A link error ends the run with SIGTERM at once
+
+Status: decided (#12)
+
+When `BoardLink` finds the run wrong, it calls `on_error`, and the backend sends the runner
+`SIGTERM` then and there; the runner sends its `stats` and exits 0, and an expect that is waiting
+fails on the end of the run with the link's reason first. A mismatched handshake is the exception:
+the runner finds it in the harness's `hello` and exits 3 by itself.
+
+**Rejected:** waiting for the runner's next turn to send `stop`, because with `quiet_until` and
+`latency` both `null` that turn may come only at `--max-seconds`, 300 emulated seconds, and the
+expect would time out after 30 s with no word of the cause.
+
+## The EOF takes the link's error from BoardLink, not from the log
+
+Status: decided (#12)
+
+`end_stream_at_end_of_run` gets the link's error from `link_error()`, which reads `BoardLink`'s
+`error` once the end-of-run line has been read; the backend writes that line after the link has
+been read to its end. The `esp32tl: the link failed: ...` line stays in the log for whoever reads
+`dut.log`.
+
+**Rejected:** finding the reason in the log with a pattern, because the guest's output shares the
+log: a long last line without a newline cuts the pattern's leading `\n` off at the 2 KiB tail, and
+the guest can print the same words.
+
+## BoardLink checks every input through the codec before it sends it
+
+Status: decided (#12)
+
+What the interfaces and the scenario return is checked to be `(t_ns, bytes)` pairs or input
+messages, encoded and decoded again, checked against the turn's `sync` and against `watch`; a
+failure is the link's error, naming the interface or the scenario, and ends the run with `stop`.
+An output longer than one line goes out as several `uart_rx` of the same `t` (`UART_RX_CHUNK`,
+512 KiB), which the runner paces one after another. Any other exception in the harness also fails
+the link rather than end its thread.
+
+**Rejected:** letting the runner refuse what is wrong, because it ends the run with exit code 3
+naming the peer, not which interface or scenario sent it; and an exception that ended the link's
+thread left the runner waiting for a turn until `--peer-timeout`, 60 s, then exit code 4.
+
+## uart_tx reaches the interfaces chunk by chunk, with each chunk's time
+
+Status: decided (#12)
+
+`BoardLink` hands every `uart_tx` to the interfaces on its TX pins as it arrives, with its own
+`t`, and interfaces find requests by their protocol's terminator.
+
+**Rejected:** joining consecutive `uart_tx` before handing them on, because a boundary may come
+from a gap of more than one character time, which keeps two requests apart with their own times,
+and the link cannot tell those boundaries from the others (protocol 5.2).
+
+## The link's report is a report section and a JSON user property
+
+Status: decided (#12)
+
+Every test that uses `board` gets the `esp32sim link` report section, for people, and the
+`esp32sim_link` user property, a JSON string with the board, the watched pins, the warnings, the
+`stats` and the error, for code.
+
+**Rejected:** the property as a `dict`, because JUnit XML writes a property's `str()`, which is
+Python's `repr`, not JSON. Also rejected: pytest warnings for the runner's `warn` messages, because
+a run may send many, and they belong to the run, not to the code that triggered a warning.
 
 ## The build directory is passed to IdfApp as an absolute path
 

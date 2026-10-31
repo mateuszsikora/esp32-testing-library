@@ -231,8 +231,7 @@ Status: decided (#53)
 `stats` with `end: signal`, and exits 0. The backend's `board` teardown, before the `dut` is torn
 down, sends `SIGTERM`, reads the socket to end of file within a wall-time limit, waits, and sends
 `SIGKILL` only after 5 s ([protocol §9](../protocol.md#9-ending-a-run)). The runner does this with
-`--board` since #11; the backend starts it without `--board`, so there it still handles no signal
-and dies of `SIGTERM`, and `Esp32Sim.close` accepts both. Reading the socket to end of file is #12.
+`--board` since #11, and the backend starts it with `--board` since #12.
 
 **Rejected:** a fixed turn cadence so that `stop` always arrives soon, because tests usually end
 between turns, when `console.expect` matches. Also rejected: leaving the end to pytest-embedded's

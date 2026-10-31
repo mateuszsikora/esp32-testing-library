@@ -12,6 +12,7 @@ back to the command line, and a session started with `--embedded-services esp` w
 from `build/` in it. `--count` above 1 is refused too: a test has one board.
 """
 
+import json
 from collections.abc import Generator, Iterator
 from typing import NoReturn
 
@@ -122,9 +123,18 @@ def board(
         try:
             backend.close()
         except BackendError as error:
-            # An expect that ended on the runner's exit has already reported it, with its code.
+            # An expect that ended on the runner's exit has already reported it, with its code
+            # and what the link found.
             if not request.node.stash.get(EXPECT_SAW_RUNNER_EXIT, False):
                 backend_failed(error)
+        finally:
+            # The link's warnings and the run's stats, in the report of every test: a section
+            # for people, which pytest shows with a failure or -rA, and a user property for code,
+            # as a JSON string: JUnit XML writes a property's str().
+            request.node.add_report_section("teardown", "esp32sim link", backend.link.report())
+            request.node.user_properties.append(
+                ("esp32sim_link", json.dumps(backend.link.properties()))
+            )
 
 
 def backend_failed(error: BackendError) -> NoReturn:

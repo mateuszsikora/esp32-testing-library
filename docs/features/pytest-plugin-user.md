@@ -101,8 +101,14 @@ A test that parametrises pytest-embedded's `count` itself above 1, as in
 - The runner has exited: the expect fails at once with pexpect's `EOF`, which names the exit code
   and carries the runner's last output
   ([when the runner exits](esp32sim-backend-user.md#when-the-runner-exits)).
-- The runner exited with an error: an error at teardown, even when every expect passed
-  ([esp32sim backend](esp32sim-backend-user.md#when-the-runner-exits-with-an-error)).
+- The runner exited with an error, had to be killed, or the harness found the link to it wrong:
+  an error at teardown, even when every expect passed
+  ([esp32sim backend](esp32sim-backend-user.md#when-the-run-fails)).
+
+Every test that uses `board` also reports what the run told: a section `esp32sim link`, which
+pytest prints with a failure or with `-rA`, and the `esp32sim_link` user property, a JSON string
+that `--junitxml` writes into the report
+([the link's report](esp32sim-backend-user.md#the-links-report)).
 
 pytest-embedded's `app_path` fixture records an XML attribute for every test, which pytest reports
 as `PytestExperimentalApiWarning: record_xml_attribute is an experimental feature`. This

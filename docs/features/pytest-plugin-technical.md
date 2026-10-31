@@ -57,8 +57,12 @@ sees is in [pytest-plugin-user.md](pytest-plugin-user.md); the backend it starts
    torn down, so the stash is set by then.
 7. **`board` fixture**, at teardown: `backend.close()`. A `BackendError` from it goes through
    `backend_failed` unless `request.node.stash.get(EXPECT_SAW_RUNNER_EXIT, False)`: an expect that
-   ended on the runner's exit has already reported the exit code, and the test would otherwise
-   show it twice.
+   ended on the runner's exit has already reported the exit code and the link's error, and the
+   test would otherwise show them twice. Then, whatever `close` did, it adds the report section
+   `("teardown", "esp32sim link", backend.link.report())` with `request.node.add_report_section`,
+   and appends `("esp32sim_link", json.dumps(backend.link.properties()))` to
+   `request.node.user_properties`. The property is a JSON string because JUnit XML writes a
+   property's `str()`, which for a `dict` is Python's `repr`.
 8. **`console` fixture** returns `Console(board.dut)`. `Console.__init__` binds `expect` and
    `expect_exact` to the dut's own methods, so their arguments, return values and 30 s default
    timeout (pexpect's `timeout=30`) are pytest-embedded's.
@@ -69,7 +73,7 @@ sees is in [pytest-plugin-user.md](pytest-plugin-user.md); the backend it starts
 |---|---|---|
 | `--esp32tl-backend NAME` | option | Choices `list(SERVICES)`; default unset, every backend |
 | `app_path(path)` | marker | One positional path, relative to the test file's directory; default that directory |
-| `board(request, dut, app_path, msg_queue, _meta)` | fixture, function scope | Yields an `Esp32Sim`; closes it at teardown |
+| `board(request, dut, app_path, msg_queue, _meta)` | fixture, function scope | Yields an `Esp32Sim`; closes it at teardown, then adds the `esp32sim link` report section and the `esp32sim_link` user property |
 | `console(board)` | fixture, function scope | Returns `Console(board.dut)` |
 | `Console` | class, `esp32tl/interfaces/console.py` | Attributes `dut`, `expect`, `expect_exact`; no `write` |
 | `SERVICES` | `dict[str, str \| None]`, `esp32tl/backends/__init__.py` | Backend name to the `embedded_services` it runs under, in parametrisation order; `None` is no service, pytest-embedded's base `Dut`. Now `{"esp32sim": None}` |
@@ -102,7 +106,7 @@ pytest-embedded's `build_dir` fixture. The backend's own environment variables a
 | `ERROR: --count is set: esp32tl runs one board in a test` | `--count` other than 1, and a selected test uses `board` | Usage error, exit code 4 |
 | `count is above 1: esp32tl runs one board in a test` | The test parametrises `count` above 1 itself, so `dut` is a tuple | Error at setup |
 | `esp32sim: {error}` | `Esp32Sim(...)` raised a `BackendError` | Error at setup; messages in [esp32sim-backend-technical.md](esp32sim-backend-technical.md#failure-modes) |
-| `esp32sim: the runner exited with code {code}; its output is in {self.dut.logfile}` | `Esp32Sim.close` raised, and no expect of the call reported the runner's exit | Error at teardown, also after a passing call |
+| `esp32sim: {problems}; its output is in {self.dut.logfile}` | `Esp32Sim.close` raised, and no expect of the call reported the runner's exit. `{problems}` is the exit code, the kill or the link's error ([esp32sim-backend-technical.md](esp32sim-backend-technical.md#failure-modes)) | Error at teardown, also after a passing call |
 
 The refusals are raised in `pytest_collection_modifyitems`, not `pytest_generate_tests`: raised
 there, a `UsageError` (or `pytest.exit`) is a collection error, with a traceback through pluggy and
@@ -127,6 +131,8 @@ pytest-embedded starts a multiprocessing manager for every session:
 - `test_a_runner_that_fails_to_start_is_reported_once`: the stash keeps the teardown quiet after
   an expect reported the exit. `test_an_eof_from_elsewhere_does_not_hide_the_runner_s_exit`: an
   `EOF` that is not the runner's does not set it.
+- `test_the_backend_serves_the_link_and_ends_the_run_with_sigterm`: the `esp32sim link` section
+  with `-rA`, and the `esp32sim_link` property read back from `--junitxml` as JSON.
 
 `tests/test_package.py` checks the `pytest11` entry point (`test_plugin_is_registered_through_pytest11`)
 and that pytest loaded the module under the name `esp32tl` (`test_pytest_loaded_the_plugin`).
