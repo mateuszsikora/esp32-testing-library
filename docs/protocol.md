@@ -173,9 +173,10 @@ The first line is the runner's, the second the harness's.
   wired to those pins only. The console's UART0 pins are normally not watched, so console output
   costs no turns; it has its own `console` message. An empty or absent `watch` makes the socket a
   board with nothing on it. Every pin in `watch` must be one the classic chip has, GPIO 0 to 39
-  but 24 and 28 to 31, as esp32sim and the board profiles count them (`esp32/src/soc.rs:191`;
-  GPIO 20, bonded only on some packages, counts); any other is a protocol error at the handshake,
-  since esp32sim would drop a level on it without a word (`esp32/src/periph.rs:373-376`).
+  but 24 and 28 to 31, as the board profiles count them (`esp32tl/boards`). esp32sim's
+  `gpio_state` also leaves out GPIO 20, which only some packages bond (`esp32/src/soc.rs:191`),
+  but takes a level on it, so it counts. Any other pin is a protocol error at the handshake: on
+  40 and above esp32sim would drop a level without a word (`esp32/src/periph.rs:373-376`).
 
 ### 5.2 `uart_tx`
 

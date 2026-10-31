@@ -25,10 +25,10 @@ use std::time::{Duration, Instant};
 
 /// The classic chip's UARTs.
 pub const PORTS: usize = 3;
-/// The classic chip's GPIOs, as a mask: 0 to 39 but 24 and 28 to 31, as esp32sim has them
-/// (`esp32/src/soc.rs:191`; it ignores levels on 40 and above, `esp32/src/periph.rs:373-376`)
-/// and as the board profiles accept them (`esp32tl/boards`, `GPIOS`). GPIO 20 is bonded only on
-/// some packages, and kept.
+/// The classic chip's GPIOs, as a mask: 0 to 39 but 24 and 28 to 31, as the board profiles have
+/// them (`esp32tl/boards`, `GPIOS`). esp32sim's `gpio_state` also leaves out GPIO 20, which only
+/// some packages bond (`esp32/src/soc.rs:191`), but its `set_input` takes a level there; it
+/// ignores one on 40 and above (`esp32/src/periph.rs:373-376`).
 const GPIOS: u64 = ((1 << 40) - 1) & !(1 << 24 | 0xf << 28);
 /// The classic RX FIFO (`esp-periph/src/uart.rs`): what does not fit is dropped.
 const RX_FIFO: usize = 128;
