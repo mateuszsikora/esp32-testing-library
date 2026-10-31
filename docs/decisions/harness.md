@@ -131,7 +131,8 @@ Status: decided (#51)
 `Esp32Sim.close` sends `SIGTERM`, waits 5 s, then sends `SIGKILL`, and fails the test on any exit
 code other than 0 and the signals it sent, even if every expect passed. It judges the code after
 the runner has stopped, so a runner that crashed just before the signal keeps its own code. The
-runner handles no signal, so `-SIGTERM` and `-SIGKILL` always mean a signal. Teardown signals the
+backend starts the runner without `--board`, where it handles no signal, so `-SIGTERM` and
+`-SIGKILL` always mean a signal. Teardown signals the
 runner before closing the log forwarder.
 
 **Rejected:** passing any exit by `SIGTERM` or `SIGKILL`, because a runner killed from outside

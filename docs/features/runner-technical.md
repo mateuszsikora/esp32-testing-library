@@ -1,9 +1,21 @@
 # esp32tl-runner: how it works
 
-The crate is `runner/`, package `esp32tl-runner`: `runner/src/main.rs` (setup and run loop) and
-`runner/src/cli.rs` (the command line). Its unit tests are `runner/src/tests.rs` and
-`runner/src/cli/tests.rs`. It drives esp32sim through two of its crates, `esp32` (the classic
-chip) and `esp-soc` (the machine, `Soc`, `Stop`). esp32sim lines below are at its pin, `8c65215`.
+The crate is `runner/`, package `esp32tl-runner`:
+
+| Module | What it does |
+|---|---|
+| `runner/src/main.rs` | setup, the run without a peer, and the start and report of the run with one |
+| `runner/src/cli.rs` | the command line |
+| `runner/src/socket_board.rs` | `SocketBoard`, the `BoardModel` on the chip's pins with `--board`: it records what the guest does, with its bus cycle, for the run loop |
+| `runner/src/session.rs` | `Session`, the run loop with a peer: slices, turns, coalescing, pacing, warnings, `stats` |
+| `runner/src/protocol.rs` | the wire format: time conversion, base64, parsing the peer's messages and writing the runner's |
+| `runner/src/transport.rs` | `SocketLink`, the Unix or TCP socket: buffered NDJSON writes, line reads, the signal flag and the time limits |
+
+Each module's unit tests are in a `tests.rs` of its own: `runner/src/tests.rs` for `main.rs`,
+`runner/src/<module>/tests.rs` for the others. It drives esp32sim through two of its crates,
+`esp32` (the classic chip) and `esp-soc` (the machine, `Soc`, `Stop`, `BoardModel`, `UartRoute`,
+and the JSON parser `esp_soc::json` the protocol module reads with). esp32sim lines below are at
+its pin, `8c65215`.
 
 ## Data flow
 
@@ -13,10 +25,9 @@ chip) and `esp-soc` (the machine, `Soc`, `Stop`). esp32sim lines below are at it
    returns `cli::Error::Help` (usage on stderr, exit 0) or `cli::Error::Usage` (exit 2 through
    `usage_error`). Flags are read in order; the first bad one is reported. After the loop it
    checks, in this order, that `--chip` was given and is `esp32`, that `--max-seconds` was given,
-   and that there is at least one `--flash-at`.
-2. **Refuse the socket console.** `--console socket` or `both` parse, then `main` refuses them
-   before anything is loaded: the runner has no board socket.
-3. **Set up** (`setup`, which returns the `esp32::Machine` at the reset vector):
+   that there is at least one `--flash-at`, and that `--console socket` or `both` comes with
+   `--board`.
+2. **Set up** (`setup`, which returns the `esp32::Machine` at the reset vector):
    - `esp32::machine(MAC, flash_size)` with `MAC` = `24:6f:28:00:11:22`, the MAC esp32sim's CLI
      gives the classic chip (`cli/src/lib.rs`), so a run here and the same run in esp32sim agree.
      `esp32::machine` also reads esp32sim's debug switches from the environment.
@@ -25,24 +36,37 @@ chip) and `esp-soc` (the machine, `Soc`, `Stop`). esp32sim lines below are at it
      one (`esp32/src/soc.rs`, `set_flash_size` stores `trailing_zeros`); any other size would boot
      into a flash-size mismatch instead of failing at the command line.
    - `m.bus.set_psram_size(psram_mb << 20)` when `--psram-mb` is not 0.
-   - `m.bus.attach_board_devices()` with the machine's default board: esp32sim's `--board none`.
+   - With `--board`, `m.bus.board` becomes a `SocketBoard` holding a `socket_board::Shared`
+     (`Rc<RefCell<Recorder>>`) that the run loop holds too; without it the machine keeps its
+     default board, esp32sim's `--board none`. Then `m.bus.attach_board_devices()`, which reads
+     `uses_uart_pins` and so makes the bus call `uart_tx` on every TX FIFO write.
    - The ROM: `--rom`, else `find_rom` (below). `m.load_rom`, then the `ROM` line on stderr.
    - Each `--flash-at` file, in command-line order: read whole, `m.write_flash(offset, data)`,
      then the `flash` line. Nothing checks that files overlap; a later one overwrites.
    - `m.boot_rom()` (core 0 to the reset vector); `m.console.mask = CONSOLE_UART0` (`2`, bit 1 of
-     `Console::mask`: UART0 only to stdout, not USB-CDC or UART1/2); and
+     `Console::mask`: UART0 only to stdout, not USB-CDC or UART1/2), or `0` with
+     `--console socket`; and
      `m.max_cycles = (max_seconds * <esp32::Esp32 as Soc>::CPU_HZ as f64) as u64`. `CPU_HZ` is
      240 000 000 (`esp32/src/periph.rs`), the fixed reference `bus.cycles()` counts at, so
      `max_cycles` is emulated time whatever clock the guest switches to.
-4. **Run** (`run`). The wall clock starts here, after setup. `m.run(u64::MAX)` runs until a
-   `Stop`; `m.drain_console()` then flushes what the guest printed, so it comes out before the
-   runner's own line. On `Stop::SwReset` the runner calls `m.reboot()`, prints the `chip reset`
-   line with the cause `reboot()` returns, and runs again, from the reset vector as the chip
-   would. Any other `Stop` returns. `Stop::Halted` is what `Machine::run` returns once
+3. **Run.** Without `--board`, `run`: the wall clock starts here, after setup. `m.run(u64::MAX)`
+   runs until a `Stop`; `m.drain_console()` then flushes what the guest printed, so it comes out
+   before the runner's own line. On `Stop::SwReset` the runner calls `m.reboot()`, prints the
+   `chip reset` line with the cause `reboot()` returns, and runs again, from the reset vector as
+   the chip would. Any other `Stop` returns. `Stop::Halted` is what `Machine::run` returns once
    `bus.cycles() >= max_cycles` (`esp-soc/src/machine.rs`).
-5. **Report.** The stop line, with `stop_name(&stop)`, `m.seconds()` (bus cycles / `CPU_HZ`),
-   the wall time and `m.reboots`. `Halted` exits 0; anything else prints the stop's `Debug` and
-   exits 1.
+
+   With `--board`, `run_with_board`: it connects with `SocketLink::unix(path)` or
+   `SocketLink::tcp(address, --peer-timeout)`, which tries every address the name resolves to
+   with `connect_timeout` and sets `TCP_NODELAY`; a failure prints the `end: cannot connect` line
+   and exits 4. Only then does it install the signal handlers (see Interfaces) and make
+   `--peer-timeout` the write limit, and the wall clock starts. Then `session::Session::run`
+   ([below](#the-session)), and `m.drain_console()`.
+4. **Report.** Without `--board`, the stop line, with `stop_name(&stop)`, `m.seconds()` (bus
+   cycles / `CPU_HZ`), the wall time and `m.reboots`; `Halted` exits 0, anything else prints the
+   stop's `Debug` and exits 1. With `--board`, the `end` line, with the cause from `session::End`,
+   `m.seconds()`, the wall time, `stats.resets` and `stats.turns`, and the exit code of
+   `End::exit_code`.
 
 `find_rom(name)` follows esp32sim's lookup (`cli/src/lib.rs`, `find_rom`), with two differences: an
 entry of `esp-rom-elfs/` must hold `name` as a file, where esp32sim takes any path there that
@@ -55,14 +79,59 @@ exists, and `HOME` is read with `var_os`, so it need not be valid UTF-8. The loo
 `stop_name` matches every `Stop` variant explicitly, with no catch-all arm, so a variant added
 upstream fails the build instead of being reported under another name.
 
+### The session
+
+`Session` runs the protocol over two traits, `Guest` (the machine: cycles, `run_until`,
+`chip_reset`, `uart_route`, `rx_pending`, `uart_input`) and `Link` (the socket: `send`, `flush`,
+`idle`, `closing`, `recv`), so that its tests drive it with a scripted guest and a fake peer.
+`impl Guest for esp32::Machine` sets `max_cycles` and calls `run(u64::MAX)`, calls `reboot()` for
+`chip_reset`, reads `bus.periph.uart_route(port)` and `uart[port].rx_pending()`, and delivers a
+byte with `bus.periph.uart_pin_input` and `irq_dirty = true`.
+
+The order of a run, as [the protocol, section 6.1](../protocol.md#61-how-the-runner-meets-the-block-point)
+specifies it:
+
+1. `hello` out, the peer's `hello` in (version, chip, `watch`), the power-on routes, then turn 0
+   at `t = 0` before the guest's first instruction.
+2. A loop of slices. At each boundary `boundary()` takes the board's log (`collect`), reads the
+   three UART routes, turns what was recorded into messages up to the block point
+   (`process_pending`), takes every turn whose block point is already behind the guest
+   (`take_turn`), and, before the end of the run, closes a coalesced message whose character time
+   has passed (`close_after_gap`), puts the inputs now due on their lines (`apply_inputs`),
+   delivers the paced bytes now due (`deliver`, which counts and warns about drops against the
+   routes it read), and lets the link write what has waited (`Link::idle`). Then `slice_end`
+   picks the earliest of the block point, `latency` after now while no event is unacknowledged,
+   the next whole emulated millisecond, the next queued input, the next paced byte and the end of
+   the run, and `run_until` runs to it. `Stop::SwReset` queues a `reset` with the cause from
+   `chip_reset`; any other stop but `Halted` ends the run.
+3. `finish` calls `Link::closing`, sends what is left where the end calls for it, and `stats`,
+   then `Link::close`.
+
+Times on the socket are nanoseconds, from `protocol::ns` (cycles to ns, rounded down) and
+`protocol::cycles` (ns to cycles, rounded up), in 128-bit arithmetic.
+
+### The socket
+
+`SocketLink` sets a 20 ms read and write timeout on the socket (`POLL`), so that no read or write
+blocks longer before it looks at the signal flag and the time limits. Lines are queued in a write
+buffer and written out at every `sync`, when the buffer reaches 64 KiB (`WRITE_BUFFER`), and from
+`idle` once the oldest queued line has waited 20 ms (`LIVE`). A write that stops part way keeps
+what is left for the next one. A read past 1 MiB without a newline, or a line that is not UTF-8,
+is a protocol error. After `closing`, a write no longer gives up on a signal and has 2 s
+(`TEARDOWN`) to finish. `close` shuts the write side, then reads and drops whatever the peer sent
+that the runner has not read, until a read would block or the peer closes its end. A run that ends
+in the peer's turn, on a protocol error or a `stop`, leaves the rest of that turn unread, and on
+Linux a Unix socket closed with unread input resets the connection: the peer's read to end of file
+then fails with `ECONNRESET` instead of returning `stats`.
+
 ## Interfaces
 
 The command line and the usage text: [runner-user.md](runner-user.md#run-an-image).
 
 - stdin: not read.
 - stdout: the guest's UART0 and nothing else, written by esp-soc's `Machine::drain_console`, so
-  that whoever reads stdout alone gets the guest's output as the guest wrote it. The runner's own
-  lines go to stderr. Under the backend the two meet again: pytest-embedded's
+  that whoever reads stdout alone gets the guest's output as the guest wrote it; nothing with
+  `--console socket`. The runner's own lines go to stderr. Under the backend the two meet again: pytest-embedded's
   `DuplicateStdoutPopen` writes stdout and stderr into one log, which `dut.expect` reads.
 - stderr, from the runner (formats from `main.rs`):
   - `esp32tl-runner: ROM {path}`
@@ -70,24 +139,36 @@ The command line and the usage text: [runner-user.md](runner-user.md#run-an-imag
   - `esp32tl-runner: chip reset at {seconds:.6} s, cause {cause:#x}`
   - `esp32tl-runner: stop: {VARIANT} at {seconds:.6} s ({wall:.1} s wall, {reboots} resets)`
   - `esp32tl-runner: the emulator stopped before --max-seconds: {stop:?}`
-- Exit codes: 0 for `Stop::Halted`; 1 for any other stop; 2 for usage errors and inputs that
-  cannot be loaded. esp32sim also exits 2 on a usage error, but panics (exit 101) on a ROM ELF it
+  - with `--board`, instead of the last two: `esp32tl-runner: end: {cause} at {seconds:.6} s
+    ({wall:.1} s wall, {resets} resets, {turns} turns)`, and
+    `esp32tl-runner: end: cannot connect to the peer at {board}: {error}` when the connection
+    fails
+- The socket, with `--board`: NDJSON both ways, as [the protocol](../protocol.md) specifies;
+  `protocol.rs` writes and parses every message, `session.rs` decides when each goes.
+- Exit codes: 0 for `Stop::Halted`, and with `--board` for `stop` from the peer and for
+  `SIGTERM` or `SIGINT`; 1 for any other stop; 2 for usage errors and inputs that cannot be
+  loaded; 3 for a protocol error by the peer; 4 when the connection fails or the peer is gone;
+  `128 + N` for a second signal with `--board`. esp32sim also exits 2 on a usage error, but panics (exit 101) on a ROM ELF it
   cannot load. 0 and 1 follow the stop line; 2 comes before the run starts, without it. A panic,
   in the runner or in esp32sim during the run, exits 101 with Rust's panic message and no stop
   line: `[profile.release]` does not set `panic = "abort"`. The backend reports it as any other
   exit code.
-- Signals: none handled; `main` and `run` install no handler. A signal ends the process with its
-  default action, wherever the run is, with no stop line and none of the codes above:
-  `Popen.returncode` is minus the signal's number (`-15` for `SIGTERM`). `Esp32Sim.close` relies
-  on that: it sends `SIGTERM` to a runner still running at teardown, `SIGKILL` 5 s later, and
-  accepts the matching negative code
-  ([esp32sim-backend-technical.md](esp32sim-backend-technical.md)). The `SIGTERM` end with
-  `stats` and exit 0 in [the protocol, section 9](../protocol.md#9-ending-a-run) is not
-  implemented.
+- Signals, without `--board`: none handled; `main` and `run` install no handler. A signal ends
+  the process with its default action, wherever the run is, with no stop line and none of the
+  codes above: `Popen.returncode` is minus the signal's number (`-15` for `SIGTERM`).
+  `Esp32Sim.close`, which starts the runner without `--board`, relies on that: it sends `SIGTERM`
+  to a runner still running at teardown, `SIGKILL` 5 s later, and accepts the matching negative
+  code ([esp32sim-backend-technical.md](esp32sim-backend-technical.md)).
+- Signals, with `--board`: once connected, `run_with_board` registers, for `SIGTERM` and
+  `SIGINT`, signal-hook's `flag::register_conditional_shutdown` with status `128 + N` and then
+  `flag::register` on one `AtomicBool`. The first signal only sets the flag, which the run loop
+  reads before each slice and `SocketLink` after each blocked read or write of at most 20 ms;
+  the run then ends as [the protocol, section 9](../protocol.md#9-ending-a-run) says, with
+  `stats` and exit 0. A second one finds the flag set and exits the process at once with
+  `128 + N`, without `stats`. Before the connection, signals keep their default action.
 
-`cli::Console` already has `Stdout`, `Socket` and `Both`, and the flag names copy esp32sim's, so
-that the change to the board socket of [the protocol](../protocol.md) is a rename
-([plan, 4.2](../implementation-plan.md#42-runner-crate)).
+The flag names copy esp32sim's, so that the change to `esp32sim --board socket:` once
+mikroverk/esp32sim#325 lands is a rename ([plan, 4.2](../implementation-plan.md#42-runner-crate)).
 
 ## Configuration
 
@@ -98,6 +179,22 @@ that the change to the board socket of [the protocol](../protocol.md) is a renam
 | `ESP_EMU_DEBUG`, `ESP_EMU_DEBUG_<AREA>`, `ESP_EMU_RT_LOG`, `ESP_EMU_LOG_ALL` | `esp32::machine`, through esp-soc's `DebugFlags::from_env` (`esp-soc/src/debug.rs`) | esp32sim's debug output on stderr |
 
 `$IDF_TOOLS_PATH` is not read: `scripts/fetch-rom-elf` honours it, `find_rom` does not.
+
+The socket's limits are constants, not options:
+
+| Constant | Value | Effect |
+|---|---|---|
+| `transport::POLL` | 20 ms | longest a read or write blocks before the signal flag and the time limits are looked at |
+| `transport::WRITE_BUFFER` | 64 KiB | queued output at which a `send` writes out |
+| `transport::LIVE` | 20 ms (wall) | how long a queued line waits before `idle` writes it out between slices |
+| `transport::TEARDOWN` | 2 s (wall) | how long the last messages of a run may take to write |
+| `protocol::MAX_LINE` | 1 MiB | the longest line from the peer; a longer one is a protocol error |
+| `session::MAX_DATA` | 48 KiB | the most bytes one `uart_tx` or `console` message carries |
+| `session::RX_FIFO` | 128 | the classic RX FIFO's size, against which `rxfifo_ovf` is counted |
+
+**Dependencies besides esp32sim.** `signal-hook` 0.4 (`default-features = false`) for the signal
+handlers: std cannot install one. JSON goes through esp-soc's own parser (`esp_soc::json`, which
+its Cooja link uses) and `esp_soc::web::json_escape`, so the crate adds no JSON crate.
 
 **The esp32sim pin.** esp32sim is not on crates.io, so `runner/Cargo.toml` takes `esp32` and
 `esp-soc` (and `emu-core`, a dev-dependency for `Stop::CostModelLifecycle` in a test) from
@@ -137,7 +234,7 @@ Every message starts with `esp32tl-runner: `. Usage errors exit 2 and add a seco
 | Message | Cause |
 |---|---|
 | `{flag} needs a value` | a flag that takes a value is the last argument |
-| `unknown argument {flag:?}` | anything not in the usage, `--board` and `--flash-mb=8` included |
+| `unknown argument {flag:?}` | anything not in the usage, `--flash-mb=8` included |
 | `--chip is required (esp32)` | no `--chip` |
 | `--chip {c}: only esp32 is supported` | another chip; `c` is lowercased |
 | `--max-seconds is required` | no `--max-seconds` |
@@ -148,7 +245,9 @@ Every message starts with `esp32tl-runner: `. Usage errors exit 2 and add a seco
 | `--flash-mb: the classic ESP32 takes 1, 2, 4, 8 or 16 MiB, got {v:?}` | any other value |
 | `--psram-mb: the classic ESP32 supports only 0 or 4 MiB, got {v:?}` | any other value |
 | `--console: expected stdout, socket or both, got {v:?}` | any other value |
-| `--console socket and both need --board socket:PATH, which this runner does not have yet` | `--console socket` or `both` (from `main`, after parsing) |
+| `--console socket and both send the console to the peer: they need --board` | `--console socket` or `both` without `--board` |
+| `--board {spec}: expected socket:PATH or tcp:HOST:PORT` | neither prefix (`--board none`), an empty path, an empty host, or a port that is not a number from 0 to 65535 |
+| `--peer-timeout: expected a number of seconds, 0 for none, got {v:?}` | not a number, negative, `inf` or `NaN`, too large for a `Duration` (`1e20`), or above 0 but rounding to 0 ns (`1e-10`) |
 
 Inputs that cannot be loaded exit 2 through `fail`, with no second line and no stop line:
 
@@ -160,32 +259,82 @@ Inputs that cannot be loaded exit 2 through `fail`, with no second line and no s
 | `--flash-at {offset:#x}={path}: flash image too large` | the file does not fit in `--flash-mb` from its offset (`esp32/src/bus.rs`, `write_flash`) |
 | `classic PSRAM supports 0 or 4194304 bytes` | esp32sim's own check (`esp32/src/psram.rs`); the CLI refuses those sizes first, so it is not reached |
 
+`cannot handle signal {sig}: {error}` also exits 2 through `fail`, if signal-hook cannot install
+a handler after the connection.
+
 Exit 1: the stop line, then `the emulator stopped before --max-seconds: {stop:?}`, for every
 `Stop` but `Halted` and `SwReset`.
 
+With `--board`, the `end` line's `{cause}` names how the run ended. Protocol errors and a vanished
+peer come from `session.rs` and `transport.rs`:
+
+| Exit | `{cause}` | When |
+|---|---|---|
+| 0 | `max_seconds` | the run reached `--max-seconds` |
+| 0 | `stop from the peer` | the peer's turn ended with `stop` |
+| 0 | `signal` | the first `SIGTERM` or `SIGINT` |
+| 1 | `the emulator stopped before --max-seconds: {stop:?}` | any `Stop` but `Halted` and `SwReset` |
+| 3 | `protocol error by the peer at {board}: {what}: {line}` | `{what}` is one of: `version {v}, the runner speaks version 1`, `chip {chip:?}, the runner runs "esp32"`, `expected hello`, `hello after the handshake`, a parse error of `protocol::parse` (`not JSON: …`, `not a JSON object`, `no "type"`, `unknown type …`, `{type}: "{field}" is missing`, `… is not an integer`, `… is negative`, `… is not a GPIO number`, `uart_rx: bad base64 character …`, and the like), `t {t} is before this turn's sync at {b} (rule 2)`, `GPIO {pin} is not in the peer's watch`, `a baud of 0`, `ack {ack}, but the last event before this sync was seq {seq}`, `quiet_until {q} is not after this turn's sync at {b}`, `{kind} is not implemented yet (#23)` for `gpio_in`, `release` and `adc`. `{line}` is the peer's line, cut after 200 characters with `...` |
+| 3 | `protocol error by the peer at {board}: a line longer than 1 MiB` or `…: a line that is not UTF-8` | from the socket, without the line |
+| 4 | `the peer at {board} is gone: {why}` | `{why}` is `the peer closed the socket`, `read failed: {error}`, `write failed: {error}`, `the socket accepts no more data`, `the peer's turn took longer than --peer-timeout`, `the peer read nothing for longer than --peer-timeout` or, while the last messages are written, `the peer did not read the last messages in time` |
+
+A failure to write the last messages does not change the exit code: the first cause decides it.
+
 ## Tests
 
-`make test-runner` runs both files (`cargo test --locked`).
+`make test-runner` runs the Rust tests (`cargo test --locked`), 53 of them:
 
 - `runner/src/cli/tests.rs`: `cli::parse` only. `minimal_command_line` checks the defaults
-  (`rom: None`, flash 4 MiB, PSRAM 0, console `Stdout`);
+  (`rom: None`, flash 4 MiB, PSRAM 0, console `Stdout`, no board, `--peer-timeout` 60 s);
   `flash_at_offsets_are_hex_with_or_without_prefix` checks hex offsets with and without `0x`,
   repeated `--flash-at` in order, a path that contains `=`, `--chip ESP32` in upper case and a
   fractional `--max-seconds`; `options` checks `--rom`, `--flash-mb`, `--psram-mb` and
-  `--console both`; `help` checks that `--help` returns `Error::Help`; `usage_errors` checks that
-  17 bad command lines return `Error::Usage`, among them a missing `--chip`, `--max-seconds` or
-  `--flash-at`, `--board none`, `--max-seconds 0` and `inf`, and the flash sizes 0, 3, 32 and
-  17592186044416 (which would overflow `<< 20`).
+  `--console both`; `boards_and_peer_timeout` checks `socket:`, `tcp:` with IPv6 and a host name,
+  and `--peer-timeout` 2.5 and 0; `help` checks that `--help` returns `Error::Help`;
+  `usage_errors` checks that 28 bad command lines return `Error::Usage`, among them a missing
+  `--chip`, `--max-seconds` or `--flash-at`, `--max-seconds 0` and `inf`, the flash sizes 0, 3, 32
+  and 17592186044416 (which would overflow `<< 20`), `--board none`, `socket:`, `tcp:host`,
+  `tcp::7000` and `tcp:h:99999`, `--peer-timeout -1`, `nan`, `1e20`, `inf` and `1e-10`, and
+  `--console socket` and `both` without `--board`.
 - `runner/src/tests.rs`: `stop_names_are_the_variant_names` builds every `Stop` variant and
   checks that `stop_name` is the start of its `Debug` text, followed by nothing, a space or `(`,
   so that `CostModelLifecycle` reported as `CostModel` fails.
+- `runner/src/protocol/tests.rs`: time conversion in both directions and past 76 emulated
+  seconds, character times, base64 against RFC 4648's vectors and malformed input, parsing every
+  message the peer may send and refusing malformed ones, the exact text of the runner's messages,
+  and `the_esp32sim_revision_is_the_one_cargo_builds`, which checks that the revision `hello`
+  reports is the one in `runner/Cargo.toml`.
+- `runner/src/socket_board/tests.rs`: what `SocketBoard` records: every UART byte, and only the
+  GPIO changes of watched pins, enable-only changes included.
+- `runner/src/transport/tests.rs`: lines both ways over a socket pair, a line over 1 MiB, the
+  `--peer-timeout` on a read and on a write the peer does not read, a signal ending a blocked
+  read, a write cut short by a signal that goes on once `closing` is called, the teardown limit,
+  `stats` still read to end of file after a close that leaves part of a turn unread,
+  a line written out by `idle` after `LIVE`, and TCP.
+- `runner/src/session/tests.rs`: the run loop against `FakeGuest`, a scripted guest that can
+  return a few cycles past a slice's end as `run` does below 240 MHz, and `FakePeer`, which checks
+  that `seq` grows by one and `t` never decreases. It covers turn 0 before the first instruction,
+  the handshake errors, pacing and the busy line, the block point and its `latency` bound mid
+  slice and with the guest idle, a late answer, events held after the block point, a block point
+  already behind the guest, coalescing and its ends, the console, resets and the reset routes,
+  each kind of `warn`, the protocol errors of a turn, each end of a run and its `stats`, and
+  `latency` 0. `on_the_emulator_the_slices_stop_a_guest_asleep_in_waiti_at_the_block_point` runs
+  the real `esp32::Machine` on a few instructions in IRAM that write one byte to UART1 and sleep
+  in `waiti`, at the 40 MHz the core starts at.
 
-Not covered by the Rust tests: the text of any message (`usage_errors` checks only the error
-kind), `main`, `setup`, `find_rom`, `run`, the exit codes and the format of the stderr lines. The
-pytest suite runs the real binary on `hello_world` (`tests/test_hello_world.py`, and
+`tests/test_runner_link.py` runs the real binary on `hello_world` with `--board socket:`, against
+a minimal peer in Python: a run to `--max-seconds` with `--console socket` (the console on the
+socket and not on stdout, `stats`, the `end` line), `SIGTERM` while the runner waits for the
+peer (exit 0 with `stats` within 2 s), a late input and a version mismatch (exit 3 with
+`stats`), a peer that does not answer within `--peer-timeout 0.2` (exit 4, nothing more), and no
+peer listening (exit 4).
+
+Not covered: the text of the usage messages (`usage_errors` checks only the error kind),
+`setup`, `find_rom`, the `SwReset` path and an exit 1 of the real runner, a second signal,
+`--board tcp:` and `--console both` on the real binary. Without `--board`, the pytest suite runs
+the real binary on `hello_world` (`tests/test_hello_world.py`, and
 `test_hello_world_fails_on_an_image_that_prints_something_else` in `tests/test_pytest_plugin.py`),
-which shows that a run boots and prints, but checks no runner line and no exit code. No test
-runs the real runner through the `SwReset` path or to an exit 1;
+which shows that a run boots and prints, but checks no runner line and no exit code;
 `tests/test_pytest_plugin.py::test_a_runner_that_exits_with_an_error_fails_the_test` checks how
 the backend handles an exit 1, from a stand-in runner.
 
@@ -194,6 +343,7 @@ the backend handles an exit 1, from a stand-in runner.
 - [runner-user.md](runner-user.md): running it by hand.
 - [esp32sim-backend-technical.md](esp32sim-backend-technical.md): the command line the backend
   builds and how it reads the exit.
-- [Implementation plan, 4.2 Runner crate](../implementation-plan.md#42-runner-crate) and
-  [Link protocol](../protocol.md): the board socket that is not implemented here.
+- [Link protocol](../protocol.md): the contract the session implements, and in section 6.1 how
+  the runner meets the block point.
+- [Implementation plan, 4.2 Runner crate](../implementation-plan.md#42-runner-crate).
 - [CI](../cicd.md): the `runner` job.

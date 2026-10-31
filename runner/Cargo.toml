@@ -16,6 +16,9 @@ rust-version = "1.95"
 [dependencies]
 esp32 = { git = "https://github.com/mikroverk/esp32sim", rev = "8c652151dd5a521249a785ca147f20a9f8eda68f" }
 esp-soc = { git = "https://github.com/mikroverk/esp32sim", rev = "8c652151dd5a521249a785ca147f20a9f8eda68f" }
+# SIGTERM and SIGINT end a run with `stats` (docs/protocol.md, section 9); std
+# has no way to handle a signal.
+signal-hook = { version = "0.4.5", default-features = false }
 
 # For `Stop::CostModelLifecycle` in a test; neither crate above re-exports it.
 [dev-dependencies]

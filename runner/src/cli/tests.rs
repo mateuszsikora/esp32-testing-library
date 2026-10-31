@@ -18,6 +18,8 @@ fn minimal_command_line() {
             psram_mb: 0,
             max_seconds: 3.0,
             console: Console::Stdout,
+            board: None,
+            peer_timeout: Some(Duration::from_secs(60)),
         }
     );
 }
@@ -39,7 +41,7 @@ fn flash_at_offsets_are_hex_with_or_without_prefix() {
 #[test]
 fn options() {
     let opts = parse_str(&format!(
-        "{MINIMAL} --rom r.elf --flash-mb 8 --psram-mb 4 --console both"
+        "{MINIMAL} --rom r.elf --flash-mb 8 --psram-mb 4 --console both --board socket:s"
     ))
     .unwrap();
     assert_eq!(opts.rom, Some("r.elf".into()));
@@ -47,6 +49,25 @@ fn options() {
         (opts.flash_mb, opts.psram_mb, opts.console),
         (8, 4, Console::Both)
     );
+}
+
+#[test]
+fn boards_and_peer_timeout() {
+    let opts = parse_str(&format!(
+        "{MINIMAL} --board socket:/tmp/b.sock --peer-timeout 2.5 --console socket"
+    ))
+    .unwrap();
+    assert_eq!(opts.board, Some(Board::Socket("/tmp/b.sock".into())));
+    assert_eq!(opts.board.unwrap().to_string(), "socket:/tmp/b.sock");
+    assert_eq!(opts.peer_timeout, Some(Duration::from_millis(2500)));
+    let opts = parse_str(&format!(
+        "{MINIMAL} --board tcp:[::1]:7000 --peer-timeout 0"
+    ))
+    .unwrap();
+    assert_eq!(opts.board, Some(Board::Tcp("[::1]:7000".into())));
+    assert_eq!(opts.peer_timeout, None);
+    let opts = parse_str(&format!("{MINIMAL} --board tcp:localhost:7000")).unwrap();
+    assert_eq!(opts.board.unwrap().to_string(), "tcp:localhost:7000");
 }
 
 #[test]
@@ -73,6 +94,17 @@ fn usage_errors() {
         "--chip esp32 --flash-at 0x1000=b.bin --max-seconds 3 --flash-mb 17592186044416",
         "--chip esp32 --flash-at 0x1000=b.bin --max-seconds 3 --console uart0",
         "--chip esp32 --flash-at 0x1000=b.bin --max-seconds 3 --board none",
+        "--chip esp32 --flash-at 0x1000=b.bin --max-seconds 3 --board socket:",
+        "--chip esp32 --flash-at 0x1000=b.bin --max-seconds 3 --board tcp:host",
+        "--chip esp32 --flash-at 0x1000=b.bin --max-seconds 3 --board tcp::7000",
+        "--chip esp32 --flash-at 0x1000=b.bin --max-seconds 3 --board tcp:h:99999",
+        "--chip esp32 --flash-at 0x1000=b.bin --max-seconds 3 --peer-timeout -1",
+        "--chip esp32 --flash-at 0x1000=b.bin --max-seconds 3 --peer-timeout nan",
+        "--chip esp32 --flash-at 0x1000=b.bin --max-seconds 3 --peer-timeout 1e20",
+        "--chip esp32 --flash-at 0x1000=b.bin --max-seconds 3 --peer-timeout inf",
+        "--chip esp32 --flash-at 0x1000=b.bin --max-seconds 3 --peer-timeout 1e-10",
+        "--chip esp32 --flash-at 0x1000=b.bin --max-seconds 3 --console socket",
+        "--chip esp32 --flash-at 0x1000=b.bin --max-seconds 3 --console both",
         "--chip esp32 --flash-at 0x1000=b.bin --max-seconds",
     ] {
         assert!(matches!(parse_str(line), Err(Error::Usage(_))), "{line}");

@@ -58,8 +58,37 @@ that references to its number keep their meaning.
 13. The runner refuses, as a usage error, a command line without `--chip esp32`, without
     `--max-seconds` (a positive, finite number) or without `--flash-at`, and the flash and PSRAM
     sizes the classic ESP32 does not have (the test tries 0, 3, 32 and 2^44 MiB of flash and 2 MiB
-    of PSRAM).
+    of PSRAM). It also refuses a `--board` that is neither `socket:PATH` nor `tcp:HOST:PORT`, a
+    `--peer-timeout` that is negative, not finite, too large or rounds to 0 ns, and
+    `--console socket` or `both` without `--board`.
     `runner/src/cli/tests.rs::usage_errors`
+18. With `--board`, the runner's messages are in non-decreasing `t`, and `seq` starts at 1 and
+    grows by 1 over every event; the fake peer fails any session test that breaks either.
+    `runner/src/session/tests.rs` (`FakePeer::send`)
+19. The first `sync` has `t = 0` and comes before the guest's first instruction, and inputs
+    stamped 0 are in the RX FIFO at cycle 0.
+    `runner/src/session/tests.rs::the_first_sync_comes_before_the_guest_runs_and_its_inputs_are_in_place`
+20. Before the `sync` at `B` the runner sends every event with `t ≤ B` and nothing later, also when
+    `run` returns past `B`.
+    `runner/src/session/tests.rs::events_after_the_block_point_wait_for_the_next_turn`,
+    `runner/src/session/tests.rs::bytes_before_the_block_point_go_out_before_the_sync`
+21. An answer stamped exactly `t_event + latency` is on time, also with the guest asleep in WFI and
+    on the real machine at the 40 MHz the core starts at; one stamped earlier than its turn's
+    `sync` is a protocol error, exit code 3, with `stats`.
+    `runner/src/session/tests.rs::an_answer_at_t_plus_latency_passes_with_the_guest_idle_in_wfi`,
+    `runner/src/session/tests.rs::on_the_emulator_the_slices_stop_a_guest_asleep_in_waiti_at_the_block_point`,
+    `runner/src/session/tests.rs::an_answer_before_t_plus_latency_is_late_and_ends_the_run`,
+    `tests/test_runner_link.py::test_a_late_input_is_a_protocol_error_with_exit_code_3`
+22. A bus cycle converted to nanoseconds and back is the same cycle, past the 76 emulated seconds
+    where `cycles × 10⁹` overflows 64 bits.
+    `runner/src/protocol/tests.rs::time_conversion_rounds_as_section_3_says`
+23. The esp32sim revision the runner's `hello` reports is the one `runner/Cargo.toml` builds.
+    `runner/src/protocol/tests.rs::the_esp32sim_revision_is_the_one_cargo_builds`
+24. With `--board`, `SIGTERM` while the runner waits for the peer ends the run with `stats`
+    (`end: signal`) and exit 0, and bytes a write left when the signal came go out once, not
+    twice.
+    `tests/test_runner_link.py::test_sigterm_while_the_runner_waits_for_the_peer_ends_the_run_with_stats`,
+    `runner/src/transport/tests.rs::a_write_cut_short_by_a_signal_goes_on_where_it_stopped_once_closing`
 
 ## Validation firmware
 
