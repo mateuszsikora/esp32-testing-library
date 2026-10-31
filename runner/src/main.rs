@@ -2,13 +2,23 @@
 //! (plan §4.2). For now the console only: the guest's UART0 goes to stdout, which
 //! pytest-embedded's `DuplicateStdoutPopen` owns, so everything the runner says goes to stderr.
 //!
-//! Every run that starts ends with one line on stderr,
+//! A run the emulator ends prints one line on stderr,
 //! `esp32tl-runner: stop: VARIANT at T s (W s wall, N resets)`, naming the `Stop` that ended it
-//! (T: emulated seconds, six decimals; W: wall seconds, one decimal), and one of these exit codes:
+//! (T: emulated seconds, six decimals; W: wall seconds, one decimal), and exits with one of these
+//! codes:
 //!
-//! - 0: the run reached `--max-seconds` (`Stop::Halted`), its normal end;
-//! - 1: the emulator stopped for any other reason;
-//! - 2: a usage error, or an input that cannot be loaded (the codes esp32sim uses for those).
+//! - 0: the run reached `--max-seconds` (`Stop::Halted`);
+//! - 1: the emulator stopped for any other reason.
+//!
+//! A usage error, or an input that cannot be loaded, exits 2 before the run starts, without the
+//! stop line (the code esp32sim uses for those).
+//!
+//! The runner installs no signal handler, so a signal ends the run where it is, without the stop
+//! line, and the process dies of it: a shell sees 128 + the signal's number, Python's `Popen` its
+//! negative. That is how a test run ends unless the test waited for the end of the run:
+//! `Esp32Sim.close` (`esp32tl/backends/esp32sim.py`) sends a runner still running `SIGTERM` at
+//! teardown, then `SIGKILL` after 5 s. Ending a run on `SIGTERM` with `stats` and exit 0 is what
+//! the link protocol specifies (`docs/protocol.md`, section 9), not what this runner does.
 mod cli;
 
 use esp_soc::{Soc, SocBus, Stop};

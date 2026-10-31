@@ -69,8 +69,16 @@ The command line and the usage text: [runner-user.md](runner-user.md#run-an-imag
   - `esp32tl-runner: stop: {VARIANT} at {seconds:.6} s ({wall:.1} s wall, {reboots} resets)`
   - `esp32tl-runner: the emulator stopped before --max-seconds: {stop:?}`
 - Exit codes: 0 for `Stop::Halted`; 1 for any other stop; 2 for usage errors and inputs that
-  cannot be loaded, the codes esp32sim uses for those.
-- Signals: none handled. A signal ends the process with its default action and no stop line.
+  cannot be loaded, the codes esp32sim uses for those. 0 and 1 follow the stop line; 2 comes
+  before the run starts, without it.
+- Signals: none handled; `main` and `run` install no handler. A signal ends the process with its
+  default action, wherever the run is, with no stop line and none of the codes above:
+  `Popen.returncode` is minus the signal's number (`-15` for `SIGTERM`). `Esp32Sim.close` relies
+  on that: it sends `SIGTERM` to a runner still running at teardown, `SIGKILL` 5 s later, and
+  accepts the matching negative code
+  ([esp32sim-backend-technical.md](esp32sim-backend-technical.md)). The `SIGTERM` end with
+  `stats` and exit 0 in [the protocol, section 9](../protocol.md#9-ending-a-run) is not
+  implemented.
 
 `cli::Console` already has `Stdout`, `Socket` and `Both`, and the flag names copy esp32sim's, so
 that the change to the board socket of [the protocol](../protocol.md) is a rename
