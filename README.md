@@ -27,18 +27,20 @@ import pytest
 pytestmark = pytest.mark.app_path("../firmware/hello_world")
 
 
-def test_hello_world(console):
+def test_hello_world(board, console):
+    board.power_on()
     console.expect("Hello world!")
 ```
 
-The test runs once per backend, as `test_hello_world[esp32sim]`. A test that replays a recording
-into the board's GNSS UART:
+The test runs once per backend, as `test_hello_world[esp32sim]`. The firmware runs only while the
+test waits on it, here in `console.expect`, whose timeout is in seconds of the board's own clock.
+A test that replays a recording into the board's GNSS UART gives it before power-on:
 
 ```python
 @pytest.mark.app_path("../firmware/nmea_reader")
-@pytest.mark.source("uart.gnss", "replay")
-def test_reports_a_fix(gnss, console):
+def test_reports_a_fix(board, gnss, console):
     gnss.replay("../recordings/gnss-generated-1.jsonl")
+    board.power_on()
     console.expect_exact("fix acquired lat=52.229677 lon=21.012233")
 ```
 

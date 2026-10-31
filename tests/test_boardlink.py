@@ -675,41 +675,81 @@ def test_scenario_pins_that_are_not_gpio_numbers_are_refused() -> None:
         BoardLink("esp32-devkitc", timeline=Scenario([], pins=["RI"]))  # type: ignore[list-item]
 
 
-def test_a_held_link_takes_its_first_turn_once_started() -> None:
-    link = BoardLink("esp32-devkitc", [Peer(schedule=[(0, b"$GPGGA\r\n")])], hold=True)
+class Holder:
+    """A `Hold` that returns its `bounds` one per turn, after `entered` is set for the turn."""
+
+    def __init__(self, *bounds: int | None) -> None:
+        self.bounds = list(bounds)
+        self.turns: list[int] = []
+        self.go = threading.Event()
+
+    def turn(self, now: int) -> int | None:
+        self.turns.append(now)
+        assert self.go.wait(5)
+        return self.bounds.pop(0)
+
+
+def test_a_hold_holds_every_turn_before_the_interfaces_are_polled() -> None:
+    gnss = Peer(schedule=[(0, b"$GPGGA\r\n")])
+    hold = Holder(100 * MS)
+    link = BoardLink("esp32-devkitc", [gnss], hold=hold)
     link.receive(HELLO)
-    assert link.held
     replies: list[HarnessMessage] = []
     turn = threading.Thread(target=lambda: replies.extend(link.receive(Sync(0))))
     turn.start()
     turn.join(0.2)
-    # The runner waits in turn 0, before the guest's first instruction.
-    assert turn.is_alive() and replies == []
-    assert link.start()
+    # The runner waits in turn 0, before the guest's first instruction; nothing has been asked.
+    assert turn.is_alive() and replies == [] and gnss.polls == []
+    hold.go.set()
     turn.join(5)
-    assert not link.held
-    assert replies == [UartRx(0, 5, 9600, b"$GPGGA\r\n"), Wait(0, None, None)]
-    # Only the first start counts.
-    assert not link.start(boot=False)
-    assert link.receive(Sync(10)) == [Wait(0, None, None)]
+    assert hold.turns == [0] and gnss.polls == [0]
+    # The hold's bound is one of the next turn's.
+    assert replies == [UartRx(0, 5, 9600, b"$GPGGA\r\n"), Wait(0, 100 * MS, None)]
 
 
-def test_a_held_link_started_without_boot_stops_the_run_at_turn_0() -> None:
-    gnss = Peer(schedule=[(0, b"$GPGGA\r\n")])
-    link = BoardLink("esp32-devkitc", [gnss], hold=True)
+def test_the_hold_bounds_the_next_turn_with_the_interfaces() -> None:
+    hold = Holder(5 * MS, 50 * MS)
+    hold.go.set()
+    link = BoardLink("esp32-devkitc", [Peer(schedule=[(20 * MS, b"x")])], hold=hold)
     link.receive(HELLO)
-    link.start(boot=False)
+    assert link.receive(Sync(0)) == [Wait(0, 5 * MS, None)]
+    assert link.receive(Sync(5 * MS)) == [Wait(0, 20 * MS, None)]
+
+
+def test_a_hold_that_returns_none_stops_the_run() -> None:
+    gnss = Peer(schedule=[(0, b"$GPGGA\r\n")])
+    hold = Holder(None)
+    hold.go.set()
+    link = BoardLink("esp32-devkitc", [gnss], hold=hold)
+    link.receive(HELLO)
     assert link.receive(Sync(0)) == [Stop()]
-    assert gnss.polls == [] and link.turns == 0
+    assert gnss.polls == [] and link.turns == 1
     assert link.error is None
 
 
-def test_a_link_made_without_hold_is_not_held() -> None:
-    link = BoardLink("esp32-devkitc", [Peer()])
-    assert not link.held
-    assert not link.start(boot=False)
+def test_a_hold_that_raises_fails_the_link_naming_the_clock() -> None:
+    class Broken:
+        def turn(self, now: int) -> int | None:
+            raise RuntimeError("broken")
+
+    link = BoardLink("esp32-devkitc", hold=Broken())
     link.receive(HELLO)
-    assert link.receive(Sync(0)) == [Wait(0, None, None)]
+    assert link.receive(Sync(0)) == [Stop()]
+    assert link.error == "the test's clock.turn raised RuntimeError: broken"
+
+
+def test_console_messages_reach_the_console_s_reader() -> None:
+    seen: list[tuple[int, bytes]] = []
+    link = BoardLink("esp32-devkitc", console=lambda t, data: seen.append((t, data)))
+    link.receive(HELLO)
+    link.receive(Sync(0))
+    assert feed(link, Console(10, b"Hello"), Console(20, b" world!\n"), Sync(30)) == [
+        Wait(0, None, None)
+    ]
+    assert seen == [(10, b"Hello"), (20, b" world!\n")]
+    # Without a reader, a console message is dropped.
+    link = started()
+    assert feed(link, Console(10, b"Hello"), Sync(30)) == [Wait(0, None, None)]
 
 
 def test_a_runner_on_another_clock_than_the_backend_s_fails_the_link() -> None:

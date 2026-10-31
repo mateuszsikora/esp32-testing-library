@@ -29,12 +29,12 @@ class Source(Protocol):
 class Uart(Interface):
     """The interface `name` (`uart.gnss`) on `wire`, whose source the test gives in its body.
 
-    `declared` is the source the test's `source` marker names for it, `None` without one; the
-    backend puts only a declared UART on the link. Until the source is given the UART hears
-    everything and says nothing, and the backend holds the run before the guest boots, so the
-    source's first event can be at 0 ns. `clock` is the backend's: a recording on another one is
-    refused. A relative path is taken from `directory`, the test file's. `on_source` is called
-    with the name once the source is given.
+    What the test does with it decides what is at the far end: `replay(path)` a recording. Until
+    then the UART hears everything and says nothing. `clock` is the backend's: a recording on
+    another one is refused. A relative path is taken from `directory`, the test file's.
+    `asked` is called with the name and the kind of source (`replay`) before the source is made,
+    and refuses it by raising: the backend's checks, that the board is still off and that a
+    backend gives that source.
     """
 
     def __init__(
@@ -42,39 +42,40 @@ class Uart(Interface):
         name: str,
         wire: Wire,
         *,
-        declared: str | None,
         clock: str,
         directory: Path,
-        on_source: Callable[[str], None] = lambda name: None,
+        asked: Callable[[str, str], None] = lambda name, source: None,
     ) -> None:
         super().__init__(name, wire)
-        self.declared = declared
         self.clock = clock
         self.directory = directory
-        self.on_source = on_source
+        self.asked = asked
         self.source: Source | None = None
+        # The kind of source the test gave, as the capability declaration names it: `replay`.
+        self.source_kind: str | None = None
         self._giving = threading.Lock()
 
     def replay(self, path: str | os.PathLike[str]) -> Replay:
         """Replays the recording at `path`, relative to the test file's directory, into the
         chip, at its recorded times: the stream case, a recording with no requests. Returns the
         `Replay`, whose `sent` counts the events the link has been given."""
-        if self.declared != "replay":
-            raise SourceError(
-                f"{self.name} has no source marker that names replay: mark the test"
-                f' @pytest.mark.source("{self.name}", "replay") to replay into it'
-            )
+        self._ask("replay")
         file = self.directory / path
         replay = Replay(recording.read(file), self.name, self.clock, name=str(path))
-        self._give(replay)
+        self._give(replay, "replay")
         return replay
 
-    def _give(self, source: Source) -> None:
+    def _ask(self, source: str) -> None:
+        if self.source is not None:
+            raise SourceError(f"{self.name} has its source already: one per test")
+        self.asked(self.name, source)
+
+    def _give(self, source: Source, kind: str) -> None:
         with self._giving:
             if self.source is not None:
                 raise SourceError(f"{self.name} has its source already: one per test")
             self.source = source
-        self.on_source(self.name)
+            self.source_kind = kind
 
     def receive(self, t: int, direction: Direction, data: bytes) -> Iterable[Output]:
         return () if self.source is None else self.source.receive(t, data)

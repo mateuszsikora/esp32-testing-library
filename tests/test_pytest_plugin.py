@@ -1,4 +1,5 @@
-"""The esp32tl plugin's parametrisation and the `esp32sim` backend's command line (plan §3, M0).
+"""The esp32tl plugin's parametrisation, the `esp32sim` backend's command line, and the board's
+power-on, clock and teardown against fake runners (plan §3, M0).
 
 The tests that run pytest inside pytest do it in a subprocess: pytest-embedded starts a
 multiprocessing manager for every session.
@@ -18,11 +19,12 @@ from xml.etree import ElementTree
 
 import pytest
 from esptool.bin_image import LoadFirmwareImage
-from pytest_embedded.log import MessageQueue, PexpectProcess
+from pytest_embedded.log import MessageQueue
 from pytest_embedded.utils import Meta
 
 from esp32tl.backends import esp32sim
-from esp32tl.backends.esp32sim import BackendError, RunnerExited
+from esp32tl.backends.esp32sim import BackendError
+from esp32tl.interfaces import RunEnded
 
 ROOT = Path(__file__).resolve().parent.parent
 HELLO_WORLD_BUILD = ROOT / "firmware" / "hello_world" / "build"
@@ -158,42 +160,31 @@ SERVICES["serial"] = "esp,idf"
 )
 
 
-def test_a_backend_that_cannot_give_a_source_or_tap_skips_with_the_reason(
+def test_a_backend_that_cannot_give_a_tap_skips_with_the_reason(
     pytester: pytest.Pytester,
 ) -> None:
     pytester.makeconftest(WITH_SERIAL)
     pytester.makepyfile(
-        test_sources="""
+        test_taps="""
         import pytest
-
-        @pytest.mark.source("uart.gnss", "model")
-        def test_model(board):
-            assert board[0] == "esp32sim"
 
         @pytest.mark.tap("console", "uart.gnss")
         def test_tap(board):
             assert board[0] == "esp32sim"
 
-        @pytest.mark.source("uart.gnss", "real")
         @pytest.mark.tap("console")
-        def test_real(board):
+        def test_console(board):
             pass
         """
     )
     result = pytester.runpytest_subprocess("-p", "no:cacheprovider", "-ra")
-    result.assert_outcomes(passed=4, skipped=2)
-    result.stdout.fnmatch_lines_random(
-        [
-            "SKIPPED [[]1[]] test_sources.py:3: serial: uart.gnss takes no model source on this"
-            " backend, only real",
-            "SKIPPED [[]1[]] test_sources.py:7: serial: uart.gnss cannot be tapped on this backend",
-        ]
+    result.assert_outcomes(passed=3, skipped=1)
+    result.stdout.fnmatch_lines(
+        ["SKIPPED [[]1[]] test_taps.py:3: serial: uart.gnss cannot be tapped on this backend"]
     )
-    # Skipped before setup: pytest-embedded's fixtures are set up for test_real[serial] only, not
-    # for test_model[serial].
-    result = pytester.runpytest_subprocess(
-        "-p", "no:cacheprovider", "--setup-plan", "-k", "model or real"
-    )
+    # Skipped before setup: pytest-embedded's fixtures are set up for test_console[serial] only,
+    # not for test_tap[serial].
+    result = pytester.runpytest_subprocess("-p", "no:cacheprovider", "--setup-plan")
     assert result.stdout.str().count("SETUP    F embedded_services['esp,idf']") == 1
 
 
@@ -205,22 +196,10 @@ def test_a_backend_that_cannot_give_a_source_or_tap_skips_with_the_reason(
             '@pytest.mark.board_profile("esp32-wrover-kit")',
             "no board profile named 'esp32-wrover-kit';*",
         ),
-        (
-            '@pytest.mark.source("uart.gnss")',
-            "the source marker takes an interface and a source, as in *",
-        ),
-        (
-            '@pytest.mark.source("uart.gnss", "model")\n@pytest.mark.source("uart.gnss", "replay")',
-            "two source markers on test_one name uart.gnss",
-        ),
         ("@pytest.mark.tap", "the tap marker takes one or more interfaces, as in *"),
         (
-            '@pytest.mark.source("uart.modem", "model")',
+            '@pytest.mark.tap("uart.modem")',
             "the board profile esp32-devkitc has no uart.modem;*",
-        ),
-        (
-            '@pytest.mark.source("uart.gnss", "recorded")',
-            "no backend takes a 'recorded' source on uart.gnss;*",
         ),
         (
             '@pytest.mark.board_profile("lilygo-t-a7670g-r2")\n@pytest.mark.tap("lines.modem")',
@@ -249,8 +228,7 @@ def test_markers_on_a_class_or_a_module_count(pytester: pytest.Pytester) -> None
 
         @pytest.mark.board_profile("lilygo-t-a7670g-r2")
         class TestModem:
-            @pytest.mark.source("uart.modem", "real")
-            def test_real(self, board):
+            def test_tapped(self, board):
                 pass
         """
     )
@@ -259,31 +237,7 @@ def test_markers_on_a_class_or_a_module_count(pytester: pytest.Pytester) -> None
     result.stdout.fnmatch_lines(["SKIPPED *: serial: uart.modem cannot be tapped on this backend"])
 
 
-def test_the_closest_source_marker_wins(pytester: pytest.Pytester) -> None:
-    pytester.makeconftest(WITH_SERIAL)
-    pytester.makepyfile(
-        test_override="""
-        import pytest
-
-        pytestmark = pytest.mark.source("uart.gnss", "model")
-
-        def test_module(board):
-            pass
-
-        @pytest.mark.source("uart.gnss", "real")
-        def test_own(board):
-            pass
-        """
-    )
-    result = pytester.runpytest_subprocess("-p", "no:cacheprovider", "-ra")
-    # The module's model skips test_module on serial; test_own's real runs on both.
-    result.assert_outcomes(passed=3, skipped=1)
-    result.stdout.fnmatch_lines(["SKIPPED *test_override.py: serial: uart.gnss takes no model*"])
-
-
-@pytest.mark.parametrize(
-    "marker", ['board_profile("lilygo-t-a7670g-r2")', 'source("uart.gnss", "model")']
-)
+@pytest.mark.parametrize("marker", ['board_profile("lilygo-t-a7670g-r2")', 'tap("uart.gnss")'])
 def test_a_board_marker_in_a_pytest_param_is_refused(
     pytester: pytest.Pytester, marker: str
 ) -> None:
@@ -310,56 +264,37 @@ def test_a_board_marker_in_a_pytest_param_is_refused(
 
 
 @pytest.mark.parametrize(
-    ("items", "node", "source", "late"),
+    ("items", "node", "taps"),
     [
-        ("items[:1]", "item", "model", "the source marker"),
-        # An empty source is a source too, which no backend gives.
-        ("items[:1]", "item", "", "the source marker"),
+        ("items[:1]", "item", '"uart.gnss"'),
+        # One that is no tap at all.
+        ("items[:1]", "item", ""),
         # The class's node, whose markers are not in the class's own pytestmark.
-        ("items[:1]", "item.parent", "model", "the source marker"),
-        # The module's node, once per item: two markers on one level.
-        ("items", "item.parent.parent", "model", "a source or tap marker"),
+        ("items[:1]", "item.parent", '"uart.gnss"'),
+        # The module's node, once per item.
+        ("items", "item.parent.parent", '"uart.gnss"'),
     ],
 )
 def test_a_board_marker_a_hook_adds_is_refused(
-    pytester: pytest.Pytester, items: str, node: str, source: str, late: str
+    pytester: pytest.Pytester, items: str, node: str, taps: str
 ) -> None:
     pytester.makeconftest(
         WITH_SERIAL
         + f"""
 def pytest_collection_modifyitems(items):
     for item in {items}:
-        {node}.add_marker(pytest.mark.source("uart.gnss", "{source}"))
+        {node}.add_marker(pytest.mark.tap({taps}))
 """
     )
     pytester.makepyfile(test_hook="class TestA:\n    def test_one(self, board):\n        pass\n")
     result = pytester.runpytest_subprocess("-p", "no:cacheprovider")
     assert result.ret == pytest.ExitCode.USAGE_ERROR
     result.stderr.fnmatch_lines(
-        [f"ERROR: test_hook.py::TestA::test_one[[]esp32sim[]]: {late} reached the test after*"]
+        [
+            "ERROR: test_hook.py::TestA::test_one[[]esp32sim[]]: the tap marker reached the test"
+            " after*"
+        ]
     )
-
-
-def test_a_subclass_s_source_overrides_its_base_s(pytester: pytest.Pytester) -> None:
-    pytester.makeconftest(WITH_SERIAL)
-    pytester.makepyfile(
-        test_classes="""
-        import pytest
-
-        @pytest.mark.source("uart.gnss", "model")
-        class TestBase:
-            def test_one(self, board):
-                pass
-
-        @pytest.mark.source("uart.gnss", "real")
-        class TestSub(TestBase):
-            pass
-        """
-    )
-    result = pytester.runpytest_subprocess("-p", "no:cacheprovider", "-rs", "-v")
-    # TestBase skips on serial; TestSub asks for real, which serial gives.
-    result.assert_outcomes(passed=3, skipped=1)
-    result.stdout.fnmatch_lines(["*TestBase::test_one[[]serial[]] SKIPPED*"])
 
 
 def fake_build(app: Path, target: str = "esp32", encrypted: bool = False) -> Path:
@@ -454,8 +389,10 @@ def test_runner_and_rom_paths_name_what_is_missing(
     assert esp32sim.rom_path() == tmp_path / "rom.elf"
 
 
-# $FAKE_EXIT KILL: killed by SIGKILL, as by the OOM killer.
+# $FAKE_EXIT KILL: killed by SIGKILL, as by the OOM killer. $FAKE_RAN, when set, is a file the
+# runner appends to when it starts.
 FAKE_RUNNER = """#!/bin/sh
+[ -z "$FAKE_RAN" ] || echo started >> "$FAKE_RAN"
 printf '%s' "$FAKE_OUTPUT"
 [ "$FAKE_EXIT" != KILL ] || kill -KILL $$
 exit "$FAKE_EXIT"
@@ -464,8 +401,9 @@ exit "$FAKE_EXIT"
 
 @pytest.fixture
 def fake_runner(pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch) -> pytest.Pytester:
-    """A suite of one test, `console.expect("Hello world!")`, on an app with a fake build, run
-    by a fake runner that prints $FAKE_OUTPUT and exits with $FAKE_EXIT."""
+    """A suite of one test, which powers the board on and expects `Hello world!`, on an app with
+    a fake build, run by a fake runner that prints $FAKE_OUTPUT and exits with $FAKE_EXIT
+    without connecting. The generated GNSS recording is in the suite's directory."""
     runner = pytester.path / "runner"
     runner.write_text(FAKE_RUNNER)
     runner.chmod(0o755)
@@ -473,31 +411,32 @@ def fake_runner(pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch) -> p
     monkeypatch.setenv("ESP32TL_RUNNER", str(runner))
     monkeypatch.setenv("ESP32TL_ROM", str(pytester.path / "rom.elf"))
     fake_build(pytester.path)
+    shutil.copy(ROOT / "recordings" / "gnss-generated-1.jsonl", pytester.path / "gnss.jsonl")
     pytester.makepyfile(
         test_fake="""
-        def test_hello(console):
+        def test_hello(board, console):
+            board.power_on()
             console.expect("Hello world!")
         """
     )
     return pytester
 
 
-def test_expect_fails_at_once_when_the_runner_has_exited(
+def test_a_wait_fails_at_once_when_the_runner_has_exited(
     fake_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("FAKE_OUTPUT", "Goodbye\n")
     monkeypatch.setenv("FAKE_EXIT", "0")
     started = time.monotonic()
     result = fake_runner.runpytest_subprocess("-p", "no:cacheprovider")
-    # pytest-embedded's expect waits 30 s by default.
     assert time.monotonic() - started < 15
     result.assert_outcomes(failed=1)
-    # pexpect empties its buffer at EOF, so the runner's output comes with the EOF it caused.
+    # The runner never took a turn: the board's clock is still at 0.
     result.stdout.fnmatch_lines(
         [
-            "E *EOF: the runner exited with code 0; its last output:",
+            "E *RunEnded: the run ended before its first turn while the test waited for"
+            " 'Hello world!' on the console: the runner exited with code 0; its last output:",
             "E *Goodbye",
-            'E *EOF: Not found "Hello world!"',
         ]
     )
 
@@ -508,21 +447,21 @@ def test_a_runner_that_fails_to_start_is_reported_once(
     monkeypatch.setenv("FAKE_OUTPUT", "esp32tl-runner: rom.elf: not an ELF file\n")
     monkeypatch.setenv("FAKE_EXIT", "2")
     result = fake_runner.runpytest_subprocess("-p", "no:cacheprovider")
-    # The expect's EOF names the exit code, so the teardown does not report it again.
+    # The RunEnded names the exit code, so the teardown does not report it again.
     result.assert_outcomes(failed=1)
     result.stdout.fnmatch_lines(
         [
-            "E *EOF: the runner exited with code 2; its last output:",
+            "E *RunEnded: * the runner exited with code 2; its last output:",
             "E *esp32tl-runner: rom.elf: not an ELF file",
         ]
     )
 
 
-def test_the_board_runs_the_profile_the_test_chose(
+def test_the_board_runs_the_profile_the_test_chose_and_starts_no_runner_unpowered(
     fake_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("FAKE_OUTPUT", "Hello world!\n")
     monkeypatch.setenv("FAKE_EXIT", "0")
+    monkeypatch.setenv("FAKE_RAN", str(fake_runner.path / "ran"))
     fake_runner.makepyfile(
         test_profiles="""
         import pytest
@@ -536,22 +475,47 @@ def test_the_board_runs_the_profile_the_test_chose(
         """
     )
     result = fake_runner.runpytest_subprocess("-p", "no:cacheprovider", "test_profiles.py")
+    # Neither set anything up for a run, so neither needs one.
     result.assert_outcomes(passed=2)
+    assert not (fake_runner.path / "ran").exists()
+
+
+def test_the_runner_starts_at_power_on_on_the_test_s_clock(
+    fake_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_EXIT", "0")
+    (fake_runner.path / "runner").write_text(
+        FAKE_RUNNER.replace('echo started >> "$FAKE_RAN"', 'echo "$@" >> "$FAKE_RAN"')
+    )
+    monkeypatch.setenv("FAKE_RAN", str(fake_runner.path / "ran"))
+    fake_runner.makepyfile(
+        test_fake="""
+        import pexpect
+
+        def test_power_on(board, console):
+            board.power_on()
+            assert board.powered
+            console.expect(pexpect.EOF)
+        """
+    )
+    result = fake_runner.runpytest_subprocess("-p", "no:cacheprovider")
+    result.assert_outcomes(passed=1)
+    (line,) = (fake_runner.path / "ran").read_text().splitlines()
+    assert " --max-seconds 86400 --console both --peer-timeout 0 --board socket:" in line
 
 
 @pytest.mark.parametrize(("exit", "code"), [("1", "1"), ("KILL", "-9")])
 def test_a_runner_that_exits_with_an_error_fails_the_test(
     fake_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch, exit: str, code: str
 ) -> None:
-    monkeypatch.setenv("FAKE_OUTPUT", "Hello world!\n")
     monkeypatch.setenv("FAKE_EXIT", exit)
     # Waits for the runner's end, so that it has exited before the teardown.
     fake_runner.makepyfile(
         test_fake="""
         import pexpect
 
-        def test_hello(console):
-            console.expect("Hello world!")
+        def test_end(board, console):
+            board.power_on()
             console.expect(pexpect.EOF)
         """
     )
@@ -562,17 +526,16 @@ def test_a_runner_that_exits_with_an_error_fails_the_test(
     )
 
 
-def test_an_eof_from_elsewhere_does_not_hide_the_runner_s_exit(
+def test_a_failure_of_another_kind_does_not_hide_the_runner_s_exit(
     fake_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("FAKE_OUTPUT", "Hello world!\n")
     monkeypatch.setenv("FAKE_EXIT", "1")
     fake_runner.makepyfile(
         test_fake="""
         import pexpect
 
-        def test_hello(console):
-            console.expect("Hello world!")
+        def test_end(board, console):
+            board.power_on()
             console.expect(pexpect.EOF)
             raise pexpect.EOF("a host tool's end")
         """
@@ -582,67 +545,235 @@ def test_an_eof_from_elsewhere_does_not_hide_the_runner_s_exit(
     result.stdout.fnmatch_lines(["*esp32sim: the runner exited with code 1; its output is in *"])
 
 
-def test_the_eof_carries_the_runner_s_last_whole_lines_without_colour() -> None:
-    output = b"".join(b"\x1b[0;32mline %d\x1b[0m\n" % i for i in range(200))
-    head, tail = eof_of_stream(output + b"\nesp32tl: the runner exited with code 0\n").split(
-        "\n", 1
+def test_the_board_s_clock_and_sources_go_in_order(
+    fake_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_EXIT", "0")
+    fake_runner.makepyfile(
+        test_fake="""
+        def test_wait_while_off(board):
+            board.wait(1)
+
+        def test_expect_while_off(board, console):
+            console.expect("x")
+
+        def test_now_while_off(board):
+            board.now
+
+        def test_power_on_twice(board):
+            board.power_on()
+            board.power_on()
+
+        def test_replay_after_power_on(board, gnss):
+            board.power_on()
+            gnss.replay("gnss.jsonl")
+
+        def test_two_replays(gnss):
+            gnss.replay("gnss.jsonl")
+            gnss.replay("gnss.jsonl")
+        """
     )
-    assert head == "the runner exited with code 0; its last output:"
-    lines = tail.splitlines()
+    result = fake_runner.runpytest_subprocess("-p", "no:cacheprovider")
+    result.assert_outcomes(failed=6)
+    result.stdout.fnmatch_lines_random(
+        [
+            "E *esp32tl.interfaces.BoardOff: the board is off; call board.power_on() first",
+            "E *esp32tl.interfaces.BoardOff: the board is on already: power it on once",
+            "E *esp32tl.interfaces.SourceError: uart.gnss: the board is on already: give a route"
+            " its source before board.power_on()",
+            "E *esp32tl.interfaces.SourceError: uart.gnss has its source already: one per test",
+        ]
+    )
+    # The wait, the expect and board.now.
+    off = re.findall(
+        r"^E +esp32tl\.interfaces\.BoardOff: the board is off;", result.stdout.str(), re.M
+    )
+    assert len(off) == 3
+
+
+# esp32sim with a model source only on its UARTs, and a backend that takes replays.
+NO_REPLAY = """
+[esp32sim]
+uart = {{ sources = ["model"] }}
+{other}
+"""
+
+
+@pytest.mark.parametrize(
+    ("other", "outcome", "line"),
+    [
+        (
+            '[serial]\nuart = { sources = ["replay"] }',
+            {"skipped": 1},
+            # At the test, not at the line of esp32tl's that skipped it.
+            "SKIPPED [[]1[]] test_fake.py:1: esp32sim: uart.gnss takes no replay source on this"
+            " backend, only model",
+        ),
+        # A source no backend gives is wrong, not a skip everywhere.
+        (
+            "",
+            {"failed": 1},
+            "E *esp32tl.interfaces.SourceError: no backend takes a 'replay' source on uart.gnss;"
+            " the sources there are model",
+        ),
+    ],
+)
+def test_a_source_the_backend_cannot_give_skips_at_the_call(
+    fake_runner: pytest.Pytester,
+    monkeypatch: pytest.MonkeyPatch,
+    other: str,
+    outcome: dict[str, int],
+    line: str,
+) -> None:
+    monkeypatch.setenv("FAKE_EXIT", "0")
+    (fake_runner.path / "capabilities.toml").write_text(NO_REPLAY.format(other=other))
+    fake_runner.makeconftest(
+        """
+        from pathlib import Path
+
+        from esp32tl.boards import capabilities
+
+        DECLARATION = Path(__file__).parent / "capabilities.toml"
+        capabilities.declared = lambda: capabilities.load(DECLARATION)
+        """
+    )
+    fake_runner.makepyfile(
+        test_fake="""
+        def test_replay(board, gnss):
+            gnss.replay("gnss.jsonl")
+            board.power_on()
+        """
+    )
+    result = fake_runner.runpytest_subprocess("-p", "no:cacheprovider", "-rA")
+    result.assert_outcomes(**outcome)
+    result.stdout.fnmatch_lines([line])
+
+
+def test_a_test_that_sets_up_a_source_and_never_powers_on_fails_at_teardown(
+    fake_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_EXIT", "0")
+    monkeypatch.setenv("FAKE_RAN", str(fake_runner.path / "ran"))
+    fake_runner.makepyfile(
+        test_fake="""
+        import pytest
+
+        @pytest.fixture
+        def replayed(gnss):
+            gnss.replay("gnss.jsonl")
+
+        def test_never_powered(replayed):
+            pass
+
+        def test_failed_first(replayed):
+            raise AssertionError("the test's own failure")
+
+        def test_skipped(replayed):
+            pytest.skip("not on this firmware")
+
+        @pytest.mark.xfail(reason="known")
+        def test_xfailed(replayed):
+            raise AssertionError("expected")
+
+        @pytest.fixture
+        def broken():
+            raise RuntimeError("a fixture of the test's own")
+
+        def test_broken_setup(replayed, broken):
+            pass
+        """
+    )
+    result = fake_runner.runpytest_subprocess(
+        "-p", "no:cacheprovider", "-rA", "--junitxml", "report.xml"
+    )
+    # Only the test that passed is reported: the failed, skipped, xfailed and broken ones not a
+    # second time, each with its one outcome.
+    result.assert_outcomes(passed=1, failed=1, skipped=1, xfailed=1, errors=2)
+    result.stdout.fnmatch_lines_random(
+        [
+            "ERROR test_fake.py::test_never_powered[[]esp32sim[]] - Failed: esp32sim*",
+            "ERROR test_fake.py::test_broken_setup[[]esp32sim[]] - RuntimeError*",
+        ]
+    )
+    result.stdout.fnmatch_lines(
+        [
+            "*esp32sim: the test set up the replay of uart.gnss and never called"
+            " board.power_on(): it ran no firmware",
+        ]
+    )
+    # No runner ran, and every link report says so.
+    assert not (fake_runner.path / "ran").exists()
+    stats = [
+        json.loads(prop.get("value", ""))["stats"]
+        for prop in ElementTree.parse(fake_runner.path / "report.xml").iter("property")
+        if prop.get("name") == "esp32sim_link"
+    ]
+    assert stats == [None] * 5
+
+
+def test_a_test_that_uses_board_gets_a_wall_time_timeout_unless_one_is_set(
+    pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pytester.makeconftest(SHOW_PARAMS)
+    pytester.makepyfile(
+        test_timeouts="""
+        import os
+
+        import pytest
+
+        def timeout(request):
+            marker = request.node.get_closest_marker("timeout")
+            return marker.args if marker else None
+
+        def test_board(board, request):
+            expected = os.environ["EXPECTED"]
+            assert timeout(request) == ((int(expected),) if expected else None)
+
+        @pytest.mark.timeout(3)
+        def test_own(board, request):
+            assert timeout(request) == (3,)
+
+        def test_without_board(request):
+            assert timeout(request) is None
+        """
+    )
+    monkeypatch.setenv("EXPECTED", "600")
+    pytester.runpytest_subprocess("-p", "no:cacheprovider").assert_outcomes(passed=3)
+    # Set for the session: the user's choice, 0 included.
+    monkeypatch.setenv("EXPECTED", "")
+    for options in (("--timeout", "5"), ("-o", "timeout=0"), ("-p", "no:timeout")):
+        result = pytester.runpytest_subprocess("-p", "no:cacheprovider", *options)
+        result.assert_outcomes(passed=3)
+    monkeypatch.setenv("PYTEST_TIMEOUT", "0")
+    pytester.runpytest_subprocess("-p", "no:cacheprovider").assert_outcomes(passed=3)
+
+
+def test_the_eof_tail_is_the_runner_s_last_whole_lines_without_colour(tmp_path: Path) -> None:
+    log = tmp_path / "runner.log"
+    log.write_bytes(b"".join(b"\x1b[0;32mline %d\x1b[0m\n" % i for i in range(200)))
+    lines = esp32sim.last_output(log).splitlines()
     # 2 KiB of output, from the first line that begins in it
     assert lines[-1] == "line 199"
     assert all(re.fullmatch(r"line \d+", line) for line in lines)
-    assert len(tail) < esp32sim.EOF_TAIL_BYTES
-
-
-# The end-of-run line the backend appends, with code 0.
-END = b"\nesp32tl: the runner exited with code 0\n"
-
-
-def eof_of_stream(output: bytes, link_error: str | None = None) -> str:
-    """The message of the EOF the stream raises after `output`, read in 100-byte chunks, with
-    `link_error` what the harness found wrong."""
-    chunks = [output[at : at + 100] for at in range(0, len(output), 100)]
-
-    class Stream:
-        def read_nonblocking(self, size: int = 1, timeout: int = -1) -> bytes:
-            return chunks.pop(0)
-
-    stream = Stream()
-    esp32sim.end_stream_at_end_of_run(cast(PexpectProcess, stream), lambda: link_error)
-    for _ in range(len(chunks)):
-        stream.read_nonblocking()
-    with pytest.raises(RunnerExited) as raised:
-        stream.read_nonblocking()
-    return str(raised.value)
+    assert len("\n".join(lines)) < esp32sim.LAST_OUTPUT_BYTES
 
 
 # ESP-IDF ends its lines with \r\n by default.
 @pytest.mark.parametrize("ending", [b"", b"\n", b"\r\n"])
-def test_the_eof_keeps_a_long_last_line(ending: bytes) -> None:
-    message = eof_of_stream(b"y" * 3000 + ending + b"\nesp32tl: the runner exited with code 1\n")
-    head, tail = message.split("\n", 1)
-    assert head == "the runner exited with code 1; its last output:"
+def test_the_eof_tail_keeps_a_long_last_line(tmp_path: Path, ending: bytes) -> None:
+    log = tmp_path / "runner.log"
+    log.write_bytes(b"x\n" + b"y" * 3000 + ending)
+    tail = esp32sim.last_output(log)
     assert tail.strip().strip("y") == "" and len(tail) > 1000
+    assert esp32sim.last_output(tmp_path / "none.log").startswith("(the log ")
 
 
-def test_the_eof_names_the_link_s_error_from_the_link_not_from_the_log() -> None:
-    # A guest line that imitates the backend's, and the backend's own with its leading newline cut
-    # off by the 2 KiB tail.
-    output = b"esp32tl: the link failed: imitated\n" + b"y" * 3000
-    output += b"\nesp32tl: the link failed: real\n\nesp32tl: the runner exited with code 0\n"
-    head = eof_of_stream(output, "real").split("\n", 1)[0]
-    assert head == "the link failed: real; the runner exited with code 0; its last output:"
-    head = eof_of_stream(b"esp32tl: the link failed: imitated\n" + END).split("\n", 1)[0]
-    assert head == "the runner exited with code 0; its last output:"
-
-
-def test_ended_on_runner_exit_stops_at_a_cycle() -> None:
+def test_ended_while_waiting_stops_at_a_cycle() -> None:
     first, second = ValueError("first"), ValueError("second")
     first.__cause__, second.__cause__ = second, first
-    assert not esp32sim.ended_on_runner_exit(first)
-    second.__cause__ = RunnerExited("end")
-    assert esp32sim.ended_on_runner_exit(first)
+    assert not esp32sim.ended_while_waiting(first)
+    second.__cause__ = RunEnded("end")
+    assert esp32sim.ended_while_waiting(first)
 
 
 def test_a_runner_that_cannot_start_leaves_no_log_open(tmp_path: Path) -> None:
@@ -710,15 +841,16 @@ def test_hello_world_fails_on_an_image_that_prints_something_else(
 
 
 # A runner that speaks the link protocol, as the backend sees one, without an emulator: it
-# connects once, shakes hands, takes turn 0, prints the console line and sends a warning. Then it
-# waits for SIGTERM and ends the run with its stats, exiting 0, as protocol §9 has it. $FAKE_LINK
-# makes it misbehave: `version` sends a hello of version 2, and exits 3 once it has the harness's
-# answer; `seq` sends an event out of sequence and ends on the harness's stop; `late` sends one
-# after turn 0, when no turn is due before --max-seconds; `deaf` ignores SIGTERM; `linger` leaves
-# a child holding the link open after it exits; `slow` loads for half a second before it connects,
-# and dies of SIGTERM until then, as the real runner does; `gone` exits 4 in turn 0 without
-# reading it, as the real runner does after --peer-timeout. $FAKE_WATCH is the pins the harness's
-# hello must watch, comma-separated.
+# connects once, shakes hands, takes turn 0, prints the console line, as the console message and on
+# stdout, sends a warning and takes the next turn at the harness's quiet_until, and so on until the
+# harness's stop or SIGTERM, on which it ends the run with its stats and exits 0, as protocol §9 has
+# it. $FAKE_LINK makes it misbehave: `version` sends a hello of version 2, and exits 3 once it has
+# the harness's answer; `late` sends an event out of sequence after the console line; `deaf`
+# ignores the harness and SIGTERM after that line; `stall` takes no turn after it until SIGTERM;
+# `linger` leaves a child holding the link open after it exits; `slow` loads for half a second
+# before it connects, and dies of SIGTERM until then, as the real runner does; `gone` exits 4 in
+# turn 0 without reading it, as the real runner does when the harness is gone. $FAKE_WATCH is the
+# pins the harness's hello must watch, comma-separated: the default profile's GNSS route's.
 LINK_RUNNER = """#!{python}
 import os
 import signal
@@ -738,14 +870,18 @@ conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 conn.connect(board.removeprefix("socket:"))
 lines = conn.makefile("rb")
 mode = os.environ.get("FAKE_LINK", "")
+# The time of the last message sent, which the stats carry.
+now = 0
 
 
 def send(*messages):
+    global now
+    now = max([now, *(getattr(message, "t", 0) for message in messages)])
     conn.sendall(b"".join(p.encode(message) for message in messages))
 
 
 def end(how, code, detail=None):
-    send(p.Stats(1000, how, 0, 1, (), 72, 0, 0, 0, detail=detail))
+    send(p.Stats(now, how, 0, 1, (), 72, 0, 0, 0, detail=detail))
     if mode == "linger":
         os.set_inheritable(conn.fileno(), True)
         subprocess.Popen(["sleep", "3"], close_fds=False)
@@ -754,32 +890,40 @@ def end(how, code, detail=None):
     sys.exit(code)
 
 
+def turn():
+    message = p.decode_harness(lines.readline())
+    if message == p.Stop():
+        end("stop", 0)
+    assert isinstance(message, p.Wait) and message.quiet_until is not None, message
+    return message.quiet_until
+
+
 send(p.RunnerHello(2 if mode == "version" else 1, "esp32", "emulated-fifo-write", "0" * 40))
 hello = p.decode_harness(lines.readline())
 board_profile = os.environ.get("FAKE_BOARD", "esp32-devkitc")
-watch = tuple(int(pin) for pin in os.environ.get("FAKE_WATCH", "").split(",") if pin)
+watch = tuple(int(pin) for pin in os.environ.get("FAKE_WATCH", "4,5").split(",") if pin)
 assert (hello.board, hello.chip, hello.watch) == (board_profile, "esp32", watch), hello
 if mode == "version":
     end("protocol_error", 3, detail="version 1 from the peer, the runner speaks 2")
-if mode == "seq":
-    send(p.UartTx(2, 0, 1, (4,), 9600, b"x"))
 send(p.Sync(0))
 if mode == "gone":
-    print("esp32tl-runner: the peer's turn took longer than --peer-timeout", file=sys.stderr)
+    print("esp32tl-runner: the peer is gone", file=sys.stderr)
     conn.close()
     sys.exit(4)
-turn = p.decode_harness(lines.readline())
+t = turn()
 print("Hello world!", flush=True)
-if turn == p.Stop():
-    end("stop", 0)
-assert turn == p.Wait(1 if mode == "seq" else 0, None, None), turn
+send(p.Console(1000, b"Hello world!\\r\\n"))
 send(p.Warn(1000, "unrouted_rx", "uart_rx on GPIO 5: 72 bytes dropped", pin=5, nbytes=72))
 if mode == "late":
     send(p.Reset(5, 2000, 12))
+if mode == "stall":
+    signal.sigwait({{signal.SIGTERM}})
+    end("signal", 0)
+send(p.Sync(t))
 if mode == "deaf":
     time.sleep(60)
-signal.sigwait({{signal.SIGTERM}})
-end("signal", 0)
+while True:
+    send(p.Sync(turn()))
 """
 
 
@@ -791,7 +935,7 @@ def link_runner(fake_runner: pytest.Pytester) -> pytest.Pytester:
     return fake_runner
 
 
-def test_the_backend_serves_the_link_and_ends_the_run_with_sigterm(
+def test_the_backend_serves_the_link_and_ends_the_run_with_stop(
     link_runner: pytest.Pytester,
 ) -> None:
     result = link_runner.runpytest_subprocess(
@@ -802,39 +946,59 @@ def test_the_backend_serves_the_link_and_ends_the_run_with_sigterm(
     (prop,) = ElementTree.parse(link_runner.path / "report.xml").iter("property")
     assert prop.get("name") == "esp32sim_link"
     data = json.loads(prop.get("value", ""))
-    assert data["stats"]["end"] == "signal"
+    assert data["stats"]["end"] == "stop"
     assert data["warnings"][0]["bytes"] == 72
-    # The warning and the stats are in the report.
+    # The warning and the stats are in the report: the run stopped at the turn the expect
+    # matched at, the second.
     result.stdout.fnmatch_lines(
         [
             "*Captured esp32sim link teardown*",
-            "board esp32-devkitc, watching no pins",
-            "runner: protocol version 1, esp32sim 0000*, clock emulated-fifo-write; 1 turn taken*",
+            "board esp32-devkitc, watching GPIO 4, GPIO 5",
+            "runner: protocol version 1, esp32sim 0000*, clock emulated-fifo-write; 2 turns taken*",
             "warnings (1):",
             "  0.000001000 s  unrouted_rx: uart_rx on GPIO 5: 72 bytes dropped",
-            "stats: the run ended at 0.000001000 s (signal); 1 turn, 0 resets",
+            "stats: the run ended at 0.100000000 s (stop); 1 turn, 0 resets",
             "  unrouted_rx_bytes 72, *",
         ]
     )
 
 
-def test_the_harness_hello_names_the_profile_the_test_chose(
+def test_every_route_of_the_profile_is_on_the_link(
     link_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("FAKE_BOARD", "lilygo-t-a7670g-r2")
+    monkeypatch.setenv("FAKE_WATCH", "26,27")
     link_runner.makepyfile(
         test_lilygo="""
         import pytest
 
         @pytest.mark.board_profile("lilygo-t-a7670g-r2")
-        def test_hello(console):
+        def test_hello(board, console):
+            board.power_on()
             console.expect("Hello world!")
         """
     )
-    # The fake runner asserts the hello's board; a failed assertion ends it with an error.
+    # The fake runner asserts the hello's board and pins; a failed assertion ends it with an error.
     result = link_runner.runpytest_subprocess("-p", "no:cacheprovider", "-rA", "test_lilygo.py")
     result.assert_outcomes(passed=1)
-    result.stdout.fnmatch_lines(["board lilygo-t-a7670g-r2, watching no pins"])
+    result.stdout.fnmatch_lines(["board lilygo-t-a7670g-r2, watching GPIO 26, GPIO 27"])
+
+
+def test_the_test_s_waits_move_the_board_s_clock(link_runner: pytest.Pytester) -> None:
+    link_runner.makepyfile(
+        test_fake="""
+        def test_clock(board, console):
+            board.power_on()
+            assert board.now == 0
+            board.wait(2.5)
+            assert board.now == 2.5
+            assert board.wait_until(lambda: b"Hello" in board.console_output, within=1)
+            assert board.now == 2.5
+            assert board.utc.isoformat() == "2026-01-01T12:00:02.500000+00:00"
+        """
+    )
+    result = link_runner.runpytest_subprocess("-p", "no:cacheprovider")
+    result.assert_outcomes(passed=1)
 
 
 def test_a_mismatched_handshake_fails_the_test_with_both_sides_reasons(
@@ -846,11 +1010,11 @@ def test_a_mismatched_handshake_fails_the_test_with_both_sides_reasons(
     # The runner had the harness's hello: it ended the run with its stats, which the harness read.
     result.stdout.fnmatch_lines(
         [
-            "E *EOF: the link failed: the runner speaks link protocol version 2, the harness 1;"
+            "E *RunEnded: the run ended at 0 s while the test waited for 'Hello world!' on the"
+            " console: the link failed: the runner speaks link protocol version 2, the harness 1;"
             " the runner exited with code 3; its last output:",
             "E *esp32tl-runner: the run ended: protocol_error",
-            "E *esp32tl: the link failed: the runner speaks link protocol version 2, the harness 1",
-            "*stats: the run ended at 0.000001000 s (protocol_error, version 1 from the peer*",
+            "*stats: the run ended at 0.000000000 s (protocol_error, version 1 from the peer*",
         ]
     )
 
@@ -858,19 +1022,42 @@ def test_a_mismatched_handshake_fails_the_test_with_both_sides_reasons(
 def test_a_link_the_harness_finds_wrong_fails_the_test_after_its_expects(
     link_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("FAKE_LINK", "seq")
+    monkeypatch.setenv("FAKE_LINK", "late")
     result = link_runner.runpytest_subprocess("-p", "no:cacheprovider")
-    # The harness stopped the run at its turn; the runner exited 0, and the test fails anyway.
+    # The harness stopped the run at its next turn; the expect saw the line printed before the
+    # end, the runner exited 0, and the test fails anyway.
     result.assert_outcomes(passed=1, errors=1)
     result.stdout.fnmatch_lines(
+        ["*esp32sim: the link failed: the runner sent reset with seq 5 after 0; its output is in *"]
+    )
+
+
+def test_a_link_error_ends_the_run_at_once_for_a_waiting_test(
+    link_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_LINK", "late")
+    link_runner.makepyfile(
+        test_fake="""
+        def test_hello(board, console):
+            board.power_on()
+            console.expect("Hello world!")
+            console.expect("Goodbye")
+        """
+    )
+    result = link_runner.runpytest_subprocess("-p", "no:cacheprovider")
+    result.assert_outcomes(failed=1)
+    result.stdout.fnmatch_lines(
         [
-            "*esp32sim: the link failed: the runner sent uart_tx with seq 2 after 0;"
-            " its output is in *",
+            # Where the stats say: at the sync that followed the bad event, which the harness
+            # answered with stop.
+            "E *RunEnded: the run ended at 0.1 s while the test waited for 'Goodbye' on the"
+            " console: the link failed: the runner sent reset with seq 5 after 0; the runner"
+            " exited with code 0; its last output:",
         ]
     )
 
 
-def test_a_runner_that_ignores_sigterm_is_killed_and_fails_the_test(
+def test_a_runner_that_ignores_stop_and_sigterm_is_killed_and_fails_the_test(
     link_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("FAKE_LINK", "deaf")
@@ -891,27 +1078,26 @@ def test_a_runner_that_ignores_sigterm_is_killed_and_fails_the_test(
     )
 
 
-def test_a_link_error_ends_the_run_at_once_for_a_waiting_expect(
+def test_a_hung_run_is_ended_by_the_test_s_timeout(
     link_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("FAKE_LINK", "late")
+    monkeypatch.setenv("FAKE_LINK", "stall")
     link_runner.makepyfile(
         test_fake="""
-        def test_hello(console):
-            console.expect("Hello world!")
-            console.expect("Goodbye")
+        def test_hung(board):
+            board.power_on()
+            board.wait(3600)
         """
     )
     started = time.monotonic()
-    result = link_runner.runpytest_subprocess("-p", "no:cacheprovider")
-    # The runner takes no turn after the bad event: the harness ends the run with SIGTERM rather
-    # than leave the expect to its 30 s timeout.
+    result = link_runner.runpytest_subprocess("-p", "no:cacheprovider", "-rA", "--timeout", "2")
     assert time.monotonic() - started < 15
     result.assert_outcomes(failed=1)
     result.stdout.fnmatch_lines(
         [
-            "E *EOF: the link failed: the runner sent reset with seq 5 after 0;"
-            " the runner exited with code 0; its last output:",
+            "*Failed: Timeout (>2.0s) from pytest-timeout.",
+            # The teardown ended the runner, with SIGTERM: it was in no turn the test held.
+            "stats: the run ended at 0.000001000 s (signal); *",
         ]
     )
 
@@ -932,33 +1118,30 @@ def test_a_link_left_open_after_the_runner_exits_is_shut_down(
     # A child of the runner holds the link for 3 s; the teardown does not wait for it.
     assert time.monotonic() - started < 3
     result.assert_outcomes(passed=1)
-    result.stdout.fnmatch_lines(["stats: the run ended at 0.000001000 s (signal); *"])
+    result.stdout.fnmatch_lines(["stats: the run ended at 0.100000000 s (stop); *"])
 
 
 def test_a_test_that_ends_while_the_runner_loads_waits_for_its_hello(
     link_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("FAKE_LINK", "slow")
-    link_runner.makepyfile(test_fake="def test_nothing(board): pass")
+    link_runner.makepyfile(test_fake="def test_nothing(board):\n    board.power_on()\n")
     result = link_runner.runpytest_subprocess("-p", "no:cacheprovider", "-rA")
     # SIGTERM before the hello would have killed it, with -15.
     result.assert_outcomes(passed=1)
-    result.stdout.fnmatch_lines(["stats: the run ended at 0.000001000 s (signal); *"])
+    result.stdout.fnmatch_lines(["stats: the run ended at 0.000000000 s (stop); *"])
 
 
 def test_a_held_run_whose_runner_is_gone_releases_the_link(
     link_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("FAKE_LINK", "gone")
-    monkeypatch.setenv("FAKE_WATCH", "4,5")
     link_runner.makepyfile(
         test_fake="""
-        import pytest
-
-        @pytest.mark.source("uart.gnss", "replay")
         def test_held(board):
+            board.power_on()
             assert board._exited.wait(10)
-            # The waiter let the link's first turn go: the link thread read to end of file.
+            # The waiter let the held turn go: the link thread read to end of file.
             board._linker.join(5)
             assert not board._linker.is_alive()
         """
@@ -968,73 +1151,3 @@ def test_a_held_run_whose_runner_is_gone_releases_the_link(
     assert time.monotonic() - started < 15
     result.assert_outcomes(passed=1, errors=1)
     result.stdout.fnmatch_lines(["*esp32sim: the runner exited with code 4; its output is in *"])
-    # The exit says why the run never started; the teardown does not say it again.
-    result.stdout.no_fnmatch_line("*the run never started*")
-
-
-def test_a_declared_source_never_given_fails_the_test_at_teardown(
-    link_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("FAKE_WATCH", "4,5")
-    link_runner.makepyfile(
-        test_fake="""
-        import pytest
-
-        pytestmark = pytest.mark.source("uart.gnss", "replay")
-
-        def test_never_given(board):
-            pass
-
-        def test_failed_first(board):
-            raise AssertionError("the test's own failure")
-
-        def test_skipped(board):
-            pytest.skip("not on this firmware")
-
-        @pytest.mark.xfail(reason="known")
-        def test_xfailed(board):
-            raise AssertionError("expected")
-
-        @pytest.fixture
-        def broken():
-            raise RuntimeError("a fixture of the test's own")
-
-        def test_broken_setup(board, broken):
-            pass
-        """
-    )
-    result = link_runner.runpytest_subprocess(
-        "-p", "no:cacheprovider", "-rA", "--junitxml", "report.xml"
-    )
-    # Only the test that passed is reported: the failed, skipped, xfailed and broken ones not a
-    # second time, each with its one outcome.
-    result.assert_outcomes(passed=1, failed=1, skipped=1, xfailed=1, errors=2)
-    result.stdout.fnmatch_lines_random(
-        [
-            "ERROR test_fake.py::test_never_given[[]esp32sim[]] - Failed: esp32sim*",
-            "ERROR test_fake.py::test_broken_setup[[]esp32sim[]] - RuntimeError*",
-        ]
-    )
-    result.stdout.fnmatch_lines(
-        [
-            "*esp32sim: the run never started: it waited for the"
-            " replay of uart.gnss, which the source marker declares; give it in the test body",
-        ]
-    )
-    # Every run was stopped at turn 0, before the guest booted: each test's own link report.
-    ends = {
-        case.get("name"): json.loads(prop.get("value", ""))["stats"]["end"]
-        for case in ElementTree.parse(link_runner.path / "report.xml").iter("testcase")
-        for prop in case.iter("property")
-        if prop.get("name") == "esp32sim_link"
-    }
-    assert ends == {
-        f"{name}[esp32sim]": "stop"
-        for name in (
-            "test_never_given",
-            "test_failed_first",
-            "test_skipped",
-            "test_xfailed",
-            "test_broken_setup",
-        )
-    }

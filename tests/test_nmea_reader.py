@@ -20,10 +20,7 @@ from esp32tl.interfaces.uart import Uart
 
 RECORDINGS = Path(__file__).resolve().parent.parent / "recordings"
 
-pytestmark = [
-    pytest.mark.app_path("../firmware/nmea_reader"),
-    pytest.mark.source("uart.gnss", "replay"),
-]
+pytestmark = pytest.mark.app_path("../firmware/nmea_reader")
 
 # A fix line as nmea_reader prints it: `fix acquired` on the first, `fix` on every later one.
 # Up to its end only: the console comes in pieces, and without the lookahead a line cut short
@@ -36,8 +33,9 @@ FIX = re.compile(rb"fix(?: acquired)? lat=\S+ lon=\S+(?=\r?\n)")
 TEN_FIXES_WALL_SECONDS = 5
 
 
-def test_reports_a_fix(gnss: Uart, console: Console) -> None:
+def test_reports_a_fix(board: Esp32Sim, gnss: Uart, console: Console) -> None:
     gnss.replay("../recordings/gnss-generated-1.jsonl")
+    board.power_on()
     console.expect_exact("fix acquired lat=52.229677 lon=21.012233", timeout=30)
 
 
@@ -45,6 +43,7 @@ def test_fix_follows_the_recording(board: Esp32Sim, gnss: Uart, console: Console
     expected = expected_fixes("gnss-generated-2.jsonl")
     assert expected[0] == "fix acquired lat=-34.603700 lon=-58.381600"
     gnss.replay("../recordings/gnss-generated-2.jsonl")
+    board.power_on()
     # The route the board profile gives, configured by the firmware itself.
     console.expect_exact("nmea_reader: UART1 RX GPIO5 TX GPIO4 9600 baud")
     # Each the next fix line the firmware printed: none in between.
@@ -53,19 +52,21 @@ def test_fix_follows_the_recording(board: Esp32Sim, gnss: Uart, console: Console
     assert board.link.warnings == []
 
 
-def test_time_is_emulated(gnss: Uart, console: Console) -> None:
-    # The run is held before the guest boots until the replay is given.
+def test_time_is_emulated(board: Esp32Sim, gnss: Uart, console: Console) -> None:
     started = time.monotonic()
     gnss.replay("../recordings/gnss-generated-1.jsonl")
-    # One sentence per emulated second from 1 s: the tenth fix is at 10 emulated seconds.
+    board.power_on()
+    # One sentence per emulated second from 1 s: the tenth fix is at 10 emulated seconds, and the
+    # expect sees it at the next turn, at most 100 emulated milliseconds later.
     fixes = [next_fix(console) for _ in range(10)]
     elapsed = time.monotonic() - started
     assert fixes == expected_fixes("gnss-generated-1.jsonl")[:10]
+    assert 10 < board.now <= 10.1
     assert elapsed < TEN_FIXES_WALL_SECONDS, f"ten fixes took {elapsed:.2f} wall seconds"
 
 
 def test_only_well_formed_fixes_count_and_an_epoch_prints_once(
-    tmp_path: Path, gnss: Uart, console: Console
+    tmp_path: Path, board: Esp32Sim, gnss: Uart, console: Console
 ) -> None:
     gga = "GPGGA,120000.00,5213.7806,N,02100.7340,E,1,08,0.9,110.0,M,34.0,M,,"
     feed = [
@@ -91,6 +92,7 @@ def test_only_well_formed_fixes_count_and_an_epoch_prints_once(
     ]
     recording.write(tmp_path / "feed.jsonl", recording.Recording(header, tuple(events)))
     gnss.replay(tmp_path / "feed.jsonl")
+    board.power_on()
     # The last sentence's fix is the third: nothing else printed a fix line in between.
     assert [next_fix(console) for _ in range(3)] == [
         # 13.78 minutes is 0.229666... degrees; 0.123456 minutes is 0.0020576 degrees

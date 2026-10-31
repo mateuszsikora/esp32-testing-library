@@ -10,14 +10,10 @@ the user sees is in [board-profiles-user.md](board-profiles-user.md).
 1. **`pytest_generate_tests`**, for a test that uses `board`, after the `app_path` marker:
    `board_profile(metafunc.definition)` loads the profile the closest `board_profile` marker names,
    or `DEFAULT_PROFILE` (`esp32-devkitc`), through `boards.profile(name)`.
-   `board_requests(metafunc.definition)` turns the `source` and `tap` markers of the test, its
-   class and its module into `Request`s: one per interface named by a `source` marker, from the
-   closest marker that names it (`source_markers`: the test, then each class of the MRO, the class
-   before its bases, then the module; a marker a hook added to the class's node counts as the
-   class's own), then one per tapped interface over every level, duplicates dropped. Two `source` markers on the same node
-   for one interface are a `MarkerError`. `check(requests, profile, declared())` raises
-   `CapabilityError` for an interface the profile does not have and for a source or tap that no
-   declared backend gives. A `MarkerError`, `ProfileError` or `CapabilityError` becomes
+   `board_requests(metafunc.definition)` turns the `tap` markers of the test, its class and its
+   module into `Request`s, one per tapped interface over every level, duplicates dropped.
+   `check(requests, profile, declared())` raises `CapabilityError` for an interface the profile
+   does not have and for a tap that no declared backend gives. A `MarkerError`, `ProfileError` or `CapabilityError` becomes
    `pytest.fail.Exception(f"{nodeid}: {error}", pytrace=False)`, raised `from None`: a collection
    error without the chained exception.
 2. Per backend, `refusal(backend, requests, declared())` is the reason the backend cannot give the
@@ -29,9 +25,15 @@ the user sees is in [board-profiles-user.md](board-profiles-user.md).
 3. **`board` fixture**, at setup: `board_profile(request.node)` again (the marker was checked at
    collection, and the profile is cached), passed to `Esp32Sim(..., profile)`, which keeps it as
    `Esp32Sim.profile` and gives its `name` and `chip` to the `BoardLink`, for the harness's `hello`
-   ([esp32sim-backend-technical.md](esp32sim-backend-technical.md#data-flow)). Each `uart.*` route
-   a `source` marker names becomes a `Uart` on the link, its `Wire` the route's `tx`, `rx` and
-   `baud`; the profile's lines, and the routes no marker names, are not on the link.
+   ([esp32sim-backend-technical.md](esp32sim-backend-technical.md#data-flow)). Every `uart.*` route
+   becomes a `Uart` on the link, its `Wire` the route's `tx`, `rx` and `baud`; the profile's lines
+   are not on the link.
+4. **A source, in the test body.** `gnss.replay(path)` asks the backend, through the `Uart`'s
+   `asked`, for a `replay` on `uart.gnss`. `Esp32Sim._asked` builds `[Request(interface, source=source)]`,
+   runs `capabilities.check` on it (a `CapabilityError` becomes a `SourceError` with its message),
+   then `capabilities.refusal(Esp32Sim.name, ...)`, whose reason skips the test at the call
+   ([esp32sim-backend-technical.md](esp32sim-backend-technical.md#data-flow)). It reads the
+   declaration through `capabilities.declared()` each time.
 
 `boards.profile(name)` checks `name` against `names()`, the stems of the `*.toml` files in
 `PROFILES` (`esp32tl/boards/`) except `capabilities.toml`, then `load(PROFILES / f"{name}.toml")`.
@@ -121,11 +123,10 @@ backends that could give a request.
 | `capabilities.check(requests, profile, capabilities)` | function | Raises `CapabilityError` for a request the profile or every backend refuses |
 | `capabilities.refusal(backend, requests, capabilities)` | function | The reason, without the backend's name, or `None`; `KeyError` for an undeclared backend |
 | `board_profile(node)`, `board_requests(node)` | functions, `esp32tl/pytest_plugin.py` | The marker readers; `MarkerError` for a marker used otherwise than registered |
-| `BoardMarkers` | frozen dataclass, `esp32tl/pytest_plugin.py` | The `app_path` marker's arguments, the profile's name and the requests, as `pytest_generate_tests` read them for a definition; kept in `config.stash[READ]` |
+| `BoardMarkers` | frozen dataclass, `esp32tl/pytest_plugin.py` | The `app_path` marker's arguments, the profile's name and the taps, as `pytest_generate_tests` read them for a definition; kept in `config.stash[READ]` |
 | `late_board_marker(config, item)` | function, `esp32tl/pytest_plugin.py` | Which board marker an item carries otherwise than its definition did, or `None` |
 
-The markers, `board_profile(name)`, `source(interface, source)` and `tap(*interfaces)`, are
-registered in `pytest_configure` with the plugin's other marker
+The markers, `board_profile(name)` and `tap(*interfaces)`, are registered in `pytest_configure` with the plugin's other marker
 ([pytest-plugin-technical.md](pytest-plugin-technical.md#interfaces)).
 
 ## Failure modes
@@ -179,17 +180,17 @@ are listed in [board-profiles-user.md](board-profiles-user.md#when-no-backend-ca
 
 `tests/test_pytest_plugin.py` runs the markers through pytest, with `serial` added to `SERVICES`
 in the generated suite's `conftest.py` (`WITH_SERIAL`):
-`test_a_backend_that_cannot_give_a_source_or_tap_skips_with_the_reason` (the skip reasons, and
-that pytest-embedded's fixtures are not set up for the skipped case, from `--setup-plan`),
+`test_a_backend_that_cannot_give_a_tap_skips_with_the_reason` (the skip reason, and that
+pytest-embedded's fixtures are not set up for the skipped case, from `--setup-plan`),
 `test_a_marker_no_backend_can_satisfy_is_a_collection_error`,
-`test_markers_on_a_class_or_a_module_count`, `test_the_closest_source_marker_wins`,
-`test_a_board_marker_in_a_pytest_param_is_refused`, `test_a_board_marker_a_hook_adds_is_refused`,
-`test_a_subclass_s_source_overrides_its_base_s`, and, on the fake runner,
-`test_the_board_runs_the_profile_the_test_chose`.
+`test_markers_on_a_class_or_a_module_count`, `test_a_board_marker_in_a_pytest_param_is_refused`,
+`test_a_board_marker_a_hook_adds_is_refused`, and, on the fake runner,
+`test_the_board_runs_the_profile_the_test_chose_and_starts_no_runner_unpowered` and
+`test_a_source_the_backend_cannot_give_skips_at_the_call`.
 
-Not covered: which reason the plugin shows when one backend refuses several requests (`refusal`
-itself is tested), `app_path` or `tap` arriving late (`board_profile` and `source` are tested), and
-markers a fixture adds at setup, which nothing checks.
+Not covered: which reason the plugin shows when one backend refuses several taps (`refusal`
+itself is tested), `app_path` arriving late (`board_profile` and `tap` are tested), and markers a
+fixture adds at setup, which nothing checks.
 
 ## See also
 

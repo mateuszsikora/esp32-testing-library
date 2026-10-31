@@ -35,14 +35,18 @@ ESP32TL_RUNNER=runner/target/debug/esp32tl-runner .venv/bin/pytest
 - `testpaths = ["tests"]`: a bare `pytest` collects `tests/` only.
 - `addopts = ["-ra", "--strict-markers"]`: the summary lists every outcome but passes, skip reasons
   included, and a marker nobody registered is an error. The esp32tl plugin registers `app_path`,
-  `board_profile`, `source` and `tap` itself; `requires_docker` is registered here.
+  `board_profile` and `tap` itself, and pytest-timeout `timeout`; `requires_docker` is registered
+  here.
 - `markers`: `requires_docker: needs a Docker daemon`.
 - `filterwarnings` ignores `record_xml_attribute is an experimental feature`
   (`pytest.PytestExperimentalApiWarning`), which pytest-embedded's `app_path` fixture causes on every
   test.
 
 The esp32tl plugin is loaded through its `pytest11` entry point, so the suite needs the package
-installed in `.venv`, as `make setup` does.
+installed in `.venv`, as `make setup` does. The suite sets no `timeout`, so every test that uses
+`board`, here and in the suites the `pytester` tests run, gets the plugin's wall-time default of
+600 s ([the test's timeout](../features/pytest-plugin-user.md#the-tests-timeout)); `--timeout`
+or `PYTEST_TIMEOUT` overrides it for a run.
 
 `tests/conftest.py` loads the `pytester` plugin (`pytest_plugins = ["pytester"]`), which the tests
 of the plugin and of the marker use to run pytest on a generated suite. They run it in a
@@ -74,12 +78,13 @@ No test of the suite carries the marker. The only marked tests are the ones
 | `tests/test_boards.py` | The board profiles esp32tl ships, the profile schema's refusals, the capability declaration and the requests it refuses | The package installed |
 | `tests/test_firmware_build.py` | `firmware/build.sh` run against a fake `docker` and a fake `idf.py` that record how they were called; the `requires_docker` marker | Neither Docker nor ESP-IDF; milliseconds |
 | `tests/test_firmware_images.py` | The `hello_world` and `nmea_reader` images as `make firmware` built them: target `esp32`, bootloader at `0x1000`, partition table at `0x8000`, app at `0x10000`, the ELF; `nmea_reader`'s UART settings in its `sdkconfig` | The built images |
-| `tests/test_hello_world.py` | ESP-IDF's `hello_world`, unmodified, printing `Hello world!` through the backend | The built image, the runner and the ROM ELF |
-| `tests/test_nmea_reader.py` | The first milestone (plan M1): `nmea_reader` fed the generated GNSS recordings, and sentences it must ignore, through `gnss.replay`: `test_reports_a_fix`, `test_fix_follows_the_recording`, `test_time_is_emulated` (ten fixes in under five wall seconds) | The built image, the runner and the ROM ELF |
+| `tests/test_hello_world.py` | ESP-IDF's `hello_world`, unmodified, powered on and printing `Hello world!` through the backend | The built image, the runner and the ROM ELF |
+| `tests/test_nmea_reader.py` | The first milestone (plan M1): `nmea_reader` fed the generated GNSS recordings, and sentences it must ignore, through `gnss.replay` before `board.power_on()`: `test_reports_a_fix`, `test_fix_follows_the_recording`, `test_time_is_emulated` (ten fixes in under five wall seconds, and `board.now` just past 10 s) | The built image, the runner and the ROM ELF |
+| `tests/test_clock.py` | The test's clock and the console on it: the run standing still until the test waits, `wait`, `wait_until`'s steps, `NeverHappened`, `RunEnded`, and `console.expect`'s matching, against a runner thread that feeds a `BoardLink` | Nothing beyond the package; under a second |
 | `tests/test_recording.py`, `tests/test_replay.py` | The recording format's reader and writer, its errors and clocks; the stream replay's timing and refusals, and the `Uart` interface that puts it on a `BoardLink` | Nothing beyond the package; milliseconds |
-| `tests/test_gnss_fixture.py` | `gnss.replay` into `nmea_reader` through the `gnss` fixture, and, through `pytester`, a source given otherwise than declared, and `test_nmea_reader.py`'s `test_reports_a_fix` failing on a changed recording and on a baud mismatch | The built `nmea_reader` image, the runner and the ROM ELF |
+| `tests/test_gnss_fixture.py` | `gnss.replay` into `nmea_reader` through the `gnss` fixture, and, through `pytester`, a source given out of order with `board.power_on()`, and `test_nmea_reader.py`'s `test_reports_a_fix` failing on a changed recording and on a baud mismatch | The built `nmea_reader` image, the runner and the ROM ELF |
 | `tests/test_gnss_recordings.py` | `recordings/gnss-*.jsonl` are what `scripts/generate-gnss-recordings.py` writes, `--check` names a stale one, and every recording is one valid sentence per emulated second | Nothing beyond Python |
-| `tests/test_pytest_plugin.py` | The plugin's parametrisation and refused options, the `board_profile`, `source` and `tap` markers, the runner's command line, `load_app`'s refusals, the runner and ROM paths, how a runner's exit is reported (against a fake runner, a shell script), how the backend serves the link and ends the run (against a fake runner that speaks the link protocol, a Python script) | Most tests nothing beyond the package; `test_hello_world_fails_on_an_image_that_prints_something_else` the built image, the runner and the ROM ELF |
+| `tests/test_pytest_plugin.py` | The plugin's parametrisation and refused options, the `board_profile` and `tap` markers, the wall-time timeout it gives, the runner's command line, `load_app`'s refusals, the runner and ROM paths, power-on, sources and how a runner's exit is reported (against a fake runner, a shell script), how the backend serves the link, holds it on the test's clock and ends the run (against a fake runner that speaks the link protocol, a Python script) | Most tests nothing beyond the package; `test_hello_world_fails_on_an_image_that_prints_something_else` the built image, the runner and the ROM ELF |
 | `tests/test_link_protocol.py`, `tests/test_boardlink.py` | The link protocol's codec and handshake; `BoardLink`'s turns, routing and errors, fed messages directly or over a socket pair | Nothing beyond the package; milliseconds |
 | `tests/test_check_docs.py`, `tests/test_decisions_index.py` | `scripts/check-docs.py` and `scripts/decisions-index.py`, run against temporary git repositories; one test runs the integrity checks of `check-docs.py` on this repository's own documentation | git; neither Docker nor the runner |
 

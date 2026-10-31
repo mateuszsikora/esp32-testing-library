@@ -132,7 +132,8 @@ The command line and the usage text: [runner-user.md](runner-user.md#run-an-imag
 - stdout: the guest's UART0 and nothing else, written by esp-soc's `Machine::drain_console`, so
   that whoever reads stdout alone gets the guest's output as the guest wrote it; nothing with
   `--console socket`. The runner's own lines go to stderr. Under the backend the two meet again: pytest-embedded's
-  `DuplicateStdoutPopen` writes stdout and stderr into one log, which `dut.expect` reads.
+  `DuplicateStdoutPopen` writes stdout and stderr into one log, `dut.log`; the test's console
+  expects read the `console` messages of `--console both` instead.
 - stderr, from the runner (formats from `main.rs`):
   - `esp32tl-runner: ROM {path}`
   - `esp32tl-runner: flash {offset:#x}: {path} ({len} bytes)`

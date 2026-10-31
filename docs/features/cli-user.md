@@ -2,10 +2,12 @@
 
 Installing esp32tl puts an `esp32tl` command on the `PATH` (`[project.scripts]` in
 `pyproject.toml`, `esp32tl = "esp32tl.cli:main"`; in this repository, `.venv/bin/esp32tl` after
-`make setup`). It runs an app on the emulator outside pytest, the same way the
-[esp32sim backend](esp32sim-backend-user.md) runs it for a test: `esp32tl run` with nothing at
-the far end of the board's interfaces, `esp32tl replay` with a [recording](replay-user.md)
-replayed into one of them. Tests run through pytest ([pytest plugin](pytest-plugin-user.md)).
+`make setup`). It runs an app on the emulator outside pytest, with the runner, the ROM and the
+build the [esp32sim backend](esp32sim-backend-user.md) uses for a test: `esp32tl run` with nothing
+at the far end of the board's interfaces, `esp32tl replay` with a [recording](replay-user.md)
+replayed into one of them. Unlike a test's run, which moves only while the test waits on the
+board's clock, the command's runs free: there is no test body to wait for, so the run goes as fast
+as the emulator does until `--max-seconds`, and the console goes to stdout only. Tests run through pytest ([pytest plugin](pytest-plugin-user.md)).
 There is no `python -m esp32tl`, and no `esp32tl record` yet.
 
 ## Running an app

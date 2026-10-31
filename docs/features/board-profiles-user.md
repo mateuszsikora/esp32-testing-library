@@ -42,9 +42,10 @@ def test_modem_route(board):
   test, a class or a module (`pytestmark`), and the closest one wins.
 - `board.profile` is the loaded profile ([its fields](board-profiles-technical.md#interfaces)).
   The esp32sim backend names it, with its chip, in the link's `hello`, and the `esp32sim link`
-  report starts with its name ([esp32sim backend](esp32sim-backend-user.md)). A route is wired to
-  the board only when a `source` marker names it ([below](#saying-what-a-test-needs)); otherwise
-  the link watches no pins. The profile's lines are never wired yet.
+  report starts with its name ([esp32sim backend](esp32sim-backend-user.md)). Every UART route of
+  the profile is wired to the board, and the link watches its pins; a route says nothing until the
+  test gives it a source ([below](#saying-what-a-test-needs)). The profile's lines are never wired
+  yet.
 - Only the profiles esp32tl ships can be named; there is no marker argument for a file of your
   own.
 - The marker goes on the test, its class or its module. One given in a
@@ -52,31 +53,28 @@ def test_modem_route(board):
   `pytest_collection_modifyitems`, reaches the test after esp32tl has checked it, so it stops the
   run before any test, with exit code 4:
   `ERROR: test_x.py::test_p[esp32sim-2]: the board_profile marker reached the test after esp32tl read it, from a pytest.param or a hook: put it on the test, its class or its module`.
-  The same holds for `app_path`, `source` and `tap`.
+  The same holds for `app_path` and `tap`.
 
 ## Saying what a test needs
 
-Two markers say what a test does with its board's interfaces. An interface is `console`, or the
+A test says what is at the far end of an interface by what it does with it before
+`board.power_on()`, and which interfaces it taps with a marker. An interface is `console`, or the
 name of a route or a set of lines in the profile: `uart.gnss`, `uart.modem`, `lines.modem`.
 
 ```python
-@pytest.mark.source("uart.gnss", "replay")  # a recording at the far end of the GNSS route
 @pytest.mark.tap("console", "uart.gnss")  # both are recorded
-def test_reports_a_fix(board, console): ...
+def test_reports_a_fix(board, gnss, console):
+    gnss.replay("../recordings/gnss-generated-1.jsonl")  # a recording at the far end
+    board.power_on()
+    ...
 ```
 
-- `source(interface, source)`: what is at the far end of the interface: `model`, `replay` or
-  `real`. For each interface the closest marker wins, so a test's own `source` overrides its
-  class's and its module's, and a subclass's overrides its base's; two on the same test, class or
-  module for one interface are an error.
+- The source of an interface is the call that gives it: `gnss.replay(path)` is a `replay`, which
+  is the only source a call gives yet; `model` and `real` get theirs later. Asked for, a source a
+  backend does not declare skips the test at the call ([below](#when-a-backend-cannot-give-it)).
 - `tap(*interfaces)`: the interfaces the test records. Taps add up: a module's and a test's both
-  count.
-
-The markers decide whether the test runs on a backend. On `esp32sim`, a `replay` source also
-wires the route to the board and holds the run at power-on until the test body gives the
-recording, as `gnss.replay(path)` does ([replay](replay-user.md)); a `model` or `real` source is an
-error at setup there, since the backend does not give them yet. No fixture taps an interface in
-this version.
+  count. A tap decides, at collection, whether the test runs on a backend. No fixture taps an
+  interface in this version.
 
 Each backend declares what it can give:
 
@@ -93,7 +91,8 @@ backends tests run on yet ([the pytest plugin](pytest-plugin-user.md#backends-an
 ## When a backend cannot give it
 
 The test is skipped on that backend, and runs on the others. `pytest -ra` shows the reason, the
-backend first; for the test above, on `serial`:
+backend first, at the test's line; for a replay on a backend that gives only `real`, such as
+`serial`:
 
 ```
 SKIPPED [1] test_gnss.py:4: serial: uart.gnss takes no replay source on this backend, only real
@@ -105,29 +104,32 @@ SKIPPED [1] test_gnss.py:4: serial: uart.gnss takes no replay source on this bac
 | `INTERFACE takes no SOURCE source on this backend` | The backend declares no source for the interface |
 | `INTERFACE cannot be tapped on this backend` | The backend cannot tap the interface |
 
-With several requests the backend cannot give, the reason names one of them, a `source` marker's
-before a `tap` marker's.
-
-The skip comes before any fixture: the backend never starts, and a real board's serial port is
-never opened.
+A tap the backend cannot give skips the test before any fixture: the backend never starts, and a
+real board's serial port is never opened; with several, the reason names the first. A source is
+asked for in the test body, so its skip comes at that call, after the fixtures are set up: on a
+real board, after its serial port is open.
 
 ## When no backend can give it
 
 A request that no backend can give, or that names an interface the profile does not have, is a
-mistake in the test, not a reason to skip it everywhere. It is a collection error that names the
-test, and like any collection error it stops the session before any test runs (exit code 2):
+mistake in the test, not a reason to skip it everywhere. For a marker it is a collection error
+that names the test, and like any collection error it stops the session before any test runs
+(exit code 2):
 
 | Message, after `<test id>: ` | When |
 |---|---|
 | `the board_profile marker takes one name, as in @pytest.mark.board_profile("esp32-devkitc")` | The marker has no argument, more than one, a keyword argument, or a name that is not a string |
 | `no board profile named 'NAME'; the profiles are esp32-devkitc, lilygo-t-a7670g-r2` | The marker names a profile esp32tl does not ship |
-| `the source marker takes an interface and a source, as in @pytest.mark.source("uart.gnss", "replay")` | A `source` marker without exactly two strings |
-| `two source markers on NAME name INTERFACE` | Two `source` markers on the same test, class or module (`NAME` is its name, as `test_one` or `test_x.py`) name the same interface |
 | `the tap marker takes one or more interfaces, as in @pytest.mark.tap("console")` | A `tap` marker with no interface, a keyword argument, or one that is not a string |
 | `the board profile PROFILE has no INTERFACE; its interfaces are console, uart.gnss` | The interface is not in the profile (the list is the profile's own) |
-| `no backend takes a 'SOURCE' source on INTERFACE; the sources there are model, replay, real` | No backend declares that source for the interface |
-| `no backend takes a source on INTERFACE` | No backend declares any source for it: `console`, `lines.*` |
 | `no backend can tap INTERFACE` | No backend can tap it: `lines.*` |
+
+For a source it is a `SourceError` at the call, which fails the test:
+
+| Message | When |
+|---|---|
+| `no backend takes a 'SOURCE' source on INTERFACE; the sources there are model, replay, real` | No backend declares that source for the interface |
+| `no backend takes a source on INTERFACE` | No backend declares any source for it |
 
 A test that does not use `board` (or `console`) is not checked: the markers mean nothing to it.
 

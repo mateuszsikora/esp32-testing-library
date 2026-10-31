@@ -13,10 +13,13 @@ requires-python = ">=3.11"
 # pytest-embedded declares no extras, so its services are separate packages
 # (plan §3, "Distribution"). The `serial` extra of pytest-embedded-idf pulls
 # pytest-embedded-serial-esp and, through it, pytest-embedded-serial.
+# pytest-timeout ends a test whose run hangs: the runner waits for the test for as long as its body
+# runs, so the plugin gives every test that uses `board` a wall-time timeout.
 dependencies = [
     "pytest>=8",
     "pytest-embedded~=2.9.3",
     "pytest-embedded-idf[serial]~=2.9.3",
+    "pytest-timeout>=2.3",
 ]
 
 [project.optional-dependencies]
@@ -66,7 +69,8 @@ python_version = "3.11"
 strict = true
 files = ["esp32tl", "tests"]
 
-# pytest-embedded and esptool ship no py.typed; their annotations are still worth checking against.
+# pytest-embedded, pytest-timeout and esptool ship no py.typed; their annotations are still worth
+# checking against.
 [[tool.mypy.overrides]]
-module = ["pytest_embedded.*", "pytest_embedded_idf.*", "esptool.*"]
+module = ["pytest_embedded.*", "pytest_embedded_idf.*", "pytest_timeout", "esptool.*"]
 follow_untyped_imports = true

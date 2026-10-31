@@ -172,10 +172,11 @@ the peer. The peer gets the events not yet sent and `stats` with `end: signal`, 
 exits 0. Those last messages get two wall seconds; a peer that does not read them by then is given
 up on, and the exit code stays 0. A second `SIGTERM` or `SIGINT` ends the process at once, with
 128 plus the signal's number. Before the connection is made, a signal ends the process as it does
-without `--board`. A test run ends this way unless the test waited for the end of the run: the
-backend starts the runner with `--max-seconds 300` and, at teardown, once the runner has said
-hello, sends one still running `SIGTERM`, then `SIGKILL` 5 s later
-([esp32sim backend](esp32sim-backend-user.md#how-the-run-ends)).
+without `--board`. A test run usually ends otherwise: the backend starts the runner with
+`--max-seconds 86400 --console both --peer-timeout 0` at `board.power_on()`, holds it in a turn
+whenever the test is not waiting, and at teardown answers that turn with `stop`. A runner in no
+held turn then, or still running 5 s later, gets one `SIGTERM` once it has said hello, then
+`SIGKILL` 5 s after that ([esp32sim backend](esp32sim-backend-user.md#how-the-run-ends)).
 
 ## See also
 

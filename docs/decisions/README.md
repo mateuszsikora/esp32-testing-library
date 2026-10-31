@@ -80,31 +80,31 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The board fixture is parametrised over board, embedded_services and app_path together](harness.md#the-board-fixture-is-parametrised-over-board-embedded_services-and-app_path-together) | `harness.md` | decided (#51) |
 | [The app comes from the app_path marker](harness.md#the-app-comes-from-the-app_path-marker) | `harness.md` | decided (#51) |
 | [pytest-embedded's app and service options are refused for board tests](harness.md#pytest-embeddeds-app-and-service-options-are-refused-for-board-tests) | `harness.md` | decided (#51) |
-| [The end of the run is a line appended to the runner's log](harness.md#the-end-of-the-run-is-a-line-appended-to-the-runners-log) | `harness.md` | decided (#51) |
-| [Teardown recognises the end of the run by RunnerExited in the exception chain](harness.md#teardown-recognises-the-end-of-the-run-by-runnerexited-in-the-exception-chain) | `harness.md` | decided (#51) |
+| [The end of the run is a line appended to the runner's log](harness.md#the-end-of-the-run-is-a-line-appended-to-the-runners-log) | `harness.md` | superseded (#65) |
+| [Teardown recognises the end of the run by RunnerExited in the exception chain](harness.md#teardown-recognises-the-end-of-the-run-by-runnerexited-in-the-exception-chain) | `harness.md` | superseded (#65) |
 | [Teardown passes only the signals it sent itself](harness.md#teardown-passes-only-the-signals-it-sent-itself) | `harness.md` | superseded (#12) |
 | [Teardown waits for the runner's hello, sends one SIGTERM and passes exit code 0 only](harness.md#teardown-waits-for-the-runners-hello-sends-one-sigterm-and-passes-exit-code-0-only) | `harness.md` | decided (#12) |
 | [A link error ends the run with SIGTERM at once](harness.md#a-link-error-ends-the-run-with-sigterm-at-once) | `harness.md` | decided (#12) |
-| [The EOF takes the link's error from BoardLink, not from the log](harness.md#the-eof-takes-the-links-error-from-boardlink-not-from-the-log) | `harness.md` | decided (#12) |
+| [The EOF takes the link's error from BoardLink, not from the log](harness.md#the-eof-takes-the-links-error-from-boardlink-not-from-the-log) | `harness.md` | superseded (#65) |
 | [BoardLink checks every input through the codec before it sends it](harness.md#boardlink-checks-every-input-through-the-codec-before-it-sends-it) | `harness.md` | decided (#12) |
 | [uart_tx reaches the interfaces chunk by chunk, with each chunk's time](harness.md#uart_tx-reaches-the-interfaces-chunk-by-chunk-with-each-chunks-time) | `harness.md` | decided (#12) |
 | [The link's report is a report section and a JSON user property](harness.md#the-links-report-is-a-report-section-and-a-json-user-property) | `harness.md` | decided (#12) |
 | [The build directory is passed to IdfApp as an absolute path](harness.md#the-build-directory-is-passed-to-idfapp-as-an-absolute-path) | `harness.md` | decided (#51) |
 | [The runner and ROM paths default to the checkout, with environment overrides](harness.md#the-runner-and-rom-paths-default-to-the-checkout-with-environment-overrides) | `harness.md` | decided (#51) |
-| [A run lasts at most 300 emulated seconds](harness.md#a-run-lasts-at-most-300-emulated-seconds) | `harness.md` | decided (#51) |
+| [A run lasts at most 300 emulated seconds](harness.md#a-run-lasts-at-most-300-emulated-seconds) | `harness.md` | superseded (#65) |
 | [The negative hello_world test edits the app image in place](harness.md#the-negative-hello_world-test-edits-the-app-image-in-place) | `harness.md` | decided (#51) |
 | [Board profiles are TOML files in the package, checked key by key](harness.md#board-profiles-are-toml-files-in-the-package-checked-key-by-key) | `harness.md` | decided (#13) |
 | [The LilyGO profile leaves out what the specification does not give](harness.md#the-lilygo-profile-leaves-out-what-the-specification-does-not-give) | `harness.md` | decided (#13) |
 | [The capability declaration is a TOML file beside the profiles, per interface kind](harness.md#the-capability-declaration-is-a-toml-file-beside-the-profiles-per-interface-kind) | `harness.md` | decided (#13) |
 | [Telling on-board from off-board interfaces is postponed](harness.md#telling-on-board-from-off-board-interfaces-is-postponed) | `harness.md` | postponed (#25) |
 | [A source or tap a backend cannot give skips its parameter at collection](harness.md#a-source-or-tap-a-backend-cannot-give-skips-its-parameter-at-collection) | `harness.md` | decided (#13) |
-| [The closest source marker wins per interface](harness.md#the-closest-source-marker-wins-per-interface) | `harness.md` | decided (#13) |
+| [The closest source marker wins per interface](harness.md#the-closest-source-marker-wins-per-interface) | `harness.md` | superseded (#65) |
 | [Board markers that reach a test after collection read it are refused](harness.md#board-markers-that-reach-a-test-after-collection-read-it-are-refused) | `harness.md` | decided (#13) |
 | [A profile reserves the console's UART and pins, not the flash pins](harness.md#a-profile-reserves-the-consoles-uart-and-pins-not-the-flash-pins) | `harness.md` | decided (#13) |
 | [A request no backend can give is a collection error](harness.md#a-request-no-backend-can-give-is-a-collection-error) | `harness.md` | decided (#13) |
-| [The run waits before the guest boots until the test has given its declared sources](harness.md#the-run-waits-before-the-guest-boots-until-the-test-has-given-its-declared-sources) | `harness.md` | decided (#14) |
-| [A replay needs the source marker that declares it](harness.md#a-replay-needs-the-source-marker-that-declares-it) | `harness.md` | decided (#14) |
-| [The esp32sim backend refuses a model or real source at setup until it gives one](harness.md#the-esp32sim-backend-refuses-a-model-or-real-source-at-setup-until-it-gives-one) | `harness.md` | decided (#14) |
+| [The run waits before the guest boots until the test has given its declared sources](harness.md#the-run-waits-before-the-guest-boots-until-the-test-has-given-its-declared-sources) | `harness.md` | superseded (#65) |
+| [A replay needs the source marker that declares it](harness.md#a-replay-needs-the-source-marker-that-declares-it) | `harness.md` | superseded (#65) |
+| [The esp32sim backend refuses a model or real source at setup until it gives one](harness.md#the-esp32sim-backend-refuses-a-model-or-real-source-at-setup-until-it-gives-one) | `harness.md` | superseded (#65) |
 | [A replay path is relative to the test file's directory](harness.md#a-replay-path-is-relative-to-the-test-files-directory) | `harness.md` | decided (#14) |
 | [A stream replay sends each event in the turn at its time](harness.md#a-stream-replay-sends-each-event-in-the-turn-at-its-time) | `harness.md` | decided (#14) |
 | [The recording reader takes the generated recordings' header as it is](harness.md#the-recording-reader-takes-the-generated-recordings-header-as-it-is) | `harness.md` | decided (#14) |
@@ -121,6 +121,13 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [A run starts at board.power_on(), and so does the runner](harness.md#a-run-starts-at-boardpower_on-and-so-does-the-runner) | `harness.md` | decided (#64) |
 | [The test's own timeout catches a hung run, not the runner's peer timeout](harness.md#the-tests-own-timeout-catches-a-hung-run-not-the-runners-peer-timeout) | `harness.md` | decided (#64) |
 | [What is at a route's far end is what the test does with it before power-on, not a marker](harness.md#what-is-at-a-routes-far-end-is-what-the-test-does-with-it-before-power-on-not-a-marker) | `harness.md` | decided (#64) |
+| [The board's durations are numbers of seconds until the units land](harness.md#the-boards-durations-are-numbers-of-seconds-until-the-units-land) | `harness.md` | decided (#65) |
+| [A wait asks its condition in the test's thread, while the link is held](harness.md#a-wait-asks-its-condition-in-the-tests-thread-while-the-link-is-held) | `harness.md` | decided (#65) |
+| [A run that ends while the test waits raises RunEnded, with the runner's last output](harness.md#a-run-that-ends-while-the-test-waits-raises-runended-with-the-runners-last-output) | `harness.md` | decided (#65) |
+| [Teardown stops the run at the turn the test left it at](harness.md#teardown-stops-the-run-at-the-turn-the-test-left-it-at) | `harness.md` | decided (#65) |
+| [The default timeout is a marker the plugin adds to each test that uses board](harness.md#the-default-timeout-is-a-marker-the-plugin-adds-to-each-test-that-uses-board) | `harness.md` | decided (#65) |
+| [A source the backend cannot give skips the test at the test's line](harness.md#a-source-the-backend-cannot-give-skips-the-test-at-the-tests-line) | `harness.md` | decided (#65) |
+| [A leftover source marker is not refused](harness.md#a-leftover-source-marker-is-not-refused) | `harness.md` | decided (#65) |
 | [Models describe the world in its own terms, in units](harness.md#models-describe-the-world-in-its-own-terms-in-units) | `harness.md` | decided (#64) |
 | [Tests observe the device from outside, and product knowledge stays in the consumer's tests](harness.md#tests-observe-the-device-from-outside-and-product-knowledge-stays-in-the-consumers-tests) | `harness.md` | decided (#64) |
 | [The network the device reaches is simulated in the harness, in emulated time](harness.md#the-network-the-device-reaches-is-simulated-in-the-harness-in-emulated-time) | `harness.md` | decided (#64) |
