@@ -5,8 +5,7 @@ esp32sim) and the harness (`esp32tl/link/`, `BoardLink`), or any other peer that
 runner's board slot. Protocol version 1. It writes down section 4.1 of the
 [implementation plan](implementation-plan.md) and the parts of 4.2 a peer needs, checked against
 esp32sim at the project's pin, `8c65215`. Where this document and the plan differ, this document
-holds; section 11 lists the differences and why. Reviewed in
-[`protocol-review.md`](protocol-review.md), whose findings are all applied here.
+holds; section 11 lists the differences and why.
 
 The protocol follows the `SocketBoard` proposed in mikroverk/esp32sim#325, so the runner can be
 replaced by upstream's once that lands (section 10). Messages marked *ext* are runner extensions
@@ -89,7 +88,8 @@ runner                                   harness
 **Handshake.** The runner sends `hello` first; the harness checks `version` and answers with its
 own `hello`, also when it has found a mismatch; the runner checks `version` and `chip`. A
 mismatch ends the run with exit code 3 whichever side found it first: the harness's `hello`
-carries its version, so the runner finds it too. Only then does the harness close the socket.
+carries its version, so the runner finds it too. The harness then reads to end of file, as at
+every end of a run, so the runner's `stats` is written before the socket closes.
 
 **Turns.** After the handshake the runner and the peer take turns. The runner's turn ends with a
 `sync` whose `t` is the block point `B` it stopped at (rule 1). The peer's turn follows: any number
@@ -121,7 +121,7 @@ seen exactly the events up to the block point, however the emulator schedules it
 | runner → harness | `sync` | `t` | M1 |
 | runner → harness | `console` | `t`, `data` | M1 |
 | runner → harness | `warn` *ext* | `t`, `kind`, `detail`, and per kind `port`, `pin`, `baud`, `bytes` | M1 |
-| runner → harness | `stats` *ext* | `t`, `end`, `resets`, `turns`, `uart`, `unrouted_rx_bytes`, `inputs_on_output`, `inputs_not_applied` | M1 |
+| runner → harness | `stats` *ext* | `t`, `end`, `resets`, `turns`, `uart`, `unrouted_rx_bytes`, `inputs_on_output`, `inputs_not_applied`, `rx_bytes_not_paced` | M1 |
 | harness → runner | `uart_rx` | `t`, `pin`, `baud`, `data` | M1 |
 | harness → runner | `gpio_in` | `t`, `levels` | M3 |
 | harness → runner | `release` | `t`, `pins` | M3 |
@@ -174,7 +174,9 @@ The first line is the runner's, the second the harness's.
 
 Bytes the guest wrote into the TX FIFO of `port` (0 to 2), with the route as it was at the write:
 `tx_pins`, every enabled, non-inverted output the UART's TX signal reaches (more than one under
-GPIO matrix fan-out), and `baud`, `null` while the UART's clock divider is zero.
+GPIO matrix fan-out), and `baud`, `null` while the UART's clock divider is zero. `tx_pins` is the
+route's full set, watched or not, as in `uart_cfg`: `watch` decides whether the message is sent,
+not what it says.
 
 The trait reports one byte at a time (`BoardModel::uart_tx`); the runner coalesces consecutive
 bytes into one message. `t` is the time of the first byte. A message ends, and the next byte
@@ -293,8 +295,10 @@ port.
 
 Consecutive drops of one kind on one pin and port are merged into one `warn` with their count in
 `bytes` and the first drop's `t`. The merged `warn` goes out as soon as any other message is due,
-so the stream stays in `t` order, and at the latest at the end of the slice it started in (at most
-one emulated millisecond), so the last warnings of a run are not held back. A peer accepts kinds it
+so the stream stays in `t` order, and at the latest at the next whole emulated millisecond, a
+slice boundary in any case, so the last warnings of a run are not held back. Not at every slice
+end: while bytes are paced each byte ends a slice, and a 1500-byte frame overflowing the FIFO would
+give some 1400 warnings instead of one. A peer accepts kinds it
 does not know. `BoardLink` puts warnings in the test report.
 
 ### 5.9 `stats` *ext*
@@ -302,15 +306,17 @@ does not know. `BoardLink` puts warnings in the test report.
 ```json
 {"type": "stats", "t": 12000000000, "end": "max_seconds", "resets": 0, "turns": 13,
  "uart": [{"port": 1, "tx_bytes": 0, "rx_bytes": 864, "rxfifo_ovf": 0, "frm_err": 0}],
- "unrouted_rx_bytes": 72, "inputs_on_output": 0, "inputs_not_applied": 0}
+ "unrouted_rx_bytes": 72, "inputs_on_output": 0, "inputs_not_applied": 0,
+ "rx_bytes_not_paced": 0}
 ```
 
 The last message of a run, sent just before the runner closes the socket (section 9). `t` is
 where the run ended: the end of the last slice, or, after a `stop`, that turn's `sync` `t`. `end`
 says why: `max_seconds`, `stop`, `signal`, `emulator` (then also `stop`, the `Stop` variant's name,
 and `detail`, its `Debug` form), or `protocol_error` (then also `detail`). `inputs_not_applied`
-counts the queued inputs and the received bytes not yet paced into the chip when the run ended,
-so `BoardLink` can tell a scenario that reached past the end of the run. `uart` has one entry per
+counts the queued input messages not yet applied when the run ended, and `rx_bytes_not_paced` the
+received bytes not yet paced into the chip, so `BoardLink` can tell a scenario that reached past
+the end of the run. `uart` has one entry per
 port that carried a watched route during the run, with the bytes each way and the drops by kind.
 `BoardLink` puts the counts in the test report next to the matching engine's unseen requests.
 
@@ -387,9 +393,9 @@ same turn are discarded.
 
    If the new `B` is already behind the guest (the runner got control a little after the old one,
    6.1, and the peer's `quiet_until` falls in between), the runner takes the next turn at once,
-   without running the guest. The gap is under one CPU cycle, so this happens in practice only
-   while the CPU runs from the 40 MHz XTAL at boot. A block point at or after the end of the run is
-   not taken: the run ends (section 9).
+   without running the guest. The gap is under one CPU cycle, but at every clock below 240 MHz,
+   ESP-IDF's default of 160 MHz included, it is there, so this case comes up in ordinary runs. A
+   block point at or after the end of the run is not taken: the run ends (section 9).
 
    A peer that acknowledges a request and answers later must keep `quiet_until` at or before the
    answer's `t`, or the runner runs past it and the answer is late under rule 2. The same goes for
@@ -456,10 +462,12 @@ last round is cut to the cycles left (`esp-soc/src/machine.rs:691`; "the cycle c
 final round short", `:503-504`), and the idle skip is bounded by `max_cycles` too (`:600`). The
 round is counted in CPU cycles and rounded up into bus cycles (`cpu_cycles_for_bus`,
 `esp32/src/soc.rs:103-105`), so the runner gets control at some `T ≥ B` less than one CPU cycle
-later: at 240 MHz in the bus cycle of `B` itself, while the CPU runs from the 40 MHz XTAL at boot
-up to five bus cycles after it. In nanoseconds `T − B` also holds the rounding of `B` up to a whole
-bus cycle (section 3), under 4.2 ns, so it stays below 25 ns. Three consequences, all hidden from
-the peer:
+later. A CPU cycle is 1 bus cycle at 240 MHz, 1.5 at 160 MHz (ESP-IDF's default for the ESP32),
+3 at 80 MHz and 6 at the 40 MHz XTAL the chip boots from (`cpu_scale_half`,
+`esp32/src/periph.rs:989-992`), so `T` is in the bus cycle of `B` itself at 240 MHz and up to 1, 2
+or 5 bus cycles after it at the others. In nanoseconds `T − B` also holds the rounding of `B` up
+to a whole bus cycle (section 3), under 4.2 ns, so it stays below 25 ns. Three consequences, all
+hidden from the peer:
 
 - the `sync` still says `t = B`; events in `(B, T]` go out after the peer's turn (section 4);
 - an input stamped in `[B, T]` takes effect at `T`, less than one CPU cycle after its `t`;
@@ -517,16 +525,23 @@ the runner at or before its `t` (rule 1).
 | the peer is gone: the connection failed, the socket closed, a read or write failed, or the peer's turn took longer than `--peer-timeout` | nothing more | 4 |
 
 Every run ends with one line on stderr naming the cause; a protocol error names the peer's
-address and the offending message.
+address and the offending message. The first cause decides the exit code: a final `stats` that
+cannot be written, because the peer has already closed the socket, does not turn a 1 or a 3 into a
+4.
 
 `stop` reaches the runner only in a turn, and with `quiet_until` and `latency` both `null` the next
 turn may be at `--max-seconds`. The usual end of a test is earlier: `console.expect` matches, and
-teardown ends the runner. So the harness ends a run between turns with `SIGTERM`, as the
-`esp32sim` backend's teardown already does (`Esp32Sim.close` in `esp32tl/backends/esp32sim.py`:
-`SIGTERM`, then `SIGKILL` after five wall seconds), keeps reading the socket until end of file,
-and gets `stats` and the last warnings within one emulated millisecond. The runner then exits 0
-rather than dying of the signal. The signal changes only where the run ends, not what happened
-before it, so determinism is unaffected. `SIGKILL` leaves no `stats`.
+teardown ends the runner. That end belongs to the `esp32sim` backend, not to pytest-embedded:
+the runner is the backend's process, pytest-embedded's base `Dut` does not know it, and
+pytest-embedded's own teardown calls `terminate()` and `kill()` back to back
+(`pytest_embedded/plugin.py:505-506`), which would leave no time for `stats`. The backend's
+teardown, in the `board` fixture, runs before the `dut` it depends on is torn down. It sends
+`SIGTERM` (`Esp32Sim.close` in `esp32tl/backends/esp32sim.py` already does), reads the socket to
+end of file within a wall-time limit (#12), waits for the process, and sends `SIGKILL` only when
+the runner has not exited within five wall seconds. It gets `stats` and the last warnings within
+one emulated millisecond. The runner then exits 0 rather than dying of the signal. The signal
+changes only where the run ends, not what happened before it, so determinism is unaffected.
+`SIGKILL` leaves no `stats`.
 
 `--peer-timeout SECONDS` bounds, in wall time, how long the runner waits for the peer's turn to
 end (default 60; `0` waits for ever). A hung peer, say a model in another process, then fails the
@@ -569,7 +584,7 @@ Section 4.1 of the plan is superseded by this document. What changed, and why:
    with `quiet_until`. #11's checklist item for the cadence follows this document.
 3. **The `sync` `t` is the block point, and rule 2 is measured against it**, not against "the
    runner's current emulated time". The runner can get control after `B` by less than one CPU
-   cycle, at the XTAL clock during boot and from rounding nanoseconds to cycles (6.1); measured
+   cycle, at every clock below 240 MHz and from rounding nanoseconds to cycles (6.1); measured
    against that time, an answer stamped exactly `t_event + latency` would be late there.
 4. **Events after the block point wait for the next turn**, so a peer's view of the run does not
    depend on the emulator's quantum.
