@@ -101,7 +101,9 @@ Each item names the fact, where it was checked, and what changes.
     routes are ours to choose, because `nmea_reader` is this repository's firmware and the IDF
     examples take their pins from `sdkconfig`. No milestone needs the LilyGO profile. The LilyGO profile is
     filled in from the schematic when someone has it, and gets a GNSS entry only then (on that
-    board the GNSS may well be reached through the modem's AT commands).
+    board the GNSS may well be reached through the modem's AT commands). *Amended by section 11:*
+    the profile takes its GNSS route, flash and PSRAM from the first consumer's firmware, and M6's
+    validation runs on its modem route, so M6 needs the LilyGO profile.
 
 ## 2. Decisions on the open questions
 
@@ -110,9 +112,9 @@ Each item names the fact, where it was checked, and what changes.
 | Transport shape (#325 vs generalised `--cooja`) | One Python-side interface, `BoardLink`, with exactly the messages #325 proposes plus the runner-only extensions marked in 4.1. The runner speaks that protocol today; if upstream chooses the `--cooja` shape, only the runner and the `BoardLink` adapter change | The harness never sees the wire format |
 | First-milestone NMEA source | Generated, written into the recording format | Deterministic, needs no hardware, and the same file format takes a real receiver's recording later with no code change |
 | Modelled Bluetooth peer description | Deferred to milestone 8, as the spec says. Leaning to Bumble scripts (Python, already a dependency of the model) | Decided when the HCI path exists |
-| PPP peer on macOS and CI | `pppd` in a Linux container on both; macOS ships `/usr/sbin/pppd` but it needs root for the tun device, which CI and developers should not grant to a test | One code path, no privileged helper |
+| PPP peer on macOS and CI | ~~`pppd` in a Linux container on both~~ *Superseded by section 11:* the harness ends PPP itself and simulates the network in emulated time | No container, no wall time, runs repeat |
 | When the repository goes public | After milestone 1 passes on CI, as the spec says ("private until a first piece works end to end") | The plan does not change a decision the spec already made |
-| Who owns the console stream | pytest-embedded's `DuplicateStdoutPopen` owns the runner's stdout; the socket `console` message is opt-in (`--console stdout\|socket\|both`) for the console tap | One owner per stream |
+| Who owns the console stream | pytest-embedded's `DuplicateStdoutPopen` owns the runner's stdout; the socket `console` message is opt-in (`--console stdout\|socket\|both`) for the console tap. *Amended by section 11:* every run uses `--console both`; `console.expect` reads the `console` messages on the test's clock, and stdout only feeds `dut.log` | One owner per stream |
 
 ## 3. Architecture
 
@@ -486,6 +488,9 @@ recording is changed. The repository goes public here.
 
 ### M3. GPIO, ADC and the scenario timeline
 
+*Amended by section 11: the test's clock replaces the `scenario` fixture's timeline for what a test
+does in its body; `lines` stays, and the modem model needs it for PWRKEY and RI.*
+
 - Runner: `gpio_out`, `gpio_in`, `release` through the trait; `adc` through the machine's analog
   source (finding 10). Future-dated events are queued by `t` in the runner (4.1). `lines` fixture
   with `drive(pin, level, at=)`, `release(pin)`, `events()`; `scenario` fixture as a sorted
@@ -509,6 +514,8 @@ recording is changed. The repository goes public here.
 
 ### M5. The `real` source on the emulator
 
+*Amended by section 11: M6 no longer depends on this milestone.*
+
 - Design, written into docs before code: a real device on a host serial port, the runner under
   `--realtime` (`machine.rt.enabled`, public, which is all the CLI flag sets:
   `cli/src/lib.rs:829`), and each received byte stamped with the emulated cycle current at the
@@ -524,6 +531,12 @@ recording is changed. The repository goes public here.
 - Not attempted on `serial`: finding 11.
 
 ### M6. Cellular modem model and PPP
+
+*Superseded in part by section 11: the PPP data phase goes to a network the harness simulates in
+emulated time, not to `pppd`; the model is `sources/model/modem.py`; its validation is
+`pppos_client` reaching the test's MQTT broker on the LilyGO profile's modem route; and the
+scenario events below become the modem model's own calls on the test's clock. The AT subset, the
+PWRKEY and RI lines and the tap stay as described here.*
 
 - `sources/model/at_modem.py`: PWRKEY on the GPIO line (power-on pulse length from the profile), RI
   reflecting power, `AT`, `ATE0`, `AT+CPIN?`, `AT+CREG?`/`AT+CEREG?`, `AT+CSQ`, `AT+CGDCONT`,
@@ -602,12 +615,13 @@ a Bumble virtual link without the emulator. Then:
 | Unit (Rust) | `SocketBoard` pacing, deadline arithmetic, reset forwarding, late-`t` error, boot after first `wait` | `cargo test` with a fake peer |
 | End-to-end, emulator | each validation firmware against model and replay | pytest with the `esp32sim` backend, runs in CI |
 | End-to-end, real board | the subset the capability table allows | pytest with `serial`, manual or self-hosted runner |
-| Determinism | same recording twice gives identical console output and identical tap | CI job diffing two runs; holds because of protocol rule 2. PPP data-phase tests are excluded: wall time is not repeatable by definition |
+| Determinism | same recording twice gives identical console output and identical tap | CI job diffing two runs; holds because of protocol rule 2. After a TLS handshake only the plain-text traffic is compared, not its times (section 11) |
 
 CI matrix: firmware built once on the self-hosted Linux runner per IDF tag and handed on through
 the Actions cache; tests on self-hosted Linux and macos-latest with Python 3.11, 3.13 and 3.14;
 the runner built once per revision of its sources and esp32sim pin, and cached; container-backed
-tests run on Linux only.
+tests run on Linux only. *Amended by section 11:* with the network simulated in the harness, no
+planned test needs a container; Docker is for building firmware only.
 
 ## 7. Risks and what we do about them
 
@@ -617,9 +631,8 @@ tests run on Linux only.
 | #325 accepted but ADC and route configuration stay outside the trait | The runner's *ext* half remains; proposed upstream in M10; documented as a permanent small crate if declined |
 | HCI transport never lands upstream | Bluetooth stays on the patch branch; everything else ships without it |
 | Fat-LTO release builds in CI are slow | Measured in #8: a cold build takes 44 s on the self-hosted runner and 20 s on macos-latest; the runner binary is cached by revision, and a `dev` profile skips the 10 s fat-LTO re-link when iterating locally |
-| No Docker on GitHub-hosted macOS runners | Firmware built on the self-hosted Linux runner and shared through the Actions cache; container tests marked `requires_docker` and skipped where absent |
-| `pppd` in a container needs Docker locally | Documented prerequisite; the modem AT tests do not need it, only the PPP ones |
-| PPP under `--realtime` is slower and not repeatable | Only the data phase pays; the AT model and link conditions stay deterministic and run without `pppd` |
+| No Docker on GitHub-hosted macOS runners | Firmware built on the self-hosted Linux runner and shared through the Actions cache. No planned test needs a container since section 11 |
+| A minimal TCP in Python misses what a device's stack does | The link reorders nothing and loses a byte only when the firmware leaves its receive FIFO full, which the runner reports as `rxfifo_ovf` and which then fails the run; checked against lwIP in two images (section 11) |
 | Wall-time to emulated-time stamping for `real` has no upstream design | Own design in M5, written before code; `clock: wall` recordings never compared with emulated ones |
 | A real board shares a USB port with other sessions | `serial` tests off by default, selected with `--esp32tl-backend serial` |
 | Timing of emulator recordings misread as wire timing | `clock` header field, refused on cross-clock comparison |
@@ -667,5 +680,63 @@ proposed for the issue, to be posted once agreed:
    is out of scope."
 3. **First-milestone board.** "The first milestone runs on a generic `esp32-devkitc` profile with
    a GNSS route chosen for the repository's own `nmea_reader` firmware (UART1, GPIO 4/5). The
-   LilyGO T-A7670G R2 profile keeps only what the spec gives and is completed from the vendor
-   schematic later; it is not needed by any validation firmware."
+   LilyGO T-A7670G R2 profile takes what the first consumer's firmware gives: the modem route and
+   lines, the GNSS route (UART2, GPIO 21/22), 4 MB of flash and PSRAM; the rest waits for the vendor
+   schematic. The modem's validation firmware runs on its modem route." *Amended by section 11,
+   before this text was posted.*
+
+## 11. Amendments from running the first consumer's image (2026-10-31)
+
+A spike ran the first consumer's release image, unmodified, under esp32tl, with a modelled GNSS
+receiver and a simulated network, and turned up how tests should read and what the network takes.
+The decisions, with what they rejected and the measurements behind them, are in
+[`decisions/harness.md`](decisions/harness.md):
+
+- [The board's clock is the test's](decisions/harness.md#the-boards-clock-is-the-tests-emulated-time-moves-only-while-the-test-waits):
+  `board.power_on()`, `board.wait()`, `board.wait_until()`, `board.now`, and `console.expect`
+  timed on the board's clock. This takes over the timeline part of M3's `scenario` fixture.
+- [A run starts at `board.power_on()`, and so does the runner](decisions/harness.md#a-run-starts-at-boardpower_on-and-so-does-the-runner),
+  and [the test's own timeout catches a hung run](decisions/harness.md#the-tests-own-timeout-catches-a-hung-run-not-the-runners-peer-timeout).
+- [What is at a route's far end is what the test does with it](decisions/harness.md#what-is-at-a-routes-far-end-is-what-the-test-does-with-it-before-power-on-not-a-marker),
+  not a `source` marker.
+- [Models describe the world in its own terms, in units](decisions/harness.md#models-describe-the-world-in-its-own-terms-in-units):
+  the GNSS receiver model (`sources/model/gnss.py`) comes before M2, and a units module with it.
+  Models are named after their device, so section 3's `nmea.py` and `at_modem.py` become
+  `gnss.py` and `modem.py`; they share one world time, which NTP tells too.
+- [Tests observe the device from outside](decisions/harness.md#tests-observe-the-device-from-outside-and-product-knowledge-stays-in-the-consumers-tests);
+  a consumer's vocabulary lives in its own tests.
+- [The network is simulated in the harness](decisions/harness.md#the-network-the-device-reaches-is-simulated-in-the-harness-in-emulated-time):
+  PPP, IPv4, UDP, an accept-only TCP, DNS, NTP, TLS with a CA made per test, and an MQTT broker,
+  in `esp32tl/net/`. This replaces M6's `pppd` data phase, and with it M6's dependence on M5,
+  Docker and `--realtime`.
+- [Flash contents go into a partition of the build's own table](decisions/harness.md#flash-contents-besides-the-build-go-into-a-partition-of-the-builds-own-table-by-name):
+  `board.nvs({...})` first.
+- [The LilyGO profile takes its GNSS route, flash and PSRAM from the first consumer's firmware](decisions/harness.md#the-lilygo-profile-takes-its-gnss-route-flash-and-psram-from-the-first-consumers-firmware),
+  amending finding 12.
+
+What the spike could not reach, and which milestones it moves forward:
+
+- The first consumer drops its telemetry without an SD card (`Capture dropped_samples=...`), so
+  its trips reach the cloud only with M7's card model.
+- Its modem power-off reads RI (`Modem still powered 8 s after its PWRKEY power-off` without it),
+  so the modem model needs M3's `gpio_out` and `gpio_in` before it can model power.
+- A modem model ignores what is not a command in command mode: the first consumer sends `+++` there
+  to be sure it is out of data mode, and answering it shifts every later answer by one.
+- A device that checks a certificate's dates needs the calendar first: the first consumer waits for
+  NTP before TLS, so the simulated network serves NTP from the start.
+- The recording format's clock switch ([`recording-format.md`](recording-format.md#clock-switches))
+  names M6's data phase as its use. M6 no longer switches clocks, so the modem's PR corrects that
+  reference, and the switch stays for the `real` source of M5.
+
+Order of work after M1. Section 9 covered M0 and M1; what the list below does not take from
+section 5 follows it in that section's order:
+
+1. The test's clock, `power_on()` with the runner started there, the console on the clock, the
+   test's timeout, and routes without the `source` marker: one change to the backend and the
+   plugin, with `tests/` moved to `power_on()`.
+2. Units and the GNSS receiver model, validated on `nmea_reader`.
+3. The LilyGO profile's GNSS route, flash and PSRAM, and `--psram-mb` from the profile.
+4. `board.nvs()`.
+5. The modem model and the simulated network, validated on `pppos_client` from esp-protocols at
+   `modem-v1.4.1` on the LilyGO profile's modem route.
+6. M3's `gpio_out` and `gpio_in` for the modem's PWRKEY and RI, then M7's SD card model.

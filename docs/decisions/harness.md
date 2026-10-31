@@ -246,6 +246,10 @@ plugin's only flag.
 
 Status: decided (#51)
 
+*Decided in #64 to give way to [the board's clock is the
+test's](#the-boards-clock-is-the-tests-emulated-time-moves-only-while-the-test-waits); this is what
+the code does until that lands.*
+
 The backend starts the runner with `--max-seconds 300` (`MAX_SECONDS`). A test normally ends the
 run earlier, at teardown; the limit also stops a runner left behind by a harness that died. On an
 M2 Pro, `hello_world` runs 12 emulated seconds in 0.3 s of wall time, and 300 in 5.9 s.
@@ -282,6 +286,11 @@ how a relative path resolves before anyone has asked.
 ## The LilyGO profile leaves out what the specification does not give
 
 Status: decided (#13)
+
+*Decided in #64 to give way to [the LilyGO profile takes its GNSS route, flash and PSRAM from the
+first consumer's
+firmware](#the-lilygo-profile-takes-its-gnss-route-flash-and-psram-from-the-first-consumers-firmware);
+this is what the code does until that lands.*
 
 `lilygo-t-a7670g-r2.toml` holds the chip, the modem's UART (UART1, GPIO 26/27, 115200 baud) and its
 `pwrkey` and `ri` lines, all from the specification, and the pull-down on `ri` that stage 0 found
@@ -323,6 +332,11 @@ distinction comes with a way to drive an off-board interface of a real board fro
 
 Status: decided (#13)
 
+*For the `source` marker, decided in #64 to give way to [what is at a route's far end is what the
+test does with
+it](#what-is-at-a-routes-far-end-is-what-the-test-does-with-it-before-power-on-not-a-marker); this
+is what the code does until that lands. The `tap` marker keeps it until #21.*
+
 The `source` and `tap` markers name what a test needs; `pytest_generate_tests` marks the
 parameter of each backend that cannot give it with `pytest.mark.skip(reason=...)`. pytest skips
 such an item before setting up any fixture.
@@ -335,6 +349,10 @@ the backend has started.
 ## The closest source marker wins per interface
 
 Status: decided (#13)
+
+*Decided in #64 to give way to [what is at a route's far end is what the test does with
+it](#what-is-at-a-routes-far-end-is-what-the-test-does-with-it-before-power-on-not-a-marker); this
+is what the code does until that lands.*
 
 For each interface, the `source` marker closest to the test decides, as the closest `app_path`
 and `board_profile` do, so a test can override its module's source. Each class of a test class's
@@ -377,6 +395,11 @@ module and its flash mode, and a profile does not name its module.
 
 Status: decided (#13)
 
+*For the `source` marker, decided in #64 to give way to [what is at a route's far end is what the
+test does with
+it](#what-is-at-a-routes-far-end-is-what-the-test-does-with-it-before-power-on-not-a-marker); this
+is what the code does until that lands. The `tap` marker keeps it until #21.*
+
 A `source` or `tap` marker that names an interface the profile lacks, or a source or tap that no
 declared backend gives, fails collection with the test's id.
 
@@ -386,6 +409,11 @@ then pass the run as skipped, never as wrong.
 ## The run waits before the guest boots until the test has given its declared sources
 
 Status: decided (#14)
+
+*Decided in #64 to give way to [the board's clock is the
+test's](#the-boards-clock-is-the-tests-emulated-time-moves-only-while-the-test-waits) and [a run
+starts at board.power_on()](#a-run-starts-at-boardpower_on-and-so-does-the-runner); this is what the
+code does until that lands.*
 
 The specification's test calls `gnss.replay(path)` in its body, after the `board` fixture has
 started the runner. The runner sends its first `sync` at `t = 0` and boots the guest only after
@@ -413,6 +441,10 @@ shows only with a failure or `-rA`.
 
 Status: decided (#14)
 
+*Decided in #64 to give way to [what is at a route's far end is what the test does with
+it](#what-is-at-a-routes-far-end-is-what-the-test-does-with-it-before-power-on-not-a-marker); this
+is what the code does until that lands.*
+
 `gnss.replay(path)` is refused without `@pytest.mark.source("uart.gnss", "replay")`. Only a
 declared route is on the link, so the board knows at setup which sources to wait for, and the
 marker is what skips the test on a backend that cannot replay (`serial`).
@@ -425,6 +457,10 @@ already rejects.
 ## The esp32sim backend refuses a model or real source at setup until it gives one
 
 Status: decided (#14)
+
+*Decided in #64 to give way to [what is at a route's far end is what the test does with
+it](#what-is-at-a-routes-far-end-is-what-the-test-does-with-it-before-power-on-not-a-marker); this
+is what the code does until that lands.*
 
 The capability declaration gives `esp32sim` `model`, `replay` and `real` on every UART, which is
 what the backend is to give; it gives `replay` only so far. A test that declares another gets
@@ -580,3 +616,257 @@ Status: postponed (#21)
 `esp32tl replay` takes one `--interface` and one `--recording`: no profile has two UART routes a
 recording can go into yet. `esp32tl record` comes with `tap(path)` (#21), which writes what it
 records.
+
+## The board's clock is the test's: emulated time moves only while the test waits
+
+Status: decided (#64)
+
+Under pytest, every run is held in the harness's turn of the link for as long as the test body
+runs, and moves on only inside `board.wait(duration)` and `board.wait_until(condition,
+within=duration)`; `board.now` is the time since power-on. A test can therefore describe the
+world around the board step by step (a receiver starts moving, the cloud publishes) and each
+change lands at the exact emulated instant the test saw. `wait(d)` bounds the next turn at
+`now + d`. `wait_until` lets the run go in steps of at most 100 emulated milliseconds, or to the
+next event of the link, asks the condition at each turn and returns what the condition returned
+at the first turn it holds; when `within` runs out it raises `NeverHappened`, an
+`AssertionError` that names the condition and the time it waited from and to, and when the run
+ends first it raises `RunEnded`, with the reason. The `esp32tl` command has no test body, and
+keeps running its clock free.
+
+The console is read from the link's `console` messages (`--console both`), which arrive in
+emulated-time order with the turns; the runner's stdout still feeds pytest-embedded's `dut.log`.
+`console.expect` and `expect_exact` keep pytest-embedded's names, its search from the end of the
+last match, its return values and `return_what_before_match`, but the matching is esp32tl's and
+waits on the held clock: `timeout`, 30 by default as before, is in seconds of the board's clock,
+and a pattern that does not appear raises `NeverHappened` instead of pexpect's `TIMEOUT`.
+`expect_all` and `not_matching` are not carried over until a test needs them.
+
+A run has no length of its own any more: it lasts as long as the test waits. The backend starts
+the runner with `--max-seconds 86400`, a day of emulated time, only because the flag is required;
+a test that reaches it gets `RunEnded`. A runner whose harness has died does not need the limit
+either: it sees the socket close and exits with code 4 (protocol §9). Until it is implemented,
+[the run waits before the guest boots until the test has given its declared sources](#the-run-waits-before-the-guest-boots-until-the-test-has-given-its-declared-sources)
+and [a run lasts at most 300 emulated seconds](#a-run-lasts-at-most-300-emulated-seconds) describe
+the code.
+
+Measured on a spike on 2026-10-31, on the protocol as it is, with no runner change, only
+`--console both`: `nmea_reader` and the first consumer's release image ran their tests on the held
+clock, 222 emulated seconds of the first consumer in 8 s of wall time, and two runs of the same
+test printed the same console line at the same emulated millisecond. `hello_world` and the four
+`nmea_reader` tests of `tests/` needed `board.power_on()` added, and the `nmea_reader` ones lost
+their `source` marker ([below](#what-is-at-a-routes-far-end-is-what-the-test-does-with-it-before-power-on-not-a-marker)).
+
+**Rejected:** keeping a free-running clock beside the held one, for tests that only expect on the
+console, because a test would then have two models of time to keep apart, and the free-running
+one measures its timeouts in wall time, which [stage 0](../stage0-findings.md#speed) showed
+cannot be relied on. Also rejected: an `async` test API, because pytest and pytest-embedded are
+synchronous and a held clock gives the same reading order without it; and keeping the 300 s
+limit, because a scenario's length would then be capped by a safety net that no longer has
+anything to catch.
+
+## A run starts at board.power_on(), and so does the runner
+
+Status: decided (#64)
+
+The test body sets up what is around the board and in its flash, then calls `board.power_on()`,
+which starts the runner and lets the guest boot. A test that waits before it gets
+`the board is off; call board.power_on() first`. A test that set up something only a run can use
+(a source on a route, a modem or a network service, flash contents) and never called
+`power_on()` gets an error at teardown, as a test that never gave its declared source does now:
+it ran no firmware, and would pass whatever the firmware does. A test that touched none of these,
+such as one that only reads `board.profile`, passes without a runner. Starting the runner at
+power-on rather than at the `board` fixture's setup lets the body still choose what the flash
+holds besides the build.
+
+**Rejected:** booting at the first `wait` or `expect`, as
+[the decision on held starts](#the-run-waits-before-the-guest-boots-until-the-test-has-given-its-declared-sources)
+already rejected for an implicit trigger; starting the runner at setup and the guest at
+`power_on()`, because the flash images are fixed when the runner starts; and passing every test
+that never powers on, because a test that set up a replay and asserts that nothing was published
+would pass with no firmware run.
+
+## The test's own timeout catches a hung run, not the runner's peer timeout
+
+Status: decided (#64)
+
+With the clock held by the test, the runner waits in its turn for as long as the test body runs, so
+the backend starts it with `--peer-timeout 0`. What ends a run that hangs, in the harness or in the
+emulator, is the test's timeout in wall time, through pytest-timeout, which becomes a dependency of
+esp32tl. The plugin gives every test that uses `board` a default of 600 s unless the test's own
+configuration sets one: a `timeout` ini option, `--timeout`, the `PYTEST_TIMEOUT` environment
+variable or a `timeout` marker. A configured `timeout = 0` is the user's choice and is kept; their
+CI's job timeout is then the only limit. pytest-timeout turns itself off when it detects a debugger
+such as pdb, unless `--timeout-disable-debugger-detection` is given. The backend's teardown ends the
+runner as for any other failed test; on the spike a test with a 2 s timeout that waited 4:50 of the
+board's time failed with `Timeout (>2.0s) from pytest-timeout` and left no runner behind. The limits
+a test states, `within=` and `timeout=`, are in the board's time and are part of what it tests; the
+wall-time timeout only says the harness or the emulator is stuck.
+
+600 s leaves room for a test that keeps the CPU busy: stage 0 measured CPU-bound code at 0.3 to
+1.7 times real time, so ten minutes of wall time covers at least three minutes of the board's
+busiest work, and far more of an idle board.
+
+**Rejected:** keeping the 60 s default of `--peer-timeout`, because a test stopped in a debugger
+for a minute would lose its run, and it is a second limit, hidden in the runner, on top of the
+test's own; and no default, because a run that hangs would then hang a CI job until the job's own
+limit.
+
+## What is at a route's far end is what the test does with it before power-on, not a marker
+
+Status: decided (#64)
+
+Every UART route of the board profile is on the link from the start, listening and silent. The
+`gnss` fixture becomes a replay when the test calls `gnss.replay(path)` and a modelled receiver
+when it calls `gnss.fix(...)` or another model method, before `board.power_on()`; the `source`
+marker is no longer needed to say it again. A backend whose capability declaration does not give
+what the test asked for skips the test at that call, with the reason, as `serial` does for a
+model: the test still runs on `esp32sim`. A source that no backend gives is an error at the call,
+not a skip, as it is a collection error now. The `real` source has no call yet, and gets one with
+M5. The `tap` marker is not part of this decision: taps come with #21, and so does the decision on
+how a test asks for one.
+
+Until it is implemented, these describe the code:
+[a replay needs the source marker that declares it](#a-replay-needs-the-source-marker-that-declares-it),
+[a source or tap a backend cannot give skips its parameter at collection](#a-source-or-tap-a-backend-cannot-give-skips-its-parameter-at-collection),
+[the closest source marker wins per interface](#the-closest-source-marker-wins-per-interface),
+[a request no backend can give is a collection error](#a-request-no-backend-can-give-is-a-collection-error)
+and [the esp32sim backend refuses a model or real source at setup until it gives one](#the-esp32sim-backend-refuses-a-model-or-real-source-at-setup-until-it-gives-one).
+
+**Rejected:** keeping the marker, because the test states the source twice, once in a decorator
+far from the body; the reason it was needed, that the board had to know at setup whether to wait,
+is gone once the run starts at `power_on()`. The cost accepted: on the `serial` backend a test is
+skipped in its body rather than before its setup, after pytest-embedded has opened the board's
+port, which [the skip at collection](#a-source-or-tap-a-backend-cannot-give-skips-its-parameter-at-collection)
+was made to avoid.
+
+## Models describe the world in its own terms, in units
+
+Status: decided (#64)
+
+A model speaks the vocabulary of the device it stands for and nothing more, and its file is named
+after the device: `sources/model/gnss.py`, `sources/model/modem.py`. The GNSS receiver model is
+told `fix(at=position)`, `move(heading=..., speed=...)`, `stand_still()`, `lose_fix()`,
+`degrade(hdop=..., satellites=...)` and `go_silent()`; each change holds from the board's current
+instant until the next one, and it sends an RMC and a GGA with the same UTC time once a second.
+Quantities are values with their unit, built by `seconds()`, `minutes()`, `km_h()`, `mph()`,
+`knots()`, `m()`, `km()`, `miles()` and `Position(lat, lon)`, and compared with
+`about(value, within=tolerance)`, so no number in a test leaves its unit to the reader. Words of a
+product, a car that drives or a bike that is ridden, belong in that product's own tests, built on
+the model. On the spike the model drove the first consumer's release image to the same power
+decision as a generated recording of the same trip, one second earlier because its first epoch
+is one second earlier.
+
+The models share one world time: a UTC instant at power-on, `2026-01-01T12:00:00Z` unless the test
+gives another as `board.power_on(utc=datetime(...))`, plus the board's clock. The GNSS receiver
+dates its sentences from it, and the network's NTP server tells it, so runs repeat whatever the
+host's clock says.
+
+**Rejected:** vehicle verbs in esp32tl, because the same receiver sits in products that are not
+vehicles; plain numbers in a unit the API implies, because kilometres, miles and knots all occur
+in the same domain; and the host's clock as the world's time, because runs would then not repeat.
+
+## Tests observe the device from outside, and product knowledge stays in the consumer's tests
+
+Status: decided (#64)
+
+A test asserts on what the firmware does on its wires and through them: its console, its pins,
+the bytes on its UARTs, and what reaches the services it talks to. A consumer interprets those in
+its own vocabulary in its own tests (which topic is its status, what its report means), the way
+the first consumer's spike wraps its status reports in a `Status` value. esp32tl knows protocols
+(NMEA, AT, PPP, MQTT) and the ESP-IDF platform (its partition table, NVS), never a product.
+
+**Rejected:** a log level of its own for tests, because it needs the firmware changed and the
+tests would then check something that does not ship; and reading the guest's memory by ELF symbol,
+because it ties a test to the firmware's internals and cannot work on a real board.
+
+## The network the device reaches is simulated in the harness, in emulated time
+
+Status: decided (#64)
+
+When a modem model is dialled, the harness ends the link itself: PPP (LCP and IPCP, handing the
+device an address and a DNS server), IPv4, UDP, and a TCP that only accepts. The runner paces
+what goes into the device and reports every byte the device sends, so as long as the firmware
+drains its receive FIFO the link loses and reorders nothing, and that TCP needs no retransmission,
+congestion control or timers. A byte the device's FIFO drops is reported as an `rxfifo_ovf`
+warning; on a route that carries the network it fails the run, as a `frm_err` does, since PPP
+would drop the frame and the connection would stall until the test's timeout with nothing to say
+why.
+
+Every destination answers: a connection goes to the service on its destination port, whatever
+the address, and a DNS query for any name returns the network's one address, so the device keeps
+the names and addresses it was built with. One service listens per port; telling two names apart
+on one port, by TLS's server name, is left until a test needs it. The services are the test's: a
+DNS server, an NTP server telling [the world's time](#models-describe-the-world-in-its-own-terms-in-units),
+TLS in front of any service with a certificate authority made for the test, its certificates
+valid from 2000 to 2099 so that any plausible device clock accepts them, and an MQTT 3.1.1 broker
+whose messages the test waits for and publishes to. All of it runs in the harness's turns, on the
+board's clock, in about 1 040 lines of Python with the modem model.
+
+Measured on the spike: esp-protocols' `pppos_client` (esp_modem 1.4.1, SIM7600 commands, changed
+in its sdkconfig only) dialled, got its address, resolved its broker, connected and published in
+0.18 emulated seconds, and received what the test published; two runs gave the same transcript.
+The first consumer's release image, given its credentials and the test's CA, dialled, asked NTP
+and DNS, completed a TLS 1.2 handshake (ECDHE-RSA-AES256-GCM-SHA384), logged in, subscribed to
+its four topics and published its status reports, which the test read.
+
+**Rejected:** `pppd` in a Linux container with NAT to the host and the data phase under
+`--realtime`, as plan M6 had it, because the far end then lives in wall time: runs do not repeat,
+the test cannot hold the clock, Docker becomes a requirement, and what the device sends ends up
+in the host's network rather than in front of the test. Also rejected: the TCP/IP stack in the
+runner, with smoltcp or a stack like esp32sim's user-mode NAT, because the modem's bytes already
+reach the harness and a stack there would only add messages to the protocol; and a bridge to a
+broker such as mosquitto as the default, which brings wall time back.
+
+## A bridge from the simulated network to a real service is postponed
+
+Status: postponed (#67)
+
+A consumer may want its real backend at the far end, in a container or on the host, at the cost
+of wall time and of repeatable runs, as with the `real` source. Nothing needs it yet: the services
+in the harness are enough for every test written so far.
+
+## A TLS stack with a seeded random source is postponed
+
+Status: postponed (#68)
+
+The device's side of a TLS session repeats: esp32sim's random number generator is a xorshift from a
+fixed seed and the cycle count (`esp-periph/src/rng.rs`), so the firmware draws the same bytes in
+every run. The harness's side does not: Python's `ssl` takes its keys and nonces from the system. On
+the spike two runs were identical up to the TLS handshake and differed by 1 to 3 emulated
+milliseconds after it, with the same messages in the same order. Why the times move was not
+measured; the likely cause is the device's arithmetic on the server's fresh keys, which takes a
+different time for different values. What would fix it is on the harness's side only: a TLS server
+with a seeded random source, or fixed ephemeral keys. Until that proves worth its cost, the
+determinism job (#22) is to compare what crossed the link in plain text and leave out the times
+after a handshake.
+
+## Flash contents besides the build go into a partition of the build's own table, by name
+
+Status: decided (#64)
+
+`board.nvs({namespace: {key: value}})` writes an NVS partition, named `nvs` unless the call names
+another, from the partition table of the build under test, before `board.power_on()`. Strings are
+`string`, bytes `binary`, and integers are spelled with their width, `u8()`, `u16()`, `u32()`,
+`i32()`, since the firmware reads them by type. The image is made with ESP-IDF's own generator,
+`esp-idf-nvs-partition-gen`. Other formats, a FAT or LittleFS image from a directory, come when a
+test needs one. Where a firmware keeps its configuration, and what it is, is the consumer's: the
+first consumer's spike writes its credentials, broker and CA with this one call.
+
+**Rejected:** helpers that know a product's configuration, because that is product knowledge;
+and an offset in the test, because it repeats the partition table and breaks when it changes.
+
+## The LilyGO profile takes its GNSS route, flash and PSRAM from the first consumer's firmware
+
+Status: decided (#64)
+
+The profile gets `[uart.gnss]`, UART2 with TX on GPIO 21 and RX on GPIO 22 at 9600 baud, the
+first consumer's defaults for its L76K receiver, `flash_mb = 4` from its `sdkconfig`, and
+`psram_mb = 4`; the backend passes `psram_mb` to the runner as `--psram-mb`. The first consumer's
+`sdkconfig` turns PSRAM on, and without it its release image runs degraded and logs
+`PSRAM not found`. The WROVER-E carries 8 MB of PSRAM, of which the emulator models 4, the most the
+runner accepts. Until it is implemented,
+[the LilyGO profile leaves out what the specification does not give](#the-lilygo-profile-leaves-out-what-the-specification-does-not-give)
+describes the profile.
+
+**Rejected:** waiting for the vendor schematic, as plan finding 12 did, because the first consumer's
+firmware is the source the modem route already comes from, and its build fixes these values.
