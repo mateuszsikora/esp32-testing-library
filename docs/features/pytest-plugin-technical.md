@@ -1,7 +1,8 @@
 # pytest plugin: how it works
 
 The plugin is `esp32tl/pytest_plugin.py`, with the backend registry in
-`esp32tl/backends/__init__.py`, the console in `esp32tl/interfaces/console.py`, and the board
+`esp32tl/backends/__init__.py`, the console in `esp32tl/interfaces/console.py`, the UART
+interface behind `gnss` in `esp32tl/interfaces/uart.py`, and the board
 profiles and capability declaration in `esp32tl/boards/`
 ([board-profiles-technical.md](board-profiles-technical.md)). What the user
 sees is in [pytest-plugin-user.md](pytest-plugin-user.md); the backend it starts is in
@@ -63,7 +64,9 @@ sees is in [pytest-plugin-user.md](pytest-plugin-user.md); the backend it starts
 5. **`board` fixture**, at setup: asserts `request.param == Esp32Sim.name`, makes the test an error
    if `dut` is not a single `Dut` (pytest-embedded makes a tuple of duts when `count` is
    parametrised above 1), and constructs
-   `Esp32Sim(dut, app_path, msg_queue, _meta, board_profile(request.node))`. A
+   `Esp32Sim(dut, app_path, msg_queue, _meta, board_profile(request.node), sources, directory=request.path.parent)`,
+   where `sources` is `{request.interface: request.source}` for every request of
+   `board_requests(request.node)` with a source, and the directory is the test file's. A
    `BackendError` goes through `backend_failed`, which raises
    `pytest.fail.Exception(f"{Esp32Sim.name}: {error}", pytrace=False) from None`: one line, no
    chained traceback.
@@ -75,14 +78,30 @@ sees is in [pytest-plugin-user.md](pytest-plugin-user.md); the backend it starts
 7. **`board` fixture**, at teardown: `backend.close()`. A `BackendError` from it goes through
    `backend_failed` unless `request.node.stash.get(EXPECT_SAW_RUNNER_EXIT, False)`: an expect that
    ended on the runner's exit has already reported the exit code and the link's error, and the
-   test would otherwise show them twice. Then, whatever `close` did, it adds the report section
+   test would otherwise show them twice. When `close` returned, and `backend.never_started` names
+   an interface while `request.node.stash.get(DID_NOT_PASS, False)` does not hold, it fails the
+   teardown with `pytest.fail(..., pytrace=False)`:
+   `esp32sim: the run never started: it waited for the {source} of {interface}, which the source marker declares; give it in the test body`
+   (` and ` between several). `pytest_runtest_makereport` sets `DID_NOT_PASS` on an item whose setup
+   or call did not pass (`not report.passed`: failed, skipped, or xfailed, which pytest reports as
+   skipped), so a test with an outcome of its own already is not reported on top of it. Then,
+   whatever `close` did, it adds the report section
    `("teardown", "esp32sim link", backend.link.report())` with `request.node.add_report_section`,
    and appends `("esp32sim_link", json.dumps(backend.link.properties()))` to
    `request.node.user_properties`. The property is a JSON string because JUnit XML writes a
    property's `str()`, which for a `dict` is Python's `repr`.
-8. **`console` fixture** returns `Console(board.dut)`. `Console.__init__` binds `expect` and
-   `expect_exact` to the dut's own methods, so their arguments, return values and 30 s default
+8. **`console` fixture** returns `Console(board.dut, board.waiting)`. `Console.expect` and
+   `Console.expect_exact` are the dut's own wrapped with `functools.wraps`, so they show their
+   signatures and documentation, and call `waiting()` first: while it names an interface, the run is
+   held for that interface's source, and they raise `SourceError`
+   (`the run has not started: it waits for the {source} of {interface}, which the source marker declares; give it before waiting on the console`,
+   ` and ` between several). Otherwise they call the dut's own `expect` and `expect_exact` with
+   every argument and return what it returns, so their arguments, return values and 30 s default
    timeout (pexpect's `timeout=30`) are pytest-embedded's.
+9. **`gnss` fixture** returns `board.uart("gnss")`, the `Uart` of `uart.gnss`: the one on the link
+   when the test declared its source, else one on no link. A profile without the route makes
+   `uart` raise `BackendError`, which goes through `backend_failed`. `Uart.replay(path)` is in
+   [replay-technical.md](replay-technical.md#data-flow).
 
 ## Interfaces
 
@@ -92,10 +111,15 @@ sees is in [pytest-plugin-user.md](pytest-plugin-user.md); the backend it starts
 | `app_path(path)` | marker | One positional path, relative to the test file's directory; default that directory |
 | `board_profile(name)`, `source(interface, source)`, `tap(*interfaces)` | markers | The board profile and the test's requests ([board-profiles-technical.md](board-profiles-technical.md#interfaces)) |
 | `board(request, dut, app_path, msg_queue, _meta)` | fixture, function scope | Yields an `Esp32Sim`; closes it at teardown, then adds the `esp32sim link` report section and the `esp32sim_link` user property |
-| `console(board)` | fixture, function scope | Returns `Console(board.dut)` |
-| `Console` | class, `esp32tl/interfaces/console.py` | Attributes `dut`, `expect`, `expect_exact`; no `write` |
+| `console(board)` | fixture, function scope | Returns `Console(board.dut, board.waiting)` |
+| `gnss(board)` | fixture, function scope | Returns `board.uart("gnss")` |
+| `Console(dut, waiting=dict)` | class, `esp32tl/interfaces/console.py` | Attribute `dut`; methods `expect`, `expect_exact`; no `write`. The `waiting` argument, a callable, returns the interfaces the run waits for, with their sources |
+| `Uart(name, wire, *, declared, clock, directory, on_source=...)` | class, `esp32tl/interfaces/uart.py`, a `BoardLink` `Interface` | `uart.<role>` and its source: attributes `declared` (the marker's source, or `None`), `clock`, `directory`, `source` (`None` until given); `replay(path)` returns the `Replay`. Without a source it hears everything and says nothing; with one, `receive`, `poll`, `quiet_until` and `latency` are the source's |
+| `Source` | protocol, `esp32tl/interfaces/uart.py` | `receive(t, data)`, `poll(now)`, `quiet_until()`, `latency()`: what drives a `Uart` |
+| `SourceError` | exception, `esp32tl/interfaces/__init__.py` | A source given otherwise than declared, or not given before an expect |
 | `SERVICES` | `dict[str, str \| None]`, `esp32tl/backends/__init__.py` | Backend name to the `embedded_services` it runs under, in parametrisation order; `None` is no service, pytest-embedded's base `Dut`. Now `{"esp32sim": None}` |
 | `EXPECT_SAW_RUNNER_EXIT` | `pytest.StashKey[bool]` | Set on an item whose call failed on an expect that read the runner's end |
+| `DID_NOT_PASS` | `pytest.StashKey[bool]` | Set on an item whose setup or call failed, skipped or xfailed |
 | `backend_failed(error)` | function | Raises the one-line `pytest.fail` for a `BackendError` |
 
 `board` constructs `Esp32Sim` for every parameter and asserts that the parameter is its name: a
@@ -108,7 +132,7 @@ second entry in `SERVICES` without a change to `board` fails that assertion.
 | `--esp32tl-backend` | unset: every key of `SERVICES` | `pytest_generate_tests` |
 | `app_path` marker | the test file's directory | `pytest_generate_tests` |
 | `board_profile` marker | `esp32-devkitc` (`DEFAULT_PROFILE`) | `pytest_generate_tests`, `board` |
-| `source`, `tap` markers | none: the test runs on every backend | `pytest_generate_tests` |
+| `source`, `tap` markers | none: the test runs on every backend | `pytest_generate_tests`; `board`, for the sources the run waits for |
 | pytest-embedded's `embedded_services`, `app_path` | set per test by the parametrisation | pytest-embedded's fixtures |
 | pytest-embedded's `--embedded-services`, `--app-path`, `--build-dir`, `--count` | must be unset (`--count` 1) when a selected test uses `board` | `pytest_collection_modifyitems` |
 
@@ -129,6 +153,10 @@ pytest-embedded's `build_dir` fixture. The backend's own environment variables a
 | `ERROR: {item.nodeid}: the {marker} marker reached the test after esp32tl read it, from a pytest.param or a hook: put it on the test, its class or its module` | A selected test that uses `board` carries a board marker from a `pytest.param` or a hook; `a source or tap marker` in place of `the {marker} marker` when the item's `source` markers clash, as when a hook adds one to the module once per item | Usage error, exit code 4 |
 | `count is above 1: esp32tl runs one board in a test` | The test parametrises `count` above 1 itself, so `dut` is a tuple | Error at setup |
 | `esp32sim: {error}` | `Esp32Sim(...)` raised a `BackendError` | Error at setup; messages in [esp32sim-backend-technical.md](esp32sim-backend-technical.md#failure-modes) |
+| `esp32sim: the board profile {name} has no uart.gnss; its interfaces are {interfaces}` | The test uses `gnss` on a profile without the route | Error at setup |
+| `esp32sim: the run never started: it waited for the {source} of {interface}, which the source marker declares; give it in the test body` | A test whose setup and call passed without giving a source it declared | Error at teardown |
+| `the run has not started: it waits for the {source} of {interface}, which the source marker declares; give it before waiting on the console` | `SourceError` from an expect while the run is held | Fails the test at once |
+| `uart.gnss has no source marker that names replay: ...`, `uart.gnss has its source already: one per test` | `SourceError` from `Uart.replay` | Fails the test ([replay-user.md](replay-user.md#when-the-test-gets-it-wrong)) |
 | `esp32sim: {problems}; its output is in {self.dut.logfile}` | `Esp32Sim.close` raised, and no expect of the call reported the runner's exit. `{problems}` is the exit code, the kill or the link's error ([esp32sim-backend-technical.md](esp32sim-backend-technical.md#failure-modes)) | Error at teardown, also after a passing call |
 
 The refusals are raised in `pytest_collection_modifyitems`, not `pytest_generate_tests`: raised
@@ -165,6 +193,11 @@ The markers of the board profiles are tested in the same file:
 `test_a_board_marker_a_hook_adds_is_refused`, `test_a_subclass_s_source_overrides_its_base_s` and
 `test_the_board_runs_the_profile_the_test_chose`
 ([board-profiles-technical.md](board-profiles-technical.md#tests)).
+
+`tests/test_gnss_fixture.py` runs `gnss.replay` into `nmea_reader` on the real runner, and,
+through `pytester`, each `SourceError` and setup error above with a declared source never given
+([replay-technical.md](replay-technical.md#tests)). `tests/test_replay.py` tests `Uart` without
+an emulator.
 
 `tests/test_package.py` checks the `pytest11` entry point (`test_plugin_is_registered_through_pytest11`)
 and that pytest loaded the module under the name `esp32tl` (`test_pytest_loaded_the_plugin`).

@@ -383,12 +383,117 @@ declared backend gives, fails collection with the test's id.
 **Rejected:** skipping such a test on every backend, because a misspelt source (`"replya"`) would
 then pass the run as skipped, never as wrong.
 
+## The run waits before the guest boots until the test has given its declared sources
+
+Status: decided (#14)
+
+The specification's test calls `gnss.replay(path)` in its body, after the `board` fixture has
+started the runner. The runner sends its first `sync` at `t = 0` and boots the guest only after
+the harness's first `wait` (protocol §6, rule 4), so `BoardLink` holds that first turn until every
+interface a `source` marker declares has its source; emulated time does not move meanwhile. A
+recording replayed from power-on then starts where it was recorded, and two runs of it give the
+same console. The wait is wall time in the runner's turn, so `--peer-timeout`, 60 s by default,
+bounds it: a body that takes longer before its replay ends the run with exit code 4. A
+`console.expect` while the run still waits raises `SourceError` at once, since the run
+could not reach what it waits for. A run still waiting at teardown is ended with `stop`, and a
+test whose setup and body passed all the same gets an error at teardown: it ran no firmware, and
+would pass whatever the firmware does.
+
+**Rejected:** starting the run at once and the replay when it is called, because with nothing on
+the link the runner runs free to the end of the run before the body starts, and the replay's start
+would depend on wall time; starting the run at the first expect, because a test that waits on
+nothing else would never run its firmware, and the start would hang on an implicit trigger; and
+giving the source in a fixture before `board`, because the specification puts `gnss.replay` in
+the body. Also rejected: letting a test that never gave its declared source pass, because a
+module-wide `source` marker would then pass every test of the module that checks nothing but what
+the run left behind, with no firmware run; and only a warning in the link's report, which pytest
+shows only with a failure or `-rA`.
+
+## A replay needs the source marker that declares it
+
+Status: decided (#14)
+
+`gnss.replay(path)` is refused without `@pytest.mark.source("uart.gnss", "replay")`. Only a
+declared route is on the link, so the board knows at setup which sources to wait for, and the
+marker is what skips the test on a backend that cannot replay (`serial`).
+
+**Rejected:** putting every route of the profile on the link and starting the run once the body
+gives a source, because the board would not know whether to wait; and taking the source from the
+body alone, which [the skip decision](#a-source-or-tap-a-backend-cannot-give-skips-its-parameter-at-collection)
+already rejects.
+
+## The esp32sim backend refuses a model or real source at setup until it gives one
+
+Status: decided (#14)
+
+The capability declaration gives `esp32sim` `model`, `replay` and `real` on every UART, which is
+what the backend is to give; it gives `replay` only so far. A test that declares another gets
+`esp32sim: uart.gnss: a model source is not implemented yet; the backend gives replay` at setup.
+
+**Rejected:** skipping, because the test would then run nowhere without failing; holding the run,
+because nothing could give the source and the test would wait for its expect's timeout; and
+narrowing the declaration, because it says what the backend is for, and a skip on `esp32sim` would
+read as "this backend cannot", which is not so.
+
+## A replay path is relative to the test file's directory
+
+Status: decided (#14)
+
+`gnss.replay("../recordings/gnss-generated-1.jsonl")` from `tests/` reads `recordings/` at the
+root, whatever directory pytest runs in, as the `app_path` marker does.
+
+**Rejected:** the working directory, as `open()` has it, because the same test would then find its
+recording or not depending on where pytest was started.
+
+## A stream replay sends each event in the turn at its time
+
+Status: decided (#14)
+
+`Replay.poll(now)` returns the events due at `now`, and `quiet_until` is the next event's time, so
+the runner stops at each recorded time and the event goes out stamped with it. This is plan §4.4's
+`quiet_until` and the `replay` row of protocol §7; it costs one turn per distinct event time, 61
+turns for a generated GNSS recording.
+
+**Rejected:** sending every event in the first turn, as `tests/test_nmea_reader.py`'s bare peer
+does, for the runner to queue (protocol §8), because the replay's `quiet_until` would then come
+from nothing in the recording, and the replay would hand the runner a whole recording's bytes at
+once.
+
+## The recording reader takes the generated recordings' header as it is
+
+Status: decided (#14)
+
+The [postponed question](firmware.md#generated-recordings-carry-no-app-no-tool-versions-and-a-fixed-creation-time)
+is decided for the reader: `source` is any non-empty string, so `generated` is read; `app_sha256`
+may be `null`, for a recording no app made; and fields the format does not define, such as
+`generator`, are kept as they are and written back after the format's own. The format gains no
+baud field: the bytes go in at the board profile's line rate, and a firmware configured otherwise
+sees the frame errors the runner reports as `frm_err`. Event and clock-switch lines take their
+keys and no other.
+
+**Rejected:** refusing unknown header fields, as board profiles refuse unknown keys, because a
+tool that records where a recording came from would need a new format version for each field;
+a closed vocabulary for `source`, because the models and real devices it would name do not exist
+yet; and a baud in the header, because it would say again what the profile says, and could
+contradict it.
+
+## The esp32sim backend does not compare a recording's app_sha256 with its app
+
+Status: decided (#14)
+
+`app_sha256` says which app ran when a recording was made. A replay into another app is what a
+test of a changed firmware does with an old recording, so the `esp32sim` backend does not compare
+the two. Plan §4.3 compares them on the `serial` backend, against what the harness flashed.
+
+**Rejected:** refusing a mismatch, because a recording belongs to the wire, not to the app, and
+the generated recordings belong to no app at all.
+
 ## Console.write is postponed until the runner reads input
 
 Status: postponed (#51)
 
-`Console` has `expect` and `expect_exact`, the dut's own, and no `write`: the runner does not read
-its stdin.
+`Console` has `expect` and `expect_exact`, which call the dut's own, and no `write`: the runner does
+not read its stdin.
 
 ## The serial backend is postponed to M4
 
@@ -403,3 +508,14 @@ Status: postponed (#40)
 
 The backend finds the runner in the checkout, so from a wheel only `ESP32TL_RUNNER` and
 `ESP32TL_ROM` find the runner and the ROM.
+
+## Replaying requests, looping and wall-clock recordings is postponed
+
+Status: postponed (#20)
+
+The replay replays streams only, and refuses the rest with a `ReplayError`. A recording with `out`
+events holds requests, whose answers need the matching engine of plan §4.4 (#20). `end: loop` on a
+stream needs a period, which the format does not record: the time from the last event to the
+start again is nowhere in the file. A recording on the `wall` clock, or one that switches to it,
+would put wall times on the emulated clock, which needs the stamping rule of the `real` source on
+the emulator (#27).

@@ -29,8 +29,9 @@ the user sees is in [board-profiles-user.md](board-profiles-user.md).
 3. **`board` fixture**, at setup: `board_profile(request.node)` again (the marker was checked at
    collection, and the profile is cached), passed to `Esp32Sim(..., profile)`, which keeps it as
    `Esp32Sim.profile` and gives its `name` and `chip` to the `BoardLink`, for the harness's `hello`
-   ([esp32sim-backend-technical.md](esp32sim-backend-technical.md#data-flow)). The profile's routes
-   and lines are not turned into the link's interfaces: the fixture passes none.
+   ([esp32sim-backend-technical.md](esp32sim-backend-technical.md#data-flow)). Each `uart.*` route
+   a `source` marker names becomes a `Uart` on the link, its `Wire` the route's `tx`, `rx` and
+   `baud`; the profile's lines, and the routes no marker names, are not on the link.
 
 `boards.profile(name)` checks `name` against `names()`, the stems of the `*.toml` files in
 `PROFILES` (`esp32tl/boards/`) except `capabilities.toml`, then `load(PROFILES / f"{name}.toml")`.

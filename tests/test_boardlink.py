@@ -622,3 +622,54 @@ def test_uart_cfg_takes_every_port_on_the_wire_into_account() -> None:
 def test_scenario_pins_that_are_not_gpio_numbers_are_refused() -> None:
     with pytest.raises(ValueError, match="the scenario's pins hold 'RI', not a GPIO number"):
         BoardLink("esp32-devkitc", timeline=Scenario([], pins=["RI"]))  # type: ignore[list-item]
+
+
+def test_a_held_link_takes_its_first_turn_once_started() -> None:
+    link = BoardLink("esp32-devkitc", [Peer(schedule=[(0, b"$GPGGA\r\n")])], hold=True)
+    link.receive(HELLO)
+    assert link.held
+    replies: list[HarnessMessage] = []
+    turn = threading.Thread(target=lambda: replies.extend(link.receive(Sync(0))))
+    turn.start()
+    turn.join(0.2)
+    # The runner waits in turn 0, before the guest's first instruction.
+    assert turn.is_alive() and replies == []
+    assert link.start()
+    turn.join(5)
+    assert not link.held
+    assert replies == [UartRx(0, 5, 9600, b"$GPGGA\r\n"), Wait(0, None, None)]
+    # Only the first start counts.
+    assert not link.start(boot=False)
+    assert link.receive(Sync(10)) == [Wait(0, None, None)]
+
+
+def test_a_held_link_started_without_boot_stops_the_run_at_turn_0() -> None:
+    gnss = Peer(schedule=[(0, b"$GPGGA\r\n")])
+    link = BoardLink("esp32-devkitc", [gnss], hold=True)
+    link.receive(HELLO)
+    link.start(boot=False)
+    assert link.receive(Sync(0)) == [Stop()]
+    assert gnss.polls == [] and link.turns == 0
+    assert link.error is None
+
+
+def test_a_link_made_without_hold_is_not_held() -> None:
+    link = BoardLink("esp32-devkitc", [Peer()])
+    assert not link.held
+    assert not link.start(boot=False)
+    link.receive(HELLO)
+    assert link.receive(Sync(0)) == [Wait(0, None, None)]
+
+
+def test_a_runner_on_another_clock_than_the_backend_s_fails_the_link() -> None:
+    errors: list[str] = []
+    link = BoardLink("esp32-devkitc", clock="emulated-fifo-write", on_error=errors.append)
+    assert link.receive(RunnerHello(1, "esp32", "wall", "0" * 40)) == [
+        HarnessHello(1, "esp32", "esp32-devkitc", ())
+    ]
+    assert errors == ["the runner's clock is wall, the backend's emulated-fifo-write"]
+    assert link.receive(Sync(0)) == [Stop()]
+    # The same clock is no error.
+    link = BoardLink("esp32-devkitc", clock="emulated-fifo-write")
+    link.receive(HELLO)
+    assert link.error is None

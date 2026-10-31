@@ -38,6 +38,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Test files are left out, and the runner's unit tests live in tests.rs files](docs.md#test-files-are-left-out-and-the-runners-unit-tests-live-in-testsrs-files) | `docs.md` | decided (#54) |
 | [The README is an entry point; the documents in docs/ own the facts](docs.md#the-readme-is-an-entry-point-the-documents-in-docs-own-the-facts) | `docs.md` | decided (#54) |
 | [Format specifications stay at the top of docs/](docs.md#format-specifications-stay-at-the-top-of-docs) | `docs.md` | decided (#54) |
+| [The recording format is a document at the top of docs/, with a rule of its own](docs.md#the-recording-format-is-a-document-at-the-top-of-docs-with-a-rule-of-its-own) | `docs.md` | decided (#14) |
 | [The decisions index is generated](docs.md#the-decisions-index-is-generated) | `docs.md` | decided (#54) |
 | [AGENTS.md is the agents' file, and CLAUDE.md links to it](docs.md#agentsmd-is-the-agents-file-and-claudemd-links-to-it) | `docs.md` | decided (#54) |
 | [Contributor conventions live in CONTRIBUTING.md; the create-pr skill restates them](docs.md#contributor-conventions-live-in-contributingmd-the-create-pr-skill-restates-them) | `docs.md` | decided (#44) |
@@ -100,9 +101,17 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Board markers that reach a test after collection read it are refused](harness.md#board-markers-that-reach-a-test-after-collection-read-it-are-refused) | `harness.md` | decided (#13) |
 | [A profile reserves the console's UART and pins, not the flash pins](harness.md#a-profile-reserves-the-consoles-uart-and-pins-not-the-flash-pins) | `harness.md` | decided (#13) |
 | [A request no backend can give is a collection error](harness.md#a-request-no-backend-can-give-is-a-collection-error) | `harness.md` | decided (#13) |
+| [The run waits before the guest boots until the test has given its declared sources](harness.md#the-run-waits-before-the-guest-boots-until-the-test-has-given-its-declared-sources) | `harness.md` | decided (#14) |
+| [A replay needs the source marker that declares it](harness.md#a-replay-needs-the-source-marker-that-declares-it) | `harness.md` | decided (#14) |
+| [The esp32sim backend refuses a model or real source at setup until it gives one](harness.md#the-esp32sim-backend-refuses-a-model-or-real-source-at-setup-until-it-gives-one) | `harness.md` | decided (#14) |
+| [A replay path is relative to the test file's directory](harness.md#a-replay-path-is-relative-to-the-test-files-directory) | `harness.md` | decided (#14) |
+| [A stream replay sends each event in the turn at its time](harness.md#a-stream-replay-sends-each-event-in-the-turn-at-its-time) | `harness.md` | decided (#14) |
+| [The recording reader takes the generated recordings' header as it is](harness.md#the-recording-reader-takes-the-generated-recordings-header-as-it-is) | `harness.md` | decided (#14) |
+| [The esp32sim backend does not compare a recording's app_sha256 with its app](harness.md#the-esp32sim-backend-does-not-compare-a-recordings-app_sha256-with-its-app) | `harness.md` | decided (#14) |
 | [Console.write is postponed until the runner reads input](harness.md#consolewrite-is-postponed-until-the-runner-reads-input) | `harness.md` | postponed (#51) |
 | [The serial backend is postponed to M4](harness.md#the-serial-backend-is-postponed-to-m4) | `harness.md` | postponed (#25) |
 | [Prebuilt runner binaries are postponed to M10](harness.md#prebuilt-runner-binaries-are-postponed-to-m10) | `harness.md` | postponed (#40) |
+| [Replaying requests, looping and wall-clock recordings is postponed](harness.md#replaying-requests-looping-and-wall-clock-recordings-is-postponed) | `harness.md` | postponed (#20) |
 
 ## The runner crate and esp32sim
 

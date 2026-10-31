@@ -13,7 +13,9 @@ its stream once it has read that line: the expect fails at once, with pexpect's 
 
 The backend owns the link's socket (`docs/protocol.md` §1): it binds a Unix socket before it
 spawns the runner, passes it as `--board socket:PATH`, and serves the one connection with a
-`BoardLink` in a thread of its own. It also owns the end of the run (§9), before the dut is torn
+`BoardLink` in a thread of its own. The link carries a `Uart` for each route whose source the test's
+`source` markers declare; the run is held before the guest boots until the test has given each its
+source, as `gnss.replay(path)` does. It also owns the end of the run (§9), before the dut is torn
 down: `SIGTERM`, the link read to end of file, the runner waited for, `SIGKILL` only as a last
 resort.
 """
@@ -27,7 +29,7 @@ import socket
 import tempfile
 import threading
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 import pexpect
@@ -36,8 +38,10 @@ from pytest_embedded.log import DuplicateStdoutPopen, MessageQueue, PexpectProce
 from pytest_embedded.utils import Meta, remove_asci_color_code
 from pytest_embedded_idf.app import IdfApp
 
+from esp32tl import recording
 from esp32tl.boards import BoardProfile
-from esp32tl.link.boardlink import BoardLink, Interface
+from esp32tl.interfaces.uart import Uart
+from esp32tl.link.boardlink import BoardLink, Wire
 
 # The checkout this package runs from, with an editable install (`make setup` makes one): the
 # runner and the ROM are looked for there. From a wheel this is site-packages, and the messages
@@ -64,6 +68,10 @@ EXIT_SECONDS = 5
 
 # The longest Unix socket path on macOS, NUL included; Linux takes 108.
 SUN_PATH_MAX = 104
+
+# The sources the backend can put at the far end of a route so far, of those the capability
+# declaration gives it.
+IMPLEMENTED_SOURCES = ("replay",)
 
 
 class BackendError(Exception):
@@ -155,16 +163,21 @@ def listen() -> tuple[socket.socket, Path]:
 
 class Esp32Sim:
     """A run of the app in `app_path` in the runner, its console going to `dut`, its board the
-    link to `interfaces`.
+    link to the UARTs `sources` names.
 
     `app` is the `IdfApp` the runner flashes. The dut's own `app` is pytest-embedded's base `App`,
     without `flash_files` or `target`: without a service, pytest-embedded builds nothing more.
     `profile` is the board profile the test chose, whose name and chip the harness's `hello`
-    carries. `link` is the `BoardLink`, whose warnings, stats and error are complete once `close`
+    carries. `sources` maps an interface (`uart.gnss`) to the source the test's `source` marker
+    declares for it; each such route is a `Uart` on the link, and the run waits for the test to
+    give it its source. `directory` is the test file's, which a relative recording path is taken
+    from. `link` is the `BoardLink`, whose warnings, stats and error are complete once `close`
     returns.
     """
 
     name = "esp32sim"
+    # The clock the run's times are on, which the runner's `hello` must name (protocol 5.1).
+    clock = recording.EMULATED
 
     def __init__(
         self,
@@ -173,12 +186,34 @@ class Esp32Sim:
         msg_queue: MessageQueue,
         meta: Meta,
         profile: BoardProfile,
-        interfaces: Sequence[Interface] = (),
+        sources: Mapping[str, str] | None = None,
+        directory: Path | None = None,
     ) -> None:
         self.dut = dut
         self.profile = profile
+        self.directory = directory or Path.cwd()
+        self._uarts: dict[str, Uart] = {}
+        for interface, source in (sources or {}).items():
+            if source not in IMPLEMENTED_SOURCES:
+                raise BackendError(
+                    f"{interface}: a {source} source is not implemented yet;"
+                    f" the backend gives {', '.join(IMPLEMENTED_SOURCES)}"
+                )
+            self._uarts[interface] = self._uart(interface, source)
+        # The UARTs whose source the test has still to give, and the run held until it has.
+        self._waiting = set(self._uarts)
+        self._given = threading.Lock()
         self.app = load_app(app_path)
-        self.link = BoardLink(profile.name, interfaces, chip=profile.chip, on_error=self._end_run)
+        self.link = BoardLink(
+            profile.name,
+            list(self._uarts.values()),
+            chip=profile.chip,
+            on_error=self._end_run,
+            hold=bool(self._waiting),
+            clock=self.clock,
+        )
+        # What the run still waited for when `close` ended it, if it never started.
+        self.never_started: dict[str, str] = {}
         runner, rom = runner_path(), rom_path()
         # Bound before the runner starts, which connects once (protocol §1).
         self._listener, self._socket = listen()
@@ -200,6 +235,44 @@ class Esp32Sim:
         # exit while this one is in waitpid().
         self._waiter = threading.Thread(target=self._mark_end_of_run, daemon=True)
         self._waiter.start()
+
+    def _uart(self, interface: str, declared: str | None) -> Uart:
+        kind, _, role = interface.partition(".")
+        route = self.profile.uart.get(role) if kind == "uart" else None
+        if route is None:
+            raise BackendError(
+                f"the board profile {self.profile.name} has no {interface};"
+                f" its interfaces are {', '.join(self.profile.interfaces)}"
+            )
+        return Uart(
+            interface,
+            Wire(tx=route.tx, rx=route.rx, baud=route.baud),
+            declared=declared,
+            clock=self.clock,
+            directory=self.directory,
+            on_source=self._source_given,
+        )
+
+    def uart(self, role: str) -> Uart:
+        """The `Uart` of the profile's `uart.<role>` route: the one on the link when the test
+        declared its source, else one that is on no link, whose `replay` says what is missing."""
+        interface = f"uart.{role}"
+        return self._uarts.get(interface) or self._uart(interface, None)
+
+    def waiting(self) -> dict[str, str]:
+        """The interfaces whose declared source the test has not given, and the run waits for,
+        each with the source; empty once the run has started."""
+        return self._unstarted() if self.link.held else {}
+
+    def _unstarted(self) -> dict[str, str]:
+        with self._given:
+            return {name: self._uarts[name].declared or "" for name in sorted(self._waiting)}
+
+    def _source_given(self, interface: str) -> None:
+        with self._given:
+            self._waiting.discard(interface)
+            if not self._waiting:
+                self.link.start()
 
     def _end_run(self, reason: str) -> None:
         """Ends the run as soon as the harness finds the link wrong, instead of at the runner's
@@ -236,6 +309,8 @@ class Esp32Sim:
     def _mark_end_of_run(self) -> None:
         code = self.process.wait()
         self._exited.set()
+        # A runner gone while the run was held: the link thread is not to wait for it.
+        self.link.start(boot=False)
         # The runner's exit ends the link; the link's last messages are read first, so that what
         # the harness found wrong is in the log ahead of the end, where an expect's EOF shows it.
         self._linker.join(EXIT_SECONDS)
@@ -253,7 +328,14 @@ class Esp32Sim:
         always sent the runner's last lines on by then, but it is not waited for: they may miss
         `dut.log`, never the test's result. A runner that exited with an error, one that had to
         be killed, and a link the harness found wrong fail the test, even one whose expects all
-        passed before it."""
+        passed before it. A run still held for a source the test did not give is stopped before
+        the guest boots, with `stop`, which is no failure of the run; `never_started` keeps what
+        it waited for, for the `board` fixture to report."""
+        self.never_started = self._unstarted()
+        if self.link.start(boot=False):
+            # The runner ends the run on the stop at its first turn, and exits 0; the signal
+            # below is for one that does not, and would race the stop for the run's end.
+            self._exited.wait(EXIT_SECONDS)
         # The runner handles SIGTERM once it has connected, and has by its hello; before that the
         # signal kills it (protocol §9), as it would at the end of a test that ends while the
         # runner loads the images. It gets EXIT_SECONDS to get there, then as long again to exit.

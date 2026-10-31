@@ -42,9 +42,9 @@ def test_modem_route(board):
   test, a class or a module (`pytestmark`), and the closest one wins.
 - `board.profile` is the loaded profile ([its fields](board-profiles-technical.md#interfaces)).
   The esp32sim backend names it, with its chip, in the link's `hello`, and the `esp32sim link`
-  report starts with its name ([esp32sim backend](esp32sim-backend-user.md)). Nothing is at the
-  far end of the profile's routes and lines yet: no fixture puts an interface on them, so the link
-  watches no pins.
+  report starts with its name ([esp32sim backend](esp32sim-backend-user.md)). A route is wired to
+  the board only when a `source` marker names it ([below](#saying-what-a-test-needs)); otherwise
+  the link watches no pins. The profile's lines are never wired yet.
 - Only the profiles esp32tl ships can be named; there is no marker argument for a file of your
   own.
 - The marker goes on the test, its class or its module. One given in a
@@ -72,8 +72,11 @@ def test_reports_a_fix(board, console): ...
 - `tap(*interfaces)`: the interfaces the test records. Taps add up: a module's and a test's both
   count.
 
-The markers decide only whether the test runs on a backend. No fixture puts a source on an
-interface or taps one in this version.
+The markers decide whether the test runs on a backend. On `esp32sim`, a `replay` source also
+wires the route to the board and holds the run at power-on until the test body gives the
+recording, as `gnss.replay(path)` does ([replay](replay-user.md)); a `model` or `real` source is an
+error at setup there, since the backend does not give them yet. No fixture taps an interface in
+this version.
 
 Each backend declares what it can give:
 

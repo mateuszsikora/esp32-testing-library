@@ -7,12 +7,17 @@ send unprompted and what the scenario timeline has due go out in the next turn, 
 before its `sync`. The turn's `wait` bounds the next one with the minimum `quiet_until` and the
 minimum `latency` over the interfaces and the timeline, `None` counting as no bound (§7).
 
+A link made with `hold` takes its first turn, at `t = 0` before the guest's first instruction
+(§6, rule 4), only once `start` is called: the backend holds the run there until the test has
+given every source it declared, and emulated time does not move meanwhile.
+
 Warnings and the run's `stats` are kept for the test report. What the harness finds wrong with
 the run is kept in `error`, the first cause only; the harness then ends the run with `stop` at the
 runner's next turn, and still reads to end of file.
 """
 
 import socket
+import threading
 import traceback
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import contextmanager
@@ -157,7 +162,9 @@ class BoardLink:
     """The link to one run of the runner, on the board profile `board` of `chip`, with its
     `interfaces` and the scenario's `timeline`. `watch`, sent in the harness's `hello`, is their
     pins. `on_error` is called once, from the link's thread, when the harness finds the run
-    wrong, so that the backend can end the run without waiting for the runner's next turn."""
+    wrong, so that the backend can end the run without waiting for the runner's next turn. With
+    `hold`, the first turn waits for `start`. With `clock`, a runner whose `hello` names another
+    clock fails the link."""
 
     def __init__(
         self,
@@ -167,6 +174,8 @@ class BoardLink:
         chip: str = "esp32",
         timeline: Timeline | None = None,
         on_error: Callable[[str], None] | None = None,
+        hold: bool = False,
+        clock: str | None = None,
     ) -> None:
         owners: dict[int, str] = {}
         for interface in interfaces:
@@ -176,6 +185,7 @@ class BoardLink:
                 owners[pin] = interface.name
         self.board = board
         self.chip = chip
+        self.clock = clock
         self.interfaces = tuple(interfaces)
         self.timeline = timeline
         # The scenario drives pins of interfaces, or pins of its own.
@@ -205,6 +215,29 @@ class BoardLink:
         )
         self._enabled: frozenset[int] = frozenset()
         self._answers: list[tuple[Interface, int, bytes]] = []
+        # The first turn waits for this, and then boots the guest, or stops the run.
+        self._started = threading.Event()
+        self._boot = True
+        self._starting = threading.Lock()
+        if not hold:
+            self._started.set()
+
+    @property
+    def held(self) -> bool:
+        """Whether the first turn still waits for `start`."""
+        return not self._started.is_set()
+
+    def start(self, boot: bool = True) -> bool:
+        """Lets the first turn go: with `boot`, it is taken as any other, and the guest boots
+        after it; without, it is `stop`, and the run ends before the guest's first instruction.
+        Only the first call counts, and returns True; on a link made without `hold`, none does.
+        From any thread."""
+        with self._starting:
+            if self._started.is_set():
+                return False
+            self._boot = boot
+            self._started.set()
+            return True
 
     def run(self, conn: socket.socket) -> None:
         """Reads the runner's messages from `conn` to end of file, writing the harness's in its
@@ -281,6 +314,9 @@ class BoardLink:
                 # Not on_error: the runner finds the mismatch in the answer and ends the run
                 # itself, with the exit code that says so (§4).
                 self._fail(mismatch, notify=False)
+            elif self.clock is not None and message.clock != self.clock:
+                # The interfaces' times are on the backend's clock: the run would not be.
+                self._fail(f"the runner's clock is {message.clock}, the backend's {self.clock}")
             return [answer]
         if isinstance(message, RunnerHello):
             raise LinkError("the runner sent a second hello")
@@ -312,6 +348,11 @@ class BoardLink:
         elif isinstance(message, GpioOut):
             self._gpio_out(message)
         elif isinstance(message, Sync):
+            if self.turns == 0:
+                self._started.wait()
+                if not self._boot:
+                    self._stopped = True
+                    return [Stop()]
             return self._turn(message.t)
         else:
             # Reset needs nothing of the interfaces: the board persists across it (5.5), and

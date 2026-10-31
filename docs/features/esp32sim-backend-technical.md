@@ -10,9 +10,17 @@ a `DuplicateStdoutPopen` on the dut's `msg_queue`.
 
 ## Data flow
 
-`Esp32Sim.__init__(dut, app_path, msg_queue, meta, profile, interfaces=())` keeps `profile`, the
-test's [board profile](board-profiles-technical.md), as `Esp32Sim.profile`, then, in order:
+`Esp32Sim.__init__(dut, app_path, msg_queue, meta, profile, sources=None, directory=None)` keeps
+`profile`, the test's [board profile](board-profiles-technical.md), as `Esp32Sim.profile`, and
+`directory`, the test file's (the working directory when `None`), as `Esp32Sim.directory`, then,
+in order:
 
+0. **The UARTs.** For each `interface: source` of `sources`, what the test's `source` markers
+   declare, it refuses a source not in `IMPLEMENTED_SOURCES`, `("replay",)`, and makes the route's
+   `Uart` (`esp32tl/interfaces/uart.py`): `Wire(tx, rx, baud)` from the profile's
+   `[uart.<role>]`, `declared=source`, `clock=Esp32Sim.clock`, `directory`, and
+   `on_source=self._source_given`. An interface that is not a `uart.*` route of the profile is a
+   `BackendError`. The names of these UARTs are the run's `_waiting`.
 1. **`load_app(app_path)`** checks that `<app_path>/build/flasher_args.json` is a file, then builds
    `IdfApp(app_path, build_dir=str(build))`. The build directory is absolute on purpose: given
    `build`, `IdfApp` falls back to a `build` directory in the working directory when the app has
@@ -21,11 +29,12 @@ test's [board profile](board-profiles-technical.md), as `Esp32Sim.profile`, then
    `esp32` when neither names one, so a build with neither passes the check),
    `flash_settings["encrypt"]` (any file marked `"encrypted": "true"`), and any of `app.flash_files`
    that is not a file. The result is `Esp32Sim.app`.
-2. **`BoardLink(profile.name, interfaces, chip=profile.chip, on_error=self._end_run)`**
+2. **`BoardLink(profile.name, uarts, chip=profile.chip, on_error=self._end_run, hold=bool(_waiting), clock=self.clock)`**
    (`esp32tl/link/boardlink.py`) is the harness's end of the link: `Esp32Sim.link`. The harness's
-   `hello` names the profile and its chip; the profile's routes and lines reach the link only as
-   `interfaces`. It checks that no two interfaces share a pin;
-   `watch` is their pins. The fixture passes no interfaces yet.
+   `hello` names the profile and its chip; the profile's routes reach the link only as the UARTs
+   of step 0. It checks that no two interfaces share a pin; `watch` is their pins, none for a test
+   without a `source` marker. With `hold`, the link takes its first turn only on `link.start()`
+   (below).
 3. **`runner_path()`** and **`rom_path()`** resolve the runner and the ROM ELF
    ([Configuration](#configuration)).
 4. **`listen()`** binds a Unix stream socket at `link.sock` in a new directory from
@@ -66,6 +75,27 @@ the number of turns and the first `error` with its traceback. When it finds the 
 runner finds the mismatch in the harness's `hello` and exits 3 by itself. What `BoardLink` checks
 is in [the link protocol](../protocol.md) and in the docstrings of `esp32tl/link/`.
 
+**The held start.** With a declared source, the link holds the runner in its first turn, at
+`t = 0` before the guest's first instruction ([protocol §4](../protocol.md#4-session)), so
+emulated time does not move until the test body gives the source. `Uart.replay` calls
+`on_source(name)`; `_source_given` removes the name from `_waiting` under a lock and calls
+`link.start()` once none is left. `waiting()` returns `{interface: declared source}` for the
+names left, sorted, and `{}` once the link is not held: the `console` fixture's expects read it
+([pytest plugin](pytest-plugin-technical.md#data-flow)). `uart(role)` returns the `Uart` of
+`uart.<role>` from step 0, or a new one with `declared=None`, on no link, for a route the test
+declared nothing on. `close` calls `link.start(boot=False)` first, and `_mark_end_of_run` once
+the runner has exited. `link.start(boot=False)` does nothing, and returns `False`, once the link
+has started; otherwise a run still held at teardown, or whose runner is gone, gets `stop` at its
+first turn instead of a boot, and the link thread is not left waiting. Before that call, `close`
+keeps in `never_started` what `_waiting` still holds, `{interface: declared source}`, empty when
+every source was given; the `board` fixture reports it
+([pytest plugin](pytest-plugin-technical.md#data-flow)), not `close`, which raises no error for it.
+
+**The clock.** `Esp32Sim.clock` is `recording.EMULATED`, `"emulated-fifo-write"`, and goes to
+`BoardLink` as `clock`: a runner whose `hello` names another clock fails the link
+(`the runner's clock is {clock}, the backend's emulated-fifo-write`), since the UARTs check their
+recordings against `Esp32Sim.clock`.
+
 **End of stream.** `pexpect_proc` reads a file that nothing closes, so it never reads an end of
 file: on its own, an expect after the runner's exit would wait out its timeout. The wrapped
 `read_nonblocking` keeps the last `EOF_TAIL_BYTES` (2048) bytes it has read and searches them for
@@ -90,6 +120,11 @@ carries the tail: pytest-embedded's "Bytes in current buffer" is empty by then.
 
 **`Esp32Sim.close()`**, from the `board` fixture's teardown:
 
+0. `link.start(boot=False)`: a run still held for a source the test did not give gets `stop` at
+   its first turn, before the guest boots. When this call is the one that released the link, it
+   then waits up to `EXIT_SECONDS` for the runner to exit, which it does with code 0, so that the
+   `SIGTERM` of step 2 does not race the `stop` for the run's end; a runner that is gone by then
+   gets no signal.
 1. Waits, for up to `EXIT_SECONDS`, until `link.runner` is set (the runner's `hello` has arrived)
    or the runner has exited. The runner registers its `SIGTERM` handler after it connects and
    before its `hello`; a signal before that kills it, so a test that ends while the runner loads
@@ -140,7 +175,9 @@ repository makes.
 
 | Name | What |
 |---|---|
-| `Esp32Sim(dut, app_path, msg_queue, meta, profile, interfaces=())` | Starts the run. Attributes: `name = "esp32sim"`, `dut`, `profile` (the `BoardProfile`), `app` (the `IdfApp`), `process` (the `RunnerPopen`), `link` (the `BoardLink`, complete once `close` returns) |
+| `Esp32Sim(dut, app_path, msg_queue, meta, profile, sources=None, directory=None)` | Starts the run. Attributes: `name = "esp32sim"`, `clock = "emulated-fifo-write"` (the clock the runner's `hello` must name, and a replayed recording must be on), `never_started` (after `close`, what a run held to the end waited for), `dut`, `profile` (the `BoardProfile`), `directory`, `app` (the `IdfApp`), `process` (the `RunnerPopen`), `link` (the `BoardLink`, complete once `close` returns) |
+| `Esp32Sim.uart(role)` | The `Uart` of `uart.<role>`; `BackendError` when the profile has no such route |
+| `Esp32Sim.waiting()` | The interfaces whose declared source the run waits for, with the source; `{}` once started |
 | `Esp32Sim.close()` | Ends the run; raises `BackendError` for a failing exit code, a killed runner or a link error |
 | `BackendError` | What keeps the backend from starting, or a failing end |
 | `listen()` | The listening socket and its path, or `BackendError` |
@@ -165,6 +202,7 @@ repository makes.
 | `EOF_TAIL_BYTES` | `2048` | `end_stream_at_end_of_run` |
 | `EXIT_SECONDS` | `5`, wall seconds: for the runner's `hello` at teardown, then for its exit after `SIGTERM`, and for each join of the link thread | `close`, `_mark_end_of_run`, `_close_link` |
 | `SUN_PATH_MAX` | `104`, the longest Unix socket path on macOS with its NUL; Linux takes 108 | `listen` |
+| `IMPLEMENTED_SOURCES` | `("replay",)`: the sources the backend gives, of those `capabilities.toml` declares for it | `Esp32Sim.__init__` |
 
 The backend always passes `--rom`: the runner's own lookup prefers the newest release under
 `~/.espressif` instead of the pinned one. `MAX_SECONDS` also bounds a runner left behind by a
@@ -178,6 +216,8 @@ at setup, in the order below, so only the first problem shows:
 
 | Message | Raised by | Cause |
 |---|---|---|
+| `{interface}: a {source} source is not implemented yet; the backend gives replay` | `Esp32Sim.__init__` | A `source` marker names `model` or `real` |
+| `the board profile {name} has no {interface}; its interfaces are {interfaces}` | `Esp32Sim.__init__`, `Esp32Sim.uart` | A source, or the `gnss` fixture, on a route the profile does not have; `{interfaces}` is `BoardProfile.interfaces`, comma-separated |
 | `{build} holds no ESP-IDF build: no flasher_args.json` | `load_app` | No `build/flasher_args.json` in the app |
 | `{build} is built for {app.target}; esp32sim runs the classic esp32` | `load_app` | Target other than `esp32` |
 | `{build} asks for flash encryption, which the runner does not do` | `load_app` | A flash file marked encrypted |
@@ -235,6 +275,8 @@ raises, a `flasher_args.json` that is not JSON or has no `flash_files` for insta
   0.5 s and dies of `SIGTERM` until then).
 
 `tests/test_hello_world.py` runs the real image on the real runner and ROM.
+`tests/test_gnss_fixture.py` runs `nmea_reader` with a declared replay, given and not, and the
+two setup errors above ([replay-technical.md](replay-technical.md#tests)).
 
 `tests/test_boardlink.py` and `tests/test_link_protocol.py` test `BoardLink` and the codec without
 a runner; `tests/test_runner_link.py` runs the real runner against a peer of its own, with the

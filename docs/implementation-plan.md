@@ -299,6 +299,10 @@ ending a run with `stats`. Its sections 6.1 and 11 say why.*
 
 ### 4.3 Recording format
 
+*As built (#14): [`docs/recording-format.md`](recording-format.md) is the format, and holds where
+the two differ: `end`, `app_sha256` and `tools` may be left out, header fields of a tool's own are
+kept, and nothing reads the HCI sidecar yet. Kept as written.*
+
 One file per tap, `.jsonl`. Line 1 is the header:
 
 ```json
