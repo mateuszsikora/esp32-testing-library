@@ -70,7 +70,16 @@ GNSS route of the `esp32-devkitc` board profile:
 
 The ranges let through pins that cannot work: GPIO 1 and 3 carry the console's UART0, and GPIO 6
 to 11 the SPI flash. `firmware/build.sh` builds with the defaults. A run in the emulator
-configures UART1 about 50 emulated milliseconds after power-on.
+configures UART1 about 50 emulated milliseconds after power-on. A build at another baud than the
+profile's fails every replay into it, on the first frame error
+([replay](replay-user.md#what-a-replay-does)).
+
+To watch it on a terminal, outside pytest ([the `esp32tl` command](cli-user.md)):
+
+```sh
+esp32tl replay --app firmware/nmea_reader --interface gnss \
+  --recording recordings/gnss-generated-1.jsonl --max-seconds 10
+```
 
 ## What a build leaves
 

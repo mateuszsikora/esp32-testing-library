@@ -146,6 +146,26 @@ that references to its number keep their meaning.
 34. A recording replayed with `gnss.replay(path)` reaches the firmware's UART on the profile's GNSS
     route: `nmea_reader` prints the fixes of `gnss-generated-1.jsonl`.
     `tests/test_gnss_fixture.py::test_a_replay_reaches_nmea_reader_on_the_gnss_route`
+35. A replay at another baud than the firmware's UART receives at fails the test at once, with the
+    interface and both bauds, rather than by a timeout; in `esp32tl replay` it is exit code 1.
+    `tests/test_boardlink.py::test_a_frame_error_fails_the_run_at_once`,
+    `tests/test_gnss_fixture.py::test_reports_a_fix_fails_on_a_baud_mismatch`,
+    `tests/test_cli.py::test_a_baud_mismatch_exits_1_with_the_link_s_error`
+36. The first milestone's test, `test_reports_a_fix`, passes on `gnss-generated-1.jsonl` and fails
+    when one digit of the recording changes.
+    `tests/test_nmea_reader.py::test_reports_a_fix`,
+    `tests/test_gnss_fixture.py::test_reports_a_fix_fails_on_a_changed_recording`
+37. A replay runs on the emulated clock: ten fixes, ten emulated seconds, reach the console in
+    under five wall seconds.
+    `tests/test_nmea_reader.py::test_time_is_emulated`
+
+## The esp32tl command
+
+38. Ctrl-C ends a run of `esp32tl run` or `esp32tl replay` with one `SIGTERM` to the runner, which
+    sends its statistics once it has connected, and the command exits 130 without a traceback,
+    also before the runner has connected.
+    `tests/test_cli.py::test_ctrl_c_ends_the_run_and_exits_130`,
+    `tests/test_cli.py::test_ctrl_c_before_the_runner_connects_exits_130`
 
 ## Validation firmware
 

@@ -317,7 +317,14 @@ event, `sync`, `console`, a `warn` of another kind, pin or port, `stats`), so th
 takes 1.04 ms, so even a millisecond window would give each dropped byte of a mismatched NMEA stream
 its own `warn`. The last warnings of a run are not held back either, because every end of a run
 that sends `stats` sends them before it. A peer accepts kinds it does not know. `BoardLink` puts
-warnings in the test report.
+warnings in the test report, and takes a `frm_err` as an error of the run: the bytes went in at
+another baud than the guest's UART receives at, which would otherwise fail a test only later, by
+a timeout that does not say why. The `esp32sim` backend then ends the run at once (§9), and the
+error reads `uart.gnss sends at 115200 baud on GPIO 5, and the firmware's UART1 receives there at
+9600 baud: 72 bytes dropped as frame errors (frm_err)`, naming the interface whose RX pin it is,
+or `bytes on GPIO {pin}` for a pin no interface owns, or `bytes on a pin the runner did not name`
+for a `frm_err` without its `pin`; `receives there with no baud set` when the route's `baud` is
+`null`.
 
 ### 5.9 `stats` *ext*
 
@@ -573,7 +580,7 @@ they get two wall seconds, then the runner gives up on a peer that does not read
 `SIGTERM` or `SIGINT` ends the process at once, with exit code 128 plus the signal's number, as a
 shell would report it. Before the connection is made a signal ends the process as it would any
 other. The backend also sends `SIGTERM` as soon as `BoardLink` finds the run
-wrong (a message out of protocol, an interface that broke its promises), rather than wait for the
+wrong (a message out of protocol, an interface that broke its promises, a `frm_err`), rather than wait for the
 runner's next turn to send `stop`, which may come only at `--max-seconds`. A handshake mismatch is
 the exception: the runner finds it in the harness's `hello` and ends the run itself, with code 3.
 

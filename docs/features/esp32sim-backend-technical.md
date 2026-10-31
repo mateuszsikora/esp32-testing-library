@@ -183,6 +183,7 @@ repository makes.
 | `listen()` | The listening socket and its path, or `BackendError` |
 | `runner_path()`, `rom_path()` | The runner and the ROM ELF, or `BackendError` |
 | `load_app(app_path)` | The checked `IdfApp` of `<app_path>/build` |
+| `profile_uart(profile, interface, *, declared, clock, directory, on_source)` | The `Uart` on the route the profile gives `interface` (`uart.gnss`), at its pins and baud; `BackendError` when the profile has no such route. `Esp32Sim` makes its UARTs with it, and so does the [`esp32tl` command](cli-user.md) |
 | `runner_command(runner, rom, app, max_seconds, link)` | The runner's argument list |
 | `RunnerPopen(msg_queue, cmd, meta)` | `DuplicateStdoutPopen` that closes its log when the start fails |
 | `end_stream_at_end_of_run(proc, link_error=lambda: None)` | Wraps `proc.read_nonblocking` to raise `RunnerExited` after the end-of-run line, with `link_error()` first in its message |

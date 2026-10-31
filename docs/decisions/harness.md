@@ -455,7 +455,7 @@ the runner stops at each recorded time and the event goes out stamped with it. T
 turns for a generated GNSS recording.
 
 **Rejected:** sending every event in the first turn, as `tests/test_nmea_reader.py`'s bare peer
-does, for the runner to queue (protocol §8), because the replay's `quiet_until` would then come
+did until #16, for the runner to queue (protocol §8), because the replay's `quiet_until` would then come
 from nothing in the recording, and the replay would hand the runner a whole recording's bytes at
 once.
 
@@ -468,7 +468,8 @@ is decided for the reader: `source` is any non-empty string, so `generated` is r
 may be `null`, for a recording no app made; and fields the format does not define, such as
 `generator`, are kept as they are and written back after the format's own. The format gains no
 baud field: the bytes go in at the board profile's line rate, and a firmware configured otherwise
-sees the frame errors the runner reports as `frm_err`. Event and clock-switch lines take their
+sees the frame errors the runner reports as `frm_err`, which
+[fail the run](#a-frame-error-fails-the-run-at-once) since #16. Event and clock-switch lines take their
 keys and no other.
 
 **Rejected:** refusing unknown header fields, as board profiles refuse unknown keys, because a
@@ -519,3 +520,63 @@ stream needs a period, which the format does not record: the time from the last 
 start again is nowhere in the file. A recording on the `wall` clock, or one that switches to it,
 would put wall times on the emulated clock, which needs the stamping rule of the `real` source on
 the emulator (#27).
+
+## A frame error fails the run at once
+
+Status: decided (#16)
+
+`BoardLink` takes a `frm_err` warning as an error of the run, naming the interface whose RX pin
+it is and both bauds, and the backend ends the run at once, as for any link error. A frame error
+means the bytes went in at another baud than the guest's UART receives at, and the firmware lost
+them; kept as a warning, it failed a test only by a timeout on what the firmware never printed,
+and the reason was in the link's report, not in the failure. Plan M1 asks for a mismatch to be a
+test failure "rather than silence".
+
+**Rejected:** failing on the `uart_cfg` that sets a route's baud to another than the interface's,
+because a firmware may configure the UART at one baud and switch before the first byte, as a
+GNSS driver that negotiates the receiver's rate does, and only the bytes that reach a mismatched
+UART are lost; failing on `rxfifo_ovf` and `unrouted_rx` too, because those are what the firmware
+does with its UART (reading too slowly, configuring it late), which a wire does to a real board
+as well, and a test may look for exactly that.
+
+**Postponed:** a way for a test to expect frame errors, a marker or an option on the source, for a
+firmware that detects a wrong baud or finds the right one by itself. Until a test needs it, such
+a firmware cannot be tested through a replay at the wrong baud. A route whose RX pin the firmware
+sets before its baud gets the same error, since the runner reports bytes into it as `frm_err`.
+
+## The esp32tl command serves the link itself, without pytest-embedded
+
+Status: decided (#16)
+
+`esp32tl run` and `esp32tl replay` start the runner with `subprocess.Popen`, its stdout and stderr
+the command's own, and serve the link with `BoardLink` in a thread, using the backend's
+`load_app`, `runner_command`, `listen` and `profile_uart`. The replay is given before the runner
+starts, so the link is not held. The link's report goes to stderr when the run ends.
+
+**Rejected:** running the `Esp32Sim` backend itself, because it is built on a pytest-embedded
+`Dut`, whose log file, `pexpect` process and message queue only a pytest session sets up, and the
+console then reaches the terminal through a log file instead of directly.
+
+## The esp32tl command runs the runner in a session of its own
+
+Status: decided (#16)
+
+A terminal's Ctrl-C sends `SIGINT` to the whole foreground process group. Were the runner in it,
+the command's own `SIGTERM` on Ctrl-C would be the runner's second signal, which kills it with
+exit code 143 and no statistics (protocol §9). With `start_new_session=True`, Ctrl-C reaches the
+command only; it sends one `SIGTERM`, and a second Ctrl-C sends `SIGKILL`. It then exits 130, as
+a shell reports `SIGINT`. A `SIGINT` handler takes Ctrl-C for the whole run, from before the
+runner starts to the report, so that none ends the command with a `KeyboardInterrupt` traceback
+and no report.
+
+**Rejected:** leaving Ctrl-C to the runner, with the command ignoring `SIGINT`, because the
+command also sends `SIGTERM` when the link fails, and a Ctrl-C after that would still be the
+runner's second signal.
+
+## esp32tl replay takes one recording, and esp32tl record waits for the tap
+
+Status: postponed (#21)
+
+`esp32tl replay` takes one `--interface` and one `--recording`: no profile has two UART routes a
+recording can go into yet. `esp32tl record` comes with `tap(path)` (#21), which writes what it
+records.

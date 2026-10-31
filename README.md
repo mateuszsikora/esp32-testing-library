@@ -3,7 +3,8 @@ Test unmodified ESP32 firmware through its wires: an emulated or real board, wit
 
 esp32tl is a pytest plugin. Today it runs an unmodified ESP-IDF image for the classic ESP32 in the
 [esp32sim](https://github.com/mikroverk/esp32sim) emulator, through the runner crate in `runner/`,
-and lets a test read the firmware's console.
+replays a recorded GNSS stream into its UART on the emulated clock, and lets a test read the
+firmware's console. The `esp32tl` command does the same outside pytest.
 
 ## Getting started
 
@@ -30,7 +31,17 @@ def test_hello_world(console):
     console.expect("Hello world!")
 ```
 
-The test runs once per backend, as `test_hello_world[esp32sim]`.
+The test runs once per backend, as `test_hello_world[esp32sim]`. A test that replays a recording
+into the board's GNSS UART:
+
+```python
+@pytest.mark.app_path("../firmware/nmea_reader")
+@pytest.mark.source("uart.gnss", "replay")
+def test_reports_a_fix(gnss, console):
+    gnss.replay("../recordings/gnss-generated-1.jsonl")
+    console.expect_exact("fix acquired lat=52.229677 lon=21.012233")
+```
+
 [The pytest plugin's documentation](https://github.com/mateuszsikora/esp32-testing-library/blob/main/docs/features/pytest-plugin-user.md)
 describes the fixtures, the `app_path` marker and the options.
 

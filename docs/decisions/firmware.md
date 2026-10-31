@@ -203,11 +203,27 @@ package, because no part of the package uses it.
 
 ## nmea_reader is tested through a bare socket peer until the gnss fixture exists
 
-Status: decided (#15)
+Status: superseded (#16)
 
-`tests/test_nmea_reader.py` speaks the link protocol to the runner itself, with every input sent
-in the first turn, so the firmware and the recordings are checked from the change that adds them.
-The `gnss` fixture and its `replay(path)` (#14) and the M1 tests (#16) replace it.
+`tests/test_nmea_reader.py` spoke the link protocol to the runner itself, with every input sent
+in the first turn, so the firmware and the recordings were checked from the change that added
+them. The M1 tests replaced it: see
+[nmea_reader is tested through the gnss fixture](#nmea_reader-is-tested-through-the-gnss-fixture).
 
 **Rejected:** leaving `nmea_reader` untested until #14, because a bug in the firmware would then
 show up first as a failure of the harness.
+
+## nmea_reader is tested through the gnss fixture
+
+Status: decided (#16)
+
+`tests/test_nmea_reader.py` holds the first milestone's tests, `test_reports_a_fix`,
+`test_fix_follows_the_recording` and `test_time_is_emulated`, and keeps the sentences `nmea_reader`
+must ignore as a recording the test writes, all replayed with `gnss.replay`. The firmware is now
+tested the way a user's test would test it, and the replay's timing, one turn per sentence, is
+the one the tests measure. The `uart_cfg` the bare peer checked is covered by the console's
+`nmea_reader: UART1 RX GPIO5 TX GPIO4 9600 baud` and by a baud mismatch failing the test.
+
+**Rejected:** keeping the bare peer beside the fixture's tests, because it sends every sentence in
+the first turn, a timing no test of a user's firmware has, and would be a second peer to keep in
+step with the protocol.
