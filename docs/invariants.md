@@ -7,13 +7,16 @@ that references to its number keep their meaning.
 
 ## Tests and backends
 
-1. A test that uses `board`, or `console`, runs once per backend, with the backend's name as its
-   id (`test_hello_world[esp32sim]`), and its `board`, `embedded_services` and `app_path` are set
-   together. `tests/test_pytest_plugin.py::test_board_is_parametrised_with_the_backend_its_services_and_the_app`
-2. `--esp32tl-backend NAME` runs the tests that use `board` on that backend only.
+1. A test that uses `board` is parametrised with the backend's name as its id
+   (`test_marked[esp32sim]`), and its `board`, `embedded_services` and `app_path` are set together;
+   a test without `board` is not parametrised. With `esp32sim` the only backend, "once per backend"
+   is not tested yet, nor is a test that uses `console` alone. `tests/test_pytest_plugin.py::test_board_is_parametrised_with_the_backend_its_services_and_the_app`
+2. `--esp32tl-backend` takes only a backend's name: any other name is a usage error (exit code 4).
+   That it limits the run to that backend is not tested while there is one backend.
    `tests/test_pytest_plugin.py::test_backend_option_limits_the_parametrisation`
 3. pytest-embedded's `--embedded-services`, `--app-path` and `--build-dir` are refused, with exit
-   code 4 and no traceback, when a selected test uses `board`, and allowed when none does.
+   code 4 and no traceback on stdout, when a selected test uses `board`; `--app-path` is allowed
+   when `-k` has deselected every test that uses `board`.
    `tests/test_pytest_plugin.py::test_pytest_embedded_options_are_refused_for_tests_with_a_board`,
    `tests/test_pytest_plugin.py::test_options_are_allowed_when_no_selected_test_uses_board`
 4. A test has one board: `--count` other than 1, and a `count` parametrised above 1, are refused.
@@ -32,7 +35,8 @@ that references to its number keep their meaning.
 8. The backend refuses a build that is missing, built for another chip than the classic ESP32,
    asks for flash encryption, or is unfinished.
    `tests/test_pytest_plugin.py::test_load_app_refuses_what_the_runner_cannot_run`
-9. The ROM the backend passes is the release that `scripts/fetch-rom-elf` fetches.
+9. The release and file name the backend's ROM path is built from (`ROM_RELEASE`, `ROM_ELF`) are
+   the ones `scripts/fetch-rom-elf` fetches.
    `tests/test_pytest_plugin.py::test_rom_is_the_one_make_setup_fetches`
 10. Once the runner has exited, an expect that has not matched fails at once, with an `EOF` that
     names the exit code and the runner's last output: whole lines, less than `EOF_TAIL_BYTES`,
@@ -48,7 +52,8 @@ that references to its number keep their meaning.
 
 ## The runner
 
-12. The runner's stop line names the `Stop` variant that ended the run by the variant's own name.
+12. For every `Stop` variant the test lists, the stop line's name is the variant's own name; a
+    variant upstream adds fails the build instead, because `stop_name` has no catch-all arm.
     `runner/src/tests.rs::stop_names_are_the_variant_names`
 13. The runner refuses, as a usage error, a command line without `--chip esp32`, without
     `--max-seconds` (a positive, finite number) or without `--flash-at`, and the flash and PSRAM

@@ -128,11 +128,13 @@ the merge base with the pull request's base branch, sets up Python 3.11, and run
 "Documentation contract" step:
 
 ```sh
-make docs-check BASE='origin/${{ github.base_ref }}'
+make docs-check BASE="$BASE"    # env: BASE: origin/${{ github.base_ref }}
 ```
 
 It builds nothing and needs nothing from the other jobs. What the check enforces, and why it is not
-a pre-commit hook, is in [guides/documentation.md](guides/documentation.md#the-check).
+a pre-commit hook, is in [guides/documentation.md](guides/documentation.md#the-check). While the
+repository is private, no job is a required check: GitHub's free plan offers no branch protection
+for private repositories, so a red `docs` job does not stop a merge by itself.
 
 ## See also
 

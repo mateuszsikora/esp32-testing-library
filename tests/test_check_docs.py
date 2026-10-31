@@ -287,8 +287,12 @@ def test_an_unowned_package_path_needs_a_feature_doc(repo: Path) -> None:
     result = run(repo)
     assert "[F12]" in result.stdout
     assert result.stdout.count("✗") == 1, "py.typed is nobody's"
+    write(repo, "docs/features/esp32sim-backend-user.md", "# Backend\n\n## Use\n\nMore.\n")
+    assert "[F12]" in run(repo).stdout, "an edit to an existing feature doc is not a new one"
     write(repo, "docs/features/board-profiles-user.md", "# Boards\n")
     assert passes(run(repo))
+    commit(repo)
+    assert passes(run(repo)), "committed, the new doc is still new since the merge base"
 
 
 def test_skip_is_local_only(repo: Path) -> None:
@@ -298,6 +302,7 @@ def test_skip_is_local_only(repo: Path) -> None:
     result = run(repo, SKIP_DOCS_CHECK="1", CI="true")
     assert not passes(result)
     assert "for local work only" in result.stdout
+    assert passes(run(repo, SKIP_DOCS_CHECK="1", CI="false"))
 
 
 def test_a_decision_linked_by_line_number_fails(repo: Path) -> None:

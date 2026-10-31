@@ -196,11 +196,11 @@ lands on `main`.
 2. `## Changes`: what a reviewer needs to know, grouped by meaning. Name files only where the
    reviewer needs to find something; do not list every file.
 3. `## Decisions`: each non-obvious choice in bold, then the alternative rejected and why.
-4. `## Verification`: the commands from step 3 and what they showed, with numbers where there
-   are numbers. Say what was not verified and why.
-5. `## Documentation`: tick the boxes of the template that hold, and name the documents the
+4. `## Documentation`: tick the boxes of the template that hold, and name the documents the
    change updates, or say why it needs none. Run `make docs-check` for the first box; never
    tick it unrun.
+5. `## Verification`: the commands from step 3 and what they showed, with numbers where there
+   are numbers. Say what was not verified and why.
 6. `## Notes`: deliberately out of scope (with issue numbers), follow-ups, anything that deserves
    a closer look. For a draft, what is missing before it is ready goes first.
 7. Delete empty sections and all template comments. No signature or attribution line at the end.

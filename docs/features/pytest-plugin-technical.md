@@ -44,8 +44,8 @@ and the console in `esp32tl/interfaces/console.py`. What the user sees is in
    `pytest.UsageError`. The refusal is needed because a parameter of `None`, which is what
    `SERVICES` gives `esp32sim`, falls back to the command line in pytest-embedded: a session
    started with `--embedded-services esp` would make the `esp32sim` case open a serial port.
-5. **`board` fixture**, at setup: asserts `request.param == Esp32Sim.name`, fails the test if
-   `dut` is not a single `Dut` (pytest-embedded makes a tuple of duts when `count` is parametrised
+5. **`board` fixture**, at setup: asserts `request.param == Esp32Sim.name`, makes the test an
+   error if `dut` is not a single `Dut` (pytest-embedded makes a tuple of duts when `count` is parametrised
    above 1), and constructs `Esp32Sim(dut, app_path, msg_queue, _meta)`. A `BackendError` goes
    through `backend_failed`, which raises `pytest.fail.Exception(f"{Esp32Sim.name}: {error}",
    pytrace=False) from None`: one line, no chained traceback.

@@ -258,5 +258,8 @@ jobs:
         with:
           python-version: "3.11"
 
+      # Through the environment, not substituted into the script.
       - name: Documentation contract
-        run: make docs-check BASE='origin/${{ github.base_ref }}'
+        env:
+          BASE: origin/${{ github.base_ref }}
+        run: make docs-check BASE="$BASE"

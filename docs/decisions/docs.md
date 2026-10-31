@@ -35,7 +35,10 @@ silently.
 Status: decided (#54)
 
 The check runs in CI on every pull request and by hand with `make docs-check`. It is not a
-pre-commit hook.
+pre-commit hook. A failing `docs` job does not block a merge yet: while the repository is private,
+on GitHub's free plan, branch protection and rulesets are not available (the API answers 403), so
+no check can be made required. The job marks the pull request red, and whoever merges reads it.
+Once the repository is public, `docs` becomes a required check of `main`, with the other jobs.
 
 **Rejected:** a hook, because the check compares the whole branch with its merge base, not one
 commit: it would block a code-only commit whose documentation comes in the next commit of the same
@@ -49,7 +52,12 @@ The `docs` job runs on `pull_request` events, against `origin/<base branch>` of 
 with the full history the merge base needs (`fetch-depth: 0`).
 
 **Rejected:** running it on pushes to `main` too, because there the merge base with `main` is the
-commit itself: the check would compare nothing with nothing and always pass.
+commit itself: the contract part would compare nothing with nothing and always pass. The integrity
+part (links, anchors, the decisions index, the rules table) does not depend on the diff, and two
+pull requests that pass on their own can break it together, one renaming a heading the other
+links to. On `main` that is caught by `make test`'s
+`tests/test_check_docs.py::test_this_repository_passes_its_integrity_checks`, which the `test`
+jobs run on every push, not by this job.
 
 ## SKIP_DOCS_CHECK is ignored in CI
 
@@ -68,7 +76,8 @@ Status: decided (#54)
 A rule claims a whole directory when one document owns it (`firmware/`, `esp32tl/backends/`). Where
 a directory has several owners, the rules name its files (`scripts/`). Under `runner/src/`, rule F6
 carves the protocol files out instead, and under `esp32tl/`, rule F12 catches every path no other
-rule owns, so a new file there is owned from its first line.
+rule owns, so a new file there is owned from its first line. F12 accepts only a new feature
+document: an edit to an existing one would satisfy it while documenting nothing.
 
 **Rejected:** listing every file by name, because a new file in a listed directory then matches no
 rule and is not enforced at all.

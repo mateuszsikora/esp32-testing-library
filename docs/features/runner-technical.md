@@ -58,9 +58,10 @@ upstream fails the build instead of being reported under another name.
 The command line and the usage text: [runner-user.md](runner-user.md#run-an-image).
 
 - stdin: not read.
-- stdout: the guest's UART0, written by esp-soc's `Machine::drain_console`. The backend reads it
-  through pytest-embedded's `DuplicateStdoutPopen`, which is why the runner's own lines go to
-  stderr.
+- stdout: the guest's UART0 and nothing else, written by esp-soc's `Machine::drain_console`, so
+  that whoever reads stdout alone gets the guest's output as the guest wrote it. The runner's own
+  lines go to stderr. Under the backend the two meet again: pytest-embedded's
+  `DuplicateStdoutPopen` writes stdout and stderr into one log, which `dut.expect` reads.
 - stderr, from the runner (formats from `main.rs`):
   - `esp32tl-runner: ROM {path}`
   - `esp32tl-runner: flash {offset:#x}: {path} ({len} bytes)`

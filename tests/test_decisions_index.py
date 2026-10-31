@@ -78,7 +78,9 @@ def test_check_fails_on_a_file_it_does_not_know(root: Path) -> None:
 
 def test_check_fails_on_a_missing_file(root: Path) -> None:
     (root / "docs/decisions/ci.md").unlink()
-    assert "docs/decisions/ci.md is missing" in run(root, "--check").stderr
+    result = run(root, "--check")
+    assert result.returncode == 1
+    assert "docs/decisions/ci.md is missing" in result.stderr
 
 
 def test_a_decision_needs_a_status(root: Path) -> None:
@@ -96,7 +98,26 @@ def test_a_decision_needs_a_status(root: Path) -> None:
         ("5.3 `uart_cfg` *ext*", "53-uart_cfg-ext"),
         ("Decisions: `docs/decisions/<domain>.md`", "decisions-docsdecisionsdomainmd"),
         ("See [the plan](plan.md)", "see-the-plan"),
+        ("An _emphasised_ word, snake_case kept", "an-emphasised-word-snake_case-kept"),
+        ("A ``code `span` `` with backticks", "a-code-span-with-backticks"),
     ],
 )
 def test_github_slug(heading: str, slug: str) -> None:
     assert decisions_index.github_slug(heading) == slug
+
+
+def test_anchors_follow_github() -> None:
+    text = (
+        "# x\n\n## x-1\n\n## x\n\n"  # x, x-1, then x-2: x-1 is taken
+        "````markdown\n## inside\n```python\n## still inside\n````\n\n"
+        "   ### Indented\n\n"
+        "Setext title\n============\n\n"
+        "- a list item\n---\n"
+    )
+    assert decisions_index.anchors(text) == {"x", "x-1", "x-2", "indented", "setext-title"}
+
+
+def test_a_pipe_in_a_status_is_escaped(root: Path) -> None:
+    (root / "docs/decisions/ci.md").write_text("# CI\n\n## A\n\nStatus: decided (#1 | #2)\n")
+    assert run(root).returncode == 0
+    assert "| decided (#1 \\| #2) |" in (root / "docs/decisions/README.md").read_text()

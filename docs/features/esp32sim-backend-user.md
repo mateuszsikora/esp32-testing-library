@@ -23,6 +23,7 @@ unmodified ESP-IDF build for the classic ESP32.
 The two defaults are paths in the checkout esp32tl is installed from, which holds only with an
 editable install; `make setup` makes one. Installed any other way, from a wheel for instance,
 esp32tl finds the runner and the ROM ELF only through `ESP32TL_RUNNER` and `ESP32TL_ROM`.
+A relative path in either resolves against pytest's working directory, not the test file's.
 
 ## How a run goes
 
@@ -48,8 +49,9 @@ esp32tl: the runner exited with code N
 where `N` is the exit code, negative for a signal: `-9` when the runner was killed by `SIGKILL`.
 
 An expect that has not matched by then fails at once with pexpect's `EOF`, instead of waiting out
-its timeout; so does every expect after it. The `EOF` names the exit code and carries the runner's
-last output, up to 2048 bytes of it, from the first whole line, without colour codes:
+its timeout; so does every expect after it, unless it matches the end-of-run line itself. The `EOF`
+names the exit code and carries the runner's last output, up to 2048 bytes of it, from the first
+whole line, without colour codes; part of it may be output that earlier expects already read:
 
 ```
 E   pexpect.exceptions.EOF: the runner exited with code 0; its last output:
@@ -62,7 +64,9 @@ E   Bytes in current buffer (color code eliminated):
 pytest-embedded's "Bytes in current buffer" is empty there, because pexpect empties its buffer at
 EOF: the runner's output is in the first `EOF` instead.
 
-To wait for the end of the run on purpose, `console.expect(pexpect.EOF)`.
+To wait for the end of the run on purpose, `console.expect(pexpect.EOF)`. Its timeout is wall
+time, 30 s by default, so an image that runs slower than real time may need a larger `timeout=` to
+reach the 300 emulated seconds.
 
 ## When the runner exits with an error
 

@@ -67,9 +67,10 @@ lint: $(VENV)/.installed
 	cd runner && cargo fmt --check
 	cd runner && cargo clippy --locked --all-targets -- -D warnings
 
-# The documentation contract (docs/guides/documentation.md): the changes since the merge base
-# with origin/main (else main), or with BASE, must update the documentation that owns them. System python3, not the
-# venv: the script needs only the standard library, and CI runs it without `make setup`.
+# The documentation contract (docs/guides/documentation.md): the changes since
+# the merge base with origin/main (else main), or with BASE, must update the
+# documentation that owns them. System python3, not the venv: the script needs
+# only the standard library, and CI runs it without `make setup`.
 docs-check:
 	python3 scripts/check-docs.py $(if $(BASE),--base $(BASE))
 

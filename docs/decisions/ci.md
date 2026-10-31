@@ -7,8 +7,8 @@ what each job runs.
 
 Status: decided (#48)
 
-The `firmware`, `runner`, `test` and `lint` jobs run on `[self-hosted, Linux, X64]`, the machine
-hp600g1, even a job such as `lint` that needs nothing from it. The repository is private, so
+The `firmware`, `runner`, `test`, `lint` and `docs` jobs run on `[self-hosted, Linux, X64]`, the
+machine hp600g1, even jobs such as `lint` and `docs` that need nothing from it. The repository is private, so
 minutes on GitHub-hosted runners are limited, and macOS minutes count ten times; every job that
 can runs on hp600g1. The machine also keeps the 7 GB `espressif/idf` image between runs, so the
 firmware build pulls nothing, and it has Docker, so the `requires_docker` tests run there. The cost

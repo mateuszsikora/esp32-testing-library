@@ -42,6 +42,8 @@ class Rule:
     # Which changed paths the rule looks at; None is all of them. An empty list is "nothing this
     # rule owns changed", not "look at everything".
     scope: Scope | None = None
+    # Whether only a new document counts: one added since the merge base, or untracked.
+    new_docs: bool = False
 
 
 def without(*patterns: str) -> Scope:
@@ -139,15 +141,20 @@ FEATURES = [
 ]
 
 # The catch-all for the package: boards/, sources/ and any new module are owned from their first
-# line of code instead of matching no rule. py.typed is a marker file with no behaviour.
+# line of code instead of matching no rule. py.typed is a marker file with no behaviour. Only a
+# new feature document satisfies it: an edit to an existing one, a blank line in cli-user.md,
+# would document nothing. Once the new feature has its row in the map, this rule no longer
+# applies to its paths.
 FEATURES.append(
     Rule(
         "F12",
         r"^esp32tl/",
         r"^docs/features/[a-z0-9-]+\.md$",
-        "This path has no owning doc yet: write its feature docs and add it to the ownership map"
+        "This path has no owning doc yet: add its feature docs, a new"
+        " docs/features/<feature>-user.md or -technical.md, and add it to the ownership map"
         " (scripts/check-docs.py, docs/features/README.md, AGENTS.md)",
         without(*(rule.source for rule in FEATURES), r"^esp32tl/py\.typed$"),
+        new_docs=True,
     )
 )
 
@@ -294,6 +301,14 @@ def merge_base(root: Path, base: str | None) -> tuple[str, str]:
     raise NoBase(f"no {tried} to compare with: fetch it, or name the base with --base REF")
 
 
+def added_paths(root: Path, mb: str) -> set[str]:
+    """The files that did not exist at the merge base: added in a commit, staged or not, or
+    untracked."""
+    return paths(root, "diff", "--name-only", "--no-renames", "--diff-filter=A", mb) | paths(
+        root, "ls-files", "--others", "--exclude-standard"
+    )
+
+
 def changed_paths(root: Path, mb: str) -> set[str]:
     """Committed since the merge base, staged, unstaged, and untracked. --no-renames: a rename
     is the removal of its old path, which the old path's rule must see."""
@@ -354,13 +369,15 @@ def require(source: str, docs: str, message: str, scope: list[str], changed: lis
     return owned and not any(re.search(docs, p) for p in changed)
 
 
-def contract(changed: list[str], files: list[str]) -> list[str]:
+def contract(changed: list[str], files: list[str], added: list[str]) -> list[str]:
     """The message of every rule that `changed` breaks. `files` is the changed set before test
-    files and version bumps were taken out, which is where documentation is looked for."""
+    files and version bumps were taken out, which is where documentation is looked for; `added`,
+    the new files among them, for a rule that wants a new document."""
     failures = []
     for rule in RULES:
         scope = rule.scope(changed) if rule.scope else changed
-        if require(rule.source, rule.docs, rule.message, scope, files):
+        docs = added if rule.new_docs else files
+        if require(rule.source, rule.docs, rule.message, scope, docs):
             failures.append(f"{rule.message} [{rule.id}]")
     return failures
 
@@ -498,7 +515,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if os.environ.get("SKIP_DOCS_CHECK") == "1":
-        if not os.environ.get("CI"):
+        # GitHub sets CI=true; CI=false or CI=0 is no CI.
+        if os.environ.get("CI", "").lower() in ("", "0", "false"):
             print("docs-check: skipped (SKIP_DOCS_CHECK=1); CI runs it anyway")
             return 0
         print("docs-check: SKIP_DOCS_CHECK is for local work only; CI checks anyway")
@@ -516,7 +534,7 @@ def main(argv: list[str] | None = None) -> int:
     files = sorted(changed_paths(root, mb))
     tests_left_out = [p for p in files if not any(re.search(t, p) for t in TEST_FILES)]
     changed, failures = drop_version_bumps(root, mb, tests_left_out)
-    failures += contract(changed, files)
+    failures += contract(changed, files, sorted(added_paths(root, mb)))
     failures += integrity(root)
 
     if args.verbose:

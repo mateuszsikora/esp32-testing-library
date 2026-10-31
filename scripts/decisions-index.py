@@ -47,45 +47,78 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 
 
 def headings(text: str) -> Iterator[tuple[int, str, int]]:
-    """(level, text, line index) of every ATX heading outside fenced code blocks."""
-    fence: str | None = None
+    """(level, text, line index) of every heading outside fenced code blocks: ATX headings, indented
+    up to three spaces, and setext ones (a line of `=` or `-` under a paragraph line), whose index
+    is that of the underline."""
+    fence: tuple[str, int] | None = None
+    previous = ""
     for number, line in enumerate(text.splitlines()):
-        stripped = line.lstrip()
-        marker = re.match(r"(`{3,}|~{3,})", stripped)
-        if marker:
-            if fence is None:
-                fence = marker[1][0] * len(marker[1])
-            elif stripped.startswith(fence):
-                fence = None
-            continue
+        marker = re.match(r" {0,3}(`{3,}|~{3,})(.*)$", line)
         if fence is not None:
+            # Only a run of the same character, at least as long, with nothing after it, closes.
+            closes = marker and marker[1][0] == fence[0] and len(marker[1]) >= fence[1]
+            if closes and not marker[2].strip():
+                fence = None
+            previous = ""
             continue
-        heading = re.match(r"^(#{1,6})[ \t]+(.*?)(?:[ \t]+#+)?[ \t]*$", line)
+        if marker and not (marker[1][0] == "`" and "`" in marker[2]):
+            fence = (marker[1][0], len(marker[1]))
+            previous = ""
+            continue
+        heading = re.match(r" {0,3}(#{1,6})[ \t]+(.*?)(?:[ \t]+#+)?[ \t]*$", line)
+        underline = re.match(r" {0,3}(=+|-+)[ \t]*$", line)
         if heading:
             yield len(heading[1]), heading[2], number
+            previous = ""
+            continue
+        if underline and previous and not re.match(r" {0,3}([-*+>|]|\d+[.)])", previous):
+            yield (1 if underline[1][0] == "=" else 2), previous.strip(), number
+            previous = ""
+            continue
+        previous = line if line.strip() else ""
 
 
 def github_slug(text: str) -> str:
-    """The anchor GitHub gives a heading: link text kept and markup dropped, lowercased,
-    everything but letters, digits, `_`, `-` and spaces removed, spaces turned into `-`."""
-    # In a code span, `<domain>` is text, not a tag: GitHub keeps "domain".
-    text = re.sub(r"`([^`]*)`", lambda span: re.sub(r"[<>]", "", span[1]), text)
-    text = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", text)
-    text = re.sub(r"<[^>]+>", "", text)
-    text = re.sub(r"[^\w\- ]", "", text.lower())
-    return text.replace(" ", "-")
+    """The anchor GitHub gives a heading, from its rendered text: code spans kept as text, link
+    text kept, tags and emphasis dropped; then lowercased, everything but letters, digits, `_`,
+    `-` and spaces removed, and spaces turned into `-`."""
+    parts = re.split(r"(`+)(.+?)\1", text)
+    rendered = []
+    for i in range(0, len(parts), 3):
+        prose = parts[i]
+        prose = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", prose)
+        prose = re.sub(r"<[^>]+>", "", prose)
+        # `_` opens or closes emphasis only at a word's edge; snake_case stays.
+        prose = re.sub(r"(?<!\w)_+(?=\S)|(?<=\S)_+(?!\w)", "", prose)
+        rendered.append(prose)
+        if i + 2 < len(parts):
+            # In a code span, `<domain>` is text, not a tag: GitHub keeps "domain".
+            rendered.append(re.sub(r"[<>]", "", parts[i + 2].strip()))
+    slug = re.sub(r"[^\w\- ]", "", "".join(rendered).lower())
+    return slug.replace(" ", "-")
+
+
+class Slugger:
+    """GitHub's numbering of repeated slugs: `x`, `x-1`, `x-2`, skipping a suffixed slug a
+    heading already took, so `x`, `x-1`, `x` gives the third `x-2`."""
+
+    def __init__(self) -> None:
+        self.taken: dict[str, int] = {}
+
+    def slug(self, heading: str) -> str:
+        base = result = github_slug(heading)
+        while result in self.taken:
+            self.taken[base] += 1
+            result = f"{base}-{self.taken[base]}"
+        self.taken[result] = 0
+        return result
 
 
 def anchors(text: str) -> set[str]:
     """Every anchor a link into this Markdown can use: the headings' slugs, numbered the way
-    GitHub numbers repeated ones (`x`, `x-1`, `x-2`), and explicit `id`/`name` attributes."""
-    seen: dict[str, int] = {}
-    found: set[str] = set()
-    for _, heading, _ in headings(text):
-        slug = github_slug(heading)
-        count = seen.get(slug, 0)
-        found.add(slug if count == 0 else f"{slug}-{count}")
-        seen[slug] = count + 1
+    GitHub numbers repeated ones, and explicit `id`/`name` attributes."""
+    slugger = Slugger()
+    found = {slugger.slug(heading) for _, heading, _ in headings(text)}
     found.update(re.findall(r"""<a\s+(?:id|name)=["']([^"']+)["']""", text))
     return found
 
@@ -96,14 +129,11 @@ def decisions(root: Path, domain: str) -> tuple[list[tuple[str, str, str]], list
     text = path.read_text(encoding="utf-8")
     lines = text.splitlines()
     found, errors = [], []
-    slugs: dict[str, int] = {}
+    slugger = Slugger()
     for level, title, number in headings(text):
-        slug = github_slug(title)
-        count = slugs.get(slug, 0)
-        slugs[slug] = count + 1
+        anchor = slugger.slug(title)
         if level != 2:
             continue
-        anchor = slug if count == 0 else f"{slug}-{count}"
         following = next((line for line in lines[number + 1 :] if line.strip()), "")
         status = STATUS.match(following)
         if status is None:
@@ -139,6 +169,7 @@ def generate(root: Path) -> tuple[str, list[str]]:
         parts.append("| Decision | File | Status |\n|---|---|---|\n")
         for decision, anchor, status in found:
             cell = decision.replace("|", "\\|")
+            status = status.replace("|", "\\|")
             parts.append(f"| [{cell}]({domain}.md#{anchor}) | `{domain}.md` | {status} |\n")
     return "".join(parts), errors
 

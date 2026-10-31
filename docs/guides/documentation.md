@@ -198,6 +198,10 @@ added later for any of those jobs does the same:
 - A new file in a part of the map that lists files by name (`scripts/`, the runner's top level,
   the protocol files) matches no rule, and nothing enforces its documentation. Whoever adds the
   file adds it to the map. Under `esp32tl/`, rule F12 catches such files; nothing does elsewhere.
+- F12 asks for a new feature document, but cannot tell whether that document describes the path
+  that changed, or whether the map gained a row for it: review checks both.
+- A red `docs` job does not block a merge while the repository is private: GitHub's free plan has
+  no branch protection for private repositories, so no check can be required.
 - `pyproject.toml` has several owners (rule C7): the check accepts any of their documents, and
   review checks that it was the right one.
 - Agent tooling (`.claude/**`, skills) restates normative files (`CONTRIBUTING.md`, this guide,

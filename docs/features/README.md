@@ -8,8 +8,8 @@ templates.
 |---|---|---|---|
 | pytest plugin: the `board` and `console` fixtures, the `app_path` marker, `--esp32tl-backend` | [user](pytest-plugin-user.md) | [technical](pytest-plugin-technical.md) | `esp32tl/pytest_plugin.py`, `esp32tl/interfaces/` |
 | `esp32sim` backend: the runner under pytest-embedded, on the emulated clock | [user](esp32sim-backend-user.md) | [technical](esp32sim-backend-technical.md) | `esp32tl/backends/` |
-| `esp32tl` command | [user](cli-user.md) | | `esp32tl/cli.py` |
-| Runner: `esp32tl-runner`, esp32sim with the harness attached | [user](runner-user.md) | [technical](runner-technical.md) | `runner/` |
+| `esp32tl` command | [user](cli-user.md) | | `esp32tl/cli.py`, `esp32tl/__init__.py` |
+| Runner: `esp32tl-runner`, esp32sim with the harness attached | [user](runner-user.md) | [technical](runner-technical.md) | `runner/src/`, `runner/Cargo.toml` |
 | Validation firmware and its container build | [user](validation-firmware-user.md) | [technical](validation-firmware-technical.md) | `firmware/` |
 | Link protocol between the runner and the harness (specified; neither peer implements it) | | [protocol](../protocol.md) | `esp32tl/link/`, `runner/src/protocol.rs`, `runner/src/socket_board.rs` |
 
@@ -39,7 +39,7 @@ GitHub Action, a pre-commit hook or a Python dependency.
 | F9 | `^runner/src/protocol\.rs$` | `^docs/protocol\.md$` | Link protocol changed in runner/src/protocol.rs: update docs/protocol.md, and its version if the wire changes |
 | F10 | `^runner/src/socket_board\.rs$` | `^docs/protocol\.md$` | Link protocol changed in runner/src/socket_board.rs: update docs/protocol.md, and its version if the wire changes |
 | F11 | `^firmware/` | `^docs/features/validation-firmware-` | Validation firmware or its build changed: update docs/features/validation-firmware-*.md |
-| F12 | `^esp32tl/`, without the paths of F1 to F11 and `esp32tl/py.typed` | `^docs/features/[a-z0-9-]+\.md$` | This path has no owning doc yet: write its feature docs and add it to the ownership map (scripts/check-docs.py, docs/features/README.md, AGENTS.md) |
+| F12 | `^esp32tl/`, without the paths of F1 to F11 and `esp32tl/py.typed` | `^docs/features/[a-z0-9-]+\.md$`, a new file only | This path has no owning doc yet: add its feature docs, a new docs/features/<feature>-user.md or -technical.md, and add it to the ownership map (scripts/check-docs.py, docs/features/README.md, AGENTS.md) |
 | C1 | `^\.github/workflows/` | `^docs/cicd\.md$` | CI workflow changed: update docs/cicd.md |
 | C2 | `^Makefile$` | `^docs/guides/development\.md$` | Makefile changed: update the make targets in docs/guides/development.md |
 | C3 | `^\.pre-commit-config\.yaml$` | `^docs/guides/development\.md$` | Pre-commit hooks changed: update docs/guides/development.md |

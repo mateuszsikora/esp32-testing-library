@@ -59,6 +59,29 @@ read the images there.
 `make clean` keeps `runner/target/` because the runner's build fetches esp32sim from the network,
 and `.cache/` because the ROM ELF comes from it too.
 
+## Dependencies
+
+`pyproject.toml` declares them; their versions are there, and nowhere in the documentation, so a
+version-only bump needs no document ([documentation.md](documentation.md#the-check)).
+
+| Package | Why | How it is pinned |
+|---|---|---|
+| `pytest` | The plugin is a pytest plugin, loaded through the `pytest11` entry point | Lower bound |
+| `pytest-embedded` | `Dut`, `DuplicateStdoutPopen`, `PexpectProcess`: the backend builds on them | Compatible release (`~=`) |
+| `pytest-embedded-idf[serial]` | `IdfApp`, which reads a build's `flasher_args.json`. pytest-embedded declares no extras, so each service is a package of its own; the `serial` extra pulls `pytest-embedded-serial-esp` and, through it, `pytest-embedded-serial` | Compatible release (`~=`), the same as `pytest-embedded` |
+
+The `dev` extra, which `make setup` installs, adds the tools:
+
+| Package | Why | How it is pinned |
+|---|---|---|
+| `ruff`, `mypy` | `make lint` and the hooks | Exact (`==`), so every worktree and CI lint alike |
+| `types-pexpect` | pexpect's annotations, for mypy | Exact |
+| `pre-commit` | `make hooks` | Lower bound |
+| `esptool` | Imported by the tests | Unpinned: `pytest-embedded-idf[serial]` brings it and chooses its version |
+
+Packaging: `hatchling` builds the wheel, which holds `esp32tl/` only, with the `esp32tl` console
+script (`esp32tl.cli:main`) and the `pytest11` entry point (`esp32tl.pytest_plugin`).
+
 ## Python and `.venv`
 
 `make` creates `.venv` with `python3`, after checking that it is 3.11 or newer:
@@ -127,7 +150,7 @@ clone, because git keeps hooks in the shared `.git` directory.
 
 | Hook | What it runs | On |
 |---|---|---|
-| `end-of-file-fixer`, `trailing-whitespace`, `check-toml`, `check-yaml` | [pre-commit-hooks](https://github.com/pre-commit/pre-commit-hooks) `v6.0.0` | Staged files; TOML and YAML files for the two checks |
+| `end-of-file-fixer`, `trailing-whitespace`, `check-toml`, `check-yaml` | [pre-commit-hooks](https://github.com/pre-commit/pre-commit-hooks), at the `rev` the config pins | Staged files; TOML and YAML files for the two checks |
 | `ruff-check` | `ruff check --fix --force-exclude` from `.venv` | Staged Python files |
 | `ruff-format` | `ruff format --force-exclude` from `.venv` | Staged Python files |
 | `mypy` | `mypy` from `.venv`, over the files `[tool.mypy]` lists (`esp32tl`, `tests`) | Every commit, whatever it stages |

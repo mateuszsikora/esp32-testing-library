@@ -29,7 +29,7 @@ paths, names, defaults and messages quoted verbatim, and `TODO(owner): …` wher
 | `runner/Cargo.toml` (esp32sim pin, profiles) | `docs/features/runner-technical.md`; a pin bump also re-checks what `docs/protocol.md` cites (F7) |
 | `esp32tl/link/`, `runner/src/protocol.rs`, `runner/src/socket_board.rs` | `docs/protocol.md`, and its version if the wire changes (F8, F9, F10) |
 | `firmware/` | `docs/features/validation-firmware-user.md` and/or `-technical.md` (F11) |
-| Any other path under `esp32tl/` (`boards/`, `sources/`, a new module) | A new `docs/features/<feature>-user.md` / `-technical.md`, and a row in the ownership map (F12) |
+| Any other path under `esp32tl/` (`boards/`, `sources/`, a new module) | A new `docs/features/<feature>-user.md` / `-technical.md` (an edit to an existing one does not count), and a row in the ownership map (F12) |
 | `.github/workflows/` | `docs/cicd.md` (C1) |
 | `Makefile`, `.pre-commit-config.yaml`, `scripts/fetch-rom-elf`, `scripts/venv-tool`, `runner/rust-toolchain.toml` | `docs/guides/development.md` (C2 to C6) |
 | `pyproject.toml` | Dependencies and packaging: `docs/guides/development.md`; `[tool.pytest]`: `docs/guides/testing.md`; entry points: the plugin or CLI doc (C7) |
@@ -44,8 +44,9 @@ documentation. The rule ids are those of the ownership map in
 [`docs/features/README.md`](docs/features/README.md#ownership-map), which `scripts/check-docs.py`
 enforces; a change to the map changes the script, that table and this one together.
 
-Verify before finishing: `make docs-check` (`BASE=REF` for a base other than `main`). It prints
-`✗ <message>` for each part of the contract the branch breaks. `SKIP_DOCS_CHECK=1` is for local
+Verify before finishing: `make docs-check`. It compares with `origin/main`, else `main`;
+`BASE=REF` names another base. It prints `✗ <message> [<rule id>]` for each part of the contract
+the branch breaks. `SKIP_DOCS_CHECK=1` is for local
 work in progress only; CI ignores it and runs the "Documentation contract" step on every pull
 request. [`docs/guides/documentation.md`](docs/guides/documentation.md) says how to write each kind
 of document, how the check works and what it cannot catch.

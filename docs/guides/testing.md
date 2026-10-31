@@ -88,8 +88,8 @@ A missing image fails the tests that need it rather than skipping them:
 on an image built in a container other than the one `firmware/build.sh` pins
 (`<image> was built in <container> (ESP-IDF <version>), not in <pinned> (<version>): run make firmware`),
 and passes an `IDF_LOCAL=1` build with a warning. A missing runner or ROM ELF fails with
-`no runner at <path>: run make setup, or set ESP32TL_RUNNER` or
-`no ROM ELF at <path>: run make setup, or set ESP32TL_ROM`.
+`esp32sim: no runner at <path>: run make setup, or set ESP32TL_RUNNER` or
+`esp32sim: no ROM ELF at <path>: run make setup, or set ESP32TL_ROM`.
 
 In `tests/test_firmware_build.py`, `test_build_refuses_esp32tl_container_set_on_the_host` skips
 with `this suite runs in a Docker container` when `/.dockerenv` exists.

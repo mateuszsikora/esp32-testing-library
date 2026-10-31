@@ -15,8 +15,9 @@ a `DuplicateStdoutPopen` on the dut's `msg_queue`.
 1. **`load_app(app_path)`** checks that `<app_path>/build/flasher_args.json` is a file, then builds
    `IdfApp(app_path, build_dir=str(build))`. The build directory is absolute on purpose: given
    `build`, `IdfApp` falls back to a `build` directory in the working directory when the app has
-   none. It then refuses a target other than `esp32` (`IdfApp.target`, from `IDF_TARGET` in
-   `config/sdkconfig.json`), `flash_settings["encrypt"]` (any file marked `"encrypted": "true"`),
+   none. It then refuses a target other than `esp32` (`IdfApp.target`: `IDF_TARGET` in
+   `config/sdkconfig.json`; without that file, `extra_esptool_args.chip` in `flasher_args.json`;
+   `esp32` when neither names one, so a build with neither passes the check), `flash_settings["encrypt"]` (any file marked `"encrypted": "true"`),
    and any of `app.flash_files` that is not a file. The result is `Esp32Sim.app`.
 2. **`runner_path()`** and **`rom_path()`** resolve the runner and the ROM ELF
    ([Configuration](#configuration)).
@@ -81,8 +82,8 @@ END_OF_RUN = re.compile(rb"\nesp32tl: the runner exited with code (-?\d+)\n")
 The code is `Popen.returncode`: the exit status, or minus the signal number.
 
 From the build, through `IdfApp`: `flasher_args.json` (`flash_files`, offset to path relative to
-`build/`; the `encrypted` field of the entries that name a file), `config/sdkconfig.json`
-(`IDF_TARGET`). [validation-firmware-technical.md](validation-firmware-technical.md) describes the
+`build/`; the `encrypted` field of the entries that name a file; `extra_esptool_args.chip` when
+there is no `sdkconfig.json`), `config/sdkconfig.json` (`IDF_TARGET`). [validation-firmware-technical.md](validation-firmware-technical.md) describes the
 builds this repository makes.
 
 ## Interfaces

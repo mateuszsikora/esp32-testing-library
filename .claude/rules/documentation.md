@@ -25,17 +25,19 @@ the two differ. How to write each document: `docs/guides/documentation.md`.
 - `runner/Cargo.toml` → `docs/features/runner-technical.md`
 - `esp32tl/link/`, `runner/src/protocol.rs`, `runner/src/socket_board.rs` → `docs/protocol.md`
 - `firmware/` → `docs/features/validation-firmware-*.md`
-- any other `esp32tl/` path → a new feature doc and a row in the ownership map
+- any other `esp32tl/` path → a new `docs/features/<feature>-*.md` and a row in the ownership map
 - `.github/workflows/` → `docs/cicd.md`
 - `Makefile`, `.pre-commit-config.yaml`, `scripts/fetch-rom-elf`, `scripts/venv-tool`,
   `runner/rust-toolchain.toml` → `docs/guides/development.md`
 - `pyproject.toml` → development guide, testing guide, or the plugin or CLI doc, by section
 - `tests/conftest.py` → `docs/guides/testing.md`
-- `scripts/check-docs.py`, `scripts/decisions-index.py` → `AGENTS.md`,
-  `docs/features/README.md` and/or `docs/guides/documentation.md`
+- `scripts/check-docs.py`, `scripts/decisions-index.py` → `AGENTS.md` and/or
+  `docs/guides/documentation.md`; a change to the rules also changes the table in
+  `docs/features/README.md`, which the check compares with the script
 - `tools/` → Reproducing in `docs/stage0-findings.md`
 - a rejected alternative or postponed scope → `docs/decisions/<domain>.md`, then
   `python3 scripts/decisions-index.py`
+- a domain rule that a test enforces → `docs/invariants.md`
 
 Test files and version-only bumps need nothing.
 

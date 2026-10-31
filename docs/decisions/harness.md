@@ -53,7 +53,7 @@ Status: decided (#51)
 
 `@pytest.mark.app_path(path)` names the app, relative to the test file's directory; without the
 marker the app is that directory, pytest-embedded's default. A marker without exactly one path
-fails the test with a readable message.
+is a collection error whose one-line message names the test.
 
 **Rejected:** letting tests parametrise `app_path` themselves, because that would collide with the
 plugin's own parametrisation of the same name.
