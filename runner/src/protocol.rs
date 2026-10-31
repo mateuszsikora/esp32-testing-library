@@ -98,13 +98,21 @@ pub enum Incoming {
         baud: u32,
         data: Vec<u8>,
     },
+    GpioIn {
+        t: u64,
+        levels: Vec<(u8, bool)>,
+    },
+    Release {
+        t: u64,
+        pins: Vec<u8>,
+    },
     Wait {
         ack: u64,
         quiet_until: Option<u64>,
         latency: Option<u64>,
     },
     Stop,
-    /// `gpio_in`, `release` or `adc`: valid messages the runner does not implement until #23.
+    /// `adc`: a valid message the runner does not implement yet.
     NotYet(&'static str),
 }
 
@@ -142,9 +150,15 @@ pub fn parse(line: &str) -> Result<Incoming, String> {
             quiet_until: field("quiet_until").optional()?,
             latency: field("latency").optional()?,
         },
+        "gpio_in" => Incoming::GpioIn {
+            t: field("t").time()?,
+            levels: field("levels").levels()?,
+        },
+        "release" => Incoming::Release {
+            t: field("t").time()?,
+            pins: field("pins").pins()?,
+        },
         "stop" => Incoming::Stop,
-        "gpio_in" => Incoming::NotYet("gpio_in"),
-        "release" => Incoming::NotYet("release"),
         "adc" => Incoming::NotYet("adc"),
         _ => return Err(format!("unknown type {kind:?}")),
     })
@@ -204,6 +218,25 @@ impl Field<'_> {
             .collect::<Option<_>>()
             .ok_or_else(|| self.error("holds something other than GPIO numbers"))
     }
+    /// `[pin, level]` pairs, a level being 0 or 1.
+    fn levels(&self) -> Result<Vec<(u8, bool)>, String> {
+        let items = match self.value() {
+            Some(value) => value
+                .as_arr()
+                .ok_or_else(|| self.error("is not an array"))?,
+            None => return Err(self.error("is missing")),
+        };
+        items
+            .iter()
+            .map(|pair| match pair.as_arr() {
+                Some([Json::Int(p), Json::Int(level @ (0 | 1))]) => {
+                    pin(*p).map(|p| (p, *level == 1))
+                }
+                _ => None,
+            })
+            .collect::<Option<_>>()
+            .ok_or_else(|| self.error("holds something other than [pin, level] pairs"))
+    }
 }
 
 fn pin(v: i64) -> Option<u8> {
@@ -257,6 +290,19 @@ pub fn uart_cfg(seq: u64, t: u64, route: &UartRoute) -> String {
     )
 }
 
+pub fn gpio_out(seq: u64, t: u64, changes: &[(u8, bool)], enabled: u64, output: u64) -> String {
+    let changes: Vec<String> = changes
+        .iter()
+        .map(|&(pin, level)| format!("[{pin},{}]", u8::from(level)))
+        .collect();
+    format!(
+        r#"{{"type":"gpio_out","seq":{seq},"t":{t},"changes":[{}],"enabled":{},"output":{}}}"#,
+        changes.join(","),
+        pins(enabled),
+        pins(output)
+    )
+}
+
 pub fn reset(seq: u64, t: u64, cause: u32) -> String {
     format!(r#"{{"type":"reset","seq":{seq},"t":{t},"cause":{cause}}}"#)
 }
@@ -265,19 +311,21 @@ pub fn console(t: u64, data: &[u8]) -> String {
     format!(r#"{{"type":"console","t":{t},"data":"{}"}}"#, base64(data))
 }
 
-/// What the emulator dropped (protocol 5.8).
+/// What the emulator dropped or refused (protocol 5.8).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WarnKind {
     RxFifoOvf,
     FrmErr,
     UnroutedRx,
+    /// `gpio_in` on a pin the guest drives: one per pin and message, never merged, no `bytes`.
+    InputOnOutput,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Warn {
     pub t: u64,
     pub kind: WarnKind,
-    /// `None` for `unrouted_rx`: no UART received the bytes.
+    /// `None` for `unrouted_rx`, where no UART received the bytes, and for `input_on_output`.
     pub port: Option<usize>,
     pub pin: u8,
     /// The route's baud, for `frm_err`.
@@ -313,6 +361,13 @@ pub fn warn(w: &Warn) -> String {
                 w.pin, w.bytes
             ),
         ),
+        WarnKind::InputOnOutput => (
+            "input_on_output",
+            format!(
+                "gpio_in on GPIO {}, which the guest drives as an output: the level is applied all the same",
+                w.pin
+            ),
+        ),
     };
     let mut out = format!(r#"{{"type":"warn","t":{},"kind":"{kind}""#, w.t);
     if let Some(port) = w.port {
@@ -322,12 +377,10 @@ pub fn warn(w: &Warn) -> String {
     if w.kind == WarnKind::FrmErr {
         let _ = write!(out, r#","baud":{}"#, opt(w.baud));
     }
-    let _ = write!(
-        out,
-        r#","bytes":{},"detail":"{}"}}"#,
-        w.bytes,
-        escape(&detail)
-    );
+    if w.kind != WarnKind::InputOnOutput {
+        let _ = write!(out, r#","bytes":{}"#, w.bytes);
+    }
+    let _ = write!(out, r#","detail":"{}"}}"#, escape(&detail));
     out
 }
 
@@ -348,6 +401,8 @@ pub struct Stats {
     pub turns: u64,
     pub uart: [PortStats; 3],
     pub unrouted_rx_bytes: u64,
+    /// `gpio_in` levels on a pin the guest drove as an output, one per `input_on_output` warning.
+    pub inputs_on_output: u64,
     pub inputs_not_applied: u64,
     pub rx_bytes_not_paced: u64,
 }
@@ -370,11 +425,12 @@ pub fn stats(t: u64, end: &str, extra: &[(&str, &str)], s: &Stats) -> String {
         .collect();
     let _ = write!(
         out,
-        r#","resets":{},"turns":{},"uart":[{}],"unrouted_rx_bytes":{},"inputs_on_output":0,"inputs_not_applied":{},"rx_bytes_not_paced":{}}}"#,
+        r#","resets":{},"turns":{},"uart":[{}],"unrouted_rx_bytes":{},"inputs_on_output":{},"inputs_not_applied":{},"rx_bytes_not_paced":{}}}"#,
         s.resets,
         s.turns,
         uart.join(","),
         s.unrouted_rx_bytes,
+        s.inputs_on_output,
         s.inputs_not_applied,
         s.rx_bytes_not_paced
     );

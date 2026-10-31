@@ -3,9 +3,9 @@
 //! The guest runs in slices: `max_cycles` is set to the slice's end and `run` returns
 //! `Stop::Halted` there. Between slices, where the runner has the bus, it turns what the board
 //! recorded into messages, compares the UART routes, takes the turn at the block point `B`,
-//! applies the inputs now due and paces received bytes into the chip. A slice ends at the
-//! earliest of `B`, the next paced byte, the next queued input, the next whole emulated
-//! millisecond and the end of the run.
+//! applies the inputs now due (GPIO levels through the board) and paces received bytes into the
+//! chip. A slice ends at the earliest of `B`, the next paced byte, the next queued input, the
+//! next whole emulated millisecond and the end of the run.
 //!
 //! One more bound keeps an event from carrying the guest past its own block point: while no event
 //! is unacknowledged, a slice is at most `latency` long, because an event in it would set
@@ -16,8 +16,8 @@
 use crate::protocol::{self, Incoming, Stats, Warn, WarnKind, char_ns, cycles, ns};
 use crate::socket_board::{Recorded, Shared};
 use crate::transport::{Link, LinkError};
-use esp_soc::Stop;
 use esp_soc::uart::{UartInput, UartRoute};
+use esp_soc::{SocBus, Stop};
 use std::collections::{BTreeMap, VecDeque};
 use std::convert::Infallible;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -25,6 +25,11 @@ use std::time::{Duration, Instant};
 
 /// The classic chip's UARTs.
 pub const PORTS: usize = 3;
+/// The classic chip's GPIOs, as a mask: 0 to 39 but 24 and 28 to 31, as esp32sim has them
+/// (`esp32/src/soc.rs:191`; it ignores levels on 40 and above, `esp32/src/periph.rs:373-376`)
+/// and as the board profiles accept them (`esp32tl/boards`, `GPIOS`). GPIO 20 is bonded only on
+/// some packages, and kept.
+const GPIOS: u64 = ((1 << 40) - 1) & !(1 << 24 | 0xf << 28);
 /// The classic RX FIFO (`esp-periph/src/uart.rs`): what does not fit is dropped.
 const RX_FIFO: usize = 128;
 /// The longest `data` of one message, so that a line stays well under the 1 MiB limit.
@@ -42,6 +47,11 @@ pub trait Guest {
     fn rx_pending(&self, port: usize) -> usize;
     /// One received byte on `pin`, into every UART whose RX pin it is.
     fn uart_input(&mut self, pin: u8, baud: u32, byte: u8);
+    /// `GPIO_ENABLE` and `GPIO_OUT`, the words `gpio_output_at` reports.
+    fn gpio_drive(&self) -> (u64, u64);
+    /// Has the chip take the levels and releases the run loop handed the board, now rather than
+    /// at the bus's next tick.
+    fn take_gpio_inputs(&mut self);
 }
 
 impl Guest for esp32::Machine {
@@ -66,6 +76,19 @@ impl Guest for esp32::Machine {
             .periph
             .uart_pin_input(&UartInput::new(pin, baud, vec![byte]));
         self.bus.irq_dirty = true;
+    }
+    fn gpio_drive(&self) -> (u64, u64) {
+        let gpio = &self.bus.periph.gpio.gpio;
+        (gpio.enable, gpio.out)
+    }
+    fn take_gpio_inputs(&mut self) {
+        // what the bus does with them at its next tick (`deliver_board_inputs`)
+        for edge in self.bus.board.take_edges() {
+            SocBus::gpio_set_input(&mut self.bus, edge.pin, edge.level);
+        }
+        for pin in self.bus.board.released_inputs() {
+            SocBus::gpio_release_input(&mut self.bus, pin);
+        }
     }
 }
 
@@ -166,11 +189,11 @@ enum Open {
     Warn(Warn),
 }
 
-struct Input {
-    t: u64,
-    pin: u8,
-    baud: u32,
-    data: Vec<u8>,
+/// A queued input (protocol §8).
+enum Input {
+    Uart { pin: u8, baud: u32, data: Vec<u8> },
+    Gpio(Vec<(u8, bool)>),
+    Release(Vec<u8>),
 }
 
 struct Paced {
@@ -283,7 +306,13 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                     );
                     self.stats.resets += 1;
                     self.pending.push_back(Item::Reset { cycle, cause });
-                    // the boundary that follows sends the reset routes right after it
+                    // the reset changes the chip's pins without the hooks that would report it
+                    let routes = self.routes();
+                    self.pending.push_back(Item::Routes { cycle, routes });
+                    if self.watch != 0 {
+                        let state = self.reset_gpio(cycle);
+                        self.pending.push_back(Item::Board(state));
+                    }
                 }
                 stop => return Err(End::Emulator(stop)),
             }
@@ -313,6 +342,12 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                 if chip != protocol::CHIP {
                     return Err(protocol_error(
                         &format!("chip {chip:?}, the runner runs {:?}", protocol::CHIP),
+                        &line,
+                    ));
+                }
+                if let Some(pin) = watch.iter().find(|&&pin| GPIOS & 1 << pin == 0) {
+                    return Err(protocol_error(
+                        &format!("watch holds GPIO {pin}, which the esp32 does not have"),
                         &line,
                     ));
                 }
@@ -347,7 +382,7 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
             return Ok(());
         }
         self.close_after_gap(ns(now))?;
-        self.apply_inputs(now);
+        self.apply_inputs(now)?;
         self.deliver(now, &routes)?;
         self.link.idle().map_err(link_end)
     }
@@ -399,6 +434,30 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
         }
     }
 
+    /// The watched pins' output state after a chip reset, read from the bus, as a `gpio_out`
+    /// (protocol 5.5). `reboot()` leaves `GPIO_ENABLE` and `GPIO_OUT` 0 and IO_MUX at function 0,
+    /// through which esp32sim drives no pad: no pad is driven, and taking a pad as driven high
+    /// where both words have its bit agrees with that. `changes` holds every watched pin whose
+    /// level differs from the one last reported in `changes`.
+    fn reset_gpio(&mut self, cycle: u64) -> Recorded {
+        let (enable, out) = self.guest.gpio_drive();
+        let mut shared = self.shared.borrow_mut();
+        let now = (enable & self.watch, out & self.watch);
+        let level = now.0 & now.1;
+        let changed = level ^ shared.levels_reported;
+        shared.reported = now;
+        shared.levels_reported = level;
+        Recorded::Gpio {
+            cycle,
+            changes: (0..64)
+                .filter(|&pin| changed & 1 << pin != 0)
+                .map(|pin| (pin, level & 1 << pin != 0))
+                .collect(),
+            enabled: now.0,
+            output: now.1,
+        }
+    }
+
     fn routes(&self) -> [UartRoute; PORTS] {
         std::array::from_fn(|port| self.guest.uart_route(port))
     }
@@ -440,8 +499,16 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                         self.close_open()?;
                     }
                 }
-                // `gpio_out` comes with #23
-                Item::Board(Recorded::Gpio { .. }) => {}
+                Item::Board(Recorded::Gpio {
+                    changes,
+                    enabled,
+                    output,
+                    ..
+                }) => {
+                    self.event(t, |seq| {
+                        protocol::gpio_out(seq, t, &changes, enabled, output)
+                    })?;
+                }
                 Item::Reset { cause, .. } => {
                     self.event(t, |seq| protocol::reset(seq, t, cause))?;
                 }
@@ -518,6 +585,7 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
         baud: Option<u32>,
     ) -> Result<(), End> {
         if let Some(Open::Warn(w)) = &mut self.open
+            && kind != WarnKind::InputOnOutput
             && w.kind == kind
             && w.port == port
             && w.pin == pin
@@ -584,24 +652,38 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
         loop {
             let line = self.recv(deadline)?;
             let msg = protocol::parse(&line).map_err(|e| protocol_error(&e, &line))?;
+            // an input's time and pins (rule 2, protocol 5.1)
+            let check = |t: u64, mut pins: Vec<u8>| {
+                if t < b {
+                    return Err(protocol_error(
+                        &format!("t {t} is before this turn's sync at {b} (rule 2)"),
+                        &line,
+                    ));
+                }
+                pins.retain(|&pin| !self.watched(pin));
+                match pins.first() {
+                    Some(pin) => Err(protocol_error(
+                        &format!("GPIO {pin} is not in the peer's watch"),
+                        &line,
+                    )),
+                    None => Ok(()),
+                }
+            };
             match msg {
                 Incoming::UartRx { t, pin, baud, data } => {
-                    if t < b {
-                        return Err(protocol_error(
-                            &format!("t {t} is before this turn's sync at {b} (rule 2)"),
-                            &line,
-                        ));
-                    }
-                    if !self.watched(pin) {
-                        return Err(protocol_error(
-                            &format!("GPIO {pin} is not in the peer's watch"),
-                            &line,
-                        ));
-                    }
+                    check(t, vec![pin])?;
                     if baud == 0 {
                         return Err(protocol_error("a baud of 0", &line));
                     }
-                    inputs.push(Input { t, pin, baud, data });
+                    inputs.push((t, Input::Uart { pin, baud, data }));
+                }
+                Incoming::GpioIn { t, levels } => {
+                    check(t, levels.iter().map(|&(pin, _)| pin).collect())?;
+                    inputs.push((t, Input::Gpio(levels)));
+                }
+                Incoming::Release { t, pins } => {
+                    check(t, pins.clone())?;
+                    inputs.push((t, Input::Release(pins)));
                 }
                 Incoming::Wait {
                     ack,
@@ -627,9 +709,9 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                     }
                     self.quiet_until = quiet_until;
                     self.latency = latency;
-                    for input in inputs {
+                    for (t, input) in inputs {
                         self.arrivals += 1;
-                        self.inputs.insert((input.t, self.arrivals), input);
+                        self.inputs.insert((t, self.arrivals), input);
                     }
                     return Ok(());
                 }
@@ -639,7 +721,7 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                 }
                 Incoming::NotYet(kind) => {
                     return Err(protocol_error(
-                        &format!("{kind} is not implemented yet (#23)"),
+                        &format!("{kind} is not implemented yet"),
                         &line,
                     ));
                 }
@@ -647,24 +729,51 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
         }
     }
 
-    /// Puts the received bytes of every input now due on their lines (rule 5).
-    fn apply_inputs(&mut self, now: u64) {
+    /// Applies every input now due, in the queue's order: received bytes go on their lines
+    /// (rule 5), GPIO levels and releases to the board, which hands them to the chip at once.
+    fn apply_inputs(&mut self, now: u64) -> Result<(), End> {
+        let mut gpio = false;
         while let Some(entry) = self.inputs.first_entry() {
-            if cycles(entry.key().0) > now {
+            let t = entry.key().0;
+            if cycles(t) > now {
                 break;
             }
-            let input = entry.remove();
-            let line = self.lines.entry(input.pin).or_default();
-            let d0 = input.t.max(line.free);
-            for (k, &byte) in input.data.iter().enumerate() {
-                line.bytes.push_back(Paced {
-                    due: d0 + char_ns(k as u64, input.baud),
-                    baud: input.baud,
-                    byte,
-                });
+            match entry.remove() {
+                Input::Uart { pin, baud, data } => {
+                    let line = self.lines.entry(pin).or_default();
+                    let d0 = t.max(line.free);
+                    for (k, &byte) in data.iter().enumerate() {
+                        line.bytes.push_back(Paced {
+                            due: d0 + char_ns(k as u64, baud),
+                            baud,
+                            byte,
+                        });
+                    }
+                    line.free = d0 + char_ns(data.len() as u64, baud);
+                }
+                Input::Gpio(levels) => {
+                    let enabled = self.guest.gpio_drive().0;
+                    for (pin, level) in levels {
+                        if enabled & 1 << pin != 0 {
+                            self.stats.inputs_on_output += 1;
+                            self.warn(ns(now), WarnKind::InputOnOutput, None, pin, None)?;
+                        }
+                        self.shared.borrow_mut().drive(now, pin, level);
+                    }
+                    gpio = true;
+                }
+                Input::Release(pins) => {
+                    for pin in pins {
+                        self.shared.borrow_mut().release(pin);
+                    }
+                    gpio = true;
+                }
             }
-            line.free = d0 + char_ns(input.data.len() as u64, input.baud);
         }
+        if gpio {
+            self.guest.take_gpio_inputs();
+        }
+        Ok(())
     }
 
     fn next_paced(&self) -> Option<u64> {

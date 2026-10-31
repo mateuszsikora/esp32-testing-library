@@ -1,7 +1,8 @@
 //! The run loop against a scripted guest and a fake peer: the arithmetic of slices, block points
 //! and pacing, the flush points, and the rules of `docs/protocol.md` the runner enforces.
 use super::*;
-use crate::socket_board::Recorder;
+use crate::socket_board::{Recorder, SocketBoard};
+use esp_soc::BoardModel;
 use esp_soc::json::{Json, parse_json};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -10,6 +11,9 @@ const GNSS_TX: u8 = 4;
 const GNSS_RX: u8 = 5;
 const MODEM_TX: u8 = 26;
 const MODEM_RX: u8 = 27;
+/// A modem's power key, which the guest drives, and its ring indicator, which the peer drives.
+const PWRKEY: u8 = 13;
+const RI: u8 = 33;
 /// One emulated second, in bus cycles.
 const SECOND: u64 = esp32::periph::CPU_HZ;
 
@@ -28,14 +32,24 @@ enum Act {
     Reset(u32),
     /// The guest reads its RX FIFO empty.
     Drain(usize),
+    /// The guest writes `GPIO_ENABLE` and `GPIO_OUT`, and the pads follow them.
+    Drive(u64, u64),
+    /// The hook reports these pad changes with `GPIO_ENABLE` and `GPIO_OUT` as given: a pad a
+    /// peripheral drives through the GPIO matrix, whatever the two words say.
+    Pads(Vec<(u8, bool)>, u64, u64),
     Fault,
 }
 
 /// A guest that does what its script says at the cycles it says, and records UART bytes the way
-/// `SocketBoard` does. `overshoot` is how far past a slice's end `run` returns, as it does at
-/// clocks below 240 MHz (protocol 6.1).
+/// `SocketBoard` does. Its GPIO goes through a real `SocketBoard`. `overshoot` is how far past a
+/// slice's end `run` returns, as it does at clocks below 240 MHz (protocol 6.1).
 struct FakeGuest {
     shared: Shared,
+    board: SocketBoard,
+    /// `GPIO_ENABLE` and `GPIO_OUT`.
+    drive: (u64, u64),
+    /// What the chip took from the board, with the cycle: a level, or `None` for a release.
+    inputs: Vec<(u64, u8, Option<bool>)>,
     now: u64,
     overshoot: u64,
     script: VecDeque<(u64, Act)>,
@@ -50,8 +64,12 @@ impl FakeGuest {
     fn new(script: Vec<(u64, Act)>) -> Self {
         let mut script = script;
         script.sort_by_key(|(cycle, _)| *cycle);
+        let shared = Rc::new(RefCell::new(Recorder::default()));
         Self {
-            shared: Rc::new(RefCell::new(Recorder::default())),
+            board: SocketBoard::new(shared.clone()),
+            shared,
+            drive: (0, 0),
+            inputs: Vec::new(),
             now: 0,
             overshoot: 0,
             script: script.into(),
@@ -99,6 +117,20 @@ impl Guest for FakeGuest {
                     return Stop::SwReset;
                 }
                 Act::Drain(port) => self.fifo[port].clear(),
+                Act::Drive(enable, out) => {
+                    let (was_enable, was_out) = self.drive;
+                    let (old, new) = (was_enable & was_out, enable & out);
+                    let changes: Vec<(u8, bool)> = (0..64)
+                        .filter(|&pin| (old ^ new) & 1 << pin != 0)
+                        .map(|pin| (pin, new & 1 << pin != 0))
+                        .collect();
+                    self.drive = (enable, out);
+                    self.board.gpio_output_at(self.now, &changes, enable, out);
+                }
+                Act::Pads(changes, enable, out) => {
+                    self.drive = (enable, out);
+                    self.board.gpio_output_at(self.now, &changes, enable, out);
+                }
                 Act::Fault => return Stop::Exceptions(3),
             }
         }
@@ -111,6 +143,7 @@ impl Guest for FakeGuest {
         };
         self.routes = std::array::from_fn(|port| UartRoute::new(port, 0, None, None));
         self.fifo = Default::default();
+        self.drive = (0, 0);
         cause
     }
     fn uart_route(&self, port: usize) -> UartRoute {
@@ -125,6 +158,17 @@ impl Guest for FakeGuest {
             if r.rx_pin == Some(pin) && r.matches_baud(baud) && self.fifo[port].len() < RX_FIFO {
                 self.fifo[port].push((self.now, byte));
             }
+        }
+    }
+    fn gpio_drive(&self) -> (u64, u64) {
+        self.drive
+    }
+    fn take_gpio_inputs(&mut self) {
+        for edge in self.board.take_edges() {
+            self.inputs.push((self.now, edge.pin, Some(edge.level)));
+        }
+        for pin in self.board.released_inputs() {
+            self.inputs.push((self.now, pin, None));
         }
     }
 }
@@ -370,6 +414,23 @@ fn a_handshake_mismatch_is_a_protocol_error_with_stats() {
             "chip \"esp32s3\"",
         ),
         (r#"{"type":"wait","ack":0}"#, "expected hello"),
+        // pins the classic chip does not have, though the parser takes any below 64
+        (
+            r#"{"type":"hello","version":1,"chip":"esp32","watch":[4,24]}"#,
+            "watch holds GPIO 24, which the esp32 does not have",
+        ),
+        (
+            r#"{"type":"hello","version":1,"chip":"esp32","watch":[28]}"#,
+            "GPIO 28",
+        ),
+        (
+            r#"{"type":"hello","version":1,"chip":"esp32","watch":[40]}"#,
+            "GPIO 40",
+        ),
+        (
+            r#"{"type":"hello","version":1,"chip":"esp32","watch":[63]}"#,
+            "GPIO 63",
+        ),
     ] {
         let peer = FakePeer::with_hello(hello, |_| panic!("no turn after a bad hello"));
         let r = run(0.01, FakeGuest::new(vec![]), peer);
@@ -779,8 +840,8 @@ fn a_reset_is_forwarded_with_its_cause_and_the_reset_routes() {
         .collect();
     let t = ns(at);
     let first_cfg = ns(0);
-    // power-on route, the byte, the reset, the reset routes, and the route the firmware sets up
-    // again: the next slice boundary sees it, at most a millisecond later
+    // power-on route, the byte, the reset, the reset routes and pins, and the route the firmware
+    // sets up again: the next slice boundary sees it, at most a millisecond later
     assert_eq!(
         events,
         [
@@ -788,6 +849,7 @@ fn a_reset_is_forwarded_with_its_cause_and_the_reset_routes() {
             ("uart_tx".into(), ns(cycles(MS))),
             ("reset".into(), t),
             ("uart_cfg".into(), t),
+            ("gpio_out".into(), t),
             ("uart_cfg".into(), ns(cycles(3 * MS))),
         ]
     );
@@ -921,8 +983,16 @@ fn the_runner_refuses_what_the_protocol_forbids() {
             "baud of 0",
         ),
         (
-            vec![r#"{"type":"gpio_in","t":0,"levels":[[5,1]]}"#.to_string()],
-            "gpio_in is not implemented",
+            vec![r#"{"type":"gpio_in","t":0,"levels":[[6,1]]}"#.to_string()],
+            "GPIO 6 is not in",
+        ),
+        (
+            vec![r#"{"type":"release","t":0,"pins":[5,6]}"#.to_string()],
+            "GPIO 6 is not in",
+        ),
+        (
+            vec![r#"{"type":"adc","t":0,"pin":5,"volts":1.0}"#.to_string()],
+            "adc is not implemented yet: ",
         ),
         (vec![r#"{"type":"bogus"}"#.to_string()], "unknown type"),
         (
@@ -1056,6 +1126,12 @@ fn a_signal_ends_the_slice_in_progress_with_stats() {
         fn uart_input(&mut self, pin: u8, baud: u32, byte: u8) {
             self.0.uart_input(pin, baud, byte)
         }
+        fn gpio_drive(&self) -> (u64, u64) {
+            self.0.gpio_drive()
+        }
+        fn take_gpio_inputs(&mut self) {
+            self.0.take_gpio_inputs()
+        }
     }
     let signal = AtomicBool::new(false);
     let inner = FakeGuest::new(tx(10, 1, b"x", 0)).with_routes(&[modem(9600)]);
@@ -1163,6 +1239,12 @@ fn on_the_emulator_the_slices_stop_a_guest_asleep_in_waiti_at_the_block_point() 
         }
         fn uart_input(&mut self, pin: u8, baud: u32, byte: u8) {
             Guest::uart_input(&mut self.m, pin, baud, byte)
+        }
+        fn gpio_drive(&self) -> (u64, u64) {
+            Guest::gpio_drive(&self.m)
+        }
+        fn take_gpio_inputs(&mut self) {
+            Guest::take_gpio_inputs(&mut self.m)
         }
     }
 
@@ -1342,4 +1424,353 @@ fn nothing_reaches_the_guest_after_the_end_of_the_run() {
     assert!(matches!(r.end, End::MaxSeconds), "{:?}", r.end);
     assert!(r.guest.received(1).is_empty());
     assert_eq!(num(r.peer.stats(), "inputs_not_applied"), 1);
+}
+
+fn gpio_in(t: u64, levels: &[(u8, u8)]) -> String {
+    let levels: Vec<String> = levels.iter().map(|(p, l)| format!("[{p},{l}]")).collect();
+    format!(
+        r#"{{"type":"gpio_in","t":{t},"levels":[{}]}}"#,
+        levels.join(",")
+    )
+}
+
+fn release(t: u64, pins: &[u8]) -> String {
+    let pins: Vec<String> = pins.iter().map(u8::to_string).collect();
+    format!(
+        r#"{{"type":"release","t":{t},"pins":[{}]}}"#,
+        pins.join(",")
+    )
+}
+
+fn pins_of(msg: &Json, key: &str) -> Vec<u64> {
+    msg.get(key)
+        .and_then(Json::as_arr)
+        .unwrap()
+        .iter()
+        .map(|p| p.as_i64().unwrap() as u64)
+        .collect()
+}
+
+/// A `gpio_out`'s `t`, `changes`, `enabled` and `output`.
+type GpioOut = (u64, Vec<(u64, u64)>, Vec<u64>, Vec<u64>);
+
+fn changes_of(msg: &Json) -> Vec<(u64, u64)> {
+    msg.get("changes")
+        .and_then(Json::as_arr)
+        .unwrap()
+        .iter()
+        .map(|c| {
+            let c = c.as_arr().unwrap();
+            (c[0].as_i64().unwrap() as u64, c[1].as_i64().unwrap() as u64)
+        })
+        .collect()
+}
+
+#[test]
+fn gpio_out_reports_watched_pins_with_their_enable_and_latch_as_an_event() {
+    let latency = 100_000;
+    let guest = FakeGuest::new(vec![
+        // an unwatched pin alone: nothing on the socket
+        (cycles(MS), Act::Drive(1 << 2, 1 << 2)),
+        (
+            cycles(2 * MS),
+            Act::Drive(1 << 2 | 1 << PWRKEY, 1 << 2 | 1 << PWRKEY),
+        ),
+        (cycles(3 * MS), Act::Drive(1 << PWRKEY, 0)),
+        // the line released: an enable-only change, with no level change
+        (cycles(4 * MS), Act::Drive(0, 0)),
+    ]);
+    let r = run(
+        0.01,
+        guest,
+        FakePeer::new(&[PWRKEY], idle(None, Some(latency))),
+    );
+    assert!(matches!(r.end, End::MaxSeconds), "{:?}", r.end);
+    let out = r.peer.of("gpio_out");
+    let seen: Vec<GpioOut> = out
+        .iter()
+        .map(|m| {
+            (
+                num(m, "t"),
+                changes_of(m),
+                pins_of(m, "enabled"),
+                pins_of(m, "output"),
+            )
+        })
+        .collect();
+    let pwrkey = u64::from(PWRKEY);
+    assert_eq!(
+        seen,
+        [
+            (
+                ns(cycles(2 * MS)),
+                vec![(pwrkey, 1)],
+                vec![pwrkey],
+                vec![pwrkey]
+            ),
+            (ns(cycles(3 * MS)), vec![(pwrkey, 0)], vec![pwrkey], vec![]),
+            (ns(cycles(4 * MS)), vec![], vec![], vec![]),
+        ]
+    );
+    // each is an event: the peer gets a turn at t + latency to answer it
+    let syncs: Vec<u64> = r.peer.of("sync").iter().map(|m| num(m, "t")).collect();
+    for (t, ..) in &seen {
+        assert!(syncs.contains(&(t + latency)), "{syncs:?}");
+    }
+}
+
+#[test]
+fn gpio_in_and_release_reach_the_chip_through_the_board_at_their_time() {
+    let mut turns = 0;
+    let peer = FakePeer::new(&[RI], move |turn| {
+        turns += 1;
+        match turns {
+            // initial level, in place at the first instruction, then a pulse queued ahead
+            1 => vec![
+                gpio_in(0, &[(RI, 1)]),
+                release(3 * MS, &[RI]),
+                gpio_in(MS + 500_000, &[(RI, 0)]),
+                wait(turn.seq, Some(4 * MS), None),
+            ],
+            // a release and a level at the same t: applied in the order they came
+            2 => vec![
+                release(5 * MS, &[RI]),
+                gpio_in(5 * MS, &[(RI, 1)]),
+                // past the end of the run: never applied
+                gpio_in(20 * MS, &[(RI, 0)]),
+                wait(turn.seq, None, None),
+            ],
+            _ => vec![wait(turn.seq, None, None)],
+        }
+    });
+    let r = run(0.01, FakeGuest::new(vec![]), peer);
+    assert!(matches!(r.end, End::MaxSeconds), "{:?}", r.end);
+    assert_eq!(
+        r.guest.inputs,
+        [
+            (0, RI, Some(true)),
+            (cycles(MS + 500_000), RI, Some(false)),
+            (cycles(3 * MS), RI, None),
+            (cycles(5 * MS), RI, Some(true)),
+        ]
+    );
+    // before the guest's first instruction
+    assert!(r.guest.slices[0] > 0);
+    // queued inputs end slices at their own time
+    for t in [MS + 500_000, 3 * MS, 5 * MS] {
+        assert!(r.guest.slices.contains(&cycles(t)), "{t}");
+    }
+    // what the peer drives, for the chip to take again after a reset
+    assert_eq!(r.guest.board.input_levels(), [(RI, true)]);
+    assert_eq!(r.stats.inputs_not_applied, 1);
+    assert!(r.peer.of("warn").is_empty());
+    assert_eq!(num(r.peer.stats(), "inputs_on_output"), 0);
+}
+
+#[test]
+fn gpio_in_on_a_pin_the_guest_drives_is_applied_with_a_warning_each_time() {
+    let guest = FakeGuest::new(vec![(cycles(MS / 2), Act::Drive(1 << RI, 0))]);
+    let mut first = true;
+    let peer = FakePeer::new(&[RI], move |turn| {
+        let mut out = Vec::new();
+        if std::mem::take(&mut first) {
+            out.push(gpio_in(MS, &[(RI, 1)]));
+            out.push(gpio_in(MS, &[(RI, 0)]));
+        }
+        out.push(wait(turn.seq, None, None));
+        out
+    });
+    let r = run(0.01, guest, peer);
+    assert!(matches!(r.end, End::MaxSeconds), "{:?}", r.end);
+    assert_eq!(
+        r.guest.inputs,
+        [(cycles(MS), RI, Some(true)), (cycles(MS), RI, Some(false))]
+    );
+    let warns = r.peer.of("warn");
+    assert_eq!(warns.len(), 2, "one per message, never merged");
+    for w in &warns {
+        assert_eq!(w.str_or("kind", ""), "input_on_output");
+        assert_eq!(num(w, "pin"), u64::from(RI));
+        assert_eq!(num(w, "t"), ns(cycles(MS)));
+        assert!(w.get("bytes").is_none() && w.get("port").is_none());
+    }
+    assert_eq!(r.stats.inputs_on_output, 2);
+    assert_eq!(num(r.peer.stats(), "inputs_on_output"), 2);
+}
+
+#[test]
+fn after_a_reset_gpio_out_reports_the_pins_as_read_from_the_chip() {
+    let at = cycles(2 * MS) + 5;
+    let guest = FakeGuest::new(vec![
+        (cycles(MS), Act::Drive(1 << PWRKEY, 1 << PWRKEY)),
+        (at, Act::Reset(12)),
+    ]);
+    let mut first = true;
+    let peer = FakePeer::new(&[PWRKEY, RI], move |turn| {
+        let mut out = Vec::new();
+        if std::mem::take(&mut first) {
+            out.push(gpio_in(0, &[(RI, 1)]));
+        }
+        out.push(wait(turn.seq, None, None));
+        out
+    });
+    let r = run(0.01, guest, peer);
+    assert!(matches!(r.end, End::MaxSeconds), "{:?}", r.end);
+    let types = r.peer.types();
+    let reset = types.iter().position(|&k| k == "reset").unwrap();
+    assert_eq!(types[reset + 1], "gpio_out", "{types:?}");
+    let after = &r.peer.msgs[reset + 1];
+    assert_eq!(num(after, "t"), ns(at));
+    assert_eq!(changes_of(after), [(u64::from(PWRKEY), 0)]);
+    assert!(pins_of(after, "enabled").is_empty() && pins_of(after, "output").is_empty());
+    // the board persists: what the peer drives stays driven
+    assert_eq!(r.guest.board.input_levels(), [(RI, true)]);
+    assert_eq!(r.peer.of("gpio_out").len(), 2);
+}
+
+#[test]
+fn a_reset_with_nothing_watched_sends_no_gpio_out() {
+    let guest = FakeGuest::new(vec![(cycles(MS), Act::Reset(12))]);
+    let r = run(0.01, guest, FakePeer::new(&[], idle(None, None)));
+    assert!(matches!(r.end, End::MaxSeconds), "{:?}", r.end);
+    assert_eq!(r.peer.of("reset").len(), 1);
+    assert!(r.peer.of("gpio_out").is_empty());
+}
+
+/// On the emulator itself: a loop in IRAM copies GPIO 33, which the peer drives, to GPIO 4. The
+/// levels go through the board into the chip at their time, and the guest's answer comes back as
+/// `gpio_out` within a few instructions.
+#[test]
+fn on_the_emulator_gpio_in_reaches_the_guest_and_its_output_comes_back_as_gpio_out() {
+    use emu_core::Bus;
+    use esp_soc::Soc;
+    // assembled with xtensa-esp32-elf-as --no-transform from:
+    //   movi a2, 0x3ff; slli a2, a2, 20; movi a3, 0x44; slli a3, a3, 12; add a2, a2, a3
+    //   movi a6, 0x10                                     (GPIO at 0x3ff44000; bit 4)
+    //   1: l32i a4, a2, 0x40; extui a5, a4, 1, 1; beqz a5, 2f   (GPIO_IN1, bit 1: GPIO 33)
+    //   s32i a6, a2, 0x08; j 1b                           (GPIO_OUT_W1TS)
+    //   2: s32i a6, a2, 0x0c; j 1b                        (GPIO_OUT_W1TC)
+    const PROGRAM: [u8; 39] = [
+        0x22, 0xa3, 0xff, 0xc0, 0x22, 0x01, 0x32, 0xa0, 0x44, 0x40, 0x33, 0x11, 0x30, 0x22, 0x80,
+        0x62, 0xa0, 0x10, 0x42, 0x22, 0x10, 0x40, 0x51, 0x04, 0x16, 0x55, 0x00, 0x62, 0x62, 0x02,
+        0x06, 0xfc, 0xff, 0x62, 0x62, 0x03, 0x86, 0xfa, 0xff,
+    ];
+    const ENTRY: u32 = 0x4008_0000;
+    const OUT: u8 = 4;
+
+    let shared = Shared::default();
+    let mut m = esp32::machine([0x24, 0x6f, 0x28, 0x00, 0x11, 0x22], 4 << 20);
+    m.bus.board = Box::new(SocketBoard::new(shared.clone()));
+    m.bus.attach_board_devices();
+    for (addr, value) in [
+        (0x3ff4_9020, 2 << 12 | 1 << 9), // IO_MUX GPIO33: GPIO function, input enabled
+        (0x3ff4_9048, 2 << 12),          // IO_MUX GPIO4: GPIO function
+        (0x3ff4_4024, 1 << OUT),         // GPIO_ENABLE_W1TS
+    ] {
+        m.bus.write32(addr, value).unwrap();
+    }
+    m.bus.load_bytes(ENTRY, &PROGRAM).unwrap();
+    <esp32::Esp32 as Soc>::boot_core(&mut m.cores[0], ENTRY);
+
+    let mut first = true;
+    let peer = FakePeer::new(&[OUT, RI], move |turn| {
+        let mut out = Vec::new();
+        if std::mem::take(&mut first) {
+            // an undriven pad reads 1: the level at t = 0 is in place at the first instruction,
+            // so the guest never sets GPIO 4 before the pulse
+            out.push(gpio_in(0, &[(RI, 0)]));
+            out.push(gpio_in(MS, &[(RI, 1)]));
+            out.push(gpio_in(2 * MS, &[(RI, 0)]));
+        }
+        out.push(wait(turn.seq, None, None));
+        out
+    });
+    let mut peer = peer;
+    let signal = AtomicBool::new(false);
+    let opts = Options {
+        end_cycle: cycles(3 * MS),
+        console: false,
+        peer_timeout: None,
+        signal: &signal,
+    };
+    let (end, stats) = Session::new(&mut m, &mut peer, shared, opts).run();
+    assert!(matches!(end, End::MaxSeconds), "{end:?}");
+    let seen: Vec<(u64, Vec<(u64, u64)>)> = peer
+        .of("gpio_out")
+        .iter()
+        .map(|m| (num(m, "t"), changes_of(m)))
+        .collect();
+    assert_eq!(seen.len(), 2, "{seen:?}");
+    let out = u64::from(OUT);
+    for ((t, changes), (at, level)) in seen.iter().zip([(MS, 1), (2 * MS, 0)]) {
+        assert_eq!(changes, &[(out, level)]);
+        assert!((at..at + 1000).contains(t), "{t} for an input at {at}");
+    }
+    assert_eq!(stats.inputs_not_applied, 0);
+    assert!(peer.of("warn").is_empty());
+}
+
+#[test]
+fn after_a_reset_gpio_out_changes_what_the_peer_last_saw_of_each_pad() {
+    let at = cycles(2 * MS);
+    let guest = FakeGuest::new(vec![
+        // UART1 TX idles high on its pad, with GPIO_OUT at 0; the power key's pad is low under a
+        // peripheral signal, with GPIO_ENABLE and GPIO_OUT both 1
+        (
+            cycles(MS),
+            Act::Pads(
+                vec![(MODEM_TX, true), (PWRKEY, false)],
+                1 << PWRKEY,
+                1 << PWRKEY,
+            ),
+        ),
+        (at, Act::Reset(12)),
+    ]);
+    let r = run(
+        0.01,
+        guest,
+        FakePeer::new(&[MODEM_TX, PWRKEY], idle(None, None)),
+    );
+    assert!(matches!(r.end, End::MaxSeconds), "{:?}", r.end);
+    let out = r.peer.of("gpio_out");
+    assert_eq!(out.len(), 2);
+    assert_eq!(
+        changes_of(out[0]),
+        [(u64::from(MODEM_TX), 1), (u64::from(PWRKEY), 0)]
+    );
+    // the pad the peer saw high goes low; the one it saw low stays unmentioned
+    assert_eq!(num(out[1], "t"), ns(at));
+    assert_eq!(changes_of(out[1]), [(u64::from(MODEM_TX), 0)]);
+    assert!(pins_of(out[1], "enabled").is_empty() && pins_of(out[1], "output").is_empty());
+}
+
+/// On the emulator: what `reset_gpio` relies on. Before the reset GPIO 4 is driven high as a
+/// plain GPIO and GPIO 26 by UART1's TX signal; after `reboot()` no pad is driven at all, through
+/// the GPIO matrix or an IO_MUX function, and `GPIO_ENABLE` and `GPIO_OUT` are 0.
+#[test]
+fn on_the_emulator_no_pad_is_driven_after_a_chip_reset() {
+    use emu_core::Bus;
+    let mut m = esp32::machine([0x24, 0x6f, 0x28, 0x00, 0x11, 0x22], 4 << 20);
+    for (addr, value) in [
+        (0x3ff4_9048, 2 << 12),               // IO_MUX GPIO4: GPIO function
+        (0x3ff4_9028, 2 << 12),               // IO_MUX GPIO26
+        (0x3ff4_4530 + 4 * 26, 17 | 1 << 10), // GPIO_FUNC26_OUT_SEL_CFG: U1TXD_OUT, OE from GPIO_ENABLE
+        (0x3ff4_4024, 1 << 4 | 1 << 26),      // GPIO_ENABLE_W1TS
+        (0x3ff4_4008, 1 << 4),                // GPIO_OUT_W1TS
+    ] {
+        m.bus.write32(addr, value).unwrap();
+    }
+    // every pad any output signal, plain GPIO (256) included, drives, inverted or not
+    let driven = |m: &esp32::Machine| {
+        (0..=256)
+            .flat_map(|signal| [signal, signal | 1 << 9])
+            .fold(0, |mask, signal| {
+                mask | m.bus.periph.gpio.output_pins(signal)
+            })
+    };
+    assert_eq!(driven(&m), 1 << 4 | 1 << 26);
+    assert_eq!(Guest::gpio_drive(&m), (1 << 4 | 1 << 26, 1 << 4));
+    Guest::chip_reset(&mut m);
+    assert_eq!(driven(&m), 0);
+    assert_eq!(Guest::gpio_drive(&m), (0, 0));
 }

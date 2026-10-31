@@ -3,7 +3,8 @@
 `esp32tl-runner` runs an unmodified image for the classic ESP32 in the esp32sim emulator, on the
 emulated clock, and prints the guest's UART0 console on stdout. With `--board`, it connects to a
 peer, the harness or any program that speaks [the link protocol](../protocol.md), and wires the
-chip's pins to it: the peer sees what the guest sends on its UARTs and sends bytes back into them.
+chip's pins to it: the peer sees what the guest sends on its UARTs and the levels it drives on
+the pins the peer watches, and sends bytes and levels back.
 The `esp32sim` backend of the pytest plugin starts it, with `--board socket:PATH` and itself as
 the peer, for every test that uses `board` or `console`. This document is for running it by hand, to watch an image boot,
 to drive it from a peer of your own, or to see why a run ended the way it did.

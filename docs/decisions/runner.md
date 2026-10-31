@@ -263,9 +263,66 @@ the route's baud may be unset, and a mismatch should reach the UART as the frame
 
 ## GPIO input, release and ADC are postponed to M3
 
+Status: superseded (#23)
+
+Until #23 the runner answered `gpio_in`, `release` and `adc` with a protocol error naming the
+message (exit code 3), and sent no `gpio_out`. #23 brought GPIO and the future-input queue: see
+[GPIO inputs reach the chip through the board, at the slice boundary](#gpio-inputs-reach-the-chip-through-the-board-at-the-slice-boundary).
+ADC: see [adc waits for an example with an analog pin](#adc-waits-for-an-example-with-an-analog-pin).
+
+## GPIO inputs reach the chip through the board, at the slice boundary
+
+Status: decided (#23)
+
+`gpio_in` and `release` go into the runner's input queue with `uart_rx`. When one comes due, the
+run loop hands its levels to `SocketBoard` (`Recorder::drive`, `Recorder::release`) and has the
+chip take them at once through `take_edges` and `released_inputs`, with `SocBus::gpio_set_input`
+and `gpio_release_input`, as the bus's `deliver_board_inputs` would
+([protocol 5.11](../protocol.md#511-gpio_in-and-release-m3), item 16 of §11).
+
+**Rejected:** leaving them to the bus's next tick, because that tick comes after the next round
+of instructions: a level would raise its interrupt up to a quantum after its time, or an idle
+chunk with the guest asleep in `waiti`. Also rejected: applying them with
+`SocBus::gpio_set_input` without the board, because the plan and mikroverk/esp32sim#325 put GPIO
+input through the `BoardModel` trait, and a board that holds the levels can give them back through
+`input_levels` when a reset attaches it again.
+
+## After a reset, gpio_out reads the pads from GPIO_ENABLE and GPIO_OUT
+
+Status: decided (#23)
+
+A chip reset calls no hook, so the runner reports the watched pins itself
+([protocol 5.5](../protocol.md#55-reset)): `enabled` and `output` are `GPIO_ENABLE` and
+`GPIO_OUT` read from the bus (`Guest::gpio_drive`), and `changes` holds every watched pin whose
+pad level differs from the one the peer last saw in `changes` (`Recorder::levels_reported`),
+taking a pad as driven high where both words have its bit. That is the pad's state right after
+`reboot()` at the pin, which leaves both words 0 and IO_MUX at function 0, through which esp32sim
+drives no pad; `on_the_emulator_no_pad_is_driven_after_a_chip_reset` checks it.
+
+**Rejected:** comparing the new state with the last report's `enabled` and `output`, because
+`changes` are pad levels and the two words are not: a pad UART TX drove high, with `GPIO_OUT` at
+0, would never be reported low. Also rejected: the pad state itself, which esp32sim keeps private
+(`ClassicGpio::driven`), because getting it means a change upstream that nothing needs at the
+pin, where it would give the same answer; protocol §11, item 17 records what would change that.
+
+## input_on_output looks at GPIO_ENABLE only
+
+Status: decided (#23)
+
+The runner warns `input_on_output` for a `gpio_in` level on a pin whose bit is set in
+`GPIO_ENABLE` when the level comes due, one warning per pin and message
+([protocol 5.8](../protocol.md#58-warn-ext)). A pad a peripheral drives with its own output
+enable, or an IO_MUX function, gives no warning: which pads those drive is in esp32sim's private
+`ClassicGpio::driven`.
+
+**Rejected:** the union of `ClassicGpio::output_pins` over every output signal, which is public,
+because for an IO_MUX function it ignores the output enable and would warn about pads the guest
+only reads.
+
+## adc waits for an example with an analog pin
+
 Status: postponed (#23)
 
-`gpio_out`, `gpio_in`, `release`, `adc` and the future-input queue are specified in protocol
-version 1 and implemented in #23. Until then the protocol has the runner answer `gpio_in`,
-`release` and `adc` with a protocol error naming the message (exit code 3), and send no
-`gpio_out` ([protocol §5](../protocol.md#5-messages)).
+No example needs an analog pin yet, so #23 left `adc` out. The runner answers it with the
+protocol error `adc is not implemented yet` (exit code 3) until it comes back as an issue of its
+own, when an example needs one ([protocol §5](../protocol.md#5-messages)).
