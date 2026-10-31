@@ -117,6 +117,24 @@ that references to its number keep their meaning.
     twice.
     `tests/test_runner_link.py::test_sigterm_while_the_runner_waits_for_the_peer_ends_the_run_with_stats`,
     `runner/src/transport/tests.rs::a_write_cut_short_by_a_signal_goes_on_where_it_stopped_once_closing`
+39. An input on a pin outside the peer's `watch`, whether `uart_rx`, `gpio_in` or `release`, is a
+    protocol error that ends the run with `stats` before the guest runs again.
+    `runner/src/session/tests.rs::the_runner_refuses_what_the_protocol_forbids`
+40. A `gpio_in` or `release` reaches the chip at the slice boundary at its own cycle, before the
+    first instruction when stamped 0, in the order of the input queue; on the real machine the
+    guest sees the level there and its answer comes back as `gpio_out`.
+    `runner/src/session/tests.rs::gpio_in_and_release_reach_the_chip_through_the_board_at_their_time`,
+    `runner/src/session/tests.rs::on_the_emulator_gpio_in_reaches_the_guest_and_its_output_comes_back_as_gpio_out`
+41. After a guest reset, with a `watch` that is not empty, the runner sends a `gpio_out` at the
+    reset's `t` with the watched pins as read from the chip, changing every pin the peer last saw
+    at a level the chip no longer drives, and what the peer drives stays driven; on the real
+    machine no pad is driven right after `reboot()`.
+    `runner/src/session/tests.rs::after_a_reset_gpio_out_reports_the_pins_as_read_from_the_chip`,
+    `runner/src/session/tests.rs::after_a_reset_gpio_out_changes_what_the_peer_last_saw_of_each_pad`,
+    `runner/src/session/tests.rs::on_the_emulator_no_pad_is_driven_after_a_chip_reset`
+42. A harness `hello` whose `watch` holds a pin the classic chip does not have (24, 28 to 31, 40
+    and above) is a protocol error at the handshake, before the guest runs.
+    `runner/src/session/tests.rs::a_handshake_mismatch_is_a_protocol_error_with_stats`
 
 ## Recordings and replay
 

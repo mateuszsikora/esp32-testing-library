@@ -96,6 +96,20 @@ fn parses_the_peer_messages() {
             latency: None
         })
     );
+    assert_eq!(
+        parse(r#"{"type": "gpio_in", "t": 3000000000, "levels": [[33, 1], [4, 0]]}"#),
+        Ok(Incoming::GpioIn {
+            t: 3_000_000_000,
+            levels: vec![(33, true), (4, false)]
+        })
+    );
+    assert_eq!(
+        parse(r#"{"type": "release", "t": 3500000000, "pins": [33]}"#),
+        Ok(Incoming::Release {
+            t: 3_500_000_000,
+            pins: vec![33]
+        })
+    );
     assert_eq!(parse(r#"{"type":"stop"}"#), Ok(Incoming::Stop));
     assert_eq!(
         parse(r#"{"type":"adc","t":0,"pin":34,"volts":1.25}"#),
@@ -122,6 +136,16 @@ fn refuses_malformed_messages() {
         r#"{"type":"uart_rx","t":0,"pin":5,"baud":9600}"#,
         r#"{"type":"hello","version":1,"chip":"esp32","watch":[4,"5"]}"#,
         r#"{"type":"hello","version":1,"chip":"esp32","watch":4}"#,
+        r#"{"type":"gpio_in","t":0}"#,
+        r#"{"type":"gpio_in","t":0,"levels":null}"#,
+        r#"{"type":"gpio_in","t":0,"levels":[33,1]}"#,
+        r#"{"type":"gpio_in","t":0,"levels":[[33,2]]}"#,
+        r#"{"type":"gpio_in","t":0,"levels":[[33,true]]}"#,
+        r#"{"type":"gpio_in","t":0,"levels":[[33,1,0]]}"#,
+        r#"{"type":"gpio_in","t":0,"levels":[[64,1]]}"#,
+        r#"{"type":"gpio_in","t":-1,"levels":[[33,1]]}"#,
+        r#"{"type":"release","pins":[33]}"#,
+        r#"{"type":"release","t":0,"pins":[-1]}"#,
     ] {
         assert!(parse(line).is_err(), "{line}");
     }
@@ -137,6 +161,14 @@ fn writes_the_runner_messages() {
     assert_eq!(
         uart_cfg(3, 5, &UartRoute::new(2, 0, None, None)),
         r#"{"type":"uart_cfg","seq":3,"t":5,"port":2,"tx_pins":[],"rx_pin":null,"baud":null}"#
+    );
+    assert_eq!(
+        gpio_out(9, 2_000_000_000, &[(4, true)], 1 << 4, 1 << 4),
+        r#"{"type":"gpio_out","seq":9,"t":2000000000,"changes":[[4,1]],"enabled":[4],"output":[4]}"#
+    );
+    assert_eq!(
+        gpio_out(10, 3, &[], 0, 1 << 4),
+        r#"{"type":"gpio_out","seq":10,"t":3,"changes":[],"enabled":[],"output":[4]}"#
     );
     assert_eq!(
         reset(12, 4, 12),
@@ -161,8 +193,20 @@ fn writes_the_runner_messages() {
         ..w
     };
     assert!(warn(&w).contains(r#""port":1,"pin":5,"baud":null,"bytes":72"#));
+    let w = Warn {
+        kind: WarnKind::InputOnOutput,
+        port: None,
+        pin: 33,
+        bytes: 0,
+        ..w
+    };
+    assert_eq!(
+        warn(&w),
+        r#"{"type":"warn","t":1,"kind":"input_on_output","pin":33,"detail":"gpio_in on GPIO 33, which the guest drives as an output: the level is applied all the same"}"#
+    );
     let mut s = Stats {
         turns: 13,
+        inputs_on_output: 2,
         ..Stats::default()
     };
     s.uart[1] = PortStats {
@@ -177,7 +221,7 @@ fn writes_the_runner_messages() {
             &[("stop", "Exceptions"), ("detail", "Exceptions(3)")],
             &s
         ),
-        r#"{"type":"stats","t":12,"end":"emulator","stop":"Exceptions","detail":"Exceptions(3)","resets":0,"turns":13,"uart":[{"port":1,"tx_bytes":0,"rx_bytes":864,"rxfifo_ovf":0,"frm_err":0}],"unrouted_rx_bytes":0,"inputs_on_output":0,"inputs_not_applied":0,"rx_bytes_not_paced":0}"#
+        r#"{"type":"stats","t":12,"end":"emulator","stop":"Exceptions","detail":"Exceptions(3)","resets":0,"turns":13,"uart":[{"port":1,"tx_bytes":0,"rx_bytes":864,"rxfifo_ovf":0,"frm_err":0}],"unrouted_rx_bytes":0,"inputs_on_output":2,"inputs_not_applied":0,"rx_bytes_not_paced":0}"#
     );
     for line in [hello(), sync(3)] {
         assert!(parse_json(&line).is_ok(), "{line}");

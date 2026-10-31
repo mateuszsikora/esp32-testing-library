@@ -6,7 +6,7 @@ The crate is `runner/`, package `esp32tl-runner`:
 |---|---|
 | `runner/src/main.rs` | setup, the run without a peer, and the start and report of the run with one |
 | `runner/src/cli.rs` | the command line |
-| `runner/src/socket_board.rs` | `SocketBoard`, the `BoardModel` on the chip's pins with `--board`: it records what the guest does, with its bus cycle, for the run loop |
+| `runner/src/socket_board.rs` | `SocketBoard`, the `BoardModel` on the chip's pins with `--board`: it records what the guest does, with its bus cycle, for the run loop, and holds the GPIO levels the peer drives for the chip to take |
 | `runner/src/session.rs` | `Session`, the run loop with a peer: slices, turns, coalescing, pacing, warnings, `stats` |
 | `runner/src/protocol.rs` | the wire format: time conversion, base64, parsing the peer's messages and writing the runner's |
 | `runner/src/transport.rs` | `SocketLink`, the Unix or TCP socket: buffered NDJSON writes, line reads, the signal flag and the time limits |
@@ -82,11 +82,24 @@ upstream fails the build instead of being reported under another name.
 ### The session
 
 `Session` runs the protocol over two traits, `Guest` (the machine: cycles, `run_until`,
-`chip_reset`, `uart_route`, `rx_pending`, `uart_input`) and `Link` (the socket: `send`, `flush`,
-`idle`, `closing`, `recv`), so that its tests drive it with a scripted guest and a fake peer.
-`impl Guest for esp32::Machine` sets `max_cycles` and calls `run(u64::MAX)`, calls `reboot()` for
-`chip_reset`, reads `bus.periph.uart_route(port)` and `uart[port].rx_pending()`, and delivers a
-byte with `bus.periph.uart_pin_input` and `irq_dirty = true`.
+`chip_reset`, `uart_route`, `rx_pending`, `uart_input`, `gpio_drive`, `take_gpio_inputs`) and
+`Link` (the socket: `send`, `flush`, `idle`, `closing`, `recv`), so that its tests drive it with a
+scripted guest and a fake peer. `impl Guest for esp32::Machine` sets `max_cycles` and calls
+`run(u64::MAX)`, calls `reboot()` for `chip_reset`, reads `bus.periph.uart_route(port)` and
+`uart[port].rx_pending()`, delivers a byte with `bus.periph.uart_pin_input` and
+`irq_dirty = true`, reads `GPIO_ENABLE` and `GPIO_OUT` (`bus.periph.gpio.gpio.enable` and `.out`)
+for `gpio_drive`, and for `take_gpio_inputs` does what the bus's `deliver_board_inputs` does at
+its tick: `SocBus::gpio_set_input` for each of the board's `take_edges`, then
+`SocBus::gpio_release_input` for each of its `released_inputs`.
+
+`SocketBoard` and `Session` share a `socket_board::Recorder`: the peer's `watch`, the log of what
+the guest did, the watched pins' enable and latch as last reported (`reported`) and their pad
+levels as last reported in `changes` (`levels_reported`), both of which the run loop sets after
+a chip reset, and the peer's GPIO levels. `Recorder::drive` and `Recorder::release`
+queue a level or a release for `take_edges` and `released_inputs` and keep the driven levels that
+`input_levels` returns; since the chip takes edges before releases, a level drops a release of the
+same pin queued before it. `uses_gpio_edges` is `true`; it changes nothing on the classic bus,
+where `uses_uart_pins` already turns the board's callbacks on (`esp32/src/bus.rs:418`).
 
 The order of a run, as [the protocol, section 6.1](../protocol.md#61-how-the-runner-meets-the-block-point)
 specifies it:
@@ -97,13 +110,17 @@ specifies it:
    three UART routes, turns what was recorded into messages up to the block point
    (`process_pending`), takes every turn whose block point is already behind the guest
    (`take_turn`), and, before the end of the run, closes a coalesced message whose character time
-   has passed (`close_after_gap`), puts the inputs now due on their lines (`apply_inputs`),
+   has passed (`close_after_gap`), applies the inputs now due (`apply_inputs`: received bytes onto
+   their lines; GPIO levels and releases to the `Recorder`, then `take_gpio_inputs`, with an
+   `input_on_output` warning for a level on a pin set in `GPIO_ENABLE`),
    delivers the paced bytes now due (`deliver`, which counts and warns about drops against the
    routes it read), and lets the link write what has waited (`Link::idle`). Then `slice_end`
    picks the earliest of the block point, `latency` after now while no event is unacknowledged,
    the next whole emulated millisecond, the next queued input, the next paced byte and the end of
    the run, and `run_until` runs to it. `Stop::SwReset` queues a `reset` with the cause from
-   `chip_reset`; any other stop but `Halted` ends the run.
+   `chip_reset`, the routes after it and, while `watch` is not empty, a `gpio_out` of the watched
+   pins as `gpio_drive` reads them, with a change for every pin whose `GPIO_ENABLE & GPIO_OUT` bit
+   differs from `levels_reported` (`reset_gpio`); any other stop but `Halted` ends the run.
 3. `finish` calls `Link::closing`, sends what is left where the end calls for it, and `stats`,
    then `Link::close`.
 
@@ -274,7 +291,7 @@ peer come from `session.rs` and `transport.rs`:
 | 0 | `stop from the peer` | the peer's turn ended with `stop` |
 | 0 | `signal` | the first `SIGTERM` or `SIGINT` |
 | 1 | `the emulator stopped before --max-seconds: {stop:?}` | any `Stop` but `Halted` and `SwReset` |
-| 3 | `protocol error by the peer at {board}: {what}: {line}` | `{what}` is one of: `version {v}, the runner speaks version 1`, `chip {chip:?}, the runner runs "esp32"`, `expected hello`, `hello after the handshake`, a parse error of `protocol::parse` (`not JSON: …`, `not a JSON object`, `no "type"`, `unknown type …`, `{type}: "{field}" is missing`, `… is not an integer`, `… is negative`, `… is not a GPIO number`, `uart_rx: bad base64 character …`, and the like), `t {t} is before this turn's sync at {b} (rule 2)`, `GPIO {pin} is not in the peer's watch`, `a baud of 0`, `ack {ack}, but the last event before this sync was seq {seq}`, `quiet_until {q} is not after this turn's sync at {b}`, `{kind} is not implemented yet (#23)` for `gpio_in`, `release` and `adc`. `{line}` is the peer's line, cut after 200 characters with `...` |
+| 3 | `protocol error by the peer at {board}: {what}: {line}` | `{what}` is one of: `version {v}, the runner speaks version 1`, `chip {chip:?}, the runner runs "esp32"`, `watch holds GPIO {pin}, which the esp32 does not have` (any pin but 0 to 39 without 24 and 28 to 31, `session::GPIOS`), `expected hello`, `hello after the handshake`, a parse error of `protocol::parse` (`not JSON: …`, `not a JSON object`, `no "type"`, `unknown type …`, `{type}: "{field}" is missing`, `… is not an integer`, `… is negative`, `… is not a GPIO number`, `uart_rx: bad base64 character …`, and the like), `t {t} is before this turn's sync at {b} (rule 2)`, `GPIO {pin} is not in the peer's watch`, `a baud of 0`, `ack {ack}, but the last event before this sync was seq {seq}`, `quiet_until {q} is not after this turn's sync at {b}`, `adc is not implemented yet`. `{line}` is the peer's line, cut after 200 characters with `...` |
 | 3 | `protocol error by the peer at {board}: a line longer than 1 MiB` or `…: a line that is not UTF-8` | from the socket, without the line |
 | 4 | `the peer at {board} is gone: {why}` | `{why}` is `the peer closed the socket`, `read failed: {error}`, `write failed: {error}`, `the socket accepts no more data`, `the peer's turn took longer than --peer-timeout`, `the peer read nothing for longer than --peer-timeout` or, while the last messages are written, `the peer did not read the last messages in time` |
 
@@ -282,7 +299,7 @@ A failure to write the last messages does not change the exit code: the first ca
 
 ## Tests
 
-`make test-runner` runs the Rust tests (`cargo test --locked`), 53 of them:
+`make test-runner` runs the Rust tests (`cargo test --locked`), 63 of them:
 
 - `runner/src/cli/tests.rs`: `cli::parse` only. `minimal_command_line` checks the defaults
   (`rom: None`, flash 4 MiB, PSRAM 0, console `Stdout`, no board, `--peer-timeout` 60 s);
@@ -305,7 +322,8 @@ A failure to write the last messages does not change the exit code: the first ca
   and `the_esp32sim_revision_is_the_one_cargo_builds`, which checks that the revision `hello`
   reports is the one in `runner/Cargo.toml`.
 - `runner/src/socket_board/tests.rs`: what `SocketBoard` records: every UART byte, and only the
-  GPIO changes of watched pins, enable-only changes included.
+  GPIO changes of watched pins, enable-only changes included; and the peer's levels and releases
+  it hands the chip, in order, with `input_levels` after them.
 - `runner/src/transport/tests.rs`: lines both ways over a socket pair, a line over 1 MiB, the
   `--peer-timeout` on a read and on a write the peer does not read, a signal ending a blocked
   read, a write cut short by a signal that goes on once `closing` is called, the teardown limit,
@@ -317,10 +335,19 @@ A failure to write the last messages does not change the exit code: the first ca
   the handshake errors, pacing and the busy line, the block point and its `latency` bound mid
   slice and with the guest idle, a late answer, events held after the block point, a block point
   already behind the guest, coalescing and its ends, the console, resets and the reset routes,
-  each kind of `warn`, the protocol errors of a turn, each end of a run and its `stats`, and
-  `latency` 0. `on_the_emulator_the_slices_stop_a_guest_asleep_in_waiti_at_the_block_point` runs
-  the real `esp32::Machine` on a few instructions in IRAM that write one byte to UART1 and sleep
-  in `waiti`, at the 40 MHz the core starts at.
+  each kind of `warn`, the protocol errors of a turn, each end of a run and its `stats`,
+  `latency` 0, `gpio_out` for watched pins as an event, `gpio_in` and `release` queued and applied
+  at their time in arrival order, a `watch` with a pin the chip does not have refused at the
+  handshake, `input_on_output`, and the
+  `gpio_out` after a reset, also for a pad a peripheral drove high with `GPIO_OUT` at 0.
+  `on_the_emulator_the_slices_stop_a_guest_asleep_in_waiti_at_the_block_point` runs the real
+  `esp32::Machine` on a few instructions in IRAM that write one byte to UART1 and sleep in
+  `waiti`, at the 40 MHz the core starts at;
+  `on_the_emulator_gpio_in_reaches_the_guest_and_its_output_comes_back_as_gpio_out` runs a loop
+  that copies GPIO 33, which the fake peer drives, to GPIO 4, and checks the two `gpio_out`s;
+  `on_the_emulator_no_pad_is_driven_after_a_chip_reset` drives GPIO 4 as a plain GPIO and GPIO 26
+  from UART1's TX signal, and checks that after `reboot()` no output signal drives any pad and
+  `GPIO_ENABLE` and `GPIO_OUT` are 0, which `reset_gpio` relies on.
 
 `tests/test_runner_link.py` runs the real binary on `hello_world` with `--board socket:`, against
 a minimal peer in Python: a run to `--max-seconds` with `--console socket` (the console on the
@@ -331,7 +358,9 @@ peer listening (exit 4).
 
 Not covered: the text of the usage messages (`usage_errors` checks only the error kind),
 `setup`, `find_rom`, the `SwReset` path and an exit 1 of the real runner, a second signal,
-`--board tcp:` and `--console both` on the real binary. Without `--board`, the pytest suite runs
+`--board tcp:` and `--console both` on the real binary, GPIO on a real image (no validation image
+uses a pin yet), and on the real machine a whole run through a reset: the `gpio_out` after it and
+the peer's levels kept across it. Without `--board`, the pytest suite runs
 the real binary on `hello_world` (`tests/test_hello_world.py`, and
 `test_hello_world_fails_on_an_image_that_prints_something_else` in `tests/test_pytest_plugin.py`),
 which shows that a run boots and prints, but checks no runner line and no exit code;

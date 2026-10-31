@@ -153,4 +153,8 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [SIGTERM ends a run with stats and exit 0, and the esp32sim backend sends it](runner.md#sigterm-ends-a-run-with-stats-and-exit-0-and-the-esp32sim-backend-sends-it) | `runner.md` | decided (#53) |
 | [Merged warnings go out only when another message is due](runner.md#merged-warnings-go-out-only-when-another-message-is-due) | `runner.md` | decided (#53) |
 | [Received bytes are paced at the uart_rx message's baud](runner.md#received-bytes-are-paced-at-the-uart_rx-messages-baud) | `runner.md` | decided (#53) |
-| [GPIO input, release and ADC are postponed to M3](runner.md#gpio-input-release-and-adc-are-postponed-to-m3) | `runner.md` | postponed (#23) |
+| [GPIO input, release and ADC are postponed to M3](runner.md#gpio-input-release-and-adc-are-postponed-to-m3) | `runner.md` | superseded (#23) |
+| [GPIO inputs reach the chip through the board, at the slice boundary](runner.md#gpio-inputs-reach-the-chip-through-the-board-at-the-slice-boundary) | `runner.md` | decided (#23) |
+| [After a reset, gpio_out reads the pads from GPIO_ENABLE and GPIO_OUT](runner.md#after-a-reset-gpio_out-reads-the-pads-from-gpio_enable-and-gpio_out) | `runner.md` | decided (#23) |
+| [input_on_output looks at GPIO_ENABLE only](runner.md#input_on_output-looks-at-gpio_enable-only) | `runner.md` | decided (#23) |
+| [adc waits for an example with an analog pin](runner.md#adc-waits-for-an-example-with-an-analog-pin) | `runner.md` | postponed (#23) |

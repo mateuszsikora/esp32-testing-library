@@ -12,7 +12,8 @@ replaced by upstream's once that lands (section 10). Messages marked *ext* are r
 that #325 does not cover; they stay in the runner whatever happens upstream (plan, finding 10).
 
 Who implements what: the runner side in #11 (M1: UART, `reset`, `uart_cfg`, `warn`, `stats`) and
-#23 (M3: GPIO, `adc`, the future-input queue); the harness side in #12.
+#23 (M3: GPIO and the future-input queue); the harness side in #12. `adc` waits for an issue of
+its own, opened when an example needs an analog pin.
 
 ## 1. Transport
 
@@ -135,8 +136,8 @@ seen exactly the events up to the block point, however the emulator schedules it
 | harness → runner | `wait` | `ack`, `quiet_until`, `latency` | M1 |
 | harness → runner | `stop` | none | M1 |
 
-Until #23 lands, the runner answers `gpio_in`, `release` and `adc` with a protocol error naming
-the message, and sends no `gpio_out`.
+The runner answers `adc` with a protocol error naming the message, `adc is not implemented yet`,
+until it has an issue of its own (5.12).
 
 **Events** are the runner messages that carry `seq`: `uart_tx`, `uart_cfg`, `gpio_out` and
 `reset`. They are what a peer may answer, so they set the block point (rule 1). `seq` is one
@@ -171,7 +172,11 @@ The first line is the runner's, the second the harness's.
   `gpio_in`, `release`, `adc`) on a pin outside `watch` are a protocol error: the socket's board is
   wired to those pins only. The console's UART0 pins are normally not watched, so console output
   costs no turns; it has its own `console` message. An empty or absent `watch` makes the socket a
-  board with nothing on it.
+  board with nothing on it. Every pin in `watch` must be one the classic chip has, GPIO 0 to 39
+  but 24 and 28 to 31, as the board profiles count them (`esp32tl/boards`). esp32sim's
+  `gpio_state` also leaves out GPIO 20, which only some packages bond (`esp32/src/soc.rs:191`),
+  but takes a level on it, so it counts. Any other pin is a protocol error at the handshake: on
+  40 and above esp32sim would drop a level without a word (`esp32/src/periph.rs:373-376`).
 
 ### 5.2 `uart_tx`
 
@@ -239,7 +244,18 @@ What `BoardModel::gpio_output_at` reports, restricted to watched pins and sent w
 output level or output enable changes: `changes`, the `[pin, level]` pairs in the order written;
 `enabled`, the watched pins whose output driver is enabled after the change; `output`, the watched
 pins whose output latch is 1. An enable-only change (an open-drain line released) comes with empty
-`changes`.
+`changes`. A change of an unwatched pin alone sends nothing.
+
+`enabled` and `output` are the chip's `GPIO_ENABLE` and `GPIO_OUT` words, which is what the hook
+passes (`esp32/src/bus.rs:313,344`). `changes` are pad levels, as esp32sim resolves them
+(`ClassicGpio::driven` and `note_driven`, `esp32/src/periph.rs:284,322`): a pad driven as a plain
+GPIO, by a peripheral signal through the GPIO matrix or by an IO_MUX function, at the level it is
+driven to, and a pad that stops being driven at `0`. The two can disagree: a pad UART TX drives
+through the matrix comes in `changes` at `1` with its bit in `output` at 0, and a pad an IO_MUX
+function drives has no bit in either word. The *level* of a pin, here and in 5.5, is the one its
+last `changes` entry reported, `0` before any. `gpio_out` is an event: it has a `seq` and sets the
+block point, so a peer that answers a pin, a modem's power key for one, sees it within its
+`latency`.
 
 ### 5.5 `reset`
 
@@ -260,8 +276,20 @@ The chip does not: `reboot()` replaces the peripherals (`esp32/src/soc.rs:138`),
 are empty, and bytes that arrive before the firmware routes its UART again are dropped as
 `unrouted_rx`. Right after `reset` the runner sends `uart_cfg` for every watched route that
 changed and, from M3, a `gpio_out` with the watched pins' state as read from the bus after
-`reboot()` (not assumed: IO_MUX can drive a pin, U0TXD on GPIO 1 for one, without its bit in
-`GPIO_ENABLE`), since the reset itself calls no `gpio_output_at`.
+`reboot()`, since the reset itself calls no `gpio_output_at`. `enabled` and `output` are
+`GPIO_ENABLE` and `GPIO_OUT` as `reboot()` left them, and `changes` holds every watched pin whose
+level (5.4) is not the one the peer last saw, at its new level: a pin a peripheral drove high
+before the reset comes back at `0`. It goes out after every reset while `watch` is not empty, with
+empty `changes` when nothing changed, after the reset's `uart_cfg`s and at the reset's `t`; the
+`reset` at the same `t` has set the block point already, so it costs no turn of its own.
+
+The runner cannot read a pad's level: esp32sim keeps `ClassicGpio::driven` private. It takes a
+pad as driven where `GPIO_ENABLE` and `GPIO_OUT` both have its bit, which right after `reboot()`
+is the pad's state in esp32sim at the pin: `reboot()` leaves both words 0 and IO_MUX at function
+0, through which esp32sim drives no pad. On the chip, IO_MUX function 0 of GPIO 1 is U0TXD, which
+drives the pin high from the reset on without its bit in `GPIO_ENABLE`; esp32sim does not model
+that, and the runner reports such a pad as undriven, as the emulator has it, until the firmware
+drives it again (section 11, item 17).
 
 ### 5.6 `sync`
 
@@ -301,7 +329,7 @@ people; the fields are for code. Kinds in version 1:
 | `rxfifo_ovf` | a paced byte found the 128-byte RX FIFO full and was dropped (`esp-periph/src/uart.rs:43-46`) | `port`, `pin`, `bytes` |
 | `frm_err` | the route's baud differs from the `uart_rx` message's by more than 3 % of the message's, or is `null` (`UartRoute::matches_baud`, `esp-soc/src/uart.rs:21`); the UART raises `FRM_ERR` and drops the byte | `port`, `pin`, `baud` (the route's), `bytes` |
 | `unrouted_rx` | a `uart_rx` byte on a pin no UART receives on ("Unrouted input is dropped", `esp-soc/src/board.rs:61`) | `pin`, `bytes` |
-| `input_on_output` | `gpio_in` on a pin the guest drives as output; the level is still applied | `pin` |
+| `input_on_output` | `gpio_in` on a pin whose bit is set in `GPIO_ENABLE` when the level comes due; the level is still applied. Not a drop: one `warn` per pin and message, never merged, with no `bytes`. A pad a peripheral drives with its output enable, or an IO_MUX function, gives none: the runner sees `GPIO_ENABLE` only | `pin` |
 
 The runner detects the drops itself, in its run loop where it has the bus: the route and
 `matches_baud` before it delivers a byte, the FIFO's `rx_pending()` against its 128 bytes. A byte
@@ -311,7 +339,7 @@ RX pin matches (`esp-soc/src/uart.rs:73-79`), so with two ports on one pin there
 port.
 
 Consecutive drops of one kind on one pin and port are merged into one `warn` with their count in
-`bytes` and the first drop's `t`. The merged `warn` goes out when any other message is due (an
+`bytes` and the first drop's `t`; `input_on_output` is not merged. The merged `warn` goes out when any other message is due (an
 event, `sync`, `console`, a `warn` of another kind, pin or port, `stats`), so the stream stays in
 `t` order, and at no other time. A time limit would defeat the merging: at 9600 baud a character
 takes 1.04 ms, so even a millisecond window would give each dropped byte of a mismatched NMEA stream
@@ -336,7 +364,8 @@ for a `frm_err` without its `pin`; `receives there with no baud set` when the ro
 ```
 
 The last message of a run, sent just before the runner closes the socket (section 9). `t` is
-where the run ended: the end of the last slice, or, after a `stop`, that turn's `sync` `t`. `end`
+where the run ended: the end of the last slice, or, after a `stop`, that turn's `sync` `t`.
+`inputs_on_output` counts the `input_on_output` warnings. `end`
 says why: `max_seconds`, `stop`, `signal`, `emulator` (then also `stop`, the `Stop` variant's name,
 and `detail`, its `Debug` form), or `protocol_error` (then also `detail`). `inputs_not_applied`
 counts the queued input messages not yet applied when the run ended, and `rx_bytes_not_paced` the
@@ -368,6 +397,21 @@ line is still busy with an earlier message.
 `gpio_in`: from `t` the peer drives each pin to its level. `release`: from `t` it stops driving the
 pins, which go back to their pulls (`BoardModel::released_inputs`; a ring indicator with a
 pull-down is the case).
+
+`levels` is a list of `[pin, level]` pairs, `level` `0` or `1`, applied in order, so of two pairs
+for one pin the second wins; it is required, and may be empty. `pins` is a pin set; absent or
+`null` is the empty set. Every pin must be in `watch` (5.1), which holds only pins the chip has, or
+the message is a protocol error. Both go into the input queue (section 8) and reach the chip through
+the board: at the slice boundary where one comes due, the runner hands its levels to
+`SocketBoard`, and has the chip take them at once through `BoardModel::take_edges` and
+`released_inputs`, as the bus does at its tick (`esp32/src/bus.rs:348-358`). Inputs due at the
+same boundary apply in the queue's order, so a `release` and a `gpio_in` of one pin at one `t`
+leave the pin as the later of the two says. An undriven pad without a pull reads `1` in
+esp32sim: a peer that wants a line low from power-on sends the level stamped `t = 0` (rule 4).
+
+What the peer drives survives a guest reset (5.5): `reboot()` keeps the chip's external levels
+(`esp32/src/soc.rs:141`), and the board reports them again through `BoardModel::input_levels`
+when it is attached anew.
 
 ### 5.12 `adc` *ext* (M3)
 
@@ -485,7 +529,8 @@ runs at about 30 wall seconds per emulated second on an M2 Pro, against 0.3 with
 - compares the UART routes (`uart_cfg`);
 - delivers the bytes now due with `bus.periph.uart_pin_input`, after checking the route, the
   baud and the FIFO's `rx_pending()`, which is how it sees the drops `warn` reports;
-- applies the queued inputs now due (`adc` through `SocBus::analog_set`);
+- applies the queued inputs now due: received bytes onto their lines, GPIO levels and releases
+  through the board (5.11);
 - at `B`, takes the turn.
 
 `run` stops close to `max_cycles`, not a quantum past it: on the path without a cost model the
@@ -554,7 +599,7 @@ the runner at or before its `t` (rule 1).
 | `SIGTERM` or `SIGINT` | ends the slice in progress (at most one emulated millisecond), or at once if it is waiting for the peer's turn; sends the events and `warn`s not yet sent, `stats` with `end: signal`, closes | 0 |
 | any other `Stop` (`esp-soc/src/soc.rs:9`: `MaxInsns`, `Breakpoint`, `Unimplemented`, `Simcall`, `Ebreak`, `Watch`, `Exceptions`, `CostModel`, `CostModelLifecycle`) | events not yet sent, `stats` with `end: emulator` and the variant, closes | 1 |
 | usage error, or an image or ROM that cannot be loaded | nothing on the socket (it may not be connected yet) | 2 |
-| protocol error by the peer: malformed or oversized line, unknown `type`, version or chip mismatch, late `t`, wrong `ack`, `quiet_until` not after the `sync`, a `baud` of `0`, a message the runner does not implement yet | `stats` with `end: protocol_error`, closes | 3 |
+| protocol error by the peer: malformed or oversized line, unknown `type`, version or chip mismatch, late `t`, wrong `ack`, `quiet_until` not after the `sync`, a `baud` of `0`, a `watch` with a pin the chip does not have, a message the runner does not implement yet | `stats` with `end: protocol_error`, closes | 3 |
 | the peer is gone: the connection failed, the socket closed, a read or write failed, the peer's turn took longer than `--peer-timeout`, or a write made no progress for that long (in or outside a turn) | nothing more | 4 |
 | a second `SIGTERM` or `SIGINT` | ends the process at once | 128 + the signal's number |
 
@@ -654,6 +699,7 @@ Section 4.1 of the plan is superseded by this document. What changed, and why:
     not `uart_rx`, `next_deadline` or `advance_to`; bytes reach the chip through
     `bus.periph.uart_pin_input` from the run loop; no `sync` between turns; `Unimplemented` and
     `Exceptions` go into `stats.end`, not `warn`. The WFI test case stays, as a test of the slices.
+    #23 adds `input_levels`, `take_edges` and `released_inputs` for GPIO inputs (item 16).
 11. **`quiet_until` must be later than the turn's `sync`**: one at or before it would make the
     runner take a turn at every slice without the guest moving.
 12. **`stats` counts per UART port**, not per route: a route is the port's configuration of the
@@ -669,3 +715,15 @@ Section 4.1 of the plan is superseded by this document. What changed, and why:
     Without this bound a request sent mid-slice, with the guest asleep in WFI waiting for the
     answer, would be seen only at the next millisecond, and an answer stamped `t + latency`
     would reach the chip up to that late.
+16. **GPIO inputs reach the chip at the slice boundary**, found while implementing #23. The plan
+    has the bus take them through `advance_to` and `take_edges` at its own tick. That tick comes
+    after the next round of instructions, so a level would raise its interrupt up to a quantum
+    after `T`, or one idle chunk with the guest asleep. The run loop instead hands a level to the
+    board when it comes due and has the chip take it at once, as it delivers received bytes.
+17. **The pins after a reset are what esp32sim leaves**, found while implementing #23. This
+    document asked for the state read after `reboot()`, not assumed, because IO_MUX can drive a
+    pin, U0TXD on GPIO 1 for one, without its bit in `GPIO_ENABLE`. At the pin esp32sim drives no
+    pad after `reboot()`, U0TXD on GPIO 1 included, and keeps the pad state private, so the runner
+    reads `GPIO_ENABLE` and `GPIO_OUT`, which right after the reset agree with it (5.5). Should a
+    later esp32sim model the IO_MUX functions a reset leaves, the runner needs the pad state from
+    it.
