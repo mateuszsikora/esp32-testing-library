@@ -22,8 +22,8 @@ sees is in [replay-user.md](replay-user.md).
    `on_source(name)` tells the backend, which starts the link once no declared UART waits.
 4. **`Replay.__init__`** refuses, in this order, a recording of another interface, one with a
    clock other than `clock` anywhere (in its header, an event or a clock switch), one with an
-   `out` event, and one whose `end` is not `hold` (`ReplayError`). Then it keeps the events as `(t, data)` pairs, in
-   order, in `Replay.events`, and `sent = 0`.
+   `out` event, and one whose `end` is not `hold` (`ReplayError`). Then it keeps the events as
+   `(t, data)` pairs, in order, in `Replay.events`, and `sent = 0`.
 5. **The link's turns.** `BoardLink` calls the `Uart` from its thread, which hands each call to
    its source ([link protocol](../protocol.md#7-latency-is-bound-to-the-source)):
    - `poll(now)` returns every event from `sent` on whose `t` is at or before `now`, and moves

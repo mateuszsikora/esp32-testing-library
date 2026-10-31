@@ -135,8 +135,9 @@ that references to its number keep their meaning.
     `tests/test_replay.py::test_a_replay_through_the_link_sends_each_event_in_the_turn_at_its_time`
 33. A run with a declared source does not boot until the test has given it: the link's first turn
     waits for `start`, a `console.expect` before then fails at once with `SourceError`, and a run never
-    started ends with `stop` before the guest boots, and fails a test that passed without giving it
-    at teardown, once only.
+    started ends with `stop` before the guest boots, and fails a test whose setup and call passed
+    without giving it at teardown; a test that failed, was skipped or xfailed keeps its one
+    outcome.
     `tests/test_boardlink.py::test_a_held_link_takes_its_first_turn_once_started`,
     `tests/test_boardlink.py::test_a_held_link_started_without_boot_stops_the_run_at_turn_0`,
     `tests/test_gnss_fixture.py::test_a_source_given_otherwise_than_declared_fails_the_test`,

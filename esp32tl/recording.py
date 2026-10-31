@@ -59,14 +59,18 @@ UTC_TIME = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z")
 
 
 class RecordingError(Exception):
-    """A recording that breaks the format, said with the file and the line at fault. `line` is
-    the line's number when the error is about one, as `Recording` finds it; `what`, the error
-    without it."""
+    """A recording that breaks the format, said with the file and the line at fault: `what`, the
+    error alone; `file`, the file, `None` for a recording built in code; `line`, the line's number,
+    `None` for an error about the whole file."""
 
-    def __init__(self, what: str, line: int | None = None) -> None:
-        super().__init__(what if line is None else f"line {line}: {what}")
+    def __init__(self, what: str, line: int | None = None, file: str | None = None) -> None:
+        where = ":".join(str(part) for part in (file, line) if part is not None)
+        if file is None and line is not None:
+            where = f"line {line}"
+        super().__init__(f"{where}: {what}" if where else what)
         self.what = what
         self.line = line
+        self.file = file
 
 
 class ClockError(Exception):
@@ -233,7 +237,7 @@ def read(path: str | os.PathLike[str]) -> Recording:
     try:
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as error:
-        raise RecordingError(f"{path}: {error}") from None
+        raise RecordingError(str(error), file=str(path)) from None
     return loads(text, str(path))
 
 
@@ -241,31 +245,33 @@ def loads(text: str, name: str = "<recording>") -> Recording:
     """The recording in `text`, whose errors name `name` as the file."""
     lines = text.split("\n")
     if lines[-1]:
-        raise RecordingError(f"{name}:{len(lines)}: the last line does not end with a newline")
+        raise RecordingError(
+            "the last line does not end with a newline", line=len(lines), file=name
+        )
     lines.pop()
     for number, text_line in enumerate(lines, start=1):
         if text_line.endswith("\r"):
-            raise RecordingError(f"{name}:{number}: the line ends with \\r\\n, not \\n")
+            raise RecordingError("the line ends with \\r\\n, not \\n", line=number, file=name)
     if not lines:
-        raise RecordingError(f"{name}: empty: a recording starts with its header")
+        raise RecordingError("empty: a recording starts with its header", file=name)
     try:
         header = _header(_object(lines[0]))
     except RecordingError as error:
-        raise RecordingError(f"{name}:1: {error}") from None
+        raise RecordingError(error.what, line=1, file=name) from None
     clock = header.clock
     body: list[Line] = []
     for number, text_line in enumerate(lines[1:], start=2):
         try:
             line = _line(_object(text_line), clock)
         except RecordingError as error:
-            raise RecordingError(f"{name}:{number}: {error}") from None
+            raise RecordingError(error.what, line=number, file=name) from None
         if isinstance(line, ClockSwitch):
             clock = line.clock
         body.append(line)
     try:
         return Recording(header, tuple(body))
     except RecordingError as error:
-        raise RecordingError(f"{name}:{error.line}: {error.what}") from None
+        raise RecordingError(error.what, line=error.line, file=name) from None
 
 
 def _object(text: str) -> dict[str, Any]:

@@ -223,9 +223,16 @@ def test_a_recording_that_breaks_the_format_is_refused_with_its_line(
 
 def test_the_errors_name_the_file(tmp_path: Path) -> None:
     path = tmp_path / "bad.jsonl"
-    path.write_text(text(HEADER, event(-1)))
-    with pytest.raises(RecordingError, match=rf"^{path}:2: t: -1 "):
+    path.write_text(text(HEADER, event(10), event(9)))
+    with pytest.raises(RecordingError, match=rf"^{path}:3: t 9 is before 10") as raised:
         recording.read(path)
+    # The same as attributes, for code.
+    assert (raised.value.file, raised.value.line) == (str(path), 3)
+    assert raised.value.what.startswith("t 9 is before 10")
+    path.write_text(text(HEADER, event(-1)))
+    with pytest.raises(RecordingError, match=rf"^{path}:2: t: -1 ") as raised:
+        recording.read(path)
+    assert raised.value.line == 2
     with pytest.raises(RecordingError, match=rf"^{tmp_path / 'none.jsonl'}: \[Errno 2\]"):
         recording.read(tmp_path / "none.jsonl")
 

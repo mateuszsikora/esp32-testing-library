@@ -95,7 +95,7 @@ clock other than its backend's ([replay](features/replay-user.md#what-a-replay-r
 | `Header(board, interface, source, clock, created, end="hold", app_sha256=None, tools={}, extra={})` | The header; `extra` holds the fields the format does not define |
 | `Event(t, dir, data, clock)` | `data` is `bytes`; `clock` is the clock in effect, which the reader fills in. `Event.since(earlier)` |
 | `ClockSwitch(t, clock)` | A clock switch |
-| `RecordingError` | A recording that breaks the format; from a `Recording` built in code, `line` is the line's number and `what` the error without it |
+| `RecordingError` | A recording that breaks the format. Attributes: `what`, the error alone; `file`, the file, `None` for a recording built in code; `line`, the line's number, `None` for an error about the whole file |
 | `ClockError` | Times compared across clocks |
 | `VERSION`, `CLOCKS`, `ENDS`, `DIRECTIONS` | `1`, `("emulated-fifo-write", "wall")`, `("hold", "loop")`, `("in", "out")`; `EMULATED` and `WALL` are the two clocks |
 

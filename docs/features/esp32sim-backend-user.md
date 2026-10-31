@@ -92,8 +92,9 @@ reach the 300 emulated seconds.
 
 A run still waiting for its source at teardown is ended before the firmware's first instruction:
 the backend answers the runner's first turn with `stop`, waits up to 5 s for the runner to exit
-0, and the report's statistics say `(stop)`; the test gets an error at teardown unless it has
-failed already ([replay](replay-user.md#when-the-test-gets-it-wrong)). Otherwise, at teardown the backend ends the run with
+0, and the report's statistics say `(stop)`; the test gets an error at teardown unless it
+failed, was skipped or xfailed already ([replay](replay-user.md#when-the-test-gets-it-wrong)).
+Otherwise, at teardown the backend ends the run with
 `SIGTERM`, once the runner has connected and said hello:
 the runner handles the signal only from then on, and before that it would die of it. A test that
 ends while the runner is still loading the images waits up to 5 s for that. On `SIGTERM` the

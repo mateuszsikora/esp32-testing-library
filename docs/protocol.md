@@ -108,9 +108,7 @@ A peer may take its time over turn 0, since the guest has not run yet: `BoardLin
 backend does when the test body has given every source its `source` markers declare, so that a
 recording replayed from the body starts at power-on. Emulated time does not move meanwhile, and
 the wait is wall time, bounded by `--peer-timeout` (section 9). `start(boot=False)` answers turn 0
-with `stop` instead, before the guest boots. A `BoardLink` made with `clock` also fails the link
-on a runner `hello` whose `clock` is another one: the `esp32sim` backend passes
-`emulated-fifo-write`, the clock its recordings are checked against.
+with `stop` instead, before the guest boots.
 
 **Ordering.** The runner's messages are in non-decreasing `t`. Before the `sync` at `B` the
 runner sends every event with `t ≤ B` and nothing later; what the guest did after `B` before the
@@ -161,7 +159,9 @@ The first line is the runner's, the second the harness's.
 - `clock`: what the times of `uart_tx` mean, in the vocabulary of the recording header (plan 4.3).
   `emulated-fifo-write`: emulated time, and a transmitted byte is stamped when the guest writes
   the UART FIFO, not when it would leave the wire (`esp32/src/bus.rs:308-311`). `wall` is reserved
-  for the design of the `real` source on the emulator (#27).
+  for the design of the `real` source on the emulator (#27). A `BoardLink` made with `clock`
+  fails the link on a runner whose `clock` is another one: the `esp32sim` backend passes
+  `emulated-fifo-write`, the clock its recordings are checked against.
 - `esp32sim`: the full revision the runner was built against, for the recording header's `tools`.
 - `board`: the harness's board profile name. The runner does not interpret it; its board is the
   socket.

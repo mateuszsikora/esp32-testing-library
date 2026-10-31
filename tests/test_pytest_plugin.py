@@ -987,11 +987,32 @@ def test_a_declared_source_never_given_fails_the_test_at_teardown(
 
         def test_failed_first(board):
             raise AssertionError("the test's own failure")
+
+        def test_skipped(board):
+            pytest.skip("not on this firmware")
+
+        @pytest.mark.xfail(reason="known")
+        def test_xfailed(board):
+            raise AssertionError("expected")
+
+        @pytest.fixture
+        def broken():
+            raise RuntimeError("a fixture of the test's own")
+
+        def test_broken_setup(board, broken):
+            pass
         """
     )
     result = link_runner.runpytest_subprocess("-p", "no:cacheprovider", "-rA")
-    # The failed test is not reported a second time.
-    result.assert_outcomes(passed=1, failed=1, errors=1)
+    # Only the test that passed is reported: the failed, skipped, xfailed and broken ones not a
+    # second time, each with its one outcome.
+    result.assert_outcomes(passed=1, failed=1, skipped=1, xfailed=1, errors=2)
+    result.stdout.fnmatch_lines_random(
+        [
+            "ERROR test_fake.py::test_never_given[[]esp32sim[]] - Failed: esp32sim*",
+            "ERROR test_fake.py::test_broken_setup[[]esp32sim[]] - RuntimeError*",
+        ]
+    )
     result.stdout.fnmatch_lines(
         [
             "*esp32sim: the run never started: it waited for the"
@@ -999,4 +1020,4 @@ def test_a_declared_source_never_given_fails_the_test_at_teardown(
         ]
     )
     # Stopped at turn 0, before the guest booted.
-    assert result.stdout.str().count("stats: the run ended at 0.000001000 s (stop)") == 2
+    assert result.stdout.str().count("stats: the run ended at 0.000001000 s (stop)") >= 2

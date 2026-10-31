@@ -396,7 +396,7 @@ same console. The wait is wall time in the runner's turn, so `--peer-timeout`, 6
 bounds it: a body that takes longer before its replay ends the run with exit code 4. A
 `console.expect` while the run still waits raises `SourceError` at once, since the run
 could not reach what it waits for. A run still waiting at teardown is ended with `stop`, and a
-test whose body passed all the same gets an error at teardown: it ran no firmware, and would pass
+test whose setup and body passed all the same gets an error at teardown: it ran no firmware, and would pass
 whatever the firmware does.
 
 **Rejected:** starting the run at once and the replay when it is called, because with nothing on

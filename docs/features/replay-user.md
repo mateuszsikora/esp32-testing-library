@@ -98,8 +98,9 @@ gets an error at teardown, even when its body passed:
 esp32sim: the run never started: it waited for the replay of uart.gnss, which the source marker declares; give it in the test body
 ```
 
-A test that has already failed, on a `SourceError` or a `ReplayError` for instance, does not get
-it as well.
+A test with an outcome of its own does not get it as well: one that failed (on a `SourceError`
+or a `ReplayError`, for instance), was skipped with `pytest.skip`, xfailed, or whose other
+fixtures failed at setup.
 
 ## In the link's report
 

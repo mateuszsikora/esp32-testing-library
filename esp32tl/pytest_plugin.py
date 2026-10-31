@@ -268,8 +268,9 @@ def late_board_marker(config: pytest.Config, item: pytest.Item) -> str | None:
 # Set on a test whose call failed on an expect that read the runner's end: its error names the exit
 # code already.
 EXPECT_SAW_RUNNER_EXIT = pytest.StashKey[bool]()
-# Set on a test whose call failed: a run it never started is then not reported a second time.
-CALL_FAILED = pytest.StashKey[bool]()
+# Set on a test whose setup or call did not pass (failed, skipped, xfailed): a run it never
+# started is then not reported on top of that.
+DID_NOT_PASS = pytest.StashKey[bool]()
 
 
 @pytest.hookimpl(wrapper=True)
@@ -277,8 +278,8 @@ def pytest_runtest_makereport(
     item: pytest.Item, call: pytest.CallInfo[None]
 ) -> Generator[None, pytest.TestReport, pytest.TestReport]:
     report = yield
-    if report.when == "call" and report.failed:
-        item.stash[CALL_FAILED] = True
+    if report.when in ("setup", "call") and not report.passed:
+        item.stash[DID_NOT_PASS] = True
     if (
         report.when == "call"
         and call.excinfo is not None
@@ -324,7 +325,7 @@ def board(
         else:
             # A test that passed without giving a source it declared ran no firmware: it would
             # pass whatever the firmware does.
-            if backend.never_started and not request.node.stash.get(CALL_FAILED, False):
+            if backend.never_started and not request.node.stash.get(DID_NOT_PASS, False):
                 names = " and ".join(
                     f"the {source} of {name}" for name, source in backend.never_started.items()
                 )

@@ -79,11 +79,12 @@ sees is in [pytest-plugin-user.md](pytest-plugin-user.md); the backend it starts
    `backend_failed` unless `request.node.stash.get(EXPECT_SAW_RUNNER_EXIT, False)`: an expect that
    ended on the runner's exit has already reported the exit code and the link's error, and the
    test would otherwise show them twice. When `close` returned, and `backend.never_started` names
-   an interface while `request.node.stash.get(CALL_FAILED, False)` does not hold, it fails the
+   an interface while `request.node.stash.get(DID_NOT_PASS, False)` does not hold, it fails the
    teardown with `pytest.fail(..., pytrace=False)`:
    `esp32sim: the run never started: it waited for the {source} of {interface}, which the source marker declares; give it in the test body`
-   (` and ` between several). `pytest_runtest_makereport` sets `CALL_FAILED` on an item whose call
-   failed, so a test that has failed already is not reported twice. Then, whatever `close` did,
+   (` and ` between several). `pytest_runtest_makereport` sets `DID_NOT_PASS` on an item whose setup
+   or call did not pass (`not report.passed`: failed, skipped, or xfailed, which pytest reports as
+   skipped), so a test with an outcome of its own already is not reported on top of it. Then, whatever `close` did,
    it adds the report section
    `("teardown", "esp32sim link", backend.link.report())` with `request.node.add_report_section`,
    and appends `("esp32sim_link", json.dumps(backend.link.properties()))` to
@@ -118,7 +119,7 @@ sees is in [pytest-plugin-user.md](pytest-plugin-user.md); the backend it starts
 | `SourceError` | exception, `esp32tl/interfaces/__init__.py` | A source given otherwise than declared, or not given before an expect |
 | `SERVICES` | `dict[str, str \| None]`, `esp32tl/backends/__init__.py` | Backend name to the `embedded_services` it runs under, in parametrisation order; `None` is no service, pytest-embedded's base `Dut`. Now `{"esp32sim": None}` |
 | `EXPECT_SAW_RUNNER_EXIT` | `pytest.StashKey[bool]` | Set on an item whose call failed on an expect that read the runner's end |
-| `CALL_FAILED` | `pytest.StashKey[bool]` | Set on an item whose call failed |
+| `DID_NOT_PASS` | `pytest.StashKey[bool]` | Set on an item whose setup or call failed, skipped or xfailed |
 | `backend_failed(error)` | function | Raises the one-line `pytest.fail` for a `BackendError` |
 
 `board` constructs `Esp32Sim` for every parameter and asserts that the parameter is its name: a
@@ -153,7 +154,7 @@ pytest-embedded's `build_dir` fixture. The backend's own environment variables a
 | `count is above 1: esp32tl runs one board in a test` | The test parametrises `count` above 1 itself, so `dut` is a tuple | Error at setup |
 | `esp32sim: {error}` | `Esp32Sim(...)` raised a `BackendError` | Error at setup; messages in [esp32sim-backend-technical.md](esp32sim-backend-technical.md#failure-modes) |
 | `esp32sim: the board profile {name} has no uart.gnss; its interfaces are {interfaces}` | The test uses `gnss` on a profile without the route | Error at setup |
-| `esp32sim: the run never started: it waited for the {source} of {interface}, which the source marker declares; give it in the test body` | A test whose call passed without giving a source it declared | Error at teardown |
+| `esp32sim: the run never started: it waited for the {source} of {interface}, which the source marker declares; give it in the test body` | A test whose setup and call passed without giving a source it declared | Error at teardown |
 | `the run has not started: it waits for the {source} of {interface}, which the source marker declares; give it before waiting on the console` | `SourceError` from an expect while the run is held | Fails the test at once |
 | `uart.gnss has no source marker that names replay: ...`, `uart.gnss has its source already: one per test` | `SourceError` from `Uart.replay` | Fails the test ([replay-user.md](replay-user.md#when-the-test-gets-it-wrong)) |
 | `esp32sim: {problems}; its output is in {self.dut.logfile}` | `Esp32Sim.close` raised, and no expect of the call reported the runner's exit. `{problems}` is the exit code, the kill or the link's error ([esp32sim-backend-technical.md](esp32sim-backend-technical.md#failure-modes)) | Error at teardown, also after a passing call |
