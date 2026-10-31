@@ -246,7 +246,9 @@ plugin's only flag.
 
 Status: decided (#51)
 
-*Decided in #64 to give way to [the board's clock is the test's](#the-boards-clock-is-the-tests-emulated-time-moves-only-while-the-test-waits); this is what the code does until that lands.*
+*Decided in #64 to give way to [the board's clock is the
+test's](#the-boards-clock-is-the-tests-emulated-time-moves-only-while-the-test-waits); this is what
+the code does until that lands.*
 
 The backend starts the runner with `--max-seconds 300` (`MAX_SECONDS`). A test normally ends the
 run earlier, at teardown; the limit also stops a runner left behind by a harness that died. On an
@@ -285,7 +287,10 @@ how a relative path resolves before anyone has asked.
 
 Status: decided (#13)
 
-*Decided in #64 to give way to [the LilyGO profile takes its GNSS route, flash and PSRAM from the first consumer's firmware](#the-lilygo-profile-takes-its-gnss-route-flash-and-psram-from-the-first-consumers-firmware); this is what the code does until that lands.*
+*Decided in #64 to give way to [the LilyGO profile takes its GNSS route, flash and PSRAM from the
+first consumer's
+firmware](#the-lilygo-profile-takes-its-gnss-route-flash-and-psram-from-the-first-consumers-firmware);
+this is what the code does until that lands.*
 
 `lilygo-t-a7670g-r2.toml` holds the chip, the modem's UART (UART1, GPIO 26/27, 115200 baud) and its
 `pwrkey` and `ri` lines, all from the specification, and the pull-down on `ri` that stage 0 found
@@ -327,7 +332,10 @@ distinction comes with a way to drive an off-board interface of a real board fro
 
 Status: decided (#13)
 
-*For the `source` marker, decided in #64 to give way to [what is at a route's far end is what the test does with it](#what-is-at-a-routes-far-end-is-what-the-test-does-with-it-before-power-on-not-a-marker); this is what the code does until that lands. The `tap` marker keeps it until #21.*
+*For the `source` marker, decided in #64 to give way to [what is at a route's far end is what the
+test does with
+it](#what-is-at-a-routes-far-end-is-what-the-test-does-with-it-before-power-on-not-a-marker); this
+is what the code does until that lands. The `tap` marker keeps it until #21.*
 
 The `source` and `tap` markers name what a test needs; `pytest_generate_tests` marks the
 parameter of each backend that cannot give it with `pytest.mark.skip(reason=...)`. pytest skips
@@ -342,7 +350,9 @@ the backend has started.
 
 Status: decided (#13)
 
-*Decided in #64 to give way to [what is at a route's far end is what the test does with it](#what-is-at-a-routes-far-end-is-what-the-test-does-with-it-before-power-on-not-a-marker); this is what the code does until that lands.*
+*Decided in #64 to give way to [what is at a route's far end is what the test does with
+it](#what-is-at-a-routes-far-end-is-what-the-test-does-with-it-before-power-on-not-a-marker); this
+is what the code does until that lands.*
 
 For each interface, the `source` marker closest to the test decides, as the closest `app_path`
 and `board_profile` do, so a test can override its module's source. Each class of a test class's
@@ -385,7 +395,10 @@ module and its flash mode, and a profile does not name its module.
 
 Status: decided (#13)
 
-*For the `source` marker, decided in #64 to give way to [what is at a route's far end is what the test does with it](#what-is-at-a-routes-far-end-is-what-the-test-does-with-it-before-power-on-not-a-marker); this is what the code does until that lands. The `tap` marker keeps it until #21.*
+*For the `source` marker, decided in #64 to give way to [what is at a route's far end is what the
+test does with
+it](#what-is-at-a-routes-far-end-is-what-the-test-does-with-it-before-power-on-not-a-marker); this
+is what the code does until that lands. The `tap` marker keeps it until #21.*
 
 A `source` or `tap` marker that names an interface the profile lacks, or a source or tap that no
 declared backend gives, fails collection with the test's id.
@@ -397,7 +410,10 @@ then pass the run as skipped, never as wrong.
 
 Status: decided (#14)
 
-*Decided in #64 to give way to [the board's clock is the test's](#the-boards-clock-is-the-tests-emulated-time-moves-only-while-the-test-waits) and [a run starts at board.power_on()](#a-run-starts-at-boardpower_on-and-so-does-the-runner); this is what the code does until that lands.*
+*Decided in #64 to give way to [the board's clock is the
+test's](#the-boards-clock-is-the-tests-emulated-time-moves-only-while-the-test-waits) and [a run
+starts at board.power_on()](#a-run-starts-at-boardpower_on-and-so-does-the-runner); this is what the
+code does until that lands.*
 
 The specification's test calls `gnss.replay(path)` in its body, after the `board` fixture has
 started the runner. The runner sends its first `sync` at `t = 0` and boots the guest only after
@@ -425,7 +441,9 @@ shows only with a failure or `-rA`.
 
 Status: decided (#14)
 
-*Decided in #64 to give way to [what is at a route's far end is what the test does with it](#what-is-at-a-routes-far-end-is-what-the-test-does-with-it-before-power-on-not-a-marker); this is what the code does until that lands.*
+*Decided in #64 to give way to [what is at a route's far end is what the test does with
+it](#what-is-at-a-routes-far-end-is-what-the-test-does-with-it-before-power-on-not-a-marker); this
+is what the code does until that lands.*
 
 `gnss.replay(path)` is refused without `@pytest.mark.source("uart.gnss", "replay")`. Only a
 declared route is on the link, so the board knows at setup which sources to wait for, and the
@@ -440,7 +458,9 @@ already rejects.
 
 Status: decided (#14)
 
-*Decided in #64 to give way to [what is at a route's far end is what the test does with it](#what-is-at-a-routes-far-end-is-what-the-test-does-with-it-before-power-on-not-a-marker); this is what the code does until that lands.*
+*Decided in #64 to give way to [what is at a route's far end is what the test does with
+it](#what-is-at-a-routes-far-end-is-what-the-test-does-with-it-before-power-on-not-a-marker); this
+is what the code does until that lands.*
 
 The capability declaration gives `esp32sim` `model`, `replay` and `real` on every UART, which is
 what the backend is to give; it gives `replay` only so far. A test that declares another gets
@@ -673,7 +693,8 @@ With the clock held by the test, the runner waits in its turn for as long as the
 so the backend starts it with `--peer-timeout 0`. What ends a run that hangs, in the harness or in
 the emulator, is the test's timeout in wall time, through pytest-timeout, which becomes a
 dependency of esp32tl. The plugin gives every test that uses `board` a default of 600 s unless the
-test's own configuration sets one: a `timeout` ini option, `--timeout` or a `timeout` marker. A
+test's own configuration sets one: a `timeout` ini option, `--timeout`, the `PYTEST_TIMEOUT`
+environment variable or a `timeout` marker. A
 configured `timeout = 0` is the user's choice and is kept; their CI's job timeout is then the only
 limit. pytest-timeout turns itself off when it detects a debugger such as pdb, unless
 `--timeout-disable-debugger-detection` is given. The backend's teardown ends the runner as for
@@ -737,8 +758,9 @@ decision as a generated recording of the same trip, one second earlier because i
 is one second earlier.
 
 The models share one world time: a UTC instant at power-on, `2026-01-01T12:00:00Z` unless the test
-sets another, plus the board's clock. The GNSS receiver dates its sentences from it, and the
-network's NTP server tells it, so runs repeat whatever the host's clock says.
+gives another as `board.power_on(utc=datetime(...))`, plus the board's clock. The GNSS receiver
+dates its sentences from it, and the network's NTP server tells it, so runs repeat whatever the
+host's clock says.
 
 **Rejected:** vehicle verbs in esp32tl, because the same receiver sits in products that are not
 vehicles; plain numbers in a unit the API implies, because kilometres, miles and knots all occur
@@ -812,9 +834,10 @@ The device's side of a TLS session repeats: esp32sim's random number generator i
 a fixed seed and the cycle count (`esp-periph/src/rng.rs`), so the firmware draws the same bytes
 in every run. The harness's side does not: Python's `ssl` takes its keys and nonces from the
 system. On the spike two runs were identical up to the TLS handshake and differed by 1 to 3
-emulated milliseconds after it, with the same messages in the same order, because the device's
-arithmetic on the server's fresh key most likely takes a different time. What would fix it is on the harness's
-side only: a TLS server with a seeded random source, or fixed ephemeral keys. Until that proves
+emulated milliseconds after it, with the same messages in the same order. Why the times move was
+not measured; the likely cause is the device's arithmetic on the server's fresh keys, which takes
+a different time for different values. What would fix it is on the harness's side only: a TLS
+server with a seeded random source, or fixed ephemeral keys. Until that proves
 worth its cost, the determinism job (#22) is to compare what crossed the link in plain text and
 leave out the times after a handshake.
 

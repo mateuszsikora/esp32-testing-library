@@ -142,6 +142,12 @@ Status: decided (#N)
 followed by the pull request or issue in brackets. A superseded decision links to the one that
 replaced it, by anchor: `[…](runner.md#the-new-heading)`, never by line number, because lines move.
 
+A decision that a newer one will replace, once the change it needs lands, keeps `decided` and gets
+a note under its `Status:` line, in italics: "Decided in #N to give way to", a link to the new
+decision by anchor, and "this is what the code does until that lands". The pull request that makes
+the change sets the old decision to `superseded` and drops the note. A decision whose note names one part only, such as
+one marker of two, says which.
+
 The index, [`docs/decisions/README.md`](../decisions/README.md), is generated:
 
 ```sh

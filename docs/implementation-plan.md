@@ -102,7 +102,8 @@ Each item names the fact, where it was checked, and what changes.
     examples take their pins from `sdkconfig`. No milestone needs the LilyGO profile. The LilyGO profile is
     filled in from the schematic when someone has it, and gets a GNSS entry only then (on that
     board the GNSS may well be reached through the modem's AT commands). *Amended by section 11:*
-    the profile takes its GNSS route, flash and PSRAM from the first consumer's firmware.
+    the profile takes its GNSS route, flash and PSRAM from the first consumer's firmware, and M6's
+    validation runs on its modem route, so M6 needs the LilyGO profile.
 
 ## 2. Decisions on the open questions
 
@@ -727,8 +728,8 @@ What the spike could not reach, and which milestones it moves forward:
   names M6's data phase as its use. M6 no longer switches clocks, so the modem's PR corrects that
   reference, and the switch stays for the `real` source of M5.
 
-Order of work after M1. Section 9 covered M0 and M1; M2, M4 and M5 follow these in their order of
-section 5:
+Order of work after M1. Section 9 covered M0 and M1; what the list below does not take from
+section 5 follows it in that section's order:
 
 1. The test's clock, `power_on()` with the runner started there, the console on the clock, the
    test's timeout, and routes without the `source` marker: one change to the backend and the
