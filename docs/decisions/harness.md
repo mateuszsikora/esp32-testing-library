@@ -27,12 +27,29 @@ jobs run `make lint` and `make .venv/.installed rom-elf`, the parts of `make set
 
 ## Clippy is not a pre-commit hook
 
-Status: decided (#45)
+Status: superseded (#57)
 
-The runner's only hook is `cargo-fmt`, run in `runner/` so rustup uses the pinned toolchain.
-Clippy runs in `make lint` and in CI's `lint` job only, because it builds esp32sim, which the hooks
-configuration calls too slow for a hook. #50 measured a cold clippy at 2 to 3 s on an M2 Pro, so
-that reason may no longer hold; revisiting it was left for a separate change.
+Clippy ran in `make lint` and in CI's `lint` job only, because the hooks configuration took it to
+build esp32sim, too slow for a hook. It does not build esp32sim: see
+[Clippy runs as a pre-commit hook on the runner's files](#clippy-runs-as-a-pre-commit-hook-on-the-runners-files).
+
+## Clippy runs as a pre-commit hook on the runner's files
+
+Status: decided (#57)
+
+The `cargo-clippy` hook runs `cargo clippy --locked --all-targets -- -D warnings` in `runner/`,
+as `make lint` does, on commits that stage a `.rs` file under `runner/`, `runner/Cargo.toml`,
+`runner/Cargo.lock` or `runner/rust-toolchain.toml`: a bump of the esp32sim pin or of the
+toolchain is linted before it is committed, not only in CI. Clippy compiles esp32sim's crates to
+metadata only (`--emit=dep-info,metadata`, plain `rustc`, `--cap-lints allow`): the API the
+runner is checked against, with no code generation and no lints of esp32sim's own. Measured on an
+M2 Pro: 0.16 to 0.17 s after a change to the runner, 2.3 to 3.2 s the first time in a worktree,
+whose `runner/target/` has no metadata yet. The network is not needed: `make setup`, which the
+hooks need anyway, has fetched esp32sim into `~/.cargo/git` before. `make lint` and CI's `lint`
+job still run clippy, so a commit made without the hooks is caught there.
+
+**Rejected:** keeping clippy out of the hooks, because a lint failure then shows up only in CI,
+after the push and the queue on hp600g1, for a saving of about 0.2 s per Rust commit.
 
 ## The board fixture is parametrised over board, embedded_services and app_path together
 

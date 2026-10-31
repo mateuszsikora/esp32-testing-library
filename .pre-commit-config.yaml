@@ -29,11 +29,21 @@ repos:
         language: system
         pass_filenames: false
         always_run: true
-      # In runner/, so rustup uses the toolchain runner/rust-toolchain.toml pins.
-      # Clippy stays in `make lint` only: it builds esp32sim, too slow for a hook.
+      # The cargo hooks run in runner/, so rustup uses the toolchain
+      # runner/rust-toolchain.toml pins.
       - id: cargo-fmt
         name: cargo fmt
         entry: sh -c 'cd runner && cargo fmt'
         language: system
         files: ^runner/.*\.rs$
+        pass_filenames: false
+      # As in `make lint`. Clippy compiles esp32sim's crates to metadata only,
+      # their API, without code generation or lints: 2 to 3 s the first time in
+      # a worktree, about 0.2 s after that. Also on the manifests and the
+      # toolchain, so a bump of the esp32sim pin or of Rust is linted too.
+      - id: cargo-clippy
+        name: cargo clippy
+        entry: sh -c 'cd runner && cargo clippy --locked --all-targets -- -D warnings'
+        language: system
+        files: ^runner/(.*\.rs|Cargo\.(toml|lock)|rust-toolchain\.toml)$
         pass_filenames: false

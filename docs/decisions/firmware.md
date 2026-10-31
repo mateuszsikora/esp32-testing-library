@@ -13,8 +13,10 @@ ESP-IDF stage 0 measured, not whatever a developer has installed. `IDF_LOCAL=1` 
 ESP-IDF of the calling shell instead, for iteration; it need not be v5.3.6, so goldens come from
 the container build only. Every build directory records how it was built in `esp32tl-build.json`
 (`idf_version`, `container`, `null` for a local build, and `project`). A build directory with a
-different record is removed before building, because CMake refuses a cache configured for another
-project directory.
+different record is removed before building. ESP-IDF refuses some of those directories itself
+(another project directory or Python, as a switch between a local and a container build brings),
+but would reuse one from another version or container that changes neither, with the old build's
+`sdkconfig`: the image would not be what a build from scratch makes.
 
 ## A local build passes with a warning, a missing or foreign one fails
 
