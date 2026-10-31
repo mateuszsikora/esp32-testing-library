@@ -194,10 +194,12 @@ def end_stream_at_end_of_run(proc: PexpectProcess) -> None:
         end = END_OF_RUN.search(seen)
         if end is not None:
             tail = seen[: end.start()]
-            # From the first whole line, if the window holds a line break: better a line cut at
-            # its start than no output at all.
-            if cut and b"\n" in tail:
-                tail = tail.partition(b"\n")[2]
+            # From the first whole line, if one follows the cut one: better a line cut at its start
+            # than no output at all, which a single long line ending in \r\n would leave.
+            if cut:
+                rest = tail.partition(b"\n")[2]
+                if rest.strip():
+                    tail = rest
             ended = (
                 f"the runner exited with code {end[1].decode()}; its last output:\n"
                 + remove_asci_color_code(tail)

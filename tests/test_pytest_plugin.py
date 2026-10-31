@@ -366,11 +366,13 @@ def eof_of_stream(output: bytes) -> str:
     return str(raised.value)
 
 
-def test_the_eof_keeps_a_long_line_without_a_break() -> None:
-    message = eof_of_stream(b"y" * 3000 + b"\nesp32tl: the runner exited with code 1\n")
+# ESP-IDF ends its lines with \r\n by default.
+@pytest.mark.parametrize("ending", [b"", b"\n", b"\r\n"])
+def test_the_eof_keeps_a_long_last_line(ending: bytes) -> None:
+    message = eof_of_stream(b"y" * 3000 + ending + b"\nesp32tl: the runner exited with code 1\n")
     head, tail = message.split("\n", 1)
     assert head == "the runner exited with code 1; its last output:"
-    assert tail.strip("y") == "" and len(tail) > 1000
+    assert tail.strip().strip("y") == "" and len(tail) > 1000
 
 
 def test_ended_on_runner_exit_stops_at_a_cycle() -> None:
