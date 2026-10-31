@@ -338,7 +338,19 @@ def test_an_eof_from_elsewhere_does_not_hide_the_runner_s_exit(
 
 def test_the_eof_carries_the_runner_s_last_whole_lines_without_colour() -> None:
     output = b"".join(b"\x1b[0;32mline %d\x1b[0m\n" % i for i in range(200))
-    output += b"\nesp32tl: the runner exited with code 0\n"
+    head, tail = eof_of_stream(output + b"\nesp32tl: the runner exited with code 0\n").split(
+        "\n", 1
+    )
+    assert head == "the runner exited with code 0; its last output:"
+    lines = tail.splitlines()
+    # 2 KiB of output, from the first line that begins in it
+    assert lines[-1] == "line 199"
+    assert all(re.fullmatch(r"line \d+", line) for line in lines)
+    assert len(tail) < esp32sim.EOF_TAIL_BYTES
+
+
+def eof_of_stream(output: bytes) -> str:
+    """The message of the EOF the stream raises after `output`, read in 100-byte chunks."""
     chunks = [output[at : at + 100] for at in range(0, len(output), 100)]
 
     class Stream:
@@ -351,14 +363,22 @@ def test_the_eof_carries_the_runner_s_last_whole_lines_without_colour() -> None:
         stream.read_nonblocking()
     with pytest.raises(RunnerExited) as raised:
         stream.read_nonblocking()
-    head, tail = str(raised.value).split("\n", 1)
-    assert head == "the runner exited with code 0; its last output:"
-    lines = tail.splitlines()
-    # 2 KiB of output, from the first line that begins in it
-    assert re.fullmatch(r"line \d+", lines[0])
-    assert lines[-1] == "line 199"
-    assert all(re.fullmatch(r"line \d+", line) for line in lines)
-    assert len(tail) < esp32sim.EOF_TAIL_BYTES
+    return str(raised.value)
+
+
+def test_the_eof_keeps_a_long_line_without_a_break() -> None:
+    message = eof_of_stream(b"y" * 3000 + b"\nesp32tl: the runner exited with code 1\n")
+    head, tail = message.split("\n", 1)
+    assert head == "the runner exited with code 1; its last output:"
+    assert tail.strip("y") == "" and len(tail) > 1000
+
+
+def test_ended_on_runner_exit_stops_at_a_cycle() -> None:
+    first, second = ValueError("first"), ValueError("second")
+    first.__cause__, second.__cause__ = second, first
+    assert not esp32sim.ended_on_runner_exit(first)
+    second.__cause__ = RunnerExited("end")
+    assert esp32sim.ended_on_runner_exit(first)
 
 
 def copy_build(build: Path, to: Path) -> None:

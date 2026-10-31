@@ -86,8 +86,9 @@ has exited, an expect that has not matched fails at once with pexpect's `EOF`, a
 ends with `esp32tl: the runner exited with code N`. The `EOF` carries that code and the runner's
 last output, which pytest-embedded's "Bytes in current buffer" no longer shows: pexpect empties its
 buffer at EOF. A runner that exits with an error on its own fails the test at teardown, even when
-its expects passed; the teardown says nothing when an expect has already reported the exit. `board.app` is the `IdfApp` the runner
-flashes; `dut.app` is pytest-embedded's base `App`, because the backend runs no service.
+its expects passed; the teardown says nothing when an expect has already reported the exit.
+`board.app` is the `IdfApp` the runner flashes; `dut.app` is pytest-embedded's base `App`, because
+the backend runs no service.
 
 The `app_path` marker names the ESP-IDF app, relative to the test file's directory, which is the
 default; the backend runs the build in its `build/` directory, every file of `flasher_args.json`

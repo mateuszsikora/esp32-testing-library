@@ -159,9 +159,12 @@ class RunnerExited(pexpect.EOF):
 def ended_on_runner_exit(error: BaseException) -> bool:
     """Whether `error` came from an expect that read the end of the run."""
     cause: BaseException | None = error
-    while cause is not None:
+    # A __cause__ set by hand can make a cycle, as the traceback module knows.
+    seen: set[int] = set()
+    while cause is not None and id(cause) not in seen:
         if isinstance(cause, RunnerExited):
             return True
+        seen.add(id(cause))
         cause = cause.__cause__ or cause.__context__
     return False
 
@@ -191,7 +194,9 @@ def end_stream_at_end_of_run(proc: PexpectProcess) -> None:
         end = END_OF_RUN.search(seen)
         if end is not None:
             tail = seen[: end.start()]
-            if cut:
+            # From the first whole line, if the window holds a line break: better a line cut at
+            # its start than no output at all.
+            if cut and b"\n" in tail:
                 tail = tail.partition(b"\n")[2]
             ended = (
                 f"the runner exited with code {end[1].decode()}; its last output:\n"
