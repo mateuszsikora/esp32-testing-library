@@ -63,14 +63,14 @@ def test_board_is_parametrised_with_the_backend_its_services_and_the_app(
     result.assert_outcomes(passed=3)
 
 
-def test_backend_option_limits_the_parametrisation(pytester: pytest.Pytester) -> None:
+def test_backend_option_takes_a_backend_name_only(pytester: pytest.Pytester) -> None:
     pytester.makeconftest(SHOW_PARAMS)
     pytester.makepyfile("def test_one(board): pass")
     result = pytester.runpytest_subprocess(
         "-p", "no:cacheprovider", "--collect-only", "-q", "--esp32tl-backend", "esp32sim"
     )
     result.stdout.fnmatch_lines(
-        ["test_backend_option_limits_the_parametrisation.py::test_one[esp32sim]"]
+        ["test_backend_option_takes_a_backend_name_only.py::test_one[esp32sim]"]
     )
     result = pytester.runpytest_subprocess("-p", "no:cacheprovider", "--esp32tl-backend", "qemu")
     assert result.ret == pytest.ExitCode.USAGE_ERROR

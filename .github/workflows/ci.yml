@@ -239,3 +239,27 @@ jobs:
           fi
 
       - run: make PYTHON='${{ steps.python.outputs.python-path }}' lint
+
+  # The documentation contract (docs/guides/documentation.md): the pull request's changes must
+  # update the documentation that owns them. Against the pull request's real base branch, with the
+  # full history the merge base needs; a shallow checkout has no merge base. On pull requests only:
+  # on main, the merge base is the commit itself and there is nothing to compare.
+  docs:
+    if: github.event_name == 'pull_request'
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # The script needs the standard library only; this pins which Python runs it.
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      # Through the environment, not substituted into the script.
+      - name: Documentation contract
+        env:
+          BASE: origin/${{ github.base_ref }}
+        run: make docs-check BASE="$BASE"

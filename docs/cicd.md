@@ -1,0 +1,144 @@
+# CI
+
+For whoever changes [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) or reads one of its
+runs: what each job does, where it runs, and how the builds reach the test jobs. Why it is built
+this way, and what was rejected, is in [decisions/ci.md](decisions/ci.md). Running the same things
+locally is [guides/development.md](guides/development.md) and
+[guides/testing.md](guides/testing.md).
+
+## When it runs
+
+The workflow runs on every pull request, on every push to `main`, and by hand
+(`workflow_dispatch`). Its token has `contents: read` and no other permission.
+
+A new push to a pull request cancels the run for the push before. On `main` every commit gets its
+own concurrency group and its own run, and nothing is cancelled: a shared group would keep at most
+one run waiting and cancel the others.
+
+## Jobs
+
+GitHub-hosted macOS runners have no Docker, so the validation firmware is built once, in the
+pinned ESP-IDF container on the self-hosted Linux runner, and the runner crate once per platform.
+The test jobs then run only the runner and Python: they build nothing.
+
+| Job | Runs on | What it does |
+|---|---|---|
+| `firmware` | self-hosted Linux | `make firmware` once per content of `firmware/`, the workflow and the `Makefile`; fetches the ROM ELF once per revision of `scripts/fetch-rom-elf` |
+| `runner` | self-hosted Linux; `macos-latest` only when the repository is public | `make build-runner test-runner`, once per content of `runner/` (its sources, its esp32sim pin, its toolchain), the workflow and the `Makefile` |
+| `test` | self-hosted Linux; `macos-latest` only when the repository is public; Python 3.11, 3.13, 3.14 | Unpacks the images and the runner, restores the ROM ELF, and runs pytest; builds nothing |
+| `lint` | self-hosted Linux; Python 3.11 | `make lint`, clippy included |
+| `docs` | self-hosted Linux; pull requests only | `make docs-check` against the pull request's base branch |
+
+`test` waits for `firmware` and `runner`. `lint` and `docs` need nothing from the other jobs. The
+`runner` and `test` matrices do not fail fast: one platform or Python version failing does not
+cancel the others.
+
+## Where the jobs run
+
+Every Linux job runs on the self-hosted runner, hp600g1 (labels `self-hosted`, `Linux`, `X64`),
+which keeps the 7 GB ESP-IDF image between runs. It is a single machine, so its jobs queue one
+after another there.
+
+While the repository is private, minutes on GitHub-hosted runners are limited, and macOS minutes
+count ten times. So every job that can runs on hp600g1, even one that needs nothing from it, such
+as `lint`, and the macOS jobs do not run. The `runner` and `test` matrices read
+`github.event.repository.private`, which drops `macos` from the platforms; making the repository
+public turns the macOS jobs back on with no change to the workflow.
+
+Tests marked `requires_docker` can run only on the self-hosted Linux runner, which has Docker; on
+macOS they skip ([guides/testing.md](guides/testing.md#requires_docker)).
+
+## How the builds reach the test jobs
+
+The build jobs hand their output to the test jobs through the Actions cache, not as artifacts:
+artifacts count against the account's storage quota, which is full, while the cache has 10 GB per
+repository of its own.
+
+Each build job saves its output under a key it publishes as a job output, and the test jobs
+restore that exact key or fail (`fail-on-cache-miss`). The key is also what keeps a build from
+running twice: a job whose key is already cached builds nothing. The firmware and runner keys hash
+the workflow and the `Makefile` as well as the sources, so a change to how a build is made or packed
+is a new key too.
+
+| Cache entry | Key | Saved by | A miss in `test` |
+|---|---|---|---|
+| `build/ci/firmware.tar` | `firmware-` and the hash of `firmware/**`, `Makefile`, `.github/workflows/ci.yml` | `firmware` | Fails the job |
+| `build/ci/runner.tar` | `runner-` and the hash of `runner/**`, `Makefile`, `.github/workflows/ci.yml`, then the runner's OS and architecture | `runner`, once per platform | Fails the job |
+| `.cache/esp-rom-elfs` | `rom-elf-` and the hash of `scripts/fetch-rom-elf` | `firmware` | No failure: `make rom-elf` downloads the ELF |
+
+A cache entry unused for 7 days is evicted. A test job re-run on its own after that fails on the
+cache miss: re-run all jobs instead, which builds again. A bad tarball saved under a key stays there
+until it is deleted:
+
+```sh
+gh cache delete <key>
+```
+
+## `firmware`
+
+On a cache miss, it runs `make firmware` and packs into `build/ci/firmware.tar` only what
+pytest-embedded's `IdfApp` reads: the files at the top of each `firmware/<image>/build/`
+(`flasher_args.json`, the ELF, the binaries, `esp32tl-build.json`, `esp32tl-built`),
+`config/sdkconfig.json`, and the `.bin` and `.elf` files of `bootloader/` and `partition_table/`.
+The object files stay behind.
+
+Before the tarball is written, and so before it is cached for good, a Python step checks every
+image for the files the tests need: `esp32tl-built`, `esp32tl-build.json`, `flasher_args.json`,
+`config/sdkconfig.json`, every flash image `flasher_args.json` names, `project_description.json`
+and the ELF it names. Each missing file is reported as `::error::<path> is missing from the tarball`
+and fails the job. The job then lists the tarball (`tar -tvf`), hit or miss.
+
+`firmware/build.sh` holds the ESP-IDF tag, the container digest and the project each image is built
+from, so a change to any of them, or to a project kept under `firmware/`, is a new key.
+
+Last, it restores `.cache/esp-rom-elfs` and runs `make rom-elf`, so the ROM ELF is fetched once
+here rather than by all the test jobs at the same time. Timeout: 30 minutes.
+
+## `runner`
+
+On a cache miss, it installs rustup if it is missing (with no default toolchain: rustup installs the
+one `runner/rust-toolchain.toml` pins on the first build), runs `make build-runner test-runner`, and
+packs `runner/target/release/esp32tl-runner` into `build/ci/runner.tar`, which keeps its executable
+bit. The hosted images have rustup; on the self-hosted runner it is installed once and stays.
+
+The key covers all of `runner/`: the sources, the esp32sim pin in `Cargo.toml` and `Cargo.lock`,
+the toolchain, the profiles, and whatever else cargo reads. A cold build takes under a minute, so
+cargo's `runner/target/` is not cached. Timeout: 30 minutes.
+
+## `test`
+
+For each platform and Python version: sets up Python with pip's cache keyed on `pyproject.toml`,
+restores the two tarballs and the ROM ELF, unpacks the tarballs (the images land in
+`firmware/<image>/build/`, where the tests read them), and runs `esp32tl-runner --help` to check
+that the binary starts. It then runs `make PYTHON=<that Python> .venv/.installed rom-elf`, which is
+`make setup` without `build-runner`, and `.venv/bin/pytest`. Timeout: 20 minutes.
+
+## `lint`
+
+`make lint` in full on Python 3.11, the oldest Python esp32tl supports and the one mypy and ruff
+target. It installs rustup if missing, as `runner` does, because `runner` may have hit its cache
+and skipped that step. The checkout removes `runner/target/`, so clippy checks esp32sim from
+scratch: 8 s on the self-hosted runner, fetching esp32sim included, not worth a cache. Timeout: 15
+minutes.
+
+## `docs`
+
+On pull requests only. It checks out the full history (`fetch-depth: 0`), because the check needs
+the merge base with the pull request's base branch, sets up Python 3.11, and runs the
+"Documentation contract" step:
+
+```sh
+make docs-check BASE="$BASE"    # env: BASE: origin/${{ github.base_ref }}
+```
+
+It builds nothing and needs nothing from the other jobs. What the check enforces, and why it is not
+a pre-commit hook, is in [guides/documentation.md](guides/documentation.md#the-check). While the
+repository is private, no job is a required check: GitHub's free plan offers no branch protection
+for private repositories, so a red `docs` job does not stop a merge by itself.
+
+## See also
+
+- [decisions/ci.md](decisions/ci.md): why CI is built this way.
+- [guides/development.md](guides/development.md): the make targets the jobs run.
+- [guides/testing.md](guides/testing.md): the test suite the `test` jobs run.
+- [implementation-plan.md](implementation-plan.md): M0 and the test strategy CI implements.

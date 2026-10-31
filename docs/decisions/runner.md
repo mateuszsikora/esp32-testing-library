@@ -1,0 +1,201 @@
+# Runner decisions
+
+Why the `esp32tl-runner` crate in `runner/`, its esp32sim pin and the link protocol it speaks
+with the harness ([`docs/protocol.md`](../protocol.md)) are the way they are.
+
+## esp32sim is pinned at the merge commit of the chip-revision fix
+
+Status: decided (#43)
+
+`runner/Cargo.toml` takes `esp32`, `esp-soc` and, as a dev-dependency, `emu-core` from git at
+`8c652151dd5a521249a785ca147f20a9f8eda68f`, the merge of mikroverk/esp32sim#322. Beyond stage 0's
+fix build it brings mikroverk/esp32sim#300 (LL Privacy in the virtual BLE controller) and #307
+(roadmap documentation). On it, `hello_world` built for v3.0 boots after its power-on reset only,
+and every stage 0 run of the first consumer's images executes the same instructions as on the fix
+build. That revision in `runner/Cargo.toml` is the project's esp32sim pin.
+
+**Rejected:** upstream's head at the time, because it is one pull request further,
+mikroverk/esp32sim#314 (classic timer-group interrupt lines ignore `INT_ENA`), which no firmware
+had been run on and which touches the timer path M9 depends on. The merge commit is the smallest
+step that was checked.
+
+## The esp32sim command-line crate is not a dependency
+
+Status: decided (#45)
+
+The runner depends on `esp32` and `esp-soc` only, although #5 listed the `esp32sim` crate as well.
+`src/cli.rs` has its own parser, with esp32sim's flag names and value formats (`--chip`,
+`--flash-at`, `--max-seconds`, `--rom`, `--flash-mb`, `--psram-mb`), so that switching to
+`esp32sim --board socket:` once mikroverk/esp32sim#325 lands is a rename.
+
+**Rejected:** depending on the `esp32sim` crate, because the runner uses nothing from it, it would
+compile the S3, C3, C6 and P4 models too, and its argument parser exits on flags it does not know,
+so the runner could not reuse it for `--board socket:` either.
+
+## Cargo runs in runner/, against a pinned toolchain
+
+Status: decided (#45)
+
+`runner/rust-toolchain.toml` pins Rust 1.99.1, the stable release the runner was first built
+with. `rust-version = "1.95"` in `Cargo.toml` records the real minimum for a toolchain not from
+rustup: esp-soc at the pin calls `AtomicUsize::try_update`, stable since 1.95. rustup reads the
+toolchain file only from the directory cargo runs in, so the `Makefile` and the `cargo-fmt` hook
+run cargo in `runner/`. `Cargo.lock` is committed and the Makefile's builds, tests and clippy pass
+`--locked`.
+
+**Rejected:** `cargo --manifest-path runner/Cargo.toml` from the root, because cargo then uses the
+default toolchain (1.93 on the machine the crate was written on) and stops at
+`requires rustc 1.95`.
+
+## The dev profile is optimised, without fat LTO
+
+Status: decided (#45)
+
+`[profile.dev]` has `opt-level = 3` with overflow checks and debug assertions off, and no LTO;
+`[profile.release]` copies upstream's (`lto = "fat"`, `codegen-units = 1`), because the emulator's
+speed depends on it. `RUNNER_PROFILE=dev` is for local iteration: after a one-line change, a
+release rebuild takes 10.8 s and a dev rebuild 0.26 s.
+
+**Rejected:** an unoptimised `dev` profile, because an unoptimised emulator is too slow to boot an
+image, and turning on overflow checks, because upstream builds and tests only in release, so its
+code has never run with them.
+
+## make test-runner follows RUNNER_PROFILE
+
+Status: decided (#45)
+
+`make test-runner` runs `cargo test --locked --profile $(RUNNER_PROFILE)`, the profile
+`build-runner` uses. In release the test binary still goes through a fat-LTO link, 5.9 s when it
+was measured: that costs a link, not a rebuild.
+
+**Rejected:** cargo's default test profile, because it would build esp32sim a second time in
+another profile.
+
+## The runner looks for the ROM the way esp32sim does
+
+Status: decided (#45)
+
+Without `--rom`, `find_rom` in `runner/src/main.rs` tries `$ESP32SIM_ROM_DIR`, then
+`~/.espressif/tools/esp-rom-elfs/*/`, newest release first, as esp32sim does, for runs by hand.
+It does not prefer the pinned release `20241011` and does not read `$IDF_TOOLS_PATH`, unlike
+`scripts/fetch-rom-elf`; that does not matter for the tests, because the `esp32sim` backend always
+passes `--rom`
+([harness.md](harness.md#the-runner-and-rom-paths-default-to-the-checkout-with-environment-overrides)).
+
+## A Stop variant added upstream breaks the build
+
+Status: decided (#45)
+
+`stop_name` in `runner/src/main.rs` is an exhaustive `match` over esp-soc's `Stop`, which names
+the variant in the runner's last stderr line,
+`esp32tl-runner: stop: VARIANT at T s (W s wall, N resets)`.
+
+**Rejected:** a catch-all arm, because a variant added upstream would then be reported under
+another name.
+
+## The socket board is postponed to M1
+
+Status: postponed (#11)
+
+`--console socket` and `--console both` are parsed but exit 2 until `--board socket:PATH` exists.
+The `console` socket message and forwarding `reset` to the peer come with it; until then the
+runner calls `reboot()` on `Stop::SwReset` and only reports the cause on stderr.
+
+## The runner reads the socket only in the peer's turn
+
+Status: decided (#53)
+
+The runner reads the socket only between its `sync` and the peer's `wait`, and the peer writes
+only then; every turn ends with exactly one `wait`
+([protocol §11](../protocol.md#11-changes-from-the-plan), item 1).
+
+**Rejected:** the plan's rule, which let data acknowledge an event and did not say when the runner
+reads, because applying whatever had arrived by wall time would let a fast and a slow peer move
+the block point, and with it the slice ends and `uart_cfg` times: the two would see different
+runs.
+
+## sync is sent only at the block point, and lateness is measured against it
+
+Status: decided (#53)
+
+The runner sends `sync` once per block point `B`, with `t = B`, and rule 2 measures a late `t`
+against that `t` (protocol §11, items 2 and 3). The runner stops up to one CPU cycle after `B` at
+every clock below 240 MHz, ESP-IDF's default 160 MHz included
+([protocol §6.1](../protocol.md#61-how-the-runner-meets-the-block-point)).
+
+**Rejected:** the plan's `sync` at every `advance_to`, at most once per emulated millisecond,
+because a `sync` that hands over no turn gives the peer nothing to act on. Also rejected:
+measuring lateness against where the runner stopped, because an answer at exactly
+`t_req + latency` would then be late at those clocks.
+
+## The run loop works in slices instead of BoardModel::next_deadline
+
+Status: decided (#53)
+
+The runner calls `Machine::run` in slices bounded by `max_cycles` and does the work that needs the
+bus between them: `uart_cfg`, the drop warnings, delivering paced bytes and `adc`. `run` cuts its
+last round at the ceiling (`esp-soc/src/machine.rs:691` at `8c65215`). `SocketBoard`'s callbacks
+only record events (protocol §11, item 10).
+
+**Rejected:** `BoardModel::next_deadline`, as plan 4.2 had it, because `BoardModel` callbacks get
+no access to the bus, and its reason (an idle guest would "jump to the next timer" past `B`) does
+not hold at the pin: the idle skip is capped at 512 cycles. Also rejected:
+`Machine::run_until_cycle`, which stops exactly but schedules core 0 only, while the classic chip
+has two cores.
+
+## The harness's hello names the pins to watch
+
+Status: decided (#53)
+
+The harness's `hello` carries `watch`, the pins whose events it wants (protocol §11, item 7).
+
+**Rejected:** reporting every pin, because `uart_tx` fires for UART0 too, so every console byte and
+every LED toggle would be an event the peer must acknowledge within `latency`.
+
+## SIGTERM ends a run with stats and exit 0, and the esp32sim backend sends it
+
+Status: decided (#53)
+
+`SIGTERM` or `SIGINT` ends the slice in progress, sends the pending events and warnings and
+`stats` with `end: signal`, and exits 0. The backend's `board` teardown, before the `dut` is torn
+down, sends `SIGTERM`, reads the socket to end of file within a wall-time limit, waits, and sends
+`SIGKILL` only after 5 s ([protocol §9](../protocol.md#9-ending-a-run)). Today the runner handles
+no signal and dies of `SIGTERM`; `Esp32Sim.close` accepts both, the runner's side is #11 and
+reading the socket to end of file is #12.
+
+**Rejected:** a fixed turn cadence so that `stop` always arrives soon, because tests usually end
+between turns, when `console.expect` matches. Also rejected: leaving the end to pytest-embedded's
+teardown, because it calls `terminate()` and `kill()` back to back
+(`pytest_embedded/plugin.py:505-506` in 2.9.3) and does not know the runner process.
+
+## Merged warnings go out only when another message is due
+
+Status: decided (#53)
+
+Consecutive drops of one kind on one pin and port merge into one `warn`, which goes out when any
+other message is due, with no time limit. `stats` is a message too, so the last warnings still go
+out before every end that sends it
+([protocol §5.8](../protocol.md#58-warn-ext)).
+
+**Rejected:** flushing at every slice end, because each paced byte ends a slice, so a frame
+overflowing the RX FIFO gave one warning per byte. Also rejected: a one-millisecond window,
+because it still merged nothing at 9600 baud, where a character takes 1.04 ms.
+
+## Received bytes are paced at the uart_rx message's baud
+
+Status: decided (#53)
+
+Bytes of a `uart_rx` enter the RX FIFO one character time (10 bit times, 8N1) apart at the
+message's `baud`, the peer's line rate (protocol §11, item 6).
+
+**Rejected:** pacing at the route's baud, as the plan and mikroverk/esp32sim#325 have it, because
+the route's baud may be unset, and a mismatch should reach the UART as the frame error it is.
+
+## GPIO input, release and ADC are postponed to M3
+
+Status: postponed (#23)
+
+`gpio_out`, `gpio_in`, `release`, `adc` and the future-input queue are specified in protocol
+version 1 and implemented in #23. Until then the protocol has the runner answer `gpio_in`,
+`release` and `adc` with a protocol error naming the message (exit code 3), and send no
+`gpio_out` ([protocol §5](../protocol.md#5-messages)).

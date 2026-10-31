@@ -3,7 +3,7 @@ PYTHON ?= python3
 override VENV := .venv
 BIN := $(VENV)/bin
 
-.PHONY: setup build-runner rom-elf test-runner firmware test lint hooks clean
+.PHONY: setup build-runner rom-elf test-runner firmware test lint docs-check hooks clean
 
 # Python environment, the runner and the ROM ELF. `make test` runs this first,
 # so a clean checkout needs one command.
@@ -66,6 +66,13 @@ lint: $(VENV)/.installed
 	$(BIN)/mypy
 	cd runner && cargo fmt --check
 	cd runner && cargo clippy --locked --all-targets -- -D warnings
+
+# The documentation contract (docs/guides/documentation.md): the changes since
+# the merge base with origin/main (else main), or with BASE, must update the
+# documentation that owns them. System python3, not the venv: the script needs
+# only the standard library, and CI runs it without `make setup`.
+docs-check:
+	python3 scripts/check-docs.py $(if $(BASE),--base $(BASE))
 
 hooks: $(VENV)/.installed
 	$(BIN)/pre-commit install

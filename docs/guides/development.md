@@ -1,0 +1,201 @@
+# Working on esp32tl
+
+For whoever works on this repository: what a machine needs, how to set it up, what each make
+target does, and how the pre-commit hooks behave. Running the tests is
+[testing.md](testing.md); CI is [docs/cicd.md](../cicd.md); writing documentation is
+[documentation.md](documentation.md).
+
+## Requirements
+
+From a clean checkout, one command sets everything up and runs the tests:
+
+```sh
+make test
+```
+
+That one command needs:
+
+- Python 3.11 or newer. `make` uses `python3` unless `PYTHON` names another interpreter
+  ([Python and `.venv`](#python-and-venv)).
+- Rust through [rustup](https://rustup.rs), to build the runner crate in `runner/`.
+  `runner/rust-toolchain.toml` pins the toolchain, Rust 1.99.1 with clippy and rustfmt, and rustup
+  installs it on the first build ([The Rust toolchain](#the-rust-toolchain)).
+- Network access to GitHub. The runner depends on
+  [esp32sim](https://github.com/mikroverk/esp32sim) as a git dependency pinned by revision in
+  `runner/Cargo.toml`, because esp32sim is not on crates.io. `make setup` also fetches the ESP32
+  mask ROM ELF ([The ROM ELF](#the-rom-elf)), with `sha256sum` or `shasum` to check it and `curl`
+  and `tar` to download it.
+- Docker, for the first `make test`. The tests read the validation firmware, which `make test`
+  builds when it is missing: it pulls the ESP-IDF image and builds `hello_world`, a couple of
+  minutes. What the firmware build expects of Docker, and how to build without it, is in
+  [validation-firmware-user.md](../features/validation-firmware-user.md).
+
+After `make setup` and `make firmware`, `.venv/bin/pytest` runs the tests directly.
+
+## Make targets
+
+| Target | What it does |
+|---|---|
+| `make setup` | Creates `.venv`, installs `esp32tl` editable with its `dev` extra, builds the runner and puts the ROM ELF in `.cache/` |
+| `make build-runner` | Builds the runner crate only, `cargo build --locked` in `runner/`, into `runner/target/release/`; `RUNNER_PROFILE=dev` builds it without fat LTO, into `runner/target/debug/` |
+| `make rom-elf` | Runs `scripts/fetch-rom-elf`: puts `esp32_rev300_rom.elf` of esp-rom-elfs `20241011` at `.cache/esp-rom-elfs/20241011/`, checked by SHA-256 |
+| `make test-runner` | The runner's Rust unit tests, `cargo test --locked`, in `RUNNER_PROFILE` like `build-runner`; `RUNNER_PROFILE=dev` skips the fat-LTO link while iterating |
+| `make firmware` | Builds every validation image in the pinned ESP-IDF container, into `firmware/<image>/build/` |
+| `make test` | Runs `make setup` and `make test-runner`, builds the validation images that are missing, then runs `.venv/bin/pytest` |
+| `make lint` | `ruff check`, `ruff format --check` and `mypy`; `cargo fmt --check` and `cargo clippy --locked --all-targets -- -D warnings` on the runner |
+| `make hooks` | Installs the pre-commit hooks ([Pre-commit hooks](#pre-commit-hooks)) |
+| `make docs-check` | Checks that the changes on this branch update the documentation they need ([documentation.md](documentation.md#the-check)); `BASE=REF` (passed as `--base REF`) compares with the merge base with `REF` rather than with the default branch |
+| `make clean` | Removes `.venv`, `build/`, `dist/` and the mypy, ruff and pytest caches; keeps the runner build in `runner/target/` and `.cache/` |
+
+`make test` counts an image as missing when its build directory has no `esp32tl-built`, the
+file `firmware/build.sh` writes when a build finishes. `make firmware` builds them all again.
+Both always write into `firmware/`, whatever `FIRMWARE_OUT` the shell exports, because the tests
+read the images there.
+
+`make lint`, `make hooks` and `make setup` create `.venv` first when it is missing or stale.
+`make lint` does not build the runner, but clippy checks esp32sim from scratch on a clean
+`runner/target/`.
+
+`make clean` keeps `runner/target/` because the runner's build fetches esp32sim from the network,
+and `.cache/` because the ROM ELF comes from it too.
+
+## Dependencies
+
+`pyproject.toml` declares them; their versions are there, and nowhere in the documentation, so a
+version-only bump needs no document ([documentation.md](documentation.md#the-check)).
+
+| Package | Why | How it is pinned |
+|---|---|---|
+| `pytest` | The plugin is a pytest plugin, loaded through the `pytest11` entry point | Lower bound |
+| `pytest-embedded` | `Dut`, `DuplicateStdoutPopen`, `PexpectProcess`: the backend builds on them | Compatible release (`~=`) |
+| `pytest-embedded-idf[serial]` | `IdfApp`, which reads a build's `flasher_args.json`. pytest-embedded declares no extras, so each service is a package of its own; the `serial` extra pulls `pytest-embedded-serial-esp` and, through it, `pytest-embedded-serial` | Compatible release (`~=`), the same as `pytest-embedded` |
+
+The `dev` extra, which `make setup` installs, adds the tools:
+
+| Package | Why | How it is pinned |
+|---|---|---|
+| `ruff`, `mypy` | `make lint` and the hooks | Exact (`==`), so every worktree and CI lint alike |
+| `types-pexpect` | pexpect's annotations, for mypy | Exact |
+| `pre-commit` | `make hooks` | Lower bound |
+| `esptool` | Imported by the tests | Unpinned: `pytest-embedded-idf[serial]` brings it and chooses its version |
+
+Packaging: `hatchling` builds the wheel, which holds `esp32tl/` only, with the `esp32tl` console
+script (`esp32tl.cli:main`) and the `pytest11` entry point (`esp32tl.pytest_plugin`).
+
+## Python and `.venv`
+
+`make` creates `.venv` with `python3`, after checking that it is 3.11 or newer:
+
+```
+esp32tl needs Python 3.11 or newer; run with PYTHON=python3.11 (or newer)
+```
+
+To use another interpreter, pass it on every call or export it, for example
+`export PYTHON=python3.11`. When `pyproject.toml` changes, the next target that needs `.venv`
+recreates it from scratch (`python -m venv --clear`) with whatever `PYTHON` is then, upgrades pip
+and installs `-e '.[dev]'` again. `.venv/.installed` marks a finished install.
+
+The path `.venv` is fixed: the pre-commit hooks run the tools from there.
+
+## The Rust toolchain
+
+`runner/rust-toolchain.toml` pins channel `1.99.1`, profile `minimal`, with `clippy` and
+`rustfmt`. rustup reads that file from the directory cargo runs in, not through
+`--manifest-path`, so every make target runs cargo in `runner/`. A toolchain that does not come
+from rustup ignores the file; `rust-version` in `runner/Cargo.toml` states the real minimum, 1.95.
+
+`RUNNER_PROFILE` (default `release`) selects the cargo profile of `make build-runner` and
+`make test-runner`. `release` is what the tests run: fat LTO, one codegen unit. After a change to
+the runner, a release build links everything again with fat LTO, about 10 s on an M2 Pro against
+0.3 s in `dev`, which is optimised all the same because an unoptimised emulator is too slow to boot
+an image. Both targets share the profile so that the tests reuse the build of esp32sim. The tests
+use the release binary unless `ESP32TL_RUNNER` names another
+([esp32sim-backend-user.md](../features/esp32sim-backend-user.md)).
+
+cargo's own cache in `runner/target/` is the cache: esp32sim is built again only when its
+revision in `runner/Cargo.toml` changes. `--locked` makes cargo refuse to change `Cargo.lock`.
+
+## The ROM ELF
+
+`make rom-elf`, part of `make setup`, runs `scripts/fetch-rom-elf`. It puts
+`esp32_rev300_rom.elf` of [esp-rom-elfs](https://github.com/espressif/esp-rom-elfs) release
+`20241011` at `.cache/esp-rom-elfs/20241011/esp32_rev300_rom.elf`, the path the backend reads by
+default:
+
+1. A file already there whose SHA-256 matches `ROM_SHA256` in the script is kept; the script then
+   prints nothing.
+2. Otherwise it looks in an ESP-IDF install, under `$IDF_TOOLS_PATH/tools/esp-rom-elfs/`, or
+   `~/.espressif/tools/esp-rom-elfs/` when `IDF_TOOLS_PATH` is unset: release `20241011` first,
+   then any other release. Newer releases ship the same ELF, so the checksum of the ELF itself is
+   the pin. A matching file is copied, not linked, because an ESP-IDF upgrade may remove the release
+   it came from. One that differs is passed over with
+   `fetch-rom-elf: <file> differs from release 20241011's (SHA-256 <sha>), skipped`.
+3. Without one, it prints
+   `fetch-rom-elf: no esp32_rev300_rom.elf matching release 20241011 under <dir>; downloading <url>`,
+   downloads `esp-rom-elfs-20241011.tar.gz` from the GitHub release with `curl`, and checks the
+   tarball against `TARBALL_SHA256` and the extracted ELF against `ROM_SHA256`.
+
+The target is phony: the script checks the checksum on every run. It runs from any directory and
+always writes the repository's `.cache/`. Without `sha256sum` or `shasum` it stops with
+`fetch-rom-elf: needs sha256sum or shasum`.
+
+`esp32tl/backends/esp32sim.py` names the same release and file in `ROM_RELEASE` and `ROM_ELF`;
+`test_rom_is_the_one_make_setup_fetches` in `tests/test_pytest_plugin.py` fails when the two
+disagree.
+
+## Pre-commit hooks
+
+`make hooks` runs `pre-commit install` from `.venv`. It installs the hooks for every worktree of the
+clone, because git keeps hooks in the shared `.git` directory.
+
+| Hook | What it runs | On |
+|---|---|---|
+| `end-of-file-fixer`, `trailing-whitespace`, `check-toml`, `check-yaml` | [pre-commit-hooks](https://github.com/pre-commit/pre-commit-hooks), at the `rev` the config pins | Staged files; TOML and YAML files for the two checks |
+| `ruff-check` | `ruff check --fix --force-exclude` from `.venv` | Staged Python files |
+| `ruff-format` | `ruff format --force-exclude` from `.venv` | Staged Python files |
+| `mypy` | `mypy` from `.venv`, over the files `[tool.mypy]` lists (`esp32tl`, `tests`) | Every commit, whatever it stages |
+| `cargo-fmt` | `cargo fmt` in `runner/` | Commits that stage a `.rs` file under `runner/` |
+
+`end-of-file-fixer`, `trailing-whitespace`, `ruff-check`, `ruff-format` and `cargo-fmt` fix the
+files they flag, and the commit stops so you can stage the fixes; `make lint` runs ruff and cargo
+fmt in their checking forms. Clippy is not a hook: it builds esp32sim, too slow for a commit. It
+runs in `make lint` and in CI. `make docs-check` is not a hook either
+([documentation.md](documentation.md#the-check) says why).
+
+The ruff and mypy hooks run the tools through `scripts/venv-tool`, from the `.venv` of the
+worktree you commit from, so their versions come from `pyproject.toml` only. Run `make setup` in
+each worktree before its first commit; without it the hook fails with
+`.venv/bin/ruff not found: run make setup in this worktree` (or `mypy` for that hook).
+
+The installed hook also remembers the `.venv` of the worktree where `make hooks` ran, to start
+pre-commit itself. If that worktree is removed, run `make hooks` again from another one.
+
+## Layout
+
+| Path | Contents |
+|---|---|
+| `esp32tl/` | The Python package and its pytest plugin |
+| `runner/` | `esp32tl-runner`, the Rust crate that runs esp32sim with the harness attached |
+| `firmware/` | `build.sh`, which builds the validation firmware; each image's build lands in `firmware/<image>/build/` |
+| `recordings/` | Committed recordings for the tests; holds only `.gitkeep` so far |
+| `tests/` | The pytest suite ([testing.md](testing.md)) |
+| `tools/` | Stage 0 measurement firmware (`cryptobench`, `deepsleep`, ESP-IDF projects) and `benchtime.py`, which times their runs ([stage0-findings.md](../stage0-findings.md#reproducing)) |
+| `scripts/` | `fetch-rom-elf` (`make rom-elf`), `venv-tool` (the pre-commit hooks), `check-docs.py` (`make docs-check`), `decisions-index.py` (the decisions index) |
+| `docs/` | The implementation plan, the link protocol, the Stage 0 findings and the CI description; `docs/README.md` says what lives where |
+| `docs/features/` | One user and one technical document per feature |
+| `docs/decisions/` | Why things are the way they are, one file per domain, with a generated index |
+| `docs/guides/` | How to work on the repository: this guide, [testing.md](testing.md), [documentation.md](documentation.md) |
+| `.github/` | The CI workflow (`workflows/ci.yml`) and the pull request template |
+| `.claude/` | Claude Code's skills and rules for this repository |
+| `AGENTS.md` | The contract for every agent working here; `CLAUDE.md` is a symlink to it |
+
+Git ignores what the builds leave behind: `.venv/`, `.cache/` (the ROM ELF), `runner/target/`,
+`firmware/**/build/`, `tools/*/build*/` and `build/`.
+
+## See also
+
+- [testing.md](testing.md): running this repository's tests.
+- [docs/cicd.md](../cicd.md): what CI runs, and where.
+- [validation-firmware-user.md](../features/validation-firmware-user.md): building the validation
+  firmware, in the container or with a local ESP-IDF.
+- [CONTRIBUTING.md](../../CONTRIBUTING.md): branch names, commit messages, pull requests.

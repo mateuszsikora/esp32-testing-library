@@ -100,6 +100,8 @@ The title follows the commit subject rules above, with the same type as the bran
   (`Closes #N` / `Refs #N`) goes right after them.
 - **Changes** lists what a reviewer needs to know, grouped by meaning, not a file-by-file inventory.
 - **Decisions** records the choices a reviewer might question, with the rejected alternative.
+- **Documentation** ticks the boxes of the documentation contract (`AGENTS.md`): `make docs-check`
+  passes, and the documents the change updates are named, or why it needs none.
 - **Verification** says what was run and what it showed: commands and results, not "tested locally".
 - **Notes** covers what is deliberately left out, follow-ups and anything worth a closer look.
 - Empty sections are deleted, not left with "N/A".
@@ -115,6 +117,15 @@ SHAs in prose and full SHAs in anything read by machine.
 Write plainly and precisely: measured claims with their numbers, no "comprehensive", "robust",
 "seamless" or "enhance", no emoji. If an earlier version of the pull request claimed something
 that turned out wrong, say so.
+
+## Documentation
+
+A change that alters behaviour updates its documentation in the same pull request, and removing
+behaviour removes its documentation. [`AGENTS.md`](AGENTS.md#documentation-contract) says which
+document each path needs; `make docs-check` checks it, and CI runs it on every pull request.
+[`docs/guides/documentation.md`](docs/guides/documentation.md) says how to write each document.
+Documentation in the same change is part of its type: a `feat` that adds its user documentation is
+still `feat`. `docs` is for changes to documentation alone.
 
 ## Labels
 
