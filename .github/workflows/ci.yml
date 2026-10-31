@@ -3,11 +3,6 @@
 # self-hosted Linux runner, and the runner crate once per platform. The test
 # jobs then run only the runner and Python: they build nothing.
 #
-# The macOS jobs run only once the repository is public. While it is private,
-# minutes on GitHub-hosted runners are limited, and macOS ones count ten times;
-# github.event.repository.private drops macos from the platforms, so making
-# the repository public turns them back on with no change here.
-#
 # The builds reach the test jobs through the Actions cache, not as artifacts:
 # artifacts count against the account's storage quota, which is full, while
 # the cache has 10 GB per repository of its own. Each build job saves a tarball
@@ -23,8 +18,13 @@
 # `gh cache delete <key>`.
 #
 # The Linux jobs run on the self-hosted runner (hp600g1), which keeps the 7 GB
-# ESP-IDF image between runs. It is a single machine, so they queue one after
-# another there.
+# ESP-IDF image between runs. It is a single machine, so its jobs queue one
+# after another there. While the repository is private, minutes on
+# GitHub-hosted runners are limited, and macOS ones count ten times: every job
+# that can runs on hp600g1, even one that needs nothing from it, such as lint,
+# and the macOS jobs do not run. github.event.repository.private drops macos
+# from the platforms, so making the repository public turns them back on with
+# no change here.
 name: CI
 
 on:
@@ -210,3 +210,32 @@ jobs:
       - run: make PYTHON='${{ steps.python.outputs.python-path }}' .venv/.installed rom-elf
 
       - run: .venv/bin/pytest
+
+  # `make lint` in full, clippy included. The checkout removes runner/target/,
+  # so clippy checks esp32sim from scratch: 8 s on the self-hosted runner,
+  # fetching esp32sim included. Not worth a cache.
+  lint:
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      # The oldest Python esp32tl supports, which mypy and ruff target too.
+      - id: python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      # As in the runner job, which may have hit its cache and skipped this.
+      - name: Install rustup if missing
+        run: |
+          if ! command -v rustup >/dev/null 2>&1; then
+            [ -x "$HOME/.cargo/bin/rustup" ] ||
+              curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
+              sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
+            echo "$HOME/.cargo/bin" >>"$GITHUB_PATH"
+          fi
+
+      - run: make PYTHON='${{ steps.python.outputs.python-path }}' lint
