@@ -758,7 +758,9 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
             }
             End::PeerGone(_) => unreachable!("returned above"),
         };
-        let _ = self.send(&line).and_then(|()| self.flush());
+        if self.send(&line).and_then(|()| self.flush()).is_ok() {
+            self.link.close();
+        }
         end
     }
 

@@ -242,6 +242,7 @@ impl Link for FakePeer {
     fn closing(&mut self) {
         self.closed = true;
     }
+    fn close(&mut self) {}
     /// A queued [`SIGNAL`] stands for `SIGTERM` arriving while the runner waits for the peer.
     fn recv(&mut self, _deadline: Option<Instant>) -> Result<String, LinkError> {
         match self.queue.pop_front() {

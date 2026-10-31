@@ -48,6 +48,8 @@ pub trait Link {
     /// The run is ending: from now on a signal no longer interrupts a write, so that the last
     /// messages reach the peer, and writing them takes at most [`TEARDOWN`].
     fn closing(&mut self);
+    /// After the last message: ends the connection (see [`SocketLink::close`]).
+    fn close(&mut self);
     /// The next line from the peer, without its `\n`. `deadline` bounds the wait.
     fn recv(&mut self, deadline: Option<Instant>) -> Result<String, LinkError>;
 }
@@ -250,6 +252,29 @@ impl Link for SocketLink {
 
     fn closing(&mut self) {
         self.teardown = Some(Instant::now() + self.teardown_limit);
+    }
+
+    /// Shuts the write side, so the peer reads end of file after the last message, then reads
+    /// and drops what the peer sent and the runner has not read: a run that ends in the peer's
+    /// turn leaves the rest of that turn unread. On Linux a Unix socket closed with unread input
+    /// resets the connection, and the peer loses what it had not read yet, `stats` among it.
+    /// The peer writes nothing after its turn, so the drop stops at the first read that would
+    /// block, or at end of file.
+    fn close(&mut self) {
+        let _ = match &self.stream {
+            Stream::Unix(s) => s.shutdown(std::net::Shutdown::Write),
+            Stream::Tcp(s) => s.shutdown(std::net::Shutdown::Write),
+        };
+        self.input.clear();
+        let mut chunk = [0u8; 8192];
+        loop {
+            match self.stream.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(_) => {}
+                Err(e) if e.kind() == ErrorKind::Interrupted => {}
+                Err(_) => break,
+            }
+        }
     }
 
     fn recv(&mut self, deadline: Option<Instant>) -> Result<String, LinkError> {

@@ -130,6 +130,25 @@ fn a_line_that_waited_goes_out_between_slices() {
 }
 
 #[test]
+fn closing_with_the_rest_of_a_turn_unread_does_not_lose_the_last_messages() {
+    // a protocol error ends the run on the first bad line of a turn; the lines after it stay
+    // unread. On Linux closing the socket like that resets the connection, and the peer
+    // could not read stats.
+    let (mut link, mut peer, _) = link();
+    peer.write_all(b"{\"type\":\"uart_rx\"}\n{\"type\":\"wait\",\"ack\":0}\n")
+        .unwrap();
+    assert_eq!(link.recv(None).unwrap(), "{\"type\":\"uart_rx\"}");
+    link.closing();
+    link.send("STATS").unwrap();
+    link.flush().unwrap();
+    link.close();
+    drop(link);
+    let mut all = Vec::new();
+    peer.read_to_end(&mut all).unwrap();
+    assert_eq!(all, b"STATS\n");
+}
+
+#[test]
 fn tcp() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap().to_string();

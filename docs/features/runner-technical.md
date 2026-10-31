@@ -104,7 +104,8 @@ specifies it:
    the next whole emulated millisecond, the next queued input, the next paced byte and the end of
    the run, and `run_until` runs to it. `Stop::SwReset` queues a `reset` with the cause from
    `chip_reset`; any other stop but `Halted` ends the run.
-3. `finish` calls `Link::closing`, sends what is left where the end calls for it, and `stats`.
+3. `finish` calls `Link::closing`, sends what is left where the end calls for it, and `stats`,
+   then `Link::close`.
 
 Times on the socket are nanoseconds, from `protocol::ns` (cycles to ns, rounded down) and
 `protocol::cycles` (ns to cycles, rounded up), in 128-bit arithmetic.
@@ -117,7 +118,11 @@ buffer and written out at every `sync`, when the buffer reaches 64 KiB (`WRITE_B
 `idle` once the oldest queued line has waited 20 ms (`LIVE`). A write that stops part way keeps
 what is left for the next one. A read past 1 MiB without a newline, or a line that is not UTF-8,
 is a protocol error. After `closing`, a write no longer gives up on a signal and has 2 s
-(`TEARDOWN`) to finish.
+(`TEARDOWN`) to finish. `close` shuts the write side, then reads and drops whatever the peer sent
+that the runner has not read, until a read would block or the peer closes its end. A run that ends
+in the peer's turn, on a protocol error or a `stop`, leaves the rest of that turn unread, and on
+Linux a Unix socket closed with unread input resets the connection: the peer's read to end of file
+then fails with `ECONNRESET` instead of returning `stats`.
 
 ## Interfaces
 
@@ -304,6 +309,7 @@ A failure to write the last messages does not change the exit code: the first ca
 - `runner/src/transport/tests.rs`: lines both ways over a socket pair, a line over 1 MiB, the
   `--peer-timeout` on a read and on a write the peer does not read, a signal ending a blocked
   read, a write cut short by a signal that goes on once `closing` is called, the teardown limit,
+  `stats` still read to end of file after a close that leaves part of a turn unread,
   a line written out by `idle` after `LIVE`, and TCP.
 - `runner/src/session/tests.rs`: the run loop against `FakeGuest`, a scripted guest that can
   return a few cycles past a slice's end as `run` does below 240 MHz, and `FakePeer`, which checks
