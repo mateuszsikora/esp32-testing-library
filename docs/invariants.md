@@ -118,6 +118,34 @@ that references to its number keep their meaning.
     `tests/test_runner_link.py::test_sigterm_while_the_runner_waits_for_the_peer_ends_the_run_with_stats`,
     `runner/src/transport/tests.rs::a_write_cut_short_by_a_signal_goes_on_where_it_stopped_once_closing`
 
+## Recordings and replay
+
+30. A committed recording reads and writes back byte for byte, and a recording that breaks the
+    format is refused with its file and line.
+    `tests/test_recording.py::test_a_committed_recording_reads_and_writes_back_byte_for_byte`,
+    `tests/test_recording.py::test_a_recording_that_breaks_the_format_is_refused_with_its_line`
+31. Times on two clocks are never compared: `Event.since` across a clock switch raises
+    `ClockError`, and a replay refuses a recording with a time on a clock other than its
+    backend's.
+    `tests/test_recording.py::test_times_compare_on_one_clock_only`,
+    `tests/test_replay.py::test_what_a_stream_replay_cannot_replay_is_refused`
+32. A stream replay sends each event in the turn at its recorded time, never before, and its
+    `quiet_until` is the next event's time.
+    `tests/test_replay.py::test_each_event_goes_out_at_its_time_and_bounds_the_turn_before`,
+    `tests/test_replay.py::test_a_replay_through_the_link_sends_each_event_in_the_turn_at_its_time`
+33. A run with a declared source does not boot until the test has given it: the link's first turn
+    waits for `start`, a `console.expect` before then fails at once with `SourceError`, and a run never
+    started ends with `stop` before the guest boots, and fails a test that passed without giving it
+    at teardown, once only.
+    `tests/test_boardlink.py::test_a_held_link_takes_its_first_turn_once_started`,
+    `tests/test_boardlink.py::test_a_held_link_started_without_boot_stops_the_run_at_turn_0`,
+    `tests/test_gnss_fixture.py::test_a_source_given_otherwise_than_declared_fails_the_test`,
+    `tests/test_pytest_plugin.py::test_a_declared_source_never_given_fails_the_test_at_teardown`,
+    `tests/test_pytest_plugin.py::test_a_held_run_whose_runner_is_gone_releases_the_link`
+34. A recording replayed with `gnss.replay(path)` reaches the firmware's UART on the profile's GNSS
+    route: `nmea_reader` prints the fixes of `gnss-generated-1.jsonl`.
+    `tests/test_gnss_fixture.py::test_a_replay_reaches_nmea_reader_on_the_gnss_route`
+
 ## Validation firmware
 
 14. `firmware/build.sh` builds in the ESP-IDF container pinned by digest, unless `IDF_LOCAL=1`.

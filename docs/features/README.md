@@ -6,13 +6,15 @@ templates.
 
 | Feature | User | Technical | Code |
 |---|---|---|---|
-| pytest plugin: the `board` and `console` fixtures, the `app_path` marker, `--esp32tl-backend` | [user](pytest-plugin-user.md) | [technical](pytest-plugin-technical.md) | `esp32tl/pytest_plugin.py`, `esp32tl/interfaces/` |
+| pytest plugin: the `board`, `console` and `gnss` fixtures, the `app_path` marker, `--esp32tl-backend` | [user](pytest-plugin-user.md) | [technical](pytest-plugin-technical.md) | `esp32tl/pytest_plugin.py`, `esp32tl/interfaces/` |
 | `esp32sim` backend: the runner under pytest-embedded, on the emulated clock | [user](esp32sim-backend-user.md) | [technical](esp32sim-backend-technical.md) | `esp32tl/backends/` |
 | `esp32tl` command | [user](cli-user.md) | | `esp32tl/cli.py`, `esp32tl/__init__.py` |
 | Runner: `esp32tl-runner`, esp32sim with the harness attached | [user](runner-user.md) | [technical](runner-technical.md) | `runner/src/`, `runner/Cargo.toml` |
 | Validation firmware and its container build | [user](validation-firmware-user.md) | [technical](validation-firmware-technical.md) | `firmware/` |
 | Board profiles: `esp32-devkitc`, `lilygo-t-a7670g-r2`, the capability declaration, the `board_profile`, `source` and `tap` markers | [user](board-profiles-user.md) | [technical](board-profiles-technical.md) | `esp32tl/boards/` |
 | Link protocol between the runner and the harness: the runner's `--board` and the backend's `BoardLink` | | [protocol](../protocol.md) | `esp32tl/link/`, `runner/src/protocol.rs`, `runner/src/socket_board.rs` |
+| Recording format: the `.jsonl` files a replay reads | | [format](../recording-format.md) | `esp32tl/recording.py` |
+| Replay: a stream recording at the far end of an interface, `gnss.replay(path)` | [user](replay-user.md) | [technical](replay-technical.md) | `esp32tl/sources/replay.py` |
 
 ## Ownership map
 
@@ -40,8 +42,10 @@ GitHub Action, a pre-commit hook or a Python dependency.
 | F9 | `^runner/src/protocol\.rs$` | `^docs/protocol\.md$` | Link protocol changed in runner/src/protocol.rs: update docs/protocol.md, and its version if the wire changes |
 | F10 | `^runner/src/socket_board\.rs$` | `^docs/protocol\.md$` | Link protocol changed in runner/src/socket_board.rs: update docs/protocol.md, and its version if the wire changes |
 | F11 | `^firmware/` | `^docs/features/validation-firmware-` | Validation firmware or its build changed: update docs/features/validation-firmware-*.md |
-| F12 | `^esp32tl/`, without the paths of F1 to F11, F13 and `esp32tl/py.typed` | `^docs/features/[a-z0-9-]+\.md$`, a new file only | This path has no owning doc yet: add its feature docs, a new docs/features/<feature>-user.md or -technical.md, and add it to the ownership map (scripts/check-docs.py, docs/features/README.md, AGENTS.md) |
+| F12 | `^esp32tl/`, without the paths of F1 to F11, F13 to F15 and `esp32tl/py.typed` | `^docs/features/[a-z0-9-]+\.md$`, a new file only | This path has no owning doc yet: add its feature docs, a new docs/features/<feature>-user.md or -technical.md, and add it to the ownership map (scripts/check-docs.py, docs/features/README.md, AGENTS.md) |
 | F13 | `^esp32tl/boards/` | `^docs/features/board-profiles-` | Board profiles or the capability declaration changed (schema, pins, sources, taps): update docs/features/board-profiles-*.md |
+| F14 | `^esp32tl/recording\.py$` | `^docs/recording-format\.md$` | Recording format changed: docs/recording-format.md is its specification; update it, and its version if the format changes |
+| F15 | `^esp32tl/sources/replay\.py$` | `^docs/features/replay-` | Replay changed (what it replays, when, what it refuses): update docs/features/replay-*.md |
 | C1 | `^\.github/workflows/` | `^docs/cicd\.md$` | CI workflow changed: update docs/cicd.md |
 | C2 | `^Makefile$` | `^docs/guides/development\.md$` | Makefile changed: update the make targets in docs/guides/development.md |
 | C3 | `^\.pre-commit-config\.yaml$` | `^docs/guides/development\.md$` | Pre-commit hooks changed: update docs/guides/development.md |
@@ -57,7 +61,9 @@ GitHub Action, a pre-commit hook or a Python dependency.
 
 Where one directory has several owners, the map lists its files by name: `scripts/` (C4, C5 for
 the development guide, C9, C10 for the documentation guide, C12 for the validation firmware) and
-the runner's top level (F7 for `Cargo.toml`, C6 for the toolchain; `Cargo.lock` is nobody's).
+the runner's top level (F7 for `Cargo.toml`, C6 for the toolchain; `Cargo.lock` is nobody's), and
+`esp32tl/sources/` (F15 for `replay.py`; its other files are F12's until they have documents of
+their own).
 `runner/src/` instead carves the protocol files out of F6, so that a new runner file is owned from
 its first line. `pyproject.toml` has several owners in one file: C7 accepts any of their
 documents, and review checks the choice.

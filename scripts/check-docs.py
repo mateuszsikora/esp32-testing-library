@@ -146,13 +146,28 @@ FEATURES = [
         "Board profiles or the capability declaration changed (schema, pins, sources, taps):"
         " update docs/features/board-profiles-*.md",
     ),
+    # The recording format is a format specification, at the top of docs/ as the protocol is.
+    Rule(
+        "F14",
+        r"^esp32tl/recording\.py$",
+        r"^docs/recording-format\.md$",
+        "Recording format changed: docs/recording-format.md is its specification; update it, and"
+        " its version if the format changes",
+    ),
+    # sources/ by file name: the models and the real source will have documents of their own.
+    Rule(
+        "F15",
+        r"^esp32tl/sources/replay\.py$",
+        r"^docs/features/replay-",
+        "Replay changed (what it replays, when, what it refuses): update docs/features/replay-*.md",
+    ),
 ]
 
-# The catch-all for the package: sources/ and any new module are owned from their first
-# line of code instead of matching no rule. py.typed is a marker file with no behaviour. Only a
-# new feature document satisfies it: an edit to an existing one, a blank line in cli-user.md,
-# would document nothing. Once the new feature has its row in the map, this rule no longer
-# applies to its paths.
+# The catch-all for the package: the rest of sources/ and any new module are owned from their
+# first line of code instead of matching no rule. py.typed is a marker file with no behaviour.
+# Only a new feature document satisfies it: an edit to an existing one, a blank line in
+# cli-user.md, would document nothing. Once the new feature has its row in the map, this rule no
+# longer applies to its paths.
 FEATURES.append(
     Rule(
         "F12",

@@ -1,7 +1,7 @@
 """The esp32tl pytest plugin, loaded through the `pytest11` entry point.
 
-It provides the `board` and `console` fixtures on top of pytest-embedded's classes (plan §3);
-`gnss`, `modem`, `bt`, `wifi`, `sd_card`, `lines` and `scenario` come with later milestones.
+It provides the `board`, `console` and `gnss` fixtures on top of pytest-embedded's classes (plan
+§3); `modem`, `bt`, `wifi`, `sd_card`, `lines` and `scenario` come with later milestones.
 The board runs a board profile, `esp32-devkitc` unless the `board_profile` marker names another
 (plan §4.5).
 
@@ -16,7 +16,9 @@ from `build/` in it. `--count` above 1 is refused too: a test has one board.
 The `source` and `tap` markers say what a test puts at the far end of its board's interfaces and
 which it taps. A backend that cannot give them gets its parameter marked `skip`, with the reason
 from the capability declaration (`esp32tl.boards.capabilities`): the test is skipped before any
-fixture is set up, so pytest-embedded never opens a serial port for it.
+fixture is set up, so pytest-embedded never opens a serial port for it. On the backend that runs
+the test, each interface a `source` marker names waits for the test body to give its source, as
+`gnss.replay(path)` does, and the run waits with it, before the guest boots.
 """
 
 import json
@@ -35,6 +37,7 @@ from esp32tl.backends.esp32sim import BackendError, Esp32Sim, ended_on_runner_ex
 from esp32tl.boards import DEFAULT_PROFILE, BoardProfile, ProfileError
 from esp32tl.boards.capabilities import CapabilityError, Request, check, declared, refusal
 from esp32tl.interfaces.console import Console
+from esp32tl.interfaces.uart import Uart
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -265,6 +268,8 @@ def late_board_marker(config: pytest.Config, item: pytest.Item) -> str | None:
 # Set on a test whose call failed on an expect that read the runner's end: its error names the exit
 # code already.
 EXPECT_SAW_RUNNER_EXIT = pytest.StashKey[bool]()
+# Set on a test whose call failed: a run it never started is then not reported a second time.
+CALL_FAILED = pytest.StashKey[bool]()
 
 
 @pytest.hookimpl(wrapper=True)
@@ -272,6 +277,8 @@ def pytest_runtest_makereport(
     item: pytest.Item, call: pytest.CallInfo[None]
 ) -> Generator[None, pytest.TestReport, pytest.TestReport]:
     report = yield
+    if report.when == "call" and report.failed:
+        item.stash[CALL_FAILED] = True
     if (
         report.when == "call"
         and call.excinfo is not None
@@ -291,8 +298,17 @@ def board(
     if not isinstance(dut, Dut):
         # `count` parametrised above 1 in the test: pytest-embedded made a dut per count.
         pytest.fail("count is above 1: esp32tl runs one board in a test", pytrace=False)
+    sources = {r.interface: r.source for r in board_requests(request.node) if r.source is not None}
     try:
-        backend = Esp32Sim(dut, app_path, msg_queue, _meta, board_profile(request.node))
+        backend = Esp32Sim(
+            dut,
+            app_path,
+            msg_queue,
+            _meta,
+            board_profile(request.node),
+            sources,
+            directory=request.path.parent,
+        )
     except BackendError as error:
         backend_failed(error)
     try:
@@ -305,6 +321,18 @@ def board(
             # and what the link found.
             if not request.node.stash.get(EXPECT_SAW_RUNNER_EXIT, False):
                 backend_failed(error)
+        else:
+            # A test that passed without giving a source it declared ran no firmware: it would
+            # pass whatever the firmware does.
+            if backend.never_started and not request.node.stash.get(CALL_FAILED, False):
+                names = " and ".join(
+                    f"the {source} of {name}" for name, source in backend.never_started.items()
+                )
+                pytest.fail(
+                    f"{Esp32Sim.name}: the run never started: it waited for {names}, which the"
+                    " source marker declares; give it in the test body",
+                    pytrace=False,
+                )
         finally:
             # The link's warnings and the run's stats, in the report of every test: a section
             # for people, which pytest shows with a failure or -rA, and a user property for code,
@@ -322,5 +350,15 @@ def backend_failed(error: BackendError) -> NoReturn:
 
 @pytest.fixture
 def console(board: Esp32Sim) -> Console:
-    """The firmware's console; `console.expect` is `dut.expect`."""
-    return Console(board.dut)
+    """The firmware's console; `console.expect` is `dut.expect`, once the run has started."""
+    return Console(board.dut, board.waiting)
+
+
+@pytest.fixture
+def gnss(board: Esp32Sim) -> Uart:
+    """The far end of the board profile's `uart.gnss` route: `gnss.replay(path)` replays a
+    recording into it."""
+    try:
+        return board.uart("gnss")
+    except BackendError as error:
+        backend_failed(error)

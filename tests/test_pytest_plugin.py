@@ -716,7 +716,9 @@ def test_hello_world_fails_on_an_image_that_prints_something_else(
 # answer; `seq` sends an event out of sequence and ends on the harness's stop; `late` sends one
 # after turn 0, when no turn is due before --max-seconds; `deaf` ignores SIGTERM; `linger` leaves
 # a child holding the link open after it exits; `slow` loads for half a second before it connects,
-# and dies of SIGTERM until then, as the real runner does.
+# and dies of SIGTERM until then, as the real runner does; `gone` exits 4 in turn 0 without
+# reading it, as the real runner does after --peer-timeout. $FAKE_WATCH is the pins the harness's
+# hello must watch, comma-separated.
 LINK_RUNNER = """#!{python}
 import os
 import signal
@@ -755,12 +757,17 @@ def end(how, code, detail=None):
 send(p.RunnerHello(2 if mode == "version" else 1, "esp32", "emulated-fifo-write", "0" * 40))
 hello = p.decode_harness(lines.readline())
 board_profile = os.environ.get("FAKE_BOARD", "esp32-devkitc")
-assert (hello.board, hello.chip, hello.watch) == (board_profile, "esp32", ()), hello
+watch = tuple(int(pin) for pin in os.environ.get("FAKE_WATCH", "").split(",") if pin)
+assert (hello.board, hello.chip, hello.watch) == (board_profile, "esp32", watch), hello
 if mode == "version":
     end("protocol_error", 3, detail="version 1 from the peer, the runner speaks 2")
 if mode == "seq":
     send(p.UartTx(2, 0, 1, (4,), 9600, b"x"))
 send(p.Sync(0))
+if mode == "gone":
+    print("esp32tl-runner: the peer's turn took longer than --peer-timeout", file=sys.stderr)
+    conn.close()
+    sys.exit(4)
 turn = p.decode_harness(lines.readline())
 print("Hello world!", flush=True)
 if turn == p.Stop():
@@ -937,3 +944,59 @@ def test_a_test_that_ends_while_the_runner_loads_waits_for_its_hello(
     # SIGTERM before the hello would have killed it, with -15.
     result.assert_outcomes(passed=1)
     result.stdout.fnmatch_lines(["stats: the run ended at 0.000001000 s (signal); *"])
+
+
+def test_a_held_run_whose_runner_is_gone_releases_the_link(
+    link_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_LINK", "gone")
+    monkeypatch.setenv("FAKE_WATCH", "4,5")
+    link_runner.makepyfile(
+        test_fake="""
+        import pytest
+
+        @pytest.mark.source("uart.gnss", "replay")
+        def test_held(board):
+            assert board._exited.wait(10)
+            # The waiter let the link's first turn go: the link thread read to end of file.
+            board._linker.join(5)
+            assert not board._linker.is_alive()
+        """
+    )
+    started = time.monotonic()
+    result = link_runner.runpytest_subprocess("-p", "no:cacheprovider", "-rA")
+    assert time.monotonic() - started < 15
+    result.assert_outcomes(passed=1, errors=1)
+    result.stdout.fnmatch_lines(["*esp32sim: the runner exited with code 4; its output is in *"])
+    # The exit says why the run never started; the teardown does not say it again.
+    result.stdout.no_fnmatch_line("*the run never started*")
+
+
+def test_a_declared_source_never_given_fails_the_test_at_teardown(
+    link_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_WATCH", "4,5")
+    link_runner.makepyfile(
+        test_fake="""
+        import pytest
+
+        pytestmark = pytest.mark.source("uart.gnss", "replay")
+
+        def test_never_given(board):
+            pass
+
+        def test_failed_first(board):
+            raise AssertionError("the test's own failure")
+        """
+    )
+    result = link_runner.runpytest_subprocess("-p", "no:cacheprovider", "-rA")
+    # The failed test is not reported a second time.
+    result.assert_outcomes(passed=1, failed=1, errors=1)
+    result.stdout.fnmatch_lines(
+        [
+            "*esp32sim: the run never started: it waited for the"
+            " replay of uart.gnss, which the source marker declares; give it in the test body",
+        ]
+    )
+    # Stopped at turn 0, before the guest booted.
+    assert result.stdout.str().count("stats: the run ended at 0.000001000 s (stop)") == 2

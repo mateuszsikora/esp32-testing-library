@@ -180,12 +180,12 @@ bytes everywhere. `--check` compares each file as text with what it would write.
 
 | Field | Value | Why |
 |---|---|---|
-| `esp32tl_recording`, `board`, `interface`, `clock`, `end` | as plan §4.3 | `t` is emulated nanoseconds since power-on; `hold`: nothing after the last event |
+| `esp32tl_recording`, `board`, `interface`, `clock`, `end` | as the [recording format](../recording-format.md#header) has them | `t` is emulated nanoseconds since power-on; `hold`: nothing after the last event |
 | `source` | `generated` | no model or device produced it |
 | `app_sha256` | `null` | the recording belongs to no app; no `app.bin` produced it |
 | `tools` | `{}` | neither esp32tl nor esp32sim produced it, and a version here would change the file at every release |
 | `created` | `CREATED`, `2026-10-31T00:00:00Z` | when the parameters were fixed, so the output depends on the script alone |
-| `generator` | the script's path, the seed, `BAUD` | not in plan §4.3: how to make the file again, and the baud its timing assumes, which the format has no field for |
+| `generator` | the script's path, the seed, `BAUD` | not a field of the format, which keeps it as an extra: how to make the file again, and the baud its timing assumes, which the format has no field for |
 
 **Events:** `{"t": T, "dir": "in", "data": "BASE64"}`, one sentence each, `t` in emulated
 nanoseconds.

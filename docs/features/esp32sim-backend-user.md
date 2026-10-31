@@ -37,9 +37,14 @@ pytest shows as the test's captured stdout when the test fails.
 The runner's board is a link to the harness: a Unix socket the backend binds before it starts the
 runner, in a new directory under the system's temporary directory (under `/tmp` when that path
 would be too long for a socket), passed as `--board socket:PATH`. The backend reads the link in a
-thread for the whole run, speaking the [link protocol](../protocol.md). No interface is wired to
-the board yet, so the link carries the handshake, one turn at the start, the runner's warnings and
-its statistics; the console still comes from the runner's stdout.
+thread for the whole run, speaking the [link protocol](../protocol.md). Each route of the board
+profile that a `source` marker names is wired to the board: the link watches its pins and carries
+what the firmware transmits there and what the source sends in, and the run waits at power-on,
+before the firmware's first instruction, until the test has given the source, as
+`gnss.replay(path)` does ([replay](replay-user.md)), or until the runner gives up on the harness
+after 60 wall seconds and exits with code 4. Without a `source` marker no interface is
+wired, and the link carries the handshake, one turn at the start, the runner's warnings and its
+statistics. The console comes from the runner's stdout either way.
 
 A run stops after 300 emulated seconds if the test has not ended it before. That is time on the
 emulated clock, not the wall clock: a test that waits for anything later fails. The runner exits
@@ -85,7 +90,11 @@ reach the 300 emulated seconds.
 
 ## How the run ends
 
-At teardown the backend ends the run with `SIGTERM`, once the runner has connected and said hello:
+A run still waiting for its source at teardown is ended before the firmware's first instruction:
+the backend answers the runner's first turn with `stop`, waits up to 5 s for the runner to exit
+0, and the report's statistics say `(stop)`; the test gets an error at teardown unless it has
+failed already ([replay](replay-user.md#when-the-test-gets-it-wrong)). Otherwise, at teardown the backend ends the run with
+`SIGTERM`, once the runner has connected and said hello:
 the runner handles the signal only from then on, and before that it would die of it. A test that
 ends while the runner is still loading the images waits up to 5 s for that. On `SIGTERM` the
 runner sends its last warnings and its statistics over the link and exits 0. The backend reads the
@@ -146,6 +155,8 @@ The test gets an error at setup and its body does not run. Every message starts 
 
 | Message | What to do |
 |---|---|
+| `{interface}: a {source} source is not implemented yet; the backend gives replay` | A `source` marker names `model` or `real`, which the backend does not give yet; use `replay` |
+| `the board profile {profile} has no {interface}; its interfaces are {interfaces}` | The test uses `gnss` on a profile without `uart.gnss`; choose a profile that has it |
 | `{build} holds no ESP-IDF build: no flasher_args.json` | Build the app (`make firmware` for this repository's firmware), or fix the `app_path` marker |
 | `{build} is built for {target}; esp32sim runs the classic esp32` | Build for `esp32` |
 | `{build} asks for flash encryption, which the runner does not do` | Build without flash encryption |
@@ -155,8 +166,9 @@ The test gets an error at setup and its body does not run. Every message starts 
 | `cannot listen on {path}: {reason}` | The backend cannot bind the link's socket in a new directory under the system's temporary directory or `/tmp`; check that it is writable |
 | `cannot start {runner}: {reason}` | The runner exists but the system cannot run it, for example `Exec format error` |
 
-`{build}` is the app's `build/` directory. The build is checked first, then the runner, the ROM ELF
-and the socket, so only the first problem is reported.
+`{build}` is the app's `build/` directory. The sources are checked first, then the build, the
+runner, the ROM ELF and the socket, so only the first problem is reported. The profile's routes
+are checked again when the test asks for `gnss`, after the runner has started.
 
 ## See also
 

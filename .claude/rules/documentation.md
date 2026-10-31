@@ -26,6 +26,8 @@ the two differ. How to write each document: `docs/guides/documentation.md`.
 - `esp32tl/link/`, `runner/src/protocol.rs`, `runner/src/socket_board.rs` → `docs/protocol.md`
 - `firmware/` → `docs/features/validation-firmware-*.md`
 - `esp32tl/boards/` → `docs/features/board-profiles-*.md`
+- `esp32tl/recording.py` → `docs/recording-format.md`
+- `esp32tl/sources/replay.py` → `docs/features/replay-*.md`
 - any other `esp32tl/` path → a new `docs/features/<feature>-*.md` and a row in the ownership map
 - `.github/workflows/` → `docs/cicd.md`
 - `Makefile`, `.pre-commit-config.yaml`, `scripts/fetch-rom-elf`, `scripts/venv-tool`,

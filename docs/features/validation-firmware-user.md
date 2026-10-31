@@ -164,7 +164,7 @@ The rest are in [Failure modes](validation-firmware-technical.md#failure-modes).
 
 `recordings/gnss-generated-1.jsonl` and `recordings/gnss-generated-2.jsonl` are what a GNSS
 receiver on the `esp32-devkitc` profile's `uart.gnss` route would send `nmea_reader`, in the
-recording format of [plan §4.3](../implementation-plan.md#43-recording-format). Each is a
+[recording format](../recording-format.md). Each is a
 stationary receiver with a fix from its first sentence: one sentence per emulated second, `$GPGGA`
 and `$GPRMC` in turn, the first at 1 s and the last at 60 s, the position wandering a few metres
 around its start. At 9600 baud a sentence takes under 80 ms on the wire.
@@ -194,8 +194,8 @@ scripts/generate-gnss-recordings.py: recordings/NAME is not what the script gene
 ```
 
 To change a recording, change the script and run it; `tests/test_gnss_recordings.py` fails while
-the committed files differ from what it writes. esp32tl cannot replay them yet: the `gnss`
-fixture is #14.
+the committed files differ from what it writes. A test replays one into the firmware with
+`gnss.replay(path)` ([replay](replay-user.md#replaying-a-gnss-recording)).
 
 ## See also
 

@@ -1,9 +1,10 @@
 # pytest plugin
 
-esp32tl ships a pytest plugin that runs an ESP-IDF firmware image and lets a test read what the
-firmware prints. A test asks for the `console` fixture (or `board`, which `console` needs), names
-the app with the `app_path` marker, and runs once on every backend. pytest loads the plugin by
-itself once esp32tl is installed; it builds on
+esp32tl ships a pytest plugin that runs an ESP-IDF firmware image, lets a test read what the
+firmware prints, and replays a recording into the firmware's GNSS UART. A test asks for the
+`console` fixture (or `board`, which `console` needs), names the app with the `app_path` marker,
+and runs once on every backend. pytest loads the plugin by itself once esp32tl is installed; it
+builds on
 [pytest-embedded](https://github.com/espressif/pytest-embedded), which esp32tl installs with it.
 
 ## Writing a test
@@ -45,6 +46,9 @@ What the backend needs besides the build, the runner and the ROM ELF, is in
   (`timeout`, `expect_all`, `not_matching`, `return_what_before_match`), the same return values,
   and the same 30 s default timeout. `expect` takes a string, a compiled regex or a list of them,
   and searches for them as regular expressions; `expect_exact` matches strings as they are.
+- While the run waits for a source the `source` marker declares and the test has not given yet,
+  both raise `SourceError` at once instead
+  ([replay](replay-user.md#when-the-test-gets-it-wrong)).
 - An expect that does not match fails with pexpect's `TIMEOUT`, or with its `EOF` once the runner
   has exited, and pytest-embedded's message `Not found "<pattern>"`.
 - `console.expect(pexpect.EOF)` waits for the end of the run and returns once the runner has
@@ -63,6 +67,19 @@ What the backend needs besides the build, the runner and the ROM ELF, is in
 - `dut.app`, from pytest-embedded's `dut` or `app` fixture, is pytest-embedded's base `App`,
   without `flash_files` or `target`: the backend runs no pytest-embedded service, so
   pytest-embedded builds nothing more. Use `board.app`.
+- When the test's `source` markers declare a source on an interface, the run waits at power-on,
+  before the firmware's first instruction, until the test body has given it, for at most 60
+  wall seconds ([replay](replay-user.md#replaying-a-gnss-recording)); without such a marker it
+  starts when `board` is set up.
+
+`gnss` is the far end of the board profile's `uart.gnss` route:
+
+- `gnss.replay(path)` replays a recording into it, at the recording's times; it needs
+  `@pytest.mark.source("uart.gnss", "replay")` on the test, its class or its module. The path is
+  relative to the test file's directory. What it does, and what it refuses, is in
+  [replay](replay-user.md).
+- On a board profile without `uart.gnss`, `gnss` is an error at setup:
+  `esp32sim: the board profile lilygo-t-a7670g-r2 has no uart.gnss; its interfaces are console, uart.modem, lines.modem`.
 
 ## Backends and test ids
 
@@ -110,6 +127,13 @@ A test that parametrises pytest-embedded's `count` itself above 1, as in
 - The backend cannot start (no runner, no ROM ELF, no usable build): an error at setup, the test
   body does not run, and the message starts with `esp32sim: `. The messages are listed in
   [the esp32sim backend](esp32sim-backend-user.md#when-the-backend-cannot-start).
+- A source given otherwise than the `source` markers declare it, or an expect before it is
+  given: the test fails with `SourceError`; a recording that cannot be replayed fails it with
+  `RecordingError` or `ReplayError` ([replay](replay-user.md#what-a-replay-refuses)). A
+  `source` marker that names `model` or `real` is an error at setup, on `esp32sim`:
+  `esp32sim: uart.gnss: a model source is not implemented yet; the backend gives replay`.
+  A test that passes without giving a source it declared gets an error at teardown:
+  `esp32sim: the run never started: it waited for the replay of uart.gnss, which the source marker declares; give it in the test body`.
 - An expect that does not match in its timeout: the test fails with pexpect's `TIMEOUT`.
 - The runner has exited: the expect fails at once with pexpect's `EOF`, which names the exit code
   and carries the runner's last output
@@ -131,6 +155,8 @@ under `[tool.pytest.ini_options]`.
 
 ## Names the plugin takes
 
+- **`board`, `console`, `gnss`**: the plugin's fixtures; a project's own fixture of one of these
+  names overrides it, as pytest has it.
 - **`board`**: esp32tl parametrises every test that asks for a fixture of that name, matched by
   name. A project's own `board` fixture, in a session where esp32tl is installed, gets the
   backend's id (`test_mine[esp32sim]`) and the plugin's parameters as well.
@@ -146,5 +172,6 @@ under `[tool.pytest.ini_options]`.
 - [pytest plugin: how it works](pytest-plugin-technical.md)
 - [esp32sim backend](esp32sim-backend-user.md)
 - [Board profiles](board-profiles-user.md)
+- [Replay](replay-user.md)
 - [Validation firmware](validation-firmware-user.md)
 - [Testing this repository](../guides/testing.md)

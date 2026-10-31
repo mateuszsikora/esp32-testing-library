@@ -186,7 +186,7 @@ would change the file without a change to its content, and the check would fail 
 
 **Postponed:** whether the recording reader of #14 accepts `"source": "generated"`, a `null`
 `app_sha256` and the extra `generator` field, or the format gains a field for the baud; decided
-with the reader.
+with the reader: [it accepts all three, and no baud field](harness.md#the-recording-reader-takes-the-generated-recordings-header-as-it-is).
 
 ## The GNSS recording generator lives in scripts/ with a rule of its own
 

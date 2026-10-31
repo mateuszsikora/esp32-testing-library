@@ -103,6 +103,14 @@ the next turn's, so it would be checked against that turn's `sync`; and a peer b
 while the runner is blocked on writing `console` or `uart_tx` to it is a deadlock.
 
 The first `sync` has `t = 0` and comes before the guest executes its first instruction (rule 4).
+A peer may take its time over turn 0, since the guest has not run yet: `BoardLink`, made with
+`hold`, answers this first `sync` only once `BoardLink.start()` is called, which the `esp32sim`
+backend does when the test body has given every source its `source` markers declare, so that a
+recording replayed from the body starts at power-on. Emulated time does not move meanwhile, and
+the wait is wall time, bounded by `--peer-timeout` (section 9). `start(boot=False)` answers turn 0
+with `stop` instead, before the guest boots. A `BoardLink` made with `clock` also fails the link
+on a runner `hello` whose `clock` is another one: the `esp32sim` backend passes
+`emulated-fifo-write`, the clock its recordings are checked against.
 
 **Ordering.** The runner's messages are in non-decreasing `t`. Before the `sync` at `B` the
 runner sends every event with `t ≤ B` and nothing later; what the guest did after `B` before the

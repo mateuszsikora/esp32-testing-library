@@ -137,6 +137,21 @@ one, and the plan and the issues link to it by that path.
 **Rejected:** moving it under `docs/features/`, because every existing link to it would break for
 no change in what it says.
 
+## The recording format is a document at the top of docs/, with a rule of its own
+
+Status: decided (#14)
+
+`docs/recording-format.md` specifies the recording format and owns `esp32tl/recording.py` (rule
+F14), as `docs/protocol.md` owns the link code: it is a format between the tools that write
+recordings and the replay that reads them, not a feature of either. The replay,
+`esp32tl/sources/replay.py`, has feature documents of its own, `docs/features/replay-*.md` (rule
+F15), named by file: the models and the real source will be other files of `sources/`.
+
+**Rejected:** a `docs/features/recordings-*.md` pair, because the format is a contract of several
+writers and readers, which [the protocol's decision](#format-specifications-stay-at-the-top-of-docs)
+keeps at the top of `docs/`; and one rule for all of `sources/`, because its other files will be
+documented elsewhere.
+
 ## The decisions index is generated
 
 Status: decided (#54)
