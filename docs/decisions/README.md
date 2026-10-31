@@ -117,6 +117,17 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The esp32tl command serves the link itself, without pytest-embedded](harness.md#the-esp32tl-command-serves-the-link-itself-without-pytest-embedded) | `harness.md` | decided (#16) |
 | [The esp32tl command runs the runner in a session of its own](harness.md#the-esp32tl-command-runs-the-runner-in-a-session-of-its-own) | `harness.md` | decided (#16) |
 | [esp32tl replay takes one recording, and esp32tl record waits for the tap](harness.md#esp32tl-replay-takes-one-recording-and-esp32tl-record-waits-for-the-tap) | `harness.md` | postponed (#21) |
+| [The board's clock is the test's: emulated time moves only while the test waits](harness.md#the-boards-clock-is-the-tests-emulated-time-moves-only-while-the-test-waits) | `harness.md` | decided (#64) |
+| [A run starts at board.power_on(), and so does the runner](harness.md#a-run-starts-at-boardpower_on-and-so-does-the-runner) | `harness.md` | decided (#64) |
+| [The test's own timeout catches a hung run, not the runner's peer timeout](harness.md#the-tests-own-timeout-catches-a-hung-run-not-the-runners-peer-timeout) | `harness.md` | decided (#64) |
+| [What is at a route's far end is what the test does with it before power-on, not a marker](harness.md#what-is-at-a-routes-far-end-is-what-the-test-does-with-it-before-power-on-not-a-marker) | `harness.md` | decided (#64) |
+| [Models describe the world in its own terms, in units](harness.md#models-describe-the-world-in-its-own-terms-in-units) | `harness.md` | decided (#64) |
+| [Tests observe the device from outside, and product knowledge stays in the consumer's tests](harness.md#tests-observe-the-device-from-outside-and-product-knowledge-stays-in-the-consumers-tests) | `harness.md` | decided (#64) |
+| [The network the device reaches is simulated in the harness, in emulated time](harness.md#the-network-the-device-reaches-is-simulated-in-the-harness-in-emulated-time) | `harness.md` | decided (#64) |
+| [A bridge from the simulated network to a real service is postponed](harness.md#a-bridge-from-the-simulated-network-to-a-real-service-is-postponed) | `harness.md` | postponed (#64) |
+| [A TLS stack with a seeded random source is postponed](harness.md#a-tls-stack-with-a-seeded-random-source-is-postponed) | `harness.md` | postponed (#64) |
+| [Flash contents besides the build go into a partition of the build's own table, by name](harness.md#flash-contents-besides-the-build-go-into-a-partition-of-the-builds-own-table-by-name) | `harness.md` | decided (#64) |
+| [The LilyGO profile takes its GNSS route, flash and PSRAM from the first consumer's firmware](harness.md#the-lilygo-profile-takes-its-gnss-route-flash-and-psram-from-the-first-consumers-firmware) | `harness.md` | decided (#64) |
 
 ## The runner crate and esp32sim
 
