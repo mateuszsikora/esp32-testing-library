@@ -52,12 +52,11 @@ Each item names the fact, where it was checked, and what changes.
    also brings mikroverk/esp32sim#300 (LL Privacy in the virtual BLE controller) and
    mikroverk/esp32sim#307 (the roadmap, documentation only), and nothing else beyond the fix build
    stage 0 used. On it, `hello_world` built with `CONFIG_ESP32_REV_MIN_3=y` boots on its power-on
-   reset and reports v3.0, and the production WROVER-E images stage 0 measured execute the same
+   reset and reports v3.0, and the production images stage 0 measured execute the same
    instructions as on the fix build in every configuration stage 0 ran them in: the release image
    with empty NVS, and with NVS naming a Bluetooth peer with and without `--ble`, and the replay
-   image. Those images
-   need no patch branch either. The branch is first needed for whichever of BT Classic (M8) and the
-   timer wake (M9) is declined upstream.
+   image. Those images need no patch branch either. The branch is first needed for whichever of BT
+   Classic (M8) and the timer wake (M9) is declined upstream.
 
 6. **`pppos_client` is not in ESP-IDF.** It lives in `espressif/esp-protocols` under
    `components/esp_modem/examples/pppos_client`. The validation list stays, the build recipe fetches
@@ -103,7 +102,7 @@ Each item names the fact, where it was checked, and what changes.
     examples take their pins from `sdkconfig`. No milestone needs the LilyGO profile. The LilyGO profile is
     filled in from the schematic when someone has it, and gets a GNSS entry only then (on that
     board the GNSS may well be reached through the modem's AT commands). *Amended by section 11:*
-    the profile takes its GNSS route, flash and PSRAM from firmware built for the board, and M6's
+    the profile takes its GNSS route, flash and PSRAM from LilyGO's documentation, and M6's
     validation runs on its modem route, so M6 needs the LilyGO profile.
 
 ## 2. Decisions on the open questions
@@ -383,9 +382,8 @@ rx = 5                    # strapping pin (SDIO slave timing): a low level at bo
 baud = 9600
 ```
 
-`lilygo-t-a7670g-r2.toml` holds what the spec gives (from firmware built for the board) and
-nothing from memory. Other pins, and whether a GNSS route exists at all, wait for the vendor
-schematic:
+`lilygo-t-a7670g-r2.toml` holds what the spec gives and nothing from memory. Other pins, and
+whether a GNSS route exists at all, wait for the vendor schematic:
 
 ```toml
 name = "lilygo-t-a7670g-r2"
@@ -681,14 +679,14 @@ proposed for the issue, to be posted once agreed:
    is out of scope."
 3. **First-milestone board.** "The first milestone runs on a generic `esp32-devkitc` profile with
    a GNSS route chosen for the repository's own `nmea_reader` firmware (UART1, GPIO 4/5). The
-   LilyGO T-A7670G R2 profile takes what firmware built for the board gives: the modem route and
-   lines, the GNSS route (UART2, GPIO 21/22), 4 MB of flash and PSRAM; the rest waits for the vendor
-   schematic. The modem's validation firmware runs on its modem route." *Amended by section 11,
-   before this text was posted.*
+   LilyGO T-A7670G R2 profile takes the modem route and lines from the spec and, from LilyGO's
+   documentation, the GNSS route of the board's GPS version (UART2, GPIO 21/22), 4 MB of flash and
+   PSRAM; the rest comes when a test needs it. The modem's validation firmware runs on its modem
+   route." *Amended by section 11, before this text was posted.*
 
 ## 11. Amendments from the test-clock and network spike (2026-10-31)
 
-A spike ran a production firmware's release image, unmodified, under esp32tl, with a modelled GNSS
+A spike ran the production release image of [stage 0](stage0-findings.md#inputs), unmodified, under esp32tl, with a modelled GNSS
 receiver and a simulated network, and turned up how tests should read and what the network takes.
 The decisions, with what they rejected and the measurements behind them, are in
 [`decisions/harness.md`](decisions/harness.md):
@@ -712,19 +710,19 @@ The decisions, with what they rejected and the measurements behind them, are in
   Docker and `--realtime`.
 - [Flash contents go into a partition of the build's own table](decisions/harness.md#flash-contents-besides-the-build-go-into-a-partition-of-the-builds-own-table-by-name):
   `board.nvs({...})` first.
-- [The LilyGO profile takes its GNSS route, flash and PSRAM from firmware built for the board](decisions/harness.md#the-lilygo-profile-takes-its-gnss-route-flash-and-psram-from-firmware-built-for-the-board),
+- [The LilyGO profile takes its GNSS route, flash and PSRAM from LilyGO's documentation](decisions/harness.md#the-lilygo-profile-takes-its-gnss-route-flash-and-psram-from-lilygos-documentation),
   amending finding 12.
 
 What the spike could not reach, and which milestones it moves forward:
 
-- Firmware that keeps what it collects on an SD card loses it without one, so what such firmware
-  sends to its cloud can be tested only with M7's card model.
-- A modem's power-off is confirmed on RI, so the modem model needs M3's `gpio_out` and `gpio_in`
-  before it can model power.
+- Firmware that keeps what it collects on an SD card may lose it without one, so what such
+  firmware sends to its cloud may be testable only with M7's card model.
+- Firmware may confirm a modem's power-off on RI, so the modem model needs M3's `gpio_out` and
+  `gpio_in` before it can model power.
 - A modem model ignores what is not a command in command mode: firmware may send `+++` there to
   be sure it is out of data mode, and answering it shifts every later answer by one.
-- A device that checks a certificate's dates needs the calendar first: it waits for NTP before
-  TLS, so the simulated network serves NTP from the start.
+- A device that checks a certificate's dates needs the calendar first and may wait for NTP before
+  TLS, as the measured image does, so the simulated network serves NTP from the start.
 - The recording format's clock switch ([`recording-format.md`](recording-format.md#clock-switches))
   names M6's data phase as its use. M6 no longer switches clocks, so the modem's PR corrects that
   reference, and the switch stays for the `real` source of M5.

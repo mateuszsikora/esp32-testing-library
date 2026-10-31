@@ -17,7 +17,7 @@ sharing.
 | esp32sim, with the revision fix | [`165f56a9cf0f211669ce282bdce9426f821b1ec4`](https://github.com/mateuszsikora/esp32sim/commit/165f56a9cf0f211669ce282bdce9426f821b1ec4): upstream plus [mikroverk/esp32sim#322](https://github.com/mikroverk/esp32sim/pull/322) |
 | Mask ROM | `esp32_rev300_rom.elf` from esp-rom-elfs `20260528`, SHA-256 `920b70635440517866aab2230964a570d2cf2b676658d93c52fbac108c1cca31` |
 | ESP-IDF | v5.3.6, image `espressif/idf:v5.3.6@sha256:cee52f0c4fdaf088992a7a739f5993154e95cf1d3ab61c24f5b40e6d56a3a070` |
-| The production images | The release image of a production application: dual-core at the default 160 MHz, PSRAM, Bluetooth Classic SPP, a cellular modem over UART through esp_modem and PPP, an SD card over SPI, and deep sleep; built with `CONFIG_ESP32_REV_MIN_3`. Also its replay image, a variant that replays a recorded session from the SD card instead of using Bluetooth. Not in this repository |
+| The production images | The production release image, of an application not in this repository: dual-core at the default 160 MHz, PSRAM, Bluetooth Classic SPP, a cellular modem over UART through esp_modem and PPP, an SD card over SPI, and deep sleep; built with `CONFIG_ESP32_REV_MIN_3`. Also its replay image, a variant that replays a recorded session from the SD card instead of using Bluetooth |
 | Public firmware | ESP-IDF v5.3.6 `examples/get-started/hello_world` (as is, with `CONFIG_ESP32_REV_MIN_3=y`, and with `CONFIG_SPIRAM=y`), `examples/bluetooth/bluedroid/classic_bt/bt_spp_initiator` and `examples/storage/sd_card/sdspi` unmodified, and this repository's `tools/cryptobench` and `tools/deepsleep` |
 
 Both esp32sim builds carry one local change, needed only because the local Rust 1.93 lacks a newer
