@@ -13,7 +13,7 @@ that references to its number keep their meaning.
    is not tested yet, nor is a test that uses `console` alone. `tests/test_pytest_plugin.py::test_board_is_parametrised_with_the_backend_its_services_and_the_app`
 2. `--esp32tl-backend` takes only a backend's name: any other name is a usage error (exit code 4).
    That it limits the run to that backend is not tested while there is one backend.
-   `tests/test_pytest_plugin.py::test_backend_option_limits_the_parametrisation`
+   `tests/test_pytest_plugin.py::test_backend_option_takes_a_backend_name_only`
 3. pytest-embedded's `--embedded-services`, `--app-path` and `--build-dir` are refused, with exit
    code 4 and no traceback on stdout, when a selected test uses `board`; `--app-path` is allowed
    when `-k` has deselected every test that uses `board`.

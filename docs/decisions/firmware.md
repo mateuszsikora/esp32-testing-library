@@ -81,11 +81,11 @@ Status: decided (#47)
 
 The container runs as the host's uid (`HOME=/tmp` for that uid, unknown to the image), with the
 repository mounted read-only and the output directory as `/out`, so nothing is written outside the
-output directory and the host's uid owns what is. Under rootless Docker or Podman the output
-belongs to another uid, and SELinux in enforcing mode would need `:z` on the mounts.
-`docs/features/validation-firmware-user.md` says so. An image that takes components from the component manager writes `dependencies.lock` and
-`managed_components/` into its project directory, which the read-only mount refuses; the comment
-at the mount in `build.sh` says so.
+output directory and the host's uid owns what is. Under rootless Docker or Podman the output belongs
+to another uid, and SELinux in enforcing mode would need `:z` on the mounts.
+`docs/features/validation-firmware-user.md` says so. An image that takes components from the
+component manager writes `dependencies.lock` and `managed_components/` into its project directory,
+which the read-only mount refuses; the comment at the mount in `build.sh` says so.
 
 ## The ROM ELF is pinned by its checksum, not by its release directory
 

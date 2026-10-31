@@ -295,6 +295,15 @@ def test_an_unowned_package_path_needs_a_feature_doc(repo: Path) -> None:
     assert passes(run(repo)), "committed, the new doc is still new since the merge base"
 
 
+def test_a_moved_feature_doc_is_no_new_one(repo: Path) -> None:
+    write(repo, "esp32tl/boards/__init__.py", '"""Boards."""\n')
+    git(
+        repo, "mv", "docs/features/esp32sim-backend-user.md", "docs/features/board-profiles-user.md"
+    )
+    commit(repo)
+    assert "[F12]" in run(repo).stdout
+
+
 def test_skip_is_local_only(repo: Path) -> None:
     write(repo, "esp32tl/backends/esp32sim.py", "x = 2\n")
     commit(repo)

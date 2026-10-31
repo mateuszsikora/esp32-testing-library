@@ -1,8 +1,8 @@
 # pytest plugin: how it works
 
-The plugin is `esp32tl/pytest_plugin.py`, with the backend registry in `esp32tl/backends/__init__.py`
-and the console in `esp32tl/interfaces/console.py`. What the user sees is in
-[pytest-plugin-user.md](pytest-plugin-user.md); the backend it starts is in
+The plugin is `esp32tl/pytest_plugin.py`, with the backend registry in
+`esp32tl/backends/__init__.py` and the console in `esp32tl/interfaces/console.py`. What the user
+sees is in [pytest-plugin-user.md](pytest-plugin-user.md); the backend it starts is in
 [esp32sim-backend-technical.md](esp32sim-backend-technical.md).
 
 ## Data flow
@@ -44,11 +44,12 @@ and the console in `esp32tl/interfaces/console.py`. What the user sees is in
    `pytest.UsageError`. The refusal is needed because a parameter of `None`, which is what
    `SERVICES` gives `esp32sim`, falls back to the command line in pytest-embedded: a session
    started with `--embedded-services esp` would make the `esp32sim` case open a serial port.
-5. **`board` fixture**, at setup: asserts `request.param == Esp32Sim.name`, makes the test an
-   error if `dut` is not a single `Dut` (pytest-embedded makes a tuple of duts when `count` is parametrised
-   above 1), and constructs `Esp32Sim(dut, app_path, msg_queue, _meta)`. A `BackendError` goes
-   through `backend_failed`, which raises `pytest.fail.Exception(f"{Esp32Sim.name}: {error}",
-   pytrace=False) from None`: one line, no chained traceback.
+5. **`board` fixture**, at setup: asserts `request.param == Esp32Sim.name`, makes the test an error
+   if `dut` is not a single `Dut` (pytest-embedded makes a tuple of duts when `count` is
+   parametrised above 1), and constructs `Esp32Sim(dut, app_path, msg_queue, _meta)`. A
+   `BackendError` goes through `backend_failed`, which raises
+   `pytest.fail.Exception(f"{Esp32Sim.name}: {error}", pytrace=False) from None`: one line, no
+   chained traceback.
 6. **`pytest_runtest_makereport`**, a `wrapper=True` hook, looks at the report of the call phase.
    When the call raised and `ended_on_runner_exit(call.excinfo.value)` holds, that is the error's
    `__cause__`/`__context__` chain holds a `RunnerExited`, it sets
@@ -116,7 +117,7 @@ pytest-embedded starts a multiprocessing manager for every session:
   `test_marked[esp32sim]`, the parameters `("esp32sim", None, <resolved app path>)` with and
   without the marker, and no `callspec` on a test without `board`. It replaces `board` with a
   fixture that returns its parameters (`SHOW_PARAMS`).
-- `test_backend_option_limits_the_parametrisation`: the id with `--esp32tl-backend esp32sim`, and
+- `test_backend_option_takes_a_backend_name_only`: the id with `--esp32tl-backend esp32sim`, and
   the usage error for `qemu`.
 - `test_pytest_embedded_options_are_refused_for_tests_with_a_board`: exit code 4, the message, no
   traceback. `test_more_than_one_dut_is_refused`: exit code 4 and the message.

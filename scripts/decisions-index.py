@@ -52,7 +52,14 @@ def headings(text: str) -> Iterator[tuple[int, str, int]]:
     is that of the underline."""
     fence: tuple[str, int] | None = None
     previous = ""
-    for number, line in enumerate(text.splitlines()):
+    lines = text.splitlines()
+    # YAML front matter, as in a skill: its closing `---` under a key is no setext heading.
+    skip = 0
+    if lines and lines[0] == "---":
+        skip = next((n + 1 for n, line in enumerate(lines[1:], 1) if line in ("---", "...")), 0)
+    for number, line in enumerate(lines):
+        if number < skip:
+            continue
         marker = re.match(r" {0,3}(`{3,}|~{3,})(.*)$", line)
         if fence is not None:
             # Only a run of the same character, at least as long, with nothing after it, closes.

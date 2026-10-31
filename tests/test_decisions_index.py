@@ -117,6 +117,11 @@ def test_anchors_follow_github() -> None:
     assert decisions_index.anchors(text) == {"x", "x-1", "x-2", "indented", "setext-title"}
 
 
+def test_front_matter_holds_no_heading() -> None:
+    text = "---\nname: x\nallowed-tools: Read\n---\n\n# Title\n"
+    assert decisions_index.anchors(text) == {"title"}
+
+
 def test_a_pipe_in_a_status_is_escaped(root: Path) -> None:
     (root / "docs/decisions/ci.md").write_text("# CI\n\n## A\n\nStatus: decided (#1 | #2)\n")
     assert run(root).returncode == 0

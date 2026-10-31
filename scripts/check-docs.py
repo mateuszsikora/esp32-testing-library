@@ -303,8 +303,9 @@ def merge_base(root: Path, base: str | None) -> tuple[str, str]:
 
 def added_paths(root: Path, mb: str) -> set[str]:
     """The files that did not exist at the merge base: added in a commit, staged or not, or
-    untracked."""
-    return paths(root, "diff", "--name-only", "--no-renames", "--diff-filter=A", mb) | paths(
+    untracked. With rename detection, unlike the changed set: a document moved with `git mv` is
+    not a new one. A move git cannot see, an untracked copy of a deleted file, still counts."""
+    return paths(root, "diff", "--name-only", "--find-renames", "--diff-filter=A", mb) | paths(
         root, "ls-files", "--others", "--exclude-standard"
     )
 

@@ -8,11 +8,11 @@ what each job runs.
 Status: decided (#48)
 
 The `firmware`, `runner`, `test`, `lint` and `docs` jobs run on `[self-hosted, Linux, X64]`, the
-machine hp600g1, even jobs such as `lint` and `docs` that need nothing from it. The repository is private, so
-minutes on GitHub-hosted runners are limited, and macOS minutes count ten times; every job that
-can runs on hp600g1. The machine also keeps the 7 GB `espressif/idf` image between runs, so the
-firmware build pulls nothing, and it has Docker, so the `requires_docker` tests run there. The cost
-is the queue: hp600g1 is one machine, and its jobs run one after another. In the run of #50,
+machine hp600g1, even jobs such as `lint` and `docs` that need nothing from it. The repository is
+private, so minutes on GitHub-hosted runners are limited, and macOS minutes count ten times; every
+job that can runs on hp600g1. The machine also keeps the 7 GB `espressif/idf` image between runs, so
+the firmware build pulls nothing, and it has Docker, so the `requires_docker` tests run there. The
+cost is the queue: hp600g1 is one machine, and its jobs run one after another. In the run of #50,
 `lint` went before `firmware` and delayed `firmware` and the Linux test jobs by about a minute. The
 header comment of `ci.yml` gives this reason, so the choice is not proposed again (#50).
 
