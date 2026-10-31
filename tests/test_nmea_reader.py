@@ -16,6 +16,7 @@ from typing import Any
 
 import pytest
 
+from esp32tl import boards
 from esp32tl.backends import esp32sim
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -76,10 +77,15 @@ def accept(server: socket.socket, process: subprocess.Popen[bytes]) -> socket.so
     raise AssertionError("the runner did not connect in 30 s")
 
 
+# The route nmea_reader's sdkconfig defaults to: the GNSS route of the board profile.
+PROFILE = boards.profile("esp32-devkitc")
+GNSS = PROFILE.uart["gnss"]
+
+
 def run(path: Path, events: list[dict[str, Any]], max_seconds: float) -> tuple[list[Any], str]:
-    """Runs nmea_reader with the events sent into GPIO 5 at 9600 baud. Returns the runner's
-    messages after the first turn, and the console. On any failure the runner is killed and its
-    stderr added to the error."""
+    """Runs nmea_reader with the events sent into the GNSS route's RX pin at its baud. Returns
+    the runner's messages after the first turn, and the console. On any failure the runner is
+    killed and its stderr added to the error."""
     if not (BUILD / "esp32tl-built").is_file():
         pytest.fail(f"{BUILD} holds no finished build: run make firmware", pytrace=False)
     app = esp32sim.load_app(str(BUILD.parent))
@@ -97,10 +103,22 @@ def run(path: Path, events: list[dict[str, Any]], max_seconds: float) -> tuple[l
                     wire.flush()
 
                 assert json.loads(wire.readline())["type"] == "hello"
-                write(type="hello", version=1, chip="esp32", board="esp32-devkitc", watch=[4, 5])
+                write(
+                    type="hello",
+                    version=1,
+                    chip=PROFILE.chip,
+                    board=PROFILE.name,
+                    watch=[GNSS.tx, GNSS.rx],
+                )
                 assert json.loads(wire.readline()) == {"type": "sync", "t": 0}
                 for event in events:
-                    write(type="uart_rx", t=event["t"], pin=5, baud=9600, data=event["data"])
+                    write(
+                        type="uart_rx",
+                        t=event["t"],
+                        pin=GNSS.rx,
+                        baud=GNSS.baud,
+                        data=event["data"],
+                    )
                 # nothing scheduled after these and no answers: the run goes to its end in one turn
                 write(type="wait", ack=0, quiet_until=None, latency=None)
                 messages = [json.loads(line) for line in wire.read().splitlines()]
@@ -140,14 +158,15 @@ def test_prints_the_fixes_of_the_recording(socket_path: Path) -> None:
     assert expected[0] == "fix acquired lat=52.229677 lon=21.012233"
     assert len(expected) == 4
     assert fixes(console) == expected
-    assert "nmea_reader: UART1 RX GPIO5 TX GPIO4 9600 baud" in console
+    route = f"UART{GNSS.port} RX GPIO{GNSS.rx} TX GPIO{GNSS.tx} {GNSS.baud} baud"
+    assert f"nmea_reader: {route}" in console
     # the route the board profile gives, configured by the firmware itself
     routes = [m for m in messages if m["type"] == "uart_cfg"]
     assert [(m["port"], m["tx_pins"], m["rx_pin"], m["baud"]) for m in routes][-1] == (
-        1,
-        [4],
-        5,
-        9600,
+        GNSS.port,
+        [GNSS.tx],
+        GNSS.rx,
+        GNSS.baud,
     )
     stats = messages[-1]
     assert stats["type"] == "stats" and stats["end"] == "max_seconds"

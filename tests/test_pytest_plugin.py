@@ -754,7 +754,8 @@ def end(how, code, detail=None):
 
 send(p.RunnerHello(2 if mode == "version" else 1, "esp32", "emulated-fifo-write", "0" * 40))
 hello = p.decode_harness(lines.readline())
-assert hello.board == "esp32-devkitc" and hello.watch == (), hello
+board_profile = os.environ.get("FAKE_BOARD", "esp32-devkitc")
+assert (hello.board, hello.chip, hello.watch) == (board_profile, "esp32", ()), hello
 if mode == "version":
     end("protocol_error", 3, detail="version 1 from the peer, the runner speaks 2")
 if mode == "seq":
@@ -808,6 +809,25 @@ def test_the_backend_serves_the_link_and_ends_the_run_with_sigterm(
             "  unrouted_rx_bytes 72, *",
         ]
     )
+
+
+def test_the_harness_hello_names_the_profile_the_test_chose(
+    link_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_BOARD", "lilygo-t-a7670g-r2")
+    link_runner.makepyfile(
+        test_lilygo="""
+        import pytest
+
+        @pytest.mark.board_profile("lilygo-t-a7670g-r2")
+        def test_hello(console):
+            console.expect("Hello world!")
+        """
+    )
+    # The fake runner asserts the hello's board; a failed assertion ends it with an error.
+    result = link_runner.runpytest_subprocess("-p", "no:cacheprovider", "-rA", "test_lilygo.py")
+    result.assert_outcomes(passed=1)
+    result.stdout.fnmatch_lines(["board lilygo-t-a7670g-r2, watching no pins"])
 
 
 def test_a_mismatched_handshake_fails_the_test_with_both_sides_reasons(
