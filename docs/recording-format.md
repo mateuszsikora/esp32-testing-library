@@ -9,8 +9,8 @@ This document is the format; `esp32tl/recording.py` reads and writes it.
 ## The file
 
 A recording is a `.jsonl` file: UTF-8 text, one JSON object per line, each line ended by `\n`
-(not `\r\n`), no blank lines. The first line is the header. Every line after it is an event or a clock switch,
-in the order they happened.
+(not `\r\n`), no blank lines. The first line is the header. Every line after it is an event or a
+clock switch, in the order they happened.
 
 ```json
 {"esp32tl_recording": 1, "board": "esp32-devkitc", "interface": "uart.gnss", "source": "model:nmea", "clock": "emulated-fifo-write", "end": "hold", "app_sha256": null, "tools": {"esp32tl": "0.1.0", "esp32sim": "8c652151dd5a521249a785ca147f20a9f8eda68f"}, "created": "2026-10-29T18:00:00Z"}

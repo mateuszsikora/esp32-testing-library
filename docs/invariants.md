@@ -134,9 +134,9 @@ that references to its number keep their meaning.
     `tests/test_replay.py::test_each_event_goes_out_at_its_time_and_bounds_the_turn_before`,
     `tests/test_replay.py::test_a_replay_through_the_link_sends_each_event_in_the_turn_at_its_time`
 33. A run with a declared source does not boot until the test has given it: the link's first turn
-    waits for `start`, a `console.expect` before then fails at once with `SourceError`, and a run never
-    started ends with `stop` before the guest boots, and fails a test whose setup and call passed
-    without giving it at teardown; a test that failed, was skipped or xfailed keeps its one
+    waits for `start`, a `console.expect` before then fails at once with `SourceError`, and a run
+    never started ends with `stop` before the guest boots, and fails a test whose setup and call
+    passed without giving it at teardown; a test that failed, was skipped or xfailed keeps its one
     outcome.
     `tests/test_boardlink.py::test_a_held_link_takes_its_first_turn_once_started`,
     `tests/test_boardlink.py::test_a_held_link_started_without_boot_stops_the_run_at_turn_0`,

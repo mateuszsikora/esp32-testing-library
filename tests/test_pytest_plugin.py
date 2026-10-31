@@ -1003,7 +1003,9 @@ def test_a_declared_source_never_given_fails_the_test_at_teardown(
             pass
         """
     )
-    result = link_runner.runpytest_subprocess("-p", "no:cacheprovider", "-rA")
+    result = link_runner.runpytest_subprocess(
+        "-p", "no:cacheprovider", "-rA", "--junitxml", "report.xml"
+    )
     # Only the test that passed is reported: the failed, skipped, xfailed and broken ones not a
     # second time, each with its one outcome.
     result.assert_outcomes(passed=1, failed=1, skipped=1, xfailed=1, errors=2)
@@ -1019,5 +1021,20 @@ def test_a_declared_source_never_given_fails_the_test_at_teardown(
             " replay of uart.gnss, which the source marker declares; give it in the test body",
         ]
     )
-    # Stopped at turn 0, before the guest booted.
-    assert result.stdout.str().count("stats: the run ended at 0.000001000 s (stop)") >= 2
+    # Every run was stopped at turn 0, before the guest booted: each test's own link report.
+    ends = {
+        case.get("name"): json.loads(prop.get("value", ""))["stats"]["end"]
+        for case in ElementTree.parse(link_runner.path / "report.xml").iter("testcase")
+        for prop in case.iter("property")
+        if prop.get("name") == "esp32sim_link"
+    }
+    assert ends == {
+        f"{name}[esp32sim]": "stop"
+        for name in (
+            "test_never_given",
+            "test_failed_first",
+            "test_skipped",
+            "test_xfailed",
+            "test_broken_setup",
+        )
+    }

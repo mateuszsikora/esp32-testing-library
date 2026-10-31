@@ -1,10 +1,11 @@
 # Replay: how it works
 
 The replay is `Replay` in `esp32tl/sources/replay.py`, plan §4.4's stream case. It reads nothing
-itself: it takes a `Recording` from `esp32tl/recording.py` ([recording format](../recording-format.md)).
-The `Uart` interface of `esp32tl/interfaces/uart.py` puts it on the link, and the `gnss` fixture
-hands that interface to the test ([pytest plugin](pytest-plugin-technical.md)). What the user
-sees is in [replay-user.md](replay-user.md).
+itself: it takes a `Recording` from `esp32tl/recording.py`
+([recording format](../recording-format.md)). The `Uart` interface of `esp32tl/interfaces/uart.py`
+puts it on the link, and the `gnss` fixture hands that interface to the test
+([pytest plugin](pytest-plugin-technical.md)). What the user sees is in
+[replay-user.md](replay-user.md).
 
 ## Data flow
 

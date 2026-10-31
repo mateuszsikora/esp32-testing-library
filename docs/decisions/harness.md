@@ -396,8 +396,8 @@ same console. The wait is wall time in the runner's turn, so `--peer-timeout`, 6
 bounds it: a body that takes longer before its replay ends the run with exit code 4. A
 `console.expect` while the run still waits raises `SourceError` at once, since the run
 could not reach what it waits for. A run still waiting at teardown is ended with `stop`, and a
-test whose setup and body passed all the same gets an error at teardown: it ran no firmware, and would pass
-whatever the firmware does.
+test whose setup and body passed all the same gets an error at teardown: it ran no firmware, and
+would pass whatever the firmware does.
 
 **Rejected:** starting the run at once and the replay when it is called, because with nothing on
 the link the runner runs free to the end of the run before the body starts, and the replay's start
@@ -492,8 +492,8 @@ the generated recordings belong to no app at all.
 
 Status: postponed (#51)
 
-`Console` has `expect` and `expect_exact`, which call the dut's own, and no `write`: the runner does not read
-its stdin.
+`Console` has `expect` and `expect_exact`, which call the dut's own, and no `write`: the runner does
+not read its stdin.
 
 ## The serial backend is postponed to M4
 

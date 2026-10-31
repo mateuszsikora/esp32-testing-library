@@ -84,16 +84,16 @@ sees is in [pytest-plugin-user.md](pytest-plugin-user.md); the backend it starts
    `esp32sim: the run never started: it waited for the {source} of {interface}, which the source marker declares; give it in the test body`
    (` and ` between several). `pytest_runtest_makereport` sets `DID_NOT_PASS` on an item whose setup
    or call did not pass (`not report.passed`: failed, skipped, or xfailed, which pytest reports as
-   skipped), so a test with an outcome of its own already is not reported on top of it. Then, whatever `close` did,
-   it adds the report section
+   skipped), so a test with an outcome of its own already is not reported on top of it. Then,
+   whatever `close` did, it adds the report section
    `("teardown", "esp32sim link", backend.link.report())` with `request.node.add_report_section`,
    and appends `("esp32sim_link", json.dumps(backend.link.properties()))` to
    `request.node.user_properties`. The property is a JSON string because JUnit XML writes a
    property's `str()`, which for a `dict` is Python's `repr`.
 8. **`console` fixture** returns `Console(board.dut, board.waiting)`. `Console.expect` and
    `Console.expect_exact` are the dut's own wrapped with `functools.wraps`, so they show their
-   signatures and documentation, and call `waiting()` first: while it names an interface, the run is held
-   for that interface's source, and they raise `SourceError`
+   signatures and documentation, and call `waiting()` first: while it names an interface, the run is
+   held for that interface's source, and they raise `SourceError`
    (`the run has not started: it waits for the {source} of {interface}, which the source marker declares; give it before waiting on the console`,
    ` and ` between several). Otherwise they call the dut's own `expect` and `expect_exact` with
    every argument and return what it returns, so their arguments, return values and 30 s default
