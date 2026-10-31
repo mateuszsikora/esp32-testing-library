@@ -179,3 +179,5 @@ real run but not asserted on its own; the `SIGKILL` after 5 s is not tested; the
   [M0](../implementation-plan.md#m0-bootstrap-console-only)
 - [Link protocol](../protocol.md): specified, not implemented; the backend speaks no protocol to
   the runner, it reads its output only
+
+A line added by the throwaway pull request #55.
