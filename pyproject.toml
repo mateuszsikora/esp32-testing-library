@@ -20,10 +20,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# esptool is imported by the tests; it comes through pytest-embedded-idf[serial] too, which also
+# chooses its version.
 dev = [
+    "esptool",
     "mypy==2.4.1",
     "pre-commit>=4",
     "ruff==0.17.3",
+    "types-pexpect==4.9.0.20260518",
 ]
 
 [project.scripts]
@@ -62,7 +66,7 @@ python_version = "3.11"
 strict = true
 files = ["esp32tl", "tests"]
 
-# pytest-embedded ships no py.typed; its annotations are still worth checking against.
+# pytest-embedded and esptool ship no py.typed; their annotations are still worth checking against.
 [[tool.mypy.overrides]]
-module = ["pytest_embedded.*", "pytest_embedded_idf.*"]
+module = ["pytest_embedded.*", "pytest_embedded_idf.*", "esptool.*"]
 follow_untyped_imports = true
