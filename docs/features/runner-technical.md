@@ -44,12 +44,13 @@ chip) and `esp-soc` (the machine, `Soc`, `Stop`). esp32sim lines below are at it
    the wall time and `m.reboots`. `Halted` exits 0; anything else prints the stop's `Debug` and
    exits 1.
 
-`find_rom(name)` follows esp32sim's lookup (`cli/src/lib.rs`, `find_rom`), with two differences:
-an entry of `esp-rom-elfs/` must hold `name` as a file, where esp32sim takes any path there that
+`find_rom(name)` follows esp32sim's lookup (`cli/src/lib.rs`, `find_rom`), with two differences: an
+entry of `esp-rom-elfs/` must hold `name` as a file, where esp32sim takes any path there that
 exists, and `HOME` is read with `var_os`, so it need not be valid UTF-8. The lookup:
 `$ESP32SIM_ROM_DIR/name` if that is a file, as in esp32sim; otherwise every entry of
 `$HOME/.espressif/tools/esp-rom-elfs/`, sorted by path and tried last first, the first one with
-`name` in it as a file. No `HOME`, or no such directory, is no ROM. `name` is `<esp32::Esp32 as Soc>::ROM_ELF`, `esp32_rev300_rom.elf`.
+`name` in it as a file. No `HOME`, or no such directory, is no ROM. `name` is
+`<esp32::Esp32 as Soc>::ROM_ELF`, `esp32_rev300_rom.elf`.
 
 `stop_name` matches every `Stop` variant explicitly, with no catch-all arm, so a variant added
 upstream fails the build instead of being reported under another name.

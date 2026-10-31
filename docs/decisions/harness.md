@@ -37,18 +37,18 @@ build esp32sim, too slow for a hook. It does not build esp32sim: see
 
 Status: decided (#57)
 
-The `cargo-clippy` hook runs `cargo clippy --locked --all-targets -- -D warnings` in `runner/`,
-as `make lint` does, on commits that stage a `.rs` file under `runner/`, `runner/Cargo.toml`,
-`runner/Cargo.lock` or `runner/rust-toolchain.toml`: a bump of the esp32sim pin or of the
-toolchain is linted before it is committed, not only in CI. Clippy compiles esp32sim's crates to
-metadata only (`--emit=dep-info,metadata`, plain `rustc`, `--cap-lints allow`): the API the
-runner is checked against, with no code generation and no lints of esp32sim's own. Measured on an
-M2 Pro: 0.16 to 0.17 s after a change to the runner, 2.3 to 3.2 s the first time in a worktree,
-whose `runner/target/` has no metadata yet. A commit that changes no pin needs no network:
-`make setup`, which the hooks need anyway, has fetched esp32sim into `~/.cargo/git` before. A
-commit that bumps the esp32sim revision or the toolchain channel fetches the new one in the hook,
-once, as `make setup` would, and compiles it cold. `make lint` and CI's `lint`
-job still run clippy, so a commit made without the hooks is caught there.
+The `cargo-clippy` hook runs `cargo clippy --locked --all-targets -- -D warnings` in `runner/`, as
+`make lint` does, on commits that stage a `.rs` file under `runner/`, `runner/Cargo.toml`,
+`runner/Cargo.lock` or `runner/rust-toolchain.toml`: a bump of the esp32sim pin or of the toolchain
+is linted before it is committed, not only in CI. Clippy compiles esp32sim's crates to metadata only
+(`--emit=dep-info,metadata`, plain `rustc`, `--cap-lints allow`): the API the runner is checked
+against, with no code generation and no lints of esp32sim's own. Measured on an M2 Pro: 0.16 to
+0.17 s after a change to the runner, 2.3 to 3.2 s the first time in a worktree, whose
+`runner/target/` has no metadata yet. A commit that changes no pin needs no network: `make setup`,
+which the hooks need anyway, has fetched esp32sim into `~/.cargo/git` before. A commit that bumps
+the esp32sim revision or the toolchain channel fetches the new one in the hook, once, as
+`make setup` would, and compiles it cold. `make lint` and CI's `lint` job still run clippy, so a
+commit made without the hooks is caught there.
 
 **Rejected:** keeping clippy out of the hooks, because a lint failure then shows up only in CI,
 after the push and the queue on hp600g1, for a saving of about 0.2 s per Rust commit.
