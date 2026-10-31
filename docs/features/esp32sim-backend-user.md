@@ -104,7 +104,8 @@ with `SIGKILL`. It sends `SIGTERM` once only: a second one would kill the runner
 143.
 
 When the harness finds the link wrong (a message out of protocol, an interface that broke its
-promises or raised), it ends the run at once with `SIGTERM`, rather than wait for the runner's next
+promises or raised, a frame error from a baud mismatch on a replayed route), it ends the run at
+once with `SIGTERM`, rather than wait for the runner's next
 turn, which may come only after 300 emulated seconds. An expect that is waiting then fails with the
 `EOF` above, the reason first. A handshake the two sides disagree on is the exception: the runner
 finds the mismatch itself and exits with code 3.

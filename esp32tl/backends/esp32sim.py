@@ -128,6 +128,34 @@ def runner_command(
     return command
 
 
+def profile_uart(
+    profile: BoardProfile,
+    interface: str,
+    *,
+    declared: str | None,
+    clock: str,
+    directory: Path,
+    on_source: Callable[[str], None] = lambda name: None,
+) -> Uart:
+    """The `Uart` on the route `profile` gives `interface` (`uart.gnss`), at the route's pins and
+    baud; the other arguments are `Uart`'s."""
+    kind, _, role = interface.partition(".")
+    route = profile.uart.get(role) if kind == "uart" else None
+    if route is None:
+        raise BackendError(
+            f"the board profile {profile.name} has no {interface};"
+            f" its interfaces are {', '.join(profile.interfaces)}"
+        )
+    return Uart(
+        interface,
+        Wire(tx=route.tx, rx=route.rx, baud=route.baud),
+        declared=declared,
+        clock=clock,
+        directory=directory,
+        on_source=on_source,
+    )
+
+
 class RunnerPopen(DuplicateStdoutPopen):
     """A `DuplicateStdoutPopen` that closes its log when the runner cannot start: the parent
     opens the log before it starts the process, and nothing else can close it then."""
@@ -237,16 +265,9 @@ class Esp32Sim:
         self._waiter.start()
 
     def _uart(self, interface: str, declared: str | None) -> Uart:
-        kind, _, role = interface.partition(".")
-        route = self.profile.uart.get(role) if kind == "uart" else None
-        if route is None:
-            raise BackendError(
-                f"the board profile {self.profile.name} has no {interface};"
-                f" its interfaces are {', '.join(self.profile.interfaces)}"
-            )
-        return Uart(
+        return profile_uart(
+            self.profile,
             interface,
-            Wire(tx=route.tx, rx=route.rx, baud=route.baud),
             declared=declared,
             clock=self.clock,
             directory=self.directory,

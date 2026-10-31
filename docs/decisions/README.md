@@ -66,7 +66,8 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The generated recordings send one sentence a second, GGA and RMC in turn](firmware.md#the-generated-recordings-send-one-sentence-a-second-gga-and-rmc-in-turn) | `firmware.md` | decided (#15) |
 | [Generated recordings carry no app, no tool versions and a fixed creation time](firmware.md#generated-recordings-carry-no-app-no-tool-versions-and-a-fixed-creation-time) | `firmware.md` | decided (#15) |
 | [The GNSS recording generator lives in scripts/ with a rule of its own](firmware.md#the-gnss-recording-generator-lives-in-scripts-with-a-rule-of-its-own) | `firmware.md` | decided (#15) |
-| [nmea_reader is tested through a bare socket peer until the gnss fixture exists](firmware.md#nmea_reader-is-tested-through-a-bare-socket-peer-until-the-gnss-fixture-exists) | `firmware.md` | decided (#15) |
+| [nmea_reader is tested through a bare socket peer until the gnss fixture exists](firmware.md#nmea_reader-is-tested-through-a-bare-socket-peer-until-the-gnss-fixture-exists) | `firmware.md` | superseded (#16) |
+| [nmea_reader is tested through the gnss fixture](firmware.md#nmea_reader-is-tested-through-the-gnss-fixture) | `firmware.md` | decided (#16) |
 
 ## The esp32tl package and its pytest plugin
 
@@ -112,6 +113,10 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The serial backend is postponed to M4](harness.md#the-serial-backend-is-postponed-to-m4) | `harness.md` | postponed (#25) |
 | [Prebuilt runner binaries are postponed to M10](harness.md#prebuilt-runner-binaries-are-postponed-to-m10) | `harness.md` | postponed (#40) |
 | [Replaying requests, looping and wall-clock recordings is postponed](harness.md#replaying-requests-looping-and-wall-clock-recordings-is-postponed) | `harness.md` | postponed (#20) |
+| [A frame error fails the run at once](harness.md#a-frame-error-fails-the-run-at-once) | `harness.md` | decided (#16) |
+| [The esp32tl command serves the link itself, without pytest-embedded](harness.md#the-esp32tl-command-serves-the-link-itself-without-pytest-embedded) | `harness.md` | decided (#16) |
+| [The esp32tl command runs the runner in a session of its own](harness.md#the-esp32tl-command-runs-the-runner-in-a-session-of-its-own) | `harness.md` | decided (#16) |
+| [esp32tl replay takes one recording, and esp32tl record waits for the tap](harness.md#esp32tl-replay-takes-one-recording-and-esp32tl-record-waits-for-the-tap) | `harness.md` | postponed (#21) |
 
 ## The runner crate and esp32sim
 

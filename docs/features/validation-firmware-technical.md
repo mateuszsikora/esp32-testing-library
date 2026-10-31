@@ -319,20 +319,31 @@ and `0x10000` `hello_world.bin`, all present, and the ELF `hello_world.elf`.
 `test_nmea_reader_takes_the_devkit_gnss_route_from_sdkconfig` its four `NMEA_READER_UART_*`
 values in `config/sdkconfig.json`.
 
-`tests/test_nmea_reader.py` runs the real `nmea_reader` in the real runner with `--board
-socket:`, against a peer in the test file that sends every input in the first turn (`wait` with
-`quiet_until` and `latency` both `null`), so the run goes to `--max-seconds` in one turn:
+`tests/test_nmea_reader.py` is the first milestone's test (plan M1): the real `nmea_reader` in
+the real runner, on the `esp32-devkitc` profile, fed through the `gnss` fixture's
+`gnss.replay(path)` ([replay](replay-user.md)). Where it expects fix lines, it works them out from
+the recording's sentences itself (its own conversion, not the firmware's), and reads each as the
+next fix line on the console, so none can come in between:
 
-- `test_prints_the_fixes_of_the_recording`: the first 4 sentences of `gnss-generated-1.jsonl`
-  print the 4 fix lines the test works out from the sentences itself (its own conversion, not the
-  firmware's), the first `fix acquired lat=52.229677 lon=21.012233`; the `nmea_reader:` line; a
-  `uart_cfg` for port 1, TX `[4]`, RX 5, 9600 baud; no `warn`;
-- `test_the_fix_follows_the_recording`: the same for `gnss-generated-2.jsonl`, first
-  `fix acquired lat=-34.603700 lon=-58.381600`;
-- `test_only_well_formed_fixes_count_and_an_epoch_prints_once`: a wrong checksum, `GGA` quality
-  0, `RMC` status `V`, an empty position, a `GSV`, an `RMC` with the time of the `GGA` before it,
-  and a sentence over 82 characters print nothing; `$GN` sentences, a `$` starting a sentence
-  over, minutes with two and six decimals (rounded half up) and 90°N 180°W print as expected.
+- `test_reports_a_fix`: the specification's example, `gnss-generated-1.jsonl` printing
+  `fix acquired lat=52.229677 lon=21.012233`;
+- `test_fix_follows_the_recording`: `gnss-generated-2.jsonl` prints its own first five fixes, the
+  first `fix acquired lat=-34.603700 lon=-58.381600`, after the line
+  `nmea_reader: UART1 RX GPIO5 TX GPIO4 9600 baud`, with no warning on the link;
+- `test_time_is_emulated`: the first ten fixes of `gnss-generated-1.jsonl`, ten emulated seconds,
+  arrive in under five wall seconds from the replay (`TEN_FIXES_WALL_SECONDS`); the margin is
+  deliberate, since each sentence costs an exchange with the harness in wall time (plan §7);
+- `test_only_well_formed_fixes_count_and_an_epoch_prints_once`, from a recording the test writes:
+  a wrong checksum, `GGA` quality 0, `RMC` status `V`, an empty position, a `GSV`, an `RMC` with
+  the time of the `GGA` before it, and a sentence over 82 characters print nothing; `$GN`
+  sentences, a `$` starting a sentence over, minutes with two and six decimals (rounded half up)
+  and 90°N 180°W print as expected.
+
+`tests/test_gnss_fixture.py` runs a copy of `test_reports_a_fix` through `pytester` twice, and it
+must fail both times: on `gnss-generated-1.jsonl` with one digit of its first latitude changed
+(and its checksum fixed), where the firmware prints `fix acquired lat=52.229843 lon=21.012233`;
+and with the profile's `uart.gnss` at 115200 baud, where the run ends on the first `frm_err`,
+well before the expect's 30 s.
 
 `tests/test_gnss_recordings.py` runs the generator with `--check` on the committed files, runs a
 copy of it with `--check` on an edited recording and requires the stale message verbatim and exit

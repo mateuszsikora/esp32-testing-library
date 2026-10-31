@@ -382,6 +382,57 @@ def test_warnings_and_stats_go_into_the_report() -> None:
     assert properties["error"] is None
 
 
+@pytest.mark.parametrize(
+    ("warning", "error"),
+    [
+        (
+            Warn(MS, "frm_err", "baud", port=1, pin=5, baud=115200, nbytes=70),
+            "gnss sends at 9600 baud on GPIO 5, and the firmware's UART1 receives there at"
+            " 115200 baud: 70 bytes dropped as frame errors (frm_err)",
+        ),
+        (
+            # A route whose baud the firmware has not set, without its port and count.
+            Warn(MS, "frm_err", "baud", pin=5),
+            "gnss sends at 9600 baud on GPIO 5, and the firmware's UART receives there with"
+            " no baud set: bytes dropped as frame errors (frm_err)",
+        ),
+        (
+            # No pin either: no interface is named, not even one without an RX pin.
+            Warn(MS, "frm_err", "baud", port=1, baud=9600, nbytes=2),
+            "bytes on a pin the runner did not name, and the firmware's UART1 receives there"
+            " at 9600 baud: 2 bytes dropped as frame errors (frm_err)",
+        ),
+        (
+            # Bytes the scenario sent, on a pin of its own.
+            Warn(MS, "frm_err", "baud", port=2, pin=33, baud=9600, nbytes=1),
+            "bytes on GPIO 33, and the firmware's UART2 receives there at 9600 baud:"
+            " 1 byte dropped as frame errors (frm_err)",
+        ),
+    ],
+)
+def test_a_frame_error_fails_the_run_at_once(warning: Warn, error: str) -> None:
+    errors: list[str] = []
+    # The modem's wire has no RX pin: a warning without a pin must not name it.
+    link = started(
+        Peer(), Peer("modem", Wire(tx=26, rx=None, baud=115200)), timeline=Scenario([], pins=[33])
+    )
+    link.on_error = errors.append
+    assert link.receive(warning) == []
+    # Kept for the report as any warning, and the run ended without waiting for its next turn.
+    assert link.warnings == [warning]
+    assert link.error == error
+    assert errors == [error]
+    assert link.receive(Sync(2 * MS)) == [Stop()]
+
+
+def test_other_warnings_fail_nothing() -> None:
+    link = started(Peer())
+    for kind in ("rxfifo_ovf", "unrouted_rx", "input_on_output", "a kind of a later version"):
+        link.receive(Warn(MS, kind, "dropped", port=1, pin=5, nbytes=1))
+    assert link.error is None
+    assert link.receive(Sync(2 * MS)) == [Wait(0, None, None)]
+
+
 def test_the_report_says_when_the_runner_never_connected_or_left_no_stats() -> None:
     link = BoardLink("esp32-devkitc")
     assert "the runner never connected" in link.report()

@@ -13,7 +13,8 @@ given every source it declared, and emulated time does not move meanwhile.
 
 Warnings and the run's `stats` are kept for the test report. What the harness finds wrong with
 the run is kept in `error`, the first cause only; the harness then ends the run with `stop` at the
-runner's next turn, and still reads to end of file.
+runner's next turn, and still reads to end of file. A `frm_err` warning is such an error: bytes
+sent at another baud than the guest's UART receives at would otherwise be lost in silence.
 """
 
 import socket
@@ -347,6 +348,9 @@ class BoardLink:
             self._uart_cfg(message)
         elif isinstance(message, GpioOut):
             self._gpio_out(message)
+        elif isinstance(message, Warn):
+            if message.kind == "frm_err":
+                raise LinkError(self._frame_errors(message))
         elif isinstance(message, Sync):
             if self.turns == 0:
                 self._started.wait()
@@ -357,7 +361,7 @@ class BoardLink:
         else:
             # Reset needs nothing of the interfaces: the board persists across it (5.5), and
             # the routes it resets come again as uart_cfg. Console is the console tap's (M2).
-            assert isinstance(message, Reset | Console | Warn | Stats), message
+            assert isinstance(message, Reset | Console | Stats), message
         return []
 
     def _uart_tx(self, message: UartTx) -> None:
@@ -386,6 +390,28 @@ class BoardLink:
                 self._configured[index] = state
                 with calling(interface.name, "configured"):
                     interface.configured(message.t, *state)
+
+    def _frame_errors(self, warning: Warn) -> str:
+        """Why a `frm_err` warning fails the run: the bytes went in at another baud than the
+        guest's UART receives at, so the firmware lost them without a sign the test could see,
+        and whatever it should have done with them would fail later as a timeout (5.8)."""
+        rate = "with no baud set" if warning.baud is None else f"at {warning.baud} baud"
+        uart = "UART" if warning.port is None else f"UART{warning.port}"
+        dropped = "bytes" if warning.nbytes is None else _count(warning.nbytes, "byte")
+        pin = warning.pin
+        owner = (
+            None if pin is None else next((i for i in self.interfaces if i.wire.rx == pin), None)
+        )
+        if owner is not None:
+            sender = f"{owner.name} sends at {owner.wire.baud} baud on GPIO {pin}"
+        elif pin is not None:
+            sender = f"bytes on GPIO {pin}"
+        else:
+            sender = "bytes on a pin the runner did not name"
+        return (
+            f"{sender}, and the firmware's {uart} receives there {rate}:"
+            f" {dropped} dropped as frame errors (frm_err)"
+        )
 
     def _gpio_out(self, message: GpioOut) -> None:
         for interface in self.interfaces:

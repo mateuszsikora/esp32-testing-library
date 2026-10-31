@@ -83,7 +83,18 @@ link with `uart.gnss sent bytes stamped {t} ns in the turn at {now} ns: ...`.
   `test_a_source_given_otherwise_than_declared_fails_the_test` runs, through `pytester`, an
   expect before the replay (failing at once), a replay without the marker, a declared replay never
   given (passing, its run ended with `stop` at 0 s), a `model` source and a profile without
-  `uart.gnss` (errors at setup).
+  `uart.gnss` (errors at setup); `test_reports_a_fix_fails_on_a_changed_recording` and
+  `test_reports_a_fix_fails_on_a_baud_mismatch` run a copy of `tests/test_nmea_reader.py`'s
+  `test_reports_a_fix` on a recording with one digit changed and with the profile's route at
+  115200 baud, and require it to fail
+  ([validation firmware](validation-firmware-technical.md)).
+- `tests/test_nmea_reader.py`, the first milestone's tests: the fixes of both generated
+  recordings, ten emulated seconds in under five wall seconds, and the sentences `nmea_reader`
+  must ignore, all through `gnss.replay`.
+- `tests/test_boardlink.py::test_a_frame_error_fails_the_run_at_once`: a `frm_err` warning is the
+  link's error, with the interface's name and both bauds, or the pin alone, and calls `on_error`
+  at once; `test_other_warnings_fail_nothing`: the other kinds fail nothing.
+- `tests/test_cli.py`: `esp32tl replay` on `nmea_reader`, and its exit code 1 on a baud mismatch.
 
 Not covered: a recording whose events reach the UART before the firmware has configured it (the
 generated ones start at 1 s), and two declared UARTs on one board, since no profile has two

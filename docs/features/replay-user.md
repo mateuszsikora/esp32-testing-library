@@ -54,8 +54,20 @@ def test_reports_a_fix(gnss, console):
   emulated seconds have passed ([esp32sim backend](esp32sim-backend-user.md#how-a-run-goes)).
 - Bytes that reach the UART before the firmware has configured it are dropped, as on a wire; the
   runner reports them as an `unrouted_rx` warning in the
-  [link's report](esp32sim-backend-user.md#the-links-report). A firmware that configures the UART
-  at another baud than the profile's sees frame errors, reported as `frm_err`.
+  [link's report](esp32sim-backend-user.md#the-links-report).
+- A firmware that configures the UART at another baud than the profile's loses the bytes as frame
+  errors, and the runner reports them as `frm_err`. That fails the test, at once: the run ends,
+  an expect that is waiting fails with the reason first, and the teardown reports it otherwise:
+
+  ```
+  the link failed: uart.gnss sends at 115200 baud on GPIO 5, and the firmware's UART1 receives there at 9600 baud: 72 bytes dropped as frame errors (frm_err)
+  ```
+
+  The recording carries no baud: its bytes go in at the profile's, so the fix is in the profile
+  or in the firmware's configuration. Bytes that reach a UART whose RX pin the firmware has set
+  before its baud are frame errors too, and fail the test the same way. A firmware that should
+  detect a wrong baud, or find the right one by itself, cannot be tested through a replay at the
+  wrong baud yet: no marker or option lets a test expect frame errors.
 
 ## What a replay refuses
 

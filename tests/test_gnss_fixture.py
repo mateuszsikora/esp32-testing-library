@@ -1,7 +1,11 @@
 """The `gnss` fixture: a recording replayed through `gnss.replay(path)` into nmea_reader on the
-real runner, and what a test that gives its source otherwise than its markers declare sees. Needs
-`make firmware` (nmea_reader)."""
+real runner, what a test that gives its source otherwise than its markers declare sees, and
+test_nmea_reader.py's test_reports_a_fix failing on a changed recording and on a baud mismatch.
+Needs `make firmware` (nmea_reader)."""
 
+import base64
+import json
+import shutil
 import time
 from pathlib import Path
 
@@ -87,3 +91,83 @@ def test_a_source_given_otherwise_than_declared_fails_the_test(pytester: pytest.
         ["*Captured esp32sim link teardown*", "board esp32-devkitc, watching GPIO 4, GPIO 5"]
     )
     assert "stats: the run ended at 0.000000000 s (stop); 1 turn, 0 resets" in result.stdout.str()
+
+
+def nmea_reader_tests(pytester: pytest.Pytester) -> None:
+    """tests/test_nmea_reader.py in pytester's directory, as tests/test_nmea_reader.py, its app
+    the nmea_reader build of this checkout and its recordings those in pytester's recordings/."""
+    if not (NMEA_READER / "build" / "esp32tl-built").is_file():
+        pytest.fail(
+            f"{NMEA_READER}/build holds no finished build: run make firmware", pytrace=False
+        )
+    marker = 'app_path("../firmware/nmea_reader")'
+    text = (ROOT / "tests" / "test_nmea_reader.py").read_text()
+    assert marker in text
+    (pytester.path / "tests").mkdir()
+    (pytester.path / "tests" / "test_nmea_reader.py").write_text(
+        text.replace(marker, f"app_path({str(NMEA_READER)!r})")
+    )
+    shutil.copytree(ROOT / "recordings", pytester.path / "recordings")
+
+
+def checksummed(sentence: bytes) -> bytes:
+    """`sentence`, `$...*hh\r\n`, with its checksum made right."""
+    body = sentence[1 : sentence.index(b"*")]
+    check = 0
+    for char in body:
+        check ^= char
+    return b"$" + body + f"*{check:02X}\r\n".encode()
+
+
+def test_reports_a_fix_fails_on_a_changed_recording(pytester: pytest.Pytester) -> None:
+    nmea_reader_tests(pytester)
+    # One digit of the first sentence's latitude, its checksum made right again: the firmware
+    # takes the sentence, and prints another position.
+    path = pytester.path / "recordings" / "gnss-generated-1.jsonl"
+    lines = path.read_text().splitlines()
+    first = json.loads(lines[1])
+    data = base64.b64decode(first["data"])
+    assert b",5213.7806,N," in data
+    first["data"] = base64.b64encode(
+        checksummed(data.replace(b",5213.7806,N,", b",5213.7906,N,"))
+    ).decode()
+    lines[1] = json.dumps(first)
+    path.write_text("\n".join(lines) + "\n")
+    result = pytester.runpytest_subprocess(
+        "-p", "no:cacheprovider", "tests", "-k", "test_reports_a_fix"
+    )
+    result.assert_outcomes(failed=1, deselected=3)
+    # The recording reached the firmware, which printed what the changed sentence says.
+    result.stdout.fnmatch_lines(["*fix acquired lat=52.229843 lon=21.012233*"])
+
+
+def test_reports_a_fix_fails_on_a_baud_mismatch(pytester: pytest.Pytester) -> None:
+    nmea_reader_tests(pytester)
+    # The profile's GNSS route at 115200 baud, and nmea_reader still at 9600: the replay's bytes
+    # go in at the profile's baud, and the firmware's UART1 drops them as frame errors.
+    pytester.makeconftest(
+        """
+        import dataclasses
+
+        from esp32tl import boards, pytest_plugin
+
+        profile = boards.profile("esp32-devkitc")
+        route = dataclasses.replace(profile.uart["gnss"], baud=115200)
+        mismatched = dataclasses.replace(profile, uart={**profile.uart, "gnss": route})
+        pytest_plugin.board_profile = lambda node: mismatched
+        """
+    )
+    started = time.monotonic()
+    result = pytester.runpytest_subprocess(
+        "-p", "no:cacheprovider", "tests", "-k", "test_reports_a_fix"
+    )
+    # Not silence: the run ends on the first frame error, and the expect with it, well before
+    # its 30 s.
+    assert time.monotonic() - started < 20
+    result.assert_outcomes(failed=1, deselected=3)
+    result.stdout.fnmatch_lines(
+        [
+            "*the link failed: uart.gnss sends at 115200 baud on GPIO 5, and the firmware's UART1"
+            " receives there at 9600 baud: * bytes dropped as frame errors (frm_err)*"
+        ]
+    )
