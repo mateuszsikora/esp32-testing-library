@@ -19,8 +19,8 @@ GNSS route is chosen for this repository's own firmware. GPIO 16 and 17 are left
 WROVER modules they belong to the PSRAM. GPIO 5 is a strapping pin; a receiver holding it low at
 boot does not change the boot mode.
 
-`lilygo-t-a7670g-r2` holds only what the specification gives, from its first consumer's firmware:
-the A7670G modem's UART and its PWRKEY and RI lines. The pull-down on RI is what stage 0 found
+`lilygo-t-a7670g-r2` holds only what the specification gives: the A7670G modem's UART and its
+PWRKEY and RI lines. The pull-down on RI is what stage 0 found
 ([gap 6](../stage0-findings.md#gaps)): with no modem fitted the line must read low. Its other pins, its flash and PSRAM sizes, and
 whether it has a GNSS route at all are not in it: they wait for the vendor schematic.
 

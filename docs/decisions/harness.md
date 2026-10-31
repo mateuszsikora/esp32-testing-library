@@ -287,9 +287,9 @@ how a relative path resolves before anyone has asked.
 
 Status: decided (#13)
 
-*Decided in #64 to give way to [the LilyGO profile takes its GNSS route, flash and PSRAM from the
-first consumer's
-firmware](#the-lilygo-profile-takes-its-gnss-route-flash-and-psram-from-the-first-consumers-firmware);
+*Decided in #64 to give way to [the LilyGO profile takes its GNSS route, flash and PSRAM from
+LilyGO's
+documentation](#the-lilygo-profile-takes-its-gnss-route-flash-and-psram-from-lilygos-documentation);
 this is what the code does until that lands.*
 
 `lilygo-t-a7670g-r2.toml` holds the chip, the modem's UART (UART1, GPIO 26/27, 115200 baud) and its
@@ -650,9 +650,10 @@ and [a run lasts at most 300 emulated seconds](#a-run-lasts-at-most-300-emulated
 the code.
 
 Measured on a spike on 2026-10-31, on the protocol as it is, with no runner change, only
-`--console both`: `nmea_reader` and the first consumer's release image ran their tests on the held
-clock, 222 emulated seconds of the first consumer in 8 s of wall time, and two runs of the same
-test printed the same console line at the same emulated millisecond. `hello_world` and the four
+`--console both`: `nmea_reader` and the production release image of
+[stage 0](../stage0-findings.md#inputs) ran their tests on the held clock, 222 emulated seconds of
+the release image in 8 s of wall time, and two runs of the same test printed the same console line
+at the same emulated millisecond. `hello_world` and the four
 `nmea_reader` tests of `tests/` needed `board.power_on()` added, and the `nmea_reader` ones lost
 their `source` marker ([below](#what-is-at-a-routes-far-end-is-what-the-test-does-with-it-before-power-on-not-a-marker)).
 
@@ -752,9 +753,9 @@ Quantities are values with their unit, built by `seconds()`, `minutes()`, `km_h(
 `knots()`, `m()`, `km()`, `miles()` and `Position(lat, lon)`, and compared with
 `about(value, within=tolerance)`, so no number in a test leaves its unit to the reader. Words of a
 product, a car that drives or a bike that is ridden, belong in that product's own tests, built on
-the model. On the spike the model drove the first consumer's release image to the same power
-decision as a generated recording of the same trip, one second earlier because its first epoch
-is one second earlier.
+the model. On the spike the model drove the production release image of
+[stage 0](../stage0-findings.md#inputs) to the same power decision as a generated recording of the
+same trip, one second earlier because its first epoch is one second earlier.
 
 The models share one world time: a UTC instant at power-on, `2026-01-01T12:00:00Z` unless the test
 gives another as `board.power_on(utc=datetime(...))`, plus the board's clock. The GNSS receiver
@@ -771,9 +772,9 @@ Status: decided (#64)
 
 A test asserts on what the firmware does on its wires and through them: its console, its pins,
 the bytes on its UARTs, and what reaches the services it talks to. A consumer interprets those in
-its own vocabulary in its own tests (which topic is its status, what its report means), the way
-the first consumer's spike wraps its status reports in a `Status` value. esp32tl knows protocols
-(NMEA, AT, PPP, MQTT) and the ESP-IDF platform (its partition table, NVS), never a product.
+its own vocabulary in its own tests (which topic is its status, what its report means). esp32tl
+knows protocols (NMEA, AT, PPP, MQTT) and the ESP-IDF platform (its partition table, NVS), never a
+product.
 
 **Rejected:** a log level of its own for tests, because it needs the firmware changed and the
 tests would then check something that does not ship; and reading the guest's memory by ELF symbol,
@@ -802,12 +803,12 @@ valid from 2000 to 2099 so that any plausible device clock accepts them, and an 
 whose messages the test waits for and publishes to. All of it runs in the harness's turns, on the
 board's clock, in about 1 040 lines of Python with the modem model.
 
-Measured on the spike: esp-protocols' `pppos_client` (esp_modem 1.4.1, SIM7600 commands, changed
-in its sdkconfig only) dialled, got its address, resolved its broker, connected and published in
-0.18 emulated seconds, and received what the test published; two runs gave the same transcript.
-The first consumer's release image, given its credentials and the test's CA, dialled, asked NTP
-and DNS, completed a TLS 1.2 handshake (ECDHE-RSA-AES256-GCM-SHA384), logged in, subscribed to
-its four topics and published its status reports, which the test read.
+Measured on the spike: esp-protocols' `pppos_client` (esp_modem 1.4.1, SIM7600 commands, changed in
+its sdkconfig only) dialled, got its address, resolved its broker, connected and published in 0.18
+emulated seconds, and received what the test published; two runs gave the same transcript. The
+production release image of [stage 0](../stage0-findings.md#inputs), given its credentials and the
+test's CA, dialled, asked NTP and DNS, completed a TLS 1.2 handshake (ECDHE-RSA-AES256-GCM-SHA384),
+logged in to the broker, subscribed and published, and the test read what it published.
 
 **Rejected:** `pppd` in a Linux container with NAT to the host and the data phase under
 `--realtime`, as plan M6 had it, because the far end then lives in wall time: runs do not repeat,
@@ -849,24 +850,29 @@ another, from the partition table of the build under test, before `board.power_o
 `string`, bytes `binary`, and integers are spelled with their width, `u8()`, `u16()`, `u32()`,
 `i32()`, since the firmware reads them by type. The image is made with ESP-IDF's own generator,
 `esp-idf-nvs-partition-gen`. Other formats, a FAT or LittleFS image from a directory, come when a
-test needs one. Where a firmware keeps its configuration, and what it is, is the consumer's: the
-first consumer's spike writes its credentials, broker and CA with this one call.
+test needs one. Where a firmware keeps its configuration, and what it is, is the consumer's: on
+the spike, this one call wrote the production release image's credentials, broker and CA.
 
 **Rejected:** helpers that know a product's configuration, because that is product knowledge;
 and an offset in the test, because it repeats the partition table and breaks when it changes.
 
-## The LilyGO profile takes its GNSS route, flash and PSRAM from the first consumer's firmware
+## The LilyGO profile takes its GNSS route, flash and PSRAM from LilyGO's documentation
 
 Status: decided (#64)
 
-The profile gets `[uart.gnss]`, UART2 with TX on GPIO 21 and RX on GPIO 22 at 9600 baud, the
-first consumer's defaults for its L76K receiver, `flash_mb = 4` from its `sdkconfig`, and
-`psram_mb = 4`; the backend passes `psram_mb` to the runner as `--psram-mb`. The first consumer's
-`sdkconfig` turns PSRAM on, and without it its release image runs degraded and logs
-`PSRAM not found`. The WROVER-E carries 8 MB of PSRAM, of which the emulator models 4, the most the
-runner accepts. Until it is implemented,
+The profile gets `[uart.gnss]`, UART2 with TX on GPIO 21 and RX on GPIO 22 at 9600 baud,
+`flash_mb = 4` and `psram_mb = 4`; the backend passes `psram_mb` to the runner as `--psram-mb`.
+LilyGO's [pin table for the T-A7670X ESP32](https://github.com/Xinyuan-LilyGO/LilyGO-T-A76XX/blob/63af963038e93c91baf39d89a3a736d6bc26ff13/docs/en/esp32/a7670-esp32/README.MD)
+gives GNSS TX and RX on GPIO 21 and 22 for the A7670G with GPS, whose L76K receiver is an external
+module, and its
+[`ExternalGPS_A7670G_Only`](https://github.com/Xinyuan-LilyGO/LilyGO-T-A76XX/blob/63af963038e93c91baf39d89a3a736d6bc26ff13/examples/ExternalGPS_A7670G_Only/ExternalGPS_A7670G_Only.ino)
+example opens it as `Serial2` at 9600 baud. The same document's product table gives an
+ESP32-WROVER-E with 4 MB of flash and 8 MB of PSRAM, of which the emulator models 4, the most the
+runner accepts. Firmware for the board may turn PSRAM on, as the production release image of
+[stage 0](../stage0-findings.md#inputs) does, and without PSRAM such an image runs degraded and logs
+`PSRAM not found`. Until it is implemented,
 [the LilyGO profile leaves out what the specification does not give](#the-lilygo-profile-leaves-out-what-the-specification-does-not-give)
 describes the profile.
 
-**Rejected:** waiting for the vendor schematic, as plan finding 12 did, because the first consumer's
-firmware is the source the modem route already comes from, and its build fixes these values.
+**Rejected:** waiting for the vendor schematic, as plan finding 12 did, because LilyGO's pin table
+and example already give these values.

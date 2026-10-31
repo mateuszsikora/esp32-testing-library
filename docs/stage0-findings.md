@@ -17,7 +17,7 @@ sharing.
 | esp32sim, with the revision fix | [`165f56a9cf0f211669ce282bdce9426f821b1ec4`](https://github.com/mateuszsikora/esp32sim/commit/165f56a9cf0f211669ce282bdce9426f821b1ec4): upstream plus [mikroverk/esp32sim#322](https://github.com/mikroverk/esp32sim/pull/322) |
 | Mask ROM | `esp32_rev300_rom.elf` from esp-rom-elfs `20260528`, SHA-256 `920b70635440517866aab2230964a570d2cf2b676658d93c52fbac108c1cca31` |
 | ESP-IDF | v5.3.6, image `espressif/idf:v5.3.6@sha256:cee52f0c4fdaf088992a7a739f5993154e95cf1d3ab61c24f5b40e6d56a3a070` |
-| The consumer's images | The first consumer's release image: dual-core at the default 160 MHz, PSRAM, Bluetooth Classic SPP, a cellular modem over UART through esp_modem and PPP, an SD card over SPI, and deep sleep; built with `CONFIG_ESP32_REV_MIN_3`. Also its "desk" variant, which replays a recorded session from the SD card instead of using Bluetooth. Not in this repository |
+| The production images | The production release image, of an application not in this repository: dual-core at the default 160 MHz, PSRAM, Bluetooth Classic SPP, a cellular modem over UART through esp_modem and PPP, an SD card over SPI, and deep sleep; built with `CONFIG_ESP32_REV_MIN_3`. Also its replay image, a variant that replays a recorded session from the SD card instead of using Bluetooth |
 | Public firmware | ESP-IDF v5.3.6 `examples/get-started/hello_world` (as is, with `CONFIG_ESP32_REV_MIN_3=y`, and with `CONFIG_SPIRAM=y`), `examples/bluetooth/bluedroid/classic_bt/bt_spp_initiator` and `examples/storage/sd_card/sdspi` unmodified, and this repository's `tools/cryptobench` and `tools/deepsleep` |
 
 Both esp32sim builds carry one local change, needed only because the local Rust 1.93 lacks a newer
@@ -30,7 +30,7 @@ name; it changes no behaviour:
 +        counter.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| (n < MAX_CONNECTS).then_some(n + 1)).ok().map(|_| Self(counter))
 ```
 
-The consumer's images are built for v3.0, so they boot only on the build with the revision fix; the
+The production images are built for v3.0, so they boot only on the build with the revision fix; the
 gaps below are reproduced on upstream.
 
 ## Results
@@ -47,8 +47,8 @@ number of instructions to the instruction.
 | Release image, empty NVS, no card | with fix | 60 s | 1.6 s | 70 037 356 + 9 019 168 | 50 | Boots to its diagnostic runtime and stays up |
 | Release image, NVS naming a Bluetooth peer | with fix | 90 s | 76.0 s | 6 935 523 763 + 523 030 753 | 98 | Panics in the Bluetooth controller: 488 panics and resets in 90 s |
 | The same, with `--ble` | with fix | 90 s | 3.1 s | 138 178 241 + 12 762 501 | 49 | No panic; 12 Bluetooth starts refused, retried with backoff |
-| Desk image, no card | with fix | 600 s | 5.9 s | 236 740 911 + 24 379 202 | 44 | RUNNING, SHUTDOWN at 180 s, SLEEP with a 2000 s timer |
-| Desk image, no card | with fix | 2400 s | 10.9 s | 236 740 911 + 24 379 202 | 24 | The same counts: nothing ran after SLEEP |
+| Replay image, no card | with fix | 600 s | 5.9 s | 236 740 911 + 24 379 202 | 44 | Runs, shuts down at 180 s, goes to deep sleep with a 2000 s timer |
+| Replay image, no card | with fix | 2400 s | 10.9 s | 236 740 911 + 24 379 202 | 24 | The same counts: nothing ran after the deep sleep began |
 
 What works on the classic chip:
 
@@ -124,7 +124,7 @@ What that means for testing:
   0.34 and 0.77, every software phase's between 0.98 and 1.65.
 - An image that mostly waits runs much faster: the release image idling did 60 s of emulated time
   in 1.6 s, because the emulator skips ahead while both cores wait for an interrupt.
-- An image in deep sleep runs faster still: the desk image did 2400 s in 10.9 s.
+- An image in deep sleep runs faster still: the replay image did 2400 s in 10.9 s.
 - So tests must measure timeouts in emulated time, never in wall time. A CPU-heavy scenario can
   take longer than it would on a board, and an idle one far less.
 
@@ -185,7 +185,7 @@ halves it again. Either is affordable in a test.
 ## Gaps
 
 Each gap is reproduced on public firmware on upstream esp32sim, so it can be reported without the
-first consumer's firmware.
+production images.
 
 1. **The chip reports revision v2.0.** esp32sim hard-codes revision 2 in its eFuse model, and
    `SYSCON_DATE_REG` reads 0, so the third ECO bit IDF needs for v3.0 is missing. An image built for
@@ -196,10 +196,10 @@ first consumer's firmware.
    as [`8c65215`](https://github.com/mikroverk/esp32sim/commit/8c652151dd5a521249a785ca147f20a9f8eda68f).
    Rechecked on 2026-10-30 on upstream at that commit, with the same `nat.rs` change. In a 3 s run
    the same `hello_world` resets once, the power-on reset (`rst:0x1 (POWERON_RESET)`), and reports
-   v3.0. The consumer's images execute exactly the instructions they do on the fix build in the
+   v3.0. The production images execute exactly the instructions they do on the fix build in the
    table above: the release image with empty NVS, 70 037 356 + 9 019 168 in 60 s; with NVS naming a
    Bluetooth peer, 6 935 523 763 + 523 030 753 in 90 s, with the same 488 panics; the same with
-   `--ble`, 138 178 241 + 12 762 501; and the desk image, 236 740 911 + 24 379 202 in 600 s. The
+   `--ble`, 138 178 241 + 12 762 501; and the replay image, 236 740 911 + 24 379 202 in 600 s. The
    commit also carries [mikroverk/esp32sim#300](https://github.com/mikroverk/esp32sim/pull/300),
    which changes the virtual BLE controller; the `--ble` run is unaffected.
 2. **Bluetooth Classic.** Without `--ble`, `bt_spp_initiator` panics in the controller task
@@ -216,13 +216,13 @@ first consumer's firmware.
    chip has no card model on its general-purpose SPI. esp32sim has an SD card model, wired only to the
    P4's SDMMC host.
 4. **Deep-sleep timer wake.** `tools/deepsleep` sleeps with a 5 s timer, and in a 60 s run it boots
-   once and never wakes, which rules out a timer running up to 12 times slow. The desk image's runs
+   once and never wakes, which rules out a timer running up to 12 times slow. The replay image's runs
    agree: 600 s and 2400 s execute the same instruction count. The guest also calibrates its slow
    clock to the nominal value (3 495 245 in IDF's Q13.19 format, 6.667 µs per cycle, 150 kHz), but
    that is what the guest believes, not a measurement of the emulator's timer.
-5. **External attachment.** The consumer's GNSS UART reports no data and its modem UART has nothing
-   on it: there is no way to put a process at the far end of a UART or a GPIO line from the stock
-   CLI. Proposed in [mikroverk/esp32sim#325](https://github.com/mikroverk/esp32sim/issues/325).
+5. **External attachment.** The release image's GNSS UART reports no data and its modem UART has
+   nothing on it: there is no way to put a process at the far end of a UART or a GPIO line from the
+   stock CLI. Proposed in [mikroverk/esp32sim#325](https://github.com/mikroverk/esp32sim/issues/325).
 6. **Board wiring.** The modem's ring indicator line (GPIO 33 on the first board) reads high with no
    modem fitted, because the board's pull-down is not modelled, so the application believes a modem
    is powered and presses its power key. That belongs in esp32tl's board profile, not in the
@@ -262,7 +262,7 @@ esp32sim --chip esp32 --board none --boot rom --console uart0 --flash-mb 4 --max
   `python3 tools/benchtime.py compare OUT_ACCELERATED OUT_SOFTWARE` must report that all results
   agree.
 
-The consumer's images, which are not in this repository, ran with `--flash-mb 4 --psram-mb 4` and
+The production images, which are not in this repository, ran with `--flash-mb 4 --psram-mb 4` and
 `--flash-at` at `0x1000` (bootloader), `0x8000` (partition table), `0x10000` (otadata) and `0x20000`
 (the application in `ota_0`), plus `--flash-at 0x9000=<nvs image>` for the runs that named a
 Bluetooth peer, the NVS image made with IDF's `nvs_partition_gen.py`.
