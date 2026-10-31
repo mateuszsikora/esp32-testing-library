@@ -155,11 +155,13 @@ clone, because git keeps hooks in the shared `.git` directory.
 | `ruff-format` | `ruff format --force-exclude` from `.venv` | Staged Python files |
 | `mypy` | `mypy` from `.venv`, over the files `[tool.mypy]` lists (`esp32tl`, `tests`) | Every commit, whatever it stages |
 | `cargo-fmt` | `cargo fmt` in `runner/` | Commits that stage a `.rs` file under `runner/` |
+| `cargo-clippy` | `cargo clippy --locked --all-targets -- -D warnings` in `runner/`, as `make lint` | Commits that stage a `.rs` file under `runner/`, `runner/Cargo.toml`, `runner/Cargo.lock` or `runner/rust-toolchain.toml` |
 
 `end-of-file-fixer`, `trailing-whitespace`, `ruff-check`, `ruff-format` and `cargo-fmt` fix the
 files they flag, and the commit stops so you can stage the fixes; `make lint` runs ruff and cargo
-fmt in their checking forms. Clippy is not a hook: it builds esp32sim, too slow for a commit. It
-runs in `make lint` and in CI. `make docs-check` is not a hook either
+fmt in their checking forms. `cargo-clippy` fixes nothing: it stops the commit on a warning. It
+takes 2 to 3 s the first time in a worktree, while it compiles esp32sim's crates to metadata (their
+API, no code), and about 0.2 s after that. `make docs-check` is not a hook
 ([documentation.md](documentation.md#the-check) says why).
 
 The ruff and mypy hooks run the tools through `scripts/venv-tool`, from the `.venv` of the

@@ -67,7 +67,8 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 |---|---|---|
 | [The ruff and mypy hooks run from the worktree's .venv](harness.md#the-ruff-and-mypy-hooks-run-from-the-worktrees-venv) | `harness.md` | decided (#42) |
 | [make setup installs no git hooks](harness.md#make-setup-installs-no-git-hooks) | `harness.md` | decided (#42) |
-| [Clippy is not a pre-commit hook](harness.md#clippy-is-not-a-pre-commit-hook) | `harness.md` | decided (#45) |
+| [Clippy is not a pre-commit hook](harness.md#clippy-is-not-a-pre-commit-hook) | `harness.md` | superseded (#57) |
+| [Clippy runs as a pre-commit hook on the runner's files](harness.md#clippy-runs-as-a-pre-commit-hook-on-the-runners-files) | `harness.md` | decided (#57) |
 | [The board fixture is parametrised over board, embedded_services and app_path together](harness.md#the-board-fixture-is-parametrised-over-board-embedded_services-and-app_path-together) | `harness.md` | decided (#51) |
 | [The app comes from the app_path marker](harness.md#the-app-comes-from-the-app_path-marker) | `harness.md` | decided (#51) |
 | [pytest-embedded's app and service options are refused for board tests](harness.md#pytest-embeddeds-app-and-service-options-are-refused-for-board-tests) | `harness.md` | decided (#51) |

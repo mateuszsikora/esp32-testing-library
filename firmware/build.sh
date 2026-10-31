@@ -13,8 +13,14 @@
 # need not be the pinned one (plan §7). Every build directory records how it
 # was built in esp32tl-build.json, with "container": null for a local build.
 #
-# Builds are incremental. A build directory made the other way, or from
-# another project directory, is removed first: CMake refuses to reuse it.
+# Builds are incremental. A build directory is removed first when its
+# esp32tl-build.json is missing or, compared as text, differs from the
+# record of the build about to start: another ESP-IDF version, container or
+# project directory. ESP-IDF refuses some of these itself (another project
+# directory, Python or toolchain, as a switch between a local and a
+# container build brings), but would reuse a directory from a version or
+# container that changes none of them and keep the old build's sdkconfig:
+# the image would not be what a build from scratch makes.
 # esp32tl-built marks a build that finished. flasher_args.json cannot: CMake
 # writes it while configuring, before anything is compiled.
 set -eu

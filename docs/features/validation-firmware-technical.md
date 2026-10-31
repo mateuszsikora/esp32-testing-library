@@ -62,10 +62,19 @@ the container, and once inside it, which builds. With `IDF_LOCAL=1` it runs once
      on stderr that it is not for goldens.
    - For each image: the project is `project_of IMAGE` (`hello_world` is
      `$IDF_PATH/examples/get-started/hello_world`), the build directory `$out/IMAGE/build`. If
-     that directory exists and its `esp32tl-build.json` is not, byte for byte, the record this
-     build would write (or is missing), the directory is removed with `rm -rf`: CMake refuses to
-     reuse a build directory configured for another project directory. Then `esp32tl-built` is
-     removed, `esp32tl-build.json` written, and
+     that directory exists and its `esp32tl-build.json` is missing or, compared as text, is not
+     the record this build would write (another `idf_version`, `container` or `project`), the
+     script prints `was built another way` and removes the directory with `rm -rf`. ESP-IDF
+     refuses only some of those directories itself. In v5.3.6, `idf.py` refuses one whose CMake
+     cache names another project directory or another Python (`_ensure_build_directory` in
+     `tools/idf_py_actions/tools.py`: `Build directory '...' configured for project '...' not
+     '...'. Run 'idf.py fullclean' to start again.`), and `tools/cmake/tool_version_check.cmake`
+     a cached compiler the new version does not support. A switch between a local and a
+     container build changes the project directory and the Python. Another version or container
+     that changes none of the three, a local ESP-IDF updated in place to a release with the same
+     toolchain say, would be reused with the `sdkconfig` the old build wrote, and the image would
+     not be the one a build from scratch makes. Then `esp32tl-built` is removed,
+     `esp32tl-build.json` written, and
 
      ```sh
      idf.py -C "$project" -B "$build" -DSDKCONFIG="$build/sdkconfig" -DIDF_TARGET=esp32 build

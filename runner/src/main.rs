@@ -1,14 +1,31 @@
 //! esp32tl-runner: runs an unmodified ESP32 image in esp32sim with the esp32tl harness attached
-//! (plan §4.2). For now the console only: the guest's UART0 goes to stdout, which
-//! pytest-embedded's `DuplicateStdoutPopen` owns, so everything the runner says goes to stderr.
+//! (plan §4.2). For now the console only: the guest's UART0 goes to stdout, and only it, so
+//! that whoever reads stdout gets the guest's output as the guest wrote it; everything the
+//! runner says goes to stderr. Under the backend the two meet again: pytest-embedded's
+//! `DuplicateStdoutPopen` writes both into one log.
 //!
-//! Every run that starts ends with one line on stderr,
+//! A run the emulator ends prints one line on stderr,
 //! `esp32tl-runner: stop: VARIANT at T s (W s wall, N resets)`, naming the `Stop` that ended it
-//! (T: emulated seconds, six decimals; W: wall seconds, one decimal), and one of these exit codes:
+//! (T: emulated seconds, six decimals; W: wall seconds, one decimal), and exits with one of these
+//! codes:
 //!
-//! - 0: the run reached `--max-seconds` (`Stop::Halted`), its normal end;
-//! - 1: the emulator stopped for any other reason;
-//! - 2: a usage error, or an input that cannot be loaded (the codes esp32sim uses for those).
+//! - 0: the run reached `--max-seconds` (`Stop::Halted`);
+//! - 1: the emulator stopped for any other reason, and a second line gives the stop with its
+//!   fields.
+//!
+//! A usage error, or an input that cannot be loaded, exits 2 before the run starts, without the
+//! stop line. esp32sim exits 2 on a usage error too, but not on every bad input: it panics on a
+//! ROM ELF it cannot load.
+//!
+//! A panic, in the runner or in esp32sim during the run, exits 101 with Rust's panic message and
+//! no stop line.
+//!
+//! The runner installs no signal handler, so a signal ends the run where it is, without the stop
+//! line, and the process dies of it: a shell sees 128 + the signal's number, Python's `Popen` its
+//! negative. That is how a test run ends unless the test waited for the end of the run:
+//! `Esp32Sim.close` (`esp32tl/backends/esp32sim.py`) sends a runner still running `SIGTERM` at
+//! teardown, then `SIGKILL` after 5 s. Ending a run on `SIGTERM` with `stats` and exit 0 is what
+//! the link protocol specifies (`docs/protocol.md`, section 9), not what this runner does.
 mod cli;
 
 use esp_soc::{Soc, SocBus, Stop};
@@ -111,8 +128,10 @@ fn read(path: &Path) -> Result<Vec<u8>, String> {
 }
 
 /// esp32sim's ROM lookup: `$ESP32SIM_ROM_DIR`, then `~/.espressif/tools/esp-rom-elfs/*/`, newest
-/// release first. Kept as esp32sim has it, for runs by hand. The plan pins release `20241011`
-/// (M0), which this lookup does not prefer, so the esp32sim backend (#9) must pass `--rom`.
+/// release first, for runs by hand. As esp32sim has it, except that an entry of `esp-rom-elfs/`
+/// must hold the ROM as a file (esp32sim takes any path there that exists) and `HOME` need not be
+/// valid UTF-8. The plan pins release `20241011` (M0), which this lookup does not prefer, so the
+/// esp32sim backend (#9) must pass `--rom`.
 fn find_rom(name: &str) -> Option<PathBuf> {
     if let Some(p) = std::env::var_os("ESP32SIM_ROM_DIR")
         .map(|d| PathBuf::from(d).join(name))

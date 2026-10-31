@@ -44,11 +44,13 @@ chip) and `esp-soc` (the machine, `Soc`, `Stop`). esp32sim lines below are at it
    the wall time and `m.reboots`. `Halted` exits 0; anything else prints the stop's `Debug` and
    exits 1.
 
-`find_rom(name)` copies esp32sim's lookup (`cli/src/lib.rs`, `find_rom`):
-`$ESP32SIM_ROM_DIR/name` if that is a file; otherwise every entry of
+`find_rom(name)` follows esp32sim's lookup (`cli/src/lib.rs`, `find_rom`), with two differences: an
+entry of `esp-rom-elfs/` must hold `name` as a file, where esp32sim takes any path there that
+exists, and `HOME` is read with `var_os`, so it need not be valid UTF-8. The lookup:
+`$ESP32SIM_ROM_DIR/name` if that is a file, as in esp32sim; otherwise every entry of
 `$HOME/.espressif/tools/esp-rom-elfs/`, sorted by path and tried last first, the first one with
-`name` in it as a file. No `HOME`, or no such directory,
-is no ROM. `name` is `<esp32::Esp32 as Soc>::ROM_ELF`, `esp32_rev300_rom.elf`.
+`name` in it as a file. No `HOME`, or no such directory, is no ROM. `name` is
+`<esp32::Esp32 as Soc>::ROM_ELF`, `esp32_rev300_rom.elf`.
 
 `stop_name` matches every `Stop` variant explicitly, with no catch-all arm, so a variant added
 upstream fails the build instead of being reported under another name.
@@ -69,8 +71,19 @@ The command line and the usage text: [runner-user.md](runner-user.md#run-an-imag
   - `esp32tl-runner: stop: {VARIANT} at {seconds:.6} s ({wall:.1} s wall, {reboots} resets)`
   - `esp32tl-runner: the emulator stopped before --max-seconds: {stop:?}`
 - Exit codes: 0 for `Stop::Halted`; 1 for any other stop; 2 for usage errors and inputs that
-  cannot be loaded, the codes esp32sim uses for those.
-- Signals: none handled. A signal ends the process with its default action and no stop line.
+  cannot be loaded. esp32sim also exits 2 on a usage error, but panics (exit 101) on a ROM ELF it
+  cannot load. 0 and 1 follow the stop line; 2 comes before the run starts, without it. A panic,
+  in the runner or in esp32sim during the run, exits 101 with Rust's panic message and no stop
+  line: `[profile.release]` does not set `panic = "abort"`. The backend reports it as any other
+  exit code.
+- Signals: none handled; `main` and `run` install no handler. A signal ends the process with its
+  default action, wherever the run is, with no stop line and none of the codes above:
+  `Popen.returncode` is minus the signal's number (`-15` for `SIGTERM`). `Esp32Sim.close` relies
+  on that: it sends `SIGTERM` to a runner still running at teardown, `SIGKILL` 5 s later, and
+  accepts the matching negative code
+  ([esp32sim-backend-technical.md](esp32sim-backend-technical.md)). The `SIGTERM` end with
+  `stats` and exit 0 in [the protocol, section 9](../protocol.md#9-ending-a-run) is not
+  implemented.
 
 `cli::Console` already has `Stdout`, `Socket` and `Both`, and the flag names copy esp32sim's, so
 that the change to the board socket of [the protocol](../protocol.md) is a rename
@@ -130,8 +143,8 @@ Every message starts with `esp32tl-runner: `. Usage errors exit 2 and add a seco
 | `--max-seconds is required` | no `--max-seconds` |
 | `--max-seconds: expected a positive number of seconds, got {v:?}` | not a number, 0 or less, `inf` or `NaN` |
 | `nothing to run: give the images with --flash-at OFFSET=FILE` | no `--flash-at` |
-| `--flash-at {spec}: expected OFFSET=FILE` | no `=`, or nothing after it |
-| `--flash-at {spec}: bad hex offset {offset:?}` | the offset is not hex after `0x` is trimmed (`0X` is not trimmed) |
+| `--flash-at {spec}: expected OFFSET=FILE` | no `=`, or a valid offset with nothing after it (`zz=` gets the next message) |
+| `--flash-at {spec}: bad hex offset {offset:?}` | the offset is not hex after every leading `0x` is trimmed (`0x0x1000` is `0x1000`; `0X` is not trimmed) |
 | `--flash-mb: the classic ESP32 takes 1, 2, 4, 8 or 16 MiB, got {v:?}` | any other value |
 | `--psram-mb: the classic ESP32 supports only 0 or 4 MiB, got {v:?}` | any other value |
 | `--console: expected stdout, socket or both, got {v:?}` | any other value |
@@ -172,7 +185,9 @@ kind), `main`, `setup`, `find_rom`, `run`, the exit codes and the format of the 
 pytest suite runs the real binary on `hello_world` (`tests/test_hello_world.py`, and
 `test_hello_world_fails_on_an_image_that_prints_something_else` in `tests/test_pytest_plugin.py`),
 which shows that a run boots and prints, but checks no runner line and no exit code. No test
-checks the `SwReset` path or an exit 1.
+runs the real runner through the `SwReset` path or to an exit 1;
+`tests/test_pytest_plugin.py::test_a_runner_that_exits_with_an_error_fails_the_test` checks how
+the backend handles an exit 1, from a stand-in runner.
 
 ## See also
 

@@ -86,7 +86,8 @@ esp32sim can print lines of its own on stderr; it does with its debug switches s
 
 ## How a run ends
 
-A run that gets past loading ends with one line on stderr:
+A run that gets past loading and that the emulator ends, not a signal, ends with one line on
+stderr:
 
 ```text
 esp32tl-runner: stop: VARIANT at T s (W s wall, N resets)
@@ -101,6 +102,7 @@ W the wall-clock seconds the run took after loading (one decimal), N the number 
 | 1 | the emulator stopped for any other reason | the stop line, then `esp32tl-runner: the emulator stopped before --max-seconds: STOP`, the stop with its fields |
 | 2 | a usage error | `esp32tl-runner: MESSAGE`, then `run esp32tl-runner --help for the usage` |
 | 2 | an input that cannot be loaded: no ROM found, a file that cannot be read, a ROM that is not an ELF, an image that does not fit in flash | `esp32tl-runner: MESSAGE`, no stop line |
+| 101 | a panic, in the runner or in esp32sim during the run | Rust's panic message, no stop line |
 
 The variants other than `Halted` are `MaxInsns`, `Breakpoint`, `Unimplemented`, `SwReset`,
 `Simcall`, `Ebreak`, `Watch`, `Exceptions`, `CostModel` and `CostModelLifecycle`. `SwReset` is
@@ -108,9 +110,20 @@ handled as a chip reset and never ends a run.
 
 `--console socket` and `--console both` exit 2 with
 `esp32tl-runner: --console socket and both need --board socket:PATH, which this runner does not have yet`,
-and `--board` itself is an unknown argument. The runner handles no signal: `SIGINT` or `SIGTERM`
-ends it at once, without the stop line. Every message, with its cause, is in
+and `--board` itself is an unknown argument. Every message, with its cause, is in
 [Failure modes](runner-technical.md#failure-modes).
+
+### Ended by a signal
+
+The runner handles no signal. `SIGINT` (Ctrl-C) or `SIGTERM` ends it at once, wherever the run is,
+without the stop line and with none of the exit codes above: the process dies of the signal, so a
+shell reports 128 plus its number (130 for `SIGINT`, 143 for `SIGTERM`) and Python's `Popen` its
+negative. A test run ends this way unless the test waited for the end of the run: the backend
+starts the runner with `--max-seconds 300`, and at teardown sends one still running `SIGTERM`,
+then `SIGKILL` after 5 s
+([esp32sim backend](esp32sim-backend-user.md#when-the-runner-exits-with-an-error)). Ending on
+`SIGTERM` with a final `stats` message and exit 0 is what
+[the link protocol, section 9](../protocol.md#9-ending-a-run) specifies, not what this runner does.
 
 ## See also
 
