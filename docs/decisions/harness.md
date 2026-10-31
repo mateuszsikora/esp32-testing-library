@@ -819,7 +819,7 @@ broker such as mosquitto as the default, which brings wall time back.
 
 ## A bridge from the simulated network to a real service is postponed
 
-Status: postponed (#64)
+Status: postponed (#67)
 
 A consumer may want its real backend at the far end, in a container or on the host, at the cost
 of wall time and of repeatable runs, as with the `real` source. Nothing needs it yet: the services
@@ -827,7 +827,7 @@ in the harness are enough for every test written so far.
 
 ## A TLS stack with a seeded random source is postponed
 
-Status: postponed (#64)
+Status: postponed (#68)
 
 The device's side of a TLS session repeats: esp32sim's random number generator is a xorshift from a
 fixed seed and the cycle count (`esp-periph/src/rng.rs`), so the firmware draws the same bytes in
