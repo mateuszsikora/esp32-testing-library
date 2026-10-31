@@ -689,18 +689,17 @@ would pass with no firmware run.
 
 Status: decided (#64)
 
-With the clock held by the test, the runner waits in its turn for as long as the test body runs,
-so the backend starts it with `--peer-timeout 0`. What ends a run that hangs, in the harness or in
-the emulator, is the test's timeout in wall time, through pytest-timeout, which becomes a
-dependency of esp32tl. The plugin gives every test that uses `board` a default of 600 s unless the
-test's own configuration sets one: a `timeout` ini option, `--timeout`, the `PYTEST_TIMEOUT`
-environment variable or a `timeout` marker. A
-configured `timeout = 0` is the user's choice and is kept; their CI's job timeout is then the only
-limit. pytest-timeout turns itself off when it detects a debugger such as pdb, unless
-`--timeout-disable-debugger-detection` is given. The backend's teardown ends the runner as for
-any other failed test; on the spike a test with a 2 s timeout that waited 4:50 of the board's
-time failed with `Timeout (>2.0s) from pytest-timeout` and left no runner behind. The limits a
-test states, `within=` and `timeout=`, are in the board's time and are part of what it tests; the
+With the clock held by the test, the runner waits in its turn for as long as the test body runs, so
+the backend starts it with `--peer-timeout 0`. What ends a run that hangs, in the harness or in the
+emulator, is the test's timeout in wall time, through pytest-timeout, which becomes a dependency of
+esp32tl. The plugin gives every test that uses `board` a default of 600 s unless the test's own
+configuration sets one: a `timeout` ini option, `--timeout`, the `PYTEST_TIMEOUT` environment
+variable or a `timeout` marker. A configured `timeout = 0` is the user's choice and is kept; their
+CI's job timeout is then the only limit. pytest-timeout turns itself off when it detects a debugger
+such as pdb, unless `--timeout-disable-debugger-detection` is given. The backend's teardown ends the
+runner as for any other failed test; on the spike a test with a 2 s timeout that waited 4:50 of the
+board's time failed with `Timeout (>2.0s) from pytest-timeout` and left no runner behind. The limits
+a test states, `within=` and `timeout=`, are in the board's time and are part of what it tests; the
 wall-time timeout only says the harness or the emulator is stuck.
 
 600 s leaves room for a test that keeps the CPU busy: stage 0 measured CPU-bound code at 0.3 to
@@ -830,16 +829,16 @@ in the harness are enough for every test written so far.
 
 Status: postponed (#64)
 
-The device's side of a TLS session repeats: esp32sim's random number generator is a xorshift from
-a fixed seed and the cycle count (`esp-periph/src/rng.rs`), so the firmware draws the same bytes
-in every run. The harness's side does not: Python's `ssl` takes its keys and nonces from the
-system. On the spike two runs were identical up to the TLS handshake and differed by 1 to 3
-emulated milliseconds after it, with the same messages in the same order. Why the times move was
-not measured; the likely cause is the device's arithmetic on the server's fresh keys, which takes
-a different time for different values. What would fix it is on the harness's side only: a TLS
-server with a seeded random source, or fixed ephemeral keys. Until that proves
-worth its cost, the determinism job (#22) is to compare what crossed the link in plain text and
-leave out the times after a handshake.
+The device's side of a TLS session repeats: esp32sim's random number generator is a xorshift from a
+fixed seed and the cycle count (`esp-periph/src/rng.rs`), so the firmware draws the same bytes in
+every run. The harness's side does not: Python's `ssl` takes its keys and nonces from the system. On
+the spike two runs were identical up to the TLS handshake and differed by 1 to 3 emulated
+milliseconds after it, with the same messages in the same order. Why the times move was not
+measured; the likely cause is the device's arithmetic on the server's fresh keys, which takes a
+different time for different values. What would fix it is on the harness's side only: a TLS server
+with a seeded random source, or fixed ephemeral keys. Until that proves worth its cost, the
+determinism job (#22) is to compare what crossed the link in plain text and leave out the times
+after a handshake.
 
 ## Flash contents besides the build go into a partition of the build's own table, by name
 
