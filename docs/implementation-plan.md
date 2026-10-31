@@ -2,10 +2,9 @@
 
 Derived from issue #1, "Specify esp32tl: test unmodified ESP32 firmware through its wires".
 Written 2026-10-29 against esp32sim `main` at `2e36224` (227 commits after v0.3.0) and
-pytest-embedded 2.9.3. Revised the same day after five reviews,
-`docs/implementation-plan-review.md` to `docs/implementation-plan-review-5.md`; section 10 lists
-what each changed. The fifth review found no blocking items and recommends that further review
-go to `docs/protocol.md` and the M1 fake-peer test rather than to this plan.
+pytest-embedded 2.9.3. Revised the same day after five reviews, the last of which found no
+blocking items and recommended that further review go to `docs/protocol.md` and the M1 fake-peer
+test rather than to this plan.
 
 The specification says that anything the plan finds wrong gets amended there, not worked around.
 Section 1 lists those findings first. Everything after it builds on the amended specification.
@@ -661,38 +660,3 @@ proposed for the issue, to be posted once agreed:
    a GNSS route chosen for the repository's own `nmea_reader` firmware (UART1, GPIO 4/5). The
    LilyGO T-A7670G R2 profile keeps only what the spec gives and is completed from the vendor
    schematic later; it is not needed by any validation firmware."
-
-First review, items closed by a change: 1.1 to 1.5, 2.1 to 2.12, and all of section 3. Answered
-with a deliberate "no": none.
-
-Second review (`docs/implementation-plan-review-2.md`), items closed by a change: the two
-blocking ones (pytest-embedded has no extras; `latency` bound to the recording and `uart_tx`
-coalescing as protocol rules) and 3.1 to 3.6 (`uart_cfg` from `bus.periph.uart_route`, the M5
-`wait` and timeout sentences, pytest-embedded's `--port` instead of a duplicate, the PMTK flag and
-the AT verbose result code, review files under `docs/`, the devkit profile carrying every
-validation firmware, the GPIO 5 strapping note, `null` for `rx_pin`, and what to drop if the first
-two weeks run short). Answered with a deliberate "no": none.
-
-Third review (`docs/implementation-plan-review-3.md`), items closed by a change: 3.1 (how the two
-backends map onto pytest-embedded: no services plus `msg_queue` for `esp32sim`, `esp` for
-`serial`, nothing on the command line, `app_path` by parametrisation), 3.2 ("at once" defined as
-`t_req + latency`; `quiet_until` covers pending answers; both in the M1 and M2 tests), 3.3 (`warn`
-and `stats` messages, `stop` semantics), and 3.4 (scenario events queued by `t` and folded into
-`quiet_until`; the GPIO 12 and 15 sentence corrected). Answered with a deliberate "no": none.
-
-Fourth review (`docs/implementation-plan-review-4.md`), items closed by a change: 3.1
-(`pytest-embedded-idf[serial]` as the dependency, `esp,idf` for the `serial` backend, flashing the
-artifact in M4, `IdfApp` for the runner's `--flash-at`), 3.2 (the PPP data phase as a `real`
-source under `--realtime` with M5's stamping, a clock-switch event in recordings, PPP excluded
-from the determinism job, a new risk row), 3.3 (`pytest_generate_tests` instead of "a fixture
-parametrises a fixture"), 3.4 (`Stop` variants in 4.2 and the M9 assertion against a silent
-`Halted`), and 3.5 (`machine.script` dropped as the `adc` queue). Answered with a deliberate "no":
-none.
-
-Fifth review (`docs/implementation-plan-review-5.md`), items closed by a change: 4.1 (the third
-component of `next_deadline` and the WFI case in the M1 fake-peer test), 4.2 (autoflash by the
-`idf` service, no second flash), 4.3 (the two leftover "serial/esp" phrases), and 4.4 (the
-nanosecond-to-cycle formula and its source, for `docs/protocol.md`). Answered with a deliberate
-"no": none. The review's section 3 confirms that the hooks the protocol rules stand on are called
-on the classic chip: `advance_to` and `uart_rx` every scheduler quantum (64 instructions), and the
-board deadline bounds the idle skip.
