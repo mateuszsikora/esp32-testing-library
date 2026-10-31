@@ -221,3 +221,4 @@ def end_stream_at_end_of_run(proc: PexpectProcess) -> None:
         return data
 
     proc.read_nonblocking = read_nonblocking  # type: ignore[method-assign]
+# A change of behaviour with no documentation, to show the docs job failing.
