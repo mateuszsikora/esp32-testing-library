@@ -198,6 +198,9 @@ Boundaries that keep the spec's rules:
 
 ### 4.1 Link protocol (runner ⇄ harness)
 
+*Superseded by [`docs/protocol.md`](protocol.md), the contract (#10). Kept as written; that
+document's last section lists what changed and why.*
+
 Newline-delimited JSON over a Unix socket (TCP as an option for a Linux container), times in
 emulated nanoseconds, following #325 so the runner is replaceable by upstream's `SocketBoard`.
 Messages marked *ext* are runner extensions that #325 does not cover; they stay in the runner
@@ -254,6 +257,11 @@ Rules:
 The Rust unit test with a fake peer (milestone 1) covers rules 2 and 4 explicitly.
 
 ### 4.2 Runner crate
+
+*Where this section and [`docs/protocol.md`](protocol.md) differ, the protocol holds: run-loop
+slices instead of `next_deadline`, received bytes delivered through `bus.periph.uart_pin_input`
+rather than `BoardModel::uart_rx`, emulator stops in `stats.end` rather than `warn`, and `SIGTERM`
+ending a run with `stats`. Its sections 6.1 and 11 say why.*
 
 - `esp32tl-runner --chip esp32 --board socket:PATH --flash-at ... --max-seconds S [--wifi ...]
   [--realtime] [--console stdout|socket|both]`: the flag names copy esp32sim's so that a future
@@ -427,6 +435,8 @@ Goal: a replayed NMEA recording reaches `nmea_reader` through UART1 in emulated 
 the printed fix; a changed recording changes the assertion's outcome. Runs on the
 `esp32-devkitc` profile.
 
+- *The runner's part follows [`docs/protocol.md`](protocol.md), which replaces the
+  `next_deadline` reasoning below with run-loop slices (its sections 6.1 and 11).*
 - Runner: `SocketBoard` with `uart_tx`/`uart_rx`, byte coalescing, baud pacing, `seq`/`ack`,
   `quiet_until`/`latency`, `reset`, `sync`, `uart_cfg` from `bus.periph.uart_route`, `warn`
   (`FRM_ERR` is exactly what `uart_cfg` exists to catch). Rust unit test with a fake peer covering
