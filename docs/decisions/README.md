@@ -60,6 +60,12 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The ROM ELF is copied into .cache/esp-rom-elfs/20241011/](firmware.md#the-rom-elf-is-copied-into-cacheesp-rom-elfs20241011) | `firmware.md` | decided (#46) |
 | [The ROM ELF is checked on every make setup](firmware.md#the-rom-elf-is-checked-on-every-make-setup) | `firmware.md` | decided (#46) |
 | [The ROM checksums are pinned in the script](firmware.md#the-rom-checksums-are-pinned-in-the-script) | `firmware.md` | decided (#46) |
+| [nmea_reader converts coordinates in integers](firmware.md#nmea_reader-converts-coordinates-in-integers) | `firmware.md` | decided (#15) |
+| [nmea_reader prints one line per epoch](firmware.md#nmea_reader-prints-one-line-per-epoch) | `firmware.md` | decided (#15) |
+| [The generated recordings send one sentence a second, GGA and RMC in turn](firmware.md#the-generated-recordings-send-one-sentence-a-second-gga-and-rmc-in-turn) | `firmware.md` | decided (#15) |
+| [Generated recordings carry no app, no tool versions and a fixed creation time](firmware.md#generated-recordings-carry-no-app-no-tool-versions-and-a-fixed-creation-time) | `firmware.md` | decided (#15) |
+| [The GNSS recording generator lives in scripts/ with a rule of its own](firmware.md#the-gnss-recording-generator-lives-in-scripts-with-a-rule-of-its-own) | `firmware.md` | decided (#15) |
+| [nmea_reader is tested through a bare socket peer until the gnss fixture exists](firmware.md#nmea_reader-is-tested-through-a-bare-socket-peer-until-the-gnss-fixture-exists) | `firmware.md` | decided (#15) |
 
 ## The esp32tl package and its pytest plugin
 

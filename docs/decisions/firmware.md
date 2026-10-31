@@ -135,3 +135,79 @@ extracted ELF against them.
 
 **Rejected:** fetching the release's checksum file at run time, because that would only prove the
 download matches whatever GitHub serves now.
+
+## nmea_reader converts coordinates in integers
+
+Status: decided (#15)
+
+`nmea.c` reads the minutes as millionths of a minute and computes microdegrees with
+`(minutes_e6 + 30) / 60`, rounded half up, and `main.c` prints them with integer formatting. The
+printed value is then a function of the sentence's digits alone, which a test in Python works out
+the same way (`tests/test_nmea_reader.py`), and the code can be checked by reading it.
+
+**Rejected:** `float` and `printf("%.6f")`, because single precision holds about seven significant
+digits and `52.229677` needs eight; and `double`, because the last digit would depend on
+newlib's rounding of a binary value, which a test would have to reproduce rather than compute.
+
+## nmea_reader prints one line per epoch
+
+Status: decided (#15)
+
+A fix whose UTC time field is the same as the last printed fix's prints nothing, so a receiver
+that sends a `GGA` and an `RMC` every second prints one line a second, as plan M1's "one line per
+later fix" reads. The talker is not checked: `$GPGGA` and `$GNGGA` both count.
+
+**Rejected:** one line per sentence, because a real receiver would print two lines per fix; and
+only the `$GP` talker, because receivers that combine constellations send `$GN`.
+
+## The generated recordings send one sentence a second, GGA and RMC in turn
+
+Status: decided (#15)
+
+Plan M1 asks for one sentence per emulated second. Alternating the two sentence types gives one fix
+per second, which is what `test_time_is_emulated` (ten fixes, #16) counts on, and feeds both
+parsers of `nmea_reader` from the same file. 60 sentences, the first at 1 s, well after the
+firmware configures UART1 (about 50 ms after power-on).
+
+**Rejected:** a `GGA` and an `RMC` every second, because that is two sentences per second, which
+plan M1 does not ask for; and `GGA` only, because the `RMC` parser would then run on no recording.
+
+## Generated recordings carry no app, no tool versions and a fixed creation time
+
+Status: decided (#15)
+
+The header has `"source": "generated"`, `"app_sha256": null`, `"tools": {}`, `created` fixed in
+the script, and a `generator` object (script, seed, baud) that plan §4.3 does not define. Running
+the script again writes the same bytes, so `--check` and `tests/test_gnss_recordings.py` can
+require the committed files to be what the script writes.
+
+**Rejected:** the esp32tl version in `tools` and the time of the run in `created`, because either
+would change the file without a change to its content, and the check would fail at every release.
+
+**Postponed:** whether the recording reader of #14 accepts `"source": "generated"`, a `null`
+`app_sha256` and the extra `generator` field, or the format gains a field for the baud; decided
+with the reader.
+
+## The GNSS recording generator lives in scripts/ with a rule of its own
+
+Status: decided (#15)
+
+`scripts/generate-gnss-recordings.py` is owned by rule C12, which sends a change to it to the
+validation firmware documents, where the recordings are described next to the firmware that reads
+them.
+
+**Rejected:** keeping it under `firmware/nmea_reader/`, which F11 would own without a new rule,
+because the recordings are the `uart.gnss` interface's, not one firmware's, and every change to the
+script would change the CI firmware cache key and rebuild the images; and inside the `esp32tl`
+package, because no part of the package uses it.
+
+## nmea_reader is tested through a bare socket peer until the gnss fixture exists
+
+Status: decided (#15)
+
+`tests/test_nmea_reader.py` speaks the link protocol to the runner itself, with every input sent
+in the first turn, so the firmware and the recordings are checked from the change that adds them.
+The `gnss` fixture and its `replay(path)` (#14) and the M1 tests (#16) replace it.
+
+**Rejected:** leaving `nmea_reader` untested until #14, because a bug in the firmware would then
+show up first as a failure of the harness.

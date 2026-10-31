@@ -51,15 +51,18 @@ GitHub Action, a pre-commit hook or a Python dependency.
 | C9 | `^scripts/check-docs\.py$` | `^(AGENTS\.md\|docs/guides/documentation\.md)$` | Docs check changed: update the table in AGENTS.md and/or docs/guides/documentation.md |
 | C10 | `^scripts/decisions-index\.py$` | `^(AGENTS\.md\|docs/guides/documentation\.md)$` | Decisions index changed: update AGENTS.md and/or docs/guides/documentation.md |
 | C11 | `^tools/` | `^docs/stage0-findings\.md$` | Benchmark tool changed: update Reproducing in docs/stage0-findings.md; re-measure if results change |
+| C12 | `^scripts/generate-gnss-recordings\.py$` | `^docs/features/validation-firmware-` | GNSS recording generator changed: update docs/features/validation-firmware-*.md |
 
 Where one directory has several owners, the map lists its files by name: `scripts/` (C4, C5 for
-the development guide, C9, C10 for the documentation guide) and the runner's top level (F7 for
-`Cargo.toml`, C6 for the toolchain; `Cargo.lock` is nobody's). `runner/src/` instead carves the
-protocol files out of F6, so that a new runner file is owned from its first line. `pyproject.toml`
-has several owners in one file: C7 accepts any of their documents, and review checks the choice.
+the development guide, C9, C10 for the documentation guide, C12 for the validation firmware) and
+the runner's top level (F7 for `Cargo.toml`, C6 for the toolchain; `Cargo.lock` is nobody's).
+`runner/src/` instead carves the protocol files out of F6, so that a new runner file is owned from
+its first line. `pyproject.toml` has several owners in one file: C7 accepts any of their
+documents, and review checks the choice.
 
 Left out on purpose: test files, which describe behaviour rather than change it;
-`runner/Cargo.lock`, whose pin that matters is in `Cargo.toml`; `recordings/`, test data;
-`esp32tl/py.typed`, `LICENSE` and `.gitignore`; and the files that are documentation or rules
-themselves (`docs/`, `README.md`, `AGENTS.md`, `CONTRIBUTING.md`, the pull request template,
-`.claude/`). Build output is ignored by git and never part of a change.
+`runner/Cargo.lock`, whose pin that matters is in `Cargo.toml`; `recordings/`, test data (C12
+owns the script that generates the GNSS ones); `esp32tl/py.typed`, `LICENSE` and `.gitignore`;
+and the files that are documentation or rules themselves (`docs/`, `README.md`, `AGENTS.md`,
+`CONTRIBUTING.md`, the pull request template, `.claude/`). Build output is ignored by git and
+never part of a change.

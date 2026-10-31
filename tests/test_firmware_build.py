@@ -20,14 +20,15 @@ CONTAINER = (
 )
 
 
-# Each fake writes its arguments to $FAKE_LOG, one per line.
+# Each fake writes its arguments to $FAKE_LOG, one per line; idf.py, which runs once per image,
+# appends them.
 FAKE_DOCKER = """#!/bin/sh
 [ "$1" = info ] && exit 0
 printf '%s\\n' "$@" >"$FAKE_LOG"
 """
 FAKE_IDF_PY = """#!/bin/sh
 [ "$1" = --version ] && { echo "ESP-IDF v9.9.9"; exit 0; }
-printf '%s\\n' "$@" >"$FAKE_LOG"
+printf '%s\\n' "$@" >>"$FAKE_LOG"
 [ -z "${FAKE_FAIL:-}" ] || exit 2
 while [ $# -gt 0 ]; do
 	[ "$1" = -B ] && build=$2
@@ -133,7 +134,7 @@ def test_build_refuses_an_unknown_image(tmp_path: Path) -> None:
     result = run_build(env, "hello_world", "nope")
     assert result.returncode == 1
     assert result.stderr == (
-        "firmware/build.sh: unknown image 'nope'; the images are: hello_world\n"
+        "firmware/build.sh: unknown image 'nope'; the images are: hello_world nmea_reader\n"
     )
     assert not (tmp_path / "out").exists()
 
@@ -231,25 +232,37 @@ def test_build_starts_the_pinned_container(tmp_path: Path) -> None:
 def test_local_build_runs_idf_py_and_records_how(tmp_path: Path, local_idf: dict[str, str]) -> None:
     result = run_build(local_idf)
     assert result.returncode == 0, result.stderr
-    build = (tmp_path / "out" / "hello_world" / "build").resolve()
-    project = f"{tmp_path}/idf/examples/get-started/hello_world"
-    assert logged(tmp_path / "idf.log") == [
-        "-C",
-        project,
-        "-B",
-        str(build),
-        f"-DSDKCONFIG={build}/sdkconfig",
-        "-DIDF_TARGET=esp32",
-        "build",
-    ]
-    assert json.loads((build / "esp32tl-build.json").read_text()) == {
-        "idf_version": "v9.9.9",
-        "container": None,
-        "project": project,
+    # every image, in the order of IMAGES: ESP-IDF's example, then the project under firmware/
+    projects = {
+        "hello_world": f"{tmp_path}/idf/examples/get-started/hello_world",
+        "nmea_reader": str(ROOT / "firmware" / "nmea_reader"),
     }
-    assert (build / "esp32tl-built").exists()
+    builds = {image: (tmp_path / "out" / image / "build").resolve() for image in projects}
+    assert logged(tmp_path / "idf.log") == [
+        argument
+        for image, project in projects.items()
+        for argument in [
+            "-C",
+            project,
+            "-B",
+            str(builds[image]),
+            f"-DSDKCONFIG={builds[image]}/sdkconfig",
+            "-DIDF_TARGET=esp32",
+            "build",
+        ]
+    ]
+    for image, project in projects.items():
+        assert json.loads((builds[image] / "esp32tl-build.json").read_text()) == {
+            "idf_version": "v9.9.9",
+            "container": None,
+            "project": project,
+        }
+        assert (builds[image] / "esp32tl-built").exists()
     assert "not for goldens" in result.stderr
-    assert result.stdout == f"firmware/build.sh: hello_world built in {build} (ESP-IDF v9.9.9)\n"
+    assert result.stdout == "".join(
+        f"firmware/build.sh: {image} built in {build} (ESP-IDF v9.9.9)\n"
+        for image, build in builds.items()
+    )
 
 
 def test_build_reuses_a_build_directory_made_the_same_way(

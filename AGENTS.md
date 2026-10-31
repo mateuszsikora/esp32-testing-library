@@ -36,6 +36,7 @@ paths, names, defaults and messages quoted verbatim, and `TODO(owner): …` wher
 | `tests/conftest.py` | `docs/guides/testing.md` (C8) |
 | `scripts/check-docs.py`, `scripts/decisions-index.py` | This table and/or `docs/guides/documentation.md` (C9, C10) |
 | `tools/` | Reproducing in `docs/stage0-findings.md`; measure again if results change (C11) |
+| `scripts/generate-gnss-recordings.py` | `docs/features/validation-firmware-user.md` and/or `-technical.md` (C12) |
 | A decision: an alternative rejected, scope postponed | `docs/decisions/<domain>.md`, then `python3 scripts/decisions-index.py` |
 | A domain rule that a test enforces | `docs/invariants.md` |
 

@@ -177,8 +177,9 @@ CROSS_CUTTING = [
         r"^docs/guides/development\.md$",
         "Pre-commit hooks changed: update docs/guides/development.md",
     ),
-    # scripts/ has two owners, the development guide (C4, C5) and the documentation guide (C9,
-    # C10), so its files are listed by name. A new script matches no rule: add it here.
+    # scripts/ has three owners, the development guide (C4, C5), the documentation guide (C9,
+    # C10) and the validation firmware documents (C12), so its files are listed by name. A new
+    # script matches no rule: add it here.
     Rule(
         "C4",
         r"^scripts/fetch-rom-elf$",
@@ -232,6 +233,12 @@ CROSS_CUTTING = [
         r"^docs/stage0-findings\.md$",
         "Benchmark tool changed: update Reproducing in docs/stage0-findings.md;"
         " re-measure if results change",
+    ),
+    Rule(
+        "C12",
+        r"^scripts/generate-gnss-recordings\.py$",
+        r"^docs/features/validation-firmware-",
+        "GNSS recording generator changed: update docs/features/validation-firmware-*.md",
     ),
 ]
 
