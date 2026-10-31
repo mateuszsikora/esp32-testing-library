@@ -1,0 +1,31 @@
+# The GNSS receiver's UART. The defaults are the [uart.gnss] route of the esp32-devkitc board
+# profile (plan §4.5), and the generated recordings in recordings/ are at the default baud.
+menu "nmea_reader"
+
+config NMEA_READER_UART_PORT
+    int "UART port of the GNSS receiver"
+    range 1 2
+    default 1
+
+config NMEA_READER_UART_RX_PIN
+    int "RX GPIO: the receiver's TX"
+    range 0 39
+    default 5
+    help
+        Not GPIO 1 or 3, the console's UART0, nor 6 to 11, the SPI flash: the range
+        cannot leave them out.
+
+config NMEA_READER_UART_TX_PIN
+    int "TX GPIO: the receiver's RX (nmea_reader sends nothing)"
+    range 0 33
+    default 4
+    help
+        Not GPIO 1 or 3, the console's UART0, nor 6 to 11, the SPI flash: the range
+        cannot leave them out.
+
+config NMEA_READER_UART_BAUD
+    int "Baud rate"
+    range 1200 921600
+    default 9600
+
+endmenu

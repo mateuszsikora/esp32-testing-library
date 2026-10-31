@@ -71,8 +71,10 @@ No test of the suite carries the marker. The only marked tests are the ones
 |---|---|---|
 | `tests/test_package.py` | The `pytest11` entry point, that pytest loaded the plugin, `esp32tl --version` | The package installed |
 | `tests/test_firmware_build.py` | `firmware/build.sh` run against a fake `docker` and a fake `idf.py` that record how they were called; the `requires_docker` marker | Neither Docker nor ESP-IDF; milliseconds |
-| `tests/test_firmware_images.py` | The `hello_world` image as `make firmware` built it: target `esp32`, bootloader at `0x1000`, partition table at `0x8000`, app at `0x10000`, the ELF | The built image |
+| `tests/test_firmware_images.py` | The `hello_world` and `nmea_reader` images as `make firmware` built them: target `esp32`, bootloader at `0x1000`, partition table at `0x8000`, app at `0x10000`, the ELF; `nmea_reader`'s UART settings in its `sdkconfig` | The built images |
 | `tests/test_hello_world.py` | ESP-IDF's `hello_world`, unmodified, printing `Hello world!` through the backend | The built image, the runner and the ROM ELF |
+| `tests/test_nmea_reader.py` | `nmea_reader` fed the generated GNSS recordings, and sentences it must ignore, through `--board socket:` by a minimal peer in the test file: the fix lines it prints, the UART route it configures | The built image, the runner and the ROM ELF |
+| `tests/test_gnss_recordings.py` | `recordings/gnss-*.jsonl` are what `scripts/generate-gnss-recordings.py` writes, `--check` names a stale one, and every recording is one valid sentence per emulated second | Nothing beyond Python |
 | `tests/test_pytest_plugin.py` | The plugin's parametrisation and refused options, the runner's command line, `load_app`'s refusals, the runner and ROM paths, how a runner's exit is reported (against a fake runner, a shell script), how the backend serves the link and ends the run (against a fake runner that speaks the link protocol, a Python script) | Most tests nothing beyond the package; `test_hello_world_fails_on_an_image_that_prints_something_else` the built image, the runner and the ROM ELF |
 | `tests/test_link_protocol.py`, `tests/test_boardlink.py` | The link protocol's codec and handshake; `BoardLink`'s turns, routing and errors, fed messages directly or over a socket pair | Nothing beyond the package; milliseconds |
 | `tests/test_check_docs.py`, `tests/test_decisions_index.py` | `scripts/check-docs.py` and `scripts/decisions-index.py`, run against temporary git repositories; one test runs the integrity checks of `check-docs.py` on this repository's own documentation | git; neither Docker nor the runner |
@@ -82,9 +84,9 @@ patches the app image to print `Hello WORLD!`, fixes its checksum and SHA-256, a
 `tests/test_hello_world.py` on it: that test must fail there, after the image has run.
 
 A missing image fails the tests that need it rather than skipping them:
-`<build> holds no finished build: run make firmware` from `tests/test_firmware_images.py` and
-`test_hello_world_fails_on_an_image_that_prints_something_else`, and the backend's
-`esp32sim: <build> holds no ESP-IDF build: no flasher_args.json` from
+`<build> holds no finished build: run make firmware` from `tests/test_firmware_images.py`,
+`tests/test_nmea_reader.py` and `test_hello_world_fails_on_an_image_that_prints_something_else`,
+and the backend's `esp32sim: <build> holds no ESP-IDF build: no flasher_args.json` from
 `tests/test_hello_world.py`. `tests/test_firmware_images.py` also fails
 on an image built in a container other than the one `firmware/build.sh` pins
 (`<image> was built in <container> (ESP-IDF <version>), not in <pinned> (<version>): run make firmware`),

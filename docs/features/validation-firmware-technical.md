@@ -2,7 +2,10 @@
 
 `firmware/build.sh` builds the validation images; the `Makefile` targets `firmware` and
 `firmware/%/build/esp32tl-built` call it. `tests/test_firmware_build.py` tests the script against
-fakes, `tests/test_firmware_images.py` checks the images it built.
+fakes, `tests/test_firmware_images.py` checks the images it built. `firmware/nmea_reader/` is the
+one image whose source lives here ([nmea_reader](#nmea_reader)), and
+`scripts/generate-gnss-recordings.py` writes the recordings it is tested with
+([The GNSS recording generator](#the-gnss-recording-generator)).
 
 ## Data flow
 
@@ -60,8 +63,11 @@ the container, and once inside it, which builds. With `IDF_LOCAL=1` it runs once
 5. **Build side** (in the container, or the local build):
    - `idf.py --version` gives the ESP-IDF version, the text after `ESP-IDF `. A local build says
      on stderr that it is not for goldens.
-   - For each image: the project is `project_of IMAGE` (`hello_world` is
-     `$IDF_PATH/examples/get-started/hello_world`), the build directory `$out/IMAGE/build`. If
+   - For each image, in the order of `IMAGES`: the project is `project_of IMAGE`
+     (`hello_world` is `$IDF_PATH/examples/get-started/hello_world`, `nmea_reader` is
+     `$PWD/firmware/nmea_reader`, the working directory being the repository's root: in the
+     container `/project/firmware/nmea_reader`, in a local build the checkout's own path), the
+     build directory `$out/IMAGE/build`. If
      that directory exists and its `esp32tl-build.json` is missing or, compared as text, is not
      the record this build would write (another `idf_version`, `container` or `project`), the
      script prints `was built another way` and removes the directory with `rm -rf`. ESP-IDF
@@ -89,8 +95,109 @@ next build is still incremental; the marker, removed first, is what says it fini
 
 The Makefile's `firmware` target runs `FIRMWARE_OUT= firmware/build.sh`; the pattern rule
 `firmware/%/build/esp32tl-built` runs `FIRMWARE_OUT= firmware/build.sh $*`, and `test` depends on
-`$(FIRMWARE_IMAGES:%=firmware/%/build/esp32tl-built)` with `FIRMWARE_IMAGES := hello_world`. The
-rule has no prerequisites, so make rebuilds an image only when its marker is missing.
+`$(FIRMWARE_IMAGES:%=firmware/%/build/esp32tl-built)` with `FIRMWARE_IMAGES := hello_world
+nmea_reader`. The rule has no prerequisites, so make rebuilds an image only when its marker is
+missing: an edit to `firmware/nmea_reader/` needs `make firmware`, or `firmware/build.sh
+nmea_reader`, before `make test` sees it.
+
+`nmea_reader` is built from the read-only `/project` mount like any other project. It takes no
+components from the component manager, and with `sdkconfig` and the build in the build directory
+ESP-IDF v5.3.6 writes nothing into `firmware/nmea_reader/`.
+
+## `nmea_reader`
+
+An ESP-IDF project of three files in `firmware/nmea_reader/main/`, about 200 lines in all:
+`main.c` (the UART and the console), `nmea.c` and `nmea.h` (the parser, with no ESP-IDF
+dependency). `Kconfig.projbuild` declares the four options of the user document; the component
+needs `esp_driver_uart` only.
+
+**Start.** `app_main` installs the UART driver on `CONFIG_NMEA_READER_UART_PORT` with a 1024-byte
+receive buffer (larger than the 128-byte hardware FIFO, as the driver requires) and no transmit
+buffer, configures 8N1 at `CONFIG_NMEA_READER_UART_BAUD` with no flow control, sets the TX and
+RX pins, and prints `nmea_reader: UART%d RX GPIO%d TX GPIO%d %d baud`. A failure of any of the
+three calls is `ESP_ERROR_CHECK`'s abort.
+
+**Reading.** One byte at a time, `uart_read_bytes(..., 1, portMAX_DELAY)`, into a sentence
+buffer:
+
+- `$` starts a sentence, dropping any partial one;
+- `\r` or `\n` ends it, and it goes to the parser; a line ending outside a sentence is ignored;
+- any other byte is appended inside a sentence; one that would make the sentence longer than 80
+  characters (`NMEA_SENTENCE_MAX`, 82, less the line ending) drops the sentence;
+- bytes outside a sentence are ignored.
+
+**Parsing**, `nmea_parse_fix(sentence, &fix)`, true only when all of these hold:
+
+1. at most 80 characters; `$`, a body, `*` and two hex digits (either case) that equal the XOR of
+   the body's bytes, and nothing after them;
+2. field 0, the address, is five characters ending in `GGA` or `RMC`; the talker is not checked;
+3. `GGA`: field 6, the fix quality, is one character other than `0`. `RMC`: field 2, the status, is
+   `A`;
+4. field 1, the UTC time, is 6 to 15 characters whose first six are digits;
+5. the position, fields 2 to 5 of `GGA` and 3 to 6 of `RMC`: latitude `ddmm[.m...]` and `N` or
+   `S`, longitude `dddmm[.m...]` and `E` or `W`, with exactly two or three degree digits and two
+   minute digits before the point, at most six decimals, minutes under 60, at most 90° or 180°
+   (and no minutes beyond it).
+
+A coordinate is converted in integers: minutes in millionths, `e6 = degrees × 10⁶ + (minutes_e6 +
+30) / 60`, microdegrees rounded half up, negated for `S` and `W`. Fields end at `,` or `*`; a field
+too long for its buffer fails the sentence.
+
+**Printing.** A fix whose time is the same string as the last printed fix's is dropped: a `GGA`
+and an `RMC` of one epoch print one line. Otherwise `main.c` prints `fix acquired` the first time
+and `fix` after, with ` lat=` and ` lon=` and each value as `[-]D.DDDDDD`, then flushes stdout.
+`nmea_reader` keeps running; a lost fix prints nothing, and the next fix prints `fix`.
+
+## The GNSS recording generator
+
+`scripts/generate-gnss-recordings.py` holds the recordings in `RECORDINGS`, each a name, a seed
+and a start position in 1/10000 minutes of arc (NMEA's own resolution, so the position needs no
+floating point). For each:
+
+1. `random.Random(seed)`; the position starts at the start position;
+2. 60 sentences, `i` from 0: from the second one on, latitude and longitude each move by
+   `randint(-20, 20)` (`STEP`, under 4 m); sentence `i` is at `t = 1 s + i × 1 s`, UTC
+   `2026-10-29 12:00:00` plus `i` seconds, a `GGA` for even `i` and an `RMC` for odd `i`;
+3. the line is the header, then one event per sentence; the file ends in a newline.
+
+The sentences, `CS` being the checksum and `ddmmyy` the date:
+
+```text
+$GPGGA,hhmmss.00,ddmm.mmmm,N,dddmm.mmmm,E,1,08,0.9,110.0,M,34.0,M,,*CS\r\n
+$GPRMC,hhmmss.00,A,ddmm.mmmm,N,dddmm.mmmm,E,0.0,,ddmmyy,,,A*CS\r\n
+```
+
+An assertion in the script holds every sentence under half a period on the wire at `BAUD`. Only
+`random.Random(int).randint` decides the walk, which gives the same numbers on every Python from
+3.9 on, and nothing in the output depends on the clock or the machine, so a run writes the same
+bytes everywhere. `--check` compares each file as text with what it would write.
+
+**Header**, one line of JSON, fields in this order:
+
+```json
+{"esp32tl_recording": 1, "board": "esp32-devkitc", "interface": "uart.gnss", "source": "generated", "clock": "emulated-fifo-write", "end": "hold", "app_sha256": null, "tools": {}, "created": "2026-10-31T00:00:00Z", "generator": {"script": "scripts/generate-gnss-recordings.py", "seed": 1, "baud": 9600}}
+```
+
+| Field | Value | Why |
+|---|---|---|
+| `esp32tl_recording`, `board`, `interface`, `clock`, `end` | as plan §4.3 | `t` is emulated nanoseconds since power-on; `hold`: nothing after the last event |
+| `source` | `generated` | no model or device produced it |
+| `app_sha256` | `null` | the recording belongs to no app; no `app.bin` produced it |
+| `tools` | `{}` | neither esp32tl nor esp32sim produced it, and a version here would change the file at every release |
+| `created` | `CREATED`, `2026-10-31T00:00:00Z` | when the parameters were fixed, so the output depends on the script alone |
+| `generator` | the script's path, the seed, `BAUD` | not in plan §4.3: how to make the file again, and the baud its timing assumes, which the format has no field for |
+
+**Events:** `{"t": T, "dir": "in", "data": "BASE64"}`, one sentence each, `t` in emulated
+nanoseconds.
+
+| Constant | Value | Effect |
+|---|---|---|
+| `BAUD` | `9600` | the line rate the timing is checked against, and `generator.baud` |
+| `FIRST_NS` | `1_000_000_000` | the first sentence, well after `nmea_reader` sets up its UART (about 50 ms) |
+| `PERIOD_NS` | `1_000_000_000` | one sentence per second |
+| `SENTENCES` | `60` | sentences per recording |
+| `START` | `2026-10-29 12:00:00` UTC | the time and date in the sentences |
+| `STEP` | `20` | the largest move per second, in 1/10000 minutes |
 
 ## Schema
 
@@ -129,6 +236,11 @@ top of each build directory, `config/sdkconfig.json`, and the `.bin` and `.elf` 
   with the exit code of `docker run` or `idf.py` when those fail. Messages go to stderr, except
   the `was built another way` and `built in` lines, which go to stdout.
 - `make firmware`, `make test`: [development guide](../guides/development.md).
+- `python3 scripts/generate-gnss-recordings.py [--check]`: exits 0, or 1 with `--check` when a
+  recording differs from what the script writes or is missing; the messages are in the
+  [user document](validation-firmware-user.md#the-gnss-recordings).
+- `nmea_reader`: UART1 in, the console out, as the [user
+  document](validation-firmware-user.md#nmea_reader) says.
 
 ## Configuration
 
@@ -136,7 +248,7 @@ top of each build directory, `config/sdkconfig.json`, and the `.bin` and `.elf` 
 |---|---|---|---|
 | `IDF_VERSION` | script constant | `v5.3.6` | the ESP-IDF tag of the container |
 | `CONTAINER` | script constant | `espressif/idf:$IDF_VERSION@sha256:cee52f0c4fdaf088992a7a739f5993154e95cf1d3ab61c24f5b40e6d56a3a070` | the image the build runs in, pinned by digest (a multi-arch index) |
-| `IMAGES` | script constant | `hello_world` | the images; `project_of` maps each to its project |
+| `IMAGES` | script constant | `hello_world nmea_reader` | the images, in build order; `project_of` maps each to its project |
 | `FIRMWARE_OUT` | environment | `firmware/` | where `IMAGE/build/` goes; empty means the default; `/out` inside the container |
 | `IDF_LOCAL` | environment | unset | `1` builds with the ESP-IDF of the calling shell |
 | `ESP32TL_CONTAINER` | environment, set by the host side | unset | marks the container side and names the image it records |
@@ -153,7 +265,7 @@ regular expressions, so each has to stay on a line of its own. Changing either, 
 
 | Message | Cause |
 |---|---|
-| `unknown image 'NAME'; the images are: hello_world` | an argument not in `IMAGES`; nothing written |
+| `unknown image 'NAME'; the images are: hello_world nmea_reader` | an argument not in `IMAGES`; nothing written |
 | `ESP32TL_CONTAINER is set outside a container; unset it` | `ESP32TL_CONTAINER` set and no `/.dockerenv`; nothing written |
 | `IDF_LOCAL=1 needs ESP-IDF in the environment: source $IDF_PATH/export.sh first` | `IDF_LOCAL=1` without `idf.py` on `PATH` or without `IDF_PATH`; nothing written |
 | `needs Docker, or IDF_LOCAL=1 to build with a local ESP-IDF` | no `docker` on `PATH`; nothing written |
@@ -186,8 +298,10 @@ write their arguments to `$FAKE_LOG`, with a `PATH` holding only them and `cat`,
   ESP-IDF) and `ESP32TL_CONTAINER` on the host (skipped when the suite itself runs in Docker):
   each message verbatim, exit 1, and no output directory created;
 - `test_build_starts_the_pinned_container`: the `docker run` arguments, exactly;
-- `test_local_build_runs_idf_py_and_records_how`: the `idf.py` arguments, the record with
-  `"container": null`, the marker, the "not for goldens" warning and the `built in` line;
+- `test_local_build_runs_idf_py_and_records_how`: with no image named, both images in order,
+  `hello_world` from the fake `IDF_PATH` and `nmea_reader` from `firmware/nmea_reader`; the
+  `idf.py` arguments of each, the records with `"container": null`, the markers, the "not for
+  goldens" warning and the two `built in` lines;
 - reuse of a build directory with the same record, and removal of one with another record;
 - no marker when `flasher_args.json` is missing, and a failed build removing the marker of an
   earlier one (exit code 2, the fake's).
@@ -201,11 +315,37 @@ runs it when `docker info` succeeds. No test in `tests/` carries the marker at p
 real `hello_world` build through `IdfApp`, after the provenance check above: target `esp32`,
 flash files `0x1000` `bootloader/bootloader.bin`, `0x8000` `partition_table/partition-table.bin`
 and `0x10000` `hello_world.bin`, all present, and the ELF `hello_world.elf`.
+`test_nmea_reader_has_the_classic_esp32_flash_layout` checks the same of `nmea_reader`, and
+`test_nmea_reader_takes_the_devkit_gnss_route_from_sdkconfig` its four `NMEA_READER_UART_*`
+values in `config/sdkconfig.json`.
+
+`tests/test_nmea_reader.py` runs the real `nmea_reader` in the real runner with `--board
+socket:`, against a peer in the test file that sends every input in the first turn (`wait` with
+`quiet_until` and `latency` both `null`), so the run goes to `--max-seconds` in one turn:
+
+- `test_prints_the_fixes_of_the_recording`: the first 4 sentences of `gnss-generated-1.jsonl`
+  print the 4 fix lines the test works out from the sentences itself (its own conversion, not the
+  firmware's), the first `fix acquired lat=52.229677 lon=21.012233`; the `nmea_reader:` line; a
+  `uart_cfg` for port 1, TX `[4]`, RX 5, 9600 baud; no `warn`;
+- `test_the_fix_follows_the_recording`: the same for `gnss-generated-2.jsonl`, first
+  `fix acquired lat=-34.603700 lon=-58.381600`;
+- `test_only_well_formed_fixes_count_and_an_epoch_prints_once`: a wrong checksum, `GGA` quality
+  0, `RMC` status `V`, an empty position, a `GSV`, an `RMC` with the time of the `GGA` before it,
+  and a sentence over 82 characters print nothing; `$GN` sentences, a `$` starting a sentence
+  over, minutes with two and six decimals (rounded half up) and 90°N 180°W print as expected.
+
+`tests/test_gnss_recordings.py` runs the generator with `--check` on the committed files, runs a
+copy of it with `--check` on an edited recording and requires the stale message verbatim and exit
+1, and reads each recording back: header fields, 60 events at 1 s to 60 s, all `in`, `$GPGGA` and
+`$GPRMC` in turn, each checksum, at most 82 characters, under half a second on the wire at 9600
+baud; and the first position of each.
 
 Not covered: the build inside the real container (only `make firmware` and the CI `firmware` job
-run it), the container side of the script (`ESP32TL_CONTAINER` set inside a container), the
-`'idf.py --version'` failure, and the foreign-container branch of the provenance check, which only
-a stale real build reaches. The timeout reason of `requires_docker` is untested.
+run it), the `nmea_reader` Kconfig options other than their defaults, a `GGA` or `RMC` whose time
+field is shorter than six digits, the container side of the script (`ESP32TL_CONTAINER` set
+inside a container), the `'idf.py --version'` failure, and the foreign-container branch of the
+provenance check, which only a stale real build reaches. The timeout reason of `requires_docker`
+is untested.
 
 ## See also
 

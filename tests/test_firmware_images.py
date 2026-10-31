@@ -56,3 +56,24 @@ def test_hello_world_has_the_classic_esp32_flash_layout() -> None:
     ]
     assert all(Path(f.file_path).is_file() for f in app.flash_files)
     assert app.elf_file == str((build / "hello_world.elf").resolve())
+
+
+def test_nmea_reader_has_the_classic_esp32_flash_layout() -> None:
+    app = idf_app("nmea_reader")
+    build = FIRMWARE / "nmea_reader" / "build"
+    assert app.target == "esp32"
+    assert [(f.offset, Path(f.file_path).relative_to(build)) for f in app.flash_files] == [
+        (0x1000, Path("bootloader/bootloader.bin")),
+        (0x8000, Path("partition_table/partition-table.bin")),
+        (0x10000, Path("nmea_reader.bin")),
+    ]
+    assert all(Path(f.file_path).is_file() for f in app.flash_files)
+    assert app.elf_file == str((build / "nmea_reader.elf").resolve())
+
+
+def test_nmea_reader_takes_the_devkit_gnss_route_from_sdkconfig() -> None:
+    config = idf_app("nmea_reader").sdkconfig
+    assert config["NMEA_READER_UART_PORT"] == 1
+    assert config["NMEA_READER_UART_RX_PIN"] == 5
+    assert config["NMEA_READER_UART_TX_PIN"] == 4
+    assert config["NMEA_READER_UART_BAUD"] == 9600
