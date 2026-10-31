@@ -294,12 +294,13 @@ RX pin matches (`esp-soc/src/uart.rs:73-79`), so with two ports on one pin there
 port.
 
 Consecutive drops of one kind on one pin and port are merged into one `warn` with their count in
-`bytes` and the first drop's `t`. The merged `warn` goes out as soon as any other message is due,
-so the stream stays in `t` order, and at the latest at the next whole emulated millisecond, a
-slice boundary in any case, so the last warnings of a run are not held back. Not at every slice
-end: while bytes are paced each byte ends a slice, and a 1500-byte frame overflowing the FIFO would
-give some 1400 warnings instead of one. A peer accepts kinds it
-does not know. `BoardLink` puts warnings in the test report.
+`bytes` and the first drop's `t`. The merged `warn` goes out when any other message is due (an
+event, `sync`, `console`, a `warn` of another kind, pin or port, `stats`), so the stream stays in
+`t` order, and at no other time. A time limit would defeat the merging: at 9600 baud a character
+takes 1.04 ms, so even a millisecond window would give each dropped byte of a mismatched NMEA stream
+its own `warn`. The last warnings of a run are not held back either, because every end of a run
+that sends `stats` sends them before it. A peer accepts kinds it does not know. `BoardLink` puts
+warnings in the test report.
 
 ### 5.9 `stats` *ext*
 
