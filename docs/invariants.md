@@ -28,6 +28,34 @@ that references to its number keep their meaning.
    `tests/test_package.py::test_plugin_is_registered_through_pytest11`,
    `tests/test_package.py::test_pytest_loaded_the_plugin`
 
+25. A test whose `source` or `tap` markers ask for what a backend cannot give is skipped on that
+    backend with the reason, before any fixture is set up, and runs on the others; one that asks for
+    what no backend can give, or for an interface its profile does not have, is a collection error
+    that names the test.
+    `tests/test_pytest_plugin.py::test_a_backend_that_cannot_give_a_source_or_tap_skips_with_the_reason`,
+    `tests/test_pytest_plugin.py::test_a_marker_no_backend_can_satisfy_is_a_collection_error`,
+    `tests/test_boards.py::test_a_request_no_backend_can_give_is_an_error_not_a_skip`
+26. Every backend in `SERVICES` has a capability declaration; on `serial` an on-board UART is real
+    only and only the console can be tapped.
+    `tests/test_boards.py::test_every_backend_has_a_declaration`,
+    `tests/test_boards.py::test_the_declaration_is_the_specification_s_table`
+29. A board marker (`app_path`, `board_profile`, `source`, `tap`) that reaches a test from a
+    `pytest.param`, or from a hook on the test, its class or its module, stops the run with a usage
+    error, so no source a test asks for goes unchecked.
+    `tests/test_pytest_plugin.py::test_a_board_marker_in_a_pytest_param_is_refused`,
+    `tests/test_pytest_plugin.py::test_a_board_marker_a_hook_adds_is_refused`
+
+## Board profiles
+
+27. The `lilygo-t-a7670g-r2` profile holds only what the specification gives, the chip, the
+    modem's UART1 on GPIO 26/27 at 115200 baud, PWRKEY on GPIO 4 and RI on GPIO 33, and the
+    pull-down on RI of stage 0's gap 6.
+    `tests/test_boards.py::test_the_lilygo_profile_holds_only_what_the_specification_gives`
+28. A profile that breaks the schema is refused with the file and the key at fault; a UART's TX is
+    never an input-only GPIO, and no GPIO serves two uses, the console's UART0 on GPIO 1 and 3
+    counted.
+    `tests/test_boards.py::test_a_profile_that_breaks_the_schema_is_refused_with_the_key`
+
 ## The esp32sim backend
 
 7. The runner is given every file of the build's `flasher_args.json`, each at its offset.

@@ -29,7 +29,8 @@ paths, names, defaults and messages quoted verbatim, and `TODO(owner): …` wher
 | `runner/Cargo.toml` (esp32sim pin, profiles) | `docs/features/runner-technical.md`; a pin bump also re-checks what `docs/protocol.md` cites (F7) |
 | `esp32tl/link/`, `runner/src/protocol.rs`, `runner/src/socket_board.rs` | `docs/protocol.md`, and its version if the wire changes (F8, F9, F10) |
 | `firmware/` | `docs/features/validation-firmware-user.md` and/or `-technical.md` (F11) |
-| Any other path under `esp32tl/` (`boards/`, `sources/`, a new module) | A new `docs/features/<feature>-user.md` / `-technical.md` (an edit to an existing one does not count), and a row in the ownership map (F12) |
+| `esp32tl/boards/` | `docs/features/board-profiles-user.md` and/or `-technical.md` (F13) |
+| Any other path under `esp32tl/` (`sources/`, a new module) | A new `docs/features/<feature>-user.md` / `-technical.md` (an edit to an existing one does not count), and a row in the ownership map (F12) |
 | `.github/workflows/` | `docs/cicd.md` (C1) |
 | `Makefile`, `.pre-commit-config.yaml`, `scripts/fetch-rom-elf`, `scripts/venv-tool`, `runner/rust-toolchain.toml` | `docs/guides/development.md` (C2 to C6) |
 | `pyproject.toml` | Dependencies and packaging: `docs/guides/development.md`; `[tool.pytest]`: `docs/guides/testing.md`; entry points: the plugin or CLI doc (C7) |

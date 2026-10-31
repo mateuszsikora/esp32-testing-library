@@ -36,6 +36,7 @@ from pytest_embedded.log import DuplicateStdoutPopen, MessageQueue, PexpectProce
 from pytest_embedded.utils import Meta, remove_asci_color_code
 from pytest_embedded_idf.app import IdfApp
 
+from esp32tl.boards import BoardProfile
 from esp32tl.link.boardlink import BoardLink, Interface
 
 # The checkout this package runs from, with an editable install (`make setup` makes one): the
@@ -56,9 +57,6 @@ MAX_SECONDS = 300
 
 # What the backend appends to the runner's log when the runner exits, with its exit code.
 END_OF_RUN = re.compile(rb"\nesp32tl: the runner exited with code (-?\d+)\n")
-
-# The board profile the harness's hello names, until board profiles come (#13).
-BOARD = "esp32-devkitc"
 
 # How long, in wall seconds, the runner has after SIGTERM to send its stats, close the link and
 # exit, before SIGKILL (protocol §9). It needs at most one emulated millisecond.
@@ -161,7 +159,9 @@ class Esp32Sim:
 
     `app` is the `IdfApp` the runner flashes. The dut's own `app` is pytest-embedded's base `App`,
     without `flash_files` or `target`: without a service, pytest-embedded builds nothing more.
-    `link` is the `BoardLink`, whose warnings, stats and error are complete once `close` returns.
+    `profile` is the board profile the test chose, whose name and chip the harness's `hello`
+    carries. `link` is the `BoardLink`, whose warnings, stats and error are complete once `close`
+    returns.
     """
 
     name = "esp32sim"
@@ -172,11 +172,13 @@ class Esp32Sim:
         app_path: str,
         msg_queue: MessageQueue,
         meta: Meta,
+        profile: BoardProfile,
         interfaces: Sequence[Interface] = (),
     ) -> None:
         self.dut = dut
+        self.profile = profile
         self.app = load_app(app_path)
-        self.link = BoardLink(BOARD, interfaces, on_error=self._end_run)
+        self.link = BoardLink(profile.name, interfaces, chip=profile.chip, on_error=self._end_run)
         runner, rom = runner_path(), rom_path()
         # Bound before the runner starts, which connects once (protocol §1).
         self._listener, self._socket = listen()

@@ -10,7 +10,8 @@ a `DuplicateStdoutPopen` on the dut's `msg_queue`.
 
 ## Data flow
 
-`Esp32Sim.__init__(dut, app_path, msg_queue, meta, interfaces=())`, in order:
+`Esp32Sim.__init__(dut, app_path, msg_queue, meta, profile, interfaces=())` keeps `profile`, the
+test's [board profile](board-profiles-technical.md), as `Esp32Sim.profile`, then, in order:
 
 1. **`load_app(app_path)`** checks that `<app_path>/build/flasher_args.json` is a file, then builds
    `IdfApp(app_path, build_dir=str(build))`. The build directory is absolute on purpose: given
@@ -20,8 +21,10 @@ a `DuplicateStdoutPopen` on the dut's `msg_queue`.
    `esp32` when neither names one, so a build with neither passes the check),
    `flash_settings["encrypt"]` (any file marked `"encrypted": "true"`), and any of `app.flash_files`
    that is not a file. The result is `Esp32Sim.app`.
-2. **`BoardLink(BOARD, interfaces, on_error=self._end_run)`** (`esp32tl/link/boardlink.py`) is
-   the harness's end of the link: `Esp32Sim.link`. It checks that no two interfaces share a pin;
+2. **`BoardLink(profile.name, interfaces, chip=profile.chip, on_error=self._end_run)`**
+   (`esp32tl/link/boardlink.py`) is the harness's end of the link: `Esp32Sim.link`. The harness's
+   `hello` names the profile and its chip; the profile's routes and lines reach the link only as
+   `interfaces`. It checks that no two interfaces share a pin;
    `watch` is their pins. The fixture passes no interfaces yet.
 3. **`runner_path()`** and **`rom_path()`** resolve the runner and the ROM ELF
    ([Configuration](#configuration)).
@@ -137,7 +140,7 @@ repository makes.
 
 | Name | What |
 |---|---|
-| `Esp32Sim(dut, app_path, msg_queue, meta, interfaces=())` | Starts the run. Attributes: `name = "esp32sim"`, `dut`, `app` (the `IdfApp`), `process` (the `RunnerPopen`), `link` (the `BoardLink`, complete once `close` returns) |
+| `Esp32Sim(dut, app_path, msg_queue, meta, profile, interfaces=())` | Starts the run. Attributes: `name = "esp32sim"`, `dut`, `profile` (the `BoardProfile`), `app` (the `IdfApp`), `process` (the `RunnerPopen`), `link` (the `BoardLink`, complete once `close` returns) |
 | `Esp32Sim.close()` | Ends the run; raises `BackendError` for a failing exit code, a killed runner or a link error |
 | `BackendError` | What keeps the backend from starting, or a failing end |
 | `listen()` | The listening socket and its path, or `BackendError` |
@@ -160,7 +163,6 @@ repository makes.
 | `ROM_ELF` | `"esp32_rev300_rom.elf"` | `rom_path()` |
 | `MAX_SECONDS` | `300`, emulated seconds, passed as `--max-seconds` | `Esp32Sim.__init__` |
 | `EOF_TAIL_BYTES` | `2048` | `end_stream_at_end_of_run` |
-| `BOARD` | `"esp32-devkitc"`, the board profile in the harness's `hello` until board profiles come (#13) | `Esp32Sim.__init__` |
 | `EXIT_SECONDS` | `5`, wall seconds: for the runner's `hello` at teardown, then for its exit after `SIGTERM`, and for each join of the link thread | `close`, `_mark_end_of_run`, `_close_link` |
 | `SUN_PATH_MAX` | `104`, the longest Unix socket path on macOS with its NUL; Linux takes 108 | `listen` |
 

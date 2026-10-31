@@ -138,9 +138,17 @@ FEATURES = [
         r"^docs/features/validation-firmware-",
         "Validation firmware or its build changed: update docs/features/validation-firmware-*.md",
     ),
+    # Numbered after F12, which was there first; listed before it, so that F12 leaves it out.
+    Rule(
+        "F13",
+        r"^esp32tl/boards/",
+        r"^docs/features/board-profiles-",
+        "Board profiles or the capability declaration changed (schema, pins, sources, taps):"
+        " update docs/features/board-profiles-*.md",
+    ),
 ]
 
-# The catch-all for the package: boards/, sources/ and any new module are owned from their first
+# The catch-all for the package: sources/ and any new module are owned from their first
 # line of code instead of matching no rule. py.typed is a marker file with no behaviour. Only a
 # new feature document satisfies it: an edit to an existing one, a blank line in cli-user.md,
 # would document nothing. Once the new feature has its row in the map, this rule no longer

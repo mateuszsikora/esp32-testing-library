@@ -350,6 +350,10 @@ Default `Protocol` configurations shipped with the engine (values fixed in miles
 
 TOML, data only. Two profiles at the start.
 
+*As built (#13): the LilyGO profile leaves out `flash_mb` and `psram_mb`, which the specification
+does not give; [`docs/features/board-profiles-technical.md`](features/board-profiles-technical.md)
+holds the schema, and [`docs/decisions/harness.md`](decisions/harness.md) why. Kept as written.*
+
 `esp32-devkitc.toml` carries every validation firmware. Its GNSS route is ours to choose because
 `nmea_reader` is this repository's firmware: UART1 on GPIO 4 (TX) and 5 (RX). GPIO 16 and 17 are
 avoided on purpose: on WROVER modules they belong to the PSRAM, and the same firmware should run
@@ -494,7 +498,8 @@ recording is changed. The repository goes public here.
   `app_sha256` against the artifact is the only guarantee that the test runs the image it
   claims to run. `hello_world` and `nmea_reader` run on a real classic devkit (console only; the
   GNSS test is skipped on `serial` with the reason "uart.gnss cannot be modelled on this
-  backend").
+  backend"; as built, `serial: uart.gnss takes no replay source on this backend, only real`, from
+  [`docs/features/board-profiles-user.md`](features/board-profiles-user.md)).
 - A comparison script lists which tests ran on both backends and whether they agreed. This is
   the spec's "every test that a real board can run, runs on one too", so it is its own milestone.
 

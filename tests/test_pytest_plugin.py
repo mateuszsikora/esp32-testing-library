@@ -146,6 +146,222 @@ def test_app_path_marker_needs_one_path(pytester: pytest.Pytester) -> None:
     )
 
 
+# SHOW_PARAMS, with a second backend that can give less than esp32sim: `serial`, which the
+# capability declaration has and esp32tl.backends.SERVICES does not yet.
+WITH_SERIAL = (
+    SHOW_PARAMS
+    + """
+from esp32tl.backends import SERVICES
+
+SERVICES["serial"] = "esp,idf"
+"""
+)
+
+
+def test_a_backend_that_cannot_give_a_source_or_tap_skips_with_the_reason(
+    pytester: pytest.Pytester,
+) -> None:
+    pytester.makeconftest(WITH_SERIAL)
+    pytester.makepyfile(
+        test_sources="""
+        import pytest
+
+        @pytest.mark.source("uart.gnss", "model")
+        def test_model(board):
+            assert board[0] == "esp32sim"
+
+        @pytest.mark.tap("console", "uart.gnss")
+        def test_tap(board):
+            assert board[0] == "esp32sim"
+
+        @pytest.mark.source("uart.gnss", "real")
+        @pytest.mark.tap("console")
+        def test_real(board):
+            pass
+        """
+    )
+    result = pytester.runpytest_subprocess("-p", "no:cacheprovider", "-ra")
+    result.assert_outcomes(passed=4, skipped=2)
+    result.stdout.fnmatch_lines_random(
+        [
+            "SKIPPED [[]1[]] test_sources.py:3: serial: uart.gnss takes no model source on this"
+            " backend, only real",
+            "SKIPPED [[]1[]] test_sources.py:7: serial: uart.gnss cannot be tapped on this backend",
+        ]
+    )
+    # Skipped before setup: pytest-embedded's fixtures are set up for test_real[serial] only, not
+    # for test_model[serial].
+    result = pytester.runpytest_subprocess(
+        "-p", "no:cacheprovider", "--setup-plan", "-k", "model or real"
+    )
+    assert result.stdout.str().count("SETUP    F embedded_services['esp,idf']") == 1
+
+
+@pytest.mark.parametrize(
+    ("marks", "message"),
+    [
+        ("@pytest.mark.board_profile", "the board_profile marker takes one name, as in *"),
+        (
+            '@pytest.mark.board_profile("esp32-wrover-kit")',
+            "no board profile named 'esp32-wrover-kit';*",
+        ),
+        (
+            '@pytest.mark.source("uart.gnss")',
+            "the source marker takes an interface and a source, as in *",
+        ),
+        (
+            '@pytest.mark.source("uart.gnss", "model")\n@pytest.mark.source("uart.gnss", "replay")',
+            "two source markers on test_one name uart.gnss",
+        ),
+        ("@pytest.mark.tap", "the tap marker takes one or more interfaces, as in *"),
+        (
+            '@pytest.mark.source("uart.modem", "model")',
+            "the board profile esp32-devkitc has no uart.modem;*",
+        ),
+        (
+            '@pytest.mark.source("uart.gnss", "recorded")',
+            "no backend takes a 'recorded' source on uart.gnss;*",
+        ),
+        (
+            '@pytest.mark.board_profile("lilygo-t-a7670g-r2")\n@pytest.mark.tap("lines.modem")',
+            "no backend can tap lines.modem",
+        ),
+    ],
+)
+def test_a_marker_no_backend_can_satisfy_is_a_collection_error(
+    pytester: pytest.Pytester, marks: str, message: str
+) -> None:
+    pytester.makeconftest(WITH_SERIAL)
+    pytester.makepyfile(test_marks=f"import pytest\n\n{marks}\ndef test_one(board):\n    pass\n")
+    result = pytester.runpytest_subprocess("-p", "no:cacheprovider")
+    assert result.ret == pytest.ExitCode.INTERRUPTED
+    result.stdout.fnmatch_lines([f"*test_marks.py::test_one: {message}"])
+    result.stdout.no_fnmatch_line("*During handling of the above exception*")
+
+
+def test_markers_on_a_class_or_a_module_count(pytester: pytest.Pytester) -> None:
+    pytester.makeconftest(WITH_SERIAL)
+    pytester.makepyfile(
+        test_levels="""
+        import pytest
+
+        pytestmark = pytest.mark.tap("uart.modem")
+
+        @pytest.mark.board_profile("lilygo-t-a7670g-r2")
+        class TestModem:
+            @pytest.mark.source("uart.modem", "real")
+            def test_real(self, board):
+                pass
+        """
+    )
+    result = pytester.runpytest_subprocess("-p", "no:cacheprovider", "-ra")
+    result.assert_outcomes(passed=1, skipped=1)
+    result.stdout.fnmatch_lines(["SKIPPED *: serial: uart.modem cannot be tapped on this backend"])
+
+
+def test_the_closest_source_marker_wins(pytester: pytest.Pytester) -> None:
+    pytester.makeconftest(WITH_SERIAL)
+    pytester.makepyfile(
+        test_override="""
+        import pytest
+
+        pytestmark = pytest.mark.source("uart.gnss", "model")
+
+        def test_module(board):
+            pass
+
+        @pytest.mark.source("uart.gnss", "real")
+        def test_own(board):
+            pass
+        """
+    )
+    result = pytester.runpytest_subprocess("-p", "no:cacheprovider", "-ra")
+    # The module's model skips test_module on serial; test_own's real runs on both.
+    result.assert_outcomes(passed=3, skipped=1)
+    result.stdout.fnmatch_lines(["SKIPPED *test_override.py: serial: uart.gnss takes no model*"])
+
+
+@pytest.mark.parametrize(
+    "marker", ['board_profile("lilygo-t-a7670g-r2")', 'source("uart.gnss", "model")']
+)
+def test_a_board_marker_in_a_pytest_param_is_refused(
+    pytester: pytest.Pytester, marker: str
+) -> None:
+    pytester.makeconftest(WITH_SERIAL)
+    pytester.makepyfile(
+        test_param=f"""
+        import pytest
+
+        @pytest.mark.parametrize("x", [1, pytest.param(2, marks=pytest.mark.{marker})])
+        def test_p(board, x):
+            pass
+        """
+    )
+    result = pytester.runpytest_subprocess("-p", "no:cacheprovider")
+    assert result.ret == pytest.ExitCode.USAGE_ERROR
+    name = marker.partition("(")[0]
+    result.stderr.fnmatch_lines(
+        [
+            f"ERROR: test_param.py::test_p[[]esp32sim-2[]]: the {name} marker reached the test"
+            " after esp32tl read it, from a pytest.param or a hook: put it on the test, its class"
+            " or its module"
+        ]
+    )
+
+
+@pytest.mark.parametrize(
+    ("items", "node", "source", "late"),
+    [
+        ("items[:1]", "item", "model", "the source marker"),
+        # An empty source is a source too, which no backend gives.
+        ("items[:1]", "item", "", "the source marker"),
+        # The class's node, whose markers are not in the class's own pytestmark.
+        ("items[:1]", "item.parent", "model", "the source marker"),
+        # The module's node, once per item: two markers on one level.
+        ("items", "item.parent.parent", "model", "a source or tap marker"),
+    ],
+)
+def test_a_board_marker_a_hook_adds_is_refused(
+    pytester: pytest.Pytester, items: str, node: str, source: str, late: str
+) -> None:
+    pytester.makeconftest(
+        WITH_SERIAL
+        + f"""
+def pytest_collection_modifyitems(items):
+    for item in {items}:
+        {node}.add_marker(pytest.mark.source("uart.gnss", "{source}"))
+"""
+    )
+    pytester.makepyfile(test_hook="class TestA:\n    def test_one(self, board):\n        pass\n")
+    result = pytester.runpytest_subprocess("-p", "no:cacheprovider")
+    assert result.ret == pytest.ExitCode.USAGE_ERROR
+    result.stderr.fnmatch_lines(
+        [f"ERROR: test_hook.py::TestA::test_one[[]esp32sim[]]: {late} reached the test after*"]
+    )
+
+
+def test_a_subclass_s_source_overrides_its_base_s(pytester: pytest.Pytester) -> None:
+    pytester.makeconftest(WITH_SERIAL)
+    pytester.makepyfile(
+        test_classes="""
+        import pytest
+
+        @pytest.mark.source("uart.gnss", "model")
+        class TestBase:
+            def test_one(self, board):
+                pass
+
+        @pytest.mark.source("uart.gnss", "real")
+        class TestSub(TestBase):
+            pass
+        """
+    )
+    result = pytester.runpytest_subprocess("-p", "no:cacheprovider", "-rs", "-v")
+    # TestBase skips on serial; TestSub asks for real, which serial gives.
+    result.assert_outcomes(passed=3, skipped=1)
+    result.stdout.fnmatch_lines(["*TestBase::test_one[[]serial[]] SKIPPED*"])
+
+
 def fake_build(app: Path, target: str = "esp32", encrypted: bool = False) -> Path:
     """An ESP-IDF build directory with what `IdfApp` reads, its images empty."""
     build = app / "build"
@@ -300,6 +516,27 @@ def test_a_runner_that_fails_to_start_is_reported_once(
             "E *esp32tl-runner: rom.elf: not an ELF file",
         ]
     )
+
+
+def test_the_board_runs_the_profile_the_test_chose(
+    fake_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_OUTPUT", "Hello world!\n")
+    monkeypatch.setenv("FAKE_EXIT", "0")
+    fake_runner.makepyfile(
+        test_profiles="""
+        import pytest
+
+        def test_default(board):
+            assert board.profile.name == "esp32-devkitc"
+
+        @pytest.mark.board_profile("lilygo-t-a7670g-r2")
+        def test_chosen(board):
+            assert board.profile.uart["modem"].baud == 115200
+        """
+    )
+    result = fake_runner.runpytest_subprocess("-p", "no:cacheprovider", "test_profiles.py")
+    result.assert_outcomes(passed=2)
 
 
 @pytest.mark.parametrize(("exit", "code"), [("1", "1"), ("KILL", "-9")])
@@ -517,7 +754,8 @@ def end(how, code, detail=None):
 
 send(p.RunnerHello(2 if mode == "version" else 1, "esp32", "emulated-fifo-write", "0" * 40))
 hello = p.decode_harness(lines.readline())
-assert hello.board == "esp32-devkitc" and hello.watch == (), hello
+board_profile = os.environ.get("FAKE_BOARD", "esp32-devkitc")
+assert (hello.board, hello.chip, hello.watch) == (board_profile, "esp32", ()), hello
 if mode == "version":
     end("protocol_error", 3, detail="version 1 from the peer, the runner speaks 2")
 if mode == "seq":
@@ -571,6 +809,25 @@ def test_the_backend_serves_the_link_and_ends_the_run_with_sigterm(
             "  unrouted_rx_bytes 72, *",
         ]
     )
+
+
+def test_the_harness_hello_names_the_profile_the_test_chose(
+    link_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_BOARD", "lilygo-t-a7670g-r2")
+    link_runner.makepyfile(
+        test_lilygo="""
+        import pytest
+
+        @pytest.mark.board_profile("lilygo-t-a7670g-r2")
+        def test_hello(console):
+            console.expect("Hello world!")
+        """
+    )
+    # The fake runner asserts the hello's board; a failed assertion ends it with an error.
+    result = link_runner.runpytest_subprocess("-p", "no:cacheprovider", "-rA", "test_lilygo.py")
+    result.assert_outcomes(passed=1)
+    result.stdout.fnmatch_lines(["board lilygo-t-a7670g-r2, watching no pins"])
 
 
 def test_a_mismatched_handshake_fails_the_test_with_both_sides_reasons(

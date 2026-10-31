@@ -11,6 +11,7 @@ templates.
 | `esp32tl` command | [user](cli-user.md) | | `esp32tl/cli.py`, `esp32tl/__init__.py` |
 | Runner: `esp32tl-runner`, esp32sim with the harness attached | [user](runner-user.md) | [technical](runner-technical.md) | `runner/src/`, `runner/Cargo.toml` |
 | Validation firmware and its container build | [user](validation-firmware-user.md) | [technical](validation-firmware-technical.md) | `firmware/` |
+| Board profiles: `esp32-devkitc`, `lilygo-t-a7670g-r2`, the capability declaration, the `board_profile`, `source` and `tap` markers | [user](board-profiles-user.md) | [technical](board-profiles-technical.md) | `esp32tl/boards/` |
 | Link protocol between the runner and the harness: the runner's `--board` and the backend's `BoardLink` | | [protocol](../protocol.md) | `esp32tl/link/`, `runner/src/protocol.rs`, `runner/src/socket_board.rs` |
 
 ## Ownership map
@@ -39,7 +40,8 @@ GitHub Action, a pre-commit hook or a Python dependency.
 | F9 | `^runner/src/protocol\.rs$` | `^docs/protocol\.md$` | Link protocol changed in runner/src/protocol.rs: update docs/protocol.md, and its version if the wire changes |
 | F10 | `^runner/src/socket_board\.rs$` | `^docs/protocol\.md$` | Link protocol changed in runner/src/socket_board.rs: update docs/protocol.md, and its version if the wire changes |
 | F11 | `^firmware/` | `^docs/features/validation-firmware-` | Validation firmware or its build changed: update docs/features/validation-firmware-*.md |
-| F12 | `^esp32tl/`, without the paths of F1 to F11 and `esp32tl/py.typed` | `^docs/features/[a-z0-9-]+\.md$`, a new file only | This path has no owning doc yet: add its feature docs, a new docs/features/<feature>-user.md or -technical.md, and add it to the ownership map (scripts/check-docs.py, docs/features/README.md, AGENTS.md) |
+| F12 | `^esp32tl/`, without the paths of F1 to F11, F13 and `esp32tl/py.typed` | `^docs/features/[a-z0-9-]+\.md$`, a new file only | This path has no owning doc yet: add its feature docs, a new docs/features/<feature>-user.md or -technical.md, and add it to the ownership map (scripts/check-docs.py, docs/features/README.md, AGENTS.md) |
+| F13 | `^esp32tl/boards/` | `^docs/features/board-profiles-` | Board profiles or the capability declaration changed (schema, pins, sources, taps): update docs/features/board-profiles-*.md |
 | C1 | `^\.github/workflows/` | `^docs/cicd\.md$` | CI workflow changed: update docs/cicd.md |
 | C2 | `^Makefile$` | `^docs/guides/development\.md$` | Makefile changed: update the make targets in docs/guides/development.md |
 | C3 | `^\.pre-commit-config\.yaml$` | `^docs/guides/development\.md$` | Pre-commit hooks changed: update docs/guides/development.md |

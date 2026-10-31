@@ -57,6 +57,8 @@ What the backend needs besides the build, the runner and the ROM ELF, is in
 
 - `board.app` is the `IdfApp` (`pytest_embedded_idf.app.IdfApp`) the runner flashes, with its
   `target`, `flash_files` and `flash_settings`.
+- `board.profile` is the board profile the test runs on: `esp32-devkitc`, unless the
+  `board_profile` marker names another ([board profiles](board-profiles-user.md#choosing-a-profile)).
 - `board.dut` is pytest-embedded's `Dut`, the same object as its `dut` fixture.
 - `dut.app`, from pytest-embedded's `dut` or `app` fixture, is pytest-embedded's base `App`,
   without `flash_files` or `target`: the backend runs no pytest-embedded service, so
@@ -73,6 +75,12 @@ parametrised.
 every backend. A name that is not a backend is a usage error (exit code 4):
 `--esp32tl-backend: invalid choice: 'qemu'`.
 
+The `source` and `tap` markers say what a test puts at the far end of its board's interfaces and
+which interfaces it taps, as in `@pytest.mark.source("uart.gnss", "replay")`. On a backend that
+cannot give them the test is skipped, with the reason, before any fixture is set up; a request
+that no backend can give is a collection error. Both are described in
+[board profiles](board-profiles-user.md#saying-what-a-test-needs).
+
 ## Options esp32tl refuses
 
 esp32tl chooses the backend, the app and the build of every test that uses `board`, so when at
@@ -83,6 +91,7 @@ one line:
 |---|---|
 | `--embedded-services`, `--app-path`, `--build-dir` | ``ERROR: --{option} is set: esp32tl chooses it for every test that uses `board` (the backend through --esp32tl-backend, the app through the app_path marker, the build in its build/ directory)`` |
 | `--count` with any value but 1 | `ERROR: --count is set: esp32tl runs one board in a test` |
+| An `app_path`, `board_profile`, `source` or `tap` marker in a `pytest.param(..., marks=...)`, or added by a hook | `ERROR: {test id}: the {marker} marker reached the test after esp32tl read it, from a pytest.param or a hook: put it on the test, its class or its module` |
 
 A test is selected when `-k` and `-m` leave it in the run: `-k test_two --app-path elsewhere`
 passes when `test_two` does not use `board`. In that case the options go to pytest-embedded as
@@ -94,6 +103,10 @@ A test that parametrises pytest-embedded's `count` itself above 1, as in
 
 ## What a failure looks like
 
+- The backend cannot give what the `source` or `tap` markers ask for: the test is skipped on it
+  ([board profiles](board-profiles-user.md#when-a-backend-cannot-give-it)). No run skips a test
+  this way yet: `esp32sim`, the only backend tests run on, gives every source and tap that any
+  backend declares, and `serial`, which would skip, is declared but not run.
 - The backend cannot start (no runner, no ROM ELF, no usable build): an error at setup, the test
   body does not run, and the message starts with `esp32sim: `. The messages are listed in
   [the esp32sim backend](esp32sim-backend-user.md#when-the-backend-cannot-start).
@@ -121,6 +134,9 @@ under `[tool.pytest.ini_options]`.
 - **`board`**: esp32tl parametrises every test that asks for a fixture of that name, matched by
   name. A project's own `board` fixture, in a session where esp32tl is installed, gets the
   backend's id (`test_mine[esp32sim]`) and the plugin's parameters as well.
+- **The `app_path`, `board_profile`, `source` and `tap` markers**: esp32tl registers them and reads
+  them on every test that uses `board`. A project's own marker of one of these names means
+  esp32tl's there.
 - **`app_path` and `embedded_services`**: esp32tl parametrises them for a test that uses `board`.
   A test that also parametrises one of them itself is a collection error:
   `duplicate parametrization of 'app_path'`.
@@ -129,5 +145,6 @@ under `[tool.pytest.ini_options]`.
 
 - [pytest plugin: how it works](pytest-plugin-technical.md)
 - [esp32sim backend](esp32sim-backend-user.md)
+- [Board profiles](board-profiles-user.md)
 - [Validation firmware](validation-firmware-user.md)
 - [Testing this repository](../guides/testing.md)

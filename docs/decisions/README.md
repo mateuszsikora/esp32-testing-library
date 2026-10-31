@@ -91,6 +91,15 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The runner and ROM paths default to the checkout, with environment overrides](harness.md#the-runner-and-rom-paths-default-to-the-checkout-with-environment-overrides) | `harness.md` | decided (#51) |
 | [A run lasts at most 300 emulated seconds](harness.md#a-run-lasts-at-most-300-emulated-seconds) | `harness.md` | decided (#51) |
 | [The negative hello_world test edits the app image in place](harness.md#the-negative-hello_world-test-edits-the-app-image-in-place) | `harness.md` | decided (#51) |
+| [Board profiles are TOML files in the package, checked key by key](harness.md#board-profiles-are-toml-files-in-the-package-checked-key-by-key) | `harness.md` | decided (#13) |
+| [The LilyGO profile leaves out what the specification does not give](harness.md#the-lilygo-profile-leaves-out-what-the-specification-does-not-give) | `harness.md` | decided (#13) |
+| [The capability declaration is a TOML file beside the profiles, per interface kind](harness.md#the-capability-declaration-is-a-toml-file-beside-the-profiles-per-interface-kind) | `harness.md` | decided (#13) |
+| [Telling on-board from off-board interfaces is postponed](harness.md#telling-on-board-from-off-board-interfaces-is-postponed) | `harness.md` | postponed (#25) |
+| [A source or tap a backend cannot give skips its parameter at collection](harness.md#a-source-or-tap-a-backend-cannot-give-skips-its-parameter-at-collection) | `harness.md` | decided (#13) |
+| [The closest source marker wins per interface](harness.md#the-closest-source-marker-wins-per-interface) | `harness.md` | decided (#13) |
+| [Board markers that reach a test after collection read it are refused](harness.md#board-markers-that-reach-a-test-after-collection-read-it-are-refused) | `harness.md` | decided (#13) |
+| [A profile reserves the console's UART and pins, not the flash pins](harness.md#a-profile-reserves-the-consoles-uart-and-pins-not-the-flash-pins) | `harness.md` | decided (#13) |
+| [A request no backend can give is a collection error](harness.md#a-request-no-backend-can-give-is-a-collection-error) | `harness.md` | decided (#13) |
 | [Console.write is postponed until the runner reads input](harness.md#consolewrite-is-postponed-until-the-runner-reads-input) | `harness.md` | postponed (#51) |
 | [The serial backend is postponed to M4](harness.md#the-serial-backend-is-postponed-to-m4) | `harness.md` | postponed (#25) |
 | [Prebuilt runner binaries are postponed to M10](harness.md#prebuilt-runner-binaries-are-postponed-to-m10) | `harness.md` | postponed (#40) |
