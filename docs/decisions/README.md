@@ -74,7 +74,13 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [pytest-embedded's app and service options are refused for board tests](harness.md#pytest-embeddeds-app-and-service-options-are-refused-for-board-tests) | `harness.md` | decided (#51) |
 | [The end of the run is a line appended to the runner's log](harness.md#the-end-of-the-run-is-a-line-appended-to-the-runners-log) | `harness.md` | decided (#51) |
 | [Teardown recognises the end of the run by RunnerExited in the exception chain](harness.md#teardown-recognises-the-end-of-the-run-by-runnerexited-in-the-exception-chain) | `harness.md` | decided (#51) |
-| [Teardown passes only the signals it sent itself](harness.md#teardown-passes-only-the-signals-it-sent-itself) | `harness.md` | decided (#51) |
+| [Teardown passes only the signals it sent itself](harness.md#teardown-passes-only-the-signals-it-sent-itself) | `harness.md` | superseded (#12) |
+| [Teardown waits for the runner's hello, sends one SIGTERM and passes exit code 0 only](harness.md#teardown-waits-for-the-runners-hello-sends-one-sigterm-and-passes-exit-code-0-only) | `harness.md` | decided (#12) |
+| [A link error ends the run with SIGTERM at once](harness.md#a-link-error-ends-the-run-with-sigterm-at-once) | `harness.md` | decided (#12) |
+| [The EOF takes the link's error from BoardLink, not from the log](harness.md#the-eof-takes-the-links-error-from-boardlink-not-from-the-log) | `harness.md` | decided (#12) |
+| [BoardLink checks every input through the codec before it sends it](harness.md#boardlink-checks-every-input-through-the-codec-before-it-sends-it) | `harness.md` | decided (#12) |
+| [uart_tx reaches the interfaces chunk by chunk, with each chunk's time](harness.md#uart_tx-reaches-the-interfaces-chunk-by-chunk-with-each-chunks-time) | `harness.md` | decided (#12) |
+| [The link's report is a report section and a JSON user property](harness.md#the-links-report-is-a-report-section-and-a-json-user-property) | `harness.md` | decided (#12) |
 | [The build directory is passed to IdfApp as an absolute path](harness.md#the-build-directory-is-passed-to-idfapp-as-an-absolute-path) | `harness.md` | decided (#51) |
 | [The runner and ROM paths default to the checkout, with environment overrides](harness.md#the-runner-and-rom-paths-default-to-the-checkout-with-environment-overrides) | `harness.md` | decided (#51) |
 | [A run lasts at most 300 emulated seconds](harness.md#a-run-lasts-at-most-300-emulated-seconds) | `harness.md` | decided (#51) |

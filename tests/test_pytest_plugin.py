@@ -9,10 +9,12 @@ import hashlib
 import json
 import re
 import shutil
+import sys
 import time
 import warnings
 from pathlib import Path
 from typing import cast
+from xml.etree import ElementTree
 
 import pytest
 from esptool.bin_image import LoadFirmwareImage
@@ -170,7 +172,9 @@ def fake_build(app: Path, target: str = "esp32", encrypted: bool = False) -> Pat
 def test_runner_command_flashes_every_file_at_its_offset(tmp_path: Path) -> None:
     build = fake_build(tmp_path)
     app = esp32sim.load_app(str(tmp_path))
-    command = esp32sim.runner_command(Path("/r/runner"), Path("/r/rom.elf"), app, 300)
+    command = esp32sim.runner_command(
+        Path("/r/runner"), Path("/r/rom.elf"), app, 300, Path("/tmp/l/link.sock")
+    )
     assert command == [
         "/r/runner",
         "--chip",
@@ -179,6 +183,8 @@ def test_runner_command_flashes_every_file_at_its_offset(tmp_path: Path) -> None
         "/r/rom.elf",
         "--max-seconds",
         "300",
+        "--board",
+        "socket:/tmp/l/link.sock",
         "--flash-at",
         f"0x1000={build.resolve()}/bootloader/bootloader.bin",
         "--flash-at",
@@ -352,8 +358,13 @@ def test_the_eof_carries_the_runner_s_last_whole_lines_without_colour() -> None:
     assert len(tail) < esp32sim.EOF_TAIL_BYTES
 
 
-def eof_of_stream(output: bytes) -> str:
-    """The message of the EOF the stream raises after `output`, read in 100-byte chunks."""
+# The end-of-run line the backend appends, with code 0.
+END = b"\nesp32tl: the runner exited with code 0\n"
+
+
+def eof_of_stream(output: bytes, link_error: str | None = None) -> str:
+    """The message of the EOF the stream raises after `output`, read in 100-byte chunks, with
+    `link_error` what the harness found wrong."""
     chunks = [output[at : at + 100] for at in range(0, len(output), 100)]
 
     class Stream:
@@ -361,7 +372,7 @@ def eof_of_stream(output: bytes) -> str:
             return chunks.pop(0)
 
     stream = Stream()
-    esp32sim.end_stream_at_end_of_run(cast(PexpectProcess, stream))
+    esp32sim.end_stream_at_end_of_run(cast(PexpectProcess, stream), lambda: link_error)
     for _ in range(len(chunks)):
         stream.read_nonblocking()
     with pytest.raises(RunnerExited) as raised:
@@ -376,6 +387,17 @@ def test_the_eof_keeps_a_long_last_line(ending: bytes) -> None:
     head, tail = message.split("\n", 1)
     assert head == "the runner exited with code 1; its last output:"
     assert tail.strip().strip("y") == "" and len(tail) > 1000
+
+
+def test_the_eof_names_the_link_s_error_from_the_link_not_from_the_log() -> None:
+    # A guest line that imitates the backend's, and the backend's own with its leading newline cut
+    # off by the 2 KiB tail.
+    output = b"esp32tl: the link failed: imitated\n" + b"y" * 3000
+    output += b"\nesp32tl: the link failed: real\n\nesp32tl: the runner exited with code 0\n"
+    head = eof_of_stream(output, "real").split("\n", 1)[0]
+    assert head == "the link failed: real; the runner exited with code 0; its last output:"
+    head = eof_of_stream(b"esp32tl: the link failed: imitated\n" + END).split("\n", 1)[0]
+    assert head == "the runner exited with code 0; its last output:"
 
 
 def test_ended_on_runner_exit_stops_at_a_cycle() -> None:
@@ -448,3 +470,213 @@ def test_hello_world_fails_on_an_image_that_prints_something_else(
     result.assert_outcomes(failed=1)
     # The image ran, and printed what it was changed to print.
     result.stdout.fnmatch_lines(["*Hello WORLD!*"])
+
+
+# A runner that speaks the link protocol, as the backend sees one, without an emulator: it
+# connects once, shakes hands, takes turn 0, prints the console line and sends a warning. Then it
+# waits for SIGTERM and ends the run with its stats, exiting 0, as protocol §9 has it. $FAKE_LINK
+# makes it misbehave: `version` sends a hello of version 2, and exits 3 once it has the harness's
+# answer; `seq` sends an event out of sequence and ends on the harness's stop; `late` sends one
+# after turn 0, when no turn is due before --max-seconds; `deaf` ignores SIGTERM; `linger` leaves
+# a child holding the link open after it exits; `slow` loads for half a second before it connects,
+# and dies of SIGTERM until then, as the real runner does.
+LINK_RUNNER = """#!{python}
+import os
+import signal
+import socket
+import subprocess
+import sys
+import time
+
+from esp32tl.link import protocol as p
+
+if os.environ.get("FAKE_LINK") == "slow":
+    time.sleep(0.5)
+signal.pthread_sigmask(signal.SIG_BLOCK, {{signal.SIGTERM}})
+args = sys.argv[1:]
+board = args[args.index("--board") + 1]
+conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+conn.connect(board.removeprefix("socket:"))
+lines = conn.makefile("rb")
+mode = os.environ.get("FAKE_LINK", "")
+
+
+def send(*messages):
+    conn.sendall(b"".join(p.encode(message) for message in messages))
+
+
+def end(how, code, detail=None):
+    send(p.Stats(1000, how, 0, 1, (), 72, 0, 0, 0, detail=detail))
+    if mode == "linger":
+        os.set_inheritable(conn.fileno(), True)
+        subprocess.Popen(["sleep", "3"], close_fds=False)
+    conn.close()
+    print(f"esp32tl-runner: the run ended: {{how}}", file=sys.stderr)
+    sys.exit(code)
+
+
+send(p.RunnerHello(2 if mode == "version" else 1, "esp32", "emulated-fifo-write", "0" * 40))
+hello = p.decode_harness(lines.readline())
+assert hello.board == "esp32-devkitc" and hello.watch == (), hello
+if mode == "version":
+    end("protocol_error", 3, detail="version 1 from the peer, the runner speaks 2")
+if mode == "seq":
+    send(p.UartTx(2, 0, 1, (4,), 9600, b"x"))
+send(p.Sync(0))
+turn = p.decode_harness(lines.readline())
+print("Hello world!", flush=True)
+if turn == p.Stop():
+    end("stop", 0)
+assert turn == p.Wait(1 if mode == "seq" else 0, None, None), turn
+send(p.Warn(1000, "unrouted_rx", "uart_rx on GPIO 5: 72 bytes dropped", pin=5, nbytes=72))
+if mode == "late":
+    send(p.Reset(5, 2000, 12))
+if mode == "deaf":
+    time.sleep(60)
+signal.sigwait({{signal.SIGTERM}})
+end("signal", 0)
+"""
+
+
+@pytest.fixture
+def link_runner(fake_runner: pytest.Pytester) -> pytest.Pytester:
+    """`fake_runner`'s suite, run by `LINK_RUNNER`."""
+    runner = fake_runner.path / "runner"
+    runner.write_text(LINK_RUNNER.format(python=sys.executable))
+    return fake_runner
+
+
+def test_the_backend_serves_the_link_and_ends_the_run_with_sigterm(
+    link_runner: pytest.Pytester,
+) -> None:
+    result = link_runner.runpytest_subprocess(
+        "-p", "no:cacheprovider", "-rA", "--junitxml", "report.xml"
+    )
+    result.assert_outcomes(passed=1)
+    # The user property is JSON, for code to read.
+    (prop,) = ElementTree.parse(link_runner.path / "report.xml").iter("property")
+    assert prop.get("name") == "esp32sim_link"
+    data = json.loads(prop.get("value", ""))
+    assert data["stats"]["end"] == "signal"
+    assert data["warnings"][0]["bytes"] == 72
+    # The warning and the stats are in the report.
+    result.stdout.fnmatch_lines(
+        [
+            "*Captured esp32sim link teardown*",
+            "board esp32-devkitc, watching no pins",
+            "runner: protocol version 1, esp32sim 0000*, clock emulated-fifo-write; 1 turn taken*",
+            "warnings (1):",
+            "  0.000001000 s  unrouted_rx: uart_rx on GPIO 5: 72 bytes dropped",
+            "stats: the run ended at 0.000001000 s (signal); 1 turn, 0 resets",
+            "  unrouted_rx_bytes 72, *",
+        ]
+    )
+
+
+def test_a_mismatched_handshake_fails_the_test_with_both_sides_reasons(
+    link_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_LINK", "version")
+    result = link_runner.runpytest_subprocess("-p", "no:cacheprovider")
+    result.assert_outcomes(failed=1)
+    # The runner had the harness's hello: it ended the run with its stats, which the harness read.
+    result.stdout.fnmatch_lines(
+        [
+            "E *EOF: the link failed: the runner speaks link protocol version 2, the harness 1;"
+            " the runner exited with code 3; its last output:",
+            "E *esp32tl-runner: the run ended: protocol_error",
+            "E *esp32tl: the link failed: the runner speaks link protocol version 2, the harness 1",
+            "*stats: the run ended at 0.000001000 s (protocol_error, version 1 from the peer*",
+        ]
+    )
+
+
+def test_a_link_the_harness_finds_wrong_fails_the_test_after_its_expects(
+    link_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_LINK", "seq")
+    result = link_runner.runpytest_subprocess("-p", "no:cacheprovider")
+    # The harness stopped the run at its turn; the runner exited 0, and the test fails anyway.
+    result.assert_outcomes(passed=1, errors=1)
+    result.stdout.fnmatch_lines(
+        [
+            "*esp32sim: the link failed: the runner sent uart_tx with seq 2 after 0;"
+            " its output is in *",
+        ]
+    )
+
+
+def test_a_runner_that_ignores_sigterm_is_killed_and_fails_the_test(
+    link_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_LINK", "deaf")
+    link_runner.makeconftest(
+        """
+        from esp32tl.backends import esp32sim
+
+        esp32sim.EXIT_SECONDS = 0.5
+        """
+    )
+    result = link_runner.runpytest_subprocess("-p", "no:cacheprovider", "-rA")
+    result.assert_outcomes(passed=1, errors=1)
+    result.stdout.fnmatch_lines(
+        [
+            "*esp32sim: the runner did not exit within 0.5 s of SIGTERM, and was killed;*",
+            "*no stats: the link ended without them (the runner was killed, or died)*",
+        ]
+    )
+
+
+def test_a_link_error_ends_the_run_at_once_for_a_waiting_expect(
+    link_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_LINK", "late")
+    link_runner.makepyfile(
+        test_fake="""
+        def test_hello(console):
+            console.expect("Hello world!")
+            console.expect("Goodbye")
+        """
+    )
+    started = time.monotonic()
+    result = link_runner.runpytest_subprocess("-p", "no:cacheprovider")
+    # The runner takes no turn after the bad event: the harness ends the run with SIGTERM rather
+    # than leave the expect to its 30 s timeout.
+    assert time.monotonic() - started < 15
+    result.assert_outcomes(failed=1)
+    result.stdout.fnmatch_lines(
+        [
+            "E *EOF: the link failed: the runner sent reset with seq 5 after 0;"
+            " the runner exited with code 0; its last output:",
+        ]
+    )
+
+
+def test_a_link_left_open_after_the_runner_exits_is_shut_down(
+    link_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_LINK", "linger")
+    link_runner.makeconftest(
+        """
+        from esp32tl.backends import esp32sim
+
+        esp32sim.EXIT_SECONDS = 0.5
+        """
+    )
+    started = time.monotonic()
+    result = link_runner.runpytest_subprocess("-p", "no:cacheprovider", "-rA")
+    # A child of the runner holds the link for 3 s; the teardown does not wait for it.
+    assert time.monotonic() - started < 3
+    result.assert_outcomes(passed=1)
+    result.stdout.fnmatch_lines(["stats: the run ended at 0.000001000 s (signal); *"])
+
+
+def test_a_test_that_ends_while_the_runner_loads_waits_for_its_hello(
+    link_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_LINK", "slow")
+    link_runner.makepyfile(test_fake="def test_nothing(board): pass")
+    result = link_runner.runpytest_subprocess("-p", "no:cacheprovider", "-rA")
+    # SIGTERM before the hello would have killed it, with -15.
+    result.assert_outcomes(passed=1)
+    result.stdout.fnmatch_lines(["stats: the run ended at 0.000001000 s (signal); *"])

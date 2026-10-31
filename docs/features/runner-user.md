@@ -4,8 +4,8 @@
 emulated clock, and prints the guest's UART0 console on stdout. With `--board`, it connects to a
 peer, the harness or any program that speaks [the link protocol](../protocol.md), and wires the
 chip's pins to it: the peer sees what the guest sends on its UARTs and sends bytes back into them.
-The `esp32sim` backend of the pytest plugin starts it, without `--board` for now, for every test
-that uses `board` or `console`. This document is for running it by hand, to watch an image boot,
+The `esp32sim` backend of the pytest plugin starts it, with `--board socket:PATH` and itself as
+the peer, for every test that uses `board` or `console`. This document is for running it by hand, to watch an image boot,
 to drive it from a peer of your own, or to see why a run ended the way it did.
 
 ## Build it
@@ -164,10 +164,7 @@ message for every end but a vanished peer and a second signal
 Without `--board`, the runner handles no signal. `SIGINT` (Ctrl-C) or `SIGTERM` ends it at once,
 wherever the run is, without the stop line and with none of the exit codes above: the process dies
 of the signal, so a shell reports 128 plus its number (130 for `SIGINT`, 143 for `SIGTERM`) and
-Python's `Popen` its negative. A test run ends this way unless the test waited for the end of the
-run: the backend starts the runner with `--max-seconds 300`, and at teardown sends one still
-running `SIGTERM`, then `SIGKILL` after 5 s
-([esp32sim backend](esp32sim-backend-user.md#when-the-runner-exits-with-an-error)).
+Python's `Popen` its negative.
 
 With `--board`, once the runner has connected, `SIGTERM` or `SIGINT` ends the run at the end of
 the slice in progress, at most one emulated millisecond, or at once if the runner is waiting for
@@ -175,7 +172,10 @@ the peer. The peer gets the events not yet sent and `stats` with `end: signal`, 
 exits 0. Those last messages get two wall seconds; a peer that does not read them by then is given
 up on, and the exit code stays 0. A second `SIGTERM` or `SIGINT` ends the process at once, with
 128 plus the signal's number. Before the connection is made, a signal ends the process as it does
-without `--board`.
+without `--board`. A test run ends this way unless the test waited for the end of the run: the
+backend starts the runner with `--max-seconds 300` and, at teardown, once the runner has said
+hello, sends one still running `SIGTERM`, then `SIGKILL` 5 s later
+([esp32sim backend](esp32sim-backend-user.md#how-the-run-ends)).
 
 ## See also
 

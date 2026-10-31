@@ -554,17 +554,20 @@ teardown ends the runner. That end belongs to the `esp32sim` backend, not to pyt
 the runner is the backend's process, pytest-embedded's base `Dut` does not know it, and
 pytest-embedded's own teardown calls `terminate()` and `kill()` back to back
 (`pytest_embedded/plugin.py:505-506`), which would leave no time for `stats`. The backend's
-teardown, in the `board` fixture, runs before the `dut` it depends on is torn down. It sends
-`SIGTERM` (`Esp32Sim.close` in `esp32tl/backends/esp32sim.py` already does), reads the socket to
-end of file within a wall-time limit (#12), waits for the process, and sends `SIGKILL` only when
-the runner has not exited within five wall seconds. It gets `stats` and the last warnings within
+teardown, in the `board` fixture, runs before the `dut` it depends on is torn down. It
+(`Esp32Sim.close` in `esp32tl/backends/esp32sim.py`) sends `SIGTERM`, reads the socket to end of
+file, waits for the process, and sends `SIGKILL` only when the runner has not exited within five
+wall seconds of the signal. It gets `stats` and the last warnings within
 one emulated millisecond. The runner then exits 0 rather than dying of the signal. The signal
 changes only where the run ends, not what happened before it, so determinism is unaffected.
 `SIGKILL` leaves no `stats`. Once the run ends, a signal no longer interrupts the last writes;
 they get two wall seconds, then the runner gives up on a peer that does not read them. A second
 `SIGTERM` or `SIGINT` ends the process at once, with exit code 128 plus the signal's number, as a
 shell would report it. Before the connection is made a signal ends the process as it would any
-other.
+other. The backend also sends `SIGTERM` as soon as `BoardLink` finds the run
+wrong (a message out of protocol, an interface that broke its promises), rather than wait for the
+runner's next turn to send `stop`, which may come only at `--max-seconds`. A handshake mismatch is
+the exception: the runner finds it in the harness's `hello` and ends the run itself, with code 3.
 
 `--peer-timeout SECONDS` bounds, in wall time, how long the runner waits for the peer's turn to
 end, and how long a write may make no progress because the peer does not read (default 60; `0`

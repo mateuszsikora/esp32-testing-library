@@ -32,8 +32,8 @@ def socket_path() -> Iterator[Path]:
 
 def command(path: Path, *options: str, max_seconds: float = 0.5) -> list[str]:
     app = esp32sim.load_app(str(FIRMWARE / "hello_world"))
-    base = esp32sim.runner_command(esp32sim.runner_path(), esp32sim.rom_path(), app, max_seconds)
-    return [*base, "--board", f"socket:{path}", *options]
+    runner, rom = esp32sim.runner_path(), esp32sim.rom_path()
+    return [*esp32sim.runner_command(runner, rom, app, max_seconds, path), *options]
 
 
 class Peer:
