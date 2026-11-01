@@ -406,8 +406,9 @@ instance, is not a `BackendError` and fails the setup with its own traceback.
   `test_a_runner_that_ignores_stop_and_sigterm_is_killed_and_fails_the_test` (`EXIT_SECONDS` set
   to 0.5), `test_a_hung_run_is_ended_by_the_test_s_timeout` (`--timeout 2`, and the teardown's
   `SIGTERM`), `test_a_link_left_open_after_the_runner_exits_is_shut_down` (a child holds the
-  socket; under 3 s), `test_a_test_that_ends_while_the_runner_loads_waits_for_its_hello` (it
-  connects after 0.5 s and dies of `SIGTERM` until then) and
+  socket for 30 s; the whole run under 15 s, the child still there, then killed),
+  `test_a_test_that_ends_while_the_runner_loads_waits_for_its_hello` (it connects after 0.5 s and
+  dies of `SIGTERM` until then) and
   `test_a_held_run_whose_runner_is_gone_releases_the_link` (exit 4 in a held turn).
 
 `tests/test_clock.py` tests `HeldClock`, `nanoseconds` and `seconds` against a runner thread that
