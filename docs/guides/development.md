@@ -26,9 +26,9 @@ That one command needs:
   mask ROM ELF ([The ROM ELF](#the-rom-elf)), with `sha256sum` or `shasum` to check it and `curl`
   and `tar` to download it.
 - Docker, for the first `make test`. The tests read the validation firmware, which `make test`
-  builds when it is missing: it pulls the ESP-IDF image and builds `hello_world` and
-  `nmea_reader`, a few minutes. What the firmware build expects of Docker, and how to build
-  without it, is in [validation-firmware-user.md](../features/validation-firmware-user.md).
+  builds when it is missing: it pulls the ESP-IDF image and builds `hello_world`, `nmea_reader` and
+  `gpio_echo`, a few minutes. What the firmware build expects of Docker, and how to build without
+  it, is in [validation-firmware-user.md](../features/validation-firmware-user.md).
 
 After `make setup` and `make firmware`, `.venv/bin/pytest` runs the tests directly.
 
@@ -41,7 +41,7 @@ After `make setup` and `make firmware`, `.venv/bin/pytest` runs the tests direct
 | `make rom-elf` | Runs `scripts/fetch-rom-elf`: puts `esp32_rev300_rom.elf` of esp-rom-elfs `20241011` at `.cache/esp-rom-elfs/20241011/`, checked by SHA-256 |
 | `make test-runner` | The runner's Rust unit tests, `cargo test --locked`, in `RUNNER_PROFILE` like `build-runner`; `RUNNER_PROFILE=dev` skips the fat-LTO link while iterating |
 | `make firmware` | Builds every validation image in the pinned ESP-IDF container, into `firmware/<image>/build/` |
-| `make test` | Runs `make setup` and `make test-runner`, builds the validation images that are missing (`FIRMWARE_IMAGES`: `hello_world` and `nmea_reader`), then runs `.venv/bin/pytest` |
+| `make test` | Runs `make setup` and `make test-runner`, builds the validation images that are missing (`FIRMWARE_IMAGES`: `hello_world`, `nmea_reader` and `gpio_echo`), then runs `.venv/bin/pytest` |
 | `make lint` | `ruff check`, `ruff format --check` and `mypy`; `cargo fmt --check` and `cargo clippy --locked --all-targets -- -D warnings` on the runner |
 | `make hooks` | Installs the pre-commit hooks ([Pre-commit hooks](#pre-commit-hooks)) |
 | `make docs-check` | Checks that the changes on this branch update the documentation they need ([documentation.md](documentation.md#the-check)); `BASE=REF` (passed as `--base REF`) compares with the merge base with `REF` rather than with the default branch |
@@ -179,7 +179,7 @@ pre-commit itself. If that worktree is removed, run `make hooks` again from anot
 |---|---|
 | `esp32tl/` | The Python package and its pytest plugin |
 | `runner/` | `esp32tl-runner`, the Rust crate that runs esp32sim with the harness attached |
-| `firmware/` | `build.sh`, which builds the validation firmware, and `nmea_reader/`, the one image kept here; each image's build lands in `firmware/<image>/build/` |
+| `firmware/` | `build.sh`, which builds the validation firmware, and `nmea_reader/` and `gpio_echo/`, the images kept here; each image's build lands in `firmware/<image>/build/` |
 | `recordings/` | Committed recordings for the tests: `gnss-generated-1.jsonl` and `gnss-generated-2.jsonl`, which `scripts/generate-gnss-recordings.py` writes ([validation-firmware-user.md](../features/validation-firmware-user.md#the-gnss-recordings)) |
 | `tests/` | The pytest suite ([testing.md](testing.md)) |
 | `tools/` | Stage 0 measurement firmware (`cryptobench`, `deepsleep`, ESP-IDF projects) and `benchtime.py`, which times their runs ([stage0-findings.md](../stage0-findings.md#reproducing)) |

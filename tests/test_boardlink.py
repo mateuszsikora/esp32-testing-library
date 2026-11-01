@@ -89,23 +89,31 @@ class Peer(Interface):
         self.drives.append((t, list(changes), enabled))
 
 
-class Scenario:
-    def __init__(self, inputs: Iterable[Input], pins: Iterable[int] = (33,)) -> None:
-        self.inputs = sorted(inputs, key=lambda message: message.t)
-        self.pins = frozenset(pins)
+class Driver(Interface):
+    """An interface on GPIO lines, with no UART, that sends `scheduled`, each input in the turn
+    at its time."""
 
-    def due(self, now: int) -> Iterable[Input]:
-        due = [message for message in self.inputs if message.t <= now]
-        self.inputs = self.inputs[len(due) :]
+    def __init__(self, scheduled: Iterable[Input] = (), pins: Iterable[int] = (33,)) -> None:
+        super().__init__("lines", None)
+        self.scheduled = sorted(scheduled, key=lambda message: message.t)
+        self._pins = frozenset(pins)
+
+    @property
+    def pins(self) -> frozenset[int]:
+        return self._pins
+
+    def inputs(self, now: int) -> Iterable[Input]:
+        due = [message for message in self.scheduled if message.t <= now]
+        self.scheduled = self.scheduled[len(due) :]
         return due
 
     def quiet_until(self) -> int | None:
-        return self.inputs[0].t if self.inputs else None
+        return self.scheduled[0].t if self.scheduled else None
 
 
-def started(*interfaces: Interface, timeline: Scenario | None = None) -> BoardLink:
+def started(*interfaces: Interface) -> BoardLink:
     """A link past the handshake and turn 0."""
-    link = BoardLink("esp32-devkitc", interfaces, timeline=timeline)
+    link = BoardLink("esp32-devkitc", interfaces)
     link.receive(HELLO)
     link.receive(Sync(0))
     return link
@@ -129,9 +137,14 @@ def test_the_handshake_names_the_board_and_watches_the_interfaces_pins() -> None
     assert link.error is None
 
 
-def test_the_scenario_s_pins_are_watched_too() -> None:
-    link = BoardLink("esp32-devkitc", [Peer()], timeline=Scenario([], pins=[33, 5]))
-    assert link.receive(HELLO) == [HarnessHello(1, "esp32", "esp32-devkitc", (4, 5, 33))]
+def test_the_pins_of_an_interface_without_a_uart_are_watched_too() -> None:
+    link = BoardLink("esp32-devkitc", [Peer(), Driver(pins=[33, 12])])
+    assert link.receive(HELLO) == [HarnessHello(1, "esp32", "esp32-devkitc", (4, 5, 12, 33))]
+
+
+def test_a_uart_and_a_line_on_one_pin_are_refused() -> None:
+    with pytest.raises(ValueError, match="GPIO 5 is on gnss and lines"):
+        BoardLink("esp32-devkitc", [Peer(), Driver(pins=[5])])
 
 
 def test_two_interfaces_on_one_pin_are_refused() -> None:
@@ -287,14 +300,31 @@ def test_quiet_until_and_latency_are_the_minimum_none_being_no_bound() -> None:
         Peer("a", Wire(4, 5, 9600), latency=None, schedule=[(300, b"x")]),
         Peer("b", Wire(12, 13, 9600), latency=7),
         Peer("c", Wire(14, 15, 9600), latency=3, schedule=[(200, b"y")]),
-        timeline=Scenario([GpioIn(250, ((33, 1),))]),
+        Driver([GpioIn(250, ((33, 1),))]),
     )
     assert link.receive(Sync(100)) == [Wait(0, 200, 3)]
 
 
-def test_the_scenario_s_inputs_go_out_in_their_turn() -> None:
-    link = started(timeline=Scenario([GpioIn(250, ((33, 1),)), GpioIn(400, ((33, 0),))]))
-    assert link.receive(Sync(250)) == [GpioIn(250, ((33, 1),)), Wait(0, 400, None)]
+def test_gpio_inputs_go_out_in_their_turn_after_the_bytes() -> None:
+    link = started(
+        Peer(schedule=[(250, b"$")]),
+        Driver([GpioIn(250, ((33, 1),)), Release(250, (33,)), GpioIn(400, ((33, 0),))]),
+    )
+    assert link.receive(Sync(250)) == [
+        UartRx(250, 5, 9600, b"$"),
+        GpioIn(250, ((33, 1),)),
+        Release(250, (33,)),
+        Wait(0, 400, None),
+    ]
+
+
+def test_an_interface_without_a_uart_hears_no_bytes_and_no_routes() -> None:
+    driver = Driver()
+    link = started(Peer(), driver)
+    assert feed(link, UartCfg(1, 10, 1, (4,), 5, 9600), tx(2, 20, b"x"), Sync(30)) == [
+        Wait(2, None, None)
+    ]
+    assert link.error is None
 
 
 def test_a_quiet_until_not_after_the_turn_is_an_error() -> None:
@@ -403,7 +433,7 @@ def test_warnings_and_stats_go_into_the_report() -> None:
             " at 9600 baud: 2 bytes dropped as frame errors (frm_err)",
         ),
         (
-            # Bytes the scenario sent, on a pin of its own.
+            # Bytes on a pin of an interface without a UART.
             Warn(MS, "frm_err", "baud", port=2, pin=33, baud=9600, nbytes=1),
             "bytes on GPIO 33, and the firmware's UART2 receives there at 9600 baud:"
             " 1 byte dropped as frame errors (frm_err)",
@@ -413,9 +443,7 @@ def test_warnings_and_stats_go_into_the_report() -> None:
 def test_a_frame_error_fails_the_run_at_once(warning: Warn, error: str) -> None:
     errors: list[str] = []
     # The modem's wire has no RX pin: a warning without a pin must not name it.
-    link = started(
-        Peer(), Peer("modem", Wire(tx=26, rx=None, baud=115200)), timeline=Scenario([], pins=[33])
-    )
+    link = started(Peer(), Peer("modem", Wire(tx=26, rx=None, baud=115200)), Driver(pins=[33]))
     link.on_error = errors.append
     assert link.receive(warning) == []
     # Kept for the report as any warning, and the run ended without waiting for its next turn.
@@ -596,29 +624,34 @@ def test_an_interface_without_rx_may_send_nothing() -> None:
     [
         (
             Adc(100, 33, float("nan")),
-            "the scenario sent a adc the link cannot carry: Out of range float values",
+            "lines sent a adc the link cannot carry: Out of range float values",
         ),
         (
             GpioIn(100, ((33, 2),)),
-            "the scenario sent a gpio_in the link cannot carry: gpio_in: levels holds level 2",
+            "lines sent a gpio_in the link cannot carry: gpio_in: levels holds level 2",
         ),
         (
             GpioIn(100, ((34, 1),)),
-            "the scenario sent gpio_in on GPIO 34, which the link does not watch",
+            "lines sent gpio_in on GPIO 34, which the link does not watch",
+        ),
+        (
+            GpioIn(100, ((33, 1), (5, 0))),
+            "lines sent gpio_in on GPIO 5, which another interface is wired to",
         ),
         (
             Release(90, (33,)),
-            "the scenario sent release stamped 90 ns in the turn at 100 ns: it held it back past"
+            "lines sent release stamped 90 ns in the turn at 100 ns: it held it back past"
             " its quiet_until",
         ),
-        (Sync(100), "the scenario sent Sync(t=100), which is not an input"),
+        (Sync(100), "lines sent Sync(t=100), which is not an input"),
     ],
 )
-def test_a_scenario_input_the_runner_would_refuse_is_refused_naming_the_scenario(
+def test_an_input_the_runner_would_refuse_is_refused_naming_its_interface(
     scheduled: Input, error: str
 ) -> None:
-    link = started(timeline=Scenario([]))
-    link.timeline.inputs = [scheduled]  # type: ignore[union-attr]
+    driver = Driver()
+    link = started(Peer(), driver)
+    driver.scheduled = [scheduled]
     assert link.receive(Sync(100)) == [Stop()]
     assert link.error is not None and link.error.startswith(error), link.error
 
@@ -670,9 +703,9 @@ def test_uart_cfg_takes_every_port_on_the_wire_into_account() -> None:
     assert gnss.routes == [(10, 9600, True, False), (20, 9600, True, True), (30, 9600, False, True)]
 
 
-def test_scenario_pins_that_are_not_gpio_numbers_are_refused() -> None:
-    with pytest.raises(ValueError, match="the scenario's pins hold 'RI', not a GPIO number"):
-        BoardLink("esp32-devkitc", timeline=Scenario([], pins=["RI"]))  # type: ignore[list-item]
+def test_pins_that_are_not_gpio_numbers_are_refused() -> None:
+    with pytest.raises(ValueError, match="the pins of lines hold 'RI', not a GPIO number"):
+        BoardLink("esp32-devkitc", [Driver(pins=["RI"])])  # type: ignore[list-item]
 
 
 class Holder:

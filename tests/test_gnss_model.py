@@ -407,3 +407,21 @@ def test_each_model_call_is_a_step_of_the_test_in_the_run_s_log() -> None:
         "uart.gnss.move(heading=NORTH, speed=m_s(10))",
     ]
     assert steps[1].split()[:2] == ["10.000000000", "s"]
+
+
+def test_a_tap_on_a_modelled_route_records_its_epochs_as_model_gnss(tmp_path: Path) -> None:
+    route = gnss_route([0])
+    assert route.recorded_source() == "none"
+    tap = route.tap(tmp_path / "tap.jsonl")
+    route.fix(at=WARSAW)
+    route.poll(S)
+    assert route.recorded_source() == "model:gnss"
+    made = tap.recording(
+        board="esp32-devkitc", source=route.recorded_source(), clock=recording.EMULATED
+    )
+    assert made.header.source == "model:gnss"
+    ((t, direction, data),) = tap.events
+    assert (t, direction) == (S, "in") and data.startswith(b"$GPRMC,120001.00,A,")
+    replayed = gnss_route([0])
+    replayed.replay("gnss-generated-1.jsonl")
+    assert replayed.recorded_source() == "replay"

@@ -2,7 +2,8 @@
 
 esp32tl ships a pytest plugin that runs an ESP-IDF firmware image, lets a test read what the
 firmware prints, puts a GNSS receiver on the firmware's GNSS UART, a recording replayed or a
-receiver the test describes, and records what crosses it. A test asks for the
+receiver the test describes, records what crosses it, and drives and reads the board's GPIO lines.
+A test asks for the
 `board` fixture, names the app with the `app_path` marker, sets up what is around the board,
 powers it on, and waits on the board's own clock for what the firmware does. It runs once on
 every backend. pytest loads the plugin by itself once esp32tl is installed; it builds on
@@ -181,9 +182,68 @@ the exception: it takes a `Duration`, or a number of seconds as in pytest-embedd
 - On a board profile without `uart.gnss`, `gnss` is an error at setup:
   `esp32sim: the board profile lilygo-t-a7670g-r2 has no uart.gnss; its interfaces are console, uart.modem, lines.modem`.
 
-`NeverHappened`, `RunEnded`, `BoardOff` and `SourceError` are in `esp32tl.interfaces`.
 `board.uart(role)` is the same for any `uart.<role>` route of the profile: `gnss` is
 `board.uart("gnss")`.
+
+`lines` is every GPIO line of the board profile's `[lines.<role>]` sets, wires to the board's
+other parts; the console's lines of text, `console.line` and `console.lines()` above, are another
+thing. On the `lilygo-t-a7670g-r2` profile, `modem.pwrkey` on GPIO 4 and `modem.ri` on GPIO 33,
+which the board pulls down ([board profiles](board-profiles-user.md#the-profiles-esp32tl-ships)).
+Shortened from
+`tests/test_gpio_echo.py`, where `gpio_echo` drives PWRKEY to the level it reads on RI
+([validation firmware](validation-firmware-user.md)):
+
+```python
+from esp32tl.units import seconds
+
+
+@pytest.mark.board_profile("lilygo-t-a7670g-r2")
+@pytest.mark.app_path("../firmware/gpio_echo")
+def test_the_firmware_follows_ri_and_drives_pwrkey(board, lines, console):
+    board.power_on()
+    console.expect_exact("in=0")
+    board.wait(seconds(1))
+    lines.drive("modem.ri", 1)
+    console.expect_exact("in=1", timeout=1)
+    assert board.wait_until(lambda: lines.level("modem.pwrkey") == 1, within=seconds(1))
+```
+
+- A line is named as `<role>.<line>`, `"modem.ri"`, or by its GPIO number, `33`.
+- `lines.drive(line, level)` drives the line to `level`, 0 or 1 (`True` and `False` count), from
+  the board's current instant, `board.now`, until the test drives it again or releases it. Called
+  before `board.power_on()`, the level holds from power-on.
+- `lines.release(line)` stops driving the line, from the board's current instant. A line the
+  profile pulls, as `ri = { pin = 33, pull = "down" }`, goes back to its pull; any other to what
+  the chip makes of an undriven pad: in esp32sim the chip's own pull, if the firmware set one, else
+  1. GPIO 34 to 39 have no pulls on the chip, and a pad on the RTC mux takes none from IO_MUX, so
+  those read 1.
+- The board's pulls hold from power-on in every test on the profile, whether it uses `lines` or
+  not, so RI reads 0 with no modem at the far end. A pull is weaker than the firmware's own
+  output: firmware that drives a pulled line wins over the pull. The harness puts a pull on the
+  line as a level it drives, so the release of a pulled line that the firmware drives as an output
+  is reported as an `input_on_output` warning in [the link's
+  report](esp32sim-backend-user.md#the-links-report), as a drive of it is.
+- `lines.level(line)` is what the firmware drives the line to, 0 or 1, or `None` while its output
+  is off; it is a condition for `board.wait_until`, as above. A change on a line takes no turn of
+  the link of its own, so `wait_until` sees it at its next look, within 100 ms of the board's
+  time; `lines.events()` has the exact time. A line counts as driven while the firmware's output
+  on it is enabled, or while its pad is high: a peripheral that drives the pad through the GPIO
+  matrix with its own output enable shows as 1 when high and `None` when low.
+- `lines.events()` is every change on the lines so far, by either end, in the order of the board's
+  time, as a list of `LineEvent(t, name, pin, by, level)`: `t` a `Duration`, an instant of the board's
+  time as `board.now` is; `name` as `modem.ri`; `by` `"firmware"` or `"test"`; `level` 0 or 1, or `None` for a
+  line no longer driven. A drive to the level the test drives the line to already, or a release of
+  a line the test does not drive, is no change, and sends nothing. A drive after the run has ended
+  is still listed, though it reaches no board.
+- A line that is not one of the profile's raises `ValueError`:
+  `GPIO 5 is no line of the board profile lilygo-t-a7670g-r2; its lines are modem.pwrkey (GPIO 4), modem.ri (GPIO 33)`.
+  A level other than 0 or 1 raises `ValueError: lines.drive: level 2 is not 0 or 1`, or
+  `TypeError` with the same message for one that is not an integer.
+- On a board profile without lines, `lines` is an error at setup:
+  `esp32sim: the board profile esp32-devkitc has no lines; its interfaces are console, uart.gnss`.
+
+`NeverHappened`, `RunEnded`, `BoardOff` and `SourceError` are in `esp32tl.interfaces`, `LineEvent`
+in `esp32tl.interfaces.lines`.
 
 ## The test's timeout
 
@@ -255,10 +315,10 @@ A test that parametrises pytest-embedded's `count` itself above 1, as in
   does not exist with `FileNotFoundError` ([taps](run-report-user.md#when-the-test-gets-it-wrong)),
   and the receiver model told what it cannot be with `ModelError`
   ([models and units](models-user.md#when-the-test-gets-it-wrong)).
-- A test that set up a source or a tap and passed without calling `board.power_on()` gets an error
-  at teardown, since it ran no firmware:
+- A test that set up a source or a tap, or drove a line, and passed without calling
+  `board.power_on()` gets an error at teardown, since it ran no firmware:
   `esp32sim: the test set up the replay of uart.gnss and never called board.power_on(): it ran no firmware`,
-  or `the model of uart.gnss` for a receiver.
+  `the model of uart.gnss` for a receiver, or `the level of modem.ri` for a line.
 - A wait or an expect whose condition does not hold in its time: `NeverHappened`.
 - The run ends while the test waits: `RunEnded`, which names the board's time it ended at (from
   the runner's statistics; without them, `after the turn at` the last turn the test saw, or
@@ -291,7 +351,7 @@ under `[tool.pytest.ini_options]`.
 
 ## Names the plugin takes
 
-- **`board`, `console`, `gnss`**: the plugin's fixtures; a project's own fixture of one of these
+- **`board`, `console`, `gnss`, `lines`**: the plugin's fixtures; a project's own fixture of one of these
   names overrides it, as pytest has it.
 - **`board`**: esp32tl parametrises every test that asks for a fixture of that name, matched by
   name. A project's own `board` fixture, in a session where esp32tl is installed, gets the

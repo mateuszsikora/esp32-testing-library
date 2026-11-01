@@ -77,3 +77,21 @@ def test_nmea_reader_takes_the_devkit_gnss_route_from_sdkconfig() -> None:
     assert config["NMEA_READER_UART_RX_PIN"] == 5
     assert config["NMEA_READER_UART_TX_PIN"] == 4
     assert config["NMEA_READER_UART_BAUD"] == 9600
+
+
+def test_gpio_echo_has_the_classic_esp32_flash_layout() -> None:
+    app = idf_app("gpio_echo")
+    build = FIRMWARE / "gpio_echo" / "build"
+    assert app.target == "esp32"
+    assert [(f.offset, Path(f.file_path).relative_to(build)) for f in app.flash_files] == [
+        (0x1000, Path("bootloader/bootloader.bin")),
+        (0x8000, Path("partition_table/partition-table.bin")),
+        (0x10000, Path("gpio_echo.bin")),
+    ]
+    assert all(Path(f.file_path).is_file() for f in app.flash_files)
+
+
+def test_gpio_echo_takes_the_lilygo_modem_lines_from_sdkconfig() -> None:
+    config = idf_app("gpio_echo").sdkconfig
+    assert config["GPIO_ECHO_IN_PIN"] == 33
+    assert config["GPIO_ECHO_OUT_PIN"] == 4

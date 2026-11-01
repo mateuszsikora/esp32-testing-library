@@ -3,7 +3,8 @@
 The plugin is `esp32tl/pytest_plugin.py`, with the backend registry in
 `esp32tl/backends/__init__.py`, the console in `esp32tl/interfaces/console.py`, the UART
 interface in `esp32tl/interfaces/uart.py` and the one behind `gnss` in
-`esp32tl/interfaces/gnss.py`, the exceptions a test sees in
+`esp32tl/interfaces/gnss.py`, the GPIO lines behind `lines` in `esp32tl/interfaces/lines.py`, the
+exceptions a test sees in
 `esp32tl/interfaces/__init__.py`, the taps and the run's log in `esp32tl/tap.py` and
 `esp32tl/report.py` ([run-report-technical.md](run-report-technical.md)), and the board
 profiles and capability declaration in `esp32tl/boards/`
@@ -92,11 +93,12 @@ are in [models-technical.md](models-technical.md).
 8. **`board` fixture**, at teardown: `backend.close()`. A `BackendError` from it goes through
    `backend_failed` unless `request.node.stash.get(CALL_SAW_RUN_END, False)`: a test that waited on
    the run when it ended has already reported the exit code and the link's error, and would
-   otherwise show them twice. When `close` returned, `backend.set_up()` names a source or a tap
-   and `backend.powered` does not hold, while `request.node.stash.get(DID_NOT_PASS, False)` does
+   otherwise show them twice. When `close` returned, `backend.set_up()` names a source, a tap
+   or a line the test drove and `backend.powered` does not hold, while `request.node.stash.get(DID_NOT_PASS, False)` does
    not hold either, it fails the teardown with `pytest.fail(..., pytrace=False)`:
    `esp32sim: the test set up the {kind} of {interface} and never called board.power_on(): it ran no firmware`
-   (` and ` between several; `{kind}` is `replay` or `tap`). `DID_NOT_PASS` is `not report.passed`:
+   (` and ` between several; `{kind}` is `replay` or `tap`, and a line reads `the level of
+   {line}`). `DID_NOT_PASS` is `not report.passed`:
    failed, skipped, or xfailed, which pytest reports as skipped, so a test with an outcome of its
    own already is not reported on top of it. Then, whatever `close` did, it adds the report section
    `("teardown", "esp32sim link", backend.report(run=run))` with
@@ -159,6 +161,32 @@ are in [models-technical.md](models-technical.md).
    and make none: without one they raise `SourceError`. `now` and `world` are the backend's, the
    held clock's time and the world's time at power-on
    ([models-technical.md](models-technical.md#data-flow)).
+11. **`lines` fixture** returns `board.lines()`, the one `Lines` the link carries for every
+   `[lines.<role>]` set of the profile, named `lines` on the link; a profile without lines makes
+   `lines()` raise `BackendError`, which goes through `backend_failed`. `Lines` is a `BoardLink`
+   `Interface` without a `wire`: its `pins` are the lines' GPIOs, which the link watches.
+   `drive(line, level)` and `release(line)` take a GPIO number or `<role>.<line>`, read the board's
+   time from `now()`, the backend's `HeldClock.now` (0 before power-on and until the first turn),
+   and, under the interface's lock, append a `LineEvent(Duration(t), name, pin, "test", level)` and
+   queue `(t, pin, level)`, `None` for a release. A drive to the level the test drives already, or a
+   release of a line it does not drive, does neither. The link asks `inputs(now)` in every turn,
+   after the UARTs' outputs: in the run's first turn a `gpio_in` at `now` with every pulled line at
+   its pull (`PULLED`, `up` 1 and `down` 0), then each queued change, stamped `max(t, now)` so that
+   one asked for after its turn goes out in the next: a `gpio_in` with its level, a `gpio_in` with
+   the pull for the release of a pulled line, a `release` for any other. The chip knows only its own
+   pulls: a `release` puts the pad back to them (`release_input`, `esp32/src/periph.rs:384`), so the
+   board's pull is a level the harness drives, and, as an external level, it takes the pad from the
+   chip's pulls (`sync_pull` skips an external pad, `:394`); the firmware's output still wins over
+   it, as `pad_level` prefers `driven`. The link calls `driven(t, changes, enabled)` on `gpio_out`:
+   `Lines` keeps each pin's last reported pad level and counts a line as the firmware's while its
+   bit is in `enabled` or its pad is reported at 1, since a pad a peripheral drives through the GPIO
+   matrix may have no bit in `GPIO_ENABLE` and an undriven pad is reported at 0 (protocol 5.4). A
+   change of that state, a level or `None`, appends `LineEvent(Duration(t), name, pin, "firmware",
+   level)`, and `level(line)` returns it. With the backend's `RunLog`, every call of `drive` and
+   `release` is a step of the run, and every change of the firmware's an entry
+   ([run-report-technical.md](run-report-technical.md#data-flow)). `Lines` declares no `latency` and
+   no `quiet_until`: a change of the firmware's takes no turn of its own, and the test sees it at
+   the next turn the clock lets the run take.
 
 ## Interfaces
 
@@ -170,12 +198,16 @@ are in [models-technical.md](models-technical.md).
 | `board(request, dut, app_path, msg_queue, _meta)` | fixture, function scope | Yields an `Esp32Sim`, off; closes it at teardown, then adds the `esp32sim link` report section and the `esp32sim_link` user property. Its methods (`power_on`, `wait`, `wait_until`, `now`, `utc`, `report`, `properties`) are in [esp32sim-backend-technical.md](esp32sim-backend-technical.md#interfaces) |
 | `console(board)` | fixture, function scope | Returns `Console(board)` |
 | `gnss(board)` | fixture, function scope | Returns `board.uart("gnss")`, a `Gnss` |
+| `lines(board)` | fixture, function scope | Returns `board.lines()` |
+| `Lines(board, lines, now, log=None)` | class, `esp32tl/interfaces/lines.py`, a `BoardLink` `Interface` named `lines` | The `[lines.<role>]` sets `lines` of the profile named `board`, the board's time from `now()`, in nanoseconds, and the `RunLog` it writes to, if any. `drive(line, level)`, `release(line)`, `level(line)` (`int \| None`), `events()` (`list[LineEvent]`); for the link, `pins`, `inputs(now)` and `driven(t, changes, enabled)` |
+| `LineEvent(t, name, pin, by, level)` | frozen dataclass, `esp32tl/interfaces/lines.py` | `t` a `Duration`, an instant of the board's time, `name` as `modem.ri`, `by` `"firmware"` or `"test"`, `level` 0, 1 or `None` |
+| `PULLED` | `dict`, `esp32tl/interfaces/lines.py` | `{"up": 1, "down": 0}`: the level a board's pull gives an undriven line |
 | `Console(board)` | class, `esp32tl/interfaces/console.py` | `expect(pattern, timeout=30, *, return_what_before_match=False)`, `expect_exact(...)` with the same arguments, `timeout` a `Duration` or a number of seconds; `line(pattern)`, `lines(pattern=None, *, since=None)`; no `write`. `board` is a `Clocked`: `console_output`, `console_lines` and `wait_on_clock(condition, within, description)`, `within` a `Duration` |
 | `Line(at, text, match=None)` | frozen dataclass, `esp32tl/interfaces/console.py` | A console line: `at` a `Duration`, `text` a `str`, `match` an `re.Match[str]`, left out of comparisons; `line[group]` is `match[group]`, a `TypeError` without a match |
 | `ConsoleLines()` | class, `esp32tl/interfaces/console.py` | `feed(t, data)`, `lines`: the console cut into `Line`s |
 | `LineCondition(lines, pattern)` | class, `esp32tl/interfaces/console.py` | What `console.line` returns: called, the first matching `Line` since it was made, or since the last it found, or `None` |
 | `DEFAULT_TIMEOUT` | `int`, `esp32tl/interfaces/console.py` | 30: an expect's `timeout`, in seconds of the board's time |
-| `Gnss(name, wire, *, clock, directory, now, world, asked=...)` | class, `esp32tl/interfaces/gnss.py`, a `Uart` | `fix(at, *, hdop=0.9, satellites=8)`, `move(*, heading, speed)`, `stand_still()`, `degrade(*, hdop=None, satellites=None)`, `lose_fix()`, `go_silent()`, `resume()`, `position`, each the `GnssReceiver`'s; `receiver()` the receiver, made by the first call that succeeds |
+| `Gnss(name, wire, *, clock, directory, now, world, asked=..., log=None, files=None)` | class, `esp32tl/interfaces/gnss.py`, a `Uart` | `fix(at, *, hdop=0.9, satellites=8)`, `move(*, heading, speed)`, `stand_still()`, `degrade(*, hdop=None, satellites=None)`, `lose_fix()`, `go_silent()`, `resume()`, `position`, each the `GnssReceiver`'s; `receiver()` the receiver, made by the first call that succeeds |
 | `Uart(name, wire, *, clock, directory, asked=..., log=None, files=None)` | class, `esp32tl/interfaces/uart.py`, a `BoardLink` `Interface` | `uart.<role>` and its source: attributes `clock`, `directory`, `asked`, `log`, `files` (the files the run replays from and taps into, shared by the backend's UARTs), `source`, `source_kind` and `source_detail` (`None` until given, then the source, `"replay"` or `"model"`, and the path as the test gave it or `a GNSS receiver`), and `tapped` (`None`, then the `Tap`); `replay(path)` returns the `Replay`, `tap(path)` the `Tap`. Without a source it hears everything and says nothing; with one, `quiet_until` and `latency` are the source's, and `receive` and `poll` return the source's outputs, read into a list. Every byte heard and every output goes to the tap and the `RunLog`, when there are. `asked(request)`, a `Request` of `esp32tl.boards.capabilities`, is called before a source or a tap is made, and refuses it by raising |
 | `Source` | protocol, `esp32tl/interfaces/uart.py` | `receive(t, data)`, `poll(now)`, `quiet_until()`, `latency()`: what drives a `Uart` |
 | `SourceError` | exception, `esp32tl/interfaces/__init__.py` | A source or a tap after power-on, a second one on a route, or one no backend gives |
@@ -223,7 +255,12 @@ pytest-embedded's `build_dir` fixture. The backend's own environment variables a
 | `count is above 1: esp32tl runs one board in a test` | The test parametrises `count` above 1 itself, so `dut` is a tuple | Error at setup |
 | `esp32sim: {error}` | `Esp32Sim(...)` raised a `BackendError` | Error at setup; messages in [esp32sim-backend-technical.md](esp32sim-backend-technical.md#failure-modes) |
 | `esp32sim: the board profile {name} has no uart.gnss; its interfaces are {interfaces}` | The test uses `gnss` on a profile without the route | Error at setup |
-| `esp32sim: the test set up the {kind} of {interface} and never called board.power_on(): it ran no firmware` | A test whose setup and call passed, which gave a source or asked for a tap and never powered on | Error at teardown |
+| `esp32sim: the board profile {name} has no lines; its interfaces are {interfaces}` | The test uses `lines` on a profile without `[lines.<role>]` sets | Error at setup |
+| `esp32sim: the test set up the {kind} of {interface} and never called board.power_on(): it ran no firmware`, `the level of {line}` for a line | A test whose setup and call passed, which gave a source, asked for a tap or drove a line and never powered on | Error at teardown |
+| `GPIO {pin} is no line of the board profile {board}; its lines are {name} (GPIO {pin}), ...`, `{line!r} is no line ...`, `{line!r}: the board profile {board} has no lines` | `ValueError` from `drive`, `release` or `level` | Fails the test |
+| `lines.drive: level {level!r} is not 0 or 1` | `ValueError` for an integer other than 0 or 1, `TypeError` for what is not an integer | Fails the test |
+| `{interface} sent {type} on GPIO {pin}, which another interface is wired to` | An interface's `inputs` returned a `gpio_in`, `release` or `adc` on a pin of another interface's; `Lines` sends only on its own | The link's error: the run ends with `stop`, a waiting test gets `RunEnded`, the teardown `the link failed: ...` |
+| `the pins of {interface} hold {pin!r}, not a GPIO number`, `GPIO {pin} is on {interface} and {other}` | `ValueError` from `BoardLink(...)`, for an interface whose `pins` hold something other than a GPIO number, or two interfaces on one pin; a profile cannot give either | Error at setup, with its traceback |
 | `the board is off; call board.power_on() first` | `BoardOff` from a wait, an expect, `now` or `utc` before power-on | Fails the test |
 | `the board is on already: power it on once` | `BoardOff` from a second `power_on()` | Fails the test |
 | `{interface}: the board is on already: give a route its source before board.power_on()`, `no backend takes a '{source}' source on {interface}; the sources there are {sources}` | `SourceError` from `Uart.replay`, or from the first model call of `Gnss` | Fails the test ([replay-user.md](replay-user.md#when-the-test-gets-it-wrong)) |
@@ -274,12 +311,15 @@ pytest-embedded starts a multiprocessing manager for every session:
   and the error for a source or a tap no backend gives, with a declaration a conftest swaps in),
   `test_a_model_the_backend_cannot_give_skips_at_the_call`,
   `test_a_test_that_sets_up_a_source_and_never_powers_on_fails_at_teardown` (a replay and a
-  model; only the tests that passed are reported, and no runner starts) and
-  `test_a_test_that_taps_a_route_and_never_powers_on_fails_at_teardown` (no file written).
+  model; only the tests that passed are reported, and no runner starts),
+  `test_the_lines_fixture_needs_a_profile_with_lines_and_a_drive_needs_power_on` (the error at
+  setup on `esp32-devkitc`, a test that only reads the lines, and the teardown error for two
+  driven lines) and `test_a_test_that_taps_a_route_and_never_powers_on_fails_at_teardown` (no
+  file written).
 - Against a fake runner that speaks the link protocol (`LINK_RUNNER`):
   `test_the_backend_serves_the_link_and_ends_the_run_with_stop` (the `esp32sim link` section
   with `-rA`, and the `esp32sim_link` property read back from `--junitxml` as JSON),
-  `test_every_route_of_the_profile_is_on_the_link`, `test_the_test_s_waits_move_the_board_s_clock`,
+  `test_every_route_and_line_of_the_profile_is_on_the_link`, `test_the_test_s_waits_move_the_board_s_clock`,
   `test_a_tap_records_what_crossed_the_route_both_ways` and
   `test_the_report_of_a_failing_test_shows_the_run_on_the_board_s_clock`,
   `test_a_tap_that_cannot_be_written_fails_the_test_at_teardown`
@@ -305,6 +345,13 @@ The `board_profile` marker is tested in `tests/test_pytest_plugin.py` too:
 `test_the_board_runs_the_profile_the_test_chose_and_starts_no_runner_unpowered`
 ([board-profiles-technical.md](board-profiles-technical.md#tests)).
 
+`tests/test_lines.py` tests `Lines` without an emulator: the names, the refused lines and levels,
+the pulls in the first turn, the stamps of what the test drives, what is no change, the firmware's
+level from `gpio_out`, and `Lines` on a `BoardLink`. `tests/test_gpio_echo.py` runs `gpio_echo` on
+the real runner on the LilyGO profile: RI at its pull-down from power-on, PWRKEY following RI
+within a millisecond of the board's time both ways, the events with their times, and a level
+driven before power-on.
+
 `tests/test_gnss_fixture.py` runs `gnss.replay` and `gnss.tap` into `nmea_reader` on the real
 runner, and,
 through `pytester`, a source after power-on, an expect before it, a source never powered on and a
@@ -316,8 +363,8 @@ with `console.line` and `console.lines` ([models-technical.md](models-technical.
 
 `tests/test_package.py` checks the `pytest11` entry point (`test_plugin_is_registered_through_pytest11`)
 and that pytest loaded the module under the name `esp32tl` (`test_pytest_loaded_the_plugin`).
-`tests/test_hello_world.py` and `tests/test_nmea_reader.py` are the end-to-end cases on the real
-runner and images.
+`tests/test_hello_world.py`, `tests/test_nmea_reader.py` and `tests/test_gpio_echo.py` are the
+end-to-end cases on the real runner and images.
 
 Not covered: deselection by `-m` (only `-k` is tested), an `app_path` marker on a class, an absolute marker
 path, a marker with keyword arguments (only the bare marker is tested), limiting the run to one of
@@ -328,5 +375,6 @@ UTC.
 
 - [pytest plugin](pytest-plugin-user.md)
 - [esp32sim backend: how it works](esp32sim-backend-technical.md)
+- [Link protocol, `gpio_out`, `gpio_in` and `release`](../protocol.md#54-gpio_out-m3)
 - [Plan section 3, architecture](../implementation-plan.md#3-architecture)
 - [Invariants](../invariants.md)

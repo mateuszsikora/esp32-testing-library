@@ -30,6 +30,7 @@ whatever `FIRMWARE_OUT` the shell exports, because the tests read the images the
 |---|---|
 | `hello_world` | ESP-IDF's `examples/get-started/hello_world`, unmodified, for target `esp32` |
 | `nmea_reader` | `firmware/nmea_reader`, this repository's own project, for target `esp32`: reads NMEA from a GNSS receiver and prints its position fixes ([below](#nmea_reader)) |
+| `gpio_echo` | `firmware/gpio_echo`, this repository's own project, for target `esp32`: reads one GPIO line and drives another to its level ([below](#gpio_echo)) |
 
 ## `nmea_reader`
 
@@ -81,6 +82,36 @@ esp32tl replay --app firmware/nmea_reader --interface gnss \
   --recording recordings/gnss-generated-1.jsonl --max-seconds 10
 ```
 
+## `gpio_echo`
+
+`gpio_echo` reads one GPIO line and drives another to the same level, and says so on its console:
+
+```text
+gpio_echo: in GPIO33 out GPIO4
+in=0
+```
+
+the first line once its lines are set up, then `in=` and the input's level, at boot and at every
+change after it. It drives the output to that level before it prints the line. A change raises an
+interrupt on either edge, and the level is read again when the task gets to it, so a change that
+comes back before then prints nothing. In the emulator the output is driven low about 44 emulated
+milliseconds after power-on, and follows a change of the input within 9 emulated microseconds.
+
+The input has the chip's own pulls off, so an undriven input reads what the board's wiring gives
+it. Its defaults are the `[lines.modem]` set of the `lilygo-t-a7670g-r2` board profile, the only
+profile with lines: it reads RI, which the board pulls down, and drives PWRKEY. It is tested on
+that profile ([pytest plugin](pytest-plugin-user.md#the-fixtures)). The lines come from
+`sdkconfig`, menu `gpio_echo` in `idf.py menuconfig`:
+
+| Option | Default | Range |
+|---|---|---|
+| `CONFIG_GPIO_ECHO_IN_PIN` | `33` (the modem's RI) | 0 to 39 |
+| `CONFIG_GPIO_ECHO_OUT_PIN` | `4` (the modem's PWRKEY) | 0 to 33 |
+
+As for `nmea_reader`, the ranges let through pins that cannot work: GPIO 1 and 3, the console's,
+6 to 11, the SPI flash's, and 20, 24 and 28 to 31, which the classic ESP32 does not have, for which
+`gpio_config` fails and `ESP_ERROR_CHECK` aborts the firmware at boot.
+
 ## What a build leaves
 
 `firmware/<image>/build/` holds an ESP-IDF build directory, the layout pytest-embedded's `IdfApp`
@@ -92,7 +123,7 @@ every image those are:
 |---|---|
 | `0x1000` | `bootloader/bootloader.bin` |
 | `0x8000` | `partition_table/partition-table.bin` |
-| `0x10000` | `IMAGE.bin` (`hello_world.bin`, `nmea_reader.bin`) |
+| `0x10000` | `IMAGE.bin` (`hello_world.bin`, `nmea_reader.bin`, `gpio_echo.bin`) |
 
 and the ELF is `IMAGE.elf`. Two more files say how the build was made:
 `esp32tl-build.json` (the ESP-IDF version, the container, and the project it was built from) and
@@ -137,8 +168,8 @@ The second one ends every finished build.
 
 ## What the tests accept
 
-`tests/test_firmware_images.py` reads `firmware/hello_world/build/` and
-`firmware/nmea_reader/build/`, and for each:
+`tests/test_firmware_images.py` reads `firmware/hello_world/build/`,
+`firmware/nmea_reader/build/` and `firmware/gpio_echo/build/`, and for each:
 
 - passes on a build from the pinned container;
 - passes on a local build (`IDF_LOCAL=1`), with the warning
@@ -162,7 +193,7 @@ run `make firmware`.
 `firmware/build.sh` exits 1 with one of these on stderr, before writing anything, or with the exit
 code of `idf.py` when the build itself fails:
 
-- `firmware/build.sh: unknown image 'NAME'; the images are: hello_world nmea_reader`
+- `firmware/build.sh: unknown image 'NAME'; the images are: hello_world nmea_reader gpio_echo`
 - `firmware/build.sh: needs Docker, or IDF_LOCAL=1 to build with a local ESP-IDF`
 - `firmware/build.sh: the Docker daemon is not reachable ('docker info' failed); is Docker running?`
 - `firmware/build.sh: IDF_LOCAL=1 needs ESP-IDF in the environment: source $IDF_PATH/export.sh first`

@@ -1,5 +1,6 @@
 """The run on the test's clock, for the report of a test that failed: what the test did, what the
-firmware printed, and the bytes that crossed each route, in the order of the board's time.
+firmware printed, the bytes that crossed each route and the levels it drove on the lines, in the
+order of the board's time.
 
 The backend fills a `RunLog` as the run goes: the test's steps from the test's thread, the console
 and the routes' bytes from the link's. It keeps every step of the test and the last `ENTRIES` of
@@ -97,7 +98,12 @@ class RunLog:
                 traffic.events_out += 1
             self._add(t, f"{interface} {direction}", data)
 
-    def _add(self, t: int, who: str, what: bytes) -> None:
+    def line(self, t: int, name: str, level: int | None) -> None:
+        """The firmware drove the line `name` to `level` at `t`, or stopped driving it (`None`)."""
+        with self._lock:
+            self._add(t, f"{name} out", "not driven" if level is None else str(level))
+
+    def _add(self, t: int, who: str, what: str | bytes) -> None:
         self._entries.append((t, self._count, who, what))
         self._count += 1
         self._wire_count += 1

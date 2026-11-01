@@ -20,8 +20,9 @@ class Gnss(Uart):
     board's time in nanoseconds, `world` the world's time at power-on; the other arguments are
     `Uart`'s. Each call goes into the `log` as a step of the test, at the board's time."""
 
-    # What the route's report says the source was made from.
+    # What the route's report says the source was made from, and a tap's recording names it by.
     DETAIL = "a GNSS receiver"
+    MODEL = "model:gnss"
 
     def __init__(
         self,
@@ -78,6 +79,10 @@ class Gnss(Uart):
     def resume(self) -> None:
         """Sentences again, from the epoch at this instant on."""
         self._tell(GnssReceiver.resume, "resume()")
+
+    def recorded_source(self) -> str:
+        """`model:gnss` for the receiver model, as the recording format names a model."""
+        return self.MODEL if self.source_kind == "model" else super().recorded_source()
 
     @property
     def position(self) -> Position | None:

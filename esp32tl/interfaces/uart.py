@@ -14,7 +14,7 @@ from esp32tl.interfaces import SourceError
 from esp32tl.link.boardlink import Direction, Interface, Output, Wire
 from esp32tl.report import RunLog
 from esp32tl.sources.replay import Replay
-from esp32tl.tap import Tap
+from esp32tl.tap import NO_SOURCE, Tap
 
 
 class Source(Protocol):
@@ -105,6 +105,11 @@ class Uart(Interface):
         if self.log is not None:
             self.log.test(0, f"{self.name}.tap({str(path)!r})")
         return self.tapped
+
+    def recorded_source(self) -> str:
+        """What a tap's recording says was at the far end (`docs/recording-format.md`): the
+        kind of source, `replay`, or `none` for nothing."""
+        return self.source_kind or NO_SOURCE
 
     def _ask(self, source: str) -> None:
         if self.source is not None:
