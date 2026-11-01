@@ -991,10 +991,10 @@ def test_hello_world_fails_on_an_image_that_prints_something_else(
 # the harness's answer; `late` sends an event out of sequence after the console line; `deaf`
 # ignores the harness and SIGTERM after that line; `stall` takes no turn after it until SIGTERM;
 # `linger` leaves a child holding the link open for 30 s after it exits, and writes the child's pid
-# to `linger.pid` beside the runner; `slow` loads for half a second
-# before it connects, and dies of SIGTERM until then, as the real runner does; `gone` exits 4 in
-# turn 0 without reading it, as the real runner does when the harness is gone. $FAKE_WATCH is the
-# pins the harness's hello must watch, comma-separated: the default profile's GNSS route's.
+# to `linger.pid` beside the runner; `slow` loads for half a second before it connects, and dies of
+# SIGTERM until then, as the real runner does; `gone` exits 4 in turn 0 without reading it, as the
+# real runner does when the harness is gone. $FAKE_WATCH is the pins the harness's hello must
+# watch, comma-separated: the default profile's GNSS route's.
 LINK_RUNNER = """#!{python}
 import os
 import signal
@@ -1441,15 +1441,18 @@ def test_a_link_left_open_after_the_runner_exits_is_shut_down(
     started = time.monotonic()
     try:
         result = link_runner.runpytest_subprocess("-p", "no:cacheprovider", "-rA")
+        elapsed = time.monotonic() - started
         # A child of the runner holds the link for 30 s; the teardown does not wait for it. The
         # whole run, pytest's start-up included, takes a few seconds: 15 leaves room for a loaded
-        # machine, and is still half the hold. The child is there still, and holds the link.
-        assert time.monotonic() - started < 15
+        # machine, and is still half the hold.
+        assert elapsed < 15, f"the run took {elapsed:.1f} s: the teardown waited for the child"
+        # The child is running still: the run ended within its hold.
         os.kill(int(child.read_text()), 0)
     finally:
-        # Nothing else ends it before its 30 s are up.
-        with contextlib.suppress(FileNotFoundError, ProcessLookupError):
-            os.kill(int(child.read_text()), signal.SIGKILL)
+        # Nothing else ends it before its 30 s are up; past them, its pid may be another's.
+        if time.monotonic() - started < 30:
+            with contextlib.suppress(FileNotFoundError, ProcessLookupError):
+                os.kill(int(child.read_text()), signal.SIGKILL)
     result.assert_outcomes(passed=1)
     result.stdout.fnmatch_lines(["stats: the run ended at 0.100000000 s (stop); *"])
 
