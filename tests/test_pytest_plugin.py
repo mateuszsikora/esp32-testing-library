@@ -1446,8 +1446,11 @@ def test_a_link_left_open_after_the_runner_exits_is_shut_down(
         # whole run, pytest's start-up included, takes a few seconds: 15 leaves room for a loaded
         # machine, and is still half the hold.
         assert elapsed < 15, f"the run took {elapsed:.1f} s: the teardown waited for the child"
-        # The child is running still: the run ended within its hold.
-        os.kill(int(child.read_text()), 0)
+        # Nothing ended the child early: it held the link through the teardown.
+        try:
+            os.kill(int(child.read_text()), 0)
+        except ProcessLookupError:
+            pytest.fail("the child holding the link was gone before its 30 s were up")
     finally:
         # Nothing else ends it before its 30 s are up; past them, its pid may be another's.
         if time.monotonic() - started < 30:
