@@ -39,6 +39,13 @@ leaves GPIO 21 and 22 free, the default I²C pins, and the profile still routes 
 
 The profiles are `esp32tl/boards/<name>.toml`, in the installed package.
 
+## Modem power timing
+
+The LilyGO PWRKEY entry carries `active = 1`, `on_ms = 50`, `off_ms = 2500`. These are model
+acceptance thresholds at the ESP32 pad, distinct from firmware's nominal delays. The
+[modem guide](modem-user.md#pwrkey-and-reporting) explains their sources and limits. Plain integer
+line entries and untimed `{ pin, pull }` tables continue to work for other lines.
+
 ## Choosing a profile
 
 ```python

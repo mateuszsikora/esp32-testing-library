@@ -235,6 +235,12 @@ for a test that failed. `Esp32Sim.properties()` is `link.properties()` with `rou
 interface: `source` (the kind, or `None`), `detail` (what the source was made from, as the test
 named it), `bytes_in`, `bytes_out` and `tap` (the path, or `None`).
 
+### Modem route
+
+The backend builds `Lines` before its UARTs and supplies it, the held clock and `lines.modem`
+timing to `interfaces.modem.Modem` on `uart.modem`. A replay does not claim RI. Model selection,
+GPIO responses and the command report are specified in [modem-technical.md](modem-technical.md).
+
 ## Schema
 
 The end-of-run lines the backend appends to the runner's log, for whoever reads `dut.log`: when

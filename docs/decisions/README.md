@@ -158,6 +158,9 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Inserting and removing the SD card while the firmware runs is postponed](harness.md#inserting-and-removing-the-sd-card-while-the-firmware-runs-is-postponed) | `harness.md` | postponed (#32) |
 | [The SD card tests skip without mtools, and CI makes sure it is there](harness.md#the-sd-card-tests-skip-without-mtools-and-ci-makes-sure-it-is-there) | `harness.md` | decided (#32) |
 | [The esp32tl command takes no SD card yet](harness.md#the-esp32tl-command-takes-no-sd-card-yet) | `harness.md` | postponed (#32) |
+| [The modem drives RI through Lines and observes PWRKEY through it](harness.md#the-modem-drives-ri-through-lines-and-observes-pwrkey-through-it) | `harness.md` | decided (#29) |
+| [The modem begins powered and registered and keeps every AT command](harness.md#the-modem-begins-powered-and-registered-and-keeps-every-at-command) | `harness.md` | decided (#29) |
+| [The modem data peer and realistic escape timing wait for network integration](harness.md#the-modem-data-peer-and-realistic-escape-timing-wait-for-network-integration) | `harness.md` | postponed (#30) |
 
 ## The runner crate and esp32sim
 

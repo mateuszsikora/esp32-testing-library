@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from esp32tl.boards import Line
+from esp32tl.interfaces import SourceError
 from esp32tl.link.boardlink import Interface
 from esp32tl.link.protocol import GpioIn, Input, Release
 from esp32tl.report import RunLog
@@ -18,14 +19,14 @@ PULLED = {"up": 1, "down": 0}
 
 @dataclass(frozen=True)
 class LineEvent:
-    """A change on a line: at `t`, an instant of the board's time, `by` the firmware or the test,
+    """A change on a line: at `t`, an instant of the board's time, `by` the firmware, test or model,
     the line `name` (`modem.ri`) on GPIO `pin` driven to `level`, or with `None` no longer
     driven: the firmware's output off, or the test's `release`."""
 
     t: Duration
     name: str
     pin: int
-    by: Literal["firmware", "test"]
+    by: Literal["firmware", "test", "model"]
     level: int | None
 
 
@@ -40,7 +41,9 @@ class Lines(Interface):
     drives, and `events` every change of either end. With a `log`, each call of the test's is a step
     of the run, and each change of the firmware's an entry.
 
-    The test calls it from its own thread while the link is held, the link from the link's.
+    A model can reserve an output and observe a firmware input through `attach`; its changes
+    use `model_drive`. The test calls from its own thread while the link is held, the link
+    from the link's.
     """
 
     def __init__(
@@ -72,6 +75,12 @@ class Lines(Interface):
         self._pads: dict[int, int] = {}
         self._levels: dict[int, int | None] = {}
         self._events: list[LineEvent] = []
+        self._owners: dict[int, str] = {}
+        self._observers: dict[int, list[Callable[[int, int | None], None]]] = {}
+        self._latency: int | None = None
+        # Hold model responses until due: a test may change the model before its response.
+        self._model_pending: dict[int, tuple[int, int]] = {}
+        self._model_levels: dict[int, int] = {}
 
     @property
     def pins(self) -> frozenset[int]:
@@ -81,6 +90,7 @@ class Lines(Interface):
         """Drives `line` to `level`, 0 or 1, from the board's current instant on, until the test
         drives it again or releases it."""
         pin = self._pin(line)
+        self._unowned(pin)
         if isinstance(level, bool):
             level = int(level)
         if not isinstance(level, int):
@@ -100,6 +110,7 @@ class Lines(Interface):
         """Stops driving `line` from the board's current instant on: it goes back to the board's
         pull, if it has one, or to what the chip makes of an undriven pad."""
         pin = self._pin(line)
+        self._unowned(pin)
         now = self._now()
         if self.log is not None:
             self.log.test(now, f"lines.release({line!r})")
@@ -118,7 +129,7 @@ class Lines(Interface):
     def events(self) -> list[LineEvent]:
         """Every change on the lines so far, by either end, in the order of the board's time."""
         with self._lock:
-            return list(self._events)
+            return sorted(self._events, key=lambda event: event.t.ns)
 
     def _pin(self, line: int | str) -> int:
         if isinstance(line, str) and line in self._lines:
@@ -134,6 +145,50 @@ class Lines(Interface):
         raise ValueError(
             f"{what} is no line of the board profile {self.board}; its lines are {known}"
         )
+
+    def _unowned(self, pin: int) -> None:
+        if pin in self._owners:
+            raise SourceError(f"{self._names[pin]} is driven by {self._owners[pin]}")
+
+    def attach(
+        self,
+        owner: str,
+        *,
+        output: str,
+        watch: str,
+        driven: Callable[[int, int | None], None],
+        latency: int,
+    ) -> None:
+        """Give a model one output and the firmware changes of one input, before power-on.
+
+        Lines stays the GPIO owner on BoardLink. A test cannot also drive the model's output.
+        Callbacks run outside the lock, so a response may enqueue a model_drive.
+        """
+        pin, observed = self._pin(output), self._pin(watch)
+        with self._lock:
+            self._unowned(pin)
+            if pin in self._driving:
+                raise SourceError(f"{output} is driven by the test already")
+            self._owners[pin] = owner
+            self._observers.setdefault(observed, []).append(driven)
+            self._latency = latency if self._latency is None else min(latency, self._latency)
+
+    def model_drive(self, owner: str, line: str, t: int, level: int) -> None:
+        """Replace the model's pending response on this line; hold it until its due time."""
+        pin = self._pin(line)
+        with self._lock:
+            if self._owners.get(pin) != owner:
+                raise SourceError(f"{owner} does not own {line}")
+            self._model_pending[pin] = (t, level)
+
+    def quiet_until(self) -> int | None:
+        """The earliest pending model response; none after all responses have been sent."""
+        with self._lock:
+            return min((t for t, _ in self._model_pending.values()), default=None)
+
+    def latency(self) -> int | None:
+        """The shortest response latency among attached models, or none without models."""
+        return self._latency
 
     def _change(self, now: int, pin: int, level: int | None) -> None:
         self._pending.append((now, pin, level))
@@ -165,12 +220,25 @@ class Lines(Interface):
                 else:
                     messages.append(Release(t, (pin,)))
             self._pending.clear()
+            for pin, (t, level) in list(self._model_pending.items()):
+                if t > now:
+                    continue
+                del self._model_pending[pin]
+                if self._model_levels.get(pin) != level:
+                    self._model_levels[pin] = level
+                    messages.append(GpioIn(now, ((pin, level),)))
+                    self._events.append(
+                        LineEvent(Duration(now), self._names[pin], pin, "model", level)
+                    )
+                    if self.log is not None:
+                        self.log.line(now, self._names[pin], level, direction="in")
             return messages
 
     def driven(self, t: int, changes: Sequence[tuple[int, int]], enabled: frozenset[int]) -> None:
         """The firmware drives a line where its output is enabled, or where its pad is reported
         high: a pad a peripheral drives through the GPIO matrix may have no bit in `enabled`, and
         an undriven pad is reported low (protocol 5.4)."""
+        notifications: list[tuple[Callable[[int, int | None], None], int | None]] = []
         with self._lock:
             for pin, level in changes:
                 self._pads[pin] = level
@@ -184,3 +252,8 @@ class Lines(Interface):
                     )
                     if self.log is not None:
                         self.log.line(t, self._names[pin], state)
+                    notifications.extend(
+                        (callback, state) for callback in self._observers.get(pin, ())
+                    )
+        for callback, state in notifications:
+            callback(t, state)
