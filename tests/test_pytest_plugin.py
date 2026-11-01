@@ -551,8 +551,10 @@ def test_the_board_s_clock_and_sources_go_in_order(
     monkeypatch.setenv("FAKE_EXIT", "0")
     fake_runner.makepyfile(
         test_fake="""
+        from esp32tl.units import seconds
+
         def test_wait_while_off(board):
-            board.wait(1)
+            board.wait(seconds(1))
 
         def test_expect_while_off(board, console):
             console.expect("x")
@@ -571,10 +573,22 @@ def test_the_board_s_clock_and_sources_go_in_order(
         def test_two_replays(gnss):
             gnss.replay("gnss.jsonl")
             gnss.replay("gnss.jsonl")
+
+        def test_model_after_power_on(board, gnss):
+            board.power_on()
+            gnss.lose_fix()
+
+        def test_model_after_a_replay(gnss):
+            gnss.replay("gnss.jsonl")
+            gnss.go_silent()
+
+        def test_replay_after_a_model(gnss):
+            gnss.go_silent()
+            gnss.replay("gnss.jsonl")
         """
     )
     result = fake_runner.runpytest_subprocess("-p", "no:cacheprovider")
-    result.assert_outcomes(failed=6)
+    result.assert_outcomes(failed=9)
     result.stdout.fnmatch_lines_random(
         [
             "E *esp32tl.interfaces.BoardOff: the board is off; call board.power_on() first",
@@ -582,8 +596,16 @@ def test_the_board_s_clock_and_sources_go_in_order(
             "E *esp32tl.interfaces.SourceError: uart.gnss: the board is on already: give a route"
             " its source before board.power_on()",
             "E *esp32tl.interfaces.SourceError: uart.gnss has its source already: one per test",
+            "E *esp32tl.interfaces.SourceError: uart.gnss replays a recording: it has no receiver"
+            " to describe; one source per test",
         ]
     )
+    # The replay and the model after power-on.
+    late = re.findall(r"^E +.*SourceError: uart.gnss: the board is on", result.stdout.str(), re.M)
+    assert len(late) == 2
+    # The second replay and the replay after a model.
+    second = re.findall(r"^E +.*SourceError: uart.gnss has its source", result.stdout.str(), re.M)
+    assert len(second) == 2
     # The wait, the expect and board.now.
     off = re.findall(
         r"^E +esp32tl\.interfaces\.BoardOff: the board is off;", result.stdout.str(), re.M
@@ -649,6 +671,42 @@ def test_a_source_the_backend_cannot_give_skips_at_the_call(
     result.stdout.fnmatch_lines([line])
 
 
+def test_a_model_the_backend_cannot_give_skips_at_the_call(
+    fake_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_EXIT", "0")
+    (fake_runner.path / "capabilities.toml").write_text(
+        '[esp32sim]\nuart = { sources = ["replay"] }\n[serial]\nuart = { sources = ["model"] }\n'
+    )
+    fake_runner.makeconftest(
+        """
+        from pathlib import Path
+
+        from esp32tl.boards import capabilities
+
+        DECLARATION = Path(__file__).parent / "capabilities.toml"
+        capabilities.declared = lambda: capabilities.load(DECLARATION)
+        """
+    )
+    fake_runner.makepyfile(
+        test_fake="""
+        from esp32tl.units import Position
+
+        def test_model(board, gnss):
+            gnss.fix(at=Position(52.2, 21.0))
+            board.power_on()
+        """
+    )
+    result = fake_runner.runpytest_subprocess("-p", "no:cacheprovider", "-rA")
+    result.assert_outcomes(skipped=1)
+    result.stdout.fnmatch_lines(
+        [
+            "SKIPPED [[]1[]] test_fake.py:3: esp32sim: uart.gnss takes no model source on this"
+            " backend, only replay"
+        ]
+    )
+
+
 def test_a_test_that_sets_up_a_source_and_never_powers_on_fails_at_teardown(
     fake_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -681,6 +739,9 @@ def test_a_test_that_sets_up_a_source_and_never_powers_on_fails_at_teardown(
 
         def test_broken_setup(replayed, broken):
             pass
+
+        def test_modelled(gnss):
+            gnss.lose_fix()
         """
     )
     result = fake_runner.runpytest_subprocess(
@@ -688,16 +749,19 @@ def test_a_test_that_sets_up_a_source_and_never_powers_on_fails_at_teardown(
     )
     # Only the test that passed is reported: the failed, skipped, xfailed and broken ones not a
     # second time, each with its one outcome.
-    result.assert_outcomes(passed=1, failed=1, skipped=1, xfailed=1, errors=2)
+    result.assert_outcomes(passed=2, failed=1, skipped=1, xfailed=1, errors=3)
     result.stdout.fnmatch_lines_random(
         [
             "ERROR test_fake.py::test_never_powered[[]esp32sim[]] - Failed: esp32sim*",
             "ERROR test_fake.py::test_broken_setup[[]esp32sim[]] - RuntimeError*",
+            "ERROR test_fake.py::test_modelled[[]esp32sim[]] - Failed: esp32sim*",
         ]
     )
-    result.stdout.fnmatch_lines(
+    result.stdout.fnmatch_lines_random(
         [
             "*esp32sim: the test set up the replay of uart.gnss and never called"
+            " board.power_on(): it ran no firmware",
+            "*esp32sim: the test set up the model of uart.gnss and never called"
             " board.power_on(): it ran no firmware",
         ]
     )
@@ -708,7 +772,7 @@ def test_a_test_that_sets_up_a_source_and_never_powers_on_fails_at_teardown(
         for prop in ElementTree.parse(fake_runner.path / "report.xml").iter("property")
         if prop.get("name") == "esp32sim_link"
     ]
-    assert stats == [None] * 5
+    assert stats == [None] * 6
 
 
 def test_a_test_that_uses_board_gets_a_wall_time_timeout_unless_one_is_set(
@@ -987,14 +1051,25 @@ def test_every_route_of_the_profile_is_on_the_link(
 def test_the_test_s_waits_move_the_board_s_clock(link_runner: pytest.Pytester) -> None:
     link_runner.makepyfile(
         test_fake="""
+        import pytest
+
+        from esp32tl.units import ms, seconds
+
         def test_clock(board, console):
             board.power_on()
-            assert board.now == 0
-            board.wait(2.5)
-            assert board.now == 2.5
-            assert board.wait_until(lambda: b"Hello" in board.console_output, within=1)
-            assert board.now == 2.5
+            assert board.now == seconds(0)
+            board.wait(seconds(2.5))
+            assert board.now == ms(2500)
+            assert board.wait_until(lambda: b"Hello" in board.console_output, within=seconds(1))
+            assert board.now == seconds(2.5)
             assert board.utc.isoformat() == "2026-01-01T12:00:02.500000+00:00"
+            # The board's durations carry their unit.
+            with pytest.raises(TypeError, match="as seconds.2.5., not 2.5$"):
+                board.wait(2.5)
+            with pytest.raises(TypeError, match="^board.wait_until: within takes a Duration"):
+                board.wait_until(lambda: True, within=1)
+            with pytest.raises(ValueError, match="takes a Duration of 0 or more, not -1 s$"):
+                board.wait(seconds(-1))
         """
     )
     result = link_runner.runpytest_subprocess("-p", "no:cacheprovider")
@@ -1084,9 +1159,11 @@ def test_a_hung_run_is_ended_by_the_test_s_timeout(
     monkeypatch.setenv("FAKE_LINK", "stall")
     link_runner.makepyfile(
         test_fake="""
+        from esp32tl.units import hours
+
         def test_hung(board):
             board.power_on()
-            board.wait(3600)
+            board.wait(hours(1))
         """
     )
     started = time.monotonic()

@@ -28,21 +28,27 @@ starting anything:
    that is not a file. The result is `Esp32Sim.app`.
 2. **`runner_path()`** and **`rom_path()`** resolve the runner and the ROM ELF
    ([Configuration](#configuration)).
-3. **The clock and the console.** A `HeldClock` (`esp32tl/backends/clock.py`, below), and
+3. **The clock and the console.** A `HeldClock` (`esp32tl/backends/clock.py`, below),
    `console_output`, a `bytearray` that gets the bytes of every `console` message of the link
-   until the link fails: after an error `BoardLink` reads on, but hands nothing more on.
-4. **The UARTs.** For every `[uart.<role>]` route of the profile, `profile_uart` makes the route's
-   `Uart` (`esp32tl/interfaces/uart.py`): `Wire(tx, rx, baud)` from the route,
-   `clock=Esp32Sim.clock`, `directory`, and `asked=self._asked`.
+   until the link fails (after an error `BoardLink` reads on, but hands nothing more on), and
+   `console_lines`, a `ConsoleLines` (`esp32tl/interfaces/console.py`) fed the same messages with
+   their times, which `console.line` and `console.lines` read.
+4. **The UARTs.** For every `[uart.<role>]` route of the profile, `_route` makes the route's
+   `Uart` (`esp32tl/interfaces/uart.py`): `Wire(tx, rx, baud)` from the route (`route_wire`),
+   `clock=Esp32Sim.clock`, `directory`, and `asked=self._asked`. `uart.gnss` gets a `Gnss`
+   (`esp32tl/interfaces/gnss.py`), with `now=lambda: hold.now`, the held clock's time in
+   nanoseconds, and `world=lambda: self._utc`, the world's time at power-on, for the receiver
+   model ([models-technical.md](models-technical.md#data-flow)).
 5. **`BoardLink(profile.name, uarts, chip=profile.chip, on_error=self._end_run, hold=clock, console=..., clock=self.clock)`**
    (`esp32tl/link/boardlink.py`) is the harness's end of the link: `Esp32Sim.link`. The harness's
    `hello` names the profile and its chip; `watch` is the pins of every UART route. It checks that
    no two interfaces share a pin. `hold` holds every turn until the test waits; `console` appends
-   each console message's bytes to `console_output`, in the link's thread.
+   each console message's bytes to `console_output` and feeds them to `console_lines`, in the
+   link's thread.
 
 **`Esp32Sim.power_on(utc=None)`** raises `BoardOff` when the runner has started already, and a
 `ValueError` for a `utc` that is not a `datetime` with a timezone; it keeps `utc` converted to UTC,
-or `POWER_ON_UTC`, for `Esp32Sim.utc`. Then:
+or `POWER_ON_UTC`, for `Esp32Sim.utc` and the GNSS receiver's dates. Then:
 
 1. **`listen()`** binds a Unix stream socket at `link.sock` in a new directory from
    `tempfile.mkdtemp(prefix="esp32tl-")`, or from `mkdtemp(..., dir="/tmp")` when the first path
@@ -110,15 +116,17 @@ The test's side runs in the test's thread:
   every wait from then on raises `RunEnded`, which says `at {at}`, else `after the turn at {now}`,
   since the runner may have gone on past its last turn, or `before its first turn`.
 
-`Esp32Sim` converts seconds to nanoseconds with `nanoseconds(value)`, which takes an `int` or a
-`float` (not a `bool`), finite and 0 or more, and rounds to the nanosecond. `now` divides the
-clock's by `10**9`; `utc` adds it, in microseconds, to the UTC instant at power-on. `wait`,
+`Esp32Sim` takes the test's durations with `nanoseconds(value, what)`, which takes a `Duration`
+(`esp32tl/units.py`) of 0 or more and returns its `ns`, and refuses anything else, naming `what`
+(`board.wait`, `board.wait_until: within`). `now` is the clock's time as a `Duration`; `utc` adds
+it, in microseconds, to the UTC instant at power-on. `wait`,
 `wait_until`, `wait_on_clock`, `now` and `utc` raise `BoardOff` before `power_on()`. `wait_until`
 describes its condition as `the condition {condition.__qualname__}`, or by its `repr` when it has
 no qualified name; `wait_on_clock(condition, within, description)` takes the description from the
 caller, as the console does.
 
-**Sources.** `Uart.replay` calls `asked(interface, "replay")` before it reads the recording.
+**Sources.** `Uart.replay` calls `asked(interface, "replay")` before it reads the recording, and
+`Gnss`'s first model call `asked(interface, "model")` before it makes the receiver.
 `_asked` refuses, with `SourceError`, a source once the board is on
 (`{interface}: the board is on already: give a route its source before board.power_on()`), and one
 that `capabilities.check` finds no backend gives, with that error's message. Otherwise, when
@@ -212,21 +220,22 @@ repository makes.
 
 | Name | What |
 |---|---|
-| `Esp32Sim(dut, app_path, msg_queue, meta, profile, directory=None, skip=None)` | The board, off. Attributes: `name = "esp32sim"`, `clock = "emulated-fifo-write"` (the clock the runner's `hello` must name, and a replayed recording must be on), `dut`, `profile` (the `BoardProfile`), `directory`, `app` (the `IdfApp`), `console_output` (a `bytearray`), `process` (the `RunnerPopen`, `None` until power-on), `link` (the `BoardLink`, complete once `close` returns) |
+| `Esp32Sim(dut, app_path, msg_queue, meta, profile, directory=None, skip=None)` | The board, off. Attributes: `name = "esp32sim"`, `clock = "emulated-fifo-write"` (the clock the runner's `hello` must name, and a replayed recording must be on), `dut`, `profile` (the `BoardProfile`), `directory`, `app` (the `IdfApp`), `console_output` (a `bytearray`), `console_lines` (a `ConsoleLines`), `process` (the `RunnerPopen`, `None` until power-on), `link` (the `BoardLink`, complete once `close` returns) |
 | `Esp32Sim.power_on(utc=None)` | Starts the runner; `BoardOff` the second time |
 | `Esp32Sim.powered` | Whether `power_on` has started the runner |
-| `Esp32Sim.wait(duration)`, `Esp32Sim.wait_until(condition, *, within)`, `Esp32Sim.wait_on_clock(condition, within, description)` | The test's waits, in seconds of the board's time |
-| `Esp32Sim.now`, `Esp32Sim.utc` | The board's time since power-on, in seconds; the world's time, a `datetime` in UTC |
-| `Esp32Sim.uart(role)` | The `Uart` of `uart.<role>` on the link; `BackendError` when the profile has no such route |
-| `Esp32Sim.set_up()` | What the test gave that only a run uses: `the replay of uart.gnss` per route with a source |
+| `Esp32Sim.wait(duration)`, `Esp32Sim.wait_until(condition, *, within)`, `Esp32Sim.wait_on_clock(condition, within, description)` | The test's waits, each a `Duration` of the board's time |
+| `Esp32Sim.now`, `Esp32Sim.utc` | The board's time since power-on, a `Duration`; the world's time, a `datetime` in UTC |
+| `Esp32Sim.uart(role)` | The `Uart` of `uart.<role>` on the link, a `Gnss` for `gnss`; `BackendError` when the profile has no such route |
+| `Esp32Sim.set_up()` | What the test gave that only a run uses: `the replay of uart.gnss` or `the model of uart.gnss` per route with a source |
 | `Esp32Sim.close()` | Ends the run; raises `BackendError` for a failing exit code, a killed runner or a link error |
 | `BackendError` | What keeps the backend from starting, or a failing end |
 | `HeldClock(step=STEP_NS)` | `esp32tl/backends/clock.py`: the link's `Hold`, `turn(now)`; `stop()`, `end(reason, at=None)`; the test's `now`, `wait(ns)`, `wait_until(condition, within_ns, description)` |
-| `nanoseconds(value)`, `seconds(ns)` | `esp32tl/backends/clock.py`: seconds of the board's time to nanoseconds, checked; nanoseconds shown as `12.5 s` |
+| `nanoseconds(value, what)`, `seconds(ns)` | `esp32tl/backends/clock.py`: a `Duration` of the board's time to nanoseconds, checked; nanoseconds shown as `12.5 s`, as `str(Duration(ns))` |
 | `listen()` | The listening socket and its path, or `BackendError` |
 | `runner_path()`, `rom_path()` | The runner and the ROM ELF, or `BackendError` |
 | `load_app(app_path)` | The checked `IdfApp` of `<app_path>/build` |
-| `profile_uart(profile, interface, *, clock, directory, asked=...)` | The `Uart` on the route the profile gives `interface` (`uart.gnss`), at its pins and baud; `BackendError` when the profile has no such route. `Esp32Sim` makes its UARTs with it, and so does the [`esp32tl` command](cli-user.md) |
+| `profile_uart(profile, interface, *, clock, directory, asked=...)` | The `Uart` on the route the profile gives `interface` (`uart.gnss`), at its pins and baud; `BackendError` when the profile has no such route. The [`esp32tl` command](cli-user.md) makes its UARTs with it |
+| `route_wire(profile, interface)` | The `Wire` of that route, or the same `BackendError`; `Esp32Sim` makes its `Uart`s and its `Gnss` on it |
 | `runner_command(runner, rom, app, max_seconds, link, *, held=False)` | The runner's argument list |
 | `RunnerPopen(msg_queue, cmd, meta)` | `DuplicateStdoutPopen` that closes its log when the start fails |
 | `refuse(reason)` | Raises `SourceError(reason)`: `Esp32Sim`'s `skip` outside pytest |
@@ -289,7 +298,7 @@ In the test body:
 | `{interface}: the board is on already: give a route its source before board.power_on()` | `SourceError` | A source after power-on |
 | the message of `capabilities.check`, as `no backend takes a 'replay' source on uart.gnss; the sources there are model` | `SourceError` | A source no backend declares |
 | `esp32sim: {reason}`, as `esp32sim: uart.gnss takes no replay source on this backend, only model` | the `skip` given: pytest's skip under the plugin | A source this backend does not declare |
-| `{value!r} is not a number of seconds of the board's time`, and the same with `, 0 or more` | `TypeError`, `ValueError` | A duration that is not an `int` or a `float`, or is negative, infinite or NaN |
+| `{what} takes a Duration, as seconds({value!r}), not {value!r}` (`as seconds(5)` for what is not a number), `{what} takes a Duration of 0 or more, not {duration}` | `TypeError`, `ValueError` | A duration that is not a `Duration`, or is below 0 |
 | `{description} did not happen within {within}: waited from {start} to {end} of the board's time` | `NeverHappened` | `wait_until`'s deadline |
 | `the run ended {when} while the test waited {what}: {reason}` | `RunEnded` | The run ended during, or before, a wait. `{when}` is `at {time}` from the runner's `stats`, `after the turn at {time}` without them, the last held turn being only a bound, or `before its first turn`. `{what}` is `until {time}` for `wait`, `for {description}` for `wait_until`; `{reason}` is `[the link failed: {error}; ]the runner exited with code {code}; its last output:` and the tail |
 

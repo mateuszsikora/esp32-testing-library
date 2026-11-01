@@ -13,13 +13,13 @@ back to the command line, and a session started with `--embedded-services esp` w
 `esp32sim` case open a serial port. The app comes from the `app_path` marker instead, its build
 from `build/` in it. `--count` above 1 is refused too: a test has one board.
 
-The test body sets up what is around the board, as `gnss.replay(path)` does, then calls
-`board.power_on()`, which starts the run; from there the board's clock moves only while the test
-waits on it (`board.wait`, `board.wait_until`, `console.expect`). A source that the backend's
-capability declaration (`esp32tl.boards.capabilities`) does not give skips the test at the call
-that asks for it. The `tap` marker says which interfaces a test taps; a backend that cannot gets
-its parameter marked `skip`, with the reason, before any fixture is set up, so pytest-embedded
-never opens a serial port for it.
+The test body sets up what is around the board, as `gnss.replay(path)` or `gnss.fix(at=...)` does,
+then calls `board.power_on()`, which starts the run; from there the board's clock moves only while
+the test waits on it (`board.wait`, `board.wait_until`, `console.expect`). A source that the
+backend's capability declaration (`esp32tl.boards.capabilities`) does not give skips the test at
+the call that asks for it. The `tap` marker says which interfaces a test taps; a backend that
+cannot gets its parameter marked `skip`, with the reason, before any fixture is set up, so
+pytest-embedded never opens a serial port for it.
 
 Every test that uses `board` gets pytest-timeout's `timeout` marker of `DEFAULT_TIMEOUT` seconds of
 wall time, unless the session or the test sets a timeout of its own: the runner waits for the test
@@ -43,7 +43,7 @@ from esp32tl.backends.esp32sim import BackendError, Esp32Sim, ended_while_waitin
 from esp32tl.boards import DEFAULT_PROFILE, BoardProfile, ProfileError
 from esp32tl.boards.capabilities import CapabilityError, Request, check, declared, refusal
 from esp32tl.interfaces.console import Console
-from esp32tl.interfaces.uart import Uart
+from esp32tl.interfaces.gnss import Gnss
 
 # The wall-time timeout of a test that uses `board`, in seconds, unless one is configured: 600 s
 # covers at least three minutes of the board's busiest work, at the 0.3 times real time stage 0
@@ -326,10 +326,13 @@ def console(board: Esp32Sim) -> Console:
 
 
 @pytest.fixture
-def gnss(board: Esp32Sim) -> Uart:
+def gnss(board: Esp32Sim) -> Gnss:
     """The far end of the board profile's `uart.gnss` route: `gnss.replay(path)`, before
-    `board.power_on()`, replays a recording into it."""
+    `board.power_on()`, replays a recording into it; `gnss.fix(at=...)` or another call of the
+    receiver model makes it a receiver the test describes."""
     try:
-        return board.uart("gnss")
+        uart = board.uart("gnss")
     except BackendError as error:
         backend_failed(error)
+    assert isinstance(uart, Gnss), uart
+    return uart

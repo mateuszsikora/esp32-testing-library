@@ -2,12 +2,14 @@
 
 The plugin is `esp32tl/pytest_plugin.py`, with the backend registry in
 `esp32tl/backends/__init__.py`, the console in `esp32tl/interfaces/console.py`, the UART
-interface behind `gnss` in `esp32tl/interfaces/uart.py`, the exceptions a test sees in
+interface in `esp32tl/interfaces/uart.py` and the one behind `gnss` in
+`esp32tl/interfaces/gnss.py`, the exceptions a test sees in
 `esp32tl/interfaces/__init__.py`, and the board
 profiles and capability declaration in `esp32tl/boards/`
 ([board-profiles-technical.md](board-profiles-technical.md)). What the user
 sees is in [pytest-plugin-user.md](pytest-plugin-user.md); the backend it starts is in
-[esp32sim-backend-technical.md](esp32sim-backend-technical.md).
+[esp32sim-backend-technical.md](esp32sim-backend-technical.md); the units and the receiver model
+are in [models-technical.md](models-technical.md).
 
 ## Data flow
 
@@ -77,7 +79,7 @@ sees is in [pytest-plugin-user.md](pytest-plugin-user.md); the backend it starts
    A `BackendError` goes through `backend_failed`, which raises
    `pytest.fail.Exception(f"{Esp32Sim.name}: {error}", pytrace=False) from None`: one line, no
    chained traceback.
-6. **A source the backend cannot give**, asked for in the body (`gnss.replay`), reaches
+6. **A source the backend cannot give**, asked for in the body (`gnss.replay`, `gnss.fix`), reaches
    `skip_at_the_test(reason)`, which raises
    `pytest.skip.Exception(reason, _use_item_location=True)`. `_use_item_location` is pytest's own
    argument for its skip marker: the report names the test's file and line, not the line of
@@ -106,7 +108,9 @@ sees is in [pytest-plugin-user.md](pytest-plugin-user.md); the backend it starts
    (`compiled`: text in UTF-8 and bytes with `re.DOTALL`, as pexpect compiles them for a bytes
    stream; `re.escape` for `expect_exact`; a compiled text pattern again with its flags but
    `re.UNICODE`, where pexpect drops every flag of it) and call
-   `board.wait_on_clock(found, timeout, description)`. `found` runs in the test's thread at every
+   `board.wait_on_clock(found, timeout_of(timeout), description)`. `timeout_of` takes a
+   `Duration` as it is and a number as seconds, pytest-embedded's unit, through
+   `esp32tl.units.number`, and refuses one below 0. `found` runs in the test's thread at every
    turn ([esp32sim-backend-technical.md](esp32sim-backend-technical.md#data-flow)). It skips a
    turn that left `board.console_output` as long as the last look saw it. Otherwise it searches
    the console from where the last match ended, with every pattern, through a `memoryview`
@@ -121,12 +125,30 @@ sees is in [pytest-plugin-user.md](pytest-plugin-user.md); the backend it starts
    pytest-embedded does, or whole with `return_what_before_match`; the cursor moves to the end.
    `description` is the patterns' `repr`, ` or ` between them, then ` on the console`, which
    `NeverHappened` and `RunEnded` quote.
-10. **`gnss` fixture** returns `board.uart("gnss")`, the `Uart` the link carries for `uart.gnss`.
-   A profile without the route makes `uart` raise `BackendError`, which goes through
-   `backend_failed`. `Uart.replay(path)` is in [replay-technical.md](replay-technical.md#data-flow);
-   before it reads the recording it calls the backend's `asked(interface, "replay")`, which
-   refuses a source after power-on or one no backend gives, and skips the test when this backend
-   does not give it.
+   `console.line(pattern)` and `console.lines(...)` read `board.console_lines`, a `ConsoleLines`
+   that the backend feeds with every `console` message's time and bytes: it gathers the bytes up
+   to each `\n` and appends a `Line(Duration(t), text)`, `t` being the time of the message that
+   carried the line ending, `text` decoded as UTF-8 with replacement, its `\r\n` or `\n` and
+   the colour codes `\x1b[…m` taken out (`COLOUR`). A line not ended stays out. `line` returns a
+   `LineCondition`, which keeps the number of lines when it was made and, when called, searches
+   those after it with the compiled pattern (`line_pattern`: text, or a compiled text pattern
+   as it is) and returns the first match as a `Line` with its `match`; a look that finds none
+   moves its start past the lines it saw. Its `repr`, `a console line matching '{pattern}'`, is
+   what `board.wait_until` names it by, as an instance has no `__qualname__`. `lines(pattern=None,
+   *, since=None)` filters the lines by `line.at >= since` and by the pattern. Neither moves
+   `expect`'s cursor.
+10. **`gnss` fixture** returns `board.uart("gnss")`, the `Gnss` the link carries for `uart.gnss`,
+   a `Uart` with the receiver model's calls. A profile without the route makes `uart` raise
+   `BackendError`, which goes through `backend_failed`. `Uart.replay(path)` is in
+   [replay-technical.md](replay-technical.md#data-flow); before it reads the recording it calls
+   the backend's `asked(interface, "replay")`, which refuses a source after power-on or one no
+   backend gives, and skips the test when this backend does not give it. Each model call
+   (`fix`, `move`, `stand_still`, `degrade`, `lose_fix`, `go_silent`, `resume`, `position`) goes
+   through `Gnss.receiver()`: the route's source when it is a `GnssReceiver` already; a
+   `SourceError` when it is a replay; otherwise `_ask("model")`, the same `asked` check with
+   `"model"`, then `GnssReceiver(now, world)` given as the source of kind `model`. `now` and
+   `world` are the backend's, the held clock's time and the world's time at power-on
+   ([models-technical.md](models-technical.md#data-flow)).
 
 ## Interfaces
 
@@ -137,9 +159,13 @@ sees is in [pytest-plugin-user.md](pytest-plugin-user.md); the backend it starts
 | `board_profile(name)`, `tap(*interfaces)` | markers | The board profile and the test's taps ([board-profiles-technical.md](board-profiles-technical.md#interfaces)) |
 | `board(request, dut, app_path, msg_queue, _meta)` | fixture, function scope | Yields an `Esp32Sim`, off; closes it at teardown, then adds the `esp32sim link` report section and the `esp32sim_link` user property. Its methods (`power_on`, `wait`, `wait_until`, `now`, `utc`) are in [esp32sim-backend-technical.md](esp32sim-backend-technical.md#interfaces) |
 | `console(board)` | fixture, function scope | Returns `Console(board)` |
-| `gnss(board)` | fixture, function scope | Returns `board.uart("gnss")` |
-| `Console(board)` | class, `esp32tl/interfaces/console.py` | `expect(pattern, timeout=30, *, return_what_before_match=False)`, `expect_exact(...)` with the same arguments; no `write`. `board` is a `Clocked`: `console_output` and `wait_on_clock(condition, within, description)` |
+| `gnss(board)` | fixture, function scope | Returns `board.uart("gnss")`, a `Gnss` |
+| `Console(board)` | class, `esp32tl/interfaces/console.py` | `expect(pattern, timeout=30, *, return_what_before_match=False)`, `expect_exact(...)` with the same arguments, `timeout` a `Duration` or a number of seconds; `line(pattern)`, `lines(pattern=None, *, since=None)`; no `write`. `board` is a `Clocked`: `console_output`, `console_lines` and `wait_on_clock(condition, within, description)`, `within` a `Duration` |
+| `Line(at, text, match=None)` | frozen dataclass, `esp32tl/interfaces/console.py` | A console line: `at` a `Duration`, `text` a `str`, `match` an `re.Match[str]`; `line[group]` is `match[group]`, a `TypeError` without a match |
+| `ConsoleLines()` | class, `esp32tl/interfaces/console.py` | `feed(t, data)`, `lines`: the console cut into `Line`s |
+| `LineCondition(lines, pattern)` | class, `esp32tl/interfaces/console.py` | What `console.line` returns: called, the first matching `Line` since it was made, or `None` |
 | `DEFAULT_TIMEOUT` | `int`, `esp32tl/interfaces/console.py` | 30: an expect's `timeout`, in seconds of the board's time |
+| `Gnss(name, wire, *, clock, directory, now, world, asked=...)` | class, `esp32tl/interfaces/gnss.py`, a `Uart` | `fix(at, *, hdop=0.9, satellites=8)`, `move(*, heading, speed)`, `stand_still()`, `degrade(*, hdop=None, satellites=None)`, `lose_fix()`, `go_silent()`, `resume()`, `position`, each the `GnssReceiver`'s; `receiver()` the receiver, made at the first call |
 | `Uart(name, wire, *, clock, directory, asked=...)` | class, `esp32tl/interfaces/uart.py`, a `BoardLink` `Interface` | `uart.<role>` and its source: attributes `clock`, `directory`, `asked`, `source` and `source_kind` (`None` until given, then the source and `"replay"`); `replay(path)` returns the `Replay`. Without a source it hears everything and says nothing; with one, `receive`, `poll`, `quiet_until` and `latency` are the source's. `asked(name, source)` is called before a source is made, and refuses it by raising |
 | `Source` | protocol, `esp32tl/interfaces/uart.py` | `receive(t, data)`, `poll(now)`, `quiet_until()`, `latency()`: what drives a `Uart` |
 | `SourceError` | exception, `esp32tl/interfaces/__init__.py` | A source after power-on, a second one on a route, or one no backend gives |
@@ -191,10 +217,12 @@ pytest-embedded's `build_dir` fixture. The backend's own environment variables a
 | `esp32sim: the test set up the {kind} of {interface} and never called board.power_on(): it ran no firmware` | A test whose setup and call passed, which gave a source and never powered on | Error at teardown |
 | `the board is off; call board.power_on() first` | `BoardOff` from a wait, an expect, `now` or `utc` before power-on | Fails the test |
 | `the board is on already: power it on once` | `BoardOff` from a second `power_on()` | Fails the test |
-| `{interface}: the board is on already: give a route its source before board.power_on()`, `uart.gnss has its source already: one per test`, `no backend takes a '{source}' source on {interface}; the sources there are {sources}` | `SourceError` from `Uart.replay` | Fails the test ([replay-user.md](replay-user.md#when-the-test-gets-it-wrong)) |
+| `{interface}: the board is on already: give a route its source before board.power_on()`, `uart.gnss has its source already: one per test`, `no backend takes a '{source}' source on {interface}; the sources there are {sources}` | `SourceError` from `Uart.replay`, or from the first model call of `Gnss` | Fails the test ([replay-user.md](replay-user.md#when-the-test-gets-it-wrong)) |
+| `uart.gnss replays a recording: it has no receiver to describe; one source per test` | `SourceError` from a model call of `Gnss` after `gnss.replay` | Fails the test |
 | `{description} did not happen within {within}: waited from {start} to {end} of the board's time` | `NeverHappened` from `wait_until` or an expect | Fails the test |
 | `the run ended {when} while the test waited {what}: {reason}` | `RunEnded` from a wait or an expect; `{when}` is `at {time}` from the runner's `stats`, `after the turn at {time}` without them, the last held turn being only a bound, or `before its first turn`; `{what}` is `until {time}` or `for {description}`, `{reason}` the backend's ([esp32sim-backend-technical.md](esp32sim-backend-technical.md#failure-modes)) | Fails the test |
-| `expect: no pattern to wait for`, `expect: {pattern!r} is not a pattern`, `expect_exact takes text or bytes, not a compiled pattern` | `ValueError`, `TypeError` from an expect | Fails the test |
+| `expect: no pattern to wait for`, `expect: {pattern!r} is not a pattern`, `expect_exact takes text or bytes, not a compiled pattern`, `expect: timeout is {timeout!r}, not a Duration or a number of seconds`, `expect: timeout is {timeout}, less than 0` | `ValueError`, `TypeError` from an expect | Fails the test |
+| `console.line: {pattern!r} is not a regular expression on text`, `console.lines: since is {since!r}, not a Duration, as seconds(5)`, `{text!r} was found by no pattern, and has no groups` | `TypeError` from `line`, `lines`, or a `Line`'s group | Fails the test |
 | `Failed: Timeout (>{timeout}s) from pytest-timeout.` | The test ran out of its wall-time timeout | Fails the test; the teardown ends the runner |
 | `esp32sim: {problems}; its output is in {self.dut.logfile}` | `Esp32Sim.close` raised, and the call did not fail on `RunEnded`. `{problems}` is the exit code, the kill or the link's error ([esp32sim-backend-technical.md](esp32sim-backend-technical.md#failure-modes)) | Error at teardown, also after a passing call |
 
@@ -227,11 +255,13 @@ pytest-embedded starts a multiprocessing manager for every session:
   `RunEnded`), `test_the_runner_starts_at_power_on_on_the_test_s_clock` (its command line),
   `test_a_runner_that_exits_with_an_error_fails_the_test`,
   `test_a_failure_of_another_kind_does_not_hide_the_runner_s_exit`,
-  `test_the_board_s_clock_and_sources_go_in_order` (each `BoardOff` and `SourceError`),
+  `test_the_board_s_clock_and_sources_go_in_order` (each `BoardOff` and `SourceError`, a model
+  after power-on, after a replay and before one),
   `test_a_source_the_backend_cannot_give_skips_at_the_call` (the skip at the test's line, and the
-  error for a source no backend gives, with a declaration a conftest swaps in) and
-  `test_a_test_that_sets_up_a_source_and_never_powers_on_fails_at_teardown` (only the test that
-  passed is reported, and no runner starts).
+  error for a source no backend gives, with a declaration a conftest swaps in),
+  `test_a_model_the_backend_cannot_give_skips_at_the_call` and
+  `test_a_test_that_sets_up_a_source_and_never_powers_on_fails_at_teardown` (a replay and a
+  model; only the tests that passed are reported, and no runner starts).
 - Against a fake runner that speaks the link protocol (`LINK_RUNNER`):
   `test_the_backend_serves_the_link_and_ends_the_run_with_stop` (the `esp32sim link` section
   with `-rA`, and the `esp32sim_link` property read back from `--junitxml` as JSON),
@@ -244,7 +274,11 @@ pytest-embedded starts a multiprocessing manager for every session:
 feeding `BoardLink`: that the run stands still until the test waits, that `wait` lands on its
 instant, the 100 ms steps of `wait_until`, `NeverHappened` and `RunEnded` with their messages, a
 condition that raises, a last look after the run's end, and `expect`'s search from the last match,
-lists, `expect_exact`, `return_what_before_match`, `pexpect.EOF` and the board-time `timeout`.
+lists, `expect_exact`, `return_what_before_match`, `pexpect.EOF` and the board-time `timeout`, as a
+number and as a `Duration`; the console's lines, their times, colour codes and partial lines, and
+`line` as a condition from when it was made
+(`test_console_lines_are_stamped_with_the_time_their_ending_came_at`,
+`test_a_line_condition_finds_the_first_matching_line_from_when_it_was_made`).
 
 The markers of the board profiles are tested in `tests/test_pytest_plugin.py` too:
 `test_a_backend_that_cannot_give_a_tap_skips_with_the_reason`,
@@ -258,6 +292,9 @@ The markers of the board profiles are tested in `tests/test_pytest_plugin.py` to
 through `pytester`, a source after power-on, an expect before it, a source never powered on and a
 profile without the route ([replay-technical.md](replay-technical.md#tests)).
 `tests/test_replay.py` tests `Uart` without an emulator.
+
+`tests/test_nmea_reader_model.py` runs the receiver model into `nmea_reader` on the real runner,
+with `console.line` and `console.lines` ([models-technical.md](models-technical.md#tests)).
 
 `tests/test_package.py` checks the `pytest11` entry point (`test_plugin_is_registered_through_pytest11`)
 and that pytest loaded the module under the name `esp32tl` (`test_pytest_loaded_the_plugin`).

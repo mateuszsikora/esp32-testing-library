@@ -16,7 +16,8 @@ import pytest
 from esp32tl import recording
 from esp32tl.backends.esp32sim import Esp32Sim
 from esp32tl.interfaces.console import Console
-from esp32tl.interfaces.uart import Uart
+from esp32tl.interfaces.gnss import Gnss
+from esp32tl.units import ms, seconds
 
 RECORDINGS = Path(__file__).resolve().parent.parent / "recordings"
 
@@ -33,13 +34,13 @@ FIX = re.compile(rb"fix(?: acquired)? lat=\S+ lon=\S+(?=\r?\n)")
 TEN_FIXES_WALL_SECONDS = 5
 
 
-def test_reports_a_fix(board: Esp32Sim, gnss: Uart, console: Console) -> None:
+def test_reports_a_fix(board: Esp32Sim, gnss: Gnss, console: Console) -> None:
     gnss.replay("../recordings/gnss-generated-1.jsonl")
     board.power_on()
     console.expect_exact("fix acquired lat=52.229677 lon=21.012233", timeout=30)
 
 
-def test_fix_follows_the_recording(board: Esp32Sim, gnss: Uart, console: Console) -> None:
+def test_fix_follows_the_recording(board: Esp32Sim, gnss: Gnss, console: Console) -> None:
     expected = expected_fixes("gnss-generated-2.jsonl")
     assert expected[0] == "fix acquired lat=-34.603700 lon=-58.381600"
     gnss.replay("../recordings/gnss-generated-2.jsonl")
@@ -52,7 +53,7 @@ def test_fix_follows_the_recording(board: Esp32Sim, gnss: Uart, console: Console
     assert board.link.warnings == []
 
 
-def test_time_is_emulated(board: Esp32Sim, gnss: Uart, console: Console) -> None:
+def test_time_is_emulated(board: Esp32Sim, gnss: Gnss, console: Console) -> None:
     started = time.monotonic()
     gnss.replay("../recordings/gnss-generated-1.jsonl")
     board.power_on()
@@ -61,12 +62,12 @@ def test_time_is_emulated(board: Esp32Sim, gnss: Uart, console: Console) -> None
     fixes = [next_fix(console) for _ in range(10)]
     elapsed = time.monotonic() - started
     assert fixes == expected_fixes("gnss-generated-1.jsonl")[:10]
-    assert 10 < board.now <= 10.1
+    assert seconds(10) < board.now <= ms(10_100)
     assert elapsed < TEN_FIXES_WALL_SECONDS, f"ten fixes took {elapsed:.2f} wall seconds"
 
 
 def test_only_well_formed_fixes_count_and_an_epoch_prints_once(
-    tmp_path: Path, board: Esp32Sim, gnss: Uart, console: Console
+    tmp_path: Path, board: Esp32Sim, gnss: Gnss, console: Console
 ) -> None:
     gga = "GPGGA,120000.00,5213.7806,N,02100.7340,E,1,08,0.9,110.0,M,34.0,M,,"
     feed = [

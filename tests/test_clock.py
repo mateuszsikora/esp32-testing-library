@@ -13,10 +13,12 @@ import pytest
 
 from esp32tl.backends.clock import HeldClock, nanoseconds, seconds
 from esp32tl.interfaces import NeverHappened, RunEnded
-from esp32tl.interfaces.console import Console
+from esp32tl.interfaces.console import Console, ConsoleLines, Line
 from esp32tl.link.boardlink import BoardLink
 from esp32tl.link.protocol import Console as ConsoleMessage
 from esp32tl.link.protocol import RunnerHello, Stop, Sync, Wait
+from esp32tl.units import Duration, minutes
+from esp32tl.units import seconds as secs
 
 HELLO = RunnerHello(1, "esp32", "emulated-fifo-write", "0" * 40)
 MS = 1_000_000
@@ -36,11 +38,8 @@ class Run:
     ) -> None:
         self.clock = HeldClock()
         self.console_output = bytearray()
-        self.link = BoardLink(
-            "esp32-devkitc",
-            hold=self.clock,
-            console=lambda t, data: self.console_output.extend(data),
-        )
+        self.console_lines = ConsoleLines()
+        self.link = BoardLink("esp32-devkitc", hold=self.clock, console=self._console)
         self.pending = list(console)
         self.end = end
         self.stats = stats
@@ -74,8 +73,14 @@ class Run:
 
     # What the console needs of the board.
 
-    def wait_on_clock(self, condition: Callable[[], T], within: float, description: str) -> T:
-        return self.clock.wait_until(condition, nanoseconds(within), description)
+    def _console(self, t: int, data: bytes) -> None:
+        self.console_output.extend(data)
+        self.console_lines.feed(t, data)
+
+    def wait_on_clock(
+        self, condition: Callable[[], T | None], within: Duration, description: str
+    ) -> T:
+        return self.clock.wait_until(condition, nanoseconds(within, "within"), description)
 
 
 def test_the_run_stands_still_until_the_test_waits() -> None:
@@ -181,16 +186,16 @@ def test_stop_ends_the_held_turn_with_stop() -> None:
     assert run.stopped and run.syncs == [0, S]
 
 
-def test_seconds_are_shown_without_trailing_zeros_and_taken_finite() -> None:
+def test_the_board_s_durations_are_durations_of_0_or_more() -> None:
     assert [seconds(n) for n in (0, S, 1500 * MS, 1)] == ["0 s", "1 s", "1.5 s", "0.000000001 s"]
-    assert nanoseconds(1.5) == 1500 * MS
-    assert nanoseconds(30) == 30 * S
-    for bad in (-1, float("nan"), float("inf")):
-        with pytest.raises(ValueError, match="is not a number of seconds of the board's time"):
-            nanoseconds(bad)
-    for wrong in (True, "1", None):
-        with pytest.raises(TypeError, match="is not a number of seconds of the board's time"):
-            nanoseconds(wrong)  # type: ignore[arg-type]
+    assert nanoseconds(secs(1.5), "board.wait") == 1500 * MS
+    assert nanoseconds(secs(0), "board.wait") == 0
+    with pytest.raises(ValueError, match=r"^board.wait takes a Duration of 0 or more, not -1 s$"):
+        nanoseconds(secs(-1), "board.wait")
+    for wrong, example in ((2.5, "seconds(2.5)"), (True, "seconds(5)"), ("1", "seconds(5)")):
+        message = f"board.wait takes a Duration, as {example}, not {wrong!r}"
+        with pytest.raises(TypeError, match=f"^{re.escape(message)}$"):
+            nanoseconds(wrong, "board.wait")  # type: ignore[arg-type]
 
 
 def console_run(*printed: tuple[float, bytes], end: float = 3600) -> tuple[Run, Console]:
@@ -289,5 +294,54 @@ def test_expect_refuses_what_is_not_a_pattern_or_a_time() -> None:
         console.expect([])
     with pytest.raises(TypeError, match="is not a pattern"):
         console.expect(42)  # type: ignore[arg-type]
-    with pytest.raises(ValueError, match="-1 is not a number of seconds"):
+    with pytest.raises(ValueError, match=r"^expect: timeout is -1 s, less than 0$"):
         console.expect("x", timeout=-1)
+    with pytest.raises(ValueError, match=r"^expect: timeout is -0.5 s, less than 0$"):
+        console.expect("x", timeout=secs(-0.5))
+    with pytest.raises(ValueError, match="timeout is nan, not a Duration or a number of seconds"):
+        console.expect("x", timeout=float("nan"))
+    with pytest.raises(TypeError, match="timeout is '1', not a Duration or a number of seconds"):
+        console.expect("x", timeout="1")  # type: ignore[arg-type]
+
+
+def test_expect_s_timeout_may_be_a_duration() -> None:
+    _, console = console_run((5, b"late\n"))
+    with pytest.raises(NeverHappened, match=r"did not happen within 2\.5 s"):
+        console.expect("late", timeout=secs(2.5))
+    assert console.expect("late", timeout=minutes(1)).group() == b"late"
+
+
+def test_console_lines_are_stamped_with_the_time_their_ending_came_at() -> None:
+    run, console = console_run(
+        (1, b"\x1b[0;32mI (10) boot: one\x1b[0m\r\n"), (2, b"two "), (3, b"halves\nthree")
+    )
+    run.clock.wait(4 * S)
+    # Without colour codes and line endings; "three" has not ended, and is no line yet.
+    assert console.lines() == [Line(secs(1), "I (10) boot: one"), Line(secs(3), "two halves")]
+    assert console.lines(since=secs(1.5)) == [Line(secs(3), "two halves")]
+    assert console.lines(since=secs(3.5)) == []
+    (found,) = console.lines(r"(?P<word>\w+) halves")
+    assert found.at == secs(3) and found["word"] == "two" and found[1] == "two"
+    with pytest.raises(TypeError, match="was found by no pattern, and has no groups"):
+        console.lines()[0]["word"]
+    with pytest.raises(TypeError, match=r"since is 1\.5, not a Duration"):
+        console.lines(since=1.5)  # type: ignore[arg-type]
+
+
+def test_a_line_condition_finds_the_first_matching_line_from_when_it_was_made() -> None:
+    run, console = console_run((1, b"fix 1\n"), (2, b"other\n"), (3, b"fix 3\n"), (4, b"fix 4\n"))
+    run.clock.wait(1500 * MS)
+    condition = console.line(r"fix (?P<n>\d)")
+    assert condition() is None
+    line = run.clock.wait_until(condition, 10 * S, repr(condition))
+    assert (line.at, line.text, line["n"]) == (secs(3), "fix 3", "3")
+    assert run.clock.now == 3 * S
+    never = console.line(re.compile("never"))
+    with pytest.raises(NeverHappened) as raised:
+        run.clock.wait_until(never, S, repr(never))
+    assert str(raised.value) == (
+        "a console line matching 'never' did not happen within 1 s: waited from 3 s to 4 s of"
+        " the board's time"
+    )
+    with pytest.raises(TypeError, match="is not a regular expression on text"):
+        console.line(b"fix")  # type: ignore[arg-type]

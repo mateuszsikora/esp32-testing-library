@@ -15,10 +15,11 @@ no `--peer-timeout`: the test's own timeout, in wall time, catches a run that ha
 The backend owns the link's socket (`docs/protocol.md` §1): it binds a Unix socket before it
 spawns the runner, passes it as `--board socket:PATH`, and serves the one connection with a
 `BoardLink` in a thread of its own. The link carries a `Uart` for every UART route of the board
-profile, which says nothing until the test gives it a source, as `gnss.replay(path)` does before
-power-on. The backend also owns the end of the run (§9), before the dut is torn down: `stop` at the
-turn the test left the run at, `SIGTERM` for a runner that is not there, the link read to end of
-file, the runner waited for, `SIGKILL` only as a last resort.
+profile, `uart.gnss` a `Gnss`, which says nothing until the test gives it a source, as
+`gnss.replay(path)` or `gnss.fix(at=...)` does before power-on. The backend also owns the end of
+the run (§9), before the dut is torn down: `stop` at the turn the test left the run at, `SIGTERM`
+for a runner that is not there, the link read to end of file, the runner waited for, `SIGKILL`
+only as a last resort.
 """
 
 import contextlib
@@ -44,8 +45,11 @@ from esp32tl.backends.clock import HeldClock, nanoseconds
 from esp32tl.boards import BoardProfile, capabilities
 from esp32tl.boards.capabilities import CapabilityError, Request
 from esp32tl.interfaces import BoardOff, RunEnded, SourceError
+from esp32tl.interfaces.console import ConsoleLines
+from esp32tl.interfaces.gnss import Gnss
 from esp32tl.interfaces.uart import Uart
 from esp32tl.link.boardlink import BoardLink, Wire
+from esp32tl.units import Duration
 
 T = TypeVar("T")
 
@@ -147,6 +151,13 @@ def profile_uart(
 ) -> Uart:
     """The `Uart` on the route `profile` gives `interface` (`uart.gnss`), at the route's pins and
     baud; the other arguments are `Uart`'s."""
+    return Uart(
+        interface, route_wire(profile, interface), clock=clock, directory=directory, asked=asked
+    )
+
+
+def route_wire(profile: BoardProfile, interface: str) -> Wire:
+    """The pins and baud of the route `profile` gives `interface` (`uart.gnss`)."""
     kind, _, role = interface.partition(".")
     route = profile.uart.get(role) if kind == "uart" else None
     if route is None:
@@ -154,13 +165,7 @@ def profile_uart(
             f"the board profile {profile.name} has no {interface};"
             f" its interfaces are {', '.join(profile.interfaces)}"
         )
-    return Uart(
-        interface,
-        Wire(tx=route.tx, rx=route.rx, baud=route.baud),
-        clock=clock,
-        directory=directory,
-        asked=asked,
-    )
+    return Wire(tx=route.tx, rx=route.rx, baud=route.baud)
 
 
 class RunnerPopen(DuplicateStdoutPopen):
@@ -231,35 +236,47 @@ class Esp32Sim:
         self._skip = skip or refuse
         self.app = load_app(app_path)
         self._runner, self._rom = runner_path(), rom_path()
-        # What the guest printed on its console, as the link brings it.
+        # What the guest printed on its console, as the link brings it, and cut into lines.
         self.console_output = bytearray()
+        self.console_lines = ConsoleLines()
         self._hold = HeldClock()
+        self._utc = POWER_ON_UTC
         # Every route of the profile, listening and silent until the test gives it a source.
-        self._uarts = {
-            f"uart.{role}": profile_uart(
-                profile,
-                f"uart.{role}",
-                clock=self.clock,
-                directory=self.directory,
-                asked=self._asked,
-            )
-            for role in profile.uart
-        }
+        self._uarts = {f"uart.{role}": self._route(f"uart.{role}") for role in profile.uart}
         self.link = BoardLink(
             profile.name,
             list(self._uarts.values()),
             chip=profile.chip,
             on_error=self._end_run,
             hold=self._hold,
-            console=lambda t, data: self.console_output.extend(data),
+            console=self._console,
             clock=self.clock,
         )
         self.process: RunnerPopen | None = None
-        self._utc = POWER_ON_UTC
         self._exited = threading.Event()
         # One SIGTERM at most: a second one kills the runner, with 128 + 15 (protocol §9).
         self._terminated = False
         self._terminating = threading.Lock()
+
+    def _route(self, interface: str) -> Uart:
+        """The `Uart` of the profile's route `interface`: a `Gnss` for `uart.gnss`, whose
+        receiver reads the board's time from the clock and the world's from the power-on."""
+        wire = route_wire(self.profile, interface)
+        if interface == "uart.gnss":
+            return Gnss(
+                interface,
+                wire,
+                clock=self.clock,
+                directory=self.directory,
+                now=lambda: self._hold.now,
+                world=lambda: self._utc,
+                asked=self._asked,
+            )
+        return Uart(interface, wire, clock=self.clock, directory=self.directory, asked=self._asked)
+
+    def _console(self, t: int, data: bytes) -> None:
+        self.console_output.extend(data)
+        self.console_lines.feed(t, data)
 
     def uart(self, role: str) -> Uart:
         """The `Uart` on the link for the profile's `uart.<role>` route."""
@@ -292,7 +309,7 @@ class Esp32Sim:
 
     def set_up(self) -> list[str]:
         """What the test has set up that only a run uses: the sources it gave, as `the replay
-        of uart.gnss`."""
+        of uart.gnss` or `the model of uart.gnss`."""
         return [
             f"the {uart.source_kind} of {name}"
             for name, uart in self._uarts.items()
@@ -335,31 +352,35 @@ class Esp32Sim:
         self._waiter.start()
 
     @property
-    def now(self) -> float:
-        """The board's time since power-on, in seconds: where the test's clock stands."""
-        return self._on().now / 10**9
+    def now(self) -> Duration:
+        """The board's time since power-on: where the test's clock stands."""
+        return Duration(self._on().now)
 
     @property
     def utc(self) -> datetime:
         """The world's time: the UTC instant at power-on, plus the board's time since."""
         return self._utc + timedelta(microseconds=self._on().now // 1000)
 
-    def wait(self, duration: float) -> None:
-        """Lets the board run for `duration` seconds of its own time."""
-        self._on().wait(nanoseconds(duration))
+    def wait(self, duration: Duration) -> None:
+        """Lets the board run for `duration` of its own time."""
+        self._on().wait(nanoseconds(duration, "board.wait"))
 
-    def wait_until(self, condition: Callable[[], T], *, within: float) -> T:
-        """Lets the board run until `condition` returns something true, for at most `within`
-        seconds of its time; returns what it returned. `condition` is asked now, then at every
-        turn of the link, at least every 100 ms of the board's time. Raises `NeverHappened`
-        when `within` runs out, and `RunEnded` when the run ends first."""
+    def wait_until(self, condition: Callable[[], T | None], *, within: Duration) -> T:
+        """Lets the board run until `condition` returns something true, for at most `within` of
+        its time; returns what it returned. `condition` is asked now, then at every turn of the
+        link, at least every 100 ms of the board's time. Raises `NeverHappened` when `within`
+        runs out, and `RunEnded` when the run ends first."""
         name = getattr(condition, "__qualname__", None)
         description = f"the condition {name}" if name else repr(condition)
-        return self.wait_on_clock(condition, within, description)
+        return self._on().wait_until(
+            condition, nanoseconds(within, "board.wait_until: within"), description
+        )
 
-    def wait_on_clock(self, condition: Callable[[], T], within: float, description: str) -> T:
+    def wait_on_clock(
+        self, condition: Callable[[], T | None], within: Duration, description: str
+    ) -> T:
         """`wait_until`, with `description` naming the condition in its errors."""
-        return self._on().wait_until(condition, nanoseconds(within), description)
+        return self._on().wait_until(condition, nanoseconds(within, "within"), description)
 
     def _on(self) -> HeldClock:
         if not self.powered:

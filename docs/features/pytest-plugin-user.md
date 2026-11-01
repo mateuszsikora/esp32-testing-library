@@ -1,7 +1,8 @@
 # pytest plugin
 
 esp32tl ships a pytest plugin that runs an ESP-IDF firmware image, lets a test read what the
-firmware prints, and replays a recording into the firmware's GNSS UART. A test asks for the
+firmware prints, and puts a GNSS receiver on the firmware's GNSS UART: a recording replayed, or a
+receiver the test describes. A test asks for the
 `board` fixture, names the app with the `app_path` marker, sets up what is around the board,
 powers it on, and waits on the board's own clock for what the firmware does. It runs once on
 every backend. pytest loads the plugin by itself once esp32tl is installed; it builds on
@@ -37,6 +38,30 @@ The body first sets up what is at the far end of the board's wires, here a repla
 in `board.wait`, `board.wait_until` or a console expect. The `timeout=30` is 30 seconds of the
 board's time, not of the wall clock.
 
+A test with a receiver it describes instead, from `tests/test_nmea_reader_model.py`:
+
+```python
+from esp32tl.units import NORTH, Position, about, km, km_h, m, minutes, seconds
+
+WARSAW = Position(52.229677, 21.012233)
+FIX = r"^fix lat=(?P<lat>\S+) lon=(?P<lon>\S+)$"
+
+
+def test_follows_the_receiver_as_it_moves(board, gnss, console):
+    gnss.fix(at=WARSAW)
+    board.power_on()
+    board.wait(seconds(10))
+
+    gnss.move(heading=NORTH, speed=km_h(36))  # 10 m/s
+    board.wait(minutes(1) + seconds(40))  # 1 km
+
+    latest = board.wait_until(console.line(FIX), within=seconds(2))
+    reported = Position(float(latest["lat"]), float(latest["lon"]))
+    assert reported.distance_to(WARSAW) == about(km(1), within=m(15))
+```
+
+What the receiver can be told, and the units, are in [models and units](models-user.md).
+
 - The path is relative to the directory of the test file. Without the marker, the app is that
   directory itself.
 - The backend runs the build in the app's `build/` directory, the layout `idf.py build` leaves:
@@ -58,20 +83,21 @@ What the backend needs besides the build, the runner and the ROM ELF, is in
 
 - `board.power_on(utc=None)` starts the run: the runner starts, the firmware boots, and the
   board's clock starts at 0, where it stays until the test waits. `utc`, a `datetime` with a
-  timezone, is the world's time at power-on, `2026-01-01T12:00:00Z` unless given; nothing reads it
-  yet but `board.utc`. A second call raises `BoardOff: the board is on already: power it on once`.
-- `board.wait(seconds)` lets the board run for that many seconds of its own time, and returns at
-  exactly that instant: `board.wait(2.5)` moves `board.now` by 2.5.
-- `board.wait_until(condition, within=seconds)` lets the board run until `condition()`, a
-  function of no arguments, returns something true, for at most `within` seconds of the board's
+  timezone, is the world's time at power-on, `2026-01-01T12:00:00Z` unless given: `board.utc` and
+  the GNSS receiver model's sentences are dated from it. A second call raises
+  `BoardOff: the board is on already: power it on once`.
+- `board.wait(duration)` lets the board run for `duration` of its own time, and returns at
+  exactly that instant: `board.wait(seconds(2.5))` moves `board.now` by 2.5 s.
+- `board.wait_until(condition, within=duration)` lets the board run until `condition()`, a
+  function of no arguments, returns something true, for at most `within` of the board's
   time, and returns what it returned. The condition is asked at once, then at every turn of the
   link: at least every 100 ms of the board's time, and at every other turn the link takes, such
   as the one at which a replayed sentence goes in. It runs in the test's thread while the board stands still, so it can
   read anything the test can. When `within` runs out it raises `NeverHappened`, an
   `AssertionError`:
   `the condition test_x.<locals>.<lambda> did not happen within 2 s: waited from 10 s to 12 s of the board's time`.
-- `board.now` is the board's time since power-on, in seconds, as a `float`; `board.utc` the
-  world's time, the UTC instant at power-on plus `board.now`.
+- `board.now` is the board's time since power-on, a `Duration`; `board.utc` the world's time,
+  the UTC instant at power-on plus `board.now`.
 - Waiting, or reading `board.now` or `board.utc`, before `board.power_on()` raises
   `BoardOff: the board is off; call board.power_on() first`.
 - When the run ends while the test waits, because the runner exited or the harness found the link
@@ -90,15 +116,17 @@ What the backend needs besides the build, the runner and the ROM ELF, is in
   without `flash_files` or `target`: the backend runs no pytest-embedded service, so
   pytest-embedded builds nothing more. Use `board.app`.
 
-Durations are plain numbers of seconds of the board's time, `int` or `float`, 0 or more; anything
-else raises `TypeError` or `ValueError`, as in
-`-1 is not a number of seconds of the board's time, 0 or more`.
+Durations are `Duration`s, made by `ms()`, `seconds()`, `minutes()` and `hours()` from
+`esp32tl.units` ([models and units](models-user.md#units)), 0 or more. A plain number raises
+`TypeError`, as in `board.wait takes a Duration, as seconds(2.5), not 2.5`, and one below 0
+`ValueError`, as in `board.wait takes a Duration of 0 or more, not -1 s`. An expect's `timeout` is
+the exception: it takes a `Duration`, or a number of seconds as in pytest-embedded.
 
 `console` is the firmware's console, its UART0, read on the board's clock:
 
 - `console.expect(pattern, timeout=30, *, return_what_before_match=False)` lets the board run until
-  `pattern` appears on the console after the last match, for at most `timeout` seconds of the
-  board's time, and returns the `re.Match`, on bytes. `pattern` is a regular expression, as a
+  `pattern` appears on the console after the last match, for at most `timeout` of the board's
+  time, a `Duration` or a number of seconds, and returns the `re.Match`, on bytes. `pattern` is a regular expression, as a
   string, bytes or a compiled pattern, or a list of them, which matches whichever appears first.
   A string or bytes compiles with `re.DOTALL`, as pexpect compiles it, so `.` matches across
   lines, and `^` matches where the last match ended. A compiled pattern keeps its own flags,
@@ -115,6 +143,17 @@ else raises `TypeError` or `ValueError`, as in
   `'fix' on the console did not happen within 30 s: waited from 0 s to 30 s of the board's time`.
   A run that ends first raises `RunEnded`.
 - An expect before `board.power_on()` raises `BoardOff`.
+- `console.line(pattern)` is a condition for `board.wait_until`: the first console line that
+  ends from now on and matches `pattern`, a regular expression on the line's text, as a string or
+  compiled. `board.wait_until(console.line(r"^fix lat=(?P<lat>\S+)"), within=seconds(2))` returns
+  a `Line`, whose `at` is the board's time its line ending came at, `text` the line without its
+  line ending and without ESP-IDF's colour codes, and `line["lat"]` or `line[1]` a group of the
+  match. One that does not come raises
+  `NeverHappened: a console line matching '^fix lat=(?P<lat>\S+)' did not happen within 2 s: …`.
+- `console.lines(pattern=None, *, since=None)` is the list of lines printed so far, those that
+  ended at `since` or later when it is given, and those that match `pattern` when it is given:
+  `console.lines(since=lost_at) == []` says nothing was printed since. A line not ended yet is not
+  in it. `line` and `lines` do not move `expect`'s search, nor it theirs.
 - pytest-embedded's `expect_all` and `not_matching` are not there; nor is `console.write`, as the
   runner does not read input for UART0.
 
@@ -123,6 +162,12 @@ else raises `TypeError` or `ValueError`, as in
 - `gnss.replay(path)` replays a recording into it, at the recording's times, from power-on. It
   must come before `board.power_on()`. The path is relative to the test file's directory. What it
   does, and what it refuses, is in [replay](replay-user.md).
+- `gnss.fix(at=...)`, `gnss.move(...)`, `gnss.lose_fix()` and the receiver model's other calls
+  put a receiver the test describes there instead. The first of them must come before
+  `board.power_on()`; every later one changes the receiver from the board's current instant
+  ([models and units](models-user.md#the-gnss-receiver)).
+- One source per test: a model call after `gnss.replay`, or a replay after a model call, raises
+  `SourceError`.
 - Until the test gives it a source, the route is on the link, listening and silent. So is every
   other UART route of the profile.
 - On a board profile without `uart.gnss`, `gnss` is an error at setup:
@@ -198,10 +243,12 @@ A test that parametrises pytest-embedded's `count` itself above 1, as in
   [the esp32sim backend](esp32sim-backend-user.md#when-the-backend-cannot-start).
 - A source given after `board.power_on()`, or a second one on the same route: the test fails with
   `SourceError`; a recording that cannot be replayed fails it with `RecordingError` or
-  `ReplayError` ([replay](replay-user.md#what-a-replay-refuses)).
+  `ReplayError` ([replay](replay-user.md#what-a-replay-refuses)); the receiver model told what it
+  cannot be fails it with `ModelError` ([models and units](models-user.md#when-the-test-gets-it-wrong)).
 - A test that set up a source and passed without calling `board.power_on()` gets an error at
   teardown, since it ran no firmware:
-  `esp32sim: the test set up the replay of uart.gnss and never called board.power_on(): it ran no firmware`.
+  `esp32sim: the test set up the replay of uart.gnss and never called board.power_on(): it ran no firmware`,
+  or `the model of uart.gnss` for a receiver.
 - A wait or an expect whose condition does not hold in its time: `NeverHappened`.
 - The run ends while the test waits: `RunEnded`, which names the board's time it ended at (from
   the runner's statistics; without them, `after the turn at` the last turn the test saw, or
@@ -251,5 +298,6 @@ under `[tool.pytest.ini_options]`.
 - [esp32sim backend](esp32sim-backend-user.md)
 - [Board profiles](board-profiles-user.md)
 - [Replay](replay-user.md)
+- [Models and units](models-user.md)
 - [Validation firmware](validation-firmware-user.md)
 - [Testing this repository](../guides/testing.md)

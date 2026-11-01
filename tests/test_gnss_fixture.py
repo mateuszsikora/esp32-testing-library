@@ -13,7 +13,7 @@ import pytest
 
 from esp32tl.backends.esp32sim import Esp32Sim
 from esp32tl.interfaces.console import Console
-from esp32tl.interfaces.uart import Uart
+from esp32tl.interfaces.gnss import Gnss
 
 ROOT = Path(__file__).resolve().parent.parent
 NMEA_READER = ROOT / "firmware" / "nmea_reader"
@@ -22,7 +22,7 @@ RECORDING = ROOT / "recordings" / "gnss-generated-1.jsonl"
 
 @pytest.mark.app_path("../firmware/nmea_reader")
 def test_a_replay_reaches_nmea_reader_on_the_gnss_route(
-    board: Esp32Sim, gnss: Uart, console: Console
+    board: Esp32Sim, gnss: Gnss, console: Console
 ) -> None:
     replay = gnss.replay("../recordings/gnss-generated-1.jsonl")
     board.power_on()
