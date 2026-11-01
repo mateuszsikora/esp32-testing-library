@@ -127,6 +127,14 @@ and passes an `IDF_LOCAL=1` build with a warning. A missing runner or ROM ELF fa
 In `tests/test_firmware_build.py`, `test_build_refuses_esp32tl_container_set_on_the_host` skips
 with `this suite runs in a Docker container` when `/.dockerenv` exists.
 
+### Modem validation
+
+`tests/test_modem_model.py` runs the AT dialogue, timing, power and GPIO ownership without an
+emulator or network. `tests/test_modem_fixture.py` runs `firmware/modem_at` on
+`lilygo-t-a7670g-r2`, including two byte-for-byte identical UART taps. Build it with
+`firmware/build.sh modem_at`; `make firmware` and `make test` include it. It uses only the runner,
+the ROM and its firmware image at test time; PPP and host network services are not involved.
+
 ## Determinism
 
 Two runs of one recording are identical (plan, section 6): the board's clock moves only while the

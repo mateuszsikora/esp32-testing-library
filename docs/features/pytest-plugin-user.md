@@ -286,6 +286,19 @@ def test_the_firmware_follows_ri_and_drives_pwrkey(board, lines, console):
 `NeverHappened`, `RunEnded`, `BoardOff` and `SourceError` are in `esp32tl.interfaces`, `LineEvent`
 in `esp32tl.interfaces.lines`.
 
+### The modem fixture
+
+`modem` is the profile's `uart.modem`, available on `lilygo-t-a7670g-r2`. Select its model with
+`modem.signal(dbm=-73)` or another model call before `board.power_on()`, or select a recording with
+`modem.replay(path)`. `modem.tap(path)` records both directions. A selected model responds to AT,
+reads PWRKEY and drives RI through `lines`; the test can inspect all GPIO events, but cannot drive
+or release the model's RI. Model changes use `by="model"` in `lines.events()`; `level()` continues
+to read only the firmware side. The model adds a 1 ms response latency to the lines interface.
+
+See [the modem guide](modem-user.md) for signal, registration, power, command history and limits.
+There is no default modem route on `esp32-devkitc`: requesting the fixture there fails with
+`the board profile esp32-devkitc has no uart.modem; its interfaces are console, uart.gnss, sd_card`.
+
 ## The test's timeout
 
 The board's time and the wall clock are apart: the board stands still while the test body runs,

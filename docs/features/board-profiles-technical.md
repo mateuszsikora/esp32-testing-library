@@ -80,6 +80,19 @@ refused
 ([why](../decisions/harness.md#a-profile-reserves-the-consoles-uart-and-pins-not-the-flash-pins)).
 Integers are TOML integers: `true` is not a port.
 
+### Pulse timing on a line
+
+A line table may also contain `active`, `on_ms` and `off_ms`, all together. `active` is integer
+0 or 1; durations are positive integer milliseconds. A timed line must be on an output-capable
+ESP32 pin. `Reader.lines` stores them on `Line`, defaulting all three to `None` for untimed lines.
+Incomplete timing fails with `lines.modem.pwrkey: pulse timing needs active, on_ms and off_ms together`
+(prefixed by the profile filename); invalid types and ranges use the usual key-specific errors.
+
+The LilyGO PWRKEY is `{ pin = 4, active = 1, on_ms = 50, off_ms = 2500 }`, with threshold
+provenance in [modem-user.md](modem-user.md#pwrkey-and-reporting). It describes the
+ESP32 pad polarity. The modem model consumes these timings; `Lines` itself interprets no pulse.
+`tests/test_boards.py::test_pulse_timing_is_checked_as_a_complete_output_line` covers the schema.
+
 ### The capability declaration: `esp32tl/boards/capabilities.toml`
 
 One table per backend, keyed by the backend's name in `SERVICES`; in it, one inline table per
@@ -123,7 +136,7 @@ backends that could give a request.
 | `BoardProfile` | frozen dataclass | `name`, `chip`, `flash_mb: int \| None`, `psram_mb: int \| None`, `uart: Mapping[str, UartRoute]`, `lines: Mapping[str, Mapping[str, Line]]`, `sd_card: SdCardRoute \| None = None`; property `interfaces`: `["console", "uart.<role>", ..., "lines.<role>", ..., "sd_card"]`, in file order, `sd_card` only with a slot. Not hashable: its mappings are not |
 | `UartRoute` | frozen dataclass | `port`, `tx`, `rx`, `baud` |
 | `SdCardRoute` | frozen dataclass | `sclk`, `mosi`, `miso`, `cs` |
-| `Line` | frozen dataclass | `pin`, `pull: "up" \| "down" \| None` |
+| `Line` | frozen dataclass | `pin`, `pull: "up" \| "down" \| None = None`, `active`, `on_ms`, `off_ms` (each `int \| None = None`); [pulse schema](#pulse-timing-on-a-line) |
 | `capabilities.declared()` | function, cached | The shipped declaration: backend name, then kind, then `Capability` |
 | `capabilities.load(path)` | function | A declaration in any file |
 | `Capability` | frozen dataclass | `sources: tuple[str, ...] = ()`, `tap: bool = False` |

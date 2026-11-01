@@ -17,8 +17,8 @@ firmware/build.sh nmea_reader    # only the images named
 
 `make test` builds the images that are missing or whose last build did not finish, so the first
 `make test` of a checkout needs Docker too, and leaves the others as they are; `make firmware`
-builds them all again ([development guide](../guides/development.md)). Builds are incremental: a build directory made
-the same way as before is built on, not from scratch.
+builds them all again ([development guide](../guides/development.md)). Builds are incremental: a
+build directory made the same way as before is built on, not from scratch.
 
 `FIRMWARE_OUT=DIR firmware/build.sh` puts each image in `DIR/<image>/build/` instead, `DIR`
 relative to the directory you run it from. `make firmware` and `make test` always use `firmware/`,
@@ -32,6 +32,24 @@ whatever `FIRMWARE_OUT` the shell exports, because the tests read the images the
 | `nmea_reader` | `firmware/nmea_reader`, this repository's own project, for target `esp32`: reads NMEA from a GNSS receiver and prints its position fixes ([below](#nmea_reader)) |
 | `gpio_echo` | `firmware/gpio_echo`, this repository's own project, for target `esp32`: reads one GPIO line and drives another to its level ([below](#gpio_echo)) |
 | `sdspi` | ESP-IDF's `examples/storage/sd_card/sdspi`, unmodified, for target `esp32`: mounts the FAT file system of an SD card on SPI and writes, renames and reads files on it ([below](#sdspi)) |
+| `modem_at` | `firmware/modem_at`: AT dialogue, PWRKEY and RI on the LilyGO profile, without a network ([below](#modem_at)) |
+
+## `modem_at`
+
+`modem_at` exercises the [modem model](modem-user.md) without a network. Build it with
+`firmware/build.sh modem_at`; `make firmware` and `make test` include it. It uses the LilyGO
+profile's UART1 at 115200 baud on TX 26/RX 27, PWRKEY 4 and RI 33, fixed in
+`firmware/modem_at/main/main.c`.
+
+If RI starts high, it sends a PWRKEY pulse with a nominal 3000 ms delay, prints
+`modem_at: powered off RI=0` and waits another 2 s before restarting the modem. It then sends a
+pulse with a nominal 100 ms delay and prints `modem_at: powered on RI=1`. An initial `+++` is
+followed by AT, echo, SIM, registration, signal, context, functionality, timezone, operator and
+fallback commands, then dial/escape using both `ATD*99#` and `AT+CGDATA="PPP",1`. Each answer
+is printed as `modem_at: <command> => <reply>`, or `TIMEOUT` after a read waits a second with
+no byte. It prints `modem_at: dialogue complete`, then queries CSQ and CEREG repeatedly,
+with 250 ms waits, and prints `modem_at: RI=<level>`. The tests change the modem on the test's
+clock and read those ordinary console messages. It does not use esp_modem or PPP.
 
 ## `sdspi`
 
@@ -149,7 +167,7 @@ every image those are:
 |---|---|
 | `0x1000` | `bootloader/bootloader.bin` |
 | `0x8000` | `partition_table/partition-table.bin` |
-| `0x10000` | `IMAGE.bin` (`hello_world.bin`, `nmea_reader.bin`, `gpio_echo.bin`), `sd_card.bin` for `sdspi` |
+| `0x10000` | `IMAGE.bin` (`hello_world.bin`, `nmea_reader.bin`, `gpio_echo.bin`, `modem_at.bin`), `sd_card.bin` for `sdspi` |
 
 and the ELF is `IMAGE.elf`, `sd_card.elf` for `sdspi`: the files take the project's name, and
 the `sdspi` example's project is called `sd_card`. Two more files say how the build was made:
@@ -196,7 +214,8 @@ The second one ends every finished build.
 ## What the tests accept
 
 `tests/test_firmware_images.py` reads `firmware/hello_world/build/`,
-`firmware/nmea_reader/build/`, `firmware/gpio_echo/build/` and `firmware/sdspi/build/`, and for each:
+`firmware/nmea_reader/build/`, `firmware/gpio_echo/build/`, `firmware/sdspi/build/` and
+`firmware/modem_at/build/`, and for each:
 
 - passes on a build from the pinned container;
 - passes on a local build (`IDF_LOCAL=1`), with the warning
@@ -220,7 +239,7 @@ run `make firmware`.
 `firmware/build.sh` exits 1 with one of these on stderr, before writing anything, or with the exit
 code of `idf.py` when the build itself fails:
 
-- `firmware/build.sh: unknown image 'NAME'; the images are: hello_world nmea_reader gpio_echo sdspi`
+- `firmware/build.sh: unknown image 'NAME'; the images are: hello_world nmea_reader gpio_echo sdspi modem_at`
 - `firmware/build.sh: needs Docker, or IDF_LOCAL=1 to build with a local ESP-IDF`
 - `firmware/build.sh: the Docker daemon is not reachable ('docker info' failed); is Docker running?`
 - `firmware/build.sh: IDF_LOCAL=1 needs ESP-IDF in the environment: source $IDF_PATH/export.sh first`

@@ -395,3 +395,35 @@ that references to its number keep their meaning.
     `tests/test_check_docs.py::test_an_owned_path_without_docs_fails`,
     `tests/test_check_docs.py::test_tests_only_pass`,
     `tests/test_check_docs.py::test_version_only_bumps_pass`
+
+## Cellular modem
+
+72. Noncommands and command-mode `+++` produce no answer, including across UART chunks. Only a
+    complete AT line is answered, at least 1 ms after the timestamp of its terminator-containing
+    UART chunk; an escape cannot shift a registration reply by one command.
+    `tests/test_modem_model.py::test_noise_and_command_mode_escape_never_leave_a_reply`,
+    `tests/test_modem_model.py::test_command_framing_and_response_times_do_not_depend_on_uart_chunks`
+73. The modem and the test cannot both drive RI. PWRKEY uses the profile's pulse thresholds,
+    and a missing supply prevents a pulse from restoring modem power. RI follows power; a power
+    loss before a pending RI response cancels that response. The validation firmware leaves at
+    least 2 s between the off pulse's release and the next on pulse.
+    `tests/test_modem_model.py::test_model_selection_is_atomic_and_ri_has_one_driver`,
+    `tests/test_modem_model.py::test_powerkey_uses_profile_timing_and_power_loss_prevents_restart`,
+    `tests/test_modem_model.py::test_nominal_lilygo_pulses_work_even_when_a_tick_truncates_them`,
+    `tests/test_modem_model.py::test_power_loss_before_a_scheduled_ri_response_cancels_that_response`,
+    `tests/test_modem_fixture.py::test_modem_at_dialogue_and_changes_on_the_test_clock`
+74. Two AT-only firmware runs on the LilyGO route produce the same modem bytes at the same
+    emulated times, without a network.
+    `tests/test_modem_fixture.py::test_two_firmware_runs_produce_identical_modem_taps`
+75. Every AT command is retained with its time and reply, including unknown commands answered
+    with fallback OK, independently of the rolling wire log's capacity.
+    `tests/test_modem_model.py::test_a_tap_and_report_keep_commands_even_after_the_wire_log_rolls_over`
+76. Packet-data dial variants (`ATD*99#`, explicit context `ATD*99***1#`, `ATD*99##` and
+    tone-prefixed `ATDT*99#`) enter data mode with CONNECT when registered and return NO CARRIER
+    otherwise; none is a fallback OK.
+    `tests/test_modem_model.py::test_packet_data_dial_variants_connect_or_report_no_carrier`
+77. A model's GPIO change appears in the run log only when sent, at its sent time; a cancelled
+    pending change never appears as a wire event.
+    `tests/test_modem_model.py::test_only_sent_model_gpio_changes_appear_in_the_run_log`
+78. A source selection that loses to another source must leave no GPIO ownership behind.
+    `tests/test_modem_model.py::test_a_model_selection_that_loses_to_replay_does_not_claim_ri`

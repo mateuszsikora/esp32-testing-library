@@ -53,6 +53,7 @@ from esp32tl.interfaces import BoardOff, NeverHappened, RunEnded, SourceError
 from esp32tl.interfaces.console import ConsoleLines
 from esp32tl.interfaces.gnss import Gnss
 from esp32tl.interfaces.lines import Lines
+from esp32tl.interfaces.modem import Modem
 from esp32tl.interfaces.sd_card import SdCard
 from esp32tl.interfaces.uart import Uart
 from esp32tl.link.boardlink import BoardLink, Wire
@@ -282,6 +283,8 @@ class Esp32Sim:
         # One mapping of the files they and the SD card read and write: no tap writes over another
         # route's file or the card's image.
         self._files: dict[Path, tuple[str, str]] = {}
+        # Before power-on the clock is 0: what drives a line then holds from the start.
+        self._lines = Lines(profile.name, profile.lines, lambda: self._hold.now, log=self.log)
         self._uarts = {f"uart.{role}": self._route(f"uart.{role}") for role in profile.uart}
         self._sd_card = (
             SdCard(
@@ -294,8 +297,6 @@ class Esp32Sim:
             if profile.sd_card is not None
             else None
         )
-        # Before power-on the clock's time is 0: what the test drives then holds from the start.
-        self._lines = Lines(profile.name, profile.lines, lambda: self._hold.now, log=self.log)
         self.link = BoardLink(
             profile.name,
             [*self._uarts.values(), self._lines],
@@ -312,8 +313,8 @@ class Esp32Sim:
         self._terminating = threading.Lock()
 
     def _route(self, interface: str) -> Uart:
-        """The `Uart` of the profile's route `interface`: a `Gnss` for `uart.gnss`, whose
-        receiver reads the board's time from the clock and the world's from the power-on."""
+        """The route's `Uart`: `Gnss` for uart.gnss, `Modem` for uart.modem. Models read
+        the held clock; GNSS also reads the world's time, and the modem shares Lines."""
         wire = route_wire(self.profile, interface)
         if interface == "uart.gnss":
             return Gnss(
@@ -323,6 +324,19 @@ class Esp32Sim:
                 directory=self.directory,
                 now=lambda: self._hold.now,
                 world=lambda: self._utc,
+                asked=self._asked,
+                log=self.log,
+                files=self._files,
+            )
+        if interface == "uart.modem":
+            return Modem(
+                interface,
+                wire,
+                clock=self.clock,
+                directory=self.directory,
+                now=lambda: self._hold.now,
+                lines=self._lines,
+                pins=self.profile.lines.get("modem", {}),
                 asked=self._asked,
                 log=self.log,
                 files=self._files,
@@ -673,6 +687,9 @@ class Esp32Sim:
         if self._sd_card is not None:
             image = self._sd_card.image
             lines.append(f"sd_card: a card holding {image}" if image else "sd_card: empty")
+        for uart in self._uarts.values():
+            if isinstance(uart, Modem):
+                lines += uart.command_report()
         if run:
             lines += self.log.lines()
         return "\n".join(lines)
@@ -681,7 +698,7 @@ class Esp32Sim:
         """The link's `properties()`, and the routes: for each, the kind of source at the far end
         and what it was made from (a replay's recording, as the test named it), the bytes each way
         and the tap's file; and `sd_card`, the card's image, or None without a slot."""
-        routes = {}
+        routes: dict[str, dict[str, object]] = {}
         for name, uart in self._uarts.items():
             traffic = self.log.traffic.get(name)
             routes[name] = {
@@ -691,6 +708,16 @@ class Esp32Sim:
                 "bytes_out": traffic.bytes_out if traffic else 0,
                 "tap": None if uart.tapped is None else str(uart.tapped.path),
             }
+            if isinstance(uart, Modem) and uart.source_kind == "model":
+                routes[name]["commands"] = [
+                    {
+                        "t_ns": c.at.ns,
+                        "command": c.text,
+                        "fallback": c.fallback,
+                        "response": c.response.decode("ascii", errors="replace"),
+                    }
+                    for c in uart.commands
+                ]
         card = self._sd_card
         sd_card = (
             None if card is None else {"image": None if card.image is None else str(card.image)}

@@ -98,13 +98,13 @@ next build is still incremental; the marker, removed first, is what says it fini
 The Makefile's `firmware` target runs `FIRMWARE_OUT= firmware/build.sh`; the pattern rule
 `firmware/%/build/esp32tl-built` runs `FIRMWARE_OUT= firmware/build.sh $*`, and `test` depends on
 `$(FIRMWARE_IMAGES:%=firmware/%/build/esp32tl-built)` with `FIRMWARE_IMAGES := hello_world
-nmea_reader gpio_echo sdspi`. The rule has no prerequisites, so make rebuilds an image only when its marker is
-missing: an edit to `firmware/nmea_reader/` needs `make firmware`, or `firmware/build.sh
-nmea_reader`, before `make test` sees it.
+nmea_reader gpio_echo sdspi modem_at`. The rule has no prerequisites, so make rebuilds an image
+only when its marker is missing: an edit to `firmware/nmea_reader/` needs `make firmware`, or
+`firmware/build.sh nmea_reader`, before `make test` sees it.
 
-`nmea_reader` and `gpio_echo` are built from the read-only `/project` mount like any other
-project. They take no components from the component manager, and with `sdkconfig` and the build in
-the build directory ESP-IDF v5.3.6 writes nothing into their directories.
+`nmea_reader`, `gpio_echo` and `modem_at` are built from the read-only `/project` mount like any
+other project. They take no components from the component manager, and with `sdkconfig` and the
+build in the build directory ESP-IDF v5.3.6 writes nothing into their directories.
 
 ## `nmea_reader`
 
@@ -168,6 +168,25 @@ matrix (`rtc_gpio_deinit`, `components/esp_driver_gpio/src/gpio.c:372` in ESP-ID
 interrupt reaches the CPU in esp32sim, where a level on an RTC pad raises no GPIO interrupt
 (`set_input`, `esp32/src/periph.rs:373`). Its pulls disabled, the input reads whatever level the
 harness drives on it: the board's pull from the profile, or the test's.
+
+## Modem AT validation
+
+`firmware/modem_at/` is an ESP-IDF project with `esp_driver_uart` and `esp_driver_gpio`.
+`project_of` maps `modem_at` to `$PWD/firmware/modem_at`; its build produces `modem_at.bin` and
+`modem_at.elf`. `make test` includes its completion marker among `FIRMWARE_IMAGES`.
+The CI firmware tarball already includes every `firmware/*/build`, so it includes this image.
+
+The firmware uses fixed LilyGO UART and GPIO pins. Its blocking reader accumulates up to 255
+bytes until `OK`, `ERROR`, `CONNECT` or `NO CARRIER` framed by CRLF, or a one-second read
+timeout. PWRKEY pulses use the nominal 100/3000 ms FreeRTOS delays without an extra tick,
+matching LilyGO. The actual pulse can be almost one tick shorter. A 20 ms wait after release is
+used before reading RI. After an off pulse, an additional 2000 ms wait keeps the interval before
+the on pulse above SIMCom's minimum 2 s `Toff-on`, including tick truncation. The model does not
+enforce this interval or the typical 8 s `Ton(uart)` startup time; the firmware starts its AT
+dialogue without that UART startup wait. It sends no PPP data. `tests/test_modem_fixture.py`
+checks its dialogue, GPIO power cycle, changes made on the test clock and identical taps from two
+runs. The command subset is the one this firmware sends; new firmware commands should extend that
+validation and the model's documented answers together.
 
 ## The GNSS recording generator
 
@@ -271,7 +290,7 @@ top of each build directory, `config/sdkconfig.json`, and the `.bin` and `.elf` 
 |---|---|---|---|
 | `IDF_VERSION` | script constant | `v5.3.6` | the ESP-IDF tag of the container |
 | `CONTAINER` | script constant | `espressif/idf:$IDF_VERSION@sha256:cee52f0c4fdaf088992a7a739f5993154e95cf1d3ab61c24f5b40e6d56a3a070` | the image the build runs in, pinned by digest (a multi-arch index) |
-| `IMAGES` | script constant | `hello_world nmea_reader gpio_echo sdspi` | the images, in build order; `project_of` maps each to its project |
+| `IMAGES` | script constant | `hello_world nmea_reader gpio_echo sdspi modem_at` | the images, in build order; `project_of` maps each to its project |
 | `FIRMWARE_OUT` | environment | `firmware/` | where `IMAGE/build/` goes; empty means the default; `/out` inside the container |
 | `IDF_LOCAL` | environment | unset | `1` builds with the ESP-IDF of the calling shell |
 | `ESP32TL_CONTAINER` | environment, set by the host side | unset | marks the container side and names the image it records |
@@ -288,7 +307,7 @@ regular expressions, so each has to stay on a line of its own. Changing either, 
 
 | Message | Cause |
 |---|---|
-| `unknown image 'NAME'; the images are: hello_world nmea_reader gpio_echo sdspi` | an argument not in `IMAGES`; nothing written |
+| `unknown image 'NAME'; the images are: hello_world nmea_reader gpio_echo sdspi modem_at` | an argument not in `IMAGES`; nothing written |
 | `ESP32TL_CONTAINER is set outside a container; unset it` | `ESP32TL_CONTAINER` set and no `/.dockerenv`; nothing written |
 | `IDF_LOCAL=1 needs ESP-IDF in the environment: source $IDF_PATH/export.sh first` | `IDF_LOCAL=1` without `idf.py` on `PATH` or without `IDF_PATH`; nothing written |
 | `needs Docker, or IDF_LOCAL=1 to build with a local ESP-IDF` | no `docker` on `PATH`; nothing written |
@@ -322,7 +341,7 @@ write their arguments to `$FAKE_LOG`, with a `PATH` holding only them and `cat`,
   each message verbatim, exit 1, and no output directory created;
 - `test_build_starts_the_pinned_container`: the `docker run` arguments, exactly;
 - `test_local_build_runs_idf_py_and_records_how`: with no image named, every image in order,
-  `hello_world` and `sdspi` from the fake `IDF_PATH`, `nmea_reader` and `gpio_echo` from
+  `hello_world` and `sdspi` from the fake `IDF_PATH`, `nmea_reader`, `gpio_echo` and `modem_at` from
   `firmware/`; the `idf.py` arguments of each, the records with `"container": null`, the markers,
   the "not for goldens" warning and the `built in` lines;
 - reuse of a build directory with the same record, and removal of one with another record;
@@ -400,11 +419,11 @@ copy of it with `--check` on an edited recording and requires the stale message 
 baud; and the first position of each.
 
 Not covered: the build inside the real container (only `make firmware` and the CI `firmware` job
-run it), the `nmea_reader` and `gpio_echo` Kconfig options other than their defaults, a `GGA` or `RMC` whose time
-field is shorter than six digits, the container side of the script (`ESP32TL_CONTAINER` set
-inside a container), the `'idf.py --version'` failure, and the foreign-container branch of the
-provenance check, which only a stale real build reaches. The timeout reason of `requires_docker`
-is untested.
+run it), the `nmea_reader` and `gpio_echo` Kconfig options other than their defaults,
+a `GGA` or `RMC` whose time field is shorter than six digits, the container side of the script
+(`ESP32TL_CONTAINER` set inside a container), the `'idf.py --version'` failure, and the
+foreign-container branch of the provenance check, which only a stale real build reaches. The
+timeout reason of `requires_docker` is untested.
 
 ## See also
 

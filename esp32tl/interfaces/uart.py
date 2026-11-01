@@ -133,13 +133,17 @@ class Uart(Interface):
         detail: str,
         file: Path | None = None,
         step: str | None = None,
+        prepare: Callable[[], None] | None = None,
     ) -> None:
         """`source`, of `kind`, made from `detail`, as the route's: `file` the run reads it from,
         if any, and `step` what the log says the test did, `{name}.{kind}({detail!r})` unless
-        given."""
+        given. `prepare`, if any, reserves model resources under the source-selection lock,
+        after refusing an existing source, so a losing selection cannot leave resources behind."""
         with self._giving:
             if self.source is not None:
                 raise SourceError(f"{self.name} has its source already: one per test")
+            if prepare is not None:
+                prepare()
             self.source = source
             self.source_kind = kind
             self.source_detail = detail

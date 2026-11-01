@@ -412,3 +412,12 @@ def test_a_stale_decisions_index_fails(repo: Path) -> None:
 
 def test_this_repository_passes_its_integrity_checks() -> None:
     assert check_docs.integrity(ROOT) == []
+
+
+def test_the_modem_owns_its_feature_documents(repo: Path) -> None:
+    write(repo, "esp32tl/sources/model/modem.py", '"""Modem."""\n')
+    result = run(repo)
+    assert "[F19]" in result.stdout
+    assert "[F12]" not in result.stdout and "[F17]" not in result.stdout
+    write(repo, "docs/features/modem-technical.md", "# Modem\n")
+    assert run(repo).returncode == 0
