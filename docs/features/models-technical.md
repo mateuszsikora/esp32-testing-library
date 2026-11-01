@@ -16,12 +16,12 @@ the backend that gives the receiver its clock in
    time at power-on. The call is made on it, and only when the call returns does it become the
    `Uart`'s `source`, of kind `model`: a refused first call leaves the route without a source.
    Reading `Gnss.position` or `Gnss.receiver()` makes no receiver.
-2. **The test tells it** something: each call checks its arguments, then, under the receiver's
-   lock, replaces its `State` with one whose `since` is `now()`, whose `position` and `heading`
-   are where it is and which way it goes at that instant (`State.at(now)`,
-   `State.course(now)`), and which carries the change. A refused call raises before it replaces
-   anything, and the route keeps the source it had. The test calls it while the link is held in a turn, or before power-on, so the link
-   never polls the receiver in the middle of a change; the lock is there all the same.
+2. **The test tells it** something: each call checks its arguments, then, under the receiver's lock,
+   replaces its `State` with one whose `since` is `now()`, whose `position` and `heading` are where
+   it is and which way it goes at that instant (`State.at(now)`, `State.course(now)`), and which
+   carries the change. A refused call raises before it replaces anything, and the route keeps the
+   source it had. The test calls it while the link is held in a turn, or before power-on, so the
+   link never polls the receiver in the middle of a change; the lock is there all the same.
 3. **The link polls it** in every turn, after the hold has returned (`BoardLink._turn`): so a
    change the test made in the turn at `now` is in what `poll(now)` sends. `poll` computes the
    first epoch on its first call, once the run has started and `world()` is known: the first

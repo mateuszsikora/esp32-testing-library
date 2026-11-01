@@ -57,9 +57,10 @@ is false.
 ## The GNSS receiver
 
 `gnss` becomes a receiver the test describes at the first of these calls that succeeds, which must
-come before `board.power_on()`; one that is refused leaves `gnss` as it was. Every call after it
-but `position`, before or after power-on, changes the receiver from the board's current instant, `board.now`, until the test says something else, as the world does: time
-passes only while the test waits.
+come before `board.power_on()`; one that is refused leaves `gnss` as it was. Every call after it but
+`position`, before or after power-on, changes the receiver from the board's current instant,
+`board.now`, until the test says something else, as the world does: time passes only while the test
+waits.
 
 ```python
 from esp32tl.units import NORTH, Position, km_h, minutes, seconds
@@ -88,10 +89,11 @@ def test_follows_the_receiver_as_it_moves(board, gnss, console):
 | `gnss.resume()` | Sends again, from the epoch at this instant on, if one falls here, or else from the next |
 | `gnss.position` | Where it is now, fix or not, a `Position`; `None` until its first fix. Reading it changes nothing and makes no receiver: before any other call it raises `SourceError` |
 
-`hdop` is a number from 0.01 to 99.99, which the GGA writes to two decimals; `satellites` a whole number from 1 to 99. Until its
-first `fix`, as after a `lose_fix`, the receiver talks but has no fix, as one does after a cold
-start. A `fix` puts the receiver at `at` and stops it: to get the fix back where a moving receiver
-is, and keep it moving, say `gnss.fix(at=gnss.position)` and `gnss.move(...)` again.
+`hdop` is a number from 0.01 to 99.99, which the GGA writes to two decimals; `satellites` a whole
+number from 1 to 99. Until its first `fix`, as after a `lose_fix`, the receiver talks but has no
+fix, as one does after a cold start. A `fix` puts the receiver at `at` and stops it: to get the fix
+back where a moving receiver is, and keep it moving, say `gnss.fix(at=gnss.position)` and
+`gnss.move(...)` again.
 
 ### What it sends
 

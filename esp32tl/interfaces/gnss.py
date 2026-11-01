@@ -64,7 +64,7 @@ class Gnss(Uart):
     @property
     def position(self) -> Position | None:
         """Where the receiver is now, fix or not; `None` until its first fix. Reading it makes
-        no receiver."""
+        no receiver: without one, a `SourceError`."""
         return self.receiver().position
 
     def receiver(self) -> GnssReceiver:
