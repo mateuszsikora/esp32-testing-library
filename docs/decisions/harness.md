@@ -948,8 +948,8 @@ milliseconds after it, with the same messages in the same order. Why the times m
 measured; the likely cause is the device's arithmetic on the server's fresh keys, which takes a
 different time for different values. What would fix it is on the harness's side only: a TLS server
 with a seeded random source, or fixed ephemeral keys. Until that proves worth its cost, the
-determinism job (#22) is to compare what crossed the link in plain text and leave out the times
-after a handshake.
+determinism job (`make determinism`) is to compare what crossed the link in plain text and leave out
+the times after a handshake; the simulated network brings the TLS part of the check (#30).
 
 ## Flash contents besides the build go into a partition of the build's own table, by name
 
