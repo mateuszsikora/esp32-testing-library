@@ -211,6 +211,6 @@ for any of those jobs does the same:
   no branch protection for private repositories, so no check can be required.
 - `pyproject.toml` has several owners (rule C7): the check accepts any of their documents, and
   review checks that it was the right one.
-- Agent tooling (`.claude/**`, `.agents/**`, skills) restates normative files (`CONTRIBUTING.md`, this guide,
-  `AGENTS.md`) and goes stale silently. When a skill and a normative file disagree, the skill is
-  wrong.
+- Agent tooling (`.claude/**`, `.agents/**`, skills) restates normative files (`CONTRIBUTING.md`,
+  this guide, `AGENTS.md`) and goes stale silently. When a skill and a normative file disagree,
+  the skill is wrong.
