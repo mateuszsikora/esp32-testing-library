@@ -179,6 +179,20 @@ each worktree before its first commit; without it the hook fails with
 The installed hook also remembers the `.venv` of the worktree where `make hooks` ran, to start
 pre-commit itself. If that worktree is removed, run `make hooks` again from another one.
 
+## Agent skills
+
+The repository's `create-pr` skill follows [CONTRIBUTING.md](../../CONTRIBUTING.md) when
+opening a pull request or updating its title and description. In Codex, invoke `$create-pr`;
+in Claude Code, invoke `/create-pr`. It takes no arguments and gathers context from the
+conversation, branch and issue tracker.
+
+The instructions live in [`.claude/skills/create-pr/SKILL.md`](../../.claude/skills/create-pr/SKILL.md).
+`.agents/skills/create-pr` is a relative symlink to that directory, so both agents read the same
+instructions. Edit the source under `.claude/skills/create-pr/` when changing the workflow.
+Codex discovers repository skills under `.agents/skills` and supports symlinked skill folders
+([OpenAI's skill documentation](https://learn.chatgpt.com/docs/build-skills#where-codex-loads-local-skills)).
+If the skill does not appear after the checkout changes, restart Codex.
+
 ## Layout
 
 | Path | Contents |
@@ -196,6 +210,7 @@ pre-commit itself. If that worktree is removed, run `make hooks` again from anot
 | `docs/guides/` | How to work on the repository: this guide, [testing.md](testing.md), [documentation.md](documentation.md) |
 | `.github/` | The CI workflow (`workflows/ci.yml`) and the pull request template |
 | `.claude/` | Claude Code's skills and rules for this repository |
+| `.agents/skills/` | Codex's repository skills; `create-pr` links to the shared skill under `.claude/skills/` |
 | `AGENTS.md` | The contract for every agent working here; `CLAUDE.md` is a symlink to it |
 
 Git ignores what the builds leave behind: `.venv/`, `.cache/` (the ROM ELF), `runner/target/`,
