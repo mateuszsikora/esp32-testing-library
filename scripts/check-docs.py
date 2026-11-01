@@ -161,10 +161,18 @@ FEATURES = [
         r"^docs/features/replay-",
         "Replay changed (what it replays, when, what it refuses): update docs/features/replay-*.md",
     ),
+    # Two modules, one feature: the tap writes what the run report shows.
+    Rule(
+        "F16",
+        r"^esp32tl/(tap|report)\.py$",
+        r"^docs/features/run-report-",
+        "Taps or the run report changed (what a tap writes, what the report shows):"
+        " update docs/features/run-report-*.md",
+    ),
     # The units and every device model: the models are named after their device and share the
     # units, so one pair of documents owns them until a model needs a pair of its own.
     Rule(
-        "F16",
+        "F17",
         r"^esp32tl/(units\.py|sources/model/)",
         r"^docs/features/models-",
         "Models or units changed (quantities, the GNSS receiver, its sentences):"

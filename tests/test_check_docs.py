@@ -307,7 +307,7 @@ def test_the_units_and_the_models_belong_to_their_documents(repo: Path) -> None:
     write(repo, "esp32tl/sources/model/gnss.py", '"""GNSS."""\n')
     commit(repo)
     result = run(repo)
-    assert result.stdout.count("[F16]") == 1
+    assert result.stdout.count("[F17]") == 1
     assert "[F12]" not in result.stdout
     write(repo, "docs/features/models-technical.md", "# Models\n")
     assert passes(run(repo))

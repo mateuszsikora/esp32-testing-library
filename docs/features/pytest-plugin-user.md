@@ -1,8 +1,8 @@
 # pytest plugin
 
 esp32tl ships a pytest plugin that runs an ESP-IDF firmware image, lets a test read what the
-firmware prints, and puts a GNSS receiver on the firmware's GNSS UART: a recording replayed, or a
-receiver the test describes. A test asks for the
+firmware prints, puts a GNSS receiver on the firmware's GNSS UART, a recording replayed or a
+receiver the test describes, and records what crosses it. A test asks for the
 `board` fixture, names the app with the `app_path` marker, sets up what is around the board,
 powers it on, and waits on the board's own clock for what the firmware does. It runs once on
 every backend. pytest loads the plugin by itself once esp32tl is installed; it builds on
@@ -172,12 +172,18 @@ the exception: it takes a `Duration`, or a number of seconds as in pytest-embedd
   `gnss.position` makes no receiver.
 - One source per test: a model call after `gnss.replay`, or a replay after a model call, raises
   `SourceError`.
+- `gnss.tap(path)` records what crosses the route from power-on, both ways, and writes it to
+  `path` as a recording once the run has ended. It must come before `board.power_on()` too, and
+  goes with a replay, a receiver or nothing at the far end. What it writes is in
+  [taps and the run report](run-report-user.md).
 - Until the test gives it a source, the route is on the link, listening and silent. So is every
   other UART route of the profile.
 - On a board profile without `uart.gnss`, `gnss` is an error at setup:
   `esp32sim: the board profile lilygo-t-a7670g-r2 has no uart.gnss; its interfaces are console, uart.modem, lines.modem`.
 
 `NeverHappened`, `RunEnded`, `BoardOff` and `SourceError` are in `esp32tl.interfaces`.
+`board.uart(role)` is the same for any `uart.<role>` route of the profile: `gnss` is
+`board.uart("gnss")`.
 
 ## The test's timeout
 
@@ -209,11 +215,9 @@ every backend. A name that is not a backend is a usage error (exit code 4):
 `--esp32tl-backend: invalid choice: 'qemu'`.
 
 What is at the far end of an interface is what the test does with it before power-on, as
-`gnss.replay(path)`; a backend that cannot give that source skips the test at the call, with the
-reason, and a source that no backend gives is an error there. The `tap` marker says which
-interfaces a test taps, as in `@pytest.mark.tap("console")`; on a backend that cannot tap them the
-test is skipped before any fixture is set up, and a tap that no backend can give is a collection
-error. Both are described in
+`gnss.replay(path)`, and so is whether it is tapped, as `gnss.tap(path)`; a backend that cannot
+give that source or tap skips the test at the call, with the reason, and one that no backend gives
+is an error there. Both are described in
 [board profiles](board-profiles-user.md#saying-what-a-test-needs).
 
 ## Options esp32tl refuses
@@ -226,7 +230,7 @@ one line:
 |---|---|
 | `--embedded-services`, `--app-path`, `--build-dir` | ``ERROR: --{option} is set: esp32tl chooses it for every test that uses `board` (the backend through --esp32tl-backend, the app through the app_path marker, the build in its build/ directory)`` |
 | `--count` with any value but 1 | `ERROR: --count is set: esp32tl runs one board in a test` |
-| An `app_path`, `board_profile` or `tap` marker in a `pytest.param(..., marks=...)`, or added by a hook | `ERROR: {test id}: the {marker} marker reached the test after esp32tl read it, from a pytest.param or a hook: put it on the test, its class or its module` |
+| An `app_path` or `board_profile` marker in a `pytest.param(..., marks=...)`, or added by a hook | `ERROR: {test id}: the {marker} marker reached the test after esp32tl read it, from a pytest.param or a hook: put it on the test, its class or its module` |
 
 A test is selected when `-k` and `-m` leave it in the run: `-k test_two --app-path elsewhere`
 passes when `test_two` does not use `board`. In that case the options go to pytest-embedded as
@@ -238,19 +242,21 @@ A test that parametrises pytest-embedded's `count` itself above 1, as in
 
 ## What a failure looks like
 
-- The backend cannot give a source the test asks for, or a tap the `tap` marker asks for: the test
-  is skipped on it ([board profiles](board-profiles-user.md#when-a-backend-cannot-give-it)). No run
-  skips a test this way yet: `esp32sim`, the only backend tests run on, gives every source and tap
-  that any backend declares, and `serial`, which would skip, is declared but not run.
+- The backend cannot give a source or a tap the test asks for: the test is skipped on it, at the
+  call ([board profiles](board-profiles-user.md#when-a-backend-cannot-give-it)). No run skips a
+  test this way yet: `esp32sim`, the only backend tests run on, gives every source and tap that
+  any backend declares, and `serial`, which would skip, is declared but not run.
 - The backend cannot start (no runner, no ROM ELF, no usable build): an error at setup, the test
   body does not run, and the message starts with `esp32sim: `. The messages are listed in
   [the esp32sim backend](esp32sim-backend-user.md#when-the-backend-cannot-start).
-- A source given after `board.power_on()`, or a second one on the same route: the test fails with
-  `SourceError`; a recording that cannot be replayed fails it with `RecordingError` or
-  `ReplayError` ([replay](replay-user.md#what-a-replay-refuses)); the receiver model told what it
-  cannot be fails it with `ModelError` ([models and units](models-user.md#when-the-test-gets-it-wrong)).
-- A test that set up a source and passed without calling `board.power_on()` gets an error at
-  teardown, since it ran no firmware:
+- A source or a tap given after `board.power_on()`, or a second one on the same route: the test
+  fails with `SourceError`; a recording that cannot be replayed fails it with `RecordingError` or
+  `ReplayError` ([replay](replay-user.md#what-a-replay-refuses)), a tap into a directory that
+  does not exist with `FileNotFoundError` ([taps](run-report-user.md#when-the-test-gets-it-wrong)),
+  and the receiver model told what it cannot be with `ModelError`
+  ([models and units](models-user.md#when-the-test-gets-it-wrong)).
+- A test that set up a source or a tap and passed without calling `board.power_on()` gets an error
+  at teardown, since it ran no firmware:
   `esp32sim: the test set up the replay of uart.gnss and never called board.power_on(): it ran no firmware`,
   or `the model of uart.gnss` for a receiver.
 - A wait or an expect whose condition does not hold in its time: `NeverHappened`.
@@ -272,7 +278,10 @@ A test that parametrises pytest-embedded's `count` itself above 1, as in
 Every test that uses `board` also reports what the run told: a section `esp32sim link`, which
 pytest prints with a failure or with `-rA`, and the `esp32sim_link` user property, a JSON string
 that `--junitxml` writes into the report
-([the link's report](esp32sim-backend-user.md#the-links-report)).
+([the link's report](esp32sim-backend-user.md#the-links-report)). For a test that failed,
+the section ends with the run on the board's clock: what the test did, what the firmware printed
+and the bytes on every route, in the order they happened
+([the run on the board's clock](run-report-user.md#the-run-on-the-boards-clock)).
 
 pytest-embedded's `app_path` fixture records an XML attribute for every test, which pytest reports
 as `PytestExperimentalApiWarning: record_xml_attribute is an experimental feature`. This
@@ -287,9 +296,8 @@ under `[tool.pytest.ini_options]`.
 - **`board`**: esp32tl parametrises every test that asks for a fixture of that name, matched by
   name. A project's own `board` fixture, in a session where esp32tl is installed, gets the
   backend's id (`test_mine[esp32sim]`) and the plugin's parameters as well.
-- **The `app_path`, `board_profile` and `tap` markers**: esp32tl registers them and reads them on
-  every test that uses `board`. A project's own marker of one of these names means esp32tl's
-  there.
+- **The `app_path` and `board_profile` markers**: esp32tl registers them and reads them on every
+  test that uses `board`. A project's own marker of one of these names means esp32tl's there.
 - **The `timeout` marker**: pytest-timeout's; esp32tl adds it to a test that uses `board` and has
   none, unless the session sets a timeout.
 - **`app_path` and `embedded_services`**: esp32tl parametrises them for a test that uses `board`.
@@ -302,6 +310,7 @@ under `[tool.pytest.ini_options]`.
 - [esp32sim backend](esp32sim-backend-user.md)
 - [Board profiles](board-profiles-user.md)
 - [Replay](replay-user.md)
+- [Taps and the run report](run-report-user.md)
 - [Models and units](models-user.md)
 - [Validation firmware](validation-firmware-user.md)
 - [Testing this repository](../guides/testing.md)

@@ -13,13 +13,17 @@ puts it on the link, and the `gnss` fixture hands that interface to the test
    for every UART route of the profile, all on the link and without a source
    ([esp32sim backend](esp32sim-backend-technical.md#data-flow)).
 2. **`gnss.replay(path)`**, in the test body, before `board.power_on()`: `Uart.replay` refuses a
-   UART that has a source already (`SourceError`), then calls `asked(name, "replay")`, through
-   which the backend refuses a source after power-on or one no backend gives (`SourceError`), and
-   skips the test when its own capability declaration does not give `replay` on the route
-   ([board profiles](board-profiles-technical.md#data-flow)). It then reads `directory / path` with
-   `recording.read`, builds `Replay(recording, self.name, self.clock, name=str(path))`, and gives
-   it: under a lock, a UART that has a source already raises `SourceError`; otherwise
-   `Uart.source` is set, and `Uart.source_kind` is `"replay"`.
+   UART that has a source already (`SourceError`), then calls
+   `asked(Request(name, source="replay"))`, through which the backend refuses a source after
+   power-on or one no backend gives (`SourceError`), and skips the test when its own capability
+   declaration does not give `replay` on the route ([board
+   profiles](board-profiles-technical.md#data-flow)). It refuses a file a route is tapped into,
+   which `Uart.files` holds (`SourceError`), but not one another route replays, then reads
+   `directory / path` with `recording.read`, builds
+   `Replay(recording, self.name, self.clock, name=str(path))`, and gives it: under a lock, a UART
+   that has a source already raises `SourceError`; otherwise `Uart.source` is set,
+   `Uart.source_kind` is `"replay"` and `Uart.source_detail` the path as the test gave it, and the
+   run's log, when the UART has one, gets `{name}.replay({path!r})` at 0.
 3. **`Replay.__init__`** refuses, in this order, a recording of another interface, one with a
    clock other than `clock` anywhere (in its header, an event or a clock switch), one with an
    `out` event, and one whose `end` is not `hold` (`ReplayError`). Then it keeps the events as
@@ -37,7 +41,9 @@ puts it on the link, and the `gnss` fixture hands that interface to the test
    - `receive(t, data)` returns nothing.
 
    `BoardLink` turns each output into a `uart_rx` on the wire's RX pin at its baud, the board
-   profile's `[uart.gnss]` `rx` and `baud`; the runner paces the bytes (protocol §6, rule 5).
+   profile's `[uart.gnss]` `rx` and `baud`; the runner paces the bytes (protocol §6, rule 5). On
+   the way the `Uart` hands every output, and every byte the firmware transmitted, to its tap and
+   the run's log ([run-report-technical.md](run-report-technical.md#data-flow)).
 
 Events are sent in their turn rather than all at once in the first one, which the runner would
 queue (protocol §8): `quiet_until` then comes from the recording, as plan §4.4 and protocol §7
@@ -95,7 +101,7 @@ link with `uart.gnss sent bytes stamped {t} ns in the turn at {now} ns: ...`.
 - `tests/test_boardlink.py::test_a_frame_error_fails_the_run_at_once`: a `frm_err` warning is the
   link's error, with the interface's name and both bauds, or the pin alone, and calls `on_error`
   at once; `test_other_warnings_fail_nothing`: the other kinds fail nothing.
-- `tests/test_pytest_plugin.py::test_a_source_the_backend_cannot_give_skips_at_the_call`: the
+- `tests/test_pytest_plugin.py::test_a_source_or_a_tap_the_backend_cannot_give_skips_at_the_call`: the
   skip at the call, and the `SourceError` for a source no backend gives, against a declaration a
   conftest swaps in.
 - `tests/test_cli.py`: `esp32tl replay` on `nmea_reader`, and its exit code 1 on a baud mismatch.

@@ -41,16 +41,17 @@ that references to its number keep their meaning.
     `pytest.param`, or from a hook on the test, its class or its module, stops the run with a usage
     error, so no source a test asks for goes unchecked.~~ No longer holds since #65, which removed
     the `source` marker: see 48.
-47. A test whose `tap` markers ask for what a backend cannot tap is skipped on that backend with the
+47. ~~A test whose `tap` markers ask for what a backend cannot tap is skipped on that backend with the
     reason, before any fixture is set up, and runs on the others; one that asks for what no backend
     can tap, or for an interface its profile does not have, is a collection error that names the
-    test.
-    `tests/test_pytest_plugin.py::test_a_backend_that_cannot_give_a_tap_skips_with_the_reason`,
-    `tests/test_pytest_plugin.py::test_a_marker_no_backend_can_satisfy_is_a_collection_error`,
-    `tests/test_boards.py::test_a_request_no_backend_can_give_is_an_error_not_a_skip`
-48. A board marker (`app_path`, `board_profile`, `tap`) that reaches a test from a `pytest.param`,
+    test.~~ No longer holds since #21, which removed the `tap` marker: see 46.
+48. ~~A board marker (`app_path`, `board_profile`, `tap`) that reaches a test from a `pytest.param`,
     or from a hook on the test, its class or its module, stops the run with a usage error, so no tap
-    a test asks for goes unchecked.
+    a test asks for goes unchecked.~~ No longer holds since #21, which removed the `tap` marker: see
+    51.
+51. A board marker (`app_path`, `board_profile`) that reaches a test from a `pytest.param`, or from
+    a hook on the test, its class or its module, stops the run with a usage error, so no profile a
+    test runs on goes unchecked.
     `tests/test_pytest_plugin.py::test_a_board_marker_in_a_pytest_param_is_refused`,
     `tests/test_pytest_plugin.py::test_a_board_marker_a_hook_adds_is_refused`
 
@@ -109,14 +110,17 @@ that references to its number keep their meaning.
 45. The runner starts at `board.power_on()`, not at setup: a test that never powers on starts no
     runner, and one that set up a source and passed without powering on fails at teardown; a test
     that failed, was skipped or xfailed keeps its one outcome. A wait before power-on raises
-    `BoardOff`, and a source after it `SourceError`.
+    `BoardOff`, and a source or a tap after it `SourceError`. A tap counts as set up too.
     `tests/test_pytest_plugin.py::test_the_board_runs_the_profile_the_test_chose_and_starts_no_runner_unpowered`,
     `tests/test_pytest_plugin.py::test_a_test_that_sets_up_a_source_and_never_powers_on_fails_at_teardown`,
+    `tests/test_pytest_plugin.py::test_a_test_that_taps_a_route_and_never_powers_on_fails_at_teardown`,
     `tests/test_pytest_plugin.py::test_the_board_s_clock_and_sources_go_in_order`,
     `tests/test_gnss_fixture.py::test_a_source_given_out_of_order_fails_the_test`
-46. A source the backend's capability declaration does not give skips the test at the call that
-    asks for it, reported at the test; one that no backend gives fails the test with `SourceError`.
-    `tests/test_pytest_plugin.py::test_a_source_the_backend_cannot_give_skips_at_the_call`
+46. A source or a tap the backend's capability declaration does not give skips the test at the call
+    that asks for it, reported at the test; one that no backend gives fails the test with
+    `SourceError`.
+    `tests/test_pytest_plugin.py::test_a_source_or_a_tap_the_backend_cannot_give_skips_at_the_call`,
+    `tests/test_tap.py::test_a_tap_the_backend_refuses_is_not_made`
 49. Every test that uses `board` has a wall-time timeout, 600 s unless the session or the test sets
     one, 0 included; a run that hangs is ended by it, and the teardown ends the runner.
     `tests/test_pytest_plugin.py::test_a_test_that_uses_board_gets_a_wall_time_timeout_unless_one_is_set`,
@@ -219,21 +223,37 @@ that references to its number keep their meaning.
 37. A replay runs on the emulated clock: ten fixes, ten emulated seconds, reach the console in
     under five wall seconds, and the board's clock reads just past 10 s.
     `tests/test_nmea_reader.py::test_time_is_emulated`
+52. A tap records every byte that crossed its route, `out` of the ESP32 and `in` from whatever is
+    at the far end, at the time it crossed, and writes it once the run has ended as a recording in
+    time order that reads back: a tap of a replay holds the replay's events as they were recorded.
+    `tests/test_tap.py::test_a_tap_writes_its_events_in_time_order_with_the_header`,
+    `tests/test_tap.py::test_a_tapped_uart_records_both_ways_whatever_its_source`,
+    `tests/test_pytest_plugin.py::test_a_tap_records_what_crossed_the_route_both_ways`,
+    `tests/test_gnss_fixture.py::test_a_tap_of_a_replay_records_what_went_in`
+54. A tap never writes over a file the run replays from or another route is tapped into, and a
+    replay never reads a file a route is tapped into: both are refused at the call.
+    `tests/test_tap.py::test_a_tap_never_writes_over_a_file_the_run_reads_or_writes`
+53. The report of a test that failed shows the run on the board's clock: the test's steps,
+    the console's lines and the bytes on every route, in the order of the board's time; that of a
+    test that passed shows the bytes on every route, not the run.
+    `tests/test_pytest_plugin.py::test_the_report_of_a_failing_test_shows_the_run_on_the_board_s_clock`,
+    `tests/test_pytest_plugin.py::test_a_tap_records_what_crossed_the_route_both_ways`,
+    `tests/test_run_report.py::test_entries_are_shown_in_the_order_of_the_board_s_time`
 
 ## Models, units and console lines
 
-51. The board's durations are `Duration`s of whole nanoseconds, 0 or more: `board.wait` and
+55. The board's durations are `Duration`s of whole nanoseconds, 0 or more: `board.wait` and
     `wait_until` refuse a plain number. Quantities of different kinds never combine or compare
     equal, but for a speed times a time, a distance, and a distance over a time, a speed.
     `tests/test_units.py::test_quantities_of_different_kinds_do_not_mix`,
     `tests/test_units.py::test_a_speed_over_a_time_is_a_distance_and_back`,
     `tests/test_clock.py::test_the_board_s_durations_are_durations_of_0_or_more`,
     `tests/test_pytest_plugin.py::test_the_test_s_waits_move_the_board_s_clock`
-52. A position moved by a distance on a heading is that distance away, along the great circle that
+56. A position moved by a distance on a heading is that distance away, along the great circle that
     leaves on that heading, in both hemispheres, across the antimeridian and over a pole.
     `tests/test_units.py::test_a_move_follows_the_great_circle_and_measures_its_distance`,
     `tests/test_units.py::test_a_move_crosses_the_antimeridian_and_a_pole`
-53. The GNSS receiver model sends an RMC and a GGA with the same UTC time once a second, on whole
+57. The GNSS receiver model sends an RMC and a GGA with the same UTC time once a second, on whole
     seconds of the world's time, each sentence checksummed and at most 82 characters; what the test
     tells it holds from the board's instant, in the epoch at that instant too; the epochs of a
     silence are never sent.
@@ -243,7 +263,7 @@ that references to its number keep their meaning.
     `tests/test_gnss_model.py::test_each_change_holds_from_the_board_s_instant`,
     `tests/test_gnss_model.py::test_a_change_at_an_epoch_s_instant_is_in_that_epoch`,
     `tests/test_gnss_model.py::test_the_epochs_of_a_silence_stay_unsent_when_no_turn_came_in_it`
-54. `nmea_reader` fed by the receiver model reports where the receiver is: its first fix, a
+58. `nmea_reader` fed by the receiver model reports where the receiver is: its first fix, a
     kilometre of movement to within 0.2 m, no fix while the fix is lost, the fix again in the epoch
     of the instant it comes back, in both hemispheres.
     `tests/test_nmea_reader_model.py::test_reports_where_the_receiver_is`,
@@ -251,7 +271,7 @@ that references to its number keep their meaning.
     `tests/test_nmea_reader_model.py::test_follows_the_receiver_as_it_moves`,
     `tests/test_nmea_reader_model.py::test_says_nothing_while_the_receiver_has_no_fix`,
     `tests/test_nmea_reader_model.py::test_reports_again_when_the_fix_comes_back`
-55. A console line is stamped with the board's time its line ending came at, without its line
+59. A console line is stamped with the board's time its line ending came at, without its line
     ending and colour codes, and is a line only once it has ended; `console.line(pattern)` finds
     only lines that end after it was made, and after the last line it found.
     `tests/test_clock.py::test_console_lines_are_stamped_with_the_time_their_ending_came_at`,

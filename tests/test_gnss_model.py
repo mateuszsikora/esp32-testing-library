@@ -12,6 +12,7 @@ from esp32tl import recording
 from esp32tl.interfaces import SourceError
 from esp32tl.interfaces.gnss import Gnss
 from esp32tl.link.boardlink import Wire
+from esp32tl.report import RunLog
 from esp32tl.sources.model.gnss import GnssReceiver, ModelError, angle, sentence
 from esp32tl.units import (
     EAST,
@@ -341,7 +342,7 @@ def test_the_receiver_moves_across_the_antimeridian_and_over_a_pole() -> None:
     assert position_of(rmc).lon == pytest.approx(-170, abs=1e-4)
 
 
-def gnss_route(t: list[int]) -> Gnss:
+def gnss_route(t: list[int], log: RunLog | None = None) -> Gnss:
     """A `Gnss` on the devkit's GNSS pins, its board's time `t[0]`, off the link."""
     return Gnss(
         "uart.gnss",
@@ -350,6 +351,7 @@ def gnss_route(t: list[int]) -> Gnss:
         directory=Path(__file__).resolve().parent.parent / "recordings",
         now=lambda: t[0],
         world=lambda: POWER_ON,
+        log=log,
     )
 
 
@@ -385,3 +387,23 @@ def test_the_first_model_call_that_succeeds_makes_the_receiver() -> None:
     t[0] = 6 * S
     assert route.position == about(WARSAW.moved(NORTH, m(1)), within=m(0.001))
     assert route.receiver() is route.source
+
+
+def test_each_model_call_is_a_step_of_the_test_in_the_run_s_log() -> None:
+    t = [0]
+    log = RunLog()
+    route = gnss_route(t, log)
+    with pytest.raises(ModelError):
+        route.move(heading=NORTH, speed=km_h(10))
+    route.fix(at=WARSAW)
+    t[0] = 10 * S
+    route.move(heading=NORTH, speed=km_h(36))
+    assert (route.source_kind, route.source_detail) == ("model", "a GNSS receiver")
+    # The refused call is not one; the first line is the log's heading.
+    heading, *steps = log.lines()
+    assert heading == "the run on the board's clock, 2 entries:"
+    assert [line.split(None, 3)[3] for line in steps] == [
+        "uart.gnss.fix(at=Position(lat=52.229677, lon=21.012233), hdop=0.9, satellites=8)",
+        "uart.gnss.move(heading=NORTH, speed=m_s(10))",
+    ]
+    assert steps[1].split()[:2] == ["10.000000000", "s"]

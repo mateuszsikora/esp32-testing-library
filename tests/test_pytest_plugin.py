@@ -22,6 +22,8 @@ from esptool.bin_image import LoadFirmwareImage
 from pytest_embedded.log import MessageQueue
 from pytest_embedded.utils import Meta
 
+import esp32tl
+from esp32tl import recording
 from esp32tl.backends import esp32sim
 from esp32tl.backends.esp32sim import BackendError
 from esp32tl.interfaces import RunEnded
@@ -160,34 +162,6 @@ SERVICES["serial"] = "esp,idf"
 )
 
 
-def test_a_backend_that_cannot_give_a_tap_skips_with_the_reason(
-    pytester: pytest.Pytester,
-) -> None:
-    pytester.makeconftest(WITH_SERIAL)
-    pytester.makepyfile(
-        test_taps="""
-        import pytest
-
-        @pytest.mark.tap("console", "uart.gnss")
-        def test_tap(board):
-            assert board[0] == "esp32sim"
-
-        @pytest.mark.tap("console")
-        def test_console(board):
-            pass
-        """
-    )
-    result = pytester.runpytest_subprocess("-p", "no:cacheprovider", "-ra")
-    result.assert_outcomes(passed=3, skipped=1)
-    result.stdout.fnmatch_lines(
-        ["SKIPPED [[]1[]] test_taps.py:3: serial: uart.gnss cannot be tapped on this backend"]
-    )
-    # Skipped before setup: pytest-embedded's fixtures are set up for test_console[serial] only,
-    # not for test_tap[serial].
-    result = pytester.runpytest_subprocess("-p", "no:cacheprovider", "--setup-plan")
-    assert result.stdout.str().count("SETUP    F embedded_services['esp,idf']") == 1
-
-
 @pytest.mark.parametrize(
     ("marks", "message"),
     [
@@ -195,15 +169,6 @@ def test_a_backend_that_cannot_give_a_tap_skips_with_the_reason(
         (
             '@pytest.mark.board_profile("esp32-wrover-kit")',
             "no board profile named 'esp32-wrover-kit';*",
-        ),
-        ("@pytest.mark.tap", "the tap marker takes one or more interfaces, as in *"),
-        (
-            '@pytest.mark.tap("uart.modem")',
-            "the board profile esp32-devkitc has no uart.modem;*",
-        ),
-        (
-            '@pytest.mark.board_profile("lilygo-t-a7670g-r2")\n@pytest.mark.tap("lines.modem")',
-            "no backend can tap lines.modem",
         ),
     ],
 )
@@ -224,20 +189,23 @@ def test_markers_on_a_class_or_a_module_count(pytester: pytest.Pytester) -> None
         test_levels="""
         import pytest
 
-        pytestmark = pytest.mark.tap("uart.modem")
+        pytestmark = pytest.mark.board_profile("lilygo-t-a7670g-r2")
 
-        @pytest.mark.board_profile("lilygo-t-a7670g-r2")
+        @pytest.mark.board_profile("esp32-wrover-kit")
         class TestModem:
-            def test_tapped(self, board):
+            def test_one(self, board):
                 pass
         """
     )
-    result = pytester.runpytest_subprocess("-p", "no:cacheprovider", "-ra")
-    result.assert_outcomes(passed=1, skipped=1)
-    result.stdout.fnmatch_lines(["SKIPPED *: serial: uart.modem cannot be tapped on this backend"])
+    result = pytester.runpytest_subprocess("-p", "no:cacheprovider")
+    assert result.ret == pytest.ExitCode.INTERRUPTED
+    # The class's marker is closer than the module's.
+    result.stdout.fnmatch_lines(
+        ["*::TestModem::test_one: no board profile named 'esp32-wrover-kit'*"]
+    )
 
 
-@pytest.mark.parametrize("marker", ['board_profile("lilygo-t-a7670g-r2")', 'tap("uart.gnss")'])
+@pytest.mark.parametrize("marker", ['board_profile("lilygo-t-a7670g-r2")', 'app_path("elsewhere")'])
 def test_a_board_marker_in_a_pytest_param_is_refused(
     pytester: pytest.Pytester, marker: str
 ) -> None:
@@ -264,26 +232,26 @@ def test_a_board_marker_in_a_pytest_param_is_refused(
 
 
 @pytest.mark.parametrize(
-    ("items", "node", "taps"),
+    ("items", "node", "profile"),
     [
-        ("items[:1]", "item", '"uart.gnss"'),
-        # One that is no tap at all.
+        ("items[:1]", "item", '"lilygo-t-a7670g-r2"'),
+        # One that names no profile at all.
         ("items[:1]", "item", ""),
         # The class's node, whose markers are not in the class's own pytestmark.
-        ("items[:1]", "item.parent", '"uart.gnss"'),
+        ("items[:1]", "item.parent", '"lilygo-t-a7670g-r2"'),
         # The module's node, once per item.
-        ("items", "item.parent.parent", '"uart.gnss"'),
+        ("items", "item.parent.parent", '"lilygo-t-a7670g-r2"'),
     ],
 )
 def test_a_board_marker_a_hook_adds_is_refused(
-    pytester: pytest.Pytester, items: str, node: str, taps: str
+    pytester: pytest.Pytester, items: str, node: str, profile: str
 ) -> None:
     pytester.makeconftest(
         WITH_SERIAL
         + f"""
 def pytest_collection_modifyitems(items):
     for item in {items}:
-        {node}.add_marker(pytest.mark.tap({taps}))
+        {node}.add_marker(pytest.mark.board_profile({profile}))
 """
     )
     pytester.makepyfile(test_hook="class TestA:\n    def test_one(self, board):\n        pass\n")
@@ -291,8 +259,8 @@ def pytest_collection_modifyitems(items):
     assert result.ret == pytest.ExitCode.USAGE_ERROR
     result.stderr.fnmatch_lines(
         [
-            "ERROR: test_hook.py::TestA::test_one[[]esp32sim[]]: the tap marker reached the test"
-            " after*"
+            "ERROR: test_hook.py::TestA::test_one[[]esp32sim[]]: the board_profile marker reached"
+            " the test after*"
         ]
     )
 
@@ -574,6 +542,17 @@ def test_the_board_s_clock_and_sources_go_in_order(
             gnss.replay("gnss.jsonl")
             gnss.replay("gnss.jsonl")
 
+        def test_tap_after_power_on(board, gnss):
+            board.power_on()
+            gnss.tap("tap.jsonl")
+
+        def test_two_taps(gnss):
+            gnss.tap("tap.jsonl")
+            gnss.tap("tap.jsonl")
+
+        def test_tap_into_no_directory(gnss):
+            gnss.tap("none/tap.jsonl")
+
         def test_model_after_power_on(board, gnss):
             board.power_on()
             gnss.lose_fix()
@@ -588,7 +567,7 @@ def test_the_board_s_clock_and_sources_go_in_order(
         """
     )
     result = fake_runner.runpytest_subprocess("-p", "no:cacheprovider")
-    result.assert_outcomes(failed=9)
+    result.assert_outcomes(failed=12)
     result.stdout.fnmatch_lines_random(
         [
             "E *esp32tl.interfaces.BoardOff: the board is off; call board.power_on() first",
@@ -596,12 +575,19 @@ def test_the_board_s_clock_and_sources_go_in_order(
             "E *esp32tl.interfaces.SourceError: uart.gnss: the board is on already: give a route"
             " its source before board.power_on()",
             "E *esp32tl.interfaces.SourceError: uart.gnss has its source already: one per test",
+            "E *esp32tl.interfaces.SourceError: uart.gnss: the board is on already: tap a route"
+            " before board.power_on()",
+            "E *esp32tl.interfaces.SourceError: uart.gnss is tapped already: one tap per test",
+            "E *FileNotFoundError: uart.gnss: cannot tap into none/tap.jsonl: */none is not a"
+            " directory",
             "E *esp32tl.interfaces.SourceError: uart.gnss replays a recording: it has no receiver"
             " to describe; one source per test",
         ]
     )
     # The replay and the model after power-on.
-    late = re.findall(r"^E +.*SourceError: uart.gnss: the board is on", result.stdout.str(), re.M)
+    late = re.findall(
+        r"^E +.*SourceError: uart.gnss: the board is on already: give", result.stdout.str(), re.M
+    )
     assert len(late) == 2
     # The second replay and the replay after a model.
     second = re.findall(r"^E +.*SourceError: uart.gnss has its source", result.stdout.str(), re.M)
@@ -622,30 +608,37 @@ uart = {{ sources = ["model"] }}
 
 
 @pytest.mark.parametrize(
-    ("other", "outcome", "line"),
+    ("other", "outcome", "lines"),
     [
         (
-            '[serial]\nuart = { sources = ["replay"] }',
-            {"skipped": 1},
+            '[serial]\nuart = { sources = ["replay"], tap = true }',
+            {"skipped": 2},
             # At the test, not at the line of esp32tl's that skipped it.
-            "SKIPPED [[]1[]] test_fake.py:1: esp32sim: uart.gnss takes no replay source on this"
-            " backend, only model",
+            [
+                "SKIPPED [[]1[]] test_fake.py:1: esp32sim: uart.gnss takes no replay source on"
+                " this backend, only model",
+                "SKIPPED [[]1[]] test_fake.py:5: esp32sim: uart.gnss cannot be tapped on this"
+                " backend",
+            ],
         ),
-        # A source no backend gives is wrong, not a skip everywhere.
+        # A source or a tap no backend gives is wrong, not a skip everywhere.
         (
             "",
-            {"failed": 1},
-            "E *esp32tl.interfaces.SourceError: no backend takes a 'replay' source on uart.gnss;"
-            " the sources there are model",
+            {"failed": 2},
+            [
+                "E *esp32tl.interfaces.SourceError: no backend takes a 'replay' source on"
+                " uart.gnss; the sources there are model",
+                "E *esp32tl.interfaces.SourceError: no backend can tap uart.gnss",
+            ],
         ),
     ],
 )
-def test_a_source_the_backend_cannot_give_skips_at_the_call(
+def test_a_source_or_a_tap_the_backend_cannot_give_skips_at_the_call(
     fake_runner: pytest.Pytester,
     monkeypatch: pytest.MonkeyPatch,
     other: str,
     outcome: dict[str, int],
-    line: str,
+    lines: list[str],
 ) -> None:
     monkeypatch.setenv("FAKE_EXIT", "0")
     (fake_runner.path / "capabilities.toml").write_text(NO_REPLAY.format(other=other))
@@ -664,11 +657,15 @@ def test_a_source_the_backend_cannot_give_skips_at_the_call(
         def test_replay(board, gnss):
             gnss.replay("gnss.jsonl")
             board.power_on()
+
+        def test_tap(board, gnss):
+            gnss.tap("tap.jsonl")
+            board.power_on()
         """
     )
     result = fake_runner.runpytest_subprocess("-p", "no:cacheprovider", "-rA")
     result.assert_outcomes(**outcome)
-    result.stdout.fnmatch_lines([line])
+    result.stdout.fnmatch_lines_random(lines)
 
 
 def test_a_model_the_backend_cannot_give_skips_at_the_call(
@@ -773,6 +770,23 @@ def test_a_test_that_sets_up_a_source_and_never_powers_on_fails_at_teardown(
         if prop.get("name") == "esp32sim_link"
     ]
     assert stats == [None] * 6
+
+
+def test_a_test_that_taps_a_route_and_never_powers_on_fails_at_teardown(
+    fake_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_EXIT", "0")
+    fake_runner.makepyfile(test_fake="def test_tapped(gnss):\n    gnss.tap('tap.jsonl')\n")
+    result = fake_runner.runpytest_subprocess("-p", "no:cacheprovider")
+    result.assert_outcomes(passed=1, errors=1)
+    result.stdout.fnmatch_lines(
+        [
+            "*esp32sim: the test set up the tap of uart.gnss and never called board.power_on():"
+            " it ran no firmware",
+        ]
+    )
+    # Nothing ran, so nothing is written.
+    assert not (fake_runner.path / "tap.jsonl").exists()
 
 
 def test_a_test_that_uses_board_gets_a_wall_time_timeout_unless_one_is_set(
@@ -908,7 +922,9 @@ def test_hello_world_fails_on_an_image_that_prints_something_else(
 # connects once, shakes hands, takes turn 0, prints the console line, as the console message and on
 # stdout, sends a warning and takes the next turn at the harness's quiet_until, and so on until the
 # harness's stop or SIGTERM, on which it ends the run with its stats and exits 0, as protocol §9 has
-# it. $FAKE_LINK makes it misbehave: `version` sends a hello of version 2, and exits 3 once it has
+# it. It drops the inputs the harness sends in its turns. $FAKE_LINK changes that: `tx` also has
+# the firmware transmit a PMTK command on the GNSS route's TX pin after the console line; the
+# others make it misbehave: `version` sends a hello of version 2, and exits 3 once it has
 # the harness's answer; `late` sends an event out of sequence after the console line; `deaf`
 # ignores the harness and SIGTERM after that line; `stall` takes no turn after it until SIGTERM;
 # `linger` leaves a child holding the link open after it exits; `slow` loads for half a second
@@ -955,10 +971,12 @@ def end(how, code, detail=None):
 
 
 def turn():
-    message = p.decode_harness(lines.readline())
-    if message == p.Stop():
-        end("stop", 0)
-    assert isinstance(message, p.Wait) and message.quiet_until is not None, message
+    message = None
+    while not isinstance(message, p.Wait):
+        message = p.decode_harness(lines.readline())
+        if message == p.Stop():
+            end("stop", 0)
+    assert message.quiet_until is not None, message
     return message.quiet_until
 
 
@@ -980,6 +998,8 @@ send(p.Console(1000, b"Hello world!\\r\\n"))
 send(p.Warn(1000, "unrouted_rx", "uart_rx on GPIO 5: 72 bytes dropped", pin=5, nbytes=72))
 if mode == "late":
     send(p.Reset(5, 2000, 12))
+if mode == "tx":
+    send(p.UartTx(1, 1000, 1, (4,), 9600, b"$PMTK314,0*28\\r\\n"))
 if mode == "stall":
     signal.sigwait({{signal.SIGTERM}})
     end("signal", 0)
@@ -1074,6 +1094,128 @@ def test_the_test_s_waits_move_the_board_s_clock(link_runner: pytest.Pytester) -
     )
     result = link_runner.runpytest_subprocess("-p", "no:cacheprovider")
     result.assert_outcomes(passed=1)
+
+
+# A test that taps the GNSS route: two sentences of the replay go in, at 1 s and 2 s, and the PMTK
+# command comes out, at 1 µs.
+TAPPED = """
+from esp32tl.units import seconds
+
+def test_tapped(board, gnss, console):
+    gnss.replay("gnss.jsonl")
+    gnss.tap("tap.jsonl")
+    board.power_on()
+    board.wait(seconds(2.5))
+    console.expect("Hello world!")
+    {end}
+"""
+
+
+def test_a_tap_records_what_crossed_the_route_both_ways(
+    link_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_LINK", "tx")
+    link_runner.makepyfile(test_fake=TAPPED.format(end=""))
+    result = link_runner.runpytest_subprocess("-p", "no:cacheprovider", "-rA")
+    result.assert_outcomes(passed=1)
+    tapped = recording.read(link_runner.path / "tap.jsonl")
+    replayed = recording.read(link_runner.path / "gnss.jsonl")
+    header = tapped.header
+    assert (header.board, header.interface, header.source, header.clock, header.end) == (
+        "esp32-devkitc",
+        "uart.gnss",
+        "replay",
+        "emulated-fifo-write",
+        "hold",
+    )
+    # The fake build's app.bin is empty.
+    assert header.app_sha256 == hashlib.sha256(b"").hexdigest()
+    assert header.tools == {"esp32tl": esp32tl.__version__, "esp32sim": "0" * 40}
+    assert [(e.t, e.dir, e.data) for e in tapped.events] == [
+        (1000, "out", b"$PMTK314,0*28\r\n"),
+        *((e.t, "in", e.data) for e in replayed.events[:2]),
+    ]
+    # A passing test's report has the routes, not the run.
+    result.stdout.fnmatch_lines(
+        [
+            "routes:",
+            "  uart.gnss: the replay of gnss.jsonl; * bytes in, 15 out; tapped into */tap.jsonl",
+        ]
+    )
+    result.stdout.no_fnmatch_line("the run on the board's clock*")
+
+
+def test_the_report_of_a_failing_test_shows_the_run_on_the_board_s_clock(
+    link_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_LINK", "tx")
+    link_runner.makepyfile(
+        test_fake=TAPPED.format(end='console.expect("Goodbye", timeout=0.5)'),
+    )
+    result = link_runner.runpytest_subprocess("-p", "no:cacheprovider", "--junitxml", "report.xml")
+    result.assert_outcomes(failed=1)
+    # The run, in the order of the board's time: the test's steps, the console, both ways of the
+    # route, and the failed expect last.
+    result.stdout.fnmatch_lines(
+        [
+            "*Captured esp32sim link teardown*",
+            "board esp32-devkitc, watching GPIO 4, GPIO 5",
+            "stats: the run ended at 3.000000000 s (stop); *",
+            "routes:",
+            "  uart.gnss: the replay of gnss.jsonl; * bytes in, 15 out; tapped into */tap.jsonl",
+            "the run on the board's clock, 12 entries:",
+            "  0.000000000 s  test           uart.gnss.replay('gnss.jsonl')",
+            "  0.000000000 s  test           uart.gnss.tap('tap.jsonl')",
+            "  0.000000000 s  test           board.power_on(), the world's time"
+            " 2026-01-01T12:00:00Z",
+            "  0.000000000 s  test           board.wait(2.5 s)",
+            "  0.000001000 s  console        Hello world!",
+            "  0.000001000 s  uart.gnss out  $PMTK314,0*28\\r\\n",
+            "  1.000000000 s  uart.gnss in   $GPGGA,*\\r\\n",
+            "  2.000000000 s  uart.gnss in   $GPRMC,*\\r\\n",
+            "  2.500000000 s  test           waits up to 30 s for 'Hello world!' on the console",
+            "  2.500000000 s  test           'Hello world!' on the console: happened",
+            "  2.500000000 s  test           waits up to 0.5 s for 'Goodbye' on the console",
+            # The test failed in the turn at 3 s, before the sentence of 3 s went in.
+            "  3.000000000 s  test           'Goodbye' on the console: did not happen within 0.5 s",
+        ]
+    )
+    # The routes are in the user property too.
+    (prop,) = ElementTree.parse(link_runner.path / "report.xml").iter("property")
+    routes = json.loads(prop.get("value", ""))["routes"]
+    assert routes["uart.gnss"] | {"bytes_in": None} == {
+        "source": "replay",
+        "detail": "gnss.jsonl",
+        "bytes_in": None,
+        "bytes_out": 15,
+        "tap": str(link_runner.path / "tap.jsonl"),
+    }
+    assert routes["uart.gnss"]["bytes_in"] > 0
+
+
+def test_a_tap_that_cannot_be_written_fails_the_test_at_teardown(
+    link_runner: pytest.Pytester,
+) -> None:
+    link_runner.makepyfile(
+        test_fake="""
+        from pathlib import Path
+
+        def test_tapped(board, gnss, console):
+            gnss.tap("tap.jsonl")
+            (Path(__file__).parent / "tap.jsonl").mkdir()
+            board.power_on()
+            console.expect("Hello world!")
+        """
+    )
+    result = link_runner.runpytest_subprocess("-p", "no:cacheprovider")
+    result.assert_outcomes(passed=1, errors=1)
+    result.stdout.fnmatch_lines(
+        [
+            "*esp32sim: the tap of uart.gnss cannot be written: *tap.jsonl*; its output is in *",
+            # The teardown failed, so the report shows the run.
+            "the run on the board's clock, * entries:",
+        ]
+    )
 
 
 def test_a_mismatched_handshake_fails_the_test_with_both_sides_reasons(

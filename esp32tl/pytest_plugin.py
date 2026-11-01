@@ -13,13 +13,14 @@ back to the command line, and a session started with `--embedded-services esp` w
 `esp32sim` case open a serial port. The app comes from the `app_path` marker instead, its build
 from `build/` in it. `--count` above 1 is refused too: a test has one board.
 
-The test body sets up what is around the board, as `gnss.replay(path)` or `gnss.fix(at=...)` does,
-then calls `board.power_on()`, which starts the run; from there the board's clock moves only while
-the test waits on it (`board.wait`, `board.wait_until`, `console.expect`). A source that the
-backend's capability declaration (`esp32tl.boards.capabilities`) does not give skips the test at
-the call that asks for it. The `tap` marker says which interfaces a test taps; a backend that
-cannot gets its parameter marked `skip`, with the reason, before any fixture is set up, so
-pytest-embedded never opens a serial port for it.
+The test body sets up what is around the board, as `gnss.replay(path)`, `gnss.fix(at=...)` and
+`gnss.tap(path)` do, then calls `board.power_on()`, which starts the run; from there the board's
+clock moves only while the test waits on it (`board.wait`, `board.wait_until`, `console.expect`). A
+source or a tap that the backend's capability declaration (`esp32tl.boards.capabilities`) does not
+give skips the test at the call that asks for it.
+
+The report of every test that uses `board` gets the `esp32sim link` section, the link's report and
+the bytes on each route, with the run on the board's clock after them when the test failed.
 
 Every test that uses `board` gets pytest-timeout's `timeout` marker of `DEFAULT_TIMEOUT` seconds of
 wall time, unless the session or the test sets a timeout of its own: the runner waits for the test
@@ -41,7 +42,6 @@ from esp32tl import boards
 from esp32tl.backends import SERVICES
 from esp32tl.backends.esp32sim import BackendError, Esp32Sim, ended_while_waiting
 from esp32tl.boards import DEFAULT_PROFILE, BoardProfile, ProfileError
-from esp32tl.boards.capabilities import CapabilityError, Request, check, declared, refusal
 from esp32tl.interfaces.console import Console
 from esp32tl.interfaces.gnss import Gnss
 
@@ -70,10 +70,6 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         f"board_profile(name): the board profile a test runs; {DEFAULT_PROFILE} by default",
     )
-    config.addinivalue_line(
-        "markers",
-        "tap(*interfaces): the board interfaces the test taps; a backend that cannot gives a skip",
-    )
 
 
 class MarkerError(Exception):
@@ -93,28 +89,13 @@ def board_profile(node: pytest.Item) -> BoardProfile:
     return boards.profile(marker.args[0])
 
 
-def board_requests(node: pytest.Item) -> list[Request]:
-    """The taps the `tap` markers of `node` and its parents ask for, added up over every level:
-    a tap asks for more, never for something else."""
-    taps: list[str] = []
-    for marker in node.iter_markers("tap"):
-        args = marker.args
-        if not args or marker.kwargs or not all(isinstance(a, str) for a in args):
-            raise MarkerError(
-                'the tap marker takes one or more interfaces, as in @pytest.mark.tap("console")'
-            )
-        taps += args
-    return [Request(i, tap=True) for i in dict.fromkeys(taps)]
-
-
 @dataclass(frozen=True)
 class BoardMarkers:
-    """What the board markers of a test say: the `app_path` marker's arguments, the profile's
-    name and the requests."""
+    """What the board markers of a test say: the `app_path` marker's arguments and the profile's
+    name."""
 
     app_path: tuple[object, ...] | None
     profile: str
-    requests: tuple[Request, ...]
 
 
 # What pytest_generate_tests read for each test that uses `board`, by the nodeid of its
@@ -137,25 +118,18 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
         app_path /= marker.args[0]
     try:
         profile = board_profile(metafunc.definition)
-        requests = board_requests(metafunc.definition)
-        check(requests, profile, declared())
-    except (MarkerError, ProfileError, CapabilityError) as error:
+    except (MarkerError, ProfileError) as error:
         # from None: raised inside the handler, the failure would show the error twice
         message = f"{metafunc.definition.nodeid}: {error}"
         raise pytest.fail.Exception(message, pytrace=False) from None
-    read = BoardMarkers(marker.args if marker else None, profile.name, tuple(requests))
+    read = BoardMarkers(marker.args if marker else None, profile.name)
     metafunc.config.stash.setdefault(READ, {})[metafunc.definition.nodeid] = read
     chosen = metafunc.config.getoption("esp32tl_backend")
     backends = [chosen] if chosen else list(SERVICES)
-    params = []
-    for backend in backends:
-        reason = refusal(backend, requests, declared())
-        marks = [pytest.mark.skip(reason=f"{backend}: {reason}")] if reason else []
-        params.append(
-            pytest.param(
-                backend, SERVICES[backend], str(app_path.resolve()), marks=marks, id=backend
-            )
-        )
+    params = [
+        pytest.param(backend, SERVICES[backend], str(app_path.resolve()), id=backend)
+        for backend in backends
+    ]
     metafunc.parametrize(("board", "embedded_services", "app_path"), params, indirect=True)
 
 
@@ -205,8 +179,7 @@ def timeout_configured(config: pytest.Config) -> bool:
 def late_board_marker(config: pytest.Config, item: pytest.Item) -> str | None:
     """Which board marker `item` carries otherwise than its definition did, if one does. A
     pytest.param's marks and those a hook adds reach the item but not the definition
-    pytest_generate_tests reads, so a tap there would skip no backend, and a profile there would
-    reach `board` unchecked."""
+    pytest_generate_tests reads, so a profile there would reach `board` unchecked."""
     callspec = getattr(item, "callspec", None)
     if callspec is None or "board" not in getattr(item, "fixturenames", ()):
         return None
@@ -223,11 +196,6 @@ def late_board_marker(config: pytest.Config, item: pytest.Item) -> str | None:
             return "the board_profile marker"
     except (MarkerError, ProfileError):
         return "the board_profile marker"
-    try:
-        if board_requests(item) != list(read.requests):
-            return "the tap marker"
-    except MarkerError:
-        return "the tap marker"
     return None
 
 
@@ -237,6 +205,8 @@ CALL_SAW_RUN_END = pytest.StashKey[bool]()
 # Set on a test whose setup or call did not pass (failed, skipped, xfailed): a board it never
 # powered on is then not reported on top of that.
 DID_NOT_PASS = pytest.StashKey[bool]()
+# Set on a test whose setup or call failed: its report shows the run on the board's clock.
+FAILED = pytest.StashKey[bool]()
 
 
 @pytest.hookimpl(wrapper=True)
@@ -246,6 +216,8 @@ def pytest_runtest_makereport(
     report = yield
     if report.when in ("setup", "call") and not report.passed:
         item.stash[DID_NOT_PASS] = True
+    if report.when in ("setup", "call") and report.failed:
+        item.stash[FAILED] = True
     if (
         report.when == "call"
         and call.excinfo is not None
@@ -277,6 +249,8 @@ def board(
         )
     except BackendError as error:
         backend_failed(error)
+    # Whether the teardown fails the test: its report then shows the run, as for a failed call.
+    failing = True
     try:
         yield backend
     finally:
@@ -287,6 +261,7 @@ def board(
             # and what the link found.
             if not request.node.stash.get(CALL_SAW_RUN_END, False):
                 backend_failed(error)
+            failing = False
         else:
             # A test that set up a source and never powered on ran no firmware: it would pass
             # whatever the firmware does.
@@ -297,14 +272,15 @@ def board(
                     " board.power_on(): it ran no firmware",
                     pytrace=False,
                 )
+            failing = False
         finally:
-            # The link's warnings and the run's stats, in the report of every test: a section
-            # for people, which pytest shows with a failure or -rA, and a user property for code,
-            # as a JSON string: JUnit XML writes a property's str().
-            request.node.add_report_section("teardown", "esp32sim link", backend.link.report())
-            request.node.user_properties.append(
-                ("esp32sim_link", json.dumps(backend.link.properties()))
-            )
+            # The link's warnings, the run's stats and the bytes on each route, in the report of
+            # every test, and the run on the board's clock in that of a test that failed: a
+            # section for people, which pytest shows with a failure or -rA, and a user property
+            # for code, as a JSON string: JUnit XML writes a property's str().
+            run = failing or request.node.stash.get(FAILED, False)
+            request.node.add_report_section("teardown", "esp32sim link", backend.report(run=run))
+            request.node.user_properties.append(("esp32sim_link", json.dumps(backend.properties())))
 
 
 def skip_at_the_test(reason: str) -> NoReturn:
@@ -329,7 +305,8 @@ def console(board: Esp32Sim) -> Console:
 def gnss(board: Esp32Sim) -> Gnss:
     """The far end of the board profile's `uart.gnss` route: `gnss.replay(path)`, before
     `board.power_on()`, replays a recording into it; `gnss.fix(at=...)` or another call of the
-    receiver model makes it a receiver the test describes."""
+    receiver model makes it a receiver the test describes; and `gnss.tap(path)` records what
+    crosses it."""
     try:
         uart = board.uart("gnss")
     except BackendError as error:
