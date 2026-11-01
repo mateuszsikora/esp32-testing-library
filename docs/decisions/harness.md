@@ -679,16 +679,13 @@ was made to avoid.
 
 ## The board's durations are numbers of seconds until the units land
 
-Status: decided (#65)
+Status: superseded (#69)
 
-*Decided in #65 to give way to [models describe the world in its own terms, in
-units](#models-describe-the-world-in-its-own-terms-in-units); this is what the code does until that
-lands.*
-
-`board.wait(duration)`, `wait_until`'s `within` and an expect's `timeout` take an `int` or a
-`float` of seconds of the board's time, finite and 0 or more, and `board.now` is a `float` of
-seconds. An expect's `timeout` was a number of seconds before, and stays one, so a test reads the
-same way with every limit it states.
+`board.wait(duration)`, `wait_until`'s `within` and an expect's `timeout` took an `int` or a
+`float` of seconds of the board's time, finite and 0 or more, and `board.now` was a `float` of
+seconds. An expect's `timeout` was a number of seconds before, and stayed one, so a test read the
+same way with every limit it stated. The units have landed: see [the board's durations are
+Durations, and an expect's timeout also takes seconds](#the-boards-durations-are-durations-and-an-expects-timeout-also-takes-seconds).
 
 **Rejected:** a `Duration` type in this change, because the units module comes with the GNSS model
 (#69), with its own feature documents, and a type of its own here would be replaced there. Also
@@ -991,6 +988,91 @@ describes the profile.
 
 **Rejected:** waiting for the vendor schematic, as plan finding 12 did, because LilyGO's pin table
 and example already give these values.
+
+## The board's durations are Durations, and an expect's timeout also takes seconds
+
+Status: decided (#69)
+
+`board.wait(duration)` and `wait_until`'s `within` take a `Duration` of `esp32tl.units`, 0 or more,
+and `board.now` is one, as a console line's `at` and a `LineEvent`'s `t` are. A plain number raises
+`TypeError` with the call that would say it, `board.wait takes a Duration, as seconds(2.5), not
+2.5`. An expect's `timeout` takes a `Duration` or a number of seconds: pytest-embedded's `expect`
+takes seconds, and its default of 30 and the tests written against it keep working.
+
+**Rejected:** numbers of seconds beside `Duration`s in `wait` and `wait_until`, because a number
+would leave its unit to the reader, which [the units decision](#models-describe-the-world-in-its-own-terms-in-units)
+rules out; and a `Duration` only, in an expect too, because a test ported from pytest-embedded
+would fail on its first `timeout=`.
+
+## Headings are a type of their own, and positions are on a sphere
+
+Status: decided (#69)
+
+A heading is a `Heading`, degrees clockwise from true north taken modulo 360, with the eight
+compass points as constants (`NORTH`, `SOUTH_WEST`), so that `move(heading=..., speed=...)` takes
+no plain number. Positions are on a sphere of the Earth's mean radius, 6371008.8 m:
+`Position.moved` follows the great circle that leaves on the heading, `distance_to` is the
+haversine, and the GNSS model's course is the great circle's azimuth where the receiver is. The
+sphere's distances differ from the WGS 84 ellipsoid's geodesics by less than 0.6 %, 6 m in a
+kilometre at most, and are close to what firmware that computes a distance with the haversine gets.
+
+**Rejected:** a heading as a number of degrees, because it is the one quantity of the model that
+would have no unit; a rhumb line, a constant compass course, because the plan asks for great-circle
+movement and a receiver reports the course it is on; and the ellipsoid's geodesics, because they
+need an iterative solution or a library for a precision that no test's tolerance yet asks for.
+
+## The GNSS receiver's epochs fall on whole seconds of the world's time
+
+Status: decided (#69)
+
+The receiver sends an RMC and then a GGA at every whole second of the world's time, the first one
+at least a second after power-on; with the default world's time, on a whole second, that is 1 s,
+2 s, 3 s of the board's time. A change the test makes at an epoch's instant is in that epoch,
+since the link polls the receiver after the test's turn. A silent receiver bounds no turn, and
+`resume` moves its next epoch past the silence, so the epochs of the silence are not sent; one at
+the instant of `resume` is.
+
+**Rejected:** epochs on whole seconds of the board's time whatever the world's time says, because
+a receiver's epochs are on whole seconds of UTC and its sentences would then carry fractions of a
+second; and a change held to the next epoch, because the receiver would need to know whether the
+link had polled it at that instant already.
+
+## A lost fix keeps the receiver moving, and a fix puts it at a place, standing
+
+Status: decided (#69)
+
+`gnss.lose_fix()` takes the fix away and nothing else: the receiver goes on moving as it did, as
+one in a tunnel does, and `gnss.position` says where it is. `gnss.fix(at=position)` puts it at
+`position`, standing, so that one call says where the receiver is and what it does; a test that
+wants the fix back on a moving receiver says `gnss.fix(at=gnss.position)` and `gnss.move(...)`.
+`move` needs a position from an earlier fix, and `degrade` a fix.
+
+**Rejected:** stopping the receiver at `lose_fix`, as the spike did, because the world does not
+stop when the receiver loses its satellites; and a `fix` that keeps the motion it had, because
+`fix(at=...)` would then not say alone where the receiver is a second later.
+
+## Console lines are stamped when they end, and console.line looks from when it was made
+
+Status: decided (#69)
+
+`console.line(pattern)` and `console.lines(...)` read the console as lines, each stamped with the
+board's time of the `console` message that carried its line ending, without the line ending and
+without ESP-IDF's colour codes; a line not ended is not one yet. `console.line` is a condition for
+`board.wait_until`: the first matching line among those that end after it was made, by count, not
+by time, so that a line that ends at the very instant the condition is made is not taken for one
+before it. Neither moves `expect`'s cursor.
+
+**Rejected:** a line's start as its time, because a line cannot be matched before it ends; lines
+from a time rather than from a count, for the instant above; and lines that share `expect`'s
+cursor, because a test that mixes the two would have one consume what the other waits for.
+
+## The GNSS receiver sends RMC and GGA only, at sea level
+
+Status: postponed (#69)
+
+The model sends no GSA, GSV or VTG, has no altitude (the GGA says `0.0`), talks only as `GP`, at
+one epoch a second, and ignores what the firmware sends it. Each comes when a firmware under test
+reads it, or configures its receiver and waits for an answer.
 
 ## GPIO lines are an interface of the link, and the scenario timeline is gone
 

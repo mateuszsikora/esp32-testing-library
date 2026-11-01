@@ -123,7 +123,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [A run starts at board.power_on(), and so does the runner](harness.md#a-run-starts-at-boardpower_on-and-so-does-the-runner) | `harness.md` | decided (#64) |
 | [The test's own timeout catches a hung run, not the runner's peer timeout](harness.md#the-tests-own-timeout-catches-a-hung-run-not-the-runners-peer-timeout) | `harness.md` | decided (#64) |
 | [What is at a route's far end is what the test does with it before power-on, not a marker](harness.md#what-is-at-a-routes-far-end-is-what-the-test-does-with-it-before-power-on-not-a-marker) | `harness.md` | decided (#64) |
-| [The board's durations are numbers of seconds until the units land](harness.md#the-boards-durations-are-numbers-of-seconds-until-the-units-land) | `harness.md` | decided (#65) |
+| [The board's durations are numbers of seconds until the units land](harness.md#the-boards-durations-are-numbers-of-seconds-until-the-units-land) | `harness.md` | superseded (#69) |
 | [A wait asks its condition in the test's thread, while the link is held](harness.md#a-wait-asks-its-condition-in-the-tests-thread-while-the-link-is-held) | `harness.md` | decided (#65) |
 | [A run that ends while the test waits raises RunEnded, with the runner's last output](harness.md#a-run-that-ends-while-the-test-waits-raises-runended-with-the-runners-last-output) | `harness.md` | decided (#65) |
 | [Teardown stops the run at the turn the test left it at](harness.md#teardown-stops-the-run-at-the-turn-the-test-left-it-at) | `harness.md` | decided (#65) |
@@ -141,6 +141,12 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [A TLS stack with a seeded random source is postponed](harness.md#a-tls-stack-with-a-seeded-random-source-is-postponed) | `harness.md` | postponed (#68) |
 | [Flash contents besides the build go into a partition of the build's own table, by name](harness.md#flash-contents-besides-the-build-go-into-a-partition-of-the-builds-own-table-by-name) | `harness.md` | decided (#64) |
 | [The LilyGO profile takes its GNSS route, flash and PSRAM from LilyGO's documentation](harness.md#the-lilygo-profile-takes-its-gnss-route-flash-and-psram-from-lilygos-documentation) | `harness.md` | decided (#64) |
+| [The board's durations are Durations, and an expect's timeout also takes seconds](harness.md#the-boards-durations-are-durations-and-an-expects-timeout-also-takes-seconds) | `harness.md` | decided (#69) |
+| [Headings are a type of their own, and positions are on a sphere](harness.md#headings-are-a-type-of-their-own-and-positions-are-on-a-sphere) | `harness.md` | decided (#69) |
+| [The GNSS receiver's epochs fall on whole seconds of the world's time](harness.md#the-gnss-receivers-epochs-fall-on-whole-seconds-of-the-worlds-time) | `harness.md` | decided (#69) |
+| [A lost fix keeps the receiver moving, and a fix puts it at a place, standing](harness.md#a-lost-fix-keeps-the-receiver-moving-and-a-fix-puts-it-at-a-place-standing) | `harness.md` | decided (#69) |
+| [Console lines are stamped when they end, and console.line looks from when it was made](harness.md#console-lines-are-stamped-when-they-end-and-consoleline-looks-from-when-it-was-made) | `harness.md` | decided (#69) |
+| [The GNSS receiver sends RMC and GGA only, at sea level](harness.md#the-gnss-receiver-sends-rmc-and-gga-only-at-sea-level) | `harness.md` | postponed (#69) |
 | [GPIO lines are an interface of the link, and the scenario timeline is gone](harness.md#gpio-lines-are-an-interface-of-the-link-and-the-scenario-timeline-is-gone) | `harness.md` | decided (#24) |
 | [A board's pull is a level the harness drives on the line](harness.md#a-boards-pull-is-a-level-the-harness-drives-on-the-line) | `harness.md` | decided (#24) |
 | [The lines fixture names a line by its GPIO or its role, and reads the firmware's side](harness.md#the-lines-fixture-names-a-line-by-its-gpio-or-its-role-and-reads-the-firmwares-side) | `harness.md` | decided (#24) |

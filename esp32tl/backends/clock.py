@@ -8,12 +8,12 @@ most `STEP_NS`, and asks the test's condition at every turn, in the test's own t
 link is held. Times here are nanoseconds on the board's clock, from power-on.
 """
 
-import math
 import threading
 from collections.abc import Callable
 from typing import TypeVar
 
 from esp32tl.interfaces import NeverHappened, RunEnded
+from esp32tl.units import Duration
 
 # How far the run may go between two looks at a condition, 100 emulated milliseconds: how late
 # after what it waits for a `wait_until` returns, when no other turn of the link comes sooner.
@@ -96,7 +96,7 @@ class HeldClock:
             while self._now < deadline:
                 self._advance(deadline, f"until {seconds(deadline)}")
 
-    def wait_until(self, condition: Callable[[], T], within: int, description: str) -> T:
+    def wait_until(self, condition: Callable[[], T | None], within: int, description: str) -> T:
         """Lets the run go until `condition` returns something true, asked now and at every
         turn, for at most `within` from now; returns what it returned. `description` names it
         in `NeverHappened` and `RunEnded`."""
@@ -172,15 +172,16 @@ class HeldClock:
 
 def seconds(ns: int) -> str:
     """`ns` as seconds, without trailing zeros: `12.5 s`, `30 s`."""
-    whole, part = divmod(ns, 10**9)
-    return f"{whole}.{part:09d}".rstrip("0").rstrip(".") + " s"
+    return str(Duration(ns))
 
 
-def nanoseconds(value: float) -> int:
-    """`value`, seconds of the board's time, in nanoseconds; a `TypeError` or a `ValueError`
-    for what is not a finite number of seconds, 0 or more."""
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        raise TypeError(f"{value!r} is not a number of seconds of the board's time")
-    if not (math.isfinite(value) and value >= 0):
-        raise ValueError(f"{value!r} is not a number of seconds of the board's time, 0 or more")
-    return round(value * 10**9)
+def nanoseconds(value: Duration, what: str) -> int:
+    """`value`, a `Duration` of the board's time, 0 or more, in nanoseconds; a `TypeError` for
+    anything else, which names `what` took it, and a `ValueError` for one below 0."""
+    if not isinstance(value, Duration):
+        plain = isinstance(value, int | float) and not isinstance(value, bool)
+        example = f"seconds({value!r})" if plain else "seconds(5)"
+        raise TypeError(f"{what} takes a Duration, as {example}, not {value!r}")
+    if value.ns < 0:
+        raise ValueError(f"{what} takes a Duration of 0 or more, not {value}")
+    return value.ns

@@ -13,6 +13,7 @@ from esp32tl.interfaces.lines import LineEvent, Lines
 from esp32tl.link.boardlink import BoardLink
 from esp32tl.link.protocol import GpioIn, GpioOut, Release, RunnerHello, Sync, Wait
 from esp32tl.report import RunLog
+from esp32tl.units import seconds
 
 HELLO = RunnerHello(1, "esp32", "emulated-fifo-write", "8c652151dd5a521249a785ca147f20a9f8eda68f")
 LILYGO = boards.profile("lilygo-t-a7670g-r2")
@@ -109,11 +110,11 @@ def test_a_drive_and_a_release_go_out_at_the_instant_the_test_made_them() -> Non
     lines.drive("modem.ri", 1)
     assert list(lines.inputs(5 * S)) == [GpioIn(5 * S, ((33, 1),))]
     assert lines.events() == [
-        LineEvent(2.0, "modem.ri", 33, "test", 1),
-        LineEvent(2.0, "modem.pwrkey", 4, "test", 1),
-        LineEvent(3.0, "modem.pwrkey", 4, "test", None),
-        LineEvent(3.0, "modem.ri", 33, "test", None),
-        LineEvent(4.0, "modem.ri", 33, "test", 1),
+        LineEvent(seconds(2), "modem.ri", 33, "test", 1),
+        LineEvent(seconds(2), "modem.pwrkey", 4, "test", 1),
+        LineEvent(seconds(3), "modem.pwrkey", 4, "test", None),
+        LineEvent(seconds(3), "modem.ri", 33, "test", None),
+        LineEvent(seconds(4), "modem.ri", 33, "test", 1),
     ]
 
 
@@ -145,12 +146,12 @@ def test_the_level_is_what_the_firmware_drives() -> None:
     lines.driven(6 * S, [(4, 1)], frozenset())
     assert lines.level(4) == 1
     assert lines.events() == [
-        LineEvent(1.0, "modem.pwrkey", 4, "firmware", 0),
-        LineEvent(2.0, "modem.pwrkey", 4, "firmware", 1),
-        LineEvent(3.0, "modem.pwrkey", 4, "firmware", None),
-        LineEvent(4.0, "modem.pwrkey", 4, "firmware", 0),
-        LineEvent(5.0, "modem.pwrkey", 4, "firmware", None),
-        LineEvent(6.0, "modem.pwrkey", 4, "firmware", 1),
+        LineEvent(seconds(1), "modem.pwrkey", 4, "firmware", 0),
+        LineEvent(seconds(2), "modem.pwrkey", 4, "firmware", 1),
+        LineEvent(seconds(3), "modem.pwrkey", 4, "firmware", None),
+        LineEvent(seconds(4), "modem.pwrkey", 4, "firmware", 0),
+        LineEvent(seconds(5), "modem.pwrkey", 4, "firmware", None),
+        LineEvent(seconds(6), "modem.pwrkey", 4, "firmware", 1),
     ]
 
 
@@ -180,7 +181,7 @@ def test_on_the_link_the_lines_are_watched_and_driven_in_their_turn() -> None:
     assert link.receive(Sync(2 * S)) == [GpioIn(2 * S, ((33, 1),)), Wait(1, None, None)]
     assert link.error is None
     assert lines.level("modem.pwrkey") == 1
-    assert [(e.t, e.by) for e in lines.events()] == [(1.0, "firmware"), (2.0, "test")]
+    assert [(e.t, e.by) for e in lines.events()] == [(seconds(1), "firmware"), (seconds(2), "test")]
 
 
 def test_the_test_s_calls_and_the_firmware_s_changes_go_into_the_run_s_log() -> None:

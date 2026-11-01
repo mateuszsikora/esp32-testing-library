@@ -17,7 +17,7 @@ import pytest
 from esp32tl import recording
 from esp32tl.backends.esp32sim import Esp32Sim
 from esp32tl.interfaces.console import Console
-from esp32tl.interfaces.uart import Uart
+from esp32tl.interfaces.gnss import Gnss
 
 ROOT = Path(__file__).resolve().parent.parent
 NMEA_READER = ROOT / "firmware" / "nmea_reader"
@@ -26,7 +26,7 @@ RECORDING = ROOT / "recordings" / "gnss-generated-1.jsonl"
 
 @pytest.mark.app_path("../firmware/nmea_reader")
 def test_a_replay_reaches_nmea_reader_on_the_gnss_route(
-    board: Esp32Sim, gnss: Uart, console: Console
+    board: Esp32Sim, gnss: Gnss, console: Console
 ) -> None:
     replay = gnss.replay("../recordings/gnss-generated-1.jsonl")
     board.power_on()
@@ -48,13 +48,15 @@ def test_a_tap_of_a_replay_records_what_went_in(pytester: pytest.Pytester) -> No
         test_tap=f"""
         import pytest
 
+        from esp32tl.units import seconds
+
         pytestmark = pytest.mark.app_path({str(NMEA_READER)!r})
 
         def test_tapped(board, gnss):
             replay = gnss.replay({str(RECORDING)!r})
             tap = gnss.tap({str(tapped)!r})
             board.power_on()
-            board.wait(5.5)
+            board.wait(seconds(5.5))
             assert tap.events == [(t, "in", data) for t, data in replay.events[:5]]
         """
     )

@@ -15,12 +15,13 @@ no `--peer-timeout`: the test's own timeout, in wall time, catches a run that ha
 The backend owns the link's socket (`docs/protocol.md` §1): it binds a Unix socket before it
 spawns the runner, passes it as `--board socket:PATH`, and serves the one connection with a
 `BoardLink` in a thread of its own. The link carries a `Uart` for every UART route of the board
-profile, which says nothing until the test gives it a source, as `gnss.replay(path)` does before
-power-on, and the profile's GPIO lines as one `Lines`, which puts the board's pulls on them from
-power-on and what the test drives at the instant it does. The backend also owns the end of the
-run (§9), before the dut is torn down: `stop` at the turn the test left the run at, `SIGTERM` for
-a runner that is not there, the link read to end of file, the runner waited for, `SIGKILL` only as
-a last resort. Then it writes the recordings of the routes the test tapped.
+profile, `uart.gnss` a `Gnss`, which says nothing until the test gives it a source, as
+`gnss.replay(path)` or `gnss.fix(at=...)` does before power-on, and the profile's GPIO lines as one
+`Lines`, which puts the board's pulls on them from power-on and what the test drives at the instant
+it does. The backend also owns the end of the run (§9), before the dut is torn down: `stop` at the
+turn the test left the run at, `SIGTERM` for a runner that is not there, the link read to end of
+file, the runner waited for, `SIGKILL` only as a last resort. Then it writes the recordings of the
+routes the test tapped.
 
 What the test does on the board, what the firmware prints and the bytes on every route go into a
 `RunLog` (`esp32tl.report`), which the report of a test that failed shows after the link's.
@@ -49,12 +50,15 @@ from esp32tl.backends.clock import HeldClock, nanoseconds, seconds
 from esp32tl.boards import BoardProfile, capabilities
 from esp32tl.boards.capabilities import CapabilityError, Request
 from esp32tl.interfaces import BoardOff, NeverHappened, RunEnded, SourceError
+from esp32tl.interfaces.console import ConsoleLines
+from esp32tl.interfaces.gnss import Gnss
 from esp32tl.interfaces.lines import Lines
 from esp32tl.interfaces.sd_card import SdCard
 from esp32tl.interfaces.uart import Uart
 from esp32tl.link.boardlink import BoardLink, Wire
 from esp32tl.report import RunLog
-from esp32tl.tap import NO_SOURCE, sha256
+from esp32tl.tap import sha256
+from esp32tl.units import Duration
 
 T = TypeVar("T")
 
@@ -170,6 +174,19 @@ def profile_uart(
 ) -> Uart:
     """The `Uart` on the route `profile` gives `interface` (`uart.gnss`), at the route's pins and
     baud; the other arguments are `Uart`'s."""
+    return Uart(
+        interface,
+        route_wire(profile, interface),
+        clock=clock,
+        directory=directory,
+        asked=asked,
+        log=log,
+        files=files,
+    )
+
+
+def route_wire(profile: BoardProfile, interface: str) -> Wire:
+    """The pins and baud of the route `profile` gives `interface` (`uart.gnss`)."""
     kind, _, role = interface.partition(".")
     route = profile.uart.get(role) if kind == "uart" else None
     if route is None:
@@ -177,15 +194,7 @@ def profile_uart(
             f"the board profile {profile.name} has no {interface};"
             f" its interfaces are {', '.join(profile.interfaces)}"
         )
-    return Uart(
-        interface,
-        Wire(tx=route.tx, rx=route.rx, baud=route.baud),
-        clock=clock,
-        directory=directory,
-        asked=asked,
-        log=log,
-        files=files,
-    )
+    return Wire(tx=route.tx, rx=route.rx, baud=route.baud)
 
 
 class RunnerPopen(DuplicateStdoutPopen):
@@ -258,33 +267,24 @@ class Esp32Sim:
         self._skip = skip or refuse
         self.app = load_app(app_path)
         self._runner, self._rom = runner_path(), rom_path()
-        # What the guest printed on its console, as the link brings it.
+        # What the guest printed on its console, as the link brings it, and cut into lines.
         self.console_output = bytearray()
+        self.console_lines = ConsoleLines()
         self.log = RunLog()
         self._hold = HeldClock()
+        self._utc = POWER_ON_UTC
         # Every route of the profile, listening and silent until the test gives it a source.
         # One mapping of the files they and the SD card read and write: no tap writes over another
         # route's file or the card's image.
-        files: dict[Path, tuple[str, str]] = {}
-        self._uarts = {
-            f"uart.{role}": profile_uart(
-                profile,
-                f"uart.{role}",
-                clock=self.clock,
-                directory=self.directory,
-                asked=self._asked,
-                log=self.log,
-                files=files,
-            )
-            for role in profile.uart
-        }
+        self._files: dict[Path, tuple[str, str]] = {}
+        self._uarts = {f"uart.{role}": self._route(f"uart.{role}") for role in profile.uart}
         self._sd_card = (
             SdCard(
                 profile.sd_card,
                 directory=self.directory,
                 asked=self._asked,
                 log=self.log,
-                files=files,
+                files=self._files,
             )
             if profile.sd_card is not None
             else None
@@ -301,14 +301,39 @@ class Esp32Sim:
             clock=self.clock,
         )
         self.process: RunnerPopen | None = None
-        self._utc = POWER_ON_UTC
         self._exited = threading.Event()
         # One SIGTERM at most: a second one kills the runner, with 128 + 15 (protocol §9).
         self._terminated = False
         self._terminating = threading.Lock()
 
+    def _route(self, interface: str) -> Uart:
+        """The `Uart` of the profile's route `interface`: a `Gnss` for `uart.gnss`, whose
+        receiver reads the board's time from the clock and the world's from the power-on."""
+        wire = route_wire(self.profile, interface)
+        if interface == "uart.gnss":
+            return Gnss(
+                interface,
+                wire,
+                clock=self.clock,
+                directory=self.directory,
+                now=lambda: self._hold.now,
+                world=lambda: self._utc,
+                asked=self._asked,
+                log=self.log,
+                files=self._files,
+            )
+        return Uart(
+            interface,
+            wire,
+            clock=self.clock,
+            directory=self.directory,
+            asked=self._asked,
+            log=self.log,
+            files=self._files,
+        )
+
     def uart(self, role: str) -> Uart:
-        """The `Uart` on the link for the profile's `uart.<role>` route."""
+        """The `Uart` on the link for the profile's `uart.<role>` route, a `Gnss` for `gnss`."""
         interface = f"uart.{role}"
         uart = self._uarts.get(interface)
         if uart is None:
@@ -338,6 +363,7 @@ class Esp32Sim:
 
     def _printed(self, t: int, data: bytes) -> None:
         self.console_output.extend(data)
+        self.console_lines.feed(t, data)
         self.log.console(t, data)
 
     def _asked(self, request: Request) -> None:
@@ -415,19 +441,19 @@ class Esp32Sim:
         self._waiter.start()
 
     @property
-    def now(self) -> float:
-        """The board's time since power-on, in seconds: where the test's clock stands."""
-        return self._on().now / 10**9
+    def now(self) -> Duration:
+        """The board's time since power-on: where the test's clock stands."""
+        return Duration(self._on().now)
 
     @property
     def utc(self) -> datetime:
         """The world's time: the UTC instant at power-on, plus the board's time since."""
         return self._utc + timedelta(microseconds=self._on().now // 1000)
 
-    def wait(self, duration: float) -> None:
-        """Lets the board run for `duration` seconds of its own time."""
+    def wait(self, duration: Duration) -> None:
+        """Lets the board run for `duration` of its own time."""
         clock = self._on()
-        ns = nanoseconds(duration)
+        ns = nanoseconds(duration, "board.wait")
         self.log.test(clock.now, f"board.wait({seconds(ns)})")
         try:
             clock.wait(ns)
@@ -435,19 +461,28 @@ class Esp32Sim:
             self.log.test(clock.now, "the run ended while the test waited")
             raise
 
-    def wait_until(self, condition: Callable[[], T], *, within: float) -> T:
-        """Lets the board run until `condition` returns something true, for at most `within`
-        seconds of its time; returns what it returned. `condition` is asked now, then at every
-        turn of the link, at least every 100 ms of the board's time. Raises `NeverHappened`
-        when `within` runs out, and `RunEnded` when the run ends first."""
+    def wait_until(self, condition: Callable[[], T | None], *, within: Duration) -> T:
+        """Lets the board run until `condition` returns something true, for at most `within` of
+        its time; returns what it returned. `condition` is asked now, then at every turn of the
+        link, at least every 100 ms of the board's time. Raises `NeverHappened` when `within`
+        runs out, and `RunEnded` when the run ends first."""
         name = getattr(condition, "__qualname__", None)
         description = f"the condition {name}" if name else repr(condition)
-        return self.wait_on_clock(condition, within, description)
+        return self._waited(condition, within, description, "board.wait_until: within")
 
-    def wait_on_clock(self, condition: Callable[[], T], within: float, description: str) -> T:
+    def wait_on_clock(
+        self, condition: Callable[[], T | None], within: Duration, description: str
+    ) -> T:
         """`wait_until`, with `description` naming the condition in its errors and in the log."""
+        return self._waited(condition, within, description, "within")
+
+    def _waited(
+        self, condition: Callable[[], T | None], within: Duration, description: str, what: str
+    ) -> T:
+        """The wait of `wait_until` and `wait_on_clock`, logged; `what` names `within` in the
+        error for one that is not a `Duration`."""
         clock = self._on()
-        ns = nanoseconds(within)
+        ns = nanoseconds(within, what)
         self.log.test(clock.now, f"waits up to {seconds(ns)} for {description}")
         try:
             value = clock.wait_until(condition, ns, description)
@@ -600,9 +635,7 @@ class Esp32Sim:
             try:
                 made = uart.tapped.recording(
                     board=self.profile.name,
-                    # TODO(#69): a model's source is model:<name> (docs/recording-format.md), not
-                    # the kind alone.
-                    source=uart.source_kind or NO_SOURCE,
+                    source=uart.recorded_source(),
                     clock=self.clock,
                     app_sha256=app_sha256,
                     tools=tools,

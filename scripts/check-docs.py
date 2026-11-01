@@ -169,6 +169,15 @@ FEATURES = [
         "Taps or the run report changed (what a tap writes, what the report shows):"
         " update docs/features/run-report-*.md",
     ),
+    # The units and every device model: the models are named after their device and share the
+    # units, so one pair of documents owns them until a model needs a pair of its own.
+    Rule(
+        "F17",
+        r"^esp32tl/(units\.py|sources/model/)",
+        r"^docs/features/models-",
+        "Models or units changed (quantities, the GNSS receiver, its sentences):"
+        " update docs/features/models-*.md",
+    ),
 ]
 
 # The catch-all for the package: the rest of sources/ and any new module are owned from their

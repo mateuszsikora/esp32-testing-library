@@ -21,8 +21,9 @@ the user sees is in [board-profiles-user.md](board-profiles-user.md).
    power-on ([pytest-plugin-technical.md](pytest-plugin-technical.md#data-flow)). An `[sd_card]`
    slot becomes an empty `SdCard`, the `sd_card` fixture.
 3. **A source or a tap, in the test body.** `gnss.replay(path)` asks the backend, through the
-   `Uart`'s `asked`, for `Request("uart.gnss", source="replay")`, `gnss.tap(path)` for
-   `Request("uart.gnss", tap=True)`, and `sd_card.insert(image)`, through the `SdCard`'s, for
+   `Uart`'s `asked`, for `Request("uart.gnss", source="replay")`, the first call of the receiver
+   model, as `gnss.fix(at=...)`, for `Request("uart.gnss", source="model")`, `gnss.tap(path)`
+   for `Request("uart.gnss", tap=True)`, and `sd_card.insert(image)`, through the `SdCard`'s, for
    `Request("sd_card", source="model")`. `Esp32Sim._asked` runs `capabilities.check([request], ...)`
    (a `CapabilityError` becomes a `SourceError` with its message), then
    `capabilities.refusal(Esp32Sim.name, [request], ...)`, whose reason skips the test at the call

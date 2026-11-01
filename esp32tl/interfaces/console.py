@@ -3,20 +3,27 @@
 The backend gathers what the guest prints from the link's `console` messages, which arrive in
 emulated-time order with the turns. `expect` and `expect_exact` keep pytest-embedded's names, its
 search from the end of the last match, its return values and `return_what_before_match`, but the
-matching is esp32tl's and waits on the test's clock: `timeout` is in seconds of the board's time,
-and the board runs only while they wait.
+matching is esp32tl's and waits on the test's clock: `timeout` is a `Duration` of the board's
+time, or a number of seconds of it, and the board runs only while they wait. `line` and `lines` read
+the console as lines, each stamped with the board's time it ended at: `line(pattern)` is a condition
+for `board.wait_until`, `lines()` what has been printed.
 """
 
 import re
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field
 from typing import Any, Protocol, TypeVar, cast
 
 import pexpect
 
 from esp32tl.interfaces import RunEnded
+from esp32tl.units import Duration, number, seconds
 
 # pytest-embedded's default, in seconds of the board's time here.
 DEFAULT_TIMEOUT = 30
+
+# The colour codes of ESP-IDF's log, which a line's text leaves out.
+COLOUR = re.compile(r"\x1b\[[0-9;]*m")
 
 T = TypeVar("T")
 
@@ -25,12 +32,76 @@ T = TypeVar("T")
 Pattern = str | bytes | re.Pattern[str] | re.Pattern[bytes] | type[pexpect.EOF]
 
 
+@dataclass(frozen=True)
+class Line:
+    """A line the firmware printed on its console: the board's time its line ending came at, its
+    text without the line ending and without colour codes, and the match of the pattern that
+    found it, if one did. `line["lat"]` and `line[1]` are the match's groups."""
+
+    at: Duration
+    text: str
+    # Matches compare by identity: two lines are equal by their time and text.
+    match: re.Match[str] | None = field(default=None, compare=False)
+
+    def __getitem__(self, group: int | str) -> Any:
+        if self.match is None:
+            raise TypeError(f"{self.text!r} was found by no pattern, and has no groups")
+        return self.match[group]
+
+
+class ConsoleLines:
+    """What the guest printed, cut into `Line`s as the link brings it: `feed` is called with the
+    board's time and the bytes of each `console` message."""
+
+    def __init__(self) -> None:
+        self.lines: list[Line] = []
+        self._partial = bytearray()
+
+    def feed(self, t: int, data: bytes) -> None:
+        for piece in data.splitlines(keepends=True):
+            self._partial += piece
+            if piece.endswith(b"\n"):
+                text = self._partial.decode(errors="replace").rstrip("\r\n")
+                self.lines.append(Line(Duration(t), COLOUR.sub("", text)))
+                self._partial.clear()
+
+
+class LineCondition:
+    """`console.line(pattern)`: the first line that ends after it was made and matches
+    `pattern`, or `None` while there is none. Once it has found one it looks after it, so the
+    same condition asked again finds the next."""
+
+    def __init__(self, lines: ConsoleLines, pattern: str | re.Pattern[str]) -> None:
+        self._lines = lines
+        self._pattern = line_pattern(pattern)
+        self._start = len(lines.lines)
+
+    def __call__(self) -> Line | None:
+        lines = self._lines.lines
+        for index in range(self._start, len(lines)):
+            line = lines[index]
+            match = self._pattern.search(line.text)
+            if match is not None:
+                self._start = index + 1
+                return Line(line.at, line.text, match)
+        # The next look starts after the lines this one saw.
+        self._start = len(self._lines.lines)
+        return None
+
+    def __repr__(self) -> str:
+        return f"a console line matching {self._pattern.pattern!r}"
+
+
 class Clocked(Protocol):
-    """The board as the console needs it: what the guest has printed, and its clock."""
+    """The board as the console needs it: what the guest has printed, as bytes and as lines, and
+    its clock."""
 
     console_output: bytearray
+    console_lines: ConsoleLines
 
-    def wait_on_clock(self, condition: Callable[[], T], within: float, description: str) -> T: ...
+    def wait_on_clock(
+        self, condition: Callable[[], T | None], within: Duration, description: str
+    ) -> T: ...
 
 
 class Console:
@@ -44,16 +115,16 @@ class Console:
     def expect(
         self,
         pattern: Pattern | Sequence[Pattern],
-        timeout: float = DEFAULT_TIMEOUT,
+        timeout: Duration | float = DEFAULT_TIMEOUT,
         *,
         return_what_before_match: bool = False,
     ) -> Any:
         """Lets the board run until `pattern`, a regular expression as text, bytes or compiled,
-        appears on the console after the last match, for at most `timeout` seconds of the
-        board's time. A list matches whichever of its patterns appears first. Returns the
-        `re.Match`, on bytes, or with `return_what_before_match` the bytes between the last
-        match and this one. `pexpect.EOF` matches the end of the run, and returns what the
-        console printed after the last match, without trailing whitespace.
+        appears on the console after the last match, for at most `timeout` of the board's time, a
+        `Duration` or a number of seconds. A list matches whichever of its patterns appears
+        first. Returns the `re.Match`, on bytes, or with `return_what_before_match` the bytes
+        between the last match and this one. `pexpect.EOF` matches the end of the run, and
+        returns what the console printed after the last match, without trailing whitespace.
 
         Raises `NeverHappened` when the pattern does not appear within `timeout`, and
         `RunEnded` when the run ends before it does."""
@@ -62,7 +133,7 @@ class Console:
     def expect_exact(
         self,
         pattern: str | bytes | type[pexpect.EOF] | Sequence[str | bytes | type[pexpect.EOF]],
-        timeout: float = DEFAULT_TIMEOUT,
+        timeout: Duration | float = DEFAULT_TIMEOUT,
         *,
         return_what_before_match: bool = False,
     ) -> Any:
@@ -73,10 +144,11 @@ class Console:
     def _expect(
         self,
         pattern: Pattern | Sequence[Pattern],
-        timeout: float,
+        timeout: Duration | float,
         return_what_before_match: bool,
         exact: bool,
     ) -> Any:
+        within = timeout_of(timeout)
         patterns: list[Pattern] = (
             list(pattern) if isinstance(pattern, list | tuple) else [cast(Pattern, pattern)]
         )
@@ -117,7 +189,7 @@ class Console:
 
         description = " or ".join(shown(p) for p in patterns) + " on the console"
         try:
-            result = self._board.wait_on_clock(found, timeout, description)
+            result = self._board.wait_on_clock(found, within, description)
         except RunEnded:
             if not eof:
                 raise
@@ -129,6 +201,56 @@ class Console:
         window, match = result
         self._cursor += match.end()
         return window[: match.start()] if return_what_before_match else match
+
+    def line(self, pattern: str | re.Pattern[str]) -> LineCondition:
+        """A condition for `board.wait_until`: the first line that ends from now on and matches
+        `pattern`, a regular expression on the line's text, as a string or compiled. It returns
+        the `Line`, with the match, or `None` while there is none. Independent of `expect`'s
+        search."""
+        return LineCondition(self._board.console_lines, pattern)
+
+    def lines(
+        self, pattern: str | re.Pattern[str] | None = None, *, since: Duration | None = None
+    ) -> list[Line]:
+        """The lines printed so far, those that ended at `since` or later when it is given, and
+        those that match `pattern` when it is given, with their match. A line not ended yet is
+        not one."""
+        if since is not None and not isinstance(since, Duration):
+            raise TypeError(f"console.lines: since is {since!r}, not a Duration, as seconds(5)")
+        regex = None if pattern is None else line_pattern(pattern)
+        found = []
+        for line in self._board.console_lines.lines:
+            if since is not None and line.at < since:
+                continue
+            if regex is None:
+                found.append(line)
+            elif (match := regex.search(line.text)) is not None:
+                found.append(Line(line.at, line.text, match))
+        return found
+
+
+def timeout_of(timeout: Duration | float) -> Duration:
+    """An expect's `timeout`: a `Duration`, or a number of seconds, pytest-embedded's unit; 0 or
+    more."""
+    if not isinstance(timeout, Duration):
+        try:
+            timeout = seconds(number(timeout, "expect: timeout"))
+        except (TypeError, ValueError) as error:
+            raise type(error)(
+                f"expect: timeout is {timeout!r}, not a Duration or a number of seconds"
+            ) from None
+    if timeout.ns < 0:
+        raise ValueError(f"expect: timeout is {timeout}, less than 0")
+    return timeout
+
+
+def line_pattern(pattern: str | re.Pattern[str]) -> re.Pattern[str]:
+    """`pattern`, a regular expression on a line's text, compiled."""
+    if isinstance(pattern, re.Pattern) and isinstance(pattern.pattern, str):
+        return pattern
+    if isinstance(pattern, str):
+        return re.compile(pattern)
+    raise TypeError(f"console.line: {pattern!r} is not a regular expression on text")
 
 
 def compiled(pattern: Pattern, exact: bool) -> re.Pattern[bytes]:

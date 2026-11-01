@@ -88,9 +88,11 @@ CI the test job installs mtools first, so there they run ([cicd.md](../cicd.md#t
 | `tests/test_sdspi.py` | ESP-IDF's `sdspi` with the runner's SD card: a FAT image mounted, written and read back with mtools, one without a file system, an empty slot; through `pytester`, the `sd_card` fixture used out of order and images it refuses | The built `sdspi` image, the runner, the ROM ELF and mtools (`requires_mtools`) |
 | `tests/test_hello_world.py` | ESP-IDF's `hello_world`, unmodified, powered on and printing `Hello world!` through the backend | The built image, the runner and the ROM ELF |
 | `tests/test_nmea_reader.py` | The first milestone (plan M1): `nmea_reader` fed the generated GNSS recordings, and sentences it must ignore, through `gnss.replay` before `board.power_on()`: `test_reports_a_fix`, `test_fix_follows_the_recording`, `test_time_is_emulated` (ten fixes in under five wall seconds, and `board.now` just past 10 s) | The built image, the runner and the ROM ELF |
+| `tests/test_nmea_reader_model.py` | `nmea_reader` fed by the GNSS receiver model: a fix in both hemispheres, a kilometre of movement, the fix lost and coming back, silence, read with `console.line` and compared in units | The built image, the runner and the ROM ELF |
 | `tests/test_gpio_echo.py` | `gpio_echo` on the `lilygo-t-a7670g-r2` profile through the `lines` fixture: RI at the board's pull-down from power-on, PWRKEY following RI as the test drives and releases it, the lines' events with their times, a level driven before `board.power_on()` | The built image, the runner and the ROM ELF |
 | `tests/test_lines.py` | The `Lines` interface: line names, refused lines and levels, the board's pulls in the first turn and on release, the stamps of what the test drives, the firmware's level from `gpio_out`, on a `BoardLink` | Nothing beyond the package; milliseconds |
-| `tests/test_clock.py` | The test's clock and the console on it: the run standing still until the test waits, `wait`, `wait_until`'s steps, `NeverHappened`, `RunEnded`, and `console.expect`'s matching, against a runner thread that feeds a `BoardLink` | Nothing beyond the package; under a second |
+| `tests/test_clock.py` | The test's clock and the console on it: the run standing still until the test waits, `wait`, `wait_until`'s steps, `NeverHappened`, `RunEnded`, `console.expect`'s matching, and the console's lines and `console.line`, against a runner thread that feeds a `BoardLink` | Nothing beyond the package; under a second |
+| `tests/test_units.py`, `tests/test_gnss_model.py` | The units: constructors, arithmetic, great-circle movement, `about`; the GNSS receiver model's sentences against NMEA worked out by hand, its epochs and what the test tells it, on a clock of the test's own | Nothing beyond the package; milliseconds |
 | `tests/test_recording.py`, `tests/test_replay.py` | The recording format's reader and writer, its errors and clocks; the stream replay's timing and refusals, and the `Uart` interface that puts it on a `BoardLink` | Nothing beyond the package; milliseconds |
 | `tests/test_gnss_fixture.py` | `gnss.replay` and `gnss.tap` into `nmea_reader` through the `gnss` fixture, and, through `pytester`, a source given out of order with `board.power_on()`, and `test_nmea_reader.py`'s `test_reports_a_fix` failing on a changed recording and on a baud mismatch | The built `nmea_reader` image, the runner and the ROM ELF |
 | `tests/test_gnss_recordings.py` | `recordings/gnss-*.jsonl` are what `scripts/generate-gnss-recordings.py` writes, `--check` names a stale one, and every recording is one valid sentence per emulated second | Nothing beyond Python |
@@ -108,7 +110,8 @@ A missing image fails the tests that need it rather than skipping them:
 the runs of `tests/test_cli.py`, the `pytester` tests of `tests/test_gnss_fixture.py` and
 `test_hello_world_fails_on_an_image_that_prints_something_else`,
 and the backend's `esp32sim: <build> holds no ESP-IDF build: no flasher_args.json` from
-`tests/test_hello_world.py`, `tests/test_nmea_reader.py`, `tests/test_gpio_echo.py`, `tests/test_sdspi.py` and
+`tests/test_hello_world.py`, `tests/test_nmea_reader.py`, `tests/test_nmea_reader_model.py`,
+`tests/test_gpio_echo.py`, `tests/test_sdspi.py` and
 `test_a_replay_reaches_nmea_reader_on_the_gnss_route`.
 `tests/test_firmware_images.py` also fails
 on an image built in a container other than the one `firmware/build.sh` pins
