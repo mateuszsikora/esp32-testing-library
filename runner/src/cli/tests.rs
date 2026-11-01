@@ -20,6 +20,7 @@ fn minimal_command_line() {
             console: Console::Stdout,
             board: None,
             peer_timeout: Some(Duration::from_secs(60)),
+            sd_card: None,
         }
     );
 }
@@ -68,6 +69,75 @@ fn boards_and_peer_timeout() {
     assert_eq!(opts.peer_timeout, None);
     let opts = parse_str(&format!("{MINIMAL} --board tcp:localhost:7000")).unwrap();
     assert_eq!(opts.board.unwrap().to_string(), "tcp:localhost:7000");
+}
+
+#[test]
+fn an_sd_card_takes_its_image_and_its_pins_in_any_order() {
+    let opts = parse_str(&format!(
+        "{MINIMAL} --sd-spi cs=13,miso=2,mosi=15,sclk=14 --sd-rw card.img"
+    ))
+    .unwrap();
+    let wiring = Wiring {
+        sclk: 14,
+        mosi: 15,
+        miso: 2,
+        cs: 13,
+    };
+    assert_eq!(opts.sd_card, Some(("card.img".into(), wiring)));
+    // MISO may be an input-only pin
+    let opts = parse_str(&format!(
+        "{MINIMAL} --sd-rw card.img --sd-spi sclk=18,mosi=23,miso=39,cs=5"
+    ))
+    .unwrap();
+    assert_eq!(opts.sd_card.unwrap().1.miso, 39);
+}
+
+#[test]
+fn sd_card_usage_errors() {
+    for (args, message) in [
+        (
+            "--sd-rw card.img",
+            "--sd-rw needs --sd-spi: the card's pins",
+        ),
+        (
+            "--sd-spi sclk=14,mosi=15,miso=2,cs=13",
+            "--sd-spi needs --sd-rw: the card's image",
+        ),
+        (
+            "--sd-rw c --sd-spi sclk=14,mosi=15,miso=2",
+            "--sd-spi sclk=14,mosi=15,miso=2: expected sclk=N,mosi=N,miso=N,cs=N",
+        ),
+        (
+            "--sd-rw c --sd-spi sclk=14,mosi=15,miso=2,cs",
+            "--sd-spi sclk=14,mosi=15,miso=2,cs: expected sclk=N,mosi=N,miso=N,cs=N",
+        ),
+        (
+            "--sd-rw c --sd-spi sclk=14,mosi=15,miso=2,cs=13,sclk=12",
+            "--sd-spi sclk=14,mosi=15,miso=2,cs=13,sclk=12: sclk is given twice",
+        ),
+        (
+            "--sd-rw c --sd-spi clk=14,mosi=15,miso=2,cs=13",
+            "--sd-spi clk=14,mosi=15,miso=2,cs=13: \"clk\" is not sclk, mosi, miso or cs",
+        ),
+        (
+            "--sd-rw c --sd-spi sclk=24,mosi=15,miso=2,cs=13",
+            "--sd-spi sclk=24,mosi=15,miso=2,cs=13: \"24\" is not a GPIO of the ESP32",
+        ),
+        (
+            "--sd-rw c --sd-spi sclk=14,mosi=15,miso=2,cs=36",
+            "--sd-spi sclk=14,mosi=15,miso=2,cs=36: GPIO 36 is input only",
+        ),
+        (
+            "--sd-rw c --sd-spi sclk=14,mosi=14,miso=2,cs=13",
+            "--sd-spi sclk=14,mosi=14,miso=2,cs=13: the four pins must differ",
+        ),
+    ] {
+        assert_eq!(
+            parse_str(&format!("{MINIMAL} {args}")),
+            Err(Error::Usage(message.into())),
+            "{args}"
+        );
+    }
 }
 
 #[test]

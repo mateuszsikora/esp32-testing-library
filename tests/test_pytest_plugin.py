@@ -24,7 +24,9 @@ from pytest_embedded.utils import Meta
 
 from esp32tl.backends import esp32sim
 from esp32tl.backends.esp32sim import BackendError
+from esp32tl.boards import SdCardRoute
 from esp32tl.interfaces import RunEnded
+from esp32tl.interfaces.sd_card import SdCard
 
 ROOT = Path(__file__).resolve().parent.parent
 HELLO_WORLD_BUILD = ROOT / "firmware" / "hello_world" / "build"
@@ -345,6 +347,28 @@ def test_runner_command_flashes_every_file_at_its_offset(tmp_path: Path) -> None
     ]
 
 
+def test_runner_command_puts_a_card_in_the_slot_once_the_test_inserts_one(tmp_path: Path) -> None:
+    fake_build(tmp_path)
+    app = esp32sim.load_app(str(tmp_path))
+    slot = SdCard(SdCardRoute(sclk=14, mosi=15, miso=2, cs=13), directory=tmp_path)
+    command = esp32sim.runner_command(
+        Path("/r/runner"), Path("/r/rom.elf"), app, 300, Path("/l.sock"), sd_card=slot
+    )
+    assert "--sd-rw" not in command
+    (tmp_path / "card.img").write_bytes(bytes(512 << 10))
+    # relative to the test file's directory
+    slot.insert("card.img")
+    command = esp32sim.runner_command(
+        Path("/r/runner"), Path("/r/rom.elf"), app, 300, Path("/l.sock"), sd_card=slot
+    )
+    assert command[-4:] == [
+        "--sd-spi",
+        "sclk=14,mosi=15,miso=2,cs=13",
+        "--sd-rw",
+        str((tmp_path / "card.img").resolve()),
+    ]
+
+
 def test_load_app_refuses_what_the_runner_cannot_run(tmp_path: Path) -> None:
     with pytest.raises(BackendError, match=r"holds no ESP-IDF build: no flasher_args\.json"):
         esp32sim.load_app(str(tmp_path / "none"))
@@ -579,8 +603,8 @@ def test_the_board_s_clock_and_sources_go_in_order(
         [
             "E *esp32tl.interfaces.BoardOff: the board is off; call board.power_on() first",
             "E *esp32tl.interfaces.BoardOff: the board is on already: power it on once",
-            "E *esp32tl.interfaces.SourceError: uart.gnss: the board is on already: give a route"
-            " its source before board.power_on()",
+            "E *esp32tl.interfaces.SourceError: uart.gnss: the board is on already: give an"
+            " interface its source before board.power_on()",
             "E *esp32tl.interfaces.SourceError: uart.gnss has its source already: one per test",
         ]
     )

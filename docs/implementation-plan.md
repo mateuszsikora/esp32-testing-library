@@ -569,7 +569,11 @@ PWRKEY and RI lines and the tap stay as described here.*
   change. The FAT image is prepared with `mtools` (`brew install mtools` on macOS; not installed
   here today). The remaining risk is `sdspi`'s DMA path (`SDSPI_DEFAULT_DMA`), which esp32sim
   declares modelled; if it is not, that is the upstream issue to file. Validation:
-  `storage/sd_card/sdspi`, then inspect the image with `mcopy`.
+  `storage/sd_card/sdspi`, then inspect the image with `mcopy`. *Update, 2026-11-01:* done in #32 as
+  planned, without a core change: the runner's card (`--sd-rw`, `--sd-spi`), the profile's
+  `[sd_card]` slot and `sd_card.insert(image)`. The DMA path is modelled, so there is nothing to
+  file; insertion and removal on the scenario timeline wait for the scenario
+  ([decisions](decisions/harness.md#inserting-and-removing-the-sd-card-while-the-firmware-runs-is-postponed)).
 
 ### M8. Bluetooth (HCI)
 

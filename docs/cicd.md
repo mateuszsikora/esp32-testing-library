@@ -46,7 +46,10 @@ as `lint`, and the macOS jobs do not run. The `runner` and `test` matrices read
 public turns the macOS jobs back on with no change to the workflow.
 
 Tests marked `requires_docker` can run only on the self-hosted Linux runner, which has Docker; on
-macOS they skip ([guides/testing.md](guides/testing.md#requires_docker)).
+macOS they skip ([guides/testing.md](guides/testing.md#requires_docker-and-requires_mtools)).
+Tests marked `requires_mtools` skip without mtools too, so the `test` job makes sure it is there
+([`test`](#test)): on hp600g1 mtools is installed by hand, once, like Docker
+(`sudo apt-get install mtools`).
 
 ## How the builds reach the test jobs
 
@@ -111,7 +114,11 @@ For each platform and Python version: sets up Python with pip's cache keyed on `
 restores the two tarballs and the ROM ELF, unpacks the tarballs (the images land in
 `firmware/<image>/build/`, where the tests read them), and runs `esp32tl-runner --help` to check
 that the binary starts. It then runs `make PYTHON=<that Python> .venv/.installed rom-elf`, which is
-`make setup` without `build-runner`, and `.venv/bin/pytest`. Timeout: 20 minutes.
+`make setup` without `build-runner`. Before `.venv/bin/pytest` the `mtools` step makes sure
+`mformat`, `mcopy`, `mdir` and `mtype` are on `PATH`, for the SD card tests, which skip without
+them: on macOS it installs mtools with Homebrew; on the self-hosted runner, which has no root for
+apt, it fails the job with `no TOOL on PATH: install mtools on this runner (apt-get install
+mtools)` until someone installs it there. Timeout: 20 minutes.
 
 ## `lint`
 

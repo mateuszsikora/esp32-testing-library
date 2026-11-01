@@ -2,7 +2,8 @@
 
 The plugin is `esp32tl/pytest_plugin.py`, with the backend registry in
 `esp32tl/backends/__init__.py`, the console in `esp32tl/interfaces/console.py`, the UART
-interface behind `gnss` in `esp32tl/interfaces/uart.py`, the exceptions a test sees in
+interface behind `gnss` in `esp32tl/interfaces/uart.py`, the SD card slot behind `sd_card` in
+`esp32tl/interfaces/sd_card.py`, the exceptions a test sees in
 `esp32tl/interfaces/__init__.py`, and the board
 profiles and capability declaration in `esp32tl/boards/`
 ([board-profiles-technical.md](board-profiles-technical.md)). What the user
@@ -127,6 +128,13 @@ sees is in [pytest-plugin-user.md](pytest-plugin-user.md); the backend it starts
    before it reads the recording it calls the backend's `asked(interface, "replay")`, which
    refuses a source after power-on or one no backend gives, and skips the test when this backend
    does not give it.
+11. **`sd_card` fixture** returns `board.sd_card()`, the `SdCard` of the profile's `[sd_card]`
+   slot; a profile without one makes it raise `BackendError`, through `backend_failed`.
+   `SdCard.insert(image)` refuses a second card, then calls the backend's
+   `asked("sd_card", "model")`, then resolves `image` against `directory`, the test file's, and
+   checks with `stat` that it is a file of a whole number of `UNIT`s (512 KiB), at least one. It
+   keeps the absolute path in `image`, which `runner_command` turns into `--sd-spi` and `--sd-rw`
+   at power-on ([esp32sim-backend-technical.md](esp32sim-backend-technical.md#data-flow)).
 
 ## Interfaces
 
@@ -138,11 +146,14 @@ sees is in [pytest-plugin-user.md](pytest-plugin-user.md); the backend it starts
 | `board(request, dut, app_path, msg_queue, _meta)` | fixture, function scope | Yields an `Esp32Sim`, off; closes it at teardown, then adds the `esp32sim link` report section and the `esp32sim_link` user property. Its methods (`power_on`, `wait`, `wait_until`, `now`, `utc`) are in [esp32sim-backend-technical.md](esp32sim-backend-technical.md#interfaces) |
 | `console(board)` | fixture, function scope | Returns `Console(board)` |
 | `gnss(board)` | fixture, function scope | Returns `board.uart("gnss")` |
+| `sd_card(board)` | fixture, function scope | Returns `board.sd_card()` |
+| `SdCard(route, *, directory, asked=...)` | class, `esp32tl/interfaces/sd_card.py` | The `sd_card` slot on `route` (an `SdCardRoute`): attributes `name` (`"sd_card"`), `route`, `directory`, `asked`, `image` (`None` until `insert`, then the image's absolute `Path`); `insert(image)` returns that path |
+| `UNIT` | `int`, `esp32tl/interfaces/sd_card.py` | 524288: an SD card image is a whole number of them |
 | `Console(board)` | class, `esp32tl/interfaces/console.py` | `expect(pattern, timeout=30, *, return_what_before_match=False)`, `expect_exact(...)` with the same arguments; no `write`. `board` is a `Clocked`: `console_output` and `wait_on_clock(condition, within, description)` |
 | `DEFAULT_TIMEOUT` | `int`, `esp32tl/interfaces/console.py` | 30: an expect's `timeout`, in seconds of the board's time |
 | `Uart(name, wire, *, clock, directory, asked=...)` | class, `esp32tl/interfaces/uart.py`, a `BoardLink` `Interface` | `uart.<role>` and its source: attributes `clock`, `directory`, `asked`, `source` and `source_kind` (`None` until given, then the source and `"replay"`); `replay(path)` returns the `Replay`. Without a source it hears everything and says nothing; with one, `receive`, `poll`, `quiet_until` and `latency` are the source's. `asked(name, source)` is called before a source is made, and refuses it by raising |
 | `Source` | protocol, `esp32tl/interfaces/uart.py` | `receive(t, data)`, `poll(now)`, `quiet_until()`, `latency()`: what drives a `Uart` |
-| `SourceError` | exception, `esp32tl/interfaces/__init__.py` | A source after power-on, a second one on a route, or one no backend gives |
+| `SourceError` | exception, `esp32tl/interfaces/__init__.py` | A source after power-on, a second one on a route or in the slot, one no backend gives, or an image the card cannot hold |
 | `BoardOff` | exception, `esp32tl/interfaces/__init__.py` | A wait, an expect, `now` or `utc` before `power_on()`, or a second `power_on()` |
 | `RunEnded` | exception, `esp32tl/interfaces/__init__.py` | The run ended while the test waited |
 | `NeverHappened` | `AssertionError`, `esp32tl/interfaces/__init__.py` | A condition or a pattern that did not come within its time |
@@ -188,10 +199,12 @@ pytest-embedded's `build_dir` fixture. The backend's own environment variables a
 | `count is above 1: esp32tl runs one board in a test` | The test parametrises `count` above 1 itself, so `dut` is a tuple | Error at setup |
 | `esp32sim: {error}` | `Esp32Sim(...)` raised a `BackendError` | Error at setup; messages in [esp32sim-backend-technical.md](esp32sim-backend-technical.md#failure-modes) |
 | `esp32sim: the board profile {name} has no uart.gnss; its interfaces are {interfaces}` | The test uses `gnss` on a profile without the route | Error at setup |
-| `esp32sim: the test set up the {kind} of {interface} and never called board.power_on(): it ran no firmware` | A test whose setup and call passed, which gave a source and never powered on | Error at teardown |
+| `esp32sim: the board profile {name} has no sd_card; its interfaces are {interfaces}` | The test uses `sd_card` on a profile without a slot | Error at setup |
+| `esp32sim: the test set up {what} and never called board.power_on(): it ran no firmware` | A test whose setup and call passed, which gave a source and never powered on; `{what}` is `the {kind} of {interface}` for each route with a source, then `a card in sd_card`, joined by ` and ` | Error at teardown |
 | `the board is off; call board.power_on() first` | `BoardOff` from a wait, an expect, `now` or `utc` before power-on | Fails the test |
 | `the board is on already: power it on once` | `BoardOff` from a second `power_on()` | Fails the test |
-| `{interface}: the board is on already: give a route its source before board.power_on()`, `uart.gnss has its source already: one per test`, `no backend takes a '{source}' source on {interface}; the sources there are {sources}` | `SourceError` from `Uart.replay` | Fails the test ([replay-user.md](replay-user.md#when-the-test-gets-it-wrong)) |
+| `{interface}: the board is on already: give an interface its source before board.power_on()`, `uart.gnss has its source already: one per test`, `no backend takes a '{source}' source on {interface}; the sources there are {sources}` | `SourceError` from `Uart.replay` | Fails the test ([replay-user.md](replay-user.md#when-the-test-gets-it-wrong)) |
+| `sd_card: the board is on already: give an interface its source before board.power_on()`, `sd_card has a card already: one per test`, `sd_card: no image at {path}: {strerror}`, `sd_card: {path} is not a file`, `sd_card: {path} has {size} bytes; an SD card image is a whole number of 512 KiB units` | `SourceError` from `SdCard.insert` | Fails the test |
 | `{description} did not happen within {within}: waited from {start} to {end} of the board's time` | `NeverHappened` from `wait_until` or an expect | Fails the test |
 | `the run ended {when} while the test waited {what}: {reason}` | `RunEnded` from a wait or an expect; `{when}` is `at {time}` from the runner's `stats`, `after the turn at {time}` without them, the last held turn being only a bound, or `before its first turn`; `{what}` is `until {time}` or `for {description}`, `{reason}` the backend's ([esp32sim-backend-technical.md](esp32sim-backend-technical.md#failure-modes)) | Fails the test |
 | `expect: no pattern to wait for`, `expect: {pattern!r} is not a pattern`, `expect_exact takes text or bytes, not a compiled pattern` | `ValueError`, `TypeError` from an expect | Fails the test |
@@ -257,7 +270,12 @@ The markers of the board profiles are tested in `tests/test_pytest_plugin.py` to
 `tests/test_gnss_fixture.py` runs `gnss.replay` into `nmea_reader` on the real runner, and,
 through `pytester`, a source after power-on, an expect before it, a source never powered on and a
 profile without the route ([replay-technical.md](replay-technical.md#tests)).
-`tests/test_replay.py` tests `Uart` without an emulator.
+`tests/test_replay.py` tests `Uart` without an emulator. `tests/test_sdspi.py` runs
+`sd_card.insert` on ESP-IDF's `sdspi` example on the real runner, and, through `pytester`, a card
+after power-on, one never powered on, two cards, a missing and a short image, and a profile
+without a slot; `test_runner_command_puts_a_card_in_the_slot_once_the_test_inserts_one` in
+`tests/test_pytest_plugin.py` checks the runner's flags. Not covered: an image path that is a
+directory.
 
 `tests/test_package.py` checks the `pytest11` entry point (`test_plugin_is_registered_through_pytest11`)
 and that pytest loaded the module under the name `esp32tl` (`test_pytest_loaded_the_plugin`).

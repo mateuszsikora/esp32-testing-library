@@ -64,7 +64,8 @@ the container, and once inside it, which builds. With `IDF_LOCAL=1` it runs once
    - `idf.py --version` gives the ESP-IDF version, the text after `ESP-IDF `. A local build says
      on stderr that it is not for goldens.
    - For each image, in the order of `IMAGES`: the project is `project_of IMAGE`
-     (`hello_world` is `$IDF_PATH/examples/get-started/hello_world`, `nmea_reader` is
+     (`hello_world` is `$IDF_PATH/examples/get-started/hello_world`, `sdspi` is
+     `$IDF_PATH/examples/storage/sd_card/sdspi`, `nmea_reader` is
      `$PWD/firmware/nmea_reader`, the working directory being the repository's root: in the
      container `/project/firmware/nmea_reader`, in a local build the checkout's own path), the
      build directory `$out/IMAGE/build`. If
@@ -96,7 +97,7 @@ next build is still incremental; the marker, removed first, is what says it fini
 The Makefile's `firmware` target runs `FIRMWARE_OUT= firmware/build.sh`; the pattern rule
 `firmware/%/build/esp32tl-built` runs `FIRMWARE_OUT= firmware/build.sh $*`, and `test` depends on
 `$(FIRMWARE_IMAGES:%=firmware/%/build/esp32tl-built)` with `FIRMWARE_IMAGES := hello_world
-nmea_reader`. The rule has no prerequisites, so make rebuilds an image only when its marker is
+nmea_reader sdspi`. The rule has no prerequisites, so make rebuilds an image only when its marker is
 missing: an edit to `firmware/nmea_reader/` needs `make firmware`, or `firmware/build.sh
 nmea_reader`, before `make test` sees it.
 
@@ -248,7 +249,7 @@ top of each build directory, `config/sdkconfig.json`, and the `.bin` and `.elf` 
 |---|---|---|---|
 | `IDF_VERSION` | script constant | `v5.3.6` | the ESP-IDF tag of the container |
 | `CONTAINER` | script constant | `espressif/idf:$IDF_VERSION@sha256:cee52f0c4fdaf088992a7a739f5993154e95cf1d3ab61c24f5b40e6d56a3a070` | the image the build runs in, pinned by digest (a multi-arch index) |
-| `IMAGES` | script constant | `hello_world nmea_reader` | the images, in build order; `project_of` maps each to its project |
+| `IMAGES` | script constant | `hello_world nmea_reader sdspi` | the images, in build order; `project_of` maps each to its project |
 | `FIRMWARE_OUT` | environment | `firmware/` | where `IMAGE/build/` goes; empty means the default; `/out` inside the container |
 | `IDF_LOCAL` | environment | unset | `1` builds with the ESP-IDF of the calling shell |
 | `ESP32TL_CONTAINER` | environment, set by the host side | unset | marks the container side and names the image it records |
@@ -265,7 +266,7 @@ regular expressions, so each has to stay on a line of its own. Changing either, 
 
 | Message | Cause |
 |---|---|
-| `unknown image 'NAME'; the images are: hello_world nmea_reader` | an argument not in `IMAGES`; nothing written |
+| `unknown image 'NAME'; the images are: hello_world nmea_reader sdspi` | an argument not in `IMAGES`; nothing written |
 | `ESP32TL_CONTAINER is set outside a container; unset it` | `ESP32TL_CONTAINER` set and no `/.dockerenv`; nothing written |
 | `IDF_LOCAL=1 needs ESP-IDF in the environment: source $IDF_PATH/export.sh first` | `IDF_LOCAL=1` without `idf.py` on `PATH` or without `IDF_PATH`; nothing written |
 | `needs Docker, or IDF_LOCAL=1 to build with a local ESP-IDF` | no `docker` on `PATH`; nothing written |
@@ -298,10 +299,10 @@ write their arguments to `$FAKE_LOG`, with a `PATH` holding only them and `cat`,
   ESP-IDF) and `ESP32TL_CONTAINER` on the host (skipped when the suite itself runs in Docker):
   each message verbatim, exit 1, and no output directory created;
 - `test_build_starts_the_pinned_container`: the `docker run` arguments, exactly;
-- `test_local_build_runs_idf_py_and_records_how`: with no image named, both images in order,
-  `hello_world` from the fake `IDF_PATH` and `nmea_reader` from `firmware/nmea_reader`; the
-  `idf.py` arguments of each, the records with `"container": null`, the markers, the "not for
-  goldens" warning and the two `built in` lines;
+- `test_local_build_runs_idf_py_and_records_how`: with no image named, the three images in
+  order, `hello_world` and `sdspi` from the fake `IDF_PATH` and `nmea_reader` from
+  `firmware/nmea_reader`; the `idf.py` arguments of each, the records with `"container": null`,
+  the markers, the "not for goldens" warning and the three `built in` lines;
 - reuse of a build directory with the same record, and removal of one with another record;
 - no marker when `flasher_args.json` is missing, and a failed build removing the marker of an
   earlier one (exit code 2, the fake's).
@@ -317,7 +318,20 @@ flash files `0x1000` `bootloader/bootloader.bin`, `0x8000` `partition_table/part
 and `0x10000` `hello_world.bin`, all present, and the ELF `hello_world.elf`.
 `test_nmea_reader_has_the_classic_esp32_flash_layout` checks the same of `nmea_reader`, and
 `test_nmea_reader_takes_the_devkit_gnss_route_from_sdkconfig` its four `NMEA_READER_UART_*`
-values in `config/sdkconfig.json`.
+values in `config/sdkconfig.json`. `test_sdspi_has_the_classic_esp32_flash_layout` checks the
+same of `sdspi`, with `sd_card.bin` and `sd_card.elf`, and
+`test_sdspi_takes_the_devkit_sd_card_slot_from_sdkconfig` that its four `EXAMPLE_PIN_*` values are
+the `esp32-devkitc` profile's slot and that both of its formatting options are off.
+
+`tests/test_sdspi.py` runs the real `sdspi` in the real runner with the runner's SD card in the
+slot, through the `sd_card` fixture, and needs mtools (`requires_mtools`): on a 32 MiB FAT image
+`mformat` made, holding a `foo.txt` of the test's, the console prints the card's name, type, size
+and bus width, both files read back, and `Card unmounted`, and the image then holds `FOO.TXT` with
+`Hello SIMSD!` and `NIHAO.TXT` with `Nihao SIMSD!` and nothing else; a 1 MiB image of zeros ends
+in `Failed to mount filesystem.` and is not written; an empty slot ends in
+`Failed to initialize the card (ESP_ERR_TIMEOUT)`. The 512-byte blocks the example reads and
+writes go through SPI DMA: the W registers hold 64 bytes, so the files come back whole only
+because esp32sim models the classic SPI DMA path the example's `SDSPI_DEFAULT_DMA` takes.
 
 `tests/test_nmea_reader.py` is the first milestone's test (plan M1): the real `nmea_reader` in
 the real runner, on the `esp32-devkitc` profile, fed through the `gnss` fixture's

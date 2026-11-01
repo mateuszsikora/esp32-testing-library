@@ -36,6 +36,7 @@
 //! the process at once, with 128 + the signal's number.
 mod cli;
 mod protocol;
+mod sd_card;
 mod session;
 mod socket_board;
 mod transport;
@@ -62,15 +63,25 @@ fn main() -> ExitCode {
         Err(cli::Error::Usage(message)) => return usage_error(&message),
     };
     let shared = opts.board.as_ref().map(|_| socket_board::Shared::default());
-    let mut m = match setup(&opts, shared.clone()) {
+    let card = match opts
+        .sd_card
+        .as_ref()
+        .map(|(image, wiring)| card(image, *wiring))
+    {
+        Some(Ok(card)) => Some(card),
+        Some(Err(message)) => return fail(&message),
+        None => None,
+    };
+    let mut m = match setup(&opts, shared.clone(), card.clone()) {
         Ok(m) => m,
         Err(message) => return fail(&message),
     };
     if let (Some(board), Some(shared)) = (&opts.board, shared) {
-        return run_with_board(&opts, board, shared, &mut m);
+        return run_with_board(&opts, board, shared, card, &mut m);
     }
     let wall = std::time::Instant::now();
     let stop = run(&mut m);
+    report_card(card.as_ref());
     eprintln!(
         "esp32tl-runner: stop: {} at {:.6} s ({:.1} s wall, {} resets)",
         stop_name(&stop),
@@ -103,6 +114,7 @@ fn run_with_board(
     opts: &cli::Opts,
     board: &cli::Board,
     shared: socket_board::Shared,
+    card: Option<sd_card::Shared>,
     m: &mut esp32::Machine,
 ) -> ExitCode {
     let signal = Arc::new(AtomicBool::new(false));
@@ -147,6 +159,7 @@ fn run_with_board(
     let (end, stats) = session.run();
     // whatever the guest printed before the end comes out before what the runner says
     m.drain_console();
+    report_card(card.as_ref());
     let cause = match &end {
         session::End::MaxSeconds => "max_seconds".to_string(),
         session::End::Stop => "stop from the peer".to_string(),
@@ -174,9 +187,44 @@ fn end_cycle(opts: &cli::Opts) -> u64 {
     (opts.max_seconds * <esp32::Esp32 as Soc>::CPU_HZ as f64) as u64
 }
 
+/// The SD card of `--sd-rw` and `--sd-spi`, writing through to `image`.
+fn card(image: &Path, wiring: sd_card::Wiring) -> Result<sd_card::Shared, String> {
+    let name = image
+        .to_str()
+        .ok_or_else(|| format!("--sd-rw {}: not a UTF-8 path", image.display()))?;
+    let store = esp_periph::sdmmc::FileStore::write_through(name)
+        .map_err(|e| format!("--sd-rw {name}: {e}"))?;
+    let card = sd_card::SdCard::new(wiring, Box::new(store))
+        .map_err(|e| format!("--sd-rw {name}: {e}"))?;
+    eprintln!(
+        "esp32tl-runner: SD card on {wiring}: {name} ({} KiB, write-through)",
+        card.len() >> 10
+    );
+    Ok(std::rc::Rc::new(std::cell::RefCell::new(card)))
+}
+
+/// What the run did with the card, before the line that ends the run.
+fn report_card(card: Option<&sd_card::Shared>) {
+    let Some(card) = card else { return };
+    let s = card.borrow().stats;
+    let errors = if s.errors > 0 {
+        format!(", {} image errors", s.errors)
+    } else {
+        String::new()
+    };
+    eprintln!(
+        "esp32tl-runner: SD card: {} commands, {} blocks read, {} blocks written{errors}",
+        s.commands, s.blocks_read, s.blocks_written
+    );
+}
+
 /// The machine with its ROM and flash loaded, at the reset vector. With `shared`, the socket
-/// board is on its pins.
-fn setup(opts: &cli::Opts, shared: Option<socket_board::Shared>) -> Result<esp32::Machine, String> {
+/// board is on its pins; with `card`, the SD card, on the socket board or on a board of its own.
+fn setup(
+    opts: &cli::Opts,
+    shared: Option<socket_board::Shared>,
+    card: Option<sd_card::Shared>,
+) -> Result<esp32::Machine, String> {
     let flash_size = opts.flash_mb << 20;
     let mut m = esp32::machine(MAC, flash_size);
     // the JEDEC capacity the guest reads follows the size, as in esp32sim
@@ -184,9 +232,13 @@ fn setup(opts: &cli::Opts, shared: Option<socket_board::Shared>) -> Result<esp32
     if opts.psram_mb != 0 {
         m.bus.set_psram_size(opts.psram_mb << 20)?;
     }
-    // without a board, esp32sim's `--board none`
-    if let Some(shared) = shared {
-        m.bus.board = Box::new(socket_board::SocketBoard::new(shared));
+    // without a board or a card, esp32sim's `--board none`
+    match (shared, card) {
+        (Some(shared), card) => {
+            m.bus.board = Box::new(socket_board::SocketBoard::new(shared, card));
+        }
+        (None, Some(card)) => m.bus.board = Box::new(sd_card::CardBoard(card)),
+        (None, None) => {}
     }
     m.bus.attach_board_devices();
 

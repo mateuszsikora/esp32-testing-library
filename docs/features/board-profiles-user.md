@@ -1,7 +1,7 @@
 # Board profiles
 
 A board profile says which chip a board carries and which UART and pins each of its interfaces
-uses: data, not code, and nothing about what the firmware does with them. Every test that uses
+uses, its SD card slot among them: data, not code, and nothing about what the firmware does with them. Every test that uses
 `board` runs on one profile, `esp32-devkitc` unless the test names another. Beside the profiles,
 esp32tl declares what each backend can put at the far end of an interface, and which interfaces
 it can tap; a test that asks for something its backend cannot give is skipped on that backend,
@@ -11,13 +11,15 @@ with the reason.
 
 | Profile | Chip | Flash, PSRAM | Interfaces |
 |---|---|---|---|
-| `esp32-devkitc` | `esp32` | 4 MB, none | `console`; `uart.gnss`: UART1, TX GPIO 4, RX GPIO 5, 9600 baud |
+| `esp32-devkitc` | `esp32` | 4 MB, none | `console`; `uart.gnss`: UART1, TX GPIO 4, RX GPIO 5, 9600 baud; `sd_card`: SCLK GPIO 14, MOSI GPIO 15, MISO GPIO 2, CS GPIO 13 |
 | `lilygo-t-a7670g-r2` | `esp32` (ESP32-WROVER-E) | not in the profile | `console`; `uart.modem`: UART1, TX GPIO 26, RX GPIO 27, 115200 baud; `lines.modem`: `pwrkey` GPIO 4, `ri` GPIO 33 pulled down |
 
 `esp32-devkitc` is a generic ESP32 module on a devkit, and carries every validation firmware: its
 GNSS route is chosen for this repository's own firmware. GPIO 16 and 17 are left free because on
 WROVER modules they belong to the PSRAM. GPIO 5 is a strapping pin; a receiver holding it low at
-boot does not change the boot mode.
+boot does not change the boot mode. Its SD card slot has the pins ESP-IDF's
+`storage/sd_card/sdspi` example takes on the ESP32 by default, so the example runs unmodified;
+GPIO 2 and 15 are strapping pins too, which a card leaves alone until the firmware selects it.
 
 `lilygo-t-a7670g-r2` holds only what the specification gives: the A7670G modem's UART and its
 PWRKEY and RI lines. The pull-down on RI is what stage 0 found
@@ -44,8 +46,8 @@ def test_modem_route(board):
   The esp32sim backend names it, with its chip, in the link's `hello`, and the `esp32sim link`
   report starts with its name ([esp32sim backend](esp32sim-backend-user.md)). Every UART route of
   the profile is wired to the board, and the link watches its pins; a route says nothing until the
-  test gives it a source ([below](#saying-what-a-test-needs)). The profile's lines are never wired
-  yet.
+  test gives it a source ([below](#saying-what-a-test-needs)). The SD card slot is empty until the
+  test inserts a card. The profile's lines are never wired yet.
 - Only the profiles esp32tl ships can be named; there is no marker argument for a file of your
   own.
 - The marker goes on the test, its class or its module. One given in a
@@ -59,7 +61,8 @@ def test_modem_route(board):
 
 A test says what is at the far end of an interface by what it does with it before
 `board.power_on()`, and which interfaces it taps with a marker. An interface is `console`, or the
-name of a route or a set of lines in the profile: `uart.gnss`, `uart.modem`, `lines.modem`.
+name of a route or a set of lines in the profile: `uart.gnss`, `uart.modem`, `lines.modem`, or
+`sd_card`, the SD card slot.
 
 ```python
 @pytest.mark.tap("console", "uart.gnss")  # both are recorded
@@ -69,8 +72,9 @@ def test_reports_a_fix(board, gnss, console):
     ...
 ```
 
-- The source of an interface is the call that gives it: `gnss.replay(path)` is a `replay`, which
-  is the only source a call gives yet; `model` and `real` get theirs later. Asked for, a source a
+- The source of an interface is the call that gives it: `gnss.replay(path)` is a `replay`, and
+  `sd_card.insert(image)` a `model`, the runner's card holding the image; the other sources get
+  their calls later. Asked for, a source a
   backend does not declare skips the test at the call ([below](#when-a-backend-cannot-give-it)).
 - `tap(*interfaces)`: the interfaces the test records. Taps add up: a module's and a test's both
   count. A tap decides, at collection, whether the test runs on a backend. No fixture taps an
@@ -83,6 +87,7 @@ Each backend declares what it can give:
 | `console` | tap | tap |
 | `uart.*` | `model`, `replay` or `real`; tap | `real` only; no tap |
 | `lines.*` | nothing | nothing |
+| `sd_card` | `model`: a card holding an image file; no tap | `real`: the card in the slot; no tap |
 
 On a real board the on-board peripherals are soldered on, so only the real part answers, and a tap
 on them would need a hardware sniffer. The `serial` backend is declared, but is not one of the
@@ -121,8 +126,8 @@ that names the test, and like any collection error it stops the session before a
 | `the board_profile marker takes one name, as in @pytest.mark.board_profile("esp32-devkitc")` | The marker has no argument, more than one, a keyword argument, or a name that is not a string |
 | `no board profile named 'NAME'; the profiles are esp32-devkitc, lilygo-t-a7670g-r2` | The marker names a profile esp32tl does not ship |
 | `the tap marker takes one or more interfaces, as in @pytest.mark.tap("console")` | A `tap` marker with no interface, a keyword argument, or one that is not a string |
-| `the board profile PROFILE has no INTERFACE; its interfaces are console, uart.gnss` | The interface is not in the profile (the list is the profile's own) |
-| `no backend can tap INTERFACE` | No backend can tap it: `lines.*` |
+| `the board profile PROFILE has no INTERFACE; its interfaces are console, uart.gnss, sd_card` | The interface is not in the profile (the list is the profile's own) |
+| `no backend can tap INTERFACE` | No backend can tap it: `lines.*`, `sd_card` |
 
 For a source it is a `SourceError` at the call, which fails the test:
 

@@ -2,7 +2,7 @@
 
 The `esp32sim` backend runs the firmware of a test in `esp32tl-runner`, the program in `runner/`
 that runs the [esp32sim](https://github.com/mikroverk/esp32sim) emulator, on the emulated clock.
-It is the backend behind the `board`, `console` and `gnss` fixtures, and the only one: every test
+It is the backend behind the `board`, `console`, `gnss` and `sd_card` fixtures, and the only one: every test
 that uses them runs on it, with `[esp32sim]` in its id ([pytest plugin](pytest-plugin-user.md)). It runs an
 unmodified ESP-IDF build for the classic ESP32.
 
@@ -54,6 +54,12 @@ link in a thread for the whole run, speaking the [link protocol](../protocol.md)
 of the board profile is wired to the board from the start: the link watches its pins and carries
 what the firmware transmits there and, once the test has given the route a source, what the source
 sends in ([replay](replay-user.md)). A route without a source listens and says nothing.
+
+The board profile's SD card slot is not on the link. A card the test inserts
+(`sd_card.insert(image)`) is the runner's own SD card model, on the slot's pins, which the backend
+passes as `--sd-spi sclk=N,mosi=N,miso=N,cs=N --sd-rw IMAGE`; the card writes into the image file
+as the firmware writes ([runner](runner-user.md#put-an-sd-card-in)). An empty slot gives the
+runner no card.
 
 ## When the runner exits
 
@@ -160,7 +166,7 @@ its body instead, as `BackendError: cannot ...`, without the prefix:
 
 | Message | What to do |
 |---|---|
-| `the board profile {profile} has no {interface}; its interfaces are {interfaces}` | The test uses `gnss` on a profile without `uart.gnss`; choose a profile that has it |
+| `the board profile {profile} has no {interface}; its interfaces are {interfaces}` | The test uses `gnss` on a profile without `uart.gnss`, or `sd_card` on one without a slot; choose a profile that has it |
 | `{build} holds no ESP-IDF build: no flasher_args.json` | Build the app (`make firmware` for this repository's firmware), or fix the `app_path` marker |
 | `{build} is built for {target}; esp32sim runs the classic esp32` | Build for `esp32` |
 | `{build} asks for flash encryption, which the runner does not do` | Build without flash encryption |
@@ -172,7 +178,9 @@ its body instead, as `BackendError: cannot ...`, without the prefix:
 
 `{build}` is the app's `build/` directory. The build is checked first, then the runner and the ROM
 ELF, so only the first problem is reported; the socket and the runner's start come at power-on.
-The profile's routes are checked when the test asks for `gnss`.
+The profile's routes are checked when the test asks for `gnss`, and its slot when it asks for
+`sd_card`. An image the runner's card cannot open stops the runner at power-on with exit code 2,
+which the test sees as `RunEnded` or at teardown ([when the runner exits](#when-the-runner-exits)).
 
 ## See also
 

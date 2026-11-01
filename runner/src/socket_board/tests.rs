@@ -4,7 +4,7 @@ use super::*;
 fn records_every_uart_byte_and_watched_gpio_changes_only() {
     let shared = Shared::default();
     shared.borrow_mut().watch = 1 << 4;
-    let mut board = SocketBoard::new(shared.clone());
+    let mut board = SocketBoard::new(shared.clone(), None);
     let route = UartRoute::new(0, 1 << 1, Some(3), Some(115_200));
     board.uart_tx(10, route, b'x');
     board.gpio_output_at(11, &[(2, true)], 1 << 2, 1 << 2);
@@ -39,7 +39,7 @@ fn records_every_uart_byte_and_watched_gpio_changes_only() {
 #[test]
 fn hands_the_peers_levels_to_the_chip_in_order_and_remembers_them() {
     let shared = Shared::default();
-    let mut board = SocketBoard::new(shared.clone());
+    let mut board = SocketBoard::new(shared.clone(), None);
     assert!(board.uses_gpio_edges());
     shared.borrow_mut().drive(5, 33, true);
     shared.borrow_mut().drive(5, 4, false);

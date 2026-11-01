@@ -665,6 +665,7 @@ codec change (#37). What #325 does not have:
 | pacing at the `uart_rx` message's baud | #325 paces "at the route's baud"; here a baud mismatch reaches the UART as the frame error it is (`frm_err`), and bytes keep the peer's line rate (11.6) |
 | `console` | the console for the peer, opt-in: the `esp32sim` backend's console expects read it, in emulated-time order with the turns |
 | `reset` comes from the runner's run loop | #325 proposes a `guest_reset` trait method; the peer sees the same message either way (plan, finding 4) |
+| The SD card of `--sd-rw` answers SPI on `SocketBoard`, in the runner | a card answers every byte of a transaction in the same transaction (`spi_transfer_pins`), which a peer a turn away could not; nothing of it goes on the socket, and the protocol does not change ([runner-technical.md](features/runner-technical.md#the-sd-card)) |
 
 ## 11. Changes from the plan
 

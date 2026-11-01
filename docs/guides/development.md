@@ -26,9 +26,14 @@ That one command needs:
   mask ROM ELF ([The ROM ELF](#the-rom-elf)), with `sha256sum` or `shasum` to check it and `curl`
   and `tar` to download it.
 - Docker, for the first `make test`. The tests read the validation firmware, which `make test`
-  builds when it is missing: it pulls the ESP-IDF image and builds `hello_world` and
-  `nmea_reader`, a few minutes. What the firmware build expects of Docker, and how to build
+  builds when it is missing: it pulls the ESP-IDF image and builds `hello_world`, `nmea_reader`
+  and `sdspi`, a few minutes. What the firmware build expects of Docker, and how to build
   without it, is in [validation-firmware-user.md](../features/validation-firmware-user.md).
+
+- mtools (`mformat`, `mcopy`, `mdir`, `mtype`), for the SD card tests, which make and read FAT
+  images with it: `brew install mtools` on macOS, `sudo apt-get install mtools` on Debian and
+  Ubuntu. Without it those tests are skipped
+  ([testing.md](testing.md#requires_docker-and-requires_mtools)).
 
 After `make setup` and `make firmware`, `.venv/bin/pytest` runs the tests directly.
 
@@ -41,7 +46,7 @@ After `make setup` and `make firmware`, `.venv/bin/pytest` runs the tests direct
 | `make rom-elf` | Runs `scripts/fetch-rom-elf`: puts `esp32_rev300_rom.elf` of esp-rom-elfs `20241011` at `.cache/esp-rom-elfs/20241011/`, checked by SHA-256 |
 | `make test-runner` | The runner's Rust unit tests, `cargo test --locked`, in `RUNNER_PROFILE` like `build-runner`; `RUNNER_PROFILE=dev` skips the fat-LTO link while iterating |
 | `make firmware` | Builds every validation image in the pinned ESP-IDF container, into `firmware/<image>/build/` |
-| `make test` | Runs `make setup` and `make test-runner`, builds the validation images that are missing (`FIRMWARE_IMAGES`: `hello_world` and `nmea_reader`), then runs `.venv/bin/pytest` |
+| `make test` | Runs `make setup` and `make test-runner`, builds the validation images that are missing (`FIRMWARE_IMAGES`: `hello_world`, `nmea_reader` and `sdspi`), then runs `.venv/bin/pytest` |
 | `make lint` | `ruff check`, `ruff format --check` and `mypy`; `cargo fmt --check` and `cargo clippy --locked --all-targets -- -D warnings` on the runner |
 | `make hooks` | Installs the pre-commit hooks ([Pre-commit hooks](#pre-commit-hooks)) |
 | `make docs-check` | Checks that the changes on this branch update the documentation they need ([documentation.md](documentation.md#the-check)); `BASE=REF` (passed as `--base REF`) compares with the merge base with `REF` rather than with the default branch |

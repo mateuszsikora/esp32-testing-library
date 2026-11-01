@@ -2,7 +2,8 @@
 
 Tests that need a container carry the `requires_docker` marker and are skipped, with the
 marker's name and what is missing as the reason, where Docker is absent: GitHub-hosted macOS
-runners have none (plan M0).
+runners have none (plan M0). Tests that make or read a FAT image carry `requires_mtools` and are
+skipped the same way where mtools is not installed.
 """
 
 import functools
@@ -29,11 +30,26 @@ def docker_missing() -> str | None:
     return None
 
 
+# The mtools commands the tests run.
+MTOOLS = ("mformat", "mcopy", "mdir")
+
+
+@functools.cache
+def mtools_missing() -> str | None:
+    """Which mtools commands are not on PATH, or None when none is missing."""
+    missing = [tool for tool in MTOOLS if shutil.which(tool) is None]
+    return f"no {', '.join(missing)} on PATH (mtools)" if missing else None
+
+
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
-    marked = [item for item in items if item.get_closest_marker("requires_docker")]
-    if not marked:
-        return
-    missing = docker_missing()
-    if missing is not None:
-        for item in marked:
-            item.add_marker(pytest.mark.skip(reason=f"requires_docker: {missing}"))
+    for marker, missing in (
+        ("requires_docker", docker_missing),
+        ("requires_mtools", mtools_missing),
+    ):
+        marked = [item for item in items if item.get_closest_marker(marker)]
+        if not marked:
+            continue
+        reason = missing()
+        if reason is not None:
+            for item in marked:
+                item.add_marker(pytest.mark.skip(reason=f"{marker}: {reason}"))

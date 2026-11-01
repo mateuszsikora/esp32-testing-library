@@ -1,7 +1,8 @@
 # pytest plugin
 
 esp32tl ships a pytest plugin that runs an ESP-IDF firmware image, lets a test read what the
-firmware prints, and replays a recording into the firmware's GNSS UART. A test asks for the
+firmware prints, replays a recording into the firmware's GNSS UART, and puts an SD card holding
+an image file in the board's slot. A test asks for the
 `board` fixture, names the app with the `app_path` marker, sets up what is around the board,
 powers it on, and waits on the board's own clock for what the firmware does. It runs once on
 every backend. pytest loads the plugin by itself once esp32tl is installed; it builds on
@@ -128,6 +129,39 @@ else raises `TypeError` or `ValueError`, as in
 - On a board profile without `uart.gnss`, `gnss` is an error at setup:
   `esp32sim: the board profile lilygo-t-a7670g-r2 has no uart.gnss; its interfaces are console, uart.modem, lines.modem`.
 
+`sd_card` is the board profile's SD card slot, empty until the test inserts a card. From
+`tests/test_sdspi.py`, with `fat_image` and `read` its helpers around mtools:
+
+```python
+def test_the_example_writes_its_files_into_the_image(tmp_path, board, sd_card, console):
+    image = fat_image(tmp_path / "card.img", {"foo.txt": b"from the test\n"})
+    sd_card.insert(image)
+    board.power_on()
+    console.expect_exact("example: Card unmounted", timeout=5)
+    assert read(image, "foo.txt") == b"Hello SIMSD!\n"
+```
+
+- `sd_card.insert(image)` puts a card holding the image file in the slot, before
+  `board.power_on()`, and returns the image's absolute path. The path is relative to the test
+  file's directory. The image is a whole number of 512 KiB units; what is in it is the test's,
+  usually a FAT file system made with mtools (`mformat`, `mcopy`).
+- On `esp32sim` the card is the runner's model of an SD card in SPI mode, on the slot's pins
+  ([runner](runner-user.md#put-an-sd-card-in)). It writes what the firmware writes into the file
+  as it goes, so the test reads the image back with mtools (`mtype`, `mcopy`, `mdir`) once the
+  firmware is done, during the run or after it. Copy the image first to keep it as it was.
+- Without `insert`, the slot is empty, as a board with no card in it: ESP-IDF's driver times out
+  (`ESP_ERR_TIMEOUT`).
+- `insert` refuses, with `SourceError`: a call after `board.power_on()`
+  (`sd_card: the board is on already: give an interface its source before board.power_on()`), a
+  second call (`sd_card has a card already: one per test`), an image that is not there
+  (`sd_card: no image at PATH: No such file or directory`) or not a file
+  (`sd_card: PATH is not a file`), and one of another size
+  (`sd_card: PATH has N bytes; an SD card image is a whole number of 512 KiB units`).
+- On a board profile without a slot, `sd_card` is an error at setup:
+  `esp32sim: the board profile lilygo-t-a7670g-r2 has no sd_card; its interfaces are console, uart.modem, lines.modem`.
+- The card stays in from power-on to the end of the run: inserting or removing it while the
+  firmware runs is not there yet.
+
 `NeverHappened`, `RunEnded`, `BoardOff` and `SourceError` are in `esp32tl.interfaces`.
 
 ## The test's timeout
@@ -196,12 +230,13 @@ A test that parametrises pytest-embedded's `count` itself above 1, as in
 - The backend cannot start (no runner, no ROM ELF, no usable build): an error at setup, the test
   body does not run, and the message starts with `esp32sim: `. The messages are listed in
   [the esp32sim backend](esp32sim-backend-user.md#when-the-backend-cannot-start).
-- A source given after `board.power_on()`, or a second one on the same route: the test fails with
-  `SourceError`; a recording that cannot be replayed fails it with `RecordingError` or
+- A source given after `board.power_on()`, or a second one on the same route or slot: the test
+  fails with `SourceError`; a recording that cannot be replayed fails it with `RecordingError` or
   `ReplayError` ([replay](replay-user.md#what-a-replay-refuses)).
 - A test that set up a source and passed without calling `board.power_on()` gets an error at
   teardown, since it ran no firmware:
-  `esp32sim: the test set up the replay of uart.gnss and never called board.power_on(): it ran no firmware`.
+  `esp32sim: the test set up the replay of uart.gnss and never called board.power_on(): it ran no firmware`;
+  for a card, `the test set up a card in sd_card and never called board.power_on()`.
 - A wait or an expect whose condition does not hold in its time: `NeverHappened`.
 - The run ends while the test waits: `RunEnded`, which names the board's time it ended at (from
   the runner's statistics; without them, `after the turn at` the last turn the test saw, or
@@ -231,7 +266,7 @@ under `[tool.pytest.ini_options]`.
 
 ## Names the plugin takes
 
-- **`board`, `console`, `gnss`**: the plugin's fixtures; a project's own fixture of one of these
+- **`board`, `console`, `gnss`, `sd_card`**: the plugin's fixtures; a project's own fixture of one of these
   names overrides it, as pytest has it.
 - **`board`**: esp32tl parametrises every test that asks for a fixture of that name, matched by
   name. A project's own `board` fixture, in a session where esp32tl is installed, gets the

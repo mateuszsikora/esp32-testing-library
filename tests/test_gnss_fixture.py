@@ -68,7 +68,7 @@ def test_a_source_given_out_of_order_fails_the_test(pytester: pytest.Pytester) -
     result.stdout.fnmatch_lines_random(
         [
             "*BoardOff: the board is off; call board.power_on() first",
-            "*SourceError: uart.gnss: the board is on already: give a route its source before"
+            "*SourceError: uart.gnss: the board is on already: give an interface its source before"
             " board.power_on()",
             "*esp32sim: the test set up the replay of uart.gnss and never called"
             " board.power_on(): it ran no firmware",

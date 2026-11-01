@@ -214,7 +214,8 @@ production images.
 3. **SD card over SPI.** `examples/storage/sd_card/sdspi` makes fourteen transfers on SPI2, then
    `sdmmc_card_init failed (0x107)` and `Failed to initialize the card (ESP_ERR_TIMEOUT)`: the classic
    chip has no card model on its general-purpose SPI. esp32sim has an SD card model, wired only to the
-   P4's SDMMC host.
+   P4's SDMMC host. *Since #32* the runner has a card on the SPI pins, and the example runs to its end
+   ([runner](features/runner-user.md#put-an-sd-card-in)).
 4. **Deep-sleep timer wake.** `tools/deepsleep` sleeps with a 5 s timer, and in a 60 s run it boots
    once and never wakes, which rules out a timer running up to 12 times slow. The replay image's runs
    agree: 600 s and 2400 s execute the same instruction count. The guest also calibrates its slow

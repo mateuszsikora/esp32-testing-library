@@ -911,3 +911,48 @@ describes the profile.
 
 **Rejected:** waiting for the vendor schematic, as plan finding 12 did, because LilyGO's pin table
 and example already give these values.
+
+## An SD card is inserted by the test, as a model source holding an image file
+
+Status: decided (#32)
+
+A board profile has at most one `[sd_card]` slot, with its four SPI pins, and the interface is
+`sd_card`, with no role. `sd_card.insert(image)` before `board.power_on()` is a `model` source:
+the runner's card model holding that file, which writes through, so the test reads what the
+firmware wrote with the same tools it prepared the image with, mtools, as the specification says.
+On `serial` the slot takes only `real`, the card in it. An empty slot is a board without a card.
+
+**Rejected:** a copy of the image for the run, because the test would then need a second call to
+get the result, and copying first is one line of the test's when it wants the original kept;
+FAT helpers in esp32tl, because mtools already makes and reads images, and the test's helpers in
+`tests/test_sdspi.py` stay a few lines; and naming the slot `[spi.<role>]`, because a profile
+names what is at the end of the wires, and the card is not any SPI device.
+
+## Inserting and removing the SD card while the firmware runs is postponed
+
+Status: postponed (#32)
+
+The specification puts the card's insertion and removal on the scenario timeline. The card is in
+from power-on to the end of the run until the scenario exists, and a removal needs the slot's
+card-detect pin, which no profile has yet; `[sd_card]` takes no `cd` key so far.
+
+## The SD card tests skip without mtools, and CI makes sure it is there
+
+Status: decided (#32)
+
+`tests/test_sdspi.py` carries `requires_mtools`, which skips it where `mformat`, `mcopy` or `mdir`
+is missing, as `requires_docker` does for Docker. The CI test job installs mtools on macOS and
+fails on a runner without it, so that the tests cannot skip there unnoticed.
+
+**Rejected:** failing the tests without mtools, because a checkout without it could run nothing
+else of the suite cleanly; and a FAT library in Python as a dependency, because the
+specification names ordinary tools, and a user's test uses the same ones.
+
+## The esp32tl command takes no SD card yet
+
+Status: postponed (#32)
+
+`esp32tl run` and `esp32tl replay` pass the runner no `--sd-rw`: the card is for tests now, and
+a run by hand can call the runner with `--sd-rw` and `--sd-spi` itself
+([runner](../features/runner-user.md#put-an-sd-card-in)). An option comes when someone runs a card
+outside pytest.

@@ -44,6 +44,7 @@ from esp32tl.backends.clock import HeldClock, nanoseconds
 from esp32tl.boards import BoardProfile, capabilities
 from esp32tl.boards.capabilities import CapabilityError, Request
 from esp32tl.interfaces import BoardOff, RunEnded, SourceError
+from esp32tl.interfaces.sd_card import SdCard
 from esp32tl.interfaces.uart import Uart
 from esp32tl.link.boardlink import BoardLink, Wire
 
@@ -123,17 +124,29 @@ def load_app(app_path: str) -> IdfApp:
 
 
 def runner_command(
-    runner: Path, rom: Path, app: IdfApp, max_seconds: float, link: Path, *, held: bool = False
+    runner: Path,
+    rom: Path,
+    app: IdfApp,
+    max_seconds: float,
+    link: Path,
+    *,
+    held: bool = False,
+    sd_card: SdCard | None = None,
 ) -> list[str]:
     """The runner's command line: every file of `flasher_args.json` at its offset, its board the
     socket at `link`. A `held` run is on the test's clock: its console also goes on the link, and
-    the runner waits for the harness's turn for as long as it takes."""
+    the runner waits for the harness's turn for as long as it takes. An `sd_card` with a card in
+    it puts the runner's card model on the slot's pins, holding the card's image."""
     command = [str(runner), "--chip", "esp32", "--rom", str(rom), "--max-seconds", str(max_seconds)]
     if held:
         command += ["--console", "both", "--peer-timeout", "0"]
     command += ["--board", f"socket:{link}"]
     for file in app.flash_files:
         command += ["--flash-at", f"{file.offset:#x}={file.file_path}"]
+    if sd_card is not None and sd_card.image is not None:
+        r = sd_card.route
+        command += ["--sd-spi", f"sclk={r.sclk},mosi={r.mosi},miso={r.miso},cs={r.cs}"]
+        command += ["--sd-rw", str(sd_card.image)]
     return command
 
 
@@ -198,7 +211,8 @@ def listen() -> tuple[socket.socket, Path]:
 
 class Esp32Sim:
     """A run of the app in `app_path` in the runner, on the board profile `profile`, its console
-    going to `dut`'s log and to the test, its board the link to every UART route of the profile.
+    going to `dut`'s log and to the test, its board the link to every UART route of the profile,
+    and the runner's SD card model in the profile's slot when the test inserts a card.
 
     `app` is the `IdfApp` the runner flashes. The dut's own `app` is pytest-embedded's base `App`,
     without `flash_files` or `target`: without a service, pytest-embedded builds nothing more.
@@ -245,6 +259,11 @@ class Esp32Sim:
             )
             for role in profile.uart
         }
+        self._sd_card = (
+            SdCard(profile.sd_card, directory=self.directory, asked=self._asked)
+            if profile.sd_card is not None
+            else None
+        )
         self.link = BoardLink(
             profile.name,
             list(self._uarts.values()),
@@ -272,12 +291,21 @@ class Esp32Sim:
             )
         return uart
 
+    def sd_card(self) -> SdCard:
+        """The profile's SD card slot."""
+        if self._sd_card is None:
+            raise BackendError(
+                f"the board profile {self.profile.name} has no sd_card;"
+                f" its interfaces are {', '.join(self.profile.interfaces)}"
+            )
+        return self._sd_card
+
     def _asked(self, interface: str, source: str) -> None:
         """Refuses a source on `interface` once the board is on, or one that no backend
         gives, and skips the test when this one does not."""
         if self.powered:
             raise SourceError(
-                f"{interface}: the board is on already: give a route its source before"
+                f"{interface}: the board is on already: give an interface its source before"
                 " board.power_on()"
             )
         request = [Request(interface, source=source)]
@@ -292,12 +320,15 @@ class Esp32Sim:
 
     def set_up(self) -> list[str]:
         """What the test has set up that only a run uses: the sources it gave, as `the replay
-        of uart.gnss`."""
-        return [
+        of uart.gnss`, and `a card in sd_card`."""
+        set_up = [
             f"the {uart.source_kind} of {name}"
             for name, uart in self._uarts.items()
             if uart.source is not None
         ]
+        if self._sd_card is not None and self._sd_card.image is not None:
+            set_up.append(f"a card in {self._sd_card.name}")
+        return set_up
 
     @property
     def powered(self) -> bool:
@@ -318,7 +349,13 @@ class Esp32Sim:
         self._listener, self._socket = listen()
         self._conn: socket.socket | None = None
         command = runner_command(
-            self._runner, self._rom, self.app, HELD_MAX_SECONDS, self._socket, held=True
+            self._runner,
+            self._rom,
+            self.app,
+            HELD_MAX_SECONDS,
+            self._socket,
+            held=True,
+            sd_card=self._sd_card,
         )
         try:
             process = RunnerPopen(self._msg_queue, command, self._meta)

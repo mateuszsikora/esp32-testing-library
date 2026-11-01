@@ -227,3 +227,17 @@ the one the tests measure. The `uart_cfg` the bare peer checked is covered by th
 **Rejected:** keeping the bare peer beside the fixture's tests, because it sends every sentence in
 the first turn, a timing no test of a user's firmware has, and would be a second peer to keep in
 step with the protocol.
+
+## The SD card is validated on ESP-IDF's sdspi example, unmodified
+
+Status: decided (#32)
+
+`sdspi` is ESP-IDF's `examples/storage/sd_card/sdspi` built as it is, like `hello_world`, and the
+`esp32-devkitc` profile's slot takes the example's default pins for the ESP32 (SCLK 14, MOSI 15,
+MISO 2, CS 13), which `tests/test_firmware_images.py` compares with its `sdkconfig`. The example
+mounts, writes, renames and reads, which covers the driver's initialisation, single and multiple
+block reads and writes, CRC and DMA.
+
+**Rejected:** a firmware of this repository's for the card, because the plan validates on public
+firmware and the example already exercises what the card has to answer; and other pins in its
+`sdkconfig.defaults`, because the example would then not be unmodified.

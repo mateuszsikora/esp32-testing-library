@@ -87,7 +87,7 @@ These raise `SourceError` (`esp32tl.interfaces.SourceError`) in the test body:
 
 | Message | Cause |
 |---|---|
-| `uart.gnss: the board is on already: give a route its source before board.power_on()` | `gnss.replay` after `board.power_on()` |
+| `uart.gnss: the board is on already: give an interface its source before board.power_on()` | `gnss.replay` after `board.power_on()` |
 | `uart.gnss has its source already: one per test` | A second `gnss.replay` in one test |
 
 A wait or an expect before `board.power_on()` raises

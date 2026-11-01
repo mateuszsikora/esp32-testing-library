@@ -5,8 +5,11 @@
 //! route and the FIFO and report what is dropped. Nor does it need `next_deadline`: the run
 //! loop's slices stop for the block point (protocol 11.10). GPIO inputs do go through it: the run
 //! loop hands the peer's `gpio_in` and `release` to the board when they come due, and the chip
-//! takes them through `take_edges` and `released_inputs`.
-use esp_soc::board::{BoardEdge, BoardModel, VirtualCycle};
+//! takes them through `take_edges` and `released_inputs`. With `--sd-rw`, the SD card is on its
+//! pins as well: it answers the chip's SPI transactions in the board, and nothing of it goes on
+//! the socket.
+use crate::sd_card;
+use esp_soc::board::{BoardEdge, BoardModel, SpiPins, VirtualCycle};
 use esp_soc::uart::UartRoute;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -74,11 +77,12 @@ pub type Shared = Rc<RefCell<Recorder>>;
 
 pub struct SocketBoard {
     shared: Shared,
+    card: Option<sd_card::Shared>,
 }
 
 impl SocketBoard {
-    pub fn new(shared: Shared) -> Self {
-        Self { shared }
+    pub fn new(shared: Shared, card: Option<sd_card::Shared>) -> Self {
+        Self { shared, card }
     }
 }
 
@@ -91,6 +95,15 @@ impl BoardModel for SocketBoard {
     }
     fn uses_uart_pins(&self) -> bool {
         true
+    }
+    fn uses_spi_pins(&self) -> bool {
+        self.card.is_some()
+    }
+    fn spi_transfer_pins(&mut self, _host: u8, pins: SpiPins, tx: &[u8], rx_len: usize) -> Vec<u8> {
+        match &self.card {
+            Some(card) => card.borrow_mut().transfer(pins, tx, rx_len),
+            None => vec![0xff; rx_len],
+        }
     }
     fn uart_tx(&mut self, cycle: VirtualCycle, route: UartRoute, byte: u8) {
         self.shared

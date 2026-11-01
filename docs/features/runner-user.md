@@ -4,7 +4,8 @@
 emulated clock, and prints the guest's UART0 console on stdout. With `--board`, it connects to a
 peer, the harness or any program that speaks [the link protocol](../protocol.md), and wires the
 chip's pins to it: the peer sees what the guest sends on its UARTs and the levels it drives on
-the pins the peer watches, and sends bytes and levels back.
+the pins the peer watches, and sends bytes and levels back. With `--sd-rw` and `--sd-spi`, an SD
+card holding an image file sits on four of the chip's pins, with or without `--board`.
 The `esp32sim` backend of the pytest plugin starts it, with `--board socket:PATH` and itself as
 the peer, for every test that uses `board` or `console`. This document is for running it by hand, to watch an image boot,
 to drive it from a peer of your own, or to see why a run ended the way it did.
@@ -52,6 +53,9 @@ usage: esp32tl-runner --chip esp32 --flash-at OFFSET=FILE... --max-seconds S [op
                         run fails with exit code 4 (default 60; 0 waits for ever)
   --console stdout|socket|both   where UART0 goes (default stdout); socket and both need
                         --board
+  --sd-rw IMAGE         an SD card holding IMAGE, a whole number of 512 KiB units, on the
+                        pins of --sd-spi; the guest's writes go into the file
+  --sd-spi sclk=N,mosi=N,miso=N,cs=N   the GPIOs the card is wired to, in SPI mode
 ```
 
 | Flag | Default | Accepts |
@@ -65,6 +69,8 @@ usage: esp32tl-runner --chip esp32 --flash-at OFFSET=FILE... --max-seconds S [op
 | `--board` | none: nothing on the chip's pins | `socket:PATH`, a Unix socket path that is not empty, or `tcp:HOST:PORT`, with a host that is not empty and a port from 0 to 65535 (`tcp:[::1]:7000` for IPv6) |
 | `--peer-timeout S` | `60` | `0`, to wait for ever, or a positive number of seconds; fractions are fine. A value that rounds to 0 ns, or is too large for a Rust `Duration` (`1e20`), is a usage error |
 | `--console` | `stdout` | `stdout`; `socket` and `both` only with `--board` |
+| `--sd-rw IMAGE` | none: no card | a path, valid UTF-8, to an image file of a whole number of 512 KiB units, from 512 KiB to 2 TiB; only with `--sd-spi` |
+| `--sd-spi sclk=N,mosi=N,miso=N,cs=N` | none | the four pins in any order, each once, four different GPIOs of the ESP32 (0 to 39 but 24 and 28 to 31); `sclk`, `mosi` and `cs` not input-only (34 to 39); only with `--sd-rw` |
 
 A flag given twice keeps its last value, except `--flash-at`, which adds a file each time. Flags
 take their value as the next argument: `--flash-mb=8` is an unknown argument.
@@ -101,18 +107,60 @@ how long a write to the socket may make no progress because the peer does not re
 also bounds each connection attempt, though not the name lookup before it. A peer that hangs then
 fails the run with exit code 4 instead of hanging a CI job.
 
+## Put an SD card in
+
+`--sd-rw IMAGE --sd-spi sclk=N,mosi=N,miso=N,cs=N` wires a card holding the image file to those
+GPIOs: an SD memory card in SPI mode, as a driver such as ESP-IDF's `sdspi` talks to it. For the
+`sdspi` validation image, which takes ESP-IDF's default pins for the ESP32, with a FAT image made
+by mtools:
+
+```sh
+truncate -s 32m card.img
+MTOOLS_SKIP_CHECK=1 mformat -i card.img -T 65536 -h 64 -s 32 ::
+B=firmware/sdspi/build
+runner/target/release/esp32tl-runner --chip esp32 \
+  --rom .cache/esp-rom-elfs/20241011/esp32_rev300_rom.elf \
+  --flash-at 0x1000=$B/bootloader/bootloader.bin \
+  --flash-at 0x8000=$B/partition_table/partition-table.bin \
+  --flash-at 0x10000=$B/sd_card.bin \
+  --sd-spi sclk=14,mosi=15,miso=2,cs=13 --sd-rw card.img \
+  --max-seconds 5
+MTOOLS_SKIP_CHECK=1 mtype -i card.img ::foo.txt
+```
+
+- The card writes through: every block the guest writes is in the file when the write's data
+  response goes back, and stays there after the run. Copy the image first to keep it as it was.
+- The card's size is the image's. It is a high capacity card, SDHC up to 32 GiB and SDXC above:
+  block addresses, 512-byte blocks, default speed. Its CID names it `SIMSD`, by OEM `ES`, so
+  ESP-IDF's `sdmmc_card_print_info` prints `Name: SIMSD`.
+- The card hears a transaction only while its CS pin is a low output and its SCLK pin carries the
+  master's clock; the guest reads its answers only when the master's MISO comes from the card's
+  pin. A guest that routes the bus to other pins finds no card, as it would on the board.
+- The card is there from power-on to the end of the run, through chip resets: it keeps its state,
+  as a powered card does, until the guest sends CMD0.
+
+What the card does and does not model is in
+[the technical side](runner-technical.md#the-sd-card).
+
 ## What it prints
 
 stdout carries the guest's UART0 output and nothing else, unless `--console socket` sends it to
 the peer instead. Everything the runner says goes to stderr, on lines that start with
 `esp32tl-runner: `:
 
+- `esp32tl-runner: SD card on SCLK GPIO N, MOSI GPIO N, MISO GPIO N, CS GPIO N: IMAGE (K KiB,
+  write-through)` first, with `--sd-rw`;
 - `esp32tl-runner: ROM PATH` once the ROM ELF is loaded;
 - `esp32tl-runner: flash 0x1000: PATH (N bytes)` for each `--flash-at` file, offset in hex;
 - `esp32tl-runner: chip reset at T s, cause CAUSE` each time the firmware resets the chip, as
   `esp_restart()` does: T in emulated seconds with six decimals, CAUSE the reset cause the ROM
   reports, in hex (`0x...`). The runner restarts the guest from the ROM, as the chip would, and
   the run goes on. With `--board`, the peer gets a `reset` message as well.
+- `esp32tl-runner: SD card: N commands, R blocks read, W blocks written` at the end of a run with
+  `--sd-rw`, just before the line that ends it; with `, E image errors` added when reads, writes
+  or erases of the image file failed. Each such failure also prints
+  `esp32tl-runner: SD card: reading block N: ERROR` (or `writing block N`, or
+  `erasing blocks LO to HI`) when it happens, and the guest gets the error a card reports for it.
 
 esp32sim can print lines of its own on stderr; it does with its debug switches set
 ([technical side](runner-technical.md#configuration)).
@@ -147,7 +195,7 @@ to `--board`, and nothing after it.
 | 0 | with `--board`: `SIGTERM` or `SIGINT` | `end: signal at ...` |
 | 1 | the emulator stopped for any other reason | the stop line, then `esp32tl-runner: the emulator stopped before --max-seconds: STOP`, the stop with its fields; with `--board`, `end: the emulator stopped before --max-seconds: STOP at ...` |
 | 2 | a usage error | `esp32tl-runner: MESSAGE`, then `run esp32tl-runner --help for the usage` |
-| 2 | an input that cannot be loaded: no ROM found, a file that cannot be read, a ROM that is not an ELF, an image that does not fit in flash | `esp32tl-runner: MESSAGE`, no stop line |
+| 2 | an input that cannot be loaded: no ROM found, a file that cannot be read, a ROM that is not an ELF, an image that does not fit in flash, an SD card image that cannot be opened for writing or is not a whole number of 512 KiB units | `esp32tl-runner: MESSAGE`, no stop line |
 | 3 | with `--board`: a protocol error by the peer, such as a malformed line, a version or chip mismatch, an input stamped before its turn's `sync` | `end: protocol error by the peer at BOARD: WHAT: LINE at ...`, `LINE` cut after 200 characters |
 | 4 | with `--board`: the connection failed, or the peer is gone: it closed the socket, a read or write failed, or `--peer-timeout` ran out | `end: cannot connect to the peer at ...`, or `end: the peer at BOARD is gone: WHY at ...` |
 | 101 | a panic, in the runner or in esp32sim during the run | Rust's panic message, no stop line |

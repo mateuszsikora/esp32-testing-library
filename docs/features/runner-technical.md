@@ -6,15 +6,17 @@ The crate is `runner/`, package `esp32tl-runner`:
 |---|---|
 | `runner/src/main.rs` | setup, the run without a peer, and the start and report of the run with one |
 | `runner/src/cli.rs` | the command line |
-| `runner/src/socket_board.rs` | `SocketBoard`, the `BoardModel` on the chip's pins with `--board`: it records what the guest does, with its bus cycle, for the run loop, and holds the GPIO levels the peer drives for the chip to take |
+| `runner/src/socket_board.rs` | `SocketBoard`, the `BoardModel` on the chip's pins with `--board`: it records what the guest does, with its bus cycle, for the run loop, holds the GPIO levels the peer drives for the chip to take, and hands SPI transactions to the SD card |
+| `runner/src/sd_card.rs` | `SdCard`, the SD card of `--sd-rw` in SPI mode, and `CardBoard`, the board that holds it alone without `--board` |
 | `runner/src/session.rs` | `Session`, the run loop with a peer: slices, turns, coalescing, pacing, warnings, `stats` |
 | `runner/src/protocol.rs` | the wire format: time conversion, base64, parsing the peer's messages and writing the runner's |
 | `runner/src/transport.rs` | `SocketLink`, the Unix or TCP socket: buffered NDJSON writes, line reads, the signal flag and the time limits |
 
 Each module's unit tests are in a `tests.rs` of its own: `runner/src/tests.rs` for `main.rs`,
 `runner/src/<module>/tests.rs` for the others. It drives esp32sim through two of its crates,
-`esp32` (the classic chip) and `esp-soc` (the machine, `Soc`, `Stop`, `BoardModel`, `UartRoute`,
-and the JSON parser `esp_soc::json` the protocol module reads with). esp32sim lines below are at
+`esp32` (the classic chip) and `esp-soc` (the machine, `Soc`, `Stop`, `BoardModel`, `SpiPins`,
+`UartRoute`, and the JSON parser `esp_soc::json` the protocol module reads with), and takes the
+SD card's image store from a third, `esp-periph` (`esp_periph::sdmmc::{SdStore, FileStore}`). esp32sim lines below are at
 its pin, `8c65215`.
 
 ## Data flow
@@ -25,9 +27,12 @@ its pin, `8c65215`.
    returns `cli::Error::Help` (usage on stderr, exit 0) or `cli::Error::Usage` (exit 2 through
    `usage_error`). Flags are read in order; the first bad one is reported. After the loop it
    checks, in this order, that `--chip` was given and is `esp32`, that `--max-seconds` was given,
-   that there is at least one `--flash-at`, and that `--console socket` or `both` comes with
-   `--board`.
-2. **Set up** (`setup`, which returns the `esp32::Machine` at the reset vector):
+   that there is at least one `--flash-at`, that `--sd-rw` and `--sd-spi` come together, and that
+   `--console socket` or `both` comes with `--board`.
+2. **Open the card**, with `--sd-rw` (`card`): `FileStore::write_through` opens the image for
+   reading and writing, `SdCard::new` checks its size, and the `SD card on` line goes to stderr.
+   The card is a `sd_card::Shared` (`Rc<RefCell<SdCard>>`), which the board and `main` hold.
+3. **Set up** (`setup`, which returns the `esp32::Machine` at the reset vector):
    - `esp32::machine(MAC, flash_size)` with `MAC` = `24:6f:28:00:11:22`, the MAC esp32sim's CLI
      gives the classic chip (`cli/src/lib.rs`), so a run here and the same run in esp32sim agree.
      `esp32::machine` also reads esp32sim's debug switches from the environment.
@@ -37,7 +42,8 @@ its pin, `8c65215`.
      into a flash-size mismatch instead of failing at the command line.
    - `m.bus.set_psram_size(psram_mb << 20)` when `--psram-mb` is not 0.
    - With `--board`, `m.bus.board` becomes a `SocketBoard` holding a `socket_board::Shared`
-     (`Rc<RefCell<Recorder>>`) that the run loop holds too; without it the machine keeps its
+     (`Rc<RefCell<Recorder>>`) that the run loop holds too, and the card if there is one; without
+     `--board` it becomes a `CardBoard` holding the card, or with no card stays the machine's
      default board, esp32sim's `--board none`. Then `m.bus.attach_board_devices()`, which reads
      `uses_uart_pins` and so makes the bus call `uart_tx` on every TX FIFO write.
    - The ROM: `--rom`, else `find_rom` (below). `m.load_rom`, then the `ROM` line on stderr.
@@ -49,7 +55,7 @@ its pin, `8c65215`.
      `m.max_cycles = (max_seconds * <esp32::Esp32 as Soc>::CPU_HZ as f64) as u64`. `CPU_HZ` is
      240 000 000 (`esp32/src/periph.rs`), the fixed reference `bus.cycles()` counts at, so
      `max_cycles` is emulated time whatever clock the guest switches to.
-3. **Run.** Without `--board`, `run`: the wall clock starts here, after setup. `m.run(u64::MAX)`
+4. **Run.** Without `--board`, `run`: the wall clock starts here, after setup. `m.run(u64::MAX)`
    runs until a `Stop`; `m.drain_console()` then flushes what the guest printed, so it comes out
    before the runner's own line. On `Stop::SwReset` the runner calls `m.reboot()`, prints the
    `chip reset` line with the cause `reboot()` returns, and runs again, from the reset vector as
@@ -62,7 +68,7 @@ its pin, `8c65215`.
    and exits 4. Only then does it install the signal handlers (see Interfaces) and make
    `--peer-timeout` the write limit, and the wall clock starts. Then `session::Session::run`
    ([below](#the-session)), and `m.drain_console()`.
-4. **Report.** Without `--board`, the stop line, with `stop_name(&stop)`, `m.seconds()` (bus
+5. **Report.** With a card, its `SD card:` line first. Without `--board`, the stop line, with `stop_name(&stop)`, `m.seconds()` (bus
    cycles / `CPU_HZ`), the wall time and `m.reboots`; `Halted` exits 0, anything else prints the
    stop's `Debug` and exits 1. With `--board`, the `end` line, with the cause from `session::End`,
    `m.seconds()`, the wall time, `stats.resets` and `stats.turns`, and the exit code of
@@ -78,6 +84,84 @@ exists, and `HOME` is read with `var_os`, so it need not be valid UTF-8. The loo
 
 `stop_name` matches every `Stop` variant explicitly, with no catch-all arm, so a variant added
 upstream fails the build instead of being reported under another name.
+
+### The SD card
+
+esp32sim's classic SPI masters hand each transaction to the board: once its command, address and
+MOSI bytes are known, from the W registers or the DMA out-link, `run_gp_spi`
+(`esp32/src/bus.rs:504-568`) calls `spi_transfer_pins(host, pins, tx, rx_len)` on a board whose
+`uses_spi_pins` is true, and puts the bytes it returns into the W registers or the DMA in-link.
+`SpiPins` carries the routes at that moment: the pads the master's SCLK and MOSI signals drive,
+the pad its MISO signal is read from, and as `cs` every low, enabled output among GPIO 0 to 33,
+which is how a software CS, a GPIO the driver sets low, shows (`esp32/src/periph.rs:414-427`).
+`SocketBoard` and `CardBoard` answer `uses_spi_pins` with true when they hold a card and pass the
+transaction to `SdCard::transfer`.
+
+`SdCard::transfer` returns 0xff for every byte unless the card's SCLK pin is in `sclk` and its CS
+pin in `cs`. It then clocks `max(tx.len(), rx_len)` bytes through `exchange`, MOSI 0xff past the
+end of `tx` or when the card's MOSI pin is not in `mosi`, and keeps the card's bytes only when
+`miso` is the card's MISO pin. Byte `i` of the answer is the card's byte while byte `i` of `tx`
+comes in: a transaction is taken as full duplex, as ESP-IDF's `spi_master` makes one by default.
+A half-duplex read (MOSI phase, then MISO phase) would see the card's bytes one phase early; no
+SD driver uses one.
+
+`exchange` sends the next byte of `out`, the card's queue, 0xff when it is empty, then takes the
+byte that came in according to `phase`:
+
+| Phase | What an incoming byte does |
+|---|---|
+| `Command` | Starts or continues a 6-byte command; a first byte must have `01` in its top bits. A whole command runs `command` |
+| `Reading { next }` | As `Command`; when `out` runs dry, block `next` is queued (CMD18) |
+| `Awaiting { lba, multi }` | 0xfe (CMD24) or 0xfc (CMD25) starts a block, 0xfd ends a CMD25; a command byte as in `Command` |
+| `Receiving { lba, multi, buf }` | Collects 512 data bytes and 2 CRC bytes, then writes the block and queues the data response |
+
+`command` checks the CRC7 of CMD0 and CMD8 always and of every command once CMD59 has turned
+checking on, and answers a bad one with R1 `COM_CRC_ERROR`. Until the first CMD0 with a good CRC
+the card is in SD mode and answers nothing. Every command clears `out` and returns the phase to
+`Command`, which ends a read in progress (CMD12) and a write still waiting for its token. The
+answer starts with one 0xff (N<sub>CR</sub>), then R1, with `IDLE` set until ACMD41 has finished.
+
+| Command | Answer |
+|---|---|
+| CMD0 | R1 `IDLE`; initialisation, CRC checking and the erase range start over |
+| CMD8 | R7: R1, then `00 00 VCA PATTERN`, VCA 1 when VHS is 1 (2.7-3.6 V), else 0 |
+| CMD55, then ACMD41 | R1; with CMD8 accepted and HCS (bit 30) set, the first ACMD41 answers `IDLE` and the next one finishes initialisation (`INIT_POLLS` = 1, as esp32sim's card); without them the card stays idle |
+| CMD58 | R3: R1, then the OCR, `0x00FF8000` before initialisation and `0xC0FF8000` (ready, CCS) after |
+| CMD59 | R1; bit 0 of the argument turns CRC checking on or off |
+| Any other command before initialisation | R1 `IDLE \| ILLEGAL_COMMAND` |
+| CMD9, CMD10 | R1, then the CSD or the CID as a data block |
+| CMD12 | a stuff byte, then R1 (ESP-IDF looks for R1 after the stuff byte) |
+| CMD13 | R2: R1, then 0 |
+| CMD16 | R1: blocks are 512 bytes whatever the argument |
+| CMD17, CMD18 | R1, then the block at the argument (a block address) as a data block; CMD18 goes on to the next block until a command comes, and a block past the end is an error token `0x08`; a start past the end is R1 `PARAMETER_ERROR` |
+| CMD24, CMD25 | R1, then `Awaiting`; a start past the end is R1 `PARAMETER_ERROR` |
+| CMD32, CMD33, CMD38 | R1; CMD38 erases the range to zeros (`SdStore::erase`), or answers `ERASE_SEQ_ERROR` without one, `PARAMETER_ERROR` for an end before the start |
+| ACMD13 | R2, then the SD status as a 64-byte data block |
+| ACMD22 | R1, then the number of blocks the last CMD24 or CMD25 wrote |
+| ACMD23, ACMD42 | R1 |
+| ACMD51 | R1, then the SCR as an 8-byte data block |
+| Anything else, CMD5, CMD52 and CMD6 among them | R1 `ILLEGAL_COMMAND` |
+
+A data block is one 0xff (N<sub>AC</sub>), the token 0xfe, the data and its CRC16, big-endian.
+An application command index the card does not define is taken as the standard command of that
+index. A block that comes in is answered with its data response, `0x05` accepted, `0x0b` with a
+bad CRC16 while checking is on, `0x0d` past the end or when the image cannot be written, on the
+byte after its CRC; the card is never busy after it. A CMD25 waits for the next token after any
+of them.
+
+The registers (SD Physical Layer Simplified Specification, chapter 5):
+
+| Register | Contents |
+|---|---|
+| CID | MID 0, OID `ES`, PNM `SIMSD`, PRV 1.0, PSN from the image's size (esp32sim's formula), MDT 2024-01, CRC7 |
+| CSD | version 2.0: TAAC 1 ms, NSAC 0, TRAN_SPEED 25 MHz, CCC `0x135` (classes 0, 2, 4, 5 and 8), READ_BL_LEN 9, C_SIZE from the image, ERASE_BLK_EN 1, SECTOR_SIZE 127, R2W_FACTOR 4, WRITE_BL_LEN 9, CRC7 |
+| SCR | structure 1.0, SD_SPEC 2 with SD_SPEC3, DATA_STAT_AFTER_ERASE 0, security 2.00 (SDHC) or 3.00 (SDXC, above 32 GiB), bus widths 1 and 4, no CMD23 |
+| SD status | bus width 1, speed class 10, AU 4 MiB, erase fields 0 |
+
+Without class 10 in CCC, ESP-IDF's `sdmmc_enable_hs_mode` does not send CMD6, and the card stays at
+default speed. The image goes through esp32sim's `FileStore::write_through`: each 512-byte block
+is a seek and a read or write of the file, with no cache, so the file holds every accepted block
+at once.
 
 ### The session
 
@@ -151,10 +235,16 @@ The command line and the usage text: [runner-user.md](runner-user.md#run-an-imag
   `--console socket`. The runner's own lines go to stderr. Under the backend the two meet again: pytest-embedded's
   `DuplicateStdoutPopen` writes stdout and stderr into one log, `dut.log`; the test's console
   expects read the `console` messages of `--console both` instead.
-- stderr, from the runner (formats from `main.rs`):
+- stderr, from the runner (formats from `main.rs` and `sd_card.rs`):
+  - `esp32tl-runner: SD card on SCLK GPIO {sclk}, MOSI GPIO {mosi}, MISO GPIO {miso}, CS GPIO
+    {cs}: {image} ({KiB} KiB, write-through)`
   - `esp32tl-runner: ROM {path}`
   - `esp32tl-runner: flash {offset:#x}: {path} ({len} bytes)`
   - `esp32tl-runner: chip reset at {seconds:.6} s, cause {cause:#x}`
+  - `esp32tl-runner: SD card: reading block {lba}: {error}`, `writing block {lba}: {error}` and
+    `erasing blocks {lo} to {hi}: {error}`, when the image file fails
+  - `esp32tl-runner: SD card: {commands} commands, {read} blocks read, {written} blocks
+    written`, with `, {errors} image errors` when there were any, before the stop or end line
   - `esp32tl-runner: stop: {VARIANT} at {seconds:.6} s ({wall:.1} s wall, {reboots} resets)`
   - `esp32tl-runner: the emulator stopped before --max-seconds: {stop:?}`
   - with `--board`, instead of the last two: `esp32tl-runner: end: {cause} at {seconds:.6} s
@@ -210,13 +300,17 @@ The socket's limits are constants, not options:
 | `session::MAX_DATA` | 48 KiB | the most bytes one `uart_tx` or `console` message carries |
 | `session::RX_FIFO` | 128 | the classic RX FIFO's size, against which `rxfifo_ovf` is counted |
 
+**The SD card's image** comes from `esp-periph`, the esp32sim crate of the peripheral models,
+pinned like the others: its `SdStore` trait and `FileStore`, the store of esp32sim's own
+`--sd-rw`; the unit tests use its `MemStore`.
+
 **Dependencies besides esp32sim.** `signal-hook` 0.4 (`default-features = false`) for the signal
 handlers: std cannot install one. JSON goes through esp-soc's own parser (`esp_soc::json`, which
 its Cooja link uses) and `esp_soc::web::json_escape`, so the crate adds no JSON crate.
 
 **The esp32sim pin.** esp32sim is not on crates.io, so `runner/Cargo.toml` takes `esp32` and
 `esp-soc` (and `emu-core`, a dev-dependency for `Stop::CostModelLifecycle` in a test) from
-`https://github.com/mikroverk/esp32sim`, each at
+`https://github.com/mikroverk/esp32sim`, with `esp-periph` for the SD card's image store, each at
 `rev = "8c652151dd5a521249a785ca147f20a9f8eda68f"`: the merge of mikroverk/esp32sim#322, from
 which images built for chip revision v3.0 boot
 ([plan, findings 3 and 5](../implementation-plan.md#1-findings-that-amend-the-specification)).
@@ -266,6 +360,13 @@ Every message starts with `esp32tl-runner: `. Usage errors exit 2 and add a seco
 | `--console socket and both send the console to the peer: they need --board` | `--console socket` or `both` without `--board` |
 | `--board {spec}: expected socket:PATH or tcp:HOST:PORT` | neither prefix (`--board none`), an empty path, an empty host, or a port that is not a number from 0 to 65535 |
 | `--peer-timeout: expected a number of seconds, 0 for none, got {v:?}` | not a number, negative, `inf` or `NaN`, too large for a `Duration` (`1e20`), or above 0 but rounding to 0 ns (`1e-10`) |
+| `--sd-rw needs --sd-spi: the card's pins`, `--sd-spi needs --sd-rw: the card's image` | one of the two without the other |
+| `--sd-spi {spec}: expected sclk=N,mosi=N,miso=N,cs=N` | a part without `=`, or one of the four missing |
+| `--sd-spi {spec}: {name:?} is not sclk, mosi, miso or cs` | another name |
+| `--sd-spi {spec}: {pin:?} is not a GPIO of the ESP32` | not a number from 0 to 39, or 24, or 28 to 31 |
+| `--sd-spi {spec}: GPIO {pin} is input only` | `sclk`, `mosi` or `cs` on 34 to 39 |
+| `--sd-spi {spec}: {name} is given twice` | a name repeated |
+| `--sd-spi {spec}: the four pins must differ` | two names on one GPIO |
 
 Inputs that cannot be loaded exit 2 through `fail`, with no second line and no stop line:
 
@@ -275,6 +376,10 @@ Inputs that cannot be loaded exit 2 through `fail`, with no second line and no s
 | `{path}: {error}` | the ROM or a flash file cannot be read; `error` is the OS error, e.g. `No such file or directory (os error 2)` |
 | `{rom}: {error}` | esp32sim cannot load the ROM ELF, e.g. `not an ELF file`, `need ELF32 little-endian` (`esp-soc/src/elf.rs`) |
 | `--flash-at {offset:#x}={path}: flash image too large` | the file does not fit in `--flash-mb` from its offset (`esp32/src/bus.rs`, `write_flash`) |
+| `--sd-rw {image}: not a UTF-8 path` | esp32sim's `FileStore` takes a `&str` |
+| `--sd-rw {image}: {error}` | the image cannot be opened for reading and writing, e.g. `No such file or directory (os error 2)` |
+| `--sd-rw {image}: an SD card image is a whole number of 512 KiB units (CSD C_SIZE), this one has {len} bytes` | an empty image, or one whose size is not a multiple of 512 KiB |
+| `--sd-rw {image}: an SD card image is at most 2 TiB (CSD C_SIZE)` | above 2^22 units |
 | `classic PSRAM supports 0 or 4194304 bytes` | esp32sim's own check (`esp32/src/psram.rs`); the CLI refuses those sizes first, so it is not reached |
 
 `cannot handle signal {sig}: {error}` also exits 2 through `fail`, if signal-hook cannot install
@@ -300,7 +405,7 @@ A failure to write the last messages does not change the exit code: the first ca
 
 ## Tests
 
-`make test-runner` runs the Rust tests (`cargo test --locked`), 63 of them:
+`make test-runner` runs the Rust tests (`cargo test --locked`), 80 of them:
 
 - `runner/src/cli/tests.rs`: `cli::parse` only. `minimal_command_line` checks the defaults
   (`rom: None`, flash 4 MiB, PSRAM 0, console `Stdout`, no board, `--peer-timeout` 60 s);
@@ -314,6 +419,9 @@ A failure to write the last messages does not change the exit code: the first ca
   and 17592186044416 (which would overflow `<< 20`), `--board none`, `socket:`, `tcp:host`,
   `tcp::7000` and `tcp:h:99999`, `--peer-timeout -1`, `nan`, `1e20`, `inf` and `1e-10`, and
   `--console socket` and `both` without `--board`.
+  `an_sd_card_takes_its_image_and_its_pins_in_any_order` checks `--sd-rw` with `--sd-spi` in
+  either order and an input-only MISO; `sd_card_usage_errors` checks the text of each `--sd-rw`
+  and `--sd-spi` usage error.
 - `runner/src/tests.rs`: `stop_names_are_the_variant_names` builds every `Stop` variant and
   checks that `stop_name` is the start of its `Debug` text, followed by nothing, a space or `(`,
   so that `CostModelLifecycle` reported as `CostModel` fails.
@@ -322,6 +430,14 @@ A failure to write the last messages does not change the exit code: the first ca
   message the peer may send and refusing malformed ones, the exact text of the runner's messages,
   and `the_esp32sim_revision_is_the_one_cargo_builds`, which checks that the revision `hello`
   reports is the one in `runner/Cargo.toml`.
+- `runner/src/sd_card/tests.rs`: `SdCard` through `transfer`, against a host in the test that
+  sends what ESP-IDF's `sdspi` sends: the image size rule, CRC7 and CRC16 against the SD
+  specification's examples, a card not selected or not clocked, a MISO routed elsewhere, the
+  initialisation (CMD0, CMD8, ACMD41 idle once, the OCR before and after) and a host without HCS
+  or CMD8, the CRC checks before and after CMD59, the CSD, CID, SCR and SD status, a single and a
+  multiple block read ended by CMD12 as `sdspi` reads it, a read past the end, a single block
+  write with a bad and a good CRC, a multiple block write with its stop token and ACMD22, an
+  erase, and the state a chip reset finds.
 - `runner/src/socket_board/tests.rs`: what `SocketBoard` records: every UART byte, and only the
   GPIO changes of watched pins, enable-only changes included; and the peer's levels and releases
   it hands the chip, in order, with `input_levels` after them.
@@ -357,7 +473,8 @@ peer (exit 0 with `stats` within 2 s), a late input and a version mismatch (exit
 `stats`), a peer that does not answer within `--peer-timeout 0.2` (exit 4, nothing more), and no
 peer listening (exit 4).
 
-Not covered: the text of the usage messages (`usage_errors` checks only the error kind),
+Not covered: the text of the usage messages but those of the SD card (`usage_errors` checks only
+the error kind),
 `setup`, `find_rom`, the `SwReset` path and an exit 1 of the real runner, a second signal,
 `--board tcp:` and `--console both` on the real binary, GPIO on a real image (no validation image
 uses a pin yet), and on the real machine a whole run through a reset: the `gpio_out` after it and
@@ -366,7 +483,10 @@ the real binary on `hello_world` (`tests/test_hello_world.py`, and
 `test_hello_world_fails_on_an_image_that_prints_something_else` in `tests/test_pytest_plugin.py`),
 which shows that a run boots and prints, but checks no runner line and no exit code;
 `tests/test_pytest_plugin.py::test_a_runner_that_exits_with_an_error_fails_the_test` checks how
-the backend handles an exit 1, from a stand-in runner.
+the backend handles an exit 1, from a stand-in runner. `tests/test_sdspi.py` runs the real binary
+with the card on ESP-IDF's `sdspi` example, through the backend: a FAT image the example mounts,
+writes and reads, one without a file system, and an empty slot. It checks no runner line either;
+the card's image errors and its lines on stderr are not covered.
 
 ## See also
 

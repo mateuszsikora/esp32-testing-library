@@ -68,6 +68,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The GNSS recording generator lives in scripts/ with a rule of its own](firmware.md#the-gnss-recording-generator-lives-in-scripts-with-a-rule-of-its-own) | `firmware.md` | decided (#15) |
 | [nmea_reader is tested through a bare socket peer until the gnss fixture exists](firmware.md#nmea_reader-is-tested-through-a-bare-socket-peer-until-the-gnss-fixture-exists) | `firmware.md` | superseded (#16) |
 | [nmea_reader is tested through the gnss fixture](firmware.md#nmea_reader-is-tested-through-the-gnss-fixture) | `firmware.md` | decided (#16) |
+| [The SD card is validated on ESP-IDF's sdspi example, unmodified](firmware.md#the-sd-card-is-validated-on-esp-idfs-sdspi-example-unmodified) | `firmware.md` | decided (#32) |
 
 ## The esp32tl package and its pytest plugin
 
@@ -135,6 +136,10 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [A TLS stack with a seeded random source is postponed](harness.md#a-tls-stack-with-a-seeded-random-source-is-postponed) | `harness.md` | postponed (#68) |
 | [Flash contents besides the build go into a partition of the build's own table, by name](harness.md#flash-contents-besides-the-build-go-into-a-partition-of-the-builds-own-table-by-name) | `harness.md` | decided (#64) |
 | [The LilyGO profile takes its GNSS route, flash and PSRAM from LilyGO's documentation](harness.md#the-lilygo-profile-takes-its-gnss-route-flash-and-psram-from-lilygos-documentation) | `harness.md` | decided (#64) |
+| [An SD card is inserted by the test, as a model source holding an image file](harness.md#an-sd-card-is-inserted-by-the-test-as-a-model-source-holding-an-image-file) | `harness.md` | decided (#32) |
+| [Inserting and removing the SD card while the firmware runs is postponed](harness.md#inserting-and-removing-the-sd-card-while-the-firmware-runs-is-postponed) | `harness.md` | postponed (#32) |
+| [The SD card tests skip without mtools, and CI makes sure it is there](harness.md#the-sd-card-tests-skip-without-mtools-and-ci-makes-sure-it-is-there) | `harness.md` | decided (#32) |
+| [The esp32tl command takes no SD card yet](harness.md#the-esp32tl-command-takes-no-sd-card-yet) | `harness.md` | postponed (#32) |
 
 ## The runner crate and esp32sim
 
@@ -165,3 +170,5 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [After a reset, gpio_out reads the pads from GPIO_ENABLE and GPIO_OUT](runner.md#after-a-reset-gpio_out-reads-the-pads-from-gpio_enable-and-gpio_out) | `runner.md` | decided (#23) |
 | [input_on_output looks at GPIO_ENABLE only](runner.md#input_on_output-looks-at-gpio_enable-only) | `runner.md` | decided (#23) |
 | [adc waits for an example with an analog pin](runner.md#adc-waits-for-an-example-with-an-analog-pin) | `runner.md` | postponed (#23) |
+| [The SD card is a model of SPI mode in the runner, not esp32sim's card](runner.md#the-sd-card-is-a-model-of-spi-mode-in-the-runner-not-esp32sims-card) | `runner.md` | decided (#32) |
+| [The SD card answers at once and has no CMD6](runner.md#the-sd-card-answers-at-once-and-has-no-cmd6) | `runner.md` | decided (#32) |
