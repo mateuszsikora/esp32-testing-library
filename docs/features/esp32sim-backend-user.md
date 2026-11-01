@@ -108,7 +108,9 @@ from then on, and before that it would die of it. A test that ends while the run
 loading the images waits up to 5 s for that. On `SIGTERM` the runner sends its last warnings and
 its statistics over the link and exits 0. The backend reads the link to its end and waits for the
 runner; one that has not exited 5 s after the signal is killed with `SIGKILL`. It sends `SIGTERM`
-once only: a second one would kill the runner, with exit code 143.
+once only: a second one would kill the runner, with exit code 143. Then it writes the recording of
+every route the test tapped ([taps](run-report-user.md#tapping-a-route)), whatever the run's
+outcome.
 
 When the harness finds the link wrong (a message out of protocol, an interface that broke its
 promises or raised, a frame error from a baud mismatch on a replayed route), it ends the run at
@@ -119,11 +121,13 @@ exits with code 3.
 
 ## When the run fails
 
-The run passes when the runner exited with code 0 and the harness found nothing wrong with the
-link. Anything else is an error at teardown, even when every expect of the test passed (pytest
-reports `1 passed, 1 error`). The message names every problem, separated by `; `:
+The run passes when the runner exited with code 0, the harness found nothing wrong with the
+link, and every tap was written. Anything else is an error at teardown, even when every expect of
+the test passed (pytest reports `1 passed, 1 error`). The message names every problem, separated
+by `; `:
 
 ```
+esp32sim: the tap of uart.gnss cannot be written: {reason}; its output is in {logfile}
 esp32sim: the runner exited with code {code}; its output is in {logfile}
 esp32sim: the runner did not exit within 5 s of SIGTERM, and was killed; its output is in {logfile}
 esp32sim: the link failed: {reason}; its output is in {logfile}
@@ -148,6 +152,8 @@ board esp32-devkitc, watching GPIO 4, GPIO 5
 runner: protocol version 1, esp32sim 8c652151dd5a521249a785ca147f20a9f8eda68f, clock emulated-fifo-write; 2 turns taken by the harness
 stats: the run ended at 0.100000000 s (stop); 2 turns, 0 resets
   unrouted_rx_bytes 0, inputs_on_output 0, inputs_not_applied 0, rx_bytes_not_paced 0
+routes:
+  uart.gnss: nothing at the far end; no bytes
 ```
 
 This is `tests/test_hello_world.py`'s. The first line names the test's
@@ -155,8 +161,13 @@ This is `tests/test_hello_world.py`'s. The first line names the test's
 every UART route of the profile. It lists the runner's warnings, one line each with its emulated time, the statistics per UART
 port, and the harness's error with its traceback when an interface raised. `the runner never
 connected`, which is what a test that never powered on gets, and `no stats: the link ended
-without them (the runner was killed, or died)` say what is missing. The same data is in the test's `esp32sim_link` user property, a JSON string with
-`board`, `watch`, `warnings`, `stats` and `error`, which `--junitxml` writes as a `<property>`.
+without them (the runner was killed, or died)` say what is missing. The statistics are those the
+runner sends as the run ends, one set per test. `routes:` gives, for every UART route of the
+profile, what the test put at its far end, the bytes that went in and came out, and the file it
+was tapped into. A test that failed gets the run on the board's clock after it
+([the run on the board's clock](run-report-user.md#the-run-on-the-boards-clock)). The same data,
+but the run, is in the test's `esp32sim_link` user property, a JSON string with `board`, `watch`,
+`warnings`, `stats`, `error` and `routes`, which `--junitxml` writes as a `<property>`.
 
 ## When the backend cannot start
 

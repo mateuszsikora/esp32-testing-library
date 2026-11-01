@@ -10,6 +10,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from esp32tl.boards import SdCardRoute
+from esp32tl.boards.capabilities import Request
 from esp32tl.interfaces import SourceError
 
 # The capacity unit of a high capacity card (CSD C_SIZE): an image is a whole number of them.
@@ -21,7 +22,7 @@ MAX_SIZE = UNIT << 22
 class SdCard:
     """The slot on `route`, empty until the test inserts a card.
 
-    `asked` is called with the name and the kind of source (`model`) before the card goes in,
+    `asked` is called with the `Request` of a `model` source before the card goes in,
     and refuses it by raising: the backend's checks, that the board is still off and that a
     backend gives that source. A relative image path is taken from `directory`, the test file's.
     """
@@ -33,7 +34,7 @@ class SdCard:
         route: SdCardRoute,
         *,
         directory: Path,
-        asked: Callable[[str, str], None] = lambda name, source: None,
+        asked: Callable[[Request], None] = lambda request: None,
     ) -> None:
         self.route = route
         self.directory = directory
@@ -48,7 +49,7 @@ class SdCard:
         file system or anything else. Returns the image's absolute path."""
         if self.image is not None:
             raise SourceError(f"{self.name} has a card already: one per test")
-        self.asked(self.name, "model")
+        self.asked(Request(self.name, source="model"))
         path = (self.directory / image).resolve()
         try:
             size = path.stat().st_size

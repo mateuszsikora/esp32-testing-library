@@ -41,16 +41,17 @@ that references to its number keep their meaning.
     `pytest.param`, or from a hook on the test, its class or its module, stops the run with a usage
     error, so no source a test asks for goes unchecked.~~ No longer holds since #65, which removed
     the `source` marker: see 48.
-47. A test whose `tap` markers ask for what a backend cannot tap is skipped on that backend with the
+47. ~~A test whose `tap` markers ask for what a backend cannot tap is skipped on that backend with the
     reason, before any fixture is set up, and runs on the others; one that asks for what no backend
     can tap, or for an interface its profile does not have, is a collection error that names the
-    test.
-    `tests/test_pytest_plugin.py::test_a_backend_that_cannot_give_a_tap_skips_with_the_reason`,
-    `tests/test_pytest_plugin.py::test_a_marker_no_backend_can_satisfy_is_a_collection_error`,
-    `tests/test_boards.py::test_a_request_no_backend_can_give_is_an_error_not_a_skip`
-48. A board marker (`app_path`, `board_profile`, `tap`) that reaches a test from a `pytest.param`,
+    test.~~ No longer holds since #21, which removed the `tap` marker: see 46.
+48. ~~A board marker (`app_path`, `board_profile`, `tap`) that reaches a test from a `pytest.param`,
     or from a hook on the test, its class or its module, stops the run with a usage error, so no tap
-    a test asks for goes unchecked.
+    a test asks for goes unchecked.~~ No longer holds since #21, which removed the `tap` marker: see
+    51.
+51. A board marker (`app_path`, `board_profile`) that reaches a test from a `pytest.param`, or from
+    a hook on the test, its class or its module, stops the run with a usage error, so no profile a
+    test runs on goes unchecked.
     `tests/test_pytest_plugin.py::test_a_board_marker_in_a_pytest_param_is_refused`,
     `tests/test_pytest_plugin.py::test_a_board_marker_a_hook_adds_is_refused`
 
@@ -111,16 +112,19 @@ that references to its number keep their meaning.
 45. The runner starts at `board.power_on()`, not at setup: a test that never powers on starts no
     runner, and one that set up a source and passed without powering on fails at teardown; a test
     that failed, was skipped or xfailed keeps its one outcome. A wait before power-on raises
-    `BoardOff`, and a source after it `SourceError`.
+    `BoardOff`, and a source or a tap after it `SourceError`. A tap counts as set up too.
     `tests/test_pytest_plugin.py::test_the_board_runs_the_profile_the_test_chose_and_starts_no_runner_unpowered`,
     `tests/test_pytest_plugin.py::test_a_test_that_sets_up_a_source_and_never_powers_on_fails_at_teardown`,
+    `tests/test_pytest_plugin.py::test_a_test_that_taps_a_route_and_never_powers_on_fails_at_teardown`,
     `tests/test_pytest_plugin.py::test_the_board_s_clock_and_sources_go_in_order`,
     `tests/test_gnss_fixture.py::test_a_source_given_out_of_order_fails_the_test`; the same holds
     for a card in the SD card slot.
     `tests/test_sdspi.py::test_the_slot_used_out_of_order_fails_the_test`
-46. A source the backend's capability declaration does not give skips the test at the call that
-    asks for it, reported at the test; one that no backend gives fails the test with `SourceError`.
-    `tests/test_pytest_plugin.py::test_a_source_the_backend_cannot_give_skips_at_the_call`
+46. A source or a tap the backend's capability declaration does not give skips the test at the call
+    that asks for it, reported at the test; one that no backend gives fails the test with
+    `SourceError`.
+    `tests/test_pytest_plugin.py::test_a_source_or_a_tap_the_backend_cannot_give_skips_at_the_call`,
+    `tests/test_tap.py::test_a_tap_the_backend_refuses_is_not_made`
 49. Every test that uses `board` has a wall-time timeout, 600 s unless the session or the test sets
     one, 0 included; a run that hangs is ended by it, and the teardown ends the runner.
     `tests/test_pytest_plugin.py::test_a_test_that_uses_board_gets_a_wall_time_timeout_unless_one_is_set`,
@@ -128,7 +132,7 @@ that references to its number keep their meaning.
 50. Every UART route of the board profile is on the link, listening and silent until the test gives
     it a source: the harness's `hello` watches the pins of all of them.
     `tests/test_pytest_plugin.py::test_every_route_of_the_profile_is_on_the_link`
-52. A card in the SD card slot writes through to the test's own image file: what the firmware
+56. A card in the SD card slot writes through to the test's own image file: what the firmware
     wrote is in the file, readable with mtools, and a card the firmware only reads leaves the file
     as it was. The runner gets the card only once the test inserts one.
     `tests/test_sdspi.py::test_the_example_writes_its_files_into_the_image`,
@@ -192,7 +196,7 @@ that references to its number keep their meaning.
 42. A harness `hello` whose `watch` holds a pin the classic chip does not have (24, 28 to 31, 40
     and above) is a protocol error at the handshake, before the guest runs.
     `runner/src/session/tests.rs::a_handshake_mismatch_is_a_protocol_error_with_stats`
-51. The SD card hears a transaction only while its CS pin is a low output and its SCLK pin carries
+55. The SD card hears a transaction only while its CS pin is a low output and its SCLK pin carries
     the master's clock, and the chip reads its answer only through the card's MISO pin; until a
     CMD0 with a good CRC it answers nothing. A card not selected leaves every byte at 0xff.
     `runner/src/sd_card/tests.rs::a_card_not_selected_or_not_clocked_hears_nothing`,
@@ -235,6 +239,22 @@ that references to its number keep their meaning.
 37. A replay runs on the emulated clock: ten fixes, ten emulated seconds, reach the console in
     under five wall seconds, and the board's clock reads just past 10 s.
     `tests/test_nmea_reader.py::test_time_is_emulated`
+52. A tap records every byte that crossed its route, `out` of the ESP32 and `in` from whatever is
+    at the far end, at the time it crossed, and writes it once the run has ended as a recording in
+    time order that reads back: a tap of a replay holds the replay's events as they were recorded.
+    `tests/test_tap.py::test_a_tap_writes_its_events_in_time_order_with_the_header`,
+    `tests/test_tap.py::test_a_tapped_uart_records_both_ways_whatever_its_source`,
+    `tests/test_pytest_plugin.py::test_a_tap_records_what_crossed_the_route_both_ways`,
+    `tests/test_gnss_fixture.py::test_a_tap_of_a_replay_records_what_went_in`
+54. A tap never writes over a file the run replays from or another route is tapped into, and a
+    replay never reads a file a route is tapped into: both are refused at the call.
+    `tests/test_tap.py::test_a_tap_never_writes_over_a_file_the_run_reads_or_writes`
+53. The report of a test that failed shows the run on the board's clock: the test's steps,
+    the console's lines and the bytes on every route, in the order of the board's time; that of a
+    test that passed shows the bytes on every route, not the run.
+    `tests/test_pytest_plugin.py::test_the_report_of_a_failing_test_shows_the_run_on_the_board_s_clock`,
+    `tests/test_pytest_plugin.py::test_a_tap_records_what_crossed_the_route_both_ways`,
+    `tests/test_run_report.py::test_entries_are_shown_in_the_order_of_the_board_s_time`
 
 ## The esp32tl command
 
@@ -256,7 +276,7 @@ that references to its number keep their meaning.
     `flasher_args.json`, leaves none.
     `tests/test_firmware_build.py::test_failed_build_unmarks_a_finished_one`,
     `tests/test_firmware_build.py::test_build_fails_without_flasher_args`
-53. `sdspi` is ESP-IDF's example unmodified: its SD card pins are the `esp32-devkitc` profile's
+57. `sdspi` is ESP-IDF's example unmodified: its SD card pins are the `esp32-devkitc` profile's
     slot, and it formats no card.
     `tests/test_firmware_images.py::test_sdspi_takes_the_devkit_sd_card_slot_from_sdkconfig`
 

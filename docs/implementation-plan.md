@@ -474,6 +474,12 @@ recording is changed. The repository goes public here.
 
 ### M2. Tap and the matching engine
 
+*As built (#21): a test taps a route with `gnss.tap(path)` before `board.power_on()`, not with the
+`tap` marker, which is gone, and the backend writes the recording at the end of the run
+([run report](features/run-report-user.md)). `stats` go into the `esp32sim link` section of every
+test, with the bytes on each route, and a test that failed gets the run on the board's clock
+there as well. `esp32tl record` and the engine's unseen-request list come with #20.*
+
 - `tap(path)` on `model` and `replay` sources; writes the format in 4.3 in both directions. (`real`
   comes with M5.)
 - `matching.py` with the four rules and the default `Protocol` configurations of 4.4 with their

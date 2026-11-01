@@ -2,7 +2,8 @@
 # (plan §4.5; the table "Backends and what each can swap" of the specification, issue #1).
 # `console` is the firmware's UART0, which every board has; `uart` is every [uart.<role>] route
 # of a board profile; `sd_card` is a profile's [sd_card] slot. A source or a tap that a backend
-# does not list here makes the `board` fixture skip the test on that backend, with the reason.
+# does not list here skips the test on that backend, with the reason, at the call in the test's
+# body that asks for it (`gnss.replay`, `gnss.tap`, `sd_card.insert`).
 
 # The emulator: whatever is at the far end of a route is esp32tl's to choose.
 [esp32sim]
