@@ -30,6 +30,7 @@ the two differ. How to write each document: `docs/guides/documentation.md`.
 - `esp32tl/sources/replay.py` → `docs/features/replay-*.md`
 - `esp32tl/tap.py`, `esp32tl/report.py` → `docs/features/run-report-*.md`
 - `esp32tl/units.py`, `esp32tl/sources/model/` → `docs/features/models-*.md`
+- `esp32tl/bluetooth/` → `docs/features/bluetooth-peer-*.md`
 - any other `esp32tl/` path → a new `docs/features/<feature>-*.md` and a row in the ownership map
 - `.github/workflows/` → `docs/cicd.md`
 - `Makefile`, `.pre-commit-config.yaml`, `scripts/fetch-rom-elf`, `scripts/venv-tool`,

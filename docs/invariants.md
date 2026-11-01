@@ -334,6 +334,36 @@ that references to its number keep their meaning.
     `tests/test_clock.py::test_console_lines_are_stamped_with_the_time_their_ending_came_at`,
     `tests/test_clock.py::test_a_line_condition_finds_the_first_matching_line_from_when_it_was_made`
 
+## Bluetooth peer
+
+68. Time on the air moves only when the test moves it, and asyncio's timers fire at their time on
+    the board's clock, never the host's.
+    `tests/test_air.py::test_timers_fire_at_their_board_time_and_only_while_the_test_moves_it`,
+    `tests/test_air.py::test_a_party_is_polled_at_every_instant_the_air_stops_at`
+69. The SPP peer is found by its name and pairs only with its PIN: another PIN fails the
+    authentication, detaches the link and leaves no key on either side; a device that paired
+    authenticates later with its key and no PIN, and one whose key the peer lost is refused.
+    `tests/test_spp_peer.py::test_the_device_finds_the_peer_by_its_name_and_its_answer_comes_on_the_boards_clock`,
+    `tests/test_spp_peer.py::test_a_wrong_pin_fails_the_authentication_and_detaches_the_link`,
+    `tests/test_spp_peer.py::test_a_device_that_paired_authenticates_with_its_key_without_a_pin`,
+    `tests/test_spp_peer.py::test_a_peer_that_lost_the_key_refuses_the_device_that_kept_it`
+70. What the device writes on the SPP channel reaches the model at the instant it arrives, and what
+    the model sends goes out at the time it gives, never earlier, in order; what it sends while no
+    device holds the channel is lost; two runs cross the channel at the same instants.
+    `tests/test_spp_peer.py::test_the_device_finds_the_peer_by_its_name_and_its_answer_comes_on_the_boards_clock`,
+    `tests/test_spp_peer.py::test_what_the_source_sends_unprompted_goes_out_at_its_time_or_is_lost`,
+    `tests/test_spp_peer.py::test_what_the_source_sends_after_the_channel_closes_is_lost`,
+    `tests/test_spp_peer.py::test_a_source_that_gets_its_answer_wrong_fails_the_air_naming_the_peer`,
+    `tests/test_spp_peer.py::test_two_runs_cross_the_channel_at_the_same_instants`
+71. The SPP channel opens to one device at a time, and, unless the peer is made with
+    `secure=False`, only on a link that device authenticated; two that ask at one instant get it
+    one.
+    `tests/test_spp_peer.py::test_the_channel_opens_to_one_device_at_a_time`,
+    `tests/test_spp_peer.py::test_two_devices_that_ask_for_the_channel_at_one_instant_get_it_one`,
+    `tests/test_spp_peer.py::test_the_channel_opens_only_on_a_link_the_device_authenticated`,
+    `tests/test_spp_peer.py::test_an_authenticated_link_needs_no_encryption_for_the_channel`,
+    `tests/test_spp_peer.py::test_a_peer_that_is_not_secure_opens_the_channel_on_any_link`
+
 ## The esp32tl command
 
 38. Ctrl-C ends a run of `esp32tl run` or `esp32tl replay` with one `SIGTERM` to the runner, which
@@ -368,12 +398,12 @@ that references to its number keep their meaning.
 
 ## Cellular modem
 
-68. Noncommands and command-mode `+++` produce no answer, including across UART chunks. Only a
+72. Noncommands and command-mode `+++` produce no answer, including across UART chunks. Only a
     complete AT line is answered, at least 1 ms after the timestamp of its terminator-containing
     UART chunk; an escape cannot shift a registration reply by one command.
     `tests/test_modem_model.py::test_noise_and_command_mode_escape_never_leave_a_reply`,
     `tests/test_modem_model.py::test_command_framing_and_response_times_do_not_depend_on_uart_chunks`
-69. The modem and the test cannot both drive RI. PWRKEY uses the profile's pulse thresholds,
+73. The modem and the test cannot both drive RI. PWRKEY uses the profile's pulse thresholds,
     and a missing supply prevents a pulse from restoring modem power. RI follows power; a power
     loss before a pending RI response cancels that response. The validation firmware leaves at
     least 2 s between the off pulse's release and the next on pulse.
@@ -382,18 +412,18 @@ that references to its number keep their meaning.
     `tests/test_modem_model.py::test_nominal_lilygo_pulses_work_even_when_a_tick_truncates_them`,
     `tests/test_modem_model.py::test_power_loss_before_a_scheduled_ri_response_cancels_that_response`,
     `tests/test_modem_fixture.py::test_modem_at_dialogue_and_changes_on_the_test_clock`
-70. Two AT-only firmware runs on the LilyGO route produce the same modem bytes at the same
+74. Two AT-only firmware runs on the LilyGO route produce the same modem bytes at the same
     emulated times, without a network.
     `tests/test_modem_fixture.py::test_two_firmware_runs_produce_identical_modem_taps`
-71. Every AT command is retained with its time and reply, including unknown commands answered
+75. Every AT command is retained with its time and reply, including unknown commands answered
     with fallback OK, independently of the rolling wire log's capacity.
     `tests/test_modem_model.py::test_a_tap_and_report_keep_commands_even_after_the_wire_log_rolls_over`
-72. Packet-data dial variants (`ATD*99#`, explicit context `ATD*99***1#`, `ATD*99##` and
+76. Packet-data dial variants (`ATD*99#`, explicit context `ATD*99***1#`, `ATD*99##` and
     tone-prefixed `ATDT*99#`) enter data mode with CONNECT when registered and return NO CARRIER
     otherwise; none is a fallback OK.
     `tests/test_modem_model.py::test_packet_data_dial_variants_connect_or_report_no_carrier`
-73. A model's GPIO change appears in the run log only when sent, at its sent time; a cancelled
+77. A model's GPIO change appears in the run log only when sent, at its sent time; a cancelled
     pending change never appears as a wire event.
     `tests/test_modem_model.py::test_only_sent_model_gpio_changes_appear_in_the_run_log`
-74. A source selection that loses to another source must leave no GPIO ownership behind.
+78. A source selection that loses to another source must leave no GPIO ownership behind.
     `tests/test_modem_model.py::test_a_model_selection_that_loses_to_replay_does_not_claim_ri`

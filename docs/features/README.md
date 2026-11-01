@@ -17,6 +17,7 @@ templates.
 | Replay: a stream recording at the far end of an interface, `gnss.replay(path)` | [user](replay-user.md) | [technical](replay-technical.md) | `esp32tl/sources/replay.py` |
 | Taps and the run report: `gnss.tap(path)`, the run on the board's clock in a failing test's report | [user](run-report-user.md) | [technical](run-report-technical.md) | `esp32tl/tap.py`, `esp32tl/report.py` |
 | Models and units: the GNSS receiver a test describes, `gnss.fix(at=...)`, and quantities with their unit | [user](models-user.md) | [technical](models-technical.md) | `esp32tl/units.py`, `esp32tl/sources/model/` except `modem.py` |
+| Bluetooth peer: a Classic device with SPP on Bumble's virtual link, answered by a model on the board's clock | [user](bluetooth-peer-user.md) | [technical](bluetooth-peer-technical.md) | `esp32tl/bluetooth/` |
 | Cellular modem: AT dialogue, signal, registration, PWRKEY and RI | [user](modem-user.md) | [technical](modem-technical.md) | `esp32tl/sources/model/modem.py`, `esp32tl/interfaces/modem.py` |
 
 ## Ownership map
@@ -45,13 +46,14 @@ GitHub Action, a pre-commit hook or a Python dependency.
 | F9 | `^runner/src/protocol\.rs$` | `^docs/protocol\.md$` | Link protocol changed in runner/src/protocol.rs: update docs/protocol.md, and its version if the wire changes |
 | F10 | `^runner/src/socket_board\.rs$` | `^docs/protocol\.md$` | Link protocol changed in runner/src/socket_board.rs: update docs/protocol.md, and its version if the wire changes |
 | F11 | `^firmware/` | `^docs/features/validation-firmware-` | Validation firmware or its build changed: update docs/features/validation-firmware-*.md |
-| F12 | `^esp32tl/`, without the paths of F1 to F11, F13 to F18 and `esp32tl/py.typed` | `^docs/features/[a-z0-9-]+\.md$`, a new file only | This path has no owning doc yet: add its feature docs, a new docs/features/<feature>-user.md or -technical.md, and add it to the ownership map (scripts/check-docs.py, docs/features/README.md, AGENTS.md) |
+| F12 | `^esp32tl/`, without the paths of F1 to F11, F13 to F19 and `esp32tl/py.typed` | `^docs/features/[a-z0-9-]+\.md$`, a new file only | This path has no owning doc yet: add its feature docs, a new docs/features/<feature>-user.md or -technical.md, and add it to the ownership map (scripts/check-docs.py, docs/features/README.md, AGENTS.md) |
 | F13 | `^esp32tl/boards/` | `^docs/features/board-profiles-` | Board profiles or the capability declaration changed (schema, pins, sources, taps): update docs/features/board-profiles-*.md |
 | F14 | `^esp32tl/recording\.py$` | `^docs/recording-format\.md$` | Recording format changed: docs/recording-format.md is its specification; update it, and its version if the format changes |
 | F15 | `^esp32tl/sources/replay\.py$` | `^docs/features/replay-` | Replay changed (what it replays, when, what it refuses): update docs/features/replay-*.md |
 | F16 | `^esp32tl/(tap\|report)\.py$` | `^docs/features/run-report-` | Taps or the run report changed (what a tap writes, what the report shows): update docs/features/run-report-*.md |
 | F17 | `^esp32tl/(units\.py\|sources/model/(?!modem\.py$))` | `^docs/features/models-` | Models or units changed (quantities, the GNSS receiver, its sentences): update docs/features/models-*.md |
-| F18 | `^esp32tl/sources/model/modem\.py$` | `^docs/features/modem-` | Modem model changed (AT dialogue, power, registration): update docs/features/modem-*.md |
+| F18 | `^esp32tl/bluetooth/` | `^docs/features/bluetooth-peer-` | Bluetooth peer changed (the air's clock, the controller, the SPP peer): update docs/features/bluetooth-peer-*.md |
+| F19 | `^esp32tl/sources/model/modem\.py$` | `^docs/features/modem-` | Modem model changed (AT dialogue, power, registration): update docs/features/modem-*.md |
 | C1 | `^\.github/workflows/` | `^docs/cicd\.md$` | CI workflow changed: update docs/cicd.md |
 | C2 | `^Makefile$` | `^docs/guides/development\.md$` | Makefile changed: update the make targets in docs/guides/development.md |
 | C3 | `^\.pre-commit-config\.yaml$` | `^docs/guides/development\.md$` | Pre-commit hooks changed: update docs/guides/development.md |
@@ -70,7 +72,7 @@ Where one directory has several owners, the map lists its files by name: `script
 the development guide, C9, C10 for the documentation guide, C12 for the validation firmware, C13
 for the testing guide) and the runner's top level (F7 for `Cargo.toml`, C6 for the toolchain;
 `Cargo.lock` is nobody's), and `esp32tl/sources/` (F15 for `replay.py`, F17 for `model/` except
-`modem.py`, F18 for that modem; its other files are F12's until they have documents of their own).
+`modem.py`, F19 for that modem; its other files are F12's until they have documents of their own).
 `runner/src/` instead carves the protocol files out of F6, so that a new runner file is owned from
 its first line. `pyproject.toml` has several owners in one file: C7 accepts any of their
 documents, and review checks the choice.
@@ -79,5 +81,5 @@ Left out on purpose: test files, which describe behaviour rather than change it;
 `runner/Cargo.lock`, whose pin that matters is in `Cargo.toml`; `recordings/`, test data (C12
 owns the script that generates the GNSS ones); `esp32tl/py.typed`, `LICENSE` and `.gitignore`;
 and the files that are documentation or rules themselves (`docs/`, `README.md`, `AGENTS.md`,
-`CONTRIBUTING.md`, the pull request template, `.claude/`). Build output is ignored by git and
-never part of a change.
+`CONTRIBUTING.md`, the pull request template, `.claude/`, `.agents/`). Build output is ignored by
+git and never part of a change.

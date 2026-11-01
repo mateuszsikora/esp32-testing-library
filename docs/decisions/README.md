@@ -47,6 +47,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Titles carry a type and an optional scope, with no catch-all scope](docs.md#titles-carry-a-type-and-an-optional-scope-with-no-catch-all-scope) | `docs.md` | decided (#44) |
 | [The create-pr skill takes no arguments](docs.md#the-create-pr-skill-takes-no-arguments) | `docs.md` | decided (#44) |
 | [The squash settings stay as GitHub's defaults](docs.md#the-squash-settings-stay-as-githubs-defaults) | `docs.md` | decided (#44) |
+| [Codex discovers create-pr through a symlink to the existing skill](docs.md#codex-discovers-create-pr-through-a-symlink-to-the-existing-skill) | `docs.md` | decided (#89) |
 
 ## Validation firmware, ESP-IDF and the ROM ELF
 
@@ -158,6 +159,12 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Inserting and removing the SD card while the firmware runs is postponed](harness.md#inserting-and-removing-the-sd-card-while-the-firmware-runs-is-postponed) | `harness.md` | postponed (#32) |
 | [The SD card tests skip without mtools, and CI makes sure it is there](harness.md#the-sd-card-tests-skip-without-mtools-and-ci-makes-sure-it-is-there) | `harness.md` | decided (#32) |
 | [The esp32tl command takes no SD card yet](harness.md#the-esp32tl-command-takes-no-sd-card-yet) | `harness.md` | postponed (#32) |
+| [The Bluetooth peer runs Bumble in the harness, on the board's clock](harness.md#the-bluetooth-peer-runs-bumble-in-the-harness-on-the-boards-clock) | `harness.md` | decided (#33) |
+| [esp32tl adds inquiry, legacy pairing, key checks and encryption to Bumble's virtual controller](harness.md#esp32tl-adds-inquiry-legacy-pairing-key-checks-and-encryption-to-bumbles-virtual-controller) | `harness.md` | decided (#33) |
+| [A model answers the SPP channel as the far end of a UART does](harness.md#a-model-answers-the-spp-channel-as-the-far-end-of-a-uart-does) | `harness.md` | decided (#33) |
+| [The SPP peer opens its channel to one device, on a link that device authenticated](harness.md#the-spp-peer-opens-its-channel-to-one-device-on-a-link-that-device-authenticated) | `harness.md` | decided (#33) |
+| [A bt fixture, an HCI tap and a replayed peer are postponed](harness.md#a-bt-fixture-an-hci-tap-and-a-replayed-peer-are-postponed) | `harness.md` | postponed (#33) |
+| [bumble is a dependency of esp32tl, pinned exactly](harness.md#bumble-is-a-dependency-of-esp32tl-pinned-exactly) | `harness.md` | decided (#33) |
 | [The modem drives RI through Lines and observes PWRKEY through it](harness.md#the-modem-drives-ri-through-lines-and-observes-pwrkey-through-it) | `harness.md` | decided (#29) |
 | [The modem begins powered and registered and keeps every AT command](harness.md#the-modem-begins-powered-and-registered-and-keeps-every-at-command) | `harness.md` | decided (#29) |
 | [The modem data peer and realistic escape timing wait for network integration](harness.md#the-modem-data-peer-and-realistic-escape-timing-wait-for-network-integration) | `harness.md` | postponed (#30) |

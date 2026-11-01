@@ -215,3 +215,16 @@ skill describe what those settings do.
 
 **Rejected:** changing the settings to match the documents, because the documents can describe
 the defaults exactly.
+
+## Codex discovers create-pr through a symlink to the existing skill
+
+Status: decided (#89)
+
+`.agents/skills/create-pr` is a relative symlink to `../../.claude/skills/create-pr`.
+Codex scans `.agents/skills` and follows symlinked skill folders
+([OpenAI's skill documentation](https://learn.chatgpt.com/docs/build-skills#where-codex-loads-local-skills));
+Claude Code keeps its existing path. The skill's relative links to the repository root work
+through either path.
+
+**Rejected:** a separate copy for Codex, because the two workflows would drift. A user-level
+installation would also need setup on every machine instead of travelling with the checkout.

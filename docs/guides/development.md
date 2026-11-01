@@ -77,6 +77,7 @@ version-only bump needs no document ([documentation.md](documentation.md#the-che
 | `pytest-embedded` | `Dut`, `DuplicateStdoutPopen`, `MessageQueue`: the backend builds on them | Compatible release (`~=`) |
 | `pytest-embedded-idf[serial]` | `IdfApp`, which reads a build's `flasher_args.json`. pytest-embedded declares no extras, so each service is a package of its own; the `serial` extra pulls `pytest-embedded-serial-esp` and, through it, `pytest-embedded-serial` | Compatible release (`~=`), the same as `pytest-embedded` |
 | `pytest-timeout` | The wall-time timeout the plugin gives every test that uses `board`, which ends a run that hangs ([the test's timeout](../features/pytest-plugin-user.md#the-tests-timeout)); the plugin reads its settings through `pytest_timeout.get_env_settings` | Lower bound |
+| `bumble` | The Bluetooth stack of the peers in `esp32tl/bluetooth/`: their devices, and the virtual controller that `esp32tl/bluetooth/controller.py` extends ([bluetooth-peer-technical.md](../features/bluetooth-peer-technical.md)) | Exact (`==`): at 0.0.x any release may change the controller's internals that esp32tl overrides |
 
 The `dev` extra, which `make setup` installs, adds the tools:
 
@@ -180,6 +181,19 @@ each worktree before its first commit; without it the hook fails with
 The installed hook also remembers the `.venv` of the worktree where `make hooks` ran, to start
 pre-commit itself. If that worktree is removed, run `make hooks` again from another one.
 
+## Agent skills
+
+The repository's `create-pr` skill follows [CONTRIBUTING.md](../../CONTRIBUTING.md) when
+opening a pull request or updating its title and description. In Codex, invoke `$create-pr`;
+in Claude Code, invoke `/create-pr`. It takes no arguments and gathers context from the
+conversation, branch and issue tracker.
+
+Edit [`.claude/skills/create-pr/SKILL.md`](../../.claude/skills/create-pr/SKILL.md) when changing
+the workflow. The [shared-skill decision](../decisions/docs.md#codex-discovers-create-pr-through-a-symlink-to-the-existing-skill)
+describes how Codex discovers it. If the skill does not appear after the checkout changes,
+restart Codex. The workflow needs authenticated `gh` access and network access to GitHub for
+its preflight, push and PR operations; the session's permissions must allow those commands.
+
 ## Layout
 
 | Path | Contents |
@@ -196,7 +210,8 @@ pre-commit itself. If that worktree is removed, run `make hooks` again from anot
 | `docs/decisions/` | Why things are the way they are, one file per domain, with a generated index |
 | `docs/guides/` | How to work on the repository: this guide, [testing.md](testing.md), [documentation.md](documentation.md) |
 | `.github/` | The CI workflow (`workflows/ci.yml`) and the pull request template |
-| `.claude/` | Claude Code's skills and rules for this repository |
+| `.claude/` | Claude Code's rules and the `create-pr` skill shared with Codex through `.agents/skills/` |
+| `.agents/skills/` | Codex's repository skills; `create-pr` links to the shared skill under `.claude/skills/` |
 | `AGENTS.md` | The contract for every agent working here; `CLAUDE.md` is a symlink to it |
 
 Git ignores what the builds leave behind: `.venv/`, `.cache/` (the ROM ELF), `runner/target/`,

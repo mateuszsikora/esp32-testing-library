@@ -183,12 +183,13 @@ claims with their numbers, no "comprehensive", "robust", "seamless" or "enhance"
 `AGENTS.md` carries the contract for every agent; `CLAUDE.md` is a symlink to it. It stays under
 about 23 KiB, because Codex stops reading it at its `project_doc_max_bytes` (32 KiB) without saying
 so: the reasoning goes into `docs/` and `AGENTS.md` links to it. `.claude/rules/documentation.md`
-restates the table for Claude Code when it edits a source file; Codex does not read `.claude/`, so
-`AGENTS.md` carries the same rules.
+restates the table for Claude Code when it edits a source file; Codex does not automatically load
+`.claude/rules/`, so `AGENTS.md` carries the same rules.
 
-Skills that open, review or merge pull requests carry the contract. `create-pr` runs
-`make docs-check` before pushing and fills the Documentation section of the description. A skill
-added later for any of those jobs does the same:
+Skills that open, review or merge pull requests carry the contract. The shared
+[`create-pr` skill](development.md#agent-skills) runs `make docs-check` before pushing and fills
+the Documentation section of the description for both Claude Code and Codex. A skill added later
+for any of those jobs does the same:
 
 - **opening a pull request:** run `make docs-check` before pushing, and fill the Documentation
   section of the pull request template;
@@ -210,6 +211,6 @@ added later for any of those jobs does the same:
   no branch protection for private repositories, so no check can be required.
 - `pyproject.toml` has several owners (rule C7): the check accepts any of their documents, and
   review checks that it was the right one.
-- Agent tooling (`.claude/**`, skills) restates normative files (`CONTRIBUTING.md`, this guide,
-  `AGENTS.md`) and goes stale silently. When a skill and a normative file disagree, the skill is
-  wrong.
+- Agent tooling (`.claude/**`, `.agents/**`, skills) restates normative files (`CONTRIBUTING.md`,
+  this guide, `AGENTS.md`) and goes stale silently. When a skill and a normative file disagree,
+  the skill is wrong.

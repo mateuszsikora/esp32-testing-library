@@ -169,7 +169,7 @@ FEATURES = [
         "Taps or the run report changed (what a tap writes, what the report shows):"
         " update docs/features/run-report-*.md",
     ),
-    # The modem has its own feature documents (F18); the other models share units (F17).
+    # The modem has its own feature documents (F19); the other models share units (F17).
     Rule(
         "F17",
         r"^esp32tl/(units\.py|sources/model/(?!modem\.py$))",
@@ -179,6 +179,13 @@ FEATURES = [
     ),
     Rule(
         "F18",
+        r"^esp32tl/bluetooth/",
+        r"^docs/features/bluetooth-peer-",
+        "Bluetooth peer changed (the air's clock, the controller, the SPP peer):"
+        " update docs/features/bluetooth-peer-*.md",
+    ),
+    Rule(
+        "F19",
         r"^esp32tl/sources/model/modem\.py$",
         r"^docs/features/modem-",
         "Modem model changed (AT dialogue, power, registration): update docs/features/modem-*.md",

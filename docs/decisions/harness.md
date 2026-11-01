@@ -1195,6 +1195,111 @@ a run by hand can call the runner with `--sd-rw` and `--sd-spi` itself
 ([runner](../features/runner-user.md#put-an-sd-card-in)). An option comes when someone runs a card
 outside pytest.
 
+## The Bluetooth peer runs Bumble in the harness, on the board's clock
+
+Status: decided (#33)
+
+A Bluetooth peer is a [Bumble](https://github.com/google/bumble) device on Bumble's virtual link,
+in the harness's process, and its controllers, hosts and timers run on an asyncio loop whose time
+is the board's: the harness moves it from one instant something is due at to the next, as the link
+goes from turn to turn, and the loop never waits on the host's clock. What the link carries
+arrives at the instant it is sent, so discovery, pairing and connection take no time of the
+board's; only what something waits for does, a model's answer at its time, a Bumble timer, an
+inquiry's length. Two runs then exchange the same bytes at the same instants. Measured on
+2026-11-01: an inquiry, legacy pairing, encryption, SDP and an RFCOMM exchange with 1.05 s of the
+board's time in it took about 20 ms of wall time
+(`test_the_device_finds_the_peer_by_its_name_and_its_answer_comes_on_the_boards_clock`).
+
+**Rejected:** Bumble on asyncio's own loop, because its timers and the peer's answers would then
+fall in wall time, and runs would not repeat; Root Canal, Android's virtual controller, for the
+peer, because it is a separate binary that keeps its own time in wall time, so the test could not
+hold it, and it would have to be built or downloaded. Which controller the ESP32's side talks to
+is #34's to choose, once esp32sim has an HCI transport for Classic. Also rejected: a delay per
+packet on the link, because no test needs one and any value would be invented.
+
+## esp32tl adds inquiry, legacy pairing, key checks and encryption to Bumble's virtual controller
+
+Status: decided (#33)
+
+Bumble 0.0.236's `Controller` on a `LocalLink` answers `HCI_Inquiry` with
+`UNKNOWN_HCI_COMMAND_ERROR`, has no legacy pairing with a PIN (it goes to Secure Simple Pairing
+whatever the hosts support), takes a stored link key without asking the peer to prove it, and has
+no encryption on a Classic link. A peer has to be discovered by its name and pair with a PIN, as
+Bluetooth 2.0 SPP devices do, so `esp32tl/bluetooth/controller.py` subclasses Bumble's controller
+and adds them, in the order the specification gives the HCI events, for links whose controllers
+are all of that class. Its keys and responses are SHA-256 over the specification's inputs instead
+of SAFER+: a PIN that differs still gives another key and fails the check, which is what a test
+sees, and no key leaves the link but through the hosts. The peer pairs with a PIN only, as the
+devices it stands for do.
+
+**Rejected:** contributing the additions to Bumble first, because they are proven only by these
+tests so far, and with stand-in keys they are not what Bumble would take; Bumble's controller as
+it is, because the peer could then be neither discovered nor paired with a PIN; and the
+specification's E1, E21 and E22, because SAFER+ would be code nobody outside the link can tell
+from the stand-in.
+
+## A model answers the SPP channel as the far end of a UART does
+
+Status: decided (#33)
+
+What answers the bytes on a peer's SPP channel is a `Source`, the protocol of the far end of a
+UART (`esp32tl/interfaces/uart.py`): `receive(t, data)` returns the answers with their times,
+`poll(now)` what it sends unprompted, `quiet_until()` when it next has something. A replay, the
+matching engine (#20) and the models of devices that sit on either a UART or SPP then fit both.
+What the source sends while no device holds the channel is lost and counted, as on the air. The
+peer checks what the source returns as `BoardLink` checks a UART's source, with messages that name
+the peer.
+
+**Rejected:** a callback that returns the answer's bytes, because an answer would then have no
+time of its own, and a delay the model chooses is part of what it models; and queueing what the
+source sends until a channel opens, because a device on the air does not keep what nobody
+received.
+
+## The SPP peer opens its channel to one device, on a link that device authenticated
+
+Status: decided (#33)
+
+A second device that asks for the channel while one holds it, or has been given it, is refused,
+as a device with one serial port refuses it. Unless the test says `secure=False`, the channel
+opens only on a link the device has authenticated, with the PIN or a key, which the peer checks
+when the device asks for the channel; the peer does not start the pairing itself. A firmware that
+never pairs then fails against the peer, as it would against a device that requires pairing,
+instead of passing. Encryption is not required: what a firmware that never pairs lacks is the
+authentication, and whether ESP-IDF's Bluedroid encrypts a link to a device without Secure Simple
+Pairing when SPP asks for `ESP_SPP_SEC_AUTHENTICATE` is not known; requiring it could fail
+firmware that a real device accepts. #34 can find out on `bt_spp_initiator`.
+
+**Rejected:** requiring encryption, for the reason above; giving the channel to the last device
+that asked, because the source's answers to
+the first device would go to the second; opening to any device by default, because a firmware
+that skips pairing would pass a test that a real device fails; and the peer starting
+authentication itself when the device asks for the channel, or when the link comes up (security
+mode 3), because Bumble's RFCOMM acceptor answers at once, without waiting, and authentication at
+link setup would need the controller to pair before `Connection_Complete`. Until a firmware is
+seen to rely on the peer starting it, the device must.
+
+## A bt fixture, an HCI tap and a replayed peer are postponed
+
+Status: postponed (#33)
+
+The peer is used from Python on an `Air`, and tested with a Bumble device in the ESP32's place,
+because esp32sim has no Classic controller for the guest (plan finding 9, #34). The `bt` fixture,
+the btsnoop tap and the validation with `bt_spp_initiator` come with #34; replaying a recorded SPP
+exchange needs the matching engine (#20), and plan M8's replayed peer waits for it.
+
+## bumble is a dependency of esp32tl, pinned exactly
+
+Status: decided (#33)
+
+`pyproject.toml` requires `bumble==0.0.236`. Bumble is at 0.0.x, where any release may change
+the internals esp32tl reaches into: the controller's, which `esp32tl/bluetooth/controller.py`
+overrides, and the RFCOMM multiplexer's acceptor and DLC's DISC handling, which
+`esp32tl/bluetooth/peer.py` replaces. A new version is taken by changing the pin, running the
+tests, and checking whether each of those is still needed.
+
+**Rejected:** an optional extra, because the Bluetooth fixture will be the plugin's and the plugin
+has no optional dependencies; and a compatible release, `~=0.0.236`, which admits every 0.0.x.
+
 ## The modem drives RI through Lines and observes PWRKEY through it
 
 Status: decided (#29)
