@@ -167,3 +167,40 @@ The `runner` job installs rustup only on a cache miss, so on hp600g1 `~/.cargo/b
 
 **Rejected:** a composite action shared by both jobs, because it is more than two copies of six
 lines are worth.
+
+## The determinism job runs tests of its own twice and compares what they leave
+
+Status: decided (#22)
+
+`make determinism` runs `tests/test_determinism.py` twice, each run with a fixed `--basetemp` and a
+`--junitxml` of its own, and `scripts/check-determinism.py` compares the two. Each test replays a
+recording, or describes a receiver to the GNSS model, taps the route into its `tmp_path`, ends the
+run at a board time it chose, and writes the console there with the board's time of each line;
+the fixed basetemp gives its `tmp_path` the same name in both runs. The `esp32sim_link` property
+in the JUnit XML adds the runner's stats: where the run ended and its turns. Only the tap header's
+`created`, the basetemp in a tap's path and pytest's `*current` symbolic links are left out. A
+difference is printed in the log as a diff, not uploaded, since the account's artifact quota is
+full. When the job was written, a test that waited 5 s in one run and 6 s in the other failed the
+check on its console, its tap and the stats.
+
+**Rejected:** diffing pytest-embedded's `dut.log`, because each of its lines starts with the
+wall-clock time the log forwarder read it (`2026-11-01 11:52:20`), the runner's last line holds
+the run's wall time (`end: stop from the peer at 21.100000 s (0.8 s wall, 0 resets, 33 turns)`),
+and the backend does not wait for the forwarder at the end of the run, so its last lines may be
+missing. Running the whole suite twice, because most of its tests use no board or run generated
+suites through `pytester`, and its board tests write neither their console nor a tap. A test in
+the suite that runs a generated suite twice through `pytester`, because it would run on every
+Python of the `test` matrix and fail as one test among many; a job of its own is a check of its
+own on the pull request, as plan section 6 has it.
+
+## The determinism job runs on Linux and Python 3.11 only
+
+Status: decided (#22)
+
+The `determinism` job has no matrix: it runs on hp600g1 with Python 3.11, as `lint` does. What it
+checks is that one machine runs one test the same way twice. It restores the same tarballs as the
+`test` jobs, with its own copy of their restore and unpack steps.
+
+**Rejected:** the `test` matrix's platforms and Pythons, because every extra entry queues on the
+one self-hosted machine and checks nothing more; comparing runs across machines, because nothing
+claims that two machines give the same run.

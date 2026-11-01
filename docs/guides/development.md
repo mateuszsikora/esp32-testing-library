@@ -47,6 +47,7 @@ After `make setup` and `make firmware`, `.venv/bin/pytest` runs the tests direct
 | `make test-runner` | The runner's Rust unit tests, `cargo test --locked`, in `RUNNER_PROFILE` like `build-runner`; `RUNNER_PROFILE=dev` skips the fat-LTO link while iterating |
 | `make firmware` | Builds every validation image in the pinned ESP-IDF container, into `firmware/<image>/build/` |
 | `make test` | Runs `make setup` and `make test-runner`, builds the validation images that are missing (`FIRMWARE_IMAGES`: `hello_world`, `nmea_reader`, `gpio_echo` and `sdspi`), then runs `.venv/bin/pytest` |
+| `make determinism` | Runs `tests/test_determinism.py` twice through `scripts/check-determinism.py` and compares the two runs ([testing.md](testing.md#determinism)); builds the `nmea_reader` image when it is missing and `.venv` when it is missing or stale, but not the runner or the ROM ELF: run `make setup` first |
 | `make lint` | `ruff check`, `ruff format --check` and `mypy`; `cargo fmt --check` and `cargo clippy --locked --all-targets -- -D warnings` on the runner |
 | `make hooks` | Installs the pre-commit hooks ([Pre-commit hooks](#pre-commit-hooks)) |
 | `make docs-check` | Checks that the changes on this branch update the documentation they need ([documentation.md](documentation.md#the-check)); `BASE=REF` (passed as `--base REF`) compares with the merge base with `REF` rather than with the default branch |
@@ -188,7 +189,7 @@ pre-commit itself. If that worktree is removed, run `make hooks` again from anot
 | `recordings/` | Committed recordings for the tests: `gnss-generated-1.jsonl` and `gnss-generated-2.jsonl`, which `scripts/generate-gnss-recordings.py` writes ([validation-firmware-user.md](../features/validation-firmware-user.md#the-gnss-recordings)) |
 | `tests/` | The pytest suite ([testing.md](testing.md)) |
 | `tools/` | Stage 0 measurement firmware (`cryptobench`, `deepsleep`, ESP-IDF projects) and `benchtime.py`, which times their runs ([stage0-findings.md](../stage0-findings.md#reproducing)) |
-| `scripts/` | `fetch-rom-elf` (`make rom-elf`), `venv-tool` (the pre-commit hooks), `check-docs.py` (`make docs-check`), `decisions-index.py` (the decisions index), `generate-gnss-recordings.py` (the GNSS recordings in `recordings/`) |
+| `scripts/` | `fetch-rom-elf` (`make rom-elf`), `venv-tool` (the pre-commit hooks), `check-docs.py` (`make docs-check`), `decisions-index.py` (the decisions index), `generate-gnss-recordings.py` (the GNSS recordings in `recordings/`), `check-determinism.py` (`make determinism`) |
 | `docs/` | The implementation plan, the link protocol, the Stage 0 findings and the CI description; `docs/README.md` says what lives where |
 | `docs/features/` | One user and one technical document per feature |
 | `docs/decisions/` | Why things are the way they are, one file per domain, with a generated index |

@@ -22,6 +22,8 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Clippy runs in the lint job, with no cache](ci.md#clippy-runs-in-the-lint-job-with-no-cache) | `ci.md` | decided (#50) |
 | [The lint job runs Python 3.11](ci.md#the-lint-job-runs-python-311) | `ci.md` | decided (#50) |
 | [The lint job carries its own copy of the rustup step](ci.md#the-lint-job-carries-its-own-copy-of-the-rustup-step) | `ci.md` | decided (#50) |
+| [The determinism job runs tests of its own twice and compares what they leave](ci.md#the-determinism-job-runs-tests-of-its-own-twice-and-compares-what-they-leave) | `ci.md` | decided (#22) |
+| [The determinism job runs on Linux and Python 3.11 only](ci.md#the-determinism-job-runs-on-linux-and-python-311-only) | `ci.md` | decided (#22) |
 
 ## Documentation and the documentation check
 

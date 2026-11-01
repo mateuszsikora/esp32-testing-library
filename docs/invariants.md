@@ -280,6 +280,12 @@ that references to its number keep their meaning.
     `tests/test_pytest_plugin.py::test_a_tap_records_what_crossed_the_route_both_ways`,
     `tests/test_run_report.py::test_entries_are_shown_in_the_order_of_the_board_s_time`,
     `tests/test_sdspi.py::test_the_example_writes_its_files_into_the_image`
+65. Two runs of one recording are identical: the console line by line with the board's times, the
+    tap but for its header's `created`, and the runner's stats, for `nmea_reader` fed each
+    generated recording and fed the receiver model. `make determinism` (the `determinism` CI job)
+    runs these tests twice and fails on any difference.
+    `tests/test_determinism.py::test_a_replay`,
+    `tests/test_determinism.py::test_the_receiver_model`
 
 ## Models, units and console lines
 
