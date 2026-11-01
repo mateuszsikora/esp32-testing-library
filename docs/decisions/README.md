@@ -47,6 +47,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Titles carry a type and an optional scope, with no catch-all scope](docs.md#titles-carry-a-type-and-an-optional-scope-with-no-catch-all-scope) | `docs.md` | decided (#44) |
 | [The create-pr skill takes no arguments](docs.md#the-create-pr-skill-takes-no-arguments) | `docs.md` | decided (#44) |
 | [The squash settings stay as GitHub's defaults](docs.md#the-squash-settings-stay-as-githubs-defaults) | `docs.md` | decided (#44) |
+| [Codex discovers create-pr through a symlink to the existing skill](docs.md#codex-discovers-create-pr-through-a-symlink-to-the-existing-skill) | `docs.md` | decided (#89) |
 
 ## Validation firmware, ESP-IDF and the ROM ELF
 

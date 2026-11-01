@@ -77,5 +77,5 @@ Left out on purpose: test files, which describe behaviour rather than change it;
 `runner/Cargo.lock`, whose pin that matters is in `Cargo.toml`; `recordings/`, test data (C12
 owns the script that generates the GNSS ones); `esp32tl/py.typed`, `LICENSE` and `.gitignore`;
 and the files that are documentation or rules themselves (`docs/`, `README.md`, `AGENTS.md`,
-`CONTRIBUTING.md`, the pull request template, `.claude/`). Build output is ignored by git and
-never part of a change.
+`CONTRIBUTING.md`, the pull request template, `.claude/`, `.agents/`). Build output is ignored by
+git and never part of a change.

@@ -179,6 +179,19 @@ each worktree before its first commit; without it the hook fails with
 The installed hook also remembers the `.venv` of the worktree where `make hooks` ran, to start
 pre-commit itself. If that worktree is removed, run `make hooks` again from another one.
 
+## Agent skills
+
+The repository's `create-pr` skill follows [CONTRIBUTING.md](../../CONTRIBUTING.md) when
+opening a pull request or updating its title and description. In Codex, invoke `$create-pr`;
+in Claude Code, invoke `/create-pr`. It takes no arguments and gathers context from the
+conversation, branch and issue tracker.
+
+Edit [`.claude/skills/create-pr/SKILL.md`](../../.claude/skills/create-pr/SKILL.md) when changing
+the workflow. The [shared-skill decision](../decisions/docs.md#codex-discovers-create-pr-through-a-symlink-to-the-existing-skill)
+describes how Codex discovers it. If the skill does not appear after the checkout changes,
+restart Codex. The workflow needs authenticated `gh` access and network access to GitHub for
+its preflight, push and PR operations; the session's permissions must allow those commands.
+
 ## Layout
 
 | Path | Contents |
@@ -195,7 +208,8 @@ pre-commit itself. If that worktree is removed, run `make hooks` again from anot
 | `docs/decisions/` | Why things are the way they are, one file per domain, with a generated index |
 | `docs/guides/` | How to work on the repository: this guide, [testing.md](testing.md), [documentation.md](documentation.md) |
 | `.github/` | The CI workflow (`workflows/ci.yml`) and the pull request template |
-| `.claude/` | Claude Code's skills and rules for this repository |
+| `.claude/` | Claude Code's rules and the `create-pr` skill shared with Codex through `.agents/skills/` |
+| `.agents/skills/` | Codex's repository skills; `create-pr` links to the shared skill under `.claude/skills/` |
 | `AGENTS.md` | The contract for every agent working here; `CLAUDE.md` is a symlink to it |
 
 Git ignores what the builds leave behind: `.venv/`, `.cache/` (the ROM ELF), `runner/target/`,
