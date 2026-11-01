@@ -24,10 +24,11 @@ a foot is 0.3048 m. `Heading(-90)` is `WEST`.
 
 - A `Duration` is also an instant on the board's clock: `board.now` is one, the time since
   power-on, and so is a console line's `at`. `line.at - back_at` is a `Duration`.
-- Quantities of one kind add, subtract, compare and sort; a number scales them, as in
-  `seconds(2) * 1.5`; one divided by another of its kind is a number. Kinds do not mix, so
-  `seconds(1) + m(1)` raises `TypeError`, except where physics says what comes out:
-  `km_h(36) * seconds(100) == km(1)`, and `km(1) / seconds(100) == m_s(10)`.
+- Durations, speeds and distances of one kind add, subtract, compare and sort; a number scales
+  them, as in `seconds(2) * 1.5` and `km_h(36) / 2`; one divided by another of its kind is a
+  number. Kinds do not mix, so `seconds(1) + m(1)` raises `TypeError`, except where physics says
+  what comes out: `km_h(36) * seconds(100) == km(1)`, `km(1) / seconds(100) == m_s(10)`, and
+  `km(1) / km_h(36) == seconds(100)`. Headings and positions only compare equal.
 - They print in their base unit: `str(ms(12_500))` is `12.5 s`, `str(km(1))` is `1000 m`, and
   `repr` writes the constructor, `seconds(12.5)`, `m(1000)`, which is what pytest shows when an
   assertion fails.
@@ -55,9 +56,9 @@ is false.
 
 ## The GNSS receiver
 
-`gnss` becomes a receiver the test describes at the first of these calls, which must come before
-`board.power_on()`. Every call after it, before or after power-on, changes the receiver from the
-board's current instant, `board.now`, until the test says something else, as the world does: time
+`gnss` becomes a receiver the test describes at the first of these calls that succeeds, which must
+come before `board.power_on()`; one that is refused leaves `gnss` as it was. Every call after it
+but `position`, before or after power-on, changes the receiver from the board's current instant, `board.now`, until the test says something else, as the world does: time
 passes only while the test waits.
 
 ```python
@@ -84,10 +85,10 @@ def test_follows_the_receiver_as_it_moves(board, gnss, console):
 | `gnss.degrade(*, hdop=None, satellites=None)` | Keeps its fix with another HDOP, another number of satellites, or both: worse, or better. It needs a fix |
 | `gnss.lose_fix()` | Has no fix, until the next `fix`; it goes on moving as it did |
 | `gnss.go_silent()` | Sends nothing, until `resume` |
-| `gnss.resume()` | Sends again, from the next epoch on |
-| `gnss.position` | Where it is now, fix or not, a `Position`; `None` until its first fix |
+| `gnss.resume()` | Sends again, from the epoch at this instant on, if one falls here, or else from the next |
+| `gnss.position` | Where it is now, fix or not, a `Position`; `None` until its first fix. Reading it changes nothing and makes no receiver: before any other call it raises `SourceError` |
 
-`hdop` is a number above 0 and up to 99.99; `satellites` a whole number from 1 to 99. Until its
+`hdop` is a number from 0.01 to 99.99, which the GGA writes to two decimals; `satellites` a whole number from 1 to 99. Until its
 first `fix`, as after a `lose_fix`, the receiver talks but has no fix, as one does after a cold
 start. A `fix` puts the receiver at `at` and stops it: to get the fix back where a moving receiver
 is, and keep it moving, say `gnss.fix(at=gnss.position)` and `gnss.move(...)` again.
@@ -135,10 +136,11 @@ $GPGGA,120001.00,,,,,0,00,99.99,,,,,,*64
 | `uart.gnss: the board is on already: give a route its source before board.power_on()` | `SourceError` | The first model call comes after `board.power_on()` |
 | `uart.gnss replays a recording: it has no receiver to describe; one source per test` | `SourceError` | A model call after `gnss.replay` |
 | `uart.gnss has its source already: one per test` | `SourceError` | `gnss.replay` after a model call |
+| `uart.gnss has no receiver: give it one with gnss.fix(at=...)` | `SourceError` | `gnss.position` before any model call |
 | `gnss.move: the receiver has no position to move from: give it a fix first, with gnss.fix(at=...)` | `ModelError` | `move` before any `fix` |
 | `gnss.degrade: the receiver has no fix to degrade: give it one first, with gnss.fix(at=...)` | `ModelError` | `degrade` without a fix |
 | `gnss.move: speed is -1 m/s, less than 0` | `ModelError` | A negative speed |
-| `gnss.fix: hdop is 0, not above 0 and up to 99.99` | `ModelError` | An HDOP out of range, also from `degrade` |
+| `gnss.fix: hdop is 0, not from 0.01 to 99.99` | `ModelError` | An HDOP out of range, also from `degrade` |
 | `gnss.degrade: satellites is 0, not from 1 to 99: a fix has some` | `ModelError` | A number of satellites out of range, also from `fix` |
 | `gnss.move: heading is 90, not a Heading, as NORTH`, `gnss.move: speed is 10, not a Speed, as km_h(50)`, `gnss.fix: at is (52, 21), not a Position` | `TypeError` | A plain number or tuple where a unit belongs |
 | `gnss.degrade: give it hdop=, satellites=, or both` | `TypeError` | `degrade()` with neither |

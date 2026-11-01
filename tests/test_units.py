@@ -81,8 +81,13 @@ def test_a_speed_over_a_time_is_a_distance_and_back() -> None:
     assert seconds(100) * m_s(10) == km(1)
     assert km(1) / seconds(100) == m_s(10)
     assert m_s(1) + m_s(2) - m_s(0.5) == m_s(2.5) and m_s(2) * 3 == m_s(6)
+    assert km_h(36) / 2 == km_h(18) and km_h(36) / km_h(18) == 2
+    # How long a kilometre takes at 36 km/h.
+    assert km(1) / km_h(36) == seconds(100)
     with pytest.raises(ZeroDivisionError, match="the duration is 0"):
         km(1) / seconds(0)
+    with pytest.raises(ZeroDivisionError, match="the speed is 0"):
+        km(1) / m_s(0)
 
 
 def test_quantities_of_different_kinds_do_not_mix() -> None:
@@ -111,6 +116,8 @@ def test_headings_are_degrees_clockwise_from_north() -> None:
         315,
     ]
     assert Heading(-90) == WEST and Heading(360) == NORTH and Heading(585) == SOUTH_WEST
+    # -1e-20 % 360 is 360.0 in floating point: still north, and below 360.
+    assert Heading(-1e-20) == NORTH and str(Heading(-1e-20)) == "north"
     assert str(EAST) == "east" and repr(NORTH_WEST) == "NORTH_WEST"
     assert str(Heading(30)) == "30°" and repr(Heading(30.5)) == "Heading(30.5)"
 

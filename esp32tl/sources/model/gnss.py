@@ -41,8 +41,10 @@ TALKER = "GP"
 # What a fix has unless the test says otherwise.
 HDOP = 0.9
 SATELLITES = 8
-# The HDOP a receiver reports without a fix, as u-blox receivers do.
+# The HDOP a receiver reports without a fix, as u-blox receivers do; and the lowest one the GGA's
+# two decimals can say.
 NO_FIX_HDOP = 99.99
+MIN_HDOP = 0.01
 
 # NMEA 0183's longest sentence, from `$` to the line ending included.
 SENTENCE_MAX = 82
@@ -174,8 +176,15 @@ class GnssReceiver:
         self._change(talking=False)
 
     def resume(self) -> None:
-        """Sentences again, from the next epoch on."""
-        self._change(talking=True)
+        """Sentences again, from the epoch at this instant on, if one falls here. The epochs of
+        the silence are not sent: a silent receiver bounds no turn, so the link may not have
+        polled it since they fell."""
+        with self._lock:
+            now = self._now()
+            if not self._state.talking and self._next is not None:
+                while self._next < now:
+                    self._next += PERIOD.ns
+            self._change_locked(talking=True)
 
     @property
     def position(self) -> Position | None:
@@ -205,16 +214,15 @@ class GnssReceiver:
         with self._lock:
             outputs = []
             for t in self._due(now):
-                # The receiver talks, it bounds every turn by its next epoch, so an epoch from
-                # before the last change is one it skipped while it was silent.
-                if self._state.talking and t >= self._state.since:
+                if self._state.talking:
                     outputs.append((t, self.epoch(t)))
             self.sent += len(outputs)
             return outputs
 
     def quiet_until(self) -> int | None:
         """The time of the next epoch; `None` while the receiver is silent, which it can stop
-        being only in a turn the test holds, before the link polls it."""
+        being only in a turn the test holds, before the link polls it, and `resume` moves the
+        next epoch past the silence."""
         with self._lock:
             return self._next if self._state.talking else None
 
@@ -283,8 +291,8 @@ def angle(degrees: float, digits: int, positive: str, negative: str) -> str:
 
 def _hdop(value: float, what: str) -> float:
     hdop = number(value, f"{what}: hdop")
-    if not 0 < hdop <= NO_FIX_HDOP:
-        raise ModelError(f"{what}: hdop is {value!r}, not above 0 and up to {NO_FIX_HDOP}")
+    if not MIN_HDOP <= hdop <= NO_FIX_HDOP:
+        raise ModelError(f"{what}: hdop is {value!r}, not from {MIN_HDOP} to {NO_FIX_HDOP}")
     return hdop
 
 

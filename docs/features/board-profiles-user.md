@@ -69,9 +69,10 @@ def test_reports_a_fix(board, gnss, console):
     ...
 ```
 
-- The source of an interface is the call that gives it: `gnss.replay(path)` is a `replay`, which
-  is the only source a call gives yet; `model` and `real` get theirs later. Asked for, a source a
-  backend does not declare skips the test at the call ([below](#when-a-backend-cannot-give-it)).
+- The source of an interface is the call that gives it: `gnss.replay(path)` is a `replay`, and
+  `gnss.fix(at=...)` or another call of the receiver model a `model`
+  ([models and units](models-user.md#the-gnss-receiver)); `real` gets its call later. Asked for, a
+  source a backend does not declare skips the test at the call ([below](#when-a-backend-cannot-give-it)).
 - `tap(*interfaces)`: the interfaces the test records. Taps add up: a module's and a test's both
   count. A tap decides, at collection, whether the test runs on a backend. No fixture taps an
   interface in this version.

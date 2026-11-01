@@ -29,7 +29,8 @@ the user sees is in [board-profiles-user.md](board-profiles-user.md).
    becomes a `Uart` on the link, its `Wire` the route's `tx`, `rx` and `baud`; the profile's lines
    are not on the link.
 4. **A source, in the test body.** `gnss.replay(path)` asks the backend, through the `Uart`'s
-   `asked`, for a `replay` on `uart.gnss`. `Esp32Sim._asked` builds `[Request(interface, source=source)]`,
+   `asked`, for a `replay` on `uart.gnss`, and the first call of the receiver model, as
+   `gnss.fix(at=...)`, for a `model`. `Esp32Sim._asked` builds `[Request(interface, source=source)]`,
    runs `capabilities.check` on it (a `CapabilityError` becomes a `SourceError` with its message),
    then `capabilities.refusal(Esp32Sim.name, ...)`, whose reason skips the test at the call
    ([esp32sim-backend-technical.md](esp32sim-backend-technical.md#data-flow)). It reads the

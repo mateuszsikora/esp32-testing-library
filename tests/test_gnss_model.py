@@ -4,9 +4,14 @@ and how what the test tells it changes them, moving on the great circle in both 
 
 from datetime import UTC, datetime
 from functools import reduce
+from pathlib import Path
 
 import pytest
 
+from esp32tl import recording
+from esp32tl.interfaces import SourceError
+from esp32tl.interfaces.gnss import Gnss
+from esp32tl.link.boardlink import Wire
 from esp32tl.sources.model.gnss import GnssReceiver, ModelError, angle, sentence
 from esp32tl.units import (
     EAST,
@@ -264,8 +269,11 @@ def test_what_the_receiver_cannot_be_is_refused() -> None:
         board.receiver.move(heading=NORTH, speed=10)  # type: ignore[arg-type]
     with pytest.raises(TypeError, match=r"^gnss.fix: at is \(52, 21\), not a Position$"):
         board.receiver.fix(at=(52, 21))  # type: ignore[arg-type]
-    with pytest.raises(ModelError, match=r"hdop is 0, not above 0 and up to 99\.99"):
+    with pytest.raises(ModelError, match=r"hdop is 0, not from 0\.01 to 99\.99"):
         board.receiver.fix(at=WARSAW, hdop=0)
+    # Below what the GGA's two decimals can say.
+    with pytest.raises(ModelError, match=r"hdop is 0\.001, not from 0\.01 to 99\.99"):
+        board.receiver.degrade(hdop=0.001)
     with pytest.raises(ModelError, match=r"satellites is 0, not from 1 to 99:"):
         board.receiver.degrade(satellites=0)
     with pytest.raises(TypeError, match=r"satellites is 4\.0, not a whole number"):
@@ -294,3 +302,86 @@ def test_a_sentence_is_checksummed_and_at_most_82_characters() -> None:
     with pytest.raises(ModelError, match="longer than NMEA's 82 characters"):
         sentence("GPTXT," + "x" * 80)
     assert seconds(1).ns == S
+
+
+def test_a_change_at_an_epoch_s_instant_is_in_that_epoch() -> None:
+    board = Board()
+    board.receiver.fix(at=WARSAW)
+    board.run_to(S)
+    # The test's turn at 2 s comes before the link polls the receiver there.
+    board.t = 2 * S
+    board.receiver.lose_fix()
+    ((t, epoch),) = board.run_to(2 * S)
+    assert t == 2 * S and fields(epoch)[0][2] == "V"
+    board.receiver.go_silent()
+    board.t = 4 * S
+    # Resumed at an epoch's instant: that epoch goes, the one at 3 s does not.
+    board.receiver.resume()
+    assert [t for t, _ in board.run_to(4 * S)] == [4 * S]
+
+
+def test_the_receiver_moves_across_the_antimeridian_and_over_a_pole() -> None:
+    board = Board()
+    board.receiver.fix(at=Position(0, 179.995))
+    board.receiver.move(heading=EAST, speed=m_s(10))
+    (_, epoch), *_ = board.run_to(100 * S)[-1:]
+    rmc, _ = fields(epoch)
+    # 1 km east of 179.995° E is 179.996° W: 179° 59.76'.
+    assert (rmc[5][:7], rmc[6], rmc[8]) == ("17959.7", "W", "90.0")
+    assert position_of(rmc) == about(Position(0, 179.995).moved(EAST, km(1)), within=m(0.05))
+    # 0.001° short of the north pole, 111 m, then a kilometre on: past it, on the far meridian,
+    # heading south. cos(lat) is no help at the pole itself, and the course comes from the start.
+    board = Board()
+    board.receiver.fix(at=Position(89.999, 10))
+    board.receiver.move(heading=NORTH, speed=m_s(10))
+    (_, epoch), *_ = board.run_to(100 * S)[-1:]
+    rmc, _ = fields(epoch)
+    assert (rmc[4], rmc[6], rmc[8]) == ("N", "W", "180.0")
+    assert position_of(rmc) == about(Position(89.999, 10).moved(NORTH, km(1)), within=m(0.05))
+    assert position_of(rmc).lon == pytest.approx(-170, abs=1e-4)
+
+
+def gnss_route(t: list[int]) -> Gnss:
+    """A `Gnss` on the devkit's GNSS pins, its board's time `t[0]`, off the link."""
+    return Gnss(
+        "uart.gnss",
+        Wire(tx=4, rx=5, baud=9600),
+        clock=recording.EMULATED,
+        directory=Path(__file__).resolve().parent.parent / "recordings",
+        now=lambda: t[0],
+        world=lambda: POWER_ON,
+    )
+
+
+def test_a_first_model_call_that_is_refused_leaves_the_route_without_a_source() -> None:
+    route = gnss_route([0])
+    with pytest.raises(TypeError, match="not a Position"):
+        route.fix(at=(52, 21))  # type: ignore[arg-type]
+    with pytest.raises(ModelError, match="no position to move from"):
+        route.move(heading=NORTH, speed=km_h(10))
+    with pytest.raises(TypeError, match="give it hdop=, satellites=, or both"):
+        route.degrade()
+    assert route.source is None and route.source_kind is None
+    # Reading where it is makes no receiver either.
+    with pytest.raises(SourceError, match=r"^uart.gnss has no receiver: give it one with"):
+        assert route.position is None
+    with pytest.raises(SourceError, match="has no receiver"):
+        route.receiver()
+    assert route.source is None
+    route.replay("gnss-generated-1.jsonl")
+    assert route.source_kind == "replay"
+    with pytest.raises(SourceError, match="replays a recording: it has no receiver"):
+        assert route.position is None
+
+
+def test_the_first_model_call_that_succeeds_makes_the_receiver() -> None:
+    t = [0]
+    route = gnss_route(t)
+    route.go_silent()
+    assert route.source_kind == "model" and route.position is None
+    route.fix(at=WARSAW)
+    t[0] = 5 * S
+    route.move(heading=NORTH, speed=m_s(1))
+    t[0] = 6 * S
+    assert route.position == about(WARSAW.moved(NORTH, m(1)), within=m(0.001))
+    assert route.receiver() is route.source

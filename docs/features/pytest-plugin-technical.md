@@ -132,8 +132,9 @@ are in [models-technical.md](models-technical.md).
    the colour codes `\x1b[…m` taken out (`COLOUR`). A line not ended stays out. `line` returns a
    `LineCondition`, which keeps the number of lines when it was made and, when called, searches
    those after it with the compiled pattern (`line_pattern`: text, or a compiled text pattern
-   as it is) and returns the first match as a `Line` with its `match`; a look that finds none
-   moves its start past the lines it saw. Its `repr`, `a console line matching '{pattern}'`, is
+   as it is) and returns the first match as a `Line` with its `match`, then starts its next look
+   after that line; a look that finds none moves its start past the lines it saw. Its `repr`,
+   `a console line matching {pattern!r}`, is
    what `board.wait_until` names it by, as an instance has no `__qualname__`. `lines(pattern=None,
    *, since=None)` filters the lines by `line.at >= since` and by the pattern. Neither moves
    `expect`'s cursor.
@@ -143,10 +144,13 @@ are in [models-technical.md](models-technical.md).
    [replay-technical.md](replay-technical.md#data-flow); before it reads the recording it calls
    the backend's `asked(interface, "replay")`, which refuses a source after power-on or one no
    backend gives, and skips the test when this backend does not give it. Each model call
-   (`fix`, `move`, `stand_still`, `degrade`, `lose_fix`, `go_silent`, `resume`, `position`) goes
-   through `Gnss.receiver()`: the route's source when it is a `GnssReceiver` already; a
-   `SourceError` when it is a replay; otherwise `_ask("model")`, the same `asked` check with
-   `"model"`, then `GnssReceiver(now, world)` given as the source of kind `model`. `now` and
+   (`fix`, `move`, `stand_still`, `degrade`, `lose_fix`, `go_silent`, `resume`) goes through
+   `Gnss._tell(call)`: `call` on the route's source when it is a `GnssReceiver` already; a
+   `SourceError` when it is a replay; otherwise `_ask("model")` first, the same `asked` check
+   with `"model"`, then `call` on a new `GnssReceiver(now, world)`, which becomes the source of
+   kind `model` only once `call` has returned, so a refused first call leaves the route without a
+   source. `position` and `receiver()` read the receiver and make none: without one they raise
+   `SourceError`. `now` and
    `world` are the backend's, the held clock's time and the world's time at power-on
    ([models-technical.md](models-technical.md#data-flow)).
 
@@ -161,11 +165,11 @@ are in [models-technical.md](models-technical.md).
 | `console(board)` | fixture, function scope | Returns `Console(board)` |
 | `gnss(board)` | fixture, function scope | Returns `board.uart("gnss")`, a `Gnss` |
 | `Console(board)` | class, `esp32tl/interfaces/console.py` | `expect(pattern, timeout=30, *, return_what_before_match=False)`, `expect_exact(...)` with the same arguments, `timeout` a `Duration` or a number of seconds; `line(pattern)`, `lines(pattern=None, *, since=None)`; no `write`. `board` is a `Clocked`: `console_output`, `console_lines` and `wait_on_clock(condition, within, description)`, `within` a `Duration` |
-| `Line(at, text, match=None)` | frozen dataclass, `esp32tl/interfaces/console.py` | A console line: `at` a `Duration`, `text` a `str`, `match` an `re.Match[str]`; `line[group]` is `match[group]`, a `TypeError` without a match |
+| `Line(at, text, match=None)` | frozen dataclass, `esp32tl/interfaces/console.py` | A console line: `at` a `Duration`, `text` a `str`, `match` an `re.Match[str]`, left out of comparisons; `line[group]` is `match[group]`, a `TypeError` without a match |
 | `ConsoleLines()` | class, `esp32tl/interfaces/console.py` | `feed(t, data)`, `lines`: the console cut into `Line`s |
-| `LineCondition(lines, pattern)` | class, `esp32tl/interfaces/console.py` | What `console.line` returns: called, the first matching `Line` since it was made, or `None` |
+| `LineCondition(lines, pattern)` | class, `esp32tl/interfaces/console.py` | What `console.line` returns: called, the first matching `Line` since it was made, or since the last it found, or `None` |
 | `DEFAULT_TIMEOUT` | `int`, `esp32tl/interfaces/console.py` | 30: an expect's `timeout`, in seconds of the board's time |
-| `Gnss(name, wire, *, clock, directory, now, world, asked=...)` | class, `esp32tl/interfaces/gnss.py`, a `Uart` | `fix(at, *, hdop=0.9, satellites=8)`, `move(*, heading, speed)`, `stand_still()`, `degrade(*, hdop=None, satellites=None)`, `lose_fix()`, `go_silent()`, `resume()`, `position`, each the `GnssReceiver`'s; `receiver()` the receiver, made at the first call |
+| `Gnss(name, wire, *, clock, directory, now, world, asked=...)` | class, `esp32tl/interfaces/gnss.py`, a `Uart` | `fix(at, *, hdop=0.9, satellites=8)`, `move(*, heading, speed)`, `stand_still()`, `degrade(*, hdop=None, satellites=None)`, `lose_fix()`, `go_silent()`, `resume()`, `position`, each the `GnssReceiver`'s; `receiver()` the receiver, made by the first call that succeeds |
 | `Uart(name, wire, *, clock, directory, asked=...)` | class, `esp32tl/interfaces/uart.py`, a `BoardLink` `Interface` | `uart.<role>` and its source: attributes `clock`, `directory`, `asked`, `source` and `source_kind` (`None` until given, then the source and `"replay"`); `replay(path)` returns the `Replay`. Without a source it hears everything and says nothing; with one, `receive`, `poll`, `quiet_until` and `latency` are the source's. `asked(name, source)` is called before a source is made, and refuses it by raising |
 | `Source` | protocol, `esp32tl/interfaces/uart.py` | `receive(t, data)`, `poll(now)`, `quiet_until()`, `latency()`: what drives a `Uart` |
 | `SourceError` | exception, `esp32tl/interfaces/__init__.py` | A source after power-on, a second one on a route, or one no backend gives |
@@ -217,8 +221,10 @@ pytest-embedded's `build_dir` fixture. The backend's own environment variables a
 | `esp32sim: the test set up the {kind} of {interface} and never called board.power_on(): it ran no firmware` | A test whose setup and call passed, which gave a source and never powered on | Error at teardown |
 | `the board is off; call board.power_on() first` | `BoardOff` from a wait, an expect, `now` or `utc` before power-on | Fails the test |
 | `the board is on already: power it on once` | `BoardOff` from a second `power_on()` | Fails the test |
-| `{interface}: the board is on already: give a route its source before board.power_on()`, `uart.gnss has its source already: one per test`, `no backend takes a '{source}' source on {interface}; the sources there are {sources}` | `SourceError` from `Uart.replay`, or from the first model call of `Gnss` | Fails the test ([replay-user.md](replay-user.md#when-the-test-gets-it-wrong)) |
-| `uart.gnss replays a recording: it has no receiver to describe; one source per test` | `SourceError` from a model call of `Gnss` after `gnss.replay` | Fails the test |
+| `{interface}: the board is on already: give a route its source before board.power_on()`, `no backend takes a '{source}' source on {interface}; the sources there are {sources}` | `SourceError` from `Uart.replay`, or from the first model call of `Gnss` | Fails the test ([replay-user.md](replay-user.md#when-the-test-gets-it-wrong)) |
+| `uart.gnss has its source already: one per test` | `SourceError` from `Uart.replay` on a route with a source, a replay or a model | Fails the test |
+| `uart.gnss replays a recording: it has no receiver to describe; one source per test` | `SourceError` from a model call, `position` or `receiver()` of `Gnss` after `gnss.replay` | Fails the test |
+| `uart.gnss has no receiver: give it one with gnss.fix(at=...)` | `SourceError` from `Gnss.position` or `receiver()` before any model call | Fails the test |
 | `{description} did not happen within {within}: waited from {start} to {end} of the board's time` | `NeverHappened` from `wait_until` or an expect | Fails the test |
 | `the run ended {when} while the test waited {what}: {reason}` | `RunEnded` from a wait or an expect; `{when}` is `at {time}` from the runner's `stats`, `after the turn at {time}` without them, the last held turn being only a bound, or `before its first turn`; `{what}` is `until {time}` or `for {description}`, `{reason}` the backend's ([esp32sim-backend-technical.md](esp32sim-backend-technical.md#failure-modes)) | Fails the test |
 | `expect: no pattern to wait for`, `expect: {pattern!r} is not a pattern`, `expect_exact takes text or bytes, not a compiled pattern`, `expect: timeout is {timeout!r}, not a Duration or a number of seconds`, `expect: timeout is {timeout}, less than 0` | `ValueError`, `TypeError` from an expect | Fails the test |

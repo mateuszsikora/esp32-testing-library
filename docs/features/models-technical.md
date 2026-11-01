@@ -9,16 +9,18 @@ the backend that gives the receiver its clock in
 
 ## Data flow
 
-1. **The receiver is made** by `Gnss.receiver()` at the first model call, after the backend's
+1. **The receiver is made** by `Gnss._tell` at the first model call, after the backend's
    `asked("uart.gnss", "model")` has let it through:
    `GnssReceiver(now, world)`, where `now` returns `HeldClock.now`, the block point of the turn
    the link was last held at (0 before power-on), and `world` returns `Esp32Sim._utc`, the world's
-   time at power-on. It becomes the `Uart`'s `source`, of kind `model`.
+   time at power-on. The call is made on it, and only when the call returns does it become the
+   `Uart`'s `source`, of kind `model`: a refused first call leaves the route without a source.
+   Reading `Gnss.position` or `Gnss.receiver()` makes no receiver.
 2. **The test tells it** something: each call checks its arguments, then, under the receiver's
    lock, replaces its `State` with one whose `since` is `now()`, whose `position` and `heading`
    are where it is and which way it goes at that instant (`State.at(now)`,
    `State.course(now)`), and which carries the change. A refused call raises before it replaces
-   anything. The test calls it while the link is held in a turn, or before power-on, so the link
+   anything, and the route keeps the source it had. The test calls it while the link is held in a turn, or before power-on, so the link
    never polls the receiver in the middle of a change; the lock is there all the same.
 3. **The link polls it** in every turn, after the hold has returned (`BoardLink._turn`): so a
    change the test made in the turn at `now` is in what `poll(now)` sends. `poll` computes the
@@ -26,13 +28,14 @@ the backend that gives the receiver its clock in
    whole second of the world's time at least `FIRST_EPOCH`, 1 s, after power-on, from the
    microseconds of the world's time at power-on. It then takes every epoch due by `now`, in
    order, advancing `_next` by `PERIOD`, 1 s, and sends each one at its own time, `(t, epoch(t))`,
-   when the receiver talks and `t` is not before `State.since`. `sent` counts the epochs sent.
+   when the receiver talks. `sent` counts the epochs sent.
 4. **`quiet_until()`** returns the next epoch's time while the receiver talks, so the runner stops
    there and the epoch goes in at its time; `None` while it is silent. A silent receiver bounds no
-   turn, and the run may go past several epoch times to the test's next turn; the test can resume
-   it only in a held turn, before the link polls, and the epochs it skipped are then before
-   `State.since` and stay unsent. A talking receiver bounds every turn by its next epoch, so it
-   has no epoch due from before its last change.
+   turn, and the run may go past several epoch times to the test's next turn without the link
+   polling it; the test can resume it only in a held turn, before the link polls, and `resume`
+   moves `_next` to the first epoch at or after `now`, so the epochs of the silence stay unsent
+   and one at `now` goes. A talking receiver bounds every turn by its next epoch, so a runner that
+   ran past it would make the link fail with `sent past its quiet_until`, not lose the epoch.
 5. **`epoch(t)`** formats an RMC and a GGA from the state at `t`: `State.at(t)` moves the position
    by `speed * Duration(t - since)` along the great circle (`Position.moved`), and
    `State.course(t)` is the azimuth at that point of the great circle that left `position` on
@@ -69,8 +72,8 @@ hemisphere's letter, `negative` for a value below 0.
 | Name | What |
 |---|---|
 | `Duration(ns)` | `esp32tl/units.py`: frozen dataclass, `ns` an `int` (`TypeError` otherwise); `+`, `-` with a `Duration`; `*`, `/` by a number (rounded to the nanosecond); `/` by a `Duration` is a `float`; `-d`, `abs`, ordering; `seconds`; `str` `12.5 s`, `repr` `seconds(12.5)` |
-| `Speed(m_s)`, `Distance(m)` | Frozen dataclasses of a finite `float`; `+`, `-`, `*` and `/` by a number, ordering, `-`, `abs`; `Speed * Duration` is a `Distance`, `Distance / Duration` a `Speed` (`ZeroDivisionError` for 0), `Distance / Distance` a `float`; `km_h`, `mph`, `knots`; `km`, `miles`, `feet`; `str` `10 m/s`, `1000 m`, `repr` `m_s(10)`, `m(1000)` |
-| `Heading(degrees)` | Frozen dataclass, `degrees` taken modulo 360; `str` `east` or `30°`, `repr` `EAST` or `Heading(30)`; `COMPASS` names the eight constants |
+| `Speed(m_s)`, `Distance(m)` | Frozen dataclasses of a finite number; `+`, `-`, `*` and `/` by a number, ordering, `-`, `abs`; `Speed * Duration` is a `Distance`, `Distance / Duration` a `Speed`, `Distance / Speed` a `Duration` (`ZeroDivisionError` for 0), `Speed / Speed` and `Distance / Distance` a `float`; `km_h`, `mph`, `knots`; `km`, `miles`, `feet`; `str` `10 m/s`, `1000 m`, `repr` `m_s(10)`, `m(1000)` |
+| `Heading(degrees)` | Frozen dataclass, `degrees` taken modulo 360, a result of 360.0 (`Heading(-1e-20)`) made 0; `str` `east` or `30°`, `repr` `EAST` or `Heading(30)`; `COMPASS` names the eight constants |
 | `Position(lat, lon)` | Frozen dataclass, `ValueError` outside −90…90 and −180…180; `moved(heading, distance)` (longitude from −180 up to 180), `distance_to(other)`, `bearing_to(other)`; `str` `52.229677° N, 21.012233° E` |
 | `about(value, *, within)` | `__eq__` true for the same kind within the tolerance, a `Position` within a `Distance`; false for any other kind; unhashable; `repr` `about(m(1000), within=m(15))` |
 | `ms`, `seconds`, `minutes`, `hours`, `m_s`, `km_h`, `mph`, `knots`, `m`, `km`, `miles`, `feet` | Constructors; an `int` duration is scaled exactly, a `float` one rounded to the nanosecond |
@@ -80,7 +83,7 @@ hemisphere's letter, `negative` for a value below 0.
 | `GnssReceiver(now, world)` | `esp32tl/sources/model/gnss.py`: the test's `fix`, `move`, `stand_still`, `degrade`, `lose_fix`, `go_silent`, `resume`, `position`; the link's `receive`, `poll`, `quiet_until`, `latency`; `epoch(t)`; `sent` |
 | `State` | Frozen dataclass: `since`, `position`, `heading`, `speed`, `fixed`, `hdop`, `satellites`, `talking`; `at(t)`, `course(t)`, `travelled(t)`. The first is `State(0, None, NORTH, m_s(0), False, 99.99, 0, True)` |
 | `FIRST_EPOCH`, `PERIOD` | `seconds(1)` each |
-| `HDOP`, `SATELLITES`, `NO_FIX_HDOP`, `SENTENCE_MAX`, `TALKER` | `0.9`, `8`: a `fix`'s defaults; `99.99`; `82`; `"GP"` |
+| `HDOP`, `SATELLITES`, `NO_FIX_HDOP`, `MIN_HDOP`, `SENTENCE_MAX`, `TALKER` | `0.9`, `8`: a `fix`'s defaults; `99.99`; `0.01`, the lowest HDOP the GGA's two decimals say; `82`; `"GP"` |
 | `sentence(body)`, `angle(degrees, digits, positive, negative)` | The sentence and coordinate formatting above |
 | `ModelError` | A `ValueError`: what the receiver cannot be told |
 
@@ -97,7 +100,7 @@ world's time at power-on is `board.power_on(utc=...)`'s, `POWER_ON_UTC` in
 | `gnss.move: the receiver has no position to move from: give it a fix first, with gnss.fix(at=...)` | `ModelError` | `move` while `State.position` is `None` |
 | `gnss.degrade: the receiver has no fix to degrade: give it one first, with gnss.fix(at=...)` | `ModelError` | `degrade` while `State.fixed` is false |
 | `gnss.move: speed is {speed}, less than 0` | `ModelError` | A `Speed` below 0 |
-| `{what}: hdop is {value!r}, not above 0 and up to 99.99` | `ModelError` | `fix` or `degrade` |
+| `{what}: hdop is {value!r}, not from 0.01 to 99.99` | `ModelError` | `fix` or `degrade` |
 | `{what}: satellites is {value}, not from 1 to 99: a fix has some` | `ModelError` | `fix` or `degrade` |
 | `{what}: satellites is {value!r}, not a whole number` | `TypeError` | Not an `int`, or a `bool` |
 | `{what}: hdop: {value!r} is not a number`, `… is not a finite number` | `TypeError`, `ValueError` | From `number` |
@@ -123,8 +126,11 @@ The `SourceError`s of the first model call are the backend's and `Gnss`'s
   across a new year; checksums checked independently; the epochs on whole seconds of the world's
   time; a move of 1 km north and its speed and course; the course along a great circle that
   turns; a course that rounds to 360; a lost fix that keeps moving and comes back; `degrade`;
-  silence, and the epochs of a silence with no turn in it; a change at an instant; what is
-  refused; the rounding of coordinates into the next degree; the 82-character limit.
+  silence, and the epochs of a silence with no turn in it; a change at an instant, and at an
+  epoch's instant; a move across the antimeridian and over the north pole, with its course;
+  what is refused; the rounding of coordinates into the next degree; the 82-character limit;
+  and `Gnss`, off the link: a refused first call that leaves the route without a source, and
+  `position` that makes no receiver.
 - `tests/test_nmea_reader_model.py`: `nmea_reader` on the real runner, fed by the model: the first
   fix and its time, the southern and western hemispheres, 1 km north at 36 km/h, no fix line while
   the fix is lost, the fix coming back at the epoch of its instant, and silence. Needs
@@ -133,7 +139,10 @@ The `SourceError`s of the first model call are the backend's and `Gnss`'s
   [pytest-plugin-technical.md](pytest-plugin-technical.md#tests)).
 
 Not covered: a receiver moving across a pole or the antimeridian on the real firmware, and a
-`power_on(utc=...)` off a whole second on the real runner (the model's side of both is tested).
+`power_on(utc=...)` off a whole second on the real runner; `tests/test_gnss_model.py` tests the
+model's side of each (`test_the_receiver_moves_across_the_antimeridian_and_over_a_pole`,
+`test_epochs_fall_on_whole_seconds_of_the_world_s_time`). A receiver that starts exactly at a
+pole is not tested.
 
 ## See also
 

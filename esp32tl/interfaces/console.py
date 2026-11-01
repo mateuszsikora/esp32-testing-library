@@ -11,7 +11,7 @@ for `board.wait_until`, `lines()` what has been printed.
 
 import re
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol, TypeVar, cast
 
 import pexpect
@@ -40,7 +40,8 @@ class Line:
 
     at: Duration
     text: str
-    match: re.Match[str] | None = None
+    # Matches compare by identity: two lines are equal by their time and text.
+    match: re.Match[str] | None = field(default=None, compare=False)
 
     def __getitem__(self, group: int | str) -> Any:
         if self.match is None:
@@ -67,7 +68,8 @@ class ConsoleLines:
 
 class LineCondition:
     """`console.line(pattern)`: the first line that ends after it was made and matches
-    `pattern`, or `None` while there is none."""
+    `pattern`, or `None` while there is none. Once it has found one it looks after it, so the
+    same condition asked again finds the next."""
 
     def __init__(self, lines: ConsoleLines, pattern: str | re.Pattern[str]) -> None:
         self._lines = lines
@@ -75,9 +77,12 @@ class LineCondition:
         self._start = len(lines.lines)
 
     def __call__(self) -> Line | None:
-        for line in self._lines.lines[self._start :]:
+        lines = self._lines.lines
+        for index in range(self._start, len(lines)):
+            line = lines[index]
             match = self._pattern.search(line.text)
             if match is not None:
+                self._start = index + 1
                 return Line(line.at, line.text, match)
         # The next look starts after the lines this one saw.
         self._start = len(self._lines.lines)

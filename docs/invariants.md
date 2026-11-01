@@ -124,11 +124,6 @@ that references to its number keep their meaning.
 50. Every UART route of the board profile is on the link, listening and silent until the test gives
     it a source: the harness's `hello` watches the pins of all of them.
     `tests/test_pytest_plugin.py::test_every_route_of_the_profile_is_on_the_link`
-55. A console line is stamped with the board's time its line ending came at, without its line
-    ending and colour codes, and is a line only once it has ended; `console.line(pattern)` finds
-    only lines that end after it was made.
-    `tests/test_clock.py::test_console_lines_are_stamped_with_the_time_their_ending_came_at`,
-    `tests/test_clock.py::test_a_line_condition_finds_the_first_matching_line_from_when_it_was_made`
 
 ## The runner
 
@@ -225,7 +220,7 @@ that references to its number keep their meaning.
     under five wall seconds, and the board's clock reads just past 10 s.
     `tests/test_nmea_reader.py::test_time_is_emulated`
 
-## Models and units
+## Models, units and console lines
 
 51. The board's durations are `Duration`s of whole nanoseconds, 0 or more: `board.wait` and
     `wait_until` refuse a plain number. Quantities of different kinds never combine or compare
@@ -246,6 +241,7 @@ that references to its number keep their meaning.
     `tests/test_gnss_model.py::test_epochs_fall_on_whole_seconds_of_the_world_s_time`,
     `tests/test_gnss_model.py::test_a_sentence_is_checksummed_and_at_most_82_characters`,
     `tests/test_gnss_model.py::test_each_change_holds_from_the_board_s_instant`,
+    `tests/test_gnss_model.py::test_a_change_at_an_epoch_s_instant_is_in_that_epoch`,
     `tests/test_gnss_model.py::test_the_epochs_of_a_silence_stay_unsent_when_no_turn_came_in_it`
 54. `nmea_reader` fed by the receiver model reports where the receiver is: its first fix, a
     kilometre of movement to within 0.2 m, no fix while the fix is lost, the fix again in the epoch
@@ -255,6 +251,11 @@ that references to its number keep their meaning.
     `tests/test_nmea_reader_model.py::test_follows_the_receiver_as_it_moves`,
     `tests/test_nmea_reader_model.py::test_says_nothing_while_the_receiver_has_no_fix`,
     `tests/test_nmea_reader_model.py::test_reports_again_when_the_fix_comes_back`
+55. A console line is stamped with the board's time its line ending came at, without its line
+    ending and colour codes, and is a line only once it has ended; `console.line(pattern)` finds
+    only lines that end after it was made, and after the last line it found.
+    `tests/test_clock.py::test_console_lines_are_stamped_with_the_time_their_ending_came_at`,
+    `tests/test_clock.py::test_a_line_condition_finds_the_first_matching_line_from_when_it_was_made`
 
 ## The esp32tl command
 

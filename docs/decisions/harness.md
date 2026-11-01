@@ -948,8 +948,9 @@ Status: decided (#69)
 The receiver sends an RMC and then a GGA at every whole second of the world's time, the first one
 at least a second after power-on; with the default world's time, on a whole second, that is 1 s,
 2 s, 3 s of the board's time. A change the test makes at an epoch's instant is in that epoch,
-since the link polls the receiver after the test's turn. A silent receiver bounds no turn, and the
-epochs of its silence are not sent when it resumes.
+since the link polls the receiver after the test's turn. A silent receiver bounds no turn, and
+`resume` moves its next epoch past the silence, so the epochs of the silence are not sent; one at
+the instant of `resume` is.
 
 **Rejected:** epochs on whole seconds of the board's time whatever the world's time says, because
 a receiver's epochs are on whole seconds of UTC and its sentences would then carry fractions of a

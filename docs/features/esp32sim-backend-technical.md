@@ -118,7 +118,8 @@ The test's side runs in the test's thread:
 
 `Esp32Sim` takes the test's durations with `nanoseconds(value, what)`, which takes a `Duration`
 (`esp32tl/units.py`) of 0 or more and returns its `ns`, and refuses anything else, naming `what`
-(`board.wait`, `board.wait_until: within`). `now` is the clock's time as a `Duration`; `utc` adds
+(`board.wait`, `board.wait_until: within`, and `within` for `wait_on_clock`, whose callers pass a
+`Duration` they have checked). `now` is the clock's time as a `Duration`; `utc` adds
 it, in microseconds, to the UTC instant at power-on. `wait`,
 `wait_until`, `wait_on_clock`, `now` and `utc` raise `BoardOff` before `power_on()`. `wait_until`
 describes its condition as `the condition {condition.__qualname__}`, or by its `repr` when it has

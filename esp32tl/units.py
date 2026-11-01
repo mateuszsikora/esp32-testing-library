@@ -176,6 +176,20 @@ class Speed:
 
     __rmul__ = __mul__
 
+    @overload
+    def __truediv__(self, other: "Speed") -> float: ...
+
+    @overload
+    def __truediv__(self, other: float) -> "Speed": ...
+
+    def __truediv__(self, other: "float | Speed") -> Any:
+        if _same(self, other):
+            assert isinstance(other, Speed)
+            return self.m_s / other.m_s
+        if isinstance(other, bool) or not isinstance(other, int | float):
+            return NotImplemented
+        return Speed(self.m_s / number(other, "Speed /"))
+
     def __neg__(self) -> "Speed":
         return Speed(-self.m_s)
 
@@ -252,16 +266,23 @@ class Distance:
     def __truediv__(self, other: "Duration") -> Speed: ...
 
     @overload
+    def __truediv__(self, other: "Speed") -> Duration: ...
+
+    @overload
     def __truediv__(self, other: "Distance") -> float: ...
 
     @overload
     def __truediv__(self, other: float) -> "Distance": ...
 
-    def __truediv__(self, other: "float | Distance | Duration") -> Any:
+    def __truediv__(self, other: "float | Distance | Duration | Speed") -> Any:
         if isinstance(other, Duration):
             if other.ns == 0:
                 raise ZeroDivisionError("Distance / Duration: the duration is 0")
             return Speed(self.m * NS_PER_S / other.ns)
+        if isinstance(other, Speed):
+            if other.m_s == 0:
+                raise ZeroDivisionError("Distance / Speed: the speed is 0")
+            return Duration(round(self.m / other.m_s * NS_PER_S))
         if _same(self, other):
             assert isinstance(other, Distance)
             return self.m / other.m
@@ -313,8 +334,10 @@ class Heading:
     degrees: float
 
     def __post_init__(self) -> None:
+        degrees = number(self.degrees, "Heading") % 360.0
+        # A tiny negative value is 360.0 modulo 360 in floating point, and north all the same.
         # Frozen: the normalised value goes in through object.__setattr__.
-        object.__setattr__(self, "degrees", number(self.degrees, "Heading") % 360.0)
+        object.__setattr__(self, "degrees", 0.0 if degrees == 360.0 else degrees)
 
     def __str__(self) -> str:
         return COMPASS.get(self.degrees, f"{shown(self.degrees)}°")

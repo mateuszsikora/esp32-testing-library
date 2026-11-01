@@ -336,11 +336,16 @@ def test_a_line_condition_finds_the_first_matching_line_from_when_it_was_made() 
     line = run.clock.wait_until(condition, 10 * S, repr(condition))
     assert (line.at, line.text, line["n"]) == (secs(3), "fix 3", "3")
     assert run.clock.now == 3 * S
+    # Asked again, the same condition looks after the line it found.
+    again = run.clock.wait_until(condition, 10 * S, repr(condition))
+    assert (again.at, again["n"]) == (secs(4), "4")
+    # Lines compare by their time and text, not by their match.
+    assert console.lines("fix 4") == console.lines("fix 4") == [Line(secs(4), "fix 4")]
     never = console.line(re.compile("never"))
     with pytest.raises(NeverHappened) as raised:
         run.clock.wait_until(never, S, repr(never))
     assert str(raised.value) == (
-        "a console line matching 'never' did not happen within 1 s: waited from 3 s to 4 s of"
+        "a console line matching 'never' did not happen within 1 s: waited from 4 s to 5 s of"
         " the board's time"
     )
     with pytest.raises(TypeError, match="is not a regular expression on text"):

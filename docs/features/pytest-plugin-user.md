@@ -38,7 +38,7 @@ The body first sets up what is at the far end of the board's wires, here a repla
 in `board.wait`, `board.wait_until` or a console expect. The `timeout=30` is 30 seconds of the
 board's time, not of the wall clock.
 
-A test with a receiver it describes instead, from `tests/test_nmea_reader_model.py`:
+A test with a receiver it describes instead, adapted from `tests/test_nmea_reader_model.py`:
 
 ```python
 from esp32tl.units import NORTH, Position, about, km, km_h, m, minutes, seconds
@@ -149,7 +149,10 @@ the exception: it takes a `Duration`, or a number of seconds as in pytest-embedd
   a `Line`, whose `at` is the board's time its line ending came at, `text` the line without its
   line ending and without ESP-IDF's colour codes, and `line["lat"]` or `line[1]` a group of the
   match. One that does not come raises
-  `NeverHappened: a console line matching '^fix lat=(?P<lat>\S+)' did not happen within 2 s: …`.
+  `NeverHappened: a console line matching '^fix lat=(?P<lat>\\S+)' did not happen within 2 s: …`,
+  the pattern as Python's `repr` writes it, its backslashes doubled.
+  Once it has found a line, the same condition looks after it, so asking it again in a loop
+  finds the next one.
 - `console.lines(pattern=None, *, since=None)` is the list of lines printed so far, those that
   ended at `since` or later when it is given, and those that match `pattern` when it is given:
   `console.lines(since=lost_at) == []` says nothing was printed since. A line not ended yet is not
@@ -163,9 +166,10 @@ the exception: it takes a `Duration`, or a number of seconds as in pytest-embedd
   must come before `board.power_on()`. The path is relative to the test file's directory. What it
   does, and what it refuses, is in [replay](replay-user.md).
 - `gnss.fix(at=...)`, `gnss.move(...)`, `gnss.lose_fix()` and the receiver model's other calls
-  put a receiver the test describes there instead. The first of them must come before
-  `board.power_on()`; every later one changes the receiver from the board's current instant
-  ([models and units](models-user.md#the-gnss-receiver)).
+  put a receiver the test describes there instead. The first of them that succeeds makes the
+  receiver, and must come before `board.power_on()`; every later one changes it from the board's
+  current instant ([models and units](models-user.md#the-gnss-receiver)). Reading
+  `gnss.position` makes no receiver.
 - One source per test: a model call after `gnss.replay`, or a replay after a model call, raises
   `SourceError`.
 - Until the test gives it a source, the route is on the link, listening and silent. So is every
