@@ -104,12 +104,13 @@ the next turn's, so it would be checked against that turn's `sync`; and a peer b
 while the runner is blocked on writing `console` or `uart_tx` to it is a deadlock.
 
 The first `sync` has `t = 0` and comes before the guest executes its first instruction (rule 4).
-A peer may take its time over turn 0, since the guest has not run yet: `BoardLink`, made with
-`hold`, answers this first `sync` only once `BoardLink.start()` is called, which the `esp32sim`
-backend does when the test body has given every source its `source` markers declare, so that a
-recording replayed from the body starts at power-on. Emulated time does not move meanwhile, and
-the wait is wall time, bounded by `--peer-timeout` (section 9). `start(boot=False)` answers turn 0
-with `stop` instead, before the guest boots.
+A peer may take its time over any turn, turn 0 included, since the guest does not run while it
+does: `BoardLink`, made with a `hold`, asks it at the start of every turn until the link fails,
+before it polls the interfaces, and takes the turn only once it returns. The `esp32sim` backend's hold is the test's
+clock, which returns once the test waits, with the latest time of the next turn, so emulated time
+moves only while the test waits; `None` answers the turn with `stop`, as at the end of the test.
+The wait is wall time, bounded by `--peer-timeout` (section 9), which the backend sets to 0 so
+that a test body can take as long as it does.
 
 **Ordering.** The runner's messages are in non-decreasing `t`. Before the `sync` at `B` the
 runner sends every event with `t ≤ B` and nothing later; what the guest did after `B` before the
@@ -312,7 +313,10 @@ Bytes the guest wrote to UART0, sent only with `--console socket` or `--console 
 the console goes to stdout, where pytest-embedded's `DuplicateStdoutPopen` reads it. Coalesced like
 `uart_tx`; a message also ends after a `\n`. Not an event: it has no `seq` and sets no block
 point. With UART0's TX pin in `watch` the same bytes go out as `uart_tx` too, and the two
-messages end together.
+messages end together. The `esp32sim` backend runs the runner with `--console both`: `BoardLink`
+hands each message to its `console` callback until the link fails, and the test's console
+expects match on those bytes, which reach the harness before the `sync` that follows them;
+`dut.log` still gets stdout.
 
 ### 5.8 `warn` *ext*
 
@@ -609,15 +613,17 @@ cannot be written, because the peer has already closed the socket, does not turn
 4.
 
 `stop` reaches the runner only in a turn, and with `quiet_until` and `latency` both `null` the next
-turn may be at `--max-seconds`. The usual end of a test is earlier: `console.expect` matches, and
-teardown ends the runner. That end belongs to the `esp32sim` backend, not to pytest-embedded:
+turn may be at `--max-seconds`. On the test's clock the runner is in a turn whenever the test is
+not waiting, so the usual end of a test is `stop` in the turn the test left the run at, from the
+backend's teardown. That end belongs to the `esp32sim` backend, not to pytest-embedded:
 the runner is the backend's process, pytest-embedded's base `Dut` does not know it, and
 pytest-embedded's own teardown calls `terminate()` and `kill()` back to back
 (`pytest_embedded/plugin.py:505-506`), which would leave no time for `stats`. The backend's
 teardown, in the `board` fixture, runs before the `dut` it depends on is torn down. It
-(`Esp32Sim.close` in `esp32tl/backends/esp32sim.py`) sends `SIGTERM`, reads the socket to end of
-file, waits for the process, and sends `SIGKILL` only when the runner has not exited within five
-wall seconds of the signal. It gets `stats` and the last warnings within
+(`Esp32Sim.close` in `esp32tl/backends/esp32sim.py`) answers the held turn with `stop`; for a
+runner that is in no held turn, or has not exited five wall seconds after the `stop`, it sends
+`SIGTERM`, reads the socket to end of file, waits for the process, and sends `SIGKILL` only when
+the runner has not exited within five wall seconds of the signal. It gets `stats` and the last warnings within
 one emulated millisecond. The runner then exits 0 rather than dying of the signal. The signal
 changes only where the run ends, not what happened before it, so determinism is unaffected.
 `SIGKILL` leaves no `stats`. Once the run ends, a signal no longer interrupts the last writes;
@@ -626,7 +632,8 @@ they get two wall seconds, then the runner gives up on a peer that does not read
 shell would report it. Before the connection is made a signal ends the process as it would any
 other. The backend also sends `SIGTERM` as soon as `BoardLink` finds the run
 wrong (a message out of protocol, an interface that broke its promises, a `frm_err`), rather than wait for the
-runner's next turn to send `stop`, which may come only at `--max-seconds`. A handshake mismatch is
+runner's next turn to send `stop`, which may come only at the end of the test's wait, or at
+`--max-seconds`. A handshake mismatch is
 the exception: the runner finds it in the harness's `hello` and ends the run itself, with code 3.
 
 `--peer-timeout SECONDS` bounds, in wall time, how long the runner waits for the peer's turn to
@@ -634,7 +641,9 @@ end, and how long a write may make no progress because the peer does not read (d
 waits for ever). For `tcp:` it also bounds each connection attempt, though not the name lookup
 before it. A hung peer, say a model in another process, then fails the
 run with code 4 instead of hanging a CI job. It acts only on that error path, so it cannot change a
-run that completes.
+run that completes. The `esp32sim` backend passes `0`: its turns last as long as the test body
+runs, and the test's own wall-time timeout ends a run that hangs
+([pytest plugin](features/pytest-plugin-user.md#the-tests-timeout)).
 
 `Stop::SwReset` is not an end: the runner sends `reset` and continues (5.5). `stats` is the last
 message, after which the peer reads end of file; a peer that sees end of file without `stats`
@@ -654,7 +663,7 @@ codec change (#37). What #325 does not have:
 | `watch` in the harness's `hello` | without it every console byte and every LED toggle would be an event the peer must acknowledge |
 | `seq`, `ack`, turns, `sync` at the block point only | #325 leaves the exchange open; these make a run independent of the peer's wall-time speed |
 | pacing at the `uart_rx` message's baud | #325 paces "at the route's baud"; here a baud mismatch reaches the UART as the frame error it is (`frm_err`), and bytes keep the peer's line rate (11.6) |
-| `console` | the console as a tap, opt-in |
+| `console` | the console for the peer, opt-in: the `esp32sim` backend's console expects read it, in emulated-time order with the turns |
 | `reset` comes from the runner's run loop | #325 proposes a `guest_reset` trait method; the peer sees the same message either way (plan, finding 4) |
 
 ## 11. Changes from the plan

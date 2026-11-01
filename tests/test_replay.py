@@ -107,17 +107,17 @@ def test_what_a_stream_replay_cannot_replay_is_refused(
     assert str(raised.value).startswith(message)
 
 
-def uart(tmp_path: Path, declared: str | None = "replay") -> tuple[Uart, list[str]]:
-    given: list[str] = []
+def uart(tmp_path: Path) -> tuple[Uart, list[tuple[str, str]]]:
+    """A `Uart` on the GNSS route, and the sources it was asked for."""
+    asked: list[tuple[str, str]] = []
     interface = Uart(
         "uart.gnss",
         GNSS,
-        declared=declared,
         clock=CLOCK,
         directory=tmp_path,
-        on_source=given.append,
+        asked=lambda name, source: asked.append((name, source)),
     )
-    return interface, given
+    return interface, asked
 
 
 def write(path: Path, *lines: dict[str, Any]) -> None:
@@ -129,12 +129,12 @@ def test_a_replay_through_the_link_sends_each_event_in_the_turn_at_its_time(
 ) -> None:
     write(tmp_path / "r.jsonl", event(S), event(2 * S, "JE5N"))
     gnss, given = uart(tmp_path)
-    link = BoardLink("esp32-devkitc", [gnss], hold=True)
+    link = BoardLink("esp32-devkitc", [gnss])
     link.receive(HELLO)
     # Relative to the directory it was given, the test file's.
     replay = gnss.replay("r.jsonl")
-    assert given == ["uart.gnss"]
-    link.start()
+    assert given == [("uart.gnss", "replay")]
+    assert gnss.source_kind == "replay"
     assert link.receive(Sync(0)) == [Wait(0, S, None)]
     # What the firmware transmits is heard and answered with nothing.
     assert link.receive(UartTx(1, S // 2, 1, (4,), 9600, b"$PMTK\r\n")) == []
@@ -144,16 +144,15 @@ def test_a_replay_through_the_link_sends_each_event_in_the_turn_at_its_time(
     assert link.error is None
 
 
-def test_a_uart_without_a_replay_source_marker_refuses_replay(tmp_path: Path) -> None:
-    for declared in (None, "model"):
-        gnss, given = uart(tmp_path, declared)
-        with pytest.raises(SourceError) as raised:
-            gnss.replay("r.jsonl")
-        assert str(raised.value) == (
-            "uart.gnss has no source marker that names replay: mark the test"
-            ' @pytest.mark.source("uart.gnss", "replay") to replay into it'
-        )
-        assert given == [] and gnss.source is None
+def test_a_replay_the_backend_refuses_gives_no_source(tmp_path: Path) -> None:
+    def refuse(name: str, source: str) -> None:
+        raise SourceError(f"{name}: no {source} here")
+
+    write(tmp_path / "r.jsonl", event(S))
+    gnss = Uart("uart.gnss", GNSS, clock=CLOCK, directory=tmp_path, asked=refuse)
+    with pytest.raises(SourceError, match=r"^uart\.gnss: no replay here$"):
+        gnss.replay("r.jsonl")
+    assert gnss.source is None and gnss.source_kind is None
 
 
 def test_a_uart_takes_one_source(tmp_path: Path) -> None:
@@ -162,17 +161,18 @@ def test_a_uart_takes_one_source(tmp_path: Path) -> None:
     gnss.replay(tmp_path / "r.jsonl")
     with pytest.raises(SourceError, match=r"^uart\.gnss has its source already: one per test$"):
         gnss.replay("r.jsonl")
-    assert given == ["uart.gnss"]
+    # Refused before the backend is asked again.
+    assert given == [("uart.gnss", "replay")]
 
 
 def test_a_recording_that_cannot_be_replayed_gives_no_source(tmp_path: Path) -> None:
-    gnss, given = uart(tmp_path)
+    gnss, _ = uart(tmp_path)
     with pytest.raises(recording.RecordingError, match=r"none\.jsonl: \[Errno 2\]"):
         gnss.replay("none.jsonl")
     (tmp_path / "wall.jsonl").write_text(json.dumps(HEADER | {"clock": "wall"}) + "\n")
     with pytest.raises(ReplayError, match=r"^wall\.jsonl has times on the wall clock"):
         gnss.replay("wall.jsonl")
-    assert given == [] and gnss.source is None
+    assert gnss.source is None
 
 
 def test_a_uart_without_a_source_hears_everything_and_says_nothing(tmp_path: Path) -> None:

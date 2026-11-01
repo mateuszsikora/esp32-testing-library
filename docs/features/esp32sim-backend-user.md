@@ -2,8 +2,8 @@
 
 The `esp32sim` backend runs the firmware of a test in `esp32tl-runner`, the program in `runner/`
 that runs the [esp32sim](https://github.com/mikroverk/esp32sim) emulator, on the emulated clock.
-It is the backend behind the `board` and `console` fixtures, and the only one: every test that uses
-them runs on it, with `[esp32sim]` in its id ([pytest plugin](pytest-plugin-user.md)). It runs an
+It is the backend behind the `board`, `console` and `gnss` fixtures, and the only one: every test
+that uses them runs on it, with `[esp32sim]` in its id ([pytest plugin](pytest-plugin-user.md)). It runs an
 unmodified ESP-IDF build for the classic ESP32.
 
 ## What it needs
@@ -27,32 +27,37 @@ A relative path in either resolves against pytest's working directory, not the t
 
 ## How a run goes
 
-Each test that uses `board` starts its own runner when the fixture is set up, with every file of
-`flasher_args.json` at its offset, and stops it at teardown. The firmware's UART0 and the runner's
-own lines (`esp32tl-runner: ...`) go into one stream: the console the test's expects read.
-pytest-embedded writes it to the test's `dut.log`, in a directory under the system's temporary
-directory unless `--root-logdir` names another, and prints it with a timestamp on each line, which
-pytest shows as the test's captured stdout when the test fails.
+Each test that uses `board` gets a board that is off. The test body sets up what is around it, as
+`gnss.replay(path)` does, then calls `board.power_on()`, which starts the test's own runner with
+every file of `flasher_args.json` at its offset; teardown stops it. A test that never calls
+`power_on()` starts no runner.
 
-The runner's board is a link to the harness: a Unix socket the backend binds before it starts the
-runner, in a new directory under the system's temporary directory (under `/tmp` when that path
-would be too long for a socket), passed as `--board socket:PATH`. The backend reads the link in a
-thread for the whole run, speaking the [link protocol](../protocol.md). Each route of the board
-profile that a `source` marker names is wired to the board: the link watches its pins and carries
-what the firmware transmits there and what the source sends in, and the run waits at power-on,
-before the firmware's first instruction, until the test has given the source, as
-`gnss.replay(path)` does ([replay](replay-user.md)), or until the runner gives up on the harness
-after 60 wall seconds and exits with code 4. Without a `source` marker no interface is
-wired, and the link carries the handshake, one turn at the start, the runner's warnings and its
-statistics. The console comes from the runner's stdout either way.
+From power-on the run is on the test's clock: the firmware runs only while the test waits, in
+`board.wait`, `board.wait_until` or a console expect, and stands still in between, however long
+the test body takes. Every limit a test states, an expect's `timeout` included, is in seconds of
+that clock ([pytest plugin](pytest-plugin-user.md#the-fixtures)). The runner waits for the test
+without a limit of its own (`--peer-timeout 0`); a run that hangs is ended by the test's
+wall-time timeout, 600 s by default ([the test's timeout](pytest-plugin-user.md#the-tests-timeout)).
+A run lasts as long as the test waits, up to a day of emulated time (`--max-seconds 86400`), at
+which the runner ends it and a waiting test gets `RunEnded`.
 
-A run stops after 300 emulated seconds if the test has not ended it before. That is time on the
-emulated clock, not the wall clock: a test that waits for anything later fails. The runner exits
-with code 0 when it reaches that limit, its normal end.
+The console reaches the test over the link, in emulated-time order with the runner's turns
+(`--console both`). The runner's stdout gets it too, and with it the runner's own lines
+(`esp32tl-runner: ...`): pytest-embedded writes that stream to the test's `dut.log`, in a directory
+under the system's temporary directory unless `--root-logdir` names another, and prints it with a
+timestamp on each line, which pytest shows as the test's captured stdout when the test fails.
+
+The runner's board is a link to the harness: a Unix socket the backend binds at power-on, before it
+starts the runner, in a new directory under the system's temporary directory (under `/tmp` when
+that path would be too long for a socket), passed as `--board socket:PATH`. The backend reads the
+link in a thread for the whole run, speaking the [link protocol](../protocol.md). Every UART route
+of the board profile is wired to the board from the start: the link watches its pins and carries
+what the firmware transmits there and, once the test has given the route a source, what the source
+sends in ([replay](replay-user.md)). A route without a source listens and says nothing.
 
 ## When the runner exits
 
-Once the runner has exited, the console ends with the line
+Once the runner has exited, the console in `dut.log` ends with the line
 
 ```
 esp32tl: the runner exited with code N
@@ -65,50 +70,46 @@ When the harness found the link wrong, the line before it is
 esp32tl: the link failed: {reason}
 ```
 
-An expect that has not matched by then fails at once with pexpect's `EOF`, instead of waiting out
-its timeout; so does every expect after it, unless it matches the end-of-run line itself. The `EOF`
-names the exit code and carries the runner's last output, up to 2048 bytes of it, from the first
-whole line, without colour codes; part of it may be output that earlier expects already read:
+A test waiting on the board then gets `RunEnded` at once, and so does every wait after it. It names
+the board's time the run ended at, from the runner's statistics (without them, `after the turn
+at` the last turn the test saw, or `before its first turn`), what the test waited for, the exit
+code, and the runner's last
+output, up to 2048 bytes of its log, from the first whole line, without colour codes; part of it
+may be output that earlier expects already read:
 
 ```
-E   pexpect.exceptions.EOF: the runner exited with code 0; its last output:
-E   Goodbye
-...
-E   pexpect.exceptions.EOF: Not found "Hello world!"
-E   Bytes in current buffer (color code eliminated):
+E   esp32tl.interfaces.RunEnded: the run ended before its first turn while the test waited for 'Hello world!' on the console: the runner exited with code 2; its last output:
+E   esp32tl-runner: rom.elf: not an ELF file
 ```
 
-When the harness found the link wrong, the `EOF` starts with that:
-`the link failed: {reason}; the runner exited with code N; its last output:`.
+When the harness found the link wrong, the reason starts with that:
+`the link failed: {reason}; the runner exited with code N; its last output:`. A wait whose
+condition holds at the run's last turn, or on what the firmware printed after it, still returns,
+also when it starts after the end: the backend ends the clock only once the link has been read to
+its end.
 
-pytest-embedded's "Bytes in current buffer" is empty there, because pexpect empties its buffer at
-EOF: the runner's output is in the first `EOF` instead.
-
-To wait for the end of the run on purpose, `console.expect(pexpect.EOF)`. Its timeout is wall
-time, 30 s by default, so an image that runs slower than real time may need a larger `timeout=` to
-reach the 300 emulated seconds.
+To wait for the end of the run on purpose, `console.expect(pexpect.EOF)`, with a `timeout` in
+seconds of the board's time.
 
 ## How the run ends
 
-A run still waiting for its source at teardown is ended before the firmware's first instruction:
-the backend answers the runner's first turn with `stop`, waits up to 5 s for the runner to exit
-0, and the report's statistics say `(stop)`; the test gets an error at teardown unless it
-failed, was skipped or xfailed already ([replay](replay-user.md#when-the-test-gets-it-wrong)).
-Otherwise, at teardown the backend ends the run with
-`SIGTERM`, once the runner has connected and said hello:
-the runner handles the signal only from then on, and before that it would die of it. A test that
-ends while the runner is still loading the images waits up to 5 s for that. On `SIGTERM` the
-runner sends its last warnings and its statistics over the link and exits 0. The backend reads the
-link to its end and waits for the runner; one that has not exited 5 s after the signal is killed
-with `SIGKILL`. It sends `SIGTERM` once only: a second one would kill the runner, with exit code
-143.
+At teardown the backend stops the run at the turn the test left it at: it answers the runner's
+held turn with `stop`, waits up to 5 s for the runner to exit 0, and the report's statistics say
+`(stop)` at the board's time the test last saw. A runner that is not in a held turn, because it is
+still loading the images or the test's wall-time timeout broke into a wait, or that has not exited
+by then, gets `SIGTERM`, once it has connected and said hello: the runner handles the signal only
+from then on, and before that it would die of it. A test that ends while the runner is still
+loading the images waits up to 5 s for that. On `SIGTERM` the runner sends its last warnings and
+its statistics over the link and exits 0. The backend reads the link to its end and waits for the
+runner; one that has not exited 5 s after the signal is killed with `SIGKILL`. It sends `SIGTERM`
+once only: a second one would kill the runner, with exit code 143.
 
 When the harness finds the link wrong (a message out of protocol, an interface that broke its
 promises or raised, a frame error from a baud mismatch on a replayed route), it ends the run at
-once with `SIGTERM`, rather than wait for the runner's next
-turn, which may come only after 300 emulated seconds. An expect that is waiting then fails with the
-`EOF` above, the reason first. A handshake the two sides disagree on is the exception: the runner
-finds the mismatch itself and exits with code 3.
+once with `SIGTERM`, rather than wait for the runner's next turn, which may come only at the end of
+the test's wait. A test that is waiting then gets the `RunEnded` above, the reason first. A
+handshake the two sides disagree on is the exception: the runner finds the mismatch itself and
+exits with code 3.
 
 ## When the run fails
 
@@ -125,9 +126,8 @@ esp32sim: the runner exited with code 3; the link failed: {reason}; its output i
 
 `{logfile}` is the path of the test's `dut.log`.
 
-The teardown says nothing when the test has already failed on an expect that read the runner's
-exit: that `EOF` names the code and the link's reason already. A test that failed for any other
-reason, an `EOF` raised by something else included, still gets the teardown error.
+The teardown says nothing when the test has already failed on `RunEnded`: it names the code and the
+link's reason already. A test that failed for any other reason still gets the teardown error.
 
 The runner's exit codes are in [how a run ends](runner-user.md#how-a-run-ends).
 
@@ -138,26 +138,28 @@ failure, or for every test with `-rA`:
 
 ```
 ----------------------- Captured esp32sim link teardown ------------------------
-board esp32-devkitc, watching no pins
-runner: protocol version 1, esp32sim 8c652151dd5a521249a785ca147f20a9f8eda68f, clock emulated-fifo-write; 1 turn taken by the harness
-stats: the run ended at 4.250000000 s (signal); 1 turn, 0 resets
+board esp32-devkitc, watching GPIO 4, GPIO 5
+runner: protocol version 1, esp32sim 8c652151dd5a521249a785ca147f20a9f8eda68f, clock emulated-fifo-write; 2 turns taken by the harness
+stats: the run ended at 0.100000000 s (stop); 2 turns, 0 resets
   unrouted_rx_bytes 0, inputs_on_output 0, inputs_not_applied 0, rx_bytes_not_paced 0
 ```
 
-The first line names the test's [board profile](board-profiles-user.md#choosing-a-profile) and
-the pins the link watches. It lists the runner's warnings, one line each with its emulated time, the statistics per UART
+This is `tests/test_hello_world.py`'s. The first line names the test's
+[board profile](board-profiles-user.md#choosing-a-profile) and the pins the link watches, those of
+every UART route of the profile. It lists the runner's warnings, one line each with its emulated time, the statistics per UART
 port, and the harness's error with its traceback when an interface raised. `the runner never
-connected` and `no stats: the link ended without them (the runner was killed, or died)` say what
-is missing. The same data is in the test's `esp32sim_link` user property, a JSON string with
+connected`, which is what a test that never powered on gets, and `no stats: the link ended
+without them (the runner was killed, or died)` say what is missing. The same data is in the test's `esp32sim_link` user property, a JSON string with
 `board`, `watch`, `warnings`, `stats` and `error`, which `--junitxml` writes as a `<property>`.
 
 ## When the backend cannot start
 
-The test gets an error at setup and its body does not run. Every message starts with `esp32sim: `:
+Unless the table says otherwise, the test gets an error at setup and its body does not run, and
+the message starts with `esp32sim: `. The two that come at `board.power_on()` fail the test in
+its body instead, as `BackendError: cannot ...`, without the prefix:
 
 | Message | What to do |
 |---|---|
-| `{interface}: a {source} source is not implemented yet; the backend gives replay` | A `source` marker names `model` or `real`, which the backend does not give yet; use `replay` |
 | `the board profile {profile} has no {interface}; its interfaces are {interfaces}` | The test uses `gnss` on a profile without `uart.gnss`; choose a profile that has it |
 | `{build} holds no ESP-IDF build: no flasher_args.json` | Build the app (`make firmware` for this repository's firmware), or fix the `app_path` marker |
 | `{build} is built for {target}; esp32sim runs the classic esp32` | Build for `esp32` |
@@ -165,12 +167,12 @@ The test gets an error at setup and its body does not run. Every message starts 
 | `{build} is not a finished build, missing {files}` | Finish the build; `{files}` is a comma-separated list |
 | `no runner at {path}: run make setup, or set ESP32TL_RUNNER` | Build the runner, or point `ESP32TL_RUNNER` at an executable one |
 | `no ROM ELF at {path}: run make setup, or set ESP32TL_ROM` | Fetch the ROM ELF, or point `ESP32TL_ROM` at it |
-| `cannot listen on {path}: {reason}` | The backend cannot bind the link's socket in a new directory under the system's temporary directory or `/tmp`; check that it is writable |
-| `cannot start {runner}: {reason}` | The runner exists but the system cannot run it, for example `Exec format error` |
+| `cannot listen on {path}: {reason}` | At `board.power_on()`, which raises `BackendError` in the test body: the backend cannot bind the link's socket in a new directory under the system's temporary directory or `/tmp`; check that it is writable |
+| `cannot start {runner}: {reason}` | At `board.power_on()`, which raises `BackendError` in the test body: the runner exists but the system cannot run it, for example `Exec format error` |
 
-`{build}` is the app's `build/` directory. The sources are checked first, then the build, the
-runner, the ROM ELF and the socket, so only the first problem is reported. The profile's routes
-are checked again when the test asks for `gnss`, after the runner has started.
+`{build}` is the app's `build/` directory. The build is checked first, then the runner and the ROM
+ELF, so only the first problem is reported; the socket and the runner's start come at power-on.
+The profile's routes are checked when the test asks for `gnss`.
 
 ## See also
 

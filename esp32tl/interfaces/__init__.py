@@ -2,5 +2,19 @@
 
 
 class SourceError(Exception):
-    """A source given otherwise than the test's `source` markers declare it, or not given before
-    the test waits on the board."""
+    """A source the test gives where the board cannot take it: after `board.power_on()`, a
+    second one on the same route, or one that no backend gives."""
+
+
+class BoardOff(Exception):
+    """The test waited on a board it has not powered on, or powered it on twice."""
+
+
+class RunEnded(Exception):
+    """The run ended while the test waited on the board's clock: the runner exited, or the link
+    failed. The message says when, and why."""
+
+
+class NeverHappened(AssertionError):
+    """What the test waited for did not happen within the board's time it gave: a `wait_until`
+    condition that never held, a console pattern that never appeared."""

@@ -6,10 +6,12 @@ it fails there.
 
 import pytest
 
+from esp32tl.backends.esp32sim import Esp32Sim
 from esp32tl.interfaces.console import Console
 
 pytestmark = pytest.mark.app_path("../firmware/hello_world")
 
 
-def test_hello_world(console: Console) -> None:
+def test_hello_world(board: Esp32Sim, console: Console) -> None:
+    board.power_on()
     console.expect("Hello world!")

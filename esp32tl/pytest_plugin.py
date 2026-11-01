@@ -13,12 +13,17 @@ back to the command line, and a session started with `--embedded-services esp` w
 `esp32sim` case open a serial port. The app comes from the `app_path` marker instead, its build
 from `build/` in it. `--count` above 1 is refused too: a test has one board.
 
-The `source` and `tap` markers say what a test puts at the far end of its board's interfaces and
-which it taps. A backend that cannot give them gets its parameter marked `skip`, with the reason
-from the capability declaration (`esp32tl.boards.capabilities`): the test is skipped before any
-fixture is set up, so pytest-embedded never opens a serial port for it. On the backend that runs
-the test, each interface a `source` marker names waits for the test body to give its source, as
-`gnss.replay(path)` does, and the run waits with it, before the guest boots.
+The test body sets up what is around the board, as `gnss.replay(path)` does, then calls
+`board.power_on()`, which starts the run; from there the board's clock moves only while the test
+waits on it (`board.wait`, `board.wait_until`, `console.expect`). A source that the backend's
+capability declaration (`esp32tl.boards.capabilities`) does not give skips the test at the call
+that asks for it. The `tap` marker says which interfaces a test taps; a backend that cannot gets
+its parameter marked `skip`, with the reason, before any fixture is set up, so pytest-embedded
+never opens a serial port for it.
+
+Every test that uses `board` gets pytest-timeout's `timeout` marker of `DEFAULT_TIMEOUT` seconds of
+wall time, unless the session or the test sets a timeout of its own: the runner waits for the test
+for as long as the body runs, so this is what ends a run that hangs.
 """
 
 import json
@@ -27,17 +32,23 @@ from dataclasses import dataclass
 from typing import NoReturn
 
 import pytest
+import pytest_timeout
 from pytest_embedded.dut import Dut
 from pytest_embedded.log import MessageQueue
 from pytest_embedded.utils import Meta
 
 from esp32tl import boards
 from esp32tl.backends import SERVICES
-from esp32tl.backends.esp32sim import BackendError, Esp32Sim, ended_on_runner_exit
+from esp32tl.backends.esp32sim import BackendError, Esp32Sim, ended_while_waiting
 from esp32tl.boards import DEFAULT_PROFILE, BoardProfile, ProfileError
 from esp32tl.boards.capabilities import CapabilityError, Request, check, declared, refusal
 from esp32tl.interfaces.console import Console
 from esp32tl.interfaces.uart import Uart
+
+# The wall-time timeout of a test that uses `board`, in seconds, unless one is configured: 600 s
+# covers at least three minutes of the board's busiest work, at the 0.3 times real time stage 0
+# measured for CPU-bound code (docs/stage0-findings.md), and far more of an idle board.
+DEFAULT_TIMEOUT = 600
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -58,11 +69,6 @@ def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
         "markers",
         f"board_profile(name): the board profile a test runs; {DEFAULT_PROFILE} by default",
-    )
-    config.addinivalue_line(
-        "markers",
-        "source(interface, source): what the test puts at the far end of a board interface, as in"
-        ' source("uart.gnss", "replay"); a backend that cannot gives a skip',
     )
     config.addinivalue_line(
         "markers",
@@ -87,59 +93,9 @@ def board_profile(node: pytest.Item) -> BoardProfile:
     return boards.profile(marker.args[0])
 
 
-def source_markers(node: pytest.Item) -> Iterator[tuple[str, object, pytest.Mark]]:
-    """The `source` markers of `node` and its parents, closest first, each with the name and the
-    identity of the level it is on. pytest gives a class the markers of its bases too, bases
-    first; here each class of the MRO is a level of its own, the class before its bases, so that
-    a subclass overrides its base. A marker a hook added to the class's node is in no class's
-    own marks, and counts as the class's."""
-    for level in reversed(node.listchain()):
-        if isinstance(level, pytest.Class):
-            mro = [(cls, class_marks(cls)) for cls in level.obj.__mro__]
-            known = [mark for _, marks in mro for mark in marks]
-            added = [mark for mark in level.own_markers if mark not in known]
-            mro[0] = (level.obj, added + mro[0][1])
-            for cls, marks in mro:
-                for mark in marks:
-                    if mark.name == "source":
-                        yield cls.__name__, cls, mark
-        else:
-            for mark in level.own_markers:
-                if mark.name == "source":
-                    yield level.name, level, mark
-
-
-def class_marks(cls: type) -> list[pytest.Mark]:
-    """The marks `cls` itself carries, without its bases': decorators, or a `pytestmark`
-    attribute of one mark or a list of them."""
-    marks = cls.__dict__.get("pytestmark", [])
-    if not isinstance(marks, list):
-        marks = [marks]
-    found = [getattr(m, "mark", m) for m in marks]
-    return [m for m in found if isinstance(m, pytest.Mark)]
-
-
 def board_requests(node: pytest.Item) -> list[Request]:
-    """The sources and taps the `source` and `tap` markers of `node` and its parents ask for.
-
-    For each interface the closest `source` marker wins, as the closest `app_path` does: one on a
-    test overrides its class's, a subclass's overrides its base's, a class's its module's. Two on
-    the same test, class or module are an error, since neither is closer. Taps add up over every
-    level."""
-    sources: dict[str, str] = {}
-    levels: dict[str, object] = {}
-    for name, level, marker in source_markers(node):
-        args = marker.args
-        if len(args) != 2 or marker.kwargs or not all(isinstance(a, str) for a in args):
-            raise MarkerError(
-                "the source marker takes an interface and a source,"
-                ' as in @pytest.mark.source("uart.gnss", "replay")'
-            )
-        if args[0] not in sources:
-            sources[args[0]] = args[1]
-            levels[args[0]] = level
-        elif levels[args[0]] is level:
-            raise MarkerError(f"two source markers on {name} name {args[0]}")
+    """The taps the `tap` markers of `node` and its parents ask for, added up over every level:
+    a tap asks for more, never for something else."""
     taps: list[str] = []
     for marker in node.iter_markers("tap"):
         args = marker.args
@@ -148,9 +104,7 @@ def board_requests(node: pytest.Item) -> list[Request]:
                 'the tap marker takes one or more interfaces, as in @pytest.mark.tap("console")'
             )
         taps += args
-    return [Request(i, source=s) for i, s in sources.items()] + [
-        Request(i, tap=True) for i in dict.fromkeys(taps)
-    ]
+    return [Request(i, tap=True) for i in dict.fromkeys(taps)]
 
 
 @dataclass(frozen=True)
@@ -229,13 +183,30 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
                 f"{item.nodeid}: {late} reached the test after esp32tl read it, from a"
                 " pytest.param or a hook: put it on the test, its class or its module"
             )
+    if not timeout_configured(config):
+        for item in items:
+            if "board" in getattr(item, "fixturenames", ()) and not item.get_closest_marker(
+                "timeout"
+            ):
+                item.add_marker(pytest.mark.timeout(DEFAULT_TIMEOUT))
+
+
+def timeout_configured(config: pytest.Config) -> bool:
+    """Whether the session sets pytest-timeout's timeout, 0 included: --timeout, then the
+    PYTEST_TIMEOUT environment variable, then the `timeout` ini option, as pytest-timeout reads
+    them. With pytest-timeout disabled (`-p no:timeout`) there is no timeout to give."""
+    if not config.pluginmanager.has_plugin("timeout"):
+        return True
+    # pytest-timeout leaves it unannotated.
+    settings = pytest_timeout.get_env_settings(config)  # type: ignore[no-untyped-call]
+    return settings.timeout is not None
 
 
 def late_board_marker(config: pytest.Config, item: pytest.Item) -> str | None:
     """Which board marker `item` carries otherwise than its definition did, if one does. A
     pytest.param's marks and those a hook adds reach the item but not the definition
-    pytest_generate_tests reads, so a source there would skip no backend, and a profile there
-    would reach `board` unchecked."""
+    pytest_generate_tests reads, so a tap there would skip no backend, and a profile there would
+    reach `board` unchecked."""
     callspec = getattr(item, "callspec", None)
     if callspec is None or "board" not in getattr(item, "fixturenames", ()):
         return None
@@ -253,23 +224,18 @@ def late_board_marker(config: pytest.Config, item: pytest.Item) -> str | None:
     except (MarkerError, ProfileError):
         return "the board_profile marker"
     try:
-        requests = board_requests(item)
+        if board_requests(item) != list(read.requests):
+            return "the tap marker"
     except MarkerError:
-        return "a source or tap marker"
-    if [r for r in requests if r.source is not None] != [
-        r for r in read.requests if r.source is not None
-    ]:
-        return "the source marker"
-    if [r for r in requests if r.tap] != [r for r in read.requests if r.tap]:
         return "the tap marker"
     return None
 
 
-# Set on a test whose call failed on an expect that read the runner's end: its error names the exit
-# code already.
-EXPECT_SAW_RUNNER_EXIT = pytest.StashKey[bool]()
-# Set on a test whose setup or call did not pass (failed, skipped, xfailed): a run it never
-# started is then not reported on top of that.
+# Set on a test whose call failed on RunEnded, waiting on a run that ended: its error names the
+# exit code and the link's error already.
+CALL_SAW_RUN_END = pytest.StashKey[bool]()
+# Set on a test whose setup or call did not pass (failed, skipped, xfailed): a board it never
+# powered on is then not reported on top of that.
 DID_NOT_PASS = pytest.StashKey[bool]()
 
 
@@ -283,9 +249,9 @@ def pytest_runtest_makereport(
     if (
         report.when == "call"
         and call.excinfo is not None
-        and ended_on_runner_exit(call.excinfo.value)
+        and ended_while_waiting(call.excinfo.value)
     ):
-        item.stash[EXPECT_SAW_RUNNER_EXIT] = True
+        item.stash[CALL_SAW_RUN_END] = True
     return report
 
 
@@ -293,13 +259,12 @@ def pytest_runtest_makereport(
 def board(
     request: pytest.FixtureRequest, dut: Dut, app_path: str, msg_queue: MessageQueue, _meta: Meta
 ) -> Iterator[Esp32Sim]:
-    """The firmware in `app_path`, running on the backend this test is parametrised with, on
-    the board profile the test chose."""
+    """The firmware in `app_path`, on the backend this test is parametrised with, on the board
+    profile the test chose; off until the test calls `board.power_on()`."""
     assert request.param == Esp32Sim.name, request.param
     if not isinstance(dut, Dut):
         # `count` parametrised above 1 in the test: pytest-embedded made a dut per count.
         pytest.fail("count is above 1: esp32tl runs one board in a test", pytrace=False)
-    sources = {r.interface: r.source for r in board_requests(request.node) if r.source is not None}
     try:
         backend = Esp32Sim(
             dut,
@@ -307,8 +272,8 @@ def board(
             msg_queue,
             _meta,
             board_profile(request.node),
-            sources,
             directory=request.path.parent,
+            skip=skip_at_the_test,
         )
     except BackendError as error:
         backend_failed(error)
@@ -318,20 +283,18 @@ def board(
         try:
             backend.close()
         except BackendError as error:
-            # An expect that ended on the runner's exit has already reported it, with its code
+            # A test that waited on the run when it ended has reported it already, with its code
             # and what the link found.
-            if not request.node.stash.get(EXPECT_SAW_RUNNER_EXIT, False):
+            if not request.node.stash.get(CALL_SAW_RUN_END, False):
                 backend_failed(error)
         else:
-            # A test that passed without giving a source it declared ran no firmware: it would
-            # pass whatever the firmware does.
-            if backend.never_started and not request.node.stash.get(DID_NOT_PASS, False):
-                names = " and ".join(
-                    f"the {source} of {name}" for name, source in backend.never_started.items()
-                )
+            # A test that set up a source and never powered on ran no firmware: it would pass
+            # whatever the firmware does.
+            set_up = backend.set_up()
+            if set_up and not backend.powered and not request.node.stash.get(DID_NOT_PASS, False):
                 pytest.fail(
-                    f"{Esp32Sim.name}: the run never started: it waited for {names}, which the"
-                    " source marker declares; give it in the test body",
+                    f"{Esp32Sim.name}: the test set up {' and '.join(set_up)} and never called"
+                    " board.power_on(): it ran no firmware",
                     pytrace=False,
                 )
         finally:
@@ -344,6 +307,12 @@ def board(
             )
 
 
+def skip_at_the_test(reason: str) -> NoReturn:
+    """Skips the test from its body, reported at the test, as a skip marker's skip is, rather
+    than at the line of esp32tl's that raised it."""
+    raise pytest.skip.Exception(reason, _use_item_location=True)
+
+
 def backend_failed(error: BackendError) -> NoReturn:
     # from None: the message says it all, and the chained error would say it twice
     raise pytest.fail.Exception(f"{Esp32Sim.name}: {error}", pytrace=False) from None
@@ -351,14 +320,15 @@ def backend_failed(error: BackendError) -> NoReturn:
 
 @pytest.fixture
 def console(board: Esp32Sim) -> Console:
-    """The firmware's console; `console.expect` is `dut.expect`, once the run has started."""
-    return Console(board.dut, board.waiting)
+    """The firmware's console, read on the board's clock: `console.expect` lets the board run
+    until a pattern appears."""
+    return Console(board)
 
 
 @pytest.fixture
 def gnss(board: Esp32Sim) -> Uart:
-    """The far end of the board profile's `uart.gnss` route: `gnss.replay(path)` replays a
-    recording into it."""
+    """The far end of the board profile's `uart.gnss` route: `gnss.replay(path)`, before
+    `board.power_on()`, replays a recording into it."""
     try:
         return board.uart("gnss")
     except BackendError as error:

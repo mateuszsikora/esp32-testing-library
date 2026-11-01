@@ -95,34 +95,22 @@ runs without a sign. Also rejected: raising from `pytest_generate_tests`, becaus
 
 ## The end of the run is a line appended to the runner's log
 
-Status: decided (#51)
+Status: superseded (#65)
 
-A thread in `Esp32Sim` waits for the runner and appends `esp32tl: the runner exited with code N`
-to its log, behind everything the runner wrote. `end_stream_at_end_of_run` replaces
-`read_nonblocking` on the dut's `pexpect_proc`, which then raises `EOF` once it has read that line,
-so an expect that has not matched fails at once instead of waiting out its 30 s timeout. pexpect
-empties its buffer at `EOF`, so pytest-embedded's "Not found" message would show nothing: the
-`EOF` carries the exit code and up to 2 KiB of the runner's last output (`EOF_TAIL_BYTES`),
-starting at a whole line and without colour codes. This relies on pexpect 4.9.0 and pytest-embedded
-2.9.3 internals (`DuplicateStdoutPopen._logfile`, how pexpect re-raises `EOF`); only
-pytest-embedded is pinned (`~=2.9.3`), and the fake-runner tests in `tests/test_pytest_plugin.py`
-fail if either changes.
-
-**Rejected:** closing the pexpect file when the runner exits, because output still in transit
-through the log forwarder, the message queue and the listener would be dropped. Also rejected:
-wrapping `console.expect` in short polling expects, because that breaks `expect_all`.
+A thread in `Esp32Sim` appended `esp32tl: the runner exited with code N` to the runner's log, and
+`end_stream_at_end_of_run` made the dut's `pexpect_proc` raise `EOF` once it had read that line,
+with the exit code and the runner's last output, so that an expect that had not matched failed at
+once rather than after its 30 s. The line is still appended, for whoever reads `dut.log`, but the
+console no longer reads the pexpect stream: see [a run that ends while the test waits raises RunEnded](#a-run-that-ends-while-the-test-waits-raises-runended-with-the-runners-last-output).
 
 ## Teardown recognises the end of the run by RunnerExited in the exception chain
 
-Status: decided (#51)
+Status: superseded (#65)
 
-The end-of-run `EOF` is a `RunnerExited`, a subclass of `pexpect.EOF`. pexpect raises its own
-`EOF` from it, and pytest-embedded its "Not found" error from that, so `ended_on_runner_exit` walks
-`__cause__` and `__context__` (stopping at a cycle) to find it. The `board` teardown skips its own
-error only when the call failed that way, so the runner's exit is reported once.
-
-**Rejected:** staying quiet after any `EOF`, because an `EOF` from a host tool the test drives
-itself could then hide a runner that crashed in the same test.
+The end-of-run `EOF` was a `RunnerExited`, a subclass of `pexpect.EOF`, which
+`ended_on_runner_exit` found in the call's exception chain, so that the `board` teardown reported
+the runner's exit once. With the console on the test's clock the end of the run is `RunEnded`: see
+[a run that ends while the test waits raises RunEnded](#a-run-that-ends-while-the-test-waits-raises-runended-with-the-runners-last-output).
 
 ## Teardown passes only the signals it sent itself
 
@@ -136,6 +124,10 @@ backend starts it with `--board`, see
 ## Teardown waits for the runner's hello, sends one SIGTERM and passes exit code 0 only
 
 Status: decided (#12)
+
+*Since #65 the `SIGTERM` is for a runner the test's clock does not hold in a turn: [teardown stops
+the run at the turn the test left it at](#teardown-stops-the-run-at-the-turn-the-test-left-it-at)
+comes first.*
 
 `Esp32Sim.close` waits up to 5 s for the runner's `hello`, sends `SIGTERM` once, reads the link
 to end of file, and sends `SIGKILL` only when the runner has not exited 5 s after the signal. The
@@ -164,20 +156,17 @@ the runner finds it in the harness's `hello` and exits 3 by itself.
 
 **Rejected:** waiting for the runner's next turn to send `stop`, because with `quiet_until` and
 `latency` both `null` that turn may come only at `--max-seconds`, 300 emulated seconds, and the
-expect would time out after 30 s with no word of the cause.
+expect would time out after 30 s with no word of the cause. Since #65 the next turn comes at the
+end of the test's wait, or at `--max-seconds 86400`, and the waiting test gets `RunEnded` with the
+link's reason first; the reason to signal at once stands.
 
 ## The EOF takes the link's error from BoardLink, not from the log
 
-Status: decided (#12)
+Status: superseded (#65)
 
-`end_stream_at_end_of_run` gets the link's error from `link_error()`, which reads `BoardLink`'s
-`error` once the end-of-run line has been read; the backend writes that line after the link has
-been read to its end. The `esp32tl: the link failed: ...` line stays in the log for whoever reads
-`dut.log`.
-
-**Rejected:** finding the reason in the log with a pattern, because the guest's output shares the
-log: a long last line without a newline cuts the pattern's leading `\n` off at the 2 KiB tail, and
-the guest can print the same words.
+`end_stream_at_end_of_run` took the link's error for its `EOF` from `BoardLink.error`, not from the
+`esp32tl: the link failed: ...` line in the log, which the guest's output could cut or imitate.
+`RunEnded` takes it from `BoardLink.error` the same way: see [a run that ends while the test waits raises RunEnded](#a-run-that-ends-while-the-test-waits-raises-runended-with-the-runners-last-output).
 
 ## BoardLink checks every input through the codec before it sends it
 
@@ -244,15 +233,12 @@ plugin's only flag.
 
 ## A run lasts at most 300 emulated seconds
 
-Status: decided (#51)
+Status: superseded (#65)
 
-*Decided in #64 to give way to [the board's clock is the
-test's](#the-boards-clock-is-the-tests-emulated-time-moves-only-while-the-test-waits); this is what
-the code does until that lands.*
-
-The backend starts the runner with `--max-seconds 300` (`MAX_SECONDS`). A test normally ends the
-run earlier, at teardown; the limit also stops a runner left behind by a harness that died. On an
-M2 Pro, `hello_world` runs 12 emulated seconds in 0.3 s of wall time, and 300 in 5.9 s.
+The backend started the runner with `--max-seconds 300` (`MAX_SECONDS`), which also stopped a
+runner left behind by a harness that died. A run on the test's clock lasts as long as the test
+waits, and the backend passes `--max-seconds 86400`: see [the board's clock is the test's](#the-boards-clock-is-the-tests-emulated-time-moves-only-while-the-test-waits). `MAX_SECONDS`, 300, stays the
+default of the `esp32tl` command, whose clock runs free.
 
 ## The negative hello_world test edits the app image in place
 
@@ -332,10 +318,9 @@ distinction comes with a way to drive an off-board interface of a real board fro
 
 Status: decided (#13)
 
-*For the `source` marker, decided in #64 to give way to [what is at a route's far end is what the
-test does with
-it](#what-is-at-a-routes-far-end-is-what-the-test-does-with-it-before-power-on-not-a-marker); this
-is what the code does until that lands. The `tap` marker keeps it until #21.*
+*For the `source` marker, superseded in #65 by [what is at a route's far end is what the test does
+with it](#what-is-at-a-routes-far-end-is-what-the-test-does-with-it-before-power-on-not-a-marker),
+whose skip comes at the call. The `tap` marker keeps it until #21.*
 
 The `source` and `tap` markers name what a test needs; `pytest_generate_tests` marks the
 parameter of each backend that cannot give it with `pytest.mark.skip(reason=...)`. pytest skips
@@ -348,26 +333,20 @@ the backend has started.
 
 ## The closest source marker wins per interface
 
-Status: decided (#13)
+Status: superseded (#65)
 
-*Decided in #64 to give way to [what is at a route's far end is what the test does with
-it](#what-is-at-a-routes-far-end-is-what-the-test-does-with-it-before-power-on-not-a-marker); this
-is what the code does until that lands.*
-
-For each interface, the `source` marker closest to the test decides, as the closest `app_path`
-and `board_profile` do, so a test can override its module's source. Each class of a test class's
-MRO counts as a level of its own, the class before its bases: pytest puts a class's and its
-bases' markers on one node, bases first, which would make a subclass's `source` clash with its
-base's. Two `source` markers on the
-same test, class or module for one interface are a collection error, since neither is closer.
-`tap` markers add up over every level: a tap asks for more, never for something else.
-
-**Rejected:** refusing two `source` markers for one interface on any levels, because a module
-could then not set a default that one test changes.
+For each interface the `source` marker closest to the test decided, each class of a test class's
+MRO a level of its own, and two on one level were a collection error. The `source` marker is gone:
+what is at a route's far end is what the test does with it before power-on, see [what is at a route's far end is what the test does with it](#what-is-at-a-routes-far-end-is-what-the-test-does-with-it-before-power-on-not-a-marker).
 
 ## Board markers that reach a test after collection read it are refused
 
 Status: decided (#13)
+
+*For the `source` marker, superseded in #65 by [what is at a route's far end is what the test does
+with it](#what-is-at-a-routes-far-end-is-what-the-test-does-with-it-before-power-on-not-a-marker):
+the plugin reads `app_path`, `board_profile` and `tap`, and a `tap` there would skip no backend the
+same way.*
 
 `pytest_generate_tests` keeps what it read from each definition's `app_path`, `board_profile`,
 `source` and `tap` markers; `pytest_collection_modifyitems`, `trylast`, reads them again from
@@ -395,10 +374,9 @@ module and its flash mode, and a profile does not name its module.
 
 Status: decided (#13)
 
-*For the `source` marker, decided in #64 to give way to [what is at a route's far end is what the
-test does with
-it](#what-is-at-a-routes-far-end-is-what-the-test-does-with-it-before-power-on-not-a-marker); this
-is what the code does until that lands. The `tap` marker keeps it until #21.*
+*For the `source` marker, superseded in #65 by [what is at a route's far end is what the test does
+with it](#what-is-at-a-routes-far-end-is-what-the-test-does-with-it-before-power-on-not-a-marker):
+a source no backend gives is an error at the call. The `tap` marker keeps it until #21.*
 
 A `source` or `tap` marker that names an interface the profile lacks, or a source or tap that no
 declared backend gives, fails collection with the test's id.
@@ -408,68 +386,30 @@ then pass the run as skipped, never as wrong.
 
 ## The run waits before the guest boots until the test has given its declared sources
 
-Status: decided (#14)
+Status: superseded (#65)
 
-*Decided in #64 to give way to [the board's clock is the
-test's](#the-boards-clock-is-the-tests-emulated-time-moves-only-while-the-test-waits) and [a run
-starts at board.power_on()](#a-run-starts-at-boardpower_on-and-so-does-the-runner); this is what the
-code does until that lands.*
-
-The specification's test calls `gnss.replay(path)` in its body, after the `board` fixture has
-started the runner. The runner sends its first `sync` at `t = 0` and boots the guest only after
-the harness's first `wait` (protocol §6, rule 4), so `BoardLink` holds that first turn until every
-interface a `source` marker declares has its source; emulated time does not move meanwhile. A
-recording replayed from power-on then starts where it was recorded, and two runs of it give the
-same console. The wait is wall time in the runner's turn, so `--peer-timeout`, 60 s by default,
-bounds it: a body that takes longer before its replay ends the run with exit code 4. A
-`console.expect` while the run still waits raises `SourceError` at once, since the run
-could not reach what it waits for. A run still waiting at teardown is ended with `stop`, and a
-test whose setup and body passed all the same gets an error at teardown: it ran no firmware, and
-would pass whatever the firmware does.
-
-**Rejected:** starting the run at once and the replay when it is called, because with nothing on
-the link the runner runs free to the end of the run before the body starts, and the replay's start
-would depend on wall time; starting the run at the first expect, because a test that waits on
-nothing else would never run its firmware, and the start would hang on an implicit trigger; and
-giving the source in a fixture before `board`, because the specification puts `gnss.replay` in
-the body. Also rejected: letting a test that never gave its declared source pass, because a
-module-wide `source` marker would then pass every test of the module that checks nothing but what
-the run left behind, with no firmware run; and only a warning in the link's report, which pytest
-shows only with a failure or `-rA`.
+The runner started at the `board` fixture's setup, and `BoardLink` held its first turn, at `t = 0`,
+until the test body had given every source a `source` marker declared, bounded by the runner's
+60 s `--peer-timeout`; a `console.expect` before then raised `SourceError`, and a run never
+started was stopped at teardown and failed a test that had passed. The test now gives its sources
+before `board.power_on()`, which starts the runner, and every turn is held until the test waits:
+see [the board's clock is the test's](#the-boards-clock-is-the-tests-emulated-time-moves-only-while-the-test-waits) and [a run starts at board.power_on()](#a-run-starts-at-boardpower_on-and-so-does-the-runner).
 
 ## A replay needs the source marker that declares it
 
-Status: decided (#14)
+Status: superseded (#65)
 
-*Decided in #64 to give way to [what is at a route's far end is what the test does with
-it](#what-is-at-a-routes-far-end-is-what-the-test-does-with-it-before-power-on-not-a-marker); this
-is what the code does until that lands.*
-
-`gnss.replay(path)` is refused without `@pytest.mark.source("uart.gnss", "replay")`. Only a
-declared route is on the link, so the board knows at setup which sources to wait for, and the
-marker is what skips the test on a backend that cannot replay (`serial`).
-
-**Rejected:** putting every route of the profile on the link and starting the run once the body
-gives a source, because the board would not know whether to wait; and taking the source from the
-body alone, which [the skip decision](#a-source-or-tap-a-backend-cannot-give-skips-its-parameter-at-collection)
-already rejects.
+`gnss.replay(path)` was refused without `@pytest.mark.source("uart.gnss", "replay")`, and only a
+declared route was on the link, so that the board knew at setup which sources to wait for. Every
+UART route of the profile is on the link now, and the call alone gives the source: see [what is at a route's far end is what the test does with it](#what-is-at-a-routes-far-end-is-what-the-test-does-with-it-before-power-on-not-a-marker).
 
 ## The esp32sim backend refuses a model or real source at setup until it gives one
 
-Status: decided (#14)
+Status: superseded (#65)
 
-*Decided in #64 to give way to [what is at a route's far end is what the test does with
-it](#what-is-at-a-routes-far-end-is-what-the-test-does-with-it-before-power-on-not-a-marker); this
-is what the code does until that lands.*
-
-The capability declaration gives `esp32sim` `model`, `replay` and `real` on every UART, which is
-what the backend is to give; it gives `replay` only so far. A test that declares another gets
-`esp32sim: uart.gnss: a model source is not implemented yet; the backend gives replay` at setup.
-
-**Rejected:** skipping, because the test would then run nowhere without failing; holding the run,
-because nothing could give the source and the test would wait for its expect's timeout; and
-narrowing the declaration, because it says what the backend is for, and a skip on `esp32sim` would
-read as "this backend cannot", which is not so.
+A `source` marker that named `model` or `real` failed the test at setup on `esp32sim`, which
+declares both and gave neither. Without the marker a source is asked for by the call that gives
+it, and there is no call for a `model` or a `real` source yet: see [what is at a route's far end is what the test does with it](#what-is-at-a-routes-far-end-is-what-the-test-does-with-it-before-power-on-not-a-marker).
 
 ## A replay path is relative to the test file's directory
 
@@ -644,10 +584,7 @@ and a pattern that does not appear raises `NeverHappened` instead of pexpect's `
 A run has no length of its own any more: it lasts as long as the test waits. The backend starts
 the runner with `--max-seconds 86400`, a day of emulated time, only because the flag is required;
 a test that reaches it gets `RunEnded`. A runner whose harness has died does not need the limit
-either: it sees the socket close and exits with code 4 (protocol §9). Until it is implemented,
-[the run waits before the guest boots until the test has given its declared sources](#the-run-waits-before-the-guest-boots-until-the-test-has-given-its-declared-sources)
-and [a run lasts at most 300 emulated seconds](#a-run-lasts-at-most-300-emulated-seconds) describe
-the code.
+either: it sees the socket close and exits with code 4 (protocol §9).
 
 Measured on a spike on 2026-10-31, on the protocol as it is, with no runner change, only
 `--console both`: `nmea_reader` and the production release image of
@@ -673,7 +610,7 @@ The test body sets up what is around the board and in its flash, then calls `boa
 which starts the runner and lets the guest boot. A test that waits before it gets
 `the board is off; call board.power_on() first`. A test that set up something only a run can use
 (a source on a route, a modem or a network service, flash contents) and never called
-`power_on()` gets an error at teardown, as a test that never gave its declared source does now:
+`power_on()` gets an error at teardown, as a test that never gave its declared source did until #65:
 it ran no firmware, and would pass whatever the firmware does. A test that touched none of these,
 such as one that only reads `board.profile`, passes without a runner. Starting the runner at
 power-on rather than at the `board` fixture's setup lets the body still choose what the flash
@@ -726,19 +663,117 @@ not a skip, as it is a collection error now. The `real` source has no call yet, 
 M5. The `tap` marker is not part of this decision: taps come with #21, and so does the decision on
 how a test asks for one.
 
-Until it is implemented, these describe the code:
-[a replay needs the source marker that declares it](#a-replay-needs-the-source-marker-that-declares-it),
-[a source or tap a backend cannot give skips its parameter at collection](#a-source-or-tap-a-backend-cannot-give-skips-its-parameter-at-collection),
-[the closest source marker wins per interface](#the-closest-source-marker-wins-per-interface),
-[a request no backend can give is a collection error](#a-request-no-backend-can-give-is-a-collection-error)
-and [the esp32sim backend refuses a model or real source at setup until it gives one](#the-esp32sim-backend-refuses-a-model-or-real-source-at-setup-until-it-gives-one).
-
 **Rejected:** keeping the marker, because the test states the source twice, once in a decorator
 far from the body; the reason it was needed, that the board had to know at setup whether to wait,
 is gone once the run starts at `power_on()`. The cost accepted: on the `serial` backend a test is
 skipped in its body rather than before its setup, after pytest-embedded has opened the board's
 port, which [the skip at collection](#a-source-or-tap-a-backend-cannot-give-skips-its-parameter-at-collection)
 was made to avoid.
+
+## The board's durations are numbers of seconds until the units land
+
+Status: decided (#65)
+
+*Decided in #65 to give way to [models describe the world in its own terms, in
+units](#models-describe-the-world-in-its-own-terms-in-units); this is what the code does until that
+lands.*
+
+`board.wait(duration)`, `wait_until`'s `within` and an expect's `timeout` take an `int` or a
+`float` of seconds of the board's time, finite and 0 or more, and `board.now` is a `float` of
+seconds. An expect's `timeout` was a number of seconds before, and stays one, so a test reads the
+same way with every limit it states.
+
+**Rejected:** a `Duration` type in this change, because the units module comes with the GNSS model
+(#69), with its own feature documents, and a type of its own here would be replaced there. Also
+rejected: `datetime.timedelta`, because its resolution is a microsecond, not the link's
+nanosecond, and the units decision gives the API esp32tl's own quantities.
+
+## A wait asks its condition in the test's thread, while the link is held
+
+Status: decided (#65)
+
+`HeldClock.turn` holds the link's thread at the start of every turn and wakes the test, which asks
+its condition, in its own thread, and then lets the run go to its next bound or returns. The
+console's patterns are such conditions. The link reads nothing while it is held, so the condition
+reads the console and anything else of the link without a race. It costs two thread switches per
+turn: at the 100 ms step, ten per emulated second.
+
+**Rejected:** asking the condition on the link's thread, inside `turn`, as the spike did, because
+an exception from the test's condition would fail the link as the harness's own fault instead of
+failing the test where it was written, and a condition would read the test's state from another
+thread.
+
+## A run that ends while the test waits raises RunEnded, with the runner's last output
+
+Status: decided (#65)
+
+The backend's waiter thread ends the clock once the runner has exited and the link has been read
+to its end, with `the runner exited with code N; its last output:` and up to 2 KiB of the runner's
+log (`LAST_OUTPUT_BYTES`), from the first whole line and without colour codes, after
+`the link failed: {error}; ` when `BoardLink.error` is set. Every wait from then on raises
+`RunEnded`, which names the board's time and what the test waited for; a wait first asks its
+condition once more, since what the guest printed last is in by then. The plugin finds `RunEnded`
+in the call's `__cause__`/`__context__` chain, stopping at a cycle, and keeps the teardown quiet
+about the exit it reported. The error comes from `BoardLink`, not from the log, where the guest's
+output could cut or imitate it.
+
+**Rejected:** keeping the pexpect stream and its end-of-run `EOF`, because the console reads the
+link now, and the stream's timeouts are wall time. Also rejected: turning `RunEnded` into
+`NeverHappened` inside an expect, as the spike did, because the end of the run is a different
+failure, whose exit code and output are what the reader needs first; and staying quiet at teardown
+after any failure, because a failure of the test's own could then hide a runner that crashed in
+the same test.
+
+## Teardown stops the run at the turn the test left it at
+
+Status: decided (#65)
+
+`Esp32Sim.close` stops the clock first: the link answers the turn it is held at with `stop`, and the
+backend waits up to 5 s for the runner to exit 0, before the `SIGTERM` of [teardown waits for the
+runner's hello](#teardown-waits-for-the-runners-hello-sends-one-sigterm-and-passes-exit-code-0-only),
+which is left for a runner in no held turn: one still loading its images, or one whose test's
+wall-time timeout broke into a wait. The run then ends at the board's time the test last saw, and
+two runs of a test end alike.
+
+**Rejected:** letting the run go and sending `SIGTERM`, as the spike did, because the run would
+run free between the two, and where it ended would depend on wall time.
+
+## The default timeout is a marker the plugin adds to each test that uses board
+
+Status: decided (#65)
+
+When the session sets no timeout (`--timeout`, `PYTEST_TIMEOUT`, the `timeout` ini option, read
+through pytest-timeout's own `get_env_settings`), `pytest_collection_modifyitems` adds
+`pytest.mark.timeout(600)` to every test that uses `board` and has no `timeout` marker of its own.
+
+**Rejected:** setting pytest-timeout's session default, because tests that do not use `board`
+would get it too; and checking for a configured timeout with private attributes of the config,
+because `get_env_settings` is what pytest-timeout reads them with.
+
+## A source the backend cannot give skips the test at the test's line
+
+Status: decided (#65)
+
+The `board` fixture gives the backend `skip_at_the_test`, which raises
+`pytest.skip.Exception(reason, _use_item_location=True)`, so `-ra` names the test's file and line,
+as for a skip marker. `_use_item_location` is pytest's own argument, used by its skip marker, and
+not part of its documented API; `tests/test_pytest_plugin.py::test_a_source_the_backend_cannot_give_skips_at_the_call`
+fails if it changes.
+
+**Rejected:** `pytest.skip(reason)`, because the report names the line of `esp32tl/backends/esp32sim.py`
+that raised it, the same for every test.
+
+## A leftover source marker is not refused
+
+Status: decided (#65)
+
+The plugin no longer registers the `source` marker. With `--strict-markers`, as this repository
+runs, a test that still carries one is a collection error,
+``'source' not found in `markers` configuration option``; without it, pytest warns of an unknown
+marker (`PytestUnknownMarkWarning`) and the test runs.
+
+**Rejected:** a message of esp32tl's own for the marker, because no project outside this repository
+uses it yet.
 
 ## Models describe the world in its own terms, in units
 

@@ -1,7 +1,7 @@
 """The `gnss` fixture: a recording replayed through `gnss.replay(path)` into nmea_reader on the
-real runner, what a test that gives its source otherwise than its markers declare sees, and
-test_nmea_reader.py's test_reports_a_fix failing on a changed recording and on a baud mismatch.
-Needs `make firmware` (nmea_reader)."""
+real runner, what a test that gives its source out of order sees, and test_nmea_reader.py's
+test_reports_a_fix failing on a changed recording and on a baud mismatch. Needs `make firmware`
+(nmea_reader)."""
 
 import base64
 import json
@@ -21,11 +21,11 @@ RECORDING = ROOT / "recordings" / "gnss-generated-1.jsonl"
 
 
 @pytest.mark.app_path("../firmware/nmea_reader")
-@pytest.mark.source("uart.gnss", "replay")
 def test_a_replay_reaches_nmea_reader_on_the_gnss_route(
     board: Esp32Sim, gnss: Uart, console: Console
 ) -> None:
     replay = gnss.replay("../recordings/gnss-generated-1.jsonl")
+    board.power_on()
     # The first sentence, at 1 emulated second, is the first fix (validation-firmware-user.md).
     console.expect_exact("fix acquired lat=52.229677 lon=21.012233")
     # The second, an RMC at 2 s: 5213.7794,N 02100.7356,E.
@@ -34,7 +34,7 @@ def test_a_replay_reaches_nmea_reader_on_the_gnss_route(
     assert board.link.warnings == []
 
 
-def test_a_source_given_otherwise_than_declared_fails_the_test(pytester: pytest.Pytester) -> None:
+def test_a_source_given_out_of_order_fails_the_test(pytester: pytest.Pytester) -> None:
     if not (NMEA_READER / "build" / "esp32tl-built").is_file():
         pytest.fail(
             f"{NMEA_READER}/build holds no finished build: run make firmware", pytrace=False
@@ -45,52 +45,45 @@ def test_a_source_given_otherwise_than_declared_fails_the_test(pytester: pytest.
 
         pytestmark = pytest.mark.app_path({str(NMEA_READER)!r})
 
-        @pytest.mark.source("uart.gnss", "replay")
-        def test_expect_before_replay(console):
-            console.expect("fix", timeout=120)
+        def test_expect_before_power_on(gnss, console):
+            gnss.replay({str(RECORDING)!r})
+            console.expect("fix")
 
-        def test_replay_without_marker(gnss):
+        def test_replay_after_power_on(board, gnss):
+            board.power_on()
             gnss.replay({str(RECORDING)!r})
 
-        @pytest.mark.source("uart.gnss", "replay")
-        def test_never_given(gnss):
-            pass
-
-        @pytest.mark.source("uart.gnss", "model")
-        def test_model(gnss):
-            pass
+        def test_never_powered(gnss):
+            gnss.replay({str(RECORDING)!r})
 
         @pytest.mark.board_profile("lilygo-t-a7670g-r2")
         def test_no_route(gnss):
             pass
         """
     )
-    started = time.monotonic()
     result = pytester.runpytest_subprocess("-p", "no:cacheprovider", "-rA")
-    # The expect fails at once: held, the runner would give up only after --peer-timeout's 60 s,
-    # and the expect after its 120 s.
-    assert time.monotonic() - started < 50
-    # test_never_given passes its call and errors at teardown; test_expect_before_replay fails on
-    # its expect only, not again at teardown.
-    result.assert_outcomes(passed=1, failed=2, errors=3)
+    # test_never_powered passes its call and errors at teardown; test_expect_before_power_on
+    # fails on its expect only, not again at teardown.
+    result.assert_outcomes(passed=1, failed=2, errors=2)
     result.stdout.fnmatch_lines_random(
         [
-            "*SourceError: the run has not started: it waits for the replay of uart.gnss, which the"
-            " source marker declares; give it before waiting on the console",
-            "*SourceError: uart.gnss has no source marker that names replay: mark the test"
-            ' @pytest.mark.source("uart.gnss", "replay") to replay into it',
-            "*esp32sim: uart.gnss: a model source is not implemented yet; the backend gives replay",
-            "*esp32sim: the run never started: it waited for the replay of uart.gnss, which the"
-            " source marker declares; give it in the test body",
+            "*BoardOff: the board is off; call board.power_on() first",
+            "*SourceError: uart.gnss: the board is on already: give a route its source before"
+            " board.power_on()",
+            "*esp32sim: the test set up the replay of uart.gnss and never called"
+            " board.power_on(): it ran no firmware",
             "*esp32sim: the board profile lilygo-t-a7670g-r2 has no uart.gnss; its interfaces are"
             " console, uart.modem, lines.modem",
         ]
     )
-    # A run held for a source that never came ends before the guest boots.
+    # Every route of the profile is on the link; a board never powered on ran no runner.
     result.stdout.fnmatch_lines(
-        ["*Captured esp32sim link teardown*", "board esp32-devkitc, watching GPIO 4, GPIO 5"]
+        [
+            "*Captured esp32sim link teardown*",
+            "board esp32-devkitc, watching GPIO 4, GPIO 5",
+            "the runner never connected",
+        ]
     )
-    assert "stats: the run ended at 0.000000000 s (stop); 1 turn, 0 resets" in result.stdout.str()
 
 
 def nmea_reader_tests(pytester: pytest.Pytester) -> None:
@@ -162,7 +155,7 @@ def test_reports_a_fix_fails_on_a_baud_mismatch(pytester: pytest.Pytester) -> No
         "-p", "no:cacheprovider", "tests", "-k", "test_reports_a_fix"
     )
     # Not silence: the run ends on the first frame error, and the expect with it, well before
-    # its 30 s.
+    # its 30 s of the board's time.
     assert time.monotonic() - started < 20
     result.assert_outcomes(failed=1, deselected=3)
     result.stdout.fnmatch_lines(

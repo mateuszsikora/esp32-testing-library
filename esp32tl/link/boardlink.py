@@ -7,9 +7,12 @@ send unprompted and what the scenario timeline has due go out in the next turn, 
 before its `sync`. The turn's `wait` bounds the next one with the minimum `quiet_until` and the
 minimum `latency` over the interfaces and the timeline, `None` counting as no bound (§7).
 
-A link made with `hold` takes its first turn, at `t = 0` before the guest's first instruction
-(§6, rule 4), only once `start` is called: the backend holds the run there until the test has
-given every source it declared, and emulated time does not move meanwhile.
+A link made with a `hold` asks it at the start of every turn, the first at `t = 0` before the
+guest's first instruction (§6, rule 4), and takes the turn only once it returns: the `esp32sim`
+backend holds the run there for as long as the test is not waiting, and emulated time does not
+move meanwhile. What the hold returns bounds the next turn, as an interface's `quiet_until` does,
+and `None` ends the run with `stop`. With `console`, the guest's console reaches it as the
+runner's `console` messages carry it (`--console socket` or `both`).
 
 Warnings and the run's `stats` are kept for the test report. What the harness finds wrong with
 the run is kept in `error`, the first cause only; the harness then ends the run with `stop` at the
@@ -18,7 +21,6 @@ sent at another baud than the guest's UART receives at would otherwise be lost i
 """
 
 import socket
-import threading
 import traceback
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import contextmanager
@@ -145,13 +147,25 @@ class Timeline(Protocol):
         ...
 
 
+class Hold(Protocol):
+    """What holds the run in the harness's turns: the test's clock."""
+
+    def turn(self, now: int) -> int | None:
+        """Called at the start of the turn at `now`, before the interfaces are polled; returns,
+        once the run may go on, the latest time of the next turn, later than `now`, or `None`
+        to end the run with `stop` in this turn."""
+        ...
+
+
 class LinkError(Exception):
     """What the harness found wrong with the run: the runner broke the protocol, or an
     interface or the scenario broke its promises or raised."""
 
 
-# How errors name the timeline.
+# How errors name the timeline, the hold and the console's reader.
 SCENARIO = "the scenario"
+HOLD = "the test's clock"
+CONSOLE = "the console"
 
 # The most bytes one `uart_rx` carries: 512 KiB is 683 KiB of base64, well within the 1 MiB
 # line. A longer output goes out as several messages of the same `t`, which the runner paces one
@@ -163,9 +177,10 @@ class BoardLink:
     """The link to one run of the runner, on the board profile `board` of `chip`, with its
     `interfaces` and the scenario's `timeline`. `watch`, sent in the harness's `hello`, is their
     pins. `on_error` is called once, from the link's thread, when the harness finds the run
-    wrong, so that the backend can end the run without waiting for the runner's next turn. With
-    `hold`, the first turn waits for `start`. With `clock`, a runner whose `hello` names another
-    clock fails the link."""
+    wrong, so that the backend can end the run without waiting for the runner's next turn.
+    `hold` holds every turn until it returns, and bounds the next. `console` is called with the
+    `t` and the bytes of every `console` message. With `clock`, a runner whose `hello` names
+    another clock fails the link."""
 
     def __init__(
         self,
@@ -175,7 +190,8 @@ class BoardLink:
         chip: str = "esp32",
         timeline: Timeline | None = None,
         on_error: Callable[[str], None] | None = None,
-        hold: bool = False,
+        hold: Hold | None = None,
+        console: Callable[[int, bytes], None] | None = None,
         clock: str | None = None,
     ) -> None:
         owners: dict[int, str] = {}
@@ -197,6 +213,8 @@ class BoardLink:
         self._watched = frozenset(owners) | scenario_pins
         self.watch = tuple(sorted(self._watched))
         self.on_error = on_error
+        self.hold = hold
+        self.console = console
         # What the run told and what the harness found, read once `run` has returned.
         self.runner: RunnerHello | None = None
         self.warnings: list[Warn] = []
@@ -216,29 +234,6 @@ class BoardLink:
         )
         self._enabled: frozenset[int] = frozenset()
         self._answers: list[tuple[Interface, int, bytes]] = []
-        # The first turn waits for this, and then boots the guest, or stops the run.
-        self._started = threading.Event()
-        self._boot = True
-        self._starting = threading.Lock()
-        if not hold:
-            self._started.set()
-
-    @property
-    def held(self) -> bool:
-        """Whether the first turn still waits for `start`."""
-        return not self._started.is_set()
-
-    def start(self, boot: bool = True) -> bool:
-        """Lets the first turn go: with `boot`, it is taken as any other, and the guest boots
-        after it; without, it is `stop`, and the run ends before the guest's first instruction.
-        Only the first call counts, and returns True; on a link made without `hold`, none does.
-        From any thread."""
-        with self._starting:
-            if self._started.is_set():
-                return False
-            self._boot = boot
-            self._started.set()
-            return True
 
     def run(self, conn: socket.socket) -> None:
         """Reads the runner's messages from `conn` to end of file, writing the harness's in its
@@ -351,17 +346,16 @@ class BoardLink:
         elif isinstance(message, Warn):
             if message.kind == "frm_err":
                 raise LinkError(self._frame_errors(message))
+        elif isinstance(message, Console):
+            if self.console is not None:
+                with calling(CONSOLE, "console"):
+                    self.console(message.t, message.data)
         elif isinstance(message, Sync):
-            if self.turns == 0:
-                self._started.wait()
-                if not self._boot:
-                    self._stopped = True
-                    return [Stop()]
             return self._turn(message.t)
         else:
             # Reset needs nothing of the interfaces: the board persists across it (5.5), and
-            # the routes it resets come again as uart_cfg. Console is the console tap's (M2).
-            assert isinstance(message, Reset | Console | Stats), message
+            # the routes it resets come again as uart_cfg.
+            assert isinstance(message, Reset | Stats), message
         return []
 
     def _uart_tx(self, message: UartTx) -> None:
@@ -425,8 +419,17 @@ class BoardLink:
         self._enabled = frozenset(message.enabled)
 
     def _turn(self, now: int) -> list[HarnessMessage]:
-        """The harness's turn at the block point `now`: the inputs, then the `wait`."""
+        """The harness's turn at the block point `now`: the inputs, then the `wait`; or `stop`,
+        when the hold ends the run."""
         self.turns += 1
+        bounds: list[tuple[str, int | None]] = []
+        if self.hold is not None:
+            with calling(HOLD, "turn"):
+                bound = self.hold.turn(now)
+            if bound is None:
+                self._stopped = True
+                return [Stop()]
+            bounds.append((HOLD, bound))
         outputs, self._answers = self._answers, []
         for interface in self.interfaces:
             with calling(interface.name, "poll"):
@@ -447,7 +450,6 @@ class BoardLink:
                 (interface.name, UartRx(t, interface.wire.rx, interface.wire.baud, chunk))
                 for chunk in _chunks(data)
             ]
-        bounds: list[tuple[str, int | None]] = []
         for interface in self.interfaces:
             with calling(interface.name, "quiet_until"):
                 bounds.append((interface.name, interface.quiet_until()))

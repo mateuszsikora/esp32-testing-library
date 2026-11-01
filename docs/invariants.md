@@ -28,20 +28,29 @@ that references to its number keep their meaning.
    `tests/test_package.py::test_plugin_is_registered_through_pytest11`,
    `tests/test_package.py::test_pytest_loaded_the_plugin`
 
-25. A test whose `source` or `tap` markers ask for what a backend cannot give is skipped on that
+25. ~~A test whose `source` or `tap` markers ask for what a backend cannot give is skipped on that
     backend with the reason, before any fixture is set up, and runs on the others; one that asks for
     what no backend can give, or for an interface its profile does not have, is a collection error
-    that names the test.
-    `tests/test_pytest_plugin.py::test_a_backend_that_cannot_give_a_source_or_tap_skips_with_the_reason`,
-    `tests/test_pytest_plugin.py::test_a_marker_no_backend_can_satisfy_is_a_collection_error`,
-    `tests/test_boards.py::test_a_request_no_backend_can_give_is_an_error_not_a_skip`
+    that names the test.~~ No longer holds since #65, which removed the `source` marker: see 47 for
+    taps and 46 for sources.
 26. Every backend in `SERVICES` has a capability declaration; on `serial` an on-board UART is real
     only and only the console can be tapped.
     `tests/test_boards.py::test_every_backend_has_a_declaration`,
     `tests/test_boards.py::test_the_declaration_is_the_specification_s_table`
-29. A board marker (`app_path`, `board_profile`, `source`, `tap`) that reaches a test from a
+29. ~~A board marker (`app_path`, `board_profile`, `source`, `tap`) that reaches a test from a
     `pytest.param`, or from a hook on the test, its class or its module, stops the run with a usage
-    error, so no source a test asks for goes unchecked.
+    error, so no source a test asks for goes unchecked.~~ No longer holds since #65, which removed
+    the `source` marker: see 48.
+47. A test whose `tap` markers ask for what a backend cannot tap is skipped on that backend with the
+    reason, before any fixture is set up, and runs on the others; one that asks for what no backend
+    can tap, or for an interface its profile does not have, is a collection error that names the
+    test.
+    `tests/test_pytest_plugin.py::test_a_backend_that_cannot_give_a_tap_skips_with_the_reason`,
+    `tests/test_pytest_plugin.py::test_a_marker_no_backend_can_satisfy_is_a_collection_error`,
+    `tests/test_boards.py::test_a_request_no_backend_can_give_is_an_error_not_a_skip`
+48. A board marker (`app_path`, `board_profile`, `tap`) that reaches a test from a `pytest.param`,
+    or from a hook on the test, its class or its module, stops the run with a usage error, so no tap
+    a test asks for goes unchecked.
     `tests/test_pytest_plugin.py::test_a_board_marker_in_a_pytest_param_is_refused`,
     `tests/test_pytest_plugin.py::test_a_board_marker_a_hook_adds_is_refused`
 
@@ -66,17 +75,55 @@ that references to its number keep their meaning.
 9. The release and file name the backend's ROM path is built from (`ROM_RELEASE`, `ROM_ELF`) are
    the ones `scripts/fetch-rom-elf` fetches.
    `tests/test_pytest_plugin.py::test_rom_is_the_one_make_setup_fetches`
-10. Once the runner has exited, an expect that has not matched fails at once, with an `EOF` that
+10. ~~Once the runner has exited, an expect that has not matched fails at once, with an `EOF` that
     names the exit code and the runner's last output: whole lines, less than `EOF_TAIL_BYTES`,
-    without colour codes, and a long last line kept.
-    `tests/test_pytest_plugin.py::test_expect_fails_at_once_when_the_runner_has_exited`,
-    `tests/test_pytest_plugin.py::test_the_eof_carries_the_runner_s_last_whole_lines_without_colour`,
-    `tests/test_pytest_plugin.py::test_the_eof_keeps_a_long_last_line`
+    without colour codes, and a long last line kept.~~ No longer holds since #65, whose console
+    reads the link on the test's clock and raises `RunEnded`: see 44.
 11. A runner that exits with an error of its own is an error of the test, even when every expect
     passed, and its exit is reported once.
     `tests/test_pytest_plugin.py::test_a_runner_that_exits_with_an_error_fails_the_test`,
     `tests/test_pytest_plugin.py::test_a_runner_that_fails_to_start_is_reported_once`,
-    `tests/test_pytest_plugin.py::test_an_eof_from_elsewhere_does_not_hide_the_runner_s_exit`
+    `tests/test_pytest_plugin.py::test_a_failure_of_another_kind_does_not_hide_the_runner_s_exit`
+43. Emulated time moves only while the test waits: the link holds every turn, before it polls the
+    interfaces, until the test waits; `board.wait(d)` ends at the board's time `now + d` exactly;
+    `wait_until` asks its condition at once and at every turn, at most 100 emulated milliseconds
+    apart, in the test's thread, and returns what it returned; a condition that does not hold in
+    time raises `NeverHappened`, an `AssertionError` naming it and the window it waited.
+    `tests/test_clock.py::test_the_run_stands_still_until_the_test_waits`,
+    `tests/test_clock.py::test_wait_until_asks_at_every_turn_and_returns_what_the_condition_returned`,
+    `tests/test_clock.py::test_a_condition_that_never_holds_raises_never_happened_naming_it_and_the_window`,
+    `tests/test_boardlink.py::test_a_hold_holds_every_turn_before_the_interfaces_are_polled`,
+    `tests/test_pytest_plugin.py::test_the_test_s_waits_move_the_board_s_clock`
+44. Once the run has ended, a test that waits gets `RunEnded` at once, naming the board's time, what
+    it waited for, the exit code, the link's error first when there is one, and the runner's last
+    output: whole lines, less than `LAST_OUTPUT_BYTES`, without colour codes, and a long last line
+    kept. A condition that holds on what the run printed last still returns, also in a wait that
+    starts after the end.
+    `tests/test_pytest_plugin.py::test_a_wait_fails_at_once_when_the_runner_has_exited`,
+    `tests/test_pytest_plugin.py::test_a_mismatched_handshake_fails_the_test_with_both_sides_reasons`,
+    `tests/test_pytest_plugin.py::test_the_eof_tail_is_the_runner_s_last_whole_lines_without_colour`,
+    `tests/test_pytest_plugin.py::test_the_eof_tail_keeps_a_long_last_line`,
+    `tests/test_clock.py::test_the_end_of_the_run_raises_run_ended_with_the_reason`,
+    `tests/test_clock.py::test_a_condition_the_last_of_the_run_makes_true_still_holds`,
+    `tests/test_clock.py::test_expect_finds_what_the_run_printed_after_it_has_ended`
+45. The runner starts at `board.power_on()`, not at setup: a test that never powers on starts no
+    runner, and one that set up a source and passed without powering on fails at teardown; a test
+    that failed, was skipped or xfailed keeps its one outcome. A wait before power-on raises
+    `BoardOff`, and a source after it `SourceError`.
+    `tests/test_pytest_plugin.py::test_the_board_runs_the_profile_the_test_chose_and_starts_no_runner_unpowered`,
+    `tests/test_pytest_plugin.py::test_a_test_that_sets_up_a_source_and_never_powers_on_fails_at_teardown`,
+    `tests/test_pytest_plugin.py::test_the_board_s_clock_and_sources_go_in_order`,
+    `tests/test_gnss_fixture.py::test_a_source_given_out_of_order_fails_the_test`
+46. A source the backend's capability declaration does not give skips the test at the call that
+    asks for it, reported at the test; one that no backend gives fails the test with `SourceError`.
+    `tests/test_pytest_plugin.py::test_a_source_the_backend_cannot_give_skips_at_the_call`
+49. Every test that uses `board` has a wall-time timeout, 600 s unless the session or the test sets
+    one, 0 included; a run that hangs is ended by it, and the teardown ends the runner.
+    `tests/test_pytest_plugin.py::test_a_test_that_uses_board_gets_a_wall_time_timeout_unless_one_is_set`,
+    `tests/test_pytest_plugin.py::test_a_hung_run_is_ended_by_the_test_s_timeout`
+50. Every UART route of the board profile is on the link, listening and silent until the test gives
+    it a source: the harness's `hello` watches the pins of all of them.
+    `tests/test_pytest_plugin.py::test_every_route_of_the_profile_is_on_the_link`
 
 ## The runner
 
@@ -151,16 +198,12 @@ that references to its number keep their meaning.
     `quiet_until` is the next event's time.
     `tests/test_replay.py::test_each_event_goes_out_at_its_time_and_bounds_the_turn_before`,
     `tests/test_replay.py::test_a_replay_through_the_link_sends_each_event_in_the_turn_at_its_time`
-33. A run with a declared source does not boot until the test has given it: the link's first turn
-    waits for `start`, a `console.expect` before then fails at once with `SourceError`, and a run
-    never started ends with `stop` before the guest boots, and fails a test whose setup and call
+33. ~~A run with a declared source does not boot until the test has given it: the link's first
+    turn waits for `start`, a `console.expect` before then fails at once with `SourceError`, and a
+    run never started ends with `stop` before the guest boots, and fails a test whose setup and call
     passed without giving it at teardown; a test that failed, was skipped or xfailed keeps its one
-    outcome.
-    `tests/test_boardlink.py::test_a_held_link_takes_its_first_turn_once_started`,
-    `tests/test_boardlink.py::test_a_held_link_started_without_boot_stops_the_run_at_turn_0`,
-    `tests/test_gnss_fixture.py::test_a_source_given_otherwise_than_declared_fails_the_test`,
-    `tests/test_pytest_plugin.py::test_a_declared_source_never_given_fails_the_test_at_teardown`,
-    `tests/test_pytest_plugin.py::test_a_held_run_whose_runner_is_gone_releases_the_link`
+    outcome.~~ No longer holds since #65: the source is given before `board.power_on()`, which
+    starts the run (see 45).
 34. A recording replayed with `gnss.replay(path)` reaches the firmware's UART on the profile's GNSS
     route: `nmea_reader` prints the fixes of `gnss-generated-1.jsonl`.
     `tests/test_gnss_fixture.py::test_a_replay_reaches_nmea_reader_on_the_gnss_route`
@@ -174,7 +217,7 @@ that references to its number keep their meaning.
     `tests/test_nmea_reader.py::test_reports_a_fix`,
     `tests/test_gnss_fixture.py::test_reports_a_fix_fails_on_a_changed_recording`
 37. A replay runs on the emulated clock: ten fixes, ten emulated seconds, reach the console in
-    under five wall seconds.
+    under five wall seconds, and the board's clock reads just past 10 s.
     `tests/test_nmea_reader.py::test_time_is_emulated`
 
 ## The esp32tl command
