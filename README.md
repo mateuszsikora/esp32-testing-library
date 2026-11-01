@@ -33,7 +33,8 @@ def test_hello_world(board, console):
 ```
 
 The test runs once per backend, as `test_hello_world[esp32sim]`. The firmware runs only while the
-test waits on it, here in `console.expect`, whose timeout is in seconds of the board's own clock.
+test waits on it, here in `console.expect`, whose timeout is on the board's own clock: a `Duration`
+or a number of seconds.
 A test that replays a recording into the board's GNSS UART gives it before power-on:
 
 ```python

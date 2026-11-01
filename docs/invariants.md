@@ -259,6 +259,43 @@ that references to its number keep their meaning.
     `tests/test_pytest_plugin.py::test_a_tap_records_what_crossed_the_route_both_ways`,
     `tests/test_run_report.py::test_entries_are_shown_in_the_order_of_the_board_s_time`
 
+## Models, units and console lines
+
+57. The board's durations are `Duration`s of whole nanoseconds, 0 or more: `board.wait` and
+    `wait_until` refuse a plain number. Quantities of different kinds never combine or compare
+    equal, but for a speed times a time, a distance, and a distance over a time, a speed.
+    `tests/test_units.py::test_quantities_of_different_kinds_do_not_mix`,
+    `tests/test_units.py::test_a_speed_over_a_time_is_a_distance_and_back`,
+    `tests/test_clock.py::test_the_board_s_durations_are_durations_of_0_or_more`,
+    `tests/test_pytest_plugin.py::test_the_test_s_waits_move_the_board_s_clock`
+58. A position moved by a distance on a heading is that distance away, along the great circle that
+    leaves on that heading, in both hemispheres, across the antimeridian and over a pole.
+    `tests/test_units.py::test_a_move_follows_the_great_circle_and_measures_its_distance`,
+    `tests/test_units.py::test_a_move_crosses_the_antimeridian_and_a_pole`
+59. The GNSS receiver model sends an RMC and a GGA with the same UTC time once a second, on whole
+    seconds of the world's time, each sentence checksummed and at most 82 characters; what the test
+    tells it holds from the board's instant, in the epoch at that instant too; the epochs of a
+    silence are never sent.
+    `tests/test_gnss_model.py::test_a_fix_is_an_rmc_and_a_gga_with_the_same_time_once_a_second`,
+    `tests/test_gnss_model.py::test_epochs_fall_on_whole_seconds_of_the_world_s_time`,
+    `tests/test_gnss_model.py::test_a_sentence_is_checksummed_and_at_most_82_characters`,
+    `tests/test_gnss_model.py::test_each_change_holds_from_the_board_s_instant`,
+    `tests/test_gnss_model.py::test_a_change_at_an_epoch_s_instant_is_in_that_epoch`,
+    `tests/test_gnss_model.py::test_the_epochs_of_a_silence_stay_unsent_when_no_turn_came_in_it`
+60. `nmea_reader` fed by the receiver model reports where the receiver is: its first fix, a
+    kilometre of movement to within 0.2 m, no fix while the fix is lost, the fix again in the epoch
+    of the instant it comes back, in both hemispheres.
+    `tests/test_nmea_reader_model.py::test_reports_where_the_receiver_is`,
+    `tests/test_nmea_reader_model.py::test_reports_the_southern_and_western_hemispheres`,
+    `tests/test_nmea_reader_model.py::test_follows_the_receiver_as_it_moves`,
+    `tests/test_nmea_reader_model.py::test_says_nothing_while_the_receiver_has_no_fix`,
+    `tests/test_nmea_reader_model.py::test_reports_again_when_the_fix_comes_back`
+61. A console line is stamped with the board's time its line ending came at, without its line
+    ending and colour codes, and is a line only once it has ended; `console.line(pattern)` finds
+    only lines that end after it was made, and after the last line it found.
+    `tests/test_clock.py::test_console_lines_are_stamped_with_the_time_their_ending_came_at`,
+    `tests/test_clock.py::test_a_line_condition_finds_the_first_matching_line_from_when_it_was_made`
+
 ## The esp32tl command
 
 38. Ctrl-C ends a run of `esp32tl run` or `esp32tl replay` with one `SIGTERM` to the runner, which

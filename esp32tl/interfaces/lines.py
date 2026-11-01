@@ -10,6 +10,7 @@ from esp32tl.boards import Line
 from esp32tl.link.boardlink import Interface
 from esp32tl.link.protocol import GpioIn, Input, Release
 from esp32tl.report import RunLog
+from esp32tl.units import Duration
 
 # The level a board's pull gives a line that neither end drives.
 PULLED = {"up": 1, "down": 0}
@@ -17,11 +18,11 @@ PULLED = {"up": 1, "down": 0}
 
 @dataclass(frozen=True)
 class LineEvent:
-    """A change on a line: at `t`, seconds of the board's time, `by` the firmware or the test,
+    """A change on a line: at `t`, an instant of the board's time, `by` the firmware or the test,
     the line `name` (`modem.ri`) on GPIO `pin` driven to `level`, or with `None` no longer
     driven: the firmware's output off, or the test's `release`."""
 
-    t: float
+    t: Duration
     name: str
     pin: int
     by: Literal["firmware", "test"]
@@ -136,7 +137,7 @@ class Lines(Interface):
 
     def _change(self, now: int, pin: int, level: int | None) -> None:
         self._pending.append((now, pin, level))
-        self._events.append(LineEvent(now / 10**9, self._names[pin], pin, "test", level))
+        self._events.append(LineEvent(Duration(now), self._names[pin], pin, "test", level))
 
     # The link's side.
 
@@ -179,7 +180,7 @@ class Lines(Interface):
                 if state != self._levels.get(pin):
                     self._levels[pin] = state
                     self._events.append(
-                        LineEvent(t / 10**9, self._names[pin], pin, "firmware", state)
+                        LineEvent(Duration(t), self._names[pin], pin, "firmware", state)
                     )
                     if self.log is not None:
                         self.log.line(t, self._names[pin], state)

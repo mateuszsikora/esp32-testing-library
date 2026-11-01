@@ -45,7 +45,8 @@ A recording, [version 1](../recording-format.md):
 {"t": 1000000000, "dir": "in", "data": "JEdQR0dB..."}
 ```
 
-- `source` is what was at the far end: `replay`, or `none` for a route the test gave nothing.
+- `source` is what was at the far end: `replay`, `model:gnss` for the GNSS receiver the test
+  described ([models and units](models-user.md)), or `none` for a route the test gave nothing.
 - `clock` is the backend's, `emulated-fifo-write`: times are the board's nanoseconds since
   power-on.
 - `app_sha256` is the SHA-256 of the app image the run flashed, the file `flasher_args.json`
@@ -85,9 +86,11 @@ the run on the board's clock, 12 entries:
 This is `tests/test_pytest_plugin.py`'s fake runner, which prints one line and transmits one
 command. Each line is the board's time, who, and what:
 
-- `test`: what the test did. Before power-on everything is at 0. `board.wait(d)` at the time it
-  started from; a wait for a condition or a console pattern when it started, and again when it
-  ended, with `happened`, `did not happen within {time}` or `the run ended first`.
+- `test`: what the test did. Before power-on everything is at 0. A call of the receiver model at
+  the board's time it was made, as `uart.gnss.move(heading=NORTH, speed=m_s(10))`; its route's line
+  says `the model of a GNSS receiver`. `board.wait(d)` at the time it started from; a wait for a
+  condition or a console pattern when it started, and again when it ended, with `happened`,
+  `did not happen within {time}` or `the run ended first`.
 - `console`: a line the firmware printed, without its line ending and colour codes, at the time of
   its first byte. Any other control character but the tab is escaped, as `\r` or `\x1b`, so that
   the line cannot write over the report. A line the run did not finish is shown too.

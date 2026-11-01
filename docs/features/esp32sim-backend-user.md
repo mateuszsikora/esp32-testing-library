@@ -28,13 +28,13 @@ A relative path in either resolves against pytest's working directory, not the t
 ## How a run goes
 
 Each test that uses `board` gets a board that is off. The test body sets up what is around it, as
-`gnss.replay(path)` does, then calls `board.power_on()`, which starts the test's own runner with
+`gnss.replay(path)` or `gnss.fix(at=...)` does, then calls `board.power_on()`, which starts the test's own runner with
 every file of `flasher_args.json` at its offset; teardown stops it. A test that never calls
 `power_on()` starts no runner.
 
 From power-on the run is on the test's clock: the firmware runs only while the test waits, in
 `board.wait`, `board.wait_until` or a console expect, and stands still in between, however long
-the test body takes. Every limit a test states, an expect's `timeout` included, is in seconds of
+the test body takes. Every limit a test states, an expect's `timeout` included, is a time on
 that clock ([pytest plugin](pytest-plugin-user.md#the-fixtures)). The runner waits for the test
 without a limit of its own (`--peer-timeout 0`); a run that hangs is ended by the test's
 wall-time timeout, 600 s by default ([the test's timeout](pytest-plugin-user.md#the-tests-timeout)).
@@ -92,8 +92,8 @@ condition holds at the run's last turn, or on what the firmware printed after it
 also when it starts after the end: the backend ends the clock only once the link has been read to
 its end.
 
-To wait for the end of the run on purpose, `console.expect(pexpect.EOF)`, with a `timeout` in
-seconds of the board's time.
+To wait for the end of the run on purpose, `console.expect(pexpect.EOF)`, with a `timeout` of the
+board's time.
 
 ## How the run ends
 

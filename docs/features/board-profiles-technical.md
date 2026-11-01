@@ -20,8 +20,9 @@ the user sees is in [board-profiles-user.md](board-profiles-user.md).
    `[lines.<role>]` set is on one `Lines`, with its `pull`, which the link drives on the line from
    power-on ([pytest-plugin-technical.md](pytest-plugin-technical.md#data-flow)).
 3. **A source or a tap, in the test body.** `gnss.replay(path)` asks the backend, through the
-   `Uart`'s `asked`, for `Request("uart.gnss", source="replay")`, and `gnss.tap(path)` for
-   `Request("uart.gnss", tap=True)`. `Esp32Sim._asked` runs `capabilities.check([request], ...)`
+   `Uart`'s `asked`, for `Request("uart.gnss", source="replay")`, the first call of the receiver
+   model, as `gnss.fix(at=...)`, for `Request("uart.gnss", source="model")`, and `gnss.tap(path)`
+   for `Request("uart.gnss", tap=True)`. `Esp32Sim._asked` runs `capabilities.check([request], ...)`
    (a `CapabilityError` becomes a `SourceError` with its message), then
    `capabilities.refusal(Esp32Sim.name, [request], ...)`, whose reason skips the test at the call
    ([esp32sim-backend-technical.md](esp32sim-backend-technical.md#data-flow)). It reads the

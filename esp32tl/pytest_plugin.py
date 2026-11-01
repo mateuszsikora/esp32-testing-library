@@ -13,11 +13,11 @@ back to the command line, and a session started with `--embedded-services esp` w
 `esp32sim` case open a serial port. The app comes from the `app_path` marker instead, its build
 from `build/` in it. `--count` above 1 is refused too: a test has one board.
 
-The test body sets up what is around the board, as `gnss.replay(path)` and `gnss.tap(path)` do,
-then calls `board.power_on()`, which starts the run; from there the board's clock moves only while
-the test waits on it (`board.wait`, `board.wait_until`, `console.expect`). A source or a tap that
-the backend's capability declaration (`esp32tl.boards.capabilities`) does not give skips the test
-at the call that asks for it.
+The test body sets up what is around the board, as `gnss.replay(path)`, `gnss.fix(at=...)` and
+`gnss.tap(path)` do, then calls `board.power_on()`, which starts the run; from there the board's
+clock moves only while the test waits on it (`board.wait`, `board.wait_until`, `console.expect`). A
+source or a tap that the backend's capability declaration (`esp32tl.boards.capabilities`) does not
+give skips the test at the call that asks for it.
 
 The report of every test that uses `board` gets the `esp32sim link` section, the link's report and
 the bytes on each route, with the run on the board's clock after them when the test failed.
@@ -43,8 +43,8 @@ from esp32tl.backends import SERVICES
 from esp32tl.backends.esp32sim import BackendError, Esp32Sim, ended_while_waiting
 from esp32tl.boards import DEFAULT_PROFILE, BoardProfile, ProfileError
 from esp32tl.interfaces.console import Console
+from esp32tl.interfaces.gnss import Gnss
 from esp32tl.interfaces.lines import Lines
-from esp32tl.interfaces.uart import Uart
 
 # The wall-time timeout of a test that uses `board`, in seconds, unless one is configured: 600 s
 # covers at least three minutes of the board's busiest work, at the 0.3 times real time stage 0
@@ -303,14 +303,17 @@ def console(board: Esp32Sim) -> Console:
 
 
 @pytest.fixture
-def gnss(board: Esp32Sim) -> Uart:
+def gnss(board: Esp32Sim) -> Gnss:
     """The far end of the board profile's `uart.gnss` route: `gnss.replay(path)`, before
-    `board.power_on()`, replays a recording into it, and `gnss.tap(path)` records what crosses
-    it."""
+    `board.power_on()`, replays a recording into it; `gnss.fix(at=...)` or another call of the
+    receiver model makes it a receiver the test describes; and `gnss.tap(path)` records what
+    crosses it."""
     try:
-        return board.uart("gnss")
+        uart = board.uart("gnss")
     except BackendError as error:
         backend_failed(error)
+    assert isinstance(uart, Gnss), uart
+    return uart
 
 
 @pytest.fixture

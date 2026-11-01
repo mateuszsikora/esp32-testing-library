@@ -71,8 +71,9 @@ def test_reports_a_fix(board, gnss, console, tmp_path):
     ...
 ```
 
-- The source of an interface is the call that gives it: `gnss.replay(path)` is a `replay`, which
-  is the only source a call gives yet; `model` and `real` get theirs later.
+- The source of an interface is the call that gives it: `gnss.replay(path)` is a `replay`, and
+  `gnss.fix(at=...)` or another call of the receiver model a `model`
+  ([models and units](models-user.md#the-gnss-receiver)); `real` gets its call later.
 - A tap is the call that asks for it: `gnss.tap(path)` taps `uart.gnss`
   ([taps and the run report](run-report-user.md)). No call taps the console: what it prints is in
   `dut.log` and in the report already.
