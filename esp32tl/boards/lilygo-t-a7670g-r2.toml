@@ -3,7 +3,7 @@
 # for the T-A7670X ESP32 and its ExternalGPS_A7670G_Only example (plan §4.5). Nothing from memory.
 name = "lilygo-t-a7670g-r2"
 chip = "esp32"            # ESP32-WROVER-E
-flash_mb = 4              # CONFIG_ESPTOOLPY_FLASHSIZE_4MB
+flash_mb = 4              # 4MB (Quad-SPI), LilyGO's product table
 psram_mb = 4              # the WROVER-E carries 8 MB; esp32sim models 0 or 4
 
 # The A7670G modem.

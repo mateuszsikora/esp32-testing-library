@@ -31,7 +31,8 @@ from LilyGO's
 and its
 [`ExternalGPS_A7670G_Only`](https://github.com/Xinyuan-LilyGO/LilyGO-T-A76XX/blob/63af963038e93c91baf39d89a3a736d6bc26ff13/examples/ExternalGPS_A7670G_Only/ExternalGPS_A7670G_Only.ino)
 example: the L76K receiver of the board's GPS version, an external module, on UART2 at 9600 baud,
-and 4 MB of flash. The ESP32-WROVER-E carries 8 MB of PSRAM; the profile gives 4, the most
+and 4 MB of flash. The profile describes that version: on the one without GPS, LilyGO's pin table
+leaves GPIO 21 and 22 free, the default I²C pins, and the profile still routes `uart.gnss` there. The ESP32-WROVER-E carries 8 MB of PSRAM; the profile gives 4, the most
 `esp32sim` models, so that firmware that turns PSRAM on finds it rather than logging
 `PSRAM not found`. The esp32sim backend gives the chip the profile's PSRAM
 ([esp32sim backend](esp32sim-backend-user.md#how-a-run-goes)). Its other pins are not in it.
