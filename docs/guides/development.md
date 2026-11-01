@@ -186,12 +186,11 @@ opening a pull request or updating its title and description. In Codex, invoke `
 in Claude Code, invoke `/create-pr`. It takes no arguments and gathers context from the
 conversation, branch and issue tracker.
 
-The instructions live in [`.claude/skills/create-pr/SKILL.md`](../../.claude/skills/create-pr/SKILL.md).
-`.agents/skills/create-pr` is a relative symlink to that directory, so both agents read the same
-instructions. Edit the source under `.claude/skills/create-pr/` when changing the workflow.
-Codex discovers repository skills under `.agents/skills` and supports symlinked skill folders
-([OpenAI's skill documentation](https://learn.chatgpt.com/docs/build-skills#where-codex-loads-local-skills)).
-If the skill does not appear after the checkout changes, restart Codex.
+Edit [`.claude/skills/create-pr/SKILL.md`](../../.claude/skills/create-pr/SKILL.md) when changing
+the workflow. The [shared-skill decision](../decisions/docs.md#codex-discovers-create-pr-through-a-symlink-to-the-existing-skill)
+describes how Codex discovers it. If the skill does not appear after the checkout changes,
+restart Codex. The workflow needs authenticated `gh` access and network access to GitHub for
+its preflight, push and PR operations; the session's permissions must allow those commands.
 
 ## Layout
 
@@ -209,7 +208,7 @@ If the skill does not appear after the checkout changes, restart Codex.
 | `docs/decisions/` | Why things are the way they are, one file per domain, with a generated index |
 | `docs/guides/` | How to work on the repository: this guide, [testing.md](testing.md), [documentation.md](documentation.md) |
 | `.github/` | The CI workflow (`workflows/ci.yml`) and the pull request template |
-| `.claude/` | Claude Code's skills and rules for this repository |
+| `.claude/` | Claude Code's rules and the `create-pr` skill shared with Codex through `.agents/skills/` |
 | `.agents/skills/` | Codex's repository skills; `create-pr` links to the shared skill under `.claude/skills/` |
 | `AGENTS.md` | The contract for every agent working here; `CLAUDE.md` is a symlink to it |
 

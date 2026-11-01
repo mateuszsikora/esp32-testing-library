@@ -44,10 +44,10 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The decisions index is generated](docs.md#the-decisions-index-is-generated) | `docs.md` | decided (#54) |
 | [AGENTS.md is the agents' file, and CLAUDE.md links to it](docs.md#agentsmd-is-the-agents-file-and-claudemd-links-to-it) | `docs.md` | decided (#54) |
 | [Contributor conventions live in CONTRIBUTING.md; the create-pr skill restates them](docs.md#contributor-conventions-live-in-contributingmd-the-create-pr-skill-restates-them) | `docs.md` | decided (#44) |
-| [Codex discovers create-pr through a symlink to the existing skill](docs.md#codex-discovers-create-pr-through-a-symlink-to-the-existing-skill) | `docs.md` | decided |
 | [Titles carry a type and an optional scope, with no catch-all scope](docs.md#titles-carry-a-type-and-an-optional-scope-with-no-catch-all-scope) | `docs.md` | decided (#44) |
 | [The create-pr skill takes no arguments](docs.md#the-create-pr-skill-takes-no-arguments) | `docs.md` | decided (#44) |
 | [The squash settings stay as GitHub's defaults](docs.md#the-squash-settings-stay-as-githubs-defaults) | `docs.md` | decided (#44) |
+| [Codex discovers create-pr through a symlink to the existing skill](docs.md#codex-discovers-create-pr-through-a-symlink-to-the-existing-skill) | `docs.md` | decided (#89) |
 
 ## Validation firmware, ESP-IDF and the ROM ELF
 

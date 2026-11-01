@@ -132,7 +132,7 @@ the title's.
 - On a branch that does not match (Conductor's placeholder names such as `mateuszsikora/ui662`,
   personal prefixes, vague slugs) and that has no open PR: rename it with `git branch -m <name>`
   without asking. This is the repository owner's standing instruction; it holds whether the
-  skill was invoked with `/create-pr` or by the model, and it overrides any general rule against
+  skill was invoked by the user or by the model, and it overrides any general rule against
   renaming branches. If the old name was already pushed, tell the user the remote branch is left
   behind and offer to delete it; do not delete it unasked.
 - On a branch that already has an open PR: keep the name, even if it does not match.
