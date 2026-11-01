@@ -128,6 +128,7 @@ In the test body:
 | `uart.gnss: cannot tap into {path}: it is the card of sd_card` | `SourceError` | The file is the image of the card in the SD card slot, which the firmware writes |
 | `sd_card: cannot hold {path}: it is the tap of uart.gnss` | `SourceError` | `sd_card.insert` of a file a route replays from or is tapped into: the card would write over it |
 | `uart.gnss: cannot replay {path}: it is the tap of uart.gnss` | `SourceError` | `gnss.replay` of a file a route is tapped into |
+| `uart.gnss: cannot replay {path}: it is the card of sd_card` | `SourceError` | `gnss.replay` of the SD card's image, which the firmware writes |
 | `no backend can tap uart.gnss` | `SourceError` | No backend declares a tap of the route |
 
 A backend that does not declare a tap of the route skips the test at the call, with

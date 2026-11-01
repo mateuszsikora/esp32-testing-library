@@ -267,7 +267,8 @@ that references to its number keep their meaning.
     `tests/test_gnss_fixture.py::test_a_tap_of_a_replay_records_what_went_in`
 54. A tap never writes over a file the run replays from or another route is tapped into, and a
     replay never reads a file a route is tapped into: both are refused at the call. Nor do a tap
-    and the SD card's image share a file, whichever comes first.
+    and the SD card's image share a file, whichever comes first, and a replay never reads the
+    card's image.
     `tests/test_tap.py::test_a_tap_never_writes_over_a_file_the_run_reads_or_writes`,
     `tests/test_sdspi.py::test_no_tap_writes_over_the_card_s_image`,
     `tests/test_sdspi.py::test_a_card_does_not_take_a_tap_s_file`

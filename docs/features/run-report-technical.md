@@ -30,8 +30,9 @@ M2 asked for it.
    backend gives every `Uart` of the run the same `files` mapping, so a route's replay and another
    route's tap count too. Under the lock that guards the source it checks again, sets
    `Uart.tapped = Tap(name, directory / path)` and enters the file in `files` as `("tap", name)`. It
-   logs `{name}.tap({path!r})` at 0. `Uart.replay` refuses a file a route is tapped into the same
-   way before it reads it (two replays of one file harm nothing), enters it as `("replay", name)`
+   logs `{name}.tap({path!r})` at 0. `Uart.replay` refuses a file a route is tapped into, or the
+   SD card's image (`WRITERS`, the kinds whose file the run writes), the same way before it reads
+   it (two replays of one file harm nothing), enters it as `("replay", name)`
    once the source is given, logs `{name}.replay({path!r})` at 0, and keeps the path as
    `Uart.source_detail`.
 3. **The link's turns.** `BoardLink` calls the `Uart` from its thread
@@ -162,7 +163,8 @@ From `Uart.tap`, in the test body:
 | `{interface}: cannot tap into {path}: {directory} is not a directory` | `FileNotFoundError` | The file's directory does not exist; checked after the backend's checks |
 | `{interface}: cannot tap into {path}: it is the {kind} of {route}` | `SourceError` | The file is in `files`: `{kind}` is `replay`, `tap` or `card` (the SD card's image, `{route}` then `sd_card`) |
 
-From `Uart.replay`: `{interface}: cannot replay {path}: it is the tap of {route}`, a `SourceError`.
+From `Uart.replay`: `{interface}: cannot replay {path}: it is the tap of {route}`, or
+`... it is the card of sd_card`, a `SourceError`.
 From `SdCard.insert`: `sd_card: cannot hold {path}: it is the {kind} of {interface}`, a
 `SourceError`, for an image a route replays from or is tapped into.
 
@@ -188,8 +190,8 @@ before ([protocol, section 7](../protocol.md#7-latency-is-bound-to-the-source)).
   text) left out of the tap and the log; a tap into a route's replay or another route's tap, and
   a replay of a tapped file, refused; the test's steps on a `Uart` logged at 0.
 - `tests/test_sdspi.py`: the card's line and `sd_card.insert` step in the report of a run with a
-  card, and the `sd_card` property; a tap into the card's image, and a card holding a tap's file,
-  refused, with `sd_card: empty` in the report.
+  card, and the `sd_card` property; a tap into the card's image, a replay of it, and a card
+  holding a tap's file, refused, with `sd_card: empty` in the report.
 - `tests/test_run_report.py`: entries in the order of the board's time, ties in the order they
   came; the console cut into lines at their first byte's time, colour codes dropped, an unfinished
   line shown; every step and the last `entries` of the rest kept, with the heading that says so,

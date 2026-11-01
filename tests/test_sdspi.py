@@ -91,6 +91,9 @@ def test_no_tap_writes_over_the_card_s_image(
     sd_card.insert(image)
     with pytest.raises(SourceError, match="it is the card of sd_card"):
         gnss.tap(image)
+    # nor does a replay read what the card writes
+    with pytest.raises(SourceError, match=r"cannot replay .*: it is the card of sd_card"):
+        gnss.replay(image)
     # a test that sets up a card and does not power on fails at teardown
     board.power_on()
 
