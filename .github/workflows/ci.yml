@@ -227,6 +227,52 @@ jobs:
 
       - run: .venv/bin/pytest
 
+  # Plan §6: two runs of one recording are identical. `make determinism` runs
+  # tests/test_determinism.py twice and compares the consoles, the taps and the
+  # runner's stats; a difference is printed as a diff. On Linux and one Python:
+  # the claim is about two runs on one machine, not across machines.
+  determinism:
+    needs: [firmware, runner]
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - id: python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      # As in the test job.
+      - uses: actions/cache/restore@v6
+        with:
+          path: build/ci/firmware.tar
+          key: ${{ needs.firmware.outputs.key }}
+          fail-on-cache-miss: true
+
+      - uses: actions/cache/restore@v6
+        with:
+          path: build/ci/runner.tar
+          key: ${{ needs.runner.outputs.key }}-${{ runner.os }}-${{ runner.arch }}
+          fail-on-cache-miss: true
+
+      - uses: actions/cache/restore@v6
+        with:
+          path: .cache/esp-rom-elfs
+          key: ${{ needs.firmware.outputs.rom-elf-key }}
+
+      - name: Unpack the firmware and the runner
+        run: |
+          tar -xf build/ci/firmware.tar
+          tar -xf build/ci/runner.tar
+          runner/target/release/esp32tl-runner --help
+
+      - run: make PYTHON='${{ steps.python.outputs.python-path }}' .venv/.installed rom-elf
+
+      - run: make determinism
+
   # `make lint` in full, clippy included. The checkout removes runner/target/,
   # so clippy checks esp32sim from scratch: 8 s on the self-hosted runner,
   # fetching esp32sim included. Not worth a cache.

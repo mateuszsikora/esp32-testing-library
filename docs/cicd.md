@@ -26,12 +26,13 @@ The test jobs then run only the runner and Python: they build nothing.
 | `firmware` | self-hosted Linux | `make firmware` once per content of `firmware/`, the workflow and the `Makefile`; fetches the ROM ELF once per revision of `scripts/fetch-rom-elf` |
 | `runner` | self-hosted Linux; `macos-latest` only when the repository is public | `make build-runner test-runner`, once per content of `runner/` (its sources, its esp32sim pin, its toolchain), the workflow and the `Makefile` |
 | `test` | self-hosted Linux; `macos-latest` only when the repository is public; Python 3.11, 3.13, 3.14 | Unpacks the images and the runner, restores the ROM ELF, and runs pytest; builds nothing |
+| `determinism` | self-hosted Linux; Python 3.11 | Unpacks the images and the runner as `test` does, and runs `make determinism`: the determinism tests twice, the two runs compared |
 | `lint` | self-hosted Linux; Python 3.11 | `make lint`, clippy included |
 | `docs` | self-hosted Linux; pull requests only | `make docs-check` against the pull request's base branch |
 
-`test` waits for `firmware` and `runner`. `lint` and `docs` need nothing from the other jobs. The
-`runner` and `test` matrices do not fail fast: one platform or Python version failing does not
-cancel the others.
+`test` and `determinism` wait for `firmware` and `runner`. `lint` and `docs` need nothing from the
+other jobs. The `runner` and `test` matrices do not fail fast: one platform or Python version
+failing does not cancel the others.
 
 ## Where the jobs run
 
@@ -119,6 +120,21 @@ that the binary starts. It then runs `make PYTHON=<that Python> .venv/.installed
 them: on macOS it installs mtools with Homebrew; on the self-hosted runner, which has no root for
 apt, it fails the job with `no TOOL on PATH: install mtools on this runner (apt-get install
 mtools)` until someone installs it there. Timeout: 20 minutes.
+
+## `determinism`
+
+Two runs of one recording must be identical (plan, section 6). The job restores the firmware and
+runner tarballs and the ROM ELF under the keys `test` uses, and fails on a miss of either tarball as
+`test` does; it unpacks them, checks that the runner starts (`esp32tl-runner --help`), runs
+`make PYTHON=<Python 3.11> .venv/.installed rom-elf`, then `make determinism`, which runs
+`tests/test_determinism.py` twice and compares the consoles, the taps and the runner's stats of the
+two runs. Each difference is printed in the job's log as a `✗` line, with a diff where both runs
+have the file or the test; there is no artifact, since the account's artifact quota is full. What
+the check compares, and what it leaves out, is in
+[guides/testing.md](guides/testing.md#determinism).
+
+It runs on Linux and one Python only: what it checks is that one machine runs one test the same
+way twice, not that two machines agree. Timeout: 10 minutes.
 
 ## `lint`
 

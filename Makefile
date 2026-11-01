@@ -3,7 +3,7 @@ PYTHON ?= python3
 override VENV := .venv
 BIN := $(VENV)/bin
 
-.PHONY: setup build-runner rom-elf test-runner firmware test lint docs-check hooks clean
+.PHONY: setup build-runner rom-elf test-runner firmware test determinism lint docs-check hooks clean
 
 # Python environment, the runner and the ROM ELF. `make test` runs this first,
 # so a clean checkout needs one command.
@@ -59,6 +59,12 @@ firmware/%/build/esp32tl-built:
 
 test: setup test-runner $(FIRMWARE_IMAGES:%=firmware/%/build/esp32tl-built)
 	$(BIN)/pytest
+
+# The determinism job (plan §6): tests/test_determinism.py run twice, and the
+# two runs compared. Not after `setup`: the runner and the ROM ELF are taken
+# as they are, as in the CI job, which receives the runner from the runner job.
+determinism: $(VENV)/.installed firmware/nmea_reader/build/esp32tl-built
+	$(BIN)/python scripts/check-determinism.py
 
 lint: $(VENV)/.installed
 	$(BIN)/ruff check .
