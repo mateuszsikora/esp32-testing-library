@@ -1508,3 +1508,21 @@ def test_a_held_run_whose_runner_is_gone_releases_the_link(
     assert time.monotonic() - started < 15
     result.assert_outcomes(passed=1, errors=1)
     result.stdout.fnmatch_lines(["*esp32sim: the runner exited with code 4; its output is in *"])
+
+
+def test_nvs_without_power_on_fails_teardown(fake_runner: pytest.Pytester) -> None:
+    import struct
+
+    table = fake_runner.path / "build/partition_table/partition-table.bin"
+    table.write_bytes(struct.pack("<HBBII16sI", 0x50AA, 1, 2, 0x9000, 0x6000, b"nvs", 0))
+    fake_runner.makepyfile(
+        test_fake='def test_config(board): board.nvs({"config": {"host": "test"}})'
+    )
+    result = fake_runner.runpytest_subprocess("-p", "no:cacheprovider")
+    result.assert_outcomes(passed=1, errors=1)
+    result.stdout.fnmatch_lines(
+        [
+            "*the test set up the NVS partition 'nvs' and never called"
+            " board.power_on(): it ran no firmware*"
+        ]
+    )

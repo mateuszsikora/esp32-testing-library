@@ -66,8 +66,10 @@ the container, and once inside it, which builds. With `IDF_LOCAL=1` it runs once
      on stderr that it is not for goldens.
    - For each image, in the order of `IMAGES`: the project is `project_of IMAGE`
      (`hello_world` is `$IDF_PATH/examples/get-started/hello_world`, `sdspi` is
-     `$IDF_PATH/examples/storage/sd_card/sdspi`, `nmea_reader` is `$PWD/firmware/nmea_reader` and
-     `gpio_echo` `$PWD/firmware/gpio_echo`, the working directory being the repository's root: in
+     `$IDF_PATH/examples/storage/sd_card/sdspi`, `nmea_reader` is `$PWD/firmware/nmea_reader`,
+     `gpio_echo` `$PWD/firmware/gpio_echo`, `modem_at` `$PWD/firmware/modem_at`,
+     and `nvs_reader` `$PWD/firmware/nvs_reader`, the working directory being the repository's
+     root: in
      the container `/project/firmware/nmea_reader`, in a local build the checkout's own path), the
      build directory `$out/IMAGE/build`. If
      that directory exists and its `esp32tl-build.json` is missing or, compared as text, is not
@@ -98,12 +100,12 @@ next build is still incremental; the marker, removed first, is what says it fini
 The Makefile's `firmware` target runs `FIRMWARE_OUT= firmware/build.sh`; the pattern rule
 `firmware/%/build/esp32tl-built` runs `FIRMWARE_OUT= firmware/build.sh $*`, and `test` depends on
 `$(FIRMWARE_IMAGES:%=firmware/%/build/esp32tl-built)` with `FIRMWARE_IMAGES := hello_world
-nmea_reader gpio_echo sdspi modem_at`. The rule has no prerequisites, so make rebuilds an image
-only when its marker is missing: an edit to `firmware/nmea_reader/` needs `make firmware`, or
+nmea_reader gpio_echo sdspi modem_at nvs_reader`. The rule has no prerequisites, so make rebuilds
+an image only when its marker is missing: an edit to `firmware/nmea_reader/` needs `make firmware`, or
 `firmware/build.sh nmea_reader`, before `make test` sees it.
 
-`nmea_reader`, `gpio_echo` and `modem_at` are built from the read-only `/project` mount like any
-other project. They take no components from the component manager, and with `sdkconfig` and the
+`nmea_reader`, `gpio_echo`, `modem_at` and `nvs_reader` are built from the read-only `/project`
+mount like any other project. They take no components from the component manager, and with `sdkconfig` and the
 build in the build directory ESP-IDF v5.3.6 writes nothing into their directories.
 
 ## `nmea_reader`
@@ -187,6 +189,20 @@ dialogue without that UART startup wait. It sends no PPP data. `tests/test_modem
 checks its dialogue, GPIO power cycle, changes made on the test clock and identical taps from two
 runs. The command subset is the one this firmware sends; new firmware commands should extend that
 validation and the model's documented answers together.
+
+## `nvs_reader`
+
+`firmware/nvs_reader/main/main.c` depends on `nvs_flash`. It calls `nvs_flash_init`, opens
+`config` with `NVS_READONLY`, and reads `broker_host`, `broker_port`, `enabled`, `count`,
+`delta` and `broker_ca` with `nvs_get_str`, `nvs_get_u16`, `nvs_get_u8`, `nvs_get_u32`,
+`nvs_get_i32` and `nvs_get_blob`. Buffers for the string and blob are 256 bytes. Every call
+is checked with `ESP_ERROR_CHECK`; after printing the values it closes the handle and returns.
+The default ESP-IDF partition table puts `nvs` at `0x9000`, size `0x6000`.
+
+`tests/test_nvs_reader.py` boots this image with two configurations supplied by `board.nvs()`;
+`tests/test_firmware_images.py::test_nvs_reader_has_a_writable_nvs_partition` checks the real
+partition table and build provenance. `make firmware` and `make test` include the image;
+CI's existing firmware glob includes its build in the cache.
 
 ## The GNSS recording generator
 
@@ -290,7 +306,7 @@ top of each build directory, `config/sdkconfig.json`, and the `.bin` and `.elf` 
 |---|---|---|---|
 | `IDF_VERSION` | script constant | `v5.3.6` | the ESP-IDF tag of the container |
 | `CONTAINER` | script constant | `espressif/idf:$IDF_VERSION@sha256:cee52f0c4fdaf088992a7a739f5993154e95cf1d3ab61c24f5b40e6d56a3a070` | the image the build runs in, pinned by digest (a multi-arch index) |
-| `IMAGES` | script constant | `hello_world nmea_reader gpio_echo sdspi modem_at` | the images, in build order; `project_of` maps each to its project |
+| `IMAGES` | script constant | `hello_world nmea_reader gpio_echo sdspi modem_at nvs_reader` | the images, in build order; `project_of` maps each to its project |
 | `FIRMWARE_OUT` | environment | `firmware/` | where `IMAGE/build/` goes; empty means the default; `/out` inside the container |
 | `IDF_LOCAL` | environment | unset | `1` builds with the ESP-IDF of the calling shell |
 | `ESP32TL_CONTAINER` | environment, set by the host side | unset | marks the container side and names the image it records |
@@ -307,7 +323,7 @@ regular expressions, so each has to stay on a line of its own. Changing either, 
 
 | Message | Cause |
 |---|---|
-| `unknown image 'NAME'; the images are: hello_world nmea_reader gpio_echo sdspi modem_at` | an argument not in `IMAGES`; nothing written |
+| `unknown image 'NAME'; the images are: hello_world nmea_reader gpio_echo sdspi modem_at nvs_reader` | an argument not in `IMAGES`; nothing written |
 | `ESP32TL_CONTAINER is set outside a container; unset it` | `ESP32TL_CONTAINER` set and no `/.dockerenv`; nothing written |
 | `IDF_LOCAL=1 needs ESP-IDF in the environment: source $IDF_PATH/export.sh first` | `IDF_LOCAL=1` without `idf.py` on `PATH` or without `IDF_PATH`; nothing written |
 | `needs Docker, or IDF_LOCAL=1 to build with a local ESP-IDF` | no `docker` on `PATH`; nothing written |
@@ -341,8 +357,8 @@ write their arguments to `$FAKE_LOG`, with a `PATH` holding only them and `cat`,
   each message verbatim, exit 1, and no output directory created;
 - `test_build_starts_the_pinned_container`: the `docker run` arguments, exactly;
 - `test_local_build_runs_idf_py_and_records_how`: with no image named, every image in order,
-  `hello_world` and `sdspi` from the fake `IDF_PATH`, `nmea_reader`, `gpio_echo` and `modem_at` from
-  `firmware/`; the `idf.py` arguments of each, the records with `"container": null`, the markers,
+  `hello_world` and `sdspi` from the fake `IDF_PATH`, `nmea_reader`, `gpio_echo`, `modem_at` and
+  `nvs_reader` from `firmware/`; the `idf.py` arguments of each, the records with `"container": null`, the markers,
   the "not for goldens" warning and the `built in` lines;
 - reuse of a build directory with the same record, and removal of one with another record;
 - no marker when `flasher_args.json` is missing, and a failed build removing the marker of an

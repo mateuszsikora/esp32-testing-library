@@ -75,6 +75,12 @@ What the receiver can be told, and the units, are in [models and units](models-u
   test runs (`Interrupted: 1 error during collection`, exit code 2), unless pytest runs with
   `--continue-on-collection-errors`.
 
+Before `board.power_on()`, `board.nvs({"config": {"broker_host": "broker.test"}})`
+can replace a named NVS partition from the build's table. Integer values require a width,
+for example `u16(8883)` from `esp32tl.flash`. See [flash contents](flash-contents-user.md).
+A test that supplies NVS and passes without calling `board.power_on()` fails teardown:
+it ran no firmware.
+
 What the backend needs besides the build, the runner and the ROM ELF, is in
 [the esp32sim backend](esp32sim-backend-user.md#what-it-needs).
 

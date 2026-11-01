@@ -190,6 +190,13 @@ FEATURES = [
         r"^docs/features/modem-",
         "Modem model changed (AT dialogue, power, registration): update docs/features/modem-*.md",
     ),
+    Rule(
+        "F20",
+        r"^esp32tl/flash\.py$",
+        r"^docs/features/flash-contents-",
+        "Flash contents changed (partition table, NVS types and generation):"
+        " update docs/features/flash-contents-*.md",
+    ),
 ]
 
 # The catch-all for the package: the rest of sources/ and any new module are owned from their

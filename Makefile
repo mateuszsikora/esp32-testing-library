@@ -53,7 +53,7 @@ firmware:
 # esp32tl-built when a build finishes. The CI test jobs receive the images
 # from the firmware job, so they build nothing (and the macOS ones have no
 # Docker). `make firmware` rebuilds them.
-FIRMWARE_IMAGES := hello_world nmea_reader gpio_echo sdspi modem_at
+FIRMWARE_IMAGES := hello_world nmea_reader gpio_echo sdspi modem_at nvs_reader
 firmware/%/build/esp32tl-built:
 	FIRMWARE_OUT= firmware/build.sh $*
 
