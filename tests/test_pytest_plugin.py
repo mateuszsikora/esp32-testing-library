@@ -730,6 +730,42 @@ def test_a_test_that_sets_up_a_source_and_never_powers_on_fails_at_teardown(
     assert stats == [None] * 5
 
 
+def test_the_lines_fixture_needs_a_profile_with_lines_and_a_drive_needs_power_on(
+    fake_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_EXIT", "0")
+    monkeypatch.setenv("FAKE_RAN", str(fake_runner.path / "ran"))
+    fake_runner.makepyfile(
+        test_fake="""
+        import pytest
+
+        def test_no_lines(lines):
+            pass
+
+        @pytest.mark.board_profile("lilygo-t-a7670g-r2")
+        def test_read_only(board, lines):
+            assert lines.level("modem.pwrkey") is None
+            assert lines.events() == []
+
+        @pytest.mark.board_profile("lilygo-t-a7670g-r2")
+        def test_driven_never_powered(board, lines):
+            lines.drive("modem.ri", 1)
+            lines.drive(4, 0)
+        """
+    )
+    result = fake_runner.runpytest_subprocess("-p", "no:cacheprovider", "-rA")
+    result.assert_outcomes(passed=2, errors=2)
+    result.stdout.fnmatch_lines_random(
+        [
+            "*esp32sim: the board profile esp32-devkitc has no lines;"
+            " its interfaces are console, uart.gnss, sd_card",
+            "*esp32sim: the test set up the level of modem.ri and the level of modem.pwrkey and"
+            " never called board.power_on(): it ran no firmware",
+        ]
+    )
+    assert not (fake_runner.path / "ran").exists()
+
+
 def test_a_test_that_taps_a_route_and_never_powers_on_fails_at_teardown(
     fake_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1005,11 +1041,11 @@ def test_the_backend_serves_the_link_and_ends_the_run_with_stop(
     )
 
 
-def test_every_route_of_the_profile_is_on_the_link(
+def test_every_route_and_line_of_the_profile_is_on_the_link(
     link_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("FAKE_BOARD", "lilygo-t-a7670g-r2")
-    monkeypatch.setenv("FAKE_WATCH", "26,27")
+    monkeypatch.setenv("FAKE_WATCH", "4,26,27,33")
     link_runner.makepyfile(
         test_lilygo="""
         import pytest
@@ -1023,7 +1059,9 @@ def test_every_route_of_the_profile_is_on_the_link(
     # The fake runner asserts the hello's board and pins; a failed assertion ends it with an error.
     result = link_runner.runpytest_subprocess("-p", "no:cacheprovider", "-rA", "test_lilygo.py")
     result.assert_outcomes(passed=1)
-    result.stdout.fnmatch_lines(["board lilygo-t-a7670g-r2, watching GPIO 26, GPIO 27"])
+    result.stdout.fnmatch_lines(
+        ["board lilygo-t-a7670g-r2, watching GPIO 4, GPIO 26, GPIO 27, GPIO 33"]
+    )
 
 
 def test_the_test_s_waits_move_the_board_s_clock(link_runner: pytest.Pytester) -> None:

@@ -496,6 +496,13 @@ there as well. `esp32tl record` and the engine's unseen-request list come with #
 *Amended by section 11: the test's clock replaces the `scenario` fixture's timeline for what a test
 does in its body; `lines` stays, and the modem model needs it for PWRKEY and RI.*
 
+*As built (#23, #24): the runner's part is in [`protocol.md`](protocol.md) 5.4 and 5.11, without
+`adc`, which waits for an example that needs it. `lines` has `drive(line, level)`, `release(line)`,
+`level(line)` and `events()`, with no `at=`; there is no `scenario` fixture, and `BoardLink` has no
+timeline ([`decisions/harness.md`](decisions/harness.md#gpio-lines-are-an-interface-of-the-link-and-the-scenario-timeline-is-gone)).
+The profile's pulls are levels the harness drives, and `gpio_echo` validates the lines on the
+LilyGO profile ([validation firmware](features/validation-firmware-user.md#gpio_echo)).*
+
 - Runner: `gpio_out`, `gpio_in`, `release` through the trait; `adc` through the machine's analog
   source (finding 10). Future-dated events are queued by `t` in the runner (4.1). `lines` fixture
   with `drive(pin, level, at=)`, `release(pin)`, `events()`; `scenario` fixture as a sorted

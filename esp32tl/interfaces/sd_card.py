@@ -12,6 +12,8 @@ from pathlib import Path
 from esp32tl.boards import SdCardRoute
 from esp32tl.boards.capabilities import Request
 from esp32tl.interfaces import SourceError
+from esp32tl.interfaces.uart import same_file
+from esp32tl.report import RunLog
 
 # The capacity unit of a high capacity card (CSD C_SIZE): an image is a whole number of them.
 UNIT = 512 * 1024
@@ -25,6 +27,9 @@ class SdCard:
     `asked` is called with the `Request` of a `model` source before the card goes in,
     and refuses it by raising: the backend's checks, that the board is still off and that a
     backend gives that source. A relative image path is taken from `directory`, the test file's.
+    `log`, when given, gets the test's `insert` as a step, at 0: it comes before power-on.
+    `files` holds the files the run reads and writes, shared with the routes, so that no tap
+    writes over the card's image and the card writes over no recording.
     """
 
     name = "sd_card"
@@ -35,10 +40,14 @@ class SdCard:
         *,
         directory: Path,
         asked: Callable[[Request], None] = lambda request: None,
+        log: RunLog | None = None,
+        files: dict[Path, tuple[str, str]] | None = None,
     ) -> None:
         self.route = route
         self.directory = directory
         self.asked = asked
+        self.log = log
+        self.files = {} if files is None else files
         # The image of the card in the slot, absolute; None while the slot is empty.
         self.image: Path | None = None
 
@@ -71,5 +80,13 @@ class SdCard:
             raise SourceError(
                 f"{self.name}: {path} cannot be read and written: the card writes into it"
             )
+        for claimed, (kind, interface) in self.files.items():
+            if same_file(path, claimed):
+                raise SourceError(
+                    f"{self.name}: cannot hold {path}: it is the {kind} of {interface}"
+                )
+        self.files[path] = ("card", self.name)
         self.image = path
+        if self.log is not None:
+            self.log.test(0, f"{self.name}.insert({str(image)!r})")
         return path

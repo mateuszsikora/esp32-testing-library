@@ -228,6 +228,21 @@ the one the tests measure. The `uart_cfg` the bare peer checked is covered by th
 the first turn, a timing no test of a user's firmware has, and would be a second peer to keep in
 step with the protocol.
 
+## gpio_echo reads RI and drives PWRKEY, on the LilyGO profile
+
+Status: decided (#24)
+
+`firmware/gpio_echo` reads one GPIO and drives another to its level, with the chip's pulls off on
+the input, and its defaults are the `[lines.modem]` set of `lilygo-t-a7670g-r2`: RI on GPIO 33,
+which the board pulls down, and PWRKEY on GPIO 4. Its tests run on that profile, the only one with
+lines and the one whose pull the harness must honour. It sees a change through an interrupt on
+either edge, and reads the level again in its task.
+
+**Rejected:** a `[lines.*]` set in `esp32-devkitc`, which carries every other validation firmware,
+because it would invent a wiring and a pull that a devkit does not have, and every devkit test
+would watch lines it does not use; and polling the input, because the echo would then lag by up to
+a FreeRTOS tick, 10 ms at ESP-IDF's default, where the interrupt takes microseconds.
+
 ## The SD card is validated on ESP-IDF's sdspi example, unmodified
 
 Status: decided (#32)

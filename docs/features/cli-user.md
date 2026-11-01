@@ -28,6 +28,16 @@ does the same with the recording replayed into the board profile's `uart.gnss` r
 at its recorded time, as `gnss.replay(path)` does in a test ([replay](replay-user.md)):
 `nmea_reader` prints `fix acquired lat=52.229677 lon=21.012233` and the two fixes after it.
 
+The board profile's GPIO lines are on the link in both commands, with nothing driving them but the
+board's pulls, as in a test ([the `lines` fixture](pytest-plugin-user.md#the-fixtures)):
+
+```sh
+esp32tl run --app firmware/gpio_echo --board lilygo-t-a7670g-r2 --max-seconds 1
+```
+
+prints `in=0`, since RI is pulled down on that board, and the report watches GPIO 4 and 33. The
+command drives no line otherwise.
+
 | Option | Commands | Default | Accepts |
 |---|---|---|---|
 | `--app APP` | both | none, required | the ESP-IDF app directory, its build in `APP/build`, relative to the working directory or absolute. The build must be one the backend runs: for the `esp32` target, finished, without flash encryption |

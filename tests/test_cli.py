@@ -1,6 +1,6 @@
 """The `esp32tl` command's `run` and `replay`: the arguments they refuse, in this process, and runs
 of the validation images through the real runner, in a subprocess of their own. The runs need
-`make firmware` (hello_world, nmea_reader)."""
+`make firmware` (hello_world, nmea_reader, gpio_echo)."""
 
 import os
 import select
@@ -17,6 +17,7 @@ from esp32tl import cli
 ROOT = Path(__file__).resolve().parent.parent
 HELLO_WORLD = ROOT / "firmware" / "hello_world"
 NMEA_READER = ROOT / "firmware" / "nmea_reader"
+GPIO_ECHO = ROOT / "firmware" / "gpio_echo"
 RECORDING = ROOT / "recordings" / "gnss-generated-1.jsonl"
 REPLAY = ("replay", "--app", "firmware/nmea_reader")
 
@@ -32,7 +33,7 @@ sys.exit(cli.main(sys.argv[1:]))
 def esp32tl(
     *args: str, patch: str = "", env: dict[str, str] | None = None
 ) -> subprocess.Popen[str]:
-    for app in (HELLO_WORLD, NMEA_READER):
+    for app in (HELLO_WORLD, NMEA_READER, GPIO_ECHO):
         if not (app / "build" / "esp32tl-built").is_file():
             pytest.fail(f"{app}/build holds no finished build: run make firmware", pytrace=False)
     return subprocess.Popen(
@@ -131,6 +132,24 @@ def test_run_prints_the_console_and_the_link_s_report() -> None:
     assert "Hello world!" in out
     assert "esp32tl: board esp32-devkitc, watching no pins\n" in err
     assert "esp32tl: stats: the run ended at 2.000000000 s (max_seconds); 1 turn, 0 resets" in err
+
+
+def test_run_holds_the_board_s_pulls_on_its_lines() -> None:
+    code, out, err = finished(
+        esp32tl(
+            "run",
+            "--app",
+            "firmware/gpio_echo",
+            "--board",
+            "lilygo-t-a7670g-r2",
+            "--max-seconds",
+            "1",
+        )
+    )
+    assert code == 0, err
+    # RI, pulled down on the board, reads low: undriven, the emulator's pad would read 1.
+    assert [line.rstrip("\r") for line in out.splitlines() if line.startswith("in=")] == ["in=0"]
+    assert "esp32tl: board lilygo-t-a7670g-r2, watching GPIO 4, GPIO 33\n" in err
 
 
 def test_replay_reaches_the_app_at_the_recorded_times() -> None:

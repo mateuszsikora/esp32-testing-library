@@ -12,8 +12,10 @@ from pathlib import Path
 import pytest
 
 from esp32tl.backends.esp32sim import Esp32Sim
+from esp32tl.interfaces import SourceError
 from esp32tl.interfaces.console import Console
 from esp32tl.interfaces.sd_card import SdCard
+from esp32tl.interfaces.uart import Uart
 
 ROOT = Path(__file__).resolve().parent.parent
 SDSPI = ROOT / "firmware" / "sdspi"
@@ -74,6 +76,36 @@ def test_the_example_writes_its_files_into_the_image(
     assert names(image) == ["::/FOO.TXT", "::/NIHAO.TXT"]
     assert read(image, "foo.txt") == b"Hello SIMSD!\n"
     assert read(image, "nihao.txt") == b"Nihao SIMSD!\n"
+    # the run's report names the card and the test's step
+    report = board.report(run=True)
+    assert f"sd_card: a card holding {image}" in report
+    assert f"sd_card.insert({str(image)!r})" in report
+    assert board.properties()["sd_card"] == {"image": str(image)}
+
+
+def test_no_tap_writes_over_the_card_s_image(
+    tmp_path: Path, board: Esp32Sim, sd_card: SdCard, gnss: Uart
+) -> None:
+    image = tmp_path / "card.img"
+    image.write_bytes(bytes(1 << 20))
+    sd_card.insert(image)
+    with pytest.raises(SourceError, match="it is the card of sd_card"):
+        gnss.tap(image)
+    # a test that sets up a card and does not power on fails at teardown
+    board.power_on()
+
+
+def test_a_card_does_not_take_a_tap_s_file(
+    tmp_path: Path, board: Esp32Sim, sd_card: SdCard, gnss: Uart
+) -> None:
+    tap = tmp_path / "gnss.jsonl"
+    gnss.tap(tap)
+    tap.write_bytes(bytes(1 << 20))
+    with pytest.raises(SourceError, match=r"sd_card: cannot hold .*: it is the tap of uart.gnss"):
+        sd_card.insert(tap)
+    assert board.report().endswith("sd_card: empty")
+    assert board.properties()["sd_card"] == {"image": None}
+    board.power_on()
 
 
 def test_a_card_without_a_file_system_does_not_mount(

@@ -11,9 +11,9 @@ The protocol follows the `SocketBoard` proposed in mikroverk/esp32sim#325, so th
 replaced by upstream's once that lands (section 10). Messages marked *ext* are runner extensions
 that #325 does not cover; they stay in the runner whatever happens upstream (plan, finding 10).
 
-Who implements what: the runner side in #11 (M1: UART, `reset`, `uart_cfg`, `warn`, `stats`) and
-#23 (M3: GPIO and the future-input queue); the harness side in #12. `adc` waits for an issue of
-its own, opened when an example needs an analog pin.
+Who implements what: the runner side in #11 (M1: UART, `reset`, `uart_cfg`, `warn`, `stats`) and #23
+(M3: GPIO and the future-input queue); the harness side in #12, and its GPIO lines in #24. `adc`
+waits for an issue of its own, opened when an example needs an analog pin.
 
 ## 1. Transport
 
@@ -374,7 +374,7 @@ says why: `max_seconds`, `stop`, `signal`, `emulator` (then also `stop`, the `St
 and `detail`, its `Debug` form), or `protocol_error` (then also `detail`). `inputs_not_applied`
 counts the queued input messages not yet applied when the run ended, and `rx_bytes_not_paced` the
 received bytes not yet paced into the chip, of `uart_rx` messages already applied (a message still
-in the queue counts in `inputs_not_applied` only), so `BoardLink` can tell a scenario that reached
+in the queue counts in `inputs_not_applied` only), so `BoardLink` can tell inputs that reached
 past the end of the run. `uart` has one entry per
 port that carried a watched route during the run, with the bytes each way and the drops by kind.
 `BoardLink` puts the counts in the test report next to the matching engine's unseen requests.
@@ -399,8 +399,8 @@ line is still busy with an earlier message.
 ```
 
 `gpio_in`: from `t` the peer drives each pin to its level. `release`: from `t` it stops driving the
-pins, which go back to their pulls (`BoardModel::released_inputs`; a ring indicator with a
-pull-down is the case).
+pins, which go back to the chip's own pulls (`BoardModel::released_inputs`), not to a resistor on
+the board (below).
 
 `levels` is a list of `[pin, level]` pairs, `level` `0` or `1`, applied in order, so of two pairs
 for one pin the second wins; it is required, and may be empty. `pins` is a pin set; absent or
@@ -412,6 +412,15 @@ the board: at the slice boundary where one comes due, the runner hands its level
 same boundary apply in the queue's order, so a `release` and a `gpio_in` of one pin at one `t`
 leave the pin as the later of the two says. An undriven pad without a pull reads `1` in
 esp32sim: a peer that wants a line low from power-on sends the level stamped `t = 0` (rule 4).
+
+The pulls `release` goes back to are the chip's own, which the firmware sets in IO_MUX (`sync_pull`,
+`esp32/src/periph.rs:394`); esp32sim knows nothing of a resistor on the board. A peer that models
+one, as the harness's `Lines` interface (`esp32tl/interfaces/lines.py`) does for a line its board
+profile pulls, drives the line to the pull's level instead: in the first turn at `t = 0`, and in
+place of each `release`. A level the peer drives also takes the pad from the chip's pulls, which
+apply only to a pad nothing external drives, so the board's resistor wins over them; the guest's own
+output still wins over it, as the pad's level is the guest's wherever it drives the pad
+(`pad_level`, `:315`).
 
 What the peer drives survives a guest reset (5.5): `reboot()` keeps the chip's external levels
 (`esp32/src/soc.rs:141`), and the board reports them again through `BoardModel::input_levels`
@@ -473,8 +482,8 @@ same turn are discarded.
 
    A peer that acknowledges a request and answers later must keep `quiet_until` at or before the
    answer's `t`, or the runner runs past it and the answer is late under rule 2. The same goes for
-   a harness that holds scenario events back instead of sending them early (section 8):
-   `BoardLink` folds the next held event into `quiet_until`.
+   an interface that holds inputs back instead of sending them early (section 8): its
+   `quiet_until` is the next one's `t`, and `BoardLink` folds it into the turn's.
 
 2. **A `t` earlier than the turn's `sync` `t` is a protocol error** that ends the run naming the
    peer: the peer broke its `latency` or `quiet_until` promise. The runner never clamps a late
@@ -579,14 +588,16 @@ request. A large `latency` costs nothing in correctness and saves turns: the run
 everything the guest sends within it into one turn. A `latency` of `0` is valid and costs a turn
 per event.
 
-When several interfaces share the socket, `BoardLink` sends the minimum `latency` and the minimum
-`quiet_until` over them and the scenario timeline, a `null` counting as no bound.
+When several interfaces share the socket, `BoardLink` sends the minimum `latency` over them, and the
+minimum `quiet_until` over them and the test's clock (section 4), a `null` counting as no bound.
+The `lines` interface, which drives GPIO lines at the instant the test does, declares neither.
 
 ## 8. Future-dated inputs
 
 Any input (`uart_rx`, `gpio_in`, `release`, `adc`) may carry a `t` later than the turn's `sync`:
 the runner keeps it in a queue of its own, ordered by `t` and, at equal `t`, by arrival, and
-applies it at its time (section 6.1). This is how scenario events with `at=` reach the guest.
+applies it at its time (section 6.1). This is how an interface's output that lies in the future, a
+replay's next sentence for one, reaches the guest.
 The queue is the runner's, not `machine.script`: the script's cursor walks its events in order,
 and an appended event would have to be later than everything the cursor has passed, an ordering
 the runner should not depend on.

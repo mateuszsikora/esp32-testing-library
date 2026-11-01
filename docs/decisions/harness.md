@@ -172,6 +172,10 @@ Status: superseded (#65)
 
 Status: decided (#12)
 
+*For the scenario, superseded in #24 by [GPIO lines are an interface of the link, and the scenario
+timeline is gone](#gpio-lines-are-an-interface-of-the-link-and-the-scenario-timeline-is-gone):
+inputs come from the interfaces only, each on its own pins, and the errors name the interface.*
+
 What the interfaces and the scenario return is checked to be `(t_ns, bytes)` pairs or input
 messages, encoded and decoded again, checked against the turn's `sync` and against `watch`; a
 failure is the link's error, naming the interface or the scenario, and ends the run with `stop`.
@@ -987,6 +991,84 @@ describes the profile.
 
 **Rejected:** waiting for the vendor schematic, as plan finding 12 did, because LilyGO's pin table
 and example already give these values.
+
+## GPIO lines are an interface of the link, and the scenario timeline is gone
+
+Status: decided (#24)
+
+The `lines` fixture is one `Lines`, a `BoardLink` `Interface` without a UART, for every
+`[lines.<role>]` set of the profile; it sends `gpio_in` and `release` from `inputs(now)` in the
+link's turns, and only on its own pins. `BoardLink`'s `Timeline`, which plan M3's `scenario`
+fixture was to fill, is removed with the link's `timeline=` argument: a test reaches an instant by
+waiting on the board's clock, then drives the line there, so `lines.drive` takes no `at=` and no
+input reaches the link but from an interface. Two interfaces on one line are refused, and so is an
+input on a pin of another interface's, so a model that drives a profile's line, the modem's RI
+(#29), cannot be an interface beside `Lines`: either `Lines` takes inputs scheduled ahead from the
+model, with a `quiet_until` of its own, or the backend leaves the model's lines out of `Lines`. #29
+decides which.
+
+**Rejected:** keeping `Timeline` for the lines, because it would be a second path for inputs that
+one interface uses, and its errors would name a scenario that no longer exists; and `at=` on
+`drive`, because it would be a second model of time beside the test's clock, which the decision
+that [the board's clock is the test's](#the-boards-clock-is-the-tests-emulated-time-moves-only-while-the-test-waits)
+rules out.
+
+## A board's pull is a level the harness drives on the line
+
+Status: decided (#24)
+
+A line the profile pulls, `ri = { pin = 33, pull = "down" }`, goes on the link as a `gpio_in` at
+the pull's level in the run's first turn, at `t = 0`, and again in place of each `release` of it.
+The chip's own `release` puts a pad back to the pulls the firmware set in IO_MUX, which know
+nothing of a resistor on the board, so a `release` of RI would read 1, the level stage 0 found
+([gap 6](../stage0-findings.md#gaps)). The pull holds in every test on the profile, also one
+that never asks for `lines`, because it is the board's wiring, not something a test sets up.
+Without it, `gpio_echo` on the LilyGO profile prints `in=1` at boot; with it, `in=0`.
+
+**Rejected:** the pull in the runner, because the runner does not read the board profile (the
+`board` of the harness's `hello` is a name it does not interpret), and it would need a new message;
+and the pull in esp32sim, because the harness gives it with the messages of version 1, and an
+upstream change is asked for only once it is the only way. The cost accepted: the release of a
+pulled line that the firmware drives as an output brings an `input_on_output` warning, which a
+`release` would not.
+
+## The lines fixture names a line by its GPIO or its role, and reads the firmware's side
+
+Status: decided (#24)
+
+`lines.drive`, `release` and `level` take a line as its GPIO number, `33`, or as
+`<role>.<line>`, `modem.ri`, as the profile names it. `lines.level(line)` is what the firmware
+drives the line to, or `None` while its output is off; what the test drives is the test's own, and
+`lines.events()` holds both ends' changes, `by` `"firmware"` or `"test"`, with the board's time.
+A line counts as the firmware's while its bit is in `gpio_out`'s `enabled` or its pad is reported
+high.
+
+**Rejected:** a fixture per set (`modem_lines`), because the sets are the profile's data and one
+fixture covers them all; and a level of the wire that folds the test's drive and the board's pull
+in, because a test that waits for the firmware to raise a line would then return on its own drive.
+
+## The lines declare no latency, and a wait sees a line's change at its next look
+
+Status: decided (#24)
+
+`Lines` declares no `latency` and no `quiet_until`, so a `gpio_out` on a line takes no turn of its
+own: `board.wait_until(lambda: lines.level(...) == 1, ...)` returns at the next turn the link takes
+after the change, at most 100 emulated milliseconds later, and `lines.events()` carries the
+change's own time. In `gpio_echo`, PWRKEY follows RI 8.8 emulated microseconds after it.
+
+**Rejected:** a `latency` of 0, or of a microsecond, so that the wait would return at the change,
+because the link's `latency` is the minimum over its interfaces and bounds every event of the run,
+the UARTs' too: `hello_world` runs at 30 wall seconds per emulated second with 0, 0.3 with 1 µs and
+0.1 with none ([protocol 6.1](../protocol.md#61-how-the-runner-meets-the-block-point)).
+
+## Whether a backend can drive a board's lines is not declared yet
+
+Status: postponed (#25)
+
+`capabilities.toml` gives no source on `lines.*`, and `lines.drive` asks the declaration nothing:
+on `esp32sim` the test drives the line itself. Whether a real board's lines can be driven from the
+host, and how a test that drives them is skipped where they cannot, comes with the `serial`
+backend.
 
 ## An SD card is inserted by the test, as a model source holding an image file
 

@@ -1,7 +1,7 @@
 """The esp32tl pytest plugin, loaded through the `pytest11` entry point.
 
-It provides the `board`, `console`, `gnss` and `sd_card` fixtures on top of pytest-embedded's
-classes (plan §3); `modem`, `bt`, `wifi`, `lines` and `scenario` come with later milestones.
+It provides the `board`, `console`, `gnss`, `lines` and `sd_card` fixtures on top of
+pytest-embedded's classes (plan §3); `modem`, `bt` and `wifi` come with later milestones.
 The board runs a board profile, `esp32-devkitc` unless the `board_profile` marker names another
 (plan §4.5).
 
@@ -43,6 +43,7 @@ from esp32tl.backends import SERVICES
 from esp32tl.backends.esp32sim import BackendError, Esp32Sim, ended_while_waiting
 from esp32tl.boards import DEFAULT_PROFILE, BoardProfile, ProfileError
 from esp32tl.interfaces.console import Console
+from esp32tl.interfaces.lines import Lines
 from esp32tl.interfaces.sd_card import SdCard
 from esp32tl.interfaces.uart import Uart
 
@@ -309,6 +310,17 @@ def gnss(board: Esp32Sim) -> Uart:
     it."""
     try:
         return board.uart("gnss")
+    except BackendError as error:
+        backend_failed(error)
+
+
+@pytest.fixture
+def lines(board: Esp32Sim) -> Lines:
+    """The board profile's GPIO lines, `[lines.<role>]`: `lines.drive(line, level)` and
+    `lines.release(line)` at the board's current instant, `lines.level(line)` what the firmware
+    drives, `lines.events()` every change with its time."""
+    try:
+        return board.lines()
     except BackendError as error:
         backend_failed(error)
 

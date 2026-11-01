@@ -3,9 +3,9 @@ Test unmodified ESP32 firmware through its wires: an emulated or real board, wit
 
 esp32tl is a pytest plugin. Today it runs an unmodified ESP-IDF image for the classic ESP32 in the
 [esp32sim](https://github.com/mikroverk/esp32sim) emulator, through the runner crate in `runner/`,
-replays a recorded GNSS stream into its UART on the emulated clock, puts an SD card holding an
-image file on its SPI pins, and lets a test read the firmware's console. The `esp32tl` command
-does the same outside pytest, but for the SD card.
+replays a recorded GNSS stream into its UART on the emulated clock, drives and reads its GPIO lines,
+puts an SD card holding an image file on its SPI pins, and lets a test read the firmware's
+console. The `esp32tl` command does the same outside pytest, but for the SD card.
 
 ## Getting started
 

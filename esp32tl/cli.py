@@ -4,7 +4,8 @@
 A run is the backend's without pytest-embedded: the runner is spawned with `--board socket:PATH`,
 its stdout and stderr are the command's own, and a `BoardLink` serves the socket in a thread. A
 replay is given before the runner starts, and the link holds no turn: there is no test body to
-wait for, so the clock runs free, and the console goes to stdout only. The run ends at
+wait for, so the clock runs free, and the console goes to stdout only. The profile's lines are on
+the link too, with nothing driving them but the board's pulls. The run ends at
 `--max-seconds`, or on Ctrl-C, which a SIGINT handler takes for the whole of `run`: the runner
 gets one `SIGTERM`, sends its stats and exits (protocol §9), or dies of it before it has
 connected; a second Ctrl-C kills it. The runner is in a session of its own, so the terminal's
@@ -27,6 +28,7 @@ from esp32tl import __version__, boards
 from esp32tl.backends import esp32sim
 from esp32tl.backends.esp32sim import BackendError, Esp32Sim
 from esp32tl.boards import DEFAULT_PROFILE, ProfileError
+from esp32tl.interfaces.lines import Lines
 from esp32tl.interfaces.uart import Uart
 from esp32tl.link.boardlink import BoardLink
 from esp32tl.recording import RecordingError
@@ -155,9 +157,12 @@ def interruptible(
             return CANNOT_START
         served = Run(process, listener)
         interrupts.attach(served)
+        # The board's pulls, as on the backend's link: no test drives the lines, so their time is
+        # never asked for.
+        lines = Lines(profile.name, profile.lines, lambda: 0)
         link = BoardLink(
             profile.name,
-            uarts,
+            [*uarts, lines],
             chip=profile.chip,
             on_error=lambda reason: served.terminate(),
             clock=Esp32Sim.clock,

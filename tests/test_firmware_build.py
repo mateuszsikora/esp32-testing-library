@@ -134,7 +134,8 @@ def test_build_refuses_an_unknown_image(tmp_path: Path) -> None:
     result = run_build(env, "hello_world", "nope")
     assert result.returncode == 1
     assert result.stderr == (
-        "firmware/build.sh: unknown image 'nope'; the images are: hello_world nmea_reader sdspi\n"
+        "firmware/build.sh: unknown image 'nope'; the images are:"
+        " hello_world nmea_reader gpio_echo sdspi\n"
     )
     assert not (tmp_path / "out").exists()
 
@@ -232,10 +233,11 @@ def test_build_starts_the_pinned_container(tmp_path: Path) -> None:
 def test_local_build_runs_idf_py_and_records_how(tmp_path: Path, local_idf: dict[str, str]) -> None:
     result = run_build(local_idf)
     assert result.returncode == 0, result.stderr
-    # every image, in the order of IMAGES: ESP-IDF's examples and the project under firmware/
+    # every image, in the order of IMAGES: ESP-IDF's examples and the projects under firmware/
     projects = {
         "hello_world": f"{tmp_path}/idf/examples/get-started/hello_world",
         "nmea_reader": str(ROOT / "firmware" / "nmea_reader"),
+        "gpio_echo": str(ROOT / "firmware" / "gpio_echo"),
         "sdspi": f"{tmp_path}/idf/examples/storage/sd_card/sdspi",
     }
     builds = {image: (tmp_path / "out" / image / "build").resolve() for image in projects}

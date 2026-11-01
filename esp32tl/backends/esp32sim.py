@@ -16,10 +16,11 @@ The backend owns the link's socket (`docs/protocol.md` §1): it binds a Unix soc
 spawns the runner, passes it as `--board socket:PATH`, and serves the one connection with a
 `BoardLink` in a thread of its own. The link carries a `Uart` for every UART route of the board
 profile, which says nothing until the test gives it a source, as `gnss.replay(path)` does before
-power-on. The backend also owns the end of the run (§9), before the dut is torn down: `stop` at the
-turn the test left the run at, `SIGTERM` for a runner that is not there, the link read to end of
-file, the runner waited for, `SIGKILL` only as a last resort. Then it writes the recordings of the
-routes the test tapped.
+power-on, and the profile's GPIO lines as one `Lines`, which puts the board's pulls on them from
+power-on and what the test drives at the instant it does. The backend also owns the end of the
+run (§9), before the dut is torn down: `stop` at the turn the test left the run at, `SIGTERM` for
+a runner that is not there, the link read to end of file, the runner waited for, `SIGKILL` only as
+a last resort. Then it writes the recordings of the routes the test tapped.
 
 What the test does on the board, what the firmware prints and the bytes on every route go into a
 `RunLog` (`esp32tl.report`), which the report of a test that failed shows after the link's.
@@ -48,6 +49,7 @@ from esp32tl.backends.clock import HeldClock, nanoseconds, seconds
 from esp32tl.boards import BoardProfile, capabilities
 from esp32tl.boards.capabilities import CapabilityError, Request
 from esp32tl.interfaces import BoardOff, NeverHappened, RunEnded, SourceError
+from esp32tl.interfaces.lines import Lines
 from esp32tl.interfaces.sd_card import SdCard
 from esp32tl.interfaces.uart import Uart
 from esp32tl.link.boardlink import BoardLink, Wire
@@ -221,8 +223,9 @@ def listen() -> tuple[socket.socket, Path]:
 
 class Esp32Sim:
     """A run of the app in `app_path` in the runner, on the board profile `profile`, its console
-    going to `dut`'s log and to the test, its board the link to every UART route of the profile,
-    and the runner's SD card model in the profile's slot when the test inserts a card.
+    going to `dut`'s log and to the test, its board the link to every UART route and every GPIO
+    line of the profile, and the runner's SD card model in the profile's slot when the test
+    inserts a card.
 
     `app` is the `IdfApp` the runner flashes. The dut's own `app` is pytest-embedded's base `App`,
     without `flash_files` or `target`: without a service, pytest-embedded builds nothing more.
@@ -260,7 +263,8 @@ class Esp32Sim:
         self.log = RunLog()
         self._hold = HeldClock()
         # Every route of the profile, listening and silent until the test gives it a source.
-        # One mapping of the files they read and write: no tap writes over another route's file.
+        # One mapping of the files they and the SD card read and write: no tap writes over another
+        # route's file or the card's image.
         files: dict[Path, tuple[str, str]] = {}
         self._uarts = {
             f"uart.{role}": profile_uart(
@@ -275,13 +279,21 @@ class Esp32Sim:
             for role in profile.uart
         }
         self._sd_card = (
-            SdCard(profile.sd_card, directory=self.directory, asked=self._asked)
+            SdCard(
+                profile.sd_card,
+                directory=self.directory,
+                asked=self._asked,
+                log=self.log,
+                files=files,
+            )
             if profile.sd_card is not None
             else None
         )
+        # Before power-on the clock's time is 0: what the test drives then holds from the start.
+        self._lines = Lines(profile.name, profile.lines, lambda: self._hold.now, log=self.log)
         self.link = BoardLink(
             profile.name,
-            list(self._uarts.values()),
+            [*self._uarts.values(), self._lines],
             chip=profile.chip,
             on_error=self._end_run,
             hold=self._hold,
@@ -305,6 +317,15 @@ class Esp32Sim:
                 f" its interfaces are {', '.join(self.profile.interfaces)}"
             )
         return uart
+
+    def lines(self) -> Lines:
+        """The `Lines` on the link for the profile's `[lines.<role>]` sets."""
+        if not self.profile.lines:
+            raise BackendError(
+                f"the board profile {self.profile.name} has no lines;"
+                f" its interfaces are {', '.join(self.profile.interfaces)}"
+            )
+        return self._lines
 
     def sd_card(self) -> SdCard:
         """The profile's SD card slot."""
@@ -338,13 +359,15 @@ class Esp32Sim:
 
     def set_up(self) -> list[str]:
         """What the test has set up that only a run uses: the sources it gave and the taps it
-        asked for, as `the replay of uart.gnss`, and `a card in sd_card`."""
+        asked for, as `the replay of uart.gnss`, the lines it drove, as `the level of
+        modem.ri`, and `a card in sd_card`."""
+        driven = dict.fromkeys(e.name for e in self._lines.events() if e.by == "test")
         set_up = [
             f"the {kind} of {name}"
             for name, uart in self._uarts.items()
             for kind, given in ((uart.source_kind, uart.source), ("tap", uart.tapped))
             if given is not None
-        ]
+        ] + [f"the level of {name}" for name in driven]
         if self._sd_card is not None and self._sd_card.image is not None:
             set_up.append(f"a card in {self._sd_card.name}")
         return set_up
@@ -592,8 +615,9 @@ class Esp32Sim:
         return problems
 
     def report(self, run: bool = False) -> str:
-        """The link's report, then the bytes on every route and, with `run`, the run on the
-        board's clock (`RunLog.lines`): for the report of a test that failed."""
+        """The link's report, then the bytes on every route, the SD card slot's card when the
+        profile has a slot, and, with `run`, the run on the board's clock (`RunLog.lines`): for
+        the report of a test that failed."""
         lines = [self.link.report(), "routes:"]
         for name, uart in self._uarts.items():
             traffic = self.log.traffic.get(name)
@@ -607,6 +631,9 @@ class Esp32Sim:
             )
             tap = f"; tapped into {uart.tapped.path}" if uart.tapped is not None else ""
             lines.append(f"  {name}: {source}; {crossed}{tap}")
+        if self._sd_card is not None:
+            image = self._sd_card.image
+            lines.append(f"sd_card: a card holding {image}" if image else "sd_card: empty")
         if run:
             lines += self.log.lines()
         return "\n".join(lines)
@@ -614,7 +641,7 @@ class Esp32Sim:
     def properties(self) -> dict[str, object]:
         """The link's `properties()`, and the routes: for each, the kind of source at the far end
         and what it was made from (a replay's recording, as the test named it), the bytes each way
-        and the tap's file."""
+        and the tap's file; and `sd_card`, the card's image, or None without a slot."""
         routes = {}
         for name, uart in self._uarts.items():
             traffic = self.log.traffic.get(name)
@@ -625,7 +652,11 @@ class Esp32Sim:
                 "bytes_out": traffic.bytes_out if traffic else 0,
                 "tap": None if uart.tapped is None else str(uart.tapped.path),
             }
-        return self.link.properties() | {"routes": routes}
+        card = self._sd_card
+        sd_card = (
+            None if card is None else {"image": None if card.image is None else str(card.image)}
+        )
+        return self.link.properties() | {"routes": routes, "sd_card": sd_card}
 
     def _close_link(self) -> None:
         """Closes the socket, once the runner is gone and the link read to its end."""

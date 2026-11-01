@@ -110,12 +110,13 @@ that references to its number keep their meaning.
     `tests/test_clock.py::test_a_condition_the_last_of_the_run_makes_true_still_holds`,
     `tests/test_clock.py::test_expect_finds_what_the_run_printed_after_it_has_ended`
 45. The runner starts at `board.power_on()`, not at setup: a test that never powers on starts no
-    runner, and one that set up a source and passed without powering on fails at teardown; a test
-    that failed, was skipped or xfailed keeps its one outcome. A wait before power-on raises
-    `BoardOff`, and a source or a tap after it `SourceError`. A tap counts as set up too.
+    runner, and one that set up a source or a tap, or drove a line, and passed without powering on
+    fails at teardown; a test that failed, was skipped or xfailed keeps its one outcome. A wait
+    before power-on raises `BoardOff`, and a source or a tap after it `SourceError`.
     `tests/test_pytest_plugin.py::test_the_board_runs_the_profile_the_test_chose_and_starts_no_runner_unpowered`,
     `tests/test_pytest_plugin.py::test_a_test_that_sets_up_a_source_and_never_powers_on_fails_at_teardown`,
     `tests/test_pytest_plugin.py::test_a_test_that_taps_a_route_and_never_powers_on_fails_at_teardown`,
+    `tests/test_pytest_plugin.py::test_the_lines_fixture_needs_a_profile_with_lines_and_a_drive_needs_power_on`,
     `tests/test_pytest_plugin.py::test_the_board_s_clock_and_sources_go_in_order`,
     `tests/test_gnss_fixture.py::test_a_source_given_out_of_order_fails_the_test`; the same holds
     for a card in the SD card slot.
@@ -130,9 +131,27 @@ that references to its number keep their meaning.
     `tests/test_pytest_plugin.py::test_a_test_that_uses_board_gets_a_wall_time_timeout_unless_one_is_set`,
     `tests/test_pytest_plugin.py::test_a_hung_run_is_ended_by_the_test_s_timeout`
 50. Every UART route of the board profile is on the link, listening and silent until the test gives
-    it a source: the harness's `hello` watches the pins of all of them.
-    `tests/test_pytest_plugin.py::test_every_route_of_the_profile_is_on_the_link`
-56. A card in the SD card slot writes through to the test's own image file: what the firmware
+    it a source, and so is every GPIO line: the harness's `hello` watches the pins of all of them.
+    `tests/test_pytest_plugin.py::test_every_route_and_line_of_the_profile_is_on_the_link`
+55. A line the board profile pulls is at its pull while the test does not drive it: from power-on,
+    in every test on the profile, whether it uses `lines` or not, and again after `lines.release`.
+    On the LilyGO profile RI reads 0 with no modem at the far end (stage 0's gap 6).
+    `tests/test_gpio_echo.py::test_ri_reads_the_board_s_pull_down_from_power_on`,
+    `tests/test_gpio_echo.py::test_the_pull_holds_in_a_test_that_does_not_use_lines`,
+    `tests/test_cli.py::test_run_holds_the_board_s_pulls_on_its_lines`,
+    `tests/test_gpio_echo.py::test_the_firmware_follows_ri_and_drives_pwrkey`,
+    `tests/test_lines.py::test_the_board_s_pulls_go_out_in_the_first_turn_before_what_the_test_drives`,
+    `tests/test_lines.py::test_a_drive_and_a_release_go_out_at_the_instant_the_test_made_them`
+56. What the test drives on a line takes effect at the board's instant it drove it, `board.now`, or
+    from power-on when it drove it before; `lines.events()` holds every change of either end, a
+    change of the firmware's at the time the firmware made it, not at the next look of a wait. An
+    interface's GPIO input on a pin another interface is wired to fails the link with
+    `{interface} sent {type} on GPIO {pin}, which another interface is wired to`.
+    `tests/test_lines.py::test_a_drive_and_a_release_go_out_at_the_instant_the_test_made_them`,
+    `tests/test_gpio_echo.py::test_the_firmware_follows_ri_and_drives_pwrkey`,
+    `tests/test_gpio_echo.py::test_a_level_driven_before_power_on_holds_from_the_start`,
+    `tests/test_boardlink.py::test_an_input_the_runner_would_refuse_is_refused_naming_its_interface`
+58. A card in the SD card slot writes through to the test's own image file: what the firmware
     wrote is in the file, readable with mtools, and a card the firmware only reads leaves the file
     as it was. The runner gets the card only once the test inserts one.
     `tests/test_sdspi.py::test_the_example_writes_its_files_into_the_image`,
@@ -196,7 +215,7 @@ that references to its number keep their meaning.
 42. A harness `hello` whose `watch` holds a pin the classic chip does not have (24, 28 to 31, 40
     and above) is a protocol error at the handshake, before the guest runs.
     `runner/src/session/tests.rs::a_handshake_mismatch_is_a_protocol_error_with_stats`
-55. The SD card hears a transaction only while its CS pin is a low output and its SCLK pin carries
+57. The SD card hears a transaction only while its CS pin is a low output and its SCLK pin carries
     the master's clock, and the chip reads its answer only through the card's MISO pin; until a
     CMD0 with a good CRC it answers nothing. A card not selected leaves every byte at 0xff.
     `runner/src/sd_card/tests.rs::a_card_not_selected_or_not_clocked_hears_nothing`,
@@ -247,14 +266,19 @@ that references to its number keep their meaning.
     `tests/test_pytest_plugin.py::test_a_tap_records_what_crossed_the_route_both_ways`,
     `tests/test_gnss_fixture.py::test_a_tap_of_a_replay_records_what_went_in`
 54. A tap never writes over a file the run replays from or another route is tapped into, and a
-    replay never reads a file a route is tapped into: both are refused at the call.
-    `tests/test_tap.py::test_a_tap_never_writes_over_a_file_the_run_reads_or_writes`
+    replay never reads a file a route is tapped into: both are refused at the call. Nor do a tap
+    and the SD card's image share a file, whichever comes first.
+    `tests/test_tap.py::test_a_tap_never_writes_over_a_file_the_run_reads_or_writes`,
+    `tests/test_sdspi.py::test_no_tap_writes_over_the_card_s_image`,
+    `tests/test_sdspi.py::test_a_card_does_not_take_a_tap_s_file`
 53. The report of a test that failed shows the run on the board's clock: the test's steps,
     the console's lines and the bytes on every route, in the order of the board's time; that of a
-    test that passed shows the bytes on every route, not the run.
+    test that passed shows the bytes on every route, not the run. A profile with an SD card slot
+    adds the card's image, and the test's `sd_card.insert` is one of the steps.
     `tests/test_pytest_plugin.py::test_the_report_of_a_failing_test_shows_the_run_on_the_board_s_clock`,
     `tests/test_pytest_plugin.py::test_a_tap_records_what_crossed_the_route_both_ways`,
-    `tests/test_run_report.py::test_entries_are_shown_in_the_order_of_the_board_s_time`
+    `tests/test_run_report.py::test_entries_are_shown_in_the_order_of_the_board_s_time`,
+    `tests/test_sdspi.py::test_the_example_writes_its_files_into_the_image`
 
 ## The esp32tl command
 
@@ -276,7 +300,7 @@ that references to its number keep their meaning.
     `flasher_args.json`, leaves none.
     `tests/test_firmware_build.py::test_failed_build_unmarks_a_finished_one`,
     `tests/test_firmware_build.py::test_build_fails_without_flasher_args`
-57. `sdspi` is ESP-IDF's example unmodified: its SD card pins are the `esp32-devkitc` profile's
+59. `sdspi` is ESP-IDF's example unmodified: its SD card pins are the `esp32-devkitc` profile's
     slot, and it formats no card.
     `tests/test_firmware_images.py::test_sdspi_takes_the_devkit_sd_card_slot_from_sdkconfig`
 

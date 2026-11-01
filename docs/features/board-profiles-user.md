@@ -23,7 +23,9 @@ GPIO 2 and 15 are strapping pins too, which a card leaves alone until the firmwa
 
 `lilygo-t-a7670g-r2` holds only what the specification gives: the A7670G modem's UART and its
 PWRKEY and RI lines. The pull-down on RI is what stage 0 found
-([gap 6](../stage0-findings.md#gaps)): with no modem fitted the line must read low. Its other pins, its flash and PSRAM sizes, and
+([gap 6](../stage0-findings.md#gaps)): with no modem fitted the line must read low, and on
+`esp32sim` it does, from power-on and whenever the test releases it, in every test on the profile
+([the `lines` fixture](pytest-plugin-user.md#the-fixtures)). Its other pins, its flash and PSRAM sizes, and
 whether it has a GNSS route at all are not in it: they wait for the vendor schematic.
 
 The profiles are `esp32tl/boards/<name>.toml`, in the installed package.
@@ -91,7 +93,9 @@ Each backend declares what it can give:
 | `sd_card` | `model`: a card holding an image file; no tap | `real`: the card in the slot; no tap |
 
 On a real board the on-board peripherals are soldered on, so only the real part answers, and a tap
-on them would need a hardware sniffer. The `serial` backend is declared, but is not one of the
+on them would need a hardware sniffer. The `lines` fixture is no source in this table: on
+`esp32sim` the test drives a line itself, through `lines.drive` and `lines.release`, without
+asking the declaration, and nothing skips it. The `serial` backend is declared, but is not one of the
 backends tests run on yet ([the pytest plugin](pytest-plugin-user.md#backends-and-test-ids)).
 
 ## When a backend cannot give it
