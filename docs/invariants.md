@@ -151,7 +151,7 @@ that references to its number keep their meaning.
     `tests/test_gpio_echo.py::test_the_firmware_follows_ri_and_drives_pwrkey`,
     `tests/test_gpio_echo.py::test_a_level_driven_before_power_on_holds_from_the_start`,
     `tests/test_boardlink.py::test_an_input_the_runner_would_refuse_is_refused_naming_its_interface`
-58. A card in the SD card slot writes through to the test's own image file: what the firmware
+63. A card in the SD card slot writes through to the test's own image file: what the firmware
     wrote is in the file, readable with mtools, and a card the firmware only reads leaves the file
     as it was. The runner gets the card only once the test inserts one.
     `tests/test_sdspi.py::test_the_example_writes_its_files_into_the_image`,
@@ -215,7 +215,7 @@ that references to its number keep their meaning.
 42. A harness `hello` whose `watch` holds a pin the classic chip does not have (24, 28 to 31, 40
     and above) is a protocol error at the handshake, before the guest runs.
     `runner/src/session/tests.rs::a_handshake_mismatch_is_a_protocol_error_with_stats`
-57. The SD card hears a transaction only while its CS pin is a low output and its SCLK pin carries
+62. The SD card hears a transaction only while its CS pin is a low output and its SCLK pin carries
     the master's clock, and the chip reads its answer only through the card's MISO pin; until a
     CMD0 with a good CRC it answers nothing. A card not selected leaves every byte at 0xff.
     `runner/src/sd_card/tests.rs::a_card_not_selected_or_not_clocked_hears_nothing`,
@@ -338,7 +338,7 @@ that references to its number keep their meaning.
     `flasher_args.json`, leaves none.
     `tests/test_firmware_build.py::test_failed_build_unmarks_a_finished_one`,
     `tests/test_firmware_build.py::test_build_fails_without_flasher_args`
-59. `sdspi` is ESP-IDF's example unmodified: its SD card pins are the `esp32-devkitc` profile's
+64. `sdspi` is ESP-IDF's example unmodified: its SD card pins are the `esp32-devkitc` profile's
     slot, and it formats no card.
     `tests/test_firmware_images.py::test_sdspi_takes_the_devkit_sd_card_slot_from_sdkconfig`
 
