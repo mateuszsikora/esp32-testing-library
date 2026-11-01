@@ -16,7 +16,11 @@ M2 asked for it.
    to the `Lines` of the profile too: `lines.drive` and `lines.release` log
    `lines.drive({line!r}, {level})` and `lines.release({line!r})` as steps at `now`, on every
    call, and `Lines.driven` calls `log.line(t, name, level)` for each change of a line the
-   firmware drives, in the link's thread.
+   firmware drives, in the link's thread. The `SdCard` of a profile's slot gets the log and the
+   routes' `files` too: `sd_card.insert(image)` refuses an image `files` holds already
+   (`same_file`; `SourceError`, `{name}: cannot hold {path}: it is the {kind} of {interface}`),
+   enters it as `("card", "sd_card")`, so that a tap into it is refused as any other, and logs
+   `sd_card.insert({image!r})` at 0.
 2. **`gnss.tap(path)`**, in the test body, before `board.power_on()`. `Uart.tap` refuses a UART that
    has a tap already (`SourceError`), calls `asked(Request(name, tap=True))`, through which the
    backend refuses a tap after power-on or one no backend gives (`SourceError`) and skips the test
@@ -26,8 +30,9 @@ M2 asked for it.
    backend gives every `Uart` of the run the same `files` mapping, so a route's replay and another
    route's tap count too. Under the lock that guards the source it checks again, sets
    `Uart.tapped = Tap(name, directory / path)` and enters the file in `files` as `("tap", name)`. It
-   logs `{name}.tap({path!r})` at 0. `Uart.replay` refuses a file a route is tapped into the same
-   way before it reads it (two replays of one file harm nothing), enters it as `("replay", name)`
+   logs `{name}.tap({path!r})` at 0. `Uart.replay` refuses a file a route is tapped into, or the
+   SD card's image (`WRITERS`, the kinds whose file the run writes), the same way before it reads
+   it (two replays of one file harm nothing), enters it as `("replay", name)`
    once the source is given, logs `{name}.replay({path!r})` at 0, and keeps the path as
    `Uart.source_detail`.
 3. **The link's turns.** `BoardLink` calls the `Uart` from its thread
@@ -63,8 +68,8 @@ M2 asked for it.
    fails, or when the setup or the call failed (`FAILED` in the item's stash), and the user
    property `("esp32sim_link", json.dumps(backend.properties()))`
    ([pytest-plugin-technical.md](pytest-plugin-technical.md#data-flow), step 8).
-   `Esp32Sim.report(run)` is the link's report, `routes:` with one line per route, then, with
-   `run`, `RunLog.lines()`.
+   `Esp32Sim.report(run)` is the link's report, `routes:` with one line per route, the slot's line
+   on a profile with an SD card slot, then, with `run`, `RunLog.lines()`.
 
 **`Tap.recording(board, source, clock, app_sha256=None, tools=None, created=None)`** sorts the
 events by `t` with a stable sort, so that events of one time keep the order they were recorded
@@ -109,20 +114,23 @@ The report section, after `BoardLink.report()`:
 ```
 routes:
   {interface}: {source}; {bytes}{tap}
+sd_card: a card holding {image}
 the run on the board's clock, {kept}:
   {seconds}.{nanoseconds:09d} s  {who}  {text}
 ```
 
 `{source}` is `the {kind} of {detail}` or `nothing at the far end`; `{bytes}`
 `{in} bytes in, {out} out`, or `no bytes` for a route nothing crossed; `{tap}`
-`; tapped into {path}` or nothing. `{kept}` is `{n} entries` (`1 entry`), every entry of the run,
+`; tapped into {path}` or nothing. The `sd_card:` line is there only on a profile with a slot, as
+`sd_card: empty` while the test has inserted no card. `{kept}` is `{n} entries` (`1 entry`), every entry of the run,
 the steps included; when the `deque` has dropped some,
 `: every step of the test, and the last {kept} of the console and the routes` follows. With no entry
 the heading is `the run on the board's clock: nothing happened`. `{who}` is `test`, `console`, or
 `{interface} in` / `{interface} out`.
 
 The user property's `routes`, by interface: `{"source": kind or null, "detail": what the source
-was made from or null, "bytes_in": n, "bytes_out": n, "tap": path or null}`.
+was made from or null, "bytes_in": n, "bytes_out": n, "tap": path or null}`; and `sd_card`,
+`{"image": path or null}`, or null on a profile without a slot.
 
 ## Interfaces
 
@@ -153,9 +161,12 @@ From `Uart.tap`, in the test body:
 | `no backend can tap {interface}` | `SourceError` | `capabilities.check`: no backend declares the tap |
 | `esp32sim: {interface} cannot be tapped on this backend` | pytest's skip | `capabilities.refusal` for this backend |
 | `{interface}: cannot tap into {path}: {directory} is not a directory` | `FileNotFoundError` | The file's directory does not exist; checked after the backend's checks |
-| `{interface}: cannot tap into {path}: it is the {kind} of {route}` | `SourceError` | The file is in `files`: `{kind}` is `replay` or `tap` |
+| `{interface}: cannot tap into {path}: it is the {kind} of {route}` | `SourceError` | The file is in `files`: `{kind}` is `replay`, `tap` or `card` (the SD card's image, `{route}` then `sd_card`) |
 
-From `Uart.replay`: `{interface}: cannot replay {path}: it is the tap of {route}`, a `SourceError`.
+From `Uart.replay`: `{interface}: cannot replay {path}: it is the tap of {route}`, or
+`... it is the card of sd_card`, a `SourceError`.
+From `SdCard.insert`: `sd_card: cannot hold {path}: it is the {kind} of {interface}`, a
+`SourceError`, for an image a route replays from or is tapped into.
 
 `same_file` takes two names that differ only in case for one file when either does not exist yet,
 as macOS's file system does; on one that tells them apart, such a tap is refused all the same.
@@ -178,6 +189,9 @@ before ([protocol, section 7](../protocol.md#7-latency-is-bound-to-the-source)).
   refuses leaving none; outputs the link would refuse as no pair (a `bool` time, a negative one,
   text) left out of the tap and the log; a tap into a route's replay or another route's tap, and
   a replay of a tapped file, refused; the test's steps on a `Uart` logged at 0.
+- `tests/test_sdspi.py`: the card's line and `sd_card.insert` step in the report of a run with a
+  card, and the `sd_card` property; a tap into the card's image, a replay of it, and a card
+  holding a tap's file, refused, with `sd_card: empty` in the report.
 - `tests/test_run_report.py`: entries in the order of the board's time, ties in the order they
   came; the console cut into lines at their first byte's time, colour codes dropped, an unfinished
   line shown; every step and the last `entries` of the rest kept, with the heading that says so,

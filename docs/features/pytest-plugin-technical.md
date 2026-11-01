@@ -4,7 +4,7 @@ The plugin is `esp32tl/pytest_plugin.py`, with the backend registry in
 `esp32tl/backends/__init__.py`, the console in `esp32tl/interfaces/console.py`, the UART
 interface in `esp32tl/interfaces/uart.py` and the one behind `gnss` in
 `esp32tl/interfaces/gnss.py`, the GPIO lines behind `lines` in `esp32tl/interfaces/lines.py`, the
-exceptions a test sees in
+SD card slot behind `sd_card` in `esp32tl/interfaces/sd_card.py`, the exceptions a test sees in
 `esp32tl/interfaces/__init__.py`, the taps and the run's log in `esp32tl/tap.py` and
 `esp32tl/report.py` ([run-report-technical.md](run-report-technical.md)), and the board
 profiles and capability declaration in `esp32tl/boards/`
@@ -187,6 +187,16 @@ are in [models-technical.md](models-technical.md).
    ([run-report-technical.md](run-report-technical.md#data-flow)). `Lines` declares no `latency` and
    no `quiet_until`: a change of the firmware's takes no turn of its own, and the test sees it at
    the next turn the clock lets the run take.
+12. **`sd_card` fixture** returns `board.sd_card()`, the `SdCard` of the profile's `[sd_card]`
+   slot; a profile without one makes it raise `BackendError`, through `backend_failed`.
+   `SdCard.insert(image)` refuses a second card, then calls the backend's
+   `asked(Request("sd_card", source="model"))`, then resolves `image` against `directory`, the
+   test file's, and checks with `stat` that it is a file of a whole number of `UNIT`s (512 KiB),
+   at least one and at most `MAX_SIZE` (2 TiB), and with `os.access` that it can be read and
+   written, and that no route replays from it or is tapped into it
+   ([run-report-technical.md](run-report-technical.md#data-flow)). It keeps the absolute path in
+   `image`, which `runner_command` turns into `--sd-spi`
+   and `--sd-rw` at power-on ([esp32sim-backend-technical.md](esp32sim-backend-technical.md#data-flow)).
 
 ## Interfaces
 
@@ -202,6 +212,9 @@ are in [models-technical.md](models-technical.md).
 | `Lines(board, lines, now, log=None)` | class, `esp32tl/interfaces/lines.py`, a `BoardLink` `Interface` named `lines` | The `[lines.<role>]` sets `lines` of the profile named `board`, the board's time from `now()`, in nanoseconds, and the `RunLog` it writes to, if any. `drive(line, level)`, `release(line)`, `level(line)` (`int \| None`), `events()` (`list[LineEvent]`); for the link, `pins`, `inputs(now)` and `driven(t, changes, enabled)` |
 | `LineEvent(t, name, pin, by, level)` | frozen dataclass, `esp32tl/interfaces/lines.py` | `t` a `Duration`, an instant of the board's time, `name` as `modem.ri`, `by` `"firmware"` or `"test"`, `level` 0, 1 or `None` |
 | `PULLED` | `dict`, `esp32tl/interfaces/lines.py` | `{"up": 1, "down": 0}`: the level a board's pull gives an undriven line |
+| `sd_card(board)` | fixture, function scope | Returns `board.sd_card()` |
+| `SdCard(route, *, directory, asked=..., log=None, files=None)` | class, `esp32tl/interfaces/sd_card.py` | The `sd_card` slot on `route` (an `SdCardRoute`): attributes `name` (`"sd_card"`), `route`, `directory`, `asked`, `log` (the `RunLog` its step goes to), `files` (shared with the routes), `image` (`None` until `insert`, then the image's absolute `Path`); `insert(image)` returns that path |
+| `UNIT`, `MAX_SIZE` | `int`, `esp32tl/interfaces/sd_card.py` | 524288: an SD card image is a whole number of them; 2^41, the most it may be |
 | `Console(board)` | class, `esp32tl/interfaces/console.py` | `expect(pattern, timeout=30, *, return_what_before_match=False)`, `expect_exact(...)` with the same arguments, `timeout` a `Duration` or a number of seconds; `line(pattern)`, `lines(pattern=None, *, since=None)`; no `write`. `board` is a `Clocked`: `console_output`, `console_lines` and `wait_on_clock(condition, within, description)`, `within` a `Duration` |
 | `Line(at, text, match=None)` | frozen dataclass, `esp32tl/interfaces/console.py` | A console line: `at` a `Duration`, `text` a `str`, `match` an `re.Match[str]`, left out of comparisons; `line[group]` is `match[group]`, a `TypeError` without a match |
 | `ConsoleLines()` | class, `esp32tl/interfaces/console.py` | `feed(t, data)`, `lines`: the console cut into `Line`s |
@@ -210,7 +223,7 @@ are in [models-technical.md](models-technical.md).
 | `Gnss(name, wire, *, clock, directory, now, world, asked=..., log=None, files=None)` | class, `esp32tl/interfaces/gnss.py`, a `Uart` | `fix(at, *, hdop=0.9, satellites=8)`, `move(*, heading, speed)`, `stand_still()`, `degrade(*, hdop=None, satellites=None)`, `lose_fix()`, `go_silent()`, `resume()`, `position`, each the `GnssReceiver`'s; `receiver()` the receiver, made by the first call that succeeds |
 | `Uart(name, wire, *, clock, directory, asked=..., log=None, files=None)` | class, `esp32tl/interfaces/uart.py`, a `BoardLink` `Interface` | `uart.<role>` and its source: attributes `clock`, `directory`, `asked`, `log`, `files` (the files the run replays from and taps into, shared by the backend's UARTs), `source`, `source_kind` and `source_detail` (`None` until given, then the source, `"replay"` or `"model"`, and the path as the test gave it or `a GNSS receiver`), and `tapped` (`None`, then the `Tap`); `replay(path)` returns the `Replay`, `tap(path)` the `Tap`. Without a source it hears everything and says nothing; with one, `quiet_until` and `latency` are the source's, and `receive` and `poll` return the source's outputs, read into a list. Every byte heard and every output goes to the tap and the `RunLog`, when there are. `asked(request)`, a `Request` of `esp32tl.boards.capabilities`, is called before a source or a tap is made, and refuses it by raising |
 | `Source` | protocol, `esp32tl/interfaces/uart.py` | `receive(t, data)`, `poll(now)`, `quiet_until()`, `latency()`: what drives a `Uart` |
-| `SourceError` | exception, `esp32tl/interfaces/__init__.py` | A source or a tap after power-on, a second one on a route, or one no backend gives |
+| `SourceError` | exception, `esp32tl/interfaces/__init__.py` | A source or a tap after power-on, a second one on a route or in the slot, one no backend gives, or an image the card cannot hold |
 | `BoardOff` | exception, `esp32tl/interfaces/__init__.py` | A wait, an expect, `now` or `utc` before `power_on()`, or a second `power_on()` |
 | `RunEnded` | exception, `esp32tl/interfaces/__init__.py` | The run ended while the test waited |
 | `NeverHappened` | `AssertionError`, `esp32tl/interfaces/__init__.py` | A condition or a pattern that did not come within its time |
@@ -256,18 +269,20 @@ pytest-embedded's `build_dir` fixture. The backend's own environment variables a
 | `esp32sim: {error}` | `Esp32Sim(...)` raised a `BackendError` | Error at setup; messages in [esp32sim-backend-technical.md](esp32sim-backend-technical.md#failure-modes) |
 | `esp32sim: the board profile {name} has no uart.gnss; its interfaces are {interfaces}` | The test uses `gnss` on a profile without the route | Error at setup |
 | `esp32sim: the board profile {name} has no lines; its interfaces are {interfaces}` | The test uses `lines` on a profile without `[lines.<role>]` sets | Error at setup |
-| `esp32sim: the test set up the {kind} of {interface} and never called board.power_on(): it ran no firmware`, `the level of {line}` for a line | A test whose setup and call passed, which gave a source, asked for a tap or drove a line and never powered on | Error at teardown |
+| `esp32sim: the test set up the {kind} of {interface} and never called board.power_on(): it ran no firmware`, `the level of {line}` for a line, `a card in sd_card` for a card | A test whose setup and call passed, which gave a source, asked for a tap, drove a line or inserted a card and never powered on | Error at teardown |
 | `GPIO {pin} is no line of the board profile {board}; its lines are {name} (GPIO {pin}), ...`, `{line!r} is no line ...`, `{line!r}: the board profile {board} has no lines` | `ValueError` from `drive`, `release` or `level` | Fails the test |
 | `lines.drive: level {level!r} is not 0 or 1` | `ValueError` for an integer other than 0 or 1, `TypeError` for what is not an integer | Fails the test |
 | `{interface} sent {type} on GPIO {pin}, which another interface is wired to` | An interface's `inputs` returned a `gpio_in`, `release` or `adc` on a pin of another interface's; `Lines` sends only on its own | The link's error: the run ends with `stop`, a waiting test gets `RunEnded`, the teardown `the link failed: ...` |
 | `the pins of {interface} hold {pin!r}, not a GPIO number`, `GPIO {pin} is on {interface} and {other}` | `ValueError` from `BoardLink(...)`, for an interface whose `pins` hold something other than a GPIO number, or two interfaces on one pin; a profile cannot give either | Error at setup, with its traceback |
+| `esp32sim: the board profile {name} has no sd_card; its interfaces are {interfaces}` | The test uses `sd_card` on a profile without a slot | Error at setup |
 | `the board is off; call board.power_on() first` | `BoardOff` from a wait, an expect, `now` or `utc` before power-on | Fails the test |
 | `the board is on already: power it on once` | `BoardOff` from a second `power_on()` | Fails the test |
-| `{interface}: the board is on already: give a route its source before board.power_on()`, `no backend takes a '{source}' source on {interface}; the sources there are {sources}` | `SourceError` from `Uart.replay`, or from the first model call of `Gnss` | Fails the test ([replay-user.md](replay-user.md#when-the-test-gets-it-wrong)) |
+| `{interface}: the board is on already: give an interface its source before board.power_on()`, `no backend takes a '{source}' source on {interface}; the sources there are {sources}` | `SourceError` from `Uart.replay`, or from the first model call of `Gnss` | Fails the test ([replay-user.md](replay-user.md#when-the-test-gets-it-wrong)) |
 | `uart.gnss has its source already: one per test` | `SourceError` from `Uart.replay` on a route with a source, a replay or a model | Fails the test |
 | `uart.gnss replays a recording: it has no receiver to describe; one source per test` | `SourceError` from a model call, `position` or `receiver()` of `Gnss` after `gnss.replay` | Fails the test |
 | `uart.gnss has no receiver: give it one with gnss.fix(at=...)` | `SourceError` from `Gnss.position` or `receiver()` before any model call | Fails the test |
-| `{interface}: the board is on already: tap a route before board.power_on()`, `uart.gnss is tapped already: one tap per test`, `no backend can tap {interface}`, `{interface}: cannot tap into {path}: it is the {kind} of {route}`; `{interface}: cannot tap into {path}: {directory} is not a directory` | `SourceError`, and `FileNotFoundError` for the last, from `Uart.tap`; `{interface}: cannot replay {path}: it is the tap of {route}` from `Uart.replay` | Fails the test ([run-report-user.md](run-report-user.md#when-the-test-gets-it-wrong)) |
+| `{interface}: the board is on already: tap a route before board.power_on()`, `uart.gnss is tapped already: one tap per test`, `no backend can tap {interface}`, `{interface}: cannot tap into {path}: it is the {kind} of {route}`; `{interface}: cannot tap into {path}: {directory} is not a directory` | `SourceError`, and `FileNotFoundError` for the last, from `Uart.tap`; `{interface}: cannot replay {path}: it is the tap of {route}` or `... it is the card of sd_card` from `Uart.replay` | Fails the test ([run-report-user.md](run-report-user.md#when-the-test-gets-it-wrong)) |
+| `sd_card: the board is on already: give an interface its source before board.power_on()`, `sd_card has a card already: one per test`, `sd_card: no image at {path}: {strerror}`, `sd_card: {path} is not a file`, `sd_card: {path} has {size} bytes; an SD card image is a whole number of 512 KiB units`, `sd_card: {path} has {size} bytes; an SD card image is at most 2 TiB`, `sd_card: {path} cannot be read and written: the card writes into it`, `sd_card: cannot hold {path}: it is the {kind} of {interface}` | `SourceError` from `SdCard.insert` | Fails the test |
 | `{description} did not happen within {within}: waited from {start} to {end} of the board's time` | `NeverHappened` from `wait_until` or an expect | Fails the test |
 | `the run ended {when} while the test waited {what}: {reason}` | `RunEnded` from a wait or an expect; `{when}` is `at {time}` from the runner's `stats`, `after the turn at {time}` without them, the last held turn being only a bound, or `before its first turn`; `{what}` is `until {time}` or `for {description}`, `{reason}` the backend's ([esp32sim-backend-technical.md](esp32sim-backend-technical.md#failure-modes)) | Fails the test |
 | `expect: no pattern to wait for`, `expect: {pattern!r} is not a pattern`, `expect_exact takes text or bytes, not a compiled pattern`, `expect: timeout is {timeout!r}, not a Duration or a number of seconds`, `expect: timeout is {timeout}, less than 0` | `ValueError`, `TypeError` from an expect | Fails the test |
@@ -357,6 +372,12 @@ runner, and,
 through `pytester`, a source after power-on, an expect before it, a source never powered on and a
 profile without the route ([replay-technical.md](replay-technical.md#tests)).
 `tests/test_replay.py` and `tests/test_tap.py` test `Uart` without an emulator.
+`tests/test_sdspi.py` runs `sd_card.insert` on ESP-IDF's `sdspi` example on the real runner, and,
+through `pytester`, a card after power-on, one never powered on, two cards, a missing, a short and
+a read-only image, and a profile without a slot;
+`test_runner_command_puts_a_card_in_the_slot_once_the_test_inserts_one` in
+`tests/test_pytest_plugin.py` checks the runner's flags. Not covered: an image path that is a
+directory, and one above 2 TiB.
 
 `tests/test_nmea_reader_model.py` runs the receiver model into `nmea_reader` on the real runner,
 with `console.line` and `console.lines` ([models-technical.md](models-technical.md#tests)).

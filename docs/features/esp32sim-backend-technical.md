@@ -41,7 +41,9 @@ starting anything:
    mapping for all of them of the files the run replays from and taps into. `uart.gnss` gets a
    `Gnss` (`esp32tl/interfaces/gnss.py`), with `now=lambda: hold.now`, the held clock's time in
    nanoseconds, and `world=lambda: self._utc`, the world's time at power-on, for the receiver
-   model ([models-technical.md](models-technical.md#data-flow)).
+   model ([models-technical.md](models-technical.md#data-flow)). An `[sd_card]` slot becomes an
+   empty `SdCard` (`esp32tl/interfaces/sd_card.py`) on the slot's `SdCardRoute`, with the same
+   `directory`, `asked`, `log` and `files`; it is not on the link.
 5. **The lines.** One `Lines(profile.name, profile.lines, now, log=self.log)`
    (`esp32tl/interfaces/lines.py`) for every `[lines.<role>]` set, also on a profile with none,
    with `now` the `HeldClock`'s, so that what the test drives before power-on holds from `t = 0`
@@ -65,8 +67,10 @@ or `POWER_ON_UTC`, for `Esp32Sim.utc` and the GNSS receiver's dates, and logs
 2. **`runner_command(runner, rom, app, HELD_MAX_SECONDS, link, held=True)`** builds
    `[runner, "--chip", "esp32", "--rom", rom, "--max-seconds", "86400", "--console", "both", "--peer-timeout", "0", "--board", "socket:<link>", "--flash-at", "0x1000=<path>", ...]`,
    one `--flash-at {offset:#x}={file_path}` per entry of `app.flash_files`, which `IdfApp` sorts by
-   offset; the paths are absolute. Without `held`, as the [`esp32tl` command](cli-user.md) calls
-   it, the `--console` and `--peer-timeout` pairs are left out. The runner's options are in
+   offset; the paths are absolute. With a card in the slot, `sd_card=` adds
+   `--sd-spi sclk=N,mosi=N,miso=N,cs=N` from the slot's route and `--sd-rw <image>`, the image's
+   absolute path, at the end. Without `held`, as the [`esp32tl` command](cli-user.md) calls
+   it, the `--console` and `--peer-timeout` pairs are left out, and so is the card. The runner's options are in
    [runner-user.md](runner-user.md).
 3. **`RunnerPopen(msg_queue, command, meta)`** is `DuplicateStdoutPopen` with one change: if the
    process cannot start (`OSError`), it closes the log file the parent opened before the fork,
@@ -140,17 +144,19 @@ with it `wait_until` and the console's expects, logs `waits up to {within} for {
 
 **Sources and taps.** `Uart.replay` calls `asked(Request(interface, source="replay"))` before it
 reads the recording, `Gnss`'s first model call `asked(Request(interface, source="model"))` before
-it makes the receiver, and `Uart.tap` calls `asked(Request(interface, tap=True))` before it makes
-the `Tap`. `_asked` refuses, with `SourceError`, either once the board is on
-(`{interface}: the board is on already: give a route its source before board.power_on()`, and
-`... tap a route before board.power_on()` for a tap), and one that `capabilities.check` finds no
-backend gives, with that error's message. Otherwise, when `capabilities.refusal(self.name, ...)`
+it makes the receiver, `Uart.tap` calls `asked(Request(interface, tap=True))` before it makes the
+`Tap`, and `SdCard.insert` calls `asked(Request("sd_card", source="model"))` before it looks at
+the image. `_asked` refuses, with `SourceError`, either once the board is on
+(`{interface}: the board is on already: give an interface its source before board.power_on()`,
+and `... tap a route before board.power_on()` for a tap), and one that `capabilities.check` finds
+no backend gives, with that error's message. Otherwise, when `capabilities.refusal(self.name, ...)`
 gives a reason, it calls `skip(f"esp32sim: {reason}")`. It reads the declaration through
 `capabilities.declared()` at each call, so a test can swap it. `set_up()` lists
 `the {source_kind} of {interface}` for every `Uart` with a source (`the replay of uart.gnss`, `the
 model of uart.gnss`) and `the tap of {interface}` for every tapped one, then `the level of {line}`
 for every line the test has driven (a `LineEvent` by `"test"`; a release of a line the test does
-not drive makes none). This is what the `board` fixture reports for a test that never powered on.
+not drive makes none), then `a card in sd_card` when the slot holds one. This is what the `board`
+fixture reports for a test that never powered on.
 
 **The link.** `BoardLink` keeps the run's `RunnerHello` (`link.runner`), its warnings, its `stats`,
 the number of turns and the first `error` with its traceback. When it finds the run wrong it calls
@@ -262,7 +268,8 @@ repository makes.
 | `Esp32Sim.now`, `Esp32Sim.utc` | The board's time since power-on, a `Duration`; the world's time, a `datetime` in UTC |
 | `Esp32Sim.uart(role)` | The `Uart` of `uart.<role>` on the link, a `Gnss` for `gnss`; `BackendError` when the profile has no such route |
 | `Esp32Sim.lines()` | The `Lines` of the profile's `[lines.<role>]` sets on the link; `BackendError` when the profile has none |
-| `Esp32Sim.set_up()` | What the test gave that only a run uses: `the replay of uart.gnss` or `the model of uart.gnss` per route with a source, `the tap of uart.gnss` per tapped route, `the level of modem.ri` per line the test drove |
+| `Esp32Sim.sd_card()` | The `SdCard` of the profile's slot; `BackendError` when the profile has none |
+| `Esp32Sim.set_up()` | What the test gave that only a run uses: `the replay of uart.gnss` or `the model of uart.gnss` per route with a source, `the tap of uart.gnss` per tapped route, `the level of modem.ri` per line the test drove, `a card in sd_card` |
 | `Esp32Sim.close()` | Ends the run and writes the taps; raises `BackendError` for a tap that cannot be written, a failing exit code, a killed runner or a link error |
 | `Esp32Sim.report(run=False)`, `Esp32Sim.properties()` | The `esp32sim link` report section, with the run on the board's clock when `run`; the `esp32sim_link` user property's data |
 | `BackendError` | What keeps the backend from starting, or a failing end |
@@ -273,7 +280,7 @@ repository makes.
 | `load_app(app_path)` | The checked `IdfApp` of `<app_path>/build` |
 | `profile_uart(profile, interface, *, clock, directory, asked=..., log=None, files=None)` | The `Uart` on the route the profile gives `interface` (`uart.gnss`), at its pins and baud; `BackendError` when the profile has no such route. The [`esp32tl` command](cli-user.md) makes its UARTs with it |
 | `route_wire(profile, interface)` | The `Wire` of that route, or the same `BackendError`; `Esp32Sim` makes its `Uart`s and its `Gnss` on it |
-| `runner_command(runner, rom, app, max_seconds, link, *, held=False)` | The runner's argument list |
+| `runner_command(runner, rom, app, max_seconds, link, *, held=False, sd_card=None)` | The runner's argument list; with an `SdCard` holding a card, the runner's card on its pins |
 | `RunnerPopen(msg_queue, cmd, meta)` | `DuplicateStdoutPopen` that closes its log when the start fails |
 | `refuse(reason)` | Raises `SourceError(reason)`: `Esp32Sim`'s `skip` outside pytest |
 | `ended_while_waiting(error)` | Whether `error`'s chain holds a `RunEnded` |
@@ -334,7 +341,7 @@ In the test body:
 | `the board is off; call board.power_on() first` | `BoardOff` | A wait, an expect, `now` or `utc` before `power_on()` |
 | `the board is on already: power it on once` | `BoardOff` | A second `power_on()` |
 | `power_on: utc is {utc!r}, not a datetime with a timezone` | `TypeError`, `ValueError` | Not a `datetime`; a naive `datetime` |
-| `{interface}: the board is on already: give a route its source before board.power_on()` | `SourceError` | A source after power-on |
+| `{interface}: the board is on already: give an interface its source before board.power_on()` | `SourceError` | A source after power-on, a card among them |
 | `{interface}: the board is on already: tap a route before board.power_on()` | `SourceError` | A tap after power-on |
 | the message of `capabilities.check`, as `no backend takes a 'replay' source on uart.gnss; the sources there are model` or `no backend can tap uart.gnss` | `SourceError` | A source or a tap no backend declares |
 | `esp32sim: {reason}`, as `esp32sim: uart.gnss takes no replay source on this backend, only model` or `esp32sim: uart.gnss cannot be tapped on this backend` | the `skip` given: pytest's skip under the plugin | A source or a tap this backend does not declare |
@@ -352,6 +359,8 @@ instance, is not a `BackendError` and fails the setup with its own traceback.
 
 - `test_runner_command_flashes_every_file_at_its_offset`: the exact command line for a fake build
   (`fake_build`), `--board socket:PATH` included.
+  `test_runner_command_puts_a_card_in_the_slot_once_the_test_inserts_one`: no card flags for an
+  empty slot, and `--sd-spi`, `--sd-rw` with the resolved path once a card is in.
 - `test_load_app_refuses_what_the_runner_cannot_run`: the four `load_app` messages.
 - `test_runner_and_rom_paths_name_what_is_missing`: both messages, a runner that is not
   executable, and the environment variables taking effect.

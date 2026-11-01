@@ -326,3 +326,34 @@ Status: postponed (#23)
 No example needs an analog pin yet, so #23 left `adc` out. The runner answers it with the
 protocol error `adc is not implemented yet` (exit code 3) until it comes back as an issue of its
 own, when an example needs one ([protocol §5](../protocol.md#5-messages)).
+
+## The SD card is a model of SPI mode in the runner, not esp32sim's card
+
+Status: decided (#32)
+
+The card of `--sd-rw` is `runner/src/sd_card.rs`: an SD memory card in SPI mode, answering each
+SPI transaction byte for byte in the board's `spi_transfer_pins`, whose `SpiPins` gives the routes
+and the CS mask, so no esp32sim change is needed (plan M7). It takes only the image store from
+esp32sim (`esp_periph::sdmmc::FileStore`, write-through), and copies the identity of esp32sim's own
+card (CID `ES`/`SIMSD`, the serial from the size), so the two read as the same card. Validated on
+ESP-IDF's unmodified `sdspi` example, whose 512-byte blocks go through the classic SPI DMA path:
+esp32sim models that path, so there is nothing to file upstream about `SDSPI_DEFAULT_DMA`.
+
+**Rejected:** driving esp32sim's `esp_periph::sdmmc::SdCard` through `SdDevice`, because it is a
+card on the SD bus: in SPI mode there is no RCA, CMD2, CMD3 or CMD7, CMD9 and CMD10 send data
+blocks, and its ACMD41 stays busy for the empty voltage window SPI hosts send. Also rejected:
+answering the card on the socket, because every byte of a transaction is answered within it, and
+the peer is a turn away; and asking upstream for an SPI mode first, because the runner shows it
+works without one.
+
+## The SD card answers at once and has no CMD6
+
+Status: decided (#32)
+
+The card is never busy after a write, an erase or CMD12, and sends a data block one byte after
+its R1; the image is a seek and a read or write per block. Without class 10 in its CSD, ESP-IDF
+does not send CMD6 and stays at the default 20 MHz, which `sdspi` asks for anyway. The tests of
+interest are the firmware's file handling, not the card's timing.
+
+**Postponed:** busy time (esp32sim's card has `prg_ns` for it), CMD6 and high speed, CMD23, and
+locking and write protection: each when a firmware needs it.

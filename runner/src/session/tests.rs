@@ -66,7 +66,7 @@ impl FakeGuest {
         script.sort_by_key(|(cycle, _)| *cycle);
         let shared = Rc::new(RefCell::new(Recorder::default()));
         Self {
-            board: SocketBoard::new(shared.clone()),
+            board: SocketBoard::new(shared.clone(), None),
             shared,
             drive: (0, 0),
             inputs: Vec::new(),
@@ -1250,7 +1250,7 @@ fn on_the_emulator_the_slices_stop_a_guest_asleep_in_waiti_at_the_block_point() 
 
     let shared = Shared::default();
     let mut m = esp32::machine([0x24, 0x6f, 0x28, 0x00, 0x11, 0x22], 4 << 20);
-    m.bus.board = Box::new(crate::socket_board::SocketBoard::new(shared.clone()));
+    m.bus.board = Box::new(crate::socket_board::SocketBoard::new(shared.clone(), None));
     m.bus.attach_board_devices();
     // UART1 TX on GPIO 26 and RX on GPIO 27 through the GPIO matrix, 115200 baud from APB
     for (addr, value) in [
@@ -1660,7 +1660,7 @@ fn on_the_emulator_gpio_in_reaches_the_guest_and_its_output_comes_back_as_gpio_o
 
     let shared = Shared::default();
     let mut m = esp32::machine([0x24, 0x6f, 0x28, 0x00, 0x11, 0x22], 4 << 20);
-    m.bus.board = Box::new(SocketBoard::new(shared.clone()));
+    m.bus.board = Box::new(SocketBoard::new(shared.clone(), None));
     m.bus.attach_board_devices();
     for (addr, value) in [
         (0x3ff4_9020, 2 << 12 | 1 << 9), // IO_MUX GPIO33: GPIO function, input enabled

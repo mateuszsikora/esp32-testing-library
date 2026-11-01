@@ -77,8 +77,9 @@ class Uart(Interface):
         `Replay`, whose `sent` counts the events the link has been given."""
         self._ask("replay")
         file = self.directory / path
-        # Two replays of one file harm nothing; a replay of a file a tap will write over does.
-        self._unclaimed(file, f"{self.name}: cannot replay {path}", taps_only=True)
+        # Two replays of one file harm nothing; a replay of a file a tap or the SD card will
+        # write over does.
+        self._unclaimed(file, f"{self.name}: cannot replay {path}", writers_only=True)
         replay = Replay(recording.read(file), self.name, self.clock, name=str(path))
         self._give(replay, "replay", str(path), file)
         return replay
@@ -116,11 +117,11 @@ class Uart(Interface):
             raise SourceError(f"{self.name} has its source already: one per test")
         self.asked(Request(self.name, source=source))
 
-    def _unclaimed(self, file: Path, what: str, taps_only: bool = False) -> None:
-        """Refuses `file` when the run reads or writes it already, or, with `taps_only`, when a
-        route is tapped into it: a tap would write over it."""
+    def _unclaimed(self, file: Path, what: str, writers_only: bool = False) -> None:
+        """Refuses `file` when the run reads or writes it already, or, with `writers_only`, when
+        a route is tapped into it or it is the SD card's image: either would write over it."""
         for claimed, (kind, route) in self.files.items():
-            if taps_only and kind != "tap":
+            if writers_only and kind not in WRITERS:
                 continue
             if same_file(file, claimed):
                 raise SourceError(f"{what}: it is the {kind} of {route}")
@@ -184,6 +185,10 @@ class Uart(Interface):
 
     def latency(self) -> int | None:
         return None if self.source is None else self.source.latency()
+
+
+# The kinds of `files` entry whose file the run writes: a replay must not read one of them.
+WRITERS = ("tap", "card")
 
 
 def same_file(a: Path, b: Path) -> bool:

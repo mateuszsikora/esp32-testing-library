@@ -1,10 +1,10 @@
 """Board profiles: pin tables as TOML data, no product knowledge (plan §4.5).
 
 A profile is `<name>.toml` in this directory. It says which chip the board carries and which UART
-and pins each of its interfaces uses: `[uart.<role>]` routes and `[lines.<role>]` sets of GPIO
-lines. Nothing in it says what the firmware does with them. `capabilities.toml`, beside the
-profiles, is no profile: it says what each backend can put at the far end of an interface
-(`esp32tl.boards.capabilities`).
+and pins each of its interfaces uses: `[uart.<role>]` routes, `[lines.<role>]` sets of GPIO
+lines and an `[sd_card]` slot on SPI. Nothing in it says what the firmware does with them.
+`capabilities.toml`, beside the profiles, is no profile: it says what each backend can put at
+the far end of an interface (`esp32tl.boards.capabilities`).
 """
 
 import re
@@ -63,6 +63,16 @@ class Line:
 
 
 @dataclass(frozen=True)
+class SdCardRoute:
+    """`[sd_card]`: the GPIOs of an SD card slot wired for SPI mode, as the chip sees them."""
+
+    sclk: int
+    mosi: int
+    miso: int
+    cs: int
+
+
+@dataclass(frozen=True)
 class BoardProfile:
     """A loaded profile. `flash_mb` and `psram_mb` are None when the profile does not know them.
 
@@ -75,15 +85,17 @@ class BoardProfile:
     psram_mb: int | None
     uart: Mapping[str, UartRoute]
     lines: Mapping[str, Mapping[str, Line]]
+    sd_card: SdCardRoute | None = None
 
     @property
     def interfaces(self) -> list[str]:
         """`console`, which every board has, then `uart.<role>` and `lines.<role>`, as the
-        profile lists them."""
+        profile lists them, then `sd_card` when the board has a slot."""
         return [
             "console",
             *(f"uart.{role}" for role in self.uart),
             *(f"lines.{role}" for role in self.lines),
+            *(["sd_card"] if self.sd_card is not None else []),
         ]
 
 
@@ -160,7 +172,7 @@ class Reader:
         return table
 
     def profile(self, data: dict[str, Any]) -> BoardProfile:
-        self.keys("", data, {"name", "chip"}, {"flash_mb", "psram_mb", "uart", "lines"})
+        self.keys("", data, {"name", "chip"}, {"flash_mb", "psram_mb", "uart", "lines", "sd_card"})
         name = data["name"]
         stem = self.file.removesuffix(".toml")
         if name != stem:
@@ -179,7 +191,8 @@ class Reader:
             role: self.lines(f"lines.{role}", value)
             for role, value in self.roles("lines", data.get("lines", {})).items()
         }
-        self.distinct(uart, lines)
+        sd_card = self.sd_card(data["sd_card"]) if "sd_card" in data else None
+        self.distinct(uart, lines, sd_card)
         return BoardProfile(
             name=name,
             chip=data["chip"],
@@ -187,6 +200,7 @@ class Reader:
             psram_mb=sizes["psram_mb"],
             uart=MappingProxyType(uart),
             lines=MappingProxyType({role: MappingProxyType(ls) for role, ls in lines.items()}),
+            sd_card=sd_card,
         )
 
     def uart(self, key: str, value: object) -> UartRoute:
@@ -197,6 +211,17 @@ class Reader:
             tx=self.gpio(f"{key}.tx", table["tx"], output=True),
             rx=self.gpio(f"{key}.rx", table["rx"]),
             baud=self.integer(f"{key}.baud", table["baud"], 1),
+        )
+
+    def sd_card(self, value: object) -> SdCardRoute:
+        table = self.table("sd_card", value)
+        self.keys("sd_card", table, {"sclk", "mosi", "miso", "cs"}, set())
+        # The chip drives SCLK, MOSI and CS; the card drives MISO.
+        return SdCardRoute(
+            sclk=self.gpio("sd_card.sclk", table["sclk"], output=True),
+            mosi=self.gpio("sd_card.mosi", table["mosi"], output=True),
+            miso=self.gpio("sd_card.miso", table["miso"]),
+            cs=self.gpio("sd_card.cs", table["cs"], output=True),
         )
 
     def lines(self, key: str, value: object) -> dict[str, Line]:
@@ -213,7 +238,12 @@ class Reader:
             lines[role] = Line(self.gpio(f"{where}.pin", line["pin"]), pull)
         return lines
 
-    def distinct(self, uart: dict[str, UartRoute], lines: dict[str, dict[str, Line]]) -> None:
+    def distinct(
+        self,
+        uart: dict[str, UartRoute],
+        lines: dict[str, dict[str, Line]],
+        sd_card: SdCardRoute | None,
+    ) -> None:
         """One UART per route, and one use per pin; the console's UART and pins are taken."""
         ports = {CONSOLE_PORT: "console"}
         for role, route in uart.items():
@@ -225,6 +255,10 @@ class Reader:
             (f"uart.{r}.{end}", getattr(u, end)) for r, u in uart.items() for end in ("tx", "rx")
         ]
         uses += [(f"lines.{r}.{n}", line.pin) for r, ls in lines.items() for n, line in ls.items()]
+        if sd_card is not None:
+            uses += [
+                (f"sd_card.{end}", getattr(sd_card, end)) for end in ("sclk", "mosi", "miso", "cs")
+            ]
         for key, pin in uses:
             if pin in pins:
                 raise self.fail(key, f"GPIO {pin} is {pins[pin]} already")

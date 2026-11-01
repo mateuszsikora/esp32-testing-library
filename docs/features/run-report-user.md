@@ -68,6 +68,7 @@ A test that fails, in its body, at setup or at teardown, gets the run at the end
 ```
 routes:
   uart.gnss: the replay of gnss.jsonl; 136 bytes in, 15 out; tapped into /tmp/…/tap.jsonl
+sd_card: empty
 the run on the board's clock, 12 entries:
   0.000000000 s  test           uart.gnss.replay('gnss.jsonl')
   0.000000000 s  test           uart.gnss.tap('tap.jsonl')
@@ -109,7 +110,12 @@ routes and changes of the lines; when it has left some out, its heading says so:
 `the run on the board's clock, {n} entries: every step of the test, and the last 200 of the console and the routes:`.
 A run with no entry says `the run on the board's clock: nothing happened`.
 
-A test that passed gets the `routes:` lines, without the run; `pytest -rA` shows them.
+On a profile with an SD card slot, as `esp32-devkitc`, a line after the routes names the card:
+`sd_card: a card holding PATH`, or `sd_card: empty`; the test's `sd_card.insert(PATH)` is one of
+its steps ([pytest plugin](pytest-plugin-user.md#the-fixtures)).
+
+A test that passed gets the `routes:` lines and the slot's, without the run; `pytest -rA` shows
+them.
 
 ## When the test gets it wrong
 
@@ -122,7 +128,10 @@ In the test body:
 | `uart.gnss: cannot tap into {path}: {directory} is not a directory` | `FileNotFoundError` | The file's directory does not exist |
 | `uart.gnss: cannot tap into {path}: it is the replay of uart.gnss` | `SourceError` | The file is the recording a route replays: the tap would write over it |
 | `uart.gnss: cannot tap into {path}: it is the tap of uart.modem` | `SourceError` | Another route is tapped into the file |
+| `uart.gnss: cannot tap into {path}: it is the card of sd_card` | `SourceError` | The file is the image of the card in the SD card slot, which the firmware writes |
+| `sd_card: cannot hold {path}: it is the tap of uart.gnss` | `SourceError` | `sd_card.insert` of a file a route replays from or is tapped into: the card would write over it |
 | `uart.gnss: cannot replay {path}: it is the tap of uart.gnss` | `SourceError` | `gnss.replay` of a file a route is tapped into |
+| `uart.gnss: cannot replay {path}: it is the card of sd_card` | `SourceError` | `gnss.replay` of the SD card's image, which the firmware writes |
 | `no backend can tap uart.gnss` | `SourceError` | No backend declares a tap of the route |
 
 A backend that does not declare a tap of the route skips the test at the call, with

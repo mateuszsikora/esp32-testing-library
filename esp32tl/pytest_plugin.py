@@ -1,7 +1,7 @@
 """The esp32tl pytest plugin, loaded through the `pytest11` entry point.
 
-It provides the `board`, `console`, `gnss` and `lines` fixtures on top of pytest-embedded's classes
-(plan §3); `modem`, `bt`, `wifi` and `sd_card` come with later milestones.
+It provides the `board`, `console`, `gnss`, `lines` and `sd_card` fixtures on top of
+pytest-embedded's classes (plan §3); `modem`, `bt` and `wifi` come with later milestones.
 The board runs a board profile, `esp32-devkitc` unless the `board_profile` marker names another
 (plan §4.5).
 
@@ -45,6 +45,7 @@ from esp32tl.boards import DEFAULT_PROFILE, BoardProfile, ProfileError
 from esp32tl.interfaces.console import Console
 from esp32tl.interfaces.gnss import Gnss
 from esp32tl.interfaces.lines import Lines
+from esp32tl.interfaces.sd_card import SdCard
 
 # The wall-time timeout of a test that uses `board`, in seconds, unless one is configured: 600 s
 # covers at least three minutes of the board's busiest work, at the 0.3 times real time stage 0
@@ -323,5 +324,15 @@ def lines(board: Esp32Sim) -> Lines:
     drives, `lines.events()` every change with its time."""
     try:
         return board.lines()
+    except BackendError as error:
+        backend_failed(error)
+
+
+@pytest.fixture
+def sd_card(board: Esp32Sim) -> SdCard:
+    """The board profile's SD card slot, empty until the test calls `sd_card.insert(image)`
+    before `board.power_on()`."""
+    try:
+        return board.sd_card()
     except BackendError as error:
         backend_failed(error)

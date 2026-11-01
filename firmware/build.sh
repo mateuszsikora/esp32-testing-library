@@ -27,7 +27,7 @@ set -eu
 
 IDF_VERSION=v5.3.6
 CONTAINER=espressif/idf:$IDF_VERSION@sha256:cee52f0c4fdaf088992a7a739f5993154e95cf1d3ab61c24f5b40e6d56a3a070
-IMAGES="hello_world nmea_reader gpio_echo"
+IMAGES="hello_world nmea_reader gpio_echo sdspi"
 
 die() {
 	echo "firmware/build.sh: $*" >&2
@@ -40,6 +40,7 @@ die() {
 project_of() {
 	case $1 in
 	hello_world) echo "$IDF_PATH/examples/get-started/hello_world" ;;
+	sdspi) echo "$IDF_PATH/examples/storage/sd_card/sdspi" ;;
 	nmea_reader) echo "$PWD/firmware/nmea_reader" ;;
 	gpio_echo) echo "$PWD/firmware/gpio_echo" ;;
 	esac

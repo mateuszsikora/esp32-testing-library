@@ -15,3 +15,12 @@ port = 1
 tx = 4
 rx = 5                    # strapping pin (SDIO slave timing): a low level at boot is harmless here
 baud = 9600
+
+# The pins ESP-IDF's storage/sd_card/sdspi example takes on the ESP32 by default, so that it runs
+# unmodified; SPI2 reaches them through the GPIO matrix. GPIO 2 and 15 are strapping pins: the card
+# drives MISO only once selected, and MOSI is the chip's, high until the driver takes it.
+[sd_card]
+sclk = 14
+mosi = 15
+miso = 2
+cs = 13

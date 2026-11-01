@@ -209,6 +209,22 @@ jobs:
       # `make setup` less build-runner: the runner came from the runner job.
       - run: make PYTHON='${{ steps.python.outputs.python-path }}' .venv/.installed rom-elf
 
+      # mtools makes and reads the FAT images of the SD card tests, which skip
+      # without it: here it must be there, so that they run. Homebrew installs
+      # it on macOS; the self-hosted runner has no root for apt, so it must be
+      # installed there once, as Docker is.
+      - name: mtools
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then
+            brew install mtools
+          fi
+          for tool in mformat mcopy mdir mtype; do
+            command -v "$tool" >/dev/null || {
+              echo "::error::no $tool on PATH: install mtools on this runner (apt-get install mtools)"
+              exit 1
+            }
+          done
+
       - run: .venv/bin/pytest
 
   # `make lint` in full, clippy included. The checkout removes runner/target/,

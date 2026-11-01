@@ -9,6 +9,8 @@ from pathlib import Path
 import pytest
 from pytest_embedded_idf.app import IdfApp
 
+from esp32tl import boards
+
 FIRMWARE = Path(__file__).resolve().parent.parent / "firmware"
 
 
@@ -95,3 +97,28 @@ def test_gpio_echo_takes_the_lilygo_modem_lines_from_sdkconfig() -> None:
     config = idf_app("gpio_echo").sdkconfig
     assert config["GPIO_ECHO_IN_PIN"] == 33
     assert config["GPIO_ECHO_OUT_PIN"] == 4
+
+
+def test_sdspi_has_the_classic_esp32_flash_layout() -> None:
+    app = idf_app("sdspi")
+    build = FIRMWARE / "sdspi" / "build"
+    assert app.target == "esp32"
+    # the example's project is called sd_card
+    assert [(f.offset, Path(f.file_path).relative_to(build)) for f in app.flash_files] == [
+        (0x1000, Path("bootloader/bootloader.bin")),
+        (0x8000, Path("partition_table/partition-table.bin")),
+        (0x10000, Path("sd_card.bin")),
+    ]
+    assert all(Path(f.file_path).is_file() for f in app.flash_files)
+    assert app.elf_file == str((build / "sd_card.elf").resolve())
+
+
+def test_sdspi_takes_the_devkit_sd_card_slot_from_sdkconfig() -> None:
+    config = idf_app("sdspi").sdkconfig
+    slot = boards.profile("esp32-devkitc").sd_card
+    assert slot is not None
+    pins = ("EXAMPLE_PIN_CLK", "EXAMPLE_PIN_MOSI", "EXAMPLE_PIN_MISO", "EXAMPLE_PIN_CS")
+    assert [config[pin] for pin in pins] == [slot.sclk, slot.mosi, slot.miso, slot.cs]
+    # unmodified: a card it cannot mount stays as it is
+    assert config["EXAMPLE_FORMAT_IF_MOUNT_FAILED"] is False
+    assert config["EXAMPLE_FORMAT_SD_CARD"] is False

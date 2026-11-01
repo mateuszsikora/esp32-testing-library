@@ -242,3 +242,17 @@ either edge, and reads the level again in its task.
 because it would invent a wiring and a pull that a devkit does not have, and every devkit test
 would watch lines it does not use; and polling the input, because the echo would then lag by up to
 a FreeRTOS tick, 10 ms at ESP-IDF's default, where the interrupt takes microseconds.
+
+## The SD card is validated on ESP-IDF's sdspi example, unmodified
+
+Status: decided (#32)
+
+`sdspi` is ESP-IDF's `examples/storage/sd_card/sdspi` built as it is, like `hello_world`, and the
+`esp32-devkitc` profile's slot takes the example's default pins for the ESP32 (SCLK 14, MOSI 15,
+MISO 2, CS 13), which `tests/test_firmware_images.py` compares with its `sdkconfig`. The example
+mounts, writes, renames and reads, which covers the driver's initialisation, single and multiple
+block reads and writes, CRC and DMA.
+
+**Rejected:** a firmware of this repository's for the card, because the plan validates on public
+firmware and the example already exercises what the card has to answer; and other pins in its
+`sdkconfig.defaults`, because the example would then not be unmodified.

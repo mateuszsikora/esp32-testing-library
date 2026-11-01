@@ -1,5 +1,6 @@
 //! The command line. Flag names and value formats copy esp32sim's, so that switching to
 //! `esp32sim --board socket:PATH` once mikroverk/esp32sim#325 lands is a rename (plan §4.2).
+use crate::sd_card::Wiring;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -20,6 +21,9 @@ usage: esp32tl-runner --chip esp32 --flash-at OFFSET=FILE... --max-seconds S [op
                         run fails with exit code 4 (default 60; 0 waits for ever)
   --console stdout|socket|both   where UART0 goes (default stdout); socket and both need
                         --board
+  --sd-rw IMAGE         an SD card holding IMAGE, a whole number of 512 KiB units, on the
+                        pins of --sd-spi; the guest's writes go into the file
+  --sd-spi sclk=N,mosi=N,miso=N,cs=N   the GPIOs the card is wired to, in SPI mode
 ";
 
 /// Where the peer is (protocol §1).
@@ -61,6 +65,8 @@ pub struct Opts {
     pub board: Option<Board>,
     /// `None`: wait for ever.
     pub peer_timeout: Option<Duration>,
+    /// `--sd-rw` and `--sd-spi`.
+    pub sd_card: Option<(PathBuf, Wiring)>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -88,7 +94,10 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Opts, Error> {
         console: Console::Stdout,
         board: None,
         peer_timeout: Some(Duration::from_secs(60)),
+        sd_card: None,
     };
+    let mut sd_image = None;
+    let mut sd_wiring = None;
     while let Some(flag) = args.next() {
         let mut value = || {
             args.next()
@@ -163,6 +172,8 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Opts, Error> {
                     }
                 };
             }
+            "--sd-rw" => sd_image = Some(PathBuf::from(value()?)),
+            "--sd-spi" => sd_wiring = Some(wiring(&value()?)?),
             "-h" | "--help" => return Err(Error::Help),
             _ => return Err(usage(format!("unknown argument {flag:?}"))),
         }
@@ -180,6 +191,12 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Opts, Error> {
             "nothing to run: give the images with --flash-at OFFSET=FILE",
         ));
     }
+    opts.sd_card = match (sd_image, sd_wiring) {
+        (Some(image), Some(wiring)) => Some((image, wiring)),
+        (None, None) => None,
+        (Some(_), None) => return Err(usage("--sd-rw needs --sd-spi: the card's pins")),
+        (None, Some(_)) => return Err(usage("--sd-spi needs --sd-rw: the card's image")),
+    };
     if opts.console != Console::Stdout && opts.board.is_none() {
         return Err(usage(
             "--console socket and both send the console to the peer: they need --board",
@@ -209,6 +226,47 @@ fn board(spec: &str) -> Result<Board, Error> {
         }
         _ => Err(bad()),
     }
+}
+
+/// `sclk=N,mosi=N,miso=N,cs=N`, in any order: four distinct GPIOs of the classic chip, those the
+/// chip drives (all but MISO) not input-only.
+fn wiring(spec: &str) -> Result<Wiring, Error> {
+    let bad = |why: String| usage(format!("--sd-spi {spec}: {why}"));
+    let mut pins: [Option<u8>; 4] = [None; 4];
+    for part in spec.split(',') {
+        let (name, pin) = part
+            .split_once('=')
+            .ok_or_else(|| bad("expected sclk=N,mosi=N,miso=N,cs=N".into()))?;
+        let at = ["sclk", "mosi", "miso", "cs"]
+            .iter()
+            .position(|&n| n == name)
+            .ok_or_else(|| bad(format!("{name:?} is not sclk, mosi, miso or cs")))?;
+        let pin = pin
+            .parse::<u8>()
+            .ok()
+            .filter(|&p| p < 40 && !matches!(p, 24 | 28..=31))
+            .ok_or_else(|| bad(format!("{pin:?} is not a GPIO of the ESP32")))?;
+        if name != "miso" && pin >= 34 {
+            return Err(bad(format!("GPIO {pin} is input only")));
+        }
+        if pins[at].replace(pin).is_some() {
+            return Err(bad(format!("{name} is given twice")));
+        }
+    }
+    let [Some(sclk), Some(mosi), Some(miso), Some(cs)] = pins else {
+        return Err(bad("expected sclk=N,mosi=N,miso=N,cs=N".into()));
+    };
+    let mut seen = [sclk, mosi, miso, cs];
+    seen.sort_unstable();
+    if seen.windows(2).any(|w| w[0] == w[1]) {
+        return Err(bad("the four pins must differ".into()));
+    }
+    Ok(Wiring {
+        sclk,
+        mosi,
+        miso,
+        cs,
+    })
 }
 
 /// `OFFSET=FILE`, the offset in hex with or without `0x`, as esp32sim reads it.

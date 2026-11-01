@@ -7,7 +7,7 @@ import pytest
 
 from esp32tl import boards
 from esp32tl.backends import SERVICES
-from esp32tl.boards import BoardProfile, Line, ProfileError, UartRoute, capabilities
+from esp32tl.boards import BoardProfile, Line, ProfileError, SdCardRoute, UartRoute, capabilities
 from esp32tl.boards.capabilities import (
     Capability,
     CapabilityError,
@@ -32,8 +32,10 @@ def test_esp32_devkitc_routes_the_gnss_on_uart1_gpio_4_and_5() -> None:
         psram_mb=0,
         uart={"gnss": UartRoute(port=1, tx=4, rx=5, baud=9600)},
         lines={},
+        # ESP-IDF's sdspi example's defaults for the ESP32
+        sd_card=SdCardRoute(sclk=14, mosi=15, miso=2, cs=13),
     )
-    assert profile.interfaces == ["console", "uart.gnss"]
+    assert profile.interfaces == ["console", "uart.gnss", "sd_card"]
 
 
 def test_the_lilygo_profile_holds_only_what_the_specification_gives() -> None:
@@ -83,6 +85,8 @@ baud = 9600
 pwrkey = 12
 ri = { pin = 33, pull = "down" }
 """
+
+SD_CARD = "\n[sd_card]\nsclk = 14\nmosi = 15\nmiso = 2\ncs = 13\n"
 
 
 @pytest.mark.parametrize(
@@ -142,6 +146,21 @@ ri = { pin = 33, pull = "down" }
             "x.toml: uart.modem.port: UART1 is uart.gnss's",
         ),
         ("name = 'x'\nchip = 'esp32'\nuart = 1", "x.toml: uart: is not a table"),
+        ("name = 'x'\nchip = 'esp32'\nsd_card = 1", "x.toml: sd_card: is not a table"),
+        (GOOD + SD_CARD.replace("cs = 13\n", ""), "x.toml: sd_card: missing cs"),
+        (GOOD + SD_CARD + "cd = 27\n", "x.toml: sd_card: unknown key cd"),
+        (
+            GOOD + SD_CARD.replace("cs = 13", "cs = 36"),
+            "x.toml: sd_card.cs: GPIO 36 is input only",
+        ),
+        (
+            GOOD + SD_CARD.replace("mosi = 15", "mosi = 4"),
+            "x.toml: sd_card.mosi: GPIO 4 is uart.gnss.tx already",
+        ),
+        (
+            GOOD + SD_CARD.replace("miso = 2", "miso = 13"),
+            "x.toml: sd_card.cs: GPIO 13 is sd_card.miso already",
+        ),
         ("name = 'x'\nchip = ", "x.toml: Invalid value (at end of document)"),
     ],
 )
@@ -162,6 +181,13 @@ def test_a_profile_without_sizes_or_interfaces_has_only_the_console(tmp_path: Pa
     assert boards.load(tmp_path / "x.toml").interfaces == ["console", "uart.gnss", "lines.modem"]
 
 
+def test_an_sd_card_slot_may_take_an_input_only_pin_for_miso(tmp_path: Path) -> None:
+    (tmp_path / "x.toml").write_text(GOOD + SD_CARD.replace("miso = 2", "miso = 39"))
+    profile = boards.load(tmp_path / "x.toml")
+    assert profile.sd_card == SdCardRoute(sclk=14, mosi=15, miso=39, cs=13)
+    assert profile.interfaces[-1] == "sd_card"
+
+
 def test_every_backend_has_a_declaration() -> None:
     assert SERVICES.keys() <= declared().keys()
 
@@ -173,8 +199,14 @@ def test_the_declaration_is_the_specification_s_table() -> None:
         "esp32sim": {
             "console": Capability(tap=True),
             "uart": Capability(("model", "replay", "real"), tap=True),
+            # the runner's card model, holding an image file
+            "sd_card": Capability(("model",)),
         },
-        "serial": {"console": Capability(tap=True), "uart": Capability(("real",))},
+        "serial": {
+            "console": Capability(tap=True),
+            "uart": Capability(("real",)),
+            "sd_card": Capability(("real",)),
+        },
     }
 
 
@@ -200,6 +232,12 @@ LILYGO = boards.profile("lilygo-t-a7670g-r2")
             "uart.gnss takes no replay source on this backend, only real",
         ),
         ("serial", Request("uart.gnss", tap=True), "uart.gnss cannot be tapped on this backend"),
+        ("esp32sim", Request("sd_card", source="model"), None),
+        (
+            "serial",
+            Request("sd_card", source="model"),
+            "sd_card takes no model source on this backend, only real",
+        ),
     ],
 )
 def test_a_backend_refuses_what_it_does_not_declare(
@@ -227,8 +265,15 @@ def test_the_first_request_a_backend_cannot_give_is_the_reason() -> None:
             DEVKITC,
             Request("uart.modem", source="model"),
             "the board profile esp32-devkitc has no uart.modem;"
-            " its interfaces are console, uart.gnss",
+            " its interfaces are console, uart.gnss, sd_card",
         ),
+        (
+            LILYGO,
+            Request("sd_card", source="model"),
+            "the board profile lilygo-t-a7670g-r2 has no sd_card;"
+            " its interfaces are console, uart.modem, lines.modem",
+        ),
+        (DEVKITC, Request("sd_card", tap=True), "no backend can tap sd_card"),
         (
             DEVKITC,
             Request("uart.gnss", source="recorded"),
@@ -265,7 +310,8 @@ def test_a_request_no_backend_can_give_is_an_error_not_a_skip(
         ("[serial]\nuart = { tap = 1 }", "c.toml: serial.uart.tap: is not true or false"),
         (
             "[serial]\nuarts = { tap = true }",
-            "c.toml: serial.uarts: no such kind of interface; the kinds are console, uart, lines",
+            "c.toml: serial.uarts: no such kind of interface;"
+            " the kinds are console, uart, lines, sd_card",
         ),
         (
             "[serial]\nuart = { sources = ['modle'] }",

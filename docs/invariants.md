@@ -62,9 +62,11 @@ that references to its number keep their meaning.
     pull-down on RI of stage 0's gap 6.
     `tests/test_boards.py::test_the_lilygo_profile_holds_only_what_the_specification_gives`
 28. A profile that breaks the schema is refused with the file and the key at fault; a UART's TX is
-    never an input-only GPIO, and no GPIO serves two uses, the console's UART0 on GPIO 1 and 3
+    never an input-only GPIO, nor is an SD card slot's SCLK, MOSI or CS, though its MISO may be;
+    and no GPIO serves two uses, the console's UART0 on GPIO 1 and 3 and the slot's four pins
     counted.
-    `tests/test_boards.py::test_a_profile_that_breaks_the_schema_is_refused_with_the_key`
+    `tests/test_boards.py::test_a_profile_that_breaks_the_schema_is_refused_with_the_key`,
+    `tests/test_boards.py::test_an_sd_card_slot_may_take_an_input_only_pin_for_miso`
 
 ## The esp32sim backend
 
@@ -116,7 +118,9 @@ that references to its number keep their meaning.
     `tests/test_pytest_plugin.py::test_a_test_that_taps_a_route_and_never_powers_on_fails_at_teardown`,
     `tests/test_pytest_plugin.py::test_the_lines_fixture_needs_a_profile_with_lines_and_a_drive_needs_power_on`,
     `tests/test_pytest_plugin.py::test_the_board_s_clock_and_sources_go_in_order`,
-    `tests/test_gnss_fixture.py::test_a_source_given_out_of_order_fails_the_test`
+    `tests/test_gnss_fixture.py::test_a_source_given_out_of_order_fails_the_test`; the same holds
+    for a card in the SD card slot.
+    `tests/test_sdspi.py::test_the_slot_used_out_of_order_fails_the_test`
 46. A source or a tap the backend's capability declaration does not give skips the test at the call
     that asks for it, reported at the test; one that no backend gives fails the test with
     `SourceError`.
@@ -147,6 +151,12 @@ that references to its number keep their meaning.
     `tests/test_gpio_echo.py::test_the_firmware_follows_ri_and_drives_pwrkey`,
     `tests/test_gpio_echo.py::test_a_level_driven_before_power_on_holds_from_the_start`,
     `tests/test_boardlink.py::test_an_input_the_runner_would_refuse_is_refused_naming_its_interface`
+63. A card in the SD card slot writes through to the test's own image file: what the firmware
+    wrote is in the file, readable with mtools, and a card the firmware only reads leaves the file
+    as it was. The runner gets the card only once the test inserts one.
+    `tests/test_sdspi.py::test_the_example_writes_its_files_into_the_image`,
+    `tests/test_sdspi.py::test_a_card_without_a_file_system_does_not_mount`,
+    `tests/test_pytest_plugin.py::test_runner_command_puts_a_card_in_the_slot_once_the_test_inserts_one`
 
 ## The runner
 
@@ -205,6 +215,12 @@ that references to its number keep their meaning.
 42. A harness `hello` whose `watch` holds a pin the classic chip does not have (24, 28 to 31, 40
     and above) is a protocol error at the handshake, before the guest runs.
     `runner/src/session/tests.rs::a_handshake_mismatch_is_a_protocol_error_with_stats`
+62. The SD card hears a transaction only while its CS pin is a low output and its SCLK pin carries
+    the master's clock, and the chip reads its answer only through the card's MISO pin; until a
+    CMD0 with a good CRC it answers nothing. A card not selected leaves every byte at 0xff.
+    `runner/src/sd_card/tests.rs::a_card_not_selected_or_not_clocked_hears_nothing`,
+    `runner/src/sd_card/tests.rs::without_miso_the_chip_reads_high_but_the_card_listens`,
+    `runner/src/sd_card/tests.rs::checks_crcs_of_cmd0_and_cmd8_always_and_of_the_rest_after_cmd59`
 
 ## Recordings and replay
 
@@ -250,14 +266,20 @@ that references to its number keep their meaning.
     `tests/test_pytest_plugin.py::test_a_tap_records_what_crossed_the_route_both_ways`,
     `tests/test_gnss_fixture.py::test_a_tap_of_a_replay_records_what_went_in`
 54. A tap never writes over a file the run replays from or another route is tapped into, and a
-    replay never reads a file a route is tapped into: both are refused at the call.
-    `tests/test_tap.py::test_a_tap_never_writes_over_a_file_the_run_reads_or_writes`
+    replay never reads a file a route is tapped into: both are refused at the call. Nor do a tap
+    and the SD card's image share a file, whichever comes first, and a replay never reads the
+    card's image.
+    `tests/test_tap.py::test_a_tap_never_writes_over_a_file_the_run_reads_or_writes`,
+    `tests/test_sdspi.py::test_no_tap_writes_over_the_card_s_image`,
+    `tests/test_sdspi.py::test_a_card_does_not_take_a_tap_s_file`
 53. The report of a test that failed shows the run on the board's clock: the test's steps,
     the console's lines and the bytes on every route, in the order of the board's time; that of a
-    test that passed shows the bytes on every route, not the run.
+    test that passed shows the bytes on every route, not the run. A profile with an SD card slot
+    adds the card's image, and the test's `sd_card.insert` is one of the steps.
     `tests/test_pytest_plugin.py::test_the_report_of_a_failing_test_shows_the_run_on_the_board_s_clock`,
     `tests/test_pytest_plugin.py::test_a_tap_records_what_crossed_the_route_both_ways`,
-    `tests/test_run_report.py::test_entries_are_shown_in_the_order_of_the_board_s_time`
+    `tests/test_run_report.py::test_entries_are_shown_in_the_order_of_the_board_s_time`,
+    `tests/test_sdspi.py::test_the_example_writes_its_files_into_the_image`
 
 ## Models, units and console lines
 
@@ -316,6 +338,9 @@ that references to its number keep their meaning.
     `flasher_args.json`, leaves none.
     `tests/test_firmware_build.py::test_failed_build_unmarks_a_finished_one`,
     `tests/test_firmware_build.py::test_build_fails_without_flasher_args`
+64. `sdspi` is ESP-IDF's example unmodified: its SD card pins are the `esp32-devkitc` profile's
+    slot, and it formats no card.
+    `tests/test_firmware_images.py::test_sdspi_takes_the_devkit_sd_card_slot_from_sdkconfig`
 
 ## Documentation
 

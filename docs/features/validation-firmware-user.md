@@ -31,6 +31,32 @@ whatever `FIRMWARE_OUT` the shell exports, because the tests read the images the
 | `hello_world` | ESP-IDF's `examples/get-started/hello_world`, unmodified, for target `esp32` |
 | `nmea_reader` | `firmware/nmea_reader`, this repository's own project, for target `esp32`: reads NMEA from a GNSS receiver and prints its position fixes ([below](#nmea_reader)) |
 | `gpio_echo` | `firmware/gpio_echo`, this repository's own project, for target `esp32`: reads one GPIO line and drives another to its level ([below](#gpio_echo)) |
+| `sdspi` | ESP-IDF's `examples/storage/sd_card/sdspi`, unmodified, for target `esp32`: mounts the FAT file system of an SD card on SPI and writes, renames and reads files on it ([below](#sdspi)) |
+
+## `sdspi`
+
+ESP-IDF's example as it is, with its default `sdkconfig`: SPI2 with SCLK on GPIO 14, MOSI 15,
+MISO 2 and CS 13, which are the `esp32-devkitc` profile's SD card slot
+([board profiles](board-profiles-user.md)), DMA on (`SDSPI_DEFAULT_DMA`), 20 MHz, and no
+formatting of a card it cannot mount. It mounts the card at `/sdcard`, prints the card's
+registers, writes `hello.txt` with `Hello NAME!`, NAME the product name in the card's CID,
+deletes `foo.txt` if there is one, renames `hello.txt` to `foo.txt`, reads it back, writes and
+reads `nihao.txt` the same way, and unmounts. With the runner's card, whose CID names it
+`SIMSD`, its console ends:
+
+```text
+I (105) example: Read from file: 'Hello SIMSD!'
+I (105) example: Opening file /sdcard/nihao.txt
+I (105) example: File written
+I (105) example: Reading file /sdcard/nihao.txt
+I (105) example: Read from file: 'Nihao SIMSD!'
+I (105) example: Card unmounted
+```
+
+and the image holds `FOO.TXT` and `NIHAO.TXT`. A card without a file system ends in
+`Failed to mount filesystem.`, an empty slot in
+`Failed to initialize the card (ESP_ERR_TIMEOUT). Make sure SD card lines have pull-up resistors in place.`
+`tests/test_sdspi.py` runs all three ([pytest plugin](pytest-plugin-user.md#the-fixtures)).
 
 ## `nmea_reader`
 
@@ -123,9 +149,10 @@ every image those are:
 |---|---|
 | `0x1000` | `bootloader/bootloader.bin` |
 | `0x8000` | `partition_table/partition-table.bin` |
-| `0x10000` | `IMAGE.bin` (`hello_world.bin`, `nmea_reader.bin`, `gpio_echo.bin`) |
+| `0x10000` | `IMAGE.bin` (`hello_world.bin`, `nmea_reader.bin`, `gpio_echo.bin`), `sd_card.bin` for `sdspi` |
 
-and the ELF is `IMAGE.elf`. Two more files say how the build was made:
+and the ELF is `IMAGE.elf`, `sd_card.elf` for `sdspi`: the files take the project's name, and
+the `sdspi` example's project is called `sd_card`. Two more files say how the build was made:
 `esp32tl-build.json` (the ESP-IDF version, the container, and the project it was built from) and
 `esp32tl-built`, present only when the build finished. `firmware/**/build/` is ignored by git.
 
@@ -169,7 +196,7 @@ The second one ends every finished build.
 ## What the tests accept
 
 `tests/test_firmware_images.py` reads `firmware/hello_world/build/`,
-`firmware/nmea_reader/build/` and `firmware/gpio_echo/build/`, and for each:
+`firmware/nmea_reader/build/`, `firmware/gpio_echo/build/` and `firmware/sdspi/build/`, and for each:
 
 - passes on a build from the pinned container;
 - passes on a local build (`IDF_LOCAL=1`), with the warning
@@ -193,7 +220,7 @@ run `make firmware`.
 `firmware/build.sh` exits 1 with one of these on stderr, before writing anything, or with the exit
 code of `idf.py` when the build itself fails:
 
-- `firmware/build.sh: unknown image 'NAME'; the images are: hello_world nmea_reader gpio_echo`
+- `firmware/build.sh: unknown image 'NAME'; the images are: hello_world nmea_reader gpio_echo sdspi`
 - `firmware/build.sh: needs Docker, or IDF_LOCAL=1 to build with a local ESP-IDF`
 - `firmware/build.sh: the Docker daemon is not reachable ('docker info' failed); is Docker running?`
 - `firmware/build.sh: IDF_LOCAL=1 needs ESP-IDF in the environment: source $IDF_PATH/export.sh first`

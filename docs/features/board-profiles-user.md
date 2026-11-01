@@ -1,7 +1,7 @@
 # Board profiles
 
 A board profile says which chip a board carries and which UART and pins each of its interfaces
-uses: data, not code, and nothing about what the firmware does with them. Every test that uses
+uses, its SD card slot among them: data, not code, and nothing about what the firmware does with them. Every test that uses
 `board` runs on one profile, `esp32-devkitc` unless the test names another. Beside the profiles,
 esp32tl declares what each backend can put at the far end of an interface, and which interfaces
 it can tap; a test that asks for something its backend cannot give is skipped on that backend,
@@ -11,13 +11,15 @@ with the reason.
 
 | Profile | Chip | Flash, PSRAM | Interfaces |
 |---|---|---|---|
-| `esp32-devkitc` | `esp32` | 4 MB, none | `console`; `uart.gnss`: UART1, TX GPIO 4, RX GPIO 5, 9600 baud |
+| `esp32-devkitc` | `esp32` | 4 MB, none | `console`; `uart.gnss`: UART1, TX GPIO 4, RX GPIO 5, 9600 baud; `sd_card`: SCLK GPIO 14, MOSI GPIO 15, MISO GPIO 2, CS GPIO 13 |
 | `lilygo-t-a7670g-r2` | `esp32` (ESP32-WROVER-E) | not in the profile | `console`; `uart.modem`: UART1, TX GPIO 26, RX GPIO 27, 115200 baud; `lines.modem`: `pwrkey` GPIO 4, `ri` GPIO 33 pulled down |
 
 `esp32-devkitc` is a generic ESP32 module on a devkit, and carries every validation firmware: its
 GNSS route is chosen for this repository's own firmware. GPIO 16 and 17 are left free because on
 WROVER modules they belong to the PSRAM. GPIO 5 is a strapping pin; a receiver holding it low at
-boot does not change the boot mode.
+boot does not change the boot mode. Its SD card slot has the pins ESP-IDF's
+`storage/sd_card/sdspi` example takes on the ESP32 by default, so the example runs unmodified;
+GPIO 2 and 15 are strapping pins too, which a card leaves alone until the firmware selects it.
 
 `lilygo-t-a7670g-r2` holds only what the specification gives: the A7670G modem's UART and its
 PWRKEY and RI lines. The pull-down on RI is what stage 0 found
@@ -46,8 +48,8 @@ def test_modem_route(board):
   The esp32sim backend names it, with its chip, in the link's `hello`, and the `esp32sim link`
   report starts with its name ([esp32sim backend](esp32sim-backend-user.md)). Every UART route of
   the profile is wired to the board, and the link watches its pins; a route says nothing until the
-  test gives it a source ([below](#saying-what-a-test-needs)). The profile's lines are never wired
-  yet.
+  test gives it a source ([below](#saying-what-a-test-needs)). The SD card slot is empty until the
+  test inserts a card. The profile's lines are never wired yet.
 - Only the profiles esp32tl ships can be named; there is no marker argument for a file of your
   own.
 - The marker goes on the test, its class or its module. One given in a
@@ -61,7 +63,8 @@ def test_modem_route(board):
 
 A test says what is at the far end of an interface, and whether it records what crosses it, by
 what it does with it before `board.power_on()`. An interface is `console`, or the name of a route
-or a set of lines in the profile: `uart.gnss`, `uart.modem`, `lines.modem`.
+or a set of lines in the profile: `uart.gnss`, `uart.modem`, `lines.modem`, or `sd_card`, the SD
+card slot.
 
 ```python
 def test_reports_a_fix(board, gnss, console, tmp_path):
@@ -73,10 +76,11 @@ def test_reports_a_fix(board, gnss, console, tmp_path):
 
 - The source of an interface is the call that gives it: `gnss.replay(path)` is a `replay`, and
   `gnss.fix(at=...)` or another call of the receiver model a `model`
-  ([models and units](models-user.md#the-gnss-receiver)); `real` gets its call later.
+  ([models and units](models-user.md#the-gnss-receiver)), and `sd_card.insert(image)` a `model`,
+  the runner's card holding the image; `real` gets its call later.
 - A tap is the call that asks for it: `gnss.tap(path)` taps `uart.gnss`
   ([taps and the run report](run-report-user.md)). No call taps the console: what it prints is in
-  `dut.log` and in the report already.
+  `dut.log` and in the report already. Nothing taps the SD card slot: the image is the record.
 - Asked for, a source or a tap a backend does not declare skips the test at the call
   ([below](#when-a-backend-cannot-give-it)).
 
@@ -87,6 +91,7 @@ Each backend declares what it can give:
 | `console` | tap | tap |
 | `uart.*` | `model`, `replay` or `real`; tap | `real` only; no tap |
 | `lines.*` | nothing | nothing |
+| `sd_card` | `model`: a card holding an image file; no tap | `real`: the card in the slot; no tap |
 
 On a real board the on-board peripherals are soldered on, so only the real part answers, and a tap
 on them would need a hardware sniffer. The `lines` fixture is no source in this table: on
