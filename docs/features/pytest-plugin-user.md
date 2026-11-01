@@ -126,15 +126,14 @@ the exception: it takes a `Duration`, or a number of seconds as in pytest-embedd
 `console` is the firmware's console, its UART0, read on the board's clock:
 
 - `console.expect(pattern, timeout=30, *, return_what_before_match=False)` lets the board run until
-  `pattern` appears on the console after the last match, for at most `timeout` of the board's
-  time, a `Duration` or a number of seconds, and returns the `re.Match`, on bytes. `pattern` is a regular expression, as a
-  string, bytes or a compiled pattern, or a list of them, which matches whichever appears first.
-  A string or bytes compiles with `re.DOTALL`, as pexpect compiles it, so `.` matches across
-  lines, and `^` matches where the last match ended. A compiled pattern keeps its own flags,
-  where pexpect drops them from a compiled string pattern.
-  With `return_what_before_match=True` it returns the bytes between the last match and this one.
-  These are pytest-embedded's names, its search from the end of the last match and its return
-  values.
+  `pattern` appears on the console after the last match, for at most `timeout` of the board's time,
+  a `Duration` or a number of seconds, and returns the `re.Match`, on bytes. `pattern` is a regular
+  expression, as a string, bytes or a compiled pattern, or a list of them, which matches whichever
+  appears first. A string or bytes compiles with `re.DOTALL`, as pexpect compiles it, so `.` matches
+  across lines, and `^` matches where the last match ended. A compiled pattern keeps its own flags,
+  where pexpect drops them from a compiled string pattern. With `return_what_before_match=True` it
+  returns the bytes between the last match and this one. These are pytest-embedded's names, its
+  search from the end of the last match and its return values.
 - `console.expect_exact(pattern, ...)` is the same with strings or bytes found as they are, not as
   regular expressions.
 - `console.expect(pexpect.EOF)` waits for the end of the run and returns what the console printed
@@ -230,11 +229,11 @@ def test_the_firmware_follows_ri_and_drives_pwrkey(board, lines, console):
   on it is enabled, or while its pad is high: a peripheral that drives the pad through the GPIO
   matrix with its own output enable shows as 1 when high and `None` when low.
 - `lines.events()` is every change on the lines so far, by either end, in the order of the board's
-  time, as a list of `LineEvent(t, name, pin, by, level)`: `t` a `Duration`, an instant of the board's
-  time as `board.now` is; `name` as `modem.ri`; `by` `"firmware"` or `"test"`; `level` 0 or 1, or `None` for a
-  line no longer driven. A drive to the level the test drives the line to already, or a release of
-  a line the test does not drive, is no change, and sends nothing. A drive after the run has ended
-  is still listed, though it reaches no board.
+  time, as a list of `LineEvent(t, name, pin, by, level)`: `t` a `Duration`, an instant of the
+  board's time as `board.now` is; `name` as `modem.ri`; `by` `"firmware"` or `"test"`; `level` 0 or
+  1, or `None` for a line no longer driven. A drive to the level the test drives the line to
+  already, or a release of a line the test does not drive, is no change, and sends nothing. A drive
+  after the run has ended is still listed, though it reaches no board.
 - A line that is not one of the profile's raises `ValueError`:
   `GPIO 5 is no line of the board profile lilygo-t-a7670g-r2; its lines are modem.pwrkey (GPIO 4), modem.ri (GPIO 33)`.
   A level other than 0 or 1 raises `ValueError: lines.drive: level 2 is not 0 or 1`, or

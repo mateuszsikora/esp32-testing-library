@@ -994,10 +994,10 @@ and example already give these values.
 Status: decided (#69)
 
 `board.wait(duration)` and `wait_until`'s `within` take a `Duration` of `esp32tl.units`, 0 or more,
-and `board.now` is one, as a console line's `at` and a `LineEvent`'s `t` are. A plain number raises `TypeError` with the
-call that would say it, `board.wait takes a Duration, as seconds(2.5), not 2.5`. An expect's
-`timeout` takes a `Duration` or a number of seconds: pytest-embedded's `expect` takes seconds, and
-its default of 30 and the tests written against it keep working.
+and `board.now` is one, as a console line's `at` and a `LineEvent`'s `t` are. A plain number raises
+`TypeError` with the call that would say it, `board.wait takes a Duration, as seconds(2.5), not
+2.5`. An expect's `timeout` takes a `Duration` or a number of seconds: pytest-embedded's `expect`
+takes seconds, and its default of 30 and the tests written against it keep working.
 
 **Rejected:** numbers of seconds beside `Duration`s in `wait` and `wait_until`, because a number
 would leave its unit to the reader, which [the units decision](#models-describe-the-world-in-its-own-terms-in-units)
