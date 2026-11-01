@@ -1,10 +1,10 @@
 # esp32sim backend
 
 The `esp32sim` backend runs the firmware of a test in `esp32tl-runner`, the program in `runner/`
-that runs the [esp32sim](https://github.com/mikroverk/esp32sim) emulator, on the emulated clock.
-It is the backend behind the `board`, `console` and `gnss` fixtures, and the only one: every test
-that uses them runs on it, with `[esp32sim]` in its id ([pytest plugin](pytest-plugin-user.md)). It runs an
-unmodified ESP-IDF build for the classic ESP32.
+that runs the [esp32sim](https://github.com/mikroverk/esp32sim) emulator, on the emulated clock. It
+is the backend behind the `board`, `console`, `gnss` and `lines` fixtures, and the only one: every
+test that uses them runs on it, with `[esp32sim]` in its id ([pytest
+plugin](pytest-plugin-user.md)). It runs an unmodified ESP-IDF build for the classic ESP32.
 
 ## What it needs
 
@@ -53,7 +53,11 @@ that path would be too long for a socket), passed as `--board socket:PATH`. The 
 link in a thread for the whole run, speaking the [link protocol](../protocol.md). Every UART route
 of the board profile is wired to the board from the start: the link watches its pins and carries
 what the firmware transmits there and, once the test has given the route a source, what the source
-sends in ([replay](replay-user.md)). A route without a source listens and says nothing.
+sends in ([replay](replay-user.md)). A route without a source listens and says nothing. So is every
+GPIO line of the profile's `[lines.<role>]` sets: the link watches it, holds a line the board pulls
+at its pull from power-on, as RI on the LilyGO profile reads 0, and carries what the firmware
+drives on the lines and what the test drives through `lines`
+([pytest plugin](pytest-plugin-user.md#the-fixtures)).
 
 ## When the runner exits
 

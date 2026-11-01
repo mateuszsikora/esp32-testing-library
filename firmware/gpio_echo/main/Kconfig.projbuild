@@ -1,0 +1,23 @@
+# The line gpio_echo reads and the line it drives. The defaults are the [lines.modem] set of the
+# lilygo-t-a7670g-r2 board profile: RI, which the board pulls down, and PWRKEY.
+menu "gpio_echo"
+
+config GPIO_ECHO_IN_PIN
+    int "Input GPIO: the line gpio_echo reads"
+    range 0 39
+    default 33
+    help
+        Read with the chip's own pulls off: an undriven line reads what the board's
+        wiring gives it. Not GPIO 1 or 3, the console's UART0, nor 6 to 11, the SPI
+        flash, nor 20, 24 or 28 to 31, which the ESP32 does not have: the range cannot
+        leave them out.
+
+config GPIO_ECHO_OUT_PIN
+    int "Output GPIO: the line gpio_echo drives to the input's level"
+    range 0 33
+    default 4
+    help
+        Not GPIO 1 or 3, the console's UART0, nor 6 to 11, the SPI flash, nor 20, 24
+        or 28 to 31, which the ESP32 does not have: the range cannot leave them out.
+
+endmenu

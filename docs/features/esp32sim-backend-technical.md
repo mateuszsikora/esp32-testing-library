@@ -34,9 +34,14 @@ starting anything:
 4. **The UARTs.** For every `[uart.<role>]` route of the profile, `profile_uart` makes the route's
    `Uart` (`esp32tl/interfaces/uart.py`): `Wire(tx, rx, baud)` from the route,
    `clock=Esp32Sim.clock`, `directory`, and `asked=self._asked`.
-5. **`BoardLink(profile.name, uarts, chip=profile.chip, on_error=self._end_run, hold=clock, console=..., clock=self.clock)`**
+5. **The lines.** One `Lines(profile.name, profile.lines, now)` (`esp32tl/interfaces/lines.py`)
+   for every `[lines.<role>]` set, also on a profile with none, with `now` the `HeldClock`'s, so
+   that what the test drives before power-on holds from `t = 0`
+   ([pytest-plugin-technical.md](pytest-plugin-technical.md#data-flow)).
+6. **`BoardLink(profile.name, [*uarts, lines], chip=profile.chip, on_error=self._end_run, hold=clock, console=..., clock=self.clock)`**
    (`esp32tl/link/boardlink.py`) is the harness's end of the link: `Esp32Sim.link`. The harness's
-   `hello` names the profile and its chip; `watch` is the pins of every UART route. It checks that
+   `hello` names the profile and its chip; `watch` is the pins of every UART route and every
+   line. It checks that
    no two interfaces share a pin. `hold` holds every turn until the test waits; `console` appends
    each console message's bytes to `console_output`, in the link's thread.
 
@@ -124,8 +129,10 @@ caller, as the console does.
 that `capabilities.check` finds no backend gives, with that error's message. Otherwise, when
 `capabilities.refusal(self.name, ...)` gives a reason, it calls `skip(f"esp32sim: {reason}")`. It
 reads the declaration through `capabilities.declared()` at each call, so a test can swap it.
-`set_up()` lists `the {source_kind} of {interface}` for every `Uart` with a source: what the
-`board` fixture reports for a test that never powered on.
+`set_up()` lists `the {source_kind} of {interface}` for every `Uart` with a source, then
+`the level of {line}` for every line the test has driven (a `LineEvent` by `"test"`; a release of
+a line the test does not drive makes none). This is what the `board` fixture reports for a test
+that never powered on.
 
 **The link.** `BoardLink` keeps the run's `RunnerHello` (`link.runner`), its warnings, its `stats`,
 the number of turns and the first `error` with its traceback. When it finds the run wrong it calls
@@ -218,7 +225,8 @@ repository makes.
 | `Esp32Sim.wait(duration)`, `Esp32Sim.wait_until(condition, *, within)`, `Esp32Sim.wait_on_clock(condition, within, description)` | The test's waits, in seconds of the board's time |
 | `Esp32Sim.now`, `Esp32Sim.utc` | The board's time since power-on, in seconds; the world's time, a `datetime` in UTC |
 | `Esp32Sim.uart(role)` | The `Uart` of `uart.<role>` on the link; `BackendError` when the profile has no such route |
-| `Esp32Sim.set_up()` | What the test gave that only a run uses: `the replay of uart.gnss` per route with a source |
+| `Esp32Sim.lines()` | The `Lines` of the profile's `[lines.<role>]` sets on the link; `BackendError` when the profile has none |
+| `Esp32Sim.set_up()` | What the test gave that only a run uses: `the replay of uart.gnss` per route with a source, `the level of modem.ri` per line the test drove |
 | `Esp32Sim.close()` | Ends the run; raises `BackendError` for a failing exit code, a killed runner or a link error |
 | `BackendError` | What keeps the backend from starting, or a failing end |
 | `HeldClock(step=STEP_NS)` | `esp32tl/backends/clock.py`: the link's `Hold`, `turn(now)`; `stop()`, `end(reason, at=None)`; the test's `now`, `wait(ns)`, `wait_until(condition, within_ns, description)` |
@@ -267,6 +275,7 @@ the first problem shows; the socket and the start come at `power_on()`, in the t
 | Message | Raised by | Cause |
 |---|---|---|
 | `the board profile {name} has no {interface}; its interfaces are {interfaces}` | `Esp32Sim.uart` | The `gnss` fixture on a route the profile does not have; `{interfaces}` is `BoardProfile.interfaces`, comma-separated |
+| `the board profile {name} has no lines; its interfaces are {interfaces}` | `Esp32Sim.lines` | The `lines` fixture on a profile without `[lines.<role>]` sets |
 | `{build} holds no ESP-IDF build: no flasher_args.json` | `load_app` | No `build/flasher_args.json` in the app |
 | `{build} is built for {app.target}; esp32sim runs the classic esp32` | `load_app` | Target other than `esp32` |
 | `{build} asks for flash encryption, which the runner does not do` | `load_app` | A flash file marked encrypted |
@@ -317,8 +326,9 @@ instance, is not a `BackendError` and fails the setup with its own traceback.
   `test_a_runner_that_exits_with_an_error_fails_the_test` (exit 1 and `SIGKILL`, `-9`: the call
   passes, the teardown errors), `test_a_failure_of_another_kind_does_not_hide_the_runner_s_exit`,
   `test_the_board_s_clock_and_sources_go_in_order`,
-  `test_a_source_the_backend_cannot_give_skips_at_the_call` and
-  `test_a_test_that_sets_up_a_source_and_never_powers_on_fails_at_teardown`.
+  `test_a_source_the_backend_cannot_give_skips_at_the_call`,
+  `test_a_test_that_sets_up_a_source_and_never_powers_on_fails_at_teardown` and
+  `test_the_lines_fixture_needs_a_profile_with_lines_and_a_drive_needs_power_on`.
 - `test_the_eof_tail_is_the_runner_s_last_whole_lines_without_colour`,
   `test_the_eof_tail_keeps_a_long_last_line` (no ending, `\n`, `\r\n`, and a log that cannot be
   read): `last_output`.
@@ -331,7 +341,9 @@ instance, is not a `BackendError` and fails the setup with its own traceback.
 - With a Python script that speaks the link protocol as the runner (`LINK_RUNNER`, through
   `link_runner`; `$FAKE_LINK` picks how it misbehaves):
   `test_the_backend_serves_the_link_and_ends_the_run_with_stop` (the report section and the
-  JSON user property in `--junitxml`), `test_every_route_of_the_profile_is_on_the_link`,
+  JSON user property in `--junitxml`), `test_every_route_and_line_of_the_profile_is_on_the_link`
+  (the LilyGO profile's `watch`; its pull-down in the first turn is checked in `tests/test_lines.py`
+  and `tests/test_gpio_echo.py`),
   `test_the_test_s_waits_move_the_board_s_clock` (`now`, `wait`, `wait_until`, `utc`),
   `test_a_mismatched_handshake_fails_the_test_with_both_sides_reasons` (exit 3, both reasons in
   the `RunEnded`), `test_a_link_the_harness_finds_wrong_fails_the_test_after_its_expects`,
@@ -344,8 +356,9 @@ instance, is not a `BackendError` and fails the setup with its own traceback.
   `test_a_held_run_whose_runner_is_gone_releases_the_link` (exit 4 in a held turn).
 
 `tests/test_clock.py` tests `HeldClock`, `nanoseconds` and `seconds` against a runner thread that
-feeds `BoardLink`. `tests/test_hello_world.py` and `tests/test_nmea_reader.py` run the real images
-on the real runner and ROM, `test_time_is_emulated` with `board.now` after the tenth fix.
+feeds `BoardLink`. `tests/test_hello_world.py`, `tests/test_nmea_reader.py` and
+`tests/test_gpio_echo.py` run the real images on the real runner and ROM, `test_time_is_emulated`
+with `board.now` after the tenth fix, `gpio_echo` with the LilyGO profile's pulled RI.
 `tests/test_gnss_fixture.py` runs `nmea_reader` with a replay, and the ordering errors above
 ([replay-technical.md](replay-technical.md#tests)).
 

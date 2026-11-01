@@ -26,8 +26,9 @@ the user sees is in [board-profiles-user.md](board-profiles-user.md).
    collection, and the profile is cached), passed to `Esp32Sim(..., profile)`, which keeps it as
    `Esp32Sim.profile` and gives its `name` and `chip` to the `BoardLink`, for the harness's `hello`
    ([esp32sim-backend-technical.md](esp32sim-backend-technical.md#data-flow)). Every `uart.*` route
-   becomes a `Uart` on the link, its `Wire` the route's `tx`, `rx` and `baud`; the profile's lines
-   are not on the link.
+   becomes a `Uart` on the link, its `Wire` the route's `tx`, `rx` and `baud`; every line of every
+   `[lines.<role>]` set is on one `Lines`, with its `pull`, which the link drives on the line from
+   power-on ([pytest-plugin-technical.md](pytest-plugin-technical.md#data-flow)).
 4. **A source, in the test body.** `gnss.replay(path)` asks the backend, through the `Uart`'s
    `asked`, for a `replay` on `uart.gnss`. `Esp32Sim._asked` builds `[Request(interface, source=source)]`,
    runs `capabilities.check` on it (a `CapabilityError` becomes a `SourceError` with its message),
@@ -69,7 +70,8 @@ No other key is allowed, at any level. A role, and a line's name, matches `[a-z]
 
 `[lines.<role>]` maps a line's name to its GPIO, either as an integer (`pwrkey = 4`) or as a table
 `{ pin = 33, pull = "down" }`, where `pull` is `up` or `down` and may be left out. A bare integer
-says nothing about the board's pull.
+says nothing about the board's pull. On `esp32sim` a pull is a level the harness drives on the line
+while the test does not, which the firmware's own output wins over.
 
 Across the profile, no two routes share a `port`, and no GPIO serves two uses (a route's `tx` and
 `rx`, a line). The `console` interface is not in the file, because every board has it, but it

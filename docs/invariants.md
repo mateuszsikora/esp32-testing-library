@@ -107,11 +107,12 @@ that references to its number keep their meaning.
     `tests/test_clock.py::test_a_condition_the_last_of_the_run_makes_true_still_holds`,
     `tests/test_clock.py::test_expect_finds_what_the_run_printed_after_it_has_ended`
 45. The runner starts at `board.power_on()`, not at setup: a test that never powers on starts no
-    runner, and one that set up a source and passed without powering on fails at teardown; a test
-    that failed, was skipped or xfailed keeps its one outcome. A wait before power-on raises
-    `BoardOff`, and a source after it `SourceError`.
+    runner, and one that set up a source or drove a line and passed without powering on fails at
+    teardown; a test that failed, was skipped or xfailed keeps its one outcome. A wait before
+    power-on raises `BoardOff`, and a source after it `SourceError`.
     `tests/test_pytest_plugin.py::test_the_board_runs_the_profile_the_test_chose_and_starts_no_runner_unpowered`,
     `tests/test_pytest_plugin.py::test_a_test_that_sets_up_a_source_and_never_powers_on_fails_at_teardown`,
+    `tests/test_pytest_plugin.py::test_the_lines_fixture_needs_a_profile_with_lines_and_a_drive_needs_power_on`,
     `tests/test_pytest_plugin.py::test_the_board_s_clock_and_sources_go_in_order`,
     `tests/test_gnss_fixture.py::test_a_source_given_out_of_order_fails_the_test`
 46. A source the backend's capability declaration does not give skips the test at the call that
@@ -122,8 +123,26 @@ that references to its number keep their meaning.
     `tests/test_pytest_plugin.py::test_a_test_that_uses_board_gets_a_wall_time_timeout_unless_one_is_set`,
     `tests/test_pytest_plugin.py::test_a_hung_run_is_ended_by_the_test_s_timeout`
 50. Every UART route of the board profile is on the link, listening and silent until the test gives
-    it a source: the harness's `hello` watches the pins of all of them.
-    `tests/test_pytest_plugin.py::test_every_route_of_the_profile_is_on_the_link`
+    it a source, and so is every GPIO line: the harness's `hello` watches the pins of all of them.
+    `tests/test_pytest_plugin.py::test_every_route_and_line_of_the_profile_is_on_the_link`
+51. A line the board profile pulls is at its pull while the test does not drive it: from power-on,
+    in every test on the profile, whether it uses `lines` or not, and again after `lines.release`.
+    On the LilyGO profile RI reads 0 with no modem at the far end (stage 0's gap 6).
+    `tests/test_gpio_echo.py::test_ri_reads_the_board_s_pull_down_from_power_on`,
+    `tests/test_gpio_echo.py::test_the_pull_holds_in_a_test_that_does_not_use_lines`,
+    `tests/test_cli.py::test_run_holds_the_board_s_pulls_on_its_lines`,
+    `tests/test_gpio_echo.py::test_the_firmware_follows_ri_and_drives_pwrkey`,
+    `tests/test_lines.py::test_the_board_s_pulls_go_out_in_the_first_turn_before_what_the_test_drives`,
+    `tests/test_lines.py::test_a_drive_and_a_release_go_out_at_the_instant_the_test_made_them`
+52. What the test drives on a line takes effect at the board's instant it drove it, `board.now`, or
+    from power-on when it drove it before; `lines.events()` holds every change of either end, a
+    change of the firmware's at the time the firmware made it, not at the next look of a wait. An
+    interface's GPIO input on a pin another interface is wired to fails the link with
+    `{interface} sent {type} on GPIO {pin}, which another interface is wired to`.
+    `tests/test_lines.py::test_a_drive_and_a_release_go_out_at_the_instant_the_test_made_them`,
+    `tests/test_gpio_echo.py::test_the_firmware_follows_ri_and_drives_pwrkey`,
+    `tests/test_gpio_echo.py::test_a_level_driven_before_power_on_holds_from_the_start`,
+    `tests/test_boardlink.py::test_an_input_the_runner_would_refuse_is_refused_naming_its_interface`
 
 ## The runner
 

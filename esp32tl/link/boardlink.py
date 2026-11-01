@@ -2,10 +2,10 @@
 
 It reads the runner's messages to end of file and writes only in its own turns, each ended by
 exactly one `wait` (`docs/protocol.md` §4; section numbers below are that document's). Events go
-to the interfaces on the pins they touch, as they arrive; what the interfaces answer, what they
-send unprompted and what the scenario timeline has due go out in the next turn, none stamped
-before its `sync`. The turn's `wait` bounds the next one with the minimum `quiet_until` and the
-minimum `latency` over the interfaces and the timeline, `None` counting as no bound (§7).
+to the interfaces on the pins they touch, as they arrive; what the interfaces answer, and what
+they send unprompted, bytes or GPIO levels, go out in the next turn, none stamped before its
+`sync`. The turn's `wait` bounds the next one with the minimum `quiet_until` and the minimum
+`latency` over the interfaces, `None` counting as no bound (§7).
 
 A link made with a `hold` asks it at the start of every turn, the first at `t = 0` before the
 guest's first instruction (§6, rule 4), and takes the turn only once it returns: the `esp32sim`
@@ -80,19 +80,25 @@ class Wire:
 
 
 class Interface:
-    """One wire of the board, as `BoardLink` drives it: a UART for now.
+    """One wire of the board, as `BoardLink` drives it: a UART on `wire`, or GPIO lines.
 
-    An interface receives `(t_ns, direction, bytes)` and returns `(t_ns, bytes)` (plan §3). It
-    sees times on the backend's clock and nothing else of the backend, so it cannot tell the
-    emulator from a real board but through that clock. The defaults are an interface with nothing
-    behind it: it hears everything and says nothing.
+    A UART interface receives `(t_ns, direction, bytes)` and returns `(t_ns, bytes)` (plan §3);
+    an interface without a `wire` has no UART, and sends GPIO levels through `inputs`. It sees
+    times on the backend's clock and nothing else of the backend, so it cannot tell the emulator
+    from a real board but through that clock. The defaults are an interface with nothing behind
+    it: it hears everything and says nothing.
 
     `BoardLink` calls it from the link's thread only, never while it is answering another call.
     """
 
-    def __init__(self, name: str, wire: Wire) -> None:
+    def __init__(self, name: str, wire: Wire | None) -> None:
         self.name = name
         self.wire = wire
+
+    @property
+    def pins(self) -> frozenset[int]:
+        """The GPIOs the interface is wired to, which the link watches: its wire's."""
+        return frozenset() if self.wire is None else self.wire.pins
 
     def receive(self, t: int, direction: Direction, data: bytes) -> Iterable[Output]:
         """`data` crossed the wire at `t`, `out` of the ESP32 (what the guest transmitted). The
@@ -104,6 +110,11 @@ class Interface:
     def poll(self, now: int) -> Iterable[Output]:
         """What the interface sends unprompted, asked at every turn; none stamped before `now`.
         Its outputs may lie in the future: the runner queues them (protocol §8)."""
+        return ()
+
+    def inputs(self, now: int) -> Iterable[Input]:
+        """The GPIO inputs (`gpio_in`, `release`) the interface sends in the turn at `now`, on
+        its own pins, asked at every turn after `poll`; none stamped before `now`."""
         return ()
 
     def quiet_until(self) -> int | None:
@@ -125,26 +136,8 @@ class Interface:
         and this is how a receive-only interface can tell one before the `frm_err` warning."""
 
     def driven(self, t: int, changes: Sequence[tuple[int, int]], enabled: frozenset[int]) -> None:
-        """The guest changed the output of this wire's pins at `t`: the `[pin, level]` changes in
-        the order written, and the pins whose output driver is enabled after them."""
-
-
-class Timeline(Protocol):
-    """Inputs scheduled at times of their own rather than in answer to the guest: the scenario."""
-
-    @property
-    def pins(self) -> frozenset[int]:
-        """The pins its inputs drive, watched from the handshake on: an input on a pin outside
-        `watch` is a protocol error (5.1)."""
-        ...
-
-    def due(self, now: int) -> Iterable[Input]:
-        """The inputs to send in the turn at `now`, none stamped before it."""
-        ...
-
-    def quiet_until(self) -> int | None:
-        """The time of the next input it holds back, asked after `due(now)`; `None` when none."""
-        ...
+        """The guest changed the output of this interface's pins at `t`: the `[pin, level]`
+        changes in the order written, and the pins whose output driver is enabled after them."""
 
 
 class Hold(Protocol):
@@ -159,11 +152,10 @@ class Hold(Protocol):
 
 class LinkError(Exception):
     """What the harness found wrong with the run: the runner broke the protocol, or an
-    interface or the scenario broke its promises or raised."""
+    interface broke its promises or raised."""
 
 
-# How errors name the timeline, the hold and the console's reader.
-SCENARIO = "the scenario"
+# How errors name the hold and the console's reader.
 HOLD = "the test's clock"
 CONSOLE = "the console"
 
@@ -175,12 +167,11 @@ UART_RX_CHUNK = 512 * 1024
 
 class BoardLink:
     """The link to one run of the runner, on the board profile `board` of `chip`, with its
-    `interfaces` and the scenario's `timeline`. `watch`, sent in the harness's `hello`, is their
-    pins. `on_error` is called once, from the link's thread, when the harness finds the run
-    wrong, so that the backend can end the run without waiting for the runner's next turn.
-    `hold` holds every turn until it returns, and bounds the next. `console` is called with the
-    `t` and the bytes of every `console` message. With `clock`, a runner whose `hello` names
-    another clock fails the link."""
+    `interfaces`. `watch`, sent in the harness's `hello`, is their pins. `on_error` is called
+    once, from the link's thread, when the harness finds the run wrong, so that the backend can
+    end the run without waiting for the runner's next turn. `hold` holds every turn until it
+    returns, and bounds the next. `console` is called with the `t` and the bytes of every
+    `console` message. With `clock`, a runner whose `hello` names another clock fails the link."""
 
     def __init__(
         self,
@@ -188,7 +179,6 @@ class BoardLink:
         interfaces: Sequence[Interface] = (),
         *,
         chip: str = "esp32",
-        timeline: Timeline | None = None,
         on_error: Callable[[str], None] | None = None,
         hold: Hold | None = None,
         console: Callable[[int, bytes], None] | None = None,
@@ -196,7 +186,11 @@ class BoardLink:
     ) -> None:
         owners: dict[int, str] = {}
         for interface in interfaces:
-            for pin in interface.wire.pins:
+            for pin in interface.pins:
+                if isinstance(pin, bool) or not isinstance(pin, int) or pin < 0:
+                    raise ValueError(
+                        f"the pins of {interface.name} hold {pin!r}, not a GPIO number"
+                    )
                 if pin in owners:
                     raise ValueError(f"GPIO {pin} is on {owners[pin]} and {interface.name}")
                 owners[pin] = interface.name
@@ -204,13 +198,7 @@ class BoardLink:
         self.chip = chip
         self.clock = clock
         self.interfaces = tuple(interfaces)
-        self.timeline = timeline
-        # The scenario drives pins of interfaces, or pins of its own.
-        scenario_pins = frozenset(timeline.pins) if timeline is not None else frozenset()
-        for pin in scenario_pins:
-            if isinstance(pin, bool) or not isinstance(pin, int) or pin < 0:
-                raise ValueError(f"the scenario's pins hold {pin!r}, not a GPIO number")
-        self._watched = frozenset(owners) | scenario_pins
+        self._watched = frozenset(owners)
         self.watch = tuple(sorted(self._watched))
         self.on_error = on_error
         self.hold = hold
@@ -360,7 +348,8 @@ class BoardLink:
 
     def _uart_tx(self, message: UartTx) -> None:
         for interface in self.interfaces:
-            if interface.wire.tx is not None and interface.wire.tx in message.tx_pins:
+            wire = interface.wire
+            if wire is not None and wire.tx is not None and wire.tx in message.tx_pins:
                 with calling(interface.name, "receive"):
                     answers = _outputs(
                         interface.name, "receive", interface.receive(message.t, "out", message.data)
@@ -371,6 +360,8 @@ class BoardLink:
         self._routes[message.port] = message
         for index, interface in enumerate(self.interfaces):
             wire = interface.wire
+            if wire is None:
+                continue
             baud, transmits, receives = None, False, False
             # Over every port: two of them can share a wire, one transmitting, one receiving.
             for route in self._routes.values():
@@ -394,9 +385,12 @@ class BoardLink:
         dropped = "bytes" if warning.nbytes is None else _count(warning.nbytes, "byte")
         pin = warning.pin
         owner = (
-            None if pin is None else next((i for i in self.interfaces if i.wire.rx == pin), None)
+            None
+            if pin is None
+            else next((i for i in self.interfaces if i.wire is not None and i.wire.rx == pin), None)
         )
         if owner is not None:
+            assert owner.wire is not None
             sender = f"{owner.name} sends at {owner.wire.baud} baud on GPIO {pin}"
         elif pin is not None:
             sender = f"bytes on GPIO {pin}"
@@ -409,7 +403,7 @@ class BoardLink:
 
     def _gpio_out(self, message: GpioOut) -> None:
         for interface in self.interfaces:
-            pins = interface.wire.pins
+            pins = interface.pins
             changes = [(pin, level) for pin, level in message.changes if pin in pins]
             enabled = pins & frozenset(message.enabled)
             # An enable-only change comes with empty changes (5.4).
@@ -435,7 +429,7 @@ class BoardLink:
             with calling(interface.name, "poll"):
                 polled = _outputs(interface.name, "poll", interface.poll(now))
             outputs += [(interface, t, data) for t, data in polled]
-        inputs: list[tuple[str, Input]] = []
+        inputs: list[tuple[Interface, Input]] = []
         for interface, t, data in outputs:
             if not data:
                 continue
@@ -444,22 +438,18 @@ class BoardLink:
                     f"{interface.name} sent bytes stamped {t} ns in the turn at {now} ns: it"
                     " answered sooner than its latency, or sent past its quiet_until"
                 )
-            if interface.wire.rx is None:
+            wire = interface.wire
+            if wire is None or wire.rx is None:
                 raise LinkError(f"{interface.name} sent bytes, and has no RX pin to send them on")
-            inputs += [
-                (interface.name, UartRx(t, interface.wire.rx, interface.wire.baud, chunk))
-                for chunk in _chunks(data)
-            ]
+            inputs += [(interface, UartRx(t, wire.rx, wire.baud, chunk)) for chunk in _chunks(data)]
+        for interface in self.interfaces:
+            with calling(interface.name, "inputs"):
+                inputs += [(interface, message) for message in interface.inputs(now)]
         for interface in self.interfaces:
             with calling(interface.name, "quiet_until"):
                 bounds.append((interface.name, interface.quiet_until()))
-        if self.timeline is not None:
-            with calling(SCENARIO, "due"):
-                inputs += [(SCENARIO, message) for message in self.timeline.due(now)]
-            with calling(SCENARIO, "quiet_until"):
-                bounds.append((SCENARIO, self.timeline.quiet_until()))
-        for source, message in inputs:
-            self._check_input(source, message, now)
+        for interface, message in inputs:
+            self._check_input(interface, message, now)
         quiet_until = None
         for name, bound in bounds:
             if bound is None:
@@ -483,9 +473,11 @@ class BoardLink:
             latency = bound if latency is None else min(latency, bound)
         return [*(message for _, message in inputs), Wait(self._seq, quiet_until, latency)]
 
-    def _check_input(self, source: str, message: Input, now: int) -> None:
-        """Refuses, naming its source, an input the runner would refuse: one that is not a
-        message of version 1, one stamped before the turn, one on a pin the link does not watch."""
+    def _check_input(self, interface: Interface, message: Input, now: int) -> None:
+        """Refuses, naming the interface that sent it, an input the runner would refuse: one that
+        is not a message of version 1, one stamped before the turn, one on a pin the link does not
+        watch; and one on a pin another interface is wired to, which the runner would take."""
+        source = interface.name
         if not isinstance(message, UartRx | GpioIn | Release | Adc):
             raise LinkError(f"{source} sent {message!r}, which is not an input")
         try:
@@ -510,6 +502,11 @@ class BoardLink:
             raise LinkError(
                 f"{source} sent {message.TYPE} on {_pins(sorted(pins - self._watched))}, which"
                 " the link does not watch"
+            )
+        if not pins <= interface.pins:
+            raise LinkError(
+                f"{source} sent {message.TYPE} on {_pins(sorted(pins - interface.pins))}, which"
+                " another interface is wired to"
             )
 
     def _fail(self, reason: str, cause: BaseException | None = None, notify: bool = True) -> None:

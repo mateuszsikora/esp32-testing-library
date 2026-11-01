@@ -68,6 +68,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The GNSS recording generator lives in scripts/ with a rule of its own](firmware.md#the-gnss-recording-generator-lives-in-scripts-with-a-rule-of-its-own) | `firmware.md` | decided (#15) |
 | [nmea_reader is tested through a bare socket peer until the gnss fixture exists](firmware.md#nmea_reader-is-tested-through-a-bare-socket-peer-until-the-gnss-fixture-exists) | `firmware.md` | superseded (#16) |
 | [nmea_reader is tested through the gnss fixture](firmware.md#nmea_reader-is-tested-through-the-gnss-fixture) | `firmware.md` | decided (#16) |
+| [gpio_echo reads RI and drives PWRKEY, on the LilyGO profile](firmware.md#gpio_echo-reads-ri-and-drives-pwrkey-on-the-lilygo-profile) | `firmware.md` | decided (#24) |
 
 ## The esp32tl package and its pytest plugin
 
@@ -135,6 +136,11 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [A TLS stack with a seeded random source is postponed](harness.md#a-tls-stack-with-a-seeded-random-source-is-postponed) | `harness.md` | postponed (#68) |
 | [Flash contents besides the build go into a partition of the build's own table, by name](harness.md#flash-contents-besides-the-build-go-into-a-partition-of-the-builds-own-table-by-name) | `harness.md` | decided (#64) |
 | [The LilyGO profile takes its GNSS route, flash and PSRAM from LilyGO's documentation](harness.md#the-lilygo-profile-takes-its-gnss-route-flash-and-psram-from-lilygos-documentation) | `harness.md` | decided (#64) |
+| [GPIO lines are an interface of the link, and the scenario timeline is gone](harness.md#gpio-lines-are-an-interface-of-the-link-and-the-scenario-timeline-is-gone) | `harness.md` | decided (#24) |
+| [A board's pull is a level the harness drives on the line](harness.md#a-boards-pull-is-a-level-the-harness-drives-on-the-line) | `harness.md` | decided (#24) |
+| [The lines fixture names a line by its GPIO or its role, and reads the firmware's side](harness.md#the-lines-fixture-names-a-line-by-its-gpio-or-its-role-and-reads-the-firmwares-side) | `harness.md` | decided (#24) |
+| [The lines declare no latency, and a wait sees a line's change at its next look](harness.md#the-lines-declare-no-latency-and-a-wait-sees-a-lines-change-at-its-next-look) | `harness.md` | decided (#24) |
+| [Whether a backend can drive a board's lines is not declared yet](harness.md#whether-a-backend-can-drive-a-boards-lines-is-not-declared-yet) | `harness.md` | postponed (#25) |
 
 ## The runner crate and esp32sim
 
