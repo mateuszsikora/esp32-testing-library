@@ -5,11 +5,14 @@ The tests that run pytest inside pytest do it in a subprocess: pytest-embedded s
 multiprocessing manager for every session.
 """
 
+import contextlib
 import gc
 import hashlib
 import json
+import os
 import re
 import shutil
+import signal
 import sys
 import time
 import warnings
@@ -987,7 +990,8 @@ def test_hello_world_fails_on_an_image_that_prints_something_else(
 # others make it misbehave: `version` sends a hello of version 2, and exits 3 once it has
 # the harness's answer; `late` sends an event out of sequence after the console line; `deaf`
 # ignores the harness and SIGTERM after that line; `stall` takes no turn after it until SIGTERM;
-# `linger` leaves a child holding the link open after it exits; `slow` loads for half a second
+# `linger` leaves a child holding the link open for 30 s after it exits, and writes the child's pid
+# to `linger.pid` beside the runner; `slow` loads for half a second
 # before it connects, and dies of SIGTERM until then, as the real runner does; `gone` exits 4 in
 # turn 0 without reading it, as the real runner does when the harness is gone. $FAKE_WATCH is the
 # pins the harness's hello must watch, comma-separated: the default profile's GNSS route's.
@@ -998,6 +1002,7 @@ import socket
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 from esp32tl.link import protocol as p
 
@@ -1024,7 +1029,8 @@ def end(how, code, detail=None):
     send(p.Stats(now, how, 0, 1, (), 72, 0, 0, 0, detail=detail))
     if mode == "linger":
         os.set_inheritable(conn.fileno(), True)
-        subprocess.Popen(["sleep", "3"], close_fds=False)
+        child = subprocess.Popen(["sleep", "30"], close_fds=False)
+        Path(sys.argv[0]).with_name("linger.pid").write_text(str(child.pid))
     conn.close()
     print(f"esp32tl-runner: the run ended: {{how}}", file=sys.stderr)
     sys.exit(code)
@@ -1431,10 +1437,19 @@ def test_a_link_left_open_after_the_runner_exits_is_shut_down(
         esp32sim.EXIT_SECONDS = 0.5
         """
     )
+    child = link_runner.path / "linger.pid"
     started = time.monotonic()
-    result = link_runner.runpytest_subprocess("-p", "no:cacheprovider", "-rA")
-    # A child of the runner holds the link for 3 s; the teardown does not wait for it.
-    assert time.monotonic() - started < 3
+    try:
+        result = link_runner.runpytest_subprocess("-p", "no:cacheprovider", "-rA")
+        # A child of the runner holds the link for 30 s; the teardown does not wait for it. The
+        # whole run, pytest's start-up included, takes a few seconds: 15 leaves room for a loaded
+        # machine, and is still half the hold. The child is there still, and holds the link.
+        assert time.monotonic() - started < 15
+        os.kill(int(child.read_text()), 0)
+    finally:
+        # Nothing else ends it before its 30 s are up.
+        with contextlib.suppress(FileNotFoundError, ProcessLookupError):
+            os.kill(int(child.read_text()), signal.SIGKILL)
     result.assert_outcomes(passed=1)
     result.stdout.fnmatch_lines(["stats: the run ended at 0.100000000 s (stop); *"])
 
