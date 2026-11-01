@@ -313,6 +313,16 @@ def test_the_units_and_the_models_belong_to_their_documents(repo: Path) -> None:
     assert passes(run(repo))
 
 
+def test_the_bluetooth_peer_belongs_to_its_documents(repo: Path) -> None:
+    write(repo, "esp32tl/bluetooth/peer.py", '"""Peer."""\n')
+    commit(repo)
+    result = run(repo)
+    assert result.stdout.count("[F18]") == 1
+    assert "[F12]" not in result.stdout
+    write(repo, "docs/features/bluetooth-peer-user.md", "# Bluetooth peer\n")
+    assert passes(run(repo))
+
+
 def test_an_unowned_package_path_needs_a_feature_doc(repo: Path) -> None:
     write(repo, "esp32tl/matching.py", '"""Matching."""\n')
     write(repo, "esp32tl/py.typed", "\n")

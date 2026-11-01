@@ -611,6 +611,13 @@ a Bumble virtual link without the emulator. Then:
 - Validation: `bt_spp_initiator` against a modelled and a replayed peer; real path with
   `controller_hci_uart_esp32` on a second board.
 
+*Update, 2026-11-01:* the Bumble-based peer is done in #33, without the emulator: `SppPeer` on an
+`Air` whose loop runs on the board's clock, answered by a `Source` as a UART's far end is, rather
+than replayed through the matching engine, which waits for #20. Bumble 0.0.236's virtual controller
+has no inquiry, legacy pairing or Classic encryption, so esp32tl's controller adds them
+([decisions](decisions/harness.md#esp32tl-adds-inquiry-legacy-pairing-key-checks-and-encryption-to-bumbles-virtual-controller));
+the controller for the ESP32's side is still #34's to choose.
+
 ### M9. Deep sleep and time skip
 
 - Upstream issue for the missing timer wake (esp32sim notes LACT sleep-time stepping as not

@@ -15,7 +15,10 @@ requires-python = ">=3.11"
 # pytest-embedded-serial-esp and, through it, pytest-embedded-serial.
 # pytest-timeout ends a test whose run hangs: the runner waits for the test for as long as its body
 # runs, so the plugin gives every test that uses `board` a wall-time timeout.
+# bumble is the Bluetooth stack of the peers in esp32tl.bluetooth; pinned exactly, because at
+# 0.0.x any release may change the internals esp32tl/bluetooth/controller.py and peer.py replace.
 dependencies = [
+    "bumble==0.0.236",
     "pytest>=8",
     "pytest-embedded~=2.9.3",
     "pytest-embedded-idf[serial]~=2.9.3",

@@ -1,0 +1,231 @@
+"""The air around the board: Bumble's controllers on one virtual link, run on the board's clock.
+
+Bumble is written for asyncio, and its controllers, hosts and timers take their time from the
+event loop. `Air` runs them on a `BoardLoop`, whose `time()` is the board's time and never the
+host's, and moves that time only in `advance`: it runs everything due at one instant until nothing
+is left to do there, then goes to the next instant something is due, a timer of the loop or a
+party's `quiet_until`, as the link goes from turn to turn. Times are nanoseconds on the board's
+clock. Nothing here reads the host's clock, so two runs do the same at the same instants.
+"""
+
+import asyncio
+import math
+import selectors
+from collections.abc import Awaitable, Callable, Coroutine
+from typing import Any, Protocol, TypeVar
+
+from bumble.link import LocalLink
+
+from esp32tl.backends.clock import nanoseconds, seconds
+from esp32tl.interfaces import NeverHappened
+from esp32tl.units import Duration
+
+T = TypeVar("T")
+
+
+class AirError(RuntimeError):
+    """Something on the air failed while time moved: a callback or a task raised, or a party
+    asked to be woken at an instant that has passed. Raised to whoever moved the time."""
+
+
+class Party(Protocol):
+    """Something on the air with a schedule of its own besides the loop's timers: a peer whose
+    source answers at times it chooses. `poll` runs inside the loop at every instant the air
+    stops at; `quiet_until` is the next instant it needs one, later than the current one."""
+
+    def poll(self, now: int) -> None: ...
+
+    def quiet_until(self) -> int | None: ...
+
+
+class _Selector(selectors.DefaultSelector):
+    """The loop's selector, which never blocks: a timeout other than 0 means the loop has
+    nothing left to do at this instant, so the selector stops it and notes how far away its
+    next timer is (`None` for none)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.loop: BoardLoop | None = None
+        self.idle = False
+        self.next_in: float | None = None
+
+    def select(self, timeout: float | None = None) -> list[tuple[Any, int]]:
+        events: list[tuple[Any, int]] = super().select(0)
+        if timeout is None or timeout > 0:
+            assert self.loop is not None
+            self.idle = True
+            self.next_in = timeout
+            self.loop.stop()
+        return events
+
+
+class BoardLoop(asyncio.SelectorEventLoop):
+    """An asyncio loop on the board's clock: `time()` is `now`, in seconds, and only `Air`
+    moves it. `run_idle` runs it until nothing is left to do at `now`."""
+
+    def __init__(self) -> None:
+        selector = _Selector()
+        super().__init__(selector)
+        selector.loop = self
+        self._idle_selector = selector
+        self.now = 0
+        self._clock_resolution = 1e-9
+
+    def time(self) -> float:
+        return self.now / 1e9
+
+    def run_idle(self) -> int | None:
+        """Runs what is due at `now` until nothing is left; returns the time of the loop's next
+        timer, `None` for none."""
+        selector = self._idle_selector
+        selector.idle = False
+        self.run_forever()
+        if not selector.idle or selector.next_in is None:
+            return None
+        # A float of seconds: at least a nanosecond on, so that a timer whose time rounds to
+        # this instant still moves the air.
+        return max(math.ceil((self.now / 1e9 + selector.next_in) * 1e9), self.now + 1)
+
+
+class Air:
+    """One virtual Bluetooth link, and the loop its controllers run on, at the board's time.
+
+    The air's time starts at 0 when it is made and moves only in `advance`, `wait` and `run`.
+    What fails on the air, a callback, a task, a party, is raised from the call that moved the
+    time, as an `AirError` whose cause is the failure.
+    """
+
+    def __init__(self) -> None:
+        self.loop = BoardLoop()
+        self.loop.set_exception_handler(self._failed)
+        # Bumble's LocalLink leaves its constructor unannotated.
+        self.link = LocalLink()  # type: ignore[no-untyped-call]
+        self._parties: list[Party] = []
+        self._next_timer: int | None = None
+        self._error: BaseException | None = None
+        # asyncio's description of where `_error` was raised; empty for one given to `fail`.
+        self._error_context = ""
+
+    @property
+    def now(self) -> Duration:
+        """The board's time on the air."""
+        return Duration(self.loop.now)
+
+    def join(self, party: Party) -> None:
+        """`party` is polled at every instant the air stops at from now on, the current one
+        first, so that what it has due now is sent before anyone asks the air's next instant."""
+        self._parties.append(party)
+        self._settle()
+
+    def call(self, function: Callable[[], T]) -> T:
+        """`function`, called inside the loop at the current instant, and everything it sets
+        off there; returns what it returned."""
+        result: list[T] = []
+        self.loop.call_soon(lambda: result.append(function()))
+        # A function that raised fails the settle.
+        self._settle()
+        return result[0]
+
+    def start(self, coroutine: Coroutine[Any, Any, T]) -> "asyncio.Task[T]":
+        """A task for `coroutine` on the loop, run as far as it goes at the current instant."""
+        return self.call(lambda: self.loop.create_task(coroutine))
+
+    def fail(self, error: Exception) -> None:
+        """Fails the air with `error`, whose message says all: the call that moved the time
+        raises an `AirError` with that message. For a party, inside the loop."""
+        if self._error is None:
+            self._error = error
+            self._error_context = ""
+
+    def quiet_until(self) -> int | None:
+        """The next instant something on the air is due: the loop's next timer or a party's
+        `quiet_until`; `None` when nothing is. A party that raises fails the air."""
+        times = [self._next_timer]
+        for party in self._parties:
+            try:
+                times.append(party.quiet_until())
+            except Exception as error:
+                self.fail(error)
+                raise AirError(str(error)) from error
+        due = [t for t in times if t is not None]
+        return min(due) if due else None
+
+    def advance(self, until: Duration) -> None:
+        """Moves the air's time to `until`, a `Duration` since the air was made, stopping at
+        every instant on the way that something is due at."""
+        self._advance(nanoseconds(until, "air.advance"))
+
+    def _advance(self, until: int) -> None:
+        if until < self.loop.now:
+            raise ValueError(
+                f"the air is at {seconds(self.loop.now)}: it cannot go back to {seconds(until)}"
+            )
+        self._settle()
+        while (next_time := self.quiet_until()) is not None and next_time <= until:
+            if next_time <= self.loop.now:
+                raise AirError(
+                    f"something on the air is due at {seconds(next_time)}, and the air is at"
+                    f" {seconds(self.loop.now)} already"
+                )
+            self.loop.now = next_time
+            self._settle()
+        self.loop.now = until
+        self._settle()
+
+    def wait(self, duration: Duration) -> None:
+        """Lets the air run for `duration` from now."""
+        self._advance(self.loop.now + nanoseconds(duration, "air.wait"))
+
+    def run(self, awaitable: Awaitable[T], *, within: Duration, description: str = "") -> T:
+        """Runs `awaitable` on the loop until it completes, for at most `within` of the board's
+        time from now; returns its result, or raises what it raised. When `within` runs out
+        first, the task is cancelled and `NeverHappened` names `description`."""
+        limit = nanoseconds(within, "air.run: within")
+
+        async def awaited() -> T:
+            return await awaitable
+
+        start = self.loop.now
+        deadline = start + limit
+        task = self.start(awaited())
+        while not task.done():
+            next_time = self.quiet_until()
+            if next_time is None or next_time > deadline:
+                self._advance(deadline)
+                if task.done():
+                    break
+                task.cancel()
+                self._settle()
+                what = description or "the awaitable"
+                raise NeverHappened(
+                    f"{what} did not complete within {seconds(limit)}: waited from"
+                    f" {seconds(start)} to {seconds(self.loop.now)} of the board's time"
+                )
+            self._advance(next_time)
+        return task.result()
+
+    def close(self) -> None:
+        """Closes the loop: the air is over."""
+        if not self.loop.is_closed():
+            self.loop.close()
+
+    def _settle(self) -> None:
+        """Runs the loop at the current instant until nothing is left to do there, the parties
+        polled first; raises what failed meanwhile."""
+        if self._error is None:
+            now = self.loop.now
+            for party in self._parties:
+                self.loop.call_soon(party.poll, now)
+            self._next_timer = self.loop.run_idle()
+        if self._error is not None:
+            error = self._error
+            message = f"{self._error_context}: {error}" if self._error_context else str(error)
+            raise AirError(message) from error
+
+    def _failed(self, loop: asyncio.AbstractEventLoop, context: dict[str, Any]) -> None:
+        if self._error is None:
+            exception = context.get("exception")
+            if exception is None:
+                self._error, self._error_context = AirError(context["message"]), ""
+            else:
+                self._error, self._error_context = exception, context.get("message", "")
