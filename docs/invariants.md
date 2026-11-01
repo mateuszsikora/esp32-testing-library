@@ -61,9 +61,11 @@ that references to its number keep their meaning.
     pull-down on RI of stage 0's gap 6.
     `tests/test_boards.py::test_the_lilygo_profile_holds_only_what_the_specification_gives`
 28. A profile that breaks the schema is refused with the file and the key at fault; a UART's TX is
-    never an input-only GPIO, and no GPIO serves two uses, the console's UART0 on GPIO 1 and 3
+    never an input-only GPIO, nor is an SD card slot's SCLK, MOSI or CS, though its MISO may be;
+    and no GPIO serves two uses, the console's UART0 on GPIO 1 and 3 and the slot's four pins
     counted.
-    `tests/test_boards.py::test_a_profile_that_breaks_the_schema_is_refused_with_the_key`
+    `tests/test_boards.py::test_a_profile_that_breaks_the_schema_is_refused_with_the_key`,
+    `tests/test_boards.py::test_an_sd_card_slot_may_take_an_input_only_pin_for_miso`
 
 ## The esp32sim backend
 
@@ -113,7 +115,9 @@ that references to its number keep their meaning.
     `tests/test_pytest_plugin.py::test_the_board_runs_the_profile_the_test_chose_and_starts_no_runner_unpowered`,
     `tests/test_pytest_plugin.py::test_a_test_that_sets_up_a_source_and_never_powers_on_fails_at_teardown`,
     `tests/test_pytest_plugin.py::test_the_board_s_clock_and_sources_go_in_order`,
-    `tests/test_gnss_fixture.py::test_a_source_given_out_of_order_fails_the_test`
+    `tests/test_gnss_fixture.py::test_a_source_given_out_of_order_fails_the_test`; the same holds
+    for a card in the SD card slot.
+    `tests/test_sdspi.py::test_the_slot_used_out_of_order_fails_the_test`
 46. A source the backend's capability declaration does not give skips the test at the call that
     asks for it, reported at the test; one that no backend gives fails the test with `SourceError`.
     `tests/test_pytest_plugin.py::test_a_source_the_backend_cannot_give_skips_at_the_call`
@@ -124,6 +128,12 @@ that references to its number keep their meaning.
 50. Every UART route of the board profile is on the link, listening and silent until the test gives
     it a source: the harness's `hello` watches the pins of all of them.
     `tests/test_pytest_plugin.py::test_every_route_of_the_profile_is_on_the_link`
+52. A card in the SD card slot writes through to the test's own image file: what the firmware
+    wrote is in the file, readable with mtools, and a card the firmware only reads leaves the file
+    as it was. The runner gets the card only once the test inserts one.
+    `tests/test_sdspi.py::test_the_example_writes_its_files_into_the_image`,
+    `tests/test_sdspi.py::test_a_card_without_a_file_system_does_not_mount`,
+    `tests/test_pytest_plugin.py::test_runner_command_puts_a_card_in_the_slot_once_the_test_inserts_one`
 
 ## The runner
 
@@ -182,6 +192,12 @@ that references to its number keep their meaning.
 42. A harness `hello` whose `watch` holds a pin the classic chip does not have (24, 28 to 31, 40
     and above) is a protocol error at the handshake, before the guest runs.
     `runner/src/session/tests.rs::a_handshake_mismatch_is_a_protocol_error_with_stats`
+51. The SD card hears a transaction only while its CS pin is a low output and its SCLK pin carries
+    the master's clock, and the chip reads its answer only through the card's MISO pin; until a
+    CMD0 with a good CRC it answers nothing. A card not selected leaves every byte at 0xff.
+    `runner/src/sd_card/tests.rs::a_card_not_selected_or_not_clocked_hears_nothing`,
+    `runner/src/sd_card/tests.rs::without_miso_the_chip_reads_high_but_the_card_listens`,
+    `runner/src/sd_card/tests.rs::checks_crcs_of_cmd0_and_cmd8_always_and_of_the_rest_after_cmd59`
 
 ## Recordings and replay
 
@@ -240,6 +256,9 @@ that references to its number keep their meaning.
     `flasher_args.json`, leaves none.
     `tests/test_firmware_build.py::test_failed_build_unmarks_a_finished_one`,
     `tests/test_firmware_build.py::test_build_fails_without_flasher_args`
+53. `sdspi` is ESP-IDF's example unmodified: its SD card pins are the `esp32-devkitc` profile's
+    slot, and it formats no card.
+    `tests/test_firmware_images.py::test_sdspi_takes_the_devkit_sd_card_slot_from_sdkconfig`
 
 ## Documentation
 

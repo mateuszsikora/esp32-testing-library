@@ -14,6 +14,8 @@ from esp32tl.interfaces import SourceError
 
 # The capacity unit of a high capacity card (CSD C_SIZE): an image is a whole number of them.
 UNIT = 512 * 1024
+# The most a card holds: 2^22 units (CSD C_SIZE).
+MAX_SIZE = UNIT << 22
 
 
 class SdCard:
@@ -41,9 +43,9 @@ class SdCard:
 
     def insert(self, image: str | os.PathLike[str]) -> Path:
         """Puts a card holding the image file `image` in the slot, before `board.power_on()`.
-        The firmware's writes go into the file. The image is a whole number of 512 KiB units, at
-        least one; its contents are the test's, a FAT file system or anything else. Returns the
-        image's absolute path."""
+        The firmware's writes go into the file, which must be readable and writable. The image is
+        a whole number of 512 KiB units, from one to 2 TiB; its contents are the test's, a FAT
+        file system or anything else. Returns the image's absolute path."""
         if self.image is not None:
             raise SourceError(f"{self.name} has a card already: one per test")
         self.asked(self.name, "model")
@@ -58,6 +60,15 @@ class SdCard:
             raise SourceError(
                 f"{self.name}: {path} has {size} bytes; an SD card image is a whole number of"
                 " 512 KiB units"
+            )
+        if size > MAX_SIZE:
+            raise SourceError(
+                f"{self.name}: {path} has {size} bytes; an SD card image is at most 2 TiB"
+            )
+        # The card writes into it, and the runner opens it for writing at power-on.
+        if not os.access(path, os.R_OK | os.W_OK):
+            raise SourceError(
+                f"{self.name}: {path} cannot be read and written: the card writes into it"
             )
         self.image = path
         return path

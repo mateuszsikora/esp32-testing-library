@@ -143,7 +143,8 @@ def test_the_example_writes_its_files_into_the_image(tmp_path, board, sd_card, c
 
 - `sd_card.insert(image)` puts a card holding the image file in the slot, before
   `board.power_on()`, and returns the image's absolute path. The path is relative to the test
-  file's directory. The image is a whole number of 512 KiB units; what is in it is the test's,
+  file's directory. The image is a whole number of 512 KiB units, up to 2 TiB, readable and
+  writable; what is in it is the test's,
   usually a FAT file system made with mtools (`mformat`, `mcopy`).
 - On `esp32sim` the card is the runner's model of an SD card in SPI mode, on the slot's pins
   ([runner](runner-user.md#put-an-sd-card-in)). It writes what the firmware writes into the file
@@ -155,8 +156,10 @@ def test_the_example_writes_its_files_into_the_image(tmp_path, board, sd_card, c
   (`sd_card: the board is on already: give an interface its source before board.power_on()`), a
   second call (`sd_card has a card already: one per test`), an image that is not there
   (`sd_card: no image at PATH: No such file or directory`) or not a file
-  (`sd_card: PATH is not a file`), and one of another size
-  (`sd_card: PATH has N bytes; an SD card image is a whole number of 512 KiB units`).
+  (`sd_card: PATH is not a file`), one of another size
+  (`sd_card: PATH has N bytes; an SD card image is a whole number of 512 KiB units`), one above
+  2 TiB (`sd_card: PATH has N bytes; an SD card image is at most 2 TiB`), and one the test cannot
+  read and write (`sd_card: PATH cannot be read and written: the card writes into it`).
 - On a board profile without a slot, `sd_card` is an error at setup:
   `esp32sim: the board profile lilygo-t-a7670g-r2 has no sd_card; its interfaces are console, uart.modem, lines.modem`.
 - The card stays in from power-on to the end of the run: inserting or removing it while the

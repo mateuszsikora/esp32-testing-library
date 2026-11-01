@@ -38,7 +38,7 @@ ESP32TL_RUNNER=runner/target/debug/esp32tl-runner .venv/bin/pytest
   `board_profile` and `tap` itself, and pytest-timeout `timeout`; `requires_docker` and
   `requires_mtools` are registered here.
 - `markers`: `requires_docker: needs a Docker daemon`, `requires_mtools: needs mtools (mformat,
-  mcopy, mdir)`.
+  mcopy, mdir, mtype)`.
 - `filterwarnings` ignores `record_xml_attribute is an experimental feature`
   (`pytest.PytestExperimentalApiWarning`), which pytest-embedded's `app_path` fixture causes on every
   test.
@@ -71,10 +71,10 @@ No test of the suite carries the marker. The only marked tests are the ones
 `tests/test_firmware_build.py` generates to test the marker itself.
 
 A test that makes or reads a FAT image carries `@pytest.mark.requires_mtools`: the same hook
-checks once (`mtools_missing`) that `mformat`, `mcopy` and `mdir` are on `PATH`, and skips every
-marked test without them, with the reason `requires_mtools: no mformat, mcopy, mdir on PATH
-(mtools)`, naming those missing. The tests of `tests/test_sdspi.py` carry it. In CI the test job
-installs mtools first, so there they run ([cicd.md](../cicd.md#test)).
+checks once (`mtools_missing`) that `mformat`, `mcopy`, `mdir` and `mtype` are on `PATH`, and
+skips every marked test without them, with the reason `requires_mtools: no mformat, mcopy, mdir,
+mtype on PATH (mtools)`, naming those missing. The tests of `tests/test_sdspi.py` carry it. In
+CI the test job installs mtools first, so there they run ([cicd.md](../cicd.md#test)).
 
 ## What each test file needs
 

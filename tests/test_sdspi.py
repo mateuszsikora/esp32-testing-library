@@ -125,6 +125,11 @@ def test_the_slot_used_out_of_order_fails_the_test(
             (tmp_path / "short.img").write_bytes(bytes(1000))
             sd_card.insert(tmp_path / "short.img")
 
+        def test_a_read_only_image(sd_card, tmp_path):
+            (tmp_path / "ro.img").write_bytes(bytes(512 << 10))
+            (tmp_path / "ro.img").chmod(0o444)
+            sd_card.insert(tmp_path / "ro.img")
+
         @pytest.mark.board_profile("lilygo-t-a7670g-r2")
         def test_no_slot(sd_card):
             pass
@@ -133,7 +138,7 @@ def test_the_slot_used_out_of_order_fails_the_test(
     result = pytester.runpytest_subprocess("-p", "no:cacheprovider", "-rA")
     # test_never_powered passes its call and errors at teardown; test_two_cards fails on its call
     # only, as the other calls that raise.
-    result.assert_outcomes(passed=1, failed=4, errors=2)
+    result.assert_outcomes(passed=1, failed=5, errors=2)
     result.stdout.fnmatch_lines_random(
         [
             "*SourceError: sd_card: the board is on already: give an interface its source before"
@@ -145,6 +150,7 @@ def test_the_slot_used_out_of_order_fails_the_test(
             " directory",
             "*SourceError: sd_card: */short.img has 1000 bytes; an SD card image is a whole"
             " number of 512 KiB units",
+            "*SourceError: sd_card: */ro.img cannot be read and written: the card writes into it",
             "*esp32sim: the board profile lilygo-t-a7670g-r2 has no sd_card; its interfaces are"
             " console, uart.modem, lines.modem",
         ]

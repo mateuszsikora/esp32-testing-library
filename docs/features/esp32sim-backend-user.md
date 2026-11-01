@@ -179,7 +179,8 @@ its body instead, as `BackendError: cannot ...`, without the prefix:
 `{build}` is the app's `build/` directory. The build is checked first, then the runner and the ROM
 ELF, so only the first problem is reported; the socket and the runner's start come at power-on.
 The profile's routes are checked when the test asks for `gnss`, and its slot when it asks for
-`sd_card`. An image the runner's card cannot open stops the runner at power-on with exit code 2,
+`sd_card`. `sd_card.insert` checks the image; one that changes after it so that the runner's
+card cannot open it, removed or made read-only, stops the runner at power-on with exit code 2,
 which the test sees as `RunEnded` or at teardown ([when the runner exits](#when-the-runner-exits)).
 
 ## See also

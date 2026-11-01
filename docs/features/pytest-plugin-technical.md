@@ -132,7 +132,8 @@ sees is in [pytest-plugin-user.md](pytest-plugin-user.md); the backend it starts
    slot; a profile without one makes it raise `BackendError`, through `backend_failed`.
    `SdCard.insert(image)` refuses a second card, then calls the backend's
    `asked("sd_card", "model")`, then resolves `image` against `directory`, the test file's, and
-   checks with `stat` that it is a file of a whole number of `UNIT`s (512 KiB), at least one. It
+   checks with `stat` that it is a file of a whole number of `UNIT`s (512 KiB), at least one
+   and at most `MAX_SIZE` (2 TiB), and with `os.access` that it can be read and written. It
    keeps the absolute path in `image`, which `runner_command` turns into `--sd-spi` and `--sd-rw`
    at power-on ([esp32sim-backend-technical.md](esp32sim-backend-technical.md#data-flow)).
 
@@ -148,7 +149,7 @@ sees is in [pytest-plugin-user.md](pytest-plugin-user.md); the backend it starts
 | `gnss(board)` | fixture, function scope | Returns `board.uart("gnss")` |
 | `sd_card(board)` | fixture, function scope | Returns `board.sd_card()` |
 | `SdCard(route, *, directory, asked=...)` | class, `esp32tl/interfaces/sd_card.py` | The `sd_card` slot on `route` (an `SdCardRoute`): attributes `name` (`"sd_card"`), `route`, `directory`, `asked`, `image` (`None` until `insert`, then the image's absolute `Path`); `insert(image)` returns that path |
-| `UNIT` | `int`, `esp32tl/interfaces/sd_card.py` | 524288: an SD card image is a whole number of them |
+| `UNIT`, `MAX_SIZE` | `int`, `esp32tl/interfaces/sd_card.py` | 524288: an SD card image is a whole number of them; 2^41, the most it may be |
 | `Console(board)` | class, `esp32tl/interfaces/console.py` | `expect(pattern, timeout=30, *, return_what_before_match=False)`, `expect_exact(...)` with the same arguments; no `write`. `board` is a `Clocked`: `console_output` and `wait_on_clock(condition, within, description)` |
 | `DEFAULT_TIMEOUT` | `int`, `esp32tl/interfaces/console.py` | 30: an expect's `timeout`, in seconds of the board's time |
 | `Uart(name, wire, *, clock, directory, asked=...)` | class, `esp32tl/interfaces/uart.py`, a `BoardLink` `Interface` | `uart.<role>` and its source: attributes `clock`, `directory`, `asked`, `source` and `source_kind` (`None` until given, then the source and `"replay"`); `replay(path)` returns the `Replay`. Without a source it hears everything and says nothing; with one, `receive`, `poll`, `quiet_until` and `latency` are the source's. `asked(name, source)` is called before a source is made, and refuses it by raising |
@@ -204,7 +205,7 @@ pytest-embedded's `build_dir` fixture. The backend's own environment variables a
 | `the board is off; call board.power_on() first` | `BoardOff` from a wait, an expect, `now` or `utc` before power-on | Fails the test |
 | `the board is on already: power it on once` | `BoardOff` from a second `power_on()` | Fails the test |
 | `{interface}: the board is on already: give an interface its source before board.power_on()`, `uart.gnss has its source already: one per test`, `no backend takes a '{source}' source on {interface}; the sources there are {sources}` | `SourceError` from `Uart.replay` | Fails the test ([replay-user.md](replay-user.md#when-the-test-gets-it-wrong)) |
-| `sd_card: the board is on already: give an interface its source before board.power_on()`, `sd_card has a card already: one per test`, `sd_card: no image at {path}: {strerror}`, `sd_card: {path} is not a file`, `sd_card: {path} has {size} bytes; an SD card image is a whole number of 512 KiB units` | `SourceError` from `SdCard.insert` | Fails the test |
+| `sd_card: the board is on already: give an interface its source before board.power_on()`, `sd_card has a card already: one per test`, `sd_card: no image at {path}: {strerror}`, `sd_card: {path} is not a file`, `sd_card: {path} has {size} bytes; an SD card image is a whole number of 512 KiB units`, `sd_card: {path} has {size} bytes; an SD card image is at most 2 TiB`, `sd_card: {path} cannot be read and written: the card writes into it` | `SourceError` from `SdCard.insert` | Fails the test |
 | `{description} did not happen within {within}: waited from {start} to {end} of the board's time` | `NeverHappened` from `wait_until` or an expect | Fails the test |
 | `the run ended {when} while the test waited {what}: {reason}` | `RunEnded` from a wait or an expect; `{when}` is `at {time}` from the runner's `stats`, `after the turn at {time}` without them, the last held turn being only a bound, or `before its first turn`; `{what}` is `until {time}` or `for {description}`, `{reason}` the backend's ([esp32sim-backend-technical.md](esp32sim-backend-technical.md#failure-modes)) | Fails the test |
 | `expect: no pattern to wait for`, `expect: {pattern!r} is not a pattern`, `expect_exact takes text or bytes, not a compiled pattern` | `ValueError`, `TypeError` from an expect | Fails the test |
@@ -272,10 +273,10 @@ through `pytester`, a source after power-on, an expect before it, a source never
 profile without the route ([replay-technical.md](replay-technical.md#tests)).
 `tests/test_replay.py` tests `Uart` without an emulator. `tests/test_sdspi.py` runs
 `sd_card.insert` on ESP-IDF's `sdspi` example on the real runner, and, through `pytester`, a card
-after power-on, one never powered on, two cards, a missing and a short image, and a profile
-without a slot; `test_runner_command_puts_a_card_in_the_slot_once_the_test_inserts_one` in
+after power-on, one never powered on, two cards, a missing, a short and a read-only image, and a
+profile without a slot; `test_runner_command_puts_a_card_in_the_slot_once_the_test_inserts_one` in
 `tests/test_pytest_plugin.py` checks the runner's flags. Not covered: an image path that is a
-directory.
+directory, and one above 2 TiB.
 
 `tests/test_package.py` checks the `pytest11` entry point (`test_plugin_is_registered_through_pytest11`)
 and that pytest loaded the module under the name `esp32tl` (`test_pytest_loaded_the_plugin`).

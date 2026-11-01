@@ -141,7 +141,7 @@ impl SdCard {
             wiring,
             store,
             blocks,
-            // esp32sim's card's: one that follows the image, so two images read as two cards
+            // esp32sim's card's: from the image's size, so cards of two sizes read as two cards
             serial: (blocks as u32).wrapping_mul(0x9e37_79b9) ^ 0x5d1c_0b17,
             spi: false,
             ready: false,
