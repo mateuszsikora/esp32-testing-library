@@ -1,16 +1,20 @@
 """The `gnss` fixture: a recording replayed through `gnss.replay(path)` into nmea_reader on the
-real runner, what a test that gives its source out of order sees, and test_nmea_reader.py's
+real runner, and tapped through `gnss.tap(path)`, what a test that gives its source out of order
+sees, and test_nmea_reader.py's
 test_reports_a_fix failing on a changed recording and on a baud mismatch. Needs `make firmware`
 (nmea_reader)."""
 
 import base64
+import hashlib
 import json
+import re
 import shutil
 import time
 from pathlib import Path
 
 import pytest
 
+from esp32tl import recording
 from esp32tl.backends.esp32sim import Esp32Sim
 from esp32tl.interfaces.console import Console
 from esp32tl.interfaces.uart import Uart
@@ -32,6 +36,42 @@ def test_a_replay_reaches_nmea_reader_on_the_gnss_route(
     console.expect_exact("fix lat=52.229657 lon=21.012260")
     assert replay.sent >= 2
     assert board.link.warnings == []
+
+
+def test_a_tap_of_a_replay_records_what_went_in(pytester: pytest.Pytester) -> None:
+    if not (NMEA_READER / "build" / "esp32tl-built").is_file():
+        pytest.fail(
+            f"{NMEA_READER}/build holds no finished build: run make firmware", pytrace=False
+        )
+    tapped = pytester.path / "gnss-tap.jsonl"
+    pytester.makepyfile(
+        test_tap=f"""
+        import pytest
+
+        pytestmark = pytest.mark.app_path({str(NMEA_READER)!r})
+
+        def test_tapped(board, gnss):
+            replay = gnss.replay({str(RECORDING)!r})
+            tap = gnss.tap({str(tapped)!r})
+            board.power_on()
+            board.wait(5.5)
+            assert tap.events == [(t, "in", data) for t, data in replay.events[:5]]
+        """
+    )
+    result = pytester.runpytest_subprocess("-p", "no:cacheprovider")
+    result.assert_outcomes(passed=1)
+    # Written at teardown: the first five sentences, at 1 s to 5 s, as recorded; nmea_reader
+    # transmits nothing on its UART1.
+    made = recording.read(tapped)
+    replayed = recording.read(RECORDING)
+    assert [(e.t, e.dir, e.data) for e in made.events] == [
+        (e.t, "in", e.data) for e in replayed.events[:5]
+    ]
+    build = NMEA_READER / "build"
+    app = json.loads((build / "flasher_args.json").read_text())["app"]["file"]
+    assert made.header.app_sha256 == hashlib.sha256((build / app).read_bytes()).hexdigest()
+    assert re.fullmatch("[0-9a-f]{40}", made.header.tools["esp32sim"])
+    assert (made.header.source, made.header.interface) == ("replay", "uart.gnss")
 
 
 def test_a_source_given_out_of_order_fails_the_test(pytester: pytest.Pytester) -> None:

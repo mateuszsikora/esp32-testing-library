@@ -161,6 +161,14 @@ FEATURES = [
         r"^docs/features/replay-",
         "Replay changed (what it replays, when, what it refuses): update docs/features/replay-*.md",
     ),
+    # Two modules, one feature: the tap writes what the run report shows.
+    Rule(
+        "F16",
+        r"^esp32tl/(tap|report)\.py$",
+        r"^docs/features/run-report-",
+        "Taps or the run report changed (what a tap writes, what the report shows):"
+        " update docs/features/run-report-*.md",
+    ),
 ]
 
 # The catch-all for the package: the rest of sources/ and any new module are owned from their

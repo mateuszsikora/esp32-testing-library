@@ -97,11 +97,11 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The LilyGO profile leaves out what the specification does not give](harness.md#the-lilygo-profile-leaves-out-what-the-specification-does-not-give) | `harness.md` | decided (#13) |
 | [The capability declaration is a TOML file beside the profiles, per interface kind](harness.md#the-capability-declaration-is-a-toml-file-beside-the-profiles-per-interface-kind) | `harness.md` | decided (#13) |
 | [Telling on-board from off-board interfaces is postponed](harness.md#telling-on-board-from-off-board-interfaces-is-postponed) | `harness.md` | postponed (#25) |
-| [A source or tap a backend cannot give skips its parameter at collection](harness.md#a-source-or-tap-a-backend-cannot-give-skips-its-parameter-at-collection) | `harness.md` | decided (#13) |
+| [A source or tap a backend cannot give skips its parameter at collection](harness.md#a-source-or-tap-a-backend-cannot-give-skips-its-parameter-at-collection) | `harness.md` | superseded (#21) |
 | [The closest source marker wins per interface](harness.md#the-closest-source-marker-wins-per-interface) | `harness.md` | superseded (#65) |
 | [Board markers that reach a test after collection read it are refused](harness.md#board-markers-that-reach-a-test-after-collection-read-it-are-refused) | `harness.md` | decided (#13) |
 | [A profile reserves the console's UART and pins, not the flash pins](harness.md#a-profile-reserves-the-consoles-uart-and-pins-not-the-flash-pins) | `harness.md` | decided (#13) |
-| [A request no backend can give is a collection error](harness.md#a-request-no-backend-can-give-is-a-collection-error) | `harness.md` | decided (#13) |
+| [A request no backend can give is a collection error](harness.md#a-request-no-backend-can-give-is-a-collection-error) | `harness.md` | superseded (#21) |
 | [The run waits before the guest boots until the test has given its declared sources](harness.md#the-run-waits-before-the-guest-boots-until-the-test-has-given-its-declared-sources) | `harness.md` | superseded (#65) |
 | [A replay needs the source marker that declares it](harness.md#a-replay-needs-the-source-marker-that-declares-it) | `harness.md` | superseded (#65) |
 | [The esp32sim backend refuses a model or real source at setup until it gives one](harness.md#the-esp32sim-backend-refuses-a-model-or-real-source-at-setup-until-it-gives-one) | `harness.md` | superseded (#65) |
@@ -116,7 +116,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [A frame error fails the run at once](harness.md#a-frame-error-fails-the-run-at-once) | `harness.md` | decided (#16) |
 | [The esp32tl command serves the link itself, without pytest-embedded](harness.md#the-esp32tl-command-serves-the-link-itself-without-pytest-embedded) | `harness.md` | decided (#16) |
 | [The esp32tl command runs the runner in a session of its own](harness.md#the-esp32tl-command-runs-the-runner-in-a-session-of-its-own) | `harness.md` | decided (#16) |
-| [esp32tl replay takes one recording, and esp32tl record waits for the tap](harness.md#esp32tl-replay-takes-one-recording-and-esp32tl-record-waits-for-the-tap) | `harness.md` | postponed (#21) |
+| [esp32tl replay takes one recording, and esp32tl record waits for the matching engine](harness.md#esp32tl-replay-takes-one-recording-and-esp32tl-record-waits-for-the-matching-engine) | `harness.md` | postponed (#20) |
 | [The board's clock is the test's: emulated time moves only while the test waits](harness.md#the-boards-clock-is-the-tests-emulated-time-moves-only-while-the-test-waits) | `harness.md` | decided (#64) |
 | [A run starts at board.power_on(), and so does the runner](harness.md#a-run-starts-at-boardpower_on-and-so-does-the-runner) | `harness.md` | decided (#64) |
 | [The test's own timeout catches a hung run, not the runner's peer timeout](harness.md#the-tests-own-timeout-catches-a-hung-run-not-the-runners-peer-timeout) | `harness.md` | decided (#64) |
@@ -128,6 +128,10 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The default timeout is a marker the plugin adds to each test that uses board](harness.md#the-default-timeout-is-a-marker-the-plugin-adds-to-each-test-that-uses-board) | `harness.md` | decided (#65) |
 | [A source the backend cannot give skips the test at the test's line](harness.md#a-source-the-backend-cannot-give-skips-the-test-at-the-tests-line) | `harness.md` | decided (#65) |
 | [A leftover source marker is not refused](harness.md#a-leftover-source-marker-is-not-refused) | `harness.md` | decided (#65) |
+| [A test taps a route by calling tap(path) before power-on, not with a marker](harness.md#a-test-taps-a-route-by-calling-tappath-before-power-on-not-with-a-marker) | `harness.md` | decided (#21) |
+| [A tap writes its recording once the run has ended, from what the far end gave](harness.md#a-tap-writes-its-recording-once-the-run-has-ended-from-what-the-far-end-gave) | `harness.md` | decided (#21) |
+| [The run on the board's clock goes into the link section of a test that failed](harness.md#the-run-on-the-boards-clock-goes-into-the-link-section-of-a-test-that-failed) | `harness.md` | decided (#21) |
+| [Tapping the console is postponed](harness.md#tapping-the-console-is-postponed) | `harness.md` | postponed (#21) |
 | [Models describe the world in its own terms, in units](harness.md#models-describe-the-world-in-its-own-terms-in-units) | `harness.md` | decided (#64) |
 | [Tests observe the device from outside, and product knowledge stays in the consumer's tests](harness.md#tests-observe-the-device-from-outside-and-product-knowledge-stays-in-the-consumers-tests) | `harness.md` | decided (#64) |
 | [The network the device reaches is simulated in the harness, in emulated time](harness.md#the-network-the-device-reaches-is-simulated-in-the-harness-in-emulated-time) | `harness.md` | decided (#64) |
