@@ -149,7 +149,9 @@ def interruptible(
         print(f"esp32tl: {error}", file=sys.stderr)
         return CANNOT_START
     try:
-        command = esp32sim.runner_command(runner, rom, image, max_seconds, link_path)
+        command = esp32sim.runner_command(
+            runner, rom, image, max_seconds, link_path, psram_mb=profile.psram_mb
+        )
         try:
             process = subprocess.Popen(command, start_new_session=True)
         except OSError as error:

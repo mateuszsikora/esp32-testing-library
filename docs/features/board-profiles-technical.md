@@ -47,7 +47,7 @@ It is `functools.cache`d, so every test gets the same object; the mappings in it
 |---|---|---|---|
 | `name` | string | yes | The file's name without `.toml` |
 | `chip` | string | yes | One of `CHIPS`: `esp32`, the classic chip, the only one the runner emulates |
-| `flash_mb`, `psram_mb` | integer | no | At least 0; absent is "not known", `None` in `BoardProfile` |
+| `flash_mb`, `psram_mb` | integer | no | At least 0; absent is "not known", `None` in `BoardProfile`. The esp32sim backend gives the runner `psram_mb` as `--psram-mb` when it is set ([esp32sim-backend-technical.md](esp32sim-backend-technical.md#data-flow)), and the runner refuses any size but 0 and 4. `flash_mb` is not passed on: the runner's flash is its default, 4 MiB |
 | `[uart.<role>]` | table | no | One per UART route; keys below |
 | `[lines.<role>]` | table | no | One per set of GPIO lines; keys below |
 | `[sd_card]` | table | no | The board's SD card slot, wired for SPI mode; keys below |
@@ -179,8 +179,8 @@ are listed in [board-profiles-user.md](board-profiles-user.md#when-no-backend-ca
 - `test_the_shipped_profiles_are_the_two_of_the_plan`, `test_esp32_devkitc_routes_the_gnss_on_uart1_gpio_4_and_5`:
   the names, the default, and `esp32-devkitc` field by field, its slot included.
   `test_an_sd_card_slot_may_take_an_input_only_pin_for_miso`: a slot's MISO on GPIO 39.
-- `test_the_lilygo_profile_holds_only_what_the_specification_gives`: the file's TOML data compared
-  whole, so a pin or a size added from memory fails it.
+- `test_the_lilygo_profile_holds_the_specification_and_lilygo_s_documentation`: the file's TOML
+  data compared whole, so a pin or a size added from memory fails it.
 - `test_a_profile_is_loaded_once_and_cannot_be_changed`, `test_an_unknown_profile_name_lists_the_profiles`,
   `test_a_profile_without_sizes_or_interfaces_has_only_the_console`.
 - `test_a_profile_that_breaks_the_schema_is_refused_with_the_key`: each message of

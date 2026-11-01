@@ -143,18 +143,23 @@ def runner_command(
     link: Path,
     *,
     held: bool = False,
+    psram_mb: int | None = None,
     sd_card: SdCard | None = None,
 ) -> list[str]:
     """The runner's command line: every file of `flasher_args.json` at its offset, its board the
     socket at `link`. A `held` run is on the test's clock: its console also goes on the link, and
-    the runner waits for the harness's turn for as long as it takes. An `sd_card` with a card in
-    it puts the runner's card model on the slot's pins, holding the card's image."""
+    the runner waits for the harness's turn for as long as it takes. `psram_mb`, the board
+    profile's, is the PSRAM the runner gives the chip; `None`, a profile that does not say, leaves
+    the runner's default. An `sd_card` with a card in it puts the runner's card model on the
+    slot's pins, holding the card's image."""
     command = [str(runner), "--chip", "esp32", "--rom", str(rom), "--max-seconds", str(max_seconds)]
     if held:
         command += ["--console", "both", "--peer-timeout", "0"]
     command += ["--board", f"socket:{link}"]
     for file in app.flash_files:
         command += ["--flash-at", f"{file.offset:#x}={file.file_path}"]
+    if psram_mb is not None:
+        command += ["--psram-mb", str(psram_mb)]
     if sd_card is not None and sd_card.image is not None:
         r = sd_card.route
         command += ["--sd-spi", f"sclk={r.sclk},mosi={r.mosi},miso={r.miso},cs={r.cs}"]
@@ -423,6 +428,7 @@ class Esp32Sim:
             HELD_MAX_SECONDS,
             self._socket,
             held=True,
+            psram_mb=self.profile.psram_mb,
             sd_card=self._sd_card,
         )
         try:

@@ -64,13 +64,17 @@ or `POWER_ON_UTC`, for `Esp32Sim.utc` and the GNSS receiver's dates, and logs
    `tempfile.mkdtemp(prefix="esp32tl-")`, or from `mkdtemp(..., dir="/tmp")` when the first path
    is `SUN_PATH_MAX` (104) bytes or longer, and listens with a backlog of 1. It binds before the
    runner starts, because the runner connects once (protocol §1).
-2. **`runner_command(runner, rom, app, HELD_MAX_SECONDS, link, held=True)`** builds
-   `[runner, "--chip", "esp32", "--rom", rom, "--max-seconds", "86400", "--console", "both", "--peer-timeout", "0", "--board", "socket:<link>", "--flash-at", "0x1000=<path>", ...]`,
+2. **`runner_command(runner, rom, app, HELD_MAX_SECONDS, link, held=True, psram_mb=profile.psram_mb)`** builds
+   `[runner, "--chip", "esp32", "--rom", rom, "--max-seconds", "86400", "--console", "both", "--peer-timeout", "0", "--board", "socket:<link>", "--flash-at", "0x1000=<path>", ..., "--psram-mb", "<psram_mb>"]`,
    one `--flash-at {offset:#x}={file_path}` per entry of `app.flash_files`, which `IdfApp` sorts by
-   offset; the paths are absolute. With a card in the slot, `sd_card=` adds
+   offset; the paths are absolute. `--psram-mb` is the board profile's `psram_mb`, `0` on
+   `esp32-devkitc` and `4` on `lilygo-t-a7670g-r2`; a profile without `psram_mb` leaves the pair
+   out, and the runner gives the chip no PSRAM, its default. The profile's `flash_mb` is not
+   passed: the runner's flash is its default, 4 MiB. With a card in the slot, `sd_card=` adds
    `--sd-spi sclk=N,mosi=N,miso=N,cs=N` from the slot's route and `--sd-rw <image>`, the image's
    absolute path, at the end. Without `held`, as the [`esp32tl` command](cli-user.md) calls
-   it, the `--console` and `--peer-timeout` pairs are left out, and so is the card. The runner's options are in
+   it, the `--console` and `--peer-timeout` pairs are left out, and so is the card; the command
+   passes its profile's `psram_mb` too. The runner's options are in
    [runner-user.md](runner-user.md).
 3. **`RunnerPopen(msg_queue, command, meta)`** is `DuplicateStdoutPopen` with one change: if the
    process cannot start (`OSError`), it closes the log file the parent opened before the fork,
@@ -280,7 +284,7 @@ repository makes.
 | `load_app(app_path)` | The checked `IdfApp` of `<app_path>/build` |
 | `profile_uart(profile, interface, *, clock, directory, asked=..., log=None, files=None)` | The `Uart` on the route the profile gives `interface` (`uart.gnss`), at its pins and baud; `BackendError` when the profile has no such route. The [`esp32tl` command](cli-user.md) makes its UARTs with it |
 | `route_wire(profile, interface)` | The `Wire` of that route, or the same `BackendError`; `Esp32Sim` makes its `Uart`s and its `Gnss` on it |
-| `runner_command(runner, rom, app, max_seconds, link, *, held=False, sd_card=None)` | The runner's argument list; with an `SdCard` holding a card, the runner's card on its pins |
+| `runner_command(runner, rom, app, max_seconds, link, *, held=False, psram_mb=None, sd_card=None)` | The runner's argument list; with `psram_mb`, `--psram-mb` of that size; with an `SdCard` holding a card, the runner's card on its pins |
 | `RunnerPopen(msg_queue, cmd, meta)` | `DuplicateStdoutPopen` that closes its log when the start fails |
 | `refuse(reason)` | Raises `SourceError(reason)`: `Esp32Sim`'s `skip` outside pytest |
 | `ended_while_waiting(error)` | Whether `error`'s chain holds a `RunEnded` |
@@ -361,6 +365,8 @@ instance, is not a `BackendError` and fails the setup with its own traceback.
   (`fake_build`), `--board socket:PATH` included.
   `test_runner_command_puts_a_card_in_the_slot_once_the_test_inserts_one`: no card flags for an
   empty slot, and `--sd-spi`, `--sd-rw` with the resolved path once a card is in.
+  `test_runner_command_gives_the_chip_the_profile_s_psram`: `--psram-mb 4` for `psram_mb=4`, and
+  no `--psram-mb` without it.
 - `test_load_app_refuses_what_the_runner_cannot_run`: the four `load_app` messages.
 - `test_runner_and_rom_paths_name_what_is_missing`: both messages, a runner that is not
   executable, and the environment variables taking effect.
@@ -392,8 +398,9 @@ instance, is not a `BackendError` and fails the setup with its own traceback.
   `link_runner`; `$FAKE_LINK` picks how it misbehaves):
   `test_the_backend_serves_the_link_and_ends_the_run_with_stop` (the report section and the
   JSON user property in `--junitxml`), `test_every_route_and_line_of_the_profile_is_on_the_link`
-  (the LilyGO profile's `watch`; its pull-down in the first turn is checked in `tests/test_lines.py`
-  and `tests/test_gpio_echo.py`),
+  (the LilyGO profile's `watch` and its `--psram-mb 4`, both of which the script asserts, with
+  `$FAKE_WATCH` and `$FAKE_PSRAM`; its pull-down in the first turn is checked in
+  `tests/test_lines.py` and `tests/test_gpio_echo.py`),
   `test_the_test_s_waits_move_the_board_s_clock` (`now`, `wait`, `wait_until`, `utc`),
   `test_a_tap_records_what_crossed_the_route_both_ways` (the tap's file, header and events, with
   `FAKE_LINK=tx`, and the routes in a passing test's report),

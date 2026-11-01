@@ -41,7 +41,7 @@ command drives no line otherwise.
 | Option | Commands | Default | Accepts |
 |---|---|---|---|
 | `--app APP` | both | none, required | the ESP-IDF app directory, its build in `APP/build`, relative to the working directory or absolute. The build must be one the backend runs: for the `esp32` target, finished, without flash encryption |
-| `--board BOARD` | both | `esp32-devkitc` | the name of a [board profile](board-profiles-user.md#the-profiles-esp32tl-ships) |
+| `--board BOARD` | both | `esp32-devkitc` | the name of a [board profile](board-profiles-user.md#the-profiles-esp32tl-ships); the chip gets the profile's PSRAM, 4 MB on `lilygo-t-a7670g-r2` and none on `esp32-devkitc` |
 | `--max-seconds S` | both | `300` | a finite number of emulated seconds above 0; fractions are fine |
 | `--interface INTERFACE` | `replay`, required | none | a UART route of the profile: `uart.gnss`, or its role alone, `gnss` |
 | `--recording RECORDING` | `replay`, required | none | a recording file, relative to the working directory or absolute |

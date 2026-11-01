@@ -98,9 +98,25 @@ def test_a_source_given_out_of_order_fails_the_test(pytester: pytest.Pytester) -
         def test_never_powered(gnss):
             gnss.replay({str(RECORDING)!r})
 
-        @pytest.mark.board_profile("lilygo-t-a7670g-r2")
+        @pytest.mark.board_profile("no-gnss")
         def test_no_route(gnss):
             pass
+        """
+    )
+    # Every profile esp32tl ships has a GNSS route: this one, the test's own, has none.
+    pytester.makeconftest(
+        """
+        from esp32tl import boards
+        from esp32tl.boards import BoardProfile
+
+        shipped = boards.profile
+
+        def profile(name):
+            if name == "no-gnss":
+                return BoardProfile("no-gnss", "esp32", None, None, uart={}, lines={})
+            return shipped(name)
+
+        boards.profile = profile
         """
     )
     result = pytester.runpytest_subprocess("-p", "no:cacheprovider", "-rA")
@@ -114,8 +130,7 @@ def test_a_source_given_out_of_order_fails_the_test(pytester: pytest.Pytester) -
             " board.power_on()",
             "*esp32sim: the test set up the replay of uart.gnss and never called"
             " board.power_on(): it ran no firmware",
-            "*esp32sim: the board profile lilygo-t-a7670g-r2 has no uart.gnss; its interfaces are"
-            " console, uart.modem, lines.modem",
+            "*esp32sim: the board profile no-gnss has no uart.gnss; its interfaces are console",
         ]
     )
     # Every route of the profile is on the link; a board never powered on ran no runner.

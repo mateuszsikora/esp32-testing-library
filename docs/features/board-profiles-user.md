@@ -12,7 +12,7 @@ with the reason.
 | Profile | Chip | Flash, PSRAM | Interfaces |
 |---|---|---|---|
 | `esp32-devkitc` | `esp32` | 4 MB, none | `console`; `uart.gnss`: UART1, TX GPIO 4, RX GPIO 5, 9600 baud; `sd_card`: SCLK GPIO 14, MOSI GPIO 15, MISO GPIO 2, CS GPIO 13 |
-| `lilygo-t-a7670g-r2` | `esp32` (ESP32-WROVER-E) | not in the profile | `console`; `uart.modem`: UART1, TX GPIO 26, RX GPIO 27, 115200 baud; `lines.modem`: `pwrkey` GPIO 4, `ri` GPIO 33 pulled down |
+| `lilygo-t-a7670g-r2` | `esp32` (ESP32-WROVER-E) | 4 MB, 4 MB | `console`; `uart.modem`: UART1, TX GPIO 26, RX GPIO 27, 115200 baud; `uart.gnss`: UART2, TX GPIO 21, RX GPIO 22, 9600 baud; `lines.modem`: `pwrkey` GPIO 4, `ri` GPIO 33 pulled down |
 
 `esp32-devkitc` is a generic ESP32 module on a devkit, and carries every validation firmware: its
 GNSS route is chosen for this repository's own firmware. GPIO 16 and 17 are left free because on
@@ -21,12 +21,20 @@ boot does not change the boot mode. Its SD card slot has the pins ESP-IDF's
 `storage/sd_card/sdspi` example takes on the ESP32 by default, so the example runs unmodified;
 GPIO 2 and 15 are strapping pins too, which a card leaves alone until the firmware selects it.
 
-`lilygo-t-a7670g-r2` holds only what the specification gives: the A7670G modem's UART and its
-PWRKEY and RI lines. The pull-down on RI is what stage 0 found
+`lilygo-t-a7670g-r2` holds the A7670G modem's UART and its PWRKEY and RI lines, which the
+specification gives. The pull-down on RI is what stage 0 found
 ([gap 6](../stage0-findings.md#gaps)): with no modem fitted the line must read low, and on
 `esp32sim` it does, from power-on and whenever the test releases it, in every test on the profile
-([the `lines` fixture](pytest-plugin-user.md#the-fixtures)). Its other pins, its flash and PSRAM sizes, and
-whether it has a GNSS route at all are not in it: they wait for the vendor schematic.
+([the `lines` fixture](pytest-plugin-user.md#the-fixtures)). Its GNSS route, flash and PSRAM come
+from LilyGO's
+[pin table for the T-A7670X ESP32](https://github.com/Xinyuan-LilyGO/LilyGO-T-A76XX/blob/63af963038e93c91baf39d89a3a736d6bc26ff13/docs/en/esp32/a7670-esp32/README.MD)
+and its
+[`ExternalGPS_A7670G_Only`](https://github.com/Xinyuan-LilyGO/LilyGO-T-A76XX/blob/63af963038e93c91baf39d89a3a736d6bc26ff13/examples/ExternalGPS_A7670G_Only/ExternalGPS_A7670G_Only.ino)
+example: the L76K receiver of the board's GPS version, an external module, on UART2 at 9600 baud,
+and 4 MB of flash. The ESP32-WROVER-E carries 8 MB of PSRAM; the profile gives 4, the most
+`esp32sim` models, so that firmware that turns PSRAM on finds it rather than logging
+`PSRAM not found`. The esp32sim backend gives the chip the profile's PSRAM
+([esp32sim backend](esp32sim-backend-user.md#how-a-run-goes)). Its other pins are not in it.
 
 The profiles are `esp32tl/boards/<name>.toml`, in the installed package.
 

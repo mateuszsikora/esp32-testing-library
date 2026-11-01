@@ -340,6 +340,20 @@ def test_runner_command_puts_a_card_in_the_slot_once_the_test_inserts_one(tmp_pa
     ]
 
 
+def test_runner_command_gives_the_chip_the_profile_s_psram(tmp_path: Path) -> None:
+    fake_build(tmp_path)
+    app = esp32sim.load_app(str(tmp_path))
+    command = esp32sim.runner_command(
+        Path("/r/runner"), Path("/r/rom.elf"), app, 300, Path("/l.sock"), psram_mb=4
+    )
+    assert command[-2:] == ["--psram-mb", "4"]
+    # A profile that does not say leaves the runner's default.
+    command = esp32sim.runner_command(
+        Path("/r/runner"), Path("/r/rom.elf"), app, 300, Path("/l.sock")
+    )
+    assert "--psram-mb" not in command
+
+
 def test_load_app_refuses_what_the_runner_cannot_run(tmp_path: Path) -> None:
     with pytest.raises(BackendError, match=r"holds no ESP-IDF build: no flasher_args\.json"):
         esp32sim.load_app(str(tmp_path / "none"))
@@ -994,7 +1008,8 @@ def test_hello_world_fails_on_an_image_that_prints_something_else(
 # to `linger.pid` beside the runner; `slow` loads for half a second before it connects, and dies of
 # SIGTERM until then, as the real runner does; `gone` exits 4 in turn 0 without reading it, as the
 # real runner does when the harness is gone. $FAKE_WATCH is the pins the harness's hello must
-# watch, comma-separated: the default profile's GNSS route's.
+# watch, comma-separated: the default profile's GNSS route's. $FAKE_PSRAM is the --psram-mb the
+# runner must be given: the default profile's 0.
 LINK_RUNNER = """#!{python}
 import os
 import signal
@@ -1010,6 +1025,7 @@ if os.environ.get("FAKE_LINK") == "slow":
     time.sleep(0.5)
 signal.pthread_sigmask(signal.SIG_BLOCK, {{signal.SIGTERM}})
 args = sys.argv[1:]
+assert args[args.index("--psram-mb") + 1] == os.environ.get("FAKE_PSRAM", "0"), args
 board = args[args.index("--board") + 1]
 conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 conn.connect(board.removeprefix("socket:"))
@@ -1117,7 +1133,8 @@ def test_every_route_and_line_of_the_profile_is_on_the_link(
     link_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("FAKE_BOARD", "lilygo-t-a7670g-r2")
-    monkeypatch.setenv("FAKE_WATCH", "4,26,27,33")
+    monkeypatch.setenv("FAKE_WATCH", "4,21,22,26,27,33")
+    monkeypatch.setenv("FAKE_PSRAM", "4")
     link_runner.makepyfile(
         test_lilygo="""
         import pytest
@@ -1128,11 +1145,12 @@ def test_every_route_and_line_of_the_profile_is_on_the_link(
             console.expect("Hello world!")
         """
     )
-    # The fake runner asserts the hello's board and pins; a failed assertion ends it with an error.
+    # The fake runner asserts its --psram-mb and the hello's board and pins; a failed assertion ends
+    # it with an error.
     result = link_runner.runpytest_subprocess("-p", "no:cacheprovider", "-rA", "test_lilygo.py")
     result.assert_outcomes(passed=1)
     result.stdout.fnmatch_lines(
-        ["board lilygo-t-a7670g-r2, watching GPIO 4, GPIO 26, GPIO 27, GPIO 33"]
+        ["board lilygo-t-a7670g-r2, watching GPIO 4, GPIO 21, GPIO 22, GPIO 26, GPIO 27, GPIO 33"]
     )
 
 

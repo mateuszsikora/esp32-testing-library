@@ -1,8 +1,10 @@
-# LilyGO T-A7670G R2. Only what the specification (issue #1) gives, and the pull-down on RI that
-# stage 0 found; nothing from memory (plan §4.5, finding 12). The other pins, the flash and PSRAM
-# sizes, and whether the board has a GNSS route at all, wait for the vendor schematic.
+# LilyGO T-A7670G R2. The modem's route and lines are the specification's (issue #1), with the
+# pull-down on RI that stage 0 found; the GNSS route, flash and PSRAM are LilyGO's: its pin table
+# for the T-A7670X ESP32 and its ExternalGPS_A7670G_Only example (plan §4.5). Nothing from memory.
 name = "lilygo-t-a7670g-r2"
 chip = "esp32"            # ESP32-WROVER-E
+flash_mb = 4              # CONFIG_ESPTOOLPY_FLASHSIZE_4MB
+psram_mb = 4              # the WROVER-E carries 8 MB; esp32sim models 0 or 4
 
 # The A7670G modem.
 [uart.modem]
@@ -10,6 +12,13 @@ port = 1
 tx = 26                   # ESP32 TX → modem RX
 rx = 27
 baud = 115200
+
+# The L76K receiver of the A7670G with GPS, an external module: Serial2 in LilyGO's example.
+[uart.gnss]
+port = 2
+tx = 21                   # ESP32 TX → receiver RX
+rx = 22
+baud = 9600
 
 [lines.modem]
 pwrkey = 4

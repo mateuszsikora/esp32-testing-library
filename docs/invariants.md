@@ -57,10 +57,11 @@ that references to its number keep their meaning.
 
 ## Board profiles
 
-27. The `lilygo-t-a7670g-r2` profile holds only what the specification gives, the chip, the
-    modem's UART1 on GPIO 26/27 at 115200 baud, PWRKEY on GPIO 4 and RI on GPIO 33, and the
-    pull-down on RI of stage 0's gap 6.
-    `tests/test_boards.py::test_the_lilygo_profile_holds_only_what_the_specification_gives`
+27. The `lilygo-t-a7670g-r2` profile holds what the specification gives, the chip, the modem's
+    UART1 on GPIO 26/27 at 115200 baud, PWRKEY on GPIO 4 and RI on GPIO 33, the pull-down on RI
+    of stage 0's gap 6, and what LilyGO's documentation gives, the GNSS receiver's UART2 on
+    GPIO 21/22 at 9600 baud, 4 MB of flash and 4 MB of PSRAM; nothing else.
+    `tests/test_boards.py::test_the_lilygo_profile_holds_the_specification_and_lilygo_s_documentation`
 28. A profile that breaks the schema is refused with the file and the key at fault; a UART's TX is
     never an input-only GPIO, nor is an SD card slot's SCLK, MOSI or CS, though its MISO may be;
     and no GPIO serves two uses, the console's UART0 on GPIO 1 and 3 and the slot's four pins
