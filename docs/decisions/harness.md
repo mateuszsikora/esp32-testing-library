@@ -200,7 +200,9 @@ Status: decided (#12)
 
 Every test that uses `board` gets the `esp32sim link` report section, for people, and the
 `esp32sim_link` user property, a JSON string with the board, the watched pins, the warnings, the
-`stats` and the error, for code.
+`stats` and the error, for code. Since #21 both carry the routes too, and the section of a test
+that failed the run on the board's clock
+([decision](#the-run-on-the-boards-clock-goes-into-the-link-section-of-a-test-that-failed)).
 
 **Rejected:** the property as a `dict`, because JUnit XML writes a property's `str()`, which is
 Python's `repr`, not JSON. Also rejected: pytest warnings for the runner's `warn` messages, because
@@ -316,15 +318,15 @@ distinction comes with a way to drive an off-board interface of a real board fro
 
 ## A source or tap a backend cannot give skips its parameter at collection
 
-Status: decided (#13)
+Status: superseded (#21)
 
-*For the `source` marker, superseded in #65 by [what is at a route's far end is what the test does
+Superseded for the `source` marker in #65 by [what is at a route's far end is what the test does
 with it](#what-is-at-a-routes-far-end-is-what-the-test-does-with-it-before-power-on-not-a-marker),
-whose skip comes at the call. The `tap` marker keeps it until #21.*
+and for the `tap` marker in #21 by [a test taps a route by calling tap(path) before power-on](#a-test-taps-a-route-by-calling-tappath-before-power-on-not-with-a-marker): both skip at the call now.
 
-The `source` and `tap` markers name what a test needs; `pytest_generate_tests` marks the
-parameter of each backend that cannot give it with `pytest.mark.skip(reason=...)`. pytest skips
-such an item before setting up any fixture.
+The `source` and `tap` markers named what a test needs; `pytest_generate_tests` marks the
+parameter of each backend that could not give it with `pytest.mark.skip(reason=...)`. pytest
+skipped such an item before setting up any fixture.
 
 **Rejected:** `pytest.skip` in the `board` fixture, because `board` depends on pytest-embedded's
 `dut`, which for a backend running `esp,idf` opens the serial port before `board` runs. Also
@@ -344,9 +346,9 @@ what is at a route's far end is what the test does with it before power-on, see 
 Status: decided (#13)
 
 *For the `source` marker, superseded in #65 by [what is at a route's far end is what the test does
-with it](#what-is-at-a-routes-far-end-is-what-the-test-does-with-it-before-power-on-not-a-marker):
-the plugin reads `app_path`, `board_profile` and `tap`, and a `tap` there would skip no backend the
-same way.*
+with it](#what-is-at-a-routes-far-end-is-what-the-test-does-with-it-before-power-on-not-a-marker),
+and for the `tap` marker in #21 by [a test taps a route by calling tap(path) before power-on](#a-test-taps-a-route-by-calling-tappath-before-power-on-not-with-a-marker): the plugin reads `app_path` and `board_profile`, and a
+`board_profile` there would reach the board unchecked the same way.*
 
 `pytest_generate_tests` keeps what it read from each definition's `app_path`, `board_profile`,
 `source` and `tap` markers; `pytest_collection_modifyitems`, `trylast`, reads them again from
@@ -372,14 +374,15 @@ module and its flash mode, and a profile does not name its module.
 
 ## A request no backend can give is a collection error
 
-Status: decided (#13)
+Status: superseded (#21)
 
-*For the `source` marker, superseded in #65 by [what is at a route's far end is what the test does
-with it](#what-is-at-a-routes-far-end-is-what-the-test-does-with-it-before-power-on-not-a-marker):
-a source no backend gives is an error at the call. The `tap` marker keeps it until #21.*
+Superseded for the `source` marker in #65 by [what is at a route's far end is what the test does
+with it](#what-is-at-a-routes-far-end-is-what-the-test-does-with-it-before-power-on-not-a-marker),
+and for the `tap` marker in #21 by [a test taps a route by calling tap(path) before power-on](#a-test-taps-a-route-by-calling-tappath-before-power-on-not-with-a-marker): a source or a tap no backend gives is a `SourceError` at
+the call, which fails the test, still not a skip.
 
-A `source` or `tap` marker that names an interface the profile lacks, or a source or tap that no
-declared backend gives, fails collection with the test's id.
+A `source` or `tap` marker that named an interface the profile lacks, or a source or tap that no
+declared backend gives, failed collection with the test's id.
 
 **Rejected:** skipping such a test on every backend, because a misspelt source (`"replya"`) would
 then pass the run as skipped, never as wrong.
@@ -549,13 +552,14 @@ and no report.
 command also sends `SIGTERM` when the link fails, and a Ctrl-C after that would still be the
 runner's second signal.
 
-## esp32tl replay takes one recording, and esp32tl record waits for the tap
+## esp32tl replay takes one recording, and esp32tl record waits for the matching engine
 
-Status: postponed (#21)
+Status: postponed (#20)
 
 `esp32tl replay` takes one `--interface` and one `--recording`: no profile has two UART routes a
-recording can go into yet. `esp32tl record` comes with `tap(path)` (#21), which writes what it
-records.
+recording can go into yet. `tap(path)` came with #21, under pytest only; `esp32tl record`, which
+would write what a tap records from the command line, comes back with the matching engine (#20),
+together with the engine's list of the requests it has not seen.
 
 ## The board's clock is the test's: emulated time moves only while the test waits
 
@@ -660,8 +664,7 @@ marker is no longer needed to say it again. A backend whose capability declarati
 what the test asked for skips the test at that call, with the reason, as `serial` does for a
 model: the test still runs on `esp32sim`. A source that no backend gives is an error at the call,
 not a skip, as it is a collection error now. The `real` source has no call yet, and gets one with
-M5. The `tap` marker is not part of this decision: taps come with #21, and so does the decision on
-how a test asks for one.
+M5. The `tap` marker was not part of this decision; #21 dropped it the same way: [a test taps a route by calling tap(path) before power-on](#a-test-taps-a-route-by-calling-tappath-before-power-on-not-with-a-marker).
 
 **Rejected:** keeping the marker, because the test states the source twice, once in a decorator
 far from the body; the reason it was needed, that the board had to know at setup whether to wait,
@@ -757,7 +760,7 @@ Status: decided (#65)
 The `board` fixture gives the backend `skip_at_the_test`, which raises
 `pytest.skip.Exception(reason, _use_item_location=True)`, so `-ra` names the test's file and line,
 as for a skip marker. `_use_item_location` is pytest's own argument, used by its skip marker, and
-not part of its documented API; `tests/test_pytest_plugin.py::test_a_source_the_backend_cannot_give_skips_at_the_call`
+not part of its documented API; `tests/test_pytest_plugin.py::test_a_source_or_a_tap_the_backend_cannot_give_skips_at_the_call`
 fails if it changes.
 
 **Rejected:** `pytest.skip(reason)`, because the report names the line of `esp32tl/backends/esp32sim.py`
@@ -774,6 +777,79 @@ marker (`PytestUnknownMarkWarning`) and the test runs.
 
 **Rejected:** a message of esp32tl's own for the marker, because no project outside this repository
 uses it yet.
+
+## A test taps a route by calling tap(path) before power-on, not with a marker
+
+Status: decided (#21)
+
+`gnss.tap(path)`, or `board.uart(role).tap(path)`, before `board.power_on()`, records what crosses
+the route from power-on and writes it to `path` once the run has ended. The backend checks the
+request the way it checks a source's: after power-on it is a `SourceError`, a tap no backend
+declares is a `SourceError` at the call, and one this backend does not declare skips the test
+there. The `tap` marker is gone, and with it the skip before setup, the collection error for a tap
+no backend gives, and the marker among those refused when they reach a test late. The tap wraps
+whatever is at the far end, a replay or nothing, and later a model, so a test can record a route
+it gave no source.
+
+**Rejected:** keeping the marker, for the reason the `source` marker went in #65: the test would
+state the tap twice, in a decorator and in the call that names the file, and a marker cannot name
+the file. Also rejected: the marker alone, writing to a path esp32tl chooses, because the test
+then has to find its recording, and a fixed name collides between tests. The cost accepted is the
+one #65 accepted for sources: on `serial`, which taps no UART, the skip comes after
+pytest-embedded has opened the port.
+
+## A tap writes its recording once the run has ended, from what the far end gave
+
+Status: decided (#21)
+
+A `Tap` keeps every event in memory, `out` at the time the firmware wrote the bytes and `in` at
+the time the source stamped them, and the backend writes it in `close`, after the link has been
+read to its end, sorted by time, whatever the run's outcome. Its header's `source` is the kind of
+source, `replay`, or `none` for a route without one. An `in` event is what the far end gave: an
+output the link refuses, stamped before its turn or on a route without an RX pin, is in the tap
+although it never reached the chip, and the run has failed on it. An output that is no
+`(t, bytes)` pair with `t` from 0 is not recorded, so a broken source never makes a recording the
+format refuses, and the link's error is what the test reports. A tap refuses a file the run
+replays from or another route taps into, and a replay refuses a file a route taps into.
+
+**Rejected:** writing as the run goes, because events reach the tap out of time order (an answer
+stamped `t_req + latency` comes before a byte the firmware writes in between) and the format wants
+time order; holding them back to the turn at which they are final costs code for a file nothing
+reads before the end. Also rejected: stamping `in` events with the time the runner put them in,
+because the link does not report it, and a replay tapped would no longer give back its own events;
+and recording in `BoardLink` after its checks, so that a refused output is not in the tap, because
+the run has failed by then, and the tap wraps the source, which the link knows nothing of. Also
+rejected: writing over a recording the test replays from, as `gnss.tap` on the replay's own path
+would, because the committed recording would change at teardown without a sign in the run.
+
+## The run on the board's clock goes into the link section of a test that failed
+
+Status: decided (#21)
+
+The `esp32sim link` section ends with `routes:`, a line per UART route with its source, its bytes
+each way and its tap, for every test; for a test whose setup, call or teardown failed it also ends
+with the run on the board's clock: the test's steps, the console's lines and every route's bytes,
+in the order of the board's time. The log keeps every step of the test and the last 200 entries of
+the console and the routes, as the bytes they came as, and turns them into text only for the
+report. The user property gets the routes, not the run.
+
+**Rejected:** a section of its own, because issue #21 asks for one report per test with the
+runner's statistics in it, and pytest shows the teardown sections of a failed test together;
+showing the run for a passing test, because `-rA` would print it for every test of a suite;
+keeping every entry, because a report of an hour of NMEA would bury its end, where a failure is,
+and the tap keeps everything for whoever needs it; and keeping the last 200 of the steps too,
+because a long replay would push out `board.power_on()` and the start of the wait that failed,
+which say what the end means. Also rejected: formatting each event as it comes, because a passing
+test, whose run nobody reads, would pay for it on every byte. Also rejected: the run in the user property,
+because JUnit XML holds it as one string, and a tap is the run's data for code.
+
+## Tapping the console is postponed
+
+Status: postponed (#21)
+
+No call taps the console. What the firmware prints is in `dut.log` and in the run report already,
+and nothing reads a recording of `console` yet. The capability declaration keeps
+`console = { tap = true }` for both backends, as the specification's table has it.
 
 ## Models describe the world in its own terms, in units
 
