@@ -9,6 +9,7 @@ from typing import Literal
 from esp32tl.boards import Line
 from esp32tl.link.boardlink import Interface
 from esp32tl.link.protocol import GpioIn, Input, Release
+from esp32tl.report import RunLog
 
 # The level a board's pull gives a line that neither end drives.
 PULLED = {"up": 1, "down": 0}
@@ -35,17 +36,23 @@ class Lines(Interface):
     the start of the run. A line the board pulls (`pull = "down"` in the profile) is at its pull
     while the test does not drive it, from power-on and after a `release`; on the chip the pull is
     the weaker side, so the firmware's own output wins over it. `level` says what the firmware
-    drives, and `events` every change of either end.
+    drives, and `events` every change of either end. With a `log`, each call of the test's is a step
+    of the run, and each change of the firmware's an entry.
 
     The test calls it from its own thread while the link is held, the link from the link's.
     """
 
     def __init__(
-        self, board: str, lines: Mapping[str, Mapping[str, Line]], now: Callable[[], int]
+        self,
+        board: str,
+        lines: Mapping[str, Mapping[str, Line]],
+        now: Callable[[], int],
+        log: RunLog | None = None,
     ) -> None:
         super().__init__("lines", None)
         self.board = board
         self._now = now
+        self.log = log
         self._lines = {
             f"{role}.{name}": line
             for role, members in lines.items()
@@ -80,6 +87,8 @@ class Lines(Interface):
         if level not in (0, 1):
             raise ValueError(f"lines.drive: level {level!r} is not 0 or 1")
         now = self._now()
+        if self.log is not None:
+            self.log.test(now, f"lines.drive({line!r}, {level})")
         with self._lock:
             if self._driving.get(pin) == level:
                 return
@@ -91,6 +100,8 @@ class Lines(Interface):
         pull, if it has one, or to what the chip makes of an undriven pad."""
         pin = self._pin(line)
         now = self._now()
+        if self.log is not None:
+            self.log.test(now, f"lines.release({line!r})")
         with self._lock:
             if self._driving.pop(pin, None) is None:
                 return
@@ -170,3 +181,5 @@ class Lines(Interface):
                     self._events.append(
                         LineEvent(t / 10**9, self._names[pin], pin, "firmware", state)
                     )
+                    if self.log is not None:
+                        self.log.line(t, self._names[pin], state)

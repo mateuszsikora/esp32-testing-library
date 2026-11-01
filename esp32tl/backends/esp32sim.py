@@ -20,7 +20,10 @@ power-on, and the profile's GPIO lines as one `Lines`, which puts the board's pu
 power-on and what the test drives at the instant it does. The backend also owns the end of the
 run (§9), before the dut is torn down: `stop` at the turn the test left the run at, `SIGTERM` for
 a runner that is not there, the link read to end of file, the runner waited for, `SIGKILL` only as
-a last resort.
+a last resort. Then it writes the recordings of the routes the test tapped.
+
+What the test does on the board, what the firmware prints and the bytes on every route go into a
+`RunLog` (`esp32tl.report`), which the report of a test that failed shows after the link's.
 """
 
 import contextlib
@@ -42,13 +45,15 @@ from pytest_embedded.utils import Meta, remove_asci_color_code
 from pytest_embedded_idf.app import IdfApp
 
 from esp32tl import recording
-from esp32tl.backends.clock import HeldClock, nanoseconds
+from esp32tl.backends.clock import HeldClock, nanoseconds, seconds
 from esp32tl.boards import BoardProfile, capabilities
 from esp32tl.boards.capabilities import CapabilityError, Request
-from esp32tl.interfaces import BoardOff, RunEnded, SourceError
+from esp32tl.interfaces import BoardOff, NeverHappened, RunEnded, SourceError
 from esp32tl.interfaces.lines import Lines
 from esp32tl.interfaces.uart import Uart
 from esp32tl.link.boardlink import BoardLink, Wire
+from esp32tl.report import RunLog
+from esp32tl.tap import NO_SOURCE, sha256
 
 T = TypeVar("T")
 
@@ -146,7 +151,9 @@ def profile_uart(
     *,
     clock: str,
     directory: Path,
-    asked: Callable[[str, str], None] = lambda name, source: None,
+    asked: Callable[[Request], None] = lambda request: None,
+    log: RunLog | None = None,
+    files: dict[Path, tuple[str, str]] | None = None,
 ) -> Uart:
     """The `Uart` on the route `profile` gives `interface` (`uart.gnss`), at the route's pins and
     baud; the other arguments are `Uart`'s."""
@@ -163,6 +170,8 @@ def profile_uart(
         clock=clock,
         directory=directory,
         asked=asked,
+        log=log,
+        files=files,
     )
 
 
@@ -210,7 +219,7 @@ class Esp32Sim:
     a relative recording path is taken from. `skip` is called with the reason when the test asks
     a route for a source this backend's capability declaration does not give, and raises; the
     `board` fixture makes it pytest's skip. `link` is the `BoardLink`, whose warnings, stats and
-    error are complete once `close` returns.
+    error are complete once `close` returns; `log` the `RunLog` of the run.
     """
 
     name = "esp32sim"
@@ -237,8 +246,11 @@ class Esp32Sim:
         self._runner, self._rom = runner_path(), rom_path()
         # What the guest printed on its console, as the link brings it.
         self.console_output = bytearray()
+        self.log = RunLog()
         self._hold = HeldClock()
         # Every route of the profile, listening and silent until the test gives it a source.
+        # One mapping of the files they read and write: no tap writes over another route's file.
+        files: dict[Path, tuple[str, str]] = {}
         self._uarts = {
             f"uart.{role}": profile_uart(
                 profile,
@@ -246,18 +258,20 @@ class Esp32Sim:
                 clock=self.clock,
                 directory=self.directory,
                 asked=self._asked,
+                log=self.log,
+                files=files,
             )
             for role in profile.uart
         }
         # Before power-on the clock's time is 0: what the test drives then holds from the start.
-        self._lines = Lines(profile.name, profile.lines, lambda: self._hold.now)
+        self._lines = Lines(profile.name, profile.lines, lambda: self._hold.now, log=self.log)
         self.link = BoardLink(
             profile.name,
             [*self._uarts.values(), self._lines],
             chip=profile.chip,
             on_error=self._end_run,
             hold=self._hold,
-            console=lambda t, data: self.console_output.extend(data),
+            console=self._printed,
             clock=self.clock,
         )
         self.process: RunnerPopen | None = None
@@ -287,32 +301,37 @@ class Esp32Sim:
             )
         return self._lines
 
-    def _asked(self, interface: str, source: str) -> None:
-        """Refuses a source on `interface` once the board is on, or one that no backend
-        gives, and skips the test when this one does not."""
+    def _printed(self, t: int, data: bytes) -> None:
+        self.console_output.extend(data)
+        self.log.console(t, data)
+
+    def _asked(self, request: Request) -> None:
+        """Refuses a source or a tap on an interface once the board is on, or one that no
+        backend gives, and skips the test when this one does not."""
         if self.powered:
+            what = "tap a route" if request.tap else "give a route its source"
             raise SourceError(
-                f"{interface}: the board is on already: give a route its source before"
-                " board.power_on()"
+                f"{request.interface}: the board is on already: {what} before board.power_on()"
             )
-        request = [Request(interface, source=source)]
         declared = capabilities.declared()
         try:
-            capabilities.check(request, self.profile, declared)
+            capabilities.check([request], self.profile, declared)
         except CapabilityError as error:
             raise SourceError(str(error)) from None
-        reason = capabilities.refusal(self.name, request, declared)
+        reason = capabilities.refusal(self.name, [request], declared)
         if reason is not None:
             self._skip(f"{self.name}: {reason}")
 
     def set_up(self) -> list[str]:
-        """What the test has set up that only a run uses: the sources it gave, as `the replay
-        of uart.gnss`, and the lines it drove, as `the level of modem.ri`."""
+        """What the test has set up that only a run uses: the sources it gave and the taps it
+        asked for, as `the replay of uart.gnss`, and the lines it drove, as `the level of
+        modem.ri`."""
         driven = dict.fromkeys(e.name for e in self._lines.events() if e.by == "test")
         return [
-            f"the {uart.source_kind} of {name}"
+            f"the {kind} of {name}"
             for name, uart in self._uarts.items()
-            if uart.source is not None
+            for kind, given in ((uart.source_kind, uart.source), ("tap", uart.tapped))
+            if given is not None
         ] + [f"the level of {name}" for name in driven]
 
     @property
@@ -343,6 +362,7 @@ class Esp32Sim:
             raise BackendError(f"cannot start {command[0]}: {error.strerror}") from error
         self.process = process
         self._utc = POWER_ON_UTC if utc is None else utc.astimezone(UTC)
+        self.log.test(0, f"board.power_on(), the world's time {self._utc:%Y-%m-%dT%H:%M:%SZ}")
         self._linker = threading.Thread(target=self._serve_link, daemon=True)
         self._linker.start()
         # The only thread that waits for the runner: Popen.poll() from another thread can miss an
@@ -362,7 +382,14 @@ class Esp32Sim:
 
     def wait(self, duration: float) -> None:
         """Lets the board run for `duration` seconds of its own time."""
-        self._on().wait(nanoseconds(duration))
+        clock = self._on()
+        ns = nanoseconds(duration)
+        self.log.test(clock.now, f"board.wait({seconds(ns)})")
+        try:
+            clock.wait(ns)
+        except RunEnded:
+            self.log.test(clock.now, "the run ended while the test waited")
+            raise
 
     def wait_until(self, condition: Callable[[], T], *, within: float) -> T:
         """Lets the board run until `condition` returns something true, for at most `within`
@@ -374,8 +401,20 @@ class Esp32Sim:
         return self.wait_on_clock(condition, within, description)
 
     def wait_on_clock(self, condition: Callable[[], T], within: float, description: str) -> T:
-        """`wait_until`, with `description` naming the condition in its errors."""
-        return self._on().wait_until(condition, nanoseconds(within), description)
+        """`wait_until`, with `description` naming the condition in its errors and in the log."""
+        clock = self._on()
+        ns = nanoseconds(within)
+        self.log.test(clock.now, f"waits up to {seconds(ns)} for {description}")
+        try:
+            value = clock.wait_until(condition, ns, description)
+        except NeverHappened:
+            self.log.test(clock.now, f"{description}: did not happen within {seconds(ns)}")
+            raise
+        except RunEnded:
+            self.log.test(clock.now, f"{description}: the run ended first")
+            raise
+        self.log.test(clock.now, f"{description}: happened")
+        return value
 
     def _on(self) -> HeldClock:
         if not self.powered:
@@ -449,8 +488,10 @@ class Esp32Sim:
         log in a busy loop and has nearly always sent the runner's last lines on by then, but it
         is not waited for: they may miss `dut.log`, never the test's result. A runner that exited
         with an error, one that had to be killed, and a link the harness found wrong fail the
-        test, even one whose expects all passed before it. A board never powered on has no
-        runner to end."""
+        test, even one whose expects all passed before it. Once the runner is gone and the link
+        read, writes the recording of every route the test tapped, also of a run that failed; one
+        that cannot be written fails the test too. A board never powered on has no runner to end,
+        and no recording to write."""
         held = self._hold.stop()
         if self.process is None:
             return
@@ -484,7 +525,7 @@ class Esp32Sim:
             self.process.stdin.close()
         # Judged by the code after the runner has stopped, not by whether it had stopped before:
         # since #11 the runner ends a run on SIGTERM and exits 0.
-        problems = []
+        problems = self._write_taps()
         if killed:
             problems.append(
                 f"the runner did not exit within {EXIT_SECONDS} s of SIGTERM, and was killed"
@@ -495,6 +536,75 @@ class Esp32Sim:
             problems.append(f"the link failed: {self.link.error}")
         if problems:
             raise BackendError("; ".join(problems) + f"; its output is in {self.dut.logfile}")
+
+    def _write_taps(self) -> list[str]:
+        """Writes the recording of every tapped route; returns what could not be written."""
+        tapped = [uart for uart in self._uarts.values() if uart.tapped is not None]
+        if not tapped:
+            return []
+        runner = self.link.runner
+        tools = {"esp32sim": runner.esp32sim} if runner and runner.esp32sim else {}
+        # The app image alone, as the format has it: the header's app_sha256 (plan §4.3).
+        app_bin = self.app.flash_args.get("app", {}).get("file")
+        try:
+            app_sha256 = sha256(Path(self.app.binary_path or "") / app_bin) if app_bin else None
+        except OSError:
+            app_sha256 = None
+        problems = []
+        for uart in tapped:
+            assert uart.tapped is not None
+            try:
+                made = uart.tapped.recording(
+                    board=self.profile.name,
+                    # TODO(#69): a model's source is model:<name> (docs/recording-format.md), not
+                    # the kind alone.
+                    source=uart.source_kind or NO_SOURCE,
+                    clock=self.clock,
+                    app_sha256=app_sha256,
+                    tools=tools,
+                )
+                recording.write(uart.tapped.path, made)
+            except (OSError, recording.RecordingError) as error:
+                # A problem of the test's like the others, so that the link's error, which a
+                # recording the format refuses comes with, is not lost.
+                problems.append(f"the tap of {uart.name} cannot be written: {error}")
+        return problems
+
+    def report(self, run: bool = False) -> str:
+        """The link's report, then the bytes on every route and, with `run`, the run on the
+        board's clock (`RunLog.lines`): for the report of a test that failed."""
+        lines = [self.link.report(), "routes:"]
+        for name, uart in self._uarts.items():
+            traffic = self.log.traffic.get(name)
+            source = (
+                f"the {uart.source_kind} of {uart.source_detail}"
+                if uart.source_kind is not None
+                else "nothing at the far end"
+            )
+            crossed = (
+                f"{traffic.bytes_in} bytes in, {traffic.bytes_out} out" if traffic else "no bytes"
+            )
+            tap = f"; tapped into {uart.tapped.path}" if uart.tapped is not None else ""
+            lines.append(f"  {name}: {source}; {crossed}{tap}")
+        if run:
+            lines += self.log.lines()
+        return "\n".join(lines)
+
+    def properties(self) -> dict[str, object]:
+        """The link's `properties()`, and the routes: for each, the kind of source at the far end
+        and what it was made from (a replay's recording, as the test named it), the bytes each way
+        and the tap's file."""
+        routes = {}
+        for name, uart in self._uarts.items():
+            traffic = self.log.traffic.get(name)
+            routes[name] = {
+                "source": uart.source_kind,
+                "detail": uart.source_detail,
+                "bytes_in": traffic.bytes_in if traffic else 0,
+                "bytes_out": traffic.bytes_out if traffic else 0,
+                "tap": None if uart.tapped is None else str(uart.tapped.path),
+            }
+        return self.link.properties() | {"routes": routes}
 
     def _close_link(self) -> None:
         """Closes the socket, once the runner is gone and the link read to its end."""

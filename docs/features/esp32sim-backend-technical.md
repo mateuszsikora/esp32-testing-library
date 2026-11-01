@@ -1,7 +1,8 @@
 # esp32sim backend: how it works
 
 The backend is `esp32tl/backends/esp32sim.py`, with the test's clock in
-`esp32tl/backends/clock.py`. The `board` fixture of the
+`esp32tl/backends/clock.py`. It keeps the run's log and writes the taps of `esp32tl/report.py`
+and `esp32tl/tap.py` ([run-report-technical.md](run-report-technical.md)). The `board` fixture of the
 [pytest plugin](pytest-plugin-technical.md) constructs it at setup and closes it at teardown. What
 the user sees is in [esp32sim-backend-user.md](esp32sim-backend-user.md).
 
@@ -28,26 +29,29 @@ starting anything:
    that is not a file. The result is `Esp32Sim.app`.
 2. **`runner_path()`** and **`rom_path()`** resolve the runner and the ROM ELF
    ([Configuration](#configuration)).
-3. **The clock and the console.** A `HeldClock` (`esp32tl/backends/clock.py`, below), and
+3. **The clock, the console and the log.** A `HeldClock` (`esp32tl/backends/clock.py`, below);
    `console_output`, a `bytearray` that gets the bytes of every `console` message of the link
-   until the link fails: after an error `BoardLink` reads on, but hands nothing more on.
+   until the link fails: after an error `BoardLink` reads on, but hands nothing more on; and
+   `Esp32Sim.log`, a `RunLog` (`esp32tl/report.py`).
 4. **The UARTs.** For every `[uart.<role>]` route of the profile, `profile_uart` makes the route's
    `Uart` (`esp32tl/interfaces/uart.py`): `Wire(tx, rx, baud)` from the route,
-   `clock=Esp32Sim.clock`, `directory`, and `asked=self._asked`.
-5. **The lines.** One `Lines(profile.name, profile.lines, now)` (`esp32tl/interfaces/lines.py`)
-   for every `[lines.<role>]` set, also on a profile with none, with `now` the `HeldClock`'s, so
-   that what the test drives before power-on holds from `t = 0`
+   `clock=Esp32Sim.clock`, `directory`, `asked=self._asked`, `log=self.log`, and `files`, one
+   mapping for all of them of the files the run replays from and taps into.
+5. **The lines.** One `Lines(profile.name, profile.lines, now, log=self.log)`
+   (`esp32tl/interfaces/lines.py`) for every `[lines.<role>]` set, also on a profile with none,
+   with `now` the `HeldClock`'s, so that what the test drives before power-on holds from `t = 0`
    ([pytest-plugin-technical.md](pytest-plugin-technical.md#data-flow)).
-6. **`BoardLink(profile.name, [*uarts, lines], chip=profile.chip, on_error=self._end_run, hold=clock, console=..., clock=self.clock)`**
+6. **`BoardLink(profile.name, [*uarts, lines], chip=profile.chip, on_error=self._end_run, hold=clock, console=self._printed, clock=self.clock)`**
    (`esp32tl/link/boardlink.py`) is the harness's end of the link: `Esp32Sim.link`. The harness's
    `hello` names the profile and its chip; `watch` is the pins of every UART route and every
-   line. It checks that
-   no two interfaces share a pin. `hold` holds every turn until the test waits; `console` appends
-   each console message's bytes to `console_output`, in the link's thread.
+   line. It checks that no two interfaces share a pin. `hold` holds every turn until the test
+   waits; `_printed` appends each console message's bytes to `console_output` and hands them to
+   `log.console`, in the link's thread.
 
 **`Esp32Sim.power_on(utc=None)`** raises `BoardOff` when the runner has started already, and a
 `ValueError` for a `utc` that is not a `datetime` with a timezone; it keeps `utc` converted to UTC,
-or `POWER_ON_UTC`, for `Esp32Sim.utc`. Then:
+or `POWER_ON_UTC`, for `Esp32Sim.utc`, and logs `board.power_on(), the world's time {utc}` at 0
+once the runner has started. Then:
 
 1. **`listen()`** binds a Unix stream socket at `link.sock` in a new directory from
    `tempfile.mkdtemp(prefix="esp32tl-")`, or from `mkdtemp(..., dir="/tmp")` when the first path
@@ -121,18 +125,24 @@ clock's by `10**9`; `utc` adds it, in microseconds, to the UTC instant at power-
 `wait_until`, `wait_on_clock`, `now` and `utc` raise `BoardOff` before `power_on()`. `wait_until`
 describes its condition as `the condition {condition.__qualname__}`, or by its `repr` when it has
 no qualified name; `wait_on_clock(condition, within, description)` takes the description from the
-caller, as the console does.
+caller, as the console does. `wait` logs `board.wait({seconds})` at the board's time it starts
+from, and `the run ended while the test waited` when it raises `RunEnded`; `wait_on_clock`, and
+with it `wait_until` and the console's expects, logs `waits up to {within} for {description}`, then
+`{description}: happened`, `{description}: did not happen within {within}` or
+`{description}: the run ended first`, at the board's time it returns or raises at.
 
-**Sources.** `Uart.replay` calls `asked(interface, "replay")` before it reads the recording.
-`_asked` refuses, with `SourceError`, a source once the board is on
-(`{interface}: the board is on already: give a route its source before board.power_on()`), and one
-that `capabilities.check` finds no backend gives, with that error's message. Otherwise, when
-`capabilities.refusal(self.name, ...)` gives a reason, it calls `skip(f"esp32sim: {reason}")`. It
-reads the declaration through `capabilities.declared()` at each call, so a test can swap it.
-`set_up()` lists `the {source_kind} of {interface}` for every `Uart` with a source, then
-`the level of {line}` for every line the test has driven (a `LineEvent` by `"test"`; a release of
-a line the test does not drive makes none). This is what the `board` fixture reports for a test
-that never powered on.
+**Sources and taps.** `Uart.replay` calls `asked(Request(interface, source="replay"))` before it
+reads the recording, and `Uart.tap` calls `asked(Request(interface, tap=True))` before it makes
+the `Tap`. `_asked` refuses, with `SourceError`, either once the board is on
+(`{interface}: the board is on already: give a route its source before board.power_on()`, and
+`... tap a route before board.power_on()` for a tap), and one that `capabilities.check` finds no
+backend gives, with that error's message. Otherwise, when `capabilities.refusal(self.name, ...)`
+gives a reason, it calls `skip(f"esp32sim: {reason}")`. It reads the declaration through
+`capabilities.declared()` at each call, so a test can swap it. `set_up()` lists
+`the {source_kind} of {interface}` for every `Uart` with a source and `the tap of {interface}` for
+every tapped one, then `the level of {line}` for every line the test has driven (a `LineEvent` by
+`"test"`; a release of a line the test does not drive makes none). This is what the `board`
+fixture reports for a test that never powered on.
 
 **The link.** `BoardLink` keeps the run's `RunnerHello` (`link.runner`), its warnings, its `stats`,
 the number of turns and the first `error` with its traceback. When it finds the run wrong it calls
@@ -184,10 +194,28 @@ cut at its start, rather than dropped. A log it cannot read gives
    for, so the runner's last lines may be missing from `dut.log`; the result does not depend on
    them. Then closes the stdin pipe `DuplicateStdoutPopen` opens and never closes, which the runner
    does not read.
-6. Raises one `BackendError` naming every problem, joined by `; `: the runner was killed, or its
-   exit code is not 0, and the link has an error. The code is judged after the runner has
-   stopped: a runner that crashed just before the signal keeps its own code. With `--board` the
-   runner exits 0 on `stop` and on `SIGTERM`, so a signal's code never passes.
+6. `_write_taps()`: for every `Uart` whose `tapped` is set, `Tap.recording(board=profile.name,
+   source=uart.source_kind or "none", clock=self.clock, app_sha256=..., tools=...)` written with
+   `recording.write` to the tap's path. `app_sha256` is the SHA-256 of the file `flasher_args.json`
+   names under `app`, `None` when it names none or the file cannot be read; `tools` holds
+   `esp32sim`, the runner's `hello`'s revision, when the runner said one, and `Tap.recording` adds
+   `esp32tl`. An `OSError` from the write, or a `RecordingError` from a recording the format
+   refuses, is a problem of its own, `the tap of {interface} cannot be written: {error}`, and the
+   other taps are still written; the link's error and the exit code still come after it. The
+   recording is written whatever the run's outcome, so a failed run leaves what crossed the wire.
+7. Raises one `BackendError` naming every problem, joined by `; `: a tap that cannot be written,
+   the runner was killed, or its exit code is not 0, and the link has an error. The code is judged
+   after the runner has stopped: a runner that crashed just before the signal keeps its own code.
+   With `--board` the runner exits 0 on `stop` and on `SIGTERM`, so a signal's code never passes.
+
+**The report.** `Esp32Sim.report(run=False)` is `link.report()`, then `routes:` and one line per
+UART route of the profile, `  {interface}: {source}; {bytes}{tap}`: `{source}` is
+`the {kind} of {detail}` (`the replay of gnss.jsonl`) or `nothing at the far end`, `{bytes}` is
+`{in} bytes in, {out} out` from `log.traffic`, or `no bytes`, and `{tap}` is
+`; tapped into {path}` for a tapped route. With `run`, `log.lines()` follows: the plugin passes it
+for a test that failed. `Esp32Sim.properties()` is `link.properties()` with `routes`, by
+interface: `source` (the kind, or `None`), `detail` (what the source was made from, as the test
+named it), `bytes_in`, `bytes_out` and `tap` (the path, or `None`).
 
 ## Schema
 
@@ -219,22 +247,23 @@ repository makes.
 
 | Name | What |
 |---|---|
-| `Esp32Sim(dut, app_path, msg_queue, meta, profile, directory=None, skip=None)` | The board, off. Attributes: `name = "esp32sim"`, `clock = "emulated-fifo-write"` (the clock the runner's `hello` must name, and a replayed recording must be on), `dut`, `profile` (the `BoardProfile`), `directory`, `app` (the `IdfApp`), `console_output` (a `bytearray`), `process` (the `RunnerPopen`, `None` until power-on), `link` (the `BoardLink`, complete once `close` returns) |
+| `Esp32Sim(dut, app_path, msg_queue, meta, profile, directory=None, skip=None)` | The board, off. Attributes: `name = "esp32sim"`, `clock = "emulated-fifo-write"` (the clock the runner's `hello` must name, a replayed recording must be on, and a tap's recording is on), `dut`, `profile` (the `BoardProfile`), `directory`, `app` (the `IdfApp`), `console_output` (a `bytearray`), `log` (the `RunLog`), `process` (the `RunnerPopen`, `None` until power-on), `link` (the `BoardLink`, complete once `close` returns) |
 | `Esp32Sim.power_on(utc=None)` | Starts the runner; `BoardOff` the second time |
 | `Esp32Sim.powered` | Whether `power_on` has started the runner |
 | `Esp32Sim.wait(duration)`, `Esp32Sim.wait_until(condition, *, within)`, `Esp32Sim.wait_on_clock(condition, within, description)` | The test's waits, in seconds of the board's time |
 | `Esp32Sim.now`, `Esp32Sim.utc` | The board's time since power-on, in seconds; the world's time, a `datetime` in UTC |
 | `Esp32Sim.uart(role)` | The `Uart` of `uart.<role>` on the link; `BackendError` when the profile has no such route |
 | `Esp32Sim.lines()` | The `Lines` of the profile's `[lines.<role>]` sets on the link; `BackendError` when the profile has none |
-| `Esp32Sim.set_up()` | What the test gave that only a run uses: `the replay of uart.gnss` per route with a source, `the level of modem.ri` per line the test drove |
-| `Esp32Sim.close()` | Ends the run; raises `BackendError` for a failing exit code, a killed runner or a link error |
+| `Esp32Sim.set_up()` | What the test gave that only a run uses: `the replay of uart.gnss` per route with a source, `the tap of uart.gnss` per tapped route, `the level of modem.ri` per line the test drove |
+| `Esp32Sim.close()` | Ends the run and writes the taps; raises `BackendError` for a tap that cannot be written, a failing exit code, a killed runner or a link error |
+| `Esp32Sim.report(run=False)`, `Esp32Sim.properties()` | The `esp32sim link` report section, with the run on the board's clock when `run`; the `esp32sim_link` user property's data |
 | `BackendError` | What keeps the backend from starting, or a failing end |
 | `HeldClock(step=STEP_NS)` | `esp32tl/backends/clock.py`: the link's `Hold`, `turn(now)`; `stop()`, `end(reason, at=None)`; the test's `now`, `wait(ns)`, `wait_until(condition, within_ns, description)` |
 | `nanoseconds(value)`, `seconds(ns)` | `esp32tl/backends/clock.py`: seconds of the board's time to nanoseconds, checked; nanoseconds shown as `12.5 s` |
 | `listen()` | The listening socket and its path, or `BackendError` |
 | `runner_path()`, `rom_path()` | The runner and the ROM ELF, or `BackendError` |
 | `load_app(app_path)` | The checked `IdfApp` of `<app_path>/build` |
-| `profile_uart(profile, interface, *, clock, directory, asked=...)` | The `Uart` on the route the profile gives `interface` (`uart.gnss`), at its pins and baud; `BackendError` when the profile has no such route. `Esp32Sim` makes its UARTs with it, and so does the [`esp32tl` command](cli-user.md) |
+| `profile_uart(profile, interface, *, clock, directory, asked=..., log=None, files=None)` | The `Uart` on the route the profile gives `interface` (`uart.gnss`), at its pins and baud; `BackendError` when the profile has no such route. `Esp32Sim` makes its UARTs with it, and so does the [`esp32tl` command](cli-user.md) |
 | `runner_command(runner, rom, app, max_seconds, link, *, held=False)` | The runner's argument list |
 | `RunnerPopen(msg_queue, cmd, meta)` | `DuplicateStdoutPopen` that closes its log when the start fails |
 | `refuse(reason)` | Raises `SourceError(reason)`: `Esp32Sim`'s `skip` outside pytest |
@@ -287,6 +316,7 @@ the first problem shows; the socket and the start come at `power_on()`, in the t
 | `the runner exited with code {code}; its output is in {self.dut.logfile}` | `Esp32Sim.close` | Exit code not 0; error at teardown, unless the call already failed on `RunEnded` |
 | `the runner did not exit within {EXIT_SECONDS} s of SIGTERM, and was killed; its output is in {self.dut.logfile}` | `Esp32Sim.close` | No exit within `EXIT_SECONDS` of the signal |
 | `the link failed: {link.error}; its output is in {self.dut.logfile}` | `Esp32Sim.close` | `BoardLink` found the run wrong; after an exit-code problem when there is one |
+| `the tap of {interface} cannot be written: {error}; its output is in {self.dut.logfile}` | `Esp32Sim.close` | An `OSError` from writing the tap's recording, or a `RecordingError` from making it; first, before any other problem |
 
 In the test body:
 
@@ -296,8 +326,9 @@ In the test body:
 | `the board is on already: power it on once` | `BoardOff` | A second `power_on()` |
 | `power_on: utc is {utc!r}, not a datetime with a timezone` | `TypeError`, `ValueError` | Not a `datetime`; a naive `datetime` |
 | `{interface}: the board is on already: give a route its source before board.power_on()` | `SourceError` | A source after power-on |
-| the message of `capabilities.check`, as `no backend takes a 'replay' source on uart.gnss; the sources there are model` | `SourceError` | A source no backend declares |
-| `esp32sim: {reason}`, as `esp32sim: uart.gnss takes no replay source on this backend, only model` | the `skip` given: pytest's skip under the plugin | A source this backend does not declare |
+| `{interface}: the board is on already: tap a route before board.power_on()` | `SourceError` | A tap after power-on |
+| the message of `capabilities.check`, as `no backend takes a 'replay' source on uart.gnss; the sources there are model` or `no backend can tap uart.gnss` | `SourceError` | A source or a tap no backend declares |
+| `esp32sim: {reason}`, as `esp32sim: uart.gnss takes no replay source on this backend, only model` or `esp32sim: uart.gnss cannot be tapped on this backend` | the `skip` given: pytest's skip under the plugin | A source or a tap this backend does not declare |
 | `{value!r} is not a number of seconds of the board's time`, and the same with `, 0 or more` | `TypeError`, `ValueError` | A duration that is not an `int` or a `float`, or is negative, infinite or NaN |
 | `{description} did not happen within {within}: waited from {start} to {end} of the board's time` | `NeverHappened` | `wait_until`'s deadline |
 | `the run ended {when} while the test waited {what}: {reason}` | `RunEnded` | The run ended during, or before, a wait. `{when}` is `at {time}` from the runner's `stats`, `after the turn at {time}` without them, the last held turn being only a bound, or `before its first turn`. `{what}` is `until {time}` for `wait`, `for {description}` for `wait_until`; `{reason}` is `[the link failed: {error}; ]the runner exited with code {code}; its last output:` and the tail |
@@ -326,8 +357,9 @@ instance, is not a `BackendError` and fails the setup with its own traceback.
   `test_a_runner_that_exits_with_an_error_fails_the_test` (exit 1 and `SIGKILL`, `-9`: the call
   passes, the teardown errors), `test_a_failure_of_another_kind_does_not_hide_the_runner_s_exit`,
   `test_the_board_s_clock_and_sources_go_in_order`,
-  `test_a_source_the_backend_cannot_give_skips_at_the_call`,
-  `test_a_test_that_sets_up_a_source_and_never_powers_on_fails_at_teardown` and
+  `test_a_source_or_a_tap_the_backend_cannot_give_skips_at_the_call`,
+  `test_a_test_that_sets_up_a_source_and_never_powers_on_fails_at_teardown`,
+  `test_a_test_that_taps_a_route_and_never_powers_on_fails_at_teardown` and
   `test_the_lines_fixture_needs_a_profile_with_lines_and_a_drive_needs_power_on`.
 - `test_the_eof_tail_is_the_runner_s_last_whole_lines_without_colour`,
   `test_the_eof_tail_keeps_a_long_last_line` (no ending, `\n`, `\r\n`, and a log that cannot be
@@ -345,6 +377,11 @@ instance, is not a `BackendError` and fails the setup with its own traceback.
   (the LilyGO profile's `watch`; its pull-down in the first turn is checked in `tests/test_lines.py`
   and `tests/test_gpio_echo.py`),
   `test_the_test_s_waits_move_the_board_s_clock` (`now`, `wait`, `wait_until`, `utc`),
+  `test_a_tap_records_what_crossed_the_route_both_ways` (the tap's file, header and events, with
+  `FAKE_LINK=tx`, and the routes in a passing test's report),
+  `test_the_report_of_a_failing_test_shows_the_run_on_the_board_s_clock` (the run, line by line,
+  and the routes in the user property),
+  `test_a_tap_that_cannot_be_written_fails_the_test_at_teardown`,
   `test_a_mismatched_handshake_fails_the_test_with_both_sides_reasons` (exit 3, both reasons in
   the `RunEnded`), `test_a_link_the_harness_finds_wrong_fails_the_test_after_its_expects`,
   `test_a_link_error_ends_the_run_at_once_for_a_waiting_test`,

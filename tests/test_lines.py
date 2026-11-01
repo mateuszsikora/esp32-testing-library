@@ -12,6 +12,7 @@ from esp32tl.boards import Line
 from esp32tl.interfaces.lines import LineEvent, Lines
 from esp32tl.link.boardlink import BoardLink
 from esp32tl.link.protocol import GpioIn, GpioOut, Release, RunnerHello, Sync, Wait
+from esp32tl.report import RunLog
 
 HELLO = RunnerHello(1, "esp32", "emulated-fifo-write", "8c652151dd5a521249a785ca147f20a9f8eda68f")
 LILYGO = boards.profile("lilygo-t-a7670g-r2")
@@ -180,3 +181,23 @@ def test_on_the_link_the_lines_are_watched_and_driven_in_their_turn() -> None:
     assert link.error is None
     assert lines.level("modem.pwrkey") == 1
     assert [(e.t, e.by) for e in lines.events()] == [(1.0, "firmware"), (2.0, "test")]
+
+
+def test_the_test_s_calls_and_the_firmware_s_changes_go_into_the_run_s_log() -> None:
+    log = RunLog()
+    clock = Clock()
+    lines = Lines(LILYGO.name, LILYGO.lines, clock, log=log)
+    clock.now = S
+    lines.drive("modem.ri", 1)
+    # A call that changes nothing is still a step of the test.
+    lines.drive(33, 1)
+    lines.driven(S + 9_000, [(4, 1)], frozenset({4}))
+    clock.now = 2 * S
+    lines.release("modem.ri")
+    assert log.lines() == [
+        "the run on the board's clock, 4 entries:",
+        "  1.000000000 s  test              lines.drive('modem.ri', 1)",
+        "  1.000000000 s  test              lines.drive(33, 1)",
+        "  1.000009000 s  modem.pwrkey out  1",
+        "  2.000000000 s  test              lines.release('modem.ri')",
+    ]

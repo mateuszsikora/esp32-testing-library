@@ -89,6 +89,7 @@ These raise `SourceError` (`esp32tl.interfaces.SourceError`) in the test body:
 |---|---|
 | `uart.gnss: the board is on already: give a route its source before board.power_on()` | `gnss.replay` after `board.power_on()` |
 | `uart.gnss has its source already: one per test` | A second `gnss.replay` in one test |
+| `uart.gnss: cannot replay {path}: it is the tap of uart.gnss` | The recording is the file a route is tapped into ([taps](run-report-user.md#tapping-a-route)) |
 
 A wait or an expect before `board.power_on()` raises
 `BoardOff: the board is off; call board.power_on() first`.
@@ -113,7 +114,11 @@ fixtures failed at setup.
 The first line of the [link's report](esp32sim-backend-user.md#the-links-report) names the pins of
 every route of the profile, `board esp32-devkitc, watching GPIO 4, GPIO 5`, with a replay or
 without one. With a replay the runner takes a turn at each recorded time it reached, as well as
-those the test's waits bring.
+those the test's waits bring. The route's line under `routes:` names the recording and counts the
+bytes that went in, `uart.gnss: the replay of ../recordings/gnss-generated-1.jsonl; {n} bytes in, 0 out`,
+and a failing test's report shows each event that went in, at its time
+([the run on the board's clock](run-report-user.md#the-run-on-the-boards-clock)). To keep what
+went in as a recording, tap the route ([taps](run-report-user.md#tapping-a-route)).
 
 ## See also
 
