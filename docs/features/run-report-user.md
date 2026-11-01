@@ -95,10 +95,14 @@ command. Each line is the board's time, who, and what:
   end sent in, at the time they crossed, whether the route is tapped or not. Printable ASCII is
   shown as it is, `\r`, `\n`, `\t` and `\\` escaped, any other byte as `\xNN`; after 100 bytes the
   line is cut, with the length: `... (512 bytes)`.
+- `{line} out`, as `modem.pwrkey out`: a level the firmware drove a line of the profile's
+  `[lines.<role>]` sets to, `0` or `1`, or `not driven` once its output is off, at the time it
+  changed. What the test drives on a line is a `test` step: `lines.drive('modem.ri', 1)`,
+  `lines.release('modem.ri')`, every call, also one that changes nothing.
 
 Entries are in the order of the board's time, those of one time in the order they came. The
-report keeps every step of the test, and the last 200 lines of the console and events of the
-routes; when it has left some out, its heading says so:
+report keeps every step of the test, and the last 200 lines of the console, events of the
+routes and changes of the lines; when it has left some out, its heading says so:
 `the run on the board's clock, {n} entries: every step of the test, and the last 200 of the console and the routes:`.
 A run with no entry says `the run on the board's clock: nothing happened`.
 

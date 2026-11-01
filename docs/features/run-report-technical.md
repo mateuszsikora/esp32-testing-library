@@ -12,7 +12,11 @@ M2 asked for it.
 1. **`Esp32Sim.__init__`** makes `Esp32Sim.log = RunLog()` and hands it to every route's `Uart`
    (`profile_uart(..., log=self.log)`), and to the console: the link's `console` callback is
    `Esp32Sim._printed`, which appends to `console_output` and calls `log.console(t, data)`
-   ([esp32sim-backend-technical.md](esp32sim-backend-technical.md#data-flow)).
+   ([esp32sim-backend-technical.md](esp32sim-backend-technical.md#data-flow)). It hands the log
+   to the `Lines` of the profile too: `lines.drive` and `lines.release` log
+   `lines.drive({line!r}, {level})` and `lines.release({line!r})` as steps at `now`, on every
+   call, and `Lines.driven` calls `log.line(t, name, level)` for each change of a line the
+   firmware drives, in the link's thread.
 2. **`gnss.tap(path)`**, in the test body, before `board.power_on()`. `Uart.tap` refuses a UART that
    has a tap already (`SourceError`), calls `asked(Request(name, tap=True))`, through which the
    backend refuses a tap after power-on or one no backend gives (`SourceError`) and skips the test
@@ -81,7 +85,9 @@ end. `console_line` drops the line ending and the colour codes (`\x1b[...m`), de
 `backslashreplace`, and escapes every other control character but the tab (`\r`, `\x1b`).
 `route(t, interface, direction, data)` counts the bytes and the events each way in
 `RunLog.traffic[interface]`, a `Traffic`, and adds the bytes as `{interface} {direction}`, which
-`lines()` writes with `shown`. `lines()` pads the who column to the longest in the entries kept.
+`lines()` writes with `shown`. `line(t, name, level)` adds `{name} out` with `0`, `1` or
+`not driven` as its text; it goes in the same `deque` and counts among the routes' entries in the
+heading. `lines()` pads the who column to the longest in the entries kept.
 
 ## Schema
 
@@ -130,7 +136,7 @@ was made from or null, "bytes_in": n, "bytes_out": n, "tap": path or null}`.
 | `Uart.tap(path)` | `esp32tl/interfaces/uart.py`: the route's `Tap`, `Uart.tapped` |
 | `Uart.files` | `dict[Path, tuple[str, str]]`: the files the run replays from and taps into, by path, with what each is for, the kind (`replay`, `tap`) and the route; one mapping for every `Uart` of an `Esp32Sim` |
 | `same_file(a, b)` | `esp32tl/interfaces/uart.py`: whether two paths name one file: `os.path.samefile` when both exist, else the same directory and the same name but for its case |
-| `RunLog(entries=ENTRIES)` | `esp32tl/report.py`. `test(t, text)`, `console(t, data)`, `route(t, interface, direction, data)`, `lines()`; attribute `traffic`, by interface |
+| `RunLog(entries=ENTRIES)` | `esp32tl/report.py`. `test(t, text)`, `console(t, data)`, `route(t, interface, direction, data)`, `line(t, name, level)`, `lines()`; attribute `traffic`, by interface |
 | `Traffic` | `bytes_in`, `bytes_out`, `events_in`, `events_out` |
 | `shown(data, limit=SHOWN_BYTES)`, `console_line(line)`, `board_time(t)`, `text(who, what)` | How the log writes bytes, console lines, times and an entry |
 | `ENTRIES`, `SHOWN_BYTES` | 200 entries of the console and the routes kept; 100 bytes shown of an event |
@@ -175,8 +181,11 @@ before ([protocol, section 7](../protocol.md#7-latency-is-bound-to-the-source)).
 - `tests/test_run_report.py`: entries in the order of the board's time, ties in the order they
   came; the console cut into lines at their first byte's time, colour codes dropped, an unfinished
   line shown; every step and the last `entries` of the rest kept, with the heading that says so,
-  and the bytes counted; an empty log; `shown` and `console_line`; a console line's `\r` and
-  other escape sequences escaped.
+  and the bytes counted; a line the firmware drives, and stops driving; an empty log; `shown` and
+  `console_line`; a console line's `\r` and other escape sequences escaped.
+  `tests/test_lines.py::test_the_test_s_calls_and_the_firmware_s_changes_go_into_the_run_s_log`:
+  the test's calls on the lines as steps, a call that changes nothing included, and the
+  firmware's change as an entry.
 - `tests/test_pytest_plugin.py`, with the fake runner that speaks the link protocol and
   `FAKE_LINK=tx`: `test_a_tap_records_what_crossed_the_route_both_ways` reads the file a passing
   test's tap wrote (header, `app_sha256` of the fake build's empty `app.bin`, tools, the `out`

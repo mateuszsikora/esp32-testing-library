@@ -16,10 +16,11 @@ The backend owns the link's socket (`docs/protocol.md` §1): it binds a Unix soc
 spawns the runner, passes it as `--board socket:PATH`, and serves the one connection with a
 `BoardLink` in a thread of its own. The link carries a `Uart` for every UART route of the board
 profile, which says nothing until the test gives it a source, as `gnss.replay(path)` does before
-power-on. The backend also owns the end of the run (§9), before the dut is torn down: `stop` at the
-turn the test left the run at, `SIGTERM` for a runner that is not there, the link read to end of
-file, the runner waited for, `SIGKILL` only as a last resort. Then it writes the recordings of the
-routes the test tapped.
+power-on, and the profile's GPIO lines as one `Lines`, which puts the board's pulls on them from
+power-on and what the test drives at the instant it does. The backend also owns the end of the
+run (§9), before the dut is torn down: `stop` at the turn the test left the run at, `SIGTERM` for
+a runner that is not there, the link read to end of file, the runner waited for, `SIGKILL` only as
+a last resort. Then it writes the recordings of the routes the test tapped.
 
 What the test does on the board, what the firmware prints and the bytes on every route go into a
 `RunLog` (`esp32tl.report`), which the report of a test that failed shows after the link's.
@@ -48,6 +49,7 @@ from esp32tl.backends.clock import HeldClock, nanoseconds, seconds
 from esp32tl.boards import BoardProfile, capabilities
 from esp32tl.boards.capabilities import CapabilityError, Request
 from esp32tl.interfaces import BoardOff, NeverHappened, RunEnded, SourceError
+from esp32tl.interfaces.lines import Lines
 from esp32tl.interfaces.uart import Uart
 from esp32tl.link.boardlink import BoardLink, Wire
 from esp32tl.report import RunLog
@@ -208,7 +210,8 @@ def listen() -> tuple[socket.socket, Path]:
 
 class Esp32Sim:
     """A run of the app in `app_path` in the runner, on the board profile `profile`, its console
-    going to `dut`'s log and to the test, its board the link to every UART route of the profile.
+    going to `dut`'s log and to the test, its board the link to every UART route and every GPIO
+    line of the profile.
 
     `app` is the `IdfApp` the runner flashes. The dut's own `app` is pytest-embedded's base `App`,
     without `flash_files` or `target`: without a service, pytest-embedded builds nothing more.
@@ -260,9 +263,11 @@ class Esp32Sim:
             )
             for role in profile.uart
         }
+        # Before power-on the clock's time is 0: what the test drives then holds from the start.
+        self._lines = Lines(profile.name, profile.lines, lambda: self._hold.now, log=self.log)
         self.link = BoardLink(
             profile.name,
-            list(self._uarts.values()),
+            [*self._uarts.values(), self._lines],
             chip=profile.chip,
             on_error=self._end_run,
             hold=self._hold,
@@ -287,6 +292,15 @@ class Esp32Sim:
             )
         return uart
 
+    def lines(self) -> Lines:
+        """The `Lines` on the link for the profile's `[lines.<role>]` sets."""
+        if not self.profile.lines:
+            raise BackendError(
+                f"the board profile {self.profile.name} has no lines;"
+                f" its interfaces are {', '.join(self.profile.interfaces)}"
+            )
+        return self._lines
+
     def _printed(self, t: int, data: bytes) -> None:
         self.console_output.extend(data)
         self.log.console(t, data)
@@ -310,13 +324,15 @@ class Esp32Sim:
 
     def set_up(self) -> list[str]:
         """What the test has set up that only a run uses: the sources it gave and the taps it
-        asked for, as `the replay of uart.gnss`."""
+        asked for, as `the replay of uart.gnss`, and the lines it drove, as `the level of
+        modem.ri`."""
+        driven = dict.fromkeys(e.name for e in self._lines.events() if e.by == "test")
         return [
             f"the {kind} of {name}"
             for name, uart in self._uarts.items()
             for kind, given in ((uart.source_kind, uart.source), ("tap", uart.tapped))
             if given is not None
-        ]
+        ] + [f"the level of {name}" for name in driven]
 
     @property
     def powered(self) -> bool:

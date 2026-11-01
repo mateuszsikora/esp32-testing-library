@@ -58,6 +58,17 @@ def test_the_log_keeps_every_step_and_the_last_entries_and_counts_every_byte() -
     )
 
 
+def test_a_line_the_firmware_drives_is_an_entry_of_its_own() -> None:
+    log = RunLog()
+    log.line(5, "modem.pwrkey", 1)
+    log.line(9, "modem.pwrkey", None)
+    assert log.lines() == [
+        "the run on the board's clock, 2 entries:",
+        "  0.000000005 s  modem.pwrkey out  1",
+        "  0.000000009 s  modem.pwrkey out  not driven",
+    ]
+
+
 def test_an_empty_run_says_so() -> None:
     assert RunLog().lines() == ["the run on the board's clock: nothing happened"]
 
