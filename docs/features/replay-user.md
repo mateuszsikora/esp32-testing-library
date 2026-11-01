@@ -95,7 +95,8 @@ A wait or an expect before `board.power_on()` raises
 `BoardOff: the board is off; call board.power_on() first`.
 
 On a profile without the route, `gnss` is an error at setup, and the test body does not run:
-`esp32sim: the board profile lilygo-t-a7670g-r2 has no uart.gnss; its interfaces are console, uart.modem, lines.modem`.
+`esp32sim: the board profile {name} has no uart.gnss; its interfaces are {interfaces}`. Both
+profiles esp32tl ships have the route.
 
 A test that calls `gnss.replay` and never `board.power_on()` ran no firmware, and would pass
 whatever the firmware does: no runner starts, the link's report says `the runner never

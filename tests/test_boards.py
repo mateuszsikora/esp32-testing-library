@@ -38,21 +38,29 @@ def test_esp32_devkitc_routes_the_gnss_on_uart1_gpio_4_and_5() -> None:
     assert profile.interfaces == ["console", "uart.gnss", "sd_card"]
 
 
-def test_the_lilygo_profile_holds_only_what_the_specification_gives() -> None:
-    # The file's data as it stands, so that a pin, a size or a GNSS route added from memory fails
-    # here: they wait for the vendor schematic.
+def test_the_lilygo_profile_holds_the_specification_and_lilygo_s_documentation() -> None:
+    # The file's data as it stands, so that a pin or a size added from memory fails here: the
+    # modem's route and lines are the specification's, the GNSS route, flash and PSRAM LilyGO's.
     with (boards.PROFILES / "lilygo-t-a7670g-r2.toml").open("rb") as file:
         assert tomllib.load(file) == {
             "name": "lilygo-t-a7670g-r2",
             "chip": "esp32",
-            "uart": {"modem": {"port": 1, "tx": 26, "rx": 27, "baud": 115200}},
+            "flash_mb": 4,
+            "psram_mb": 4,
+            "uart": {
+                "modem": {"port": 1, "tx": 26, "rx": 27, "baud": 115200},
+                "gnss": {"port": 2, "tx": 21, "rx": 22, "baud": 9600},
+            },
             "lines": {"modem": {"pwrkey": 4, "ri": {"pin": 33, "pull": "down"}}},
         }
     profile = boards.profile("lilygo-t-a7670g-r2")
-    assert profile.flash_mb is None and profile.psram_mb is None
-    assert profile.uart == {"modem": UartRoute(port=1, tx=26, rx=27, baud=115200)}
+    assert (profile.flash_mb, profile.psram_mb) == (4, 4)
+    assert profile.uart == {
+        "modem": UartRoute(port=1, tx=26, rx=27, baud=115200),
+        "gnss": UartRoute(port=2, tx=21, rx=22, baud=9600),
+    }
     assert profile.lines == {"modem": {"pwrkey": Line(4), "ri": Line(33, "down")}}
-    assert profile.interfaces == ["console", "uart.modem", "lines.modem"]
+    assert profile.interfaces == ["console", "uart.modem", "uart.gnss", "lines.modem"]
 
 
 def test_a_profile_is_loaded_once_and_cannot_be_changed() -> None:
@@ -271,7 +279,7 @@ def test_the_first_request_a_backend_cannot_give_is_the_reason() -> None:
             LILYGO,
             Request("sd_card", source="model"),
             "the board profile lilygo-t-a7670g-r2 has no sd_card;"
-            " its interfaces are console, uart.modem, lines.modem",
+            " its interfaces are console, uart.modem, uart.gnss, lines.modem",
         ),
         (DEVKITC, Request("sd_card", tap=True), "no backend can tap sd_card"),
         (

@@ -247,3 +247,31 @@ def test_ctrl_c_before_the_runner_connects_exits_130(tmp_path: Path) -> None:
     assert code == 130, err
     assert "esp32tl: the runner never connected" in err
     assert "Traceback" not in err
+
+
+# A runner that says what it was given and exits without connecting.
+ARGS_RUNNER = """#!/bin/sh
+echo "fake runner: $*" >&2
+"""
+
+
+# Not `board`: esp32tl's plugin parametrizes that name.
+@pytest.mark.parametrize(
+    ("profile", "psram"), [("esp32-devkitc", "0"), ("lilygo-t-a7670g-r2", "4")]
+)
+def test_run_gives_the_chip_the_profile_s_psram(tmp_path: Path, profile: str, psram: str) -> None:
+    runner = tmp_path / "runner"
+    runner.write_text(ARGS_RUNNER)
+    runner.chmod(0o755)
+    _, _, err = finished(
+        esp32tl(
+            "run",
+            "--app",
+            "firmware/hello_world",
+            "--board",
+            profile,
+            env={"ESP32TL_RUNNER": str(runner)},
+        )
+    )
+    (args,) = [line for line in err.splitlines() if line.startswith("fake runner: ")]
+    assert args.endswith(f" --psram-mb {psram}"), err

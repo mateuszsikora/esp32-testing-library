@@ -277,21 +277,19 @@ how a relative path resolves before anyone has asked.
 
 ## The LilyGO profile leaves out what the specification does not give
 
-Status: decided (#13)
+Status: superseded (#66)
 
-*Decided in #64 to give way to [the LilyGO profile takes its GNSS route, flash and PSRAM from
-LilyGO's
-documentation](#the-lilygo-profile-takes-its-gnss-route-flash-and-psram-from-lilygos-documentation);
-this is what the code does until that lands.*
-
-`lilygo-t-a7670g-r2.toml` holds the chip, the modem's UART (UART1, GPIO 26/27, 115200 baud) and its
+`lilygo-t-a7670g-r2.toml` held the chip, the modem's UART (UART1, GPIO 26/27, 115200 baud) and its
 `pwrkey` and `ri` lines, all from the specification, and the pull-down on `ri` that stage 0 found
-([gap 6](../stage0-findings.md#gaps)); `flash_mb` and `psram_mb` are optional in the schema and
-absent here. `test_the_lilygo_profile_holds_only_what_the_specification_gives` compares the
-file's data whole.
+([gap 6](../stage0-findings.md#gaps)); `flash_mb` and `psram_mb`, optional in the schema, were
+absent, and so was a GNSS route. `test_the_lilygo_profile_holds_only_what_the_specification_gives`
+compared the file's data whole. The profile now takes its GNSS route, flash and PSRAM from
+LilyGO's documentation: see [the LilyGO profile takes its GNSS route, flash and PSRAM from
+LilyGO's
+documentation](#the-lilygo-profile-takes-its-gnss-route-flash-and-psram-from-lilygos-documentation).
 
 **Rejected:** `flash_mb = 4` and `psram_mb = 4`, as the plan's §4.5 sketch has them, because the
-specification gives neither and they would be written from memory, which it rules out.
+specification gives neither and they would have been written from memory, which it rules out.
 
 ## The capability declaration is a TOML file beside the profiles, per interface kind
 
@@ -982,9 +980,8 @@ example opens it as `Serial2` at 9600 baud. The same document's product table gi
 ESP32-WROVER-E with 4 MB of flash and 8 MB of PSRAM, of which the emulator models 4, the most the
 runner accepts. Firmware for the board may turn PSRAM on, as the production release image of
 [stage 0](../stage0-findings.md#inputs) does, and without PSRAM such an image runs degraded and logs
-`PSRAM not found`. Until it is implemented,
-[the LilyGO profile leaves out what the specification does not give](#the-lilygo-profile-leaves-out-what-the-specification-does-not-give)
-describes the profile.
+`PSRAM not found`. `test_the_lilygo_profile_holds_the_specification_and_lilygo_s_documentation`
+compares the file's data whole, as the test it replaces did.
 
 **Rejected:** waiting for the vendor schematic, as plan finding 12 did, because LilyGO's pin table
 and example already give these values.

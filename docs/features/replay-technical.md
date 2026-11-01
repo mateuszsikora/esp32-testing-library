@@ -89,7 +89,8 @@ link with `uart.gnss sent bytes stamped {t} ns in the turn at {now} ns: ...`.
   `gnss-generated-1.jsonl` and no warning;
   `test_a_source_given_out_of_order_fails_the_test` runs, through `pytester`, an expect before
   power-on, a replay after it, a replay never powered on (passing its call, an error at teardown,
-  no runner) and a profile without `uart.gnss` (an error at setup);
+  no runner) and a profile without `uart.gnss` (an error at setup), which its `conftest.py` makes
+  because every profile esp32tl ships has the route;
   `test_reports_a_fix_fails_on_a_changed_recording` and
   `test_reports_a_fix_fails_on_a_baud_mismatch` run a copy of `tests/test_nmea_reader.py`'s
   `test_reports_a_fix` on a recording with one digit changed and with the profile's route at

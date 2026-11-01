@@ -356,9 +356,11 @@ Default `Protocol` configurations shipped with the engine (values fixed in miles
 
 TOML, data only. Two profiles at the start.
 
-*As built (#13): the LilyGO profile leaves out `flash_mb` and `psram_mb`, which the specification
-does not give; [`docs/features/board-profiles-technical.md`](features/board-profiles-technical.md)
-holds the schema, and [`docs/decisions/harness.md`](decisions/harness.md) why. Kept as written.*
+*As built (#13, #66): the LilyGO profile takes its GNSS route, flash and PSRAM from LilyGO's pin
+table for the T-A7670X ESP32 and its `ExternalGPS_A7670G_Only` example, and the esp32sim backend
+gives the runner the profile's `psram_mb` as `--psram-mb`;
+[`docs/features/board-profiles-technical.md`](features/board-profiles-technical.md) holds the
+schema, and [`docs/decisions/harness.md`](decisions/harness.md) why.*
 
 `esp32-devkitc.toml` carries every validation firmware. Its GNSS route is ours to choose because
 `nmea_reader` is this repository's firmware: UART1 on GPIO 4 (TX) and 5 (RX). GPIO 16 and 17 are
@@ -382,8 +384,10 @@ rx = 5                    # strapping pin (SDIO slave timing): a low level at bo
 baud = 9600
 ```
 
-`lilygo-t-a7670g-r2.toml` holds what the spec gives and nothing from memory. Other pins, and
-whether a GNSS route exists at all, wait for the vendor schematic:
+`lilygo-t-a7670g-r2.toml` holds the modem route and lines the spec gives, and from LilyGO's pin
+table for the T-A7670X ESP32 and its `ExternalGPS_A7670G_Only` example the GNSS route of the
+board's GPS version, its flash and its PSRAM; nothing from memory. The WROVER-E carries 8 MB of
+PSRAM, and esp32sim models 0 or 4:
 
 ```toml
 name = "lilygo-t-a7670g-r2"
@@ -396,6 +400,12 @@ port = 1
 tx = 26                   # ESP32 TX → modem RX
 rx = 27
 baud = 115200
+
+[uart.gnss]
+port = 2
+tx = 21                   # ESP32 TX → receiver RX
+rx = 22
+baud = 9600
 
 [lines.modem]
 pwrkey = 4
@@ -566,8 +576,9 @@ PWRKEY and RI lines and the tap stay as described here.*
 - Validation: esp-protocols `pppos_client` at a pinned tag reaches a local HTTP server started by
   the test; the test asserts on the server's request log.
 - Scenario events: registration lost and regained, signal change, modem power loss.
-- First board-specific firmware would need the LilyGO profile completed from the schematic; the
-  validation firmware does not, it uses the devkit profile with a `[uart.modem]` route added.
+- First board-specific firmware runs on the LilyGO profile, whose GNSS route, flash and PSRAM
+  come from LilyGO's documentation (section 11); the validation firmware does not, it uses the
+  devkit profile with a `[uart.modem]` route added.
 
 ### M7. Wi-Fi and SD card
 

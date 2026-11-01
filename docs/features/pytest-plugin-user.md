@@ -179,7 +179,8 @@ the exception: it takes a `Duration`, or a number of seconds as in pytest-embedd
 - Until the test gives it a source, the route is on the link, listening and silent. So is every
   other UART route of the profile.
 - On a board profile without `uart.gnss`, `gnss` is an error at setup:
-  `esp32sim: the board profile lilygo-t-a7670g-r2 has no uart.gnss; its interfaces are console, uart.modem, lines.modem`.
+  `esp32sim: the board profile {name} has no uart.gnss; its interfaces are {interfaces}`. Both
+  profiles esp32tl ships have the route.
 
 `sd_card` is the board profile's SD card slot, empty until the test inserts a card. From
 `tests/test_sdspi.py`, with `fat_image` and `read` its helpers around mtools:
@@ -219,7 +220,7 @@ def test_the_example_writes_its_files_into_the_image(tmp_path, board, sd_card, c
   the `esp32sim_link` property has `sd_card`, `{"image": PATH}`
   ([the run report](run-report-user.md)).
 - On a board profile without a slot, `sd_card` is an error at setup:
-  `esp32sim: the board profile lilygo-t-a7670g-r2 has no sd_card; its interfaces are console, uart.modem, lines.modem`.
+  `esp32sim: the board profile lilygo-t-a7670g-r2 has no sd_card; its interfaces are console, uart.modem, uart.gnss, lines.modem`.
 - The card stays in from power-on to the end of the run: inserting or removing it while the
   firmware runs is not there yet.
 `board.uart(role)` is the same for any `uart.<role>` route of the profile: `gnss` is

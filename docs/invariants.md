@@ -57,10 +57,15 @@ that references to its number keep their meaning.
 
 ## Board profiles
 
-27. The `lilygo-t-a7670g-r2` profile holds only what the specification gives, the chip, the
+27. ~~The `lilygo-t-a7670g-r2` profile holds only what the specification gives, the chip, the
     modem's UART1 on GPIO 26/27 at 115200 baud, PWRKEY on GPIO 4 and RI on GPIO 33, and the
-    pull-down on RI of stage 0's gap 6.
-    `tests/test_boards.py::test_the_lilygo_profile_holds_only_what_the_specification_gives`
+    pull-down on RI of stage 0's gap 6.~~ No longer holds since #66, which gives the profile
+    LilyGO's GNSS route, flash and PSRAM: see 66.
+66. The `lilygo-t-a7670g-r2` profile holds what the specification gives, the chip, the modem's
+    UART1 on GPIO 26/27 at 115200 baud, PWRKEY on GPIO 4 and RI on GPIO 33, the pull-down on RI
+    of stage 0's gap 6, and what LilyGO's documentation gives, the GNSS receiver's UART2 on
+    GPIO 21/22 at 9600 baud, 4 MB of flash and 4 MB of PSRAM; nothing else.
+    `tests/test_boards.py::test_the_lilygo_profile_holds_the_specification_and_lilygo_s_documentation`
 28. A profile that breaks the schema is refused with the file and the key at fault; a UART's TX is
     never an input-only GPIO, nor is an SD card slot's SCLK, MOSI or CS, though its MISO may be;
     and no GPIO serves two uses, the console's UART0 on GPIO 1 and 3 and the slot's four pins
@@ -157,6 +162,11 @@ that references to its number keep their meaning.
     `tests/test_sdspi.py::test_the_example_writes_its_files_into_the_image`,
     `tests/test_sdspi.py::test_a_card_without_a_file_system_does_not_mount`,
     `tests/test_pytest_plugin.py::test_runner_command_puts_a_card_in_the_slot_once_the_test_inserts_one`
+67. The runner gets the board profile's PSRAM as `--psram-mb`, in a test and in the `esp32tl`
+    command: 0 on `esp32-devkitc`, 4 on `lilygo-t-a7670g-r2`.
+    `tests/test_pytest_plugin.py::test_every_route_and_line_of_the_profile_is_on_the_link`,
+    `tests/test_pytest_plugin.py::test_runner_command_gives_the_chip_the_profile_s_psram`,
+    `tests/test_cli.py::test_run_gives_the_chip_the_profile_s_psram`
 
 ## The runner
 

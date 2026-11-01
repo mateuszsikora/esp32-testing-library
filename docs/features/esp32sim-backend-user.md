@@ -30,7 +30,10 @@ A relative path in either resolves against pytest's working directory, not the t
 Each test that uses `board` gets a board that is off. The test body sets up what is around it, as
 `gnss.replay(path)` or `gnss.fix(at=...)` does, then calls `board.power_on()`, which starts the test's own runner with
 every file of `flasher_args.json` at its offset; teardown stops it. A test that never calls
-`power_on()` starts no runner.
+`power_on()` starts no runner. The chip gets the board profile's PSRAM, passed to the runner as
+`--psram-mb`: 4 MB on `lilygo-t-a7670g-r2`, whose module carries 8, and none on `esp32-devkitc`
+([board profiles](board-profiles-user.md#the-profiles-esp32tl-ships)). Its flash is the runner's
+4 MB, whatever the profile says.
 
 From power-on the run is on the test's clock: the firmware runs only while the test waits, in
 `board.wait`, `board.wait_until` or a console expect, and stands still in between, however long
