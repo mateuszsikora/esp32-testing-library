@@ -178,8 +178,8 @@ and exit 0. One run of the three tests took 2.3 to 5.3 s of wall time on an M2 P
 A test of `tests/test_determinism.py` ends its run at a time it chose (`board.wait`), so that the
 two runs end at the same instant, and checks that its run printed its fixes, so that two runs that
 both did nothing do not pass. No run speaks TLS yet, so everything is compared, times included;
-when the simulated network brings a TLS handshake, what comes after it is to be compared without
-its times ([the postponed seeded TLS](../decisions/harness.md#a-tls-stack-with-a-seeded-random-source-is-postponed)).
+when the simulated network brings a TLS handshake (#30), what comes after it is to be compared
+without its times ([the postponed seeded TLS](../decisions/harness.md#a-tls-stack-with-a-seeded-random-source-is-postponed)).
 
 ## The runner's Rust tests
 
