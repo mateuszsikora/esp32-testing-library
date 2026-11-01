@@ -178,6 +178,13 @@ FEATURES = [
         "Models or units changed (quantities, the GNSS receiver, its sentences):"
         " update docs/features/models-*.md",
     ),
+    Rule(
+        "F18",
+        r"^esp32tl/bluetooth/",
+        r"^docs/features/bluetooth-peer-",
+        "Bluetooth peer changed (the air's clock, the controller, the SPP peer):"
+        " update docs/features/bluetooth-peer-*.md",
+    ),
 ]
 
 # The catch-all for the package: the rest of sources/ and any new module are owned from their

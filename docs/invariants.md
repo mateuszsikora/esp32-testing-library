@@ -334,6 +334,36 @@ that references to its number keep their meaning.
     `tests/test_clock.py::test_console_lines_are_stamped_with_the_time_their_ending_came_at`,
     `tests/test_clock.py::test_a_line_condition_finds_the_first_matching_line_from_when_it_was_made`
 
+## Bluetooth peer
+
+68. Time on the air moves only when the test moves it, and asyncio's timers fire at their time on
+    the board's clock, never the host's.
+    `tests/test_air.py::test_timers_fire_at_their_board_time_and_only_while_the_test_moves_it`,
+    `tests/test_air.py::test_a_party_is_polled_at_every_instant_the_air_stops_at`
+69. The SPP peer is found by its name and pairs only with its PIN: another PIN fails the
+    authentication, detaches the link and leaves no key on either side; a device that paired
+    authenticates later with its key and no PIN, and one whose key the peer lost is refused.
+    `tests/test_spp_peer.py::test_the_device_finds_the_peer_by_its_name_and_its_answer_comes_on_the_boards_clock`,
+    `tests/test_spp_peer.py::test_a_wrong_pin_fails_the_authentication_and_detaches_the_link`,
+    `tests/test_spp_peer.py::test_a_device_that_paired_authenticates_with_its_key_without_a_pin`,
+    `tests/test_spp_peer.py::test_a_peer_that_lost_the_key_refuses_the_device_that_kept_it`
+70. What the device writes on the SPP channel reaches the model at the instant it arrives, and what
+    the model sends goes out at the time it gives, never earlier, in order; what it sends while no
+    device holds the channel is lost; two runs cross the channel at the same instants.
+    `tests/test_spp_peer.py::test_the_device_finds_the_peer_by_its_name_and_its_answer_comes_on_the_boards_clock`,
+    `tests/test_spp_peer.py::test_what_the_source_sends_unprompted_goes_out_at_its_time_or_is_lost`,
+    `tests/test_spp_peer.py::test_what_the_source_sends_after_the_channel_closes_is_lost`,
+    `tests/test_spp_peer.py::test_a_source_that_gets_its_answer_wrong_fails_the_air_naming_the_peer`,
+    `tests/test_spp_peer.py::test_two_runs_cross_the_channel_at_the_same_instants`
+71. The SPP channel opens to one device at a time, and, unless the peer is made with
+    `secure=False`, only on a link that device authenticated; two that ask at one instant get it
+    one.
+    `tests/test_spp_peer.py::test_the_channel_opens_to_one_device_at_a_time`,
+    `tests/test_spp_peer.py::test_two_devices_that_ask_for_the_channel_at_one_instant_get_it_one`,
+    `tests/test_spp_peer.py::test_the_channel_opens_only_on_a_link_the_device_authenticated`,
+    `tests/test_spp_peer.py::test_an_authenticated_link_needs_no_encryption_for_the_channel`,
+    `tests/test_spp_peer.py::test_a_peer_that_is_not_secure_opens_the_channel_on_any_link`
+
 ## The esp32tl command
 
 38. Ctrl-C ends a run of `esp32tl run` or `esp32tl replay` with one `SIGTERM` to the runner, which

@@ -76,6 +76,7 @@ version-only bump needs no document ([documentation.md](documentation.md#the-che
 | `pytest-embedded` | `Dut`, `DuplicateStdoutPopen`, `MessageQueue`: the backend builds on them | Compatible release (`~=`) |
 | `pytest-embedded-idf[serial]` | `IdfApp`, which reads a build's `flasher_args.json`. pytest-embedded declares no extras, so each service is a package of its own; the `serial` extra pulls `pytest-embedded-serial-esp` and, through it, `pytest-embedded-serial` | Compatible release (`~=`), the same as `pytest-embedded` |
 | `pytest-timeout` | The wall-time timeout the plugin gives every test that uses `board`, which ends a run that hangs ([the test's timeout](../features/pytest-plugin-user.md#the-tests-timeout)); the plugin reads its settings through `pytest_timeout.get_env_settings` | Lower bound |
+| `bumble` | The Bluetooth stack of the peers in `esp32tl/bluetooth/`: their devices, and the virtual controller that `esp32tl/bluetooth/controller.py` extends ([bluetooth-peer-technical.md](../features/bluetooth-peer-technical.md)) | Exact (`==`): at 0.0.x any release may change the controller's internals that esp32tl overrides |
 
 The `dev` extra, which `make setup` installs, adds the tools:
 
