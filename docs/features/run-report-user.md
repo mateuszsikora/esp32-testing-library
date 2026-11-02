@@ -36,6 +36,18 @@ def test_reports_a_fix(board, gnss, console, tmp_path):
   so far, as `(t, dir, data)` tuples in the order they reached the route, and `path` is the file.
 - One tap per route in a test.
 
+## Console taps
+
+`console.tap(path)` records firmware console output on both backends, from `board.power_on()`
+through teardown. It has the same path, duplicate and file collision checks as UART taps. On
+esp32sim it writes `interface: console`, `source: none` and `clock: emulated-fifo-write`. On
+serial it writes `interface: console`, `source: real` and `clock: wall`, stamping batches
+after the serial reader polls, with up to 10 ms polling delay plus USB, driver and host
+scheduling delays. Every event is `out`; setup and flash-tool messages are excluded. Serial
+writes the selected artifact's app hash, which does not prove the device's flash contents under
+`--skip-autoflash y`. See [serial](serial-backend-user.md) for reference-recording checks and the
+`serial console` report / `serial_console` JSON property.
+
 ## What a tap writes
 
 A recording, [version 1](../recording-format.md):
@@ -144,7 +156,6 @@ A tap that cannot be written at teardown is an error there:
 
 ## What it does not do
 
-- No call taps the console: what the firmware prints is in `dut.log` and in the run report.
 - A tap of a route the firmware transmits on holds `out` events, and `gnss.replay` refuses a
   recording with `out` events ([what a replay refuses](replay-user.md#what-a-replay-refuses)):
   such a tap can be read and compared, not replayed. A tap of a route the firmware only listens

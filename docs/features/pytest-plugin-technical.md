@@ -22,8 +22,8 @@ are in [models-technical.md](models-technical.md).
    service ([plan section 1](../implementation-plan.md#1-findings-that-amend-the-specification),
    finding 1).
 2. **`pytest_addoption`** adds the `esp32tl` group with `--esp32tl-backend`, whose choices are
-   `list(SERVICES)`. **`pytest_configure`** registers the `app_path` and `board_profile` markers,
-   which `--strict-markers` would otherwise refuse.
+   `list(SERVICES)`. **`pytest_configure`** registers the `app_path`, `app_recording` and
+   `board_profile` markers, which `--strict-markers` would otherwise refuse.
 3. **`pytest_generate_tests`** returns at once unless `board` is in `metafunc.fixturenames`, which
    holds the whole fixture closure, so a test that asks only for `console` counts. It starts from
    `metafunc.definition.path.parent`, joins the single argument of the closest `app_path` marker to
@@ -34,7 +34,7 @@ are in [models-technical.md](models-technical.md).
    `ProfileError` is raised as
    `pytest.fail.Exception(f"{nodeid}: {error}", pytrace=False) from None`, a collection error
    without the chained exception. The backends are `[chosen]` when `--esp32tl-backend` is set, else
-   `list(SERVICES)`, each with a `pytest.param`. Then one call:
+   `["esp32sim"]`, each with a `pytest.param`; serial is opt-in. Then one call:
 
    ```python
    metafunc.parametrize(("board", "embedded_services", "app_path"), params, indirect=True)
@@ -54,7 +54,7 @@ are in [models-technical.md](models-technical.md).
    `SERVICES` gives `esp32sim`, falls back to the command line in pytest-embedded: a session
    started with `--embedded-services esp` would make the `esp32sim` case open a serial port.
    It then refuses the first remaining item that uses `board` and whose board markers
-   (`app_path`, `board_profile`) say something else than its definition's did:
+   (`app_path`, `app_recording`, `board_profile`) say something else than its definition's did:
    `late_board_marker` reads them from the item, the profile with `board_profile`, and
    compares them, one marker at a time, with the `BoardMarkers` `pytest_generate_tests` kept in
    `config.stash[READ]`, by the definition's nodeid (the item's
@@ -62,22 +62,29 @@ are in [models-technical.md](models-technical.md).
    conftest adds (this one runs `trylast`), reach the item but not `metafunc.definition`, so
    they would go unchecked: a `board_profile` there would reach `board` but not the check, and an
    `app_path` there would not reach pytest-embedded. A marker a fixture adds at setup is not seen.
-   Last, unless `timeout_configured(config)`, it adds `pytest.mark.timeout(DEFAULT_TIMEOUT)`, 600,
+   For a selected serial item it also requires an exact `--port` or indirect `port` parameter,
+   refusing blank or wildcard values with `PORT_REQUIRED`, conflicting `ESPPORT` with
+   `PORT_CONFLICT`, and separate flashing ports with `FLASH_PORT_UNSUPPORTED`. These checks run
+   after deselection. `serial_artifact` checks resolved fixtures, the environment and cached
+   pytest-embedded port options again before `app` setup, so a fixture override cannot restore
+   discovery or redirect flashing. A cached port mismatch uses `CACHED_PORT_CONFLICT`; missing
+   serial options use the services requirement error instead of a `KeyError`.
+   Last, unless `timeout_configured(config)`, it adds
+   `pytest.mark.timeout(DEFAULT_TIMEOUT)`, 600,
    to every item that uses `board` and has no `timeout` marker. `timeout_configured` holds when
    pytest-timeout is not loaded (`-p no:timeout`), or when
    `pytest_timeout.get_env_settings(config).timeout` is not `None`: that function reads
    `--timeout`, then `PYTEST_TIMEOUT`, then the `timeout` ini option, as pytest-timeout itself
    does, so a configured 0 counts as set. pytest-timeout reads the marker per item in its
    `pytest_runtest_protocol` hook, after collection, and times setup, call and teardown together.
-5. **`board` fixture**, at setup: asserts `request.param == Esp32Sim.name`, makes the test an error
-   if `dut` is not a single `Dut` (pytest-embedded makes a tuple of duts when `count` is
-   parametrised above 1), and constructs
-   `Esp32Sim(dut, app_path, msg_queue, _meta, board_profile(request.node), directory=request.path.parent, skip=skip_at_the_test)`.
-   The directory is the test file's. The backend starts no runner here: it does at
-   `board.power_on()` ([esp32sim-backend-technical.md](esp32sim-backend-technical.md#data-flow)).
-   A `BackendError` goes through `backend_failed`, which raises
-   `pytest.fail.Exception(f"{Esp32Sim.name}: {error}", pytrace=False) from None`: one line, no
-   chained traceback.
+5. **`board` fixture**, at setup: validates serial's artifact (and optional `app_recording`
+   reference), then obtains `dut` with `request.getfixturevalue`. A `pytest_fixture_setup` hook
+   validates before pytest-embedded's `app` too, covering tests that request `dut` directly.
+   The digest is cached in the item's `SERIAL_ARTIFACT` stash. It refuses a non-single `Dut`,
+   then constructs `Esp32Sim` or `Serial`, with the profile, the test file's directory and
+   `skip_at_the_test`. Serial requires an `IdfDut`; its fixture setup has already handled
+   flashing. `backend_failed(error, name)` raises a short pytest failure prefixed with the chosen
+   backend. [Serial lifecycle](serial-backend-technical.md#data-flow) gives the timing details.
 6. **A source or a tap the backend cannot give**, asked for in the body (`gnss.replay`,
    `gnss.fix`, `gnss.tap`), reaches
    `skip_at_the_test(reason)`, which raises
@@ -107,7 +114,11 @@ are in [models-technical.md](models-technical.md).
    `("esp32sim_link", json.dumps(backend.properties()))` to `request.node.user_properties`. The
    property is a JSON string because JUnit XML writes a property's `str()`, which for a `dict` is
    Python's `repr`. A test that failed on `RunEnded` and gets no teardown error has `FAILED` set,
-   so its report shows the run too.
+   so its report shows the run too. The backend attributes `report_section` and
+   `report_property` supply these names. Serial uses `serial console` and `serial_console`:
+   its report gives console byte count, tap path and any error; failures include the tap, power-on
+   and wait steps and console lines. Its JSON property gives `clock`, `app_sha256`, `console_bytes`,
+   `error` and `tap` ([serial schema](serial-backend-technical.md#schema)).
 9. **`console` fixture** returns `Console(board)`. `Console.expect` and `Console.expect_exact`
    take a pattern or a list of them, compile each into a regular expression on bytes
    (`compiled`: text in UTF-8 and bytes with `re.DOTALL`, as pexpect compiles them for a bytes
@@ -198,14 +209,20 @@ are in [models-technical.md](models-technical.md).
    `image`, which `runner_command` turns into `--sd-spi`
    and `--sd-rw` at power-on ([esp32sim-backend-technical.md](esp32sim-backend-technical.md#data-flow)).
 
+`Console.tap` delegates to the backend's `tap_console`. Both backends reuse `Uart.tap`'s file
+checks for a console-only route and include it in teardown and the no-power-on guard. Serial's
+console properties drain the reader queue before returning; waits also drain before checking
+conditions, so `Console` uses the same matching and line logic on both clocks.
+
 ## Interfaces
 
 | Name | Kind | What |
 |---|---|---|
-| `--esp32tl-backend NAME` | option | Choices `list(SERVICES)`; default unset, every backend |
+| `--esp32tl-backend NAME` | option | Choices `list(SERVICES)`; default unset, esp32sim only |
+| `app_recording(path)` | marker | One positional path, relative to the test file or absolute; on serial checks the recording app hash before port setup; ignored on esp32sim |
 | `app_path(path)` | marker | One positional path, relative to the test file's directory; default that directory |
 | `board_profile(name)` | marker | The board profile ([board-profiles-technical.md](board-profiles-technical.md#interfaces)) |
-| `board(request, dut, app_path, msg_queue, _meta)` | fixture, function scope | Yields an `Esp32Sim`, off; closes it at teardown, then adds the `esp32sim link` report section and the `esp32sim_link` user property. Its methods (`power_on`, `wait`, `wait_until`, `now`, `utc`, `report`, `properties`) are in [esp32sim-backend-technical.md](esp32sim-backend-technical.md#interfaces) |
+| `board(request, app_path, msg_queue, _meta)` | fixture, function scope | Yields an `Esp32Sim` or `Serial`; closes it at teardown, then adds its backend-specific report section and JSON property. Its methods (`power_on`, `wait`, `wait_until`, `now`, `utc`, `report`, `properties`) are in [esp32sim-backend-technical.md](esp32sim-backend-technical.md#interfaces) and [serial-backend-technical.md](serial-backend-technical.md#interfaces) |
 | `console(board)` | fixture, function scope | Returns `Console(board)` |
 | `gnss(board)` | fixture, function scope | Returns `board.uart("gnss")`, a `Gnss` |
 | `lines(board)` | fixture, function scope | Returns `board.lines()` |
@@ -215,7 +232,7 @@ are in [models-technical.md](models-technical.md).
 | `sd_card(board)` | fixture, function scope | Returns `board.sd_card()` |
 | `SdCard(route, *, directory, asked=..., log=None, files=None)` | class, `esp32tl/interfaces/sd_card.py` | The `sd_card` slot on `route` (an `SdCardRoute`): attributes `name` (`"sd_card"`), `route`, `directory`, `asked`, `log` (the `RunLog` its step goes to), `files` (shared with the routes), `image` (`None` until `insert`, then the image's absolute `Path`); `insert(image)` returns that path |
 | `UNIT`, `MAX_SIZE` | `int`, `esp32tl/interfaces/sd_card.py` | 524288: an SD card image is a whole number of them; 2^41, the most it may be |
-| `Console(board)` | class, `esp32tl/interfaces/console.py` | `expect(pattern, timeout=30, *, return_what_before_match=False)`, `expect_exact(...)` with the same arguments, `timeout` a `Duration` or a number of seconds; `line(pattern)`, `lines(pattern=None, *, since=None)`; no `write`. `board` is a `Clocked`: `console_output`, `console_lines` and `wait_on_clock(condition, within, description)`, `within` a `Duration` |
+| `Console(board)` | class, `esp32tl/interfaces/console.py` | `expect(pattern, timeout=30, *, return_what_before_match=False)`, `expect_exact(...)` with the same arguments, `timeout` a `Duration` or a number of seconds; `line(pattern)`, `lines(pattern=None, *, since=None)`, `tap(path)`; no `write`. `board` is a `Clocked`: `console_output`, `console_lines` and `wait_on_clock(condition, within, description)`, `within` a `Duration` |
 | `Line(at, text, match=None)` | frozen dataclass, `esp32tl/interfaces/console.py` | A console line: `at` a `Duration`, `text` a `str`, `match` an `re.Match[str]`, left out of comparisons; `line[group]` is `match[group]`, a `TypeError` without a match |
 | `ConsoleLines()` | class, `esp32tl/interfaces/console.py` | `feed(t, data)`, `lines`: the console cut into `Line`s |
 | `LineCondition(lines, pattern)` | class, `esp32tl/interfaces/console.py` | What `console.line` returns: called, the first matching `Line` since it was made, or since the last it found, or `None` |
@@ -293,6 +310,15 @@ pytest-embedded's `build_dir` fixture. The backend's own environment variables a
 The refusals are raised in `pytest_collection_modifyitems`, not `pytest_generate_tests`: raised
 there, a `UsageError` (or `pytest.exit`) is a collection error, with a traceback through pluggy and
 exit code 2; here it is one line and exit code 4.
+
+The `app_recording` collection error includes the test id:
+`{nodeid}: the app_recording marker takes one path, as in @pytest.mark.app_recording("hello-console.jsonl")`.
+Serial checks the explicit port against `ESPPORT`, refuses a separate `flash_port`, and checks
+resolved fixtures and cached pytest-embedded options before opening the device.
+Serial's port selection and setup failures are listed in
+[serial failure modes](serial-backend-technical.md#failure-modes). `Console.tap` raises
+`SourceError: this board cannot tap its console` for an external `Clocked` object without
+`tap_console`; both shipped backends implement it.
 
 ## Tests
 

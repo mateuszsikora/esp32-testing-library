@@ -393,7 +393,7 @@ def test_a_plan_reference_must_name_a_heading(repo: Path) -> None:
 
 
 def test_the_rules_table_must_match_the_script(repo: Path) -> None:
-    index = features_index().replace("| F3 | `^esp32tl/backends/`", "| F3 | `^esp32tl/backend/`")
+    index = features_index().replace("| F3 | `^esp32tl/backends/", "| F3 | `^esp32tl/backend/")
     write(repo, "docs/features/README.md", index + "\n| F99 | `^x` | `^y` | z |\n")
     result = run(repo)
     assert "Rule F3 differs between" in result.stdout

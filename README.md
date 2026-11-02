@@ -35,8 +35,9 @@ def test_hello_world(board, console):
     console.expect("Hello world!")
 ```
 
-The test runs once per backend, as `test_hello_world[esp32sim]`. The firmware runs only while the
-test waits on it, here in `console.expect`, whose timeout is on the board's own clock: a `Duration`
+The test runs once on the selected backend, esp32sim by default, as
+`test_hello_world[esp32sim]`. On the emulator the firmware runs only while the test waits on it,
+here in `console.expect`, whose timeout is on the board's own clock: a `Duration`
 or a number of seconds.
 A test that replays a recording into the board's GNSS UART gives it before power-on:
 

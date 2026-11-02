@@ -15,7 +15,7 @@ sd_card = { sources = ["model"] }
 # A real board: its on-board peripherals are soldered on, so only the real part answers, and only
 # the console can be tapped (finding 11). Every UART counts as on-board, also one wired to a
 # devkit's pins: driving an off-board one from the host is postponed (docs/decisions/harness.md).
-# The backend itself is not in esp32tl.backends.SERVICES yet (#25).
+# Selected explicitly with --esp32tl-backend serial; the default runs no hardware.
 [serial]
 console = { tap = true }
 uart = { sources = ["real"], tap = false }

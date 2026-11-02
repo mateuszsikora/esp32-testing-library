@@ -26,7 +26,7 @@ clock switch, in the order they happened.
 |---|---|---|---|
 | `esp32tl_recording` | integer | yes | The format's version, `1`. Any other value is refused |
 | `board` | non-empty string | yes | The board profile the recording was made on, as in `esp32-devkitc`. Not checked against the profiles esp32tl ships |
-| `interface` | non-empty string | yes | The interface of that profile: `uart.gnss`, `uart.modem`. A replay refuses a recording of another interface |
+| `interface` | non-empty string | yes | The interface of that profile: `console`, `uart.gnss`, `uart.modem`. A replay refuses a recording of another interface |
 | `source` | non-empty string | yes | What was at the far end: `model:<name>` for a model, `real` for a real device, `generated` for a script's output; a tap writes `replay` for a replay, `model:gnss` for the GNSS receiver model and `none` for a route with nothing at its far end. Any non-empty string is read |
 | `clock` | `emulated-fifo-write` or `wall` | yes | The clock the times are on, up to the first clock switch ([Clocks](#clocks)) |
 | `end` | `hold` or `loop` | no, `hold` | After the last event: `hold`, nothing more; `loop`, the recording starts over |
@@ -38,6 +38,12 @@ The header may carry fields of its own beyond these, as the generated recordings
 `generator` (script, seed, baud). They are read, kept as they are, and written back after the
 format's own fields; a replay ignores them. A field of this table is never an extra.
 
+Console taps use `interface: console`, `source: none` on esp32sim or `real` on serial, and only
+`out` events. This is still version 1: the interface field already accepts that name. On serial,
+`app_sha256` describes the selected local artifact; under skip-autoflash it cannot prove which
+app is actually in flash. `app_recording(path)` compares the reference hash against that artifact
+before opening the port ([serial backend](features/serial-backend-user.md#builds-and-flashing)).
+
 ## Events
 
 ```json
@@ -45,7 +51,8 @@ format's own fields; a replay ignores them. A field of this table is never an ex
 ```
 
 - `t`: when the bytes crossed the wire, in nanoseconds, an integer from 0, on the clock in effect
-  ([Clocks](#clocks)).
+  ([Clocks](#clocks)). Serial console taps stamp a whole read batch after a poll; polling (10 ms
+  nominal interval), USB, driver and scheduling delays are included, not removed.
 - `dir`: `in`, into the ESP32 (what the GNSS receiver sent), or `out`, out of it (what the firmware
   transmitted).
 - `data`: the bytes, base64 with padding, at least one byte. Where one event's bytes end and the

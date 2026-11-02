@@ -12,6 +12,8 @@ import os
 from datetime import UTC, datetime
 from pathlib import Path
 
+from pytest_embedded_idf.app import IdfApp
+
 from esp32tl import __version__
 from esp32tl.recording import Direction, Event, Header, Recording
 
@@ -76,3 +78,9 @@ def sha256(path: str | os.PathLike[str]) -> str:
         for block in iter(lambda: file.read(1 << 16), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def app_image_sha256(app: IdfApp) -> str | None:
+    """The app entry's binary hash on both backends, never an ELF or bootloader hash."""
+    app_bin = app.flash_args.get("app", {}).get("file")
+    return sha256(Path(app.binary_path or "") / app_bin) if app_bin else None

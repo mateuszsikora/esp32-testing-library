@@ -88,8 +88,9 @@ def test_reports_a_fix(board, gnss, console, tmp_path):
   ([models and units](models-user.md#the-gnss-receiver)), and `sd_card.insert(image)` a `model`,
   the runner's card holding the image; `real` gets its call later.
 - A tap is the call that asks for it: `gnss.tap(path)` taps `uart.gnss`
-  ([taps and the run report](run-report-user.md)). No call taps the console: what it prints is in
-  `dut.log` and in the report already. Nothing taps the SD card slot: the image is the record.
+  ([taps and the run report](run-report-user.md)); `console.tap(path)` records the console on
+  both backends, in addition to `dut.log` and the run report. Nothing taps the SD card slot:
+  the image is the record.
 - Asked for, a source or a tap a backend does not declare skips the test at the call
   ([below](#when-a-backend-cannot-give-it)).
 
@@ -105,8 +106,9 @@ Each backend declares what it can give:
 On a real board the on-board peripherals are soldered on, so only the real part answers, and a tap
 on them would need a hardware sniffer. The `lines` fixture is no source in this table: on
 `esp32sim` the test drives a line itself, through `lines.drive` and `lines.release`, without
-asking the declaration, and nothing skips it. The `serial` backend is declared, but is not one of the
-backends tests run on yet ([the pytest plugin](pytest-plugin-user.md#backends-and-test-ids)).
+asking the declaration, and nothing skips it. The `serial` backend runs only when explicitly
+selected with `--esp32tl-backend serial`
+([the pytest plugin](pytest-plugin-user.md#backends-and-test-ids)).
 
 ## When a backend cannot give it
 

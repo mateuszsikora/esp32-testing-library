@@ -235,6 +235,19 @@ for a test that failed. `Esp32Sim.properties()` is `link.properties()` with `rou
 interface: `source` (the kind, or `None`), `detail` (what the source was made from, as the test
 named it), `bytes_in`, `bytes_out` and `tap` (the path, or `None`).
 
+### Console taps
+
+`Esp32Sim._console` is a `Uart("console", Wire(1, 3, 115200), ...)` used only for tap/path handling;
+it is not registered in `BoardLink`. It shares `_files`, `_asked` and `log` with UART routes.
+`tap_console(path)` delegates to its `tap`, which logs `console.tap(...)` at 0. `_printed` records
+`(t, "out", data)` on its tap before feeding the console buffers and run log.
+`set_up` includes `the tap of console`; `_write_taps` includes `_console` alongside `_uarts`,
+with source `none`, clock `emulated-fifo-write`, and the shared `app_image_sha256` helper's hash.
+
+When tapped, `report` adds `console: {n} bytes out; tapped into {path}` and `properties` adds
+`console: {"bytes_out": n, "tap": path}`. With no console tap these fields are absent.
+`report_section = "esp32sim link"` and `report_property = "esp32sim_link"` are read by the plugin.
+
 ## Schema
 
 The end-of-run lines the backend appends to the runner's log, for whoever reads `dut.log`: when
@@ -274,6 +287,7 @@ repository makes.
 | `Esp32Sim.lines()` | The `Lines` of the profile's `[lines.<role>]` sets on the link; `BackendError` when the profile has none |
 | `Esp32Sim.sd_card()` | The `SdCard` of the profile's slot; `BackendError` when the profile has none |
 | `Esp32Sim.set_up()` | What the test gave that only a run uses: `the replay of uart.gnss` or `the model of uart.gnss` per route with a source, `the tap of uart.gnss` per tapped route, `the level of modem.ri` per line the test drove, `a card in sd_card` |
+| `Esp32Sim.tap_console(path)` | The console `Tap`; before power-on only, shares file collision checks with UARTs and the SD card |
 | `Esp32Sim.close()` | Ends the run and writes the taps; raises `BackendError` for a tap that cannot be written, a failing exit code, a killed runner or a link error |
 | `Esp32Sim.report(run=False)`, `Esp32Sim.properties()` | The `esp32sim link` report section, with the run on the board's clock when `run`; the `esp32sim_link` user property's data |
 | `BackendError` | What keeps the backend from starting, or a failing end |
@@ -281,7 +295,7 @@ repository makes.
 | `nanoseconds(value, what)`, `seconds(ns)` | `esp32tl/backends/clock.py`: a `Duration` of the board's time to nanoseconds, checked; nanoseconds shown as `12.5 s`, as `str(Duration(ns))` |
 | `listen()` | The listening socket and its path, or `BackendError` |
 | `runner_path()`, `rom_path()` | The runner and the ROM ELF, or `BackendError` |
-| `load_app(app_path)` | The checked `IdfApp` of `<app_path>/build` |
+| `load_app(app_path, *, backend="esp32sim")` | The checked `IdfApp` of `<app_path>/build`; `backend` chooses target/encryption error wording |
 | `profile_uart(profile, interface, *, clock, directory, asked=..., log=None, files=None)` | The `Uart` on the route the profile gives `interface` (`uart.gnss`), at its pins and baud; `BackendError` when the profile has no such route. The [`esp32tl` command](cli-user.md) makes its UARTs with it |
 | `route_wire(profile, interface)` | The `Wire` of that route, or the same `BackendError`; `Esp32Sim` makes its `Uart`s and its `Gnss` on it |
 | `runner_command(runner, rom, app, max_seconds, link, *, held=False, psram_mb=None, sd_card=None)` | The runner's argument list; with `psram_mb`, `--psram-mb` of that size; with an `SdCard` holding a card, the runner's card on its pins |
@@ -357,7 +371,18 @@ Times in these messages are `seconds(ns)`: seconds without trailing zeros, `1.5 
 Anything else `IdfApp` raises, a `flasher_args.json` that is not JSON or has no `flash_files` for
 instance, is not a `BackendError` and fails the setup with its own traceback.
 
+`load_app(app_path, backend="esp32sim")` is also used by serial with `backend="serial"`:
+its target and encryption errors name that backend. The default retains the runner-specific
+messages above. `app_image_sha256(app)` in `esp32tl/tap.py` hashes the app entry for both backends;
+no app entry returns `None`, and read failures raise `OSError` (tap writing catches those).
+
 ## Tests
+
+`tests/test_pytest_plugin.py::test_console_tap_preserves_emulated_output` checks the console
+recording after passing and failing assertions, its path and byte count in the report and JUnit
+property, and its `console.tap` step in the failure log.
+`test_reference_recording_is_not_read_on_esp32sim` powers on with a nonexistent reference marker,
+proving serial-only validation does not reach the simulator.
 
 `tests/test_pytest_plugin.py`:
 
