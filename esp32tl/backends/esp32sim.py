@@ -56,7 +56,8 @@ from esp32tl.interfaces.lines import Lines
 from esp32tl.interfaces.sd_card import SdCard
 from esp32tl.interfaces.uart import Uart
 from esp32tl.link.boardlink import BoardLink, Wire
-from esp32tl.report import RunLog
+from esp32tl.report import RunLog, shown
+from esp32tl.sources.replay import Replay
 from esp32tl.tap import sha256
 from esp32tl.units import Duration
 
@@ -670,6 +671,10 @@ class Esp32Sim:
             )
             tap = f"; tapped into {uart.tapped.path}" if uart.tapped is not None else ""
             lines.append(f"  {name}: {source}; {crossed}{tap}")
+            if isinstance(uart.source, Replay) and uart.source.unseen_count:
+                lines.append(f"    unseen requests: {uart.source.unseen_count}")
+                for request, count in uart.source.unseen.items():
+                    lines.append(f"      {count} x {shown(request)}")
         if self._sd_card is not None:
             image = self._sd_card.image
             lines.append(f"sd_card: a card holding {image}" if image else "sd_card: empty")
@@ -681,7 +686,7 @@ class Esp32Sim:
         """The link's `properties()`, and the routes: for each, the kind of source at the far end
         and what it was made from (a replay's recording, as the test named it), the bytes each way
         and the tap's file; and `sd_card`, the card's image, or None without a slot."""
-        routes = {}
+        routes: dict[str, dict[str, object]] = {}
         for name, uart in self._uarts.items():
             traffic = self.log.traffic.get(name)
             routes[name] = {
@@ -691,6 +696,11 @@ class Esp32Sim:
                 "bytes_out": traffic.bytes_out if traffic else 0,
                 "tap": None if uart.tapped is None else str(uart.tapped.path),
             }
+            if isinstance(uart.source, Replay) and uart.source.unseen_count:
+                routes[name]["unseen_requests"] = [
+                    {"request_hex": request.hex(), "count": count}
+                    for request, count in uart.source.unseen.items()
+                ]
         card = self._sd_card
         sd_card = (
             None if card is None else {"image": None if card.image is None else str(card.image)}

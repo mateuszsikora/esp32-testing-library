@@ -579,7 +579,7 @@ Rule 2 turns `latency` into a promise the source must keep for the whole run:
 
 | Source | `latency` | `quiet_until` |
 |---|---|---|
-| `replay` | the smallest request-to-answer delay in its recording, computed when the recording is loaded (plan 4.4); a replay never answers sooner. A recording with no request-answer pair (an NMEA stream) declares `null` | the minimum of the next unprompted event and every answer waiting to be sent |
+| `replay` | the smallest request-to-answer delay in its recording, computed when the recording is loaded (plan 4.4); a replay never answers sooner. A passive stream with no requests and no explicit protocol declares `null`. An active protocol with no recorded answer delays declares `0`, including a recording of unanswered commands or a stream with an explicit protocol; unknown requests can still receive fallback answers | the minimum of the next unprompted event and every answer waiting to be sent |
 | `model` | the shortest answer delay the model can produce, declared by the model | the model's next unprompted output |
 | `real` | designed in #27 | renewed in short slices (rule 3) |
 

@@ -416,3 +416,12 @@ under `[tool.pytest.ini_options]`.
 - [Models and units](models-user.md)
 - [Validation firmware](validation-firmware-user.md)
 - [Testing this repository](../guides/testing.md)
+
+
+### Selecting a replay protocol
+
+`gnss.replay(path, protocol=...)` and `board.uart(role).replay(path, protocol=...)` accept a
+`Protocol` from `esp32tl.matching`: `AT`, `PMTK`, `UBX`, or `GNSS` (mixed PMTK/UBX).
+Omitting it detects the protocol from recorded requests; a recording with no requests stays
+passive. The returned replay exposes `sent`, `unseen_count` and `unseen`, a mapping of normalised
+request bytes to occurrence counts. See [matching](matching-user.md) for timing and defaults.

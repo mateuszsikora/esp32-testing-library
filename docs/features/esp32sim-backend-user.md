@@ -207,3 +207,13 @@ which the test sees as `RunEnded` or at teardown ([when the runner exits](#when-
 - [pytest plugin](pytest-plugin-user.md)
 - [Runner](runner-user.md)
 - [Development setup](../guides/development.md)
+
+
+### Requests absent from a replay
+
+A replay with unknown requests adds `unseen requests: {count}` under its route in the report,
+then one `  {count} x {request}` line per normalised request, in first-seen order. Bytes are
+escaped and long requests abbreviated as in the run log. The route in the JSON properties also
+gets `unseen_requests`, a list of `{"request_hex": "...", "count": 2}` objects; hex preserves
+all bytes. The field is absent when there are no unknown requests. Unknown commands alone do
+not fail the test; their protocol supplies a fallback response ([matching](matching-user.md)).

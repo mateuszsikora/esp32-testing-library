@@ -117,7 +117,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Console.write is postponed until the runner reads input](harness.md#consolewrite-is-postponed-until-the-runner-reads-input) | `harness.md` | postponed (#51) |
 | [The serial backend is postponed to M4](harness.md#the-serial-backend-is-postponed-to-m4) | `harness.md` | postponed (#25) |
 | [Prebuilt runner binaries are postponed to M10](harness.md#prebuilt-runner-binaries-are-postponed-to-m10) | `harness.md` | postponed (#40) |
-| [Replaying requests, looping and wall-clock recordings is postponed](harness.md#replaying-requests-looping-and-wall-clock-recordings-is-postponed) | `harness.md` | postponed (#20) |
+| [Replaying requests, looping and wall-clock recordings is postponed](harness.md#replaying-requests-looping-and-wall-clock-recordings-is-postponed) | `harness.md` | superseded (#20) |
 | [A frame error fails the run at once](harness.md#a-frame-error-fails-the-run-at-once) | `harness.md` | decided (#16) |
 | [The esp32tl command serves the link itself, without pytest-embedded](harness.md#the-esp32tl-command-serves-the-link-itself-without-pytest-embedded) | `harness.md` | decided (#16) |
 | [The esp32tl command runs the runner in a session of its own](harness.md#the-esp32tl-command-runs-the-runner-in-a-session-of-its-own) | `harness.md` | decided (#16) |
@@ -165,6 +165,9 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The SPP peer opens its channel to one device, on a link that device authenticated](harness.md#the-spp-peer-opens-its-channel-to-one-device-on-a-link-that-device-authenticated) | `harness.md` | decided (#33) |
 | [A bt fixture, an HCI tap and a replayed peer are postponed](harness.md#a-bt-fixture-an-hci-tap-and-a-replayed-peer-are-postponed) | `harness.md` | postponed (#33) |
 | [bumble is a dependency of esp32tl, pinned exactly](harness.md#bumble-is-a-dependency-of-esp32tl-pinned-exactly) | `harness.md` | decided (#33) |
+| [Request answers wrap independently of the unprompted timeline](harness.md#request-answers-wrap-independently-of-the-unprompted-timeline) | `harness.md` | decided (#20) |
+| [Replay detects protocols from requests and leaves pure streams passive](harness.md#replay-detects-protocols-from-requests-and-leaves-pure-streams-passive) | `harness.md` | decided (#20) |
+| [AT separators end before the response and prompts belong at line boundaries](harness.md#at-separators-end-before-the-response-and-prompts-belong-at-line-boundaries) | `harness.md` | decided (#20) |
 
 ## The runner crate and esp32sim
 

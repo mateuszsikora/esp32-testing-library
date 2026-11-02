@@ -142,13 +142,17 @@ UART route.
 A tap that cannot be written at teardown is an error there:
 `esp32sim: the tap of uart.gnss cannot be written: {reason}; its output is in {logfile}`.
 
+## Replaying a tap
+
+`gnss.replay(path)` can replay both passive streams and taps with outgoing commands and incoming
+answers. The [matching engine](matching-user.md) groups complete `out` requests with the `in`
+events that follow them. Use `protocol=` when automatic AT or GNSS detection is unsuitable;
+the tap must use a supported framing and the replay route's clock and interface. A tap ending
+part-way through a request is refused ([replay errors](replay-user.md#what-a-replay-refuses)).
+
 ## What it does not do
 
 - No call taps the console: what the firmware prints is in `dut.log` and in the run report.
-- A tap of a route the firmware transmits on holds `out` events, and `gnss.replay` refuses a
-  recording with `out` events ([what a replay refuses](replay-user.md#what-a-replay-refuses)):
-  such a tap can be read and compared, not replayed. A tap of a route the firmware only listens
-  on, as `nmea_reader`'s GNSS route, replays.
 - The `esp32tl` command does not tap: there is no `esp32tl record`
   ([the esp32tl command](cli-user.md)).
 - The run report has a line per UART route; esp32tl simulates no network service yet, so there

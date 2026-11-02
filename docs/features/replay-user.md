@@ -6,8 +6,10 @@ device that sent it were wired to the board. A GNSS receiver's sentences replaye
 `uart.gnss` reach the firmware's UART on the emulated clock, so a test of an hour's drive runs in
 seconds and the same recording gives the same console every time.
 
-This version replays streams only: recordings with nothing but events into the ESP32, such as
-NMEA sentences. A recording with requests and answers (a modem's AT commands) is refused.
+Streams such as NMEA sentences play at their absolute recorded times. Recordings with requests
+also answer firmware commands, preserving their relative timing and recorded timeouts. The
+[matching engine](matching-user.md) supplies AT, PMTK and UBX defaults; use
+`gnss.replay(path, protocol=PMTK)` to choose one explicitly.
 
 ## Replaying a GNSS recording
 
@@ -38,15 +40,18 @@ def test_reports_a_fix(board, gnss, console):
 
 ## What a replay does
 
-- Each event goes into the ESP32 on the route's RX pin at the route's baud, from the board
-  profile, starting at its recorded time `t`: emulated nanoseconds since power-on. The replay is
+- Each unprompted event goes into the ESP32 on the route's RX pin at the route's baud, from the
+  board profile, starting at its recorded time `t`: emulated nanoseconds since power-on. The replay is
   given before power-on, so an event at `0` is in time, and two runs of one recording give the
   same console.
 - Nothing goes in before its time, and the run stops at each event's time to send it: a recording
   of one sentence a second costs one exchange with the runner per second of emulated time.
-- What the firmware transmits on the route's TX pin is heard and dropped: a stream answers
-  nothing.
-- After the last event the far end is silent, and the run goes on for as long as the test waits
+- A pure stream with no explicit `protocol` ignores firmware transmissions. Recordings with
+  requests match commands and schedule the recorded answer relative to the completed command.
+  Unknown commands receive the protocol's fallback and are counted in the report.
+- After the last unprompted event, `end: hold` is silent; `end: loop` repeats those events with
+  a period equal to the final recording timestamp. Command matching continues in both cases.
+  The run goes on for as long as the test waits
   ([esp32sim backend](esp32sim-backend-user.md#how-a-run-goes)).
 - Bytes that reach the UART before the firmware has configured it are dropped, as on a wire; the
   runner reports them as an `unrouted_rx` warning in the
@@ -78,8 +83,10 @@ here raises `ReplayError`, `{path}` being the path as the test gave it:
 |---|---|
 | `{path} is a recording of {interface}, not of uart.gnss` | The header's `interface` is another one |
 | `{path} has times on the wall clock, and uart.gnss runs on the emulated-fifo-write clock: replaying it would compare times across clocks` | The recording was made on a real board or device. `{clocks}` lists every clock it uses, `emulated-fifo-write and wall` for one with a clock switch |
-| `{path} has events out of the ESP32, the first at {t} ns: it holds requests, and replay answers none yet, only streams with events in` | An `out` event: the recording holds requests |
-| `{path} ends with loop: replay holds at the end only` | `end` is `loop` |
+
+Malformed request framing also raises `ReplayError`, prefixed with `{path}:`, including
+`the recording ends with an incomplete request`. A nonempty loop of duration zero raises
+`a looping recording with unprompted events must have positive duration`.
 
 ## When the test gets it wrong
 

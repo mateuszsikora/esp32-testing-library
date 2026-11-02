@@ -94,10 +94,13 @@ def test_a_stream_does_not_listen() -> None:
         (
             [event(0), event(7, direction="out")],
             {},
-            "r.jsonl has events out of the ESP32, the first at 7 ns: it holds requests, and"
-            " replay answers none yet, only streams with events in",
+            "r.jsonl: the recording ends with an incomplete request",
         ),
-        ([event(0)], {"end": "loop"}, "r.jsonl ends with loop: replay holds at the end only"),
+        (
+            [event(0)],
+            {"end": "loop"},
+            "r.jsonl: a looping recording with unprompted events must have positive duration",
+        ),
     ],
 )
 def test_what_a_stream_replay_cannot_replay_is_refused(
@@ -186,3 +189,65 @@ def test_the_committed_recording_replays_one_sentence_a_second() -> None:
     while (bound := replay.quiet_until()) is not None:
         times += [t for t, _ in replay.poll(bound)]
     assert times == [(1 + i) * S for i in range(60)]
+
+
+@pytest.mark.parametrize("binary", [False, True])
+def test_gnss_replay_answers_configuration_commands_through_the_link(
+    tmp_path: Path,
+    binary: bool,
+) -> None:
+    from dataclasses import replace
+
+    from esp32tl.recording import Event
+
+    command = bytes.fromhex("b56206010200010a1447") if binary else b"$PMTK220,1000*1F\r\n"
+    answer = bytes.fromhex("b5620501020006010f38") if binary else b"$PMTK001,220,3*30\r\n"
+    recording.write(
+        tmp_path / "commands.jsonl",
+        recording.Recording(
+            replace(stream().header, end="hold"),
+            (Event(10, "out", command, CLOCK), Event(30, "in", answer, CLOCK)),
+        ),
+    )
+    gnss, _ = uart(tmp_path)
+    replay = gnss.replay("commands.jsonl")
+    link = BoardLink("esp32-devkitc", [gnss])
+    link.receive(HELLO)
+    assert link.receive(Sync(0)) == [Wait(0, None, 20)]
+    # Fragmentation on the live wire differs from the recording.
+    link.receive(UartTx(1, 100, 1, (4,), 9600, command[:3]))
+    assert link.receive(Sync(120)) == [Wait(1, None, 20)]
+    link.receive(UartTx(2, 130, 1, (4,), 9600, command[3:]))
+    assert link.receive(Sync(140)) == [Wait(2, 150, 20)]
+    assert link.receive(Sync(150)) == [UartRx(150, 5, 9600, answer), Wait(2, None, 20)]
+    assert replay.sent == 1
+    assert link.error is None
+
+
+def test_unseen_requests_are_in_the_backend_report_and_json_properties(tmp_path: Path) -> None:
+    from esp32tl.backends.esp32sim import Esp32Sim
+    from esp32tl.matching import AT
+    from esp32tl.report import RunLog
+
+    write(tmp_path / "r.jsonl", event(S))
+    gnss, _ = uart(tmp_path)
+    gnss.replay("r.jsonl", protocol=AT)
+    backend = Esp32Sim.__new__(Esp32Sim)
+    backend._uarts = {"uart.gnss": gnss}
+    backend._sd_card = None
+    backend.log = RunLog()
+    backend.link = BoardLink("esp32-devkitc", [gnss])
+    backend.link.receive(HELLO)
+    backend.link.receive(Sync(0))
+    backend.link.receive(UartTx(1, 100, 1, (4,), 9600, b"AT+UNKNOWN\rAT+UNKNOWN\r"))
+    assert backend.link.receive(Sync(100)) == [
+        UartRx(100, 5, 9600, b"\r\nERROR\r\n"),
+        UartRx(100, 5, 9600, b"\r\nERROR\r\n"),
+        Wait(1, S, 0),
+    ]
+    assert "unseen requests: 2\n      2 x AT+UNKNOWN" in backend.report()
+    routes = backend.properties()["routes"]
+    assert isinstance(routes, dict)
+    assert routes["uart.gnss"]["unseen_requests"] == [
+        {"request_hex": b"AT+UNKNOWN".hex(), "count": 2},
+    ]

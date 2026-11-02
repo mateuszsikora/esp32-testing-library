@@ -493,7 +493,7 @@ The backend finds the runner in the checkout, so from a wheel only `ESP32TL_RUNN
 
 ## Replaying requests, looping and wall-clock recordings is postponed
 
-Status: postponed (#20)
+Status: superseded (#20)
 
 The replay replays streams only, and refuses the rest with a `ReplayError`. A recording with `out`
 events holds requests, whose answers need the matching engine of plan §4.4 (#20). `end: loop` on a
@@ -1298,3 +1298,52 @@ tests, and checking whether each of those is still needed.
 
 **Rejected:** an optional extra, because the Bluetooth fixture will be the plugin's and the plugin
 has no optional dependencies; and a compatible release, `~=0.0.236`, which admits every 0.0.x.
+
+
+## Request answers wrap independently of the unprompted timeline
+
+Status: decided (#20)
+
+The matching engine keeps one sequence of occurrences per normalised request, including empty
+answers for recorded timeouts. That sequence always wraps; `end: hold` does not disable commands
+once the unprompted timeline is exhausted. `loop` repeats only the unprompted events (those before
+the first complete request), with a period equal to the last recording line's time, measured from
+zero. There is no invented inter-cycle pause or new format field. An event at zero in the next
+cycle follows the preceding cycle's final event at the same instant. A nonempty, zero-duration
+unprompted loop is refused; an empty loop stays silent.
+
+The format has no correlation metadata: every input after a request and before the next complete
+request belongs to that request. The engine does not guess which of those bytes are unsolicited
+notifications, or which response belongs to an earlier pipelined request. Such traffic needs a
+protocol model or a recording split appropriately for this rule.
+
+## Replay detects protocols from requests and leaves pure streams passive
+
+Status: decided (#20)
+
+Requests beginning with `$` or UBX sync use the combined GNSS framer (PMTK lines and UBX frames
+on one wire); other requests use AT. `protocol=` overrides that choice, including for recordings
+with no requests. A pure stream without that argument retains `latency=None` and ignores firmware
+transmissions. An explicitly configured protocol answers unseen requests even without examples;
+when there is no recorded answer delay its latency is zero, since no positive bound is known.
+Wall-clock recordings still cannot replay on an emulated-clock route (#27).
+
+The final request fragment supplies its timestamp, both while compiling and receiving. Starting
+at the first byte could put a short answer before the request's terminator arrives. UBX framing
+uses its length field; payload and checksum bytes remain opaque, permitting fault recordings.
+AT case and whitespace normalisation preserves quoted values and prompted Ctrl-Z payloads.
+
+
+## AT separators end before the response and prompts belong at line boundaries
+
+Status: decided (#20)
+
+A CR-terminated command consumes one optional LF, including in a separate outgoing chunk before
+the response. The first response byte closes this separator window. Stripping whitespace from
+prompted payloads was rejected: a payload's leading LF, spaces and CR/LF must stay literal.
+A LF sent after the response starts is therefore data, not a delayed command separator.
+
+A prompt must begin the response or follow CR/LF and be its current suffix. Every response
+fragment recomputes that candidate until payload bytes start; permanently latching a temporary
+suffix would make framing depend on chunk boundaries. Once the payload starts, Ctrl-Z framing
+stays active until it completes. The same framer handles the recording and live wire.

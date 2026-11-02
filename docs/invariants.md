@@ -395,3 +395,29 @@ that references to its number keep their meaning.
     `tests/test_check_docs.py::test_an_owned_path_without_docs_fails`,
     `tests/test_check_docs.py::test_tests_only_pass`,
     `tests/test_check_docs.py::test_version_only_bumps_pass`
+
+
+## Request matching
+
+85. Each request cycles through its recorded occurrences independently, including silent ones;
+    `hold` and `loop` apply to unprompted events and do not stop command matching.
+    `tests/test_matching.py::test_answers_wrap_per_request_including_recorded_timeouts`,
+    `tests/test_matching.py::test_end_policy_does_not_discard_pending_answers_or_stop_matching`,
+    `tests/test_matching.py::test_loop_repeats_unprompted_events_and_hold_stops`
+86. Request time is the final fragment's timestamp. The minimum recorded answer delay bounds
+    latency, and every pending answer, including unknown-command fallbacks, bounds quiet_until.
+    `tests/test_matching.py::test_request_time_is_its_final_fragment_and_chunk_boundaries_do_not_matter`,
+    `tests/test_matching.py::test_quiet_until_includes_stream_unknown_and_every_deferred_answer`
+87. An unknown request is counted and listed; its default PMTK reply uses flag 1 and its UBX NAK
+    identifies the request's class and ID. Protocol framing works across UART chunks.
+    `tests/test_matching.py::test_pmtk_fallback_has_the_command_flag_one_and_checksum`,
+    `tests/test_matching.py::test_ubx_is_length_framed_even_with_terminators_in_payload_and_naks_class_id`,
+    `tests/test_replay.py::test_unseen_requests_are_in_the_backend_report_and_json_properties`,
+    `tests/test_replay.py::test_gnss_replay_answers_configuration_commands_through_the_link`
+
+88. AT prompt recognition does not depend on response chunk boundaries. Command CR/CRLF
+    separators, including a split CRLF before the response, never become prompted payload
+    bytes; actual leading payload whitespace is preserved.
+    `tests/test_matching.py::test_prompt_like_text_does_not_depend_on_response_fragmentation`,
+    `tests/test_matching.py::test_at_command_endings_do_not_change_prompted_payload_bytes`,
+    `tests/test_matching.py::test_at_prompt_switches_next_request_to_opaque_ctrl_z_payload`

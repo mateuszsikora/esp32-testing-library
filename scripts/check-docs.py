@@ -185,6 +185,12 @@ FEATURES = [
         "Bluetooth peer changed (the air's clock, the controller, the SPP peer):"
         " update docs/features/bluetooth-peer-*.md",
     ),
+    Rule(
+        "F21",
+        r"^esp32tl/matching\.py$",
+        r"^docs/features/matching-",
+        "Matching engine changed (protocols, requests, timing): update docs/features/matching-*.md",
+    ),
 ]
 
 # The catch-all for the package: the rest of sources/ and any new module are owned from their
