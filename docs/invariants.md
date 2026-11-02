@@ -427,3 +427,49 @@ that references to its number keep their meaning.
     `tests/test_modem_model.py::test_only_sent_model_gpio_changes_appear_in_the_run_log`
 78. A source selection that loses to another source must leave no GPIO ownership behind.
     `tests/test_modem_model.py::test_a_model_selection_that_loses_to_replay_does_not_claim_ri`
+
+
+## Simulated network
+
+79. PPP delivers IPv4 only after both sides acknowledge LCP and IPCP; acknowledgments must match
+    the pending request, including after termination and renegotiation. Framing survives arbitrary byte splits, escaping and compressed headers.
+    `tests/test_net_ppp.py::test_ack_must_match_request_and_ipcp_waits_for_lcp`,
+    `tests/test_net_ppp.py::test_fcs_reference_and_compressed_frames_at_every_split`,
+    `tests/test_net_ppp.py::test_renegotiation_and_termination_invalidate_old_acknowledgments`
+80. TCP honors the peer's receive window and MSS, delivers a retransmitted payload once, wraps
+    sequence numbers, and notifies connection loss once.
+    `tests/test_net_ip.py::test_tcp_handshake_data_duplicate_flow_control_fin_and_wrap`,
+    `tests/test_net_ip.py::test_reset_notifies_once_and_unbound_port_refuses`
+81. MQTT Will is emitted once on connection loss at the loss time, never after DISCONNECT.
+    Keepalive deadlines use the board clock, and wildcard filters respect `$` topics.
+    `tests/test_net_mqtt.py::test_will_on_transport_loss_once_and_never_on_disconnect`,
+    `tests/test_net_mqtt.py::test_keepalive_expires_on_the_board_clock`,
+    `tests/test_net_mqtt.py::test_topic_filters`
+82. NTP returns world UTC plus emulated time; TLS verifies the per-test CA and named server and
+    exposes application plaintext in its transcript.
+    `tests/test_net_services.py::test_ntp_world_time_fraction_origin_and_era`,
+    `tests/test_net_tls.py::test_tls_mqtt_and_transcript`,
+    `tests/test_net_tls.py::test_tls_rejects_unknown_ca_or_wrong_hostname`
+83. Only a modem with a simulated network treats receive overflow as fatal; binary pluses do not
+    escape data mode without idle guards. Losing registration or supply resets the network.
+    `tests/test_modem_model.py::test_only_a_network_route_fails_on_receive_overflow`,
+    `tests/test_modem_model.py::test_network_selection_guarded_escape_and_loss_reset`
+84. TLS determinism ignores times only after handshake starts and compares plaintext streams;
+    changed plaintext or pre-handshake times still fail.
+    `tests/test_check_determinism.py::test_network_tls_compares_plaintext_without_times_only_after_handshake`
+
+85. Anonymous MQTT clients have distinct deterministic IDs before Will construction or takeover;
+    they do not disconnect each other or collide with IDs already supplied by named clients.
+    Empty IDs without CleanSession receive CONNACK code 2 and close.
+    `tests/test_net_mqtt.py::test_anonymous_clients_have_independent_ids_and_wills`,
+    `tests/test_net_mqtt.py::test_anonymous_id_skips_an_id_already_supplied_by_a_client`,
+    `tests/test_net_mqtt.py::test_empty_id_without_clean_session_gets_identifier_rejected`
+86. Acknowledged PPP MRU bounds every outgoing IPv4 packet. TCP preserves payload bytes while
+    respecting MRU, MSS and the receive window; oversized UDP replies are logged and dropped.
+    Renegotiation and redial cannot inherit the previous MRU, and unsupported small values are
+    NAKed rather than acknowledged.
+    `tests/test_net_mru.py::test_tcp_respects_mru_mss_and_window_without_losing_bytes`,
+    `tests/test_net_mru.py::test_udp_sends_at_mru_and_logs_oversized_replies`,
+    `tests/test_net_mru.py::test_mru_resets_on_renegotiation_termination_and_redial`,
+    `tests/test_net_mru.py::test_mru_too_small_for_this_stack_gets_a_nak_not_an_ack`,
+    `tests/test_net_mru.py::test_ppp_does_not_emit_an_oversized_ip_packet_even_when_called_directly`

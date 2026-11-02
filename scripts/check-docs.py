@@ -190,6 +190,12 @@ FEATURES = [
         r"^docs/features/modem-",
         "Modem model changed (AT dialogue, power, registration): update docs/features/modem-*.md",
     ),
+    Rule(
+        "F20",
+        r"^esp32tl/net/",
+        r"^docs/features/network-",
+        "Simulated network changed: update docs/features/network-*.md",
+    ),
 ]
 
 # The catch-all for the package: the rest of sources/ and any new module are owned from their

@@ -429,3 +429,13 @@ under `[tool.pytest.ini_options]`.
 - [Models and units](models-user.md)
 - [Validation firmware](validation-firmware-user.md)
 - [Testing this repository](../guides/testing.md)
+
+
+## MQTT broker fixture
+
+`broker` selects the modem model and its simulated network before power-on and returns its
+MQTT 3.1.1 broker on port 1883. It requires a profile with `uart.modem`, such as
+`lilygo-t-a7670g-r2`. Use `board.wait_until(broker.message(topic), within=seconds(...))`,
+`broker.subscribed(topic)`, `broker.connected()` and `broker.publish(topic, payload)`.
+`modem.network()` gives the underlying network for DNS, NTP and TLS service configuration.
+See [the network guide](network-user.md) for complete examples and condition semantics.

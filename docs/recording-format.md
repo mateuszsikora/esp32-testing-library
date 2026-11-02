@@ -61,8 +61,9 @@ An event has these three keys and no other.
 
 From this line on the times are on `clock`, the clock of every event up to the next switch. `t` is
 the time of the switch on the new clock. A switch to the clock the recording is on already is
-refused. It is meant for a session that leaves the emulated clock part-way, a modem after
-`CONNECT` (plan M6); nothing esp32tl writes makes one yet.
+refused. Clock switches describe sessions that cross between emulated and wall-clock sources;
+nothing esp32tl writes makes one yet. The modem and its simulated PPP network stay on the
+emulated clock throughout a run, including after `CONNECT`.
 
 ## Clocks
 

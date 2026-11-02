@@ -435,3 +435,16 @@ timeout reason of `requires_docker` is untested.
   goldens.
 - [Stage 0 findings, Inputs](../stage0-findings.md#inputs): the ESP-IDF image and digest stage 0
   measured with.
+
+
+## Pinned esp-protocols source
+
+`firmware/pppos_client/prepare.py` downloads the archive for commit
+`2cc7c99664caf9705064affba6ea829137d4e1e8` (`modem-v1.4.1`) from GitHub codeload and checks SHA-256
+`7cdcf43c876e0bebbfeafe8aaa543c603df5a035d6e465f2cd743e5214041c32` before extraction.
+It extracts through a temporary directory into `$FIRMWARE_OUT/.esp-protocols-<commit>/`, reusing
+that tree on later builds. The upstream component manifest's relative `override_path` resolves
+to the pinned esp_modem in that tree. No C/C++ source or manifest is patched. `build.sh` passes
+upstream `sdkconfig.defaults` followed by `firmware/pppos_client/sdkconfig.defaults` through
+`SDKCONFIG_DEFAULTS`; the project path containing the revision is recorded in provenance.
+Only the built image is packed into CI's existing firmware cache, as for the other examples.

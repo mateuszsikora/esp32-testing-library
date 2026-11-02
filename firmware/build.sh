@@ -27,7 +27,7 @@ set -eu
 
 IDF_VERSION=v5.3.6
 CONTAINER=espressif/idf:$IDF_VERSION@sha256:cee52f0c4fdaf088992a7a739f5993154e95cf1d3ab61c24f5b40e6d56a3a070
-IMAGES="hello_world nmea_reader gpio_echo sdspi modem_at"
+IMAGES="hello_world nmea_reader gpio_echo sdspi modem_at pppos_client"
 
 die() {
 	echo "firmware/build.sh: $*" >&2
@@ -44,6 +44,7 @@ project_of() {
 	nmea_reader) echo "$PWD/firmware/nmea_reader" ;;
 	gpio_echo) echo "$PWD/firmware/gpio_echo" ;;
 	modem_at) echo "$PWD/firmware/modem_at" ;;
+	pppos_client) python3 firmware/pppos_client/prepare.py "$out" ;;
 	esac
 }
 
@@ -127,7 +128,12 @@ for image in "$@"; do
 	printf '%s\n' "$provenance" >"$build/esp32tl-build.json"
 	# sdkconfig in the build directory: the project directory may be ESP-IDF's
 	# own examples, or read-only.
-	idf.py -C "$project" -B "$build" -DSDKCONFIG="$build/sdkconfig" -DIDF_TARGET=esp32 build
+	if [ "$image" = pppos_client ]; then
+		idf.py -C "$project" -B "$build" -DSDKCONFIG="$build/sdkconfig" -DIDF_TARGET=esp32 \
+			"-DSDKCONFIG_DEFAULTS=$project/sdkconfig.defaults;$PWD/firmware/pppos_client/sdkconfig.defaults" build
+	else
+		idf.py -C "$project" -B "$build" -DSDKCONFIG="$build/sdkconfig" -DIDF_TARGET=esp32 build
+	fi
 	[ -f "$build/flasher_args.json" ] || die "$image: the build wrote no flasher_args.json"
 	: >"$build/esp32tl-built"
 	echo "firmware/build.sh: $image built in $shown (ESP-IDF $idf_version)"

@@ -85,7 +85,7 @@ CI the test job installs mtools first, so there they run ([cicd.md](../cicd.md#t
 | `tests/test_cli.py` | `esp32tl run` and `esp32tl replay`: the arguments they refuse and the runs that cannot start (exit 2), in this process; runs of `hello_world`, `nmea_reader` and `gpio_echo` (the LilyGO profile's pull-down on RI) in a subprocess, a baud mismatch (exit 1) and Ctrl-C (exit 130), also before the runner connects, against a fake runner that never does; the profile's `--psram-mb`, against a fake runner that prints its arguments | The refusals nothing beyond the package; the runs the built images, the runner and the ROM ELF |
 | `tests/test_boards.py` | The board profiles esp32tl ships, the profile schema's refusals, the capability declaration and the requests it refuses | The package installed |
 | `tests/test_firmware_build.py` | `firmware/build.sh` run against a fake `docker` and a fake `idf.py` that record how they were called; the `requires_docker` marker | Neither Docker nor ESP-IDF; milliseconds |
-| `tests/test_firmware_images.py` | The `hello_world`, `nmea_reader`, `gpio_echo` and `sdspi` images as `make firmware` built them: target `esp32`, bootloader at `0x1000`, partition table at `0x8000`, app at `0x10000`, the ELF; `nmea_reader`'s UART settings `gpio_echo`'s pins and `sdspi`'s SD card pins in their `sdkconfig` | The built images |
+| `tests/test_firmware_images.py` | The `hello_world`, `nmea_reader`, `gpio_echo`, `sdspi` and `pppos_client` images as `make firmware` built them: target `esp32`, bootloader at `0x1000`, partition table at `0x8000`, app at `0x10000`, the ELF; `nmea_reader`'s UART settings `gpio_echo`'s pins and `sdspi`'s SD card pins in their `sdkconfig` | The built images |
 | `tests/test_sdspi.py` | ESP-IDF's `sdspi` with the runner's SD card: a FAT image mounted, written and read back with mtools, one without a file system, an empty slot; through `pytester`, the `sd_card` fixture used out of order and images it refuses | The built `sdspi` image, the runner, the ROM ELF and mtools (`requires_mtools`) |
 | `tests/test_hello_world.py` | ESP-IDF's `hello_world`, unmodified, powered on and printing `Hello world!` through the backend | The built image, the runner and the ROM ELF |
 | `tests/test_nmea_reader.py` | The first milestone (plan M1): `nmea_reader` fed the generated GNSS recordings, and sentences it must ignore, through `gnss.replay` before `board.power_on()`: `test_reports_a_fix`, `test_fix_follows_the_recording`, `test_time_is_emulated` (ten fixes in under five wall seconds, and `board.now` just past 10 s) | The built image, the runner and the ROM ELF |
@@ -181,14 +181,26 @@ After them comes `determinism: the two runs differ in <n> places` (`1 place` for
 that left no file and no test that used the board compared nothing, and fail too:
 `✗ the runs left no file and no test that used the board: nothing was compared`.
 Two identical runs end with
-`determinism: the two runs are identical: 6 files, and the link of 3 tests that used the board`,
-and exit 0. One run of the three tests took 2.3 to 5.3 s of wall time on an M2 Pro.
+`determinism: the two runs are identical: 9 files, and the link of 4 tests that used the board`,
+and exit 0. One run of the three GNSS tests took 2.3 to 5.3 s of wall time on an M2 Pro.
 
 A test of `tests/test_determinism.py` ends its run at a time it chose (`board.wait`), so that the
 two runs end at the same instant, and checks that its run printed its fixes, so that two runs that
-both did nothing do not pass. No run speaks TLS yet, so everything is compared, times included;
-when the simulated network brings a TLS handshake (#30), what comes after it is to be compared
-without its times ([the postponed seeded TLS](../decisions/harness.md#a-tls-stack-with-a-seeded-random-source-is-postponed)).
+both did nothing do not pass. `test_plain_mqtt` additionally runs `pppos_client`, leaves its raw modem tap and network
+transcript, and compares bytes and times exactly. `test_tls_plaintext` performs a real TLS 1.2
+handshake and bidirectional MQTT exchange using MemoryBIO, validates the CA and server name,
+and leaves `network.json`. This test needs no firmware; TLS/NTP on tracker firmware is #72.
+
+Files with `"esp32tl_network": 1` are explicit plaintext network transcripts. Before the first
+`tls: handshake started` event, every event and time is compared exactly, including that event's
+time. Afterwards the checker compares event order without `t_ns` and concatenated plaintext
+bytes per stream/direction, ignoring chunk boundaries. Changed messages, missing events, changed
+pre-handshake times and changed plain-network times still fail. This accounts for system TLS
+randomness ([the postponed seeded TLS](../decisions/harness.md#a-tls-stack-with-a-seeded-random-source-is-postponed)).
+Raw UART taps and `esp32sim_link` properties are still compared exactly; do not save ciphertext
+or random CA files as determinism artifacts expecting the checker to discard them. The current
+TLS determinism test has no board link property; a firmware TLS test must explicitly choose its
+plaintext artifact rather than weaken the checker for unrelated routes or warnings.
 
 ## The runner's Rust tests
 
@@ -222,3 +234,14 @@ runs `make lint`. [docs/cicd.md](../cicd.md) describes each job.
 - [validation-firmware-user.md](../features/validation-firmware-user.md): the images the tests
   read.
 - [docs/cicd.md](../cicd.md): the CI workflow.
+
+
+## Simulated network validation
+
+`tests/test_net_ppp.py`, `test_net_ip.py`, `test_net_services.py`, `test_net_mqtt.py` and
+`test_net_tls.py` check the protocol layers with handmade frames, independent checksums and
+in-memory TLS. They need the installed package, including cryptography, but no emulator or
+network service. `tests/test_pppos_client.py` needs `firmware/pppos_client/build/`, the runner
+and ROM ELF; it validates plain MQTT in both directions. `make determinism` now needs both
+`nmea_reader` and `pppos_client`; it builds either missing image. `tests/test_modem_model.py`
+also checks PPP lifecycle, guarded escape and fatal receive overflow on the network route.

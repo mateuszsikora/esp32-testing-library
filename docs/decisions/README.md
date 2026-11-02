@@ -167,7 +167,13 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [bumble is a dependency of esp32tl, pinned exactly](harness.md#bumble-is-a-dependency-of-esp32tl-pinned-exactly) | `harness.md` | decided (#33) |
 | [The modem drives RI through Lines and observes PWRKEY through it](harness.md#the-modem-drives-ri-through-lines-and-observes-pwrkey-through-it) | `harness.md` | decided (#29) |
 | [The modem begins powered and registered and keeps every AT command](harness.md#the-modem-begins-powered-and-registered-and-keeps-every-at-command) | `harness.md` | decided (#29) |
-| [The modem data peer and realistic escape timing wait for network integration](harness.md#the-modem-data-peer-and-realistic-escape-timing-wait-for-network-integration) | `harness.md` | postponed (#30) |
+| [The modem data peer and realistic escape timing wait for network integration](harness.md#the-modem-data-peer-and-realistic-escape-timing-wait-for-network-integration) | `harness.md` | superseded (#30) |
+| [The network is selected explicitly, and resets with its modem](harness.md#the-network-is-selected-explicitly-and-resets-with-its-modem) | `harness.md` | decided (#30) |
+| [The MQTT service implements ephemeral sessions and QoS zero and one](harness.md#the-mqtt-service-implements-ephemeral-sessions-and-qos-zero-and-one) | `harness.md` | decided (#30) |
+| [TLS determinism compares explicit plaintext transcripts](harness.md#tls-determinism-compares-explicit-plaintext-transcripts) | `harness.md` | decided (#30) |
+| [pppos_client is fetched by pinned commit and checksum](harness.md#pppos_client-is-fetched-by-pinned-commit-and-checksum) | `harness.md` | decided (#30) |
+| [Peer MRU limits TCP segmentation and oversized UDP replies are dropped](harness.md#peer-mru-limits-tcp-segmentation-and-oversized-udp-replies-are-dropped) | `harness.md` | decided (#30) |
+| [Anonymous MQTT clients get deterministic distinct identifiers](harness.md#anonymous-mqtt-clients-get-deterministic-distinct-identifiers) | `harness.md` | decided (#30) |
 
 ## The runner crate and esp32sim
 

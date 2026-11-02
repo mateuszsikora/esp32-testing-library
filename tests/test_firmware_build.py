@@ -72,6 +72,7 @@ def logged(path: Path) -> list[str]:
 def local_idf(tmp_path: Path) -> dict[str, str]:
     """The environment of an IDF_LOCAL=1 build with the fake idf.py."""
     script(tmp_path / "bin", "idf.py", FAKE_IDF_PY)
+    script(tmp_path / "bin", "python3", '#!/bin/sh\nprintf "%s\\n" "$2/pppos-source"\n')
     return {
         "PATH": minimal_path(tmp_path / "bin"),
         "FIRMWARE_OUT": str(tmp_path / "out"),
@@ -135,7 +136,7 @@ def test_build_refuses_an_unknown_image(tmp_path: Path) -> None:
     assert result.returncode == 1
     assert result.stderr == (
         "firmware/build.sh: unknown image 'nope'; the images are:"
-        " hello_world nmea_reader gpio_echo sdspi modem_at\n"
+        " hello_world nmea_reader gpio_echo sdspi modem_at pppos_client\n"
     )
     assert not (tmp_path / "out").exists()
 
@@ -240,6 +241,7 @@ def test_local_build_runs_idf_py_and_records_how(tmp_path: Path, local_idf: dict
         "gpio_echo": str(ROOT / "firmware" / "gpio_echo"),
         "sdspi": f"{tmp_path}/idf/examples/storage/sd_card/sdspi",
         "modem_at": str(ROOT / "firmware" / "modem_at"),
+        "pppos_client": f"{tmp_path}/out/pppos-source",
     }
     builds = {image: (tmp_path / "out" / image / "build").resolve() for image in projects}
     assert logged(tmp_path / "idf.log") == [
@@ -252,6 +254,14 @@ def test_local_build_runs_idf_py_and_records_how(tmp_path: Path, local_idf: dict
             str(builds[image]),
             f"-DSDKCONFIG={builds[image]}/sdkconfig",
             "-DIDF_TARGET=esp32",
+            *(
+                [
+                    f"-DSDKCONFIG_DEFAULTS={project}/sdkconfig.defaults;"
+                    f"{ROOT}/firmware/pppos_client/sdkconfig.defaults"
+                ]
+                if image == "pppos_client"
+                else []
+            ),
             "build",
         ]
     ]
