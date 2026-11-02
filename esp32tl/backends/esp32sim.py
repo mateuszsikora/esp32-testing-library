@@ -60,7 +60,7 @@ from esp32tl.link.boardlink import BoardLink, Wire
 from esp32tl.net import Internet
 from esp32tl.report import RunLog, board_time, shown
 from esp32tl.sources.replay import Replay
-from esp32tl.tap import sha256
+from esp32tl.tap import Tap, app_image_sha256
 from esp32tl.units import Duration
 
 T = TypeVar("T")
@@ -118,8 +118,8 @@ def rom_path() -> Path:
     return path
 
 
-def load_app(app_path: str) -> IdfApp:
-    """The ESP-IDF build in `app_path`/build, checked for what the runner needs.
+def load_app(app_path: str, *, backend: str = "esp32sim") -> IdfApp:
+    """The finished, unencrypted classic ESP32 build in `app_path`/build.
 
     The build directory is given to `IdfApp` as an absolute path: given `build`, it would fall back
     to a `build` directory in the working directory when the app has none.
@@ -129,9 +129,12 @@ def load_app(app_path: str) -> IdfApp:
         raise BackendError(f"{build} holds no ESP-IDF build: no flasher_args.json")
     app = IdfApp(app_path, build_dir=str(build))
     if app.target != "esp32":
-        raise BackendError(f"{build} is built for {app.target}; esp32sim runs the classic esp32")
+        raise BackendError(f"{build} is built for {app.target}; {backend} runs the classic esp32")
     if app.flash_settings.get("encrypt"):
-        raise BackendError(f"{build} asks for flash encryption, which the runner does not do")
+        reason = (
+            "the runner does not do" if backend == "esp32sim" else f"{backend} does not support"
+        )
+        raise BackendError(f"{build} asks for flash encryption, which {reason}")
     missing = [f.file_path for f in app.flash_files if not Path(f.file_path).is_file()]
     if missing:
         raise BackendError(f"{build} is not a finished build, missing {', '.join(missing)}")
@@ -258,6 +261,8 @@ class Esp32Sim:
     """
 
     name = "esp32sim"
+    report_section = "esp32sim link"
+    report_property = "esp32sim_link"
     # The clock the run's times are on, which the runner's `hello` must name (protocol 5.1).
     clock = recording.EMULATED
 
@@ -290,6 +295,16 @@ class Esp32Sim:
         # One mapping of the files they and the SD card read and write: no tap writes over another
         # route's file or the card's image.
         self._files: dict[Path, tuple[str, str]] = {}
+        self._console = Uart(
+            "console",
+            Wire(1, 3, 115200),
+            log=self.log,
+            clock=self.clock,
+            directory=self.directory,
+            asked=self._asked,
+            files=self._files,
+        )
+
         # Before power-on the clock is 0: what drives a line then holds from the start.
         self._lines = Lines(profile.name, profile.lines, lambda: self._hold.now, log=self.log)
         self._uarts = {f"uart.{role}": self._route(f"uart.{role}") for role in profile.uart}
@@ -388,7 +403,12 @@ class Esp32Sim:
             )
         return self._sd_card
 
+    def tap_console(self, path: str | Path) -> Tap:
+        return self._console.tap(path)
+
     def _printed(self, t: int, data: bytes) -> None:
+        if self._console.tapped is not None:
+            self._console.tapped.record(t, "out", data)
         self.console_output.extend(data)
         self.console_lines.feed(t, data)
         self.log.console(t, data)
@@ -454,6 +474,9 @@ class Esp32Sim:
         ] + [f"the level of {name}" for name in driven]
         if self._sd_card is not None and self._sd_card.image is not None:
             set_up.append(f"a card in {self._sd_card.name}")
+        if self._console.tapped is not None:
+            set_up.append("the tap of console")
+
         set_up += [f"the NVS partition {name!r}" for name in self._nvs]
         return set_up
 
@@ -679,15 +702,16 @@ class Esp32Sim:
 
     def _write_taps(self) -> list[str]:
         """Writes the recording of every tapped route; returns what could not be written."""
-        tapped = [uart for uart in self._uarts.values() if uart.tapped is not None]
+        tapped = [
+            uart for uart in [self._console, *self._uarts.values()] if uart.tapped is not None
+        ]
         if not tapped:
             return []
         runner = self.link.runner
         tools = {"esp32sim": runner.esp32sim} if runner and runner.esp32sim else {}
         # The app image alone, as the format has it: the header's app_sha256 (plan §4.3).
-        app_bin = self.app.flash_args.get("app", {}).get("file")
         try:
-            app_sha256 = sha256(Path(self.app.binary_path or "") / app_bin) if app_bin else None
+            app_sha256 = app_image_sha256(self.app)
         except OSError:
             app_sha256 = None
         problems = []
@@ -734,6 +758,11 @@ class Esp32Sim:
                     f"      {board_time(t)}  {shown(request, limit=len(request))}"
                     for t, request in uart.source.unseen_events
                 )
+        if self._console.tapped is not None:
+            lines.append(
+                f"console: {len(self.console_output)} bytes out;"
+                f" tapped into {self._console.tapped.path}"
+            )
         if self._sd_card is not None:
             image = self._sd_card.image
             lines.append(f"sd_card: a card holding {image}" if image else "sd_card: empty")
@@ -784,7 +813,13 @@ class Esp32Sim:
         sd_card = (
             None if card is None else {"image": None if card.image is None else str(card.image)}
         )
-        return self.link.properties() | {"routes": routes, "sd_card": sd_card}
+        properties = self.link.properties() | {"routes": routes, "sd_card": sd_card}
+        if self._console.tapped is not None:
+            properties["console"] = {
+                "bytes_out": len(self.console_output),
+                "tap": str(self._console.tapped.path),
+            }
+        return properties
 
     def _close_link(self) -> None:
         """Closes the socket, once the runner is gone and the link read to its end."""

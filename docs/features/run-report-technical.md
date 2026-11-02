@@ -94,26 +94,41 @@ end. `console_line` drops the line ending and the colour codes (`\x1b[...m`), de
 `not driven` as its text; it goes in the same `deque` and counts among the routes' entries in the
 heading. `lines()` pads the who column to the longest in the entries kept.
 
+Console capture uses the same `Tap` and file checks: `Console.tap` calls the backend's
+`tap_console`, whose console-only `Uart` receives `log=self.log` and records the setup step.
+On esp32sim, `_printed(t, data)` records `out` events using the link time and `_write_taps`
+includes the console. On serial, the reader queues bytes stamped after its poll (10 ms interval,
+plus USB/driver/host scheduling delay); `_drain` records them on the test thread and `close`
+writes them. Serial also logs `waits up to ...`, success, timeout and run-end steps.
+A console tap's path is in both backends' human report and JSON property. Their `report_section`
+and `report_property` attributes choose the names; serial uses `serial console` / `serial_console`.
+
 ## Schema
 
 What a tap writes is a recording of [version 1 of the format](../recording-format.md), with:
 
 | Field | Value |
 |---|---|
-| `board` | `Esp32Sim.profile.name` |
-| `interface` | The route, `uart.<role>` |
-| `source` | `Uart.source_kind`, `replay`, or `NO_SOURCE`, `none`, when the test gave the route nothing |
-| `clock` | `Esp32Sim.clock`, `emulated-fifo-write` |
+| `board` | The backend's `profile.name` |
+| `interface` | `console` or the route, `uart.<role>` |
+| `source` | UART source (`replay`, `model:gnss`, or `none`); console is `none` on esp32sim and `real` on serial |
+| `clock` | `emulated-fifo-write` on esp32sim, `wall` on serial |
 | `end` | `hold` |
-| `app_sha256` | `sha256(binary_path / flasher_args["app"]["file"])`; `null` when `flasher_args.json` names no app or the file cannot be read |
+| `app_sha256` | `app_image_sha256(app)`, hashing `binary_path / flasher_args["app"]["file"]`; on esp32sim `null` when `flasher_args.json` names no app or the file cannot be read |
 | `tools` | `{"esp32tl": esp32tl.__version__}`, and `esp32sim`, the runner's `hello`'s revision, when it sent one |
 | `created` | The UTC time the recording was made, to the second |
 
-The report section, after `BoardLink.report()`:
+Serial requires an app hash at setup; a missing entry or unreadable file fails before the port
+opens. It writes the selected artifact's digest, including with skip-autoflash, which does not
+prove the device's flash contents. Console taps contain only `out` events. The schema is unchanged
+(version 1): `console` was already a valid interface name.
+
+The esp32sim report section, after `BoardLink.report()`:
 
 ```
 routes:
   {interface}: {source}; {bytes}{tap}
+console: {n} bytes out; tapped into {path}
 sd_card: a card holding {image}
 the run on the board's clock, {kept}:
   {seconds}.{nanoseconds:09d} s  {who}  {text}
@@ -128,9 +143,12 @@ the steps included; when the `deque` has dropped some,
 the heading is `the run on the board's clock: nothing happened`. `{who}` is `test`, `console`, or
 `{interface} in` / `{interface} out`.
 
-The user property's `routes`, by interface: `{"source": kind or null, "detail": what the source
-was made from or null, "bytes_in": n, "bytes_out": n, "tap": path or null}`; and `sd_card`,
-`{"image": path or null}`, or null on a profile without a slot.
+The `console:` line and a JSON `console: {"bytes_out": n, "tap": path}` object appear only when
+the console is tapped. Serial instead uses the [serial schema](serial-backend-technical.md#schema).
+
+The esp32sim user property's `routes`, by interface: `{"source": kind or null, "detail": what
+the source was made from or null, "bytes_in": n, "bytes_out": n, "tap": path or null}`;
+and `sd_card`, `{"image": path or null}`, or null on a profile without a slot.
 
 `RunLog.line(t, name, level, direction="out")` records firmware GPIO output by default.
 `Lines.inputs` calls it with `direction="in"` when a model's pending GPIO response is due and
@@ -147,7 +165,8 @@ checks the timing and cancellation. The modem's separate command history is desc
 | `Tap.record(t, direction, data)` | One event; nothing for empty `data` |
 | `Tap.recording(*, board, source, clock, app_sha256=None, tools=None, created=None)` | The `Recording`, events in time order |
 | `NO_SOURCE` | `"none"`: the header's `source` for a route without one |
-| `utc_time(moment)`, `sha256(path)` | The header's `created` and `app_sha256` |
+| `utc_time(moment)`, `sha256(path)`, `app_image_sha256(app)` | The header's `created` and app-image hash; the last reads exactly `flasher_args["app"]["file"]`, returns `None` without an app entry, and propagates file errors |
+| `Console.tap(path)` | Delegates to the backend's `tap_console`; the same path and duplicate checks as a UART tap |
 | `Uart.tap(path)` | `esp32tl/interfaces/uart.py`: the route's `Tap`, `Uart.tapped` |
 | `Uart.files` | `dict[Path, tuple[str, str]]`: the files the run replays from and taps into, by path, with what each is for, the kind (`replay`, `tap`) and the route; one mapping for every `Uart` of an `Esp32Sim` |
 | `same_file(a, b)` | `esp32tl/interfaces/uart.py`: whether two paths name one file: `os.path.samefile` when both exist, else the same directory and the same name but for its case |
@@ -185,7 +204,16 @@ From `Esp32Sim.close`: `the tap of {interface} cannot be written: {error}`, for 
 An output that is not a `(t, bytes)` pair with `t` from 0 is not recorded, and fails the link as
 before ([protocol, section 7](../protocol.md#7-latency-is-bound-to-the-source)).
 
+Serial errors and its report properties are specified in
+[serial failure modes](serial-backend-technical.md#failure-modes).
+
 ## Tests
+
+- `tests/test_pytest_plugin.py::test_console_tap_preserves_emulated_output`: passing and failing
+  runs, console event bytes, hash, report path and byte count, JSON property and the tap step.
+- `tests/test_serial_backend.py::test_console_reset_clock_tap_and_autoflash` and
+  `test_serial_waits_and_console_tap_are_in_the_failure_report`: wall-clock console tap, shared
+  app hash, protected files, tap setup step, wait starts and outcomes, timeout interval.
 
 - `tests/test_tap.py`, without an emulator: a `Tap`'s recording in time order, ties in the order
   recorded, no event for empty bytes, the header with the tools, and its round trip through the

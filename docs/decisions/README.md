@@ -115,7 +115,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The recording reader takes the generated recordings' header as it is](harness.md#the-recording-reader-takes-the-generated-recordings-header-as-it-is) | `harness.md` | decided (#14) |
 | [The esp32sim backend does not compare a recording's app_sha256 with its app](harness.md#the-esp32sim-backend-does-not-compare-a-recordings-app_sha256-with-its-app) | `harness.md` | decided (#14) |
 | [Console.write is postponed until the runner reads input](harness.md#consolewrite-is-postponed-until-the-runner-reads-input) | `harness.md` | postponed (#51) |
-| [The serial backend is postponed to M4](harness.md#the-serial-backend-is-postponed-to-m4) | `harness.md` | postponed (#25) |
+| [The serial backend is postponed to M4](harness.md#the-serial-backend-is-postponed-to-m4) | `harness.md` | superseded (#25) |
 | [Prebuilt runner binaries are postponed to M10](harness.md#prebuilt-runner-binaries-are-postponed-to-m10) | `harness.md` | postponed (#40) |
 | [Replaying requests, looping and wall-clock recordings is postponed](harness.md#replaying-requests-looping-and-wall-clock-recordings-is-postponed) | `harness.md` | superseded (#20) |
 | [A frame error fails the run at once](harness.md#a-frame-error-fails-the-run-at-once) | `harness.md` | decided (#16) |
@@ -136,7 +136,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [A test taps a route by calling tap(path) before power-on, not with a marker](harness.md#a-test-taps-a-route-by-calling-tappath-before-power-on-not-with-a-marker) | `harness.md` | decided (#21) |
 | [A tap writes its recording once the run has ended, from what the far end gave](harness.md#a-tap-writes-its-recording-once-the-run-has-ended-from-what-the-far-end-gave) | `harness.md` | decided (#21) |
 | [The run on the board's clock goes into the link section of a test that failed](harness.md#the-run-on-the-boards-clock-goes-into-the-link-section-of-a-test-that-failed) | `harness.md` | decided (#21) |
-| [Tapping the console is postponed](harness.md#tapping-the-console-is-postponed) | `harness.md` | postponed (#21) |
+| [Tapping the console is postponed](harness.md#tapping-the-console-is-postponed) | `harness.md` | superseded (#25) |
 | [Models describe the world in its own terms, in units](harness.md#models-describe-the-world-in-its-own-terms-in-units) | `harness.md` | decided (#64) |
 | [Tests observe the device from outside, and product knowledge stays in the consumer's tests](harness.md#tests-observe-the-device-from-outside-and-product-knowledge-stays-in-the-consumers-tests) | `harness.md` | decided (#64) |
 | [The network the device reaches is simulated in the harness, in emulated time](harness.md#the-network-the-device-reaches-is-simulated-in-the-harness-in-emulated-time) | `harness.md` | decided (#64) |
@@ -165,6 +165,11 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The SPP peer opens its channel to one device, on a link that device authenticated](harness.md#the-spp-peer-opens-its-channel-to-one-device-on-a-link-that-device-authenticated) | `harness.md` | decided (#33) |
 | [A bt fixture, an HCI tap and a replayed peer are postponed](harness.md#a-bt-fixture-an-hci-tap-and-a-replayed-peer-are-postponed) | `harness.md` | postponed (#33) |
 | [bumble is a dependency of esp32tl, pinned exactly](harness.md#bumble-is-a-dependency-of-esp32tl-pinned-exactly) | `harness.md` | decided (#33) |
+| [Serial is opt-in and pytest-embedded owns flashing and the port](harness.md#serial-is-opt-in-and-pytest-embedded-owns-flashing-and-the-port) | `harness.md` | decided (#25) |
+| [Reference recordings check the serial artifact before opening the port](harness.md#reference-recordings-check-the-serial-artifact-before-opening-the-port) | `harness.md` | decided (#25) |
+| [Console taps use the same API on both backends](harness.md#console-taps-use-the-same-api-on-both-backends) | `harness.md` | decided (#25) |
+| [Serial capture failures leave no successful power-on and have bounded reader teardown](harness.md#serial-capture-failures-leave-no-successful-power-on-and-have-bounded-reader-teardown) | `harness.md` | decided (#25) |
+| [Serial validation accepts unencrypted classic ESP32 builds only](harness.md#serial-validation-accepts-unencrypted-classic-esp32-builds-only) | `harness.md` | decided (#25) |
 | [The modem drives RI through Lines and observes PWRKEY through it](harness.md#the-modem-drives-ri-through-lines-and-observes-pwrkey-through-it) | `harness.md` | decided (#29) |
 | [The modem begins powered and registered and keeps every AT command](harness.md#the-modem-begins-powered-and-registered-and-keeps-every-at-command) | `harness.md` | decided (#29) |
 | [The modem data peer and realistic escape timing wait for network integration](harness.md#the-modem-data-peer-and-realistic-escape-timing-wait-for-network-integration) | `harness.md` | superseded (#30) |
@@ -173,6 +178,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Replay detects protocols from requests and leaves pure streams passive](harness.md#replay-detects-protocols-from-requests-and-leaves-pure-streams-passive) | `harness.md` | decided (#20) |
 | [AT separators end before the response and prompts belong at line boundaries](harness.md#at-separators-end-before-the-response-and-prompts-belong-at-line-boundaries) | `harness.md` | decided (#20) |
 | [Unseen replay requests retain raw occurrences alongside normalised counts](harness.md#unseen-replay-requests-retain-raw-occurrences-alongside-normalised-counts) | `harness.md` | decided (#20) |
+| [Serial adapters preserve skips for modem models and NVS replacement](harness.md#serial-adapters-preserve-skips-for-modem-models-and-nvs-replacement) | `harness.md` | decided (#25) |
 | [The network is selected explicitly, and resets with its modem](harness.md#the-network-is-selected-explicitly-and-resets-with-its-modem) | `harness.md` | decided (#30) |
 | [The MQTT service implements ephemeral sessions and QoS zero and one](harness.md#the-mqtt-service-implements-ephemeral-sessions-and-qos-zero-and-one) | `harness.md` | decided (#30) |
 | [TLS determinism compares explicit plaintext transcripts](harness.md#tls-determinism-compares-explicit-plaintext-transcripts) | `harness.md` | decided (#30) |

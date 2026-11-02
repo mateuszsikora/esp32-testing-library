@@ -122,8 +122,8 @@ sd_card = { sources = ["real"] }
 The `model` on `sd_card` is the runner's card model holding an image file
 ([runner-technical.md](runner-technical.md#the-sd-card)); on `serial` it is the card in the slot.
 
-`serial` is not in `SERVICES`, so no test is parametrised with it; `check` counts it among the
-backends that could give a request.
+`serial` is in `SERVICES` with services `esp,idf`; tests select it explicitly with
+`--esp32tl-backend serial`. Both backends are counted by `check`.
 
 ## Interfaces
 

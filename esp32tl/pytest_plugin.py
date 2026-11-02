@@ -15,12 +15,13 @@ from `build/` in it. `--count` above 1 is refused too: a test has one board.
 
 The test body sets up what is around the board, as `gnss.replay(path)`, `gnss.fix(at=...)` and
 `gnss.tap(path)` do, then calls `board.power_on()`, which starts the run; from there the board's
-clock moves only while the test waits on it (`board.wait`, `board.wait_until`, `console.expect`). A
-source or a tap that the backend's capability declaration (`esp32tl.boards.capabilities`) does not
+clock moves only while the test waits on it (`board.wait`, `board.wait_until`, `console.expect`)
+on esp32sim. Serial is opt-in, uses esp,idf and runs continuously on wall time; power_on resets it.
+A source or a tap that the backend's capability declaration (`esp32tl.boards.capabilities`) does not
 give skips the test at the call that asks for it.
 
-The report of every test that uses `board` gets the `esp32sim link` section, the link's report and
-the bytes on each route, with the run on the board's clock after them when the test failed.
+The report gets the `esp32sim link` or `serial console` section for its backend, with the run
+on the board's clock after it when the test failed.
 
 Every test that uses `board` gets pytest-timeout's `timeout` marker of `DEFAULT_TIMEOUT` seconds of
 wall time, unless the session or the test sets a timeout of its own: the runner waits for the test
@@ -28,8 +29,10 @@ for as long as the body runs, so this is what ends a run that hangs.
 """
 
 import json
+import os
 from collections.abc import Generator, Iterator
 from dataclasses import dataclass
+from pathlib import Path
 from typing import NoReturn
 
 import pytest
@@ -37,10 +40,12 @@ import pytest_timeout
 from pytest_embedded.dut import Dut
 from pytest_embedded.log import MessageQueue
 from pytest_embedded.utils import Meta
+from pytest_embedded_idf.dut import IdfDut
 
 from esp32tl import boards
 from esp32tl.backends import SERVICES
 from esp32tl.backends.esp32sim import BackendError, Esp32Sim, ended_while_waiting
+from esp32tl.backends.serial import Serial, check_artifact
 from esp32tl.boards import DEFAULT_PROFILE, BoardProfile, ProfileError
 from esp32tl.interfaces.console import Console
 from esp32tl.interfaces.gnss import Gnss
@@ -54,13 +59,15 @@ from esp32tl.net.mqtt import Broker
 # measured for CPU-bound code (docs/stage0-findings.md), and far more of an idle board.
 DEFAULT_TIMEOUT = 600
 
+Board = Esp32Sim | Serial
+
 
 def pytest_addoption(parser: pytest.Parser) -> None:
     group = parser.getgroup("esp32tl")
     group.addoption(
         "--esp32tl-backend",
         choices=list(SERVICES),
-        help="run the tests that use `board` on this backend only (default: every backend)",
+        help="run board tests on this backend (default: esp32sim; serial is opt-in)",
     )
 
 
@@ -69,6 +76,10 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "app_path(path): the ESP-IDF app a test runs, its build in path/build; relative to the"
         " test file's directory, which is the default",
+    )
+    config.addinivalue_line(
+        "markers",
+        "app_recording(path): on serial, require the recording app_sha256 to match the artifact",
     )
     config.addinivalue_line(
         "markers",
@@ -95,11 +106,11 @@ def board_profile(node: pytest.Item) -> BoardProfile:
 
 @dataclass(frozen=True)
 class BoardMarkers:
-    """What the board markers of a test say: the `app_path` marker's arguments and the profile's
-    name."""
+    """The app and reference paths read at collection, and the board profile's name."""
 
     app_path: tuple[object, ...] | None
     profile: str
+    app_recording: tuple[object, ...] | None
 
 
 # What pytest_generate_tests read for each test that uses `board`, by the nodeid of its
@@ -126,15 +137,53 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
         # from None: raised inside the handler, the failure would show the error twice
         message = f"{metafunc.definition.nodeid}: {error}"
         raise pytest.fail.Exception(message, pytrace=False) from None
-    read = BoardMarkers(marker.args if marker else None, profile.name)
+    reference = metafunc.definition.get_closest_marker("app_recording")
+    if reference is not None and (
+        len(reference.args) != 1
+        or reference.kwargs
+        or not isinstance(reference.args[0], str | Path)
+    ):
+        pytest.fail(
+            f"{metafunc.definition.nodeid}: the app_recording marker takes one path,"
+            ' as in @pytest.mark.app_recording("hello-console.jsonl")',
+            pytrace=False,
+        )
+    read = BoardMarkers(
+        marker.args if marker else None, profile.name, reference.args if reference else None
+    )
     metafunc.config.stash.setdefault(READ, {})[metafunc.definition.nodeid] = read
     chosen = metafunc.config.getoption("esp32tl_backend")
-    backends = [chosen] if chosen else list(SERVICES)
+    backends = [chosen] if chosen else [Esp32Sim.name]
     params = [
         pytest.param(backend, SERVICES[backend], str(app_path.resolve()), id=backend)
         for backend in backends
     ]
     metafunc.parametrize(("board", "embedded_services", "app_path"), params, indirect=True)
+
+
+PORT_REQUIRED = (
+    "serial requires an explicit --port (or a parametrised port) without wildcards:"
+    " automatic port discovery is disabled"
+)
+PORT_CONFLICT = "serial requires ESPPORT to be unset, empty or equal to the explicit port"
+CACHED_PORT_CONFLICT = "serial requires pytest-embedded's cached port to match the explicit port"
+FLASH_PORT_UNSUPPORTED = (
+    "serial does not support --flash-port: use one port for flashing and console"
+)
+
+
+def explicit_port(value: object) -> bool:
+    return isinstance(value, str) and bool(value.strip()) and "*" not in value
+
+
+def serial_port_error(port: object, flash_port: object, override: object) -> str | None:
+    if not explicit_port(port):
+        return PORT_REQUIRED
+    if override and override != port:
+        return PORT_CONFLICT
+    if flash_port is not None:
+        return FLASH_PORT_UNSUPPORTED
+    return None
 
 
 @pytest.hookimpl(trylast=True)
@@ -155,6 +204,13 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     if config.getoption("count", 1) != 1:
         raise pytest.UsageError("--count is set: esp32tl runs one board in a test")
     for item in items:
+        callspec = getattr(item, "callspec", None)
+        if callspec is not None and callspec.params.get("board") == Serial.name:
+            port = callspec.params.get("port") or config.getoption("port", None)
+            flash_port = callspec.params.get("flash_port") or config.getoption("flash_port", None)
+            error = serial_port_error(port, flash_port, os.environ.get("ESPPORT"))
+            if error:
+                raise pytest.UsageError(f"{item.nodeid}: {error}")
         late = late_board_marker(config, item)
         if late is not None:
             raise pytest.UsageError(
@@ -191,6 +247,9 @@ def late_board_marker(config: pytest.Config, item: pytest.Item) -> str | None:
     read = config.stash.get(READ, {}).get(item.nodeid.removesuffix(f"[{callspec.id}]"))
     if read is None:
         return None
+    reference = item.get_closest_marker("app_recording")
+    if read.app_recording != (reference.args if reference else None):
+        return "the app_recording marker"
     # The definition's markers were read without an error, so an error here is a new marker's.
     app_path = item.get_closest_marker("app_path")
     if read.app_path != (app_path.args if app_path else None):
@@ -231,28 +290,99 @@ def pytest_runtest_makereport(
     return report
 
 
+# Cached before pytest-embedded's app fixture, which serial/dut depend on: a test may also
+# request dut directly, in which case checking only inside board would be too late.
+SERIAL_ARTIFACT = pytest.StashKey[str]()
+
+
+def serial_artifact(request: pytest.FixtureRequest) -> str:
+    node: pytest.Item = request.node
+    callspec = getattr(node, "callspec", None)
+    if callspec is not None and int(callspec.params.get("count", 1)) != 1:
+        pytest.fail("count is above 1: esp32tl runs one board in a test", pytrace=False)
+    port = request.getfixturevalue("port")
+    port_error = serial_port_error(
+        port, request.getfixturevalue("flash_port"), os.environ.get("ESPPORT")
+    )
+    if port_error:
+        pytest.fail(port_error, pytrace=False)
+    # pytest-embedded snapshots ESPPORT into these kwargs before app setup. Check that
+    # snapshot too: a later fixture may have restored the environment in the meantime.
+    options = request.getfixturevalue("_fixture_classes_and_options").kwargs.get("serial")
+    if options is None:
+        backend_failed(
+            BackendError("the serial backend requires pytest-embedded's esp,idf services"),
+            Serial.name,
+        )
+    if options.get("port") != port:
+        pytest.fail(CACHED_PORT_CONFLICT, pytrace=False)
+    port_error = serial_port_error(port, options.get("flash_port"), None)
+    if port_error:
+        pytest.fail(port_error, pytrace=False)
+    if SERIAL_ARTIFACT not in node.stash:
+        reference = request.node.get_closest_marker("app_recording")
+        path = request.path.parent / reference.args[0] if reference else None
+        try:
+            node.stash[SERIAL_ARTIFACT] = check_artifact(request.getfixturevalue("app_path"), path)
+        except BackendError as error:
+            backend_failed(error, Serial.name)
+    return node.stash[SERIAL_ARTIFACT]
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_fixture_setup(
+    fixturedef: pytest.FixtureDef[object], request: pytest.FixtureRequest
+) -> None:
+    callspec = getattr(request.node, "callspec", None)
+    if (
+        fixturedef.argname == "app"
+        and callspec is not None
+        and callspec.params.get("board") == Serial.name
+    ):
+        serial_artifact(request)
+
+
 @pytest.fixture
 def board(
-    request: pytest.FixtureRequest, dut: Dut, app_path: str, msg_queue: MessageQueue, _meta: Meta
-) -> Iterator[Esp32Sim]:
+    request: pytest.FixtureRequest, app_path: str, msg_queue: MessageQueue, _meta: Meta
+) -> Iterator[Board]:
     """The firmware in `app_path`, on the backend this test is parametrised with, on the board
     profile the test chose; off until the test calls `board.power_on()`."""
-    assert request.param == Esp32Sim.name, request.param
+    name = request.param
+    assert name in SERVICES, name
+    digest = serial_artifact(request) if name == Serial.name else ""
+    # Resolve only after serial's artifact/recording check: dut opens and may flash the port.
+    dut = request.getfixturevalue("dut")
     if not isinstance(dut, Dut):
         # `count` parametrised above 1 in the test: pytest-embedded made a dut per count.
         pytest.fail("count is above 1: esp32tl runs one board in a test", pytrace=False)
     try:
-        backend = Esp32Sim(
-            dut,
-            app_path,
-            msg_queue,
-            _meta,
-            board_profile(request.node),
-            directory=request.path.parent,
-            skip=skip_at_the_test,
-        )
+        backend: Board
+        if name == Serial.name:
+            if not isinstance(dut, IdfDut):
+                raise BackendError("the serial backend requires pytest-embedded's esp,idf services")
+            reference = request.node.get_closest_marker("app_recording")
+            backend = Serial(
+                dut,
+                board_profile(request.node),
+                msg_queue,
+                app_sha256=digest,
+                directory=request.path.parent,
+                reference=request.path.parent / reference.args[0] if reference else None,
+                skip=skip_at_the_test,
+            )
+        else:
+            backend = Esp32Sim(
+                dut,
+                app_path,
+                msg_queue,
+                _meta,
+                board_profile(request.node),
+                directory=request.path.parent,
+                skip=skip_at_the_test,
+            )
     except BackendError as error:
-        backend_failed(error)
+        backend_failed(error, name)
     # Whether the teardown fails the test: its report then shows the run, as for a failed call.
     failing = True
     try:
@@ -264,7 +394,7 @@ def board(
             # A test that waited on the run when it ended has reported it already, with its code
             # and what the link found.
             if not request.node.stash.get(CALL_SAW_RUN_END, False):
-                backend_failed(error)
+                backend_failed(error, name)
             failing = False
         else:
             # A test that set up a source and never powered on ran no firmware: it would pass
@@ -272,7 +402,7 @@ def board(
             set_up = backend.set_up()
             if set_up and not backend.powered and not request.node.stash.get(DID_NOT_PASS, False):
                 pytest.fail(
-                    f"{Esp32Sim.name}: the test set up {' and '.join(set_up)} and never called"
+                    f"{name}: the test set up {' and '.join(set_up)} and never called"
                     " board.power_on(): it ran no firmware",
                     pytrace=False,
                 )
@@ -283,8 +413,15 @@ def board(
             # section for people, which pytest shows with a failure or -rA, and a user property
             # for code, as a JSON string: JUnit XML writes a property's str().
             run = failing or request.node.stash.get(FAILED, False)
-            request.node.add_report_section("teardown", "esp32sim link", backend.report(run=run))
-            request.node.user_properties.append(("esp32sim_link", json.dumps(backend.properties())))
+            request.node.add_report_section(
+                "teardown", backend.report_section, backend.report(run=run)
+            )
+            request.node.user_properties.append(
+                (
+                    backend.report_property,
+                    json.dumps(backend.properties()),
+                )
+            )
 
 
 def skip_at_the_test(reason: str) -> NoReturn:
@@ -293,20 +430,20 @@ def skip_at_the_test(reason: str) -> NoReturn:
     raise pytest.skip.Exception(reason, _use_item_location=True)
 
 
-def backend_failed(error: BackendError) -> NoReturn:
+def backend_failed(error: BackendError, name: str) -> NoReturn:
     # from None: the message says it all, and the chained error would say it twice
-    raise pytest.fail.Exception(f"{Esp32Sim.name}: {error}", pytrace=False) from None
+    raise pytest.fail.Exception(f"{name}: {error}", pytrace=False) from None
 
 
 @pytest.fixture
-def console(board: Esp32Sim) -> Console:
+def console(board: Board) -> Console:
     """The firmware's console, read on the board's clock: `console.expect` lets the board run
     until a pattern appears."""
     return Console(board)
 
 
 @pytest.fixture
-def gnss(board: Esp32Sim) -> Gnss:
+def gnss(board: Board) -> Gnss:
     """The far end of the board profile's `uart.gnss` route: `gnss.replay(path)`, before
     `board.power_on()`, replays a recording into it; `gnss.fix(at=...)` or another call of the
     receiver model makes it a receiver the test describes; and `gnss.tap(path)` records what
@@ -314,41 +451,41 @@ def gnss(board: Esp32Sim) -> Gnss:
     try:
         uart = board.uart("gnss")
     except BackendError as error:
-        backend_failed(error)
+        backend_failed(error, board.name)
     assert isinstance(uart, Gnss), uart
     return uart
 
 
 @pytest.fixture
-def modem(board: Esp32Sim) -> Modem:
+def modem(board: Board) -> Modem:
     """The profile's uart.modem route; select its model or replay before power-on."""
     try:
         uart = board.uart("modem")
     except BackendError as error:
-        backend_failed(error)
+        backend_failed(error, board.name)
     assert isinstance(uart, Modem), uart
     return uart
 
 
 @pytest.fixture
-def lines(board: Esp32Sim) -> Lines:
+def lines(board: Board) -> Lines:
     """The board profile's GPIO lines, `[lines.<role>]`: `lines.drive(line, level)` and
     `lines.release(line)` at the board's current instant, `lines.level(line)` what the firmware
     drives, `lines.events()` every change with its time."""
     try:
         return board.lines()
     except BackendError as error:
-        backend_failed(error)
+        backend_failed(error, board.name)
 
 
 @pytest.fixture
-def sd_card(board: Esp32Sim) -> SdCard:
+def sd_card(board: Board) -> SdCard:
     """The board profile's SD card slot, empty until the test calls `sd_card.insert(image)`
     before `board.power_on()`."""
     try:
         return board.sd_card()
     except BackendError as error:
-        backend_failed(error)
+        backend_failed(error, board.name)
 
 
 @pytest.fixture

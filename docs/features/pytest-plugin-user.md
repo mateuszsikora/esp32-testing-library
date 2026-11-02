@@ -6,7 +6,8 @@ receiver the test describes, records what crosses it, drives and reads the board
 puts an SD card holding an image file in the board's slot. A test asks for the
 `board` fixture, names the app with the `app_path` marker, sets up what is around the board,
 powers it on, and waits on the board's own clock for what the firmware does. It runs once on
-every backend. pytest loads the plugin by itself once esp32tl is installed; it builds on
+the selected backend, esp32sim by default. pytest loads the plugin by itself once esp32tl is
+installed; it builds on
 [pytest-embedded](https://github.com/espressif/pytest-embedded), which esp32tl installs with it.
 
 ## Writing a test
@@ -75,9 +76,10 @@ What the receiver can be told, and the units, are in [models and units](models-u
   test runs (`Interrupted: 1 error during collection`, exit code 2), unless pytest runs with
   `--continue-on-collection-errors`.
 
-Before `board.power_on()`, `board.nvs({"config": {"broker_host": "broker.test"}})`
+On esp32sim, before `board.power_on()`, `board.nvs({"config": {"broker_host": "broker.test"}})`
 can replace a named NVS partition from the build's table. Integer values require a width,
-for example `u16(8883)` from `esp32tl.flash`. See [flash contents](flash-contents-user.md).
+for example `u16(8883)` from `esp32tl.flash`. On serial, `board.nvs(...)` skips without writing
+a replacement partition. See [flash contents](flash-contents-user.md).
 A test that supplies NVS and passes without calling `board.power_on()` fails teardown:
 it ran no firmware.
 
@@ -86,7 +88,12 @@ What the backend needs besides the build, the runner and the ROM ELF, is in
 
 ## The fixtures
 
-`board` is the board, off until the test powers it on:
+`board` is the board, off until the test powers it on. The details below describe esp32sim.
+On [serial](serial-backend-user.md#power-on-time-and-console), power-on is a reset, the clock
+advances continuously in wall time, waits poll the running board, and UTC comes from the host.
+Setup may already have flashed and booted the hardware.
+
+For esp32sim:
 
 - `board.power_on(utc=None)` starts the run: the runner starts, the firmware boots, and the
   board's clock starts at 0, where it stays until the test waits. `utc`, a `datetime` with a
@@ -323,16 +330,33 @@ is given. With `-p no:timeout` there is no timeout.
 The limits a test states, `within=` and `timeout=`, are part of what it tests, on the board's
 clock; the wall-time timeout says only that something is stuck.
 
+## Tapping the console
+
+`console.tap(path)` before `board.power_on()` records the console on either backend. It returns
+a `Tap` and writes at teardown, with paths relative to the test file, one tap per console, and the
+same file collision checks as `gnss.tap`. Its clock is `emulated-fifo-write` on esp32sim and
+`wall` on serial, stamped after reader polls with polling, USB, driver and scheduling delays.
+See [taps](run-report-user.md).
+
 ## Backends and test ids
 
-A test that uses `board`, or `console`, runs once per backend, with the backend in its id:
-`test_hello_world[esp32sim]`. `esp32sim`, the runner on the emulated clock, is the only backend
-([esp32sim backend](esp32sim-backend-user.md)). Tests that use neither fixture are not
-parametrised.
+A test that uses `board`, directly or through another fixture, runs once on the selected backend,
+with its name in the id: `test_hello_world[esp32sim]` or `test_hello_world[serial]`. Tests without
+`board` in their fixture dependencies are not parametrised.
 
-`--esp32tl-backend NAME` runs the tests that use `board` on that backend only; the default is
-every backend. A name that is not a backend is a usage error (exit code 4):
+`--esp32tl-backend NAME` chooses `esp32sim` or `serial`. Serial also requires an exact `--port`
+(or an indirectly parametrised `port` ); missing, blank or wildcard ports are refused before
+setup. The default is **esp32sim only**; serial requires explicit selection so ordinary test
+runs never claim a USB board. [esp32sim](esp32sim-backend-user.md) runs on emulated time;
+[serial](serial-backend-user.md) uses pytest-embedded's `esp,idf` services, `--port`, autoflash
+and
+`--skip-autoflash y`, and wall time. An unknown backend is a usage error (exit code 4):
 `--esp32tl-backend: invalid choice: 'qemu'`.
+
+`@pytest.mark.app_recording(path)` optionally checks a reference recording's `app_sha256` against
+the artifact before serial opens its port, including with skip-autoflash. It takes one path,
+relative to the test file or absolute, and is ignored on esp32sim. See
+[builds and flashing](serial-backend-user.md#builds-and-flashing) for its guarantees and errors.
 
 What is at the far end of an interface is what the test does with it before power-on, as
 `gnss.replay(path)`, and so is whether it is tapped, as `gnss.tap(path)`; a backend that cannot
@@ -363,12 +387,12 @@ A test that parametrises pytest-embedded's `count` itself above 1, as in
 ## What a failure looks like
 
 - The backend cannot give a source or a tap the test asks for: the test is skipped on it, at the
-  call ([board profiles](board-profiles-user.md#when-a-backend-cannot-give-it)). No run skips a
-  test this way yet: `esp32sim`, the only backend tests run on, gives every source and tap that
-  any backend declares, and `serial`, which would skip, is declared but not run.
+  call ([board profiles](board-profiles-user.md#when-a-backend-cannot-give-it)). Serial skips
+  models, replays and taps on UART peripherals, and SD-card models.
 - The backend cannot start (no runner, no ROM ELF, no usable build): an error at setup, the test
-  body does not run, and the message starts with `esp32sim: `. The messages are listed in
-  [the esp32sim backend](esp32sim-backend-user.md#when-the-backend-cannot-start).
+  body does not run, and the message starts with the backend name, `esp32sim: ` or `serial: `.
+  See [esp32sim](esp32sim-backend-user.md#when-the-backend-cannot-start) and
+  [serial](serial-backend-technical.md#failure-modes) for their setup errors.
 - A source or a tap given after `board.power_on()`, or a second one on the same route or slot: the
   test fails with `SourceError`; a recording that cannot be replayed fails it with `RecordingError` or
   `ReplayError` ([replay](replay-user.md#what-a-replay-refuses)), a tap into a directory that
@@ -453,4 +477,5 @@ MQTT 3.1.1 broker on port 1883. It requires a profile with `uart.modem`, such as
 `lilygo-t-a7670g-r2`. Use `board.wait_until(broker.message(topic), within=seconds(...))`,
 `broker.subscribed(topic)`, `broker.connected()` and `broker.publish(topic, payload)`.
 `modem.network()` gives the underlying network for DNS, NTP and TLS service configuration.
+On serial, both `broker` and `modem.network()` skip because a modem model is unsupported.
 See [the network guide](network-user.md) for complete examples and condition semantics.

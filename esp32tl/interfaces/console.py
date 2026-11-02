@@ -1,22 +1,25 @@
 """The console: the firmware's UART0, read on the board's clock.
 
 The backend gathers what the guest prints from the link's `console` messages, which arrive in
-emulated-time order with the turns. `expect` and `expect_exact` keep pytest-embedded's names, its
-search from the end of the last match, its return values and `return_what_before_match`, but the
-matching is esp32tl's and waits on the test's clock: `timeout` is a `Duration` of the board's
-time, or a number of seconds of it, and the board runs only while they wait. `line` and `lines` read
-the console as lines, each stamped with the board's time it ended at: `line(pattern)` is a condition
-for `board.wait_until`, `lines()` what has been printed.
+emulated-time order with the turns; serial stamps its read batches on wall time. `expect` and
+`expect_exact` keep pytest-embedded's names, its search from the end of the last match, its return
+values and `return_what_before_match`. The matching is esp32tl's and waits on the test's clock:
+`timeout` is a `Duration` of the board's time, or a number of seconds of it. On esp32sim the
+board runs only while they wait. `line` and
+`lines` read the console as lines, each stamped with the board's time it ended at: `line(pattern)`
+is a condition for `board.wait_until`, `lines()` what has been printed.
 """
 
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Protocol, TypeVar, cast
+from pathlib import Path
+from typing import Any, Protocol, TypeVar, cast, runtime_checkable
 
 import pexpect
 
-from esp32tl.interfaces import RunEnded
+from esp32tl.interfaces import RunEnded, SourceError
+from esp32tl.tap import Tap
 from esp32tl.units import Duration, number, seconds
 
 # pytest-embedded's default, in seconds of the board's time here.
@@ -96,12 +99,20 @@ class Clocked(Protocol):
     """The board as the console needs it: what the guest has printed, as bytes and as lines, and
     its clock."""
 
-    console_output: bytearray
-    console_lines: ConsoleLines
+    @property
+    def console_output(self) -> bytearray: ...
+
+    @property
+    def console_lines(self) -> ConsoleLines: ...
 
     def wait_on_clock(
         self, condition: Callable[[], T | None], within: Duration, description: str
     ) -> T: ...
+
+
+@runtime_checkable
+class Tappable(Protocol):
+    def tap_console(self, path: str | Path) -> Tap: ...
 
 
 class Console:
@@ -111,6 +122,12 @@ class Console:
         self._board = board
         # Where the last match ended: the next expect searches from there, as pexpect does.
         self._cursor = 0
+
+    def tap(self, path: str | Path) -> Tap:
+        """Records console bytes from power-on, with the backend's receipt times."""
+        if not isinstance(self._board, Tappable):
+            raise SourceError("this board cannot tap its console")
+        return self._board.tap_console(path)
 
     def expect(
         self,

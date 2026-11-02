@@ -297,8 +297,8 @@ Status: decided (#13)
 
 `esp32tl/boards/capabilities.toml` declares, per backend and per interface kind (`console`,
 `uart`), the sources a backend takes and whether it can tap. It declares `serial` with the
-specification's table (real only, only the console tapped) although `serial` is not in `SERVICES`
-yet, so that the skip has data to act on and #25 adds only the backend.
+specification's table (real only, only the console tapped). At the time of #13, `serial` was
+not yet in `SERVICES`; the declaration gave skips data to act on before #25 added the backend.
 
 **Rejected:** a dict beside `SERVICES` in `esp32tl/backends/__init__.py`, the "capabilities per
 interface" of plan §3's `Backend`, because the plan's §4.5 and issue #13 place the declaration
@@ -479,10 +479,11 @@ not read its stdin.
 
 ## The serial backend is postponed to M4
 
-Status: postponed (#25)
+Status: superseded (#25)
 
-`esp32tl.backends.SERVICES` has the `esp32sim` entry only, so the parametrisation has a single
-case. `serial` (`esp,idf`) is added with M4.
+Before #25, `esp32tl.backends.SERVICES` had only esp32sim, so tests had one backend parameter.
+[Serial is now opt-in](#serial-is-opt-in-and-pytest-embedded-owns-flashing-and-the-port), with
+pytest-embedded's `esp,idf` services. The default still runs esp32sim only.
 
 ## Prebuilt runner binaries are postponed to M10
 
@@ -844,11 +845,13 @@ because JUnit XML holds it as one string, and a tap is the run's data for code.
 
 ## Tapping the console is postponed
 
-Status: postponed (#21)
+Status: superseded (#25)
 
-No call taps the console. What the firmware prints is in `dut.log` and in the run report already,
-and nothing reads a recording of `console` yet. The capability declaration keeps
-`console = { tap = true }` for both backends, as the specification's table has it.
+At #21, no feature consumed a console recording, so the console remained only in `dut.log` and
+the run report.
+[Console taps now use both backend clocks](#console-taps-use-the-same-api-on-both-backends):
+`app_recording` can check their app hash on serial and recording tools can read the output. These
+recordings still cannot be replayed into the console: the runner has no console-input route.
 
 ## Models describe the world in its own terms, in units
 
@@ -1300,6 +1303,91 @@ tests, and checking whether each of those is still needed.
 **Rejected:** an optional extra, because the Bluetooth fixture will be the plugin's and the plugin
 has no optional dependencies; and a compatible release, `~=0.0.236`, which admits every 0.0.x.
 
+## Serial is opt-in and pytest-embedded owns flashing and the port
+
+Status: decided (#25)
+
+`SERVICES` has `esp32sim: None` and `serial: esp,idf`, but the default selection is esp32sim only.
+Serial needs `--esp32tl-backend serial` and an exact `--port` (or a parametrised `port`).
+The collection hook refuses missing, blank or wildcard ports; validation before `app` also checks
+the resolved port fixture. `ESPPORT` must be unset, empty or equal to the explicit port: the
+plugin checks both the environment and pytest-embedded's cached port options. A separate
+`flash_port` is refused; flashing, console and reset use one port. pytest-embedded's
+`IdfSerial._start` owns autoflash and skip-autoflash.
+`power_on()` resets the board and starts a fresh console capture; it neither opens a second
+port nor flashes again. The real board runs
+continuously, using monotonic host time; it cannot implement the emulator's held clock or set
+its UTC. Serial takes over the redirect reader during capture to stamp batches after read polls,
+then returns it to pytest-embedded after healthy teardown. Only the test thread updates console
+buffers.
+
+**Rejected:** adding esp32tl port/flash options, flashing twice, enabling hardware automatically,
+or pretending the real device stops while the test body runs. Also rejected: permitting
+autodetection, including a wildcard port, or accepting `--port-location` / `--port-mac` alone:
+pytest-embedded 2.9.3 may probe other ports before resolving them. An exact port avoids claiming
+an unrelated connected ESP32. Also rejected: silently accepting `ESPPORT` overriding that
+selection, or allowing a separate flash port without a reset transport design.
+
+## Reference recordings check the serial artifact before opening the port
+
+Status: decided (#25)
+
+`app_recording(path)` is an optional reference marker, separate from UART replay (unsupported on
+serial). It requires `app_sha256` to equal the hash of the app binary named in `flasher_args.json`.
+The plugin validates before pytest-embedded's `app` fixture, including when a test explicitly
+asks for `dut`, and before `board` constructs its backend. Missing hashes and mismatches fail.
+The check applies both with autoflash and skip-autoflash, and is ignored on esp32sim, preserving
+replay into other applications. Console taps record that artifact hash on serial with clock
+`wall`; comparing it cannot prove what a board carries under skip-autoflash.
+
+**Rejected:** using the ELF hash as the recording hash, requiring a reference recording for tests
+with none, checking only inside an unsupported UART replay, or claiming this performs flash
+readback. Readback verification remains outside this milestone.
+
+## Console taps use the same API on both backends
+
+Status: decided (#25)
+
+`console.tap(path)` remains in #25 on both serial and esp32sim. The console already declares
+`tap = true` on both, and a console test can record either run without backend-specific code.
+The emulator stamps output with the link time; serial stamps it after a reader poll, on wall
+time, with polling, USB, driver and host scheduling delays. Both record only `out` events and
+share the app-image hash helper. A console tap is a test step in `RunLog`; its path is visible in
+the report and JSON property. This resolves the console-tap part postponed in #21, not replay
+of console input. The recording schema already accepts `console`, so its version remains 1.
+
+**Rejected:** splitting the emulator's small console adapter into a separate change while making
+`console.tap` backend-dependent. Recording on both backends makes reference hashes usable across
+them; it does not imply that console output can be replayed as UART input.
+
+## Serial capture failures leave no successful power-on and have bounded reader teardown
+
+Status: decided (#25)
+
+A failed reset rolls back the clock origin, leaves `powered` false, and restores pytest-embedded's
+redirect thread. It writes no recording of a successful run. A test may retry the reset. During
+close, the backend waits at most one second for its reader; a still-running reader is a
+`BackendError`. The reader is a daemon and discards bytes returned after the stop signal.
+The redirect thread restarts only after a healthy reader stopped, avoiding concurrent readers
+and pytest-embedded's reconnect loop on a disconnected device. The fixture owner closes the port.
+
+**Rejected:** an unbounded join up to the test's 600 s timeout, claiming a failed reset powered the
+board on, or restarting another reader on a dead port. This bounds esp32tl's join, not arbitrary
+blocking calls in the USB driver or pytest-embedded's own connection and reset operations.
+
+## Serial validation accepts unencrypted classic ESP32 builds only
+
+Status: decided (#25)
+
+`load_app(app_path, backend="serial")` shares the finished-build checks and gives serial-specific
+messages. Like the first emulator backend, M4 is scoped to classic ESP32 and unencrypted builds.
+Flash encryption is physically possible but requires provisioning and key/efuse management that
+this harness neither implements nor validates. The app hash refers to the local plaintext file,
+not ciphertext on flash. Encrypted builds are refused before port setup even with skip-autoflash.
+
+**Rejected:** implying that the serial restriction comes from a runner, or silently accepting
+an unvalidated encryption/provisioning workflow. Supporting such boards needs its own design.
+
 ## The modem drives RI through Lines and observes PWRKEY through it
 
 Status: decided (#29)
@@ -1460,6 +1548,18 @@ log and retained for the whole run, with the memory and report-size cost documen
 recovering occurrences from the rolling log, which can discard precisely the request needed
 for diagnosis. Existing summary fields stay intact for tests and report consumers.
 
+## Serial adapters preserve skips for modem models and NVS replacement
+
+Status: decided (#25)
+
+The serial modem route uses the same `Modem` adapter as esp32sim so model, replay and tap
+requests reach the capability check. Merely requesting it leaves the physical peripheral
+untouched and does not skip a console test. Its local `Lines` object has no transport and no
+model can attach to it. `board.nvs()` skips on serial before generating or writing an image.
+
+**Rejected:** exposing the new emulator APIs as missing attributes on serial, or flashing a
+test-specific NVS partition after pytest-embedded's autoflash without a hardware lifecycle
+design. Replacement of physical NVS remains outside this serial milestone.
 
 
 ## The network is selected explicitly, and resets with its modem

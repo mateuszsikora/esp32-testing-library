@@ -4,6 +4,9 @@ The `modem` fixture puts a cellular modem on the board profile's `uart.modem` ro
 changes signal, registration and power at the board's current instant. The firmware talks AT and
 uses its ordinary PWRKEY and RI wires. No network, host serial port or `pppd` is needed.
 
+On the serial backend, the peripheral remains physical: model, replay and tap requests skip
+at the call. Merely requesting `modem` on a profile with that route does not skip a console test.
+
 ## Set up the modem
 
 Select the model with its first call before `board.power_on()`. Merely requesting `modem` leaves

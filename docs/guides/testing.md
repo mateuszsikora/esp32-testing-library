@@ -29,14 +29,34 @@ ESP32TL_RUNNER=runner/target/debug/esp32tl-runner .venv/bin/pytest
 `ESP32TL_RUNNER` and `ESP32TL_ROM` are described in
 [esp32sim-backend-user.md](../features/esp32sim-backend-user.md).
 
+## Real-board checks
+
+Serial is off by default. After building firmware, these commands **flash the selected board**:
+
+```sh
+.venv/bin/pytest tests/test_hello_world.py --esp32tl-backend serial --port /dev/ttyUSB0
+.venv/bin/pytest tests/test_nmea_reader.py -k starts_uart --esp32tl-backend serial --port /dev/ttyUSB0
+```
+
+Use the connected device's exact path (on macOS, for example `/dev/cu.usbserial-5C854994151`),
+without wildcards. `ESPPORT` must be unset, empty or equal to the explicit `--port` value.
+The NMEA smoke test checks UART startup without a receiver; the replay/model tests skip on
+serial. `--skip-autoflash y` reuses the image already on the board.
+[Serial documentation](../features/serial-backend-user.md) explains time, reset and recording/hash
+guarantees. Unit tests do not establish hardware compatibility.
+
+`tests/test_serial_backend.py` needs no hardware or runner: it runs the actual pytest-embedded
+fixture chain with an in-memory port and fake flash/reset, checking selection, autoflash,
+console capture, wall time, capability skips, reference hashes before port creation and disconnects.
+
 ## How pytest is configured
 
 `[tool.pytest.ini_options]` in `pyproject.toml`:
 
 - `testpaths = ["tests"]`: a bare `pytest` collects `tests/` only.
 - `addopts = ["-ra", "--strict-markers"]`: the summary lists every outcome but passes, skip reasons
-  included, and a marker nobody registered is an error. The esp32tl plugin registers `app_path`
-  and `board_profile` itself, and pytest-timeout `timeout`; `requires_docker` and
+  included, and a marker nobody registered is an error. The esp32tl plugin registers `app_path`,
+  `app_recording` and `board_profile` itself, and pytest-timeout `timeout`; `requires_docker` and
   `requires_mtools` are registered here.
 - `markers`: `requires_docker: needs a Docker daemon`, `requires_mtools: needs mtools (mformat,
   mcopy, mdir, mtype)`.

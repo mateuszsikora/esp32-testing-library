@@ -233,6 +233,7 @@ def test_unseen_requests_are_in_the_backend_report_and_json_properties(tmp_path:
     gnss, _ = uart(tmp_path)
     gnss.replay("r.jsonl", protocol=AT)
     backend = Esp32Sim.__new__(Esp32Sim)
+    backend._console = Uart("console", Wire(1, 3, 115200), clock=CLOCK, directory=tmp_path)
     backend._uarts = {"uart.gnss": gnss}
     backend._sd_card = None
     backend.log = RunLog(entries=1)

@@ -35,6 +35,10 @@ for different partitions are independent. An empty mapping creates empty NVS. Th
 is never edited; each run gets its own image beside its `dut.log`, retained after teardown.
 Firmware changes to emulated flash are not saved back to that image.
 
+`board.nvs(...)` is supported on esp32sim only. On serial it skips with
+`serial: NVS contents cannot be configured on this backend`, without generating or writing a
+replacement partition.
+
 ## Choose the type the firmware reads
 
 Import the integer constructors from `esp32tl.flash`:

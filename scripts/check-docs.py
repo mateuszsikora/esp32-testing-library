@@ -71,14 +71,19 @@ FEATURES = [
         r"^docs/features/pytest-plugin-",
         "Console interface changed: update docs/features/pytest-plugin-*.md",
     ),
-    # All of backends/ while esp32sim is the only backend; backends/__init__.py will be shared
-    # with the serial backend (#25), and this rule splits by file name then.
+    # The registry and serial backend belong to F23; the held clock belongs to esp32sim.
     Rule(
         "F3",
-        r"^esp32tl/backends/",
+        r"^esp32tl/backends/(esp32sim|clock)\.py$",
         r"^docs/features/esp32sim-backend-",
         "esp32sim backend changed (spawn, ROM and runner lookup, end of run, teardown):"
         " update docs/features/esp32sim-backend-*.md",
+    ),
+    Rule(
+        "F23",
+        r"^esp32tl/backends/(serial|__init__)\.py$",
+        r"^docs/features/serial-backend-",
+        "Serial backend or backend registry changed: update docs/features/serial-backend-*.md",
     ),
     Rule(
         "F4",

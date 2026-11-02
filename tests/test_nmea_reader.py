@@ -17,6 +17,7 @@ from esp32tl import recording
 from esp32tl.backends.esp32sim import Esp32Sim
 from esp32tl.interfaces.console import Console
 from esp32tl.interfaces.gnss import Gnss
+from esp32tl.pytest_plugin import Board
 from esp32tl.units import ms, seconds
 
 RECORDINGS = Path(__file__).resolve().parent.parent / "recordings"
@@ -32,6 +33,12 @@ FIX = re.compile(rb"fix(?: acquired)? lat=\S+ lon=\S+(?=\r?\n)")
 # faster than real time, but every recorded sentence is an exchange with the harness, a wall-time
 # block, so the margin is deliberate (plan §7).
 TEN_FIXES_WALL_SECONDS = 5
+
+
+def test_starts_uart(board: Board, console: Console) -> None:
+    """The console-only smoke test also runs on a devkit without a receiver attached."""
+    board.power_on()
+    console.expect_exact("nmea_reader: UART1 RX GPIO5 TX GPIO4 9600 baud")
 
 
 def test_reports_a_fix(board: Esp32Sim, gnss: Gnss, console: Console) -> None:

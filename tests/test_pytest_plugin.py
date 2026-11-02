@@ -155,18 +155,6 @@ def test_app_path_marker_needs_one_path(pytester: pytest.Pytester) -> None:
     )
 
 
-# SHOW_PARAMS, with a second backend that can give less than esp32sim: `serial`, which the
-# capability declaration has and esp32tl.backends.SERVICES does not yet.
-WITH_SERIAL = (
-    SHOW_PARAMS
-    + """
-from esp32tl.backends import SERVICES
-
-SERVICES["serial"] = "esp,idf"
-"""
-)
-
-
 @pytest.mark.parametrize(
     ("marks", "message"),
     [
@@ -180,7 +168,7 @@ SERVICES["serial"] = "esp,idf"
 def test_a_marker_no_backend_can_satisfy_is_a_collection_error(
     pytester: pytest.Pytester, marks: str, message: str
 ) -> None:
-    pytester.makeconftest(WITH_SERIAL)
+    pytester.makeconftest(SHOW_PARAMS)
     pytester.makepyfile(test_marks=f"import pytest\n\n{marks}\ndef test_one(board):\n    pass\n")
     result = pytester.runpytest_subprocess("-p", "no:cacheprovider")
     assert result.ret == pytest.ExitCode.INTERRUPTED
@@ -189,7 +177,7 @@ def test_a_marker_no_backend_can_satisfy_is_a_collection_error(
 
 
 def test_markers_on_a_class_or_a_module_count(pytester: pytest.Pytester) -> None:
-    pytester.makeconftest(WITH_SERIAL)
+    pytester.makeconftest(SHOW_PARAMS)
     pytester.makepyfile(
         test_levels="""
         import pytest
@@ -210,11 +198,14 @@ def test_markers_on_a_class_or_a_module_count(pytester: pytest.Pytester) -> None
     )
 
 
-@pytest.mark.parametrize("marker", ['board_profile("lilygo-t-a7670g-r2")', 'app_path("elsewhere")'])
+@pytest.mark.parametrize(
+    "marker",
+    ['board_profile("lilygo-t-a7670g-r2")', 'app_path("elsewhere")', 'app_recording("r.jsonl")'],
+)
 def test_a_board_marker_in_a_pytest_param_is_refused(
     pytester: pytest.Pytester, marker: str
 ) -> None:
-    pytester.makeconftest(WITH_SERIAL)
+    pytester.makeconftest(SHOW_PARAMS)
     pytester.makepyfile(
         test_param=f"""
         import pytest
@@ -252,7 +243,7 @@ def test_a_board_marker_a_hook_adds_is_refused(
     pytester: pytest.Pytester, items: str, node: str, profile: str
 ) -> None:
     pytester.makeconftest(
-        WITH_SERIAL
+        SHOW_PARAMS
         + f"""
 def pytest_collection_modifyitems(items):
     for item in {items}:
@@ -1231,6 +1222,35 @@ def test_a_tap_records_what_crossed_the_route_both_ways(
     result.stdout.no_fnmatch_line("the run on the board's clock*")
 
 
+@pytest.mark.parametrize("end", ["", "assert False, 'after capture'"])
+def test_console_tap_preserves_emulated_output(link_runner: pytest.Pytester, end: str) -> None:
+    link_runner.makepyfile(
+        test_fake=TAPPED.replace('gnss.tap("tap.jsonl")', 'console.tap("console.jsonl")').format(
+            end=end
+        )
+    )
+    result = link_runner.runpytest_subprocess(
+        "-p", "no:cacheprovider", "-rA", "--junitxml=report.xml"
+    )
+    result.assert_outcomes(**({"failed": 1} if end else {"passed": 1}))
+    captured = recording.read(link_runner.path / "console.jsonl")
+    assert captured.header.interface == "console"
+    assert captured.header.clock == "emulated-fifo-write"
+    assert captured.header.app_sha256 == hashlib.sha256(b"").hexdigest()
+    assert b"Hello world!" in b"".join(event.data for event in captured.events)
+    assert all(event.dir == "out" for event in captured.events)
+
+    result.stdout.fnmatch_lines(["*console: * bytes out; tapped into */console.jsonl*"])
+    if end:
+        result.stdout.fnmatch_lines(["*console.tap('console.jsonl')*"])
+    root = ElementTree.parse(link_runner.path / "report.xml")
+    prop = root.find(".//property[@name='esp32sim_link']")
+    assert prop is not None
+    console = json.loads(prop.attrib["value"])["console"]
+    assert console["tap"] == str(link_runner.path / "console.jsonl")
+    assert console["bytes_out"] == sum(len(event.data) for event in captured.events)
+
+
 def test_a_tap_on_a_modelled_route_records_the_receiver(
     link_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1508,6 +1528,19 @@ def test_a_held_run_whose_runner_is_gone_releases_the_link(
     assert time.monotonic() - started < 15
     result.assert_outcomes(passed=1, errors=1)
     result.stdout.fnmatch_lines(["*esp32sim: the runner exited with code 4; its output is in *"])
+
+
+def test_reference_recording_is_not_read_on_esp32sim(link_runner: pytest.Pytester) -> None:
+    link_runner.makepyfile(
+        test_fake="""
+        import pytest
+        @pytest.mark.app_recording("does-not-exist.jsonl")
+        def test_reference(board, console):
+            board.power_on()
+            console.expect("Hello world!")
+    """
+    )
+    link_runner.runpytest_subprocess("-p", "no:cacheprovider").assert_outcomes(passed=1)
 
 
 def test_nvs_without_power_on_fails_teardown(fake_runner: pytest.Pytester) -> None:

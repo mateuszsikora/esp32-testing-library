@@ -2,9 +2,10 @@
 
 The `esp32sim` backend runs the firmware of a test in `esp32tl-runner`, the program in `runner/`
 that runs the [esp32sim](https://github.com/mikroverk/esp32sim) emulator, on the emulated clock. It
-is the backend behind the `board`, `console`, `gnss`, `lines` and `sd_card` fixtures, and the only
-one: every test that uses them runs on it, with `[esp32sim]` in its id ([pytest
-plugin](pytest-plugin-user.md)). It runs an unmodified ESP-IDF build for the classic ESP32.
+is the default backend behind the `board`, `console`, `gnss`, `lines` and `sd_card` fixtures,
+with `[esp32sim]` in each test id ([pytest plugin](pytest-plugin-user.md)). A real board is selected
+explicitly through the [serial backend](serial-backend-user.md). The emulator runs an unmodified
+ESP-IDF build for the classic ESP32.
 
 ## What it needs
 
@@ -67,6 +68,16 @@ The board profile's SD card slot is not on the link. A card the test inserts
 passes as `--sd-spi sclk=N,mosi=N,miso=N,cs=N --sd-rw IMAGE`; the card writes into the image file
 as the firmware writes ([runner](runner-user.md#put-an-sd-card-in)). An empty slot gives the
 runner no card.
+
+## Console recordings
+
+`console.tap(path)` captures link console messages with their emulated times and writes them at
+teardown as `interface: console`, `source: none`, with the app hash and runner revision, just as
+UART taps do. It shares their file collision checks and no-power-on guard.
+
+The `console.tap(...)` call appears in the run log. A tapped console also gets
+`console: <n> bytes out; tapped into <path>` in the report and a `console` object containing
+`bytes_out` and `tap` in the `esp32sim_link` JSON property.
 
 ## When the runner exits
 

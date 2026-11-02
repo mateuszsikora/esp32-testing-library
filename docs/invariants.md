@@ -9,10 +9,14 @@ that references to its number keep their meaning.
 
 1. A test that uses `board` is parametrised with the backend's name as its id
    (`test_marked[esp32sim]`), and its `board`, `embedded_services` and `app_path` are set together;
-   a test without `board` is not parametrised. With `esp32sim` the only backend, "once per backend"
-   is not tested yet, nor is a test that uses `console` alone. `tests/test_pytest_plugin.py::test_board_is_parametrised_with_the_backend_its_services_and_the_app`
+   a test without `board` is not parametrised. Serial is opt-in; selecting it gives `esp,idf`,
+   including for a test requesting only `console`.
+   `tests/test_serial_backend.py::test_serial_is_opt_in_and_selects_esp_idf`,
+   `tests/test_serial_backend.py::test_console_only_uses_serial_backend`.
+   `tests/test_pytest_plugin.py::test_board_is_parametrised_with_the_backend_its_services_and_the_app`
 2. `--esp32tl-backend` takes only a backend's name: any other name is a usage error (exit code 4).
-   That it limits the run to that backend is not tested while there is one backend.
+   Explicit selection runs that backend only; the default is esp32sim.
+   `tests/test_serial_backend.py::test_serial_is_opt_in_and_selects_esp_idf`.
    `tests/test_pytest_plugin.py::test_backend_option_takes_a_backend_name_only`
 3. pytest-embedded's `--embedded-services`, `--app-path` and `--build-dir` are refused, with exit
    code 4 and no traceback on stdout, when a selected test uses `board`; `--app-path` is allowed
@@ -387,6 +391,55 @@ that references to its number keep their meaning.
 64. `sdspi` is ESP-IDF's example unmodified: its SD card pins are the `esp32-devkitc` profile's
     slot, and it formats no card.
     `tests/test_firmware_images.py::test_sdspi_takes_the_devkit_sd_card_slot_from_sdkconfig`
+
+## Serial hardware boundary
+
+98. Serial's power-on resets once without another flash, excludes pre-reset console bytes, and
+    uses wall time that advances outside waits. Console taps contain only output with clock
+    `wall` and the selected artifact's app hash; they cannot overwrite the reference recording
+    or flash artifacts.
+    `tests/test_serial_backend.py::test_console_reset_clock_tap_and_autoflash`
+99. A serial reference recording must have an app hash matching the app binary, unaffected by
+    bootloader changes. Missing or mismatched hashes fail, and mismatch prevents port setup even
+    for an explicitly requested `dut`.
+    `tests/test_serial_backend.py::test_artifact_hash_is_app_binary_and_refuses_missing_or_different_hash`,
+    `tests/test_serial_backend.py::test_recording_mismatch_prevents_dut_setup`,
+    `tests/test_serial_backend.py::test_reference_check_precedes_even_an_explicit_dut`
+100. Serial skips GNSS/modem UART models (including `modem.network()` and `broker`),
+    replays and taps, SD-card models, GPIO control and
+    NVS replacement. Merely requesting the modem fixture does not skip a console test. A disconnected
+    console ends a wait with `RunEnded`, without a duplicate teardown failure.
+    `tests/test_serial_backend.py::test_serial_capabilities_skip_at_the_call`,
+    `test_serial_modem_fixture_can_accompany_console_test`,
+    `tests/test_serial_backend.py::test_disconnect_ends_wait_and_releases_reader`
+101. Serial requires an exact port before setup; neither an absent/blank/wildcard selection nor
+    a fixture overriding it to `None` can enable autodetection. An indirect port parameter works;
+    a run selecting no board test needs no port. `ESPPORT` cannot redirect that selection, even
+    through cached options, and a separate flashing port is refused before opening a device.
+    Cached-port mismatches name the snapshot; missing serial services produce a setup error
+    without a traceback, before a device opens.
+    `tests/test_serial_backend.py::test_serial_requires_an_exact_port_before_setup`,
+    `test_port_parametrisation_selects_the_device`, `test_overridden_port_cannot_enable_discovery`,
+    `test_environment_cannot_override_explicit_port`,
+    `test_environment_can_agree_with_explicit_port`,
+    `test_setup_environment_cannot_redirect_port`,
+    `test_cached_port_override_names_the_snapshot`,
+    `test_overridden_services_fail_without_a_traceback`,
+    `test_separate_flash_port_is_refused_before_opening`
+102. A failed serial reset restores redirection and leaves the board off, producing no successful
+    run recording; retry can start capture. A stuck reader cannot block esp32tl's close beyond
+    its join bound, and neither stuck nor disconnected capture restarts another reader.
+    `tests/test_serial_backend.py::test_failed_reset_restores_redirect_and_stays_off`,
+    `test_stuck_reader_has_bounded_teardown_and_no_late_capture`,
+    `test_dead_open_port_does_not_restart_redirect`
+103. A malformed `app_recording` marker names its test at collection; esp32sim does not read the
+    referenced file. Console taps appear in the report, and serial logs wait starts and outcomes.
+    Serial uses the same wait-step logging and duration validation messages as esp32sim.
+    `tests/test_serial_backend.py::test_bad_reference_marker_names_the_test`,
+    `test_serial_waits_and_console_tap_are_in_the_failure_report`,
+    `test_wait_validation_and_closed_run_match_emulator`,
+    `tests/test_pytest_plugin.py::test_reference_recording_is_not_read_on_esp32sim`,
+    `test_console_tap_preserves_emulated_output`
 
 ## Documentation
 
