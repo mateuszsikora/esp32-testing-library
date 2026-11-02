@@ -87,7 +87,7 @@ def test_the_help_names_run_and_replay(
         (
             ["run", "--app", "firmware/hello_world", "--board", "nope"],
             "esp32tl: no board profile named 'nope'; the profiles are esp32-devkitc,"
-            " gps-alarm-clock, lilygo-t-a7670g-r2\n",
+            " gps-alarm-clock, lilygo-t-a7670g-r2, sd-data-logger\n",
         ),
         (
             ["run", "--app", "nowhere"],

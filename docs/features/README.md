@@ -13,7 +13,7 @@ templates.
 | Runner: `esp32tl-runner`, esp32sim with the harness attached | [user](runner-user.md) | [technical](runner-technical.md) | `runner/src/`, `runner/Cargo.toml` |
 | Runnable examples | [user](examples-user.md) | [technical](examples-technical.md) | `examples/` |
 | Validation firmware and its container build | [user](validation-firmware-user.md) | [technical](validation-firmware-technical.md) | `firmware/` |
-| Board profiles: `esp32-devkitc`, `gps-alarm-clock`, `lilygo-t-a7670g-r2`, the capability declaration, the `board_profile` marker | [user](board-profiles-user.md) | [technical](board-profiles-technical.md) | `esp32tl/boards/` |
+| Board profiles: `esp32-devkitc`, `gps-alarm-clock`, `lilygo-t-a7670g-r2`, `sd-data-logger`, the capability declaration, the `board_profile` marker | [user](board-profiles-user.md) | [technical](board-profiles-technical.md) | `esp32tl/boards/` |
 | Link protocol between the runner and the harness: the runner's `--board` and the backend's `BoardLink` | | [protocol](../protocol.md) | `esp32tl/link/`, `runner/src/protocol.rs`, `runner/src/socket_board.rs` |
 | Recording format: the `.jsonl` files a replay reads | | [format](../recording-format.md) | `esp32tl/recording.py` |
 | Replay: a recording at the far end of an interface, `gnss.replay(path)` | [user](replay-user.md) | [technical](replay-technical.md) | `esp32tl/sources/replay.py` |

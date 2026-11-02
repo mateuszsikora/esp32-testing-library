@@ -13,6 +13,7 @@ with the reason.
 |---|---|---|---|
 | `esp32-devkitc` | `esp32` | 4 MB, none | `console`; `uart.gnss`: UART1, TX GPIO 4, RX GPIO 5, 9600 baud; `sd_card`: SCLK GPIO 14, MOSI GPIO 15, MISO GPIO 2, CS GPIO 13 |
 | `gps-alarm-clock` | `esp32` | 4 MB, none | `console`; `uart.gnss`: UART1, TX GPIO4, RX GPIO5, 9600 baud; `lines.alarm`: buzzer GPIO18 |
+| `sd-data-logger` | `esp32` | 4 MB, none | `console`; `uart.gnss`: UART1, TX GPIO4, RX GPIO5, 9600 baud; `sd_card`: SCLK GPIO14, MOSI GPIO15, MISO GPIO2, CS GPIO13; `lines.logger`: error GPIO18 |
 | `lilygo-t-a7670g-r2` | `esp32` (ESP32-WROVER-E) | 4 MB, 4 MB | `console`; `uart.modem`: UART1, TX GPIO 26, RX GPIO 27, 115200 baud; `uart.gnss`: UART2, TX GPIO 21, RX GPIO 22, 9600 baud; `lines.modem`: `pwrkey` GPIO 4, `ri` GPIO 33 pulled down |
 
 `esp32-devkitc` is a generic ESP32 module on a devkit, and carries every validation firmware: its
@@ -41,6 +42,10 @@ leaves GPIO 21 and 22 free, the default I²C pins, and the profile still routes 
 `gps-alarm-clock` describes the devkit, receiver and active buzzer assembly of the
 [GPS alarm example](examples-user.md#gps-alarm-clock). It is separate from the generic devkit
 profile because the buzzer is an added peripheral.
+
+`sd-data-logger` describes the [SD logger example](examples-user.md#sd-data-logger): the generic
+devkit's GNSS and SPI SD wiring plus GPIO18, high while storage is unavailable. Tests observe
+it with `lines.output("logger.error")`.
 
 The profiles are `esp32tl/boards/<name>.toml`, in the installed package.
 
@@ -151,7 +156,7 @@ runs (exit code 2):
 | Message, after `<test id>: ` | When |
 |---|---|
 | `the board_profile marker takes one name, as in @pytest.mark.board_profile("esp32-devkitc")` | The marker has no argument, more than one, a keyword argument, or a name that is not a string |
-| `no board profile named 'NAME'; the profiles are esp32-devkitc, gps-alarm-clock, lilygo-t-a7670g-r2` | The marker names a profile esp32tl does not ship |
+| `no board profile named 'NAME'; the profiles are esp32-devkitc, gps-alarm-clock, lilygo-t-a7670g-r2, sd-data-logger` | The marker names a profile esp32tl does not ship |
 For a source or a tap it is a `SourceError` at the call, which fails the test:
 
 | Message | When |

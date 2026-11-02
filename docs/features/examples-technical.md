@@ -57,6 +57,40 @@ and the firmware's 100 ms UART polling. This is an externally observed expiry wi
 an assertion about the exact internal `last_fix` timestamp.
 The separate `gps-alarm-clock` profile gives this assembly's wiring without changing the generic devkit.
 
+## SD logger implementation
+
+`examples/sd_data_logger/main/main.c` uses ESP-IDF's SDSPI host and FAT VFS, with SPI2 on
+GPIO14/15/2/13 and `format_if_mount_failed = false`. GPIO18 starts high, becomes low only when
+the mount succeeds, and latches high on any `fopen`, `fprintf` or `fclose` failure. The UART
+driver is installed before mounting so it can buffer incoming sentences during card discovery.
+The application continues its UART loop after storage failure and reports accepted fixes on
+the console. It does not retry mounting or writing after failure.
+
+Like the alarm, this project compiles `firmware/nmea_reader/main/nmea.c` from the checkout.
+`dated_fix` accepts RMC only, delegates checksum/status/coordinate parsing, and validates its
+date and time locally. The date must be six digits and a real calendar day in 2000–2099;
+the time is six digits (00–23 hours, 00–59 minutes and seconds), optionally followed by a dot
+and at least one decimal digit. Leap seconds are rejected. The NMEA buffer is bounded to
+82 characters including CRLF; `$` restarts reception and overflow drops the sentence.
+Only validated digits enter the 8.3 filename `YYYYMMDD.CSV`, avoiding long-filename settings
+and preventing the receiver from selecting an arbitrary path.
+
+`append_fix` opens the day's file with `"a"`, writes the original NMEA time and decimal
+coordinates rounded to microdegrees, and closes it before printing `(saved)`. Closing flushes
+stdio and synchronizes the FAT file. There is no cached open file across dates, no GGA-derived
+date carryover and no duplicate-sentence suppression. A write failure can leave a partial row;
+the example promises neither atomic rows under power loss nor recovery from a damaged FAT.
+
+The tests use only public GNSS, board, SD and GPIO fixtures. Their local `card_image` fixture
+checks for mtools before inserting a 32 MiB image; it skips only tests requiring that image.
+`board.wait` stops at a quiet point between epochs before mtools reads the image, with the
+firmware's previous row already closed. Exact row counts catch double logging of RMC/GGA;
+pre-existing rows catch truncation. The rollover tests check the first file both before and
+after midnight. The empty-slot test supplies a fix after the mount has failed, observes two
+distinct later timestamps and requires continuous error-pin history between them.
+
+## Documentation and builder checks
+
 `scripts/check-docs.py` owns `examples/` through F24; Python test files under each example's
 `tests/` are exempt just like the root suite. `tests/test_check_docs.py` checks both behaviours.
 `tests/test_firmware_build.py` exercises example discovery, refusal of unknown names, container

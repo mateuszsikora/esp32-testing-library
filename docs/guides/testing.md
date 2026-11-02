@@ -278,3 +278,10 @@ receiver and the buzzer GPIO through the public fixtures. It needs `make example
 and the ROM ELF. Run it alone with `.venv/bin/pytest examples/gps_alarm_clock/tests` after
 `make setup examples`; `make test` builds missing example images automatically.
 See [the example guide](../features/examples-user.md) for the scenarios and wiring.
+
+`examples/sd_data_logger/tests/test_logger.py` prepares FAT images with mtools and verifies
+the firmware's CSV rows, date rollover (New Year and leap day), fix loss/recovery and malformed
+NMEA rejection. Its `card_image` fixture skips dependent tests if mtools is missing; the
+empty-slot test still runs and observes the error GPIO and continued GNSS processing.
+Build with `firmware/build.sh --examples sd_data_logger`, then run
+`.venv/bin/pytest examples/sd_data_logger/tests`. It needs the runner and ROM ELF as well.

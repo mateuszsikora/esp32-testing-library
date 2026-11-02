@@ -104,6 +104,65 @@ The tests demonstrate:
 - NVS controls both the destination and radius, including southern/western coordinates.
 - Missing configuration leaves it off even when the receiver has a fix at the example target.
 
+## SD data logger
+
+Read [the firmware](../../examples/sd_data_logger/main/main.c) and
+[its tests](../../examples/sd_data_logger/tests/test_logger.py). It appends one CSV row per valid
+RMC fix to an SD card over SPI, with a separate `YYYYMMDD.CSV` file for each GNSS UTC date.
+
+```sh
+firmware/build.sh --examples sd_data_logger
+.venv/bin/pytest examples/sd_data_logger/tests
+```
+
+Install mtools (`brew install mtools` or `sudo apt-get install mtools`) to prepare and read the
+test cards. Tests needing a FAT image skip with `SD logger tests need mtools: missing ...` if
+any of `mformat`, `mcopy`, `mdir` or `mtype` is absent. The empty-slot test needs no mtools.
+
+The `sd-data-logger` profile describes the assembly:
+
+| Connection | ESP32 side |
+|---|---|
+| GNSS UART | UART1, TX GPIO4, RX GPIO5, 9600 baud, 8N1 |
+| SD card SPI | SPI2, SCLK GPIO14, MOSI GPIO15, MISO GPIO2, CS GPIO13 |
+| Storage error | GPIO18, high means unavailable |
+| Console | UART0, the default ESP-IDF console |
+
+Use a 3.3 V SD interface with the required pull-ups. GPIO2, GPIO5 and GPIO15 are strapping
+pins; attached peripherals must permit normal boot. GPIO18 can drive a logic input or an LED
+through a suitable resistor.
+
+The test formats a 32 MiB FAT image with mtools and calls `sd_card.insert(image)` before
+`board.power_on(utc=...)`. On hardware, insert a preformatted FAT card before boot. The firmware
+never formats the card. Each row is `hhmmss[.fraction],latitude,longitude`, followed by a newline;
+coordinates are signed decimal degrees with six decimal places. There is no header. For example,
+`20261102.CSV` can contain:
+
+```text
+120001.00,52.229677,21.012233
+120002.00,52.229677,21.012233
+```
+
+Files are opened in append mode and closed after each row, so existing entries survive and the
+test can read completed writes while the board's clock is stopped. The date comes from RMC,
+not the ESP32's wall clock. Years `00` through `99` mean 2000 through 2099. GGA is ignored because
+it supplies no date; a receiver sending RMC and GGA once a second therefore produces one row per
+second. Missing fixes, invalid checksums, impossible dates and malformed times produce no rows.
+Loss of fix pauses writing; recovery appends again. Each accepted RMC sentence is a row, including
+a repeated RMC; there is no retransmission deduplication.
+
+GPIO18 starts high and goes low only after a successful mount. A missing or unmountable card
+leaves it high and prints `sd_data_logger: SD card unavailable (<ESP-IDF error name>)`.
+The firmware then prints `sd_data_logger: ready` and continues receiving fixes. Each accepted
+fix prints, for example, `sd_data_logger: fix 20261102 120001.00 (saved)` or
+`sd_data_logger: fix 20261102 120001.00 (card unavailable)`. A write/close failure raises GPIO18,
+prints `sd_data_logger: SD card write failed` and disables further writes until reboot.
+Mounting is attempted once at boot; insertion/removal during a run is not supported.
+
+Tests verify existing rows and new coordinates byte for byte, a new file across New Year and
+leap-day midnight, no files without a fix, pause/recovery after fix loss, malformed input, and
+continued reception with the error pin continuously high after an empty-slot failure.
+
 ## Adding an example
 
 Add `examples/<name>/CMakeLists.txt`, `main/`, `sdkconfig.defaults` and `tests/test_*.py`.

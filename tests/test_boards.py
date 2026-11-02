@@ -20,7 +20,12 @@ from esp32tl.boards.capabilities import (
 
 
 def test_the_shipped_profiles_include_the_example_assembly() -> None:
-    assert boards.names() == ["esp32-devkitc", "gps-alarm-clock", "lilygo-t-a7670g-r2"]
+    assert boards.names() == [
+        "esp32-devkitc",
+        "gps-alarm-clock",
+        "lilygo-t-a7670g-r2",
+        "sd-data-logger",
+    ]
     assert boards.DEFAULT_PROFILE == "esp32-devkitc"
 
 
@@ -83,7 +88,7 @@ def test_an_unknown_profile_name_lists_the_profiles() -> None:
         boards.profile("esp32-wrover-kit")
     assert str(error.value) == (
         "no board profile named 'esp32-wrover-kit';"
-        " the profiles are esp32-devkitc, gps-alarm-clock, lilygo-t-a7670g-r2"
+        " the profiles are esp32-devkitc, gps-alarm-clock, lilygo-t-a7670g-r2, sd-data-logger"
     )
 
 

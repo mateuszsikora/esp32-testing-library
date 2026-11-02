@@ -613,3 +613,9 @@ that references to its number keep their meaning.
     `tests/test_lines.py::test_output_history_requires_a_known_start_and_rejects_released_outputs`,
     `tests/test_lines.py::test_output_history_uses_start_state_and_includes_the_current_instant`,
     `tests/test_lines.py::test_output_history_ignores_inputs_other_pins_and_future_events`
+
+107. The SD logger appends exactly one row per valid dated RMC, preserving existing rows and
+    using a separate file for each GNSS UTC date, including New Year and leap day. GGA and
+    invalid or missing fixes add no rows. Without a card it keeps processing new GNSS input
+    and continuously asserts the storage-error pin after initialization fails.
+    `examples/sd_data_logger/tests/test_logger.py`
