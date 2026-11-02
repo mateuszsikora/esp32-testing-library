@@ -40,17 +40,19 @@ POLL_SECONDS = 0.01
 READER_STOP_SECONDS = 1.0
 
 
-def check_artifact(app_path: str, reference: Path | None = None) -> str:
+def check_artifact(
+    app_path: str, reference: Path | None = None, *, build_dir: str | Path | None = None
+) -> str:
     """Validate the local build, optionally against a recording, before opening a port.
 
     This compares app.bin, not the ELF hash stored in the ESP-IDF app descriptor. It does not
     establish what is on a board when autoflash is skipped.
     """
-    app = load_app(app_path, backend=Serial.name)
+    app = load_app(app_path, build_dir=build_dir, backend=Serial.name)
     try:
         digest = app_image_sha256(app)
         if digest is None:
-            raise BackendError(f"{app_path}/build/flasher_args.json names no app image")
+            raise BackendError(f"{app.binary_path}/flasher_args.json names no app image")
         if reference is not None:
             expected = recording.read(reference).header.app_sha256
             if expected is None:

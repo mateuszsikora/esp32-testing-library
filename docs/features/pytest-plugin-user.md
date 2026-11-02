@@ -66,15 +66,44 @@ What the receiver can be told, and the units, are in [models and units](models-u
 
 - The path is relative to the directory of the test file. Without the marker, the app is that
   directory itself.
-- The backend runs the build in the app's `build/` directory, the layout `idf.py build` leaves:
+- By default, the backend runs the build in the app's `build/` directory:
   every file `flasher_args.json` lists is flashed at its offset. For this repository's firmware,
   `make firmware` builds it ([validation firmware](validation-firmware-user.md)).
-- The marker takes exactly one path. `@pytest.mark.app_path` with none, or with more than one
-  argument or a keyword argument, is a collection error that names the test:
-  `test_bad.py::test_bare: the app_path marker takes one path, as in @pytest.mark.app_path("../firmware/hello_world")`.
+- The marker takes exactly one positional path (`str` or `pathlib.Path`), plus an optional
+  `build_dir` keyword of the same types. An empty build string, another type, an unknown keyword
+  or the wrong number of positional arguments is a collection error that names the test:
+  `test_bad.py::test_bare: the app_path marker takes one path, and optionally build_dir as a non-empty path, as in @pytest.mark.app_path("../firmware/hello_world", build_dir="build")`.
   The error is the whole module's, and like any collection error it stops the session before any
   test runs (`Interrupted: 1 error during collection`, exit code 2), unless pytest runs with
   `--continue-on-collection-errors`.
+
+To select an existing build outside the application, use:
+
+```python
+@pytest.mark.app_path("../firmware", build_dir="../CI builds/debug")
+def test_debug(board, console):
+    board.power_on()
+    console.expect("Hello world!")
+```
+
+`build_dir` is relative to the resolved **application directory**, or absolute. In this example,
+with a test in `project/tests/`, it selects `project/CI builds/debug/`, independently of pytest's
+working directory. The directory itself must contain `flasher_args.json`. Paths with spaces
+work without special handling in Python. The closest `app_path` marker wins as a whole (test,
+then class, then module); omitting `build_dir` on that marker selects its application's `build/`,
+without inheriting a more distant marker's keyword.
+
+Both backends use the resolved absolute directory, including serial preflight, flashing and
+recording hash checks. A missing or invalid build fails: esp32tl never searches another build,
+rebuilds it, moves its artifacts or edits the application's sources. The same target, encryption
+and missing-file checks apply. Repository validation firmware still has its separate provenance
+checks; this selector does not bypass them or require external builds to carry repository stamps.
+
+pytest-embedded's raw `--build-dir` remains refused for selected `board` tests, even when it names
+the same directory. Use the marker in pytest and `esp32tl run --build-dir` or
+`esp32tl replay --build-dir` at the CLI. Do not parametrise `build_dir` yourself: esp32tl supplies
+it together with `app_path`; a second parametrisation is a collection error. A change to the
+marker's keyword after collection has read it is refused like a late `app_path` argument.
 
 On esp32sim, before `board.power_on()`, `board.nvs({"config": {"broker_host": "broker.test"}})`
 can replace a named NVS partition from the build's table. Integer values require a width,
@@ -488,7 +517,7 @@ one line:
 
 | Option | Message |
 |---|---|
-| `--embedded-services`, `--app-path`, `--build-dir` | ``ERROR: --{option} is set: esp32tl chooses it for every test that uses `board` (the backend through --esp32tl-backend, the app through the app_path marker, the build in its build/ directory)`` |
+| `--embedded-services`, `--app-path`, `--build-dir` | ``ERROR: --{option} is set: esp32tl chooses it for every test that uses `board` (the backend through --esp32tl-backend, the app through the app_path marker, the build through that marker's build_dir keyword or its build/ directory)`` |
 | `--count` with any value but 1 | `ERROR: --count is set: esp32tl runs one board in a test` |
 | An `app_path` or `board_profile` marker in a `pytest.param(..., marks=...)`, or added by a hook | `ERROR: {test id}: the {marker} marker reached the test after esp32tl read it, from a pytest.param or a hook: put it on the test, its class or its module` |
 
@@ -561,7 +590,7 @@ under `[tool.pytest.ini_options]`.
   test that uses `board`. A project's own marker of one of these names means esp32tl's there.
 - **The `timeout` marker**: pytest-timeout's; esp32tl adds it to a test that uses `board` and has
   none, unless the session sets a timeout.
-- **`app_path` and `embedded_services`**: esp32tl parametrises them for a test that uses `board`.
+- **`app_path`, `build_dir` and `embedded_services`**: esp32tl parametrises them for a test that uses `board`.
   A test that also parametrises one of them itself is a collection error:
   `duplicate parametrization of 'app_path'`.
 

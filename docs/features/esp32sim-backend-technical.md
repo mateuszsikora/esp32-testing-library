@@ -12,14 +12,15 @@ a `DuplicateStdoutPopen` on the dut's `msg_queue`, but only at `power_on()`.
 
 ## Data flow
 
-`Esp32Sim.__init__(dut, app_path, msg_queue, meta, profile, directory=None, skip=None)` keeps
+`Esp32Sim.__init__(dut, app_path, msg_queue, meta, profile, directory=None, skip=None, *, build_dir=None)` keeps
 `profile`, the test's [board profile](board-profiles-technical.md), as `Esp32Sim.profile`,
 `directory`, the test file's (the working directory when `None`), as `Esp32Sim.directory`, and
 `skip`, what to call for a source this backend does not give (`refuse`, which raises
 `SourceError`, when `None`; the `board` fixture passes pytest's skip). Then, in order, without
 starting anything:
 
-1. **`load_app(app_path)`** checks that `<app_path>/build/flasher_args.json` is a file, then builds
+1. **`load_app(app_path, build_dir=build_dir)`** resolves the selected directory against the app
+   (`build` when omitted), checks its `flasher_args.json` is a file, then builds
    `IdfApp(app_path, build_dir=str(build))`. The build directory is absolute on purpose: given
    `build`, `IdfApp` falls back to a `build` directory in the working directory when the app has
    none. It then refuses a target other than `esp32` (`IdfApp.target`: `IDF_TARGET` in
@@ -294,7 +295,7 @@ repository makes.
 
 | Name | What |
 |---|---|
-| `Esp32Sim(dut, app_path, msg_queue, meta, profile, directory=None, skip=None)` | The board, off. Attributes: `name = "esp32sim"`, `clock = "emulated-fifo-write"` (the clock the runner's `hello` must name, a replayed recording must be on, and a tap's recording is on), `dut`, `profile` (the `BoardProfile`), `directory`, `app` (the `IdfApp`), `console_output` (a `bytearray`), `console_lines` (a `ConsoleLines`), `log` (the `RunLog`), `process` (the `RunnerPopen`, `None` until power-on), `link` (the `BoardLink`, complete once `close` returns) |
+| `Esp32Sim(dut, app_path, msg_queue, meta, profile, directory=None, skip=None, *, build_dir=None)` | The board, off. Attributes: `name = "esp32sim"`, `clock = "emulated-fifo-write"` (the clock the runner's `hello` must name, a replayed recording must be on, and a tap's recording is on), `dut`, `profile` (the `BoardProfile`), `directory`, `app` (the `IdfApp`), `console_output` (a `bytearray`), `console_lines` (a `ConsoleLines`), `log` (the `RunLog`), `process` (the `RunnerPopen`, `None` until power-on), `link` (the `BoardLink`, complete once `close` returns) |
 | `Esp32Sim.power_on(utc=None)` | Starts the runner; `BoardOff` the second time |
 | `Esp32Sim.powered` | Whether `power_on` has started the runner |
 | `Esp32Sim.wait(duration)`, `Esp32Sim.wait_until(condition, *, within)`, `Esp32Sim.wait_on_clock(condition, within, description)` | The test's waits, each a `Duration` of the board's time, logged as steps of the test |
@@ -311,7 +312,7 @@ repository makes.
 | `nanoseconds(value, what)`, `seconds(ns)` | `esp32tl/backends/clock.py`: a `Duration` of the board's time to nanoseconds, checked; nanoseconds shown as `12.5 s`, as `str(Duration(ns))` |
 | `listen()` | The listening socket and its path, or `BackendError` |
 | `runner_path()`, `rom_path()` | The runner and the ROM ELF, or `BackendError` |
-| `load_app(app_path, *, backend="esp32sim")` | The checked `IdfApp` of `<app_path>/build`; `backend` chooses target/encryption error wording |
+| `load_app(app_path, *, build_dir=None, backend="esp32sim")` | The checked `IdfApp` of the selected directory (default `<app_path>/build`); `backend` chooses target/encryption error wording |
 | `profile_uart(profile, interface, *, clock, directory, asked=..., log=None, files=None)` | The `Uart` on the route the profile gives `interface` (`uart.gnss`), at its pins and baud; `BackendError` when the profile has no such route. The [`esp32tl` command](cli-user.md) makes its UARTs with it |
 | `route_wire(profile, interface)` | The `Wire` of that route, or the same `BackendError`; `Esp32Sim` makes its `Uart`s and its `Gnss` on it |
 | `runner_command(runner, rom, app, max_seconds, link, *, held=False, psram_mb=None, sd_card=None)` | The runner's argument list; with `psram_mb`, `--psram-mb` of that size; with an `SdCard` holding a card, the runner's card on its pins |
@@ -387,7 +388,7 @@ Times in these messages are `seconds(ns)`: seconds without trailing zeros, `1.5 
 Anything else `IdfApp` raises, a `flasher_args.json` that is not JSON or has no `flash_files` for
 instance, is not a `BackendError` and fails the setup with its own traceback.
 
-`load_app(app_path, backend="esp32sim")` is also used by serial with `backend="serial"`:
+`load_app(app_path, build_dir=build_dir, backend="esp32sim")` is also used by serial with `backend="serial"`:
 its target and encryption errors name that backend. The default retains the runner-specific
 messages above. `app_image_sha256(app)` in `esp32tl/tap.py` hashes the app entry for both backends;
 no app entry returns `None`, and read failures raise `OSError` (tap writing catches those).

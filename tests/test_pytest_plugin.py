@@ -41,7 +41,7 @@ SHOW_PARAMS = """
 import pytest
 
 @pytest.fixture
-def board(request, embedded_services, app_path):
+def board(request, embedded_services, app_path, build_dir):
     return request.param, embedded_services, app_path
 """
 
@@ -261,9 +261,11 @@ def pytest_collection_modifyitems(items):
     )
 
 
-def fake_build(app: Path, target: str = "esp32", encrypted: bool = False) -> Path:
+def fake_build(
+    app: Path, target: str = "esp32", encrypted: bool = False, *, build_dir: str = "build"
+) -> Path:
     """An ESP-IDF build directory with what `IdfApp` reads, its images empty."""
-    build = app / "build"
+    build = app / build_dir
     files = {
         "0x1000": "bootloader/bootloader.bin",
         "0x8000": "partition_table/partition-table.bin",
@@ -361,6 +363,126 @@ def test_load_app_refuses_what_the_runner_cannot_run(tmp_path: Path) -> None:
     (build / "app.bin").unlink()
     with pytest.raises(BackendError, match=r"is not a finished build, missing .*/app\.bin$"):
         esp32sim.load_app(str(tmp_path / "unfinished"))
+
+
+@pytest.mark.parametrize("absolute", [False, True])
+def test_load_app_selects_only_the_explicit_build(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, absolute: bool
+) -> None:
+    app_path = tmp_path / "app source"
+    default = fake_build(app_path)
+    selected = fake_build(app_path, build_dir="../CI builds/debug").resolve()
+    (default / "app.bin").write_bytes(b"default")
+    (selected / "app.bin").write_bytes(b"debug")
+    # A third build in cwd must never win, even when the selected one is missing.
+    cwd = tmp_path / "unrelated"
+    fake_build(cwd)
+    monkeypatch.chdir(cwd)
+    selector = selected if absolute else Path("../CI builds/debug")
+    app = esp32sim.load_app("../app source", build_dir=selector)
+    assert app.binary_path is not None
+    assert app.bin_file is not None
+    assert Path(app.binary_path) == selected
+    assert Path(app.bin_file).read_bytes() == b"debug"
+    command = esp32sim.runner_command(Path("runner"), Path("rom"), app, 1, Path("link"))
+    assert [command[i + 1] for i, value in enumerate(command) if value == "--flash-at"] == [
+        f"0x1000={selected}/bootloader/bootloader.bin",
+        f"0x8000={selected}/partition_table/partition-table.bin",
+        f"0x10000={selected}/app.bin",
+    ]
+    (selected / "flasher_args.json").unlink()
+    with pytest.raises(BackendError, match=re.escape(str(selected)) + " holds no ESP-IDF build"):
+        esp32sim.load_app("../app source", build_dir=selector)
+    assert (default / "app.bin").read_bytes() == b"default"
+
+
+@pytest.mark.parametrize("problem", ["target", "encryption", "missing"])
+def test_selected_build_keeps_validation(tmp_path: Path, problem: str) -> None:
+    fake_build(tmp_path)
+    selected = fake_build(
+        tmp_path,
+        target="esp32s3" if problem == "target" else "esp32",
+        encrypted=problem == "encryption",
+        build_dir="external build",
+    )
+    if problem == "missing":
+        (selected / "bootloader/bootloader.bin").unlink()
+    with pytest.raises(BackendError, match=re.escape(str(selected))):
+        esp32sim.load_app(str(tmp_path), build_dir="external build")
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [
+        'app_path(".", build_dir=None)',
+        'app_path(".", build_dir=42)',
+        'app_path(".", build_dir="")',
+        'app_path(".", unexpected="build")',
+        "app_path(42)",
+    ],
+)
+def test_app_path_refuses_invalid_build_selectors(pytester: pytest.Pytester, marker: str) -> None:
+    pytester.makepyfile(f"import pytest\n@pytest.mark.{marker}\ndef test_one(board): pass")
+    result = pytester.runpytest_subprocess("-q")
+    result.assert_outcomes(errors=1)
+    result.stdout.fnmatch_lines(["*the app_path marker takes one path,*"])
+
+
+def test_a_late_build_keyword_is_refused(pytester: pytest.Pytester) -> None:
+    pytester.makeconftest(
+        SHOW_PARAMS
+        + """
+def pytest_collection_modifyitems(items):
+    items[0].get_closest_marker("app_path").kwargs["build_dir"] = "other"
+"""
+    )
+    pytester.makepyfile("""
+        import pytest
+        @pytest.mark.app_path(".", build_dir="build")
+        def test_one(board): pass
+    """)
+    result = pytester.runpytest_subprocess("-q")
+    assert result.ret == pytest.ExitCode.USAGE_ERROR
+    result.stderr.fnmatch_lines(["*the app_path marker reached the test after*"])
+
+
+def test_board_loads_each_selected_build_from_another_directory(
+    fake_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = fake_runner.path / "app source"
+    for name in ("build", "../CI builds/debug", "../CI builds/release"):
+        build = fake_build(app, build_dir=name)
+        (build / "app.bin").write_bytes(name.encode())
+    suite = fake_runner.path / "suite"
+    suite.mkdir()
+    (suite / "test_builds.py").write_text("""
+from pathlib import Path
+import pytest
+
+pytestmark = pytest.mark.app_path("../app source", build_dir="../CI builds/debug")
+
+def check(board, build_dir, expected):
+    assert Path(board.app.binary_path) == Path(build_dir)
+    assert Path(build_dir).is_absolute()
+    assert Path(board.dut.app.binary_path) == Path(build_dir)
+    assert Path(board.app.bin_file).read_bytes() == expected.encode()
+
+def test_debug(board, build_dir):
+    check(board, build_dir, "../CI builds/debug")
+
+@pytest.mark.app_path("../app source", build_dir=Path("../CI builds/release"))
+class TestRelease:
+    def test_release(self, board, build_dir):
+        check(board, build_dir, "../CI builds/release")
+
+    @pytest.mark.app_path("../app source")
+    def test_default(self, board, build_dir):
+        check(board, build_dir, "build")
+""")
+    cwd = fake_runner.path / "other cwd"
+    cwd.mkdir()
+    monkeypatch.chdir(cwd)
+    fake_runner.runpytest_subprocess(str(suite), "-q").assert_outcomes(passed=3)
 
 
 def test_rom_is_the_one_make_setup_fetches() -> None:
@@ -984,6 +1106,50 @@ def test_hello_world_fails_on_an_image_that_prints_something_else(
     result.assert_outcomes(failed=1)
     # The image ran, and printed what it was changed to print.
     result.stdout.fnmatch_lines(["*Hello WORLD!*"])
+
+
+def test_two_builds_of_one_app_run_the_selected_firmware(
+    pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if not (HELLO_WORLD_BUILD / "esp32tl-built").is_file():
+        pytest.fail(
+            f"{HELLO_WORLD_BUILD} holds no finished build: run make firmware", pytrace=False
+        )
+    app = pytester.path / "app source"
+    copy_build(HELLO_WORLD_BUILD, app / "build")
+    debug = pytester.path / "CI builds" / "debug"
+    release = pytester.path / "CI builds" / "release"
+    for build in (debug, release):
+        copy_build(HELLO_WORLD_BUILD, build)
+    image = json.loads((debug / "flasher_args.json").read_text())["app"]["file"]
+    replace_in_app_image(debug / image, b"Hello world!", b"Hello DEBUG!")
+    replace_in_app_image(release / image, b"Hello world!", b"Hello FINAL!")
+    suite = pytester.path / "suite"
+    suite.mkdir()
+    (suite / "test_builds.py").write_text(f"""
+import pytest
+from pathlib import Path
+
+@pytest.mark.app_path("../app source", build_dir="../CI builds/debug")
+def test_debug(board, console):
+    console.tap("debug.jsonl")
+    board.power_on()
+    console.expect("Hello DEBUG!")
+
+@pytest.mark.app_path(Path({str(app)!r}), build_dir=Path({str(release)!r}))
+def test_release(board, console):
+    console.tap("release.jsonl")
+    board.power_on()
+    console.expect("Hello FINAL!")
+""")
+    cwd = pytester.path / "other cwd"
+    cwd.mkdir()
+    monkeypatch.chdir(cwd)
+    pytester.runpytest_subprocess(str(suite), "-q").assert_outcomes(passed=2)
+    for build in (debug, release):
+        tapped = recording.read(suite / f"{build.name}.jsonl")
+        assert tapped.header.app_sha256 == hashlib.sha256((build / image).read_bytes()).hexdigest()
+    assert b"Hello world!" in (app / "build" / image).read_bytes()
 
 
 # A runner that speaks the link protocol, as the backend sees one, without an emulator: it

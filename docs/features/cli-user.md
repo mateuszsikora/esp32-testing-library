@@ -43,7 +43,8 @@ command drives no line otherwise.
 
 | Option | Commands | Default | Accepts |
 |---|---|---|---|
-| `--app APP` | both | none, required | the ESP-IDF app directory, its build in `APP/build`, relative to the working directory or absolute. The build must be one the backend runs: for the `esp32` target, finished, without flash encryption |
+| `--app APP` | both | none, required | the ESP-IDF app directory, its build in `APP/build` by default, relative to the working directory or absolute. The build must be one the backend runs: for the `esp32` target, finished, without flash encryption |
+| `--build-dir DIR` | both | `build` | an existing directory containing `flasher_args.json`, relative to `APP` or absolute |
 | `--board BOARD` | both | `esp32-devkitc` | the name of a [board profile](board-profiles-user.md#the-profiles-esp32tl-ships); the chip gets the profile's PSRAM, 4 MB on `lilygo-t-a7670g-r2` and none on `esp32-devkitc` |
 | `--max-seconds S` | both | `300` | a finite number of emulated seconds above 0; fractions are fine |
 | `--interface INTERFACE` | `replay`, required | none | a UART route of the profile: `uart.gnss`, or its role alone, `gnss` |
@@ -52,6 +53,24 @@ command drives no line otherwise.
 `esp32tl replay` takes one recording. The runner and the ROM ELF are the backend's, from the
 checkout or from `ESP32TL_RUNNER` and `ESP32TL_ROM`
 ([what the backend needs](esp32sim-backend-user.md#what-it-needs)).
+
+For a build produced by an external CI job, both commands accept `--build-dir`:
+
+```sh
+esp32tl run --app firmware --build-dir "../CI builds/debug" --max-seconds 2
+esp32tl replay --app /work/firmware --build-dir /artifacts/release \
+  --interface gnss --recording recordings/gnss-generated-1.jsonl --max-seconds 3.5
+```
+
+The relative build directory is resolved against `--app`, not the shell's working directory.
+The resolved absolute directory is passed to the loader and all flash paths come from its
+`flasher_args.json`. A missing `flasher_args.json`, an unsupported target, flash encryption or
+missing flash files detected by the backend's validation fail with exit 2. Malformed build
+metadata can instead raise an unhandled parser exception and exit 1 with a traceback
+([exit codes](#exit-codes)). No other directory is tried and no build, artifact relocation or
+source modification is performed. The target, encryption, missing-file and recording checks
+remain in force. This CLI option is independent of
+pytest-embedded's raw `pytest --build-dir`, which remains refused for board tests.
 
 ## What it prints
 
@@ -95,12 +114,15 @@ as two signals, which would kill it.
 |---|---|---|
 | 0 | the run reached `--max-seconds` | the report, `(max_seconds)` |
 | 1 | the harness found the link wrong, and the runner exited 0 | `esp32tl: error: {reason}` |
+| 1 | an unhandled exception while parsing build metadata, such as invalid JSON in `flasher_args.json` | Python traceback ending with the parser exception, such as `json.decoder.JSONDecodeError` |
 | 2 | the run could not start: see below; or a usage error from argparse | `esp32tl: {message}`, or argparse's usage and error |
 | 130 | Ctrl-C | the report, `(signal)`; `the runner never connected` when it came before the runner connected; nothing when it came before the runner started |
 | any other | the runner's own exit code, when it is not 0 ([how a run ends](runner-user.md#how-a-run-ends)); 128 + N when a signal N killed it | the runner's last line, then the report |
 
-What keeps a run from starting is checked before the runner starts, in this order, and printed
-as `esp32tl: {message}`:
+The handled startup errors below are checked before the runner starts, in this order, and printed
+as `esp32tl: {message}` with exit code 2. Other exceptions from `IdfApp`, such as malformed JSON
+or a missing `flash_files` key in `flasher_args.json`, propagate with their own traceback and
+exit code 1; they are not converted to these messages.
 
 | Message | Cause |
 |---|---|
@@ -108,7 +130,7 @@ as `esp32tl: {message}`:
 | `the board profile {board} has no {interface}; its interfaces are {interfaces}` | `--interface` names no UART route of the profile |
 | `{path}: [Errno 2] No such file or directory: '{path}'`, and every other `RecordingError` | the recording cannot be read, or breaks the [format](../recording-format.md#errors) |
 | `{path} is a recording of {recorded}, not of {interface}`, and every other `ReplayError` | the recording cannot be replayed into that interface ([replay](replay-user.md#what-a-replay-refuses)); `{path}` is the path as given |
-| `{app}/build holds no ESP-IDF build: no flasher_args.json`, and the backend's other build errors | `--app` holds no build the backend runs ([when the backend cannot start](esp32sim-backend-user.md#when-the-backend-cannot-start)) |
+| `{build} holds no ESP-IDF build: no flasher_args.json`, and the backend's other build errors | the selected build is missing or invalid ([when the backend cannot start](esp32sim-backend-user.md#when-the-backend-cannot-start)) |
 | `no runner at {path}: run make setup, or set ESP32TL_RUNNER` | no runner |
 | `no ROM ELF at {path}: run make setup, or set ESP32TL_ROM` | no ROM ELF |
 | `cannot listen on {path}: {reason}` | the link's Unix socket could not be bound, in a new directory under the system's temporary directory, or under `/tmp` when that path would be too long |

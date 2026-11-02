@@ -192,6 +192,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Board owns interfaces and SD image builders](harness.md#board-owns-interfaces-and-sd-image-builders) | `harness.md` | decided (#73) |
 | [Network selection stays explicit and FAT paths name one entry](harness.md#network-selection-stays-explicit-and-fat-paths-name-one-entry) | `harness.md` | decided (#73) |
 | [Network failure controls stay in the models and tracker reports stay in the example](harness.md#network-failure-controls-stay-in-the-models-and-tracker-reports-stay-in-the-example) | `harness.md` | decided (#72) |
+| [Explicit build paths are relative to the application and never fall back](harness.md#explicit-build-paths-are-relative-to-the-application-and-never-fall-back) | `harness.md` | decided (#102) |
 
 ## The runner crate and esp32sim
 

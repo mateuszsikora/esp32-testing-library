@@ -28,8 +28,8 @@ are in [models-technical.md](models-technical.md).
    holds the whole fixture closure, so a test that asks only for `console` counts. It starts from
    `metafunc.definition.path.parent`, joins the single argument of the closest `app_path` marker to
    it (an absolute argument replaces it, as `pathlib` joins) and resolves the result. A marker with
-   other than one positional argument, or with any keyword argument, is `pytest.fail(...,
-   pytrace=False)`. It then loads the board profile the `board_profile` marker names
+   other than one positional path (`str` or `Path`), an unknown keyword, or a `build_dir`
+   that is not a non-empty string or `Path`, is `pytest.fail(..., pytrace=False)`. It then loads the board profile the `board_profile` marker names
    ([board-profiles-technical.md](board-profiles-technical.md#data-flow)); a `MarkerError` or
    `ProfileError` is raised as
    `pytest.fail.Exception(f"{nodeid}: {error}", pytrace=False) from None`, a collection error
@@ -37,14 +37,16 @@ are in [models-technical.md](models-technical.md).
    `["esp32sim"]`, each with a `pytest.param`; serial is opt-in. Then one call:
 
    ```python
-   metafunc.parametrize(("board", "embedded_services", "app_path"), params, indirect=True)
+   metafunc.parametrize(("board", "embedded_services", "app_path", "build_dir"), params, indirect=True)
    ```
 
    where every element of `params` is
-   `pytest.param(backend, SERVICES[backend], str(app_path.resolve()), id=backend)`.
-   One `parametrize` over the three keeps them together under one id per backend. `indirect=True`
+   `pytest.param(backend, SERVICES[backend], str(app_path.resolve()),
+   str((app_path / build_dir).resolve()), id=backend)`. `build_dir` comes from the closest
+   marker's keyword, defaulting to `"build"`; relative builds resolve against the app.
+   One `parametrize` over the four keeps them together under one id per backend. `indirect=True`
    hands each value to its fixture as `request.param`: `board` gets the backend name, and
-   pytest-embedded's `embedded_services` and `app_path` fixtures read the parameter before the
+   pytest-embedded's `embedded_services`, `app_path` and `build_dir` fixtures read the parameter before the
    command line (`_request_param_or_config_option_or_default` in `pytest_embedded/plugin.py`).
 4. **`pytest_collection_modifyitems`**, `trylast=True` so that `-k` and `-m` have deselected
    their tests first, refuses the options esp32tl sets itself when any remaining item has `board`
@@ -56,7 +58,7 @@ are in [models-technical.md](models-technical.md).
    It then refuses the first remaining item that uses `board` and whose board markers
    (`app_path`, `app_recording`, `board_profile`) say something else than its definition's did:
    `late_board_marker` reads them from the item, the profile with `board_profile`, and
-   compares them, one marker at a time, with the `BoardMarkers` `pytest_generate_tests` kept in
+   compares them, one marker at a time, with the `BoardMarkers` (including a copy of `app_path.kwargs`) `pytest_generate_tests` kept in
    `config.stash[READ]`, by the definition's nodeid (the item's
    without `[{callspec.id}]`). A `pytest.param`'s marks, and those a hook of another plugin or a
    conftest adds (this one runs `trylast`), reach the item but not `metafunc.definition`, so
@@ -237,9 +239,9 @@ the existing no-latency behavior and board pulls are unchanged.
 |---|---|---|
 | `--esp32tl-backend NAME` | option | Choices `list(SERVICES)`; default unset, esp32sim only |
 | `app_recording(path)` | marker | One positional path, relative to the test file or absolute; on serial checks the recording app hash before port setup; ignored on esp32sim |
-| `app_path(path)` | marker | One positional path, relative to the test file's directory; default that directory |
+| `app_path(path, build_dir="build")` | marker | One positional path, relative to the test file's directory; default that directory. The optional build path is relative to the app or absolute |
 | `board_profile(name)` | marker | The board profile ([board-profiles-technical.md](board-profiles-technical.md#interfaces)) |
-| `board(request, app_path, msg_queue, _meta)` | fixture, function scope | Yields an `Esp32Sim` or `Serial`; closes it at teardown, then adds its backend-specific report section and JSON property. Its methods (`power_on`, `wait`, `wait_until`, `now`, `utc`, `report`, `properties`) are in [esp32sim-backend-technical.md](esp32sim-backend-technical.md#interfaces) and [serial-backend-technical.md](serial-backend-technical.md#interfaces) |
+| `board(request, app_path, build_dir, msg_queue, _meta)` | fixture, function scope | Yields an `Esp32Sim` or `Serial`; closes it at teardown, then adds its backend-specific report section and JSON property. Its methods (`power_on`, `wait`, `wait_until`, `now`, `utc`, `report`, `properties`) are in [esp32sim-backend-technical.md](esp32sim-backend-technical.md#interfaces) and [serial-backend-technical.md](serial-backend-technical.md#interfaces) |
 | `console(board)` | fixture, function scope | Returns the cached `board.console` |
 | `gnss(board)` | fixture, function scope | Returns `board.uart("gnss")`, a `Gnss` |
 | `lines(board)` | fixture, function scope | Returns `board.lines` |
@@ -279,26 +281,27 @@ second entry in `SERVICES` without a change to `board` fails that assertion.
 
 | Setting | Default | Read by |
 |---|---|---|
-| `--esp32tl-backend` | unset: every key of `SERVICES` | `pytest_generate_tests` |
+| `--esp32tl-backend` | unset: `esp32sim` | `pytest_generate_tests` |
 | `app_path` marker | the test file's directory | `pytest_generate_tests` |
 | `board_profile` marker | `esp32-devkitc` (`DEFAULT_PROFILE`) | `pytest_generate_tests`, `board` |
 | pytest-timeout's `--timeout`, `PYTEST_TIMEOUT`, `timeout` ini option, `timeout` marker | unset: `DEFAULT_TIMEOUT`, 600 s, for a test that uses `board` | `pytest_collection_modifyitems`, then pytest-timeout |
-| pytest-embedded's `embedded_services`, `app_path` | set per test by the parametrisation | pytest-embedded's fixtures |
+| pytest-embedded's `embedded_services`, `app_path`, `build_dir` | set per test by the parametrisation | pytest-embedded's fixtures |
 | pytest-embedded's `--embedded-services`, `--app-path`, `--build-dir`, `--count` | must be unset (`--count` 1) when a selected test uses `board` | `pytest_collection_modifyitems` |
 
-The build directory is not a setting: the backend reads `<app_path>/build` and never consults
-pytest-embedded's `build_dir` fixture. The backend's own environment variables are in
+The marker's `build_dir` keyword defaults to `build`. The plugin resolves it against the app
+and parametrises pytest-embedded's `build_dir` fixture with the absolute directory. `board`
+passes that same value to `Esp32Sim`; serial's preflight and pytest-embedded's `IdfApp` use it too. The backend's own environment variables are in
 [esp32sim-backend-technical.md](esp32sim-backend-technical.md#configuration).
 
 ## Failure modes
 
 | Message | When | Outcome |
 |---|---|---|
-| `{metafunc.definition.nodeid}: the app_path marker takes one path, as in @pytest.mark.app_path("../firmware/hello_world")` | The marker has no argument, more than one, or a keyword argument | Collection error, exit code 2 |
+| `{metafunc.definition.nodeid}: the app_path marker takes one path, and optionally build_dir as a non-empty path, as in @pytest.mark.app_path("../firmware/hello_world", build_dir="build")` | The marker has the wrong number/type of positional paths, an unknown keyword, or a build_dir that is not a non-empty string or Path | Collection error, exit code 2 |
 | `{metafunc.definition.nodeid}: {error}` | A `board_profile` marker used otherwise than registered, or a profile esp32tl does not ship; the messages are in [board-profiles-user.md](board-profiles-user.md#when-no-backend-can-give-it) | Collection error, exit code 2 |
 | `esp32sim: {reason}`, as `esp32sim: uart.gnss takes no replay source on this backend, only model` or `esp32sim: uart.gnss cannot be tapped on this backend` | The test asks a route for a source or a tap the backend's declaration does not give | The test is skipped at the call, reported at the test |
 | `--esp32tl-backend: invalid choice: 'NAME'` (argparse's wording around it varies with the Python version) | A name not in `SERVICES` | Usage error, exit code 4 |
-| ``ERROR: --{option} is set: esp32tl chooses it for every test that uses `board` (the backend through --esp32tl-backend, the app through the app_path marker, the build in its build/ directory)`` | `--embedded-services`, `--app-path` or `--build-dir` set, and a selected test uses `board` | Usage error, exit code 4, no traceback |
+| ``ERROR: --{option} is set: esp32tl chooses it for every test that uses `board` (the backend through --esp32tl-backend, the app through the app_path marker, the build through that marker's build_dir keyword or its build/ directory)`` | `--embedded-services`, `--app-path` or `--build-dir` set, and a selected test uses `board` | Usage error, exit code 4, no traceback |
 | `ERROR: --count is set: esp32tl runs one board in a test` | `--count` other than 1, and a selected test uses `board` | Usage error, exit code 4 |
 | `ERROR: {item.nodeid}: the {marker} marker reached the test after esp32tl read it, from a pytest.param or a hook: put it on the test, its class or its module` | A selected test that uses `board` carries a board marker from a `pytest.param` or a hook | Usage error, exit code 4 |
 | `count is above 1: esp32tl runs one board in a test` | The test parametrises `count` above 1 itself, so `dut` is a tuple | Error at setup |
@@ -432,10 +435,18 @@ and that pytest loaded the module under the name `esp32tl` (`test_pytest_loaded_
 `tests/test_hello_world.py`, `tests/test_nmea_reader.py` and `tests/test_gpio_echo.py` are the
 end-to-end cases on the real runner and images.
 
-Not covered: deselection by `-m` (only `-k` is tested), an `app_path` marker on a class, an absolute marker
-path, a marker with keyword arguments (only the bare marker is tested), limiting the run to one of
-several backends, since `SERVICES` has one, and `power_on(utc=...)` with a timezone other than
-UTC.
+Build-selection tests in `tests/test_pytest_plugin.py` cover app-relative and absolute paths,
+spaces, invocation from another directory, default/module/class/test precedence, late keyword
+mutation, invalid selectors and the no-fallback guarantee. `test_two_builds_of_one_app_run_the_selected_firmware`
+runs two distinct copies of `hello_world` through the real emulator and verifies both their
+console text and tap hashes; it needs the built `hello_world` image, runner and ROM ELF.
+`tests/test_serial_backend.py::test_serial_preflight_and_flashing_use_the_selected_build`
+checks the real pytest-embedded fixture chain with a fake serial port, including hash, target,
+encryption and missing-file failures before port setup. `tests/test_cli.py::test_cli_passes_only_the_selected_build_to_the_runner`
+checks both CLI commands with a fake runner that reads the exact files passed to it.
+
+Not covered: deselection by `-m` (only `-k` is tested), running several backends in one
+session, and `power_on(utc=...)` with a timezone other than UTC.
 
 ## See also
 

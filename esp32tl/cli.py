@@ -76,7 +76,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "replay":
         interface = args.interface if "." in args.interface else f"uart.{args.interface}"
         replays[interface] = args.recording
-    return run(args.app, args.board, args.max_seconds, replays)
+    return run(args.app, args.board, args.max_seconds, replays, build_dir=args.build_dir)
 
 
 def run_arguments(parser: argparse.ArgumentParser) -> None:
@@ -84,7 +84,12 @@ def run_arguments(parser: argparse.ArgumentParser) -> None:
         "--app",
         required=True,
         type=Path,
-        help="the ESP-IDF app directory; its build is in APP/build",
+        help="the ESP-IDF app directory; its build defaults to APP/build",
+    )
+    parser.add_argument(
+        "--build-dir",
+        type=Path,
+        help="the existing ESP-IDF build directory, relative to APP or absolute (default: build)",
     )
     parser.add_argument(
         "--board",
@@ -111,7 +116,14 @@ def positive(text: str) -> float:
     return value
 
 
-def run(app: Path, board: str, max_seconds: float, replays: dict[str, Path]) -> int:
+def run(
+    app: Path,
+    board: str,
+    max_seconds: float,
+    replays: dict[str, Path],
+    *,
+    build_dir: Path | None = None,
+) -> int:
     """Runs `app` on the board profile `board`, each recording of `replays` replayed into its
     interface. Returns the exit code: the runner's, 1 when the link failed, CANNOT_START when
     the run could not start and INTERRUPTED after Ctrl-C. Ctrl-C is handled from the start: one
@@ -119,13 +131,19 @@ def run(app: Path, board: str, max_seconds: float, replays: dict[str, Path]) -> 
     interrupts = Interrupts()
     previous = signal.signal(signal.SIGINT, interrupts.handle)
     try:
-        return interruptible(app, board, max_seconds, replays, interrupts)
+        return interruptible(app, board, max_seconds, replays, interrupts, build_dir=build_dir)
     finally:
         signal.signal(signal.SIGINT, previous)
 
 
 def interruptible(
-    app: Path, board: str, max_seconds: float, replays: dict[str, Path], interrupts: "Interrupts"
+    app: Path,
+    board: str,
+    max_seconds: float,
+    replays: dict[str, Path],
+    interrupts: "Interrupts",
+    *,
+    build_dir: Path | None = None,
 ) -> int:
     try:
         profile = boards.profile(board)
@@ -136,7 +154,7 @@ def interruptible(
             )
             uart.replay(path)
             uarts.append(uart)
-        image = esp32sim.load_app(str(app.resolve()))
+        image = esp32sim.load_app(str(app.resolve()), build_dir=build_dir)
         runner, rom = esp32sim.runner_path(), esp32sim.rom_path()
     except (ProfileError, BackendError, RecordingError, ReplayError) as error:
         print(f"esp32tl: {error}", file=sys.stderr)

@@ -58,8 +58,8 @@ after the push and the queue on hp600g1, for a saving of about 0.2 s per Rust co
 Status: decided (#51)
 
 `pytest_generate_tests` parametrises every test that uses `board` in a single
-`metafunc.parametrize` over `board`, `embedded_services` and `app_path`, `indirect=True`, with the
-backend name as the shared id (`test_hello_world[esp32sim]`). `board` itself is one of the
+`metafunc.parametrize` over `board`, `embedded_services`, `app_path` and (since #102) `build_dir`,
+`indirect=True`, with the backend name as the shared id (`test_hello_world[esp32sim]`). `board` itself is one of the
 indirect parameters, and the fixture reads the backend name from `request.param`.
 `--esp32tl-backend NAME` limits the run to one backend.
 
@@ -72,7 +72,9 @@ Status: decided (#51)
 
 `@pytest.mark.app_path(path)` names the app, relative to the test file's directory; without the
 marker the app is that directory, pytest-embedded's default. A marker without exactly one path
-is a collection error whose one-line message names the test.
+is a collection error whose one-line message names the test. Since #102 its optional `build_dir`
+keyword selects an existing build relative to the app or by absolute path; the default is `build`.
+The closest marker supplies both values, without inheriting keywords from more distant markers.
 
 **Rejected:** letting tests parametrise `app_path` themselves, because that would collide with the
 plugin's own parametrisation of the same name.
@@ -81,6 +83,8 @@ plugin's own parametrisation of the same name.
 
 Status: decided (#51)
 
+The `build_dir` keyword added to the `app_path` marker in #102 is the supported pytest selector;
+the raw pytest-embedded option stays guarded, even when it agrees with the marker.
 When a selected test uses `board`, `--embedded-services`, `--app-path` and `--build-dir` are
 refused with a `pytest.UsageError`, and so is `--count` above 1; the `board` fixture also refuses a
 `count` that a test parametrises above 1. pytest-embedded replaces an empty `embedded_services`
@@ -216,7 +220,10 @@ a run may send many, and they belong to the run, not to the code that triggered 
 
 Status: decided (#51)
 
-`load_app` builds `IdfApp(app_path, build_dir=str(Path(app_path) / "build"))`.
+`load_app` builds `IdfApp(app_path, build_dir=str(build))`, where `build` is the resolved absolute
+directory. Since #102 it is selected explicitly or defaults to `<app_path>/build`. The plugin
+passes the same absolute `build_dir` fixture to simulator loading, serial preflight and
+pytest-embedded's app/flash chain. The CLI resolves its selector through the same loader.
 
 **Rejected:** a relative `build`, because pytest-embedded then falls back to `./build` in the
 working directory when the app has none; in this repository that is CI's `build/ci`.
@@ -1379,8 +1386,8 @@ blocking calls in the USB driver or pytest-embedded's own connection and reset o
 
 Status: decided (#25)
 
-`load_app(app_path, backend="serial")` shares the finished-build checks and gives serial-specific
-messages. Like the first emulator backend, M4 is scoped to classic ESP32 and unencrypted builds.
+`load_app(app_path, build_dir=build_dir, backend="serial")` shares the finished-build checks and
+gives serial-specific messages. Like the first emulator backend, M4 is scoped to classic ESP32 and unencrypted builds.
 Flash encryption is physically possible but requires provisioning and key/efuse management that
 this harness neither implements nor validates. The app hash refers to the local plaintext file,
 not ciphertext on flash. Encrypted builds are refused before port setup even with skip-autoflash.
@@ -1761,3 +1768,23 @@ or removing service-map entries to simulate an NTP outage, because these hide th
 state behind protocol details; teaching esp32tl about the tracker's fields, topic or NVS keys,
 because product vocabulary belongs in the consumer's tests; and a wrapper that owns another
 clock or implicitly powers on the board, because the scenarios should show when firmware runs.
+
+
+## Explicit build paths are relative to the application and never fall back
+
+Status: decided (#102)
+
+`@pytest.mark.app_path(path, build_dir="../builds/debug")` selects an existing directory containing
+`flasher_args.json`. The build defaults to `build`; explicit paths may be absolute or relative to
+the application. `esp32tl run` and `esp32tl replay` offer `--build-dir` with the same semantics.
+The app path itself remains relative to the test file in pytest and to the working directory in
+the CLI. Resolving the build to an absolute path before passing it to pytest-embedded prevents
+its cwd fallback. Both backends retain target, encryption and missing-file validation; serial
+hashes the selected artifact before opening a port. Existing repository firmware provenance checks
+remain separate and unchanged; external builds do not need repository build stamps.
+
+**Rejected:** resolving build paths against the test directory or cwd, because app-relative paths
+keep pytest and the CLI consistent and preserve the meaning of the default `build`.
+Also rejected: falling back to another build, rebuilding, relocating artifacts or modifying
+sources, because a test or CI job must run exactly the artifact it selected. Pytest's raw
+`--build-dir` remains refused; allowing two competing selectors would obscure that selection.

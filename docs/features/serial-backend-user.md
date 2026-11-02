@@ -31,7 +31,7 @@ checks `nmea_reader: UART1 RX GPIO5 TX GPIO4 9600 baud` without needing a GNSS r
 
 ## Builds and flashing
 
-The `app_path` marker selects an ESP-IDF app, with its finished build in `build/`, just as on
+The `app_path` marker selects an ESP-IDF app, with its finished build in `build/` by default, just as on
 esp32sim. Use the CI-built files or `make firmware`; pytest builds nothing. The build must target
 `esp32`, list its app image under `app` in `flasher_args.json`, contain every flash file, and
 request no flash encryption. Encrypted firmware needs provisioning and key/efuse management
@@ -74,6 +74,13 @@ The comparison establishes recording/artifact identity, **not the contents of fl
 board**. With `--skip-autoflash y`, keeping the board on that image is the caller's responsibility.
 Without `app_recording` there is no reference recording to compare. A new console tap records the
 selected artifact's hash; under skip-autoflash that is also a statement about the artifact only.
+
+An external build is selected with `@pytest.mark.app_path("../firmware", build_dir="../builds/debug")`.
+The build path is relative to the application or absolute, and must contain `flasher_args.json`.
+Preflight, flashing, the `app_recording` hash comparison and tap artifact hashes all use that
+same resolved directory. An invalid selection fails before opening the port, including when
+`dut` is requested before `board`. No default build is substituted. pytest-embedded's raw
+`--build-dir` is still refused; use the marker's keyword ([build selection](pytest-plugin-user.md)).
 
 ## Power-on, time and console
 
