@@ -57,7 +57,12 @@ and evaluates broker keepalive deadlines; `quiet_until` bounds the next turn by 
   validation happens before key generation. Temporary key files are removed
   after `SSLContext.load_cert_chain`. TLS uses `SSLObject` and two `MemoryBIO`s; plaintext reaches
   the inner service only after handshake completion. TLS errors close the connection and notify
-  the inner service once. No deterministic replacement for OpenSSL randomness is attempted (#68).
+  the inner service once. `Internet.listen(..., tls=ca)` returns the installed `Tls` object;
+  plain listeners return `None`. Its cumulative `handshakes_started` counter increments on the
+  first nonempty `on_data` per session, before TLS parsing. Empty input, TCP accept alone,
+  subsequent fragments and data after closure do not increment it. Invalid first input does.
+  Session closure and network reset leave the counter intact. No deterministic replacement for
+  OpenSSL randomness is attempted (#68).
 
 These are a lossless test network, not a general Internet stack. TCP congestion control, packet
 reassembly, retransmission, persistent MQTT sessions, MQTT QoS 2 and bridging to host services

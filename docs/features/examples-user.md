@@ -195,8 +195,9 @@ Provision these required values in the default NVS partition before `board.power
 | `config` | `apn` | string | Cellular access point name |
 
 The tests separate their simulated broker from firmware provisioning. The `broker_ca` fixture
-creates a per-test CA for `broker.test`; `tls_broker` registers the TLS listener on port 8883
-and returns the existing `Broker`. Neither fixture writes NVS or powers on the board.
+creates a per-test CA for `broker.test`; `tls_listener` registers TLS on port 8883
+and returns its `Tls` handle. Tests select this setup fixture explicitly. Neither fixture writes
+NVS or powers on the board.
 `configure_tracker(board, trusted_ca=broker_ca.ca_pem)` writes only NVS: the trusted CA,
 `broker.test`, port 8883, `time.test` and APN `internet`. Its `broker_host` and `broker_port`
 keyword arguments override the destination. This helper belongs to the example, not the library.
@@ -221,26 +222,29 @@ model already has a position. It never connects before NTP synchronization or fa
 NTP while printing `position_tracker: waiting for NTP` every 10 seconds of waiting. Modem power
 sequencing and PPP redial are outside this example; MQTT reconnect operates while PPP is up.
 
-The example's `reports` fixture interprets publications on `tracker/position`. Its conditions
+The example's `reports` fixture depends only on `broker` and interprets publications on
+`tracker/position`; it registers no listener, so custom TLS setups can use it too. Its conditions
 return a `Report` with `received_at` (the board's time), `utc` (a timezone-aware datetime) and
 `position` (`Position` or `None`):
 
 ```python
+@pytest.mark.usefixtures("tls_listener")
 def test_losing_the_fix_clears_the_reported_position(board, gnss, broker_ca, reports):
     configure_tracker(board, trusted_ca=broker_ca.ca_pem)
     gnss.fix(at=WARSAW)
     board.power_on(utc=WORLD)
-    first = board.wait_until(reports.with_position(), within=seconds(60))
+    first = board.wait_until(reports.when_received(with_position=True), within=seconds(60))
     assert first.position == WARSAW
 
     gnss.lose_fix()
-    report = board.wait_until(reports.next(), within=seconds(10.25))
+    report = board.wait_until(reports.when_received(), within=seconds(10.25))
     assert report.position is None
 ```
 
-`reports.next()` matches the first report published after the condition is created;
-`reports.with_position()` additionally requires a fix. It can wait past the initial no-fix
-report without assuming which numbered message has a position. `reports.history` includes only
+`reports.when_received()` matches the first report published after the condition is created;
+`reports.when_received(with_position=True)` additionally requires a fix. Neither call consumes
+a message: each creates a condition, whose repeated polls return the same first match. A position
+condition can wait past the initial no-fix report without assuming which numbered message has a position. `reports.history` includes only
 tracker reports from firmware, excluding unrelated topics and publications made by the test.
 Malformed reports fail decoding instead of disappearing from a position wait. This application
 adapter lives in `tests/tracker_support.py`; `board` remains the only clock and power control.
@@ -252,7 +256,10 @@ library and know nothing about the tracker report format.
 The tests show a report within one second of connection, three subsequent 10-second intervals
 on `board.now`, position following a moving GNSS model, and timestamps following two different
 `power_on(utc=...)` epochs. They also reject the wrong CA and hostname, expired and not-yet-valid
-server certificates (with a valid CA), and check no-fix, lost-fix, receiver silence, missing
+server certificates (with a valid CA). Each rejection case waits for the TLS listener to receive
+handshake input, then checks the complete broker history after 30 seconds of simulated time
+for any connection or publication, including short-lived ones. It does not match firmware log
+wording. Other cases check no-fix, lost-fix, receiver silence, missing
 configuration and a nonresponding NTP server. TLS uses system randomness, so these tests
 assert application behavior with small timing tolerances, not identical ciphertext.
 

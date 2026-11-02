@@ -154,18 +154,21 @@ Reports use QoS 0, retain false, on `tracker/position`. `time` is integer Unix U
 failure logs `position_tracker: publish failed`. The no-fix report still carries synchronized time.
 
 `tests/test_tracker.py` keeps power-on and every wait explicit. Its `broker_ca` fixture creates
-credentials; `tls_broker` registers the listener and returns the library's `Broker`; `reports`
-wraps that broker in the application-owned `Reports` adapter. `configure_tracker` in
+credentials; `tls_listener` registers TLS and returns its `Tls` handle. Tests request that
+fixture explicitly, using `usefixtures` when only setup is needed. The independent `reports`
+fixture wraps `broker` in the application-owned `Reports` adapter without registering a listener,
+including in the positive certificate-date test with custom credentials. `configure_tracker` in
 `tests/tracker_support.py` only translates the application's settings into NVS entries.
 It does not create a CA, register a listener or start the firmware.
 
 `Report.decode` validates the exact JSON fields and their types: a boolean fix, integer Unix
 seconds, numeric coordinates within the position bounds for a fix, and null coordinates without
 one. It returns an aware UTC datetime, a `Position` or `None`, and the message's `Duration`
-timestamp. Invalid data raises `ValueError` with the received time. `Reports.next()` and
-`Reports.with_position()` capture the broker history length when constructed, observe only
-subsequent firmware publications on the exact topic and return the first matching report.
-They never advance time. Position waits skip valid no-fix reports, but reject malformed ones;
+timestamp. Invalid data raises `ValueError` with the received time.
+`Reports.when_received(with_position=False)` captures the broker history length when constructed
+and returns a condition observing only subsequent firmware publications on the exact topic.
+Neither construction nor polling consumes messages or advances time. Position waits skip valid
+no-fix reports, but reject malformed ones;
 later invalid messages cannot mask an earlier match. The history view validates every matching
 publication and filters out unrelated topics and the test publisher. `test_tracker_support.py`
 checks these boundaries independently of firmware.
@@ -178,8 +181,12 @@ sampling at 10 m/s. Movement and separate lost-fix/silence scenarios wait for a 
 without relying on the first GNSS epoch's order relative to TLS startup. The no-fix scenario
 waits two seconds for a receiver epoch before observing a subsequent report. Two world epochs,
 including one past 2038, check whole-second UTC against message arrival without a GNSS source,
-with 1.25 seconds for truncation and NTP/transport latency. Wrong CA and hostname
-cases must reach a certificate verification failure without an MQTT connection or report.
+with 1.25 seconds for truncation and NTP/transport latency. Wrong CA, hostname and validity-date
+cases wait for `Tls.handshakes_started > 0`, then advance the board by 30 seconds (covering the
+MQTT client's default 10-second reconnect delay). The broker's cumulative connection and message
+histories must remain empty, so even a temporary fallback fails. This proves absence within the
+observation window, not indefinitely, and uses no firmware error text. The attempt count proves
+input reached TLS, not successful certificate verification or a particular rejection reason.
 Certificate-date regressions keep the CA valid from 2000 through 2099 while changing only the
 server certificate: one expired in 2030, one starts in 2032, and a positive control is valid
 from 2030 to 2032. At the 2031 world epoch only the control may connect and publish. The tests

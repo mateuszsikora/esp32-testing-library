@@ -1727,7 +1727,17 @@ network behavior and certificate dates remain unchanged.
 
 The position tracker interprets its JSON through a local `Report`/`Reports` adapter with future
 message conditions and topic-specific history. It keeps firmware provisioning separate from
-TLS listener fixtures. Power-on and every wait remain explicit calls on `board`.
+TLS listener fixtures. The `reports` fixture depends only on `broker`; tests select TLS setup
+explicitly. `when_received(with_position=...)` names condition construction, not dequeueing.
+Power-on and every wait remain explicit calls on `board`.
+
+TLS listeners expose a cumulative `handshakes_started` count and are returned by
+`network.listen(..., tls=ca)`. Rejection tests wait for actual input and inspect broker history
+after a bounded interval; they do not infer absence from a firmware error string.
+
+**Rejected:** a reports fixture that implicitly installs TLS, because it conflicts with custom
+certificate setups; matching certificate-error log wording as the rejection oracle, because it
+couples behavior tests to diagnostics and says nothing about later reconnects or fallback.
 
 **Rejected:** implementing cryptographic certificate construction separately in each consumer
 or removing service-map entries to simulate an NTP outage, because these hide the intended world

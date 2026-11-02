@@ -650,7 +650,8 @@ that references to its number keep their meaning.
     coordinates, and Unix UTC follows NTP's world epoch, including dates after 2038. No fix,
     loss of fix or receiver silence produces null coordinates rather than a stale current fix.
     A wrong CA or hostname, or a server certificate outside its validity period at the NTP
-    time, never reaches MQTT. The date tests keep the CA valid and include an accepted server
+    time, leaves the broker's cumulative history empty through 30 seconds after the first TLS
+    input. The date tests keep the CA valid and include an accepted server
     certificate valid at that world epoch. Missing NVS configuration or NTP synchronization
     never connects.
     `examples/position_tracker/tests/test_tracker.py`
@@ -672,3 +673,10 @@ that references to its number keep their meaning.
     but reject malformed ones. Repeated polling returns the first match; later invalid messages
     cannot hide it, and the complete report history still detects malformed publications.
     `examples/position_tracker/tests/test_tracker_support.py`
+
+111. A TLS listener counts attempts once per connection on its first nonempty input, including
+    malformed input. Empty input, an idle TCP connection, later fragments, application traffic
+    and input after closure do not add attempts. Counts survive closure and new connections.
+    `tests/test_net_tls.py::test_tls_attempts_count_nonempty_input_once_per_connection`,
+    `tests/test_net_tls.py::test_tls_mqtt_and_transcript`,
+    `tests/test_net_tls.py::test_tls_rejects_unknown_ca_or_wrong_hostname`

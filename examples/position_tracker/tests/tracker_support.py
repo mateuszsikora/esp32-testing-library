@@ -78,24 +78,21 @@ class Reports:
     def history(self) -> list[Report]:
         return list(self._since(0))
 
-    def next(self) -> Callable[[], Report | None]:
-        """The first report published after this condition is created."""
-        return self._condition(require_position=False)
+    def when_received(self, *, with_position: bool = False) -> Callable[[], Report | None]:
+        """Create a condition for the first future report, optionally requiring a position.
 
-    def with_position(self) -> Callable[[], Report | None]:
-        """The first future report with a fix, skipping valid no-fix reports."""
-        return self._condition(require_position=True)
-
-    def _condition(self, *, require_position: bool) -> Callable[[], Report | None]:
+        Creating or polling it never consumes a report. Repeated polls retain the first
+        match; create a new condition to observe publications after that point.
+        """
         start = len(self._broker.messages)
 
         def find() -> Report | None:
             return next(
-                (r for r in self._since(start) if not require_position or r.position is not None),
+                (r for r in self._since(start) if not with_position or r.position is not None),
                 None,
             )
 
         find.description = (  # type: ignore[attr-defined]
-            "a tracker report with a position" if require_position else "a tracker report"
+            "a tracker report with a position" if with_position else "a tracker report"
         )
         return find

@@ -27,7 +27,7 @@ def test_waits_start_now_filter_the_topic_and_preserve_the_first_match() -> None
     broker = Broker(lambda: 0)
     received(broker, POSITION)
     reports = Reports(broker)
-    next_report, positioned = reports.next(), reports.with_position()
+    next_report, positioned = reports.when_received(), reports.when_received(with_position=True)
     assert next_report() is None and positioned() is None
     received(broker, "unrelated telemetry", topic="tracker/health")
     received(broker, POSITION, client="(test)")
@@ -43,7 +43,7 @@ def test_waits_start_now_filter_the_topic_and_preserve_the_first_match() -> None
     assert with_fix.received_at == seconds(4)
     assert next_report() == without_fix  # Repeated polling retains the first matching report.
     assert len(reports.history) == 3
-    assert reports.next()() is None
+    assert reports.when_received()() is None
 
 
 @pytest.mark.parametrize(
@@ -65,7 +65,7 @@ def test_position_wait_rejects_malformed_reports_instead_of_skipping_them(
     bad_report: object,
 ) -> None:
     broker = Broker(lambda: 0)
-    waiting = Reports(broker).with_position()
+    waiting = Reports(broker).when_received(with_position=True)
     received(broker, bad_report)
     received(broker, POSITION)
     with pytest.raises(ValueError, match="invalid tracker report at 0 s"):
@@ -75,7 +75,7 @@ def test_position_wait_rejects_malformed_reports_instead_of_skipping_them(
 def test_first_match_is_not_masked_by_a_later_malformed_report() -> None:
     broker = Broker(lambda: 0)
     reports = Reports(broker)
-    waiting = reports.next()
+    waiting = reports.when_received()
     received(broker, POSITION)
     received(broker, {})
     assert waiting() is not None

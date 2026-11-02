@@ -19,7 +19,7 @@ def tls_exchange() -> dict[str, object]:
     certificate = x509.load_pem_x509_certificate(ca.ca_pem.encode())
     assert certificate.not_valid_before_utc == NOT_BEFORE
     assert certificate.not_valid_after_utc == NOT_AFTER
-    net.listen(8883, net.broker, tls=ca)
+    listener = net.listen(8883, net.broker, tls=ca)
     context = ssl.create_default_context(cadata=ca.ca_pem)
     context.maximum_version = ssl.TLSVersion.TLSv1_2
     incoming, outgoing = ssl.MemoryBIO(), ssl.MemoryBIO()
@@ -29,7 +29,8 @@ def tls_exchange() -> dict[str, object]:
     def receive(data: bytes) -> None:
         incoming.write(data)
 
-    server = net.ip.tcp[8883].accept(("10.64.0.2", 4000), receive, lambda: closed.append(True))
+    server = listener.accept(("10.64.0.2", 4000), receive, lambda: closed.append(True))
+    assert listener.handshakes_started == 0
     for _ in range(20):
         with contextlib.suppress(ssl.SSLWantReadError):
             client.do_handshake()
@@ -43,6 +44,7 @@ def tls_exchange() -> dict[str, object]:
     else:
         pytest.fail("TLS did not finish its handshake")
     assert client.version() == "TLSv1.2" and closed == []
+    assert listener.handshakes_started == 1
     peer = client.getpeercert()
     assert peer is not None
     assert peer["subjectAltName"] == (
@@ -71,6 +73,7 @@ def tls_exchange() -> dict[str, object]:
         "data" not in e or "4d515454" in str(e["data"]) or len(str(e["data"])) < 40
         for e in net.events
     )  # no handshake ciphertext in the application transcript
+    assert listener.handshakes_started == 1  # Application data is not another handshake.
     return net.transcript()
 
 
@@ -83,7 +86,7 @@ def test_tls_mqtt_and_transcript(tmp_path: Path) -> None:
 def test_tls_rejects_unknown_ca_or_wrong_hostname(trusted: bool) -> None:
     net = Internet(lambda: 0)
     ca = CertificateAuthority(["broker.example"])
-    net.listen(8883, net.broker, tls=ca)
+    listener = net.listen(8883, net.broker, tls=ca)
     context = ssl.create_default_context(cadata=ca.ca_pem if trusted else None)
     incoming, outgoing = ssl.MemoryBIO(), ssl.MemoryBIO()
     client = context.wrap_bio(incoming, outgoing, server_hostname="wrong.example")
@@ -92,7 +95,7 @@ def test_tls_rejects_unknown_ca_or_wrong_hostname(trusted: bool) -> None:
     def receive(data: bytes) -> None:
         incoming.write(data)
 
-    server = net.ip.tcp[8883].accept(("10.64.0.2", 4000), receive, lambda: closed.append(True))
+    server = listener.accept(("10.64.0.2", 4000), receive, lambda: closed.append(True))
     with pytest.raises(ssl.SSLCertVerificationError):
         for _ in range(10):
             with contextlib.suppress(ssl.SSLWantReadError):
@@ -101,6 +104,7 @@ def test_tls_rejects_unknown_ca_or_wrong_hostname(trusted: bool) -> None:
     server.on_data(outgoing.read())
     assert closed == [True]
     assert not net.broker.clients
+    assert listener.handshakes_started == 1
 
 
 def test_server_dates_change_without_changing_ca_validity() -> None:
@@ -157,3 +161,24 @@ def test_server_dates_require_a_nonempty_forward_interval(end_year: int) -> None
             server_not_before=datetime(2030, 1, 1, tzinfo=UTC),
             server_not_after=datetime(end_year, 1, 1, tzinfo=UTC),
         )
+
+
+def test_tls_attempts_count_nonempty_input_once_per_connection() -> None:
+    net = Internet(lambda: 0)
+    listener = net.listen(8883, net.broker, tls=CertificateAuthority(["broker.example"]))
+    first = listener.accept(("10.64.0.2", 4000), lambda data: None, lambda: None)
+    first.on_data(b"")
+    assert listener.handshakes_started == 0
+    first.on_data(b"\x16")  # First fragment, without a full ClientHello yet.
+    first.on_data(b"\x03\x03")
+    assert listener.handshakes_started == 1
+    first.on_close()
+    first.on_data(b"ignored after closure")
+    idle = listener.accept(("10.64.0.2", 4001), lambda data: None, lambda: None)
+    idle.on_close()
+    assert listener.handshakes_started == 1
+    second = listener.accept(("10.64.0.2", 4002), lambda data: None, lambda: None)
+    second.on_data(b"invalid TLS input")
+    assert listener.handshakes_started == 2
+    assert not net.broker.clients
+    assert net.listen(9000, net.broker) is None

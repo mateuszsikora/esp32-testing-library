@@ -96,8 +96,18 @@ from esp32tl.net.tls import CertificateAuthority
 
 network = modem.network()
 ca = CertificateAuthority(["broker.example"])
-network.listen(8883, network.broker, tls=ca)
+listener = network.listen(8883, network.broker, tls=ca)
 # Provision ca.ca_pem as the firmware's trusted CA using that firmware's configuration interface.
+```
+
+With `tls=ca`, `listen` returns the `Tls` listener; without TLS it returns `None`.
+`listener.handshakes_started` counts connections that have supplied their first nonempty input.
+It includes incomplete, malformed and failed handshakes; it does not prove TLS success. Reading
+it does not advance time, and closing a connection or resetting the network does not clear the
+count. After powering on the board, a test can wait for an attempt without matching log text:
+
+```python
+board.wait_until(lambda: listener.handshakes_started > 0, within=seconds(60))
 ```
 
 By default, CA and server certificates are valid from `2000-01-01T00:00:00Z` to

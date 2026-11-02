@@ -107,7 +107,11 @@ def _name(name: str) -> x509.GeneralName:
 
 
 class Tls:
-    """The `StreamService` that ends TLS and hands the plain stream to `inner`."""
+    """The `StreamService` that ends TLS and hands the plain stream to `inner`.
+
+    `handshakes_started` counts connections that supplied nonempty input, even if invalid.
+    The cumulative count survives closure; it does not imply handshake completion.
+    """
 
     def __init__(
         self,
@@ -118,6 +122,7 @@ class Tls:
         self.inner = inner
         self.ca = ca
         self._log = log
+        self.handshakes_started = 0
 
     def accept(
         self, peer: tuple[str, int], write: Callable[[bytes], None], close: Callable[[], None]
@@ -142,6 +147,7 @@ class _Session:
         self._inner: Connection | None = None
         self._closed = False
         self._ready = False
+        self._started = False
 
     def _flush(self) -> None:
         data = self._outgoing.read()
@@ -151,6 +157,9 @@ class _Session:
     def on_data(self, data: bytes) -> None:
         if self._closed:
             return
+        if not self._started and data:
+            self._started = True
+            self._tls.handshakes_started += 1
         self._incoming.write(data)
         if not self._ready:
             try:
