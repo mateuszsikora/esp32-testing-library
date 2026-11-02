@@ -464,3 +464,15 @@ that forgot to call the condition. The existing `Lines.level` API retains its 0/
 polarity validation, event filtering and the absence of input writes. The real-firmware test
 `tests/test_gpio_echo.py::test_named_output_waits_report_the_line_and_state` checks successful
 waits and the `NeverHappened` diagnostic through the board's clock.
+
+`OutputLine.assert_on` / `assert_off` read the current firmware level without advancing time.
+`assert_stayed_on(since=...)` / `assert_stayed_off(since=...)` take a sorted event snapshot,
+filter to firmware events, reconstruct the state from the last event at or before the starting
+instant, and check every transition after it through the current instant. Ties at the starting
+instant use the last event in arrival order; all later transitions are checked, even when they
+share a timestamp. No prior firmware event means unknown, which fails. The caller uses the
+held board clock, as with other line reads. History is retained for the run; assertions do not
+consume it. Input events cannot satisfy or violate a firmware-output assertion.
+
+`tests/test_lines.py` covers current-state diagnostics, both polarities and states, a one-nanosecond
+pulse, unknown/released outputs, starting/end boundaries, input filtering and invalid windows.

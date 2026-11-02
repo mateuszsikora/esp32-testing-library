@@ -1659,3 +1659,13 @@ false while the firmware's output is undriven. Polarity is explicit: `active=0` 
 configured the pin; a separate clock or waiting API on the handle, which would duplicate the
 board's clock; and putting the GPS alarm's NVS schema into the library. Its unit-aware
 `configure_alarm` helper stays in the example.
+
+Current-state assertions and history assertions are explicit separate operations:
+`assert_on` / `assert_off` inspect now, while `assert_stayed_on(since=...)` /
+`assert_stayed_off(since=...)` inspect the starting state and all subsequent firmware events
+through now. They never advance the clock. Unknown states fail. At the starting timestamp the
+last reported state wins; subsequent events are all checked, including same-timestamp pulses.
+
+**Rejected:** polling to prove an output stayed off, which misses short pulses; silently
+accepting an unknown starting state, which hides unconfigured pins. The example's boot helper
+separately permits initial setup while still rejecting every active pulse.

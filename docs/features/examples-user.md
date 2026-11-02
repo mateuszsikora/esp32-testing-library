@@ -79,7 +79,13 @@ The movement tests calculate `time_to_boundary` from distance divided by speed. 
 the old state one fix interval before the crossing, advance to the boundary, then wait for the
 new state with `REACTION_TIME = 2 * FIX_INTERVAL` (`FIX_INTERVAL = seconds(1)`). The response
 budget starts at the boundary, independent of travel time. `assert_never_buzzed` checks both
-the current off condition and the output's event history, so short pulses cannot pass unnoticed.
+the current off state and the output's event history, so short pulses cannot pass unnoticed
+from boot, while allowing the initial unconfigured pin. Once a state is established, tests use
+`buzzer.assert_stayed_on(since=...)` or `buzzer.assert_stayed_off(since=...)` to require that
+state throughout an interval. In particular, loss of fix must keep the buzzer off for three
+seconds after it first turns off. `assert_on()` / `assert_off()` check only the current state.
+The scenarios come first in the file; the NVS helper and fixture follow them. Separate smaller-
+and larger-radius cases show the expected output directly, without conditional assertions.
 
 The tests demonstrate:
 

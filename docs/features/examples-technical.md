@@ -39,8 +39,12 @@ NVS keys before boot; the `buzzer` fixture returns an `OutputLine`, not a rename
 move the model on emulated time and pass its `is_on`/`is_off` conditions to `board.wait_until`.
 They calculate travel time to the radius separately from the two-fix response budget and check
 the output's event history for unwanted pulses. Its non-default target/radius cases catch a firmware that ignores
-NVS. Its silence and loss cases catch a buzzer left on by a stale position. The separate
-`gps-alarm-clock` profile gives this assembly's wiring without changing the generic devkit.
+NVS, with separate tests for smaller and larger configured radii. Its silence and loss cases
+catch a buzzer left on by a stale position; loss also checks three subsequent seconds of
+firmware history for reactivation. Departure checks that the buzzer stays on before the boundary.
+The boot-window helper allows an initially unconfigured pin but rejects any active pulse and
+requires the final state to be off; strict interval assertions require a known starting state.
+The separate `gps-alarm-clock` profile gives this assembly's wiring without changing the generic devkit.
 
 `scripts/check-docs.py` owns `examples/` through F24; Python test files under each example's
 `tests/` are exempt just like the root suite. `tests/test_check_docs.py` checks both behaviours.

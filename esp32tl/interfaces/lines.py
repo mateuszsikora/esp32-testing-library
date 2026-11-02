@@ -75,6 +75,50 @@ class OutputLine:
         """This line's changes by firmware, test and model, on the board's clock."""
         return [event for event in self._lines.events() if event.pin == self.pin]
 
+    def assert_on(self) -> None:
+        """Assert the current firmware output is active, without advancing time."""
+        self._assert_level(self._lines.level(self.pin), on=True, when="now")
+
+    def assert_off(self) -> None:
+        """Assert the current firmware output is inactive, without advancing time."""
+        self._assert_level(self._lines.level(self.pin), on=False, when="now")
+
+    def assert_stayed_on(self, *, since: Duration) -> None:
+        """Assert the output stayed active from `since` through now, including short pulses."""
+        self._assert_stayed(on=True, since=since)
+
+    def assert_stayed_off(self, *, since: Duration) -> None:
+        """Assert the output stayed inactive from `since` through now, including short pulses."""
+        self._assert_stayed(on=False, since=since)
+
+    def _assert_level(self, level: int | None, *, on: bool, when: str) -> None:
+        expected = self.active if on else 1 - self.active
+        if level != expected:
+            state = "on" if on else "off"
+            actual = "undriven/unknown" if level is None else f"level {level}"
+            raise AssertionError(
+                f"{self.name} expected {state} (GPIO {self.pin}, level {expected}) "
+                f"{when}; observed {actual}"
+            )
+
+    def _assert_stayed(self, *, on: bool, since: Duration) -> None:
+        if not isinstance(since, Duration):
+            raise TypeError("since must be a Duration on the board's clock")
+        now = Duration(self._lines._now())
+        if not 0 <= since.ns <= now.ns:
+            raise ValueError("since must be between zero and board.now")
+        events = [event for event in self.events() if event.by == "firmware"]
+        level = None
+        for event in events:
+            if event.t > since:
+                break
+            level = event.level
+        window = f"during [{since.seconds:g}, {now.seconds:g}] s"
+        self._assert_level(level, on=on, when=f"at {since.seconds:g} s {window}")
+        for event in events:
+            if since < event.t <= now:
+                self._assert_level(event.level, on=on, when=f"at {event.t.seconds:g} s {window}")
+
 
 class Lines(Interface):
     """The `[lines.<role>]` sets of the board profile `board`, one interface on the link, `lines`.

@@ -589,16 +589,24 @@ that references to its number keep their meaning.
     `tests/test_net_mru.py::test_ppp_does_not_emit_an_oversized_ip_packet_even_when_called_directly`
 
 
-98. The GPS alarm drives its buzzer only while a fresh valid fix is within the NVS-configured
+104. The GPS alarm drives its buzzer only while a fresh valid fix is within the NVS-configured
     radius. Moving across the radius changes its output within two fix intervals; no fix,
     loss of fix, receiver silence or missing configuration cannot leave it on. Both destination
     and radius come from typed NVS values, including southern/western destinations.
     `examples/gps_alarm_clock/tests/test_alarm.py`
 
 
-99. Named GPIO output conditions observe only what the firmware drives. Neither on nor off
+105. Named GPIO output conditions observe only what the firmware drives. Neither on nor off
     matches an undriven output, for either polarity, and constructing a handle queues no input.
     Saved conditions read the live state; waits report the line, desired state, pin and level.
     `tests/test_lines.py::test_named_output_conditions_follow_the_firmware_and_exclude_undriven`,
     `tests/test_lines.py::test_output_handles_resolve_pin_names_and_filter_events_without_driving`,
     `tests/test_gpio_echo.py::test_named_output_waits_report_the_line_and_state`
+
+106. GPIO interval assertions require a known matching state at the starting instant and every
+    subsequent firmware transition through now, catching pulses even after the output recovers.
+    Input writes cannot satisfy an output assertion; none of these assertions advance time.
+    `tests/test_lines.py::test_output_history_catches_short_pulses_even_after_state_recovers`,
+    `tests/test_lines.py::test_output_history_requires_a_known_start_and_rejects_released_outputs`,
+    `tests/test_lines.py::test_output_history_uses_start_state_and_includes_the_current_instant`,
+    `tests/test_lines.py::test_output_history_ignores_inputs_other_pins_and_future_events`
