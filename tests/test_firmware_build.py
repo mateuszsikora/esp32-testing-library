@@ -319,3 +319,57 @@ def test_failed_build_unmarks_a_finished_one(tmp_path: Path, local_idf: dict[str
     assert built.exists()
     assert run_build({**local_idf, "FAKE_FAIL": "1"}).returncode == 2
     assert not built.exists()
+
+
+@pytest.mark.parametrize("names", [(), ("gps_alarm_clock",)])
+def test_examples_are_discovered_and_built_from_their_projects(
+    tmp_path: Path, local_idf: dict[str, str], names: tuple[str, ...]
+) -> None:
+    result = run_build(local_idf, "--examples", *names)
+    assert result.returncode == 0, result.stderr
+    projects = (
+        [ROOT / "examples" / name for name in names]
+        if names
+        else sorted(path.parent for path in (ROOT / "examples").glob("*/CMakeLists.txt"))
+    )
+    for project in projects:
+        build = tmp_path / "out" / project.name / "build"
+        assert (build / "esp32tl-built").is_file()
+        assert json.loads((build / "esp32tl-build.json").read_text())["project"] == str(project)
+        assert str(project) in logged(tmp_path / "idf.log")
+    assert logged(tmp_path / "idf.log").count("build") == len(projects)
+
+
+def test_example_build_forwards_the_mode_into_the_pinned_container(tmp_path: Path) -> None:
+    script(tmp_path / "bin", "docker", FAKE_DOCKER)
+    env = {
+        "PATH": minimal_path(tmp_path / "bin"),
+        "FIRMWARE_OUT": str(tmp_path / "out"),
+        "FAKE_LOG": str(tmp_path / "docker.log"),
+    }
+    result = run_build(env, "--examples", "gps_alarm_clock")
+    assert result.returncode == 0, result.stderr
+    args = logged(tmp_path / "docker.log")
+    assert args[-4:] == [CONTAINER, "firmware/build.sh", "--examples", "gps_alarm_clock"]
+    assert f"{ROOT}:/project:ro" in args
+    assert f"{tmp_path / 'out'}:/out" in args
+
+
+def test_example_names_are_validated_before_creating_output(
+    tmp_path: Path, local_idf: dict[str, str]
+) -> None:
+    result = run_build(local_idf, "--examples", "../firmware/nmea_reader")
+    assert result.returncode == 1
+    assert "unknown image '../firmware/nmea_reader'" in result.stderr
+    assert not (tmp_path / "out").exists()
+
+
+def test_failed_example_build_removes_its_completion_marker(
+    tmp_path: Path, local_idf: dict[str, str]
+) -> None:
+    assert run_build(local_idf, "--examples", "gps_alarm_clock").returncode == 0
+    built = tmp_path / "out" / "gps_alarm_clock" / "build" / "esp32tl-built"
+    assert built.is_file()
+    result = run_build({**local_idf, "FAKE_FAIL": "1"}, "--examples", "gps_alarm_clock")
+    assert result.returncode == 2
+    assert not built.exists()

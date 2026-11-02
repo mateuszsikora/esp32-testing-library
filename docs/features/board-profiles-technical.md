@@ -159,7 +159,7 @@ file is broken. The ones `tests/test_boards.py` checks, verbatim:
 
 | Message | Cause |
 |---|---|
-| `no board profile named 'NAME'; the profiles are esp32-devkitc, lilygo-t-a7670g-r2` | `boards.profile` with another name |
+| `no board profile named 'NAME'; the profiles are esp32-devkitc, gps-alarm-clock, lilygo-t-a7670g-r2` | `boards.profile` with another name |
 | `x.toml: <tomllib's message>`, as `x.toml: Invalid value (at end of document)` | Not TOML, or not readable |
 | `x.toml: missing chip`, `x.toml: unknown key pins` | A top-level key missing or unknown |
 | `x.toml: uart.gnss: missing baud`, `x.toml: lines.modem.ri: missing pin` | The same in a table |
@@ -189,7 +189,7 @@ are listed in [board-profiles-user.md](board-profiles-user.md#when-no-backend-ca
 
 `tests/test_boards.py`, plain pytest:
 
-- `test_the_shipped_profiles_are_the_two_of_the_plan`, `test_esp32_devkitc_routes_the_gnss_on_uart1_gpio_4_and_5`:
+- `test_the_shipped_profiles_include_the_example_assembly`, `test_esp32_devkitc_routes_the_gnss_on_uart1_gpio_4_and_5`:
   the names, the default, and `esp32-devkitc` field by field, its slot included.
   `test_an_sd_card_slot_may_take_an_input_only_pin_for_miso`: a slot's MISO on GPIO 39.
 - `test_the_lilygo_profile_holds_the_specification_and_lilygo_s_documentation`: the file's TOML

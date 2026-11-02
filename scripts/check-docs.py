@@ -214,6 +214,12 @@ FEATURES = [
         r"^docs/features/network-",
         "Simulated network changed: update docs/features/network-*.md",
     ),
+    Rule(
+        "F24",
+        r"^examples/",
+        r"^docs/features/examples-",
+        "Examples changed: update docs/features/examples-*.md",
+    ),
 ]
 
 # The catch-all for the package: the rest of sources/ and any new module are owned from their
@@ -330,6 +336,7 @@ RULES = FEATURES + CROSS_CUTTING
 # runner keeps its unit tests in tests.rs files for this reason, not in inline `mod tests` blocks.
 TEST_FILES = [
     r"^tests/test_[^/]*\.py$",
+    r"^examples/[^/]+/tests/(.*/)?test_[^/]*\.py$",
     r"(^|/)[^/]*\.(test|spec)\.[^/]+$",
     r"^runner/src/(.+/)?tests\.rs$",
     r"^runner/tests/",

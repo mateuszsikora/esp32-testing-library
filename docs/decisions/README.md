@@ -73,6 +73,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [nmea_reader is tested through the gnss fixture](firmware.md#nmea_reader-is-tested-through-the-gnss-fixture) | `firmware.md` | decided (#16) |
 | [gpio_echo reads RI and drives PWRKEY, on the LilyGO profile](firmware.md#gpio_echo-reads-ri-and-drives-pwrkey-on-the-lilygo-profile) | `firmware.md` | decided (#24) |
 | [The SD card is validated on ESP-IDF's sdspi example, unmodified](firmware.md#the-sd-card-is-validated-on-esp-idfs-sdspi-example-unmodified) | `firmware.md` | decided (#32) |
+| [Examples share the pinned builder and have their own assembly profiles](firmware.md#examples-share-the-pinned-builder-and-have-their-own-assembly-profiles) | `firmware.md` | decided (#71) |
 
 ## The esp32tl package and its pytest plugin
 
@@ -185,6 +186,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [pppos_client is fetched by pinned commit and checksum](harness.md#pppos_client-is-fetched-by-pinned-commit-and-checksum) | `harness.md` | decided (#30) |
 | [Peer MRU limits TCP segmentation and oversized UDP replies are dropped](harness.md#peer-mru-limits-tcp-segmentation-and-oversized-udp-replies-are-dropped) | `harness.md` | decided (#30) |
 | [Anonymous MQTT clients get deterministic distinct identifiers](harness.md#anonymous-mqtt-clients-get-deterministic-distinct-identifiers) | `harness.md` | decided (#30) |
+| [Output handles provide live named conditions without changing GPIO ownership](harness.md#output-handles-provide-live-named-conditions-without-changing-gpio-ownership) | `harness.md` | decided (#71) |
 
 ## The runner crate and esp32sim
 

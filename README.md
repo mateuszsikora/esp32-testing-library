@@ -22,6 +22,9 @@ mtools for the SD card tests and, for the first run, Docker:
 [the development guide](https://github.com/mateuszsikora/esp32-testing-library/blob/main/docs/guides/development.md#requirements)
 says what each is for.
 
+The [runnable examples](docs/features/examples-user.md) show complete firmware with readable
+tests, starting with a [GPS alarm clock](examples/gps_alarm_clock/).
+
 ## Writing a test
 
 ```python

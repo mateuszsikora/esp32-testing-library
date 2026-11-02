@@ -3,7 +3,7 @@ firmware drives. The `lines` fixture is the one of every line set of the profile
 
 import threading
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
 from esp32tl.boards import Line
@@ -28,6 +28,96 @@ class LineEvent:
     pin: int
     by: Literal["firmware", "test", "model"]
     level: int | None
+
+
+@dataclass(frozen=True)
+class OutputCondition:
+    """A live firmware-output condition, callable directly or passed to board.wait_until."""
+
+    output: "OutputLine"
+    on: bool
+
+    @property
+    def _level(self) -> int:
+        return self.output.active if self.on else 1 - self.output.active
+
+    def __call__(self) -> bool:
+        return self.output._lines.level(self.output.pin) == self._level
+
+    def __repr__(self) -> str:
+        state = "on" if self.on else "off"
+        return f"{self.output.name} is {state} (GPIO {self.output.pin}, level {self._level})"
+
+    def __bool__(self) -> bool:
+        raise TypeError("call the output condition with (), or pass it to board.wait_until")
+
+
+@dataclass(frozen=True)
+class OutputLine:
+    """A read-only view of one firmware output; creating it configures no GPIO."""
+
+    _lines: "Lines" = field(repr=False)
+    name: str
+    pin: int
+    active: int
+
+    @property
+    def is_on(self) -> OutputCondition:
+        """A condition for the active level; false while the firmware leaves it undriven."""
+        return OutputCondition(self, on=True)
+
+    @property
+    def is_off(self) -> OutputCondition:
+        """A condition for the inactive level; false while the firmware leaves it undriven."""
+        return OutputCondition(self, on=False)
+
+    def events(self) -> list[LineEvent]:
+        """This line's changes by firmware, test and model, on the board's clock."""
+        return [event for event in self._lines.events() if event.pin == self.pin]
+
+    def assert_on(self) -> None:
+        """Assert the current firmware output is active, without advancing time."""
+        self._assert_level(self._lines.level(self.pin), on=True, when="now")
+
+    def assert_off(self) -> None:
+        """Assert the current firmware output is inactive, without advancing time."""
+        self._assert_level(self._lines.level(self.pin), on=False, when="now")
+
+    def assert_stayed_on(self, *, since: Duration) -> None:
+        """Assert the output stayed active from `since` through now, including short pulses."""
+        self._assert_stayed(on=True, since=since)
+
+    def assert_stayed_off(self, *, since: Duration) -> None:
+        """Assert the output stayed inactive from `since` through now, including short pulses."""
+        self._assert_stayed(on=False, since=since)
+
+    def _assert_level(self, level: int | None, *, on: bool, when: str) -> None:
+        expected = self.active if on else 1 - self.active
+        if level != expected:
+            state = "on" if on else "off"
+            actual = "undriven/unknown" if level is None else f"level {level}"
+            raise AssertionError(
+                f"{self.name} expected {state} (GPIO {self.pin}, level {expected}) "
+                f"{when}; observed {actual}"
+            )
+
+    def _assert_stayed(self, *, on: bool, since: Duration) -> None:
+        if not isinstance(since, Duration):
+            raise TypeError("since must be a Duration on the board's clock")
+        now = Duration(self._lines._now())
+        if not 0 <= since.ns <= now.ns:
+            raise ValueError("since must be between zero and board.now")
+        events = [event for event in self.events() if event.by == "firmware"]
+        level = None
+        for event in events:
+            if event.t > since:
+                break
+            level = event.level
+        window = f"during [{since.seconds:g}, {now.seconds:g}] s"
+        self._assert_level(level, on=on, when=f"at {since.seconds:g} s {window}")
+        for event in events:
+            if since < event.t <= now:
+                self._assert_level(event.level, on=on, when=f"at {event.t.seconds:g} s {window}")
 
 
 class Lines(Interface):
@@ -125,6 +215,22 @@ class Lines(Interface):
         pin = self._pin(line)
         with self._lock:
             return self._levels.get(pin)
+
+    def output(self, line: int | str, *, active: int = 1) -> OutputLine:
+        """Observe one firmware output with named is_on/is_off conditions.
+
+        active=1 means high is on; active=0 means low is on. This polarity is explicit,
+        independent of any profile model's active field. Neither condition accepts an
+        undriven output. The name is validated now, before the test starts waiting.
+        """
+        pin = self._pin(line)
+        if isinstance(active, bool):
+            active = int(active)
+        if not isinstance(active, int):
+            raise TypeError(f"lines.output: active {active!r} is not 0 or 1")
+        if active not in (0, 1):
+            raise ValueError(f"lines.output: active {active!r} is not 0 or 1")
+        return OutputLine(self, self._names[pin], pin, active)
 
     def events(self) -> list[LineEvent]:
         """Every change on the lines so far, by either end, in the order of the board's time."""

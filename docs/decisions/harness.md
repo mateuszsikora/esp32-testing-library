@@ -1644,3 +1644,28 @@ CONNACK code 2 before closure. Explicitly repeating an ID still replaces its pri
 
 **Rejected:** treating every empty ID as the same client, which disconnects unrelated firmware
 connections and may emit their Wills; random IDs, which make otherwise identical tests differ.
+
+
+## Output handles provide live named conditions without changing GPIO ownership
+
+Status: decided (#71)
+
+`lines.output(line, active=1)` exposes `is_on` and `is_off` callable conditions on a read-only
+handle. Their representation names the line, desired state, pin and level, so the existing
+`board.wait_until` produces useful diagnostics without special handling. Both conditions are
+false while the firmware's output is undriven. Polarity is explicit: `active=0` means low is on.
+
+**Rejected:** treating an undriven output as off, which could make a test pass before firmware
+configured the pin; a separate clock or waiting API on the handle, which would duplicate the
+board's clock; and putting the GPS alarm's NVS schema into the library. Its unit-aware
+`configure_alarm` helper stays in the example.
+
+Current-state assertions and history assertions are explicit separate operations:
+`assert_on` / `assert_off` inspect now, while `assert_stayed_on(since=...)` /
+`assert_stayed_off(since=...)` inspect the starting state and all subsequent firmware events
+through now. They never advance the clock. Unknown states fail. At the starting timestamp the
+last reported state wins; subsequent events are all checked, including same-timestamp pulses.
+
+**Rejected:** polling to prove an output stayed off, which misses short pulses; silently
+accepting an unknown starting state, which hides unconfigured pins. The example's boot helper
+separately permits initial setup while still rejecting every active pulse.

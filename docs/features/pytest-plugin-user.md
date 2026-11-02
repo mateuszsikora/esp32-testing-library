@@ -299,6 +299,60 @@ def test_the_firmware_follows_ri_and_drives_pwrkey(board, lines, console):
 `NeverHappened`, `RunEnded`, `BoardOff` and `SourceError` are in `esp32tl.interfaces`, `LineEvent`
 in `esp32tl.interfaces.lines`.
 
+### Named output conditions
+
+`lines.output(line, active=1)` returns a read-only `OutputLine` for a profile line, named by
+its role or GPIO number. It observes what the firmware drives; it neither configures the chip
+nor drives the input. The default is high means on. Pass `active=0` for an active-low output;
+this is explicit test-side polarity, independent of the profile's model `active` field.
+
+```python
+buzzer = lines.output("alarm.buzzer")  # on the gps-alarm-clock profile
+board.power_on()
+board.wait_until(buzzer.is_on, within=seconds(2))
+buzzer.assert_on()
+```
+
+`is_on` and `is_off` are callable conditions, like `console.line(...)`. Pass the condition
+without parentheses to `board.wait_until`, or call it to check the current state without
+advancing time. Both return false while the firmware leaves the output undriven: unknown is
+not off. A condition reads the current level every time; it does not remember an earlier match.
+`assert buzzer.is_on` without `()` raises `TypeError: call the output condition with (), or
+pass it to board.wait_until`, rather than silently passing on the condition object's truthiness.
+
+The wait's log and `NeverHappened` message name the line, state, pin and level, for example
+`alarm.buzzer is on (GPIO 18, level 1) did not happen within 2 s`, followed by the time window.
+`buzzer.events()` returns only that line's events, retaining the same `LineEvent` fields and
+all three origins (`firmware`, `test`, `model`) as `lines.events()`. It can catch short pulses
+between waits. The handle also exposes `name`, `pin` and `active`.
+
+Use `buzzer.assert_on()` and `buzzer.assert_off()` for assertions about the current state.
+Failures name the line, GPIO, expected level and observed level (or `undriven/unknown`).
+They do not advance time. To check an entire interval, save its starting instant:
+
+```python
+board.wait_until(buzzer.is_off, within=seconds(2))
+off_since = board.now
+board.wait(seconds(3))
+buzzer.assert_stayed_off(since=off_since)
+```
+
+`assert_stayed_on(since=...)` and `assert_stayed_off(since=...)` inspect recorded firmware
+transitions through `board.now`, including pulses between waits. The starting state is the
+last firmware event at or before `since`; every subsequent transition up to and including
+`board.now` must match. Unknown or undriven states fail, including an unknown starting state.
+Events from test/model input writes do not count. These assertions neither wait nor drive GPIO.
+For example, a recovered pulse can still fail with
+`alarm.buzzer expected off (GPIO 18, level 0) at 2 s during [1, 4] s; observed level 1`.
+`since` must be a `Duration` on the board's clock between zero and `board.now` (inclusive).
+A wrong type raises `TypeError: since must be a Duration on the board's clock`; an out-of-range
+instant raises `ValueError: since must be between zero and board.now`.
+
+Names are checked when the handle is created, with the same errors as `lines.level`.
+An invalid polarity raises `ValueError: lines.output: active 2 is not 0 or 1`, or
+`TypeError: lines.output: active '1' is not 0 or 1` for a non-integer; booleans count as 0/1,
+as in `lines.drive`. Existing `drive`, `release`, `level` and `events` calls remain available.
+
 ### The modem fixture
 
 `modem` is the profile's `uart.modem`, available on `lilygo-t-a7670g-r2`. Select its model with

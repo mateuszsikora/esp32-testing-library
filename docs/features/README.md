@@ -11,8 +11,9 @@ templates.
 | `serial` backend: a real ESP32 through pytest-embedded, on the wall clock | [user](serial-backend-user.md) | [technical](serial-backend-technical.md) | `esp32tl/backends/serial.py`, `esp32tl/backends/__init__.py` |
 | `esp32tl` command | [user](cli-user.md) | | `esp32tl/cli.py`, `esp32tl/__init__.py` |
 | Runner: `esp32tl-runner`, esp32sim with the harness attached | [user](runner-user.md) | [technical](runner-technical.md) | `runner/src/`, `runner/Cargo.toml` |
+| Runnable examples | [user](examples-user.md) | [technical](examples-technical.md) | `examples/` |
 | Validation firmware and its container build | [user](validation-firmware-user.md) | [technical](validation-firmware-technical.md) | `firmware/` |
-| Board profiles: `esp32-devkitc`, `lilygo-t-a7670g-r2`, the capability declaration, the `board_profile` marker | [user](board-profiles-user.md) | [technical](board-profiles-technical.md) | `esp32tl/boards/` |
+| Board profiles: `esp32-devkitc`, `gps-alarm-clock`, `lilygo-t-a7670g-r2`, the capability declaration, the `board_profile` marker | [user](board-profiles-user.md) | [technical](board-profiles-technical.md) | `esp32tl/boards/` |
 | Link protocol between the runner and the harness: the runner's `--board` and the backend's `BoardLink` | | [protocol](../protocol.md) | `esp32tl/link/`, `runner/src/protocol.rs`, `runner/src/socket_board.rs` |
 | Recording format: the `.jsonl` files a replay reads | | [format](../recording-format.md) | `esp32tl/recording.py` |
 | Replay: a recording at the far end of an interface, `gnss.replay(path)` | [user](replay-user.md) | [technical](replay-technical.md) | `esp32tl/sources/replay.py` |
@@ -62,6 +63,7 @@ GitHub Action, a pre-commit hook or a Python dependency.
 | F20 | `^esp32tl/flash\.py$` | `^docs/features/flash-contents-` | Flash contents changed (partition table, NVS types and generation): update docs/features/flash-contents-*.md |
 | F21 | `^esp32tl/matching\.py$` | `^docs/features/matching-` | Matching engine changed (protocols, requests, timing): update docs/features/matching-*.md |
 | F22 | `^esp32tl/net/` | `^docs/features/network-` | Simulated network changed: update docs/features/network-*.md |
+| F24 | `^examples/` | `^docs/features/examples-` | Examples changed: update docs/features/examples-*.md |
 | C1 | `^\.github/workflows/` | `^docs/cicd\.md$` | CI workflow changed: update docs/cicd.md |
 | C2 | `^Makefile$` | `^docs/guides/development\.md$` | Makefile changed: update the make targets in docs/guides/development.md |
 | C3 | `^\.pre-commit-config\.yaml$` | `^docs/guides/development\.md$` | Pre-commit hooks changed: update docs/guides/development.md |

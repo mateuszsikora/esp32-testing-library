@@ -23,7 +23,7 @@ The test jobs then run only the runner and Python: they build nothing.
 
 | Job | Runs on | What it does |
 |---|---|---|
-| `firmware` | self-hosted Linux | `make firmware` once per content of `firmware/`, the workflow and the `Makefile`; fetches the ROM ELF once per revision of `scripts/fetch-rom-elf` |
+| `firmware` | self-hosted Linux | `make firmware examples` once per content of `firmware/`, `examples/`, the workflow and the `Makefile`; fetches the ROM ELF once per revision of `scripts/fetch-rom-elf` |
 | `runner` | self-hosted Linux; `macos-latest` only when the repository is public | `make build-runner test-runner`, once per content of `runner/` (its sources, its esp32sim pin, its toolchain), the workflow and the `Makefile` |
 | `test` | self-hosted Linux; `macos-latest` only when the repository is public; Python 3.11, 3.13, 3.14 | Unpacks the images and the runner, restores the ROM ELF, and runs pytest; builds nothing |
 | `determinism` | self-hosted Linux; Python 3.11 | Unpacks the images and the runner as `test` does, and runs `make determinism`: the determinism tests twice, the two runs compared |
@@ -66,7 +66,7 @@ is a new key too.
 
 | Cache entry | Key | Saved by | A miss in `test` |
 |---|---|---|---|
-| `build/ci/firmware.tar` | `firmware-` and the hash of `firmware/**`, `Makefile`, `.github/workflows/ci.yml` | `firmware` | Fails the job |
+| `build/ci/firmware.tar` | `firmware-` and the hash of `firmware/**`, `examples/**`, `Makefile`, `.github/workflows/ci.yml` | `firmware` | Fails the job |
 | `build/ci/runner.tar` | `runner-` and the hash of `runner/**`, `Makefile`, `.github/workflows/ci.yml`, then the runner's OS and architecture | `runner`, once per platform | Fails the job |
 | `.cache/esp-rom-elfs` | `rom-elf-` and the hash of `scripts/fetch-rom-elf` | `firmware` | No failure: `make rom-elf` downloads the ELF |
 
@@ -80,8 +80,8 @@ gh cache delete <key>
 
 ## `firmware`
 
-On a cache miss, it runs `make firmware` and packs into `build/ci/firmware.tar` only what
-pytest-embedded's `IdfApp` reads: the files at the top of each `firmware/<image>/build/`
+On a cache miss, it runs `make firmware examples` and packs into `build/ci/firmware.tar` only what
+pytest-embedded's `IdfApp` reads: the files at the top of each `firmware/<image>/build/` and `examples/<name>/build/`
 (`flasher_args.json`, the ELF, the binaries, `esp32tl-build.json`, `esp32tl-built`),
 `config/sdkconfig.json`, and the `.bin` and `.elf` files of `bootloader/` and `partition_table/`.
 The object files stay behind.
@@ -93,7 +93,7 @@ and the ELF it names. Each missing file is reported as `::error::<path> is missi
 and fails the job. The job then lists the tarball (`tar -tvf`), hit or miss.
 
 `firmware/build.sh` holds the ESP-IDF tag, the container digest and the project each image is built
-from, so a change to any of them, or to a project kept under `firmware/`, is a new key.
+from, so a change to any of them, or to a project kept under `firmware/` or `examples/`, is a new key.
 
 Last, it restores `.cache/esp-rom-elfs` and runs `make rom-elf`, so the ROM ELF is fetched once
 here rather than by all the test jobs at the same time. Timeout: 30 minutes.
@@ -165,3 +165,10 @@ for private repositories, so a red `docs` job does not stop a merge by itself.
 - [guides/development.md](guides/development.md): the make targets the jobs run.
 - [guides/testing.md](guides/testing.md): the test suite the `test` jobs run.
 - [implementation-plan.md](implementation-plan.md): M0 and the test strategy CI implements.
+
+## Examples
+
+Every `examples/*/CMakeLists.txt` project is built in the firmware job and packed with the
+validation images. `examples/**` participates in its cache key. pytest's default collection
+includes `examples/`, so every `test` matrix member runs their tests using the restored images.
+Adding a project and `tests/test_*.py` requires no new CI job or explicit example list.

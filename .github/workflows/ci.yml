@@ -55,10 +55,10 @@ jobs:
 
       # firmware/build.sh holds the IDF tag, the container digest and the
       # project each image is built from, so a change to any of them, or to a
-      # project kept under firmware/, is a new key.
+      # project kept under firmware/ or examples/, is a new key.
       - id: key
         run: |
-          echo "key=firmware-${{ hashFiles('firmware/**', 'Makefile', '.github/workflows/ci.yml') }}" >>"$GITHUB_OUTPUT"
+          echo "key=firmware-${{ hashFiles('firmware/**', 'examples/**', 'Makefile', '.github/workflows/ci.yml') }}" >>"$GITHUB_OUTPUT"
           echo "rom-elf-key=rom-elf-${{ hashFiles('scripts/fetch-rom-elf') }}" >>"$GITHUB_OUTPUT"
 
       - id: cache
@@ -74,18 +74,19 @@ jobs:
       # behind. Before the tarball is cached for good, every image is checked
       # for the files the tests need: the flash images flasher_args.json names
       # and the ELF project_description.json names among them.
-      - name: Build the validation images
+      - name: Build the validation images and examples
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
-          make firmware
+          make firmware examples
           mkdir -p build/ci
           {
-            find firmware/*/build -maxdepth 1 -type f
-            find firmware/*/build/config -maxdepth 1 -name sdkconfig.json
-            find firmware/*/build/bootloader firmware/*/build/partition_table -maxdepth 1 \
+            find firmware/*/build examples/*/build -maxdepth 1 -type f
+            find firmware/*/build/config examples/*/build/config -maxdepth 1 -name sdkconfig.json
+            find firmware/*/build/bootloader firmware/*/build/partition_table \
+              examples/*/build/bootloader examples/*/build/partition_table -maxdepth 1 \
               -type f \( -name '*.bin' -o -name '*.elf' \)
           } >build/ci/firmware.list
-          python3 - build/ci/firmware.list firmware/*/build <<'EOF'
+          python3 - build/ci/firmware.list firmware/*/build examples/*/build <<'EOF'
           import json, sys
           from pathlib import Path
 
@@ -198,7 +199,7 @@ jobs:
           path: .cache/esp-rom-elfs
           key: ${{ needs.firmware.outputs.rom-elf-key }}
 
-      # The images land in firmware/<image>/build/, where
+      # The images land in firmware/<image>/build/ and examples/<name>/build/, where
       # test_firmware_images.py reads them; esp32tl-built marks them finished.
       - name: Unpack the firmware and the runner
         run: |

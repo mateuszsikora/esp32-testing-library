@@ -256,3 +256,16 @@ block reads and writes, CRC and DMA.
 **Rejected:** a firmware of this repository's for the card, because the plan validates on public
 firmware and the example already exercises what the card has to answer; and other pins in its
 `sdkconfig.defaults`, because the example would then not be unmodified.
+
+## Examples share the pinned builder and have their own assembly profiles
+
+Status: decided (#71)
+
+`firmware/build.sh --examples` discovers projects in `examples/` and uses the validation
+builder's container, provenance and completion checks. CI builds and caches both sets together.
+The GPS alarm reuses `nmea_reader`'s parser and has a `gps-alarm-clock` profile for its devkit,
+GNSS and buzzer assembly.
+
+**Rejected:** another container pin and build script for examples, which could drift from the
+validation builds; repurposing the LilyGO modem's PWRKEY as a buzzer, which misrepresents the
+wiring; and adding a buzzer to the generic devkit profile, which has no such peripheral.

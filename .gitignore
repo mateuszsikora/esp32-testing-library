@@ -28,3 +28,8 @@ tools/*/sdkconfig.old
 tools/*/dependencies.lock
 tools/*/managed_components/
 firmware/.esp-protocols-*/
+
+# Example ESP-IDF project output
+examples/**/sdkconfig
+examples/**/sdkconfig.old
+examples/**/managed_components/

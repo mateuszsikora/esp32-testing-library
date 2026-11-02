@@ -29,6 +29,7 @@ paths, names, defaults and messages quoted verbatim, and `TODO(owner): …` wher
 | `runner/src/`, except the protocol files | `docs/features/runner-user.md` and/or `-technical.md` (F6) |
 | `runner/Cargo.toml` (esp32sim pin, profiles) | `docs/features/runner-technical.md`; a pin bump also re-checks what `docs/protocol.md` cites (F7) |
 | `esp32tl/link/`, `runner/src/protocol.rs`, `runner/src/socket_board.rs` | `docs/protocol.md`, and its version if the wire changes (F8, F9, F10) |
+| `examples/` | `docs/features/examples-user.md` and/or `-technical.md` (F24) |
 | `firmware/` | `docs/features/validation-firmware-user.md` and/or `-technical.md` (F11) |
 | `esp32tl/boards/` | `docs/features/board-profiles-user.md` and/or `-technical.md` (F13) |
 | `esp32tl/recording.py` | `docs/recording-format.md`, and its version if the format changes (F14) |

@@ -3,7 +3,7 @@ PYTHON ?= python3
 override VENV := .venv
 BIN := $(VENV)/bin
 
-.PHONY: setup build-runner rom-elf test-runner firmware test determinism lint docs-check hooks clean
+.PHONY: setup build-runner rom-elf test-runner firmware examples test determinism lint docs-check hooks clean
 
 # Python environment, the runner and the ROM ELF. `make test` runs this first,
 # so a clean checkout needs one command.
@@ -57,7 +57,15 @@ FIRMWARE_IMAGES := hello_world nmea_reader gpio_echo sdspi modem_at nvs_reader p
 firmware/%/build/esp32tl-built:
 	FIRMWARE_OUT= firmware/build.sh $*
 
-test: setup test-runner $(FIRMWARE_IMAGES:%=firmware/%/build/esp32tl-built)
+# Every examples/<name>/CMakeLists.txt is a project, built by the same pinned builder.
+EXAMPLE_PROJECTS := $(patsubst examples/%/CMakeLists.txt,%,$(wildcard examples/*/CMakeLists.txt))
+examples:
+	FIRMWARE_OUT= firmware/build.sh --examples
+
+examples/%/build/esp32tl-built:
+	FIRMWARE_OUT= firmware/build.sh --examples $*
+
+test: setup test-runner $(FIRMWARE_IMAGES:%=firmware/%/build/esp32tl-built) $(EXAMPLE_PROJECTS:%=examples/%/build/esp32tl-built)
 	$(BIN)/pytest
 
 # The determinism job (plan §6): tests/test_determinism.py run twice, and the

@@ -214,3 +214,10 @@ for any of those jobs does the same:
 - Agent tooling (`.claude/**`, `.agents/**`, skills) restates normative files (`CONTRIBUTING.md`,
   this guide, `AGENTS.md`) and goes stale silently. When a skill and a normative file disagree,
   the skill is wrong.
+
+### Example ownership
+
+F24 owns `examples/` and requires `docs/features/examples-user.md` or
+`docs/features/examples-technical.md` in the same change. Test-only edits under
+`examples/<name>/tests/` (`test_*.py`, including nested directories) are exempt, as root test
+files are. Assembly profiles under `esp32tl/boards/` still require their F13 documentation.
