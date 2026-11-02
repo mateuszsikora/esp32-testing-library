@@ -124,6 +124,18 @@ def test_sdspi_takes_the_devkit_sd_card_slot_from_sdkconfig() -> None:
     assert config["EXAMPLE_FORMAT_SD_CARD"] is False
 
 
+def test_nvs_reader_has_a_writable_nvs_partition() -> None:
+    from esp32tl.flash import partitions
+
+    app = idf_app("nvs_reader")
+    assert app.target == "esp32"
+    table = next(
+        Path(f.file_path) for f in app.flash_files if f.file_path.endswith("partition-table.bin")
+    )
+    nvs = partitions(table.read_bytes())["nvs"]
+    assert (nvs.type, nvs.subtype, nvs.offset, nvs.size, nvs.flags) == (1, 2, 0x9000, 0x6000, 0)
+
+
 def test_pppos_client_has_the_classic_layout_and_lilygo_route() -> None:
     app = idf_app("pppos_client")
     build = FIRMWARE / "pppos_client" / "build"

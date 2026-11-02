@@ -1,6 +1,6 @@
 # Replay: how it works
 
-The replay is `Replay` in `esp32tl/sources/replay.py`, plan §4.4's stream case. It reads nothing
+The replay is `Replay` in `esp32tl/sources/replay.py`, plan §4.4. It reads nothing
 itself: it takes a `Recording` from `esp32tl/recording.py`
 ([recording format](../recording-format.md)). The `Uart` interface of `esp32tl/interfaces/uart.py`
 puts it on the link, and the `gnss` fixture hands that interface to the test
@@ -12,7 +12,7 @@ puts it on the link, and the `gnss` fixture hands that interface to the test
 1. **`board` fixture.** It passes the test file's directory to `Esp32Sim`, which makes a `Uart`
    for every UART route of the profile, all on the link and without a source
    ([esp32sim backend](esp32sim-backend-technical.md#data-flow)).
-2. **`gnss.replay(path)`**, in the test body, before `board.power_on()`: `Uart.replay` refuses a
+2. **`gnss.replay(path, protocol=None)`**, in the test body, before `board.power_on()`: `Uart.replay` refuses a
    UART that has a source already (`SourceError`), then calls
    `asked(Request(name, source="replay"))`, through which the backend refuses a source after
    power-on or one no backend gives (`SourceError`), and skips the test when its own capability
@@ -20,25 +20,17 @@ puts it on the link, and the `gnss` fixture hands that interface to the test
    profiles](board-profiles-technical.md#data-flow)). It refuses a file a route is tapped into,
    which `Uart.files` holds (`SourceError`), but not one another route replays, then reads
    `directory / path` with `recording.read`, builds
-   `Replay(recording, self.name, self.clock, name=str(path))`, and gives it: under a lock, a UART
+   `Replay(recording, self.name, self.clock, name=str(path), protocol=protocol)`, and gives it: under a lock, a UART
    that has a source already raises `SourceError`; otherwise `Uart.source` is set,
    `Uart.source_kind` is `"replay"` and `Uart.source_detail` the path as the test gave it, and the
    run's log, when the UART has one, gets `{name}.replay({path!r})` at 0.
-3. **`Replay.__init__`** refuses, in this order, a recording of another interface, one with a
-   clock other than `clock` anywhere (in its header, an event or a clock switch), one with an
-   `out` event, and one whose `end` is not `hold` (`ReplayError`). Then it keeps the events as
-   `(t, data)` pairs, in order, in `Replay.events`, and `sent = 0`.
-4. **The link's turns.** From `board.power_on()`, `BoardLink` calls the `Uart` from its thread, which hands each call to
-   its source ([link protocol](../protocol.md#7-latency-is-bound-to-the-source)):
-   - `poll(now)` returns every event from `sent` on whose `t` is at or before `now`, and moves
-     `sent` past them. Events of one time go out together, in recorded order.
-   - `quiet_until()` is the `t` of `events[sent]`, `None` once all are sent. After `poll(now)`
-     it is later than `now`, so the runner's next block point is the next event's time, or the
-     end of the test's wait when that is sooner: each event goes out in the turn at its own `t`,
-     stamped `t`.
-   - `latency()` is `None`: a stream answers no request (protocol §7), so the firmware's
-     transmissions never bring a turn forward.
-   - `receive(t, data)` returns nothing.
+3. **`Replay.__init__`** refuses a recording of another interface or one with another clock
+   anywhere in its header, events or clock switches (`ReplayError`). It then builds `Matching`
+   with the optional `protocol`, wrapping framing and loop errors as `{name}: {error}`.
+4. **The link's turns.** `Uart` delegates to the matching engine's `receive`, `poll`,
+   `quiet_until` and `latency`. `receive` assembles commands and queues answers; `poll` emits
+   due answers and unprompted events. `sent` counts all emitted events. See
+   [matching-technical.md](matching-technical.md) for grouping, prompts, timing and end policies.
 
    `BoardLink` turns each output into a `uart_rx` on the wire's RX pin at its baud, the board
    profile's `[uart.gnss]` `rx` and `baud`; the runner paces the bytes (protocol §6, rule 5). On
@@ -54,7 +46,7 @@ have it. The cost is one turn per distinct event time
 
 | Name | What |
 |---|---|
-| `Replay(recording, interface, clock, name="")` | The stream replay of `recording` on `interface`, whose times are on `clock`; `name` is the recording in the errors, `the recording` when empty. Attributes `events` (the `(t, data)` pairs) and `sent` |
+| `Replay(recording, interface, clock, name="", *, protocol=None)` | The replay of `recording` on `interface`, whose times are on `clock`; `name` is the recording in the errors, `the recording` when empty. Attributes `events` (unprompted `(t, data)` pairs), `sent`, `unseen` and `unseen_count` |
 | `Replay.receive(t, data)`, `poll(now)`, `quiet_until()`, `latency()` | The source's side of the `Interface` methods of `esp32tl/link/boardlink.py`, without the wire |
 | `ReplayError` | A recording that cannot be replayed there |
 | `Output` | `tuple[int, bytes]`: from `t`, these bytes |
@@ -67,8 +59,8 @@ have it. The cost is one turn per distinct event time
 |---|---|
 | `{name} is a recording of {header.interface}, not of {interface}` | Another interface |
 | `{name} has times on the {clocks} clock, and {interface} runs on the {clock} clock: replaying it would compare times across clocks` | `{clocks}`: every clock of the header, the events and the clock switches, sorted, joined by ` and `; refused unless it is `clock` alone, so a recording that leaves the clock and comes back is refused too |
-| `{name} has events out of the ESP32, the first at {t} ns: it holds requests, and replay answers none yet, only streams with events in` | An `out` event |
-| `{name} ends with {end}: replay holds at the end only` | `end: loop` |
+
+Framing errors and zero-duration loops are listed in [matching-technical.md](matching-technical.md).
 
 An event stamped before the turn it is polled in cannot come from a `Replay` the link drives,
 since its `quiet_until` stops the runner at the next event; were it to, `BoardLink` would fail the
@@ -115,6 +107,5 @@ routes that a test can replay into.
 
 - [Replay](replay-user.md)
 - [Recording format](../recording-format.md)
-- [Plan section 4.4](../implementation-plan.md#44-matching-engine), the matching engine whose
-  stream case this is
+- [Plan section 4.4](../implementation-plan.md#44-matching-engine), the matching engine
 - [Link protocol, section 7](../protocol.md#7-latency-is-bound-to-the-source)

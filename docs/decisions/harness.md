@@ -493,7 +493,7 @@ The backend finds the runner in the checkout, so from a wheel only `ESP32TL_RUNN
 
 ## Replaying requests, looping and wall-clock recordings is postponed
 
-Status: postponed (#20)
+Status: superseded (#20)
 
 The replay replays streams only, and refuses the rest with a `ReplayError`. A recording with `out`
 events holds requests, whose answers need the matching engine of plan §4.4 (#20). `end: loop` on a
@@ -1358,6 +1358,108 @@ notifications, realistic boot/shutdown delays (including `Toff-on` and `Ton(uart
 APN/operator configuration wait until validation firmware needs them. Commands accepted without
 simulating their settings and unknown fallbacks are documented, so they do not imply a complete
 cellular modem.
+
+## NVS generation treats every key and namespace literally
+
+Status: decided (#70)
+
+`board.nvs()` uses `esp-idf-nvs-partition-gen`'s `nvs_open` and the `NVS.write_namespace` and
+`NVS.write_entry` methods directly. The dependency is pinned exactly; upgrades must verify
+literal names, actual values, the complete entry set and deterministic image bytes. The API
+takes the usable size excluding the final reserved page and adds that page when the writer
+closes.
+
+The adapter validates values and passes strings as `string`, bytes as `binary` and integers
+with their explicit width directly to the writer, without CSV or temporary files. This
+preserves CRLF, multiline certificates and lines beginning with `#`, and supports blobs larger
+than 64 KiB whenever the NVS partition has room. A successful second call for a partition
+replaces its contents; failed validation or generation leaves the preceding image intact.
+
+Names reach the pinned generator as `_NvsKey`, a private `str` subclass whose length is its
+UTF-8 byte count. Version 0.3.0's primitive and variable-length writers use `len(key)` to size
+a bytearray slice receiving `key.encode()`. Ordinary Unicode strings can enlarge the entry
+header, corrupt neighbours and extend the final page. The adapter preserves the original
+text, UTF-8 bytes and namespace identity while making that slice length correct. Output-size
+validation remains mandatory; tests independently check entry contents and CRCs at page
+boundaries.
+
+**Rejected:** the generator's CLI and module-level `write_entry` wrapper. In both 0.1.9 and
+0.3.0 they interpret names such as `sta.ssid` and `sta.pswd` even in a namespace called `config`,
+write temporary file paths instead of string contents, and add unrequested Wi-Fi keys. They
+also interpret namespace names as keys before checking the CSV row type. Inlining strings
+would not prevent the extra keys, and the CLI filters comment-looking lines before CSV
+parsing. An open dependency range could silently restore these transformations. Implicitly
+merging successive calls is also rejected: each call describes a whole partition and must not
+retain keys absent from the new configuration.
+
+Retaining intermediate CSV is rejected: its default 131072-character field limit rejects a
+hex-encoded blob above 64 KiB even when it fits in NVS. Raising a process-global CSV limit
+would only preserve unnecessary serialisation and shared mutable state. Rejecting non-ASCII
+names would narrow the promised UTF-8 API; copying the generator's page encoder or patching
+its global classes would carry more code and affect other callers. The length adapter is
+local to the names passed to this writer and is rechecked when upgrading the pinned package.
+
+## Request answers wrap independently of the unprompted timeline
+
+Status: decided (#20)
+
+The matching engine keeps one sequence of occurrences per normalised request, including empty
+answers for recorded timeouts. That sequence always wraps; `end: hold` does not disable commands
+once the unprompted timeline is exhausted. `loop` repeats only the unprompted events (those before
+the first complete request), with a period equal to the last recording line's time, measured from
+zero. There is no invented inter-cycle pause or new format field. An event at zero in the next
+cycle follows the preceding cycle's final event at the same instant. A nonempty, zero-duration
+unprompted loop is refused; an empty loop stays silent.
+
+The format has no correlation metadata: every input after a request and before the next complete
+request belongs to that request. The engine does not guess which of those bytes are unsolicited
+notifications, or which response belongs to an earlier pipelined request. Such traffic needs a
+protocol model or a recording split appropriately for this rule.
+
+## Replay detects protocols from requests and leaves pure streams passive
+
+Status: decided (#20)
+
+Requests beginning with `$` or UBX sync use the combined GNSS framer (PMTK lines and UBX frames
+on one wire); other requests use AT. `protocol=` overrides that choice, including for recordings
+with no requests. A pure stream without that argument retains `latency=None` and ignores firmware
+transmissions. An explicitly configured protocol answers unseen requests even without examples;
+when there is no recorded answer delay its latency is zero, since no positive bound is known.
+Wall-clock recordings still cannot replay on an emulated-clock route (#27).
+
+The final request fragment supplies its timestamp, both while compiling and receiving. Starting
+at the first byte could put a short answer before the request's terminator arrives. UBX framing
+uses its length field; payload and checksum bytes remain opaque, permitting fault recordings.
+AT case and whitespace normalisation preserves quoted values and prompted Ctrl-Z payloads.
+
+
+## AT separators end before the response and prompts belong at line boundaries
+
+Status: decided (#20)
+
+A CR-terminated command consumes one optional LF, including in a separate outgoing chunk before
+the response. The first response byte closes this separator window. Stripping whitespace from
+prompted payloads was rejected: a payload's leading LF, spaces and CR/LF must stay literal.
+A LF sent after the response starts is therefore data, not a delayed command separator.
+
+A prompt must begin the response or follow CR/LF and be its current suffix. Every response
+fragment recomputes that candidate until payload bytes start; permanently latching a temporary
+suffix would make framing depend on chunk boundaries. Once the payload starts, Ctrl-Z framing
+stays active until it completes. The same framer handles the recording and live wire.
+
+## Unseen replay requests retain raw occurrences alongside normalised counts
+
+Status: decided (#20)
+
+The normalised `unseen` counter remains the summary. `unseen_events` additionally stores every
+unknown request's completion time and full raw frame, including repeats and silent fallbacks.
+Text and JSON reports expose both representations. The list is independent of the rolling wire
+log and retained for the whole run, with the memory and report-size cost documented.
+
+**Rejected:** retaining only counters, which merges distinct wire spellings and loses timing;
+recovering occurrences from the rolling log, which can discard precisely the request needed
+for diagnosis. Existing summary fields stay intact for tests and report consumers.
+
 
 
 ## The network is selected explicitly, and resets with its modem

@@ -428,43 +428,104 @@ that references to its number keep their meaning.
 78. A source selection that loses to another source must leave no GPIO ownership behind.
     `tests/test_modem_model.py::test_a_model_selection_that_loses_to_replay_does_not_claim_ri`
 
+## Flash contents
+
+79. An NVS partition is selected by name from the build's own table, and its test image is flashed
+    after the build's files at that partition's offset. A later call replaces the whole image.
+    `tests/test_flash.py::test_nvs_flashes_at_named_partition_after_build_and_replaces_previous_call`
+80. NVS integers have explicit widths and checked ranges; a bare integer or boolean is refused.
+    `tests/test_flash.py::test_integer_widths_check_their_range`,
+    `tests/test_flash.py::test_nvs_requires_a_type_for_integers_and_refuses_other_values`
+81. The firmware reads exactly the NVS types and values the test supplies before power-on.
+    Strings retain their UTF-8 bytes, including CRLF and lines beginning with `#`. Key and
+    namespace names have no special meaning: no entries are changed or added for Wi-Fi-looking
+    names, and identical inputs produce identical images.
+    `tests/test_nvs_reader.py::test_firmware_reads_typed_values`,
+    `tests/test_flash.py::test_real_generator_preserves_string_bytes_and_has_exact_partition_size`,
+    `tests/test_flash.py::test_nvs_names_do_not_change_values_or_add_keys`
+82. NVS cannot be supplied after power-on. A passing test that supplies NVS without powering on
+    fails teardown; it ran no firmware.
+    `tests/test_flash.py::test_nvs_refuses_unknown_wrong_type_encrypted_and_late_calls`,
+    `tests/test_pytest_plugin.py::test_nvs_without_power_on_fails_teardown`
+83. Binary NVS values are limited by the format and partition capacity, not by a CSV field
+    limit. Blobs above 64 KiB are reconstructed unchanged from the generated chunks.
+    `tests/test_flash.py::test_large_blob_fits_without_a_csv_field_limit`
+84. UTF-8 keys and namespaces consume their encoded byte count in fixed-size NVS headers,
+    including the final slot of a page. Entry contents and CRCs remain correct, and the final
+    image must always match the partition's size.
+    `tests/test_flash.py::test_utf8_key_at_page_boundary_preserves_entries`,
+    `tests/test_flash.py::test_utf8_namespace_at_page_boundary_preserves_entries`,
+    `tests/test_flash.py::test_generator_output_must_match_partition_size`
+
+## Request matching
+
+85. Each request cycles through its recorded occurrences independently, including silent ones;
+    `hold` and `loop` apply to unprompted events and do not stop command matching.
+    `tests/test_matching.py::test_answers_wrap_per_request_including_recorded_timeouts`,
+    `tests/test_matching.py::test_end_policy_does_not_discard_pending_answers_or_stop_matching`,
+    `tests/test_matching.py::test_loop_repeats_unprompted_events_and_hold_stops`
+86. Request time is the final fragment's timestamp. The minimum recorded answer delay bounds
+    latency, and every pending answer, including unknown-command fallbacks, bounds quiet_until.
+    `tests/test_matching.py::test_request_time_is_its_final_fragment_and_chunk_boundaries_do_not_matter`,
+    `tests/test_matching.py::test_quiet_until_includes_stream_unknown_and_every_deferred_answer`
+87. An unknown request is counted and listed; its default PMTK reply uses flag 1 and its UBX NAK
+    identifies the request's class and ID. Protocol framing works across UART chunks.
+    `tests/test_matching.py::test_pmtk_fallback_has_the_command_flag_one_and_checksum`,
+    `tests/test_matching.py::test_ubx_is_length_framed_even_with_terminators_in_payload_and_naks_class_id`,
+    `tests/test_replay.py::test_unseen_requests_are_in_the_backend_report_and_json_properties`,
+    `tests/test_replay.py::test_gnss_replay_answers_configuration_commands_through_the_link`
+
+88. AT prompt recognition does not depend on response chunk boundaries. Command CR/CRLF
+    separators, including a split CRLF before the response, never become prompted payload
+    bytes; actual leading payload whitespace is preserved.
+    `tests/test_matching.py::test_prompt_like_text_does_not_depend_on_response_fragmentation`,
+    `tests/test_matching.py::test_at_command_endings_do_not_change_prompted_payload_bytes`,
+    `tests/test_matching.py::test_at_prompt_switches_next_request_to_opaque_ctrl_z_payload`
+
+89. Every unknown replay request retains its completion time and raw frame in arrival order,
+    including repeated normalised keys and silent fallbacks. Known requests are excluded. The
+    text and JSON reports preserve the full history and bytes after the wire log rolls over;
+    the existing normalised counts remain available.
+    `tests/test_matching.py::test_unseen_history_retains_raw_occurrences_and_completion_times_without_a_reply`,
+    `tests/test_replay.py::test_unseen_requests_are_in_the_backend_report_and_json_properties`
+
 
 ## Simulated network
 
-79. PPP delivers IPv4 only after both sides acknowledge LCP and IPCP; acknowledgments must match
+90. PPP delivers IPv4 only after both sides acknowledge LCP and IPCP; acknowledgments must match
     the pending request, including after termination and renegotiation. Framing survives arbitrary byte splits, escaping and compressed headers.
     `tests/test_net_ppp.py::test_ack_must_match_request_and_ipcp_waits_for_lcp`,
     `tests/test_net_ppp.py::test_fcs_reference_and_compressed_frames_at_every_split`,
     `tests/test_net_ppp.py::test_renegotiation_and_termination_invalidate_old_acknowledgments`
-80. TCP honors the peer's receive window and MSS, delivers a retransmitted payload once, wraps
+91. TCP honors the peer's receive window and MSS, delivers a retransmitted payload once, wraps
     sequence numbers, and notifies connection loss once.
     `tests/test_net_ip.py::test_tcp_handshake_data_duplicate_flow_control_fin_and_wrap`,
     `tests/test_net_ip.py::test_reset_notifies_once_and_unbound_port_refuses`
-81. MQTT Will is emitted once on connection loss at the loss time, never after DISCONNECT.
+92. MQTT Will is emitted once on connection loss at the loss time, never after DISCONNECT.
     Keepalive deadlines use the board clock, and wildcard filters respect `$` topics.
     `tests/test_net_mqtt.py::test_will_on_transport_loss_once_and_never_on_disconnect`,
     `tests/test_net_mqtt.py::test_keepalive_expires_on_the_board_clock`,
     `tests/test_net_mqtt.py::test_topic_filters`
-82. NTP returns world UTC plus emulated time; TLS verifies the per-test CA and named server and
+93. NTP returns world UTC plus emulated time; TLS verifies the per-test CA and named server and
     exposes application plaintext in its transcript.
     `tests/test_net_services.py::test_ntp_world_time_fraction_origin_and_era`,
     `tests/test_net_tls.py::test_tls_mqtt_and_transcript`,
     `tests/test_net_tls.py::test_tls_rejects_unknown_ca_or_wrong_hostname`
-83. Only a modem with a simulated network treats receive overflow as fatal; binary pluses do not
+94. Only a modem with a simulated network treats receive overflow as fatal; binary pluses do not
     escape data mode without idle guards. Losing registration or supply resets the network.
     `tests/test_modem_model.py::test_only_a_network_route_fails_on_receive_overflow`,
     `tests/test_modem_model.py::test_network_selection_guarded_escape_and_loss_reset`
-84. TLS determinism ignores times only after handshake starts and compares plaintext streams;
+95. TLS determinism ignores times only after handshake starts and compares plaintext streams;
     changed plaintext or pre-handshake times still fail.
     `tests/test_check_determinism.py::test_network_tls_compares_plaintext_without_times_only_after_handshake`
 
-85. Anonymous MQTT clients have distinct deterministic IDs before Will construction or takeover;
+96. Anonymous MQTT clients have distinct deterministic IDs before Will construction or takeover;
     they do not disconnect each other or collide with IDs already supplied by named clients.
     Empty IDs without CleanSession receive CONNACK code 2 and close.
     `tests/test_net_mqtt.py::test_anonymous_clients_have_independent_ids_and_wills`,
     `tests/test_net_mqtt.py::test_anonymous_id_skips_an_id_already_supplied_by_a_client`,
     `tests/test_net_mqtt.py::test_empty_id_without_clean_session_gets_identifier_rejected`
-86. Acknowledged PPP MRU bounds every outgoing IPv4 packet. TCP preserves payload bytes while
+97. Acknowledged PPP MRU bounds every outgoing IPv4 packet. TCP preserves payload bytes while
     respecting MRU, MSS and the receive window; oversized UDP replies are logged and dropped.
     Renegotiation and redial cannot inherit the previous MRU, and unsupported small values are
     NAKed rather than acknowledged.

@@ -45,7 +45,7 @@ from pytest_embedded.log import DuplicateStdoutPopen, MessageQueue
 from pytest_embedded.utils import Meta, remove_asci_color_code
 from pytest_embedded_idf.app import IdfApp
 
-from esp32tl import recording
+from esp32tl import flash, recording
 from esp32tl.backends.clock import HeldClock, nanoseconds, seconds
 from esp32tl.boards import BoardProfile, capabilities
 from esp32tl.boards.capabilities import CapabilityError, Request
@@ -58,7 +58,8 @@ from esp32tl.interfaces.sd_card import SdCard
 from esp32tl.interfaces.uart import Uart
 from esp32tl.link.boardlink import BoardLink, Wire
 from esp32tl.net import Internet
-from esp32tl.report import RunLog
+from esp32tl.report import RunLog, board_time, shown
+from esp32tl.sources.replay import Replay
 from esp32tl.tap import sha256
 from esp32tl.units import Duration
 
@@ -147,19 +148,23 @@ def runner_command(
     held: bool = False,
     psram_mb: int | None = None,
     sd_card: SdCard | None = None,
+    extra_flash: tuple[tuple[int, Path], ...] = (),
 ) -> list[str]:
     """The runner's command line: every file of `flasher_args.json` at its offset, its board the
     socket at `link`. A `held` run is on the test's clock: its console also goes on the link, and
     the runner waits for the harness's turn for as long as it takes. `psram_mb`, the board
     profile's, is the PSRAM the runner gives the chip; `None`, a profile that does not say, leaves
     the runner's default. An `sd_card` with a card in it puts the runner's card model on the
-    slot's pins, holding the card's image."""
+    slot's pins, holding the card's image. `extra_flash` overrides the build's flash contents
+    at the supplied offsets, in order."""
     command = [str(runner), "--chip", "esp32", "--rom", str(rom), "--max-seconds", str(max_seconds)]
     if held:
         command += ["--console", "both", "--peer-timeout", "0"]
     command += ["--board", f"socket:{link}"]
     for file in app.flash_files:
         command += ["--flash-at", f"{file.offset:#x}={file.file_path}"]
+    for offset, image in extra_flash:
+        command += ["--flash-at", f"{offset:#x}={image}"]
     if psram_mb is not None:
         command += ["--psram-mb", str(psram_mb)]
     if sd_card is not None and sd_card.image is not None:
@@ -273,6 +278,7 @@ class Esp32Sim:
         self._meta = meta
         self._skip = skip or refuse
         self.app = load_app(app_path)
+        self._nvs: dict[str, tuple[int, Path]] = {}
         self._runner, self._rom = runner_path(), rom_path()
         # What the guest printed on its console, as the link brings it, and cut into lines.
         self.console_output = bytearray()
@@ -404,10 +410,41 @@ class Esp32Sim:
         if reason is not None:
             self._skip(f"{self.name}: {reason}")
 
+    def nvs(self, namespaces: flash.Namespaces, partition: str = "nvs") -> None:
+        """Replace a named NVS partition with the test's values before power-on."""
+        if self.powered:
+            raise BackendError("board.nvs: write the flash before board.power_on()")
+        tables = [
+            Path(f.file_path)
+            for f in self.app.flash_files
+            if Path(f.file_path).name == "partition-table.bin"
+        ]
+        if len(tables) != 1:
+            raise BackendError("board.nvs: the build must flash one partition-table.bin")
+        try:
+            found = flash.partitions(tables[0].read_bytes())
+        except (OSError, ValueError) as error:
+            raise BackendError(f"board.nvs: cannot read {tables[0]}: {error}") from error
+        if partition not in found:
+            raise BackendError(
+                f"the build has no partition {partition!r}: it has {', '.join(found)}"
+            )
+        entry = found[partition]
+        if (entry.type, entry.subtype) != (1, 2) or entry.flags:
+            raise BackendError(
+                f"board.nvs: partition {partition!r} must be unencrypted, writable NVS"
+            )
+        image = flash.nvs_image(namespaces, entry.size)
+        # The offset is a safe filename even when a partition's label contains path separators.
+        path = Path(self.dut.logfile).parent / f"nvs-{entry.offset:x}.bin"
+        path.write_bytes(image)
+        self._nvs[partition] = (entry.offset, path)
+        self.log.test(0, f"board.nvs(partition={partition!r})")
+
     def set_up(self) -> list[str]:
         """What the test has set up that only a run uses: the sources it gave and the taps it
         asked for, as `the replay of uart.gnss`, the lines it drove, as `the level of
-        modem.ri`, and `a card in sd_card`."""
+        modem.ri`, `a card in sd_card`, and `the NVS partition 'nvs'`."""
         driven = dict.fromkeys(e.name for e in self._lines.events() if e.by == "test")
         set_up = [
             f"the {kind} of {name}"
@@ -417,6 +454,7 @@ class Esp32Sim:
         ] + [f"the level of {name}" for name in driven]
         if self._sd_card is not None and self._sd_card.image is not None:
             set_up.append(f"a card in {self._sd_card.name}")
+        set_up += [f"the NVS partition {name!r}" for name in self._nvs]
         return set_up
 
     @property
@@ -446,6 +484,7 @@ class Esp32Sim:
             held=True,
             psram_mb=self.profile.psram_mb,
             sd_card=self._sd_card,
+            extra_flash=tuple(self._nvs.values()),
         )
         try:
             process = RunnerPopen(self._msg_queue, command, self._meta)
@@ -686,6 +725,15 @@ class Esp32Sim:
             )
             tap = f"; tapped into {uart.tapped.path}" if uart.tapped is not None else ""
             lines.append(f"  {name}: {source}; {crossed}{tap}")
+            if isinstance(uart.source, Replay) and uart.source.unseen_count:
+                lines.append(f"    unseen requests: {uart.source.unseen_count}")
+                for request, count in uart.source.unseen.items():
+                    lines.append(f"      {count} x {shown(request)}")
+                lines.append("    unseen request events:")
+                lines.extend(
+                    f"      {board_time(t)}  {shown(request, limit=len(request))}"
+                    for t, request in uart.source.unseen_events
+                )
         if self._sd_card is not None:
             image = self._sd_card.image
             lines.append(f"sd_card: a card holding {image}" if image else "sd_card: empty")
@@ -723,6 +771,15 @@ class Esp32Sim:
                 data = uart.model().data
                 if isinstance(data, Internet):
                     routes[name]["network"] = data.transcript()
+            if isinstance(uart.source, Replay) and uart.source.unseen_count:
+                routes[name]["unseen_requests"] = [
+                    {"request_hex": request.hex(), "count": count}
+                    for request, count in uart.source.unseen.items()
+                ]
+                routes[name]["unseen_request_events"] = [
+                    {"t_ns": t, "request_hex": request.hex()}
+                    for t, request in uart.source.unseen_events
+                ]
         card = self._sd_card
         sd_card = (
             None if card is None else {"image": None if card.image is None else str(card.image)}

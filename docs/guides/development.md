@@ -27,7 +27,7 @@ That one command needs:
   and `tar` to download it.
 - Docker, for the first `make test`. The tests read the validation firmware, which `make test`
   builds when it is missing: it pulls the ESP-IDF image and builds `hello_world`, `nmea_reader`,
-  `gpio_echo`, `sdspi`, `modem_at` and `pppos_client`, a few minutes. What the firmware build expects of Docker,
+  `gpio_echo`, `sdspi`, `modem_at`, `nvs_reader` and `pppos_client`, a few minutes. What the firmware build expects of Docker,
   and how to build without it, is in
   [validation-firmware-user.md](../features/validation-firmware-user.md).
 
@@ -47,7 +47,7 @@ After `make setup` and `make firmware`, `.venv/bin/pytest` runs the tests direct
 | `make rom-elf` | Runs `scripts/fetch-rom-elf`: puts `esp32_rev300_rom.elf` of esp-rom-elfs `20241011` at `.cache/esp-rom-elfs/20241011/`, checked by SHA-256 |
 | `make test-runner` | The runner's Rust unit tests, `cargo test --locked`, in `RUNNER_PROFILE` like `build-runner`; `RUNNER_PROFILE=dev` skips the fat-LTO link while iterating |
 | `make firmware` | Builds every validation image in the pinned ESP-IDF container, into `firmware/<image>/build/` |
-| `make test` | Runs `make setup` and `make test-runner`, builds the validation images that are missing (`FIRMWARE_IMAGES`: `hello_world`, `nmea_reader`, `gpio_echo`, `sdspi`, `modem_at` and `pppos_client`), then runs `.venv/bin/pytest` |
+| `make test` | Runs `make setup` and `make test-runner`, builds the validation images that are missing (`FIRMWARE_IMAGES`: `hello_world`, `nmea_reader`, `gpio_echo`, `sdspi`, `modem_at`, `nvs_reader` and `pppos_client`), then runs `.venv/bin/pytest` |
 | `make determinism` | Runs `tests/test_determinism.py` twice through `scripts/check-determinism.py` and compares the two runs ([testing.md](testing.md#determinism)); builds the `nmea_reader` and `pppos_client` images when missing and `.venv` when it is missing or stale, but not the runner or the ROM ELF: run `make setup` first |
 | `make lint` | `ruff check`, `ruff format --check` and `mypy`; `cargo fmt --check` and `cargo clippy --locked --all-targets -- -D warnings` on the runner |
 | `make hooks` | Installs the pre-commit hooks ([Pre-commit hooks](#pre-commit-hooks)) |
@@ -77,6 +77,7 @@ version-only bump needs no document ([documentation.md](documentation.md#the-che
 | `pytest-embedded` | `Dut`, `DuplicateStdoutPopen`, `MessageQueue`: the backend builds on them | Compatible release (`~=`) |
 | `pytest-embedded-idf[serial]` | `IdfApp`, which reads a build's `flasher_args.json`. pytest-embedded declares no extras, so each service is a package of its own; the `serial` extra pulls `pytest-embedded-serial-esp` and, through it, `pytest-embedded-serial` | Compatible release (`~=`), the same as `pytest-embedded` |
 | `pytest-timeout` | The wall-time timeout the plugin gives every test that uses `board`, which ends a run that hangs ([the test's timeout](../features/pytest-plugin-user.md#the-tests-timeout)); the plugin reads its settings through `pytest_timeout.get_env_settings` | Lower bound |
+| `esp-idf-nvs-partition-gen` | Encodes NVS entries for `board.nvs()` through its Python API, without the CLI's interpretation of Wi-Fi keys ([flash contents](../features/flash-contents-user.md)) | Exact (`==`): API changes require checking entry contents and deterministic output |
 | `bumble` | The Bluetooth stack of the peers in `esp32tl/bluetooth/`: their devices, and the virtual controller that `esp32tl/bluetooth/controller.py` extends ([bluetooth-peer-technical.md](../features/bluetooth-peer-technical.md)) | Exact (`==`): at 0.0.x any release may change the controller's internals that esp32tl overrides |
 
 The `dev` extra, which `make setup` installs, adds the tools:
@@ -200,7 +201,7 @@ its preflight, push and PR operations; the session's permissions must allow thos
 |---|---|
 | `esp32tl/` | The Python package and its pytest plugin |
 | `runner/` | `esp32tl-runner`, the Rust crate that runs esp32sim with the harness attached |
-| `firmware/` | `build.sh`, which builds the validation firmware, and `nmea_reader/`, `gpio_echo/` and `modem_at/`, the images kept here; each image's build lands in `firmware/<image>/build/` |
+| `firmware/` | `build.sh`, which builds the validation firmware, and `nmea_reader/`, `gpio_echo/`, `modem_at/` and `nvs_reader/`, the images kept here; each image's build lands in `firmware/<image>/build/` |
 | `recordings/` | Committed recordings for the tests: `gnss-generated-1.jsonl` and `gnss-generated-2.jsonl`, which `scripts/generate-gnss-recordings.py` writes ([validation-firmware-user.md](../features/validation-firmware-user.md#the-gnss-recordings)) |
 | `tests/` | The pytest suite ([testing.md](testing.md)) |
 | `tools/` | Stage 0 measurement firmware (`cryptobench`, `deepsleep`, ESP-IDF projects) and `benchtime.py`, which times their runs ([stage0-findings.md](../stage0-findings.md#reproducing)) |

@@ -34,9 +34,11 @@ paths, names, defaults and messages quoted verbatim, and `TODO(owner): …` wher
 | `esp32tl/sources/replay.py` | `docs/features/replay-user.md` and/or `-technical.md` (F15) |
 | `esp32tl/tap.py`, `esp32tl/report.py` | `docs/features/run-report-user.md` and/or `-technical.md` (F16) |
 | `esp32tl/units.py`, `esp32tl/sources/model/` except `modem.py` | `docs/features/models-user.md` and/or `-technical.md` (F17) |
+| `esp32tl/flash.py` | `docs/features/flash-contents-user.md` and/or `-technical.md` (F20) |
+| `esp32tl/matching.py` | `docs/features/matching-user.md` and/or `-technical.md` (F21) |
 | `esp32tl/bluetooth/` | `docs/features/bluetooth-peer-user.md` and/or `-technical.md` (F18) |
 | `esp32tl/sources/model/modem.py` | `docs/features/modem-user.md` and/or `-technical.md` (F19) |
-| `esp32tl/net/` | `docs/features/network-user.md` and/or `-technical.md` (F20) |
+| `esp32tl/net/` | `docs/features/network-user.md` and/or `-technical.md` (F22) |
 | Any other path under `esp32tl/` (the rest of `sources/`, a new module) | A new `docs/features/<feature>-user.md` / `-technical.md` (an edit to an existing one does not count), and a row in the ownership map (F12) |
 | `.github/workflows/` | `docs/cicd.md` (C1) |
 | `Makefile`, `.pre-commit-config.yaml`, `scripts/fetch-rom-elf`, `scripts/venv-tool`, `runner/rust-toolchain.toml` | `docs/guides/development.md` (C2 to C6) |

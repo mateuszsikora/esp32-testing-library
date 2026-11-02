@@ -20,6 +20,7 @@ requires-python = ">=3.11"
 dependencies = [
     "bumble==0.0.236",
     "cryptography>=42",
+    "esp-idf-nvs-partition-gen==0.3.0",
     "pytest>=8",
     "pytest-embedded~=2.9.3",
     "pytest-embedded-idf[serial]~=2.9.3",
@@ -75,7 +76,7 @@ strict = true
 files = ["esp32tl", "tests"]
 
 # pytest-embedded, pytest-timeout and esptool ship no py.typed; their annotations are still worth
-# checking against.
+# checking against. The NVS generator is also untyped; esp32tl calls its NVS methods directly.
 [[tool.mypy.overrides]]
-module = ["pytest_embedded.*", "pytest_embedded_idf.*", "pytest_timeout", "esptool.*"]
+module = ["pytest_embedded.*", "pytest_embedded_idf.*", "pytest_timeout", "esptool.*", "esp_idf_nvs_partition_gen.*"]
 follow_untyped_imports = true

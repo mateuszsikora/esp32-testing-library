@@ -12,6 +12,7 @@ from esp32tl import recording
 from esp32tl.boards.capabilities import Request
 from esp32tl.interfaces import SourceError
 from esp32tl.link.boardlink import Direction, Interface, Output, Wire
+from esp32tl.matching import Protocol as ReplayProtocol
 from esp32tl.report import RunLog
 from esp32tl.sources.replay import Replay
 from esp32tl.tap import NO_SOURCE, Tap
@@ -71,16 +72,20 @@ class Uart(Interface):
         self.files = {} if files is None else files
         self._giving = threading.Lock()
 
-    def replay(self, path: str | os.PathLike[str]) -> Replay:
+    def replay(
+        self, path: str | os.PathLike[str], *, protocol: ReplayProtocol | None = None
+    ) -> Replay:
         """Replays the recording at `path`, relative to the test file's directory, into the
-        chip, at its recorded times: the stream case, a recording with no requests. Returns the
+        chip, with recorded timing and request matching. `protocol` overrides detection. Returns the
         `Replay`, whose `sent` counts the events the link has been given."""
         self._ask("replay")
         file = self.directory / path
         # Two replays of one file harm nothing; a replay of a file a tap or the SD card will
         # write over does.
         self._unclaimed(file, f"{self.name}: cannot replay {path}", writers_only=True)
-        replay = Replay(recording.read(file), self.name, self.clock, name=str(path))
+        replay = Replay(
+            recording.read(file), self.name, self.clock, name=str(path), protocol=protocol
+        )
         self._give(replay, "replay", str(path), file)
         return replay
 

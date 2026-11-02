@@ -27,7 +27,7 @@ set -eu
 
 IDF_VERSION=v5.3.6
 CONTAINER=espressif/idf:$IDF_VERSION@sha256:cee52f0c4fdaf088992a7a739f5993154e95cf1d3ab61c24f5b40e6d56a3a070
-IMAGES="hello_world nmea_reader gpio_echo sdspi modem_at pppos_client"
+IMAGES="hello_world nmea_reader gpio_echo sdspi modem_at nvs_reader pppos_client"
 
 die() {
 	echo "firmware/build.sh: $*" >&2
@@ -45,6 +45,7 @@ project_of() {
 	gpio_echo) echo "$PWD/firmware/gpio_echo" ;;
 	modem_at) echo "$PWD/firmware/modem_at" ;;
 	pppos_client) python3 firmware/pppos_client/prepare.py "$out" ;;
+	nvs_reader) echo "$PWD/firmware/nvs_reader" ;;
 	esac
 }
 

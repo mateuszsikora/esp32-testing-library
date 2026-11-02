@@ -75,6 +75,12 @@ What the receiver can be told, and the units, are in [models and units](models-u
   test runs (`Interrupted: 1 error during collection`, exit code 2), unless pytest runs with
   `--continue-on-collection-errors`.
 
+Before `board.power_on()`, `board.nvs({"config": {"broker_host": "broker.test"}})`
+can replace a named NVS partition from the build's table. Integer values require a width,
+for example `u16(8883)` from `esp32tl.flash`. See [flash contents](flash-contents-user.md).
+A test that supplies NVS and passes without calling `board.power_on()` fails teardown:
+it ran no firmware.
+
 What the backend needs besides the build, the runner and the ROM ELF, is in
 [the esp32sim backend](esp32sim-backend-user.md#what-it-needs).
 
@@ -429,6 +435,15 @@ under `[tool.pytest.ini_options]`.
 - [Models and units](models-user.md)
 - [Validation firmware](validation-firmware-user.md)
 - [Testing this repository](../guides/testing.md)
+
+
+### Selecting a replay protocol
+
+`gnss.replay(path, protocol=...)` and `board.uart(role).replay(path, protocol=...)` accept a
+`Protocol` from `esp32tl.matching`: `AT`, `PMTK`, `UBX`, or `GNSS` (mixed PMTK/UBX).
+Omitting it detects the protocol from recorded requests; a recording with no requests stays
+passive. The returned replay exposes `sent`, `unseen_count` and `unseen`, a mapping of normalised
+request bytes to occurrence counts. See [matching](matching-user.md) for timing and defaults.
 
 
 ## MQTT broker fixture
