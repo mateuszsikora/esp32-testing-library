@@ -1358,3 +1358,43 @@ notifications, realistic boot/shutdown delays (including `Toff-on` and `Ton(uart
 APN/operator configuration wait until validation firmware needs them. Commands accepted without
 simulating their settings and unknown fallbacks are documented, so they do not imply a complete
 cellular modem.
+
+## NVS generation treats every key and namespace literally
+
+Status: decided (#70)
+
+`board.nvs()` uses `esp-idf-nvs-partition-gen`'s `nvs_open` and the `NVS.write_namespace` and
+`NVS.write_entry` methods directly. The dependency is pinned exactly; upgrades must verify
+literal names, actual values, the complete entry set and deterministic image bytes. The API
+takes the usable size excluding the final reserved page and adds that page when the writer
+closes.
+
+The adapter validates values and passes strings as `string`, bytes as `binary` and integers
+with their explicit width directly to the writer, without CSV or temporary files. This
+preserves CRLF, multiline certificates and lines beginning with `#`, and supports blobs larger
+than 64 KiB whenever the NVS partition has room. A successful second call for a partition
+replaces its contents; failed validation or generation leaves the preceding image intact.
+
+Names reach the pinned generator as `_NvsKey`, a private `str` subclass whose length is its
+UTF-8 byte count. Version 0.3.0's primitive and variable-length writers use `len(key)` to size
+a bytearray slice receiving `key.encode()`. Ordinary Unicode strings can enlarge the entry
+header, corrupt neighbours and extend the final page. The adapter preserves the original
+text, UTF-8 bytes and namespace identity while making that slice length correct. Output-size
+validation remains mandatory; tests independently check entry contents and CRCs at page
+boundaries.
+
+**Rejected:** the generator's CLI and module-level `write_entry` wrapper. In both 0.1.9 and
+0.3.0 they interpret names such as `sta.ssid` and `sta.pswd` even in a namespace called `config`,
+write temporary file paths instead of string contents, and add unrequested Wi-Fi keys. They
+also interpret namespace names as keys before checking the CSV row type. Inlining strings
+would not prevent the extra keys, and the CLI filters comment-looking lines before CSV
+parsing. An open dependency range could silently restore these transformations. Implicitly
+merging successive calls is also rejected: each call describes a whole partition and must not
+retain keys absent from the new configuration.
+
+Retaining intermediate CSV is rejected: its default 131072-character field limit rejects a
+hex-encoded blob above 64 KiB even when it fits in NVS. Raising a process-global CSV limit
+would only preserve unnecessary serialisation and shared mutable state. Rejecting non-ASCII
+names would narrow the promised UTF-8 API; copying the generator's page encoder or patching
+its global classes would carry more code and affect other callers. The length adapter is
+local to the names passed to this writer and is rechecked when upgrading the pinned package.

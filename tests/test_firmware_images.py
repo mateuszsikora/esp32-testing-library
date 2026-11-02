@@ -122,3 +122,15 @@ def test_sdspi_takes_the_devkit_sd_card_slot_from_sdkconfig() -> None:
     # unmodified: a card it cannot mount stays as it is
     assert config["EXAMPLE_FORMAT_IF_MOUNT_FAILED"] is False
     assert config["EXAMPLE_FORMAT_SD_CARD"] is False
+
+
+def test_nvs_reader_has_a_writable_nvs_partition() -> None:
+    from esp32tl.flash import partitions
+
+    app = idf_app("nvs_reader")
+    assert app.target == "esp32"
+    table = next(
+        Path(f.file_path) for f in app.flash_files if f.file_path.endswith("partition-table.bin")
+    )
+    nvs = partitions(table.read_bytes())["nvs"]
+    assert (nvs.type, nvs.subtype, nvs.offset, nvs.size, nvs.flags) == (1, 2, 0x9000, 0x6000, 0)

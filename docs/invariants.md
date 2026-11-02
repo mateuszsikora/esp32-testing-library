@@ -427,3 +427,32 @@ that references to its number keep their meaning.
     `tests/test_modem_model.py::test_only_sent_model_gpio_changes_appear_in_the_run_log`
 78. A source selection that loses to another source must leave no GPIO ownership behind.
     `tests/test_modem_model.py::test_a_model_selection_that_loses_to_replay_does_not_claim_ri`
+
+## Flash contents
+
+79. An NVS partition is selected by name from the build's own table, and its test image is flashed
+    after the build's files at that partition's offset. A later call replaces the whole image.
+    `tests/test_flash.py::test_nvs_flashes_at_named_partition_after_build_and_replaces_previous_call`
+80. NVS integers have explicit widths and checked ranges; a bare integer or boolean is refused.
+    `tests/test_flash.py::test_integer_widths_check_their_range`,
+    `tests/test_flash.py::test_nvs_requires_a_type_for_integers_and_refuses_other_values`
+81. The firmware reads exactly the NVS types and values the test supplies before power-on.
+    Strings retain their UTF-8 bytes, including CRLF and lines beginning with `#`. Key and
+    namespace names have no special meaning: no entries are changed or added for Wi-Fi-looking
+    names, and identical inputs produce identical images.
+    `tests/test_nvs_reader.py::test_firmware_reads_typed_values`,
+    `tests/test_flash.py::test_real_generator_preserves_string_bytes_and_has_exact_partition_size`,
+    `tests/test_flash.py::test_nvs_names_do_not_change_values_or_add_keys`
+82. NVS cannot be supplied after power-on. A passing test that supplies NVS without powering on
+    fails teardown; it ran no firmware.
+    `tests/test_flash.py::test_nvs_refuses_unknown_wrong_type_encrypted_and_late_calls`,
+    `tests/test_pytest_plugin.py::test_nvs_without_power_on_fails_teardown`
+83. Binary NVS values are limited by the format and partition capacity, not by a CSV field
+    limit. Blobs above 64 KiB are reconstructed unchanged from the generated chunks.
+    `tests/test_flash.py::test_large_blob_fits_without_a_csv_field_limit`
+84. UTF-8 keys and namespaces consume their encoded byte count in fixed-size NVS headers,
+    including the final slot of a page. Entry contents and CRCs remain correct, and the final
+    image must always match the partition's size.
+    `tests/test_flash.py::test_utf8_key_at_page_boundary_preserves_entries`,
+    `tests/test_flash.py::test_utf8_namespace_at_page_boundary_preserves_entries`,
+    `tests/test_flash.py::test_generator_output_must_match_partition_size`
