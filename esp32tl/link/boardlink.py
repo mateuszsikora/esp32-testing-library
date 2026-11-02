@@ -14,6 +14,10 @@ move meanwhile. What the hold returns bounds the next turn, as an interface's `q
 and `None` ends the run with `stop`. With `console`, the guest's console reaches it as the
 runner's `console` messages carry it (`--console socket` or `both`).
 
+With `--wifi`, the Ethernet frames the station sends (`eth_tx`) go to the one interface that is the
+network behind the access point (`Interface.ethernet`), a frame per call, and what it answers goes
+in as `eth_rx`, a frame per output.
+
 Warnings and the run's `stats` are kept for the test report. What the harness finds wrong with
 the run is kept in `error`, the first cause only; the harness then ends the run with `stop` at the
 runner's next turn, and still reads to end of file. A `frm_err` warning is such an error: bytes
@@ -31,6 +35,8 @@ from esp32tl.link.protocol import (
     MAX_LINE,
     Adc,
     Console,
+    EthRx,
+    EthTx,
     Event,
     GpioIn,
     GpioOut,
@@ -49,6 +55,7 @@ from esp32tl.link.protocol import (
     UartTx,
     Wait,
     Warn,
+    WifiAp,
     as_json,
     decode_harness,
     decode_runner,
@@ -98,6 +105,14 @@ class Interface:
     @property
     def lossless(self) -> bool:
         """Whether UART receive overflow must fail this route's run."""
+        return False
+
+    @property
+    def ethernet(self) -> bool:
+        """Whether the interface is the network behind the Wi-Fi access point: it has no wire,
+        `receive` gets each Ethernet frame the station sends (`eth_tx`), and each output it
+        returns is one frame for the station (`eth_rx`). Its `inputs` may switch the access
+        point (`wifi_ap`)."""
         return False
 
     @property
@@ -199,6 +214,9 @@ class BoardLink:
                 if pin in owners:
                     raise ValueError(f"GPIO {pin} is on {owners[pin]} and {interface.name}")
                 owners[pin] = interface.name
+        ethernet = [interface.name for interface in interfaces if interface.ethernet]
+        if len(ethernet) > 1:
+            raise ValueError(f"one network behind the access point, not {', '.join(ethernet)}")
         self.board = board
         self.chip = chip
         self.clock = clock
@@ -332,6 +350,8 @@ class BoardLink:
             self._seq = message.seq
         if isinstance(message, UartTx):
             self._uart_tx(message)
+        elif isinstance(message, EthTx):
+            self._eth_tx(message)
         elif isinstance(message, UartCfg):
             self._uart_cfg(message)
         elif isinstance(message, GpioOut):
@@ -369,6 +389,15 @@ class BoardLink:
         for interface in self.interfaces:
             wire = interface.wire
             if wire is not None and wire.tx is not None and wire.tx in message.tx_pins:
+                with calling(interface.name, "receive"):
+                    answers = _outputs(
+                        interface.name, "receive", interface.receive(message.t, "out", message.data)
+                    )
+                self._answers += [(interface, t, data) for t, data in answers]
+
+    def _eth_tx(self, message: EthTx) -> None:
+        for interface in self.interfaces:
+            if interface.ethernet:
                 with calling(interface.name, "receive"):
                     answers = _outputs(
                         interface.name, "receive", interface.receive(message.t, "out", message.data)
@@ -457,6 +486,9 @@ class BoardLink:
                     f"{interface.name} sent bytes stamped {t} ns in the turn at {now} ns: it"
                     " answered sooner than its latency, or sent past its quiet_until"
                 )
+            if interface.ethernet:
+                inputs.append((interface, EthRx(t, data)))
+                continue
             wire = interface.wire
             if wire is None or wire.rx is None:
                 raise LinkError(f"{interface.name} sent bytes, and has no RX pin to send them on")
@@ -497,7 +529,7 @@ class BoardLink:
         is not a message of version 1, one stamped before the turn, one on a pin the link does not
         watch; and one on a pin another interface is wired to, which the runner would take."""
         source = interface.name
-        if not isinstance(message, UartRx | GpioIn | Release | Adc):
+        if not isinstance(message, UartRx | GpioIn | Release | Adc | EthRx | WifiAp):
             raise LinkError(f"{source} sent {message!r}, which is not an input")
         try:
             # What the runner reads, through the same codec: types, ranges, the line's length.
@@ -511,6 +543,12 @@ class BoardLink:
                 f"{source} sent {message.TYPE} stamped {message.t} ns in the turn at {now} ns:"
                 " it held it back past its quiet_until"
             )
+        if isinstance(message, EthRx | WifiAp):
+            if not interface.ethernet:
+                raise LinkError(
+                    f"{source} sent {message.TYPE}, and is not the network behind the access point"
+                )
+            return
         if isinstance(message, GpioIn):
             pins = {pin for pin, _ in message.levels}
         elif isinstance(message, Release):
@@ -571,6 +609,14 @@ class BoardLink:
                 f" inputs_not_applied {stats.inputs_not_applied},"
                 f" rx_bytes_not_paced {stats.rx_bytes_not_paced}"
             )
+            if stats.wifi is not None:
+                w = stats.wifi
+                lines.append(
+                    f"  Wi-Fi: {_count(w.eth_tx, 'Ethernet frame')} sent"
+                    f" ({w.eth_tx_dropped} dropped by the relay), {w.eth_rx} received"
+                    f" ({w.eth_rx_dropped} with the access point off the air);"
+                    f" {_count(w.rx_dropped, 'frame')} from the air with no receive descriptor"
+                )
         elif self.connected:
             lines.append("no stats: the link ended without them (the runner was killed, or died)")
         if self.error is not None:

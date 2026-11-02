@@ -19,6 +19,7 @@ from esp32tl.backends.esp32sim import Esp32Sim
 from esp32tl.interfaces.console import Console
 from esp32tl.interfaces.gnss import Gnss
 from esp32tl.interfaces.modem import Modem
+from esp32tl.interfaces.wifi import Wifi
 from esp32tl.net.mqtt import Broker
 from esp32tl.report import board_time
 from esp32tl.units import EAST, NORTH, Position, km, km_h, seconds
@@ -79,3 +80,15 @@ def test_plain_mqtt(board: Esp32Sim, modem: Modem, broker: Broker, tmp_path: Pat
 
 def test_tls_plaintext(tmp_path: Path) -> None:
     (tmp_path / "network.json").write_text(json.dumps(tls_exchange()))
+
+
+@pytest.mark.app_path("../firmware/http_request")
+def test_wifi_http(board: Esp32Sim, wifi: Wifi, console: Console, tmp_path: Path) -> None:
+    network = wifi.access_point("myssid", password="mypassword")
+    network.http.serve("/", "hello from the test\n")
+    board.power_on()
+    board.wait_until(network.http.requested("/"), within=seconds(30))
+    board.wait(seconds(2))
+    write_console(tmp_path, console)
+    assert console.lines(r"^hello from the test$")
+    (tmp_path / "network.json").write_text(json.dumps(network.transcript()))

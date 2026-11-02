@@ -32,6 +32,7 @@ from esp32tl.backends.esp32sim import BackendError
 from esp32tl.boards import SdCardRoute
 from esp32tl.interfaces import RunEnded
 from esp32tl.interfaces.sd_card import SdCard
+from esp32tl.interfaces.wifi import Wifi
 
 ROOT = Path(__file__).resolve().parent.parent
 HELLO_WORLD_BUILD = ROOT / "firmware" / "hello_world" / "build"
@@ -328,6 +329,27 @@ def test_runner_command_puts_a_card_in_the_slot_once_the_test_inserts_one(tmp_pa
         "sclk=14,mosi=15,miso=2,cs=13",
         "--sd-rw",
         str((tmp_path / "card.img").resolve()),
+    ]
+
+
+def test_runner_command_puts_the_tests_access_point_on_the_air(tmp_path: Path) -> None:
+    fake_build(tmp_path)
+    app = esp32sim.load_app(str(tmp_path))
+    wifi = Wifi(now=lambda: 0)
+    command = esp32sim.runner_command(
+        Path("/r/runner"), Path("/r/rom.elf"), app, 300, Path("/l.sock"), wifi=wifi
+    )
+    assert "--wifi" not in command
+    wifi.access_point("myssid", password="mypassword")
+    wifi.nearby("cafe", secure=False)
+    command = esp32sim.runner_command(
+        Path("/r/runner"), Path("/r/rom.elf"), app, 300, Path("/l.sock"), wifi=wifi
+    )
+    assert command[-4:] == [
+        "--wifi",
+        "ssid=myssid,chan=6,psk=mypassword",
+        "--wifi-nearby",
+        "ssid=cafe,chan=1,rssi=-60,secure=0",
     ]
 
 
@@ -832,7 +854,7 @@ def test_the_lines_fixture_needs_a_profile_with_lines_and_a_drive_needs_power_on
     result.stdout.fnmatch_lines_random(
         [
             "*esp32sim: the board profile esp32-devkitc has no lines;"
-            " its interfaces are console, uart.gnss, sd_card",
+            " its interfaces are console, uart.gnss, sd_card, wifi",
             "*esp32sim: the test set up the level of modem.ri and the level of modem.pwrkey and"
             " never called board.power_on(): it ran no firmware",
         ]

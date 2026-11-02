@@ -53,7 +53,7 @@ def minimal_path(bin_dir: Path) -> str:
     """A PATH with only the tools build.sh needs besides Docker or ESP-IDF, and whatever
     bin_dir already holds."""
     bin_dir.mkdir(exist_ok=True)
-    for tool in ("cat", "dirname", "id", "mkdir", "rm", "sed"):
+    for tool in ("cat", "cp", "dirname", "id", "mkdir", "mv", "rm", "sed"):
         found = shutil.which(tool)
         assert found is not None, tool
         (bin_dir / tool).symlink_to(found)
@@ -73,6 +73,9 @@ def local_idf(tmp_path: Path) -> dict[str, str]:
     """The environment of an IDF_LOCAL=1 build with the fake idf.py."""
     script(tmp_path / "bin", "idf.py", FAKE_IDF_PY)
     script(tmp_path / "bin", "python3", '#!/bin/sh\nprintf "%s\\n" "$2/pppos-source"\n')
+    example = tmp_path / "idf" / "examples" / "protocols" / "http_request"
+    example.mkdir(parents=True)
+    (example / "CMakeLists.txt").write_text("project(http_request)\n")
     return {
         "PATH": minimal_path(tmp_path / "bin"),
         "FIRMWARE_OUT": str(tmp_path / "out"),
@@ -136,7 +139,7 @@ def test_build_refuses_an_unknown_image(tmp_path: Path) -> None:
     assert result.returncode == 1
     assert result.stderr == (
         "firmware/build.sh: unknown image 'nope'; the images are:"
-        " hello_world nmea_reader gpio_echo sdspi modem_at nvs_reader pppos_client\n"
+        " hello_world nmea_reader gpio_echo sdspi modem_at nvs_reader pppos_client http_request\n"
     )
     assert not (tmp_path / "out").exists()
 
@@ -243,6 +246,8 @@ def test_local_build_runs_idf_py_and_records_how(tmp_path: Path, local_idf: dict
         "modem_at": str(ROOT / "firmware" / "modem_at"),
         "nvs_reader": str(ROOT / "firmware" / "nvs_reader"),
         "pppos_client": f"{tmp_path}/out/pppos-source",
+        # copied, unchanged, once per ESP-IDF version: its component manager writes into it
+        "http_request": f"{(tmp_path / 'out').resolve()}/.http_request-v9.9.9",
     }
     builds = {image: (tmp_path / "out" / image / "build").resolve() for image in projects}
     assert logged(tmp_path / "idf.log") == [
@@ -273,6 +278,8 @@ def test_local_build_runs_idf_py_and_records_how(tmp_path: Path, local_idf: dict
             "project": project,
         }
         assert (builds[image] / "esp32tl-built").exists()
+    copied = Path(projects["http_request"]) / "CMakeLists.txt"
+    assert copied.read_text() == "project(http_request)\n"
     assert "not for goldens" in result.stderr
     assert result.stdout == "".join(
         f"firmware/build.sh: {image} built in {build} (ESP-IDF v9.9.9)\n"

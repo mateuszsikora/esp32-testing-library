@@ -1,4 +1,4 @@
-"""One class per wire: console, UART (GNSS, modem), lines, HCI, Wi-Fi, SD card."""
+"""One class per wire: console, UART (GNSS, modem), lines, Wi-Fi, SD card."""
 
 
 class SourceError(Exception):

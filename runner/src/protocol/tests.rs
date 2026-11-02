@@ -110,6 +110,17 @@ fn parses_the_peer_messages() {
             pins: vec![33]
         })
     );
+    assert_eq!(
+        parse(r#"{"type": "eth_rx", "t": 7, "data": "AAAAAAAAAAAAAAAAAAA="}"#),
+        Ok(Incoming::EthRx {
+            t: 7,
+            data: vec![0; 14]
+        })
+    );
+    assert_eq!(
+        parse(r#"{"type": "wifi_ap", "t": 8, "on": false}"#),
+        Ok(Incoming::WifiAp { t: 8, on: false })
+    );
     assert_eq!(parse(r#"{"type":"stop"}"#), Ok(Incoming::Stop));
     assert_eq!(
         parse(r#"{"type":"adc","t":0,"pin":34,"volts":1.25}"#),
@@ -146,6 +157,10 @@ fn refuses_malformed_messages() {
         r#"{"type":"gpio_in","t":-1,"levels":[[33,1]]}"#,
         r#"{"type":"release","pins":[33]}"#,
         r#"{"type":"release","t":0,"pins":[-1]}"#,
+        r#"{"type":"eth_rx","t":0,"data":"AAAAAAAAAAAAAAAAAA=="}"#,
+        r#"{"type":"eth_rx","data":"AAAAAAAAAAAAAAAAAAA="}"#,
+        r#"{"type":"wifi_ap","t":0,"on":1}"#,
+        r#"{"type":"wifi_ap","t":0}"#,
     ] {
         assert!(parse(line).is_err(), "{line}");
     }
@@ -223,6 +238,31 @@ fn writes_the_runner_messages() {
         ),
         r#"{"type":"stats","t":12,"end":"emulator","stop":"Exceptions","detail":"Exceptions(3)","resets":0,"turns":13,"uart":[{"port":1,"tx_bytes":0,"rx_bytes":864,"rxfifo_ovf":0,"frm_err":0}],"unrouted_rx_bytes":0,"inputs_on_output":2,"inputs_not_applied":0,"rx_bytes_not_paced":0}"#
     );
+    assert_eq!(
+        eth_tx(4, 5, &[1, 2, 3]),
+        r#"{"type":"eth_tx","seq":4,"t":5,"data":"AQID"}"#
+    );
+    s.wifi = Some(WifiStats {
+        eth_tx: 1,
+        eth_tx_dropped: 2,
+        eth_rx: 3,
+        eth_rx_dropped: 4,
+        rx_dropped: 5,
+    });
+    assert!(stats(12, "stop", &[], &s).ends_with(
+        r#""rx_bytes_not_paced":0,"wifi":{"eth_tx":1,"eth_tx_dropped":2,"eth_rx":3,"eth_rx_dropped":4,"rx_dropped":5}}"#
+    ));
+    // a 1519-byte frame is over the limit; 1518 is not
+    let long = format!(
+        r#"{{"type":"eth_rx","t":0,"data":"{}"}}"#,
+        base64(&[0; 1519])
+    );
+    assert!(parse(&long).unwrap_err().contains("1519 bytes"));
+    let longest = format!(
+        r#"{{"type":"eth_rx","t":0,"data":"{}"}}"#,
+        base64(&[0; 1518])
+    );
+    assert!(parse(&longest).is_ok());
     for line in [hello(), sync(3)] {
         assert!(parse_json(&line).is_ok(), "{line}");
     }

@@ -154,6 +154,7 @@ fn run_with_board(
             console: opts.console != cli::Console::Stdout,
             peer_timeout: opts.peer_timeout,
             signal: &signal,
+            wifi: opts.wifi.as_ref(),
         },
     );
     let (end, stats) = session.run();
@@ -241,6 +242,30 @@ fn setup(
         (None, None) => {}
     }
     m.bus.attach_board_devices();
+    if let Some(wifi) = &opts.wifi {
+        // esp32sim's access point, with the network behind it on the socket: the relay hands the
+        // run loop the station's Ethernet frames instead of esp32sim's own network
+        session::Guest::wifi_access_point(&mut m, wifi);
+        m.bus.set_ethernet_relay(true)?;
+        let ap = wifi.access_point();
+        eprintln!(
+            "esp32tl-runner: Wi-Fi access point '{}' bssid {} channel {} ({}), its network on the socket",
+            ap.ssid,
+            esp_soc::wifi::mac_str(&ap.bssid),
+            ap.channel,
+            if ap.psk.is_some() { "WPA2-PSK" } else { "open" }
+        );
+        for b in &wifi.nearby {
+            eprintln!(
+                "esp32tl-runner: Wi-Fi network around: '{}' bssid {} channel {} {} dBm ({})",
+                b.ssid,
+                esp_soc::wifi::mac_str(&b.bssid),
+                b.channel,
+                b.rssi,
+                if b.secure { "WPA2-PSK" } else { "open" }
+            );
+        }
+    }
 
     let rom_name = <esp32::Esp32 as Soc>::ROM_ELF;
     let rom = opts

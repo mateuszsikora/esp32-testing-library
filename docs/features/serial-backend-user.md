@@ -134,7 +134,10 @@ observe those pins through the console adapter. The model/replay GNSS tests skip
 smoke tests run. Host-side hardware to drive off-board peripherals remains postponed.
 
 `modem.network()` and the `broker` fixture also skip on serial: the simulated network
-requires a modem model, which this backend cannot provide.
+requires a modem model, which this backend cannot provide. So do `wifi.access_point(...)` and
+`wifi.nearby(...)`, with `serial: wifi takes no model source on this backend, only real`: the real
+board's station hears whatever access points are around it, and the host puts none on its air.
+Requesting the `wifi` fixture alone does not skip.
 
 ## Validation status
 

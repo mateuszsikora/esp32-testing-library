@@ -2,8 +2,9 @@
 
 esp32tl ships a pytest plugin that runs an ESP-IDF firmware image, lets a test read what the
 firmware prints, puts a GNSS receiver on the firmware's GNSS UART, a recording replayed or a
-receiver the test describes, records what crosses it, drives and reads the board's GPIO lines, and
-puts an SD card holding an image file in the board's slot. A test asks for the
+receiver the test describes, records what crosses it, drives and reads the board's GPIO lines,
+puts an SD card holding an image file in the board's slot, and puts a Wi-Fi access point with a
+simulated network behind it on the chip's air. A test asks for the
 `board` fixture, names the app with the `app_path` marker, sets up what is around the board,
 powers it on, and waits on the board's own clock for what the firmware does. It runs once on
 the selected backend, esp32sim by default. pytest loads the plugin by itself once esp32tl is
@@ -99,11 +100,11 @@ def test_hello_world(board: Board):
     board.console.expect_exact("Hello world!")
 ```
 
-`board.console`, `board.gnss`, `board.modem`, `board.lines` and `board.sd_card` expose the
-profile's interfaces. Access does not power on the board or select a UART source.
+`board.console`, `board.gnss`, `board.modem`, `board.lines`, `board.sd_card` and `board.wifi`
+expose the profile's interfaces. Access does not power on the board or select a UART source.
 Missing profile interfaces fail when accessed; serial capabilities still skip unsupported calls.
-The existing `console`, `gnss`, `modem`, `lines` and `sd_card` fixtures remain shortcuts to these
-same objects. Mixing the two styles shares state, including the console's match cursor.
+The existing `console`, `gnss`, `modem`, `lines`, `sd_card` and `wifi` fixtures remain shortcuts
+to these same objects. Mixing the two styles shares state, including the console's match cursor.
 For MQTT, use `board.modem.network().broker`: `network()` explicitly selects the modem's
 simulated network before power-on. The existing `broker` fixture remains a shortcut to that
 service. There is no `board.broker` property that implicitly configures a network.
@@ -295,7 +296,7 @@ def test_the_example_writes_its_files_into_the_image(board: Board):
   the `esp32sim_link` property has `sd_card`, `{"image": PATH}`
   ([the run report](run-report-user.md)).
 - On a board profile without a slot, `sd_card` is an error at setup:
-  `esp32sim: the board profile lilygo-t-a7670g-r2 has no sd_card; its interfaces are console, uart.modem, uart.gnss, lines.modem`.
+  `esp32sim: the board profile lilygo-t-a7670g-r2 has no sd_card; its interfaces are console, uart.modem, uart.gnss, lines.modem, wifi`.
 - The card stays in from power-on to the end of the run: inserting or removing it while the
   firmware runs is not there yet.
 `board.uart(role)` is the same for any `uart.<role>` route of the profile: `gnss` is
@@ -356,7 +357,7 @@ def test_the_firmware_follows_ri_and_drives_pwrkey(board, lines, console):
   A level other than 0 or 1 raises `ValueError: lines.drive: level 2 is not 0 or 1`, or
   `TypeError` with the same message for one that is not an integer.
 - On a board profile without lines, `lines` is an error at setup:
-  `esp32sim: the board profile esp32-devkitc has no lines; its interfaces are console, uart.gnss, sd_card`.
+  `esp32sim: the board profile esp32-devkitc has no lines; its interfaces are console, uart.gnss, sd_card, wifi`.
 
 `NeverHappened`, `RunEnded`, `BoardOff` and `SourceError` are in `esp32tl.interfaces`, `LineEvent`
 in `esp32tl.interfaces.lines`.
@@ -426,7 +427,66 @@ to read only the firmware side. The model adds a 1 ms response latency to the li
 
 See [the modem guide](modem-user.md) for signal, registration, power, command history and limits.
 There is no default modem route on `esp32-devkitc`: requesting the fixture there fails with
-`the board profile esp32-devkitc has no uart.modem; its interfaces are console, uart.gnss, sd_card`.
+`the board profile esp32-devkitc has no uart.modem; its interfaces are console, uart.gnss, sd_card, wifi`.
+
+### The wifi fixture
+
+`wifi` is the chip's Wi-Fi station, which every board profile has: every classic ESP32 has the
+radio. Until the test gives it an access point there is none on the air, and the firmware finds
+nothing to join. From `tests/test_http_request.py`, where ESP-IDF's unmodified `http_request`
+example joins with ESP-IDF's default SSID and passphrase and fetches a page
+([validation firmware](validation-firmware-user.md)):
+
+```python
+from esp32tl.units import seconds
+
+pytestmark = pytest.mark.app_path("../firmware/http_request")
+
+
+def test_joins_and_fetches_from_the_tests_server(board, wifi, console):
+    network = wifi.access_point("myssid", password="mypassword")
+    network.http.serve("/", "hello from the test\n")
+    board.power_on()
+    request = board.wait_until(network.http.requested("/"), within=seconds(30))
+    assert request.header("Host") == "example.com:80"
+```
+
+- `wifi.access_point(ssid, *, password=None, channel=6, bssid=None)`, before `board.power_on()`,
+  puts an access point on the air from power-on: open without a password, WPA2-PSK with one, on
+  `channel` 1 to 14, at `bssid` (`02:53:49:4d:00:01`, esp32sim's, unless given). It returns the
+  simulated network behind it, an `Internet`: a DHCP server gives the station `10.64.0.2`, and DNS,
+  NTP, the MQTT broker on 1883 and an HTTP server on 80 answer, all on the board's clock
+  ([the network](network-user.md)). Once per test; `wifi.network` returns the same network later.
+- `wifi.nearby(ssid, *, channel=1, rssi=-60, secure=True, bssid=None)`, before `board.power_on()`
+  and after `access_point`, adds a network around the station: a scan lists it on `channel` at
+  `rssi` dBm, WPA2-PSK when `secure`, and nothing can join it. At most 32.
+- `wifi.access_point_off()` takes the access point, and the networks around, off the air from the
+  board's current instant, as one that shuts down: a station that has joined gets a
+  deauthentication with reason 3, "leaving" (ESP-IDF's examples print `Wi-Fi disconnected 3`).
+  The network behind it loses its TCP connections and the replies it had queued.
+  `wifi.access_point_on()` puts a fresh access point back on the air from the board's current
+  instant, and the station must join it again, DHCP included. A switch to the state the access
+  point is in already does nothing. Both after `board.power_on()`, or before it to start off the
+  air ([the runner](runner-user.md)).
+- `wifi.on_air`, `wifi.configuration` (the `AccessPoint` given, or `None`), `wifi.around` (the
+  `Nearby` networks) and `wifi.events` (each switch, an `AirEvent(t, on)` with `t` in nanoseconds
+  of the board's time) describe what the test set up.
+- The parameters are checked when called: `ValueError` for an SSID that is not 1 to 32 bytes
+  (`wifi.access_point: an SSID has 1 to 32 bytes, '' has 0`), a WPA2 password that is not 8 to 63
+  bytes (`wifi.access_point: a WPA2 password has 8 to 63 bytes`), a comma in either
+  (`a comma cannot reach esp32sim's access point`), a channel outside 1 to 14, a BSSID that is not
+  six hexadecimal octets, and a network around with the access point's SSID or BSSID
+  (`wifi.nearby: 'myssid' would be the access point`). `SourceError` for a second access point
+  (`wifi has its access point already: one per test`), `nearby` before `access_point`
+  (`wifi.nearby: the networks around need wifi.access_point() first`), a switch or `wifi.network`
+  without an access point (`wifi has no access point: give it with wifi.access_point()`), and
+  `access_point` or `nearby` after `board.power_on()`
+  (`wifi: the board is on already: give an interface its source before board.power_on()`).
+- On [serial](serial-backend-user.md) the access points are whatever is around the real board:
+  `access_point` and `nearby` skip with `serial: wifi takes no model source on this backend, only real`.
+- The report of the run has `wifi: access point 'myssid', channel 6, WPA2-PSK`, a line per network
+  around, then the network's events; the `esp32sim_link` property has `wifi`
+  ([the esp32sim backend](esp32sim-backend-user.md#the-links-report)).
 
 ## The test's timeout
 
@@ -552,7 +612,7 @@ under `[tool.pytest.ini_options]`.
 
 ## Names the plugin takes
 
-- **`board`, `console`, `gnss`, `lines`, `sd_card`**: the plugin's fixtures; a project's own fixture of one of these
+- **`board`, `console`, `gnss`, `lines`, `sd_card`, `wifi`**: the plugin's fixtures; a project's own fixture of one of these
   names overrides it, as pytest has it.
 - **`board`**: esp32tl parametrises every test that asks for a fixture of that name, matched by
   name. A project's own `board` fixture, in a session where esp32tl is installed, gets the

@@ -5,7 +5,9 @@ emulated clock, and prints the guest's UART0 console on stdout. With `--board`, 
 peer, the harness or any program that speaks [the link protocol](../protocol.md), and wires the
 chip's pins to it: the peer sees what the guest sends on its UARTs and the levels it drives on
 the pins the peer watches, and sends bytes and levels back. With `--sd-rw` and `--sd-spi`, an SD
-card holding an image file sits on four of the chip's pins, with or without `--board`.
+card holding an image file sits on four of the chip's pins, with or without `--board`. With
+`--wifi`, a Wi-Fi access point is on the air for the chip's station, and the network behind it is
+the peer's.
 The `esp32sim` backend of the pytest plugin starts it, with `--board socket:PATH` and itself as
 the peer, for every test that uses `board` or `console`. This document is for running it by hand, to watch an image boot,
 to drive it from a peer of your own, or to see why a run ended the way it did.
@@ -56,6 +58,12 @@ usage: esp32tl-runner --chip esp32 --flash-at OFFSET=FILE... --max-seconds S [op
   --sd-rw IMAGE         an SD card holding IMAGE, a whole number of 512 KiB units, on the
                         pins of --sd-spi; the guest's writes go into the file
   --sd-spi sclk=N,mosi=N,miso=N,cs=N   the GPIOs the card is wired to, in SPI mode
+  --wifi ssid=…,psk=…,chan=…,bssid=…   esp32sim's virtual access point, every key
+                        optional; the network behind it is the peer's, over the
+                        socket (eth_tx, eth_rx): needs --board
+  --wifi-nearby ssid=…,chan=…,rssi=…,secure=0|1,bssid=…   a network around the
+                        station that a scan lists and nothing can join; repeatable,
+                        needs --wifi
 ```
 
 | Flag | Default | Accepts |
@@ -71,8 +79,11 @@ usage: esp32tl-runner --chip esp32 --flash-at OFFSET=FILE... --max-seconds S [op
 | `--console` | `stdout` | `stdout`; `socket` and `both` only with `--board` |
 | `--sd-rw IMAGE` | none: no card | a path, valid UTF-8, to an image file of a whole number of 512 KiB units, from 512 KiB to 2 TiB; only with `--sd-spi` |
 | `--sd-spi sclk=N,mosi=N,miso=N,cs=N` | none | the four pins in any order, each once, four different GPIOs of the ESP32 (0 to 39 but 24 and 28 to 31); `sclk`, `mosi` and `cs` not input-only (34 to 39); only with `--sd-rw` |
+| `--wifi SPEC` | none: no access point | esp32sim's `key=value,...`, every key optional, an empty `SPEC` included: `ssid` (default `esp32sim`), `psk` (also `password` or `pass`; WPA2-PSK with it, open without), `chan` (also `channel` or `ch`; 1 to 14, default 6), `bssid` (default `02:53:49:4d:00:01`). `epoch` is refused. Only with `--board` |
+| `--wifi-nearby SPEC` | none | esp32sim's `key=value,...`: `ssid` (1 to 32 bytes, required), `chan` (1 to 14, default 1), `rssi` in dBm (-128 to 127, default -60), `secure` (`0` or `1`, also `false`/`true` or `no`/`yes`; default `1`), `bssid` (default: one derived from the SSID, the same every run). Repeatable, at most 32, each on a BSSID of its own and not the access point's SSID or BSSID. Only with `--wifi` |
 
-A flag given twice keeps its last value, except `--flash-at`, which adds a file each time. Flags
+A flag given twice keeps its last value, except `--flash-at` and `--wifi-nearby`, which add one
+each time. Flags
 take their value as the next argument: `--flash-mb=8` is an unknown argument.
 
 ### Where the ROM comes from
@@ -142,6 +153,62 @@ MTOOLS_SKIP_CHECK=1 mtype -i card.img ::foo.txt
 What the card does and does not model is in
 [the technical side](runner-technical.md#the-sd-card).
 
+## Put a Wi-Fi access point on the air
+
+`--wifi SPEC` puts esp32sim's virtual access point on the air for the chip's Wi-Fi station, from
+power-on, and makes the peer the network behind it. It needs `--board`: esp32sim's own network
+behind the access point (its DHCP server, DNS, NTP and NAT to the host) is not used, and esp32sim's
+`--net` flag is not taken. For the `http_request` validation image, which joins the SSID `myssid`
+with the passphrase `mypassword`, ESP-IDF's defaults for its examples:
+
+```sh
+B=firmware/http_request/build
+runner/target/release/esp32tl-runner --chip esp32 \
+  --rom .cache/esp-rom-elfs/20241011/esp32_rev300_rom.elf \
+  --flash-at 0x1000=$B/bootloader/bootloader.bin \
+  --flash-at 0x8000=$B/partition_table/partition-table.bin \
+  --flash-at 0x10000=$B/http_request.bin \
+  --board socket:/tmp/peer.sock \
+  --wifi ssid=myssid,psk=mypassword \
+  --wifi-nearby ssid=cafe,chan=3,rssi=-70,secure=0 \
+  --max-seconds 10
+```
+
+- The station sees what esp32sim's access point does: it answers scans, takes authentication and
+  association, runs the WPA2 handshake when `psk` is set, and beacons on its channel. A station
+  with another passphrase does not finish the handshake: ESP-IDF's example prints
+  a log line with `Wi-Fi disconnected` in it, and gets no address.
+- Each `--wifi-nearby` adds a network around the station: a scan lists it, with its channel, signal
+  and security, and nothing can join it.
+- Once the station has joined, every Ethernet frame it sends goes to the peer as an `eth_tx`
+  message, and every `eth_rx` the peer sends reaches the station as a frame from the network: the
+  peer answers DHCP, ARP and whatever the firmware sends after that
+  ([protocol, 5.15](../protocol.md#515-eth_tx-and-eth_rx-ext-m7)). A peer that answers nothing
+  leaves the station joined but without an address.
+- The peer can take the access point off the air and put it back with `wifi_ap`
+  ([protocol, 5.16](../protocol.md#516-wifi_ap-ext-m7)). Off, the access point deauthenticates the
+  station, as one that shuts down does, and the networks around go with it; back on, it is a fresh
+  access point, and the station has to join it again.
+- The final `stats` has a `wifi` object with the frames each way and the drops
+  ([protocol, 5.9](../protocol.md#59-stats-ext)).
+
+The harness does all of this for a test through `board.wifi`; running it by hand needs a peer that
+speaks the three messages.
+
+The command line refuses, with exit code 2:
+
+- `--wifi puts the peer's network behind the access point: it needs --board`, for `--wifi` without
+  `--board`;
+- `--wifi-nearby needs the access point of --wifi`;
+- `--wifi: epoch sets esp32sim's own network's clock; the network here is the peer's`, for `epoch=`
+  in `--wifi`;
+- `--wifi: MESSAGE` and `--wifi-nearby: MESSAGE`, with esp32sim's own message for a spec it
+  refuses, such as `--wifi: invalid WiFi channel '15': expected 1 through 14` or
+  `--wifi-nearby: a nearby network needs an ssid of 1 to 32 bytes`;
+- `--wifi-nearby ssid=SSID: a network around with the access point's SSID would be the access
+  point` (or `BSSID`), where esp32sim's own command line would leave that network out with a line
+  on stderr.
+
 ## What it prints
 
 stdout carries the guest's UART0 output and nothing else, unless `--console socket` sends it to
@@ -150,6 +217,16 @@ the peer instead. Everything the runner says goes to stderr, on lines that start
 
 - `esp32tl-runner: SD card on SCLK GPIO N, MOSI GPIO N, MISO GPIO N, CS GPIO N: IMAGE (K KiB,
   write-through)` first, with `--sd-rw`;
+- `esp32tl-runner: Wi-Fi access point 'SSID' bssid BSSID channel N (WPA2-PSK), its network on the
+  socket` with `--wifi`, `(open)` without `psk`; then, for each `--wifi-nearby`,
+  `esp32tl-runner: Wi-Fi network around: 'SSID' bssid BSSID channel N RSSI dBm (open)`, or
+  `(WPA2-PSK)` for one that is `secure`. For the example above:
+
+  ```text
+  esp32tl-runner: Wi-Fi access point 'myssid' bssid 02:53:49:4d:00:01 channel 6 (WPA2-PSK), its network on the socket
+  esp32tl-runner: Wi-Fi network around: 'cafe' bssid 02:28:90:58:e8:90 channel 3 -70 dBm (open)
+  ```
+
 - `esp32tl-runner: ROM PATH` once the ROM ELF is loaded;
 - `esp32tl-runner: flash 0x1000: PATH (N bytes)` for each `--flash-at` file, offset in hex;
 - `esp32tl-runner: chip reset at T s, cause CAUSE` each time the firmware resets the chip, as
@@ -196,7 +273,7 @@ to `--board`, and nothing after it.
 | 1 | the emulator stopped for any other reason | the stop line, then `esp32tl-runner: the emulator stopped before --max-seconds: STOP`, the stop with its fields; with `--board`, `end: the emulator stopped before --max-seconds: STOP at ...` |
 | 2 | a usage error | `esp32tl-runner: MESSAGE`, then `run esp32tl-runner --help for the usage` |
 | 2 | an input that cannot be loaded: no ROM found, a file that cannot be read, a ROM that is not an ELF, an image that does not fit in flash, an SD card image that cannot be opened for writing or is not a whole number of 512 KiB units | `esp32tl-runner: MESSAGE`, no stop line |
-| 3 | with `--board`: a protocol error by the peer, such as a malformed line, a version or chip mismatch, an input stamped before its turn's `sync` | `end: protocol error by the peer at BOARD: WHAT: LINE at ...`, `LINE` cut after 200 characters |
+| 3 | with `--board`: a protocol error by the peer, such as a malformed line, a version or chip mismatch, an input stamped before its turn's `sync`, an `eth_rx` or `wifi_ap` on a run without `--wifi` | `end: protocol error by the peer at BOARD: WHAT: LINE at ...`, `LINE` cut after 200 characters |
 | 4 | with `--board`: the connection failed, or the peer is gone: it closed the socket, a read or write failed, or `--peer-timeout` ran out | `end: cannot connect to the peer at ...`, or `end: the peer at BOARD is gone: WHY at ...` |
 | 101 | a panic, in the runner or in esp32sim during the run | Rust's panic message, no stop line |
 | 128 + N | with `--board`: a second `SIGTERM` or `SIGINT` (signal number N) | whatever came before it |

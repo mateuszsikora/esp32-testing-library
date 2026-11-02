@@ -190,6 +190,10 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Output handles provide live named conditions without changing GPIO ownership](harness.md#output-handles-provide-live-named-conditions-without-changing-gpio-ownership) | `harness.md` | decided (#71) |
 | [Board owns interfaces and SD image builders](harness.md#board-owns-interfaces-and-sd-image-builders) | `harness.md` | decided (#73) |
 | [Network selection stays explicit and FAT paths name one entry](harness.md#network-selection-stays-explicit-and-fat-paths-name-one-entry) | `harness.md` | decided (#73) |
+| [The Wi-Fi station is an interface of every profile, and the access point a model source](harness.md#the-wi-fi-station-is-an-interface-of-every-profile-and-the-access-point-a-model-source) | `harness.md` | decided (#31) |
+| [Behind the access point the network speaks Ethernet, ARP and DHCP](harness.md#behind-the-access-point-the-network-speaks-ethernet-arp-and-dhcp) | `harness.md` | decided (#31) |
+| [An HTTP server answers on port 80 of every simulated network](harness.md#an-http-server-answers-on-port-80-of-every-simulated-network) | `harness.md` | decided (#31) |
+| [A Wi-Fi tap, signal changes and the esp32tl command's Wi-Fi are postponed](harness.md#a-wi-fi-tap-signal-changes-and-the-esp32tl-commands-wi-fi-are-postponed) | `harness.md` | postponed (#31) |
 
 ## The runner crate and esp32sim
 
@@ -222,3 +226,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [adc waits for an example with an analog pin](runner.md#adc-waits-for-an-example-with-an-analog-pin) | `runner.md` | postponed (#23) |
 | [The SD card is a model of SPI mode in the runner, not esp32sim's card](runner.md#the-sd-card-is-a-model-of-spi-mode-in-the-runner-not-esp32sims-card) | `runner.md` | decided (#32) |
 | [The SD card answers at once and has no CMD6](runner.md#the-sd-card-answers-at-once-and-has-no-cmd6) | `runner.md` | decided (#32) |
+| [The network behind the access point is the peer's, over the link](runner.md#the-network-behind-the-access-point-is-the-peers-over-the-link) | `runner.md` | decided (#31) |
+| [Ethernet frames are stamped at the slice boundary they are taken at](runner.md#ethernet-frames-are-stamped-at-the-slice-boundary-they-are-taken-at) | `runner.md` | decided (#31) |
+| [The access point that goes off the air deauthenticates the station first](runner.md#the-access-point-that-goes-off-the-air-deauthenticates-the-station-first) | `runner.md` | decided (#31) |
+| [The Wi-Fi messages keep the link protocol at version 1](runner.md#the-wi-fi-messages-keep-the-link-protocol-at-version-1) | `runner.md` | decided (#31) |

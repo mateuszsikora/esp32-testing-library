@@ -349,6 +349,7 @@ fn run_for(seconds: f64, mut guest: FakeGuest, mut peer: FakePeer, console: bool
         console,
         peer_timeout: None,
         signal: &signal,
+        wifi: None,
     };
     let (end, stats) = Session::new(&mut guest, &mut peer, shared, opts).run();
     Run {
@@ -1143,6 +1144,7 @@ fn a_signal_ends_the_slice_in_progress_with_stats() {
         console: false,
         peer_timeout: None,
         signal: &signal,
+        wifi: None,
     };
     let (end, _) = Session::new(&mut guest, &mut peer, shared, opts).run();
     assert!(matches!(end, End::Signal), "{end:?}");
@@ -1306,6 +1308,7 @@ fn on_the_emulator_the_slices_stop_a_guest_asleep_in_waiti_at_the_block_point() 
         console: false,
         peer_timeout: None,
         signal: &signal,
+        wifi: None,
     };
     let (end, stats) = Session::new(&mut guest, &mut peer, shared, opts).run();
     assert!(matches!(end, End::MaxSeconds), "{end:?}");
@@ -1692,6 +1695,7 @@ fn on_the_emulator_gpio_in_reaches_the_guest_and_its_output_comes_back_as_gpio_o
         console: false,
         peer_timeout: None,
         signal: &signal,
+        wifi: None,
     };
     let (end, stats) = Session::new(&mut m, &mut peer, shared, opts).run();
     assert!(matches!(end, End::MaxSeconds), "{end:?}");
@@ -1773,4 +1777,310 @@ fn on_the_emulator_no_pad_is_driven_after_a_chip_reset() {
     Guest::chip_reset(&mut m);
     assert_eq!(driven(&m), 0);
     assert_eq!(Guest::gpio_drive(&m), (0, 0));
+}
+
+/// A guest with a Wi-Fi station: it sends the scripted Ethernet frames at their cycles into the
+/// relay, and its link takes at most `room` frames between two slices, as esp32sim's queue of 64
+/// does, handing one to the station per slice.
+struct WifiGuest {
+    inner: FakeGuest,
+    sends: VecDeque<(u64, Vec<u8>)>,
+    relay: Vec<Vec<u8>>,
+    room: usize,
+    queued: usize,
+    /// What the link took, with the cycle.
+    taken: Vec<(u64, Vec<u8>)>,
+    /// The access point's switches, with the cycle: `true` on the air, `false` once it has
+    /// left.
+    switches: Vec<(u64, bool)>,
+    /// How many times the access point is asked to leave before it has.
+    leave_after: usize,
+    asked_to_leave: usize,
+}
+
+impl WifiGuest {
+    fn new(sends: Vec<(u64, Vec<u8>)>, room: usize) -> Self {
+        Self {
+            inner: FakeGuest::new(Vec::new()),
+            sends: sends.into(),
+            relay: Vec::new(),
+            room,
+            queued: 0,
+            taken: Vec::new(),
+            switches: Vec::new(),
+            leave_after: 1,
+            asked_to_leave: 0,
+        }
+    }
+}
+
+impl Guest for WifiGuest {
+    fn cycles(&self) -> u64 {
+        self.inner.cycles()
+    }
+    fn run_until(&mut self, cycle: u64) -> Stop {
+        let stop = self.inner.run_until(cycle);
+        while self
+            .sends
+            .front()
+            .is_some_and(|(at, _)| *at < self.inner.now)
+        {
+            let (_, frame) = self.sends.pop_front().unwrap();
+            self.relay.push(frame);
+        }
+        self.queued = self.queued.saturating_sub(1);
+        stop
+    }
+    fn chip_reset(&mut self) -> u32 {
+        self.inner.chip_reset()
+    }
+    fn uart_route(&self, port: usize) -> UartRoute {
+        self.inner.uart_route(port)
+    }
+    fn rx_pending(&self, port: usize) -> usize {
+        self.inner.rx_pending(port)
+    }
+    fn uart_input(&mut self, pin: u8, baud: u32, byte: u8) {
+        self.inner.uart_input(pin, baud, byte)
+    }
+    fn gpio_drive(&self) -> (u64, u64) {
+        self.inner.gpio_drive()
+    }
+    fn take_gpio_inputs(&mut self) {
+        self.inner.take_gpio_inputs()
+    }
+    fn take_eth_frames(&mut self) -> Vec<Vec<u8>> {
+        std::mem::take(&mut self.relay)
+    }
+    fn eth_input(&mut self, frame: &[u8]) -> bool {
+        if self.queued >= self.room {
+            return false;
+        }
+        self.queued += 1;
+        self.taken.push((self.inner.now, frame.to_vec()));
+        true
+    }
+    fn wifi_access_point(&mut self, _wifi: &cli::Wifi) {
+        self.switches.push((self.inner.now, true));
+        self.asked_to_leave = 0;
+    }
+    fn wifi_leave(&mut self) -> bool {
+        self.asked_to_leave += 1;
+        if self.asked_to_leave < self.leave_after {
+            return false;
+        }
+        self.switches.push((self.inner.now, false));
+        self.queued = 0;
+        true
+    }
+    fn wifi_drops(&self) -> (u64, u64) {
+        (2, 1)
+    }
+}
+
+fn eth_rx(t: u64, frame: &[u8]) -> String {
+    format!(
+        r#"{{"type":"eth_rx","t":{t},"data":"{}"}}"#,
+        protocol::base64(frame)
+    )
+}
+
+fn wifi_ap(t: u64, on: bool) -> String {
+    format!(r#"{{"type":"wifi_ap","t":{t},"on":{on}}}"#)
+}
+
+/// An Ethernet frame of the minimum length, told apart by its first byte.
+fn frame(n: u8) -> Vec<u8> {
+    let mut f = vec![0; protocol::ETH_MIN];
+    f[0] = n;
+    f
+}
+
+fn run_wifi(end: u64, guest: &mut WifiGuest, peer: &mut FakePeer) -> (End, Stats) {
+    let signal = AtomicBool::new(false);
+    let wifi = cli::Wifi {
+        spec: "ssid=test".into(),
+        nearby: Vec::new(),
+    };
+    let opts = Options {
+        end_cycle: end,
+        console: false,
+        peer_timeout: None,
+        signal: &signal,
+        wifi: Some(&wifi),
+    };
+    let shared = guest.inner.shared.clone();
+    Session::new(guest, peer, shared, opts).run()
+}
+
+#[test]
+fn the_station_frames_go_out_as_eth_tx_events_stamped_at_the_slice_boundary() {
+    let latency = 100_000;
+    let mut guest = WifiGuest::new(
+        vec![(cycles(250_000), frame(1)), (cycles(260_000), frame(2))],
+        64,
+    );
+    let mut answered = false;
+    let mut peer = FakePeer::new(&[], move |turn| {
+        let mut out = Vec::new();
+        if !answered && turn.msgs.iter().any(|m| kind(m) == "eth_tx") {
+            answered = true;
+            out.push(eth_rx(turn.t, &frame(9)));
+        }
+        out.push(wait(turn.seq, None, Some(latency)));
+        out
+    });
+    let (end, stats) = run_wifi(cycles(MS), &mut guest, &mut peer);
+    assert!(matches!(end, End::MaxSeconds), "{end:?}");
+    let sent = peer.of("eth_tx");
+    assert_eq!(sent.len(), 2);
+    // with no event unacknowledged a slice lasts at most the latency: taken at 300 µs
+    for (msg, n) in sent.iter().zip([1, 2]) {
+        assert_eq!(num(msg, "t"), ns(cycles(300_000)));
+        assert_eq!(data(msg), frame(n));
+    }
+    assert_eq!(num(sent[1], "seq"), num(sent[0], "seq") + 1);
+    // the turn at t + latency, and the answer taken there
+    assert_eq!(guest.taken, [(cycles(400_000), frame(9))]);
+    assert_eq!(
+        stats.wifi,
+        Some(WifiStats {
+            eth_tx: 2,
+            eth_rx: 1,
+            eth_rx_dropped: 0,
+            rx_dropped: 2,
+            eth_tx_dropped: 1,
+        })
+    );
+    assert!(
+        peer.stats()
+            .get("wifi")
+            .is_some_and(|w| num(w, "eth_tx") == 2 && num(w, "rx_dropped") == 2)
+    );
+}
+
+#[test]
+fn eth_rx_waits_for_room_in_the_link_and_goes_off_the_air_with_the_access_point() {
+    let mut first = true;
+    let mut peer = FakePeer::new(&[], move |turn| {
+        let mut out = Vec::new();
+        if std::mem::take(&mut first) {
+            out.extend([1, 2, 3].map(|n| eth_rx(MS, &frame(n))));
+            out.push(wifi_ap(3 * MS, false));
+            out.push(eth_rx(4 * MS, &frame(4)));
+            out.push(wifi_ap(5 * MS, true));
+            out.push(wifi_ap(5 * MS, true));
+            out.push(eth_rx(5 * MS, &frame(5)));
+        }
+        out.push(wait(turn.seq, None, None));
+        out
+    });
+    let mut guest = WifiGuest::new(Vec::new(), 2);
+    // the station has joined: the access point leaves at the next slice boundary
+    guest.leave_after = 2;
+    let (end, stats) = run_wifi(cycles(6 * MS), &mut guest, &mut peer);
+    assert!(matches!(end, End::MaxSeconds), "{end:?}");
+    // two fit at 1 ms; the third waits for the slice after, which the link drains
+    assert_eq!(
+        guest.taken,
+        [
+            (cycles(MS), frame(1)),
+            (cycles(MS), frame(2)),
+            (cycles(2 * MS), frame(3)),
+            (cycles(5 * MS), frame(5)),
+        ]
+    );
+    // asked to leave at 3 ms, gone by the boundary after; the second "on" is no switch
+    assert_eq!(
+        guest.switches,
+        [(cycles(4 * MS), false), (cycles(5 * MS), true)]
+    );
+    let wifi = stats.wifi.unwrap();
+    assert_eq!((wifi.eth_rx, wifi.eth_rx_dropped), (4, 1));
+    // counted as the access point left, and at the end: a fresh one starts from none
+    assert_eq!(wifi.rx_dropped, 4);
+}
+
+#[test]
+fn eth_rx_and_wifi_ap_without_wifi_are_protocol_errors() {
+    for line in [eth_rx(0, &frame(1)), wifi_ap(0, false)] {
+        let peer = FakePeer::new(&[], move |turn| {
+            vec![line.clone(), wait(turn.seq, None, None)]
+        });
+        let r = run(1.0, FakeGuest::new(Vec::new()), peer);
+        assert!(
+            matches!(&r.end, End::Protocol(m) if m.contains("without --wifi")),
+            "{:?}",
+            r.end
+        );
+        assert!(r.peer.stats().get("wifi").is_none());
+    }
+}
+
+/// On the emulator itself: the access point that leaves deauthenticates a joined station, waits
+/// until the frame is off its queue, and only then leaves the air; one with no station leaves at
+/// once, and a fresh one comes back joinable.
+#[test]
+fn on_the_emulator_the_access_point_deauthenticates_the_station_before_it_leaves() {
+    let mut m = esp32::machine([0x24, 0x6f, 0x28, 0x00, 0x11, 0x22], 4 << 20);
+    let wifi = cli::Wifi {
+        spec: "ssid=home,bssid=02:00:00:00:00:01".into(),
+        nearby: Vec::new(),
+    };
+    m.wifi_access_point(&wifi);
+    assert!(m.wifi_leave(), "nobody joined: gone at once");
+    assert!(m.bus.periph.wifi.link.ap().is_none());
+
+    m.wifi_access_point(&wifi);
+    let sta = [0x24, 0x6f, 0x28, 0x00, 0x11, 0x22];
+    let ap = m.bus.periph.wifi.link.ap_mut().unwrap();
+    ap.sta = sta;
+    ap.state = StaState::Associated;
+    assert!(!m.wifi_leave());
+    let ap = m.bus.periph.wifi.link.ap_mut().unwrap();
+    assert_eq!(ap.state, StaState::Idle);
+    assert_eq!(ap.next_beacon_us, u64::MAX, "no more beacons");
+    let deauth = &ap.queue.last().unwrap().frame;
+    assert_eq!(&deauth[..2], &[0xc0, 0]);
+    assert_eq!(&deauth[4..10], &sta);
+    assert_eq!(&deauth[10..16], &[2, 0, 0, 0, 0, 1]);
+    // after the sequence control, reason 3: the access point is leaving
+    assert_eq!(&deauth[24..], &[3, 0]);
+    assert!(!m.wifi_leave(), "the station has not had it yet");
+    m.bus.periph.wifi.link.ap_mut().unwrap().queue.clear();
+    assert!(m.wifi_leave());
+    assert!(m.bus.periph.wifi.link.ap().is_none());
+    m.wifi_access_point(&wifi);
+    let ap = m.bus.periph.wifi.link.ap().unwrap();
+    assert_eq!((ap.cfg.ssid.as_str(), ap.state), ("home", StaState::Idle));
+}
+
+#[test]
+fn an_access_point_put_back_while_it_is_leaving_comes_back_once_it_has_left() {
+    let mut first = true;
+    let mut peer = FakePeer::new(&[], move |turn| {
+        let mut out = Vec::new();
+        if std::mem::take(&mut first) {
+            // off and on again at one instant, then a frame while it is leaving
+            out.push(wifi_ap(MS, false));
+            out.push(wifi_ap(MS, true));
+            out.push(eth_rx(MS, &frame(1)));
+            out.push(eth_rx(3 * MS, &frame(2)));
+        }
+        out.push(wait(turn.seq, None, None));
+        out
+    });
+    let mut guest = WifiGuest::new(Vec::new(), 64);
+    // a station has joined: the deauthentication takes a slice to reach it
+    guest.leave_after = 2;
+    let (end, stats) = run_wifi(cycles(4 * MS), &mut guest, &mut peer);
+    assert!(matches!(end, End::MaxSeconds), "{end:?}");
+    assert_eq!(
+        guest.switches,
+        [(cycles(2 * MS), false), (cycles(2 * MS), true)],
+        "the fresh one only once the old one has left"
+    );
+    assert_eq!(guest.taken, [(cycles(3 * MS), frame(2))]);
+    let wifi = stats.wifi.unwrap();
+    assert_eq!((wifi.eth_rx, wifi.eth_rx_dropped), (1, 1));
 }

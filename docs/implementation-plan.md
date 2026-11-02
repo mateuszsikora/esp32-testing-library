@@ -586,7 +586,14 @@ PWRKEY and RI lines and the tap stay as described here.*
   `m.bus.attach_wifi(cfg, nat)` and `StationLink`, both public (the CLI calls them on the classic
   machine from another crate, `cli/src/lib.rs:554`, `esp-soc/src/wifi.rs:490`); the `wifi`
   fixture configures them and puts link events on the scenario timeline. Validation: an IDF
-  example that joins and fetches from a local server.
+  example that joins and fetches from a local server. *Update, 2026-11-02:* done in #31, with
+  section 11's network instead of esp32sim's: the runner's `--wifi` and `--wifi-nearby`, the
+  station's frames relayed on the link (`eth_tx`, `eth_rx`) to the harness's network, which gains
+  Ethernet, ARP, DHCP and an HTTP server, and the access point switched off and on at the test's
+  instant (`wifi_ap`) instead of on a scenario timeline; the access point that leaves
+  deauthenticates the station, since esp32sim's station does not notice missing beacons. ESP-IDF's
+  `protocols/http_request`, unmodified, is the validation
+  ([decisions](decisions/runner.md#the-network-behind-the-access-point-is-the-peers-over-the-link)).
 - SD card, main path: a card model implementing `spi_transfer_pins` in the runner's board. The
   classic SPI bus calls it when `uses_spi_pins()` is true (`esp32/src/spi.rs:541-549`) and
   `SpiPins.cs` carries the select mask, so a transfer-level card model is feasible without a core
