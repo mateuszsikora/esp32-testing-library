@@ -197,6 +197,12 @@ FEATURES = [
         "Flash contents changed (partition table, NVS types and generation):"
         " update docs/features/flash-contents-*.md",
     ),
+    Rule(
+        "F21",
+        r"^esp32tl/matching\.py$",
+        r"^docs/features/matching-",
+        "Matching engine changed (protocols, requests, timing): update docs/features/matching-*.md",
+    ),
 ]
 
 # The catch-all for the package: the rest of sources/ and any new module are owned from their

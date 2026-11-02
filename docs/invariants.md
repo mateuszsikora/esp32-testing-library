@@ -456,3 +456,35 @@ that references to its number keep their meaning.
     `tests/test_flash.py::test_utf8_key_at_page_boundary_preserves_entries`,
     `tests/test_flash.py::test_utf8_namespace_at_page_boundary_preserves_entries`,
     `tests/test_flash.py::test_generator_output_must_match_partition_size`
+
+## Request matching
+
+85. Each request cycles through its recorded occurrences independently, including silent ones;
+    `hold` and `loop` apply to unprompted events and do not stop command matching.
+    `tests/test_matching.py::test_answers_wrap_per_request_including_recorded_timeouts`,
+    `tests/test_matching.py::test_end_policy_does_not_discard_pending_answers_or_stop_matching`,
+    `tests/test_matching.py::test_loop_repeats_unprompted_events_and_hold_stops`
+86. Request time is the final fragment's timestamp. The minimum recorded answer delay bounds
+    latency, and every pending answer, including unknown-command fallbacks, bounds quiet_until.
+    `tests/test_matching.py::test_request_time_is_its_final_fragment_and_chunk_boundaries_do_not_matter`,
+    `tests/test_matching.py::test_quiet_until_includes_stream_unknown_and_every_deferred_answer`
+87. An unknown request is counted and listed; its default PMTK reply uses flag 1 and its UBX NAK
+    identifies the request's class and ID. Protocol framing works across UART chunks.
+    `tests/test_matching.py::test_pmtk_fallback_has_the_command_flag_one_and_checksum`,
+    `tests/test_matching.py::test_ubx_is_length_framed_even_with_terminators_in_payload_and_naks_class_id`,
+    `tests/test_replay.py::test_unseen_requests_are_in_the_backend_report_and_json_properties`,
+    `tests/test_replay.py::test_gnss_replay_answers_configuration_commands_through_the_link`
+
+88. AT prompt recognition does not depend on response chunk boundaries. Command CR/CRLF
+    separators, including a split CRLF before the response, never become prompted payload
+    bytes; actual leading payload whitespace is preserved.
+    `tests/test_matching.py::test_prompt_like_text_does_not_depend_on_response_fragmentation`,
+    `tests/test_matching.py::test_at_command_endings_do_not_change_prompted_payload_bytes`,
+    `tests/test_matching.py::test_at_prompt_switches_next_request_to_opaque_ctrl_z_payload`
+
+89. Every unknown replay request retains its completion time and raw frame in arrival order,
+    including repeated normalised keys and silent fallbacks. Known requests are excluded. The
+    text and JSON reports preserve the full history and bytes after the wire log rolls over;
+    the existing normalised counts remain available.
+    `tests/test_matching.py::test_unseen_history_retains_raw_occurrences_and_completion_times_without_a_reply`,
+    `tests/test_replay.py::test_unseen_requests_are_in_the_backend_report_and_json_properties`
