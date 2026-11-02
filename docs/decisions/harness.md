@@ -1675,8 +1675,8 @@ separately permits initial setup while still rejecting every active pulse.
 
 Status: decided (#73)
 
-Tests can request one `board: Board` and access `console`, `gnss`, `modem`, `lines`, `sd_card`
-and `broker` through it. Both backends implement the shared public base, exported from
+Tests can request one `board: Board` and access `console`, `gnss`, `modem`, `lines` and `sd_card`
+through it. Both backends implement the shared public base, exported from
 `esp32tl`. Existing fixtures return the same objects, including the console matching cursor.
 This avoids a growing fixture parameter list as a test uses more interfaces without adding
 another context object or hiding backend capabilities.
@@ -1694,3 +1694,24 @@ text and bytes, since encoding belongs to text only; automatic insertion by `bui
 scenario setup; and a Python FAT dependency, since existing mtools already handles the image
 formats and avoids a second filesystem implementation. There is no host mutation API on a built
 image: declare initial files through the builder and let the firmware write during the run.
+
+
+## Network selection stays explicit and FAT paths name one entry
+
+Status: decided (#73)
+
+`board.modem.network().broker` selects a modem network explicitly. The existing `broker` fixture
+remains available, but the proposed `board.broker` property is removed: unlike other interface
+properties it selected a source as a side effect, and its transport would be ambiguous with
+future network interfaces.
+
+Card readers expose `FileNotFoundError`, `NotADirectoryError` and `IsADirectoryError` for path
+errors. Directory-entry inspection establishes those conditions, while tool failures remain
+`SourceError`. All builder/reader paths reject brackets along with `*` and `?`: mtools expands
+bracket character classes even without a shell, potentially concatenating unrelated file data.
+This also rejects literal bracket names created outside the API.
+
+**Rejected:** parsing mtools stderr to classify missing files, because its wording can depend on
+locale; and accepting patterns in single-file reads, because an assertion must inspect the one
+file it names. Supporting literal bracket names through escaping is deferred; explicit rejection
+keeps the currently documented no-pattern contract uniform across all commands.

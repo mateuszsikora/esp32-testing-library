@@ -1,5 +1,7 @@
 """FAT image preparation, byte fidelity and ownership through the public SD API."""
 
+import os
+import subprocess
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -69,7 +71,9 @@ def test_external_images_survive_slot_close(slot: SdCard, tmp_path: Path) -> Non
     assert path.exists()
 
 
-@pytest.mark.parametrize("name", ["/ROOT", "../OUT", "A/../OUT", "A//B", "A/*", "C:X", "A\\B"])
+@pytest.mark.parametrize(
+    "name", ["/ROOT", "../OUT", "A/../OUT", "A//B", "A/*", "C:X", "A\\B", "[AB].TXT", "A[", "A]"]
+)
 def test_paths_cannot_escape_or_expand_as_mtools_patterns(slot: SdCard, name: str) -> None:
     with pytest.raises(ValueError, match="invalid card file path"):
         slot.image().with_text(name, "content")
@@ -105,3 +109,60 @@ def test_failed_build_removes_the_partial_image(slot: SdCard) -> None:
         slot.image(size_mb=1).with_bytes("FULL.BIN", b"x" * (2 << 20)).build()
     assert slot._temporary is not None
     assert list(Path(slot._temporary.name).iterdir()) == []
+
+
+@pytest.mark.requires_mtools
+def test_bracket_patterns_never_read_other_files(slot: SdCard, tmp_path: Path) -> None:
+    # Model a filename created outside this API (for example, by firmware).
+    # mcopy creates the literal name, while mtype would expand it as a pattern.
+    card = slot.image(size_mb=1).with_text("A.TXT", "alpha").with_text("B.TXT", "beta").build()
+    source = tmp_path / "literal.txt"
+    source.write_text("literal")
+    subprocess.run(
+        ["mcopy", "-i", str(card.path), str(source), "::[AB].TXT"],
+        check=True,
+        capture_output=True,
+        env={**os.environ, "MTOOLS_SKIP_CHECK": "1"},
+    )
+    assert card.list_files() == ["A.TXT", "B.TXT", "[AB].TXT"]
+    for pattern in ("[AB].TXT", "[A-Z].TXT", "[!C].TXT", "DIR/[AB].TXT"):
+        for read in (card.read_text, card.read_bytes, card.list_files):
+            with pytest.raises(ValueError, match="invalid card file path"):
+                read(pattern)
+    assert card.read_text("A.TXT") == "alpha"
+    assert card.read_text("B.TXT") == "beta"
+
+
+@pytest.mark.requires_mtools
+def test_readers_distinguish_missing_files_and_directories(slot: SdCard) -> None:
+    card = slot.image().with_text("DIR/FILE.TXT", "content").build()
+    for read in (card.read_text, card.read_bytes):
+        with pytest.raises(IsADirectoryError) as directory:
+            read("dir")
+        assert directory.value.filename == "dir"
+        for name in ("MISSING.TXT", "dir/missing.txt", "missing/file.txt"):
+            with pytest.raises(FileNotFoundError) as missing:
+                read(name)
+            assert missing.value.filename == name
+        with pytest.raises(NotADirectoryError):
+            read("dir/file.txt/child")
+        # Errors do not affect subsequent valid, case-insensitive reads.
+        assert card.read_text("dir/file.txt") == "content"
+    with pytest.raises(NotADirectoryError) as file:
+        card.list_files("dir/file.txt")
+    assert file.value.filename == "dir/file.txt"
+    with pytest.raises(NotADirectoryError):
+        card.list_files("dir/file.txt/child")
+    with pytest.raises(FileNotFoundError):
+        card.list_files("dir/missing")
+    assert card.list_files("dir") == ["FILE.TXT"]
+
+
+@pytest.mark.requires_mtools
+def test_invalid_fat_remains_a_tool_error(slot: SdCard) -> None:
+    card = slot.image().build()
+    # An unreadable filesystem is not equivalent to a missing requested file.
+    with card.path.open("r+b") as stream:
+        stream.write(b"\0" * 512)
+    with pytest.raises(SourceError, match="mdir failed"):
+        card.read_text("FILE.TXT")

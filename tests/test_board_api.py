@@ -40,7 +40,7 @@ def test_modem_alias_does_not_select_a_source(board: Board, modem: Modem) -> Non
 
 @pytest.mark.board_profile("lilygo-t-a7670g-r2")
 def test_broker_alias_uses_the_same_modem_network(board: Board, broker: Broker) -> None:
-    assert board.broker is broker is board.modem.network().broker
+    assert broker is board.modem.network().broker
     board.power_on()
 
 

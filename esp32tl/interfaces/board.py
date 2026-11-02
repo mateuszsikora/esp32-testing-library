@@ -15,7 +15,6 @@ from esp32tl.interfaces.lines import Lines
 from esp32tl.interfaces.modem import Modem
 from esp32tl.interfaces.sd_card import SdCard
 from esp32tl.interfaces.uart import Uart
-from esp32tl.net.mqtt import Broker
 from esp32tl.tap import Tap
 from esp32tl.units import Duration
 
@@ -49,10 +48,6 @@ class Board(ABC):
         uart = self.uart("modem")
         assert isinstance(uart, Modem), uart
         return uart
-
-    @property
-    def broker(self) -> Broker:
-        return self.modem.network().broker
 
     @property
     def lines(self) -> Lines:

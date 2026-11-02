@@ -189,6 +189,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Anonymous MQTT clients get deterministic distinct identifiers](harness.md#anonymous-mqtt-clients-get-deterministic-distinct-identifiers) | `harness.md` | decided (#30) |
 | [Output handles provide live named conditions without changing GPIO ownership](harness.md#output-handles-provide-live-named-conditions-without-changing-gpio-ownership) | `harness.md` | decided (#71) |
 | [Board owns interfaces and SD image builders](harness.md#board-owns-interfaces-and-sd-image-builders) | `harness.md` | decided (#73) |
+| [Network selection stays explicit and FAT paths name one entry](harness.md#network-selection-stays-explicit-and-fat-paths-name-one-entry) | `harness.md` | decided (#73) |
 
 ## The runner crate and esp32sim
 

@@ -485,7 +485,9 @@ from `esp32tl` and, for existing imports, `esp32tl.pytest_plugin`. It declares t
 waiting, NVS, reporting and lifecycle API. Interface properties reuse each backend's existing
 UART/line/slot objects; `console` is a `cached_property` wrapping that backend's console buffers.
 Fixture functions return the properties, preserving object identity and the console cursor.
-`broker` delegates to `modem.network().broker`, which selects a model source.
+The `broker` fixture delegates to `modem.network().broker`, which selects a model source.
+`Board` has no broker property; tests selecting the service through the board explicitly call
+`board.modem.network().broker`.
 
 `SdCard.image(size_mb=32)` returns `CardImageBuilder`; both this call and `build()` check that
 the slot is open and call `asked(Request("sd_card", source="model"))`. A saved builder therefore
@@ -496,8 +498,13 @@ truncates `card.img`, formats it with `mformat` (FAT32 forced from 512 MiB), cre
 partial directory. Duplicate and file/parent conflicts are checked case-insensitively.
 
 `CardImage` exposes `path`, `__fspath__`, `read_bytes`, `read_text` and `list_files`. Reads use
-`mtype`; listings use `mdir -b` and exclude directory entries. No FAT state or file contents are
-cached. All commands run without a shell and with `MTOOLS_SKIP_CHECK=1`; command failure becomes
+`mtype`; listings use `mdir -b` and exclude directory entries. Before either operation,
+`_resolve` walks directory entries case-insensitively to check the requested path's existence and
+type. Missing entries raise `FileNotFoundError`, non-directory parents or listing targets raise
+`NotADirectoryError`, and reading a directory raises `IsADirectoryError`. This uses actual
+entries rather than parsing locale-dependent tool errors. `_path` rejects `*`, `?`, `[` and `]`
+for both builder and reader calls, preventing mtools from expanding a requested single path
+into several files. No FAT state or file contents are cached. All commands run without a shell and with `MTOOLS_SKIP_CHECK=1`; command failure becomes
 `SourceError` including stderr. Text encoding/decoding defaults to UTF-8 with no newline
 translation. `SdCard.close()` invalidates handles and removes only builder-owned directories;
 backends call it after stopping the run, including on teardown errors. The inserted path stays
@@ -506,4 +513,6 @@ in `image_path` for reporting, even after the owned image has been removed.
 `tests/test_board_api.py` covers fixture identity, lazy interface access, broker sharing,
 build-after-power-on refusal and backend cleanup. `tests/test_card_image.py` exercises real
 FAT12/16/32 images, nested paths, binary/text fidelity, conflicts, failed builds and ownership.
+It also checks standard path exceptions and bracket-pattern rejection with `A.TXT`, `B.TXT`
+and an externally created literal `[AB].TXT` on the same image.
 The logger integration tests verify that repeated reads see fresh guest writes.

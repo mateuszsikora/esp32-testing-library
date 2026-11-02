@@ -100,11 +100,13 @@ def test_hello_world(board: Board):
 ```
 
 `board.console`, `board.gnss`, `board.modem`, `board.lines` and `board.sd_card` expose the
-profile's interfaces. Access does not power on the board or select a UART source. `board.broker`
-selects the modem's simulated network and returns its MQTT broker, so access it before power-on.
+profile's interfaces. Access does not power on the board or select a UART source.
 Missing profile interfaces fail when accessed; serial capabilities still skip unsupported calls.
-The existing `console`, `gnss`, `modem`, `lines`, `sd_card` and `broker` fixtures remain shortcuts
-to these same objects. Mixing the two styles shares state, including the console's match cursor.
+The existing `console`, `gnss`, `modem`, `lines` and `sd_card` fixtures remain shortcuts to these
+same objects. Mixing the two styles shares state, including the console's match cursor.
+For MQTT, use `board.modem.network().broker`: `network()` explicitly selects the modem's
+simulated network before power-on. The existing `broker` fixture remains a shortcut to that
+service. There is no `board.broker` property that implicitly configures a network.
 `board.uart(role)` remains available for arbitrary UART roles.
 
 For code using backend accessors directly, replace `board.lines()` with `board.lines` and
@@ -242,8 +244,9 @@ def test_the_example_writes_its_files_into_the_image(board: Board):
 - `image(size_mb=32)` starts a builder; `size_mb` is a whole number from 1 to 2048 MiB.
   `with_text(name, contents, encoding="utf-8")` and `with_bytes(name, contents)` declare initial
   files and return the same builder. Subdirectories are created automatically. Paths are relative
-  with `/` separators; traversal, wildcards, FAT-invalid characters and case-insensitive file
-  collisions are refused with `ValueError`.
+  with `/` separators; traversal, wildcards (`*`, `?`, `[` and `]`), FAT-invalid characters and
+  case-insensitive file collisions are refused with `ValueError`. Readers and listings reject
+  the same path syntax, including literal names containing brackets created outside this API.
 - `build()` creates a fresh FAT image each time, before power-on, without inserting it. Existing
   builds are unaffected by later builder changes. The builder uses mtools (`mformat`, `mcopy`,
   `mmd`, `mtype`, `mdir`); install it with `brew install mtools` or `sudo apt-get install mtools`.
@@ -251,9 +254,13 @@ def test_the_example_writes_its_files_into_the_image(board: Board):
   `sd_card: missing mformat, mcopy, mmd, mtype, mdir; install mtools`.
 - `card.read_text(name, encoding="utf-8")` and `card.read_bytes(name)` reopen the current image
   every time, so they see firmware writes. Text decoding preserves line endings, including CRLF.
-  Wait for firmware to finish and close a write before reading. Missing files or tool errors raise
-  `SourceError` naming the command and its stderr. `card.list_files(directory="")` returns sorted
-  immediate filenames, excluding subdirectories, at the root or a specified relative directory.
+  Wait for firmware to finish and close a write before reading. Missing paths raise
+  `FileNotFoundError`; reading a directory raises `IsADirectoryError`. Passing a file as a parent
+  directory raises `NotADirectoryError`. `card.list_files(directory="")` returns sorted immediate
+  filenames, excluding subdirectories, at the root or a specified relative directory; a file
+  argument raises `NotADirectoryError`, and a missing directory raises `FileNotFoundError`.
+  These exceptions carry the card-relative path in `filename`. Tool failures, including an
+  unreadable FAT filesystem, remain `SourceError` naming the command and its stderr.
 - `card.path` is the host image path; the object also supports `os.fspath`. Images created by the
   builder are removed when the board closes, even when never inserted or when the test fails.
   Read or copy results before teardown. Later reader/builder calls raise

@@ -5,6 +5,7 @@ SPI mode on the slot's pins, which writes what the firmware writes into the file
 image builder and reader use mtools; external image paths remain supported.
 """
 
+import errno
 import os
 import shutil
 import subprocess
@@ -51,7 +52,7 @@ def _path(name: str) -> PurePosixPath:
     if any(
         part in ("", ".", "..")
         or part.endswith((".", " "))
-        or any(ord(char) < 32 or char in '<>:"\\|?*' for char in part)
+        or any(ord(char) < 32 or char in '<>:"\\|?*[]' for char in part)
         for part in parts
     ):
         raise ValueError(f"invalid card file path: {name!r}")
@@ -75,8 +76,10 @@ class CardImage(os.PathLike[str]):
 
     def read_bytes(self, name: str) -> bytes:
         self._check()
-        name = str(_path(name))
-        return _mtools("mtype", "-i", str(self.path), f"::{name}")
+        path, is_directory = self._resolve(name)
+        if is_directory:
+            raise IsADirectoryError(errno.EISDIR, "card path is a directory", name)
+        return _mtools("mtype", "-i", str(self.path), f"::{path}")
 
     def read_text(self, name: str, *, encoding: str = "utf-8") -> str:
         """Decode exact file bytes, preserving CRLF and other line endings."""
@@ -85,13 +88,41 @@ class CardImage(os.PathLike[str]):
     def list_files(self, directory: str = "") -> list[str]:
         """Sorted immediate filenames in a directory; excludes subdirectories."""
         self._check()
-        target = str(_path(directory)) if directory else ""
-        entries = _mtools("mdir", "-b", "-i", str(self.path), f"::{target}")
-        return sorted(
-            PurePosixPath(entry).name
+        path = PurePosixPath(".")
+        if directory:
+            path, is_directory = self._resolve(directory)
+            if not is_directory:
+                raise NotADirectoryError(errno.ENOTDIR, "card path is not a directory", directory)
+        return sorted(name for name, is_directory in self._entries(path) if not is_directory)
+
+    def _entries(self, directory: PurePosixPath) -> list[tuple[str, bool]]:
+        # Read actual directory entries instead of interpreting locale-dependent tool errors.
+        target = "" if directory == PurePosixPath(".") else f"{directory}/"
+        entries = _mtools("mdir", "-b", "-i", str(self.path), f"::/{target}")
+        return [
+            (PurePosixPath(entry).name, entry.endswith("/"))
             for entry in entries.decode("utf-8").splitlines()
-            if not entry.endswith("/")
-        )
+        ]
+
+    def _resolve(self, name: str) -> tuple[PurePosixPath, bool]:
+        parts = _path(name).parts
+        parent = PurePosixPath(".")
+        for index, part in enumerate(parts):
+            entry = next(
+                (
+                    entry
+                    for entry in self._entries(parent)
+                    if entry[0].casefold() == part.casefold()
+                ),
+                None,
+            )
+            if entry is None:
+                raise FileNotFoundError(errno.ENOENT, "no such file or directory on card", name)
+            actual_name, is_directory = entry
+            parent /= actual_name
+            if index < len(parts) - 1 and not is_directory:
+                raise NotADirectoryError(errno.ENOTDIR, "card path is not a directory", str(parent))
+        return parent, is_directory
 
 
 class CardImageBuilder:
