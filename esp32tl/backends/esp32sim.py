@@ -57,7 +57,7 @@ from esp32tl.interfaces.modem import Modem
 from esp32tl.interfaces.sd_card import SdCard
 from esp32tl.interfaces.uart import Uart
 from esp32tl.link.boardlink import BoardLink, Wire
-from esp32tl.report import RunLog, shown
+from esp32tl.report import RunLog, board_time, shown
 from esp32tl.sources.replay import Replay
 from esp32tl.tap import sha256
 from esp32tl.units import Duration
@@ -727,6 +727,11 @@ class Esp32Sim:
                 lines.append(f"    unseen requests: {uart.source.unseen_count}")
                 for request, count in uart.source.unseen.items():
                     lines.append(f"      {count} x {shown(request)}")
+                lines.append("    unseen request events:")
+                lines.extend(
+                    f"      {board_time(t)}  {shown(request, limit=len(request))}"
+                    for t, request in uart.source.unseen_events
+                )
         if self._sd_card is not None:
             image = self._sd_card.image
             lines.append(f"sd_card: a card holding {image}" if image else "sd_card: empty")
@@ -765,6 +770,10 @@ class Esp32Sim:
                 routes[name]["unseen_requests"] = [
                     {"request_hex": request.hex(), "count": count}
                     for request, count in uart.source.unseen.items()
+                ]
+                routes[name]["unseen_request_events"] = [
+                    {"t_ns": t, "request_hex": request.hex()}
+                    for t, request in uart.source.unseen_events
                 ]
         card = self._sd_card
         sd_card = (

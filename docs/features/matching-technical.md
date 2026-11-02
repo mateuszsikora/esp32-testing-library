@@ -32,7 +32,10 @@ following inputs belong to the last command.
 active but no answer delay exists, and `None` for a passive stream. `receive(t, data)` frames
 requests, advances a separate index per key modulo the number of occurrences, and schedules
 each selected fragment in a heap `(t + delay, insertion_order, bytes)`. An unknown key increments
-`unseen` and schedules its fallback at `t + latency`. `receive` returns no immediate outputs.
+`unseen`, appends `(t, request)` to `unseen_events` before applying the fallback, and schedules
+that fallback at `t + latency`. The occurrence list stores raw frames independently of the
+normalised counter and the rolling wire log, without a retention limit. `receive` returns no
+immediate outputs.
 
 `poll(now)` emits all due unprompted events and pending answers, ordered by timestamp. Equal-time
 unprompted events precede answers, and answers retain insertion order. It feeds emitted answer
@@ -81,6 +84,9 @@ of whitespace at the start of prompted payloads.
 
 `tests/test_replay.py` runs PMTK and UBX configuration requests through `Uart.replay` and
 `BoardLink`, including a request split differently from its recording and a deferred answer.
-It also checks unseen requests in the backend text report and JSON properties. These tests need
+It also checks unseen requests in the backend text report and JSON properties: timestamps use
+the final fragment, raw case and whitespace survive normalisation, repeated occurrences remain
+in order, and long/binary requests remain complete after log rollover. A matcher test covers
+unknown requests with a silent fallback and excludes known requests from the history. These tests need
 neither emulator nor firmware. The existing GNSS firmware tests continue to exercise passive
 streams; `nmea_reader` itself sends no configuration commands.

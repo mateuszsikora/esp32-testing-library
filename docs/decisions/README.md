@@ -172,6 +172,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Request answers wrap independently of the unprompted timeline](harness.md#request-answers-wrap-independently-of-the-unprompted-timeline) | `harness.md` | decided (#20) |
 | [Replay detects protocols from requests and leaves pure streams passive](harness.md#replay-detects-protocols-from-requests-and-leaves-pure-streams-passive) | `harness.md` | decided (#20) |
 | [AT separators end before the response and prompts belong at line boundaries](harness.md#at-separators-end-before-the-response-and-prompts-belong-at-line-boundaries) | `harness.md` | decided (#20) |
+| [Unseen replay requests retain raw occurrences alongside normalised counts](harness.md#unseen-replay-requests-retain-raw-occurrences-alongside-normalised-counts) | `harness.md` | decided (#20) |
 
 ## The runner crate and esp32sim
 

@@ -1446,3 +1446,16 @@ A prompt must begin the response or follow CR/LF and be its current suffix. Ever
 fragment recomputes that candidate until payload bytes start; permanently latching a temporary
 suffix would make framing depend on chunk boundaries. Once the payload starts, Ctrl-Z framing
 stays active until it completes. The same framer handles the recording and live wire.
+
+## Unseen replay requests retain raw occurrences alongside normalised counts
+
+Status: decided (#20)
+
+The normalised `unseen` counter remains the summary. `unseen_events` additionally stores every
+unknown request's completion time and full raw frame, including repeats and silent fallbacks.
+Text and JSON reports expose both representations. The list is independent of the rolling wire
+log and retained for the whole run, with the memory and report-size cost documented.
+
+**Rejected:** retaining only counters, which merges distinct wire spellings and loses timing;
+recovering occurrences from the rolling log, which can discard precisely the request needed
+for diagnosis. Existing summary fields stay intact for tests and report consumers.

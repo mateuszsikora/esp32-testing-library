@@ -290,3 +290,25 @@ def test_at_command_endings_do_not_change_prompted_payload_bytes(
     engine.receive(111, payload[1:])
     assert engine.poll(121) == [(121, b"\r\nOK\r\n")]
     assert engine.unseen_count == 0
+
+
+def test_unseen_history_retains_raw_occurrences_and_completion_times_without_a_reply() -> None:
+    engine = Matching(
+        recording((1, "out", b"AT\r"), (2, "in", b"OK")),
+        replace(AT, unknown_reply=b""),
+    )
+    engine.receive(10, b"AT\r")  # Known requests never enter the unseen history.
+    assert engine.poll(11) == [(11, b"OK")]
+    engine.receive(20, b" at +missing ")
+    assert engine.unseen_events == []
+    engine.receive(25, b"\rAT+MISSING\r")
+    engine.receive(30, b"AT+MISSING\r")
+    assert engine.unseen_count == 3
+    assert engine.unseen == {b"AT+MISSING": 3}
+    assert engine.unseen_events == [
+        (25, b" at +missing \r"),
+        (25, b"AT+MISSING\r"),
+        (30, b"AT+MISSING\r"),
+    ]
+    assert engine.quiet_until() is None
+    assert engine.poll(40) == []

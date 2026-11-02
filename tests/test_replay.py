@@ -235,19 +235,44 @@ def test_unseen_requests_are_in_the_backend_report_and_json_properties(tmp_path:
     backend = Esp32Sim.__new__(Esp32Sim)
     backend._uarts = {"uart.gnss": gnss}
     backend._sd_card = None
-    backend.log = RunLog()
+    backend.log = RunLog(entries=1)
+    gnss.log = backend.log
     backend.link = BoardLink("esp32-devkitc", [gnss])
     backend.link.receive(HELLO)
     backend.link.receive(Sync(0))
-    backend.link.receive(UartTx(1, 100, 1, (4,), 9600, b"AT+UNKNOWN\rAT+UNKNOWN\r"))
+    routes = backend.properties()["routes"]
+    assert isinstance(routes, dict)
+    assert "unseen_requests" not in routes["uart.gnss"]
+    assert "unseen_request_events" not in routes["uart.gnss"]
+    backend.link.receive(UartTx(1, 90, 1, (4,), 9600, b" at +unknown "))
+    backend.link.receive(UartTx(2, 100, 1, (4,), 9600, b"\rAT+UNKNOWN\r"))
     assert backend.link.receive(Sync(100)) == [
         UartRx(100, 5, 9600, b"\r\nERROR\r\n"),
         UartRx(100, 5, 9600, b"\r\nERROR\r\n"),
-        Wait(1, S, 0),
+        Wait(2, S, 0),
     ]
-    assert "unseen requests: 2\n      2 x AT+UNKNOWN" in backend.report()
+    long_request = b"AT+" + b"x" * 110 + b"\x00\x1b\r"
+    backend.link.receive(UartTx(3, 120, 1, (4,), 9600, long_request))
+    backend.link.receive(Sync(120))
+    # Raw requests survive log rollover, normalisation and the summary's abbreviation.
+    assert "UNKNOWN" not in "\n".join(backend.log.lines())
+    report = backend.report()
+    assert "unseen requests: 3\n      2 x AT+UNKNOWN" in report
+    assert "    unseen request events:" in report
+    assert report.split("    unseen request events:\n")[1].splitlines() == [
+        "      0.000000100 s   at +unknown \\r",
+        "      0.000000100 s  AT+UNKNOWN\\r",
+        "      0.000000120 s  AT+" + "x" * 110 + "\\x00\\x1b\\r",
+    ]
     routes = backend.properties()["routes"]
     assert isinstance(routes, dict)
     assert routes["uart.gnss"]["unseen_requests"] == [
         {"request_hex": b"AT+UNKNOWN".hex(), "count": 2},
+        {"request_hex": (b"AT+" + b"X" * 110 + b"\x00\x1b").hex(), "count": 1},
     ]
+    assert routes["uart.gnss"]["unseen_request_events"] == [
+        {"t_ns": 100, "request_hex": b" at +unknown \r".hex()},
+        {"t_ns": 100, "request_hex": b"AT+UNKNOWN\r".hex()},
+        {"t_ns": 120, "request_hex": long_request.hex()},
+    ]
+    assert backend.link.error is None

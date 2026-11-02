@@ -118,6 +118,15 @@ its steps ([pytest plugin](pytest-plugin-user.md#the-fixtures)).
 A test that passed gets the `routes:` lines and the slot's, without the run; `pytest -rA` shows
 them.
 
+### Unseen replay request history
+
+Replay routes retain the normalised request counts and also list every unknown occurrence under
+`unseen request events:`, with its completion time and full escaped raw frame. The JSON route's
+`unseen_request_events` entries carry `t_ns` and `request_hex`; repeated requests keep separate
+entries in arrival order. This history survives the rolling log dropping old entries and has no
+length limit. See [the backend report](esp32sim-backend-user.md#requests-absent-from-a-replay)
+for the exact representation and the memory and report-size cost.
+
 ### Modem command history
 
 A modem model keeps a complete command history outside the rolling wire log. See

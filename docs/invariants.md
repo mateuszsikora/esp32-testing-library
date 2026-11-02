@@ -481,3 +481,10 @@ that references to its number keep their meaning.
     `tests/test_matching.py::test_prompt_like_text_does_not_depend_on_response_fragmentation`,
     `tests/test_matching.py::test_at_command_endings_do_not_change_prompted_payload_bytes`,
     `tests/test_matching.py::test_at_prompt_switches_next_request_to_opaque_ctrl_z_payload`
+
+89. Every unknown replay request retains its completion time and raw frame in arrival order,
+    including repeated normalised keys and silent fallbacks. Known requests are excluded. The
+    text and JSON reports preserve the full history and bytes after the wire log rolls over;
+    the existing normalised counts remain available.
+    `tests/test_matching.py::test_unseen_history_retains_raw_occurrences_and_completion_times_without_a_reply`,
+    `tests/test_replay.py::test_unseen_requests_are_in_the_backend_report_and_json_properties`

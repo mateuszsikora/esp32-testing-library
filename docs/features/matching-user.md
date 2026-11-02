@@ -68,9 +68,16 @@ duration. Empty loops stay silent. Request matching and pending answers continue
 end policy.
 
 The returned replay exposes `sent` (emitted fragments), `unseen_count` (total unmatched commands)
-and `unseen` (normalised request bytes mapped to their counts). Unknown requests are listed in
-the [backend report](esp32sim-backend-user.md#requests-absent-from-a-replay), but do not by themselves
+and `unseen` (normalised request bytes mapped to their counts). `unseen_events` retains every
+unknown occurrence as `(t_ns, request_bytes)`, in arrival order, including repeated requests.
+The time is when the request's final fragment arrived; the bytes are the complete frame before
+normalisation, including its terminator (the optional LF after an AT CR separator is not part
+of the frame). Occurrences are retained even when the fallback is silence. Unknown requests are
+listed in the [backend report](esp32sim-backend-user.md#requests-absent-from-a-replay), but do not by themselves
 fail a test.
+
+The occurrence history survives the rolling wire log dropping old entries. It is unbounded for
+the run, so long runs with many unknown requests consume memory and produce larger reports.
 
 See [replay](replay-user.md) for paths, clocks, route selection and setup errors, and
 [the implementation](matching-technical.md) for scheduling details.
