@@ -1,0 +1,14 @@
+# The assembly in examples/gps_alarm_clock: a devkit, GNSS receiver and active buzzer.
+name = "gps-alarm-clock"
+chip = "esp32"
+flash_mb = 4
+psram_mb = 0
+
+[uart.gnss]
+port = 1
+tx = 4
+rx = 5
+baud = 9600
+
+[lines.alarm]
+buzzer = 18

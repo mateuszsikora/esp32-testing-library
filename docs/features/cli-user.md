@@ -101,7 +101,7 @@ as `esp32tl: {message}`:
 
 | Message | Cause |
 |---|---|
-| `no board profile named '{board}'; the profiles are esp32-devkitc, lilygo-t-a7670g-r2` | `--board` names no profile esp32tl ships |
+| `no board profile named '{board}'; the profiles are esp32-devkitc, gps-alarm-clock, lilygo-t-a7670g-r2` | `--board` names no profile esp32tl ships |
 | `the board profile {board} has no {interface}; its interfaces are {interfaces}` | `--interface` names no UART route of the profile |
 | `{path}: [Errno 2] No such file or directory: '{path}'`, and every other `RecordingError` | the recording cannot be read, or breaks the [format](../recording-format.md#errors) |
 | `{path} is a recording of {recorded}, not of {interface}`, and every other `ReplayError` | the recording cannot be replayed into that interface ([replay](replay-user.md#what-a-replay-refuses)); `{path}` is the path as given |

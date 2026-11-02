@@ -431,3 +431,15 @@ def test_the_modem_owns_its_feature_documents(repo: Path) -> None:
     assert "[F12]" not in result.stdout and "[F17]" not in result.stdout
     write(repo, "docs/features/modem-technical.md", "# Modem\n")
     assert run(repo).returncode == 0
+
+
+def test_example_firmware_needs_its_documentation(repo: Path) -> None:
+    write(repo, "examples/alarm/main/main.c", "void app_main(void) {}\n")
+    assert "[F24]" in run(repo).stdout
+    write(repo, "docs/features/examples-user.md", "# Examples\n\nAn alarm.\n")
+    assert passes(run(repo))
+
+
+def test_example_tests_only_need_no_documentation(repo: Path) -> None:
+    write(repo, "examples/alarm/tests/test_alarm.py", "def test_alarm(): pass\n")
+    assert passes(run(repo))

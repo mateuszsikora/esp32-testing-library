@@ -51,7 +51,7 @@ esp32tl = "esp32tl.pytest_plugin"
 packages = ["esp32tl"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "examples"]
 addopts = ["-ra", "--strict-markers"]
 # tests/conftest.py skips these where Docker, or mtools, is absent.
 markers = [
@@ -73,7 +73,7 @@ select = ["E", "W", "F", "I", "B", "UP", "SIM", "RUF"]
 [tool.mypy]
 python_version = "3.11"
 strict = true
-files = ["esp32tl", "tests"]
+files = ["esp32tl", "tests", "examples"]
 
 # pytest-embedded, pytest-timeout and esptool ship no py.typed; their annotations are still worth
 # checking against. The NVS generator is also untyped; esp32tl calls its NVS methods directly.

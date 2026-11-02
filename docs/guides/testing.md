@@ -9,7 +9,7 @@ here, and what each test file needs to run. Writing tests for your own firmware 
 
 ```sh
 make test                                   # everything, from a clean checkout
-.venv/bin/pytest                            # the pytest suite, after make setup and make firmware
+.venv/bin/pytest                            # the pytest suite, after make setup and make firmware examples
 .venv/bin/pytest tests/test_firmware_build.py -k requires_docker
 make test-runner                            # the runner's Rust unit tests only
 make test-runner RUNNER_PROFILE=dev         # the same, without the fat-LTO link
@@ -53,7 +53,7 @@ console capture, wall time, capability skips, reference hashes before port creat
 
 `[tool.pytest.ini_options]` in `pyproject.toml`:
 
-- `testpaths = ["tests"]`: a bare `pytest` collects `tests/` only.
+- `testpaths = ["tests", "examples"]`: a bare `pytest` collects both suites.
 - `addopts = ["-ra", "--strict-markers"]`: the summary lists every outcome but passes, skip reasons
   included, and a marker nobody registered is an error. The esp32tl plugin registers `app_path`,
   `app_recording` and `board_profile` itself, and pytest-timeout `timeout`; `requires_docker` and
@@ -269,3 +269,12 @@ network service. `tests/test_pppos_client.py` needs `firmware/pppos_client/build
 and ROM ELF; it validates plain MQTT in both directions. `make determinism` now needs both
 `nmea_reader` and `pppos_client`; it builds either missing image. `tests/test_modem_model.py`
 also checks PPP lifecycle, guarded escape and fatal receive overflow on the network route.
+
+## Example tests
+
+The default pytest collection includes `examples/` alongside `tests/`.
+`examples/gps_alarm_clock/tests/test_alarm.py` exercises NVS configuration, a moving GNSS
+receiver and the buzzer GPIO through the public fixtures. It needs `make examples`, the runner
+and the ROM ELF. Run it alone with `.venv/bin/pytest examples/gps_alarm_clock/tests` after
+`make setup examples`; `make test` builds missing example images automatically.
+See [the example guide](../features/examples-user.md) for the scenarios and wiring.

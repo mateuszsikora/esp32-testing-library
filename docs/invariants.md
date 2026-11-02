@@ -587,3 +587,10 @@ that references to its number keep their meaning.
     `tests/test_net_mru.py::test_mru_resets_on_renegotiation_termination_and_redial`,
     `tests/test_net_mru.py::test_mru_too_small_for_this_stack_gets_a_nak_not_an_ack`,
     `tests/test_net_mru.py::test_ppp_does_not_emit_an_oversized_ip_packet_even_when_called_directly`
+
+
+98. The GPS alarm drives its buzzer only while a fresh valid fix is within the NVS-configured
+    radius. Moving across the radius changes its output within two fix intervals; no fix,
+    loss of fix, receiver silence or missing configuration cannot leave it on. Both destination
+    and radius come from typed NVS values, including southern/western destinations.
+    `examples/gps_alarm_clock/tests/test_alarm.py`

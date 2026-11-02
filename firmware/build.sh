@@ -3,9 +3,10 @@
 # into $FIRMWARE_OUT/<image>/build/, the layout pytest-embedded's IdfApp reads:
 # flasher_args.json, which the backend turns into the runner's --flash-at
 # offsets, beside the ELF, the binaries and config/sdkconfig.json.
-# FIRMWARE_OUT is firmware/ by default.
+# FIRMWARE_OUT is firmware/ by default, or examples/ with --examples.
 #
-#   firmware/build.sh [IMAGE...]     all images when none is named
+#   firmware/build.sh [IMAGE...]     all validation images when none is named
+#   firmware/build.sh --examples [NAME...]     all examples when none is named
 #
 # The build runs in ESP-IDF's container, pinned by digest. IDF_LOCAL=1 builds
 # with the ESP-IDF of the calling shell instead (export.sh sourced), for
@@ -28,6 +29,18 @@ set -eu
 IDF_VERSION=v5.3.6
 CONTAINER=espressif/idf:$IDF_VERSION@sha256:cee52f0c4fdaf088992a7a739f5993154e95cf1d3ab61c24f5b40e6d56a3a070
 IMAGES="hello_world nmea_reader gpio_echo sdspi modem_at nvs_reader pppos_client"
+family=firmware
+if [ "${1:-}" = --examples ]; then
+	shift
+	family=examples
+	IMAGES=
+	for project in "$(dirname "$0")"/../examples/*/CMakeLists.txt; do
+		[ -f "$project" ] || continue
+		name=${project%/CMakeLists.txt}
+		IMAGES="${IMAGES:+$IMAGES }${name##*/}"
+	done
+	[ -n "$IMAGES" ] || { echo "firmware/build.sh: no examples found" >&2; exit 1; }
+fi
 
 die() {
 	echo "firmware/build.sh: $*" >&2
@@ -35,9 +48,13 @@ die() {
 }
 
 # The ESP-IDF project an image is built from: one of ESP-IDF's examples, or
-# one kept under firmware/ (the working directory is the repository's root
+# one kept under firmware/ or examples/ (the working directory is the repository's root
 # when this runs).
 project_of() {
+	if [ "$family" = examples ]; then
+		echo "$PWD/examples/$1"
+		return
+	fi
 	case $1 in
 	hello_world) echo "$IDF_PATH/examples/get-started/hello_world" ;;
 	sdspi) echo "$IDF_PATH/examples/storage/sd_card/sdspi" ;;
@@ -77,7 +94,7 @@ else
 fi
 
 # Before changing directory, so that a relative FIRMWARE_OUT is the caller's.
-out=${FIRMWARE_OUT:-$(dirname "$0")}
+out=${FIRMWARE_OUT:-$(dirname "$0")/../$family}
 mkdir -p "$out"
 out=$(cd "$out" && pwd -P)
 cd "$(dirname "$0")/.."
@@ -86,6 +103,7 @@ cd "$(dirname "$0")/.."
 # ESP32TL_CONTAINER naming its image and ESP32TL_HOST_OUT the host's path of
 # /out, for the messages.
 if [ -z "$container" ]; then
+	[ "$family" != examples ] || set -- --examples "$@"
 	# The repository read-only, so a build cannot write into it except
 	# through /out. hello_world writes nothing into its project directory; a
 	# project under firmware/ that takes components from the component manager
@@ -129,7 +147,7 @@ for image in "$@"; do
 	printf '%s\n' "$provenance" >"$build/esp32tl-build.json"
 	# sdkconfig in the build directory: the project directory may be ESP-IDF's
 	# own examples, or read-only.
-	if [ "$image" = pppos_client ]; then
+	if [ "$family" = firmware ] && [ "$image" = pppos_client ]; then
 		idf.py -C "$project" -B "$build" -DSDKCONFIG="$build/sdkconfig" -DIDF_TARGET=esp32 \
 			"-DSDKCONFIG_DEFAULTS=$project/sdkconfig.defaults;$PWD/firmware/pppos_client/sdkconfig.defaults" build
 	else

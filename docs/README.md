@@ -7,6 +7,7 @@ guide](guides/documentation.md) says how to write each kind.
 | Path | What it holds |
 |---|---|
 | [`features/`](features/README.md) | One pair of documents per feature: `-user.md`, what you can do with it, and `-technical.md`, how it works. Its README holds the ownership map that `make docs-check` enforces |
+| [`features/examples-user.md`](features/examples-user.md) | Runnable examples: build commands, GPS alarm wiring, NVS configuration and tests |
 | [`guides/development.md`](guides/development.md) | Requirements, setup, make targets, the Rust toolchain, the ROM ELF, pre-commit hooks, the repository layout |
 | [`guides/testing.md`](guides/testing.md) | This repository's own test suite: how to run it, its configuration, what each test file needs |
 | [`guides/documentation.md`](guides/documentation.md) | How to write each kind of document, how the documentation check works and what it cannot catch |

@@ -327,3 +327,11 @@ The image lands at `firmware/pppos_client/build/`, with the same provenance and 
 marker as other images. `tests/test_pppos_client.py` checks the firmware publishing and receiving
 from the test's broker. [The network guide](network-user.md) shows both tests. This example uses
 plain MQTT; tracker firmware TLS/NTP validation is #72.
+
+## Building runnable examples
+
+The same builder also supports `firmware/build.sh --examples [NAME...]`, invoked by
+`make examples`. It discovers `examples/*/CMakeLists.txt` instead of the validation-image list
+and writes to `examples/<name>/build/` by default, retaining the pinned container and provenance
+checks. `make firmware` continues to build validation images only.
+See [runnable examples](examples-user.md) for commands and configuration.
