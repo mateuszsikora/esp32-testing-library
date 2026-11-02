@@ -195,9 +195,9 @@ are in [models-technical.md](models-technical.md).
    change of that state, a level or `None`, appends `LineEvent(Duration(t), name, pin, "firmware",
    level)`, and `level(line)` returns it. With the backend's `RunLog`, every call of `drive` and
    `release` is a step of the run, and every change of the firmware's an entry
-   ([run-report-technical.md](run-report-technical.md#data-flow)). `Lines` declares no `latency` and
-   no `quiet_until`: a change of the firmware's takes no turn of its own, and the test sees it at
-   the next turn the clock lets the run take.
+   ([run-report-technical.md](run-report-technical.md#data-flow)). `Lines` without an attached
+   model declares no `latency` and no `quiet_until`: a change of the firmware's takes no turn
+   of its own, and the test sees it at the next turn the clock lets the run take.
 12. **`sd_card` fixture** returns `board.sd_card()`, the `SdCard` of the profile's `[sd_card]`
    slot; a profile without one makes it raise `BackendError`, through `backend_failed`.
    `SdCard.insert(image)` refuses a second card, then calls the backend's
@@ -214,6 +214,23 @@ checks for a console-only route and include it in teardown and the no-power-on g
 console properties drain the reader queue before returning; waits also drain before checking
 conditions, so `Console` uses the same matching and line logic on both clocks.
 
+### Modem fixture and GPIO model responses
+
+`pytest_plugin.modem` returns the backend's `interfaces.modem.Modem` for `uart.modem`. On serial,
+model, replay and tap requests skip through the UART capability check. On esp32sim its first
+model call selects `sources.model.modem.Modem`; the existing source and
+tap checks still apply. See [modem-technical.md](modem-technical.md) for the AT parser and report.
+
+`Lines.attach` reserves a model output and installs a callback for a firmware input. `driven`
+collects callbacks under the line lock and invokes them after releasing it; the modem can then
+queue RI with `model_drive` without a lock cycle. `quiet_until` names the earliest pending model
+change, and `inputs` sends only those due, recording `LineEvent`s with `by="model"`. A new model
+change replaces a pending response on the same pin, allowing the test to cancel an RI transition
+before it reaches the wire. `events` returns chronological snapshots.
+A line reserved for a model rejects direct test drive/release. While the modem is attached,
+`Lines.latency()` is 1,000,000 ns, bounding GPIO replies as well as UART replies. With no model,
+the existing no-latency behavior and board pulls are unchanged.
+
 ## Interfaces
 
 | Name | Kind | What |
@@ -226,8 +243,10 @@ conditions, so `Console` uses the same matching and line logic on both clocks.
 | `console(board)` | fixture, function scope | Returns `Console(board)` |
 | `gnss(board)` | fixture, function scope | Returns `board.uart("gnss")`, a `Gnss` |
 | `lines(board)` | fixture, function scope | Returns `board.lines()` |
-| `Lines(board, lines, now, log=None)` | class, `esp32tl/interfaces/lines.py`, a `BoardLink` `Interface` named `lines` | The `[lines.<role>]` sets `lines` of the profile named `board`, the board's time from `now()`, in nanoseconds, and the `RunLog` it writes to, if any. `drive(line, level)`, `release(line)`, `level(line)` (`int \| None`), `events()` (`list[LineEvent]`); for the link, `pins`, `inputs(now)` and `driven(t, changes, enabled)` |
-| `LineEvent(t, name, pin, by, level)` | frozen dataclass, `esp32tl/interfaces/lines.py` | `t` a `Duration`, an instant of the board's time, `name` as `modem.ri`, `by` `"firmware"` or `"test"`, `level` 0, 1 or `None` |
+| `modem(board)` | fixture, `esp32tl/pytest_plugin.py` | The profile's `uart.modem`, a `Modem`; see [modem-user.md](modem-user.md) |
+| `Modem(name, wire, *, clock, directory, now, lines, pins, asked=..., log=None, files=None)` | class, `esp32tl/interfaces/modem.py`, a `Uart` | Model calls, state properties and command history: [modem-technical.md](modem-technical.md#interfaces) |
+| `Lines(board, lines, now, log=None)` | class, `esp32tl/interfaces/lines.py`, a `BoardLink` `Interface` named `lines` | The `[lines.<role>]` sets `lines` of the profile named `board`, the board's time from `now()`, in nanoseconds, and the `RunLog` it writes to, if any. `drive(line, level)`, `release(line)`, `level(line)` (`int \| None`), `events()` (`list[LineEvent]`); model attachment via `attach(owner, *, output, watch, driven, latency)` and `model_drive(owner, line, t, level)`; for the link, `pins`, `inputs(now)`, `driven(t, changes, enabled)`, `quiet_until()` and `latency()` |
+| `LineEvent(t, name, pin, by, level)` | frozen dataclass, `esp32tl/interfaces/lines.py` | `t` a `Duration`, an instant of the board's time, `name` as `modem.ri`, `by` `"firmware"`, `"test"` or `"model"`, `level` 0, 1 or `None` |
 | `PULLED` | `dict`, `esp32tl/interfaces/lines.py` | `{"up": 1, "down": 0}`: the level a board's pull gives an undriven line |
 | `sd_card(board)` | fixture, function scope | Returns `board.sd_card()` |
 | `SdCard(route, *, directory, asked=..., log=None, files=None)` | class, `esp32tl/interfaces/sd_card.py` | The `sd_card` slot on `route` (an `SdCardRoute`): attributes `name` (`"sd_card"`), `route`, `directory`, `asked`, `log` (the `RunLog` its step goes to), `files` (shared with the routes), `image` (`None` until `insert`, then the image's absolute `Path`); `insert(image)` returns that path |

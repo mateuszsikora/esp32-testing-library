@@ -1,7 +1,7 @@
 """The esp32tl pytest plugin, loaded through the `pytest11` entry point.
 
-It provides the `board`, `console`, `gnss`, `lines` and `sd_card` fixtures on top of
-pytest-embedded's classes (plan §3); `modem`, `bt` and `wifi` come with later milestones.
+It provides the `board`, `console`, `gnss`, `modem`, `lines` and `sd_card` fixtures on top of
+pytest-embedded's classes (plan §3); `bt` and `wifi` come with later milestones.
 The board runs a board profile, `esp32-devkitc` unless the `board_profile` marker names another
 (plan §4.5).
 
@@ -50,6 +50,7 @@ from esp32tl.boards import DEFAULT_PROFILE, BoardProfile, ProfileError
 from esp32tl.interfaces.console import Console
 from esp32tl.interfaces.gnss import Gnss
 from esp32tl.interfaces.lines import Lines
+from esp32tl.interfaces.modem import Modem
 from esp32tl.interfaces.sd_card import SdCard
 
 # The wall-time timeout of a test that uses `board`, in seconds, unless one is configured: 600 s
@@ -451,6 +452,17 @@ def gnss(board: Board) -> Gnss:
     except BackendError as error:
         backend_failed(error, board.name)
     assert isinstance(uart, Gnss), uart
+    return uart
+
+
+@pytest.fixture
+def modem(board: Board) -> Modem:
+    """The profile's uart.modem route; select its model or replay before power-on."""
+    try:
+        uart = board.uart("modem")
+    except BackendError as error:
+        backend_failed(error, board.name)
+    assert isinstance(uart, Modem), uart
     return uart
 
 

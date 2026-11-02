@@ -94,10 +94,13 @@ def test_a_stream_does_not_listen() -> None:
         (
             [event(0), event(7, direction="out")],
             {},
-            "r.jsonl has events out of the ESP32, the first at 7 ns: it holds requests, and"
-            " replay answers none yet, only streams with events in",
+            "r.jsonl: the recording ends with an incomplete request",
         ),
-        ([event(0)], {"end": "loop"}, "r.jsonl ends with loop: replay holds at the end only"),
+        (
+            [event(0)],
+            {"end": "loop"},
+            "r.jsonl: a looping recording with unprompted events must have positive duration",
+        ),
     ],
 )
 def test_what_a_stream_replay_cannot_replay_is_refused(
@@ -186,3 +189,91 @@ def test_the_committed_recording_replays_one_sentence_a_second() -> None:
     while (bound := replay.quiet_until()) is not None:
         times += [t for t, _ in replay.poll(bound)]
     assert times == [(1 + i) * S for i in range(60)]
+
+
+@pytest.mark.parametrize("binary", [False, True])
+def test_gnss_replay_answers_configuration_commands_through_the_link(
+    tmp_path: Path,
+    binary: bool,
+) -> None:
+    from dataclasses import replace
+
+    from esp32tl.recording import Event
+
+    command = bytes.fromhex("b56206010200010a1447") if binary else b"$PMTK220,1000*1F\r\n"
+    answer = bytes.fromhex("b5620501020006010f38") if binary else b"$PMTK001,220,3*30\r\n"
+    recording.write(
+        tmp_path / "commands.jsonl",
+        recording.Recording(
+            replace(stream().header, end="hold"),
+            (Event(10, "out", command, CLOCK), Event(30, "in", answer, CLOCK)),
+        ),
+    )
+    gnss, _ = uart(tmp_path)
+    replay = gnss.replay("commands.jsonl")
+    link = BoardLink("esp32-devkitc", [gnss])
+    link.receive(HELLO)
+    assert link.receive(Sync(0)) == [Wait(0, None, 20)]
+    # Fragmentation on the live wire differs from the recording.
+    link.receive(UartTx(1, 100, 1, (4,), 9600, command[:3]))
+    assert link.receive(Sync(120)) == [Wait(1, None, 20)]
+    link.receive(UartTx(2, 130, 1, (4,), 9600, command[3:]))
+    assert link.receive(Sync(140)) == [Wait(2, 150, 20)]
+    assert link.receive(Sync(150)) == [UartRx(150, 5, 9600, answer), Wait(2, None, 20)]
+    assert replay.sent == 1
+    assert link.error is None
+
+
+def test_unseen_requests_are_in_the_backend_report_and_json_properties(tmp_path: Path) -> None:
+    from esp32tl.backends.esp32sim import Esp32Sim
+    from esp32tl.matching import AT
+    from esp32tl.report import RunLog
+
+    write(tmp_path / "r.jsonl", event(S))
+    gnss, _ = uart(tmp_path)
+    gnss.replay("r.jsonl", protocol=AT)
+    backend = Esp32Sim.__new__(Esp32Sim)
+    backend._console = Uart("console", Wire(1, 3, 115200), clock=CLOCK, directory=tmp_path)
+    backend._uarts = {"uart.gnss": gnss}
+    backend._sd_card = None
+    backend.log = RunLog(entries=1)
+    gnss.log = backend.log
+    backend.link = BoardLink("esp32-devkitc", [gnss])
+    backend.link.receive(HELLO)
+    backend.link.receive(Sync(0))
+    routes = backend.properties()["routes"]
+    assert isinstance(routes, dict)
+    assert "unseen_requests" not in routes["uart.gnss"]
+    assert "unseen_request_events" not in routes["uart.gnss"]
+    backend.link.receive(UartTx(1, 90, 1, (4,), 9600, b" at +unknown "))
+    backend.link.receive(UartTx(2, 100, 1, (4,), 9600, b"\rAT+UNKNOWN\r"))
+    assert backend.link.receive(Sync(100)) == [
+        UartRx(100, 5, 9600, b"\r\nERROR\r\n"),
+        UartRx(100, 5, 9600, b"\r\nERROR\r\n"),
+        Wait(2, S, 0),
+    ]
+    long_request = b"AT+" + b"x" * 110 + b"\x00\x1b\r"
+    backend.link.receive(UartTx(3, 120, 1, (4,), 9600, long_request))
+    backend.link.receive(Sync(120))
+    # Raw requests survive log rollover, normalisation and the summary's abbreviation.
+    assert "UNKNOWN" not in "\n".join(backend.log.lines())
+    report = backend.report()
+    assert "unseen requests: 3\n      2 x AT+UNKNOWN" in report
+    assert "    unseen request events:" in report
+    assert report.split("    unseen request events:\n")[1].splitlines() == [
+        "      0.000000100 s   at +unknown \\r",
+        "      0.000000100 s  AT+UNKNOWN\\r",
+        "      0.000000120 s  AT+" + "x" * 110 + "\\x00\\x1b\\r",
+    ]
+    routes = backend.properties()["routes"]
+    assert isinstance(routes, dict)
+    assert routes["uart.gnss"]["unseen_requests"] == [
+        {"request_hex": b"AT+UNKNOWN".hex(), "count": 2},
+        {"request_hex": (b"AT+" + b"X" * 110 + b"\x00\x1b").hex(), "count": 1},
+    ]
+    assert routes["uart.gnss"]["unseen_request_events"] == [
+        {"t_ns": 100, "request_hex": b" at +unknown \r".hex()},
+        {"t_ns": 100, "request_hex": b"AT+UNKNOWN\r".hex()},
+        {"t_ns": 120, "request_hex": long_request.hex()},
+    ]
+    assert backend.link.error is None

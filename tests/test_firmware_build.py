@@ -135,7 +135,7 @@ def test_build_refuses_an_unknown_image(tmp_path: Path) -> None:
     assert result.returncode == 1
     assert result.stderr == (
         "firmware/build.sh: unknown image 'nope'; the images are:"
-        " hello_world nmea_reader gpio_echo sdspi\n"
+        " hello_world nmea_reader gpio_echo sdspi modem_at nvs_reader\n"
     )
     assert not (tmp_path / "out").exists()
 
@@ -239,6 +239,8 @@ def test_local_build_runs_idf_py_and_records_how(tmp_path: Path, local_idf: dict
         "nmea_reader": str(ROOT / "firmware" / "nmea_reader"),
         "gpio_echo": str(ROOT / "firmware" / "gpio_echo"),
         "sdspi": f"{tmp_path}/idf/examples/storage/sd_card/sdspi",
+        "modem_at": str(ROOT / "firmware" / "modem_at"),
+        "nvs_reader": str(ROOT / "firmware" / "nvs_reader"),
     }
     builds = {image: (tmp_path / "out" / image / "build").resolve() for image in projects}
     assert logged(tmp_path / "idf.log") == [

@@ -323,8 +323,18 @@ def test_the_bluetooth_peer_belongs_to_its_documents(repo: Path) -> None:
     assert passes(run(repo))
 
 
-def test_an_unowned_package_path_needs_a_feature_doc(repo: Path) -> None:
+def test_matching_belongs_to_its_documents(repo: Path) -> None:
     write(repo, "esp32tl/matching.py", '"""Matching."""\n')
+    commit(repo)
+    result = run(repo)
+    assert result.stdout.count("[F21]") == 1
+    assert "[F12]" not in result.stdout
+    write(repo, "docs/features/matching-user.md", "# Matching\n")
+    assert passes(run(repo))
+
+
+def test_an_unowned_package_path_needs_a_feature_doc(repo: Path) -> None:
+    write(repo, "esp32tl/new_feature.py", '"""New feature."""\n')
     write(repo, "esp32tl/py.typed", "\n")
     commit(repo)
     result = run(repo)
@@ -332,15 +342,15 @@ def test_an_unowned_package_path_needs_a_feature_doc(repo: Path) -> None:
     assert result.stdout.count("✗") == 1, "py.typed is nobody's"
     write(repo, "docs/features/esp32sim-backend-user.md", "# Backend\n\n## Use\n\nMore.\n")
     assert "[F12]" in run(repo).stdout, "an edit to an existing feature doc is not a new one"
-    write(repo, "docs/features/matching-user.md", "# Matching\n")
+    write(repo, "docs/features/new-feature-user.md", "# New feature\n")
     assert passes(run(repo))
     commit(repo)
     assert passes(run(repo)), "committed, the new doc is still new since the merge base"
 
 
 def test_a_moved_feature_doc_is_no_new_one(repo: Path) -> None:
-    write(repo, "esp32tl/matching.py", '"""Matching."""\n')
-    git(repo, "mv", "docs/features/esp32sim-backend-user.md", "docs/features/matching-user.md")
+    write(repo, "esp32tl/new_feature.py", '"""New feature."""\n')
+    git(repo, "mv", "docs/features/esp32sim-backend-user.md", "docs/features/new-feature-user.md")
     commit(repo)
     assert "[F12]" in run(repo).stdout
 
@@ -412,3 +422,12 @@ def test_a_stale_decisions_index_fails(repo: Path) -> None:
 
 def test_this_repository_passes_its_integrity_checks() -> None:
     assert check_docs.integrity(ROOT) == []
+
+
+def test_the_modem_owns_its_feature_documents(repo: Path) -> None:
+    write(repo, "esp32tl/sources/model/modem.py", '"""Modem."""\n')
+    result = run(repo)
+    assert "[F19]" in result.stdout
+    assert "[F12]" not in result.stdout and "[F17]" not in result.stdout
+    write(repo, "docs/features/modem-technical.md", "# Modem\n")
+    assert run(repo).returncode == 0

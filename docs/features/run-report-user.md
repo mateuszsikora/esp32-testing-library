@@ -57,18 +57,24 @@ A recording, [version 1](../recording-format.md):
 {"t": 1000000000, "dir": "in", "data": "JEdQR0dB..."}
 ```
 
-- `source` is what was at the far end: `replay`, `model:gnss` for the GNSS receiver the test
-  described ([models and units](models-user.md)), or `none` for a route the test gave nothing.
+- `source` is what was at the far end: `replay`, `model:modem` for the modem, `model:gnss` for the
+  GNSS receiver the test described ([models and units](models-user.md)), or `none` for a route
+  the test gave nothing.
 - `clock` is the backend's, `emulated-fifo-write`: times are the board's nanoseconds since
   power-on.
 - `app_sha256` is the SHA-256 of the app image the run flashed, the file `flasher_args.json`
   names under `app`; `tools` the esp32tl version and the esp32sim revision the runner reported;
   `created` when the file was written, in UTC.
 - An `out` event is bytes the firmware wrote to the route's UART, at the time it wrote them. An
-  `in` event is bytes the far end gave, at the time it stamped them: a replay's events keep their
-  recorded times, so a tap of a replay holds the replay's events up to where the run ended. Bytes
-  the harness refused to send, because they were stamped too early, are in the tap as well; the
-  run has failed on them.
+  `in` event is bytes the far end gave, at the time it stamped them in the current run. Unprompted
+  replay events keep their recorded absolute times on the first pass; `loop` shifts later passes
+  by the recording's period. Matched answers keep their recorded bytes and delays relative to
+  the current request's completion time, not their original absolute times. Repeated requests
+  or a different request order can repeat or reorder answers, and unknown requests can add
+  fallback replies. A tap therefore records the current exchange, not necessarily a prefix of
+  the original recording ([matching](matching-user.md#timing-and-diagnostics)). Bytes the harness
+  refused to send, because they were stamped too early, are in the tap as well; the run has
+  failed on them.
 - Events come in the order of their times; two of one time in the order they reached the route.
 
 ## The run on the board's clock
@@ -129,6 +135,22 @@ its steps ([pytest plugin](pytest-plugin-user.md#the-fixtures)).
 A test that passed gets the `routes:` lines and the slot's, without the run; `pytest -rA` shows
 them.
 
+### Unseen replay request history
+
+Replay routes retain the normalised request counts and also list every unknown occurrence under
+`unseen request events:`, with its completion time and full escaped raw frame. The JSON route's
+`unseen_request_events` entries carry `t_ns` and `request_hex`; repeated requests keep separate
+entries in arrival order. This history survives the rolling log dropping old entries and has no
+length limit. See [the backend report](esp32sim-backend-user.md#requests-absent-from-a-replay)
+for the exact representation and the memory and report-size cost.
+
+### Modem command history
+
+A modem model keeps a complete command history outside the rolling wire log. See
+[modem reporting](modem-user.md#pwrkey-and-reporting) for its fields and the memory and JUnit size
+cost of long runs. The run log also shows `<line> in`, such as `modem.ri in`, for model-driven
+GPIO changes when they reach the link. A pending change cancelled by the test is not logged.
+
 ## When the test gets it wrong
 
 In the test body:
@@ -154,12 +176,16 @@ UART route.
 A tap that cannot be written at teardown is an error there:
 `esp32sim: the tap of uart.gnss cannot be written: {reason}; its output is in {logfile}`.
 
+## Replaying a tap
+
+`gnss.replay(path)` can replay both passive streams and taps with outgoing commands and incoming
+answers. The [matching engine](matching-user.md) groups complete `out` requests with the `in`
+events that follow them. Use `protocol=` when automatic AT or GNSS detection is unsuitable;
+the tap must use a supported framing and the replay route's clock and interface. A tap ending
+part-way through a request is refused ([replay errors](replay-user.md#what-a-replay-refuses)).
+
 ## What it does not do
 
-- A tap of a route the firmware transmits on holds `out` events, and `gnss.replay` refuses a
-  recording with `out` events ([what a replay refuses](replay-user.md#what-a-replay-refuses)):
-  such a tap can be read and compared, not replayed. A tap of a route the firmware only listens
-  on, as `nmea_reader`'s GNSS route, replays.
 - The `esp32tl` command does not tap: there is no `esp32tl record`
   ([the esp32tl command](cli-user.md)).
 - The run report has a line per UART route; esp32tl simulates no network service yet, so there

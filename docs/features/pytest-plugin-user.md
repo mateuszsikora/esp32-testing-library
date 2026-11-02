@@ -76,6 +76,13 @@ What the receiver can be told, and the units, are in [models and units](models-u
   test runs (`Interrupted: 1 error during collection`, exit code 2), unless pytest runs with
   `--continue-on-collection-errors`.
 
+On esp32sim, before `board.power_on()`, `board.nvs({"config": {"broker_host": "broker.test"}})`
+can replace a named NVS partition from the build's table. Integer values require a width,
+for example `u16(8883)` from `esp32tl.flash`. On serial, `board.nvs(...)` skips without writing
+a replacement partition. See [flash contents](flash-contents-user.md).
+A test that supplies NVS and passes without calling `board.power_on()` fails teardown:
+it ran no firmware.
+
 What the backend needs besides the build, the runner and the ROM ELF, is in
 [the esp32sim backend](esp32sim-backend-user.md#what-it-needs).
 
@@ -292,6 +299,19 @@ def test_the_firmware_follows_ri_and_drives_pwrkey(board, lines, console):
 `NeverHappened`, `RunEnded`, `BoardOff` and `SourceError` are in `esp32tl.interfaces`, `LineEvent`
 in `esp32tl.interfaces.lines`.
 
+### The modem fixture
+
+`modem` is the profile's `uart.modem`, available on `lilygo-t-a7670g-r2`. Select its model with
+`modem.signal(dbm=-73)` or another model call before `board.power_on()`, or select a recording with
+`modem.replay(path)`. `modem.tap(path)` records both directions. A selected model responds to AT,
+reads PWRKEY and drives RI through `lines`; the test can inspect all GPIO events, but cannot drive
+or release the model's RI. Model changes use `by="model"` in `lines.events()`; `level()` continues
+to read only the firmware side. The model adds a 1 ms response latency to the lines interface.
+
+See [the modem guide](modem-user.md) for signal, registration, power, command history and limits.
+There is no default modem route on `esp32-devkitc`: requesting the fixture there fails with
+`the board profile esp32-devkitc has no uart.modem; its interfaces are console, uart.gnss, sd_card`.
+
 ## The test's timeout
 
 The board's time and the wall clock are apart: the board stands still while the test body runs,
@@ -439,3 +459,12 @@ under `[tool.pytest.ini_options]`.
 - [Models and units](models-user.md)
 - [Validation firmware](validation-firmware-user.md)
 - [Testing this repository](../guides/testing.md)
+
+
+### Selecting a replay protocol
+
+`gnss.replay(path, protocol=...)` and `board.uart(role).replay(path, protocol=...)` accept a
+`Protocol` from `esp32tl.matching`: `AT`, `PMTK`, `UBX`, or `GNSS` (mixed PMTK/UBX).
+Omitting it detects the protocol from recorded requests; a recording with no requests stays
+passive. The returned replay exposes `sent`, `unseen_count` and `unseen`, a mapping of normalised
+request bytes to occurrence counts. See [matching](matching-user.md) for timing and defaults.

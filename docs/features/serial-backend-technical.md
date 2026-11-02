@@ -41,9 +41,11 @@ indirect parametrisation. See [the user contract](serial-backend-user.md).
    times. The test thread drains the queue into its bytearray, `ConsoleLines`, `RunLog` and tap
    when reading console properties, waiting or closing. Only that thread mutates the buffer,
    avoiding a resize while `Console` holds a matching memoryview. Read errors are queued too.
-6. UARTs use the existing `Uart` and `Gnss` capability callback, refusing replay/model requests
+6. UARTs use the existing `Uart`, `Gnss` and `Modem` capability callback, refusing replay/model requests
    before reading a recording or constructing a model. Their clock/world callbacks are lazy;
-   serial never creates a `GnssReceiver`. `SdCard.insert` likewise skips before reading an image.
+   serial never creates a `GnssReceiver` or modem model. The modem adapter has a local `Lines`
+   object for its interface contract, but no model attaches or drives it. `SdCard.insert` skips
+   before reading an image, and `nvs` skips before generating or writing a partition.
    GPIO fixture access skips after checking the profile has lines. Physical peripherals operate
    independently: the harness has no transport to their wires. Console tapping reuses `Uart.tap`
    through `_console`, sharing `log` and the file map, which reserves reference and flash files.
@@ -97,8 +99,9 @@ run log: the tap, power-on and wait steps, and received console lines.
 | `wait(duration)`, `wait_until(condition, *, within)` | Wait on wall time; durations are nonnegative `Duration`s |
 | `wait_on_clock(condition, within, description)` | Console-facing wait with a description used in logs and errors |
 | `console_output`, `console_lines` | Drain queued input, then return the shared bytearray / `ConsoleLines` |
-| `uart(role)` | Profile's UART object, a `Gnss` for `gnss`, whose unsupported source/tap requests skip |
+| `uart(role)` | Profile's UART object, a `Gnss` for `gnss` or `Modem` for `modem`; unsupported source/tap requests skip |
 | `lines()`, `sd_card()` | Skip GPIO access, or return the slot whose model insertion skips; missing interfaces fail |
+| `nvs(namespaces, partition="nvs")` | Skip: hardware NVS replacement is unsupported |
 | `tap_console(path)` | Console `Tap` via `Uart.tap`; before power-on, with path collision checks |
 | `set_up()` | `the tap of console` when tapped, otherwise empty |
 | `close()` | Stop capture, restore healthy redirection, write tap, report errors; idempotent |
@@ -111,6 +114,7 @@ run log: the tap, power-on and wait steps, and received console lines.
 |---|---|
 | `--esp32tl-backend` | esp32sim unless explicitly set to serial; esp32tl |
 | `--port`, indirect `port` parameter | No default for serial; an exact, nonblank value is required; pytest-embedded opens it |
+| `ESPBAUD` | 921600 for `IdfSerial.flash()` in pytest-embedded-idf 2.9.3; use a lower value for adapters that need it. `--esptool-baud` alone does not control this flash command |
 | `ESPPORT` | Must be unset, empty or equal to the explicit port; pytest-embedded otherwise overrides `port` |
 | `--flash-port`, indirect `flash_port` parameter | No separate flashing port supported; resolved value must be `None` |
 | `--skip-autoflash` | False; pytest-embedded, use `--skip-autoflash y` to reuse flash |
@@ -120,7 +124,8 @@ run log: the tap, power-on and wait steps, and received console lines.
 | `POLL_SECONDS` | 0.01; reader and wait polling interval, not a precision guarantee |
 | `READER_STOP_SECONDS` | 1.0; maximum wait for esp32tl's reader during close |
 
-esp32tl adds no environment variables; pytest-embedded's `ESPPORT` is checked as above. Runner
+esp32tl adds no environment variables; pytest-embedded's `ESPPORT` is checked as above and
+`ESPBAUD` controls flashing as listed in the table. Runner
 and ROM settings are unused. Encrypted builds are deliberately outside M4: provisioning,
 efuse/key management and ciphertext verification are not implemented
 ([decision](../decisions/harness.md#serial-validation-accepts-unencrypted-classic-esp32-builds-only)).
@@ -156,6 +161,7 @@ from pytest-embedded propagate with their original messages.
 | `serial: console reader did not stop within 1 s` | Bounded join expired; teardown failure, no redirect restart |
 | `serial: the tap of console cannot be written: {error}` | Tap `OSError` or `RecordingError` at teardown |
 | `serial: the test set up the tap of console and never called board.power_on(): it ran no firmware` | Passing test with a tap but no successful power-on; no tap written |
+| `serial: NVS contents cannot be configured on this backend` | Skip before generating or writing a partition |
 | `serial: GPIO lines cannot be controlled or observed on this backend` | Skip for a profile with GPIO lines |
 | `serial: the board profile {name} has no lines`, `serial: the board profile {name} has no sd_card` | Missing profile interface; fixture error |
 | `this board cannot tap its console` | `SourceError` from `Console.tap` on an external board lacking `tap_console`; both shipped backends implement it |

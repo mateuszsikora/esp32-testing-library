@@ -162,22 +162,53 @@ def test_serial_capabilities_skip_at_the_call(pytester: pytest.Pytester) -> None
             gnss.tap("not-written.jsonl")
         def test_card(sd_card):
             sd_card.insert("not-read.img")
+        def test_nvs(board):
+            board.nvs({"config": {"host": "test"}})
+        @pytest.mark.board_profile("lilygo-t-a7670g-r2")
+        def test_modem_model(modem):
+            modem.signal(dbm=-73)
+        @pytest.mark.board_profile("lilygo-t-a7670g-r2")
+        def test_modem_replay(modem):
+            modem.replay("not-read.jsonl")
+        @pytest.mark.board_profile("lilygo-t-a7670g-r2")
+        def test_modem_tap(modem):
+            modem.tap("not-written.jsonl")
         @pytest.mark.board_profile("lilygo-t-a7670g-r2")
         def test_gpio(lines):
             lines.drive("modem.ri", True)
     """)
     result = run_serial(pytester, "-rs")
-    result.assert_outcomes(skipped=5)
+    result.assert_outcomes(skipped=9)
     result.stdout.fnmatch_lines(
         [
             "*serial: uart.gnss takes no model source on this backend, only real*",
             "*serial: uart.gnss takes no replay source on this backend, only real*",
             "*serial: uart.gnss cannot be tapped on this backend*",
             "*serial: sd_card takes no model source on this backend, only real*",
+            "*serial: NVS contents cannot be configured on this backend*",
+            "*serial: uart.modem takes no model source on this backend, only real*",
+            "*serial: uart.modem takes no replay source on this backend, only real*",
+            "*serial: uart.modem cannot be tapped on this backend*",
             "*serial: GPIO lines cannot be controlled or observed on this backend*",
         ]
     )
     assert not (pytester.path / "not-written.jsonl").exists()
+
+
+def test_serial_modem_fixture_can_accompany_console_test(pytester: pytest.Pytester) -> None:
+    fake_build(pytester.path)
+    pytester.makeconftest(FAKE_SERIAL)
+    pytester.makepyfile("""
+        import pytest
+        from esp32tl.interfaces.modem import Modem
+        @pytest.mark.board_profile("lilygo-t-a7670g-r2")
+        def test_console(board, modem, console):
+            assert isinstance(modem, Modem)
+            assert modem.source is None
+            board.power_on()
+            console.expect("Hello world!")
+    """)
+    run_serial(pytester).assert_outcomes(passed=1)
 
 
 def test_artifact_hash_is_app_binary_and_refuses_missing_or_different_hash(tmp_path: Path) -> None:

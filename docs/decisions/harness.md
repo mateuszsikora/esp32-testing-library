@@ -494,7 +494,7 @@ The backend finds the runner in the checkout, so from a wheel only `ESP32TL_RUNN
 
 ## Replaying requests, looping and wall-clock recordings is postponed
 
-Status: postponed (#20)
+Status: superseded (#20)
 
 The replay replays streams only, and refuses the rest with a `ReplayError`. A recording with `out`
 events holds requests, whose answers need the matching engine of plan §4.4 (#20). `end: loop` on a
@@ -1086,8 +1086,9 @@ waiting on the board's clock, then drives the line there, so `lines.drive` takes
 input reaches the link but from an interface. Two interfaces on one line are refused, and so is an
 input on a pin of another interface's, so a model that drives a profile's line, the modem's RI
 (#29), cannot be an interface beside `Lines`: either `Lines` takes inputs scheduled ahead from the
-model, with a `quiet_until` of its own, or the backend leaves the model's lines out of `Lines`. #29
-decides which.
+model, with a `quiet_until` of its own, or the backend leaves the model's lines out of `Lines`.
+#29 uses the first arrangement: see
+[the modem drives RI through Lines](#the-modem-drives-ri-through-lines-and-observes-pwrkey-through-it).
 
 **Rejected:** keeping `Timeline` for the lines, because it would be a second path for inputs that
 one interface uses, and its errors would name a scenario that no longer exists; and `at=` on
@@ -1386,3 +1387,176 @@ not ciphertext on flash. Encrypted builds are refused before port setup even wit
 
 **Rejected:** implying that the serial restriction comes from a runner, or silently accepting
 an unvalidated encryption/provisioning workflow. Supporting such boards needs its own design.
+
+## The modem drives RI through Lines and observes PWRKEY through it
+
+Status: decided (#29)
+
+`Lines` remains the single GPIO interface on the link. The modem model reserves RI as its output,
+observes firmware PWRKEY changes through callbacks and queues GPIO responses through
+`Lines.model_drive`. These stay in Lines until due, with `quiet_until` bounding the next turn;
+a new model change replaces a pending one on the same pin. Sending future GPIO changes straight
+to the runner was rejected because a test can remove power before the planned response and must
+be able to cancel it. The lines fixture retains every line for reading and event inspection,
+but rejects test drive/release of a model-owned output. Model changes carry `by="model"`.
+Callbacks run outside the line lock. A model selects the minimum response latency of `Lines`,
+1 ms for the modem, so a PWRKEY edge cannot arrive too late to schedule RI.
+
+**Rejected:** excluding model pins from `Lines`, because requesting the modem would then change
+which lines the test can inspect; and letting two interfaces own RI, which BoardLink forbids.
+No separate scenario or wall clock is introduced.
+
+## The modem begins powered and registered and keeps every AT command
+
+Status: decided (#29)
+
+A first model call selects an initially powered, registered modem with -73 dBm signal and echo
+off, matching the spike's immediately useful AT peer. `power_off` selects an initially off modem
+when firmware must start it with PWRKEY. Power pulses use the profile's ESP32-pad active level
+and separate on/off thresholds: high at the ESP32 pad, 50 ms and 2500 ms. The polarity comes
+from LilyGO's ATdebug example; SIMCom's Hardware Design V1.03, tables 10–11, gives 50 ms as the
+typical on pulse and 2.5 s as the minimum off pulse
+([sources](../features/modem-user.md#pwrkey-and-reporting)).
+The model uses 50 ms as a threshold, not as a claimed manufacturer-guaranteed minimum. Using
+LilyGO's nominal 100/3000 ms delays as thresholds was rejected: a tick-based delay
+can end nearly one tick early, so unmodified example firmware would fail to start or stop the
+model. The validation firmware uses those nominal delays without adding a tick. The pulse
+is evaluated at release; the model has no boot delay. Unknown AT commands get `OK` and are marked
+as fallbacks in the complete, timestamped command report, so the subset can grow from firmware.
+Noncommands, including command-mode `+++`, never get `OK`.
+
+**Rejected:** failing unknown AT commands by default, because the spike showed that a permissive
+peer can run firmware whose modem initialization includes unrelated settings; and relying on the
+rolling wire log for the command list, because earlier setup commands would disappear.
+
+## The modem data peer and realistic escape timing wait for network integration
+
+Status: postponed (#30)
+
+This AT-only model accepts an optional `Source` as its data peer, but creates no PPP or host
+network. Without one, dial still returns `CONNECT` and data bytes are retained without answers.
+The validation firmware exercises dial and escape without a network. Registration and supply
+loss end data mode silently, without an unsolicited `NO CARRIER`; disconnect notification is
+left with the peer lifecycle in #30 and documented as a current limitation. Resetting the eventual
+PPP peer belongs with its lifecycle in #30.
+
+`+++` escapes across any UART chunk boundaries, without guard-time enforcement; one or two
+trailing pluses wait for the next byte. A timed escape recognizer, unsolicited registration
+notifications, realistic boot/shutdown delays (including `Toff-on` and `Ton(uart)`) and detailed
+APN/operator configuration wait until validation firmware needs them. Commands accepted without
+simulating their settings and unknown fallbacks are documented, so they do not imply a complete
+cellular modem.
+
+## NVS generation treats every key and namespace literally
+
+Status: decided (#70)
+
+`board.nvs()` uses `esp-idf-nvs-partition-gen`'s `nvs_open` and the `NVS.write_namespace` and
+`NVS.write_entry` methods directly. The dependency is pinned exactly; upgrades must verify
+literal names, actual values, the complete entry set and deterministic image bytes. The API
+takes the usable size excluding the final reserved page and adds that page when the writer
+closes.
+
+The adapter validates values and passes strings as `string`, bytes as `binary` and integers
+with their explicit width directly to the writer, without CSV or temporary files. This
+preserves CRLF, multiline certificates and lines beginning with `#`, and supports blobs larger
+than 64 KiB whenever the NVS partition has room. A successful second call for a partition
+replaces its contents; failed validation or generation leaves the preceding image intact.
+
+Names reach the pinned generator as `_NvsKey`, a private `str` subclass whose length is its
+UTF-8 byte count. Version 0.3.0's primitive and variable-length writers use `len(key)` to size
+a bytearray slice receiving `key.encode()`. Ordinary Unicode strings can enlarge the entry
+header, corrupt neighbours and extend the final page. The adapter preserves the original
+text, UTF-8 bytes and namespace identity while making that slice length correct. Output-size
+validation remains mandatory; tests independently check entry contents and CRCs at page
+boundaries.
+
+**Rejected:** the generator's CLI and module-level `write_entry` wrapper. In both 0.1.9 and
+0.3.0 they interpret names such as `sta.ssid` and `sta.pswd` even in a namespace called `config`,
+write temporary file paths instead of string contents, and add unrequested Wi-Fi keys. They
+also interpret namespace names as keys before checking the CSV row type. Inlining strings
+would not prevent the extra keys, and the CLI filters comment-looking lines before CSV
+parsing. An open dependency range could silently restore these transformations. Implicitly
+merging successive calls is also rejected: each call describes a whole partition and must not
+retain keys absent from the new configuration.
+
+Retaining intermediate CSV is rejected: its default 131072-character field limit rejects a
+hex-encoded blob above 64 KiB even when it fits in NVS. Raising a process-global CSV limit
+would only preserve unnecessary serialisation and shared mutable state. Rejecting non-ASCII
+names would narrow the promised UTF-8 API; copying the generator's page encoder or patching
+its global classes would carry more code and affect other callers. The length adapter is
+local to the names passed to this writer and is rechecked when upgrading the pinned package.
+
+## Request answers wrap independently of the unprompted timeline
+
+Status: decided (#20)
+
+The matching engine keeps one sequence of occurrences per normalised request, including empty
+answers for recorded timeouts. That sequence always wraps; `end: hold` does not disable commands
+once the unprompted timeline is exhausted. `loop` repeats only the unprompted events (those before
+the first complete request), with a period equal to the last recording line's time, measured from
+zero. There is no invented inter-cycle pause or new format field. An event at zero in the next
+cycle follows the preceding cycle's final event at the same instant. A nonempty, zero-duration
+unprompted loop is refused; an empty loop stays silent.
+
+The format has no correlation metadata: every input after a request and before the next complete
+request belongs to that request. The engine does not guess which of those bytes are unsolicited
+notifications, or which response belongs to an earlier pipelined request. Such traffic needs a
+protocol model or a recording split appropriately for this rule.
+
+## Replay detects protocols from requests and leaves pure streams passive
+
+Status: decided (#20)
+
+Requests beginning with `$` or UBX sync use the combined GNSS framer (PMTK lines and UBX frames
+on one wire); other requests use AT. `protocol=` overrides that choice, including for recordings
+with no requests. A pure stream without that argument retains `latency=None` and ignores firmware
+transmissions. An explicitly configured protocol answers unseen requests even without examples;
+when there is no recorded answer delay its latency is zero, since no positive bound is known.
+Wall-clock recordings still cannot replay on an emulated-clock route (#27).
+
+The final request fragment supplies its timestamp, both while compiling and receiving. Starting
+at the first byte could put a short answer before the request's terminator arrives. UBX framing
+uses its length field; payload and checksum bytes remain opaque, permitting fault recordings.
+AT case and whitespace normalisation preserves quoted values and prompted Ctrl-Z payloads.
+
+
+## AT separators end before the response and prompts belong at line boundaries
+
+Status: decided (#20)
+
+A CR-terminated command consumes one optional LF, including in a separate outgoing chunk before
+the response. The first response byte closes this separator window. Stripping whitespace from
+prompted payloads was rejected: a payload's leading LF, spaces and CR/LF must stay literal.
+A LF sent after the response starts is therefore data, not a delayed command separator.
+
+A prompt must begin the response or follow CR/LF and be its current suffix. Every response
+fragment recomputes that candidate until payload bytes start; permanently latching a temporary
+suffix would make framing depend on chunk boundaries. Once the payload starts, Ctrl-Z framing
+stays active until it completes. The same framer handles the recording and live wire.
+
+## Unseen replay requests retain raw occurrences alongside normalised counts
+
+Status: decided (#20)
+
+The normalised `unseen` counter remains the summary. `unseen_events` additionally stores every
+unknown request's completion time and full raw frame, including repeats and silent fallbacks.
+Text and JSON reports expose both representations. The list is independent of the rolling wire
+log and retained for the whole run, with the memory and report-size cost documented.
+
+**Rejected:** retaining only counters, which merges distinct wire spellings and loses timing;
+recovering occurrences from the rolling log, which can discard precisely the request needed
+for diagnosis. Existing summary fields stay intact for tests and report consumers.
+
+## Serial adapters preserve skips for modem models and NVS replacement
+
+Status: decided (#25)
+
+The serial modem route uses the same `Modem` adapter as esp32sim so model, replay and tap
+requests reach the capability check. Merely requesting it leaves the physical peripheral
+untouched and does not skip a console test. Its local `Lines` object has no transport and no
+model can attach to it. `board.nvs()` skips on serial before generating or writing an image.
+
+**Rejected:** exposing the new emulator APIs as missing attributes on serial, or flashing a
+test-specific NVS partition after pytest-embedded's autoflash without a hardware lifecycle
+design. Replacement of physical NVS remains outside this serial milestone.

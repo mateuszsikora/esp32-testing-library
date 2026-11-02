@@ -27,9 +27,9 @@ clock switch, in the order they happened.
 | `esp32tl_recording` | integer | yes | The format's version, `1`. Any other value is refused |
 | `board` | non-empty string | yes | The board profile the recording was made on, as in `esp32-devkitc`. Not checked against the profiles esp32tl ships |
 | `interface` | non-empty string | yes | The interface of that profile: `console`, `uart.gnss`, `uart.modem`. A replay refuses a recording of another interface |
-| `source` | non-empty string | yes | What was at the far end: `model:<name>` for a model, `real` for a real device, `generated` for a script's output; a tap writes `replay` for a replay, `model:gnss` for the GNSS receiver model and `none` for a route with nothing at its far end. Any non-empty string is read |
+| `source` | non-empty string | yes | What was at the far end: `model:<name>` for a model, `real` for a real device, `generated` for a script's output; a tap writes `replay` for a replay, `model:gnss` for the GNSS receiver model, `model:modem` for the modem model and `none` for a route with nothing at its far end. Any non-empty string is read |
 | `clock` | `emulated-fifo-write` or `wall` | yes | The clock the times are on, up to the first clock switch ([Clocks](#clocks)) |
-| `end` | `hold` or `loop` | no, `hold` | After the last event: `hold`, nothing more; `loop`, the recording starts over |
+| `end` | `hold` or `loop` | no, `hold` | Unprompted events: `hold`, stop after the last; `loop`, repeat with the final timestamp as period. Request matching continues in either case ([matching](features/matching-user.md)) |
 | `app_sha256` | 64 lowercase hex digits, or `null` | no, `null` | The SHA-256 of the `app.bin` that ran when the recording was made, the app image only, so that a bootloader or partition-table change does not set it apart; `null` when no app made it. The `esp32sim` backend does not compare it |
 | `tools` | object of strings | no, `{}` | The versions of the tools that made it, by name: `esp32tl`, `esp32sim` (the full revision the runner's `hello` names) |
 | `created` | string | yes | When it was made, in UTC: `YYYY-MM-DDTHH:MM:SSZ`, fractions of a second allowed (`.5Z`), nothing else |

@@ -71,7 +71,7 @@ FEATURES = [
         r"^docs/features/pytest-plugin-",
         "Console interface changed: update docs/features/pytest-plugin-*.md",
     ),
-    # The registry and serial backend belong to F19; the held clock belongs to esp32sim.
+    # The registry and serial backend belong to F22; the held clock belongs to esp32sim.
     Rule(
         "F3",
         r"^esp32tl/backends/(esp32sim|clock)\.py$",
@@ -80,7 +80,7 @@ FEATURES = [
         " update docs/features/esp32sim-backend-*.md",
     ),
     Rule(
-        "F19",
+        "F22",
         r"^esp32tl/backends/(serial|__init__)\.py$",
         r"^docs/features/serial-backend-",
         "Serial backend or backend registry changed: update docs/features/serial-backend-*.md",
@@ -174,11 +174,10 @@ FEATURES = [
         "Taps or the run report changed (what a tap writes, what the report shows):"
         " update docs/features/run-report-*.md",
     ),
-    # The units and every device model: the models are named after their device and share the
-    # units, so one pair of documents owns them until a model needs a pair of its own.
+    # The modem has its own feature documents (F19); the other models share units (F17).
     Rule(
         "F17",
-        r"^esp32tl/(units\.py|sources/model/)",
+        r"^esp32tl/(units\.py|sources/model/(?!modem\.py$))",
         r"^docs/features/models-",
         "Models or units changed (quantities, the GNSS receiver, its sentences):"
         " update docs/features/models-*.md",
@@ -189,6 +188,25 @@ FEATURES = [
         r"^docs/features/bluetooth-peer-",
         "Bluetooth peer changed (the air's clock, the controller, the SPP peer):"
         " update docs/features/bluetooth-peer-*.md",
+    ),
+    Rule(
+        "F19",
+        r"^esp32tl/sources/model/modem\.py$",
+        r"^docs/features/modem-",
+        "Modem model changed (AT dialogue, power, registration): update docs/features/modem-*.md",
+    ),
+    Rule(
+        "F20",
+        r"^esp32tl/flash\.py$",
+        r"^docs/features/flash-contents-",
+        "Flash contents changed (partition table, NVS types and generation):"
+        " update docs/features/flash-contents-*.md",
+    ),
+    Rule(
+        "F21",
+        r"^esp32tl/matching\.py$",
+        r"^docs/features/matching-",
+        "Matching engine changed (protocols, requests, timing): update docs/features/matching-*.md",
     ),
 ]
 

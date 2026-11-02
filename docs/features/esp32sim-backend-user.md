@@ -218,3 +218,24 @@ which the test sees as `RunEnded` or at teardown ([when the runner exits](#when-
 - [pytest plugin](pytest-plugin-user.md)
 - [Runner](runner-user.md)
 - [Development setup](../guides/development.md)
+
+
+### Requests absent from a replay
+
+A replay with unknown requests adds `unseen requests: {count}` under its route in the report,
+then one `  {count} x {request}` line per normalised request, in first-seen order. Bytes are
+escaped and long requests abbreviated as in the run log. The route in the JSON properties also
+gets `unseen_requests`, a list of `{"request_hex": "...", "count": 2}` objects; hex preserves
+all normalised bytes.
+
+After the counts, `unseen request events:` lists every occurrence in arrival order as
+`      0.000000100 s  AT+UNKNOWN\r`, with its request-completion time and full escaped raw frame.
+These lines are not abbreviated; case, whitespace, terminators and binary bytes are retained.
+The route's JSON adds `unseen_request_events`, a list of
+`{"t_ns": 100, "request_hex": "41542b554e4b4e4f574e0d"}` objects. Repeated requests remain separate
+entries even at the same time. Both JSON fields are absent when there are no unknown requests.
+
+The occurrence history is independent of the rolling log and is retained for the whole run;
+long runs with many unknown requests therefore use more memory and produce larger reports.
+Unknown commands alone do not fail the test; their protocol supplies a fallback response
+([matching](matching-user.md)), and a silent fallback still creates a history entry.

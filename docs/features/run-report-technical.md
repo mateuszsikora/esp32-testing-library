@@ -150,6 +150,13 @@ The esp32sim user property's `routes`, by interface: `{"source": kind or null, "
 the source was made from or null, "bytes_in": n, "bytes_out": n, "tap": path or null}`;
 and `sd_card`, `{"image": path or null}`, or null on a profile without a slot.
 
+`RunLog.line(t, name, level, direction="out")` records firmware GPIO output by default.
+`Lines.inputs` calls it with `direction="in"` when a model's pending GPIO response is due and
+changes the sent level. These entries share the bounded wire log; cancelled responses never
+reach it. `tests/test_modem_model.py::test_only_sent_model_gpio_changes_appear_in_the_run_log`
+checks the timing and cancellation. The modem's separate command history is described in
+[modem-technical.md](modem-technical.md).
+
 ## Interfaces
 
 | Name | What |
@@ -163,7 +170,7 @@ and `sd_card`, `{"image": path or null}`, or null on a profile without a slot.
 | `Uart.tap(path)` | `esp32tl/interfaces/uart.py`: the route's `Tap`, `Uart.tapped` |
 | `Uart.files` | `dict[Path, tuple[str, str]]`: the files the run replays from and taps into, by path, with what each is for, the kind (`replay`, `tap`) and the route; one mapping for every `Uart` of an `Esp32Sim` |
 | `same_file(a, b)` | `esp32tl/interfaces/uart.py`: whether two paths name one file: `os.path.samefile` when both exist, else the same directory and the same name but for its case |
-| `RunLog(entries=ENTRIES)` | `esp32tl/report.py`. `test(t, text)`, `console(t, data)`, `route(t, interface, direction, data)`, `line(t, name, level)`, `lines()`; attribute `traffic`, by interface |
+| `RunLog(entries=ENTRIES)` | `esp32tl/report.py`. `test(t, text)`, `console(t, data)`, `route(t, interface, direction, data)`, `line(t, name, level, *, direction="out")`, `lines()`; attribute `traffic`, by interface |
 | `Traffic` | `bytes_in`, `bytes_out`, `events_in`, `events_out` |
 | `shown(data, limit=SHOWN_BYTES)`, `console_line(line)`, `board_time(t)`, `text(who, what)` | How the log writes bytes, console lines, times and an entry |
 | `ENTRIES`, `SHOWN_BYTES` | 200 entries of the console and the routes kept; 100 bytes shown of an event |

@@ -394,22 +394,24 @@ that references to its number keep their meaning.
 
 ## Serial hardware boundary
 
-72. Serial's power-on resets once without another flash, excludes pre-reset console bytes, and
+90. Serial's power-on resets once without another flash, excludes pre-reset console bytes, and
     uses wall time that advances outside waits. Console taps contain only output with clock
     `wall` and the selected artifact's app hash; they cannot overwrite the reference recording
     or flash artifacts.
     `tests/test_serial_backend.py::test_console_reset_clock_tap_and_autoflash`
-73. A serial reference recording must have an app hash matching the app binary, unaffected by
+91. A serial reference recording must have an app hash matching the app binary, unaffected by
     bootloader changes. Missing or mismatched hashes fail, and mismatch prevents port setup even
     for an explicitly requested `dut`.
     `tests/test_serial_backend.py::test_artifact_hash_is_app_binary_and_refuses_missing_or_different_hash`,
     `tests/test_serial_backend.py::test_recording_mismatch_prevents_dut_setup`,
     `tests/test_serial_backend.py::test_reference_check_precedes_even_an_explicit_dut`
-74. Serial skips UART models, replays and taps, SD-card models and GPIO control. A disconnected
+92. Serial skips GNSS/modem UART models, replays and taps, SD-card models, GPIO control and
+    NVS replacement. Merely requesting the modem fixture does not skip a console test. A disconnected
     console ends a wait with `RunEnded`, without a duplicate teardown failure.
     `tests/test_serial_backend.py::test_serial_capabilities_skip_at_the_call`,
+    `test_serial_modem_fixture_can_accompany_console_test`,
     `tests/test_serial_backend.py::test_disconnect_ends_wait_and_releases_reader`
-75. Serial requires an exact port before setup; neither an absent/blank/wildcard selection nor
+93. Serial requires an exact port before setup; neither an absent/blank/wildcard selection nor
     a fixture overriding it to `None` can enable autodetection. An indirect port parameter works;
     a run selecting no board test needs no port. `ESPPORT` cannot redirect that selection, even
     through cached options, and a separate flashing port is refused before opening a device.
@@ -423,13 +425,13 @@ that references to its number keep their meaning.
     `test_cached_port_override_names_the_snapshot`,
     `test_overridden_services_fail_without_a_traceback`,
     `test_separate_flash_port_is_refused_before_opening`
-76. A failed serial reset restores redirection and leaves the board off, producing no successful
+94. A failed serial reset restores redirection and leaves the board off, producing no successful
     run recording; retry can start capture. A stuck reader cannot block esp32tl's close beyond
     its join bound, and neither stuck nor disconnected capture restarts another reader.
     `tests/test_serial_backend.py::test_failed_reset_restores_redirect_and_stays_off`,
     `test_stuck_reader_has_bounded_teardown_and_no_late_capture`,
     `test_dead_open_port_does_not_restart_redirect`
-77. A malformed `app_recording` marker names its test at collection; esp32sim does not read the
+95. A malformed `app_recording` marker names its test at collection; esp32sim does not read the
     referenced file. Console taps appear in the report, and serial logs wait starts and outcomes.
     Serial uses the same wait-step logging and duration validation messages as esp32sim.
     `tests/test_serial_backend.py::test_bad_reference_marker_names_the_test`,
@@ -445,3 +447,96 @@ that references to its number keep their meaning.
     `tests/test_check_docs.py::test_an_owned_path_without_docs_fails`,
     `tests/test_check_docs.py::test_tests_only_pass`,
     `tests/test_check_docs.py::test_version_only_bumps_pass`
+
+## Cellular modem
+
+72. Noncommands and command-mode `+++` produce no answer, including across UART chunks. Only a
+    complete AT line is answered, at least 1 ms after the timestamp of its terminator-containing
+    UART chunk; an escape cannot shift a registration reply by one command.
+    `tests/test_modem_model.py::test_noise_and_command_mode_escape_never_leave_a_reply`,
+    `tests/test_modem_model.py::test_command_framing_and_response_times_do_not_depend_on_uart_chunks`
+73. The modem and the test cannot both drive RI. PWRKEY uses the profile's pulse thresholds,
+    and a missing supply prevents a pulse from restoring modem power. RI follows power; a power
+    loss before a pending RI response cancels that response. The validation firmware leaves at
+    least 2 s between the off pulse's release and the next on pulse.
+    `tests/test_modem_model.py::test_model_selection_is_atomic_and_ri_has_one_driver`,
+    `tests/test_modem_model.py::test_powerkey_uses_profile_timing_and_power_loss_prevents_restart`,
+    `tests/test_modem_model.py::test_nominal_lilygo_pulses_work_even_when_a_tick_truncates_them`,
+    `tests/test_modem_model.py::test_power_loss_before_a_scheduled_ri_response_cancels_that_response`,
+    `tests/test_modem_fixture.py::test_modem_at_dialogue_and_changes_on_the_test_clock`
+74. Two AT-only firmware runs on the LilyGO route produce the same modem bytes at the same
+    emulated times, without a network.
+    `tests/test_modem_fixture.py::test_two_firmware_runs_produce_identical_modem_taps`
+75. Every AT command is retained with its time and reply, including unknown commands answered
+    with fallback OK, independently of the rolling wire log's capacity.
+    `tests/test_modem_model.py::test_a_tap_and_report_keep_commands_even_after_the_wire_log_rolls_over`
+76. Packet-data dial variants (`ATD*99#`, explicit context `ATD*99***1#`, `ATD*99##` and
+    tone-prefixed `ATDT*99#`) enter data mode with CONNECT when registered and return NO CARRIER
+    otherwise; none is a fallback OK.
+    `tests/test_modem_model.py::test_packet_data_dial_variants_connect_or_report_no_carrier`
+77. A model's GPIO change appears in the run log only when sent, at its sent time; a cancelled
+    pending change never appears as a wire event.
+    `tests/test_modem_model.py::test_only_sent_model_gpio_changes_appear_in_the_run_log`
+78. A source selection that loses to another source must leave no GPIO ownership behind.
+    `tests/test_modem_model.py::test_a_model_selection_that_loses_to_replay_does_not_claim_ri`
+
+## Flash contents
+
+79. An NVS partition is selected by name from the build's own table, and its test image is flashed
+    after the build's files at that partition's offset. A later call replaces the whole image.
+    `tests/test_flash.py::test_nvs_flashes_at_named_partition_after_build_and_replaces_previous_call`
+80. NVS integers have explicit widths and checked ranges; a bare integer or boolean is refused.
+    `tests/test_flash.py::test_integer_widths_check_their_range`,
+    `tests/test_flash.py::test_nvs_requires_a_type_for_integers_and_refuses_other_values`
+81. The firmware reads exactly the NVS types and values the test supplies before power-on.
+    Strings retain their UTF-8 bytes, including CRLF and lines beginning with `#`. Key and
+    namespace names have no special meaning: no entries are changed or added for Wi-Fi-looking
+    names, and identical inputs produce identical images.
+    `tests/test_nvs_reader.py::test_firmware_reads_typed_values`,
+    `tests/test_flash.py::test_real_generator_preserves_string_bytes_and_has_exact_partition_size`,
+    `tests/test_flash.py::test_nvs_names_do_not_change_values_or_add_keys`
+82. NVS cannot be supplied after power-on. A passing test that supplies NVS without powering on
+    fails teardown; it ran no firmware.
+    `tests/test_flash.py::test_nvs_refuses_unknown_wrong_type_encrypted_and_late_calls`,
+    `tests/test_pytest_plugin.py::test_nvs_without_power_on_fails_teardown`
+83. Binary NVS values are limited by the format and partition capacity, not by a CSV field
+    limit. Blobs above 64 KiB are reconstructed unchanged from the generated chunks.
+    `tests/test_flash.py::test_large_blob_fits_without_a_csv_field_limit`
+84. UTF-8 keys and namespaces consume their encoded byte count in fixed-size NVS headers,
+    including the final slot of a page. Entry contents and CRCs remain correct, and the final
+    image must always match the partition's size.
+    `tests/test_flash.py::test_utf8_key_at_page_boundary_preserves_entries`,
+    `tests/test_flash.py::test_utf8_namespace_at_page_boundary_preserves_entries`,
+    `tests/test_flash.py::test_generator_output_must_match_partition_size`
+
+## Request matching
+
+85. Each request cycles through its recorded occurrences independently, including silent ones;
+    `hold` and `loop` apply to unprompted events and do not stop command matching.
+    `tests/test_matching.py::test_answers_wrap_per_request_including_recorded_timeouts`,
+    `tests/test_matching.py::test_end_policy_does_not_discard_pending_answers_or_stop_matching`,
+    `tests/test_matching.py::test_loop_repeats_unprompted_events_and_hold_stops`
+86. Request time is the final fragment's timestamp. The minimum recorded answer delay bounds
+    latency, and every pending answer, including unknown-command fallbacks, bounds quiet_until.
+    `tests/test_matching.py::test_request_time_is_its_final_fragment_and_chunk_boundaries_do_not_matter`,
+    `tests/test_matching.py::test_quiet_until_includes_stream_unknown_and_every_deferred_answer`
+87. An unknown request is counted and listed; its default PMTK reply uses flag 1 and its UBX NAK
+    identifies the request's class and ID. Protocol framing works across UART chunks.
+    `tests/test_matching.py::test_pmtk_fallback_has_the_command_flag_one_and_checksum`,
+    `tests/test_matching.py::test_ubx_is_length_framed_even_with_terminators_in_payload_and_naks_class_id`,
+    `tests/test_replay.py::test_unseen_requests_are_in_the_backend_report_and_json_properties`,
+    `tests/test_replay.py::test_gnss_replay_answers_configuration_commands_through_the_link`
+
+88. AT prompt recognition does not depend on response chunk boundaries. Command CR/CRLF
+    separators, including a split CRLF before the response, never become prompted payload
+    bytes; actual leading payload whitespace is preserved.
+    `tests/test_matching.py::test_prompt_like_text_does_not_depend_on_response_fragmentation`,
+    `tests/test_matching.py::test_at_command_endings_do_not_change_prompted_payload_bytes`,
+    `tests/test_matching.py::test_at_prompt_switches_next_request_to_opaque_ctrl_z_payload`
+
+89. Every unknown replay request retains its completion time and raw frame in arrival order,
+    including repeated normalised keys and silent fallbacks. Known requests are excluded. The
+    text and JSON reports preserve the full history and bytes after the wire log rolls over;
+    the existing normalised counts remain available.
+    `tests/test_matching.py::test_unseen_history_retains_raw_occurrences_and_completion_times_without_a_reply`,
+    `tests/test_replay.py::test_unseen_requests_are_in_the_backend_report_and_json_properties`

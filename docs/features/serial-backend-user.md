@@ -46,6 +46,12 @@ Flashing replaces the device's current firmware. For iteration on a board alread
 .venv/bin/pytest tests/test_hello_world.py --esp32tl-backend serial --port /dev/ttyUSB0 --skip-autoflash y
 ```
 
+If the USB adapter cannot sustain the default flashing speed, set `ESPBAUD`, for example
+`ESPBAUD=230400 .venv/bin/pytest tests/test_hello_world.py --esp32tl-backend serial --port /dev/ttyUSB0`.
+In pytest-embedded-idf 2.9.3, `IdfSerial.flash()` uses `ESPBAUD` (default 921600); the
+`--esptool-baud` option alone does not change that flash command. `--baud` independently sets
+the console speed, normally 115200.
+
 A test associated with a recording can require the local artifact to match it:
 
 ```python
@@ -111,7 +117,10 @@ cleanup; the bound does not cover its calls or a blocked USB driver.
 
 The [capability table](board-profiles-user.md#saying-what-a-test-needs) decides source and tap skips
 at the call in the test. UART peripherals and the SD card are physical parts; the host cannot
-replace them. Only the console can be tapped. Examples:
+replace them. Only the console can be tapped. Merely requesting `modem` on a profile with that UART does not
+select a model or skip the test; requesting its model, replay or tap skips at that call.
+`board.nvs(...)` skips with `serial: NVS contents cannot be configured on this backend`; it does
+not generate or flash a replacement partition. Examples:
 
 - `serial: uart.gnss takes no model source on this backend, only real`
 - `serial: uart.gnss takes no replay source on this backend, only real`

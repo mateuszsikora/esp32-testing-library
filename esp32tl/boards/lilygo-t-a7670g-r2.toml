@@ -21,5 +21,6 @@ rx = 22
 baud = 9600
 
 [lines.modem]
-pwrkey = 4
+# ESP32 pad polarity from LilyGO; model thresholds from SIMCom (see modem-user.md).
+pwrkey = { pin = 4, active = 1, on_ms = 50, off_ms = 2500 }
 ri = { pin = 33, pull = "down" }   # pulled down on the board: docs/stage0-findings.md, gap 6
