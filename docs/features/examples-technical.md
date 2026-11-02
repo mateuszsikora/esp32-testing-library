@@ -42,8 +42,19 @@ the output's event history for unwanted pulses. Its non-default target/radius ca
 NVS, with separate tests for smaller and larger configured radii. Its silence and loss cases
 catch a buzzer left on by a stale position; loss also checks three subsequent seconds of
 firmware history for reactivation. Departure checks that the buzzer stays on before the boundary.
-The boot-window helper allows an initially unconfigured pin but rejects any active pulse and
-requires the final state to be off; strict interval assertions require a known starting state.
+The boot-window helper skips unknown firmware levels only before the first driven level.
+Thereafter it rejects any active or undriven event, even if the output recovers, and reports the
+first offending timestamp and level. It requires the current state to be off, so an output
+that never initializes fails too. `tests/test_alarm_example.py` checks recovery after pulses
+and releases, a pulse at the initialization timestamp, input filtering and an uninitialized pin.
+Strict interval assertions require a known starting state.
+
+The silence case stops GNSS immediately after observing the first on state, avoiding an
+arbitrarily old last fix. `FIX_MAX_AGE = seconds(2.5)` and `EXPIRY_TOLERANCE = seconds(0.2)`
+require continuous on history for 2.3 s and off within the following 0.4 s. The tolerance covers
+the wait's 100 ms observation granularity, completion of the first NMEA epoch already queued,
+and the firmware's 100 ms UART polling. This is an externally observed expiry window, not
+an assertion about the exact internal `last_fix` timestamp.
 The separate `gps-alarm-clock` profile gives this assembly's wiring without changing the generic devkit.
 
 `scripts/check-docs.py` owns `examples/` through F24; Python test files under each example's

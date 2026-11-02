@@ -592,8 +592,11 @@ that references to its number keep their meaning.
 104. The GPS alarm drives its buzzer only while a fresh valid fix is within the NVS-configured
     radius. Moving across the radius changes its output within two fix intervals; no fix,
     loss of fix, receiver silence or missing configuration cannot leave it on. Both destination
-    and radius come from typed NVS values, including southern/western destinations.
-    `examples/gps_alarm_clock/tests/test_alarm.py`
+    and radius come from typed NVS values, including southern/western destinations. After silence
+    immediately following the first observed on state, the buzzer stays on for 2.3 s and turns
+    off by 2.7 s (the 2.5 s fix lifetime with observation/UART tolerance). Off-from-boot checks
+    permit unknown only before initialization; subsequent releases and active pulses fail.
+    `examples/gps_alarm_clock/tests/test_alarm.py`, `tests/test_alarm_example.py`
 
 
 105. Named GPIO output conditions observe only what the firmware drives. Neither on nor off

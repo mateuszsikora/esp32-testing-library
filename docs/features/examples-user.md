@@ -80,10 +80,18 @@ the old state one fix interval before the crossing, advance to the boundary, the
 new state with `REACTION_TIME = 2 * FIX_INTERVAL` (`FIX_INTERVAL = seconds(1)`). The response
 budget starts at the boundary, independent of travel time. `assert_never_buzzed` checks both
 the current off state and the output's event history, so short pulses cannot pass unnoticed
-from boot, while allowing the initial unconfigured pin. Once a state is established, tests use
+from boot. It allows an unknown pin only until the first firmware-driven level, then rejects
+both active levels and an undriven output. A failure reports the first violation, for example
+`alarm.buzzer expected off after initialization (GPIO 18, level 0); first violation at 2 s: undriven/unknown`.
+A pin that never initializes also fails. Once a state is established, tests use
 `buzzer.assert_stayed_on(since=...)` or `buzzer.assert_stayed_off(since=...)` to require that
 state throughout an interval. In particular, loss of fix must keep the buzzer off for three
-seconds after it first turns off. `assert_on()` / `assert_off()` check only the current state.
+seconds after it first turns off. The silence test requires the buzzer to stay on for 2.3 s
+after the first observed on state, then turn off within another 0.4 s. This brackets the 2.5 s
+fix lifetime with a 0.2 s tolerance for observing the output, completing the NMEA epoch already
+in flight, and the firmware's UART polling. It catches both premature and late expiry;
+it does not establish an exact 2.5 s deadline from the firmware's internal last-fix timestamp.
+`assert_on()` / `assert_off()` check only the current state.
 The scenarios come first in the file; the NVS helper and fixture follow them. Separate smaller-
 and larger-radius cases show the expected output directly, without conditional assertions.
 

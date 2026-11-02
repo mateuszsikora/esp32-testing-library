@@ -15,6 +15,9 @@ RADIUS = m(100)
 SPEED = km_h(36)
 FIX_INTERVAL = seconds(1)
 REACTION_TIME = 2 * FIX_INTERVAL
+FIX_MAX_AGE = seconds(2.5)
+# Allow for observing the first on state, completing its NMEA epoch and UART polling.
+EXPIRY_TOLERANCE = seconds(0.2)
 
 
 def test_far_away_the_buzzer_stays_off(board: Esp32Sim, gnss: Gnss, buzzer: OutputLine) -> None:
@@ -83,8 +86,12 @@ def test_silence_expires_the_last_fix(board: Esp32Sim, gnss: Gnss, buzzer: Outpu
     gnss.fix(at=TARGET)
     board.power_on()
     board.wait_until(buzzer.is_on, within=REACTION_TIME)
+    on_since = board.now
     gnss.go_silent()
-    board.wait_until(buzzer.is_off, within=seconds(3))
+
+    board.wait(FIX_MAX_AGE - EXPIRY_TOLERANCE)
+    buzzer.assert_stayed_on(since=on_since)
+    board.wait_until(buzzer.is_off, within=2 * EXPIRY_TOLERANCE)
 
 
 def test_a_smaller_configured_radius_keeps_it_off(
@@ -145,8 +152,19 @@ def buzzer(lines: Lines) -> OutputLine:
 
 
 def assert_never_buzzed(buzzer: OutputLine) -> None:
-    """Check the entire observation window, including pulses between the test's waits."""
+    """Allow an unconfigured pin only before the first firmware-driven level."""
+    initialized = False
+    for event in buzzer.events():
+        if event.by != "firmware":
+            continue
+        if event.level is None and not initialized:
+            continue
+        initialized = True
+        if event.level != 1 - buzzer.active:
+            observed = "undriven/unknown" if event.level is None else f"level {event.level}"
+            raise AssertionError(
+                f"{buzzer.name} expected off after initialization "
+                f"(GPIO {buzzer.pin}, level {1 - buzzer.active}); "
+                f"first violation at {event.t.seconds:g} s: {observed}"
+            )
     buzzer.assert_off()
-    assert not any(
-        event.by == "firmware" and event.level == buzzer.active for event in buzzer.events()
-    )
