@@ -135,10 +135,12 @@ smoke tests run. Host-side hardware to drive off-board peripherals remains postp
 
 ## Validation status
 
-The automated checks use a loopback port. `hello_world` and `test_starts_uart` have not been
-verified on a physical classic devkit for this change. #25's hardware acceptance criterion
-remains pending. The commands above are for a future run on a designated test board, not evidence
-of one already performed.
+The console smoke tests passed on 2026-11-02 on a LilyGO board with a classic ESP32-D0WD-V3
+(revision 3.1) and 4 MB flash: `test_hello_world` and `test_starts_uart`, **2 passed**.
+The USB adapter required `ESPBAUD=230400`. This verifies console capture, reset and autoflash;
+it does not verify a GNSS receiver, modem or other physical peripherals. The reproducible
+command, tool versions and app hashes are in
+[physical validation](serial-backend-technical.md#physical-validation).
 
 ## See also
 

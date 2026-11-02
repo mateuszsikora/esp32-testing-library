@@ -184,12 +184,38 @@ reference hashes before port creation, console reset/capture, waits and their re
 skips, failed reset with retry, disconnected open ports and a blocked reader released after close.
 `tests/test_pytest_plugin.py` covers console tap reports on esp32sim and ignoring references there.
 
-`tests/test_hello_world.py::test_hello_world` and
-`tests/test_nmea_reader.py::test_starts_uart` are the physical devkit smoke tests. **They have not
-been run on hardware for this change.**
-Loopback success does not satisfy this acceptance criterion; #25 must remain open pending it.
-TODO(mateuszsikora): run both smoke tests on a designated classic devkit and record the board,
-port, firmware artifacts and results before closing #25. A PR must state this missing validation.
+### Physical validation
+
+On 2026-11-02, both console smoke tests passed on a user-identified LilyGO board. esptool
+identified an ESP32-D0WD-V3 (revision 3.1), 4 MB flash, and disabled flash encryption and Secure
+Boot. The board profile was the default `esp32-devkitc`; these tests check console output only,
+not the LilyGO peripheral wiring. No external GNSS receiver was required.
+
+```sh
+ESPBAUD=230400 .venv/bin/pytest --esp32tl-backend serial \
+  --port /dev/cu.usbserial-5C854994151 --esptool-baud 230400 -v \
+  tests/test_hello_world.py::test_hello_world \
+  tests/test_nmea_reader.py::test_starts_uart
+```
+
+Result: **2 passed in 19.85 s**, with autoflash enabled. Host: macOS 27.0.1 arm64, Python 3.14.6,
+pytest-embedded and pytest-embedded-idf 2.9.3, esptool 5.6.0. The applications were built with the
+repository's pinned ESP-IDF v5.3.6 container, without firmware changes.
+
+| App binary | SHA-256 |
+|---|---|
+| `firmware/hello_world/build/hello_world.bin` | `a8964fe8b1b3cc8b361e3f26b30d0ff299f4ad019a1facc2a6c94d1e02d8ae47` |
+| `firmware/nmea_reader/build/nmea_reader.bin` | `d1266deb2d3ded46e8c0e22540a619a0cdcac815f5c173a4cd1f796485726f85` |
+
+The first attempt used `--esptool-baud 230400` alone; IDF flashing still selected 921600 and both
+setups failed while checking the flash connection. Setting `ESPBAUD=230400` made the same tests
+pass. This is the reason for the environment-variable guidance above, not a change to the test
+firmware or to pytest-embedded's flashing implementation.
+
+Before testing, two independent reads of the entire 4,194,304-byte flash matched byte for byte.
+After testing, that original image was written back with flash mode, frequency and size kept
+unchanged. A full readback matched the backup before the board was reset to run its original
+firmware. Backup binaries and device logs remain private and are not repository artifacts.
 
 ## See also
 
