@@ -807,9 +807,10 @@ does.
 esp32sim's pacing alone lets the guest reach a block point up to 2 ms plus one pacing interval,
 about 2.3 ms, before wall time does, and its anchor is private (`Realtime::wall_start`), so the
 runner cannot ask it where wall time stands. The runner keeps a wall clock of its own, and starts
-it with esp32sim's. esp32sim takes its anchor at its first check, the first round after the guest
-has run 2¹⁶ bus cycles since pacing was turned on, and a turn held before that check, by the test
-or the peer, would come before one anchor and after the other. So the runner sets
+it with esp32sim's. esp32sim takes its anchor at its first check, in the first round, with pacing
+on, at which the bus has counted at least 2¹⁶ cycles since power-on: `rt.last_check` starts at 0,
+and turning pacing on does not reset it. A turn held before that check, by the test or the peer,
+would come before one anchor and after the other. So the runner sets
 `machine.rt.enabled` only at the first slice boundary at or after 2¹⁶ bus cycles, after any turn
 taken there and just before it calls `run` again, and anchors its clock at the same moment with
 esp32sim's convention: emulated time 0 is now. esp32sim's first check comes in the first round of
@@ -871,7 +872,9 @@ source therefore keeps its line at most 50 ms behind. It works out where its lin
 the runner paces it, `line_free(pin)` of rule 5, from its own messages, which are the only ones on
 its RX pin. At each turn at `now` it sends no more of what the port gave than the line carries by
 `now + 50 ms`, the newest bytes, and drops the older ones, counting them for the test report. The
-guest then hears what the device says now, an answer included, at most 50 ms after its stamp.
+guest then hears what the device says now, an answer included, at most 50 ms after its stamp. The
+cut falls wherever the bound does, so it can split a sentence or a frame, as bytes lost on a wire
+do: the bound limits how late the guest hears the device, not what of it arrives whole.
 50 ms is above an FTDI adapter's 16 ms burst, so while the guest keeps up with wall time no byte
 is dropped.
 
