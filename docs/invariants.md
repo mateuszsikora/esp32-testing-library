@@ -644,3 +644,13 @@ that references to its number keep their meaning.
     `tests/test_card_image.py::test_paths_cannot_escape_or_expand_as_mtools_patterns`,
     `tests/test_card_image.py::test_readers_distinguish_missing_files_and_directories`,
     `tests/test_card_image.py::test_invalid_fat_remains_a_tool_error`
+
+107. The position tracker publishes over verified MQTT/TLS immediately on connection and every
+    10 seconds on the test clock. Reported positions follow GNSS, including southern/western
+    coordinates, and Unix UTC follows NTP's world epoch, including dates after 2038. No fix,
+    loss of fix or receiver silence produces null coordinates rather than a stale current fix.
+    A wrong CA or hostname, or a server certificate outside its validity period at the NTP
+    time, never reaches MQTT. The date tests keep the CA valid and include an accepted server
+    certificate valid at that world epoch. Missing NVS configuration or NTP synchronization
+    never connects.
+    `examples/position_tracker/tests/test_tracker.py`

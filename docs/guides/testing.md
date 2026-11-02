@@ -213,7 +213,8 @@ two runs end at the same instant, and checks that its run printed its fixes, so 
 both did nothing do not pass. `test_plain_mqtt` additionally runs `pppos_client`, leaves its raw modem tap and network
 transcript, and compares bytes and times exactly. `test_tls_plaintext` performs a real TLS 1.2
 handshake and bidirectional MQTT exchange using MemoryBIO, validates the CA and server name,
-and leaves `network.json`. This test needs no firmware; TLS/NTP on tracker firmware is #72.
+and leaves `network.json`. This test needs no firmware; `examples/position_tracker/tests/test_tracker.py` separately
+validates firmware TLS/NTP through the modem.
 
 Files with `"esp32tl_network": 1` are explicit plaintext network transcripts. Before the first
 `tls: handshake started` event, every event and time is compared exactly, including that event's
@@ -277,6 +278,11 @@ The default pytest collection includes `examples/` alongside `tests/`.
 receiver and the buzzer GPIO through the public fixtures. It needs `make examples`, the runner
 and the ROM ELF. Run it alone with `.venv/bin/pytest examples/gps_alarm_clock/tests` after
 `make setup examples`; `make test` builds missing example images automatically.
+`examples/position_tracker/tests/test_tracker.py` exercises PPP, NTP and MQTT/TLS with a CA
+from NVS, GNSS movement, report deadlines on the test clock and UTC from the simulated world.
+It also checks certificate rejection and missing/stale GNSS data. Build with
+`firmware/build.sh --examples position_tracker` and run with
+`.venv/bin/pytest examples/position_tracker/tests`. TLS ciphertext is not a determinism artifact.
 See [the example guide](../features/examples-user.md) for the scenarios and wiring.
 
 `examples/sd_data_logger/tests/test_logger.py` prepares FAT images with mtools and verifies

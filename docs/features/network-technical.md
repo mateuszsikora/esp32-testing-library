@@ -91,4 +91,5 @@ connection loss, keepalive, retained delivery, topic filters, Wills, UTC and cer
 `tests/test_modem_model.py` checks network selection, binary pluses, guarded escape, reset and the
 route-specific overflow policy. `tests/test_pppos_client.py` exercises unmodified firmware in
 both directions. `tests/test_determinism.py` includes plain PPP/MQTT with a raw tap and a TLS
-handshake with a plaintext transcript. Firmware TLS/NTP validation is #72's tracker test.
+handshake with a plaintext transcript. Firmware TLS/NTP validation lives in `examples/position_tracker/tests/test_tracker.py`,
+using NVS credentials and the same in-process services.

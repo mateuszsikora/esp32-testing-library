@@ -99,7 +99,8 @@ CA and server certificates are valid from `2000-01-01T00:00:00Z` to `2099-12-31T
 Names may be DNS names or IP addresses. TLS 1.2 and later use Python's `ssl` in memory, with
 system randomness. The harness sees application plaintext; TLS ciphertext and timing do not
 repeat. Provisioning firmware credentials is separate from this API. `pppos_client` validates
-plain MQTT; TLS and NTP have layer tests here, and their tracker firmware validation belongs to #72.
+plain MQTT; [the position tracker](examples-user.md#position-tracker-over-a-cellular-modem)
+validates firmware PPP, NTP and MQTT over TLS, with its broker CA provisioned through NVS.
 
 ## Failures and reports
 

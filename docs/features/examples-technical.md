@@ -110,3 +110,61 @@ sentence's scheduled time plus the same write margin.
 `tests/` are exempt just like the root suite. `tests/test_check_docs.py` checks both behaviours.
 `tests/test_firmware_build.py` exercises example discovery, refusal of unknown names, container
 forwarding and failed-build completion markers against fake tools.
+
+## Position tracker implementation
+
+`examples/position_tracker` uses the LilyGO profile's UART2 GNSS and UART1 modem. Its CMake
+configuration calls `firmware/pppos_client/prepare.py` to fetch the same SHA-256-verified
+esp-protocols `modem-v1.4.1` revision as the validation image. The source tree lives under
+`build/dependencies/`; `EXTRA_COMPONENT_DIRS` points to its `esp_modem`. Component-manager
+resolution is disabled for this project because all components are supplied by that tree or
+ESP-IDF. Configuration therefore writes neither a lockfile nor managed components into the
+read-only project mount. The usual example discovery, build provenance and CI cache apply.
+
+`main/main.c` reads the five required `config` NVS keys before creating tasks or connecting.
+The host buffers accept up to 253 characters, APN up to 63; CA storage is allocated from the NVS
+string size, limited to 8192 bytes including its terminator. Missing, empty, oversized or mistyped
+values, or a zero port, stop startup without erasing flash. PEM syntax and certificate trust are
+checked by the TLS client when it connects.
+
+A dedicated GNSS task uses the shared `firmware/nmea_reader/main/nmea.c` parser. A mutex guards
+its latest position, validity and monotonic reception timestamp. Recognized invalid GGA/RMC
+sentences clear validity; unrelated sentences are ignored. A bounded sentence buffer restarts
+at `$` and drops oversized input. A report uses a snapshot under the mutex, marking a fix older
+than 2.5 seconds invalid. NMEA supplies position only; the report's timestamp comes from NTP.
+
+`esp_modem` uses SIM7600 commands, 115200 baud and no hardware flow control, with the APN from
+NVS. After PPP supplies IP and DNS, `esp_netif_sntp` requests the configured NTP hostname. Startup
+waits for successful synchronization, logging `position_tracker: waiting for NTP` on each
+10-second wait timeout. MQTT then connects using `MQTT_TRANSPORT_OVER_SSL`, the provisioned
+CA and hostname verification; there is no plaintext fallback. `sdkconfig.defaults` explicitly
+enables `CONFIG_MBEDTLS_HAVE_TIME_DATE=y` so mbedTLS also checks certificate validity periods
+against the NTP-synchronized system clock. The client ID is `position-tracker`.
+
+The MQTT connected callback notifies the main task. That task publishes immediately, and resets
+its monotonic 10-second report deadline on every MQTT connection. Subsequent deadlines use
+`esp_timer`, independent of UTC adjustments. Disconnected deadlines produce no report and no
+offline backlog; MQTT handles its own reconnects while PPP remains available. The example does
+not implement modem power sequencing or redial after PPP loss. The modem must already be powered
+and registered (the model's initial state). All objects and configuration buffers live for the
+application's lifetime.
+
+Reports use QoS 0, retain false, on `tracker/position`. `time` is integer Unix UTC seconds;
+`lat`/`lon` are decimal degrees with six places, or both JSON null when `fix` is false. Publishing
+failure logs `position_tracker: publish failed`. The no-fix report still carries synchronized time.
+
+`tests/test_tracker.py` asserts received broker payloads and timestamps. It bounds the first
+report relative to the broker's connection event, brackets three later deadlines with a 250 ms
+transport/scheduling tolerance, and checks message history for early or extra publications.
+Movement uses southern/western coordinates and a 15 m tolerance for the receiver's one-second
+sampling at 10 m/s. Two world epochs, including one past 2038, check whole-second UTC against
+message arrival, with 1.25 seconds for truncation and NTP/transport latency. Wrong CA and hostname
+cases must reach a certificate verification failure without an MQTT connection or report.
+Certificate-date regressions keep the CA valid from 2000 through 2099 while changing only the
+server certificate: one expired in 2030, one starts in 2032, and a positive control is valid
+from 2030 to 2032. At the 2031 world epoch only the control may connect and publish.
+No-fix, lost-fix, silence and missing-NVS cases cover startup and stale data. A missing NTP
+responder keeps the firmware from resolving or connecting to the broker even with valid GNSS.
+
+These are functional TLS tests. The existing determinism checker still compares raw UART and
+board-link statistics exactly; this example does not feed random TLS ciphertext to that check.
