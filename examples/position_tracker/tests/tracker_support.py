@@ -1,4 +1,4 @@
-"""The tracker's NVS schema and MQTT report format; no clocks or firmware startup here."""
+"""Tracker broker setup, NVS schema and report format; no waits or firmware startup."""
 
 import json
 from collections.abc import Callable, Iterator
@@ -7,12 +7,22 @@ from datetime import UTC, datetime
 
 from esp32tl import Board
 from esp32tl.flash import u16
+from esp32tl.net import Internet
 from esp32tl.net.mqtt import Broker, Message
+from esp32tl.net.tls import CertificateAuthority, Tls
 from esp32tl.units import Duration, Position
 
 TOPIC = "tracker/position"
 BROKER_HOST = "broker.test"
 BROKER_PORT = 8883
+
+
+def serve_broker(board: Board, *, ca: CertificateAuthority | None = None) -> tuple[Internet, Tls]:
+    """Select the modem network and serve its broker over TLS, without provisioning NVS."""
+    network = board.modem.network()
+    credentials = CertificateAuthority([BROKER_HOST]) if ca is None else ca
+    tls = network.listen(BROKER_PORT, network.broker, tls=credentials)
+    return network, tls
 
 
 def configure_tracker(
@@ -105,3 +115,6 @@ class _ReportCondition:
 
     def __repr__(self) -> str:
         return "a tracker report with a position" if self.with_position else "a tracker report"
+
+    def __bool__(self) -> bool:
+        raise TypeError("call the report condition with (), or pass it to board.wait_until")

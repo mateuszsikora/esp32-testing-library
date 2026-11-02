@@ -6,6 +6,7 @@ import datetime
 import ssl
 import tempfile
 from collections.abc import Callable
+from dataclasses import dataclass
 from ipaddress import ip_address
 from pathlib import Path
 
@@ -123,12 +124,39 @@ class Tls:
         self.ca = ca
         self._log = log
         self.handshakes_started = 0
+        self.handshakes_completed = 0
+
+    @property
+    def handshake_started(self) -> "_HandshakeCondition":
+        """A live condition: some connection has supplied nonempty TLS input."""
+        return _HandshakeCondition(self, completed=False)
+
+    @property
+    def handshake_completed(self) -> "_HandshakeCondition":
+        """A live condition: some connection has completed the server-side handshake."""
+        return _HandshakeCondition(self, completed=True)
 
     def accept(
         self, peer: tuple[str, int], write: Callable[[bytes], None], close: Callable[[], None]
     ) -> "_Session":
         self._log("tls: handshake started")
         return _Session(self, peer, write, close)
+
+
+@dataclass(frozen=True, repr=False)
+class _HandshakeCondition:
+    tls: Tls
+    completed: bool
+
+    def __call__(self) -> bool:
+        count = self.tls.handshakes_completed if self.completed else self.tls.handshakes_started
+        return count > 0
+
+    def __repr__(self) -> str:
+        return "a TLS handshake to complete" if self.completed else "a TLS handshake to start"
+
+    def __bool__(self) -> bool:
+        raise TypeError("call the TLS condition with (), or pass it to board.wait_until")
 
 
 class _Session:
@@ -173,6 +201,7 @@ class _Session:
                 self._end()
                 return
             self._ready = True
+            self._tls.handshakes_completed += 1
             self._tls._log(f"tls: handshake done, {self._ssl.version()}")
             self._flush()
             self._inner = self._tls.inner.accept(self._peer, self._send_plain, self._end)

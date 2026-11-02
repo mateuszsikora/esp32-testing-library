@@ -20,6 +20,8 @@ def tls_exchange() -> dict[str, object]:
     assert certificate.not_valid_before_utc == NOT_BEFORE
     assert certificate.not_valid_after_utc == NOT_AFTER
     listener = net.listen(8883, net.broker, tls=ca)
+    started, completed = listener.handshake_started, listener.handshake_completed
+    assert not started() and not completed()
     context = ssl.create_default_context(cadata=ca.ca_pem)
     context.maximum_version = ssl.TLSVersion.TLSv1_2
     incoming, outgoing = ssl.MemoryBIO(), ssl.MemoryBIO()
@@ -38,13 +40,17 @@ def tls_exchange() -> dict[str, object]:
         if data:
             # Fragment the TLS record at a point unrelated to its header.
             server.on_data(data[:3])
+            assert started()
             server.on_data(data[3:])
-        if client.version() and any("handshake done" in str(e.get("event")) for e in net.events):
+        if client.version() and completed():
             break
     else:
         pytest.fail("TLS did not finish its handshake")
     assert client.version() == "TLSv1.2" and closed == []
-    assert listener.handshakes_started == 1
+    assert listener.handshakes_started == listener.handshakes_completed == 1
+    assert completed()
+    with pytest.raises(TypeError, match="call the TLS condition"):
+        bool(completed)
     peer = client.getpeercert()
     assert peer is not None
     assert peer["subjectAltName"] == (
@@ -73,7 +79,8 @@ def tls_exchange() -> dict[str, object]:
         "data" not in e or "4d515454" in str(e["data"]) or len(str(e["data"])) < 40
         for e in net.events
     )  # no handshake ciphertext in the application transcript
-    assert listener.handshakes_started == 1  # Application data is not another handshake.
+    assert listener.handshakes_started == listener.handshakes_completed == 1
+    assert started() and completed()  # Closure retains the listener history.
     return net.transcript()
 
 
@@ -105,6 +112,8 @@ def test_tls_rejects_unknown_ca_or_wrong_hostname(trusted: bool) -> None:
     assert closed == [True]
     assert not net.broker.clients
     assert listener.handshakes_started == 1
+    assert listener.handshakes_completed == 0
+    assert listener.handshake_started() and not listener.handshake_completed()
 
 
 def test_server_dates_change_without_changing_ca_validity() -> None:
@@ -182,3 +191,24 @@ def test_tls_attempts_count_nonempty_input_once_per_connection() -> None:
     assert listener.handshakes_started == 2
     assert not net.broker.clients
     assert net.listen(9000, net.broker) is None
+
+
+@pytest.mark.parametrize("completed", [False, True])
+def test_tls_conditions_are_live_named_and_reject_truth_testing(completed: bool) -> None:
+    net = Internet(lambda: 0)
+    listener = net.listen(8883, net.broker, tls=CertificateAuthority(["broker.example"]))
+    condition = listener.handshake_completed if completed else listener.handshake_started
+    expected = "a TLS handshake to complete" if completed else "a TLS handshake to start"
+    assert repr(condition) == expected
+    assert not condition()
+    with pytest.raises(TypeError, match="call the TLS condition"):
+        bool(condition)
+    server = listener.accept(("10.64.0.2", 4000), lambda data: None, lambda: None)
+    assert not condition()  # Accept alone is not TLS input.
+    server.on_data(b"\x16")
+    assert condition() is (not completed)  # Input is not handshake completion.
+    server.on_close()
+    net.stop()
+    assert condition() is (not completed)
+    with pytest.raises(TypeError, match="call the TLS condition"):
+        bool(condition)

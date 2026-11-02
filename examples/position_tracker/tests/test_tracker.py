@@ -3,7 +3,7 @@
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from tracker_support import BROKER_HOST, BROKER_PORT, TOPIC, Reports, configure_tracker
+from tracker_support import BROKER_HOST, TOPIC, Reports, configure_tracker, serve_broker
 
 from esp32tl import Board
 from esp32tl.net.tls import CertificateAuthority
@@ -21,11 +21,9 @@ UTC_TOLERANCE = timedelta(seconds=1.25)  # Whole-second timestamps and NTP/trans
 
 
 def test_reports_on_connect(board: Board) -> None:
-    network = board.modem.network()
-    ca = CertificateAuthority([BROKER_HOST])
-    network.listen(BROKER_PORT, network.broker, tls=ca)
+    network, tls = serve_broker(board)
     reports = Reports(network.broker)
-    configure_tracker(board, trusted_ca=ca.ca_pem)
+    configure_tracker(board, trusted_ca=tls.ca.ca_pem)
     connected, report = network.broker.connected(), reports.when_received()
     board.power_on(utc=WORLD)
 
@@ -35,11 +33,9 @@ def test_reports_on_connect(board: Board) -> None:
 
 
 def test_reports_every_ten_seconds(board: Board) -> None:
-    network = board.modem.network()
-    ca = CertificateAuthority([BROKER_HOST])
-    network.listen(BROKER_PORT, network.broker, tls=ca)
+    network, tls = serve_broker(board)
     reports = Reports(network.broker)
-    configure_tracker(board, trusted_ca=ca.ca_pem)
+    configure_tracker(board, trusted_ca=tls.ca.ca_pem)
     board.power_on(utc=WORLD)
     first = board.wait_until(reports.when_received(), within=STARTUP)
 
@@ -53,11 +49,9 @@ def test_reports_every_ten_seconds(board: Board) -> None:
 
 
 def test_reported_position_follows_the_receiver(board: Board) -> None:
-    network = board.modem.network()
-    ca = CertificateAuthority([BROKER_HOST])
-    network.listen(BROKER_PORT, network.broker, tls=ca)
+    network, tls = serve_broker(board)
     reports = Reports(network.broker)
-    configure_tracker(board, trusted_ca=ca.ca_pem)
+    configure_tracker(board, trusted_ca=tls.ca.ca_pem)
     start = Position(-34.6037, -58.3816)
     board.gnss.fix(at=start)
     board.power_on(utc=WORLD)
@@ -78,11 +72,9 @@ def test_reported_position_follows_the_receiver(board: Board) -> None:
 
 @pytest.mark.parametrize("world", [WORLD, datetime(2042, 9, 10, 3, 4, 5, tzinfo=UTC)])
 def test_report_carries_the_worlds_time(board: Board, world: datetime) -> None:
-    network = board.modem.network()
-    ca = CertificateAuthority([BROKER_HOST])
-    network.listen(BROKER_PORT, network.broker, tls=ca)
+    network, tls = serve_broker(board)
     reports = Reports(network.broker)
-    configure_tracker(board, trusted_ca=ca.ca_pem)
+    configure_tracker(board, trusted_ca=tls.ca.ca_pem)
     board.power_on(utc=world)
     for _ in range(2):
         report = board.wait_until(reports.when_received(), within=STARTUP)
@@ -91,11 +83,9 @@ def test_report_carries_the_worlds_time(board: Board, world: datetime) -> None:
 
 
 def test_without_a_fix_reports_null_coordinates(board: Board) -> None:
-    network = board.modem.network()
-    ca = CertificateAuthority([BROKER_HOST])
-    network.listen(BROKER_PORT, network.broker, tls=ca)
+    network, tls = serve_broker(board)
     reports = Reports(network.broker)
-    configure_tracker(board, trusted_ca=ca.ca_pem)
+    configure_tracker(board, trusted_ca=tls.ca.ca_pem)
     board.gnss.lose_fix()
     board.power_on(utc=WORLD)
     board.wait(seconds(2))  # Let the receiver deliver its no-fix NMEA epoch.
@@ -104,11 +94,9 @@ def test_without_a_fix_reports_null_coordinates(board: Board) -> None:
 
 
 def test_losing_the_fix_clears_the_reported_position(board: Board) -> None:
-    network = board.modem.network()
-    ca = CertificateAuthority([BROKER_HOST])
-    network.listen(BROKER_PORT, network.broker, tls=ca)
+    network, tls = serve_broker(board)
     reports = Reports(network.broker)
-    configure_tracker(board, trusted_ca=ca.ca_pem)
+    configure_tracker(board, trusted_ca=tls.ca.ca_pem)
     board.gnss.fix(at=WARSAW)
     board.power_on(utc=WORLD)
     first = board.wait_until(reports.when_received(with_position=True), within=STARTUP)
@@ -120,11 +108,9 @@ def test_losing_the_fix_clears_the_reported_position(board: Board) -> None:
 
 
 def test_a_silent_receiver_expires_the_reported_position(board: Board) -> None:
-    network = board.modem.network()
-    ca = CertificateAuthority([BROKER_HOST])
-    network.listen(BROKER_PORT, network.broker, tls=ca)
+    network, tls = serve_broker(board)
     reports = Reports(network.broker)
-    configure_tracker(board, trusted_ca=ca.ca_pem)
+    configure_tracker(board, trusted_ca=tls.ca.ca_pem)
     board.gnss.fix(at=WARSAW)
     board.power_on(utc=WORLD)
     first = board.wait_until(reports.when_received(with_position=True), within=STARTUP)
@@ -136,38 +122,32 @@ def test_a_silent_receiver_expires_the_reported_position(board: Board) -> None:
 
 
 def test_publishes_unretained_qos_zero_over_tls(board: Board) -> None:
-    network = board.modem.network()
-    ca = CertificateAuthority([BROKER_HOST])
-    network.listen(BROKER_PORT, network.broker, tls=ca)
-    configure_tracker(board, trusted_ca=ca.ca_pem)
+    network, tls = serve_broker(board)
+    configure_tracker(board, trusted_ca=tls.ca.ca_pem)
     board.power_on(utc=WORLD)
     message = board.wait_until(network.broker.message(TOPIC), within=STARTUP)
     assert message.qos == 0 and not message.retain
     assert BROKER_HOST in network.dns.asked
-    assert "tls: handshake done" in board.report()
+    assert tls.handshake_completed()
     assert board.properties()["warnings"] == []
 
 
 def test_refuses_an_untrusted_ca(board: Board) -> None:
-    network = board.modem.network()
-    ca = CertificateAuthority([BROKER_HOST])
-    tls_listener = network.listen(BROKER_PORT, network.broker, tls=ca)
+    network, tls = serve_broker(board)
     unknown_ca = CertificateAuthority([BROKER_HOST])
     configure_tracker(board, trusted_ca=unknown_ca.ca_pem)
     board.power_on(utc=WORLD)
-    board.wait_until(lambda: tls_listener.handshakes_started > 0, within=STARTUP)
+    board.wait_until(tls.handshake_started, within=STARTUP)
     board.wait(REJECTION_WINDOW)
     assert not network.broker.clients
     assert not network.broker.messages
 
 
 def test_refuses_the_wrong_server_name(board: Board) -> None:
-    network = board.modem.network()
-    ca = CertificateAuthority([BROKER_HOST])
-    tls_listener = network.listen(BROKER_PORT, network.broker, tls=ca)
-    configure_tracker(board, trusted_ca=ca.ca_pem, broker_host="impostor.test")
+    network, tls = serve_broker(board)
+    configure_tracker(board, trusted_ca=tls.ca.ca_pem, broker_host="impostor.test")
     board.power_on(utc=WORLD)
-    board.wait_until(lambda: tls_listener.handshakes_started > 0, within=STARTUP)
+    board.wait_until(tls.handshake_started, within=STARTUP)
     board.wait(REJECTION_WINDOW)
     assert not network.broker.clients
     assert not network.broker.messages
@@ -184,14 +164,13 @@ def test_refuses_the_wrong_server_name(board: Board) -> None:
 def test_refuses_a_server_certificate_outside_its_validity_period(
     board: Board, not_before: datetime, not_after: datetime
 ) -> None:
-    network = board.modem.network()
     ca = CertificateAuthority(
         [BROKER_HOST], server_not_before=not_before, server_not_after=not_after
     )
-    tls_listener = network.listen(BROKER_PORT, network.broker, tls=ca)
-    configure_tracker(board, trusted_ca=ca.ca_pem)
+    network, tls = serve_broker(board, ca=ca)
+    configure_tracker(board, trusted_ca=tls.ca.ca_pem)
     board.power_on(utc=WORLD)
-    board.wait_until(lambda: tls_listener.handshakes_started > 0, within=STARTUP)
+    board.wait_until(tls.handshake_started, within=STARTUP)
     board.wait(REJECTION_WINDOW)
     assert network.ntp.requests > 0
     assert not network.broker.clients
@@ -199,15 +178,14 @@ def test_refuses_a_server_certificate_outside_its_validity_period(
 
 
 def test_accepts_a_server_certificate_valid_at_the_ntp_time(board: Board) -> None:
-    network = board.modem.network()
     ca = CertificateAuthority(
         [BROKER_HOST],
         server_not_before=datetime(2030, 1, 1, tzinfo=UTC),
         server_not_after=datetime(2032, 1, 1, tzinfo=UTC),
     )
-    network.listen(BROKER_PORT, network.broker, tls=ca)
+    network, tls = serve_broker(board, ca=ca)
     reports = Reports(network.broker)
-    configure_tracker(board, trusted_ca=ca.ca_pem)
+    configure_tracker(board, trusted_ca=tls.ca.ca_pem)
     board.power_on(utc=WORLD)
     report = board.wait_until(reports.when_received(), within=STARTUP)
     expected = WORLD + timedelta(seconds=report.received_at.seconds)
@@ -217,24 +195,22 @@ def test_accepts_a_server_certificate_valid_at_the_ntp_time(board: Board) -> Non
 
 
 def test_waits_for_ntp_and_connects_when_it_returns(board: Board) -> None:
-    network = board.modem.network()
-    ca = CertificateAuthority([BROKER_HOST])
-    tls_listener = network.listen(BROKER_PORT, network.broker, tls=ca)
+    network, tls = serve_broker(board)
     reports = Reports(network.broker)
-    configure_tracker(board, trusted_ca=ca.ca_pem)
+    configure_tracker(board, trusted_ca=tls.ca.ca_pem)
     network.ntp.go_silent()
     board.gnss.fix(at=WARSAW)
     board.power_on(utc=WORLD)
     board.wait_until(lambda: "time.test" in network.dns.asked, within=STARTUP)
     board.wait(NTP_OUTAGE)
     assert BROKER_HOST not in network.dns.asked
-    assert tls_listener.handshakes_started == 0
+    assert not tls.handshake_started()
     assert not network.broker.clients
     assert not network.broker.messages
 
     network.ntp.resume()
     report = board.wait_until(reports.when_received(with_position=True), within=STARTUP)
-    assert tls_listener.handshakes_started > 0
+    assert tls.handshake_started()
     assert network.ntp.requests > 0
     assert report.position == WARSAW
     expected = WORLD + timedelta(seconds=report.received_at.seconds)

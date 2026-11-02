@@ -107,8 +107,21 @@ it does not advance time, and closing a connection or resetting the network does
 count. After powering on the board, a test can wait for an attempt without matching log text:
 
 ```python
-board.wait_until(lambda: listener.handshakes_started > 0, within=seconds(60))
+board.wait_until(listener.handshake_started, within=seconds(60))
+board.wait_until(listener.handshake_completed, within=seconds(60))
 ```
+
+`handshake_started` and `handshake_completed` are named callable conditions on this listener's
+entire history, including events before the condition was obtained. Saved conditions read the
+live counts, without consuming events or advancing time. Call them directly, for example
+`assert listener.handshake_completed()`, or pass them to `board.wait_until`. They stay true after
+connection closure or network reset. Use a fresh listener when a scenario requires fresh history.
+`handshakes_completed` counts server-side handshake completions, once per connection; it does
+not prove an MQTT connection or publication. Started input alone does not imply completion.
+
+Timeouts name `a TLS handshake to start` or `a TLS handshake to complete`. Treating a condition
+itself as a boolean raises `TypeError("call the TLS condition with (), or pass it to board.wait_until")`,
+preventing an unevaluated `assert listener.handshake_completed` from passing silently.
 
 By default, CA and server certificates are valid from `2000-01-01T00:00:00Z` to
 `2099-12-31T00:00:00Z`. To test an expired or not-yet-valid **server** certificate while keeping

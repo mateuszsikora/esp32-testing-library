@@ -154,14 +154,15 @@ Reports use QoS 0, retain false, on `tracker/position`. `time` is integer Unix U
 failure logs `position_tracker: publish failed`. The no-fix report still carries synchronized time.
 
 `tests/test_tracker.py` requests only the public `Board` plus parametrized scenario data.
-Each scenario selects `board.modem.network()`, constructs its certificate authority, registers
-TLS with `network.listen(...)` and, where needed, wraps `network.broker` in `Reports`.
-GNSS and console access use `board.gnss` and `board.console`; there are no listener, credential
-or report fixtures, and no setup decorators. This mirrors the SD logger's explicit image
-preparation/insertion. Both default and custom certificates use the same visible setup path.
-`configure_tracker(board: Board, ...)` in `tests/tracker_support.py` only translates the
-application's settings into NVS entries. It does not create a CA, register a listener or start
-firmware. Power-on and every wait remain explicit. The transport test retains the simulator's
+Each scenario explicitly calls the local `serve_broker(board, ca=None)` helper. It selects
+`board.modem.network()`, creates default credentials only when none are supplied, registers the
+broker's TLS listener and returns `(Internet, Tls)`. This groups the repeated three-line setup
+without adding a library convenience API or another context object. A caller-provided CA goes
+unchanged into the listener, including custom validity dates. The helper never writes NVS,
+powers on or waits. `Reports(network.broker)` remains an independent application adapter.
+GNSS and console access use `board.gnss` and `board.console`; there are no setup fixtures or
+decorators. `configure_tracker(board: Board, ...)` only writes NVS. Power-on and every wait remain
+explicit. The transport test checks `tls.handshake_completed()` and retains the simulator's
 empty-warning assertion through `board.properties()["warnings"]`, without accessing `board.link`.
 Using the shared board type does not add hardware network modeling support.
 
@@ -177,7 +178,9 @@ later invalid messages cannot mask an earlier match. The history view validates 
 publication and filters out unrelated topics and the test publisher. The callable
 `_ReportCondition` keeps its captured cursor immutable and implements `__repr__` as
 `a tracker report` or `a tracker report with a position`. Both board backends already use this
-representation for callable objects in wait diagnostics. `test_tracker_support.py` checks report
+representation for callable objects in wait diagnostics. Its `__bool__` raises
+`TypeError("call the report condition with (), or pass it to board.wait_until")`, both before
+and after a match, to reject assertions on an unevaluated condition. `test_tracker_support.py` checks report
 boundaries independently of firmware and exercises both timeout descriptions and their run-report
 entries through the simulated board.
 
@@ -190,7 +193,7 @@ without relying on the first GNSS epoch's order relative to TLS startup. The no-
 waits two seconds for a receiver epoch before observing a subsequent report. Two world epochs,
 including one past 2038, check whole-second UTC against message arrival without a GNSS source,
 with 1.25 seconds for truncation and NTP/transport latency. Wrong CA, hostname and validity-date
-cases wait for `Tls.handshakes_started > 0`, then advance the board by 30 seconds (covering the
+cases wait on `tls.handshake_started`, then advance the board by 30 seconds (covering the
 MQTT client's default 10-second reconnect delay). The broker's cumulative connection and message
 histories must remain empty, so even a temporary fallback fails. This proves absence within the
 observation window, not indefinitely, and uses no firmware error text. The attempt count proves

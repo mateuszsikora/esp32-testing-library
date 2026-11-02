@@ -1727,22 +1727,28 @@ network behavior and certificate dates remain unchanged.
 
 The position tracker interprets its JSON through a local `Report`/`Reports` adapter with future
 message conditions and topic-specific history. Its scenarios now follow the SD logger's public
-`Board` API: interfaces come from `board`, and network selection, CA creation, TLS registration
-and `Reports(network.broker)` construction appear in the test body. This supersedes the example's
-separate credential/listener/report fixtures and setup decorators. Firmware provisioning remains
+`Board` API: interfaces come from `board`, and network setup is an explicit call in the test.
+The local `serve_broker(board, ca=None)` helper groups the repeated network selection, CA creation
+and TLS registration, returning the existing network and listener. Custom CAs remain explicit.
+It lives in the example, not the library, and does not provision NVS, power on or wait.
+`Reports(network.broker)` is constructed separately. This supersedes both the example's setup
+fixtures and its repeated three-line network setup. Firmware provisioning remains
 a separate NVS-only operation. `when_received(with_position=...)` names condition construction,
 not dequeueing.
 Power-on and every wait remain explicit calls on `board`. Report conditions are callable
 objects whose representation names the expected report, using the board's existing diagnostic
 path, as GPIO conditions do. They do not rely on an unused function `description` attribute.
+Report and TLS conditions reject boolean coercion, so asserting on a condition object cannot
+silently pass without evaluating it.
 
 The NTP outage scenario observes a fixed interval after time-server resolution, then restores
 NTP and checks a positioned report against current world UTC. Stopping at the first waiting-log
 line would miss a later attempt to connect without synchronization and would not test recovery.
 
-TLS listeners expose a cumulative `handshakes_started` count and are returned by
-`network.listen(..., tls=ca)`. Rejection tests wait for actual input and inspect broker history
-after a bounded interval; they do not infer absence from a firmware error string.
+TLS listeners expose cumulative started/completed counts and named callable conditions over
+those counts, and are returned by `network.listen(..., tls=ca)`. Completion is the server's TLS
+handshake success, distinct from MQTT activity; conditions retain history after closure.
+Rejection tests wait for actual input and inspect broker history after a bounded interval; they do not infer absence from a firmware error string.
 
 **Rejected:** a second world/context object or fixture graph hiding network selection and TLS
 registration, because the board already owns interfaces and the scenario should show what it

@@ -675,11 +675,18 @@ that references to its number keep their meaning.
     but reject malformed ones. Repeated polling returns the first match; later invalid messages
     cannot hide it, and the complete report history still detects malformed publications.
     Wait timeouts and run reports distinguish a tracker report from one requiring a position.
+    Boolean coercion of a report condition raises before and after a match; explicit calls return
+    the observed report or None.
     `examples/position_tracker/tests/test_tracker_support.py`
 
 115. A TLS listener counts attempts once per connection on its first nonempty input, including
     malformed input. Empty input, an idle TCP connection, later fragments, application traffic
     and input after closure do not add attempts. Counts survive closure and new connections.
+    Completed handshakes are counted once after server-side success, not on partial or failed
+    input. Saved TLS conditions observe these live cumulative counts, retain history after
+    closure/reset, reject boolean coercion and name the desired event in board timeouts.
     `tests/test_net_tls.py::test_tls_attempts_count_nonempty_input_once_per_connection`,
     `tests/test_net_tls.py::test_tls_mqtt_and_transcript`,
-    `tests/test_net_tls.py::test_tls_rejects_unknown_ca_or_wrong_hostname`
+    `tests/test_net_tls.py::test_tls_rejects_unknown_ca_or_wrong_hostname`,
+    `tests/test_net_tls.py::test_tls_conditions_are_live_named_and_reject_truth_testing`,
+    `examples/position_tracker/tests/test_tracker_support.py::test_tls_timeout_names_the_expected_handshake`

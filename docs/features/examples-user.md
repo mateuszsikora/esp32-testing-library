@@ -195,13 +195,15 @@ Provision these required values in the default NVS partition before `board.power
 | `config` | `apn` | string | Cellular access point name |
 
 Tests request the public `board: Board`, as in the SD logger, and reach the GNSS receiver and
-console through `board.gnss` and `board.console`. Each scenario explicitly selects
-`network = board.modem.network()`, creates its CA and registers
-`network.listen(BROKER_PORT, network.broker, tls=ca)` before power-on. The returned TLS handle
-can observe handshake attempts. No fixture or decorator installs the listener.
-`configure_tracker(board, trusted_ca=ca.ca_pem)` writes only NVS: the trusted CA,
+console through `board.gnss` and `board.console`. The local helper
+`network, tls = serve_broker(board)` selects the modem network, creates a CA for `broker.test`
+and registers its broker on TLS port 8883. `serve_broker(board, ca=custom_ca)` uses supplied
+credentials unchanged. It returns the existing network and TLS listener, without writing NVS,
+starting firmware or advancing time. The helper lives in this example's `tests/tracker_support.py`;
+it is not an esp32tl API or an implicit fixture.
+`configure_tracker(board, trusted_ca=tls.ca.ca_pem)` writes only NVS: the trusted CA,
 `broker.test`, port 8883, `time.test` and APN `internet`. Its `broker_host` and `broker_port`
-keyword arguments override the destination. This helper belongs to the example, not the library.
+keyword arguments override the destination. This helper also belongs to the example.
 Missing or invalid configuration prints `position_tracker: invalid or missing NVS configuration`
 and stops before connecting. There are no default credentials. The hostnames are limited to
 253 characters, the APN to 63 and the PEM string to 8191 bytes, excluding its terminator.
@@ -233,11 +235,9 @@ from esp32tl import Board
 
 
 def test_losing_the_fix_clears_the_reported_position(board: Board) -> None:
-    network = board.modem.network()
-    ca = CertificateAuthority([BROKER_HOST])
-    network.listen(BROKER_PORT, network.broker, tls=ca)
+    network, tls = serve_broker(board)
     reports = Reports(network.broker)
-    configure_tracker(board, trusted_ca=ca.ca_pem)
+    configure_tracker(board, trusted_ca=tls.ca.ca_pem)
     board.gnss.fix(at=WARSAW)
     board.power_on(utc=WORLD)
     first = board.wait_until(reports.when_received(with_position=True), within=seconds(60))
@@ -256,7 +256,10 @@ tracker reports from firmware, excluding unrelated topics and publications made 
 Malformed reports fail decoding instead of disappearing from a position wait. This application
 adapter lives in `tests/tracker_support.py`; `board` remains the only clock and power control.
 Timeouts and the run report describe the expected result as `a tracker report` or
-`a tracker report with a position`, instead of the adapter's internal function name.
+`a tracker report with a position`, instead of the adapter's internal function name. Treating the
+condition itself as a boolean
+(for example `assert reports.when_received()`) raises `TypeError`: call it with `()` to inspect
+it or pass it to `board.wait_until()`.
 
 TLS date tests use `CertificateAuthority(..., server_not_before=..., server_not_after=...)`;
 the NTP outage test uses `network.ntp.go_silent()`. After the firmware resolves
@@ -268,8 +271,8 @@ library and know nothing about the tracker report format.
 The tests show a report within one second of connection, three subsequent 10-second intervals
 on `board.now`, position following a moving GNSS model, and timestamps following two different
 `power_on(utc=...)` epochs. They also reject the wrong CA and hostname, expired and not-yet-valid
-server certificates (with a valid CA). Each rejection case waits for the TLS listener to receive
-handshake input, then checks the complete broker history after 30 seconds of simulated time
+server certificates (with a valid CA). Each rejection case waits on
+`tls.handshake_started`, then checks the complete broker history after 30 seconds of simulated time
 for any connection or publication, including short-lived ones. It does not match firmware log
 wording. Other cases check no-fix, lost-fix, receiver silence, missing
 configuration and a nonresponding NTP server. TLS uses system randomness, so these tests

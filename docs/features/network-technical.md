@@ -61,8 +61,12 @@ and evaluates broker keepalive deadlines; `quiet_until` bounds the next turn by 
   plain listeners return `None`. Its cumulative `handshakes_started` counter increments on the
   first nonempty `on_data` per session, before TLS parsing. Empty input, TCP accept alone,
   subsequent fragments and data after closure do not increment it. Invalid first input does.
-  Session closure and network reset leave the counter intact. No deterministic replacement for
-  OpenSSL randomness is attempted (#68).
+  `handshakes_completed` increments once when `SSLObject.do_handshake()` returns successfully,
+  before handing the plaintext stream to the inner service. Session closure and network reset
+  leave both counters intact. Callable `handshake_started` / `handshake_completed` properties
+  observe whether the corresponding live count is positive; they do not capture a future cursor.
+  Their representations name the desired event, and `__bool__` rejects unevaluated truth tests.
+  No deterministic replacement for OpenSSL randomness is attempted (#68).
 
 These are a lossless test network, not a general Internet stack. TCP congestion control, packet
 reassembly, retransmission, persistent MQTT sessions, MQTT QoS 2 and bridging to host services

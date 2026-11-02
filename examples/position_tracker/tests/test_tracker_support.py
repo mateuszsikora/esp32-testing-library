@@ -4,7 +4,7 @@ import json
 from datetime import UTC, datetime
 
 import pytest
-from tracker_support import TOPIC, Reports
+from tracker_support import TOPIC, Reports, serve_broker
 
 from esp32tl import Board
 from esp32tl.interfaces import NeverHappened
@@ -101,3 +101,31 @@ def test_report_timeout_names_the_expected_report(
     with pytest.raises(NeverHappened, match=f"{description} did not happen within"):
         board.wait_until(reports.when_received(with_position=with_position), within=seconds(0.1))
     assert f"waits up to 0.1 s for {description}" in board.report(run=True)
+
+
+@pytest.mark.parametrize("with_position", [False, True])
+def test_report_conditions_reject_truth_testing_even_after_a_match(with_position: bool) -> None:
+    broker = Broker(lambda: 0)
+    condition = Reports(broker).when_received(with_position=with_position)
+    assert condition() is None
+    with pytest.raises(TypeError, match="call the report condition"):
+        bool(condition)
+    received(broker, POSITION)
+    assert condition() is not None
+    with pytest.raises(TypeError, match="call the report condition"):
+        bool(condition)
+
+
+@pytest.mark.app_path("..")
+@pytest.mark.board_profile("lilygo-t-a7670g-r2")
+@pytest.mark.parametrize("completed", [False, True])
+def test_tls_timeout_names_the_expected_handshake(board: Board, completed: bool) -> None:
+    _, tls = serve_broker(board)
+    condition = tls.handshake_completed if completed else tls.handshake_started
+    expected = "a TLS handshake to complete" if completed else "a TLS handshake to start"
+    # Broker setup leaves the board off and NVS unprovisioned, so no handshake can arrive.
+    assert not board.powered
+    board.power_on()
+    with pytest.raises(NeverHappened, match=f"{expected} did not happen within"):
+        board.wait_until(condition, within=seconds(0.1))
+    assert f"waits up to 0.1 s for {expected}" in board.report(run=True)
