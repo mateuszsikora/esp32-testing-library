@@ -1,6 +1,7 @@
 # LilyGO T-A7670G R2. The modem's route and lines are the specification's (issue #1), with the
-# pull-down on RI that stage 0 found; the GNSS route, flash and PSRAM are LilyGO's: its pin table
-# for the T-A7670X ESP32 and its ExternalGPS_A7670G_Only example (plan §4.5). Nothing from memory.
+# pull-down on RI that stage 0 found. GNSS, SD and the other controls follow LilyGO's ESP32
+# pin table and ExternalGPS_A7670G_Only example at 63af963038e93c91baf39d89a3a736d6bc26ff13.
+# Sources and unresolved R2/revision differences: docs/features/board-profiles-technical.md.
 name = "lilygo-t-a7670g-r2"
 chip = "esp32"            # ESP32-WROVER-E
 flash_mb = 4              # 4MB (Quad-SPI), LilyGO's product table
@@ -24,3 +25,19 @@ baud = 9600
 # ESP32 pad polarity from LilyGO; model thresholds from SIMCom (see modem-user.md).
 pwrkey = { pin = 4, active = 1, on_ms = 50, off_ms = 2500 }
 ri = { pin = 33, pull = "down" }   # pulled down on the board: docs/stage0-findings.md, gap 6
+# Named GPIOs only: no modeled sleep or reset effects, no assumed pulls or pulse timings.
+dtr = 25
+reset = 5
+
+[lines.gnss]
+wake = 19                 # receiver wake/standby control; no modeled effect
+pps = 23                  # receiver pulse output; no automatic PPS generation
+
+[lines.board]
+power_enable = 12         # peripheral supply control; no modeled power gating
+
+[sd_card]
+sclk = 14
+mosi = 15
+miso = 2
+cs = 13

@@ -161,10 +161,10 @@ comes back before then prints nothing. In the emulator the output is driven low 
 milliseconds after power-on, and follows a change of the input within 9 emulated microseconds.
 
 The input has the chip's own pulls off, so an undriven input reads what the board's wiring gives
-it. Its defaults are the `[lines.modem]` set of the `lilygo-t-a7670g-r2` board profile, the only
-profile with lines: it reads RI, which the board pulls down, and drives PWRKEY. It is tested on
-that profile ([pytest plugin](pytest-plugin-user.md#the-fixtures)). The lines come from
-`sdkconfig`, menu `gpio_echo` in `idf.py menuconfig`:
+it. Its defaults are the `[lines.modem]` set of the `lilygo-t-a7670g-r2` board profile: it reads
+RI, which the board pulls down, and drives PWRKEY. It is tested on that profile
+([pytest plugin](pytest-plugin-user.md#the-fixtures)). The lines come from `sdkconfig`, menu
+`gpio_echo` in `idf.py menuconfig`:
 
 | Option | Default | Range |
 |---|---|---|

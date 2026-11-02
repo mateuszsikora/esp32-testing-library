@@ -14,6 +14,8 @@ import pytest
 from esp32tl.backends.esp32sim import Esp32Sim
 from esp32tl.interfaces import SourceError
 from esp32tl.interfaces.console import Console
+from esp32tl.interfaces.gnss import Gnss
+from esp32tl.interfaces.modem import Modem
 from esp32tl.interfaces.sd_card import SdCard
 from esp32tl.interfaces.uart import Uart
 
@@ -81,6 +83,25 @@ def test_the_example_writes_its_files_into_the_image(
     assert f"sd_card: a card holding {image}" in report
     assert f"sd_card.insert({str(image)!r})" in report
     assert board.properties()["sd_card"] == {"image": str(image)}
+
+
+@pytest.mark.board_profile("lilygo-t-a7670g-r2")
+def test_the_lilygo_slot_writes_an_image_alongside_both_uart_models(
+    tmp_path: Path,
+    board: Esp32Sim,
+    sd_card: SdCard,
+    console: Console,
+    gnss: Gnss,
+    modem: Modem,
+) -> None:
+    gnss.lose_fix()
+    modem.register()
+    image = fat_image(tmp_path / "lilygo.img")
+    sd_card.insert(image)
+    board.power_on()
+    console.expect_exact("example: Card unmounted", timeout=TIMEOUT)
+    assert read(image, "foo.txt") == b"Hello SIMSD!\n"
+    assert read(image, "nihao.txt") == b"Nihao SIMSD!\n"
 
 
 def test_no_tap_writes_over_the_card_s_image(
@@ -165,7 +186,7 @@ def test_the_slot_used_out_of_order_fails_the_test(
             (tmp_path / "ro.img").chmod(0o444)
             sd_card.insert(tmp_path / "ro.img")
 
-        @pytest.mark.board_profile("lilygo-t-a7670g-r2")
+        @pytest.mark.board_profile("gps-alarm-clock")
         def test_no_slot(sd_card):
             pass
         """
@@ -186,7 +207,7 @@ def test_the_slot_used_out_of_order_fails_the_test(
             "*SourceError: sd_card: */short.img has 1000 bytes; an SD card image is a whole"
             " number of 512 KiB units",
             "*SourceError: sd_card: */ro.img cannot be read and written: the card writes into it",
-            "*esp32sim: the board profile lilygo-t-a7670g-r2 has no sd_card; its interfaces are"
-            " console, uart.modem, uart.gnss, lines.modem, wifi",
+            "*esp32sim: the board profile gps-alarm-clock has no sd_card; its interfaces are"
+            " console, uart.gnss, lines.alarm, wifi",
         ]
     )

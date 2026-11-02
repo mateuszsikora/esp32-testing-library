@@ -205,6 +205,28 @@ def test_model_selection_is_atomic_and_ri_has_one_driver(tmp_path: Path) -> None
     assert list(lines.inputs(0))[-1] == GpioIn(0, ((33, 1),))
 
 
+def test_named_controls_are_observable_without_changing_modem_state(tmp_path: Path) -> None:
+    now = [0]
+    modem, lines, _ = route(tmp_path, now)
+    modem.register()
+    reply(modem.model(), "ATE1")
+    controls = {
+        "modem.dtr": 25,
+        "modem.reset": 5,
+        "gnss.wake": 19,
+        "gnss.pps": 23,
+        "board.power_enable": 12,
+    }
+    for t, level in ((1, 1), (4, 0)):
+        now[0] = seconds(t).ns
+        lines.driven(
+            now[0], [(pin, level) for pin in controls.values()], frozenset(controls.values())
+        )
+        assert all(lines.level(name) == level for name in controls)
+        assert modem.powered and modem.registered
+        assert reply(modem.model(), "AT", now[0]) == b"AT\r\n\r\nOK\r\n"
+
+
 def test_powerkey_uses_profile_timing_and_power_loss_prevents_restart(tmp_path: Path) -> None:
     now = [0]
     modem, lines, log = route(tmp_path, now)

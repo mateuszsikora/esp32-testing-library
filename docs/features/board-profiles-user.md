@@ -14,7 +14,7 @@ with the reason.
 | `esp32-devkitc` | `esp32` | 4 MB, none | `console`; `uart.gnss`: UART1, TX GPIO 4, RX GPIO 5, 9600 baud; `sd_card`: SCLK GPIO 14, MOSI GPIO 15, MISO GPIO 2, CS GPIO 13 |
 | `gps-alarm-clock` | `esp32` | 4 MB, none | `console`; `uart.gnss`: UART1, TX GPIO4, RX GPIO5, 9600 baud; `lines.alarm`: buzzer GPIO18 |
 | `sd-data-logger` | `esp32` | 4 MB, none | `console`; `uart.gnss`: UART1, TX GPIO4, RX GPIO5, 9600 baud; `sd_card`: SCLK GPIO14, MOSI GPIO15, MISO GPIO2, CS GPIO13; `lines.logger`: error GPIO18 |
-| `lilygo-t-a7670g-r2` | `esp32` (ESP32-WROVER-E) | 4 MB, 4 MB | `console`; `uart.modem`: UART1, TX GPIO 26, RX GPIO 27, 115200 baud; `uart.gnss`: UART2, TX GPIO 21, RX GPIO 22, 9600 baud; `lines.modem`: `pwrkey` GPIO 4, `ri` GPIO 33 pulled down |
+| `lilygo-t-a7670g-r2` | `esp32` (ESP32-WROVER-E) | 4 MB, 4 MB | `console`; `uart.modem`: UART1, TX GPIO 26, RX GPIO 27, 115200 baud; `uart.gnss`: UART2, TX GPIO 21, RX GPIO 22, 9600 baud; `sd_card`: SCLK GPIO 14, MOSI GPIO 15, MISO GPIO 2, CS GPIO 13; `lines.modem`, `lines.gnss`, `lines.board` ([control lines](#lilygo-control-lines-and-simulation-limits)) |
 
 Every profile also has `wifi`, the chip's Wi-Fi station: every classic ESP32 has the radio, so a
 profile does not list it, and it comes last in a profile's interfaces
@@ -26,6 +26,16 @@ WROVER modules they belong to the PSRAM. GPIO 5 is a strapping pin; a receiver h
 boot does not change the boot mode. Its SD card slot has the pins ESP-IDF's
 `storage/sd_card/sdspi` example takes on the ESP32 by default, so the example runs unmodified;
 GPIO 2 and 15 are strapping pins too, which a card leaves alone until the firmware selects it.
+
+`gps-alarm-clock` describes the devkit, receiver and active buzzer assembly of the
+[GPS alarm example](examples-user.md#gps-alarm-clock). It is separate from the generic devkit
+profile because the buzzer is an added peripheral.
+
+`sd-data-logger` describes the [SD logger example](examples-user.md#sd-data-logger): the generic
+devkit's GNSS and SPI SD wiring plus GPIO18, high while storage is unavailable. Tests observe
+it with `lines.output("logger.error")`.
+
+The profiles are `esp32tl/boards/<name>.toml`, in the installed package.
 
 `lilygo-t-a7670g-r2` holds the A7670G modem's UART and its PWRKEY and RI lines, which the
 specification gives. The pull-down on RI is what stage 0 found
@@ -41,17 +51,60 @@ and 4 MB of flash. The profile describes that version: on the one without GPS, L
 leaves GPIO 21 and 22 free, the default I²C pins, and the profile still routes `uart.gnss` there. The ESP32-WROVER-E carries 8 MB of PSRAM; the profile gives 4, the most
 `esp32sim` models, so that firmware that turns PSRAM on finds it rather than logging
 `PSRAM not found`. The esp32sim backend gives the chip the profile's PSRAM
-([esp32sim backend](esp32sim-backend-user.md#how-a-run-goes)). Its other pins are not in it.
+([esp32sim backend](esp32sim-backend-user.md#how-a-run-goes)). Firmware requiring all 8 MB
+cannot be validated with this profile's emulated memory.
 
-`gps-alarm-clock` describes the devkit, receiver and active buzzer assembly of the
-[GPS alarm example](examples-user.md#gps-alarm-clock). It is separate from the generic devkit
-profile because the buzzer is an added peripheral.
+The SPI SD slot uses SCLK GPIO 14, MOSI GPIO 15, MISO GPIO 2 and CS GPIO 13, confirmed by the
+same pin table and example. It can hold an image alongside both UART routes:
 
-`sd-data-logger` describes the [SD logger example](examples-user.md#sd-data-logger): the generic
-devkit's GNSS and SPI SD wiring plus GPIO18, high while storage is unavailable. Tests observe
-it with `lines.output("logger.error")`.
+```python
+import pytest
 
-The profiles are `esp32tl/boards/<name>.toml`, in the installed package.
+
+@pytest.mark.board_profile("lilygo-t-a7670g-r2")
+def test_with_card(board, sd_card, gnss, modem):
+    sd_card.insert("card.img")  # existing writable image, relative to this test file
+    gnss.lose_fix()  # select the GNSS model, initially without a fix
+    modem.register()
+    board.power_on()
+    # Observe your firmware through board.console and the other interfaces.
+```
+
+The slot starts empty; inserting an image enables the runner's SPI card model. See
+[SD card images](pytest-plugin-user.md#the-fixtures) for preparing and inspecting an image.
+
+### LilyGO control lines and simulation limits
+
+These names are accepted by the `lines` fixture, for example `lines.level("modem.reset")`
+observes the firmware's output on GPIO 5. New entries declare neither pulls nor pulse timings.
+
+| Line | GPIO | Role | Effect in esp32sim |
+|---|---|---|---|
+| `modem.pwrkey` | 4 | Modem power key | With the modem model selected, firmware pulses change modem power state using the thresholds below |
+| `modem.ri` | 33 | Modem ring indication | Board pull-down; the selected modem model drives RI and reserves it against test drives |
+| `modem.dtr` | 25 | Modem DTR | Observational only; no modem sleep/wake effect |
+| `modem.reset` | 5 | Modem reset | Observational only; no reset of modem state |
+| `gnss.wake` | 19 | L76K wake/standby control | Observational only; no gating of GNSS messages or fix state |
+| `gnss.pps` | 23 | L76K pulse-per-second output | Named GPIO only; no model-generated PPS pulses |
+| `board.power_enable` | 12 | Peripheral supply enable | Observational only; no gating of the modem, GNSS or SD slot |
+
+Observational lines still support `lines.drive`, `lines.release`, `lines.level` and `lines.events`
+through the generic GPIO interface. Tests can supply PPS transitions explicitly; naming the pin
+does not create a pulse generator. The GNSS and modem models and an inserted SD image operate
+without firmware asserting these additional controls. This cannot validate the real board's
+power-up, sleep or reset sequence.
+
+`board.power_enable` (GPIO 12), `modem.reset` (GPIO 5), the slot's MISO (GPIO 2) and MOSI
+(GPIO 15) are strapping pins. esp32sim reads the strapping from a fixed value, not from the pins'
+levels, so a test that drives GPIO 12 or 5 before `board.power_on()` boots normally. On the board,
+GPIO 12 high at reset selects 1.8 V for the 3.3 V flash and the boot fails; a `lines.drive` of
+GPIO 12 or GPIO 5, both ESP32 outputs, before power-on does not reproduce the board.
+
+LilyGO's sources describe the ESP32 T-A7670X family and the A7670G with an external L76K;
+they do not explicitly map the profile's `R2` suffix to a PCB revision. The linked schematic is
+V1.4. GPIO assignments agree, but reset polarity, timing and power sequencing across revisions
+are not inferred from them. The [technical audit](board-profiles-technical.md#lilygo-wiring-audit)
+records the sources and discrepancies.
 
 ## Modem power timing
 
@@ -79,7 +132,8 @@ def test_modem_route(board):
   report starts with its name ([esp32sim backend](esp32sim-backend-user.md)). Every UART route of
   the profile is wired to the board, and the link watches its pins; a route says nothing until the
   test gives it a source ([below](#saying-what-a-test-needs)). The SD card slot is empty until the
-  test inserts a card. The profile's lines are never wired yet.
+  test inserts a card. The link also watches the profile's named GPIO lines; declaring a line
+  does not give it a peripheral model.
 - Only the profiles esp32tl ships can be named; there is no marker argument for a file of your
   own.
 - The marker goes on the test, its class or its module. One given in a

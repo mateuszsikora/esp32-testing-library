@@ -68,8 +68,14 @@ that references to its number keep their meaning.
 - **66.** The `lilygo-t-a7670g-r2` profile holds what the specification gives, the chip, the modem's
     UART1 on GPIO 26/27 at 115200 baud, PWRKEY on GPIO 4 and RI on GPIO 33, the pull-down on RI
     of stage 0's gap 6, and what LilyGO's documentation gives, the GNSS receiver's UART2 on
-    GPIO 21/22 at 9600 baud, 4 MB of flash and 4 MB of PSRAM; nothing else.
-    `tests/test_boards.py::test_the_lilygo_profile_holds_the_specification_and_lilygo_s_documentation`
+    GPIO 21/22 at 9600 baud, 4 MB of flash and 4 MB of emulated PSRAM (8 MB physical), SPI SD
+    SCLK/MOSI/MISO/CS on GPIO14/15/2/13, DTR/reset on 25/5, GNSS wake/PPS on 19/23 and peripheral
+    power enable on 12; nothing else. The five added lines carry no pulls or pulse timings.
+    They are observable without changing modem power, registration or AT settings; an inserted
+    SD image works alongside both UART models.
+    `tests/test_boards.py::test_the_lilygo_profile_holds_the_specification_and_lilygo_s_documentation`,
+    `tests/test_modem_model.py::test_named_controls_are_observable_without_changing_modem_state`,
+    `tests/test_sdspi.py::test_the_lilygo_slot_writes_an_image_alongside_both_uart_models`
 - **28.** A profile that breaks the schema is refused with the file and the key at fault; a UART's TX is
     never an input-only GPIO, nor is an SD card slot's SCLK, MOSI or CS, though its MISO may be;
     and no GPIO serves two uses, the console's UART0 on GPIO 1 and 3 and the slot's four pins

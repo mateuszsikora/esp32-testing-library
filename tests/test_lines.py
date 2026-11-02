@@ -37,7 +37,7 @@ def lilygo() -> tuple[Lines, Clock]:
 
 def test_the_lines_are_the_profile_s_and_named_by_pin_or_by_role() -> None:
     lines, _ = lilygo()
-    assert lines.pins == {4, 33}
+    assert lines.pins == {4, 5, 12, 19, 23, 25, 33}
     lines.drive("modem.ri", 1)
     lines.drive(4, True)
     assert [(e.name, e.pin, e.level) for e in lines.events()] == [
@@ -50,11 +50,13 @@ def test_the_lines_are_the_profile_s_and_named_by_pin_or_by_role() -> None:
     ("line", "level", "error", "message"),
     [
         (
-            5,
+            18,
             1,
             ValueError,
-            "GPIO 5 is no line of the board profile lilygo-t-a7670g-r2; its lines are"
-            " modem.pwrkey (GPIO 4), modem.ri (GPIO 33)",
+            "GPIO 18 is no line of the board profile lilygo-t-a7670g-r2; its lines are"
+            " modem.pwrkey (GPIO 4), modem.ri (GPIO 33), modem.dtr (GPIO 25),"
+            " modem.reset (GPIO 5), gnss.wake (GPIO 19), gnss.pps (GPIO 23),"
+            " board.power_enable (GPIO 12)",
         ),
         ("ri", 1, ValueError, "'ri' is no line of the board profile lilygo-t-a7670g-r2"),
         (True, 1, ValueError, "True is no line"),
@@ -173,7 +175,7 @@ def test_a_pull_up_drives_its_line_high() -> None:
 def test_on_the_link_the_lines_are_watched_and_driven_in_their_turn() -> None:
     lines, clock = lilygo()
     link = BoardLink(LILYGO.name, [lines])
-    assert link.receive(HELLO)[0].watch == (4, 33)  # type: ignore[union-attr]
+    assert link.receive(HELLO)[0].watch == (4, 5, 12, 19, 23, 25, 33)  # type: ignore[union-attr]
     assert link.receive(Sync(0)) == [GpioIn(0, ((33, 0),)), Wait(0, None, None)]
     link.receive(GpioOut(1, S, ((4, 1),), (4,), (4,)))
     clock.now = 2 * S

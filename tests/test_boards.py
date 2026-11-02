@@ -46,7 +46,7 @@ def test_esp32_devkitc_routes_the_gnss_on_uart1_gpio_4_and_5() -> None:
 
 def test_the_lilygo_profile_holds_the_specification_and_lilygo_s_documentation() -> None:
     # The file's data as it stands, so that a pin or a size added from memory fails here: the
-    # modem's route and lines are the specification's, the GNSS route, flash and PSRAM LilyGO's.
+    # modem's original route and lines are the specification's; added wiring is LilyGO's.
     with (boards.PROFILES / "lilygo-t-a7670g-r2.toml").open("rb") as file:
         assert tomllib.load(file) == {
             "name": "lilygo-t-a7670g-r2",
@@ -61,8 +61,13 @@ def test_the_lilygo_profile_holds_the_specification_and_lilygo_s_documentation()
                 "modem": {
                     "pwrkey": {"pin": 4, "active": 1, "on_ms": 50, "off_ms": 2500},
                     "ri": {"pin": 33, "pull": "down"},
-                }
+                    "dtr": 25,
+                    "reset": 5,
+                },
+                "gnss": {"wake": 19, "pps": 23},
+                "board": {"power_enable": 12},
             },
+            "sd_card": {"sclk": 14, "mosi": 15, "miso": 2, "cs": 13},
         }
     profile = boards.profile("lilygo-t-a7670g-r2")
     assert (profile.flash_mb, profile.psram_mb) == (4, 4)
@@ -71,9 +76,26 @@ def test_the_lilygo_profile_holds_the_specification_and_lilygo_s_documentation()
         "gnss": UartRoute(port=2, tx=21, rx=22, baud=9600),
     }
     assert profile.lines == {
-        "modem": {"pwrkey": Line(4, active=1, on_ms=50, off_ms=2500), "ri": Line(33, "down")}
+        "modem": {
+            "pwrkey": Line(4, active=1, on_ms=50, off_ms=2500),
+            "ri": Line(33, "down"),
+            "dtr": Line(25),
+            "reset": Line(5),
+        },
+        "gnss": {"wake": Line(19), "pps": Line(23)},
+        "board": {"power_enable": Line(12)},
     }
-    assert profile.interfaces == ["console", "uart.modem", "uart.gnss", "lines.modem", "wifi"]
+    assert profile.sd_card == SdCardRoute(sclk=14, mosi=15, miso=2, cs=13)
+    assert profile.interfaces == [
+        "console",
+        "uart.modem",
+        "uart.gnss",
+        "lines.modem",
+        "lines.gnss",
+        "lines.board",
+        "sd_card",
+        "wifi",
+    ]
 
 
 def test_a_profile_is_loaded_once_and_cannot_be_changed() -> None:
@@ -301,10 +323,10 @@ def test_the_first_request_a_backend_cannot_give_is_the_reason() -> None:
             " its interfaces are console, uart.gnss, sd_card, wifi",
         ),
         (
-            LILYGO,
+            boards.profile("gps-alarm-clock"),
             Request("sd_card", source="model"),
-            "the board profile lilygo-t-a7670g-r2 has no sd_card;"
-            " its interfaces are console, uart.modem, uart.gnss, lines.modem, wifi",
+            "the board profile gps-alarm-clock has no sd_card;"
+            " its interfaces are console, uart.gnss, lines.alarm, wifi",
         ),
         (DEVKITC, Request("sd_card", tap=True), "no backend can tap sd_card"),
         (
