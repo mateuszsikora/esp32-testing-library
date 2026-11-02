@@ -15,11 +15,16 @@ from esp32tl.interfaces.console import Console
 from esp32tl.interfaces.gnss import Gnss
 from esp32tl.interfaces.lines import Lines, OutputLine
 from esp32tl.interfaces.sd_card import SdCard
-from esp32tl.units import Position, seconds
+from esp32tl.units import Duration, Position, seconds
 
 pytestmark = [pytest.mark.app_path(".."), pytest.mark.board_profile("sd-data-logger")]
 START = datetime(2026, 11, 2, 12, tzinfo=UTC)
 WARSAW = Position(52.229677, 21.012233)
+# Every model scenario boots on a whole UTC second: its first fix is at 1 s,
+# then one per second. Read after the final fix's UART reception and FAT close,
+# but before the next epoch. Later whole-interval waits preserve this margin.
+FIX_INTERVAL = seconds(1)
+WRITE_MARGIN = seconds(0.5)
 
 
 def test_each_fix_appends_one_line(
@@ -30,7 +35,7 @@ def test_each_fix_appends_one_line(
     sd_card.insert(card_image)
     gnss.fix(at=WARSAW)
     board.power_on(utc=START)
-    board.wait(seconds(3.5))
+    board.wait(3 * FIX_INTERVAL + WRITE_MARGIN)
     expected = (
         "115959.00,52.000000,21.000000\n"
         "120001.00,52.229677,21.012233\n"
@@ -42,7 +47,7 @@ def test_each_fix_appends_one_line(
     healthy_since = board.now
 
     gnss.fix(at=Position(-34.6037, -58.3816))
-    board.wait(seconds(2))
+    board.wait(2 * FIX_INTERVAL)
     assert read_file(card_image, "20261102.CSV") == (
         expected + "120004.00,-34.603700,-58.381600\n120005.00,-34.603700,-58.381600\n"
     )
@@ -69,12 +74,12 @@ def test_a_new_gnss_date_starts_a_new_file(
     sd_card.insert(card_image)
     gnss.fix(at=WARSAW)
     board.power_on(utc=start)
-    board.wait(seconds(2.5))
+    board.wait(2 * FIX_INTERVAL + WRITE_MARGIN)
     before_midnight = "235958.00,52.229677,21.012233\n235959.00,52.229677,21.012233\n"
     assert read_file(card_image, old_file) == before_midnight
     assert list_files(card_image) == [old_file]
 
-    board.wait(seconds(3))
+    board.wait(3 * FIX_INTERVAL)
     assert read_file(card_image, old_file) == before_midnight
     assert read_file(card_image, new_file) == (
         "000000.00,52.229677,21.012233\n"
@@ -90,7 +95,7 @@ def test_without_a_fix_no_file_is_created(
     sd_card.insert(card_image)
     gnss.lose_fix()
     board.power_on(utc=START)
-    board.wait(seconds(3.5))
+    board.wait(3 * FIX_INTERVAL + WRITE_MARGIN)
     assert list_files(card_image) == []
     error.assert_off()  # No fix is not a storage error.
 
@@ -101,15 +106,15 @@ def test_losing_the_fix_pauses_logging_and_recovery_appends(
     sd_card.insert(card_image)
     gnss.fix(at=WARSAW)
     board.power_on(utc=START)
-    board.wait(seconds(2.5))
+    board.wait(2 * FIX_INTERVAL + WRITE_MARGIN)
     expected = "120001.00,52.229677,21.012233\n120002.00,52.229677,21.012233\n"
     assert read_file(card_image, "20261102.CSV") == expected
 
     gnss.lose_fix()
-    board.wait(seconds(3))
+    board.wait(3 * FIX_INTERVAL)
     assert read_file(card_image, "20261102.CSV") == expected
     gnss.fix(at=WARSAW)
-    board.wait(seconds(2))
+    board.wait(2 * FIX_INTERVAL)
     assert read_file(card_image, "20261102.CSV") == (
         expected + "120006.00,52.229677,21.012233\n120007.00,52.229677,21.012233\n"
     )
@@ -130,19 +135,16 @@ def test_bad_sentences_cannot_create_files(
         b"$" + b"x" * 100 + b"\r\n",
         nmea(prefix.format(time="120003.00", date="021126")),
     ]
-    header = recording.Header(
-        "sd-data-logger", "uart.gnss", "generated", recording.EMULATED, "2026-11-02T00:00:00Z"
+    first_sentence_at = seconds(1)
+    sentence_interval = seconds(0.25)
+    path = write_gnss_recording(
+        tmp_path / "feed.jsonl", feed, first_at=first_sentence_at, interval=sentence_interval
     )
-    events = tuple(
-        recording.Event(1_000_000_000 + i * 250_000_000, "in", data, recording.EMULATED)
-        for i, data in enumerate(feed)
-    )
-    path = tmp_path / "feed.jsonl"
-    recording.write(path, recording.Recording(header, events))
     sd_card.insert(card_image)
     gnss.replay(path)
     board.power_on(utc=START)
-    board.wait(seconds(4))
+    last_sentence_at = first_sentence_at + (len(feed) - 1) * sentence_interval
+    board.wait(last_sentence_at + WRITE_MARGIN)
     assert list_files(card_image) == ["20261102.CSV"]
     assert read_file(card_image, "20261102.CSV") == "120003.00,52.229677,21.012233\n"
 
@@ -159,9 +161,9 @@ def test_without_a_card_the_error_pin_stays_on_and_fixes_keep_arriving(
 
     # Supply new input after initialization has failed, proving the UART loop survives.
     gnss.fix(at=WARSAW)
-    pattern = rb"sd_data_logger: fix 20261102 (\d{6}\.00) \(card unavailable\)"
-    first = console.expect(pattern, timeout=seconds(2)).group(1)
-    second = console.expect(pattern, timeout=seconds(2)).group(1)
+    first = next_unsaved_fix_time(console)
+    second = next_unsaved_fix_time(console)
+    assert first.date() == second.date() == START.date()
     assert second > first
     error.assert_stayed_on(since=failed_since)
 
@@ -209,6 +211,28 @@ def list_files(image: Path) -> list[str]:
     """List root filenames using ordinary names, without mtools' drive prefix."""
     entries = mtools("mdir", "-b", "-i", str(image), "::").splitlines()
     return sorted(entry.removeprefix("::/") for entry in entries)
+
+
+def write_gnss_recording(
+    path: Path, sentences: list[bytes], *, first_at: Duration, interval: Duration
+) -> Path:
+    """Wrap the scenario's raw UART bytes in a recording, without changing their checksums."""
+    header = recording.Header(
+        "sd-data-logger", "uart.gnss", "generated", recording.EMULATED, "2026-11-02T00:00:00Z"
+    )
+    events = tuple(
+        recording.Event((first_at + i * interval).ns, "in", data, recording.EMULATED)
+        for i, data in enumerate(sentences)
+    )
+    recording.write(path, recording.Recording(header, events))
+    return path
+
+
+def next_unsaved_fix_time(console: Console) -> datetime:
+    """Wait at most two fix intervals for the next fix reported with unavailable storage."""
+    pattern = rb"sd_data_logger: fix (\d{8} \d{6}\.\d+) \(card unavailable\)"
+    match = console.expect(pattern, timeout=2 * FIX_INTERVAL)
+    return datetime.strptime(match.group(1).decode("ascii"), "%Y%m%d %H%M%S.%f").replace(tzinfo=UTC)
 
 
 def nmea(body: str) -> bytes:

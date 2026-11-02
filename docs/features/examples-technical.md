@@ -87,11 +87,21 @@ It does not insert the card: each scenario calls `sd_card.insert(card_image)` be
 Local `write_file`, `read_file` and `list_files` helpers hide mtools arguments, temporary host
 files and the `::/` drive prefix. Scenarios use ordinary filenames and compare exact CSV text;
 these helpers belong to the example, not to the library's SD interface.
-`board.wait` stops at a quiet point between epochs before mtools reads the image, with the
-firmware's previous row already closed. Exact row counts catch double logging of RMC/GGA;
+Model scenarios boot on a whole UTC second, so the first fix arrives at 1 s and subsequent
+fixes at `FIX_INTERVAL = seconds(1)`. Their first read follows the expected number of intervals
+plus `WRITE_MARGIN = seconds(0.5)` for UART reception and closing the FAT row. Later waits add
+whole intervals, preserving the margin before the next epoch. This is a fixed processing budget,
+not a wait until the contents happen to match: exact row counts and deadlines remain assertions.
+`board.wait` stops at those chosen times before mtools reads the image. Exact row counts catch double logging of RMC/GGA;
 pre-existing rows catch truncation. The rollover tests check the first file both before and
 after midnight. The empty-slot test supplies a fix after the mount has failed, observes two
 distinct later timestamps and requires continuous error-pin history between them.
+`next_unsaved_fix_time` encapsulates the console pattern, waits at most two fix intervals for
+an unsaved fix, and returns its UTC `datetime`; the scenario compares dates and ordering.
+The malformed-input scenario keeps its raw NMEA bytes visible, including deliberately broken
+checksums. `write_gnss_recording` packages them into a recording without modifying the bytes;
+the scenario specifies the first send time and spacing in units, then waits until the last
+sentence's scheduled time plus the same write margin.
 
 ## Documentation and builder checks
 
