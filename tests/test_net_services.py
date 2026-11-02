@@ -42,3 +42,32 @@ def test_ntp_world_time_fraction_origin_and_era() -> None:
     assert answer is not None and answer[40:] == struct.pack(">II", 1, 0x80000000)
     assert ntp.on_datagram(query[:47]) is None
     assert ntp.on_datagram(b"\x24" + query[1:]) is None
+
+
+def test_ntp_silence_and_resume_preserve_time_and_reply_count() -> None:
+    now = [0]
+    events: list[str] = []
+    ntp = Ntp(lambda: now[0], lambda: datetime(2031, 5, 6, tzinfo=UTC), events.append)
+    query = b"\x23" + b"\0" * 39 + b"abcdefgh"
+    first = ntp.on_datagram(query)
+    assert first is not None and ntp.requests == 1
+
+    ntp.go_silent()
+    ntp.go_silent()
+    now[0] = 10_000_000_000
+    assert ntp.on_datagram(query) is None
+    assert ntp.requests == 1
+    ntp.resume()
+    ntp.resume()
+    assert ntp.requests == 1  # Resume itself emits no answer or backlog.
+    resumed = ntp.on_datagram(query)
+    assert resumed is not None and ntp.requests == 2
+    assert struct.unpack(">II", resumed[40:])[0] == struct.unpack(">II", first[40:])[0] + 10
+    assert events == ["ntp: answered", "ntp: silent", "ntp: resumed", "ntp: answered"]
+
+
+def test_ntp_can_be_silent_before_its_first_request() -> None:
+    ntp = Ntp(lambda: 0)
+    ntp.go_silent()
+    assert ntp.on_datagram(b"\x23" + b"\0" * 47) is None
+    assert ntp.requests == 0

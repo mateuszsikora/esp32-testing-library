@@ -75,6 +75,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The SD card is validated on ESP-IDF's sdspi example, unmodified](firmware.md#the-sd-card-is-validated-on-esp-idfs-sdspi-example-unmodified) | `firmware.md` | decided (#32) |
 | [Examples share the pinned builder and have their own assembly profiles](firmware.md#examples-share-the-pinned-builder-and-have-their-own-assembly-profiles) | `firmware.md` | decided (#71) |
 | [The SD logger uses each RMC's date and closes every appended row](firmware.md#the-sd-logger-uses-each-rmcs-date-and-closes-every-appended-row) | `firmware.md` | decided (#73) |
+| [The position tracker reuses the pinned modem component and reports without a fix](firmware.md#the-position-tracker-reuses-the-pinned-modem-component-and-reports-without-a-fix) | `firmware.md` | decided (#72) |
 
 ## The esp32tl package and its pytest plugin
 
@@ -190,6 +191,11 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Output handles provide live named conditions without changing GPIO ownership](harness.md#output-handles-provide-live-named-conditions-without-changing-gpio-ownership) | `harness.md` | decided (#71) |
 | [Board owns interfaces and SD image builders](harness.md#board-owns-interfaces-and-sd-image-builders) | `harness.md` | decided (#73) |
 | [Network selection stays explicit and FAT paths name one entry](harness.md#network-selection-stays-explicit-and-fat-paths-name-one-entry) | `harness.md` | decided (#73) |
+| [Network failure controls stay in the models and tracker reports stay in the example](harness.md#network-failure-controls-stay-in-the-models-and-tracker-reports-stay-in-the-example) | `harness.md` | decided (#72) |
+| [A run with a real source is on the wall clock from power-on, and stays on the test's clock](harness.md#a-run-with-a-real-source-is-on-the-wall-clock-from-power-on-and-stays-on-the-tests-clock) | `harness.md` | decided (#27) |
+| [The real source stamps what the port gave with the turn it hands it over in, every emulated millisecond](harness.md#the-real-source-stamps-what-the-port-gave-with-the-turn-it-hands-it-over-in-every-emulated-millisecond) | `harness.md` | decided (#27) |
+| [A real source's port keeps the wire's baud, and a transmit at another rate fails the run](harness.md#a-real-sources-port-keeps-the-wires-baud-and-a-transmit-at-another-rate-fails-the-run) | `harness.md` | decided (#27) |
+| [A real source keeps at most 50 ms of bytes waiting on its line, and drops the oldest](harness.md#a-real-source-keeps-at-most-50-ms-of-bytes-waiting-on-its-line-and-drops-the-oldest) | `harness.md` | decided (#27) |
 | [The Wi-Fi station is an interface of every profile, and the access point a model source](harness.md#the-wi-fi-station-is-an-interface-of-every-profile-and-the-access-point-a-model-source) | `harness.md` | decided (#31) |
 | [Behind the access point the network speaks Ethernet, ARP and DHCP](harness.md#behind-the-access-point-the-network-speaks-ethernet-arp-and-dhcp) | `harness.md` | decided (#31) |
 | [An HTTP server answers on port 80 of every simulated network](harness.md#an-http-server-answers-on-port-80-of-every-simulated-network) | `harness.md` | decided (#31) |
@@ -226,6 +232,8 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [adc waits for an example with an analog pin](runner.md#adc-waits-for-an-example-with-an-analog-pin) | `runner.md` | postponed (#23) |
 | [The SD card is a model of SPI mode in the runner, not esp32sim's card](runner.md#the-sd-card-is-a-model-of-spi-mode-in-the-runner-not-esp32sims-card) | `runner.md` | decided (#32) |
 | [The SD card answers at once and has no CMD6](runner.md#the-sd-card-answers-at-once-and-has-no-cmd6) | `runner.md` | decided (#32) |
+| [Under --realtime the runner waits at each block point until wall time reaches it](runner.md#under---realtime-the-runner-waits-at-each-block-point-until-wall-time-reaches-it) | `runner.md` | decided (#27) |
+| [The runner starts its wall clock with esp32sim's pacing, and then follows esp32sim's resyncs](runner.md#the-runner-starts-its-wall-clock-with-esp32sims-pacing-and-then-follows-esp32sims-resyncs) | `runner.md` | decided (#27) |
 | [The network behind the access point is the peer's, over the link](runner.md#the-network-behind-the-access-point-is-the-peers-over-the-link) | `runner.md` | decided (#31) |
 | [Ethernet frames are stamped at the slice boundary they are taken at](runner.md#ethernet-frames-are-stamped-at-the-slice-boundary-they-are-taken-at) | `runner.md` | decided (#31) |
 | [The access point that goes off the air deauthenticates the station first](runner.md#the-access-point-that-goes-off-the-air-deauthenticates-the-station-first) | `runner.md` | decided (#31) |

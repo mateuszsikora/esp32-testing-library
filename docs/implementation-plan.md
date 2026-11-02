@@ -538,6 +538,11 @@ LilyGO profile ([validation firmware](features/validation-firmware-user.md#gpio_
 
 *Amended by section 11: M6 no longer depends on this milestone.*
 
+*Designed in [`protocol.md`, section 12](protocol.md#12-wall-time---realtime-and-the-real-source-m5)
+(#27), which holds where it differs from the text below: the run is on the wall clock from
+power-on with no clock switch, the source renews its turn at the next whole emulated millisecond,
+and the runner keeps a wall clock of its own for the wait at the block point.*
+
 - Design, written into docs before code: a real device on a host serial port, the runner under
   `--realtime` (`machine.rt.enabled`, public, which is all the CLI flag sets:
   `cli/src/lib.rs:829`), and each received byte stamped with the emulated cycle current at the

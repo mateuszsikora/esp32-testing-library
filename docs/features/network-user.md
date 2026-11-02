@@ -184,6 +184,11 @@ Every destination IP answers, so TCP and UDP dispatch by destination port, regar
 address. DNS on UDP 53 answers every IN A query with `10.64.0.1`; other query types receive an empty answer.
 `network.dns.asked` records queried names. NTP on UDP 123 tells `board.power_on(utc=...)` plus
 elapsed emulated time; `network.ntp.requests` counts replies. The default UTC is the board's.
+`network.ntp.go_silent()` stops answering new requests; `network.ntp.resume()` answers new
+requests again using the current world time. Both work before power-on and during a run,
+without advancing time. Silence does not count as a reply, queue requests for later, or cancel
+replies already scheduled for delivery. Transitions appear as `ntp: silent` and `ntp: resumed`
+in the network transcript; repeating either call in the same state adds no event.
 
 PPP honors the device's negotiated maximum receive unit (MRU), default 1500 bytes, for the whole
 outgoing IPv4 packet. TCP segmentation also respects the peer's MSS and receive window. The
@@ -209,15 +214,60 @@ from esp32tl.net.tls import CertificateAuthority
 
 network = modem.network()
 ca = CertificateAuthority(["broker.example"])
-network.listen(8883, network.broker, tls=ca)
+listener = network.listen(8883, network.broker, tls=ca)
 # Provision ca.ca_pem as the firmware's trusted CA using that firmware's configuration interface.
 ```
 
-CA and server certificates are valid from `2000-01-01T00:00:00Z` to `2099-12-31T00:00:00Z`.
+With `tls=ca`, `listen` returns the `Tls` listener; without TLS it returns `None`.
+`listener.handshakes_started` counts connections that have supplied their first nonempty input.
+It includes incomplete, malformed and failed handshakes; it does not prove TLS success. Reading
+it does not advance time, and closing a connection or resetting the network does not clear the
+count. After powering on the board, a test can wait for an attempt without matching log text:
+
+```python
+board.wait_until(listener.handshake_started, within=seconds(60))
+board.wait_until(listener.handshake_completed, within=seconds(60))
+```
+
+`handshake_started` and `handshake_completed` are named callable conditions on this listener's
+entire history, including events before the condition was obtained. Saved conditions read the
+live counts, without consuming events or advancing time. Call them directly, for example
+`assert listener.handshake_completed()`, or pass them to `board.wait_until`. They stay true after
+connection closure or network reset. Use a fresh listener when a scenario requires fresh history.
+`handshakes_completed` counts server-side handshake completions, once per connection; it does
+not prove an MQTT connection or publication. Started input alone does not imply completion.
+
+Timeouts name `a TLS handshake to start` or `a TLS handshake to complete`. Treating a condition
+itself as a boolean raises `TypeError("call the TLS condition with (), or pass it to board.wait_until")`,
+preventing an unevaluated `assert listener.handshake_completed` from passing silently.
+
+By default, CA and server certificates are valid from `2000-01-01T00:00:00Z` to
+`2099-12-31T00:00:00Z`. To test an expired or not-yet-valid **server** certificate while keeping
+the CA valid, pass `server_not_before` and/or `server_not_after` to `CertificateAuthority`:
+
+```python
+from datetime import UTC, datetime
+
+ca = CertificateAuthority(
+    ["broker.example"],
+    server_not_before=datetime(2020, 1, 1, tzinfo=UTC),
+    server_not_after=datetime(2030, 1, 1, tzinfo=UTC),
+)
+network.listen(8883, network.broker, tls=ca)
+# Provision ca.ca_pem and power on the device in a world dated after 2030.
+```
+
+These arguments require timezone-aware datetimes, converted to UTC; naive values raise
+`TLS server_not_before must be a timezone-aware datetime` (or the `server_not_after` equivalent).
+An empty or reversed interval raises `TLS server_not_before must be earlier than server_not_after`.
+The CA's own dates stay unchanged. Firmware must enable certificate date verification and
+synchronize its clock for the validity check to take effect.
+
 Names may be DNS names or IP addresses. TLS 1.2 and later use Python's `ssl` in memory, with
 system randomness. The harness sees application plaintext; TLS ciphertext and timing do not
 repeat. Provisioning firmware credentials is separate from this API. `pppos_client` validates
-plain MQTT; TLS and NTP have layer tests here, and their tracker firmware validation belongs to #72.
+plain MQTT; [the position tracker](examples-user.md#position-tracker-over-a-cellular-modem)
+validates firmware PPP, NTP and MQTT over TLS, with its broker CA provisioned through NVS.
 
 ## Failures and reports
 
