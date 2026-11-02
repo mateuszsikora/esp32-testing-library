@@ -22,11 +22,31 @@ NOT_AFTER = datetime.datetime(2099, 12, 31, tzinfo=datetime.UTC)
 
 
 class CertificateAuthority:
-    """A CA and one server certificate for `names`. `ca_pem` is what the device is to trust."""
+    """A CA and server certificate for `names`; `ca_pem` is what the device trusts.
 
-    def __init__(self, names: list[str]) -> None:
+    `server_not_before` / `server_not_after` change only the leaf certificate's validity.
+    They require timezone-aware datetimes; the CA keeps its 2000-2099 validity period.
+    """
+
+    def __init__(
+        self,
+        names: list[str],
+        *,
+        server_not_before: datetime.datetime = NOT_BEFORE,
+        server_not_after: datetime.datetime = NOT_AFTER,
+    ) -> None:
         if not names:
             raise ValueError("TLS needs at least one server name")
+        for name, value in (
+            ("server_not_before", server_not_before),
+            ("server_not_after", server_not_after),
+        ):
+            if not isinstance(value, datetime.datetime) or value.utcoffset() is None:
+                raise ValueError(f"TLS {name} must be a timezone-aware datetime")
+        server_not_before = server_not_before.astimezone(datetime.UTC)
+        server_not_after = server_not_after.astimezone(datetime.UTC)
+        if server_not_before >= server_not_after:
+            raise ValueError("TLS server_not_before must be earlier than server_not_after")
         ca_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
         ca_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "esp32tl test CA")])
         ca = (
@@ -51,8 +71,8 @@ class CertificateAuthority:
             .issuer_name(ca_name)
             .public_key(key.public_key())
             .serial_number(2)
-            .not_valid_before(NOT_BEFORE)
-            .not_valid_after(NOT_AFTER)
+            .not_valid_before(server_not_before)
+            .not_valid_after(server_not_after)
             .add_extension(x509.SubjectAlternativeName([_name(n) for n in names]), False)
             .add_extension(x509.BasicConstraints(ca=False, path_length=None), True)
             .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), False)

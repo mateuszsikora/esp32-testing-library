@@ -101,3 +101,59 @@ def test_tls_rejects_unknown_ca_or_wrong_hostname(trusted: bool) -> None:
     server.on_data(outgoing.read())
     assert closed == [True]
     assert not net.broker.clients
+
+
+def test_server_dates_change_without_changing_ca_validity() -> None:
+    from datetime import UTC, datetime, timedelta, timezone
+
+    # An unverified MemoryBIO client lets us inspect dates without using the host's clock.
+    before = datetime(2030, 1, 1, 2, tzinfo=timezone(timedelta(hours=2)))
+    after = datetime(2032, 1, 1, tzinfo=UTC)
+    ca = CertificateAuthority(["broker.example"], server_not_before=before, server_not_after=after)
+    issuer = x509.load_pem_x509_certificate(ca.ca_pem.encode())
+    assert issuer.not_valid_before_utc == NOT_BEFORE
+    assert issuer.not_valid_after_utc == NOT_AFTER
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    incoming, outgoing = ssl.MemoryBIO(), ssl.MemoryBIO()
+    client = context.wrap_bio(incoming, outgoing, server_hostname="broker.example")
+    server_in, server_out = ssl.MemoryBIO(), ssl.MemoryBIO()
+    server = ca.context.wrap_bio(server_in, server_out, server_side=True)
+    for _ in range(20):
+        with contextlib.suppress(ssl.SSLWantReadError):
+            client.do_handshake()
+        server_in.write(outgoing.read())
+        with contextlib.suppress(ssl.SSLWantReadError):
+            server.do_handshake()
+        incoming.write(server_out.read())
+        if client.version():
+            break
+    else:
+        pytest.fail("TLS did not finish its handshake")
+    der = client.getpeercert(binary_form=True)
+    assert der is not None
+    certificate = x509.load_der_x509_certificate(der)
+    certificate.verify_directly_issued_by(issuer)
+    assert certificate.not_valid_before_utc == before.astimezone(UTC)
+    assert certificate.not_valid_after_utc == after
+
+
+@pytest.mark.parametrize("field", ["server_not_before", "server_not_after"])
+def test_server_dates_require_a_timezone(field: str) -> None:
+    from datetime import datetime
+
+    with pytest.raises(ValueError, match=f"TLS {field} must be a timezone-aware datetime"):
+        CertificateAuthority(["broker.example"], **{field: datetime(2031, 1, 1)})
+
+
+@pytest.mark.parametrize("end_year", [2029, 2030])
+def test_server_dates_require_a_nonempty_forward_interval(end_year: int) -> None:
+    from datetime import UTC, datetime
+
+    with pytest.raises(ValueError, match="TLS server_not_before must be earlier"):
+        CertificateAuthority(
+            ["broker.example"],
+            server_not_before=datetime(2030, 1, 1, tzinfo=UTC),
+            server_not_after=datetime(end_year, 1, 1, tzinfo=UTC),
+        )

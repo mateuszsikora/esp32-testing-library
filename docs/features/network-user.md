@@ -70,6 +70,11 @@ IP answers, so TCP and UDP dispatch by destination port, regardless of the addre
 UDP 53 answers every IN A query with `10.64.0.1`; other query types receive an empty answer.
 `network.dns.asked` records queried names. NTP on UDP 123 tells `board.power_on(utc=...)` plus
 elapsed emulated time; `network.ntp.requests` counts replies. The default UTC is the board's.
+`network.ntp.go_silent()` stops answering new requests; `network.ntp.resume()` answers new
+requests again using the current world time. Both work before power-on and during a run,
+without advancing time. Silence does not count as a reply, queue requests for later, or cancel
+replies already scheduled for delivery. Transitions appear as `ntp: silent` and `ntp: resumed`
+in the network transcript; repeating either call in the same state adds no event.
 
 PPP honors the device's negotiated maximum receive unit (MRU), default 1500 bytes, for the whole
 outgoing IPv4 packet. TCP segmentation also respects the peer's MSS and receive window. The
@@ -95,7 +100,28 @@ network.listen(8883, network.broker, tls=ca)
 # Provision ca.ca_pem as the firmware's trusted CA using that firmware's configuration interface.
 ```
 
-CA and server certificates are valid from `2000-01-01T00:00:00Z` to `2099-12-31T00:00:00Z`.
+By default, CA and server certificates are valid from `2000-01-01T00:00:00Z` to
+`2099-12-31T00:00:00Z`. To test an expired or not-yet-valid **server** certificate while keeping
+the CA valid, pass `server_not_before` and/or `server_not_after` to `CertificateAuthority`:
+
+```python
+from datetime import UTC, datetime
+
+ca = CertificateAuthority(
+    ["broker.example"],
+    server_not_before=datetime(2020, 1, 1, tzinfo=UTC),
+    server_not_after=datetime(2030, 1, 1, tzinfo=UTC),
+)
+network.listen(8883, network.broker, tls=ca)
+# Provision ca.ca_pem and power on the device in a world dated after 2030.
+```
+
+These arguments require timezone-aware datetimes, converted to UTC; naive values raise
+`TLS server_not_before must be a timezone-aware datetime` (or the `server_not_after` equivalent).
+An empty or reversed interval raises `TLS server_not_before must be earlier than server_not_after`.
+The CA's own dates stay unchanged. Firmware must enable certificate date verification and
+synchronize its clock for the validity check to take effect.
+
 Names may be DNS names or IP addresses. TLS 1.2 and later use Python's `ssl` in memory, with
 system randomness. The harness sees application plaintext; TLS ciphertext and timing do not
 repeat. Provisioning firmware credentials is separate from this API. `pppos_client` validates

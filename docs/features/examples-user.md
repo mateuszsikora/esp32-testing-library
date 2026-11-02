@@ -194,9 +194,12 @@ Provision these required values in the default NVS partition before `board.power
 | `config` | `ntp_host` | string | NTP server DNS name |
 | `config` | `apn` | string | Cellular access point name |
 
-The tests' `configure_tracker(board, modem)` creates a per-test CA for `broker.test`, registers
-`network.listen(8883, network.broker, tls=server)` and writes the CA plus host, port, `time.test`
-and APN `internet` with `board.nvs`. This helper belongs to the example, not the library.
+The tests separate their simulated broker from firmware provisioning. The `broker_ca` fixture
+creates a per-test CA for `broker.test`; `tls_broker` registers the TLS listener on port 8883
+and returns the existing `Broker`. Neither fixture writes NVS or powers on the board.
+`configure_tracker(board, trusted_ca=broker_ca.ca_pem)` writes only NVS: the trusted CA,
+`broker.test`, port 8883, `time.test` and APN `internet`. Its `broker_host` and `broker_port`
+keyword arguments override the destination. This helper belongs to the example, not the library.
 Missing or invalid configuration prints `position_tracker: invalid or missing NVS configuration`
 and stops before connecting. There are no default credentials. The hostnames are limited to
 253 characters, the APN to 63 and the PEM string to 8191 bytes, excluding its terminator.
@@ -217,6 +220,34 @@ The first report can precede the receiver's first epoch and then has no fix even
 model already has a position. It never connects before NTP synchronization or falls back to unverified/plain MQTT. It retries
 NTP while printing `position_tracker: waiting for NTP` every 10 seconds of waiting. Modem power
 sequencing and PPP redial are outside this example; MQTT reconnect operates while PPP is up.
+
+The example's `reports` fixture interprets publications on `tracker/position`. Its conditions
+return a `Report` with `received_at` (the board's time), `utc` (a timezone-aware datetime) and
+`position` (`Position` or `None`):
+
+```python
+def test_losing_the_fix_clears_the_reported_position(board, gnss, broker_ca, reports):
+    configure_tracker(board, trusted_ca=broker_ca.ca_pem)
+    gnss.fix(at=WARSAW)
+    board.power_on(utc=WORLD)
+    first = board.wait_until(reports.with_position(), within=seconds(60))
+    assert first.position == WARSAW
+
+    gnss.lose_fix()
+    report = board.wait_until(reports.next(), within=seconds(10.25))
+    assert report.position is None
+```
+
+`reports.next()` matches the first report published after the condition is created;
+`reports.with_position()` additionally requires a fix. It can wait past the initial no-fix
+report without assuming which numbered message has a position. `reports.history` includes only
+tracker reports from firmware, excluding unrelated topics and publications made by the test.
+Malformed reports fail decoding instead of disappearing from a position wait. This application
+adapter lives in `tests/tracker_support.py`; `board` remains the only clock and power control.
+
+TLS date tests use `CertificateAuthority(..., server_not_before=..., server_not_after=...)`;
+the NTP outage test uses `modem.network().ntp.go_silent()`. These network controls belong to the
+library and know nothing about the tracker report format.
 
 The tests show a report within one second of connection, three subsequent 10-second intervals
 on `board.now`, position following a moving GNSS model, and timestamps following two different

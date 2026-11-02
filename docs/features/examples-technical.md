@@ -153,18 +153,42 @@ Reports use QoS 0, retain false, on `tracker/position`. `time` is integer Unix U
 `lat`/`lon` are decimal degrees with six places, or both JSON null when `fix` is false. Publishing
 failure logs `position_tracker: publish failed`. The no-fix report still carries synchronized time.
 
-`tests/test_tracker.py` asserts received broker payloads and timestamps. It bounds the first
-report relative to the broker's connection event, brackets three later deadlines with a 250 ms
-transport/scheduling tolerance, and checks message history for early or extra publications.
+`tests/test_tracker.py` keeps power-on and every wait explicit. Its `broker_ca` fixture creates
+credentials; `tls_broker` registers the listener and returns the library's `Broker`; `reports`
+wraps that broker in the application-owned `Reports` adapter. `configure_tracker` in
+`tests/tracker_support.py` only translates the application's settings into NVS entries.
+It does not create a CA, register a listener or start the firmware.
+
+`Report.decode` validates the exact JSON fields and their types: a boolean fix, integer Unix
+seconds, numeric coordinates within the position bounds for a fix, and null coordinates without
+one. It returns an aware UTC datetime, a `Position` or `None`, and the message's `Duration`
+timestamp. Invalid data raises `ValueError` with the received time. `Reports.next()` and
+`Reports.with_position()` capture the broker history length when constructed, observe only
+subsequent firmware publications on the exact topic and return the first matching report.
+They never advance time. Position waits skip valid no-fix reports, but reject malformed ones;
+later invalid messages cannot mask an earlier match. The history view validates every matching
+publication and filters out unrelated topics and the test publisher. `test_tracker_support.py`
+checks these boundaries independently of firmware.
+
+The connect test captures both conditions before power-on so observing the connection cannot
+lose its initial report. Periodicity brackets three later deadlines with a 250 ms
+transport/scheduling tolerance and checks report history for early or extra publications.
 Movement uses southern/western coordinates and a 15 m tolerance for the receiver's one-second
-sampling at 10 m/s. Two world epochs, including one past 2038, check whole-second UTC against
-message arrival, with 1.25 seconds for truncation and NTP/transport latency. Wrong CA and hostname
+sampling at 10 m/s. Movement and separate lost-fix/silence scenarios wait for a positioned report,
+without relying on the first GNSS epoch's order relative to TLS startup. The no-fix scenario
+waits two seconds for a receiver epoch before observing a subsequent report. Two world epochs,
+including one past 2038, check whole-second UTC against message arrival without a GNSS source,
+with 1.25 seconds for truncation and NTP/transport latency. Wrong CA and hostname
 cases must reach a certificate verification failure without an MQTT connection or report.
 Certificate-date regressions keep the CA valid from 2000 through 2099 while changing only the
 server certificate: one expired in 2030, one starts in 2032, and a positive control is valid
-from 2030 to 2032. At the 2031 world epoch only the control may connect and publish.
+from 2030 to 2032. At the 2031 world epoch only the control may connect and publish. The tests
+use the public `server_not_before` / `server_not_after` constructor arguments, with no local
+certificate builder or TLS subclass.
 No-fix, lost-fix, silence and missing-NVS cases cover startup and stale data. A missing NTP
-responder keeps the firmware from resolving or connecting to the broker even with valid GNSS.
+responder, selected with `modem.network().ntp.go_silent()`, keeps the firmware from resolving or
+connecting to the broker even with valid GNSS. Transport assertions (TLS, QoS and retention) are
+separate from the immediate-report scenario.
 
 These are functional TLS tests. The existing determinism checker still compares raw UART and
 board-link statistics exactly; this example does not feed random TLS ciphertext to that check.

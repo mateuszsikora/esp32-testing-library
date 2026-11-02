@@ -1715,3 +1715,22 @@ This also rejects literal bracket names created outside the API.
 locale; and accepting patterns in single-file reads, because an assertion must inspect the one
 file it names. Supporting literal bracket names through escaping is deferred; explicit rejection
 keeps the currently documented no-pattern contract uniform across all commands.
+
+## Network failure controls stay in the models and tracker reports stay in the example
+
+Status: decided (#72)
+
+NTP exposes `go_silent()` and `resume()` so tests describe an unavailable time server without
+editing the UDP service table. TLS credentials accept `server_not_before` / `server_not_after`
+as aware datetimes, changing only the leaf certificate while keeping the CA valid. The default
+network behavior and certificate dates remain unchanged.
+
+The position tracker interprets its JSON through a local `Report`/`Reports` adapter with future
+message conditions and topic-specific history. It keeps firmware provisioning separate from
+TLS listener fixtures. Power-on and every wait remain explicit calls on `board`.
+
+**Rejected:** implementing cryptographic certificate construction separately in each consumer
+or removing service-map entries to simulate an NTP outage, because these hide the intended world
+state behind protocol details; teaching esp32tl about the tracker's fields, topic or NVS keys,
+because product vocabulary belongs in the consumer's tests; and a wrapper that owns another
+clock or implicitly powers on the board, because the scenarios should show when firmware runs.

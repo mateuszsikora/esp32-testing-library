@@ -20,6 +20,19 @@ class Ntp:
         self._world = utc_at_power_on
         self._log = log
         self.requests = 0
+        self._silent = False
+
+    def go_silent(self) -> None:
+        """Stop answering new requests until `resume`, without moving the world's clock."""
+        if not self._silent:
+            self._silent = True
+            self._log("ntp: silent")
+
+    def resume(self) -> None:
+        """Answer new requests with the current world time; missed requests are not replayed."""
+        if self._silent:
+            self._silent = False
+            self._log("ntp: resumed")
 
     def _stamp(self) -> bytes:
         delta = self._world() - NTP_EPOCH
@@ -32,7 +45,7 @@ class Ntp:
         return struct.pack(">II", seconds & 0xFFFFFFFF, (rest << 32) // 1_000_000_000)
 
     def on_datagram(self, data: bytes) -> bytes | None:
-        if len(data) < 48 or data[0] & 7 != 3 or (data[0] >> 3) & 7 not in (3, 4):
+        if self._silent or len(data) < 48 or data[0] & 7 != 3 or (data[0] >> 3) & 7 not in (3, 4):
             return None
         self.requests += 1
         stamp = self._stamp()

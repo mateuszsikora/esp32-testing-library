@@ -654,3 +654,21 @@ that references to its number keep their meaning.
     certificate valid at that world epoch. Missing NVS configuration or NTP synchronization
     never connects.
     `examples/position_tracker/tests/test_tracker.py`
+
+108. NTP silence suppresses new replies without incrementing the reply count. Resume answers only
+    new requests with current world UTC; transitions are idempotent and do not replay a backlog.
+    `tests/test_net_services.py::test_ntp_silence_and_resume_preserve_time_and_reply_count`,
+    `tests/test_net_services.py::test_ntp_can_be_silent_before_its_first_request`
+
+109. Server certificate validity can change independently of the signing CA. Validity inputs are
+    aware datetimes normalized to UTC, with the end strictly after the start. The CA keeps its
+    default dates and signs the generated leaf.
+    `tests/test_net_tls.py::test_server_dates_change_without_changing_ca_validity`,
+    `tests/test_net_tls.py::test_server_dates_require_a_timezone`,
+    `tests/test_net_tls.py::test_server_dates_require_a_nonempty_forward_interval`
+
+110. Tracker report conditions observe future firmware publications only on the tracker topic,
+    ignoring unrelated messages and test publications. Position waits skip valid no-fix reports
+    but reject malformed ones. Repeated polling returns the first match; later invalid messages
+    cannot hide it, and the complete report history still detects malformed publications.
+    `examples/position_tracker/tests/test_tracker_support.py`
