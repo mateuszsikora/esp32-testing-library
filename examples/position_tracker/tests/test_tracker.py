@@ -19,6 +19,7 @@ WORLD = datetime(2031, 5, 6, 12, 34, 56, tzinfo=UTC)
 STARTUP = seconds(60)
 INTERVAL = seconds(10)
 JITTER = seconds(0.25)  # RTOS scheduling, TLS records and UART transport, on the board's clock.
+NTP_OUTAGE = seconds(30)
 REJECTION_WINDOW = seconds(30)  # Covers the MQTT client's 10-second reconnect delay.
 UTC_TOLERANCE = timedelta(seconds=1.25)  # Whole-second timestamps and NTP/transport latency.
 
@@ -207,24 +208,34 @@ def test_accepts_a_server_certificate_valid_at_the_ntp_time(
     assert "time.test" in modem.network().dns.asked
 
 
-@pytest.mark.usefixtures("tls_listener")
-def test_waits_for_ntp_before_connecting(
+def test_waits_for_ntp_and_connects_when_it_returns(
     board: Esp32Sim,
     gnss: Gnss,
     modem: Modem,
     broker: Broker,
     broker_ca: CertificateAuthority,
-    console: Console,
+    tls_listener: Tls,
+    reports: Reports,
 ) -> None:
     configure_tracker(board, trusted_ca=broker_ca.ca_pem)
-    modem.network().ntp.go_silent()
+    network = modem.network()
+    network.ntp.go_silent()
     gnss.fix(at=WARSAW)
     board.power_on(utc=WORLD)
-    board.wait_until(console.line("position_tracker: waiting for NTP"), within=seconds(15))
-    assert "time.test" in modem.network().dns.asked
-    assert BROKER_HOST not in modem.network().dns.asked
+    board.wait_until(lambda: "time.test" in network.dns.asked, within=STARTUP)
+    board.wait(NTP_OUTAGE)
+    assert BROKER_HOST not in network.dns.asked
+    assert tls_listener.handshakes_started == 0
     assert not broker.clients
     assert not broker.messages
+
+    network.ntp.resume()
+    report = board.wait_until(reports.when_received(with_position=True), within=STARTUP)
+    assert tls_listener.handshakes_started > 0
+    assert network.ntp.requests > 0
+    assert report.position == WARSAW
+    expected = WORLD + timedelta(seconds=report.received_at.seconds)
+    assert abs(report.utc - expected) < UTC_TOLERANCE
 
 
 def test_missing_configuration_does_not_connect(

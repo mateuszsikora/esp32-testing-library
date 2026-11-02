@@ -248,9 +248,14 @@ condition can wait past the initial no-fix report without assuming which numbere
 tracker reports from firmware, excluding unrelated topics and publications made by the test.
 Malformed reports fail decoding instead of disappearing from a position wait. This application
 adapter lives in `tests/tracker_support.py`; `board` remains the only clock and power control.
+Timeouts and the run report describe the expected result as `a tracker report` or
+`a tracker report with a position`, instead of the adapter's internal function name.
 
 TLS date tests use `CertificateAuthority(..., server_not_before=..., server_not_after=...)`;
-the NTP outage test uses `modem.network().ntp.go_silent()`. These network controls belong to the
+the NTP outage test uses `modem.network().ntp.go_silent()`. After the firmware resolves
+`time.test`, it observes 30 seconds with no broker lookup, TLS attempt, MQTT connection or
+publication. It then calls `ntp.resume()` and requires a report with the GNSS position and UTC
+matching the advancing world clock within 60 seconds. These network controls belong to the
 library and know nothing about the tracker report format.
 
 The tests show a report within one second of connection, three subsequent 10-second intervals

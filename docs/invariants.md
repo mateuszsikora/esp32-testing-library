@@ -645,36 +645,39 @@ that references to its number keep their meaning.
     `tests/test_card_image.py::test_readers_distinguish_missing_files_and_directories`,
     `tests/test_card_image.py::test_invalid_fat_remains_a_tool_error`
 
-107. The position tracker publishes over verified MQTT/TLS immediately on connection and every
+111. The position tracker publishes over verified MQTT/TLS immediately on connection and every
     10 seconds on the test clock. Reported positions follow GNSS, including southern/western
     coordinates, and Unix UTC follows NTP's world epoch, including dates after 2038. No fix,
     loss of fix or receiver silence produces null coordinates rather than a stale current fix.
     A wrong CA or hostname, or a server certificate outside its validity period at the NTP
     time, leaves the broker's cumulative history empty through 30 seconds after the first TLS
     input. The date tests keep the CA valid and include an accepted server
-    certificate valid at that world epoch. Missing NVS configuration or NTP synchronization
-    never connects.
+    certificate valid at that world epoch. Missing NVS configuration never connects. During
+    NTP silence, no broker lookup, TLS attempt, MQTT connection or publication occurs in the
+    30 seconds after the time-server lookup. Resuming NTP yields a report with valid GNSS
+    position and current world UTC within 60 seconds.
     `examples/position_tracker/tests/test_tracker.py`
 
-108. NTP silence suppresses new replies without incrementing the reply count. Resume answers only
+112. NTP silence suppresses new replies without incrementing the reply count. Resume answers only
     new requests with current world UTC; transitions are idempotent and do not replay a backlog.
     `tests/test_net_services.py::test_ntp_silence_and_resume_preserve_time_and_reply_count`,
     `tests/test_net_services.py::test_ntp_can_be_silent_before_its_first_request`
 
-109. Server certificate validity can change independently of the signing CA. Validity inputs are
+113. Server certificate validity can change independently of the signing CA. Validity inputs are
     aware datetimes normalized to UTC, with the end strictly after the start. The CA keeps its
     default dates and signs the generated leaf.
     `tests/test_net_tls.py::test_server_dates_change_without_changing_ca_validity`,
     `tests/test_net_tls.py::test_server_dates_require_a_timezone`,
     `tests/test_net_tls.py::test_server_dates_require_a_nonempty_forward_interval`
 
-110. Tracker report conditions observe future firmware publications only on the tracker topic,
+114. Tracker report conditions observe future firmware publications only on the tracker topic,
     ignoring unrelated messages and test publications. Position waits skip valid no-fix reports
     but reject malformed ones. Repeated polling returns the first match; later invalid messages
     cannot hide it, and the complete report history still detects malformed publications.
+    Wait timeouts and run reports distinguish a tracker report from one requiring a position.
     `examples/position_tracker/tests/test_tracker_support.py`
 
-111. A TLS listener counts attempts once per connection on its first nonempty input, including
+115. A TLS listener counts attempts once per connection on its first nonempty input, including
     malformed input. Empty input, an idle TCP connection, later fragments, application traffic
     and input after closure do not add attempts. Counts survive closure and new connections.
     `tests/test_net_tls.py::test_tls_attempts_count_nonempty_input_once_per_connection`,

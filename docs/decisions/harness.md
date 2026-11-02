@@ -1729,7 +1729,13 @@ The position tracker interprets its JSON through a local `Report`/`Reports` adap
 message conditions and topic-specific history. It keeps firmware provisioning separate from
 TLS listener fixtures. The `reports` fixture depends only on `broker`; tests select TLS setup
 explicitly. `when_received(with_position=...)` names condition construction, not dequeueing.
-Power-on and every wait remain explicit calls on `board`.
+Power-on and every wait remain explicit calls on `board`. Report conditions are callable
+objects whose representation names the expected report, using the board's existing diagnostic
+path, as GPIO conditions do. They do not rely on an unused function `description` attribute.
+
+The NTP outage scenario observes a fixed interval after time-server resolution, then restores
+NTP and checks a positioned report against current world UTC. Stopping at the first waiting-log
+line would miss a later attempt to connect without synchronization and would not test recovery.
 
 TLS listeners expose a cumulative `handshakes_started` count and are returned by
 `network.listen(..., tls=ca)`. Rejection tests wait for actual input and inspect broker history

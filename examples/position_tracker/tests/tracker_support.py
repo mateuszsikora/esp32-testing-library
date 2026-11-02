@@ -84,15 +84,24 @@ class Reports:
         Creating or polling it never consumes a report. Repeated polls retain the first
         match; create a new condition to observe publications after that point.
         """
-        start = len(self._broker.messages)
+        return _ReportCondition(self, len(self._broker.messages), with_position)
 
-        def find() -> Report | None:
-            return next(
-                (r for r in self._since(start) if not with_position or r.position is not None),
-                None,
-            )
 
-        find.description = (  # type: ignore[attr-defined]
-            "a tracker report with a position" if with_position else "a tracker report"
+@dataclass(frozen=True, repr=False)
+class _ReportCondition:
+    reports: Reports
+    start: int
+    with_position: bool
+
+    def __call__(self) -> Report | None:
+        return next(
+            (
+                report
+                for report in self.reports._since(self.start)
+                if not self.with_position or report.position is not None
+            ),
+            None,
         )
-        return find
+
+    def __repr__(self) -> str:
+        return "a tracker report with a position" if self.with_position else "a tracker report"

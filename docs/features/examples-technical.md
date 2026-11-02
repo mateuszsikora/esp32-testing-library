@@ -170,8 +170,12 @@ and returns a condition observing only subsequent firmware publications on the e
 Neither construction nor polling consumes messages or advances time. Position waits skip valid
 no-fix reports, but reject malformed ones;
 later invalid messages cannot mask an earlier match. The history view validates every matching
-publication and filters out unrelated topics and the test publisher. `test_tracker_support.py`
-checks these boundaries independently of firmware.
+publication and filters out unrelated topics and the test publisher. The callable
+`_ReportCondition` keeps its captured cursor immutable and implements `__repr__` as
+`a tracker report` or `a tracker report with a position`. Both board backends already use this
+representation for callable objects in wait diagnostics. `test_tracker_support.py` checks report
+boundaries independently of firmware and exercises both timeout descriptions and their run-report
+entries through the simulated board.
 
 The connect test captures both conditions before power-on so observing the connection cannot
 lose its initial report. Periodicity brackets three later deadlines with a 250 ms
@@ -193,9 +197,13 @@ from 2030 to 2032. At the 2031 world epoch only the control may connect and publ
 use the public `server_not_before` / `server_not_after` constructor arguments, with no local
 certificate builder or TLS subclass.
 No-fix, lost-fix, silence and missing-NVS cases cover startup and stale data. A missing NTP
-responder, selected with `modem.network().ntp.go_silent()`, keeps the firmware from resolving or
-connecting to the broker even with valid GNSS. Transport assertions (TLS, QoS and retention) are
-separate from the immediate-report scenario.
+responder, selected with `modem.network().ntp.go_silent()`, is observed for 30 seconds after the
+firmware resolves `time.test`, with valid GNSS throughout. The test checks no broker DNS lookup,
+zero TLS attempts and empty cumulative MQTT connection/message histories, without matching NTP
+log wording. It then resumes NTP and waits up to 60 seconds for a positioned report, allowing
+SNTP's retry delay. The recovered report must contain Warsaw's position and current world UTC
+within the same 1.25-second tolerance; an NTP reply and TLS attempt must have occurred.
+Transport assertions (TLS, QoS and retention) are separate from the immediate-report scenario.
 
 These are functional TLS tests. The existing determinism checker still compares raw UART and
 board-link statistics exactly; this example does not feed random TLS ciphertext to that check.
