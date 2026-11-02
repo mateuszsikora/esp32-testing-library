@@ -13,7 +13,8 @@ that #325 does not cover; they stay in the runner whatever happens upstream (pla
 
 Who implements what: the runner side in #11 (M1: UART, `reset`, `uart_cfg`, `warn`, `stats`) and #23
 (M3: GPIO and the future-input queue); the harness side in #12, and its GPIO lines in #24. `adc`
-waits for an issue of its own, opened when an example needs an analog pin.
+waits for an issue of its own, opened when an example needs an analog pin. Wall time under
+`--realtime`, for a real device at the far end of a route (section 12), comes with #28.
 
 ## 1. Transport
 
@@ -129,7 +130,7 @@ seen exactly the events up to the block point, however the emulator schedules it
 | runner → harness | `sync` | `t` | M1 |
 | runner → harness | `console` | `t`, `data` | M1 |
 | runner → harness | `warn` *ext* | `t`, `kind`, `detail`, and per kind `port`, `pin`, `baud`, `bytes` | M1 |
-| runner → harness | `stats` *ext* | `t`, `end`, `resets`, `turns`, `uart`, `unrouted_rx_bytes`, `inputs_on_output`, `inputs_not_applied`, `rx_bytes_not_paced` | M1 |
+| runner → harness | `stats` *ext* | `t`, `end`, `resets`, `turns`, `uart`, `unrouted_rx_bytes`, `inputs_on_output`, `inputs_not_applied`, `rx_bytes_not_paced`; under `--realtime` also `rt_resyncs` (M5) | M1 |
 | harness → runner | `uart_rx` | `t`, `pin`, `baud`, `data` | M1 |
 | harness → runner | `gpio_in` | `t`, `levels` | M3 |
 | harness → runner | `release` | `t`, `pins` | M3 |
@@ -160,10 +161,11 @@ The first line is the runner's, the second the harness's.
   profile and the runner refuses another.
 - `clock`: what the times of `uart_tx` mean, in the vocabulary of the recording header (plan 4.3).
   `emulated-fifo-write`: emulated time, and a transmitted byte is stamped when the guest writes
-  the UART FIFO, not when it would leave the wire (`esp32/src/bus.rs:308-311`). `wall` is reserved
-  for the design of the `real` source on the emulator (#27). A `BoardLink` made with `clock`
-  fails the link on a runner whose `clock` is another one: the `esp32sim` backend passes
-  `emulated-fifo-write`, the clock its recordings are checked against.
+  the UART FIFO, not when it would leave the wire (`esp32/src/bus.rs:308-311`). `wall`: the same
+  emulated nanoseconds, paced to wall time under `--realtime` (section 12, M5). A `BoardLink`
+  made with `clock` fails the link on a runner whose `clock` is another one: the `esp32sim`
+  backend passes `emulated-fifo-write`, the clock its recordings are checked against, and, from
+  #28, `wall` for a run with a `real` source (12.4).
 - `esp32sim`: the full revision the runner was built against, for the recording header's `tools`.
 - `board`: the harness's board profile name. The runner does not interpret it; its board is the
   socket.
@@ -377,7 +379,8 @@ received bytes not yet paced into the chip, of `uart_rx` messages already applie
 in the queue counts in `inputs_not_applied` only), so `BoardLink` can tell inputs that reached
 past the end of the run. `uart` has one entry per
 port that carried a watched route during the run, with the bytes each way and the drops by kind.
-`BoardLink` puts the counts in the test report next to the matching engine's unseen requests.
+`rt_resyncs`, only under `--realtime`, counts the times the run skipped a lag behind wall time
+(12.2). `BoardLink` puts the counts in the test report next to the matching engine's unseen requests.
 
 ### 5.10 `uart_rx`
 
@@ -496,7 +499,7 @@ same turn are discarded.
 
 3. **`sync` is the turn**, one per block point and nothing in between. A peer that wants to hear
    from the runner at least every millisecond of emulated time sets `quiet_until` no later than one
-   millisecond ahead (the `real` source on the emulator will do this, #27).
+   millisecond ahead, as the `real` source on the emulator does (12.3).
 
 4. **The guest boots after the first `wait`.** The runner sends `sync` with `t = 0` before the
    guest's first instruction and waits for the peer's turn, so a peer that comes up slower than
@@ -581,7 +584,7 @@ Rule 2 turns `latency` into a promise the source must keep for the whole run:
 |---|---|---|
 | `replay` | the smallest request-to-answer delay in its recording, computed when the recording is loaded (plan 4.4); a replay never answers sooner. A passive stream with no requests and no explicit protocol declares `null`. An active protocol with no recorded answer delays declares `0`, including a recording of unanswered commands or a stream with an explicit protocol; unknown requests can still receive fallback answers | the minimum of the next unprompted event and every answer waiting to be sent |
 | `model` | the shortest answer delay the model can produce, declared by the model | the model's next unprompted output |
-| `real` | designed in #27 | renewed in short slices (rule 3) |
+| `real` | `null`: a real device promises no answer time, and its bytes are stamped at the turn they are handed over in (12.3) | the next whole emulated millisecond after the turn, renewed at every turn (rule 3) |
 
 A replay that declared a `latency` larger than an answer in its recording would fail at that
 request. A large `latency` costs nothing in correctness and saves turns: the runner coalesces
@@ -611,7 +614,7 @@ the runner at or before its `t` (rule 1).
 |---|---|---|
 | `--max-seconds` reached (`Stop::Halted`, `esp-soc/src/machine.rs:584`) | sends events not yet sent, `stats` with `end: max_seconds`, closes | 0 |
 | `stop` from the peer | drops the events held after `B`, sends `stats` with `end: stop`, closes | 0 |
-| `SIGTERM` or `SIGINT` | ends the slice in progress (at most one emulated millisecond), or at once if it is waiting for the peer's turn; sends the events and `warn`s not yet sent, `stats` with `end: signal`, closes | 0 |
+| `SIGTERM` or `SIGINT` | ends the slice in progress (at most one emulated millisecond), or at once if it is waiting for the peer's turn or, under `--realtime`, for wall time (12.2); sends the events and `warn`s not yet sent, `stats` with `end: signal`, closes | 0 |
 | any other `Stop` (`esp-soc/src/soc.rs:9`: `MaxInsns`, `Breakpoint`, `Unimplemented`, `Simcall`, `Ebreak`, `Watch`, `Exceptions`, `CostModel`, `CostModelLifecycle`) | events not yet sent, `stats` with `end: emulator` and the variant, closes | 1 |
 | usage error, or an image or ROM that cannot be loaded | nothing on the socket (it may not be connected yet) | 2 |
 | protocol error by the peer: malformed or oversized line, unknown `type`, version or chip mismatch, late `t`, wrong `ack`, `quiet_until` not after the `sync`, a `baud` of `0`, a `watch` with a pin the chip does not have, a message the runner does not implement yet | `stats` with `end: protocol_error`, closes | 3 |
@@ -748,6 +751,14 @@ Section 4.1 of the plan is superseded by this document. What changed, and why:
     reads `GPIO_ENABLE` and `GPIO_OUT`, which right after the reset agree with it (5.5). Should a
     later esp32sim model the IO_MUX functions a reset leaves, the runner needs the pad state from
     it.
+18. **A run with a `real` source is on the wall clock from power-on**, designed in #27. Plan 4.3
+    and its section 11 kept the recording format's clock switch for M5, for a session that crosses
+    from emulated to wall time. Under `--realtime` the run is paced from its first instruction, so
+    every time in it is a wall time already, and every route's timing depends on when the device's
+    bytes came, so no switch has a place to go (12.4).
+19. **The `real` source renews its turn at the next whole emulated millisecond**, not one
+    millisecond after each turn as plan M5 has it: the runner ends a slice there anyway (6.1), so
+    the source's turns cost no slices of their own (12.3).
 
 
 ### Harness policy for simulated network receive loss
@@ -757,3 +768,127 @@ On an interface whose `lossless` property is true (currently a modem with the si
 `uart.modem: UART receive overflow (rxfifo_ovf) on GPIO 27: the simulated network requires a lossless route`.
 The warning is retained in the report and the run stops as for `frm_err`. Ordinary UART routes
 keep overflow as a warning. This changes harness policy only, not message fields or version 1.
+
+## 12. Wall time: `--realtime` and the `real` source (M5)
+
+Designed in #27, before code; the runner's half and the harness's `real` source come with #28.
+Until then the runner has no `--realtime` and its `hello` always says `emulated-fifo-write`.
+Nothing here changes the wire: `wall` is a value `clock` already reserved, and `rt_resyncs` a
+field `stats` may add (section 2), so the protocol stays at version 1.
+
+A real device on a host serial port, a GNSS receiver on a USB adapter for one, sends when it
+sends, in wall time; it cannot be held in a turn or say when it will next send. Putting it at the
+far end of an emulated route takes emulated time paced to wall time, a rule for the emulated time
+each of its bytes gets, and turns often enough that the rule stays close to the wire.
+mikroverk/esp32sim#325 leaves exactly this open: "the mechanics of stamping wall time as emulated
+time need their own design" (plan, finding 11).
+
+### 12.1 The runner under `--realtime`
+
+`--realtime` sets `machine.rt.enabled`, which is all esp32sim's flag of the same name does
+(`cli/src/lib.rs:829`), and the runner's `hello` then says `clock: wall`. esp32sim paces `run`
+itself (`Machine::rt_pace`, `esp-soc/src/machine.rs:1091-1115`): every 2¹⁶ bus cycles, 273
+emulated µs, it compares emulated time with the wall time since its first such check. It sleeps
+while emulated time is more than 2 ms ahead, lets the guest run as fast as it can while it is
+behind, and once wall time is more than 500 ms ahead it moves its anchor up to emulated time,
+skipping the lag, and counts the skip in `rt.resyncs`. Real-time pacing also turns off round
+batching and virtual quanta (`:573`, `:777`), which changes the emulator's speed and nothing the
+guest sees.
+
+Times on the socket are emulated nanoseconds as in section 3, and every rule of section 6 holds as
+written. What changes is what the times mean: they follow wall time, less what a held turn or a
+skipped lag took out of it (12.2), so a run under `--realtime` does not repeat, whatever its peer
+does.
+
+### 12.2 The runner waits for wall time at the block point
+
+esp32sim's pacing alone lets the guest reach a block point up to 2 ms plus one pacing interval,
+about 2.3 ms, before wall time does, and its anchor is private (`Realtime::wall_start`), so the
+runner cannot ask it where wall time stands. The runner keeps a wall clock of its own. Emulated
+time 0 is the wall instant at which the peer's first `wait` ends turn 0 and the guest's first
+instruction runs (rule 4). When `rt.resyncs` has grown by a slice boundary `T`, the runner moves its
+anchor so that `T` is now, as esp32sim moved its own. The two anchors then differ by less than the
+wall time of one slice, plus, until the first resync, the wall time of the guest's first 2¹⁶ bus
+cycles, well under a millisecond.
+
+At each block point `B`, before it sends `sync`, the runner under `--realtime` waits until its
+wall clock reaches `B`. It waits on the socket with the wall time left as the timeout, in the
+transport's 20 ms steps, as it waits for a turn: a signal ends the wait at once (section 9), and so
+does the peer closing the socket (exit code 4). The wait is never without a bound: it is at most
+the emulated time from where the guest last resumed to `B`, and under about 2.3 ms while
+esp32sim's pacing keeps the guest close to wall time. It is not part of the peer's turn, so
+`--peer-timeout` does not count it. Without it, the harness would take the turn at `B` before the
+device's bytes up to `B` had arrived and give them the next turn's time, up to about 3.3 ms late
+instead of within a millisecond (12.3).
+
+A turn held in the harness, by the test's clock (section 4) or a slow peer, stops emulated time
+while wall time goes on, and leaves the guest behind. Under 500 ms esp32sim runs it flat out until
+it has caught up, and the runner does not wait at the block points meanwhile; past 500 ms both skip
+the lag. A guest that cannot keep up falls behind the same way: stage 0 measured CPU-bound code at
+0.3 to 1.7 times real time ([speed](stage0-findings.md#speed)). `stats` under `--realtime` carries
+`rt_resyncs`, `rt.resyncs` at the end of the run, which `BoardLink` puts in the test report: each
+resync is a stretch of the device's wall time that reached the guest at one emulated instant.
+
+### 12.3 The `real` source
+
+The harness's `real` source (`esp32tl/sources/real.py`, given with `gnss.real(port)` or
+`board.uart(role).real(port)`) opens the host serial port `port` at the wire's baud, the line rate
+of the board profile's route, at which a replay and a model send too. It reads the port in a thread
+of its own, so the operating system's buffer does not fill while a turn is held. It declares:
+
+- `latency`: `null`. A real device promises no answer time, and needs none: its bytes are stamped
+  at the turn they are handed over in, never before it (rule 2).
+- `quiet_until`: the next whole emulated millisecond after the turn's `sync` `t`. The device does
+  not know when it will next send, so the source renews its turn at least every emulated
+  millisecond (rule 3). A whole millisecond is where the runner ends a slice anyway (6.1), so these
+  turns add no slices of their own.
+
+**Received bytes.** At each turn the source sends everything the port has given since its last
+turn as one `uart_rx` stamped with the turn's `sync` `t`, at the wire's baud. A byte thus gets the
+time of the first turn that looks at the port after it arrived: the end of the emulated millisecond
+in which it arrived or, if it arrived while the run was held in a turn, that turn's time. The
+runner paces the bytes from there at the line rate (rule 5), as the wire did. While the guest keeps up with wall time (12.2), a byte is stamped within one emulated
+millisecond after it reached the harness. The USB adapter's and the host driver's delays come
+before that and are not removed: an FTDI adapter holds received bytes for up to its latency timer,
+16 ms by default.
+
+**Transmitted bytes.** The source writes what the firmware transmits to the port as soon as the
+link hands it over, in or between turns. A `uart_tx` reaches the harness at the latest in the turn
+after its `t`, within an emulated millisecond, so under `--realtime` the bytes leave at their
+`uart_tx` time to within about a millisecond, and the port's UART puts them on the wire at its
+baud. The port's rate is fixed for the run. A `uart_tx` whose `baud` is `null`, or further from
+the port's than the 3 % `matches_baud` allows, would give the device what a wire does not carry
+intact, which the port cannot reproduce: the run fails on it, as it does on a `frm_err` (5.8).
+
+The source's turns are the run's cost: a thousand per emulated second, each a round trip through
+`BoardLink`. A harness that takes close to a millisecond of wall time per turn keeps the guest
+behind wall time, and the lag grows until it is skipped every half second (12.2).
+
+### 12.4 The backend and recordings
+
+A test gives a route a `real` source before `board.power_on()`, as any other source. The
+`esp32sim` backend then starts the runner with `--realtime` and makes its `BoardLink` with `clock`
+`wall`, so the whole run is on the wall clock from power-on and nothing switches clocks
+([recording format](recording-format.md#clock-switches)). Every recording of such a run says
+`clock: wall`, the console's and a model's route's too, since what the firmware did depended on
+when the device's bytes came. The real route's tap writes `source: real`, its `in` events at the
+source's stamps and its `out` events at their `uart_tx` times. A replay in such a run takes only a
+`clock: wall` recording, since it refuses a clock other than its backend's
+([replay](features/replay-user.md#what-a-replay-refuses)). Recordings on the wall clock are never
+compared with emulated ones, and tests with a `real` source stay out of the determinism job
+([testing](guides/testing.md#determinism)).
+
+The run stays on the test's clock: it is held while the test body runs, and `board.wait(d)` lets
+it go for `d` of the board's time, which under `--realtime` is also about `d` of wall time. The
+test's own timeout, 600 wall seconds by default
+([pytest plugin](features/pytest-plugin-user.md#the-tests-timeout)), then bounds the board's time
+too.
+
+#28 tests this without hardware: a pseudo-terminal pair stands in for the USB adapter, with a
+thread on one end writing the device's bytes in wall time, which checks the stamping bound and the
+wait at the block point in CI. A GNSS receiver on a USB serial adapter validates the whole (plan M5); its
+recording replaces none of the generated ones, which stay the deterministic reference.
+
+TODO(owner): what `gnss.real(port)` does on the `serial` backend. Its capability declaration gives
+`serial` a `real` source for the device wired to the board, which no host port reaches (finding
+11): skip the test there, or run it against the board's own device and leave `port` closed.

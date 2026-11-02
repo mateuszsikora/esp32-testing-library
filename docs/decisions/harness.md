@@ -1715,3 +1715,57 @@ This also rejects literal bracket names created outside the API.
 locale; and accepting patterns in single-file reads, because an assertion must inspect the one
 file it names. Supporting literal bracket names through escaping is deferred; explicit rejection
 keeps the currently documented no-pattern contract uniform across all commands.
+
+
+## A run with a real source is on the wall clock from power-on, and stays on the test's clock
+
+Status: decided (#27)
+
+A test that gives a route a `real` source before `board.power_on()` gets a run under `--realtime`
+whose `BoardLink` and taps are on the `wall` clock, every route and the console included, with no
+clock switch ([protocol 12.4](../protocol.md#124-the-backend-and-recordings)). The run is still
+held while the test body runs, as [the board's clock is the test's](#the-boards-clock-is-the-tests-emulated-time-moves-only-while-the-test-waits)
+has it, and a replay in it takes only a `wall` recording, under the existing rule that a replay
+refuses another clock than its backend's.
+
+**Rejected:** a clock switch at the first byte from the device, which plan §4.3 and §11 kept the
+switch for, because the run is paced from power-on and every time in it is a wall time already.
+Also rejected: the `wall` clock on the real route alone, because when the firmware sends on every
+other route depends on when the device's bytes came; and letting the run go while the test body
+runs, as on `serial`, because a test would then have two models of time, which #64 rejected, while
+the held clock costs only a catch-up of under half a second, or a skipped lag past that.
+
+## The real source stamps what the port gave with the turn it hands it over in, every emulated millisecond
+
+Status: decided (#27)
+
+At each turn the `real` source sends what its host port gave since the last one as one `uart_rx`
+stamped with the turn's `sync` `t`, declares no `latency`, and is quiet only until the next whole
+emulated millisecond ([protocol 12.3](../protocol.md#123-the-real-source)). A byte thus gets the
+emulated time current when it arrived, at most a millisecond after it while the guest keeps up
+with wall time, and never a time before the turn (rule 2).
+
+**Rejected:** stamping each byte with its own arrival time through a wall clock in the harness,
+because the anchor is the runner's, a copy would drift from it, and a time computed from a copy
+that runs ahead of the runner's falls before the turn, which is a protocol error. Also rejected: a
+`latency` in place of `quiet_until`, because `latency` gives a turn only after the firmware
+transmits, and a GNSS receiver sends unprompted to a firmware that never does; a renewal longer
+than a millisecond, because each millisecond more is a millisecond later on every stamp; and a
+message per byte, because the runner paces a message's bytes on the line from its `t` anyway.
+
+## A real source's port keeps the wire's baud, and a transmit at another rate fails the run
+
+Status: decided (#27)
+
+The `real` source opens its host port at the wire's baud, the board profile's line rate, and
+keeps it for the run. A `uart_tx` at another rate, beyond the 3 % `matches_baud` allows, or with
+no rate set, fails the run, as a `frm_err` does in the other direction: the port would put intact
+bytes on the wire where a real one would carry garbage.
+
+**Rejected:** following the route's baud from `uart_cfg`, because the port would then read the
+device at the firmware's rate instead of its own: a firmware at the wrong rate would hear garbage,
+the `uart_rx` would carry the route's baud, and the runner could no longer report the `frm_err`
+that names both rates.
+
+**Postponed:** firmware that negotiates its device's rate, as a GNSS driver that switches a
+receiver to 115200 baud does, until an example needs it.
