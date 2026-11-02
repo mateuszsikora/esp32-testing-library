@@ -1,7 +1,7 @@
 """The esp32tl pytest plugin, loaded through the `pytest11` entry point.
 
-It provides the `board`, `console`, `gnss`, `modem`, `lines` and `sd_card` fixtures on top of
-pytest-embedded's classes (plan §3); `bt` and `wifi` come with later milestones.
+It provides the `board`, `console`, `gnss`, `modem`, `broker`, `lines` and `sd_card` fixtures on
+top of pytest-embedded's classes (plan §3); `bt` and `wifi` come with later milestones.
 The board runs a board profile, `esp32-devkitc` unless the `board_profile` marker names another
 (plan §4.5).
 
@@ -52,6 +52,7 @@ from esp32tl.interfaces.gnss import Gnss
 from esp32tl.interfaces.lines import Lines
 from esp32tl.interfaces.modem import Modem
 from esp32tl.interfaces.sd_card import SdCard
+from esp32tl.net.mqtt import Broker
 
 # The wall-time timeout of a test that uses `board`, in seconds, unless one is configured: 600 s
 # covers at least three minutes of the board's busiest work, at the 0.3 times real time stage 0
@@ -485,3 +486,9 @@ def sd_card(board: Board) -> SdCard:
         return board.sd_card()
     except BackendError as error:
         backend_failed(error, board.name)
+
+
+@pytest.fixture
+def broker(modem: Modem) -> Broker:
+    """An MQTT 3.1.1 broker at port 1883 behind the selected modem model."""
+    return modem.network().broker

@@ -174,11 +174,17 @@ def test_serial_capabilities_skip_at_the_call(pytester: pytest.Pytester) -> None
         def test_modem_tap(modem):
             modem.tap("not-written.jsonl")
         @pytest.mark.board_profile("lilygo-t-a7670g-r2")
+        def test_network(modem):
+            modem.network()
+        @pytest.mark.board_profile("lilygo-t-a7670g-r2")
+        def test_broker(broker):
+            pytest.fail("the simulated broker must skip before the test body")
+        @pytest.mark.board_profile("lilygo-t-a7670g-r2")
         def test_gpio(lines):
             lines.drive("modem.ri", True)
     """)
     result = run_serial(pytester, "-rs")
-    result.assert_outcomes(skipped=9)
+    result.assert_outcomes(skipped=11)
     result.stdout.fnmatch_lines(
         [
             "*serial: uart.gnss takes no model source on this backend, only real*",
@@ -189,6 +195,8 @@ def test_serial_capabilities_skip_at_the_call(pytester: pytest.Pytester) -> None
             "*serial: uart.modem takes no model source on this backend, only real*",
             "*serial: uart.modem takes no replay source on this backend, only real*",
             "*serial: uart.modem cannot be tapped on this backend*",
+            "*serial: uart.modem takes no model source on this backend, only real*",
+            "*serial: uart.modem takes no model source on this backend, only real*",
             "*serial: GPIO lines cannot be controlled or observed on this backend*",
         ]
     )

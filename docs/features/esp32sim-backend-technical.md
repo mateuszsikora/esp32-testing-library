@@ -483,3 +483,14 @@ are not tested; the `cannot start` message is not checked through the fixture, o
 - [Plan section 3, architecture](../implementation-plan.md#3-architecture) and
   [M0](../implementation-plan.md#m0-bootstrap-console-only)
 - [Link protocol](../protocol.md): what the backend's `BoardLink` and the runner speak
+
+
+## Modem network reporting
+
+The modem route receives the same lazy world-UTC callback as GNSS, so NTP uses the value supplied
+at `board.power_on(utc=...)`, even when the network was selected earlier. With a selected network,
+`report()` appends its full event transcript after AT history. `properties()` adds `network` to
+`routes["uart.modem"]`, an `esp32tl_network: 1` transcript containing events and application
+plaintext, as described in [network internals](network-technical.md). Raw UART taps still contain
+PPP and TLS wire bytes. The route advertises `lossless=True`; its receive FIFO overflows fail
+through `BoardLink` immediately.

@@ -52,7 +52,8 @@ board power-on instead starts it off, for firmware that boots it with PWRKEY.
 Registration changes affect the next query; there are no unsolicited registration notifications.
 Losing registration or power in data mode ends that mode silently: this model sends no unsolicited
 `NO CARRIER` for an established connection's loss. Firmware waiting for a disconnect indication
-may time out; PPP disconnect notification and peer teardown remain part of #30. A dial attempted
+may time out. With `modem.network()`, loss resets PPP and closes TCP connections, publishing
+MQTT Wills once; no old connection or queued reply survives a new dial. A dial attempted
 while unregistered does return `NO CARRIER`.
 Power loss silences the UART, clears any partial command and ends data mode. RI is 1 while
 powered and 0 while off. `lines.events()` includes RI changes with `by="model"`; `lines.level`
@@ -88,10 +89,12 @@ asterisks and hashes, and a final `#`. `AT+CGDATA=` accepts any arguments withou
 Echo preserves the original command bytes; command history decodes non-ASCII bytes as U+FFFD.
 
 Answers are stamped 1 ms after the `uart_tx` chunk containing the command terminator. This is the
-chunk's first-byte timestamp, not a separately measured terminator timestamp. Data mode currently
-records bytes without answering them: the simulated PPP/network peer belongs to #30. Escape
-detection has no guard-time requirement: three consecutive pluses escape, even in payload. One or
-two trailing pluses wait for the next byte. The model does not validate APNs or emulate a
+chunk's first-byte timestamp, not a separately measured terminator timestamp. Without a selected
+network, data mode records bytes without answering them and three consecutive pluses escape
+immediately, even in payload. With `modem.network()` (also selected by the `broker` fixture),
+PPP reaches the [simulated network](network-user.md). Its binary payload preserves pluses;
+`+++` escapes only after one second of silence on each side. One or two trailing candidate
+pluses wait for the next byte. The model does not validate APNs or emulate a
 cellular network, SIM provisioning, boot delays or shutdown delays. An overlong command (more
 than 4096 bytes) is discarded through its next terminator.
 

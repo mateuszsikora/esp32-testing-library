@@ -6,7 +6,7 @@ templates.
 
 | Feature | User | Technical | Code |
 |---|---|---|---|
-| pytest plugin: the `board`, `console`, `gnss`, `modem`, `lines` and `sd_card` fixtures, the `app_path` and `app_recording` markers, `--esp32tl-backend` | [user](pytest-plugin-user.md) | [technical](pytest-plugin-technical.md) | `esp32tl/pytest_plugin.py`, `esp32tl/interfaces/` |
+| pytest plugin: the `board`, `console`, `gnss`, `modem`, `broker`, `lines` and `sd_card` fixtures, the `app_path` and `app_recording` markers, `--esp32tl-backend` | [user](pytest-plugin-user.md) | [technical](pytest-plugin-technical.md) | `esp32tl/pytest_plugin.py`, `esp32tl/interfaces/` |
 | `esp32sim` backend: the runner under pytest-embedded, on the emulated clock | [user](esp32sim-backend-user.md) | [technical](esp32sim-backend-technical.md) | `esp32tl/backends/esp32sim.py`, `esp32tl/backends/clock.py` |
 | `serial` backend: a real ESP32 through pytest-embedded, on the wall clock | [user](serial-backend-user.md) | [technical](serial-backend-technical.md) | `esp32tl/backends/serial.py`, `esp32tl/backends/__init__.py` |
 | `esp32tl` command | [user](cli-user.md) | | `esp32tl/cli.py`, `esp32tl/__init__.py` |
@@ -22,6 +22,7 @@ templates.
 | Bluetooth peer: a Classic device with SPP on Bumble's virtual link, answered by a model on the board's clock | [user](bluetooth-peer-user.md) | [technical](bluetooth-peer-technical.md) | `esp32tl/bluetooth/` |
 | Cellular modem: AT dialogue, signal, registration, PWRKEY and RI | [user](modem-user.md) | [technical](modem-technical.md) | `esp32tl/sources/model/modem.py`, `esp32tl/interfaces/modem.py` |
 | Flash contents: `board.nvs()` and typed integers, by partition name | [user](flash-contents-user.md) | [technical](flash-contents-technical.md) | `esp32tl/flash.py` |
+| Simulated network: PPP, IPv4, TCP/UDP, DNS, NTP, TLS and MQTT | [user](network-user.md) | [technical](network-technical.md) | `esp32tl/net/` |
 
 ## Ownership map
 
@@ -41,7 +42,7 @@ GitHub Action, a pre-commit hook or a Python dependency.
 | F1 | `^esp32tl/pytest_plugin\.py$` | `^docs/features/pytest-plugin-` | pytest plugin changed (fixtures, markers, options, parametrisation): update docs/features/pytest-plugin-*.md |
 | F2 | `^esp32tl/interfaces/` | `^docs/features/pytest-plugin-` | Console interface changed: update docs/features/pytest-plugin-*.md |
 | F3 | `^esp32tl/backends/(esp32sim\|clock)\.py$` | `^docs/features/esp32sim-backend-` | esp32sim backend changed (spawn, ROM and runner lookup, end of run, teardown): update docs/features/esp32sim-backend-*.md |
-| F22 | `^esp32tl/backends/(serial\|__init__)\.py$` | `^docs/features/serial-backend-` | Serial backend or backend registry changed: update docs/features/serial-backend-*.md |
+| F23 | `^esp32tl/backends/(serial\|__init__)\.py$` | `^docs/features/serial-backend-` | Serial backend or backend registry changed: update docs/features/serial-backend-*.md |
 | F4 | `^esp32tl/cli\.py$` | `^docs/features/cli-user\.md$` | esp32tl command changed: update docs/features/cli-user.md |
 | F5 | `^esp32tl/__init__\.py$` | `^docs/features/cli-user\.md$` | Package root changed (version shown by esp32tl --version): update docs/features/cli-user.md |
 | F6 | `^runner/src/`, without the paths of F9 and F10 | `^docs/features/runner-` | Runner changed (flags, stop line, exit codes, run loop): update docs/features/runner-*.md |
@@ -50,7 +51,7 @@ GitHub Action, a pre-commit hook or a Python dependency.
 | F9 | `^runner/src/protocol\.rs$` | `^docs/protocol\.md$` | Link protocol changed in runner/src/protocol.rs: update docs/protocol.md, and its version if the wire changes |
 | F10 | `^runner/src/socket_board\.rs$` | `^docs/protocol\.md$` | Link protocol changed in runner/src/socket_board.rs: update docs/protocol.md, and its version if the wire changes |
 | F11 | `^firmware/` | `^docs/features/validation-firmware-` | Validation firmware or its build changed: update docs/features/validation-firmware-*.md |
-| F12 | `^esp32tl/`, without the paths of F1 to F11, F13 to F22 and `esp32tl/py.typed` | `^docs/features/[a-z0-9-]+\.md$`, a new file only | This path has no owning doc yet: add its feature docs, a new docs/features/<feature>-user.md or -technical.md, and add it to the ownership map (scripts/check-docs.py, docs/features/README.md, AGENTS.md) |
+| F12 | `^esp32tl/`, without the paths of F1 to F11, F13 to F23 and `esp32tl/py.typed` | `^docs/features/[a-z0-9-]+\.md$`, a new file only | This path has no owning doc yet: add its feature docs, a new docs/features/<feature>-user.md or -technical.md, and add it to the ownership map (scripts/check-docs.py, docs/features/README.md, AGENTS.md) |
 | F13 | `^esp32tl/boards/` | `^docs/features/board-profiles-` | Board profiles or the capability declaration changed (schema, pins, sources, taps): update docs/features/board-profiles-*.md |
 | F14 | `^esp32tl/recording\.py$` | `^docs/recording-format\.md$` | Recording format changed: docs/recording-format.md is its specification; update it, and its version if the format changes |
 | F15 | `^esp32tl/sources/replay\.py$` | `^docs/features/replay-` | Replay changed (what it replays, when, what it refuses): update docs/features/replay-*.md |
@@ -60,6 +61,7 @@ GitHub Action, a pre-commit hook or a Python dependency.
 | F19 | `^esp32tl/sources/model/modem\.py$` | `^docs/features/modem-` | Modem model changed (AT dialogue, power, registration): update docs/features/modem-*.md |
 | F20 | `^esp32tl/flash\.py$` | `^docs/features/flash-contents-` | Flash contents changed (partition table, NVS types and generation): update docs/features/flash-contents-*.md |
 | F21 | `^esp32tl/matching\.py$` | `^docs/features/matching-` | Matching engine changed (protocols, requests, timing): update docs/features/matching-*.md |
+| F22 | `^esp32tl/net/` | `^docs/features/network-` | Simulated network changed: update docs/features/network-*.md |
 | C1 | `^\.github/workflows/` | `^docs/cicd\.md$` | CI workflow changed: update docs/cicd.md |
 | C2 | `^Makefile$` | `^docs/guides/development\.md$` | Makefile changed: update the make targets in docs/guides/development.md |
 | C3 | `^\.pre-commit-config\.yaml$` | `^docs/guides/development\.md$` | Pre-commit hooks changed: update docs/guides/development.md |

@@ -57,12 +57,15 @@ latency later. A lost supply prevents PWRKEY from restarting the modem. Power tr
 partial commands, echo, registration query modes, data mode and pulse state. Signal and coverage
 survive a power cycle; functionality resets to 1.
 
-The model's optional constructor `data: Source | None` is the seam for #30's simulated PPP peer.
+The model's optional constructor `data: Source | None` accepts a data peer; `modem.network()`
+installs `esp32tl.net.Internet` before power-on. The `broker` fixture selects it automatically.
 In data mode its payload reaches `data.receive`, and `poll`, `quiet_until` and `latency` delegate
 to that source (latency remains at most 1 ms). With no peer, payload is retained and unanswered.
-The model instantiates no PPP session. Established connection loss emits no unsolicited
-`NO CARRIER`. Escape recognition deliberately omits guard times; the peer's lifecycle/reset on lost
-registration and power belongs with that network integration.
+A network dial starts PPP after CONNECT; power, registration and functionality loss reset it,
+clear queued replies and close TCP sessions. Established connection loss emits no unsolicited
+`NO CARRIER`. Network data mode guards `+++` with one second of silence before and after it;
+`poll` completes the escape and `quiet_until` exposes its deadline. Other data sources retain
+the immediate escape recognizer. See [network internals](network-technical.md).
 
 ## Failure modes
 

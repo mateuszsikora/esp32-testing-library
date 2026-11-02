@@ -133,6 +133,9 @@ is an error. Requesting `lines` on a profile that has GPIO lines skips with
 observe those pins through the console adapter. The model/replay GNSS tests skip; the console-only
 smoke tests run. Host-side hardware to drive off-board peripherals remains postponed.
 
+`modem.network()` and the `broker` fixture also skip on serial: the simulated network
+requires a modem model, which this backend cannot provide.
+
 ## Validation status
 
 The console smoke tests passed on 2026-11-02 on a LilyGO board with a classic ESP32-D0WD-V3

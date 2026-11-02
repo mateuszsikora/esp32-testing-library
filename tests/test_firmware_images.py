@@ -134,3 +134,23 @@ def test_nvs_reader_has_a_writable_nvs_partition() -> None:
     )
     nvs = partitions(table.read_bytes())["nvs"]
     assert (nvs.type, nvs.subtype, nvs.offset, nvs.size, nvs.flags) == (1, 2, 0x9000, 0x6000, 0)
+
+
+def test_pppos_client_has_the_classic_layout_and_lilygo_route() -> None:
+    app = idf_app("pppos_client")
+    build = FIRMWARE / "pppos_client" / "build"
+    assert app.target == "esp32"
+    assert [(f.offset, Path(f.file_path).relative_to(build)) for f in app.flash_files] == [
+        (0x1000, Path("bootloader/bootloader.bin")),
+        (0x8000, Path("partition_table/partition-table.bin")),
+        (0x10000, Path("pppos_client.bin")),
+    ]
+    route = boards.profile("lilygo-t-a7670g-r2").uart["modem"]
+    config = app.sdkconfig
+    assert config["EXAMPLE_MODEM_DEVICE_SIM7600"] is True
+    assert config["EXAMPLE_MODEM_UART_TX_PIN"] == route.tx
+    assert config["EXAMPLE_MODEM_UART_RX_PIN"] == route.rx
+    assert config["EXAMPLE_FLOW_CONTROL_NONE"] is True
+    assert config["EXAMPLE_MQTT_BROKER_URI"] == "mqtt://mqtt.eclipseprojects.io"
+    assert config["LWIP_PPP_SUPPORT"] is True
+    assert all(Path(f.file_path).is_file() for f in app.flash_files)

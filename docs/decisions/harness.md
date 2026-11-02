@@ -1431,7 +1431,7 @@ rolling wire log for the command list, because earlier setup commands would disa
 
 ## The modem data peer and realistic escape timing wait for network integration
 
-Status: postponed (#30)
+Status: superseded (#30)
 
 This AT-only model accepts an optional `Source` as its data peer, but creates no PPP or host
 network. Without one, dial still returns `CONNECT` and data bytes are retained without answers.
@@ -1560,3 +1560,87 @@ model can attach to it. `board.nvs()` skips on serial before generating or writi
 **Rejected:** exposing the new emulator APIs as missing attributes on serial, or flashing a
 test-specific NVS partition after pytest-embedded's autoflash without a hardware lifecycle
 design. Replacement of physical NVS remains outside this serial milestone.
+
+
+## The network is selected explicitly, and resets with its modem
+
+Status: decided (#30)
+
+`modem.network()` selects the AT model and its PPP peer before power-on; `broker` calls it as a
+fixture. Existing AT-only tests retain their immediate `+++` escape and unanswered data phase.
+Network data mode instead requires a second of idle time before and after `+++`, preserving
+binary PPP bytes. Power, registration and functionality loss reset PPP, queued replies and TCP
+sessions; a fresh dial negotiates again. The broker retains its test-side history and retained
+messages, while connection loss emits Wills once. No unsolicited `NO CARRIER` is emitted yet.
+
+**Rejected:** enabling PPP for every AT-model call, because existing firmware tests deliberately
+dial and escape without a PPP stack; and recognizing every binary `+++` as an escape, because
+valid PPP/TLS payloads may contain it. Fully model-specific escape timing and unsolicited modem
+notifications wait for a firmware test that needs them.
+
+## The MQTT service implements ephemeral sessions and QoS zero and one
+
+Status: decided (#30)
+
+The broker grants subscription QoS at most 1 and refuses QoS 2 publications. Subscriptions and
+unacknowledged deliveries belong to a connection and are not restored on reconnect; CONNACK
+reports no session present. Retained publications belong to the test's broker and survive modem
+power cycles. Credentials are recorded, not authenticated. The current validation example uses
+clean sessions. Persistent session restoration and authentication policy wait for a test that
+needs them, rather than pretending to have full broker persistence or an external auth service.
+
+## TLS determinism compares explicit plaintext transcripts
+
+Status: decided (#30)
+
+The network records events and application stream bytes after TLS termination. Its diagnostic
+`esp32tl_network: 1` transcript is compared exactly before the first handshake starts, then by
+ordered events and bytes per connection/direction without times or chunk boundaries. System TLS
+randomness starts affecting the run during handshake, so the boundary is its start, not completion.
+The TLS regression uses a real MemoryBIO client, CA verification and bidirectional MQTT. Raw
+UART recordings and link reports remain exact; firmware TLS/NTP validation belongs to #72.
+
+**Rejected:** stripping times from every recording or dropping every link statistic whenever TLS
+appears, because either can hide regressions on unrelated routes; comparing encrypted TLS bytes,
+because system keys and nonces differ even when application traffic is identical.
+
+## pppos_client is fetched by pinned commit and checksum
+
+Status: decided (#30)
+
+The build downloads esp-protocols `modem-v1.4.1` at its fixed commit and checks its archive digest.
+The whole source tree is retained under the build output so the unmodified example's relative
+component override uses that revision's esp_modem. Only sdkconfig selects SIM7600 and the LilyGO
+UART; application and component sources remain unchanged.
+
+**Rejected:** copying the example into this repository or resolving its component from the latest
+registry release, because the former obscures whether validation still uses upstream unchanged,
+and the latter stops testing the version demonstrated by the spike.
+
+
+## Peer MRU limits TCP segmentation and oversized UDP replies are dropped
+
+Status: decided (#30)
+
+The PPP peer records the MRU it acknowledges, defaulting to 1500 when omitted and resetting on
+renegotiation, termination or redial. TCP limits each payload by MRU minus its IPv4/TCP headers,
+MSS and the receive window. This stack supports MRU values from 68; smaller requests get a
+Configure-Nak proposing 68, enough for its fixed control headers. UDP responses above MRU are
+dropped before packet construction and logged, without fragmentation. PPP also checks outgoing
+IPv4 packet size at its boundary.
+
+**Rejected:** acknowledging MRU without applying it, because a device may then discard TCP or TLS
+responses it negotiated to be smaller; adding outgoing fragmentation here, because this network
+has no fragmentation/reassembly support and the existing DNS/NTP services fit ordinary MRUs.
+
+## Anonymous MQTT clients get deterministic distinct identifiers
+
+Status: decided (#30)
+
+An empty client ID with CleanSession set gets `esp32tl-anonymous-<n>` before Will construction,
+client takeover and connection history. The broker increments its own counter and skips every
+ID in its connection history, including supplied IDs. Empty IDs without CleanSession receive
+CONNACK code 2 before closure. Explicitly repeating an ID still replaces its prior connection.
+
+**Rejected:** treating every empty ID as the same client, which disconnects unrelated firmware
+connections and may emit their Wills; random IDs, which make otherwise identical tests differ.

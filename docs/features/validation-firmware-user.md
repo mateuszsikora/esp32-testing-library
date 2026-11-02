@@ -34,6 +34,7 @@ whatever `FIRMWARE_OUT` the shell exports, because the tests read the images the
 | `nvs_reader` | `firmware/nvs_reader`: reads strings, blobs and typed integers from NVS ([below](#nvs_reader)) |
 | `sdspi` | ESP-IDF's `examples/storage/sd_card/sdspi`, unmodified, for target `esp32`: mounts the FAT file system of an SD card on SPI and writes, renames and reads files on it ([below](#sdspi)) |
 | `modem_at` | `firmware/modem_at`: AT dialogue, PWRKEY and RI on the LilyGO profile, without a network ([below](#modem_at)) |
+| `pppos_client` | esp-protocols `modem-v1.4.1`, unchanged except sdkconfig: PPP and plain MQTT on the LilyGO modem route ([below](#pppos_client)) |
 
 ## `modem_at`
 
@@ -309,3 +310,20 @@ the committed files differ from what it writes. A test replays one into the firm
   what `nmea_reader` and the recordings are for.
 - [CI](../cicd.md): the `firmware` job, which builds the images once and hands them to the tests.
 - [Firmware decisions](../decisions/firmware.md): why the build works this way.
+
+
+## pppos_client
+
+`firmware/build.sh pppos_client` builds esp-protocols' unmodified
+`components/esp_modem/examples/pppos_client` at `modem-v1.4.1`
+(commit `2cc7c99664caf9705064affba6ea829137d4e1e8`). It is also included in `make firmware`
+and `make test`. The first build downloads the source archive; firmware tests require no host
+network. `firmware/pppos_client/sdkconfig.defaults` selects SIM7600 AT commands, UART TX 26,
+RX 27, no flow control, and 4 MB flash. The route matches `lilygo-t-a7670g-r2` at 115200 baud.
+The upstream MQTT URI, topic and payload are unchanged: `mqtt://mqtt.eclipseprojects.io`,
+`/topic/esp-pppos`, `esp32-pppos`.
+
+The image lands at `firmware/pppos_client/build/`, with the same provenance and finished-build
+marker as other images. `tests/test_pppos_client.py` checks the firmware publishing and receiving
+from the test's broker. [The network guide](network-user.md) shows both tests. This example uses
+plain MQTT; tracker firmware TLS/NTP validation is #72.

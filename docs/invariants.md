@@ -394,24 +394,25 @@ that references to its number keep their meaning.
 
 ## Serial hardware boundary
 
-90. Serial's power-on resets once without another flash, excludes pre-reset console bytes, and
+98. Serial's power-on resets once without another flash, excludes pre-reset console bytes, and
     uses wall time that advances outside waits. Console taps contain only output with clock
     `wall` and the selected artifact's app hash; they cannot overwrite the reference recording
     or flash artifacts.
     `tests/test_serial_backend.py::test_console_reset_clock_tap_and_autoflash`
-91. A serial reference recording must have an app hash matching the app binary, unaffected by
+99. A serial reference recording must have an app hash matching the app binary, unaffected by
     bootloader changes. Missing or mismatched hashes fail, and mismatch prevents port setup even
     for an explicitly requested `dut`.
     `tests/test_serial_backend.py::test_artifact_hash_is_app_binary_and_refuses_missing_or_different_hash`,
     `tests/test_serial_backend.py::test_recording_mismatch_prevents_dut_setup`,
     `tests/test_serial_backend.py::test_reference_check_precedes_even_an_explicit_dut`
-92. Serial skips GNSS/modem UART models, replays and taps, SD-card models, GPIO control and
+100. Serial skips GNSS/modem UART models (including `modem.network()` and `broker`),
+    replays and taps, SD-card models, GPIO control and
     NVS replacement. Merely requesting the modem fixture does not skip a console test. A disconnected
     console ends a wait with `RunEnded`, without a duplicate teardown failure.
     `tests/test_serial_backend.py::test_serial_capabilities_skip_at_the_call`,
     `test_serial_modem_fixture_can_accompany_console_test`,
     `tests/test_serial_backend.py::test_disconnect_ends_wait_and_releases_reader`
-93. Serial requires an exact port before setup; neither an absent/blank/wildcard selection nor
+101. Serial requires an exact port before setup; neither an absent/blank/wildcard selection nor
     a fixture overriding it to `None` can enable autodetection. An indirect port parameter works;
     a run selecting no board test needs no port. `ESPPORT` cannot redirect that selection, even
     through cached options, and a separate flashing port is refused before opening a device.
@@ -425,13 +426,13 @@ that references to its number keep their meaning.
     `test_cached_port_override_names_the_snapshot`,
     `test_overridden_services_fail_without_a_traceback`,
     `test_separate_flash_port_is_refused_before_opening`
-94. A failed serial reset restores redirection and leaves the board off, producing no successful
+102. A failed serial reset restores redirection and leaves the board off, producing no successful
     run recording; retry can start capture. A stuck reader cannot block esp32tl's close beyond
     its join bound, and neither stuck nor disconnected capture restarts another reader.
     `tests/test_serial_backend.py::test_failed_reset_restores_redirect_and_stays_off`,
     `test_stuck_reader_has_bounded_teardown_and_no_late_capture`,
     `test_dead_open_port_does_not_restart_redirect`
-95. A malformed `app_recording` marker names its test at collection; esp32sim does not read the
+103. A malformed `app_recording` marker names its test at collection; esp32sim does not read the
     referenced file. Console taps appear in the report, and serial logs wait starts and outcomes.
     Serial uses the same wait-step logging and duration validation messages as esp32sim.
     `tests/test_serial_backend.py::test_bad_reference_marker_names_the_test`,
@@ -540,3 +541,49 @@ that references to its number keep their meaning.
     the existing normalised counts remain available.
     `tests/test_matching.py::test_unseen_history_retains_raw_occurrences_and_completion_times_without_a_reply`,
     `tests/test_replay.py::test_unseen_requests_are_in_the_backend_report_and_json_properties`
+
+
+## Simulated network
+
+90. PPP delivers IPv4 only after both sides acknowledge LCP and IPCP; acknowledgments must match
+    the pending request, including after termination and renegotiation. Framing survives arbitrary byte splits, escaping and compressed headers.
+    `tests/test_net_ppp.py::test_ack_must_match_request_and_ipcp_waits_for_lcp`,
+    `tests/test_net_ppp.py::test_fcs_reference_and_compressed_frames_at_every_split`,
+    `tests/test_net_ppp.py::test_renegotiation_and_termination_invalidate_old_acknowledgments`
+91. TCP honors the peer's receive window and MSS, delivers a retransmitted payload once, wraps
+    sequence numbers, and notifies connection loss once.
+    `tests/test_net_ip.py::test_tcp_handshake_data_duplicate_flow_control_fin_and_wrap`,
+    `tests/test_net_ip.py::test_reset_notifies_once_and_unbound_port_refuses`
+92. MQTT Will is emitted once on connection loss at the loss time, never after DISCONNECT.
+    Keepalive deadlines use the board clock, and wildcard filters respect `$` topics.
+    `tests/test_net_mqtt.py::test_will_on_transport_loss_once_and_never_on_disconnect`,
+    `tests/test_net_mqtt.py::test_keepalive_expires_on_the_board_clock`,
+    `tests/test_net_mqtt.py::test_topic_filters`
+93. NTP returns world UTC plus emulated time; TLS verifies the per-test CA and named server and
+    exposes application plaintext in its transcript.
+    `tests/test_net_services.py::test_ntp_world_time_fraction_origin_and_era`,
+    `tests/test_net_tls.py::test_tls_mqtt_and_transcript`,
+    `tests/test_net_tls.py::test_tls_rejects_unknown_ca_or_wrong_hostname`
+94. Only a modem with a simulated network treats receive overflow as fatal; binary pluses do not
+    escape data mode without idle guards. Losing registration or supply resets the network.
+    `tests/test_modem_model.py::test_only_a_network_route_fails_on_receive_overflow`,
+    `tests/test_modem_model.py::test_network_selection_guarded_escape_and_loss_reset`
+95. TLS determinism ignores times only after handshake starts and compares plaintext streams;
+    changed plaintext or pre-handshake times still fail.
+    `tests/test_check_determinism.py::test_network_tls_compares_plaintext_without_times_only_after_handshake`
+
+96. Anonymous MQTT clients have distinct deterministic IDs before Will construction or takeover;
+    they do not disconnect each other or collide with IDs already supplied by named clients.
+    Empty IDs without CleanSession receive CONNACK code 2 and close.
+    `tests/test_net_mqtt.py::test_anonymous_clients_have_independent_ids_and_wills`,
+    `tests/test_net_mqtt.py::test_anonymous_id_skips_an_id_already_supplied_by_a_client`,
+    `tests/test_net_mqtt.py::test_empty_id_without_clean_session_gets_identifier_rejected`
+97. Acknowledged PPP MRU bounds every outgoing IPv4 packet. TCP preserves payload bytes while
+    respecting MRU, MSS and the receive window; oversized UDP replies are logged and dropped.
+    Renegotiation and redial cannot inherit the previous MRU, and unsupported small values are
+    NAKed rather than acknowledged.
+    `tests/test_net_mru.py::test_tcp_respects_mru_mss_and_window_without_losing_bytes`,
+    `tests/test_net_mru.py::test_udp_sends_at_mru_and_logs_oversized_replies`,
+    `tests/test_net_mru.py::test_mru_resets_on_renegotiation_termination_and_redial`,
+    `tests/test_net_mru.py::test_mru_too_small_for_this_stack_gets_a_nak_not_an_ack`,
+    `tests/test_net_mru.py::test_ppp_does_not_emit_an_oversized_ip_packet_even_when_called_directly`

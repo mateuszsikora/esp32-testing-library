@@ -71,7 +71,7 @@ FEATURES = [
         r"^docs/features/pytest-plugin-",
         "Console interface changed: update docs/features/pytest-plugin-*.md",
     ),
-    # The registry and serial backend belong to F22; the held clock belongs to esp32sim.
+    # The registry and serial backend belong to F23; the held clock belongs to esp32sim.
     Rule(
         "F3",
         r"^esp32tl/backends/(esp32sim|clock)\.py$",
@@ -80,7 +80,7 @@ FEATURES = [
         " update docs/features/esp32sim-backend-*.md",
     ),
     Rule(
-        "F22",
+        "F23",
         r"^esp32tl/backends/(serial|__init__)\.py$",
         r"^docs/features/serial-backend-",
         "Serial backend or backend registry changed: update docs/features/serial-backend-*.md",
@@ -207,6 +207,12 @@ FEATURES = [
         r"^esp32tl/matching\.py$",
         r"^docs/features/matching-",
         "Matching engine changed (protocols, requests, timing): update docs/features/matching-*.md",
+    ),
+    Rule(
+        "F22",
+        r"^esp32tl/net/",
+        r"^docs/features/network-",
+        "Simulated network changed: update docs/features/network-*.md",
     ),
 ]
 
