@@ -194,11 +194,12 @@ Provision these required values in the default NVS partition before `board.power
 | `config` | `ntp_host` | string | NTP server DNS name |
 | `config` | `apn` | string | Cellular access point name |
 
-The tests separate their simulated broker from firmware provisioning. The `broker_ca` fixture
-creates a per-test CA for `broker.test`; `tls_listener` registers TLS on port 8883
-and returns its `Tls` handle. Tests select this setup fixture explicitly. Neither fixture writes
-NVS or powers on the board.
-`configure_tracker(board, trusted_ca=broker_ca.ca_pem)` writes only NVS: the trusted CA,
+Tests request the public `board: Board`, as in the SD logger, and reach the GNSS receiver and
+console through `board.gnss` and `board.console`. Each scenario explicitly selects
+`network = board.modem.network()`, creates its CA and registers
+`network.listen(BROKER_PORT, network.broker, tls=ca)` before power-on. The returned TLS handle
+can observe handshake attempts. No fixture or decorator installs the listener.
+`configure_tracker(board, trusted_ca=ca.ca_pem)` writes only NVS: the trusted CA,
 `broker.test`, port 8883, `time.test` and APN `internet`. Its `broker_host` and `broker_port`
 keyword arguments override the destination. This helper belongs to the example, not the library.
 Missing or invalid configuration prints `position_tracker: invalid or missing NVS configuration`
@@ -222,21 +223,27 @@ model already has a position. It never connects before NTP synchronization or fa
 NTP while printing `position_tracker: waiting for NTP` every 10 seconds of waiting. Modem power
 sequencing and PPP redial are outside this example; MQTT reconnect operates while PPP is up.
 
-The example's `reports` fixture depends only on `broker` and interprets publications on
-`tracker/position`; it registers no listener, so custom TLS setups can use it too. Its conditions
-return a `Report` with `received_at` (the board's time), `utc` (a timezone-aware datetime) and
-`position` (`Position` or `None`):
+The local `Reports(network.broker)` adapter interprets publications on `tracker/position`.
+Constructing it registers no listener and does not select a network or advance time. Its
+conditions return a `Report` with `received_at` (the board's time), `utc` (a timezone-aware
+datetime) and `position` (`Position` or `None`):
 
 ```python
-@pytest.mark.usefixtures("tls_listener")
-def test_losing_the_fix_clears_the_reported_position(board, gnss, broker_ca, reports):
-    configure_tracker(board, trusted_ca=broker_ca.ca_pem)
-    gnss.fix(at=WARSAW)
+from esp32tl import Board
+
+
+def test_losing_the_fix_clears_the_reported_position(board: Board) -> None:
+    network = board.modem.network()
+    ca = CertificateAuthority([BROKER_HOST])
+    network.listen(BROKER_PORT, network.broker, tls=ca)
+    reports = Reports(network.broker)
+    configure_tracker(board, trusted_ca=ca.ca_pem)
+    board.gnss.fix(at=WARSAW)
     board.power_on(utc=WORLD)
     first = board.wait_until(reports.when_received(with_position=True), within=seconds(60))
     assert first.position == WARSAW
 
-    gnss.lose_fix()
+    board.gnss.lose_fix()
     report = board.wait_until(reports.when_received(), within=seconds(10.25))
     assert report.position is None
 ```
@@ -252,7 +259,7 @@ Timeouts and the run report describe the expected result as `a tracker report` o
 `a tracker report with a position`, instead of the adapter's internal function name.
 
 TLS date tests use `CertificateAuthority(..., server_not_before=..., server_not_after=...)`;
-the NTP outage test uses `modem.network().ntp.go_silent()`. After the firmware resolves
+the NTP outage test uses `network.ntp.go_silent()`. After the firmware resolves
 `time.test`, it observes 30 seconds with no broker lookup, TLS attempt, MQTT connection or
 publication. It then calls `ntp.resume()` and requires a report with the GNSS position and UTC
 matching the advancing world clock within 60 seconds. These network controls belong to the

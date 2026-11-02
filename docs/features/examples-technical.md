@@ -153,13 +153,17 @@ Reports use QoS 0, retain false, on `tracker/position`. `time` is integer Unix U
 `lat`/`lon` are decimal degrees with six places, or both JSON null when `fix` is false. Publishing
 failure logs `position_tracker: publish failed`. The no-fix report still carries synchronized time.
 
-`tests/test_tracker.py` keeps power-on and every wait explicit. Its `broker_ca` fixture creates
-credentials; `tls_listener` registers TLS and returns its `Tls` handle. Tests request that
-fixture explicitly, using `usefixtures` when only setup is needed. The independent `reports`
-fixture wraps `broker` in the application-owned `Reports` adapter without registering a listener,
-including in the positive certificate-date test with custom credentials. `configure_tracker` in
-`tests/tracker_support.py` only translates the application's settings into NVS entries.
-It does not create a CA, register a listener or start the firmware.
+`tests/test_tracker.py` requests only the public `Board` plus parametrized scenario data.
+Each scenario selects `board.modem.network()`, constructs its certificate authority, registers
+TLS with `network.listen(...)` and, where needed, wraps `network.broker` in `Reports`.
+GNSS and console access use `board.gnss` and `board.console`; there are no listener, credential
+or report fixtures, and no setup decorators. This mirrors the SD logger's explicit image
+preparation/insertion. Both default and custom certificates use the same visible setup path.
+`configure_tracker(board: Board, ...)` in `tests/tracker_support.py` only translates the
+application's settings into NVS entries. It does not create a CA, register a listener or start
+firmware. Power-on and every wait remain explicit. The transport test retains the simulator's
+empty-warning assertion through `board.properties()["warnings"]`, without accessing `board.link`.
+Using the shared board type does not add hardware network modeling support.
 
 `Report.decode` validates the exact JSON fields and their types: a boolean fix, integer Unix
 seconds, numeric coordinates within the position bounds for a fix, and null coordinates without
@@ -197,7 +201,7 @@ from 2030 to 2032. At the 2031 world epoch only the control may connect and publ
 use the public `server_not_before` / `server_not_after` constructor arguments, with no local
 certificate builder or TLS subclass.
 No-fix, lost-fix, silence and missing-NVS cases cover startup and stale data. A missing NTP
-responder, selected with `modem.network().ntp.go_silent()`, is observed for 30 seconds after the
+responder, selected with `network.ntp.go_silent()`, is observed for 30 seconds after the
 firmware resolves `time.test`, with valid GNSS throughout. The test checks no broker DNS lookup,
 zero TLS attempts and empty cumulative MQTT connection/message histories, without matching NTP
 log wording. It then resumes NTP and waits up to 60 seconds for a positioned report, allowing

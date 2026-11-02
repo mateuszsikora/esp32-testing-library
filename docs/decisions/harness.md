@@ -1726,9 +1726,12 @@ as aware datetimes, changing only the leaf certificate while keeping the CA vali
 network behavior and certificate dates remain unchanged.
 
 The position tracker interprets its JSON through a local `Report`/`Reports` adapter with future
-message conditions and topic-specific history. It keeps firmware provisioning separate from
-TLS listener fixtures. The `reports` fixture depends only on `broker`; tests select TLS setup
-explicitly. `when_received(with_position=...)` names condition construction, not dequeueing.
+message conditions and topic-specific history. Its scenarios now follow the SD logger's public
+`Board` API: interfaces come from `board`, and network selection, CA creation, TLS registration
+and `Reports(network.broker)` construction appear in the test body. This supersedes the example's
+separate credential/listener/report fixtures and setup decorators. Firmware provisioning remains
+a separate NVS-only operation. `when_received(with_position=...)` names condition construction,
+not dequeueing.
 Power-on and every wait remain explicit calls on `board`. Report conditions are callable
 objects whose representation names the expected report, using the board's existing diagnostic
 path, as GPIO conditions do. They do not rely on an unused function `description` attribute.
@@ -1741,7 +1744,9 @@ TLS listeners expose a cumulative `handshakes_started` count and are returned by
 `network.listen(..., tls=ca)`. Rejection tests wait for actual input and inspect broker history
 after a bounded interval; they do not infer absence from a firmware error string.
 
-**Rejected:** a reports fixture that implicitly installs TLS, because it conflicts with custom
+**Rejected:** a second world/context object or fixture graph hiding network selection and TLS
+registration, because the board already owns interfaces and the scenario should show what it
+connects; a reports fixture that implicitly installs TLS, because it conflicts with custom
 certificate setups; matching certificate-error log wording as the rejection oracle, because it
 couples behavior tests to diagnostics and says nothing about later reconnects or fallback.
 

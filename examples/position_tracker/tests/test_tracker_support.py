@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 import pytest
 from tracker_support import TOPIC, Reports
 
-from esp32tl.backends.esp32sim import Esp32Sim
+from esp32tl import Board
 from esp32tl.interfaces import NeverHappened
 from esp32tl.net.mqtt import Broker, Message
 from esp32tl.units import Position, seconds
@@ -92,10 +92,11 @@ def test_first_match_is_not_masked_by_a_later_malformed_report() -> None:
     [(False, "a tracker report"), (True, "a tracker report with a position")],
 )
 def test_report_timeout_names_the_expected_report(
-    board: Esp32Sim, broker: Broker, with_position: bool, description: str
+    board: Board, with_position: bool, description: str
 ) -> None:
     # No NVS configuration or listener: exercise a real timeout without publishing.
-    reports = Reports(broker)
+    network = board.modem.network()
+    reports = Reports(network.broker)
     board.power_on()
     with pytest.raises(NeverHappened, match=f"{description} did not happen within"):
         board.wait_until(reports.when_received(with_position=with_position), within=seconds(0.1))

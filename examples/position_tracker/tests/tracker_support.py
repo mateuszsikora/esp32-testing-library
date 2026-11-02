@@ -5,7 +5,7 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from esp32tl.backends.esp32sim import Esp32Sim
+from esp32tl import Board
 from esp32tl.flash import u16
 from esp32tl.net.mqtt import Broker, Message
 from esp32tl.units import Duration, Position
@@ -16,7 +16,7 @@ BROKER_PORT = 8883
 
 
 def configure_tracker(
-    board: Esp32Sim,
+    board: Board,
     *,
     trusted_ca: str,
     broker_host: str = BROKER_HOST,
