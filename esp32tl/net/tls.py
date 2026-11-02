@@ -6,6 +6,7 @@ import datetime
 import ssl
 import tempfile
 from collections.abc import Callable
+from dataclasses import dataclass
 from ipaddress import ip_address
 from pathlib import Path
 
@@ -22,11 +23,31 @@ NOT_AFTER = datetime.datetime(2099, 12, 31, tzinfo=datetime.UTC)
 
 
 class CertificateAuthority:
-    """A CA and one server certificate for `names`. `ca_pem` is what the device is to trust."""
+    """A CA and server certificate for `names`; `ca_pem` is what the device trusts.
 
-    def __init__(self, names: list[str]) -> None:
+    `server_not_before` / `server_not_after` change only the leaf certificate's validity.
+    They require timezone-aware datetimes; the CA keeps its 2000-2099 validity period.
+    """
+
+    def __init__(
+        self,
+        names: list[str],
+        *,
+        server_not_before: datetime.datetime = NOT_BEFORE,
+        server_not_after: datetime.datetime = NOT_AFTER,
+    ) -> None:
         if not names:
             raise ValueError("TLS needs at least one server name")
+        for name, value in (
+            ("server_not_before", server_not_before),
+            ("server_not_after", server_not_after),
+        ):
+            if not isinstance(value, datetime.datetime) or value.utcoffset() is None:
+                raise ValueError(f"TLS {name} must be a timezone-aware datetime")
+        server_not_before = server_not_before.astimezone(datetime.UTC)
+        server_not_after = server_not_after.astimezone(datetime.UTC)
+        if server_not_before >= server_not_after:
+            raise ValueError("TLS server_not_before must be earlier than server_not_after")
         ca_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
         ca_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "esp32tl test CA")])
         ca = (
@@ -51,8 +72,8 @@ class CertificateAuthority:
             .issuer_name(ca_name)
             .public_key(key.public_key())
             .serial_number(2)
-            .not_valid_before(NOT_BEFORE)
-            .not_valid_after(NOT_AFTER)
+            .not_valid_before(server_not_before)
+            .not_valid_after(server_not_after)
             .add_extension(x509.SubjectAlternativeName([_name(n) for n in names]), False)
             .add_extension(x509.BasicConstraints(ca=False, path_length=None), True)
             .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), False)
@@ -87,7 +108,11 @@ def _name(name: str) -> x509.GeneralName:
 
 
 class Tls:
-    """The `StreamService` that ends TLS and hands the plain stream to `inner`."""
+    """The `StreamService` that ends TLS and hands the plain stream to `inner`.
+
+    `handshakes_started` counts connections that supplied nonempty input, even if invalid.
+    The cumulative count survives closure; it does not imply handshake completion.
+    """
 
     def __init__(
         self,
@@ -98,12 +123,40 @@ class Tls:
         self.inner = inner
         self.ca = ca
         self._log = log
+        self.handshakes_started = 0
+        self.handshakes_completed = 0
+
+    @property
+    def handshake_started(self) -> "_HandshakeCondition":
+        """A live condition: some connection has supplied nonempty TLS input."""
+        return _HandshakeCondition(self, completed=False)
+
+    @property
+    def handshake_completed(self) -> "_HandshakeCondition":
+        """A live condition: some connection has completed the server-side handshake."""
+        return _HandshakeCondition(self, completed=True)
 
     def accept(
         self, peer: tuple[str, int], write: Callable[[bytes], None], close: Callable[[], None]
     ) -> "_Session":
         self._log("tls: handshake started")
         return _Session(self, peer, write, close)
+
+
+@dataclass(frozen=True, repr=False)
+class _HandshakeCondition:
+    tls: Tls
+    completed: bool
+
+    def __call__(self) -> bool:
+        count = self.tls.handshakes_completed if self.completed else self.tls.handshakes_started
+        return count > 0
+
+    def __repr__(self) -> str:
+        return "a TLS handshake to complete" if self.completed else "a TLS handshake to start"
+
+    def __bool__(self) -> bool:
+        raise TypeError("call the TLS condition with (), or pass it to board.wait_until")
 
 
 class _Session:
@@ -122,6 +175,7 @@ class _Session:
         self._inner: Connection | None = None
         self._closed = False
         self._ready = False
+        self._started = False
 
     def _flush(self) -> None:
         data = self._outgoing.read()
@@ -131,6 +185,9 @@ class _Session:
     def on_data(self, data: bytes) -> None:
         if self._closed:
             return
+        if not self._started and data:
+            self._started = True
+            self._tls.handshakes_started += 1
         self._incoming.write(data)
         if not self._ready:
             try:
@@ -144,6 +201,7 @@ class _Session:
                 self._end()
                 return
             self._ready = True
+            self._tls.handshakes_completed += 1
             self._tls._log(f"tls: handshake done, {self._ssl.version()}")
             self._flush()
             self._inner = self._tls.inner.accept(self._peer, self._send_plain, self._end)

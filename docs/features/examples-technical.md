@@ -110,3 +110,107 @@ sentence's scheduled time plus the same write margin.
 `tests/` are exempt just like the root suite. `tests/test_check_docs.py` checks both behaviours.
 `tests/test_firmware_build.py` exercises example discovery, refusal of unknown names, container
 forwarding and failed-build completion markers against fake tools.
+
+## Position tracker implementation
+
+`examples/position_tracker` uses the LilyGO profile's UART2 GNSS and UART1 modem. Its CMake
+configuration calls `firmware/pppos_client/prepare.py` to fetch the same SHA-256-verified
+esp-protocols `modem-v1.4.1` revision as the validation image. The source tree lives under
+`build/dependencies/`; `EXTRA_COMPONENT_DIRS` points to its `esp_modem`. Component-manager
+resolution is disabled for this project because all components are supplied by that tree or
+ESP-IDF. Configuration therefore writes neither a lockfile nor managed components into the
+read-only project mount. The usual example discovery, build provenance and CI cache apply.
+
+`main/main.c` reads the five required `config` NVS keys before creating tasks or connecting.
+The host buffers accept up to 253 characters, APN up to 63; CA storage is allocated from the NVS
+string size, limited to 8192 bytes including its terminator. Missing, empty, oversized or mistyped
+values, or a zero port, stop startup without erasing flash. PEM syntax and certificate trust are
+checked by the TLS client when it connects.
+
+A dedicated GNSS task uses the shared `firmware/nmea_reader/main/nmea.c` parser. A mutex guards
+its latest position, validity and monotonic reception timestamp. Recognized invalid GGA/RMC
+sentences clear validity; unrelated sentences are ignored. A bounded sentence buffer restarts
+at `$` and drops oversized input. A report uses a snapshot under the mutex, marking a fix older
+than 2.5 seconds invalid. NMEA supplies position only; the report's timestamp comes from NTP.
+
+`esp_modem` uses SIM7600 commands, 115200 baud and no hardware flow control, with the APN from
+NVS. After PPP supplies IP and DNS, `esp_netif_sntp` requests the configured NTP hostname. Startup
+waits for successful synchronization, logging `position_tracker: waiting for NTP` on each
+10-second wait timeout. MQTT then connects using `MQTT_TRANSPORT_OVER_SSL`, the provisioned
+CA and hostname verification; there is no plaintext fallback. `sdkconfig.defaults` explicitly
+enables `CONFIG_MBEDTLS_HAVE_TIME_DATE=y` so mbedTLS also checks certificate validity periods
+against the NTP-synchronized system clock. The client ID is `position-tracker`.
+
+The MQTT connected callback notifies the main task. That task publishes immediately, and resets
+its monotonic 10-second report deadline on every MQTT connection. Subsequent deadlines use
+`esp_timer`, independent of UTC adjustments. Disconnected deadlines produce no report and no
+offline backlog; MQTT handles its own reconnects while PPP remains available. The example does
+not implement modem power sequencing or redial after PPP loss. The modem must already be powered
+and registered (the model's initial state). All objects and configuration buffers live for the
+application's lifetime.
+
+Reports use QoS 0, retain false, on `tracker/position`. `time` is integer Unix UTC seconds;
+`lat`/`lon` are decimal degrees with six places, or both JSON null when `fix` is false. Publishing
+failure logs `position_tracker: publish failed`. The no-fix report still carries synchronized time.
+
+`tests/test_tracker.py` requests only the public `Board` plus parametrized scenario data.
+Each scenario explicitly calls the local `serve_broker(board, ca=None)` helper. It selects
+`board.modem.network()`, creates default credentials only when none are supplied, registers the
+broker's TLS listener and returns `(Internet, Tls)`. This groups the repeated three-line setup
+without adding a library convenience API or another context object. A caller-provided CA goes
+unchanged into the listener, including custom validity dates. The helper never writes NVS,
+powers on or waits. `Reports(network.broker)` remains an independent application adapter.
+GNSS and console access use `board.gnss` and `board.console`; there are no setup fixtures or
+decorators. `configure_tracker(board: Board, ...)` only writes NVS. Power-on and every wait remain
+explicit. The transport test checks `tls.handshake_completed()` and retains the simulator's
+empty-warning assertion through `board.properties()["warnings"]`, without accessing `board.link`.
+Using the shared board type does not add hardware network modeling support.
+
+`Report.decode` validates the exact JSON fields and their types: a boolean fix, integer Unix
+seconds, numeric coordinates within the position bounds for a fix, and null coordinates without
+one. It returns an aware UTC datetime, a `Position` or `None`, and the message's `Duration`
+timestamp. Invalid data raises `ValueError` with the received time.
+`Reports.when_received(with_position=False)` captures the broker history length when constructed
+and returns a condition observing only subsequent firmware publications on the exact topic.
+Neither construction nor polling consumes messages or advances time. Position waits skip valid
+no-fix reports, but reject malformed ones;
+later invalid messages cannot mask an earlier match. The history view validates every matching
+publication and filters out unrelated topics and the test publisher. The callable
+`_ReportCondition` keeps its captured cursor immutable and implements `__repr__` as
+`a tracker report` or `a tracker report with a position`. Both board backends already use this
+representation for callable objects in wait diagnostics. Its `__bool__` raises
+`TypeError("call the report condition with (), or pass it to board.wait_until")`, both before
+and after a match, to reject assertions on an unevaluated condition. `test_tracker_support.py` checks report
+boundaries independently of firmware and exercises both timeout descriptions and their run-report
+entries through the simulated board.
+
+The connect test captures both conditions before power-on so observing the connection cannot
+lose its initial report. Periodicity brackets three later deadlines with a 250 ms
+transport/scheduling tolerance and checks report history for early or extra publications.
+Movement uses southern/western coordinates and a 15 m tolerance for the receiver's one-second
+sampling at 10 m/s. Movement and separate lost-fix/silence scenarios wait for a positioned report,
+without relying on the first GNSS epoch's order relative to TLS startup. The no-fix scenario
+waits two seconds for a receiver epoch before observing a subsequent report. Two world epochs,
+including one past 2038, check whole-second UTC against message arrival without a GNSS source,
+with 1.25 seconds for truncation and NTP/transport latency. Wrong CA, hostname and validity-date
+cases wait on `tls.handshake_started`, then advance the board by 30 seconds (covering the
+MQTT client's default 10-second reconnect delay). The broker's cumulative connection and message
+histories must remain empty, so even a temporary fallback fails. This proves absence within the
+observation window, not indefinitely, and uses no firmware error text. The attempt count proves
+input reached TLS, not successful certificate verification or a particular rejection reason.
+Certificate-date regressions keep the CA valid from 2000 through 2099 while changing only the
+server certificate: one expired in 2030, one starts in 2032, and a positive control is valid
+from 2030 to 2032. At the 2031 world epoch only the control may connect and publish. The tests
+use the public `server_not_before` / `server_not_after` constructor arguments, with no local
+certificate builder or TLS subclass.
+No-fix, lost-fix, silence and missing-NVS cases cover startup and stale data. A missing NTP
+responder, selected with `network.ntp.go_silent()`, is observed for 30 seconds after the
+firmware resolves `time.test`, with valid GNSS throughout. The test checks no broker DNS lookup,
+zero TLS attempts and empty cumulative MQTT connection/message histories, without matching NTP
+log wording. It then resumes NTP and waits up to 60 seconds for a positioned report, allowing
+SNTP's retry delay. The recovered report must contain Warsaw's position and current world UTC
+within the same 1.25-second tolerance; an NTP reply and TLS attempt must have occurred.
+Transport assertions (TLS, QoS and retention) are separate from the immediate-report scenario.
+
+These are functional TLS tests. The existing determinism checker still compares raw UART and
+board-link statistics exactly; this example does not feed random TLS ciphertext to that check.
