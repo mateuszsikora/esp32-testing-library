@@ -34,8 +34,11 @@ radius`). GPIO is updated on every parsed GGA/RMC, so the example does not dedup
 two sentences or add hysteresis. It sends no configuration commands to the receiver.
 
 `examples/gps_alarm_clock/tests/test_alarm.py` boots the image through the public pytest plugin.
-It injects NVS before boot, moves the model on emulated time, and asserts the firmware's GPIO
-output and its event history. Its non-default target/radius cases catch a firmware that ignores
+Its local `configure_alarm` helper translates `Position`/`Distance` to the firmware's typed
+NVS keys before boot; the `buzzer` fixture returns an `OutputLine`, not a renamed board. Tests
+move the model on emulated time and pass its `is_on`/`is_off` conditions to `board.wait_until`.
+They calculate travel time to the radius separately from the two-fix response budget and check
+the output's event history for unwanted pulses. Its non-default target/radius cases catch a firmware that ignores
 NVS. Its silence and loss cases catch a buzzer left on by a stale position. The separate
 `gps-alarm-clock` profile gives this assembly's wiring without changing the generic devkit.
 

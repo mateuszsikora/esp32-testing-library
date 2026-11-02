@@ -202,3 +202,61 @@ def test_the_test_s_calls_and_the_firmware_s_changes_go_into_the_run_s_log() -> 
         "  1.000009000 s  modem.pwrkey out  1",
         "  2.000000000 s  test              lines.release('modem.ri')",
     ]
+
+
+@pytest.mark.parametrize("active", [0, 1])
+def test_named_output_conditions_follow_the_firmware_and_exclude_undriven(active: int) -> None:
+    lines, _ = lilygo()
+    output = lines.output("modem.pwrkey", active=active)
+    on, off = output.is_on, output.is_off
+    assert not on() and not off()  # Unknown is not off, including for an active-low output.
+    lines.drive(4, active)
+    assert not on() and not off()  # Driving the input cannot satisfy a firmware-output wait.
+    lines.driven(S, [(4, active)], frozenset({4}))
+    assert on() and not off()
+    lines.driven(2 * S, [(4, 1 - active)], frozenset({4}))
+    assert off() and not on()  # A condition reads the live level, not the level at creation.
+    lines.driven(3 * S, [(4, 0)], frozenset())
+    assert not on() and not off()
+
+
+def test_output_handles_resolve_pin_names_and_filter_events_without_driving() -> None:
+    lines, clock = lilygo()
+    output = lines.output(4)
+    assert (output.name, output.pin, output.active) == ("modem.pwrkey", 4, 1)
+    assert output.events() == []
+    # Only the board's RI pull: constructing and reading a handle queues no GPIO input.
+    assert list(lines.inputs(0)) == [GpioIn(0, ((33, 0),))]
+    clock.now = S
+    lines.drive(33, 1)
+    lines.drive(4, 0)
+    lines.driven(2 * S, [(4, 1)], frozenset({4}))
+    assert output.events() == [
+        LineEvent(seconds(1), "modem.pwrkey", 4, "test", 0),
+        LineEvent(seconds(2), "modem.pwrkey", 4, "firmware", 1),
+    ]
+    assert repr(output.is_on) == "modem.pwrkey is on (GPIO 4, level 1)"
+    assert repr(lines.output(4, active=0).is_off) == "modem.pwrkey is off (GPIO 4, level 1)"
+
+
+@pytest.mark.parametrize(
+    "active,error", [(2, ValueError), (-1, ValueError), ("1", TypeError), (None, TypeError)]
+)
+def test_output_polarity_is_validated_before_waiting(active: int, error: type[Exception]) -> None:
+    lines, _ = lilygo()
+    with pytest.raises(error, match=r"lines\.output: active .* is not 0 or 1"):
+        lines.output(4, active=active)
+
+
+def test_output_name_is_validated_before_waiting() -> None:
+    lines, _ = lilygo()
+    with pytest.raises(ValueError, match="'missing' is no line of the board profile"):
+        lines.output("missing")
+
+
+def test_a_condition_cannot_accidentally_pass_an_assertion_without_being_called() -> None:
+    lines, _ = lilygo()
+    output = lines.output(4)
+    for condition in (output.is_on, output.is_off):
+        with pytest.raises(TypeError, match="call the output condition with"):
+            bool(condition)

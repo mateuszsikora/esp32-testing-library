@@ -3,9 +3,12 @@
 test drives and releases RI at the board's instant and reads PWRKEY as a condition of the board's
 clock."""
 
+import re
+
 import pytest
 
 from esp32tl.backends.esp32sim import Esp32Sim
+from esp32tl.interfaces import NeverHappened
 from esp32tl.interfaces.console import Console
 from esp32tl.interfaces.lines import LineEvent, Lines
 from esp32tl.units import ms, seconds
@@ -77,3 +80,19 @@ def test_a_level_driven_before_power_on_holds_from_the_start(
     console.expect_exact("in=1")
     assert lines.level("modem.pwrkey") == 1
     assert lines.events()[0] == LineEvent(seconds(0), "modem.ri", 33, "test", 1)
+
+
+def test_named_output_waits_report_the_line_and_state(
+    board: Esp32Sim, lines: Lines, console: Console
+) -> None:
+    pwrkey = lines.output("modem.pwrkey")
+    board.power_on()
+    console.expect_exact("in=0")
+    assert board.wait_until(pwrkey.is_off, within=ms(100))
+    with pytest.raises(
+        NeverHappened,
+        match=re.escape("modem.pwrkey is on (GPIO 4, level 1) did not happen within 0.2 s"),
+    ):
+        board.wait_until(pwrkey.is_on, within=ms(200))
+    lines.drive("modem.ri", 1)
+    assert board.wait_until(pwrkey.is_on, within=ms(100))

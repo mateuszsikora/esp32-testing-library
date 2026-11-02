@@ -50,7 +50,8 @@ The `gps-alarm-clock` board profile describes this example's assembly:
 | Console | UART0, the default ESP-IDF console |
 
 On real hardware use a suitable buzzer driver; the example supplies a steady logic level, not
-an audio waveform. The emulator observes GPIO18 through `lines.level("alarm.buzzer")`.
+an audio waveform. The test observes GPIO18 through `buzzer = lines.output("alarm.buzzer")`, with
+`buzzer.is_on` and `buzzer.is_off` conditions for `board.wait_until`.
 
 Before `board.power_on()`, write the destination to the default NVS partition with `board.nvs`:
 
@@ -60,8 +61,12 @@ Before `board.power_on()`, write the destination to the default NVS partition wi
 | `alarm` | `lon_e6` | `i32` | Longitude in microdegrees, from -180000000 to 180000000 |
 | `alarm` | `radius_m` | `u32` | Positive radius in metres |
 
-For example, the tests write `i32(52229677)`, `i32(21012233)` and `u32(100)` for a 100 m
-radius around Warsaw. There is no default destination. Missing, mistyped or invalid values
+The example's `configure_alarm(board, target=TARGET, radius=m(100))` helper accepts a
+`Position` and a `Distance`, converts coordinates to the nearest microdegree and requires a
+positive whole-metre radius. It writes `i32(52229677)`, `i32(21012233)` and `u32(100)` for a
+100 m radius around Warsaw. The helper belongs to this application; the library's `board.nvs`
+continues to accept typed NVS values. Each configured test calls the helper explicitly and uses
+`board.power_on()`; there is no second board object named `alarm`. There is no default destination. Missing, mistyped or invalid values
 leave the buzzer off and print `gps_alarm_clock: invalid or missing NVS alarm configuration`.
 A configured image prints `gps_alarm_clock: ready`.
 
@@ -69,6 +74,12 @@ A valid GGA or RMC sentence turns the buzzer on when the great-circle distance i
 radius, and off outside it. A GGA/RMC without a fix or with an invalid checksum/position turns
 it off. Other sentence types are ignored. With no valid fix for 2.5 s it turns off too; the
 UART loop checks this at least every 100 ms. This prevents a silent receiver leaving the alarm on.
+
+The movement tests calculate `time_to_boundary` from distance divided by speed. They check
+the old state one fix interval before the crossing, advance to the boundary, then wait for the
+new state with `REACTION_TIME = 2 * FIX_INTERVAL` (`FIX_INTERVAL = seconds(1)`). The response
+budget starts at the boundary, independent of travel time. `assert_never_buzzed` checks both
+the current off condition and the output's event history, so short pulses cannot pass unnoticed.
 
 The tests demonstrate:
 

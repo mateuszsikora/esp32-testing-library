@@ -594,3 +594,11 @@ that references to its number keep their meaning.
     loss of fix, receiver silence or missing configuration cannot leave it on. Both destination
     and radius come from typed NVS values, including southern/western destinations.
     `examples/gps_alarm_clock/tests/test_alarm.py`
+
+
+99. Named GPIO output conditions observe only what the firmware drives. Neither on nor off
+    matches an undriven output, for either polarity, and constructing a handle queues no input.
+    Saved conditions read the live state; waits report the line, desired state, pin and level.
+    `tests/test_lines.py::test_named_output_conditions_follow_the_firmware_and_exclude_undriven`,
+    `tests/test_lines.py::test_output_handles_resolve_pin_names_and_filter_events_without_driving`,
+    `tests/test_gpio_echo.py::test_named_output_waits_report_the_line_and_state`

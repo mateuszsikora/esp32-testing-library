@@ -299,6 +299,38 @@ def test_the_firmware_follows_ri_and_drives_pwrkey(board, lines, console):
 `NeverHappened`, `RunEnded`, `BoardOff` and `SourceError` are in `esp32tl.interfaces`, `LineEvent`
 in `esp32tl.interfaces.lines`.
 
+### Named output conditions
+
+`lines.output(line, active=1)` returns a read-only `OutputLine` for a profile line, named by
+its role or GPIO number. It observes what the firmware drives; it neither configures the chip
+nor drives the input. The default is high means on. Pass `active=0` for an active-low output;
+this is explicit test-side polarity, independent of the profile's model `active` field.
+
+```python
+buzzer = lines.output("alarm.buzzer")  # on the gps-alarm-clock profile
+board.power_on()
+board.wait_until(buzzer.is_on, within=seconds(2))
+assert buzzer.is_on()
+```
+
+`is_on` and `is_off` are callable conditions, like `console.line(...)`. Pass the condition
+without parentheses to `board.wait_until`, or call it to check the current state without
+advancing time. Both return false while the firmware leaves the output undriven: unknown is
+not off. A condition reads the current level every time; it does not remember an earlier match.
+`assert buzzer.is_on` without `()` raises `TypeError: call the output condition with (), or
+pass it to board.wait_until`, rather than silently passing on the condition object's truthiness.
+
+The wait's log and `NeverHappened` message name the line, state, pin and level, for example
+`alarm.buzzer is on (GPIO 18, level 1) did not happen within 2 s`, followed by the time window.
+`buzzer.events()` returns only that line's events, retaining the same `LineEvent` fields and
+all three origins (`firmware`, `test`, `model`) as `lines.events()`. It can catch short pulses
+between waits. The handle also exposes `name`, `pin` and `active`.
+
+Names are checked when the handle is created, with the same errors as `lines.level`.
+An invalid polarity raises `ValueError: lines.output: active 2 is not 0 or 1`, or
+`TypeError: lines.output: active '1' is not 0 or 1` for a non-integer; booleans count as 0/1,
+as in `lines.drive`. Existing `drive`, `release`, `level` and `events` calls remain available.
+
 ### The modem fixture
 
 `modem` is the profile's `uart.modem`, available on `lilygo-t-a7670g-r2`. Select its model with
