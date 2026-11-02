@@ -188,6 +188,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Peer MRU limits TCP segmentation and oversized UDP replies are dropped](harness.md#peer-mru-limits-tcp-segmentation-and-oversized-udp-replies-are-dropped) | `harness.md` | decided (#30) |
 | [Anonymous MQTT clients get deterministic distinct identifiers](harness.md#anonymous-mqtt-clients-get-deterministic-distinct-identifiers) | `harness.md` | decided (#30) |
 | [Output handles provide live named conditions without changing GPIO ownership](harness.md#output-handles-provide-live-named-conditions-without-changing-gpio-ownership) | `harness.md` | decided (#71) |
+| [Board owns interfaces and SD image builders](harness.md#board-owns-interfaces-and-sd-image-builders) | `harness.md` | decided (#73) |
 
 ## The runner crate and esp32sim
 

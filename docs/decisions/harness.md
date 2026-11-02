@@ -1165,8 +1165,8 @@ On `serial` the slot takes only `real`, the card in it. An empty slot is a board
 
 **Rejected:** a copy of the image for the run, because the test would then need a second call to
 get the result, and copying first is one line of the test's when it wants the original kept;
-FAT helpers in esp32tl, because mtools already makes and reads images, and the test's helpers in
-`tests/test_sdspi.py` stay a few lines; and naming the slot `[spi.<role>]`, because a profile
+initially FAT helpers in esp32tl, because mtools already makes and reads images (this part is
+superseded by [library-owned image builders](#board-owns-interfaces-and-sd-image-builders)); and naming the slot `[spi.<role>]`, because a profile
 names what is at the end of the wires, and the card is not any SPI device.
 
 ## Inserting and removing the SD card while the firmware runs is postponed
@@ -1181,8 +1181,8 @@ card-detect pin, which no profile has yet; `[sd_card]` takes no `cd` key so far.
 
 Status: decided (#32)
 
-`tests/test_sdspi.py` carries `requires_mtools`, which skips it where `mformat`, `mcopy`, `mdir` or
-`mtype` is missing, as `requires_docker` does for Docker. The CI test job installs mtools on
+`tests/test_sdspi.py` carries `requires_mtools`, which skips it where `mformat`, `mcopy`, `mdir`,
+`mtype` or `mmd` is missing, as `requires_docker` does for Docker. The CI test job installs mtools on
 macOS and fails on a runner without it, so that the tests cannot skip there unnoticed.
 
 **Rejected:** failing the tests without mtools, because a checkout without it could run nothing
@@ -1669,3 +1669,28 @@ last reported state wins; subsequent events are all checked, including same-time
 **Rejected:** polling to prove an output stayed off, which misses short pulses; silently
 accepting an unknown starting state, which hides unconfigured pins. The example's boot helper
 separately permits initial setup while still rejecting every active pulse.
+
+
+## Board owns interfaces and SD image builders
+
+Status: decided (#73)
+
+Tests can request one `board: Board` and access `console`, `gnss`, `modem`, `lines`, `sd_card`
+and `broker` through it. Both backends implement the shared public base, exported from
+`esp32tl`. Existing fixtures return the same objects, including the console matching cursor.
+This avoids a growing fixture parameter list as a test uses more interfaces without adding
+another context object or hiding backend capabilities.
+
+The SD logger exposed repeated image preparation and filesystem helpers in application tests.
+`board.sd_card.image(size_mb=32).with_text(...).with_bytes(...).build()` now owns that work in
+`esp32tl/interfaces/sd_card.py`, superseding the earlier decision to keep FAT helpers local.
+Building prepares initial contents; inserting the resulting `CardImage` remains explicit. Reads
+reopen the current image so firmware writes are visible. Temporary images live until board
+close, including those never inserted, while external paths retain their original ownership.
+
+**Rejected:** adding a second context fixture, which would duplicate `board`; replacing existing
+fixture names, which would force unrelated tests to migrate; a single ambiguous `write` accepting
+text and bytes, since encoding belongs to text only; automatic insertion by `build`, which hides
+scenario setup; and a Python FAT dependency, since existing mtools already handles the image
+formats and avoids a second filesystem implementation. There is no host mutation API on a built
+image: declare initial files through the builder and let the firmware write during the run.

@@ -81,12 +81,13 @@ stdio and synchronizes the FAT file. There is no cached open file across dates, 
 date carryover and no duplicate-sentence suppression. A write failure can leave a partial row;
 the example promises neither atomic rows under power loss nor recovery from a damaged FAT.
 
-The tests use only public GNSS, board, SD and GPIO fixtures. Their local `card_image` fixture
-checks for mtools and formats an empty 32 MiB image; it skips only tests requiring that image.
-It does not insert the card: each scenario calls `sd_card.insert(card_image)` before power-on.
-Local `write_file`, `read_file` and `list_files` helpers hide mtools arguments, temporary host
-files and the `::/` drive prefix. Scenarios use ordinary filenames and compare exact CSV text;
-these helpers belong to the example, not to the library's SD interface.
+The tests use the public `Board` API, with `board.gnss`, `board.sd_card`, `board.lines` and
+`board.console`. They prepare 32 MiB FAT images through `board.sd_card.image(...).build()`;
+`with_text(...)` seeds the append scenario. Every scenario inserts its card explicitly before
+power-on. `CardImage.read_text` and `list_files` inspect results with ordinary relative names.
+FAT commands and temporary-file ownership live in the library; there is no local card fixture
+or filesystem helper. The malformed-recording scenario still uses pytest's `tmp_path` for its
+application-specific input recording.
 Model scenarios boot on a whole UTC second, so the first fix arrives at 1 s and subsequent
 fixes at `FIX_INTERVAL = seconds(1)`. Their first read follows the expected number of intervals
 plus `WRITE_MARGIN = seconds(0.5)` for UART reception and closing the FAT row. Later waits add

@@ -619,3 +619,18 @@ that references to its number keep their meaning.
     invalid or missing fixes add no rows. Without a card it keeps processing new GNSS input
     and continuously asserts the storage-error pin after initialization fails.
     `examples/sd_data_logger/tests/test_logger.py`
+
+
+108. Board interface properties and their fixture shortcuts share objects and state. Accessing
+    console, GNSS, modem, lines or SD interfaces neither selects a UART source nor powers on;
+    the broker property and fixture select the same modem network.
+    `tests/test_board_api.py::test_fixture_aliases_share_interfaces_without_powering_on`,
+    `tests/test_board_api.py::test_modem_alias_does_not_select_a_source`,
+    `tests/test_board_api.py::test_broker_alias_uses_the_same_modem_network`
+
+109. Building an SD image does not insert it; each build has independent contents. Binary bytes
+    and text line endings survive FAT preparation and reading. Board close removes all owned
+    images and invalidates readers/builders, while external images survive. A saved builder
+    cannot build after power-on, and a failed build leaves no partial image.
+    `tests/test_card_image.py`,
+    `tests/test_board_api.py::test_build_rechecks_power_and_backend_close_removes_images`

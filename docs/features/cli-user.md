@@ -9,6 +9,9 @@ replayed into one of them. Unlike a test's run, which moves only while the test 
 board's clock, the command's runs free: there is no test body to wait for, so the run goes as fast
 as the emulator does until `--max-seconds`, and the console goes to stdout only. Tests run through pytest ([pytest plugin](pytest-plugin-user.md)).
 There is no `python -m esp32tl`, and no `esp32tl record` yet.
+For Python tests, the package also exports `Board`: `from esp32tl import Board` annotates the
+`board` fixture and exposes its interface properties; see the
+[pytest API](pytest-plugin-user.md#one-board-and-its-interfaces).
 
 ## Running an app
 

@@ -116,8 +116,8 @@ firmware/build.sh --examples sd_data_logger
 ```
 
 Install mtools (`brew install mtools` or `sudo apt-get install mtools`) to prepare and read the
-test cards. Tests needing a FAT image skip with `SD logger tests need mtools: missing ...` if
-any of `mformat`, `mcopy`, `mdir` or `mtype` is absent. The empty-slot test needs no mtools.
+test cards. The library's builder requires `mformat`, `mcopy`, `mmd`, `mdir` and `mtype` and
+raises `SourceError` naming missing commands. The empty-slot test needs no mtools.
 
 The `sd-data-logger` profile describes the assembly:
 
@@ -132,7 +132,10 @@ Use a 3.3 V SD interface with the required pull-ups. GPIO2, GPIO5 and GPIO15 are
 pins; attached peripherals must permit normal boot. GPIO18 can drive a logic input or an LED
 through a suitable resistor.
 
-The test formats a 32 MiB FAT image with mtools and calls `sd_card.insert(image)` before
+Tests request `board: Board` and use `board.gnss`, `board.lines` and `board.console` directly.
+`board.sd_card.image(size_mb=32).with_text(name, contents).build()` prepares a card with an
+existing row; `.build()` alone prepares an empty card. Each scenario explicitly calls
+`board.sd_card.insert(card)` before
 `board.power_on(utc=...)`. On hardware, insert a preformatted FAT card before boot. The firmware
 never formats the card. Each row is `hhmmss[.fraction],latitude,longitude`, followed by a newline;
 coordinates are signed decimal degrees with six decimal places. There is no header. For example,

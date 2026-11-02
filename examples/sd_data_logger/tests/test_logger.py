@@ -1,20 +1,12 @@
 """Prepare a real FAT image, feed GNSS on a wire, then read the firmware's files."""
 
-import os
-import shutil
-import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
-from tempfile import NamedTemporaryFile
 
 import pytest
 
-from esp32tl import recording
-from esp32tl.backends.esp32sim import Esp32Sim
+from esp32tl import Board, recording
 from esp32tl.interfaces.console import Console
-from esp32tl.interfaces.gnss import Gnss
-from esp32tl.interfaces.lines import Lines, OutputLine
-from esp32tl.interfaces.sd_card import SdCard
 from esp32tl.units import Duration, Position, seconds
 
 pytestmark = [pytest.mark.app_path(".."), pytest.mark.board_profile("sd-data-logger")]
@@ -27,13 +19,16 @@ FIX_INTERVAL = seconds(1)
 WRITE_MARGIN = seconds(0.5)
 
 
-def test_each_fix_appends_one_line(
-    board: Esp32Sim, gnss: Gnss, sd_card: SdCard, card_image: Path, error: OutputLine
-) -> None:
+def test_each_fix_appends_one_line(board: Board) -> None:
     # An existing row must survive: opening with "w" would destroy it.
-    write_file(card_image, "20261102.CSV", "115959.00,52.000000,21.000000\n")
-    sd_card.insert(card_image)
-    gnss.fix(at=WARSAW)
+    card = (
+        board.sd_card.image(size_mb=32)
+        .with_text("20261102.CSV", "115959.00,52.000000,21.000000\n")
+        .build()
+    )
+    error = board.lines.output("logger.error")
+    board.sd_card.insert(card)
+    board.gnss.fix(at=WARSAW)
     board.power_on(utc=START)
     board.wait(3 * FIX_INTERVAL + WRITE_MARGIN)
     expected = (
@@ -42,16 +37,16 @@ def test_each_fix_appends_one_line(
         "120002.00,52.229677,21.012233\n"
         "120003.00,52.229677,21.012233\n"
     )
-    assert read_file(card_image, "20261102.CSV") == expected
+    assert card.read_text("20261102.CSV") == expected
     error.assert_off()
     healthy_since = board.now
 
-    gnss.fix(at=Position(-34.6037, -58.3816))
+    board.gnss.fix(at=Position(-34.6037, -58.3816))
     board.wait(2 * FIX_INTERVAL)
-    assert read_file(card_image, "20261102.CSV") == (
+    assert card.read_text("20261102.CSV") == (
         expected + "120004.00,-34.603700,-58.381600\n120005.00,-34.603700,-58.381600\n"
     )
-    assert list_files(card_image) == ["20261102.CSV"]
+    assert card.list_files() == ["20261102.CSV"]
     error.assert_stayed_off(since=healthy_since)
 
 
@@ -63,66 +58,62 @@ def test_each_fix_appends_one_line(
     ],
 )
 def test_a_new_gnss_date_starts_a_new_file(
-    board: Esp32Sim,
-    gnss: Gnss,
-    sd_card: SdCard,
-    card_image: Path,
+    board: Board,
     start: datetime,
     old_file: str,
     new_file: str,
 ) -> None:
-    sd_card.insert(card_image)
-    gnss.fix(at=WARSAW)
+    card = board.sd_card.image(size_mb=32).build()
+    board.sd_card.insert(card)
+    board.gnss.fix(at=WARSAW)
     board.power_on(utc=start)
     board.wait(2 * FIX_INTERVAL + WRITE_MARGIN)
     before_midnight = "235958.00,52.229677,21.012233\n235959.00,52.229677,21.012233\n"
-    assert read_file(card_image, old_file) == before_midnight
-    assert list_files(card_image) == [old_file]
+    assert card.read_text(old_file) == before_midnight
+    assert card.list_files() == [old_file]
 
     board.wait(3 * FIX_INTERVAL)
-    assert read_file(card_image, old_file) == before_midnight
-    assert read_file(card_image, new_file) == (
+    assert card.read_text(old_file) == before_midnight
+    assert card.read_text(new_file) == (
         "000000.00,52.229677,21.012233\n"
         "000001.00,52.229677,21.012233\n"
         "000002.00,52.229677,21.012233\n"
     )
-    assert list_files(card_image) == [old_file, new_file]
+    assert card.list_files() == [old_file, new_file]
 
 
-def test_without_a_fix_no_file_is_created(
-    board: Esp32Sim, gnss: Gnss, sd_card: SdCard, card_image: Path, error: OutputLine
-) -> None:
-    sd_card.insert(card_image)
-    gnss.lose_fix()
+def test_without_a_fix_no_file_is_created(board: Board) -> None:
+    card = board.sd_card.image(size_mb=32).build()
+    error = board.lines.output("logger.error")
+    board.sd_card.insert(card)
+    board.gnss.lose_fix()
     board.power_on(utc=START)
     board.wait(3 * FIX_INTERVAL + WRITE_MARGIN)
-    assert list_files(card_image) == []
+    assert card.list_files() == []
     error.assert_off()  # No fix is not a storage error.
 
 
-def test_losing_the_fix_pauses_logging_and_recovery_appends(
-    board: Esp32Sim, gnss: Gnss, sd_card: SdCard, card_image: Path
-) -> None:
-    sd_card.insert(card_image)
-    gnss.fix(at=WARSAW)
+def test_losing_the_fix_pauses_logging_and_recovery_appends(board: Board) -> None:
+    card = board.sd_card.image(size_mb=32).build()
+    board.sd_card.insert(card)
+    board.gnss.fix(at=WARSAW)
     board.power_on(utc=START)
     board.wait(2 * FIX_INTERVAL + WRITE_MARGIN)
     expected = "120001.00,52.229677,21.012233\n120002.00,52.229677,21.012233\n"
-    assert read_file(card_image, "20261102.CSV") == expected
+    assert card.read_text("20261102.CSV") == expected
 
-    gnss.lose_fix()
+    board.gnss.lose_fix()
     board.wait(3 * FIX_INTERVAL)
-    assert read_file(card_image, "20261102.CSV") == expected
-    gnss.fix(at=WARSAW)
+    assert card.read_text("20261102.CSV") == expected
+    board.gnss.fix(at=WARSAW)
     board.wait(2 * FIX_INTERVAL)
-    assert read_file(card_image, "20261102.CSV") == (
+    assert card.read_text("20261102.CSV") == (
         expected + "120006.00,52.229677,21.012233\n120007.00,52.229677,21.012233\n"
     )
 
 
-def test_bad_sentences_cannot_create_files(
-    board: Esp32Sim, gnss: Gnss, sd_card: SdCard, card_image: Path, tmp_path: Path
-) -> None:
+def test_bad_sentences_cannot_create_files(board: Board, tmp_path: Path) -> None:
+    card = board.sd_card.image(size_mb=32).build()
     prefix = "GPRMC,{time},A,5213.78062,N,02100.73398,E,0.0,,{date},,,A"
     feed = [
         nmea(prefix.format(time="120001.00", date="000000")),
@@ -140,77 +131,31 @@ def test_bad_sentences_cannot_create_files(
     path = write_gnss_recording(
         tmp_path / "feed.jsonl", feed, first_at=first_sentence_at, interval=sentence_interval
     )
-    sd_card.insert(card_image)
-    gnss.replay(path)
+    board.sd_card.insert(card)
+    board.gnss.replay(path)
     board.power_on(utc=START)
     last_sentence_at = first_sentence_at + (len(feed) - 1) * sentence_interval
     board.wait(last_sentence_at + WRITE_MARGIN)
-    assert list_files(card_image) == ["20261102.CSV"]
-    assert read_file(card_image, "20261102.CSV") == "120003.00,52.229677,21.012233\n"
+    assert card.list_files() == ["20261102.CSV"]
+    assert card.read_text("20261102.CSV") == "120003.00,52.229677,21.012233\n"
 
 
-def test_without_a_card_the_error_pin_stays_on_and_fixes_keep_arriving(
-    board: Esp32Sim, gnss: Gnss, error: OutputLine, console: Console
-) -> None:
-    gnss.lose_fix()
+def test_without_a_card_the_error_pin_stays_on_and_fixes_keep_arriving(board: Board) -> None:
+    error = board.lines.output("logger.error")
+    board.gnss.lose_fix()
     board.power_on(utc=START)
-    console.expect_exact("sd_data_logger: SD card unavailable (ESP_ERR_TIMEOUT)")
-    console.expect_exact("sd_data_logger: ready")
+    board.console.expect_exact("sd_data_logger: SD card unavailable (ESP_ERR_TIMEOUT)")
+    board.console.expect_exact("sd_data_logger: ready")
     error.assert_on()
     failed_since = board.now
 
     # Supply new input after initialization has failed, proving the UART loop survives.
-    gnss.fix(at=WARSAW)
-    first = next_unsaved_fix_time(console)
-    second = next_unsaved_fix_time(console)
+    board.gnss.fix(at=WARSAW)
+    first = next_unsaved_fix_time(board.console)
+    second = next_unsaved_fix_time(board.console)
     assert first.date() == second.date() == START.date()
     assert second > first
     error.assert_stayed_on(since=failed_since)
-
-
-@pytest.fixture
-def error(lines: Lines) -> OutputLine:
-    return lines.output("logger.error")
-
-
-@pytest.fixture
-def card_image(tmp_path: Path) -> Path:
-    """Prepare an empty FAT image; each scenario inserts it explicitly."""
-    missing = [tool for tool in ("mformat", "mcopy", "mdir", "mtype") if not shutil.which(tool)]
-    if missing:
-        pytest.skip(f"SD logger tests need mtools: missing {', '.join(missing)}")
-    image = tmp_path / "card.img"
-    with image.open("wb") as file:
-        file.truncate(32 << 20)
-    mtools("mformat", "-i", str(image), "-T", str(32 << 11), "-h", "64", "-s", "32", "::")
-    return image
-
-
-def mtools(*args: str) -> str:
-    return subprocess.run(
-        args,
-        check=True,
-        capture_output=True,
-        env={**os.environ, "MTOOLS_SKIP_CHECK": "1"},
-    ).stdout.decode("ascii")
-
-
-def write_file(image: Path, name: str, contents: str) -> None:
-    """Seed a card file before power-on, without exposing mtools paths to the scenario."""
-    with NamedTemporaryFile(dir=image.parent) as source:
-        source.write(contents.encode("ascii"))
-        source.flush()
-        mtools("mcopy", "-o", "-i", str(image), source.name, f"::{name}")
-
-
-def read_file(image: Path, name: str) -> str:
-    return mtools("mtype", "-i", str(image), f"::{name}")
-
-
-def list_files(image: Path) -> list[str]:
-    """List root filenames using ordinary names, without mtools' drive prefix."""
-    entries = mtools("mdir", "-b", "-i", str(image), "::").splitlines()
-    return sorted(entry.removeprefix("::/") for entry in entries)
 
 
 def write_gnss_recording(

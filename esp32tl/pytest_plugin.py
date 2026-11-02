@@ -47,6 +47,7 @@ from esp32tl.backends import SERVICES
 from esp32tl.backends.esp32sim import BackendError, Esp32Sim, ended_while_waiting
 from esp32tl.backends.serial import Serial, check_artifact
 from esp32tl.boards import DEFAULT_PROFILE, BoardProfile, ProfileError
+from esp32tl.interfaces.board import Board as Board
 from esp32tl.interfaces.console import Console
 from esp32tl.interfaces.gnss import Gnss
 from esp32tl.interfaces.lines import Lines
@@ -58,8 +59,6 @@ from esp32tl.net.mqtt import Broker
 # covers at least three minutes of the board's busiest work, at the 0.3 times real time stage 0
 # measured for CPU-bound code (docs/stage0-findings.md), and far more of an idle board.
 DEFAULT_TIMEOUT = 600
-
-Board = Esp32Sim | Serial
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -357,7 +356,7 @@ def board(
         # `count` parametrised above 1 in the test: pytest-embedded made a dut per count.
         pytest.fail("count is above 1: esp32tl runs one board in a test", pytrace=False)
     try:
-        backend: Board
+        backend: Esp32Sim | Serial
         if name == Serial.name:
             if not isinstance(dut, IdfDut):
                 raise BackendError("the serial backend requires pytest-embedded's esp,idf services")
@@ -439,7 +438,7 @@ def backend_failed(error: BackendError, name: str) -> NoReturn:
 def console(board: Board) -> Console:
     """The firmware's console, read on the board's clock: `console.expect` lets the board run
     until a pattern appears."""
-    return Console(board)
+    return board.console
 
 
 @pytest.fixture
@@ -449,22 +448,18 @@ def gnss(board: Board) -> Gnss:
     receiver model makes it a receiver the test describes; and `gnss.tap(path)` records what
     crosses it."""
     try:
-        uart = board.uart("gnss")
+        return board.gnss
     except BackendError as error:
         backend_failed(error, board.name)
-    assert isinstance(uart, Gnss), uart
-    return uart
 
 
 @pytest.fixture
 def modem(board: Board) -> Modem:
     """The profile's uart.modem route; select its model or replay before power-on."""
     try:
-        uart = board.uart("modem")
+        return board.modem
     except BackendError as error:
         backend_failed(error, board.name)
-    assert isinstance(uart, Modem), uart
-    return uart
 
 
 @pytest.fixture
@@ -473,7 +468,7 @@ def lines(board: Board) -> Lines:
     `lines.release(line)` at the board's current instant, `lines.level(line)` what the firmware
     drives, `lines.events()` every change with its time."""
     try:
-        return board.lines()
+        return board.lines
     except BackendError as error:
         backend_failed(error, board.name)
 
@@ -483,7 +478,7 @@ def sd_card(board: Board) -> SdCard:
     """The board profile's SD card slot, empty until the test calls `sd_card.insert(image)`
     before `board.power_on()`."""
     try:
-        return board.sd_card()
+        return board.sd_card
     except BackendError as error:
         backend_failed(error, board.name)
 

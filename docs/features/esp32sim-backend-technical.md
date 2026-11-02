@@ -300,8 +300,8 @@ repository makes.
 | `Esp32Sim.wait(duration)`, `Esp32Sim.wait_until(condition, *, within)`, `Esp32Sim.wait_on_clock(condition, within, description)` | The test's waits, each a `Duration` of the board's time, logged as steps of the test |
 | `Esp32Sim.now`, `Esp32Sim.utc` | The board's time since power-on, a `Duration`; the world's time, a `datetime` in UTC |
 | `Esp32Sim.uart(role)` | The `Uart` of `uart.<role>` on the link, a `Gnss` for `gnss`; `BackendError` when the profile has no such route |
-| `Esp32Sim.lines()` | The `Lines` of the profile's `[lines.<role>]` sets on the link; `BackendError` when the profile has none |
-| `Esp32Sim.sd_card()` | The `SdCard` of the profile's slot; `BackendError` when the profile has none |
+| `Esp32Sim.lines` | The `Lines` of the profile's `[lines.<role>]` sets on the link; `BackendError` when the profile has none |
+| `Esp32Sim.sd_card` | The `SdCard` of the profile's slot; `BackendError` when the profile has none |
 | `Esp32Sim.set_up()` | What the test gave that only a run uses: `the replay of uart.gnss` or `the model of uart.gnss` per route with a source, `the tap of uart.gnss` per tapped route, `the level of modem.ri` per line the test drove, `a card in sd_card` |
 | `Esp32Sim.tap_console(path)` | The console `Tap`; before power-on only, shares file collision checks with UARTs and the SD card |
 | `Esp32Sim.close()` | Ends the run and writes the taps; raises `BackendError` for a tap that cannot be written, a failing exit code, a killed runner or a link error |
@@ -494,3 +494,11 @@ at `board.power_on(utc=...)`, even when the network was selected earlier. With a
 plaintext, as described in [network internals](network-technical.md). Raw UART taps still contain
 PPP and TLS wire bytes. The route advertises `lossless=True`; its receive FIFO overflows fail
 through `BoardLink` immediately.
+
+
+`Esp32Sim` implements the public `Board` base. Its `lines` and `sd_card` properties delegate to
+`_get_lines()` and `_get_sd_card()`; they replace the former callable backend accessors. The
+runner command, setup guard and reports read the slot's `image_path`. `close()` stops and joins
+the runner before closing the SD slot in a `finally` block, so owned images are removed on both
+successful and failed teardown. An uninserted built image is also cleaned; merely building does
+not count as firmware setup for the no-power-on guard.

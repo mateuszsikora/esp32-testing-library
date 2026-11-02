@@ -86,6 +86,32 @@ it ran no firmware.
 What the backend needs besides the build, the runner and the ROM ELF, is in
 [the esp32sim backend](esp32sim-backend-user.md#what-it-needs).
 
+## One board and its interfaces
+
+Annotate tests with `from esp32tl import Board` and request just `board: Board`:
+
+```python
+from esp32tl import Board
+
+
+def test_hello_world(board: Board):
+    board.power_on()
+    board.console.expect_exact("Hello world!")
+```
+
+`board.console`, `board.gnss`, `board.modem`, `board.lines` and `board.sd_card` expose the
+profile's interfaces. Access does not power on the board or select a UART source. `board.broker`
+selects the modem's simulated network and returns its MQTT broker, so access it before power-on.
+Missing profile interfaces fail when accessed; serial capabilities still skip unsupported calls.
+The existing `console`, `gnss`, `modem`, `lines`, `sd_card` and `broker` fixtures remain shortcuts
+to these same objects. Mixing the two styles shares state, including the console's match cursor.
+`board.uart(role)` remains available for arbitrary UART roles.
+
+For code using backend accessors directly, replace `board.lines()` with `board.lines` and
+`board.sd_card()` with `board.sd_card`. The inserted image's host path is now
+`board.sd_card.image_path`; `image(...)` starts the builder. Existing fixture-based tests using
+`sd_card.insert(path)` need no change.
+
 ## The fixtures
 
 `board` is the board, off until the test powers it on. The details below describe esp32sim.
@@ -195,17 +221,45 @@ the exception: it takes a `Duration`, or a number of seconds as in pytest-embedd
   `esp32sim: the board profile {name} has no uart.gnss; its interfaces are {interfaces}`. Both
   profiles esp32tl ships have the route.
 
-`sd_card` is the board profile's SD card slot, empty until the test inserts a card. From
-`tests/test_sdspi.py`, with `fat_image` and `read` its helpers around mtools:
+`board.sd_card` (also the `sd_card` fixture) is the profile's slot, empty until insertion.
+For a test running `firmware/sdspi`, prepare and inspect its FAT contents through the library:
 
 ```python
-def test_the_example_writes_its_files_into_the_image(tmp_path, board, sd_card, console):
-    image = fat_image(tmp_path / "card.img", {"foo.txt": b"from the test\n"})
-    sd_card.insert(image)
+def test_the_example_writes_its_files_into_the_image(board: Board):
+    card = (
+        board.sd_card.image(size_mb=32)
+        .with_text("foo.txt", "from the test\n")
+        .with_bytes("config.bin", b"\x01\x02")
+        .build()
+    )
+    board.sd_card.insert(card)
     board.power_on()
-    console.expect_exact("example: Card unmounted", timeout=5)
-    assert read(image, "foo.txt") == b"Hello SIMSD!\n"
+    board.console.expect_exact("example: Card unmounted", timeout=5)
+    assert card.read_text("foo.txt") == "Hello SIMSD!\n"
+    assert card.read_bytes("config.bin") == b"\x01\x02"
 ```
+
+- `image(size_mb=32)` starts a builder; `size_mb` is a whole number from 1 to 2048 MiB.
+  `with_text(name, contents, encoding="utf-8")` and `with_bytes(name, contents)` declare initial
+  files and return the same builder. Subdirectories are created automatically. Paths are relative
+  with `/` separators; traversal, wildcards, FAT-invalid characters and case-insensitive file
+  collisions are refused with `ValueError`.
+- `build()` creates a fresh FAT image each time, before power-on, without inserting it. Existing
+  builds are unaffected by later builder changes. The builder uses mtools (`mformat`, `mcopy`,
+  `mmd`, `mtype`, `mdir`); install it with `brew install mtools` or `sudo apt-get install mtools`.
+  Missing commands raise `SourceError`, for example
+  `sd_card: missing mformat, mcopy, mmd, mtype, mdir; install mtools`.
+- `card.read_text(name, encoding="utf-8")` and `card.read_bytes(name)` reopen the current image
+  every time, so they see firmware writes. Text decoding preserves line endings, including CRLF.
+  Wait for firmware to finish and close a write before reading. Missing files or tool errors raise
+  `SourceError` naming the command and its stderr. `card.list_files(directory="")` returns sorted
+  immediate filenames, excluding subdirectories, at the root or a specified relative directory.
+- `card.path` is the host image path; the object also supports `os.fspath`. Images created by the
+  builder are removed when the board closes, even when never inserted or when the test fails.
+  Read or copy results before teardown. Later reader/builder calls raise
+  `sd_card: the board is closed`. Externally supplied image paths are never deleted.
+- On serial, starting a builder skips just like inserting a model card. These APIs prepare the
+  simulator's storage; they do not format a physical card.
 
 - `sd_card.insert(image)` puts a card holding the image file in the slot, before
   `board.power_on()`, and returns the image's absolute path. The path is relative to the test
@@ -214,8 +268,9 @@ def test_the_example_writes_its_files_into_the_image(tmp_path, board, sd_card, c
   usually a FAT file system made with mtools (`mformat`, `mcopy`).
 - On `esp32sim` the card is the runner's model of an SD card in SPI mode, on the slot's pins
   ([runner](runner-user.md#put-an-sd-card-in)). It writes what the firmware writes into the file
-  as it goes, so the test reads the image back with mtools (`mtype`, `mcopy`, `mdir`) once the
-  firmware is done, during the run or after it. Copy the image first to keep it as it was.
+  as it goes, so the test reads the image back with `CardImage` or mtools once the firmware
+  is done. Builder-owned images remain available until the board closes; external images also
+  survive teardown. Copy the image first to keep it as it was.
 - Without `insert`, the slot is empty, as a board with no card in it: ESP-IDF's driver times out
   (`ESP_ERR_TIMEOUT`).
 - `insert` refuses, with `SourceError`: a call after `board.power_on()`

@@ -3,3 +3,5 @@
 from importlib.metadata import version
 
 __version__ = version("esp32tl")
+
+from esp32tl.interfaces.board import Board as Board
