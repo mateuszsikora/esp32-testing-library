@@ -9,6 +9,9 @@ replayed into one of them. Unlike a test's run, which moves only while the test 
 board's clock, the command's runs free: there is no test body to wait for, so the run goes as fast
 as the emulator does until `--max-seconds`, and the console goes to stdout only. Tests run through pytest ([pytest plugin](pytest-plugin-user.md)).
 There is no `python -m esp32tl`, and no `esp32tl record` yet.
+For Python tests, the package also exports `Board`: `from esp32tl import Board` annotates the
+`board` fixture and exposes its interface properties; see the
+[pytest API](pytest-plugin-user.md#one-board-and-its-interfaces).
 
 ## Running an app
 
@@ -101,7 +104,7 @@ as `esp32tl: {message}`:
 
 | Message | Cause |
 |---|---|
-| `no board profile named '{board}'; the profiles are esp32-devkitc, gps-alarm-clock, lilygo-t-a7670g-r2` | `--board` names no profile esp32tl ships |
+| `no board profile named '{board}'; the profiles are esp32-devkitc, gps-alarm-clock, lilygo-t-a7670g-r2, sd-data-logger` | `--board` names no profile esp32tl ships |
 | `the board profile {board} has no {interface}; its interfaces are {interfaces}` | `--interface` names no UART route of the profile |
 | `{path}: [Errno 2] No such file or directory: '{path}'`, and every other `RecordingError` | the recording cannot be read, or breaks the [format](../recording-format.md#errors) |
 | `{path} is a recording of {recorded}, not of {interface}`, and every other `ReplayError` | the recording cannot be replayed into that interface ([replay](replay-user.md#what-a-replay-refuses)); `{path}` is the path as given |

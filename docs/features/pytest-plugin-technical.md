@@ -119,7 +119,7 @@ are in [models-technical.md](models-technical.md).
    its report gives console byte count, tap path and any error; failures include the tap, power-on
    and wait steps and console lines. Its JSON property gives `clock`, `app_sha256`, `console_bytes`,
    `error` and `tap` ([serial schema](serial-backend-technical.md#schema)).
-9. **`console` fixture** returns `Console(board)`. `Console.expect` and `Console.expect_exact`
+9. **`console` fixture** returns the cached `board.console`. `Console.expect` and `Console.expect_exact`
    take a pattern or a list of them, compile each into a regular expression on bytes
    (`compiled`: text in UTF-8 and bytes with `re.DOTALL`, as pexpect compiles them for a bytes
    stream; `re.escape` for `expect_exact`; a compiled text pattern again with its flags but
@@ -172,9 +172,9 @@ are in [models-technical.md](models-technical.md).
    and make none: without one they raise `SourceError`. `now` and `world` are the backend's, the
    held clock's time and the world's time at power-on
    ([models-technical.md](models-technical.md#data-flow)).
-11. **`lines` fixture** returns `board.lines()`, the one `Lines` the link carries for every
+11. **`lines` fixture** returns `board.lines`, the one `Lines` the link carries for every
    `[lines.<role>]` set of the profile, named `lines` on the link; a profile without lines makes
-   `lines()` raise `BackendError`, which goes through `backend_failed`. `Lines` is a `BoardLink`
+   `board.lines` raise `BackendError`, which goes through `backend_failed`. `Lines` is a `BoardLink`
    `Interface` without a `wire`: its `pins` are the lines' GPIOs, which the link watches.
    `drive(line, level)` and `release(line)` take a GPIO number or `<role>.<line>`, read the board's
    time from `now()`, the backend's `HeldClock.now` (0 before power-on and until the first turn),
@@ -198,7 +198,7 @@ are in [models-technical.md](models-technical.md).
    ([run-report-technical.md](run-report-technical.md#data-flow)). `Lines` without an attached
    model declares no `latency` and no `quiet_until`: a change of the firmware's takes no turn
    of its own, and the test sees it at the next turn the clock lets the run take.
-12. **`sd_card` fixture** returns `board.sd_card()`, the `SdCard` of the profile's `[sd_card]`
+12. **`sd_card` fixture** returns `board.sd_card`, the `SdCard` of the profile's `[sd_card]`
    slot; a profile without one makes it raise `BackendError`, through `backend_failed`.
    `SdCard.insert(image)` refuses a second card, then calls the backend's
    `asked(Request("sd_card", source="model"))`, then resolves `image` against `directory`, the
@@ -206,7 +206,7 @@ are in [models-technical.md](models-technical.md).
    at least one and at most `MAX_SIZE` (2 TiB), and with `os.access` that it can be read and
    written, and that no route replays from it or is tapped into it
    ([run-report-technical.md](run-report-technical.md#data-flow)). It keeps the absolute path in
-   `image`, which `runner_command` turns into `--sd-spi`
+   `image_path`, which `runner_command` turns into `--sd-spi`
    and `--sd-rw` at power-on ([esp32sim-backend-technical.md](esp32sim-backend-technical.md#data-flow)).
 
 `Console.tap` delegates to the backend's `tap_console`. Both backends reuse `Uart.tap`'s file
@@ -240,16 +240,16 @@ the existing no-latency behavior and board pulls are unchanged.
 | `app_path(path)` | marker | One positional path, relative to the test file's directory; default that directory |
 | `board_profile(name)` | marker | The board profile ([board-profiles-technical.md](board-profiles-technical.md#interfaces)) |
 | `board(request, app_path, msg_queue, _meta)` | fixture, function scope | Yields an `Esp32Sim` or `Serial`; closes it at teardown, then adds its backend-specific report section and JSON property. Its methods (`power_on`, `wait`, `wait_until`, `now`, `utc`, `report`, `properties`) are in [esp32sim-backend-technical.md](esp32sim-backend-technical.md#interfaces) and [serial-backend-technical.md](serial-backend-technical.md#interfaces) |
-| `console(board)` | fixture, function scope | Returns `Console(board)` |
+| `console(board)` | fixture, function scope | Returns the cached `board.console` |
 | `gnss(board)` | fixture, function scope | Returns `board.uart("gnss")`, a `Gnss` |
-| `lines(board)` | fixture, function scope | Returns `board.lines()` |
+| `lines(board)` | fixture, function scope | Returns `board.lines` |
 | `modem(board)` | fixture, `esp32tl/pytest_plugin.py` | The profile's `uart.modem`, a `Modem`; see [modem-user.md](modem-user.md) |
 | `Modem(name, wire, *, clock, directory, now, lines, pins, asked=..., log=None, files=None)` | class, `esp32tl/interfaces/modem.py`, a `Uart` | Model calls, state properties and command history: [modem-technical.md](modem-technical.md#interfaces) |
 | `Lines(board, lines, now, log=None)` | class, `esp32tl/interfaces/lines.py`, a `BoardLink` `Interface` named `lines` | The `[lines.<role>]` sets `lines` of the profile named `board`, the board's time from `now()`, in nanoseconds, and the `RunLog` it writes to, if any. `drive(line, level)`, `release(line)`, `level(line)` (`int \| None`), `events()` (`list[LineEvent]`); model attachment via `attach(owner, *, output, watch, driven, latency)` and `model_drive(owner, line, t, level)`; for the link, `pins`, `inputs(now)`, `driven(t, changes, enabled)`, `quiet_until()` and `latency()` |
 | `LineEvent(t, name, pin, by, level)` | frozen dataclass, `esp32tl/interfaces/lines.py` | `t` a `Duration`, an instant of the board's time, `name` as `modem.ri`, `by` `"firmware"`, `"test"` or `"model"`, `level` 0, 1 or `None` |
 | `PULLED` | `dict`, `esp32tl/interfaces/lines.py` | `{"up": 1, "down": 0}`: the level a board's pull gives an undriven line |
-| `sd_card(board)` | fixture, function scope | Returns `board.sd_card()` |
-| `SdCard(route, *, directory, asked=..., log=None, files=None)` | class, `esp32tl/interfaces/sd_card.py` | The `sd_card` slot on `route` (an `SdCardRoute`): attributes `name` (`"sd_card"`), `route`, `directory`, `asked`, `log` (the `RunLog` its step goes to), `files` (shared with the routes), `image` (`None` until `insert`, then the image's absolute `Path`); `insert(image)` returns that path |
+| `sd_card(board)` | fixture, function scope | Returns `board.sd_card` |
+| `SdCard(route, *, directory, asked=..., log=None, files=None)` | class, `esp32tl/interfaces/sd_card.py` | The `sd_card` slot on `route` (an `SdCardRoute`): attributes `name` (`"sd_card"`), `route`, `directory`, `asked`, `log` (the `RunLog` its step goes to), `files` (shared with the routes), `image_path` (`None` until `insert`, then the image's absolute `Path`); `insert(image)` returns that path |
 | `UNIT`, `MAX_SIZE` | `int`, `esp32tl/interfaces/sd_card.py` | 524288: an SD card image is a whole number of them; 2^41, the most it may be |
 | `Console(board)` | class, `esp32tl/interfaces/console.py` | `expect(pattern, timeout=30, *, return_what_before_match=False)`, `expect_exact(...)` with the same arguments, `timeout` a `Duration` or a number of seconds; `line(pattern)`, `lines(pattern=None, *, since=None)`, `tap(path)`; no `write`. `board` is a `Clocked`: `console_output`, `console_lines` and `wait_on_clock(condition, within, description)`, `within` a `Duration` |
 | `Line(at, text, match=None)` | frozen dataclass, `esp32tl/interfaces/console.py` | A console line: `at` a `Duration`, `text` a `str`, `match` an `re.Match[str]`, left out of comparisons; `line[group]` is `match[group]`, a `TypeError` without a match |
@@ -476,3 +476,43 @@ consume it. Input events cannot satisfy or violate a firmware-output assertion.
 
 `tests/test_lines.py` covers current-state diagnostics, both polarities and states, a one-nanosecond
 pulse, unknown/released outputs, starting/end boundaries, input filtering and invalid windows.
+
+
+## Shared board and FAT image API
+
+`esp32tl.interfaces.board.Board` is the abstract base of `Esp32Sim` and `Serial`, re-exported
+from `esp32tl` and, for existing imports, `esp32tl.pytest_plugin`. It declares the common clock,
+waiting, NVS, reporting and lifecycle API. Interface properties reuse each backend's existing
+UART/line/slot objects; `console` is a `cached_property` wrapping that backend's console buffers.
+Fixture functions return the properties, preserving object identity and the console cursor.
+The `broker` fixture delegates to `modem.network().broker`, which selects a model source.
+`Board` has no broker property; tests selecting the service through the board explicitly call
+`board.modem.network().broker`.
+
+`SdCard.image(size_mb=32)` returns `CardImageBuilder`; both this call and `build()` check that
+the slot is open and call `asked(Request("sd_card", source="model"))`. A saved builder therefore
+cannot bypass the before-power-on or backend-capability checks. Declaring files allocates no
+image. Each build creates a unique subdirectory of a lazily allocated `TemporaryDirectory`,
+truncates `card.img`, formats it with `mformat` (FAT32 forced from 512 MiB), creates parents with
+`mmd`, and copies bytes through temporary host files using `mcopy`. Failed builds remove their
+partial directory. Duplicate and file/parent conflicts are checked case-insensitively.
+
+`CardImage` exposes `path`, `__fspath__`, `read_bytes`, `read_text` and `list_files`. Reads use
+`mtype`; listings use `mdir -b` and exclude directory entries. Before either operation,
+`_resolve` walks directory entries case-insensitively to check the requested path's existence and
+type. Missing entries raise `FileNotFoundError`, non-directory parents or listing targets raise
+`NotADirectoryError`, and reading a directory raises `IsADirectoryError`. This uses actual
+entries rather than parsing locale-dependent tool errors. `_path` rejects `*`, `?`, `[` and `]`
+for both builder and reader calls, preventing mtools from expanding a requested single path
+into several files. No FAT state or file contents are cached. All commands run without a shell and with `MTOOLS_SKIP_CHECK=1`; command failure becomes
+`SourceError` including stderr. Text encoding/decoding defaults to UTF-8 with no newline
+translation. `SdCard.close()` invalidates handles and removes only builder-owned directories;
+backends call it after stopping the run, including on teardown errors. The inserted path stays
+in `image_path` for reporting, even after the owned image has been removed.
+
+`tests/test_board_api.py` covers fixture identity, lazy interface access, broker sharing,
+build-after-power-on refusal and backend cleanup. `tests/test_card_image.py` exercises real
+FAT12/16/32 images, nested paths, binary/text fidelity, conflicts, failed builds and ownership.
+It also checks standard path exceptions and bracket-pattern rejection with `A.TXT`, `B.TXT`
+and an externally created literal `[AB].TXT` on the same image.
+The logger integration tests verify that repeated reads see fresh guest writes.

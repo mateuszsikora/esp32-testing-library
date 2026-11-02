@@ -22,6 +22,7 @@ from esp32tl.backends.esp32sim import BackendError, load_app, refuse, route_wire
 from esp32tl.boards import BoardProfile, capabilities
 from esp32tl.boards.capabilities import CapabilityError, Request
 from esp32tl.interfaces import BoardOff, NeverHappened, RunEnded, SourceError
+from esp32tl.interfaces.board import Board
 from esp32tl.interfaces.console import ConsoleLines
 from esp32tl.interfaces.gnss import Gnss
 from esp32tl.interfaces.lines import Lines
@@ -63,7 +64,7 @@ def check_artifact(app_path: str, reference: Path | None = None) -> str:
     return digest
 
 
-class Serial:
+class Serial(Board):
     """The real board. power_on is a reset; hardware also runs outside the test's waits."""
 
     name = "serial"
@@ -311,12 +312,12 @@ class Serial:
                 )
         return self._uarts[interface]
 
-    def lines(self) -> Lines:
+    def _get_lines(self) -> Lines:
         if not self.profile.lines:
             raise BackendError(f"the board profile {self.profile.name} has no lines")
         self._skip("serial: GPIO lines cannot be controlled or observed on this backend")
 
-    def sd_card(self) -> SdCard:
+    def _get_sd_card(self) -> SdCard:
         if self._card is None:
             raise BackendError(f"the board profile {self.profile.name} has no sd_card")
         return self._card
@@ -331,6 +332,13 @@ class Serial:
         return ["the tap of console"] if self._console.tapped is not None else []
 
     def close(self) -> None:
+        try:
+            self._close()
+        finally:
+            if self._card is not None:
+                self._card.close()
+
+    def _close(self) -> None:
         if self._closed:
             return
         self._stop.set()

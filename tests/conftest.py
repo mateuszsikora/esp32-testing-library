@@ -31,7 +31,7 @@ def docker_missing() -> str | None:
 
 
 # The mtools commands the tests run.
-MTOOLS = ("mformat", "mcopy", "mdir", "mtype")
+MTOOLS = ("mformat", "mcopy", "mdir", "mtype", "mmd")
 
 
 @functools.cache

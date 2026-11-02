@@ -101,6 +101,9 @@ def test_console_reset_clock_tap_and_autoflash(
 
         @pytest.mark.app_recording("reference.jsonl")
         def test_console(board, console, tmp_path):
+            from esp32tl import Board
+            assert isinstance(board, Board)
+            assert board.console is console
             assert board.name == "serial" and board.clock == "wall"
             assert board.dut.serial.flashes == {int(not skip_autoflash)}
             assert board.dut.serial.resets == 1
@@ -160,6 +163,8 @@ def test_serial_capabilities_skip_at_the_call(pytester: pytest.Pytester) -> None
             gnss.replay("not-read.jsonl")
         def test_tap(gnss):
             gnss.tap("not-written.jsonl")
+        def test_card_builder(board):
+            board.sd_card.image().build()
         def test_card(sd_card):
             sd_card.insert("not-read.img")
         def test_nvs(board):
@@ -184,7 +189,7 @@ def test_serial_capabilities_skip_at_the_call(pytester: pytest.Pytester) -> None
             lines.drive("modem.ri", True)
     """)
     result = run_serial(pytester, "-rs")
-    result.assert_outcomes(skipped=11)
+    result.assert_outcomes(skipped=12)
     result.stdout.fnmatch_lines(
         [
             "*serial: uart.gnss takes no model source on this backend, only real*",

@@ -50,6 +50,7 @@ from esp32tl.backends.clock import HeldClock, nanoseconds, seconds
 from esp32tl.boards import BoardProfile, capabilities
 from esp32tl.boards.capabilities import CapabilityError, Request
 from esp32tl.interfaces import BoardOff, NeverHappened, RunEnded, SourceError
+from esp32tl.interfaces.board import Board
 from esp32tl.interfaces.console import ConsoleLines
 from esp32tl.interfaces.gnss import Gnss
 from esp32tl.interfaces.lines import Lines
@@ -170,10 +171,10 @@ def runner_command(
         command += ["--flash-at", f"{offset:#x}={image}"]
     if psram_mb is not None:
         command += ["--psram-mb", str(psram_mb)]
-    if sd_card is not None and sd_card.image is not None:
+    if sd_card is not None and sd_card.image_path is not None:
         r = sd_card.route
         command += ["--sd-spi", f"sclk={r.sclk},mosi={r.mosi},miso={r.miso},cs={r.cs}"]
-        command += ["--sd-rw", str(sd_card.image)]
+        command += ["--sd-rw", str(sd_card.image_path)]
     return command
 
 
@@ -245,7 +246,7 @@ def listen() -> tuple[socket.socket, Path]:
     return listener, path
 
 
-class Esp32Sim:
+class Esp32Sim(Board):
     """A run of the app in `app_path` in the runner, on the board profile `profile`, its console
     going to `dut`'s log and to the test, its board the link to every UART route and every GPIO
     line of the profile, and the runner's SD card model in the profile's slot when the test
@@ -385,7 +386,7 @@ class Esp32Sim:
             )
         return uart
 
-    def lines(self) -> Lines:
+    def _get_lines(self) -> Lines:
         """The `Lines` on the link for the profile's `[lines.<role>]` sets."""
         if not self.profile.lines:
             raise BackendError(
@@ -394,7 +395,7 @@ class Esp32Sim:
             )
         return self._lines
 
-    def sd_card(self) -> SdCard:
+    def _get_sd_card(self) -> SdCard:
         """The profile's SD card slot."""
         if self._sd_card is None:
             raise BackendError(
@@ -472,7 +473,7 @@ class Esp32Sim:
             for kind, given in ((uart.source_kind, uart.source), ("tap", uart.tapped))
             if given is not None
         ] + [f"the level of {name}" for name in driven]
-        if self._sd_card is not None and self._sd_card.image is not None:
+        if self._sd_card is not None and self._sd_card.image_path is not None:
             set_up.append(f"a card in {self._sd_card.name}")
         if self._console.tapped is not None:
             set_up.append("the tap of console")
@@ -643,6 +644,13 @@ class Esp32Sim:
         )
 
     def close(self) -> None:
+        try:
+            self._close()
+        finally:
+            if self._sd_card is not None:
+                self._sd_card.close()
+
+    def _close(self) -> None:
         """Ends the run (protocol §9): `stop` at the turn the test left it at, on which the
         runner sends its last warnings and its stats, closes the link and exits 0; SIGTERM, once
         the runner has said hello, when it has not exited within EXIT_SECONDS of that; the link
@@ -764,7 +772,7 @@ class Esp32Sim:
                 f" tapped into {self._console.tapped.path}"
             )
         if self._sd_card is not None:
-            image = self._sd_card.image
+            image = self._sd_card.image_path
             lines.append(f"sd_card: a card holding {image}" if image else "sd_card: empty")
         for uart in self._uarts.values():
             if isinstance(uart, Modem):
@@ -811,7 +819,9 @@ class Esp32Sim:
                 ]
         card = self._sd_card
         sd_card = (
-            None if card is None else {"image": None if card.image is None else str(card.image)}
+            None
+            if card is None
+            else {"image": None if card.image_path is None else str(card.image_path)}
         )
         properties = self.link.properties() | {"routes": routes, "sd_card": sd_card}
         if self._console.tapped is not None:

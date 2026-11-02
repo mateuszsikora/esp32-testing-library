@@ -1,0 +1,20 @@
+# The assembly in examples/sd_data_logger: GNSS, an SPI SD slot and an error output.
+name = "sd-data-logger"
+chip = "esp32"
+flash_mb = 4
+psram_mb = 0
+
+[uart.gnss]
+port = 1
+tx = 4
+rx = 5
+baud = 9600
+
+[sd_card]
+sclk = 14
+mosi = 15
+miso = 2
+cs = 13
+
+[lines.logger]
+error = 18

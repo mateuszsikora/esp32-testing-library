@@ -269,3 +269,18 @@ GNSS and buzzer assembly.
 **Rejected:** another container pin and build script for examples, which could drift from the
 validation builds; repurposing the LilyGO modem's PWRKEY as a buzzer, which misrepresents the
 wiring; and adding a buzzer to the generic devkit profile, which has no such peripheral.
+
+## The SD logger uses each RMC's date and closes every appended row
+
+Status: decided (#73)
+
+The `sd_data_logger` example reuses the checksum/position parser and locally validates the
+RMC date/time. It writes `YYYYMMDD.CSV` with one row per accepted RMC, closing the file after
+each append. Its own `sd-data-logger` assembly profile adds a storage-error GPIO to the devkit's
+GNSS/SD wiring. A mount or write failure latches that output high while the UART loop continues.
+
+**Rejected:** logging both RMC and GGA, which duplicates the model's fixes and requires assigning
+a date to a sentence with none; deriving filenames from the ESP32 clock, which need not know UTC;
+and keeping a file open across fixes, which hides buffered rows from a test reading the card.
+The example uses the SD interface's existing boot-time insertion contract; hot-plug and retry
+behaviour remain outside its scope. It never formats an unmountable card.

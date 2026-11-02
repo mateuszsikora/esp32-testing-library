@@ -159,7 +159,7 @@ file is broken. The ones `tests/test_boards.py` checks, verbatim:
 
 | Message | Cause |
 |---|---|
-| `no board profile named 'NAME'; the profiles are esp32-devkitc, gps-alarm-clock, lilygo-t-a7670g-r2` | `boards.profile` with another name |
+| `no board profile named 'NAME'; the profiles are esp32-devkitc, gps-alarm-clock, lilygo-t-a7670g-r2, sd-data-logger` | `boards.profile` with another name |
 | `x.toml: <tomllib's message>`, as `x.toml: Invalid value (at end of document)` | Not TOML, or not readable |
 | `x.toml: missing chip`, `x.toml: unknown key pins` | A top-level key missing or unknown |
 | `x.toml: uart.gnss: missing baud`, `x.toml: lines.modem.ri: missing pin` | The same in a table |

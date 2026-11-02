@@ -100,7 +100,7 @@ run log: the tap, power-on and wait steps, and received console lines.
 | `wait_on_clock(condition, within, description)` | Console-facing wait with a description used in logs and errors |
 | `console_output`, `console_lines` | Drain queued input, then return the shared bytearray / `ConsoleLines` |
 | `uart(role)` | Profile's UART object, a `Gnss` for `gnss` or `Modem` for `modem`; unsupported source/tap requests skip |
-| `lines()`, `sd_card()` | Skip GPIO access, or return the slot whose model insertion skips; missing interfaces fail |
+| `lines`, `sd_card` | Skip GPIO access, or return the slot whose model insertion skips; missing interfaces fail |
 | `nvs(namespaces, partition="nvs")` | Skip: hardware NVS replacement is unsupported |
 | `tap_console(path)` | Console `Tap` via `Uart.tap`; before power-on, with path collision checks |
 | `set_up()` | `the tap of console` when tapped, otherwise empty |
@@ -224,3 +224,10 @@ firmware. Backup binaries and device logs remain private and are not repository 
 - [Recording format](../recording-format.md)
 - [Taps and run reports](run-report-technical.md)
 - [Serial decisions](../decisions/harness.md#serial-is-opt-in-and-pytest-embedded-owns-flashing-and-the-port)
+
+
+`Serial` implements the same public `Board` base as the simulator. `board.console` is cached,
+and the `console` fixture returns it. `board.gnss`, `board.modem` and the interface fixtures reuse
+the same UART objects. GPIO access skips, and both `board.sd_card.image()` and `insert(...)`
+request a model source and skip before creating or opening an image. `close()` closes its SD
+slot in a `finally` block after ending the serial run.

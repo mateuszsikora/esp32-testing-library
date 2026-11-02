@@ -59,7 +59,7 @@ console capture, wall time, capability skips, reference hashes before port creat
   `app_recording` and `board_profile` itself, and pytest-timeout `timeout`; `requires_docker` and
   `requires_mtools` are registered here.
 - `markers`: `requires_docker: needs a Docker daemon`, `requires_mtools: needs mtools (mformat,
-  mcopy, mdir, mtype)`.
+  mcopy, mdir, mtype, mmd)`.
 - `filterwarnings` ignores `record_xml_attribute is an experimental feature`
   (`pytest.PytestExperimentalApiWarning`), which pytest-embedded's `app_path` fixture causes on every
   test.
@@ -92,9 +92,9 @@ No test of the suite carries the marker. The only marked tests are the ones
 `tests/test_firmware_build.py` generates to test the marker itself.
 
 A test that makes or reads a FAT image carries `@pytest.mark.requires_mtools`: the same hook
-checks once (`mtools_missing`) that `mformat`, `mcopy`, `mdir` and `mtype` are on `PATH`, and
+checks once (`mtools_missing`) that `mformat`, `mcopy`, `mdir`, `mtype` and `mmd` are on `PATH`, and
 skips every marked test without them, with the reason `requires_mtools: no mformat, mcopy, mdir,
-mtype on PATH (mtools)`, naming those missing. The tests of `tests/test_sdspi.py` carry it. In
+mtype, mmd on PATH (mtools)`, naming those missing. The tests of `tests/test_sdspi.py` carry it. In
 CI the test job installs mtools first, so there they run ([cicd.md](../cicd.md#test)).
 
 ## What each test file needs
@@ -278,3 +278,16 @@ receiver and the buzzer GPIO through the public fixtures. It needs `make example
 and the ROM ELF. Run it alone with `.venv/bin/pytest examples/gps_alarm_clock/tests` after
 `make setup examples`; `make test` builds missing example images automatically.
 See [the example guide](../features/examples-user.md) for the scenarios and wiring.
+
+`examples/sd_data_logger/tests/test_logger.py` prepares FAT images with mtools and verifies
+the firmware's CSV rows, date rollover (New Year and leap day), fix loss/recovery and malformed
+NMEA rejection. Its library image builder requires mtools and reports missing commands as `SourceError`; the
+empty-slot test still runs and observes the error GPIO and continued GNSS processing.
+Build with `firmware/build.sh --examples sd_data_logger`, then run
+`.venv/bin/pytest examples/sd_data_logger/tests`. It needs the runner and ROM ELF as well.
+
+
+`tests/test_card_image.py` checks builder/reader behavior against real FAT images and marks the
+cases needing mtools with `requires_mtools`. `tests/test_board_api.py` checks the shared `Board`
+interface and fixture identities; its lifecycle test also uses that marker. The marker is
+implemented by `tests/conftest.py`; standalone example tests require their documented tools.

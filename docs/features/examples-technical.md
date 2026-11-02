@@ -57,6 +57,55 @@ and the firmware's 100 ms UART polling. This is an externally observed expiry wi
 an assertion about the exact internal `last_fix` timestamp.
 The separate `gps-alarm-clock` profile gives this assembly's wiring without changing the generic devkit.
 
+## SD logger implementation
+
+`examples/sd_data_logger/main/main.c` uses ESP-IDF's SDSPI host and FAT VFS, with SPI2 on
+GPIO14/15/2/13 and `format_if_mount_failed = false`. GPIO18 starts high, becomes low only when
+the mount succeeds, and latches high on any `fopen`, `fprintf` or `fclose` failure. The UART
+driver is installed before mounting so it can buffer incoming sentences during card discovery.
+The application continues its UART loop after storage failure and reports accepted fixes on
+the console. It does not retry mounting or writing after failure.
+
+Like the alarm, this project compiles `firmware/nmea_reader/main/nmea.c` from the checkout.
+`dated_fix` accepts RMC only, delegates checksum/status/coordinate parsing, and validates its
+date and time locally. The date must be six digits and a real calendar day in 2000–2099;
+the time is six digits (00–23 hours, 00–59 minutes and seconds), optionally followed by a dot
+and at least one decimal digit. Leap seconds are rejected. The NMEA buffer is bounded to
+82 characters including CRLF; `$` restarts reception and overflow drops the sentence.
+Only validated digits enter the 8.3 filename `YYYYMMDD.CSV`, avoiding long-filename settings
+and preventing the receiver from selecting an arbitrary path.
+
+`append_fix` opens the day's file with `"a"`, writes the original NMEA time and decimal
+coordinates rounded to microdegrees, and closes it before printing `(saved)`. Closing flushes
+stdio and synchronizes the FAT file. There is no cached open file across dates, no GGA-derived
+date carryover and no duplicate-sentence suppression. A write failure can leave a partial row;
+the example promises neither atomic rows under power loss nor recovery from a damaged FAT.
+
+The tests use the public `Board` API, with `board.gnss`, `board.sd_card`, `board.lines` and
+`board.console`. They prepare 32 MiB FAT images through `board.sd_card.image(...).build()`;
+`with_text(...)` seeds the append scenario. Every scenario inserts its card explicitly before
+power-on. `CardImage.read_text` and `list_files` inspect results with ordinary relative names.
+FAT commands and temporary-file ownership live in the library; there is no local card fixture
+or filesystem helper. The malformed-recording scenario still uses pytest's `tmp_path` for its
+application-specific input recording.
+Model scenarios boot on a whole UTC second, so the first fix arrives at 1 s and subsequent
+fixes at `FIX_INTERVAL = seconds(1)`. Their first read follows the expected number of intervals
+plus `WRITE_MARGIN = seconds(0.5)` for UART reception and closing the FAT row. Later waits add
+whole intervals, preserving the margin before the next epoch. This is a fixed processing budget,
+not a wait until the contents happen to match: exact row counts and deadlines remain assertions.
+`board.wait` stops at those chosen times before mtools reads the image. Exact row counts catch double logging of RMC/GGA;
+pre-existing rows catch truncation. The rollover tests check the first file both before and
+after midnight. The empty-slot test supplies a fix after the mount has failed, observes two
+distinct later timestamps and requires continuous error-pin history between them.
+`next_unsaved_fix_time` encapsulates the console pattern, waits at most two fix intervals for
+an unsaved fix, and returns its UTC `datetime`; the scenario compares dates and ordering.
+The malformed-input scenario keeps its raw NMEA bytes visible, including deliberately broken
+checksums. `write_gnss_recording` packages them into a recording without modifying the bytes;
+the scenario specifies the first send time and spacing in units, then waits until the last
+sentence's scheduled time plus the same write margin.
+
+## Documentation and builder checks
+
 `scripts/check-docs.py` owns `examples/` through F24; Python test files under each example's
 `tests/` are exempt just like the root suite. `tests/test_check_docs.py` checks both behaviours.
 `tests/test_firmware_build.py` exercises example discovery, refusal of unknown names, container
