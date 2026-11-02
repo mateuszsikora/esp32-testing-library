@@ -165,6 +165,10 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The SPP peer opens its channel to one device, on a link that device authenticated](harness.md#the-spp-peer-opens-its-channel-to-one-device-on-a-link-that-device-authenticated) | `harness.md` | decided (#33) |
 | [A bt fixture, an HCI tap and a replayed peer are postponed](harness.md#a-bt-fixture-an-hci-tap-and-a-replayed-peer-are-postponed) | `harness.md` | postponed (#33) |
 | [bumble is a dependency of esp32tl, pinned exactly](harness.md#bumble-is-a-dependency-of-esp32tl-pinned-exactly) | `harness.md` | decided (#33) |
+| [The modem drives RI through Lines and observes PWRKEY through it](harness.md#the-modem-drives-ri-through-lines-and-observes-pwrkey-through-it) | `harness.md` | decided (#29) |
+| [The modem begins powered and registered and keeps every AT command](harness.md#the-modem-begins-powered-and-registered-and-keeps-every-at-command) | `harness.md` | decided (#29) |
+| [The modem data peer and realistic escape timing wait for network integration](harness.md#the-modem-data-peer-and-realistic-escape-timing-wait-for-network-integration) | `harness.md` | postponed (#30) |
+| [NVS generation treats every key and namespace literally](harness.md#nvs-generation-treats-every-key-and-namespace-literally) | `harness.md` | decided (#70) |
 | [Request answers wrap independently of the unprompted timeline](harness.md#request-answers-wrap-independently-of-the-unprompted-timeline) | `harness.md` | decided (#20) |
 | [Replay detects protocols from requests and leaves pure streams passive](harness.md#replay-detects-protocols-from-requests-and-leaves-pure-streams-passive) | `harness.md` | decided (#20) |
 | [AT separators end before the response and prompts belong at line boundaries](harness.md#at-separators-end-before-the-response-and-prompts-belong-at-line-boundaries) | `harness.md` | decided (#20) |

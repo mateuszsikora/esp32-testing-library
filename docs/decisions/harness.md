@@ -1083,8 +1083,9 @@ waiting on the board's clock, then drives the line there, so `lines.drive` takes
 input reaches the link but from an interface. Two interfaces on one line are refused, and so is an
 input on a pin of another interface's, so a model that drives a profile's line, the modem's RI
 (#29), cannot be an interface beside `Lines`: either `Lines` takes inputs scheduled ahead from the
-model, with a `quiet_until` of its own, or the backend leaves the model's lines out of `Lines`. #29
-decides which.
+model, with a `quiet_until` of its own, or the backend leaves the model's lines out of `Lines`.
+#29 uses the first arrangement: see
+[the modem drives RI through Lines](#the-modem-drives-ri-through-lines-and-observes-pwrkey-through-it).
 
 **Rejected:** keeping `Timeline` for the lines, because it would be a second path for inputs that
 one interface uses, and its errors would name a scenario that no longer exists; and `at=` on
@@ -1299,6 +1300,104 @@ tests, and checking whether each of those is still needed.
 **Rejected:** an optional extra, because the Bluetooth fixture will be the plugin's and the plugin
 has no optional dependencies; and a compatible release, `~=0.0.236`, which admits every 0.0.x.
 
+## The modem drives RI through Lines and observes PWRKEY through it
+
+Status: decided (#29)
+
+`Lines` remains the single GPIO interface on the link. The modem model reserves RI as its output,
+observes firmware PWRKEY changes through callbacks and queues GPIO responses through
+`Lines.model_drive`. These stay in Lines until due, with `quiet_until` bounding the next turn;
+a new model change replaces a pending one on the same pin. Sending future GPIO changes straight
+to the runner was rejected because a test can remove power before the planned response and must
+be able to cancel it. The lines fixture retains every line for reading and event inspection,
+but rejects test drive/release of a model-owned output. Model changes carry `by="model"`.
+Callbacks run outside the line lock. A model selects the minimum response latency of `Lines`,
+1 ms for the modem, so a PWRKEY edge cannot arrive too late to schedule RI.
+
+**Rejected:** excluding model pins from `Lines`, because requesting the modem would then change
+which lines the test can inspect; and letting two interfaces own RI, which BoardLink forbids.
+No separate scenario or wall clock is introduced.
+
+## The modem begins powered and registered and keeps every AT command
+
+Status: decided (#29)
+
+A first model call selects an initially powered, registered modem with -73 dBm signal and echo
+off, matching the spike's immediately useful AT peer. `power_off` selects an initially off modem
+when firmware must start it with PWRKEY. Power pulses use the profile's ESP32-pad active level
+and separate on/off thresholds: high at the ESP32 pad, 50 ms and 2500 ms. The polarity comes
+from LilyGO's ATdebug example; SIMCom's Hardware Design V1.03, tables 10–11, gives 50 ms as the
+typical on pulse and 2.5 s as the minimum off pulse
+([sources](../features/modem-user.md#pwrkey-and-reporting)).
+The model uses 50 ms as a threshold, not as a claimed manufacturer-guaranteed minimum. Using
+LilyGO's nominal 100/3000 ms delays as thresholds was rejected: a tick-based delay
+can end nearly one tick early, so unmodified example firmware would fail to start or stop the
+model. The validation firmware uses those nominal delays without adding a tick. The pulse
+is evaluated at release; the model has no boot delay. Unknown AT commands get `OK` and are marked
+as fallbacks in the complete, timestamped command report, so the subset can grow from firmware.
+Noncommands, including command-mode `+++`, never get `OK`.
+
+**Rejected:** failing unknown AT commands by default, because the spike showed that a permissive
+peer can run firmware whose modem initialization includes unrelated settings; and relying on the
+rolling wire log for the command list, because earlier setup commands would disappear.
+
+## The modem data peer and realistic escape timing wait for network integration
+
+Status: postponed (#30)
+
+This AT-only model accepts an optional `Source` as its data peer, but creates no PPP or host
+network. Without one, dial still returns `CONNECT` and data bytes are retained without answers.
+The validation firmware exercises dial and escape without a network. Registration and supply
+loss end data mode silently, without an unsolicited `NO CARRIER`; disconnect notification is
+left with the peer lifecycle in #30 and documented as a current limitation. Resetting the eventual
+PPP peer belongs with its lifecycle in #30.
+
+`+++` escapes across any UART chunk boundaries, without guard-time enforcement; one or two
+trailing pluses wait for the next byte. A timed escape recognizer, unsolicited registration
+notifications, realistic boot/shutdown delays (including `Toff-on` and `Ton(uart)`) and detailed
+APN/operator configuration wait until validation firmware needs them. Commands accepted without
+simulating their settings and unknown fallbacks are documented, so they do not imply a complete
+cellular modem.
+
+## NVS generation treats every key and namespace literally
+
+Status: decided (#70)
+
+`board.nvs()` uses `esp-idf-nvs-partition-gen`'s `nvs_open` and the `NVS.write_namespace` and
+`NVS.write_entry` methods directly. The dependency is pinned exactly; upgrades must verify
+literal names, actual values, the complete entry set and deterministic image bytes. The API
+takes the usable size excluding the final reserved page and adds that page when the writer
+closes.
+
+The adapter validates values and passes strings as `string`, bytes as `binary` and integers
+with their explicit width directly to the writer, without CSV or temporary files. This
+preserves CRLF, multiline certificates and lines beginning with `#`, and supports blobs larger
+than 64 KiB whenever the NVS partition has room. A successful second call for a partition
+replaces its contents; failed validation or generation leaves the preceding image intact.
+
+Names reach the pinned generator as `_NvsKey`, a private `str` subclass whose length is its
+UTF-8 byte count. Version 0.3.0's primitive and variable-length writers use `len(key)` to size
+a bytearray slice receiving `key.encode()`. Ordinary Unicode strings can enlarge the entry
+header, corrupt neighbours and extend the final page. The adapter preserves the original
+text, UTF-8 bytes and namespace identity while making that slice length correct. Output-size
+validation remains mandatory; tests independently check entry contents and CRCs at page
+boundaries.
+
+**Rejected:** the generator's CLI and module-level `write_entry` wrapper. In both 0.1.9 and
+0.3.0 they interpret names such as `sta.ssid` and `sta.pswd` even in a namespace called `config`,
+write temporary file paths instead of string contents, and add unrequested Wi-Fi keys. They
+also interpret namespace names as keys before checking the CSV row type. Inlining strings
+would not prevent the extra keys, and the CLI filters comment-looking lines before CSV
+parsing. An open dependency range could silently restore these transformations. Implicitly
+merging successive calls is also rejected: each call describes a whole partition and must not
+retain keys absent from the new configuration.
+
+Retaining intermediate CSV is rejected: its default 131072-character field limit rejects a
+hex-encoded blob above 64 KiB even when it fits in NVS. Raising a process-global CSV limit
+would only preserve unnecessary serialisation and shared mutable state. Rejecting non-ASCII
+names would narrow the promised UTF-8 API; copying the generator's page encoder or patching
+its global classes would carry more code and affect other callers. The length adapter is
+local to the names passed to this writer and is rechecked when upgrading the pinned package.
 
 ## Request answers wrap independently of the unprompted timeline
 

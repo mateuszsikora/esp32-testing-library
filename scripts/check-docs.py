@@ -169,11 +169,10 @@ FEATURES = [
         "Taps or the run report changed (what a tap writes, what the report shows):"
         " update docs/features/run-report-*.md",
     ),
-    # The units and every device model: the models are named after their device and share the
-    # units, so one pair of documents owns them until a model needs a pair of its own.
+    # The modem has its own feature documents (F19); the other models share units (F17).
     Rule(
         "F17",
-        r"^esp32tl/(units\.py|sources/model/)",
+        r"^esp32tl/(units\.py|sources/model/(?!modem\.py$))",
         r"^docs/features/models-",
         "Models or units changed (quantities, the GNSS receiver, its sentences):"
         " update docs/features/models-*.md",
@@ -184,6 +183,19 @@ FEATURES = [
         r"^docs/features/bluetooth-peer-",
         "Bluetooth peer changed (the air's clock, the controller, the SPP peer):"
         " update docs/features/bluetooth-peer-*.md",
+    ),
+    Rule(
+        "F19",
+        r"^esp32tl/sources/model/modem\.py$",
+        r"^docs/features/modem-",
+        "Modem model changed (AT dialogue, power, registration): update docs/features/modem-*.md",
+    ),
+    Rule(
+        "F20",
+        r"^esp32tl/flash\.py$",
+        r"^docs/features/flash-contents-",
+        "Flash contents changed (partition table, NVS types and generation):"
+        " update docs/features/flash-contents-*.md",
     ),
     Rule(
         "F21",

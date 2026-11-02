@@ -45,8 +45,9 @@ A recording, [version 1](../recording-format.md):
 {"t": 1000000000, "dir": "in", "data": "JEdQR0dB..."}
 ```
 
-- `source` is what was at the far end: `replay`, `model:gnss` for the GNSS receiver the test
-  described ([models and units](models-user.md)), or `none` for a route the test gave nothing.
+- `source` is what was at the far end: `replay`, `model:modem` for the modem, `model:gnss` for the
+  GNSS receiver the test described ([models and units](models-user.md)), or `none` for a route
+  the test gave nothing.
 - `clock` is the backend's, `emulated-fifo-write`: times are the board's nanoseconds since
   power-on.
 - `app_sha256` is the SHA-256 of the app image the run flashed, the file `flasher_args.json`
@@ -116,6 +117,13 @@ its steps ([pytest plugin](pytest-plugin-user.md#the-fixtures)).
 
 A test that passed gets the `routes:` lines and the slot's, without the run; `pytest -rA` shows
 them.
+
+### Modem command history
+
+A modem model keeps a complete command history outside the rolling wire log. See
+[modem reporting](modem-user.md#pwrkey-and-reporting) for its fields and the memory and JUnit size
+cost of long runs. The run log also shows `<line> in`, such as `modem.ri in`, for model-driven
+GPIO changes when they reach the link. A pending change cancelled by the test is not logged.
 
 ## When the test gets it wrong
 

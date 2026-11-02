@@ -75,6 +75,12 @@ What the receiver can be told, and the units, are in [models and units](models-u
   test runs (`Interrupted: 1 error during collection`, exit code 2), unless pytest runs with
   `--continue-on-collection-errors`.
 
+Before `board.power_on()`, `board.nvs({"config": {"broker_host": "broker.test"}})`
+can replace a named NVS partition from the build's table. Integer values require a width,
+for example `u16(8883)` from `esp32tl.flash`. See [flash contents](flash-contents-user.md).
+A test that supplies NVS and passes without calling `board.power_on()` fails teardown:
+it ran no firmware.
+
 What the backend needs besides the build, the runner and the ROM ELF, is in
 [the esp32sim backend](esp32sim-backend-user.md#what-it-needs).
 
@@ -285,6 +291,19 @@ def test_the_firmware_follows_ri_and_drives_pwrkey(board, lines, console):
 
 `NeverHappened`, `RunEnded`, `BoardOff` and `SourceError` are in `esp32tl.interfaces`, `LineEvent`
 in `esp32tl.interfaces.lines`.
+
+### The modem fixture
+
+`modem` is the profile's `uart.modem`, available on `lilygo-t-a7670g-r2`. Select its model with
+`modem.signal(dbm=-73)` or another model call before `board.power_on()`, or select a recording with
+`modem.replay(path)`. `modem.tap(path)` records both directions. A selected model responds to AT,
+reads PWRKEY and drives RI through `lines`; the test can inspect all GPIO events, but cannot drive
+or release the model's RI. Model changes use `by="model"` in `lines.events()`; `level()` continues
+to read only the firmware side. The model adds a 1 ms response latency to the lines interface.
+
+See [the modem guide](modem-user.md) for signal, registration, power, command history and limits.
+There is no default modem route on `esp32-devkitc`: requesting the fixture there fails with
+`the board profile esp32-devkitc has no uart.modem; its interfaces are console, uart.gnss, sd_card`.
 
 ## The test's timeout
 

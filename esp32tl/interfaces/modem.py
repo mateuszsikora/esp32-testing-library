@@ -1,0 +1,138 @@
+"""The profile's uart.modem route, a replay or a cellular modem described by the test."""
+
+from collections.abc import Callable, Mapping
+from pathlib import Path
+
+from esp32tl.boards import Line
+from esp32tl.boards.capabilities import Request
+from esp32tl.interfaces import SourceError
+from esp32tl.interfaces.lines import Lines
+from esp32tl.interfaces.uart import Uart
+from esp32tl.link.boardlink import Wire
+from esp32tl.report import RunLog, board_time
+from esp32tl.sources.model.modem import LATENCY_NS, Command
+from esp32tl.sources.model.modem import Modem as ModemModel
+
+
+class Modem(Uart):
+    """The first successful model call before power-on selects the model; later calls change it
+    on the test's clock. Merely requesting the fixture keeps the route silent."""
+
+    def __init__(
+        self,
+        name: str,
+        wire: Wire,
+        *,
+        clock: str,
+        directory: Path,
+        now: Callable[[], int],
+        lines: Lines,
+        pins: Mapping[str, Line],
+        asked: Callable[[Request], None] = lambda request: None,
+        log: RunLog | None = None,
+        files: dict[Path, tuple[str, str]] | None = None,
+    ) -> None:
+        super().__init__(
+            name, wire, clock=clock, directory=directory, asked=asked, log=log, files=files
+        )
+        self._now = now
+        self._lines = lines
+        self._pins = pins
+
+    def signal(self, *, dbm: float) -> None:
+        """Set the measured signal strength in dBm for subsequent CSQ queries."""
+        self._tell(lambda model: model.signal(dbm=dbm), f"signal(dbm={dbm!r})")
+
+    def lose_registration(self) -> None:
+        """Remove coverage and end data mode silently; queries report status 0."""
+        self._tell(ModemModel.lose_registration, "lose_registration()")
+
+    def register(self) -> None:
+        """Restore coverage; register when powered with functionality 1."""
+        self._tell(ModemModel.register, "register()")
+
+    def power_on(self) -> None:
+        """Restore supply and start the modem in command mode."""
+        self._tell(ModemModel.power_on, "power_on()")
+
+    def power_off(self) -> None:
+        """Switch off with the supply still available for PWRKEY."""
+        self._tell(ModemModel.power_off, "power_off()")
+
+    def lose_power(self) -> None:
+        """Remove supply, silence the UART and prevent PWRKEY from starting the modem."""
+        self._tell(ModemModel.lose_power, "lose_power()")
+
+    def restore_power(self) -> None:
+        """Restore supply without starting an off modem."""
+        self._tell(ModemModel.restore_power, "restore_power()")
+
+    @property
+    def powered(self) -> bool:
+        """Whether the selected model is powered."""
+        return self.model().powered
+
+    @property
+    def registered(self) -> bool:
+        """Whether the selected model is registered."""
+        return self.model().registered
+
+    @property
+    def data_mode(self) -> bool:
+        """Whether the selected model is in data mode."""
+        return self.model().data_mode
+
+    @property
+    def commands(self) -> list[Command]:
+        """Every completed AT command and reply, as a snapshot."""
+        return self.model().commands
+
+    def model(self) -> ModemModel:
+        """The selected model; reading this never selects a source."""
+        if isinstance(self.source, ModemModel):
+            return self.source
+        raise SourceError(f"{self.name} has no modem model: select it before board.power_on()")
+
+    def recorded_source(self) -> str:
+        return "model:modem" if self.source_kind == "model" else super().recorded_source()
+
+    def command_report(self) -> list[str]:
+        """Every AT command with its time and fallback marker for the report."""
+        if not isinstance(self.source, ModemModel):
+            return []
+        return ["modem AT commands:"] + [
+            f"  {board_time(c.at.ns)}  {c.text!r}" + (" (fallback OK)" if c.fallback else "")
+            for c in self.commands
+        ]
+
+    def _tell(self, call: Callable[[ModemModel], None], step: str) -> None:
+        if isinstance(self.source, ModemModel):
+            call(self.source)
+            if self.log is not None:
+                self.log.test(self._now(), f"{self.name}.{step}")
+            return
+        self._ask("model")
+        key = self._pins.get("pwrkey")
+        if key is None or key.on_ms is None or "ri" not in self._pins:
+            raise SourceError(
+                f"{self.name}: the modem model needs pwrkey pulse timing and ri in the profile"
+            )
+        # Apply and validate the first call without touching the lines on failure.
+        model = ModemModel(self._now, pwrkey=key)
+        call(model)
+        self._give(
+            model,
+            "model",
+            "a cellular modem",
+            step=f"{self.name}.{step}",
+            prepare=lambda: self._lines.attach(
+                self.name,
+                output="modem.ri",
+                watch="modem.pwrkey",
+                driven=model.driven,
+                latency=LATENCY_NS,
+            ),
+        )
+        model.connect_power(
+            lambda t, powered: self._lines.model_drive(self.name, "modem.ri", t, int(powered))
+        )

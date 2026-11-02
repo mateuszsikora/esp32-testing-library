@@ -60,6 +60,10 @@ class Line:
 
     pin: int
     pull: Literal["up", "down"] | None = None
+    # Optional pulse polarity (0 or 1) and on/off thresholds in milliseconds at the ESP32 pad.
+    active: int | None = None
+    on_ms: int | None = None
+    off_ms: int | None = None
 
 
 @dataclass(frozen=True)
@@ -231,11 +235,20 @@ class Reader:
             if not isinstance(line, dict):
                 lines[role] = Line(self.gpio(where, line))
                 continue
-            self.keys(where, line, {"pin"}, {"pull"})
+            self.keys(where, line, {"pin"}, {"pull", "active", "on_ms", "off_ms"})
             pull = line.get("pull")
             if pull is not None and pull not in PULLS:
                 raise self.fail(f"{where}.pull", f"{pull!r} is not one of {', '.join(PULLS)}")
-            lines[role] = Line(self.gpio(f"{where}.pin", line["pin"]), pull)
+            timing = {"active", "on_ms", "off_ms"} & line.keys()
+            if timing and timing != {"active", "on_ms", "off_ms"}:
+                raise self.fail(where, "pulse timing needs active, on_ms and off_ms together")
+            lines[role] = Line(
+                self.gpio(f"{where}.pin", line["pin"], output=bool(timing)),
+                pull,
+                self.integer(f"{where}.active", line["active"], 0, 1) if timing else None,
+                self.integer(f"{where}.on_ms", line["on_ms"], 1) if timing else None,
+                self.integer(f"{where}.off_ms", line["off_ms"], 1) if timing else None,
+            )
         return lines
 
     def distinct(

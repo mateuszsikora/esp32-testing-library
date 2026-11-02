@@ -55,6 +55,16 @@ starting anything:
    waits; `_printed` appends each console message's bytes to `console_output`, feeds them to
    `console_lines` and hands them to `log.console`, in the link's thread.
 
+**`Esp32Sim.nvs(namespaces, partition="nvs")`** reads the build's `partition-table.bin`
+from `app.flash_files`, resolves the name and generates a whole NVS image through
+`esp32tl.flash`. It writes `nvs-<offset in hex>.bin` beside `dut.logfile`, retaining it after
+teardown. `_nvs` keeps one `(offset, path)` per partition; a later successful call replaces it.
+`runner_command(..., extra_flash=())` appends those `--flash-at` arguments after every build file,
+so the test overrides any NVS image the build supplies. The call adds
+`board.nvs(partition='NAME')` to the run log, without values, and `set_up()` includes
+`the NVS partition 'NAME'` so a passing test that never powers on fails teardown.
+[Flash contents](flash-contents-technical.md) owns the formats and failures.
+
 **`Esp32Sim.power_on(utc=None)`** raises `BoardOff` when the runner has started already, and a
 `ValueError` for a `utc` that is not a `datetime` with a timezone; it keeps `utc` converted to UTC,
 or `POWER_ON_UTC`, for `Esp32Sim.utc` and the GNSS receiver's dates, and logs
@@ -234,6 +244,12 @@ UART route of the profile, `  {interface}: {source}; {bytes}{tap}`: `{source}` i
 for a test that failed. `Esp32Sim.properties()` is `link.properties()` with `routes`, by
 interface: `source` (the kind, or `None`), `detail` (what the source was made from, as the test
 named it), `bytes_in`, `bytes_out` and `tap` (the path, or `None`).
+
+### Modem route
+
+The backend builds `Lines` before its UARTs and supplies it, the held clock and `lines.modem`
+timing to `interfaces.modem.Modem` on `uart.modem`. A replay does not claim RI. Model selection,
+GPIO responses and the command report are specified in [modem-technical.md](modem-technical.md).
 
 ## Schema
 

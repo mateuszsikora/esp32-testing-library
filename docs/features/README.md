@@ -6,7 +6,7 @@ templates.
 
 | Feature | User | Technical | Code |
 |---|---|---|---|
-| pytest plugin: the `board`, `console`, `gnss` and `lines` fixtures, the `app_path` marker, `--esp32tl-backend` | [user](pytest-plugin-user.md) | [technical](pytest-plugin-technical.md) | `esp32tl/pytest_plugin.py`, `esp32tl/interfaces/` |
+| pytest plugin: the `board`, `console`, `gnss`, `modem`, `lines` and `sd_card` fixtures, the `app_path` marker, `--esp32tl-backend` | [user](pytest-plugin-user.md) | [technical](pytest-plugin-technical.md) | `esp32tl/pytest_plugin.py`, `esp32tl/interfaces/` |
 | `esp32sim` backend: the runner under pytest-embedded, on the emulated clock | [user](esp32sim-backend-user.md) | [technical](esp32sim-backend-technical.md) | `esp32tl/backends/` |
 | `esp32tl` command | [user](cli-user.md) | | `esp32tl/cli.py`, `esp32tl/__init__.py` |
 | Runner: `esp32tl-runner`, esp32sim with the harness attached | [user](runner-user.md) | [technical](runner-technical.md) | `runner/src/`, `runner/Cargo.toml` |
@@ -17,8 +17,10 @@ templates.
 | Replay: a recording at the far end of an interface, `gnss.replay(path)` | [user](replay-user.md) | [technical](replay-technical.md) | `esp32tl/sources/replay.py` |
 | Matching engine: AT, PMTK and UBX requests, recorded answers and timing | [user](matching-user.md) | [technical](matching-technical.md) | `esp32tl/matching.py` |
 | Taps and the run report: `gnss.tap(path)`, the run on the board's clock in a failing test's report | [user](run-report-user.md) | [technical](run-report-technical.md) | `esp32tl/tap.py`, `esp32tl/report.py` |
-| Models and units: the GNSS receiver a test describes, `gnss.fix(at=...)`, and quantities with their unit | [user](models-user.md) | [technical](models-technical.md) | `esp32tl/units.py`, `esp32tl/sources/model/` |
+| Models and units: the GNSS receiver a test describes, `gnss.fix(at=...)`, and quantities with their unit | [user](models-user.md) | [technical](models-technical.md) | `esp32tl/units.py`, `esp32tl/sources/model/` except `modem.py` |
 | Bluetooth peer: a Classic device with SPP on Bumble's virtual link, answered by a model on the board's clock | [user](bluetooth-peer-user.md) | [technical](bluetooth-peer-technical.md) | `esp32tl/bluetooth/` |
+| Cellular modem: AT dialogue, signal, registration, PWRKEY and RI | [user](modem-user.md) | [technical](modem-technical.md) | `esp32tl/sources/model/modem.py`, `esp32tl/interfaces/modem.py` |
+| Flash contents: `board.nvs()` and typed integers, by partition name | [user](flash-contents-user.md) | [technical](flash-contents-technical.md) | `esp32tl/flash.py` |
 
 ## Ownership map
 
@@ -51,8 +53,10 @@ GitHub Action, a pre-commit hook or a Python dependency.
 | F14 | `^esp32tl/recording\.py$` | `^docs/recording-format\.md$` | Recording format changed: docs/recording-format.md is its specification; update it, and its version if the format changes |
 | F15 | `^esp32tl/sources/replay\.py$` | `^docs/features/replay-` | Replay changed (what it replays, when, what it refuses): update docs/features/replay-*.md |
 | F16 | `^esp32tl/(tap\|report)\.py$` | `^docs/features/run-report-` | Taps or the run report changed (what a tap writes, what the report shows): update docs/features/run-report-*.md |
-| F17 | `^esp32tl/(units\.py\|sources/model/)` | `^docs/features/models-` | Models or units changed (quantities, the GNSS receiver, its sentences): update docs/features/models-*.md |
+| F17 | `^esp32tl/(units\.py\|sources/model/(?!modem\.py$))` | `^docs/features/models-` | Models or units changed (quantities, the GNSS receiver, its sentences): update docs/features/models-*.md |
 | F18 | `^esp32tl/bluetooth/` | `^docs/features/bluetooth-peer-` | Bluetooth peer changed (the air's clock, the controller, the SPP peer): update docs/features/bluetooth-peer-*.md |
+| F19 | `^esp32tl/sources/model/modem\.py$` | `^docs/features/modem-` | Modem model changed (AT dialogue, power, registration): update docs/features/modem-*.md |
+| F20 | `^esp32tl/flash\.py$` | `^docs/features/flash-contents-` | Flash contents changed (partition table, NVS types and generation): update docs/features/flash-contents-*.md |
 | F21 | `^esp32tl/matching\.py$` | `^docs/features/matching-` | Matching engine changed (protocols, requests, timing): update docs/features/matching-*.md |
 | C1 | `^\.github/workflows/` | `^docs/cicd\.md$` | CI workflow changed: update docs/cicd.md |
 | C2 | `^Makefile$` | `^docs/guides/development\.md$` | Makefile changed: update the make targets in docs/guides/development.md |
@@ -71,8 +75,8 @@ GitHub Action, a pre-commit hook or a Python dependency.
 Where one directory has several owners, the map lists its files by name: `scripts/` (C4, C5 for
 the development guide, C9, C10 for the documentation guide, C12 for the validation firmware, C13
 for the testing guide) and the runner's top level (F7 for `Cargo.toml`, C6 for the toolchain;
-`Cargo.lock` is nobody's), and `esp32tl/sources/` (F15 for `replay.py`, F17 for `model/`; its other
-files are F12's until they have documents of their own).
+`Cargo.lock` is nobody's), and `esp32tl/sources/` (F15 for `replay.py`, F17 for `model/` except
+`modem.py`, F19 for that modem; its other files are F12's until they have documents of their own).
 `runner/src/` instead carves the protocol files out of F6, so that a new runner file is owned from
 its first line. `pyproject.toml` has several owners in one file: C7 accepts any of their
 documents, and review checks the choice.

@@ -1,5 +1,6 @@
 """Board profiles and the capability declaration (plan §4.5): plain pytest, no emulator."""
 
+import re
 import tomllib
 from pathlib import Path
 
@@ -51,7 +52,12 @@ def test_the_lilygo_profile_holds_the_specification_and_lilygo_s_documentation()
                 "modem": {"port": 1, "tx": 26, "rx": 27, "baud": 115200},
                 "gnss": {"port": 2, "tx": 21, "rx": 22, "baud": 9600},
             },
-            "lines": {"modem": {"pwrkey": 4, "ri": {"pin": 33, "pull": "down"}}},
+            "lines": {
+                "modem": {
+                    "pwrkey": {"pin": 4, "active": 1, "on_ms": 50, "off_ms": 2500},
+                    "ri": {"pin": 33, "pull": "down"},
+                }
+            },
         }
     profile = boards.profile("lilygo-t-a7670g-r2")
     assert (profile.flash_mb, profile.psram_mb) == (4, 4)
@@ -59,7 +65,9 @@ def test_the_lilygo_profile_holds_the_specification_and_lilygo_s_documentation()
         "modem": UartRoute(port=1, tx=26, rx=27, baud=115200),
         "gnss": UartRoute(port=2, tx=21, rx=22, baud=9600),
     }
-    assert profile.lines == {"modem": {"pwrkey": Line(4), "ri": Line(33, "down")}}
+    assert profile.lines == {
+        "modem": {"pwrkey": Line(4, active=1, on_ms=50, off_ms=2500), "ri": Line(33, "down")}
+    }
     assert profile.interfaces == ["console", "uart.modem", "uart.gnss", "lines.modem"]
 
 
@@ -334,3 +342,33 @@ def test_a_declaration_that_breaks_the_schema_is_refused(
     with pytest.raises(CapabilityError) as error:
         capabilities.load(tmp_path / "c.toml")
     assert str(error.value) == message
+
+
+@pytest.mark.parametrize(
+    ("timing", "message"),
+    [
+        ("active = 1", "pulse timing needs active, on_ms and off_ms together"),
+        ("active = 2, on_ms = 100, off_ms = 3000", "active: 2 is out of range"),
+        ("active = true, on_ms = 100, off_ms = 3000", "active: True is not an integer"),
+        ("active = 1, on_ms = 0, off_ms = 3000", "on_ms: 0 is out of range"),
+        ("active = 1, on_ms = 100, off_ms = 3.0", "off_ms: 3.0 is not an integer"),
+    ],
+)
+def test_pulse_timing_is_checked_as_a_complete_output_line(
+    tmp_path: Path,
+    timing: str,
+    message: str,
+) -> None:
+    path = tmp_path / "x.toml"
+    path.write_text(GOOD.replace("pwrkey = 12", f"pwrkey = {{pin = 12, {timing}}}"))
+    with pytest.raises(ProfileError, match=re.escape(message)):
+        boards.load(path)
+
+
+def test_a_timed_line_must_be_output_capable(tmp_path: Path) -> None:
+    path = tmp_path / "x.toml"
+    path.write_text(
+        GOOD.replace("pwrkey = 12", "pwrkey = {pin = 34, active = 0, on_ms = 100, off_ms = 3000}")
+    )
+    with pytest.raises(ProfileError, match="GPIO 34 is input only"):
+        boards.load(path)
