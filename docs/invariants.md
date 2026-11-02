@@ -733,7 +733,7 @@ that references to its number keep their meaning.
     malformed input. Empty input, an idle TCP connection, later fragments, application traffic
     and input after closure do not add attempts. Counts survive closure and new connections.
     Completed handshakes are counted once after server-side success, not on partial or failed
-    input. Saved TLS conditions observe these live cumulative counts, retain history after
+    input. Saved cumulative TLS conditions observe these live counts, retain history after
     closure/reset, reject boolean coercion and name the desired event in board timeouts.
     `tests/test_net_tls.py::test_tls_attempts_count_nonempty_input_once_per_connection`,
     `tests/test_net_tls.py::test_tls_mqtt_and_transcript`,
@@ -756,6 +756,26 @@ that references to its number keep their meaning.
     `tests/test_net_mqtt_policy.py::test_empty_id_rejection_precedes_policy_and_has_an_outcome`,
     `tests/test_net_mqtt_policy.py::test_internet_reset_keeps_the_policy_and_both_histories`,
     `tests/test_net_mqtt_policy.py::test_policy_errors_in_a_board_run_fail_the_link_naming_them`
+
+- **124.** MQTT next-event conditions capture append order at creation, exclude earlier events even
+    at equal timestamps, and repeatedly return the first matching record without consuming it.
+    Existing `message` / `connected` / `connection_attempt` names keep these semantics. History queries return the
+    first matching recorded event even after closure. A pre-armed publication condition sees
+    a response delivered in the same slice as CONNECT; a condition made after that slice does
+    not. Subscription conditions read current state and do not latch previous subscriptions.
+    All MQTT conditions name the expected event and reject boolean coercion before and after
+    a match.
+    `tests/test_net_mqtt.py::test_history_and_next_events_use_append_order_without_consuming`,
+    `tests/test_net_mqtt.py::test_subscription_condition_tracks_current_state_without_latching`,
+    `tests/test_net_mqtt.py::test_mqtt_conditions_are_named_and_reject_truth_testing`,
+    `tests/test_clock.py::test_mqtt_immediate_response_is_visible_after_waiting_for_connection`
+
+- **125.** TLS next-event conditions require a started/completed counter increment after construction.
+    Prior successes cannot satisfy them after closure or reset, and a failed new attempt does
+    not satisfy completion. Completion of a handshake already in progress does qualify.
+    Equal timestamps do not collapse events, polling consumes nothing, and cumulative queries
+    continue to reflect history. Next-event conditions name their scope and reject truth testing.
+    `tests/test_net_tls.py::test_next_tls_handshake_excludes_previous_success_across_reconnects`
 
 ## Explicit build selection
 

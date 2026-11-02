@@ -2011,3 +2011,28 @@ keep pytest and the CLI consistent and preserve the meaning of the default `buil
 Also rejected: falling back to another build, rebuilding, relocating artifacts or modifying
 sources, because a test or CI job must run exactly the artifact it selected. Pytest's raw
 `--build-dir` remains refused; allowing two competing selectors would obscure that selection.
+
+## Network event APIs name history queries and next-event conditions explicitly
+
+Status: decided (#108)
+
+MQTT exposes immediate `find_message` / `find_connection` history queries and callable
+`next_message` / `next_connection` conditions. The existing `message` / `connected` names keep
+their future-only semantics. `subscribed` continues to describe current subscription state.
+TLS retains cumulative `handshake_started` / `handshake_completed` properties and adds
+`next_handshake_started()` / `next_handshake_completed()` factories. MQTT conditions now name
+their expected event through `repr` and reject boolean coercion like TLS and report conditions.
+
+Next-event construction captures the relevant list length or counter, not a timestamp or the
+first polling time. Appends and counter increments order equal-time events. Polling consumes
+nothing and never moves the boundary; a new wait for another event needs a new condition.
+TLS completion means a completion event after construction, including an already-started
+handshake. Tests must arm conditions before the action that can produce their event. Immediate
+history queries find a fast publication even after waiting for its connection has returned.
+Application payload schemas stay in the consumer's adapters.
+
+**Rejected:** changing existing MQTT defaults to include history, which could silently satisfy
+reconnect waits with stale events; making every condition future-only, which loses useful
+current-state and cumulative queries. A public shared cursor is unnecessary for these scopes:
+explicit methods express them without requiring callers to compare timestamps, edit counters
+or manage cursor ownership across brokers and TLS listeners.

@@ -128,13 +128,25 @@ class Tls:
 
     @property
     def handshake_started(self) -> "_HandshakeCondition":
-        """A live condition: some connection has supplied nonempty TLS input."""
+        """A cumulative condition, including past connections with nonempty TLS input."""
         return _HandshakeCondition(self, completed=False)
 
     @property
     def handshake_completed(self) -> "_HandshakeCondition":
-        """A live condition: some connection has completed the server-side handshake."""
+        """A cumulative condition, including past server-side handshake completions."""
         return _HandshakeCondition(self, completed=True)
+
+    def next_handshake_started(self) -> "_HandshakeCondition":
+        """A non-consuming condition for a connection's first nonempty input after this call."""
+        return _HandshakeCondition(self, completed=False, after=self.handshakes_started)
+
+    def next_handshake_completed(self) -> "_HandshakeCondition":
+        """A non-consuming condition for a server-side completion after this call.
+
+        A handshake already in progress can satisfy it. Arm before triggering a reconnect
+        to exclude previous successes, including those at the same board timestamp.
+        """
+        return _HandshakeCondition(self, completed=True, after=self.handshakes_completed)
 
     def accept(
         self, peer: tuple[str, int], write: Callable[[bytes], None], close: Callable[[], None]
@@ -147,13 +159,16 @@ class Tls:
 class _HandshakeCondition:
     tls: Tls
     completed: bool
+    after: int | None = None
 
     def __call__(self) -> bool:
         count = self.tls.handshakes_completed if self.completed else self.tls.handshakes_started
-        return count > 0
+        return count > (self.after if self.after is not None else 0)
 
     def __repr__(self) -> str:
-        return "a TLS handshake to complete" if self.completed else "a TLS handshake to start"
+        event = "complete" if self.completed else "start"
+        scope = "a" if self.after is None else "the next"
+        return f"{scope} TLS handshake to {event}"
 
     def __bool__(self) -> bool:
         raise TypeError("call the TLS condition with (), or pass it to board.wait_until")
