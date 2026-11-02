@@ -82,7 +82,11 @@ date carryover and no duplicate-sentence suppression. A write failure can leave 
 the example promises neither atomic rows under power loss nor recovery from a damaged FAT.
 
 The tests use only public GNSS, board, SD and GPIO fixtures. Their local `card_image` fixture
-checks for mtools before inserting a 32 MiB image; it skips only tests requiring that image.
+checks for mtools and formats an empty 32 MiB image; it skips only tests requiring that image.
+It does not insert the card: each scenario calls `sd_card.insert(card_image)` before power-on.
+Local `write_file`, `read_file` and `list_files` helpers hide mtools arguments, temporary host
+files and the `::/` drive prefix. Scenarios use ordinary filenames and compare exact CSV text;
+these helpers belong to the example, not to the library's SD interface.
 `board.wait` stops at a quiet point between epochs before mtools reads the image, with the
 firmware's previous row already closed. Exact row counts catch double logging of RMC/GGA;
 pre-existing rows catch truncation. The rollover tests check the first file both before and
