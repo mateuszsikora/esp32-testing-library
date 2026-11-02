@@ -8,6 +8,10 @@ Small ESP-IDF applications tested through their wires with esp32tl. Each project
 - [SD data logger](sd_data_logger/): one CSV row per GNSS fix, one file per date on an SPI SD
   card, with a storage-error output. Start with [its tests](sd_data_logger/tests/test_logger.py).
 
+- [Position tracker](position_tracker/): GNSS positions and NTP time sent through a cellular
+  modem to MQTT over TLS, with the broker CA in NVS. Start with
+  [its tests](position_tracker/tests/test_tracker.py).
+
 See the [examples guide](../docs/features/examples-user.md) for wiring, configuration and commands.
 
 ```sh

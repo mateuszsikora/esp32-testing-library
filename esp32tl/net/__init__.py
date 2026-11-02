@@ -2,7 +2,7 @@
 
 from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import cast
+from typing import cast, overload
 
 from esp32tl.link.boardlink import Output
 from esp32tl.net.dns import Dns
@@ -62,16 +62,35 @@ class Internet:
             lines.append(f"  {board_time(cast(int, event['t_ns']))}  {detail}")
         return lines
 
+    @overload
+    def listen(self, port: int, service: StreamService, *, tls: CertificateAuthority) -> Tls: ...
+
+    @overload
+    def listen(self, port: int, service: StreamService, *, tls: None = None) -> None: ...
+
+    @overload
+    def listen(
+        self, port: int, service: StreamService, *, tls: CertificateAuthority | None
+    ) -> Tls | None: ...
+
     def listen(
         self, port: int, service: StreamService, *, tls: CertificateAuthority | None = None
-    ) -> None:
-        """Install a TCP service on any destination's port; optionally terminate TLS first."""
+    ) -> Tls | None:
+        """Install a TCP service, returning its TLS listener when `tls` is supplied.
+
+        Plain listeners return None. The port applies to every destination address.
+        """
         if not 1 <= port <= 65535:
             raise ValueError("TCP port must be between 1 and 65535")
         if port in self.ip.tcp:
             raise ValueError(f"TCP port {port} already has a service")
         traced = _Traced(self, port, service)
-        self.ip.tcp[port] = Tls(traced, tls, self.log) if tls is not None else traced
+        if tls is not None:
+            listener = Tls(traced, tls, self.log)
+            self.ip.tcp[port] = listener
+            return listener
+        self.ip.tcp[port] = traced
+        return None
 
     def _peer(self) -> Ppp:
         return Ppp(

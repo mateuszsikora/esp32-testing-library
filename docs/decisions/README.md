@@ -75,6 +75,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The SD card is validated on ESP-IDF's sdspi example, unmodified](firmware.md#the-sd-card-is-validated-on-esp-idfs-sdspi-example-unmodified) | `firmware.md` | decided (#32) |
 | [Examples share the pinned builder and have their own assembly profiles](firmware.md#examples-share-the-pinned-builder-and-have-their-own-assembly-profiles) | `firmware.md` | decided (#71) |
 | [The SD logger uses each RMC's date and closes every appended row](firmware.md#the-sd-logger-uses-each-rmcs-date-and-closes-every-appended-row) | `firmware.md` | decided (#73) |
+| [The position tracker reuses the pinned modem component and reports without a fix](firmware.md#the-position-tracker-reuses-the-pinned-modem-component-and-reports-without-a-fix) | `firmware.md` | decided (#72) |
 
 ## The esp32tl package and its pytest plugin
 
@@ -190,6 +191,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Output handles provide live named conditions without changing GPIO ownership](harness.md#output-handles-provide-live-named-conditions-without-changing-gpio-ownership) | `harness.md` | decided (#71) |
 | [Board owns interfaces and SD image builders](harness.md#board-owns-interfaces-and-sd-image-builders) | `harness.md` | decided (#73) |
 | [Network selection stays explicit and FAT paths name one entry](harness.md#network-selection-stays-explicit-and-fat-paths-name-one-entry) | `harness.md` | decided (#73) |
+| [Network failure controls stay in the models and tracker reports stay in the example](harness.md#network-failure-controls-stay-in-the-models-and-tracker-reports-stay-in-the-example) | `harness.md` | decided (#72) |
 
 ## The runner crate and esp32sim
 

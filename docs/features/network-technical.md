@@ -38,6 +38,9 @@ and evaluates broker keepalive deadlines; `quiet_until` bounds the next turn by 
 - `ntp.py`: accepts NTP v3/v4 client requests; returns a v4 stratum-1 server response. The
   origin timestamp copies the client's transmit field. Reference, receive and transmit stamps
   use world UTC plus emulated time, including fractions and the 32-bit NTP era wrap.
+  `go_silent` / `resume` toggle whether new datagrams receive replies, without changing the
+  UDP binding, the clock or already queued packets. `requests` continues to count replies only;
+  each state transition is logged once, and resuming never replays unanswered datagrams.
 - `mqtt.py`: incremental MQTT 3.1.1 parsing (up to 1 MiB per packet); CONNECT, QoS 0/1 PUBLISH,
   PUBACK, SUBSCRIBE/SUBACK, UNSUBSCRIBE/UNSUBACK, PING and DISCONNECT. Retained state belongs to
   the test's broker; subscriptions belong to a connection. Empty clean-session client IDs are
@@ -48,10 +51,22 @@ and evaluates broker keepalive deadlines; `quiet_until` bounds the next turn by 
   of disconnect, not the time of CONNECT. A replacement client ID closes the old connection.
   Session persistence and QoS 2 publication are unsupported; credentials are observable only.
 - `tls.py`: a generated RSA-2048 CA and server certificate, SHA-256 signatures, DNS/IP subject
-  alternative names, CA key usage and server extended key usage. Temporary key files are removed
+  alternative names, CA key usage and server extended key usage. Optional `server_not_before`
+  and `server_not_after` apply only to the leaf certificate; the CA retains its fixed validity.
+  Inputs must be timezone-aware, are normalized to UTC, and must form a forward interval;
+  validation happens before key generation. Temporary key files are removed
   after `SSLContext.load_cert_chain`. TLS uses `SSLObject` and two `MemoryBIO`s; plaintext reaches
   the inner service only after handshake completion. TLS errors close the connection and notify
-  the inner service once. No deterministic replacement for OpenSSL randomness is attempted (#68).
+  the inner service once. `Internet.listen(..., tls=ca)` returns the installed `Tls` object;
+  plain listeners return `None`. Its cumulative `handshakes_started` counter increments on the
+  first nonempty `on_data` per session, before TLS parsing. Empty input, TCP accept alone,
+  subsequent fragments and data after closure do not increment it. Invalid first input does.
+  `handshakes_completed` increments once when `SSLObject.do_handshake()` returns successfully,
+  before handing the plaintext stream to the inner service. Session closure and network reset
+  leave both counters intact. Callable `handshake_started` / `handshake_completed` properties
+  observe whether the corresponding live count is positive; they do not capture a future cursor.
+  Their representations name the desired event, and `__bool__` rejects unevaluated truth tests.
+  No deterministic replacement for OpenSSL randomness is attempted (#68).
 
 These are a lossless test network, not a general Internet stack. TCP congestion control, packet
 reassembly, retransmission, persistent MQTT sessions, MQTT QoS 2 and bridging to host services
@@ -88,7 +103,12 @@ relaxed. See [testing](../guides/testing.md#determinism).
 `test_net_tls.py` use handmade packets, independent checksum/framing calculations and a real TLS
 client in memory. They check malformed inputs, partial frames, flow control, sequence wrap,
 connection loss, keepalive, retained delivery, topic filters, Wills, UTC and certificate trust.
+NTP tests cover silence from startup, idempotent transitions and resumed replies using elapsed
+world time. A MemoryBIO handshake with verification disabled solely for certificate inspection
+checks independent leaf validity dates, UTC normalization and a signature from the unchanged CA;
+firmware tests enforce those dates against its NTP clock.
 `tests/test_modem_model.py` checks network selection, binary pluses, guarded escape, reset and the
 route-specific overflow policy. `tests/test_pppos_client.py` exercises unmodified firmware in
 both directions. `tests/test_determinism.py` includes plain PPP/MQTT with a raw tap and a TLS
-handshake with a plaintext transcript. Firmware TLS/NTP validation is #72's tracker test.
+handshake with a plaintext transcript. Firmware TLS/NTP validation lives in `examples/position_tracker/tests/test_tracker.py`,
+using NVS credentials and the same in-process services.

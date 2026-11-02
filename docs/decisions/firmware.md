@@ -284,3 +284,22 @@ a date to a sentence with none; deriving filenames from the ESP32 clock, which n
 and keeping a file open across fixes, which hides buffered rows from a test reading the card.
 The example uses the SD interface's existing boot-time insertion contract; hot-plug and retry
 behaviour remain outside its scope. It never formats an unmountable card.
+
+## The position tracker reuses the pinned modem component and reports without a fix
+
+Status: decided (#72)
+
+The position tracker fetches `esp_modem` with the validation image's existing commit/checksum
+helper into its own build directory. CMake disables component-manager resolution because
+ESP-IDF and that download provide all its dependencies. The example reuses the LilyGO profile
+and the checksum-checking NMEA parser. Its configuration is application-owned NVS data.
+
+It publishes on MQTT connection and every 10 monotonic seconds, after NTP synchronization.
+Without a recent valid fix it publishes null coordinates and `fix: false`, retaining the report's
+UTC time. CA and hostname verification stay enabled. The example assumes a powered, registered
+modem; modem power sequencing and PPP redial are left outside its scope.
+
+**Rejected:** a separate floating registry dependency, which could drift from the validated
+modem version; waiting indefinitely for GNSS before the connect report, which would hide a
+receiver outage; and carrying old coordinates as a current fix after GNSS silence. The report
+period is fixed in firmware, rather than adding configuration unrelated to the demonstration.

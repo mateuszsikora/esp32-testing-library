@@ -1715,3 +1715,49 @@ This also rejects literal bracket names created outside the API.
 locale; and accepting patterns in single-file reads, because an assertion must inspect the one
 file it names. Supporting literal bracket names through escaping is deferred; explicit rejection
 keeps the currently documented no-pattern contract uniform across all commands.
+
+## Network failure controls stay in the models and tracker reports stay in the example
+
+Status: decided (#72)
+
+NTP exposes `go_silent()` and `resume()` so tests describe an unavailable time server without
+editing the UDP service table. TLS credentials accept `server_not_before` / `server_not_after`
+as aware datetimes, changing only the leaf certificate while keeping the CA valid. The default
+network behavior and certificate dates remain unchanged.
+
+The position tracker interprets its JSON through a local `Report`/`Reports` adapter with future
+message conditions and topic-specific history. Its scenarios now follow the SD logger's public
+`Board` API: interfaces come from `board`, and network setup is an explicit call in the test.
+The local `serve_broker(board, ca=None)` helper groups the repeated network selection, CA creation
+and TLS registration, returning the existing network and listener. Custom CAs remain explicit.
+It lives in the example, not the library, and does not provision NVS, power on or wait.
+`Reports(network.broker)` is constructed separately. This supersedes both the example's setup
+fixtures and its repeated three-line network setup. Firmware provisioning remains
+a separate NVS-only operation. `when_received(with_position=...)` names condition construction,
+not dequeueing.
+Power-on and every wait remain explicit calls on `board`. Report conditions are callable
+objects whose representation names the expected report, using the board's existing diagnostic
+path, as GPIO conditions do. They do not rely on an unused function `description` attribute.
+Report and TLS conditions reject boolean coercion, so asserting on a condition object cannot
+silently pass without evaluating it.
+
+The NTP outage scenario observes a fixed interval after time-server resolution, then restores
+NTP and checks a positioned report against current world UTC. Stopping at the first waiting-log
+line would miss a later attempt to connect without synchronization and would not test recovery.
+
+TLS listeners expose cumulative started/completed counts and named callable conditions over
+those counts, and are returned by `network.listen(..., tls=ca)`. Completion is the server's TLS
+handshake success, distinct from MQTT activity; conditions retain history after closure.
+Rejection tests wait for actual input and inspect broker history after a bounded interval; they do not infer absence from a firmware error string.
+
+**Rejected:** a second world/context object or fixture graph hiding network selection and TLS
+registration, because the board already owns interfaces and the scenario should show what it
+connects; a reports fixture that implicitly installs TLS, because it conflicts with custom
+certificate setups; matching certificate-error log wording as the rejection oracle, because it
+couples behavior tests to diagnostics and says nothing about later reconnects or fallback.
+
+**Rejected:** implementing cryptographic certificate construction separately in each consumer
+or removing service-map entries to simulate an NTP outage, because these hide the intended world
+state behind protocol details; teaching esp32tl about the tracker's fields, topic or NVS keys,
+because product vocabulary belongs in the consumer's tests; and a wrapper that owns another
+clock or implicitly powers on the board, because the scenarios should show when firmware runs.
