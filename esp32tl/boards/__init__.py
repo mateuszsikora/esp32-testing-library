@@ -125,7 +125,7 @@ def load(path: Path) -> BoardProfile:
     try:
         with path.open("rb") as file:
             data = tomllib.load(file)
-    except (OSError, tomllib.TOMLDecodeError) as error:
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
         raise ProfileError(f"{path.name}: {error}") from None
     return Reader(path.name).profile(data)
 

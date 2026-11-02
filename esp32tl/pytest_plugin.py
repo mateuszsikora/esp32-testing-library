@@ -84,7 +84,8 @@ def pytest_configure(config: pytest.Config) -> None:
     )
     config.addinivalue_line(
         "markers",
-        f"board_profile(name): the board profile a test runs; {DEFAULT_PROFILE} by default",
+        "board_profile(name) or board_profile(path=...): a bundled name or a local profile path"
+        f" relative to the test file's directory; {DEFAULT_PROFILE} by default",
     )
 
 
@@ -92,32 +93,81 @@ class MarkerError(Exception):
     """A marker of esp32tl's used another way than its registration says."""
 
 
-def board_profile(node: pytest.Item) -> BoardProfile:
-    """The profile the closest `board_profile` marker names, else the default one."""
+def profile_reference(node: pytest.Item) -> str | Path:
+    """A bundled name or an absolute local path, always relative to the test file."""
     marker = node.get_closest_marker("board_profile")
     if marker is None:
-        return boards.profile(DEFAULT_PROFILE)
-    if len(marker.args) != 1 or marker.kwargs or not isinstance(marker.args[0], str):
-        raise MarkerError(
-            "the board_profile marker takes one name,"
-            f' as in @pytest.mark.board_profile("{DEFAULT_PROFILE}")'
-        )
-    return boards.profile(marker.args[0])
+        return DEFAULT_PROFILE
+    if len(marker.args) == 1 and not marker.kwargs and isinstance(marker.args[0], str):
+        return marker.args[0]
+    if not marker.args and marker.kwargs.keys() == {"path"}:
+        path = marker.kwargs["path"]
+        # Path("") is Path("."), which str() turns into a non-empty "."
+        if isinstance(path, str | Path) and str(path).strip() and Path(path) != Path():
+            try:
+                return (node.path.parent / path).resolve()
+            except (OSError, RuntimeError, ValueError) as error:
+                raise MarkerError(f"cannot resolve board_profile path {path!r}: {error}") from None
+    raise MarkerError(
+        "the board_profile marker takes one bundled name or path= (str or pathlib.Path),"
+        f' as in @pytest.mark.board_profile("{DEFAULT_PROFILE}") or'
+        ' @pytest.mark.board_profile(path="boards/test-board.toml"); do not combine them'
+    )
+
+
+# Local profiles are snapshots for this pytest session, keyed by their full path, not name.
+LOCAL_PROFILES = pytest.StashKey[dict[Path, BoardProfile]]()
+
+
+def load_profile(config: pytest.Config, reference: str | Path) -> BoardProfile:
+    """Load a bundled profile by name, or a local one once per session by its full path."""
+    if isinstance(reference, str):
+        try:
+            return boards.profile(reference)
+        except ProfileError as error:
+            if "/" in reference or reference.endswith(".toml"):
+                raise ProfileError(
+                    f'{error}; for a local file, use board_profile(path="{reference}")'
+                ) from None
+            raise
+    profiles = config.stash.setdefault(LOCAL_PROFILES, {})
+    if reference not in profiles:
+        try:
+            profiles[reference] = boards.load(reference)
+        except ProfileError as error:
+            raise ProfileError(f"{reference}: {error}") from None
+    return profiles[reference]
 
 
 @dataclass(frozen=True)
 class BoardMarkers:
-    """The app and reference paths read at collection, and the board profile's name."""
+    """The markers read at collection, with the selected profile's reference and snapshot."""
 
     app_path: tuple[object, ...] | None
     app_kwargs: dict[str, object]
-    profile: str
+    profile: str | Path
     app_recording: tuple[object, ...] | None
+    loaded_profile: BoardProfile
 
 
 # What pytest_generate_tests read for each test that uses `board`, by the nodeid of its
 # definition: pytest_collection_modifyitems compares it with what each of its items carries.
 READ = pytest.StashKey[dict[str, BoardMarkers]]()
+
+
+def collected_board_markers(config: pytest.Config, node: pytest.Item) -> BoardMarkers | None:
+    """Find the collection snapshot for a definition or one of its parametrised items."""
+    callspec = getattr(node, "callspec", None)
+    nodeid = node.nodeid.removesuffix(f"[{callspec.id}]") if callspec is not None else node.nodeid
+    return config.stash.get(READ, {}).get(nodeid)
+
+
+def board_profile(node: pytest.Item) -> BoardProfile:
+    """The profile pytest_generate_tests validated for this test, as it was at collection."""
+    read = collected_board_markers(node.config, node)
+    # `board` gets its parameter only from pytest_generate_tests, which saves READ first.
+    assert read is not None, node.nodeid
+    return read.loaded_profile
 
 
 def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
@@ -143,7 +193,8 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
         app_path /= marker.args[0]
         build_dir = marker.kwargs.get("build_dir", "build")
     try:
-        profile = board_profile(metafunc.definition)
+        profile = profile_reference(metafunc.definition)
+        loaded_profile = load_profile(metafunc.config, profile)
     except (MarkerError, ProfileError) as error:
         # from None: raised inside the handler, the failure would show the error twice
         message = f"{metafunc.definition.nodeid}: {error}"
@@ -160,10 +211,11 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
             pytrace=False,
         )
     read = BoardMarkers(
-        marker.args if marker else None,
-        dict(marker.kwargs) if marker else {},
-        profile.name,
-        reference.args if reference else None,
+        app_path=marker.args if marker else None,
+        app_kwargs=dict(marker.kwargs) if marker else {},
+        profile=profile,
+        app_recording=reference.args if reference else None,
+        loaded_profile=loaded_profile,
     )
     metafunc.config.stash.setdefault(READ, {})[metafunc.definition.nodeid] = read
     chosen = metafunc.config.getoption("esp32tl_backend")
@@ -266,8 +318,7 @@ def late_board_marker(config: pytest.Config, item: pytest.Item) -> str | None:
     callspec = getattr(item, "callspec", None)
     if callspec is None or "board" not in getattr(item, "fixturenames", ()):
         return None
-    # The definition's nodeid is the item's without the parameters' id.
-    read = config.stash.get(READ, {}).get(item.nodeid.removesuffix(f"[{callspec.id}]"))
+    read = collected_board_markers(config, item)
     if read is None:
         return None
     reference = item.get_closest_marker("app_recording")
@@ -280,9 +331,9 @@ def late_board_marker(config: pytest.Config, item: pytest.Item) -> str | None:
     ):
         return "the app_path marker"
     try:
-        if board_profile(item).name != read.profile:
+        if profile_reference(item) != read.profile:
             return "the board_profile marker"
-    except (MarkerError, ProfileError):
+    except MarkerError:
         return "the board_profile marker"
     return None
 
@@ -389,6 +440,7 @@ def board(
     if not isinstance(dut, Dut):
         # `count` parametrised above 1 in the test: pytest-embedded made a dut per count.
         pytest.fail("count is above 1: esp32tl runs one board in a test", pytrace=False)
+    profile = board_profile(request.node)
     try:
         backend: Esp32Sim | Serial
         if name == Serial.name:
@@ -397,7 +449,7 @@ def board(
             reference = request.node.get_closest_marker("app_recording")
             backend = Serial(
                 dut,
-                board_profile(request.node),
+                profile,
                 msg_queue,
                 app_sha256=digest,
                 directory=request.path.parent,
@@ -410,7 +462,7 @@ def board(
                 app_path,
                 msg_queue,
                 _meta,
-                board_profile(request.node),
+                profile,
                 directory=request.path.parent,
                 skip=skip_at_the_test,
                 build_dir=build_dir,

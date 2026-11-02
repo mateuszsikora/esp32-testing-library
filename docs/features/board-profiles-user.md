@@ -134,14 +134,64 @@ def test_modem_route(board):
   test gives it a source ([below](#saying-what-a-test-needs)). The SD card slot is empty until the
   test inserts a card. The link also watches the profile's named GPIO lines; declaring a line
   does not give it a peripheral model.
-- Only the profiles esp32tl ships can be named; there is no marker argument for a file of your
-  own.
+- A positional name selects a bundled profile. To select a project-local TOML file, use
+  `@pytest.mark.board_profile(path="boards/test-board.toml")`; `path` accepts a string or
+  `pathlib.Path`. Give exactly one name or `path=`, never both.
 - The marker goes on the test, its class or its module. One given in a
   `pytest.param(..., marks=...)`, or added by a hook such as a conftest's
   `pytest_collection_modifyitems`, reaches the test after esp32tl has checked it, so it stops the
   run before any test, with exit code 4:
   `ERROR: test_x.py::test_p[esp32sim-2]: the board_profile marker reached the test after esp32tl read it, from a pytest.param or a hook: put it on the test, its class or its module`.
   The same holds for `app_path`.
+
+### A project-local profile
+
+For `tests/test_device.py`, create `tests/boards/test-board.toml`:
+
+```toml
+name = "test-board"
+chip = "esp32"
+
+[uart.gnss]
+port = 1
+tx = 4
+rx = 5
+baud = 9600
+```
+
+Select it in `tests/test_device.py`:
+
+```python
+import pytest
+
+pytestmark = pytest.mark.board_profile(path="boards/test-board.toml")
+
+
+def test_wiring(board):
+    assert board.profile.name == "test-board"
+    assert board.profile.uart["gnss"].tx == 4
+```
+
+Relative paths always start at the **test file's directory**, including markers inherited from
+a class or module, or a `pytestmark` that a test module imports from a conftest. They do not start
+at the process working directory or the conftest's directory. Absolute paths work too; a shared
+conftest can build one from `Path(__file__).parent`. No change to the installed package is needed.
+
+The file uses the same [schema](board-profiles-technical.md#schema) as bundled profiles, including
+the requirement that `name` match the filename without `.toml`, UART constraints and GPIO conflict
+checks. Files must be UTF-8. An unreadable, missing or invalid file, including invalid UTF-8,
+fails collection with the test id, resolved path and loader error. Sources and taps use the same
+backend capability checks as bundled profiles.
+
+Each resolved local path is loaded once per pytest session. The validated snapshot is used at
+setup even if the file changes or a symlink is retargeted after collection's marker checks;
+setup uses the saved profile object without resolving the path again. Edit profiles before
+starting the next session. Files with the same `name` in different directories remain separate,
+and a local profile never replaces
+a bundled profile of that name. A late marker switching between those files is refused even if
+their contents match. Reports, the simulator handshake and recordings use the TOML `name`;
+recordings also retain the selected route's pins and baud. The local path is not a recording id,
+so choose distinct names if recordings need distinguishable board labels.
 
 ## Saying what a test needs
 
@@ -216,8 +266,12 @@ runs (exit code 2):
 
 | Message, after `<test id>: ` | When |
 |---|---|
-| `the board_profile marker takes one name, as in @pytest.mark.board_profile("esp32-devkitc")` | The marker has no argument, more than one, a keyword argument, or a name that is not a string |
+| `the board_profile marker takes one bundled name or path= (str or pathlib.Path), as in @pytest.mark.board_profile("esp32-devkitc") or @pytest.mark.board_profile(path="boards/test-board.toml"); do not combine them` | No argument, mixed name/path arguments, extra arguments, a non-string name, or a `path` that is not a string or `Path`, is blank, or is `Path("")` or `"."` (the test file's directory) |
 | `no board profile named 'NAME'; the profiles are esp32-devkitc, gps-alarm-clock, lilygo-t-a7670g-r2, sd-data-logger` | The marker names a profile esp32tl does not ship |
+| `no board profile named 'NAME'; the profiles are esp32-devkitc, gps-alarm-clock, lilygo-t-a7670g-r2, sd-data-logger; for a local file, use board_profile(path="NAME")` | The positional name contains `/` or ends in `.toml`, so it looks like a local file |
+| `<resolved path>: <file>: <loader error>` | A local file is missing, unreadable, invalid TOML or violates the profile schema |
+| `cannot resolve board_profile path <path repr>: <error>` | The local path cannot be resolved |
+
 For a source or a tap it is a `SourceError` at the call, which fails the test:
 
 | Message | When |
