@@ -192,6 +192,10 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Board owns interfaces and SD image builders](harness.md#board-owns-interfaces-and-sd-image-builders) | `harness.md` | decided (#73) |
 | [Network selection stays explicit and FAT paths name one entry](harness.md#network-selection-stays-explicit-and-fat-paths-name-one-entry) | `harness.md` | decided (#73) |
 | [Network failure controls stay in the models and tracker reports stay in the example](harness.md#network-failure-controls-stay-in-the-models-and-tracker-reports-stay-in-the-example) | `harness.md` | decided (#72) |
+| [A run with a real source is on the wall clock from power-on, and stays on the test's clock](harness.md#a-run-with-a-real-source-is-on-the-wall-clock-from-power-on-and-stays-on-the-tests-clock) | `harness.md` | decided (#27) |
+| [The real source stamps what the port gave with the turn it hands it over in, every emulated millisecond](harness.md#the-real-source-stamps-what-the-port-gave-with-the-turn-it-hands-it-over-in-every-emulated-millisecond) | `harness.md` | decided (#27) |
+| [A real source's port keeps the wire's baud, and a transmit at another rate fails the run](harness.md#a-real-sources-port-keeps-the-wires-baud-and-a-transmit-at-another-rate-fails-the-run) | `harness.md` | decided (#27) |
+| [A real source keeps at most 50 ms of bytes waiting on its line, and drops the oldest](harness.md#a-real-source-keeps-at-most-50-ms-of-bytes-waiting-on-its-line-and-drops-the-oldest) | `harness.md` | decided (#27) |
 
 ## The runner crate and esp32sim
 
@@ -224,3 +228,5 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [adc waits for an example with an analog pin](runner.md#adc-waits-for-an-example-with-an-analog-pin) | `runner.md` | postponed (#23) |
 | [The SD card is a model of SPI mode in the runner, not esp32sim's card](runner.md#the-sd-card-is-a-model-of-spi-mode-in-the-runner-not-esp32sims-card) | `runner.md` | decided (#32) |
 | [The SD card answers at once and has no CMD6](runner.md#the-sd-card-answers-at-once-and-has-no-cmd6) | `runner.md` | decided (#32) |
+| [Under --realtime the runner waits at each block point until wall time reaches it](runner.md#under---realtime-the-runner-waits-at-each-block-point-until-wall-time-reaches-it) | `runner.md` | decided (#27) |
+| [The runner starts its wall clock with esp32sim's pacing, and then follows esp32sim's resyncs](runner.md#the-runner-starts-its-wall-clock-with-esp32sims-pacing-and-then-follows-esp32sims-resyncs) | `runner.md` | decided (#27) |
