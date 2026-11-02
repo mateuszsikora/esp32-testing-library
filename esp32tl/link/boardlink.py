@@ -96,6 +96,11 @@ class Interface:
         self.wire = wire
 
     @property
+    def lossless(self) -> bool:
+        """Whether UART receive overflow must fail this route's run."""
+        return False
+
+    @property
     def pins(self) -> frozenset[int]:
         """The GPIOs the interface is wired to, which the link watches: its wire's."""
         return frozenset() if self.wire is None else self.wire.pins
@@ -334,6 +339,20 @@ class BoardLink:
         elif isinstance(message, Warn):
             if message.kind == "frm_err":
                 raise LinkError(self._frame_errors(message))
+            if message.kind == "rxfifo_ovf":
+                owner = next(
+                    (
+                        i
+                        for i in self.interfaces
+                        if i.lossless and i.wire is not None and i.wire.rx == message.pin
+                    ),
+                    None,
+                )
+                if owner is not None:
+                    raise LinkError(
+                        f"{owner.name}: UART receive overflow (rxfifo_ovf) on GPIO "
+                        f"{message.pin}: the simulated network requires a lossless route"
+                    )
         elif isinstance(message, Console):
             if self.console is not None:
                 with calling(CONSOLE, "console"):

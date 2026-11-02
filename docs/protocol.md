@@ -748,3 +748,12 @@ Section 4.1 of the plan is superseded by this document. What changed, and why:
     reads `GPIO_ENABLE` and `GPIO_OUT`, which right after the reset agree with it (5.5). Should a
     later esp32sim model the IO_MUX functions a reset leaves, the runner needs the pad state from
     it.
+
+
+### Harness policy for simulated network receive loss
+
+On an interface whose `lossless` property is true (currently a modem with the simulated network),
+`BoardLink` treats `warn.kind == "rxfifo_ovf"` on that interface's RX pin as fatal. For LilyGO:
+`uart.modem: UART receive overflow (rxfifo_ovf) on GPIO 27: the simulated network requires a lossless route`.
+The warning is retained in the report and the run stops as for `frm_err`. Ordinary UART routes
+keep overflow as a warning. This changes harness policy only, not message fields or version 1.

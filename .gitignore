@@ -27,3 +27,4 @@ tools/*/sdkconfig
 tools/*/sdkconfig.old
 tools/*/dependencies.lock
 tools/*/managed_components/
+firmware/.esp-protocols-*/

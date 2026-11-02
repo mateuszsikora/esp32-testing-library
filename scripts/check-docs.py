@@ -203,6 +203,12 @@ FEATURES = [
         r"^docs/features/matching-",
         "Matching engine changed (protocols, requests, timing): update docs/features/matching-*.md",
     ),
+    Rule(
+        "F22",
+        r"^esp32tl/net/",
+        r"^docs/features/network-",
+        "Simulated network changed: update docs/features/network-*.md",
+    ),
 ]
 
 # The catch-all for the package: the rest of sources/ and any new module are owned from their

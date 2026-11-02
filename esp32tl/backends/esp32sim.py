@@ -57,6 +57,7 @@ from esp32tl.interfaces.modem import Modem
 from esp32tl.interfaces.sd_card import SdCard
 from esp32tl.interfaces.uart import Uart
 from esp32tl.link.boardlink import BoardLink, Wire
+from esp32tl.net import Internet
 from esp32tl.report import RunLog, board_time, shown
 from esp32tl.sources.replay import Replay
 from esp32tl.tap import sha256
@@ -342,6 +343,7 @@ class Esp32Sim:
                 directory=self.directory,
                 now=lambda: self._hold.now,
                 lines=self._lines,
+                world=lambda: self._utc,
                 pins=self.profile.lines.get("modem", {}),
                 asked=self._asked,
                 log=self.log,
@@ -766,6 +768,9 @@ class Esp32Sim:
                     }
                     for c in uart.commands
                 ]
+                data = uart.model().data
+                if isinstance(data, Internet):
+                    routes[name]["network"] = data.transcript()
             if isinstance(uart.source, Replay) and uart.source.unseen_count:
                 routes[name]["unseen_requests"] = [
                     {"request_hex": request.hex(), "count": count}

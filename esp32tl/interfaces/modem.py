@@ -1,6 +1,7 @@
 """The profile's uart.modem route, a replay or a cellular modem described by the test."""
 
 from collections.abc import Callable, Mapping
+from datetime import UTC, datetime
 from pathlib import Path
 
 from esp32tl.boards import Line
@@ -9,6 +10,7 @@ from esp32tl.interfaces import SourceError
 from esp32tl.interfaces.lines import Lines
 from esp32tl.interfaces.uart import Uart
 from esp32tl.link.boardlink import Wire
+from esp32tl.net import Internet
 from esp32tl.report import RunLog, board_time
 from esp32tl.sources.model.modem import LATENCY_NS, Command
 from esp32tl.sources.model.modem import Modem as ModemModel
@@ -27,6 +29,7 @@ class Modem(Uart):
         directory: Path,
         now: Callable[[], int],
         lines: Lines,
+        world: Callable[[], datetime] = lambda: datetime(2026, 1, 1, tzinfo=UTC),
         pins: Mapping[str, Line],
         asked: Callable[[Request], None] = lambda request: None,
         log: RunLog | None = None,
@@ -36,8 +39,24 @@ class Modem(Uart):
             name, wire, clock=clock, directory=directory, asked=asked, log=log, files=files
         )
         self._now = now
+        self._world = world
         self._lines = lines
         self._pins = pins
+
+    def network(self) -> Internet:
+        """Select the modem and its simulated network before power-on, or return it later."""
+        if isinstance(self.source, ModemModel) and isinstance(self.source.data, Internet):
+            return self.source.data
+        self.asked(Request(self.name, source="model"))
+        self._tell(lambda model: None, "network()")
+        network = Internet(self._now, self._world)
+        self.model().data = network
+        return network
+
+    @property
+    def lossless(self) -> bool:
+        """PPP cannot recover a UART overflow in this simulated network."""
+        return isinstance(self.source, ModemModel) and isinstance(self.source.data, Internet)
 
     def signal(self, *, dbm: float) -> None:
         """Set the measured signal strength in dBm for subsequent CSQ queries."""
@@ -100,10 +119,13 @@ class Modem(Uart):
         """Every AT command with its time and fallback marker for the report."""
         if not isinstance(self.source, ModemModel):
             return []
-        return ["modem AT commands:"] + [
+        commands = ["modem AT commands:"] + [
             f"  {board_time(c.at.ns)}  {c.text!r}" + (" (fallback OK)" if c.fallback else "")
             for c in self.commands
         ]
+        if isinstance(self.source.data, Internet):
+            commands += self.source.data.report()
+        return commands
 
     def _tell(self, call: Callable[[ModemModel], None], step: str) -> None:
         if isinstance(self.source, ModemModel):

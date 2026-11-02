@@ -38,6 +38,7 @@ paths, names, defaults and messages quoted verbatim, and `TODO(owner): …` wher
 | `esp32tl/matching.py` | `docs/features/matching-user.md` and/or `-technical.md` (F21) |
 | `esp32tl/bluetooth/` | `docs/features/bluetooth-peer-user.md` and/or `-technical.md` (F18) |
 | `esp32tl/sources/model/modem.py` | `docs/features/modem-user.md` and/or `-technical.md` (F19) |
+| `esp32tl/net/` | `docs/features/network-user.md` and/or `-technical.md` (F22) |
 | Any other path under `esp32tl/` (the rest of `sources/`, a new module) | A new `docs/features/<feature>-user.md` / `-technical.md` (an edit to an existing one does not count), and a row in the ownership map (F12) |
 | `.github/workflows/` | `docs/cicd.md` (C1) |
 | `Makefile`, `.pre-commit-config.yaml`, `scripts/fetch-rom-elf`, `scripts/venv-tool`, `runner/rust-toolchain.toml` | `docs/guides/development.md` (C2 to C6) |

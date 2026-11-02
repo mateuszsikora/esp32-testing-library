@@ -446,3 +446,49 @@ def test_a_model_selection_that_loses_to_replay_does_not_claim_ri(
     assert modem.source_kind == "replay"
     assert lines.latency() is None and lines.events() == []
     lines.drive("modem.ri", 1)
+
+
+def test_network_selection_guarded_escape_and_loss_reset(tmp_path: Path) -> None:
+    now = [0]
+    modem, _, _ = route(tmp_path, now)
+    network = modem.network()
+    assert modem.network() is network and modem.lossless
+    model = modem.model()
+    assert b"CONNECT" in reply(model, "ATD*99#")
+    model.poll(1_000_000)
+    # Pluses within an ordinary binary stream never escape, across UART chunks.
+    model.receive(2_000_000, b"~abc++")
+    model.receive(3_000_000, b"+xyz~")
+    assert model.data_mode
+    assert b"".join(data for _, data in model.data_received) == b"~abc+++xyz~"
+    model.receive(2_000_000_000, b"+")
+    model.receive(2_010_000_000, b"++")
+    assert model.quiet_until() == 3_010_000_000
+    assert list(model.poll(3_010_000_000)) == [(3_010_000_000, b"\r\nOK\r\n")]
+    assert not model.data_mode and not network.active
+    reply(model, "ATD*99#", 4_000_000_000)
+    assert network.active
+    model.lose_registration()
+    assert not network.active and not network.ppp.started and not model.data_mode
+    assert list(network.poll(5_000_000_000)) == []
+    model.register()
+    reply(model, "ATD*99#", 6_000_000_000)
+    model.lose_power()
+    assert not network.active and not network.ppp.started
+
+
+def test_only_a_network_route_fails_on_receive_overflow(tmp_path: Path) -> None:
+    from esp32tl.link.protocol import Warn
+
+    for selected, pin, fails in [(True, 27, True), (True, 5, False), (False, 27, False)]:
+        modem, _, _ = route(tmp_path, [0])
+        if selected:
+            modem.network()
+        link = BoardLink("lilygo-t-a7670g-r2", interfaces=[modem])
+        link.receive(RunnerHello(1, "esp32", "emulated-fifo-write", "revision"))
+        warning = Warn(1, "rxfifo_ovf", "dropped", pin=pin, port=1, nbytes=1)
+        link.receive(warning)
+        assert (link.error is not None) is fails
+        assert link.warnings == [warning]
+        if fails:
+            assert "uart.modem: UART receive overflow (rxfifo_ovf) on GPIO 27" in str(link.error)

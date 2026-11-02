@@ -9,13 +9,17 @@ Alone, in the suite, each checks that its run did what it should, so that two ru
 nothing cannot pass the job.
 """
 
+import json
 from pathlib import Path
 
 import pytest
+from test_net_tls import tls_exchange
 
 from esp32tl.backends.esp32sim import Esp32Sim
 from esp32tl.interfaces.console import Console
 from esp32tl.interfaces.gnss import Gnss
+from esp32tl.interfaces.modem import Modem
+from esp32tl.net.mqtt import Broker
 from esp32tl.report import board_time
 from esp32tl.units import EAST, NORTH, Position, km, km_h, seconds
 
@@ -61,3 +65,17 @@ def write_console(directory: Path, console: Console) -> None:
     board's time it ended at."""
     lines = (f"{board_time(line.at.ns)}  {line.text}\n" for line in console.lines())
     (directory / "console.txt").write_text("".join(lines))
+
+
+@pytest.mark.app_path("../firmware/pppos_client")
+@pytest.mark.board_profile("lilygo-t-a7670g-r2")
+def test_plain_mqtt(board: Esp32Sim, modem: Modem, broker: Broker, tmp_path: Path) -> None:
+    modem.tap(tmp_path / "uart.modem.jsonl")
+    board.power_on()
+    message = board.wait_until(broker.message("/topic/esp-pppos"), within=seconds(60))
+    assert message.text == "esp32-pppos"
+    (tmp_path / "network.json").write_text(json.dumps(modem.network().transcript()))
+
+
+def test_tls_plaintext(tmp_path: Path) -> None:
+    (tmp_path / "network.json").write_text(json.dumps(tls_exchange()))

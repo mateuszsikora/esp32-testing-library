@@ -19,6 +19,7 @@ requires-python = ">=3.11"
 # 0.0.x any release may change the internals esp32tl/bluetooth/controller.py and peer.py replace.
 dependencies = [
     "bumble==0.0.236",
+    "cryptography>=42",
     "esp-idf-nvs-partition-gen==0.3.0",
     "pytest>=8",
     "pytest-embedded~=2.9.3",

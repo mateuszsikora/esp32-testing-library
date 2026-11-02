@@ -1,6 +1,6 @@
 """A cellular modem: AT dialogue and power on the test's clock, without a host network.
 
-The optional data source is the seam for the simulated PPP peer (#30). With no peer, data bytes
+The optional data source can be the simulated PPP peer. With no peer, data bytes
 are kept for inspection and produce no response. See docs/features/modem-technical.md.
 """
 
@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from esp32tl.boards import Line
 from esp32tl.interfaces.uart import Source
 from esp32tl.link.boardlink import Output
+from esp32tl.net import Internet
 from esp32tl.units import Duration, number
 
 LATENCY_NS = 1_000_000
@@ -70,6 +71,8 @@ class Modem:
         self._overflow = False
         self._skip_lf = False
         self._pluses = bytearray()
+        self._last_data = 0
+        self._escape_at: int | None = None
         self._commands: list[Command] = []
         self._data_received: list[tuple[Duration, bytes]] = []
 
@@ -101,8 +104,7 @@ class Modem:
         """Remove coverage and end data mode silently; queries report status 0."""
         with self._lock:
             self._coverage = self.registered = False
-            self.data_mode = False
-            self._pluses.clear()
+            self._end_data()
 
     def register(self) -> None:
         """Restore coverage; register when powered with functionality 1."""
@@ -136,7 +138,7 @@ class Modem:
         self.powered = powered
         self.registered = powered and self._coverage
         self._function = 1
-        self.data_mode = False
+        self._end_data(t)
         self._echo = False
         self._registration = dict.fromkeys(self._registration, 0)
         self._line.clear()
@@ -183,6 +185,20 @@ class Modem:
                     if byte == 10:
                         continue
                 if self.data_mode:
+                    if isinstance(self.data, Internet):
+                        # PPP is binary: +++ inside a frame must reach its FCS unchanged.
+                        guarded = t - self._last_data >= 1_000_000_000
+                        if byte == 43 and (guarded or self._pluses) and len(self._pluses) < 3:
+                            self._pluses.append(byte)
+                            if len(self._pluses) == 3:
+                                self._escape_at = t + 1_000_000_000
+                        else:
+                            payload.extend(self._pluses)
+                            self._pluses.clear()
+                            self._escape_at = None
+                            payload.append(byte)
+                        self._last_data = t
+                        continue
                     if byte == 43:
                         self._pluses.append(byte)
                         if len(self._pluses) == 3:
@@ -248,7 +264,7 @@ class Modem:
                 self._function = int(value)
                 self.registered = value == "1" and self._coverage
                 if not self.registered:
-                    self.data_mode = False
+                    self._end_data(t)
             else:
                 terminal = "ERROR"
         elif upper == "AT+COPS?":
@@ -256,6 +272,9 @@ class Modem:
         elif re.fullmatch(r"ATDT?\*99[0-9*#]*#", upper) or upper.startswith("AT+CGDATA="):
             self.data_mode = self.registered
             terminal = "CONNECT" if self.registered else "NO CARRIER"
+            if self.data_mode and isinstance(self.data, Internet):
+                self._last_data = t
+                self.data.start(t + LATENCY_NS)
         elif upper.startswith(("AT+CGDCONT=", "AT+CTZU=", "AT+COPS=")):
             pass
         elif upper not in ANSWERS:
@@ -268,15 +287,26 @@ class Modem:
     def poll(self, now: int) -> Iterable[Output]:
         """Poll the optional data peer while in data mode."""
         with self._lock:
+            if self._escape_at is not None and now >= self._escape_at:
+                self._end_data(now)
+                return [(now, b"\r\nOK\r\n")]
             return list(self.data.poll(now)) if self.data_mode and self.data is not None else ()
 
     def quiet_until(self) -> int | None:
         """The optional data peer's next deadline, or no deadline in command mode."""
         with self._lock:
-            return self.data.quiet_until() if self.data_mode and self.data is not None else None
+            deadline = self.data.quiet_until() if self.data_mode and self.data is not None else None
+            return min((t for t in (deadline, self._escape_at) if t is not None), default=None)
 
     def latency(self) -> int | None:
         """The response bound: 1 ms or the data peer's shorter latency."""
         with self._lock:
             latency = self.data.latency() if self.data_mode and self.data is not None else None
             return LATENCY_NS if latency is None else min(LATENCY_NS, latency)
+
+    def _end_data(self, at: int | None = None) -> None:
+        self.data_mode = False
+        self._pluses.clear()
+        self._escape_at = None
+        if isinstance(self.data, Internet):
+            self.data.stop(at)
