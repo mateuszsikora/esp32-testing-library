@@ -54,10 +54,15 @@ A recording, [version 1](../recording-format.md):
   names under `app`; `tools` the esp32tl version and the esp32sim revision the runner reported;
   `created` when the file was written, in UTC.
 - An `out` event is bytes the firmware wrote to the route's UART, at the time it wrote them. An
-  `in` event is bytes the far end gave, at the time it stamped them: a replay's events keep their
-  recorded times, so a tap of a replay holds the replay's events up to where the run ended. Bytes
-  the harness refused to send, because they were stamped too early, are in the tap as well; the
-  run has failed on them.
+  `in` event is bytes the far end gave, at the time it stamped them in the current run. Unprompted
+  replay events keep their recorded absolute times on the first pass; `loop` shifts later passes
+  by the recording's period. Matched answers keep their recorded bytes and delays relative to
+  the current request's completion time, not their original absolute times. Repeated requests
+  or a different request order can repeat or reorder answers, and unknown requests can add
+  fallback replies. A tap therefore records the current exchange, not necessarily a prefix of
+  the original recording ([matching](matching-user.md#timing-and-diagnostics)). Bytes the harness
+  refused to send, because they were stamped too early, are in the tap as well; the run has
+  failed on them.
 - Events come in the order of their times; two of one time in the order they reached the route.
 
 ## The run on the board's clock
