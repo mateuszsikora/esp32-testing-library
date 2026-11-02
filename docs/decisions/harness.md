@@ -1769,3 +1769,25 @@ that names both rates.
 
 **Postponed:** firmware that negotiates its device's rate, as a GNSS driver that switches a
 receiver to 115200 baud does, until an example needs it.
+
+## A real source keeps at most 50 ms of bytes waiting on its line, and drops the oldest
+
+Status: decided (#27)
+
+The `real` source works out from its own messages where its line will be free as the runner paces
+it, and at each turn sends no more of what the port gave than the line carries in the next 50 ms,
+the newest bytes, dropping the older ones and counting them for the test report
+([protocol 12.3](../protocol.md#123-the-real-source)). A device's bytes from a held turn, or from
+a stretch the guest fell behind in, cannot all reach the guest when they should: emulated time does
+not move during the hold, and the wire carries no more than its line rate.
+
+**Rejected:** keeping every byte, because the backlog stays on the line whatever the clock does: a
+device sending at its full line rate, 9600 baud, through a 10 s hold leaves its bytes about 10 s
+behind for the rest of the run, and an answer to a new command waits behind them until the
+firmware times out. Also rejected: ending the run past a backlog, because a test body that takes a
+second, or a test stopped in a debugger, would lose its run; dropping in the runner, because it
+cannot tell a real source's line from a replay's, whose one message of a GNSS epoch can hold half a
+second of line time on its own; dropping the newest, as a full RX FIFO does, because the guest
+would go on reading the past while the device's answers are lost; and a bound of 500 ms, as long
+as esp32sim lets a lag be caught up, because at full line rate it would hold every later answer
+half a second late.

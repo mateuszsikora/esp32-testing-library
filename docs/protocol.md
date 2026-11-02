@@ -786,11 +786,13 @@ time need their own design" (plan, finding 11).
 ### 12.1 The runner under `--realtime`
 
 `--realtime` sets `machine.rt.enabled`, which is all esp32sim's flag of the same name does
-(`cli/src/lib.rs:829`), and the runner's `hello` then says `clock: wall`. esp32sim paces `run`
-itself (`Machine::rt_pace`, `esp-soc/src/machine.rs:1091-1115`): every 2¹⁶ bus cycles, 273
-emulated µs, it compares emulated time with the wall time since its first such check. It sleeps
-while emulated time is more than 2 ms ahead, lets the guest run as fast as it can while it is
-behind, and once wall time is more than 500 ms ahead it moves its anchor up to emulated time,
+(`cli/src/lib.rs:829`), though only once the guest has run 2¹⁶ bus cycles (12.2), and the
+runner's `hello` says `clock: wall`. esp32sim paces `run` itself (`Machine::rt_pace`,
+`esp-soc/src/machine.rs:1091-1115`): every 2¹⁶ bus cycles, 273 emulated µs, it compares emulated
+time since power-on with the wall time since its first such check, which takes the wall instant
+of that check as emulated time 0 (`wall_start`, set by `get_or_insert_with(Instant::now)`). It
+sleeps while emulated time is more than 2 ms ahead, lets the guest run as fast as it can while it
+is behind, and once wall time is more than 500 ms ahead it moves its anchor up to emulated time,
 skipping the lag, and counts the skip in `rt.resyncs`. Real-time pacing also turns off round
 batching and virtual quanta (`:573`, `:777`), which changes the emulator's speed and nothing the
 guest sees.
@@ -804,12 +806,18 @@ does.
 
 esp32sim's pacing alone lets the guest reach a block point up to 2 ms plus one pacing interval,
 about 2.3 ms, before wall time does, and its anchor is private (`Realtime::wall_start`), so the
-runner cannot ask it where wall time stands. The runner keeps a wall clock of its own. Emulated
-time 0 is the wall instant at which the peer's first `wait` ends turn 0 and the guest's first
-instruction runs (rule 4). When `rt.resyncs` has grown by a slice boundary `T`, the runner moves its
-anchor so that `T` is now, as esp32sim moved its own. The two anchors then differ by less than the
-wall time of one slice, plus, until the first resync, the wall time of the guest's first 2¹⁶ bus
-cycles, well under a millisecond.
+runner cannot ask it where wall time stands. The runner keeps a wall clock of its own, and starts
+it with esp32sim's. esp32sim takes its anchor at its first check, the first round after the guest
+has run 2¹⁶ bus cycles since pacing was turned on, and a turn held before that check, by the test
+or the peer, would come before one anchor and after the other. So the runner sets
+`machine.rt.enabled` only at the first slice boundary at or after 2¹⁶ bus cycles, after any turn
+taken there and just before it calls `run` again, and anchors its clock at the same moment with
+esp32sim's convention: emulated time 0 is now. esp32sim's first check comes in the first round of
+that `run`, microseconds later, so the two anchors agree to within that, whatever turns were held
+before. Until then, the first emulated millisecond at most, the run is not paced and the runner
+does not wait. When `rt.resyncs` has grown by a slice boundary `T`, the runner moves its anchor so
+that `T` is now, as esp32sim moved its own; the two then differ by less than the wall time of one
+slice.
 
 At each block point `B`, before it sends `sync`, the runner under `--realtime` waits until its
 wall clock reaches `B`. It waits on the socket with the wall time left as the timeout, in the
@@ -827,7 +835,8 @@ it has caught up, and the runner does not wait at the block points meanwhile; pa
 the lag. A guest that cannot keep up falls behind the same way: stage 0 measured CPU-bound code at
 0.3 to 1.7 times real time ([speed](stage0-findings.md#speed)). `stats` under `--realtime` carries
 `rt_resyncs`, `rt.resyncs` at the end of the run, which `BoardLink` puts in the test report: each
-resync is a stretch of the device's wall time that reached the guest at one emulated instant.
+resync is a stretch of wall time the guest did not see. Catching up or skipping puts the clock
+right, not the device's bytes from that stretch: those are the `real` source's to bound (12.3).
 
 ### 12.3 The `real` source
 
@@ -843,14 +852,28 @@ of its own, so the operating system's buffer does not fill while a turn is held.
   millisecond (rule 3). A whole millisecond is where the runner ends a slice anyway (6.1), so these
   turns add no slices of their own.
 
-**Received bytes.** At each turn the source sends everything the port has given since its last
-turn as one `uart_rx` stamped with the turn's `sync` `t`, at the wire's baud. A byte thus gets the
-time of the first turn that looks at the port after it arrived: the end of the emulated millisecond
-in which it arrived or, if it arrived while the run was held in a turn, that turn's time. The
-runner paces the bytes from there at the line rate (rule 5), as the wire did. While the guest keeps up with wall time (12.2), a byte is stamped within one emulated
+**Received bytes.** At each turn the source sends what the port has given since its last turn,
+up to the backlog's bound below, as one `uart_rx` stamped with the turn's `sync` `t`, at the
+wire's baud. A byte thus gets the time of the first turn that looks at the port after it arrived:
+the end of the emulated millisecond in which it arrived or, if it arrived while the run was held in
+a turn, that turn's time. The runner paces the bytes from there at the line rate (rule 5), as the
+wire did. While the guest keeps up with wall time (12.2), a byte is stamped within one emulated
 millisecond after it reached the harness. The USB adapter's and the host driver's delays come
 before that and are not removed: an FTDI adapter holds received bytes for up to its latency timer,
 16 ms by default.
+
+**Backlog.** A wire carries no more than its line rate, and emulated time does not move while a
+turn is held, so the bytes a device sends during a held turn, or while the guest is behind, cannot
+all reach the guest when they should. Kept, they would queue on the line (rule 5) and stay there:
+a device sending at its full line rate through a 10 s hold leaves its bytes about 10 s behind for
+the rest of the run, whatever the clock does, and an answer to a new command waits behind them. The
+source therefore keeps its line at most 50 ms behind. It works out where its line will be free as
+the runner paces it, `line_free(pin)` of rule 5, from its own messages, which are the only ones on
+its RX pin. At each turn at `now` it sends no more of what the port gave than the line carries by
+`now + 50 ms`, the newest bytes, and drops the older ones, counting them for the test report. The
+guest then hears what the device says now, an answer included, at most 50 ms after its stamp.
+50 ms is above an FTDI adapter's 16 ms burst, so while the guest keeps up with wall time no byte
+is dropped.
 
 **Transmitted bytes.** The source writes what the firmware transmits to the port as soon as the
 link hands it over, in or between turns. A `uart_tx` reaches the harness at the latest in the turn
@@ -872,7 +895,8 @@ A test gives a route a `real` source before `board.power_on()`, as any other sou
 ([recording format](recording-format.md#clock-switches)). Every recording of such a run says
 `clock: wall`, the console's and a model's route's too, since what the firmware did depended on
 when the device's bytes came. The real route's tap writes `source: real`, its `in` events at the
-source's stamps and its `out` events at their `uart_tx` times. A replay in such a run takes only a
+source's stamps, without the bytes it dropped (12.3), and its `out` events at their `uart_tx`
+times. A replay in such a run takes only a
 `clock: wall` recording, since it refuses a clock other than its backend's
 ([replay](features/replay-user.md#what-a-replay-refuses)). Recordings on the wall clock are never
 compared with emulated ones, and tests with a `real` source stay out of the determinism job
@@ -885,8 +909,11 @@ test's own timeout, 600 wall seconds by default
 too.
 
 #28 tests this without hardware: a pseudo-terminal pair stands in for the USB adapter, with a
-thread on one end writing the device's bytes in wall time, which checks the stamping bound and the
-wait at the block point in CI. A GNSS receiver on a USB serial adapter validates the whole (plan M5); its
+thread on one end writing the device's bytes in wall time. In CI that checks the stamping bound,
+the wait at the block point, a turn held before the first 2¹⁶ bus cycles (after which the runner
+still waits at the block points), and a turn held for more than 500 ms against a device sending at
+its full line rate, with the bytes dropped counted and an answer sent after the hold reaching the
+guest within the 50 ms bound. A GNSS receiver on a USB serial adapter validates the whole (plan M5); its
 recording replaces none of the generated ones, which stay the deterministic reference.
 
 TODO(owner): what `gnss.real(port)` does on the `serial` backend. Its capability declaration gives

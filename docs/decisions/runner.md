@@ -377,17 +377,26 @@ before `sync`, because the harness would then take its turn before the bytes up 
 arrived; and a sleep, because the socket wait sees a peer that has gone, in the same 20 ms steps
 in which it sees a signal.
 
-## The runner's wall clock follows esp32sim's resyncs, so a held turn is caught up under half a second
+## The runner starts its wall clock with esp32sim's pacing, and then follows esp32sim's resyncs
 
 Status: decided (#27)
 
-The runner's wall clock starts where the guest's first instruction runs, after turn 0, and moves
-its anchor only when `rt.resyncs` grows, to the slice boundary where the runner sees it. The wall
-time a held turn takes is therefore caught up by running the guest flat out when it is under
-500 ms, and skipped past that, as esp32sim does with its own anchor, which is private
+The runner turns on `machine.rt.enabled` at the first slice boundary at or after 2¹⁶ bus cycles,
+just before it calls `run` again, and anchors its wall clock there, emulated time 0 being now, as
+esp32sim's first check, in the first round of that `run`, anchors its own
+([protocol 12.2](../protocol.md#122-the-runner-waits-for-wall-time-at-the-block-point)). It moves
+its anchor only when `rt.resyncs` grows, to the slice boundary where it sees that. The wall time a
+held turn takes is therefore caught up by running the guest flat out when it is under 500 ms, and
+skipped past that, as esp32sim does with its own anchor, which is private
 (`Realtime::wall_start`). `stats` reports the skips as `rt_resyncs`.
 
-**Rejected:** moving the anchor after every turn, because each turn of a `real` source costs
+**Rejected:** turning pacing on at power-on and anchoring the runner's clock where the guest's first
+instruction runs, the first version of this design, because esp32sim anchors only at its first
+check, 2¹⁶ bus cycles in, and does not count that as a resync: a turn the test held in between
+would set the two anchors apart by its whole length for the rest of the run, and the runner would
+take the guest for behind and stop waiting at the block points.
+
+Also rejected: moving the anchor after every turn, because each turn of a `real` source costs
 harness time every emulated millisecond, and leaving it out of the clock would run the guest slower
 than wall time: a 0.3 ms turn per millisecond runs it at 0.77 times real time, behind a device that
 does not slow down. Also rejected: catching up every held turn whatever its length, because a test
