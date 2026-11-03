@@ -30,7 +30,9 @@ are in [models-technical.md](models-technical.md).
    `metafunc.definition.path.parent`, joins the single argument of the closest `app_path` marker to
    it (an absolute argument replaces it, as `pathlib` joins) and resolves the result. A marker with
    other than one positional path (`str` or `Path`), an unknown keyword, or a `build_dir`
-   that is not a non-empty string or `Path`, is `pytest.fail(..., pytrace=False)`. It then loads the board profile the `board_profile` marker names
+   that is not a non-empty string or a `Path` (`Path("")` is `Path(".")`, the app itself, and
+   passes), is `pytest.fail(..., pytrace=False)`. It then loads the board profile the
+   `board_profile` marker names
    ([board-profiles-technical.md](board-profiles-technical.md#data-flow)); a `MarkerError` or
    `ProfileError` is raised as
    `pytest.fail.Exception(f"{nodeid}: {error}", pytrace=False) from None`, a collection error
@@ -47,8 +49,9 @@ are in [models-technical.md](models-technical.md).
    marker's keyword, defaulting to `"build"`; relative builds resolve against the app.
    One `parametrize` over the four keeps them together under one id per backend. `indirect=True`
    hands each value to its fixture as `request.param`: `board` gets the backend name, and
-   pytest-embedded's `embedded_services`, `app_path` and `build_dir` fixtures read the parameter before the
-   command line (`_request_param_or_config_option_or_default` in `pytest_embedded/plugin.py`).
+   pytest-embedded's `embedded_services`, `app_path` and `build_dir` fixtures read the parameter
+   before the command line (`_request_param_or_config_option_or_default` in
+   `pytest_embedded/plugin.py`).
 4. **`pytest_collection_modifyitems`**, `trylast=True` so that `-k` and `-m` have deselected
    their tests first, refuses the options esp32tl sets itself when any remaining item has `board`
    in its `fixturenames`: `--embedded-services`, `--app-path` and `--build-dir` when
@@ -59,12 +62,13 @@ are in [models-technical.md](models-technical.md).
    It then refuses the first remaining item that uses `board` and whose board markers
    (`app_path`, `app_recording`, `board_profile`) say something else than its definition's did:
    `late_board_marker` reads them from the item, the profile with `board_profile`, and
-   compares them, one marker at a time, with the `BoardMarkers` (including a copy of `app_path.kwargs`) `pytest_generate_tests` kept in
-   `config.stash[READ]`, by the definition's nodeid (the item's
-   without `[{callspec.id}]`). A `pytest.param`'s marks, and those a hook of another plugin or a
-   conftest adds (this one runs `trylast`), reach the item but not `metafunc.definition`, so
-   they would go unchecked: a `board_profile` there would reach `board` but not the check, and an
-   `app_path` there would not reach pytest-embedded. A marker a fixture adds at setup is not seen.
+   compares them, one marker at a time, with the `BoardMarkers` (including a copy of
+   `app_path.kwargs`) `pytest_generate_tests` kept in `config.stash[READ]`, by the definition's
+   nodeid (the item's without `[{callspec.id}]`). A `pytest.param`'s marks, and those a hook of
+   another plugin or a conftest adds (this one runs `trylast`), reach the item but not
+   `metafunc.definition`, so they would go unchecked: a `board_profile` there would reach `board`
+   but not the check, and an `app_path` there would not reach pytest-embedded.
+   A marker a fixture adds at setup is not seen.
    For a selected serial item it also requires an exact `--port` or indirect `port` parameter,
    refusing blank or wildcard values with `PORT_REQUIRED`, conflicting `ESPPORT` with
    `PORT_CONFLICT`, and separate flashing ports with `FLASH_PORT_UNSUPPORTED`. These checks run
@@ -294,7 +298,8 @@ second entry in `SERVICES` without a change to `board` fails that assertion.
 
 The marker's `build_dir` keyword defaults to `build`. The plugin resolves it against the app
 and parametrises pytest-embedded's `build_dir` fixture with the absolute directory. `board`
-passes that same value to `Esp32Sim`; serial's preflight and pytest-embedded's `IdfApp` use it too. The backend's own environment variables are in
+passes that same value to `Esp32Sim`; serial's preflight and pytest-embedded's `IdfApp` use it too.
+The backend's own environment variables are in
 [esp32sim-backend-technical.md](esp32sim-backend-technical.md#configuration).
 
 ## Failure modes
@@ -441,13 +446,15 @@ end-to-end cases on the real runner and images.
 
 Build-selection tests in `tests/test_pytest_plugin.py` cover app-relative and absolute paths,
 spaces, invocation from another directory, default/module/class/test precedence, late keyword
-mutation, invalid selectors and the no-fallback guarantee. `test_two_builds_of_one_app_run_the_selected_firmware`
-runs two distinct copies of `hello_world` through the real emulator and verifies both their
-console text and tap hashes; it needs the built `hello_world` image, runner and ROM ELF.
-`tests/test_serial_backend.py::test_serial_preflight_and_flashing_use_the_selected_build`
-checks the real pytest-embedded fixture chain with a fake serial port, including hash, target,
-encryption and missing-file failures before port setup. `tests/test_cli.py::test_cli_passes_only_the_selected_build_to_the_runner`
-checks both CLI commands with a fake runner that reads the exact files passed to it.
+mutation, invalid selectors and the no-fallback guarantee.
+`test_two_builds_of_one_app_run_the_selected_firmware` runs two distinct copies of `hello_world`
+through the real emulator and verifies both their console text and tap hashes; it needs the built
+`hello_world` image, runner and ROM ELF.
+`tests/test_serial_backend.py::test_serial_preflight_and_flashing_use_the_selected_build` checks the
+real pytest-embedded fixture chain with a fake serial port, including hash, target, encryption and
+missing-file failures before port setup.
+`tests/test_cli.py::test_cli_passes_only_the_selected_build_to_the_runner` checks both CLI commands
+with a fake runner that reads the exact files passed to it.
 
 Not covered: deselection by `-m` (only `-k` is tested), running several backends in one
 session, and `power_on(utc=...)` with a timezone other than UTC.

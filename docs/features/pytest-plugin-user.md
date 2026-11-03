@@ -72,7 +72,8 @@ What the receiver can be told, and the units, are in [models and units](models-u
   `make firmware` builds it ([validation firmware](validation-firmware-user.md)).
 - The marker takes exactly one positional path (`str` or `pathlib.Path`), plus an optional
   `build_dir` keyword of the same types. An empty build string, another type, an unknown keyword
-  or the wrong number of positional arguments is a collection error that names the test:
+  or the wrong number of positional arguments is a collection error that names the test (the
+  check sees text only: `Path("")` is `Path(".")`, so it selects the application directory itself):
   `test_bad.py::test_bare: the app_path marker takes one path, and optionally build_dir as a non-empty path, as in @pytest.mark.app_path("../firmware/hello_world", build_dir="build")`.
   The error is the whole module's, and like any collection error it stops the session before any
   test runs (`Interrupted: 1 error during collection`, exit code 2), unless pytest runs with
@@ -650,8 +651,8 @@ under `[tool.pytest.ini_options]`.
   test that uses `board`. A project's own marker of one of these names means esp32tl's there.
 - **The `timeout` marker**: pytest-timeout's; esp32tl adds it to a test that uses `board` and has
   none, unless the session sets a timeout.
-- **`app_path`, `build_dir` and `embedded_services`**: esp32tl parametrises them for a test that uses `board`.
-  A test that also parametrises one of them itself is a collection error:
+- **`app_path`, `build_dir` and `embedded_services`**: esp32tl parametrises them for a test that
+  uses `board`. A test that also parametrises one of them itself is a collection error:
   `duplicate parametrization of 'app_path'`.
 
 ## See also

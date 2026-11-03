@@ -2,8 +2,8 @@
 
 `esp32tl/backends/serial.py` implements `Serial`; `esp32tl/backends/__init__.py` registers
 `serial: esp,idf` alongside `esp32sim: None`. The plugin defaults to `Esp32Sim.name`; explicit
-selection uses a single backend parameter, with `embedded_services`, `app_path` and `build_dir` in the same
-indirect parametrisation. See [the user contract](serial-backend-user.md).
+selection uses a single backend parameter, with `embedded_services`, `app_path` and `build_dir` in
+the same indirect parametrisation. See [the user contract](serial-backend-user.md).
 
 ## Data flow
 
@@ -25,7 +25,8 @@ indirect parametrisation. See [the user contract](serial-backend-user.md).
    `pytest_fixture_setup` runs it before pytest-embedded's `app` fixture, so an explicitly requested
    `dut` cannot flash before validation. `board` checks it too, then obtains `dut` dynamically.
    `serial_artifact` passes the resolved `build_dir` fixture to `check_artifact`; pytest-embedded
-   receives the same fixture for its app and flashing. `check_artifact` calls `load_app(app_path, build_dir=build_dir, backend="serial")` for finished-build checks, then
+   receives the same fixture for its app and flashing. `check_artifact` calls
+   `load_app(app_path, build_dir=build_dir, backend="serial")` for finished-build checks, then
    `app_image_sha256(app)` from `esp32tl/tap.py`. This hashes the app entry in `flasher_args.json`,
    not `IdfApp.bin_file` (which may name another `.bin`), the ELF or its embedded digest.
 3. pytest-embedded creates `IdfApp`, `IdfSerial` and `IdfDut`. `IdfSerial._start` owns autoflash,

@@ -128,6 +128,13 @@ def test_max_seconds_is_a_number_above_0(seconds: str, capsys: pytest.CaptureFix
     )
 
 
+def test_build_dir_is_not_empty(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        cli.main(["run", "--app", "firmware/hello_world", "--build-dir", ""])
+    assert exit_info.value.code == 2
+    assert "argument --build-dir: the build directory is an empty path" in capsys.readouterr().err
+
+
 @pytest.mark.parametrize("command", ["run", "replay"])
 @pytest.mark.parametrize("absolute", [False, True])
 def test_cli_passes_only_the_selected_build_to_the_runner(

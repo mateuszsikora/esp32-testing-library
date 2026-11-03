@@ -12,12 +12,12 @@ a `DuplicateStdoutPopen` on the dut's `msg_queue`, but only at `power_on()`.
 
 ## Data flow
 
-`Esp32Sim.__init__(dut, app_path, msg_queue, meta, profile, directory=None, skip=None, *, build_dir=None)` keeps
-`profile`, the test's [board profile](board-profiles-technical.md), as `Esp32Sim.profile`,
-`directory`, the test file's (the working directory when `None`), as `Esp32Sim.directory`, and
-`skip`, what to call for a source this backend does not give (`refuse`, which raises
-`SourceError`, when `None`; the `board` fixture passes pytest's skip). Then, in order, without
-starting anything:
+`Esp32Sim.__init__(dut, app_path, msg_queue, meta, profile, directory=None, skip=None,
+*, build_dir=None)` keeps `profile`, the test's [board profile](board-profiles-technical.md), as
+`Esp32Sim.profile`, `directory`, the test file's (the working directory when `None`), as
+`Esp32Sim.directory`, and `skip`, what to call for a source this backend does not give (`refuse`,
+which raises `SourceError`, when `None`; the `board` fixture passes pytest's skip). Then, in order,
+without starting anything:
 
 1. **`load_app(app_path, build_dir=build_dir)`** resolves the selected directory against the app
    (`build` when omitted), checks its `flasher_args.json` is a file, then builds
@@ -402,10 +402,11 @@ Times in these messages are `seconds(ns)`: seconds without trailing zeros, `1.5 
 Anything else `IdfApp` raises, a `flasher_args.json` that is not JSON or has no `flash_files` for
 instance, is not a `BackendError` and fails the setup with its own traceback.
 
-`load_app(app_path, build_dir=build_dir, backend="esp32sim")` is also used by serial with `backend="serial"`:
-its target and encryption errors name that backend. The default retains the runner-specific
-messages above. `app_image_sha256(app)` in `esp32tl/tap.py` hashes the app entry for both backends;
-no app entry returns `None`, and read failures raise `OSError` (tap writing catches those).
+`load_app(app_path, build_dir=build_dir, backend="esp32sim")` is also used by serial with
+`backend="serial"`: its target and encryption errors name that backend. The default retains the
+runner-specific messages above. `app_image_sha256(app)` in `esp32tl/tap.py` hashes the app entry for
+both backends; no app entry returns `None`, and read failures raise `OSError` (tap writing catches
+those).
 
 ## Tests
 

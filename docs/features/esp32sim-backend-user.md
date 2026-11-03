@@ -18,9 +18,9 @@ ESP-IDF build for the classic ESP32.
   always hands this file to the runner, so the runner's own ROM lookup is not used
   ([where the runner looks for it](runner-user.md#where-the-rom-comes-from)).
 - **An ESP-IDF build** in the directory selected by `app_path(..., build_dir=...)`, defaulting
-  to the app's `build/`. Relative build paths are relative to the app; absolute paths work too. Built
-  for the `esp32` target, finished, every file `flasher_args.json` lists present, and without flash
-  encryption.
+  to the app's `build/`. Relative build paths are relative to the app; absolute paths work too.
+  Built for the `esp32` target, finished, every file `flasher_args.json` lists present, and without
+  flash encryption.
 
 The two defaults are paths in the checkout esp32tl is installed from, which holds only with an
 editable install; `make setup` makes one. Installed any other way, from a wheel for instance,

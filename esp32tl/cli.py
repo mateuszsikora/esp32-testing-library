@@ -88,7 +88,7 @@ def run_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--build-dir",
-        type=Path,
+        type=build_path,
         help="the existing ESP-IDF build directory, relative to APP or absolute (default: build)",
     )
     parser.add_argument(
@@ -114,6 +114,13 @@ def positive(text: str) -> float:
     if not (math.isfinite(value) and value > 0):
         raise argparse.ArgumentTypeError(f"{text!r} is not a number of seconds above 0")
     return value
+
+
+def build_path(text: str) -> Path:
+    """A build directory: Path("") would be ".", the app itself, so empty text is refused."""
+    if not text:
+        raise argparse.ArgumentTypeError("the build directory is an empty path")
+    return Path(text)
 
 
 def run(

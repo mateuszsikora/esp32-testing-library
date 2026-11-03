@@ -8,9 +8,9 @@ that references to its number keep their meaning.
 ## Tests and backends
 
 1. A test that uses `board` is parametrised with the backend's name as its id
-   (`test_marked[esp32sim]`), and its `board`, `embedded_services`, `app_path` and `build_dir` are set together;
-   a test without `board` is not parametrised. Serial is opt-in; selecting it gives `esp,idf`,
-   including for a test requesting only `console`.
+   (`test_marked[esp32sim]`), and its `board`, `embedded_services`, `app_path` and `build_dir` are
+   set together; a test without `board` is not parametrised. Serial is opt-in; selecting it gives
+   `esp,idf`, including for a test requesting only `console`.
    `tests/test_serial_backend.py::test_serial_is_opt_in_and_selects_esp_idf`,
    `tests/test_serial_backend.py::test_console_only_uses_serial_backend`.
    `tests/test_pytest_plugin.py::test_board_is_parametrised_with_the_backend_its_services_and_the_app`
@@ -718,7 +718,6 @@ that references to its number keep their meaning.
     `tests/test_net_tls.py::test_tls_rejects_unknown_ca_or_wrong_hostname`,
     `tests/test_net_tls.py::test_tls_conditions_are_live_named_and_reject_truth_testing`,
     `examples/position_tracker/tests/test_tracker_support.py::test_tls_timeout_names_the_expected_handshake`
-
 
 ## Explicit build selection
 
