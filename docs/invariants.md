@@ -741,7 +741,7 @@ that references to its number keep their meaning.
     `tests/test_net_tls.py::test_tls_conditions_are_live_named_and_reject_truth_testing`,
     `examples/position_tracker/tests/test_tracker_support.py::test_tls_timeout_names_the_expected_handshake`
 
-- **123.** MQTT CONNECT policy uses only named MQTT 3.1.1 return codes and runs on fully parsed
+- **124.** MQTT CONNECT policy uses only named MQTT 3.1.1 return codes and runs on fully parsed
     public metadata before session state is installed. Rejection closes after CONNACK, never takes
     over an accepted client, processes pipelined publications, subscribes or emits a Will.
     Attempts record the selected code and board time separately from accepted clients, and both
