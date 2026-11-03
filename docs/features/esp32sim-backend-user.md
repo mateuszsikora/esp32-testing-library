@@ -69,6 +69,14 @@ passes as `--sd-spi sclk=N,mosi=N,miso=N,cs=N --sd-rw IMAGE`; the card writes in
 as the firmware writes ([runner](runner-user.md#put-an-sd-card-in)). An empty slot gives the
 runner no card.
 
+The chip's Wi-Fi station is on the link once the test gives it an access point
+(`wifi.access_point(...)`, [pytest plugin](pytest-plugin-user.md#the-wifi-fixture)): the backend
+passes it to the runner as `--wifi ssid=…,chan=…,psk=…` and each network around as
+`--wifi-nearby ssid=…,chan=…,rssi=…,secure=0|1`, and the link carries the station's Ethernet frames
+to the simulated network behind the access point, on the test's clock, and that network's frames
+back ([network](network-user.md)). Without an access point the runner gets neither flag and the
+station finds nothing to join.
+
 ## Console recordings
 
 `console.tap(path)` captures link console messages with their emulated times and writes them at
@@ -182,10 +190,15 @@ connected`, which is what a test that never powered on gets, and `no stats: the 
 without them (the runner was killed, or died)` say what is missing. The statistics are those the
 runner sends as the run ends, one set per test. `routes:` gives, for every UART route of the
 profile, what the test put at its far end, the bytes that went in and came out, and the file it
-was tapped into. A test that failed gets the run on the board's clock after it
+was tapped into. With an access point, the statistics have a `Wi-Fi:` line, the frames the
+station sent and received, and the report ends with the access point
+(`wifi: access point 'myssid', channel 6, WPA2-PSK`), a line per network around and the network's
+events (`network events:`, as for the modem's network). A test that failed gets the run on the
+board's clock after it
 ([the run on the board's clock](run-report-user.md#the-run-on-the-boards-clock)). The same data,
 but the run, is in the test's `esp32sim_link` user property, a JSON string with `board`, `watch`,
-`warnings`, `stats`, `error` and `routes`, which `--junitxml` writes as a `<property>`.
+`warnings`, `stats`, `error`, `routes`, `sd_card` and `wifi`, which `--junitxml` writes as a
+`<property>`; `wifi` is `null` without an access point.
 
 ## When the backend cannot start
 

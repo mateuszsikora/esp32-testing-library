@@ -41,7 +41,7 @@ def test_esp32_devkitc_routes_the_gnss_on_uart1_gpio_4_and_5() -> None:
         # ESP-IDF's sdspi example's defaults for the ESP32
         sd_card=SdCardRoute(sclk=14, mosi=15, miso=2, cs=13),
     )
-    assert profile.interfaces == ["console", "uart.gnss", "sd_card"]
+    assert profile.interfaces == ["console", "uart.gnss", "sd_card", "wifi"]
 
 
 def test_the_lilygo_profile_holds_the_specification_and_lilygo_s_documentation() -> None:
@@ -73,7 +73,7 @@ def test_the_lilygo_profile_holds_the_specification_and_lilygo_s_documentation()
     assert profile.lines == {
         "modem": {"pwrkey": Line(4, active=1, on_ms=50, off_ms=2500), "ri": Line(33, "down")}
     }
-    assert profile.interfaces == ["console", "uart.modem", "uart.gnss", "lines.modem"]
+    assert profile.interfaces == ["console", "uart.modem", "uart.gnss", "lines.modem", "wifi"]
 
 
 def test_a_profile_is_loaded_once_and_cannot_be_changed() -> None:
@@ -197,16 +197,25 @@ def test_a_profile_that_breaks_the_schema_is_refused_with_the_key(
 def test_a_profile_without_sizes_or_interfaces_has_only_the_console(tmp_path: Path) -> None:
     (tmp_path / "bare.toml").write_text("name = 'bare'\nchip = 'esp32'\n")
     profile = boards.load(tmp_path / "bare.toml")
-    assert (profile.flash_mb, profile.psram_mb, profile.interfaces) == (None, None, ["console"])
+    assert (profile.flash_mb, profile.psram_mb, profile.interfaces) == (
+        None,
+        None,
+        ["console", "wifi"],
+    )
     (tmp_path / "x.toml").write_text(GOOD)
-    assert boards.load(tmp_path / "x.toml").interfaces == ["console", "uart.gnss", "lines.modem"]
+    assert boards.load(tmp_path / "x.toml").interfaces == [
+        "console",
+        "uart.gnss",
+        "lines.modem",
+        "wifi",
+    ]
 
 
 def test_an_sd_card_slot_may_take_an_input_only_pin_for_miso(tmp_path: Path) -> None:
     (tmp_path / "x.toml").write_text(GOOD + SD_CARD.replace("miso = 2", "miso = 39"))
     profile = boards.load(tmp_path / "x.toml")
     assert profile.sd_card == SdCardRoute(sclk=14, mosi=15, miso=39, cs=13)
-    assert profile.interfaces[-1] == "sd_card"
+    assert profile.interfaces[-2:] == ["sd_card", "wifi"]
 
 
 def test_every_backend_has_a_declaration() -> None:
@@ -222,11 +231,14 @@ def test_the_declaration_is_the_specification_s_table() -> None:
             "uart": Capability(("model", "replay", "real"), tap=True),
             # the runner's card model, holding an image file
             "sd_card": Capability(("model",)),
+            # esp32sim's access point, with the simulated network behind it
+            "wifi": Capability(("model",)),
         },
         "serial": {
             "console": Capability(tap=True),
             "uart": Capability(("real",)),
             "sd_card": Capability(("real",)),
+            "wifi": Capability(("real",)),
         },
     }
 
@@ -286,13 +298,13 @@ def test_the_first_request_a_backend_cannot_give_is_the_reason() -> None:
             DEVKITC,
             Request("uart.modem", source="model"),
             "the board profile esp32-devkitc has no uart.modem;"
-            " its interfaces are console, uart.gnss, sd_card",
+            " its interfaces are console, uart.gnss, sd_card, wifi",
         ),
         (
             LILYGO,
             Request("sd_card", source="model"),
             "the board profile lilygo-t-a7670g-r2 has no sd_card;"
-            " its interfaces are console, uart.modem, uart.gnss, lines.modem",
+            " its interfaces are console, uart.modem, uart.gnss, lines.modem, wifi",
         ),
         (DEVKITC, Request("sd_card", tap=True), "no backend can tap sd_card"),
         (
@@ -332,7 +344,7 @@ def test_a_request_no_backend_can_give_is_an_error_not_a_skip(
         (
             "[serial]\nuarts = { tap = true }",
             "c.toml: serial.uarts: no such kind of interface;"
-            " the kinds are console, uart, lines, sd_card",
+            " the kinds are console, uart, lines, sd_card, wifi",
         ),
         (
             "[serial]\nuart = { sources = ['modle'] }",

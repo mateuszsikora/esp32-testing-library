@@ -1,11 +1,15 @@
-"""The simulated network behind a modem, driven only by the board's turns."""
+"""The simulated network behind a modem or a Wi-Fi access point, driven only by the board's
+turns."""
 
 from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import cast, overload
+from typing import Literal, cast, overload
 
 from esp32tl.link.boardlink import Output
+from esp32tl.net.dhcp import Dhcp
 from esp32tl.net.dns import Dns
+from esp32tl.net.ethernet import Ethernet
+from esp32tl.net.http import HttpServer
 from esp32tl.net.ip import Connection, Network, StreamService
 from esp32tl.net.mqtt import Broker
 from esp32tl.net.ntp import Ntp
@@ -15,33 +19,59 @@ from esp32tl.report import board_time
 
 LATENCY_NS = 1_000_000
 
+Link = Literal["ppp", "ethernet"]
+
 
 class Internet:
-    """One per modem. DNS and NTP always listen; the test registers TCP services by port.
+    """One per modem, over PPP, or per Wi-Fi access point, over Ethernet with ARP and DHCP. DNS
+    and NTP always listen, the broker on TCP 1883 and the HTTP server on 80; the test registers
+    other TCP services by port.
 
-    Responses are stamped 1 ms after the request's UART chunk. Public calls run while the
-    board is held, and callbacks while it advances: neither uses host time or sockets.
+    Responses are stamped 1 ms after the request's UART chunk or Ethernet frame. Public calls run
+    while the board is held, and callbacks while it advances: neither uses host time or sockets.
     """
 
     def __init__(
         self,
         now: Callable[[], int],
         world: Callable[[], datetime] = lambda: datetime(2026, 1, 1, tzinfo=UTC),
+        *,
+        link: Link = "ppp",
     ) -> None:
         self._now = now
         self._at: int | None = None
         self._out: list[Output] = []
+        self._kind = link
         self.events: list[dict[str, object]] = []
-        self.ip = Network(
-            lambda data: self.ppp.send_ip(data), self.log, mtu=lambda: self.ppp.peer_mru
-        )
+        self.ip = Network(lambda data: self.link.send_ip(data), self.log, mtu=self._mtu)
         self.dns = Dns("10.64.0.1", self.log)
         self.ntp = Ntp(self.now, world, self.log)
         self.ip.udp.update({53: self.dns, 123: self.ntp})
         self.broker = Broker(self.now, self.log)
         self.listen(1883, self.broker)
-        self.ppp = self._peer()
+        self.http = HttpServer(self.now, self.log)
+        self.listen(80, self.http)
+        # Serves behind an access point only; its leases outlive the link's restarts.
+        self.dhcp = Dhcp(self.now, self.log)
+        self.link: Ppp | Ethernet = self._peer()
         self.active = False
+
+    @property
+    def ppp(self) -> Ppp:
+        """The PPP link of a network behind a modem."""
+        if not isinstance(self.link, Ppp):
+            raise AttributeError("this network is behind a Wi-Fi access point: it has no PPP")
+        return self.link
+
+    @property
+    def ethernet(self) -> Ethernet:
+        """The Ethernet of a network behind a Wi-Fi access point."""
+        if not isinstance(self.link, Ethernet):
+            raise AttributeError("this network is behind a modem: it has no Ethernet")
+        return self.link
+
+    def _mtu(self) -> int:
+        return self.link.peer_mru if isinstance(self.link, Ppp) else self.link.mtu
 
     def now(self) -> int:
         return self._now() if self._at is None else self._at
@@ -92,20 +122,23 @@ class Internet:
         self.ip.tcp[port] = traced
         return None
 
-    def _peer(self) -> Ppp:
-        return Ppp(
-            lambda data: self._out.append((self.now() + LATENCY_NS, data)),
-            self.ip.receive,
-            log=self.log,
-            ended=self.ip.reset,
-        )
+    def _peer(self) -> Ppp | Ethernet:
+        def send(data: bytes) -> None:
+            self._out.append((self.now() + LATENCY_NS, data))
+
+        if self._kind == "ethernet":
+            return Ethernet(send, self.ip.receive, self.dhcp, log=self.log)
+        return Ppp(send, self.ip.receive, log=self.log, ended=self.ip.reset)
 
     def start(self, t: int) -> None:
+        """The link comes up at `t`: a modem's dial, which starts PPP, or an access point on the
+        air."""
         self.stop(t)
         self.active = True
         self._at = t
         try:
-            self.ppp.start()
+            if isinstance(self.link, Ppp):
+                self.link.start()
         finally:
             self._at = None
 
@@ -116,14 +149,15 @@ class Internet:
             self.active = False
             self.ip.reset()
             self._out.clear()
-            self.ppp = self._peer()
+            self.link = self._peer()
         finally:
             self._at = previous
 
     def receive(self, t: int, data: bytes) -> list[Output]:
+        """What the device sent at `t`: bytes of the modem's line, or one Ethernet frame."""
         self._at = t
         try:
-            self.ppp.receive(data)
+            self.link.receive(data)
             return self._take()
         finally:
             self._at = None

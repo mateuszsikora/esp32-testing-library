@@ -1837,3 +1837,58 @@ second of line time on its own; dropping the newest, as a full RX FIFO does, bec
 would go on reading the past while the device's answers are lost; and a bound of 500 ms, as long
 as esp32sim lets a lag be caught up, because at full line rate it would hold every later answer
 half a second late.
+
+## The Wi-Fi station is an interface of every profile, and the access point a model source
+
+Status: decided (#31)
+
+Every classic ESP32 has the radio, so every board profile has `wifi` without listing it, last in
+its interfaces, and the `wifi` fixture is `board.wifi`. What is on the air is what the test gives
+before power-on: `wifi.access_point(...)` returns the network behind it, `wifi.nearby(...)` adds a
+network a scan lists; both ask the capability declaration for a `model` source on the new kind
+`wifi`, which `esp32sim` gives and `serial` does not, so a real board skips. Without an access
+point the station finds nothing, as a board with none in range. The access point goes off the air
+and comes back at the board's current instant, through `wifi.access_point_off()` and
+`wifi.access_point_on()`, the way the test drives a line.
+
+**Rejected:** a `[wifi]` table in the profiles, because nothing in it would differ from one board to
+another; and the access point from the profile, because what is in range is the test's world, not
+the board's wiring.
+
+## Behind the access point the network speaks Ethernet, ARP and DHCP
+
+Status: decided (#31)
+
+The network behind the access point is `Internet` with an Ethernet link instead of PPP: the same
+addresses as behind the modem (the device `10.64.0.2`, router and DNS `10.64.0.1`), handed out by
+a DHCP server, ARP answered for every address but the device's own, and the same IPv4, TCP, UDP,
+DNS, NTP and broker on top, so a firmware's test reads the same whichever link it uses. IPv6 frames
+are dropped and counted: ESP-IDF's examples configure a link-local address, which needs no answer.
+
+**Rejected:** answering ARP for the device's own address, because lwIP probes it before it takes a
+lease (RFC 5227) and declines an address something answers for; and a subnet of its own for the
+Wi-Fi network, which would make tests of one firmware differ by its link.
+
+## An HTTP server answers on port 80 of every simulated network
+
+Status: decided (#31)
+
+`network.http` is an HTTP/1.1 server on TCP 80, behind the modem and behind the access point alike,
+as the broker is on 1883: `serve(path, body)` says what a path answers, `requested(...)` is a
+condition for a request, and every request is kept. It answers one request per connection and
+closes it, and refuses chunked bodies and heads or bodies over its limits; firmware that fetches
+over HTTP (plan M7's validation, ESP-IDF's `http_request`) needs nothing more yet.
+
+**Rejected:** a server the test has to install with `network.listen(80, ...)` first, because a
+test of a firmware that fetches would always do so; and keep-alive, chunked transfer and TLS by
+default, until a firmware's test needs them (TLS is `network.listen(443, network.http, tls=ca)`
+already).
+
+## A Wi-Fi tap, signal changes and the esp32tl command's Wi-Fi are postponed
+
+Status: postponed (#31)
+
+What crosses the air is in the network's transcript, plain text after TLS, and nothing records the
+Ethernet frames themselves, as a pcap could; the signal of the access point is esp32sim's fixed
+-40 dBm and does not change during a run; `esp32tl run` and `esp32tl replay` pass the runner no
+`--wifi`. Each comes when a test or a run by hand needs it.

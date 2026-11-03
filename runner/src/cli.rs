@@ -1,6 +1,7 @@
 //! The command line. Flag names and value formats copy esp32sim's, so that switching to
 //! `esp32sim --board socket:PATH` once mikroverk/esp32sim#325 lands is a rename (plan §4.2).
 use crate::sd_card::Wiring;
+use esp_soc::wifi::{ApConfig, BeaconAp};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -24,6 +25,12 @@ usage: esp32tl-runner --chip esp32 --flash-at OFFSET=FILE... --max-seconds S [op
   --sd-rw IMAGE         an SD card holding IMAGE, a whole number of 512 KiB units, on the
                         pins of --sd-spi; the guest's writes go into the file
   --sd-spi sclk=N,mosi=N,miso=N,cs=N   the GPIOs the card is wired to, in SPI mode
+  --wifi ssid=…,psk=…,chan=…,bssid=…   esp32sim's virtual access point, every key
+                        optional; the network behind it is the peer's, over the
+                        socket (eth_tx, eth_rx): needs --board
+  --wifi-nearby ssid=…,chan=…,rssi=…,secure=0|1,bssid=…   a network around the
+                        station that a scan lists and nothing can join; repeatable,
+                        needs --wifi
 ";
 
 /// Where the peer is (protocol §1).
@@ -67,6 +74,24 @@ pub struct Opts {
     pub peer_timeout: Option<Duration>,
     /// `--sd-rw` and `--sd-spi`.
     pub sd_card: Option<(PathBuf, Wiring)>,
+    /// `--wifi` and `--wifi-nearby`.
+    pub wifi: Option<Wifi>,
+}
+
+/// esp32sim's virtual access point (`--wifi`), as esp32sim parses it, and the networks around
+/// the station (`--wifi-nearby`). The spec is kept as given: `ApConfig` has no `PartialEq`, and
+/// the run loop makes a fresh access point from it each time the peer puts it back on the air.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Wifi {
+    pub spec: String,
+    pub nearby: Vec<BeaconAp>,
+}
+
+impl Wifi {
+    /// The access point's configuration; the spec was checked when it was parsed.
+    pub fn access_point(&self) -> ApConfig {
+        ApConfig::parse(&self.spec).expect("checked by cli::parse")
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -95,9 +120,12 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Opts, Error> {
         board: None,
         peer_timeout: Some(Duration::from_secs(60)),
         sd_card: None,
+        wifi: None,
     };
     let mut sd_image = None;
     let mut sd_wiring = None;
+    let mut wifi = None;
+    let mut nearby = Vec::new();
     while let Some(flag) = args.next() {
         let mut value = || {
             args.next()
@@ -174,6 +202,12 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Opts, Error> {
             }
             "--sd-rw" => sd_image = Some(PathBuf::from(value()?)),
             "--sd-spi" => sd_wiring = Some(wiring(&value()?)?),
+            "--wifi" => {
+                let spec = value()?;
+                access_point(&spec)?;
+                wifi = Some(spec);
+            }
+            "--wifi-nearby" => nearby.push(value()?),
             "-h" | "--help" => return Err(Error::Help),
             _ => return Err(usage(format!("unknown argument {flag:?}"))),
         }
@@ -197,12 +231,54 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Opts, Error> {
         (Some(_), None) => return Err(usage("--sd-rw needs --sd-spi: the card's pins")),
         (None, Some(_)) => return Err(usage("--sd-spi needs --sd-rw: the card's image")),
     };
+    opts.wifi = match wifi {
+        Some(spec) => {
+            if opts.board.is_none() {
+                return Err(usage(
+                    "--wifi puts the peer's network behind the access point: it needs --board",
+                ));
+            }
+            let nearby =
+                BeaconAp::parse_all(&nearby).map_err(|e| usage(format!("--wifi-nearby: {e}")))?;
+            let ap = access_point(&spec)?;
+            // esp32sim leaves such a network out with a line on stderr (`set_beacons`); here the
+            // harness asked for it, so it is the harness's mistake
+            if let Some(b) = nearby
+                .iter()
+                .find(|b| b.ssid == ap.ssid || b.bssid == ap.bssid)
+            {
+                return Err(usage(format!(
+                    "--wifi-nearby ssid={}: a network around with the access point's {} would be \
+                     the access point",
+                    b.ssid,
+                    if b.ssid == ap.ssid { "SSID" } else { "BSSID" }
+                )));
+            }
+            Some(Wifi { spec, nearby })
+        }
+        None if !nearby.is_empty() => {
+            return Err(usage("--wifi-nearby needs the access point of --wifi"));
+        }
+        None => None,
+    };
     if opts.console != Console::Stdout && opts.board.is_none() {
         return Err(usage(
             "--console socket and both send the console to the peer: they need --board",
         ));
     }
     Ok(opts)
+}
+
+/// `--wifi`'s spec, as esp32sim reads it, without `epoch`: the network behind the access point is
+/// the peer's, and so is the time it tells.
+fn access_point(spec: &str) -> Result<ApConfig, Error> {
+    let ap = ApConfig::parse(spec).map_err(|e| usage(format!("--wifi: {e}")))?;
+    if ap.epoch_s.is_some() {
+        return Err(usage(
+            "--wifi: epoch sets esp32sim's own network's clock; the network here is the peer's",
+        ));
+    }
+    Ok(ap)
 }
 
 /// `socket:PATH` or `tcp:HOST:PORT`.

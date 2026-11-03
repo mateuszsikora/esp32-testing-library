@@ -1,5 +1,6 @@
 """The link protocol's codec and handshake (`docs/protocol.md`), without a runner."""
 
+import base64
 import json
 import re
 from pathlib import Path
@@ -12,6 +13,8 @@ from esp32tl.link.protocol import (
     MAX_LINE,
     Adc,
     Console,
+    EthRx,
+    EthTx,
     GpioIn,
     GpioOut,
     HarnessHello,
@@ -30,6 +33,8 @@ from esp32tl.link.protocol import (
     UartTx,
     Wait,
     Warn,
+    WifiAp,
+    WifiStats,
     as_json,
     decode,
     encode,
@@ -46,6 +51,11 @@ EVERY_MESSAGE: list[tuple[Sender, Message]] = [
     ("runner", UartCfg(4, 312_456_789, 2, (), None, None)),
     ("runner", GpioOut(9, 2_000_000_000, ((4, 1), (5, 0)), (4,), (4,))),
     ("runner", Reset(12, 4_100_000_000, 12)),
+    ("runner", EthTx(13, 4_200_000_000, b"\xff" * 6 + b"\x24\x6f\x28\x00\x11\x22\x08\x06")),
+    (
+        "runner",
+        Stats(5, "stop", 0, 2, (), 0, 0, 0, 0, wifi=WifiStats(3, 0, 2, 1, 0)),
+    ),
     ("runner", Sync(2_000_000_000)),
     ("runner", Console(812_345_678, b"Hello world!\n")),
     ("runner", Warn(1_000_000_000, "frm_err", "baud", port=1, pin=5, baud=115200, nbytes=3)),
@@ -72,6 +82,9 @@ EVERY_MESSAGE: list[tuple[Sender, Message]] = [
     ("harness", GpioIn(3_000_000_000, ((33, 1),))),
     ("harness", Release(3_500_000_000, (33,))),
     ("harness", Adc(3_000_000_000, 34, 1.25)),
+    ("harness", EthRx(4_201_000_000, bytes(14))),
+    ("harness", WifiAp(5_000_000_000, False)),
+    ("harness", WifiAp(6_000_000_000, True)),
     ("harness", Wait(9, 3_000_000_000, 1_000_000)),
     ("harness", Wait(0, None, None)),
     ("harness", Stop()),
@@ -221,3 +234,28 @@ def test_a_mismatched_handshake_is_answered_all_the_same(
     # The answer carries the harness's version and chip, so the runner finds the mismatch too.
     assert answer == HarnessHello(1, "esp32", "esp32-devkitc", ())
     assert found == mismatch
+
+
+@pytest.mark.parametrize(
+    ("line", "sender"),
+    [
+        (b'{"type":"eth_tx","seq":1,"t":0,"data":"AAAAAAAAAAAAAAAAAA=="}', "runner"),
+        (
+            b'{"type":"eth_rx","t":0,"data":"' + base64.b64encode(bytes(1519)) + b'"}',
+            "harness",
+        ),
+        (b'{"type":"wifi_ap","t":0,"on":1}', "harness"),
+        (b'{"type":"wifi_ap","t":0}', "harness"),
+    ],
+)
+def test_ethernet_frames_are_14_to_1518_bytes_and_wifi_ap_is_true_or_false(
+    line: bytes, sender: Sender
+) -> None:
+    with pytest.raises(ProtocolError):
+        decode(line, sender)
+
+
+def test_stats_without_wifi_has_no_wifi_field() -> None:
+    stats = Stats(5, "stop", 0, 2, (), 0, 0, 0, 0)
+    assert "wifi" not in as_json(stats)
+    assert decode(encode(stats), "runner") == stats

@@ -28,7 +28,7 @@ set -eu
 
 IDF_VERSION=v5.3.6
 CONTAINER=espressif/idf:$IDF_VERSION@sha256:cee52f0c4fdaf088992a7a739f5993154e95cf1d3ab61c24f5b40e6d56a3a070
-IMAGES="hello_world nmea_reader gpio_echo sdspi modem_at nvs_reader pppos_client"
+IMAGES="hello_world nmea_reader gpio_echo sdspi modem_at nvs_reader pppos_client http_request"
 family=firmware
 if [ "${1:-}" = --examples ]; then
 	shift
@@ -58,6 +58,18 @@ project_of() {
 	case $1 in
 	hello_world) echo "$IDF_PATH/examples/get-started/hello_world" ;;
 	sdspi) echo "$IDF_PATH/examples/storage/sd_card/sdspi" ;;
+	http_request)
+		# Copied, unchanged, into the output: its component manager writes
+		# dependencies.lock into the project, and ESP-IDF's own examples are
+		# read-only in the container. One copy per ESP-IDF version, made once.
+		source=$out/.http_request-$idf_version
+		if [ ! -d "$source" ]; then
+			rm -rf "$source.partial"
+			cp -Rp "$IDF_PATH/examples/protocols/http_request" "$source.partial"
+			mv "$source.partial" "$source"
+		fi
+		echo "$source"
+		;;
 	nmea_reader) echo "$PWD/firmware/nmea_reader" ;;
 	gpio_echo) echo "$PWD/firmware/gpio_echo" ;;
 	modem_at) echo "$PWD/firmware/modem_at" ;;

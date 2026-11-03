@@ -15,6 +15,7 @@ from esp32tl.interfaces.lines import Lines
 from esp32tl.interfaces.modem import Modem
 from esp32tl.interfaces.sd_card import SdCard
 from esp32tl.interfaces.uart import Uart
+from esp32tl.interfaces.wifi import Wifi
 from esp32tl.tap import Tap
 from esp32tl.units import Duration
 
@@ -57,6 +58,10 @@ class Board(ABC):
     def sd_card(self) -> SdCard:
         return self._get_sd_card()
 
+    @property
+    def wifi(self) -> Wifi:
+        return self._get_wifi()
+
     @abstractmethod
     def uart(self, role: str) -> Uart: ...
 
@@ -65,6 +70,9 @@ class Board(ABC):
 
     @abstractmethod
     def _get_sd_card(self) -> SdCard: ...
+
+    @abstractmethod
+    def _get_wifi(self) -> Wifi: ...
 
     @abstractmethod
     def power_on(self, utc: datetime | None = None) -> None: ...

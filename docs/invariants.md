@@ -235,6 +235,21 @@ that references to its number keep their meaning.
     `runner/src/sd_card/tests.rs::a_card_not_selected_or_not_clocked_hears_nothing`,
     `runner/src/sd_card/tests.rs::without_miso_the_chip_reads_high_but_the_card_listens`,
     `runner/src/sd_card/tests.rs::checks_crcs_of_cmd0_and_cmd8_always_and_of_the_rest_after_cmd59`
+111. With `--wifi`, every frame the station sent goes to the peer as an `eth_tx` event stamped at
+     the slice boundary that took it, in order; an `eth_rx` reaches the station's link only when
+     due and in order, waits in the runner while the link's queue is full, and is dropped and
+     counted while the access point is off the air. `eth_rx` and `wifi_ap` without `--wifi` are
+     protocol errors.
+     `runner/src/session/tests.rs::the_station_frames_go_out_as_eth_tx_events_stamped_at_the_slice_boundary`,
+     `runner/src/session/tests.rs::eth_rx_waits_for_room_in_the_link_and_goes_off_the_air_with_the_access_point`,
+     `runner/src/session/tests.rs::eth_rx_and_wifi_ap_without_wifi_are_protocol_errors`
+112. An access point that leaves the air deauthenticates a station that has joined it, reason 3,
+     and is gone only once that frame is off its queue; one that nobody joined is gone at once. One
+     put back on the air while it is leaving comes back only once it has left, so the station still
+     learns it must join again.
+     `runner/src/session/tests.rs::on_the_emulator_the_access_point_deauthenticates_the_station_before_it_leaves`,
+     `runner/src/session/tests.rs::an_access_point_put_back_while_it_is_leaving_comes_back_once_it_has_left`,
+     `tests/test_http_request.py::test_rejoins_an_access_point_switched_off_and_on_at_one_instant`
 
 ## Recordings and replay
 
@@ -587,6 +602,19 @@ that references to its number keep their meaning.
     `tests/test_net_mru.py::test_mru_resets_on_renegotiation_termination_and_redial`,
     `tests/test_net_mru.py::test_mru_too_small_for_this_stack_gets_a_nak_not_an_ack`,
     `tests/test_net_mru.py::test_ppp_does_not_emit_an_oversized_ip_packet_even_when_called_directly`
+113. Behind the access point ARP never answers for the device's own address, so a lease is never
+     declined, and answers every other address with the network's MAC; DHCP acknowledges only the
+     device's one address and NAKs another, and answers no datagram the IP layer would drop.
+     `tests/test_net_ethernet.py::test_arp_answers_every_address_but_the_devices_own`,
+     `tests/test_net_ethernet.py::test_dhcp_naks_another_address_and_ignores_another_server`,
+     `tests/test_net_ethernet.py::test_dhcp_checks_the_datagram_as_the_ip_layer_does`
+114. ESP-IDF's unmodified `http_request` example joins the test's access point with ESP-IDF's
+     default SSID and passphrase, gets its address by DHCP and fetches from the test's HTTP server;
+     after the access point leaves and comes back it joins again and fetches again; with a wrong
+     passphrase it gets no address.
+     `tests/test_http_request.py::test_joins_and_fetches_from_the_tests_server`,
+     `tests/test_http_request.py::test_rejoins_once_the_access_point_is_back`,
+     `tests/test_http_request.py::test_a_wrong_password_never_gets_an_address`
 
 
 104. The GPS alarm drives its buzzer only while a fresh valid fix is within the NVS-configured

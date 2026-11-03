@@ -29,6 +29,7 @@ from esp32tl.interfaces.lines import Lines
 from esp32tl.interfaces.modem import Modem
 from esp32tl.interfaces.sd_card import SdCard
 from esp32tl.interfaces.uart import Uart
+from esp32tl.interfaces.wifi import Wifi
 from esp32tl.link.boardlink import Wire
 from esp32tl.report import RunLog
 from esp32tl.tap import Tap, app_image_sha256
@@ -106,6 +107,7 @@ class Serial(Board):
         if reference is not None:
             self._files[reference.resolve()] = ("recording", "app_recording")
         self._uarts: dict[str, Uart] = {}
+        self._wifi: Wifi | None = None
         self._console = Uart(
             "console",
             Wire(1, 3, dut.serial.baud),
@@ -321,6 +323,12 @@ class Serial(Board):
         if self._card is None:
             raise BackendError(f"the board profile {self.profile.name} has no sd_card")
         return self._card
+
+    def _get_wifi(self) -> Wifi:
+        """The real board's station: whatever access points are around it. Giving one skips."""
+        if self._wifi is None:
+            self._wifi = Wifi(now=lambda: self.now.ns if self.powered else 0, asked=self._asked)
+        return self._wifi
 
     def tap_console(self, path: str | Path) -> Tap:
         return self._console.tap(path)

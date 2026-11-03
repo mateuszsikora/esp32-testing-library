@@ -196,6 +196,10 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The real source stamps what the port gave with the turn it hands it over in, every emulated millisecond](harness.md#the-real-source-stamps-what-the-port-gave-with-the-turn-it-hands-it-over-in-every-emulated-millisecond) | `harness.md` | decided (#27) |
 | [A real source's port keeps the wire's baud, and a transmit at another rate fails the run](harness.md#a-real-sources-port-keeps-the-wires-baud-and-a-transmit-at-another-rate-fails-the-run) | `harness.md` | decided (#27) |
 | [A real source keeps at most 50 ms of bytes waiting on its line, and drops the oldest](harness.md#a-real-source-keeps-at-most-50-ms-of-bytes-waiting-on-its-line-and-drops-the-oldest) | `harness.md` | decided (#27) |
+| [The Wi-Fi station is an interface of every profile, and the access point a model source](harness.md#the-wi-fi-station-is-an-interface-of-every-profile-and-the-access-point-a-model-source) | `harness.md` | decided (#31) |
+| [Behind the access point the network speaks Ethernet, ARP and DHCP](harness.md#behind-the-access-point-the-network-speaks-ethernet-arp-and-dhcp) | `harness.md` | decided (#31) |
+| [An HTTP server answers on port 80 of every simulated network](harness.md#an-http-server-answers-on-port-80-of-every-simulated-network) | `harness.md` | decided (#31) |
+| [A Wi-Fi tap, signal changes and the esp32tl command's Wi-Fi are postponed](harness.md#a-wi-fi-tap-signal-changes-and-the-esp32tl-commands-wi-fi-are-postponed) | `harness.md` | postponed (#31) |
 
 ## The runner crate and esp32sim
 
@@ -230,3 +234,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The SD card answers at once and has no CMD6](runner.md#the-sd-card-answers-at-once-and-has-no-cmd6) | `runner.md` | decided (#32) |
 | [Under --realtime the runner waits at each block point until wall time reaches it](runner.md#under---realtime-the-runner-waits-at-each-block-point-until-wall-time-reaches-it) | `runner.md` | decided (#27) |
 | [The runner starts its wall clock with esp32sim's pacing, and then follows esp32sim's resyncs](runner.md#the-runner-starts-its-wall-clock-with-esp32sims-pacing-and-then-follows-esp32sims-resyncs) | `runner.md` | decided (#27) |
+| [The network behind the access point is the peer's, over the link](runner.md#the-network-behind-the-access-point-is-the-peers-over-the-link) | `runner.md` | decided (#31) |
+| [Ethernet frames are stamped at the slice boundary they are taken at](runner.md#ethernet-frames-are-stamped-at-the-slice-boundary-they-are-taken-at) | `runner.md` | decided (#31) |
+| [The access point that goes off the air deauthenticates the station first](runner.md#the-access-point-that-goes-off-the-air-deauthenticates-the-station-first) | `runner.md` | decided (#31) |
+| [The Wi-Fi messages keep the link protocol at version 1](runner.md#the-wi-fi-messages-keep-the-link-protocol-at-version-1) | `runner.md` | decided (#31) |

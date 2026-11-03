@@ -187,9 +187,11 @@ def test_serial_capabilities_skip_at_the_call(pytester: pytest.Pytester) -> None
         @pytest.mark.board_profile("lilygo-t-a7670g-r2")
         def test_gpio(lines):
             lines.drive("modem.ri", True)
+        def test_wifi(wifi):
+            wifi.access_point("myssid", password="mypassword")
     """)
     result = run_serial(pytester, "-rs")
-    result.assert_outcomes(skipped=12)
+    result.assert_outcomes(skipped=13)
     result.stdout.fnmatch_lines(
         [
             "*serial: uart.gnss takes no model source on this backend, only real*",
@@ -203,6 +205,7 @@ def test_serial_capabilities_skip_at_the_call(pytester: pytest.Pytester) -> None
             "*serial: uart.modem takes no model source on this backend, only real*",
             "*serial: uart.modem takes no model source on this backend, only real*",
             "*serial: GPIO lines cannot be controlled or observed on this backend*",
+            "*serial: wifi takes no model source on this backend, only real*",
         ]
     )
     assert not (pytester.path / "not-written.jsonl").exists()

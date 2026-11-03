@@ -14,6 +14,10 @@ pub const CLOCK: &str = "emulated-fifo-write";
 pub const ESP32SIM: &str = "8c652151dd5a521249a785ca147f20a9f8eda68f";
 /// The longest line either side may send (protocol §2).
 pub const MAX_LINE: usize = 1 << 20;
+/// An Ethernet frame without FCS, as esp32sim's relay takes and gives it (5.15): a header, and at
+/// most 1500 bytes of payload.
+pub const ETH_MIN: usize = 14;
+pub const ETH_MAX: usize = 1518;
 
 const CPU_HZ: u128 = esp32::periph::CPU_HZ as u128;
 const NS_PER_S: u128 = 1_000_000_000;
@@ -106,6 +110,16 @@ pub enum Incoming {
         t: u64,
         pins: Vec<u8>,
     },
+    /// An Ethernet frame for the station, behind the access point of `--wifi` (5.15).
+    EthRx {
+        t: u64,
+        data: Vec<u8>,
+    },
+    /// The access point of `--wifi` on the air or off it (5.16).
+    WifiAp {
+        t: u64,
+        on: bool,
+    },
     Wait {
         ack: u64,
         quiet_until: Option<u64>,
@@ -158,6 +172,24 @@ pub fn parse(line: &str) -> Result<Incoming, String> {
             t: field("t").time()?,
             pins: field("pins").pins()?,
         },
+        "eth_rx" => {
+            let data = unbase64(&field("data").string()?).map_err(|e| format!("eth_rx: {e}"))?;
+            if !(ETH_MIN..=ETH_MAX).contains(&data.len()) {
+                return Err(format!(
+                    "eth_rx: an Ethernet frame of {} bytes; one without FCS has {ETH_MIN} to \
+                     {ETH_MAX}",
+                    data.len()
+                ));
+            }
+            Incoming::EthRx {
+                t: field("t").time()?,
+                data,
+            }
+        }
+        "wifi_ap" => Incoming::WifiAp {
+            t: field("t").time()?,
+            on: field("on").boolean()?,
+        },
         "stop" => Incoming::Stop,
         "adc" => Incoming::NotYet("adc"),
         _ => return Err(format!("unknown type {kind:?}")),
@@ -182,6 +214,13 @@ impl Field<'_> {
         match self.value() {
             Some(Json::Int(v)) => Ok(*v),
             Some(_) => Err(self.error("is not an integer")),
+            None => Err(self.error("is missing")),
+        }
+    }
+    fn boolean(&self) -> Result<bool, String> {
+        match self.value() {
+            Some(Json::Bool(v)) => Ok(*v),
+            Some(_) => Err(self.error("is not true or false")),
             None => Err(self.error("is missing")),
         }
     }
@@ -307,6 +346,13 @@ pub fn reset(seq: u64, t: u64, cause: u32) -> String {
     format!(r#"{{"type":"reset","seq":{seq},"t":{t},"cause":{cause}}}"#)
 }
 
+pub fn eth_tx(seq: u64, t: u64, data: &[u8]) -> String {
+    format!(
+        r#"{{"type":"eth_tx","seq":{seq},"t":{t},"data":"{}"}}"#,
+        base64(data)
+    )
+}
+
 pub fn console(t: u64, data: &[u8]) -> String {
     format!(r#"{{"type":"console","t":{t},"data":"{}"}}"#, base64(data))
 }
@@ -395,6 +441,24 @@ pub struct PortStats {
     pub frm_err: u64,
 }
 
+/// The Wi-Fi station's link, for `stats` with `--wifi` (5.9).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WifiStats {
+    /// `eth_tx` messages: Ethernet frames the station sent.
+    pub eth_tx: u64,
+    /// `eth_rx` frames the station's link took.
+    pub eth_rx: u64,
+    /// `eth_rx` frames that came due while the access point was off the air, or that it still
+    /// held when it went off.
+    pub eth_rx_dropped: u64,
+    /// Frames from the air the station's receive ring had no descriptor for (esp32sim's
+    /// `StationLink::rx_dropped`), beacons included.
+    pub rx_dropped: u64,
+    /// Frames the station sent that the relay dropped: longer than 1518 bytes, or more than 64
+    /// in one slice (`StationLink::tx_dropped`).
+    pub eth_tx_dropped: u64,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Stats {
     pub resets: u64,
@@ -405,6 +469,8 @@ pub struct Stats {
     pub inputs_on_output: u64,
     pub inputs_not_applied: u64,
     pub rx_bytes_not_paced: u64,
+    /// With `--wifi` only.
+    pub wifi: Option<WifiStats>,
 }
 
 /// `end` and its extra fields: `stop` and `detail` for `emulator`, `detail` for `protocol_error`.
@@ -425,7 +491,7 @@ pub fn stats(t: u64, end: &str, extra: &[(&str, &str)], s: &Stats) -> String {
         .collect();
     let _ = write!(
         out,
-        r#","resets":{},"turns":{},"uart":[{}],"unrouted_rx_bytes":{},"inputs_on_output":{},"inputs_not_applied":{},"rx_bytes_not_paced":{}}}"#,
+        r#","resets":{},"turns":{},"uart":[{}],"unrouted_rx_bytes":{},"inputs_on_output":{},"inputs_not_applied":{},"rx_bytes_not_paced":{}"#,
         s.resets,
         s.turns,
         uart.join(","),
@@ -434,6 +500,14 @@ pub fn stats(t: u64, end: &str, extra: &[(&str, &str)], s: &Stats) -> String {
         s.inputs_not_applied,
         s.rx_bytes_not_paced
     );
+    if let Some(w) = &s.wifi {
+        let _ = write!(
+            out,
+            r#","wifi":{{"eth_tx":{},"eth_tx_dropped":{},"eth_rx":{},"eth_rx_dropped":{},"rx_dropped":{}}}"#,
+            w.eth_tx, w.eth_tx_dropped, w.eth_rx, w.eth_rx_dropped, w.rx_dropped
+        );
+    }
+    out.push('}');
     out
 }
 

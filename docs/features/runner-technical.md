@@ -8,14 +8,15 @@ The crate is `runner/`, package `esp32tl-runner`:
 | `runner/src/cli.rs` | the command line |
 | `runner/src/socket_board.rs` | `SocketBoard`, the `BoardModel` on the chip's pins with `--board`: it records what the guest does, with its bus cycle, for the run loop, holds the GPIO levels the peer drives for the chip to take, and hands SPI transactions to the SD card |
 | `runner/src/sd_card.rs` | `SdCard`, the SD card of `--sd-rw` in SPI mode, and `CardBoard`, the board that holds it alone without `--board` |
-| `runner/src/session.rs` | `Session`, the run loop with a peer: slices, turns, coalescing, pacing, warnings, `stats` |
+| `runner/src/session.rs` | `Session`, the run loop with a peer: slices, turns, coalescing, pacing, warnings, the Wi-Fi station's Ethernet frames and access point with `--wifi`, `stats` |
 | `runner/src/protocol.rs` | the wire format: time conversion, base64, parsing the peer's messages and writing the runner's |
 | `runner/src/transport.rs` | `SocketLink`, the Unix or TCP socket: buffered NDJSON writes, line reads, the signal flag and the time limits |
 
 Each module's unit tests are in a `tests.rs` of its own: `runner/src/tests.rs` for `main.rs`,
 `runner/src/<module>/tests.rs` for the others. It drives esp32sim through two of its crates,
 `esp32` (the classic chip) and `esp-soc` (the machine, `Soc`, `Stop`, `BoardModel`, `SpiPins`,
-`UartRoute`, and the JSON parser `esp_soc::json` the protocol module reads with), and takes the
+`UartRoute`, the Wi-Fi access point and station link of `esp_soc::wifi`, and the JSON parser
+`esp_soc::json` the protocol module reads with), and takes the
 SD card's image store from a third, `esp-periph` (`esp_periph::sdmmc::{SdStore, FileStore}`). esp32sim lines below are at
 its pin, `8c65215`.
 
@@ -27,8 +28,13 @@ its pin, `8c65215`.
    returns `cli::Error::Help` (usage on stderr, exit 0) or `cli::Error::Usage` (exit 2 through
    `usage_error`). Flags are read in order; the first bad one is reported. After the loop it
    checks, in this order, that `--chip` was given and is `esp32`, that `--max-seconds` was given,
-   that there is at least one `--flash-at`, that `--sd-rw` and `--sd-spi` come together, and that
-   `--console socket` or `both` comes with `--board`.
+   that there is at least one `--flash-at`, that `--sd-rw` and `--sd-spi` come together, that
+   `--wifi` comes with `--board` and its `--wifi-nearby` specs parse and differ from the access
+   point (`--wifi-nearby` without `--wifi` is refused there too), and that `--console socket` or
+   `both` comes with `--board`. A `--wifi` spec is checked as the flag is read (`access_point`:
+   esp32sim's `ApConfig::parse`, then no `epoch`); `cli::Wifi` keeps the spec as given, since
+   `ApConfig` has no `PartialEq`, and `Wifi::access_point` parses it again each time a fresh access
+   point is made. The `--wifi-nearby` specs become `BeaconAp`s through `BeaconAp::parse_all`.
 2. **Open the card**, with `--sd-rw` (`card`): `FileStore::write_through` opens the image for
    reading and writing, `SdCard::new` checks its size, and the `SD card on` line goes to stderr.
    The card is a `sd_card::Shared` (`Rc<RefCell<SdCard>>`), which the board and `main` hold.
@@ -46,6 +52,10 @@ its pin, `8c65215`.
      `--board` it becomes a `CardBoard` holding the card, or with no card stays the machine's
      default board, esp32sim's `--board none`. Then `m.bus.attach_board_devices()`, which reads
      `uses_uart_pins` and so makes the bus call `uart_tx` on every TX FIFO write.
+   - With `--wifi` ([below](#wi-fi)): `Guest::wifi_access_point` attaches the access point and the
+     networks around, `m.bus.set_ethernet_relay(true)` puts the station link in relay mode, and
+     the `Wi-Fi access point` line, then one `Wi-Fi network around` line per `--wifi-nearby`, go
+     to stderr.
    - The ROM: `--rom`, else `find_rom` (below). `m.load_rom`, then the `ROM` line on stderr.
    - Each `--flash-at` file, in command-line order: read whole, `m.write_flash(offset, data)`,
      then the `flash` line. Nothing checks that files overlap; a later one overwrites.
@@ -166,7 +176,10 @@ at once.
 ### The session
 
 `Session` runs the protocol over two traits, `Guest` (the machine: cycles, `run_until`,
-`chip_reset`, `uart_route`, `rx_pending`, `uart_input`, `gpio_drive`, `take_gpio_inputs`) and
+`chip_reset`, `uart_route`, `rx_pending`, `uart_input`, `gpio_drive`, `take_gpio_inputs`, and for
+Wi-Fi `take_eth_frames`, `eth_input`, `wifi_access_point`, `wifi_leave` and `wifi_drops`, whose
+defaults are a chip without Wi-Fi: no frames, nothing taken, nothing attached, left at once, no
+drops) and
 `Link` (the socket: `send`, `flush`, `idle`, `closing`, `recv`), so that its tests drive it with a
 scripted guest and a fake peer. `impl Guest for esp32::Machine` sets `max_cycles` and calls
 `run(u64::MAX)`, calls `reboot()` for `chip_reset`, reads `bus.periph.uart_route(port)` and
@@ -190,26 +203,129 @@ specifies it:
 
 1. `hello` out, the peer's `hello` in (version, chip, `watch`), the power-on routes, then turn 0
    at `t = 0` before the guest's first instruction.
-2. A loop of slices. At each boundary `boundary()` takes the board's log (`collect`), reads the
+2. A loop of slices. At each boundary `boundary()` takes the board's log and, with `--wifi`, the
+   station's Ethernet frames (`collect`), reads the
    three UART routes, turns what was recorded into messages up to the block point
    (`process_pending`), takes every turn whose block point is already behind the guest
    (`take_turn`), and, before the end of the run, closes a coalesced message whose character time
-   has passed (`close_after_gap`), applies the inputs now due (`apply_inputs`: received bytes onto
-   their lines; GPIO levels and releases to the `Recorder`, then `take_gpio_inputs`, with an
-   `input_on_output` warning for a level on a pin set in `GPIO_ENABLE`),
+   has passed (`close_after_gap`), asks an access point on its way off the air whether it has
+   left (`leave`), applies the inputs now due (`apply_inputs`: received bytes onto their lines;
+   GPIO levels and releases to the `Recorder`, then `take_gpio_inputs`, with an
+   `input_on_output` warning for a level on a pin set in `GPIO_ENABLE`; Ethernet frames and
+   access point switches, [below](#wi-fi)),
    delivers the paced bytes now due (`deliver`, which counts and warns about drops against the
-   routes it read), and lets the link write what has waited (`Link::idle`). Then `slice_end`
+   routes it read), offers the station's link the Ethernet frames it has not taken yet
+   (`deliver_eth`), and lets the link write what has waited (`Link::idle`). Then `slice_end`
    picks the earliest of the block point, `latency` after now while no event is unacknowledged,
    the next whole emulated millisecond, the next queued input, the next paced byte and the end of
-   the run, and `run_until` runs to it. `Stop::SwReset` queues a `reset` with the cause from
+   the run, and `run_until` runs to it. `Stop::SwReset` first takes the board's log and the
+   station's frames (`collect`) and adds up the station link's drops (`count_wifi_drops`), then
+   queues a `reset` with the cause from
    `chip_reset`, the routes after it and, while `watch` is not empty, a `gpio_out` of the watched
    pins as `gpio_drive` reads them, with a change for every pin whose `GPIO_ENABLE & GPIO_OUT` bit
    differs from `levels_reported` (`reset_gpio`); any other stop but `Halted` ends the run.
-3. `finish` calls `Link::closing`, sends what is left where the end calls for it, and `stats`,
-   then `Link::close`.
+3. `finish` calls `Link::closing`, sends what is left where the end calls for it (after a last
+   `collect` for `max_seconds`, a signal and an emulator stop), adds up the station link's drops,
+   and sends `stats`, then `Link::close`.
 
 Times on the socket are nanoseconds, from `protocol::ns` (cycles to ns, rounded down) and
 `protocol::cycles` (ns to cycles, rounded up), in 128-bit arithmetic.
+
+### Wi-Fi
+
+With `--wifi`, the chip's station joins esp32sim's `VirtualAp`, and the network behind it is the
+peer's ([protocol, 5.15 and 5.16](../protocol.md#515-eth_tx-and-eth_rx-ext-m7)). esp32sim's
+`StationLink` (`esp-soc/src/wifi.rs:490-514`) holds the access point, the network behind it and
+the relay mode. `setup` attaches a fresh access point through `Guest::wifi_access_point`, which
+calls `StationLink::attach_new(cfg, None, debug)` (`:538-543`: the access point, and esp32sim's
+`VirtualNet` behind it without NAT) and then sets the networks around with `set_beacons`
+(`:565-575`), and turns the relay on (`SocBus::set_ethernet_relay(true)`,
+`esp32/src/soc.rs:92-95`). In relay mode `StationLink::net_step` does nothing (`:634-635`), so
+esp32sim's own network, with its DHCP server, DNS, NTP and NAT, never answers; the frames the
+access point passes on as data stay in the relay's queue, at most 64 of at most 1518 bytes
+(`RELAY_QUEUE`, `RELAY_FRAME_MAX`, `:520-521`; `station_tx`, `:578-583`, counts the rest in
+`tx_dropped`). `SocBus::attach_wifi` (`esp32/src/soc.rs:88-91`) does the same `attach_new` on the
+classic chip; the runner calls `attach_new` on the link directly. `Wifi::access_point` refuses no
+spec at run time: `cli::parse` has checked it, and an unparsable one is a panic.
+
+**Frames from the station.** `collect`, at every slice boundary, right before a chip reset and in
+`finish`, calls `Guest::take_eth_frames` (`SocBus::take_ethernet_frames`, `esp32/src/soc.rs:96`,
+which is `StationLink::take_relay_frames`, `esp-soc/src/wifi.rs:651-653`). The relay keeps no
+time, so every frame taken becomes an `Item::Eth` stamped with the cycle it was taken at, after the
+board's log of the same slice. `process_pending` turns each into an `eth_tx` event, counted in
+`stats.wifi.eth_tx`, and the event sets the block point as any other. The slice rules of the
+protocol (6.1) bound the stamp: at most one emulated millisecond after the station sent the frame,
+and at most `latency` while no event is unacknowledged. A slice ends for no Wi-Fi reason of its
+own.
+
+**Frames for the station.** An `eth_rx` goes into the input queue as `Input::Eth`; when it comes
+due, `apply_inputs` appends it to `Session::eth`, the runner's own queue, and calls `deliver_eth`,
+which hands the frames at its front to `Guest::eth_input` (`SocBus::receive_ethernet_frame`,
+`esp32/src/soc.rs:97-99`, which is `StationLink::receive_relay_frame`, `esp-soc/src/wifi.rs:656-662`)
+in order, until one is refused because esp32sim's queue holds 64 already. The rest wait in
+`Session::eth` and are offered again at every slice boundary (`boundary` calls `deliver_eth`
+after `deliver`). Each frame taken counts in `stats.wifi.eth_rx`. esp32sim then puts the frames
+on the air one at a time, at least `RX_GAP_US` (400 µs) apart, and only when the access point has
+nothing of its own due, management frames before beacons (`StationLink::next_rx`, `:608-624`); a
+frame that comes off the queue while the station is not associated is discarded by
+`VirtualAp::data_from_ds` (`:436-437`), uncounted. While the access point is off the air
+(`ap_on` false), `deliver_eth` drops every frame in `Session::eth` and counts it in
+`stats.wifi.eth_rx_dropped`.
+
+**The access point leaving.** `wifi_ap` goes into the input queue as `Input::WifiAp`;
+`switch_access_point` ignores a switch to the state `ap_on` already holds. Before it switches it
+runs `deliver_eth`, so the frames already due meet the access point as it was. Off sets `ap_on` false and
+`leaving`, and calls `leave`, which calls `Guest::wifi_leave` with the link's drop counts read
+just before. On the machine, `wifi_leave`:
+
+- with no access point attached, returns `true`;
+- when the access point's `state` is not `StaState::Idle` (a station has authenticated or
+  associated), removes every frame but beacons from its queue, queues a deauthentication to the
+  station at the current microsecond (`session::deauthentication`: frame control `0xc0`, the
+  station, the BSSID twice, the access point's next sequence number, reason 3, "the sending
+  station is leaving", IEEE 802.11-2020 9.3.3.12 and Table 9-49), sets `state` to `Idle` and
+  `next_beacon_us` to `u64::MAX`, so it beacons no more and holds no station, and returns `false`.
+  Nothing stops it answering what the station sends meanwhile (`VirtualAp::on_station_tx`); a
+  station that authenticates again before the detach is deauthenticated again at the next call;
+- otherwise returns `false` while anything but beacons is in its queue: the deauthentication, or
+  answers queued before (probe responses, with no station joined);
+- otherwise detaches the access point, and with it the networks around, which esp32sim keeps on
+  the access point (`StationLink::attach(None, None)`, `esp-soc/src/wifi.rs:534-536`, which also
+  empties the link's queues and starts its counts again), and returns `true`.
+
+While `leaving`, `boundary` calls `leave` at every slice boundary, before `apply_inputs`; on
+`true` it adds the drop counts it read to `stats.wifi` and clears `leaving`. The access point
+thus leaves at the first boundary after esp32sim has put the deauthentication on the air.
+Switching on sets `ap_on` true and, unless the old access point is still `leaving`, calls
+`Guest::wifi_access_point`, which attaches a fresh `VirtualAp` from the same spec with
+`attach_new`, so the station must scan, authenticate, associate and run the WPA2 handshake again;
+the relay mode stays (`attach`, `:534-536`). While the old one is leaving, `leave` does that
+once `wifi_leave` returns `true`: attaching at once would replace the queue that holds the
+deauthentication, and the station, never told, would keep sending to an access point that has
+forgotten it (an `off` and an `on` at one instant did exactly that, and the station's TCP
+connects failed with errno 113 for a minute). `deliver_eth` drops frames while `leaving` as well
+as while off. No drop counts are read on the way on: the old access point's were added as it
+left, and a fresh one starts from none. After the switch `deliver_eth` runs again: going off,
+it drops the frames the link did not take.
+
+Why the deauthentication: at the pin esp32sim's station does not notice beacons that stop coming.
+Measured with ESP-IDF's `http_request` example: with the access point merely detached, the
+firmware kept its connection state for 60 emulated seconds, and only its TCP connects failed, with
+errno 113. The deauthentication is what an access point that shuts down sends, and ESP-IDF's
+station acts on it: `http_request` prints `Wi-Fi disconnected 3` within an emulated second of the
+switch and joins again once the access point is back (`tests/test_http_request.py`).
+
+**Counts.** `stats.wifi` is `Some` from the start with `--wifi` (`protocol::WifiStats`), and
+`protocol::stats` writes it after `rx_bytes_not_paced`, only then. esp32sim's `rx_dropped` and
+`tx_dropped` start again whenever the link is attached anew (`attach`) and at a chip reset
+(`surviving_reboot`, `esp-soc/src/wifi.rs:546`, from `reboot`, `esp32/src/soc.rs:145`), so
+`Guest::wifi_drops` is read and added up just before each: before `chip_reset`, before a fresh
+access point, in `leave` before the detach, and in `finish`. `eth_tx`, `eth_rx` and
+`eth_rx_dropped` are the runner's own counts.
+
+A chip reset keeps the access point, its state and the relay mode (`surviving_reboot`); it
+empties esp32sim's two relay queues, so frames for the station that the link had taken are lost
+there, while those still in `Session::eth` stay.
 
 ### The socket
 
@@ -238,6 +354,11 @@ The command line and the usage text: [runner-user.md](runner-user.md#run-an-imag
 - stderr, from the runner (formats from `main.rs` and `sd_card.rs`):
   - `esp32tl-runner: SD card on SCLK GPIO {sclk}, MOSI GPIO {mosi}, MISO GPIO {miso}, CS GPIO
     {cs}: {image} ({KiB} KiB, write-through)`
+  - `esp32tl-runner: Wi-Fi access point '{ssid}' bssid {bssid} channel {channel} ({security}),
+    its network on the socket`, with `--wifi`; `{security}` is `WPA2-PSK` with a `psk`, else
+    `open`, and `{bssid}` is lowercase hex with colons (`esp_soc::wifi::mac_str`)
+  - `esp32tl-runner: Wi-Fi network around: '{ssid}' bssid {bssid} channel {channel} {rssi} dBm
+    ({security})`, one per `--wifi-nearby`, `WPA2-PSK` when it is `secure`
   - `esp32tl-runner: ROM {path}`
   - `esp32tl-runner: flash {offset:#x}: {path} ({len} bytes)`
   - `esp32tl-runner: chip reset at {seconds:.6} s, cause {cause:#x}`
@@ -299,6 +420,14 @@ The socket's limits are constants, not options:
 | `protocol::MAX_LINE` | 1 MiB | the longest line from the peer; a longer one is a protocol error |
 | `session::MAX_DATA` | 48 KiB | the most bytes one `uart_tx` or `console` message carries |
 | `session::RX_FIFO` | 128 | the classic RX FIFO's size, against which `rxfifo_ovf` is counted |
+
+**Wi-Fi** is configured on the command line only: `--wifi` and `--wifi-nearby`
+([runner-user.md](runner-user.md#put-a-wi-fi-access-point-on-the-air)). The frame limits are
+`protocol::ETH_MIN` (14) and `protocol::ETH_MAX` (1518), an Ethernet frame without FCS as
+esp32sim's relay takes it; the 64-frame queues and the 400 µs between received frames are
+esp32sim's (`esp-soc/src/wifi.rs:520-523`). esp32sim's `wifi-frames` debug area
+(`ESP_EMU_DEBUG=wifi-frames`, or `ESP_EMU_DEBUG_WIFI_FRAMES`) logs the access point's frames on
+stderr, `[wifi] AP -> …`: `attach_new` takes the machine's debug flags.
 
 **The SD card's image** comes from `esp-periph`, the esp32sim crate of the peripheral models,
 pinned like the others: its `SdStore` trait and `FileStore`, the store of esp32sim's own
@@ -367,6 +496,12 @@ Every message starts with `esp32tl-runner: `. Usage errors exit 2 and add a seco
 | `--sd-spi {spec}: GPIO {pin} is input only` | `sclk`, `mosi` or `cs` on 34 to 39 |
 | `--sd-spi {spec}: {name} is given twice` | a name repeated |
 | `--sd-spi {spec}: the four pins must differ` | two names on one GPIO |
+| `--wifi: {error}` | esp32sim's `ApConfig::parse` refuses the spec: `invalid WiFi option '{entry}': expected key=value`, `invalid WiFi channel '{value}': expected 1 through 14`, `unknown WiFi option '{key}'`, or a bad `bssid` |
+| `--wifi: epoch sets esp32sim's own network's clock; the network here is the peer's` | `epoch=` in the spec |
+| `--wifi puts the peer's network behind the access point: it needs --board` | `--wifi` without `--board` |
+| `--wifi-nearby needs the access point of --wifi` | `--wifi-nearby` without `--wifi` |
+| `--wifi-nearby: {error}` | esp32sim's `BeaconAp::parse_all` refuses the specs: `invalid nearby-network option '{entry}': expected key=value`, `a nearby network needs an ssid of 1 to 32 bytes`, `more than 32 nearby networks`, `nearby networks '{a}' and '{b}' share the BSSID {bssid}`, and the like for a bad `chan`, `rssi`, `secure` or `bssid` |
+| `--wifi-nearby ssid={ssid}: a network around with the access point's SSID would be the access point` (or `BSSID`) | a nearby network with the access point's SSID, or its BSSID; esp32sim's own CLI leaves it out with `[emu] --wifi-nearby '{ssid}' left out: it has {why}` on stderr instead (`cli/src/lib.rs:486-490`) |
 
 Inputs that cannot be loaded exit 2 through `fail`, with no second line and no stop line:
 
@@ -397,7 +532,7 @@ peer come from `session.rs` and `transport.rs`:
 | 0 | `stop from the peer` | the peer's turn ended with `stop` |
 | 0 | `signal` | the first `SIGTERM` or `SIGINT` |
 | 1 | `the emulator stopped before --max-seconds: {stop:?}` | any `Stop` but `Halted` and `SwReset` |
-| 3 | `protocol error by the peer at {board}: {what}: {line}` | `{what}` is one of: `version {v}, the runner speaks version 1`, `chip {chip:?}, the runner runs "esp32"`, `watch holds GPIO {pin}, which the esp32 does not have` (any pin but 0 to 39 without 24 and 28 to 31, `session::GPIOS`), `expected hello`, `hello after the handshake`, a parse error of `protocol::parse` (`not JSON: …`, `not a JSON object`, `no "type"`, `unknown type …`, `{type}: "{field}" is missing`, `… is not an integer`, `… is negative`, `… is not a GPIO number`, `uart_rx: bad base64 character …`, and the like), `t {t} is before this turn's sync at {b} (rule 2)`, `GPIO {pin} is not in the peer's watch`, `a baud of 0`, `ack {ack}, but the last event before this sync was seq {seq}`, `quiet_until {q} is not after this turn's sync at {b}`, `adc is not implemented yet`. `{line}` is the peer's line, cut after 200 characters with `...` |
+| 3 | `protocol error by the peer at {board}: {what}: {line}` | `{what}` is one of: `version {v}, the runner speaks version 1`, `chip {chip:?}, the runner runs "esp32"`, `watch holds GPIO {pin}, which the esp32 does not have` (any pin but 0 to 39 without 24 and 28 to 31, `session::GPIOS`), `expected hello`, `hello after the handshake`, a parse error of `protocol::parse` (`not JSON: …`, `not a JSON object`, `no "type"`, `unknown type …`, `{type}: "{field}" is missing`, `… is not an integer`, `… is negative`, `… is not a GPIO number`, `uart_rx: bad base64 character …`, and the like), `t {t} is before this turn's sync at {b} (rule 2)`, `GPIO {pin} is not in the peer's watch`, `a baud of 0`, `ack {ack}, but the last event before this sync was seq {seq}`, `quiet_until {q} is not after this turn's sync at {b}`, `adc is not implemented yet`, `eth_rx without --wifi`, `wifi_ap without --wifi` (after the check of `t`), `eth_rx: an Ethernet frame of {n} bytes; one without FCS has 14 to 1518`, `eth_rx: bad base64 character …`, `wifi_ap: "on" is not true or false`. `{line}` is the peer's line, cut after 200 characters with `...` |
 | 3 | `protocol error by the peer at {board}: a line longer than 1 MiB` or `…: a line that is not UTF-8` | from the socket, without the line |
 | 4 | `the peer at {board} is gone: {why}` | `{why}` is `the peer closed the socket`, `read failed: {error}`, `write failed: {error}`, `the socket accepts no more data`, `the peer's turn took longer than --peer-timeout`, `the peer read nothing for longer than --peer-timeout` or, while the last messages are written, `the peer did not read the last messages in time` |
 
@@ -405,7 +540,7 @@ A failure to write the last messages does not change the exit code: the first ca
 
 ## Tests
 
-`make test-runner` runs the Rust tests (`cargo test --locked`), 80 of them:
+`make test-runner` runs the Rust tests (`cargo test --locked`), 86 of them:
 
 - `runner/src/cli/tests.rs`: `cli::parse` only. `minimal_command_line` checks the defaults
   (`rom: None`, flash 4 MiB, PSRAM 0, console `Stdout`, no board, `--peer-timeout` 60 s);
@@ -421,13 +556,21 @@ A failure to write the last messages does not change the exit code: the first ca
   `--console socket` and `both` without `--board`.
   `an_sd_card_takes_its_image_and_its_pins_in_any_order` checks `--sd-rw` with `--sd-spi` in
   either order and an input-only MISO; `sd_card_usage_errors` checks the text of each `--sd-rw`
-  and `--sd-spi` usage error.
+  and `--sd-spi` usage error. `wifi_takes_esp32sims_access_point_and_the_networks_around` checks
+  `--wifi` with `ssid`, `psk` and `chan`, two `--wifi-nearby` with their values and defaults, and
+  a spec with every other key left out (channel 6);
+  `wifi_refuses_what_esp32sim_refuses_and_what_needs_another_flag` checks the text of the usage
+  errors: `--wifi` without `--board`, `--wifi-nearby` without `--wifi`, a channel of 15, an entry
+  without `=`, `epoch`, a nearby network without `ssid`, and one with the access point's SSID or
+  BSSID.
 - `runner/src/tests.rs`: `stop_names_are_the_variant_names` builds every `Stop` variant and
   checks that `stop_name` is the start of its `Debug` text, followed by nothing, a space or `(`,
   so that `CostModelLifecycle` reported as `CostModel` fails.
 - `runner/src/protocol/tests.rs`: time conversion in both directions and past 76 emulated
   seconds, character times, base64 against RFC 4648's vectors and malformed input, parsing every
-  message the peer may send and refusing malformed ones, the exact text of the runner's messages,
+  message the peer may send and refusing malformed ones (`eth_rx` of 13 bytes or without `t`,
+  `wifi_ap` with `on` of `1` or missing; 1518 bytes taken and 1519 refused), the exact text of the
+  runner's messages, `eth_tx` and `stats` with `wifi` among them,
   and `the_esp32sim_revision_is_the_one_cargo_builds`, which checks that the revision `hello`
   reports is the one in `runner/Cargo.toml`.
 - `runner/src/sd_card/tests.rs`: `SdCard` through `transfer`, against a host in the test that
@@ -465,6 +608,22 @@ A failure to write the last messages does not change the exit code: the first ca
   `on_the_emulator_no_pad_is_driven_after_a_chip_reset` drives GPIO 4 as a plain GPIO and GPIO 26
   from UART1's TX signal, and checks that after `reboot()` no output signal drives any pad and
   `GPIO_ENABLE` and `GPIO_OUT` are 0, which `reset_gpio` relies on.
+  Wi-Fi runs against `WifiGuest`, a `FakeGuest` with a scripted relay and a link that takes a
+  given number of frames between two slices:
+  `the_station_frames_go_out_as_eth_tx_events_stamped_at_the_slice_boundary` (two frames stamped
+  at the boundary the `latency` bound sets, consecutive `seq`, the answer taken at `t + latency`,
+  and `stats.wifi`); `eth_rx_waits_for_room_in_the_link_and_goes_off_the_air_with_the_access_point`
+  (frames that wait for room, an access point that leaves a boundary after it is asked, a frame
+  dropped while it is off, a second `on` that is no switch, and the drop counts added up as it
+  leaves and at the end); `eth_rx_and_wifi_ap_without_wifi_are_protocol_errors`;
+  `an_access_point_put_back_while_it_is_leaving_comes_back_once_it_has_left` (an `off` and an
+  `on` at one instant: the fresh one only once the old one has left, and a frame due meanwhile
+  dropped).
+  `on_the_emulator_the_access_point_deauthenticates_the_station_before_it_leaves` runs
+  `wifi_access_point` and `wifi_leave` on the real `esp32::Machine`: with no station the access
+  point leaves at once; with an associated one it queues the deauthentication (frame control,
+  addresses, reason 3), stops beaconing, stays until its queue is empty, then leaves, and a fresh
+  one comes back.
 
 `tests/test_runner_link.py` runs the real binary on `hello_world` with `--board socket:`, against
 a minimal peer in Python: a run to `--max-seconds` with `--console socket` (the console on the
@@ -473,8 +632,8 @@ peer (exit 0 with `stats` within 2 s), a late input and a version mismatch (exit
 `stats`), a peer that does not answer within `--peer-timeout 0.2` (exit 4, nothing more), and no
 peer listening (exit 4).
 
-Not covered: the text of the usage messages but those of the SD card (`usage_errors` checks only
-the error kind),
+Not covered: the text of the usage messages but those of the SD card and of Wi-Fi
+(`usage_errors` checks only the error kind),
 `setup`, `find_rom`, the `SwReset` path and an exit 1 of the real runner, a second signal,
 `--board tcp:` and `--console both` on the real binary, GPIO on a real image (no validation image
 uses a pin yet), and on the real machine a whole run through a reset: the `gpio_out` after it and
@@ -486,7 +645,12 @@ which shows that a run boots and prints, but checks no runner line and no exit c
 the backend handles an exit 1, from a stand-in runner. `tests/test_sdspi.py` runs the real binary
 with the card on ESP-IDF's `sdspi` example, through the backend: a FAT image the example mounts,
 writes and reads, one without a file system, and an empty slot. It checks no runner line either;
-the card's image errors and its lines on stderr are not covered.
+the card's image errors and its lines on stderr are not covered. `tests/test_http_request.py`
+runs the real binary with `--wifi` on ESP-IDF's `http_request` example, through the backend and
+the harness's network: a fetch, a rejoin after the access point goes off and comes back, no access
+point, a wrong passphrase. It checks no runner line either; the `Wi-Fi` lines on stderr, the
+`--wifi-nearby` networks in a real scan, frames dropped by the relay or the receive ring, and an
+access point that leaves during a chip reset are not covered.
 
 ## See also
 
