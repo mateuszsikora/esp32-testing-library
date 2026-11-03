@@ -228,7 +228,7 @@ Status: decided (#51)
 *Extended in #102 by [Explicit build paths are relative to the application and never fall
 back](#explicit-build-paths-are-relative-to-the-application-and-never-fall-back).*
 
-`load_app` builds `IdfApp(app_path, build_dir=str(Path(app_path) / "build"))`.
+`load_app` passes `IdfApp` the build directory as an absolute path, the app's `build` by default.
 
 **Rejected:** a relative `build`, because pytest-embedded then falls back to `./build` in the
 working directory when the app has none; in this repository that is CI's `build/ci`.
