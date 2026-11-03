@@ -107,7 +107,10 @@ does not retry it, and the firmware writes no more until it restarts, so the exa
 recovery; a firmware that remounts would be tested the same way, after the one-shot rule is used
 up. The slow-card scenario takes the console lines' board times (`board.console.lines`) and the
 rule's `hits` between the first and the second `(saved)` line: two writes, at least 300 ms
-apart, so the firmware's `fclose` waited out each busy time on the board's clock.
+apart, so the firmware's `fclose` waited out each busy time on the board's clock. The timeout
+scenario checks the gap between the write's `at` and the console line with `0x107` against
+ESP-IDF's `SDMMC_WRITE_CMD_TIMEOUT_MS` (5000 in the pinned v5.3.6), and that the write is not
+`failed` but `written`: the timeout is the driver's, not the card's.
 The malformed-input scenario keeps its raw NMEA bytes visible, including deliberately broken
 checksums. `write_gnss_recording` packages them into a recording without modifying the bytes;
 the scenario specifies the first send time and spacing in units, then waits until the last

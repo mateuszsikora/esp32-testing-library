@@ -644,14 +644,18 @@ def test_a_write_that_fails_after_logging_works(board: Board):
 ```
 
 - An operation is a read or a write of one 512-byte block (each block of a multiple block read or
-  write is one), or an erase. `fail("read")` answers a read with an error token instead of its
+  write is one), or an erase. A multiple block read ends with the card already on the block after
+  the last one the firmware wants: ESP-IDF polls the card before it sends the command that stops
+  the read. That block is not an operation: it uses up no rule, and no `hits` show it. `fail("read")` answers a read with an error token instead of its
   data; `fail("write")` answers a write with a write error and leaves the block as it was: the
   card never writes part of a block, so whatever the image shows afterwards is what the firmware
   and its file system wrote. An erase cannot fail.
 - `delay("read", by)` sends no data block until `by` has passed; `delay("write", by)` and
   `delay("erase", by)` keep the card busy for `by` after it takes the block or the erase. The
   firmware waits on the board's clock, and so do its timeouts: ESP-IDF gives up on a read after
-  1 s and on a write after 5 s, with `ESP_ERR_TIMEOUT`. `by` is a `Duration` more than 0 and at
+  1 s and on a write after 5 s (`SDMMC_DEFAULT_CMD_TIMEOUT_MS` and `SDMMC_WRITE_CMD_TIMEOUT_MS`),
+  with `ESP_ERR_TIMEOUT`. A write that times out so still went into the image: the card took the
+  block before it was busy. `by` is a `Duration` more than 0 and at
   most `MAX_DELAY`, 10 s.
 - `blocks=` limits a rule to one block number or a `range` of them, within the card; `skip=` lets
   that many matching operations through first; `count=` is how many it then acts on, `None` for
@@ -663,7 +667,8 @@ def test_a_write_that_fails_after_logging_works(board: Board):
 - `sd_card.fail` and `sd_card.delay` return a `CardFault`, whose `hits` are the operations it
   acted on so far; `sd_card.affected` holds them all and `sd_card.faults` every rule given. Each
   is a `CardIo`: `at` (the board's time it began: the command for a read or an erase, the block's
-  CRC for a write), `op`, `block`, `blocks`, `faults`, `failed`, `delay` and `written` (whether
+  CRC for a write; for a later block of a multiple block read, when the firmware went on past it,
+  to the next block or another command), `op`, `block`, `blocks`, `faults`, `failed`, `delay` and `written` (whether
   the image was written: a write that went through, an erase). Read the image only once the
   firmware is done with it, as for any write.
 - ESP-IDF's `sdspi` driver looks for a block's start token in the 8 bytes after the command's

@@ -467,7 +467,8 @@ a read-only image, and a profile without a slot;
 directory, and one above 2 TiB. The fault rules: `tests/test_sdspi.py` delays every read and
 checks each is held on the board's clock, delays one past ESP-IDF's 1 s read timeout and fails one
 alone and with a delay, on the real `sdspi`; `examples/sd_data_logger/tests/test_logger.py` fails a
-write after logging works and slows every write. `tests/test_sd_faults.py` tests `SdCard`'s rules
+write after logging works, slows every write, and keeps one busy past ESP-IDF's 5 s write
+timeout. `tests/test_sd_faults.py` tests `SdCard`'s rules
 without a runner: an empty slot, what goes on the link and when, clearing, every argument refused,
 `card_io` into `hits`, the report and the properties, and a rule through a `BoardLink`.
 

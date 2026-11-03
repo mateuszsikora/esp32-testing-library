@@ -505,6 +505,8 @@ fn a_read_a_rule_fails_ends_with_an_ecc_error_token() {
     let answer = command(&mut card, 18, 5, 16);
     assert_eq!(data_block(&mut card, after_r1(answer), BLOCK)[7], 5);
     assert_eq!(xfer(&mut card, &[0xff; 4]), [0xff, ERROR_ECC, 0xff, 0xff]);
+    // the host goes on with another command: it took the error token
+    command(&mut card, 13, 0, 8);
     let reads: Vec<(u64, bool, bool)> = card
         .io
         .iter()
@@ -592,11 +594,12 @@ fn each_block_of_cmd18_waits_from_the_end_of_the_one_before() {
     let answer = xfer(&mut card, &[0xff; 2]);
     let second = data_block(&mut card, answer, BLOCK);
     assert_eq!(second[7], 8);
-    let cycles: Vec<u64> = card.io.iter().map(|io| io.cycle).collect();
-    assert_eq!(cycles, [0, 60]);
-    // CMD12 ends the read, and the block the card had begun with it
+    // CMD12 ends the read, and the block the card had begun with it; block 8 counts from where
+    // the card began block 9, at the CMD12's first byte
     command(&mut card, 12, 0, 9);
     assert_eq!(xfer(&mut card, &[0xff; 4]), [0xff; 4]);
+    let cycles: Vec<(u64, u64)> = card.io.iter().map(|io| (io.block, io.cycle)).collect();
+    assert_eq!(cycles, [(7, 0), (8, 110)]);
 }
 
 #[test]
@@ -668,4 +671,86 @@ fn cleared_rules_act_no_more_but_a_running_delay_runs_out() {
     card.io.clear();
     first_byte(&mut card, 3);
     assert!(card.io.is_empty());
+}
+
+#[test]
+fn a_block_cmd12_stops_before_the_host_takes_it_uses_up_no_rule() {
+    let mut card = card(2);
+    init(&mut card);
+    card.add_rule(Rule {
+        blocks: Some((9, 9)),
+        count: Some(1),
+        ..rule(1, Op::Read, true, 0)
+    });
+    // the host reads blocks 7 and 8; the card has begun block 9 when the CMD12 comes, after a
+    // poll for busy as ESP-IDF's
+    let answer = command(&mut card, 18, 7, 16);
+    data_block(&mut card, after_r1(answer), BLOCK);
+    let answer = xfer(&mut card, &[0xff; 2]);
+    data_block(&mut card, answer, BLOCK);
+    assert_eq!(xfer(&mut card, &[0xff; 3]), [0xff, ERROR_ECC, 0xff]);
+    command(&mut card, 12, 0, 9);
+    assert!(card.io.is_empty(), "{:?}", card.io);
+    assert_eq!(card.stats.failed, 0);
+    let ids: Vec<u64> = card.rules.iter().map(|r| r.id).collect();
+    assert_eq!(ids, [1], "the rule is as it was");
+    // the read the firmware asks for is the one that fails
+    assert_eq!(after_r1(command(&mut card, 17, 9, 10))[1], ERROR_ECC);
+    assert_eq!(card.io.len(), 1);
+    assert!(card.rules.is_empty());
+}
+
+#[test]
+fn a_later_block_of_cmd18_counts_once_the_host_goes_on_past_it() {
+    let mut card = card(2);
+    init(&mut card);
+    card.add_rule(Rule {
+        skip: 1,
+        ..rule(1, Op::Read, false, 20)
+    });
+    let answer = command(&mut card, 18, 7, 16);
+    data_block(&mut card, after_r1(answer), BLOCK);
+    // block 8 is begun, and its rule's skip used, but nothing is reported yet
+    card.now = 100;
+    let answer = xfer(&mut card, &[0xff; 2]);
+    data_block(&mut card, answer, BLOCK);
+    assert!(card.io.is_empty());
+    // the card begins block 9: the host took block 8, at that time; then a CMD12 stops block 9
+    card.now = 500;
+    command(&mut card, 12, 0, 9);
+    let reported: Vec<(u64, u64)> = card.io.iter().map(|io| (io.block, io.cycle)).collect();
+    assert_eq!(reported, [(8, 500)]);
+    assert_eq!(
+        card.rules[0].skip, 0,
+        "block 7 used the skip; block 9's verdict is undone"
+    );
+    // another command, not CMD12, goes on past a block too: here a failed one
+    card.clear_rules(None);
+    card.add_rule(Rule {
+        blocks: Some((12, 12)),
+        ..rule(2, Op::Read, true, 0)
+    });
+    let answer = command(&mut card, 18, 11, 16);
+    data_block(&mut card, after_r1(answer), BLOCK);
+    card.now = 900;
+    let tail = xfer(&mut card, &[0xff; 64]);
+    assert!(tail.contains(&ERROR_ECC), "{tail:?}");
+    command(&mut card, 13, 0, 8);
+    let last = card.io.last().unwrap();
+    assert_eq!((last.block, last.failed, last.cycle), (12, true, 900));
+}
+
+#[test]
+fn a_rule_cleared_while_a_block_is_begun_is_not_put_back_by_cmd12() {
+    let mut card = card(2);
+    init(&mut card);
+    card.add_rule(Rule {
+        count: Some(5),
+        ..rule(1, Op::Read, false, 10)
+    });
+    let answer = command(&mut card, 18, 7, 16);
+    data_block(&mut card, after_r1(answer), BLOCK);
+    card.clear_rules(Some(&[1]));
+    command(&mut card, 12, 0, 9);
+    assert!(card.rules.is_empty());
 }

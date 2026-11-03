@@ -187,6 +187,27 @@ def test_a_slow_card_delays_each_saved_fix_by_its_busy_time(board: Board) -> Non
     error.assert_off()
 
 
+def test_a_write_busier_than_esp_idf_s_timeout_fails_on_the_board_s_clock(board: Board) -> None:
+    card = board.sd_card.image(size_mb=32).build()
+    error = board.lines.output("logger.error")
+    board.sd_card.insert(card)
+    board.gnss.fix(at=WARSAW)
+    board.power_on(utc=START)
+    board.wait(2 * FIX_INTERVAL + WRITE_MARGIN)
+    error.assert_off()
+
+    # The card takes the next block, then stays busy past ESP-IDF's 5 s write timeout
+    # (SDMMC_WRITE_CMD_TIMEOUT_MS): 0x107 is ESP_ERR_TIMEOUT.
+    busy = board.sd_card.delay("write", seconds(6), count=1)
+    board.console.expect_exact("sd_data_logger: SD card write failed", timeout=7 * FIX_INTERVAL)
+    [write] = busy.hits
+    [timeout] = board.console.lines(r"sdmmc_write_blocks failed \(0x107\)")
+    assert seconds(5) <= timeout.at - write.at < seconds(5.01)
+    # The block went into the image before the card was busy: a timeout is not a failed write.
+    assert (write.failed, write.written) == (False, True)
+    error.assert_on()
+
+
 def test_without_a_card_the_error_pin_stays_on_and_fixes_keep_arriving(board: Board) -> None:
     error = board.lines.output("logger.error")
     board.gnss.lose_fix()

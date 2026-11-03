@@ -147,8 +147,8 @@ pub struct Rule {
 /// An operation one or more rules acted on, for `sd_io`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Io {
-    /// When it began: the command (a read, an erase), the block's CRC (a write), or the end of
-    /// the block before it (a later block of CMD18).
+    /// When it began: the command (a read, an erase), the block's CRC (a write); for a later
+    /// block of CMD18, when the host went on past it ([`Begun`]).
     pub cycle: u64,
     pub op: Op,
     pub block: u64,
@@ -169,6 +169,19 @@ struct Verdict {
     fail: bool,
     delay_ns: u64,
     delay: u64,
+    /// The rules it changed, as they were before, to put back if the operation never happens.
+    before: Vec<Rule>,
+}
+
+/// A later block of a CMD18 that the card has begun and the host has not taken yet. A card
+/// begins the block after the last one the host wants before the host's CMD12 comes, as ESP-IDF
+/// does with every CMD18 (it polls for busy before the CMD12), so the rules' verdict on it holds
+/// only once the host goes on past it: when the card begins the next block, or a command other
+/// than CMD12 comes. A CMD12 first undoes it.
+#[derive(Debug)]
+struct Begun {
+    block: u64,
+    verdict: Verdict,
 }
 
 /// One item of what goes out on MISO.
@@ -226,6 +239,8 @@ pub struct SdCard {
     rules: Vec<Rule>,
     /// The operations the rules acted on, until the board takes them.
     pub io: Vec<Io>,
+    /// The later block of a CMD18 the host may still stop before taking.
+    begun: Option<Begun>,
     pub stats: Stats,
 }
 
@@ -266,6 +281,7 @@ impl SdCard {
             now: 0,
             rules: Vec::new(),
             io: Vec::new(),
+            begun: None,
             stats: Stats::default(),
         })
     }
@@ -310,9 +326,11 @@ impl SdCard {
 
     /// Clears the rules of `ids`, or every rule. A delay already running runs out.
     pub fn clear_rules(&mut self, ids: Option<&[u64]>) {
-        match ids {
-            Some(ids) => self.rules.retain(|r| !ids.contains(&r.id)),
-            None => self.rules.clear(),
+        let kept = |r: &Rule| ids.is_some_and(|ids| !ids.contains(&r.id));
+        self.rules.retain(kept);
+        // a cleared rule is not put back by a CMD12 that stops a begun block
+        if let Some(begun) = &mut self.begun {
+            begun.verdict.before.retain(kept);
         }
     }
 
@@ -326,6 +344,7 @@ impl SdCard {
             if !matches {
                 continue;
             }
+            v.before.push(rule.clone());
             if rule.skip > 0 {
                 rule.skip -= 1;
                 continue;
@@ -342,6 +361,32 @@ impl SdCard {
         }
         self.rules.retain(|r| r.count != Some(0));
         v
+    }
+
+    /// Ends the later block of a CMD18 the card has begun, if any: the host went on past it, and
+    /// it is reported now, or the host `stopped` the read before taking it, and the rules are put
+    /// back as they were, those used up by it included.
+    fn take_begun(&mut self, stopped: bool) {
+        let Some(begun) = self.begun.take() else {
+            return;
+        };
+        if !stopped {
+            self.report(self.now, Op::Read, (begun.block, 1), &begun.verdict, false);
+            return;
+        }
+        for old in begun.verdict.before {
+            match self.rules.iter_mut().find(|r| r.id == old.id) {
+                Some(rule) => {
+                    rule.skip = old.skip;
+                    rule.count = old.count;
+                }
+                // ids grow in the order rules are given
+                None => {
+                    let at = self.rules.partition_point(|r| r.id < old.id);
+                    self.rules.insert(at, old);
+                }
+            }
+        }
     }
 
     /// Keeps an operation the rules acted on for the peer; `cycle` is when it began.
@@ -518,22 +563,33 @@ impl SdCard {
         let Phase::Reading { next } = self.phase else {
             return;
         };
+        // the host has taken the block before this one
+        self.take_begun(false);
         if next >= self.blocks {
             self.extend([0xff, ERROR_RANGE]);
             self.phase = Phase::Command;
             return;
         }
         self.phase = Phase::Reading { next: next + 1 };
-        self.read_block(next);
+        self.read_block(next, true);
     }
 
     /// The block at `lba` as a data block, after one byte of access time and a rule's delay; an
-    /// error token when a rule fails the read or the image cannot be read.
-    fn read_block(&mut self, lba: u64) {
+    /// error token when a rule fails the read or the image cannot be read. A `later` block of a
+    /// CMD18 is [`Begun`] until the host takes it.
+    fn read_block(&mut self, lba: u64, later: bool) {
         let verdict = self.verdict(Op::Read, lba, lba);
-        self.report(self.now, Op::Read, (lba, 1), &verdict, false);
+        let fail = verdict.fail;
         self.hold(verdict.delay, 0xff);
-        if verdict.fail {
+        if later {
+            self.begun = Some(Begun {
+                block: lba,
+                verdict,
+            });
+        } else {
+            self.report(self.now, Op::Read, (lba, 1), &verdict, false);
+        }
+        if fail {
             self.extend([0xff, ERROR_ECC]);
             self.phase = Phase::Command;
             return;
@@ -585,6 +641,8 @@ impl SdCard {
             }
         }
         self.stats.commands += 1;
+        // a CMD12 stops a CMD18 at the block the card had begun; any other command goes on past it
+        self.take_begun(index == 12);
         let app = std::mem::take(&mut self.app_cmd);
         // A command ends what the card was sending, a read in progress included (SD spec
         // §7.2.3), and a write that never got its token.
@@ -718,7 +776,7 @@ impl SdCard {
                 if index == 18 {
                     self.phase = Phase::Reading { next: lba + 1 };
                 }
-                self.read_block(lba);
+                self.read_block(lba, false);
             }
             // CMD24 WRITE_BLOCK, CMD25 WRITE_MULTIPLE_BLOCK
             24 | 25 => {

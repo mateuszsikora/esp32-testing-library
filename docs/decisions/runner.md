@@ -372,7 +372,10 @@ block write, an erase), optionally a block range, a number of matching operation
 number to act on, and makes them fail, waits a delay before the card answers, or both. The card
 decides an operation when it begins: at the command, at the block's CRC, at the previous block of
 a CMD18. That makes the selection deterministic, counts every block of a multiple block transfer
-as an operation of its own, and leaves an operation in progress alone when rules change. Every
+as an operation of its own, and leaves an operation in progress alone when rules change. A card
+begins the block after the last one a host wants from a CMD18 before the host's CMD12 comes, and
+ESP-IDF polls one byte of it before every CMD12, so that block counts only once the host goes on
+past it, and a CMD12 that comes first puts the rules back as they were. Every
 rule that matches acts and counts, so rules compose without precedence. The runner reports only
 the operations rules acted on (`sd_io`), which keeps a run without rules byte for byte what it
 was, and the protocol at version 1: a peer that gives no rule never sees one.
@@ -381,8 +384,10 @@ was, and the protocol at version 1: a peer that gives no rule never sees one.
 answered within it and the peer is a turn away (as for the card itself); rules on the command line,
 because a test breaks the card after it has mounted, at a time it chooses; one message that
 replaces the whole policy, because the counts the card has used up would start again at every
-change, unless the harness tracked them; and deciding by SPI transaction, because a transaction
-can hold part of a block or several, depending on the driver.
+change, unless the harness tracked them; deciding by SPI transaction, because a transaction
+can hold part of a block or several, depending on the driver; and counting the block a CMD12
+stops, because a `fail` rule of `count` 1 would be used up on a block the firmware never took,
+and the firmware's own read of it would then succeed.
 
 ## An SD card delay passes on the bus's clock, which the board reads from advance_to
 

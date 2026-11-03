@@ -209,10 +209,11 @@ class CardImageBuilder:
 class CardIo:
     """An operation of the card that fault rules acted on: a read or a write of one block, or an
     erase of `blocks` blocks from `block`. `at` is when it began on the board's clock: when the
-    command came, for a read or an erase; when the block's CRC came, for a write; when the block
-    before it was out, for a later block of a multiple block read. `failed` is whether the card
-    answered with an error, `delay` how long it held its answer, and `written` whether the image
-    was written: a write that went through, an erase. `faults` are the rules that acted on it."""
+    command came, for a read or an erase; when the block's CRC came, for a write; for a later
+    block of a multiple block read, when the host went on past it (protocol 5.19). `failed` is
+    whether the card answered with an error, `delay` how long it held its answer, and `written`
+    whether the image was written: a write that went through, an erase. `faults` are the rules
+    that acted on it."""
 
     at: Duration
     op: Operation
@@ -298,7 +299,8 @@ def describe_io(io: CardIo) -> str:
     effects = (["failed"] if io.failed else []) + ([f"delayed {io.delay}"] if io.delay.ns else [])
     written = "written" if io.written else "not written"
     faults = ", ".join(str(fault.id) for fault in io.faults)
-    return f"{io.at} {io.op} {where}: {', '.join(effects)}, {written} (fault {faults})"
+    noun = "fault" if len(io.faults) == 1 else "faults"
+    return f"{io.at} {io.op} {where}: {', '.join(effects)}, {written} ({noun} {faults})"
 
 
 class SdCard(Interface):

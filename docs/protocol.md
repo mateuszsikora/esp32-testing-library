@@ -681,9 +681,20 @@ A rule acts on operations of one `op`, each counted when it begins:
 
 | `op` | One operation | Begins |
 |---|---|---|
-| `read` | a block read: CMD17, or one block of CMD18 | at the command; for a later block of CMD18, once the block before it has gone out |
+| `read` | a block read: CMD17, or one block of CMD18 | at the command; for a later block of CMD18, once the block before it has gone out, but see below |
 | `write` | a block write: CMD24, or one block of CMD25 | when the block's CRC has come in |
 | `erase` | CMD38, over the blocks CMD32 and CMD33 set | at the command |
+
+A card begins the block after the last one a host wants from a CMD18 before the host's CMD12
+reaches it: ESP-IDF polls for busy before every command, and the first byte it polls already
+belongs to the next block. So the card decides a later block of CMD18 when it begins it, holds it
+for any delay and sends its error token if it fails, but the block counts as an operation only once
+the host has gone on past it: when the card begins the block after it, or a command other than
+CMD12 comes. Its `sd_io` goes out then, with that time as `t`. A CMD12 that comes first stops the
+read at that block: the host never took it, the rules' `skip` and `count` are put back as they
+were, a rule it used up included unless it has been cleared since, and nothing reports it. A host
+that takes a later block's error token and then stops the read with CMD12 therefore gets the
+error but uses up no rule; ESP-IDF sends no CMD12 after one.
 
 - `id`: the rule's name in `sd_io` and `sd_clear`, 1 or more, and greater than every earlier
   `sd_fault`'s.
@@ -721,7 +732,8 @@ the delay pass on the board's clock, and its own timeouts, read from the same cl
  "failed": true, "delay": 0, "written": false}
 ```
 
-An operation of the SD card that one or more rules acted on, at `t`, when it began (5.19). The
+An operation of the SD card that one or more rules acted on, at `t`, when it began (5.19); for a
+later block of CMD18, when the host went on past it. The
 runner sends one for every such operation, and none for the others. Not an event: it has no `seq`
 and sets no block point; it goes out in `t` order with the rest, before the `sync` of its turn.
 

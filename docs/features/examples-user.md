@@ -171,7 +171,9 @@ fails (`board.sd_card.fail("write")`) gives `sd_data_logger: SD card write faile
 leaves the rows saved before it as they were and stops logging; writes slowed by 300 ms each
 (`board.sd_card.delay("write", ms(300))`) still save every row, each `(saved)` line at least
 600 ms after the row's first write, since a row takes a write of its data and one of its
-directory entry.
+directory entry; and a write kept busy for 6 s (`count=1`) fails ESP-IDF's 5 s write timeout with
+`sdmmc_write_blocks failed (0x107)` 5.0 s after it began, and the firmware stops logging, though
+the card took the block.
 
 ## Position tracker over a cellular modem
 
