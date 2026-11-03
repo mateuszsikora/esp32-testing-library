@@ -113,6 +113,15 @@ With `--console socket` the guest's UART0 goes to the peer as `console` messages
 stdout; with `--console both` it goes to both. Messages written outside the peer's turn reach the
 socket within about 20 wall milliseconds, so a peer can read the console as it comes.
 
+The peer can also switch the board's supply off and on (`power`) and pulse the chip's EN pin
+(`chip_reset`), as a test does with `board.power_off()`, `board.power_on()` and `board.reset()`
+([pytest plugin](pytest-plugin-user.md#resets-and-power-cycles)). The run goes on through both:
+the chip comes back through a power-on reset, with what the firmware wrote to flash, and the
+run's time does not restart. While the supply is off the guest runs nothing, and the run's time
+still passes from one turn of the peer to the next. The flash is the runner's copy of the
+`--flash-at` files: the files are read once, at the start, and never written.
+[The protocol](../protocol.md#517-power-ext-105) says what a power cycle keeps and what it clears.
+
 `--peer-timeout` bounds, in wall time, how long the runner waits for the peer's turn to end and
 how long a write to the socket may make no progress because the peer does not read; for `tcp:` it
 also bounds each connection attempt, though not the name lookup before it. A peer that hangs then
@@ -232,7 +241,9 @@ the peer instead. Everything the runner says goes to stderr, on lines that start
 - `esp32tl-runner: chip reset at T s, cause CAUSE` each time the firmware resets the chip, as
   `esp_restart()` does: T in emulated seconds with six decimals, CAUSE the reset cause the ROM
   reports, in hex (`0x...`). The runner restarts the guest from the ROM, as the chip would, and
-  the run goes on. With `--board`, the peer gets a `reset` message as well.
+  the run goes on. With `--board`, the peer gets a `reset` message as well. The same line, with
+  cause `0x1`, follows the peer's `chip_reset` and its `power` that switches the supply back on;
+- `esp32tl-runner: power off at T s` when the peer switches the board's supply off.
 - `esp32tl-runner: SD card: N commands, R blocks read, W blocks written` at the end of a run with
   `--sd-rw`, just before the line that ends it; with `, E image errors` added when reads, writes
   or erases of the image file failed. Each such failure also prints

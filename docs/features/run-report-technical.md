@@ -80,7 +80,8 @@ when a source answers ahead: an answer stamped `t_req + latency` can be recorded
 the firmware transmits at a time between the two.
 
 **`RunLog`** keeps entries `(t, n, who, what)`, `n` counting every entry ever added: the test's
-steps in a list, all of them, and the console's lines and the routes' events in a `deque` of
+steps in a list, all of them, with the chip's resets (`chip(t, text)`, who `chip`), which the
+backend adds from the link's thread, and the console's lines and the routes' events in a `deque` of
 `ENTRIES` (200), so the oldest of those go first. `what` is the step's text, or the bytes as they
 came: nothing is turned into text until `lines()`, which merges the two, sorts by `(t, n)` and
 writes each entry with `text(who, what)`. `console(t, data)` cuts `data` at line ends
@@ -140,8 +141,8 @@ the run on the board's clock, {kept}:
 `sd_card: empty` while the test has inserted no card. `{kept}` is `{n} entries` (`1 entry`), every entry of the run,
 the steps included; when the `deque` has dropped some,
 `: every step of the test, and the last {kept} of the console and the routes` follows. With no entry
-the heading is `the run on the board's clock: nothing happened`. `{who}` is `test`, `console`, or
-`{interface} in` / `{interface} out`.
+the heading is `the run on the board's clock: nothing happened`. `{who}` is `test`, `chip`,
+`console`, or `{interface} in` / `{interface} out`.
 
 The `console:` line and a JSON `console: {"bytes_out": n, "tap": path}` object appear only when
 the console is tapped. Serial instead uses the [serial schema](serial-backend-technical.md#schema).
@@ -170,7 +171,7 @@ checks the timing and cancellation. The modem's separate command history is desc
 | `Uart.tap(path)` | `esp32tl/interfaces/uart.py`: the route's `Tap`, `Uart.tapped` |
 | `Uart.files` | `dict[Path, tuple[str, str]]`: the files the run replays from and taps into, by path, with what each is for, the kind (`replay`, `tap`) and the route; one mapping for every `Uart` of an `Esp32Sim` |
 | `same_file(a, b)` | `esp32tl/interfaces/uart.py`: whether two paths name one file: `os.path.samefile` when both exist, else the same directory and the same name but for its case |
-| `RunLog(entries=ENTRIES)` | `esp32tl/report.py`. `test(t, text)`, `console(t, data)`, `route(t, interface, direction, data)`, `line(t, name, level, *, direction="out")`, `lines()`; attribute `traffic`, by interface |
+| `RunLog(entries=ENTRIES)` | `esp32tl/report.py`. `test(t, text)`, `chip(t, text)`, `console(t, data)`, `route(t, interface, direction, data)`, `line(t, name, level, *, direction="out")`, `lines()`; attribute `traffic`, by interface |
 | `Traffic` | `bytes_in`, `bytes_out`, `events_in`, `events_out` |
 | `shown(data, limit=SHOWN_BYTES)`, `console_line(line)`, `board_time(t)`, `text(who, what)` | How the log writes bytes, console lines, times and an entry |
 | `ENTRIES`, `SHOWN_BYTES` | 200 entries of the console and the routes kept; 100 bytes shown of an event |

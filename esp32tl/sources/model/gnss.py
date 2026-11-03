@@ -112,6 +112,8 @@ class GnssReceiver:
         self._state = State(0, None, NORTH, STILL, False, NO_FIX_HDOP, 0, True)
         # The time of the next epoch, once the run has started.
         self._next: int | None = None
+        # Whether the board's supply, which the receiver is on, is on.
+        self._supplied = True
         # How many epochs the link has been given.
         self.sent = 0
 
@@ -186,6 +188,17 @@ class GnssReceiver:
                     self._next += PERIOD.ns
             self._change_locked(talking=True)
 
+    def supply(self, on: bool) -> None:
+        """The board's supply went off, or came back. Without it the receiver is silent, as
+        after `go_silent`; with it back it sends again from the epoch at this instant on, with
+        the fix and the motion the test gave it, and no time to a first fix."""
+        with self._lock:
+            now = self._now()
+            if on and not self._supplied and self._next is not None:
+                while self._next < now:
+                    self._next += PERIOD.ns
+            self._supplied = on
+
     @property
     def position(self) -> Position | None:
         """Where the receiver is now, fix or not; `None` until its first fix."""
@@ -210,21 +223,22 @@ class GnssReceiver:
         return ()
 
     def poll(self, now: int) -> Iterable[Output]:
-        """The epochs due at `now`, each at its own time; none while the receiver is silent."""
+        """The epochs due at `now`, each at its own time; none while the receiver is silent or
+        without power."""
         with self._lock:
             outputs = []
             for t in self._due(now):
-                if self._state.talking:
+                if self._state.talking and self._supplied:
                     outputs.append((t, self.epoch(t)))
             self.sent += len(outputs)
             return outputs
 
     def quiet_until(self) -> int | None:
-        """The time of the next epoch; `None` while the receiver is silent, which it can stop
-        being only in a turn the test holds, before the link polls it, and `resume` moves the
-        next epoch past the silence."""
+        """The time of the next epoch; `None` while the receiver is silent or without power,
+        which it can stop being only in a turn the test holds, before the link polls it, and
+        `resume` and `supply` move the next epoch past the silence."""
         with self._lock:
-            return self._next if self._state.talking else None
+            return self._next if self._state.talking and self._supplied else None
 
     def latency(self) -> int | None:
         """`None`: the receiver answers nothing."""

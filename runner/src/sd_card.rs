@@ -163,6 +163,23 @@ impl SdCard {
         self.blocks * BLOCK as u64
     }
 
+    /// The board's supply went off: the card is back where it was when it was inserted, out of
+    /// SPI mode and uninitialised, and a block it had not received whole is lost. What it wrote
+    /// is in the image already: a block goes there whole once its CRC is in.
+    pub fn power_off(&mut self) {
+        self.spi = false;
+        self.ready = false;
+        self.init_left = INIT_POLLS;
+        self.if_cond = false;
+        self.app_cmd = false;
+        self.crc = false;
+        self.erase = (None, None);
+        self.written = 0;
+        self.phase = Phase::Command;
+        self.command.clear();
+        self.out.clear();
+    }
+
     /// One SPI transaction on the chip's routes `pins`: `tx` out on MOSI, `rx_len` bytes back
     /// from MISO, all 0xff from a card that is not selected or not on the master's MISO.
     pub fn transfer(&mut self, pins: SpiPins, tx: &[u8], rx_len: usize) -> Vec<u8> {

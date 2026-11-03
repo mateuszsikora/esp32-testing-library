@@ -129,3 +129,22 @@ def test_hears_nothing_while_the_receiver_is_silent(
     assert board.wait_until(console.line(FIX), within=seconds(2)).text == (
         "fix lat=52.229677 lon=21.012233"
     )
+
+
+def test_the_receiver_loses_its_power_with_the_board_and_keeps_its_fix(
+    board: Esp32Sim, gnss: Gnss, console: Console
+) -> None:
+    gnss.fix(at=WARSAW)
+    board.power_on()
+    board.wait_until(console.line(FIRST_FIX), within=seconds(5))
+    # between two epochs: the bytes of one still on the line would be dropped, as unrouted_rx
+    board.wait(ms(500))
+    board.power_off()
+    received = board.log.traffic["uart.gnss"].bytes_in
+    board.wait(seconds(10))
+    assert board.log.traffic["uart.gnss"].bytes_in == received, "no power, no sentences"
+    board.power_on()
+    # a fresh boot, and the receiver's first epoch after the power came back
+    again = board.wait_until(console.line(FIRST_FIX), within=seconds(5))
+    assert reported(again) == about(WARSAW, within=m(1))
+    assert board.link.warnings == []

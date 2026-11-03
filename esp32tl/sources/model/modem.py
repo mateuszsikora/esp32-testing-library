@@ -134,6 +134,14 @@ class Modem:
         with self._lock:
             self._supply = True
 
+    def supply(self, on: bool) -> None:
+        """The board's supply, which the modem is on, went off or came back: `lose_power` or
+        `restore_power`. A modem that comes back with the board waits for its PWRKEY pulse."""
+        if on:
+            self.restore_power()
+        else:
+            self.lose_power()
+
     def _set_power(self, t: int, powered: bool) -> None:
         self.powered = powered
         self.registered = powered and self._coverage

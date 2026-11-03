@@ -157,8 +157,14 @@ For esp32sim:
 - `board.power_on(utc=None)` starts the run: the runner starts, the firmware boots, and the
   board's clock starts at 0, where it stays until the test waits. `utc`, a `datetime` with a
   timezone, is the world's time at power-on, `2026-01-01T12:00:00Z` unless given: `board.utc` and
-  the GNSS receiver model's sentences are dated from it. A second call raises
-  `BoardOff: the board is on already: power it on once`.
+  the GNSS receiver model's sentences are dated from it. On a board that is on it raises
+  `BoardOff: the board is on already: call board.power_off() first`. After `board.power_off()` it
+  switches the supply back on ([resets and power cycles](#resets-and-power-cycles)).
+- `board.reset()` and `board.power_off()` reset the chip and switch the board's supply off, at
+  the board's time now; `board.boots` and `board.boot` are the chip's boots
+  ([resets and power cycles](#resets-and-power-cycles)).
+- `board.powered` is whether the supply is on, from `power_on()` to `power_off()`;
+  `board.started`, whether the test has called `power_on()` at all.
 - `board.wait(duration)` lets the board run for `duration` of its own time, and returns at
   exactly that instant: `board.wait(seconds(2.5))` moves `board.now` by 2.5 s.
 - `board.wait_until(condition, within=duration)` lets the board run until `condition()`, a
@@ -169,10 +175,12 @@ For esp32sim:
   read anything the test can. When `within` runs out it raises `NeverHappened`, an
   `AssertionError`:
   `the condition test_x.<locals>.<lambda> did not happen within 2 s: waited from 10 s to 12 s of the board's time`.
-- `board.now` is the board's time since power-on, a `Duration`; `board.utc` the world's time,
-  the UTC instant at power-on plus `board.now`.
-- Waiting, or reading `board.now` or `board.utc`, before `board.power_on()` raises
-  `BoardOff: the board is off; call board.power_on() first`.
+- `board.now` is the board's time since the first power-on, a `Duration`; `board.utc` the
+  world's time, the UTC instant at the first power-on plus `board.now`. Neither restarts at a
+  reset or a power cycle.
+- Waiting, or reading `board.now`, `board.utc` or `board.boots`, before the first
+  `board.power_on()` raises `BoardOff: the board is off; call board.power_on() first`. A board
+  switched off by `board.power_off()` can be waited on.
 - When the run ends while the test waits, because the runner exited or the harness found the link
   wrong, the wait raises `RunEnded`, which says when, as far as the harness knows, and why
   ([when the run ends](#what-a-failure-looks-like)).
@@ -197,6 +205,85 @@ Durations are `Duration`s, made by `ms()`, `seconds()`, `minutes()` and `hours()
 `TypeError`, as in `board.wait takes a Duration, as seconds(2.5), not 2.5`, and one below 0
 `ValueError`, as in `board.wait takes a Duration of 0 or more, not -1 s`. An expect's `timeout` is
 the exception: it takes a `Duration`, or a number of seconds as in pytest-embedded.
+
+### Resets and power cycles
+
+A test can reset the board and switch it off and on, as many times as it likes, in one run on one
+clock:
+
+```python
+from esp32tl import Board
+from esp32tl.units import minutes
+
+
+def test_the_count_survives_a_power_cut(board: Board):
+    board.power_on()
+    board.console.expect_exact("boots: 1")
+    board.power_off()
+    board.wait(minutes(5))
+    board.power_on()
+    board.console.expect_exact("boots: 2")
+    assert board.boot.reason == "POWERON_RESET"
+```
+
+- `board.reset()` pulses the chip's EN pin, as a board's reset button does: the ESP32 alone
+  restarts, through a power-on reset, and the rest of the board keeps its power. On a board that
+  is off it raises `BoardOff: the board is off: board.reset() resets a board that is on`.
+- `board.power_off()` switches the board's supply off. The chip stops; the SD card in the slot,
+  and the parts of the board a model stands for, the GNSS receiver and the modem, lose their power
+  with it. The board's clock runs on: `board.wait` and `board.wait_until` work as before, and the
+  world around the board, a broker or an access point, goes on in that time. Before the first
+  `power_on()` it raises `BoardOff: the board is off; call board.power_on() first`, and on a board
+  that is off already `BoardOff: the board is off already: call board.power_on() to switch it on`.
+- `board.power_on()` after `power_off()` switches the supply back on at the board's time now, and
+  the chip boots through a power-on reset. `utc` cannot be given again: `ValueError: power_on: utc
+  is the world's time at the first power-on; it has run on since, and the board's clock with it`.
+- Sources and taps are still given before the first `power_on()` only:
+  `SourceError: uart.gnss: the board has been on: give an interface its source before
+  board.power_on()`. So is `board.nvs()`.
+- `board.boots` is the chip's boots, in order, as `Boot`s (`esp32tl.interfaces.board`): `number`,
+  1 for the first; `at`, the board's time the boot started, a `Duration`; `cause`, the reset cause
+  the ROM reports for it (`RESET_REASON` in ESP-IDF's `esp32/rom/rtc.h`); and `reason`, its name,
+  as the ROM prints it, such as `POWERON_RESET` (1) or `SW_CPU_RESET` (12, `esp_restart()`). The
+  first boot is at 0 with cause 1; every reset adds one, whoever caused it: `board.reset()` and
+  `power_on()` give cause 1, the firmware and its watchdogs their own. `board.boot` is the last.
+- Times stay on the board's clock: `board.now`, the console's lines, the run's log in a failed
+  test's report and every tap's recording go on from the first power-on through every boot. What
+  the firmware counts from its own boot, `esp_timer_get_time()` or the ESP-IDF log's
+  milliseconds, starts again at each one: `board.now - board.boot.at` is the board's time since.
+
+What each kind of restart keeps, on esp32sim:
+
+| | The firmware restarts (`esp_restart()`, a watchdog) | `board.reset()` | `board.power_off()`, `board.power_on()` |
+|---|---|---|---|
+| Reset cause | the firmware's, 12 for `esp_restart()` | 1, `POWERON_RESET` | 1, `POWERON_RESET` |
+| Flash: the app, NVS, OTA data, what the firmware wrote | kept | kept | kept |
+| RAM, `.noinit` (`__NOINIT_ATTR`) included | kept | zeroed | zeroed |
+| RTC memory (`RTC_NOINIT_ATTR`) | kept | zeroed | zeroed |
+| PSRAM | zeroed | zeroed | zeroed |
+| The RTC timer | runs on | starts at 0 | starts at 0 |
+| SD card: its files | kept | kept | kept |
+| SD card: its state | kept | kept | uninitialised: the driver mounts it again |
+| GNSS receiver model | sends on | sends on | silent while off; then sends again, with the fix the test gave it |
+| Modem model | keeps its state | keeps its state | off: PPP and its TCP sessions end; it starts again only on a PWRKEY pulse |
+| Wi-Fi station | the access point keeps its side of the link | joins a fresh access point again | joins a fresh access point again |
+| Simulated network: broker, HTTP server, DHCP | goes on | goes on | goes on |
+| The test's levels on the lines | kept | kept | kept |
+| `board.now`, `board.utc` | run on | run on | run on, also while off |
+
+`RTC_DATA_ATTR` variables are no exception: ESP-IDF's bootloader loads them from the image at every
+boot but a wake from deep sleep. The build's files are never written: the flash the firmware
+writes to is the runner's copy, and
+lasts as long as the run. esp32sim carries out each flash program and erase command whole, so a
+power cut falls between two of them: torn writes are not modelled, nor is what a real chip's RAM
+holds after a reset, which is zero here. A replay or a real device at the far end of a route is not
+on the board's supply: it keeps sending, and what it sends while the chip is off, or before the
+firmware has set up its UART again, is lost, each such drop an `unrouted_rx` warning in the link's
+report. Every interface of a board profile is on the board's supply
+([board profiles](board-profiles-user.md#the-profiles-esp32tl-ships)).
+
+On [serial](serial-backend-user.md#power-on-time-and-console), `board.reset()` pulses EN through
+the adapter, and `board.power_off()` and `board.boots` skip the test.
 
 `console` is the firmware's console, its UART0, read on the board's clock:
 

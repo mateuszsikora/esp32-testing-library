@@ -26,6 +26,7 @@ SHOWN_BYTES = 100
 # Who an entry is from, besides a route's name and direction.
 TEST = "test"
 CONSOLE = "console"
+CHIP = "chip"
 
 # The colour codes of ESP-IDF's log lines.
 COLOUR = re.compile(rb"\x1b\[[0-9;]*m")
@@ -105,6 +106,13 @@ class RunLog:
         """A GPIO drive at `t`: out from firmware (default), in from a model; None releases it."""
         with self._lock:
             self._add(t, f"{name} {direction}", "not driven" if level is None else str(level))
+
+    def chip(self, t: int, text: str) -> None:
+        """The chip did `text` at `t`: it reset, and boots again. Kept as the test's steps are:
+        there are few."""
+        with self._lock:
+            self._steps.append((t, self._count, CHIP, text))
+            self._count += 1
 
     def _add(self, t: int, who: str, what: str | bytes) -> None:
         self._entries.append((t, self._count, who, what))

@@ -2,6 +2,7 @@
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime
 from functools import cached_property
 from pathlib import Path
@@ -20,6 +21,43 @@ from esp32tl.tap import Tap
 from esp32tl.units import Duration
 
 T = TypeVar("T")
+
+# The classic chip's reset causes, as its ROM reports them (`RESET_REASON` in ESP-IDF's
+# esp_rom/esp32/include/esp32/rom/rtc.h) and prints them in its banner, `rst:0x1 (POWERON_RESET)`.
+RESET_REASONS = {
+    1: "POWERON_RESET",
+    3: "SW_RESET",
+    4: "OWDT_RESET",
+    5: "DEEPSLEEP_RESET",
+    6: "SDIO_RESET",
+    7: "TG0WDT_SYS_RESET",
+    8: "TG1WDT_SYS_RESET",
+    9: "RTCWDT_SYS_RESET",
+    10: "INTRUSION_RESET",
+    11: "TGWDT_CPU_RESET",
+    12: "SW_CPU_RESET",
+    13: "RTCWDT_CPU_RESET",
+    14: "EXT_CPU_RESET",
+    15: "RTCWDT_BROWN_OUT_RESET",
+    16: "RTCWDT_RTC_RESET",
+}
+
+# The cause of a power-on reset: the run's first boot, board.reset(), and power coming back.
+POWERON_RESET = 1
+
+
+@dataclass(frozen=True)
+class Boot:
+    """One boot of the chip: its `number`, 1 for the first, the board's time `at` which it
+    started, and the reset `cause` the ROM reports for it, which `reason` names."""
+
+    number: int
+    at: Duration
+    cause: int
+
+    @property
+    def reason(self) -> str:
+        return RESET_REASONS.get(self.cause, f"reset cause {self.cause}")
 
 
 class Board(ABC):
@@ -77,9 +115,28 @@ class Board(ABC):
     @abstractmethod
     def power_on(self, utc: datetime | None = None) -> None: ...
 
+    @abstractmethod
+    def power_off(self) -> None: ...
+
+    @abstractmethod
+    def reset(self) -> None: ...
+
     @property
     @abstractmethod
     def powered(self) -> bool: ...
+
+    @property
+    @abstractmethod
+    def started(self) -> bool: ...
+
+    @property
+    @abstractmethod
+    def boots(self) -> tuple[Boot, ...]: ...
+
+    @property
+    def boot(self) -> Boot:
+        """The chip's current boot: the last of `boots`."""
+        return self.boots[-1]
 
     @property
     @abstractmethod

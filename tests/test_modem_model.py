@@ -514,3 +514,20 @@ def test_only_a_network_route_fails_on_receive_overflow(tmp_path: Path) -> None:
         assert link.warnings == [warning]
         if fails:
             assert "uart.modem: UART receive overflow (rxfifo_ovf) on GPIO 27" in str(link.error)
+
+
+def test_a_modem_on_the_board_s_supply_waits_for_pwrkey_when_it_comes_back(
+    tmp_path: Path,
+) -> None:
+    now = [0]
+    modem, lines, _ = route(tmp_path, now)
+    modem.signal(dbm=-73)
+    assert modem.powered
+    modem.supply(False)
+    assert not modem.powered
+    assert list(lines.inputs(0))[-1] == GpioIn(0, ((33, 0),))
+    modem.supply(True)
+    assert not modem.powered
+    lines.driven(seconds(1).ns, [(4, 1)], frozenset({4}))
+    lines.driven(seconds(1).ns + ms(100).ns, [(4, 0)], frozenset({4}))
+    assert modem.powered

@@ -121,6 +121,14 @@ fn parses_the_peer_messages() {
         parse(r#"{"type": "wifi_ap", "t": 8, "on": false}"#),
         Ok(Incoming::WifiAp { t: 8, on: false })
     );
+    assert_eq!(
+        parse(r#"{"type": "power", "t": 9, "on": true}"#),
+        Ok(Incoming::Power { t: 9, on: true })
+    );
+    assert_eq!(
+        parse(r#"{"type": "chip_reset", "t": 10}"#),
+        Ok(Incoming::ChipReset { t: 10 })
+    );
     assert_eq!(parse(r#"{"type":"stop"}"#), Ok(Incoming::Stop));
     assert_eq!(
         parse(r#"{"type":"adc","t":0,"pin":34,"volts":1.25}"#),
@@ -161,6 +169,11 @@ fn refuses_malformed_messages() {
         r#"{"type":"eth_rx","data":"AAAAAAAAAAAAAAAAAAA="}"#,
         r#"{"type":"wifi_ap","t":0,"on":1}"#,
         r#"{"type":"wifi_ap","t":0}"#,
+        r#"{"type":"power","t":0}"#,
+        r#"{"type":"power","t":0,"on":"off"}"#,
+        r#"{"type":"power","on":false}"#,
+        r#"{"type":"chip_reset"}"#,
+        r#"{"type":"chip_reset","t":-1}"#,
     ] {
         assert!(parse(line).is_err(), "{line}");
     }

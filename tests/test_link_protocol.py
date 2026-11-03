@@ -12,6 +12,7 @@ from esp32tl.link import protocol
 from esp32tl.link.protocol import (
     MAX_LINE,
     Adc,
+    ChipReset,
     Console,
     EthRx,
     EthTx,
@@ -19,6 +20,7 @@ from esp32tl.link.protocol import (
     GpioOut,
     HarnessHello,
     Message,
+    Power,
     ProtocolError,
     Release,
     Reset,
@@ -85,6 +87,9 @@ EVERY_MESSAGE: list[tuple[Sender, Message]] = [
     ("harness", EthRx(4_201_000_000, bytes(14))),
     ("harness", WifiAp(5_000_000_000, False)),
     ("harness", WifiAp(6_000_000_000, True)),
+    ("harness", Power(7_000_000_000, False)),
+    ("harness", Power(8_000_000_000, True)),
+    ("harness", ChipReset(9_000_000_000)),
     ("harness", Wait(9, 3_000_000_000, 1_000_000)),
     ("harness", Wait(0, None, None)),
     ("harness", Stop()),
@@ -246,9 +251,13 @@ def test_a_mismatched_handshake_is_answered_all_the_same(
         ),
         (b'{"type":"wifi_ap","t":0,"on":1}', "harness"),
         (b'{"type":"wifi_ap","t":0}', "harness"),
+        (b'{"type":"power","t":0,"on":0}', "harness"),
+        (b'{"type":"power","t":0}', "harness"),
+        (b'{"type":"chip_reset"}', "harness"),
+        (b'{"type":"chip_reset","t":-1}', "harness"),
     ],
 )
-def test_ethernet_frames_are_14_to_1518_bytes_and_wifi_ap_is_true_or_false(
+def test_ethernet_frames_are_14_to_1518_bytes_and_switches_are_true_or_false(
     line: bytes, sender: Sender
 ) -> None:
     with pytest.raises(ProtocolError):

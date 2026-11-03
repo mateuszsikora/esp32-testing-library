@@ -123,3 +123,30 @@ def test_fixture_refuses_a_missing_route_and_model_selection_after_power_on(
             " board.power_on()*",
         ]
     )
+
+
+@pytest.mark.app_path("../firmware/modem_at")
+@pytest.mark.board_profile("lilygo-t-a7670g-r2")
+def test_the_modem_keeps_its_power_through_a_reset_and_loses_it_with_the_board(
+    board: Esp32Sim, modem: Modem, console: Console
+) -> None:
+    modem.signal(dbm=-73)
+    board.power_on()
+    console.expect_exact("modem_at: dialogue complete", timeout=seconds(15))
+    # EN resets the chip alone: the firmware finds the modem on, and switches it off and on
+    board.reset()
+    console.expect_exact("modem_at: powered off RI=0", timeout=seconds(10))
+    console.expect_exact("modem_at: powered on RI=1", timeout=seconds(10))
+    console.expect_exact("modem_at: dialogue complete", timeout=seconds(15))
+    # with the board's supply the modem goes off, and comes back off: it waits for PWRKEY
+    board.power_off()
+    assert not modem.powered
+    board.wait(seconds(1))
+    board.power_on()
+    assert not modem.powered
+    console.expect_exact("modem_at: powered on RI=1", timeout=seconds(10))
+    console.expect_exact("modem_at: dialogue complete", timeout=seconds(15))
+    assert modem.powered
+    # the modem's answers on their way when the chip reset and when it lost its power: no UART
+    # took them
+    assert {(w.kind, w.pin) for w in board.link.warnings} == {("unrouted_rx", 27)}

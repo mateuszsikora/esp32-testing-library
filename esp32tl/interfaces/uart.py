@@ -6,7 +6,7 @@ import os
 import threading
 from collections.abc import Callable, Iterable
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from esp32tl import recording
 from esp32tl.boards.capabilities import Request
@@ -29,6 +29,16 @@ class Source(Protocol):
     def quiet_until(self) -> int | None: ...
 
     def latency(self) -> int | None: ...
+
+
+@runtime_checkable
+class Supplied(Protocol):
+    """A source that is a part of the board, on the board's supply: a model of the receiver or
+    the modem soldered on, or wired to the board's power."""
+
+    def supply(self, on: bool) -> None:
+        """The board's supply went off, or came back, at the board's time now."""
+        ...
 
 
 class Uart(Interface):
@@ -191,6 +201,13 @@ class Uart(Interface):
 
     def quiet_until(self) -> int | None:
         return None if self.source is None else self.source.quiet_until()
+
+    def supply(self, on: bool) -> None:
+        """The board's supply went off, or came back: a model of a part of the board loses its
+        power with it, and gets it back. A replay or a real device is not on it, and keeps
+        sending; what it sends while the chip is off is lost."""
+        if isinstance(self.source, Supplied):
+            self.source.supply(on)
 
     def latency(self) -> int | None:
         return None if self.source is None else self.source.latency()

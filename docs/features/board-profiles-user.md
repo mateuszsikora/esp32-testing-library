@@ -20,6 +20,16 @@ Every profile also has `wifi`, the chip's Wi-Fi station: every classic ESP32 has
 profile does not list it, and it comes last in a profile's interfaces
 ([the wifi fixture](pytest-plugin-user.md#the-wifi-fixture)).
 
+Everything a profile lists is on the board's supply: `board.power_off()` takes the power of the
+chip, the card in its slot and the parts at the far end of its routes together, and
+`board.reset()` that of none of them, only the chip's EN pin
+([resets and power cycles](pytest-plugin-user.md#resets-and-power-cycles)). On the LilyGO board
+the modem, the L76K receiver and the slot are on the board; on a devkit assembly the receiver
+and the card are wired to the devkit's 3V3. What is beyond the board, the broker, the access
+point and the network behind them, is not. A profile cannot yet put a part on a supply of its
+own, nor does `lines.board.power_enable` gate one
+([decision](../decisions/harness.md#every-interface-of-a-profile-is-on-the-boards-supply)).
+
 `esp32-devkitc` is a generic ESP32 module on a devkit, and carries every validation firmware: its
 GNSS route is chosen for this repository's own firmware. GPIO 16 and 17 are left free because on
 WROVER modules they belong to the PSRAM. GPIO 5 is a strapping pin; a receiver holding it low at

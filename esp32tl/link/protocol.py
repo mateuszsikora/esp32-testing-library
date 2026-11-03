@@ -242,6 +242,23 @@ class WifiAp:
 
 
 @dataclass(frozen=True)
+class Power:
+    """From `t` the board's supply is on, or off (5.17)."""
+
+    TYPE: ClassVar[str] = "power"
+    t: int
+    on: bool
+
+
+@dataclass(frozen=True)
+class ChipReset:
+    """At `t` the chip's EN pin is pulsed: a power-on reset of the chip alone (5.18)."""
+
+    TYPE: ClassVar[str] = "chip_reset"
+    t: int
+
+
+@dataclass(frozen=True)
 class Wait:
     """The end of the peer's turn (5.13); `None` is no bound."""
 
@@ -260,7 +277,7 @@ class Stop:
 
 Event = UartTx | UartCfg | GpioOut | Reset | EthTx
 RunnerMessage = RunnerHello | Event | Sync | Console | Warn | Stats
-Input = UartRx | GpioIn | Release | Adc | EthRx | WifiAp
+Input = UartRx | GpioIn | Release | Adc | EthRx | WifiAp | Power | ChipReset
 HarnessMessage = HarnessHello | Input | Wait | Stop
 Message = RunnerMessage | HarnessMessage
 
@@ -550,6 +567,8 @@ DECODERS: dict[Sender, dict[str, Callable[[Fields], Message]]] = {
         "adc": lambda f: Adc(f.integer("t"), f.integer("pin"), f.number("volts")),
         "eth_rx": lambda f: EthRx(f.integer("t"), f.frame("data")),
         "wifi_ap": lambda f: WifiAp(f.integer("t"), f.boolean("on")),
+        "power": lambda f: Power(f.integer("t"), f.boolean("on")),
+        "chip_reset": lambda f: ChipReset(f.integer("t")),
         "wait": lambda f: Wait(
             f.integer("ack"), f.opt_integer("quiet_until"), f.opt_integer("latency")
         ),

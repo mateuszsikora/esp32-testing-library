@@ -486,7 +486,7 @@ def board(
             # A test that set up a source and never powered on ran no firmware: it would pass
             # whatever the firmware does.
             set_up = backend.set_up()
-            if set_up and not backend.powered and not request.node.stash.get(DID_NOT_PASS, False):
+            if set_up and not backend.started and not request.node.stash.get(DID_NOT_PASS, False):
                 pytest.fail(
                     f"{name}: the test set up {' and '.join(set_up)} and never called"
                     " board.power_on(): it ran no firmware",

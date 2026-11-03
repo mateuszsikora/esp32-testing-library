@@ -136,6 +136,20 @@ def test_nvs_reader_has_a_writable_nvs_partition() -> None:
     assert (nvs.type, nvs.subtype, nvs.offset, nvs.size, nvs.flags) == (1, 2, 0x9000, 0x6000, 0)
 
 
+def test_persistence_has_a_writable_nvs_partition_where_its_boots_are_counted() -> None:
+    from esp32tl.flash import partitions
+
+    app = idf_app("persistence")
+    assert app.target == "esp32"
+    table = next(
+        Path(f.file_path) for f in app.flash_files if f.file_path.endswith("partition-table.bin")
+    )
+    nvs = partitions(table.read_bytes())["nvs"]
+    assert (nvs.type, nvs.subtype, nvs.offset, nvs.size, nvs.flags) == (1, 2, 0x9000, 0x6000, 0)
+    # nothing of the build is at the partition: the boots counted there are the run's own
+    assert all(f.offset != nvs.offset for f in app.flash_files)
+
+
 def test_pppos_client_has_the_classic_layout_and_lilygo_route() -> None:
     app = idf_app("pppos_client")
     build = FIRMWARE / "pppos_client" / "build"

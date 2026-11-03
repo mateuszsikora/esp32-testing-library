@@ -797,3 +797,46 @@ that references to its number keep their meaning.
 - **118.** A change to `app_path`'s `build_dir` keyword after collection read it is refused, including
      an in-place mutation of the original marker.
      `tests/test_pytest_plugin.py::test_a_late_build_keyword_is_refused`
+
+## Resets and power cycles
+
+- **127.** With the board's supply off the runner runs no instruction of the guest, takes the
+     peer's turns at their times, routes no UART (bytes for the chip are `unrouted_rx`) and drives
+     no pad; when the supply comes back the chip resets with cause 1, and the run's time has not
+     restarted.
+     `runner/src/session/tests.rs::with_the_supply_off_the_guest_runs_nothing_and_its_time_goes_on`,
+     `runner/src/session/tests.rs::with_the_supply_off_no_pad_is_driven`
+- **128.** A `chip_reset` with the supply on is a reset with cause 1, and does nothing with it off;
+     a `power` to the state the supply is in does nothing.
+     `runner/src/session/tests.rs::en_resets_the_chip_with_power_on_as_its_cause_and_does_nothing_without_power`
+- **129.** A power-on reset zeroes SRAM and both RTC memories, puts the RTC registers back to
+     `POWERON_RESET` with the RTC timer at 0, and keeps the flash and the bus cycle counter.
+     `runner/src/session/tests.rs::on_the_emulator_a_power_on_reset_clears_sram_and_the_rtc_and_keeps_the_flash`
+- **130.** On the firmware, `esp_restart()` keeps RAM and RTC memory, and `board.reset()` and a power
+     cycle clear both and give `POWERON_RESET`; NVS and the SD card's files keep what every boot
+     wrote, and the build's flash files are unchanged.
+     `tests/test_power.py::test_a_restart_keeps_ram_and_rtc_memory_and_board_reset_clears_them`,
+     `tests/test_power.py::test_a_power_cycle_keeps_nvs_and_the_card_and_the_clock_runs_on_while_off`
+- **131.** `board.now` runs on through every reset and while the board is off, and `board.boots`
+     holds one boot per reset, at its time, with its cause.
+     `tests/test_power.py::test_a_restart_keeps_ram_and_rtc_memory_and_board_reset_clears_them`,
+     `tests/test_power.py::test_a_power_cycle_keeps_nvs_and_the_card_and_the_clock_runs_on_while_off`
+- **132.** The SD card loses its initialisation with the board's supply, and keeps every block it
+     received whole.
+     `runner/src/sd_card/tests.rs::after_a_power_cut_the_card_is_uninitialised_and_keeps_its_whole_blocks`
+- **133.** A modem and a GNSS receiver model on the board's supply go off with it; the modem keeps its
+     power through `board.reset()` and comes back off, until PWRKEY, after a power cycle; the
+     receiver sends again with the fix the test gave it.
+     `tests/test_modem_fixture.py::test_the_modem_keeps_its_power_through_a_reset_and_loses_it_with_the_board`,
+     `tests/test_modem_model.py::test_a_modem_on_the_board_s_supply_waits_for_pwrkey_when_it_comes_back`,
+     `tests/test_gnss_model.py::test_without_the_board_s_supply_the_receiver_is_silent_and_comes_back_with_its_fix`,
+     `tests/test_nmea_reader_model.py::test_the_receiver_loses_its_power_with_the_board_and_keeps_its_fix`
+- **134.** The board's `power` and `chip_reset` go out first in the turn after the test's call, and one
+     stamped before that turn fails the link; an interface cannot send them.
+     `tests/test_boardlink.py::test_the_board_s_power_and_en_go_out_first_in_the_next_turn`,
+     `tests/test_boardlink.py::test_a_board_input_stamped_before_its_turn_fails_the_link`,
+     `tests/test_boardlink.py::test_an_interface_cannot_switch_the_board_s_power`
+- **135.** On serial, `board.reset()` pulses EN again, and `board.power_off()` and `board.boot` skip the
+     test with their reasons.
+     `tests/test_serial_backend.py::test_console_reset_clock_tap_and_autoflash`,
+     `tests/test_serial_backend.py::test_serial_capabilities_skip_at_the_call`

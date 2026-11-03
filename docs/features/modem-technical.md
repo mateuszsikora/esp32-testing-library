@@ -19,6 +19,9 @@ discarded until a terminator. Echo defaults off; when enabled it preserves raw c
 Only the history text decodes non-ASCII bytes with replacement. Registration test commands
 (`AT+CREG=?` and its variants) list modes 0–2 without changing the selected mode.
 
+`supply(on)`, which the backend calls through `Uart.supply` at `board.power_off()` and at the
+`power_on()` after it, is `lose_power()` or `restore_power()`.
+
 The model keeps every `Command` under an RLock. `commands` returns a snapshot. With a model,
 `Esp32Sim.report` appends the command section; `properties` adds all commands to the modem route.
 The rolling wire log still keeps only its normal last entries. Raw data-mode payloads are available
@@ -86,7 +89,8 @@ answer timestamps, escape and data handoff, signal mapping, registration, power 
 pulse timing, RI ownership, taps and unbounded command history, and a real `BoardLink` exchange.
 `tests/test_modem_fixture.py` runs `modem_at` on the LilyGO profile, checks physical PWRKEY and
 RI, starts powered, off and after restored supply, changes signal/registration/power on the
-test's clock, compares two complete taps byte for byte, and checks missing-route and late-source
+test's clock, keeps the modem on through `board.reset()` and off after a power cycle until the
+firmware's PWRKEY pulse, compares two complete taps byte for byte, and checks missing-route and late-source
 errors. `tests/test_boards.py` checks timing validation. The validation firmware and tests have
 no network dependency.
 

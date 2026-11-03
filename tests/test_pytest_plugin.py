@@ -978,7 +978,7 @@ def test_the_board_s_clock_and_sources_go_in_order(
     result.stdout.fnmatch_lines_random(
         [
             "E *esp32tl.interfaces.BoardOff: the board is off; call board.power_on() first",
-            "E *esp32tl.interfaces.BoardOff: the board is on already: power it on once",
+            "E *esp32tl.interfaces.BoardOff: the board is on already: call board.power_off() first",
             "E *esp32tl.interfaces.SourceError: uart.gnss: the board is on already: give an"
             " interface its source before board.power_on()",
             "E *esp32tl.interfaces.SourceError: uart.gnss has its source already: one per test",

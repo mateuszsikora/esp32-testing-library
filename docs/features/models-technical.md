@@ -44,6 +44,12 @@ the backend that gives the receiver its clock in
    timedelta(microseconds=t // 1000)`.
 6. **`receive(t, data)`** returns nothing: the receiver hears what the firmware sends and drops
    it. **`latency()`** is `None`.
+7. **`supply(on)`** is the board's supply, which the backend hands every UART's source that has
+   the method (`Supplied`, `esp32tl/interfaces/uart.py`) at `board.power_off()` and at the
+   `power_on()` after it. `_supplied` is apart from the state's `talking`: `poll` sends an epoch
+   only with both, and `quiet_until` is `None` without either. When the supply comes back,
+   `_next` moves to the first epoch at or after `now`, as `resume` does, so the epochs of the
+   power cut stay unsent. The state, fix and motion included, is as the test left it.
 
 ## Schema
 
@@ -127,14 +133,17 @@ The `SourceError`s of the first model call are the backend's and `Gnss`'s
   time; a move of 1 km north and its speed and course; the course along a great circle that
   turns; a course that rounds to 360; a lost fix that keeps moving and comes back; `degrade`;
   silence, and the epochs of a silence with no turn in it; a change at an instant, and at an
-  epoch's instant; a move across the antimeridian and over the north pole, with its course;
+  epoch's instant; the board's supply, apart from silence
+  (`test_without_the_board_s_supply_the_receiver_is_silent_and_comes_back_with_its_fix`); a
+  move across the antimeridian and over the north pole, with its course;
   what is refused; the rounding of coordinates into the next degree; the 82-character limit;
   and `Gnss`, off the link: a refused first call that leaves the route without a source, and
   `position` that makes no receiver.
 - `tests/test_nmea_reader_model.py`: `nmea_reader` on the real runner, fed by the model: the first
   fix and its time, the southern and western hemispheres, 1 km north at 36 km/h, no fix line while
-  the fix is lost, the fix coming back at the epoch of its instant, and silence. Needs
-  `make firmware`.
+  the fix is lost, the fix coming back at the epoch of its instant, silence, and a power cycle
+  of the board, through which no sentence reaches the chip and after which the fresh boot gets
+  its fix again. Needs `make firmware`.
 - `tests/test_pytest_plugin.py`: the model's place among the sources (see
   [pytest-plugin-technical.md](pytest-plugin-technical.md#tests)).
 

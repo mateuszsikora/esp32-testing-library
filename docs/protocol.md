@@ -15,7 +15,8 @@ Who implements what: the runner side in #11 (M1: UART, `reset`, `uart_cfg`, `war
 (M3: GPIO and the future-input queue); the harness side in #12, and its GPIO lines in #24. #31
 (M7: Wi-Fi) adds `eth_tx`, `eth_rx`, `wifi_ap` and `stats.wifi` on both sides. `adc` waits for an
 issue of its own, opened when an example needs an analog pin. Wall time under `--realtime`, for a
-real device at the far end of a route (section 12), comes with #28.
+real device at the far end of a route (section 12), comes with #28. #105 adds `power` and
+`chip_reset`, the board's supply and the chip's EN pin, on both sides.
 
 ## 1. Transport
 
@@ -47,8 +48,11 @@ proposed in #325, so a switch to `esp32sim --board socket:PATH` is a rename.
 ## 3. Time
 
 All times are emulated nanoseconds since the runner created the machine (power-on). The clock
-does not restart at a guest reset or a wake from deep sleep: the runner keeps the same machine,
-and `reboot()` leaves the bus cycle counter alone.
+does not restart at a guest reset, a wake from deep sleep, a pulse of EN (`chip_reset`) or the
+board's supply coming back (`power`), and it runs on while the supply is off: the runner keeps the
+same machine, and neither `reboot()` nor its power-on reset (5.17) touches the bus cycle counter.
+What the firmware counts from its own boot, `esp_timer_get_time()` for one, starts again at every
+reset; the times on the socket do not.
 
 The runner counts time in bus cycles, `bus.cycles()`. They run at a fixed reference independent
 of the momentary CPU clock (`tick` scales through `cpu_scale_half`, `esp32/src/bus.rs:631`), so
@@ -139,6 +143,8 @@ seen exactly the events up to the block point, however the emulator schedules it
 | harness → runner | `adc` *ext* | `t`, `pin`, `volts` | M3 |
 | harness → runner | `eth_rx` *ext* | `t`, `data` | M7 |
 | harness → runner | `wifi_ap` *ext* | `t`, `on` | M7 |
+| harness → runner | `power` *ext* | `t`, `on` | #105 |
+| harness → runner | `chip_reset` *ext* | `t` | #105 |
 | harness → runner | `wait` | `ack`, `quiet_until`, `latency` | M1 |
 | harness → runner | `stop` | none | M1 |
 
@@ -150,6 +156,11 @@ the version stays 1. The runner sends `eth_tx` only with `--wifi`, and only a ha
 the three messages starts it with that flag, so a peer written before M7 sees none of them; without
 `--wifi`, `eth_rx` and `wifi_ap` are protocol errors (section 9). `stats.wifi` is a field an older
 peer does not know, which section 2 lets it ignore.
+
+`power` and `chip_reset` (5.17, 5.18) leave the version at 1 too. A peer that never sends them
+sees no difference: the runner sends no new message, and `reset` (5.5) keeps its fields. A runner
+built before them answers either with a protocol error, `unknown type "power"`, so a harness that
+needs them finds out at the first one; the harness and the runner come from one checkout.
 
 **Events** are the runner messages that carry `seq`: `uart_tx`, `uart_cfg`, `gpio_out`, `reset`
 and `eth_tx`. They are what a peer may answer, so they set the block point (rule 1). `seq` is one
@@ -276,15 +287,17 @@ block point, so a peer that answers a pin, a modem's power key for one, sees it 
 {"type": "reset", "seq": 12, "t": 4100000000, "cause": 12}
 ```
 
-The guest reset, from the run loop: `run` returned `Stop::SwReset`, and `cause` is what
+The guest reset. From the run loop: `run` returned `Stop::SwReset`, and `cause` is what
 `reboot()` returned (`esp-soc/src/machine.rs:306`), the ROM's reset reason (`RESET_REASON` in
 ESP-IDF's `esp_rom/esp32/include/esp32/rom/rtc.h`). The classic chip in esp32sim raises
 3 (`SW_RESET`), 5 (`DEEPSLEEP_RESET`, the wake from deep sleep), 9 (`RTCWDT_SYS_RESET`),
-12 (`SW_CPU_RESET`, `esp_restart`), 13 (`RTCWDT_CPU_RESET`) and 16 (`RTCWDT_RTC_RESET`). The
-power-on at the start of the run sends no `reset`.
+12 (`SW_CPU_RESET`, `esp_restart`), 13 (`RTCWDT_CPU_RESET`) and 16 (`RTCWDT_RTC_RESET`). From the
+peer: a `chip_reset` (5.18) and a `power` that brings the supply back (5.17) reset the chip with
+cause 1 (`POWERON_RESET`), at the input's `t`. The power-on at the start of the run sends no
+`reset`, so the `n`-th `reset` of a run starts the chip's boot `n + 1`.
 
 The board persists across a reset, as on a real board where a firmware restart does not reset the
-modem: levels the peer drives stay driven, queued inputs stay queued, and paced bytes keep coming.
+modem (the supply going off is another matter, 5.17): levels the peer drives stay driven, queued inputs stay queued, and paced bytes keep coming.
 The chip does not: `reboot()` replaces the peripherals (`esp32/src/soc.rs:138`), so the RX FIFOs
 are empty, and bytes that arrive before the firmware routes its UART again are dropped as
 `unrouted_rx`. Right after `reset` the runner sends `uart_cfg` for every watched route that
@@ -574,6 +587,67 @@ still leaving, an `off` and an `on` at one `t` among them, takes effect once it 
 a slice or two later: attaching the fresh one would take the deauthentication off the air, and the
 station would never learn that it had to join again.
 
+### 5.17 `power` *ext* (#105)
+
+```json
+{"type": "power", "t": 12000000000, "on": false}
+```
+
+From `t` the board's supply is off (`on: false`) or on (`on: true`). `on` is JSON `true` or
+`false`; anything else is a protocol error. It goes into the input queue (section 8) like any
+input. The supply is on from the start of the run; a switch to the state it is in already does
+nothing.
+
+Off: the guest stops where it is, between two instructions, and runs nothing until the supply
+comes back. The runner still takes the peer's turns at their block points, and applies the inputs
+at their times, so the run's time goes on (section 3); a slice without the guest takes no wall
+time. The chip drives no pad and routes no UART: a `uart_cfg` with no pins goes out for every
+port whose route touched a watched pin, and a `gpio_out` with empty `enabled` and `output` and,
+in `changes`, every watched pin the peer last saw high, at `0`; both at the switch's `t`. Bytes
+that come due while the supply is off, those of a `uart_rx` still being paced included, are
+dropped as `unrouted_rx` (5.8). Levels the peer drives stay driven, and the chip has them when it
+comes back. The SD card of `--sd-rw` loses its power: it leaves SPI mode and forgets its
+initialisation, and a block it had not received whole is lost; the blocks it took are in the
+image already. With `--wifi`, the station leaves the air without a word, the access point forgets
+it at once, and `eth_rx` frames that come due while the supply is off are dropped
+(`stats.wifi.eth_rx_dropped`).
+
+On: a power-on reset of the chip, then `reset` with cause 1 (5.5), and what follows a reset. The
+chip starts as at the start of the run, but for its flash:
+
+| | Kept | Starts again |
+|---|---|---|
+| Flash: the build, NVS, OTA data, everything the guest wrote, in the runner's memory | ✓ | |
+| eFuses | ✓ | |
+| SRAM (DRAM, IRAM, the cache's RAM), RTC fast and RTC slow memory | | zeroed |
+| PSRAM | | zeroed |
+| RTC registers, the RTC timer, the RTC watchdog | | as at power-on, `RESET_STATE` saying `POWERON_RESET` |
+| The cores and the digital peripherals | | as at every reset (`reboot()`) |
+| The levels the peer drives on the pins | ✓ | |
+
+The runner does it with esp32sim's `reboot()`, then writes zeros over SRAM and the RTC memories
+through the bus, so that code esp32sim decoded from them is decoded again, loads the ROM's ELF
+again for the data its reset handler expects in DRAM, and replaces the RTC registers with a new
+chip's. With `--wifi` the station comes back to a fresh access point, as at power-on, which it
+must join again; the access point stays off the air if the peer switched it off.
+
+The flash lives in the runner, from the `--flash-at` files read at the start, and is never
+written back to them: what the guest wrote lasts as long as the run. esp32sim carries out each
+program and erase command whole when the guest issues it, so a power cut falls between two
+commands, never inside one: torn pages and half-erased sectors are not modelled.
+
+### 5.18 `chip_reset` *ext* (#105)
+
+```json
+{"type": "chip_reset", "t": 4500000000}
+```
+
+At `t` the chip's EN pin is pulsed, as a board's reset button does: a power-on reset of the chip
+alone, as `power` gives one when the supply comes back (5.17), then `reset` with cause 1 (5.5). The
+board keeps its power: the SD card stays where it was, and so does what the peer models around
+the chip. It goes into the input queue (section 8) like any input. With the supply off it does
+nothing. The pulse takes no time: the guest runs again from the same `t`.
+
 ## 6. Rules
 
 1. **Block point.** After each `wait` the runner runs the guest until the block point
@@ -773,7 +847,8 @@ run that completes. The `esp32sim` backend passes `0`: its turns last as long as
 runs, and the test's own wall-time timeout ends a run that hangs
 ([pytest plugin](features/pytest-plugin-user.md#the-tests-timeout)).
 
-`Stop::SwReset` is not an end: the runner sends `reset` and continues (5.5). `stats` is the last
+`Stop::SwReset` is not an end: the runner sends `reset` and continues (5.5), and neither is the
+supply going off (5.17). `stats` is the last
 message, after which the peer reads end of file; a peer that sees end of file without `stats`
 knows the runner died.
 
@@ -794,6 +869,7 @@ codec change (#37). What #325 does not have:
 | `console` | the console for the peer, opt-in: the `esp32sim` backend's console expects read it, in emulated-time order with the turns |
 | `reset` comes from the runner's run loop | #325 proposes a `guest_reset` trait method; the peer sees the same message either way (plan, finding 4) |
 | `eth_tx`, `eth_rx`, `wifi_ap` and `stats.wifi` (*ext*), with `--wifi` | #325 has nothing of Wi-Fi. They carry the Ethernet frames of esp32sim's station link in relay mode, and switch its access point, so that the network behind the access point is the peer's, in emulated time ([decision](decisions/harness.md#the-network-the-device-reaches-is-simulated-in-the-harness-in-emulated-time)) |
+| `power` and `chip_reset` (*ext*) | #325's board has no supply and no EN pin of its own; a test resets or power-cycles the board it describes, and the runner does both in one run, on one clock (5.17, 5.18) |
 | The SD card of `--sd-rw` answers SPI on `SocketBoard`, in the runner | a card answers every byte of a transaction in the same transaction (`spi_transfer_pins`), which a peer a turn away could not; nothing of it goes on the socket, and the protocol does not change ([runner-technical.md](features/runner-technical.md#the-sd-card)) |
 
 ## 11. Changes from the plan

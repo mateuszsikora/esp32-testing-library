@@ -15,10 +15,16 @@
 //! each slice boundary (`eth_tx`), and the peer's frames go to the station's link when they come
 //! due (`eth_rx`), as does the access point going off the air and coming back (`wifi_ap`).
 //!
+//! The peer can also pulse the chip's EN pin (`chip_reset`) and switch the board's supply
+//! (`power`). Either way the chip comes back through a power-on reset, which the peer sees as
+//! `reset` with cause 1. While the supply is off the guest runs nothing and its time still passes:
+//! the slices go on, without the guest, so that the peer's turns and inputs keep their times.
+//!
 //! [`Guest`] and [`Link`] stand for the machine and the socket, so the tests run the loop
 //! against a scripted guest and a fake peer.
 use crate::cli;
 use crate::protocol::{self, Incoming, Stats, Warn, WarnKind, WifiStats, char_ns, cycles, ns};
+use crate::sd_card;
 use crate::socket_board::{Recorded, Shared};
 use crate::transport::{Link, LinkError};
 use esp_soc::uart::{UartInput, UartRoute};
@@ -49,6 +55,14 @@ pub trait Guest {
     fn run_until(&mut self, cycle: u64) -> Stop;
     /// After `Stop::SwReset`: the chip reset, returning the cause the ROM will report.
     fn chip_reset(&mut self) -> u32;
+    /// The chip's power-on reset, from EN or from the board's supply coming back: SRAM, the RTC
+    /// memories and the RTC registers start again as at the run's first power-on, and the flash
+    /// keeps what the guest wrote to it. `rom` is the mask ROM's ELF. Returns the cause the ROM
+    /// will report, `POWERON_RESET`.
+    fn power_on_reset(&mut self, rom: &[u8]) -> u32;
+    /// With the board's supply off: the bus's clock moves on to `cycle`, and the chip runs
+    /// nothing.
+    fn idle_until(&mut self, cycle: u64);
     fn uart_route(&self, port: usize) -> UartRoute;
     fn rx_pending(&self, port: usize) -> usize;
     /// One received byte on `pin`, into every UART whose RX pin it is.
@@ -83,7 +97,16 @@ pub trait Guest {
     fn wifi_drops(&self) -> (u64, u64) {
         (0, 0)
     }
+    /// Takes the access point, and the networks around, off the station's air at once, without
+    /// a word: the station has lost its power, and with it what it knew of them.
+    fn wifi_forget(&mut self) {}
 }
+
+/// Where the classic chip's SRAM and RTC memories are on the data bus, besides the DRAM, which
+/// ends at `esp32::bus::DRAM_HIGH` (`esp32/src/bus.rs`, `SocBus::memory`).
+const CACHE_RAM: u32 = 0x4007_0000;
+const RTC_FAST: u32 = 0x3ff8_0000;
+const RTC_SLOW: u32 = 0x5000_0000;
 
 impl Guest for esp32::Machine {
     fn cycles(&self) -> u64 {
@@ -95,6 +118,36 @@ impl Guest for esp32::Machine {
     }
     fn chip_reset(&mut self) -> u32 {
         self.reboot()
+    }
+    fn power_on_reset(&mut self, rom: &[u8]) -> u32 {
+        // the cores, the digital peripherals and PSRAM, as at any reset
+        self.reboot();
+        // what keeps its contents through `reboot` and not without power: through the bus, so
+        // that the code decoded from it is decoded again
+        let bus = &mut self.bus;
+        let memories = [
+            (
+                esp32::bus::DRAM_HIGH - bus.dram.len() as u32,
+                bus.dram.len(),
+            ),
+            (esp32::bus::IRAM_LOW, bus.iram.len()),
+            (CACHE_RAM, bus.cache_ram.len()),
+            (RTC_FAST, bus.rtc_fast.len()),
+            (RTC_SLOW, bus.rtc_slow.len()),
+        ];
+        for (address, len) in memories {
+            bus.load_bytes(address, &vec![0; len])
+                .expect("the chip's memories are mapped");
+        }
+        // the ROM's data in DRAM, as its reset handler finds it after the first power-on
+        self.load_rom(rom)
+            .expect("the ROM loaded at the start of the run");
+        // the RTC registers, the RTC timer and RESET_STATE as a new chip has them: POWERON
+        self.bus.periph.rtc = esp32::periph::Peripherals::new(self.mac).rtc;
+        esp_periph::rtc_cntl::RST_POWERON
+    }
+    fn idle_until(&mut self, cycle: u64) {
+        self.bus.cycles = cycle;
     }
     fn uart_route(&self, port: usize) -> UartRoute {
         self.bus.periph.uart_route(port)
@@ -167,6 +220,9 @@ impl Guest for esp32::Machine {
         let link = &self.bus.periph.wifi.link;
         (link.rx_dropped(), link.tx_dropped())
     }
+    fn wifi_forget(&mut self) {
+        self.bus.periph.wifi.link.attach(None, None);
+    }
 }
 
 pub struct Options<'a> {
@@ -181,6 +237,10 @@ pub struct Options<'a> {
     /// `--wifi`: the access point is on the air from power-on, and the station's frames go to
     /// the peer.
     pub wifi: Option<&'a cli::Wifi>,
+    /// The mask ROM's ELF, for a power-on reset.
+    pub rom: &'a [u8],
+    /// The SD card of `--sd-rw`, which loses its power with the board's.
+    pub card: Option<sd_card::Shared>,
 }
 
 /// Why the run ended (protocol §9).
@@ -283,6 +343,8 @@ enum Input {
     Release(Vec<u8>),
     Eth(Vec<u8>),
     WifiAp(bool),
+    Power(bool),
+    ChipReset,
 }
 
 struct Paced {
@@ -333,6 +395,8 @@ pub struct Session<'a, G: Guest, L: Link> {
     /// Frames for the station that came due and that its link has not taken yet: its queue
     /// holds 64.
     eth: VecDeque<Vec<u8>>,
+    /// The board's supply is off, as the peer last switched it (`power`).
+    off: bool,
     stats: Stats,
 }
 
@@ -360,6 +424,7 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
             ap_on: opts.wifi.is_some(),
             leaving: false,
             eth: VecDeque::new(),
+            off: false,
             stats: Stats {
                 wifi: opts.wifi.map(|_| WifiStats::default()),
                 ..Stats::default()
@@ -395,6 +460,10 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
             if now >= self.opts.end_cycle {
                 return Err(End::MaxSeconds);
             }
+            if self.off {
+                self.guest.idle_until(self.slice_end(now));
+                continue;
+            }
             match self.guest.run_until(self.slice_end(now)) {
                 Stop::Halted => {}
                 Stop::SwReset => {
@@ -402,20 +471,7 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                     self.collect();
                     self.count_wifi_drops();
                     let cause = self.guest.chip_reset();
-                    let cycle = self.guest.cycles();
-                    eprintln!(
-                        "esp32tl-runner: chip reset at {:.6} s, cause {cause:#x}",
-                        ns(cycle) as f64 / 1e9
-                    );
-                    self.stats.resets += 1;
-                    self.pending.push_back(Item::Reset { cycle, cause });
-                    // the reset changes the chip's pins without the hooks that would report it
-                    let routes = self.routes();
-                    self.pending.push_back(Item::Routes { cycle, routes });
-                    if self.watch != 0 {
-                        let state = self.reset_gpio(cycle);
-                        self.pending.push_back(Item::Board(state));
-                    }
+                    self.reset(cause);
                 }
                 stop => return Err(End::Emulator(stop)),
             }
@@ -467,26 +523,33 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
     fn boundary(&mut self) -> Result<(), End> {
         let now = self.guest.cycles();
         self.collect();
-        let routes = self.routes();
+        let mut routes = self.routes();
         self.pending.push_back(Item::Routes { cycle: now, routes });
         loop {
-            self.process_pending(false)?;
-            match self.block_point() {
-                // a block point already behind the guest is taken at once, without running it;
-                // one at or after the end of the run is not taken
-                Some(b) if cycles(b) <= now && cycles(b) < self.opts.end_cycle => {
-                    self.take_turn(b)?;
+            loop {
+                self.process_pending(false)?;
+                match self.block_point() {
+                    // a block point already behind the guest is taken at once, without running
+                    // it; one at or after the end of the run is not taken
+                    Some(b) if cycles(b) <= now && cycles(b) < self.opts.end_cycle => {
+                        self.take_turn(b)?;
+                    }
+                    _ => break,
                 }
-                _ => break,
             }
+            if now >= self.opts.end_cycle {
+                // nothing more reaches the guest
+                return Ok(());
+            }
+            self.close_after_gap(ns(now))?;
+            self.leave();
+            if !self.apply_inputs(now)? {
+                break;
+            }
+            // the chip reset or lost its power: what that changed, its routes included, goes
+            // out, and may call for a turn, before the guest runs again
+            routes = self.routes();
         }
-        if now >= self.opts.end_cycle {
-            // nothing more reaches the guest
-            return Ok(());
-        }
-        self.close_after_gap(ns(now))?;
-        self.leave();
-        self.apply_inputs(now)?;
         self.deliver(now, &routes)?;
         self.deliver_eth();
         self.link.idle().map_err(link_end)
@@ -516,7 +579,10 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
         {
             end = end.min(cycles(t.saturating_add(latency)));
         }
-        end = end.min(cycles((t / MS + 1) * MS));
+        // a slice without the guest takes no wall time, so nothing waits for its end
+        if !self.off {
+            end = end.min(cycles((t / MS + 1) * MS));
+        }
         if let Some((&(t, _), _)) = self.inputs.first_key_value() {
             end = end.min(cycles(t));
         }
@@ -543,9 +609,10 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
     /// (protocol 5.5). `reboot()` leaves `GPIO_ENABLE` and `GPIO_OUT` 0 and IO_MUX at function 0,
     /// through which esp32sim drives no pad: no pad is driven, and taking a pad as driven high
     /// where both words have its bit agrees with that. `changes` holds every watched pin whose
-    /// level differs from the one last reported in `changes`.
+    /// level differs from the one last reported in `changes`. With the supply off nothing drives
+    /// a pad either.
     fn reset_gpio(&mut self, cycle: u64) -> Recorded {
-        let (enable, out) = self.guest.gpio_drive();
+        let (enable, out) = self.pads();
         let mut shared = self.shared.borrow_mut();
         let now = (enable & self.watch, out & self.watch);
         let level = now.0 & now.1;
@@ -563,8 +630,86 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
         }
     }
 
+    /// The chip's UART routes; none while the supply is off.
     fn routes(&self) -> [UartRoute; PORTS] {
+        if self.off {
+            return std::array::from_fn(|port| UartRoute::new(port, 0, None, None));
+        }
         std::array::from_fn(|port| self.guest.uart_route(port))
+    }
+
+    /// `GPIO_ENABLE` and `GPIO_OUT`; nothing drives a pad while the supply is off.
+    fn pads(&self) -> (u64, u64) {
+        if self.off {
+            (0, 0)
+        } else {
+            self.guest.gpio_drive()
+        }
+    }
+
+    /// What follows every reset of the chip, at the bus's cycle: the `reset` with its `cause`, and
+    /// the routes and pins the reset changed without the hooks that would report them.
+    fn reset(&mut self, cause: u32) {
+        let cycle = self.guest.cycles();
+        eprintln!(
+            "esp32tl-runner: chip reset at {:.6} s, cause {cause:#x}",
+            ns(cycle) as f64 / 1e9
+        );
+        self.stats.resets += 1;
+        self.pending.push_back(Item::Reset { cycle, cause });
+        let routes = self.routes();
+        self.pending.push_back(Item::Routes { cycle, routes });
+        if self.watch != 0 {
+            let state = self.reset_gpio(cycle);
+            self.pending.push_back(Item::Board(state));
+        }
+    }
+
+    /// The chip's power-on reset, from EN (`chip_reset`) or from the supply coming back
+    /// (`power`). The station comes back to a fresh access point, as at the start of the run,
+    /// which it must join again.
+    fn power_on_reset(&mut self) {
+        if !std::mem::replace(&mut self.off, false) {
+            // what the guest did before the reset goes out before it
+            self.collect();
+            self.count_wifi_drops();
+        }
+        let cause = self.guest.power_on_reset(self.opts.rom);
+        if let Some(wifi) = self.opts.wifi {
+            self.leaving = false;
+            if self.ap_on {
+                self.guest.wifi_access_point(wifi);
+            } else {
+                self.guest.wifi_forget();
+            }
+        }
+        self.reset(cause);
+    }
+
+    /// The board's supply goes off: the guest stops where it is, no pad is driven and no UART
+    /// routed, the SD card loses its power, and the station leaves the air without a word.
+    fn power_off(&mut self) {
+        self.collect();
+        self.count_wifi_drops();
+        self.off = true;
+        let cycle = self.guest.cycles();
+        eprintln!(
+            "esp32tl-runner: power off at {:.6} s",
+            ns(cycle) as f64 / 1e9
+        );
+        if let Some(card) = &self.opts.card {
+            card.borrow_mut().power_off();
+        }
+        if self.opts.wifi.is_some() {
+            self.leaving = false;
+            self.guest.wifi_forget();
+        }
+        let routes = self.routes();
+        self.pending.push_back(Item::Routes { cycle, routes });
+        if self.watch != 0 {
+            let state = self.reset_gpio(cycle);
+            self.pending.push_back(Item::Board(state));
+        }
     }
 
     fn watched(&self, pin: u8) -> bool {
@@ -826,6 +971,14 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                     }
                     inputs.push((t, Input::WifiAp(on)));
                 }
+                Incoming::Power { t, on } => {
+                    check(t, Vec::new())?;
+                    inputs.push((t, Input::Power(on)));
+                }
+                Incoming::ChipReset { t } => {
+                    check(t, Vec::new())?;
+                    inputs.push((t, Input::ChipReset));
+                }
                 Incoming::Wait {
                     ack,
                     quiet_until,
@@ -872,8 +1025,11 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
 
     /// Applies every input now due, in the queue's order: received bytes go on their lines
     /// (rule 5), GPIO levels and releases to the board, which hands them to the chip at once.
-    fn apply_inputs(&mut self, now: u64) -> Result<(), End> {
+    /// Returns whether the chip reset or lost its power. EN pulsed while the supply is off, and
+    /// a `power` that leaves the supply as it was, change nothing.
+    fn apply_inputs(&mut self, now: u64) -> Result<bool, End> {
         let mut gpio = false;
+        let mut reset = false;
         while let Some(entry) = self.inputs.first_entry() {
             let t = entry.key().0;
             if cycles(t) > now {
@@ -893,7 +1049,7 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                     line.free = d0 + char_ns(data.len() as u64, baud);
                 }
                 Input::Gpio(levels) => {
-                    let enabled = self.guest.gpio_drive().0;
+                    let enabled = self.pads().0;
                     for (pin, level) in levels {
                         if enabled & 1 << pin != 0 {
                             self.stats.inputs_on_output += 1;
@@ -914,12 +1070,25 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                     self.deliver_eth();
                 }
                 Input::WifiAp(on) => self.switch_access_point(on),
+                Input::Power(on) if on == self.off => {
+                    if on {
+                        self.power_on_reset();
+                    } else {
+                        self.power_off();
+                    }
+                    reset = true;
+                }
+                Input::ChipReset if !self.off => {
+                    self.power_on_reset();
+                    reset = true;
+                }
+                Input::Power(_) | Input::ChipReset => {}
             }
         }
         if gpio {
             self.guest.take_gpio_inputs();
         }
-        Ok(())
+        Ok(reset)
     }
 
     /// Hands the station's link the frames that came due, in order, as many as its queue takes;
@@ -930,7 +1099,7 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
             return;
         };
         while let Some(frame) = self.eth.front() {
-            if !self.ap_on || self.leaving {
+            if !self.ap_on || self.leaving || self.off {
                 wifi.eth_rx_dropped += 1;
             } else if self.guest.eth_input(frame) {
                 wifi.eth_rx += 1;
@@ -1036,7 +1205,9 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                 self.stats.unrouted_rx_bytes += 1;
                 self.warn(t, WarnKind::UnroutedRx, None, pin, None)?;
             }
-            self.guest.uart_input(pin, paced.baud, paced.byte);
+            if !self.off {
+                self.guest.uart_input(pin, paced.baud, paced.byte);
+            }
         }
         Ok(())
     }

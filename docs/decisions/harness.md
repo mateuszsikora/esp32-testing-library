@@ -2042,3 +2042,85 @@ reconnect waits with stale events; making every condition future-only, which los
 current-state and cumulative queries. A public shared cursor is unnecessary for these scopes:
 explicit methods express them without requiring callers to compare timestamps, edit counters
 or manage cursor ownership across brokers and TLS listeners.
+
+## A reset and a power cycle go on in the run they happen in, on its clock
+
+Status: decided (#105)
+
+`board.reset()`, `board.power_off()` and a `board.power_on()` after it are inputs of the run the
+first `power_on()` started: the backend sends them to the runner at the board's time the test
+calls them, and the runner resets or idles the chip in the machine it has. One runner, one link
+and one clock serve the whole test, so `board.now`, `board.utc`, the console's lines, the run's
+log and every tap's recording go on through every boot, and the models and simulated services on
+the link see the time between two boots pass in turns, as any other. The flash the firmware
+writes to is the runner's copy, which a power cycle keeps; the build's files are only read. What
+the firmware counts from its own boot starts again: a test reads it as
+`board.now - board.boot.at`. `board.boots` comes from the link's `reset` messages, the first boot
+at 0 with cause 1, so it holds every reset, the firmware's own and its watchdogs' included.
+
+This extends [a run starts at board.power_on(), and so does the runner](#a-run-starts-at-boardpower_on-and-so-does-the-runner):
+the first `power_on()` still starts the runner, and sources, taps and `board.nvs()` are still
+given before it, also when a later boot would find them.
+
+**Rejected:** ending the runner at `power_off()` and starting a new one at `power_on()`, with the
+flash dumped to a file in between, because the new run's clock and turns would start again from 0,
+every model and the network would see a gap that is no time at all, and the runner would need a
+way to write its flash out that the protocol does not have; and restarting `board.now` at each
+boot, because the world's time and the services' history would then have to be kept apart from
+the board's clock, which is what every other time of the run is on.
+
+## board.reset() is EN, a power-on reset of the chip; power_off() is the board's supply
+
+Status: decided (#105)
+
+`board.reset()` pulses the chip's EN pin, as a devkit's reset button does: on the ESP32, EN low
+holds the whole chip, the RTC domain included, in reset, and the ROM reports `POWERON_RESET`. So
+the chip starts with zeroed SRAM and RTC memory, as at the first power-on, and the rest of the
+board keeps its power: the SD card stays initialised, the modem and the receiver go on. The
+pulse takes no time. `board.power_off()` switches the board's supply off: the chip and every part
+on the supply lose their power, and `board.power_on()` brings them back, the chip through the same
+power-on reset. The board's clock runs on while it is off, and the test can wait.
+
+**Rejected:** a reset that keeps SRAM and RTC memory, as `reboot()` does for `esp_restart()`,
+because that is the firmware's own restart, which a test can already cause through the firmware,
+and the chip does not do it at EN; one call with a domain argument, `board.power(domain=...)`,
+because two names say which supply each one acts on without a parameter to get wrong; and a
+`hold` for how long EN stays low, which no firmware needs yet: the chip does nothing while held.
+
+## Every interface of a profile is on the board's supply
+
+Status: postponed (#105)
+
+A power cycle takes the supply of every interface a board profile lists: the GNSS receiver and
+modem models lose their power (the receiver is silent, the modem off until its PWRKEY pulse), and
+so does the SD card in the slot. On the profiles esp32tl ships that is the board as it is: the
+LilyGO board's modem, receiver and slot are on it, and a devkit assembly wires its receiver and
+card to the devkit's 3V3. What is beyond the board, the broker, the access point and the network,
+keeps its power. A replay or a real device at the far end of a route is not a part of the board
+and keeps sending. A profile key that puts a part on a supply of its own, and a model of
+`lines.board.power_enable` gating one, wait for a board that needs them, like
+[telling on-board from off-board interfaces](#telling-on-board-from-off-board-interfaces-is-postponed).
+
+## Torn flash writes and what RAM holds after a reset are not modelled
+
+Status: postponed (#105)
+
+esp32sim carries out each flash program and erase command whole when the guest issues it, so a
+power cut falls between two commands, and the power-on reset zeroes SRAM and RTC memory. A real
+chip can lose power in the middle of a page program or a sector erase, and its RAM holds what it
+holds after a reset. The documentation states both, and the tests rely on neither. A model of
+interrupted flash operations needs flash timing esp32sim does not have, and comes with a firmware
+test that needs it.
+
+## On serial, reset() pulses EN and power_off() and boots skip
+
+Status: decided (#105)
+
+The serial backend's `board.reset()` is pytest-embedded's `hard_reset()`, EN through the USB
+adapter's RTS, as its `power_on()` is. It cannot switch a real board's supply, and it sees the
+chip's resets only as console text: `board.power_off()`, `board.boots` and `board.boot` skip the
+test at the line that asks, as a source the backend cannot give does.
+
+**Rejected:** reading the ROM's `rst:0x..` banner from the console as the serial backend's boots,
+because a firmware that silences UART0, or a reset during the banner, would leave the list wrong
+without a sign.
