@@ -53,7 +53,19 @@ The check also fails when:
 - a `plan §N`, `plan §N.N` or `plan MN` reference in the code names no heading of
   [`docs/implementation-plan.md`](../implementation-plan.md);
 - [`docs/decisions/README.md`](../decisions/README.md) is not what `scripts/decisions-index.py`
-  generates, or a decision file exists that the script does not list.
+  generates, or a decision file exists that the script does not list;
+- [`docs/invariants.md`](../invariants.md) gives one number to two invariants (`<N> numbers <count>
+  invariants; numbers are never reused`), or has a list item not written `- **<N>.** `: an
+  ordered-list marker, which GitHub renumbers (`<N>. is an ordered-list marker, which GitHub
+  renumbers; write - **<N>.**`, and the same for `<N>)`), or any other bullet, which the count would
+  miss (`"<the item's first 30 characters>" is a list item not written - **<N>.**`). A line that
+  goes on with a rule's text, indented under its dash, may start with a number other than 1: GitHub
+  reads it as text, and so does the check. Two pull requests that each take the next free number
+  pass on their own. The second fails once it is checked against a base that holds the first: after
+  the base branch is merged into it, or when CI runs on a new push to it, since CI checks out the
+  pull request merged into its base as of that push; re-running a finished job does not take the new
+  base. If both land anyway,
+  `tests/test_check_docs.py::test_this_repository_passes_its_integrity_checks` fails on `main`.
 
 It prints every failure as `✗ <message>` and exits 1.
 
