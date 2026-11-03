@@ -184,8 +184,11 @@ and after a match, to reject assertions on an unevaluated condition. `test_track
 boundaries independently of firmware and exercises both timeout descriptions and their run-report
 entries through the simulated board.
 
-The connect test captures both conditions before power-on so observing the connection cannot
-lose its initial report. Periodicity brackets three later deadlines with a 250 ms
+The connect test captures both conditions, `network.broker.next_connection()` and
+`reports.when_received()`, before power-on so observing the connection cannot lose its initial
+report. `test_tracker_support.py` also powers on unprovisioned firmware and checks that board
+timeouts name `the next MQTT client connection`, `a TLS handshake to start` and
+`a TLS handshake to complete`. Periodicity brackets three later deadlines with a 250 ms
 transport/scheduling tolerance and checks report history for early or extra publications.
 Movement uses southern/western coordinates and a 15 m tolerance for the receiver's one-second
 sampling at 10 m/s. Movement and separate lost-fix/silence scenarios wait for a positioned report,

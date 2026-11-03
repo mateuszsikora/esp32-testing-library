@@ -15,7 +15,7 @@ def test_split_connect_subscribe_qos_one_retained_and_unsubscribe() -> None:
     sent: list[bytes] = []
     closed: list[bool] = []
     session = broker.accept(("10.0.0.2", 100), sent.append, lambda: closed.append(True))
-    connected = broker.connected()
+    connected = broker.next_connection()
     for byte in CONNECT:
         session.on_data(bytes([byte]))
     assert sent == [b"\x20\x02\0\0"]
@@ -26,7 +26,7 @@ def test_split_connect_subscribe_qos_one_retained_and_unsubscribe() -> None:
     assert sent[-2:] == [b"\x90\x03\0\x01\x01", b"\x33\x0a\0\x03a/b\0\x01old"]
     session.on_data(b"\x40\x02\0\x01")
     assert not session.unacked
-    waiting = broker.message("a/+", "new")
+    waiting = broker.next_message("a/+", "new")
     now[0] = 30
     session.on_data(b"\x32\x0a\0\x03a/b\0\x09new")
     assert sent[-1] == b"\x40\x02\0\x09"
@@ -188,3 +188,84 @@ def test_empty_id_without_clean_session_gets_identifier_rejected() -> None:
     session.on_data(b"\x10\x0c\0\x04MQTT\x04\0\0\0\0\0")
     assert sent == [b"\x20\x02\0\x02"] and closed == [True]
     assert not broker.clients and not broker.messages
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_history_and_next_events_use_append_order_without_consuming(legacy: bool) -> None:
+    broker = Broker(lambda: 123)
+    message_condition = broker.message if legacy else broker.next_message
+    connection_condition = broker.connected if legacy else broker.next_connection
+    assert broker.find_message() is None and broker.find_connection() is None
+    waiting = message_condition("a/+", "new")
+    connected = connection_condition()
+    assert waiting() is None and connected() is None
+    session = broker.accept(("10.64.0.2", 4000), lambda data: None, lambda: None)
+    # CONNECT and the immediate publication arrive together, before another test poll.
+    session.on_data(CONNECT + b"\x30\x08\0\x03a/bnew")
+    first_message, first_client = broker.messages[0], broker.clients[0]
+    for _ in range(2):
+        assert waiting() is first_message
+        assert connected() is first_client
+        assert broker.find_message("a/#", b"new") is first_message
+        assert broker.find_connection() is first_client
+    assert broker.find_message("other/#") is None
+    assert broker.find_message("a/b", "absent") is None
+    next_message, next_client = message_condition("a/+", "new"), connection_condition()
+    assert next_message() is None and next_client() is None
+    # The timestamp does not move. Unrelated and mismatched messages do not satisfy the wait.
+    broker.publish("other/b", "new")
+    broker.publish("a/b", "different")
+    assert next_message() is None
+    session.on_close()
+    replacement = broker.accept(("10.64.0.2", 4001), lambda data: None, lambda: None)
+    replacement.on_data(CONNECT + b"\x30\x08\0\x03a/bnew")
+    for _ in range(2):
+        assert next_message() is broker.messages[-1]
+        assert next_client() is broker.clients[-1]
+        assert waiting() is first_message and connected() is first_client
+    assert first_message.at == broker.messages[-1].at
+    assert first_client.at == broker.clients[-1].at
+    assert broker.find_message("a/b", "new") is first_message
+    assert broker.find_connection() is first_client
+
+
+def test_subscription_condition_tracks_current_state_without_latching() -> None:
+    broker = Broker(lambda: 0)
+    subscribed = broker.subscribed("a/#")
+    session = broker.accept(("10.64.0.2", 4000), lambda data: None, lambda: None)
+    assert not subscribed()
+    session.on_data(CONNECT + SUBSCRIBE)
+    assert subscribed() and subscribed()
+    session.on_data(b"\xa2\x07\0\x02\0\x03a/#")
+    assert not subscribed()
+    session.on_data(SUBSCRIBE)
+    assert subscribed()
+    session.on_close()
+    assert not subscribed()
+
+
+@pytest.mark.parametrize(
+    ("method", "args", "description"),
+    [
+        ("message", ("a/+", "new"), "the next MQTT message on 'a/+' saying b'new'"),
+        ("next_message", (), "the next MQTT message on '#'"),
+        ("connected", (), "the next MQTT client connection"),
+        ("next_connection", (), "the next MQTT client connection"),
+        ("connection_attempt", (), "the next MQTT connection attempt"),
+        ("subscribed", ("a/#",), "an active MQTT subscription to 'a/#'"),
+    ],
+)
+def test_mqtt_conditions_are_named_and_reject_truth_testing(
+    method: str, args: tuple[str, ...], description: str
+) -> None:
+    broker = Broker(lambda: 0)
+    condition = getattr(broker, method)(*args)
+    assert repr(condition) == description
+    assert not condition()
+    with pytest.raises(TypeError, match="call the MQTT condition"):
+        bool(condition)
+    session = broker.accept(("10.64.0.2", 4000), lambda data: None, lambda: None)
+    session.on_data(CONNECT + SUBSCRIBE + b"\x30\x08\0\x03a/bnew")
+    assert condition()
+    with pytest.raises(TypeError, match="call the MQTT condition"):
+        bool(condition)

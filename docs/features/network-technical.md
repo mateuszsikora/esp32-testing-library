@@ -147,6 +147,14 @@ the test made, stamped at its instant or at the turn's `now`, whichever is later
   of disconnect, not the time of CONNECT. A replacement client ID closes the old connection.
   Session persistence and QoS 2 publication are unsupported. Credentials are observed by default;
   authentication is performed only by an installed test policy, with no external auth service.
+  `next_message` and `next_connection` capture the length of their respective append-only
+  histories at construction; `message` and `connected` delegate to them, and
+  `connection_attempt` captures `connection_attempts` the same way. Matching uses append order,
+  not timestamps, and polling does not change the captured offset. `find_message` scans
+  from index zero with the same topic/payload filters; `find_connection` reads the first CONNECT.
+  These are immediate queries returning records or `None`. `_Condition` wraps the MQTT
+  callables with useful `repr` output and rejects boolean coercion, including for the live
+  subscription query. Subscriptions continue to read active sessions, without latching matches.
 - `tls.py`: a generated RSA-2048 CA and server certificate, SHA-256 signatures, DNS/IP subject
   alternative names, CA key usage and server extended key usage. Optional `server_not_before`
   and `server_not_after` apply only to the leaf certificate; the CA retains its fixed validity.
@@ -162,6 +170,11 @@ the test made, stamped at its instant or at the turn's `now`, whichever is later
   before handing the plaintext stream to the inner service. Session closure and network reset
   leave both counters intact. Callable `handshake_started` / `handshake_completed` properties
   observe whether the corresponding live count is positive; they do not capture a future cursor.
+  `next_handshake_started()` / `next_handshake_completed()` instead capture the corresponding
+  count in `_HandshakeCondition.after` and compare the live count strictly against it. Event
+  processing order distinguishes equal-time events; no timestamp filtering or match consumption
+  occurs. Completion after construction includes handshakes already in progress. These counters
+  describe events across the listener, not the lifecycle of a selected connection.
   Their representations name the desired event, and `__bool__` rejects unevaluated truth tests.
   No deterministic replacement for OpenSSL randomness is attempted (#68).
 
@@ -224,6 +237,15 @@ It also checks immutable wire metadata, anonymous-ID allocation only on acceptan
 empty-ID rejection precedence, malformed CONNECT exclusion and propagation of policy errors,
 both out of `on_data` and as a link failure in a `BoardLink` turn. A test through `Internet`
 covers its traced plain and TLS listeners and keeps the policy and both histories across reset.
+MQTT temporal tests send CONNECT and PUBLISH in one callback, check both the `message` /
+`connected` aliases and the `next_*` methods, history filtering, equal timestamps, repeated
+polls and boolean protection.
+`tests/test_clock.py::test_mqtt_immediate_response_is_visible_after_waiting_for_connection`
+delivers both events in one runner slice, waits for CONNECT, then retrieves the pre-armed
+publication without advancing time; a newly created condition times out with its MQTT name.
+TLS reconnect tests complete real MemoryBIO handshakes around a failed attempt and reset,
+checking that old successes never satisfy a newly armed completion condition and that a
+handshake already in progress can satisfy a later-created completion condition.
 NTP tests cover silence from startup, idempotent transitions and resumed replies using elapsed
 world time. A MemoryBIO handshake with verification disabled solely for certificate inspection
 checks independent leaf validity dates, UTC normalization and a signature from the unchanged CA;

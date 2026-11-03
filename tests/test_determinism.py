@@ -73,7 +73,7 @@ def write_console(directory: Path, console: Console) -> None:
 def test_plain_mqtt(board: Esp32Sim, modem: Modem, broker: Broker, tmp_path: Path) -> None:
     modem.tap(tmp_path / "uart.modem.jsonl")
     board.power_on()
-    message = board.wait_until(broker.message("/topic/esp-pppos"), within=seconds(60))
+    message = board.wait_until(broker.next_message("/topic/esp-pppos"), within=seconds(60))
     assert message.text == "esp32-pppos"
     (tmp_path / "network.json").write_text(json.dumps(modem.network().transcript()))
 

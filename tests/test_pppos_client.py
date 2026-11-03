@@ -16,7 +16,7 @@ pytestmark = [
 
 def test_publishes_its_test_message(board: Esp32Sim, modem: Modem, broker: Broker) -> None:
     board.power_on()
-    message = board.wait_until(broker.message(topic="/topic/esp-pppos"), within=seconds(60))
+    message = board.wait_until(broker.next_message(topic="/topic/esp-pppos"), within=seconds(60))
     assert message.text == "esp32-pppos"
     assert modem.network().dns.asked == ["mqtt.eclipseprojects.io"]
     assert board.link.warnings == []

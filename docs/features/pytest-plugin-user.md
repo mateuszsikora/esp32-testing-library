@@ -683,8 +683,12 @@ request bytes to occurrence counts. See [matching](matching-user.md) for timing 
 
 `broker` selects the modem model and its simulated network before power-on and returns its
 MQTT 3.1.1 broker on port 1883. It requires a profile with `uart.modem`, such as
-`lilygo-t-a7670g-r2`. Use `board.wait_until(broker.message(topic), within=seconds(...))`,
-`broker.subscribed(topic)`, `broker.connected()` and `broker.publish(topic, payload)`.
+`lilygo-t-a7670g-r2`. Use `board.wait_until(broker.next_message(topic), within=seconds(...))`,
+`broker.subscribed(topic)`, `broker.next_connection()` and `broker.publish(topic, payload)`.
+`broker.find_message(topic)` and `broker.find_connection()` query recorded history; TLS
+listeners add `next_handshake_started()` and `next_handshake_completed()`. Create a `next_*`
+condition before the action that may produce its event. The
+[network guide](network-user.md#history-next-events-and-current-state) defines the boundaries.
 `modem.network()` gives the underlying network for DNS, NTP and TLS service configuration.
 On serial, both `broker` and `modem.network()` skip because a modem model is unsupported.
 See [the network guide](network-user.md) for complete examples and condition semantics.

@@ -17,6 +17,7 @@ from esp32tl.interfaces.console import Console, ConsoleLines, Line
 from esp32tl.link.boardlink import BoardLink
 from esp32tl.link.protocol import Console as ConsoleMessage
 from esp32tl.link.protocol import RunnerHello, Stop, Sync, Wait
+from esp32tl.net.mqtt import Broker
 from esp32tl.units import Duration, minutes
 from esp32tl.units import seconds as secs
 
@@ -114,6 +115,34 @@ def test_a_condition_that_holds_at_once_lets_no_time_pass() -> None:
     run = Run()
     assert run.clock.wait_until(lambda: 42, 10 * S, "the answer") == 42
     assert run.syncs == [0] and run.clock.now == 0
+
+
+def test_mqtt_immediate_response_is_visible_after_waiting_for_connection() -> None:
+    broker = Broker(lambda: 100 * MS)
+    session = broker.accept(("10.64.0.2", 4000), lambda data: None, lambda: None)
+
+    class MqttRun(Run):
+        def _print(self, until: int) -> None:
+            if not broker.clients:
+                # Both events occur in one runner slice, before the test regains control.
+                session.on_data(b"\x10\x0d\0\x04MQTT\x04\x02\0\x0a\0\x01c\x30\x09\0\x03a/bfast")
+
+    run = MqttRun()
+    connected, response = broker.next_connection(), broker.next_message("a/b", "fast")
+    try:
+        assert run.clock.wait_until(connected, S, repr(connected)) is broker.clients[0]
+        at = run.clock.now
+        message = run.clock.wait_until(response, S, repr(response))
+        assert message is broker.find_message("a/b", "fast")
+        assert run.clock.now == at == 100 * MS
+        assert response() is message  # Waiting did not consume the match.
+        next_response = broker.next_message("a/b", "fast")
+        with pytest.raises(NeverHappened) as raised:
+            run.clock.wait_until(next_response, 100 * MS, repr(next_response))
+        assert "the next MQTT message on 'a/b' saying b'fast' did not happen" in str(raised.value)
+    finally:
+        run.clock.stop()
+        run.runner.join(5)
 
 
 def test_a_condition_that_never_holds_raises_never_happened_naming_it_and_the_window() -> None:
