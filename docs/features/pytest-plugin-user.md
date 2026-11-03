@@ -422,8 +422,10 @@ def test_the_example_writes_its_files_into_the_image(board: Board):
   (`sd_card: cannot hold PATH: it is the tap of uart.gnss`). A tap into the card's image is
   refused the same way ([taps](run-report-user.md#when-the-test-gets-it-wrong)).
 - The report of the run names the card, `sd_card: a card holding PATH`, or `sd_card: empty`, and
-  the `esp32sim_link` property has `sd_card`, `{"image": PATH}`
+  the `esp32sim_link` property has `sd_card`, `{"image": PATH, "faults": [...], "affected": [...]}`
   ([the run report](run-report-user.md)).
+- Once a card is in, the test can make its reads and writes fail and slow its reads, writes and
+  erases, before or after power-on ([below](#make-the-card-fail-or-slow)).
 - On a board profile without a slot, `sd_card` is an error at setup:
   `esp32sim: the board profile gps-alarm-clock has no sd_card; its interfaces are console, uart.gnss, lines.alarm, wifi`.
 - The card stays in from power-on to the end of the run: inserting or removing it while the
@@ -616,6 +618,72 @@ def test_joins_and_fetches_from_the_tests_server(board, wifi, console):
 - The report of the run has `wifi: access point 'myssid', channel 6, WPA2-PSK`, a line per network
   around, then the network's events; the `esp32sim_link` property has `wifi`
   ([the esp32sim backend](esp32sim-backend-user.md#the-links-report)).
+
+### Make the card fail or slow
+
+On `esp32sim`, a card in the slot takes fault rules: `sd_card.fail(op, ...)` makes chosen reads or
+writes fail, `sd_card.delay(op, by, ...)` holds the card's answer to chosen reads, writes or erases
+for `by` of the board's time. A rule acts from the board's time the test gives it at, on the
+operations that begin from then on, so a test lets the firmware mount the card and write first,
+then breaks the card. Shortened from `examples/sd_data_logger/tests/test_logger.py`:
+
+```python
+def test_a_write_that_fails_after_logging_works(board: Board):
+    card = board.sd_card.image(size_mb=32).build()
+    board.sd_card.insert(card)
+    board.gnss.fix(at=WARSAW)
+    board.power_on(utc=START)
+    board.wait(seconds(2.5))
+    rows = card.read_text("20261102.CSV")
+
+    fault = board.sd_card.fail("write")  # the next write the card gets
+    board.console.expect_exact("sd_data_logger: SD card write failed", timeout=1)
+    [failed] = fault.hits
+    assert failed.written is False
+    assert card.read_text("20261102.CSV") == rows  # nothing of the failed row
+```
+
+- An operation is a read or a write of one 512-byte block (each block of a multiple block read or
+  write is one), or an erase. `fail("read")` answers a read with an error token instead of its
+  data; `fail("write")` answers a write with a write error and leaves the block as it was: the
+  card never writes part of a block, so whatever the image shows afterwards is what the firmware
+  and its file system wrote. An erase cannot fail.
+- `delay("read", by)` sends no data block until `by` has passed; `delay("write", by)` and
+  `delay("erase", by)` keep the card busy for `by` after it takes the block or the erase. The
+  firmware waits on the board's clock, and so do its timeouts: ESP-IDF gives up on a read after
+  1 s and on a write after 5 s, with `ESP_ERR_TIMEOUT`. `by` is a `Duration` more than 0 and at
+  most `MAX_DELAY`, 10 s.
+- `blocks=` limits a rule to one block number or a `range` of them, within the card; `skip=` lets
+  that many matching operations through first; `count=` is how many it then acts on, `None` for
+  every one until cleared. `fail` acts once by default, `delay` on every matching operation.
+  Every rule that matches an operation acts on it: `fail` and `delay` on the same block make a
+  failure that comes late.
+- `fault.clear()` and `sd_card.clear_faults()` stop rules from acting on operations that begin
+  from then on; a delay already running runs out.
+- `sd_card.fail` and `sd_card.delay` return a `CardFault`, whose `hits` are the operations it
+  acted on so far; `sd_card.affected` holds them all and `sd_card.faults` every rule given. Each
+  is a `CardIo`: `at` (the board's time it began: the command for a read or an erase, the block's
+  CRC for a write), `op`, `block`, `blocks`, `faults`, `failed`, `delay` and `written` (whether
+  the image was written: a write that went through, an erase). Read the image only once the
+  firmware is done with it, as for any write.
+- ESP-IDF's `sdspi` driver looks for a block's start token in the 8 bytes after the command's
+  answer and does not see an error token there. A failed read the card answers at once therefore
+  reaches it as `ESP_ERR_TIMEOUT` after its 1 s read timeout; with a `delay` on the same read the
+  error token comes while the driver polls, and it reports `ESP_ERR_INVALID_RESPONSE` at once.
+- Refused with `SourceError`: a rule for an empty slot
+  (`sd_card: the slot is empty: insert a card before giving it faults`), or after the board is
+  closed (`sd_card: the board is closed`). With `ValueError` or `TypeError`, naming the call: an
+  `op` the method does not take (`sd_card.fail: op is 'erase', not 'read' or 'write'`), a `by` that
+  is not a `Duration` or not more than 0 and at most 10 s
+  (`sd_card.delay: by is 0 s; a delay is more than 0 s and at most 10 s`), `blocks` that are not a
+  block or a non-empty range of them with step 1, or past the card
+  (`sd_card.fail: blocks is 2048; the card's blocks are 0 to 2047`), a `skip` below 0 and a `count`
+  below 1.
+- The report of the run lists each rule under the card's line, with the operations it acted on:
+  `  fault 1 from 2.5 s: fail writes on every block, 1 time; 1 operation`, then
+  `    3.0681844 s write block 541: failed, not written (fault 1)`. The run on the board's clock has
+  each call as a step, `sd_card.fail('write'): CardFault(1)`.
+- On [serial](serial-backend-user.md) a card cannot be inserted, so no rule can be given either.
 
 ## The test's timeout
 

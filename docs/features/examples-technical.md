@@ -99,6 +99,15 @@ after midnight. The empty-slot test supplies a fix after the mount has failed, o
 distinct later timestamps and requires continuous error-pin history between them.
 `next_unsaved_fix_time` encapsulates the console pattern, waits at most two fix intervals for
 an unsaved fix, and returns its UTC `datetime`; the scenario compares dates and ordering.
+The fault scenarios give the card's rules only once two rows are saved, so the mount and the
+file's creation go through unharmed. The failed write is the next one the card gets, whichever
+block it is; on this image it is the row's data block, so FatFs never updates the directory entry
+and the file reads as before. `fault.hits` tells the test that the block was not written. ESP-IDF
+does not retry it, and the firmware writes no more until it restarts, so the example shows no
+recovery; a firmware that remounts would be tested the same way, after the one-shot rule is used
+up. The slow-card scenario takes the console lines' board times (`board.console.lines`) and the
+rule's `hits` between the first and the second `(saved)` line: two writes, at least 300 ms
+apart, so the firmware's `fclose` waited out each busy time on the board's clock.
 The malformed-input scenario keeps its raw NMEA bytes visible, including deliberately broken
 checksums. `write_gnss_recording` packages them into a recording without modifying the bytes;
 the scenario specifies the first send time and spacing in units, then waits until the last

@@ -1,6 +1,7 @@
 //! The link protocol's wire format (`docs/protocol.md`, version 1): time in nanoseconds, base64,
 //! the messages the peer sends and the lines the runner writes. JSON is parsed with esp32sim's own
 //! parser (`esp_soc::json`, which its Cooja NDJSON link uses), so the runner adds no JSON crate.
+use crate::sd_card::{self, Op, Rule};
 use esp_soc::json::{Json, parse_json};
 use esp_soc::uart::UartRoute;
 use std::fmt::Write;
@@ -129,6 +130,16 @@ pub enum Incoming {
     ChipReset {
         t: u64,
     },
+    /// A fault rule for the SD card of `--sd-rw` (5.19).
+    SdFault {
+        t: u64,
+        rule: Rule,
+    },
+    /// The SD card's rules of `ids` cleared, or all of them (5.19).
+    SdClear {
+        t: u64,
+        ids: Option<Vec<u64>>,
+    },
     Wait {
         ack: u64,
         quiet_until: Option<u64>,
@@ -206,9 +217,67 @@ pub fn parse(line: &str) -> Result<Incoming, String> {
         "chip_reset" => Incoming::ChipReset {
             t: field("t").time()?,
         },
+        "sd_fault" => Incoming::SdFault {
+            t: field("t").time()?,
+            rule: sd_rule(&field)?,
+        },
+        "sd_clear" => Incoming::SdClear {
+            t: field("t").time()?,
+            ids: field("ids").ids()?,
+        },
         "stop" => Incoming::Stop,
         "adc" => Incoming::NotYet("adc"),
         _ => return Err(format!("unknown type {kind:?}")),
+    })
+}
+
+/// The rule of an `sd_fault`, checked but against the card, which the run loop knows.
+fn sd_rule<'a>(field: &impl Fn(&'static str) -> Field<'a>) -> Result<Rule, String> {
+    let id = field("id").time()?;
+    if id == 0 {
+        return Err(field("id").error("is 0; an id is 1 or more"));
+    }
+    let op = field("op").string()?;
+    let op = Op::parse(&op).ok_or_else(|| {
+        field("op").error(&format!("is {op:?}, not \"read\", \"write\" or \"erase\""))
+    })?;
+    let fail = field("fail").optional_boolean()?.unwrap_or(false);
+    if fail && op == Op::Erase {
+        return Err("sd_fault: an erase cannot fail, only be delayed".into());
+    }
+    let delay = field("delay").optional()?.unwrap_or(0);
+    if delay > sd_card::MAX_DELAY {
+        return Err(field("delay").error(&format!(
+            "is {delay} ns, over the {} ns a delay may last",
+            sd_card::MAX_DELAY
+        )));
+    }
+    if !fail && delay == 0 {
+        return Err("sd_fault: a rule that neither fails nor delays".into());
+    }
+    let blocks = match (field("first").optional()?, field("last").optional()?) {
+        (None, None) => None,
+        (Some(first), Some(last)) if first <= last => Some((first, last)),
+        (Some(first), Some(last)) => {
+            return Err(format!(
+                "sd_fault: \"first\" {first} is after \"last\" {last}"
+            ));
+        }
+        _ => return Err("sd_fault: \"first\" and \"last\" come together".into()),
+    };
+    let count = field("count").optional()?;
+    if count == Some(0) {
+        return Err(field("count").error("is 0; a rule acts on 1 operation or more"));
+    }
+    Ok(Rule {
+        id,
+        op,
+        fail,
+        delay_ns: delay,
+        delay: cycles(delay),
+        blocks,
+        skip: field("skip").optional()?.unwrap_or(0),
+        count,
     })
 }
 
@@ -239,6 +308,27 @@ impl Field<'_> {
             Some(_) => Err(self.error("is not true or false")),
             None => Err(self.error("is missing")),
         }
+    }
+    fn optional_boolean(&self) -> Result<Option<bool>, String> {
+        self.value().map(|_| self.boolean()).transpose()
+    }
+    /// Rule ids, each 1 or more; absent or `null` is `None`, every rule.
+    fn ids(&self) -> Result<Option<Vec<u64>>, String> {
+        let Some(value) = self.value() else {
+            return Ok(None);
+        };
+        let items = value
+            .as_arr()
+            .ok_or_else(|| self.error("is not an array"))?;
+        items
+            .iter()
+            .map(|v| match v {
+                Json::Int(id) if *id > 0 => Some(*id as u64),
+                _ => None,
+            })
+            .collect::<Option<_>>()
+            .map(Some)
+            .ok_or_else(|| self.error("holds something other than rule ids"))
     }
     fn time(&self) -> Result<u64, String> {
         u64::try_from(self.int()?).map_err(|_| self.error("is negative"))
@@ -366,6 +456,21 @@ pub fn eth_tx(seq: u64, t: u64, data: &[u8]) -> String {
     format!(
         r#"{{"type":"eth_tx","seq":{seq},"t":{t},"data":"{}"}}"#,
         base64(data)
+    )
+}
+
+/// An operation of the SD card that the peer's fault rules acted on (5.20).
+pub fn sd_io(t: u64, io: &sd_card::Io) -> String {
+    let rules: Vec<String> = io.rules.iter().map(u64::to_string).collect();
+    format!(
+        r#"{{"type":"sd_io","t":{t},"op":"{}","block":{},"blocks":{},"rules":[{}],"failed":{},"delay":{},"written":{}}}"#,
+        io.op.name(),
+        io.block,
+        io.blocks,
+        rules.join(","),
+        io.failed,
+        io.delay,
+        io.written
     )
 }
 

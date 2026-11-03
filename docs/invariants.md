@@ -188,6 +188,14 @@ that references to its number keep their meaning.
     `tests/test_sdspi.py::test_the_example_writes_its_files_into_the_image`,
     `tests/test_sdspi.py::test_a_card_without_a_file_system_does_not_mount`,
     `tests/test_pytest_plugin.py::test_runner_command_puts_a_card_in_the_slot_once_the_test_inserts_one`
+- **142.** `sd_card.fail` and `sd_card.delay` need a card in the slot, and refuse what the runner
+  would refuse before anything goes on the link; a rule the test gives at the board's time `t`
+  goes on the link stamped no earlier than `t` and no earlier than the turn, and each operation it
+  acted on comes back as one of its `hits`.
+  `tests/test_sd_faults.py::test_a_slot_without_a_card_takes_no_fault`,
+  `tests/test_sd_faults.py::test_a_rule_the_card_cannot_take_is_refused_before_it_goes_anywhere`,
+  `tests/test_sd_faults.py::test_each_rule_goes_on_the_link_as_given_and_at_the_turn_at_the_earliest`,
+  `tests/test_sd_faults.py::test_the_cards_reports_become_hits_of_the_rules_that_acted`
 - **67.** The runner gets the board profile's PSRAM as `--psram-mb`, in a test and in the `esp32tl`
     command: 0 on `esp32-devkitc`, 4 on `lilygo-t-a7670g-r2`.
     `tests/test_pytest_plugin.py::test_every_route_and_line_of_the_profile_is_on_the_link`,
@@ -257,6 +265,38 @@ that references to its number keep their meaning.
     `runner/src/sd_card/tests.rs::a_card_not_selected_or_not_clocked_hears_nothing`,
     `runner/src/sd_card/tests.rs::without_miso_the_chip_reads_high_but_the_card_listens`,
     `runner/src/sd_card/tests.rs::checks_crcs_of_cmd0_and_cmd8_always_and_of_the_rest_after_cmd59`
+- **137.** Without fault rules the SD card answers as it did before them, and the runner sends no
+  `sd_io`; each operation a rule acted on goes to the peer as one `sd_io`, without `seq`, in `t`
+  order with the other messages.
+  `runner/src/sd_card/tests.rs::without_rules_the_card_reports_nothing`,
+  `runner/src/session/tests.rs::sd_faults_reach_the_card_when_due_and_what_they_did_goes_out_in_t_order`
+- **138.** A block write a fault rule fails is answered with a write error and leaves its block in the
+  image as it was: the card never writes part of a block, and a CMD25 writes nothing after the
+  failed block until its stop token.
+  `runner/src/sd_card/tests.rs::a_write_a_rule_fails_leaves_its_block_as_it_was`,
+  `runner/src/sd_card/tests.rs::a_failed_block_of_cmd25_ends_what_it_writes`,
+  `examples/sd_data_logger/tests/test_logger.py::test_a_write_that_fails_after_logging_works_stops_logging_and_keeps_the_rows`
+- **139.** A fault rule acts on the operations of its `op` whose blocks meet its own, from the slice
+  boundary it comes due at, after it has let `skip` of them through, and on `count` of them; each
+  block of a multiple block transfer is one operation. Every rule that matches acts, and a cleared
+  rule acts on no operation that begins after.
+  `runner/src/sd_card/tests.rs::skip_and_count_pick_the_operations_a_rule_acts_on`,
+  `runner/src/sd_card/tests.rs::every_rule_that_matches_acts_and_the_longest_delay_holds`,
+  `runner/src/sd_card/tests.rs::cleared_rules_act_no_more_but_a_running_delay_runs_out`,
+  `runner/src/session/tests.rs::sd_faults_reach_the_card_when_due_and_what_they_did_goes_out_in_t_order`
+- **140.** An SD card delay passes on the bus's clock: the card sends 0xff before a data block, or 0x00
+  while busy, until a transaction comes in at or after the cycle the operation began at plus the
+  delay, and while busy it takes in nothing, a command included. A firmware's own timeout sees the
+  delay pass.
+  `runner/src/sd_card/tests.rs::a_read_delay_holds_the_data_block_until_the_bus_reaches_it`,
+  `runner/src/sd_card/tests.rs::a_write_delay_keeps_the_card_busy_and_deaf_until_it_is_done`,
+  `runner/src/socket_board/tests.rs::the_card_hears_the_bus_cycle_and_its_reports_go_into_the_log`,
+  `tests/test_sdspi.py::test_a_read_slower_than_the_driver_s_timeout_fails_the_mount_on_the_board_s_clock`
+- **141.** The runner refuses, as a protocol error, `sd_fault` and `sd_clear` without `--sd-rw`, a rule
+  that neither fails nor delays, an erase that fails, a delay over 10 s, an id not above the last
+  `sd_fault`'s, blocks past the card, and an `sd_clear` of an id no `sd_fault` gave.
+  `runner/src/protocol/tests.rs::refuses_sd_faults_that_say_nothing_or_too_much`,
+  `runner/src/session/tests.rs::the_runner_refuses_sd_faults_it_cannot_take`
 - **119.** With `--wifi`, every frame the station sent goes to the peer as an `eth_tx` event stamped at
      the slice boundary that took it, in order; an `eth_rx` reaches the station's link only when
      due and in order, waits in the runner while the link's queue is full, and is dropped and

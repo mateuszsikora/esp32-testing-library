@@ -131,6 +131,8 @@ routes:
   {interface}: {source}; {bytes}{tap}
 console: {n} bytes out; tapped into {path}
 sd_card: a card holding {image}
+  fault {id} from {at}: {rule}[, cleared at {t}]; {n} operation(s)
+    {at} {op} block {n}: {failed|delayed {delay}}, {written|not written} (fault {ids})
 the run on the board's clock, {kept}:
   {seconds}.{nanoseconds:09d} s  {who}  {text}
 ```
@@ -138,7 +140,9 @@ the run on the board's clock, {kept}:
 `{source}` is `the {kind} of {detail}` or `nothing at the far end`; `{bytes}`
 `{in} bytes in, {out} out`, or `no bytes` for a route nothing crossed; `{tap}`
 `; tapped into {path}` or nothing. The `sd_card:` line is there only on a profile with a slot, as
-`sd_card: empty` while the test has inserted no card. `{kept}` is `{n} entries` (`1 entry`), every entry of the run,
+`sd_card: empty` while the test has inserted no card. `{rule}` is `CardFault.describe()`, as
+`fail writes on block 8, 1 time` or `delay by 0.3 s writes on every block, until cleared`; an
+erase's line has `blocks {first} to {last}`. `{kept}` is `{n} entries` (`1 entry`), every entry of the run,
 the steps included; when the `deque` has dropped some,
 `: every step of the test, and the last {kept} of the console and the routes` follows. With no entry
 the heading is `the run on the board's clock: nothing happened`. `{who}` is `test`, `chip`,
@@ -149,7 +153,9 @@ the console is tapped. Serial instead uses the [serial schema](serial-backend-te
 
 The esp32sim user property's `routes`, by interface: `{"source": kind or null, "detail": what
 the source was made from or null, "bytes_in": n, "bytes_out": n, "tap": path or null}`;
-and `sd_card`, `{"image": path or null}`, or null on a profile without a slot.
+and `sd_card`, `{"image": path or null, "faults": [...], "affected": [...]}`, or null on a profile
+without a slot ([esp32sim-backend-technical.md](esp32sim-backend-technical.md#data-flow) gives
+their fields).
 
 `RunLog.line(t, name, level, direction="out")` records firmware GPIO output by default.
 `Lines.inputs` calls it with `direction="in"` when a model's pending GPIO response is due and

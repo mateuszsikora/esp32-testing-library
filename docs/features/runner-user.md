@@ -158,6 +158,12 @@ MTOOLS_SKIP_CHECK=1 mtype -i card.img ::foo.txt
   pin. A guest that routes the bus to other pins finds no card, as it would on the board.
 - The card is there from power-on to the end of the run, through chip resets: it keeps its state,
   as a powered card does, until the guest sends CMD0.
+- It answers at once, unless a peer on `--board` gives it fault rules (`sd_fault`,
+  [protocol 5.19](../protocol.md#519-sd_fault-and-sd_clear-ext-107)): those make chosen reads and
+  writes fail, and hold the card's answer to chosen reads, writes and erases for a time on the
+  board's clock. A run without `--board` has no way to give them. The harness gives them through
+  `sd_card.fail` and `sd_card.delay`
+  ([pytest plugin](pytest-plugin-user.md#make-the-card-fail-or-slow)).
 
 What the card does and does not model is in
 [the technical side](runner-technical.md#the-sd-card).
@@ -246,7 +252,9 @@ the peer instead. Everything the runner says goes to stderr, on lines that start
 - `esp32tl-runner: power off at T s` when the peer switches the board's supply off.
 - `esp32tl-runner: SD card: N commands, R blocks read, W blocks written` at the end of a run with
   `--sd-rw`, just before the line that ends it; with `, E image errors` added when reads, writes
-  or erases of the image file failed. Each such failure also prints
+  or erases of the image file failed, and `, fault rules: F failed, D delayed` when the peer's
+  fault rules failed or delayed any operation (a block read or written, an erase). Blocks a rule
+  failed are not counted as read or written. Each such failure also prints
   `esp32tl-runner: SD card: reading block N: ERROR` (or `writing block N`, or
   `erasing blocks LO to HI`) when it happens, and the guest gets the error a card reports for it.
 

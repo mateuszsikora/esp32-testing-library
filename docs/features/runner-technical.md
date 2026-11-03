@@ -6,9 +6,9 @@ The crate is `runner/`, package `esp32tl-runner`:
 |---|---|
 | `runner/src/main.rs` | setup, the run without a peer, and the start and report of the run with one |
 | `runner/src/cli.rs` | the command line |
-| `runner/src/socket_board.rs` | `SocketBoard`, the `BoardModel` on the chip's pins with `--board`: it records what the guest does, with its bus cycle, for the run loop, holds the GPIO levels the peer drives for the chip to take, and hands SPI transactions to the SD card |
+| `runner/src/socket_board.rs` | `SocketBoard`, the `BoardModel` on the chip's pins with `--board`: it records what the guest does, with its bus cycle, for the run loop, holds the GPIO levels the peer drives for the chip to take, and hands SPI transactions to the SD card at the latest bus cycle it was given, with what the card's fault rules did going into the log |
 | `runner/src/sd_card.rs` | `SdCard`, the SD card of `--sd-rw` in SPI mode, and `CardBoard`, the board that holds it alone without `--board` |
-| `runner/src/session.rs` | `Session`, the run loop with a peer: slices, turns, coalescing, pacing, warnings, the Wi-Fi station's Ethernet frames and access point with `--wifi`, `stats` |
+| `runner/src/session.rs` | `Session`, the run loop with a peer: slices, turns, coalescing, pacing, warnings, the Wi-Fi station's Ethernet frames and access point with `--wifi`, the SD card's fault rules with `--sd-rw`, `stats` |
 | `runner/src/protocol.rs` | the wire format: time conversion, base64, parsing the peer's messages and writing the runner's |
 | `runner/src/transport.rs` | `SocketLink`, the Unix or TCP socket: buffered NDJSON writes, line reads, the signal flag and the time limits |
 
@@ -108,15 +108,21 @@ which is how a software CS, a GPIO the driver sets low, shows (`esp32/src/periph
 transaction to `SdCard::transfer`.
 
 `SdCard::transfer` returns 0xff for every byte unless the card's SCLK pin is in `sclk` and its CS
-pin in `cs`. It then clocks `max(tx.len(), rx_len)` bytes through `exchange`, MOSI 0xff past the
+pin in `cs`. The transaction comes in at `SdCard::now`, a bus cycle: `SocketBoard` sets it before
+each transfer to the latest cycle any of its hooks was given, which is the bus's own, since
+esp32sim calls `advance_to` (through `advance_inputs_with_clock`) at every tick of a board that
+uses GPIO edges, and the SPI hook carries no cycle of its own. `CardBoard` uses no GPIO edges, is
+never advanced and leaves `now` at 0; nothing gives it rules either. It then clocks `max(tx.len(), rx_len)` bytes through `exchange`, MOSI 0xff past the
 end of `tx` or when the card's MOSI pin is not in `mosi`, and keeps the card's bytes only when
 `miso` is the card's MISO pin. Byte `i` of the answer is the card's byte while byte `i` of `tx`
 comes in: a transaction is taken as full duplex, as ESP-IDF's `spi_master` makes one by default.
 A half-duplex read (MOSI phase, then MISO phase) would see the card's bytes one phase early; no
 SD driver uses one.
 
-`exchange` sends the next byte of `out`, the card's queue, 0xff when it is empty, then takes the
-byte that came in according to `phase`:
+`exchange` sends the next item of `out`, the card's queue, 0xff when it is empty, then takes the
+byte that came in according to `phase`. An item is a byte (`Out::Byte`) or a delay
+(`Out::Hold { until, fill }`), which sends `fill` and stays at the front while `now` is before
+`until`; with `fill` 0x00 (busy) the card also drops the byte that came in, whatever its phase:
 
 | Phase | What an incoming byte does |
 |---|---|
@@ -156,8 +162,37 @@ A data block is one 0xff (N<sub>AC</sub>), the token 0xfe, the data and its CRC1
 An application command index the card does not define is taken as the standard command of that
 index. A block that comes in is answered with its data response, `0x05` accepted, `0x0b` with a
 bad CRC16 while checking is on, `0x0d` past the end or when the image cannot be written, on the
-byte after its CRC; the card is never busy after it. A CMD25 waits for the next token after any
-of them.
+byte after its CRC; without a fault rule the card is never busy after it. A CMD25 waits for the
+next token after any of them.
+
+**Fault rules.** `SdCard::add_rule` and `clear_rules` take the peer's rules (`sd_card::Rule`, from
+`sd_fault` and `sd_clear`, [protocol 5.19](../protocol.md#519-sd_fault-and-sd_clear-ext-107)),
+which the run loop applies at the slice boundary where they come due. When an operation begins,
+`verdict(op, first, last)` goes through the rules in the order given: a rule of that `op` whose
+blocks overlap `first` to `last` counts down its `skip` if it has one left, and otherwise acts and
+counts down its `count`; a rule whose `count` reaches 0 is removed. The operation fails if one
+rule that acted fails it, and is held for the longest of their delays, in bus cycles from `now`
+(`protocol::cycles` of the nanoseconds, rounded up). Where each operation is decided:
+
+| Operation | Where | A rule that fails it | A rule that delays it |
+|---|---|---|---|
+| read | `read_block`, for CMD17 and each block of CMD18, before the image is read | 0xff, then the error token `0x04` (`ERROR_ECC`, card ECC failed) instead of the data block; CMD18 ends | `Out::Hold` of 0xff before the data block or the error token |
+| write | `block_in`, once the CRC is checked and the block is within the card, before the image is written | data response `0x0d`; the image is not written, `written` (ACMD22) not counted | `Out::Hold` of 0x00 after the data response |
+| erase | CMD38, before `SdStore::erase` | not allowed: the protocol refuses it | `Out::Hold` of 0x00 after R1 |
+
+An operation a rule acted on goes into `SdCard::io` as an `sd_card::Io` (its cycle, op, blocks,
+the rules' ids, whether it failed, the delay in nanoseconds, whether the image was written);
+`SocketBoard::spi_transfer_pins` moves them into the board's log as `Recorded::SdIo` after each
+transfer, and the run loop sends each as `sd_io` in `t` order with the rest. `Stats::failed` and
+`Stats::delayed` count them for the `SD card:` line. With no rule, `verdict` returns nothing and
+the card answers as before, byte for byte.
+
+A delayed read answers with 0xff until `until`, where a real card's access time would be; ESP-IDF's
+`poll_data_token` reads 8 bytes per poll and finds the token after it. A failed read's token comes
+one byte after R1, inside the 8 bytes `start_command_read_blocks` scans for the start token only:
+ESP-IDF then polls for a token that never comes and reports `ESP_ERR_TIMEOUT` after its 1 s read
+timeout. A read that fails after a delay of its own arrives while it polls, and ESP-IDF reports
+`ESP_ERR_INVALID_RESPONSE` at once (`tests/test_sdspi.py`).
 
 The registers (SD Physical Layer Simplified Specification, chapter 5):
 
@@ -404,7 +439,8 @@ The command line and the usage text: [runner-user.md](runner-user.md#run-an-imag
   - `esp32tl-runner: SD card: reading block {lba}: {error}`, `writing block {lba}: {error}` and
     `erasing blocks {lo} to {hi}: {error}`, when the image file fails
   - `esp32tl-runner: SD card: {commands} commands, {read} blocks read, {written} blocks
-    written`, with `, {errors} image errors` when there were any, before the stop or end line
+    written`, with `, {errors} image errors` when there were any and `, fault rules: {failed}
+    failed, {delayed} delayed` when the peer's fault rules acted, before the stop or end line
   - `esp32tl-runner: stop: {VARIANT} at {seconds:.6} s ({wall:.1} s wall, {reboots} resets)`
   - `esp32tl-runner: the emulator stopped before --max-seconds: {stop:?}`
   - with `--board`, instead of the last two: `esp32tl-runner: end: {cause} at {seconds:.6} s
@@ -623,10 +659,16 @@ A failure to write the last messages does not change the exit code: the first ca
   erase, the state a chip reset finds, and
   `after_a_power_cut_the_card_is_uninitialised_and_keeps_its_whole_blocks`: a multiple block
   write cut inside its second block, after which the card answers nothing before CMD0, the first
-  block is in the image and the second is not.
+  block is in the image and the second is not. Fault rules: none reports nothing; a failed write
+  leaves its block and is one-shot by `count`; a failed block of CMD25 and the stop token after
+  it; a failed read's error token, also inside CMD18; `skip` and `count`; several rules on one
+  operation and the longest delay; a read held until the bus cycle, each CMD18 block counted from
+  the one before; a write busy and deaf to a command until its delay is done; an erase busy after
+  R1 and matched by overlap; cleared rules, and a delay that runs out after its rule is cleared.
 - `runner/src/socket_board/tests.rs`: what `SocketBoard` records: every UART byte, and only the
-  GPIO changes of watched pins, enable-only changes included; and the peer's levels and releases
-  it hands the chip, in order, with `input_levels` after them.
+  GPIO changes of watched pins, enable-only changes included; the peer's levels and releases
+  it hands the chip, in order, with `input_levels` after them; and the SD card at the latest
+  cycle a hook was given, its `Io` moved into the log.
 - `runner/src/transport/tests.rs`: lines both ways over a socket pair, a line over 1 MiB, the
   `--peer-timeout` on a read and on a write the peer does not read, a signal ending a blocked
   read, a write cut short by a signal that goes on once `closing` is called, the teardown limit,
@@ -678,6 +720,11 @@ A failure to write the last messages does not change the exit code: the first ca
   `an_access_point_put_back_while_it_is_leaving_comes_back_once_it_has_left` (an `off` and an
   `on` at one instant: the fresh one only once the old one has left, and a frame due meanwhile
   dropped).
+  The SD card's rules: `sd_faults_reach_the_card_when_due_and_what_they_did_goes_out_in_t_order`
+  (rules added and cleared at their `t`, an `sd_io` without `seq` that ends the `uart_tx` it lands
+  in) and `the_runner_refuses_sd_faults_it_cannot_take` (without `--sd-rw`, an id not above the
+  last, a block past the card, an `sd_clear` of an unknown id); the rules' own fields are
+  `protocol/tests.rs`'s `refuses_sd_faults_that_say_nothing_or_too_much`.
   `on_the_emulator_the_access_point_deauthenticates_the_station_before_it_leaves` runs
   `wifi_access_point` and `wifi_leave` on the real `esp32::Machine`: with no station the access
   point leaves at once; with an associated one it queues the deauthentication (frame control,

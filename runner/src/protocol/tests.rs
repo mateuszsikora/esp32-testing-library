@@ -131,6 +131,52 @@ fn parses_the_peer_messages() {
     );
     assert_eq!(parse(r#"{"type":"stop"}"#), Ok(Incoming::Stop));
     assert_eq!(
+        parse(
+            r#"{"type":"sd_fault","t":9,"id":3,"op":"read","fail":true,"delay":1000,"first":4,"last":7,"skip":2,"count":1}"#
+        ),
+        Ok(Incoming::SdFault {
+            t: 9,
+            rule: Rule {
+                id: 3,
+                op: Op::Read,
+                fail: true,
+                delay_ns: 1000,
+                delay: 240,
+                blocks: Some((4, 7)),
+                skip: 2,
+                count: Some(1),
+            }
+        })
+    );
+    // what may be left out: no failure, no limit on blocks or count, nothing skipped
+    assert_eq!(
+        parse(r#"{"type":"sd_fault","t":9,"id":1,"op":"erase","delay":10000000000,"first":null}"#),
+        Ok(Incoming::SdFault {
+            t: 9,
+            rule: Rule {
+                id: 1,
+                op: Op::Erase,
+                fail: false,
+                delay_ns: 10_000_000_000,
+                delay: 2_400_000_000,
+                blocks: None,
+                skip: 0,
+                count: None,
+            }
+        })
+    );
+    assert_eq!(
+        parse(r#"{"type":"sd_clear","t":10,"ids":[1,3]}"#),
+        Ok(Incoming::SdClear {
+            t: 10,
+            ids: Some(vec![1, 3])
+        })
+    );
+    assert_eq!(
+        parse(r#"{"type":"sd_clear","t":10,"ids":null}"#),
+        Ok(Incoming::SdClear { t: 10, ids: None })
+    );
+    assert_eq!(
         parse(r#"{"type":"adc","t":0,"pin":34,"volts":1.25}"#),
         Ok(Incoming::NotYet("adc"))
     );
@@ -180,6 +226,49 @@ fn refuses_malformed_messages() {
 }
 
 #[test]
+fn refuses_sd_faults_that_say_nothing_or_too_much() {
+    let fault = |extra: &str| format!(r#"{{"type":"sd_fault","t":0,"id":1{extra}}}"#);
+    for (extra, found) in [
+        (r#","op":"write""#, "a rule that neither fails nor delays"),
+        (
+            r#","op":"write","fail":false,"delay":0"#,
+            "neither fails nor delays",
+        ),
+        (r#","op":"format","fail":true"#, r#""op" is "format""#),
+        (r#","fail":true"#, r#""op" is missing"#),
+        (r#","op":"erase","fail":true"#, "an erase cannot fail"),
+        (
+            r#","op":"read","delay":10000000001"#,
+            "over the 10000000000 ns a delay may last",
+        ),
+        (r#","op":"read","fail":1"#, r#""fail" is not true or false"#),
+        (r#","op":"read","fail":true,"first":3"#, "come together"),
+        (
+            r#","op":"read","fail":true,"first":3,"last":2"#,
+            r#""first" 3 is after "last" 2"#,
+        ),
+        (r#","op":"read","fail":true,"count":0"#, r#""count" is 0"#),
+        (
+            r#","op":"read","fail":true,"skip":-1"#,
+            r#""skip" is negative"#,
+        ),
+    ] {
+        let line = fault(extra);
+        let error = parse(&line).unwrap_err();
+        assert!(error.contains(found), "{line}: {error}");
+    }
+    let error = parse(r#"{"type":"sd_fault","t":0,"id":0,"op":"read","fail":true}"#).unwrap_err();
+    assert!(error.contains(r#""id" is 0"#), "{error}");
+    for line in [
+        r#"{"type":"sd_clear","t":0,"ids":[0]}"#,
+        r#"{"type":"sd_clear","t":0,"ids":1}"#,
+        r#"{"type":"sd_clear","ids":[1]}"#,
+    ] {
+        assert!(parse(line).is_err(), "{line}");
+    }
+}
+
+#[test]
 fn writes_the_runner_messages() {
     let route = UartRoute::new(1, 1 << 26, Some(27), Some(115_200));
     assert_eq!(
@@ -201,6 +290,20 @@ fn writes_the_runner_messages() {
     assert_eq!(
         reset(12, 4, 12),
         r#"{"type":"reset","seq":12,"t":4,"cause":12}"#
+    );
+    let io = sd_card::Io {
+        cycle: 0,
+        op: Op::Erase,
+        block: 64,
+        blocks: 32,
+        rules: vec![2, 5],
+        failed: false,
+        delay: 250_000_000,
+        written: true,
+    };
+    assert_eq!(
+        sd_io(6, &io),
+        r#"{"type":"sd_io","t":6,"op":"erase","block":64,"blocks":32,"rules":[2,5],"failed":false,"delay":250000000,"written":true}"#
     );
     let w = Warn {
         t: 1,

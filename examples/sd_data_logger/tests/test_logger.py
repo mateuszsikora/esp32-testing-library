@@ -7,7 +7,7 @@ import pytest
 
 from esp32tl import Board, recording
 from esp32tl.interfaces.console import Console
-from esp32tl.units import Duration, Position, seconds
+from esp32tl.units import Duration, Position, ms, seconds
 
 pytestmark = [pytest.mark.app_path(".."), pytest.mark.board_profile("sd-data-logger")]
 START = datetime(2026, 11, 2, 12, tzinfo=UTC)
@@ -138,6 +138,53 @@ def test_bad_sentences_cannot_create_files(board: Board, tmp_path: Path) -> None
     board.wait(last_sentence_at + WRITE_MARGIN)
     assert card.list_files() == ["20261102.CSV"]
     assert card.read_text("20261102.CSV") == "120003.00,52.229677,21.012233\n"
+
+
+def test_a_write_that_fails_after_logging_works_stops_logging_and_keeps_the_rows(
+    board: Board,
+) -> None:
+    card = board.sd_card.image(size_mb=32).build()
+    error = board.lines.output("logger.error")
+    board.sd_card.insert(card)
+    board.gnss.fix(at=WARSAW)
+    board.power_on(utc=START)
+    board.wait(2 * FIX_INTERVAL + WRITE_MARGIN)
+    saved = "120001.00,52.229677,21.012233\n120002.00,52.229677,21.012233\n"
+    assert card.read_text("20261102.CSV") == saved
+    error.assert_off()
+
+    # The next write the card gets fails, whichever block it is: the row's data.
+    fault = board.sd_card.fail("write")
+    board.console.expect_exact("sd_data_logger: SD card write failed", timeout=FIX_INTERVAL)
+    board.console.expect_exact("sd_data_logger: fix 20261102 120003.00 (card unavailable)")
+    error.assert_on()
+    [failed] = fault.hits
+    assert (failed.op, failed.failed, failed.written) == ("write", True, False)
+    # The firmware writes no more until it restarts, and the file is as it was before the fault.
+    next_unsaved_fix_time(board.console)
+    assert card.read_text("20261102.CSV") == saved
+    assert board.sd_card.affected == (failed,)
+
+
+def test_a_slow_card_delays_each_saved_fix_by_its_busy_time(board: Board) -> None:
+    card = board.sd_card.image(size_mb=32).build()
+    error = board.lines.output("logger.error")
+    board.sd_card.insert(card)
+    board.gnss.fix(at=WARSAW)
+    slow = board.sd_card.delay("write", ms(300))
+    board.power_on(utc=START)
+    # The firmware waits out each write before it reads the next fix, which the UART buffers.
+    board.console.expect_exact("fix 20261102 120002.00 (saved)", timeout=5 * FIX_INTERVAL)
+    first, second = board.console.lines(r"\(saved\)")
+    # The second row takes a write of its data and one of its directory entry, in turn.
+    writes = [io for io in slow.hits if first.at < io.at < second.at]
+    assert len(writes) == 2
+    assert writes[1].at - writes[0].at >= ms(300)
+    assert second.at - writes[0].at >= ms(600)
+    assert card.read_text("20261102.CSV") == (
+        "120001.00,52.229677,21.012233\n120002.00,52.229677,21.012233\n"
+    )
+    error.assert_off()
 
 
 def test_without_a_card_the_error_pin_stays_on_and_fixes_keep_arriving(board: Board) -> None:

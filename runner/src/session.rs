@@ -20,11 +20,15 @@
 //! `reset` with cause 1. While the supply is off the guest runs nothing and its time still passes:
 //! the slices go on, without the guest, so that the peer's turns and inputs keep their times.
 //!
+//! With `--sd-rw` the peer's fault rules go to the SD card when they come due (`sd_fault`,
+//! `sd_clear`), and each operation they acted on goes to the peer, in the board's log with the
+//! rest (`sd_io`).
+//!
 //! [`Guest`] and [`Link`] stand for the machine and the socket, so the tests run the loop
 //! against a scripted guest and a fake peer.
 use crate::cli;
 use crate::protocol::{self, Incoming, Stats, Warn, WarnKind, WifiStats, char_ns, cycles, ns};
-use crate::sd_card;
+use crate::sd_card::{self, Rule};
 use crate::socket_board::{Recorded, Shared};
 use crate::transport::{Link, LinkError};
 use esp_soc::uart::{UartInput, UartRoute};
@@ -239,7 +243,8 @@ pub struct Options<'a> {
     pub wifi: Option<&'a cli::Wifi>,
     /// The mask ROM's ELF, for a power-on reset.
     pub rom: &'a [u8],
-    /// The SD card of `--sd-rw`, which loses its power with the board's.
+    /// The SD card of `--sd-rw`, which loses its power with the board's and takes the peer's
+    /// fault rules.
     pub card: Option<sd_card::Shared>,
 }
 
@@ -293,7 +298,11 @@ enum Item {
 impl Item {
     fn cycle(&self) -> u64 {
         match self {
-            Item::Board(Recorded::UartTx { cycle, .. } | Recorded::Gpio { cycle, .. })
+            Item::Board(
+                Recorded::UartTx { cycle, .. }
+                | Recorded::Gpio { cycle, .. }
+                | Recorded::SdIo(sd_card::Io { cycle, .. }),
+            )
             | Item::Reset { cycle, .. }
             | Item::Routes { cycle, .. }
             | Item::Eth { cycle, .. } => *cycle,
@@ -345,6 +354,8 @@ enum Input {
     WifiAp(bool),
     Power(bool),
     ChipReset,
+    SdFault(Rule),
+    SdClear(Option<Vec<u64>>),
 }
 
 struct Paced {
@@ -397,6 +408,8 @@ pub struct Session<'a, G: Guest, L: Link> {
     eth: VecDeque<Vec<u8>>,
     /// The board's supply is off, as the peer last switched it (`power`).
     off: bool,
+    /// The highest `id` of the peer's `sd_fault`s so far.
+    sd_id: u64,
     stats: Stats,
 }
 
@@ -425,6 +438,7 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
             leaving: false,
             eth: VecDeque::new(),
             off: false,
+            sd_id: 0,
             stats: Stats {
                 wifi: opts.wifi.map(|_| WifiStats::default()),
                 ..Stats::default()
@@ -789,6 +803,11 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                     }
                     self.event(t, |seq| protocol::eth_tx(seq, t, &data))?;
                 }
+                // not an event: it asks the peer for nothing
+                Item::Board(Recorded::SdIo(io)) => {
+                    self.close_open()?;
+                    self.send(&protocol::sd_io(t, &io))?;
+                }
             }
         }
         Ok(())
@@ -979,6 +998,42 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                     check(t, Vec::new())?;
                     inputs.push((t, Input::ChipReset));
                 }
+                Incoming::SdFault { t, rule } => {
+                    check(t, Vec::new())?;
+                    let Some(card) = &self.opts.card else {
+                        return Err(protocol_error("sd_fault without --sd-rw", &line));
+                    };
+                    if rule.id <= self.sd_id {
+                        return Err(protocol_error(
+                            &format!(
+                                "id {} is not above {}, the last sd_fault's",
+                                rule.id, self.sd_id
+                            ),
+                            &line,
+                        ));
+                    }
+                    let blocks = card.borrow().blocks();
+                    if let Some((_, last)) = rule.blocks
+                        && last >= blocks
+                    {
+                        return Err(protocol_error(
+                            &format!("block {last} is past the card's last, {}", blocks - 1),
+                            &line,
+                        ));
+                    }
+                    self.sd_id = rule.id;
+                    inputs.push((t, Input::SdFault(rule)));
+                }
+                Incoming::SdClear { t, ids } => {
+                    check(t, Vec::new())?;
+                    if self.opts.card.is_none() {
+                        return Err(protocol_error("sd_clear without --sd-rw", &line));
+                    }
+                    if let Some(id) = ids.iter().flatten().find(|&&id| id > self.sd_id) {
+                        return Err(protocol_error(&format!("id {id} is no sd_fault's"), &line));
+                    }
+                    inputs.push((t, Input::SdClear(ids)));
+                }
                 Incoming::Wait {
                     ack,
                     quiet_until,
@@ -1083,6 +1138,16 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                     reset = true;
                 }
                 Input::Power(_) | Input::ChipReset => {}
+                Input::SdFault(rule) => {
+                    if let Some(card) = &self.opts.card {
+                        card.borrow_mut().add_rule(rule);
+                    }
+                }
+                Input::SdClear(ids) => {
+                    if let Some(card) = &self.opts.card {
+                        card.borrow_mut().clear_rules(ids.as_deref());
+                    }
+                }
             }
         }
         if gpio {

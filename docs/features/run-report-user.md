@@ -135,7 +135,10 @@ A run with no entry says `the run on the board's clock: nothing happened`.
 
 On a profile with an SD card slot, as `esp32-devkitc`, a line after the routes names the card:
 `sd_card: a card holding PATH`, or `sd_card: empty`; the test's `sd_card.insert(PATH)` is one of
-its steps ([pytest plugin](pytest-plugin-user.md#the-fixtures)).
+its steps ([pytest plugin](pytest-plugin-user.md#the-fixtures)). Each fault rule the test gave the
+card follows on a line of its own, with a line for each operation it acted on, and each
+`sd_card.fail`, `sd_card.delay` or clear is a step
+([make the card fail or slow](pytest-plugin-user.md#make-the-card-fail-or-slow)).
 
 A test that passed gets the `routes:` lines and the slot's, without the run; `pytest -rA` shows
 them.

@@ -38,6 +38,10 @@ enum Act {
     /// peripheral drives through the GPIO matrix, whatever the two words say.
     Pads(Vec<(u8, bool)>, u64, u64),
     Fault,
+    /// The SD card reports an operation its rules acted on, as `SocketBoard` logs it.
+    SdIo(sd_card::Io),
+    /// The ids of the SD card's rules in force are these.
+    SdRules(Vec<u64>),
 }
 
 /// A guest that does what its script says at the cycles it says, and records UART bytes the way
@@ -62,6 +66,8 @@ struct FakeGuest {
     power_resets: Vec<u64>,
     /// Where each slice with the supply off ended.
     idles: Vec<u64>,
+    /// The SD card of `--sd-rw`.
+    card: Option<sd_card::Shared>,
 }
 
 impl FakeGuest {
@@ -82,7 +88,22 @@ impl FakeGuest {
             slices: Vec::new(),
             power_resets: Vec::new(),
             idles: Vec::new(),
+            card: None,
         }
+    }
+
+    /// With an SD card of 1 MiB, 2048 blocks.
+    fn with_card(mut self) -> Self {
+        let wiring = sd_card::Wiring {
+            sclk: 14,
+            mosi: 15,
+            miso: 2,
+            cs: 13,
+        };
+        let store = esp_periph::sdmmc::MemStore(vec![0; 2 * sd_card::UNIT as usize]);
+        let card = sd_card::SdCard::new(wiring, Box::new(store)).unwrap();
+        self.card = Some(Rc::new(RefCell::new(card)));
+        self
     }
 
     fn with_routes(mut self, routes: &[UartRoute]) -> Self {
@@ -138,6 +159,16 @@ impl Guest for FakeGuest {
                     self.board.gpio_output_at(self.now, &changes, enable, out);
                 }
                 Act::Fault => return Stop::Exceptions(3),
+                Act::SdIo(io) => self
+                    .shared
+                    .borrow_mut()
+                    .log
+                    .push(Recorded::SdIo(sd_card::Io { cycle: at, ..io })),
+                Act::SdRules(ids) => {
+                    let card = self.card.as_ref().expect("a card").borrow();
+                    let rules: Vec<u64> = card.rules().iter().map(|r| r.id).collect();
+                    assert_eq!(rules, ids, "the rules at cycle {at}");
+                }
             }
         }
         self.now = end;
@@ -366,6 +397,7 @@ struct Run {
 fn run_for(seconds: f64, mut guest: FakeGuest, mut peer: FakePeer, console: bool) -> Run {
     let signal = AtomicBool::new(false);
     let shared = guest.shared.clone();
+    let card = guest.card.clone();
     let opts = Options {
         end_cycle: (seconds * SECOND as f64) as u64,
         console,
@@ -373,7 +405,7 @@ fn run_for(seconds: f64, mut guest: FakeGuest, mut peer: FakePeer, console: bool
         signal: &signal,
         wifi: None,
         rom: &[],
-        card: None,
+        card,
     };
     let (end, stats) = Session::new(&mut guest, &mut peer, shared, opts).run();
     Run {
@@ -2366,4 +2398,105 @@ fn on_the_emulator_a_power_on_reset_clears_sram_and_the_rtc_and_keeps_the_flash(
         1 | 1 << 6,
         "RESET_STATE: POWERON on both cores"
     );
+}
+
+fn sd_fault(t: u64, id: u64, extra: &str) -> String {
+    format!(r#"{{"type":"sd_fault","t":{t},"id":{id},"op":"write","fail":true{extra}}}"#)
+}
+
+#[test]
+fn sd_faults_reach_the_card_when_due_and_what_they_did_goes_out_in_t_order() {
+    let mut first = true;
+    let peer = FakePeer::new(&[GNSS_TX], move |turn| {
+        let mut out = Vec::new();
+        if std::mem::take(&mut first) {
+            out.push(sd_fault(2 * MS, 1, ""));
+            out.push(sd_fault(
+                2 * MS,
+                2,
+                r#","op":"read","fail":false,"delay":5000"#,
+            ));
+            out.push(r#"{"type":"sd_clear","t":4000000,"ids":[1]}"#.to_string());
+            out.push(r#"{"type":"sd_clear","t":6000000}"#.to_string());
+        }
+        out.push(wait(turn.seq, Some(turn.t + MS), None));
+        out
+    });
+    let io = sd_card::Io {
+        cycle: 0,
+        op: sd_card::Op::Write,
+        block: 8,
+        blocks: 1,
+        rules: vec![1],
+        failed: true,
+        delay: 0,
+        written: false,
+    };
+    let mut script = vec![
+        (cycles(MS), Act::SdRules(vec![])),
+        (cycles(3 * MS), Act::SdRules(vec![1, 2])),
+        (cycles(3 * MS) + 1, Act::SdIo(io)),
+        (cycles(5 * MS), Act::SdRules(vec![2])),
+        (cycles(7 * MS), Act::SdRules(vec![])),
+    ];
+    script.extend(tx(cycles(3 * MS), 1, b"a", 1));
+    script.extend(tx(cycles(3 * MS) + 2, 1, b"b", 1));
+    let guest = FakeGuest::new(script)
+        .with_routes(&[route(1, Some(GNSS_TX), None, Some(9600))])
+        .with_card();
+    let r = run(0.01, guest, peer);
+    assert!(matches!(r.end, End::MaxSeconds), "{:?}", r.end);
+    let sd_io = r.peer.of("sd_io");
+    assert_eq!(sd_io.len(), 1);
+    let line = sd_io[0];
+    assert_eq!(num(line, "t"), ns(cycles(3 * MS) + 1));
+    assert_eq!(line.get("op").and_then(Json::as_str), Some("write"));
+    assert_eq!((num(line, "block"), num(line, "blocks")), (8, 1));
+    assert_eq!(line.get("failed"), Some(&Json::Bool(true)));
+    assert_eq!(line.get("written"), Some(&Json::Bool(false)));
+    // not an event: no seq, and it ends the uart_tx it lands in, which goes out first
+    assert!(line.get("seq").is_none());
+    let uart: Vec<Vec<u8>> = r.peer.of("uart_tx").iter().map(|m| data(m)).collect();
+    assert_eq!(uart, [b"a".to_vec(), b"b".to_vec()]);
+}
+
+#[test]
+fn the_runner_refuses_sd_faults_it_cannot_take() {
+    for (lines, card, found) in [
+        (vec![sd_fault(0, 1, "")], false, "sd_fault without --sd-rw"),
+        (
+            vec![r#"{"type":"sd_clear","t":0}"#.to_string()],
+            false,
+            "sd_clear without --sd-rw",
+        ),
+        (
+            vec![sd_fault(0, 2, ""), sd_fault(0, 2, "")],
+            true,
+            "id 2 is not above 2",
+        ),
+        (
+            vec![sd_fault(0, 1, r#","first":0,"last":2048"#)],
+            true,
+            "block 2048 is past the card's last, 2047",
+        ),
+        (
+            vec![r#"{"type":"sd_clear","t":0,"ids":[1]}"#.to_string()],
+            true,
+            "id 1 is no sd_fault's",
+        ),
+    ] {
+        let mut lines = Some(lines);
+        let peer = FakePeer::new(&[GNSS_RX], move |turn| {
+            let mut out = lines.take().expect("one turn");
+            out.push(wait(turn.seq, None, None));
+            out
+        });
+        let guest = FakeGuest::new(vec![]);
+        let guest = if card { guest.with_card() } else { guest };
+        let r = run(0.01, guest, peer);
+        let End::Protocol(detail) = &r.end else {
+            panic!("{found}: {:?}", r.end)
+        };
+        assert!(detail.contains(found), "{detail}");
+    }
 }

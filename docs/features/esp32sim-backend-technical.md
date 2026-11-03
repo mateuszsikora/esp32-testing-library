@@ -44,18 +44,24 @@ without starting anything:
    nanoseconds, and `world=lambda: self._utc`, the world's time at power-on, for the receiver
    model ([models-technical.md](models-technical.md#data-flow)). An `[sd_card]` slot becomes an
    empty `SdCard` (`esp32tl/interfaces/sd_card.py`) on the slot's `SdCardRoute`, with the same
-   `directory`, `asked`, `log` and `files`; it is not on the link. The chip's station becomes a
+   `directory`, `asked`, `log` and `files`, and `now=lambda: hold.now`, for its fault rules. The
+   chip's station becomes a
    `Wifi(now=lambda: hold.now, world=lambda: self._utc, asked=self._asked, log=self.log)`
    (`esp32tl/interfaces/wifi.py`), on every profile.
 5. **The lines.** One `Lines(profile.name, profile.lines, now, log=self.log)`
    (`esp32tl/interfaces/lines.py`) for every `[lines.<role>]` set, also on a profile with none,
    with `now` the `HeldClock`'s, so that what the test drives before power-on holds from `t = 0`
    ([pytest-plugin-technical.md](pytest-plugin-technical.md#data-flow)).
-6. **`BoardLink(profile.name, [*uarts, lines, wifi], chip=profile.chip, on_error=self._end_run, hold=clock, console=self._printed, clock=self.clock, on_reset=self._reset)`**
-   (`esp32tl/link/boardlink.py`) is the harness's end of the link: `Esp32Sim.link`. The harness's
+6. **`BoardLink(profile.name, [*uarts, lines, wifi, *card], chip=profile.chip, on_error=self._end_run, hold=clock, console=self._printed, clock=self.clock, on_reset=self._reset)`**
+   (`esp32tl/link/boardlink.py`) is the harness's end of the link: `Esp32Sim.link`; `card` is the
+   `SdCard` on a profile with a slot, none otherwise. The harness's
    `hello` names the profile and its chip; `watch` is the pins of every UART route and every
    line; the `Wifi` has no pins, and is the link's one interface whose `ethernet` is true, which
-   gets the station's `eth_tx` frames. It checks that no two interfaces share a pin. `hold` holds
+   gets the station's `eth_tx` frames. The `SdCard` has no pins either, and is the one whose
+   `sd_card` is true: its `inputs` carry the test's fault rules, and it gets the runner's `sd_io`
+   ([pytest-plugin-technical.md](pytest-plugin-technical.md#data-flow)). The runner takes the
+   rules only with `--sd-rw`, which a card in the slot brings, and the slot gives none without
+   one. It checks that no two interfaces share a pin. `hold` holds
    every turn until the test
    waits; `_printed` appends each console message's bytes to `console_output`, feeds them to
    `console_lines` and hands them to `log.console`, in the link's thread. `_reset` puts each
@@ -292,10 +298,18 @@ cut at its start, rather than dropped. A log it cannot read gives
 UART route of the profile, `  {interface}: {source}; {bytes}{tap}`: `{source}` is
 `the {kind} of {detail}` (`the replay of gnss.jsonl`) or `nothing at the far end`, `{bytes}` is
 `{in} bytes in, {out} out` from `log.traffic`, or `no bytes`, and `{tap}` is
-`; tapped into {path}` for a tapped route. With `run`, `log.lines()` follows: the plugin passes it
+`; tapped into {path}` for a tapped route. On a profile with a slot, `SdCard.report()` comes next:
+`sd_card: a card holding {image}` or `sd_card: empty`, then for each fault rule
+`  fault {id} from {at}: {CardFault.describe()}[, cleared at {t}]; {n} operation(s)` and a line
+`    {at} {op} block {n}: failed|delayed {delay}, written|not written (fault {ids})` per
+operation it acted on. With `run`, `log.lines()` follows: the plugin passes it
 for a test that failed. `Esp32Sim.properties()` is `link.properties()` with `routes`, by
 interface: `source` (the kind, or `None`), `detail` (what the source was made from, as the test
-named it), `bytes_in`, `bytes_out` and `tap` (the path, or `None`); then `sd_card`, and `wifi`:
+named it), `bytes_in`, `bytes_out` and `tap` (the path, or `None`); then `sd_card`, `None` on a
+profile without a slot, else `SdCard.properties()`: `image` (the path, or `None`), `faults` (`id`,
+`t_ns`, `op`, `fail`, `delay_ns`, `blocks` as `[first, last]` or `None`, `skip`, `count`,
+`cleared_ns` each) and `affected` (`t_ns`, `op`, `block`, `blocks`, `faults` as ids, `failed`,
+`delay_ns`, `written` each); and `wifi`:
 `None` without an access point, else `Wifi.properties()`, `access_point` (`ssid`, `channel`,
 `secure`), `nearby` (`ssid`, `channel`, `rssi`, `secure` each), `switches` (`t_ns`, `on` each) and
 `network`, the network's `esp32tl_network: 1` transcript. With an access point `report` ends with

@@ -75,10 +75,13 @@ at its pull from power-on, as RI on the LilyGO profile reads 0, and carries what
 drives on the lines and what the test drives through `lines`
 ([pytest plugin](pytest-plugin-user.md#the-fixtures)).
 
-The board profile's SD card slot is not on the link. A card the test inserts
-(`sd_card.insert(image)`) is the runner's own SD card model, on the slot's pins, which the backend
-passes as `--sd-spi sclk=N,mosi=N,miso=N,cs=N --sd-rw IMAGE`; the card writes into the image file
-as the firmware writes ([runner](runner-user.md#put-an-sd-card-in)). An empty slot gives the
+A card the test inserts in the board profile's SD card slot (`sd_card.insert(image)`) is the
+runner's own SD card model, on the slot's pins, which the backend passes as
+`--sd-spi sclk=N,mosi=N,miso=N,cs=N --sd-rw IMAGE`; the card writes into the image file as the
+firmware writes ([runner](runner-user.md#put-an-sd-card-in)), and its SPI traffic never crosses
+the link. What does is the test's fault rules for it, at the board's time the test gives them,
+and each operation they made fail or wait
+([pytest plugin](pytest-plugin-user.md#make-the-card-fail-or-slow)). An empty slot gives the
 runner no card.
 
 The chip's Wi-Fi station is on the link once the test gives it an access point
@@ -205,7 +208,9 @@ profile, what the test put at its far end, the bytes that went in and came out, 
 was tapped into. With an access point, the statistics have a `Wi-Fi:` line, the frames the
 station sent and received, and the report ends with the access point
 (`wifi: access point 'myssid', channel 6, WPA2-PSK`), a line per network around and the network's
-events (`network events:`, as for the modem's network). A test that failed gets the run on the
+events (`network events:`, as for the modem's network). On a profile with an SD card slot, a line
+names the card (`sd_card: a card holding PATH` or `sd_card: empty`), followed by each fault rule
+the test gave and the operations it acted on. A test that failed gets the run on the
 board's clock after it
 ([the run on the board's clock](run-report-user.md#the-run-on-the-boards-clock)). The same data,
 but the run, is in the test's `esp32sim_link` user property, a JSON string with `board`, `watch`,

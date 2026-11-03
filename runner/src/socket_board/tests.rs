@@ -68,3 +68,63 @@ fn hands_the_peers_levels_to_the_chip_in_order_and_remembers_them() {
     assert_eq!(board.take_edges().len(), 1);
     assert_eq!(board.input_levels(), [(33, false)]);
 }
+
+/// A command to the card on the board's SPI hook, with `answer` more bytes clocked out.
+fn command(board: &mut SocketBoard, index: u8, arg: u32, answer: usize) -> Vec<u8> {
+    let mut tx = vec![0x40 | index];
+    tx.extend(arg.to_be_bytes());
+    tx.push(sd_card::crc7(&tx) << 1 | 1);
+    tx.resize(6 + answer, 0xff);
+    let pins = SpiPins {
+        sclk: 1 << 14,
+        mosi: 1 << 15,
+        miso: Some(2),
+        cs: 1 << 13,
+    };
+    board.spi_transfer_pins(2, pins, &tx, tx.len()).split_off(6)
+}
+
+#[test]
+fn the_card_hears_the_bus_cycle_and_its_reports_go_into_the_log() {
+    let wiring = sd_card::Wiring {
+        sclk: 14,
+        mosi: 15,
+        miso: 2,
+        cs: 13,
+    };
+    let store = esp_periph::sdmmc::MemStore(vec![0; sd_card::UNIT as usize]);
+    let card = Rc::new(RefCell::new(
+        sd_card::SdCard::new(wiring, Box::new(store)).unwrap(),
+    ));
+    let shared = Shared::default();
+    let mut board = SocketBoard::new(shared.clone(), Some(card.clone()));
+    assert!(board.uses_spi_pins());
+    command(&mut board, 0, 0, 2);
+    command(&mut board, 8, 0x1aa, 6);
+    for _ in 0..2 {
+        command(&mut board, 55, 0, 2);
+        command(&mut board, 41, 1 << 30, 2);
+    }
+    card.borrow_mut().add_rule(sd_card::Rule {
+        id: 1,
+        op: sd_card::Op::Read,
+        fail: true,
+        delay_ns: 0,
+        delay: 0,
+        blocks: None,
+        skip: 0,
+        count: Some(1),
+    });
+    // the latest cycle any hook was given: the tick's, or a later output's
+    board.advance_to(500);
+    board.gpio_output_at(700, &[], 0, 0);
+    board.advance_to(600);
+    command(&mut board, 17, 3, 4);
+    assert_eq!(card.borrow().now, 700);
+    let log = &shared.borrow().log;
+    let [Recorded::SdIo(io)] = &log[..] else {
+        panic!("{log:?}")
+    };
+    assert_eq!((io.cycle, io.block, io.failed), (700, 3, true));
+    assert!(card.borrow().io.is_empty(), "the board took it");
+}

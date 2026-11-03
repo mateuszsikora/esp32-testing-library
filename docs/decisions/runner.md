@@ -353,10 +353,71 @@ Status: decided (#32)
 The card is never busy after a write, an erase or CMD12, and sends a data block one byte after
 its R1; the image is a seek and a read or write per block. Without class 10 in its CSD, ESP-IDF
 does not send CMD6 and stays at the default 20 MHz, which `sdspi` asks for anyway. The tests of
-interest are the firmware's file handling, not the card's timing.
+interest are the firmware's file handling, not the card's timing. Since #107 a test can ask for
+timing all the same, for the operations it chooses: the peer's fault rules hold a read, a write or
+an erase for a delay ([below](#sd-card-faults-are-rules-the-peer-gives-the-card-decided-when-an-operation-begins));
+without them the card answers at once, as before.
 
-**Postponed:** busy time (esp32sim's card has `prg_ns` for it), CMD6 and high speed, CMD23, and
-locking and write protection: each when a firmware needs it.
+**Postponed:** a busy time of the card's own, without a rule (esp32sim's card has `prg_ns` for
+it), busy after CMD12 and after a CMD25's stop token, CMD6 and high speed, CMD23, and locking and
+write protection: each when a firmware needs it.
+
+## SD card faults are rules the peer gives the card, decided when an operation begins
+
+Status: decided (#107)
+
+The peer gives the runner's card rules on the link (`sd_fault`, `sd_clear`), which the run loop
+hands to the card when they come due, like any input. A rule names an operation (a block read, a
+block write, an erase), optionally a block range, a number of matching operations to skip and a
+number to act on, and makes them fail, waits a delay before the card answers, or both. The card
+decides an operation when it begins: at the command, at the block's CRC, at the previous block of
+a CMD18. That makes the selection deterministic, counts every block of a multiple block transfer
+as an operation of its own, and leaves an operation in progress alone when rules change. Every
+rule that matches acts and counts, so rules compose without precedence. The runner reports only
+the operations rules acted on (`sd_io`), which keeps a run without rules byte for byte what it
+was, and the protocol at version 1: a peer that gives no rule never sees one.
+
+**Rejected:** answering the card's SPI in the harness, because every byte of a transaction is
+answered within it and the peer is a turn away (as for the card itself); rules on the command line,
+because a test breaks the card after it has mounted, at a time it chooses; one message that
+replaces the whole policy, because the counts the card has used up would start again at every
+change, unless the harness tracked them; and deciding by SPI transaction, because a transaction
+can hold part of a block or several, depending on the driver.
+
+## An SD card delay passes on the bus's clock, which the board reads from advance_to
+
+Status: decided (#107)
+
+`spi_transfer_pins` carries no cycle, but esp32sim calls the board's `advance_to` at every tick
+of a board that uses GPIO edges, as `SocketBoard` does, and the board takes the latest cycle any
+hook was given. The card queues a hold until that cycle plus the delay, and answers 0xff (a read)
+or 0x00 (busy) until a transaction comes in at or after it. A firmware that polls the card sees
+the delay pass on the board's clock and runs its own timeouts on the same clock: ESP-IDF's `sdspi`
+gives up on a read 1.0 s after it began (`tests/test_sdspi.py`). No esp32sim change is needed.
+
+**Rejected:** asking upstream for a cycle on `spi_transfer_pins`, because `advance_to` already
+gives it; a host sleep, because the guest does not run while the runner sleeps, and a run would
+depend on the host's speed; and `next_deadline`, because the guest polls the card and nothing needs
+waking at the deadline.
+
+## A failed SD block write leaves its block as it was
+
+Status: decided (#107)
+
+A write a rule fails is answered with a write error and does not reach the image, and a failed
+read is answered with an error token, `0x04` (card ECC failed), so that it reads apart from the
+runner's own `0x02` for an image that cannot be read. Whatever the image shows after a failed
+write is therefore what the firmware and its file system wrote, never a block the card half
+programmed: a test reads it with the ordinary image readers. The error token comes one byte after
+R1, where ESP-IDF's driver looks only for a start token, so ESP-IDF reports a failed read as a
+timeout after 1 s; a rule that also delays the read moves the token to where the driver polls, and
+ESP-IDF then reports `ESP_ERR_INVALID_RESPONSE`.
+
+**Rejected:** placing the error token past the 8 bytes ESP-IDF scans, because that would fit the
+model to one driver, and a delay does it when a test wants it.
+
+**Postponed:** a partly programmed block, a write that fails after its block is written, a failed
+erase, and card removal (#32): each when a firmware's handling of it needs a test.
 
 ## Under --realtime the runner waits at each block point until wall time reaches it
 

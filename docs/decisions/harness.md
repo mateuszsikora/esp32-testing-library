@@ -1234,6 +1234,25 @@ The specification puts the card's insertion and removal on the scenario timeline
 from power-on to the end of the run until the scenario exists, and a removal needs the slot's
 card-detect pin, which no profile has yet; `[sd_card]` takes no `cd` key so far.
 
+## The test breaks the SD card with fail and delay rules on the board's clock
+
+Status: decided (#107)
+
+`sd_card.fail(op, ...)` and `sd_card.delay(op, by, ...)` give the card one rule each, at the
+board's time the test calls them, before or after power-on, and return a `CardFault` whose `hits`
+are the operations it acted on. `fail` acts once by default, the targeted one-shot failure a
+firmware's error handling is usually tested with, and `delay` on every matching operation until
+cleared, the slow card. `blocks` takes a block number or a `range`, the type a Python reader
+expects for "these blocks". A delay is a `Duration`, from just above 0 to 10 s, twice ESP-IDF's
+write timeout, so a test can run a driver past it. A rule needs a card in the slot: the runner
+takes rules only with `--sd-rw`.
+
+**Rejected:** one `fault(policy)` call taking a policy object, because the two kinds have
+different defaults and the call is what the run log shows; host sleeps or wall-clock delays,
+because the board's time does not move while the test runs; and naming blocks by file, because
+the blocks a file system writes for a file are its own business: a test that needs one finds it
+in a rule's `hits`.
+
 ## The SD card tests skip without mtools, and CI makes sure it is there
 
 Status: decided (#32)

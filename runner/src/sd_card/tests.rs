@@ -71,12 +71,18 @@ fn after_r1(mut answer: Vec<u8>) -> Vec<u8> {
     answer.split_off(at + 1)
 }
 
-/// The data block that starts in `answer`, or later, polled for as sdspi does.
+/// The data block that starts in `answer`, or later, polled for as sdspi does, each poll 10 bus
+/// cycles after the one before.
 fn data_block(card: &mut SdCard, mut answer: Vec<u8>, len: usize) -> Vec<u8> {
-    while !answer.contains(&START_BLOCK) {
+    for _ in 0..10_000 {
+        if answer.contains(&START_BLOCK) {
+            break;
+        }
         assert!(answer.iter().all(|&b| b == 0xff), "{answer:?}");
+        card.now += 10;
         answer = xfer(card, &[0xff; 8]);
     }
+    assert!(answer.contains(&START_BLOCK), "no data block");
     let start = answer.iter().position(|&b| b == START_BLOCK).unwrap();
     let mut data = answer.split_off(start + 1);
     let rest = len + 2 - data.len().min(len + 2);
@@ -371,4 +377,295 @@ fn after_a_power_cut_the_card_is_uninitialised_and_keeps_its_whole_blocks() {
     assert_eq!(data_block(&mut card, after_r1(answer), BLOCK), data);
     let answer = command(&mut card, 17, 8, 10);
     assert_eq!(data_block(&mut card, after_r1(answer), BLOCK)[7], 8);
+}
+
+/// A rule of `id` on `op`, every block, until cleared; `delay` in bus cycles, `delay * 10` ns.
+fn rule(id: u64, op: Op, fail: bool, delay: u64) -> Rule {
+    Rule {
+        id,
+        op,
+        fail,
+        delay_ns: delay * 10,
+        delay,
+        blocks: None,
+        skip: 0,
+        count: None,
+    }
+}
+
+/// The first byte of block `lba` as the card has it now.
+fn first_byte(card: &mut SdCard, lba: u32) -> u8 {
+    let answer = command(card, 17, lba, 10);
+    data_block(card, after_r1(answer), BLOCK)[7]
+}
+
+#[test]
+fn without_rules_the_card_reports_nothing() {
+    let mut card = card(2);
+    init(&mut card);
+    first_byte(&mut card, 3);
+    assert_eq!(r1(&command(&mut card, 24, 3, 10)).1, 0);
+    let data = [1; BLOCK];
+    let response = write_block(&mut card, START_BLOCK, &data, crc16(&data));
+    assert_eq!(response, DATA_ACCEPTED);
+    assert!(card.io.is_empty());
+    assert_eq!((card.stats.failed, card.stats.delayed), (0, 0));
+}
+
+#[test]
+fn a_write_a_rule_fails_leaves_its_block_as_it_was() {
+    let mut card = card(2);
+    init(&mut card);
+    card.now = 500;
+    card.add_rule(Rule {
+        count: Some(1),
+        ..rule(1, Op::Write, true, 0)
+    });
+    let data = [0x5a; BLOCK];
+    assert_eq!(r1(&command(&mut card, 24, 3, 10)).1, 0);
+    let response = write_block(&mut card, START_BLOCK, &data, crc16(&data));
+    assert_eq!(response, DATA_WRITE_ERROR);
+    assert_eq!(first_byte(&mut card, 3), 3, "the block is as it was");
+    assert_eq!(
+        card.io,
+        [Io {
+            cycle: 500,
+            op: Op::Write,
+            block: 3,
+            blocks: 1,
+            rules: vec![1],
+            failed: true,
+            delay: 0,
+            written: false,
+        }]
+    );
+    // a one-shot rule: the next write goes through, and nobody hears of it
+    card.io.clear();
+    assert_eq!(r1(&command(&mut card, 24, 3, 10)).1, 0);
+    let response = write_block(&mut card, START_BLOCK, &data, crc16(&data));
+    assert_eq!(response, DATA_ACCEPTED);
+    assert_eq!(first_byte(&mut card, 3), 0x5a);
+    assert!(card.io.is_empty());
+    assert_eq!((card.stats.failed, card.stats.blocks_written), (1, 1));
+}
+
+#[test]
+fn a_failed_block_of_cmd25_ends_what_it_writes() {
+    let mut card = card(2);
+    init(&mut card);
+    card.add_rule(Rule {
+        blocks: Some((11, 11)),
+        ..rule(1, Op::Write, true, 0)
+    });
+    assert_eq!(r1(&command(&mut card, 25, 10, 10)).1, 0);
+    let mut responses = Vec::new();
+    for n in 0..3u8 {
+        let data = [0xa0 | n; BLOCK];
+        responses.push(write_block(
+            &mut card,
+            START_MULTI_WRITE,
+            &data,
+            crc16(&data),
+        ));
+    }
+    // the card waits for the stop token after an error (SD spec §7.3.3.1)
+    assert_eq!(
+        responses,
+        [DATA_ACCEPTED, DATA_WRITE_ERROR, DATA_WRITE_ERROR]
+    );
+    card.transfer(pins(true), &[STOP_TRAN, 0xff], 0);
+    command(&mut card, 55, 0, 8);
+    let answer = command(&mut card, 22, 0, 10);
+    assert_eq!(
+        data_block(&mut card, after_r1(answer), 4),
+        1u32.to_be_bytes()
+    );
+    let firsts: Vec<u8> = (10..13).map(|lba| first_byte(&mut card, lba)).collect();
+    assert_eq!(firsts, [0xa0, 11, 12]);
+    let blocks: Vec<u64> = card.io.iter().map(|io| io.block).collect();
+    assert_eq!(
+        blocks,
+        [11, 11],
+        "the rule takes the block again after the error"
+    );
+}
+
+#[test]
+fn a_read_a_rule_fails_ends_with_an_ecc_error_token() {
+    let mut card = card(2);
+    init(&mut card);
+    card.add_rule(Rule {
+        blocks: Some((6, 6)),
+        ..rule(4, Op::Read, true, 0)
+    });
+    assert_eq!(first_byte(&mut card, 5), 5);
+    let answer = after_r1(command(&mut card, 17, 6, 10));
+    assert_eq!(answer[..2], [0xff, ERROR_ECC]);
+    // CMD18 sends block 5, then the error token in place of block 6, and stops
+    let answer = command(&mut card, 18, 5, 16);
+    assert_eq!(data_block(&mut card, after_r1(answer), BLOCK)[7], 5);
+    assert_eq!(xfer(&mut card, &[0xff; 4]), [0xff, ERROR_ECC, 0xff, 0xff]);
+    let reads: Vec<(u64, bool, bool)> = card
+        .io
+        .iter()
+        .map(|io| (io.block, io.failed, io.written))
+        .collect();
+    assert_eq!(reads, [(6, true, false), (6, true, false)]);
+    assert_eq!(card.stats.blocks_read, 2);
+}
+
+#[test]
+fn skip_and_count_pick_the_operations_a_rule_acts_on() {
+    let mut card = card(2);
+    init(&mut card);
+    card.add_rule(Rule {
+        skip: 2,
+        count: Some(2),
+        ..rule(1, Op::Read, true, 0)
+    });
+    // a write is no read: it neither counts nor skips
+    assert_eq!(r1(&command(&mut card, 24, 3, 10)).1, 0);
+    let data = [7; BLOCK];
+    write_block(&mut card, START_BLOCK, &data, crc16(&data));
+    let failed: Vec<bool> = (0..6)
+        .map(|lba| after_r1(command(&mut card, 17, lba, 10))[1] == ERROR_ECC)
+        .collect();
+    assert_eq!(failed, [false, false, true, true, false, false]);
+    assert_eq!(card.rules, [], "a rule that is used up is gone");
+}
+
+#[test]
+fn every_rule_that_matches_acts_and_the_longest_delay_holds() {
+    let mut card = card(2);
+    init(&mut card);
+    card.add_rule(rule(1, Op::Read, false, 300));
+    card.add_rule(Rule {
+        blocks: Some((0, 3)),
+        ..rule(2, Op::Read, false, 700)
+    });
+    card.add_rule(Rule {
+        blocks: Some((8, 9)),
+        ..rule(3, Op::Read, true, 0)
+    });
+    first_byte(&mut card, 2);
+    let io = card.io.pop().unwrap();
+    assert_eq!((io.rules, io.delay, io.failed), (vec![1, 2], 7000, false));
+}
+
+#[test]
+fn a_read_delay_holds_the_data_block_until_the_bus_reaches_it() {
+    let mut card = card(2);
+    init(&mut card);
+    card.add_rule(rule(1, Op::Read, false, 1000));
+    card.now = 100;
+    let answer = after_r1(command(&mut card, 17, 4, 10));
+    assert!(answer.iter().all(|&b| b == 0xff), "{answer:?}");
+    // a host that polls for the token: all 0xff until cycle 1100
+    card.now = 1099;
+    assert_eq!(xfer(&mut card, &[0xff; 8]), [0xff; 8]);
+    card.now = 1100;
+    let answer = xfer(&mut card, &[0xff; 4]);
+    assert_eq!(answer[..2], [0xff, START_BLOCK]);
+    assert_eq!(card.io[0].cycle, 100);
+    assert_eq!(card.io[0].delay, 10_000);
+    assert_eq!(card.stats.delayed, 1);
+}
+
+#[test]
+fn each_block_of_cmd18_waits_from_the_end_of_the_one_before() {
+    let mut card = card(2);
+    init(&mut card);
+    card.add_rule(rule(1, Op::Read, false, 50));
+    let answer = command(&mut card, 18, 7, 2);
+    assert!(after_r1(answer).iter().all(|&b| b == 0xff));
+    card.now = 50;
+    let answer = xfer(&mut card, &[0xff; 2]);
+    let first = data_block(&mut card, answer, BLOCK);
+    assert_eq!(first[7], 7);
+    card.now = 60;
+    assert_eq!(
+        xfer(&mut card, &[0xff; 4]),
+        [0xff; 4],
+        "block 8 is not ready"
+    );
+    card.now = 110;
+    let answer = xfer(&mut card, &[0xff; 2]);
+    let second = data_block(&mut card, answer, BLOCK);
+    assert_eq!(second[7], 8);
+    let cycles: Vec<u64> = card.io.iter().map(|io| io.cycle).collect();
+    assert_eq!(cycles, [0, 60]);
+    // CMD12 ends the read, and the block the card had begun with it
+    command(&mut card, 12, 0, 9);
+    assert_eq!(xfer(&mut card, &[0xff; 4]), [0xff; 4]);
+}
+
+#[test]
+fn a_write_delay_keeps_the_card_busy_and_deaf_until_it_is_done() {
+    let mut card = card(2);
+    init(&mut card);
+    card.add_rule(rule(1, Op::Write, false, 1000));
+    card.now = 200;
+    assert_eq!(r1(&command(&mut card, 24, 3, 10)).1, 0);
+    let data = [0x33; BLOCK];
+    let response = write_block(&mut card, START_BLOCK, &data, crc16(&data));
+    assert_eq!(response, DATA_ACCEPTED);
+    assert_eq!(xfer(&mut card, &[0xff; 4]), [BUSY; 4]);
+    // a command while the card is busy is not taken (SD spec §7.2.4)
+    card.now = 1199;
+    let mut tx = frame(13, 0).to_vec();
+    tx.resize(14, 0xff);
+    assert_eq!(xfer(&mut card, &tx), [BUSY; 14]);
+    card.now = 1200;
+    assert_eq!(xfer(&mut card, &[0xff; 2]), [0xff; 2]);
+    assert_eq!(r1(&command(&mut card, 13, 0, 8)), (1, 0));
+    assert_eq!(first_byte(&mut card, 3), 0x33);
+    assert!(card.io[0].written);
+}
+
+#[test]
+fn an_erase_delay_is_busy_after_r1_and_matches_overlapping_blocks() {
+    let mut card = card(2);
+    init(&mut card);
+    card.add_rule(Rule {
+        blocks: Some((6, 9)),
+        ..rule(1, Op::Erase, false, 100)
+    });
+    command(&mut card, 32, 4, 8);
+    command(&mut card, 33, 6, 8);
+    let answer = command(&mut card, 38, 0, 8);
+    assert_eq!(answer[..4], [0xff, 0, BUSY, BUSY]);
+    card.now = 100;
+    assert_eq!(xfer(&mut card, &[0xff; 2]), [0xff; 2]);
+    let io = &card.io[0];
+    assert_eq!(
+        (io.op, io.block, io.blocks, io.written),
+        (Op::Erase, 4, 3, true)
+    );
+    // blocks 1 to 2 do not overlap 6 to 9
+    command(&mut card, 32, 1, 8);
+    command(&mut card, 33, 2, 8);
+    assert_eq!(command(&mut card, 38, 0, 4), [0xff, 0, 0xff, 0xff]);
+    assert_eq!(card.io.len(), 1);
+}
+
+#[test]
+fn cleared_rules_act_no_more_but_a_running_delay_runs_out() {
+    let mut card = card(2);
+    init(&mut card);
+    card.add_rule(rule(1, Op::Write, false, 100));
+    card.add_rule(rule(2, Op::Read, true, 0));
+    card.add_rule(rule(3, Op::Read, false, 100));
+    assert_eq!(r1(&command(&mut card, 24, 3, 10)).1, 0);
+    let data = [1; BLOCK];
+    write_block(&mut card, START_BLOCK, &data, crc16(&data));
+    card.clear_rules(Some(&[1, 2]));
+    assert_eq!(xfer(&mut card, &[0xff; 2]), [BUSY; 2]);
+    card.now = 100;
+    first_byte(&mut card, 3);
+    let rules: Vec<Vec<u64>> = card.io.iter().map(|io| io.rules.clone()).collect();
+    assert_eq!(rules, [vec![1], vec![3]]);
+    card.clear_rules(None);
+    card.io.clear();
+    first_byte(&mut card, 3);
+    assert!(card.io.is_empty());
 }

@@ -6,8 +6,9 @@
 //! loop's slices stop for the block point (protocol 11.10). GPIO inputs do go through it: the run
 //! loop hands the peer's `gpio_in` and `release` to the board when they come due, and the chip
 //! takes them through `take_edges` and `released_inputs`. With `--sd-rw`, the SD card is on its
-//! pins as well: it answers the chip's SPI transactions in the board, and nothing of it goes on
-//! the socket.
+//! pins as well: it answers the chip's SPI transactions in the board, at the bus cycle the board
+//! last saw (`advance_to`), and only the operations the peer's fault rules acted on go into the
+//! log, for `sd_io`.
 use crate::sd_card;
 use esp_soc::board::{BoardEdge, BoardModel, SpiPins, VirtualCycle};
 use esp_soc::uart::UartRoute;
@@ -32,6 +33,8 @@ pub enum Recorded {
         enabled: u64,
         output: u64,
     },
+    /// An operation of the SD card that the peer's fault rules acted on (`sd_io`).
+    SdIo(sd_card::Io),
 }
 
 /// The state the board and the run loop share.
@@ -78,11 +81,18 @@ pub type Shared = Rc<RefCell<Recorder>>;
 pub struct SocketBoard {
     shared: Shared,
     card: Option<sd_card::Shared>,
+    /// The latest bus cycle a callback was given: the bus advances the board at every tick
+    /// (`advance_to`), and the SPI hook carries no cycle of its own.
+    now: VirtualCycle,
 }
 
 impl SocketBoard {
     pub fn new(shared: Shared, card: Option<sd_card::Shared>) -> Self {
-        Self { shared, card }
+        Self {
+            shared,
+            card,
+            now: 0,
+        }
     }
 }
 
@@ -100,12 +110,26 @@ impl BoardModel for SocketBoard {
         self.card.is_some()
     }
     fn spi_transfer_pins(&mut self, _host: u8, pins: SpiPins, tx: &[u8], rx_len: usize) -> Vec<u8> {
-        match &self.card {
-            Some(card) => card.borrow_mut().transfer(pins, tx, rx_len),
-            None => vec![0xff; rx_len],
+        let Some(card) = &self.card else {
+            return vec![0xff; rx_len];
+        };
+        let mut card = card.borrow_mut();
+        card.now = self.now;
+        let rx = card.transfer(pins, tx, rx_len);
+        if !card.io.is_empty() {
+            let io = std::mem::take(&mut card.io);
+            self.shared
+                .borrow_mut()
+                .log
+                .extend(io.into_iter().map(Recorded::SdIo));
         }
+        rx
+    }
+    fn advance_to(&mut self, cycle: VirtualCycle) {
+        self.now = self.now.max(cycle);
     }
     fn uart_tx(&mut self, cycle: VirtualCycle, route: UartRoute, byte: u8) {
+        self.now = self.now.max(cycle);
         self.shared
             .borrow_mut()
             .log
@@ -118,6 +142,7 @@ impl BoardModel for SocketBoard {
         enabled: u64,
         output: u64,
     ) {
+        self.now = self.now.max(cycle);
         let mut shared = self.shared.borrow_mut();
         let watch = shared.watch;
         let reported = (enabled & watch, output & watch);

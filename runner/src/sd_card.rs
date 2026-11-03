@@ -11,6 +11,13 @@
 //! SPI. It answers at once: no busy time after a write or an erase, no wait before a data block
 //! beyond one byte. Without CMD6 (CCC without class 10) the host stays at default speed, and
 //! there is no locking, write protection or CMD23.
+//!
+//! The peer's fault rules (`sd_fault`, protocol 5.19) change that for the reads, writes and erases
+//! they match: a read answers with an error token, a write with a write error and leaves its block
+//! as it was, and a delay holds the card's answer on the bus's clock, which the board hands the
+//! card as `now`: a read sends 0xff until its data block is ready, a write or an erase holds MISO
+//! low (busy) and takes nothing in until it is done. Each operation a rule acted on is kept in
+//! `io` for the peer (`sd_io`).
 use esp_periph::sdmmc::SdStore;
 use esp_periph::sdmmc::card::BLOCK;
 use esp_soc::board::{BoardModel, SpiPins};
@@ -54,9 +61,13 @@ const STOP_TRAN: u8 = 0xfd;
 const DATA_ACCEPTED: u8 = 0x05;
 const DATA_CRC_ERROR: u8 = 0x0b;
 const DATA_WRITE_ERROR: u8 = 0x0d;
-/// Data error tokens: card controller error, out of range.
+/// Data error tokens: card controller error, card ECC failed (a fault rule's read error), out
+/// of range.
 const ERROR_CC: u8 = 0x02;
+const ERROR_ECC: u8 = 0x04;
 const ERROR_RANGE: u8 = 0x08;
+/// What the card sends while it is busy (SD spec §7.2.4).
+const BUSY: u8 = 0x00;
 
 /// OCR (SD spec §5.1): 2.7-3.6 V, card capacity status, power-up done.
 const OCR_VOLTAGE: u32 = 0x00ff_8000;
@@ -78,6 +89,98 @@ pub struct Stats {
     pub blocks_written: u64,
     /// Reads and writes of the image that failed.
     pub errors: u64,
+    /// Operations a fault rule failed, and operations one delayed.
+    pub failed: u64,
+    pub delayed: u64,
+}
+
+/// What a fault rule acts on: a block read (CMD17, each block of CMD18), a block write (CMD24,
+/// each block of CMD25) or an erase (CMD38).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Op {
+    Read,
+    Write,
+    Erase,
+}
+
+impl Op {
+    pub fn parse(name: &str) -> Option<Op> {
+        match name {
+            "read" => Some(Op::Read),
+            "write" => Some(Op::Write),
+            "erase" => Some(Op::Erase),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Op::Read => "read",
+            Op::Write => "write",
+            Op::Erase => "erase",
+        }
+    }
+}
+
+/// The longest delay a rule may give, in nanoseconds: 10 s, twice ESP-IDF's write timeout.
+pub const MAX_DELAY: u64 = 10_000_000_000;
+
+/// A fault rule of the peer's (`sd_fault`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Rule {
+    pub id: u64,
+    pub op: Op,
+    /// Whether the operations it acts on fail.
+    pub fail: bool,
+    /// How long the card holds its answer to them, in nanoseconds and in bus cycles.
+    pub delay_ns: u64,
+    pub delay: u64,
+    /// The first and last block of the operations it matches; `None` for any block. An erase
+    /// matches when its blocks overlap them.
+    pub blocks: Option<(u64, u64)>,
+    /// Matching operations it lets through before it acts.
+    pub skip: u64,
+    /// Operations it acts on before it is used up; `None` for every one until it is cleared.
+    pub count: Option<u64>,
+}
+
+/// An operation one or more rules acted on, for `sd_io`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Io {
+    /// When it began: the command (a read, an erase), the block's CRC (a write), or the end of
+    /// the block before it (a later block of CMD18).
+    pub cycle: u64,
+    pub op: Op,
+    pub block: u64,
+    pub blocks: u64,
+    /// The rules that acted on it, in the order they were given.
+    pub rules: Vec<u64>,
+    pub failed: bool,
+    /// How long the card held its answer, in nanoseconds: the longest of the rules' delays.
+    pub delay: u64,
+    /// Whether the image was written: a write that went through, an erase.
+    pub written: bool,
+}
+
+/// What the rules do to one operation.
+#[derive(Debug, Default)]
+struct Verdict {
+    rules: Vec<u64>,
+    fail: bool,
+    delay_ns: u64,
+    delay: u64,
+}
+
+/// One item of what goes out on MISO.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Out {
+    Byte(u8),
+    /// `fill` until the bus reaches `until`: a delay. While `fill` is [`BUSY`] the card takes in
+    /// nothing.
+    Hold {
+        until: u64,
+        fill: u8,
+    },
 }
 
 /// What the card does with the bytes that come in.
@@ -116,7 +219,13 @@ pub struct SdCard {
     /// The command coming in, from its start byte.
     command: Vec<u8>,
     /// What goes out on MISO next; 0xff when empty.
-    out: VecDeque<u8>,
+    out: VecDeque<Out>,
+    /// The bus cycle, as the board last saw it: the time of the transaction coming in.
+    pub now: u64,
+    /// The peer's fault rules in force, in the order given.
+    rules: Vec<Rule>,
+    /// The operations the rules acted on, until the board takes them.
+    pub io: Vec<Io>,
     pub stats: Stats,
 }
 
@@ -154,6 +263,9 @@ impl SdCard {
             phase: Phase::Command,
             command: Vec::with_capacity(6),
             out: VecDeque::new(),
+            now: 0,
+            rules: Vec::new(),
+            io: Vec::new(),
             stats: Stats::default(),
         })
     }
@@ -178,6 +290,106 @@ impl SdCard {
         self.phase = Phase::Command;
         self.command.clear();
         self.out.clear();
+    }
+
+    /// The number of blocks, for the peer's rules.
+    pub fn blocks(&self) -> u64 {
+        self.blocks
+    }
+
+    /// From now on `rule` acts on the operations that begin, after those it skips.
+    pub fn add_rule(&mut self, rule: Rule) {
+        self.rules.push(rule);
+    }
+
+    /// The rules in force, for the run loop's tests.
+    #[cfg(test)]
+    pub fn rules(&self) -> &[Rule] {
+        &self.rules
+    }
+
+    /// Clears the rules of `ids`, or every rule. A delay already running runs out.
+    pub fn clear_rules(&mut self, ids: Option<&[u64]>) {
+        match ids {
+            Some(ids) => self.rules.retain(|r| !ids.contains(&r.id)),
+            None => self.rules.clear(),
+        }
+    }
+
+    /// What the rules do to an operation `op` on blocks `first` to `last`: every rule that
+    /// matches it skips it while it has some to skip, else acts on it and counts it.
+    fn verdict(&mut self, op: Op, first: u64, last: u64) -> Verdict {
+        let mut v = Verdict::default();
+        for rule in &mut self.rules {
+            let matches =
+                rule.op == op && rule.blocks.is_none_or(|(lo, hi)| first <= hi && lo <= last);
+            if !matches {
+                continue;
+            }
+            if rule.skip > 0 {
+                rule.skip -= 1;
+                continue;
+            }
+            v.rules.push(rule.id);
+            v.fail |= rule.fail;
+            if rule.delay > v.delay {
+                v.delay = rule.delay;
+                v.delay_ns = rule.delay_ns;
+            }
+            if let Some(count) = &mut rule.count {
+                *count -= 1;
+            }
+        }
+        self.rules.retain(|r| r.count != Some(0));
+        v
+    }
+
+    /// Keeps an operation the rules acted on for the peer; `cycle` is when it began.
+    fn report(
+        &mut self,
+        cycle: u64,
+        op: Op,
+        (block, blocks): (u64, u64),
+        v: &Verdict,
+        written: bool,
+    ) {
+        if v.rules.is_empty() {
+            return;
+        }
+        if v.fail {
+            self.stats.failed += 1;
+        }
+        if v.delay > 0 {
+            self.stats.delayed += 1;
+        }
+        self.io.push(Io {
+            cycle,
+            op,
+            block,
+            blocks,
+            rules: v.rules.clone(),
+            failed: v.fail,
+            delay: v.delay_ns,
+            written,
+        });
+    }
+
+    fn push(&mut self, byte: u8) {
+        self.out.push_back(Out::Byte(byte));
+    }
+
+    fn extend(&mut self, bytes: impl IntoIterator<Item = u8>) {
+        self.out.extend(bytes.into_iter().map(Out::Byte));
+    }
+
+    /// `fill` on MISO for `delay` bus cycles from now, before what is queued after it.
+    fn hold(&mut self, delay: u64, fill: u8) {
+        if delay > 0 {
+            self.out.push_back(Out::Hold {
+                until: self.now.saturating_add(delay),
+                fill,
+            });
+        }
     }
 
     /// One SPI transaction on the chip's routes `pins`: `tx` out on MOSI, `rx_len` bytes back
@@ -210,7 +422,28 @@ impl SdCard {
         if self.out.is_empty() {
             self.next_block();
         }
-        let miso = self.out.pop_front().unwrap_or(0xff);
+        let miso = loop {
+            match self.out.front() {
+                None => break 0xff,
+                Some(&Out::Byte(byte)) => {
+                    self.out.pop_front();
+                    break byte;
+                }
+                Some(&Out::Hold { until, fill }) if self.now < until => {
+                    // busy, the card rejects whatever comes in (SD spec §7.2.4)
+                    if fill == BUSY {
+                        return fill;
+                    }
+                    break fill;
+                }
+                Some(Out::Hold { .. }) => {
+                    self.out.pop_front();
+                    if self.out.is_empty() {
+                        self.next_block();
+                    }
+                }
+            }
+        };
         match &mut self.phase {
             Phase::Awaiting { lba, multi } => {
                 let (lba, multi) = (*lba, *multi);
@@ -242,23 +475,33 @@ impl SdCard {
         };
     }
 
-    /// A block written, with its CRC: the data response, then the next block of a CMD25.
+    /// A block written, with its CRC: the data response, the busy time of a rule's delay, then
+    /// the next block of a CMD25. A block a rule fails is not written.
     fn block_in(&mut self, lba: u64, multi: bool, buf: &[u8]) {
         let (data, crc) = buf.split_at(BLOCK);
+        let mut verdict = Verdict::default();
         let response = if self.crc && crc16(data) != u16::from_be_bytes([crc[0], crc[1]]) {
             DATA_CRC_ERROR
         } else if lba >= self.blocks {
             DATA_WRITE_ERROR
-        } else if let Err(e) = self.store.write(lba, data.try_into().unwrap()) {
-            self.stats.errors += 1;
-            eprintln!("esp32tl-runner: SD card: writing block {lba}: {e}");
-            DATA_WRITE_ERROR
         } else {
-            self.stats.blocks_written += 1;
-            self.written += 1;
-            DATA_ACCEPTED
+            verdict = self.verdict(Op::Write, lba, lba);
+            if verdict.fail {
+                DATA_WRITE_ERROR
+            } else if let Err(e) = self.store.write(lba, data.try_into().unwrap()) {
+                self.stats.errors += 1;
+                eprintln!("esp32tl-runner: SD card: writing block {lba}: {e}");
+                DATA_WRITE_ERROR
+            } else {
+                self.stats.blocks_written += 1;
+                self.written += 1;
+                DATA_ACCEPTED
+            }
         };
-        self.out.push_back(response);
+        let written = response == DATA_ACCEPTED;
+        self.report(self.now, Op::Write, (lba, 1), &verdict, written);
+        self.push(response);
+        self.hold(verdict.delay, BUSY);
         // after an error a multiple block write waits for its stop token (SD spec §7.3.3.1)
         self.phase = match (multi, response) {
             (true, DATA_ACCEPTED) => Phase::Awaiting {
@@ -276,7 +519,7 @@ impl SdCard {
             return;
         };
         if next >= self.blocks {
-            self.out.extend([0xff, ERROR_RANGE]);
+            self.extend([0xff, ERROR_RANGE]);
             self.phase = Phase::Command;
             return;
         }
@@ -284,9 +527,17 @@ impl SdCard {
         self.read_block(next);
     }
 
-    /// The block at `lba` as a data block, after one byte of access time; an error token when
-    /// the image cannot be read.
+    /// The block at `lba` as a data block, after one byte of access time and a rule's delay; an
+    /// error token when a rule fails the read or the image cannot be read.
     fn read_block(&mut self, lba: u64) {
+        let verdict = self.verdict(Op::Read, lba, lba);
+        self.report(self.now, Op::Read, (lba, 1), &verdict, false);
+        self.hold(verdict.delay, 0xff);
+        if verdict.fail {
+            self.extend([0xff, ERROR_ECC]);
+            self.phase = Phase::Command;
+            return;
+        }
         let mut block = [0; BLOCK];
         match self.store.read(lba, &mut block) {
             Ok(()) => {
@@ -296,7 +547,7 @@ impl SdCard {
             Err(e) => {
                 self.stats.errors += 1;
                 eprintln!("esp32tl-runner: SD card: reading block {lba}: {e}");
-                self.out.extend([0xff, ERROR_CC]);
+                self.extend([0xff, ERROR_CC]);
                 self.phase = Phase::Command;
             }
         }
@@ -304,9 +555,9 @@ impl SdCard {
 
     /// `data` as a data block: a byte of access time, the start token, the data, its CRC16.
     fn data_block(&mut self, data: &[u8]) {
-        self.out.extend([0xff, START_BLOCK]);
-        self.out.extend(data);
-        self.out.extend(crc16(data).to_be_bytes());
+        self.extend([0xff, START_BLOCK]);
+        self.extend(data.iter().copied());
+        self.extend(crc16(data).to_be_bytes());
     }
 
     /// A byte towards a command: a command starts with 01 in its top bits (SD spec §7.3.1.1).
@@ -340,7 +591,7 @@ impl SdCard {
         self.out.clear();
         self.phase = Phase::Command;
         // the command response time, one byte (SD spec §7.5.4)
-        self.out.push_back(0xff);
+        self.push(0xff);
         // CMD0 and CMD8 are always checked, the others once CMD59 turns checking on.
         if !crc_ok && (self.crc || index == 0 || index == 8) {
             self.r1(COM_CRC);
@@ -355,7 +606,7 @@ impl SdCard {
     /// R1 with the idle bit while the card initialises.
     fn r1(&mut self, bits: u8) {
         let idle = if self.ready { 0 } else { IDLE };
-        self.out.push_back(bits | idle);
+        self.push(bits | idle);
     }
 
     /// An application command, after CMD55; false for an index the card does not define, which
@@ -378,7 +629,7 @@ impl SdCard {
             // ACMD13 SD_STATUS: R2, then the status as a data block
             13 => {
                 self.r1(0);
-                self.out.push_back(0);
+                self.push(0);
                 self.data_block(&ssr());
             }
             // ACMD22 SEND_NUM_WR_BLOCKS
@@ -411,7 +662,7 @@ impl SdCard {
                 self.if_cond = accepted;
                 self.r1(0);
                 let vca = if accepted { 1 } else { 0 };
-                self.out.extend([0, 0, vca, arg as u8]);
+                self.extend([0, 0, vca, arg as u8]);
             }
             // CMD55 APP_CMD
             55 => {
@@ -426,7 +677,7 @@ impl SdCard {
                 } else {
                     OCR_VOLTAGE
                 };
-                self.out.extend(ocr.to_be_bytes());
+                self.extend(ocr.to_be_bytes());
             }
             // CMD59 CRC_ON_OFF
             59 => {
@@ -446,13 +697,13 @@ impl SdCard {
             }
             // CMD12 STOP_TRANSMISSION: a stuff byte, then R1b (SD spec §7.3.1.3)
             12 => {
-                self.out.push_back(0xff);
+                self.push(0xff);
                 self.r1(0);
             }
             // CMD13 SEND_STATUS: R2
             13 => {
                 self.r1(0);
-                self.out.push_back(0);
+                self.push(0);
             }
             // CMD16 SET_BLOCKLEN: blocks are 512 bytes on a high capacity card regardless
             16 => self.r1(0),
@@ -497,7 +748,8 @@ impl SdCard {
                 }
                 self.r1(0);
             }
-            // CMD38 ERASE: erased blocks read 0 (SCR DATA_STAT_AFTER_ERASE 0); R1b
+            // CMD38 ERASE: erased blocks read 0 (SCR DATA_STAT_AFTER_ERASE 0); R1b, busy for a
+            // rule's delay
             38 => {
                 let (Some(lo), Some(hi)) = std::mem::take(&mut self.erase) else {
                     self.r1(ERASE_SEQ);
@@ -507,11 +759,18 @@ impl SdCard {
                     self.r1(PARAMETER);
                     return;
                 }
-                if let Err(e) = self.store.erase(lo, hi) {
-                    self.stats.errors += 1;
-                    eprintln!("esp32tl-runner: SD card: erasing blocks {lo} to {hi}: {e}");
-                }
+                let verdict = self.verdict(Op::Erase, lo, hi);
+                let written = match self.store.erase(lo, hi) {
+                    Ok(()) => true,
+                    Err(e) => {
+                        self.stats.errors += 1;
+                        eprintln!("esp32tl-runner: SD card: erasing blocks {lo} to {hi}: {e}");
+                        false
+                    }
+                };
+                self.report(self.now, Op::Erase, (lo, hi - lo + 1), &verdict, written);
                 self.r1(0);
+                self.hold(verdict.delay, BUSY);
             }
             _ => self.r1(ILLEGAL),
         }

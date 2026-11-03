@@ -164,7 +164,14 @@ Mounting is attempted once at boot; insertion/removal during a run is not suppor
 
 Tests verify existing rows and new coordinates byte for byte, a new file across New Year and
 leap-day midnight, no files without a fix, pause/recovery after fix loss, malformed input, and
-continued reception with the error pin continuously high after an empty-slot failure.
+continued reception with the error pin continuously high after an empty-slot failure. Two more
+break the card once logging works, through its fault rules
+([make the card fail or slow](pytest-plugin-user.md#make-the-card-fail-or-slow)): a write that
+fails (`board.sd_card.fail("write")`) gives `sd_data_logger: SD card write failed`, raises GPIO18,
+leaves the rows saved before it as they were and stops logging; writes slowed by 300 ms each
+(`board.sd_card.delay("write", ms(300))`) still save every row, each `(saved)` line at least
+600 ms after the row's first write, since a row takes a write of its data and one of its
+directory entry.
 
 ## Position tracker over a cellular modem
 

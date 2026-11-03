@@ -336,6 +336,7 @@ class Esp32Sim(Board):
                 asked=self._asked,
                 log=self.log,
                 files=self._files,
+                now=lambda: self._hold.now,
             )
             if profile.sd_card is not None
             else None
@@ -343,9 +344,10 @@ class Esp32Sim(Board):
         self._wifi = Wifi(
             now=lambda: self._hold.now, world=lambda: self._utc, asked=self._asked, log=self.log
         )
+        card = [] if self._sd_card is None else [self._sd_card]
         self.link = BoardLink(
             profile.name,
-            [*self._uarts.values(), self._lines, self._wifi],
+            [*self._uarts.values(), self._lines, self._wifi, *card],
             chip=profile.chip,
             on_error=self._end_run,
             hold=self._hold,
@@ -869,8 +871,7 @@ class Esp32Sim(Board):
                 f" tapped into {self._console.tapped.path}"
             )
         if self._sd_card is not None:
-            image = self._sd_card.image_path
-            lines.append(f"sd_card: a card holding {image}" if image else "sd_card: empty")
+            lines += self._sd_card.report()
         for uart in self._uarts.values():
             if isinstance(uart, Modem):
                 lines += uart.command_report()
@@ -917,14 +918,9 @@ class Esp32Sim(Board):
                     for t, request in uart.source.unseen_events
                 ]
         card = self._sd_card
-        sd_card = (
-            None
-            if card is None
-            else {"image": None if card.image_path is None else str(card.image_path)}
-        )
         properties = self.link.properties() | {
             "routes": routes,
-            "sd_card": sd_card,
+            "sd_card": None if card is None else card.properties(),
             "wifi": self._wifi.properties(),
         }
         if self._console.tapped is not None:

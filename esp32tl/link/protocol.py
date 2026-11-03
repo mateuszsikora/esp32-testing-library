@@ -23,6 +23,10 @@ MAX_LINE = 1 << 20
 ETH_MIN = 14
 ETH_MAX = 1518
 
+# What an SD card fault rule acts on, and the longest delay it may give, in nanoseconds (5.19).
+SD_OPS = ("read", "write", "erase")
+SD_MAX_DELAY = 10_000_000_000
+
 Sender = Literal["runner", "harness"]
 
 
@@ -144,6 +148,21 @@ class Warn:
 
 
 @dataclass(frozen=True)
+class SdIo:
+    """An operation of the SD card that the peer's fault rules acted on, from its `t` (5.20)."""
+
+    TYPE: ClassVar[str] = "sd_io"
+    t: int
+    op: str
+    block: int
+    blocks: int
+    rules: tuple[int, ...]
+    failed: bool
+    delay: int
+    written: bool
+
+
+@dataclass(frozen=True)
 class WifiStats:
     """`stats.wifi`, with `--wifi` (5.9)."""
 
@@ -259,6 +278,33 @@ class ChipReset:
 
 
 @dataclass(frozen=True)
+class SdFault:
+    """From `t` the SD card's rule `id` acts on `op`s (5.19): fails them, delays them by `delay`
+    nanoseconds, or both. `first` and `last` bound the blocks, `skip` matching operations go
+    through first, and `count` is how many it acts on, `None` for every one."""
+
+    TYPE: ClassVar[str] = "sd_fault"
+    t: int
+    id: int
+    op: str
+    fail: bool
+    delay: int
+    first: int | None = None
+    last: int | None = None
+    skip: int = 0
+    count: int | None = None
+
+
+@dataclass(frozen=True)
+class SdClear:
+    """From `t` the SD card's rules of `ids` act no more, every rule with `None` (5.19)."""
+
+    TYPE: ClassVar[str] = "sd_clear"
+    t: int
+    ids: tuple[int, ...] | None = None
+
+
+@dataclass(frozen=True)
 class Wait:
     """The end of the peer's turn (5.13); `None` is no bound."""
 
@@ -276,8 +322,8 @@ class Stop:
 
 
 Event = UartTx | UartCfg | GpioOut | Reset | EthTx
-RunnerMessage = RunnerHello | Event | Sync | Console | Warn | Stats
-Input = UartRx | GpioIn | Release | Adc | EthRx | WifiAp | Power | ChipReset
+RunnerMessage = RunnerHello | Event | Sync | Console | Warn | SdIo | Stats
+Input = UartRx | GpioIn | Release | Adc | EthRx | WifiAp | Power | ChipReset | SdFault | SdClear
 HarnessMessage = HarnessHello | Input | Wait | Stop
 Message = RunnerMessage | HarnessMessage
 
@@ -423,6 +469,12 @@ class Fields:
         except binascii.Error as error:
             raise ProtocolError(f"{name} is not base64 ({error})") from None
 
+    def opt_boolean(self, name: str) -> bool | None:
+        return None if self.obj.get(name) is None else self.boolean(name)
+
+    def ids(self, name: str) -> tuple[int, ...]:
+        return tuple(_int(id, name, 1) for id in self.array(name))
+
     def boolean(self, name: str) -> bool:
         value = self._get(name)
         if not isinstance(value, bool):
@@ -499,6 +551,53 @@ def _wifi_stats(value: Any) -> WifiStats | None:
     )
 
 
+def _sd_fault(f: Fields) -> SdFault:
+    """An `sd_fault` checked as the runner checks it, but against the card (5.19)."""
+    op = f.string("op")
+    if op not in SD_OPS:
+        raise ProtocolError(f"op is {op!r}, not one of {', '.join(SD_OPS)}")
+    fail = bool(f.opt_boolean("fail"))
+    delay = f.opt_integer("delay") or 0
+    if fail and op == "erase":
+        raise ProtocolError("an erase cannot fail, only be delayed")
+    if delay > SD_MAX_DELAY:
+        raise ProtocolError(f"delay is {delay} ns, over the {SD_MAX_DELAY} ns a delay may last")
+    if not fail and delay == 0:
+        raise ProtocolError("a rule that neither fails nor delays")
+    first, last = f.opt_integer("first"), f.opt_integer("last")
+    if (first is None) != (last is None):
+        raise ProtocolError("first and last come together")
+    if first is not None and last is not None and first > last:
+        raise ProtocolError(f"first {first} is after last {last}")
+    return SdFault(
+        f.integer("t"),
+        f.integer("id", 1),
+        op,
+        fail,
+        delay,
+        first,
+        last,
+        f.opt_integer("skip") or 0,
+        f.opt_integer("count", 1),
+    )
+
+
+def _sd_io(f: Fields) -> SdIo:
+    op = f.string("op")
+    if op not in SD_OPS:
+        raise ProtocolError(f"op is {op!r}, not one of {', '.join(SD_OPS)}")
+    return SdIo(
+        f.integer("t"),
+        op,
+        f.integer("block"),
+        f.integer("blocks", 1),
+        f.ids("rules"),
+        f.boolean("failed"),
+        f.integer("delay"),
+        f.boolean("written"),
+    )
+
+
 def _stats(f: Fields) -> Stats:
     return Stats(
         t=f.integer("t"),
@@ -555,6 +654,7 @@ DECODERS: dict[Sender, dict[str, Callable[[Fields], Message]]] = {
             f.opt_integer("baud"),
             f.opt_integer("bytes"),
         ),
+        "sd_io": _sd_io,
         "stats": _stats,
     },
     "harness": {
@@ -569,6 +669,10 @@ DECODERS: dict[Sender, dict[str, Callable[[Fields], Message]]] = {
         "wifi_ap": lambda f: WifiAp(f.integer("t"), f.boolean("on")),
         "power": lambda f: Power(f.integer("t"), f.boolean("on")),
         "chip_reset": lambda f: ChipReset(f.integer("t")),
+        "sd_fault": _sd_fault,
+        "sd_clear": lambda f: SdClear(
+            f.integer("t"), None if f.obj.get("ids") is None else f.ids("ids")
+        ),
         "wait": lambda f: Wait(
             f.integer("ack"), f.opt_integer("quiet_until"), f.opt_integer("latency")
         ),

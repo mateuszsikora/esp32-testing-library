@@ -211,13 +211,15 @@ fn card(image: &Path, wiring: sd_card::Wiring) -> Result<sd_card::Shared, String
 fn report_card(card: Option<&sd_card::Shared>) {
     let Some(card) = card else { return };
     let s = card.borrow().stats;
-    let errors = if s.errors > 0 {
-        format!(", {} image errors", s.errors)
-    } else {
-        String::new()
-    };
+    let mut extra = String::new();
+    if s.errors > 0 {
+        extra += &format!(", {} image errors", s.errors);
+    }
+    if s.failed > 0 || s.delayed > 0 {
+        extra += &format!(", fault rules: {} failed, {} delayed", s.failed, s.delayed);
+    }
     eprintln!(
-        "esp32tl-runner: SD card: {} commands, {} blocks read, {} blocks written{errors}",
+        "esp32tl-runner: SD card: {} commands, {} blocks read, {} blocks written{extra}",
         s.commands, s.blocks_read, s.blocks_written
     );
 }

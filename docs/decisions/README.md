@@ -163,6 +163,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Whether a backend can drive a board's lines is not declared yet](harness.md#whether-a-backend-can-drive-a-boards-lines-is-not-declared-yet) | `harness.md` | postponed (#25) |
 | [An SD card is inserted by the test, as a model source holding an image file](harness.md#an-sd-card-is-inserted-by-the-test-as-a-model-source-holding-an-image-file) | `harness.md` | decided (#32) |
 | [Inserting and removing the SD card while the firmware runs is postponed](harness.md#inserting-and-removing-the-sd-card-while-the-firmware-runs-is-postponed) | `harness.md` | postponed (#32) |
+| [The test breaks the SD card with fail and delay rules on the board's clock](harness.md#the-test-breaks-the-sd-card-with-fail-and-delay-rules-on-the-boards-clock) | `harness.md` | decided (#107) |
 | [The SD card tests skip without mtools, and CI makes sure it is there](harness.md#the-sd-card-tests-skip-without-mtools-and-ci-makes-sure-it-is-there) | `harness.md` | decided (#32) |
 | [The esp32tl command takes no SD card yet](harness.md#the-esp32tl-command-takes-no-sd-card-yet) | `harness.md` | postponed (#32) |
 | [The Bluetooth peer runs Bumble in the harness, on the board's clock](harness.md#the-bluetooth-peer-runs-bumble-in-the-harness-on-the-boards-clock) | `harness.md` | decided (#33) |
@@ -243,6 +244,9 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [adc waits for an example with an analog pin](runner.md#adc-waits-for-an-example-with-an-analog-pin) | `runner.md` | postponed (#23) |
 | [The SD card is a model of SPI mode in the runner, not esp32sim's card](runner.md#the-sd-card-is-a-model-of-spi-mode-in-the-runner-not-esp32sims-card) | `runner.md` | decided (#32) |
 | [The SD card answers at once and has no CMD6](runner.md#the-sd-card-answers-at-once-and-has-no-cmd6) | `runner.md` | decided (#32) |
+| [SD card faults are rules the peer gives the card, decided when an operation begins](runner.md#sd-card-faults-are-rules-the-peer-gives-the-card-decided-when-an-operation-begins) | `runner.md` | decided (#107) |
+| [An SD card delay passes on the bus's clock, which the board reads from advance_to](runner.md#an-sd-card-delay-passes-on-the-buss-clock-which-the-board-reads-from-advance_to) | `runner.md` | decided (#107) |
+| [A failed SD block write leaves its block as it was](runner.md#a-failed-sd-block-write-leaves-its-block-as-it-was) | `runner.md` | decided (#107) |
 | [Under --realtime the runner waits at each block point until wall time reaches it](runner.md#under---realtime-the-runner-waits-at-each-block-point-until-wall-time-reaches-it) | `runner.md` | decided (#27) |
 | [The runner starts its wall clock with esp32sim's pacing, and then follows esp32sim's resyncs](runner.md#the-runner-starts-its-wall-clock-with-esp32sims-pacing-and-then-follows-esp32sims-resyncs) | `runner.md` | decided (#27) |
 | [The network behind the access point is the peer's, over the link](runner.md#the-network-behind-the-access-point-is-the-peers-over-the-link) | `runner.md` | decided (#31) |

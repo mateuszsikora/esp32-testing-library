@@ -27,6 +27,9 @@ from esp32tl.link.protocol import (
     Reset,
     RunnerHello,
     RunnerMessage,
+    SdClear,
+    SdFault,
+    SdIo,
     Stats,
     Stop,
     Sync,
@@ -908,3 +911,59 @@ def test_every_reset_is_kept_in_order_and_given_to_on_reset() -> None:
     link.receive(Sync(0))
     feed(link, Reset(1, 100, 12), Reset(2, 200, 1), Sync(200))
     assert link.resets == seen == [Reset(1, 100, 12), Reset(2, 200, 1)]
+
+
+class Slot(Interface):
+    """An SD card slot that sends `rules`, each in the turn at its time, and keeps what the card
+    reports."""
+
+    def __init__(self, name: str = "sd_card", rules: Iterable[SdFault | SdClear] = ()) -> None:
+        super().__init__(name, None)
+        self.rules = list(rules)
+        self.io: list[SdIo] = []
+
+    @property
+    def sd_card(self) -> bool:
+        return True
+
+    def inputs(self, now: int) -> Iterable[Input]:
+        due = [r for r in self.rules if r.t <= now]
+        self.rules = self.rules[len(due) :]
+        return due
+
+    def card_io(self, io: SdIo) -> None:
+        self.io.append(io)
+
+
+def test_sd_rules_go_out_in_their_turn_and_the_card_s_reports_reach_the_slot() -> None:
+    rule = SdFault(2 * MS, 1, "write", True, 0, None, None, 0, 1)
+    slot = Slot(rules=[rule, SdClear(4 * MS, (1,))])
+    gnss = Peer()
+    link = started(gnss, slot)
+    assert feed(link, Sync(2 * MS)) == [rule, Wait(0, None, None)]
+    io = SdIo(3 * MS, "write", 8, 1, (1,), True, 0, False)
+    assert feed(link, io, Sync(4 * MS)) == [SdClear(4 * MS, (1,)), Wait(0, None, None)]
+    # not an event: no seq to acknowledge, and no other interface hears of it
+    assert slot.io == [io]
+    assert gnss.received == []
+    assert link.error is None
+
+
+def test_an_sd_rule_from_an_interface_that_is_not_the_slot_fails_the_link() -> None:
+    link = started(Driver([SdClear(MS)]))
+    assert feed(link, Sync(MS)) == [Stop()]
+    assert link.error == "lines sent sd_clear, and is not the SD card slot"
+
+
+def test_an_sd_rule_the_runner_would_refuse_fails_the_link_naming_the_slot() -> None:
+    link = started(Slot(rules=[SdFault(MS, 1, "erase", True, 0)]))
+    assert feed(link, Sync(MS)) == [Stop()]
+    assert link.error == (
+        "sd_card sent a sd_fault the link cannot carry: sd_fault: an erase cannot fail, only be"
+        " delayed"
+    )
+
+
+def test_one_sd_card_slot() -> None:
+    with pytest.raises(ValueError, match="one SD card slot, not a, b"):
+        BoardLink("esp32-devkitc", [Slot("a"), Slot("b")])

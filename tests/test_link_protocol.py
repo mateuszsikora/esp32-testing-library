@@ -25,6 +25,9 @@ from esp32tl.link.protocol import (
     Release,
     Reset,
     RunnerHello,
+    SdClear,
+    SdFault,
+    SdIo,
     Sender,
     Stats,
     Stop,
@@ -62,6 +65,8 @@ EVERY_MESSAGE: list[tuple[Sender, Message]] = [
     ("runner", Console(812_345_678, b"Hello world!\n")),
     ("runner", Warn(1_000_000_000, "frm_err", "baud", port=1, pin=5, baud=115200, nbytes=3)),
     ("runner", Warn(1_000_000_000, "a kind of a later version", "detail")),
+    ("runner", SdIo(523_000_000, "write", 8, 1, (1,), True, 0, False)),
+    ("runner", SdIo(524_000_000, "erase", 64, 32, (2, 3), False, 250_000_000, True)),
     (
         "runner",
         Stats(
@@ -90,6 +95,10 @@ EVERY_MESSAGE: list[tuple[Sender, Message]] = [
     ("harness", Power(7_000_000_000, False)),
     ("harness", Power(8_000_000_000, True)),
     ("harness", ChipReset(9_000_000_000)),
+    ("harness", SdFault(2_000_000_000, 1, "write", True, 0, None, None, 0, 1)),
+    ("harness", SdFault(2_000_000_000, 2, "read", False, 1_500_000_000, 64, 95, 3, None)),
+    ("harness", SdClear(3_000_000_000, (1, 2))),
+    ("harness", SdClear(3_000_000_000)),
     ("harness", Wait(9, 3_000_000_000, 1_000_000)),
     ("harness", Wait(0, None, None)),
     ("harness", Stop()),
@@ -258,6 +267,52 @@ def test_a_mismatched_handshake_is_answered_all_the_same(
     ],
 )
 def test_ethernet_frames_are_14_to_1518_bytes_and_switches_are_true_or_false(
+    line: bytes, sender: Sender
+) -> None:
+    with pytest.raises(ProtocolError):
+        decode(line, sender)
+
+
+@pytest.mark.parametrize(
+    ("fields", "found"),
+    [
+        ('"op":"write"', "a rule that neither fails nor delays"),
+        ('"op":"write","fail":false,"delay":0', "a rule that neither fails nor delays"),
+        ('"op":"format","fail":true', "op is 'format', not one of read, write, erase"),
+        ('"op":"erase","fail":true', "an erase cannot fail, only be delayed"),
+        ('"op":"read","delay":10000000001', "over the 10000000000 ns a delay may last"),
+        ('"op":"read","fail":true,"first":3', "first and last come together"),
+        ('"op":"read","fail":true,"first":3,"last":2', "first 3 is after last 2"),
+        ('"op":"read","fail":true,"count":0', "count is 0, below 1"),
+        ('"op":"read","fail":1', "fail is not true or false"),
+    ],
+)
+def test_an_sd_fault_says_what_it_does_and_no_more_than_the_runner_takes(
+    fields: str, found: str
+) -> None:
+    with pytest.raises(ProtocolError, match=re.escape(found)):
+        decode(b'{"type":"sd_fault","t":0,"id":1,' + fields.encode() + b"}", "harness")
+
+
+@pytest.mark.parametrize(
+    ("line", "sender"),
+    [
+        (b'{"type":"sd_fault","t":0,"id":0,"op":"read","fail":true}', "harness"),
+        (b'{"type":"sd_clear","t":0,"ids":[0]}', "harness"),
+        (b'{"type":"sd_clear","t":0,"ids":1}', "harness"),
+        (
+            b'{"type":"sd_io","t":0,"op":"read","block":0,"blocks":0,"rules":[1],'
+            b'"failed":true,"delay":0,"written":false}',
+            "runner",
+        ),
+        (
+            b'{"type":"sd_io","t":0,"op":"read","block":0,"blocks":1,"rules":[1],'
+            b'"failed":true,"delay":0}',
+            "runner",
+        ),
+    ],
+)
+def test_sd_rule_ids_are_1_or_more_and_an_sd_io_says_everything(
     line: bytes, sender: Sender
 ) -> None:
     with pytest.raises(ProtocolError):
