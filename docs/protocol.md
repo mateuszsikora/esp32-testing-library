@@ -690,8 +690,9 @@ reaches it: ESP-IDF polls for busy before every command, until it has read two b
 0, and those already belong to the next block. So the card decides a later block of CMD18 when it
 begins it, holds it for any delay and sends its error token if it fails, but the block counts as
 an operation only once the host has gone on past it: when the card begins the block after it, or a
-command other than CMD12 comes. Its `sd_io` goes out then (5.20). A CMD12 that comes first stops
-the read at that block: the host never took it, the rules' `skip` and `count` are put back as they
+command other than CMD12 and CMD0 comes. Its `sd_io` goes out then (5.20). A CMD12 that comes first
+stops the read at that block, and a CMD0 starts the host over, as after a chip reset in the read:
+either way the host never took it, the rules' `skip` and `count` are put back as they
 were, a rule it used up included unless it has been cleared since, and nothing reports it. A block
 the host neither goes past nor stops by the end of the run is not reported either.
 

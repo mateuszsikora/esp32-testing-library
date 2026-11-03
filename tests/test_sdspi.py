@@ -232,6 +232,21 @@ def test_fault_rules_are_the_test_s_and_outlast_a_power_cycle(
     assert board.boots[-1].number == 2
 
 
+def test_fault_rules_outlast_a_reset_of_the_chip(
+    tmp_path: Path, board: Esp32Sim, sd_card: SdCard, console: Console
+) -> None:
+    image = fat_image(tmp_path / "card.img")
+    sd_card.insert(image)
+    board.power_on()
+    console.expect_exact("example: Card unmounted", timeout=TIMEOUT)
+    broken = sd_card.fail("read", blocks=0)
+    board.reset()
+    console.expect_exact("example: Failed to mount filesystem.", timeout=TIMEOUT)
+    [io] = broken.hits
+    assert (io.block, io.failed) == (0, True)
+    assert board.boots[-1].number == 2
+
+
 def test_an_empty_slot_never_answers(board: Esp32Sim, console: Console) -> None:
     board.power_on()
     console.expect_exact(

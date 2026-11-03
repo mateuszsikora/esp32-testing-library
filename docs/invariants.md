@@ -282,7 +282,7 @@ that references to its number keep their meaning.
 - **142.** A fault rule acts on the operations of its `op` whose blocks meet its own, from the slice
   boundary it comes due at, after it has let `skip` of them through, and on `count` of them; each
   block of a multiple block transfer is one operation, but the block a CMD12 stops a CMD18 at is
-  none: the rules are as they were before it. Every rule that matches acts, and a cleared rule
+  none, nor the one a CMD0 finds after a chip reset: the rules are as they were before it. Every rule that matches acts, and a cleared rule
   acts on no operation that begins after. Rules outlast a power cycle of the board, which ends a
   running delay and undoes a block the card had begun.
   `runner/src/sd_card/tests.rs::skip_and_count_pick_the_operations_a_rule_acts_on`,
@@ -290,7 +290,9 @@ that references to its number keep their meaning.
   `runner/src/sd_card/tests.rs::a_later_block_of_cmd18_counts_once_the_host_goes_on_past_it`,
   `runner/src/sd_card/tests.rs::a_rule_cleared_while_a_block_is_begun_is_not_put_back_by_cmd12`,
   `runner/src/sd_card/tests.rs::a_power_cut_keeps_the_rules_ends_a_delay_and_undoes_a_begun_block`,
+  `runner/src/sd_card/tests.rs::a_chip_reset_in_a_cmd18_uses_up_no_rule_when_the_host_starts_again_with_cmd0`,
   `tests/test_sdspi.py::test_fault_rules_are_the_test_s_and_outlast_a_power_cycle`,
+  `tests/test_sdspi.py::test_fault_rules_outlast_a_reset_of_the_chip`,
   `runner/src/sd_card/tests.rs::every_rule_that_matches_acts_and_the_longest_delay_holds`,
   `runner/src/sd_card/tests.rs::cleared_rules_act_no_more_but_a_running_delay_runs_out`,
   `runner/src/session/tests.rs::sd_faults_reach_the_card_when_due_and_what_they_did_goes_out_in_t_order`

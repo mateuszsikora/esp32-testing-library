@@ -180,7 +180,7 @@ struct Verdict {
 /// begins the block after the last one the host wants before the host's CMD12 comes, as ESP-IDF
 /// does with every CMD18 (it polls for busy before the CMD12), so the rules' verdict on it holds
 /// only once the host goes on past it: when the card begins the next block, or a command other
-/// than CMD12 comes. A CMD12 first undoes it.
+/// than CMD12 and CMD0 comes. A CMD12 or a CMD0 first undoes it.
 #[derive(Debug)]
 struct Begun {
     began: u64,
@@ -656,8 +656,9 @@ impl SdCard {
             }
         }
         self.stats.commands += 1;
-        // a CMD12 stops a CMD18 at the block the card had begun; any other command goes on past it
-        self.take_begun(index == 12);
+        // a CMD12 stops a CMD18 at the block the card had begun, and a CMD0 starts the host over
+        // (the chip may have reset in the read); any other command goes on past it
+        self.take_begun(index == 12 || index == 0);
         let app = std::mem::take(&mut self.app_cmd);
         // A command ends what the card was sending, a read in progress included (SD spec
         // §7.2.3), and a write that never got its token.

@@ -375,7 +375,8 @@ a CMD18. That makes the selection deterministic, counts every block of a multipl
 as an operation of its own, and leaves an operation in progress alone when rules change. A card
 begins the block after the last one a host wants from a CMD18 before the host's CMD12 comes, and
 ESP-IDF's poll for busy before every command reads two bytes of it, so that block counts only once
-the host goes on past it, and a CMD12 that comes first puts the rules back as they were. `sd_io`
+the host goes on past it, and a CMD12 that comes first puts the rules back as they were. So does a
+CMD0, with which a driver starts over after a chip reset cut the read. `sd_io`
 then carries two times: `t`, when it is reported, which may not go back in the stream, and `began`,
 which is what a test reads as `CardIo.at` and what a rule's delay counts from. Rules are the test's,
 not the card's, so they outlast a reset and a power cycle of the board, which ends only the card's

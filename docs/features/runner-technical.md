@@ -185,9 +185,9 @@ A later block of CMD18 (`read_block(lba, true)`, from `next_block`) is held as `
 instead of being reported: the host may stop the read before taking it, and ESP-IDF always does,
 with a poll for busy (`poll_busy` waits for two bytes that are not 0) that already clocks out the
 block's first bytes, then CMD12. `take_begun` ends it: with `stopped` false, from `next_block` as
-the card begins the following block or from `command` for any command but CMD12, it reports the
-block, with `Io::cycle` `now`, which keeps `sd_io`'s `t` in order with what the board logged
-meanwhile, and `Io::began` the cycle it began at; with `stopped` true, for a CMD12, it puts back
+the card begins the following block or from `command` for any command but CMD12 and CMD0, it
+reports the block, with `Io::cycle` `now`, which keeps `sd_io`'s `t` in order with what the board
+logged meanwhile, and `Io::began` the cycle it began at; with `stopped` true, for a CMD12 or a CMD0, it puts back
 each rule in `before` by id, re-inserting by id order one that the block used up. Nothing ends a
 block still held at the end of the run; ESP-IDF always sends a CMD13 after a read
 (`sdmmc_read_sectors_dma`), so it does not leave one held. `clear_rules` drops cleared ids from
@@ -229,7 +229,8 @@ at once.
 inserted: out of SPI mode, uninitialised, CRC checking off, no erase range, `Command` phase, the
 command in progress and `out` emptied. A block in `Receiving` is dropped with its phase; every
 block written before it is in the image. A reset of the chip alone (`chip_reset`, or one the guest
-asks for) leaves the card as it is, and the host's CMD0 finds it where it was.
+asks for) leaves the card as it is, and the host's CMD0 finds it where it was; that CMD0 undoes a
+block of a CMD18 the reset cut, which the firmware after it knows nothing of.
 
 ### The session
 
@@ -684,7 +685,8 @@ A failure to write the last messages does not change the exit code: the first ca
   the block a CMD12 stops a CMD18 at, which uses up no rule, a later block reported once the host
   goes on past it, by the next block or another command, with `began` and `cycle` apart, a rule
   cleared meanwhile that CMD12 does not bring back, and one cleared after the block began that
-  still owns it, and a power cut that keeps the rules, ends a delay and undoes a begun block. No
+  still owns it, a power cut that keeps the rules, ends a delay and undoes a begun block, and a CMD0 after a chip
+  reset that undoes one too. No
   test on real firmware goes through CMD18: neither `sdspi` nor
   `sd_data_logger` sends one, so the stop is covered on the card's bytes and against ESP-IDF's
   source (v5.3.6) only.

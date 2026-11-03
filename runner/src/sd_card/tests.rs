@@ -826,3 +826,24 @@ fn a_power_cut_keeps_the_rules_ends_a_delay_and_undoes_a_begun_block() {
         "no busy time is left, and the block is there"
     );
 }
+
+#[test]
+fn a_chip_reset_in_a_cmd18_uses_up_no_rule_when_the_host_starts_again_with_cmd0() {
+    let mut card = card(2);
+    init(&mut card);
+    card.add_rule(Rule {
+        blocks: Some((8, 8)),
+        count: Some(1),
+        ..rule(1, Op::Read, true, 0)
+    });
+    let answer = command(&mut card, 18, 7, 16);
+    data_block(&mut card, after_r1(answer), BLOCK);
+    assert_eq!(xfer(&mut card, &[0xff; 2]), [0xff, ERROR_ECC]);
+    // the chip resets: the card keeps its power, and the driver's first command is CMD0
+    init(&mut card);
+    assert!(card.io.is_empty(), "{:?}", card.io);
+    assert_eq!(card.stats.failed, 0);
+    assert_eq!(after_r1(command(&mut card, 17, 8, 10))[1], ERROR_ECC);
+    assert_eq!(card.io.len(), 1);
+    assert!(card.rules.is_empty());
+}
