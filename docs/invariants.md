@@ -741,7 +741,7 @@ that references to its number keep their meaning.
     `tests/test_net_tls.py::test_tls_conditions_are_live_named_and_reject_truth_testing`,
     `examples/position_tracker/tests/test_tracker_support.py::test_tls_timeout_names_the_expected_handshake`
 
-- **123.** MQTT CONNECT policy uses only named MQTT 3.1.1 return codes and runs on fully parsed
+- **124.** MQTT CONNECT policy uses only named MQTT 3.1.1 return codes and runs on fully parsed
     public metadata before session state is installed. Rejection closes after CONNACK, never takes
     over an accepted client, processes pipelined publications, subscribes or emits a Will.
     Attempts record the selected code and board time separately from accepted clients, and both
@@ -757,7 +757,7 @@ that references to its number keep their meaning.
     `tests/test_net_mqtt_policy.py::test_internet_reset_keeps_the_policy_and_both_histories`,
     `tests/test_net_mqtt_policy.py::test_policy_errors_in_a_board_run_fail_the_link_naming_them`
 
-- **124.** MQTT next-event conditions capture append order at creation, exclude earlier events even
+- **125.** MQTT next-event conditions capture append order at creation, exclude earlier events even
     at equal timestamps, and repeatedly return the first matching record without consuming it.
     The `message` / `connected` aliases share these semantics, and so does `connection_attempt`.
     History queries return the first matching recorded event even after closure. A pre-armed
@@ -771,7 +771,7 @@ that references to its number keep their meaning.
     `tests/test_clock.py::test_mqtt_immediate_response_is_visible_after_waiting_for_connection`,
     `examples/position_tracker/tests/test_tracker_support.py::test_mqtt_timeout_names_the_expected_connection`
 
-- **125.** TLS next-event conditions require a started/completed counter increment after construction.
+- **126.** TLS next-event conditions require a started/completed counter increment after construction.
     Prior successes cannot satisfy them after closure or reset, and a failed new attempt does
     not satisfy completion. Completion of a handshake already in progress does qualify.
     Equal timestamps do not collapse events, polling consumes nothing, and cumulative queries
