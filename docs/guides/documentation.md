@@ -123,6 +123,19 @@ does. A rule that code can break without any test failing is a note, not an inva
 the owning technical document instead. Numbers are never reused; a rule that no longer holds is
 struck through with the reason, so references to it stay meaningful.
 
+```markdown
+- **<N>.** <The rule.>
+  `<test file>::<test name>`,
+  `<test file>::<test name>`
+```
+
+The number is bold text in a bulleted item, not an ordered-list marker: GitHub numbers an ordered
+list from its first item onwards and ignores the numbers written on the others, so `119.` after
+`42.` would show as 43. A new rule takes the next number after the highest one in the file, in the
+section it belongs to, so numbers within a section need not be in order. Continuation lines are
+indented by at least two spaces; the items written before this format keep the indentation they
+had.
+
 ### Decisions: `docs/decisions/<domain>.md`
 
 Why things are the way they are: alternatives that were rejected, and scope that was postponed. One
