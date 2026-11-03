@@ -778,6 +778,40 @@ that references to its number keep their meaning.
     continue to reflect history. Next-event conditions name their scope and reject truth testing.
     `tests/test_net_tls.py::test_next_tls_handshake_excludes_previous_success_across_reconnects`
 
+- **127.** Incoming MQTT QoS 1 routes on receipt even while PUBACK is held. Pending receipts with
+    the same connection/packet ID share a handle and the first receipt's deadline; each DUP
+    flag and receipt time remain visible. Release emits once at the current simulated time.
+    After emission, identifier reuse creates a new handle; old release calls send nothing.
+    Default/zero-delay ACKs are immediate, and policy changes affect only new exchanges.
+    A pending ID reused with another topic or payload joins the same handle and is logged.
+    A QoS 0 PUBLISH with DUP set closes the connection as malformed.
+    `tests/test_net_mqtt.py::test_default_puback_records_emission_separately_from_receipt`,
+    `tests/test_net_mqtt.py::test_hold_routes_duplicates_and_release_acknowledges_only_the_selected_exchange`,
+    `tests/test_net_mqtt.py::test_pending_id_reused_for_different_content_is_merged_and_logged`,
+    `tests/test_net_mqtt.py::test_qos_zero_publish_with_dup_closes_as_malformed`,
+    `tests/test_net_mqtt.py::test_delayed_puback_uses_first_receipt_and_policy_changes_only_new_exchanges`,
+    `tests/test_net_mqtt.py::test_manual_release_cancels_a_scheduled_puback`,
+    `tests/test_net_mqtt.py::test_late_poll_stamps_actual_emission_time_and_does_not_backdate`
+
+- **128.** Closing an MQTT connection cancels pending PUBACK handles permanently, including on
+    disconnect, transport loss, takeover and keepalive expiry. Graceful DISCONNECT suppresses
+    the Will; other losses emit it once. Keepalive expiry wins a tie with an ACK deadline.
+    A reconnect has a fresh connection identity; a stale handle cannot acknowledge its packets.
+    A stream whose CONNECT is rejected also takes an ID; client records and Wills carry theirs.
+    Synchronous stream-write failure cancels instead of claiming emission. Network reset
+    cancels delayed handles and keeps retained receipts; emitted history survives closure.
+    `tests/test_net_mqtt.py::test_connection_end_cancels_pending_ack_and_stale_release_cannot_ack_reconnect`,
+    `tests/test_net_mqtt.py::test_failed_stream_write_cancels_instead_of_claiming_puback_emission`,
+    `tests/test_net_mqtt.py::test_rejected_connect_uses_a_connection_id_and_accepted_records_carry_theirs`,
+    `tests/test_net_mqtt.py::test_disconnect_leaves_other_clients_pending_and_emitted_history_intact`,
+    `tests/test_net_mqtt_failures.py::test_network_reset_cancels_delayed_puback_without_losing_retained_receipt`
+
+- **129.** Broker disconnect affects only the selected stream over both TCP and TLS. Another stream
+    and a new NTP exchange remain usable over the same open PPP link. Reconnect restores no
+    subscriptions or broker session even with CleanSession zero; retransmission is recorded
+    again and its PUBACK must use the new handle. Emission precedes client consumption.
+    `tests/test_net_mqtt_failures.py::test_puback_faults_reconnect_and_other_network_activity`
+
 ## Explicit build selection
 
 - **116.** A selected build is resolved relative to the application or taken as absolute, independently
