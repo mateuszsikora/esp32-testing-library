@@ -447,7 +447,7 @@ In the test body:
 | `the board is off: board.reset() resets a board that is on` | `BoardOff` | `reset()` before power-on or with the supply off |
 | `power_on: utc is {utc!r}, not a datetime with a timezone` | `TypeError`, `ValueError` | Not a `datetime`; a naive `datetime` |
 | `power_on: utc is the world's time at the first power-on; it has run on since, and the board's clock with it` | `ValueError` | A `utc` given to a `power_on()` after `power_off()` |
-| `{interface}: the board is on already: give an interface its source before board.power_on()` | `SourceError` | A source after power-on, a card among them; `the board has been on` once the supply is off |
+| `{interface}: the board is on already: give an interface its source before board.power_on()` | `SourceError` | A source after power-on, `the board has been on` once the supply is off; not a card, which goes in and out once the run has started |
 | `{interface}: the board is on already: tap a route before board.power_on()` | `SourceError` | A tap after power-on; `the board has been on` once the supply is off |
 | the message of `capabilities.check`, as `no backend takes a 'replay' source on uart.gnss; the sources there are model` or `no backend can tap uart.gnss` | `SourceError` | A source or a tap no backend declares |
 | `esp32sim: {reason}`, as `esp32sim: uart.gnss takes no replay source on this backend, only model` or `esp32sim: uart.gnss cannot be tapped on this backend` | the `skip` given: pytest's skip under the plugin | A source or a tap this backend does not declare |
