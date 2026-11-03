@@ -87,7 +87,7 @@ def test_wifi_http(board: Esp32Sim, wifi: Wifi, console: Console, tmp_path: Path
     network = wifi.access_point("myssid", password="mypassword")
     network.http.serve("/", "hello from the test\n")
     board.power_on()
-    board.wait_until(network.http.requested("/"), within=seconds(30))
+    board.wait_until(network.http.next_request("/"), within=seconds(30))
     board.wait(seconds(2))
     write_console(tmp_path, console)
     assert console.lines(r"^hello from the test$")

@@ -78,7 +78,8 @@ The boundary is the end of the corresponding history at the method call, not the
 or the start of `board.wait_until`. Events already recorded are excluded; events appended
 afterwards are included even if their board timestamps equal an earlier event's timestamp.
 Within each history, append order breaks timestamp ties and the first matching entry wins.
-There is no shared MQTT/TLS timestamp cursor or cross-history ordering API.
+There is no timestamp cursor shared across MQTT, TLS, HTTP and DHCP, nor a cross-history
+ordering API.
 
 For example, a device may connect and publish within one run slice. Arm both conditions before
 power-on so waiting for the connection cannot miss the immediate publication:
@@ -235,7 +236,7 @@ def test_joins_and_fetches_from_the_tests_server(board, wifi, console):
     network.http.serve("/", "hello from the test\n")
     printed = console.line(r"^hello from the test$")
     board.power_on()
-    request = board.wait_until(network.http.requested("/"), within=seconds(30))
+    request = board.wait_until(network.http.next_request("/"), within=seconds(30))
     assert (request.method, request.version) == ("GET", "HTTP/1.0")
     assert request.header("Host") == "example.com:80"
     board.wait_until(printed, within=seconds(5))
@@ -264,8 +265,10 @@ address, as `network.http`. Until the test serves a path, every request gets `40
 | HTTP server API | Meaning |
 |---|---|
 | `serve(path, body=b"", *, status=200, content_type=None, headers=None)` | Answer every request for `path` from now on, replacing what was served there before. A `str` body goes as UTF-8 with `text/plain; charset=utf-8`, `bytes` with `application/octet-stream`, unless `content_type` names another; `headers` (a dict) are added as given |
-| `requested(path=None, *, method=None)` | Condition returning the first request, for `path` and with `method` when given, received **after the condition was created** |
-| `requests` | Every request answered, in order |
+| `next_request(path=None, *, method=None)` | Condition returning the first request, for `path` and with `method` when given, recorded **after this method call** |
+| `find_request(path=None, *, method=None)` | Immediate history query returning the first recorded request with the same filters, or `None` |
+| `requested(path=None, *, method=None)` | Alias of `next_request` |
+| `requests` | Every request recorded, in order; refused requests are not |
 
 A request (`Request`) has `at` (`Duration`), `method`, `target` (as sent), `path` (an
 origin-form target such as `/a?b` without its query, `://` in it or not; an absolute-form one such
@@ -273,6 +276,28 @@ as `http://host/x?b` without its scheme, host and query, `/x`; `*` and `host:por
 `HTTP/1.1`, as sent), `headers` (name and value pairs, in order), `body` (bytes) and `text` (the
 body as UTF-8 with replacement). `header(name)` returns the first field of that name, whatever its
 case, or `None`.
+
+`path` is compared with the request's `path` and `method` with its method exactly as sent, so
+`method="get"` does not match `GET`. A `next_request` condition has the boundary, polling and
+naming of the [MQTT next-event conditions](#history-next-events-and-current-state): construct it
+before the action that makes the firmware send the request; requests already recorded are
+excluded, even at an equal board time; polling consumes nothing, so repeated calls return the same
+first match. A timeout names it: its message begins
+`the next HTTP request for '/' with method 'GET' did not happen within 30 s`, and the run report
+logs `waits up to 30 s for the next HTTP request for '/' with method 'GET'`. `find_request`
+returns a record now, not a condition, and never waits. Boolean coercion of a condition from
+`next_request` or `requested` raises
+`TypeError("call the HTTP condition with (), or pass it to board.wait_until")`, before and after a
+match, so an unevaluated `assert network.http.requested("/")` fails. Use
+`assert network.http.find_request("/") is not None` to inspect past requests.
+
+A `path` filter does not see the query, which is in the request's `target`. `next_request`,
+`requested` and `find_request` raise `ValueError` for a filter that holds `?`
+(`http.find_request: '/update?v=2' holds a query, which a path does not: filter by the path and read the request's target`):
+filter by `/update` and compare `request.target` with `/update?v=2`. The refused requests listed
+below are not recorded, so no condition or query sees them: a timeout says the request
+did not happen although the firmware sent it, and only the transcript's
+`http: refused a request: <status> <reason>` shows it.
 
 The server takes one request per connection. It answers `HTTP/1.1 <status> <reason>`,
 `Content-Type`, `Content-Length`, `Connection: close` and the test's headers, then the body (none
@@ -293,7 +318,8 @@ status), answered with the reason in lower case as the body, and not kept in `re
 | `501 Not Implemented` | Any `Transfer-Encoding` |
 
 `serve` raises `ValueError` for a path that does not start with `/`
-(`http.serve: 'index.html' is not a path, which starts with /`), a status the server has no reason
+(`http.serve: 'index.html' is not a path, which starts with /`) or that holds a query
+(`http.serve: '/a?b' holds a query, which a path does not: serving the path answers it whatever the query`), a status the server has no reason
 for (`http.serve: status 418 is not one of [200, 201, 204, 301, 302, 304, 400, 401, 403, 404, 413, 431, 500, 501, 503]`),
 a header whose name is empty or holds `:`, or whose name or value holds a line break
 (`http.serve: 'X-A:B': '1' is not a header field`), and a body with a `204` or `304`
@@ -311,9 +337,15 @@ are logged and not answered. The transcript shows
 
 `network.dhcp.leases` lists every acknowledged lease, each a `Lease` with `at` (`Duration`), `mac`,
 `address` and `hostname` (the name the device sent, `espressif` for ESP-IDF's default, or `None`).
-`network.dhcp.leased()` is a condition returning the next lease after the condition was created:
-it is how a test waits for the station to join again. The leases outlive the access point
-switching off and on. `network.dhcp` exists behind the modem too, where nothing asks it.
+`network.dhcp.next_lease()` is a condition returning the first lease recorded **after this method
+call**: it is how a test waits for the station to join again. `network.dhcp.leased()` is its
+alias. `network.dhcp.find_lease()` is an immediate history query returning the first recorded
+lease, or `None`. A `next_lease` condition has the boundary and polling of the
+[MQTT next-event conditions](#history-next-events-and-current-state); its timeout names
+`the next DHCP lease`, and boolean coercion raises
+`TypeError("call the DHCP condition with (), or pass it to board.wait_until")`, before and after
+a lease. The leases outlive the access point switching off and on. `network.dhcp` exists behind
+the modem too, where nothing asks it.
 
 ARP for any address but the device's own is answered with the network's MAC,
 `02:53:49:4d:00:02`, so every address on the subnet and off it reaches the network. ARP for
@@ -545,7 +577,7 @@ queued replies are dropped, MQTT Wills are published once, and the transcript lo
 `wifi: access point off the air`. Nothing the station sends is answered until
 `wifi.access_point_on()`, which logs `wifi: access point back on the air`; the station then joins
 the fresh access point from the start, DHCP included. The leases stay in `network.dhcp.leases`,
-and a `network.dhcp.leased()` condition created after the last lease waits for the new one, as
+and a `network.dhcp.next_lease()` condition created after the last lease waits for the new one, as
 `tests/test_http_request.py` does. ESP-IDF's examples
 print `Wi-Fi disconnected 3, trying to reconnect...` when the access point leaves.
 
