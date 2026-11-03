@@ -275,12 +275,16 @@ runs `make lint`. [docs/cicd.md](../cicd.md) describes each job.
 in-memory TLS. They need the installed package, including cryptography, but no emulator or
 network service. `tests/test_net_ethernet.py` and `tests/test_net_http.py` do the same for the
 network behind the Wi-Fi access point (Ethernet, ARP, DHCP) and the HTTP server, and
-`tests/test_wifi.py` for the `wifi` interface. `tests/test_pppos_client.py` needs
-`firmware/pppos_client/build/`, the runner and ROM ELF; it validates plain MQTT in both directions.
-`tests/test_http_request.py` needs `firmware/http_request/build/`, the runner and ROM ELF; it
-validates joining over WPA2, DHCP, DNS and HTTP behind the access point. `make determinism` needs
-`nmea_reader`, `pppos_client` and `http_request`; it builds any missing one. `tests/test_modem_model.py`
-also checks PPP lifecycle, guarded escape and fatal receive overflow on the network route.
+`tests/test_wifi.py` for the `wifi` interface. `tests/test_net_mqtt_failures.py` drives held,
+released and delayed PUBACKs over PPP/TCP with both plain and TLS clients, then disconnects before
+ACK and retransmits after reconnect. Another stream and NTP remain usable on the same PPP link.
+These tests need no firmware; the existing firmware examples publish QoS 0.
+`tests/test_pppos_client.py` needs `firmware/pppos_client/build/`, the runner and ROM ELF; it
+validates plain MQTT in both directions. `tests/test_http_request.py` needs
+`firmware/http_request/build/`, the runner and ROM ELF; it validates joining over WPA2, DHCP, DNS
+and HTTP behind the access point. `make determinism` needs `nmea_reader`, `pppos_client` and
+`http_request`; it builds any missing one. `tests/test_modem_model.py` also checks PPP lifecycle,
+guarded escape and fatal receive overflow on the network route.
 
 ## Example tests
 

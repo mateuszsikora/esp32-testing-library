@@ -7,8 +7,8 @@ returns its `Broker`. All callbacks execute during link turns or while the test 
 There are no sockets, worker threads or host-clock timers. `Internet` uses the current UART chunk's
 or Ethernet frame's timestamp inside receive callbacks and the held board time for test calls.
 Responses carry a 1,000,000 ns latency (`LATENCY_NS`); the modem starts PPP after CONNECT, so LCP
-follows the AT response. `poll` drains queued replies and evaluates broker keepalive deadlines;
-`quiet_until` bounds the next turn by those deadlines.
+follows the AT response. `poll` drains queued replies and evaluates broker keepalive and PUBACK
+deadlines; `quiet_until` bounds the next turn by the earliest of those deadlines.
 
 ## The link
 
@@ -155,6 +155,27 @@ the test made, stamped at its instant or at the turn's `now`, whichever is later
   These are immediate queries returning records or `None`. `_Condition` wraps the MQTT
   callables with useful `repr` output and rejects boolean coercion, including for the live
   subscription query. Subscriptions continue to read active sessions, without latching matches.
+  Each accepted stream receives a broker-local increasing `connection_id`, independent of the
+  client ID and listener. Every incoming PUBLISH records its packet ID and DUP bit; `_handle`
+  rejects DUP on QoS 0 as malformed. QoS 1 receipts reference a public `Publication`; the
+  session's `incoming` map groups pending receipts by packet ID. Each receipt still reaches
+  `_route`, including duplicates; one whose topic or payload differs from the handle's first
+  receipt is merged as well, with a log line. PUBACK emission removes that map entry; later use
+  of the ID creates a new handle. The handle's `messages` tuple exposes the receipts, including
+  their original timestamps and DUP bits.
+  `Broker.puback` is sampled when a handle is created: immediate and zero delays release it
+  after routing, `"hold"` has no deadline, and a `Duration` supplies an absolute deadline from
+  the first receipt. Duplicates and policy changes leave that deadline unchanged. `poll`
+  expires keepalives first, then releases due handles in connection/receipt order. A late poll
+  stamps emission at its actual current time, never backdates it to the deadline.
+  `Publication.release()` writes PUBACK to the stream, marks it `"emitted"` and records
+  `puback_at`; a synchronous TLS write failure closes the session and leaves it `"cancelled"`
+  instead. Releasing a finished handle returns `False` without writing. `_end` cancels and
+  clears pending handles before closing the stream, so closure through TLS cannot resurrect
+  them. `Broker.disconnect(client_id)` uses the same loss/Will path as transport loss and
+  never resets the network. An emitted handle survives closure as an emission record, not
+  evidence of device processing. Histories and retained messages survive reconnect; incoming
+  ACK state, outgoing unacknowledged deliveries and subscriptions do not.
 - `tls.py`: a generated RSA-2048 CA and server certificate, SHA-256 signatures, DNS/IP subject
   alternative names, CA key usage and server extended key usage. Optional `server_not_before`
   and `server_not_after` apply only to the leaf certificate; the CA retains its fixed validity.
@@ -246,6 +267,18 @@ publication without advancing time; a newly created condition times out with its
 TLS reconnect tests complete real MemoryBIO handshakes around a failed attempt and reset,
 checking that old successes never satisfy a newly armed completion condition and that a
 handshake already in progress can satisfy a later-created completion condition.
+`test_net_mqtt.py` also checks held/delayed/default PUBACK, duplicate routing, identifier reuse
+(including the log for a pending ID reused with other content), DUP on QoS 0, connection IDs
+taken by rejected CONNECTs, policy changes, early release and cancellation on every
+session-ending path. These tests use the clock directly to check exact deadlines and release
+timestamps.
+`tests/test_net_mqtt_failures.py` negotiates PPP and drives real TCP frames with independent
+checksums, both with plaintext and a verifying MemoryBIO TLS client. It receives without ACK,
+releases and delays PUBACK, disconnects before ACK, then reconnects and retransmits with DUP.
+During the outage another stream still answers PING and a new NTP request traverses the same
+open PPP session. It also checks that CONNACK has no restored session and subscriptions are
+gone. These are protocol-client tests; the existing firmware examples publish QoS 0 and cannot
+validate firmware processing of a QoS 1 PUBACK.
 NTP tests cover silence from startup, idempotent transitions and resumed replies using elapsed
 world time. A MemoryBIO handshake with verification disabled solely for certificate inspection
 checks independent leaf validity dates, UTC normalization and a signature from the unchanged CA;

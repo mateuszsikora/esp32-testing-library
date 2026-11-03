@@ -55,12 +55,21 @@ silent; an AT-only model still works without PPP. The network's broker is `modem
 | `publish(topic, payload, retain=False, qos=0)` | Publish from the test at the board's current time; bytes or UTF-8 text, QoS 0 or 1 |
 | `messages`, `clients`, `retained` | Message history, accepted-client history and currently retained messages |
 | `connection_attempts` | CONNECT outcome history, including accepted and rejected attempts |
+| `puback` | Policy for new incoming QoS 1 exchanges: `"immediate"` (default), `"hold"`, or a nonnegative `Duration` |
+| `pending` | Tuple of pending `Publication` handles, grouped by connection, then first receipt |
+| `disconnect(client_id)` | Close that client's stream as a connection loss; return `True` if connected, otherwise `False` |
 
 A message has `at` (`Duration`), `client`, `topic`, `payload` (bytes), `qos`, `retain`, and
-`text` (UTF-8 with replacement). Test publications use client `(test)`. A client record has
-`at`, `client_id`, `username`, `password`, `keepalive` and `will_topic`. By default, credentials
-are observed, not authenticated; install a connection policy to check them. Treat reports and
-histories as test data: payloads, usernames and passwords can be sensitive.
+`text` (UTF-8 with replacement). Incoming publications also expose `connection_id`, `packet_id`
+(`None` for QoS 0), `dup` and `publication` (a `Publication` handle for QoS 1, otherwise `None`).
+Test publications use client `(test)` and have no connection, packet ID or handle. Wills carry
+their original connection ID but have no packet ID or handle. A client record has `at`,
+`client_id`, `username`, `password`, `keepalive`, `will_topic` and `connection_id`. Connection
+IDs are increasing integers local to this broker, allocated when streams are accepted (so a
+rejected CONNECT also uses one), shared across plain and TLS listeners and never reused,
+including after a network reset. By default, credentials are observed, not authenticated;
+install a connection policy to check them. Treat reports and histories as test data: payloads,
+usernames and passwords can be sensitive.
 
 ### History, next events and current state
 
@@ -108,7 +117,9 @@ Subscriptions support `+` and final `#`, including empty levels. Wildcards begin
 or `#` do not match `$` topics. QoS 0 and 1, PUBACK, retained delivery, empty retained-message
 deletion, unsubscribe, PING and Will on connection loss are supported. Keepalive expires after
 1.5 times its advertised interval on the board's clock. DISCONNECT suppresses the Will.
-QoS 2 publications are refused. Sessions are not persisted across connections.
+QoS 2 publications are refused, and so is a QoS 0 PUBLISH with the DUP flag set (MQTT 3.1.1
+requires DUP 0 for QoS 0): the broker logs `mqtt: malformed or unsupported packet, closing` and
+closes the connection. Sessions are not persisted across connections.
 
 A CONNECT with an empty client ID and `CleanSession=1` receives a generated ID such as
 `esp32tl-anonymous-1`, visible in accepted-client history, messages and Wills. IDs use a
@@ -313,6 +324,72 @@ The network speaks IPv4 only. Frames of any other type are dropped, and the firs
 logged: ESP-IDF's IPv6 link-local traffic gives
 `ethernet: dropping frames of type 0x86dd (IPv6)`. The MTU is 1500 bytes; a packet for the device
 over it is dropped with `ethernet: dropped an IPv4 packet of <n> bytes: over the MTU`.
+
+## Withhold PUBACK and disconnect a client
+
+Set `broker.puback` before the publication arrives. Holding an acknowledgement still records,
+routes and, when requested, retains the publication immediately. For firmware publishing QoS 1:
+
+```python
+broker.puback = "hold"
+received = broker.next_message("telemetry/position")
+board.power_on()
+message = board.wait_until(received, within=seconds(60))
+ack = message.publication
+assert ack is not None and ack.status == "pending"
+assert ack.puback_at is None
+board.wait(seconds(2))
+assert ack.release()  # Emit this exchange's PUBACK at the held board time.
+assert ack.status == "emitted" and ack.puback_at == board.now
+```
+
+`broker.puback = seconds(2)` instead schedules PUBACK two emulated seconds after the first
+receipt. `seconds(0)` behaves like `"immediate"`. The delay participates in the network's next
+deadline; waiting advances it, host time does not. Manual `release()` can emit a scheduled ACK
+early. A policy change applies only to new exchanges: it neither releases existing held handles
+nor reschedules delayed ones. Negative durations raise `PUBACK delay must be nonnegative`;
+other values raise `PUBACK policy must be 'immediate', 'hold', or a Duration`.
+
+Each `Publication` exposes `connection_id`, `packet_id`, `messages` (a tuple of its receipts),
+`status` (`"pending"`, `"emitted"` or `"cancelled"`), `puback_at` (`Duration` or `None`) and
+`release()`. Obtain it from `message.publication` or select one from `broker.pending`; for
+type annotations, import `Publication`, like `Message` and `Client`, from `esp32tl.net.mqtt`.
+Successful release of a pending handle returns `True` once. If the stream closes during the
+write (for example on a TLS write error), the handle is cancelled and release returns `False`.
+Releasing an emitted or cancelled handle also returns `False` and sends nothing. These
+observations and controls do not advance time. Every emission, immediate, delayed or released,
+adds `mqtt: CLIENT_ID (connection N) PUBACK PACKET_ID emitted` to the network log.
+
+Every incoming PUBLISH is recorded and routed, including duplicates. Receipts using the same
+packet ID on the same connection **while its PUBACK is pending** share one handle and the first
+receipt's deadline. Their individual `at` and `dup` remain visible in `messages`; DUP is an
+observation, not proof of an earlier receipt. After emission, the same ID starts a new handle,
+even with DUP set. A client must not reuse a pending ID for a different exchange: the broker
+cannot distinguish that misuse from a retransmission, so it still joins the receipt to the
+pending handle. When the topic or payload differs from the first receipt, it also logs
+`mqtt: CLIENT_ID (connection N) reused pending packet ID PACKET_ID for a different publication`.
+This model permits duplicate application messages; it promises no exactly-once delivery or
+content deduplication.
+
+`broker.disconnect(message.client)` closes only that client's active stream, including when it
+uses TLS. It publishes the Will once, cancels pending ACKs, removes subscriptions and leaves PPP,
+other streams and DNS/NTP usable. Graceful MQTT DISCONNECT cancels ACKs but suppresses the Will.
+Transport loss, keepalive expiry, client-ID takeover and network reset also cancel pending ACKs.
+Expiry wins if keepalive and PUBACK have the same deadline. An already emitted ACK stays emitted;
+closing does not retract bytes already queued in the transport.
+
+A reconnect gets a new `connection_id`. Reusing a client ID and packet ID cannot make an old
+handle valid again. Retained messages and receipt history survive, but subscriptions and pending
+exchanges are ephemeral, even for `CleanSession=0`; CONNACK always reports no session present.
+The client can retransmit, producing a new receipt and handle. Broker-side session restoration
+is not provided.
+
+Keep three observations separate: `message.at` proves broker receipt; `puback_at` proves that
+PUBACK was handed to the stream (before TCP buffering, simulated link latency and device
+scheduling); neither proves firmware processing or durable delivery bookkeeping. After emission,
+wait for a device-visible result appropriate to that firmware to establish processing. The
+broker cannot assert that the device committed delivery. The shipped `pppos_client` and position
+tracker publish QoS 0; a QoS 1 scenario needs firmware that actually requests QoS 1.
 
 ## DNS, time and services
 

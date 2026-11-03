@@ -269,3 +269,283 @@ def test_mqtt_conditions_are_named_and_reject_truth_testing(
     assert condition()
     with pytest.raises(TypeError, match="call the MQTT condition"):
         bool(condition)
+
+
+PUBLISH = b"\x32\x0a\0\x03a/b\0\x09new"
+DUPLICATE = b"\x3a" + PUBLISH[1:]
+PUBACK = b"\x40\x02\0\x09"
+
+
+def test_default_puback_records_emission_separately_from_receipt() -> None:
+    broker = Broker(lambda: 20)
+    sent: list[bytes] = []
+    session = broker.accept(("10.0.0.2", 100), sent.append, lambda: None)
+    session.on_data(CONNECT + PUBLISH)
+    message = broker.messages[0]
+    assert message.connection_id == broker.clients[0].connection_id
+    assert message.packet_id == 9 and not message.dup
+    handle = message.publication
+    assert handle is not None and handle.messages == (message,)
+    assert handle.status == "emitted" and handle.puback_at == message.at
+    assert sent[-1] == PUBACK and broker.pending == ()
+    assert not handle.release()
+    # QoS 0, test publications and Wills have no incoming PUBACK handle.
+    session.on_data(b"\x30\x08\0\x03a/bnew")
+    broker.publish("a/b", "test", qos=1)
+    assert all(m.publication is None and m.packet_id is None for m in broker.messages[1:])
+    assert broker.messages[-1].connection_id is None
+
+
+def test_rejected_connect_uses_a_connection_id_and_accepted_records_carry_theirs() -> None:
+    from esp32tl.net.mqtt import ConnackCode
+
+    broker = Broker(lambda: 0, connection_policy=lambda c: ConnackCode.NOT_AUTHORIZED)
+    rejected = broker.accept(("10.0.0.2", 100), lambda b: None, lambda: None)
+    rejected.on_data(CONNECT)
+    assert rejected.closed and not broker.clients
+    broker.connection_policy = None
+    session = broker.accept(("10.0.0.2", 101), lambda b: None, lambda: None)
+    # A Will on topic a/w, then a QoS 1 publication.
+    session.on_data(b"\x10\x16\0\x04MQTT\x04\x06\0\x0a\0\x01c\0\x03a/w\0\x02by" + PUBLISH)
+    assert session.connection_id > rejected.connection_id
+    assert broker.clients[0].connection_id == session.connection_id
+    assert broker.messages[0].connection_id == session.connection_id
+    broker.disconnect("c")
+    assert broker.messages[-1].topic == "a/w"
+    assert broker.messages[-1].connection_id == session.connection_id
+
+
+def test_qos_zero_publish_with_dup_closes_as_malformed() -> None:
+    log: list[str] = []
+    broker = Broker(lambda: 0, log.append)
+    session = broker.accept(("10.0.0.2", 100), lambda b: None, lambda: None)
+    session.on_data(CONNECT + b"\x38\x08\0\x03a/bnew")
+    assert session.closed and not broker.messages
+    assert log[-1] == "mqtt: malformed or unsupported packet, closing"
+
+
+def test_pending_id_reused_for_different_content_is_merged_and_logged() -> None:
+    log: list[str] = []
+    broker = Broker(lambda: 0, log.append)
+    broker.puback = "hold"
+    session = broker.accept(("10.0.0.2", 100), lambda b: None, lambda: None)
+    session.on_data(CONNECT + PUBLISH + DUPLICATE)
+    connection = broker.clients[0].connection_id
+    reuse = (
+        f"mqtt: c (connection {connection}) reused pending packet ID 9 for a different publication"
+    )
+    assert reuse not in log
+    session.on_data(DUPLICATE[:-3] + b"XYZ")
+    (handle,) = broker.pending
+    assert [m.payload for m in handle.messages] == [b"new", b"new", b"XYZ"]
+    assert log.count(reuse) == 1
+    assert handle.release()
+    assert log[-1] == f"mqtt: c (connection {connection}) PUBACK 9 emitted"
+
+
+def test_hold_routes_duplicates_and_release_acknowledges_only_the_selected_exchange() -> None:
+    from esp32tl.units import Duration
+
+    now = [20]
+    broker = Broker(lambda: now[0])
+    broker.puback = "hold"
+    sent: list[bytes] = []
+    session = broker.accept(("10.0.0.2", 100), sent.append, lambda: None)
+    session.on_data(CONNECT + SUBSCRIBE + PUBLISH)
+    first = broker.pending[0]
+    # Another packet ID, and a retransmission of the first, all reach subscribers.
+    session.on_data(PUBLISH[:8] + b"\x0a" + PUBLISH[9:] + DUPLICATE)
+    assert len(broker.pending) == 2 and len(broker.messages) == 3
+    assert len([p for p in sent if p[0] == 0x32]) == 3
+    assert [m.dup for m in broker.messages] == [False, False, True]
+    assert first.messages == (broker.messages[0], broker.messages[2])
+    assert broker.messages[2].publication is first
+    assert first.puback_at is None and PUBACK not in sent
+    now[0] = 50
+    assert first.release()
+    assert first.status == "emitted" and first.puback_at == Duration(50)
+    assert sent.count(PUBACK) == 1 and len(broker.pending) == 1
+    assert not first.release()
+    # The same ID after emission is a new exchange, even if DUP remains set.
+    session.on_data(DUPLICATE)
+    reused = broker.messages[-1].publication
+    assert reused is not None and reused is not first and reused.status == "pending"
+    assert not first.release() and reused.puback_at is None
+    assert reused.release() and sent.count(PUBACK) == 2
+
+
+def test_delayed_puback_uses_first_receipt_and_policy_changes_only_new_exchanges() -> None:
+    from esp32tl.units import Duration
+
+    now = [20]
+    broker = Broker(lambda: now[0])
+    broker.puback = Duration(100)
+    sent: list[bytes] = []
+    session = broker.accept(("10.0.0.2", 100), sent.append, lambda: None)
+    session.on_data(CONNECT + PUBLISH)
+    handle = broker.pending[0]
+    assert broker.quiet_until() == 120
+    now[0] = 100
+    broker.puback = "immediate"
+    session.on_data(DUPLICATE)
+    broker.poll()
+    assert handle.puback_at is None and broker.quiet_until() == 120
+    now[0] = 119
+    broker.poll()
+    assert PUBACK not in sent
+    now[0] = 120
+    broker.poll()
+    assert handle.puback_at == Duration(120) and sent.count(PUBACK) == 1
+    assert broker.quiet_until() == 15_000_000_100
+    session.on_data(PUBLISH)
+    assert broker.messages[-1].publication is not handle
+    assert sent.count(PUBACK) == 2
+
+
+@pytest.mark.parametrize("policy", ["immediate", "zero", "delay"])
+def test_manual_release_cancels_a_scheduled_puback(policy: str) -> None:
+    from esp32tl.units import Duration
+
+    now = [0]
+    broker = Broker(lambda: now[0])
+    broker.puback = (
+        "immediate" if policy == "immediate" else Duration(0 if policy == "zero" else 100)
+    )
+    sent: list[bytes] = []
+    session = broker.accept(("10.0.0.2", 100), sent.append, lambda: None)
+    session.on_data(CONNECT + PUBLISH)
+    handle = broker.messages[0].publication
+    assert handle is not None
+    now[0] = 50
+    assert handle.release() is (policy == "delay")
+    now[0] = 100
+    broker.poll()
+    assert sent.count(PUBACK) == 1
+    assert handle.puback_at == Duration(50 if policy == "delay" else 0)
+
+
+@pytest.mark.parametrize("ending", ["disconnect", "graceful", "loss", "takeover", "keepalive"])
+def test_connection_end_cancels_pending_ack_and_stale_release_cannot_ack_reconnect(
+    ending: str,
+) -> None:
+    from esp32tl.units import seconds
+
+    now = [0]
+    broker = Broker(lambda: now[0])
+    # The one-second keepalive expires at the same instant as the ACK deadline.
+    broker.puback = seconds(1.5)
+    sent: list[bytes] = []
+    closed: list[bool] = []
+    session = broker.accept(("10.0.0.2", 100), sent.append, lambda: closed.append(True))
+    session.on_data(b"\x10\x18\0\x04MQTT\x04\x2e\0\x01\0\x01c\0\x03a/b\0\x04gone")
+    session.on_data(PUBLISH)
+    old = broker.pending[0]
+    now[0] = 1_500_000_000
+    replacement = None
+    if ending == "disconnect":
+        assert broker.disconnect("c")
+        assert not broker.disconnect("c")
+    elif ending == "graceful":
+        session.on_data(b"\xe0\0")
+    elif ending == "loss":
+        session.on_close()
+    elif ending == "takeover":
+        replacement = broker.accept(("10.0.0.2", 101), sent.append, lambda: None)
+        replacement.on_data(CONNECT)
+    else:
+        broker.poll()
+    assert old.status == "cancelled" and old.puback_at is None
+    pending = broker.pending
+    assert pending == () and not old.release() and PUBACK not in sent
+    assert closed == [True]
+    wills = [m for m in broker.messages if m.payload == b"gone"]
+    assert len(wills) == (0 if ending == "graceful" else 1)
+    if wills:
+        assert wills[0].at == seconds(1.5) and wills[0].publication is None
+        assert wills[0].connection_id == old.connection_id
+    if replacement is None:
+        replacement = broker.accept(("10.0.0.2", 101), sent.append, lambda: None)
+        replacement.on_data(CONNECT)
+    broker.puback = "hold"
+    replacement.on_data(DUPLICATE)
+    new = broker.pending[0]
+    assert new.connection_id != old.connection_id and new.packet_id == old.packet_id
+    assert broker.clients[-1].connection_id == new.connection_id
+    assert not old.release() and new.puback_at is None
+    now[0] += 1
+    assert new.release() and sent.count(PUBACK) == 1
+    broker.poll()
+    assert sent.count(PUBACK) == 1
+
+
+@pytest.mark.parametrize("bad", ["later", None, 2, -1])
+def test_puback_policy_refuses_invalid_values(bad: object) -> None:
+    broker = Broker(lambda: 0)
+    with pytest.raises(ValueError, match="PUBACK policy must be"):
+        broker.puback = bad  # type: ignore[assignment]
+    assert broker.puback == "immediate"
+
+
+def test_puback_delay_refuses_negative_duration() -> None:
+    from esp32tl.units import Duration
+
+    broker = Broker(lambda: 0)
+    with pytest.raises(ValueError, match="PUBACK delay must be nonnegative"):
+        broker.puback = Duration(-1)
+
+
+def test_disconnect_leaves_other_clients_pending_and_emitted_history_intact() -> None:
+    from esp32tl.units import Duration
+
+    now = [0]
+    broker = Broker(lambda: now[0])
+    broker.puback = "hold"
+    first_sent: list[bytes] = []
+    first = broker.accept(("10.0.0.2", 100), first_sent.append, lambda: None)
+    first.on_data(CONNECT + PUBLISH)
+    held = broker.pending[0]
+    second_sent: list[bytes] = []
+    second = broker.accept(("10.0.0.2", 101), second_sent.append, lambda: None)
+    second.on_data(CONNECT[:-1] + b"d" + PUBLISH)
+    other = broker.messages[-1].publication
+    assert other is not None and other is not held
+    assert not broker.disconnect("unknown")
+    assert list(broker.pending) == [held, other]
+    assert broker.disconnect("c")
+    assert broker.pending == (other,)
+    assert not held.release() and PUBACK not in first_sent
+    now[0] = 30
+    assert other.release() and second_sent[-1] == PUBACK
+    assert broker.disconnect("d")
+    assert other.status == "emitted" and other.puback_at == Duration(30)
+    assert not other.release() and broker.quiet_until() is None
+
+
+def test_failed_stream_write_cancels_instead_of_claiming_puback_emission() -> None:
+    broker = Broker(lambda: 0)
+    broker.puback = "hold"
+
+    def write(data: bytes) -> None:
+        if data == PUBACK:
+            session.on_close()  # The TLS adapter closes synchronously on an SSL write error.
+
+    session = broker.accept(("10.0.0.2", 100), write, lambda: None)
+    session.on_data(CONNECT + PUBLISH)
+    handle = broker.pending[0]
+    assert not handle.release()
+    assert handle.status == "cancelled" and handle.puback_at is None
+    assert not handle.release() and not broker.pending
+
+
+def test_late_poll_stamps_actual_emission_time_and_does_not_backdate() -> None:
+    from esp32tl.units import Duration
+
+    now = [0]
+    broker = Broker(lambda: now[0])
+    broker.puback = Duration(100)
+    session = broker.accept(("10.0.0.2", 100), lambda data: None, lambda: None)
+    session.on_data(CONNECT + PUBLISH)
+    handle = broker.pending[0]
+    now[0] = 200
+    broker.poll()
+    assert handle.puback_at == Duration(200)

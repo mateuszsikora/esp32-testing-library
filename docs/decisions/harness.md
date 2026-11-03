@@ -1640,7 +1640,7 @@ notifications wait for a firmware test that needs them.
 
 ## The MQTT service implements ephemeral sessions and QoS zero and one
 
-Status: decided (#30)
+Status: decided (#30, #104)
 
 The broker grants subscription QoS at most 1 and refuses QoS 2 publications. Subscriptions and
 unacknowledged deliveries belong to a connection and are not restored on reconnect; CONNACK
@@ -1674,6 +1674,22 @@ there. Policy exceptions are test errors, rather than hiding test bugs as authen
 failures or malformed firmware traffic. A directly used broker raises them from `on_data`; in a
 board run the policy runs in the link's turn, so the link fails naming the exception and the run
 ends, and the test's wait raises `RunEnded`. Both histories survive network reset.
+
+Incoming QoS 1 PUBACK timing belongs to the broker: `puback` selects immediate (the default),
+held or emulated-clock-delayed emission for each new exchange. Each receipt carries a
+connection ID, packet ID and DUP bit, and references a public `Publication` handle. Pending
+receipts with the same connection/packet ID share that handle and its original deadline; every
+receipt is routed, since QoS 1 permits duplicates. After emission or reconnect, reuse creates a
+new handle. `release()` is idempotent; closure cancels pending handles permanently. `disconnect`
+closes one client's stream through the Will path, leaving PPP and unrelated traffic intact.
+The model records receipt and PUBACK emission separately and does not infer device processing
+or durable delivery from either. Protocol tests cover plain TCP and TLS over PPP, including NTP
+and a second connection while the first reconnects. Existing firmware examples use QoS 0.
+
+**Rejected:** resetting the modem to simulate a broker fault, because it destroys the independent
+network path under test; using client ID plus packet ID as a permanent publication identity,
+because both can be reused; hiding duplicate receipts or treating PUBACK emission as exactly-once
+delivery. Persistent sessions remain unsupported, including when CleanSession is zero.
 
 ## TLS determinism compares explicit plaintext transcripts
 

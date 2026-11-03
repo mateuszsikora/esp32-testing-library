@@ -5,9 +5,9 @@ publish too.
 
 import struct
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from enum import IntEnum
-from typing import Generic, TypeVar
+from typing import Generic, Literal, TypeVar
 
 from esp32tl.units import Duration
 
@@ -40,6 +40,10 @@ class Message:
     payload: bytes
     qos: int
     retain: bool
+    connection_id: int | None = None
+    packet_id: int | None = None
+    dup: bool = False
+    publication: "Publication | None" = field(default=None, compare=False, repr=False)
 
     @property
     def text(self) -> str:
@@ -54,6 +58,61 @@ class Client:
     password: bytes | None
     keepalive: int
     will_topic: str | None
+    connection_id: int = 0
+
+
+class Publication:
+    """One incoming QoS 1 exchange. Repeated receipts share this handle until PUBACK.
+
+    `puback_at` records emission to the stream, never processing by the device. Closing the
+    connection cancels a pending handle; releasing it then returns False, even after reconnect.
+    """
+
+    def __init__(self, session: "_Session", packet_id: int, due: int | None) -> None:
+        self._session = session
+        self._packet_id = packet_id
+        self._due = due
+        self._messages: list[Message] = []
+        self._status: Literal["pending", "emitted", "cancelled"] = "pending"
+        self._puback_at: Duration | None = None
+
+    @property
+    def messages(self) -> tuple[Message, ...]:
+        return tuple(self._messages)
+
+    @property
+    def connection_id(self) -> int:
+        return self._session.connection_id
+
+    @property
+    def packet_id(self) -> int:
+        return self._packet_id
+
+    @property
+    def status(self) -> Literal["pending", "emitted", "cancelled"]:
+        return self._status
+
+    @property
+    def puback_at(self) -> Duration | None:
+        return self._puback_at
+
+    def release(self) -> bool:
+        """Emit one PUBACK now. Return False for an emitted or cancelled handle."""
+        if self._status != "pending":
+            return False
+        session = self._session
+        session.write(_packet(PUBACK, 0, struct.pack(">H", self.packet_id)))
+        # A TLS write failure can close the session synchronously.
+        if self._status != "pending":
+            return False
+        self._status = "emitted"
+        self._puback_at = Duration(session.broker._now())
+        del session.incoming[self.packet_id]
+        session.broker._log(
+            f"mqtt: {session.client_id} (connection {self.connection_id}) "
+            f"PUBACK {self.packet_id} emitted"
+        )
+        return True
 
 
 class ConnackCode(IntEnum):
@@ -154,11 +213,14 @@ class Broker:
         self.retained: dict[str, Message] = {}
         self._sessions: list[_Session] = []
         self._anonymous = 0
+        self._connections = 0
+        self._puback: Literal["immediate", "hold"] | Duration = "immediate"
 
     def accept(
         self, peer: tuple[str, int], write: Callable[[bytes], None], close: Callable[[], None]
     ) -> "_Session":
-        session = _Session(self, peer, write, close)
+        self._connections += 1
+        session = _Session(self, peer, write, close, self._connections)
         self._sessions.append(session)
         return session
 
@@ -172,6 +234,34 @@ class Broker:
                 return candidate
 
     # The test's side.
+
+    @property
+    def puback(self) -> Literal["immediate", "hold"] | Duration:
+        """Policy for new incoming QoS 1 exchanges; existing pending handles keep theirs."""
+        return self._puback
+
+    @puback.setter
+    def puback(self, policy: Literal["immediate", "hold"] | Duration) -> None:
+        if isinstance(policy, Duration):
+            if policy.ns < 0:
+                raise ValueError("PUBACK delay must be nonnegative")
+        elif policy not in ("immediate", "hold"):
+            raise ValueError("PUBACK policy must be 'immediate', 'hold', or a Duration")
+        self._puback = policy
+
+    @property
+    def pending(self) -> tuple[Publication, ...]:
+        """Pending handles, grouped by connection and then by first receipt."""
+        return tuple(p for session in self._sessions for p in session.incoming.values())
+
+    def disconnect(self, client_id: str) -> bool:
+        """Close this client's stream as a connection loss, including its Will, if connected."""
+        for session in list(self._sessions):
+            if session.connected and session.client_id == client_id:
+                self._log(f"mqtt: {client_id} disconnected by the test")
+                session.on_close()
+                return True
+        return False
 
     def message(
         self, topic: str = "#", payload: bytes | str | None = None
@@ -257,9 +347,14 @@ class Broker:
             if session.deadline is not None and self._now() >= session.deadline:
                 self._log(f"mqtt: {session.client_id} keepalive expired")
                 session.on_close()
+        # Connection expiry wins a tie with a PUBACK deadline.
+        for publication in self.pending:
+            if publication._due is not None and self._now() >= publication._due:
+                publication.release()
 
     def quiet_until(self) -> int | None:
         deadlines = [s.deadline for s in self._sessions if s.deadline is not None]
+        deadlines.extend(p._due for p in self.pending if p._due is not None)
         return min(deadlines, default=None)
 
     # Routing.
@@ -283,6 +378,7 @@ class _Session:
         peer: tuple[str, int],
         write: Callable[[bytes], None],
         close: Callable[[], None],
+        connection_id: int,
     ) -> None:
         self.broker = broker
         self.peer = peer
@@ -290,6 +386,8 @@ class _Session:
         self.close = close
         self.buffer = bytearray()
         self.client_id = "?"
+        self.connection_id = connection_id
+        self.incoming: dict[int, Publication] = {}
         self.subscriptions: dict[str, int] = {}
         self.will: Message | None = None
         self.packet_id = 0
@@ -430,6 +528,7 @@ class _Session:
                 connect.will_payload,
                 connect.will_qos,
                 connect.will_retain,
+                connection_id=self.connection_id,
             )
         for session in list(broker._sessions):
             if session is not self and session.connected and session.client_id == self.client_id:
@@ -444,6 +543,7 @@ class _Session:
                 connect.password,
                 connect.keepalive,
                 connect.will_topic,
+                self.connection_id,
             )
         )
         broker._log(f"mqtt: {self.client_id} connected")
@@ -461,15 +561,54 @@ class _Session:
             topic, at = _string(body, 0)
             if not topic or "+" in topic or "#" in topic or qos > 1:
                 raise ValueError("unsupported PUBLISH topic or QoS")
+            if not qos and flags & 8:
+                raise ValueError("DUP set on a QoS 0 PUBLISH")
             packet_id = None
             if qos:
                 (packet_id,) = struct.unpack(">H", body[at : at + 2])
                 at += 2
                 if not packet_id:
                     raise ValueError("zero packet id")
-            broker._route(Message(now, self.client_id, topic, body[at:], qos, retain))
-            if qos == 1:
-                self.write(_packet(PUBACK, 0, struct.pack(">H", packet_id)))
+            publication = None
+            if packet_id is not None:
+                publication = self.incoming.get(packet_id)
+                if publication is not None:
+                    first = publication._messages[0]
+                    if (first.topic, first.payload) != (topic, body[at:]):
+                        broker._log(
+                            f"mqtt: {self.client_id} (connection {self.connection_id}) "
+                            f"reused pending packet ID {packet_id} for a different publication"
+                        )
+                else:
+                    policy = broker.puback
+                    due = (
+                        None
+                        if policy == "hold"
+                        else now.ns + (policy.ns if isinstance(policy, Duration) else 0)
+                    )
+                    publication = Publication(self, packet_id, due)
+                    self.incoming[packet_id] = publication
+            message = Message(
+                now,
+                self.client_id,
+                topic,
+                body[at:],
+                qos,
+                retain,
+                self.connection_id,
+                packet_id,
+                bool(flags & 8),
+                publication,
+            )
+            if publication is not None:
+                publication._messages.append(message)
+            broker._route(message)
+            if (
+                publication is not None
+                and publication._due is not None
+                and publication._due <= now.ns
+            ):
+                publication.release()
 
         elif kind == SUBSCRIBE:
             packet_id, at = body[:2], 2
@@ -533,6 +672,9 @@ class _Session:
         if not self.closed:
             self.closed = True
             self.deadline = None
+            for publication in self.incoming.values():
+                publication._status = "cancelled"
+            self.incoming.clear()
             if self in self.broker._sessions:
                 self.broker._sessions.remove(self)
             self.close()
