@@ -384,12 +384,15 @@ and when the firmware reconnects is up to the firmware:
 next_started = listener.next_handshake_started()
 next_completed = listener.next_handshake_completed()
 modem.lose_registration()  # Ends data mode.
-board.wait(seconds(5))  # TODO(owner): how long a given firmware takes to notice the lost link.
+board.wait(seconds(5))  # Long enough for the firmware to notice the lost link.
 modem.register()
 board.wait_until(next_started, within=seconds(60))
 board.wait_until(next_completed, within=seconds(60))
 assert listener.handshake_completed()  # Cumulative history query remains available.
 ```
+
+TODO(owner): the 5 seconds is a placeholder; how long the outage must last depends on how
+quickly the firmware notices the lost link.
 
 Each `next_handshake_*()` call captures its corresponding counter immediately and returns a
 condition that becomes true only when that counter increases. Existing successes cannot satisfy
