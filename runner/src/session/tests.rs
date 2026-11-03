@@ -2299,6 +2299,36 @@ fn the_station_loses_its_access_point_with_the_power_and_finds_a_fresh_one_after
     assert_eq!(guest.taken[0].1, frame(2));
 }
 
+#[test]
+fn an_access_point_switched_with_the_supply_off_is_as_the_peer_left_it_at_power_on() {
+    let mut guest = WifiGuest::new(Vec::new(), 64);
+    let mut peer = FakePeer::new(
+        &[],
+        scripted(vec![
+            (MS, power(MS, false)),
+            (2 * MS, wifi_ap(2 * MS, false)),
+            (3 * MS, power(3 * MS, true)),
+            (4 * MS, power(4 * MS, false)),
+            (5 * MS, wifi_ap(5 * MS, true)),
+            (6 * MS, power(6 * MS, true)),
+        ]),
+    );
+    let (end, _) = run_wifi(cycles(8 * MS), &mut guest, &mut peer);
+    assert!(matches!(end, End::MaxSeconds), "{end:?}");
+    // nothing reaches the station's link while it has no power, and the power-on reset
+    // finds the access point as the peer last switched it
+    assert_eq!(
+        guest.switches,
+        [
+            (cycles(MS), false),
+            (cycles(3 * MS), false),
+            (cycles(4 * MS), false),
+            (cycles(6 * MS), true),
+        ]
+    );
+    assert_eq!(guest.asked_to_leave, 0);
+}
+
 /// On the emulator itself: what `power_on_reset` leaves of the chip. A ROM without segments is
 /// enough here: the test looks at the memories, and runs nothing.
 #[test]

@@ -603,19 +603,22 @@ class Esp32Sim(Board):
         power."""
         if not self.powered:
             raise BoardOff("the board is off: board.reset() resets a board that is on")
+        self._hold.check("board.reset()")
         now = self._hold.now
         self.link.board_input(ChipReset(now))
         self.log.test(now, "board.reset()")
 
     def _switch(self, on: bool) -> None:
         """The board's supply on or off at the board's time now, for the runner and for the
-        models on it."""
+        models on it; `RunEnded`, and nothing switched, once the run has ended."""
+        step = "board.power_on()" if on else "board.power_off()"
+        self._hold.check(step)
         now = self._hold.now
         self.link.board_input(Power(now, on))
         self._supply = on
         for uart in self._uarts.values():
             uart.supply(on)
-        self.log.test(now, "board.power_on()" if on else "board.power_off()")
+        self.log.test(now, step)
 
     @property
     def now(self) -> Duration:

@@ -398,7 +398,9 @@ for a `frm_err` without its `pin`; `receives there with no baud set` when the ro
 
 The last message of a run, sent just before the runner closes the socket (section 9). `t` is
 where the run ended: the end of the last slice, or, after a `stop`, that turn's `sync` `t`.
-`inputs_on_output` counts the `input_on_output` warnings. `end`
+`resets` counts the `reset` messages: the guest's own resets, and those of the peer's
+`chip_reset` and of its `power` that brings the supply back (5.5). `inputs_on_output` counts the
+`input_on_output` warnings. `end`
 says why: `max_seconds`, `stop`, `signal`, `emulator` (then also `stop`, the `Stop` variant's name,
 and `detail`, its `Debug` form), or `protocol_error` (then also `detail`). `inputs_not_applied`
 counts the queued input messages not yet applied when the run ended, and `rx_bytes_not_paced` the
@@ -418,7 +420,8 @@ the whole run:
   `esp-soc/src/wifi.rs:578-583`);
 - `eth_rx`: `eth_rx` frames the station's link took;
 - `eth_rx_dropped`: `eth_rx` frames that came due while the access point was off the air, or that
-  the runner still held when it went off (5.16);
+  the runner still held when it went off (5.16), and those that came due while the board's supply
+  was off (5.17);
 - `rx_dropped`: frames from the air, beacons included, that found no free descriptor in the
   station's receive ring (`StationLink::rx_dropped`).
 
@@ -610,7 +613,9 @@ comes back. The SD card of `--sd-rw` loses its power: it leaves SPI mode and for
 initialisation, and a block it had not received whole is lost; the blocks it took are in the
 image already. With `--wifi`, the station leaves the air without a word, the access point forgets
 it at once, and `eth_rx` frames that come due while the supply is off are dropped
-(`stats.wifi.eth_rx_dropped`).
+(`stats.wifi.eth_rx_dropped`). A `wifi_ap` while the supply is off only records whether the
+access point is on the air: there is no station to deauthenticate, and the power-on reset puts it
+on the air, or leaves it off, as the peer last switched it.
 
 On: a power-on reset of the chip, then `reset` with cause 1 (5.5), and what follows a reset. The
 chip starts as at the start of the run, but for its flash:
@@ -719,7 +724,8 @@ cycle, into state the run loop shares. The run loop runs the machine in slices: 
 `max_cycles` to the slice's end and calls `run`, which returns `Stop::Halted` there, as it does
 today at `--max-seconds`. A slice ends at the earliest of `B`, the next paced byte, the next
 queued input, the next whole emulated millisecond, and the end of the run, each converted to
-cycles (section 3). While no event is unacknowledged, so that `B` has no `latency` term yet, a
+cycles (section 3); while the board's supply is off the guest does not run, and the next
+millisecond is left out (5.17). While no event is unacknowledged, so that `B` has no `latency` term yet, a
 slice is also at most `latency` long: an event in it sets `B = t + latency`, and the callback
 that records it cannot stop `run`, so a longer slice would carry the guest past that `B`. With a
 `latency` of `0` a slice is one bus cycle until the next event, which is slow: `hello_world`

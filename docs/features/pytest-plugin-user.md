@@ -247,6 +247,12 @@ def test_the_count_survives_a_power_cut(board: Board):
   as the ROM prints it, such as `POWERON_RESET` (1) or `SW_CPU_RESET` (12, `esp_restart()`). The
   first boot is at 0 with cause 1; every reset adds one, whoever caused it: `board.reset()` and
   `power_on()` give cause 1, the firmware and its watchdogs their own. `board.boot` is the last.
+  A boot is there once the board has run into it: right after `board.reset()`, or the
+  `power_on()` that follows a `power_off()`, `board.boot` is still the one before, until the test
+  lets the board run, for as little as `board.wait(ms(1))`.
+- Once the run has ended, `board.reset()`, `board.power_off()` and `board.power_on()` raise
+  `RunEnded` at once, as a wait does, and change nothing:
+  `RunEnded: the run ended at 12 s before board.reset(): the runner exited with code 0; …`.
 - Times stay on the board's clock: `board.now`, the console's lines, the run's log in a failed
   test's report and every tap's recording go on from the first power-on through every boot. What
   the firmware counts from its own boot, `esp_timer_get_time()` or the ESP-IDF log's
@@ -265,7 +271,7 @@ What each kind of restart keeps, on esp32sim:
 | SD card: its files | kept | kept | kept |
 | SD card: its state | kept | kept | uninitialised: the driver mounts it again |
 | GNSS receiver model | sends on | sends on | silent while off; then sends again, with the fix the test gave it |
-| Modem model | keeps its state | keeps its state | off: PPP and its TCP sessions end; it starts again only on a PWRKEY pulse |
+| Modem model | keeps its state | keeps its state | off: PPP and its TCP sessions end; it starts again on a PWRKEY pulse, or the test's `modem.power_on()` |
 | Wi-Fi station | the access point keeps its side of the link | joins a fresh access point again | joins a fresh access point again |
 | Simulated network: broker, HTTP server, DHCP | goes on | goes on | goes on |
 | The test's levels on the lines | kept | kept | kept |
@@ -277,10 +283,11 @@ writes to is the runner's copy, and
 lasts as long as the run. esp32sim carries out each flash program and erase command whole, so a
 power cut falls between two of them: torn writes are not modelled, nor is what a real chip's RAM
 holds after a reset, which is zero here. A replay or a real device at the far end of a route is not
-on the board's supply: it keeps sending, and what it sends while the chip is off, or before the
-firmware has set up its UART again, is lost, each such drop an `unrouted_rx` warning in the link's
-report. Every interface of a board profile is on the board's supply
-([board profiles](board-profiles-user.md#the-profiles-esp32tl-ships)).
+on the board's supply, and keeps sending. Bytes that reach the chip while it is off, or after a
+reset before the firmware has set up its UART again, are lost, each such drop an `unrouted_rx`
+warning in the link's report: from a replay or a real device, and from a model too, an answer or
+a sentence that was on the line when the chip reset or the power went. Every interface of a board
+profile is on the board's supply ([board profiles](board-profiles-user.md#the-profiles-esp32tl-ships)).
 
 On [serial](serial-backend-user.md#power-on-time-and-console), `board.reset()` pulses EN through
 the adapter, and `board.power_off()` and `board.boots` skip the test.

@@ -184,7 +184,7 @@ From `Uart.tap`, in the test body:
 | Message | Exception | Cause |
 |---|---|---|
 | `{interface} is tapped already: one tap per test` | `SourceError` | A second tap of the route |
-| `{interface}: the board is on already: tap a route before board.power_on()` | `SourceError` | From the backend's `_asked`, after power-on |
+| `{interface}: the board is on already: tap a route before board.power_on()` | `SourceError` | From the backend's `_asked`, after power-on; `the board has been on` after `power_off()` |
 | `no backend can tap {interface}` | `SourceError` | `capabilities.check`: no backend declares the tap |
 | `esp32sim: {interface} cannot be tapped on this backend` | pytest's skip | `capabilities.refusal` for this backend |
 | `{interface}: cannot tap into {path}: {directory} is not a directory` | `FileNotFoundError` | The file's directory does not exist; checked after the backend's checks |

@@ -141,7 +141,7 @@ $GPGGA,120001.00,,,,,0,00,99.99,,,,,,*64
 
 | Message | Exception | When |
 |---|---|---|
-| `uart.gnss: the board is on already: give an interface its source before board.power_on()` | `SourceError` | The first model call comes after `board.power_on()` |
+| `uart.gnss: the board is on already: give an interface its source before board.power_on()` | `SourceError` | The first model call comes after `board.power_on()`; `the board has been on` once `board.power_off()` has switched it off again |
 | `uart.gnss replays a recording: it has no receiver to describe; one source per test` | `SourceError` | A model call after `gnss.replay` |
 | `uart.gnss has its source already: one per test` | `SourceError` | `gnss.replay` after a model call |
 | `uart.gnss has no receiver: give it one with gnss.fix(at=...)` | `SourceError` | `gnss.position` before any model call |

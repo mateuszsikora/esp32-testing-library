@@ -162,7 +162,7 @@ In the test body:
 
 | Message | Exception | Cause |
 |---|---|---|
-| `uart.gnss: the board is on already: tap a route before board.power_on()` | `SourceError` | `gnss.tap` after `board.power_on()` |
+| `uart.gnss: the board is on already: tap a route before board.power_on()` | `SourceError` | `gnss.tap` after `board.power_on()`; `the board has been on` once `board.power_off()` has switched it off |
 | `uart.gnss is tapped already: one tap per test` | `SourceError` | A second `gnss.tap` in one test |
 | `uart.gnss: cannot tap into {path}: {directory} is not a directory` | `FileNotFoundError` | The file's directory does not exist |
 | `uart.gnss: cannot tap into {path}: it is the replay of uart.gnss` | `SourceError` | The file is the recording a route replays: the tap would write over it |

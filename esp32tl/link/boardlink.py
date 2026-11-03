@@ -19,7 +19,8 @@ network behind the access point (`Interface.ethernet`), a frame per call, and wh
 in as `eth_rx`, a frame per output.
 
 The backend can also switch the board's supply and pulse the chip's EN pin (`board_input`): the
-message goes out at the start of the next turn, before what the interfaces send. Every `reset` the
+message goes out in the harness's answer to the turn the link is held at, or to the first turn
+before the run reaches it, before what the interfaces send. Every `reset` the
 runner sends is kept in `resets`, in order, and given to `on_reset`.
 
 Warnings and the run's `stats` are kept for the test report. What the harness finds wrong with
@@ -260,9 +261,10 @@ class BoardLink:
         self._answers: list[tuple[Interface, int, bytes]] = []
 
     def board_input(self, message: Power | ChipReset) -> None:
-        """Sends `message` at the start of the next turn, which must not be later than its `t`.
-        Called from the test's thread while the hold keeps the link in a turn, or before the
-        run."""
+        """Sends `message` in the harness's answer to the turn the link is held at, or to the
+        first turn before the run reaches it, ahead of the interfaces' inputs; its `t` must not
+        be before that turn's. Called from the test's thread while the hold keeps the link in a
+        turn, or before the run's first turn."""
         self._board_inputs.append(message)
 
     def run(self, conn: socket.socket) -> None:

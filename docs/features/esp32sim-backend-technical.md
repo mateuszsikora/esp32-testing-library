@@ -75,7 +75,8 @@ so the test overrides any NVS image the build supplies. The call adds
 **`Esp32Sim.power_on(utc=None)`** raises `BoardOff` when the supply is on
 (`the board is on already: call board.power_off() first`). After a `power_off`, with the runner
 started, it switches the supply back on (below), and refuses a `utc` with a `ValueError`. The
-first time it raises a `ValueError` for a `utc` that is not a `datetime` with a timezone; it keeps `utc` converted to UTC,
+first time it raises a `TypeError` for a `utc` that is not a `datetime`, and a `ValueError` for
+one without a timezone; it keeps `utc` converted to UTC,
 or `POWER_ON_UTC`, for `Esp32Sim.utc` and the GNSS receiver's dates, and logs
 `board.power_on(), the world's time {utc}` at 0 once the runner has started. Then:
 
@@ -128,9 +129,12 @@ or `POWER_ON_UTC`, for `Esp32Sim.utc` and the GNSS receiver's dates, and logs
    can miss an exit while this one is in `waitpid()`.
 
 **Resets and the supply.** The runner runs from the first `power_on` to teardown, whatever the
-board does; the test's calls go to it as inputs of the next turn, stamped at the held clock's
-`now`, through `BoardLink.board_input`, which sends them first in that turn, before what the
-interfaces send ([protocol 5.17 and 5.18](../protocol.md#517-power-ext-105)):
+board does; the test's calls go to it stamped at the held clock's `now`, through
+`BoardLink.board_input`, which sends them in the harness's answer to the turn the link is held at
+(the first turn, `t = 0`, when the runner has not reached it yet), when the test next waits,
+first, before what the interfaces send ([protocol 5.17 and 5.18](../protocol.md#517-power-ext-105)).
+Their `t` is that turn's, so `BoardLink`'s check that a board input is not stamped before its turn
+cannot fail with this backend; it is there for another caller:
 
 - `reset()`, with the supply on, queues `ChipReset(now)` and logs `board.reset()`; otherwise
   `BoardOff` (`the board is off: board.reset() resets a board that is on`).
@@ -148,8 +152,18 @@ interfaces send ([protocol 5.17 and 5.18](../protocol.md#517-power-ext-105)):
 
 `_on()`, which `now`, `utc`, `boots` and every wait go through, asks only that the runner has
 started, so the test can wait on a board that is off: the runner idles the guest and still takes
-the turns the clock bounds. `_asked` and `nvs` refuse once the runner has started, with or
-without the supply: `the board is on already` while it is on, `the board has been on` after.
+the turns the clock bounds. `_asked` refuses a source or a tap once the runner has started, with
+or without the supply: `the board is on already` while it is on, `the board has been on` after.
+`nvs` refuses then too, always with `BackendError: board.nvs: write the flash before
+board.power_on()`.
+
+A `reset()`, `power_off()` or `power_on()` once the run has ended (the runner exited, or the
+link failed, and the backend has ended the clock) raises `RunEnded` at once, through
+`HeldClock.check`, and changes nothing: no step in the log, no model switched, nothing queued.
+
+`boots` changes only as the link reads the runner's `reset`, which comes in the turn after the
+reset: right after `board.reset()`, or the `power_on()` after a `power_off()`, `boot` is still
+the boot before it, until the test waits.
 
 **The test's clock.** `HeldClock` is the link's `Hold`: `BoardLink` calls `turn(now)` at the start
 of every turn until the link fails, before it polls the interfaces, from the link thread; after
@@ -337,10 +351,12 @@ repository makes.
 | Name | What |
 |---|---|
 | `Esp32Sim(dut, app_path, msg_queue, meta, profile, directory=None, skip=None, *, build_dir=None)` | The board, off. Attributes: `name = "esp32sim"`, `clock = "emulated-fifo-write"` (the clock the runner's `hello` must name, a replayed recording must be on, and a tap's recording is on), `dut`, `profile` (the `BoardProfile`), `directory`, `app` (the `IdfApp`), `console_output` (a `bytearray`), `console_lines` (a `ConsoleLines`), `log` (the `RunLog`), `process` (the `RunnerPopen`, `None` until power-on), `link` (the `BoardLink`, complete once `close` returns) |
-| `Esp32Sim.power_on(utc=None)` | Starts the runner; `BoardOff` the second time |
-| `Esp32Sim.powered` | Whether `power_on` has started the runner |
+| `Esp32Sim.power_on(utc=None)` | The first time, starts the runner; after `power_off`, switches the supply back on (no `utc`); `BoardOff` with the supply on |
+| `Esp32Sim.power_off()`, `Esp32Sim.reset()` | The supply off; a pulse of EN. Both at the held clock's `now`, sent with the turn the link is held at; `BoardOff` when the board is not in the state they need, `RunEnded` once the run has ended |
+| `Esp32Sim.powered`, `Esp32Sim.started` | Whether the supply is on, from `power_on` to `power_off`; whether `power_on` has started the runner |
+| `Esp32Sim.boots`, `Esp32Sim.boot` | The chip's boots as `Boot`s, the first at 0 with cause 1 and one per `reset` the link has read; the last. `BoardOff` before the first `power_on` |
 | `Esp32Sim.wait(duration)`, `Esp32Sim.wait_until(condition, *, within)`, `Esp32Sim.wait_on_clock(condition, within, description)` | The test's waits, each a `Duration` of the board's time, logged as steps of the test |
-| `Esp32Sim.now`, `Esp32Sim.utc` | The board's time since power-on, a `Duration`; the world's time, a `datetime` in UTC |
+| `Esp32Sim.now`, `Esp32Sim.utc` | The board's time since the first power-on, a `Duration`, through every reset and while the board is off; the world's time, a `datetime` in UTC |
 | `Esp32Sim.uart(role)` | The `Uart` of `uart.<role>` on the link, a `Gnss` for `gnss`; `BackendError` when the profile has no such route |
 | `Esp32Sim.lines` | The `Lines` of the profile's `[lines.<role>]` sets on the link; `BackendError` when the profile has none |
 | `Esp32Sim.sd_card` | The `SdCard` of the profile's slot; `BackendError` when the profile has none |
@@ -349,7 +365,7 @@ repository makes.
 | `Esp32Sim.close()` | Ends the run and writes the taps; raises `BackendError` for a tap that cannot be written, a failing exit code, a killed runner or a link error |
 | `Esp32Sim.report(run=False)`, `Esp32Sim.properties()` | The `esp32sim link` report section, with the run on the board's clock when `run`; the `esp32sim_link` user property's data |
 | `BackendError` | What keeps the backend from starting, or a failing end |
-| `HeldClock(step=STEP_NS)` | `esp32tl/backends/clock.py`: the link's `Hold`, `turn(now)`; `stop()`, `end(reason, at=None)`; the test's `now`, `wait(ns)`, `wait_until(condition, within_ns, description)` |
+| `HeldClock(step=STEP_NS)` | `esp32tl/backends/clock.py`: the link's `Hold`, `turn(now)`; `stop()`, `end(reason, at=None)`; the test's `now`, `wait(ns)`, `wait_until(condition, within_ns, description)`, and `check(step)`, which raises `RunEnded` (`the run ended {when} before {step}: {reason}`) once the run has ended |
 | `nanoseconds(value, what)`, `seconds(ns)` | `esp32tl/backends/clock.py`: a `Duration` of the board's time to nanoseconds, checked; nanoseconds shown as `12.5 s`, as `str(Duration(ns))` |
 | `listen()` | The listening socket and its path, or `BackendError` |
 | `runner_path()`, `rom_path()` | The runner and the ROM ELF, or `BackendError` |

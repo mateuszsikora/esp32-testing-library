@@ -261,7 +261,8 @@ specifies it:
    While `off`, the loop calls `idle_until` instead of `run_until`, with a slice end that leaves
    out the next whole millisecond, so that an hour without power is a few slices; `deliver` drops
    the bytes it paces, as `unrouted_rx`, without handing them to the machine, and `deliver_eth`
-   the frames, as `eth_rx_dropped`.
+   the frames, as `eth_rx_dropped`; `switch_access_point` only sets `ap_on`, which the power-on
+   reset then follows.
 3. `finish` calls `Link::closing`, sends what is left where the end calls for it (after a last
    `collect` for `max_seconds`, a signal and an emulator stop), adds up the station link's drops,
    and sends `stats`, then `Link::close`.
@@ -651,7 +652,9 @@ A failure to write the last messages does not change the exit code: the first ca
   the reset's own `t` follows it at once); `with_the_supply_off_no_pad_is_driven` (a `gpio_out`
   that clears the driven pin, and the peer's level kept); and
   `the_station_loses_its_access_point_with_the_power_and_finds_a_fresh_one_after` (`wifi_forget`
-  at the switch, a frame dropped while off, a fresh access point when the supply comes back).
+  at the switch, a frame dropped while off, a fresh access point when the supply comes back);
+  and `an_access_point_switched_with_the_supply_off_is_as_the_peer_left_it_at_power_on` (no
+  switch reaches the link while off, and the power-on reset follows the last `wifi_ap`).
   `on_the_emulator_a_power_on_reset_clears_sram_and_the_rtc_and_keeps_the_flash` runs
   `power_on_reset` on the real `esp32::Machine` with a ROM of no segments: DRAM, IRAM, the
   cache's RAM and both RTC memories read 0, the flash keeps what was written, the cycle count

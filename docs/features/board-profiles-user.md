@@ -21,8 +21,10 @@ profile does not list it, and it comes last in a profile's interfaces
 ([the wifi fixture](pytest-plugin-user.md#the-wifi-fixture)).
 
 Everything a profile lists is on the board's supply: `board.power_off()` takes the power of the
-chip, the card in its slot and the parts at the far end of its routes together, and
-`board.reset()` that of none of them, only the chip's EN pin
+chip, the card in its slot, and the GNSS receiver and modem models at the far end of its routes
+together, and `board.reset()` that of none of them, only the chip's EN pin. A replay or a real
+device at the far end of a route stands for a part the test does not model, and keeps sending
+whatever the board's supply does
 ([resets and power cycles](pytest-plugin-user.md#resets-and-power-cycles)). On the LilyGO board
 the modem, the L76K receiver and the slot are on the board; on a devkit assembly the receiver
 and the card are wired to the devkit's 3V3. What is beyond the board, the broker, the access

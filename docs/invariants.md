@@ -825,18 +825,25 @@ that references to its number keep their meaning.
      received whole.
      `runner/src/sd_card/tests.rs::after_a_power_cut_the_card_is_uninitialised_and_keeps_its_whole_blocks`
 - **133.** A modem and a GNSS receiver model on the board's supply go off with it; the modem keeps its
-     power through `board.reset()` and comes back off, until PWRKEY, after a power cycle; the
-     receiver sends again with the fix the test gave it.
+     power through `board.reset()` and comes back off, until PWRKEY, after a power cycle, and a
+     supply the test took with `lose_power()` stays taken; the receiver sends again with the fix
+     the test gave it.
      `tests/test_modem_fixture.py::test_the_modem_keeps_its_power_through_a_reset_and_loses_it_with_the_board`,
      `tests/test_modem_model.py::test_a_modem_on_the_board_s_supply_waits_for_pwrkey_when_it_comes_back`,
+     `tests/test_modem_model.py::test_the_board_s_supply_and_the_test_s_lose_power_are_apart`,
      `tests/test_gnss_model.py::test_without_the_board_s_supply_the_receiver_is_silent_and_comes_back_with_its_fix`,
      `tests/test_nmea_reader_model.py::test_the_receiver_loses_its_power_with_the_board_and_keeps_its_fix`
-- **134.** The board's `power` and `chip_reset` go out first in the turn after the test's call, and one
-     stamped before that turn fails the link; an interface cannot send them.
-     `tests/test_boardlink.py::test_the_board_s_power_and_en_go_out_first_in_the_next_turn`,
+- **134.** The board's `power` and `chip_reset` go out once, first in the harness's answer to the turn
+     the link is held at when the test calls for them, and one stamped before that turn fails the
+     link; an interface cannot send them.
+     `tests/test_boardlink.py::test_the_board_s_power_and_en_go_out_first_in_the_answer_to_a_turn`,
      `tests/test_boardlink.py::test_a_board_input_stamped_before_its_turn_fails_the_link`,
      `tests/test_boardlink.py::test_an_interface_cannot_switch_the_board_s_power`
 - **135.** On serial, `board.reset()` pulses EN again, and `board.power_off()` and `board.boot` skip the
      test with their reasons.
      `tests/test_serial_backend.py::test_console_reset_clock_tap_and_autoflash`,
      `tests/test_serial_backend.py::test_serial_capabilities_skip_at_the_call`
+- **136.** Once the run has ended, `board.reset()`, `board.power_off()` and `board.power_on()` raise
+     `RunEnded` at once, and log and switch nothing.
+     `tests/test_clock.py::test_a_step_on_the_board_after_the_end_of_the_run_raises_run_ended_at_once`,
+     `tests/test_pytest_plugin.py::test_the_board_s_power_and_reset_after_the_run_ended_raise_run_ended_and_log_nothing`

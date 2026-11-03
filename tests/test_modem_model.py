@@ -516,6 +516,29 @@ def test_only_a_network_route_fails_on_receive_overflow(tmp_path: Path) -> None:
             assert "uart.modem: UART receive overflow (rxfifo_ovf) on GPIO 27" in str(link.error)
 
 
+def test_the_board_s_supply_and_the_test_s_lose_power_are_apart(tmp_path: Path) -> None:
+    now = [0]
+    modem, lines, _ = route(tmp_path, now)
+    modem.signal(dbm=-73)
+    modem.lose_power()
+    modem.supply(False)
+    modem.supply(True)
+    # the board's power is back, the modem's own supply is still the test's to give back
+    lines.driven(seconds(1).ns, [(4, 1)], frozenset({4}))
+    lines.driven(seconds(1).ns + ms(100).ns, [(4, 0)], frozenset({4}))
+    assert not modem.powered
+    modem.restore_power()
+    lines.driven(seconds(2).ns, [(4, 1)], frozenset({4}))
+    lines.driven(seconds(2).ns + ms(100).ns, [(4, 0)], frozenset({4}))
+    assert modem.powered
+    # and the test's power_on waits for the board's supply
+    modem.supply(False)
+    modem.power_on()
+    assert not modem.powered
+    modem.supply(True)
+    assert not modem.powered
+
+
 def test_a_modem_on_the_board_s_supply_waits_for_pwrkey_when_it_comes_back(
     tmp_path: Path,
 ) -> None:

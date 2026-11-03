@@ -1120,6 +1120,12 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
         if on == self.ap_on {
             return;
         }
+        if self.off {
+            // no station to tell: the power-on reset puts the access point on the air as it
+            // is then
+            self.ap_on = on;
+            return;
+        }
         // whatever came due before the switch goes first
         self.deliver_eth();
         self.ap_on = on;

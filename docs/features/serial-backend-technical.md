@@ -98,7 +98,7 @@ run log: the tap, power-on and wait steps, and received console lines.
 | `name`, `clock`, `report_section`, `report_property` | `serial`, `wall`, `serial console`, `serial_console` |
 | `power_on(utc=None)` | Reset and begin capture; rejects a supplied UTC and repeated successful power-on |
 | `powered`, `started`, `now`, `utc` | Successful power-on (both), monotonic `Duration` since reset request, host-origin UTC plus elapsed time |
-| `reset()` | After power-on, `dut.serial.hard_reset()` again with the reader running; logs `board.reset(): hard reset` at `now` |
+| `reset()` | After power-on, `dut.serial.hard_reset()` again with the reader running; logs `board.reset(): hard reset` at `now`. After `close()`, `BoardOff: serial: the board is closed: the port is pytest-embedded's again`, and the port is not touched |
 | `power_off()`, `boots` | Skip: `serial: the backend cannot switch the board's power`, `serial: the backend does not see the chip's resets` |
 | `wait(duration)`, `wait_until(condition, *, within)` | Wait on wall time; durations are nonnegative `Duration`s |
 | `wait_on_clock(condition, within, description)` | Console-facing wait with a description used in logs and errors |

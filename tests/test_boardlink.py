@@ -874,7 +874,7 @@ def test_the_report_counts_the_stations_frames() -> None:
     ) in link.report().splitlines()
 
 
-def test_the_board_s_power_and_en_go_out_first_in_the_next_turn() -> None:
+def test_the_board_s_power_and_en_go_out_first_in_the_answer_to_a_turn() -> None:
     link = started(Peer(schedule=[(300, b"$")]))
     link.board_input(Power(300, False))
     link.board_input(ChipReset(300))

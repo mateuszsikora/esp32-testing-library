@@ -144,6 +144,8 @@ class Serial(Board):
     def reset(self) -> None:
         """Pulses EN through the adapter's RTS, as power_on does."""
         self._on()
+        if self._closed:
+            raise BoardOff("serial: the board is closed: the port is pytest-embedded's again")
         self.dut.serial.hard_reset()
         self.log.test(self.now.ns, "board.reset(): hard reset")
 
