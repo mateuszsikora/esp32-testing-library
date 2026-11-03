@@ -2029,7 +2029,9 @@ nothing and never moves the boundary; a new wait for another event needs a new c
 TLS completion means a completion event after construction, including an already-started
 handshake. Tests must arm conditions before the action that can produce their event. Immediate
 history queries find a fast publication even after waiting for its connection has returned.
-Application payload schemas stay in the consumer's adapters.
+Application payload schemas stay in the consumer's adapters. `connection_attempt()`, from #117,
+takes the same condition object and boundary but keeps its name; it gets no `next_*` alias and
+no `find_*` query beside the public `connection_attempts` history.
 
 **Postponed:** the same names and condition objects for HTTP and DHCP. `HttpServer.requested()`
 and `Dhcp.leased()` stay future-only conditions with no `next_*` or `find_*` counterpart, no
