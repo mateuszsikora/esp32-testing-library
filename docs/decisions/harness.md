@@ -1620,9 +1620,35 @@ Status: decided (#30)
 The broker grants subscription QoS at most 1 and refuses QoS 2 publications. Subscriptions and
 unacknowledged deliveries belong to a connection and are not restored on reconnect; CONNACK
 reports no session present. Retained publications belong to the test's broker and survive modem
-power cycles. Credentials are recorded, not authenticated. The current validation example uses
-clean sessions. Persistent session restoration and authentication policy wait for a test that
-needs them, rather than pretending to have full broker persistence or an external auth service.
+power cycles. Credentials are recorded without authentication by default; #103 adds an optional
+test-controlled CONNECT policy (see below). The current validation example uses clean sessions.
+Persistent session restoration still waits for a test that needs it, rather than pretending to
+have full broker persistence.
+
+## MQTT CONNECT policy runs before accepted session state is installed
+
+Status: decided (#103)
+
+`Broker.connection_policy` is a replaceable callable from immutable public `Connect` metadata
+to a named MQTT 3.1.1 `ConnackCode`; `None` preserves the accepting default. A test can compare
+credentials, refuse the next attempt with a stateful callable, or change policy between board
+advances. No credential store or external authentication service is needed. MQTT 5 reason codes,
+bare integers and booleans are not accepted as policy results.
+
+Parsing finishes before the policy runs. An empty ID without CleanSession remains a built-in
+rejection that policy cannot override. Other malformed or unsupported requests close without
+policy evaluation. Metadata retains the submitted client ID; allocation of anonymous IDs,
+Will installation and takeover happen only on acceptance, so refusal cannot affect an existing
+client or publish an unaccepted Will. Both TCP and TLS use the same broker policy.
+
+`connection_attempts` records selected outcomes, including built-in identifier rejection, with
+CONNECT metadata, board timestamps and return codes. It is separate from accepted `clients`
+to preserve existing assertions and `connected()` waits. `connection_attempt()` waits for a
+future outcome. Malformed input and TLS failures have no CONNACK outcome and are not recorded
+there. Policy exceptions are test errors, rather than hiding test bugs as authentication
+failures or malformed firmware traffic. A directly used broker raises them from `on_data`; in a
+board run the policy runs in the link's turn, so the link fails naming the exception and the run
+ends, and the test's wait raises `RunEnded`. Both histories survive network reset.
 
 ## TLS determinism compares explicit plaintext transcripts
 
