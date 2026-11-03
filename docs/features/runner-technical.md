@@ -190,7 +190,10 @@ block, with `Io::cycle` `now`, which keeps `sd_io`'s `t` in order with what the 
 meanwhile, and `Io::began` the cycle it began at; with `stopped` true, for a CMD12, it puts back
 each rule in `before` by id, re-inserting by id order one that the block used up. Nothing ends a
 block still held at the end of the run; ESP-IDF always sends a CMD13 after a read
-(`sdmmc_read_sectors_dma`), so it does not leave one held. `clear_rules` drops cleared ids from `before`, so a CMD12 does not bring a cleared rule back.
+(`sdmmc_read_sectors_dma`), so it does not leave one held. `clear_rules` drops cleared ids from
+`before`, so a CMD12 does not bring a cleared rule back. `power_off` takes a begun block as stopped,
+and clears `out`, a delay in it included; `rules` stay, being the peer's, so a rule outlasts a power
+cycle.
 The block still counts in `Stats::blocks_read`, as the card read it from the image.
 
 An operation a rule acted on goes into `SdCard::io` as an `sd_card::Io` (its cycles, op, blocks,
@@ -681,7 +684,8 @@ A failure to write the last messages does not change the exit code: the first ca
   the block a CMD12 stops a CMD18 at, which uses up no rule, a later block reported once the host
   goes on past it, by the next block or another command, with `began` and `cycle` apart, a rule
   cleared meanwhile that CMD12 does not bring back, and one cleared after the block began that
-  still owns it. No test on real firmware goes through CMD18: neither `sdspi` nor
+  still owns it, and a power cut that keeps the rules, ends a delay and undoes a begun block. No
+  test on real firmware goes through CMD18: neither `sdspi` nor
   `sd_data_logger` sends one, so the stop is covered on the card's bytes and against ESP-IDF's
   source (v5.3.6) only.
 - `runner/src/socket_board/tests.rs`: what `SocketBoard` records: every UART byte, and only the

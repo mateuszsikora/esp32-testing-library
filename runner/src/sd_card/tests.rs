@@ -789,3 +789,40 @@ fn a_rule_cleared_after_a_block_began_still_owns_it_at_the_time_it_began() {
     assert_eq!((io.block, io.began, io.cycle), (8, 100, 300));
     assert!(card.rules.is_empty());
 }
+
+#[test]
+fn a_power_cut_keeps_the_rules_ends_a_delay_and_undoes_a_begun_block() {
+    let mut card = card(2);
+    init(&mut card);
+    card.add_rule(Rule {
+        blocks: Some((8, 8)),
+        count: Some(1),
+        ..rule(1, Op::Read, true, 0)
+    });
+    card.add_rule(rule(2, Op::Write, false, 1000));
+    // the card has begun block 8, and it is busy with a write
+    let answer = command(&mut card, 18, 7, 16);
+    data_block(&mut card, after_r1(answer), BLOCK);
+    assert_eq!(xfer(&mut card, &[0xff; 2]), [0xff, ERROR_ECC]);
+    card.power_off();
+    assert!(card.io.is_empty(), "{:?}", card.io);
+    let ids: Vec<u64> = card.rules.iter().map(|r| r.id).collect();
+    assert_eq!(
+        ids,
+        [1, 2],
+        "block 8's rule is back, and neither is the card's to lose"
+    );
+    init(&mut card);
+    assert_eq!(after_r1(command(&mut card, 17, 8, 10))[1], ERROR_ECC);
+    assert_eq!(r1(&command(&mut card, 24, 3, 10)).1, 0);
+    let data = [9; BLOCK];
+    write_block(&mut card, START_BLOCK, &data, crc16(&data));
+    assert_eq!(xfer(&mut card, &[0xff; 2]), [BUSY; 2]);
+    card.power_off();
+    init(&mut card);
+    assert_eq!(
+        first_byte(&mut card, 3),
+        9,
+        "no busy time is left, and the block is there"
+    );
+}

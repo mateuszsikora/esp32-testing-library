@@ -236,9 +236,9 @@ are in [models-technical.md](models-technical.md).
    ([protocol 5.19](../protocol.md#519-sd_fault-and-sd_clear-ext-107)). `BoardLink` checks them
    through the codec like any input, and refuses them from an interface that is not the slot.
    Each `sd_io` the runner sends reaches `card_io`, which makes a `CardIo` at its `began`, with the
-   `CardFault`s of its `rules`, and appends it to `affected` and to each one's `hits`. Each call is a step of
-   the `RunLog` at `now()`, written as the call with its non-default arguments and the rule it
-   made: `sd_card.delay('read', seconds(0.02)): CardFault(1)`.
+   `CardFault`s of its `rules`, and appends it to `affected` and to each one's `hits`. Each call is
+   a step of the `RunLog` at `now()`, written as the call with its non-default arguments and the
+   rule it made: `sd_card.delay('read', seconds(0.02)): CardFault(1)`.
 
 `Console.tap` delegates to the backend's `tap_console`. Both backends reuse `Uart.tap`'s file
 checks for a console-only route and include it in teardown and the no-power-on guard. Serial's

@@ -667,7 +667,9 @@ def test_a_write_that_fails_after_logging_works(board: Board):
   Every rule that matches an operation acts on it: `fail` and `delay` on the same block make a
   failure that comes late.
 - `fault.clear()` and `sd_card.clear_faults()` stop rules from acting on operations that begin
-  from then on; a delay already running runs out.
+  from then on; a delay already running runs out. Rules stay through `board.reset()`, and through
+  `board.power_off()` and `power_on()`, also one given while the board is off; only the delay
+  running when the supply goes off ends with it.
 - `sd_card.fail` and `sd_card.delay` return a `CardFault`, whose `hits` are the operations it
   acted on so far; `sd_card.affected` holds them all and `sd_card.faults` every rule given. Each
   is a `CardIo`: `at` (the board's time it began: the command for a read or an erase, the block's

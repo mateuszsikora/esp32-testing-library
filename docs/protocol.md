@@ -723,8 +723,10 @@ reports the second.
 Every rule that matches an operation acts on it and counts it, in the order given: the operation
 fails if one of them fails it, and is held for the longest of their delays. A rule decides an
 operation when it begins, so a rule given or cleared while an operation is in progress leaves that
-operation alone, and a delay already running runs out. Rules stay in force across a guest reset,
-as the card keeps its power. `ids` that no `sd_fault` has given are a protocol error; ids of rules
+operation alone, and a delay already running runs out. Rules are the peer's, not the card's: they
+stay in force across a guest reset, `chip_reset` and `power`. Losing its power (5.17) ends a delay
+running and undoes a block of CMD18 the card had begun, as a CMD12 does (below); the card keeps
+none of it. `ids` that no `sd_fault` has given are a protocol error; ids of rules
 already used up or cleared are not.
 
 The card reads the bus's clock from the board's `advance_to`, which esp32sim calls at every tick,

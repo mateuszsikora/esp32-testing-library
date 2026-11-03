@@ -377,7 +377,9 @@ begins the block after the last one a host wants from a CMD18 before the host's 
 ESP-IDF's poll for busy before every command reads two bytes of it, so that block counts only once
 the host goes on past it, and a CMD12 that comes first puts the rules back as they were. `sd_io`
 then carries two times: `t`, when it is reported, which may not go back in the stream, and `began`,
-which is what a test reads as `CardIo.at` and what a rule's delay counts from. Every
+which is what a test reads as `CardIo.at` and what a rule's delay counts from. Rules are the test's,
+not the card's, so they outlast a reset and a power cycle of the board, which ends only the card's
+state: a running delay and a begun block. Every
 rule that matches acts and counts, so rules compose without precedence. The runner reports only
 the operations rules acted on (`sd_io`), which keeps a run without rules byte for byte what it
 was, and the protocol at version 1: a peer that gives no rule never sees one.

@@ -215,6 +215,23 @@ def test_a_failed_read_that_comes_late_is_an_invalid_response_to_esp_idf(
     assert ms(1) <= error.at - io.at < ms(10)
 
 
+def test_fault_rules_are_the_test_s_and_outlast_a_power_cycle(
+    tmp_path: Path, board: Esp32Sim, sd_card: SdCard, console: Console
+) -> None:
+    image = fat_image(tmp_path / "card.img")
+    sd_card.insert(image)
+    board.power_on()
+    console.expect_exact("example: Card unmounted", timeout=TIMEOUT)
+    board.power_off()
+    # given with the supply off, it acts on the first read after it comes back
+    broken = sd_card.fail("read", blocks=0)
+    board.power_on()
+    console.expect_exact("example: Failed to mount filesystem.", timeout=TIMEOUT)
+    [io] = broken.hits
+    assert (io.block, io.failed) == (0, True)
+    assert board.boots[-1].number == 2
+
+
 def test_an_empty_slot_never_answers(board: Esp32Sim, console: Console) -> None:
     board.power_on()
     console.expect_exact(

@@ -297,8 +297,11 @@ impl SdCard {
 
     /// The board's supply went off: the card is back where it was when it was inserted, out of
     /// SPI mode and uninitialised, and a block it had not received whole is lost. What it wrote
-    /// is in the image already: a block goes there whole once its CRC is in.
+    /// is in the image already: a block goes there whole once its CRC is in. A delay running
+    /// ends, and the host never took a block of a CMD18 the card had begun. The fault rules stay:
+    /// they are the peer's, not the card's.
     pub fn power_off(&mut self) {
+        self.take_begun(true);
         self.spi = false;
         self.ready = false;
         self.init_left = INIT_POLLS;
