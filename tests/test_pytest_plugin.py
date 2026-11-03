@@ -159,7 +159,7 @@ def test_app_path_marker_needs_one_path(pytester: pytest.Pytester) -> None:
 @pytest.mark.parametrize(
     ("marks", "message"),
     [
-        ("@pytest.mark.board_profile", "the board_profile marker takes one name, as in *"),
+        ("@pytest.mark.board_profile", "the board_profile marker takes one bundled name or *"),
         (
             '@pytest.mark.board_profile("esp32-wrover-kit")',
             "no board profile named 'esp32-wrover-kit';*",
@@ -197,6 +197,237 @@ def test_markers_on_a_class_or_a_module_count(pytester: pytest.Pytester) -> None
     result.stdout.fnmatch_lines(
         ["*::TestModem::test_one: no board profile named 'esp32-wrover-kit'*"]
     )
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        '"esp32-devkitc", path="board.toml"',
+        'name="esp32-devkitc"',
+        'path="board.toml", extra=True',
+        '"one", "two"',
+        "42",
+        "Path('board.toml')",
+        "path=None",
+        "path=42",
+        "path=''",
+        "path=Path('')",
+    ],
+)
+def test_board_profile_rejects_ambiguous_arguments(
+    pytester: pytest.Pytester, arguments: str
+) -> None:
+    pytester.makepyfile(f"""
+        from pathlib import Path
+        import pytest
+        @pytest.mark.board_profile({arguments})
+        def test_profile(board): pass
+    """)
+    result = pytester.runpytest_subprocess("-q")
+    assert result.ret == pytest.ExitCode.INTERRUPTED
+    result.stdout.fnmatch_lines(
+        [
+            "*::test_profile: the board_profile marker takes one bundled name or path=*"
+            "*do not combine them"
+        ]
+    )
+
+
+@pytest.mark.parametrize("name", ["boards/local.toml", "local.toml"])
+def test_a_bundled_name_that_looks_like_a_path_suggests_path(
+    pytester: pytest.Pytester, name: str
+) -> None:
+    pytester.makepyfile(f"""
+        import pytest
+        @pytest.mark.board_profile("{name}")
+        def test_profile(board): pass
+    """)
+    result = pytester.runpytest_subprocess("-q")
+    assert result.ret == pytest.ExitCode.INTERRUPTED
+    result.stdout.fnmatch_lines(
+        [
+            f"*::test_profile: no board profile named '{name}'; the profiles are *;"
+            f' for a local file, use board_profile(path="{name}")'
+        ]
+    )
+
+
+@pytest.mark.parametrize(
+    ("contents", "message"),
+    [
+        (None, "*No such file or directory*"),
+        ("name = [", "*Invalid value*"),
+        (b'name = "local"\nchip = "esp32"\n# \xff\n', "*'utf-8' codec can't decode byte*"),
+        ('name = "wrong"\nchip = "esp32"', "*name: 'wrong' is not the file's name, 'local'*"),
+        ('name = "local"', "*missing chip*"),
+        ('name = "local"\nchip = "esp32s3"', "*chip: 'esp32s3' is not one of esp32*"),
+        (
+            'name = "local"\nchip = "esp32"\n[uart.gnss]\nport = 1\ntx = 4\nrx = 4\nbaud = 9600',
+            "*GPIO 4 is uart.gnss.tx already*",
+        ),
+        (
+            'name = "local"\nchip = "esp32"\n[uart.gnss]\nport = 0\ntx = 4\nrx = 5\nbaud = 9600',
+            "*UART0 is console's*",
+        ),
+    ],
+)
+def test_invalid_local_profiles_fail_at_collection(
+    pytester: pytest.Pytester, contents: str | bytes | None, message: str
+) -> None:
+    path = pytester.path / "local.toml"
+    if contents is not None:
+        path.write_bytes(contents.encode() if isinstance(contents, str) else contents)
+    pytester.makepyfile("""
+        import pytest
+        @pytest.mark.board_profile(path="local.toml")
+        def test_profile(board): pass
+    """)
+    result = pytester.runpytest_subprocess("-q")
+    assert result.ret == pytest.ExitCode.INTERRUPTED
+    result.stdout.fnmatch_lines([f"*::test_profile: {path}: {message}"])
+    result.stdout.no_fnmatch_line("*Traceback*")
+    result.stdout.no_fnmatch_line("*UnicodeDecodeError*")
+
+
+def test_local_profiles_are_test_relative_and_inherited(fake_runner: pytest.Pytester) -> None:
+    suite = fake_runner.path / "suite"
+    suite.mkdir()
+    (suite / "local.toml").write_text('name = "local"\nchip = "esp32"\npsram_mb = 4')
+    (suite / "test_local.py").write_text("""
+from pathlib import Path
+import pytest
+
+pytestmark = [
+    pytest.mark.app_path(".."),
+    pytest.mark.board_profile(path="local.toml"),
+]
+
+def test_module(board):
+    assert board.profile.name == "local"
+    assert board.profile.psram_mb == 4
+
+@pytest.mark.board_profile("lilygo-t-a7670g-r2")
+class TestNamed:
+    def test_class(self, board):
+        assert board.profile.name == "lilygo-t-a7670g-r2"
+
+    @pytest.mark.board_profile(path=Path(__file__).parent / "local.toml")
+    def test_absolute_override(self, board):
+        assert board.profile.name == "local"
+
+@pytest.mark.board_profile(path=Path("local.toml"))
+class TestLocal:
+    def test_class(self, board):
+        assert board.profile.name == "local"
+""")
+    # Invocation directory is the parent of suite; only the test-relative file exists.
+    fake_runner.runpytest_subprocess("-q", str(suite)).assert_outcomes(passed=4)
+
+
+def test_local_profiles_with_the_same_name_keep_separate_snapshots(
+    fake_runner: pytest.Pytester,
+) -> None:
+    for directory, pin in (("one", 18), ("two", 19)):
+        folder = fake_runner.path / directory
+        folder.mkdir()
+        (folder / "esp32-devkitc.toml").write_text(
+            f'name = "esp32-devkitc"\nchip = "esp32"\n[lines.test]\noutput = {pin}\n'
+        )
+        (folder / "test_profile.py").write_text(f"""
+import pytest
+
+pytestmark = [pytest.mark.app_path(".."), pytest.mark.board_profile(path="esp32-devkitc.toml")]
+
+def test_local(board):
+    assert board.profile.name == "esp32-devkitc"
+    assert board.profile.lines["test"]["output"].pin == {pin}
+    assert board.profile.uart == {{}}
+
+@pytest.mark.board_profile("esp32-devkitc")
+def test_bundled(board):
+    assert board.profile.uart["gnss"].tx == 4
+    assert board.profile.lines == {{}}
+""")
+    fake_runner.makeconftest("""
+def pytest_collection_modifyitems(items):
+    # The validated snapshot must reach setup even if its file disappears after collection.
+    for directory in ("one", "two"):
+        (items[0].config.rootpath / directory / "esp32-devkitc.toml").unlink()
+""")
+    fake_runner.runpytest_subprocess("-q", "--import-mode=importlib", "one", "two").assert_outcomes(
+        passed=4
+    )
+
+
+def test_local_profile_snapshot_survives_retargeting_a_symlink(
+    fake_runner: pytest.Pytester,
+) -> None:
+    for directory, size in (("one", 4), ("two", 8)):
+        folder = fake_runner.path / directory
+        folder.mkdir()
+        (folder / "local.toml").write_text(f'name = "local"\nchip = "esp32"\npsram_mb = {size}')
+    (fake_runner.path / "local.toml").symlink_to("one/local.toml")
+    fake_runner.makeconftest("""
+def pytest_runtest_setup(item):
+    link = item.path.parent / "local.toml"
+    link.unlink()
+    link.symlink_to("two/local.toml")
+    (item.path.parent / "one/local.toml").unlink(missing_ok=True)
+""")
+    fake_runner.makepyfile(
+        test_fake="""
+        import pytest
+
+        @pytest.mark.board_profile(path="local.toml")
+        @pytest.mark.parametrize("case", [1, 2])
+        def test_snapshot(board, case):
+            assert board.profile.name == "local"
+            assert board.profile.psram_mb == 4
+    """
+    )
+    fake_runner.runpytest_subprocess("-q").assert_outcomes(passed=2)
+
+
+@pytest.mark.parametrize("late", ["param", "hook"])
+def test_late_local_profile_switch_with_the_same_name_is_refused(
+    pytester: pytest.Pytester, late: str
+) -> None:
+    for directory in ("one", "two"):
+        folder = pytester.path / directory
+        folder.mkdir()
+        (folder / "local.toml").write_text('name = "local"\nchip = "esp32"')
+    pytester.makeconftest(
+        SHOW_PARAMS
+        + (
+            """
+def pytest_collection_modifyitems(items):
+    items[0].add_marker(pytest.mark.board_profile(path="two/local.toml"), append=False)
+"""
+            if late == "hook"
+            else ""
+        )
+    )
+    pytester.makepyfile(
+        """
+import pytest
+pytestmark = pytest.mark.board_profile(path="one/local.toml")
+"""
+        + (
+            """
+@pytest.mark.parametrize("x", [
+    pytest.param(1, marks=pytest.mark.board_profile(path="two/local.toml"))
+])
+"""
+            if late == "param"
+            else '@pytest.mark.parametrize("x", [1])\n'
+        )
+        + """
+def test_local(board, x): pass
+"""
+    )
+    result = pytester.runpytest_subprocess("-q")
+    assert result.ret == pytest.ExitCode.USAGE_ERROR
+    result.stderr.fnmatch_lines(["*the board_profile marker reached the test after*"])
 
 
 @pytest.mark.parametrize(
@@ -1392,18 +1623,29 @@ def test_tapped(board, gnss, console):
 """
 
 
+@pytest.mark.parametrize("local", [False, True])
 def test_a_tap_records_what_crossed_the_route_both_ways(
-    link_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+    link_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch, local: bool
 ) -> None:
     monkeypatch.setenv("FAKE_LINK", "tx")
-    link_runner.makepyfile(test_fake=TAPPED.format(end=""))
+    profile = "local" if local else "esp32-devkitc"
+    marker = ""
+    if local:
+        (link_runner.path / "local.toml").write_text(
+            (ROOT / "esp32tl/boards/esp32-devkitc.toml")
+            .read_text()
+            .replace("esp32-devkitc", profile)
+        )
+        marker = 'import pytest\npytestmark = pytest.mark.board_profile(path="local.toml")\n'
+        monkeypatch.setenv("FAKE_BOARD", profile)
+    link_runner.makepyfile(test_fake=marker + TAPPED.format(end=""))
     result = link_runner.runpytest_subprocess("-p", "no:cacheprovider", "-rA")
     result.assert_outcomes(passed=1)
     tapped = recording.read(link_runner.path / "tap.jsonl")
     replayed = recording.read(link_runner.path / "gnss.jsonl")
     header = tapped.header
     assert (header.board, header.interface, header.source, header.clock, header.end) == (
-        "esp32-devkitc",
+        profile,
         "uart.gnss",
         "replay",
         "emulated-fifo-write",

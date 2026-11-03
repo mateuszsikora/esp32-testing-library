@@ -179,7 +179,10 @@ For esp32sim:
 - `board.app` is the `IdfApp` (`pytest_embedded_idf.app.IdfApp`) the runner flashes, with its
   `target`, `flash_files` and `flash_settings`.
 - `board.profile` is the board profile the test runs on: `esp32-devkitc`, unless the
-  `board_profile` marker names another ([board profiles](board-profiles-user.md#choosing-a-profile)).
+  `board_profile` marker selects another by bundled name or by
+  `@pytest.mark.board_profile(path="boards/test-board.toml")`. A relative path starts at the test
+  file's directory, also for inherited markers; strings and `pathlib.Path` are accepted.
+  Name and path cannot be combined ([board profiles](board-profiles-user.md#choosing-a-profile)).
   A test that only reads it needs no `power_on()`, and no runner starts for it.
 - `board.console_output` is every byte the firmware has printed on its console so far.
 - `board.dut` is pytest-embedded's `Dut`, the same object as its `dut` fixture; its log,

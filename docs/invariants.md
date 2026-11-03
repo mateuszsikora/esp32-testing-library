@@ -80,8 +80,24 @@ that references to its number keep their meaning.
     never an input-only GPIO, nor is an SD card slot's SCLK, MOSI or CS, though its MISO may be;
     and no GPIO serves two uses, the console's UART0 on GPIO 1 and 3 and the slot's four pins
     counted.
+    Invalid UTF-8 raises `ProfileError`; through the marker it fails collection with the test id
+    and resolved file path, without a traceback.
+    `tests/test_pytest_plugin.py::test_invalid_local_profiles_fail_at_collection`,
     `tests/test_boards.py::test_a_profile_that_breaks_the_schema_is_refused_with_the_key`,
     `tests/test_boards.py::test_an_sd_card_slot_may_take_an_input_only_pin_for_miso`
+- **123.** A local `board_profile(path=...)` resolves against the test file, independently of the
+    invocation directory and marker inheritance. Its validated snapshot lasts for the pytest
+    session, including after a symlink is retargeted at setup; different resolved paths and a
+    bundled namesake never share cached profile data.
+    A late switch between same-name files is refused, even with identical contents. Both
+    backends and their recordings use the selected profile's TOML name; on esp32sim, its route
+    metadata too.
+    `tests/test_pytest_plugin.py::test_local_profiles_are_test_relative_and_inherited`,
+    `tests/test_pytest_plugin.py::test_local_profiles_with_the_same_name_keep_separate_snapshots`,
+    `tests/test_pytest_plugin.py::test_local_profile_snapshot_survives_retargeting_a_symlink`,
+    `tests/test_pytest_plugin.py::test_late_local_profile_switch_with_the_same_name_is_refused`,
+    `tests/test_pytest_plugin.py::test_a_tap_records_what_crossed_the_route_both_ways`,
+    `tests/test_serial_backend.py::test_console_reset_clock_tap_and_autoflash`
 
 ## The esp32sim backend
 

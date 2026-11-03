@@ -103,6 +103,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [A run lasts at most 300 emulated seconds](harness.md#a-run-lasts-at-most-300-emulated-seconds) | `harness.md` | superseded (#65) |
 | [The negative hello_world test edits the app image in place](harness.md#the-negative-hello_world-test-edits-the-app-image-in-place) | `harness.md` | decided (#51) |
 | [Board profiles are TOML files in the package, checked key by key](harness.md#board-profiles-are-toml-files-in-the-package-checked-key-by-key) | `harness.md` | decided (#13) |
+| [Local board profiles use an explicit path relative to the test file](harness.md#local-board-profiles-use-an-explicit-path-relative-to-the-test-file) | `harness.md` | decided (#101) |
 | [The LilyGO profile leaves out what the specification does not give](harness.md#the-lilygo-profile-leaves-out-what-the-specification-does-not-give) | `harness.md` | superseded (#66) |
 | [The capability declaration is a TOML file beside the profiles, per interface kind](harness.md#the-capability-declaration-is-a-toml-file-beside-the-profiles-per-interface-kind) | `harness.md` | decided (#13) |
 | [Telling on-board from off-board interfaces is postponed](harness.md#telling-on-board-from-off-board-interfaces-is-postponed) | `harness.md` | postponed (#25) |

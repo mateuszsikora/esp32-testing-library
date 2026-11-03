@@ -32,7 +32,10 @@ are in [models-technical.md](models-technical.md).
    other than one positional path (`str` or `Path`), an unknown keyword, or a `build_dir`
    that is not a non-empty string or a `Path` (`Path("")` is `Path(".")`, the app itself, and
    passes), is `pytest.fail(..., pytrace=False)`. It then loads the board profile the
-   `board_profile` marker names
+   `board_profile` marker selects by bundled name or local `path=`. Local paths resolve against
+   `metafunc.definition.path.parent` and are cached by absolute path in
+   `config.stash[LOCAL_PROFILES]` for the session; `BoardMarkers` saves both the reference and
+   the loaded object for each definition
    ([board-profiles-technical.md](board-profiles-technical.md#data-flow)); a `MarkerError` or
    `ProfileError` is raised as
    `pytest.fail.Exception(f"{nodeid}: {error}", pytrace=False) from None`, a collection error
@@ -61,14 +64,15 @@ are in [models-technical.md](models-technical.md).
    started with `--embedded-services esp` would make the `esp32sim` case open a serial port.
    It then refuses the first remaining item that uses `board` and whose board markers
    (`app_path`, `app_recording`, `board_profile`) say something else than its definition's did:
-   `late_board_marker` reads them from the item, the profile with `board_profile`, and
-   compares them, one marker at a time, with the `BoardMarkers` (including a copy of
+   `late_board_marker` reads them from the item, the profile reference with `profile_reference`,
+   and compares them, one marker at a time, with the `BoardMarkers` (including a copy of
    `app_path.kwargs`) `pytest_generate_tests` kept in `config.stash[READ]`, by the definition's
    nodeid (the item's without `[{callspec.id}]`). A `pytest.param`'s marks, and those a hook of
    another plugin or a conftest adds (this one runs `trylast`), reach the item but not
    `metafunc.definition`, so they would go unchecked: a `board_profile` there would reach `board`
-   but not the check, and an `app_path` there would not reach pytest-embedded.
-   A marker a fixture adds at setup is not seen.
+   but not the check, and an `app_path` there would not reach pytest-embedded. Profile references
+   distinguish bundled names from local absolute paths, including different files with the same
+   TOML name. A marker a fixture adds at setup is not seen.
    For a selected serial item it also requires an exact `--port` or indirect `port` parameter,
    refusing blank or wildcard values with `PORT_REQUIRED`, conflicting `ESPPORT` with
    `PORT_CONFLICT`, and separate flashing ports with `FLASH_PORT_UNSUPPORTED`. These checks run
@@ -90,7 +94,9 @@ are in [models-technical.md](models-technical.md).
    The digest is cached in the item's `SERIAL_ARTIFACT` stash. It refuses a non-single `Dut`,
    then constructs `Esp32Sim` or `Serial`, with the profile, the test file's directory and
    `skip_at_the_test`. Serial requires an `IdfDut`; its fixture setup has already handled
-   flashing. `backend_failed(error, name)` raises a short pytest failure prefixed with the chosen
+   flashing. `board_profile(request.node)` retrieves `BoardMarkers.loaded_profile` using the
+   definition's nodeid, without resolving a symlink or reading the marker again at setup.
+   `backend_failed(error, name)` raises a short pytest failure prefixed with the chosen
    backend. [Serial lifecycle](serial-backend-technical.md#data-flow) gives the timing details.
 6. **A source or a tap the backend cannot give**, asked for in the body (`gnss.replay`,
    `gnss.fix`, `gnss.tap`), reaches
@@ -245,7 +251,7 @@ the existing no-latency behavior and board pulls are unchanged.
 | `--esp32tl-backend NAME` | option | Choices `list(SERVICES)`; default unset, esp32sim only |
 | `app_recording(path)` | marker | One positional path, relative to the test file or absolute; on serial checks the recording app hash before port setup; ignored on esp32sim |
 | `app_path(path, build_dir="build")` | marker | One positional path, relative to the test file's directory; default that directory. The optional build path is relative to the app or absolute |
-| `board_profile(name)` | marker | The board profile ([board-profiles-technical.md](board-profiles-technical.md#interfaces)) |
+| `board_profile(name)` or `board_profile(path=...)` | marker | One bundled name or a local string/`Path` relative to the test file's directory; mixing them is a collection error ([board-profiles-technical.md](board-profiles-technical.md#interfaces)) |
 | `board(request, app_path, build_dir, msg_queue, _meta)` | fixture, function scope | Yields an `Esp32Sim` or `Serial`; closes it at teardown, then adds its backend-specific report section and JSON property. Its methods (`power_on`, `wait`, `wait_until`, `now`, `utc`, `report`, `properties`) are in [esp32sim-backend-technical.md](esp32sim-backend-technical.md#interfaces) and [serial-backend-technical.md](serial-backend-technical.md#interfaces) |
 | `console(board)` | fixture, function scope | Returns the cached `board.console` |
 | `gnss(board)` | fixture, function scope | Returns `board.uart("gnss")`, a `Gnss` |
@@ -307,7 +313,7 @@ The backend's own environment variables are in
 | Message | When | Outcome |
 |---|---|---|
 | `{metafunc.definition.nodeid}: the app_path marker takes one path, and optionally build_dir as a non-empty path, as in @pytest.mark.app_path("../firmware/hello_world", build_dir="build")` | The marker has the wrong number/type of positional paths, an unknown keyword, or a build_dir that is not a non-empty string or Path | Collection error, exit code 2 |
-| `{metafunc.definition.nodeid}: {error}` | A `board_profile` marker used otherwise than registered, or a profile esp32tl does not ship; the messages are in [board-profiles-user.md](board-profiles-user.md#when-no-backend-can-give-it) | Collection error, exit code 2 |
+| `{metafunc.definition.nodeid}: {error}` | A `board_profile` marker used otherwise than registered, an unknown bundled name, or a missing/invalid local file; the messages are in [board-profiles-user.md](board-profiles-user.md#when-no-backend-can-give-it) | Collection error, exit code 2 |
 | `esp32sim: {reason}`, as `esp32sim: uart.gnss takes no replay source on this backend, only model` or `esp32sim: uart.gnss cannot be tapped on this backend` | The test asks a route for a source or a tap the backend's declaration does not give | The test is skipped at the call, reported at the test |
 | `--esp32tl-backend: invalid choice: 'NAME'` (argparse's wording around it varies with the Python version) | A name not in `SERVICES` | Usage error, exit code 4 |
 | ``ERROR: --{option} is set: esp32tl chooses it for every test that uses `board` (the backend through --esp32tl-backend, the app through the app_path marker, the build through that marker's build_dir keyword or its build/ directory)`` | `--embedded-services`, `--app-path` or `--build-dir` set, and a selected test uses `board` | Usage error, exit code 4, no traceback |

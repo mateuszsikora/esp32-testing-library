@@ -1,11 +1,12 @@
 """Serial's real pytest-embedded fixture chain, with an in-memory port instead of hardware."""
 
 from pathlib import Path
+from textwrap import dedent
 
 import pytest
 from test_pytest_plugin import SHOW_PARAMS, fake_build
 
-from esp32tl import recording
+from esp32tl import boards, recording
 from esp32tl.backends.esp32sim import BackendError
 from esp32tl.backends.serial import check_artifact
 from esp32tl.tap import Tap, sha256
@@ -78,11 +79,16 @@ def test_serial_is_opt_in_and_selects_esp_idf(pytester: pytest.Pytester) -> None
 
 
 @pytest.mark.parametrize("skip_autoflash", [False, True])
+@pytest.mark.parametrize("local", [False, True])
 def test_console_reset_clock_tap_and_autoflash(
-    pytester: pytest.Pytester, skip_autoflash: bool
+    pytester: pytest.Pytester, skip_autoflash: bool, local: bool
 ) -> None:
     fake_build(pytester.path)
     pytester.makeconftest(FAKE_SERIAL)
+    profile = "local" if local else "esp32-devkitc"
+    marker = '@pytest.mark.board_profile(path="local.toml")' if local else ""
+    if local:
+        (pytester.path / "local.toml").write_text('name = "local"\nchip = "esp32"')
     reference = Tap("console", pytester.path / "reference.jsonl")
     recording.write(
         reference.path,
@@ -100,10 +106,12 @@ def test_console_reset_clock_tap_and_autoflash(
         from esp32tl.units import seconds
 
         @pytest.mark.app_recording("reference.jsonl")
+        {marker}
         def test_console(board, console, tmp_path):
             from esp32tl import Board
             assert isinstance(board, Board)
             assert board.console is console
+            assert board.profile.name == {profile!r}
             assert board.name == "serial" and board.clock == "wall"
             assert board.dut.serial.flashes == {int(not skip_autoflash)}
             assert board.dut.serial.resets == 1
@@ -143,6 +151,7 @@ def test_console_reset_clock_tap_and_autoflash(
     args = ("--skip-autoflash", "y") if skip_autoflash else ()
     run_serial(pytester, *args).assert_outcomes(passed=1)
     made = recording.read(pytester.path / "console.jsonl")
+    assert made.header.board == profile
     assert made.header.clock == "wall"
     assert made.header.interface == "console"
     assert made.header.source == "real"
@@ -151,10 +160,19 @@ def test_console_reset_clock_tap_and_autoflash(
     assert all(event.dir == "out" for event in made.events)
 
 
-def test_serial_capabilities_skip_at_the_call(pytester: pytest.Pytester) -> None:
+@pytest.mark.parametrize("local", [False, True])
+def test_serial_capabilities_skip_at_the_call(pytester: pytest.Pytester, local: bool) -> None:
     fake_build(pytester.path)
     pytester.makeconftest(FAKE_SERIAL)
-    pytester.makepyfile("""
+    marker = ""
+    if local:
+        (pytester.path / "local.toml").write_text(
+            (boards.PROFILES / "esp32-devkitc.toml").read_text().replace("esp32-devkitc", "local")
+        )
+        marker = 'import pytest\npytestmark = pytest.mark.board_profile(path="local.toml")\n'
+    pytester.makepyfile(
+        marker
+        + dedent("""
         import pytest
         from esp32tl.units import Position
         def test_model(gnss):
@@ -190,6 +208,7 @@ def test_serial_capabilities_skip_at_the_call(pytester: pytest.Pytester) -> None
         def test_wifi(wifi):
             wifi.access_point("myssid", password="mypassword")
     """)
+    )
     result = run_serial(pytester, "-rs")
     result.assert_outcomes(skipped=13)
     result.stdout.fnmatch_lines(

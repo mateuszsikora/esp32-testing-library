@@ -283,9 +283,34 @@ names the file and the key. The profiles ship in the wheel, and a test names one
 firmware (plan finding 12).
 
 **Rejected:** a schema library, because it would be a dependency for six keys, and its messages
-would not name the key the way a person writes it (`uart.gnss.tx`). Also rejected: a path to a
-profile file of the project's own in the marker, because no consumer needs it yet and it would fix
-how a relative path resolves before anyone has asked.
+would not name the key the way a person writes it (`uart.gnss.tx`). Local paths were deferred
+until a consumer needed them; #101 adds them in
+[the local profile decision](#local-board-profiles-use-an-explicit-path-relative-to-the-test-file).
+
+## Local board profiles use an explicit path relative to the test file
+
+Status: decided (#101)
+
+`board_profile("name")` keeps selecting a bundled profile. `board_profile(path=...)` selects a
+project-local file, with a string or `pathlib.Path` relative to the test file's directory, also
+for inherited markers. Absolute paths work too. This matches `app_path` and gives the same
+selection regardless of pytest's invocation directory. The marker rejects combined name/path
+arguments and uses the existing `boards.load` validation.
+
+Local profiles are cached in the pytest config stash by resolved absolute path for the session.
+Collection, backend setup and capability checks use the same validated snapshot. Each test
+definition retains the loaded object in `BoardMarkers`, so setup uses it even if a symlink's
+target changes after collection's marker checks. Late-marker
+checks compare the bundled name or resolved path, so a switch between files with identical names
+or contents is detected. A local file does not enter the bundled registry. The handshake,
+reports and recording headers keep the TOML name, with recordings retaining the route's wire
+metadata; no machine-specific path is added to either format.
+
+**Rejected:** guessing whether a positional string is a name or path; resolving against the
+working directory or marker declaration, whose provenance is not retained by pytest for marks
+imported from conftest; caching by TOML name, which aliases different files; reloading a profile
+at setup, or resolving its symlink again there, which could use data different from what
+collection validated.
 
 ## The LilyGO profile leaves out what the specification does not give
 

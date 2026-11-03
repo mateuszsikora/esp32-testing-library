@@ -8,12 +8,18 @@ the user sees is in [board-profiles-user.md](board-profiles-user.md).
 ## Data flow
 
 1. **`pytest_generate_tests`**, for a test that uses `board`, after the `app_path` marker:
-   `board_profile(metafunc.definition)` loads the profile the closest `board_profile` marker names,
-   or `DEFAULT_PROFILE` (`esp32-devkitc`), through `boards.profile(name)`. A `MarkerError` or
+   `profile_reference(metafunc.definition)` reads the closest `board_profile` marker once: a
+   bundled name, `DEFAULT_PROFILE` (`esp32-devkitc`) without a marker, or for `path=` the resolved
+   `node.path.parent / path`. `load_profile(config, reference)` loads that same reference, a name
+   through `boards.profile(name)`, a path through `boards.load`, cached by absolute `Path` in
+   `config.stash[LOCAL_PROFILES]` for the session. An unknown name that contains `/` or ends in
+   `.toml` gets `; for a local file, use board_profile(path="NAME")` appended to its error. Relative paths always use the test file, even for inherited markers. A `MarkerError` or
    `ProfileError` becomes `pytest.fail.Exception(f"{nodeid}: {error}", pytrace=False)`, raised
    `from None`: a collection error without the chained exception.
-2. **`board` fixture**, at setup: `board_profile(request.node)` again (the marker was checked at
-   collection, and the profile is cached), passed to `Esp32Sim(..., profile)`, which keeps it as
+2. **`board` fixture**, at setup: `board_profile(request.node)` retrieves the saved
+   `BoardMarkers.loaded_profile` through `collected_board_markers`, without resolving the path
+   again. That object is passed to `Esp32Sim(..., profile)` or `Serial`.
+   The simulator keeps it as
    `Esp32Sim.profile` and gives its `name` and `chip` to the `BoardLink`, for the harness's `hello`
    ([esp32sim-backend-technical.md](esp32sim-backend-technical.md#data-flow)). Every `uart.*` route
    becomes a `Uart` on the link, its `Wire` the route's `tx`, `rx` and `baud`; every line of every
@@ -36,12 +42,23 @@ It is `functools.cache`d, so every test gets the same object; the mappings in it
 `MappingProxyType`s and the dataclasses are frozen, so no test can change what the next one gets.
 `declared()` is cached the same way.
 
-`load(path)` reads the file with `tomllib` and checks it key by key with `Reader`, in the order of
-[Schema](#schema). The first error raises `ProfileError` and loading stops.
+Local profiles do not enter that name cache or `names()`. Different resolved paths stay separate
+even if their TOML names or contents match. The session cache preserves the validated snapshot
+if a file changes or disappears between collection and setup. `BoardMarkers.loaded_profile`
+retains that object for each definition and its parametrised items, so retargeting a symlink
+after collection's marker checks cannot select another profile at setup. `BoardMarkers.profile`
+holds a bundled name (`str`) or resolved local path (`Path`); `late_board_marker` compares
+`profile_reference(item)` against it, without loading a new file. Reports, handshakes and
+recording headers continue to carry `BoardProfile.name`, and UART recordings use that profile's
+wire metadata. Paths are selection identities within a session, not new recording fields.
+
+`load(path)` reads the UTF-8 file with `tomllib` and checks it key by key with `Reader`, in the
+order of [Schema](#schema). File access, UTF-8 decoding and TOML parsing errors become
+`ProfileError` with the filename. The first error raises `ProfileError` and loading stops.
 
 ## Schema
 
-### A profile: `esp32tl/boards/<name>.toml`
+### A profile: `<name>.toml`, bundled or local
 
 | Key | Type | Required | Rule |
 |---|---|---|---|
@@ -187,24 +204,29 @@ The `model` on `wifi` is esp32sim's access point (`--wifi`) with the harness's n
 | `Request` | frozen dataclass | `interface`, `source: str \| None = None`, `tap: bool = False` |
 | `capabilities.check(requests, profile, capabilities)` | function | Raises `CapabilityError` for a request the profile or every backend refuses |
 | `capabilities.refusal(backend, requests, capabilities)` | function | The reason, without the backend's name, or `None`; `KeyError` for an undeclared backend |
-| `board_profile(node)` | function, `esp32tl/pytest_plugin.py` | The marker's reader; `MarkerError` for a marker used otherwise than registered |
-| `BoardMarkers` | frozen dataclass, `esp32tl/pytest_plugin.py` | The `app_path` marker's arguments and the profile's name, as `pytest_generate_tests` read them for a definition; kept in `config.stash[READ]` |
+| `board_profile(node)` | function, `esp32tl/pytest_plugin.py` | The `loaded_profile` collection saved for the test's definition; never reads the marker or the file |
+| `load_profile(config, reference)` | function, `esp32tl/pytest_plugin.py` | Loads a bundled name or a resolved local path, local ones once per session in `config.stash[LOCAL_PROFILES]`; `ProfileError` prefixed with the path for a bad local file |
+| `profile_reference(node)` | function, `esp32tl/pytest_plugin.py` | The closest marker's bundled name (`str`) or resolved local path (`Path`); validates exactly one positional string or `path=` string/`Path` |
+| `BoardMarkers` | frozen dataclass, `esp32tl/pytest_plugin.py` | The `app_path` arguments and keywords, the `app_recording` arguments, the profile's bundled name or resolved path, and `loaded_profile`, the validated object; kept by definition nodeid in `config.stash[READ]` |
+| `collected_board_markers(config, node)` | function, `esp32tl/pytest_plugin.py` | The saved `BoardMarkers` for a definition or parametrised item, or `None` before collection saves it |
 | `late_board_marker(config, item)` | function, `esp32tl/pytest_plugin.py` | Which board marker an item carries otherwise than its definition did, or `None` |
 
-The marker, `board_profile(name)`, is registered in `pytest_configure` with the plugin's other marker
+The marker, `board_profile(name)` or `board_profile(path=...)`, is registered in `pytest_configure`
+with the plugin's other markers
 ([pytest-plugin-technical.md](pytest-plugin-technical.md#interfaces)).
 
 ## Failure modes
 
 Profile errors, `ProfileError`, are `<file>: <key>: <what>`, and `<file>: <what>` for the
 top level; at collection they come after
-`<test id>: `, but only a shipped profile is loaded there, so a test sees one only when a shipped
-file is broken. The ones `tests/test_boards.py` checks, verbatim:
+`<test id>: `. Local-file errors also carry the resolved path before the loader's message.
+The ones `tests/test_boards.py` checks, verbatim:
 
 | Message | Cause |
 |---|---|
 | `no board profile named 'NAME'; the profiles are esp32-devkitc, gps-alarm-clock, lilygo-t-a7670g-r2, sd-data-logger` | `boards.profile` with another name |
 | `x.toml: <tomllib's message>`, as `x.toml: Invalid value (at end of document)` | Not TOML, or not readable |
+| `x.toml: 'utf-8' codec can't decode byte ...` | Invalid UTF-8; the decoder's message gives the byte and position |
 | `x.toml: missing chip`, `x.toml: unknown key pins` | A top-level key missing or unknown |
 | `x.toml: uart.gnss: missing baud`, `x.toml: lines.modem.ri: missing pin` | The same in a table |
 | `x.toml: name: 'y' is not the file's name, 'x'` | `name` differs from the file's name |
@@ -264,6 +286,17 @@ models selected. It needs the sdspi build, runner, ROM ELF and mtools.
 `tests/test_modem_model.py::test_named_controls_are_observable_without_changing_modem_state`
 checks that the additional GPIOs can change while modem power, registration and AT settings
 remain intact.
+
+Local selection in `tests/test_pytest_plugin.py` covers ambiguous arguments, missing and invalid
+files, inherited markers and absolute paths, invocation outside the test directory, separate
+snapshots for same-name files and a bundled namesake, and late path switches from params/hooks.
+`test_local_profile_snapshot_survives_retargeting_a_symlink` retargets a symlink and removes the
+original file at setup, then checks that both parametrised cases use the collection snapshot.
+`test_invalid_local_profiles_fail_at_collection` includes invalid UTF-8 and requires the test id
+and resolved file path without a traceback.
+`test_a_tap_records_what_crossed_the_route_both_ways` also runs with a local profile, checking the
+handshake and recording. `tests/test_serial_backend.py::test_console_reset_clock_tap_and_autoflash`
+checks local selection and recording identity through serial's real fixture chain with a fake port.
 
 Not covered: `app_path` added late by a hook (in a `pytest.param` it is tested), and markers a
 fixture adds at setup, which nothing checks.
