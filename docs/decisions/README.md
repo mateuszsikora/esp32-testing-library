@@ -200,6 +200,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Behind the access point the network speaks Ethernet, ARP and DHCP](harness.md#behind-the-access-point-the-network-speaks-ethernet-arp-and-dhcp) | `harness.md` | decided (#31) |
 | [An HTTP server answers on port 80 of every simulated network](harness.md#an-http-server-answers-on-port-80-of-every-simulated-network) | `harness.md` | decided (#31) |
 | [A Wi-Fi tap, signal changes and the esp32tl command's Wi-Fi are postponed](harness.md#a-wi-fi-tap-signal-changes-and-the-esp32tl-commands-wi-fi-are-postponed) | `harness.md` | postponed (#31) |
+| [Explicit build paths are relative to the application and never fall back](harness.md#explicit-build-paths-are-relative-to-the-application-and-never-fall-back) | `harness.md` | decided (#102) |
 
 ## The runner crate and esp32sim
 

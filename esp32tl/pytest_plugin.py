@@ -6,12 +6,13 @@ The board runs a board profile, `esp32-devkitc` unless the `board_profile` marke
 (plan §4.5).
 
 A test that uses `board` is parametrised over the backends by `pytest_generate_tests`, in one
-`metafunc.parametrize` over `board`, `embedded_services` and `app_path`, so that the three always
+`metafunc.parametrize` over `board`, `embedded_services`, `app_path` and `build_dir`, so they always
 travel together under one id. pytest-embedded's `--embedded-services`, `--app-path` and
 `--build-dir` are refused when a test uses `board`: an empty `embedded_services` parameter falls
 back to the command line, and a session started with `--embedded-services esp` would make the
 `esp32sim` case open a serial port. The app comes from the `app_path` marker instead, its build
-from `build/` in it. `--count` above 1 is refused too: a test has one board.
+from its `build_dir` keyword (relative to the app), or `build/` in it by default.
+`--count` above 1 is refused too: a test has one board.
 
 The test body sets up what is around the board, as `gnss.replay(path)`, `gnss.fix(at=...)` and
 `gnss.tap(path)` do, then calls `board.power_on()`, which starts the run; from there the board's
@@ -74,8 +75,8 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
         "markers",
-        "app_path(path): the ESP-IDF app a test runs, its build in path/build; relative to the"
-        " test file's directory, which is the default",
+        "app_path(path, build_dir='build'): the ESP-IDF app, relative to the test file's"
+        " directory (the default app); build_dir is relative to the app or absolute",
     )
     config.addinivalue_line(
         "markers",
@@ -109,6 +110,7 @@ class BoardMarkers:
     """The app and reference paths read at collection, and the board profile's name."""
 
     app_path: tuple[object, ...] | None
+    app_kwargs: dict[str, object]
     profile: str
     app_recording: tuple[object, ...] | None
 
@@ -122,15 +124,24 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     if "board" not in metafunc.fixturenames:
         return
     app_path = metafunc.definition.path.parent
+    build_dir: str | Path = "build"
     marker = metafunc.definition.get_closest_marker("app_path")
     if marker is not None:
-        if len(marker.args) != 1 or marker.kwargs:
+        if (
+            len(marker.args) != 1
+            or not isinstance(marker.args[0], str | Path)
+            or marker.kwargs.keys() - {"build_dir"}
+            or not isinstance(marker.kwargs.get("build_dir", "build"), str | Path)
+            or marker.kwargs.get("build_dir") == ""
+        ):
             pytest.fail(
                 f"{metafunc.definition.nodeid}: the app_path marker takes one path,"
-                ' as in @pytest.mark.app_path("../firmware/hello_world")',
+                " and optionally build_dir as a non-empty path,"
+                ' as in @pytest.mark.app_path("../firmware/hello_world", build_dir="build")',
                 pytrace=False,
             )
         app_path /= marker.args[0]
+        build_dir = marker.kwargs.get("build_dir", "build")
     try:
         profile = board_profile(metafunc.definition)
     except (MarkerError, ProfileError) as error:
@@ -149,16 +160,27 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
             pytrace=False,
         )
     read = BoardMarkers(
-        marker.args if marker else None, profile.name, reference.args if reference else None
+        marker.args if marker else None,
+        dict(marker.kwargs) if marker else {},
+        profile.name,
+        reference.args if reference else None,
     )
     metafunc.config.stash.setdefault(READ, {})[metafunc.definition.nodeid] = read
     chosen = metafunc.config.getoption("esp32tl_backend")
     backends = [chosen] if chosen else [Esp32Sim.name]
     params = [
-        pytest.param(backend, SERVICES[backend], str(app_path.resolve()), id=backend)
+        pytest.param(
+            backend,
+            SERVICES[backend],
+            str(app_path.resolve()),
+            str((app_path / build_dir).resolve()),
+            id=backend,
+        )
         for backend in backends
     ]
-    metafunc.parametrize(("board", "embedded_services", "app_path"), params, indirect=True)
+    metafunc.parametrize(
+        ("board", "embedded_services", "app_path", "build_dir"), params, indirect=True
+    )
 
 
 PORT_REQUIRED = (
@@ -199,7 +221,8 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
             raise pytest.UsageError(
                 f"--{option.replace('_', '-')} is set: esp32tl chooses it for every test that uses"
                 " `board` (the backend through --esp32tl-backend, the app through the app_path"
-                " marker, the build in its build/ directory)"
+                " marker, the build through that marker's build_dir keyword or its build/"
+                " directory)"
             )
     if config.getoption("count", 1) != 1:
         raise pytest.UsageError("--count is set: esp32tl runs one board in a test")
@@ -252,7 +275,9 @@ def late_board_marker(config: pytest.Config, item: pytest.Item) -> str | None:
         return "the app_recording marker"
     # The definition's markers were read without an error, so an error here is a new marker's.
     app_path = item.get_closest_marker("app_path")
-    if read.app_path != (app_path.args if app_path else None):
+    if read.app_path != (app_path.args if app_path else None) or read.app_kwargs != (
+        app_path.kwargs if app_path else {}
+    ):
         return "the app_path marker"
     try:
         if board_profile(item).name != read.profile:
@@ -323,7 +348,11 @@ def serial_artifact(request: pytest.FixtureRequest) -> str:
         reference = request.node.get_closest_marker("app_recording")
         path = request.path.parent / reference.args[0] if reference else None
         try:
-            node.stash[SERIAL_ARTIFACT] = check_artifact(request.getfixturevalue("app_path"), path)
+            node.stash[SERIAL_ARTIFACT] = check_artifact(
+                request.getfixturevalue("app_path"),
+                path,
+                build_dir=request.getfixturevalue("build_dir"),
+            )
         except BackendError as error:
             backend_failed(error, Serial.name)
     return node.stash[SERIAL_ARTIFACT]
@@ -344,7 +373,11 @@ def pytest_fixture_setup(
 
 @pytest.fixture
 def board(
-    request: pytest.FixtureRequest, app_path: str, msg_queue: MessageQueue, _meta: Meta
+    request: pytest.FixtureRequest,
+    app_path: str,
+    build_dir: str,
+    msg_queue: MessageQueue,
+    _meta: Meta,
 ) -> Iterator[Board]:
     """The firmware in `app_path`, on the backend this test is parametrised with, on the board
     profile the test chose; off until the test calls `board.power_on()`."""
@@ -380,6 +413,7 @@ def board(
                 board_profile(request.node),
                 directory=request.path.parent,
                 skip=skip_at_the_test,
+                build_dir=build_dir,
             )
     except BackendError as error:
         backend_failed(error, name)

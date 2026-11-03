@@ -154,7 +154,7 @@ def device(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Esp32Sim:
     app = Mock(
         spec=IdfApp, flash_files=[FlashFile(offset=0x8000, file_path=str(table), encrypted=False)]
     )
-    monkeypatch.setattr(esp32sim, "load_app", lambda _: app)
+    monkeypatch.setattr(esp32sim, "load_app", lambda _, *, build_dir=None: app)
     monkeypatch.setattr(esp32sim, "runner_path", lambda: Path("runner"))
     monkeypatch.setattr(esp32sim, "rom_path", lambda: Path("rom"))
     run = tmp_path / "run"

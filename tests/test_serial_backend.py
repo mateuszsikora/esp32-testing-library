@@ -251,6 +251,66 @@ def test_artifact_hash_is_app_binary_and_refuses_missing_or_different_hash(tmp_p
                 check_artifact(str(tmp_path), tap.path)
 
 
+@pytest.mark.parametrize("invalid", [None, "hash", "missing", "target", "encryption"])
+def test_serial_preflight_and_flashing_use_the_selected_build(
+    pytester: pytest.Pytester, invalid: str | None
+) -> None:
+    app = pytester.path / "app source"
+    default = fake_build(app)
+    selected = fake_build(
+        app,
+        build_dir="../CI builds/debug",
+        target="esp32s3" if invalid == "target" else "esp32",
+        encrypted=invalid == "encryption",
+    ).resolve()
+    (default / "app.bin").write_bytes(b"default firmware")
+    (selected / "app.bin").write_bytes(b"selected firmware")
+    digest = sha256(selected / "app.bin")
+    tap = Tap("console", pytester.path / "reference.jsonl")
+    recording.write(
+        tap.path,
+        tap.recording(
+            board="esp32-devkitc",
+            clock="wall",
+            source="real",
+            app_sha256=sha256(default / "app.bin") if invalid == "hash" else digest,
+        ),
+    )
+    if invalid == "missing":
+        (selected / "app.bin").unlink()
+    pytester.makeconftest(FAKE_SERIAL)
+    pytester.makepyfile(f"""
+        from pathlib import Path
+        import pytest
+        @pytest.mark.app_path("app source", build_dir="../CI builds/debug")
+        @pytest.mark.app_recording("reference.jsonl")
+        def test_selected(dut, board, console, build_dir):
+            assert Path(dut.app.binary_path) == Path({str(selected)!r})
+            assert Path(build_dir) == Path(dut.app.binary_path)
+            assert Path(dut.serial.app.bin_file).read_bytes() == b"selected firmware"
+            assert dut.serial.flashes == 1
+            assert board.app_sha256 == {digest!r}
+            console.tap("selected.jsonl")
+            board.power_on()
+            console.expect("Hello world!")
+    """)
+    result = run_serial(pytester)
+    if invalid is None:
+        result.assert_outcomes(passed=1)
+        assert recording.read(pytester.path / "selected.jsonl").header.app_sha256 == digest
+    else:
+        result.assert_outcomes(errors=1)
+        assert not (pytester.path / "port-opened").exists()
+        message = {
+            "hash": "recording app_sha256 * does not match artifact",
+            "missing": "is not a finished build, missing",
+            "target": "is built for esp32s3; serial runs the classic esp32",
+            "encryption": "asks for flash encryption, which serial does not support",
+        }[invalid]
+        result.stdout.fnmatch_lines([f"*serial: *{message}*"])
+    assert (default / "app.bin").read_bytes() == b"default firmware"
+
+
 def test_recording_mismatch_prevents_dut_setup(pytester: pytest.Pytester) -> None:
     fake_build(pytester.path)
     tap = Tap("console", pytester.path / "reference.jsonl")

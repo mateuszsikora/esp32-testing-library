@@ -2,6 +2,7 @@
 of the validation images through the real runner, in a subprocess of their own. The runs need
 `make firmware` (hello_world, nmea_reader, gpio_echo)."""
 
+import json
 import os
 import select
 import signal
@@ -11,6 +12,7 @@ import time
 from pathlib import Path
 
 import pytest
+from test_pytest_plugin import fake_build
 
 from esp32tl import cli
 
@@ -124,6 +126,80 @@ def test_max_seconds_is_a_number_above_0(seconds: str, capsys: pytest.CaptureFix
     assert f"argument --max-seconds: {seconds!r} is not a number of seconds above 0" in (
         capsys.readouterr().err
     )
+
+
+def test_build_dir_is_not_empty(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        cli.main(["run", "--app", "firmware/hello_world", "--build-dir", ""])
+    assert exit_info.value.code == 2
+    assert "argument --build-dir: the build directory is an empty path" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("command", ["run", "replay"])
+@pytest.mark.parametrize("absolute", [False, True])
+def test_cli_passes_only_the_selected_build_to_the_runner(
+    tmp_path: Path, command: str, absolute: bool
+) -> None:
+    app = tmp_path / "app source"
+    default = fake_build(app)
+    selected = fake_build(app, build_dir="../CI builds/debug").resolve()
+    (default / "app.bin").write_bytes(b"default")
+    (selected / "app.bin").write_bytes(b"selected")
+    cwd = tmp_path / "other directory"
+    fake_build(cwd)
+    runner = tmp_path / "fake runner"
+    runner.write_text(f"""#!{sys.executable}
+import json
+import sys
+from pathlib import Path
+args = sys.argv[1:]
+files = [args[i + 1] for i, arg in enumerate(args) if arg == "--flash-at"]
+Path({str(tmp_path / "loaded.json")!r}).write_text(json.dumps([
+    [file, Path(file.split("=", 1)[1]).read_text()] for file in files
+]))
+""")
+    runner.chmod(0o755)
+    rom = tmp_path / "rom.elf"
+    rom.touch()
+    args = [
+        command,
+        "--app",
+        "../app source",
+        "--build-dir",
+        str(selected) if absolute else "../CI builds/debug",
+    ]
+    if command == "replay":
+        args += ["--interface", "gnss", "--recording", str(RECORDING)]
+    env = {**os.environ, "ESP32TL_RUNNER": str(runner), "ESP32TL_ROM": str(rom)}
+    result = subprocess.run(
+        [sys.executable, "-c", COMMAND.format(patch=""), *args],
+        cwd=cwd,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    # This fake runner loads the files and exits without connecting to the link.
+    assert result.returncode == 0, result.stderr
+    assert json.loads((tmp_path / "loaded.json").read_text()) == [
+        [f"0x1000={selected}/bootloader/bootloader.bin", ""],
+        [f"0x8000={selected}/partition_table/partition-table.bin", ""],
+        [f"0x10000={selected}/app.bin", "selected"],
+    ]
+    (selected / "flasher_args.json").unlink()
+    (tmp_path / "loaded.json").unlink()
+    result = subprocess.run(
+        [sys.executable, "-c", COMMAND.format(patch=""), *args],
+        cwd=cwd,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 2
+    assert f"{selected} holds no ESP-IDF build: no flasher_args.json" in result.stderr
+    assert not (tmp_path / "loaded.json").exists()
+    assert (default / "app.bin").read_bytes() == b"default"
 
 
 def test_run_prints_the_console_and_the_link_s_report() -> None:

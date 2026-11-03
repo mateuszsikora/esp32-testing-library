@@ -17,9 +17,10 @@ ESP-IDF build for the classic ESP32.
   `make setup` (or `make rom-elf`) puts there. `ESP32TL_ROM=PATH` names another. The backend
   always hands this file to the runner, so the runner's own ROM lookup is not used
   ([where the runner looks for it](runner-user.md#where-the-rom-comes-from)).
-- **An ESP-IDF build** in the `build/` directory of the test's app (the `app_path` marker): built
-  for the `esp32` target, finished, every file `flasher_args.json` lists present, and without flash
-  encryption.
+- **An ESP-IDF build** in the directory selected by `app_path(..., build_dir=...)`, defaulting
+  to the app's `build/`. Relative build paths are relative to the app; absolute paths work too.
+  Built for the `esp32` target, finished, every file `flasher_args.json` lists present, and without
+  flash encryption.
 
 The two defaults are paths in the checkout esp32tl is installed from, which holds only with an
 editable install; `make setup` makes one. Installed any other way, from a wheel for instance,
@@ -209,7 +210,7 @@ its body instead, as `BackendError: cannot ...`, without the prefix:
 | Message | What to do |
 |---|---|
 | `the board profile {profile} has no {interface}; its interfaces are {interfaces}` | The test uses `gnss` on a profile without `uart.gnss`, or `sd_card` on one without a slot; choose a profile that has it |
-| `{build} holds no ESP-IDF build: no flasher_args.json` | Build the app (`make firmware` for this repository's firmware), or fix the `app_path` marker |
+| `{build} holds no ESP-IDF build: no flasher_args.json` | Build the app (`make firmware` for this repository's firmware), or fix the `app_path` marker and its `build_dir` keyword; no other build is tried |
 | `{build} is built for {target}; esp32sim runs the classic esp32` | Build for `esp32` |
 | `{build} asks for flash encryption, which the runner does not do` | Build without flash encryption |
 | `{build} is not a finished build, missing {files}` | Finish the build; `{files}` is a comma-separated list |

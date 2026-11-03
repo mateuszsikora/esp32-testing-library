@@ -2,8 +2,8 @@
 
 `esp32tl/backends/serial.py` implements `Serial`; `esp32tl/backends/__init__.py` registers
 `serial: esp,idf` alongside `esp32sim: None`. The plugin defaults to `Esp32Sim.name`; explicit
-selection uses a single backend parameter, with `embedded_services` and `app_path` in the same
-indirect parametrisation. See [the user contract](serial-backend-user.md).
+selection uses a single backend parameter, with `embedded_services`, `app_path` and `build_dir` in
+the same indirect parametrisation. See [the user contract](serial-backend-user.md).
 
 ## Data flow
 
@@ -24,7 +24,9 @@ indirect parametrisation. See [the user contract](serial-backend-user.md).
    once per item, caching the digest under `SERIAL_ARTIFACT`.
    `pytest_fixture_setup` runs it before pytest-embedded's `app` fixture, so an explicitly requested
    `dut` cannot flash before validation. `board` checks it too, then obtains `dut` dynamically.
-   `check_artifact` calls `load_app(app_path, backend="serial")` for finished-build checks, then
+   `serial_artifact` passes the resolved `build_dir` fixture to `check_artifact`; pytest-embedded
+   receives the same fixture for its app and flashing. `check_artifact` calls
+   `load_app(app_path, build_dir=build_dir, backend="serial")` for finished-build checks, then
    `app_image_sha256(app)` from `esp32tl/tap.py`. This hashes the app entry in `flasher_args.json`,
    not `IdfApp.bin_file` (which may name another `.bin`), the ELF or its embedded digest.
 3. pytest-embedded creates `IdfApp`, `IdfSerial` and `IdfDut`. `IdfSerial._start` owns autoflash,
@@ -107,7 +109,7 @@ run log: the tap, power-on and wait steps, and received console lines.
 | `set_up()` | `the tap of console` when tapped, otherwise empty |
 | `close()` | Stop capture, restore healthy redirection, write tap, report errors; idempotent |
 | `report(run=False)`, `properties()` | Human report (with run log when requested) and schema above |
-| `check_artifact(app_path, reference=None)` | Validate build/reference before port setup, return the app-image hash |
+| `check_artifact(app_path, reference=None, *, build_dir=None)` | Validate build/reference before port setup, return the app-image hash |
 
 ## Configuration
 
@@ -120,7 +122,7 @@ run log: the tap, power-on and wait steps, and received console lines.
 | `--flash-port`, indirect `flash_port` parameter | No separate flashing port supported; resolved value must be `None` |
 | `--skip-autoflash` | False; pytest-embedded, use `--skip-autoflash y` to reuse flash |
 | `--baud` | 115200; pytest-embedded's console baud |
-| `app_path(path)` | Test directory when absent; build is its `build/` directory |
+| `app_path(path, build_dir="build")` | Test directory when absent; build is relative to the app or absolute |
 | `app_recording(path)` | No reference by default; relative to the test file or absolute; ignored on esp32sim |
 | `POLL_SECONDS` | 0.01; reader and wait polling interval, not a precision guarantee |
 | `READER_STOP_SECONDS` | 1.0; maximum wait for esp32tl's reader during close |
@@ -148,7 +150,7 @@ from pytest-embedded propagate with their original messages.
 | `serial: {build} is built for {target}; serial runs the classic esp32` | Non-classic target |
 | `serial: {build} asks for flash encryption, which serial does not support` | Encryption outside the supported workflow |
 | `serial: {build} is not a finished build, missing {files}` | Missing files listed for flashing |
-| `serial: {app_path}/build/flasher_args.json names no app image` | No `app.file` entry |
+| `serial: {app.binary_path}/flasher_args.json names no app image` | No `app.file` entry |
 | `serial: {reference}: recording has no app_sha256` | Reference missing its required hash |
 | `serial: {reference}: recording app_sha256 {expected} does not match artifact {digest}` | Reference mismatch |
 | `serial: the serial backend requires pytest-embedded's esp,idf services` | Cached serial options are absent (for example an overridden `embedded_services` fixture), or `dut` is not an `IdfDut` |

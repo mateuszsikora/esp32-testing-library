@@ -121,13 +121,15 @@ def rom_path() -> Path:
     return path
 
 
-def load_app(app_path: str, *, backend: str = "esp32sim") -> IdfApp:
-    """The finished, unencrypted classic ESP32 build in `app_path`/build.
+def load_app(
+    app_path: str, *, build_dir: str | Path | None = None, backend: str = "esp32sim"
+) -> IdfApp:
+    """The finished, unencrypted classic ESP32 build selected relative to `app_path`.
 
     The build directory is given to `IdfApp` as an absolute path: given `build`, it would fall back
     to a `build` directory in the working directory when the app has none.
     """
-    build = Path(app_path) / "build"
+    build = (Path(app_path) / (build_dir if build_dir is not None else "build")).resolve()
     if not (build / "flasher_args.json").is_file():
         raise BackendError(f"{build} holds no ESP-IDF build: no flasher_args.json")
     app = IdfApp(app_path, build_dir=str(build))
@@ -282,6 +284,8 @@ class Esp32Sim(Board):
         profile: BoardProfile,
         directory: Path | None = None,
         skip: Callable[[str], NoReturn] | None = None,
+        *,
+        build_dir: str | Path | None = None,
     ) -> None:
         self.dut = dut
         self.profile = profile
@@ -289,7 +293,7 @@ class Esp32Sim(Board):
         self._msg_queue = msg_queue
         self._meta = meta
         self._skip = skip or refuse
-        self.app = load_app(app_path)
+        self.app = load_app(app_path, build_dir=build_dir)
         self._nvs: dict[str, tuple[int, Path]] = {}
         self._runner, self._rom = runner_path(), rom_path()
         # What the guest printed on its console, as the link brings it, and cut into lines.

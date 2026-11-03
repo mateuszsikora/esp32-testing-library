@@ -8,9 +8,9 @@ that references to its number keep their meaning.
 ## Tests and backends
 
 1. A test that uses `board` is parametrised with the backend's name as its id
-   (`test_marked[esp32sim]`), and its `board`, `embedded_services` and `app_path` are set together;
-   a test without `board` is not parametrised. Serial is opt-in; selecting it gives `esp,idf`,
-   including for a test requesting only `console`.
+   (`test_marked[esp32sim]`), and its `board`, `embedded_services`, `app_path` and `build_dir` are
+   set together; a test without `board` is not parametrised. Serial is opt-in; selecting it gives
+   `esp,idf`, including for a test requesting only `console`.
    `tests/test_serial_backend.py::test_serial_is_opt_in_and_selects_esp_idf`,
    `tests/test_serial_backend.py::test_console_only_uses_serial_backend`.
    `tests/test_pytest_plugin.py::test_board_is_parametrised_with_the_backend_its_services_and_the_app`
@@ -718,3 +718,23 @@ that references to its number keep their meaning.
     `tests/test_net_tls.py::test_tls_rejects_unknown_ca_or_wrong_hostname`,
     `tests/test_net_tls.py::test_tls_conditions_are_live_named_and_reject_truth_testing`,
     `examples/position_tracker/tests/test_tracker_support.py::test_tls_timeout_names_the_expected_handshake`
+
+## Explicit build selection
+
+116. A selected build is resolved relative to the application or taken as absolute, independently
+     of the test's working directory. Only its artifacts reach the runner or serial flashing;
+     missing or invalid selections never fall back to the app's or cwd's `build/`. The closest
+     app marker supplies both app and build, with `build` as the default for an omitted keyword.
+     `tests/test_pytest_plugin.py::test_load_app_selects_only_the_explicit_build`,
+     `tests/test_pytest_plugin.py::test_board_loads_each_selected_build_from_another_directory`,
+     `tests/test_pytest_plugin.py::test_two_builds_of_one_app_run_the_selected_firmware`,
+     `tests/test_cli.py::test_cli_passes_only_the_selected_build_to_the_runner`
+117. Explicit builds retain target, encryption, missing-file and serial recording-hash checks;
+     serial refuses invalid selected artifacts before even an explicitly requested `dut` opens
+     a port. Taps hash the selected application's binary.
+     `tests/test_pytest_plugin.py::test_selected_build_keeps_validation`,
+     `tests/test_serial_backend.py::test_serial_preflight_and_flashing_use_the_selected_build`,
+     `tests/test_pytest_plugin.py::test_two_builds_of_one_app_run_the_selected_firmware`
+118. A change to `app_path`'s `build_dir` keyword after collection read it is refused, including
+     an in-place mutation of the original marker.
+     `tests/test_pytest_plugin.py::test_a_late_build_keyword_is_refused`
