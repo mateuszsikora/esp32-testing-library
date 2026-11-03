@@ -22,9 +22,11 @@ usage: esp32tl-runner --chip esp32 --flash-at OFFSET=FILE... --max-seconds S [op
                         run fails with exit code 4 (default 60; 0 waits for ever)
   --console stdout|socket|both   where UART0 goes (default stdout); socket and both need
                         --board
-  --sd-rw IMAGE         an SD card holding IMAGE, a whole number of 512 KiB units, on the
-                        pins of --sd-spi; the guest's writes go into the file
-  --sd-spi sclk=N,mosi=N,miso=N,cs=N   the GPIOs the card is wired to, in SPI mode
+  --sd-spi sclk=N,mosi=N,miso=N,cs=N   an SD card slot on these GPIOs, in SPI mode; empty
+                        unless --sd-rw puts a card in it, and the peer's sd_card can
+                        put one in or take it out while the guest runs
+  --sd-rw IMAGE         an SD card holding IMAGE, a whole number of 512 KiB units, in the
+                        slot of --sd-spi from power-on; the guest's writes go into the file
   --wifi ssid=…,psk=…,chan=…,bssid=…   esp32sim's virtual access point, every key
                         optional; the network behind it is the peer's, over the
                         socket (eth_tx, eth_rx): needs --board
@@ -72,8 +74,8 @@ pub struct Opts {
     pub board: Option<Board>,
     /// `None`: wait for ever.
     pub peer_timeout: Option<Duration>,
-    /// `--sd-rw` and `--sd-spi`.
-    pub sd_card: Option<(PathBuf, Wiring)>,
+    /// `--sd-spi`, and the image of `--sd-rw`.
+    pub sd_card: Option<(Option<PathBuf>, Wiring)>,
     /// `--wifi` and `--wifi-nearby`.
     pub wifi: Option<Wifi>,
 }
@@ -226,10 +228,9 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Opts, Error> {
         ));
     }
     opts.sd_card = match (sd_image, sd_wiring) {
-        (Some(image), Some(wiring)) => Some((image, wiring)),
+        (image, Some(wiring)) => Some((image, wiring)),
         (None, None) => None,
         (Some(_), None) => return Err(usage("--sd-rw needs --sd-spi: the card's pins")),
-        (None, Some(_)) => return Err(usage("--sd-spi needs --sd-rw: the card's image")),
     };
     opts.wifi = match wifi {
         Some(spec) => {

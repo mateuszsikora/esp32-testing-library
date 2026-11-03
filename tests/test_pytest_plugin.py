@@ -550,7 +550,8 @@ def test_runner_command_puts_a_card_in_the_slot_once_the_test_inserts_one(tmp_pa
     command = esp32sim.runner_command(
         Path("/r/runner"), Path("/r/rom.elf"), app, 300, Path("/l.sock"), sd_card=slot
     )
-    assert "--sd-rw" not in command
+    # the slot is there empty, so that a card can go in while the firmware runs
+    assert command[-2:] == ["--sd-spi", "sclk=14,mosi=15,miso=2,cs=13"]
     (tmp_path / "card.img").write_bytes(bytes(512 << 10))
     # relative to the test file's directory
     slot.insert("card.img")
@@ -1445,7 +1446,7 @@ def test_release(board, console):
 # real runner does when the harness is gone. $FAKE_WATCH is the pins the harness's hello must
 # watch, comma-separated: the default profile's GNSS route's. $FAKE_PSRAM is the --psram-mb the
 # runner must be given: the default profile's 0. $FAKE_SD is the --sd-spi and --sd-rw it must be
-# given, one per line: by default neither.
+# given, one per line: by default the default profile's empty slot, its --sd-spi alone.
 LINK_RUNNER = """#!{python}
 import os
 import signal
@@ -1463,7 +1464,7 @@ signal.pthread_sigmask(signal.SIG_BLOCK, {{signal.SIGTERM}})
 args = sys.argv[1:]
 assert args[args.index("--psram-mb") + 1] == os.environ.get("FAKE_PSRAM", "0"), args
 sd = [args[args.index(flag) + 1] for flag in ("--sd-spi", "--sd-rw") if flag in args]
-assert "\\n".join(sd) == os.environ.get("FAKE_SD", ""), args
+assert "\\n".join(sd) == os.environ.get("FAKE_SD", "sclk=14,mosi=15,miso=2,cs=13"), args
 board = args[args.index("--board") + 1]
 conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 conn.connect(board.removeprefix("socket:"))

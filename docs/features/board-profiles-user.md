@@ -144,7 +144,7 @@ def test_modem_route(board):
   report starts with its name ([esp32sim backend](esp32sim-backend-user.md)). Every UART route of
   the profile is wired to the board, and the link watches its pins; a route says nothing until the
   test gives it a source ([below](#saying-what-a-test-needs)). The SD card slot is empty until the
-  test inserts a card. The link also watches the profile's named GPIO lines; declaring a line
+  test inserts a card, before power-on or while the firmware runs. The link also watches the profile's named GPIO lines; declaring a line
   does not give it a peripheral model.
 - A positional name selects a bundled profile. To select a project-local TOML file, use
   `@pytest.mark.board_profile(path="boards/test-board.toml")`; `path` accepts a string or

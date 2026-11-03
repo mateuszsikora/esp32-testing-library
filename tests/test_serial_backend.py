@@ -188,6 +188,8 @@ def test_serial_capabilities_skip_at_the_call(pytester: pytest.Pytester, local: 
             board.sd_card.image().build()
         def test_card(sd_card):
             sd_card.insert("not-read.img")
+        def test_card_removal(sd_card):
+            sd_card.remove()
         def test_nvs(board):
             board.nvs({"config": {"host": "test"}})
         @pytest.mark.board_profile("lilygo-t-a7670g-r2")
@@ -219,7 +221,7 @@ def test_serial_capabilities_skip_at_the_call(pytester: pytest.Pytester, local: 
     """)
     )
     result = run_serial(pytester, "-rs")
-    result.assert_outcomes(skipped=15)
+    result.assert_outcomes(skipped=16)
     result.stdout.fnmatch_lines(
         [
             "*serial: uart.gnss takes no model source on this backend, only real*",

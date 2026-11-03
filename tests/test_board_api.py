@@ -45,14 +45,18 @@ def test_broker_alias_uses_the_same_modem_network(board: Board, broker: Broker) 
 
 
 @pytest.mark.requires_mtools
-def test_build_rechecks_power_and_backend_close_removes_images(board: Board) -> None:
+def test_a_build_after_power_on_is_a_replacement_and_close_removes_images(board: Board) -> None:
     builder = board.sd_card.image().with_text("BEFORE.TXT", "before boot")
     card = builder.build()
     board.sd_card.insert(card)
     board.power_on()
-    with pytest.raises(SourceError, match="board is on already"):
-        builder.build()
+    # a card to put in later, while the firmware runs
+    replacement = builder.with_text("AFTER.TXT", "after boot").build()
+    assert replacement.path != card.path
     board.console.expect_exact("Hello world!")
     assert card.read_text("BEFORE.TXT") == "before boot"
+    assert replacement.list_files() == ["AFTER.TXT", "BEFORE.TXT"]
     board.close()
-    assert not card.path.exists()
+    assert not card.path.exists() and not replacement.path.exists()
+    with pytest.raises(SourceError, match="the board is closed"):
+        builder.build()

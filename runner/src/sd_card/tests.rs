@@ -372,3 +372,127 @@ fn after_a_power_cut_the_card_is_uninitialised_and_keeps_its_whole_blocks() {
     let answer = command(&mut card, 17, 8, 10);
     assert_eq!(data_block(&mut card, after_r1(answer), BLOCK)[7], 8);
 }
+
+/// An image the test still sees once the card holding it is out of the slot.
+struct SharedStore(Rc<RefCell<Vec<u8>>>);
+
+impl SdStore for SharedStore {
+    fn len(&self) -> u64 {
+        self.0.borrow().len() as u64
+    }
+    fn read(&mut self, lba: u64, buf: &mut [u8; BLOCK]) -> std::io::Result<()> {
+        let at = lba as usize * BLOCK;
+        buf.copy_from_slice(&self.0.borrow()[at..at + BLOCK]);
+        Ok(())
+    }
+    fn write(&mut self, lba: u64, data: &[u8; BLOCK]) -> std::io::Result<()> {
+        let at = lba as usize * BLOCK;
+        self.0.borrow_mut()[at..at + BLOCK].copy_from_slice(data);
+        Ok(())
+    }
+}
+
+#[test]
+fn a_power_cut_reaches_the_card_in_the_slot_and_nothing_else() {
+    let mut slot = Slot::new(WIRING);
+    slot.power_off();
+    assert_eq!(slot.image(), None, "an empty slot stays empty");
+    slot.insert("a", Box::new(MemStore(vec![0; UNIT as usize])))
+        .unwrap();
+    let mut reset = frame(0, 0).to_vec();
+    reset.resize(14, 0xff);
+    assert_eq!(
+        r1(&slot.transfer(pins(true), &reset, 14)[6..]),
+        (1, IDLE),
+        "in SPI mode"
+    );
+    slot.power_off();
+    assert_eq!(slot.image(), Some("a"), "the card stays in the slot");
+    let mut status = frame(13, 0).to_vec();
+    status.resize(14, 0xff);
+    assert_eq!(
+        slot.transfer(pins(true), &status, 14),
+        [0xff; 14],
+        "back in SD mode: nothing answers until CMD0"
+    );
+}
+
+#[test]
+fn an_empty_slot_answers_nothing_and_takes_one_card_at_a_time() {
+    let mut slot = Slot::new(WIRING);
+    let mut tx = frame(0, 0).to_vec();
+    tx.resize(14, 0xff);
+    assert_eq!(slot.transfer(pins(true), &tx, 14), [0xff; 14]);
+    assert_eq!(slot.image(), None);
+    assert!(!slot.remove(), "nothing to take out");
+    let error = slot
+        .insert("short", Box::new(MemStore(vec![0; BLOCK])))
+        .unwrap_err();
+    assert!(error.contains("whole number of 512 KiB units"), "{error}");
+    assert_eq!(slot.image(), None, "a card it refused is not in it");
+    let len = slot.insert("a", Box::new(MemStore(vec![0; UNIT as usize])));
+    assert_eq!(len, Ok(UNIT));
+    let error = slot
+        .insert("b", Box::new(MemStore(vec![0; UNIT as usize])))
+        .unwrap_err();
+    assert_eq!(error, "the slot holds a already");
+    assert_eq!(slot.image(), Some("a"));
+}
+
+#[test]
+fn a_card_taken_out_mid_write_keeps_the_blocks_it_accepted_and_comes_back_unpowered() {
+    let image = Rc::new(RefCell::new(vec![0u8; 2 * UNIT as usize]));
+    let mut slot = Slot::new(WIRING);
+    slot.insert("card", Box::new(SharedStore(image.clone())))
+        .unwrap();
+    let x = |slot: &mut Slot, tx: &[u8]| slot.transfer(pins(true), tx, tx.len());
+    // initialise and start a multiple block write at block 8, as sdspi does
+    x(&mut slot, &[0xff; 10]);
+    for (index, arg) in [
+        (0, 0),
+        (8, 0x1aa),
+        (55, 0),
+        (41, OCR_CCS),
+        (55, 0),
+        (41, OCR_CCS),
+    ] {
+        let mut tx = frame(index, arg).to_vec();
+        tx.resize(14, 0xff);
+        x(&mut slot, &tx);
+    }
+    let mut tx = frame(25, 8).to_vec();
+    tx.resize(16, 0xff);
+    assert_eq!(r1(&x(&mut slot, &tx)[6..]).1, 0);
+    let first = [0x11; BLOCK];
+    x(&mut slot, &[START_MULTI_WRITE]);
+    x(&mut slot, &first);
+    let [hi, lo] = crc16(&first).to_be_bytes();
+    assert_eq!(x(&mut slot, &[hi, lo, 0xff])[2], DATA_ACCEPTED);
+    // the second block is on its way when the card goes
+    x(&mut slot, &[START_MULTI_WRITE]);
+    x(&mut slot, &[0x22; BLOCK]);
+    let commands = slot.stats().commands;
+    assert!(slot.remove());
+    // the data response, and the end of the busy time, read as the pull-up's 0xff
+    assert_eq!(x(&mut slot, &[0, 0, 0xff, 0xff]), [0xff; 4]);
+    {
+        let image = image.borrow();
+        assert_eq!(image[8 * BLOCK..9 * BLOCK], first, "accepted: in the image");
+        assert_eq!(
+            image[9 * BLOCK..10 * BLOCK],
+            [0; BLOCK],
+            "not finished: never written"
+        );
+    }
+    // the same image again: a card just powered, in SD mode until CMD0, its work counted on
+    slot.insert("card", Box::new(SharedStore(image.clone())))
+        .unwrap();
+    let mut read = frame(17, 8).to_vec();
+    read.resize(16, 0xff);
+    assert_eq!(x(&mut slot, &read), [0xff; 16]);
+    let mut reset = frame(0, 0).to_vec();
+    reset.resize(14, 0xff);
+    assert_eq!(r1(&x(&mut slot, &reset)[6..]), (1, IDLE));
+    assert_eq!(r1(&x(&mut slot, &read)[6..]).1, IDLE | ILLEGAL);
+    assert_eq!(slot.stats().commands, commands + 2);
+}

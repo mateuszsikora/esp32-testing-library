@@ -28,7 +28,7 @@ set -eu
 
 IDF_VERSION=v5.3.6
 CONTAINER=espressif/idf:$IDF_VERSION@sha256:cee52f0c4fdaf088992a7a739f5993154e95cf1d3ab61c24f5b40e6d56a3a070
-IMAGES="hello_world nmea_reader gpio_echo sdspi modem_at nvs_reader pppos_client http_request persistence"
+IMAGES="hello_world nmea_reader gpio_echo sdspi sd_remount modem_at nvs_reader pppos_client http_request persistence"
 family=firmware
 if [ "${1:-}" = --examples ]; then
 	shift
@@ -76,6 +76,7 @@ project_of() {
 	pppos_client) python3 firmware/pppos_client/prepare.py "$out" ;;
 	nvs_reader) echo "$PWD/firmware/nvs_reader" ;;
 	persistence) echo "$PWD/firmware/persistence" ;;
+	sd_remount) echo "$PWD/firmware/sd_remount" ;;
 	esac
 }
 

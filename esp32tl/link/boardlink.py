@@ -16,7 +16,9 @@ runner's `console` messages carry it (`--console socket` or `both`).
 
 With `--wifi`, the Ethernet frames the station sends (`eth_tx`) go to the one interface that is the
 network behind the access point (`Interface.ethernet`), a frame per call, and what it answers goes
-in as `eth_rx`, a frame per output.
+in as `eth_rx`, a frame per output. With `--sd-spi`, the one interface that is the SD card slot
+(`Interface.card_slot`) changes the card in it with its `inputs` (`sd_card`), and gets what the
+runner says the slot holds after each change (`sd_card_ack`).
 
 The backend can also switch the board's supply and pulse the chip's EN pin (`board_input`): the
 message goes out in the harness's answer to the turn the link is held at, or to the first turn
@@ -54,6 +56,8 @@ from esp32tl.link.protocol import (
     Reset,
     RunnerHello,
     RunnerMessage,
+    SdCardAck,
+    SdCardChange,
     Stats,
     Stop,
     Sync,
@@ -123,6 +127,13 @@ class Interface:
         return False
 
     @property
+    def card_slot(self) -> bool:
+        """Whether the interface is the SD card slot: it has no wire, its `inputs` may change the
+        card in it (`sd_card`), and `card_changed` gets what the runner says the slot holds after
+        each change (`sd_card_ack`)."""
+        return False
+
+    @property
     def pins(self) -> frozenset[int]:
         """The GPIOs the interface is wired to, which the link watches: its wire's."""
         return frozenset() if self.wire is None else self.wire.pins
@@ -165,6 +176,11 @@ class Interface:
     def driven(self, t: int, changes: Sequence[tuple[int, int]], enabled: frozenset[int]) -> None:
         """The guest changed the output of this interface's pins at `t`: the `[pin, level]`
         changes in the order written, and the pins whose output driver is enabled after them."""
+
+    def card_changed(self, t: int, image: str | None, error: str | None) -> None:
+        """The runner applied the slot's next `sd_card` at `t`, in the order they were sent: the
+        slot holds the image file `image` now, or no card; `error` says why it refused the
+        change, which left the slot as it was."""
 
 
 class Hold(Protocol):
@@ -226,6 +242,9 @@ class BoardLink:
         ethernet = [interface.name for interface in interfaces if interface.ethernet]
         if len(ethernet) > 1:
             raise ValueError(f"one network behind the access point, not {', '.join(ethernet)}")
+        slots = [interface.name for interface in interfaces if interface.card_slot]
+        if len(slots) > 1:
+            raise ValueError(f"one SD card slot, not {', '.join(slots)}")
         self.board = board
         self.chip = chip
         self.clock = clock
@@ -394,6 +413,8 @@ class BoardLink:
                         f"{owner.name}: UART receive overflow (rxfifo_ovf) on GPIO "
                         f"{message.pin}: the simulated network requires a lossless route"
                     )
+        elif isinstance(message, SdCardAck):
+            self._sd_card_ack(message)
         elif isinstance(message, Console):
             if self.console is not None:
                 with calling(CONSOLE, "console"):
@@ -429,6 +450,13 @@ class BoardLink:
                         interface.name, "receive", interface.receive(message.t, "out", message.data)
                     )
                 self._answers += [(interface, t, data) for t, data in answers]
+
+    def _sd_card_ack(self, message: SdCardAck) -> None:
+        slot = next((i for i in self.interfaces if i.card_slot), None)
+        if slot is None:
+            raise LinkError("the runner sent sd_card_ack, and no interface is the SD card slot")
+        with calling(slot.name, "card_changed"):
+            slot.card_changed(message.t, message.image, message.error)
 
     def _uart_cfg(self, message: UartCfg) -> None:
         self._routes[message.port] = message
@@ -566,7 +594,7 @@ class BoardLink:
         is not a message of version 1, one stamped before the turn, one on a pin the link does not
         watch; and one on a pin another interface is wired to, which the runner would take."""
         source = interface.name
-        if not isinstance(message, UartRx | GpioIn | Release | Adc | EthRx | WifiAp):
+        if not isinstance(message, UartRx | GpioIn | Release | Adc | EthRx | WifiAp | SdCardChange):
             raise LinkError(f"{source} sent {message!r}, which is not an input")
         try:
             # What the runner reads, through the same codec: types, ranges, the line's length.
@@ -585,6 +613,10 @@ class BoardLink:
                 raise LinkError(
                     f"{source} sent {message.TYPE}, and is not the network behind the access point"
                 )
+            return
+        if isinstance(message, SdCardChange):
+            if not interface.card_slot:
+                raise LinkError(f"{source} sent sd_card, and is not the SD card slot")
             return
         if isinstance(message, GpioIn):
             pins = {pin for pin, _ in message.levels}

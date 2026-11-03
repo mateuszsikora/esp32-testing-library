@@ -112,6 +112,17 @@ class EthTx:
 
 
 @dataclass(frozen=True)
+class SdCardAck:
+    """What the SD card slot holds after the harness's `sd_card`, and why the change was
+    refused, if it was (5.19). Not an event: nothing answers it."""
+
+    TYPE: ClassVar[str] = "sd_card_ack"
+    t: int
+    image: str | None
+    error: str | None = None
+
+
+@dataclass(frozen=True)
 class Sync:
     """The end of the runner's turn at the block point `t` (5.6)."""
 
@@ -259,6 +270,16 @@ class ChipReset:
 
 
 @dataclass(frozen=True)
+class SdCardChange:
+    """From `t` the SD card slot holds a card with the image file `image`, or, with `None`, no
+    card (5.19)."""
+
+    TYPE: ClassVar[str] = "sd_card"
+    t: int
+    image: str | None
+
+
+@dataclass(frozen=True)
 class Wait:
     """The end of the peer's turn (5.13); `None` is no bound."""
 
@@ -276,8 +297,8 @@ class Stop:
 
 
 Event = UartTx | UartCfg | GpioOut | Reset | EthTx
-RunnerMessage = RunnerHello | Event | Sync | Console | Warn | Stats
-Input = UartRx | GpioIn | Release | Adc | EthRx | WifiAp | Power | ChipReset
+RunnerMessage = RunnerHello | Event | Sync | Console | Warn | SdCardAck | Stats
+Input = UartRx | GpioIn | Release | Adc | EthRx | WifiAp | Power | ChipReset | SdCardChange
 HarnessMessage = HarnessHello | Input | Wait | Stop
 Message = RunnerMessage | HarnessMessage
 
@@ -555,6 +576,9 @@ DECODERS: dict[Sender, dict[str, Callable[[Fields], Message]]] = {
             f.opt_integer("baud"),
             f.opt_integer("bytes"),
         ),
+        "sd_card_ack": lambda f: SdCardAck(
+            f.integer("t"), f.opt_string("image"), f.opt_string("error")
+        ),
         "stats": _stats,
     },
     "harness": {
@@ -569,6 +593,7 @@ DECODERS: dict[Sender, dict[str, Callable[[Fields], Message]]] = {
         "wifi_ap": lambda f: WifiAp(f.integer("t"), f.boolean("on")),
         "power": lambda f: Power(f.integer("t"), f.boolean("on")),
         "chip_reset": lambda f: ChipReset(f.integer("t")),
+        "sd_card": lambda f: SdCardChange(f.integer("t"), f.opt_string("image")),
         "wait": lambda f: Wait(
             f.integer("ack"), f.opt_integer("quiet_until"), f.opt_integer("latency")
         ),
