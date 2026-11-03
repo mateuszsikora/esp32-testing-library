@@ -119,6 +119,17 @@ delay. Short pulses do nothing; disabling the output ends a pulse. RI follows 1 
 ending edge; a test's direct power call changes it at the test's instant. A power change before a
 pending RI response takes effect replaces that response.
 
+The modem is on the board's supply. `board.power_off()` switches it off as `lose_power()` does: RI
+drops, and PPP with its TCP sessions ends, and no PWRKEY pulse starts it while the board is off.
+After the `board.power_on()` that follows, the modem stays off until the firmware's PWRKEY pulse
+starts it, as on the board, whatever it was at the first power-on; the test's `modem.power_on()`
+starts it too. The board's supply and the test's `lose_power()` are apart: a modem whose supply the
+test took stays without it through a power cycle of the board, until `restore_power()`, and a
+`modem.power_on()` while the board is off starts it only once the board's power is back and
+PWRKEY is pulsed. `board.reset()` resets the
+ESP32 alone: the modem keeps its power and its state, so a firmware that checks RI at boot finds
+it on ([resets and power cycles](pytest-plugin-user.md#resets-and-power-cycles)).
+
 The report has a `modem AT commands:` section keeping every command and its time, even when the
 rolling UART log has discarded its bytes. The `esp32sim_link` JSON property's
 `routes["uart.modem"]["commands"]` contains `t_ns`, `command`, `response` and `fallback` for each.

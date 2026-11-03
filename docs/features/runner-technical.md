@@ -173,13 +173,21 @@ default speed. The image goes through esp32sim's `FileStore::write_through`: eac
 is a seek and a read or write of the file, with no cache, so the file holds every accepted block
 at once.
 
+`SdCard::power_off`, which the session calls when the peer switches the board's supply off
+([protocol 5.17](../protocol.md#517-power-ext-105)), puts the card back as it was when it was
+inserted: out of SPI mode, uninitialised, CRC checking off, no erase range, `Command` phase, the
+command in progress and `out` emptied. A block in `Receiving` is dropped with its phase; every
+block written before it is in the image. A reset of the chip alone (`chip_reset`, or one the guest
+asks for) leaves the card as it is, and the host's CMD0 finds it where it was.
+
 ### The session
 
 `Session` runs the protocol over two traits, `Guest` (the machine: cycles, `run_until`,
-`chip_reset`, `uart_route`, `rx_pending`, `uart_input`, `gpio_drive`, `take_gpio_inputs`, and for
-Wi-Fi `take_eth_frames`, `eth_input`, `wifi_access_point`, `wifi_leave` and `wifi_drops`, whose
-defaults are a chip without Wi-Fi: no frames, nothing taken, nothing attached, left at once, no
-drops) and
+`chip_reset`, `power_on_reset`, `idle_until`, `uart_route`, `rx_pending`, `uart_input`,
+`gpio_drive`, `take_gpio_inputs`, and for Wi-Fi `take_eth_frames`, `eth_input`,
+`wifi_access_point`, `wifi_leave`, `wifi_drops` and `wifi_forget`, whose defaults are a chip
+without Wi-Fi: no frames, nothing taken, nothing attached, left at once, no drops, nothing to
+forget) and
 `Link` (the socket: `send`, `flush`, `idle`, `closing`, `recv`), so that its tests drive it with a
 scripted guest and a fake peer. `impl Guest for esp32::Machine` sets `max_cycles` and calls
 `run(u64::MAX)`, calls `reboot()` for `chip_reset`, reads `bus.periph.uart_route(port)` and
@@ -187,7 +195,21 @@ scripted guest and a fake peer. `impl Guest for esp32::Machine` sets `max_cycles
 `irq_dirty = true`, reads `GPIO_ENABLE` and `GPIO_OUT` (`bus.periph.gpio.gpio.enable` and `.out`)
 for `gpio_drive`, and for `take_gpio_inputs` does what the bus's `deliver_board_inputs` does at
 its tick: `SocBus::gpio_set_input` for each of the board's `take_edges`, then
-`SocBus::gpio_release_input` for each of its `released_inputs`.
+`SocBus::gpio_release_input` for each of its `released_inputs`. `idle_until` sets `bus.cycles`
+and runs nothing; `wifi_forget` detaches the access point (`StationLink::attach(None, None)`).
+
+`power_on_reset` is the chip's power-on reset, which esp32sim has no call for: `reboot()` resets
+the cores (core 1 held), the digital peripherals and PSRAM, but keeps SRAM, the RTC memories and
+the RTC registers, as a reset with power does. The runner then writes zeros over what a chip
+without power loses, through `SocBus::load_bytes`, which moves the page versions of esp32sim's
+decoded-block cache on, so that no block decoded from the old contents runs again: DRAM from
+`DRAM_HIGH - dram.len()` (the ROM's data at `0x3ffadafc` included), IRAM from `IRAM_LOW`, the
+cache's RAM at `0x40070000`, RTC fast memory at `0x3ff80000` and RTC slow memory at `0x50000000`.
+It loads the ROM's ELF again (`Machine::load_rom`), so that DRAM holds the ROM's initialised data
+as the first boot found it, and puts in the RTC registers of a new chip
+(`Peripherals::new(mac).rtc`): `RESET_STATE` says `POWERON_RESET` for both cores, and the RTC timer
+(`slow_ticks`) and watchdog start from 0. It returns 1. The ROM's ELF is the one `setup` read,
+which `main` keeps and passes in `Options::rom`.
 
 `SocketBoard` and `Session` share a `socket_board::Recorder`: the peer's `watch`, the log of what
 the guest did, the watched pins' enable and latch as last reported (`reported`) and their pad
@@ -224,6 +246,23 @@ specifies it:
    `chip_reset`, the routes after it and, while `watch` is not empty, a `gpio_out` of the watched
    pins as `gpio_drive` reads them, with a change for every pin whose `GPIO_ENABLE & GPIO_OUT` bit
    differs from `levels_reported` (`reset_gpio`); any other stop but `Halted` ends the run.
+
+   `apply_inputs` also takes the peer's `power` and `chip_reset`
+   ([protocol 5.17 and 5.18](../protocol.md#517-power-ext-105)). `power` off (`power_off`)
+   collects what the guest did, sets `off`, calls `SdCard::power_off` on the card in
+   `Options::card`, forgets the access point, and queues the routes and the pins as the chip
+   leaves them: while `off`, `routes` reads no UART routed and `pads` no pad driven, whatever the
+   machine's registers hold. `power` on and `chip_reset` (`power_on_reset`) clear `off`, call
+   `Guest::power_on_reset`, put a fresh access point on the air when the peer has it on (or
+   forget it), and queue the `reset` and what follows it as for `Stop::SwReset`. A `chip_reset`
+   while `off`, and a `power` to the state the supply is in, do nothing. After any of them
+   `boundary` goes round again before the guest runs: the `reset` sets the block point, and with a
+   latency of 0 the peer's turn at the reset's own `t` comes before the guest's next instruction.
+   While `off`, the loop calls `idle_until` instead of `run_until`, with a slice end that leaves
+   out the next whole millisecond, so that an hour without power is a few slices; `deliver` drops
+   the bytes it paces, as `unrouted_rx`, without handing them to the machine, and `deliver_eth`
+   the frames, as `eth_rx_dropped`; `switch_access_point` only sets `ap_on`, which the power-on
+   reset then follows.
 3. `finish` calls `Link::closing`, sends what is left where the end calls for it (after a last
    `collect` for `max_seconds`, a signal and an emulator stop), adds up the station link's drops,
    and sends `stats`, then `Link::close`.
@@ -569,7 +608,8 @@ A failure to write the last messages does not change the exit code: the first ca
 - `runner/src/protocol/tests.rs`: time conversion in both directions and past 76 emulated
   seconds, character times, base64 against RFC 4648's vectors and malformed input, parsing every
   message the peer may send and refusing malformed ones (`eth_rx` of 13 bytes or without `t`,
-  `wifi_ap` with `on` of `1` or missing; 1518 bytes taken and 1519 refused), the exact text of the
+  `wifi_ap` with `on` of `1` or missing, `power` without `on` or `t` or with `on` a string,
+  `chip_reset` without `t` or with a negative one; 1518 bytes taken and 1519 refused), the exact text of the
   runner's messages, `eth_tx` and `stats` with `wifi` among them,
   and `the_esp32sim_revision_is_the_one_cargo_builds`, which checks that the revision `hello`
   reports is the one in `runner/Cargo.toml`.
@@ -580,7 +620,10 @@ A failure to write the last messages does not change the exit code: the first ca
   or CMD8, the CRC checks before and after CMD59, the CSD, CID, SCR and SD status, a single and a
   multiple block read ended by CMD12 as `sdspi` reads it, a read past the end, a single block
   write with a bad and a good CRC, a multiple block write with its stop token and ACMD22, an
-  erase, and the state a chip reset finds.
+  erase, the state a chip reset finds, and
+  `after_a_power_cut_the_card_is_uninitialised_and_keeps_its_whole_blocks`: a multiple block
+  write cut inside its second block, after which the card answers nothing before CMD0, the first
+  block is in the image and the second is not.
 - `runner/src/socket_board/tests.rs`: what `SocketBoard` records: every UART byte, and only the
   GPIO changes of watched pins, enable-only changes included; and the peer's levels and releases
   it hands the chip, in order, with `input_levels` after them.
@@ -599,7 +642,23 @@ A failure to write the last messages does not change the exit code: the first ca
   `latency` 0, `gpio_out` for watched pins as an event, `gpio_in` and `release` queued and applied
   at their time in arrival order, a `watch` with a pin the chip does not have refused at the
   handshake, `input_on_output`, and the
-  `gpio_out` after a reset, also for a pad a peripheral drove high with `GPIO_OUT` at 0.
+  `gpio_out` after a reset, also for a pad a peripheral drove high with `GPIO_OUT` at 0. The
+  board's supply and EN: `with_the_supply_off_the_guest_runs_nothing_and_its_time_goes_on` (no
+  slice of the guest while off, a few idle slices, a byte sent meanwhile unrouted, the routes
+  cleared at the switch, `reset` with cause 1 when the supply comes back);
+  `en_resets_the_chip_with_power_on_as_its_cause_and_does_nothing_without_power` (a `chip_reset`
+  while off and a second `power` of either state change nothing);
+  `the_reset_from_the_peer_goes_out_before_the_guest_runs_again` (with a latency of 0, the turn at
+  the reset's own `t` follows it at once); `with_the_supply_off_no_pad_is_driven` (a `gpio_out`
+  that clears the driven pin, and the peer's level kept); and
+  `the_station_loses_its_access_point_with_the_power_and_finds_a_fresh_one_after` (`wifi_forget`
+  at the switch, a frame dropped while off, a fresh access point when the supply comes back);
+  and `an_access_point_switched_with_the_supply_off_is_as_the_peer_left_it_at_power_on` (no
+  switch reaches the link while off, and the power-on reset follows the last `wifi_ap`).
+  `on_the_emulator_a_power_on_reset_clears_sram_and_the_rtc_and_keeps_the_flash` runs
+  `power_on_reset` on the real `esp32::Machine` with a ROM of no segments: DRAM, IRAM, the
+  cache's RAM and both RTC memories read 0, the flash keeps what was written, the cycle count
+  stays, and the RTC registers say `POWERON_RESET` with the RTC timer at 0.
   `on_the_emulator_the_slices_stop_a_guest_asleep_in_waiti_at_the_block_point` runs the real
   `esp32::Machine` on a few instructions in IRAM that write one byte to UART1 and sleep in
   `waiti`, at the 40 MHz the core starts at;

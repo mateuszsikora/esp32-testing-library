@@ -184,6 +184,18 @@ def test_the_end_of_the_run_raises_run_ended_with_the_reason() -> None:
         run.clock.wait(S)
 
 
+def test_a_step_on_the_board_after_the_end_of_the_run_raises_run_ended_at_once() -> None:
+    run = Run(end=2 * S)
+    run.clock.check("board.reset()")
+    with pytest.raises(RunEnded):
+        run.clock.wait(10 * S)
+    with pytest.raises(RunEnded) as raised:
+        run.clock.check("board.reset()")
+    assert str(raised.value) == (
+        "the run ended at 2 s before board.reset(): the runner exited with code 0"
+    )
+
+
 def test_without_stats_run_ended_names_the_last_turn_only() -> None:
     run = Run(end=2 * S, stats=False)
     with pytest.raises(RunEnded, match=r"^the run ended after the turn at 1\.9 s while"):

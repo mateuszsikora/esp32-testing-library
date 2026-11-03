@@ -46,6 +46,17 @@ wall-time timeout, 600 s by default ([the test's timeout](pytest-plugin-user.md#
 A run lasts as long as the test waits, up to a day of emulated time (`--max-seconds 86400`), at
 which the runner ends it and a waiting test gets `RunEnded`.
 
+One runner serves the whole test, from the first `power_on()` to teardown. `board.reset()`,
+`board.power_off()` and a `power_on()` after it go to it over the link, at the board's time the test
+calls them, and the run goes on through them on the same clock
+([resets and power cycles](pytest-plugin-user.md#resets-and-power-cycles)). The flash the firmware
+writes to, NVS and OTA data among them, is the runner's copy of the build's files: a power cycle
+keeps it, and the build's files are never written. The card in the slot is the test's image file,
+which keeps what the firmware wrote through every reset and power cycle; with the supply off the
+card loses its power, and the firmware's driver has to mount it again. Each reset goes into the
+run's log as `boot N: REASON (reset cause C)`, and into the link's statistics as one of its
+`resets`.
+
 The console reaches the test over the link, in emulated-time order with the runner's turns
 (`--console both`). The runner's stdout gets it too, and with it the runner's own lines
 (`esp32tl-runner: ...`): pytest-embedded writes that stream to the test's `dut.log`, in a directory

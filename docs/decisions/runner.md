@@ -464,3 +464,37 @@ version stays, as it did when `gpio_out` came with M3.
 
 **Rejected:** version 2, which every peer and the recording header's tools would have had to follow
 for messages none of them can receive.
+
+## A power-on reset is reboot() with SRAM and RTC memory zeroed, in the same machine
+
+Status: decided (#105)
+
+esp32sim has no call for a power-on reset: `reboot()` resets the cores, the digital peripherals
+and PSRAM and keeps SRAM, the RTC memories and the RTC registers, as a reset with power does. For
+`chip_reset` and `power` on, the runner calls `reboot()`, then writes zeros over DRAM, IRAM, the
+cache's RAM and both RTC memories through `SocBus::load_bytes`, which moves on the page versions
+that esp32sim's decoded-block cache checks, loads the ROM's ELF again for the data its reset
+handler expects in DRAM, and puts in a new chip's RTC registers, which say `POWERON_RESET` and
+start the RTC timer at 0. The machine, its flash, its bus cycle counter and its board stay, so the
+run's time goes on and the guest's flash writes are kept (protocol 5.17).
+
+**Rejected:** building a new `Machine` from the `--flash-at` files, because the flash the guest
+wrote would have to be carried over, the bus cycle counter set forward on a machine whose
+peripherals start at 0, and every part of `setup` run again inside the session; writing the zeros
+into `SocBus`'s vectors directly, because blocks decoded from the old contents would stay valid;
+`request_reset(1)` alone, which reports `POWERON_RESET` and keeps every memory; and asking
+esp32sim for a power-on reset first, because the runner can do it with what esp32sim exposes, and
+an upstream change waits until it is shown to be needed there.
+
+## With the supply off the run loop idles the guest and still takes the turns
+
+Status: decided (#105)
+
+While the peer has the board's supply off, the runner moves the bus cycle counter from slice to
+slice without running the guest, and keeps taking the peer's turns and applying its inputs at
+their times. Without the guest, a slice is not cut at the next emulated millisecond: it takes no
+wall time, so an hour without power is a few slices. The chip reports no route and drives no pad,
+whatever its registers hold; bytes and frames for it are dropped and counted.
+
+**Rejected:** stopping the run loop until the supply comes back, because the peer's turns, and
+with them the test's waits and the models' times, would stop with it.

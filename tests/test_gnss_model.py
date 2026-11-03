@@ -425,3 +425,19 @@ def test_a_tap_on_a_modelled_route_records_its_epochs_as_model_gnss(tmp_path: Pa
     replayed = gnss_route([0])
     replayed.replay("gnss-generated-1.jsonl")
     assert replayed.recorded_source() == "replay"
+
+
+def test_without_the_board_s_supply_the_receiver_is_silent_and_comes_back_with_its_fix() -> None:
+    board = Board()
+    board.receiver.fix(at=WARSAW)
+    board.run_to(S)
+    board.receiver.supply(False)
+    assert board.receiver.quiet_until() is None
+    assert board.run_to(5 * S + 300_000_000) == []
+    # the test's silence and the supply are apart: resuming does not give it power
+    board.receiver.resume()
+    assert board.run_to(5 * S + 600_000_000) == []
+    board.receiver.supply(True)
+    assert board.receiver.quiet_until() == 6 * S
+    [(t, epoch)] = board.run_to(6 * S)
+    assert t == 6 * S and b",A," in epoch

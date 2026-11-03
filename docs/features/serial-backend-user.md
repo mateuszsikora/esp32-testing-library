@@ -87,8 +87,18 @@ marker's keyword ([build selection](pytest-plugin-user.md)).
 
 `board.power_on()` hard-resets the board once. Setup may already have booted it; power-on discards
 pending pre-reset serial bytes and starts a new console capture. It is a reset, not a power switch.
-The board continues running after teardown. `board.powered` means power-on succeeded. If reset
-fails, the error propagates, capture remains off and no tap is written; a test may retry.
+The board continues running after teardown. `board.powered` and `board.started` mean power-on
+succeeded. If reset fails, the error propagates, capture remains off and no tap is written; a test
+may retry.
+
+`board.reset()` hard-resets the board again, as power-on does, through pytest-embedded's
+`hard_reset()` (EN pulsed through the adapter's RTS); the console capture and `board.now` go on
+across it, and the run's log gets `board.reset(): hard reset`. Before power-on it raises
+`BoardOff: the board is off; call board.power_on() first`. The backend cannot switch the board's
+supply, nor see the chip's resets: `board.power_off()` skips the test with
+`serial: the backend cannot switch the board's power`, and `board.boots` and `board.boot` with
+`serial: the backend does not see the chip's resets`, at the line that asks, as an unsupported
+source does ([resets and power cycles](pytest-plugin-user.md#resets-and-power-cycles)).
 
 `board.clock` is `wall`. `board.now` uses monotonic elapsed time from the reset request, including
 reset latency, and advances while the test body runs. `board.utc` is the host's UTC at reset plus

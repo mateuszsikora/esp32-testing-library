@@ -58,6 +58,10 @@ struct FakeGuest {
     fifo: [Vec<(u64, u8)>; PORTS],
     /// Where each slice was asked to end.
     slices: Vec<u64>,
+    /// The cycles of each power-on reset.
+    power_resets: Vec<u64>,
+    /// Where each slice with the supply off ended.
+    idles: Vec<u64>,
 }
 
 impl FakeGuest {
@@ -76,6 +80,8 @@ impl FakeGuest {
             routes: std::array::from_fn(|port| UartRoute::new(port, 0, None, None)),
             fifo: Default::default(),
             slices: Vec::new(),
+            power_resets: Vec::new(),
+            idles: Vec::new(),
         }
     }
 
@@ -145,6 +151,22 @@ impl Guest for FakeGuest {
         self.fifo = Default::default();
         self.drive = (0, 0);
         cause
+    }
+    fn power_on_reset(&mut self, _rom: &[u8]) -> u32 {
+        self.power_resets.push(self.now);
+        self.routes = std::array::from_fn(|port| UartRoute::new(port, 0, None, None));
+        self.fifo = Default::default();
+        self.drive = (0, 0);
+        1
+    }
+    fn idle_until(&mut self, cycle: u64) {
+        assert!(
+            cycle > self.now,
+            "an idle slice from {} to {cycle}",
+            self.now
+        );
+        self.idles.push(cycle);
+        self.now = cycle;
     }
     fn uart_route(&self, port: usize) -> UartRoute {
         self.routes[port]
@@ -350,6 +372,8 @@ fn run_for(seconds: f64, mut guest: FakeGuest, mut peer: FakePeer, console: bool
         peer_timeout: None,
         signal: &signal,
         wifi: None,
+        rom: &[],
+        card: None,
     };
     let (end, stats) = Session::new(&mut guest, &mut peer, shared, opts).run();
     Run {
@@ -1118,6 +1142,12 @@ fn a_signal_ends_the_slice_in_progress_with_stats() {
         fn chip_reset(&mut self) -> u32 {
             self.0.chip_reset()
         }
+        fn power_on_reset(&mut self, rom: &[u8]) -> u32 {
+            self.0.power_on_reset(rom)
+        }
+        fn idle_until(&mut self, cycle: u64) {
+            self.0.idle_until(cycle)
+        }
         fn uart_route(&self, port: usize) -> UartRoute {
             self.0.uart_route(port)
         }
@@ -1145,6 +1175,8 @@ fn a_signal_ends_the_slice_in_progress_with_stats() {
         peer_timeout: None,
         signal: &signal,
         wifi: None,
+        rom: &[],
+        card: None,
     };
     let (end, _) = Session::new(&mut guest, &mut peer, shared, opts).run();
     assert!(matches!(end, End::Signal), "{end:?}");
@@ -1233,6 +1265,12 @@ fn on_the_emulator_the_slices_stop_a_guest_asleep_in_waiti_at_the_block_point() 
         fn chip_reset(&mut self) -> u32 {
             self.m.chip_reset()
         }
+        fn power_on_reset(&mut self, rom: &[u8]) -> u32 {
+            self.m.power_on_reset(rom)
+        }
+        fn idle_until(&mut self, cycle: u64) {
+            self.m.idle_until(cycle)
+        }
         fn uart_route(&self, port: usize) -> UartRoute {
             Guest::uart_route(&self.m, port)
         }
@@ -1309,6 +1347,8 @@ fn on_the_emulator_the_slices_stop_a_guest_asleep_in_waiti_at_the_block_point() 
         peer_timeout: None,
         signal: &signal,
         wifi: None,
+        rom: &[],
+        card: None,
     };
     let (end, stats) = Session::new(&mut guest, &mut peer, shared, opts).run();
     assert!(matches!(end, End::MaxSeconds), "{end:?}");
@@ -1696,6 +1736,8 @@ fn on_the_emulator_gpio_in_reaches_the_guest_and_its_output_comes_back_as_gpio_o
         peer_timeout: None,
         signal: &signal,
         wifi: None,
+        rom: &[],
+        card: None,
     };
     let (end, stats) = Session::new(&mut m, &mut peer, shared, opts).run();
     assert!(matches!(end, End::MaxSeconds), "{end:?}");
@@ -1834,6 +1876,12 @@ impl Guest for WifiGuest {
     fn chip_reset(&mut self) -> u32 {
         self.inner.chip_reset()
     }
+    fn power_on_reset(&mut self, rom: &[u8]) -> u32 {
+        self.inner.power_on_reset(rom)
+    }
+    fn idle_until(&mut self, cycle: u64) {
+        self.inner.idle_until(cycle)
+    }
     fn uart_route(&self, port: usize) -> UartRoute {
         self.inner.uart_route(port)
     }
@@ -1876,6 +1924,10 @@ impl Guest for WifiGuest {
     fn wifi_drops(&self) -> (u64, u64) {
         (2, 1)
     }
+    fn wifi_forget(&mut self) {
+        self.switches.push((self.inner.now, false));
+        self.queued = 0;
+    }
 }
 
 fn eth_rx(t: u64, frame: &[u8]) -> String {
@@ -1908,6 +1960,8 @@ fn run_wifi(end: u64, guest: &mut WifiGuest, peer: &mut FakePeer) -> (End, Stats
         peer_timeout: None,
         signal: &signal,
         wifi: Some(&wifi),
+        rom: &[],
+        card: None,
     };
     let shared = guest.inner.shared.clone();
     Session::new(guest, peer, shared, opts).run()
@@ -2083,4 +2137,233 @@ fn an_access_point_put_back_while_it_is_leaving_comes_back_once_it_has_left() {
     assert_eq!(guest.taken, [(cycles(3 * MS), frame(2))]);
     let wifi = stats.wifi.unwrap();
     assert_eq!((wifi.eth_rx, wifi.eth_rx_dropped), (1, 1));
+}
+
+fn power(t: u64, on: bool) -> String {
+    format!(r#"{{"type":"power","t":{t},"on":{on}}}"#)
+}
+
+fn chip_reset(t: u64) -> String {
+    format!(r#"{{"type":"chip_reset","t":{t}}}"#)
+}
+
+/// A peer that sends `script`'s messages, each in the first turn at or after the time it names,
+/// and a turn at each of those times.
+fn scripted(script: Vec<(u64, String)>) -> impl FnMut(&Turn) -> Vec<String> {
+    let mut script: VecDeque<(u64, String)> = script.into();
+    move |turn| {
+        let mut out = Vec::new();
+        while script.front().is_some_and(|(at, _)| *at <= turn.t) {
+            out.push(script.pop_front().unwrap().1);
+        }
+        let next = script.front().map(|(at, _)| *at);
+        out.push(wait(turn.seq, next, None));
+        out
+    }
+}
+
+#[test]
+fn with_the_supply_off_the_guest_runs_nothing_and_its_time_goes_on() {
+    let guest = FakeGuest::new(vec![]).with_routes(&[modem(115_200)]);
+    let peer = FakePeer::new(
+        &[MODEM_TX, MODEM_RX],
+        scripted(vec![
+            (MS, power(MS, false)),
+            // bytes the chip cannot hear: no UART is routed without power
+            (2 * MS, uart_rx(2 * MS, MODEM_RX, 115_200, b"R")),
+            (40 * MS, power(40 * MS, true)),
+        ]),
+    );
+    let r = run(0.05, guest, peer);
+    assert!(matches!(r.end, End::MaxSeconds), "{:?}", r.end);
+    let (off, on) = (cycles(MS), cycles(40 * MS));
+    assert!(
+        r.guest.slices.iter().all(|&end| end <= off || end > on),
+        "the guest ran with the supply off: {:?}",
+        r.guest.slices
+    );
+    assert!(r.guest.idles.iter().all(|&end| end > off && end <= on));
+    // one slice to each turn and to the paced byte, not one per millisecond
+    assert!(r.guest.idles.len() <= 4, "{:?}", r.guest.idles);
+    assert!(r.guest.fifo[1].is_empty());
+    assert_eq!(r.stats.unrouted_rx_bytes, 1);
+    // the routes go with the power, and the chip comes back through a power-on reset
+    let cfg = r.peer.of("uart_cfg");
+    assert_eq!(cfg.len(), 2, "{cfg:?}");
+    assert_eq!(num(cfg[1], "t"), MS);
+    assert_eq!(cfg[1].get("rx_pin"), Some(&Json::Null));
+    let reset = r.peer.of("reset");
+    assert_eq!(reset.len(), 1);
+    assert_eq!((num(reset[0], "t"), num(reset[0], "cause")), (40 * MS, 1));
+    assert_eq!(r.guest.power_resets, [on]);
+    assert_eq!(r.stats.resets, 1);
+}
+
+#[test]
+fn en_resets_the_chip_with_power_on_as_its_cause_and_does_nothing_without_power() {
+    let guest = FakeGuest::new(vec![]);
+    let peer = FakePeer::new(
+        &[],
+        scripted(vec![
+            (MS, chip_reset(MS)),
+            (2 * MS, power(2 * MS, false)),
+            (3 * MS, chip_reset(3 * MS)),
+            // a supply that is off already stays off
+            (4 * MS, power(4 * MS, false)),
+            (5 * MS, power(5 * MS, true)),
+            (6 * MS, power(6 * MS, true)),
+        ]),
+    );
+    let r = run(0.01, guest, peer);
+    assert!(matches!(r.end, End::MaxSeconds), "{:?}", r.end);
+    let resets: Vec<(u64, u64)> = r
+        .peer
+        .of("reset")
+        .iter()
+        .map(|m| (num(m, "t"), num(m, "cause")))
+        .collect();
+    assert_eq!(resets, [(MS, 1), (5 * MS, 1)]);
+    assert_eq!(r.guest.power_resets, [cycles(MS), cycles(5 * MS)]);
+}
+
+#[test]
+fn the_reset_from_the_peer_goes_out_before_the_guest_runs_again() {
+    // with a latency of 0 the reset is answered in a turn at its own time, as one the guest
+    // asked for is
+    let guest = FakeGuest::new(vec![]);
+    let mut sent = false;
+    let peer = FakePeer::new(&[], move |turn| {
+        let mut out = Vec::new();
+        if turn.t == MS && !sent {
+            sent = true;
+            out.push(chip_reset(MS));
+        }
+        out.push(wait(turn.seq, (turn.t < MS).then_some(MS), Some(0)));
+        out
+    });
+    let r = run(0.002, guest, peer);
+    assert!(matches!(r.end, End::MaxSeconds), "{:?}", r.end);
+    let types = r.peer.types();
+    let reset = types.iter().position(|&k| k == "reset").unwrap();
+    assert_eq!(types[reset + 1], "sync", "{types:?}");
+    assert_eq!(num(&r.peer.msgs[reset + 1], "t"), MS);
+}
+
+#[test]
+fn with_the_supply_off_no_pad_is_driven() {
+    let guest = FakeGuest::new(vec![(cycles(MS / 2), Act::Drive(1 << PWRKEY, 1 << PWRKEY))]);
+    let peer = FakePeer::new(
+        &[PWRKEY, RI],
+        scripted(vec![
+            (MS, power(MS, false)),
+            // what the peer drives stays driven, and the chip has it when it comes back
+            (2 * MS, gpio_in(2 * MS, &[(RI, 1)])),
+            (3 * MS, power(3 * MS, true)),
+        ]),
+    );
+    let r = run(0.005, guest, peer);
+    assert!(matches!(r.end, End::MaxSeconds), "{:?}", r.end);
+    let gpio = r.peer.of("gpio_out");
+    assert_eq!(gpio.len(), 3, "{gpio:?}");
+    assert_eq!(num(gpio[1], "t"), MS);
+    assert_eq!(changes_of(gpio[1]), [(u64::from(PWRKEY), 0)]);
+    assert!(pins_of(gpio[1], "enabled").is_empty());
+    // at the power-on reset nothing changed since
+    assert_eq!(num(gpio[2], "t"), 3 * MS);
+    assert!(changes_of(gpio[2]).is_empty());
+    assert!(r.peer.of("warn").is_empty());
+    assert_eq!(r.guest.board.input_levels(), [(RI, true)]);
+}
+
+#[test]
+fn the_station_loses_its_access_point_with_the_power_and_finds_a_fresh_one_after() {
+    let mut guest = WifiGuest::new(Vec::new(), 64);
+    let mut peer = FakePeer::new(
+        &[],
+        scripted(vec![
+            (MS, power(MS, false)),
+            (2 * MS, eth_rx(2 * MS, &frame(1))),
+            (3 * MS, power(3 * MS, true)),
+            (4 * MS, eth_rx(4 * MS, &frame(2))),
+        ]),
+    );
+    let (end, stats) = run_wifi(cycles(6 * MS), &mut guest, &mut peer);
+    assert!(matches!(end, End::MaxSeconds), "{end:?}");
+    assert_eq!(
+        guest.switches,
+        [(cycles(MS), false), (cycles(3 * MS), true)]
+    );
+    let wifi = stats.wifi.unwrap();
+    assert_eq!((wifi.eth_rx, wifi.eth_rx_dropped), (1, 1));
+    assert_eq!(guest.taken.len(), 1);
+    assert_eq!(guest.taken[0].1, frame(2));
+}
+
+#[test]
+fn an_access_point_switched_with_the_supply_off_is_as_the_peer_left_it_at_power_on() {
+    let mut guest = WifiGuest::new(Vec::new(), 64);
+    let mut peer = FakePeer::new(
+        &[],
+        scripted(vec![
+            (MS, power(MS, false)),
+            (2 * MS, wifi_ap(2 * MS, false)),
+            (3 * MS, power(3 * MS, true)),
+            (4 * MS, power(4 * MS, false)),
+            (5 * MS, wifi_ap(5 * MS, true)),
+            (6 * MS, power(6 * MS, true)),
+        ]),
+    );
+    let (end, _) = run_wifi(cycles(8 * MS), &mut guest, &mut peer);
+    assert!(matches!(end, End::MaxSeconds), "{end:?}");
+    // nothing reaches the station's link while it has no power, and the power-on reset
+    // finds the access point as the peer last switched it
+    assert_eq!(
+        guest.switches,
+        [
+            (cycles(MS), false),
+            (cycles(3 * MS), false),
+            (cycles(4 * MS), false),
+            (cycles(6 * MS), true),
+        ]
+    );
+    assert_eq!(guest.asked_to_leave, 0);
+}
+
+/// On the emulator itself: what `power_on_reset` leaves of the chip. A ROM without segments is
+/// enough here: the test looks at the memories, and runs nothing.
+#[test]
+fn on_the_emulator_a_power_on_reset_clears_sram_and_the_rtc_and_keeps_the_flash() {
+    use emu_core::Bus;
+    // an ELF32 little-endian header with no program or section headers
+    let mut rom = vec![0; 52];
+    rom[..6].copy_from_slice(b"\x7fELF\x01\x01");
+    let mut m = esp32::machine([0x24, 0x6f, 0x28, 0x00, 0x11, 0x22], 4 << 20);
+    let memories = [
+        0x3ffb_0000,
+        0x4008_0000,
+        0x4007_0000,
+        0x3ff8_0000,
+        0x5000_0000,
+    ];
+    for address in memories {
+        m.bus.load_bytes(address, &[0xa5; 4]).unwrap();
+    }
+    m.write_flash(0x9000, b"NVS!").unwrap();
+    m.bus.cycles = 7 * SECOND;
+    m.bus.periph.rtc.0.slow_ticks = 12_345;
+    Guest::idle_until(&mut m, 8 * SECOND);
+    m.bus.request_reset(12);
+    assert_eq!(Guest::power_on_reset(&mut m, &rom), 1);
+    for address in memories {
+        assert_eq!(m.bus.read32(address).unwrap(), 0, "{address:#x}");
+    }
+    assert_eq!(&m.bus.flash[0x9000..0x9004], b"NVS!");
+    assert_eq!(m.bus.cycles, 8 * SECOND, "the clock runs on");
+    let rtc = &m.bus.periph.rtc.0;
+    assert_eq!((rtc.reset_cause, rtc.slow_ticks), (1, 0));
+    assert_eq!(
+        rtc.ram.read(0x38),
+        1 | 1 << 6,
+        "RESET_STATE: POWERON on both cores"
+    );
 }

@@ -13,6 +13,7 @@ from esp32tl.link.boardlink import BoardLink, Direction, Interface, Output, Wire
 from esp32tl.link.protocol import (
     MAX_LINE,
     Adc,
+    ChipReset,
     Console,
     EthRx,
     EthTx,
@@ -21,6 +22,7 @@ from esp32tl.link.protocol import (
     HarnessHello,
     HarnessMessage,
     Input,
+    Power,
     Release,
     Reset,
     RunnerHello,
@@ -870,3 +872,39 @@ def test_the_report_counts_the_stations_frames() -> None:
         "  Wi-Fi: 3 Ethernet frames sent (0 dropped by the relay), 2 received (1 with the access"
         " point off the air); 4 frames from the air with no receive descriptor"
     ) in link.report().splitlines()
+
+
+def test_the_board_s_power_and_en_go_out_first_in_the_answer_to_a_turn() -> None:
+    link = started(Peer(schedule=[(300, b"$")]))
+    link.board_input(Power(300, False))
+    link.board_input(ChipReset(300))
+    assert link.receive(Sync(300)) == [
+        Power(300, False),
+        ChipReset(300),
+        UartRx(300, 5, 9600, b"$"),
+        Wait(0, None, None),
+    ]
+    # once only
+    assert link.receive(Sync(400)) == [Wait(0, None, None)]
+
+
+def test_a_board_input_stamped_before_its_turn_fails_the_link() -> None:
+    link = started()
+    link.board_input(Power(100, True))
+    assert link.receive(Sync(200)) == [Stop()]
+    assert link.error == "the board's power is stamped 100 ns, before the turn at 200 ns"
+
+
+def test_an_interface_cannot_switch_the_board_s_power() -> None:
+    link = started(Driver([Power(250, False)]))
+    assert link.receive(Sync(250)) == [Stop()]
+    assert link.error is not None and "which is not an input" in link.error
+
+
+def test_every_reset_is_kept_in_order_and_given_to_on_reset() -> None:
+    seen: list[Reset] = []
+    link = BoardLink("esp32-devkitc", [], on_reset=seen.append)
+    link.receive(HELLO)
+    link.receive(Sync(0))
+    feed(link, Reset(1, 100, 12), Reset(2, 200, 1), Sync(200))
+    assert link.resets == seen == [Reset(1, 100, 12), Reset(2, 200, 1)]

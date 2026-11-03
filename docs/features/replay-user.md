@@ -94,7 +94,7 @@ These raise `SourceError` (`esp32tl.interfaces.SourceError`) in the test body:
 
 | Message | Cause |
 |---|---|
-| `uart.gnss: the board is on already: give an interface its source before board.power_on()` | `gnss.replay` after `board.power_on()` |
+| `uart.gnss: the board is on already: give an interface its source before board.power_on()` | `gnss.replay` after `board.power_on()`; `the board has been on` once `board.power_off()` has switched it off |
 | `uart.gnss has its source already: one per test` | A second `gnss.replay` in one test |
 | `uart.gnss: cannot replay {path}: it is the tap of uart.gnss` | The recording is the file a route is tapped into ([taps](run-report-user.md#tapping-a-route)) |
 

@@ -120,6 +120,15 @@ pub enum Incoming {
         t: u64,
         on: bool,
     },
+    /// The board's supply switched off or on (5.17).
+    Power {
+        t: u64,
+        on: bool,
+    },
+    /// The chip's EN pin pulsed: a power-on reset of the chip alone (5.18).
+    ChipReset {
+        t: u64,
+    },
     Wait {
         ack: u64,
         quiet_until: Option<u64>,
@@ -189,6 +198,13 @@ pub fn parse(line: &str) -> Result<Incoming, String> {
         "wifi_ap" => Incoming::WifiAp {
             t: field("t").time()?,
             on: field("on").boolean()?,
+        },
+        "power" => Incoming::Power {
+            t: field("t").time()?,
+            on: field("on").boolean()?,
+        },
+        "chip_reset" => Incoming::ChipReset {
+            t: field("t").time()?,
         },
         "stop" => Incoming::Stop,
         "adc" => Incoming::NotYet("adc"),

@@ -82,6 +82,13 @@ class HeldClock:
 
     # The test's side.
 
+    def check(self, step: str) -> None:
+        """Raises `RunEnded` once the run has ended: `step`, a call on the board, can no longer
+        reach it."""
+        with self._cv:
+            if self._ended is not None:
+                raise RunEnded(f"the run ended {self._when()} before {step}: {self._ended}")
+
     @property
     def now(self) -> int:
         """The block point of the turn the link was last held at: 0 until the first."""
@@ -159,15 +166,16 @@ class HeldClock:
             raise self._run_ended(what)
 
     def _run_ended(self, what: str) -> RunEnded:
+        return RunEnded(f"the run ended {self._when()} while the test waited {what}: {self._ended}")
+
+    def _when(self) -> str:
         # The last turn is no more than a bound on where the run ended: the runner may have run
         # on to its next block point, or have died anywhere before it.
         if self._ended_at is not None:
-            when = f"at {seconds(self._ended_at)}"
-        elif self._turns == 0:
-            when = "before its first turn"
-        else:
-            when = f"after the turn at {seconds(self._now)}"
-        return RunEnded(f"the run ended {when} while the test waited {what}: {self._ended}")
+            return f"at {seconds(self._ended_at)}"
+        if self._turns == 0:
+            return "before its first turn"
+        return f"after the turn at {seconds(self._now)}"
 
 
 def seconds(ns: int) -> str:

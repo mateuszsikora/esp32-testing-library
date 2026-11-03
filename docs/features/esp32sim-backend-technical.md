@@ -51,14 +51,16 @@ without starting anything:
    (`esp32tl/interfaces/lines.py`) for every `[lines.<role>]` set, also on a profile with none,
    with `now` the `HeldClock`'s, so that what the test drives before power-on holds from `t = 0`
    ([pytest-plugin-technical.md](pytest-plugin-technical.md#data-flow)).
-6. **`BoardLink(profile.name, [*uarts, lines, wifi], chip=profile.chip, on_error=self._end_run, hold=clock, console=self._printed, clock=self.clock)`**
+6. **`BoardLink(profile.name, [*uarts, lines, wifi], chip=profile.chip, on_error=self._end_run, hold=clock, console=self._printed, clock=self.clock, on_reset=self._reset)`**
    (`esp32tl/link/boardlink.py`) is the harness's end of the link: `Esp32Sim.link`. The harness's
    `hello` names the profile and its chip; `watch` is the pins of every UART route and every
    line; the `Wifi` has no pins, and is the link's one interface whose `ethernet` is true, which
    gets the station's `eth_tx` frames. It checks that no two interfaces share a pin. `hold` holds
    every turn until the test
    waits; `_printed` appends each console message's bytes to `console_output`, feeds them to
-   `console_lines` and hands them to `log.console`, in the link's thread.
+   `console_lines` and hands them to `log.console`, in the link's thread. `_reset` puts each
+   `reset` the runner sends into the run's log, `boot N: REASON (reset cause C)`, through
+   `RunLog.chip`, also in the link's thread.
 
 **`Esp32Sim.nvs(namespaces, partition="nvs")`** reads the build's `partition-table.bin`
 from `app.flash_files`, resolves the name and generates a whole NVS image through
@@ -70,8 +72,11 @@ so the test overrides any NVS image the build supplies. The call adds
 `the NVS partition 'NAME'` so a passing test that never powers on fails teardown.
 [Flash contents](flash-contents-technical.md) owns the formats and failures.
 
-**`Esp32Sim.power_on(utc=None)`** raises `BoardOff` when the runner has started already, and a
-`ValueError` for a `utc` that is not a `datetime` with a timezone; it keeps `utc` converted to UTC,
+**`Esp32Sim.power_on(utc=None)`** raises `BoardOff` when the supply is on
+(`the board is on already: call board.power_off() first`). After a `power_off`, with the runner
+started, it switches the supply back on (below), and refuses a `utc` with a `ValueError`. The
+first time it raises a `TypeError` for a `utc` that is not a `datetime`, and a `ValueError` for
+one without a timezone; it keeps `utc` converted to UTC,
 or `POWER_ON_UTC`, for `Esp32Sim.utc` and the GNSS receiver's dates, and logs
 `board.power_on(), the world's time {utc}` at 0 once the runner has started. Then:
 
@@ -101,8 +106,8 @@ or `POWER_ON_UTC`, for `Esp32Sim.utc` and the GNSS receiver's dates, and logs
    that reads that file in a loop and puts what it reads on `msg_queue`. pytest-embedded's listener
    process takes it off the queue, prints it to stdout and appends it to `dut.log`
    (`dut.logfile`). If the start fails, the socket and its directory are removed before the
-   `BackendError`. `Esp32Sim.process` is `None` until it is set here, and `powered` says whether
-   it is.
+   `BackendError`. `Esp32Sim.process` is `None` until it is set here, and `started` says whether
+   it is; `powered` says whether it is and the supply, `_supply`, set here, is on.
 4. A daemon thread runs **`_serve_link`**: `accept()` with a 0.05 s timeout, in a loop that reads
    `_exited` before each attempt and gives up after a timeout that began with the runner already
    gone, so a runner that connected and then exited is still accepted, and one that exits without
@@ -122,6 +127,45 @@ or `POWER_ON_UTC`, for `Esp32Sim.utc` and the GNSS receiver's dates, and logs
    link's final error, and a test's last look at the console sees everything the guest printed
    that the link handed on: all of it, unless the link failed. It is the only thread that waits for the runner: `Popen.poll()` from another thread
    can miss an exit while this one is in `waitpid()`.
+
+**Resets and the supply.** The runner runs from the first `power_on` to teardown, whatever the
+board does; the test's calls go to it stamped at the held clock's `now`, through
+`BoardLink.board_input`, which sends them in the harness's answer to the turn the link is held at
+(the first turn, `t = 0`, when the runner has not reached it yet), when the test next waits,
+first, before what the interfaces send ([protocol 5.17 and 5.18](../protocol.md#517-power-ext-105)).
+Their `t` is that turn's, so `BoardLink`'s check that a board input is not stamped before its turn
+cannot fail with this backend; it is there for another caller:
+
+- `reset()`, with the supply on, queues `ChipReset(now)` and logs `board.reset()`; otherwise
+  `BoardOff` (`the board is off: board.reset() resets a board that is on`).
+- `power_off()`, once started and with the supply on, and `power_on()` after it, go through
+  `_switch(on)`: `Power(now, on)`, `_supply`, then `supply(on)` on every UART of the profile,
+  which hands it to a source that is `Supplied` (`esp32tl/interfaces/uart.py`): the GNSS receiver
+  model and the modem model ([models](models-technical.md), [modem](modem-technical.md)). A replay
+  or a real source is not, and keeps sending. The step goes into the run's log as
+  `board.power_off()` or `board.power_on()`. `power_off()` before the runner has started raises
+  `BoardOff: the board is off; call board.power_on() first`, and on a supply that is off
+  `BoardOff: the board is off already: call board.power_on() to switch it on`.
+- `boots` is `Boot(1, Duration(0), 1)`, then one `Boot(n, Duration(reset.t), reset.cause)` per
+  `reset` in `BoardLink.resets`, numbered from 2; `boot` is the last (`esp32tl/interfaces/board.py`,
+  which also names the causes, `RESET_REASONS`).
+
+`_on()`, which `now`, `utc`, `boots` and every wait go through, asks only that the runner has
+started, so the test can wait on a board that is off: the runner idles the guest and still takes
+the turns the clock bounds. `_asked` refuses a source or a tap once the runner has started, with
+or without the supply: `the board is on already` while it is on, `the board has been on` after.
+`nvs` refuses then too, always with `BackendError: board.nvs: write the flash before
+board.power_on()`.
+
+A `reset()`, `power_off()` or `power_on()` once the run has ended (the runner exited, or the
+link failed, and the backend has ended the clock) raises `RunEnded` at once, through
+`HeldClock.check`, and changes nothing: no step in the log, no model switched, nothing queued.
+`_mark_end_of_run` ends the clock only after the runner's exit and the link's last messages, so a
+call in between still goes through; the next wait raises `RunEnded`.
+
+`boots` changes only as the link reads the runner's `reset`, which comes in the turn after the
+reset: right after `board.reset()`, or the `power_on()` after a `power_off()`, `boot` is still
+the boot before it, until the test waits.
 
 **The test's clock.** `HeldClock` is the link's `Hold`: `BoardLink` calls `turn(now)` at the start
 of every turn until the link fails, before it polls the interfaces, from the link thread; after
@@ -309,10 +353,12 @@ repository makes.
 | Name | What |
 |---|---|
 | `Esp32Sim(dut, app_path, msg_queue, meta, profile, directory=None, skip=None, *, build_dir=None)` | The board, off. Attributes: `name = "esp32sim"`, `clock = "emulated-fifo-write"` (the clock the runner's `hello` must name, a replayed recording must be on, and a tap's recording is on), `dut`, `profile` (the `BoardProfile`), `directory`, `app` (the `IdfApp`), `console_output` (a `bytearray`), `console_lines` (a `ConsoleLines`), `log` (the `RunLog`), `process` (the `RunnerPopen`, `None` until power-on), `link` (the `BoardLink`, complete once `close` returns) |
-| `Esp32Sim.power_on(utc=None)` | Starts the runner; `BoardOff` the second time |
-| `Esp32Sim.powered` | Whether `power_on` has started the runner |
+| `Esp32Sim.power_on(utc=None)` | The first time, starts the runner; after `power_off`, switches the supply back on (no `utc`); `BoardOff` with the supply on |
+| `Esp32Sim.power_off()`, `Esp32Sim.reset()` | The supply off; a pulse of EN. Both at the held clock's `now`, sent with the turn the link is held at; `BoardOff` when the board is not in the state they need, `RunEnded` once the run has ended |
+| `Esp32Sim.powered`, `Esp32Sim.started` | Whether the supply is on, from `power_on` to `power_off`; whether `power_on` has started the runner |
+| `Esp32Sim.boots`, `Esp32Sim.boot` | The chip's boots as `Boot`s, the first at 0 with cause 1 and one per `reset` the link has read; the last. `BoardOff` before the first `power_on` |
 | `Esp32Sim.wait(duration)`, `Esp32Sim.wait_until(condition, *, within)`, `Esp32Sim.wait_on_clock(condition, within, description)` | The test's waits, each a `Duration` of the board's time, logged as steps of the test |
-| `Esp32Sim.now`, `Esp32Sim.utc` | The board's time since power-on, a `Duration`; the world's time, a `datetime` in UTC |
+| `Esp32Sim.now`, `Esp32Sim.utc` | The board's time since the first power-on, a `Duration`, through every reset and while the board is off; the world's time, a `datetime` in UTC |
 | `Esp32Sim.uart(role)` | The `Uart` of `uart.<role>` on the link, a `Gnss` for `gnss`; `BackendError` when the profile has no such route |
 | `Esp32Sim.lines` | The `Lines` of the profile's `[lines.<role>]` sets on the link; `BackendError` when the profile has none |
 | `Esp32Sim.sd_card` | The `SdCard` of the profile's slot; `BackendError` when the profile has none |
@@ -321,7 +367,7 @@ repository makes.
 | `Esp32Sim.close()` | Ends the run and writes the taps; raises `BackendError` for a tap that cannot be written, a failing exit code, a killed runner or a link error |
 | `Esp32Sim.report(run=False)`, `Esp32Sim.properties()` | The `esp32sim link` report section, with the run on the board's clock when `run`; the `esp32sim_link` user property's data |
 | `BackendError` | What keeps the backend from starting, or a failing end |
-| `HeldClock(step=STEP_NS)` | `esp32tl/backends/clock.py`: the link's `Hold`, `turn(now)`; `stop()`, `end(reason, at=None)`; the test's `now`, `wait(ns)`, `wait_until(condition, within_ns, description)` |
+| `HeldClock(step=STEP_NS)` | `esp32tl/backends/clock.py`: the link's `Hold`, `turn(now)`; `stop()`, `end(reason, at=None)`; the test's `now`, `wait(ns)`, `wait_until(condition, within_ns, description)`, and `check(step)`, which raises `RunEnded` (`the run ended {when} before {step}: {reason}`) once the run has ended |
 | `nanoseconds(value, what)`, `seconds(ns)` | `esp32tl/backends/clock.py`: a `Duration` of the board's time to nanoseconds, checked; nanoseconds shown as `12.5 s`, as `str(Duration(ns))` |
 | `listen()` | The listening socket and its path, or `BackendError` |
 | `runner_path()`, `rom_path()` | The runner and the ROM ELF, or `BackendError` |
@@ -387,11 +433,14 @@ In the test body:
 
 | Message | Exception | Cause |
 |---|---|---|
-| `the board is off; call board.power_on() first` | `BoardOff` | A wait, an expect, `now` or `utc` before `power_on()` |
-| `the board is on already: power it on once` | `BoardOff` | A second `power_on()` |
+| `the board is off; call board.power_on() first` | `BoardOff` | A wait, an expect, `now`, `utc`, `boots` or `power_off()` before the first `power_on()` |
+| `the board is on already: call board.power_off() first` | `BoardOff` | `power_on()` with the supply on |
+| `the board is off already: call board.power_on() to switch it on` | `BoardOff` | `power_off()` with the supply off |
+| `the board is off: board.reset() resets a board that is on` | `BoardOff` | `reset()` before power-on or with the supply off |
 | `power_on: utc is {utc!r}, not a datetime with a timezone` | `TypeError`, `ValueError` | Not a `datetime`; a naive `datetime` |
-| `{interface}: the board is on already: give an interface its source before board.power_on()` | `SourceError` | A source after power-on, a card among them |
-| `{interface}: the board is on already: tap a route before board.power_on()` | `SourceError` | A tap after power-on |
+| `power_on: utc is the world's time at the first power-on; it has run on since, and the board's clock with it` | `ValueError` | A `utc` given to a `power_on()` after `power_off()` |
+| `{interface}: the board is on already: give an interface its source before board.power_on()` | `SourceError` | A source after power-on, a card among them; `the board has been on` once the supply is off |
+| `{interface}: the board is on already: tap a route before board.power_on()` | `SourceError` | A tap after power-on; `the board has been on` once the supply is off |
 | the message of `capabilities.check`, as `no backend takes a 'replay' source on uart.gnss; the sources there are model` or `no backend can tap uart.gnss` | `SourceError` | A source or a tap no backend declares |
 | `esp32sim: {reason}`, as `esp32sim: uart.gnss takes no replay source on this backend, only model` or `esp32sim: uart.gnss cannot be tapped on this backend` | the `skip` given: pytest's skip under the plugin | A source or a tap this backend does not declare |
 | `{what} takes a Duration, as seconds({value!r}), not {value!r}` (`as seconds(5)` for what is not a number), `{what} takes a Duration of 0 or more, not {duration}` | `TypeError`, `ValueError` | A duration that is not a `Duration`, or is below 0 |
@@ -484,8 +533,18 @@ with `board.now` after the tenth fix, `gpio_echo` with the LilyGO profile's pull
 `tests/test_gnss_fixture.py` runs `nmea_reader` with a replay, and the ordering errors above
 ([replay-technical.md](replay-technical.md#tests)).
 
+`tests/test_power.py` runs `firmware/persistence` through `esp_restart` and `board.reset()`
+without a card, through `board.reset()` with one, and through a power cycle with one: the reset
+causes, NVS, RTC and RAM counts and the card's
+lines the firmware prints, `boots`, `now` across the power-off, every `BoardOff` and the `utc`
+refusal, and that the build's flash files are unchanged.
+`tests/test_modem_fixture.py::test_the_modem_keeps_its_power_through_a_reset_and_loses_it_with_the_board`,
+`tests/test_nmea_reader_model.py::test_the_receiver_loses_its_power_with_the_board_and_keeps_its_fix`
+and `tests/test_http_request.py::test_joins_again_after_a_reset_or_a_power_cycle` check what the
+modem model, the receiver model and the station do across them.
+
 `tests/test_boardlink.py` and `tests/test_link_protocol.py` test `BoardLink` and the codec without
-a runner; `tests/test_runner_link.py` runs the real runner against a peer of its own, with the
+a runner, `board_input` and `resets` among them; `tests/test_runner_link.py` runs the real runner against a peer of its own, with the
 command line from `runner_command`.
 
 Not covered: that `_end_run` and `close` send `SIGTERM` once only is not asserted, because the

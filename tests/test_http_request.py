@@ -126,3 +126,25 @@ def test_wifi_after_power_on_is_refused(pytester: pytest.Pytester) -> None:
     result.stdout.fnmatch_lines(
         ["*wifi: the board is on already: give an interface its source before board.power_on()*"]
     )
+
+
+@pytest.mark.parametrize("how", ["reset", "power cycle"])
+def test_joins_again_after_a_reset_or_a_power_cycle(
+    board: Esp32Sim, wifi: Wifi, console: Console, how: str
+) -> None:
+    network = wifi.access_point(SSID, password=PASSWORD)
+    network.http.serve("/", "first\n")
+    board.power_on()
+    board.wait_until(console.line(r"^first$"), within=seconds(30))
+    rejoined = network.dhcp.leased()
+    network.http.serve("/", "second\n")
+    if how == "reset":
+        board.reset()
+    else:
+        board.power_off()
+        board.wait(seconds(5))
+        assert rejoined() is None, "a station without power joins nothing"
+        board.power_on()
+    board.wait_until(rejoined, within=seconds(30))
+    board.wait_until(console.line(r"^second$"), within=seconds(30))
+    assert board.link.error is None

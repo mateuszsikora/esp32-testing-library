@@ -19,6 +19,12 @@ discarded until a terminator. Echo defaults off; when enabled it preserves raw c
 Only the history text decodes non-ASCII bytes with replacement. Registration test commands
 (`AT+CREG=?` and its variants) list modes 0–2 without changing the selected mode.
 
+`supply(on)`, which the backend calls through `Uart.supply` at `board.power_off()` and at the
+`power_on()` after it, sets `_board`, the board's supply, apart from `_supply`, the one the test
+takes with `lose_power()` and gives back with `restore_power()` or `power_on()`. Off, it powers a
+running modem down as `lose_power()` does; back, it starts nothing. A PWRKEY pulse starts the
+modem only with both, and `power_on()` with `_board` off restores `_supply` and starts nothing.
+
 The model keeps every `Command` under an RLock. `commands` returns a snapshot. With a model,
 `Esp32Sim.report` appends the command section; `properties` adds all commands to the modem route.
 The rolling wire log still keeps only its normal last entries. Raw data-mode payloads are available
@@ -76,8 +82,8 @@ the immediate escape recognizer. See [network internals](network-technical.md).
 - `uart.modem has its source already: one per test`: replay and model are mutually exclusive.
 - `uart.modem has no modem model: select it before board.power_on()`: a property was read before
   model selection or on a replay.
-- `uart.modem: the board is on already: give an interface its source before board.power_on()`:
-  first source selection was too late. Later calls on an existing model remain allowed.
+- `uart.modem: the board is on already: give an interface its source before board.power_on()`
+  (`the board has been on` after `board.power_off()`): first source selection was too late. Later calls on an existing model remain allowed.
 
 ## Tests
 
@@ -86,7 +92,9 @@ answer timestamps, escape and data handoff, signal mapping, registration, power 
 pulse timing, RI ownership, taps and unbounded command history, and a real `BoardLink` exchange.
 `tests/test_modem_fixture.py` runs `modem_at` on the LilyGO profile, checks physical PWRKEY and
 RI, starts powered, off and after restored supply, changes signal/registration/power on the
-test's clock, compares two complete taps byte for byte, and checks missing-route and late-source
+test's clock, keeps the modem on through `board.reset()` and off after a power cycle until the
+firmware's PWRKEY pulse (and `tests/test_modem_model.py` keeps the board's supply and the test's
+`lose_power()` apart), compares two complete taps byte for byte, and checks missing-route and late-source
 errors. `tests/test_boards.py` checks timing validation. The validation firmware and tests have
 no network dependency.
 

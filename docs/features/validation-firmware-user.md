@@ -36,6 +36,7 @@ whatever `FIRMWARE_OUT` the shell exports, because the tests read the images the
 | `modem_at` | `firmware/modem_at`: AT dialogue, PWRKEY and RI on the LilyGO profile, without a network ([below](#modem_at)) |
 | `pppos_client` | esp-protocols `modem-v1.4.1`, unchanged except sdkconfig: PPP and plain MQTT on the LilyGO modem route ([below](#pppos_client)) |
 | `http_request` | ESP-IDF's `examples/protocols/http_request`, unmodified, with its default `sdkconfig`, for target `esp32`: joins a Wi-Fi access point and fetches `http://example.com/` over and over ([below](#http_request)) |
+| `persistence` | `firmware/persistence`: counts its boots in NVS, RTC memory, RAM and on an SD card, prints them with its reset reason, and restarts itself once ([below](#persistence)) |
 
 ## `modem_at`
 
@@ -69,6 +70,27 @@ nvs_reader: blob=00ff0d0a434180
 The blob line is hexadecimal. A missing key, wrong type or oversized value fails an
 `ESP_ERROR_CHECK` and aborts the firmware. `tests/test_nvs_reader.py` supplies the values
 before power-on and checks the real firmware's output.
+
+## `persistence`
+
+`persistence` shows what a boot finds of the boots before it, for the tests of
+[resets and power cycles](pytest-plugin-user.md#resets-and-power-cycles). Build it with
+`firmware/build.sh persistence`; `make firmware` and `make test` include it. At every boot it
+adds one to `boots` (`u32`) in NVS namespace `persistence` of the default `nvs` partition, to a
+count in RTC slow memory (`RTC_NOINIT_ATTR`) and to one in RAM (`__NOINIT_ATTR`); a count whose
+marker word is not there starts again at 1. With a FAT card in the `esp32-devkitc` profile's slot
+(SCLK 14, MOSI 15, MISO 2, CS 13) it appends `boot N` to `/BOOTS.TXT` and counts the file's lines;
+without one, `sd` is -1. It prints:
+
+```text
+persistence: boot=2 reason=3 rom=12 rtc=2 ram=2 sd=2 uptime_ms=63
+```
+
+`reason` is `esp_reset_reason()` (1 power-on, 3 software restart), `rom` the ROM's reset reason
+for core 0, `esp_rom_get_reset_reason(0)` (1 `POWERON_RESET`, 12 `SW_CPU_RESET`), and `uptime_ms`
+`esp_timer_get_time()` in milliseconds, the firmware's time since its boot. On the boot NVS counts
+as the first it prints `persistence: restarting` and calls `esp_restart()`; on every other boot it
+prints `persistence: done` and returns. `tests/test_power.py` runs it.
 
 ## `sdspi`
 

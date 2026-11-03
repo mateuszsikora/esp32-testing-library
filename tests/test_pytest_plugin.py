@@ -816,6 +816,31 @@ def test_a_wait_fails_at_once_when_the_runner_has_exited(
     )
 
 
+def test_the_board_s_power_and_reset_after_the_run_ended_raise_run_ended_and_log_nothing(
+    fake_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_EXIT", "0")
+    fake_runner.makepyfile(
+        test_fake="""
+        import pytest
+        from esp32tl.interfaces import RunEnded
+
+        def test_after_the_end(board, console):
+            board.power_on()
+            with pytest.raises(RunEnded):
+                console.expect("Hello world!")
+            for step in (board.reset, board.power_off):
+                with pytest.raises(RunEnded, match=r"before board\\.(reset|power_off)\\(\\)"):
+                    step()
+            assert board.powered
+            assert "board.power_off()" not in board.report(run=True)
+            assert "board.reset()" not in board.report(run=True)
+        """
+    )
+    result = fake_runner.runpytest_subprocess("-p", "no:cacheprovider")
+    result.assert_outcomes(passed=1)
+
+
 def test_a_runner_that_fails_to_start_is_reported_once(
     fake_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -978,7 +1003,7 @@ def test_the_board_s_clock_and_sources_go_in_order(
     result.stdout.fnmatch_lines_random(
         [
             "E *esp32tl.interfaces.BoardOff: the board is off; call board.power_on() first",
-            "E *esp32tl.interfaces.BoardOff: the board is on already: power it on once",
+            "E *esp32tl.interfaces.BoardOff: the board is on already: call board.power_off() first",
             "E *esp32tl.interfaces.SourceError: uart.gnss: the board is on already: give an"
             " interface its source before board.power_on()",
             "E *esp32tl.interfaces.SourceError: uart.gnss has its source already: one per test",

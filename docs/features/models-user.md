@@ -128,6 +128,12 @@ $GPGGA,120001.00,,,,,0,00,99.99,,,,,,*64
 - A change at an epoch's instant is in that epoch: a test that waits 25 s and then calls
   `gnss.fix(...)` has the fix in the epoch at 25 s.
 - While silent, the receiver skips its epochs; it does not catch up when it resumes.
+- The receiver is on the board's supply. While the board is off (`board.power_off()`) it sends
+  nothing, as if silent, and from `board.power_on()` it sends again, from the epoch at that instant
+  on, with the fix, the motion and the silence the test gave it: there is no time to a first fix.
+  `go_silent` and `resume` and the supply are apart, so a receiver the test silenced stays silent
+  when the power comes back. `board.reset()` does not touch it
+  ([resets and power cycles](pytest-plugin-user.md#resets-and-power-cycles)).
 - It hears what the firmware sends it and answers nothing: a firmware that configures its
   receiver gets no acknowledgement.
 
@@ -135,7 +141,7 @@ $GPGGA,120001.00,,,,,0,00,99.99,,,,,,*64
 
 | Message | Exception | When |
 |---|---|---|
-| `uart.gnss: the board is on already: give an interface its source before board.power_on()` | `SourceError` | The first model call comes after `board.power_on()` |
+| `uart.gnss: the board is on already: give an interface its source before board.power_on()` | `SourceError` | The first model call comes after `board.power_on()`; `the board has been on` once `board.power_off()` has switched it off again |
 | `uart.gnss replays a recording: it has no receiver to describe; one source per test` | `SourceError` | A model call after `gnss.replay` |
 | `uart.gnss has its source already: one per test` | `SourceError` | `gnss.replay` after a model call |
 | `uart.gnss has no receiver: give it one with gnss.fix(at=...)` | `SourceError` | `gnss.position` before any model call |

@@ -350,3 +350,25 @@ fn a_command_after_a_chip_reset_finds_the_card_where_it_was() {
     assert_eq!(r1(&command(&mut card, 52, 0, 8)).1, ILLEGAL);
     init(&mut card);
 }
+
+#[test]
+fn after_a_power_cut_the_card_is_uninitialised_and_keeps_its_whole_blocks() {
+    let mut card = card(2);
+    init(&mut card);
+    let data = [0xa5; BLOCK];
+    assert_eq!(r1(&command(&mut card, 25, 7, 10)).1, 0);
+    let response = write_block(&mut card, START_MULTI_WRITE, &data, crc16(&data));
+    assert_eq!(response, DATA_ACCEPTED);
+    // the next block is cut short by the power going off
+    card.transfer(pins(true), &[START_MULTI_WRITE], 0);
+    card.transfer(pins(true), &[0x3c; 100], 0);
+    card.power_off();
+    assert!(!card.ready);
+    // out of SPI mode: nothing answers until CMD0 with CS low
+    assert_eq!(command(&mut card, 58, 0, 8), [0xff; 8]);
+    init(&mut card);
+    let answer = command(&mut card, 17, 7, 10);
+    assert_eq!(data_block(&mut card, after_r1(answer), BLOCK), data);
+    let answer = command(&mut card, 17, 8, 10);
+    assert_eq!(data_block(&mut card, after_r1(answer), BLOCK)[7], 8);
+}

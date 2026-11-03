@@ -22,7 +22,7 @@ from esp32tl.backends.esp32sim import BackendError, load_app, refuse, route_wire
 from esp32tl.boards import BoardProfile, capabilities
 from esp32tl.boards.capabilities import CapabilityError, Request
 from esp32tl.interfaces import BoardOff, NeverHappened, RunEnded, SourceError
-from esp32tl.interfaces.board import Board
+from esp32tl.interfaces.board import Board, Boot
 from esp32tl.interfaces.console import ConsoleLines
 from esp32tl.interfaces.gnss import Gnss
 from esp32tl.interfaces.lines import Lines
@@ -68,7 +68,8 @@ def check_artifact(
 
 
 class Serial(Board):
-    """The real board. power_on is a reset; hardware also runs outside the test's waits."""
+    """The real board. power_on is a reset, and so is reset; the test cannot switch the board's
+    power, nor see the chip's resets. Hardware also runs outside the test's waits."""
 
     name = "serial"
     report_section = "serial console"
@@ -128,6 +129,25 @@ class Serial(Board):
     @property
     def powered(self) -> bool:
         return self._start is not None
+
+    @property
+    def started(self) -> bool:
+        return self._start is not None
+
+    @property
+    def boots(self) -> tuple[Boot, ...]:
+        self._skip("serial: the backend does not see the chip's resets")
+
+    def power_off(self) -> None:
+        self._skip("serial: the backend cannot switch the board's power")
+
+    def reset(self) -> None:
+        """Pulses EN through the adapter's RTS, as power_on does."""
+        self._on()
+        if self._closed:
+            raise BoardOff("serial: the board is closed: the port is pytest-embedded's again")
+        self.dut.serial.hard_reset()
+        self.log.test(self.now.ns, "board.reset(): hard reset")
 
     def _on(self) -> None:
         if not self.powered:

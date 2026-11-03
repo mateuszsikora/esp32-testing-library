@@ -209,6 +209,24 @@ The default ESP-IDF partition table puts `nvs` at `0x9000`, size `0x6000`.
 partition table and build provenance. `make firmware` and `make test` include the image;
 CI's existing firmware glob includes its build in the cache.
 
+## `persistence`
+
+`firmware/persistence/main/main.c` depends on `nvs_flash`, `esp_timer`, `esp_driver_spi`, `fatfs`
+and `sdmmc`. `count_boot` calls `nvs_flash_init`, opens `persistence` with `NVS_READWRITE`, reads
+`boots` (absent is 0), writes it back one higher and commits. `next` keeps a count beside a marker
+word, `0x5e5510f1`, in `.rtc_noinit` (`RTC_NOINIT_ATTR`, RTC slow memory) and in `.noinit`
+(`__NOINIT_ATTR`, DRAM): a marker that is not there, as after a power-on, restarts the count at 1.
+`log_boot` mounts the card as `examples/sd_data_logger` does (`spi_bus_initialize` on
+`SDSPI_HOST_DEFAULT`, `esp_vfs_fat_sdspi_mount` at `/sdcard`, no formatting), appends a line to
+`BOOTS.TXT`, counts the newlines of the whole file, unmounts and frees the bus; a mount that fails
+frees the bus and gives -1. The image uses ESP-IDF's default `sdkconfig` and partition table:
+`nvs` at `0x9000`, size `0x6000`.
+
+What it proves on esp32sim, measured on the runs of `tests/test_power.py`: `esp_restart()` keeps
+both memory counts (2 on the second boot) and gives `reason=3 rom=12`; `board.reset()` and a power
+cycle give `reason=1 rom=1` with both counts back at 1, the NVS count and the card's lines going on,
+and `uptime_ms` under a second at the print after a reset, while `board.now` goes on.
+
 ## `http_request`
 
 ESP-IDF's `examples/protocols/http_request`, built as it is: no file of this repository goes into
@@ -396,8 +414,8 @@ write their arguments to `$FAKE_LOG`, with a `PATH` holding only them and `cat`,
 - `test_build_starts_the_pinned_container`: the `docker run` arguments, exactly;
 - `test_local_build_runs_idf_py_and_records_how`: with no image named, every image in order,
   `hello_world` and `sdspi` from the fake `IDF_PATH`, `nmea_reader`, `gpio_echo`, `modem_at` and
-  `nvs_reader` from `firmware/`, `pppos_client` from what a fake `python3` prints, and
-  `http_request` from its copy, `.http_request-v9.9.9` in the output directory, which holds the
+  `nvs_reader` from `firmware/`, `pppos_client` from what a fake `python3` prints,
+  `persistence` from `firmware/`, and `http_request` from its copy, `.http_request-v9.9.9` in the output directory, which holds the
   fake example's `CMakeLists.txt`; the `idf.py` arguments of each, the records with `"container": null`, the markers,
   the "not for goldens" warning and the `built in` lines;
 - reuse of a build directory with the same record, and removal of one with another record;
@@ -421,6 +439,9 @@ values in `config/sdkconfig.json`. `test_gpio_echo_has_the_classic_esp32_flash_l
 checks the same of `sdspi`, with `sd_card.bin` and `sd_card.elf`, and
 `test_sdspi_takes_the_devkit_sd_card_slot_from_sdkconfig` that its four `EXAMPLE_PIN_*` values are
 the `esp32-devkitc` profile's slot and that both of its formatting options are off.
+`test_persistence_has_a_writable_nvs_partition_where_its_boots_are_counted` checks that
+`persistence` has the default `nvs` partition at `0x9000`, writable, and that no file of the build
+is flashed there.
 
 `tests/test_gpio_echo.py` runs the real `gpio_echo` in the real runner on the
 `lilygo-t-a7670g-r2` profile, all but one through the `lines` fixture:

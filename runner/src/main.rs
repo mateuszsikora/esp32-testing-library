@@ -72,12 +72,12 @@ fn main() -> ExitCode {
         Some(Err(message)) => return fail(&message),
         None => None,
     };
-    let mut m = match setup(&opts, shared.clone(), card.clone()) {
-        Ok(m) => m,
+    let (mut m, rom) = match setup(&opts, shared.clone(), card.clone()) {
+        Ok(loaded) => loaded,
         Err(message) => return fail(&message),
     };
     if let (Some(board), Some(shared)) = (&opts.board, shared) {
-        return run_with_board(&opts, board, shared, card, &mut m);
+        return run_with_board(&opts, board, shared, card, &mut m, &rom);
     }
     let wall = std::time::Instant::now();
     let stop = run(&mut m);
@@ -116,6 +116,7 @@ fn run_with_board(
     shared: socket_board::Shared,
     card: Option<sd_card::Shared>,
     m: &mut esp32::Machine,
+    rom: &[u8],
 ) -> ExitCode {
     let signal = Arc::new(AtomicBool::new(false));
     let link = match board {
@@ -155,6 +156,8 @@ fn run_with_board(
             peer_timeout: opts.peer_timeout,
             signal: &signal,
             wifi: opts.wifi.as_ref(),
+            rom,
+            card: card.clone(),
         },
     );
     let (end, stats) = session.run();
@@ -219,13 +222,14 @@ fn report_card(card: Option<&sd_card::Shared>) {
     );
 }
 
-/// The machine with its ROM and flash loaded, at the reset vector. With `shared`, the socket
-/// board is on its pins; with `card`, the SD card, on the socket board or on a board of its own.
+/// The machine with its ROM and flash loaded, at the reset vector, and the ROM's ELF, which a
+/// power-on reset loads again. With `shared`, the socket board is on its pins; with `card`, the
+/// SD card, on the socket board or on a board of its own.
 fn setup(
     opts: &cli::Opts,
     shared: Option<socket_board::Shared>,
     card: Option<sd_card::Shared>,
-) -> Result<esp32::Machine, String> {
+) -> Result<(esp32::Machine, Vec<u8>), String> {
     let flash_size = opts.flash_mb << 20;
     let mut m = esp32::machine(MAC, flash_size);
     // the JEDEC capacity the guest reads follows the size, as in esp32sim
@@ -273,7 +277,8 @@ fn setup(
         .clone()
         .or_else(|| find_rom(rom_name))
         .ok_or_else(|| format!("no {rom_name} found: pass --rom, or set ESP32SIM_ROM_DIR"))?;
-    m.load_rom(&read(&rom)?)
+    let elf = read(&rom)?;
+    m.load_rom(&elf)
         .map_err(|e| format!("{}: {e}", rom.display()))?;
     eprintln!("esp32tl-runner: ROM {}", rom.display());
     for (offset, path) in &opts.flash_at {
@@ -294,7 +299,7 @@ fn setup(
         CONSOLE_UART0
     };
     m.max_cycles = end_cycle(opts);
-    Ok(m)
+    Ok((m, elf))
 }
 
 fn read(path: &Path) -> Result<Vec<u8>, String> {

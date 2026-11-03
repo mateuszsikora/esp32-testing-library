@@ -117,6 +117,11 @@ command. Each line is the board's time, who, and what:
   end sent in, at the time they crossed, whether the route is tapped or not. Printable ASCII is
   shown as it is, `\r`, `\n`, `\t` and `\\` escaped, any other byte as `\xNN`; after 100 bytes the
   line is cut, with the length: `... (512 bytes)`.
+- `chip`: the chip reset, at the time of the reset, with the boot it starts and why:
+  `boot 2: SW_CPU_RESET (reset cause 12)` after `esp_restart()`, `boot 3: POWERON_RESET (reset
+  cause 1)` after `board.reset()` or the `board.power_on()` that follows a `board.power_off()`,
+  which are `test` steps of their own ([resets and power cycles](pytest-plugin-user.md#resets-and-power-cycles)).
+  Kept as the test's steps are, however long the console.
 - `{line} out`, as `modem.pwrkey out`: a level the firmware drove a line of the profile's
   `[lines.<role>]` sets to, `0` or `1`, or `not driven` once its output is off, at the time it
   changed. What the test drives on a line is a `test` step: `lines.drive('modem.ri', 1)`,
@@ -157,7 +162,7 @@ In the test body:
 
 | Message | Exception | Cause |
 |---|---|---|
-| `uart.gnss: the board is on already: tap a route before board.power_on()` | `SourceError` | `gnss.tap` after `board.power_on()` |
+| `uart.gnss: the board is on already: tap a route before board.power_on()` | `SourceError` | `gnss.tap` after `board.power_on()`; `the board has been on` once `board.power_off()` has switched it off |
 | `uart.gnss is tapped already: one tap per test` | `SourceError` | A second `gnss.tap` in one test |
 | `uart.gnss: cannot tap into {path}: {directory} is not a directory` | `FileNotFoundError` | The file's directory does not exist |
 | `uart.gnss: cannot tap into {path}: it is the replay of uart.gnss` | `SourceError` | The file is the recording a route replays: the tap would write over it |

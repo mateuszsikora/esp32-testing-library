@@ -114,7 +114,8 @@ are in [models-technical.md](models-technical.md).
    `backend_failed` unless `request.node.stash.get(CALL_SAW_RUN_END, False)`: a test that waited on
    the run when it ended has already reported the exit code and the link's error, and would
    otherwise show them twice. When `close` returned, `backend.set_up()` names a source, a tap
-   or a line the test drove and `backend.powered` does not hold, while `request.node.stash.get(DID_NOT_PASS, False)` does
+   or a line the test drove and `backend.started` does not hold (a board switched off before
+   teardown still ran its firmware), while `request.node.stash.get(DID_NOT_PASS, False)` does
    not hold either, it fails the teardown with `pytest.fail(..., pytrace=False)`:
    `esp32sim: the test set up the {kind} of {interface} and never called board.power_on(): it ran no firmware`
    (` and ` between several; `{kind}` is `replay` or `tap`, and a line reads `the level of
@@ -329,9 +330,10 @@ The backend's own environment variables are in
 | `{interface} sent {type} on GPIO {pin}, which another interface is wired to` | An interface's `inputs` returned a `gpio_in`, `release` or `adc` on a pin of another interface's; `Lines` sends only on its own | The link's error: the run ends with `stop`, a waiting test gets `RunEnded`, the teardown `the link failed: ...` |
 | `the pins of {interface} hold {pin!r}, not a GPIO number`, `GPIO {pin} is on {interface} and {other}` | `ValueError` from `BoardLink(...)`, for an interface whose `pins` hold something other than a GPIO number, or two interfaces on one pin; a profile cannot give either | Error at setup, with its traceback |
 | `esp32sim: the board profile {name} has no sd_card; its interfaces are {interfaces}` | The test uses `sd_card` on a profile without a slot | Error at setup |
-| `the board is off; call board.power_on() first` | `BoardOff` from a wait, an expect, `now` or `utc` before power-on | Fails the test |
-| `the board is on already: power it on once` | `BoardOff` from a second `power_on()` | Fails the test |
-| `{interface}: the board is on already: give an interface its source before board.power_on()`, `no backend takes a '{source}' source on {interface}; the sources there are {sources}` | `SourceError` from `Uart.replay`, or from the first model call of `Gnss` | Fails the test ([replay-user.md](replay-user.md#when-the-test-gets-it-wrong)) |
+| `the board is off; call board.power_on() first` | `BoardOff` from a wait, an expect, `now` or `utc` before power-on; on esp32sim also from `boots` and `power_off()` (on serial these two skip the test) | Fails the test |
+| `the board is on already: call board.power_off() first` | `BoardOff` from `power_on()` on esp32sim with the supply on | Fails the test |
+| `the board is off already: call board.power_on() to switch it on`, `the board is off: board.reset() resets a board that is on` | `BoardOff` from `power_off()` with the supply off, `reset()` with it off ([resets and power cycles](pytest-plugin-user.md#resets-and-power-cycles)) | Fails the test |
+| `{interface}: the board is on already: give an interface its source before board.power_on()` (`the board has been on` after `power_off()`), `no backend takes a '{source}' source on {interface}; the sources there are {sources}` | `SourceError` from `Uart.replay`, or from the first model call of `Gnss` | Fails the test ([replay-user.md](replay-user.md#when-the-test-gets-it-wrong)) |
 | `uart.gnss has its source already: one per test` | `SourceError` from `Uart.replay` on a route with a source, a replay or a model | Fails the test |
 | `uart.gnss replays a recording: it has no receiver to describe; one source per test` | `SourceError` from a model call, `position` or `receiver()` of `Gnss` after `gnss.replay` | Fails the test |
 | `uart.gnss has no receiver: give it one with gnss.fix(at=...)` | `SourceError` from `Gnss.position` or `receiver()` before any model call | Fails the test |
@@ -510,7 +512,10 @@ pulse, unknown/released outputs, starting/end boundaries, input filtering and in
 
 `esp32tl.interfaces.board.Board` is the abstract base of `Esp32Sim` and `Serial`, re-exported
 from `esp32tl` and, for existing imports, `esp32tl.pytest_plugin`. It declares the common clock,
-waiting, NVS, reporting and lifecycle API. Interface properties reuse each backend's existing
+waiting, NVS, reporting and lifecycle API: `power_on`, `power_off`, `reset`, `powered`, `started`
+and `boots` are abstract, and `boot` is `boots[-1]`. `Boot(number, at, cause)` and its `reason`,
+from `RESET_REASONS`, the classic chip's ROM names, are in the same module, with
+`POWERON_RESET = 1`. Interface properties reuse each backend's existing
 UART/line/slot objects; `console` is a `cached_property` wrapping that backend's console buffers.
 Fixture functions return the properties, preserving object identity and the console cursor.
 The `broker` fixture delegates to `modem.network().broker`, which selects a model source.

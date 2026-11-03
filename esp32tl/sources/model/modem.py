@@ -58,6 +58,8 @@ class Modem:
         self._key = pwrkey
         self._pressed: int | None = None
         self._supply = True
+        # The board's supply, which the modem is on: apart from the test's `lose_power`.
+        self._board = True
         self.powered = True
         self.registered = True
         self._coverage = True
@@ -118,10 +120,12 @@ class Modem:
             self._set_power(self._now(), False)
 
     def power_on(self) -> None:
-        """Restore supply and start the modem in command mode."""
+        """Restore supply and start the modem in command mode; with the board's supply off it
+        starts once that comes back and PWRKEY is pulsed."""
         with self._lock:
             self._supply = True
-            self._set_power(self._now(), True)
+            if self._board:
+                self._set_power(self._now(), True)
 
     def lose_power(self) -> None:
         """Remove supply, silence the UART and prevent PWRKEY from starting the modem."""
@@ -133,6 +137,15 @@ class Modem:
         """Restore the supply; a PWRKEY pulse (or power_on) still has to start the modem."""
         with self._lock:
             self._supply = True
+
+    def supply(self, on: bool) -> None:
+        """The board's supply, which the modem is on, went off or came back. Off, the modem
+        goes off as with `lose_power`; back, it waits for its PWRKEY pulse, and still has no
+        supply if the test took it with `lose_power`: the two are apart."""
+        with self._lock:
+            self._board = on
+            if not on and self.powered:
+                self._set_power(self._now(), False)
 
     def _set_power(self, t: int, powered: bool) -> None:
         self.powered = powered
@@ -160,7 +173,12 @@ class Modem:
             since, self._pressed = self._pressed, None
             duration = key.off_ms if self.powered else key.on_ms
             assert duration is not None
-            if since is not None and t - since >= duration * 1_000_000 and self._supply:
+            if (
+                since is not None
+                and t - since >= duration * 1_000_000
+                and self._supply
+                and self._board
+            ):
                 self._set_power(t + LATENCY_NS, not self.powered)
 
     def receive(self, t: int, data: bytes) -> Iterable[Output]:

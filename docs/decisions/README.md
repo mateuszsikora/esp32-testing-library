@@ -206,6 +206,11 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [A Wi-Fi tap, signal changes and the esp32tl command's Wi-Fi are postponed](harness.md#a-wi-fi-tap-signal-changes-and-the-esp32tl-commands-wi-fi-are-postponed) | `harness.md` | postponed (#31) |
 | [Explicit build paths are relative to the application and never fall back](harness.md#explicit-build-paths-are-relative-to-the-application-and-never-fall-back) | `harness.md` | decided (#102) |
 | [MQTT and TLS event APIs name history queries and next-event conditions explicitly](harness.md#mqtt-and-tls-event-apis-name-history-queries-and-next-event-conditions-explicitly) | `harness.md` | decided (#108) |
+| [A reset and a power cycle go on in the run they happen in, on its clock](harness.md#a-reset-and-a-power-cycle-go-on-in-the-run-they-happen-in-on-its-clock) | `harness.md` | decided (#105) |
+| [board.reset() is EN, a power-on reset of the chip; power_off() is the board's supply](harness.md#boardreset-is-en-a-power-on-reset-of-the-chip-power_off-is-the-boards-supply) | `harness.md` | decided (#105) |
+| [Every interface of a profile is on the board's supply](harness.md#every-interface-of-a-profile-is-on-the-boards-supply) | `harness.md` | postponed (#105) |
+| [Torn flash writes and what RAM holds after a reset are not modelled](harness.md#torn-flash-writes-and-what-ram-holds-after-a-reset-are-not-modelled) | `harness.md` | postponed (#105) |
+| [On serial, reset() pulses EN and power_off() and boots skip](harness.md#on-serial-reset-pulses-en-and-power_off-and-boots-skip) | `harness.md` | decided (#105) |
 
 ## The runner crate and esp32sim
 
@@ -244,3 +249,5 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Ethernet frames are stamped at the slice boundary they are taken at](runner.md#ethernet-frames-are-stamped-at-the-slice-boundary-they-are-taken-at) | `runner.md` | decided (#31) |
 | [The access point that goes off the air deauthenticates the station first](runner.md#the-access-point-that-goes-off-the-air-deauthenticates-the-station-first) | `runner.md` | decided (#31) |
 | [The Wi-Fi messages keep the link protocol at version 1](runner.md#the-wi-fi-messages-keep-the-link-protocol-at-version-1) | `runner.md` | decided (#31) |
+| [A power-on reset is reboot() with SRAM and RTC memory zeroed, in the same machine](runner.md#a-power-on-reset-is-reboot-with-sram-and-rtc-memory-zeroed-in-the-same-machine) | `runner.md` | decided (#105) |
+| [With the supply off the run loop idles the guest and still takes the turns](runner.md#with-the-supply-off-the-run-loop-idles-the-guest-and-still-takes-the-turns) | `runner.md` | decided (#105) |

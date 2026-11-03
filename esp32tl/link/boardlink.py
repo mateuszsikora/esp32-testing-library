@@ -18,6 +18,11 @@ With `--wifi`, the Ethernet frames the station sends (`eth_tx`) go to the one in
 network behind the access point (`Interface.ethernet`), a frame per call, and what it answers goes
 in as `eth_rx`, a frame per output.
 
+The backend can also switch the board's supply and pulse the chip's EN pin (`board_input`): the
+message goes out in the harness's answer to the turn the link is held at, or to the first turn
+before the run reaches it, before what the interfaces send. Every `reset` the
+runner sends is kept in `resets`, in order, and given to `on_reset`.
+
 Warnings and the run's `stats` are kept for the test report. What the harness finds wrong with
 the run is kept in `error`, the first cause only; the harness then ends the run with `stop` at the
 runner's next turn, and still reads to end of file. A `frm_err` warning is such an error: bytes
@@ -34,6 +39,7 @@ from typing import Any, Literal, Protocol
 from esp32tl.link.protocol import (
     MAX_LINE,
     Adc,
+    ChipReset,
     Console,
     EthRx,
     EthTx,
@@ -42,6 +48,7 @@ from esp32tl.link.protocol import (
     GpioOut,
     HarnessMessage,
     Input,
+    Power,
     ProtocolError,
     Release,
     Reset,
@@ -191,7 +198,8 @@ class BoardLink:
     once, from the link's thread, when the harness finds the run wrong, so that the backend can
     end the run without waiting for the runner's next turn. `hold` holds every turn until it
     returns, and bounds the next. `console` is called with the `t` and the bytes of every
-    `console` message. With `clock`, a runner whose `hello` names another clock fails the link."""
+    `console` message. With `clock`, a runner whose `hello` names another clock fails the link.
+    `on_reset` is called, from the link's thread, with every `reset` the runner sends."""
 
     def __init__(
         self,
@@ -203,6 +211,7 @@ class BoardLink:
         hold: Hold | None = None,
         console: Callable[[int, bytes], None] | None = None,
         clock: str | None = None,
+        on_reset: Callable[[Reset], None] | None = None,
     ) -> None:
         owners: dict[int, str] = {}
         for interface in interfaces:
@@ -226,6 +235,11 @@ class BoardLink:
         self.on_error = on_error
         self.hold = hold
         self.console = console
+        self.on_reset = on_reset
+        # The chip's resets, as the runner reported them.
+        self.resets: list[Reset] = []
+        # The board's own inputs for the next turn: its supply switched, its EN pulsed.
+        self._board_inputs: list[Power | ChipReset] = []
         # What the run told and what the harness found, read once `run` has returned.
         self.runner: RunnerHello | None = None
         self.warnings: list[Warn] = []
@@ -245,6 +259,13 @@ class BoardLink:
         )
         self._enabled: frozenset[int] = frozenset()
         self._answers: list[tuple[Interface, int, bytes]] = []
+
+    def board_input(self, message: Power | ChipReset) -> None:
+        """Sends `message` in the harness's answer to the turn the link is held at, or to the
+        first turn before the run reaches it, ahead of the interfaces' inputs; its `t` must not
+        be before that turn's. Called from the test's thread while the hold keeps the link in a
+        turn, or before the run's first turn."""
+        self._board_inputs.append(message)
 
     def run(self, conn: socket.socket) -> None:
         """Reads the runner's messages from `conn` to end of file, writing the harness's in its
@@ -379,10 +400,15 @@ class BoardLink:
                     self.console(message.t, message.data)
         elif isinstance(message, Sync):
             return self._turn(message.t)
+        elif isinstance(message, Reset):
+            # The interfaces need nothing of it: the board persists across it (5.5), and the
+            # routes and pins it resets come again as uart_cfg and gpio_out.
+            self.resets.append(message)
+            if self.on_reset is not None:
+                with calling("the board", "on_reset"):
+                    self.on_reset(message)
         else:
-            # Reset needs nothing of the interfaces: the board persists across it (5.5), and
-            # the routes it resets come again as uart_cfg.
-            assert isinstance(message, Reset | Stats), message
+            assert isinstance(message, Stats), message
         return []
 
     def _uart_tx(self, message: UartTx) -> None:
@@ -472,6 +498,13 @@ class BoardLink:
                 self._stopped = True
                 return [Stop()]
             bounds.append((HOLD, bound))
+        board, self._board_inputs = self._board_inputs, []
+        for switch in board:
+            if switch.t < now:
+                raise LinkError(
+                    f"the board's {switch.TYPE} is stamped {switch.t} ns, before the turn at"
+                    f" {now} ns"
+                )
         outputs, self._answers = self._answers, []
         for interface in self.interfaces:
             with calling(interface.name, "poll"):
@@ -522,7 +555,11 @@ class BoardLink:
             if isinstance(bound, bool) or not isinstance(bound, int) or bound < 0:
                 raise LinkError(f"{interface.name} declares a latency of {bound!r} ns")
             latency = bound if latency is None else min(latency, bound)
-        return [*(message for _, message in inputs), Wait(self._seq, quiet_until, latency)]
+        return [
+            *board,
+            *(message for _, message in inputs),
+            Wait(self._seq, quiet_until, latency),
+        ]
 
     def _check_input(self, interface: Interface, message: Input, now: int) -> None:
         """Refuses, naming the interface that sent it, an input the runner would refuse: one that

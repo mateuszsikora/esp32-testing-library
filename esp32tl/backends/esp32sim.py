@@ -24,6 +24,13 @@ that `wifi.access_point(...)` puts on the runner's air. The backend also owns th
 runner that is not there, the link read to end of file, the runner waited for, `SIGKILL` only as a
 last resort. Then it writes the recordings of the routes the test tapped.
 
+The runner starts once, at the first `power_on()`, and runs to teardown. `reset()` pulses the
+chip's EN pin and `power_off()` switches the board's supply off, until the next `power_on()`; they
+go to the runner on the link, at the board's time the test called them, and the chip comes back
+through a power-on reset. Its flash keeps what the firmware wrote, in the runner, and the build's
+files are never written. The board's clock runs on from the first power-on whatever the board does,
+also while it is off; `boots` are the chip's boots, from the link's `reset` messages.
+
 What the test does on the board, what the firmware prints and the bytes on every route go into a
 `RunLog` (`esp32tl.report`), which the report of a test that failed shows after the link's.
 """
@@ -51,7 +58,7 @@ from esp32tl.backends.clock import HeldClock, nanoseconds, seconds
 from esp32tl.boards import BoardProfile, capabilities
 from esp32tl.boards.capabilities import CapabilityError, Request
 from esp32tl.interfaces import BoardOff, NeverHappened, RunEnded, SourceError
-from esp32tl.interfaces.board import Board
+from esp32tl.interfaces.board import POWERON_RESET, Board, Boot
 from esp32tl.interfaces.console import ConsoleLines
 from esp32tl.interfaces.gnss import Gnss
 from esp32tl.interfaces.lines import Lines
@@ -60,6 +67,7 @@ from esp32tl.interfaces.sd_card import SdCard
 from esp32tl.interfaces.uart import Uart
 from esp32tl.interfaces.wifi import Wifi
 from esp32tl.link.boardlink import BoardLink, Wire
+from esp32tl.link.protocol import ChipReset, Power, Reset
 from esp32tl.net import Internet
 from esp32tl.report import RunLog, board_time, shown
 from esp32tl.sources.replay import Replay
@@ -302,6 +310,8 @@ class Esp32Sim(Board):
         self.log = RunLog()
         self._hold = HeldClock()
         self._utc = POWER_ON_UTC
+        # The board's supply, from power_on to power_off; the runner runs from the first.
+        self._supply = False
         # Every route of the profile, listening and silent until the test gives it a source.
         # One mapping of the files they and the SD card read and write: no tap writes over another
         # route's file or the card's image.
@@ -341,6 +351,7 @@ class Esp32Sim(Board):
             hold=self._hold,
             console=self._printed,
             clock=self.clock,
+            on_reset=self._reset,
         )
         self.process: RunnerPopen | None = None
         self._exited = threading.Event()
@@ -432,12 +443,13 @@ class Esp32Sim(Board):
         self.log.console(t, data)
 
     def _asked(self, request: Request) -> None:
-        """Refuses a source or a tap on an interface once the board is on, or one that no
+        """Refuses a source or a tap on an interface once the board has been on, or one that no
         backend gives, and skips the test when this one does not."""
-        if self.powered:
+        if self.started:
             what = "tap a route" if request.tap else "give an interface its source"
+            state = "is on already" if self.powered else "has been on"
             raise SourceError(
-                f"{request.interface}: the board is on already: {what} before board.power_on()"
+                f"{request.interface}: the board {state}: {what} before board.power_on()"
             )
         declared = capabilities.declared()
         try:
@@ -450,7 +462,7 @@ class Esp32Sim(Board):
 
     def nvs(self, namespaces: flash.Namespaces, partition: str = "nvs") -> None:
         """Replace a named NVS partition with the test's values before power-on."""
-        if self.powered:
+        if self.started:
             raise BackendError("board.nvs: write the flash before board.power_on()")
         tables = [
             Path(f.file_path)
@@ -502,15 +514,44 @@ class Esp32Sim(Board):
 
     @property
     def powered(self) -> bool:
-        """Whether the test has called `power_on`."""
+        """Whether the board's supply is on: from `power_on` to `power_off`."""
+        return self.process is not None and self._supply
+
+    @property
+    def started(self) -> bool:
+        """Whether the test has called `power_on`, and with it started the runner."""
         return self.process is not None
 
+    @property
+    def boots(self) -> tuple[Boot, ...]:
+        """The chip's boots, in order: the first at power-on, then one at each reset, whatever
+        caused it."""
+        self._on()
+        first = Boot(1, Duration(0), POWERON_RESET)
+        later = [Boot(n, Duration(r.t), r.cause) for n, r in enumerate(self.link.resets, start=2)]
+        return (first, *later)
+
+    def _reset(self, message: Reset) -> None:
+        """The chip reset: into the run's log, from the link's thread."""
+        boot = Boot(len(self.link.resets) + 1, Duration(message.t), message.cause)
+        self.log.chip(message.t, f"boot {boot.number}: {boot.reason} (reset cause {boot.cause})")
+
     def power_on(self, utc: datetime | None = None) -> None:
-        """Starts the runner, which boots the guest: the board's clock starts at 0 and stays
-        there until the test waits. `utc`, timezone-aware, is the world's time at power-on;
-        `POWER_ON_UTC` unless given."""
+        """The board's supply on. The first time, starts the runner, which boots the guest: the
+        board's clock starts at 0 and stays there until the test waits. `utc`, timezone-aware,
+        is the world's time at that power-on; `POWER_ON_UTC` unless given. After `power_off`,
+        the supply comes back at the board's time now, and the chip boots through a power-on
+        reset; the world's time has run on meanwhile, and cannot be given again."""
         if self.powered:
-            raise BoardOff("the board is on already: power it on once")
+            raise BoardOff("the board is on already: call board.power_off() first")
+        if self.started:
+            if utc is not None:
+                raise ValueError(
+                    "power_on: utc is the world's time at the first power-on; it has run on"
+                    " since, and the board's clock with it"
+                )
+            self._switch(True)
+            return
         if utc is not None and not isinstance(utc, datetime):
             raise TypeError(f"power_on: utc is {utc!r}, not a datetime with a timezone")
         if utc is not None and utc.utcoffset() is None:
@@ -536,6 +577,7 @@ class Esp32Sim(Board):
             self._close_link()
             raise BackendError(f"cannot start {command[0]}: {error.strerror}") from error
         self.process = process
+        self._supply = True
         self._utc = POWER_ON_UTC if utc is None else utc.astimezone(UTC)
         self.log.test(0, f"board.power_on(), the world's time {self._utc:%Y-%m-%dT%H:%M:%SZ}")
         self._linker = threading.Thread(target=self._serve_link, daemon=True)
@@ -545,14 +587,49 @@ class Esp32Sim(Board):
         self._waiter = threading.Thread(target=self._mark_end_of_run, daemon=True)
         self._waiter.start()
 
+    def power_off(self) -> None:
+        """The board's supply off, at the board's time now: the chip stops, and loses what is
+        not in flash; the SD card, and the parts of the board a model stands for, lose their
+        power with it. The board's clock runs on, and the test may wait, until `power_on`."""
+        if not self.started:
+            raise BoardOff("the board is off; call board.power_on() first")
+        if not self._supply:
+            raise BoardOff("the board is off already: call board.power_on() to switch it on")
+        self._switch(False)
+
+    def reset(self) -> None:
+        """Pulses the chip's EN pin at the board's time now, as the board's reset button does:
+        the chip boots again through a power-on reset, and the rest of the board keeps its
+        power."""
+        if not self.powered:
+            raise BoardOff("the board is off: board.reset() resets a board that is on")
+        self._hold.check("board.reset()")
+        now = self._hold.now
+        self.link.board_input(ChipReset(now))
+        self.log.test(now, "board.reset()")
+
+    def _switch(self, on: bool) -> None:
+        """The board's supply on or off at the board's time now, for the runner and for the
+        models on it; `RunEnded`, and nothing switched, once the run has ended."""
+        step = "board.power_on()" if on else "board.power_off()"
+        self._hold.check(step)
+        now = self._hold.now
+        self.link.board_input(Power(now, on))
+        self._supply = on
+        for uart in self._uarts.values():
+            uart.supply(on)
+        self.log.test(now, step)
+
     @property
     def now(self) -> Duration:
-        """The board's time since power-on: where the test's clock stands."""
+        """The board's time since the first power-on: where the test's clock stands. It runs on
+        through resets, and while the board is off."""
         return Duration(self._on().now)
 
     @property
     def utc(self) -> datetime:
-        """The world's time: the UTC instant at power-on, plus the board's time since."""
+        """The world's time: the UTC instant at the first power-on, plus the board's time
+        since."""
         return self._utc + timedelta(microseconds=self._on().now // 1000)
 
     def wait(self, duration: Duration) -> None:
@@ -601,7 +678,7 @@ class Esp32Sim(Board):
         return value
 
     def _on(self) -> HeldClock:
-        if not self.powered:
+        if not self.started:
             raise BoardOff("the board is off; call board.power_on() first")
         return self._hold
 
