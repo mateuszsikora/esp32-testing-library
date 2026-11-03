@@ -149,10 +149,12 @@ class Warn:
 
 @dataclass(frozen=True)
 class SdIo:
-    """An operation of the SD card that the peer's fault rules acted on, from its `t` (5.20)."""
+    """An operation of the SD card that the peer's fault rules acted on: reported at `t`, begun
+    at `began` (5.20)."""
 
     TYPE: ClassVar[str] = "sd_io"
     t: int
+    began: int
     op: str
     block: int
     blocks: int
@@ -588,6 +590,7 @@ def _sd_io(f: Fields) -> SdIo:
         raise ProtocolError(f"op is {op!r}, not one of {', '.join(SD_OPS)}")
     return SdIo(
         f.integer("t"),
+        f.integer("began"),
         op,
         f.integer("block"),
         f.integer("blocks", 1),

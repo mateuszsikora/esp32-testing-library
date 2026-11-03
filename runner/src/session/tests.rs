@@ -2424,6 +2424,7 @@ fn sd_faults_reach_the_card_when_due_and_what_they_did_goes_out_in_t_order() {
     });
     let io = sd_card::Io {
         cycle: 0,
+        began: cycles(2 * MS),
         op: sd_card::Op::Write,
         block: 8,
         blocks: 1,
@@ -2450,6 +2451,7 @@ fn sd_faults_reach_the_card_when_due_and_what_they_did_goes_out_in_t_order() {
     assert_eq!(sd_io.len(), 1);
     let line = sd_io[0];
     assert_eq!(num(line, "t"), ns(cycles(3 * MS) + 1));
+    assert_eq!(num(line, "began"), 2 * MS);
     assert_eq!(line.get("op").and_then(Json::as_str), Some("write"));
     assert_eq!((num(line, "block"), num(line, "blocks")), (8, 1));
     assert_eq!(line.get("failed"), Some(&Json::Bool(true)));

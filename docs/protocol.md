@@ -136,7 +136,7 @@ seen exactly the events up to the block point, however the emulator schedules it
 | runner → harness | `console` | `t`, `data` | M1 |
 | runner → harness | `warn` *ext* | `t`, `kind`, `detail`, and per kind `port`, `pin`, `baud`, `bytes` | M1 |
 | runner → harness | `eth_tx` *ext* | `seq`, `t`, `data` | M7 |
-| runner → harness | `sd_io` *ext* | `t`, `op`, `block`, `blocks`, `rules`, `failed`, `delay`, `written` | #107 |
+| runner → harness | `sd_io` *ext* | `t`, `began`, `op`, `block`, `blocks`, `rules`, `failed`, `delay`, `written` | #107 |
 | runner → harness | `stats` *ext* | `t`, `end`, `resets`, `turns`, `uart`, `unrouted_rx_bytes`, `inputs_on_output`, `inputs_not_applied`, `rx_bytes_not_paced`; `wifi` with `--wifi` (M7); under `--realtime` also `rt_resyncs` (M5) | M1 |
 | harness → runner | `uart_rx` | `t`, `pin`, `baud`, `data` | M1 |
 | harness → runner | `gpio_in` | `t`, `levels` | M3 |
@@ -681,20 +681,26 @@ A rule acts on operations of one `op`, each counted when it begins:
 
 | `op` | One operation | Begins |
 |---|---|---|
-| `read` | a block read: CMD17, or one block of CMD18 | at the command; for a later block of CMD18, once the block before it has gone out, but see below |
+| `read` | a block read: CMD17, or one block of CMD18 | at the command; for a later block of CMD18, once the block before it has gone out |
 | `write` | a block write: CMD24, or one block of CMD25 | when the block's CRC has come in |
 | `erase` | CMD38, over the blocks CMD32 and CMD33 set | at the command |
 
 A card begins the block after the last one a host wants from a CMD18 before the host's CMD12
-reaches it: ESP-IDF polls for busy before every command, and the first byte it polls already
-belongs to the next block. So the card decides a later block of CMD18 when it begins it, holds it
-for any delay and sends its error token if it fails, but the block counts as an operation only once
-the host has gone on past it: when the card begins the block after it, or a command other than
-CMD12 comes. Its `sd_io` goes out then, with that time as `t`. A CMD12 that comes first stops the
-read at that block: the host never took it, the rules' `skip` and `count` are put back as they
-were, a rule it used up included unless it has been cleared since, and nothing reports it. A host
-that takes a later block's error token and then stops the read with CMD12 therefore gets the
-error but uses up no rule; ESP-IDF sends no CMD12 after one.
+reaches it: ESP-IDF polls for busy before every command, until it has read two bytes that are not
+0, and those already belong to the next block. So the card decides a later block of CMD18 when it
+begins it, holds it for any delay and sends its error token if it fails, but the block counts as
+an operation only once the host has gone on past it: when the card begins the block after it, or a
+command other than CMD12 comes. Its `sd_io` goes out then (5.20). A CMD12 that comes first stops
+the read at that block: the host never took it, the rules' `skip` and `count` are put back as they
+were, a rule it used up included unless it has been cleared since, and nothing reports it. A block
+the host neither goes past nor stops by the end of the run is not reported either.
+
+The bytes of a poll before a CMD12 and of a real read of a failed block are the same, so a host
+that takes a later block's error token and then stops the read with CMD12 gets the error and uses
+up no rule. ESP-IDF sends no CMD12 after one: it returns the error, and its next command, a CMD13,
+goes on past the block. Arduino's SD library (`sdReadSectors` in `sd_diskio.cpp`) does send one,
+then starts a new CMD18 at that block, so a rule of `count` 1 on a later block fails it twice and
+reports the second.
 
 - `id`: the rule's name in `sd_io` and `sd_clear`, 1 or more, and greater than every earlier
   `sd_fault`'s.
@@ -728,15 +734,18 @@ the delay pass on the board's clock, and its own timeouts, read from the same cl
 ### 5.20 `sd_io` *ext* (#107)
 
 ```json
-{"type": "sd_io", "t": 523000000, "op": "write", "block": 8, "blocks": 1, "rules": [1],
- "failed": true, "delay": 0, "written": false}
+{"type": "sd_io", "t": 523000000, "began": 523000000, "op": "write", "block": 8, "blocks": 1,
+ "rules": [1], "failed": true, "delay": 0, "written": false}
 ```
 
-An operation of the SD card that one or more rules acted on, at `t`, when it began (5.19); for a
-later block of CMD18, when the host went on past it. The
-runner sends one for every such operation, and none for the others. Not an event: it has no `seq`
-and sets no block point; it goes out in `t` order with the rest, before the `sync` of its turn.
+An operation of the SD card that one or more rules acted on. The runner sends one for every such
+operation, and none for the others. Not an event: it has no `seq` and sets no block point; it goes
+out in `t` order with the rest, before the `sync` of its turn.
 
+- `t`: when the runner reports it, the message's place in the stream (section 4). `began`: when the
+  operation began (5.19), which `delay` counts from. The two are the same but for a later block of
+  CMD18, reported only when the host goes on past it: there `began` is earlier, and may lie before
+  a message already sent, or before an `sd_clear` of a rule that acted on the block.
 - `op`, `block`, `blocks`: what the operation was, its first block and how many blocks: 1 for a
   read or a write, the erase's range for an erase.
 - `rules`: the `id`s of the rules that acted on it, in the order they were given.

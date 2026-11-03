@@ -293,6 +293,7 @@ fn writes_the_runner_messages() {
     );
     let io = sd_card::Io {
         cycle: 0,
+        began: 24,
         op: Op::Erase,
         block: 64,
         blocks: 32,
@@ -303,7 +304,7 @@ fn writes_the_runner_messages() {
     };
     assert_eq!(
         sd_io(6, &io),
-        r#"{"type":"sd_io","t":6,"op":"erase","block":64,"blocks":32,"rules":[2,5],"failed":false,"delay":250000000,"written":true}"#
+        r#"{"type":"sd_io","t":6,"began":100,"op":"erase","block":64,"blocks":32,"rules":[2,5],"failed":false,"delay":250000000,"written":true}"#
     );
     let w = Warn {
         t: 1,

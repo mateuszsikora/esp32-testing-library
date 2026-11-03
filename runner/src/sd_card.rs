@@ -147,9 +147,12 @@ pub struct Rule {
 /// An operation one or more rules acted on, for `sd_io`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Io {
-    /// When it began: the command (a read, an erase), the block's CRC (a write); for a later
-    /// block of CMD18, when the host went on past it ([`Begun`]).
+    /// When the card reports it: when it began, but for a later block of CMD18, when the host
+    /// went on past it ([`Begun`]).
     pub cycle: u64,
+    /// When it began: the command (a read, an erase), the block's CRC (a write), or the end of
+    /// the block before it (a later block of CMD18).
+    pub began: u64,
     pub op: Op,
     pub block: u64,
     pub blocks: u64,
@@ -180,6 +183,7 @@ struct Verdict {
 /// than CMD12 comes. A CMD12 first undoes it.
 #[derive(Debug)]
 struct Begun {
+    began: u64,
     block: u64,
     verdict: Verdict,
 }
@@ -371,7 +375,13 @@ impl SdCard {
             return;
         };
         if !stopped {
-            self.report(self.now, Op::Read, (begun.block, 1), &begun.verdict, false);
+            self.report(
+                begun.began,
+                Op::Read,
+                (begun.block, 1),
+                &begun.verdict,
+                false,
+            );
             return;
         }
         for old in begun.verdict.before {
@@ -389,10 +399,10 @@ impl SdCard {
         }
     }
 
-    /// Keeps an operation the rules acted on for the peer; `cycle` is when it began.
+    /// Keeps an operation the rules acted on for the peer, reported now; `began` is when it began.
     fn report(
         &mut self,
-        cycle: u64,
+        began: u64,
         op: Op,
         (block, blocks): (u64, u64),
         v: &Verdict,
@@ -408,7 +418,8 @@ impl SdCard {
             self.stats.delayed += 1;
         }
         self.io.push(Io {
-            cycle,
+            cycle: self.now,
+            began,
             op,
             block,
             blocks,
@@ -583,6 +594,7 @@ impl SdCard {
         self.hold(verdict.delay, 0xff);
         if later {
             self.begun = Some(Begun {
+                began: self.now,
                 block: lba,
                 verdict,
             });

@@ -941,7 +941,7 @@ def test_sd_rules_go_out_in_their_turn_and_the_card_s_reports_reach_the_slot() -
     gnss = Peer()
     link = started(gnss, slot)
     assert feed(link, Sync(2 * MS)) == [rule, Wait(0, None, None)]
-    io = SdIo(3 * MS, "write", 8, 1, (1,), True, 0, False)
+    io = SdIo(3 * MS, 3 * MS, "write", 8, 1, (1,), True, 0, False)
     assert feed(link, io, Sync(4 * MS)) == [SdClear(4 * MS, (1,)), Wait(0, None, None)]
     # not an event: no seq to acknowledge, and no other interface hears of it
     assert slot.io == [io]

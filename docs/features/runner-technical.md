@@ -183,14 +183,17 @@ it goes into `Verdict::before`. Where each operation is decided:
 
 A later block of CMD18 (`read_block(lba, true)`, from `next_block`) is held as `SdCard::begun`
 instead of being reported: the host may stop the read before taking it, and ESP-IDF always does,
-with a poll for busy that already clocks out the block's first byte, then CMD12. `take_begun`
-ends it: with `stopped` false, from `next_block` as the card begins the following block or from
-`command` for any command but CMD12, it reports the block at `now`; with `stopped` true, for a
-CMD12, it puts back each rule in `before` by id, re-inserting by id order one that the block used
-up. `clear_rules` drops cleared ids from `before`, so a CMD12 does not bring a cleared rule back.
+with a poll for busy (`poll_busy` waits for two bytes that are not 0) that already clocks out the
+block's first bytes, then CMD12. `take_begun` ends it: with `stopped` false, from `next_block` as
+the card begins the following block or from `command` for any command but CMD12, it reports the
+block, with `Io::cycle` `now`, which keeps `sd_io`'s `t` in order with what the board logged
+meanwhile, and `Io::began` the cycle it began at; with `stopped` true, for a CMD12, it puts back
+each rule in `before` by id, re-inserting by id order one that the block used up. Nothing ends a
+block still held at the end of the run; ESP-IDF always sends a CMD13 after a read
+(`sdmmc_read_sectors_dma`), so it does not leave one held. `clear_rules` drops cleared ids from `before`, so a CMD12 does not bring a cleared rule back.
 The block still counts in `Stats::blocks_read`, as the card read it from the image.
 
-An operation a rule acted on goes into `SdCard::io` as an `sd_card::Io` (its cycle, op, blocks,
+An operation a rule acted on goes into `SdCard::io` as an `sd_card::Io` (its cycles, op, blocks,
 the rules' ids, whether it failed, the delay in nanoseconds, whether the image was written);
 `SocketBoard::spi_transfer_pins` moves them into the board's log as `Recorded::SdIo` after each
 transfer, and the run loop sends each as `sd_io` in `t` order with the rest. `Stats::failed` and
@@ -676,8 +679,11 @@ A failure to write the last messages does not change the exit code: the first ca
   the one before; a write busy and deaf to a command until its delay is done; an erase busy after
   R1 and matched by overlap; cleared rules, and a delay that runs out after its rule is cleared;
   the block a CMD12 stops a CMD18 at, which uses up no rule, a later block reported once the host
-  goes on past it, by the next block or another command, and a rule cleared meanwhile that CMD12
-  does not bring back.
+  goes on past it, by the next block or another command, with `began` and `cycle` apart, a rule
+  cleared meanwhile that CMD12 does not bring back, and one cleared after the block began that
+  still owns it. No test on real firmware goes through CMD18: neither `sdspi` nor
+  `sd_data_logger` sends one, so the stop is covered on the card's bytes and against ESP-IDF's
+  source (v5.3.6) only.
 - `runner/src/socket_board/tests.rs`: what `SocketBoard` records: every UART byte, and only the
   GPIO changes of watched pins, enable-only changes included; the peer's levels and releases
   it hands the chip, in order, with `input_levels` after them; and the SD card at the latest

@@ -131,8 +131,8 @@ def test_a_rule_the_card_cannot_take_is_refused_before_it_goes_anywhere(
 def test_the_cards_reports_become_hits_of_the_rules_that_acted(card: SdCard) -> None:
     first = card.fail("write")
     second = card.delay("write", ms(5))
-    card.card_io(SdIo(7 * MS, "write", 8, 1, (1, 2), True, 5 * MS, False))
-    card.card_io(SdIo(9 * MS, "write", 9, 1, (2,), False, 5 * MS, True))
+    card.card_io(SdIo(7 * MS, 7 * MS, "write", 8, 1, (1, 2), True, 5 * MS, False))
+    card.card_io(SdIo(9 * MS, 9 * MS, "write", 9, 1, (2,), False, 5 * MS, True))
     [both, slow] = card.affected
     assert first.hits == (both,)
     assert second.hits == (both, slow)
@@ -140,6 +140,17 @@ def test_the_cards_reports_become_hits_of_the_rules_that_acted(card: SdCard) -> 
     assert (both.at, both.op, both.block, both.blocks) == (Duration(7 * MS), "write", 8, 1)
     assert (both.failed, both.delay, both.written) == (True, ms(5), False)
     assert repr(slow) == "CardIo(0.009 s write block 9: delayed 0.005 s, written (fault 2))"
+    assert (
+        repr(both)
+        == "CardIo(0.007 s write block 8: failed, delayed 0.005 s, not written (faults 1, 2))"
+    )
+
+
+def test_an_operation_is_at_the_time_it_began_not_the_time_it_was_reported(card: SdCard) -> None:
+    fault = card.fail("read", blocks=8)
+    card.card_io(SdIo(9 * MS, 7 * MS, "read", 8, 1, (1,), True, 0, False))
+    assert fault.hits[0].at == Duration(7 * MS)
+    assert card.properties()["affected"][0]["t_ns"] == 7 * MS  # type: ignore[index]
 
 
 def test_the_report_and_the_properties_say_what_each_rule_did(
@@ -148,7 +159,7 @@ def test_the_report_and_the_properties_say_what_each_rule_did(
     clock.t = MS
     card.fail("write", blocks=range(8, 16), skip=2)
     card.delay("erase", ms(250), count=1)
-    card.card_io(SdIo(2 * MS, "erase", 64, 32, (2,), False, 250 * MS, True))
+    card.card_io(SdIo(2 * MS, 2 * MS, "erase", 64, 32, (2,), False, 250 * MS, True))
     clock.t = 3 * MS
     card.clear_faults()
     image = card.image_path
@@ -216,7 +227,7 @@ def test_the_slot_is_the_links_sd_card_and_its_rules_pass_the_links_checks(card:
     link.receive(HELLO)
     out = link.receive(Sync(0))
     assert out == [SdFault(0, 1, "read", True, 0, 0, 2047, 0, 1), Wait(0, None, None)]
-    link.receive(SdIo(MS, "read", 0, 1, (1,), True, 0, False))
+    link.receive(SdIo(MS, MS, "read", 0, 1, (1,), True, 0, False))
     assert link.error is None
     assert [io.block for io in fault.hits] == [0]
     assert isinstance(card.faults[0], CardFault)

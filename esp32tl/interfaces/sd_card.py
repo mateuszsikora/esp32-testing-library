@@ -209,11 +209,10 @@ class CardImageBuilder:
 class CardIo:
     """An operation of the card that fault rules acted on: a read or a write of one block, or an
     erase of `blocks` blocks from `block`. `at` is when it began on the board's clock: when the
-    command came, for a read or an erase; when the block's CRC came, for a write; for a later
-    block of a multiple block read, when the host went on past it (protocol 5.19). `failed` is
-    whether the card answered with an error, `delay` how long it held its answer, and `written`
-    whether the image was written: a write that went through, an erase. `faults` are the rules
-    that acted on it."""
+    command came, for a read or an erase; when the block's CRC came, for a write; when the block
+    before it was out, for a later block of a multiple block read. `failed` is whether the card
+    answered with an error, `delay` how long it held its answer, and `written` whether the image
+    was written: a write that went through, an erase. `faults` are the rules that acted on it."""
 
     at: Duration
     op: Operation
@@ -588,7 +587,7 @@ class SdCard(Interface):
         with self._lock:
             faults = tuple(self._faults[id] for id in io.rules if id in self._faults)
             done = CardIo(
-                Duration(io.t),
+                Duration(io.began),
                 cast(Operation, io.op),
                 io.block,
                 io.blocks,

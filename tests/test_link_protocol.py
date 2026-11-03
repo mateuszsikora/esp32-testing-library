@@ -65,8 +65,8 @@ EVERY_MESSAGE: list[tuple[Sender, Message]] = [
     ("runner", Console(812_345_678, b"Hello world!\n")),
     ("runner", Warn(1_000_000_000, "frm_err", "baud", port=1, pin=5, baud=115200, nbytes=3)),
     ("runner", Warn(1_000_000_000, "a kind of a later version", "detail")),
-    ("runner", SdIo(523_000_000, "write", 8, 1, (1,), True, 0, False)),
-    ("runner", SdIo(524_000_000, "erase", 64, 32, (2, 3), False, 250_000_000, True)),
+    ("runner", SdIo(523_000_000, 523_000_000, "write", 8, 1, (1,), True, 0, False)),
+    ("runner", SdIo(524_000_000, 524_000_000, "erase", 64, 32, (2, 3), False, 250_000_000, True)),
     (
         "runner",
         Stats(
@@ -301,13 +301,18 @@ def test_an_sd_fault_says_what_it_does_and_no_more_than_the_runner_takes(
         (b'{"type":"sd_clear","t":0,"ids":[0]}', "harness"),
         (b'{"type":"sd_clear","t":0,"ids":1}', "harness"),
         (
-            b'{"type":"sd_io","t":0,"op":"read","block":0,"blocks":0,"rules":[1],'
+            b'{"type":"sd_io","t":0,"began":0,"op":"read","block":0,"blocks":0,"rules":[1],'
             b'"failed":true,"delay":0,"written":false}',
             "runner",
         ),
         (
-            b'{"type":"sd_io","t":0,"op":"read","block":0,"blocks":1,"rules":[1],'
+            b'{"type":"sd_io","t":0,"began":0,"op":"read","block":0,"blocks":1,"rules":[1],'
             b'"failed":true,"delay":0}',
+            "runner",
+        ),
+        (
+            b'{"type":"sd_io","t":0,"op":"read","block":0,"blocks":1,"rules":[1],'
+            b'"failed":true,"delay":0,"written":false}',
             "runner",
         ),
     ],

@@ -132,7 +132,7 @@ routes:
 console: {n} bytes out; tapped into {path}
 sd_card: a card holding {image}
   fault {id} from {at}: {rule}[, cleared at {t}]; {n} operation(s)
-    {at} {op} block {n}: {failed|delayed {delay}}, {written|not written} (fault {ids})
+    {at} {op} block {n}: {failed|delayed {delay}}, {written|not written} (fault {id}|faults {ids})
 the run on the board's clock, {kept}:
   {seconds}.{nanoseconds:09d} s  {who}  {text}
 ```

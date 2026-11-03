@@ -301,7 +301,7 @@ UART route of the profile, `  {interface}: {source}; {bytes}{tap}`: `{source}` i
 `; tapped into {path}` for a tapped route. On a profile with a slot, `SdCard.report()` comes next:
 `sd_card: a card holding {image}` or `sd_card: empty`, then for each fault rule
 `  fault {id} from {at}: {CardFault.describe()}[, cleared at {t}]; {n} operation(s)` and a line
-`    {at} {op} block {n}: failed|delayed {delay}, written|not written (fault {ids})` per
+`    {at} {op} block {n}: failed|delayed {delay}, written|not written (fault {id}|faults {ids})` per
 operation it acted on. With `run`, `log.lines()` follows: the plugin passes it
 for a test that failed. `Esp32Sim.properties()` is `link.properties()` with `routes`, by
 interface: `source` (the kind, or `None`), `detail` (what the source was made from, as the test

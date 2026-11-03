@@ -463,7 +463,8 @@ pub fn eth_tx(seq: u64, t: u64, data: &[u8]) -> String {
 pub fn sd_io(t: u64, io: &sd_card::Io) -> String {
     let rules: Vec<String> = io.rules.iter().map(u64::to_string).collect();
     format!(
-        r#"{{"type":"sd_io","t":{t},"op":"{}","block":{},"blocks":{},"rules":[{}],"failed":{},"delay":{},"written":{}}}"#,
+        r#"{{"type":"sd_io","t":{t},"began":{},"op":"{}","block":{},"blocks":{},"rules":[{}],"failed":{},"delay":{},"written":{}}}"#,
+        ns(io.began),
         io.op.name(),
         io.block,
         io.blocks,

@@ -374,8 +374,10 @@ decides an operation when it begins: at the command, at the block's CRC, at the 
 a CMD18. That makes the selection deterministic, counts every block of a multiple block transfer
 as an operation of its own, and leaves an operation in progress alone when rules change. A card
 begins the block after the last one a host wants from a CMD18 before the host's CMD12 comes, and
-ESP-IDF polls one byte of it before every CMD12, so that block counts only once the host goes on
-past it, and a CMD12 that comes first puts the rules back as they were. Every
+ESP-IDF's poll for busy before every command reads two bytes of it, so that block counts only once
+the host goes on past it, and a CMD12 that comes first puts the rules back as they were. `sd_io`
+then carries two times: `t`, when it is reported, which may not go back in the stream, and `began`,
+which is what a test reads as `CardIo.at` and what a rule's delay counts from. Every
 rule that matches acts and counts, so rules compose without precedence. The runner reports only
 the operations rules acted on (`sd_io`), which keeps a run without rules byte for byte what it
 was, and the protocol at version 1: a peer that gives no rule never sees one.
@@ -385,9 +387,15 @@ answered within it and the peer is a turn away (as for the card itself); rules o
 because a test breaks the card after it has mounted, at a time it chooses; one message that
 replaces the whole policy, because the counts the card has used up would start again at every
 change, unless the harness tracked them; deciding by SPI transaction, because a transaction
-can hold part of a block or several, depending on the driver; and counting the block a CMD12
+can hold part of a block or several, depending on the driver; counting the block a CMD12
 stops, because a `fail` rule of `count` 1 would be used up on a block the firmware never took,
-and the firmware's own read of it would then succeed.
+and the firmware's own read of it would then succeed; undoing only a block whose bytes had not all
+gone out, because ESP-IDF's poll for busy reads the whole two-byte error token of a failed block;
+telling a poll before a CMD12 from a real read of a failed block, because the bytes are the same,
+which costs a driver that stops after a later block's error token, as Arduino's SD library does, a
+second failure on its retry; and a single time, when the block is reported, because a read would
+then seem to take no time before a driver's timeout, and a cleared rule would seem to act after
+it was cleared.
 
 ## An SD card delay passes on the bus's clock, which the board reads from advance_to
 
