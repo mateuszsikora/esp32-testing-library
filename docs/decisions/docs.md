@@ -228,3 +228,24 @@ through either path.
 
 **Rejected:** a separate copy for Codex, because the two workflows would drift. A user-level
 installation would also need setup on every machine instead of travelling with the checkout.
+
+## Invariant numbers are bold text, not ordered-list markers
+
+Status: decided (#113)
+
+Each invariant in `docs/invariants.md` is a bulleted item that starts with its number in bold,
+`- **119.** …`. GitHub renders an ordered list from the number of its first item and counts on
+from there, so with `119.` written as a list marker the page showed it as 44, and a reader citing
+the rendered page cited another rule's number. In bold text the number shows as written.
+
+The continuation lines of the items written as an ordered list keep their indentation, which
+renders the same under a bullet; re-indenting them would have rewritten every line of the file and
+its `git blame` with it. For the same reason the first lines, six characters longer, are not
+rewrapped, so more of them run past 100 columns than before.
+
+**Rejected:** a heading per invariant, because GitHub's anchor would be built from the whole rule
+and change with its wording, and a heading for each of more than a hundred rules would bury the
+section headings in the outline.
+
+**Rejected:** keeping the ordered list and starting a new list at every gap in the numbering,
+because most items are out of order within their section.
