@@ -816,6 +816,7 @@ that references to its number keep their meaning.
      cycle clear both and give `POWERON_RESET`; NVS and the SD card's files keep what every boot
      wrote, and the build's flash files are unchanged.
      `tests/test_power.py::test_a_restart_keeps_ram_and_rtc_memory_and_board_reset_clears_them`,
+     `tests/test_power.py::test_the_card_keeps_its_power_and_its_files_through_board_reset`,
      `tests/test_power.py::test_a_power_cycle_keeps_nvs_and_the_card_and_the_clock_runs_on_while_off`
 - **131.** `board.now` runs on through every reset and while the board is off, and `board.boots`
      holds one boot per reset, at its time, with its cause.
@@ -843,7 +844,7 @@ that references to its number keep their meaning.
      test with their reasons.
      `tests/test_serial_backend.py::test_console_reset_clock_tap_and_autoflash`,
      `tests/test_serial_backend.py::test_serial_capabilities_skip_at_the_call`
-- **136.** Once the run has ended, `board.reset()`, `board.power_off()` and `board.power_on()` raise
-     `RunEnded` at once, and log and switch nothing.
+- **136.** Once the backend has ended the test's clock, `board.reset()`, `board.power_off()` and
+     `board.power_on()` raise `RunEnded` without waiting, and log and switch nothing.
      `tests/test_clock.py::test_a_step_on_the_board_after_the_end_of_the_run_raises_run_ended_at_once`,
      `tests/test_pytest_plugin.py::test_the_board_s_power_and_reset_after_the_run_ended_raise_run_ended_and_log_nothing`

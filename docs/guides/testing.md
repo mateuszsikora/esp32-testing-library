@@ -94,7 +94,7 @@ No test of the suite carries the marker. The only marked tests are the ones
 A test that makes or reads a FAT image carries `@pytest.mark.requires_mtools`: the same hook
 checks once (`mtools_missing`) that `mformat`, `mcopy`, `mdir`, `mtype` and `mmd` are on `PATH`, and
 skips every marked test without them, with the reason `requires_mtools: no mformat, mcopy, mdir,
-mtype, mmd on PATH (mtools)`, naming those missing. The tests of `tests/test_sdspi.py` carry it, and so do the reset and power-cycle tests of `tests/test_power.py`. In
+mtype, mmd on PATH (mtools)`, naming those missing. The tests of `tests/test_sdspi.py` carry it, and so do the two tests of `tests/test_power.py` with a card in the slot. In
 CI the test job installs mtools first, so there they run ([cicd.md](../cicd.md#test)).
 
 ## What each test file needs

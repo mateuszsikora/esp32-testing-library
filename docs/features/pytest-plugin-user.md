@@ -250,8 +250,10 @@ def test_the_count_survives_a_power_cut(board: Board):
   A boot is there once the board has run into it: right after `board.reset()`, or the
   `power_on()` that follows a `power_off()`, `board.boot` is still the one before, until the test
   lets the board run, for as little as `board.wait(ms(1))`.
-- Once the run has ended, `board.reset()`, `board.power_off()` and `board.power_on()` raise
-  `RunEnded` at once, as a wait does, and change nothing:
+- Once the backend has the run's end, `board.reset()`, `board.power_off()` and
+  `board.power_on()` raise `RunEnded` without waiting, as a wait does, and change nothing. In the
+  moment between the runner's exit and the backend learning of it, a call still goes into the
+  run's log, and the next wait raises `RunEnded`:
   `RunEnded: the run ended at 12 s before board.reset(): the runner exited with code 0; …`.
 - Times stay on the board's clock: `board.now`, the console's lines, the run's log in a failed
   test's report and every tap's recording go on from the first power-on through every boot. What

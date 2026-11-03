@@ -61,14 +61,11 @@ def digests(board: Esp32Sim) -> dict[str, str]:
     }
 
 
-@pytest.mark.requires_mtools
 def test_a_restart_keeps_ram_and_rtc_memory_and_board_reset_clears_them(
-    board: Esp32Sim, console: Console, sd_card: SdCard
+    board: Esp32Sim, console: Console
 ) -> None:
-    card = sd_card.image().build()
-    sd_card.insert(card)
     board.power_on()
-    assert state(booted(console)) == (1, ESP_RST_POWERON, POWERON_RESET, 1, 1, 1)
+    assert state(booted(console)) == (1, ESP_RST_POWERON, POWERON_RESET, 1, 1, -1)
     console.expect_exact("persistence: restarting")
     second = booted(console)
     assert (second.boot, second.reason, second.rom) == (2, ESP_RST_SW, SW_CPU_RESET)
@@ -87,15 +84,28 @@ def test_a_restart_keeps_ram_and_rtc_memory_and_board_reset_clears_them(
     board.wait(ms(1))
     assert board.boot == Boot(3, pressed, POWERON_RESET)
     third = booted(console)
-    # a power-on reset of the chip: what is not in flash starts again, NVS keeps its count, and
-    # the card, which kept its power, its lines
-    assert state(third) == (3, ESP_RST_POWERON, POWERON_RESET, 1, 1, 3)
+    # a power-on reset of the chip: what is not in flash starts again, NVS keeps its count
+    assert state(third) == (3, ESP_RST_POWERON, POWERON_RESET, 1, 1, -1)
     assert board.boot == Boot(3, pressed, POWERON_RESET)
     # the board's clock runs on through the reset, the firmware's starts again
     assert board.now - pressed < seconds(1)
     assert third.uptime_ms < 1000 < pressed.ns // 1_000_000
     console.expect_exact("persistence: done")
     assert "boot 3: POWERON_RESET (reset cause 1)" in board.report(run=True)
+
+
+@pytest.mark.requires_mtools
+def test_the_card_keeps_its_power_and_its_files_through_board_reset(
+    board: Esp32Sim, console: Console, sd_card: SdCard
+) -> None:
+    card = sd_card.image().build()
+    sd_card.insert(card)
+    board.power_on()
+    assert [booted(console).sd, booted(console).sd] == [1, 2]
+    console.expect_exact("persistence: done")
+    board.reset()
+    assert state(booted(console)) == (3, ESP_RST_POWERON, POWERON_RESET, 1, 1, 3)
+    console.expect_exact("persistence: done")
     assert card.read_text("BOOTS.TXT") == "boot 1\nboot 2\nboot 3\n"
 
 

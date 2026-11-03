@@ -160,6 +160,8 @@ board.power_on()`.
 A `reset()`, `power_off()` or `power_on()` once the run has ended (the runner exited, or the
 link failed, and the backend has ended the clock) raises `RunEnded` at once, through
 `HeldClock.check`, and changes nothing: no step in the log, no model switched, nothing queued.
+`_mark_end_of_run` ends the clock only after the runner's exit and the link's last messages, so a
+call in between still goes through; the next wait raises `RunEnded`.
 
 `boots` changes only as the link reads the runner's `reset`, which comes in the turn after the
 reset: right after `board.reset()`, or the `power_on()` after a `power_off()`, `boot` is still
@@ -531,8 +533,9 @@ with `board.now` after the tenth fix, `gpio_echo` with the LilyGO profile's pull
 `tests/test_gnss_fixture.py` runs `nmea_reader` with a replay, and the ordering errors above
 ([replay-technical.md](replay-technical.md#tests)).
 
-`tests/test_power.py` runs `firmware/persistence` through `esp_restart`, `board.reset()` and a
-power cycle with a card in the slot: the reset causes, NVS, RTC and RAM counts and the card's
+`tests/test_power.py` runs `firmware/persistence` through `esp_restart` and `board.reset()`
+without a card, through `board.reset()` with one, and through a power cycle with one: the reset
+causes, NVS, RTC and RAM counts and the card's
 lines the firmware prints, `boots`, `now` across the power-off, every `BoardOff` and the `utc`
 refusal, and that the build's flash files are unchanged.
 `tests/test_modem_fixture.py::test_the_modem_keeps_its_power_through_a_reset_and_loses_it_with_the_board`,
