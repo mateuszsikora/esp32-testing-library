@@ -1226,6 +1226,27 @@ initially FAT helpers in esp32tl, because mtools already makes and reads images 
 superseded by [library-owned image builders](#board-owns-interfaces-and-sd-image-builders)); and naming the slot `[spi.<role>]`, because a profile
 names what is at the end of the wires, and the card is not any SPI device.
 
+## The test makes the SD card fail or slow down with sd_card.fail and sd_card.delay
+
+Status: decided (#107)
+
+`sd_card.fail(op, *, count=None, blocks=None)` and `sd_card.delay(op, by, *, count=None,
+blocks=None)` give the runner's card a rule from the board's current instant on, before power-on
+from the first instruction; each returns a `CardFault` with `hits`, `active` and `clear()`, and
+`sd_card.clear_faults()` removes them all. `op` is `read` or `write`, and for `delay` also `erase`;
+`by` is a `Duration`, at most 10 s; `count` is how many operations, `None` every one until cleared;
+`blocks` a block number or a `range`. What the rules did is `sd_card.faulted`, each a
+`FaultedOperation` with its time on the board's clock, its blocks and whether the card wrote the
+image. A rule needs a card in the slot; on `serial` the test never gets that far, because
+`insert` skips there. The slot is on the link as the interface whose rules go out as `sd_fault`
+and `sd_clear` and whose `sd_op`s come back.
+
+**Rejected:** a callback the harness runs on each block operation, because the card answers within
+the transaction, and a callback a turn away could not; one `fault(op, action, ...)` with the
+action as a string, because two methods say what they do and check their own arguments; a count
+of 1 by default, because `fail("write")` reads as every write; and block offsets in bytes,
+because the card and its driver count in blocks.
+
 ## Inserting and removing the SD card while the firmware runs is postponed
 
 Status: postponed (#32)

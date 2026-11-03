@@ -222,6 +222,9 @@ are in [models-technical.md](models-technical.md).
    ([run-report-technical.md](run-report-technical.md#data-flow)). It keeps the absolute path in
    `image_path`, which `runner_command` turns into `--sd-spi`
    and `--sd-rw` at power-on ([esp32sim-backend-technical.md](esp32sim-backend-technical.md#data-flow)).
+   `insert` also keeps the card's size in blocks, which `fail` and `delay` check `blocks`
+   against. `SdCard` is an `Interface` with no wire and `sd_card` true
+   ([the SD card's fault rules](#the-sd-cards-fault-rules)).
 
 `Console.tap` delegates to the backend's `tap_console`. Both backends reuse `Uart.tap`'s file
 checks for a console-only route and include it in teardown and the no-power-on guard. Serial's
@@ -263,8 +266,10 @@ the existing no-latency behavior and board pulls are unchanged.
 | `LineEvent(t, name, pin, by, level)` | frozen dataclass, `esp32tl/interfaces/lines.py` | `t` a `Duration`, an instant of the board's time, `name` as `modem.ri`, `by` `"firmware"`, `"test"` or `"model"`, `level` 0, 1 or `None` |
 | `PULLED` | `dict`, `esp32tl/interfaces/lines.py` | `{"up": 1, "down": 0}`: the level a board's pull gives an undriven line |
 | `sd_card(board)` | fixture, function scope | Returns `board.sd_card` |
-| `SdCard(route, *, directory, asked=..., log=None, files=None)` | class, `esp32tl/interfaces/sd_card.py` | The `sd_card` slot on `route` (an `SdCardRoute`): attributes `name` (`"sd_card"`), `route`, `directory`, `asked`, `log` (the `RunLog` its step goes to), `files` (shared with the routes), `image_path` (`None` until `insert`, then the image's absolute `Path`); `insert(image)` returns that path |
+| `SdCard(route, *, directory, asked=..., log=None, files=None, now=lambda: 0, ended=lambda: False)` | class, `esp32tl/interfaces/sd_card.py` | The `sd_card` slot on `route` (an `SdCardRoute`): attributes `name` (`"sd_card"`), `route`, `directory`, `asked`, `log` (the `RunLog` its steps go to), `files` (shared with the routes), `image_path` (`None` until `insert`, then the image's absolute `Path`); `insert(image)` returns that path. `now`, the board's clock in nanoseconds, stamps the fault rules, and `ended` says whether the run is over: `fail(op, *, count=None, blocks=None)` and `delay(op, by, *, count=None, blocks=None)` return a `CardFault`, `clear_faults()`, `faults` and `faulted`; `report()` and `properties()` for the run's report |
+| `CardFault`, `FaultedOperation` | classes, `esp32tl/interfaces/sd_card.py` | A rule (`id`, `at`, `op`, `action`, `delay`, `count`, `blocks`, `call`, `cleared_at`, `hits`, `active`, `clear()`) and an operation it met (`at`, `fault`, `op`, `blocks`, `action`, `delay`, `written`) |
 | `UNIT`, `MAX_SIZE` | `int`, `esp32tl/interfaces/sd_card.py` | 524288: an SD card image is a whole number of them; 2^41, the most it may be |
+| `BLOCK`, `MAX_DELAY` | `int`, `Duration`, `esp32tl/interfaces/sd_card.py` | 512, the block the rules count in; 10 s, the longest delay (`SD_DELAY_MAX` of `esp32tl.link.protocol`) |
 | `wifi(board)` | fixture, function scope | Returns `board.wifi` |
 | `Wifi(*, now, world=..., asked=..., log=None)` | class, `esp32tl/interfaces/wifi.py`, a `BoardLink` `Interface` named `wifi` with no wire and `ethernet` true | The station's air. `access_point(ssid, *, password=None, channel=6, bssid=None)` returns the `Internet(now, world, link="ethernet")` behind it and starts it at 0; `nearby(ssid, *, channel=1, rssi=-60, secure=True, bssid=None)`; `access_point_off()`, `access_point_on()`; `network`, `on_air`, `configuration` (`AccessPoint \| None`), `around` (`tuple[Nearby, ...]`), `events` (`list[AirEvent]`); `runner_args()`, the runner's `--wifi` and `--wifi-nearby`; `report()` and `properties()`. For the link: `receive(t, direction, frame)` and `poll(now)` are the network's while it is active, `inputs(now)` the switches as `WifiAp`, `quiet_until()` the network's, `latency()` `LATENCY_NS` (1 ms) once there is an access point. `asked(Request("wifi", source="model"))` is called by `access_point` and `nearby` |
 | `AccessPoint(ssid, password, channel, bssid)`, `Nearby(ssid, channel, rssi, secure, bssid)`, `AirEvent(t, on)` | frozen dataclasses, `esp32tl/interfaces/wifi.py` | What the test gave; `spec()` is the runner flag's value. `AirEvent.t` in nanoseconds of the board's time |
@@ -338,6 +343,7 @@ The backend's own environment variables are in
 | `uart.gnss replays a recording: it has no receiver to describe; one source per test` | `SourceError` from a model call, `position` or `receiver()` of `Gnss` after `gnss.replay` | Fails the test |
 | `uart.gnss has no receiver: give it one with gnss.fix(at=...)` | `SourceError` from `Gnss.position` or `receiver()` before any model call | Fails the test |
 | `{interface}: the board is on already: tap a route before board.power_on()`, `uart.gnss is tapped already: one tap per test`, `no backend can tap {interface}`, `{interface}: cannot tap into {path}: it is the {kind} of {route}`; `{interface}: cannot tap into {path}: {directory} is not a directory` | `SourceError`, and `FileNotFoundError` for the last, from `Uart.tap`; `{interface}: cannot replay {path}: it is the tap of {route}` or `... it is the card of sd_card` from `Uart.replay` | Fails the test ([run-report-user.md](run-report-user.md#when-the-test-gets-it-wrong)) |
+| `sd_card.fail: the slot is empty: insert a card first` (`SourceError`); `sd_card.fail: op {op!r} is not 'read' or 'write'`, `sd_card.delay: op {op!r} is not 'read', 'write' or 'erase'`, `sd_card.delay: a delay of {by}; one is 1 ns to 10 s`, `{method}: a count of {count}; it is 1 to 2**63 - 1, or None`, `{method}: blocks {blocks!r}, and the card has blocks 0 to {last}`, `{method}: blocks {blocks!r} is not a non-empty range of step 1` (`ValueError`); `sd_card.delay: by is {by!r}, not a Duration`, `{method}: count is {count!r}, not a whole number`, `{method}: blocks is {blocks!r}, not a block number or a range` (`TypeError`); `{method}: the run has ended: no rule reaches the card any more` (`RunEnded`) | `SdCard.fail` and `SdCard.delay` refuse the rule before it is given | Fails the test |
 | `sd_card: the board is on already: give an interface its source before board.power_on()`, `sd_card has a card already: one per test`, `sd_card: no image at {path}: {strerror}`, `sd_card: {path} is not a file`, `sd_card: {path} has {size} bytes; an SD card image is a whole number of 512 KiB units`, `sd_card: {path} has {size} bytes; an SD card image is at most 2 TiB`, `sd_card: {path} cannot be read and written: the card writes into it`, `sd_card: cannot hold {path}: it is the {kind} of {interface}` | `SourceError` from `SdCard.insert` | Fails the test |
 | `{description} did not happen within {within}: waited from {start} to {end} of the board's time` | `NeverHappened` from `wait_until` or an expect | Fails the test |
 | `the run ended {when} while the test waited {what}: {reason}` | `RunEnded` from a wait or an expect; `{when}` is `at {time}` from the runner's `stats`, `after the turn at {time}` without them, the last held turn being only a bound, or `before its first turn`; `{what}` is `until {time}` or `for {description}`, `{reason}` the backend's ([esp32sim-backend-technical.md](esp32sim-backend-technical.md#failure-modes)) | Fails the test |
@@ -542,6 +548,35 @@ into several files. No FAT state or file contents are cached. All commands run w
 translation. `SdCard.close()` invalidates handles and removes only builder-owned directories;
 backends call it after stopping the run, including on teardown errors. The inserted path stays
 in `image_path` for reporting, even after the owned image has been removed.
+
+### The SD card's fault rules
+
+On esp32sim the backend puts its `SdCard` on the `BoardLink` with the others, the one interface
+whose `sd_card` is true (`BoardLink` refuses two). `fail` and `delay` check their arguments, then,
+under a lock, number the rule from 1 (`CardFault.id`), keep it in `faults` and queue an `SdFault`
+stamped with `now()`; once `ended()` is true they raise `RunEnded`, since nothing would send the
+rule. `clear()` and `clear_faults()` stamp `cleared_at` on the rules still active and queue an
+`SdClear` with their ids, or with none for all, and nothing when none was active. A rule whose
+`hits` have reached its `count` is not active and keeps no `cleared_at`; one that looks active
+may be spent in the runner by the time the clear comes due, which the runner takes as no error.
+Every call is a step of the `RunLog`, in the words of the call. `inputs(now)` sends what is queued
+in the link's next turn, at the later of its stamp and the turn's `now`, so a rule given before
+power-on goes in turn 0 at `t = 0`. `BoardLink._check_input` refuses `sd_fault` and `sd_clear` from
+any other interface (`{name} sent sd_fault, and is not the SD card`) and, through the codec, one
+the runner would refuse ([protocol 5.19](../protocol.md#519-sd_fault-sd_clear-and-sd_op-ext-107)).
+
+`sd_op` reaches `SdCard.sd_op` from the link's thread, which makes a `FaultedOperation` with the
+rule it names, its time as a `Duration`, its blocks as a `range` and its delay as a `Duration`, and
+adds it to the rule's `hits` and to `faulted`. `CardFault.active` is false once the rule is cleared
+or its `hits` reach its `count`, which is when the runner removes it too. An `sd_op` on a link with
+no SD card fails the link (`the runner sent sd_op, and the link has no SD card`). On serial the slot
+is on no link, and `insert`, which a rule needs, skips through the capability declaration first.
+
+`tests/test_sd_faults.py` covers the rules without the emulator: what goes out in which turn and
+at what time, the clears, the refusals and their messages, an `sd_op` into `hits`, `faulted`, the
+report and the properties, a spent rule that is not cleared, a run that has ended, and an
+`sd_fault` from another interface. `tests/test_sdspi.py` checks `RunEnded` on a real run.
+`examples/sd_data_logger/tests/test_logger.py` runs them against the logger on the real runner.
 
 ### The Wi-Fi station
 

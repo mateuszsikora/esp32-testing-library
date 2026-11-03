@@ -129,6 +129,45 @@ fn parses_the_peer_messages() {
         parse(r#"{"type": "chip_reset", "t": 10}"#),
         Ok(Incoming::ChipReset { t: 10 })
     );
+    assert_eq!(
+        parse(
+            r#"{"type":"sd_fault","t":9,"id":3,"op":"write","action":"delay","delay":5000000,"count":2,"blocks":[10,20]}"#
+        ),
+        Ok(Incoming::SdFault {
+            t: 9,
+            fault: Fault {
+                id: 3,
+                op: Op::Write,
+                action: Action::Delay(5_000_000),
+                blocks: Some((10, 20)),
+                count: Some(2),
+            }
+        })
+    );
+    assert_eq!(
+        parse(r#"{"type":"sd_fault","t":0,"id":0,"op":"read","action":"error","count":null}"#),
+        Ok(Incoming::SdFault {
+            t: 0,
+            fault: Fault {
+                id: 0,
+                op: Op::Read,
+                action: Action::Error,
+                blocks: None,
+                count: None,
+            }
+        })
+    );
+    assert_eq!(
+        parse(r#"{"type":"sd_clear","t":4,"ids":[1,2]}"#),
+        Ok(Incoming::SdClear {
+            t: 4,
+            ids: Some(vec![1, 2])
+        })
+    );
+    assert_eq!(
+        parse(r#"{"type":"sd_clear","t":4}"#),
+        Ok(Incoming::SdClear { t: 4, ids: None })
+    );
     assert_eq!(parse(r#"{"type":"stop"}"#), Ok(Incoming::Stop));
     assert_eq!(
         parse(r#"{"type":"adc","t":0,"pin":34,"volts":1.25}"#),
@@ -177,6 +216,84 @@ fn refuses_malformed_messages() {
     ] {
         assert!(parse(line).is_err(), "{line}");
     }
+}
+
+#[test]
+fn refuses_an_sd_fault_that_cannot_be() {
+    let fault = |rest: &str| format!(r#"{{"type":"sd_fault","t":0,"id":1,{rest}}}"#);
+    for (rest, error) in [
+        (
+            r#""op":"trim","action":"error""#,
+            "\"op\" \"trim\" is not read, write or erase",
+        ),
+        (
+            r#""op":"read","action":"drop""#,
+            "\"action\" \"drop\" is not error or delay",
+        ),
+        (
+            r#""op":"erase","action":"error""#,
+            "an erase cannot fail, only be delayed",
+        ),
+        (
+            r#""op":"read","action":"error","delay":5"#,
+            "an error takes no \"delay\"",
+        ),
+        (r#""op":"read","action":"delay""#, "a delay takes \"delay\""),
+        (
+            r#""op":"read","action":"delay","delay":0"#,
+            "a delay of 0 ns; one is 1 ns to 10000000000 ns (10 s)",
+        ),
+        (
+            r#""op":"read","action":"delay","delay":10000000001"#,
+            "a delay of 10000000001 ns",
+        ),
+        (
+            r#""op":"read","action":"error","count":0"#,
+            "a \"count\" of 0",
+        ),
+        (
+            r#""op":"read","action":"error","blocks":[4,3]"#,
+            "\"blocks\" 4 to 3: the last before the first",
+        ),
+        (
+            r#""op":"read","action":"error","blocks":[4]"#,
+            "\"blocks\" is not [first, last]",
+        ),
+        (
+            r#""op":"read","action":"error","blocks":[-1,3]"#,
+            "holds something other than non-negative integers",
+        ),
+    ] {
+        let line = fault(rest);
+        let found = parse(&line).unwrap_err();
+        assert!(found.contains(error), "{line}: {found}");
+    }
+    assert!(parse(r#"{"type":"sd_fault","t":0,"op":"read","action":"error"}"#).is_err());
+    assert!(parse(r#"{"type":"sd_clear","t":0,"ids":[true]}"#).is_err());
+}
+
+#[test]
+fn writes_sd_op() {
+    let mut f = Faulted {
+        cycle: 0,
+        fault: 2,
+        op: Op::Write,
+        blocks: (7, 7),
+        action: Action::Error,
+        written: false,
+    };
+    assert_eq!(
+        sd_op(5, &f),
+        r#"{"type":"sd_op","t":5,"fault":2,"op":"write","blocks":[7,7],"action":"error","delay":null,"written":false}"#
+    );
+    f.op = Op::Erase;
+    f.blocks = (8, 15);
+    f.action = Action::Delay(1_000);
+    f.written = true;
+    assert_eq!(
+        sd_op(6, &f),
+        r#"{"type":"sd_op","t":6,"fault":2,"op":"erase","blocks":[8,15],"action":"delay","delay":1000,"written":true}"#
+    );
 }
 
 #[test]

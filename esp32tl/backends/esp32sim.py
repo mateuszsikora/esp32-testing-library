@@ -336,6 +336,8 @@ class Esp32Sim(Board):
                 asked=self._asked,
                 log=self.log,
                 files=self._files,
+                now=lambda: self._hold.now,
+                ended=lambda: self._hold.ended,
             )
             if profile.sd_card is not None
             else None
@@ -345,7 +347,12 @@ class Esp32Sim(Board):
         )
         self.link = BoardLink(
             profile.name,
-            [*self._uarts.values(), self._lines, self._wifi],
+            [
+                *self._uarts.values(),
+                self._lines,
+                self._wifi,
+                *([self._sd_card] if self._sd_card is not None else []),
+            ],
             chip=profile.chip,
             on_error=self._end_run,
             hold=self._hold,
@@ -871,6 +878,7 @@ class Esp32Sim(Board):
         if self._sd_card is not None:
             image = self._sd_card.image_path
             lines.append(f"sd_card: a card holding {image}" if image else "sd_card: empty")
+            lines += self._sd_card.report()
         for uart in self._uarts.values():
             if isinstance(uart, Modem):
                 lines += uart.command_report()
@@ -920,7 +928,10 @@ class Esp32Sim(Board):
         sd_card = (
             None
             if card is None
-            else {"image": None if card.image_path is None else str(card.image_path)}
+            else {
+                "image": None if card.image_path is None else str(card.image_path),
+                "faults": card.properties(),
+            }
         )
         properties = self.link.properties() | {
             "routes": routes,

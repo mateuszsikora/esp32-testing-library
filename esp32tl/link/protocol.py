@@ -23,6 +23,14 @@ MAX_LINE = 1 << 20
 ETH_MIN = 14
 ETH_MAX = 1518
 
+# The longest delay an `sd_fault` may give, in nanoseconds (5.19): 10 s.
+SD_DELAY_MAX = 10_000_000_000
+# The largest `count` an `sd_fault` may give (5.19): what the runner's JSON integers hold.
+SD_COUNT_MAX = 2**63 - 1
+# What an `sd_fault` applies to and what it does (5.19).
+SD_OPS = ("read", "write", "erase")
+SD_ACTIONS = ("error", "delay")
+
 Sender = Literal["runner", "harness"]
 
 
@@ -109,6 +117,22 @@ class EthTx:
     seq: int
     t: int
     data: bytes
+
+
+@dataclass(frozen=True)
+class SdOp:
+    """A block operation of the SD card that the harness's rule `fault` applied to, at `t`
+    (5.19): its first and last block, the rule's `action` and `delay`, and whether the card wrote
+    the image. Not an event: it has no `seq`."""
+
+    TYPE: ClassVar[str] = "sd_op"
+    t: int
+    fault: int
+    op: str
+    blocks: tuple[int, int]
+    action: str
+    delay: int | None
+    written: bool
 
 
 @dataclass(frozen=True)
@@ -259,6 +283,30 @@ class ChipReset:
 
 
 @dataclass(frozen=True)
+class SdFault:
+    """From `t` the SD card applies the rule `id` to the block operations it matches (5.19):
+    `count` of them, or every one until cleared, on `blocks`, first and last, or any."""
+
+    TYPE: ClassVar[str] = "sd_fault"
+    t: int
+    id: int
+    op: str
+    action: str
+    delay: int | None = None
+    count: int | None = None
+    blocks: tuple[int, int] | None = None
+
+
+@dataclass(frozen=True)
+class SdClear:
+    """From `t` the SD card's rules `ids`, or all of them, are gone (5.19)."""
+
+    TYPE: ClassVar[str] = "sd_clear"
+    t: int
+    ids: tuple[int, ...] | None = None
+
+
+@dataclass(frozen=True)
 class Wait:
     """The end of the peer's turn (5.13); `None` is no bound."""
 
@@ -276,8 +324,8 @@ class Stop:
 
 
 Event = UartTx | UartCfg | GpioOut | Reset | EthTx
-RunnerMessage = RunnerHello | Event | Sync | Console | Warn | Stats
-Input = UartRx | GpioIn | Release | Adc | EthRx | WifiAp | Power | ChipReset
+RunnerMessage = RunnerHello | Event | Sync | Console | Warn | SdOp | Stats
+Input = UartRx | GpioIn | Release | Adc | EthRx | WifiAp | Power | ChipReset | SdFault | SdClear
 HarnessMessage = HarnessHello | Input | Wait | Stop
 Message = RunnerMessage | HarnessMessage
 
@@ -399,6 +447,12 @@ class Fields:
     def pins(self, name: str) -> tuple[int, ...]:
         return tuple(_int(pin, name, 0) for pin in self.array(name))
 
+    def opt_integers(self, name: str) -> tuple[int, ...] | None:
+        """An array of non-negative integers; None when absent or null."""
+        if self.obj.get(name) is None:
+            return None
+        return tuple(_int(value, name, 0) for value in self.array(name))
+
     def levels(self, name: str) -> tuple[tuple[int, int], ...]:
         pairs = []
         for pair in self.array(name):
@@ -428,6 +482,24 @@ class Fields:
         if not isinstance(value, bool):
             raise ProtocolError(f"{name} is not true or false: {value!r}")
         return value
+
+    def choice(self, name: str, choices: tuple[str, ...]) -> str:
+        value = self.string(name)
+        if value not in choices:
+            raise ProtocolError(f"{name} is {value!r}, not {' or '.join(choices)}")
+        return value
+
+    def pair(self, name: str) -> tuple[int, int] | None:
+        """`[first, last]`, first not after last; None when absent or null."""
+        if self.obj.get(name) is None:
+            return None
+        items = self.array(name)
+        if len(items) != 2:
+            raise ProtocolError(f"{name} is {items!r}, not [first, last]")
+        first, last = (_int(item, name, 0) for item in items)
+        if first > last:
+            raise ProtocolError(f"{name} is {first} to {last}: the last before the first")
+        return first, last
 
     def frame(self, name: str) -> bytes:
         data = self.data(name)
@@ -499,6 +571,41 @@ def _wifi_stats(value: Any) -> WifiStats | None:
     )
 
 
+def _sd_op(f: Fields) -> SdOp:
+    blocks = f.pair("blocks")
+    if blocks is None:
+        raise ProtocolError("no blocks")
+    return SdOp(
+        f.integer("t"),
+        f.integer("fault"),
+        f.choice("op", SD_OPS),
+        blocks,
+        f.choice("action", SD_ACTIONS),
+        f.opt_integer("delay", 1),
+        f.boolean("written"),
+    )
+
+
+def _sd_fault(f: Fields) -> SdFault:
+    """An `sd_fault`, checked as the runner checks it without the card."""
+    op = f.choice("op", SD_OPS)
+    action = f.choice("action", SD_ACTIONS)
+    delay = f.opt_integer("delay")
+    if action == "error":
+        if op == "erase":
+            raise ProtocolError("an erase cannot fail, only be delayed")
+        if delay is not None:
+            raise ProtocolError("an error takes no delay")
+    elif delay is None:
+        raise ProtocolError("a delay takes delay")
+    elif not 1 <= delay <= SD_DELAY_MAX:
+        raise ProtocolError(f"a delay of {delay} ns; one is 1 ns to {SD_DELAY_MAX} ns (10 s)")
+    count = f.opt_integer("count", 1)
+    if count is not None and count > SD_COUNT_MAX:
+        raise ProtocolError(f"a count of {count}; one is at most {SD_COUNT_MAX}")
+    return SdFault(f.integer("t"), f.integer("id"), op, action, delay, count, f.pair("blocks"))
+
+
 def _stats(f: Fields) -> Stats:
     return Stats(
         t=f.integer("t"),
@@ -555,6 +662,7 @@ DECODERS: dict[Sender, dict[str, Callable[[Fields], Message]]] = {
             f.opt_integer("baud"),
             f.opt_integer("bytes"),
         ),
+        "sd_op": _sd_op,
         "stats": _stats,
     },
     "harness": {
@@ -569,6 +677,8 @@ DECODERS: dict[Sender, dict[str, Callable[[Fields], Message]]] = {
         "wifi_ap": lambda f: WifiAp(f.integer("t"), f.boolean("on")),
         "power": lambda f: Power(f.integer("t"), f.boolean("on")),
         "chip_reset": lambda f: ChipReset(f.integer("t")),
+        "sd_fault": _sd_fault,
+        "sd_clear": lambda f: SdClear(f.integer("t"), f.opt_integers("ids")),
         "wait": lambda f: Wait(
             f.integer("ack"), f.opt_integer("quiet_until"), f.opt_integer("latency")
         ),

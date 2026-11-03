@@ -422,12 +422,87 @@ def test_the_example_writes_its_files_into_the_image(board: Board):
   (`sd_card: cannot hold PATH: it is the tap of uart.gnss`). A tap into the card's image is
   refused the same way ([taps](run-report-user.md#when-the-test-gets-it-wrong)).
 - The report of the run names the card, `sd_card: a card holding PATH`, or `sd_card: empty`, and
-  the `esp32sim_link` property has `sd_card`, `{"image": PATH}`
+  the `esp32sim_link` property has `sd_card`, `{"image": PATH, "faults": []}`
   ([the run report](run-report-user.md)).
 - On a board profile without a slot, `sd_card` is an error at setup:
   `esp32sim: the board profile gps-alarm-clock has no sd_card; its interfaces are console, uart.gnss, lines.alarm, wifi`.
 - The card stays in from power-on to the end of the run: inserting or removing it while the
   firmware runs is not there yet.
+
+On `esp32sim` the test can make the card in the slot fail or slow down at block level, from the
+board's current instant on, and see what each rule did:
+
+```python
+def test_a_failed_write_raises_the_error_pin(board: Board):
+    card = board.sd_card.image(size_mb=32).build()
+    board.sd_card.insert(card)
+    board.power_on()
+    board.wait(seconds(2.5))  # the firmware has mounted the card and written to it
+    fault = board.sd_card.fail("write", count=1)
+    board.wait_until(board.console.line("SD card write failed"), within=seconds(1))
+    (write,) = fault.hits
+    assert not write.written  # the card left the block as it was
+    board.wait(seconds(1))
+    assert not fault.active  # spent: the next write goes through
+```
+
+- `sd_card.fail(op, *, count=None, blocks=None)`, `op` `"read"` or `"write"`: a read gets the
+  data error token "card ECC failed" instead of its data, a write the data response "write error",
+  and its block on the image stays as it was. ESP-IDF's driver returns `ESP_FAIL` for the write at
+  once. For the read it returns `ESP_ERR_TIMEOUT` 1 s later on the board's clock: it looks for the
+  start token alone in the first bytes after a command, misses the error token, and polls until
+  its read timeout.
+- `sd_card.delay(op, by, *, count=None, blocks=None)`, `op` `"read"`, `"write"` or `"erase"`, `by`
+  a `Duration` from 1 ns to 10 s: a read's data comes `by` after the read starts, and after a
+  write or an erase the card is busy for `by`, hearing nothing meanwhile. The time is the board's:
+  firmware that polls the card sees it pass, and gives up when its own timeout does. ESP-IDF waits
+  1 s for a read's data and 5 s for a busy write, then returns `ESP_ERR_TIMEOUT`. A delayed write
+  is in the image when it starts, also when the firmware gives up on it.
+- `count` is how many operations the rule applies to, 1 to 2**63 - 1; `None`, the default, every
+  one until it is cleared. `blocks` is a block number or a `range` of them (512-byte blocks, as the
+  driver addresses the card), `None` for any; a read or a write meets a rule on its block, an
+  erase one whose blocks overlap its range. Each block of a multiple block read or write counts
+  as one operation, and a read that fails sends nothing more. A multiple block read reaches only
+  the blocks the firmware's driver clocks on for: ESP-IDF's sends its stop command right after the
+  last block it wants, so a rule on the next block waits for a read of that block.
+- Of the rules an operation matches, the one given last applies: `fail("write", count=1)` after
+  `delay("write", ms(300))` fails the next write, and the writes after it are slow again. An
+  operation under way when a rule is given or cleared keeps what it met when it started. Rules stay
+  through `board.power_off()` and `board.reset()`; an operation under way ends with the power, and
+  goes on through a reset of the chip alone.
+- Both return a `CardFault`: `hits`, the operations it applied to so far; `active`, whether it
+  still applies (not cleared, with operations left); `clear()`, which removes it from the board's
+  current instant on and does nothing to a rule already spent or cleared; and `id`, `op`, `action` (`"error"` or `"delay"`), `delay`, `count`,
+  `blocks`, `at` (when it was given) and `cleared_at`. `sd_card.clear_faults()` removes every rule,
+  `sd_card.faults` lists them in order, and `sd_card.faulted` lists what all of them did.
+- Each operation is a `FaultedOperation`: `at`, its start on the board's clock (a read at its
+  command, or for the next block of a multiple block read when the driver clocks on for it; a
+  write at its data response; an erase at its command); `fault`, the rule; `op`; `blocks`, a
+  `range`; `action` and `delay`; and `written`, whether the card wrote the image: never for a
+  read or a failed write, always for a delayed write or erase it carried out.
+- A rule is given before power-on, from the first instruction, or while the board is on; a rule
+  given before the firmware has initialised the card can fail the mount. `fail` and `delay` refuse,
+  at the call: an empty slot (`SourceError`:
+  `sd_card.fail: the slot is empty: insert a card first`), an `op` the method does not take, a
+  delay that is not a `Duration` or outside 1 ns to 10 s
+  (`sd_card.delay: a delay of 10.5 s; one is 1 ns to 10 s`), a `count` out of range, a run that
+  has ended (`RunEnded`: `sd_card.fail: the run has ended: no rule reaches the card any more`), and
+  blocks the
+  card does not have (`sd_card.fail: blocks range(2048, 2049), and the card has blocks 0 to 2047`)
+  or a range that is empty or steps.
+- Read the image as above, between the firmware's writes: it holds every block the card
+  accepted, delayed ones included, and none of a failed write, so it is never a block written in
+  part. What a failed write does to the file system is the firmware's: in
+  `examples/sd_data_logger`, a row whose data block fails leaves the file as it was before the
+  row, but a firmware that writes on after an error can leave a file system that mtools reads
+  differently, or refuses (`SourceError` naming the command). A
+  modeled block error is never on the image itself: read again, the block is what the card last
+  accepted.
+- The report of the run lists each rule under `sd_card:`, with what it did
+  (`fault 1: sd_card.fail('write', count=1) at 2.5 s; 1 operation`, then
+  `3.0681844 s  write of block 541 failed, not written`), and `fail`, `delay`, `clear` and
+  `clear_faults` are steps of the run. The `esp32sim_link` property's `sd_card` has `faults`, one
+  entry per rule with its operations.
 `board.uart(role)` is the same for any `uart.<role>` route of the profile: `gnss` is
 `board.uart("gnss")`.
 

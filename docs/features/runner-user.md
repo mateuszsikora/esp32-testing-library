@@ -158,6 +158,14 @@ MTOOLS_SKIP_CHECK=1 mtype -i card.img ::foo.txt
   pin. A guest that routes the bus to other pins finds no card, as it would on the board.
 - The card is there from power-on to the end of the run, through chip resets: it keeps its state,
   as a powered card does, until the guest sends CMD0.
+- With `--board`, the peer can make the card fail reads and writes, or take longer over reads,
+  writes and erases, from an instant it chooses, on chosen blocks, for so many operations or until
+  it clears the rule, and hears back what each rule did
+  ([protocol 5.19](../protocol.md#519-sd_fault-sd_clear-and-sd_op-ext-107)). Delays are on the
+  emulated clock: the guest polls the card for them as it would a slow card, and its own timeouts
+  run on the same clock. Without `--board` the card always answers at once. The harness's way to
+  give the rules is `sd_card.fail` and `sd_card.delay`
+  ([pytest plugin](pytest-plugin-user.md#the-fixtures)).
 
 What the card does and does not model is in
 [the technical side](runner-technical.md#the-sd-card).
@@ -246,7 +254,8 @@ the peer instead. Everything the runner says goes to stderr, on lines that start
 - `esp32tl-runner: power off at T s` when the peer switches the board's supply off.
 - `esp32tl-runner: SD card: N commands, R blocks read, W blocks written` at the end of a run with
   `--sd-rw`, just before the line that ends it; with `, E image errors` added when reads, writes
-  or erases of the image file failed. Each such failure also prints
+  or erases of the image file failed, and `, F operations faulted` when the peer's fault rules
+  failed or delayed any. Each such failure also prints
   `esp32tl-runner: SD card: reading block N: ERROR` (or `writing block N`, or
   `erasing blocks LO to HI`) when it happens, and the guest gets the error a card reports for it.
 

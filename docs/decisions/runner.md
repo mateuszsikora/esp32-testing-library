@@ -348,15 +348,63 @@ works without one.
 
 ## The SD card answers at once and has no CMD6
 
-Status: decided (#32)
+Status: decided (#32), busy time by fault rules (#107)
 
-The card is never busy after a write, an erase or CMD12, and sends a data block one byte after
-its R1; the image is a seek and a read or write per block. Without class 10 in its CSD, ESP-IDF
-does not send CMD6 and stays at the default 20 MHz, which `sdspi` asks for anyway. The tests of
-interest are the firmware's file handling, not the card's timing.
+Without a fault rule from the peer, the card is never busy after a write, an erase or CMD12, and
+sends a data block one byte after its R1; the image is a seek and a read or write per block.
+Without class 10 in its CSD, ESP-IDF does not send CMD6 and stays at the default 20 MHz, which
+`sdspi` asks for anyway. The tests of interest are the firmware's file handling, not the card's
+timing; a test that is about timing gives the card a delay
+([below](#sd-faults-are-the-peers-rules-applied-by-the-card-on-the-buss-clock)).
 
-**Postponed:** busy time (esp32sim's card has `prg_ns` for it), CMD6 and high speed, CMD23, and
-locking and write protection: each when a firmware needs it.
+**Postponed:** a busy time of the card's own on every write (esp32sim's card has `prg_ns` for it),
+CMD6 and high speed, CMD23, and locking and write protection: each when a firmware needs it.
+
+## SD faults are the peer's rules, applied by the card on the bus's clock
+
+Status: decided (#107)
+
+The peer gives the card rules as inputs, `sd_fault` and `sd_clear`, and the card applies them
+within each transaction, as it answers everything else; what a rule did comes back as `sd_op`,
+which is not an event ([protocol 5.19](../protocol.md#519-sd_fault-sd_clear-and-sd_op-ext-107)).
+A rule names an operation (a block read, a block written, an erase), an error or a delay, its
+blocks and a count. A delay is on the bus's clock: the card learns the bus cycle from
+`BoardModel::advance_to`, which the bus calls at every tick, holds a read's data block back with
+0xff and stays busy with 0x00 after a write or an erase, and a firmware polling it sees time pass
+between its transactions, so its own timeouts fire as on a slow card. No esp32sim change was
+needed: `advance_to` exists, and `bus.cycles` moves only in the tick that calls it. A delayed
+write or erase is in the image when it starts; the busy is time only. Of the rules an operation
+matches, the one given last applies, so a one-shot rule can be put on top of a lasting one. Rules
+stay through a power cut and a chip reset, since they are the test's and not the card's state; a
+delayed read and a busy time end with the power.
+
+**Rejected:** a schedule of faults on the command line, because a test gives a fault after the
+firmware has initialised the card, at an instant it learns only while the run goes; answering
+the card's bytes from the peer, a turn away, for the reason the card is in the runner at all
+([above](#the-sd-card-is-a-model-of-spi-mode-in-the-runner-not-esp32sims-card)); a cycle passed
+to `spi_transfer_pins` upstream, because `advance_to` already gives it; host sleeps or the wall
+clock for delays, because the run would no longer repeat; writing a delayed block only once the
+busy is over, because a real card programs the block during the busy, and a firmware that gives
+up first would then see a write that never landed; and the first rule given winning, because a
+lasting delay would then hide every later one-shot rule.
+
+**Postponed:** an erase that fails, and programming errors reported later in CMD13's status, which
+ESP-IDF does not read after a write in SPI mode; faults of the initialisation and register
+commands (CMD0 to ACMD41, CMD9, CMD10), which fail the mount, not the file handling; a block
+programmed in part, as a card that loses power would leave it: the card writes a block whole or
+not at all; and the card taken out of its slot, apart from #32's postponed insertion and removal.
+
+## The SD card's fault messages keep protocol version 1
+
+Status: decided (#107)
+
+`sd_fault`, `sd_clear` and `sd_op` are new message types on version 1. Harness and runner come from
+one checkout and nothing else speaks the protocol yet, so there is no older peer to keep working
+or to tell apart. A stale runner build fails the first rule with `unknown type "sd_fault"`, and
+`make setup` fixes it.
+
+**Rejected:** version 2, because a version tells apart peers that ship apart, and none do; and a
+flag to gate the messages, for the same reason.
 
 ## Under --realtime the runner waits at each block point until wall time reaches it
 

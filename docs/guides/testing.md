@@ -111,6 +111,7 @@ CI the test job installs mtools first, so there they run ([cicd.md](../cicd.md#t
 | `tests/test_power.py` | `persistence` through `esp_restart()`, `board.reset()` and a power cycle: reset causes, NVS, RTC and RAM counts, the card's lines, `board.boots`, `board.now` while off, the errors of the power calls, the build's files unchanged | The built `persistence` image, runner and ROM ELF; mtools for the two tests with a card (`requires_mtools`) |
 | `tests/test_sdspi.py` | ESP-IDF's `sdspi` with the runner's SD card: a FAT image mounted, written and read back with mtools, one without a file system, an empty slot, the LilyGO profile's slot with the GNSS and modem models selected; through `pytester`, the `sd_card` fixture used out of order and images it refuses | The built `sdspi` image, the runner, the ROM ELF and mtools (`requires_mtools`) |
 | `tests/test_http_request.py` | ESP-IDF's unmodified `http_request` through the `wifi` fixture: joining the test's access point and fetching from its HTTP server, joining again after `wifi.access_point_off()` and `wifi.access_point_on()` and after `board.reset()` and a power cycle, no access point, a wrong password that gets no lease, the report and `board.properties()["wifi"]`; through `pytester`, `wifi` refused after `board.power_on()` | The built `http_request` image, the runner and the ROM ELF |
+| `tests/test_sd_faults.py` | The SD card's fault rules without the emulator: `sd_card.fail`, `sd_card.delay` and the clears in the link's turns at the test's instants, what they refuse, the runner's `sd_op` into the rules' hits, the report and the properties, a spent rule, a run that has ended, and an `sd_fault` from another interface | Nothing beyond the package; milliseconds |
 | `tests/test_wifi.py` | The `Wifi` interface without the emulator: the runner's `--wifi` and `--wifi-nearby` arguments, the parameters it refuses, one access point and networks around that are not it, a backend that refuses the access point, the `wifi_ap` inputs at the instants of the switches | Nothing beyond the package; milliseconds |
 | `tests/test_net_ethernet.py`, `tests/test_net_http.py` | The network behind the access point with handmade Ethernet frames and independent checksums: DHCP, ARP, IPv4 to the services, other ethertypes dropped; the HTTP server's side of a connection without TCP: what it serves, keeps and refuses | Nothing beyond the package; milliseconds |
 | `tests/test_hello_world.py` | ESP-IDF's `hello_world`, unmodified, powered on and printing `Hello world!` through the backend | The built image, the runner and the ROM ELF |
@@ -303,7 +304,8 @@ See [the example guide](../features/examples-user.md) for the scenarios and wiri
 
 `examples/sd_data_logger/tests/test_logger.py` prepares FAT images with mtools and verifies
 the firmware's CSV rows, date rollover (New Year and leap day), fix loss/recovery and malformed
-NMEA rejection. Its library image builder requires mtools and reports missing commands as `SourceError`; the
+NMEA rejection, and, through the card's fault rules, a failed write and a failed read and the
+next ones that succeed, a slow write, and a write slower than ESP-IDF's 5 s timeout (about 10 wall seconds). Its library image builder requires mtools and reports missing commands as `SourceError`; the
 empty-slot test still runs and observes the error GPIO and continued GNSS processing.
 Build with `firmware/build.sh --examples sd_data_logger`, then run
 `.venv/bin/pytest examples/sd_data_logger/tests`. It needs the runner and ROM ELF as well.

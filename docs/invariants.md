@@ -188,6 +188,28 @@ that references to its number keep their meaning.
     `tests/test_sdspi.py::test_the_example_writes_its_files_into_the_image`,
     `tests/test_sdspi.py::test_a_card_without_a_file_system_does_not_mount`,
     `tests/test_pytest_plugin.py::test_runner_command_puts_a_card_in_the_slot_once_the_test_inserts_one`
+- **142.** The SD card's fault rules reach the runner in the link's next turn, at the board's
+    instant the test gave them, before power-on at `t = 0`; only the slot sends `sd_fault` and
+    `sd_clear`; each `sd_op` goes to the rule it names, which is spent once its count is reached,
+    and a spent rule is not cleared. A rule needs a card and a run that has not ended, and one the
+    card cannot take (an op the method does not take, a delay that is not a `Duration` of 1 ns to
+    10 s, a count outside 1 to 2**63 - 1, blocks the card does not have) is refused at the call.
+    `tests/test_sd_faults.py::test_rules_go_out_in_the_next_turn_at_the_instant_the_test_gave_them`,
+    `tests/test_sd_faults.py::test_what_a_rule_did_reaches_the_rule_and_the_slot`,
+    `tests/test_sd_faults.py::test_a_rule_the_card_cannot_take_is_refused_at_the_call`,
+    `tests/test_sd_faults.py::test_only_the_card_sends_sd_fault_and_sd_op_needs_a_card`,
+    `tests/test_sd_faults.py::test_a_spent_rule_is_not_cleared`,
+    `tests/test_sd_faults.py::test_a_run_that_has_ended_takes_no_rule`,
+    `tests/test_sdspi.py::test_a_rule_given_after_the_end_of_the_run_is_refused`
+- **143.** On a firmware that has mounted the card, a failed block write or read is reported by the
+    firmware and leaves the image as the card last accepted it, readable with mtools; once the rule
+    is spent the firmware writes again. A delay passes on the board's clock: the firmware's own
+    timeout, 5 s for ESP-IDF's writes, fires 5 s after the write, not in wall time; so does the 1 s
+    read timeout ESP-IDF turns a failed read into.
+    `examples/sd_data_logger/tests/test_logger.py::test_a_failed_read_reaches_the_firmware_as_the_driver_s_read_timeout`,
+    `examples/sd_data_logger/tests/test_logger.py::test_a_failed_write_raises_the_error_pin_and_the_next_fix_writes_again`,
+    `examples/sd_data_logger/tests/test_logger.py::test_a_slow_write_saves_its_row_later`,
+    `examples/sd_data_logger/tests/test_logger.py::test_a_write_slower_than_the_driver_s_timeout_fails_on_the_board_s_clock`
 - **67.** The runner gets the board profile's PSRAM as `--psram-mb`, in a test and in the `esp32tl`
     command: 0 on `esp32-devkitc`, 4 on `lilygo-t-a7670g-r2`.
     `tests/test_pytest_plugin.py::test_every_route_and_line_of_the_profile_is_on_the_link`,
@@ -272,6 +294,31 @@ that references to its number keep their meaning.
      `runner/src/session/tests.rs::on_the_emulator_the_access_point_deauthenticates_the_station_before_it_leaves`,
      `runner/src/session/tests.rs::an_access_point_put_back_while_it_is_leaving_comes_back_once_it_has_left`,
      `tests/test_http_request.py::test_rejoins_an_access_point_switched_off_and_on_at_one_instant`
+
+- **140.** Without a fault rule the SD card answers at once, as it always has. A rule applies to the
+     operations that start once it is in place, at most one per operation, the one given last
+     first; each block of a multiple block read or write is one operation, and a block a CMD12
+     ends before it begins is none. A failed read sends the
+     error token `0x04` and nothing more of the read; a failed write is answered `0x0d` and leaves
+     its block on the image as it was. A cleared or spent rule applies no more.
+     `runner/src/sd_card/tests.rs::without_a_rule_nothing_is_faulted_and_the_card_never_waits`,
+     `runner/src/sd_card/tests.rs::a_failed_read_is_an_ecc_error_token_and_a_failed_write_leaves_the_block`,
+     `runner/src/sd_card/tests.rs::each_block_of_a_multiple_block_read_is_one_operation`,
+     `runner/src/sd_card/tests.rs::a_rule_is_not_met_by_the_block_a_cmd12_ends_before_it_begins`,
+     `runner/src/sd_card/tests.rs::a_failed_block_of_a_multiple_block_write_waits_for_the_stop_token`,
+     `runner/src/sd_card/tests.rs::the_rule_given_last_applies_and_cleared_rules_apply_no_more`
+- **141.** A delay is on the bus's clock: a delayed read sends 0xff until its time, a delayed write
+     or erase holds MISO at 0x00 and hears nothing, a command included, until its time, and is in
+     the image from its start. What a rule did goes to the peer as `sd_op` at the operation's
+     start, with no `seq`. `sd_fault` and `sd_clear` without `--sd-rw`, blocks past the card and
+     an id used twice are protocol errors. A power cut ends a delayed read and a busy time and leaves
+     the rules.
+     `runner/src/sd_card/tests.rs::a_delayed_read_holds_its_block_back_on_the_bus_clock`,
+     `runner/src/sd_card/tests.rs::a_delayed_write_keeps_the_card_busy_and_deaf_until_it_is_done`,
+     `runner/src/sd_card/tests.rs::an_erase_meets_a_rule_on_any_block_of_its_range_and_is_busy_after_its_r1`,
+     `runner/src/session/tests.rs::an_sd_fault_comes_due_on_the_card_and_what_it_did_goes_out_as_sd_op`,
+     `runner/src/session/tests.rs::sd_fault_and_sd_clear_need_the_card_and_fit_it`,
+     `runner/src/sd_card/tests.rs::a_power_cut_ends_a_delay_and_leaves_the_rules`
 
 ## Recordings and replay
 

@@ -75,11 +75,13 @@ at its pull from power-on, as RI on the LilyGO profile reads 0, and carries what
 drives on the lines and what the test drives through `lines`
 ([pytest plugin](pytest-plugin-user.md#the-fixtures)).
 
-The board profile's SD card slot is not on the link. A card the test inserts
-(`sd_card.insert(image)`) is the runner's own SD card model, on the slot's pins, which the backend
-passes as `--sd-spi sclk=N,mosi=N,miso=N,cs=N --sd-rw IMAGE`; the card writes into the image file
-as the firmware writes ([runner](runner-user.md#put-an-sd-card-in)). An empty slot gives the
-runner no card.
+A card the test inserts (`sd_card.insert(image)`) is the runner's own SD card model, on the
+slot's pins, which the backend passes as `--sd-spi sclk=N,mosi=N,miso=N,cs=N --sd-rw IMAGE`; the
+card writes into the image file as the firmware writes ([runner](runner-user.md#put-an-sd-card-in)).
+An empty slot gives the runner no card. The slot is on the link for the card's fault rules: what
+the test gives with `sd_card.fail` and `sd_card.delay` goes to the runner at the board's current
+instant, and what each rule did comes back
+([pytest plugin](pytest-plugin-user.md#the-fixtures)).
 
 The chip's Wi-Fi station is on the link once the test gives it an access point
 (`wifi.access_point(...)`, [pytest plugin](pytest-plugin-user.md#the-wifi-fixture)): the backend
@@ -210,7 +212,9 @@ board's clock after it
 ([the run on the board's clock](run-report-user.md#the-run-on-the-boards-clock)). The same data,
 but the run, is in the test's `esp32sim_link` user property, a JSON string with `board`, `watch`,
 `warnings`, `stats`, `error`, `routes`, `sd_card` and `wifi`, which `--junitxml` writes as a
-`<property>`; `wifi` is `null` without an access point.
+`<property>`; `wifi` is `null` without an access point, and `sd_card`, without a slot, else the
+card's `image` and its `faults`. With a slot the report also names the card and lists each fault
+rule the test gave with what it did.
 
 ## When the backend cannot start
 

@@ -12,12 +12,13 @@ from pathlib import Path
 import pytest
 
 from esp32tl.backends.esp32sim import Esp32Sim
-from esp32tl.interfaces import SourceError
+from esp32tl.interfaces import RunEnded, SourceError
 from esp32tl.interfaces.console import Console
 from esp32tl.interfaces.gnss import Gnss
 from esp32tl.interfaces.modem import Modem
 from esp32tl.interfaces.sd_card import SdCard
 from esp32tl.interfaces.uart import Uart
+from esp32tl.units import seconds
 
 ROOT = Path(__file__).resolve().parent.parent
 SDSPI = ROOT / "firmware" / "sdspi"
@@ -82,7 +83,7 @@ def test_the_example_writes_its_files_into_the_image(
     report = board.report(run=True)
     assert f"sd_card: a card holding {image}" in report
     assert f"sd_card.insert({str(image)!r})" in report
-    assert board.properties()["sd_card"] == {"image": str(image)}
+    assert board.properties()["sd_card"] == {"image": str(image), "faults": []}
 
 
 @pytest.mark.board_profile("lilygo-t-a7670g-r2")
@@ -128,8 +129,21 @@ def test_a_card_does_not_take_a_tap_s_file(
     with pytest.raises(SourceError, match=r"sd_card: cannot hold .*: it is the tap of uart.gnss"):
         sd_card.insert(tap)
     assert board.report().endswith("sd_card: empty")
-    assert board.properties()["sd_card"] == {"image": None}
+    assert board.properties()["sd_card"] == {"image": None, "faults": []}
     board.power_on()
+
+
+def test_a_rule_given_after_the_end_of_the_run_is_refused(
+    tmp_path: Path, board: Esp32Sim, sd_card: SdCard
+) -> None:
+    sd_card.insert(fat_image(tmp_path / "card.img"))
+    board.power_on()
+    board.wait(seconds(0.01))
+    board._terminate()
+    with pytest.raises(RunEnded):
+        board.wait(seconds(1))
+    with pytest.raises(RunEnded, match="the run has ended"):
+        sd_card.fail("read")
 
 
 def test_a_card_without_a_file_system_does_not_mount(

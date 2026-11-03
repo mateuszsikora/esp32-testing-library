@@ -25,6 +25,9 @@ from esp32tl.link.protocol import (
     Release,
     Reset,
     RunnerHello,
+    SdClear,
+    SdFault,
+    SdOp,
     Sender,
     Stats,
     Stop,
@@ -58,6 +61,8 @@ EVERY_MESSAGE: list[tuple[Sender, Message]] = [
         "runner",
         Stats(5, "stop", 0, 2, (), 0, 0, 0, 0, wifi=WifiStats(3, 0, 2, 1, 0)),
     ),
+    ("runner", SdOp(2_100_000_000, 1, "write", (541, 541), "error", None, False)),
+    ("runner", SdOp(2_200_000_000, 2, "erase", (64, 127), "delay", 250_000_000, True)),
     ("runner", Sync(2_000_000_000)),
     ("runner", Console(812_345_678, b"Hello world!\n")),
     ("runner", Warn(1_000_000_000, "frm_err", "baud", port=1, pin=5, baud=115200, nbytes=3)),
@@ -90,6 +95,10 @@ EVERY_MESSAGE: list[tuple[Sender, Message]] = [
     ("harness", Power(7_000_000_000, False)),
     ("harness", Power(8_000_000_000, True)),
     ("harness", ChipReset(9_000_000_000)),
+    ("harness", SdFault(2_500_000_000, 1, "write", "error", count=1)),
+    ("harness", SdFault(0, 2, "read", "delay", 50_000_000, None, (0, 63))),
+    ("harness", SdClear(3_000_000_000, (1, 2))),
+    ("harness", SdClear(3_000_000_000)),
     ("harness", Wait(9, 3_000_000_000, 1_000_000)),
     ("harness", Wait(0, None, None)),
     ("harness", Stop()),
@@ -262,6 +271,31 @@ def test_ethernet_frames_are_14_to_1518_bytes_and_switches_are_true_or_false(
 ) -> None:
     with pytest.raises(ProtocolError):
         decode(line, sender)
+
+
+@pytest.mark.parametrize(
+    ("fields", "error"),
+    [
+        ('"op":"trim","action":"error"', "op is 'trim', not read or write or erase"),
+        ('"op":"read","action":"drop"', "action is 'drop', not error or delay"),
+        ('"op":"erase","action":"error"', "an erase cannot fail, only be delayed"),
+        ('"op":"read","action":"error","delay":5', "an error takes no delay"),
+        ('"op":"read","action":"delay"', "a delay takes delay"),
+        ('"op":"read","action":"delay","delay":0', "a delay of 0 ns"),
+        ('"op":"read","action":"delay","delay":10000000001', "a delay of 10000000001 ns"),
+        ('"op":"read","action":"error","count":0', "count is 0, below 1"),
+        (
+            '"op":"read","action":"error","count":9223372036854775808',
+            "a count of 9223372036854775808",
+        ),
+        ('"op":"read","action":"error","blocks":[4,3]', "blocks is 4 to 3"),
+        ('"op":"read","action":"error","blocks":[4]', "blocks is [4], not [first, last]"),
+    ],
+)
+def test_an_sd_fault_the_runner_would_refuse_does_not_decode(fields: str, error: str) -> None:
+    line = f'{{"type":"sd_fault","t":0,"id":1,{fields}}}'.encode()
+    with pytest.raises(ProtocolError, match=re.escape(error)):
+        decode(line, "harness")
 
 
 def test_stats_without_wifi_has_no_wifi_field() -> None:

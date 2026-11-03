@@ -216,8 +216,13 @@ fn report_card(card: Option<&sd_card::Shared>) {
     } else {
         String::new()
     };
+    let faults = if s.faults > 0 {
+        format!(", {} operations faulted", s.faults)
+    } else {
+        String::new()
+    };
     eprintln!(
-        "esp32tl-runner: SD card: {} commands, {} blocks read, {} blocks written{errors}",
+        "esp32tl-runner: SD card: {} commands, {} blocks read, {} blocks written{errors}{faults}",
         s.commands, s.blocks_read, s.blocks_written
     );
 }

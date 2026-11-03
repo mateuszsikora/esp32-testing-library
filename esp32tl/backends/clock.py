@@ -95,6 +95,12 @@ class HeldClock:
         with self._cv:
             return self._now
 
+    @property
+    def ended(self) -> bool:
+        """Whether the run is over: no turn is coming, and nothing more reaches the runner."""
+        with self._cv:
+            return self._ended is not None
+
     def wait(self, duration: int) -> None:
         """Lets the run go for `duration` from now, and returns at the turn at its end."""
         with self._cv:

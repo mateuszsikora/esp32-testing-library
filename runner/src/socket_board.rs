@@ -6,8 +6,9 @@
 //! loop's slices stop for the block point (protocol 11.10). GPIO inputs do go through it: the run
 //! loop hands the peer's `gpio_in` and `release` to the board when they come due, and the chip
 //! takes them through `take_edges` and `released_inputs`. With `--sd-rw`, the SD card is on its
-//! pins as well: it answers the chip's SPI transactions in the board, and nothing of it goes on
-//! the socket.
+//! pins as well: it answers the chip's SPI transactions in the board, which tells it the bus
+//! cycle at every tick (`advance_to`) for the delays of the peer's fault rules. Only what those
+//! rules did goes on the socket, recorded after the transaction it happened in (`sd_op`).
 use crate::sd_card;
 use esp_soc::board::{BoardEdge, BoardModel, SpiPins, VirtualCycle};
 use esp_soc::uart::UartRoute;
@@ -32,6 +33,8 @@ pub enum Recorded {
         enabled: u64,
         output: u64,
     },
+    /// A block operation of the SD card that one of the peer's fault rules applied to (`sd_op`).
+    Sd(sd_card::Faulted),
 }
 
 /// The state the board and the run loop share.
@@ -100,9 +103,22 @@ impl BoardModel for SocketBoard {
         self.card.is_some()
     }
     fn spi_transfer_pins(&mut self, _host: u8, pins: SpiPins, tx: &[u8], rx_len: usize) -> Vec<u8> {
-        match &self.card {
-            Some(card) => card.borrow_mut().transfer(pins, tx, rx_len),
-            None => vec![0xff; rx_len],
+        let Some(card) = &self.card else {
+            return vec![0xff; rx_len];
+        };
+        let mut card = card.borrow_mut();
+        let rx = card.transfer(pins, tx, rx_len);
+        let faulted = card.take_faulted();
+        if !faulted.is_empty() {
+            let log = &mut self.shared.borrow_mut().log;
+            log.extend(faulted.into_iter().map(Recorded::Sd));
+        }
+        rx
+    }
+    /// The bus's tick: the card's clock, for the delays of fault rules.
+    fn advance_to(&mut self, cycle: VirtualCycle) {
+        if let Some(card) = &self.card {
+            card.borrow_mut().advance(cycle);
         }
     }
     fn uart_tx(&mut self, cycle: VirtualCycle, route: UartRoute, byte: u8) {
