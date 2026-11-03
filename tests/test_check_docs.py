@@ -420,6 +420,63 @@ def test_a_stale_decisions_index_fails(repo: Path) -> None:
     assert "docs/decisions/README.md is stale" in result.stdout
 
 
+def test_a_repeated_invariant_number_fails(repo: Path) -> None:
+    write(
+        repo,
+        "docs/invariants.md",
+        "# Invariants\n\n## A\n\n- **1.** One.\n  `t`\n- **2.** Two.\n\n## B\n\n- **2.** Again.\n",
+    )
+    result = run(repo)
+    assert "docs/invariants.md: 2 numbers 2 invariants; numbers are never reused" in result.stdout
+    assert "1 numbers" not in result.stdout
+
+
+def test_an_invariant_numbered_as_an_ordered_list_item_fails(repo: Path) -> None:
+    write(
+        repo,
+        "docs/invariants.md",
+        "# Invariants\n\n- **1.** One.\n\n2. Two.\n3) Three.\n\n```markdown\n4. An example.\n```\n",
+    )
+    result = run(repo)
+    for marker, n in (("2.", 2), ("3)", 3)):
+        assert (
+            f"docs/invariants.md: {marker} is an ordered-list marker, which GitHub renumbers;"
+            f" write - **{n}.**" in result.stdout
+        )
+    assert "4. is" not in result.stdout
+
+
+def test_an_invariant_in_another_form_fails_rather_than_go_uncounted(repo: Path) -> None:
+    write(
+        repo,
+        "docs/invariants.md",
+        "# Invariants\n\n- **1.** One.\n* **1.** Star.\n- 1. Plain.\n- **1**. Outside.\n"
+        "* `tests/x.py::t` code.\n",
+    )
+    result = run(repo)
+    for item in ("* **1.** Star.", "- 1. Plain.", "- **1**. Outside.", "* `tests/x.py::t` code."):
+        assert (
+            f'docs/invariants.md: "{item}" is a list item not written - **<N>.**' in result.stdout
+        )
+    assert "1 numbers" not in result.stdout
+
+
+def test_a_numbered_line_inside_a_rule_is_text_unless_it_starts_at_1(repo: Path) -> None:
+    write(
+        repo,
+        "docs/invariants.md",
+        "# Invariants\n\n- **1.** On GPIO\n  13. A card.\n- **2.** Two\n  `t`\n  1. Nested.\n\n"
+        "## B\n  14. After a heading.\n- **3.** Three\n ## C\n  15. After an indented heading.\n"
+        "- **4.** Four\n  ---\n  16. After a setext underline.\n\n<!-- x -->\n  17. After HTML.\n\n"
+        "| a |\n|---|\n  18. After a table row.\n- **5.** Five\n  > q\n  19. After a quote.\n"
+        "- **6.** Six\n  ***\n  20. After a break.\n- **7.** Seven\n  ___\n  21. After a break.\n",
+    )
+    result = run(repo)
+    assert "13." not in result.stdout
+    for n in (1, 14, 15, 16, 17, 18, 19, 20, 21):
+        assert f"docs/invariants.md: {n}. is an ordered-list marker" in result.stdout
+
+
 def test_this_repository_passes_its_integrity_checks() -> None:
     assert check_docs.integrity(ROOT) == []
 

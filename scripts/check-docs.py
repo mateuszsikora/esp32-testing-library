@@ -362,6 +362,7 @@ VERSION_LINES = {
 PLAN = "docs/implementation-plan.md"
 PLAN_REF = re.compile(r"\bplan ((?:§\d+(?:\.\d+)?|M\d+)(?:, (?:§\d+(?:\.\d+)?|M\d+))*)")
 FEATURES_INDEX = "docs/features/README.md"
+INVARIANTS = "docs/invariants.md"
 TEXT_SUFFIXES = {".md", ".py", ".rs", ".sh", ".toml", ".yml", ".yaml", ".c", ".h", ".txt", ""}
 
 
@@ -506,10 +507,14 @@ def text_files(root: Path) -> dict[str, str]:
     return found
 
 
+def without_fences(text: str) -> str:
+    """Markdown without its fenced code blocks."""
+    return re.sub(r"(?ms)^[ \t]*(`{3,}|~{3,}).*?^[ \t]*\1[ \t]*$", "", text)
+
+
 def prose(text: str) -> str:
     """Markdown without its code: links and references in an example are not links."""
-    text = re.sub(r"(?ms)^[ \t]*(`{3,}|~{3,}).*?^[ \t]*\1[ \t]*$", "", text)
-    return re.sub(r"(`+).+?\1", "", text)
+    return re.sub(r"(`+).+?\1", "", without_fences(text))
 
 
 def link_targets(path: str, text: str) -> list[tuple[str, str | None]]:
@@ -563,8 +568,57 @@ def integrity(root: Path) -> list[str]:
                         failures.append(f"{path}: plan {ref} is no heading of {PLAN}")
     failures += index.check(root)
     failures += rules_table(files.get(FEATURES_INDEX))
+    failures += invariant_numbers(files.get(INVARIANTS))
     # A link used three times in a file is one problem.
     return list(dict.fromkeys(failures))
+
+
+def invariant_numbers(text: str | None) -> list[str]:
+    """A number docs/invariants.md gives twice, or a list item not written `- **<N>.** `.
+
+    Every item has to be in that one form to be counted: one written `2)` or `* **2.**` would slip
+    past the count, and an ordered-list marker past GitHub's numbering too. Two pull requests that
+    each take the next free number pass on their own and collide once both are merged, so this
+    runs whatever changed."""
+    if text is None:
+        return []
+    failures = []
+    counts: Counter[str] = Counter()
+    # Whether the line before is text of a rule: its item's first line, or a line indented under
+    # the dash that starts like text (a letter, a digit, code, a bracket, a quote, `~~`). Anything
+    # else may end the paragraph (a heading, HTML, a table, a quote, a break, a setext underline),
+    # and so does a blank line or a line at the left margin: past it, a number is checked.
+    in_rule = False
+    # Inline code stays: an item's test names are in backticks, and the report quotes the item.
+    for line in without_fences(text).splitlines():
+        starts_item = re.match(r" {0,3}(?:[-*+]|\d+[.)])(?:\s|$)", line)
+        # GitHub starts an ordered list inside a paragraph only at 1: in a rule's text,
+        # "  13. A card" is text, not a marker.
+        continues = in_rule and re.match(r"\s{2}", line)
+        in_rule = bool(starts_item) or bool(
+            in_rule and re.match(r"\s{2,}(?:[^\W_]|[`(\[\"'~])", line)
+        )
+        if not starts_item:
+            continue
+        if item := re.match(r"- \*\*(\d+)\.\*\* ", line):
+            counts[item[1]] += 1
+        elif ordered := re.match(r" {0,3}(\d+)([.)])", line):
+            if continues and ordered[1] != "1":
+                continue
+            failures.append(
+                f"{INVARIANTS}: {ordered[1]}{ordered[2]} is an ordered-list marker, which GitHub"
+                f" renumbers; write - **{ordered[1]}.**"
+            )
+        else:
+            failures.append(
+                f'{INVARIANTS}: "{line.strip()[:30]}" is a list item not written - **<N>.**'
+            )
+    failures += [
+        f"{INVARIANTS}: {n} numbers {count} invariants; numbers are never reused"
+        for n, count in sorted(counts.items(), key=lambda item: int(item[0]))
+        if count > 1
+    ]
+    return failures
 
 
 def plan_sections(index: ModuleType, text: str) -> set[str]:
