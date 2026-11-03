@@ -834,16 +834,16 @@ that references to its number keep their meaning.
 
 ## Resets and power cycles
 
-- **127.** With the board's supply off the runner runs no instruction of the guest, takes the
+- **137.** With the board's supply off the runner runs no instruction of the guest, takes the
      peer's turns at their times, routes no UART (bytes for the chip are `unrouted_rx`) and drives
      no pad; when the supply comes back the chip resets with cause 1, and the run's time has not
      restarted.
      `runner/src/session/tests.rs::with_the_supply_off_the_guest_runs_nothing_and_its_time_goes_on`,
      `runner/src/session/tests.rs::with_the_supply_off_no_pad_is_driven`
-- **128.** A `chip_reset` with the supply on is a reset with cause 1, and does nothing with it off;
+- **138.** A `chip_reset` with the supply on is a reset with cause 1, and does nothing with it off;
      a `power` to the state the supply is in does nothing.
      `runner/src/session/tests.rs::en_resets_the_chip_with_power_on_as_its_cause_and_does_nothing_without_power`
-- **129.** A power-on reset zeroes SRAM and both RTC memories, puts the RTC registers back to
+- **139.** A power-on reset zeroes SRAM and both RTC memories, puts the RTC registers back to
      `POWERON_RESET` with the RTC timer at 0, and keeps the flash and the bus cycle counter.
      `runner/src/session/tests.rs::on_the_emulator_a_power_on_reset_clears_sram_and_the_rtc_and_keeps_the_flash`
 - **130.** On the firmware, `esp_restart()` keeps RAM and RTC memory, and `board.reset()` and a power
