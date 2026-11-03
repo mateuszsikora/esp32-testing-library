@@ -125,11 +125,28 @@ the test made, stamped at its instant or at the turn's `now`, whichever is later
   PUBACK, SUBSCRIBE/SUBACK, UNSUBSCRIBE/UNSUBACK, PING and DISCONNECT. Retained state belongs to
   the test's broker; subscriptions belong to a connection. Empty clean-session client IDs are
   replaced before Will construction and takeover checks with `esp32tl-anonymous-<n>`. A per-broker
-  counter and connection history prevent reuse or collision with an earlier supplied ID.
-  Empty IDs without CleanSession get CONNACK `00 02` followed by close.
+  counter and the accepted-client history prevent reuse or collision with an earlier accepted ID;
+  an ID supplied only in a rejected attempt may still be allocated.
+  CONNECT parsing first constructs immutable public `Connect` metadata, retaining the wire ID
+  and the board timestamp. Empty IDs without CleanSession get CONNACK `00 02` followed by close;
+  other supported requests pass through the current `connection_policy` (or accept with `None`).
+  The callable must return `ConnackCode`, the six MQTT 3.1.1 values 0–5. It executes outside the
+  malformed-packet exception handler: exceptions and invalid return types close the transport
+  and leave `on_data` without CONNACK or an outcome. In a board run `on_data` is called from the
+  link's `modem.receive` or `wifi.receive`, so `boardlink.calling` turns the error into the
+  `LinkError` `modem.receive raised <Type>: <message>`; the link fails with its traceback, ends
+  the run, and the test's wait raises `RunEnded` naming it. A successfully selected code appends
+  a `ConnectionAttempt` to `connection_attempts` before sending CONNACK. This history is separate
+  from accepted `clients`; `connection_attempt()` captures a future cursor like `connected()`.
+  Rejections log `mqtt: '<client-id>' rejected: <CODE_NAME> (<value>)`, send CONNACK with Session
+  Present zero and close before allocating an anonymous ID, installing a Will, setting keepalive
+  or taking over an existing client. The parser stops processing buffered packets on closure.
+  Only accepted connections install session state and enter `clients`; replacing the policy
+  affects subsequent CONNECTs only. Network reset retains both histories and the policy.
   Will is published once with the time
   of disconnect, not the time of CONNECT. A replacement client ID closes the old connection.
-  Session persistence and QoS 2 publication are unsupported; credentials are observable only.
+  Session persistence and QoS 2 publication are unsupported. Credentials are observed by default;
+  authentication is performed only by an installed test policy, with no external auth service.
 - `tls.py`: a generated RSA-2048 CA and server certificate, SHA-256 signatures, DNS/IP subject
   alternative names, CA key usage and server extended key usage. Optional `server_not_before`
   and `server_not_after` apply only to the leaf certificate; the CA retains its fixed validity.
@@ -200,6 +217,13 @@ relaxed. See [testing](../guides/testing.md#determinism).
 `test_net_tls.py` use handmade packets, independent checksum/framing calculations and a real TLS
 client in memory. They check malformed inputs, partial frames, flow control, sequence wrap,
 connection loss, keepalive, retained delivery, topic filters, Wills, UTC and certificate trust.
+`tests/test_net_mqtt_policy.py` drives TCP packets with both plain MQTT and a verified MemoryBIO
+TLS client. It checks all CONNACK codes, retries after credential/policy changes, accepted-client
+and attempt histories, rejection before takeover, pipelined packet isolation and Will suppression.
+It also checks immutable wire metadata, anonymous-ID allocation only on acceptance, built-in
+empty-ID rejection precedence, malformed CONNECT exclusion and propagation of policy errors,
+both out of `on_data` and as a link failure in a `BoardLink` turn. A test through `Internet`
+covers its traced plain and TLS listeners and keeps the policy and both histories across reset.
 NTP tests cover silence from startup, idempotent transitions and resumed replies using elapsed
 world time. A MemoryBIO handshake with verification disabled solely for certificate inspection
 checks independent leaf validity dates, UTC normalization and a signature from the unchanged CA;

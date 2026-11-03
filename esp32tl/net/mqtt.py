@@ -6,6 +6,7 @@ publish too.
 import struct
 from collections.abc import Callable
 from dataclasses import dataclass, replace
+from enum import IntEnum
 
 from esp32tl.units import Duration
 
@@ -35,6 +36,48 @@ class Client:
     password: bytes | None
     keepalive: int
     will_topic: str | None
+
+
+class ConnackCode(IntEnum):
+    """MQTT 3.1.1 CONNECT return codes, not MQTT 5 reason codes."""
+
+    ACCEPTED = 0
+    UNACCEPTABLE_PROTOCOL_VERSION = 1
+    IDENTIFIER_REJECTED = 2
+    SERVER_UNAVAILABLE = 3
+    BAD_USERNAME_OR_PASSWORD = 4
+    NOT_AUTHORIZED = 5
+
+
+@dataclass(frozen=True)
+class Connect:
+    """A parsed CONNECT, with the client ID exactly as sent by the device."""
+
+    at: Duration
+    peer: tuple[str, int]
+    client_id: str
+    clean_session: bool
+    username: str | None
+    password: bytes | None
+    keepalive: int
+    will_topic: str | None
+    will_payload: bytes | None
+    will_qos: int
+    will_retain: bool
+
+
+@dataclass(frozen=True)
+class ConnectionAttempt:
+    connect: Connect
+    return_code: ConnackCode
+
+    @property
+    def at(self) -> Duration:
+        return self.connect.at
+
+    @property
+    def accepted(self) -> bool:
+        return self.return_code == ConnackCode.ACCEPTED
 
 
 def matches(pattern: str, topic: str) -> bool:
@@ -78,12 +121,18 @@ class Broker:
     """`now` is the board's clock. The `StreamService` of `esp32tl.net.ip`."""
 
     def __init__(
-        self, now: Callable[[], int], log: Callable[[str], None] = lambda line: None
+        self,
+        now: Callable[[], int],
+        log: Callable[[str], None] = lambda line: None,
+        *,
+        connection_policy: Callable[[Connect], ConnackCode] | None = None,
     ) -> None:
         self._now = now
         self._log = log
         self.messages: list[Message] = []
         self.clients: list[Client] = []
+        self.connection_attempts: list[ConnectionAttempt] = []
+        self.connection_policy = connection_policy
         self.retained: dict[str, Message] = {}
         self._sessions: list[_Session] = []
         self._anonymous = 0
@@ -91,12 +140,12 @@ class Broker:
     def accept(
         self, peer: tuple[str, int], write: Callable[[bytes], None], close: Callable[[], None]
     ) -> "_Session":
-        session = _Session(self, write, close)
+        session = _Session(self, peer, write, close)
         self._sessions.append(session)
         return session
 
     def _anonymous_id(self) -> str:
-        """Allocate a repeatable ID that no earlier CONNECT in this broker used."""
+        """Allocate a repeatable ID that no earlier accepted CONNECT in this broker used."""
         used = {client.client_id for client in self.clients}
         while True:
             self._anonymous += 1
@@ -144,6 +193,18 @@ class Broker:
         find.description = "a client connecting"  # type: ignore[attr-defined]
         return find
 
+    def connection_attempt(self) -> Callable[[], ConnectionAttempt | None]:
+        """A condition: the next CONNECT outcome from now on, accepted or rejected."""
+        start = len(self.connection_attempts)
+
+        def find() -> ConnectionAttempt | None:
+            return (
+                self.connection_attempts[start] if len(self.connection_attempts) > start else None
+            )
+
+        find.description = "an MQTT connection attempt"  # type: ignore[attr-defined]
+        return find
+
     def publish(
         self, topic: str, payload: bytes | str, *, retain: bool = False, qos: int = 0
     ) -> None:
@@ -180,9 +241,14 @@ class Broker:
 
 class _Session:
     def __init__(
-        self, broker: Broker, write: Callable[[bytes], None], close: Callable[[], None]
+        self,
+        broker: Broker,
+        peer: tuple[str, int],
+        write: Callable[[bytes], None],
+        close: Callable[[], None],
     ) -> None:
         self.broker = broker
+        self.peer = peer
         self.write = write
         self.close = close
         self.buffer = bytearray()
@@ -242,76 +308,118 @@ class _Session:
                 return
             first, body = self.buffer[0], bytes(self.buffer[at : at + length])
             del self.buffer[: at + length]
+            connect = None
             try:
-                self._handle(first >> 4, first & 0x0F, body)
+                if first >> 4 == CONNECT:
+                    connect = self._parse_connect(first & 0x0F, body)
+                else:
+                    self._handle(first >> 4, first & 0x0F, body)
             except (ValueError, IndexError, struct.error):
                 self.broker._log("mqtt: malformed or unsupported packet, closing")
                 self.on_close()
+            if connect is not None:
+                # Test policy errors must reach the test, not become malformed wire input.
+                self._connect(connect)
             if self.closed:
                 return
             if self.keepalive:
                 self.deadline = self.broker._now() + self.keepalive * 1_500_000_000
 
+    def _parse_connect(self, flags: int, body: bytes) -> Connect:
+        protocol, at = _string(body, 0)
+        if flags or self.connected or protocol != "MQTT" or body[at] != 4:
+            raise ValueError("expected one MQTT 3.1.1 CONNECT")
+        connect_flags = body[at + 1]
+        (keepalive,) = struct.unpack(">H", body[at + 2 : at + 4])
+        if connect_flags & 1 or ((connect_flags >> 3) & 3) > 1:
+            raise ValueError("unsupported CONNECT flags or Will QoS")
+        if not connect_flags & 4 and connect_flags & 0x38:
+            raise ValueError("Will flags without a Will")
+        client_id, at = _string(body, at + 4)
+        will_topic = will_payload = None
+        if connect_flags & 0x04:
+            will_topic, at = _string(body, at)
+            if not will_topic or "+" in will_topic or "#" in will_topic:
+                raise ValueError("invalid Will topic")
+            will_payload, at = _blob(body, at)
+        username = password = None
+        if connect_flags & 0x80:
+            username, at = _string(body, at)
+        if connect_flags & 0x40:
+            password, at = _blob(body, at)
+        if at != len(body):
+            raise ValueError("trailing CONNECT data")
+        return Connect(
+            at=Duration(self.broker._now()),
+            peer=self.peer,
+            client_id=client_id,
+            clean_session=bool(connect_flags & 2),
+            username=username,
+            password=password,
+            keepalive=keepalive,
+            will_topic=will_topic,
+            will_payload=will_payload,
+            will_qos=(connect_flags >> 3) & 3,
+            will_retain=bool(connect_flags & 0x20),
+        )
+
+    def _connect(self, connect: Connect) -> None:
+        broker = self.broker
+        code = ConnackCode.ACCEPTED
+        if not connect.client_id and not connect.clean_session:
+            code = ConnackCode.IDENTIFIER_REJECTED
+        elif broker.connection_policy is not None:
+            try:
+                code = broker.connection_policy(connect)
+                if not isinstance(code, ConnackCode):
+                    raise TypeError("MQTT connection_policy must return a ConnackCode")
+            except Exception:
+                self._end()
+                raise
+        broker.connection_attempts.append(ConnectionAttempt(connect, code))
+        if code != ConnackCode.ACCEPTED:
+            broker._log(f"mqtt: {connect.client_id!r} rejected: {code.name} ({code.value})")
+            self.write(_packet(CONNACK, 0, bytes([0, code])))
+            self._end()
+            return
+
+        self.client_id = connect.client_id or broker._anonymous_id()
+        if connect.will_topic is not None:
+            assert connect.will_payload is not None
+            self.will = Message(
+                connect.at,
+                self.client_id,
+                connect.will_topic,
+                connect.will_payload,
+                connect.will_qos,
+                connect.will_retain,
+            )
+        for session in list(broker._sessions):
+            if session is not self and session.connected and session.client_id == self.client_id:
+                session.on_close()
+        self.connected = True
+        self.keepalive = connect.keepalive
+        broker.clients.append(
+            Client(
+                connect.at,
+                self.client_id,
+                connect.username,
+                connect.password,
+                connect.keepalive,
+                connect.will_topic,
+            )
+        )
+        broker._log(f"mqtt: {self.client_id} connected")
+        self.write(_packet(CONNACK, 0, bytes([0, code])))
+
     def _handle(self, kind: int, flags: int, body: bytes) -> None:
         if kind != PUBLISH and flags != (2 if kind in (SUBSCRIBE, UNSUBSCRIBE) else 0):
             raise ValueError("invalid MQTT flags")
-        if not self.connected and kind != CONNECT:
+        if not self.connected:
             raise ValueError("CONNECT must come first")
         broker = self.broker
         now = Duration(broker._now())
-        if kind == CONNECT:
-            protocol, at = _string(body, 0)
-            if self.connected or protocol != "MQTT" or body[at] != 4:
-                raise ValueError("expected one MQTT 3.1.1 CONNECT")
-            connect_flags = body[at + 1]
-            (keepalive,) = struct.unpack(">H", body[at + 2 : at + 4])
-            if connect_flags & 1 or ((connect_flags >> 3) & 3) > 1:
-                raise ValueError("unsupported CONNECT flags or Will QoS")
-            if not connect_flags & 4 and connect_flags & 0x38:
-                raise ValueError("Will flags without a Will")
-            self.client_id, at = _string(body, at + 4)
-            if not self.client_id:
-                if not connect_flags & 2:
-                    self.write(_packet(CONNACK, 0, b"\x00\x02"))
-                    self._end()
-                    return
-                self.client_id = broker._anonymous_id()
-            will_topic = None
-            if connect_flags & 0x04:
-                will_topic, at = _string(body, at)
-                if not will_topic or "+" in will_topic or "#" in will_topic:
-                    raise ValueError("invalid Will topic")
-                will_payload, at = _blob(body, at)
-                self.will = Message(
-                    now,
-                    self.client_id,
-                    will_topic,
-                    will_payload,
-                    (connect_flags >> 3) & 3,
-                    bool(connect_flags & 0x20),
-                )
-            username = password = None
-            if connect_flags & 0x80:
-                username, at = _string(body, at)
-            if connect_flags & 0x40:
-                password, at = _blob(body, at)
-            if at != len(body):
-                raise ValueError("trailing CONNECT data")
-            for session in list(broker._sessions):
-                if (
-                    session is not self
-                    and session.connected
-                    and session.client_id == self.client_id
-                ):
-                    session.on_close()
-            self.connected = True
-            self.keepalive = keepalive
-            broker.clients.append(
-                Client(now, self.client_id, username, password, keepalive, will_topic)
-            )
-            broker._log(f"mqtt: {self.client_id} connected")
-            self.write(_packet(CONNACK, 0, b"\x00\x00"))
-        elif kind == PUBLISH:
+        if kind == PUBLISH:
             qos, retain = (flags >> 1) & 3, bool(flags & 1)
             topic, at = _string(body, 0)
             if not topic or "+" in topic or "#" in topic or qos > 1:

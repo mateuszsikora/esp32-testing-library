@@ -46,13 +46,17 @@ silent; an AT-only model still works without PPP. The network's broker is `modem
 | `message(topic="#", payload=None)` | Condition returning the first matching message received **after the condition was created**; MQTT topic filters are accepted, payload is bytes or text |
 | `subscribed(topic)` | Condition true while an active client has this exact subscription filter, including an existing subscription |
 | `connected()` | Condition returning the next client connecting after the condition was created |
+| `connection_attempt()` | Condition returning the next accepted or rejected CONNECT outcome after the condition was created |
+| `connection_policy` | Callable receiving `Connect` and returning `ConnackCode`; `None` (default) accepts supported requests |
 | `publish(topic, payload, retain=False, qos=0)` | Publish from the test at the board's current time; bytes or UTF-8 text, QoS 0 or 1 |
-| `messages`, `clients`, `retained` | Message history, connection history and currently retained messages |
+| `messages`, `clients`, `retained` | Message history, accepted-client history and currently retained messages |
+| `connection_attempts` | CONNECT outcome history, including accepted and rejected attempts |
 
 A message has `at` (`Duration`), `client`, `topic`, `payload` (bytes), `qos`, `retain`, and
 `text` (UTF-8 with replacement). Test publications use client `(test)`. A client record has
-`at`, `client_id`, `username`, `password`, `keepalive` and `will_topic`. Credentials are recorded,
-not authenticated. Treat reports as test data: payloads and usernames can be sensitive.
+`at`, `client_id`, `username`, `password`, `keepalive` and `will_topic`. By default, credentials
+are observed, not authenticated; install a connection policy to check them. Treat reports and
+histories as test data: payloads, usernames and passwords can be sensitive.
 
 Subscriptions support `+` and final `#`, including empty levels. Wildcards beginning with `+`
 or `#` do not match `$` topics. QoS 0 and 1, PUBACK, retained delivery, empty retained-message
@@ -61,10 +65,98 @@ deletion, unsubscribe, PING and Will on connection loss are supported. Keepalive
 QoS 2 publications are refused. Sessions are not persisted across connections.
 
 A CONNECT with an empty client ID and `CleanSession=1` receives a generated ID such as
-`esp32tl-anonymous-1`, visible in connection history, messages and Wills. IDs use a per-broker
-counter and skip IDs already in its connection history, so anonymous clients remain independent
-and repeated test runs assign the same IDs. An empty ID with `CleanSession=0` receives CONNACK
-return code 2 (`Identifier rejected`) and is disconnected.
+`esp32tl-anonymous-1`, visible in accepted-client history, messages and Wills. IDs use a
+per-broker counter and skip IDs already in its accepted-client history, so anonymous clients
+remain independent and repeated test runs assign the same IDs. An empty ID with
+`CleanSession=0` receives CONNACK return code 2 (`Identifier rejected`) and is disconnected.
+
+## Reject MQTT connections and check credentials
+
+Set `broker.connection_policy` before power-on or between board advances. It receives an
+immutable `Connect` record and must return a member of `ConnackCode`, both imported from
+`esp32tl.net.mqtt`. The same policy applies to plain TCP and TLS listeners using this broker.
+It runs once per supported, fully parsed CONNECT; it must not block or wait on the board.
+Changing it affects future attempts only, leaving existing clients connected. Assign `None`
+to restore the accepting default. Behind a Wi-Fi access point the same policy is set on
+`network.broker`. A directly constructed `Broker` also accepts the keyword
+`connection_policy=`.
+
+For firmware configured to retry, first refuse connections, then enable credential checking:
+
+```python
+from esp32tl.net.mqtt import ConnackCode, Connect
+from esp32tl.units import seconds
+
+broker.connection_policy = lambda connect: ConnackCode.SERVER_UNAVAILABLE
+attempt = broker.connection_attempt()
+board.power_on()
+refused = board.wait_until(attempt, within=seconds(60))
+assert refused.return_code is ConnackCode.SERVER_UNAVAILABLE
+assert not broker.clients
+
+
+def authenticate(connect: Connect) -> ConnackCode:
+    if (connect.username, connect.password) == ("device", b"secret"):
+        return ConnackCode.ACCEPTED
+    return ConnackCode.BAD_USERNAME_OR_PASSWORD
+
+
+# Provision those credentials through the firmware's own configuration interface.
+connected = broker.connected()
+broker.connection_policy = authenticate
+client = board.wait_until(connected, within=seconds(60))
+assert client.username == "device"
+```
+
+A stateful policy can reject just the next attempt, without relying on elapsed host time:
+
+```python
+outcomes = iter([ConnackCode.SERVER_UNAVAILABLE])
+broker.connection_policy = lambda connect: next(outcomes, ConnackCode.ACCEPTED)
+```
+
+These are MQTT 3.1.1 CONNACK return codes, not MQTT 5 reason codes:
+
+| `ConnackCode` member | Wire value |
+|---|---|
+| `ACCEPTED` | 0 |
+| `UNACCEPTABLE_PROTOCOL_VERSION` | 1 |
+| `IDENTIFIER_REJECTED` | 2 |
+| `SERVER_UNAVAILABLE` | 3 |
+| `BAD_USERNAME_OR_PASSWORD` | 4 |
+| `NOT_AUTHORIZED` | 5 |
+
+The policy can simulate any of these responses to a supported MQTT 3.1.1 request. Unsupported
+protocol versions and malformed packets still close without invoking it or sending CONNACK.
+An empty client ID without CleanSession is rejected with `IDENTIFIER_REJECTED` before the policy;
+the policy cannot override that rule. Every rejection sends CONNACK with Session Present zero,
+then closes. It cannot take over another client, route pipelined publications, subscribe or
+emit a Will.
+
+`Connect` contains `at` (`Duration`, on the board clock), `peer` (IP string and source port),
+`client_id`, `clean_session`, `username` (text or `None`), `password` (bytes or `None`),
+`keepalive` (seconds), `will_topic`, `will_payload`, `will_qos` and `will_retain`. Absent Will
+topic/payload are `None`; QoS and retain are zero/false. The client ID is exactly what the device
+sent, including an empty string; an anonymous ID is allocated only after acceptance and appears
+in `clients`.
+
+Each immutable `ConnectionAttempt` in `connection_attempts` has `connect` (the metadata),
+`return_code`, `at` (the CONNECT timestamp) and `accepted` (boolean). This includes the built-in
+empty-ID rejection. Histories survive connection loss and network reset. `clients` and
+`connected()` include accepted connections only. `connection_attempt()` observes future outcomes
+without consuming them; a timeout names `an MQTT connection attempt`. Malformed or incomplete
+CONNECTs, TCP accepts and TLS handshake failures do not create outcomes.
+
+A policy that raises, or returns anything other than a `ConnackCode` (including a bare integer
+or boolean, which raises `TypeError("MQTT connection_policy must return a ConnackCode")`), is a
+test error. It sends no CONNACK, records no outcome and does not become a simulated
+authentication failure. In a board test the policy runs in the link, not in the test: the link
+fails and the run ends, so the waiting `board.wait_until(...)` raises `RunEnded`, not the
+policy's exception. Its message names the error, as in
+`the link failed: modem.receive raised TypeError: MQTT connection_policy must return a ConnackCode`
+(`wifi.receive` behind an access point), and the traceback is in the link's report. Only a
+`Broker` driven directly, without a board, raises the policy's own exception from `on_data`, after
+closing that connection.
 
 ## Fetch a page behind a Wi-Fi access point
 

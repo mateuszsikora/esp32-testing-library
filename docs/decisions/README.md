@@ -187,6 +187,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Serial adapters preserve skips for modem models and NVS replacement](harness.md#serial-adapters-preserve-skips-for-modem-models-and-nvs-replacement) | `harness.md` | decided (#25) |
 | [The network is selected explicitly, and resets with its modem](harness.md#the-network-is-selected-explicitly-and-resets-with-its-modem) | `harness.md` | decided (#30) |
 | [The MQTT service implements ephemeral sessions and QoS zero and one](harness.md#the-mqtt-service-implements-ephemeral-sessions-and-qos-zero-and-one) | `harness.md` | decided (#30) |
+| [MQTT CONNECT policy runs before accepted session state is installed](harness.md#mqtt-connect-policy-runs-before-accepted-session-state-is-installed) | `harness.md` | decided (#103) |
 | [TLS determinism compares explicit plaintext transcripts](harness.md#tls-determinism-compares-explicit-plaintext-transcripts) | `harness.md` | decided (#30) |
 | [pppos_client is fetched by pinned commit and checksum](harness.md#pppos_client-is-fetched-by-pinned-commit-and-checksum) | `harness.md` | decided (#30) |
 | [Peer MRU limits TCP segmentation and oversized UDP replies are dropped](harness.md#peer-mru-limits-tcp-segmentation-and-oversized-udp-replies-are-dropped) | `harness.md` | decided (#30) |

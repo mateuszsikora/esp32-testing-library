@@ -741,6 +741,22 @@ that references to its number keep their meaning.
     `tests/test_net_tls.py::test_tls_conditions_are_live_named_and_reject_truth_testing`,
     `examples/position_tracker/tests/test_tracker_support.py::test_tls_timeout_names_the_expected_handshake`
 
+- **123.** MQTT CONNECT policy uses only named MQTT 3.1.1 return codes and runs on fully parsed
+    public metadata before session state is installed. Rejection closes after CONNACK, never takes
+    over an accepted client, processes pipelined publications, subscribes or emits a Will.
+    Attempts record the selected code and board time separately from accepted clients, and both
+    histories and the policy survive a network reset. Retries can succeed after credentials or
+    policy change over plain TCP and TLS; `None` restores credential observation without
+    authentication. Empty IDs without CleanSession are rejected before policy, while accepted
+    anonymous clients receive IDs only after policy evaluation. Policy errors produce no CONNACK
+    or outcome: they leave `on_data` of a directly used broker, and fail the link of a board run.
+    `tests/test_net_mqtt_policy.py::test_connack_codes_and_rejection_isolation`,
+    `tests/test_net_mqtt_policy.py::test_retries_credentials_policy_changes_and_success`,
+    `tests/test_net_mqtt_policy.py::test_rejected_takeover_keeps_old_client_and_will`,
+    `tests/test_net_mqtt_policy.py::test_empty_id_rejection_precedes_policy_and_has_an_outcome`,
+    `tests/test_net_mqtt_policy.py::test_internet_reset_keeps_the_policy_and_both_histories`,
+    `tests/test_net_mqtt_policy.py::test_policy_errors_in_a_board_run_fail_the_link_naming_them`
+
 ## Explicit build selection
 
 - **116.** A selected build is resolved relative to the application or taken as absolute, independently
