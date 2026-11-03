@@ -176,7 +176,7 @@ class Broker:
     def message(
         self, topic: str = "#", payload: bytes | str | None = None
     ) -> Callable[[], Message | None]:
-        """Compatibility name for `next_message`; earlier messages remain excluded."""
+        """Alias of `next_message`."""
         return self.next_message(topic, payload)
 
     def next_message(
@@ -214,7 +214,7 @@ class Broker:
         return _Condition(find, f"an active MQTT subscription to {topic!r}")
 
     def connected(self) -> Callable[[], Client | None]:
-        """Compatibility name for `next_connection`; earlier connections remain excluded."""
+        """Alias of `next_connection`."""
         return self.next_connection()
 
     def next_connection(self) -> Callable[[], Client | None]:

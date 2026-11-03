@@ -129,3 +129,15 @@ def test_tls_timeout_names_the_expected_handshake(board: Board, completed: bool)
     with pytest.raises(NeverHappened, match=f"{expected} did not happen within"):
         board.wait_until(condition, within=seconds(0.1))
     assert f"waits up to 0.1 s for {expected}" in board.report(run=True)
+
+
+@pytest.mark.app_path("..")
+@pytest.mark.board_profile("lilygo-t-a7670g-r2")
+def test_mqtt_timeout_names_the_expected_connection(board: Board) -> None:
+    network, _ = serve_broker(board)
+    expected = "the next MQTT client connection"
+    # Broker setup leaves the board off and NVS unprovisioned, so no client can connect.
+    board.power_on()
+    with pytest.raises(NeverHappened, match=f"{expected} did not happen within"):
+        board.wait_until(network.broker.next_connection(), within=seconds(0.1))
+    assert f"waits up to 0.1 s for {expected}" in board.report(run=True)

@@ -759,16 +759,17 @@ that references to its number keep their meaning.
 
 - **124.** MQTT next-event conditions capture append order at creation, exclude earlier events even
     at equal timestamps, and repeatedly return the first matching record without consuming it.
-    Existing `message` / `connected` / `connection_attempt` names keep these semantics. History queries return the
-    first matching recorded event even after closure. A pre-armed publication condition sees
-    a response delivered in the same slice as CONNECT; a condition made after that slice does
-    not. Subscription conditions read current state and do not latch previous subscriptions.
+    The `message` / `connected` aliases share these semantics, and so does `connection_attempt`.
+    History queries return the first matching recorded event even after closure. A pre-armed
+    publication condition sees a response delivered in the same slice as CONNECT; a condition
+    made after that slice does not. Subscription conditions read current state and do not latch previous subscriptions.
     All MQTT conditions name the expected event and reject boolean coercion before and after
     a match.
     `tests/test_net_mqtt.py::test_history_and_next_events_use_append_order_without_consuming`,
     `tests/test_net_mqtt.py::test_subscription_condition_tracks_current_state_without_latching`,
     `tests/test_net_mqtt.py::test_mqtt_conditions_are_named_and_reject_truth_testing`,
-    `tests/test_clock.py::test_mqtt_immediate_response_is_visible_after_waiting_for_connection`
+    `tests/test_clock.py::test_mqtt_immediate_response_is_visible_after_waiting_for_connection`,
+    `examples/position_tracker/tests/test_tracker_support.py::test_mqtt_timeout_names_the_expected_connection`
 
 - **125.** TLS next-event conditions require a started/completed counter increment after construction.
     Prior successes cannot satisfy them after closure or reset, and a failed new attempt does

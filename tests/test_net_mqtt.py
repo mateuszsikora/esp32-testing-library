@@ -15,7 +15,7 @@ def test_split_connect_subscribe_qos_one_retained_and_unsubscribe() -> None:
     sent: list[bytes] = []
     closed: list[bool] = []
     session = broker.accept(("10.0.0.2", 100), sent.append, lambda: closed.append(True))
-    connected = broker.connected()
+    connected = broker.next_connection()
     for byte in CONNECT:
         session.on_data(bytes([byte]))
     assert sent == [b"\x20\x02\0\0"]
@@ -26,7 +26,7 @@ def test_split_connect_subscribe_qos_one_retained_and_unsubscribe() -> None:
     assert sent[-2:] == [b"\x90\x03\0\x01\x01", b"\x33\x0a\0\x03a/b\0\x01old"]
     session.on_data(b"\x40\x02\0\x01")
     assert not session.unacked
-    waiting = broker.message("a/+", "new")
+    waiting = broker.next_message("a/+", "new")
     now[0] = 30
     session.on_data(b"\x32\x0a\0\x03a/b\0\x09new")
     assert sent[-1] == b"\x40\x02\0\x09"

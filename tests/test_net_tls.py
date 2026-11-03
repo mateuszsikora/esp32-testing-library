@@ -58,7 +58,7 @@ def tls_exchange() -> dict[str, object]:
         ("IP Address", "192.0.2.1"),
     )
     now[0] = 10_000_000
-    waiting = net.broker.message("a/b")
+    waiting = net.broker.next_message("a/b")
     client.write(b"\x10\x0d\0\x04MQTT\x04\x02\0\x0a\0\x01c")
     server.on_data(outgoing.read())
     assert client.read() == b"\x20\x02\0\0"
@@ -203,7 +203,6 @@ def test_tls_conditions_are_live_named_and_reject_truth_testing(completed: bool)
     assert not condition()
     with pytest.raises(TypeError, match="call the TLS condition"):
         bool(condition)
-
     server = listener.accept(("10.64.0.2", 4000), lambda data: None, lambda: None)
     assert not condition()  # Accept alone is not TLS input.
     server.on_data(b"\x16")

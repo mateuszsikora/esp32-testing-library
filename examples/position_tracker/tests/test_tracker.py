@@ -24,7 +24,7 @@ def test_reports_on_connect(board: Board) -> None:
     network, tls = serve_broker(board)
     reports = Reports(network.broker)
     configure_tracker(board, trusted_ca=tls.ca.ca_pem)
-    connected, report = network.broker.connected(), reports.when_received()
+    connected, report = network.broker.next_connection(), reports.when_received()
     board.power_on(utc=WORLD)
 
     client = board.wait_until(connected, within=STARTUP)
@@ -125,7 +125,7 @@ def test_publishes_unretained_qos_zero_over_tls(board: Board) -> None:
     network, tls = serve_broker(board)
     configure_tracker(board, trusted_ca=tls.ca.ca_pem)
     board.power_on(utc=WORLD)
-    message = board.wait_until(network.broker.message(TOPIC), within=STARTUP)
+    message = board.wait_until(network.broker.next_message(TOPIC), within=STARTUP)
     assert message.qos == 0 and not message.retain
     assert BROKER_HOST in network.dns.asked
     assert tls.handshake_completed()

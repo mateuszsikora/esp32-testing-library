@@ -25,7 +25,7 @@ pytestmark = [
 
 def test_publishes(board, broker):
     board.power_on()
-    message = board.wait_until(broker.message("/topic/esp-pppos"), within=seconds(60))
+    message = board.wait_until(broker.next_message("/topic/esp-pppos"), within=seconds(60))
     assert message.text == "esp32-pppos"
 
 
@@ -45,11 +45,11 @@ silent; an AT-only model still works without PPP. The network's broker is `modem
 |---|---|
 | `next_message(topic="#", payload=None)` | Condition returning the first matching message recorded **after this method call**; MQTT topic filters are accepted, payload is bytes or text |
 | `find_message(topic="#", payload=None)` | Immediate history query returning the first recorded match, or `None`; the same filters as `next_message` |
-| `message(topic="#", payload=None)` | Compatibility name for `next_message`, with the same future-only behavior as before |
+| `message(topic="#", payload=None)` | Alias of `next_message` |
 | `subscribed(topic)` | Condition true while an active client has this exact subscription filter, including an existing subscription |
 | `next_connection()` | Condition returning the first accepted MQTT CONNECT recorded **after this method call** |
 | `find_connection()` | Immediate history query returning the first accepted CONNECT, or `None`, even if that connection has closed |
-| `connected()` | Compatibility name for `next_connection`, with the same future-only behavior as before |
+| `connected()` | Alias of `next_connection` |
 | `connection_attempt()` | Condition returning the first accepted or rejected CONNECT outcome recorded **after this method call** |
 | `connection_policy` | Callable receiving `Connect` and returning `ConnackCode`; `None` (default) accepts supported requests |
 | `publish(topic, payload, retain=False, qos=0)` | Publish from the test at the board's current time; bytes or UTF-8 text, QoS 0 or 1 |
@@ -97,12 +97,12 @@ a previously true condition false.
 
 All MQTT conditions have timeout representations such as `the next MQTT message on 'a/+' saying
 b'new'`, `the next MQTT client connection`, `the next MQTT connection attempt` and
-`an active MQTT subscription to 'a/#'`.
-Call a condition with `()` or pass it to `board.wait_until`; boolean coercion now raises
+`an active MQTT subscription to 'a/#'`. Call a condition with `()` or pass it to
+`board.wait_until`. Boolean coercion of any MQTT condition, including those from `message`,
+`connected`, `connection_attempt` and `subscribed`, raises
 `TypeError("call the MQTT condition with (), or pass it to board.wait_until")`, before and after
-a match. This also applies to the existing `message`, `connected`, `connection_attempt` and
-`subscribed` methods: their polling behavior is unchanged, but an unevaluated
-`assert broker.connected()` is now rejected. Use `assert broker.find_connection() is not None` to inspect past connections.
+a match, so an unevaluated `assert broker.connected()` fails. Use
+`assert broker.find_connection() is not None` to inspect past connections.
 
 Subscriptions support `+` and final `#`, including empty levels. Wildcards beginning with `+`
 or `#` do not match `$` topics. QoS 0 and 1, PUBACK, retained delivery, empty retained-message
@@ -148,7 +148,7 @@ def authenticate(connect: Connect) -> ConnackCode:
 
 
 # Provision those credentials through the firmware's own configuration interface.
-connected = broker.connected()
+connected = broker.next_connection()
 broker.connection_policy = authenticate
 client = board.wait_until(connected, within=seconds(60))
 assert client.username == "device"
@@ -189,9 +189,9 @@ in `clients`.
 Each immutable `ConnectionAttempt` in `connection_attempts` has `connect` (the metadata),
 `return_code`, `at` (the CONNECT timestamp) and `accepted` (boolean). This includes the built-in
 empty-ID rejection. Histories survive connection loss and network reset. `clients` and
-`connected()` include accepted connections only. `connection_attempt()` observes future outcomes
-without consuming them; a timeout names `the next MQTT connection attempt`. Malformed or incomplete
-CONNECTs, TCP accepts and TLS handshake failures do not create outcomes.
+`next_connection()` include accepted connections only. `connection_attempt()` observes future
+outcomes without consuming them; a timeout names `the next MQTT connection attempt`. Malformed or
+incomplete CONNECTs, TCP accepts and TLS handshake failures do not create outcomes.
 
 A policy that raises, or returns anything other than a `ConnackCode` (including a bare integer
 or boolean, which raises `TypeError("MQTT connection_policy must return a ConnackCode")`), is a
@@ -371,16 +371,21 @@ board.wait_until(listener.handshake_completed, within=seconds(60))
 entire history, including events before the condition was obtained. Saved conditions read the
 live counts, without consuming events or advancing time. Call them directly, for example
 `assert listener.handshake_completed()`, or pass them to `board.wait_until`. They stay true after
-connection closure or network reset.
+connection closure or network reset. Their timeouts name `a TLS handshake to start` or
+`a TLS handshake to complete`.
 `handshakes_completed` counts server-side handshake completions, once per connection; it does
 not prove an MQTT connection or publication. Started input alone does not imply completion.
 
-For reconnects, explicitly select the next event and arm it before triggering the reconnect:
+For reconnects, explicitly select the next event and arm it before triggering the reconnect.
+Here the modem's [coverage controls](modem-user.md) take the link down and restore it; whether
+and when the firmware reconnects is up to the firmware:
 
 ```python
 next_started = listener.next_handshake_started()
 next_completed = listener.next_handshake_completed()
-# Trigger the disconnect/reconnect using the test's modem or firmware controls here.
+modem.lose_registration()  # Ends data mode.
+board.wait(seconds(5))  # TODO(owner): how long a given firmware takes to notice the lost link.
+modem.register()
 board.wait_until(next_started, within=seconds(60))
 board.wait_until(next_completed, within=seconds(60))
 assert listener.handshake_completed()  # Cumulative history query remains available.
@@ -395,13 +400,11 @@ It is not restricted to connections accepted or started after creation, nor tied
 peer. Arm both conditions before reconnecting when both events matter.
 
 Next-event TLS conditions also consume nothing: once true, repeated polls remain true. Construct
-a new condition for another event. Their timeout names are `the next TLS handshake to start`
-and `the next TLS handshake to complete`. The existing cumulative property names and defaults
-are unchanged; `listener.handshake_started()` and `listener.handshake_completed()` inspect
-whether the event has ever happened, while the new methods construct future-event conditions.
+a new condition for another event. Their timeouts name `the next TLS handshake to start` or
+`the next TLS handshake to complete`. `listener.handshake_started()` and
+`listener.handshake_completed()` answer whether the event has ever happened on this listener.
 
-Timeouts name `a TLS handshake to start` or `a TLS handshake to complete`. Treating a condition
-itself as a boolean raises `TypeError("call the TLS condition with (), or pass it to board.wait_until")`,
+Treating any TLS condition itself as a boolean raises `TypeError("call the TLS condition with (), or pass it to board.wait_until")`,
 preventing an unevaluated `assert listener.handshake_completed` from passing silently.
 
 By default, CA and server certificates are valid from `2000-01-01T00:00:00Z` to

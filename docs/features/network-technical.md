@@ -237,8 +237,9 @@ It also checks immutable wire metadata, anonymous-ID allocation only on acceptan
 empty-ID rejection precedence, malformed CONNECT exclusion and propagation of policy errors,
 both out of `on_data` and as a link failure in a `BoardLink` turn. A test through `Internet`
 covers its traced plain and TLS listeners and keeps the policy and both histories across reset.
-MQTT temporal tests send CONNECT and PUBLISH in one callback, check both legacy and explicit
-next-event APIs, history filtering, equal timestamps, repeated polls and boolean protection.
+MQTT temporal tests send CONNECT and PUBLISH in one callback, check both the `message` /
+`connected` aliases and the `next_*` methods, history filtering, equal timestamps, repeated
+polls and boolean protection.
 `tests/test_clock.py::test_mqtt_immediate_response_is_visible_after_waiting_for_connection`
 delivers both events in one runner slice, waits for CONNECT, then retrieves the pre-armed
 publication without advancing time; a newly created condition times out with its MQTT name.

@@ -685,20 +685,10 @@ request bytes to occurrence counts. See [matching](matching-user.md) for timing 
 MQTT 3.1.1 broker on port 1883. It requires a profile with `uart.modem`, such as
 `lilygo-t-a7670g-r2`. Use `board.wait_until(broker.next_message(topic), within=seconds(...))`,
 `broker.subscribed(topic)`, `broker.next_connection()` and `broker.publish(topic, payload)`.
-`message` and `connected` remain compatibility names for the future-only `next_*` methods.
-Create event conditions before the action that may produce their event, including before a
-wait for another event: a connection and its first publication can arrive in the same slice.
-Their boundary is history append order at creation, even for equal timestamps; repeated polls
-do not consume matches. `broker.find_message(topic, payload=None)` and
-`broker.find_connection()` immediately return the first match from history or `None`.
-`subscribed` reads current active subscriptions, so closure or unsubscribe makes it false.
-MQTT conditions name their expected event in timeout errors and reject boolean coercion;
-call them with `()` or pass them to `board.wait_until`.
+`broker.find_message(topic)` and `broker.find_connection()` query recorded history; TLS
+listeners add `next_handshake_started()` and `next_handshake_completed()`. Create a `next_*`
+condition before the action that may produce its event. The
+[network guide](network-user.md#history-next-events-and-current-state) defines the boundaries.
 `modem.network()` gives the underlying network for DNS, NTP and TLS service configuration.
-For TLS reconnect waits, call `listener.next_handshake_started()` and
-`listener.next_handshake_completed()` before triggering the reconnect. They capture the event
-counts at creation and require a later increment, without consuming matches. Completion can
-belong to a handshake already in progress. The existing `handshake_started` and
-`handshake_completed` properties remain cumulative conditions, including past connections.
 On serial, both `broker` and `modem.network()` skip because a modem model is unsupported.
 See [the network guide](network-user.md) for complete examples and condition semantics.
