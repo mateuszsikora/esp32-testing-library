@@ -1188,7 +1188,8 @@ def test_release(board, console):
 # SIGTERM until then, as the real runner does; `gone` exits 4 in turn 0 without reading it, as the
 # real runner does when the harness is gone. $FAKE_WATCH is the pins the harness's hello must
 # watch, comma-separated: the default profile's GNSS route's. $FAKE_PSRAM is the --psram-mb the
-# runner must be given: the default profile's 0.
+# runner must be given: the default profile's 0. $FAKE_SD is the --sd-spi and --sd-rw it must be
+# given, one per line: by default neither.
 LINK_RUNNER = """#!{python}
 import os
 import signal
@@ -1205,6 +1206,8 @@ if os.environ.get("FAKE_LINK") == "slow":
 signal.pthread_sigmask(signal.SIG_BLOCK, {{signal.SIGTERM}})
 args = sys.argv[1:]
 assert args[args.index("--psram-mb") + 1] == os.environ.get("FAKE_PSRAM", "0"), args
+sd = [args[args.index(flag) + 1] for flag in ("--sd-spi", "--sd-rw") if flag in args]
+assert "\\n".join(sd) == os.environ.get("FAKE_SD", ""), args
 board = args[args.index("--board") + 1]
 conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 conn.connect(board.removeprefix("socket:"))
@@ -1308,28 +1311,41 @@ def test_the_backend_serves_the_link_and_ends_the_run_with_stop(
     )
 
 
+@pytest.mark.parametrize("with_card", [False, True])
 def test_every_route_and_line_of_the_profile_is_on_the_link(
-    link_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+    link_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch, with_card: bool
 ) -> None:
     monkeypatch.setenv("FAKE_BOARD", "lilygo-t-a7670g-r2")
-    monkeypatch.setenv("FAKE_WATCH", "4,21,22,26,27,33")
+    monkeypatch.setenv("FAKE_WATCH", "4,5,12,19,21,22,23,25,26,27,33")
     monkeypatch.setenv("FAKE_PSRAM", "4")
+    image = link_runner.path / "card.img"
+    image.write_bytes(bytes(512 << 10))
+    if with_card:
+        monkeypatch.setenv("FAKE_SD", f"sclk=14,mosi=15,miso=2,cs=13\n{image}")
     link_runner.makepyfile(
-        test_lilygo="""
+        test_lilygo=f"""
         import pytest
 
         @pytest.mark.board_profile("lilygo-t-a7670g-r2")
-        def test_hello(board, console):
+        def test_hello(board, console, sd_card, gnss, modem):
+            assert sd_card.image_path is None
+            if {with_card!r}:
+                sd_card.insert("card.img")
+            gnss.lose_fix()
+            modem.register()
             board.power_on()
             console.expect("Hello world!")
         """
     )
-    # The fake runner asserts its --psram-mb and the hello's board and pins; a failed assertion ends
-    # it with an error.
+    # The fake runner asserts its --psram-mb and SD slot and the hello's board and pins; a failed
+    # assertion ends it with an error.
     result = link_runner.runpytest_subprocess("-p", "no:cacheprovider", "-rA", "test_lilygo.py")
     result.assert_outcomes(passed=1)
     result.stdout.fnmatch_lines(
-        ["board lilygo-t-a7670g-r2, watching GPIO 4, GPIO 21, GPIO 22, GPIO 26, GPIO 27, GPIO 33"]
+        [
+            "board lilygo-t-a7670g-r2, watching GPIO 4, GPIO 5, GPIO 12, GPIO 19, "
+            "GPIO 21, GPIO 22, GPIO 23, GPIO 25, GPIO 26, GPIO 27, GPIO 33"
+        ]
     )
 
 

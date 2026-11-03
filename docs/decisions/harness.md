@@ -1001,6 +1001,26 @@ compares the file's data whole, as the test it replaces did.
 **Rejected:** waiting for the vendor schematic, as plan finding 12 did, because LilyGO's pin table
 and example already give these values.
 
+## The LilyGO SD slot and additional controls declare wiring without new model effects
+
+Status: decided (#100)
+
+The profile adds SPI SD on GPIO14/15/2/13 (SCLK/MOSI/MISO/CS), modem DTR on 25 and reset on 5,
+GNSS wake on 19 and PPS on 23, and board peripheral power enable on 12. The
+[manufacturer audit](../features/board-profiles-technical.md#lilygo-wiring-audit) pins the sources,
+resolves the README's contradictory SD CS warning against its pin table, example and schematic,
+and records the unresolved R2-to-PCB revision mapping. The existing UART routes, PWRKEY timing,
+RI pull-down and 4 MB emulated PSRAM stay as they were; the physical module has 8 MB PSRAM.
+
+**Rejected:** leaving the slot out while the schema and runner already support it; copying the
+README warning's GPIO2 CS assignment instead of the consistent wiring sources; inferring pulls,
+reset timing or polarity from a pin name or one example's startup sequence.
+
+**Postponed:** DTR sleep, reset, GNSS wake/standby, PPS generation and supply gating. These pins
+are named GPIOs, accessible through `Lines`, with no automatic peripheral-state effects. Only
+the existing modem PWRKEY observer and RI driver have model behavior. Electrical behavior must
+be verified for the supported hardware revision before adding these effects.
+
 ## The board's durations are Durations, and an expect's timeout also takes seconds
 
 Status: decided (#69)

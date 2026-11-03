@@ -225,7 +225,10 @@ def test_run_holds_the_board_s_pulls_on_its_lines() -> None:
     assert code == 0, err
     # RI, pulled down on the board, reads low: undriven, the emulator's pad would read 1.
     assert [line.rstrip("\r") for line in out.splitlines() if line.startswith("in=")] == ["in=0"]
-    assert "esp32tl: board lilygo-t-a7670g-r2, watching GPIO 4, GPIO 33\n" in err
+    assert (
+        "esp32tl: board lilygo-t-a7670g-r2, watching GPIO 4, GPIO 5, GPIO 12, "
+        "GPIO 19, GPIO 23, GPIO 25, GPIO 33\n" in err
+    )
 
 
 def test_replay_reaches_the_app_at_the_recorded_times() -> None:

@@ -11,7 +11,9 @@ at the call. Merely requesting `modem` on a profile with that route does not ski
 
 Select the model with its first call before `board.power_on()`. Merely requesting `modem` leaves
 its UART silent; `modem.replay(path)` selects a recording instead. The LilyGO profile has the
-modem's route: UART1, TX GPIO 26, RX GPIO 27, 115200 baud, PWRKEY GPIO 4 and RI GPIO 33. The devkit
+modem's route: UART1, TX GPIO 26, RX GPIO 27, 115200 baud, PWRKEY GPIO 4 and RI GPIO 33; its
+DTR and reset lines are named GPIOs without a model effect
+([control lines](board-profiles-user.md#lilygo-control-lines-and-simulation-limits)). The devkit
 profile has no modem route.
 
 ```python

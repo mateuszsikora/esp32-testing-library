@@ -93,6 +93,46 @@ provenance in [modem-user.md](modem-user.md#pwrkey-and-reporting). It describes 
 ESP32 pad polarity. The modem model consumes these timings; `Lines` itself interprets no pulse.
 `tests/test_boards.py::test_pulse_timing_is_checked_as_a_complete_output_line` covers the schema.
 
+### LilyGO wiring audit
+
+`lilygo-t-a7670g-r2.toml` describes the classic ESP32 A7670G board with the external L76K,
+using LilyGO revision `63af963038e93c91baf39d89a3a736d6bc26ff13` throughout:
+
+- [ESP32 T-A7670X pin table and product specification](https://github.com/Xinyuan-LilyGO/LilyGO-T-A76XX/blob/63af963038e93c91baf39d89a3a736d6bc26ff13/docs/en/esp32/a7670-esp32/README.MD#-pins-map).
+- [ExternalGPS_A7670G_Only example](https://github.com/Xinyuan-LilyGO/LilyGO-T-A76XX/blob/63af963038e93c91baf39d89a3a736d6bc26ff13/examples/ExternalGPS_A7670G_Only/ExternalGPS_A7670G_Only.ino#L20-L35),
+  explicitly restricted to ESP32 A7670G plus L76K, not the S3 series.
+- [T-A7670X V1.4 schematic](https://github.com/Xinyuan-LilyGO/LilyGO-T-A76XX/blob/63af963038e93c91baf39d89a3a736d6bc26ff13/schematic/esp32/T-A7670X-V1.4.pdf),
+  whose ESP32 sheet labels the SD nets GPIO13/CS, GPIO15/MOSI, GPIO14/CLK and GPIO2/MISO.
+
+| Profile entry | Verified assignment | Evidence |
+|---|---|---|
+| `sd_card` | SCLK 14, MOSI 15, MISO 2, CS 13 | Pin table, example's `BOARD_SDCARD_*`, schematic SD net labels |
+| `lines.modem.dtr` | 25 | Pin table and `BOARD_MODEM_DTR_PIN` |
+| `lines.modem.reset` | 5 | Pin table's modem RESET and example's `BOARD_RST_PIN` |
+| `lines.gnss.wake` | 19 | GPS-only pin table and `BOARD_GPS_WAKEUP_PIN` |
+| `lines.gnss.pps` | 23 | GPS-only pin table and `BOARD_GPS_PPS_PIN` |
+| `lines.board.power_enable` | 12 | Pin table's peripheral power control and `BOARD_POWER_ON_PIN` |
+
+The pin table's upload warning calls GPIO2 CS, contradicting its own table, the example and
+schematic, which agree on MISO=2 and CS=13. The profile uses the latter mapping. The same
+README links V1.4 and discusses ESP32 V1.x; it does not establish which PCB revision the
+repository's R2 name denotes. The example holds GPIO5 low during setup, but that alone does
+not establish reset polarity and pulse requirements across revisions. GPIO12's physical power
+control and GPIO19's documented wake/standby behavior are not implemented as model effects.
+GPIO 12, 5, 2 and 15 are strapping pins; esp32sim at the pinned revision sets the strapping
+register to a constant (`gpio.strap = 0x13` in `esp32/src/periph.rs`), so their levels at reset
+change nothing in the emulator, whereas GPIO 12 high at reset breaks the WROVER-E's boot.
+TODO(maintainers): match the R2-labelled hardware to a manufacturer schematic and verify its
+reset polarity, pulls and power sequencing before modeling those controls.
+
+The five new lines are bare integer entries. `Lines` watches and exposes them without attaching
+model callbacks, assigning default pulls, or generating PPS. The modem interface attaches its
+existing PWRKEY observer and RI driver only; GNSS models generate UART messages independently
+of these GPIOs. SD insertion still passes `--sd-spi sclk=14,mosi=15,miso=2,cs=13` and `--sd-rw`
+to the runner at power-on, with no dependency on GPIO12. No schema or protocol change is needed.
+The physical 8 MB PSRAM remains represented by `psram_mb = 4`, the runner's supported maximum;
+`flash_mb = 4` and both UART routes remain as documented in the [user guide](board-profiles-user.md).
+
 ### The capability declaration: `esp32tl/boards/capabilities.toml`
 
 One table per backend, keyed by the backend's name in `SERVICES`; in it, one inline table per
@@ -197,7 +237,7 @@ are listed in [board-profiles-user.md](board-profiles-user.md#when-no-backend-ca
   the names, the default, and `esp32-devkitc` field by field, its slot included.
   `test_an_sd_card_slot_may_take_an_input_only_pin_for_miso`: a slot's MISO on GPIO 39.
 - `test_the_lilygo_profile_holds_the_specification_and_lilygo_s_documentation`: the file's TOML
-  data compared whole, so a pin or a size added from memory fails it.
+  data compared whole, including SD wiring and the five untimed control lines.
 - `test_a_profile_is_loaded_once_and_cannot_be_changed`, `test_an_unknown_profile_name_lists_the_profiles`,
   `test_a_profile_without_sizes_or_interfaces_has_only_the_console`.
 - `test_a_profile_that_breaks_the_schema_is_refused_with_the_key`: each message of
@@ -215,6 +255,15 @@ in the generated suite's `conftest.py` (`WITH_SERIAL`):
 `test_a_board_marker_a_hook_adds_is_refused`, and, on the fake runner,
 `test_the_board_runs_the_profile_the_test_chose_and_starts_no_runner_unpowered` and
 `test_a_source_or_a_tap_the_backend_cannot_give_skips_at_the_call`.
+`test_every_route_and_line_of_the_profile_is_on_the_link` checks LilyGO with an empty slot and
+with an inserted image alongside GNSS and modem models: runner SD arguments, PSRAM and the
+handshake's watched GPIOs. It needs no firmware build or real emulator.
+`tests/test_sdspi.py::test_the_lilygo_slot_writes_an_image_alongside_both_uart_models` runs the
+unmodified ESP-IDF SD example on LilyGO and checks the image's written files with both UART
+models selected. It needs the sdspi build, runner, ROM ELF and mtools.
+`tests/test_modem_model.py::test_named_controls_are_observable_without_changing_modem_state`
+checks that the additional GPIOs can change while modem power, registration and AT settings
+remain intact.
 
 Not covered: `app_path` added late by a hook (in a `pytest.param` it is tested), and markers a
 fixture adds at setup, which nothing checks.

@@ -326,7 +326,7 @@ def test_the_example_writes_its_files_into_the_image(board: Board):
   the `esp32sim_link` property has `sd_card`, `{"image": PATH}`
   ([the run report](run-report-user.md)).
 - On a board profile without a slot, `sd_card` is an error at setup:
-  `esp32sim: the board profile lilygo-t-a7670g-r2 has no sd_card; its interfaces are console, uart.modem, uart.gnss, lines.modem, wifi`.
+  `esp32sim: the board profile gps-alarm-clock has no sd_card; its interfaces are console, uart.gnss, lines.alarm, wifi`.
 - The card stays in from power-on to the end of the run: inserting or removing it while the
   firmware runs is not there yet.
 `board.uart(role)` is the same for any `uart.<role>` route of the profile: `gnss` is
