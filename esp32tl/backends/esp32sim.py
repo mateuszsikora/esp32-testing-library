@@ -18,10 +18,11 @@ spawns the runner, passes it as `--board socket:PATH`, and serves the one connec
 profile, `uart.gnss` a `Gnss`, which says nothing until the test gives it a source, as
 `gnss.replay(path)` or `gnss.fix(at=...)` does before power-on, and the profile's GPIO lines as one
 `Lines`, which puts the board's pulls on them from power-on and what the test drives at the instant
-it does. The backend also owns the end of the run (§9), before the dut is torn down: `stop` at the
-turn the test left the run at, `SIGTERM` for a runner that is not there, the link read to end of
-file, the runner waited for, `SIGKILL` only as a last resort. Then it writes the recordings of the
-routes the test tapped.
+it does, and the chip's Wi-Fi station as one `Wifi`, the simulated network behind the access point
+that `wifi.access_point(...)` puts on the runner's air. The backend also owns the end of the run
+(§9), before the dut is torn down: `stop` at the turn the test left the run at, `SIGTERM` for a
+runner that is not there, the link read to end of file, the runner waited for, `SIGKILL` only as a
+last resort. Then it writes the recordings of the routes the test tapped.
 
 What the test does on the board, what the firmware prints and the bytes on every route go into a
 `RunLog` (`esp32tl.report`), which the report of a test that failed shows after the link's.
@@ -57,6 +58,7 @@ from esp32tl.interfaces.lines import Lines
 from esp32tl.interfaces.modem import Modem
 from esp32tl.interfaces.sd_card import SdCard
 from esp32tl.interfaces.uart import Uart
+from esp32tl.interfaces.wifi import Wifi
 from esp32tl.link.boardlink import BoardLink, Wire
 from esp32tl.net import Internet
 from esp32tl.report import RunLog, board_time, shown
@@ -155,6 +157,7 @@ def runner_command(
     psram_mb: int | None = None,
     sd_card: SdCard | None = None,
     extra_flash: tuple[tuple[int, Path], ...] = (),
+    wifi: Wifi | None = None,
 ) -> list[str]:
     """The runner's command line: every file of `flasher_args.json` at its offset, its board the
     socket at `link`. A `held` run is on the test's clock: its console also goes on the link, and
@@ -162,7 +165,8 @@ def runner_command(
     profile's, is the PSRAM the runner gives the chip; `None`, a profile that does not say, leaves
     the runner's default. An `sd_card` with a card in it puts the runner's card model on the
     slot's pins, holding the card's image. `extra_flash` overrides the build's flash contents
-    at the supplied offsets, in order."""
+    at the supplied offsets, in order. A `wifi` with an access point puts it, and the networks
+    around, on the runner's air, with the network behind it on the link."""
     command = [str(runner), "--chip", "esp32", "--rom", str(rom), "--max-seconds", str(max_seconds)]
     if held:
         command += ["--console", "both", "--peer-timeout", "0"]
@@ -177,6 +181,8 @@ def runner_command(
         r = sd_card.route
         command += ["--sd-spi", f"sclk={r.sclk},mosi={r.mosi},miso={r.miso},cs={r.cs}"]
         command += ["--sd-rw", str(sd_card.image_path)]
+    if wifi is not None:
+        command += wifi.runner_args()
     return command
 
 
@@ -324,9 +330,12 @@ class Esp32Sim(Board):
             if profile.sd_card is not None
             else None
         )
+        self._wifi = Wifi(
+            now=lambda: self._hold.now, world=lambda: self._utc, asked=self._asked, log=self.log
+        )
         self.link = BoardLink(
             profile.name,
-            [*self._uarts.values(), self._lines],
+            [*self._uarts.values(), self._lines, self._wifi],
             chip=profile.chip,
             on_error=self._end_run,
             hold=self._hold,
@@ -408,6 +417,10 @@ class Esp32Sim(Board):
             )
         return self._sd_card
 
+    def _get_wifi(self) -> Wifi:
+        """The chip's Wi-Fi station."""
+        return self._wifi
+
     def tap_console(self, path: str | Path) -> Tap:
         return self._console.tap(path)
 
@@ -479,6 +492,8 @@ class Esp32Sim(Board):
         ] + [f"the level of {name}" for name in driven]
         if self._sd_card is not None and self._sd_card.image_path is not None:
             set_up.append(f"a card in {self._sd_card.name}")
+        if self._wifi.configuration is not None:
+            set_up.append("the access point of wifi")
         if self._console.tapped is not None:
             set_up.append("the tap of console")
 
@@ -513,6 +528,7 @@ class Esp32Sim(Board):
             psram_mb=self.profile.psram_mb,
             sd_card=self._sd_card,
             extra_flash=tuple(self._nvs.values()),
+            wifi=self._wifi,
         )
         try:
             process = RunnerPopen(self._msg_queue, command, self._meta)
@@ -781,6 +797,8 @@ class Esp32Sim(Board):
         for uart in self._uarts.values():
             if isinstance(uart, Modem):
                 lines += uart.command_report()
+        if self._wifi.configuration is not None:
+            lines += self._wifi.report()
         if run:
             lines += self.log.lines()
         return "\n".join(lines)
@@ -827,7 +845,11 @@ class Esp32Sim(Board):
             if card is None
             else {"image": None if card.image_path is None else str(card.image_path)}
         )
-        properties = self.link.properties() | {"routes": routes, "sd_card": sd_card}
+        properties = self.link.properties() | {
+            "routes": routes,
+            "sd_card": sd_card,
+            "wifi": self._wifi.properties(),
+        }
         if self._console.tapped is not None:
             properties["console"] = {
                 "bytes_out": len(self.console_output),

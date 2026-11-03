@@ -11,12 +11,18 @@
 //! is unacknowledged, a slice is at most `latency` long, because an event in it would set
 //! `B = t + latency`, and the board callback that records it cannot stop `run`.
 //!
+//! With `--wifi` the station's Ethernet frames go to the peer too, taken from esp32sim's relay at
+//! each slice boundary (`eth_tx`), and the peer's frames go to the station's link when they come
+//! due (`eth_rx`), as does the access point going off the air and coming back (`wifi_ap`).
+//!
 //! [`Guest`] and [`Link`] stand for the machine and the socket, so the tests run the loop
 //! against a scripted guest and a fake peer.
-use crate::protocol::{self, Incoming, Stats, Warn, WarnKind, char_ns, cycles, ns};
+use crate::cli;
+use crate::protocol::{self, Incoming, Stats, Warn, WarnKind, WifiStats, char_ns, cycles, ns};
 use crate::socket_board::{Recorded, Shared};
 use crate::transport::{Link, LinkError};
 use esp_soc::uart::{UartInput, UartRoute};
+use esp_soc::wifi::{self, StaState};
 use esp_soc::{SocBus, Stop};
 use std::collections::{BTreeMap, VecDeque};
 use std::convert::Infallible;
@@ -52,6 +58,31 @@ pub trait Guest {
     /// Has the chip take the levels and releases the run loop handed the board, now rather than
     /// at the bus's next tick.
     fn take_gpio_inputs(&mut self);
+    // Wi-Fi, asked only with `--wifi`: the defaults are a chip without it.
+
+    /// The Ethernet frames the station sent since the last call, in order: esp32sim's relay.
+    fn take_eth_frames(&mut self) -> Vec<Vec<u8>> {
+        Vec::new()
+    }
+    /// Hands the station's link one Ethernet frame for the station; `false` when its queue is
+    /// full and the frame was not taken.
+    fn eth_input(&mut self, _frame: &[u8]) -> bool {
+        false
+    }
+    /// Puts the access point of `--wifi`, and the networks around, on the air afresh. The relay
+    /// to the peer stays.
+    fn wifi_access_point(&mut self, _wifi: &cli::Wifi) {}
+    /// Takes the access point, and the networks around, off the air, as one that shuts down: it
+    /// deauthenticates a station that has joined it, and leaves once the station has had the
+    /// frame. `true` once it has left; asked again at every slice boundary until then.
+    fn wifi_leave(&mut self) -> bool {
+        true
+    }
+    /// The station link's drops, `(received, sent)`, since the access point last went on the air
+    /// or the chip last reset, which both start the counts again.
+    fn wifi_drops(&self) -> (u64, u64) {
+        (0, 0)
+    }
 }
 
 impl Guest for esp32::Machine {
@@ -90,6 +121,52 @@ impl Guest for esp32::Machine {
             SocBus::gpio_release_input(&mut self.bus, pin);
         }
     }
+    fn take_eth_frames(&mut self) -> Vec<Vec<u8>> {
+        SocBus::take_ethernet_frames(&mut self.bus)
+    }
+    fn eth_input(&mut self, frame: &[u8]) -> bool {
+        // also refused without an access point, which the run loop never asks for
+        SocBus::receive_ethernet_frame(&mut self.bus, frame).is_ok()
+    }
+    fn wifi_access_point(&mut self, wifi: &cli::Wifi) {
+        // a fresh access point, as at power-on: the station must join it again
+        let link = &mut self.bus.periph.wifi.link;
+        link.attach_new(wifi.access_point(), None, &self.bus.debug);
+        link.set_beacons(wifi.nearby.clone());
+    }
+    fn wifi_leave(&mut self) -> bool {
+        let now_us = self.bus.cycles / (esp32::periph::CPU_HZ / 1_000_000);
+        let link = &mut self.bus.periph.wifi.link;
+        let Some(ap) = link.ap_mut() else {
+            return true;
+        };
+        if ap.state != StaState::Idle {
+            // esp32sim's station does not notice beacons that stop coming, so the access point
+            // tells it it is leaving, as one that shuts down does, ahead of anything it had
+            // queued but beacons; then it beacons no more. Until it has left it still answers a
+            // station that tries again, which the next boundary deauthenticates again
+            let deauth = deauthentication(ap.sta, ap.cfg.bssid, ap.seq);
+            ap.seq = ap.seq.wrapping_add(1);
+            ap.queue.retain(|f| wifi::is_beacon(&f.frame));
+            ap.queue.push(wifi::AirFrame {
+                at_us: now_us,
+                frame: deauth,
+            });
+            ap.state = StaState::Idle;
+            ap.next_beacon_us = u64::MAX;
+            return false;
+        }
+        // the deauthentication, or what the access point answered before it, is on its way
+        if ap.queue.iter().any(|f| !wifi::is_beacon(&f.frame)) {
+            return false;
+        }
+        link.attach(None, None);
+        true
+    }
+    fn wifi_drops(&self) -> (u64, u64) {
+        let link = &self.bus.periph.wifi.link;
+        (link.rx_dropped(), link.tx_dropped())
+    }
 }
 
 pub struct Options<'a> {
@@ -101,6 +178,9 @@ pub struct Options<'a> {
     pub peer_timeout: Option<Duration>,
     /// Set by `SIGTERM` and `SIGINT`.
     pub signal: &'a AtomicBool,
+    /// `--wifi`: the access point is on the air from power-on, and the station's frames go to
+    /// the peer.
+    pub wifi: Option<&'a cli::Wifi>,
 }
 
 /// Why the run ended (protocol §9).
@@ -142,6 +222,12 @@ enum Item {
         cycle: u64,
         routes: [UartRoute; PORTS],
     },
+    /// An Ethernet frame the station sent, as taken from the relay at a slice boundary or right
+    /// before a reset.
+    Eth {
+        cycle: u64,
+        data: Vec<u8>,
+    },
 }
 
 impl Item {
@@ -149,7 +235,8 @@ impl Item {
         match self {
             Item::Board(Recorded::UartTx { cycle, .. } | Recorded::Gpio { cycle, .. })
             | Item::Reset { cycle, .. }
-            | Item::Routes { cycle, .. } => *cycle,
+            | Item::Routes { cycle, .. }
+            | Item::Eth { cycle, .. } => *cycle,
         }
     }
 }
@@ -194,6 +281,8 @@ enum Input {
     Uart { pin: u8, baud: u32, data: Vec<u8> },
     Gpio(Vec<(u8, bool)>),
     Release(Vec<u8>),
+    Eth(Vec<u8>),
+    WifiAp(bool),
 }
 
 struct Paced {
@@ -237,6 +326,13 @@ pub struct Session<'a, G: Guest, L: Link> {
     inputs: BTreeMap<(u64, u64), Input>,
     arrivals: u64,
     lines: BTreeMap<u8, Line>,
+    /// Whether the access point of `--wifi` is on the air, as the peer last switched it.
+    ap_on: bool,
+    /// Whether the access point is on its way off the air (`Guest::wifi_leave`).
+    leaving: bool,
+    /// Frames for the station that came due and that its link has not taken yet: its queue
+    /// holds 64.
+    eth: VecDeque<Vec<u8>>,
     stats: Stats,
 }
 
@@ -246,7 +342,6 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
             guest,
             link,
             shared,
-            opts,
             watch: 0,
             seq: 0,
             sync_t: 0,
@@ -262,7 +357,14 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
             inputs: BTreeMap::new(),
             arrivals: 0,
             lines: BTreeMap::new(),
-            stats: Stats::default(),
+            ap_on: opts.wifi.is_some(),
+            leaving: false,
+            eth: VecDeque::new(),
+            stats: Stats {
+                wifi: opts.wifi.map(|_| WifiStats::default()),
+                ..Stats::default()
+            },
+            opts,
         }
     }
 
@@ -298,6 +400,7 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                 Stop::SwReset => {
                     // what the guest did before the reset goes out before it
                     self.collect();
+                    self.count_wifi_drops();
                     let cause = self.guest.chip_reset();
                     let cycle = self.guest.cycles();
                     eprintln!(
@@ -382,8 +485,10 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
             return Ok(());
         }
         self.close_after_gap(ns(now))?;
+        self.leave();
         self.apply_inputs(now)?;
         self.deliver(now, &routes)?;
+        self.deliver_eth();
         self.link.idle().map_err(link_end)
     }
 
@@ -470,10 +575,26 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
         route.tx_pins & self.watch != 0 || route.rx_pin.is_some_and(|p| self.watched(p))
     }
 
-    /// Takes what the board recorded.
+    /// Takes what the board recorded, then the frames the station sent, which the relay holds
+    /// without their time: they are stamped with the cycle they are taken at.
     fn collect(&mut self) {
         let log = std::mem::take(&mut self.shared.borrow_mut().log);
         self.pending.extend(log.into_iter().map(Item::Board));
+        if self.opts.wifi.is_some() {
+            let cycle = self.guest.cycles();
+            let frames = self.guest.take_eth_frames();
+            self.pending
+                .extend(frames.into_iter().map(|data| Item::Eth { cycle, data }));
+        }
+    }
+
+    /// Adds the station link's drops to the stats before something starts its counts again.
+    fn count_wifi_drops(&mut self) {
+        if let Some(wifi) = &mut self.stats.wifi {
+            let (rx, tx) = self.guest.wifi_drops();
+            wifi.rx_dropped += rx;
+            wifi.eth_tx_dropped += tx;
+        }
     }
 
     /// Turns pending items into messages, up to the block point unless `all`.
@@ -516,6 +637,12 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                     for route in routes {
                         self.route_seen(route, t)?;
                     }
+                }
+                Item::Eth { data, .. } => {
+                    if let Some(wifi) = &mut self.stats.wifi {
+                        wifi.eth_tx += 1;
+                    }
+                    self.event(t, |seq| protocol::eth_tx(seq, t, &data))?;
                 }
             }
         }
@@ -685,6 +812,20 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                     check(t, pins.clone())?;
                     inputs.push((t, Input::Release(pins)));
                 }
+                Incoming::EthRx { t, data } => {
+                    check(t, Vec::new())?;
+                    if self.opts.wifi.is_none() {
+                        return Err(protocol_error("eth_rx without --wifi", &line));
+                    }
+                    inputs.push((t, Input::Eth(data)));
+                }
+                Incoming::WifiAp { t, on } => {
+                    check(t, Vec::new())?;
+                    if self.opts.wifi.is_none() {
+                        return Err(protocol_error("wifi_ap without --wifi", &line));
+                    }
+                    inputs.push((t, Input::WifiAp(on)));
+                }
                 Incoming::Wait {
                     ack,
                     quiet_until,
@@ -768,12 +909,85 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                     }
                     gpio = true;
                 }
+                Input::Eth(data) => {
+                    self.eth.push_back(data);
+                    self.deliver_eth();
+                }
+                Input::WifiAp(on) => self.switch_access_point(on),
             }
         }
         if gpio {
             self.guest.take_gpio_inputs();
         }
         Ok(())
+    }
+
+    /// Hands the station's link the frames that came due, in order, as many as its queue takes;
+    /// the rest wait for the next slice boundary. Without the access point on the air, or while
+    /// it is leaving, they are dropped: the station cannot hear them.
+    fn deliver_eth(&mut self) {
+        let Some(wifi) = &mut self.stats.wifi else {
+            return;
+        };
+        while let Some(frame) = self.eth.front() {
+            if !self.ap_on || self.leaving {
+                wifi.eth_rx_dropped += 1;
+            } else if self.guest.eth_input(frame) {
+                wifi.eth_rx += 1;
+            } else {
+                break;
+            }
+            self.eth.pop_front();
+        }
+    }
+
+    /// The access point goes off the air (`Guest::wifi_leave`), or comes back as a fresh one. One
+    /// that comes back while the old one is still leaving waits for it to have left, so that the
+    /// station has had its deauthentication: a fresh access point would take it off the queue.
+    fn switch_access_point(&mut self, on: bool) {
+        let Some(wifi) = self.opts.wifi else {
+            return;
+        };
+        if on == self.ap_on {
+            return;
+        }
+        // whatever came due before the switch goes first
+        self.deliver_eth();
+        self.ap_on = on;
+        if on {
+            if self.leaving {
+                // `leave` puts it back once the old one has left
+                return;
+            }
+            // the old one has left already, and its counts with it
+            self.guest.wifi_access_point(wifi);
+        } else {
+            self.leaving = true;
+            self.leave();
+        }
+        // frames the link held go off the air with it
+        self.deliver_eth();
+    }
+
+    /// Asks a leaving access point whether it has left, with the link's counts read just before.
+    fn leave(&mut self) {
+        if !self.leaving {
+            return;
+        }
+        let (rx, tx) = self.guest.wifi_drops();
+        if self.guest.wifi_leave() {
+            self.leaving = false;
+            if let Some(wifi) = &mut self.stats.wifi {
+                wifi.rx_dropped += rx;
+                wifi.eth_tx_dropped += tx;
+            }
+            // the peer put it back on the air while it was leaving
+            if self.ap_on
+                && let Some(wifi) = self.opts.wifi
+            {
+                self.guest.wifi_access_point(wifi);
+            }
+        }
     }
 
     fn next_paced(&self) -> Option<u64> {
@@ -847,6 +1061,7 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
             // a stop drops what the guest did after B; a protocol error ends the run in a turn
             End::Stop | End::Protocol(_) => self.sync_t,
         };
+        self.count_wifi_drops();
         self.stats.inputs_not_applied = self.inputs.len() as u64;
         self.stats.rx_bytes_not_paced = self.lines.values().map(|l| l.bytes.len() as u64).sum();
         let line = match &end {
@@ -891,6 +1106,18 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
     fn recv(&mut self, deadline: Option<Instant>) -> Result<String, End> {
         self.link.recv(deadline).map_err(link_end)
     }
+}
+
+/// A deauthentication from the access point at `bssid` to the station `sta`, reason 3: "the
+/// sending station is leaving" (IEEE 802.11-2020 9.3.3.12 and Table 9-49).
+fn deauthentication(sta: [u8; 6], bssid: [u8; 6], seq: u16) -> Vec<u8> {
+    let mut frame = vec![0xc0, 0, 0, 0];
+    frame.extend_from_slice(&sta);
+    frame.extend_from_slice(&bssid);
+    frame.extend_from_slice(&bssid);
+    frame.extend_from_slice(&(seq << 4).to_le_bytes());
+    frame.extend_from_slice(&3u16.to_le_bytes());
+    frame
 }
 
 /// Whether the next byte comes more than one character time after the previous one.

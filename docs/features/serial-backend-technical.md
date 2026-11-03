@@ -102,6 +102,7 @@ run log: the tap, power-on and wait steps, and received console lines.
 | `console_output`, `console_lines` | Drain queued input, then return the shared bytearray / `ConsoleLines` |
 | `uart(role)` | Profile's UART object, a `Gnss` for `gnss` or `Modem` for `modem`; unsupported source/tap requests skip |
 | `lines`, `sd_card` | Skip GPIO access, or return the slot whose model insertion skips; missing interfaces fail |
+| `wifi` | A `Wifi` made on first access with the backend's `asked`, on no link: `access_point` and `nearby` ask for a `model` source on `wifi`, which the declaration gives serial only as `real`, so they skip |
 | `nvs(namespaces, partition="nvs")` | Skip: hardware NVS replacement is unsupported |
 | `tap_console(path)` | Console `Tap` via `Uart.tap`; before power-on, with path collision checks |
 | `set_up()` | `the tap of console` when tapped, otherwise empty |

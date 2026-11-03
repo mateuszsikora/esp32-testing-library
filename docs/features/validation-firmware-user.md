@@ -35,6 +35,7 @@ whatever `FIRMWARE_OUT` the shell exports, because the tests read the images the
 | `sdspi` | ESP-IDF's `examples/storage/sd_card/sdspi`, unmodified, for target `esp32`: mounts the FAT file system of an SD card on SPI and writes, renames and reads files on it ([below](#sdspi)) |
 | `modem_at` | `firmware/modem_at`: AT dialogue, PWRKEY and RI on the LilyGO profile, without a network ([below](#modem_at)) |
 | `pppos_client` | esp-protocols `modem-v1.4.1`, unchanged except sdkconfig: PPP and plain MQTT on the LilyGO modem route ([below](#pppos_client)) |
+| `http_request` | ESP-IDF's `examples/protocols/http_request`, unmodified, with its default `sdkconfig`, for target `esp32`: joins a Wi-Fi access point and fetches `http://example.com/` over and over ([below](#http_request)) |
 
 ## `modem_at`
 
@@ -185,7 +186,7 @@ every image those are:
 |---|---|
 | `0x1000` | `bootloader/bootloader.bin` |
 | `0x8000` | `partition_table/partition-table.bin` |
-| `0x10000` | `IMAGE.bin` (`hello_world.bin`, `nmea_reader.bin`, `gpio_echo.bin`, `modem_at.bin`, `nvs_reader.bin`), `sd_card.bin` for `sdspi` |
+| `0x10000` | `IMAGE.bin` (`hello_world.bin`, `nmea_reader.bin`, `gpio_echo.bin`, `modem_at.bin`, `nvs_reader.bin`, `pppos_client.bin`, `http_request.bin`), `sd_card.bin` for `sdspi` |
 
 and the ELF is `IMAGE.elf`, `sd_card.elf` for `sdspi`: the files take the project's name, and
 the `sdspi` example's project is called `sd_card`. Two more files say how the build was made:
@@ -233,7 +234,8 @@ The second one ends every finished build.
 
 `tests/test_firmware_images.py` reads `firmware/hello_world/build/`,
 `firmware/nmea_reader/build/`, `firmware/gpio_echo/build/`, `firmware/sdspi/build/`,
-`firmware/modem_at/build/` and `firmware/nvs_reader/build/`, and for each:
+`firmware/nvs_reader/build/`, `firmware/pppos_client/build/` and `firmware/http_request/build/`,
+and for each:
 
 - passes on a build from the pinned container;
 - passes on a local build (`IDF_LOCAL=1`), with the warning
@@ -257,7 +259,7 @@ run `make firmware`.
 `firmware/build.sh` exits 1 with one of these on stderr, before writing anything, or with the exit
 code of `idf.py` when the build itself fails:
 
-- `firmware/build.sh: unknown image 'NAME'; the images are: hello_world nmea_reader gpio_echo sdspi modem_at nvs_reader`
+- `firmware/build.sh: unknown image 'NAME'; the images are: hello_world nmea_reader gpio_echo sdspi modem_at nvs_reader pppos_client http_request`
 - `firmware/build.sh: needs Docker, or IDF_LOCAL=1 to build with a local ESP-IDF`
 - `firmware/build.sh: the Docker daemon is not reachable ('docker info' failed); is Docker running?`
 - `firmware/build.sh: IDF_LOCAL=1 needs ESP-IDF in the environment: source $IDF_PATH/export.sh first`
@@ -327,6 +329,40 @@ The image lands at `firmware/pppos_client/build/`, with the same provenance and 
 marker as other images. `tests/test_pppos_client.py` checks the firmware publishing and receiving
 from the test's broker. [The network guide](network-user.md) shows both tests. This example uses
 plain MQTT; tracker firmware TLS/NTP validation is #72.
+
+## `http_request`
+
+`firmware/build.sh http_request` builds ESP-IDF v5.3.6's `examples/protocols/http_request`,
+unmodified and with no `sdkconfig` change, so it takes ESP-IDF's defaults: Wi-Fi
+(`EXAMPLE_CONNECT_WIFI=y`), SSID `myssid` (`EXAMPLE_WIFI_SSID`) and passphrase `mypassword`
+(`EXAMPLE_WIFI_PASSWORD`). `make firmware` and `make test` include it. The first build copies the
+example, unchanged, to `firmware/.http_request-v5.3.6/` (`.http_request-<version>` for the ESP-IDF
+version that builds it, under `FIRMWARE_OUT` when that is set; git ignores it) and builds the copy: the example takes `protocol_examples_common` through the component manager,
+which writes `dependencies.lock` into the project, and ESP-IDF's examples are read-only in the
+container. The copy is made once per ESP-IDF version and reused.
+
+It joins the access point, then in a loop resolves `example.com`, connects to port 80, sends
+
+```text
+GET / HTTP/1.0
+Host: example.com:80
+User-Agent: esp-idf/1.0 esp32
+```
+
+prints the whole response, headers and body, as it reads it, then
+`... done reading from socket. Last read return=0 errno=<n>.`, counts down from `10... ` to
+`0... `, one second apart, prints `Starting again!` and fetches again. While it cannot join it
+prints `Wi-Fi disconnected <reason>, trying to reconnect...`: reason 3 when the access point
+deauthenticates it as it leaves. In the emulator, with the test's access point, it joins at about
+2.79 emulated seconds, has its DHCP lease at 2.80 s and sends its request at 4.13 s.
+
+`tests/test_http_request.py` runs it with the `wifi` fixture
+([network](network-user.md#fetch-a-page-behind-a-wi-fi-access-point)): the fetch from the test's
+HTTP server, a rejoin after the access point goes off the air and back, no access point, a wrong
+password, the report, and `wifi` refused after power-on. `tests/test_determinism.py::test_wifi_http`
+runs it twice for [determinism](../guides/testing.md#determinism), and
+`tests/test_firmware_images.py::test_http_request_is_esp_idfs_example_with_its_default_wifi` checks
+the build's flash layout and its three Wi-Fi options in `config/sdkconfig.json`.
 
 ## Building runnable examples
 

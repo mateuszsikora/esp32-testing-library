@@ -4,7 +4,8 @@ The plugin is `esp32tl/pytest_plugin.py`, with the backend registry in
 `esp32tl/backends/__init__.py`, the console in `esp32tl/interfaces/console.py`, the UART
 interface in `esp32tl/interfaces/uart.py` and the one behind `gnss` in
 `esp32tl/interfaces/gnss.py`, the GPIO lines behind `lines` in `esp32tl/interfaces/lines.py`, the
-SD card slot behind `sd_card` in `esp32tl/interfaces/sd_card.py`, the exceptions a test sees in
+SD card slot behind `sd_card` in `esp32tl/interfaces/sd_card.py`, the Wi-Fi station behind
+`wifi` in `esp32tl/interfaces/wifi.py`, the exceptions a test sees in
 `esp32tl/interfaces/__init__.py`, the taps and the run's log in `esp32tl/tap.py` and
 `esp32tl/report.py` ([run-report-technical.md](run-report-technical.md)), and the board
 profiles and capability declaration in `esp32tl/boards/`
@@ -253,6 +254,9 @@ the existing no-latency behavior and board pulls are unchanged.
 | `sd_card(board)` | fixture, function scope | Returns `board.sd_card` |
 | `SdCard(route, *, directory, asked=..., log=None, files=None)` | class, `esp32tl/interfaces/sd_card.py` | The `sd_card` slot on `route` (an `SdCardRoute`): attributes `name` (`"sd_card"`), `route`, `directory`, `asked`, `log` (the `RunLog` its step goes to), `files` (shared with the routes), `image_path` (`None` until `insert`, then the image's absolute `Path`); `insert(image)` returns that path |
 | `UNIT`, `MAX_SIZE` | `int`, `esp32tl/interfaces/sd_card.py` | 524288: an SD card image is a whole number of them; 2^41, the most it may be |
+| `wifi(board)` | fixture, function scope | Returns `board.wifi` |
+| `Wifi(*, now, world=..., asked=..., log=None)` | class, `esp32tl/interfaces/wifi.py`, a `BoardLink` `Interface` named `wifi` with no wire and `ethernet` true | The station's air. `access_point(ssid, *, password=None, channel=6, bssid=None)` returns the `Internet(now, world, link="ethernet")` behind it and starts it at 0; `nearby(ssid, *, channel=1, rssi=-60, secure=True, bssid=None)`; `access_point_off()`, `access_point_on()`; `network`, `on_air`, `configuration` (`AccessPoint \| None`), `around` (`tuple[Nearby, ...]`), `events` (`list[AirEvent]`); `runner_args()`, the runner's `--wifi` and `--wifi-nearby`; `report()` and `properties()`. For the link: `receive(t, direction, frame)` and `poll(now)` are the network's while it is active, `inputs(now)` the switches as `WifiAp`, `quiet_until()` the network's, `latency()` `LATENCY_NS` (1 ms) once there is an access point. `asked(Request("wifi", source="model"))` is called by `access_point` and `nearby` |
+| `AccessPoint(ssid, password, channel, bssid)`, `Nearby(ssid, channel, rssi, secure, bssid)`, `AirEvent(t, on)` | frozen dataclasses, `esp32tl/interfaces/wifi.py` | What the test gave; `spec()` is the runner flag's value. `AirEvent.t` in nanoseconds of the board's time |
 | `Console(board)` | class, `esp32tl/interfaces/console.py` | `expect(pattern, timeout=30, *, return_what_before_match=False)`, `expect_exact(...)` with the same arguments, `timeout` a `Duration` or a number of seconds; `line(pattern)`, `lines(pattern=None, *, since=None)`, `tap(path)`; no `write`. `board` is a `Clocked`: `console_output`, `console_lines` and `wait_on_clock(condition, within, description)`, `within` a `Duration` |
 | `Line(at, text, match=None)` | frozen dataclass, `esp32tl/interfaces/console.py` | A console line: `at` a `Duration`, `text` a `str`, `match` an `re.Match[str]`, left out of comparisons; `line[group]` is `match[group]`, a `TypeError` without a match |
 | `ConsoleLines()` | class, `esp32tl/interfaces/console.py` | `feed(t, data)`, `lines`: the console cut into `Line`s |
@@ -261,7 +265,7 @@ the existing no-latency behavior and board pulls are unchanged.
 | `Gnss(name, wire, *, clock, directory, now, world, asked=..., log=None, files=None)` | class, `esp32tl/interfaces/gnss.py`, a `Uart` | `fix(at, *, hdop=0.9, satellites=8)`, `move(*, heading, speed)`, `stand_still()`, `degrade(*, hdop=None, satellites=None)`, `lose_fix()`, `go_silent()`, `resume()`, `position`, each the `GnssReceiver`'s; `receiver()` the receiver, made by the first call that succeeds |
 | `Uart(name, wire, *, clock, directory, asked=..., log=None, files=None)` | class, `esp32tl/interfaces/uart.py`, a `BoardLink` `Interface` | `uart.<role>` and its source: attributes `clock`, `directory`, `asked`, `log`, `files` (the files the run replays from and taps into, shared by the backend's UARTs), `source`, `source_kind` and `source_detail` (`None` until given, then the source, `"replay"` or `"model"`, and the path as the test gave it or `a GNSS receiver`), and `tapped` (`None`, then the `Tap`); `replay(path)` returns the `Replay`, `tap(path)` the `Tap`. Without a source it hears everything and says nothing; with one, `quiet_until` and `latency` are the source's, and `receive` and `poll` return the source's outputs, read into a list. Every byte heard and every output goes to the tap and the `RunLog`, when there are. `asked(request)`, a `Request` of `esp32tl.boards.capabilities`, is called before a source or a tap is made, and refuses it by raising |
 | `Source` | protocol, `esp32tl/interfaces/uart.py` | `receive(t, data)`, `poll(now)`, `quiet_until()`, `latency()`: what drives a `Uart` |
-| `SourceError` | exception, `esp32tl/interfaces/__init__.py` | A source or a tap after power-on, a second one on a route or in the slot, one no backend gives, or an image the card cannot hold |
+| `SourceError` | exception, `esp32tl/interfaces/__init__.py` | A source or a tap after power-on, a second one on a route or in the slot, one no backend gives, an image the card cannot hold, or a second access point |
 | `BoardOff` | exception, `esp32tl/interfaces/__init__.py` | A wait, an expect, `now` or `utc` before `power_on()`, or a second `power_on()` |
 | `RunEnded` | exception, `esp32tl/interfaces/__init__.py` | The run ended while the test waited |
 | `NeverHappened` | `AssertionError`, `esp32tl/interfaces/__init__.py` | A condition or a pattern that did not come within its time |
@@ -520,6 +524,28 @@ into several files. No FAT state or file contents are cached. All commands run w
 translation. `SdCard.close()` invalidates handles and removes only builder-owned directories;
 backends call it after stopping the run, including on teardown errors. The inserted path stays
 in `image_path` for reporting, even after the owned image has been removed.
+
+### The Wi-Fi station
+
+`Wifi` is on every backend's `Board` as `board.wifi`. On esp32sim it is one of the `BoardLink`'s
+interfaces from construction, the only one whose `ethernet` is true, so the link hands it every
+`eth_tx` frame and sends what it returns as `eth_rx` ([protocol](../protocol.md)). `access_point`
+validates its arguments first, then calls `asked`, which refuses after power-on and skips on a
+backend whose declaration has no `model` source for `wifi`, then makes the network and records the
+access point under a lock, so that a call that fails leaves nothing behind. Before power-on the
+backend reads `runner_args()` into the runner's command line; without an access point it adds no
+flag, and the station finds nothing. `access_point_off` and `access_point_on` read the board's
+clock, stop or start the network at that instant (`Internet.stop` drops TCP connections and queued
+replies; `Internet.start` brings the Ethernet link up again, its DHCP leases kept), log the switch
+in the network's events and the `RunLog`, and queue a `WifiAp` that `inputs` sends in the link's
+next turn, at that instant or the turn's, the later of the two. While the network is not active
+the station's frames reach nothing. On serial `board.wifi` is a `Wifi` that is on no link: its
+`asked` skips `access_point` and `nearby` through the capability declaration.
+
+`tests/test_wifi.py` covers the flags, the parameter checks, the capability request, the switches
+and their timing without the emulator; `tests/test_http_request.py` runs the station against
+ESP-IDF's `http_request` example: a fetch, a rejoin after the access point leaves and comes back,
+no access point, a wrong password, the report and properties, and a call after power-on.
 
 `tests/test_board_api.py` covers fixture identity, lazy interface access, broker sharing,
 build-after-power-on refusal and backend cleanup. `tests/test_card_image.py` exercises real

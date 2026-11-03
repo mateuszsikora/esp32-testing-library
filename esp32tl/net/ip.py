@@ -31,6 +31,46 @@ def addr(raw: bytes) -> str:
     return ".".join(str(b) for b in raw)
 
 
+class Fragmented(Exception):
+    """An IPv4 fragment, which this network does not reassemble."""
+
+
+def ipv4(datagram: bytes) -> tuple[int, str, str, bytes] | None:
+    """The protocol, source, destination and payload of a whole IPv4 datagram, its header
+    checksum and lengths checked; `None` for anything else. Raises `Fragmented` for a fragment."""
+    if len(datagram) < 20 or datagram[0] >> 4 != 4:
+        return None
+    version_ihl, _, total = struct.unpack(">BBH", datagram[:4])
+    ihl = (version_ihl & 0x0F) * 4
+    if not 20 <= ihl <= total <= len(datagram) or checksum(datagram[:ihl]):
+        return None
+    if int.from_bytes(datagram[6:8], "big") & 0x3FFF:
+        raise Fragmented
+    return datagram[9], addr(datagram[12:16]), addr(datagram[16:20]), datagram[ihl:total]
+
+
+def udp(src: str, dst: str, payload: bytes) -> tuple[int, int, bytes] | None:
+    """The ports and data of a UDP datagram from `src` to `dst`, its length and its checksum,
+    unless zero, checked; `None` for anything else."""
+    if len(payload) < 8:
+        return None
+    sport, dport, length, check = struct.unpack(">HHHH", payload[:8])
+    if not 8 <= length <= len(payload):
+        return None
+    payload = payload[:length]
+    if check and checksum(_pseudo(src, dst, UDP, length) + payload):
+        return None
+    return sport, dport, payload[8:]
+
+
+def _pseudo(src: str, dst: str, protocol: int, length: int) -> bytes:
+    return (
+        bytes(int(p) for p in src.split("."))
+        + bytes(int(p) for p in dst.split("."))
+        + struct.pack(">BBH", 0, protocol, length)
+    )
+
+
 class Connection(Protocol):
     """A service's side of one TCP connection."""
 
@@ -88,36 +128,28 @@ class Network:
         self._ident = 0
 
     def receive(self, datagram: bytes) -> None:
-        if len(datagram) < 20 or datagram[0] >> 4 != 4:
-            return
-        version_ihl, _, total = struct.unpack(">BBH", datagram[:4])
-        ihl = (version_ihl & 0x0F) * 4
-        if not 20 <= ihl <= total <= len(datagram) or checksum(datagram[:ihl]):
-            return
-        if int.from_bytes(datagram[6:8], "big") & 0x3FFF:
+        try:
+            parsed = ipv4(datagram)
+        except Fragmented:
             self._log("net: fragmented IPv4 is unsupported")
             return
-        protocol = datagram[9]
-        src, dst = addr(datagram[12:16]), addr(datagram[16:20])
-        payload = datagram[ihl:total]
+        if parsed is None:
+            return
+        protocol, src, dst, payload = parsed
         if protocol == TCP:
             if len(payload) < 20 or checksum(self._pseudo(src, dst, TCP, len(payload)) + payload):
                 return
             self._tcp(src, dst, payload)
         elif protocol == UDP:
-            if len(payload) < 8:
+            datagram_ = udp(src, dst, payload)
+            if datagram_ is None:
                 return
-            sport, dport, length, check = struct.unpack(">HHHH", payload[:8])
-            if not 8 <= length <= len(payload):
-                return
-            payload = payload[:length]
-            if check and checksum(self._pseudo(src, dst, UDP, length) + payload):
-                return
+            sport, dport, data = datagram_
             service = self.udp.get(dport)
             if service is None:
                 self._log(f"net: UDP {src}:{sport} → {dst}:{dport}, nothing listens there")
                 return
-            answer = service.on_datagram(payload[8:])
+            answer = service.on_datagram(data)
             if answer is not None:
                 self._udp_send(dst, dport, src, sport, answer)
 
@@ -142,11 +174,7 @@ class Network:
         self._send_ip(header + payload)
 
     def _pseudo(self, src: str, dst: str, protocol: int, length: int) -> bytes:
-        return (
-            bytes(int(p) for p in src.split("."))
-            + bytes(int(p) for p in dst.split("."))
-            + struct.pack(">BBH", 0, protocol, length)
-        )
+        return _pseudo(src, dst, protocol, length)
 
     def _udp_send(self, src: str, sport: int, dst: str, dport: int, data: bytes) -> None:
         if len(data) + 28 > self._mtu():

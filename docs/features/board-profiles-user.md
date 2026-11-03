@@ -16,6 +16,10 @@ with the reason.
 | `sd-data-logger` | `esp32` | 4 MB, none | `console`; `uart.gnss`: UART1, TX GPIO4, RX GPIO5, 9600 baud; `sd_card`: SCLK GPIO14, MOSI GPIO15, MISO GPIO2, CS GPIO13; `lines.logger`: error GPIO18 |
 | `lilygo-t-a7670g-r2` | `esp32` (ESP32-WROVER-E) | 4 MB, 4 MB | `console`; `uart.modem`: UART1, TX GPIO 26, RX GPIO 27, 115200 baud; `uart.gnss`: UART2, TX GPIO 21, RX GPIO 22, 9600 baud; `lines.modem`: `pwrkey` GPIO 4, `ri` GPIO 33 pulled down |
 
+Every profile also has `wifi`, the chip's Wi-Fi station: every classic ESP32 has the radio, so a
+profile does not list it, and it comes last in a profile's interfaces
+([the wifi fixture](pytest-plugin-user.md#the-wifi-fixture)).
+
 `esp32-devkitc` is a generic ESP32 module on a devkit, and carries every validation firmware: its
 GNSS route is chosen for this repository's own firmware. GPIO 16 and 17 are left free because on
 WROVER modules they belong to the PSRAM. GPIO 5 is a strapping pin; a receiver holding it low at
@@ -89,8 +93,8 @@ def test_modem_route(board):
 
 A test says what is at the far end of an interface, and whether it records what crosses it, by
 what it does with it before `board.power_on()`. An interface is `console`, or the name of a route
-or a set of lines in the profile: `uart.gnss`, `uart.modem`, `lines.modem`, or `sd_card`, the SD
-card slot.
+or a set of lines in the profile: `uart.gnss`, `uart.modem`, `lines.modem`, `sd_card`, the SD
+card slot, or `wifi`, the chip's Wi-Fi station.
 
 ```python
 def test_reports_a_fix(board, gnss, console, tmp_path):
@@ -102,8 +106,10 @@ def test_reports_a_fix(board, gnss, console, tmp_path):
 
 - The source of an interface is the call that gives it: `gnss.replay(path)` is a `replay`, and
   `gnss.fix(at=...)` or another call of the receiver model a `model`
-  ([models and units](models-user.md#the-gnss-receiver)), and `sd_card.insert(image)` a `model`,
-  the runner's card holding the image; `real` gets its call later.
+  ([models and units](models-user.md#the-gnss-receiver)), `sd_card.insert(image)` a `model`,
+  the runner's card holding the image, and `wifi.access_point(...)` or `wifi.nearby(...)` a
+  `model`, esp32sim's access point with the simulated network behind it; `real` gets its call
+  later.
 - A tap is the call that asks for it: `gnss.tap(path)` taps `uart.gnss`
   ([taps and the run report](run-report-user.md)); `console.tap(path)` records the console on
   both backends, in addition to `dut.log` and the run report. Nothing taps the SD card slot:
@@ -119,6 +125,7 @@ Each backend declares what it can give:
 | `uart.*` | `model`, `replay` or `real`; tap | `real` only; no tap |
 | `lines.*` | nothing | nothing |
 | `sd_card` | `model`: a card holding an image file; no tap | `real`: the card in the slot; no tap |
+| `wifi` | `model`: esp32sim's access point, the network behind it the harness's; no tap | `real`: the access points around the board; no tap |
 
 On a real board the on-board peripherals are soldered on, so only the real part answers, and a tap
 on them would need a hardware sniffer. The `lines` fixture is no source in this table: on

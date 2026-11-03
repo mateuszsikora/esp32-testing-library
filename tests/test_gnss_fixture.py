@@ -130,7 +130,8 @@ def test_a_source_given_out_of_order_fails_the_test(pytester: pytest.Pytester) -
             " board.power_on()",
             "*esp32sim: the test set up the replay of uart.gnss and never called"
             " board.power_on(): it ran no firmware",
-            "*esp32sim: the board profile no-gnss has no uart.gnss; its interfaces are console",
+            "*esp32sim: the board profile no-gnss has no uart.gnss;"
+            " its interfaces are console, wifi",
         ]
     )
     # Every route of the profile is on the link; a board never powered on ran no runner.

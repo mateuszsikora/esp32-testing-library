@@ -403,3 +403,64 @@ does not slow down. Also rejected: catching up every held turn whatever its leng
 stopped in a debugger for minutes would then race the guest through those minutes, every stamp
 squeezed together; and a threshold of the runner's own, because two pacers with different
 thresholds would disagree on where wall time stands.
+
+## The network behind the access point is the peer's, over the link
+
+Status: decided (#31)
+
+With `--wifi` the runner attaches esp32sim's virtual access point (`StationLink::attach_new` with
+no NAT) and puts the station's link in Ethernet relay mode (`SocBus::set_ethernet_relay`): the
+station's frames go to the peer as `eth_tx`, and the peer's `eth_rx` frames come back to the
+station. The network is the harness's, on the test's clock, as behind the modem
+([harness decisions](harness.md#the-network-the-device-reaches-is-simulated-in-the-harness-in-emulated-time)),
+so the runner takes no `--net`. Both hooks are public in esp32sim at the pin, so no esp32sim change
+is needed (plan M7 named `attach_wifi` and `StationLink`; the relay sits in the same type).
+
+**Rejected:** esp32sim's own network with `--net nat`, for the reasons #64 rejected NAT for the
+modem: wall time, runs that do not repeat, and the device's traffic in the host's network instead
+of in front of the test. Also rejected: esp32sim's own network without NAT, which gives DHCP, DNS
+and NTP but refuses every TCP connection, and would be a second network, with other addresses and
+services, than the one behind the modem.
+
+## Ethernet frames are stamped at the slice boundary they are taken at
+
+Status: decided (#31)
+
+esp32sim's relay hands over the station's frames without the time it sent them
+(`StationLink::take_relay_frames`), so `eth_tx` carries the cycle of the slice boundary the runner
+takes them at, as `uart_cfg` and the drop warnings do: at most one emulated millisecond late, or
+`latency` while no event is unacknowledged. The answer is then on time at `t + latency` like any
+other. The peer's frames go to the link's queue of 64 when they come due, and those it has no room
+for wait in the runner for the next boundary, in order: none is lost to a full queue.
+
+**Rejected:** asking upstream for timestamps on relayed frames, because a millisecond is below
+anything the station's TCP/IP stack times, and nothing yet needs them closer.
+
+## The access point that goes off the air deauthenticates the station first
+
+Status: decided (#31)
+
+`wifi_ap` with `on: false` makes the access point send a station that has authenticated or
+associated a deauthentication, reason 3 ("leaving"), stop beaconing, and leave once the frame is
+off its queue. At the pin esp32sim's station does not notice beacons that stop coming: with the
+access point simply detached, ESP-IDF's `http_request` kept its connection state for 60 emulated
+seconds, and only its TCP connects failed, with `errno=113`. An access point that shuts down
+deauthenticates its stations, so the station learns of it as from a real one. `on: true` attaches
+a fresh access point from the same `--wifi`, as at power-on, but only once the old one has left:
+attached at once, it would take the deauthentication off its queue before the station had it.
+
+**Postponed:** an access point that goes out of range without a word, which needs the station to
+time out on missing beacons in esp32sim; it comes when a firmware's test needs it and the emulator
+can do it.
+
+## The Wi-Fi messages keep the link protocol at version 1
+
+Status: decided (#31)
+
+`eth_tx`, `eth_rx` and `wifi_ap` pass only in a run started with `--wifi`, which only a harness
+that speaks them gives the runner, and `stats.wifi` is a field an older peer ignores
+([protocol §2](../protocol.md#2-framing)). No message of version 1 changes its meaning, so the
+version stays, as it did when `gpio_out` came with M3.
+
+**Rejected:** version 2, which every peer and the recording header's tools would have had to follow
+for messages none of them can receive.

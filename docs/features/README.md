@@ -6,7 +6,7 @@ templates.
 
 | Feature | User | Technical | Code |
 |---|---|---|---|
-| pytest plugin: the `board`, `console`, `gnss`, `modem`, `broker`, `lines` and `sd_card` fixtures, the `app_path` and `app_recording` markers, `--esp32tl-backend` | [user](pytest-plugin-user.md) | [technical](pytest-plugin-technical.md) | `esp32tl/pytest_plugin.py`, `esp32tl/interfaces/` |
+| pytest plugin: the `board`, `console`, `gnss`, `modem`, `broker`, `lines`, `sd_card` and `wifi` fixtures, the `app_path` and `app_recording` markers, `--esp32tl-backend` | [user](pytest-plugin-user.md) | [technical](pytest-plugin-technical.md) | `esp32tl/pytest_plugin.py`, `esp32tl/interfaces/` |
 | `esp32sim` backend: the runner under pytest-embedded, on the emulated clock | [user](esp32sim-backend-user.md) | [technical](esp32sim-backend-technical.md) | `esp32tl/backends/esp32sim.py`, `esp32tl/backends/clock.py` |
 | `serial` backend: a real ESP32 through pytest-embedded, on the wall clock | [user](serial-backend-user.md) | [technical](serial-backend-technical.md) | `esp32tl/backends/serial.py`, `esp32tl/backends/__init__.py` |
 | `esp32tl` command | [user](cli-user.md) | | `esp32tl/cli.py`, `esp32tl/__init__.py` |
@@ -23,7 +23,7 @@ templates.
 | Bluetooth peer: a Classic device with SPP on Bumble's virtual link, answered by a model on the board's clock | [user](bluetooth-peer-user.md) | [technical](bluetooth-peer-technical.md) | `esp32tl/bluetooth/` |
 | Cellular modem: AT dialogue, signal, registration, PWRKEY and RI | [user](modem-user.md) | [technical](modem-technical.md) | `esp32tl/sources/model/modem.py`, `esp32tl/interfaces/modem.py` |
 | Flash contents: `board.nvs()` and typed integers, by partition name | [user](flash-contents-user.md) | [technical](flash-contents-technical.md) | `esp32tl/flash.py` |
-| Simulated network: PPP, IPv4, TCP/UDP, DNS, NTP, TLS and MQTT | [user](network-user.md) | [technical](network-technical.md) | `esp32tl/net/` |
+| Simulated network: PPP or Ethernet with ARP and DHCP, IPv4, TCP/UDP, DNS, NTP, TLS, MQTT and HTTP | [user](network-user.md) | [technical](network-technical.md) | `esp32tl/net/` |
 
 ## Ownership map
 

@@ -14,6 +14,8 @@ from esp32tl.link.protocol import (
     MAX_LINE,
     Adc,
     Console,
+    EthRx,
+    EthTx,
     GpioIn,
     GpioOut,
     HarnessHello,
@@ -32,6 +34,8 @@ from esp32tl.link.protocol import (
     UartTx,
     Wait,
     Warn,
+    WifiAp,
+    WifiStats,
     decode_harness,
     encode,
 )
@@ -797,3 +801,72 @@ def test_a_runner_on_another_clock_than_the_backend_s_fails_the_link() -> None:
     link = BoardLink("esp32-devkitc", clock="emulated-fifo-write")
     link.receive(HELLO)
     assert link.error is None
+
+
+class Air(Interface):
+    """The network behind the access point: answers each frame with `answer` after `latency`,
+    and switches the access point as `switches` says, each in the turn at its time."""
+
+    def __init__(
+        self, name: str = "wifi", *, answer: bytes = bytes(14), switches: Iterable[WifiAp] = ()
+    ) -> None:
+        super().__init__(name, None)
+        self.received: list[tuple[int, Direction, bytes]] = []
+        self._answer = answer
+        self.switches = list(switches)
+
+    @property
+    def ethernet(self) -> bool:
+        return True
+
+    def receive(self, t: int, direction: Direction, data: bytes) -> Iterable[Output]:
+        self.received.append((t, direction, data))
+        return [(t + MS, self._answer)] if self._answer else []
+
+    def inputs(self, now: int) -> Iterable[Input]:
+        due = [s for s in self.switches if s.t <= now]
+        self.switches = self.switches[len(due) :]
+        return due
+
+    def latency(self) -> int | None:
+        return MS
+
+
+FRAME = b"\x02\x53\x49\x4d\x00\x02" + b"\x24\x6f\x28\x00\x11\x22" + b"\x08\x00"
+
+
+def test_eth_tx_reaches_the_network_and_its_answer_goes_in_as_eth_rx() -> None:
+    air = Air(answer=FRAME[::-1])
+    link = started(Peer(), air)
+    out = feed(link, EthTx(1, 5 * MS, FRAME), Sync(6 * MS))
+    assert air.received == [(5 * MS, "out", FRAME)]
+    assert out == [EthRx(6 * MS, FRAME[::-1]), Wait(1, None, MS)]
+    # one frame per output: a frame is never cut into chunks as bytes are
+    assert all(decode_harness(encode(m)) == m for m in out)
+
+
+def test_wifi_ap_goes_out_in_its_turn_from_the_network_only() -> None:
+    air = Air(answer=b"", switches=[WifiAp(2 * MS, False), WifiAp(4 * MS, True)])
+    link = started(air)
+    assert feed(link, Sync(2 * MS)) == [WifiAp(2 * MS, False), Wait(0, None, MS)]
+    assert feed(link, Sync(4 * MS)) == [WifiAp(4 * MS, True), Wait(0, None, MS)]
+
+
+def test_eth_rx_from_an_interface_that_is_not_the_network_fails_the_link() -> None:
+    link = started(Driver([EthRx(MS, bytes(14))]))
+    assert feed(link, Sync(MS)) == [Stop()]
+    assert link.error == "lines sent eth_rx, and is not the network behind the access point"
+
+
+def test_one_network_behind_the_access_point() -> None:
+    with pytest.raises(ValueError, match="one network behind the access point, not a, b"):
+        BoardLink("esp32-devkitc", [Air("a"), Air("b")])
+
+
+def test_the_report_counts_the_stations_frames() -> None:
+    link = started(Air())
+    feed(link, Stats(MS, "stop", 0, 1, (), 0, 0, 0, 0, wifi=WifiStats(3, 0, 2, 1, 4)))
+    assert (
+        "  Wi-Fi: 3 Ethernet frames sent (0 dropped by the relay), 2 received (1 with the access"
+        " point off the air); 4 frames from the air with no receive descriptor"
+    ) in link.report().splitlines()

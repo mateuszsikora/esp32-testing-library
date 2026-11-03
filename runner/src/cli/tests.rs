@@ -21,6 +21,7 @@ fn minimal_command_line() {
             board: None,
             peer_timeout: Some(Duration::from_secs(60)),
             sd_card: None,
+            wifi: None,
         }
     );
 }
@@ -178,5 +179,69 @@ fn usage_errors() {
         "--chip esp32 --flash-at 0x1000=b.bin --max-seconds",
     ] {
         assert!(matches!(parse_str(line), Err(Error::Usage(_))), "{line}");
+    }
+}
+
+#[test]
+fn wifi_takes_esp32sims_access_point_and_the_networks_around() {
+    let opts = parse_str(&format!(
+        "{MINIMAL} --board socket:s --wifi ssid=home,psk=password1,chan=11 \
+         --wifi-nearby ssid=cafe,chan=3,rssi=-70,secure=0 --wifi-nearby ssid=office"
+    ))
+    .unwrap();
+    let wifi = opts.wifi.unwrap();
+    let ap = wifi.access_point();
+    assert_eq!(
+        (ap.ssid.as_str(), ap.psk.as_deref(), ap.channel),
+        ("home", Some("password1"), 11)
+    );
+    let nearby: Vec<(&str, u8, i8, bool)> = wifi
+        .nearby
+        .iter()
+        .map(|b| (b.ssid.as_str(), b.channel, b.rssi, b.secure))
+        .collect();
+    assert_eq!(nearby, [("cafe", 3, -70, false), ("office", 1, -60, true)]);
+    // every key is optional, as in esp32sim
+    let opts = parse_str(&format!("{MINIMAL} --board socket:s --wifi ssid=x")).unwrap();
+    assert_eq!(opts.wifi.unwrap().access_point().channel, 6);
+}
+
+#[test]
+fn wifi_refuses_what_esp32sim_refuses_and_what_needs_another_flag() {
+    for (args, says) in [
+        ("--wifi ssid=x", "needs --board"),
+        (
+            "--board socket:s --wifi-nearby ssid=x",
+            "needs the access point of --wifi",
+        ),
+        (
+            "--board socket:s --wifi ssid=x,chan=15",
+            "--wifi: invalid WiFi channel",
+        ),
+        (
+            "--board socket:s --wifi ssid=x,pass",
+            "--wifi: invalid WiFi option",
+        ),
+        (
+            "--board socket:s --wifi ssid=x,epoch=1700000000",
+            "the network here is the peer's",
+        ),
+        (
+            "--board socket:s --wifi ssid=x --wifi-nearby chan=2",
+            "--wifi-nearby: a nearby network needs an ssid",
+        ),
+        (
+            "--board socket:s --wifi ssid=x --wifi-nearby ssid=x",
+            "the access point's SSID",
+        ),
+        (
+            "--board socket:s --wifi ssid=x,bssid=02:00:00:00:00:01 --wifi-nearby ssid=y,bssid=02:00:00:00:00:01",
+            "the access point's BSSID",
+        ),
+    ] {
+        match parse_str(&format!("{MINIMAL} {args}")) {
+            Err(Error::Usage(m)) => assert!(m.contains(says), "{args}: {m}"),
+            other => panic!("{args}: {other:?}"),
+        }
     }
 }

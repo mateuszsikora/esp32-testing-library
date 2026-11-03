@@ -12,9 +12,10 @@ replaced by upstream's once that lands (section 10). Messages marked *ext* are r
 that #325 does not cover; they stay in the runner whatever happens upstream (plan, finding 10).
 
 Who implements what: the runner side in #11 (M1: UART, `reset`, `uart_cfg`, `warn`, `stats`) and #23
-(M3: GPIO and the future-input queue); the harness side in #12, and its GPIO lines in #24. `adc`
-waits for an issue of its own, opened when an example needs an analog pin. Wall time under
-`--realtime`, for a real device at the far end of a route (section 12), comes with #28.
+(M3: GPIO and the future-input queue); the harness side in #12, and its GPIO lines in #24. #31
+(M7: Wi-Fi) adds `eth_tx`, `eth_rx`, `wifi_ap` and `stats.wifi` on both sides. `adc` waits for an
+issue of its own, opened when an example needs an analog pin. Wall time under `--realtime`, for a
+real device at the far end of a route (section 12), comes with #28.
 
 ## 1. Transport
 
@@ -130,20 +131,29 @@ seen exactly the events up to the block point, however the emulator schedules it
 | runner → harness | `sync` | `t` | M1 |
 | runner → harness | `console` | `t`, `data` | M1 |
 | runner → harness | `warn` *ext* | `t`, `kind`, `detail`, and per kind `port`, `pin`, `baud`, `bytes` | M1 |
-| runner → harness | `stats` *ext* | `t`, `end`, `resets`, `turns`, `uart`, `unrouted_rx_bytes`, `inputs_on_output`, `inputs_not_applied`, `rx_bytes_not_paced`; under `--realtime` also `rt_resyncs` (M5) | M1 |
+| runner → harness | `eth_tx` *ext* | `seq`, `t`, `data` | M7 |
+| runner → harness | `stats` *ext* | `t`, `end`, `resets`, `turns`, `uart`, `unrouted_rx_bytes`, `inputs_on_output`, `inputs_not_applied`, `rx_bytes_not_paced`; `wifi` with `--wifi` (M7); under `--realtime` also `rt_resyncs` (M5) | M1 |
 | harness → runner | `uart_rx` | `t`, `pin`, `baud`, `data` | M1 |
 | harness → runner | `gpio_in` | `t`, `levels` | M3 |
 | harness → runner | `release` | `t`, `pins` | M3 |
 | harness → runner | `adc` *ext* | `t`, `pin`, `volts` | M3 |
+| harness → runner | `eth_rx` *ext* | `t`, `data` | M7 |
+| harness → runner | `wifi_ap` *ext* | `t`, `on` | M7 |
 | harness → runner | `wait` | `ack`, `quiet_until`, `latency` | M1 |
 | harness → runner | `stop` | none | M1 |
 
 The runner answers `adc` with a protocol error naming the message, `adc is not implemented yet`,
 until it has an issue of its own (5.12).
 
-**Events** are the runner messages that carry `seq`: `uart_tx`, `uart_cfg`, `gpio_out` and
-`reset`. They are what a peer may answer, so they set the block point (rule 1). `seq` is one
-counter over all four, starting at 1 and growing by 1. `sync`, `console`, `warn` and `stats` carry
+The Wi-Fi messages (`eth_tx`, `eth_rx`, `wifi_ap`) pass only on a run started with `--wifi`, and
+the version stays 1. The runner sends `eth_tx` only with `--wifi`, and only a harness that speaks
+the three messages starts it with that flag, so a peer written before M7 sees none of them; without
+`--wifi`, `eth_rx` and `wifi_ap` are protocol errors (section 9). `stats.wifi` is a field an older
+peer does not know, which section 2 lets it ignore.
+
+**Events** are the runner messages that carry `seq`: `uart_tx`, `uart_cfg`, `gpio_out`, `reset`
+and `eth_tx`. They are what a peer may answer, so they set the block point (rule 1). `seq` is one
+counter over all five, starting at 1 and growing by 1. `sync`, `console`, `warn` and `stats` carry
 no `seq` and ask for nothing.
 
 ### 5.1 `hello`
@@ -367,6 +377,10 @@ for a `frm_err` without its `pin`; `receives there with no baud set` when the ro
  "uart": [{"port": 1, "tx_bytes": 0, "rx_bytes": 864, "rxfifo_ovf": 0, "frm_err": 0}],
  "unrouted_rx_bytes": 72, "inputs_on_output": 0, "inputs_not_applied": 0,
  "rx_bytes_not_paced": 0}
+{"type": "stats", "t": 15000000000, "end": "stop", "resets": 0, "turns": 1840, "uart": [],
+ "unrouted_rx_bytes": 0, "inputs_on_output": 0, "inputs_not_applied": 0,
+ "rx_bytes_not_paced": 0,
+ "wifi": {"eth_tx": 38, "eth_tx_dropped": 0, "eth_rx": 41, "eth_rx_dropped": 0, "rx_dropped": 0}}
 ```
 
 The last message of a run, sent just before the runner closes the socket (section 9). `t` is
@@ -381,6 +395,23 @@ past the end of the run. `uart` has one entry per
 port that carried a watched route during the run, with the bytes each way and the drops by kind.
 `rt_resyncs`, only under `--realtime`, counts the times the run skipped a lag behind wall time
 (12.2). `BoardLink` puts the counts in the test report next to the matching engine's unseen requests.
+
+`wifi` is there with `--wifi` only, as in the second example, and counts the station's link over
+the whole run:
+
+- `eth_tx`: the `eth_tx` messages sent, one per Ethernet frame the station sent (5.15);
+- `eth_tx_dropped`: frames the station sent that esp32sim's relay dropped, longer than 1518 bytes or
+  more than 64 between two slice boundaries (`StationLink::tx_dropped`,
+  `esp-soc/src/wifi.rs:578-583`);
+- `eth_rx`: `eth_rx` frames the station's link took;
+- `eth_rx_dropped`: `eth_rx` frames that came due while the access point was off the air, or that
+  the runner still held when it went off (5.16);
+- `rx_dropped`: frames from the air, beacons included, that found no free descriptor in the
+  station's receive ring (`StationLink::rx_dropped`).
+
+esp32sim starts its two counts again when the access point is attached anew and at a chip reset;
+the runner adds them up before each, so `wifi` holds the run's totals. The harness reads `wifi` as
+an object of these five integers, all required.
 
 ### 5.10 `uart_rx`
 
@@ -464,6 +495,85 @@ so a changed `latency` applies only to events after it, and no promise already m
 `{"type": "stop"}`. Ends the peer's turn and the run (section 9). Inputs sent before it in the
 same turn are discarded.
 
+### 5.15 `eth_tx` and `eth_rx` *ext* (M7)
+
+```json
+{"type": "eth_tx", "seq": 41, "t": 2804000000, "data": "////////JG8oABEiCAYAAQgABgQAASRvKAARIgpAAAIAAAAAAAAKQAAB"}
+{"type": "eth_rx", "t": 2805000000, "data": "JG8oABEiAlNJTQACCAYAAQgABgQAAgJTSU0AAgpAAAEkbygAESIKQAAC"}
+```
+
+With `--wifi`, the chip's Wi-Fi station joins esp32sim's virtual access point, and the network
+behind the access point is the peer's: the runner puts esp32sim's station link in Ethernet relay
+mode (`SocBus::set_ethernet_relay`, `esp32/src/soc.rs:92-95`), so esp32sim's own network (DHCP,
+DNS, NTP, NAT to the host) answers nothing. The example is an ARP request from the station,
+`24:6f:28:00:11:22`, for `10.64.0.1`, and the harness's answer from the gateway's MAC,
+`02:53:49:4d:00:02`, a millisecond later.
+
+`data` is one Ethernet II frame without its FCS: destination, source, EtherType and payload, 14 to
+1518 bytes. An `eth_rx` outside that range is a protocol error, as is `eth_rx` on a run without
+`--wifi`; the harness's codec refuses an `eth_tx` outside the range too.
+
+`eth_tx`: a frame the station sent. It is an event: it carries `seq`, sets the block point, and an
+answer stamped `t + latency` is on time (rule 2). esp32sim's relay hands over frames without their
+time (`StationLink::take_relay_frames`, `esp-soc/src/wifi.rs:651-653`), so `t` is the slice
+boundary at which the runner took them (6.1): at most one emulated millisecond after the station
+sent them, or at most `latency` while no event is unacknowledged. The runner also takes them right
+before a chip reset, so they go out before its `reset`, and at the end of the run. Frames taken at
+one boundary go out in the order the station sent them, one message each, with one `t`. The relay
+holds at most 64 frames between two boundaries and drops the rest, and any frame over 1518 bytes,
+which `stats.wifi.eth_tx_dropped` counts (5.9).
+
+`eth_rx`: from `t` the frame is for the station. It goes into the input queue (section 8) and,
+when it comes due, the runner hands it to the station's link, whose queue holds 64 frames
+(`StationLink::receive_relay_frame`, `esp-soc/src/wifi.rs:656-662`). Frames the link does not take
+wait in the runner, in order, and are offered again at every slice boundary, at most one emulated
+millisecond apart. esp32sim then puts one frame on the air for the station at most every 400 µs,
+and only when the access point has nothing of its own due: its answers and beacons go first
+(`StationLink::next_rx`, `esp-soc/src/wifi.rs:608-624`). The access point wraps a frame for the
+air only while the station is associated with it (`VirtualAp::data_from_ds`,
+`esp-soc/src/wifi.rs:436-437`); one the link takes before then is lost there, and still counts in
+`stats.wifi.eth_rx`. A frame that comes due while the access point is off the air (5.16) is
+dropped and counted in `stats.wifi.eth_rx_dropped`.
+
+A peer answers a frame within its `latency` like any event. `BoardLink` gives every `eth_tx` to
+the one interface that is the network behind the access point (`Interface.ethernet`), and sends
+each output of it as one `eth_rx`.
+
+### 5.16 `wifi_ap` *ext* (M7)
+
+```json
+{"type": "wifi_ap", "t": 10000000000, "on": false}
+```
+
+From `t` the access point of `--wifi` is off the air (`on: false`) or on it (`on: true`). `on` is
+JSON `true` or `false`; anything else is a protocol error, as is `wifi_ap` without `--wifi`. It
+goes into the input queue (section 8) like any input. The access point is on the air from
+power-on; a switch to the state it is in already does nothing.
+
+Off: the access point leaves as one that shuts down. If a station has authenticated or associated
+with it, it drops the answers it had queued, queues a deauthentication with reason 3, "the sending
+station is leaving" (IEEE 802.11-2020, 9.3.3.12 and Table 9-49), and stops beaconing. At every
+slice boundary the runner then checks whether anything but beacons is still in the access point's
+queue; once nothing is, the access point is detached (`StationLink::attach(None, None)`,
+`esp-soc/src/wifi.rs:534-536`): at the first boundary after esp32sim has put the deauthentication
+on the air. With no station joined, it waits only for answers already queued, such as probe
+responses. Until it is detached it still answers what the station sends; a station that
+authenticates again in that window is deauthenticated again. The networks around
+(`--wifi-nearby`) go off the air with it: esp32sim keeps them on the access point. Frames the
+runner still held for the station are dropped, as are `eth_rx` frames that come due while it is
+off or leaving; frames the station's link had taken are lost with it.
+
+The deauthentication is there because at the pin esp32sim's station does not notice beacons that
+stop coming: with the access point merely detached, ESP-IDF's `http_request` example kept its
+connection state for 60 emulated seconds, and only its TCP connects failed, with errno 113.
+
+On: a fresh access point from the same `--wifi` spec, with the same networks around, as at
+power-on. The station must join it again: scan, authentication, association, the WPA2 handshake
+with a passphrase, then DHCP from the peer. An `on` that comes while the old access point is
+still leaving, an `off` and an `on` at one `t` among them, takes effect once it has left, at most
+a slice or two later: attaching the fresh one would take the deauthentication off the air, and the
+station would never learn that it had to join again.
+
 ## 6. Rules
 
 1. **Block point.** After each `wait` the runner runs the guest until the block point
@@ -546,7 +656,11 @@ runs at about 30 wall seconds per emulated second on an M2 Pro, against 0.3 with
 - delivers the bytes now due with `bus.periph.uart_pin_input`, after checking the route, the
   baud and the FIFO's `rx_pending()`, which is how it sees the drops `warn` reports;
 - applies the queued inputs now due: received bytes onto their lines, GPIO levels and releases
-  through the board (5.11);
+  through the board (5.11), Ethernet frames to the station's link and the access point's switches
+  (5.15, 5.16);
+- with `--wifi`, takes the station's Ethernet frames from the relay (`eth_tx`), asks an access
+  point on its way off the air whether it has left, and offers the station's link the frames that
+  are due and that it has not taken yet;
 - at `B`, takes the turn.
 
 `run` stops close to `max_cycles`, not a quantum past it: on the path without a cost model the
@@ -597,8 +711,8 @@ The `lines` interface, which drives GPIO lines at the instant the test does, dec
 
 ## 8. Future-dated inputs
 
-Any input (`uart_rx`, `gpio_in`, `release`, `adc`) may carry a `t` later than the turn's `sync`:
-the runner keeps it in a queue of its own, ordered by `t` and, at equal `t`, by arrival, and
+Any input (`uart_rx`, `gpio_in`, `release`, `adc`, `eth_rx`, `wifi_ap`) may carry a `t` later
+than the turn's `sync`: the runner keeps it in a queue of its own, ordered by `t` and, at equal `t`, by arrival, and
 applies it at its time (section 6.1). This is how an interface's output that lies in the future, a
 replay's next sentence for one, reaches the guest.
 The queue is the runner's, not `machine.script`: the script's cursor walks its events in order,
@@ -617,7 +731,7 @@ the runner at or before its `t` (rule 1).
 | `SIGTERM` or `SIGINT` | ends the slice in progress (at most one emulated millisecond), or at once if it is waiting for the peer's turn or, under `--realtime`, for wall time (12.2); sends the events and `warn`s not yet sent, `stats` with `end: signal`, closes | 0 |
 | any other `Stop` (`esp-soc/src/soc.rs:9`: `MaxInsns`, `Breakpoint`, `Unimplemented`, `Simcall`, `Ebreak`, `Watch`, `Exceptions`, `CostModel`, `CostModelLifecycle`) | events not yet sent, `stats` with `end: emulator` and the variant, closes | 1 |
 | usage error, or an image or ROM that cannot be loaded | nothing on the socket (it may not be connected yet) | 2 |
-| protocol error by the peer: malformed or oversized line, unknown `type`, version or chip mismatch, late `t`, wrong `ack`, `quiet_until` not after the `sync`, a `baud` of `0`, a `watch` with a pin the chip does not have, a message the runner does not implement yet | `stats` with `end: protocol_error`, closes | 3 |
+| protocol error by the peer: malformed or oversized line, unknown `type`, version or chip mismatch, late `t`, wrong `ack`, `quiet_until` not after the `sync`, a `baud` of `0`, a `watch` with a pin the chip does not have, a message the runner does not implement yet, `eth_rx` or `wifi_ap` without `--wifi` (`eth_rx without --wifi`, `wifi_ap without --wifi`), an `eth_rx` frame outside 14 to 1518 bytes (`eth_rx: an Ethernet frame of N bytes; one without FCS has 14 to 1518`), an `on` that is not `true` or `false` | `stats` with `end: protocol_error`, closes | 3 |
 | the peer is gone: the connection failed, the socket closed, a read or write failed, the peer's turn took longer than `--peer-timeout`, or a write made no progress for that long (in or outside a turn) | nothing more | 4 |
 | a second `SIGTERM` or `SIGINT` | ends the process at once | 128 + the signal's number |
 
@@ -679,6 +793,7 @@ codec change (#37). What #325 does not have:
 | pacing at the `uart_rx` message's baud | #325 paces "at the route's baud"; here a baud mismatch reaches the UART as the frame error it is (`frm_err`), and bytes keep the peer's line rate (11.6) |
 | `console` | the console for the peer, opt-in: the `esp32sim` backend's console expects read it, in emulated-time order with the turns |
 | `reset` comes from the runner's run loop | #325 proposes a `guest_reset` trait method; the peer sees the same message either way (plan, finding 4) |
+| `eth_tx`, `eth_rx`, `wifi_ap` and `stats.wifi` (*ext*), with `--wifi` | #325 has nothing of Wi-Fi. They carry the Ethernet frames of esp32sim's station link in relay mode, and switch its access point, so that the network behind the access point is the peer's, in emulated time ([decision](decisions/harness.md#the-network-the-device-reaches-is-simulated-in-the-harness-in-emulated-time)) |
 | The SD card of `--sd-rw` answers SPI on `SocketBoard`, in the runner | a card answers every byte of a transaction in the same transaction (`spi_transfer_pins`), which a peer a turn away could not; nothing of it goes on the socket, and the protocol does not change ([runner-technical.md](features/runner-technical.md#the-sd-card)) |
 
 ## 11. Changes from the plan

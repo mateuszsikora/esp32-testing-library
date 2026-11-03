@@ -12,6 +12,7 @@ from esp32tl import recording
 from esp32tl.boards.capabilities import Request
 from esp32tl.interfaces import SourceError
 from esp32tl.interfaces.uart import Uart
+from esp32tl.interfaces.wifi import Wifi
 from esp32tl.link.boardlink import BoardLink, Wire
 from esp32tl.link.protocol import RunnerHello, Sync, UartRx, UartTx, Wait
 from esp32tl.sources.replay import Replay, ReplayError
@@ -236,6 +237,7 @@ def test_unseen_requests_are_in_the_backend_report_and_json_properties(tmp_path:
     backend._console = Uart("console", Wire(1, 3, 115200), clock=CLOCK, directory=tmp_path)
     backend._uarts = {"uart.gnss": gnss}
     backend._sd_card = None
+    backend._wifi = Wifi(now=lambda: 0)
     backend.log = RunLog(entries=1)
     gnss.log = backend.log
     backend.link = BoardLink("esp32-devkitc", [gnss])

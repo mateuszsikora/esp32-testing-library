@@ -48,7 +48,8 @@ the container, and once inside it, which builds. With `IDF_LOCAL=1` it runs once
      except through `/out`. `hello_world` writes nothing into its project directory. A project
      under `firmware/` that takes components from the component manager writes
      `dependencies.lock` and `managed_components/` into its own directory, and needs that
-     directory made writable first.
+     directory made writable first. ESP-IDF's `http_request` example is such a project, which is
+     why it is built from a copy under `/out` ([`http_request`](#http_request)).
    - `--volume "$out:/out"` with `FIRMWARE_OUT=/out`: the output directory, the only writable
      mount.
    - `--user "$(id -u):$(id -g)"`: the host's uid owns what the build writes. Under rootless
@@ -66,7 +67,10 @@ the container, and once inside it, which builds. With `IDF_LOCAL=1` it runs once
      on stderr that it is not for goldens.
    - For each image, in the order of `IMAGES`: the project is `project_of IMAGE`
      (`hello_world` is `$IDF_PATH/examples/get-started/hello_world`, `sdspi` is
-     `$IDF_PATH/examples/storage/sd_card/sdspi`, `nmea_reader` is `$PWD/firmware/nmea_reader`,
+     `$IDF_PATH/examples/storage/sd_card/sdspi`, `http_request` is a copy of
+     `$IDF_PATH/examples/protocols/http_request` at `$out/.http_request-$idf_version`
+     ([`http_request`](#http_request)), `pppos_client` what `firmware/pppos_client/prepare.py`
+     prints ([Pinned esp-protocols source](#pinned-esp-protocols-source)), `nmea_reader` is `$PWD/firmware/nmea_reader`,
      `gpio_echo` `$PWD/firmware/gpio_echo`, `modem_at` `$PWD/firmware/modem_at`,
      and `nvs_reader` `$PWD/firmware/nvs_reader`, the working directory being the repository's
      root: in
@@ -100,7 +104,8 @@ next build is still incremental; the marker, removed first, is what says it fini
 The Makefile's `firmware` target runs `FIRMWARE_OUT= firmware/build.sh`; the pattern rule
 `firmware/%/build/esp32tl-built` runs `FIRMWARE_OUT= firmware/build.sh $*`, and `test` depends on
 `$(FIRMWARE_IMAGES:%=firmware/%/build/esp32tl-built)` with `FIRMWARE_IMAGES := hello_world
-nmea_reader gpio_echo sdspi modem_at nvs_reader`. The rule has no prerequisites, so make rebuilds
+nmea_reader gpio_echo sdspi modem_at nvs_reader pppos_client http_request`. `determinism` depends on
+the markers of `nmea_reader`, `pppos_client` and `http_request`. The rule has no prerequisites, so make rebuilds
 an image only when its marker is missing: an edit to `firmware/nmea_reader/` needs `make firmware`, or
 `firmware/build.sh nmea_reader`, before `make test` sees it.
 
@@ -204,6 +209,39 @@ The default ESP-IDF partition table puts `nvs` at `0x9000`, size `0x6000`.
 partition table and build provenance. `make firmware` and `make test` include the image;
 CI's existing firmware glob includes its build in the cache.
 
+## `http_request`
+
+ESP-IDF's `examples/protocols/http_request`, built as it is: no file of this repository goes into
+it, and no `SDKCONFIG_DEFAULTS` is passed, so its sdkconfig is ESP-IDF v5.3.6's defaults for the
+example (`EXAMPLE_CONNECT_WIFI=y`, `EXAMPLE_WIFI_SSID="myssid"`, `EXAMPLE_WIFI_PASSWORD="mypassword"`,
+from `protocol_examples_common`'s Kconfig). Its `main/idf_component.yml` takes
+`protocol_examples_common` from `$IDF_PATH/examples/common_components` through the component
+manager, which writes `dependencies.lock` into the project directory. In the container that
+directory is in the image's read-only `IDF_PATH`, so `project_of http_request` copies it first:
+
+```sh
+source=$out/.http_request-$idf_version
+if [ ! -d "$source" ]; then
+	rm -rf "$source.partial"
+	cp -Rp "$IDF_PATH/examples/protocols/http_request" "$source.partial"
+	mv "$source.partial" "$source"
+fi
+```
+
+The copy is made once per ESP-IDF version and then reused; one interrupted halfway leaves only the
+`.partial` directory, which the next build removes. The copy's path is the `project` that
+`esp32tl-build.json` records, so a build of another ESP-IDF version has another project and builds
+from scratch. `.gitignore` ignores `firmware/.http_request-*/`.
+
+`tests/test_firmware_images.py::test_http_request_is_esp_idfs_example_with_its_default_wifi` checks
+target `esp32`, the flash files `0x1000` `bootloader/bootloader.bin`, `0x8000`
+`partition_table/partition-table.bin` and `0x10000` `http_request.bin`, all present, and the three
+Wi-Fi options in `config/sdkconfig.json`. `tests/test_http_request.py` and
+`tests/test_determinism.py::test_wifi_http` run it against the access point of the `wifi` fixture
+([network](network-technical.md)). `tests/test_firmware_build.py` gives the fake `IDF_PATH` an
+`examples/protocols/http_request` and checks that the local build builds it from
+`.http_request-v9.9.9` under the output directory, a copy of the fake example.
+
 ## The GNSS recording generator
 
 `scripts/generate-gnss-recordings.py` holds the recordings in `RECORDINGS`, each a name, a seed
@@ -306,7 +344,7 @@ top of each build directory, `config/sdkconfig.json`, and the `.bin` and `.elf` 
 |---|---|---|---|
 | `IDF_VERSION` | script constant | `v5.3.6` | the ESP-IDF tag of the container |
 | `CONTAINER` | script constant | `espressif/idf:$IDF_VERSION@sha256:cee52f0c4fdaf088992a7a739f5993154e95cf1d3ab61c24f5b40e6d56a3a070` | the image the build runs in, pinned by digest (a multi-arch index) |
-| `IMAGES` | script constant | `hello_world nmea_reader gpio_echo sdspi modem_at nvs_reader` | the images, in build order; `project_of` maps each to its project |
+| `IMAGES` | script constant | `hello_world nmea_reader gpio_echo sdspi modem_at nvs_reader pppos_client http_request` | the images, in build order; `project_of` maps each to its project |
 | `FIRMWARE_OUT` | environment | `firmware/` | where `IMAGE/build/` goes; empty means the default; `/out` inside the container |
 | `IDF_LOCAL` | environment | unset | `1` builds with the ESP-IDF of the calling shell |
 | `ESP32TL_CONTAINER` | environment, set by the host side | unset | marks the container side and names the image it records |
@@ -323,7 +361,7 @@ regular expressions, so each has to stay on a line of its own. Changing either, 
 
 | Message | Cause |
 |---|---|
-| `unknown image 'NAME'; the images are: hello_world nmea_reader gpio_echo sdspi modem_at nvs_reader` | an argument not in `IMAGES`; nothing written |
+| `unknown image 'NAME'; the images are: hello_world nmea_reader gpio_echo sdspi modem_at nvs_reader pppos_client http_request` | an argument not in `IMAGES`; nothing written |
 | `ESP32TL_CONTAINER is set outside a container; unset it` | `ESP32TL_CONTAINER` set and no `/.dockerenv`; nothing written |
 | `IDF_LOCAL=1 needs ESP-IDF in the environment: source $IDF_PATH/export.sh first` | `IDF_LOCAL=1` without `idf.py` on `PATH` or without `IDF_PATH`; nothing written |
 | `needs Docker, or IDF_LOCAL=1 to build with a local ESP-IDF` | no `docker` on `PATH`; nothing written |
@@ -358,7 +396,9 @@ write their arguments to `$FAKE_LOG`, with a `PATH` holding only them and `cat`,
 - `test_build_starts_the_pinned_container`: the `docker run` arguments, exactly;
 - `test_local_build_runs_idf_py_and_records_how`: with no image named, every image in order,
   `hello_world` and `sdspi` from the fake `IDF_PATH`, `nmea_reader`, `gpio_echo`, `modem_at` and
-  `nvs_reader` from `firmware/`; the `idf.py` arguments of each, the records with `"container": null`, the markers,
+  `nvs_reader` from `firmware/`, `pppos_client` from what a fake `python3` prints, and
+  `http_request` from its copy, `.http_request-v9.9.9` in the output directory, which holds the
+  fake example's `CMakeLists.txt`; the `idf.py` arguments of each, the records with `"container": null`, the markers,
   the "not for goldens" warning and the `built in` lines;
 - reuse of a build directory with the same record, and removal of one with another record;
 - no marker when `flasher_args.json` is missing, and a failed build removing the marker of an

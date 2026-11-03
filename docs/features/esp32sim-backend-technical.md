@@ -44,15 +44,19 @@ starting anything:
    nanoseconds, and `world=lambda: self._utc`, the world's time at power-on, for the receiver
    model ([models-technical.md](models-technical.md#data-flow)). An `[sd_card]` slot becomes an
    empty `SdCard` (`esp32tl/interfaces/sd_card.py`) on the slot's `SdCardRoute`, with the same
-   `directory`, `asked`, `log` and `files`; it is not on the link.
+   `directory`, `asked`, `log` and `files`; it is not on the link. The chip's station becomes a
+   `Wifi(now=lambda: hold.now, world=lambda: self._utc, asked=self._asked, log=self.log)`
+   (`esp32tl/interfaces/wifi.py`), on every profile.
 5. **The lines.** One `Lines(profile.name, profile.lines, now, log=self.log)`
    (`esp32tl/interfaces/lines.py`) for every `[lines.<role>]` set, also on a profile with none,
    with `now` the `HeldClock`'s, so that what the test drives before power-on holds from `t = 0`
    ([pytest-plugin-technical.md](pytest-plugin-technical.md#data-flow)).
-6. **`BoardLink(profile.name, [*uarts, lines], chip=profile.chip, on_error=self._end_run, hold=clock, console=self._printed, clock=self.clock)`**
+6. **`BoardLink(profile.name, [*uarts, lines, wifi], chip=profile.chip, on_error=self._end_run, hold=clock, console=self._printed, clock=self.clock)`**
    (`esp32tl/link/boardlink.py`) is the harness's end of the link: `Esp32Sim.link`. The harness's
    `hello` names the profile and its chip; `watch` is the pins of every UART route and every
-   line. It checks that no two interfaces share a pin. `hold` holds every turn until the test
+   line; the `Wifi` has no pins, and is the link's one interface whose `ethernet` is true, which
+   gets the station's `eth_tx` frames. It checks that no two interfaces share a pin. `hold` holds
+   every turn until the test
    waits; `_printed` appends each console message's bytes to `console_output`, feeds them to
    `console_lines` and hands them to `log.console`, in the link's thread.
 
@@ -83,7 +87,10 @@ or `POWER_ON_UTC`, for `Esp32Sim.utc` and the GNSS receiver's dates, and logs
    out, and the runner gives the chip no PSRAM, its default. The profile's `flash_mb` is not
    passed: the runner's flash is its default, 4 MiB. With a card in the slot, `sd_card=` adds
    `--sd-spi sclk=N,mosi=N,miso=N,cs=N` from the slot's route and `--sd-rw <image>`, the image's
-   absolute path, at the end. Without `held`, as the [`esp32tl` command](cli-user.md) calls
+   absolute path, at the end. With an access point, `wifi=` adds `wifi.runner_args()` after that:
+   `--wifi ssid=<ssid>,chan=<channel>[,psk=<password>][,bssid=<bssid>]` and one
+   `--wifi-nearby ssid=<ssid>,chan=<channel>,rssi=<dBm>,secure=<0|1>[,bssid=<bssid>]` per network
+   around. Without `held`, as the [`esp32tl` command](cli-user.md) calls
    it, the `--console` and `--peer-timeout` pairs are left out, and so is the card; the command
    passes its profile's `psram_mb` too. The runner's options are in
    [runner-user.md](runner-user.md).
@@ -244,7 +251,13 @@ UART route of the profile, `  {interface}: {source}; {bytes}{tap}`: `{source}` i
 `; tapped into {path}` for a tapped route. With `run`, `log.lines()` follows: the plugin passes it
 for a test that failed. `Esp32Sim.properties()` is `link.properties()` with `routes`, by
 interface: `source` (the kind, or `None`), `detail` (what the source was made from, as the test
-named it), `bytes_in`, `bytes_out` and `tap` (the path, or `None`).
+named it), `bytes_in`, `bytes_out` and `tap` (the path, or `None`); then `sd_card`, and `wifi`:
+`None` without an access point, else `Wifi.properties()`, `access_point` (`ssid`, `channel`,
+`secure`), `nearby` (`ssid`, `channel`, `rssi`, `secure` each), `switches` (`t_ns`, `on` each) and
+`network`, the network's `esp32tl_network: 1` transcript. With an access point `report` ends with
+`Wifi.report()`: `wifi: access point '<ssid>', channel <n>, <WPA2-PSK|open>`, a line
+`  around: '<ssid>', channel <n>, <rssi> dBm, <WPA2-PSK|open>` per network around, then the
+network's `network events:`.
 
 ### Console taps
 
@@ -303,7 +316,7 @@ repository makes.
 | `Esp32Sim.uart(role)` | The `Uart` of `uart.<role>` on the link, a `Gnss` for `gnss`; `BackendError` when the profile has no such route |
 | `Esp32Sim.lines` | The `Lines` of the profile's `[lines.<role>]` sets on the link; `BackendError` when the profile has none |
 | `Esp32Sim.sd_card` | The `SdCard` of the profile's slot; `BackendError` when the profile has none |
-| `Esp32Sim.set_up()` | What the test gave that only a run uses: `the replay of uart.gnss` or `the model of uart.gnss` per route with a source, `the tap of uart.gnss` per tapped route, `the level of modem.ri` per line the test drove, `a card in sd_card` |
+| `Esp32Sim.set_up()` | What the test gave that only a run uses: `the replay of uart.gnss` or `the model of uart.gnss` per route with a source, `the tap of uart.gnss` per tapped route, `the level of modem.ri` per line the test drove, `a card in sd_card`, `the access point of wifi`, `the tap of console`, `the NVS partition 'nvs'` |
 | `Esp32Sim.tap_console(path)` | The console `Tap`; before power-on only, shares file collision checks with UARTs and the SD card |
 | `Esp32Sim.close()` | Ends the run and writes the taps; raises `BackendError` for a tap that cannot be written, a failing exit code, a killed runner or a link error |
 | `Esp32Sim.report(run=False)`, `Esp32Sim.properties()` | The `esp32sim link` report section, with the run on the board's clock when `run`; the `esp32sim_link` user property's data |
@@ -315,7 +328,8 @@ repository makes.
 | `load_app(app_path, *, build_dir=None, backend="esp32sim")` | The checked `IdfApp` of the selected directory (default `<app_path>/build`); `backend` chooses target/encryption error wording |
 | `profile_uart(profile, interface, *, clock, directory, asked=..., log=None, files=None)` | The `Uart` on the route the profile gives `interface` (`uart.gnss`), at its pins and baud; `BackendError` when the profile has no such route. The [`esp32tl` command](cli-user.md) makes its UARTs with it |
 | `route_wire(profile, interface)` | The `Wire` of that route, or the same `BackendError`; `Esp32Sim` makes its `Uart`s and its `Gnss` on it |
-| `runner_command(runner, rom, app, max_seconds, link, *, held=False, psram_mb=None, sd_card=None)` | The runner's argument list; with `psram_mb`, `--psram-mb` of that size; with an `SdCard` holding a card, the runner's card on its pins |
+| `runner_command(runner, rom, app, max_seconds, link, *, held=False, psram_mb=None, sd_card=None, extra_flash=(), wifi=None)` | The runner's argument list; with `psram_mb`, `--psram-mb` of that size; with an `SdCard` holding a card, the runner's card on its pins; with a `Wifi` holding an access point, `--wifi` and `--wifi-nearby` |
+| `Esp32Sim.wifi` | The chip's `Wifi`, on the link from construction |
 | `RunnerPopen(msg_queue, cmd, meta)` | `DuplicateStdoutPopen` that closes its log when the start fails |
 | `refuse(reason)` | Raises `SourceError(reason)`: `Esp32Sim`'s `skip` outside pytest |
 | `ended_while_waiting(error)` | Whether `error`'s chain holds a `RunEnded` |
@@ -408,7 +422,9 @@ proving serial-only validation does not reach the simulator.
   `test_runner_command_puts_a_card_in_the_slot_once_the_test_inserts_one`: no card flags for an
   empty slot, and `--sd-spi`, `--sd-rw` with the resolved path once a card is in.
   `test_runner_command_gives_the_chip_the_profile_s_psram`: `--psram-mb 4` for `psram_mb=4`, and
-  no `--psram-mb` without it.
+  no `--psram-mb` without it. `test_runner_command_puts_the_tests_access_point_on_the_air`: no
+  `--wifi` without an access point, then `--wifi` and `--wifi-nearby` as `Wifi.runner_args()`
+  gives them.
 - `test_load_app_refuses_what_the_runner_cannot_run`: the four `load_app` messages.
 - `test_runner_and_rom_paths_name_what_is_missing`: both messages, a runner that is not
   executable, and the environment variables taking effect.
@@ -497,8 +513,10 @@ PPP and TLS wire bytes. The route advertises `lossless=True`; its receive FIFO o
 through `BoardLink` immediately.
 
 
-`Esp32Sim` implements the public `Board` base. Its `lines` and `sd_card` properties delegate to
-`_get_lines()` and `_get_sd_card()`; they replace the former callable backend accessors. The
+`Esp32Sim` implements the public `Board` base. Its `lines`, `sd_card` and `wifi` properties
+delegate to `_get_lines()`, `_get_sd_card()` and `_get_wifi()`; the first two replace the former
+callable backend accessors. `set_up()` lists `the access point of wifi` once the test has given
+one, so that a test that gives one and never powers on fails teardown, as for a source. The
 runner command, setup guard and reports read the slot's `image_path`. `close()` stops and joins
 the runner before closing the SD slot in a `finally` block, so owned images are removed on both
 successful and failed teardown. An uninserted built image is also cleaned; merely building does

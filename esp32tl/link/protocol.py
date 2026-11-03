@@ -19,6 +19,10 @@ VERSION = 1
 # The longest line either side accepts, its newline not counted (§2).
 MAX_LINE = 1 << 20
 
+# An Ethernet frame without FCS, as esp32sim's relay takes and gives it (5.15).
+ETH_MIN = 14
+ETH_MAX = 1518
+
 Sender = Literal["runner", "harness"]
 
 
@@ -98,6 +102,16 @@ class Reset:
 
 
 @dataclass(frozen=True)
+class EthTx:
+    """An Ethernet frame the Wi-Fi station sent, with `--wifi` (5.15)."""
+
+    TYPE: ClassVar[str] = "eth_tx"
+    seq: int
+    t: int
+    data: bytes
+
+
+@dataclass(frozen=True)
 class Sync:
     """The end of the runner's turn at the block point `t` (5.6)."""
 
@@ -130,6 +144,17 @@ class Warn:
 
 
 @dataclass(frozen=True)
+class WifiStats:
+    """`stats.wifi`, with `--wifi` (5.9)."""
+
+    eth_tx: int
+    eth_tx_dropped: int
+    eth_rx: int
+    eth_rx_dropped: int
+    rx_dropped: int
+
+
+@dataclass(frozen=True)
 class UartStats:
     """One port's entry in `stats.uart`."""
 
@@ -156,6 +181,7 @@ class Stats:
     rx_bytes_not_paced: int
     stop: str | None = None
     detail: str | None = None
+    wifi: WifiStats | None = None
 
 
 @dataclass(frozen=True)
@@ -198,6 +224,24 @@ class Adc:
 
 
 @dataclass(frozen=True)
+class EthRx:
+    """From `t` the access point puts this Ethernet frame on the air for the station (5.15)."""
+
+    TYPE: ClassVar[str] = "eth_rx"
+    t: int
+    data: bytes
+
+
+@dataclass(frozen=True)
+class WifiAp:
+    """From `t` the access point is on the air, or off it (5.16)."""
+
+    TYPE: ClassVar[str] = "wifi_ap"
+    t: int
+    on: bool
+
+
+@dataclass(frozen=True)
 class Wait:
     """The end of the peer's turn (5.13); `None` is no bound."""
 
@@ -214,9 +258,9 @@ class Stop:
     TYPE: ClassVar[str] = "stop"
 
 
-Event = UartTx | UartCfg | GpioOut | Reset
+Event = UartTx | UartCfg | GpioOut | Reset | EthTx
 RunnerMessage = RunnerHello | Event | Sync | Console | Warn | Stats
-Input = UartRx | GpioIn | Release | Adc
+Input = UartRx | GpioIn | Release | Adc | EthRx | WifiAp
 HarnessMessage = HarnessHello | Input | Wait | Stop
 Message = RunnerMessage | HarnessMessage
 
@@ -224,13 +268,16 @@ Message = RunnerMessage | HarnessMessage
 JSON_NAMES = {"nbytes": "bytes"}
 
 
-def as_json(message: Message | UartStats) -> dict[str, Any]:
+def as_json(message: Message | UartStats | WifiStats) -> dict[str, Any]:
     """The message as the JSON object that goes on the socket."""
     obj: dict[str, Any] = {}
-    if not isinstance(message, UartStats):
+    if not isinstance(message, UartStats | WifiStats):
         obj["type"] = message.TYPE
     for field in fields(message):
-        obj[JSON_NAMES.get(field.name, field.name)] = _to_json(getattr(message, field.name))
+        value = getattr(message, field.name)
+        # `stats.wifi` is there with `--wifi` only
+        if not (isinstance(message, Stats) and field.name == "wifi" and value is None):
+            obj[JSON_NAMES.get(field.name, field.name)] = _to_json(value)
     return obj
 
 
@@ -239,7 +286,7 @@ def _to_json(value: Any) -> Any:
         return base64.b64encode(value).decode("ascii")
     if isinstance(value, tuple):
         return [_to_json(item) for item in value]
-    if isinstance(value, UartStats):
+    if isinstance(value, UartStats | WifiStats):
         return as_json(value)
     return value
 
@@ -359,6 +406,21 @@ class Fields:
         except binascii.Error as error:
             raise ProtocolError(f"{name} is not base64 ({error})") from None
 
+    def boolean(self, name: str) -> bool:
+        value = self._get(name)
+        if not isinstance(value, bool):
+            raise ProtocolError(f"{name} is not true or false: {value!r}")
+        return value
+
+    def frame(self, name: str) -> bytes:
+        data = self.data(name)
+        if not ETH_MIN <= len(data) <= ETH_MAX:
+            raise ProtocolError(
+                f"{name} is an Ethernet frame of {len(data)} bytes; one without FCS has"
+                f" {ETH_MIN} to {ETH_MAX}"
+            )
+        return data
+
     def number(self, name: str) -> float:
         value = self._get(name)
         if isinstance(value, bool) or not isinstance(value, int | float):
@@ -405,6 +467,21 @@ def _uart_stats(value: Any) -> UartStats:
     )
 
 
+def _wifi_stats(value: Any) -> WifiStats | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ProtocolError(f"wifi holds {value!r}, not an object")
+    f = Fields(value)
+    return WifiStats(
+        f.integer("eth_tx"),
+        f.integer("eth_tx_dropped"),
+        f.integer("eth_rx"),
+        f.integer("eth_rx_dropped"),
+        f.integer("rx_dropped"),
+    )
+
+
 def _stats(f: Fields) -> Stats:
     return Stats(
         t=f.integer("t"),
@@ -418,6 +495,7 @@ def _stats(f: Fields) -> Stats:
         rx_bytes_not_paced=f.integer("rx_bytes_not_paced"),
         stop=f.opt_string("stop"),
         detail=f.opt_string("detail"),
+        wifi=_wifi_stats(f.obj.get("wifi")),
     )
 
 
@@ -448,6 +526,7 @@ DECODERS: dict[Sender, dict[str, Callable[[Fields], Message]]] = {
             f.pins("output"),
         ),
         "reset": lambda f: Reset(f.integer("seq", 1), f.integer("t"), f.integer("cause")),
+        "eth_tx": lambda f: EthTx(f.integer("seq", 1), f.integer("t"), f.frame("data")),
         "sync": lambda f: Sync(f.integer("t")),
         "console": lambda f: Console(f.integer("t"), f.data("data")),
         "warn": lambda f: Warn(
@@ -469,6 +548,8 @@ DECODERS: dict[Sender, dict[str, Callable[[Fields], Message]]] = {
         "gpio_in": lambda f: GpioIn(f.integer("t"), f.levels("levels")),
         "release": lambda f: Release(f.integer("t"), f.pins("pins")),
         "adc": lambda f: Adc(f.integer("t"), f.integer("pin"), f.number("volts")),
+        "eth_rx": lambda f: EthRx(f.integer("t"), f.frame("data")),
+        "wifi_ap": lambda f: WifiAp(f.integer("t"), f.boolean("on")),
         "wait": lambda f: Wait(
             f.integer("ack"), f.opt_integer("quiet_until"), f.opt_integer("latency")
         ),
