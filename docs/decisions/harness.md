@@ -2012,7 +2012,7 @@ Also rejected: falling back to another build, rebuilding, relocating artifacts o
 sources, because a test or CI job must run exactly the artifact it selected. Pytest's raw
 `--build-dir` remains refused; allowing two competing selectors would obscure that selection.
 
-## Network event APIs name history queries and next-event conditions explicitly
+## MQTT and TLS event APIs name history queries and next-event conditions explicitly
 
 Status: decided (#108)
 
@@ -2030,6 +2030,10 @@ TLS completion means a completion event after construction, including an already
 handshake. Tests must arm conditions before the action that can produce their event. Immediate
 history queries find a fast publication even after waiting for its connection has returned.
 Application payload schemas stay in the consumer's adapters.
+
+**Postponed:** the same names and condition objects for HTTP and DHCP. `HttpServer.requested()`
+and `Dhcp.leased()` stay future-only conditions with no `next_*` or `find_*` counterpart, no
+boolean-coercion guard and a timeout that names the local function, until #116.
 
 **Rejected:** changing existing MQTT defaults to include history, which could silently satisfy
 reconnect waits with stale events; making every condition future-only, which loses useful
