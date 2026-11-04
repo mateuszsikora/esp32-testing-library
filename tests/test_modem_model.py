@@ -1145,6 +1145,29 @@ def test_a_second_hang_is_refused_and_keeps_the_first_s_choice(second: bool) -> 
     assert model.hung
 
 
+def test_the_test_s_power_calls_end_a_hang_and_restore_power_does_not() -> None:
+    model = lilygo()
+    model.hang(pwrkey=False)
+    model.restore_power()
+    assert model.hung
+    pulse(model.driven, seconds(1), ms(3000))
+    assert model.hung and model.powered
+    # power_on restarts it: it answers, and PWRKEY works again
+    model.power_on()
+    assert not model.hung and model.powered
+    assert reply(model, "AT") == b"\r\nOK\r\n"
+    pulse(model.driven, seconds(5), ms(3000))
+    assert not model.powered
+    # power_off ends it too: the next start has PWRKEY, and is not hung
+    model.power_on()
+    model.hang(pwrkey=False)
+    model.power_off()
+    assert not model.hung and not model.powered
+    pulse(model.driven, seconds(10), ms(100))
+    assert model.powered and not model.hung
+    assert reply(model, "AT") == b"\r\nOK\r\n"
+
+
 def test_a_route_and_a_bare_model_start_from_the_same_world(tmp_path: Path) -> None:
     modem, _, _ = route(tmp_path, [0])
     modem.signal(dbm=-73)

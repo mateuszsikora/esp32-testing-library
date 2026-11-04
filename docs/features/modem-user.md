@@ -170,8 +170,8 @@ modem.hang: the modem is hung already` on a hung one, whose `pwrkey` choice stay
 and `TypeError` for a `pwrkey` that is not `True` or `False`.
 
 `hang(pwrkey=True)` leaves PWRKEY working: an off pulse switches the modem off, and the next on
-pulse starts it, no longer hung. `hang(pwrkey=False)` ignores PWRKEY until RESET or a loss of
-supply. Any restart ends the hang: a RESET pulse, an off pulse where PWRKEY works, `lose_power()`,
+pulse starts it, no longer hung. `hang(pwrkey=False)` ignores PWRKEY until a
+restart. Any restart ends the hang: a RESET pulse, an off pulse where PWRKEY works, `lose_power()`,
 `board.power_off()`, `modem.power_off()` and `modem.power_on()`.
 
 `modem.reset` is active high at the ESP32 pad, with a threshold of 2000 ms. SIMCom's
@@ -218,10 +218,12 @@ and none says when a real modem sends `NO CARRIER` unprompted: both are the test
 off by default. What the firmware sends after the call has ended, such as lwIP's Terminate-Ack, is
 noise on the command line, which the next newline clears. A command sent before that newline is part
 of the noise and lost whole: it gets no answer and is not in `commands`, on a hung modem or a healthy
-one, and the next `AT` gets its `OK`. `esp_modem` writes that newline when it leaves data mode, and
+one, and on a healthy one the next `AT` gets its `OK`. `esp_modem` writes that newline when it leaves
+data mode, unless `NO CARRIER`, `DISCONNECTED` or `OK` comes in the 2 s it waits for one, and
 `esp_modem_sync` alone does not. The [A76XX manual](https://eicut.com/wp-content/uploads/2025/10/A76XX_Series_AT_Command_Manual_V1.12.pdf),
-section 1.5.2, requires the `AT` prefix at the beginning of each command line and does not say what
-happens to bytes before it: losing the line is the model's assumption.
+section 1.5.2, requires the `AT` prefix at the beginning of each command line, says `<CR>` ends one,
+and does not say what happens to bytes before the prefix. Losing the line, and a lone newline clearing
+it, are the model's assumptions.
 
 It raises `SourceError: modem.drop_call: the modem is not in data mode` with no call to drop, as on
 a hung modem; `SourceError: modem.drop_call: terminate needs modem.network(): no PPP` when
