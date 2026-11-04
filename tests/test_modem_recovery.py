@@ -143,9 +143,17 @@ def test_redials_after_a_dropped_call(
     assert any(d == "out" and b"\xc0!}&" in data for d, data in after) is terminate
 
 
-@pytest.mark.parametrize("delay", [None, 0, 5, 13])
+@pytest.mark.parametrize(
+    ("delay", "newline"),
+    [(None, False), (0, True), (5, True), (13.9, True), (14.1, False), (15.5, False)],
+)
 def test_a_call_dropped_while_the_firmware_leaves_data_mode_restarts_nothing(
-    board: Esp32Sim, modem: Modem, console: Console, tmp_path: Path, delay: int | None
+    board: Esp32Sim,
+    modem: Modem,
+    console: Console,
+    tmp_path: Path,
+    delay: float | None,
+    newline: bool,
 ) -> None:
     network = modem.network()
     tap = modem.tap(tmp_path / "modem.jsonl")
@@ -162,7 +170,9 @@ def test_a_call_dropped_while_the_firmware_leaves_data_mode_restarts_nothing(
         modem.drop_call()
     board.wait_until(console.line("modem_recovery: command mode"), within=seconds(60))
     assert not modem.restarts and not console.lines("modem_recovery: hung")
-    sent = [data for t, d, data in tap.events if t >= leaving.ns and d == "out"]
-    # with a call to escape from, +++ gets its OK, and AT needs no newline before it
-    assert (b"\nAT\r" in sent) is (delay is not None)
-    assert b"AT\r" in sent
+    assert all(c.response for c in modem.commands)
+    sent = b"".join(data for t, d, data in tap.events if t >= leaving.ns and d == "out")
+    # +++ goes unanswered only if exit_data took NO CARRIER, until 14 s in: it searches each read
+    # for it, and here each is a byte. With no drop +++ gets its OK; later NO CARRIER answers it.
+    assert (b"\nAT\r" in sent) is newline
+    assert b"+++" in sent and b"AT\r" in sent

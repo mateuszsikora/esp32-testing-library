@@ -1865,8 +1865,10 @@ clears PPP bytes left on the line. A command stuck to those bytes, with no newli
 whole, with no answer and no entry in `commands`. The A76XX manual, section 1.5.2, requires the prefix
 at the beginning of each command line and does not say what happens to bytes before it, so this is
 the model's assumption, and no firmware here needs otherwise: `modem_recovery` leaves data mode
-through `esp_modem`, which after a dropped call gets no answer to `+++` and writes the newline, also
-when the call drops while it is leaving.
+through `esp_modem`, which writes the newline when `+++` gets no answer. A call dropped so late that
+`NO CARRIER` answers `+++` leaves no newline, and nothing on the line for `AT` to stick to
+([measured](../features/modem-user.md#a-dropped-data-call), with what esp32sim's byte-sized reads
+change).
 
 **Rejected:** a `NO CARRIER` from `lose_registration()` too, because no source says a modem sends one
 and existing tests rely on the silence; a Terminate-Request by default, because it would make every

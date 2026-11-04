@@ -706,6 +706,7 @@ that references to its number keep their meaning.
     `tests/test_modem_model.py::test_the_operator_format_chooses_what_cops_names`,
     `tests/test_modem_model.py::test_any_other_operator_format_is_an_error_and_changes_nothing`,
     `tests/test_modem_model.py::test_the_operator_format_goes_back_at_a_power_cycle_and_clock_and_operator_stay`,
+    `tests/test_modem_model.py::test_a_wrong_and_an_unset_clock_survive_a_power_cycle`,
     `tests/test_modem_fixture.py::test_the_firmware_reads_the_five_digit_code_and_the_network_s_time`
 - **175.** A hung modem answers nothing and passes no data, sends no `NO CARRIER` and keeps RI high;
     its AT commands stay in the history with an empty response, shown as `(no answer)`. With
@@ -719,6 +720,7 @@ that references to its number keep their meaning.
     `tests/test_modem_model.py::test_pwrkey_does_nothing_to_a_hung_modem_that_ignores_it`,
     `tests/test_modem_model.py::test_a_loss_of_supply_ends_the_hang_and_a_later_start_has_pwrkey`,
     `tests/test_modem_model.py::test_a_second_hang_is_refused_and_keeps_the_first_s_choice`,
+    `tests/test_modem_recovery.py::test_recovers_a_hung_modem`,
     `tests/test_modem_model.py::test_the_test_s_power_calls_end_a_hang_and_restore_power_does_not`
 - **176.** A RESET pulse at the profile's polarity, judged at release against its threshold, restarts
     a running modem in command mode and ends a hang; a shorter pulse, and any pulse on a modem that
@@ -727,6 +729,8 @@ that references to its number keep their meaning.
     `tests/test_modem_model.py::test_reset_restarts_a_hung_modem_in_command_mode`,
     `tests/test_modem_model.py::test_reset_is_judged_at_release_and_at_the_profile_s_threshold`,
     `tests/test_modem_model.py::test_reset_is_active_high_at_the_pad`,
+    `tests/test_modem_model.py::test_reset_takes_its_polarity_and_threshold_from_the_profile`,
+    `tests/test_modem_model.py::test_reset_of_a_modem_in_data_mode_ends_the_call_and_leaves_command_mode`,
     `tests/test_modem_model.py::test_reset_of_a_modem_that_is_off_does_nothing`,
     `tests/test_modem_model.py::test_power_enable_has_no_effect_on_the_modem`,
     `tests/test_modem_recovery.py::test_recovers_a_hung_modem`,
@@ -746,7 +750,9 @@ that references to its number keep their meaning.
 - **179.** At the pin, firmware on `esp_modem` learns of a call dropped with a Terminate-Request from
     `IP_EVENT_PPP_LOST_IP` 6 s later, and of one without it from its own timeout, and redials on
     both, with the modem registered and not restarted. A call dropped while it is leaving data mode
-    restarts nothing either: `+++` gets no answer, and `esp_modem` writes `\n` before its `AT`.
+    restarts nothing either, and every command is answered: until `exit_data` stops listening, 14 s
+    into leaving, `+++` gets no answer and `esp_modem` writes `\n` before its `AT`; later, `+++` takes
+    `NO CARRIER` as its answer and `AT` goes out alone.
     `tests/test_modem_recovery.py::test_redials_after_a_dropped_call`,
     `tests/test_modem_recovery.py::test_a_call_dropped_while_the_firmware_leaves_data_mode_restarts_nothing`
 - **180.** A command stuck to bytes left on the command line is lost whole, with no answer and no

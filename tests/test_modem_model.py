@@ -599,6 +599,7 @@ def test_cclk_offsets_the_time_and_gives_the_zone_in_quarters_of_an_hour(
         (minutes(-20), "-20"),
         (hours(24) + minutes(15), "1455"),
         (hours(-25), "-1500"),
+        (hours(-24) - minutes(15), "-1455"),
         (seconds(1), "0.016667"),
     ],
 )
@@ -794,8 +795,9 @@ def test_a_hung_modem_passes_no_data_and_sends_no_no_carrier(tmp_path: Path) -> 
     assert list(model.poll(now[0])) == [] and model.quiet_until() is None
     assert reply(model, "AT", now[0]) == b""
     assert modem.commands[-1].response == b""
-    # RI stays high
-    assert not [e for e in lines.events() if e.by == "model" and e.level == 0]
+    # RI stays high: it went out once, at its start
+    list(lines.inputs(now[0] + LATENCY_NS))
+    assert [e.level for e in lines.events() if e.name == "modem.ri"] == [1]
 
 
 def test_the_report_shows_a_command_with_no_answer(tmp_path: Path) -> None:
@@ -1143,6 +1145,44 @@ def test_a_second_hang_is_refused_and_keeps_the_first_s_choice(second: bool) -> 
     pulse(model.reset_driven, seconds(5), ms(2600))
     model.hang()
     assert model.hung
+
+
+def test_a_wrong_and_an_unset_clock_survive_a_power_cycle() -> None:
+    world = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
+    model = Modem(lambda: 0, world=lambda: world)
+    model.clock(wrong_by=hours(-1), zone=hours(2))
+    model.power_off()
+    model.power_on()
+    assert b'"26/01/01,13:00:00+08"' in reply(model, "AT+CCLK?")
+    model.clock_not_set(reads=datetime(2000, 1, 1, tzinfo=UTC))
+    model.power_off()
+    model.power_on()
+    assert b'"00/01/01,00:00:00"' in reply(model, "AT+CCLK?")
+
+
+def test_reset_takes_its_polarity_and_threshold_from_the_profile() -> None:
+    model = Modem(lambda: 0, reset=Line(5, active=0, pulse_ms=500))
+    # high is the idle level here, however long
+    model.reset_driven(seconds(1).ns, 1)
+    model.reset_driven(seconds(5).ns, 0)
+    model.reset_driven(seconds(5).ns + ms(499).ns, 1)
+    assert not model.restarts
+    model.reset_driven(seconds(6).ns, 0)
+    model.reset_driven(seconds(6).ns + ms(500).ns, 1)
+    assert model.restarts == (Restart(seconds(6) + ms(501), "reset"),)
+
+
+def test_reset_of_a_modem_in_data_mode_ends_the_call_and_leaves_command_mode(
+    tmp_path: Path,
+) -> None:
+    now = [seconds(1).ns]
+    modem, model, network = dialled(tmp_path, now)
+    assert modem.data_mode and network.active
+    pulse(model.reset_driven, seconds(2), ms(2600))
+    assert not modem.data_mode and not network.active
+    assert modem.powered and modem.registered
+    assert reply(model, "AT", seconds(5).ns) == b"\r\nOK\r\n"
+    assert reply(model, "ATD*99#", seconds(5).ns) == b"\r\nCONNECT\r\n"
 
 
 def test_the_test_s_power_calls_end_a_hang_and_restore_power_does_not() -> None:

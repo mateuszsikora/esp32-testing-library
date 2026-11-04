@@ -238,7 +238,7 @@ Git ignores what the builds leave behind: `.venv/`, `.cache/` (the ROM ELF), `ru
 `cryptography>=42` is a direct runtime dependency: `esp32tl.net.tls.CertificateAuthority`
 generates per-test certificates. TLS itself uses standard-library `ssl`/MemoryBIO; no external
 broker or network daemon is needed. `make firmware` and `make test` include `pppos_client`,
-`modem_recovery` and `http_request`; `make determinism` requires both images as well as `nmea_reader`. Its first build fetches the pinned
+`modem_recovery` and `http_request`; `make determinism` requires `pppos_client` and `http_request` as well as `nmea_reader`. `pppos_client`'s first build fetches the pinned
 esp-protocols source archive, verified by SHA-256, under `firmware/.esp-protocols-<commit>/`
 (or `$FIRMWARE_OUT`). The preparation script uses Python's tarfile `data` extraction filter; the pinned ESP-IDF
 container supplies a Python with that filter.

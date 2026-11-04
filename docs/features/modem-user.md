@@ -131,8 +131,8 @@ the world's time in zone `+00`.
 timezone, as of the call, plus the time since then, in `reads`' own timezone, with no zone in the
 answer. No document gives the clock's value before the network sets it, so `reads` has no default.
 The manuals ([A76XX V1.12](https://eicut.com/wp-content/uploads/2025/10/A76XX_Series_AT_Command_Manual_V1.12.pdf),
-sections 3.2.10 and 4.2.2; [SIM7500/SIM7600 V3.00](https://ws.dfrobot.com.cn/Ftbi-gQP6fuk5I1SigJuHrOtnrxq),
-sections 3.2.17, 4.2.2 and 4.2.17) say only that the factory time zone is invalid and that
+section 3.2.10; [SIM7500/SIM7600 V3.00](https://ws.dfrobot.com.cn/Ftbi-gQP6fuk5I1SigJuHrOtnrxq),
+section 3.2.17) say only that the factory time zone is invalid and that
 `+CCLK?` returns the zone when it is valid: leaving the zone out is an inference. Setting the
 clock with `AT+CCLK=` stays a fallback: it changes nothing.
 
@@ -151,6 +151,10 @@ A call that cannot hold raises and, as the first call, selects no model:
 - `modem.operator: name is '', not text for quotes` (`ValueError`), and the same for `short`, for
   anything but non-empty printable text without a `"`: a line ending in it would end the answer;
 - `modem.operator: act is True, not a whole number` (`ValueError`).
+
+A `wrong_by` or `reads` that takes the date beyond what `datetime` holds is not refused at the call:
+the `AT+CCLK?` that reaches it fails the run with `uart.modem.receive raised OverflowError: date value
+out of range`.
 
 ## A hung modem and RESET
 
@@ -181,7 +185,7 @@ LilyGO drives it [`MODEM_RESET_LEVEL HIGH`](https://github.com/Xinyuan-LilyGO/Li
 for [2600 ms](https://github.com/Xinyuan-LilyGO/LilyGO-T-A76XX/blob/63af963038e93c91baf39d89a3a736d6bc26ff13/examples/ATdebug/ATdebug.ino#L79-L85).
 The pulse is judged at its release, as PWRKEY's is, and restarts a running modem in command mode,
 with echo, query modes and the operator format at their power-on values. A shorter pulse does
-nothing, and RESET on a modem that is off does nothing. RI stays high through a restart.
+nothing, and RESET on a modem that is off does nothing. RI stays high through a RESET restart.
 
 `lines.board.power_enable` (GPIO 12) stays an observed line: driving it has no effect on the
 modem. A firmware's recovery can pulse it, and a test can check the pulses with `lines.events()`.
@@ -219,8 +223,7 @@ off by default. What the firmware sends after the call has ended, such as lwIP's
 noise on the command line, which the next newline clears. A command sent before that newline is part
 of the noise and lost whole: it gets no answer and is not in `commands`, on a hung modem or a healthy
 one, and on a healthy one the next `AT` gets its `OK`. `esp_modem` writes that newline when `+++` gets
-no answer as it leaves data mode, as it does after a dropped call, and `esp_modem_sync` alone does
-not. The [A76XX manual](https://eicut.com/wp-content/uploads/2025/10/A76XX_Series_AT_Command_Manual_V1.12.pdf),
+no answer as it leaves data mode, and `esp_modem_sync` alone does not. The [A76XX manual](https://eicut.com/wp-content/uploads/2025/10/A76XX_Series_AT_Command_Manual_V1.12.pdf),
 section 1.5.2, requires the `AT` prefix at the beginning of each command line, says `<CR>` ends one,
 and does not say what happens to bytes before the prefix. Losing the line, and a lone newline clearing
 it, are the model's assumptions.
@@ -237,13 +240,20 @@ and shown by `firmware/modem_recovery` on that pin:
 - In data mode `Netif::receive` hands every byte to `pppos_input`, where text without a valid frame
   raises no event. `esp_modem` looks for `NO CARRIER` only while the firmware itself leaves data
   mode (`exit_data`, `set_command_mode`). So `NO CARRIER` alone goes unnoticed: what it adds is that
-  registration stays and AT works again. The firmware learns from its own timeout, a TCP or MQTT
-  one, or from LCP echo, which is off by default.
+  registration stays and AT works again. The firmware learns from its own timeout, such as a TCP
+  or MQTT one, or from LCP echo, which is off by default.
 - A Terminate-Request is the prompt signal. lwIP answers Terminate-Ack, takes the link down and,
   after `FSM_DEFTIMEOUT` (6 s), ends with `PPPERR_CONNECT`, on which esp_netif posts
   `IP_EVENT_PPP_LOST_IP`.
 - `+++` with no answer in command mode is survivable: after a 5 s timeout `esp_modem` writes `\n` and
   `AT`, which also clears PPP bytes left in the command line. The parser needed no change for it.
+- Under esp32sim these bytes reach `esp_modem` one byte per read, and `exit_data` looks for `NO
+  CARRIER` within each read, so there it never finds it. A read on a real UART can hold the whole
+  text, and by the code `exit_data` would then skip `+++`; that has not been measured. As measured
+  with `modem_recovery`, whose `exit_data` stops listening 14 s into leaving data mode: a call
+  dropped before that leaves `+++` with no answer, so `\n` and `AT` follow 5 s later; one dropped
+  later has `NO CARRIER` answer `+++`, and `AT` goes out alone. Either way every command is answered
+  and nothing restarts the modem.
 
 ## PWRKEY and reporting
 

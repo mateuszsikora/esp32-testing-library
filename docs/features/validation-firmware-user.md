@@ -77,9 +77,10 @@ high for 2600 ms; 10 s later a 100 ms PWRKEY pulse, then `modem_recovery: recove
 dials again. A dial that gets no `CONNECT` is followed by the same `AT`, and so is one that gets no
 address within 30 s, once it has left data mode.
 
-On v5.3.6 a hung modem takes about 35 s from the last request to `modem_recovery: hung`:
-`esp_modem`'s `exit_data` waits for lwIP's Terminate-Requests to run out, 12 s here, then 2 s and
-three rounds of a 1 s pause, `+++`, 5 s and `\n` `AT`. After `modem.drop_call()` it takes about 21 s
+On v5.3.6 a hung modem takes about 35 s from `modem_recovery: no answer` to `modem_recovery: hung`:
+`esp_modem`'s `exit_data` waits for lwIP's Terminate-Requests to run out, 12 s here, then 2 s; three
+rounds of a 1 s pause, `+++`, 5 s and `\n` `AT`, which waits 0.5 s; then 1 s, and the firmware's own
+`AT`, which waits 0.5 s. After `modem.drop_call()` it takes about 21 s
 to `modem_recovery: no answer` and 41 s to the next dial, and after `modem.drop_call(terminate=True)`
 6 s to `modem_recovery: lost ip` and 14 s to the next dial. No part of this is the model's; it is
 the firmware's own timing.
