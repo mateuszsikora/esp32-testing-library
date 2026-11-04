@@ -1017,7 +1017,8 @@ that references to its number keep their meaning.
      that is longer: it sends the newest bytes that fit,
      counts the rest in `dropped`, and neither a tap nor the run's log holds what it dropped; at the
      line rate with turns that keep up, it drops nothing, and what the device sent before the run's
-     first turn is not counted.
+     first turn or after its last is not counted.
+     `tests/test_real_source.py::test_what_comes_after_the_last_turn_is_not_counted_as_dropped`,
      `tests/test_real_source.py::test_what_the_device_sent_before_the_first_turn_is_not_counted_as_dropped`,
      `tests/test_real_source.py::test_an_adapter_s_whole_usb_packets_at_the_line_rate_lose_nothing`,
      `tests/test_real_source.py::test_the_bound_is_50_ms_where_that_carries_more_than_a_burst`,
@@ -1026,7 +1027,8 @@ that references to its number keep their meaning.
      `tests/test_real_source.py::test_a_tap_records_the_source_s_stamps_and_not_what_it_dropped`,
      `tests/test_real_source.py::test_a_long_hold_drops_the_backlog_and_an_answer_reaches_the_guest_within_the_bound`
 - **157.** A `uart_tx` with no baud, or one further from the port's than 3 %, fails a run with a
-     `real` source, within the 3 % it does not.
+     `real` source, within the 3 % it does not. Its bytes are in the tap and the run's log, as the
+     firmware transmitted them, and not in the port's queue.
      `tests/test_real_source.py::test_a_baud_within_the_3_percent_passes`,
      `tests/test_real_source.py::test_a_baud_further_from_the_port_fails`,
      `tests/test_real_source.py::test_no_baud_fails`,
@@ -1041,6 +1043,9 @@ that references to its number keep their meaning.
      `tests/test_real_source.py::test_a_replay_given_after_a_real_source_takes_the_wall_clock_only`
 - **159.** On `serial`, `real(port)` skips the test at the call and opens no port.
      `tests/test_serial_backend.py::test_serial_capabilities_skip_at_the_call`
+- **161.** Closing a `real` source discards what the port's driver holds, and closes a port already
+     gone all the same.
+     `tests/test_real_source.py::test_closing_discards_what_the_driver_holds_even_on_a_port_that_is_gone`
 - **160.** Under `--realtime` the runner starts pacing, and its wall clock, at the first slice
      boundary at or after 2¹⁶ bus cycles at which the guest runs, after any turn there; it waits at
      each block point until the wall clock reaches it, and moves the clock to the boundary at which

@@ -1270,8 +1270,8 @@ gets ahead of the wire: esp32sim's UART reads as idle whatever has been written 
 leaves over as long as the line takes to carry it, later than its stamps. The port's rate is fixed
 for the run. A `uart_tx` whose `baud` is `null`, or further from the port's than the 3 %
 `matches_baud` allows, would give the device what a wire does not carry intact, which the port
-cannot reproduce: the run fails on it, as it does on a `frm_err` (5.8). The source writes 64 bytes
-at a time, and a port that has not taken them after 5 wall seconds fails the run as a failed port does.
+cannot reproduce: the run fails on it, as it does on a `frm_err` (5.8). A port that takes no byte for
+5 wall seconds fails the run as a failed port does.
 What it has not sent when the run ends, in the queue or in its driver, is not sent.
 
 The source's turns are the run's cost: a thousand per emulated second, each a round trip through

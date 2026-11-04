@@ -2293,21 +2293,24 @@ of the last, and would then lose a byte or more; and a longer bound at every rat
 a fast line further behind after a hold than it needs. What 128 bytes cost is an answer after a hold
 up to 133 ms late at 9600 baud, instead of 50.
 
-## The real source writes its port from a thread of its own, and limits only a port that makes no progress
+## The real source writes its port from a thread of its own, and limits only a port that takes nothing
 
 Status: decided (#28)
 
-`Real.receive` queues what the firmware transmits, and a thread writes the queue to the port in writes
-of 64 bytes, each with a limit of 5 wall seconds. A port that fails or stalls fails the run at its next
-turn. esp32sim's UART reads as idle, so a firmware can send up to the runner's 48 KiB `uart_tx` far faster
-than a line carries it; the run does not wait for the line.
+`Real.receive` queues what the firmware transmits, and a thread writes the queue into the port's
+non-blocking descriptor with `os.write`. A port that takes no byte for 5 wall seconds, or fails, fails the
+run at its next turn. esp32sim's UART reads as idle, so a firmware can send up to the runner's 48 KiB
+`uart_tx` far faster than a line carries it; the run does not wait for the line.
 
 **Rejected:** writing in the link's thread with a limit on progress, because every turn would then
 stand for as long as the port takes, the guest would fall behind wall time, and the reading thread would
-cut the device's bytes at the bound meanwhile. Also rejected: one write with pyserial's timeout,
-which covers the whole of the write, so that a burst of 8 KiB at 9600 baud fails a run whose device is
-reading. Also rejected: holding the firmware to the line's rate, which would take a model of the
-transmit FIFO that the emulator does not have, and which would be esp32sim's to give.
+cut the device's bytes at the bound meanwhile. Also rejected: pyserial's `write` with its timeout. The
+timeout covers the whole of a write, so that a burst of 8 KiB at 9600 baud fails a run whose device is
+reading; and writing small pieces does not save it, because `write` waits in `select` after each, and
+Linux says a tty is writable only once under 256 characters are left. A limit then has to outlast the
+whole buffer draining, about 19 KiB on a pty; a driver that holds 4 KiB takes about 4 s at 9600 baud and twice that at 4800. Also
+rejected: holding the firmware to the line's rate, which would take a model of the transmit FIFO that the
+emulator does not have, and which would be esp32sim's to give.
 
 ## The real source's port lock is the advisory one, not TIOCEXCL
 

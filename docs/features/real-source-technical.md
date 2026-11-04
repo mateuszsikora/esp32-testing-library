@@ -15,7 +15,7 @@ Code: `esp32tl/sources/real.py`, `Uart.real` in `esp32tl/interfaces/uart.py`, `E
    refuses a replay already given on another route. On `serial`, `_asked` skips here, so the port is
    not opened.
 2. `Real.__init__` opens the port with `serial.Serial(port, baud, timeout=READ_SECONDS,
-   write_timeout=WRITE_SECONDS, exclusive=True)`, where `exclusive` is pyserial's advisory `flock`, and
+   exclusive=True)`, where `exclusive` is pyserial's advisory `flock`, and
    starts two daemon threads, `_read_port` and
    `_write_port`.
    `Uart._give` makes it the route's source; if that loses to another source given at the same time,
@@ -46,14 +46,14 @@ Code: `esp32tl/sources/real.py`, `Uart.real` in `esp32tl/interfaces/uart.py`, `E
    `receive`. `Uart.transmitted` hands it to a source that is `RateBound`, a protocol as `Supplied`
    is, which `Real` is; `Real.transmitted` raises `SourceError` on a `None`
    baud or one further from the port's than 3 % of the port's, `UartRoute::matches_baud`'s test. Then
-   `Real.receive` queues the bytes, and returns. `_write_port` writes the queue in `WRITE_CHUNK`s, so
-   a turn never waits for the port: esp32sim's UART reads as idle (`esp-periph/src/uart.rs:2`), and the
+   `Real.receive` queues the bytes, and returns. `_write_port` writes the queue into the port's
+   non-blocking descriptor with `os.write`, so a turn never waits for the port: esp32sim's UART reads as idle (`esp-periph/src/uart.rs:2`), and the
    runner coalesces what the firmware sends in a burst into a `uart_tx` of up to 48 KiB. Any exception,
    `SerialTimeoutException` among them, goes into `_failed` through `_fail`, as in `_read_port`, and
    ends the thread.
 9. `Esp32Sim.close` calls `_release` in its `finally`, which closes the SD card and every `Real`,
    each whatever another raises, and reports what raised unless the end of the run has failed first.
-   `Real.close` sets `_closing`, wakes the writer with `None` and `cancel_write`, joins both threads,
+   `Real.close` sets `_closing`, wakes the writer with `None`, joins both threads,
    the reader within `READ_SECONDS`, discards what the driver holds, and closes the port; what is still
    queued is not written. The flush is for Linux, where closing a tty can wait for its buffer for up to
    a driver's `closing_wait`, 30 s by default for usb-serial; that comes from the kernel's documentation
@@ -86,8 +86,8 @@ off, which the runner counts as `unrouted_rx`.
 | `BACKLOG_NS` | 50 ms | How far behind the line may fall, unless `BURST_BYTES` takes longer on it. `Real.backlog_ns` is the larger of the two |
 | `BURST_BYTES` | 128 | Two packets of a full-speed USB adapter, which can hand over 64 bytes at once while the line still carries the last 64. A CH9102 at 9600 baud delivers 64 bytes every 67 ms |
 | `READ_SECONDS` | 0.05 | How long a read blocks before the thread looks at `_closing` |
-| `WRITE_SECONDS` | 5 | How long a write of `WRITE_CHUNK` may stall before pyserial raises, which fails the run at its next turn |
-| `WRITE_CHUNK` | 64 | The most bytes one write takes. pyserial's write timeout covers the whole of a write, and the limit is on a port that makes no progress. 64 bytes take under 5 s at any rate above 128 baud |
+| `WRITE_SECONDS` | 5 | How long the port may take no byte before the run fails at its next turn |
+| `WRITE_RETRY_SECONDS` | 0.005 | How often the writing thread tries a port that took nothing. It does not wait in `select`, as pyserial's `write` does after every write: Linux says a tty is writable only once its buffer has nearly drained, under 256 characters, so that wait lasts as long as the whole buffer takes on the line, about 19 KiB for a pty |
 
 ## Failure modes
 

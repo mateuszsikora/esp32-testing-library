@@ -221,7 +221,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The last stretch of the wait for wall time is a sleep, not a read with a timeout](harness.md#the-last-stretch-of-the-wait-for-wall-time-is-a-sleep-not-a-read-with-a-timeout) | `harness.md` | decided (#28) |
 | [A device that delivers faster than the route's line rate loses bytes to the bound](harness.md#a-device-that-delivers-faster-than-the-routes-line-rate-loses-bytes-to-the-bound) | `harness.md` | decided (#28) |
 | [The real source's bound is at least 128 bytes on the line, not 50 ms at any rate](harness.md#the-real-sources-bound-is-at-least-128-bytes-on-the-line-not-50-ms-at-any-rate) | `harness.md` | decided (#28) |
-| [The real source writes its port from a thread of its own, and limits only a port that makes no progress](harness.md#the-real-source-writes-its-port-from-a-thread-of-its-own-and-limits-only-a-port-that-makes-no-progress) | `harness.md` | decided (#28) |
+| [The real source writes its port from a thread of its own, and limits only a port that takes nothing](harness.md#the-real-source-writes-its-port-from-a-thread-of-its-own-and-limits-only-a-port-that-takes-nothing) | `harness.md` | decided (#28) |
 | [The real source's port lock is the advisory one, not TIOCEXCL](harness.md#the-real-sources-port-lock-is-the-advisory-one-not-tiocexcl) | `harness.md` | decided (#28) |
 
 ## The runner crate and esp32sim

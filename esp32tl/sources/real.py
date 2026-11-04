@@ -6,14 +6,16 @@ held, and another writes it, so that a burst from the firmware does not hold the
 the source hands over what the port gave since the last one, stamped with the turn's time, and it
 renews its turn at the next whole emulated millisecond. It keeps its line at most `backlog_ns`
 behind, the newest bytes, and counts the ones it drops in `dropped`; what the device sent before the
-run's first turn is no loss of the run's, and is not counted. What the firmware transmits goes to
-the port's queue as soon as the link hands it over.
+run's first turn or after its last is no loss of the run's, and is not counted. What the firmware
+transmits goes to the port's queue as soon as the link hands it over.
 """
 
 import contextlib
+import os
 import queue
 import termios
 import threading
+import time
 from collections.abc import Iterable
 
 import serial
@@ -36,14 +38,15 @@ BACKLOG_NS = 50 * MS
 BURST_BYTES = 128
 
 # How long, in wall seconds, a read of the port blocks before the thread looks at whether the source
-# has closed, and a write may stall before the run fails on it.
+# has closed, and how long the port may take no byte before the run fails on it.
 READ_SECONDS = 0.05
 WRITE_SECONDS = 5
 
-# The most bytes one write takes. pyserial's write timeout is for the whole of a write, and the
-# limit is on a port that makes no progress: this takes under WRITE_SECONDS at any rate above 128
-# baud.
-WRITE_CHUNK = 64
+# How often, in wall seconds, the writing thread tries a port that took nothing. It does not wait in
+# `select`, nor lets pyserial's write do so: Linux says a tty is writable only once its buffer is
+# nearly empty, so the wait would be for the whole buffer to drain, not for room in it, and a slow
+# line would look like a stalled one.
+WRITE_RETRY_SECONDS = 0.005
 
 
 class Real:
@@ -81,9 +84,7 @@ class Real:
         try:
             # A second reader would take bytes from this one. This locks out a second `Real` and any
             # program that takes the same advisory lock; no others, as a kernel lock cannot tell.
-            self._port = serial.Serial(
-                port, baud, timeout=READ_SECONDS, write_timeout=WRITE_SECONDS, exclusive=True
-            )
+            self._port = serial.Serial(port, baud, timeout=READ_SECONDS, exclusive=True)
         except (OSError, ValueError, termios.error) as error:
             raise SourceError(f"{name}: cannot open the serial port {port}: {error}") from error
         self._reader = threading.Thread(target=self._read_port, daemon=True)
@@ -111,14 +112,31 @@ class Real:
 
     def _write_port(self) -> None:
         while (data := self._to_write.get()) is not None:
-            for at in range(0, len(data), WRITE_CHUNK):
-                if self._closing.is_set():
-                    return
-                try:
-                    self._port.write(data[at : at + WRITE_CHUNK])
-                except Exception as error:
-                    self._fail(error)
-                    return
+            try:
+                self._write(data)
+            except Exception as error:
+                self._fail(error)
+                return
+
+    def _write(self, data: bytes) -> None:
+        """All of `data`, into the port's non-blocking descriptor, until the source closes. Every
+        byte the port takes is progress; WRITE_SECONDS without any fails the port."""
+        descriptor = self._port.fd
+        assert descriptor is not None, "the port is open until the threads have ended"
+        left = memoryview(data)
+        limit = time.monotonic() + WRITE_SECONDS
+        while left and not self._closing.is_set():
+            try:
+                taken = os.write(descriptor, left)
+            except BlockingIOError:
+                taken = 0
+            if taken:
+                left = left[taken:]
+                limit = time.monotonic() + WRITE_SECONDS
+            elif time.monotonic() >= limit:
+                raise serial.SerialTimeoutException("Write timeout")
+            else:
+                time.sleep(WRITE_RETRY_SECONDS)
 
     def _fail(self, error: Exception) -> None:
         """The port failed, in a thread of its own, or a thread cannot go on: the next turn fails
@@ -205,7 +223,6 @@ class Real:
         nothing."""
         self._closing.set()
         self._to_write.put(None)
-        self._port.cancel_write()
         self._writer.join()
         self._reader.join()
         # What the driver holds goes too: on Linux closing a tty can wait up to 30 s for it. A port

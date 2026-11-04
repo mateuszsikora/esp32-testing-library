@@ -319,7 +319,9 @@ def test_a_slow_port_that_makes_progress_does_not_fail(
     monkeypatch.setattr(real_source, "WRITE_SECONDS", 0.5)
     source = Real("uart.gnss", device.port, BAUD)
     try:
-        # Over twice the limit in all, and never long without progress.
+        # Over twice the limit in all, and never long without progress. Linux's pty holds some 19
+        # KiB and says it is writable only once they have nearly drained, about 1 s here, which is
+        # why the writing thread does not wait for that.
         data = bytes(32 << 10)
         source.receive(0, data)
         assert read_all(device, len(data), pause=0.05) == data
@@ -457,20 +459,20 @@ def test_a_failure_a_turn_has_raised_does_not_come_from_close_as_well(device: De
 def test_a_thread_that_cannot_go_on_is_a_failure_of_the_port(
     device: Device, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # As `select` raises for a descriptor past FD_SETSIZE: no OSError.
+    # An exception no one expects: no OSError.
     source = Real("uart.gnss", device.port, BAUD)
 
-    def refuse(data: bytes) -> int:
-        raise ValueError("filedescriptor out of range in select()")
+    def refuse(data: bytes) -> None:
+        raise ValueError("no such thing")
 
-    monkeypatch.setattr(source._port, "write", refuse)
+    monkeypatch.setattr(source, "_write", refuse)
     try:
         source.receive(0, b"AT")
         deadline = time.monotonic() + 5
         while source._failed is None:
             assert time.monotonic() < deadline
             time.sleep(0.001)
-        with pytest.raises(SourceError, match="out of range in select"):
+        with pytest.raises(SourceError, match="no such thing"):
             source.poll(0)
     finally:
         source.close()
