@@ -691,6 +691,22 @@ that references to its number keep their meaning.
     `tests/test_modem_model.py::test_only_sent_model_gpio_changes_appear_in_the_run_log`
 - **78.** A source selection that loses to another source must leave no GPIO ownership behind.
     `tests/test_modem_model.py::test_a_model_selection_that_loses_to_replay_does_not_claim_ri`
+- **173.** `AT+CCLK?` is the world's time at the command's instant plus the test's offset, with the
+    zone in quarters of an hour and `+00`, never `-00`, for none; an unset clock reads what the test
+    said, runs on from it and has no zone; a zone that is no whole quarter of an hour from -24 to
+    +24 hours is refused.
+    `tests/test_modem_model.py::test_cclk_is_the_world_s_clock_at_the_command_s_instant`,
+    `tests/test_modem_model.py::test_cclk_offsets_the_time_and_gives_the_zone_in_quarters_of_an_hour`,
+    `tests/test_modem_model.py::test_clock_refuses_a_zone_that_is_no_quarter_of_an_hour_or_out_of_range`,
+    `tests/test_modem_model.py::test_an_unset_clock_has_no_zone_and_runs_on_from_the_call`,
+    `tests/test_modem_fixture.py::test_the_firmware_reads_a_wrong_clock_and_then_the_network_s`,
+    `tests/test_modem_fixture.py::test_the_firmware_reads_an_unset_clock_with_no_zone_and_it_runs_on`
+- **174.** `AT+COPS=3,<0|1|2>` chooses what `AT+COPS?` names and any other format gets `ERROR`; the
+    format goes back to 0 at a power cycle, and the clock and the operator survive one.
+    `tests/test_modem_model.py::test_the_operator_format_chooses_what_cops_names`,
+    `tests/test_modem_model.py::test_any_other_operator_format_is_an_error_and_changes_nothing`,
+    `tests/test_modem_model.py::test_the_operator_format_goes_back_at_a_power_cycle_and_clock_and_operator_stay`,
+    `tests/test_modem_fixture.py::test_the_firmware_reads_the_five_digit_code_and_the_network_s_time`
 
 ## Flash contents
 

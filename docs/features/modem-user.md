@@ -48,6 +48,10 @@ board power-on instead starts it off, for firmware that boots it with PWRKEY.
 | `power_on()` | Supply and power on, resetting command mode and AT settings |
 | `lose_power()` | Remove supply and switch off; PWRKEY cannot start it |
 | `restore_power()` | Restore supply, leaving a powered-off modem off until PWRKEY or `power_on()` |
+| `clock(wrong_by=seconds(0), zone=seconds(0))` | `AT+CCLK?` tells the world's time, off by `wrong_by`, in `zone` ([below](#clock-and-operator)) |
+| `clock_not_set(reads=...)` | `AT+CCLK?` tells `reads`, running on from this call, with no zone; `reads` is required |
+| `clock_set_by_network()` | The same as `clock()`: the world's time, zone `+00` |
+| `operator(name="ESP32TL", numeric="26000", short=None, act=7)` | What `AT+COPS?` names; `short=None` is `name` |
 | `powered`, `registered`, `data_mode` | Current model state; reading does not select a model |
 | `commands` | Every complete AT command while powered, as `Command(at, text, response, fallback)`; `at` is a `Duration` |
 
@@ -79,12 +83,14 @@ produce no reply.
 | `AT+CSQ` | `+CSQ: <rssi>,99`, then `OK` |
 | `AT+CFUN=0`, `=1`, `=4` | Change functionality; 0 and 4 prevent registration, 1 permits it; other values get `ERROR` |
 | `AT+CFUN?` | `+CFUN: <value>`, then `OK` |
-| `AT+CGDCONT=...`, `AT+CTZU=...`, `AT+COPS=...` | `OK`; settings are accepted without further simulation |
-| `AT+COPS?` | `+COPS: 0,0,"ESP32TL",7` if registered, otherwise `+COPS: 0`, then `OK` |
+| `AT+CGDCONT=...`, `AT+CTZU=...`, `AT+COPS=...` other than the format below | `OK`; settings are accepted without further simulation |
+| `AT+COPS=3,0`, `=3,1`, `=3,2` | `OK`; the format of `AT+COPS?`: long name, short name, numeric code. `AT+COPS=3` with any other format gets `ERROR` |
+| `AT+COPS?` | `+COPS: 0,<format>,"<operator>",<act>` if registered, otherwise `+COPS: 0`, then `OK` |
+| `AT+CCLK?` | `+CCLK: "yy/MM/dd,hh:mm:ss±zz"`, then `OK` ([below](#clock-and-operator)) |
 | `AT+CGMM`, `AT+CGMR`, `AT+CGSN`, `AT+CIMI` | Fixed model identity, then `OK` |
 | `ATD*99#`, `ATD*99***1#`, `ATD*99##`, `ATDT*99#`, `AT+CGDATA=...` | `CONNECT` and data mode when registered; otherwise `NO CARRIER` |
 | `+++` in data mode | Return to command mode with `OK`; may be split across UART chunks |
-| Other `AT` commands | `OK`, marked `fallback=True` in history and `(fallback OK)` in the report |
+| Other `AT` commands, `AT+CCLK=...` among them | `OK`, marked `fallback=True` in history and `(fallback OK)` in the report |
 
 The dial recognizer accepts `ATD` or `ATDT`, followed by `*99`, an optional suffix of digits,
 asterisks and hashes, and a final `#`. `AT+CGDATA=` accepts any arguments without validating them.
@@ -99,6 +105,49 @@ PPP reaches the [simulated network](network-user.md). Its binary payload preserv
 pluses wait for the next byte. The model does not validate APNs or emulate a
 cellular network, SIM provisioning, boot delays or shutdown delays. An overlong command (more
 than 4096 bytes) is discarded through its next terminator.
+
+## Clock and operator
+
+```python
+from datetime import UTC, datetime
+from esp32tl.units import hours
+
+modem.clock(wrong_by=hours(-1), zone=hours(2))  # +CCLK: "26/01/01,13:00:05+08"
+modem.clock_not_set(reads=datetime(2000, 1, 1, tzinfo=UTC))  # +CCLK: "00/01/01,00:00:05"
+modem.clock_set_by_network()  # +CCLK: "26/01/01,12:00:05+00"
+modem.operator(name="Example Mobile", numeric="26001", short="EXM", act=7)
+```
+
+The examples read the clock 5 s after a `board.power_on()` at the default world time, 12:00:00
+UTC on 2026-01-01. `AT+CCLK?` tells the world's time, the one NTP tells behind `modem.network()`,
+at the instant of the command, plus `zone` and `wrong_by`, cut to the whole second. The zone is in
+quarters of an hour, `+08` for `hours(2)`, and `+00`, never `-00`, for none. The model starts with
+the world's time in zone `+00`.
+
+`clock_not_set` gives a clock the network has not set: `AT+CCLK?` tells `reads`, a `datetime` with a
+timezone, as of the call, plus the time since then, in `reads`' own timezone, with no zone in the
+answer. No document gives the clock's value before the network sets it, so `reads` has no default.
+The manuals ([A76XX V1.12](https://eicut.com/wp-content/uploads/2025/10/A76XX_Series_AT_Command_Manual_V1.12.pdf),
+sections 3.2.10 and 4.2.2; [SIM7500/SIM7600 V3.00](https://ws.dfrobot.com.cn/Ftbi-gQP6fuk5I1SigJuHrOtnrxq),
+sections 3.2.17, 4.2.2 and 4.2.17) say only that the factory time zone is invalid and that
+`+CCLK?` returns the zone when it is valid: leaving the zone out is an inference. Setting the
+clock with `AT+CCLK=` stays a fallback: it changes nothing.
+
+`AT+COPS=3,<format>` chooses what `AT+COPS?` names: 0 `name`, 1 `short`, 2 `numeric`. The default
+numeric code, `26000`, matches the model's IMSI, `260000000000000`. The format goes back to 0 at a
+power cycle, like echo; the clock and the operator survive one, like signal and coverage.
+
+A call that cannot hold raises and, as the first call, selects no model:
+
+- `modem.clock: zone is 20 minutes: a whole number of quarters of an hour from -24 to +24 hours`
+  (`ValueError`); the zone's range, -96 to 96 quarters, is the A76XX manual's;
+- `modem.clock: zone is 2, not a Duration` (`TypeError`), and the same for `wrong_by`;
+- `modem.clock_not_set: reads is datetime.datetime(2000, 1, 1, 0, 0), not a datetime with a
+  timezone` (`TypeError`);
+- `modem.operator: numeric is '2600', not 5 or 6 digits` (`ValueError`);
+- `modem.operator: name is '', not text for quotes` (`ValueError`), and the same for `short`, for
+  anything but non-empty text without a `"`;
+- `modem.operator: act is True, not a whole number` (`ValueError`).
 
 ## PWRKEY and reporting
 

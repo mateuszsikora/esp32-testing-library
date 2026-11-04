@@ -1663,6 +1663,21 @@ Noncommands, including command-mode `+++`, never get `OK`.
 peer can run firmware whose modem initialization includes unrelated settings; and relying on the
 rolling wire log for the command list, because earlier setup commands would disappear.
 
+## The modem's unset clock reads what the test says, with no zone
+
+Status: decided (#128)
+
+`modem.clock_not_set(reads=...)` has a required argument. No document gives the value `AT+CCLK?`
+returns before the network sets the clock, so any default would look like a fact about the modem.
+The manuals say only that the factory time zone is invalid and that `+CCLK?` returns the zone when
+it is valid: leaving the zone out is an inference, and the
+[guide](../features/modem-user.md#clock-and-operator) says so. The clock runs on from the value
+given. The default operator's numeric code is `26000`, which matches the model's IMSI,
+`260000000000000`. `AT+CCLK=` stays a fallback until a firmware needs it.
+
+**Rejected:** a default such as 2000-01-01, because no source for this modem
+gives it; `00101` as the default code, because it would not match the IMSI.
+
 ## The modem data peer and realistic escape timing wait for network integration
 
 Status: superseded (#30)

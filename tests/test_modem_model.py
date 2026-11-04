@@ -1,6 +1,7 @@
 """Deterministic AT dialogue, independent of the runner and of the simulated network."""
 
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -13,7 +14,7 @@ from esp32tl.link.boardlink import BoardLink, Wire
 from esp32tl.link.protocol import GpioIn, GpioOut, RunnerHello, Sync, UartCfg, UartTx, Wait
 from esp32tl.report import RunLog
 from esp32tl.sources.model.modem import LATENCY_NS, MAX_COMMAND, Modem
-from esp32tl.units import Duration, ms, seconds
+from esp32tl.units import Duration, hours, minutes, ms, seconds
 
 LILYGO = boards.profile("lilygo-t-a7670g-r2")
 
@@ -36,6 +37,7 @@ def reply(model: Modem, command: str, t: int = 0) -> bytes:
         ("AT+CFUN=1", b"\r\nOK\r\n"),
         ("AT+CTZU=1", b"\r\nOK\r\n"),
         ("AT+COPS=0", b"\r\nOK\r\n"),
+        ("AT+COPS=?", b"\r\nOK\r\n"),
         ("AT+COPS?", b'\r\n+COPS: 0,0,"ESP32TL",7\r\n\r\nOK\r\n'),
         ("ATD*99#", b"\r\nCONNECT\r\n"),
         ('AT+CGDATA="PPP",1', b"\r\nCONNECT\r\n"),
@@ -554,3 +556,193 @@ def test_a_modem_on_the_board_s_supply_waits_for_pwrkey_when_it_comes_back(
     lines.driven(seconds(1).ns, [(4, 1)], frozenset({4}))
     lines.driven(seconds(1).ns + ms(100).ns, [(4, 0)], frozenset({4}))
     assert modem.powered
+
+
+def test_cclk_is_the_world_s_clock_at_the_command_s_instant() -> None:
+    world = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
+    model = Modem(lambda: 0, world=lambda: world)
+    assert reply(model, "AT+CCLK?") == b'\r\n+CCLK: "26/01/01,12:00:00+00"\r\n\r\nOK\r\n'
+    assert not model.commands[-1].fallback
+    assert b'"26/01/01,12:00:05+00"' in reply(model, "AT+CCLK?", seconds(5.9).ns)
+    assert b'"26/01/01,12:01:05+00"' in reply(model, "AT+CCLK?", seconds(65).ns)
+
+
+@pytest.mark.parametrize(
+    ("wrong_by", "zone", "answer"),
+    [
+        (hours(-1), hours(2), b'"26/01/01,13:00:05+08"'),
+        (seconds(0), hours(-2), b'"26/01/01,10:00:05-08"'),
+        (seconds(0), minutes(15), b'"26/01/01,12:15:05+01"'),
+        (seconds(0), minutes(-15), b'"26/01/01,11:45:05-01"'),
+        (seconds(0), seconds(0), b'"26/01/01,12:00:05+00"'),
+        (seconds(0), hours(24), b'"26/01/02,12:00:05+96"'),
+        (seconds(0), hours(-24), b'"25/12/31,12:00:05-96"'),
+        (hours(24), seconds(0), b'"26/01/02,12:00:05+00"'),
+    ],
+)
+def test_cclk_offsets_the_time_and_gives_the_zone_in_quarters_of_an_hour(
+    wrong_by: Duration, zone: Duration, answer: bytes
+) -> None:
+    world = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
+    model = Modem(lambda: 0, world=lambda: world)
+    model.clock(wrong_by=wrong_by, zone=zone)
+    assert answer in reply(model, "AT+CCLK?", seconds(5).ns)
+
+
+@pytest.mark.parametrize(
+    ("zone", "shown"),
+    [
+        (minutes(20), "20"),
+        (minutes(-20), "-20"),
+        (hours(24) + minutes(15), "1455"),
+        (hours(-25), "-1500"),
+        (seconds(1), "0.016667"),
+    ],
+)
+def test_clock_refuses_a_zone_that_is_no_quarter_of_an_hour_or_out_of_range(
+    zone: Duration, shown: str
+) -> None:
+    with pytest.raises(ValueError) as refused:
+        Modem(lambda: 0).clock(zone=zone)
+    assert str(refused.value) == (
+        f"modem.clock: zone is {shown} minutes: a whole number of quarters of an hour"
+        " from -24 to +24 hours"
+    )
+
+
+@pytest.mark.parametrize("arguments", [{"zone": 2}, {"wrong_by": 3600.0}])
+def test_clock_takes_durations_only(arguments: dict[str, object]) -> None:
+    with pytest.raises(TypeError, match="not a Duration"):
+        Modem(lambda: 0).clock(**arguments)  # type: ignore[arg-type]
+
+
+def test_an_unset_clock_has_no_zone_and_runs_on_from_the_call() -> None:
+    now = [seconds(10).ns]
+    model = Modem(lambda: now[0], world=lambda: datetime(2026, 1, 1, tzinfo=UTC))
+    model.clock(wrong_by=hours(1), zone=hours(2))
+    model.clock_not_set(reads=datetime(2000, 1, 1, tzinfo=UTC))
+    assert reply(model, "AT+CCLK?", seconds(10).ns) == (
+        b'\r\n+CCLK: "00/01/01,00:00:00"\r\n\r\nOK\r\n'
+    )
+    assert b'"00/01/01,00:01:05"' in reply(model, "AT+CCLK?", seconds(75).ns)
+    model.clock_set_by_network()
+    assert b'"26/01/01,00:01:15+00"' in reply(model, "AT+CCLK?", seconds(75).ns)
+
+
+def test_an_unset_clock_needs_what_it_reads() -> None:
+    model = Modem(lambda: 0)
+    with pytest.raises(TypeError, match="reads"):
+        model.clock_not_set()  # type: ignore[call-arg]
+    naive = datetime(2000, 1, 1)
+    with pytest.raises(TypeError, match="not a datetime with a timezone"):
+        model.clock_not_set(reads=naive)
+    other = datetime(2000, 1, 1, 12, tzinfo=timezone(timedelta(hours=2)))
+    model.clock_not_set(reads=other)
+    assert b'"00/01/01,12:00:00"' in reply(model, "AT+CCLK?")
+
+
+def test_setting_the_clock_stays_a_fallback() -> None:
+    model = Modem(lambda: 0)
+    assert reply(model, 'AT+CCLK="26/01/01,12:00:00+00"') == b"\r\nOK\r\n"
+    assert model.commands[-1].fallback
+    assert b'"26/01/01,12:00:00+00"' in reply(model, "AT+CCLK?")
+
+
+@pytest.mark.parametrize(
+    ("command", "answer"),
+    [
+        ("AT+COPS=3,0", b'+COPS: 0,0,"Example Mobile",7'),
+        ("AT+COPS=3,1", b'+COPS: 0,1,"EXM",7'),
+        ("AT+COPS=3,2", b'+COPS: 0,2,"26001",7'),
+    ],
+)
+def test_the_operator_format_chooses_what_cops_names(command: str, answer: bytes) -> None:
+    model = Modem(lambda: 0)
+    model.operator(name="Example Mobile", numeric="26001", short="EXM", act=7)
+    assert reply(model, command) == b"\r\nOK\r\n"
+    assert not model.commands[-1].fallback
+    assert answer in reply(model, "AT+COPS?")
+
+
+def test_the_default_operator_s_code_matches_the_imsi_and_short_falls_back_to_the_name() -> None:
+    model = Modem(lambda: 0)
+    assert b'+COPS: 0,1,"ESP32TL",7' in reply(model, "AT+COPS=3,1") + reply(model, "AT+COPS?")
+    assert b'+COPS: 0,2,"26000",7' in reply(model, "AT+COPS=3,2") + reply(model, "AT+COPS?")
+    assert reply(model, "AT+CIMI").startswith(b"\r\n26000")
+
+
+@pytest.mark.parametrize("command", ["AT+COPS=3", "AT+COPS=3,3", "AT+COPS=3,", "AT+COPS=3,2,1"])
+def test_any_other_operator_format_is_an_error_and_changes_nothing(command: str) -> None:
+    model = Modem(lambda: 0)
+    reply(model, "AT+COPS=3,2")
+    assert reply(model, command) == b"\r\nERROR\r\n"
+    assert not model.commands[-1].fallback
+    assert b'+COPS: 0,2,"26000",7' in reply(model, "AT+COPS?")
+
+
+def test_the_operator_format_goes_back_at_a_power_cycle_and_clock_and_operator_stay() -> None:
+    world = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
+    model = Modem(lambda: 0, world=lambda: world)
+    model.operator(name="Example Mobile", numeric="260010", act=2)
+    model.clock(zone=hours(2))
+    reply(model, "AT+COPS=3,2")
+    model.power_off()
+    model.power_on()
+    assert b'+COPS: 0,0,"Example Mobile",2' in reply(model, "AT+COPS?")
+    assert b'+08"' in reply(model, "AT+CCLK?")
+    reply(model, "AT+COPS=3,2")
+    assert b'+COPS: 0,2,"260010",2' in reply(model, "AT+COPS?")
+
+
+def test_an_unregistered_modem_names_no_operator() -> None:
+    model = Modem(lambda: 0)
+    reply(model, "AT+COPS=3,2")
+    model.lose_registration()
+    assert reply(model, "AT+COPS?") == b"\r\n+COPS: 0\r\n\r\nOK\r\n"
+
+
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    [
+        ({"numeric": "2600"}, "modem.operator: numeric is '2600', not 5 or 6 digits"),
+        ({"numeric": "2600000"}, "modem.operator: numeric is '2600000', not 5 or 6 digits"),
+        ({"numeric": "2600a"}, "modem.operator: numeric is '2600a', not 5 or 6 digits"),
+        ({"numeric": 26000}, "modem.operator: numeric is 26000, not 5 or 6 digits"),
+        ({"name": ""}, "modem.operator: name is '', not text for quotes"),
+        ({"short": 'a"b'}, "modem.operator: short is 'a\"b', not text for quotes"),
+        ({"act": True}, "modem.operator: act is True, not a whole number"),
+        ({"act": -1}, "modem.operator: act is -1, not a whole number"),
+    ],
+)
+def test_operator_refuses_what_cops_could_not_say(
+    arguments: dict[str, object], message: str
+) -> None:
+    with pytest.raises(ValueError) as refused:
+        Modem(lambda: 0).operator(**arguments)  # type: ignore[arg-type]
+    assert str(refused.value) == message
+
+
+def test_the_clock_and_operator_are_steps_of_the_run(tmp_path: Path) -> None:
+    modem, _, log = route(tmp_path, [0])
+    modem.clock(zone=hours(2))
+    modem.clock_not_set(reads=datetime(2000, 1, 1, tzinfo=UTC))
+    modem.clock_set_by_network()
+    modem.operator(numeric="26001")
+    logged = "\n".join(log.lines())
+    for step in (
+        "clock(wrong_by=",
+        "clock_not_set(reads=",
+        "clock_set_by_network()",
+        "operator(name=",
+    ):
+        assert f"uart.modem.{step}" in logged
+    modem.model()
+
+
+def test_a_refused_clock_or_operator_leaves_the_route_without_a_source(tmp_path: Path) -> None:
+    modem, _, _ = route(tmp_path, [0])
+    with pytest.raises(ValueError):
+        modem.clock(zone=minutes(20))
+    with pytest.raises(ValueError):
+        modem.operator(numeric="2600")
+    assert modem.source is None

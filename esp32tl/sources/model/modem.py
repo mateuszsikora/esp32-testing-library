@@ -8,15 +8,21 @@ import re
 import threading
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 
 from esp32tl.boards import Line
 from esp32tl.interfaces.uart import Source
 from esp32tl.link.boardlink import Output
 from esp32tl.net import Internet
-from esp32tl.units import Duration, number
+from esp32tl.net.ntp import DEFAULT_UTC
+from esp32tl.units import Duration, minutes, number, shown
 
 LATENCY_NS = 1_000_000
 MAX_COMMAND = 4096
+QUARTER_NS = minutes(15).ns
+# The A76XX manual's range for +CCLK's zone, in quarters of an hour.
+MAX_ZONE = 96
+NO_OFFSET = Duration(0)
 ANSWERS = {
     "AT+CPIN?": "+CPIN: READY",
     "AT+CGMM": "ESP32TL-MODEM",
@@ -51,8 +57,10 @@ class Modem:
         pwrkey: Line | None = None,
         power: Callable[[int, bool], None] = lambda t, powered: None,
         data: Source | None = None,
+        world: Callable[[], datetime] = lambda: DEFAULT_UTC,
     ) -> None:
         self._now = now
+        self._world = world
         self._lock = threading.RLock()
         self._power = power
         self._key = pwrkey
@@ -67,6 +75,13 @@ class Modem:
         self._dbm = -73.0
         self._echo = False
         self._registration = dict.fromkeys(("CREG", "CGREG", "CEREG"), 0)
+        self._wrong_by = 0
+        self._zone = 0
+        # An unset clock: what it read, and when.
+        self._unset: tuple[datetime, int] | None = None
+        self._format = 0
+        self._operator = ("ESP32TL", "ESP32TL", "26000")
+        self._act = 7
         self.data_mode = False
         self.data = data
         self._line = bytearray()
@@ -101,6 +116,54 @@ class Modem:
         value = number(dbm, "modem.signal: dbm")
         with self._lock:
             self._dbm = value
+
+    def clock(self, *, wrong_by: Duration = NO_OFFSET, zone: Duration = NO_OFFSET) -> None:
+        """Set +CCLK to the world's time in `zone`, `wrong_by` off it."""
+        for what, value in (("wrong_by", wrong_by), ("zone", zone)):
+            if not isinstance(value, Duration):
+                raise TypeError(f"modem.clock: {what} is {value!r}, not a Duration")
+        quarters, rest = divmod(zone.ns, QUARTER_NS)
+        if rest or abs(quarters) > MAX_ZONE:
+            raise ValueError(
+                f"modem.clock: zone is {shown(zone.seconds / 60)} minutes: a whole number of"
+                " quarters of an hour from -24 to +24 hours"
+            )
+        with self._lock:
+            self._wrong_by, self._zone, self._unset = wrong_by.ns, quarters, None
+
+    def clock_not_set(self, *, reads: datetime) -> None:
+        """Make +CCLK read `reads` now, with no zone, and run on from there."""
+        if not isinstance(reads, datetime) or reads.utcoffset() is None:
+            raise TypeError(
+                f"modem.clock_not_set: reads is {reads!r}, not a datetime with a timezone"
+            )
+        with self._lock:
+            self._unset = (reads, self._now())
+
+    def clock_set_by_network(self) -> None:
+        """Back to the world's time, in zone +00."""
+        self.clock()
+
+    def operator(
+        self,
+        *,
+        name: str = "ESP32TL",
+        numeric: str = "26000",
+        short: str | None = None,
+        act: int = 7,
+    ) -> None:
+        """Set what +COPS names: formats 0, 1 and 2 give `name`, `short` (`name` unless given) and
+        `numeric`, then the access technology `act`."""
+        if not isinstance(numeric, str) or not re.fullmatch("[0-9]{5,6}", numeric):
+            raise ValueError(f"modem.operator: numeric is {numeric!r}, not 5 or 6 digits")
+        short = name if short is None else short
+        for what, value in (("name", name), ("short", short)):
+            if not isinstance(value, str) or not value or '"' in value:
+                raise ValueError(f"modem.operator: {what} is {value!r}, not text for quotes")
+        if isinstance(act, bool) or not isinstance(act, int) or act < 0:
+            raise ValueError(f"modem.operator: act is {act!r}, not a whole number")
+        with self._lock:
+            self._operator, self._act = (name, short, numeric), act
 
     def lose_registration(self) -> None:
         """Remove coverage and end data mode silently; queries report status 0."""
@@ -154,6 +217,7 @@ class Modem:
         self._end_data(t)
         self._echo = False
         self._registration = dict.fromkeys(self._registration, 0)
+        self._format = 0
         self._line.clear()
         self._pluses.clear()
         self._overflow = self._skip_lf = False
@@ -286,7 +350,17 @@ class Modem:
             else:
                 terminal = "ERROR"
         elif upper == "AT+COPS?":
-            answer = '+COPS: 0,0,"ESP32TL",7' if self.registered else "+COPS: 0"
+            name = self._operator[self._format]
+            answer = f'+COPS: 0,{self._format},"{name}",{self._act}'
+            answer = answer if self.registered else "+COPS: 0"
+        elif upper == "AT+COPS=3" or upper.startswith("AT+COPS=3,"):
+            value = upper.partition(",")[2]
+            if value in ("0", "1", "2"):
+                self._format = int(value)
+            else:
+                terminal = "ERROR"
+        elif upper == "AT+CCLK?":
+            answer = self._cclk(t)
         elif re.fullmatch(r"ATDT?\*99[0-9*#]*#", upper) or upper.startswith("AT+CGDATA="):
             self.data_mode = self.registered
             terminal = "CONNECT" if self.registered else "NO CARRIER"
@@ -301,6 +375,15 @@ class Modem:
         response += f"\r\n{terminal}\r\n".encode()
         self._commands.append(Command(Duration(t), command, response, fallback))
         return response
+
+    def _cclk(self, t: int) -> str:
+        if self._unset is not None:
+            reads, since = self._unset
+            stamp = reads + timedelta(microseconds=(t - since) // 1000)
+            return f'+CCLK: "{stamp:%y/%m/%d,%H:%M:%S}"'
+        offset = t + self._wrong_by + self._zone * QUARTER_NS
+        stamp = self._world() + timedelta(microseconds=offset // 1000)
+        return f'+CCLK: "{stamp:%y/%m/%d,%H:%M:%S}{self._zone:+03d}"'
 
     def poll(self, now: int) -> Iterable[Output]:
         """Poll the optional data peer while in data mode."""

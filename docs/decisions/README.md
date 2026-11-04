@@ -189,6 +189,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Serial validation accepts unencrypted classic ESP32 builds only](harness.md#serial-validation-accepts-unencrypted-classic-esp32-builds-only) | `harness.md` | decided (#25) |
 | [The modem drives RI through Lines and observes PWRKEY through it](harness.md#the-modem-drives-ri-through-lines-and-observes-pwrkey-through-it) | `harness.md` | decided (#29) |
 | [The modem begins powered and registered and keeps every AT command](harness.md#the-modem-begins-powered-and-registered-and-keeps-every-at-command) | `harness.md` | decided (#29) |
+| [The modem's unset clock reads what the test says, with no zone](harness.md#the-modems-unset-clock-reads-what-the-test-says-with-no-zone) | `harness.md` | decided (#128) |
 | [The modem data peer and realistic escape timing wait for network integration](harness.md#the-modem-data-peer-and-realistic-escape-timing-wait-for-network-integration) | `harness.md` | superseded (#30) |
 | [NVS generation treats every key and namespace literally](harness.md#nvs-generation-treats-every-key-and-namespace-literally) | `harness.md` | decided (#70) |
 | [Request answers wrap independently of the unprompted timeline](harness.md#request-answers-wrap-independently-of-the-unprompted-timeline) | `harness.md` | decided (#20) |

@@ -178,8 +178,8 @@ with `this suite runs in a Docker container` when `/.dockerenv` exists.
 
 ### Modem validation
 
-`tests/test_modem_model.py` runs the AT dialogue, timing, power and GPIO ownership without an
-emulator or network. `tests/test_modem_fixture.py` runs `firmware/modem_at` on
+`tests/test_modem_model.py` runs the AT dialogue, the clock and operator, timing, power and GPIO
+ownership without an emulator or network. `tests/test_modem_fixture.py` runs `firmware/modem_at` on
 `lilygo-t-a7670g-r2`, including two byte-for-byte identical UART taps, and the modem through `board.reset()` and a power cycle. Build it with
 `firmware/build.sh modem_at`; `make firmware` and `make test` include it. It uses only the runner,
 the ROM and its firmware image at test time; PPP and host network services are not involved.

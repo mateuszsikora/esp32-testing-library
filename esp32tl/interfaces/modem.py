@@ -12,8 +12,9 @@ from esp32tl.interfaces.uart import Uart
 from esp32tl.link.boardlink import Wire
 from esp32tl.net import Internet
 from esp32tl.report import RunLog, board_time
-from esp32tl.sources.model.modem import LATENCY_NS, Command
+from esp32tl.sources.model.modem import LATENCY_NS, NO_OFFSET, Command
 from esp32tl.sources.model.modem import Modem as ModemModel
+from esp32tl.units import Duration
 
 
 class Modem(Uart):
@@ -61,6 +62,38 @@ class Modem(Uart):
     def signal(self, *, dbm: float) -> None:
         """Set the measured signal strength in dBm for subsequent CSQ queries."""
         self._tell(lambda model: model.signal(dbm=dbm), f"signal(dbm={dbm!r})")
+
+    def clock(self, *, wrong_by: Duration = NO_OFFSET, zone: Duration = NO_OFFSET) -> None:
+        """Set +CCLK to the world's time in `zone`, `wrong_by` off it."""
+        self._tell(
+            lambda model: model.clock(wrong_by=wrong_by, zone=zone),
+            f"clock(wrong_by={wrong_by!r}, zone={zone!r})",
+        )
+
+    def clock_not_set(self, *, reads: datetime) -> None:
+        """Make +CCLK read `reads` now, with no zone, and run on from there."""
+        self._tell(
+            lambda model: model.clock_not_set(reads=reads), f"clock_not_set(reads={reads!r})"
+        )
+
+    def clock_set_by_network(self) -> None:
+        """Back to the world's time, in zone +00."""
+        self._tell(ModemModel.clock_set_by_network, "clock_set_by_network()")
+
+    def operator(
+        self,
+        *,
+        name: str = "ESP32TL",
+        numeric: str = "26000",
+        short: str | None = None,
+        act: int = 7,
+    ) -> None:
+        """Set what +COPS names: formats 0, 1 and 2 give `name`, `short` (`name` unless given) and
+        `numeric`, then the access technology `act`."""
+        self._tell(
+            lambda model: model.operator(name=name, numeric=numeric, short=short, act=act),
+            f"operator(name={name!r}, numeric={numeric!r}, short={short!r}, act={act!r})",
+        )
 
     def lose_registration(self) -> None:
         """Remove coverage and end data mode silently; queries report status 0."""
@@ -140,7 +173,7 @@ class Modem(Uart):
                 f"{self.name}: the modem model needs pwrkey pulse timing and ri in the profile"
             )
         # Apply and validate the first call without touching the lines on failure.
-        model = ModemModel(self._now, pwrkey=key)
+        model = ModemModel(self._now, pwrkey=key, world=self._world)
         call(model)
         self._give(
             model,

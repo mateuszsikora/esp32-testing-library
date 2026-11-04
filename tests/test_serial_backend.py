@@ -176,8 +176,10 @@ def test_serial_capabilities_skip_at_the_call(pytester: pytest.Pytester, local: 
     pytester.makepyfile(
         marker
         + dedent("""
+        from datetime import UTC, datetime
+
         import pytest
-        from esp32tl.units import Position
+        from esp32tl.units import Position, seconds
         def test_model(gnss):
             gnss.fix(at=Position(0, 0))
         def test_replay(gnss):
@@ -210,6 +212,18 @@ def test_serial_capabilities_skip_at_the_call(pytester: pytest.Pytester, local: 
         def test_broker(broker):
             pytest.fail("the simulated broker must skip before the test body")
         @pytest.mark.board_profile("lilygo-t-a7670g-r2")
+        def test_modem_clock(modem):
+            modem.clock(zone=seconds(0))
+        @pytest.mark.board_profile("lilygo-t-a7670g-r2")
+        def test_modem_clock_not_set(modem):
+            modem.clock_not_set(reads=datetime(2000, 1, 1, tzinfo=UTC))
+        @pytest.mark.board_profile("lilygo-t-a7670g-r2")
+        def test_modem_clock_set_by_network(modem):
+            modem.clock_set_by_network()
+        @pytest.mark.board_profile("lilygo-t-a7670g-r2")
+        def test_modem_operator(modem):
+            modem.operator(numeric="26001")
+        @pytest.mark.board_profile("lilygo-t-a7670g-r2")
         def test_gpio(lines):
             lines.drive("modem.ri", True)
         def test_wifi(wifi):
@@ -223,7 +237,7 @@ def test_serial_capabilities_skip_at_the_call(pytester: pytest.Pytester, local: 
     """)
     )
     result = run_serial(pytester, "-rs")
-    result.assert_outcomes(skipped=17)
+    result.assert_outcomes(skipped=21)
     result.stdout.fnmatch_lines(
         [
             "*serial: uart.gnss takes no model source on this backend, only real*",
@@ -236,6 +250,10 @@ def test_serial_capabilities_skip_at_the_call(pytester: pytest.Pytester, local: 
             "*serial: uart.modem takes no model source on this backend, only real*",
             "*serial: uart.modem takes no replay source on this backend, only real*",
             "*serial: uart.modem cannot be tapped on this backend*",
+            "*serial: uart.modem takes no model source on this backend, only real*",
+            "*serial: uart.modem takes no model source on this backend, only real*",
+            "*serial: uart.modem takes no model source on this backend, only real*",
+            "*serial: uart.modem takes no model source on this backend, only real*",
             "*serial: uart.modem takes no model source on this backend, only real*",
             "*serial: uart.modem takes no model source on this backend, only real*",
             "*serial: GPIO lines cannot be controlled or observed on this backend*",

@@ -72,6 +72,7 @@ void app_main(void) {
     static const char *dialogue[] = {
         "AT", "ATE0", "AT+CPIN?", "AT+CREG?", "AT+CGREG?", "AT+CEREG?", "AT+CSQ",
         "AT+CGDCONT=1,\"IP\",\"internet\"", "AT+CFUN=1", "AT+CTZU=1", "AT+COPS?",
+        "AT+COPS=3,2", "AT+COPS?", "AT+CCLK?",
         "AT+UNIMPLEMENTED", "ATD*99#", "+++", "AT+CGDATA=\"PPP\",1", "+++",
     };
     for (unsigned i = 0; i < sizeof(dialogue) / sizeof(dialogue[0]); ++i) command(dialogue[i]);
@@ -81,6 +82,7 @@ void app_main(void) {
         printf("modem_at: RI=%d\n", gpio_get_level(RI));
         command("AT+CSQ");
         command("AT+CEREG?");
+        command("AT+CCLK?");
         vTaskDelay(pdMS_TO_TICKS(250));
     }
 }

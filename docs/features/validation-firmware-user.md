@@ -49,10 +49,11 @@ profile's UART1 at 115200 baud on TX 26/RX 27, PWRKEY 4 and RI 33, fixed in
 If RI starts high, it sends a PWRKEY pulse with a nominal 3000 ms delay, prints
 `modem_at: powered off RI=0` and waits another 2 s before restarting the modem. It then sends a
 pulse with a nominal 100 ms delay and prints `modem_at: powered on RI=1`. An initial `+++` is
-followed by AT, echo, SIM, registration, signal, context, functionality, timezone, operator and
-fallback commands, then dial/escape using both `ATD*99#` and `AT+CGDATA="PPP",1`. Each answer
+followed by AT, echo, SIM, registration, signal, context, functionality, timezone and operator
+commands, `AT+COPS=3,2`, `AT+COPS?` and `AT+CCLK?`, a fallback command, then dial/escape using both
+`ATD*99#` and `AT+CGDATA="PPP",1`. Each answer
 is printed as `modem_at: <command> => <reply>`, or `TIMEOUT` after a read waits a second with
-no byte. It prints `modem_at: dialogue complete`, then queries CSQ and CEREG repeatedly,
+no byte. It prints `modem_at: dialogue complete`, then queries CSQ, CEREG and CCLK repeatedly,
 with 250 ms waits, and prints `modem_at: RI=<level>`. The tests change the modem on the test's
 clock and read those ordinary console messages. It does not use esp_modem or PPP.
 

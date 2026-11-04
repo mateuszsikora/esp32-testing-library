@@ -547,7 +547,7 @@ def test_a_real_source_puts_the_run_on_the_wall_clock(
     assert board.clock == recording.EMULATED
     gnss.real(device.port)
     assert board.clock == recording.WALL
-    assert gnss.clock == recording.WALL
+    assert gnss.recording_clock == recording.WALL
     assert gnss.source_kind == "real"
     assert board.set_up() == ["the real device of uart.gnss"]
     board.power_on()
@@ -566,7 +566,7 @@ def test_a_real_source_that_could_not_be_made_leaves_the_run_as_it_was(
         gnss.real(port)
     assert gnss.source is None
     assert board.clock == recording.EMULATED
-    assert gnss.clock == recording.EMULATED
+    assert gnss.recording_clock == recording.EMULATED
     # And the route is free, for a recording on the clock the run is still on.
     gnss.replay("../recordings/gnss-generated-1.jsonl")
     board.power_on()
