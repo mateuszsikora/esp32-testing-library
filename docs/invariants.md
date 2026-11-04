@@ -150,7 +150,8 @@ that references to its number keep their meaning.
     `tests/test_pytest_plugin.py::test_the_lines_fixture_needs_a_profile_with_lines_and_a_drive_needs_power_on`,
     `tests/test_pytest_plugin.py::test_the_board_s_clock_and_sources_go_in_order`,
     `tests/test_gnss_fixture.py::test_a_source_given_out_of_order_fails_the_test`; the same holds
-    for a card in the SD card slot.
+    for a card in the SD card slot at teardown, though the card may go in and out after power-on
+    (147).
     `tests/test_sdspi.py::test_the_slot_used_out_of_order_fails_the_test`
 - **46.** A source or a tap the backend's capability declaration does not give skips the test at the call
     that asks for it, reported at the test; one that no backend gives fails the test with
@@ -188,6 +189,31 @@ that references to its number keep their meaning.
     `tests/test_sdspi.py::test_the_example_writes_its_files_into_the_image`,
     `tests/test_sdspi.py::test_a_card_without_a_file_system_does_not_mount`,
     `tests/test_pytest_plugin.py::test_runner_command_puts_a_card_in_the_slot_once_the_test_inserts_one`
+- **147.** Once the run has started, with the supply on or off, `sd_card.remove()` and
+    `sd_card.insert(image)` change the card at
+    `board.now`: the runner applies the changes in the order the test made them, at the first
+    slice boundary at or after that instant, and acknowledges each, and `sd_card.changes` lists
+    them with the times it applied them; until then they are in `sd_card.not_reached`, and
+    `sd_card.held`, the card the run has, does not count them. Once the
+    card is out the firmware's file operations fail; what it had written before is in the image,
+    and nothing after. A card put in, another image or the same one again, is mounted afresh by a
+    firmware that mounts again, and a slot empty at power-on takes a card later.
+    `tests/test_sd_remount.py::test_writes_fail_once_the_card_is_out_and_go_on_on_the_card_put_in`,
+    `tests/test_sd_remount.py::test_a_slot_empty_at_power_on_takes_a_card_later`,
+    `tests/test_sd_remount.py::test_a_card_swapped_with_the_supply_off_is_the_one_the_next_boot_finds`,
+    `tests/test_sd_card_slot.py::test_with_the_board_on_each_change_goes_out_at_its_instant_and_is_acknowledged`,
+    `tests/test_sd_card_slot.py::test_the_card_the_run_has_counts_only_the_changes_the_runner_acknowledged`
+- **148.** The SD card slot holds one card at a time, and refuses a removal from an empty slot. Every
+    insertion, before power-on or after it, checks the image's size and access and that no route
+    replays from it or taps into it; a removal gives the image back. A change the runner refuses,
+    which `sd_card.refused` keeps, or acknowledges with another image than the test asked for, or
+    did not ask for, fails the link; only the slot sends `sd_card`, and a link has one slot.
+    `tests/test_sd_card_slot.py::test_one_card_at_a_time_and_none_to_take_out_of_an_empty_slot`,
+    `tests/test_sd_card_slot.py::test_every_insertion_checks_the_image_and_its_owner`,
+    `tests/test_sd_card_slot.py::test_a_refused_or_another_card_fails_the_link`,
+    `tests/test_sd_card_slot.py::test_an_acknowledgement_nobody_asked_for_fails_the_link`,
+    `tests/test_sd_card_slot.py::test_only_the_slot_changes_the_card_and_a_board_has_one_slot`,
+    `tests/test_sd_remount.py::test_a_card_the_runner_cannot_open_ends_the_run`
 - **67.** The runner gets the board profile's PSRAM as `--psram-mb`, in a test and in the `esp32tl`
     command: 0 on `esp32-devkitc`, 4 on `lilygo-t-a7670g-r2`.
     `tests/test_pytest_plugin.py::test_every_route_and_line_of_the_profile_is_on_the_link`,
@@ -248,6 +274,20 @@ that references to its number keep their meaning.
     `runner/src/session/tests.rs::after_a_reset_gpio_out_reports_the_pins_as_read_from_the_chip`,
     `runner/src/session/tests.rs::after_a_reset_gpio_out_changes_what_the_peer_last_saw_of_each_pad`,
     `runner/src/session/tests.rs::on_the_emulator_no_pad_is_driven_after_a_chip_reset`
+- **149.** The runner changes the card in the slot of `--sd-spi` only at a slice boundary, at or after
+    the `sd_card`'s `t`, in the order the peer sent them, and answers each with an `sd_card_ack`
+    carrying no `seq`; a card for a full slot, or one whose image it cannot open or is not a card's
+    size, is refused in the acknowledgement and leaves the slot as it was. An empty slot answers
+    every byte with 0xff. A card taken out keeps in its image exactly the blocks it accepted, and
+    the card put in next starts in SD mode, uninitialised. `sd_card` without `--sd-spi` is a
+    protocol error.
+    `runner/src/session/tests.rs::the_peer_takes_the_card_out_and_puts_cards_in_at_their_times`,
+    `runner/src/session/tests.rs::a_card_the_slot_cannot_take_is_refused_and_the_slot_stays_as_it_was`,
+    `runner/src/session/tests.rs::the_card_changes_with_the_supply_off_too`,
+    `runner/src/session/tests.rs::sd_card_without_a_slot_is_a_protocol_error`,
+    `runner/src/sd_card/tests.rs::an_empty_slot_answers_nothing_and_takes_one_card_at_a_time`,
+    `runner/src/sd_card/tests.rs::a_card_taken_out_mid_write_keeps_the_blocks_it_accepted_and_comes_back_unpowered`,
+    `runner/src/sd_card/tests.rs::a_power_cut_reaches_the_card_in_the_slot_and_nothing_else`
 - **42.** A harness `hello` whose `watch` holds a pin the classic chip does not have (24, 28 to 31, 40
     and above) is a protocol error at the handshake, before the guest runs.
     `runner/src/session/tests.rs::a_handshake_mismatch_is_a_protocol_error_with_stats`
@@ -678,12 +718,18 @@ that references to its number keep their meaning.
     `tests/test_board_api.py::test_modem_alias_does_not_select_a_source`,
     `tests/test_board_api.py::test_broker_alias_uses_the_same_modem_network`
 
-- **109.** Building an SD image does not insert it; each build has independent contents. Binary bytes
+- **109.** ~~Building an SD image does not insert it; each build has independent contents. Binary bytes
     and text line endings survive FAT preparation and reading. Board close removes all owned
     images and invalidates readers/builders, while external images survive. A saved builder
-    cannot build after power-on, and a failed build leaves no partial image.
+    cannot build after power-on, and a failed build leaves no partial image.~~ No longer holds
+    since #106, which lets a test build a card to put in while the firmware runs: see 146.
+- **146.** Building an SD image does not insert it; each build has independent contents, also one
+    made after power-on, for a card to put in while the firmware runs. Binary bytes and text line
+    endings survive FAT preparation and reading. Board close removes all owned images and
+    invalidates readers/builders, while external images survive, and a failed build leaves no
+    partial image.
     `tests/test_card_image.py`,
-    `tests/test_board_api.py::test_build_rechecks_power_and_backend_close_removes_images`
+    `tests/test_board_api.py::test_a_build_after_power_on_is_a_replacement_and_close_removes_images`
 
 
 - **110.** FAT paths never expand into multiple entries: readers and builders reject bracket patterns,

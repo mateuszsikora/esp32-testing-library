@@ -66,7 +66,7 @@ fn main() -> ExitCode {
     let card = match opts
         .sd_card
         .as_ref()
-        .map(|(image, wiring)| card(image, *wiring))
+        .map(|(image, wiring)| slot(image.as_deref(), *wiring))
     {
         Some(Ok(card)) => Some(card),
         Some(Err(message)) => return fail(&message),
@@ -191,40 +191,55 @@ fn end_cycle(opts: &cli::Opts) -> u64 {
     (opts.max_seconds * <esp32::Esp32 as Soc>::CPU_HZ as f64) as u64
 }
 
-/// The SD card of `--sd-rw` and `--sd-spi`, writing through to `image`.
-fn card(image: &Path, wiring: sd_card::Wiring) -> Result<sd_card::Shared, String> {
-    let name = image
-        .to_str()
-        .ok_or_else(|| format!("--sd-rw {}: not a UTF-8 path", image.display()))?;
-    let store = esp_periph::sdmmc::FileStore::write_through(name)
-        .map_err(|e| format!("--sd-rw {name}: {e}"))?;
-    let card = sd_card::SdCard::new(wiring, Box::new(store))
-        .map_err(|e| format!("--sd-rw {name}: {e}"))?;
-    eprintln!(
-        "esp32tl-runner: SD card on {wiring}: {name} ({} KiB, write-through)",
-        card.len() >> 10
-    );
-    Ok(std::rc::Rc::new(std::cell::RefCell::new(card)))
+/// The SD card slot of `--sd-spi`, with a card writing through to `image` in it when `--sd-rw`
+/// gives one.
+fn slot(image: Option<&Path>, wiring: sd_card::Wiring) -> Result<sd_card::Shared, String> {
+    let mut slot = sd_card::Slot::new(wiring);
+    match image {
+        Some(image) => {
+            let name = image
+                .to_str()
+                .ok_or_else(|| format!("--sd-rw {}: not a UTF-8 path", image.display()))?;
+            let len = slot
+                .insert_file(name)
+                .map_err(|e| format!("--sd-rw {name}: {e}"))?;
+            eprintln!(
+                "esp32tl-runner: SD card on {wiring}: {name} ({} KiB, write-through)",
+                len >> 10
+            );
+        }
+        None => eprintln!("esp32tl-runner: SD card slot on {wiring}: empty"),
+    }
+    Ok(std::rc::Rc::new(std::cell::RefCell::new(slot)))
 }
 
-/// What the run did with the card, before the line that ends the run.
+/// What the run did with the cards in the slot, before the line that ends the run.
 fn report_card(card: Option<&sd_card::Shared>) {
     let Some(card) = card else { return };
-    let s = card.borrow().stats;
+    let slot = card.borrow();
+    let s = slot.stats();
     let errors = if s.errors > 0 {
         format!(", {} image errors", s.errors)
     } else {
         String::new()
     };
+    let changes = if slot.inserted + slot.removed > 0 {
+        format!(
+            "; while it ran, cards put in: {}, taken out: {}",
+            slot.inserted, slot.removed
+        )
+    } else {
+        String::new()
+    };
     eprintln!(
-        "esp32tl-runner: SD card: {} commands, {} blocks read, {} blocks written{errors}",
+        "esp32tl-runner: SD card: {} commands, {} blocks read, {} blocks written{errors}{changes}",
         s.commands, s.blocks_read, s.blocks_written
     );
 }
 
 /// The machine with its ROM and flash loaded, at the reset vector, and the ROM's ELF, which a
 /// power-on reset loads again. With `shared`, the socket board is on its pins; with `card`, the
-/// SD card, on the socket board or on a board of its own.
+/// SD card slot, on the socket board or on a board of its own.
 fn setup(
     opts: &cli::Opts,
     shared: Option<socket_board::Shared>,

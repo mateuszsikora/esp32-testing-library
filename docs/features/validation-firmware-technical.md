@@ -71,8 +71,8 @@ the container, and once inside it, which builds. With `IDF_LOCAL=1` it runs once
      `$IDF_PATH/examples/protocols/http_request` at `$out/.http_request-$idf_version`
      ([`http_request`](#http_request)), `pppos_client` what `firmware/pppos_client/prepare.py`
      prints ([Pinned esp-protocols source](#pinned-esp-protocols-source)), `nmea_reader` is `$PWD/firmware/nmea_reader`,
-     `gpio_echo` `$PWD/firmware/gpio_echo`, `modem_at` `$PWD/firmware/modem_at`,
-     and `nvs_reader` `$PWD/firmware/nvs_reader`, the working directory being the repository's
+     `gpio_echo` `$PWD/firmware/gpio_echo`, `sd_remount` `$PWD/firmware/sd_remount`, `modem_at`
+     `$PWD/firmware/modem_at`, and `nvs_reader` `$PWD/firmware/nvs_reader`, the working directory being the repository's
      root: in
      the container `/project/firmware/nmea_reader`, in a local build the checkout's own path), the
      build directory `$out/IMAGE/build`. If
@@ -104,12 +104,12 @@ next build is still incremental; the marker, removed first, is what says it fini
 The Makefile's `firmware` target runs `FIRMWARE_OUT= firmware/build.sh`; the pattern rule
 `firmware/%/build/esp32tl-built` runs `FIRMWARE_OUT= firmware/build.sh $*`, and `test` depends on
 `$(FIRMWARE_IMAGES:%=firmware/%/build/esp32tl-built)` with `FIRMWARE_IMAGES := hello_world
-nmea_reader gpio_echo sdspi modem_at nvs_reader pppos_client http_request`. `determinism` depends on
+nmea_reader gpio_echo sdspi sd_remount modem_at nvs_reader pppos_client http_request`. `determinism` depends on
 the markers of `nmea_reader`, `pppos_client` and `http_request`. The rule has no prerequisites, so make rebuilds
 an image only when its marker is missing: an edit to `firmware/nmea_reader/` needs `make firmware`, or
 `firmware/build.sh nmea_reader`, before `make test` sees it.
 
-`nmea_reader`, `gpio_echo`, `modem_at` and `nvs_reader` are built from the read-only `/project`
+`nmea_reader`, `gpio_echo`, `sd_remount`, `modem_at` and `nvs_reader` are built from the read-only `/project`
 mount like any other project. They take no components from the component manager, and with `sdkconfig` and the
 build in the build directory ESP-IDF v5.3.6 writes nothing into their directories.
 
@@ -226,6 +226,46 @@ What it proves on esp32sim, measured on the runs of `tests/test_power.py`: `esp_
 both memory counts (2 on the second boot) and gives `reason=3 rom=12`; `board.reset()` and a power
 cycle give `reason=1 rom=1` with both counts back at 1, the NVS count and the card's lines going on,
 and `uptime_ms` under a second at the print after a reset, while `board.now` goes on.
+
+## `sd_remount`
+
+`firmware/sd_remount/main/main.c` depends on `esp_driver_spi`, `fatfs` and `sdmmc`, with the
+default `sdkconfig`. `app_main` initialises SPI2 (`SDSPI_HOST_DEFAULT()`'s slot) once, with
+`SDSPI_DEFAULT_DMA` and `max_transfer_sz` 4000, and never frees it. Then it loops:
+
+- With no card (`card` `NULL`), `esp_vfs_fat_sdspi_mount("/sdcard", ...)` with CS on GPIO 13,
+  `format_if_mount_failed` false, `max_files` 1 and a 16 KiB allocation unit. On success it prints
+  `sd_remount: mounted K`, K counting the mounts since boot; on failure it prints
+  `sd_remount: no card (ERROR)`, `esp_err_to_name` of the result, unless the last failure had the
+  same result, and sleeps 200 ms.
+- With a card, it opens `/sdcard/LOG.TXT` for appending, writes the line number `N` and `\n`, and
+  closes it. When all three succeed it prints `sd_remount: wrote N` and counts on; otherwise it
+  prints `sd_remount: write failed (ERROR)`, `strerror(errno)`, calls
+  `esp_vfs_fat_sdcard_unmount`, which removes the card's device from the bus, and keeps `N` for
+  the next card. Then it sleeps 100 ms.
+
+With the runner's slot empty, ESP-IDF's driver gets no R1 and returns `ESP_ERR_TIMEOUT`
+(`0x107`); FatFs makes that `FR_DISK_ERR`, which the VFS reports as `EIO`, `I/O error` in
+newlib's `strerror`.
+
+`tests/test_firmware_images.py::test_sd_remount_has_the_classic_esp32_flash_layout` checks its
+flash files and ELF, and `test_sd_remount_takes_the_devkit_sd_card_slot` that the pins in its
+source are the `esp32-devkitc` profile's slot. `tests/test_sd_remount.py` runs it in the real
+runner, through the `sd_card` fixture, and needs mtools (`requires_mtools`):
+`test_writes_fail_once_the_card_is_out_and_go_on_on_the_card_put_in` takes the card out after
+`wrote 3`, waits for `write failed (I/O error)` and checks that `LOG.TXT` on that image holds
+every line announced before and nothing after; puts in a second, 64 MiB image built after
+power-on, on which the lines go on from the one that failed; takes that out and puts the first
+back, on which `LOG.TXT` goes on after its old lines; checks that `sd_card.changes` holds the
+four, each within a millisecond after the test made it; and takes the card out once more without
+a wait, which the report and `board.properties()["sd_card"]` show as not reached, the run still
+holding the first card. `test_a_slot_empty_at_power_on_takes_a_card_later` powers on with an
+empty slot, waits for `no card`, and inserts one.
+`test_a_card_swapped_with_the_supply_off_is_the_one_the_next_boot_finds` swaps the card between
+`board.power_off()` and `board.power_on()`. `test_a_card_the_runner_cannot_open_ends_the_run`
+runs, through `pytester`, a test that inserts a card, deletes its image and waits: the wait raises
+`RunEnded` with `sd_card: the runner refused the card at T ns: PATH: No such file or directory
+(os error 2)`.
 
 ## `http_request`
 
@@ -362,7 +402,7 @@ top of each build directory, `config/sdkconfig.json`, and the `.bin` and `.elf` 
 |---|---|---|---|
 | `IDF_VERSION` | script constant | `v5.3.6` | the ESP-IDF tag of the container |
 | `CONTAINER` | script constant | `espressif/idf:$IDF_VERSION@sha256:cee52f0c4fdaf088992a7a739f5993154e95cf1d3ab61c24f5b40e6d56a3a070` | the image the build runs in, pinned by digest (a multi-arch index) |
-| `IMAGES` | script constant | `hello_world nmea_reader gpio_echo sdspi modem_at nvs_reader pppos_client http_request` | the images, in build order; `project_of` maps each to its project |
+| `IMAGES` | script constant | `hello_world nmea_reader gpio_echo sdspi sd_remount modem_at nvs_reader pppos_client http_request` | the images, in build order; `project_of` maps each to its project |
 | `FIRMWARE_OUT` | environment | `firmware/` | where `IMAGE/build/` goes; empty means the default; `/out` inside the container |
 | `IDF_LOCAL` | environment | unset | `1` builds with the ESP-IDF of the calling shell |
 | `ESP32TL_CONTAINER` | environment, set by the host side | unset | marks the container side and names the image it records |
@@ -379,7 +419,7 @@ regular expressions, so each has to stay on a line of its own. Changing either, 
 
 | Message | Cause |
 |---|---|
-| `unknown image 'NAME'; the images are: hello_world nmea_reader gpio_echo sdspi modem_at nvs_reader pppos_client http_request` | an argument not in `IMAGES`; nothing written |
+| `unknown image 'NAME'; the images are: hello_world nmea_reader gpio_echo sdspi sd_remount modem_at nvs_reader pppos_client http_request` | an argument not in `IMAGES`; nothing written |
 | `ESP32TL_CONTAINER is set outside a container; unset it` | `ESP32TL_CONTAINER` set and no `/.dockerenv`; nothing written |
 | `IDF_LOCAL=1 needs ESP-IDF in the environment: source $IDF_PATH/export.sh first` | `IDF_LOCAL=1` without `idf.py` on `PATH` or without `IDF_PATH`; nothing written |
 | `needs Docker, or IDF_LOCAL=1 to build with a local ESP-IDF` | no `docker` on `PATH`; nothing written |
@@ -413,8 +453,8 @@ write their arguments to `$FAKE_LOG`, with a `PATH` holding only them and `cat`,
   each message verbatim, exit 1, and no output directory created;
 - `test_build_starts_the_pinned_container`: the `docker run` arguments, exactly;
 - `test_local_build_runs_idf_py_and_records_how`: with no image named, every image in order,
-  `hello_world` and `sdspi` from the fake `IDF_PATH`, `nmea_reader`, `gpio_echo`, `modem_at` and
-  `nvs_reader` from `firmware/`, `pppos_client` from what a fake `python3` prints,
+  `hello_world` and `sdspi` from the fake `IDF_PATH`, `nmea_reader`, `gpio_echo`, `sd_remount`,
+  `modem_at` and `nvs_reader` from `firmware/`, `pppos_client` from what a fake `python3` prints,
   `persistence` from `firmware/`, and `http_request` from its copy, `.http_request-v9.9.9` in the output directory, which holds the
   fake example's `CMakeLists.txt`; the `idf.py` arguments of each, the records with `"container": null`, the markers,
   the "not for goldens" warning and the `built in` lines;

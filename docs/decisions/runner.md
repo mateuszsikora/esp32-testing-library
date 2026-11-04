@@ -358,6 +358,27 @@ interest are the firmware's file handling, not the card's timing.
 **Postponed:** busy time (esp32sim's card has `prg_ns` for it), CMD6 and high speed, CMD23, and
 locking and write protection: each when a firmware needs it.
 
+## The SD card slot changes its card between transactions, and a new card starts unpowered
+
+Status: decided (#106)
+
+`--sd-spi` is a slot (`runner/src/sd_card.rs`, `Slot`), empty unless `--sd-rw` puts a card in it,
+and the peer's `sd_card` empties and fills it at a slice boundary
+([protocol 5.19](../protocol.md#519-sd_card-and-sd_card_ack-ext-106)). A transaction is answered
+whole in `spi_transfer_pins`, so a change never falls inside one. Taking the card out drops it,
+with what it had not finished, and closes its image; every block it accepted is in the image
+already, since it writes through. A card put in is a new `SdCard`, in SD mode until CMD0, so the
+firmware must initialise it as after a power-on. The board on the pins is the runner's, so no
+esp32sim change is needed: there is no hook upstream lacks.
+
+**Rejected:** writing the block on its way, or the rest of a multiple block write, when the card
+comes out, because a firmware's handling of a pulled card is what the test is about; keeping the
+removed card's protocol state for the next one, because a real card loses it with its power;
+making `sd_card_ack` an event with a `seq`, because nothing answers it and, with a `latency` set,
+it would cost a turn; and ending the run with a protocol error for an image the runner cannot
+open, because that is not the peer breaking the protocol: the acknowledgement carries the error,
+and the harness fails the run with it.
+
 ## Under --realtime the runner waits at each block point until wall time reaches it
 
 Status: decided (#27)

@@ -1215,7 +1215,9 @@ backend.
 Status: decided (#32)
 
 A board profile has at most one `[sd_card]` slot, with its four SPI pins, and the interface is
-`sd_card`, with no role. `sd_card.insert(image)` before `board.power_on()` is a `model` source:
+`sd_card`, with no role. `sd_card.insert(image)` before `board.power_on()` is a `model` source
+(and, since #106, also while the firmware runs:
+[the card comes and goes at the board's current instant](#the-test-takes-the-sd-card-out-and-puts-one-in-at-the-boards-current-instant)):
 the runner's card model holding that file, which writes through, so the test reads what the
 firmware wrote with the same tools it prepared the image with, mtools, as the specification says.
 On `serial` the slot takes only `real`, the card in it. An empty slot is a board without a card.
@@ -1228,11 +1230,58 @@ names what is at the end of the wires, and the card is not any SPI device.
 
 ## Inserting and removing the SD card while the firmware runs is postponed
 
-Status: postponed (#32)
+Status: superseded (#106)
 
-The specification puts the card's insertion and removal on the scenario timeline. The card is in
-from power-on to the end of the run until the scenario exists, and a removal needs the slot's
-card-detect pin, which no profile has yet; `[sd_card]` takes no `cd` key so far.
+The specification puts the card's insertion and removal on the scenario timeline. The card was in
+from power-on to the end of the run, and a removal was taken to need the slot's card-detect pin,
+which no profile has. It does not: a firmware learns of a removal from its I/O errors, as on a
+board without the line. See
+[the test takes the SD card out and puts one in at the board's current instant](#the-test-takes-the-sd-card-out-and-puts-one-in-at-the-boards-current-instant).
+
+## The test takes the SD card out and puts one in at the board's current instant
+
+Status: decided (#106)
+
+`sd_card.remove()` and `sd_card.insert(image)` with the board on change the card at `board.now`,
+as `wifi.access_point_off()` switches the access point: the slot queues an `sd_card` input for
+the link's next turn, the runner applies it at the first slice boundary at or after that instant,
+between two SPI transactions, and acknowledges it with `sd_card_ack`, which the slot keeps in
+`changes` and fails the link on when the runner refused the card or names another image. Both
+calls return at once. While the test does not wait the firmware does not run, so the image does
+not change under the test's reads, and the runner closes a removed image before the firmware runs
+again: the test may change or delete it at once. Every insertion checks the image and its owners
+as before power-on; a removal gives the image back, since after power-on no route can claim it.
+A card built after power-on is allowed, for the card to put in.
+
+**Rejected:** `remove(at=...)` and other future-dated changes, because the test reaches an
+instant by waiting for it, as for every other interface; a `remove()` that blocks until the runner
+has acknowledged it, because that needs the clock to move, and a test that has not waited has not
+let the firmware run; finishing the write in progress on removal, because a test of what the
+firmware does with a pulled card must see what was on the card at that instant; and requiring a
+card-detect line, because the firmware sees the removal through its I/O errors anyway.
+
+## The backend always gives the runner the profile's SD card slot
+
+Status: decided (#106)
+
+On a profile with an `[sd_card]` slot the backend passes `--sd-spi` at power-on whether or not a
+card is in it, and `SdCard` is on the link, so that a test can put a card into a slot that was
+empty at power-on. An empty slot answers every byte with `0xff`, as no slot does, so the firmware
+of a test that never touches the slot sees nothing new; the runner's stderr gains its slot line
+and its `SD card:` count.
+
+**Rejected:** passing `--sd-spi` only when the test asked for `sd_card` before power-on, because a
+test that takes the fixture later could then not insert a card, and the difference would show only
+there.
+
+## The SD card slot has no card-detect line yet
+
+Status: postponed (#106)
+
+`[sd_card]` takes no `cd` key, and the slot drives no line when its card comes and goes: no
+profile of esp32tl's has a card-detect pin wired, and a firmware without one learns of a removal
+from its I/O errors. A `cd` key comes with a board that has the line and a firmware that reads
+it; the slot would then drive it through `Lines` at the same instant as the change.
 
 ## The SD card tests skip without mtools, and CI makes sure it is there
 

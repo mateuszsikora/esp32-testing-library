@@ -5,9 +5,9 @@
 //! route and the FIFO and report what is dropped. Nor does it need `next_deadline`: the run
 //! loop's slices stop for the block point (protocol 11.10). GPIO inputs do go through it: the run
 //! loop hands the peer's `gpio_in` and `release` to the board when they come due, and the chip
-//! takes them through `take_edges` and `released_inputs`. With `--sd-rw`, the SD card is on its
-//! pins as well: it answers the chip's SPI transactions in the board, and nothing of it goes on
-//! the socket.
+//! takes them through `take_edges` and `released_inputs`. With `--sd-spi`, the SD card slot is on
+//! its pins as well: the card in it answers the chip's SPI transactions in the board, and nothing
+//! of it goes on the socket but the peer's `sd_card` and the runner's `sd_card_ack`.
 use crate::sd_card;
 use esp_soc::board::{BoardEdge, BoardModel, SpiPins, VirtualCycle};
 use esp_soc::uart::UartRoute;
@@ -101,7 +101,7 @@ impl BoardModel for SocketBoard {
     }
     fn spi_transfer_pins(&mut self, _host: u8, pins: SpiPins, tx: &[u8], rx_len: usize) -> Vec<u8> {
         match &self.card {
-            Some(card) => card.borrow_mut().transfer(pins, tx, rx_len),
+            Some(slot) => slot.borrow_mut().transfer(pins, tx, rx_len),
             None => vec![0xff; rx_len],
         }
     }

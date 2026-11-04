@@ -27,7 +27,7 @@ That one command needs:
   and `tar` to download it.
 - Docker, for the first `make test`. The tests read the validation firmware, which `make test`
   builds when it is missing: it pulls the ESP-IDF image and builds `hello_world`, `nmea_reader`,
-  `gpio_echo`, `sdspi`, `modem_at`, `nvs_reader`, `pppos_client`, `http_request`, `persistence` and the projects in `examples/`, a few minutes. What the firmware build expects of Docker,
+  `gpio_echo`, `sdspi`, `sd_remount`, `modem_at`, `nvs_reader`, `pppos_client`, `http_request`, `persistence` and the projects in `examples/`, a few minutes. What the firmware build expects of Docker,
   and how to build without it, is in
   [validation-firmware-user.md](../features/validation-firmware-user.md).
 
@@ -48,7 +48,7 @@ After `make setup` and `make firmware examples`, `.venv/bin/pytest` runs the tes
 | `make test-runner` | The runner's Rust unit tests, `cargo test --locked`, in `RUNNER_PROFILE` like `build-runner`; `RUNNER_PROFILE=dev` skips the fat-LTO link while iterating |
 | `make firmware` | Builds every validation image in the pinned ESP-IDF container, into `firmware/<image>/build/` |
 | `make examples` | Builds every project discovered at `examples/*/CMakeLists.txt` in the pinned ESP-IDF container, into `examples/<name>/build/` |
-| `make test` | Runs `make setup` and `make test-runner`, builds the validation images that are missing (`FIRMWARE_IMAGES`: `hello_world`, `nmea_reader`, `gpio_echo`, `sdspi`, `modem_at`, `nvs_reader`, `pppos_client`, `http_request` and `persistence`), builds missing examples, then runs `.venv/bin/pytest` on both suites |
+| `make test` | Runs `make setup` and `make test-runner`, builds the validation images that are missing (`FIRMWARE_IMAGES`: `hello_world`, `nmea_reader`, `gpio_echo`, `sdspi`, `sd_remount`, `modem_at`, `nvs_reader`, `pppos_client`, `http_request` and `persistence`), builds missing examples, then runs `.venv/bin/pytest` on both suites |
 | `make determinism` | Runs `tests/test_determinism.py` twice through `scripts/check-determinism.py` and compares the two runs ([testing.md](testing.md#determinism)); builds the `nmea_reader`, `pppos_client` and `http_request` images when missing and `.venv` when it is missing or stale, but not the runner or the ROM ELF: run `make setup` first |
 | `make lint` | `ruff check`, `ruff format --check` and `mypy`; `cargo fmt --check` and `cargo clippy --locked --all-targets -- -D warnings` on the runner |
 | `make hooks` | Installs the pre-commit hooks ([Pre-commit hooks](#pre-commit-hooks)) |
@@ -203,7 +203,7 @@ its preflight, push and PR operations; the session's permissions must allow thos
 |---|---|
 | `esp32tl/` | The Python package and its pytest plugin |
 | `runner/` | `esp32tl-runner`, the Rust crate that runs esp32sim with the harness attached |
-| `firmware/` | `build.sh`, which builds the validation firmware, and `nmea_reader/`, `gpio_echo/`, `modem_at/`, `nvs_reader/` and `persistence/`, the images kept here; each image's build lands in `firmware/<image>/build/` |
+| `firmware/` | `build.sh`, which builds the validation firmware, and `nmea_reader/`, `gpio_echo/`, `sd_remount/`, `modem_at/`, `nvs_reader/` and `persistence/`, the images kept here; each image's build lands in `firmware/<image>/build/` |
 | `examples/` | Runnable ESP-IDF projects and their tests; see [examples](../features/examples-user.md) |
 | `recordings/` | Committed recordings for the tests: `gnss-generated-1.jsonl` and `gnss-generated-2.jsonl`, which `scripts/generate-gnss-recordings.py` writes ([validation-firmware-user.md](../features/validation-firmware-user.md#the-gnss-recordings)) |
 | `tests/` | The pytest suite ([testing.md](testing.md)) |

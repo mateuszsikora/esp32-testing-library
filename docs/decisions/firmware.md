@@ -285,6 +285,19 @@ and keeping a file open across fixes, which hides buffered rows from a test read
 The example uses the SD interface's existing boot-time insertion contract; hot-plug and retry
 behaviour remain outside its scope. It never formats an unmountable card.
 
+## A card that comes and goes is validated on a firmware of this repository's
+
+Status: decided (#106)
+
+`sd_remount` (`firmware/sd_remount`) appends a line to a file every 100 ms, closing it each time,
+unmounts the card on the first failure and mounts it again every 200 ms, on the `esp32-devkitc`
+profile's slot. `tests/test_sd_remount.py` shows on it what a removal does to a firmware and that
+a card put in is mounted again, the same image or another.
+
+**Rejected:** making `sd_data_logger` retry, because its latched error output is its own decision
+([above](#the-sd-logger-uses-each-rmcs-date-and-closes-every-appended-row)); and ESP-IDF's `sdspi`
+example, which mounts once and stops.
+
 ## The position tracker reuses the pinned modem component and reports without a fix
 
 Status: decided (#72)

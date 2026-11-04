@@ -73,7 +73,7 @@ fn boards_and_peer_timeout() {
 }
 
 #[test]
-fn an_sd_card_takes_its_image_and_its_pins_in_any_order() {
+fn an_sd_card_slot_takes_its_pins_in_any_order_and_a_card_from_power_on() {
     let opts = parse_str(&format!(
         "{MINIMAL} --sd-spi cs=13,miso=2,mosi=15,sclk=14 --sd-rw card.img"
     ))
@@ -84,7 +84,10 @@ fn an_sd_card_takes_its_image_and_its_pins_in_any_order() {
         miso: 2,
         cs: 13,
     };
-    assert_eq!(opts.sd_card, Some(("card.img".into(), wiring)));
+    assert_eq!(opts.sd_card, Some((Some("card.img".into()), wiring)));
+    // without --sd-rw the slot is empty at power-on
+    let opts = parse_str(&format!("{MINIMAL} --sd-spi sclk=14,mosi=15,miso=2,cs=13")).unwrap();
+    assert_eq!(opts.sd_card, Some((None, wiring)));
     // MISO may be an input-only pin
     let opts = parse_str(&format!(
         "{MINIMAL} --sd-rw card.img --sd-spi sclk=18,mosi=23,miso=39,cs=5"
@@ -99,10 +102,6 @@ fn sd_card_usage_errors() {
         (
             "--sd-rw card.img",
             "--sd-rw needs --sd-spi: the card's pins",
-        ),
-        (
-            "--sd-spi sclk=14,mosi=15,miso=2,cs=13",
-            "--sd-spi needs --sd-rw: the card's image",
         ),
         (
             "--sd-rw c --sd-spi sclk=14,mosi=15,miso=2",

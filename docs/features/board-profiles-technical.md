@@ -29,8 +29,9 @@ the user sees is in [board-profiles-user.md](board-profiles-user.md).
 3. **A source or a tap, in the test body.** `gnss.replay(path)` asks the backend, through the
    `Uart`'s `asked`, for `Request("uart.gnss", source="replay")`, the first call of the receiver
    model, as `gnss.fix(at=...)`, for `Request("uart.gnss", source="model")`, `gnss.tap(path)`
-   for `Request("uart.gnss", tap=True)`, and `sd_card.insert(image)`, through the `SdCard`'s, for
-   `Request("sd_card", source="model")`. `Esp32Sim._asked` runs `capabilities.check([request], ...)`
+   for `Request("uart.gnss", tap=True)`, and `sd_card.insert(image)` and `sd_card.remove()`,
+   through the `SdCard`'s, for `Request("sd_card", source="model")`, before or after power-on.
+   `Esp32Sim._asked`, and for the slot `Esp32Sim._declared`, runs `capabilities.check([request], ...)`
    (a `CapabilityError` becomes a `SourceError` with its message), then
    `capabilities.refusal(Esp32Sim.name, [request], ...)`, whose reason skips the test at the call
    ([esp32sim-backend-technical.md](esp32sim-backend-technical.md#data-flow)). It reads the
@@ -145,8 +146,8 @@ reset polarity, pulls and power sequencing before modeling those controls.
 The five new lines are bare integer entries. `Lines` watches and exposes them without attaching
 model callbacks, assigning default pulls, or generating PPS. The modem interface attaches its
 existing PWRKEY observer and RI driver only; GNSS models generate UART messages independently
-of these GPIOs. SD insertion still passes `--sd-spi sclk=14,mosi=15,miso=2,cs=13` and `--sd-rw`
-to the runner at power-on, with no dependency on GPIO12. No schema or protocol change is needed.
+of these GPIOs. The slot still passes `--sd-spi sclk=14,mosi=15,miso=2,cs=13` to the runner at
+power-on, and `--sd-rw` with a card in it, with no dependency on GPIO12. No schema or protocol change is needed.
 The physical 8 MB PSRAM remains represented by `psram_mb = 4`, the runner's supported maximum;
 `flash_mb = 4` and both UART routes remain as documented in the [user guide](board-profiles-user.md).
 

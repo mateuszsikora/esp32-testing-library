@@ -13,7 +13,8 @@ that #325 does not cover; they stay in the runner whatever happens upstream (pla
 
 Who implements what: the runner side in #11 (M1: UART, `reset`, `uart_cfg`, `warn`, `stats`) and #23
 (M3: GPIO and the future-input queue); the harness side in #12, and its GPIO lines in #24. #31
-(M7: Wi-Fi) adds `eth_tx`, `eth_rx`, `wifi_ap` and `stats.wifi` on both sides. `adc` waits for an
+(M7: Wi-Fi) adds `eth_tx`, `eth_rx`, `wifi_ap` and `stats.wifi` on both sides, and #106 `sd_card` and
+`sd_card_ack`, the SD card coming and going while the firmware runs. `adc` waits for an
 issue of its own, opened when an example needs an analog pin. Wall time under `--realtime`, for a
 real device at the far end of a route (section 12), comes with #28. #105 adds `power` and
 `chip_reset`, the board's supply and the chip's EN pin, on both sides.
@@ -136,6 +137,7 @@ seen exactly the events up to the block point, however the emulator schedules it
 | runner → harness | `console` | `t`, `data` | M1 |
 | runner → harness | `warn` *ext* | `t`, `kind`, `detail`, and per kind `port`, `pin`, `baud`, `bytes` | M1 |
 | runner → harness | `eth_tx` *ext* | `seq`, `t`, `data` | M7 |
+| runner → harness | `sd_card_ack` *ext* | `t`, `image`, `error` | #106 |
 | runner → harness | `stats` *ext* | `t`, `end`, `resets`, `turns`, `uart`, `unrouted_rx_bytes`, `inputs_on_output`, `inputs_not_applied`, `rx_bytes_not_paced`; `wifi` with `--wifi` (M7); under `--realtime` also `rt_resyncs` (M5) | M1 |
 | harness → runner | `uart_rx` | `t`, `pin`, `baud`, `data` | M1 |
 | harness → runner | `gpio_in` | `t`, `levels` | M3 |
@@ -145,6 +147,7 @@ seen exactly the events up to the block point, however the emulator schedules it
 | harness → runner | `wifi_ap` *ext* | `t`, `on` | M7 |
 | harness → runner | `power` *ext* | `t`, `on` | #105 |
 | harness → runner | `chip_reset` *ext* | `t` | #105 |
+| harness → runner | `sd_card` *ext* | `t`, `image` | #106 |
 | harness → runner | `wait` | `ack`, `quiet_until`, `latency` | M1 |
 | harness → runner | `stop` | none | M1 |
 
@@ -162,10 +165,15 @@ sees no difference: the runner sends no new message, and `reset` (5.5) keeps its
 built before them answers either with a protocol error, `unknown type "power"`, so a harness that
 needs them finds out at the first one; the harness and the runner come from one checkout.
 
+The SD card messages (`sd_card`, `sd_card_ack`, 5.19) pass only on a run started with `--sd-spi`, and
+the version stays 1 for the same reason: the runner sends `sd_card_ack` only in answer to the
+peer's `sd_card`, so a peer that never sends it never sees one; without `--sd-spi`, `sd_card` is a
+protocol error.
+
 **Events** are the runner messages that carry `seq`: `uart_tx`, `uart_cfg`, `gpio_out`, `reset`
 and `eth_tx`. They are what a peer may answer, so they set the block point (rule 1). `seq` is one
-counter over all five, starting at 1 and growing by 1. `sync`, `console`, `warn` and `stats` carry
-no `seq` and ask for nothing.
+counter over all five, starting at 1 and growing by 1. `sync`, `console`, `warn`, `sd_card_ack`
+and `stats` carry no `seq` and ask for nothing.
 
 ### 5.1 `hello`
 
@@ -609,7 +617,7 @@ port whose route touched a watched pin, and a `gpio_out` with empty `enabled` an
 in `changes`, every watched pin the peer last saw high, at `0`; both at the switch's `t`. Bytes
 that come due while the supply is off, those of a `uart_rx` still being paced included, are
 dropped as `unrouted_rx` (5.8). Levels the peer drives stay driven, and the chip has them when it
-comes back. The SD card of `--sd-rw` loses its power: it leaves SPI mode and forgets its
+comes back. A card in the slot of `--sd-spi` loses its power: it leaves SPI mode and forgets its
 initialisation, and a block it had not received whole is lost; the blocks it took are in the
 image already. With `--wifi`, the station leaves the air without a word, the access point forgets
 it at once, and `eth_rx` frames that come due while the supply is off are dropped
@@ -652,6 +660,57 @@ alone, as `power` gives one when the supply comes back (5.17), then `reset` with
 board keeps its power: the SD card stays where it was, and so does what the peer models around
 the chip. It goes into the input queue (section 8) like any input. With the supply off it does
 nothing. The pulse takes no time: the guest runs again from the same `t`.
+
+### 5.19 `sd_card` and `sd_card_ack` *ext* (#106)
+
+```json
+{"type": "sd_card", "t": 2000000000, "image": null}
+{"type": "sd_card", "t": 2500000000, "image": "/tmp/esp32tl-sd-x1/card.img"}
+{"type": "sd_card_ack", "t": 2000000000, "image": null}
+{"type": "sd_card_ack", "t": 2500000000, "image": "/tmp/esp32tl-sd-x1/card.img"}
+```
+
+`sd_card`, from the peer, changes what the slot of `--sd-spi` holds from `t`: with `image` a path,
+a card holding that image file goes into the empty slot; with `image` `null` or absent, the card
+comes out. It goes into the input queue (section 8) like any input, and the runner applies it at
+the first slice boundary at or after `t` (6.1): between two of the chip's SPI transactions, never
+inside one, since the card answers each transaction whole in the board's `spi_transfer_pins`. A
+relative path is the runner's working directory's; `BoardLink` sends absolute ones. `image` that is
+not a string is a protocol error, as is `sd_card` without `--sd-spi`.
+
+`sd_card_ack`, from the runner, answers each `sd_card` once it is applied, in the order they were
+sent: `t` is the slice boundary it was applied at, `image` what the slot holds then, `null` when it
+is empty, and `error`, `null` or absent unless the runner refused the change, why. A refused change
+leaves the slot as it was. The runner refuses a card for a slot that holds one already
+(`<image>: the slot holds <held> already`) and an image it cannot open for reading and writing or
+whose size is not a whole number of 512 KiB units up to 2 TiB, naming the image and the error
+(`<image>: No such file or directory (os error 2)`). Taking the card out of an empty slot changes
+nothing and is no error. `sd_card_ack` is not an event: nothing answers it, it carries no `seq`
+and sets no block point, and it reaches the peer in `t` order with the other messages, before the
+first `sync` whose `t` is at or after its own. `BoardLink` hands it to the one interface that is the slot
+(`Interface.card_slot`), which fails the link on an `error`, and on an `image` other than the one
+its `sd_card` asked for.
+
+What the slot does, in `runner/src/sd_card.rs` (`Slot`):
+
+- **An empty slot**, and a card that is not selected or whose MISO is not routed to the master,
+  gives the chip 0xff for every byte: the line's pull-up. A host waiting for an R1, a data token or
+  a data response times out; one polling for the end of a busy time (MISO low) sees it at once.
+- **Taking the card out** closes its image. Every block the card answered `0x05` (data accepted)
+  for is in the image already, since the card writes through; a block still coming in, the rest of
+  a multiple block write and a read in progress are dropped. Nothing the firmware had not finished
+  is written for it, so a file system on the image is as the firmware left it at that instant,
+  which need not be consistent.
+- **A card that goes in** starts as a card just powered: in SD mode, answering nothing until a
+  CMD0 with its CS low, then idle until the host initialises it again (CMD8, ACMD41). Its CID and
+  CSD come from the image's size, as at power-on, so two images of one size read as the same card.
+- A chip reset changes nothing in the slot: the card keeps its state until CMD0 (5.5).
+- **With the supply off** (5.17) the slot still changes: an `sd_card` is applied at its time like
+  any input, and acknowledged. The card in the slot has lost its power, and one put in meanwhile
+  is the same as any other, so the guest that comes back initialises whichever is there.
+
+The runner's line at the end of the run counts the commands and blocks of every card the slot
+held, and, when the peer changed the card, how many went in and came out.
 
 ## 6. Rules
 
@@ -791,8 +850,8 @@ The `lines` interface, which drives GPIO lines at the instant the test does, dec
 
 ## 8. Future-dated inputs
 
-Any input (`uart_rx`, `gpio_in`, `release`, `adc`, `eth_rx`, `wifi_ap`) may carry a `t` later
-than the turn's `sync`: the runner keeps it in a queue of its own, ordered by `t` and, at equal `t`, by arrival, and
+Any input (`uart_rx`, `gpio_in`, `release`, `adc`, `eth_rx`, `wifi_ap`, `sd_card`) may carry a `t`
+later than the turn's `sync`: the runner keeps it in a queue of its own, ordered by `t` and, at equal `t`, by arrival, and
 applies it at its time (section 6.1). This is how an interface's output that lies in the future, a
 replay's next sentence for one, reaches the guest.
 The queue is the runner's, not `machine.script`: the script's cursor walks its events in order,
@@ -811,7 +870,7 @@ the runner at or before its `t` (rule 1).
 | `SIGTERM` or `SIGINT` | ends the slice in progress (at most one emulated millisecond), or at once if it is waiting for the peer's turn or, under `--realtime`, for wall time (12.2); sends the events and `warn`s not yet sent, `stats` with `end: signal`, closes | 0 |
 | any other `Stop` (`esp-soc/src/soc.rs:9`: `MaxInsns`, `Breakpoint`, `Unimplemented`, `Simcall`, `Ebreak`, `Watch`, `Exceptions`, `CostModel`, `CostModelLifecycle`) | events not yet sent, `stats` with `end: emulator` and the variant, closes | 1 |
 | usage error, or an image or ROM that cannot be loaded | nothing on the socket (it may not be connected yet) | 2 |
-| protocol error by the peer: malformed or oversized line, unknown `type`, version or chip mismatch, late `t`, wrong `ack`, `quiet_until` not after the `sync`, a `baud` of `0`, a `watch` with a pin the chip does not have, a message the runner does not implement yet, `eth_rx` or `wifi_ap` without `--wifi` (`eth_rx without --wifi`, `wifi_ap without --wifi`), an `eth_rx` frame outside 14 to 1518 bytes (`eth_rx: an Ethernet frame of N bytes; one without FCS has 14 to 1518`), an `on` that is not `true` or `false` | `stats` with `end: protocol_error`, closes | 3 |
+| protocol error by the peer: malformed or oversized line, unknown `type`, version or chip mismatch, late `t`, wrong `ack`, `quiet_until` not after the `sync`, a `baud` of `0`, a `watch` with a pin the chip does not have, a message the runner does not implement yet, `eth_rx` or `wifi_ap` without `--wifi` (`eth_rx without --wifi`, `wifi_ap without --wifi`), an `eth_rx` frame outside 14 to 1518 bytes (`eth_rx: an Ethernet frame of N bytes; one without FCS has 14 to 1518`), an `on` that is not `true` or `false`, `sd_card` without `--sd-spi` (`sd_card without --sd-spi`), an `image` that is not a string | `stats` with `end: protocol_error`, closes | 3 |
 | the peer is gone: the connection failed, the socket closed, a read or write failed, the peer's turn took longer than `--peer-timeout`, or a write made no progress for that long (in or outside a turn) | nothing more | 4 |
 | a second `SIGTERM` or `SIGINT` | ends the process at once | 128 + the signal's number |
 
@@ -876,7 +935,7 @@ codec change (#37). What #325 does not have:
 | `reset` comes from the runner's run loop | #325 proposes a `guest_reset` trait method; the peer sees the same message either way (plan, finding 4) |
 | `eth_tx`, `eth_rx`, `wifi_ap` and `stats.wifi` (*ext*), with `--wifi` | #325 has nothing of Wi-Fi. They carry the Ethernet frames of esp32sim's station link in relay mode, and switch its access point, so that the network behind the access point is the peer's, in emulated time ([decision](decisions/harness.md#the-network-the-device-reaches-is-simulated-in-the-harness-in-emulated-time)) |
 | `power` and `chip_reset` (*ext*) | #325's board has no supply and no EN pin of its own; a test resets or power-cycles the board it describes, and the runner does both in one run, on one clock (5.17, 5.18) |
-| The SD card of `--sd-rw` answers SPI on `SocketBoard`, in the runner | a card answers every byte of a transaction in the same transaction (`spi_transfer_pins`), which a peer a turn away could not; nothing of it goes on the socket, and the protocol does not change ([runner-technical.md](features/runner-technical.md#the-sd-card)) |
+| The SD card slot of `--sd-spi` answers SPI on `SocketBoard`, in the runner; `sd_card` and `sd_card_ack` (*ext*) change the card in it | a card answers every byte of a transaction in the same transaction (`spi_transfer_pins`), which a peer a turn away could not; only the card going in and coming out goes on the socket ([runner-technical.md](features/runner-technical.md#the-sd-card)) |
 
 ## 11. Changes from the plan
 
