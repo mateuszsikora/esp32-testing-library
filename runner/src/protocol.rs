@@ -129,6 +129,12 @@ pub enum Incoming {
     ChipReset {
         t: u64,
     },
+    /// A card holding the image file `image` into the slot of `--sd-spi`, or, with `None`, the
+    /// card out of it (5.19).
+    SdCard {
+        t: u64,
+        image: Option<String>,
+    },
     Wait {
         ack: u64,
         quiet_until: Option<u64>,
@@ -206,6 +212,10 @@ pub fn parse(line: &str) -> Result<Incoming, String> {
         "chip_reset" => Incoming::ChipReset {
             t: field("t").time()?,
         },
+        "sd_card" => Incoming::SdCard {
+            t: field("t").time()?,
+            image: field("image").optional_string()?,
+        },
         "stop" => Incoming::Stop,
         "adc" => Incoming::NotYet("adc"),
         _ => return Err(format!("unknown type {kind:?}")),
@@ -252,6 +262,10 @@ impl Field<'_> {
             Some(_) => Err(self.error("is not a string")),
             None => Err(self.error("is missing")),
         }
+    }
+    /// `None` for an absent field or `null`.
+    fn optional_string(&self) -> Result<Option<String>, String> {
+        self.value().map(|_| self.string()).transpose()
     }
     fn pin(&self) -> Result<u8, String> {
         pin(self.int()?).ok_or_else(|| self.error("is not a GPIO number"))
@@ -366,6 +380,17 @@ pub fn eth_tx(seq: u64, t: u64, data: &[u8]) -> String {
     format!(
         r#"{{"type":"eth_tx","seq":{seq},"t":{t},"data":"{}"}}"#,
         base64(data)
+    )
+}
+
+/// What the slot holds after the peer's `sd_card`, and why the change was refused, if it was
+/// (5.19).
+pub fn sd_card_ack(t: u64, image: Option<&str>, error: Option<&str>) -> String {
+    let quoted = |v: Option<&str>| v.map_or("null".into(), |v| format!(r#""{}""#, escape(v)));
+    format!(
+        r#"{{"type":"sd_card_ack","t":{t},"image":{},"error":{}}}"#,
+        quoted(image),
+        quoted(error)
     )
 }
 

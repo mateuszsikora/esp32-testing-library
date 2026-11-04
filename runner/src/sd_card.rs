@@ -4,7 +4,8 @@
 //! bytes when its SCLK is routed and its CS low, and its answer reaches the chip when the master's
 //! MISO is routed from the card's pin. A transaction is full duplex: the card's byte for each byte
 //! clocked in comes out on the same clock, so its answer to a command starts one byte after the
-//! command's last.
+//! command's last. The card sits in a [`Slot`], which the peer can empty and fill again while the
+//! guest runs (`sd_card`, protocol 5.19).
 //!
 //! It is a high capacity card (CSD version 2.0, block addressing, 512-byte blocks) of the image's
 //! size, as esp32sim's own card (`esp_periph::sdmmc::SdCard`) is; that one speaks the SD bus, not
@@ -119,8 +120,6 @@ pub struct SdCard {
     out: VecDeque<u8>,
     pub stats: Stats,
 }
-
-pub type Shared = Rc<RefCell<SdCard>>;
 
 impl SdCard {
     /// A card on `wiring` holding `store`, which must be a whole number of 512 KiB units, from 1
@@ -561,7 +560,112 @@ impl SdCard {
     }
 }
 
-/// The board of a run without `--board` that has a card: nothing on the chip's pins but it.
+/// The slot of `--sd-spi`, and the card in it, if any (protocol 5.19). With no card in it, or
+/// with its card not selected, the chip reads every MISO byte as 0xff: the line's pull-up, which
+/// is what a host waiting for an answer, a data token or the end of a busy time sees. The card
+/// comes and goes between two SPI transactions, never inside one; a removal drops what the card
+/// had not finished, a block coming in included, and closes the image. Every block it accepted
+/// before is in the image already: it writes through. A card that goes in starts as a card that
+/// was just powered: in SD mode until a CMD0 with its CS low, and not initialised.
+pub struct Slot {
+    pub wiring: Wiring,
+    card: Option<SdCard>,
+    /// The image of the card in the slot, as the run named it.
+    image: Option<String>,
+    /// What the cards that have left the slot did.
+    retired: Stats,
+    /// Cards put in and taken out while the guest ran.
+    pub inserted: u64,
+    pub removed: u64,
+}
+
+pub type Shared = Rc<RefCell<Slot>>;
+
+impl Slot {
+    /// An empty slot on `wiring`.
+    pub fn new(wiring: Wiring) -> Self {
+        Slot {
+            wiring,
+            card: None,
+            image: None,
+            retired: Stats::default(),
+            inserted: 0,
+            removed: 0,
+        }
+    }
+
+    /// Puts a card holding `store`, named `image`, in the empty slot; returns the card's size in
+    /// bytes.
+    pub fn insert(&mut self, image: &str, store: Box<dyn SdStore>) -> Result<u64, String> {
+        if let Some(held) = &self.image {
+            return Err(format!("the slot holds {held} already"));
+        }
+        let card = SdCard::new(self.wiring, store)?;
+        let len = card.len();
+        self.card = Some(card);
+        self.image = Some(image.to_string());
+        Ok(len)
+    }
+
+    /// Puts a card holding the image file `image` in the empty slot, writing through to it;
+    /// returns the card's size in bytes.
+    pub fn insert_file(&mut self, image: &str) -> Result<u64, String> {
+        if let Some(held) = &self.image {
+            return Err(format!("the slot holds {held} already"));
+        }
+        let store =
+            esp_periph::sdmmc::FileStore::write_through(image).map_err(|e| e.to_string())?;
+        self.insert(image, Box::new(store))
+    }
+
+    /// Takes the card out, closing its image; `false` for an empty slot.
+    pub fn remove(&mut self) -> bool {
+        let Some(card) = self.card.take() else {
+            return false;
+        };
+        self.image = None;
+        let s = card.stats;
+        self.retired.commands += s.commands;
+        self.retired.blocks_read += s.blocks_read;
+        self.retired.blocks_written += s.blocks_written;
+        self.retired.errors += s.errors;
+        true
+    }
+
+    /// The board's supply went off: the card in the slot, if any, loses its power.
+    pub fn power_off(&mut self) {
+        if let Some(card) = &mut self.card {
+            card.power_off();
+        }
+    }
+
+    /// The image of the card in the slot; `None` when it is empty.
+    pub fn image(&self) -> Option<&str> {
+        self.image.as_deref()
+    }
+
+    /// What every card the slot has held did.
+    pub fn stats(&self) -> Stats {
+        let mut s = self.retired;
+        if let Some(card) = &self.card {
+            s.commands += card.stats.commands;
+            s.blocks_read += card.stats.blocks_read;
+            s.blocks_written += card.stats.blocks_written;
+            s.errors += card.stats.errors;
+        }
+        s
+    }
+
+    /// One SPI transaction (`SdCard::transfer`); all 0xff back from an empty slot.
+    pub fn transfer(&mut self, pins: SpiPins, tx: &[u8], rx_len: usize) -> Vec<u8> {
+        match &mut self.card {
+            Some(card) => card.transfer(pins, tx, rx_len),
+            None => vec![0xff; rx_len],
+        }
+    }
+}
+
+/// The board of a run without `--board` that has a slot: nothing on the chip's pins but it.
 pub struct CardBoard(pub Shared);
 
 impl BoardModel for CardBoard {

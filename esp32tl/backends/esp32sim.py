@@ -171,10 +171,10 @@ def runner_command(
     socket at `link`. A `held` run is on the test's clock: its console also goes on the link, and
     the runner waits for the harness's turn for as long as it takes. `psram_mb`, the board
     profile's, is the PSRAM the runner gives the chip; `None`, a profile that does not say, leaves
-    the runner's default. An `sd_card` with a card in it puts the runner's card model on the
-    slot's pins, holding the card's image. `extra_flash` overrides the build's flash contents
-    at the supplied offsets, in order. A `wifi` with an access point puts it, and the networks
-    around, on the runner's air, with the network behind it on the link."""
+    the runner's default. An `sd_card` puts the runner's card slot on its pins, and a card
+    holding its image in it when the test has inserted one. `extra_flash` overrides the build's
+    flash contents at the supplied offsets, in order. A `wifi` with an access point puts it, and
+    the networks around, on the runner's air, with the network behind it on the link."""
     command = [str(runner), "--chip", "esp32", "--rom", str(rom), "--max-seconds", str(max_seconds)]
     if held:
         command += ["--console", "both", "--peer-timeout", "0"]
@@ -185,10 +185,11 @@ def runner_command(
         command += ["--flash-at", f"{offset:#x}={image}"]
     if psram_mb is not None:
         command += ["--psram-mb", str(psram_mb)]
-    if sd_card is not None and sd_card.image_path is not None:
+    if sd_card is not None:
         r = sd_card.route
         command += ["--sd-spi", f"sclk={r.sclk},mosi={r.mosi},miso={r.miso},cs={r.cs}"]
-        command += ["--sd-rw", str(sd_card.image_path)]
+        if sd_card.image_path is not None:
+            command += ["--sd-rw", str(sd_card.image_path)]
     if wifi is not None:
         command += wifi.runner_args()
     return command
@@ -265,8 +266,8 @@ def listen() -> tuple[socket.socket, Path]:
 class Esp32Sim(Board):
     """A run of the app in `app_path` in the runner, on the board profile `profile`, its console
     going to `dut`'s log and to the test, its board the link to every UART route and every GPIO
-    line of the profile, and the runner's SD card model in the profile's slot when the test
-    inserts a card.
+    line of the profile, and the runner's SD card slot on the profile's slot's pins, which holds
+    the card the test inserts, before power-on or while the firmware runs.
 
     `app` is the `IdfApp` the runner flashes. The dut's own `app` is pytest-embedded's base `App`,
     without `flash_files` or `target`: without a service, pytest-embedded builds nothing more.
@@ -333,9 +334,11 @@ class Esp32Sim(Board):
             SdCard(
                 profile.sd_card,
                 directory=self.directory,
-                asked=self._asked,
+                asked=self._declared,
                 log=self.log,
                 files=self._files,
+                now=lambda: self._hold.now,
+                started=lambda: self.started,
             )
             if profile.sd_card is not None
             else None
@@ -343,9 +346,10 @@ class Esp32Sim(Board):
         self._wifi = Wifi(
             now=lambda: self._hold.now, world=lambda: self._utc, asked=self._asked, log=self.log
         )
+        slot = [] if self._sd_card is None else [self._sd_card]
         self.link = BoardLink(
             profile.name,
-            [*self._uarts.values(), self._lines, self._wifi],
+            [*self._uarts.values(), self._lines, self._wifi, *slot],
             chip=profile.chip,
             on_error=self._end_run,
             hold=self._hold,
@@ -443,14 +447,20 @@ class Esp32Sim(Board):
         self.log.console(t, data)
 
     def _asked(self, request: Request) -> None:
-        """Refuses a source or a tap on an interface once the board has been on, or one that no
-        backend gives, and skips the test when this one does not."""
+        """Refuses a source or a tap on an interface once the board has been on, then as
+        `_declared` does."""
         if self.started:
             what = "tap a route" if request.tap else "give an interface its source"
             state = "is on already" if self.powered else "has been on"
             raise SourceError(
                 f"{request.interface}: the board {state}: {what} before board.power_on()"
             )
+        self._declared(request)
+
+    def _declared(self, request: Request) -> None:
+        """Refuses a source or a tap that no backend gives, and skips the test when this one
+        does not. The SD card slot asks only this: a card goes in and out while the run goes
+        on, with the supply on or off."""
         declared = capabilities.declared()
         try:
             capabilities.check([request], self.profile, declared)
@@ -869,8 +879,22 @@ class Esp32Sim(Board):
                 f" tapped into {self._console.tapped.path}"
             )
         if self._sd_card is not None:
-            image = self._sd_card.image_path
+            image = self._sd_card.held
             lines.append(f"sd_card: a card holding {image}" if image else "sd_card: empty")
+            lines += [
+                f"  {board_time(change.t)}  "
+                + ("taken out" if change.image is None else f"{change.image} put in")
+                for change in self._sd_card.changes
+            ]
+            lines += [
+                f"  {board_time(change.t)}  {why}: "
+                + ("taken out" if change.image is None else f"{change.image} put in")
+                for why, changes in (
+                    ("refused", self._sd_card.refused),
+                    ("not reached", self._sd_card.not_reached),
+                )
+                for change in changes
+            ]
         for uart in self._uarts.values():
             if isinstance(uart, Modem):
                 lines += uart.command_report()
@@ -883,7 +907,9 @@ class Esp32Sim(Board):
     def properties(self) -> dict[str, object]:
         """The link's `properties()`, and the routes: for each, the kind of source at the far end
         and what it was made from (a replay's recording, as the test named it), the bytes each way
-        and the tap's file; and `sd_card`, the card's image, or None without a slot."""
+        and the tap's file; and `sd_card`, the card's image as the run has it, the changes the
+        runner acknowledged while the board was on and those it did not reach, or None without a
+        slot."""
         routes: dict[str, dict[str, object]] = {}
         for name, uart in self._uarts.items():
             traffic = self.log.traffic.get(name)
@@ -920,7 +946,23 @@ class Esp32Sim(Board):
         sd_card = (
             None
             if card is None
-            else {"image": None if card.image_path is None else str(card.image_path)}
+            else {
+                "image": None if card.held is None else str(card.held),
+                "changes": [
+                    {"t_ns": c.t, "image": None if c.image is None else str(c.image)}
+                    for c in card.changes
+                ],
+                **{
+                    key: [
+                        {"t_ns": c.t, "image": None if c.image is None else str(c.image)}
+                        for c in changes
+                    ]
+                    for key, changes in (
+                        ("refused", card.refused),
+                        ("not_reached", card.not_reached),
+                    )
+                },
+            }
         )
         properties = self.link.properties() | {
             "routes": routes,

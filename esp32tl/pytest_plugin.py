@@ -562,8 +562,9 @@ def lines(board: Board) -> Lines:
 
 @pytest.fixture
 def sd_card(board: Board) -> SdCard:
-    """The board profile's SD card slot, empty until the test calls `sd_card.insert(image)`
-    before `board.power_on()`."""
+    """The board profile's SD card slot, empty until the test calls `sd_card.insert(image)`:
+    before `board.power_on()` the card is in from power-on; after it, `sd_card.remove()` and
+    `sd_card.insert(image)` take the card out and put one in at the board's current instant."""
     try:
         return board.sd_card
     except BackendError as error:

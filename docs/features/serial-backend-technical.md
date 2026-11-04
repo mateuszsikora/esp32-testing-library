@@ -233,6 +233,7 @@ firmware. Backup binaries and device logs remain private and are not repository 
 
 `Serial` implements the same public `Board` base as the simulator. `board.console` is cached,
 and the `console` fixture returns it. `board.gnss`, `board.modem` and the interface fixtures reuse
-the same UART objects. GPIO access skips, and both `board.sd_card.image()` and `insert(...)`
-request a model source and skip before creating or opening an image. `close()` closes its SD
+the same UART objects. GPIO access skips, and `board.sd_card.image()`, `insert(...)` and
+`remove()` request a model source and skip before creating or opening an image: the host cannot
+take the physical card out. `close()` closes its SD
 slot in a `finally` block after ending the serial run.

@@ -44,7 +44,9 @@ without starting anything:
    nanoseconds, and `world=lambda: self._utc`, the world's time at power-on, for the receiver
    model ([models-technical.md](models-technical.md#data-flow)). An `[sd_card]` slot becomes an
    empty `SdCard` (`esp32tl/interfaces/sd_card.py`) on the slot's `SdCardRoute`, with the same
-   `directory`, `asked`, `log` and `files`; it is not on the link. The chip's station becomes a
+   `directory`, `log` and `files`, `asked=self._declared` (the capability check without the
+   before-power-on one), `now=lambda: hold.now` and `started=lambda: self.started`; it is on the
+   link, last, as the one interface whose `card_slot` is true. The chip's station becomes a
    `Wifi(now=lambda: hold.now, world=lambda: self._utc, asked=self._asked, log=self.log)`
    (`esp32tl/interfaces/wifi.py`), on every profile.
 5. **The lines.** One `Lines(profile.name, profile.lines, now, log=self.log)`
@@ -90,9 +92,10 @@ or `POWER_ON_UTC`, for `Esp32Sim.utc` and the GNSS receiver's dates, and logs
    offset; the paths are absolute. `--psram-mb` is the board profile's `psram_mb`, `0` on
    `esp32-devkitc` and `4` on `lilygo-t-a7670g-r2`; a profile without `psram_mb` leaves the pair
    out, and the runner gives the chip no PSRAM, its default. The profile's `flash_mb` is not
-   passed: the runner's flash is its default, 4 MiB. With a card in the slot, `sd_card=` adds
-   `--sd-spi sclk=N,mosi=N,miso=N,cs=N` from the slot's route and `--sd-rw <image>`, the image's
-   absolute path, at the end. With an access point, `wifi=` adds `wifi.runner_args()` after that:
+   passed: the runner's flash is its default, 4 MiB. With a slot, `sd_card=` adds
+   `--sd-spi sclk=N,mosi=N,miso=N,cs=N` from the slot's route at the end, and with a card in it
+   `--sd-rw <image>`, the image's absolute path, after that: the slot is there empty, so that a
+   card can go in while the firmware runs. With an access point, `wifi=` adds `wifi.runner_args()` after that:
    `--wifi ssid=<ssid>,chan=<channel>[,psk=<password>][,bssid=<bssid>]` and one
    `--wifi-nearby ssid=<ssid>,chan=<channel>,rssi=<dBm>,secure=<0|1>[,bssid=<bssid>]` per network
    around. Without `held`, as the [`esp32tl` command](cli-user.md) calls
@@ -211,12 +214,14 @@ with it `wait_until` and the console's expects, logs `waits up to {within} for {
 **Sources and taps.** `Uart.replay` calls `asked(Request(interface, source="replay"))` before it
 reads the recording, `Gnss`'s first model call `asked(Request(interface, source="model"))` before
 it makes the receiver, `Uart.tap` calls `asked(Request(interface, tap=True))` before it makes the
-`Tap`, and `SdCard.insert` calls `asked(Request("sd_card", source="model"))` before it looks at
-the image. `_asked` refuses, with `SourceError`, either once the board is on
+`Tap`, and `SdCard.insert`, `SdCard.remove` and the card builder call
+`asked(Request("sd_card", source="model"))` before they act. `_asked` refuses, with
+`SourceError`, a request once the board is on
 (`{interface}: the board is on already: give an interface its source before board.power_on()`,
-and `... tap a route before board.power_on()` for a tap), and one that `capabilities.check` finds
-no backend gives, with that error's message. Otherwise, when `capabilities.refusal(self.name, ...)`
-gives a reason, it calls `skip(f"esp32sim: {reason}")`. It reads the declaration through
+and `... tap a route before board.power_on()` for a tap), then does what `_declared` does, which
+is all the slot asks, since a card goes in and out with the board on: it refuses one that
+`capabilities.check` finds no backend gives, with that error's message, and otherwise, when
+`capabilities.refusal(self.name, ...)` gives a reason, calls `skip(f"esp32sim: {reason}")`. It reads the declaration through
 `capabilities.declared()` at each call, so a test can swap it. `set_up()` lists
 `the {source_kind} of {interface}` for every `Uart` with a source (`the replay of uart.gnss`, `the
 model of uart.gnss`) and `the tap of {interface}` for every tapped one, then `the level of {line}`
@@ -295,7 +300,10 @@ UART route of the profile, `  {interface}: {source}; {bytes}{tap}`: `{source}` i
 `; tapped into {path}` for a tapped route. With `run`, `log.lines()` follows: the plugin passes it
 for a test that failed. `Esp32Sim.properties()` is `link.properties()` with `routes`, by
 interface: `source` (the kind, or `None`), `detail` (what the source was made from, as the test
-named it), `bytes_in`, `bytes_out` and `tap` (the path, or `None`); then `sd_card`, and `wifi`:
+named it), `bytes_in`, `bytes_out` and `tap` (the path, or `None`); then `sd_card`, `None`
+without a slot, else `image` (`SdCard.held`, the card the run had at its end, or `None`),
+`changes`, one `{"t_ns", "image"}` per `SdCard.changes` entry, and `refused` and
+`not_reached`, the same per `SdCard.refused` and `SdCard.not_reached` entry; and `wifi`:
 `None` without an access point, else `Wifi.properties()`, `access_point` (`ssid`, `channel`,
 `secure`), `nearby` (`ssid`, `channel`, `rssi`, `secure` each), `switches` (`t_ns`, `on` each) and
 `network`, the network's `esp32tl_network: 1` transcript. With an access point `report` ends with
@@ -439,7 +447,7 @@ In the test body:
 | `the board is off: board.reset() resets a board that is on` | `BoardOff` | `reset()` before power-on or with the supply off |
 | `power_on: utc is {utc!r}, not a datetime with a timezone` | `TypeError`, `ValueError` | Not a `datetime`; a naive `datetime` |
 | `power_on: utc is the world's time at the first power-on; it has run on since, and the board's clock with it` | `ValueError` | A `utc` given to a `power_on()` after `power_off()` |
-| `{interface}: the board is on already: give an interface its source before board.power_on()` | `SourceError` | A source after power-on, a card among them; `the board has been on` once the supply is off |
+| `{interface}: the board is on already: give an interface its source before board.power_on()` | `SourceError` | A source after power-on, `the board has been on` once the supply is off; not a card, which goes in and out once the run has started |
 | `{interface}: the board is on already: tap a route before board.power_on()` | `SourceError` | A tap after power-on; `the board has been on` once the supply is off |
 | the message of `capabilities.check`, as `no backend takes a 'replay' source on uart.gnss; the sources there are model` or `no backend can tap uart.gnss` | `SourceError` | A source or a tap no backend declares |
 | `esp32sim: {reason}`, as `esp32sim: uart.gnss takes no replay source on this backend, only model` or `esp32sim: uart.gnss cannot be tapped on this backend` | the `skip` given: pytest's skip under the plugin | A source or a tap this backend does not declare |
@@ -469,8 +477,8 @@ proving serial-only validation does not reach the simulator.
 
 - `test_runner_command_flashes_every_file_at_its_offset`: the exact command line for a fake build
   (`fake_build`), `--board socket:PATH` included.
-  `test_runner_command_puts_a_card_in_the_slot_once_the_test_inserts_one`: no card flags for an
-  empty slot, and `--sd-spi`, `--sd-rw` with the resolved path once a card is in.
+  `test_runner_command_puts_a_card_in_the_slot_once_the_test_inserts_one`: `--sd-spi` alone for
+  an empty slot, and `--sd-spi`, `--sd-rw` with the resolved path once a card is in.
   `test_runner_command_gives_the_chip_the_profile_s_psram`: `--psram-mb 4` for `psram_mb=4`, and
   no `--psram-mb` without it. `test_runner_command_puts_the_tests_access_point_on_the_air`: no
   `--wifi` without an access point, then `--wifi` and `--wifi-nearby` as `Wifi.runner_args()`
