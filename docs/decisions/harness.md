@@ -1440,7 +1440,9 @@ page would find it.
 link when the peer returns in time, because it would need baseband retransmission for what was lost
 meanwhile; dropping the keys on a power loss, or one call that does both, because the two are
 separate facts about a device; repeating a page until its timeout, because it is the same baseband
-repetition, for a difference of when a retry connects, until a firmware is seen to depend on it;
+repetition, for a difference of when a retry connects, until a firmware is seen to depend on it,
+and for now also having `Controller.returned` send `LmpHostConnectionReq` again to whoever is paging
+that address, which adds no instants to other runs but has not been tried, for the same reason;
 and the API on the air (`air.remove(peer)`), because leaving is what a peer does, and the mechanism
 under it may change.
 

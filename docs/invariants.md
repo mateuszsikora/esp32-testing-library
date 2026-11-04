@@ -541,6 +541,19 @@ that references to its number keep their meaning.
     `tests/test_spp_peer.py::test_the_rssi_is_given_in_the_mode_that_has_it_and_not_in_the_plain_one`
 - **169.** A `BluetoothDevice` does not answer for SPP in SDP, and has no RFCOMM channel.
     `tests/test_spp_peer.py::test_a_device_without_spp_says_so_in_sdp_and_has_no_channel`
+- **170.** A device that leaves during its own page can be reached again once both are back, and a
+    power loss ends a page, a remote name request and an inquiry, whose timers do not end the next;
+    a device that left finds nobody.
+    `tests/test_spp_peer.py::test_a_device_that_leaves_during_its_own_page_can_be_reached_again`,
+    `tests/test_spp_peer.py::test_a_device_that_left_during_its_own_page_can_be_paged_once_both_are_back`,
+    `tests/test_spp_peer.py::test_a_page_that_outlasts_the_link_falling_at_the_other_end_lets_the_pair_go`,
+    `tests/test_spp_peer.py::test_a_power_loss_ends_a_page_and_its_timer_does_not_end_the_next`,
+    `tests/test_spp_peer.py::test_a_power_loss_ends_a_remote_name_request_and_its_timer_does_not_end_the_next`,
+    `tests/test_spp_peer.py::test_a_power_loss_ends_an_inquiry`,
+    `tests/test_spp_peer.py::test_a_device_that_left_finds_nothing_in_its_own_inquiry`
+- **171.** A remote name request nobody answers ends in `PAGE_TIMEOUT` exactly at the page timeout.
+    `tests/test_spp_peer.py::test_a_remote_name_request_to_a_peer_that_left_ends_at_the_page_timeout`,
+    `tests/test_spp_peer.py::test_a_remote_name_request_is_answered_at_once_when_the_peer_is_there`
 
 ## The esp32tl command
 

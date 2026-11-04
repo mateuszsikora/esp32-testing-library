@@ -133,6 +133,8 @@ To a device on the air both ways of leaving look the same:
   answered or not at the instant it starts: a peer that returns before the timeout does not answer
   that page, only the next one. A real controller keeps paging until the timeout, so it may
   connect where this one times out.
+- **A remote name request ends in `PAGE_TIMEOUT`** at the same timeout, with Bumble's
+  `HCI_Error` on the device's side, as it needs a page too.
 - **The link falls with `CONNECTION_TIMEOUT`** at the supervision timeout after the peer left, on
   each end still holding it: 20 s, unless the link's central wrote another with
   `Write_Link_Supervision_Timeout`, or 0 for a link that never falls. A peripheral that writes it
@@ -232,6 +234,7 @@ On the air:
 | `HCI_Error(hci/PIN_OR_KEY_MISSING_ERROR [0x6])` | Bumble's `HCI_Error`, on the device's side | The device authenticated with a key the peer does not keep |
 | `HCI_Error(hci/INSUFFICIENT_SECURITY_ERROR [0x2F])` | Bumble's `HCI_Error`, on the device's side | The device asked for encryption on a link it had not authenticated |
 | `hci/PAGE_TIMEOUT_ERROR`, in `error_code` | Bumble's `core.ConnectionError`, on the device's side | Nobody answered the page: the peer has left, its end of an old link has not fallen, or no device has the address |
+| `HCI_Error(hci/PAGE_TIMEOUT_ERROR [0x4])` | Bumble's `HCI_Error`, on the device's side | Nobody answered `Device.request_remote_name` |
 | `HCI_Error(hci/CONNECTION_ALREADY_EXISTS_ERROR [0xB])` | Bumble's `HCI_Error`, on the device's side | The device paged a peer while it holds a link to it, as one that lost contact and has not fallen |
 | `HCI_Error(hci/CONNECTION_TIMEOUT_ERROR [0x8])` | Bumble's `HCI_Error`, on the device's side | The link fell during `Connection.authenticate()` |
 

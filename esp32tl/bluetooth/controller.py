@@ -147,9 +147,10 @@ class Controller(BumbleController):
     inquiry, legacy pairing, authentication with a stored key, encryption, a page timeout and link
     supervision."""
 
+    link: Link
+
     def __init__(self, name: str, link: Link, address: str) -> None:
         super().__init__(name, link=link, public_address=address)
-        self._link = link
         self.lmp_features &= ~hci.LmpFeatureMask.BR_EDR_NOT_SUPPORTED
         self.class_of_device = 0
         self.extended_inquiry_response = bytes(240)
@@ -163,6 +164,8 @@ class Controller(BumbleController):
         self.page_timeout = PAGE_TIMEOUT_SLOTS
         # The page this side started to each peer, until it ends.
         self._paging: dict[hci.Address, asyncio.TimerHandle] = {}
+        # The remote name request this side made of each peer, until it is answered.
+        self._naming: dict[hci.Address, asyncio.TimerHandle] = {}
         # Each link's timeout in slots, where a host or the central changed it; 0 for none.
         self._supervision_timeouts: dict[hci.Address, int] = {}
         # The time each link lost contact, on the loop's clock, and the timer it falls by.
@@ -221,11 +224,12 @@ class Controller(BumbleController):
         others = sorted(
             (
                 c
-                for c in self._link.controllers
+                for c in self.link.controllers
                 if c is not self
                 and isinstance(c, Controller)
                 and c.classic_scan_enable & 0x01
-                and self._link.present(c.public_address)
+                and self.link.present(c.public_address)
+                and self.link.present(self.public_address)
             ),
             key=lambda c: bytes(reversed(bytes(c.public_address))),
         )
@@ -315,6 +319,40 @@ class Controller(BumbleController):
             # Bumble keeps the connection it made for the page.
             self.classic_connections.pop(peer_address, None)
         super().on_classic_connection_complete(peer_address, status)
+        if status != hci.HCI_ErrorCode.SUCCESS:
+            self._let_go(peer_address)
+
+    # Remote name requests: a page too, so one nobody answers ends at the page timeout.
+
+    def on_hci_remote_name_request_command(
+        self, command: hci.HCI_Remote_Name_Request_Command
+    ) -> None:
+        peer = command.bd_addr
+        if peer not in self._naming:
+            self._naming[peer] = asyncio.get_running_loop().call_later(
+                self.page_timeout * SLOT_S, self._name_timed_out, peer
+            )
+        super().on_hci_remote_name_request_command(command)
+
+    def on_classic_remote_name_response(
+        self, peer_address: hci.Address, name_offset: int, name_length: int, name_fregment: bytes
+    ) -> None:
+        timer = self._naming.pop(peer_address, None)
+        if timer is not None:
+            timer.cancel()
+        super().on_classic_remote_name_response(
+            peer_address, name_offset, name_length, name_fregment
+        )
+
+    def _name_timed_out(self, peer: hci.Address) -> None:
+        timer = self._naming.pop(peer, None)
+        if timer is not None:
+            timer.cancel()
+        self.send_hci_packet(
+            hci.HCI_Remote_Name_Request_Complete_Event(
+                status=hci.HCI_ErrorCode.PAGE_TIMEOUT_ERROR, bd_addr=peer, remote_name=b""
+            )
+        )
 
     # Link supervision: a link that lost contact falls at its timeout.
 
@@ -375,22 +413,29 @@ class Controller(BumbleController):
 
     def left(self) -> None:
         """This device is gone from the air, without a word: both ends of each of its links lose
-        contact."""
-        peers = list(self.classic_connections)
-        self._link.leave(self.public_address, peers)
+        contact. A page this side has under way is no link: it ends by itself."""
+        peers = [peer for peer in self.classic_connections if peer not in self._paging]
+        self.link.leave(self.public_address, peers)
         for peer in peers:
             self._lose_contact(peer)
-            other = self._link.find_classic_controller(peer)
+            other = self.link.find_classic_controller(peer)
             if isinstance(other, Controller):
                 other._lose_contact(self.public_address)
 
     def returned(self) -> None:
         """This device is on the air again. The links it left stay severed until they fall."""
-        self._link.back(self.public_address)
+        self.link.back(self.public_address)
 
     def power_lost(self) -> None:
-        """This device lost its power: its end of each link is gone at once, and only its own
-        host hears of it."""
+        """This device lost its power: what it has under way ends, and its end of each link is
+        gone at once. Only its own host hears of it."""
+        for peer in list(self._paging):
+            self._page_timed_out(peer)
+        for peer in list(self._naming):
+            self._name_timed_out(peer)
+        if self._inquiry is not None:
+            self._inquiry.cancel()
+            self._inquiry_complete()
         for peer in list(self.classic_connections):
             self.on_classic_disconnected(peer, hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR)
 
@@ -679,9 +724,13 @@ class Controller(BumbleController):
         if timer is not None:
             timer.cancel()
         super().on_classic_disconnected(peer_address, reason)
-        other = self._link.find_classic_controller(peer_address)
+        self._let_go(peer_address)
+
+    def _let_go(self, peer: hci.Address) -> None:
+        """The link holds no more on this side: when `peer` holds none either, they may page."""
+        other = self.link.find_classic_controller(peer)
         if other is None or self.public_address not in other.classic_connections:
-            self._link.let_go(self.public_address, peer_address)
+            self.link.let_go(self.public_address, peer)
 
     def authenticated(self, peer: hci.Address) -> bool:
         """Whether the link to `peer` is authenticated, on this side: by legacy pairing, by a
@@ -697,7 +746,7 @@ class Controller(BumbleController):
     def _both_simple_pairing(self, peer: hci.Address) -> bool:
         """Whether both hosts support Secure Simple Pairing: what LMP's features exchange would
         tell, read from the peer's controller on the link."""
-        other = self._link.find_classic_controller(peer)
+        other = self.link.find_classic_controller(peer)
         ssp = hci.LmpFeatureMask.SECURE_SIMPLE_PAIRING_HOST_SUPPORT
         return other is not None and bool(self.lmp_features & other.lmp_features & ssp)
 
