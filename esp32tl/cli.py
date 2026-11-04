@@ -26,12 +26,12 @@ from pathlib import Path
 
 from esp32tl import __version__, boards
 from esp32tl.backends import esp32sim
-from esp32tl.backends.esp32sim import BackendError, Esp32Sim
+from esp32tl.backends.esp32sim import BackendError
 from esp32tl.boards import DEFAULT_PROFILE, ProfileError
 from esp32tl.interfaces.lines import Lines
 from esp32tl.interfaces.uart import Uart
 from esp32tl.link.boardlink import BoardLink
-from esp32tl.recording import RecordingError
+from esp32tl.recording import EMULATED, RecordingError
 from esp32tl.sources.replay import ReplayError
 
 # What the command exits with when it cannot start the run, as the runner does for an input it
@@ -156,9 +156,7 @@ def interruptible(
         profile = boards.profile(board)
         uarts: list[Uart] = []
         for interface, path in replays.items():
-            uart = esp32sim.profile_uart(
-                profile, interface, clock=Esp32Sim.clock, directory=Path.cwd()
-            )
+            uart = esp32sim.profile_uart(profile, interface, clock=EMULATED, directory=Path.cwd())
             uart.replay(path)
             uarts.append(uart)
         image = esp32sim.load_app(str(app.resolve()), build_dir=build_dir)
@@ -192,7 +190,7 @@ def interruptible(
             [*uarts, lines],
             chip=profile.chip,
             on_error=lambda reason: served.terminate(),
-            clock=Esp32Sim.clock,
+            clock=EMULATED,
         )
         code = served.until_exit(link)
     finally:

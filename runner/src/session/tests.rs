@@ -82,6 +82,10 @@ struct FakeGuest {
     idles: Vec<u64>,
     /// What came back of each `Act::Spi`, with the cycle.
     spi: Vec<(u64, Vec<u8>)>,
+    /// Where pacing started, and the wall instant it did.
+    paced: Vec<(u64, Instant)>,
+    /// The cycles esp32sim skips a lag at.
+    lags: Vec<u64>,
 }
 
 impl FakeGuest {
@@ -103,6 +107,8 @@ impl FakeGuest {
             power_resets: Vec::new(),
             idles: Vec::new(),
             spi: Vec::new(),
+            paced: Vec::new(),
+            lags: Vec::new(),
         }
     }
 
@@ -224,6 +230,12 @@ impl Guest for FakeGuest {
             self.inputs.push((self.now, pin, None));
         }
     }
+    fn start_pacing(&mut self) {
+        self.paced.push((self.now, Instant::now()));
+    }
+    fn resyncs(&self) -> u64 {
+        self.lags.iter().filter(|&&at| at <= self.now).count() as u64
+    }
 }
 
 /// What the peer saw in one of its turns.
@@ -251,6 +263,10 @@ struct FakePeer {
     closed: bool,
     /// How many messages had been sent at each `idle`.
     idles: Vec<usize>,
+    /// What the runner waited for on its wall clock, each with the `sync`s sent by then.
+    waits: Vec<(usize, Instant)>,
+    /// What ends the first such wait, if anything does.
+    wait_ends: Option<LinkError>,
 }
 
 const SIGNAL: &str = "SIGNAL";
@@ -277,6 +293,8 @@ impl FakePeer {
             queue: VecDeque::new(),
             closed: false,
             idles: Vec::new(),
+            waits: Vec::new(),
+            wait_ends: None,
         }
     }
 
@@ -350,6 +368,12 @@ impl Link for FakePeer {
             )),
         }
     }
+    /// Returns at once: the tests read the times the runner asks for.
+    fn wait_until(&mut self, until: Instant) -> Result<(), LinkError> {
+        let syncs = self.of("sync").len();
+        self.waits.push((syncs, until));
+        self.wait_ends.take().map_or(Ok(()), Err)
+    }
 }
 
 fn kind(msg: &Json) -> &str {
@@ -415,6 +439,7 @@ fn run_with_card(
         wifi: None,
         rom: &[],
         card: card.cloned(),
+        realtime: false,
     };
     let (end, stats) = Session::new(&mut guest, &mut peer, shared, opts).run();
     Run {
@@ -1218,6 +1243,7 @@ fn a_signal_ends_the_slice_in_progress_with_stats() {
         wifi: None,
         rom: &[],
         card: None,
+        realtime: false,
     };
     let (end, _) = Session::new(&mut guest, &mut peer, shared, opts).run();
     assert!(matches!(end, End::Signal), "{end:?}");
@@ -1390,6 +1416,7 @@ fn on_the_emulator_the_slices_stop_a_guest_asleep_in_waiti_at_the_block_point() 
         wifi: None,
         rom: &[],
         card: None,
+        realtime: false,
     };
     let (end, stats) = Session::new(&mut guest, &mut peer, shared, opts).run();
     assert!(matches!(end, End::MaxSeconds), "{end:?}");
@@ -1779,6 +1806,7 @@ fn on_the_emulator_gpio_in_reaches_the_guest_and_its_output_comes_back_as_gpio_o
         wifi: None,
         rom: &[],
         card: None,
+        realtime: false,
     };
     let (end, stats) = Session::new(&mut m, &mut peer, shared, opts).run();
     assert!(matches!(end, End::MaxSeconds), "{end:?}");
@@ -2003,6 +2031,7 @@ fn run_wifi(end: u64, guest: &mut WifiGuest, peer: &mut FakePeer) -> (End, Stats
         wifi: Some(&wifi),
         rom: &[],
         card: None,
+        realtime: false,
     };
     let shared = guest.inner.shared.clone();
     Session::new(guest, peer, shared, opts).run()
@@ -2445,6 +2474,7 @@ fn run_with_slot(seconds: f64, peer: FakePeer, slot: &sd_card::Shared) -> Run {
         wifi: None,
         rom: &[],
         card: Some(slot.clone()),
+        realtime: false,
     };
     let (end, stats) = Session::new(&mut guest, &mut peer, shared, opts).run();
     Run {
@@ -2726,4 +2756,174 @@ fn sd_fault_and_sd_clear_need_the_slot_and_an_id_is_used_once() {
         "{:?}",
         r.end
     );
+}
+
+fn run_realtime(seconds: f64, mut guest: FakeGuest, mut peer: FakePeer) -> Run {
+    let signal = AtomicBool::new(false);
+    let shared = guest.shared.clone();
+    let opts = Options {
+        end_cycle: (seconds * SECOND as f64) as u64,
+        console: false,
+        peer_timeout: None,
+        signal: &signal,
+        wifi: None,
+        rom: &[],
+        card: None,
+        realtime: true,
+    };
+    let (end, stats) = Session::new(&mut guest, &mut peer, shared, opts).run();
+    Run {
+        end,
+        stats,
+        guest,
+        peer,
+    }
+}
+
+/// `quiet_until` every `step` nanoseconds, as the `real` source renews its turn.
+fn every(step: u64) -> impl FnMut(&Turn) -> Vec<String> {
+    move |turn| vec![wait(turn.seq, Some(turn.t + step), None)]
+}
+
+#[test]
+fn realtime_says_wall_in_hello_and_rt_resyncs_in_stats() {
+    let run = run_realtime(0.002, FakeGuest::new(vec![]), FakePeer::new(&[], every(MS)));
+    let hello = &run.peer.msgs[0];
+    assert_eq!(hello.get("clock").and_then(Json::as_str), Some("wall"));
+    assert_eq!(num(run.peer.stats(), "rt_resyncs"), 0);
+}
+
+#[test]
+fn without_realtime_the_clock_is_emulated_and_nothing_waits_for_wall_time() {
+    let run = run_for(
+        0.002,
+        FakeGuest::new(vec![]),
+        FakePeer::new(&[], every(MS)),
+        false,
+    );
+    let hello = &run.peer.msgs[0];
+    assert_eq!(
+        hello.get("clock").and_then(Json::as_str),
+        Some("emulated-fifo-write")
+    );
+    assert!(run.peer.stats().get("rt_resyncs").is_none());
+    assert!(run.guest.paced.is_empty());
+    assert!(run.peer.waits.is_empty());
+}
+
+#[test]
+fn pacing_starts_at_the_first_boundary_past_2_16_cycles_after_the_turn_there() {
+    // turns every 100 us, 24 000 cycles: the boundary at 300 us is the first at or after 65 536
+    let step = 100_000;
+    let run = run_realtime(
+        0.001,
+        FakeGuest::new(vec![]),
+        FakePeer::new(&[], every(step)),
+    );
+    let (cycle, paced) = run.guest.paced[0];
+    assert_eq!(run.guest.paced.len(), 1);
+    assert_eq!(cycle, cycles(3 * step));
+    // nothing waited before: the turn at 0 and those up to 300 us had gone out by the first wait
+    let (syncs, first) = run.peer.waits[0];
+    assert_eq!(syncs, 4);
+    // emulated time 0 is when pacing started, so the turn at 400 us waits for 400 us from there
+    let left = first.duration_since(paced);
+    assert!(
+        left >= Duration::from_nanos(4 * step) && left < Duration::from_secs(5),
+        "{left:?}"
+    );
+    // and every later turn for another step
+    let later: Vec<Duration> = run
+        .peer
+        .waits
+        .windows(2)
+        .map(|w| w[1].1.duration_since(w[0].1))
+        .collect();
+    assert!(!later.is_empty());
+    assert!(later.iter().all(|&d| d == Duration::from_nanos(step)));
+}
+
+#[test]
+fn a_turn_held_before_pacing_starts_does_not_count_against_the_wall_clock() {
+    let held = Duration::from_millis(30);
+    let mut first = true;
+    let peer = FakePeer::new(&[], move |turn| {
+        if std::mem::take(&mut first) {
+            std::thread::sleep(held);
+        }
+        vec![wait(turn.seq, Some(turn.t + 100_000), None)]
+    });
+    let before = Instant::now();
+    let run = run_realtime(0.001, FakeGuest::new(vec![]), peer);
+    let (_, paced) = run.guest.paced[0];
+    assert!(paced.duration_since(before) >= held);
+    // measured from after the hold: the runner still waits for the whole of the next block point
+    let (_, first_wait) = run.peer.waits[0];
+    assert!(first_wait.duration_since(paced) >= Duration::from_nanos(400_000));
+}
+
+#[test]
+fn a_resync_moves_the_wall_clock_to_the_boundary_it_is_seen_at() {
+    let step = MS;
+    // a turn held for 30 ms at 3 ms, and the lag skipped in the slice after it
+    let held = Duration::from_millis(30);
+    let peer = FakePeer::new(&[], move |turn| {
+        if turn.t == 3 * step {
+            std::thread::sleep(held);
+        }
+        vec![wait(turn.seq, Some(turn.t + step), None)]
+    });
+    let mut guest = FakeGuest::new(vec![]);
+    guest.lags = vec![cycles(3 * step) + 1];
+    let run = run_realtime(0.006, guest, peer);
+    assert_eq!(num(run.peer.stats(), "rt_resyncs"), 1);
+    let at = |t: u64| {
+        let syncs = run.peer.of("sync");
+        let index = syncs.iter().position(|m| num(m, "t") == t).unwrap();
+        run.peer.waits.iter().find(|(n, _)| *n == index).unwrap().1
+    };
+    // the wait at 4 ms is the first after the anchor moved, and comes after the hold: on the old
+    // anchor it would be 4 ms from where pacing started
+    let (_, paced) = run.guest.paced[0];
+    assert!(at(4 * step).duration_since(paced) >= held);
+    assert_eq!(
+        at(5 * step).duration_since(at(4 * step)),
+        Duration::from_nanos(step)
+    );
+}
+
+#[test]
+fn a_board_switched_off_before_pacing_starts_starts_it_when_the_guest_runs_again() {
+    let peer = FakePeer::new(&[], |turn| {
+        let mut lines = vec![];
+        if turn.t == 0 {
+            lines.push(power(0, false));
+        }
+        if turn.t == 2 * MS {
+            lines.push(power(turn.t, true));
+        }
+        lines.push(wait(turn.seq, Some(turn.t + MS), None));
+        lines
+    });
+    let run = run_realtime(0.004, FakeGuest::new(vec![]), peer);
+    assert_eq!(run.guest.paced.len(), 1);
+    assert_eq!(run.guest.paced[0].0, cycles(2 * MS));
+}
+
+#[test]
+fn a_signal_or_the_peer_gone_ends_the_wait_for_wall_time() {
+    let mut peer = FakePeer::new(&[], every(100_000));
+    peer.wait_ends = Some(LinkError::Signal);
+    let run = run_realtime(0.001, FakeGuest::new(vec![]), peer);
+    assert!(matches!(run.end, End::Signal));
+    assert_eq!(
+        run.peer.stats().get("end").and_then(Json::as_str),
+        Some("signal")
+    );
+    assert_eq!(num(run.peer.stats(), "rt_resyncs"), 0);
+
+    let mut peer = FakePeer::new(&[], every(100_000));
+    peer.wait_ends = Some(LinkError::Gone("the peer closed the socket".into()));
+    let run = run_realtime(0.001, FakeGuest::new(vec![]), peer);
+    assert!(matches!(run.end, End::PeerGone(_)));
 }

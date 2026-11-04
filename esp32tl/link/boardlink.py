@@ -157,6 +157,11 @@ class Interface:
         Its outputs may lie in the future: the runner queues them (protocol §8)."""
         return ()
 
+    def transmitted(self, t: int, baud: int | None) -> None:
+        """The guest's UART transmits the bytes of the next `receive` at `baud`, `None` when it
+        has none set: the rate of the `uart_tx`, which `configured` does not give when two ports
+        share the wire. Raising fails the run."""
+
     def inputs(self, now: int) -> Iterable[Input]:
         """The GPIO inputs (`gpio_in`, `release`) the interface sends in the turn at `now`, on
         its own pins, asked at every turn after `poll`; none stamped before `now`."""
@@ -224,7 +229,8 @@ class BoardLink:
     once, from the link's thread, when the harness finds the run wrong, so that the backend can
     end the run without waiting for the runner's next turn. `hold` holds every turn until it
     returns, and bounds the next. `console` is called with the `t` and the bytes of every
-    `console` message. With `clock`, a runner whose `hello` names another clock fails the link.
+    `console` message. With `clock`, or a way to ask it when the runner says hello, a runner whose
+    `hello` names another clock fails the link.
     `on_reset` is called, from the link's thread, with every `reset` the runner sends."""
 
     def __init__(
@@ -236,7 +242,7 @@ class BoardLink:
         on_error: Callable[[str], None] | None = None,
         hold: Hold | None = None,
         console: Callable[[int, bytes], None] | None = None,
-        clock: str | None = None,
+        clock: str | Callable[[], str] | None = None,
         on_reset: Callable[[Reset], None] | None = None,
     ) -> None:
         owners: dict[int, str] = {}
@@ -257,7 +263,7 @@ class BoardLink:
             raise ValueError(f"one SD card slot, not {', '.join(slots)}")
         self.board = board
         self.chip = chip
-        self.clock = clock
+        self._clock = clock
         self.interfaces = tuple(interfaces)
         self._watched = frozenset(owners)
         self.watch = tuple(sorted(self._watched))
@@ -288,6 +294,11 @@ class BoardLink:
         )
         self._enabled: frozenset[int] = frozenset()
         self._answers: list[tuple[Interface, int, bytes]] = []
+
+    @property
+    def clock(self) -> str | None:
+        """The clock the runner's `hello` must name, if any."""
+        return self._clock() if callable(self._clock) else self._clock
 
     def board_input(self, message: Power | ChipReset) -> None:
         """Sends `message` in the harness's answer to the turn the link is held at, or to the
@@ -452,6 +463,8 @@ class BoardLink:
         for interface in self.interfaces:
             wire = interface.wire
             if wire is not None and wire.tx is not None and wire.tx in message.tx_pins:
+                with calling(interface.name, "transmitted"):
+                    interface.transmitted(message.t, message.baud)
                 with calling(interface.name, "receive"):
                     answers = _outputs(
                         interface.name, "receive", interface.receive(message.t, "out", message.data)
@@ -686,6 +699,11 @@ class BoardLink:
                 f"stats: the run ended at {_time(stats.t)} ({end});"
                 f" {counted(stats.turns, 'turn')}, {counted(stats.resets, 'reset')}"
             )
+            if stats.rt_resyncs is not None:
+                lines.append(
+                    f"  {counted(stats.rt_resyncs, 'resync')}: stretches of wall time the guest did"
+                    " not see"
+                )
             lines += [
                 f"  UART{u.port}: {u.tx_bytes} bytes sent, {u.rx_bytes} received,"
                 f" {u.rxfifo_ovf} rxfifo_ovf, {u.frm_err} frm_err"

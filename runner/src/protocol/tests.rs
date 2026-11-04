@@ -417,7 +417,7 @@ fn writes_the_runner_messages() {
         base64(&[0; 1518])
     );
     assert!(parse(&longest).is_ok());
-    for line in [hello(), sync(3)] {
+    for line in [hello(CLOCK), sync(3)] {
         assert!(parse_json(&line).is_ok(), "{line}");
     }
 }

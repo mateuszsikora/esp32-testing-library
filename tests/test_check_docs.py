@@ -490,6 +490,15 @@ def test_the_modem_owns_its_feature_documents(repo: Path) -> None:
     assert run(repo).returncode == 0
 
 
+def test_the_real_source_owns_its_feature_documents(repo: Path) -> None:
+    write(repo, "esp32tl/sources/real.py", '"""Real."""\n')
+    result = run(repo)
+    assert "[F25]" in result.stdout
+    assert "[F12]" not in result.stdout
+    write(repo, "docs/features/real-source-technical.md", "# Real source\n")
+    assert run(repo).returncode == 0
+
+
 def test_example_firmware_needs_its_documentation(repo: Path) -> None:
     write(repo, "examples/alarm/main/main.c", "void app_main(void) {}\n")
     assert "[F24]" in run(repo).stdout

@@ -339,7 +339,7 @@ that references to its number keep their meaning.
      `runner/src/session/tests.rs::an_access_point_put_back_while_it_is_leaving_comes_back_once_it_has_left`,
      `tests/test_http_request.py::test_rejoins_an_access_point_switched_off_and_on_at_one_instant`
 
-- **150.** Without a fault rule the SD card answers at once, as it always has. A rule applies to the
+- **154.** Without a fault rule the SD card answers at once, as it always has. A rule applies to the
      operations that start once it is in place, at most one per operation, the one given last
      first; each block of a multiple block read or write is one operation, and a block a CMD12
      or a chip reset's CMD0 ends before it begins is none. A failed read sends the
@@ -1006,3 +1006,47 @@ that references to its number keep their meaning.
      `board.power_on()` raise `RunEnded` without waiting, and log and switch nothing.
      `tests/test_clock.py::test_a_step_on_the_board_after_the_end_of_the_run_raises_run_ended_at_once`,
      `tests/test_pytest_plugin.py::test_the_board_s_power_and_reset_after_the_run_ended_raise_run_ended_and_log_nothing`
+
+## The real source
+
+- **155.** A `real` source hands over what the port gave stamped with the turn's time, promises no
+     latency, and renews its turn at the next whole emulated millisecond.
+     `tests/test_real_source.py::test_a_turn_hands_over_what_the_port_gave_stamped_with_the_turn`,
+     `tests/test_real_source.py::test_it_promises_no_latency_and_renews_its_turn_at_the_next_whole_millisecond`
+- **156.** A `real` source keeps its line at most 50 ms behind, or as long as 128 bytes take on it if
+     that is longer: it sends the newest bytes that fit,
+     counts the rest in `dropped`, and neither a tap nor the run's log holds what it dropped; at the
+     line rate with turns that keep up, it drops nothing, and what the device sent before the run's
+     first turn is not counted.
+     `tests/test_real_source.py::test_what_the_device_sent_before_the_first_turn_is_not_counted_as_dropped`,
+     `tests/test_real_source.py::test_an_adapter_s_whole_usb_packets_at_the_line_rate_lose_nothing`,
+     `tests/test_real_source.py::test_the_bound_is_50_ms_where_that_carries_more_than_a_burst`,
+     `tests/test_real_source.py::test_a_backlog_keeps_the_newest_bytes_within_the_bound`,
+     `tests/test_real_source.py::test_a_device_at_its_line_rate_loses_nothing_while_the_turns_keep_up`,
+     `tests/test_real_source.py::test_a_tap_records_the_source_s_stamps_and_not_what_it_dropped`,
+     `tests/test_real_source.py::test_a_long_hold_drops_the_backlog_and_an_answer_reaches_the_guest_within_the_bound`
+- **157.** A `uart_tx` with no baud, or one further from the port's than 3 %, fails a run with a
+     `real` source, within the 3 % it does not.
+     `tests/test_real_source.py::test_a_baud_within_the_3_percent_passes`,
+     `tests/test_real_source.py::test_a_baud_further_from_the_port_fails`,
+     `tests/test_real_source.py::test_no_baud_fails`,
+     `tests/test_real_source.py::test_the_link_fails_the_run_on_a_transmission_at_another_baud`
+- **158.** A `real` source puts the whole run on the wall clock at the call: the runner's `--realtime`
+     and `hello`, the link, every recording and later replays. It refuses a replay already given; a
+     run without one, or with a call that failed, stays on the emulated clock.
+     `tests/test_real_source.py::test_a_real_source_that_could_not_be_made_leaves_the_run_as_it_was`,
+     `tests/test_real_source.py::test_a_real_source_puts_the_run_on_the_wall_clock`,
+     `tests/test_real_source.py::test_without_a_real_source_the_run_stays_emulated`,
+     `tests/test_real_source.py::test_a_replay_on_another_route_must_be_on_the_wall_clock`,
+     `tests/test_real_source.py::test_a_replay_given_after_a_real_source_takes_the_wall_clock_only`
+- **159.** On `serial`, `real(port)` skips the test at the call and opens no port.
+     `tests/test_serial_backend.py::test_serial_capabilities_skip_at_the_call`
+- **160.** Under `--realtime` the runner starts pacing, and its wall clock, at the first slice
+     boundary at or after 2¹⁶ bus cycles at which the guest runs, after any turn there; it waits at
+     each block point until the wall clock reaches it, and moves the clock to the boundary at which
+     it sees a resync. A signal or the peer gone ends the wait.
+     `runner/src/session/tests.rs::pacing_starts_at_the_first_boundary_past_2_16_cycles_after_the_turn_there`,
+     `runner/src/session/tests.rs::a_turn_held_before_pacing_starts_does_not_count_against_the_wall_clock`,
+     `runner/src/session/tests.rs::a_resync_moves_the_wall_clock_to_the_boundary_it_is_seen_at`,
+     `runner/src/session/tests.rs::a_signal_or_the_peer_gone_ends_the_wait_for_wall_time`,
+     `tests/test_real_source.py::test_a_turn_held_before_the_first_2_16_cycles_does_not_cost_the_waits`

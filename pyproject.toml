@@ -17,10 +17,12 @@ requires-python = ">=3.11"
 # runs, so the plugin gives every test that uses `board` a wall-time timeout.
 # bumble is the Bluetooth stack of the peers in esp32tl.bluetooth; pinned exactly, because at
 # 0.0.x any release may change the internals esp32tl/bluetooth/controller.py and peer.py replace.
+# pyserial reads the host serial port of a real source (esp32tl/sources/real.py).
 dependencies = [
     "bumble==0.0.236",
     "cryptography>=42",
     "esp-idf-nvs-partition-gen==0.3.0",
+    "pyserial>=3.5",
     "pytest>=8",
     "pytest-embedded~=2.9.3",
     "pytest-embedded-idf[serial]~=2.9.3",
@@ -36,6 +38,7 @@ dev = [
     "pre-commit>=4",
     "ruff==0.17.3",
     "types-pexpect==4.9.0.20260518",
+    "types-pyserial==3.5.0.20261030",
 ]
 
 [project.scripts]

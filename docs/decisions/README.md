@@ -216,6 +216,13 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Every interface of a profile is on the board's supply](harness.md#every-interface-of-a-profile-is-on-the-boards-supply) | `harness.md` | postponed (#105) |
 | [Torn flash writes and what RAM holds after a reset are not modelled](harness.md#torn-flash-writes-and-what-ram-holds-after-a-reset-are-not-modelled) | `harness.md` | postponed (#105) |
 | [On serial, reset() pulses EN and power_off() and boots skip](harness.md#on-serial-reset-pulses-en-and-power_off-and-boots-skip) | `harness.md` | decided (#105) |
+| [real(port) skips on serial and leaves the port closed](harness.md#realport-skips-on-serial-and-leaves-the-port-closed) | `harness.md` | decided (#28) |
+| [A real source refuses a replay given before it, and a replay after it takes the wall clock](harness.md#a-real-source-refuses-a-replay-given-before-it-and-a-replay-after-it-takes-the-wall-clock) | `harness.md` | decided (#28) |
+| [The last stretch of the wait for wall time is a sleep, not a read with a timeout](harness.md#the-last-stretch-of-the-wait-for-wall-time-is-a-sleep-not-a-read-with-a-timeout) | `harness.md` | decided (#28) |
+| [A device that delivers faster than the route's line rate loses bytes to the bound](harness.md#a-device-that-delivers-faster-than-the-routes-line-rate-loses-bytes-to-the-bound) | `harness.md` | decided (#28) |
+| [The real source's bound is at least 128 bytes on the line, not 50 ms at any rate](harness.md#the-real-sources-bound-is-at-least-128-bytes-on-the-line-not-50-ms-at-any-rate) | `harness.md` | decided (#28) |
+| [The real source writes its port from a thread of its own, and limits only a port that makes no progress](harness.md#the-real-source-writes-its-port-from-a-thread-of-its-own-and-limits-only-a-port-that-makes-no-progress) | `harness.md` | decided (#28) |
+| [The real source's port lock is the advisory one, not TIOCEXCL](harness.md#the-real-sources-port-lock-is-the-advisory-one-not-tiocexcl) | `harness.md` | decided (#28) |
 
 ## The runner crate and esp32sim
 

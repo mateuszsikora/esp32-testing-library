@@ -113,8 +113,8 @@ What a tap writes is a recording of [version 1 of the format](../recording-forma
 |---|---|
 | `board` | The backend's `profile.name` |
 | `interface` | `console` or the route, `uart.<role>` |
-| `source` | UART source (`replay`, `model:gnss`, or `none`); console is `none` on esp32sim and `real` on serial |
-| `clock` | `emulated-fifo-write` on esp32sim, `wall` on serial |
+| `source` | UART source (`replay`, `model:gnss`, `real`, or `none`); console is `none` on esp32sim and `real` on serial |
+| `clock` | `emulated-fifo-write` on esp32sim, `wall` in a run with a real source there and on serial |
 | `end` | `hold` |
 | `app_sha256` | `app_image_sha256(app)`, hashing `binary_path / flasher_args["app"]["file"]`; on esp32sim `null` when `flasher_args.json` names no app or the file cannot be read |
 | `tools` | `{"esp32tl": esp32tl.__version__}`, and `esp32sim`, the runner's `hello`'s revision, when it sent one |

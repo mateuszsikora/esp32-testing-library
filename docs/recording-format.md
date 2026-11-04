@@ -70,8 +70,8 @@ From this line on the times are on `clock`, the clock of every event up to the n
 the time of the switch on the new clock. A switch to the clock the recording is on already is
 refused. Clock switches describe sessions that cross between emulated and wall-clock sources;
 nothing esp32tl writes makes one yet. The modem and its simulated PPP network stay on the
-emulated clock throughout a run, including after `CONNECT`. Nor will the `real` source on the
-emulator (#28) make one: a run with a real device at the far end of a route is on the `wall`
+emulated clock throughout a run, including after `CONNECT`. Nor does the `real` source on the
+emulator make one: a run with a real device at the far end of a route is on the `wall`
 clock from power-on ([link protocol](protocol.md#124-the-backend-and-recordings)).
 
 ## Clocks
@@ -83,7 +83,7 @@ The vocabulary is that of the runner's `hello` ([link protocol](protocol.md#51-h
   backend runs on.
 - `wall`: wall-clock nanoseconds, from a real board or a real device. The format fixes no origin
   for them: only their differences mean anything. A run on the emulator with a real device at the
-  far end of a route (#28) is on this clock too: its times are emulated nanoseconds since
+  far end of a route is on this clock too: its times are emulated nanoseconds since
   power-on, paced to wall time, less the wall time the run was held in a turn or skipped when it
   fell behind ([link protocol](protocol.md#12-wall-time---realtime-and-the-real-source-m5)).
 

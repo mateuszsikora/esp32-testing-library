@@ -159,7 +159,7 @@ FEATURES = [
         "Recording format changed: docs/recording-format.md is its specification; update it, and"
         " its version if the format changes",
     ),
-    # sources/ by file name: the models and the real source will have documents of their own.
+    # sources/ by file name: the models and the real source have documents of their own.
     Rule(
         "F15",
         r"^esp32tl/sources/replay\.py$",
@@ -219,6 +219,13 @@ FEATURES = [
         r"^examples/",
         r"^docs/features/examples-",
         "Examples changed: update docs/features/examples-*.md",
+    ),
+    Rule(
+        "F25",
+        r"^esp32tl/sources/real\.py$",
+        r"^docs/features/real-source-",
+        "Real source changed (the port, its stamps, the bound, what it refuses):"
+        " update docs/features/real-source-*.md",
     ),
 ]
 

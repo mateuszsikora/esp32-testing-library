@@ -184,6 +184,8 @@ def test_serial_capabilities_skip_at_the_call(pytester: pytest.Pytester, local: 
             gnss.replay("not-read.jsonl")
         def test_tap(gnss):
             gnss.tap("not-written.jsonl")
+        def test_real_port(gnss):
+            gnss.real("/dev/not-opened")
         def test_card_builder(board):
             board.sd_card.image().build()
         def test_card(sd_card):
@@ -221,12 +223,14 @@ def test_serial_capabilities_skip_at_the_call(pytester: pytest.Pytester, local: 
     """)
     )
     result = run_serial(pytester, "-rs")
-    result.assert_outcomes(skipped=16)
+    result.assert_outcomes(skipped=17)
     result.stdout.fnmatch_lines(
         [
             "*serial: uart.gnss takes no model source on this backend, only real*",
             "*serial: uart.gnss takes no replay source on this backend, only real*",
             "*serial: uart.gnss cannot be tapped on this backend*",
+            "*serial: uart.gnss has the device wired to the board at its far end: a host serial"
+            " port goes there on the emulator only*",
             "*serial: sd_card takes no model source on this backend, only real*",
             "*serial: NVS contents cannot be configured on this backend*",
             "*serial: uart.modem takes no model source on this backend, only real*",

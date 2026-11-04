@@ -166,3 +166,58 @@ fn tcp() {
     let signal = Arc::new(AtomicBool::new(false));
     assert!(SocketLink::tcp(&address, Some(Duration::from_secs(5)), signal).is_err());
 }
+
+#[test]
+fn wait_until_returns_when_the_time_comes_and_keeps_what_the_peer_sent() {
+    let (mut link, mut peer, _) = link();
+    peer.write_all(b"early\n").unwrap();
+    let start = Instant::now();
+    let wait = Duration::from_millis(50);
+    link.wait_until(start + wait).unwrap();
+    assert!(start.elapsed() >= wait);
+    assert_eq!(link.recv(None).unwrap(), "early");
+}
+
+#[test]
+fn wait_until_a_time_past_returns_at_once() {
+    let (mut link, _peer, _) = link();
+    let start = Instant::now();
+    link.wait_until(start).unwrap();
+    assert!(start.elapsed() < Duration::from_secs(1));
+}
+
+#[test]
+fn a_signal_ends_wait_until() {
+    let (mut link, _peer, signal) = link();
+    signal.store(true, Ordering::Relaxed);
+    let start = Instant::now();
+    assert_eq!(
+        link.wait_until(start + Duration::from_secs(60)),
+        Err(LinkError::Signal)
+    );
+    assert!(start.elapsed() < Duration::from_secs(1));
+}
+
+#[test]
+fn the_peer_closing_ends_wait_until() {
+    let (mut link, peer, _) = link();
+    drop(peer);
+    let start = Instant::now();
+    assert!(matches!(
+        link.wait_until(start + Duration::from_secs(60)),
+        Err(LinkError::Gone(_))
+    ));
+    assert!(start.elapsed() < Duration::from_secs(1));
+}
+
+#[test]
+fn what_waited_goes_out_during_wait_until() {
+    let (mut link, mut peer, _) = link();
+    link.send("{\"a\":1}").unwrap();
+    // long enough for the line to have waited `LIVE`, and for a read step to end after that
+    link.wait_until(Instant::now() + 3 * LIVE).unwrap();
+    peer.set_nonblocking(true).unwrap();
+    let mut got = [0u8; 16];
+    let n = peer.read(&mut got).unwrap();
+    assert_eq!(&got[..n], b"{\"a\":1}\n");
+}

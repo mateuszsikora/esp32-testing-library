@@ -49,6 +49,21 @@ guarantees. Unit tests do not establish hardware compatibility.
 fixture chain with an in-memory port and fake flash/reset, checking selection, autoflash,
 console capture, wall time, capability skips, reference hashes before port creation and disconnects.
 
+## Real-device checks
+
+`tests/test_real_source.py` runs without hardware, with a pseudo-terminal in place of the USB adapter.
+One test needs a GNSS receiver on a USB serial adapter at 9600 baud, with a view of the sky, and runs
+only when told where it is:
+
+```sh
+ESP32TL_REAL_GNSS_PORT=/dev/cu.usbserial-0001 .venv/bin/pytest tests/test_real_source.py -k usb_adapter -s
+```
+
+It waits up to 300 s of the board's time, which under `--realtime` is wall time, for a fix, checks no
+byte was dropped once the firmware had started, and writes what crossed the route to `/tmp/esp32tl-real-gnss.jsonl`, or to
+`ESP32TL_REAL_GNSS_TAP`. The suite reads no such recording: the generated ones stay the deterministic
+reference. See [the real source](../features/real-source-user.md).
+
 ## How pytest is configured
 
 `[tool.pytest.ini_options]` in `pyproject.toml`:
@@ -128,6 +143,7 @@ CI the test job installs mtools first, so there they run ([cicd.md](../cicd.md#t
 | `tests/test_air.py`, `tests/test_spp_peer.py` | The air's loop on the board's clock; the SPP peer and the controller under it against a Bumble device that does what `bt_spp_initiator` does: inquiry, legacy pairing with a PIN and with a stored key, encryption, SDP, RFCOMM, the channel to one authenticated device at a time, and a model's answers at their times, without the emulator | Nothing beyond the package; under a second |
 | `tests/test_matching.py` | Synthetic request/answer recordings: per-command cycling, silence, deadlines, loops, fragmentation, prompts and AT/PMTK/UBX defaults | Nothing beyond the package |
 | `tests/test_recording.py`, `tests/test_replay.py` | The recording format's reader and writer, its errors and clocks; the replay's timing and refusals, GNSS configuration responses and unseen-request reporting, and the `Uart` interface that puts it on a `BoardLink` | Nothing beyond the package; milliseconds |
+| `tests/test_real_source.py` | `gnss.real(port)` on a pseudo-terminal pair: the source alone, the backend's refusals and clock, and whole runs paced to wall time, each of which takes a few wall seconds and holds wall-time bounds with wide margins ([details](../features/real-source-technical.md#tests)) | The built `nmea_reader` and `modem_at` images, the runner and the ROM ELF for the runs; the source alone needs nothing beyond the package. One test needs a real receiver, and skips without `ESP32TL_REAL_GNSS_PORT` |
 | `tests/test_gnss_fixture.py` | `gnss.replay` and `gnss.tap` into `nmea_reader` through the `gnss` fixture, and, through `pytester`, a source given out of order with `board.power_on()`, and `test_nmea_reader.py`'s `test_reports_a_fix` failing on a changed recording and on a baud mismatch | The built `nmea_reader` image, the runner and the ROM ELF |
 | `tests/test_gnss_recordings.py` | `recordings/gnss-*.jsonl` are what `scripts/generate-gnss-recordings.py` writes, `--check` names a stale one, and every recording is one valid sentence per emulated second | Nothing beyond Python |
 | `tests/test_pytest_plugin.py` | The plugin's parametrisation and refused options, the `board_profile` marker, the wall-time timeout it gives, the runner's command line, `load_app`'s refusals, the runner and ROM paths, power-on, sources and taps, the `lines` fixture's refusals and how a runner's exit is reported (against a fake runner, a shell script), how the backend serves the link, holds it on the test's clock, ends the run, writes a tap and reports the run (against a fake runner that speaks the link protocol, a Python script) | Most tests nothing beyond the package; `test_hello_world_fails_on_an_image_that_prints_something_else` the built image, the runner and the ROM ELF |

@@ -68,8 +68,12 @@ class Board(ABC):
     """
 
     name: str
-    clock: str
     profile: BoardProfile
+
+    @property
+    @abstractmethod
+    def clock(self) -> str:
+        """The clock the run's times are on, as the recording format names it."""
 
     @cached_property
     def console(self) -> Console:

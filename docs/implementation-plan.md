@@ -557,6 +557,15 @@ and the runner keeps a wall clock of its own for the wait at the block point.*
   recording stays as the deterministic one).
 - Not attempted on `serial`: finding 11.
 
+*Update, 2026-11-04:* built in #28 as protocol section 12 has it, and tested on a pseudo-terminal
+pair. Validated with `tests/test_real_source.py::test_a_receiver_on_a_usb_adapter`, run by hand: the
+L76K of a LilyGO T-A7670G on a balcony, reaching the host through that board's CH9102 at 9600 baud,
+gave `nmea_reader` a fix in 45.6 s, with no resync, no byte dropped after the firmware's start, and
+541 sentences, all with a valid checksum, in the tap. A small bridge loaded into the board's RAM, which
+is not in this repository, joined the L76K's UART to the CH9102's. The firmware transmitted nothing, so
+writing to a real port is tested on a pseudo-terminal only. The recording replaces nothing, and holds
+where the receiver was, so it is not committed.
+
 ### M6. Cellular modem model and PPP
 
 *Superseded in part by section 11: the PPP data phase goes to a network the harness simulates in

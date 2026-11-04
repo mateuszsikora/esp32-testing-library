@@ -52,6 +52,9 @@ pub trait Link {
     fn close(&mut self);
     /// The next line from the peer, without its `\n`. `deadline` bounds the wait.
     fn recv(&mut self, deadline: Option<Instant>) -> Result<String, LinkError>;
+    /// Waits until `until`, outside the peer's turn (protocol 12.2): a signal ends the wait, and so
+    /// does the peer closing the socket. What the peer sends meanwhile waits for [`Link::recv`].
+    fn wait_until(&mut self, until: Instant) -> Result<(), LinkError>;
 }
 
 enum Stream {
@@ -297,6 +300,32 @@ impl Link for SocketLink {
                 return Err(LinkError::Gone(
                     "the peer's turn took longer than --peer-timeout".into(),
                 ));
+            }
+        }
+    }
+
+    /// Reads in [`POLL`] steps while more than a step is left. The last stretch is a sleep: a
+    /// read's timeout is rounded up to the kernel's tick, 4 ms at Linux's usual 250 Hz, and this
+    /// wait is for at most a few milliseconds nearly every time. What has been queued for a while
+    /// goes out meanwhile, as between slices.
+    fn wait_until(&mut self, until: Instant) -> Result<(), LinkError> {
+        let mut chunk = [0u8; 8192];
+        loop {
+            if self.signal.load(Ordering::Relaxed) {
+                return Err(LinkError::Signal);
+            }
+            self.idle()?;
+            let left = until.saturating_duration_since(Instant::now());
+            if left <= POLL {
+                std::thread::sleep(left);
+                return Ok(());
+            }
+            match self.stream.read(&mut chunk) {
+                Ok(0) => return Err(LinkError::Gone("the peer closed the socket".into())),
+                Ok(n) => self.input.extend_from_slice(&chunk[..n]),
+                Err(e) if e.kind() == ErrorKind::Interrupted => {}
+                Err(e) if blocked(&e) => {}
+                Err(e) => return Err(LinkError::Gone(format!("read failed: {e}"))),
             }
         }
     }

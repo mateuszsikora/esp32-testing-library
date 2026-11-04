@@ -27,6 +27,10 @@
 //! time comes, at a slice boundary, between two of the chip's SPI transactions; the runner says
 //! what the slot holds then (`sd_card_ack`).
 //!
+//! Under `--realtime` the run is paced to wall time (protocol 12): esp32sim paces `run` from the
+//! first slice boundary at or after 2^16 bus cycles, and the runner keeps a wall clock of its own
+//! from that moment, on which it waits for each block point before it takes the turn there.
+//!
 //! [`Guest`] and [`Link`] stand for the machine and the socket, so the tests run the loop
 //! against a scripted guest and a fake peer.
 use crate::cli;
@@ -54,6 +58,9 @@ const RX_FIFO: usize = 128;
 /// The longest `data` of one message, so that a line stays well under the 1 MiB limit.
 const MAX_DATA: usize = 48 << 10;
 const MS: u64 = 1_000_000;
+/// esp32sim's first pacing check comes in the first round, with pacing on, at or after this many
+/// bus cycles since power-on (`rt.last_check` starts at 0): pacing starts no sooner (protocol 12.2).
+const PACING_FROM: u64 = 1 << 16;
 
 /// The machine, as the run loop needs it.
 pub trait Guest {
@@ -107,6 +114,14 @@ pub trait Guest {
     /// Takes the access point, and the networks around, off the station's air at once, without
     /// a word: the station has lost its power, and with it what it knew of them.
     fn wifi_forget(&mut self) {}
+    // Pacing, asked only with `--realtime`: the defaults are a guest that never falls behind.
+
+    /// Turns esp32sim's pacing to wall time on.
+    fn start_pacing(&mut self) {}
+    /// How many times esp32sim has skipped a lag behind wall time.
+    fn resyncs(&self) -> u64 {
+        0
+    }
 }
 
 /// Where the classic chip's SRAM and RTC memories are on the data bus, besides the DRAM, which
@@ -230,6 +245,12 @@ impl Guest for esp32::Machine {
     fn wifi_forget(&mut self) {
         self.bus.periph.wifi.link.attach(None, None);
     }
+    fn start_pacing(&mut self) {
+        self.rt.enabled = true;
+    }
+    fn resyncs(&self) -> u64 {
+        self.rt.resyncs
+    }
 }
 
 pub struct Options<'a> {
@@ -249,6 +270,8 @@ pub struct Options<'a> {
     /// `--sd-spi`: the SD card slot, which the peer's `sd_card` empties and fills, and whose card
     /// loses its power with the board's.
     pub card: Option<sd_card::Shared>,
+    /// `--realtime`: the run is paced to wall time.
+    pub realtime: bool,
 }
 
 /// Why the run ended (protocol §9).
@@ -419,6 +442,11 @@ pub struct Session<'a, G: Guest, L: Link> {
     off: bool,
     /// Every `sd_fault` id the peer has given, queued rules' included: an id is used once.
     sd_ids: BTreeSet<u64>,
+    /// Under `--realtime`, once pacing has started: this wall instant is this emulated time, in
+    /// nanoseconds.
+    anchor: Option<(Instant, u64)>,
+    /// The resyncs the anchor has followed.
+    resyncs: u64,
     stats: Stats,
 }
 
@@ -448,6 +476,8 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
             eth: VecDeque::new(),
             off: false,
             sd_ids: BTreeSet::new(),
+            anchor: None,
+            resyncs: 0,
             stats: Stats {
                 wifi: opts.wifi.map(|_| WifiStats::default()),
                 ..Stats::default()
@@ -487,6 +517,7 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                 self.guest.idle_until(self.slice_end(now));
                 continue;
             }
+            self.start_pacing(now);
             match self.guest.run_until(self.slice_end(now)) {
                 Stop::Halted => {}
                 Stop::SwReset => {
@@ -502,7 +533,12 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
     }
 
     fn handshake(&mut self) -> Result<(), End> {
-        self.send(&protocol::hello())?;
+        let clock = if self.opts.realtime {
+            protocol::WALL
+        } else {
+            protocol::CLOCK
+        };
+        self.send(&protocol::hello(clock))?;
         self.flush()?;
         let deadline = self.deadline();
         let line = self.recv(deadline)?;
@@ -545,6 +581,7 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
     /// Between two slices, at the bus's current cycle.
     fn boundary(&mut self) -> Result<(), End> {
         let now = self.guest.cycles();
+        self.follow_resyncs(now);
         self.collect();
         let mut routes = self.routes();
         self.pending.push_back(Item::Routes { cycle: now, routes });
@@ -555,6 +592,7 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                     // a block point already behind the guest is taken at once, without running
                     // it; one at or after the end of the run is not taken
                     Some(b) if cycles(b) <= now && cycles(b) < self.opts.end_cycle => {
+                        self.wait_for_wall_time(b)?;
                         self.take_turn(b)?;
                     }
                     _ => break,
@@ -576,6 +614,42 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
         self.deliver(now, &routes)?;
         self.deliver_eth();
         self.link.idle().map_err(link_end)
+    }
+
+    /// Under `--realtime`, about to run the guest: at the first slice boundary at or after
+    /// [`PACING_FROM`], turns esp32sim's pacing on and starts the runner's wall clock with its
+    /// convention, that emulated time 0 is now. esp32sim's own anchor is private, and its first
+    /// check comes in the first round of the `run` that follows, so the two agree to within that,
+    /// whatever turns were held before (protocol 12.2).
+    fn start_pacing(&mut self, now: u64) {
+        if self.opts.realtime && self.anchor.is_none() && now >= PACING_FROM {
+            self.guest.start_pacing();
+            self.anchor = Some((Instant::now(), 0));
+        }
+    }
+
+    /// When esp32sim has skipped a lag since the last slice boundary, `now` is now, as it moved
+    /// its own anchor; the two then differ by less than the wall time of one slice.
+    fn follow_resyncs(&mut self, now: u64) {
+        if self.anchor.is_none() {
+            return;
+        }
+        let resyncs = self.guest.resyncs();
+        if resyncs != self.resyncs {
+            self.resyncs = resyncs;
+            self.anchor = Some((Instant::now(), ns(now)));
+        }
+    }
+
+    /// Waits until the wall clock reaches the block point `b`, so that what the peer's device sent
+    /// up to `b` has come when the peer takes the turn there. Not part of the peer's turn, so
+    /// `--peer-timeout` does not count it. A guest behind wall time does not wait.
+    fn wait_for_wall_time(&mut self, b: u64) -> Result<(), End> {
+        let Some((anchor, at)) = self.anchor else {
+            return Ok(());
+        };
+        let until = anchor + Duration::from_nanos(b.saturating_sub(at));
+        self.link.wait_until(until).map_err(link_end)
     }
 
     /// Ends a coalesced message once a character time has passed without its next byte, which
@@ -1358,6 +1432,7 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
             End::Stop | End::Protocol(_) => self.sync_t,
         };
         self.count_wifi_drops();
+        self.stats.rt_resyncs = self.opts.realtime.then(|| self.guest.resyncs());
         self.stats.inputs_not_applied = self.inputs.len() as u64;
         self.stats.rx_bytes_not_paced = self.lines.values().map(|l| l.bytes.len() as u64).sum();
         let line = match &end {

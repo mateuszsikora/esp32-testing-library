@@ -3,8 +3,9 @@
 
 The route's interface hands the tap every byte the firmware transmitted on it (`out`) and every
 byte its source sent into the ESP32 (`in`), with the time it gave them, whatever the source is: a
-replay, a model, or nothing. At the end of the run the backend writes `Tap.recording`, the events
-in time order with a header that says what was at the far end, to the file the test named.
+replay, a model, a real device, or nothing. At the end of the run the backend writes
+`Tap.recording`, the events in time order with a header that says what was at the far end, to the
+file the test named.
 """
 
 import hashlib

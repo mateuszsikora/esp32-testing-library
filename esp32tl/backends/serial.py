@@ -292,6 +292,13 @@ class Serial(Board):
         reason = capabilities.refusal(self.name, [request], declared)
         if reason is not None:
             self._skip(f"{self.name}: {reason}")
+        # The `real` this backend declares is the device wired to the board, which no host port
+        # reaches, and a tap on it would need a hardware sniffer (finding 11).
+        if request.source == "real" and capabilities.kind(request.interface) == "uart":
+            self._skip(
+                f"{self.name}: {request.interface} has the device wired to the board at its far"
+                " end: a host serial port goes there on the emulator only"
+            )
 
     def uart(self, role: str) -> Uart:
         interface = f"uart.{role}"

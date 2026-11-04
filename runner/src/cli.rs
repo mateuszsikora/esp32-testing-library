@@ -33,6 +33,8 @@ usage: esp32tl-runner --chip esp32 --flash-at OFFSET=FILE... --max-seconds S [op
   --wifi-nearby ssid=…,chan=…,rssi=…,secure=0|1,bssid=…   a network around the
                         station that a scan lists and nothing can join; repeatable,
                         needs --wifi
+  --realtime            pace the run to wall time, for a real device at the peer's end
+                        of a route (docs/protocol.md, section 12): needs --board
 ";
 
 /// Where the peer is (protocol §1).
@@ -78,6 +80,8 @@ pub struct Opts {
     pub sd_card: Option<(Option<PathBuf>, Wiring)>,
     /// `--wifi` and `--wifi-nearby`.
     pub wifi: Option<Wifi>,
+    /// `--realtime`.
+    pub realtime: bool,
 }
 
 /// esp32sim's virtual access point (`--wifi`), as esp32sim parses it, and the networks around
@@ -123,6 +127,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Opts, Error> {
         peer_timeout: Some(Duration::from_secs(60)),
         sd_card: None,
         wifi: None,
+        realtime: false,
     };
     let mut sd_image = None;
     let mut sd_wiring = None;
@@ -210,6 +215,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Opts, Error> {
                 wifi = Some(spec);
             }
             "--wifi-nearby" => nearby.push(value()?),
+            "--realtime" => opts.realtime = true,
             "-h" | "--help" => return Err(Error::Help),
             _ => return Err(usage(format!("unknown argument {flag:?}"))),
         }
@@ -262,6 +268,11 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Opts, Error> {
         }
         None => None,
     };
+    if opts.realtime && opts.board.is_none() {
+        return Err(usage(
+            "--realtime paces a run for the peer's real device: it needs --board",
+        ));
+    }
     if opts.console != Console::Stdout && opts.board.is_none() {
         return Err(usage(
             "--console socket and both send the console to the peer: they need --board",

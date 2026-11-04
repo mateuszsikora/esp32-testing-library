@@ -1992,6 +1992,8 @@ receiver to 115200 baud does, until an example needs it.
 
 Status: decided (#27)
 
+*Its 50 ms changed in #28: [the real source's bound is at least 128 bytes on the line](#the-real-sources-bound-is-at-least-128-bytes-on-the-line-not-50-ms-at-any-rate).*
+
 The `real` source works out from its own messages where its line will be free as the runner paces
 it, and at each turn sends no more of what the port gave than the line carries in the next 50 ms,
 the newest bytes, dropping the older ones and counting them for the test report
@@ -2219,3 +2221,102 @@ test at the line that asks, as a source the backend cannot give does.
 **Rejected:** reading the ROM's `rst:0x..` banner from the console as the serial backend's boots,
 because a firmware that silences UART0, or a reset during the banner, would leave the list wrong
 without a sign.
+
+## real(port) skips on serial and leaves the port closed
+
+Status: decided (#28)
+
+`gnss.real(port)` on the `serial` backend skips the test at the call, with `serial: uart.gnss has
+the device wired to the board at its far end: a host serial port goes there on the emulator only`, and
+opens nothing. `real` stays in the backend's capability declaration, where it means the device wired
+to the board, what a console-only test runs against.
+
+**Rejected:** running the test against the board's own device and leaving `port` closed, because the
+test named a port and would be told it had talked to a device on it. Also rejected: taking `real` out
+of the declaration, which would change `serial: uart.gnss takes no replay source on this backend, only
+real`, a true sentence about the board, and which still leaves no way to say what `real(port)` needs.
+
+## A real source refuses a replay given before it, and a replay after it takes the wall clock
+
+Status: decided (#28)
+
+A real source puts the backend on the wall clock at the call, so a replay after it is checked against
+that clock under the existing rule. A replay given before it was checked against the emulated clock,
+so the real source refuses it, with `{route}: a real source puts the run on the wall clock, and {other}
+replays a recording on the emulated-fifo-write clock`. A test that wants both gives the real source
+first.
+
+**Rejected:** checking replays again at `board.power_on()`, which would accept a wall recording given
+first, because the call that is wrong would then not be the call that raises, and a recording's clock
+is refused at the call everywhere else. Also rejected: a flag on the test that says it is on the wall
+clock, a second statement of what `gnss.real` already says.
+
+## The last stretch of the wait for wall time is a sleep, not a read with a timeout
+
+Status: decided (#28)
+
+The runner reads the socket while more than a 20 ms step of the wait is left, then sleeps the rest
+([protocol 12.2](../protocol.md#122-the-runner-waits-for-wall-time-at-the-block-point)).
+
+**Rejected:** a read with the time left as its timeout throughout, as #27 designed it, because
+`SO_RCVTIMEO` is rounded up to the kernel's tick, 4 ms at Linux's usual 250 Hz, on a wait of under
+2.3 ms: every turn would then be late by a tick, and the guest would spend the run catching up. What
+the sleep costs is that a signal or a closed socket waits for the turn that follows, at most 20 ms on.
+Also rejected: `poll(2)` through `libc`, a dependency for the same behaviour.
+
+## A device that delivers faster than the route's line rate loses bytes to the bound
+
+Status: decided (#28)
+
+The real source keeps the bound of [protocol 12.3](../protocol.md#123-the-real-source) for every
+device. A burst larger than what the line carries in the bound loses its older bytes, also while the
+guest keeps up: a receiver with native USB at 9600 baud loses most of each epoch. The report's `dropped`
+shows it, and the user's document says what to do.
+
+**Postponed:** a bound the test can set, or one that grows with a burst, until a device needs it; a
+line kept further behind is what the bound exists to prevent, so each such device has to be weighed
+against it.
+
+## The real source's bound is at least 128 bytes on the line, not 50 ms at any rate
+
+Status: decided (#28)
+
+The bound is 50 ms, or as long as 128 bytes take on the line if that is longer. This changes
+[the 50 ms of #27](#a-real-source-keeps-at-most-50-ms-of-bytes-waiting-on-its-line-and-drops-the-oldest),
+which took an FTDI adapter's 16 ms burst as the largest. Validating on a T-A7670G, whose CH9102 hands
+over 64 bytes at once at 9600 baud, every 67 ms, 50 ms of that line carried 48 of them: 3396 of about
+14900 bytes were dropped in 30 s, and most sentences cut, with no resync. With the 128 bytes, the same
+30 s on the same receiver dropped none, and all 359 sentences had a valid checksum.
+
+**Rejected:** room for one packet, 64 bytes, because the next can come a moment before the line is free
+of the last, and would then lose a byte or more; and a longer bound at every rate, because it would keep
+a fast line further behind after a hold than it needs. What 128 bytes cost is an answer after a hold
+up to 133 ms late at 9600 baud, instead of 50.
+
+## The real source writes its port from a thread of its own, and limits only a port that makes no progress
+
+Status: decided (#28)
+
+`Real.receive` queues what the firmware transmits, and a thread writes the queue to the port in writes
+of 64 bytes, each with a limit of 5 wall seconds. A port that fails or stalls fails the run at its next
+turn. esp32sim's UART reads as idle, so a firmware can send up to the runner's 48 KiB `uart_tx` far faster
+than a line carries it; the run does not wait for the line.
+
+**Rejected:** writing in the link's thread with a limit on progress, because every turn would then
+stand for as long as the port takes, the guest would fall behind wall time, and the reading thread would
+cut the device's bytes at the bound meanwhile. Also rejected: one write with pyserial's timeout,
+which covers the whole of the write, so that a burst of 8 KiB at 9600 baud fails a run whose device is
+reading. Also rejected: holding the firmware to the line's rate, which would take a model of the
+transmit FIFO that the emulator does not have, and which would be esp32sim's to give.
+
+## The real source's port lock is the advisory one, not TIOCEXCL
+
+Status: decided (#28)
+
+`Real` opens the port with pyserial's `exclusive=True`, an advisory `flock`, which stops a second route
+and a program that asks for the same lock. The user's document says to close anything else that holds
+the port, since a program without the lock takes bytes from the firmware and `dropped` cannot count them.
+
+**Rejected:** adding `TIOCEXCL`, because it blocks later opens only: a program that already holds the
+port, the case that loses bytes in silence, goes unseen, and the lock already stops the later open that
+matters, a second route's.

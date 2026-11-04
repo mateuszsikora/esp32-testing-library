@@ -158,6 +158,7 @@ fn run_with_board(
             wifi: opts.wifi.as_ref(),
             rom,
             card: card.clone(),
+            realtime: opts.realtime,
         },
     );
     let (end, stats) = session.run();

@@ -34,6 +34,7 @@ paths, names, defaults and messages quoted verbatim, and `TODO(owner): …` wher
 | `esp32tl/boards/` | `docs/features/board-profiles-user.md` and/or `-technical.md` (F13) |
 | `esp32tl/recording.py` | `docs/recording-format.md`, and its version if the format changes (F14) |
 | `esp32tl/sources/replay.py` | `docs/features/replay-user.md` and/or `-technical.md` (F15) |
+| `esp32tl/sources/real.py` | `docs/features/real-source-user.md` and/or `-technical.md` (F25) |
 | `esp32tl/tap.py`, `esp32tl/report.py` | `docs/features/run-report-user.md` and/or `-technical.md` (F16) |
 | `esp32tl/units.py`, `esp32tl/sources/model/` except `modem.py` | `docs/features/models-user.md` and/or `-technical.md` (F17) |
 | `esp32tl/flash.py` | `docs/features/flash-contents-user.md` and/or `-technical.md` (F20) |

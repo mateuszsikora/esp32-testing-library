@@ -1,5 +1,5 @@
-"""The `gnss` fixture: the profile's `uart.gnss` route, whose far end is a replay or a receiver the
-test describes, by what the test calls first, before `board.power_on()`."""
+"""The `gnss` fixture: the profile's `uart.gnss` route, whose far end is a replay, a real device or
+a receiver the test describes, by what the test calls first, before `board.power_on()`."""
 
 from collections.abc import Callable
 from datetime import datetime
@@ -29,7 +29,7 @@ class Gnss(Uart):
         name: str,
         wire: Wire,
         *,
-        clock: str,
+        clock: str | Callable[[], str],
         directory: Path,
         now: Callable[[], int],
         world: Callable[[], datetime],
@@ -119,7 +119,7 @@ class Gnss(Uart):
 
     def _refuse_replay(self) -> None:
         if self.source is not None:
+            what = "has a real device" if self.source_kind == "real" else "replays a recording"
             raise SourceError(
-                f"{self.name} replays a recording: it has no receiver to describe; one source"
-                " per test"
+                f"{self.name} {what}: it has no receiver to describe; one source per test"
             )
