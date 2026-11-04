@@ -862,3 +862,85 @@ fn rules_stay_through_a_change_of_card_and_a_delay_goes_with_the_card() {
     );
     assert_eq!(slot.stats().faults, 2, "counted over both cards");
 }
+
+#[test]
+fn cleared_rules_act_no_more_but_a_running_delay_runs_out() {
+    let mut card = card(2);
+    init(&mut card);
+    card.install(rule(1, Op::Write, Action::Delay(1_000_000), None, None));
+    card.install(rule(2, Op::Read, Action::Delay(1_000_000), None, None));
+    let data = [0x33; BLOCK];
+    command(&mut card, 24, 3, 10);
+    write_block(&mut card, START_BLOCK, &data, crc16(&data));
+    card.clear(None);
+    assert_eq!(xfer(&mut card, &[0xff; 2]), [BUSY; 2], "still programming");
+    card.advance(MS);
+    assert_eq!(xfer(&mut card, &[0xff; 2]), [0xff; 2]);
+    assert_eq!(card.take_faulted().len(), 1);
+    // a read the rule met, before the rule goes
+    card.install(rule(3, Op::Read, Action::Delay(1_000_000), None, None));
+    let answer = after_r1(command(&mut card, 17, 3, 8));
+    assert!(answer.iter().all(|&b| b == 0xff), "{answer:?}");
+    card.clear(Some(&[3]));
+    assert_eq!(xfer(&mut card, &[0xff; 8]), [0xff; 8], "still waiting");
+    card.advance(2 * MS);
+    let answer = xfer(&mut card, &[0xff; 8]);
+    assert_eq!(data_block(&mut card, answer, BLOCK), data);
+    assert_eq!(card.take_faulted().len(), 1);
+    // and with no rule left, nothing more waits or is reported
+    let answer = after_r1(command(&mut card, 17, 3, 8));
+    assert_eq!(answer[..2], [0xff, START_BLOCK]);
+    assert!(card.take_faulted().is_empty());
+}
+
+#[test]
+fn each_next_block_of_cmd18_waits_from_where_the_host_clocks_on_for_it() {
+    let mut card = card(2);
+    init(&mut card);
+    card.install(rule(1, Op::Read, Action::Delay(1_000_000), None, None));
+    let answer = after_r1(command(&mut card, 18, 7, 2));
+    assert!(answer.iter().all(|&b| b == 0xff), "{answer:?}");
+    card.advance(MS);
+    let answer = xfer(&mut card, &[0xff; 2]);
+    assert_eq!(data_block(&mut card, answer, BLOCK)[7], 7);
+    card.advance(10 * MS);
+    assert_eq!(
+        xfer(&mut card, &[0xff; 2]),
+        [0xff; 2],
+        "block 8 begins here"
+    );
+    card.advance(11 * MS - 1);
+    assert_eq!(xfer(&mut card, &[0xff; 2]), [0xff; 2]);
+    card.advance(11 * MS);
+    let answer = xfer(&mut card, &[0xff; 2]);
+    assert_eq!(data_block(&mut card, answer, BLOCK)[7], 8);
+    command(&mut card, 12, 0, 9);
+    let faulted: Vec<_> = card
+        .take_faulted()
+        .iter()
+        .map(|f| (f.blocks.0, f.cycle))
+        .collect();
+    assert_eq!(faulted, [(7, 0), (8, 10 * MS)]);
+}
+
+#[test]
+fn a_chip_reset_in_a_cmd18_uses_up_no_rule_when_the_host_starts_again_with_cmd0() {
+    let mut card = card(2);
+    init(&mut card);
+    card.install(rule(1, Op::Read, Action::Error, Some((8, 8)), Some(1)));
+    let blocks = read_blocks(&mut card, 7, 1);
+    assert_eq!(blocks[0][7], 7);
+    // the chip resets and the card keeps its power: the driver clocks with CS high, then CMD0
+    assert_eq!(card.transfer(pins(false), &[0xff; 10], 10), [0xff; 10]);
+    assert_eq!(r1(&command(&mut card, 0, 0, 8)).1, IDLE);
+    assert!(card.take_faulted().is_empty());
+    // still there for the read of that block, once the driver has initialised the card again
+    command(&mut card, 8, 0x1aa, 8);
+    for _ in 0..=INIT_POLLS {
+        command(&mut card, 55, 0, 8);
+        command(&mut card, 41, OCR_CCS, 8);
+    }
+    let answer = after_r1(command(&mut card, 17, 8, 10));
+    assert_eq!(answer[..2], [0xff, ERROR_ECC]);
+    assert_eq!(card.take_faulted().len(), 1);
+}

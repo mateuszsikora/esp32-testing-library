@@ -659,7 +659,7 @@ A failure to write the last messages does not change the exit code: the first ca
 
 ## Tests
 
-`make test-runner` runs the Rust tests (`cargo test --locked`), 117 of them:
+`make test-runner` runs the Rust tests (`cargo test --locked`), 121 of them:
 
 - `runner/src/cli/tests.rs`: `cli::parse` only. `minimal_command_line` checks the defaults
   (`rom: None`, flash 4 MiB, PSRAM 0, console `Stdout`, no board, `--peer-timeout` 60 s);
@@ -718,12 +718,15 @@ A failure to write the last messages does not change the exit code: the first ca
   delayed write busy and deaf to a command until its time, MISO let go with CS high, the block in
   the image at once; a failed block of a CMD25 that waits for the next token; an erase delayed by
   a rule on any block of its range; the rule given last first, and rules cleared by id and all; a
+  clear that leaves a read and a write under way their delay; each next block of a CMD18 delayed
+  from where the host clocks on for it; a chip reset in a CMD18, whose CMD0 meets no rule; a
   power cut that ends a busy time and a delayed read and leaves the rules; rules that stay through a change of card, while the delay goes with the card.
 - `runner/src/protocol/tests.rs` also parses `sd_fault` and `sd_clear`, refuses each `sd_fault`
   5.20 does not allow with its message, and writes `sd_op` for an error and a delay.
 - `runner/src/socket_board/tests.rs`: what `SocketBoard` records: every UART byte, and only the
   GPIO changes of watched pins, enable-only changes included; and the peer's levels and releases
-  it hands the chip, in order, with `input_levels` after them.
+  it hands the chip, in order, with `input_levels` after them; and, with a card in the slot, the
+  bus cycle from `advance_to` on a rule's report, which goes into the log.
 - `runner/src/transport/tests.rs`: lines both ways over a socket pair, a line over 1 MiB, the
   `--peer-timeout` on a read and on a write the peer does not read, a signal ending a blocked
   read, a write cut short by a signal that goes on once `closing` is called, the teardown limit,
@@ -819,8 +822,9 @@ the card out of `sd_remount` and puts cards in while it runs. They check no runn
 the card's image errors and its lines on stderr are not covered.
 `examples/sd_data_logger/tests/test_logger.py` runs the fault rules on the real binary through
 the backend: a failed read and a failed write, a write busy within ESP-IDF's timeout and one busy
-past it, with the firmware's timeouts on the board's clock; `tests/test_sd_remount.py`, a rule that
-stays through a change of card. An erase rule and a multiple block operation on a real image are
+past it, with the firmware's timeouts on the board's clock; `tests/test_sdspi.py`, reads held on
+that clock, a slow and a failed read that fail the mount, and rules that outlast a power cycle and
+a chip reset; `tests/test_sd_remount.py`, a rule that stays through a change of card. An erase rule and a multiple block operation on a real image are
 not covered: what `sdspi` clocks around a CMD18 comes from its source at ESP-IDF v5.3.6, in the unit
 test above.
 `tests/test_http_request.py`

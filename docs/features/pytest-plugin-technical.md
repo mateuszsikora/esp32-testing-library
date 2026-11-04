@@ -597,7 +597,9 @@ is on no link, and `insert`, which a rule needs, skips through the capability de
 `tests/test_sd_faults.py` covers the rules without the emulator: what goes out in which turn and
 at what time, the clears, the refusals and their messages, an `sd_op` into `hits`, `faulted`, the
 report and the properties, a spent rule that is not cleared, a run that has ended, and an
-`sd_fault` from another interface. `tests/test_sdspi.py` checks `RunEnded` on a real run.
+`sd_fault` from another interface or one the runner would refuse. `tests/test_sdspi.py` runs them
+on ESP-IDF's example: reads held on the board's clock, a slow and a failed read that fail the mount,
+rules that outlast a power cycle and a chip reset, and `RunEnded` on a real run.
 `examples/sd_data_logger/tests/test_logger.py` runs them against the logger on the real runner.
 
 ### The Wi-Fi station

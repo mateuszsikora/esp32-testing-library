@@ -1,10 +1,11 @@
 """ESP-IDF's storage/sd_card/sdspi example, unmodified, with the runner's SD card model in the
 board profile's slot (plan M7): the test prepares a FAT image with mtools, the example mounts it
 over SPI, writes, renames and reads its files, and the test reads them back from the image with
-mtools. Also what a test that uses the `sd_card` fixture out of order sees. Needs `make firmware`
-(sdspi) and mtools.
+mtools. Also what the card's fault rules do to the example, and what a test that uses the
+`sd_card` fixture out of order sees. Needs `make firmware` (sdspi) and mtools.
 """
 
+import itertools
 import os
 import subprocess
 from pathlib import Path
@@ -18,7 +19,7 @@ from esp32tl.interfaces.gnss import Gnss
 from esp32tl.interfaces.modem import Modem
 from esp32tl.interfaces.sd_card import SdCard
 from esp32tl.interfaces.uart import Uart
-from esp32tl.units import seconds
+from esp32tl.units import ms, seconds
 
 ROOT = Path(__file__).resolve().parent.parent
 SDSPI = ROOT / "firmware" / "sdspi"
@@ -168,6 +169,92 @@ def test_a_card_without_a_file_system_does_not_mount(
     # the example does not format a card it cannot mount
     console.expect_exact("example: Failed to mount filesystem.", timeout=TIMEOUT)
     assert image.read_bytes() == bytes(1 << 20)
+
+
+def test_read_delays_hold_each_read_on_the_board_s_clock(
+    tmp_path: Path, board: Esp32Sim, sd_card: SdCard, console: Console
+) -> None:
+    image = fat_image(tmp_path / "card.img", {"foo.txt": b"from the test\n"})
+    sd_card.insert(image)
+    slow = sd_card.delay("read", ms(20))
+    board.power_on()
+    console.expect_exact("example: Card unmounted", timeout=TIMEOUT)
+    reads = slow.hits
+    assert len(reads) > 1
+    assert all(io.op == "read" and io.delay == ms(20) and io.action == "delay" for io in reads)
+    # the driver waits for each block before it asks for the next one
+    assert all(b.at - a.at >= ms(20) for a, b in itertools.pairwise(reads))
+    assert read(image, "foo.txt") == b"Hello SIMSD!\n"
+    assert sd_card.faulted == reads
+    assert (
+        f"  fault 1: sd_card.delay('read', seconds(0.02)) at 0 s; {len(reads)} operations"
+        in board.report().splitlines()
+    )
+
+
+def test_a_read_slower_than_the_driver_s_timeout_fails_the_mount_on_the_board_s_clock(
+    tmp_path: Path, board: Esp32Sim, sd_card: SdCard, console: Console
+) -> None:
+    image = fat_image(tmp_path / "card.img")
+    before = image.read_bytes()
+    sd_card.insert(image)
+    slow = sd_card.delay("read", seconds(1.5), count=1)
+    board.power_on()
+    console.expect_exact("example: Failed to mount filesystem.", timeout=TIMEOUT)
+    [first] = slow.hits
+    assert first.blocks == range(0, 1)
+    # ESP-IDF's read timeout is 1 s (SDMMC_DEFAULT_CMD_TIMEOUT_MS): 0x107 is ESP_ERR_TIMEOUT
+    [timeout] = console.lines("sdmmc_read_blocks failed \\(0x107\\)")
+    assert seconds(1) <= timeout.at - first.at < seconds(1.01)
+    assert image.read_bytes() == before
+
+
+def test_a_failed_read_of_the_boot_sector_fails_the_mount(
+    tmp_path: Path, board: Esp32Sim, sd_card: SdCard, console: Console
+) -> None:
+    image = fat_image(tmp_path / "card.img")
+    sd_card.insert(image)
+    broken = sd_card.fail("read", blocks=0, count=1)
+    board.power_on()
+    console.expect_exact("example: Failed to mount filesystem.", timeout=TIMEOUT)
+    [io] = broken.hits
+    assert (io.op, io.blocks, io.action, io.written) == ("read", range(0, 1), "error", False)
+    # The error token comes right after R1, where ESP-IDF looks only for the start token: it
+    # then polls for one that never comes, and gives up after its 1 s read timeout.
+    [timeout] = console.lines("sdmmc_read_blocks failed \\(0x107\\)")
+    assert seconds(1) <= timeout.at - io.at < seconds(1.01)
+
+
+def test_fault_rules_are_the_test_s_and_outlast_a_power_cycle(
+    tmp_path: Path, board: Esp32Sim, sd_card: SdCard, console: Console
+) -> None:
+    image = fat_image(tmp_path / "card.img")
+    sd_card.insert(image)
+    board.power_on()
+    console.expect_exact("example: Card unmounted", timeout=TIMEOUT)
+    board.power_off()
+    # given with the supply off, it acts on the first read after it comes back
+    broken = sd_card.fail("read", blocks=0, count=1)
+    board.power_on()
+    console.expect_exact("example: Failed to mount filesystem.", timeout=TIMEOUT)
+    [io] = broken.hits
+    assert (io.blocks, io.action) == (range(0, 1), "error")
+    assert board.boots[-1].number == 2
+
+
+def test_fault_rules_outlast_a_reset_of_the_chip(
+    tmp_path: Path, board: Esp32Sim, sd_card: SdCard, console: Console
+) -> None:
+    image = fat_image(tmp_path / "card.img")
+    sd_card.insert(image)
+    board.power_on()
+    console.expect_exact("example: Card unmounted", timeout=TIMEOUT)
+    broken = sd_card.fail("read", blocks=0, count=1)
+    board.reset()
+    console.expect_exact("example: Failed to mount filesystem.", timeout=TIMEOUT)
+    [io] = broken.hits
+    assert (io.blocks, io.action) == (range(0, 1), "error")
+    assert board.boots[-1].number == 2
 
 
 def test_an_empty_slot_never_answers(board: Esp32Sim, console: Console) -> None:

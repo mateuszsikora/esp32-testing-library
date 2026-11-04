@@ -284,6 +284,23 @@ def test_rules_and_card_changes_go_out_in_order_and_only_changes_are_acknowledge
     assert fault.active and later.active
 
 
+def test_an_sd_rule_the_runner_would_refuse_fails_the_link_naming_the_slot() -> None:
+    class Slot(Interface):
+        @property
+        def card_slot(self) -> bool:
+            return True
+
+        def inputs(self, now: int) -> list[SdFault]:
+            return [SdFault(now, 1, "erase", "error")]
+
+    link = started(Slot("sd_card", None))
+    assert link.receive(Sync(0)) == [Stop()]
+    assert link.error == (
+        "sd_card sent a sd_fault the link cannot carry: sd_fault: an erase cannot fail, only be"
+        " delayed"
+    )
+
+
 def test_only_the_card_sends_sd_fault_and_sd_op_needs_a_card(card: SdCard) -> None:
     class Impostor(Interface):
         def inputs(self, now: int) -> list[SdFault]:
