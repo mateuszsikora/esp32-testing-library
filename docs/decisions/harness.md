@@ -1473,6 +1473,42 @@ does with a device that has it can only be seen with firmware, so it waits for #
 holds it.
 
 
+## A remote name request nobody answers ends at the page timeout
+
+Status: decided (#129)
+
+A device in the ESP32's place can ask a peer that left for its name, and Bumble then waits for an
+answer that never comes. The controller ends the request in `PAGE_TIMEOUT` at the page timeout, the
+same mechanism as a page's, and the error Bluetooth Core 5.4 names for this command (Vol 1, Part F,
+2.4). The issue named only the page.
+
+**Rejected:** documenting the hang, because a test would learn of it from a test that hangs.
+
+
+## A page that respects page scan is postponed
+
+Status: postponed (#135)
+
+Bumble's controller answers a page whatever the target's page scan says, though an inquiry respects
+inquiry scan, so `set_connectable(False)` does not stop a device that knows the address. It predates
+#129, and is reachable only through `peer.device`, because the peer's API has no call that turns page
+scan off.
+
+
+## Connection_Accept_Timeout is postponed
+
+Status: postponed (#34)
+
+The page's timer runs until the target's host accepts, and a target's host has no time limit (Vol 4,
+Part E, 6.7, is not modelled). A host that accepts after the page ended makes a link although the
+pager reported `PAGE_TIMEOUT`. Bumble's host accepts at the instant it hears, so this takes a slowed
+host, and firmware behind #34 is the first that will be slow: what it needs can be seen then.
+
+**Rejected:** ignoring the late answer on the pager's side, because the target would be left holding
+a link with no other end, and adding the timeout now, because nothing would exercise it but its own
+test.
+
+
 ## A bt fixture, an HCI tap and a replayed peer are postponed
 
 Status: postponed (#33)

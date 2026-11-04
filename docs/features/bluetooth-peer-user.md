@@ -103,7 +103,7 @@ An inquiry finds every device on the air, each with its own class and signal str
 of their addresses. `rssi` can be set at any time, on either class, and the next inquiry gets it. It
 reaches the device in the RSSI and extended inquiry modes (Bumble asks for extended); the plain
 `Inquiry_Result` has no such field. Nothing else depends on it: a device at -127 dBm connects as one
-at 20.
+at 20. A device that has left hears nobody in its own inquiry, which still takes its whole length.
 
 Secure Simple Pairing is not modelled on these devices: they pair with a PIN, as `SppPeer` does.
 
@@ -153,6 +153,7 @@ They differ only at the peer:
 | A source that has `supply(on)` | Gets `supply(False)`, and `supply(True)` from `switch_on`, at the air's time; what it had queued is dropped, and not counted in `lost` | Is not told; runs on, and what it sends counts in `lost` |
 | Any other source | Runs on, and what it sends counts in `lost` | The same |
 | The peer's end of its links | Gone at once: `channel_open` is false | Falls at its timeout: `channel_open` stays true until then, and a second device is refused the channel until then |
+| What it has under way itself, through `peer.device` | A page or a remote name request ends at once in `PAGE_TIMEOUT`, an authentication in `CONNECTION_TIMEOUT`, an inquiry with its completion, and no inquiry restarts by itself | Each runs to its own timeout, hearing nobody |
 
 Link keys stay either way, and `forget_keys()` is the only way to lose them; it applies from the
 peer's next link on. No specification or vendor document says what a given device keeps after

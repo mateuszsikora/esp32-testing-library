@@ -177,6 +177,9 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [A peer leaves without a word, keeps its keys, and its old link stays dead until it falls](harness.md#a-peer-leaves-without-a-word-keeps-its-keys-and-its-old-link-stays-dead-until-it-falls) | `harness.md` | decided (#129) |
 | [Devices on the air have a base class without SPP, and an RSSI of their own](harness.md#devices-on-the-air-have-a-base-class-without-spp-and-an-rssi-of-their-own) | `harness.md` | decided (#129) |
 | [Secure Simple Pairing on the peer's side is postponed](harness.md#secure-simple-pairing-on-the-peers-side-is-postponed) | `harness.md` | postponed (#129) |
+| [A remote name request nobody answers ends at the page timeout](harness.md#a-remote-name-request-nobody-answers-ends-at-the-page-timeout) | `harness.md` | decided (#129) |
+| [A page that respects page scan is postponed](harness.md#a-page-that-respects-page-scan-is-postponed) | `harness.md` | postponed (#135) |
+| [Connection_Accept_Timeout is postponed](harness.md#connection_accept_timeout-is-postponed) | `harness.md` | postponed (#34) |
 | [A bt fixture, an HCI tap and a replayed peer are postponed](harness.md#a-bt-fixture-an-hci-tap-and-a-replayed-peer-are-postponed) | `harness.md` | postponed (#33) |
 | [bumble is a dependency of esp32tl, pinned exactly](harness.md#bumble-is-a-dependency-of-esp32tl-pinned-exactly) | `harness.md` | decided (#33) |
 | [Serial is opt-in and pytest-embedded owns flashing and the port](harness.md#serial-is-opt-in-and-pytest-embedded-owns-flashing-and-the-port) | `harness.md` | decided (#25) |

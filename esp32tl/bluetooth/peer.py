@@ -172,6 +172,8 @@ class BluetoothDevice:
         if was_present and not self.present:
             self._controller.left()
         if was_on and not on:
+            # A host with no power starts no inquiry when the last one ends.
+            self.device.auto_restart_inquiry = False
             self._controller.power_lost()
         if was_on != on:
             self._supply(on)

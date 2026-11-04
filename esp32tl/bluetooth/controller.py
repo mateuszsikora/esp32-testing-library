@@ -166,6 +166,8 @@ class Controller(BumbleController):
         self._paging: dict[hci.Address, asyncio.TimerHandle] = {}
         # The remote name request this side made of each peer, until it is answered.
         self._naming: dict[hci.Address, asyncio.TimerHandle] = {}
+        # Who paged this side and is gone, with this side's host yet to answer.
+        self._unanswered: set[hci.Address] = set()
         # Each link's timeout in slots, where a host or the central changed it; 0 for none.
         self._supervision_timeouts: dict[hci.Address, int] = {}
         # The time each link lost contact, on the loop's clock, and the timer it falls by.
@@ -221,15 +223,16 @@ class Controller(BumbleController):
         self._inquiry = loop.call_later(
             command.inquiry_length * INQUIRY_UNIT_S, self._inquiry_complete
         )
+        # A device that left hears nobody; it still waits out the inquiry's length.
+        heard = self.link.controllers if self.link.present(self.public_address) else ()
         others = sorted(
             (
                 c
-                for c in self.link.controllers
+                for c in heard
                 if c is not self
                 and isinstance(c, Controller)
                 and c.classic_scan_enable & 0x01
                 and self.link.present(c.public_address)
-                and self.link.present(self.public_address)
             ),
             key=lambda c: bytes(reversed(bytes(c.public_address))),
         )
@@ -322,6 +325,18 @@ class Controller(BumbleController):
         if status != hci.HCI_ErrorCode.SUCCESS:
             self._let_go(peer_address)
 
+    def on_hci_accept_connection_request_command(
+        self, command: hci.HCI_Accept_Connection_Request_Command
+    ) -> None:
+        peer = command.bd_addr
+        if peer not in self.classic_connections and peer in self._unanswered:
+            # The page it answers ended meanwhile, and no link came of it.
+            self._unanswered.discard(peer)
+            self._send_hci_command_status(hci.HCI_ErrorCode.SUCCESS, command.op_code)
+            self.on_classic_connection_complete(peer, hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR)
+            return
+        super().on_hci_accept_connection_request_command(command)
+
     # Remote name requests: a page too, so one nobody answers ends at the page timeout.
 
     def on_hci_remote_name_request_command(
@@ -413,14 +428,23 @@ class Controller(BumbleController):
 
     def left(self) -> None:
         """This device is gone from the air, without a word: both ends of each of its links lose
-        contact. A page this side has under way is no link: it ends by itself."""
-        peers = [peer for peer in self.classic_connections if peer not in self._paging]
+        contact. A page this side has under way that nobody heard is no link: it ends by itself;
+        one the target heard, the target holds, and only that end has a timeout to wait for."""
+        peers = [
+            peer
+            for peer in self.classic_connections
+            if peer not in self._paging or self._held_by(peer)
+        ]
         self.link.leave(self.public_address, peers)
         for peer in peers:
             self._lose_contact(peer)
             other = self.link.find_classic_controller(peer)
             if isinstance(other, Controller):
                 other._lose_contact(self.public_address)
+
+    def _held_by(self, peer: hci.Address) -> bool:
+        other = self.link.find_classic_controller(peer)
+        return other is not None and self.public_address in other.classic_connections
 
     def returned(self) -> None:
         """This device is on the air again. The links it left stay severed until they fall."""
@@ -437,7 +461,7 @@ class Controller(BumbleController):
             self._inquiry.cancel()
             self._inquiry_complete()
         for peer in list(self.classic_connections):
-            self.on_classic_disconnected(peer, hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR)
+            self._link_timed_out(peer)
 
     # Authentication: this side's host asks.
 
@@ -723,13 +747,19 @@ class Controller(BumbleController):
         timer = self._supervision.pop(peer_address, None)
         if timer is not None:
             timer.cancel()
-        super().on_classic_disconnected(peer_address, reason)
+        connection = self.classic_connections.get(peer_address)
+        if connection is not None and connection.handle == 0:
+            # A page this side's host has yet to answer: handles start at 1, and no link was made
+            # to tell it of.
+            del self.classic_connections[peer_address]
+            self._unanswered.add(peer_address)
+        else:
+            super().on_classic_disconnected(peer_address, reason)
         self._let_go(peer_address)
 
     def _let_go(self, peer: hci.Address) -> None:
         """The link holds no more on this side: when `peer` holds none either, they may page."""
-        other = self.link.find_classic_controller(peer)
-        if other is None or self.public_address not in other.classic_connections:
+        if not self._held_by(peer):
             self.link.let_go(self.public_address, peer)
 
     def authenticated(self, peer: hci.Address) -> bool:

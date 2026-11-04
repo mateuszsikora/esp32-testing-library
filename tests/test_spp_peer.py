@@ -674,12 +674,12 @@ PEER = hci.Address("00:00:00:00:5B:01/P")
 Echo = Elm
 
 
-def leave(peer: SppPeer, how: str) -> None:
-    getattr(peer, how)()
+def leave(device: BluetoothDevice, how: str) -> None:
+    getattr(device, how)()
 
 
-def come_back(peer: SppPeer, how: str) -> None:
-    getattr(peer, RETURNING[how])()
+def come_back(device: BluetoothDevice, how: str) -> None:
+    getattr(device, RETURNING[how])()
 
 
 async def link_to(esp32: Initiator) -> Connection:
@@ -1403,9 +1403,9 @@ def test_a_second_device_at_an_address_on_the_air_is_refused_in_its_own_words(ai
 # A device that leaves with something of its own under way.
 
 
-def phone_and_speaker(air: Air, pin: str | None = None) -> tuple[BluetoothDevice, BluetoothDevice]:
-    phone = BluetoothDevice(air, name="phone", pin=pin, address=PHONE)
-    speaker = BluetoothDevice(air, name="speaker", pin=pin, address=SPEAKER)
+def phone_and_speaker(air: Air) -> tuple[BluetoothDevice, BluetoothDevice]:
+    phone = BluetoothDevice(air, name="phone", address=PHONE)
+    speaker = BluetoothDevice(air, name="speaker", address=SPEAKER)
     return phone, speaker
 
 
@@ -1515,12 +1515,8 @@ def test_a_device_that_left_finds_nothing_in_its_own_inquiry(air: Air, how: str)
     phone.device.on("inquiry_result", lambda address, *_: found.append(str(address)))
     completed: list[int] = []
     phone.device.on("inquiry_complete", lambda: completed.append(air.loop.now))
-    if how == "out_of_range":
-        phone.out_of_range()
-        air.run(phone.device.start_discovery(auto_restart=False), within=seconds(0))
-    else:
-        phone.switch_off()
-        air.run(phone.device.start_discovery(auto_restart=False), within=seconds(0))
+    leave(phone, how)
+    air.run(phone.device.start_discovery(auto_restart=False), within=seconds(0))
     air.wait(seconds(11))
     assert found == []
     assert completed == [10_240 * MS]
@@ -1561,3 +1557,160 @@ def test_a_power_loss_ends_a_remote_name_request_and_its_timer_does_not_end_the_
     with pytest.raises(hci.HCI_Error):
         air.run(phone.device.request_remote_name(hci.Address(SPEAKER + "/P")), within=seconds(10))
     assert air.now == ms(9_120)
+
+
+# A target whose host takes its time to answer a page.
+
+
+def slow_to_accept(
+    air: Air, target: BluetoothDevice, patch: pytest.MonkeyPatch, delay: float = 0.1
+) -> None:
+    """The host of `target` answers a page `delay` seconds after it hears it, as firmware may."""
+    controller = air.link.find_classic_controller(target.device.public_address)
+    assert controller is not None
+    accept = controller.on_hci_accept_connection_request_command
+
+    def later(command: hci.HCI_Accept_Connection_Request_Command) -> None:
+        air.loop.call_later(delay, accept, command)
+
+    patch.setattr(controller, "on_hci_accept_connection_request_command", later)
+
+
+def falls_of(air: Air, device: BluetoothDevice) -> list[tuple[int, int]]:
+    """The links of `device` that fall from now on, as (t, reason)."""
+    fell: list[tuple[int, int]] = []
+
+    def connected(connection: Connection) -> None:
+        def down(reason: int) -> None:
+            fell.append((air.loop.now, reason))
+
+        connection.on(connection.EVENT_DISCONNECTION, down)
+
+    device.device.on(device.device.EVENT_CONNECTION, connected)
+    return fell
+
+
+@pytest.mark.parametrize("how", LEAVING)
+def test_a_target_that_heard_the_page_loses_contact_when_the_pager_leaves(
+    air: Air, how: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    phone, speaker = phone_and_speaker(air)
+    slow_to_accept(air, speaker, monkeypatch)
+    fell = falls_of(air, speaker)
+    task = air.start(page(phone, SPEAKER))
+    air.advance(ms(50))
+    leave(phone, how)
+    air.advance(ms(120_000))
+    assert task.done()
+    # Accepted at 0.1 s, with nobody left: its end falls 20 s after the pager left.
+    assert fell == [(20_050 * MS, hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR)]
+    assert not speaker.device.connections
+    come_back(phone, how)
+    # It holds nothing, so it can page the one that returned.
+    monkeypatch.undo()
+    air.run(page(speaker, PHONE), within=seconds(1))
+
+
+def test_a_pager_whose_power_cycles_before_the_host_answers_gets_no_link(
+    air: Air, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    phone, speaker = phone_and_speaker(air)
+    slow_to_accept(air, speaker, monkeypatch)
+    fell = falls_of(air, speaker)
+    task = air.start(page(phone, SPEAKER))
+    air.advance(ms(50))
+    phone.switch_off()
+    phone.switch_on()
+    assert isinstance(task.exception(), core.ConnectionError)
+    air.advance(ms(200))
+    # The target's host accepted a page that was over: the pager has no link, and the target's end
+    # falls by itself.
+    assert not phone.device.connections
+    air.advance(seconds(21))
+    assert fell == [(20_050 * MS, hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR)]
+    monkeypatch.undo()
+    air.run(page(phone, SPEAKER), within=seconds(1))
+
+
+def test_a_power_loss_ends_an_authentication_with_a_status(air: Air) -> None:
+    phone = BluetoothDevice(air, name="phone", pin="0000", address=PHONE)
+    speaker = BluetoothDevice(air, name="speaker", pin="0000", address=SPEAKER)
+    connection = air.run(page(phone, SPEAKER), within=seconds(1))
+    speaker.out_of_range()
+    task = air.start(connection.authenticate())
+    air.wait(seconds(1))
+    phone.switch_off()
+    error = task.exception()
+    assert isinstance(error, hci.HCI_Error)
+    assert error.error_code == hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR
+
+
+@pytest.mark.parametrize("how", LEAVING)
+def test_a_target_that_leaves_before_its_host_answers_tells_its_host_of_no_link(
+    air: Air, how: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    phone, speaker = phone_and_speaker(air)
+    slow_to_accept(air, speaker, monkeypatch)
+    told: list[int] = []
+    host = speaker.device.host
+    heard = host.on_hci_disconnection_complete_event
+
+    def disconnection(event: hci.HCI_Disconnection_Complete_Event) -> None:
+        told.append(event.connection_handle)
+        heard(event)
+
+    monkeypatch.setattr(host, "on_hci_disconnection_complete_event", disconnection)
+    task = air.start(page(phone, SPEAKER))
+    air.advance(ms(50))
+    leave(speaker, how)
+    air.advance(seconds(30))
+    assert task.done()
+    assert 0 not in told
+    assert not speaker.device.connections
+
+
+def test_a_host_that_answers_a_page_after_its_end_fell_gets_no_link(
+    air: Air, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    phone, speaker = phone_and_speaker(air)
+    slow_to_accept(air, speaker, monkeypatch, delay=30)
+    task = air.start(page(phone, SPEAKER))
+    air.advance(ms(50))
+    speaker.out_of_range()
+    air.advance(seconds(31))
+    assert task.done()
+    assert not speaker.device.connections
+    speaker.in_range()
+    # Nothing is left of it on either side.
+    monkeypatch.undo()
+    air.run(page(phone, SPEAKER), within=seconds(1))
+
+
+def test_a_power_loss_at_the_instant_a_page_is_heard_does_not_fail_the_air(
+    air: Air, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    phone, speaker = phone_and_speaker(air)
+    target = air.link.find_classic_controller(speaker.device.public_address)
+    assert target is not None
+    heard = target.on_classic_connection_request
+
+    def hear_and_lose_power(peer: hci.Address, link_type: int) -> None:
+        heard(peer, link_type)
+        speaker.switch_off()
+
+    monkeypatch.setattr(target, "on_classic_connection_request", hear_and_lose_power)
+    with pytest.raises(core.ConnectionError) as raised:
+        air.run(page(phone, SPEAKER), within=seconds(10))
+    assert raised.value.error_code == hci.HCI_ErrorCode.PAGE_TIMEOUT_ERROR
+    assert air.now == ms(5_120)
+
+
+def test_a_power_loss_ends_an_inquiry_that_would_restart_itself(air: Air) -> None:
+    phone, _ = phone_and_speaker(air)
+    air.run(phone.device.start_discovery(), within=seconds(0))
+    air.wait(seconds(1))
+    phone.switch_off()
+    air.wait(seconds(1))
+    phone.switch_on()
+    # A device switched off starts no inquiry by itself, so this one is not refused.
+    air.run(phone.device.start_discovery(auto_restart=False), within=seconds(0))

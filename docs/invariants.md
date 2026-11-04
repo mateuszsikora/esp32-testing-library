@@ -550,10 +550,21 @@ that references to its number keep their meaning.
     `tests/test_spp_peer.py::test_a_power_loss_ends_a_page_and_its_timer_does_not_end_the_next`,
     `tests/test_spp_peer.py::test_a_power_loss_ends_a_remote_name_request_and_its_timer_does_not_end_the_next`,
     `tests/test_spp_peer.py::test_a_power_loss_ends_an_inquiry`,
+    `tests/test_spp_peer.py::test_a_power_loss_ends_an_inquiry_that_would_restart_itself`,
+    `tests/test_spp_peer.py::test_a_power_loss_ends_an_authentication_with_a_status`,
     `tests/test_spp_peer.py::test_a_device_that_left_finds_nothing_in_its_own_inquiry`
-- **171.** A remote name request nobody answers ends in `PAGE_TIMEOUT` exactly at the page timeout.
+- **171.** A remote name request nobody answers ends in `PAGE_TIMEOUT` exactly at the page timeout; a
+    second to the same peer while one is pending ends when the first does.
     `tests/test_spp_peer.py::test_a_remote_name_request_to_a_peer_that_left_ends_at_the_page_timeout`,
     `tests/test_spp_peer.py::test_a_remote_name_request_is_answered_at_once_when_the_peer_is_there`
+- **172.** A target that heard a page loses contact when the pager leaves, and its end falls at the
+    supervision timeout counted from then. A target whose host has not answered tells it of no link
+    when its end goes, and a host that answers later gets no link, without failing the air.
+    `tests/test_spp_peer.py::test_a_target_that_heard_the_page_loses_contact_when_the_pager_leaves`,
+    `tests/test_spp_peer.py::test_a_pager_whose_power_cycles_before_the_host_answers_gets_no_link`,
+    `tests/test_spp_peer.py::test_a_target_that_leaves_before_its_host_answers_tells_its_host_of_no_link`,
+    `tests/test_spp_peer.py::test_a_host_that_answers_a_page_after_its_end_fell_gets_no_link`,
+    `tests/test_spp_peer.py::test_a_power_loss_at_the_instant_a_page_is_heard_does_not_fail_the_air`
 
 ## The esp32tl command
 
