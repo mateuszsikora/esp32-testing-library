@@ -9,11 +9,11 @@ clock. Nothing here reads the host's clock, so two runs do the same at the same 
 """
 
 import asyncio
-import math
 import selectors
-from collections.abc import Awaitable, Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine, Iterable
 from typing import Any, Protocol, TypeVar
 
+from bumble import controller, core, hci, lmp
 from bumble.link import LocalLink
 
 from esp32tl.backends.clock import nanoseconds, seconds
@@ -82,9 +82,72 @@ class BoardLoop(asyncio.SelectorEventLoop):
         self.run_forever()
         if not selector.idle or selector.next_in is None:
             return None
-        # A float of seconds: at least a nanosecond on, so that a timer whose time rounds to
-        # this instant still moves the air.
-        return max(math.ceil((self.now / 1e9 + selector.next_in) * 1e9), self.now + 1)
+        # A float of seconds, whose error is far under a nanosecond: the nearest nanosecond is the
+        # timer's own, and the loop fires what is due within `_clock_resolution`. At least a
+        # nanosecond on, so that a timer whose time rounds to this instant still moves the air.
+        return max(round((self.now / 1e9 + selector.next_in) * 1e9), self.now + 1)
+
+
+class Link(LocalLink):
+    """Bumble's virtual link, which refuses delivery where no radio would reach: to and from a
+    device that has left, and between two devices on a link that lost contact, until both ends
+    have let it go. What is refused vanishes without a word, as on the air, also what is sent to
+    an address no device has. Bumble's own link raises for that address, and delivers to any
+    controller it holds. Whether a device can be reached is decided here and nowhere else."""
+
+    def __init__(self) -> None:
+        # Bumble's LocalLink leaves its constructor unannotated.
+        super().__init__()  # type: ignore[no-untyped-call]
+        self._absent: set[hci.Address] = set()
+        self._severed: set[frozenset[hci.Address]] = set()
+
+    def present(self, address: hci.Address) -> bool:
+        """Whether the device at `address` is on the air: it has not left, or it came back."""
+        return address not in self._absent
+
+    def reaches(self, sender: hci.Address, receiver: hci.Address) -> bool:
+        """Whether what `sender` sends to `receiver` arrives."""
+        return (
+            self.present(sender)
+            and self.present(receiver)
+            and frozenset((sender, receiver)) not in self._severed
+        )
+
+    def leave(self, address: hci.Address, peers: Iterable[hci.Address]) -> None:
+        """The device at `address` is gone, from its links to `peers` too: coming back does not
+        mend them."""
+        self._absent.add(address)
+        self._severed.update(frozenset((address, peer)) for peer in peers)
+
+    def back(self, address: hci.Address) -> None:
+        """The device at `address` is on the air again; the links it lost stay severed."""
+        self._absent.discard(address)
+
+    def let_go(self, one: hci.Address, other: hci.Address) -> None:
+        """Neither end holds the link between `one` and `other` any more: they may page again."""
+        self._severed.discard(frozenset((one, other)))
+
+    def send_acl_data(
+        self,
+        sender_controller: controller.Controller,
+        destination_address: hci.Address,
+        transport: core.PhysicalTransport,
+        data: bytes,
+    ) -> None:
+        if self.reaches(sender_controller.public_address, destination_address):
+            super().send_acl_data(sender_controller, destination_address, transport, data)
+
+    def send_lmp_packet(
+        self,
+        sender_controller: controller.Controller,
+        receiver_address: hci.Address,
+        packet: lmp.Packet,
+    ) -> None:
+        if (
+            self.reaches(sender_controller.public_address, receiver_address)
+            and self.find_classic_controller(receiver_address) is not None
+        ):
+            super().send_lmp_packet(sender_controller, receiver_address, packet)
 
 
 class Air:
@@ -98,8 +161,7 @@ class Air:
     def __init__(self) -> None:
         self.loop = BoardLoop()
         self.loop.set_exception_handler(self._failed)
-        # Bumble's LocalLink leaves its constructor unannotated.
-        self.link = LocalLink()  # type: ignore[no-untyped-call]
+        self.link = Link()
         self._parties: list[Party] = []
         self._next_timer: int | None = None
         self._error: BaseException | None = None
@@ -119,7 +181,10 @@ class Air:
 
     def call(self, function: Callable[[], T]) -> T:
         """`function`, called inside the loop at the current instant, and everything it sets
-        off there; returns what it returned."""
+        off there; returns what it returned. From inside the loop, as from a coroutine on the
+        air, `function` runs at once, and what it sets off follows when the caller yields."""
+        if self.loop.is_running():
+            return function()
         result: list[T] = []
         self.loop.call_soon(lambda: result.append(function()))
         # A function that raised fails the settle.

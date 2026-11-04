@@ -9,6 +9,7 @@ answers what it writes, on the board's clock."""
 import asyncio
 import re
 from collections.abc import Iterable, Iterator
+from typing import Any
 
 import pytest
 from bumble import core, hci, rfcomm
@@ -85,6 +86,8 @@ class Initiator:
         self.found: list[tuple[int, str, int, str | None]] = []
         self.received: list[tuple[int, bytes]] = []
         self.inquiry_complete: list[int] = []
+        # Each link of this device that fell, as (t, reason).
+        self.fell: list[tuple[int, int]] = []
         self.device = air.call(lambda: self._make(ssp, address, name))
         air.run(self.device.power_on(), within=seconds(0))
 
@@ -104,7 +107,14 @@ class Initiator:
         )
         device.on("inquiry_result", self._on_result)
         device.on("inquiry_complete", lambda: self.inquiry_complete.append(self.air.loop.now))
+        device.on(device.EVENT_CONNECTION, self._on_connection)
         return device
+
+    def _on_connection(self, connection: Connection) -> None:
+        def fell(reason: int) -> None:
+            self.fell.append((self.air.loop.now, reason))
+
+        connection.on(connection.EVENT_DISCONNECTION, fell)
 
     def _on_result(
         self, address: hci.Address, class_of_device: int, eir: core.AdvertisingData, rssi: int
@@ -229,7 +239,7 @@ def test_a_peer_that_lost_the_key_refuses_the_device_that_kept_it(air: Air) -> N
         await connection.disconnect()
 
     air.run(pair_and_disconnect(), within=seconds(10))
-    peer.device.keystore = MemoryKeyStore()
+    peer.forget_keys()
     with pytest.raises(hci.HCI_Error) as raised:
         air.run(esp32.connect(peer.device.public_address), within=seconds(10))
     assert raised.value.error_code == hci.HCI_ErrorCode.PIN_OR_KEY_MISSING_ERROR
@@ -645,3 +655,542 @@ def test_a_peer_with_something_due_at_once_leaves_the_air_well(air: Air) -> None
     # What was due when the peer joined went out then, to nobody.
     assert peer.lost == 2
     assert air.quiet_until() is None
+
+
+# A peer that leaves: the same to the device whichever way it goes.
+
+LEAVING = ["switch_off", "out_of_range"]
+RETURNING = {"switch_off": "switch_on", "out_of_range": "in_range"}
+PEER = hci.Address("00:00:00:00:5B:01/P")
+Echo = Elm
+
+
+def leave(peer: SppPeer, how: str) -> None:
+    getattr(peer, how)()
+
+
+def come_back(peer: SppPeer, how: str) -> None:
+    getattr(peer, RETURNING[how])()
+
+
+async def link_to(esp32: Initiator) -> Connection:
+    """A link to the peer, not authenticated."""
+    return await esp32.device.connect(PEER, transport=core.PhysicalTransport.BR_EDR)
+
+
+async def write_timeout(esp32: Initiator, command: hci.HCI_SyncCommand[Any]) -> int:
+    """The status the controller answers `command` with."""
+    result = await esp32.device.host.send_sync_command_raw(command)
+    parameters = result.return_parameters
+    assert isinstance(parameters, hci.HCI_StatusReturnParameters)
+    return parameters.status
+
+
+@pytest.mark.parametrize("how", LEAVING)
+def test_a_link_to_a_peer_that_left_falls_at_the_supervision_timeout_without_a_detach(
+    air: Air, how: str
+) -> None:
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo())
+    esp32 = Initiator(air)
+    air.run(esp32.connect(PEER), within=seconds(10))
+    air.advance(seconds(2))
+
+    leave(peer, how)
+    assert not peer.present
+    air.advance(ms(21_999))
+    # No LMP_detach: the device goes on holding the link for the whole of the timeout.
+    assert esp32.fell == []
+    assert esp32.device.connections
+
+    air.advance(seconds(22))
+    assert esp32.fell == [(22_000 * MS, hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR)]
+    assert not esp32.device.connections
+
+
+@pytest.mark.parametrize("how", LEAVING)
+def test_a_page_to_a_peer_that_left_ends_at_the_page_timeout(air: Air, how: str) -> None:
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo())
+    esp32 = Initiator(air)
+    air.advance(seconds(1))
+    leave(peer, how)
+    ended: list[int] = []
+
+    async def page() -> None:
+        try:
+            await link_to(esp32)
+        finally:
+            ended.append(air.loop.now)
+
+    with pytest.raises(core.ConnectionError) as raised:
+        air.run(page(), within=seconds(10))
+    assert raised.value.error_code == hci.HCI_ErrorCode.PAGE_TIMEOUT_ERROR
+    assert ended == [6_120 * MS]
+    assert not esp32.device.connections
+
+
+def test_a_page_to_an_address_nobody_has_ends_at_the_page_timeout(air: Air) -> None:
+    esp32 = Initiator(air)
+    with pytest.raises(core.ConnectionError) as raised:
+        air.run(link_to(esp32), within=seconds(10))
+    assert raised.value.error_code == hci.HCI_ErrorCode.PAGE_TIMEOUT_ERROR
+    assert air.now == ms(5_120)
+
+
+def test_a_page_started_while_the_peer_is_away_does_not_find_it_when_it_returns(air: Air) -> None:
+    """The page is one delivery, refused: the model has no page train that goes on repeating."""
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo())
+    esp32 = Initiator(air)
+    peer.out_of_range()
+    task = air.start(link_to(esp32))
+    air.advance(seconds(1))
+    peer.in_range()
+    air.advance(ms(5_120))
+    assert isinstance(task.exception(), core.ConnectionError)
+    # The next page finds it.
+    air.run(link_to(esp32), within=seconds(1))
+
+
+@pytest.mark.parametrize("how", LEAVING)
+def test_an_inquiry_does_not_find_a_peer_that_left_until_it_returns(air: Air, how: str) -> None:
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo())
+    esp32 = Initiator(air)
+
+    async def inquiry() -> None:
+        await esp32.device.start_discovery(auto_restart=False)
+        await asyncio.sleep(11)
+
+    leave(peer, how)
+    air.run(inquiry(), within=seconds(20))
+    assert esp32.found == []
+    assert esp32.inquiry_complete == [10_240 * MS]
+
+    come_back(peer, how)
+    assert peer.present
+    air.run(inquiry(), within=seconds(20))
+    assert [name for _, _, _, name in esp32.found] == ["peer"]
+
+
+@pytest.mark.parametrize("how", LEAVING)
+def test_a_device_authenticates_with_its_key_after_the_peer_returns(air: Air, how: str) -> None:
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo())
+    esp32 = Initiator(air)
+    air.run(esp32.connect(PEER), within=seconds(10))
+    kept = keys_of(peer.device)
+
+    leave(peer, how)
+    air.wait(seconds(21))
+    assert keys_of(peer.device) == kept
+    come_back(peer, how)
+    assert keys_of(peer.device) == kept
+
+    dlc = air.run(esp32.session("peer"), within=seconds(10))
+    # The PIN was asked for once, by the first pairing.
+    assert esp32.delegate.asked == 1
+    assert isinstance(dlc, rfcomm.DLC)
+    assert peer.channel_open
+
+
+def test_a_peer_that_forgot_its_keys_refuses_after_it_returns(air: Air) -> None:
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo())
+    esp32 = Initiator(air)
+    air.run(esp32.connect(PEER), within=seconds(10))
+    peer.switch_off()
+    peer.forget_keys()
+    air.wait(seconds(21))
+    peer.switch_on()
+    with pytest.raises(hci.HCI_Error) as raised:
+        air.run(esp32.connect(PEER), within=seconds(10))
+    assert raised.value.error_code == hci.HCI_ErrorCode.PIN_OR_KEY_MISSING_ERROR
+
+
+@pytest.mark.parametrize("how", LEAVING)
+def test_coming_back_before_the_timeout_does_not_revive_the_link(air: Air, how: str) -> None:
+    echo = Echo()
+    peer = SppPeer(air, name="peer", pin="1234", source=echo)
+    esp32 = Initiator(air)
+    dlc = air.run(esp32.session("peer"), within=seconds(10))
+
+    leave(peer, how)
+    air.wait(seconds(5))
+    come_back(peer, how)
+    assert peer.present
+    dlc.write(b"PING\r")
+    air.wait(seconds(1))
+    # The peer can be discovered again, and what the device writes on the old link is gone.
+    assert echo.heard == []
+    assert peer.events == []
+    air.run(esp32.discover("peer"), within=seconds(1))
+
+    # The device still holds the link, so it cannot page the peer yet.
+    with pytest.raises(hci.HCI_Error) as raised:
+        air.run(link_to(esp32), within=seconds(1))
+    assert raised.value.error_code == hci.HCI_ErrorCode.CONNECTION_ALREADY_EXISTS_ERROR
+
+    assert esp32.fell == []
+    air.advance(seconds(20))
+    assert esp32.fell == [(20_000 * MS, hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR)]
+
+    # Fallen, the link can be made anew, with the key.
+    dlc = air.run(esp32.session("peer"), within=seconds(10))
+    dlc.write(b"PING\r")
+    air.wait(seconds(1))
+    assert echo.heard == [(20_000 * MS, b"PING\r")]
+    assert esp32.delegate.asked == 1
+
+
+def test_another_device_can_connect_to_a_peer_back_before_the_old_link_falls(air: Air) -> None:
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo())
+    first = Initiator(air)
+    second = Initiator(air, address="24:0A:C4:00:00:02", name="second")
+    air.run(first.session("peer"), within=seconds(10))
+
+    peer.out_of_range()
+    air.wait(seconds(5))
+    peer.in_range()
+    connection = air.run(second.connect(PEER), within=seconds(10))
+    assert connection.is_encrypted
+    # The peer's end of the old link has not fallen, so its channel is still that link's.
+    with pytest.raises(core.ConnectionError):
+        air.run(second.open(connection, CHANNEL), within=seconds(1))
+    assert peer.refused == [(5_000 * MS, "24:0A:C4:00:00:02: the channel is held by " + DEVICE)]
+
+    air.advance(seconds(20))
+    assert not peer.channel_open
+    dlc = air.run(second.open(connection, CHANNEL), within=seconds(1))
+    assert isinstance(dlc, rfcomm.DLC)
+
+
+def test_a_device_that_ends_its_link_to_an_absent_peer_pages_it_once_the_peer_let_go(
+    air: Air,
+) -> None:
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo())
+    esp32 = Initiator(air)
+    connection = air.run(esp32.connect(PEER), within=seconds(10))
+    peer.out_of_range()
+    air.wait(seconds(1))
+    air.run(connection.disconnect(), within=seconds(1))
+    assert air.now == seconds(1)
+    assert not esp32.device.connections
+    peer.in_range()
+
+    # The peer's end still holds the link: nobody answers the page.
+    with pytest.raises(core.ConnectionError) as raised:
+        air.run(link_to(esp32), within=seconds(10))
+    assert raised.value.error_code == hci.HCI_ErrorCode.PAGE_TIMEOUT_ERROR
+
+    air.advance(seconds(20))
+    assert not peer.device.connections
+    air.run(link_to(esp32), within=seconds(1))
+    assert air.now == seconds(20)
+
+
+def test_leaving_again_does_not_restart_the_timeout_of_a_link_that_lost_contact(air: Air) -> None:
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo())
+    esp32 = Initiator(air)
+    air.run(link_to(esp32), within=seconds(1))
+    peer.out_of_range()
+    air.wait(seconds(5))
+    peer.in_range()
+    air.wait(seconds(5))
+    peer.out_of_range()
+    air.advance(seconds(30))
+    assert esp32.fell == [(20_000 * MS, hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR)]
+
+
+def test_an_authentication_under_way_ends_when_the_link_falls(air: Air) -> None:
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo())
+    esp32 = Initiator(air)
+    connection = air.run(link_to(esp32), within=seconds(1))
+    peer.out_of_range()
+    with pytest.raises(hci.HCI_Error) as raised:
+        air.run(connection.authenticate(), within=seconds(30))
+    assert raised.value.error_code == hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR
+    assert air.now == seconds(20)
+
+
+# The timeouts a host writes.
+
+
+def test_the_page_timeout_a_host_writes_takes_effect(air: Air) -> None:
+    esp32 = Initiator(air)
+    write = hci.HCI_Write_Page_Timeout_Command(page_timeout=0x0800)  # 1.28 s
+    assert air.run(write_timeout(esp32, write), within=seconds(0)) == hci.HCI_SUCCESS
+    with pytest.raises(core.ConnectionError):
+        air.run(link_to(esp32), within=seconds(10))
+    assert air.now == ms(1_280)
+
+
+def test_a_page_timeout_of_zero_is_refused_and_changes_nothing(air: Air) -> None:
+    esp32 = Initiator(air)
+    write = hci.HCI_Write_Page_Timeout_Command(page_timeout=0)
+    status = air.run(write_timeout(esp32, write), within=seconds(0))
+    assert status == hci.HCI_ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR
+    with pytest.raises(core.ConnectionError):
+        air.run(link_to(esp32), within=seconds(10))
+    assert air.now == ms(5_120)
+
+
+def test_the_supervision_timeout_a_central_writes_takes_effect_on_both_ends(air: Air) -> None:
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo())
+    esp32 = Initiator(air)
+    connection = air.run(link_to(esp32), within=seconds(1))
+    write = hci.HCI_Write_Link_Supervision_Timeout_Command(
+        handle=connection.handle,
+        link_supervision_timeout=0x0C80,  # 2 s
+    )
+    assert air.run(write_timeout(esp32, write), within=seconds(0)) == hci.HCI_SUCCESS
+
+    fell_at_peer: list[int] = []
+    for link in peer.device.connections.values():
+        link.on(link.EVENT_DISCONNECTION, lambda reason: fell_at_peer.append(air.loop.now))
+    air.advance(seconds(1))
+    peer.out_of_range()
+    air.advance(seconds(10))
+    assert esp32.fell == [(3_000 * MS, hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR)]
+    assert fell_at_peer == [3_000 * MS]
+
+
+def test_a_supervision_timeout_written_after_contact_is_lost_counts_from_that_instant(
+    air: Air,
+) -> None:
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo())
+    esp32 = Initiator(air)
+    connection = air.run(link_to(esp32), within=seconds(1))
+    peer.out_of_range()
+    air.wait(seconds(1))
+    write = hci.HCI_Write_Link_Supervision_Timeout_Command(
+        handle=connection.handle,
+        link_supervision_timeout=0x0C80,  # 2 s
+    )
+    air.run(write_timeout(esp32, write), within=seconds(0))
+    air.wait(seconds(5))
+    assert esp32.fell == [(2_000 * MS, hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR)]
+
+
+def test_a_supervision_timeout_of_zero_means_the_link_never_falls(air: Air) -> None:
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo())
+    esp32 = Initiator(air)
+    connection = air.run(link_to(esp32), within=seconds(1))
+    write = hci.HCI_Write_Link_Supervision_Timeout_Command(
+        handle=connection.handle, link_supervision_timeout=0
+    )
+    air.run(write_timeout(esp32, write), within=seconds(0))
+    peer.out_of_range()
+    air.wait(seconds(100))
+    assert esp32.fell == []
+    assert esp32.device.connections
+
+
+def test_a_peripheral_may_not_write_the_supervision_timeout(air: Air) -> None:
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo())
+    esp32 = Initiator(air)
+    air.run(link_to(esp32), within=seconds(1))
+    handle = next(iter(peer.device.connections))
+    write = hci.HCI_Write_Link_Supervision_Timeout_Command(
+        handle=handle, link_supervision_timeout=0x0C80
+    )
+
+    async def status() -> int:
+        result = await peer.device.host.send_sync_command_raw(write)
+        parameters = result.return_parameters
+        assert isinstance(parameters, hci.HCI_StatusReturnParameters)
+        return parameters.status
+
+    assert air.run(status(), within=seconds(0)) == hci.HCI_ErrorCode.COMMAND_DISALLOWED_ERROR
+
+
+def test_a_supervision_timeout_for_no_link_is_refused(air: Air) -> None:
+    esp32 = Initiator(air)
+    write = hci.HCI_Write_Link_Supervision_Timeout_Command(
+        handle=0x0123, link_supervision_timeout=0x0C80
+    )
+    status = air.run(write_timeout(esp32, write), within=seconds(0))
+    assert status == hci.HCI_ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR
+
+
+# What happens to the source.
+
+
+class Powered(Echo):
+    """A model on the peer's supply: silent without it, as a model of a part with no power is."""
+
+    def __init__(self, delay: int = 50 * MS, greeting: bytes = b"", at: int = 0) -> None:
+        super().__init__(delay, greeting, at)
+        self.supplied: list[bool] = []
+
+    def supply(self, on: bool) -> None:
+        self.supplied.append(on)
+
+
+def test_a_power_loss_tells_a_supplied_source_and_drops_what_it_had_queued(air: Air) -> None:
+    source = Powered(delay=500 * MS)
+    peer = SppPeer(air, name="peer", pin="1234", source=source)
+    esp32 = Initiator(air)
+    dlc = air.run(esp32.session("peer"), within=seconds(10))
+    dlc.write(b"PING\r")
+    air.wait(ms(100))
+
+    peer.switch_off()
+    assert source.supplied == [False]
+    # Its end of the link went with the power.
+    assert not peer.channel_open
+    assert not peer.device.connections
+    air.wait(seconds(1))
+    assert peer.lost == 0
+    assert peer.events == [(0, "out", b"PING\r")]
+    assert esp32.received == []
+
+    peer.switch_on()
+    assert source.supplied == [False, True]
+
+
+def test_out_of_range_does_not_tell_a_supplied_source_and_what_it_sends_is_lost(air: Air) -> None:
+    source = Powered(delay=500 * MS)
+    peer = SppPeer(air, name="peer", pin="1234", source=source)
+    esp32 = Initiator(air)
+    dlc = air.run(esp32.session("peer"), within=seconds(10))
+    dlc.write(b"PING\r")
+    air.wait(ms(100))
+
+    peer.out_of_range()
+    air.wait(seconds(1))
+    assert source.supplied == []
+    # The peer does not know yet: its channel stays open until its end of the link falls.
+    assert peer.channel_open
+    assert peer.lost == len(b"PING\r\r>")
+    assert peer.events == [(0, "out", b"PING\r")]
+    assert esp32.received == []
+
+    air.advance(ms(20_100))
+    assert not peer.channel_open
+
+
+def test_what_a_source_sends_after_the_peer_returns_on_the_old_link_is_lost(air: Air) -> None:
+    source = Echo(greeting=b"hello\r", at=2_000 * MS)
+    peer = SppPeer(air, name="peer", pin="1234", source=source)
+    esp32 = Initiator(air)
+    air.run(esp32.session("peer"), within=seconds(10))
+    peer.out_of_range()
+    air.wait(seconds(1))
+    peer.in_range()
+    air.wait(seconds(2))
+    assert peer.lost == len(b"hello\r")
+    assert peer.events == []
+    assert esp32.received == []
+
+
+def test_a_power_loss_leaves_a_source_that_is_not_supplied_running_and_it_is_lost(
+    air: Air,
+) -> None:
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo(greeting=b"hello\r", at=1_000 * MS))
+    peer.switch_off()
+    air.wait(seconds(2))
+    assert peer.lost == len(b"hello\r")
+
+
+def test_a_supplied_source_that_raises_fails_the_air_naming_the_peer(air: Air) -> None:
+    class Broken(Echo):
+        def supply(self, on: bool) -> None:
+            raise KeyError("model bug")
+
+    peer = SppPeer(air, name="peer", pin="1234", source=Broken())
+    with pytest.raises(AirError) as raised:
+        peer.switch_off()
+    assert str(raised.value) == "peer: source.supply raised KeyError: 'model bug'"
+
+
+# The two pairs of calls.
+
+
+def test_a_peer_is_present_only_when_it_is_on_and_in_range(air: Air) -> None:
+    source = Powered()
+    peer = SppPeer(air, name="peer", pin="1234", source=source)
+    assert peer.present
+    peer.switch_off()
+    peer.out_of_range()
+    assert not peer.present
+    peer.switch_on()
+    # Back on, still out of range; the source has its power.
+    assert not peer.present
+    assert source.supplied == [False, True]
+    peer.in_range()
+    assert peer.present
+
+
+def test_saying_it_twice_changes_nothing(air: Air) -> None:
+    source = Powered()
+    peer = SppPeer(air, name="peer", pin="1234", source=source)
+    peer.switch_on()
+    peer.in_range()
+    assert source.supplied == []
+    peer.switch_off()
+    peer.switch_off()
+    assert source.supplied == [False]
+    peer.switch_on()
+    peer.switch_on()
+    assert source.supplied == [False, True]
+    peer.out_of_range()
+    peer.out_of_range()
+    peer.in_range()
+    assert peer.present
+
+
+def test_a_peer_can_leave_from_a_coroutine_on_the_air(air: Air) -> None:
+    echo = Echo()
+    peer = SppPeer(air, name="peer", pin="1234", source=echo)
+    esp32 = Initiator(air)
+
+    async def scenario() -> None:
+        dlc = await esp32.session("peer")
+        await asyncio.sleep(1)
+        peer.switch_off()
+        # At the same instant, and on the same call: refused.
+        dlc.write(b"PING\r")
+        await asyncio.sleep(25)
+
+    air.run(scenario(), within=seconds(30))
+    assert echo.heard == []
+    assert esp32.fell == [(21_000 * MS, hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR)]
+
+
+def test_two_runs_lose_the_peer_at_the_same_instants() -> None:
+    def run() -> list[object]:
+        air = Air()
+        try:
+            source = Powered(delay=7 * MS, greeting=b"hello\r", at=1_500 * MS)
+            peer = SppPeer(air, name="peer", pin="1234", source=source)
+            esp32 = Initiator(air)
+            other = Initiator(air, address="24:0A:C4:00:00:02", name="other")
+            dlc = air.run(esp32.session("peer"), within=seconds(10))
+            dlc.write(b"PING\r")
+            air.wait(seconds(1))
+            peer.out_of_range()
+            air.wait(seconds(1))
+            peer.in_range()
+            air.run(other.connect(PEER), within=seconds(10))
+            peer.switch_off()
+            pages: list[int] = []
+
+            async def page() -> None:
+                with pytest.raises(core.ConnectionError):
+                    await esp32.device.connect(
+                        hci.Address("00:00:00:00:5B:7F/P"),
+                        transport=core.PhysicalTransport.BR_EDR,
+                    )
+                pages.append(air.loop.now)
+
+            air.advance(seconds(5))
+            air.run(page(), within=seconds(10))
+            air.advance(seconds(40))
+            peer.switch_on()
+            air.run(esp32.session("peer"), within=seconds(10))
+            return [peer.events, peer.lost, esp32.fell, other.fell, pages, esp32.found]
+        finally:
+            air.close()
+
+    first = run()
+    # The first link fell 20 s after the peer went out of range; the second 20 s after the power
+    # loss.
+    assert first[2] == [(21_000 * MS, hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR)]
+    assert first[3] == [(22_000 * MS, hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR)]
+    assert first == run()

@@ -505,6 +505,35 @@ that references to its number keep their meaning.
     `tests/test_spp_peer.py::test_the_channel_opens_only_on_a_link_the_device_authenticated`,
     `tests/test_spp_peer.py::test_an_authenticated_link_needs_no_encryption_for_the_channel`,
     `tests/test_spp_peer.py::test_a_peer_that_is_not_secure_opens_the_channel_on_any_link`
+- **162.** A peer that leaves, switched off or out of range, sends nothing: the device's link falls
+    with `CONNECTION_TIMEOUT` exactly at the supervision timeout after it left, a page ends in
+    `PAGE_TIMEOUT` exactly at the page timeout, and an inquiry does not find it until it returns.
+    `tests/test_spp_peer.py::test_a_link_to_a_peer_that_left_falls_at_the_supervision_timeout_without_a_detach`,
+    `tests/test_spp_peer.py::test_a_page_to_a_peer_that_left_ends_at_the_page_timeout`,
+    `tests/test_spp_peer.py::test_an_inquiry_does_not_find_a_peer_that_left_until_it_returns`
+- **163.** A peer keeps its link keys across leaving and returning, however it left; only
+    `forget_keys` loses them.
+    `tests/test_spp_peer.py::test_a_device_authenticates_with_its_key_after_the_peer_returns`,
+    `tests/test_spp_peer.py::test_a_peer_that_forgot_its_keys_refuses_after_it_returns`
+- **164.** Coming back does not revive a link: nothing crosses it, it falls at its timeout counted
+    from when contact was lost, and the peer can be discovered and connected to by another device
+    meanwhile.
+    `tests/test_spp_peer.py::test_coming_back_before_the_timeout_does_not_revive_the_link`,
+    `tests/test_spp_peer.py::test_another_device_can_connect_to_a_peer_back_before_the_old_link_falls`,
+    `tests/test_spp_peer.py::test_leaving_again_does_not_restart_the_timeout_of_a_link_that_lost_contact`
+- **165.** A power loss calls `supply` on a source that has it and drops what it queued; out of range
+    the source runs on, and what it sends counts in `lost`.
+    `tests/test_spp_peer.py::test_a_power_loss_tells_a_supplied_source_and_drops_what_it_had_queued`,
+    `tests/test_spp_peer.py::test_out_of_range_does_not_tell_a_supplied_source_and_what_it_sends_is_lost`,
+    `tests/test_spp_peer.py::test_a_power_loss_leaves_a_source_that_is_not_supplied_running_and_it_is_lost`
+- **166.** The page timeout and link supervision timeout a host writes take effect; only a central
+    may write the second, on both ends, and 0 means no supervision.
+    `tests/test_spp_peer.py::test_the_page_timeout_a_host_writes_takes_effect`,
+    `tests/test_spp_peer.py::test_the_supervision_timeout_a_central_writes_takes_effect_on_both_ends`,
+    `tests/test_spp_peer.py::test_a_peripheral_may_not_write_the_supervision_timeout`,
+    `tests/test_spp_peer.py::test_a_supervision_timeout_of_zero_means_the_link_never_falls`
+- **167.** Two runs in which a peer leaves and returns do the same at the same instants.
+    `tests/test_spp_peer.py::test_two_runs_lose_the_peer_at_the_same_instants`
 
 ## The esp32tl command
 

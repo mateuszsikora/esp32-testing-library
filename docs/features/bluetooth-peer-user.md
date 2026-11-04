@@ -54,15 +54,16 @@ air.close()
 | `channel` | The RFCOMM channel of its SPP service, 1 to 30 |
 | `secure` | Whether the channel opens only on a link the device has authenticated |
 
-From the moment it is made, at the air's current instant, the peer is:
+From the moment it is made, at the air's current instant, and until the test takes it off the air
+([below](#a-peer-that-leaves)), the peer is:
 
 - **Discoverable and connectable.** An inquiry finds it with its address, its class of device,
   `0x001F00` (uncategorised), and its name.
 - **Paired with its PIN.** It pairs the way Bluetooth 2.0 devices do, with a PIN (legacy
   pairing), and never with Secure Simple Pairing. A device that gives another PIN fails to
-  authenticate and is disconnected. The peer keeps the key of each device it paired with, for as
-  long as it exists, so a device that paired once authenticates later without a PIN; a device that
-  kept a key the peer does not have fails to authenticate. A link the device authenticated can be
+  authenticate and is disconnected. The peer keeps the key of each device it paired with until
+  `peer.forget_keys()`, so a device that paired once authenticates later without a PIN; a device
+  that kept a key the peer does not have fails to authenticate. A link the device authenticated can be
   encrypted.
 - **Offering SPP.** Its SDP record names the Serial Port service (`0x1101`) on RFCOMM `channel`. The
   channel opens to one device at a time, also when two ask at the same instant, and, with `secure`,
@@ -74,6 +75,60 @@ From the moment it is made, at the air's current instant, the peer is:
   `(0, "24:0A:C4:00:00:02: the channel is held by 24:0A:C4:00:00:01")`. With `secure=False`, any
   device opens it. `peer.channel_open` says whether a device holds it now; the channel closes when
   the device closes it or the link.
+
+## A peer that leaves
+
+```python
+peer.switch_off()  # it loses its power
+peer.switch_on()
+peer.out_of_range()  # it runs on, out of reach
+peer.in_range()
+peer.present  # on and in range
+peer.forget_keys()  # it loses the link keys it keeps
+```
+
+Each call takes effect at the air's time, from the test or from a coroutine on the air. Power and
+range are apart: a peer switched off and out of range is `present` again once both are undone.
+Saying what is already so changes nothing.
+
+To a device on the air both ways of leaving look the same:
+
+- **Nothing is sent.** No `LMP_detach`: the device learns nothing at the instant the peer leaves,
+  and what it writes meanwhile is gone.
+- **An inquiry does not find it,** until it is back. An inquiry is answered at the instant it
+  starts, so a peer that returns during one answers the next.
+- **A page ends in `PAGE_TIMEOUT`** at the page timeout, 5.12 s unless the device's host wrote
+  another with `Write_Page_Timeout`. So does a page to an address no device has. The page is
+  answered or not at the instant it starts: a peer that returns before the timeout does not answer
+  that page, only the next one. A real controller keeps paging until the timeout, so it may
+  connect where this one times out.
+- **The link falls with `CONNECTION_TIMEOUT`** at the supervision timeout after the peer left, on
+  each end still holding it: 20 s, unless the link's central wrote another with
+  `Write_Link_Supervision_Timeout`, or 0 for a link that never falls. A peripheral that writes it
+  gets `COMMAND_DISALLOWED`. An authentication under way ends with the same status when its link
+  falls.
+- **Coming back does not revive the link.** A peer back before the timeout can be discovered, and
+  another device can connect to it, but nothing crosses the old link, which still falls at its
+  timeout. Until it does, the device that holds it gets `CONNECTION_ALREADY_EXISTS` when it pages
+  the peer. A device that ends the link itself first gets `PAGE_TIMEOUT` until the peer's end has
+  fallen too.
+
+They differ only at the peer:
+
+| | `switch_off` | `out_of_range` |
+|---|---|---|
+| A source that has `supply(on)` | Gets `supply(False)`, and `supply(True)` from `switch_on`, at the air's time; what it had queued is dropped, and not counted in `lost` | Is not told; runs on, and what it sends counts in `lost` |
+| Any other source | Runs on, and what it sends counts in `lost` | The same |
+| The peer's end of its links | Gone at once: `channel_open` is false | Falls at its timeout: `channel_open` stays true until then, and a second device is refused the channel until then |
+
+Link keys stay either way, and `forget_keys()` is the only way to lose them; it applies from the
+peer's next link on. No specification or vendor document says what a given device keeps after
+losing power: that it keeps its keys is this model's assumption, as are the sources' `supply` and
+what a power loss does to what a source had queued. A test about a device that loses them calls
+`forget_keys()`.
+
+All of this has been exercised only on an `Air`, with a Bumble device in the ESP32's place: no
+firmware has seen a peer leave. What ESP-IDF does with these events is not known yet.
 
 ## The model that answers
 
@@ -130,7 +185,7 @@ On the air:
 | `SppPeer: channel is 31, not an RFCOMM channel, 1 to 30` | `PeerError` | A channel out of range, or not a whole number |
 | `SppPeer: address is 'nonsense', not a Bluetooth address, as 00:00:00:00:5B:01` | `PeerError` | An address that is not six pairs of hex digits |
 | `SppPeer: address 00:00:00:00:5B:01 is another device's on the air: give each its own` | `PeerError` | A second device at an address already on the air |
-| `OBDII: source.receive raised KeyError: 'model bug'` | `AirError`, from `PeerError`, from the source's exception | The source raised, in `receive`, `poll` or `quiet_until` |
+| `OBDII: source.receive raised KeyError: 'model bug'` | `AirError`, from `PeerError`, from the source's exception | The source raised, in `receive`, `poll`, `quiet_until` or `supply` |
 | `OBDII: source.receive sent b'too early' at -0.000000001 s, and the air is at 0 s: it cannot send into the past` | `AirError`, from `PeerError` | The source returned a time before the instant it was asked at |
 | `OBDII: source.receive returned (0, 'text'), not a (t_ns, bytes) pair` | `AirError`, from `PeerError` | The source returned something else |
 | `OBDII: source.quiet_until returned 1.5, not nanoseconds` | `AirError`, from `PeerError` | `quiet_until` returned something other than an `int` or `None` |
@@ -143,6 +198,9 @@ On the air:
 | `HCI_Error(hci/AUTHENTICATION_FAILURE_ERROR [0x5])` | Bumble's `HCI_Error`, on the device's side | The device gave a PIN other than the peer's |
 | `HCI_Error(hci/PIN_OR_KEY_MISSING_ERROR [0x6])` | Bumble's `HCI_Error`, on the device's side | The device authenticated with a key the peer does not keep |
 | `HCI_Error(hci/INSUFFICIENT_SECURITY_ERROR [0x2F])` | Bumble's `HCI_Error`, on the device's side | The device asked for encryption on a link it had not authenticated |
+| `hci/PAGE_TIMEOUT_ERROR`, in `error_code` | Bumble's `core.ConnectionError`, on the device's side | Nobody answered the page: the peer has left, its end of an old link has not fallen, or no device has the address |
+| `HCI_Error(hci/CONNECTION_ALREADY_EXISTS_ERROR [0xB])` | Bumble's `HCI_Error`, on the device's side | The device paged a peer while it holds a link to it, as one that lost contact and has not fallen |
+| `HCI_Error(hci/CONNECTION_TIMEOUT_ERROR [0x8])` | Bumble's `HCI_Error`, on the device's side | The link fell during `Connection.authenticate()` |
 
 `PeerError` is a `ValueError`, in `esp32tl.bluetooth.peer`; `AirError` a `RuntimeError`, in
 `esp32tl.bluetooth.air`, whose `__cause__` is what failed: whatever raises on the air, in a model
@@ -157,3 +215,4 @@ own coroutine's callbacks, is prefixed with asyncio's description of where it wa
 - [Bluetooth peer: how it works](bluetooth-peer-technical.md)
 - [Models and units](models-user.md): `Duration` and the other units
 - [Decisions: the Bluetooth peer](../decisions/harness.md#the-bluetooth-peer-runs-bumble-in-the-harness-on-the-boards-clock)
+- [Decisions: how a peer leaves](../decisions/harness.md#a-peer-leaves-without-a-word-keeps-its-keys-and-its-old-link-stays-dead-until-it-falls)

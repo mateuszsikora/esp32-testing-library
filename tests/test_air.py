@@ -23,6 +23,17 @@ def air() -> Iterator[Air]:
     air.close()
 
 
+def test_a_timer_set_at_any_instant_falls_on_its_exact_nanosecond(air: Air) -> None:
+    """A float of seconds can land a hair above a nanosecond: at 49 ms, 5.12 s later is
+    5.169000000000001 s. The air stops on the nanosecond itself, not on the next one."""
+    air.advance(ms(49))
+    fired: list[int] = []
+    air.call(lambda: air.loop.call_later(5.12, lambda: fired.append(air.loop.now)))
+    assert air.quiet_until() == 5_169 * MS
+    air.advance(seconds(6))
+    assert fired == [5_169 * MS]
+
+
 def test_timers_fire_at_their_board_time_and_only_while_the_test_moves_it(air: Air) -> None:
     fired: list[int] = []
 

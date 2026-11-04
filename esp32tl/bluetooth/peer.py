@@ -5,7 +5,8 @@
 the link keys it pairs to, and offers SPP on one RFCOMM channel, to one device at a time and,
 unless told otherwise, only on a link the device has authenticated. What the device writes on the
 channel goes to the source, a `Source` as at the far end of a UART, and what the source sends goes
-out on the channel at the board's time it gives.
+out on the channel at the board's time it gives. A peer can be switched off and go out of range,
+and come back, with the link keys it had.
 """
 
 import bisect
@@ -17,13 +18,14 @@ from bumble import core, rfcomm
 from bumble.device import Connection, Device, DeviceConfiguration
 from bumble.hci import Address
 from bumble.host import Host
+from bumble.keys import MemoryKeyStore
 from bumble.pairing import PairingConfig, PairingDelegate
 from bumble.transport.common import AsyncPipeSink
 
 from esp32tl.backends.clock import seconds
 from esp32tl.bluetooth.air import Air
 from esp32tl.bluetooth.controller import Controller
-from esp32tl.interfaces.uart import Source
+from esp32tl.interfaces.uart import Source, Supplied
 from esp32tl.link.boardlink import Direction, Output
 from esp32tl.units import Duration
 
@@ -71,6 +73,11 @@ class SppPeer:
     never earlier. What the source sends while no channel is open is lost, as it would be on the
     air; `lost` counts its bytes. `events` holds what crossed the channel, in order: `out` of the
     device, `in` to it, as a tap's recording names them.
+
+    `switch_off` and `out_of_range` take it off the air without a word, until `switch_on` and
+    `in_range` have both undone what was done; `present` says whether it is on the air. To a device
+    the two look the same. The source gets `supply` on a power loss, when it is `Supplied`; out of
+    range it runs on, and what it sends is lost. The link keys stay until `forget_keys`.
     """
 
     def __init__(
@@ -104,6 +111,8 @@ class SppPeer:
         self.events: list[tuple[int, Direction, bytes]] = []
         self.refused: list[tuple[int, str]] = []
         self.lost = 0
+        self._on = True
+        self._in_range = True
         self._pending: list[Output] = []
         self._dlc: rfcomm.DLC | None = None
         # The link the channel is given to, from the moment the peer accepts it until it closes:
@@ -122,6 +131,55 @@ class SppPeer:
     def channel_open(self) -> bool:
         """Whether a device holds the SPP channel now."""
         return self._dlc is not None
+
+    @property
+    def present(self) -> bool:
+        """Whether the peer is on the air: switched on and in range."""
+        return self._on and self._in_range
+
+    def switch_off(self) -> None:
+        """The peer loses its power, at the air's time: gone from the air, its source told."""
+        self.air.call(lambda: self._become(False, self._in_range))
+
+    def switch_on(self) -> None:
+        """The peer has its power back, at the air's time; on the air if it is in range."""
+        self.air.call(lambda: self._become(True, self._in_range))
+
+    def out_of_range(self) -> None:
+        """The peer is out of reach, at the air's time: gone from the air, its source running."""
+        self.air.call(lambda: self._become(self._on, False))
+
+    def in_range(self) -> None:
+        """The peer is within reach again, at the air's time; on the air if it is switched on."""
+        self.air.call(lambda: self._become(self._on, True))
+
+    def forget_keys(self) -> None:
+        """The peer loses the link keys it keeps: from its next link on, a device that kept one
+        fails to authenticate, and a device pairs with the PIN again."""
+        self.device.keystore = MemoryKeyStore()
+
+    def _become(self, on: bool, in_range: bool) -> None:
+        assert self._controller is not None
+        was_present = self.present
+        was_on = self._on
+        self._on, self._in_range = on, in_range
+        if was_present and not self.present:
+            self._controller.left()
+        if was_on and not on:
+            self._controller.power_lost()
+        if was_on != on:
+            self._supply(on)
+        if self.present and not was_present:
+            self._controller.returned()
+
+    def _supply(self, on: bool) -> None:
+        """A source that is `Supplied` loses its power with the peer, and what it had queued
+        with it; any other runs on, and what it sends is lost."""
+        if isinstance(self.source, Supplied):
+            self._pending.clear()
+            source = self.source
+            with self._failing():
+                self._call("supply", lambda: source.supply(on))
 
     def _make(self, address: Address) -> Device:
         controller = Controller(self.name, self.air.link, str(address))
@@ -296,11 +354,16 @@ class SppPeer:
     def _flush(self, now: int) -> None:
         while self._pending and self._pending[0][0] <= now:
             t, data = self._pending.pop(0)
-            if self._dlc is None:
+            if self._dlc is None or not self._reaches_holder():
                 self.lost += len(data)
                 continue
             self.events.append((t, "in", data))
             self._dlc.write(data)
+
+    def _reaches_holder(self) -> bool:
+        """Whether what the peer sends reaches the device that holds its channel."""
+        assert self._holder is not None
+        return self.air.link.reaches(self.device.public_address, self._holder.peer_address)
 
 
 def _named(connection: Connection) -> str:
