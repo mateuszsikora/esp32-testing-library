@@ -316,8 +316,8 @@ logged once, nothing sent to a station that has sent nothing, and a SYN to port 
 request, a body by `Content-Length`, bytes, `HEAD` and absolute form, 404 and `next_request`'s
 filters, `find_request`, `next_request` and its `requested` alias with append order at equal
 timestamps and non-consuming polls, each condition's name and its refusal of `bool()`, a filter
-holding a query refused while the query stays in `target`, `serve` refusing a path with a query, the refused requests, unseen by the
-conditions and queries, what `serve` refuses, the path of each form of target
+holding a query refused while the query stays in `target`, `serve` refusing a path with a query,
+the refused requests, unseen by the conditions and queries, what `serve` refuses, the path of each form of target
 (`/proxy/http://example.com/fw.bin` among them), and `204` and `304` ending with their head.
 `tests/test_wifi.py` checks the `Wifi` interface without the emulator: the runner's flags, the
 refusals, a backend that refuses the access point, and the `WifiAp` inputs at the instants of the

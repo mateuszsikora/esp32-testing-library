@@ -858,7 +858,7 @@ that references to its number keep their meaning.
     again and its PUBACK must use the new handle. Emission precedes client consumption.
     `tests/test_net_mqtt_failures.py::test_puback_faults_reconnect_and_other_network_activity`
 
-- **140.** HTTP and DHCP next-event conditions capture append order at creation, exclude earlier
+- **150.** HTTP and DHCP next-event conditions capture append order at creation, exclude earlier
     requests or leases even at equal timestamps, and repeatedly return the first matching record
     without consuming it. The `requested` / `leased` aliases share these semantics. History
     queries return the first matching recorded request or lease. All HTTP and DHCP conditions
