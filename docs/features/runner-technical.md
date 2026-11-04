@@ -6,9 +6,9 @@ The crate is `runner/`, package `esp32tl-runner`:
 |---|---|
 | `runner/src/main.rs` | setup, the run without a peer, and the start and report of the run with one |
 | `runner/src/cli.rs` | the command line |
-| `runner/src/socket_board.rs` | `SocketBoard`, the `BoardModel` on the chip's pins with `--board`: it records what the guest does, with its bus cycle, for the run loop, holds the GPIO levels the peer drives for the chip to take, hands SPI transactions to the SD card, tells the card the bus cycle at every tick, and records what the peer's fault rules did |
-| `runner/src/sd_card.rs` | `SdCard`, the SD card of `--sd-rw` in SPI mode, with the peer's fault rules, and `CardBoard`, the board that holds it alone without `--board` |
-| `runner/src/session.rs` | `Session`, the run loop with a peer: slices, turns, coalescing, pacing, warnings, the Wi-Fi station's Ethernet frames and access point with `--wifi`, `stats` |
+| `runner/src/socket_board.rs` | `SocketBoard`, the `BoardModel` on the chip's pins with `--board`: it records what the guest does, with its bus cycle, for the run loop, holds the GPIO levels the peer drives for the chip to take, hands SPI transactions to the SD card slot, tells it the bus cycle at every tick, and records what the peer's fault rules did |
+| `runner/src/sd_card.rs` | `SdCard`, an SD card in SPI mode, with the peer's fault rules; `Slot`, the slot of `--sd-spi` and the card in it, which the peer's `sd_card` empties and fills; and `CardBoard`, the board that holds the slot alone without `--board` |
+| `runner/src/session.rs` | `Session`, the run loop with a peer: slices, turns, coalescing, pacing, warnings, the Wi-Fi station's Ethernet frames and access point with `--wifi`, the SD card going in and out with `--sd-spi`, `stats` |
 | `runner/src/protocol.rs` | the wire format: time conversion, base64, parsing the peer's messages and writing the runner's |
 | `runner/src/transport.rs` | `SocketLink`, the Unix or TCP socket: buffered NDJSON writes, line reads, the signal flag and the time limits |
 
@@ -28,16 +28,18 @@ its pin, `8c65215`.
    returns `cli::Error::Help` (usage on stderr, exit 0) or `cli::Error::Usage` (exit 2 through
    `usage_error`). Flags are read in order; the first bad one is reported. After the loop it
    checks, in this order, that `--chip` was given and is `esp32`, that `--max-seconds` was given,
-   that there is at least one `--flash-at`, that `--sd-rw` and `--sd-spi` come together, that
+   that there is at least one `--flash-at`, that `--sd-rw` comes with `--sd-spi`, that
    `--wifi` comes with `--board` and its `--wifi-nearby` specs parse and differ from the access
    point (`--wifi-nearby` without `--wifi` is refused there too), and that `--console socket` or
    `both` comes with `--board`. A `--wifi` spec is checked as the flag is read (`access_point`:
    esp32sim's `ApConfig::parse`, then no `epoch`); `cli::Wifi` keeps the spec as given, since
    `ApConfig` has no `PartialEq`, and `Wifi::access_point` parses it again each time a fresh access
    point is made. The `--wifi-nearby` specs become `BeaconAp`s through `BeaconAp::parse_all`.
-2. **Open the card**, with `--sd-rw` (`card`): `FileStore::write_through` opens the image for
-   reading and writing, `SdCard::new` checks its size, and the `SD card on` line goes to stderr.
-   The card is a `sd_card::Shared` (`Rc<RefCell<SdCard>>`), which the board and `main` hold.
+2. **Make the slot**, with `--sd-spi` (`slot`): an empty `Slot` on the wiring; with `--sd-rw`,
+   `Slot::insert_file` opens the image for reading and writing with `FileStore::write_through`,
+   `SdCard::new` checks its size, and the `SD card on` line goes to stderr, else the
+   `SD card slot on ...: empty` line. The slot is a `sd_card::Shared` (`Rc<RefCell<Slot>>`),
+   which the board, the session (`Options::card`) and `main` hold.
 3. **Set up** (`setup`, which returns the `esp32::Machine` at the reset vector):
    - `esp32::machine(MAC, flash_size)` with `MAC` = `24:6f:28:00:11:22`, the MAC esp32sim's CLI
      gives the classic chip (`cli/src/lib.rs`), so a run here and the same run in esp32sim agree.
@@ -48,8 +50,8 @@ its pin, `8c65215`.
      into a flash-size mismatch instead of failing at the command line.
    - `m.bus.set_psram_size(psram_mb << 20)` when `--psram-mb` is not 0.
    - With `--board`, `m.bus.board` becomes a `SocketBoard` holding a `socket_board::Shared`
-     (`Rc<RefCell<Recorder>>`) that the run loop holds too, and the card if there is one; without
-     `--board` it becomes a `CardBoard` holding the card, or with no card stays the machine's
+     (`Rc<RefCell<Recorder>>`) that the run loop holds too, and the slot if there is one; without
+     `--board` it becomes a `CardBoard` holding the slot, or with no slot stays the machine's
      default board, esp32sim's `--board none`. Then `m.bus.attach_board_devices()`, which reads
      `uses_uart_pins` and so makes the bus call `uart_tx` on every TX FIFO write.
    - With `--wifi` ([below](#wi-fi)): `Guest::wifi_access_point` attaches the access point and the
@@ -78,7 +80,8 @@ its pin, `8c65215`.
    and exits 4. Only then does it install the signal handlers (see Interfaces) and make
    `--peer-timeout` the write limit, and the wall clock starts. Then `session::Session::run`
    ([below](#the-session)), and `m.drain_console()`.
-5. **Report.** With a card, its `SD card:` line first. Without `--board`, the stop line, with `stop_name(&stop)`, `m.seconds()` (bus
+5. **Report.** With a slot, its `SD card:` line first, from `Slot::stats` and the counts of
+   cards put in and taken out. Without `--board`, the stop line, with `stop_name(&stop)`, `m.seconds()` (bus
    cycles / `CPU_HZ`), the wall time and `m.reboots`; `Halted` exits 0, anything else prints the
    stop's `Debug` and exits 1. With `--board`, the `end` line, with the cause from `session::End`,
    `m.seconds()`, the wall time, `stats.resets` and `stats.turns`, and the exit code of
@@ -104,8 +107,10 @@ MOSI bytes are known, from the W registers or the DMA out-link, `run_gp_spi`
 `SpiPins` carries the routes at that moment: the pads the master's SCLK and MOSI signals drive,
 the pad its MISO signal is read from, and as `cs` every low, enabled output among GPIO 0 to 33,
 which is how a software CS, a GPIO the driver sets low, shows (`esp32/src/periph.rs:414-427`).
-`SocketBoard` and `CardBoard` answer `uses_spi_pins` with true when they hold a card and pass the
-transaction to `SdCard::transfer`.
+`SocketBoard` and `CardBoard` answer `uses_spi_pins` with true when they hold a slot and pass the
+transaction to `Slot::transfer`, which hands it to `SdCard::transfer` when the slot holds a card
+and returns 0xff for every byte when it is empty. With `uses_spi_pins` false, esp32sim's default
+`spi_transfer` returns 0xff too, so an empty slot and no slot look the same to the guest.
 
 `SdCard::transfer` returns 0xff for every byte unless the card's SCLK pin is in `sclk` and its CS
 pin in `cs`. It then clocks `max(tx.len(), rx_len)` bytes through `exchange`, MOSI 0xff past the
@@ -173,7 +178,8 @@ default speed. The image goes through esp32sim's `FileStore::write_through`: eac
 is a seek and a read or write of the file, with no cache, so the file holds every accepted block
 at once.
 
-`SdCard::power_off`, which the session calls when the peer switches the board's supply off
+`SdCard::power_off`, which the session reaches through `Slot::power_off` when the peer switches
+the board's supply off
 ([protocol 5.17](../protocol.md#517-power-ext-105)), puts the card back as it was when it was
 inserted: out of SPI mode, uninitialised, CRC checking off, no erase range, `Command` phase, the
 command in progress and `out` emptied. A block in `Receiving` is dropped with its phase; every
@@ -184,10 +190,13 @@ the peer's fault rules stay through both ([below](#fault-rules)).
 
 #### Fault rules
 
-With `--board`, the peer's `sd_fault` and `sd_clear` ([protocol 5.19](../protocol.md#519-sd_fault-sd_clear-and-sd_op-ext-107))
-reach the card through the run loop's input queue: `Session::apply_inputs` calls
-`SdCard::install(Fault)` and `SdCard::clear(Option<&[u64]>)` at the slice boundary where they come
-due. A `Fault` is the rule's `id`, `op` (`Op::Read`, `Op::Write`, `Op::Erase`), `action`
+With `--board`, the peer's `sd_fault` and `sd_clear` ([protocol 5.20](../protocol.md#520-sd_fault-sd_clear-and-sd_op-ext-107))
+reach the slot through the run loop's input queue: `Session::apply_inputs` calls
+`Slot::install(Fault)` and `Slot::clear(Option<&[u64]>)` at the slice boundary where they come
+due, which pass them to the card in the slot, or keep them while it is empty. `Slot::remove` takes
+the rules back from the card that goes, and `Slot::insert` hands them to the next one, with the
+slot's clock: the rules are the test's, and stay until spent or cleared. A delayed read and a busy
+time are the card's own, and go with it. A `Fault` is the rule's `id`, `op` (`Op::Read`, `Op::Write`, `Op::Erase`), `action`
 (`Action::Error`, or `Action::Delay(ns)`), `blocks` (`Option<(first, last)>`) and `count`
 (`Option<u64>`, operations left). `install` appends it to `faults`; `clear` removes the ones with
 those ids, or all.
@@ -209,7 +218,7 @@ before. Every command clears `access` along with `out`, as it ends a read under 
 
 `now` is the card's clock, in bus cycles: `SocketBoard::advance_to(cycle)`, which the bus calls at
 every tick through `advance_inputs_with_clock` in `deliver_board_inputs`
-(`esp32/src/bus.rs:349-351`, `:630-641`), passes it to `SdCard::advance`. `bus.cycles` changes only
+(`esp32/src/bus.rs:349-351`, `:630-641`), passes it through `Slot::advance` to `SdCard::advance`. `bus.cycles` changes only
 in `tick`, so at the register write that starts a transaction (`run_gp_spi`, `:316-319`) `now` is
 `bus.cycles`. `CardBoard`, without `--board`, has no `advance_to`: no rule can reach its card.
 
@@ -227,7 +236,24 @@ it, and the session sends it as `sd_op`, not an event (`process_pending`, after 
 `written` is whether the image changed: `true` for a write accepted and an erase carried out
 under a delay, `false` for a read, a failed write and a write or erase the image refused.
 
+`Slot` holds the wiring, the card (`Option<SdCard>`) and the image's name as the run gave it.
+`insert(image, store)` refuses a slot that holds a card (`the slot holds {held} already`) and a
+store `SdCard::new` refuses, and leaves the slot as it was; `insert_file(image)` opens the file
+first, so an error opening it comes back as `io::Error`'s text. `remove()` drops the card, which
+closes its file, and returns false for an empty slot. A card dropped mid-transfer takes its
+`phase` and `out` with it: a block in `Receiving` is never written, and every block it answered
+`DATA_ACCEPTED` for was written before the answer. The next card is a fresh `SdCard::new`, in SD
+mode (`spi` false) and not `ready`. `stats()` adds the counts of the cards that left (`retired`)
+to the current card's; `inserted` and `removed` count the peer's changes.
+
 ### The session
+
+With `--sd-spi`, `Session::take_turn` queues each `sd_card` as `Input::SdCard(image)` (a
+protocol error without the slot), and `apply_inputs` hands it to `change_card` when it comes due,
+at a slice boundary: `Slot::insert_file` or `Slot::remove`, the `SD card in`, `out` or `refused`
+line on stderr, and an `Item::SdCard { cycle, image, error }` on `pending`, which
+`process_pending` sends as `sd_card_ack` in its `t` order, with no `seq`
+([protocol 5.19](../protocol.md#519-sd_card-and-sd_card_ack-ext-106)).
 
 `Session` runs the protocol over two traits, `Guest` (the machine: cycles, `run_until`,
 `chip_reset`, `power_on_reset`, `idle_until`, `uart_route`, `rx_pending`, `uart_input`,
@@ -440,7 +466,8 @@ The command line and the usage text: [runner-user.md](runner-user.md#run-an-imag
   expects read the `console` messages of `--console both` instead.
 - stderr, from the runner (formats from `main.rs` and `sd_card.rs`):
   - `esp32tl-runner: SD card on SCLK GPIO {sclk}, MOSI GPIO {mosi}, MISO GPIO {miso}, CS GPIO
-    {cs}: {image} ({KiB} KiB, write-through)`
+    {cs}: {image} ({KiB} KiB, write-through)` with `--sd-rw`, else `esp32tl-runner: SD card slot
+    on SCLK GPIO {sclk}, MOSI GPIO {mosi}, MISO GPIO {miso}, CS GPIO {cs}: empty`
   - `esp32tl-runner: Wi-Fi access point '{ssid}' bssid {bssid} channel {channel} ({security}),
     its network on the socket`, with `--wifi`; `{security}` is `WPA2-PSK` with a `psk`, else
     `open`, and `{bssid}` is lowercase hex with colons (`esp_soc::wifi::mac_str`)
@@ -451,9 +478,13 @@ The command line and the usage text: [runner-user.md](runner-user.md#run-an-imag
   - `esp32tl-runner: chip reset at {seconds:.6} s, cause {cause:#x}`
   - `esp32tl-runner: SD card: reading block {lba}: {error}`, `writing block {lba}: {error}` and
     `erasing blocks {lo} to {hi}: {error}`, when the image file fails
+  - `esp32tl-runner: SD card out at {seconds:.6} s: {image}`, `esp32tl-runner: SD card in at
+    {seconds:.6} s: {image} ({KiB} KiB, write-through)` and `esp32tl-runner: SD card refused at
+    {seconds:.6} s: {image}: {error}`, as the peer's `sd_card` comes due
   - `esp32tl-runner: SD card: {commands} commands, {read} blocks read, {written} blocks
-    written`, with `, {errors} image errors` when there were any and `, {faults} operations
-    faulted` when a fault rule met any (`Stats::faults`), before the stop or end line
+    written`, with `, {errors} image errors` when there were any, `, {faults} operations faulted`
+    when a fault rule met any (`Stats::faults`), and `; while it ran, cards put in: {inserted}, taken
+    out: {removed}` when the peer changed the card, before the stop or end line
   - `esp32tl-runner: stop: {VARIANT} at {seconds:.6} s ({wall:.1} s wall, {reboots} resets)`
   - `esp32tl-runner: the emulator stopped before --max-seconds: {stop:?}`
   - with `--board`, instead of the last two: `esp32tl-runner: end: {cause} at {seconds:.6} s
@@ -577,7 +608,7 @@ Every message starts with `esp32tl-runner: `. Usage errors exit 2 and add a seco
 | `--console socket and both send the console to the peer: they need --board` | `--console socket` or `both` without `--board` |
 | `--board {spec}: expected socket:PATH or tcp:HOST:PORT` | neither prefix (`--board none`), an empty path, an empty host, or a port that is not a number from 0 to 65535 |
 | `--peer-timeout: expected a number of seconds, 0 for none, got {v:?}` | not a number, negative, `inf` or `NaN`, too large for a `Duration` (`1e20`), or above 0 but rounding to 0 ns (`1e-10`) |
-| `--sd-rw needs --sd-spi: the card's pins`, `--sd-spi needs --sd-rw: the card's image` | one of the two without the other |
+| `--sd-rw needs --sd-spi: the card's pins` | `--sd-rw` without `--sd-spi`; `--sd-spi` alone is an empty slot |
 | `--sd-spi {spec}: expected sclk=N,mosi=N,miso=N,cs=N` | a part without `=`, or one of the four missing |
 | `--sd-spi {spec}: {name:?} is not sclk, mosi, miso or cs` | another name |
 | `--sd-spi {spec}: {pin:?} is not a GPIO of the ESP32` | not a number from 0 to 39, or 24, or 28 to 31 |
@@ -620,7 +651,7 @@ peer come from `session.rs` and `transport.rs`:
 | 0 | `stop from the peer` | the peer's turn ended with `stop` |
 | 0 | `signal` | the first `SIGTERM` or `SIGINT` |
 | 1 | `the emulator stopped before --max-seconds: {stop:?}` | any `Stop` but `Halted` and `SwReset` |
-| 3 | `protocol error by the peer at {board}: {what}: {line}` | `{what}` is one of: `version {v}, the runner speaks version 1`, `chip {chip:?}, the runner runs "esp32"`, `watch holds GPIO {pin}, which the esp32 does not have` (any pin but 0 to 39 without 24 and 28 to 31, `session::GPIOS`), `expected hello`, `hello after the handshake`, a parse error of `protocol::parse` (`not JSON: …`, `not a JSON object`, `no "type"`, `unknown type …`, `{type}: "{field}" is missing`, `… is not an integer`, `… is negative`, `… is not a GPIO number`, `uart_rx: bad base64 character …`, and the like), `t {t} is before this turn's sync at {b} (rule 2)`, `GPIO {pin} is not in the peer's watch`, `a baud of 0`, `ack {ack}, but the last event before this sync was seq {seq}`, `quiet_until {q} is not after this turn's sync at {b}`, `adc is not implemented yet`, `eth_rx without --wifi`, `wifi_ap without --wifi` (after the check of `t`), `eth_rx: an Ethernet frame of {n} bytes; one without FCS has 14 to 1518`, `eth_rx: bad base64 character …`, `wifi_ap: "on" is not true or false`. `{line}` is the peer's line, cut after 200 characters with `...` |
+| 3 | `protocol error by the peer at {board}: {what}: {line}` | `{what}` is one of: `version {v}, the runner speaks version 1`, `chip {chip:?}, the runner runs "esp32"`, `watch holds GPIO {pin}, which the esp32 does not have` (any pin but 0 to 39 without 24 and 28 to 31, `session::GPIOS`), `expected hello`, `hello after the handshake`, a parse error of `protocol::parse` (`not JSON: …`, `not a JSON object`, `no "type"`, `unknown type …`, `{type}: "{field}" is missing`, `… is not an integer`, `… is negative`, `… is not a GPIO number`, `uart_rx: bad base64 character …`, and the like), `t {t} is before this turn's sync at {b} (rule 2)`, `GPIO {pin} is not in the peer's watch`, `a baud of 0`, `ack {ack}, but the last event before this sync was seq {seq}`, `quiet_until {q} is not after this turn's sync at {b}`, `adc is not implemented yet`, `eth_rx without --wifi`, `wifi_ap without --wifi` (after the check of `t`), `eth_rx: an Ethernet frame of {n} bytes; one without FCS has 14 to 1518`, `eth_rx: bad base64 character …`, `wifi_ap: "on" is not true or false`, `sd_card without --sd-spi` (after the check of `t`), `sd_card: "image" is not a string`. `{line}` is the peer's line, cut after 200 characters with `...` |
 | 3 | `protocol error by the peer at {board}: a line longer than 1 MiB` or `…: a line that is not UTF-8` | from the socket, without the line |
 | 4 | `the peer at {board} is gone: {why}` | `{why}` is `the peer closed the socket`, `read failed: {error}`, `write failed: {error}`, `the socket accepts no more data`, `the peer's turn took longer than --peer-timeout`, `the peer read nothing for longer than --peer-timeout` or, while the last messages are written, `the peer did not read the last messages in time` |
 
@@ -628,7 +659,7 @@ A failure to write the last messages does not change the exit code: the first ca
 
 ## Tests
 
-`make test-runner` runs the Rust tests (`cargo test --locked`), 109 of them:
+`make test-runner` runs the Rust tests (`cargo test --locked`), 117 of them:
 
 - `runner/src/cli/tests.rs`: `cli::parse` only. `minimal_command_line` checks the defaults
   (`rom: None`, flash 4 MiB, PSRAM 0, console `Stdout`, no board, `--peer-timeout` 60 s);
@@ -642,9 +673,9 @@ A failure to write the last messages does not change the exit code: the first ca
   and 17592186044416 (which would overflow `<< 20`), `--board none`, `socket:`, `tcp:host`,
   `tcp::7000` and `tcp:h:99999`, `--peer-timeout -1`, `nan`, `1e20`, `inf` and `1e-10`, and
   `--console socket` and `both` without `--board`.
-  `an_sd_card_takes_its_image_and_its_pins_in_any_order` checks `--sd-rw` with `--sd-spi` in
-  either order and an input-only MISO; `sd_card_usage_errors` checks the text of each `--sd-rw`
-  and `--sd-spi` usage error. `wifi_takes_esp32sims_access_point_and_the_networks_around` checks
+  `an_sd_card_slot_takes_its_pins_in_any_order_and_a_card_from_power_on` checks `--sd-rw` with
+  `--sd-spi` in either order, `--sd-spi` alone, and an input-only MISO; `sd_card_usage_errors`
+  checks the text of each `--sd-rw` and `--sd-spi` usage error. `wifi_takes_esp32sims_access_point_and_the_networks_around` checks
   `--wifi` with `ssid`, `psk` and `chan`, two `--wifi-nearby` with their values and defaults, and
   a spec with every other key left out (channel 6);
   `wifi_refuses_what_esp32sim_refuses_and_what_needs_another_flag` checks the text of the usage
@@ -658,8 +689,9 @@ A failure to write the last messages does not change the exit code: the first ca
   seconds, character times, base64 against RFC 4648's vectors and malformed input, parsing every
   message the peer may send and refusing malformed ones (`eth_rx` of 13 bytes or without `t`,
   `wifi_ap` with `on` of `1` or missing, `power` without `on` or `t` or with `on` a string,
-  `chip_reset` without `t` or with a negative one; 1518 bytes taken and 1519 refused), the exact text of the
-  runner's messages, `eth_tx` and `stats` with `wifi` among them,
+  `chip_reset` without `t` or with a negative one, `sd_card` without `t` or with an `image` that
+  is not a string; 1518 bytes taken and 1519 refused), the exact text of the runner's messages,
+  `eth_tx`, `sd_card_ack` and `stats` with `wifi` among them,
   and `the_esp32sim_revision_is_the_one_cargo_builds`, which checks that the revision `hello`
   reports is the one in `runner/Cargo.toml`.
 - `runner/src/sd_card/tests.rs`: `SdCard` through `transfer`, against a host in the test that
@@ -672,7 +704,13 @@ A failure to write the last messages does not change the exit code: the first ca
   erase, the state a chip reset finds, and
   `after_a_power_cut_the_card_is_uninitialised_and_keeps_its_whole_blocks`: a multiple block
   write cut inside its second block, after which the card answers nothing before CMD0, the first
-  block is in the image and the second is not. The fault rules, with the clock set by `advance`: no
+  block is in the image and the second is not. `Slot`: an empty slot that answers 0xff and takes
+  one card at a time, refusing one of a bad size; a card taken out in the middle of a multiple
+  block write, through a store the test still reads afterwards: the block it accepted is in the
+  image, the one on its way is not, the data response and the busy poll read 0xff, and the same
+  image put back is a card in SD mode that needs CMD0 and its initialisation again, its commands
+  added to the slot's; and a power cut, which reaches the card in the slot and does nothing to
+  an empty one. The fault rules, with the clock set by `advance`: no
   rule, no wait; a read that fails with `0x04` and a write that fails with `0x0d` and leaves its
   block, on a rule's blocks only, one-shot; a delayed read that sends 0xff until its time and is
   ended by a command; each block of a CMD18 as one operation; a rule on the block after a CMD18's
@@ -680,9 +718,9 @@ A failure to write the last messages does not change the exit code: the first ca
   delayed write busy and deaf to a command until its time, MISO let go with CS high, the block in
   the image at once; a failed block of a CMD25 that waits for the next token; an erase delayed by
   a rule on any block of its range; the rule given last first, and rules cleared by id and all; a
-  power cut that ends a busy time and a delayed read and leaves the rules.
+  power cut that ends a busy time and a delayed read and leaves the rules; rules that stay through a change of card, while the delay goes with the card.
 - `runner/src/protocol/tests.rs` also parses `sd_fault` and `sd_clear`, refuses each `sd_fault`
-  5.19 does not allow with its message, and writes `sd_op` for an error and a delay.
+  5.20 does not allow with its message, and writes `sd_op` for an error and a delay.
 - `runner/src/socket_board/tests.rs`: what `SocketBoard` records: every UART byte, and only the
   GPIO changes of watched pins, enable-only changes included; and the peer's levels and releases
   it hands the chip, in order, with `input_levels` after them.
@@ -737,6 +775,14 @@ A failure to write the last messages does not change the exit code: the first ca
   `an_access_point_put_back_while_it_is_leaving_comes_back_once_it_has_left` (an `off` and an
   `on` at one instant: the fresh one only once the old one has left, and a frame due meanwhile
   dropped).
+  The SD card slot: `the_peer_takes_the_card_out_and_puts_cards_in_at_their_times` (a card out,
+  another in, then out and the first in again at one instant, each acknowledged at its time in
+  the order sent, no `seq`, no turn of their own);
+  `a_card_the_slot_cannot_take_is_refused_and_the_slot_stays_as_it_was` (a removal from an empty
+  slot, a missing and a short image, a second card for a full slot);
+  `the_card_changes_with_the_supply_off_too`;
+  `sd_card_without_a_slot_is_a_protocol_error`. They open real image files under the system's
+  temporary directory.
   `on_the_emulator_the_access_point_deauthenticates_the_station_before_it_leaves` runs
   `wifi_access_point` and `wifi_leave` on the real `esp32::Machine`: with no station the access
   point leaves at once; with an associated one it queues the deauthentication (frame control,
@@ -768,13 +814,16 @@ which shows that a run boots and prints, but checks no runner line and no exit c
 `tests/test_pytest_plugin.py::test_a_runner_that_exits_with_an_error_fails_the_test` checks how
 the backend handles an exit 1, from a stand-in runner. `tests/test_sdspi.py` runs the real binary
 with the card on ESP-IDF's `sdspi` example, through the backend: a FAT image the example mounts,
-writes and reads, one without a file system, and an empty slot. It checks no runner line either;
+writes and reads, one without a file system, and an empty slot; `tests/test_sd_remount.py` takes
+the card out of `sd_remount` and puts cards in while it runs. They check no runner line either;
 the card's image errors and its lines on stderr are not covered.
 `examples/sd_data_logger/tests/test_logger.py` runs the fault rules on the real binary through
 the backend: a failed read and a failed write, a write busy within ESP-IDF's timeout and one busy
-past it, with the firmware's timeouts on the board's clock. An erase rule and a multiple block
-operation on a real image are not covered there: no validation image makes either, so what `sdspi`
-clocks around a CMD18 comes from its source at ESP-IDF v5.3.6, in the unit test above. `tests/test_http_request.py`
+past it, with the firmware's timeouts on the board's clock; `tests/test_sd_remount.py`, a rule that
+stays through a change of card. An erase rule and a multiple block operation on a real image are
+not covered: what `sdspi` clocks around a CMD18 comes from its source at ESP-IDF v5.3.6, in the unit
+test above.
+`tests/test_http_request.py`
 runs the real binary with `--wifi` on ESP-IDF's `http_request` example, through the backend and
 the harness's network: a fetch, a rejoin after the access point goes off and comes back, no access
 point, a wrong passphrase. It checks no runner line either; the `Wi-Fi` lines on stderr, the

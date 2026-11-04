@@ -133,9 +133,15 @@ routes and changes of the lines; when it has left some out, its heading says so:
 `the run on the board's clock, {n} entries: every step of the test, and the last 200 of the console and the routes:`.
 A run with no entry says `the run on the board's clock: nothing happened`.
 
-On a profile with an SD card slot, as `esp32-devkitc`, a line after the routes names the card:
-`sd_card: a card holding PATH`, or `sd_card: empty`; the test's `sd_card.insert(PATH)` is one of
-its steps ([pytest plugin](pytest-plugin-user.md#the-fixtures)).
+On a profile with an SD card slot, as `esp32-devkitc`, a line after the routes names the card the
+run had in the slot at its end: `sd_card: a card holding PATH`, or `sd_card: empty`. A line under
+it for each time the card came out or went in while the board was on gives the board's time the
+runner did it at: `  0.400000000 s  taken out`, `  0.600000000 s  PATH put in`. A change the test
+made that the run ended before, with no wait after it, follows with the time the test made it:
+`  0.900000000 s  not reached: taken out`; a card the runner refused, which fails the run, with
+the time it refused it: `  0.900000000 s  refused: PATH put in`. The test's
+`sd_card.insert(PATH)` and `sd_card.remove()` are among its steps
+([pytest plugin](pytest-plugin-user.md#taking-the-card-out-and-putting-one-in)).
 
 A test that passed gets the `routes:` lines and the slot's, without the run; `pytest -rA` shows
 them.

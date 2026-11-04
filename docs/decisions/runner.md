@@ -366,7 +366,7 @@ Status: decided (#107)
 
 The peer gives the card rules as inputs, `sd_fault` and `sd_clear`, and the card applies them
 within each transaction, as it answers everything else; what a rule did comes back as `sd_op`,
-which is not an event ([protocol 5.19](../protocol.md#519-sd_fault-sd_clear-and-sd_op-ext-107)).
+which is not an event ([protocol 5.20](../protocol.md#520-sd_fault-sd_clear-and-sd_op-ext-107)).
 A rule names an operation (a block read, a block written, an erase), an error or a delay, its
 blocks and a count. A delay is on the bus's clock: the card learns the bus cycle from
 `BoardModel::advance_to`, which the bus calls at every tick, holds a read's data block back with
@@ -375,8 +375,15 @@ between its transactions, so its own timeouts fire as on a slow card. No esp32si
 needed: `advance_to` exists, and `bus.cycles` moves only in the tick that calls it. A delayed
 write or erase is in the image when it starts; the busy is time only. Of the rules an operation
 matches, the one given last applies, so a one-shot rule can be put on top of a lasting one. Rules
-stay through a power cut and a chip reset, since they are the test's and not the card's state; a
-delayed read and a busy time end with the power.
+stay through a power cut, a chip reset and a change of card (#106), since they are the test's and
+not the card's state: a rule lasts until it is spent or cleared, and needs no message to say a card
+went. A delayed read and a busy time end with the power and with the card. The runner does not hold
+a rule's blocks against a card's size, since cards of other sizes may follow; the harness checks
+them at the call.
+
+**Rejected:** rules that go with the card, as a bad block does: the harness would have to learn of
+that to keep `active` true to the runner, and a test that swaps a failing card clears the rule in
+one line.
 
 **Rejected:** a schedule of faults on the command line, because a test gives a fault after the
 firmware has initialised the card, at an instant it learns only while the run goes; answering
@@ -390,9 +397,9 @@ lasting delay would then hide every later one-shot rule.
 
 **Postponed:** an erase that fails, and programming errors reported later in CMD13's status, which
 ESP-IDF does not read after a write in SPI mode; faults of the initialisation and register
-commands (CMD0 to ACMD41, CMD9, CMD10), which fail the mount, not the file handling; a block
+commands (CMD0 to ACMD41, CMD9, CMD10), which fail the mount, not the file handling; and a block
 programmed in part, as a card that loses power would leave it: the card writes a block whole or
-not at all; and the card taken out of its slot, apart from #32's postponed insertion and removal.
+not at all.
 
 ## The SD card's fault messages keep protocol version 1
 
@@ -405,6 +412,27 @@ or to tell apart. A stale runner build fails the first rule with `unknown type "
 
 **Rejected:** version 2, because a version tells apart peers that ship apart, and none do; and a
 flag to gate the messages, for the same reason.
+
+## The SD card slot changes its card between transactions, and a new card starts unpowered
+
+Status: decided (#106)
+
+`--sd-spi` is a slot (`runner/src/sd_card.rs`, `Slot`), empty unless `--sd-rw` puts a card in it,
+and the peer's `sd_card` empties and fills it at a slice boundary
+([protocol 5.19](../protocol.md#519-sd_card-and-sd_card_ack-ext-106)). A transaction is answered
+whole in `spi_transfer_pins`, so a change never falls inside one. Taking the card out drops it,
+with what it had not finished, and closes its image; every block it accepted is in the image
+already, since it writes through. A card put in is a new `SdCard`, in SD mode until CMD0, so the
+firmware must initialise it as after a power-on. The board on the pins is the runner's, so no
+esp32sim change is needed: there is no hook upstream lacks.
+
+**Rejected:** writing the block on its way, or the rest of a multiple block write, when the card
+comes out, because a firmware's handling of a pulled card is what the test is about; keeping the
+removed card's protocol state for the next one, because a real card loses it with its power;
+making `sd_card_ack` an event with a `seq`, because nothing answers it and, with a `latency` set,
+it would cost a turn; and ending the run with a protocol error for an image the runner cannot
+open, because that is not the peer breaking the protocol: the acknowledgement carries the error,
+and the harness fails the run with it.
 
 ## Under --realtime the runner waits at each block point until wall time reaches it
 

@@ -83,7 +83,13 @@ def test_the_example_writes_its_files_into_the_image(
     report = board.report(run=True)
     assert f"sd_card: a card holding {image}" in report
     assert f"sd_card.insert({str(image)!r})" in report
-    assert board.properties()["sd_card"] == {"image": str(image), "faults": []}
+    assert board.properties()["sd_card"] == {
+        "image": str(image),
+        "changes": [],
+        "refused": [],
+        "not_reached": [],
+        "faults": [],
+    }
 
 
 @pytest.mark.board_profile("lilygo-t-a7670g-r2")
@@ -129,7 +135,13 @@ def test_a_card_does_not_take_a_tap_s_file(
     with pytest.raises(SourceError, match=r"sd_card: cannot hold .*: it is the tap of uart.gnss"):
         sd_card.insert(tap)
     assert board.report().endswith("sd_card: empty")
-    assert board.properties()["sd_card"] == {"image": None, "faults": []}
+    assert board.properties()["sd_card"] == {
+        "image": None,
+        "changes": [],
+        "refused": [],
+        "not_reached": [],
+        "faults": [],
+    }
     board.power_on()
 
 
@@ -177,9 +189,9 @@ def test_the_slot_used_out_of_order_fails_the_test(
 
         pytestmark = pytest.mark.app_path({str(SDSPI)!r})
 
-        def test_insert_after_power_on(board, sd_card):
+        def test_remove_from_an_empty_slot(board, sd_card):
             board.power_on()
-            sd_card.insert({str(image)!r})
+            sd_card.remove()
 
         def test_never_powered(sd_card):
             sd_card.insert({str(image)!r})
@@ -211,11 +223,10 @@ def test_the_slot_used_out_of_order_fails_the_test(
     result.assert_outcomes(passed=1, failed=5, errors=2)
     result.stdout.fnmatch_lines_random(
         [
-            "*SourceError: sd_card: the board is on already: give an interface its source before"
-            " board.power_on()",
+            "*SourceError: sd_card is empty: there is no card to remove",
             "*esp32sim: the test set up a card in sd_card and never called board.power_on():"
             " it ran no firmware",
-            "*SourceError: sd_card has a card already: one per test",
+            "*SourceError: sd_card has a card already: remove it first",
             f"*SourceError: sd_card: no image at {pytester.path}/missing.img: No such file or"
             " directory",
             "*SourceError: sd_card: */short.img has 1000 bytes; an SD card image is a whole"

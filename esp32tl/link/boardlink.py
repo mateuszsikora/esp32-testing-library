@@ -16,15 +16,17 @@ runner's `console` messages carry it (`--console socket` or `both`).
 
 With `--wifi`, the Ethernet frames the station sends (`eth_tx`) go to the one interface that is the
 network behind the access point (`Interface.ethernet`), a frame per call, and what it answers goes
-in as `eth_rx`, a frame per output.
+in as `eth_rx`, a frame per output. With `--sd-spi`, the one interface that is the SD card slot
+(`Interface.card_slot`) changes the card in it with its `inputs` (`sd_card`), and gets what the
+runner says the slot holds after each change (`sd_card_ack`).
 
 The backend can also switch the board's supply and pulse the chip's EN pin (`board_input`): the
 message goes out in the harness's answer to the turn the link is held at, or to the first turn
 before the run reaches it, before what the interfaces send. Every `reset` the
 runner sends is kept in `resets`, in order, and given to `on_reset`.
 
-With `--sd-rw`, what the runner reports of the SD card's fault rules (`sd_op`) goes to the one
-interface that is the card (`Interface.sd_card`), which alone may send `sd_fault` and `sd_clear`.
+What the runner reports of the SD card's fault rules (`sd_op`) goes to the same interface, which
+alone may send `sd_fault` and `sd_clear`.
 
 Warnings and the run's `stats` are kept for the test report. What the harness finds wrong with
 the run is kept in `error`, the first cause only; the harness then ends the run with `stop` at the
@@ -57,6 +59,8 @@ from esp32tl.link.protocol import (
     Reset,
     RunnerHello,
     RunnerMessage,
+    SdCardAck,
+    SdCardChange,
     SdClear,
     SdFault,
     SdOp,
@@ -129,9 +133,11 @@ class Interface:
         return False
 
     @property
-    def sd_card(self) -> bool:
-        """Whether the interface is the SD card's fault rules: it has no wire, `sd_op` gets
-        each `sd_op`, and its `inputs` may be `sd_fault` and `sd_clear`."""
+    def card_slot(self) -> bool:
+        """Whether the interface is the SD card slot: it has no wire, its `inputs` may change the
+        card in it (`sd_card`), and `card_changed` gets what the runner says the slot holds after
+        each change (`sd_card_ack`). Its `inputs` may also be fault rules for the card (`sd_fault`,
+        `sd_clear`), and `sd_op` gets what they did."""
         return False
 
     @property
@@ -180,6 +186,11 @@ class Interface:
 
     def sd_op(self, message: SdOp) -> None:
         """One of the interface's SD fault rules applied to a block operation (`sd_op`)."""
+
+    def card_changed(self, t: int, image: str | None, error: str | None) -> None:
+        """The runner applied the slot's next `sd_card` at `t`, in the order they were sent: the
+        slot holds the image file `image` now, or no card; `error` says why it refused the
+        change, which left the slot as it was."""
 
 
 class Hold(Protocol):
@@ -241,9 +252,9 @@ class BoardLink:
         ethernet = [interface.name for interface in interfaces if interface.ethernet]
         if len(ethernet) > 1:
             raise ValueError(f"one network behind the access point, not {', '.join(ethernet)}")
-        cards = [interface.name for interface in interfaces if interface.sd_card]
-        if len(cards) > 1:
-            raise ValueError(f"one SD card, not {', '.join(cards)}")
+        slots = [interface.name for interface in interfaces if interface.card_slot]
+        if len(slots) > 1:
+            raise ValueError(f"one SD card slot, not {', '.join(slots)}")
         self.board = board
         self.chip = chip
         self.clock = clock
@@ -412,14 +423,16 @@ class BoardLink:
                         f"{owner.name}: UART receive overflow (rxfifo_ovf) on GPIO "
                         f"{message.pin}: the simulated network requires a lossless route"
                     )
+        elif isinstance(message, SdCardAck):
+            self._sd_card_ack(message)
         elif isinstance(message, Console):
             if self.console is not None:
                 with calling(CONSOLE, "console"):
                     self.console(message.t, message.data)
         elif isinstance(message, SdOp):
-            card = next((i for i in self.interfaces if i.sd_card), None)
+            card = next((i for i in self.interfaces if i.card_slot), None)
             if card is None:
-                raise LinkError("the runner sent sd_op, and the link has no SD card")
+                raise LinkError("the runner sent sd_op, and no interface is the SD card slot")
             with calling(card.name, "sd_op"):
                 card.sd_op(message)
         elif isinstance(message, Sync):
@@ -453,6 +466,13 @@ class BoardLink:
                         interface.name, "receive", interface.receive(message.t, "out", message.data)
                     )
                 self._answers += [(interface, t, data) for t, data in answers]
+
+    def _sd_card_ack(self, message: SdCardAck) -> None:
+        slot = next((i for i in self.interfaces if i.card_slot), None)
+        if slot is None:
+            raise LinkError("the runner sent sd_card_ack, and no interface is the SD card slot")
+        with calling(slot.name, "card_changed"):
+            slot.card_changed(message.t, message.image, message.error)
 
     def _uart_cfg(self, message: UartCfg) -> None:
         self._routes[message.port] = message
@@ -591,7 +611,8 @@ class BoardLink:
         watch; and one on a pin another interface is wired to, which the runner would take."""
         source = interface.name
         if not isinstance(
-            message, UartRx | GpioIn | Release | Adc | EthRx | WifiAp | SdFault | SdClear
+            message,
+            UartRx | GpioIn | Release | Adc | EthRx | WifiAp | SdCardChange | SdFault | SdClear,
         ):
             raise LinkError(f"{source} sent {message!r}, which is not an input")
         try:
@@ -612,9 +633,9 @@ class BoardLink:
                     f"{source} sent {message.TYPE}, and is not the network behind the access point"
                 )
             return
-        if isinstance(message, SdFault | SdClear):
-            if not interface.sd_card:
-                raise LinkError(f"{source} sent {message.TYPE}, and is not the SD card")
+        if isinstance(message, SdCardChange | SdFault | SdClear):
+            if not interface.card_slot:
+                raise LinkError(f"{source} sent {message.TYPE}, and is not the SD card slot")
             return
         if isinstance(message, GpioIn):
             pins = {pin for pin, _ in message.levels}

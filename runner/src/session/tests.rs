@@ -2409,6 +2409,203 @@ fn on_the_emulator_a_power_on_reset_clears_sram_and_the_rtc_and_keeps_the_flash(
     );
 }
 
+fn sd_card(t: u64, image: Option<&std::path::Path>) -> String {
+    let image = image.map_or("null".into(), |p| format!(r#""{}""#, p.display()));
+    format!(r#"{{"type":"sd_card","t":{t},"image":{image}}}"#)
+}
+
+/// A file of `len` bytes, its own for this test, under the system's temporary directory, removed
+/// when it is dropped.
+struct ImageFile(std::path::PathBuf);
+
+impl ImageFile {
+    fn new(name: &str, len: usize) -> Self {
+        let path = std::env::temp_dir().join(format!("esp32tl-{}-{name}", std::process::id()));
+        std::fs::write(&path, vec![0; len]).unwrap();
+        Self(path)
+    }
+}
+
+impl Drop for ImageFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+fn run_with_slot(seconds: f64, peer: FakePeer, slot: &sd_card::Shared) -> Run {
+    let signal = AtomicBool::new(false);
+    let mut guest = FakeGuest::new(Vec::new());
+    let shared = guest.shared.clone();
+    let mut peer = peer;
+    let opts = Options {
+        end_cycle: (seconds * SECOND as f64) as u64,
+        console: false,
+        peer_timeout: None,
+        signal: &signal,
+        wifi: None,
+        rom: &[],
+        card: Some(slot.clone()),
+    };
+    let (end, stats) = Session::new(&mut guest, &mut peer, shared, opts).run();
+    Run {
+        end,
+        stats,
+        guest,
+        peer,
+    }
+}
+
+fn slot() -> sd_card::Shared {
+    Rc::new(RefCell::new(sd_card::Slot::new(sd_card::Wiring {
+        sclk: 14,
+        mosi: 15,
+        miso: 2,
+        cs: 13,
+    })))
+}
+
+fn acks(peer: &FakePeer) -> Vec<(u64, Option<String>, Option<String>)> {
+    let text = |m: &Json, key| m.get(key).and_then(Json::as_str).map(str::to_string);
+    peer.of("sd_card_ack")
+        .iter()
+        .map(|m| (num(m, "t"), text(m, "image"), text(m, "error")))
+        .collect()
+}
+
+#[test]
+fn the_peer_takes_the_card_out_and_puts_cards_in_at_their_times() {
+    let (a_file, b_file) = (
+        ImageFile::new("a.img", sd_card::UNIT as usize),
+        ImageFile::new("b.img", 2 * sd_card::UNIT as usize),
+    );
+    let (a, b) = (a_file.0.clone(), b_file.0.clone());
+    let s = slot();
+    s.borrow_mut().insert_file(a.to_str().unwrap()).unwrap();
+    let (a2, b2) = (a.clone(), b.clone());
+    let mut turns = 0;
+    let peer = FakePeer::new(&[], move |turn| {
+        turns += 1;
+        let mut out = Vec::new();
+        if turns == 1 {
+            // out at 1 ms; another in at 2 ms; the first again at the same instant as the second
+            // goes out, in the order sent
+            out.push(sd_card(MS, None));
+            out.push(sd_card(2 * MS, Some(&b2)));
+            out.push(sd_card(3 * MS, None));
+            out.push(sd_card(3 * MS, Some(&a2)));
+        }
+        out.push(wait(turn.seq, None, None));
+        out
+    });
+    let r = run_with_slot(0.005, peer, &s);
+    assert!(matches!(r.end, End::MaxSeconds), "{:?}", r.end);
+    let (a, b) = (a.display().to_string(), b.display().to_string());
+    assert_eq!(
+        acks(&r.peer),
+        [
+            (MS, None, None),
+            (2 * MS, Some(b.clone()), None),
+            (3 * MS, None, None),
+            (3 * MS, Some(a.clone()), None),
+        ]
+    );
+    let slot = s.borrow();
+    assert_eq!(slot.image(), Some(a.as_str()));
+    assert_eq!((slot.inserted, slot.removed), (2, 2));
+    // not events: nothing to acknowledge, no turn of their own
+    assert!(
+        r.peer
+            .of("sd_card_ack")
+            .iter()
+            .all(|m| m.get("seq").is_none())
+    );
+    assert_eq!(r.stats.turns, 1);
+}
+
+#[test]
+fn a_card_the_slot_cannot_take_is_refused_and_the_slot_stays_as_it_was() {
+    let (good_file, short_file) = (
+        ImageFile::new("good.img", sd_card::UNIT as usize),
+        ImageFile::new("short.img", 1000),
+    );
+    let (good, short) = (good_file.0.clone(), short_file.0.clone());
+    let missing = std::env::temp_dir().join(format!("esp32tl-{}-missing.img", std::process::id()));
+    let s = slot();
+    let (good2, short2, missing2) = (good.clone(), short.clone(), missing.clone());
+    let mut first = true;
+    let peer = FakePeer::new(&[], move |turn| {
+        let mut out = Vec::new();
+        if std::mem::take(&mut first) {
+            out.push(sd_card(0, None));
+            out.push(sd_card(0, Some(&missing2)));
+            out.push(sd_card(0, Some(&short2)));
+            out.push(sd_card(MS, Some(&good2)));
+            out.push(sd_card(MS, Some(&good2)));
+        }
+        out.push(wait(turn.seq, None, None));
+        out
+    });
+    let r = run_with_slot(0.002, peer, &s);
+    assert!(matches!(r.end, End::MaxSeconds), "{:?}", r.end);
+    let acks = acks(&r.peer);
+    let good = good.display().to_string();
+    // taking the card out of an empty slot changes nothing, and is no error
+    assert_eq!(acks[0], (0, None, None));
+    let error = |i: usize| acks[i].2.clone().unwrap();
+    assert!(acks[1].1.is_none() && error(1).starts_with(&missing.display().to_string()));
+    assert!(
+        error(2).contains("whole number of 512 KiB units"),
+        "{}",
+        error(2)
+    );
+    assert_eq!(acks[3], (MS, Some(good.clone()), None));
+    assert_eq!(acks[4].1.as_deref(), Some(good.as_str()));
+    assert!(error(4).contains("the slot holds"), "{}", error(4));
+    assert_eq!((s.borrow().inserted, s.borrow().removed), (1, 0));
+}
+
+#[test]
+fn the_card_changes_with_the_supply_off_too() {
+    let (a_file, b_file) = (
+        ImageFile::new("off-a.img", sd_card::UNIT as usize),
+        ImageFile::new("off-b.img", sd_card::UNIT as usize),
+    );
+    let (a, b) = (a_file.0.clone(), b_file.0.clone());
+    let s = slot();
+    s.borrow_mut().insert_file(a.to_str().unwrap()).unwrap();
+    let b2 = b.clone();
+    let peer = FakePeer::new(
+        &[],
+        scripted(vec![
+            (MS, power(MS, false)),
+            (2 * MS, sd_card(2 * MS, None)),
+            (2 * MS, sd_card(2 * MS, Some(&b2))),
+            (3 * MS, power(3 * MS, true)),
+        ]),
+    );
+    let r = run_with_slot(0.005, peer, &s);
+    assert!(matches!(r.end, End::MaxSeconds), "{:?}", r.end);
+    let b = b.display().to_string();
+    assert_eq!(
+        acks(&r.peer),
+        [(2 * MS, None, None), (2 * MS, Some(b.clone()), None)]
+    );
+    assert_eq!(s.borrow().image(), Some(b.as_str()));
+}
+
+#[test]
+fn sd_card_without_a_slot_is_a_protocol_error() {
+    let peer = FakePeer::new(&[], |turn| {
+        vec![sd_card(0, None), wait(turn.seq, None, None)]
+    });
+    let r = run(1.0, FakeGuest::new(Vec::new()), peer);
+    assert!(
+        matches!(&r.end, End::Protocol(m) if m.contains("sd_card without --sd-spi")),
+        "{:?}",
+        r.end
+    );
+}
+
 /// A command to the SD card, with its CRC7, and `answer` bytes of 0xff after it.
 fn sd_command(index: u8, arg: u32, answer: usize) -> Vec<u8> {
     let mut f = vec![0x40 | index, 0, 0, 0, 0, 0];
@@ -2421,7 +2618,8 @@ fn sd_command(index: u8, arg: u32, answer: usize) -> Vec<u8> {
 /// A 1 MiB card, initialised as sdspi does it.
 fn ready_card() -> sd_card::Shared {
     let store = esp_periph::sdmmc::MemStore(vec![0; 2 * sd_card::UNIT as usize]);
-    let mut card = sd_card::SdCard::new(CARD, Box::new(store)).unwrap();
+    let mut slot = sd_card::Slot::new(CARD);
+    slot.insert("card", Box::new(store)).unwrap();
     for (index, arg) in [
         (0, 0),
         (8, 0x1aa),
@@ -2430,11 +2628,11 @@ fn ready_card() -> sd_card::Shared {
         (55, 0),
         (41, 1 << 30),
     ] {
-        card.transfer(CARD_PINS, &sd_command(index, arg, 8), 14);
+        slot.transfer(CARD_PINS, &sd_command(index, arg, 8), 14);
     }
-    let answer = card.transfer(CARD_PINS, &sd_command(58, 0, 8), 14);
+    let answer = slot.transfer(CARD_PINS, &sd_command(58, 0, 8), 14);
     assert_eq!(answer[8] >> 7, 1, "initialised: {answer:?}");
-    Rc::new(RefCell::new(card))
+    Rc::new(RefCell::new(slot))
 }
 
 fn sd_fault(t: u64, id: u64, rest: &str) -> String {
@@ -2481,34 +2679,25 @@ fn an_sd_fault_comes_due_on_the_card_and_what_it_did_goes_out_as_sd_op() {
         .map(|(_, rx)| *rx[8..].iter().find(|&&b| b != 0xff).unwrap())
         .collect();
     assert_eq!(tokens, [0xfe, 0x04, 0xfe]);
-    assert_eq!(card.borrow().stats.faults, 1);
+    assert_eq!(card.borrow().stats().faults, 1);
 }
 
 #[test]
-fn sd_fault_and_sd_clear_need_the_card_and_fit_it() {
-    for (line, with_card, error) in [
+fn sd_fault_and_sd_clear_need_the_slot_and_an_id_is_used_once() {
+    for (line, error) in [
         (
             sd_fault(0, 1, r#""op":"read","action":"error""#),
-            false,
-            "sd_fault without --sd-rw",
+            "sd_fault without --sd-spi",
         ),
         (
             r#"{"type":"sd_clear","t":0}"#.to_string(),
-            false,
-            "sd_clear without --sd-rw",
-        ),
-        (
-            sd_fault(0, 1, r#""op":"read","action":"error","blocks":[0,2048]"#),
-            true,
-            "sd_fault: blocks 0 to 2048, and the card has 2048",
+            "sd_clear without --sd-spi",
         ),
     ] {
-        let card = ready_card();
-        let guest = FakeGuest::new(Vec::new()).with_card(&card);
         let peer = FakePeer::new(&[], move |turn| {
             vec![line.clone(), wait(turn.seq, None, None)]
         });
-        let r = run_with_card(0.01, guest, peer, false, with_card.then_some(&card));
+        let r = run(0.01, FakeGuest::new(Vec::new()), peer);
         assert!(
             matches!(&r.end, End::Protocol(m) if m.contains(error)),
             "{:?}",

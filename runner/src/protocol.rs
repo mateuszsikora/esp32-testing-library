@@ -19,7 +19,7 @@ pub const MAX_LINE: usize = 1 << 20;
 /// most 1500 bytes of payload.
 pub const ETH_MIN: usize = 14;
 pub const ETH_MAX: usize = 1518;
-/// The longest delay an `sd_fault` may give (5.19): 10 emulated seconds, twice ESP-IDF's longest
+/// The longest delay an `sd_fault` may give (5.20): 10 emulated seconds, twice ESP-IDF's longest
 /// SD timeout, its 5 s for a write.
 pub const SD_DELAY_MAX: u64 = 10_000_000_000;
 
@@ -133,15 +133,21 @@ pub enum Incoming {
     ChipReset {
         t: u64,
     },
-    /// A fault rule for the SD card of `--sd-rw` (5.19).
+    /// A fault rule for the SD card of `--sd-rw` (5.20).
     SdFault {
         t: u64,
         fault: Fault,
     },
-    /// The SD card's rules with these ids, or all of them, gone (5.19).
+    /// The SD card's rules with these ids, or all of them, gone (5.20).
     SdClear {
         t: u64,
         ids: Option<Vec<u64>>,
+    },
+    /// A card holding the image file `image` into the slot of `--sd-spi`, or, with `None`, the
+    /// card out of it (5.19).
+    SdCard {
+        t: u64,
+        image: Option<String>,
     },
     Wait {
         ack: u64,
@@ -228,13 +234,17 @@ pub fn parse(line: &str) -> Result<Incoming, String> {
             t: field("t").time()?,
             ids: field("ids").numbers()?,
         },
+        "sd_card" => Incoming::SdCard {
+            t: field("t").time()?,
+            image: field("image").optional_string()?,
+        },
         "stop" => Incoming::Stop,
         "adc" => Incoming::NotYet("adc"),
         _ => return Err(format!("unknown type {kind:?}")),
     })
 }
 
-/// The rule of an `sd_fault`, checked as far as it can be without the card (5.19).
+/// The rule of an `sd_fault`, checked as far as it can be without the card (5.20).
 fn sd_fault<'a>(field: &impl Fn(&'static str) -> Field<'a>) -> Result<Fault, String> {
     let op = match field("op").string()?.as_str() {
         "read" => Op::Read,
@@ -329,6 +339,10 @@ impl Field<'_> {
             Some(_) => Err(self.error("is not a string")),
             None => Err(self.error("is missing")),
         }
+    }
+    /// `None` for an absent field or `null`.
+    fn optional_string(&self) -> Result<Option<String>, String> {
+        self.value().map(|_| self.string()).transpose()
     }
     fn pin(&self) -> Result<u8, String> {
         pin(self.int()?).ok_or_else(|| self.error("is not a GPIO number"))
@@ -464,7 +478,7 @@ pub fn eth_tx(seq: u64, t: u64, data: &[u8]) -> String {
     )
 }
 
-/// What one of the peer's rules did to the SD card (5.19): not an event.
+/// What one of the peer's rules did to the SD card (5.20): not an event.
 pub fn sd_op(t: u64, f: &Faulted) -> String {
     let (action, delay) = match f.action {
         Action::Error => ("error", "null".to_string()),
@@ -477,6 +491,17 @@ pub fn sd_op(t: u64, f: &Faulted) -> String {
         f.blocks.0,
         f.blocks.1,
         f.written
+    )
+}
+
+/// What the slot holds after the peer's `sd_card`, and why the change was refused, if it was
+/// (5.19).
+pub fn sd_card_ack(t: u64, image: Option<&str>, error: Option<&str>) -> String {
+    let quoted = |v: Option<&str>| v.map_or("null".into(), |v| format!(r#""{}""#, escape(v)));
+    format!(
+        r#"{{"type":"sd_card_ack","t":{t},"image":{},"error":{}}}"#,
+        quoted(image),
+        quoted(error)
     )
 }
 

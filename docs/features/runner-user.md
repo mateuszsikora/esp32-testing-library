@@ -4,8 +4,9 @@
 emulated clock, and prints the guest's UART0 console on stdout. With `--board`, it connects to a
 peer, the harness or any program that speaks [the link protocol](../protocol.md), and wires the
 chip's pins to it: the peer sees what the guest sends on its UARTs and the levels it drives on
-the pins the peer watches, and sends bytes and levels back. With `--sd-rw` and `--sd-spi`, an SD
-card holding an image file sits on four of the chip's pins, with or without `--board`. With
+the pins the peer watches, and sends bytes and levels back. With `--sd-spi`, an SD card slot sits
+on four of the chip's pins, with or without `--board`, holding a card with the image file of
+`--sd-rw`; with `--board` the peer can take the card out and put one in while the guest runs. With
 `--wifi`, a Wi-Fi access point is on the air for the chip's station, and the network behind it is
 the peer's.
 The `esp32sim` backend of the pytest plugin starts it, with `--board socket:PATH` and itself as
@@ -55,9 +56,11 @@ usage: esp32tl-runner --chip esp32 --flash-at OFFSET=FILE... --max-seconds S [op
                         run fails with exit code 4 (default 60; 0 waits for ever)
   --console stdout|socket|both   where UART0 goes (default stdout); socket and both need
                         --board
-  --sd-rw IMAGE         an SD card holding IMAGE, a whole number of 512 KiB units, on the
-                        pins of --sd-spi; the guest's writes go into the file
-  --sd-spi sclk=N,mosi=N,miso=N,cs=N   the GPIOs the card is wired to, in SPI mode
+  --sd-spi sclk=N,mosi=N,miso=N,cs=N   an SD card slot on these GPIOs, in SPI mode; empty
+                        unless --sd-rw puts a card in it, and the peer's sd_card can
+                        put one in or take it out while the guest runs
+  --sd-rw IMAGE         an SD card holding IMAGE, a whole number of 512 KiB units, in the
+                        slot of --sd-spi from power-on; the guest's writes go into the file
   --wifi ssid=…,psk=…,chan=…,bssid=…   esp32sim's virtual access point, every key
                         optional; the network behind it is the peer's, over the
                         socket (eth_tx, eth_rx): needs --board
@@ -77,8 +80,8 @@ usage: esp32tl-runner --chip esp32 --flash-at OFFSET=FILE... --max-seconds S [op
 | `--board` | none: nothing on the chip's pins | `socket:PATH`, a Unix socket path that is not empty, or `tcp:HOST:PORT`, with a host that is not empty and a port from 0 to 65535 (`tcp:[::1]:7000` for IPv6) |
 | `--peer-timeout S` | `60` | `0`, to wait for ever, or a positive number of seconds; fractions are fine. A value that rounds to 0 ns, or is too large for a Rust `Duration` (`1e20`), is a usage error |
 | `--console` | `stdout` | `stdout`; `socket` and `both` only with `--board` |
-| `--sd-rw IMAGE` | none: no card | a path, valid UTF-8, to an image file of a whole number of 512 KiB units, from 512 KiB to 2 TiB; only with `--sd-spi` |
-| `--sd-spi sclk=N,mosi=N,miso=N,cs=N` | none | the four pins in any order, each once, four different GPIOs of the ESP32 (0 to 39 but 24 and 28 to 31); `sclk`, `mosi` and `cs` not input-only (34 to 39); only with `--sd-rw` |
+| `--sd-rw IMAGE` | none: an empty slot | a path, valid UTF-8, to an image file of a whole number of 512 KiB units, from 512 KiB to 2 TiB; only with `--sd-spi` |
+| `--sd-spi sclk=N,mosi=N,miso=N,cs=N` | none: no slot | the four pins in any order, each once, four different GPIOs of the ESP32 (0 to 39 but 24 and 28 to 31); `sclk`, `mosi` and `cs` not input-only (34 to 39) |
 | `--wifi SPEC` | none: no access point | esp32sim's `key=value,...`, every key optional, an empty `SPEC` included: `ssid` (default `esp32sim`), `psk` (also `password` or `pass`; WPA2-PSK with it, open without), `chan` (also `channel` or `ch`; 1 to 14, default 6), `bssid` (default `02:53:49:4d:00:01`). `epoch` is refused. Only with `--board` |
 | `--wifi-nearby SPEC` | none | esp32sim's `key=value,...`: `ssid` (1 to 32 bytes, required), `chan` (1 to 14, default 1), `rssi` in dBm (-128 to 127, default -60), `secure` (`0` or `1`, also `false`/`true` or `no`/`yes`; default `1`), `bssid` (default: one derived from the SSID, the same every run). Repeatable, at most 32, each on a BSSID of its own and not the access point's SSID or BSSID. Only with `--wifi` |
 
@@ -156,16 +159,25 @@ MTOOLS_SKIP_CHECK=1 mtype -i card.img ::foo.txt
 - The card hears a transaction only while its CS pin is a low output and its SCLK pin carries the
   master's clock; the guest reads its answers only when the master's MISO comes from the card's
   pin. A guest that routes the bus to other pins finds no card, as it would on the board.
-- The card is there from power-on to the end of the run, through chip resets: it keeps its state,
-  as a powered card does, until the guest sends CMD0.
+- The card stays through chip resets: it keeps its state, as a powered card does, until the guest
+  sends CMD0.
+- `--sd-spi` without `--sd-rw` is an empty slot: every byte the guest reads from it is `0xff`, as
+  from a slot with nothing in it, and ESP-IDF's driver times out (`ESP_ERR_TIMEOUT`).
+- With `--board`, the peer takes the card out and puts one in with `sd_card`, and the runner says
+  what the slot holds after each with `sd_card_ack`
+  ([protocol 5.19](../protocol.md#519-sd_card-and-sd_card_ack-ext-106)). The change comes between
+  two of the guest's SPI transactions. A card taken out keeps in its image every block it took,
+  and the image is closed; the guest reads `0xff` from then on. A card put in starts unpowered, in
+  SD mode, and the guest has to initialise it again. It can change with the board's supply off
+  as well. Without `--board` the card stays in from power-on to the end of the run.
 - With `--board`, the peer can make the card fail reads and writes, or take longer over reads,
   writes and erases, from an instant it chooses, on chosen blocks, for so many operations or until
   it clears the rule, and hears back what each rule did
-  ([protocol 5.19](../protocol.md#519-sd_fault-sd_clear-and-sd_op-ext-107)). Delays are on the
+  ([protocol 5.20](../protocol.md#520-sd_fault-sd_clear-and-sd_op-ext-107)). Delays are on the
   emulated clock: the guest polls the card for them as it would a slow card, and its own timeouts
   run on the same clock. Without `--board` the card always answers at once. The harness's way to
   give the rules is `sd_card.fail` and `sd_card.delay`
-  ([pytest plugin](pytest-plugin-user.md#the-fixtures)).
+  ([pytest plugin](pytest-plugin-user.md#making-the-card-fail-or-slow-down)).
 
 What the card does and does not model is in
 [the technical side](runner-technical.md#the-sd-card).
@@ -233,7 +245,9 @@ the peer instead. Everything the runner says goes to stderr, on lines that start
 `esp32tl-runner: `:
 
 - `esp32tl-runner: SD card on SCLK GPIO N, MOSI GPIO N, MISO GPIO N, CS GPIO N: IMAGE (K KiB,
-  write-through)` first, with `--sd-rw`;
+  write-through)` first, with `--sd-rw`, or
+  `esp32tl-runner: SD card slot on SCLK GPIO N, MOSI GPIO N, MISO GPIO N, CS GPIO N: empty` with
+  `--sd-spi` alone;
 - `esp32tl-runner: Wi-Fi access point 'SSID' bssid BSSID channel N (WPA2-PSK), its network on the
   socket` with `--wifi`, `(open)` without `psk`; then, for each `--wifi-nearby`,
   `esp32tl-runner: Wi-Fi network around: 'SSID' bssid BSSID channel N RSSI dBm (open)`, or
@@ -252,10 +266,16 @@ the peer instead. Everything the runner says goes to stderr, on lines that start
   the run goes on. With `--board`, the peer gets a `reset` message as well. The same line, with
   cause `0x1`, follows the peer's `chip_reset` and its `power` that switches the supply back on;
 - `esp32tl-runner: power off at T s` when the peer switches the board's supply off.
+  the run goes on. With `--board`, the peer gets a `reset` message as well.
+- `esp32tl-runner: SD card out at T s: IMAGE`, `esp32tl-runner: SD card in at T s: IMAGE (K KiB,
+  write-through)` and `esp32tl-runner: SD card refused at T s: IMAGE: ERROR` when the peer's
+  `sd_card` takes the card out, puts one in, or puts in one the slot cannot take; T in emulated
+  seconds with six decimals.
 - `esp32tl-runner: SD card: N commands, R blocks read, W blocks written` at the end of a run with
-  `--sd-rw`, just before the line that ends it; with `, E image errors` added when reads, writes
-  or erases of the image file failed, and `, F operations faulted` when the peer's fault rules
-  failed or delayed any. Each such failure also prints
+  `--sd-spi`, just before the line that ends it, counting every card the slot held; with
+  `, E image errors` added when reads, writes or erases of an image file failed, `, F operations
+  faulted` when the peer's fault rules failed or delayed any, and
+  `; while it ran, cards put in: I, taken out: O` when the peer changed the card. Each such failure also prints
   `esp32tl-runner: SD card: reading block N: ERROR` (or `writing block N`, or
   `erasing blocks LO to HI`) when it happens, and the guest gets the error a card reports for it.
 
@@ -293,7 +313,7 @@ to `--board`, and nothing after it.
 | 1 | the emulator stopped for any other reason | the stop line, then `esp32tl-runner: the emulator stopped before --max-seconds: STOP`, the stop with its fields; with `--board`, `end: the emulator stopped before --max-seconds: STOP at ...` |
 | 2 | a usage error | `esp32tl-runner: MESSAGE`, then `run esp32tl-runner --help for the usage` |
 | 2 | an input that cannot be loaded: no ROM found, a file that cannot be read, a ROM that is not an ELF, an image that does not fit in flash, an SD card image that cannot be opened for writing or is not a whole number of 512 KiB units | `esp32tl-runner: MESSAGE`, no stop line |
-| 3 | with `--board`: a protocol error by the peer, such as a malformed line, a version or chip mismatch, an input stamped before its turn's `sync`, an `eth_rx` or `wifi_ap` on a run without `--wifi` | `end: protocol error by the peer at BOARD: WHAT: LINE at ...`, `LINE` cut after 200 characters |
+| 3 | with `--board`: a protocol error by the peer, such as a malformed line, a version or chip mismatch, an input stamped before its turn's `sync`, an `eth_rx` or `wifi_ap` on a run without `--wifi`, an `sd_card` on a run without `--sd-spi` | `end: protocol error by the peer at BOARD: WHAT: LINE at ...`, `LINE` cut after 200 characters |
 | 4 | with `--board`: the connection failed, or the peer is gone: it closed the socket, a read or write failed, or `--peer-timeout` ran out | `end: cannot connect to the peer at ...`, or `end: the peer at BOARD is gone: WHY at ...` |
 | 101 | a panic, in the runner or in esp32sim during the run | Rust's panic message, no stop line |
 | 128 + N | with `--board`: a second `SIGTERM` or `SIGINT` (signal number N) | whatever came before it |

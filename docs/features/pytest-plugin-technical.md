@@ -214,16 +214,29 @@ are in [models-technical.md](models-technical.md).
    of its own, and the test sees it at the next turn the clock lets the run take.
 12. **`sd_card` fixture** returns `board.sd_card`, the `SdCard` of the profile's `[sd_card]`
    slot; a profile without one makes it raise `BackendError`, through `backend_failed`.
-   `SdCard.insert(image)` refuses a second card, then calls the backend's
+   `SdCard.insert(image)` refuses a slot that holds a card, then calls the backend's
    `asked(Request("sd_card", source="model"))`, then resolves `image` against `directory`, the
    test file's, and checks with `stat` that it is a file of a whole number of `UNIT`s (512 KiB),
    at least one and at most `MAX_SIZE` (2 TiB), and with `os.access` that it can be read and
    written, and that no route replays from it or is tapped into it
-   ([run-report-technical.md](run-report-technical.md#data-flow)). It keeps the absolute path in
-   `image_path`, which `runner_command` turns into `--sd-spi`
-   and `--sd-rw` at power-on ([esp32sim-backend-technical.md](esp32sim-backend-technical.md#data-flow)).
-   `insert` also keeps the card's size in blocks, which `fail` and `delay` check `blocks`
-   against. `SdCard` is an `Interface` with no wire and `sd_card` true
+   ([run-report-technical.md](run-report-technical.md#data-flow)). It claims the absolute path in
+   `files` as `("card", "sd_card")` and keeps it in `image_path`; `SdCard.remove()` calls
+   `asked` the same way, so that it skips where `insert` does, then refuses an empty slot,
+   releases the claim and sets `image_path` to `None`.
+   Before power-on that is all: `runner_command` turns the slot into `--sd-spi`, and
+   `image_path`, when there is one, into `--sd-rw`
+   ([esp32sim-backend-technical.md](esp32sim-backend-technical.md#data-flow)).
+   Once the run has started (`started()`), with the supply on or off, each call also queues `SdCardChange(now(), image)`, `image`
+   the path as a string or `None`, and logs its step at `now()` rather than at 0. `SdCard` is a
+   `BoardLink` `Interface` named `sd_card` with no wire and `card_slot` true: `inputs(now)` hands
+   the queued changes to the link, stamped no earlier than `now`, and keeps them in order as
+   sent; `card_changed(t, image, error)`, for each `sd_card_ack`, takes the oldest sent change and
+   appends it to `refused` and raises `LinkError` when the runner refused it (`error`), and
+   otherwise appends `CardChange(t, Path(image) or None)`, what the runner says the slot holds, to
+   `changes`, raising `LinkError` after that when it names another image than the test asked for
+   ([protocol 5.19](../protocol.md#519-sd_card-and-sd_card_ack-ext-106)). The test thread queues
+   and the link thread takes under one lock.
+   `insert` also keeps the card's size in blocks, which `fail` and `delay` check `blocks` against
    ([the SD card's fault rules](#the-sd-cards-fault-rules)).
 
 `Console.tap` delegates to the backend's `tap_console`. Both backends reuse `Uart.tap`'s file
@@ -266,7 +279,8 @@ the existing no-latency behavior and board pulls are unchanged.
 | `LineEvent(t, name, pin, by, level)` | frozen dataclass, `esp32tl/interfaces/lines.py` | `t` a `Duration`, an instant of the board's time, `name` as `modem.ri`, `by` `"firmware"`, `"test"` or `"model"`, `level` 0, 1 or `None` |
 | `PULLED` | `dict`, `esp32tl/interfaces/lines.py` | `{"up": 1, "down": 0}`: the level a board's pull gives an undriven line |
 | `sd_card(board)` | fixture, function scope | Returns `board.sd_card` |
-| `SdCard(route, *, directory, asked=..., log=None, files=None, now=lambda: 0, ended=lambda: False)` | class, `esp32tl/interfaces/sd_card.py` | The `sd_card` slot on `route` (an `SdCardRoute`): attributes `name` (`"sd_card"`), `route`, `directory`, `asked`, `log` (the `RunLog` its steps go to), `files` (shared with the routes), `image_path` (`None` until `insert`, then the image's absolute `Path`); `insert(image)` returns that path. `now`, the board's clock in nanoseconds, stamps the fault rules, and `ended` says whether the run is over: `fail(op, *, count=None, blocks=None)` and `delay(op, by, *, count=None, blocks=None)` return a `CardFault`, `clear_faults()`, `faults` and `faulted`; `report()` and `properties()` for the run's report |
+| `SdCard(route, *, directory, asked=..., log=None, files=None, now=..., started=..., ended=...)` | class, `esp32tl/interfaces/sd_card.py`, a `BoardLink` `Interface` named `sd_card` with no wire and `card_slot` true | The `sd_card` slot on `route` (an `SdCardRoute`): attributes `name` (`"sd_card"`), `route`, `directory`, `asked`, `log` (the `RunLog` its steps go to), `files` (shared with the routes), `image_path` (`None` while the slot is empty, else the image's absolute `Path`, as the test last put it), `changes` (`list[CardChange]`, acknowledged), `held` (the image the run has: after the last acknowledged change, else the one at power-on, which the first change with the board on keeps), `not_reached` (`list[CardChange]`, sent or queued and not acknowledged, at the instants the test made them), `refused` (`list[CardChange]`, the change the runner refused, with the image the test asked for); `insert(image)` and `remove()` return the image's path. `now` is the board's clock and `started` whether the run has started, `0` and `False` by default. `ended` says whether the run is over, `False` by default: `fail(op, *, count=None, blocks=None)` and `delay(op, by, *, count=None, blocks=None)` return a `CardFault`, with `clear_faults()`, `faults` and `faulted`; `report()` and `properties()` for the run's report |
+| `CardChange(t, image)` | frozen dataclass, `esp32tl/interfaces/sd_card.py` | What the slot held from `t`, in nanoseconds, after a change made with the board on: the image's `Path`, or `None` |
 | `CardFault`, `FaultedOperation` | classes, `esp32tl/interfaces/sd_card.py` | A rule (`id`, `at`, `op`, `action`, `delay`, `count`, `blocks`, `call`, `cleared_at`, `hits`, `active`, `clear()`) and an operation it met (`at`, `fault`, `op`, `blocks`, `action`, `delay`, `written`) |
 | `UNIT`, `MAX_SIZE` | `int`, `esp32tl/interfaces/sd_card.py` | 524288: an SD card image is a whole number of them; 2^41, the most it may be |
 | `BLOCK`, `MAX_DELAY` | `int`, `Duration`, `esp32tl/interfaces/sd_card.py` | 512, the block the rules count in; 10 s, the longest delay (`SD_DELAY_MAX` of `esp32tl.link.protocol`) |
@@ -344,7 +358,9 @@ The backend's own environment variables are in
 | `uart.gnss has no receiver: give it one with gnss.fix(at=...)` | `SourceError` from `Gnss.position` or `receiver()` before any model call | Fails the test |
 | `{interface}: the board is on already: tap a route before board.power_on()`, `uart.gnss is tapped already: one tap per test`, `no backend can tap {interface}`, `{interface}: cannot tap into {path}: it is the {kind} of {route}`; `{interface}: cannot tap into {path}: {directory} is not a directory` | `SourceError`, and `FileNotFoundError` for the last, from `Uart.tap`; `{interface}: cannot replay {path}: it is the tap of {route}` or `... it is the card of sd_card` from `Uart.replay` | Fails the test ([run-report-user.md](run-report-user.md#when-the-test-gets-it-wrong)) |
 | `sd_card.fail: the slot is empty: insert a card first` (`SourceError`); `sd_card.fail: op {op!r} is not 'read' or 'write'`, `sd_card.delay: op {op!r} is not 'read', 'write' or 'erase'`, `sd_card.delay: a delay of {by}; one is 1 ns to 10 s`, `{method}: a count of {count}; it is 1 to 2**63 - 1, or None`, `{method}: blocks {blocks!r}, and the card has blocks 0 to {last}`, `{method}: blocks {blocks!r} is not a non-empty range of step 1` (`ValueError`); `sd_card.delay: by is {by!r}, not a Duration`, `{method}: count is {count!r}, not a whole number`, `{method}: blocks is {blocks!r}, not a block number or a range` (`TypeError`); `{method}: the run has ended: no rule reaches the card any more` (`RunEnded`) | `SdCard.fail` and `SdCard.delay` refuse the rule before it is given | Fails the test |
-| `sd_card: the board is on already: give an interface its source before board.power_on()`, `sd_card has a card already: one per test`, `sd_card: no image at {path}: {strerror}`, `sd_card: {path} is not a file`, `sd_card: {path} has {size} bytes; an SD card image is a whole number of 512 KiB units`, `sd_card: {path} has {size} bytes; an SD card image is at most 2 TiB`, `sd_card: {path} cannot be read and written: the card writes into it`, `sd_card: cannot hold {path}: it is the {kind} of {interface}` | `SourceError` from `SdCard.insert` | Fails the test |
+| `sd_card has a card already: remove it first`, `sd_card: no image at {path}: {strerror}`, `sd_card: {path} is not a file`, `sd_card: {path} has {size} bytes; an SD card image is a whole number of 512 KiB units`, `sd_card: {path} has {size} bytes; an SD card image is at most 2 TiB`, `sd_card: {path} cannot be read and written: the card writes into it`, `sd_card: cannot hold {path}: it is the {kind} of {interface}` | `SourceError` from `SdCard.insert` | Fails the test |
+| `sd_card is empty: there is no card to remove` | `SourceError` from `SdCard.remove` | Fails the test |
+| `sd_card: the runner refused the card at {t} ns: {error}`, `sd_card: the runner says the slot holds {image} at {t} ns, where the test asked for {wanted}`, `sd_card: the runner acknowledged a change nobody asked for` | `LinkError` from `SdCard.card_changed`, the link's `error` | Ends the run; a waiting test gets `RunEnded`, and the test fails at teardown |
 | `{description} did not happen within {within}: waited from {start} to {end} of the board's time` | `NeverHappened` from `wait_until` or an expect | Fails the test |
 | `the run ended {when} while the test waited {what}: {reason}` | `RunEnded` from a wait or an expect; `{when}` is `at {time}` from the runner's `stats`, `after the turn at {time}` without them, the last held turn being only a bound, or `before its first turn`; `{what}` is `until {time}` or `for {description}`, `{reason}` the backend's ([esp32sim-backend-technical.md](esp32sim-backend-technical.md#failure-modes)) | Fails the test |
 | `expect: no pattern to wait for`, `expect: {pattern!r} is not a pattern`, `expect_exact takes text or bytes, not a compiled pattern`, `expect: timeout is {timeout!r}, not a Duration or a number of seconds`, `expect: timeout is {timeout}, less than 0` | `ValueError`, `TypeError` from an expect | Fails the test |
@@ -444,8 +460,11 @@ through `pytester`, a source after power-on, an expect before it, a source never
 profile without the route ([replay-technical.md](replay-technical.md#tests)).
 `tests/test_replay.py` and `tests/test_tap.py` test `Uart` without an emulator.
 `tests/test_sdspi.py` runs `sd_card.insert` on ESP-IDF's `sdspi` example on the real runner, and,
-through `pytester`, a card after power-on, one never powered on, two cards, a missing, a short and
-a read-only image, and a profile without a slot;
+through `pytester`, a removal from an empty slot, a card never powered on, two cards, a missing,
+a short and a read-only image, and a profile without a slot; `tests/test_sd_remount.py` takes the
+card out of `sd_remount` and puts another and the same one back while it runs, and puts one into
+a slot empty at power-on; `tests/test_sd_card_slot.py` tests `SdCard` on a `BoardLink` without an
+emulator;
 `test_runner_command_puts_a_card_in_the_slot_once_the_test_inserts_one` in
 `tests/test_pytest_plugin.py` checks the runner's flags. Not covered: an image path that is a
 directory, and one above 2 TiB.
@@ -530,7 +549,8 @@ The `broker` fixture delegates to `modem.network().broker`, which selects a mode
 
 `SdCard.image(size_mb=32)` returns `CardImageBuilder`; both this call and `build()` check that
 the slot is open and call `asked(Request("sd_card", source="model"))`. A saved builder therefore
-cannot bypass the before-power-on or backend-capability checks. Declaring files allocates no
+cannot bypass the backend-capability check. On esp32sim `asked` is the backend's `_declared`,
+without the before-power-on check, so a test can build a card to put in while the firmware runs. Declaring files allocates no
 image. Each build creates a unique subdirectory of a lazily allocated `TemporaryDirectory`,
 truncates `card.img`, formats it with `mformat` (FAT32 forced from 512 MiB), creates parents with
 `mmd`, and copies bytes through temporary host files using `mcopy`. Failed builds remove their
@@ -546,30 +566,32 @@ for both builder and reader calls, preventing mtools from expanding a requested 
 into several files. No FAT state or file contents are cached. All commands run without a shell and with `MTOOLS_SKIP_CHECK=1`; command failure becomes
 `SourceError` including stderr. Text encoding/decoding defaults to UTF-8 with no newline
 translation. `SdCard.close()` invalidates handles and removes only builder-owned directories;
-backends call it after stopping the run, including on teardown errors. The inserted path stays
-in `image_path` for reporting, even after the owned image has been removed.
+backends call it after stopping the run, including on teardown errors. The path of the card in the
+slot at the end stays in `image_path` for reporting, even after the owned image has been removed.
 
 ### The SD card's fault rules
 
-On esp32sim the backend puts its `SdCard` on the `BoardLink` with the others, the one interface
-whose `sd_card` is true (`BoardLink` refuses two). `fail` and `delay` check their arguments, then,
+The rules go on the link as the card's changes do: `SdCard` is the one interface whose `card_slot`
+is true. `fail` and `delay` check their arguments, then,
 under a lock, number the rule from 1 (`CardFault.id`), keep it in `faults` and queue an `SdFault`
 stamped with `now()`; once `ended()` is true they raise `RunEnded`, since nothing would send the
 rule. `clear()` and `clear_faults()` stamp `cleared_at` on the rules still active and queue an
 `SdClear` with their ids, or with none for all, and nothing when none was active. A rule whose
 `hits` have reached its `count` is not active and keeps no `cleared_at`; one that looks active
 may be spent in the runner by the time the clear comes due, which the runner takes as no error.
-Every call is a step of the `RunLog`, in the words of the call. `inputs(now)` sends what is queued
-in the link's next turn, at the later of its stamp and the turn's `now`, so a rule given before
-power-on goes in turn 0 at `t = 0`. `BoardLink._check_input` refuses `sd_fault` and `sd_clear` from
-any other interface (`{name} sent sd_fault, and is not the SD card`) and, through the codec, one
-the runner would refuse ([protocol 5.19](../protocol.md#519-sd_fault-sd_clear-and-sd_op-ext-107)).
+Every call is a step of the `RunLog`, in the words of the call. Rules and card changes share one
+queue, so they go out in the order the test made them. `inputs(now)` sends it in the link's next
+turn, at the later of each stamp and the turn's `now`, so a rule given before power-on goes in turn
+0 at `t = 0`; only the changes wait for an `sd_card_ack`, and only they are in `not_reached`.
+`blocks` is checked against the card as the test last put it; a rule stays through a change of card. `BoardLink._check_input` refuses `sd_fault` and `sd_clear` from
+any other interface (`{name} sent sd_fault, and is not the SD card slot`) and, through the codec, one
+the runner would refuse ([protocol 5.20](../protocol.md#520-sd_fault-sd_clear-and-sd_op-ext-107)).
 
 `sd_op` reaches `SdCard.sd_op` from the link's thread, which makes a `FaultedOperation` with the
 rule it names, its time as a `Duration`, its blocks as a `range` and its delay as a `Duration`, and
 adds it to the rule's `hits` and to `faulted`. `CardFault.active` is false once the rule is cleared
 or its `hits` reach its `count`, which is when the runner removes it too. An `sd_op` on a link with
-no SD card fails the link (`the runner sent sd_op, and the link has no SD card`). On serial the slot
+no SD card fails the link (`the runner sent sd_op, and no interface is the SD card slot`). On serial the slot
 is on no link, and `insert`, which a rule needs, skips through the capability declaration first.
 
 `tests/test_sd_faults.py` covers the rules without the emulator: what goes out in which turn and

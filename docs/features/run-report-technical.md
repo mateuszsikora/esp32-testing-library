@@ -20,7 +20,8 @@ M2 asked for it.
    routes' `files` too: `sd_card.insert(image)` refuses an image `files` holds already
    (`same_file`; `SourceError`, `{name}: cannot hold {path}: it is the {kind} of {interface}`),
    enters it as `("card", "sd_card")`, so that a tap into it is refused as any other, and logs
-   `sd_card.insert({image!r})` at 0.
+   `sd_card.insert({image!r})` at 0, or at `now` once the board is on. `sd_card.remove()` takes
+   the image out of `files` again and logs `sd_card.remove()` the same way.
 2. **`gnss.tap(path)`**, in the test body, before `board.power_on()`. `Uart.tap` refuses a UART that
    has a tap already (`SourceError`), calls `asked(Request(name, tap=True))`, through which the
    backend refuses a tap after power-on or one no backend gives (`SourceError`) and skips the test
@@ -131,6 +132,10 @@ routes:
   {interface}: {source}; {bytes}{tap}
 console: {n} bytes out; tapped into {path}
 sd_card: a card holding {image}
+  {seconds}.{nanoseconds:09d} s  taken out
+  {seconds}.{nanoseconds:09d} s  {image} put in
+  {seconds}.{nanoseconds:09d} s  refused: {image} put in
+  {seconds}.{nanoseconds:09d} s  not reached: taken out
 the run on the board's clock, {kept}:
   {seconds}.{nanoseconds:09d} s  {who}  {text}
 ```
@@ -138,7 +143,11 @@ the run on the board's clock, {kept}:
 `{source}` is `the {kind} of {detail}` or `nothing at the far end`; `{bytes}`
 `{in} bytes in, {out} out`, or `no bytes` for a route nothing crossed; `{tap}`
 `; tapped into {path}` or nothing. The `sd_card:` line is there only on a profile with a slot, as
-`sd_card: empty` while the test has inserted no card. `{kept}` is `{n} entries` (`1 entry`), every entry of the run,
+`sd_card: empty`, and names `SdCard.held`, the card after the last change the runner
+acknowledged, else the one at power-on; after it, one line per change the runner acknowledged
+while the board was on (`SdCard.changes`), at its time, then the one it refused
+(`SdCard.refused`), at that time, with `refused: ` before it, then one per change it did not
+reach (`SdCard.not_reached`), at the time the test made it, with `not reached: ` before it. `{kept}` is `{n} entries` (`1 entry`), every entry of the run,
 the steps included; when the `deque` has dropped some,
 `: every step of the test, and the last {kept} of the console and the routes` follows. With no entry
 the heading is `the run on the board's clock: nothing happened`. `{who}` is `test`, `chip`,
@@ -149,7 +158,10 @@ the console is tapped. Serial instead uses the [serial schema](serial-backend-te
 
 The esp32sim user property's `routes`, by interface: `{"source": kind or null, "detail": what
 the source was made from or null, "bytes_in": n, "bytes_out": n, "tap": path or null}`;
-and `sd_card`, `{"image": path or null}`, or null on a profile without a slot.
+and `sd_card`, `{"image": path or null, "changes": [{"t_ns": t, "image": path or null}, ...],
+"refused": [...], "not_reached": [{"t_ns": t, "image": path or null}, ...], "faults": [...]}`, `image` being
+`SdCard.held`, or null
+on a profile without a slot.
 
 `RunLog.line(t, name, level, direction="out")` records firmware GPIO output by default.
 `Lines.inputs` calls it with `direction="in"` when a model's pending GPIO response is due and

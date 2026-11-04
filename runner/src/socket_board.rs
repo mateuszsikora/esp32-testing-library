@@ -5,10 +5,11 @@
 //! route and the FIFO and report what is dropped. Nor does it need `next_deadline`: the run
 //! loop's slices stop for the block point (protocol 11.10). GPIO inputs do go through it: the run
 //! loop hands the peer's `gpio_in` and `release` to the board when they come due, and the chip
-//! takes them through `take_edges` and `released_inputs`. With `--sd-rw`, the SD card is on its
-//! pins as well: it answers the chip's SPI transactions in the board, which tells it the bus
-//! cycle at every tick (`advance_to`) for the delays of the peer's fault rules. Only what those
-//! rules did goes on the socket, recorded after the transaction it happened in (`sd_op`).
+//! takes them through `take_edges` and `released_inputs`. With `--sd-spi`, the SD card slot is on
+//! its pins as well: the card in it answers the chip's SPI transactions in the board, which tells
+//! it the bus cycle at every tick (`advance_to`) for the delays of the peer's fault rules. Of the
+//! card, only the peer's `sd_card`, `sd_fault` and `sd_clear` and the runner's `sd_card_ack` and
+//! `sd_op` go on the socket; an `sd_op` is recorded after the transaction it happened in.
 use crate::sd_card;
 use esp_soc::board::{BoardEdge, BoardModel, SpiPins, VirtualCycle};
 use esp_soc::uart::UartRoute;
@@ -103,22 +104,22 @@ impl BoardModel for SocketBoard {
         self.card.is_some()
     }
     fn spi_transfer_pins(&mut self, _host: u8, pins: SpiPins, tx: &[u8], rx_len: usize) -> Vec<u8> {
-        let Some(card) = &self.card else {
+        let Some(slot) = &self.card else {
             return vec![0xff; rx_len];
         };
-        let mut card = card.borrow_mut();
-        let rx = card.transfer(pins, tx, rx_len);
-        let faulted = card.take_faulted();
+        let mut slot = slot.borrow_mut();
+        let rx = slot.transfer(pins, tx, rx_len);
+        let faulted = slot.take_faulted();
         if !faulted.is_empty() {
             let log = &mut self.shared.borrow_mut().log;
             log.extend(faulted.into_iter().map(Recorded::Sd));
         }
         rx
     }
-    /// The bus's tick: the card's clock, for the delays of fault rules.
+    /// The bus's tick: the slot's clock, for the delays of fault rules.
     fn advance_to(&mut self, cycle: VirtualCycle) {
-        if let Some(card) = &self.card {
-            card.borrow_mut().advance(cycle);
+        if let Some(slot) = &self.card {
+            slot.borrow_mut().advance(cycle);
         }
     }
     fn uart_tx(&mut self, cycle: VirtualCycle, route: UartRoute, byte: u8) {

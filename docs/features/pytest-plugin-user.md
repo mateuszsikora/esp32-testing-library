@@ -377,14 +377,18 @@ def test_the_example_writes_its_files_into_the_image(board: Board):
   with `/` separators; traversal, wildcards (`*`, `?`, `[` and `]`), FAT-invalid characters and
   case-insensitive file collisions are refused with `ValueError`. Readers and listings reject
   the same path syntax, including literal names containing brackets created outside this API.
-- `build()` creates a fresh FAT image each time, before power-on, without inserting it. Existing
-  builds are unaffected by later builder changes. The builder uses mtools (`mformat`, `mcopy`,
+- `build()` creates a fresh FAT image each time, without inserting it, before power-on or after
+  it, for a card to put in while the firmware runs. Existing builds are unaffected by later
+  builder changes. The builder uses mtools (`mformat`, `mcopy`,
   `mmd`, `mtype`, `mdir`); install it with `brew install mtools` or `sudo apt-get install mtools`.
   Missing commands raise `SourceError`, for example
   `sd_card: missing mformat, mcopy, mmd, mtype, mdir; install mtools`.
 - `card.read_text(name, encoding="utf-8")` and `card.read_bytes(name)` reopen the current image
   every time, so they see firmware writes. Text decoding preserves line endings, including CRLF.
-  Wait for firmware to finish and close a write before reading. Missing paths raise
+  Wait for firmware to finish and close a write before reading: the readers never mount the image
+  or keep its FAT between calls, and a file the firmware has not closed may not be on the card
+  yet, whether the card is in the slot or has been taken out
+  ([safe image inspection](#taking-the-card-out-and-putting-one-in)). Missing paths raise
   `FileNotFoundError`; reading a directory raises `IsADirectoryError`. Passing a file as a parent
   directory raises `NotADirectoryError`. `card.list_files(directory="")` returns sorted immediate
   filenames, excluding subdirectories, at the root or a specified relative directory; a file
@@ -398,8 +402,9 @@ def test_the_example_writes_its_files_into_the_image(board: Board):
 - On serial, starting a builder skips just like inserting a model card. These APIs prepare the
   simulator's storage; they do not format a physical card.
 
-- `sd_card.insert(image)` puts a card holding the image file in the slot, before
-  `board.power_on()`, and returns the image's absolute path. The path is relative to the test
+- `sd_card.insert(image)` puts a card holding the image file in the empty slot, and returns the
+  image's absolute path. Before `board.power_on()` the card is in from power-on; after it, from
+  the board's current instant ([below](#taking-the-card-out-and-putting-one-in)). The path is relative to the test
   file's directory. The image is a whole number of 512 KiB units, up to 2 TiB, readable and
   writable; what is in it is the test's,
   usually a FAT file system made with mtools (`mformat`, `mcopy`).
@@ -410,9 +415,8 @@ def test_the_example_writes_its_files_into_the_image(board: Board):
   survive teardown. Copy the image first to keep it as it was.
 - Without `insert`, the slot is empty, as a board with no card in it: ESP-IDF's driver times out
   (`ESP_ERR_TIMEOUT`).
-- `insert` refuses, with `SourceError`: a call after `board.power_on()`
-  (`sd_card: the board is on already: give an interface its source before board.power_on()`), a
-  second call (`sd_card has a card already: one per test`), an image that is not there
+- `insert` refuses, with `SourceError`: a slot that holds a card
+  (`sd_card has a card already: remove it first`), an image that is not there
   (`sd_card: no image at PATH: No such file or directory`) or not a file
   (`sd_card: PATH is not a file`), one of another size
   (`sd_card: PATH has N bytes; an SD card image is a whole number of 512 KiB units`), one above
@@ -421,13 +425,79 @@ def test_the_example_writes_its_files_into_the_image(board: Board):
   file a route replays from or is tapped into
   (`sd_card: cannot hold PATH: it is the tap of uart.gnss`). A tap into the card's image is
   refused the same way ([taps](run-report-user.md#when-the-test-gets-it-wrong)).
-- The report of the run names the card, `sd_card: a card holding PATH`, or `sd_card: empty`, and
-  the `esp32sim_link` property has `sd_card`, `{"image": PATH, "faults": []}`
+- The report of the run names the card the run had in the slot at its end,
+  `sd_card: a card holding PATH`, or `sd_card: empty`, then each change the runner applied while
+  the board was on, as `  0.300000000 s  taken out` and `  0.800000000 s  PATH put in`, then a
+  card the runner refused, as `  0.900000000 s  refused: PATH put in`, then each change the test
+  made that the run ended before, as `  0.900000000 s  not reached: taken out`. The
+  `esp32sim_link` property has `sd_card`, `{"image": PATH, "changes": [{"t_ns": T, "image": PATH
+  or None}, ...], "refused": [...], "not_reached": [...], "faults": [...]}`
   ([the run report](run-report-user.md)).
 - On a board profile without a slot, `sd_card` is an error at setup:
   `esp32sim: the board profile gps-alarm-clock has no sd_card; its interfaces are console, uart.gnss, lines.alarm, wifi`.
-- The card stays in from power-on to the end of the run: inserting or removing it while the
-  firmware runs is not there yet.
+
+#### Taking the card out and putting one in
+
+`sd_card.remove()` takes the card out of the slot and returns its image's absolute path;
+`sd_card.insert(image)` puts one in. Before `board.power_on()`, `remove()` takes back an
+`insert`, so that the slot is empty at power-on. After it, both act at the board's current
+instant, `board.now`, as a hand would: the firmware sees the change the next time it talks to the
+card. They return at once; the change reaches the firmware when the test next waits.
+
+```python
+def test_writes_go_on_on_the_card_put_in(board: Board):
+    first = board.sd_card.image(size_mb=32).build()
+    board.sd_card.insert(first)
+    board.power_on()
+    board.console.expect_exact("sd_remount: wrote 3", timeout=10)
+    board.sd_card.remove()
+    board.console.expect_exact("sd_remount: write failed", timeout=10)
+    second = board.sd_card.image(size_mb=32).build()
+    board.sd_card.insert(second)
+    board.console.expect_exact("sd_remount: mounted 2", timeout=10)
+```
+
+- The change happens between two of the chip's SPI transactions, never inside one. With the slot
+  empty, every byte the firmware reads from the card is `0xff`, as on a board whose MISO line is
+  pulled up with nothing on it: a command gets no answer and ESP-IDF's driver times out, and a
+  file system call on the mounted card fails with an I/O error (`EIO`). The firmware learns of
+  the removal that way only: the slot has no card-detect line.
+- What the card had written stays in its image: every block the card took before it came out.
+  What the firmware had not finished, a file not closed, a block on its way, a directory entry not
+  updated yet, is not written for it. The file system on the image is as the firmware left it at
+  that instant, which need not be consistent. A firmware that closes each file before it moves on
+  leaves only closed files.
+- A card that goes in is a card just powered: the firmware must initialise and mount it again
+  (`esp_vfs_fat_sdspi_mount`), as after a power-on. A firmware that latches its first storage
+  error, as the `sd_data_logger` example does, stays latched. The same image can go in again
+  after it came out, and so can another; two images of the same size read as the same card (the
+  card's identity comes from its size).
+- `remove()` and `insert(image)` also work between `board.power_off()` and the next
+  `board.power_on()`, as a hand swaps a card on a board that is off: the firmware that boots then
+  finds the card that is in the slot. They act at `board.now`, which runs on while the board is
+  off, and reach the run when the test next waits.
+- Every insertion checks the image as before power-on, and that no route replays from it or taps
+  into it. The image is the card's while it is in the slot; once it is out, the test may read it,
+  change it or delete it: the runner has closed it before the firmware runs on.
+- `remove()` refuses an empty slot with `SourceError` (`sd_card is empty: there is no card to
+  remove`).
+- `sd_card.changes` lists what the slot held after each change made with the board on, as
+  `CardChange(t, image)`, `image` `None` for an empty slot, once the runner has applied it: the
+  test reads it after a wait. `t` is the first slice boundary at or after the instant the test
+  made the change, at most an emulated millisecond later. `sd_card.held` is the image of the
+  card the run has, from those changes; `sd_card.refused` is the change the runner refused, and
+  `sd_card.not_reached` the changes it has not applied yet, both as `CardChange(t, image)` too;
+  `sd_card.image_path` is the card as the test last put it. A change made just before the test
+  ends, without a wait after it, never reaches the run. The runner refuses a card it cannot
+  open, as when the image was deleted after `insert`; the run then fails with
+  `sd_card: the runner refused the card at T ns: PATH: ERROR`.
+- **Reading a card safely.** `CardImage.read_bytes`, `read_text` and `list_files` read the image
+  as it is on the host when they are called, whether the card is in or out. While the test is
+  not waiting the firmware does not run, so the image does not change under a read; but it holds
+  only what the firmware has written. Wait until the firmware has closed its file, by its console
+  or a line it drives, before you read; taking the card out does not finish a write.
+
+#### Making the card fail or slow down
 
 On `esp32sim` the test can make the card in the slot fail or slow down at block level, from the
 board's current instant on, and see what each rule did:
@@ -468,8 +538,9 @@ def test_a_failed_write_raises_the_error_pin(board: Board):
 - Of the rules an operation matches, the one given last applies: `fail("write", count=1)` after
   `delay("write", ms(300))` fails the next write, and the writes after it are slow again. An
   operation under way when a rule is given or cleared keeps what it met when it started. Rules stay
-  through `board.power_off()` and `board.reset()`; an operation under way ends with the power, and
-  goes on through a reset of the chip alone.
+  through `board.power_off()`, `board.reset()` and a change of card: a rule lasts until it is spent
+  or cleared, so clear it when the next card should be a good one. An operation under way ends with
+  the power and with the card, and goes on through a reset of the chip alone.
 - Both return a `CardFault`: `hits`, the operations it applied to so far; `active`, whether it
   still applies (not cleared, with operations left); `clear()`, which removes it from the board's
   current instant on and does nothing to a rule already spent or cleared; and `id`, `op`, `action` (`"error"` or `"delay"`), `delay`, `count`,
@@ -482,7 +553,7 @@ def test_a_failed_write_raises_the_error_pin(board: Board):
   read or a failed write, always for a delayed write or erase it carried out.
 - A rule is given before power-on, from the first instruction, or while the board is on; a rule
   given before the firmware has initialised the card can fail the mount. `fail` and `delay` refuse,
-  at the call: an empty slot (`SourceError`:
+  at the call: an empty slot, as the test last left it (`SourceError`:
   `sd_card.fail: the slot is empty: insert a card first`), an `op` the method does not take, a
   delay that is not a `Duration` or outside 1 ns to 10 s
   (`sd_card.delay: a delay of 10.5 s; one is 1 ns to 10 s`), a `count` out of range, a run that
@@ -773,8 +844,8 @@ A test that parametrises pytest-embedded's `count` itself above 1, as in
   body does not run, and the message starts with the backend name, `esp32sim: ` or `serial: `.
   See [esp32sim](esp32sim-backend-user.md#when-the-backend-cannot-start) and
   [serial](serial-backend-technical.md#failure-modes) for their setup errors.
-- A source or a tap given after `board.power_on()`, or a second one on the same route or slot: the
-  test fails with `SourceError`; a recording that cannot be replayed fails it with `RecordingError` or
+- A source or a tap given after `board.power_on()`, or a second one on the same route, or a card
+  for a slot that holds one: the test fails with `SourceError`; a recording that cannot be replayed fails it with `RecordingError` or
   `ReplayError` ([replay](replay-user.md#what-a-replay-refuses)), a tap into a directory that
   does not exist with `FileNotFoundError` ([taps](run-report-user.md#when-the-test-gets-it-wrong)),
   and the receiver model told what it cannot be with `ModelError`

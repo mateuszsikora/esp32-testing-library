@@ -168,6 +168,20 @@ fn parses_the_peer_messages() {
         parse(r#"{"type":"sd_clear","t":4}"#),
         Ok(Incoming::SdClear { t: 4, ids: None })
     );
+    assert_eq!(
+        parse(r#"{"type":"sd_card","t":9,"image":"/tmp/card.img"}"#),
+        Ok(Incoming::SdCard {
+            t: 9,
+            image: Some("/tmp/card.img".into())
+        })
+    );
+    // null and absent alike: the card out
+    for line in [
+        r#"{"type":"sd_card","t":9,"image":null}"#,
+        r#"{"type":"sd_card","t":9}"#,
+    ] {
+        assert_eq!(parse(line), Ok(Incoming::SdCard { t: 9, image: None }));
+    }
     assert_eq!(parse(r#"{"type":"stop"}"#), Ok(Incoming::Stop));
     assert_eq!(
         parse(r#"{"type":"adc","t":0,"pin":34,"volts":1.25}"#),
@@ -213,6 +227,8 @@ fn refuses_malformed_messages() {
         r#"{"type":"power","on":false}"#,
         r#"{"type":"chip_reset"}"#,
         r#"{"type":"chip_reset","t":-1}"#,
+        r#"{"type":"sd_card","image":"a.img"}"#,
+        r#"{"type":"sd_card","t":0,"image":7}"#,
     ] {
         assert!(parse(line).is_err(), "{line}");
     }
@@ -318,6 +334,14 @@ fn writes_the_runner_messages() {
     assert_eq!(
         reset(12, 4, 12),
         r#"{"type":"reset","seq":12,"t":4,"cause":12}"#
+    );
+    assert_eq!(
+        sd_card_ack(5, Some("/tmp/a \"b\".img"), None),
+        r#"{"type":"sd_card_ack","t":5,"image":"/tmp/a \"b\".img","error":null}"#
+    );
+    assert_eq!(
+        sd_card_ack(6, None, Some("x.img: No such file")),
+        r#"{"type":"sd_card_ack","t":6,"image":null,"error":"x.img: No such file"}"#
     );
     let w = Warn {
         t: 1,

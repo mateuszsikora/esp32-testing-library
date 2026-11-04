@@ -33,6 +33,7 @@ whatever `FIRMWARE_OUT` the shell exports, because the tests read the images the
 | `gpio_echo` | `firmware/gpio_echo`, this repository's own project, for target `esp32`: reads one GPIO line and drives another to its level ([below](#gpio_echo)) |
 | `nvs_reader` | `firmware/nvs_reader`: reads strings, blobs and typed integers from NVS ([below](#nvs_reader)) |
 | `sdspi` | ESP-IDF's `examples/storage/sd_card/sdspi`, unmodified, for target `esp32`: mounts the FAT file system of an SD card on SPI and writes, renames and reads files on it ([below](#sdspi)) |
+| `sd_remount` | `firmware/sd_remount`: appends a line to a file on an SD card every 100 ms, and mounts the card again after a failure, for a card taken out and put back while it runs ([below](#sd_remount)) |
 | `modem_at` | `firmware/modem_at`: AT dialogue, PWRKEY and RI on the LilyGO profile, without a network ([below](#modem_at)) |
 | `pppos_client` | esp-protocols `modem-v1.4.1`, unchanged except sdkconfig: PPP and plain MQTT on the LilyGO modem route ([below](#pppos_client)) |
 | `http_request` | ESP-IDF's `examples/protocols/http_request`, unmodified, with its default `sdkconfig`, for target `esp32`: joins a Wi-Fi access point and fetches `http://example.com/` over and over ([below](#http_request)) |
@@ -116,6 +117,34 @@ and the image holds `FOO.TXT` and `NIHAO.TXT`. A card without a file system ends
 `Failed to mount filesystem.`, an empty slot in
 `Failed to initialize the card (ESP_ERR_TIMEOUT). Make sure SD card lines have pull-up resistors in place.`
 `tests/test_sdspi.py` runs all three ([pytest plugin](pytest-plugin-user.md#the-fixtures)).
+
+## `sd_remount`
+
+`sd_remount` keeps writing to an SD card that may come and go. Build it with
+`firmware/build.sh sd_remount`; `make firmware` and `make test` include it. Its card is on the
+`esp32-devkitc` profile's slot, the `sdspi` example's pins (SCLK 14, MOSI 15, MISO 2, CS 13), fixed
+in `firmware/sd_remount/main/main.c`; SPI2 is initialised once, with DMA, and stays so.
+
+With a card mounted at `/sdcard` it appends the next line number to `LOG.TXT` every 100 ms,
+closing the file each time, and prints the line once the file is closed. The first failure to
+open, write or close the file prints the error, unmounts the card, and does not count the line,
+which it writes again on the next card. Without a mounted card it tries to mount one every
+200 ms, and prints a mount failure once for each run of failed attempts. It never formats a card.
+
+```text
+sd_remount: mounted 1
+sd_remount: wrote 1
+sd_remount: wrote 2
+sd_remount: wrote 3
+sd_remount: write failed (I/O error)
+sd_remount: no card (ESP_ERR_TIMEOUT)
+sd_remount: mounted 2
+sd_remount: wrote 4
+```
+
+`tests/test_sd_remount.py` takes the card out, puts another in, takes that out and puts the
+first back while it runs, and starts it with an empty slot
+([pytest plugin](pytest-plugin-user.md#taking-the-card-out-and-putting-one-in)).
 
 ## `nmea_reader`
 
@@ -208,7 +237,7 @@ every image those are:
 |---|---|
 | `0x1000` | `bootloader/bootloader.bin` |
 | `0x8000` | `partition_table/partition-table.bin` |
-| `0x10000` | `IMAGE.bin` (`hello_world.bin`, `nmea_reader.bin`, `gpio_echo.bin`, `modem_at.bin`, `nvs_reader.bin`, `pppos_client.bin`, `http_request.bin`), `sd_card.bin` for `sdspi` |
+| `0x10000` | `IMAGE.bin` (`hello_world.bin`, `nmea_reader.bin`, `gpio_echo.bin`, `sd_remount.bin`, `modem_at.bin`, `nvs_reader.bin`, `pppos_client.bin`, `http_request.bin`), `sd_card.bin` for `sdspi` |
 
 and the ELF is `IMAGE.elf`, `sd_card.elf` for `sdspi`: the files take the project's name, and
 the `sdspi` example's project is called `sd_card`. Two more files say how the build was made:
@@ -256,7 +285,7 @@ The second one ends every finished build.
 
 `tests/test_firmware_images.py` reads `firmware/hello_world/build/`,
 `firmware/nmea_reader/build/`, `firmware/gpio_echo/build/`, `firmware/sdspi/build/`,
-`firmware/nvs_reader/build/`, `firmware/pppos_client/build/` and `firmware/http_request/build/`,
+`firmware/sd_remount/build/`, `firmware/nvs_reader/build/`, `firmware/pppos_client/build/` and `firmware/http_request/build/`,
 and for each:
 
 - passes on a build from the pinned container;
@@ -281,7 +310,7 @@ run `make firmware`.
 `firmware/build.sh` exits 1 with one of these on stderr, before writing anything, or with the exit
 code of `idf.py` when the build itself fails:
 
-- `firmware/build.sh: unknown image 'NAME'; the images are: hello_world nmea_reader gpio_echo sdspi modem_at nvs_reader pppos_client http_request`
+- `firmware/build.sh: unknown image 'NAME'; the images are: hello_world nmea_reader gpio_echo sdspi sd_remount modem_at nvs_reader pppos_client http_request`
 - `firmware/build.sh: needs Docker, or IDF_LOCAL=1 to build with a local ESP-IDF`
 - `firmware/build.sh: the Docker daemon is not reachable ('docker info' failed); is Docker running?`
 - `firmware/build.sh: IDF_LOCAL=1 needs ESP-IDF in the environment: source $IDF_PATH/export.sh first`

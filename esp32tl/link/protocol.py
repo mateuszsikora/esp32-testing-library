@@ -23,11 +23,11 @@ MAX_LINE = 1 << 20
 ETH_MIN = 14
 ETH_MAX = 1518
 
-# The longest delay an `sd_fault` may give, in nanoseconds (5.19): 10 s.
+# The longest delay an `sd_fault` may give, in nanoseconds (5.20): 10 s.
 SD_DELAY_MAX = 10_000_000_000
-# The largest `count` an `sd_fault` may give (5.19): what the runner's JSON integers hold.
+# The largest `count` an `sd_fault` may give (5.20): what the runner's JSON integers hold.
 SD_COUNT_MAX = 2**63 - 1
-# What an `sd_fault` applies to and what it does (5.19).
+# What an `sd_fault` applies to and what it does (5.20).
 SD_OPS = ("read", "write", "erase")
 SD_ACTIONS = ("error", "delay")
 
@@ -122,7 +122,7 @@ class EthTx:
 @dataclass(frozen=True)
 class SdOp:
     """A block operation of the SD card that the harness's rule `fault` applied to, at `t`
-    (5.19): its first and last block, the rule's `action` and `delay`, and whether the card wrote
+    (5.20): its first and last block, the rule's `action` and `delay`, and whether the card wrote
     the image. Not an event: it has no `seq`."""
 
     TYPE: ClassVar[str] = "sd_op"
@@ -133,6 +133,17 @@ class SdOp:
     action: str
     delay: int | None
     written: bool
+
+
+@dataclass(frozen=True)
+class SdCardAck:
+    """What the SD card slot holds after the harness's `sd_card`, and why the change was
+    refused, if it was (5.19). Not an event: nothing answers it."""
+
+    TYPE: ClassVar[str] = "sd_card_ack"
+    t: int
+    image: str | None
+    error: str | None = None
 
 
 @dataclass(frozen=True)
@@ -284,7 +295,7 @@ class ChipReset:
 
 @dataclass(frozen=True)
 class SdFault:
-    """From `t` the SD card applies the rule `id` to the block operations it matches (5.19):
+    """From `t` the SD card applies the rule `id` to the block operations it matches (5.20):
     `count` of them, or every one until cleared, on `blocks`, first and last, or any."""
 
     TYPE: ClassVar[str] = "sd_fault"
@@ -299,11 +310,21 @@ class SdFault:
 
 @dataclass(frozen=True)
 class SdClear:
-    """From `t` the SD card's rules `ids`, or all of them, are gone (5.19)."""
+    """From `t` the SD card's rules `ids`, or all of them, are gone (5.20)."""
 
     TYPE: ClassVar[str] = "sd_clear"
     t: int
     ids: tuple[int, ...] | None = None
+
+
+@dataclass(frozen=True)
+class SdCardChange:
+    """From `t` the SD card slot holds a card with the image file `image`, or, with `None`, no
+    card (5.19)."""
+
+    TYPE: ClassVar[str] = "sd_card"
+    t: int
+    image: str | None
 
 
 @dataclass(frozen=True)
@@ -324,8 +345,20 @@ class Stop:
 
 
 Event = UartTx | UartCfg | GpioOut | Reset | EthTx
-RunnerMessage = RunnerHello | Event | Sync | Console | Warn | SdOp | Stats
-Input = UartRx | GpioIn | Release | Adc | EthRx | WifiAp | Power | ChipReset | SdFault | SdClear
+RunnerMessage = RunnerHello | Event | Sync | Console | Warn | SdCardAck | SdOp | Stats
+Input = (
+    UartRx
+    | GpioIn
+    | Release
+    | Adc
+    | EthRx
+    | WifiAp
+    | Power
+    | ChipReset
+    | SdCardChange
+    | SdFault
+    | SdClear
+)
 HarnessMessage = HarnessHello | Input | Wait | Stop
 Message = RunnerMessage | HarnessMessage
 
@@ -663,6 +696,9 @@ DECODERS: dict[Sender, dict[str, Callable[[Fields], Message]]] = {
             f.opt_integer("bytes"),
         ),
         "sd_op": _sd_op,
+        "sd_card_ack": lambda f: SdCardAck(
+            f.integer("t"), f.opt_string("image"), f.opt_string("error")
+        ),
         "stats": _stats,
     },
     "harness": {
@@ -679,6 +715,7 @@ DECODERS: dict[Sender, dict[str, Callable[[Fields], Message]]] = {
         "chip_reset": lambda f: ChipReset(f.integer("t")),
         "sd_fault": _sd_fault,
         "sd_clear": lambda f: SdClear(f.integer("t"), f.opt_integers("ids")),
+        "sd_card": lambda f: SdCardChange(f.integer("t"), f.opt_string("image")),
         "wait": lambda f: Wait(
             f.integer("ack"), f.opt_integer("quiet_until"), f.opt_integer("latency")
         ),

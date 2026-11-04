@@ -75,13 +75,17 @@ at its pull from power-on, as RI on the LilyGO profile reads 0, and carries what
 drives on the lines and what the test drives through `lines`
 ([pytest plugin](pytest-plugin-user.md#the-fixtures)).
 
-A card the test inserts (`sd_card.insert(image)`) is the runner's own SD card model, on the
-slot's pins, which the backend passes as `--sd-spi sclk=N,mosi=N,miso=N,cs=N --sd-rw IMAGE`; the
-card writes into the image file as the firmware writes ([runner](runner-user.md#put-an-sd-card-in)).
-An empty slot gives the runner no card. The slot is on the link for the card's fault rules: what
-the test gives with `sd_card.fail` and `sd_card.delay` goes to the runner at the board's current
-instant, and what each rule did comes back
-([pytest plugin](pytest-plugin-user.md#the-fixtures)).
+The board profile's SD card slot is the runner's own slot, on the slot's pins, which the backend
+passes as `--sd-spi sclk=N,mosi=N,miso=N,cs=N` whenever the profile has one, with
+`--sd-rw IMAGE` for a card the test inserted before power-on (`sd_card.insert(image)`); the card
+writes into the image file as the firmware writes ([runner](runner-user.md#put-an-sd-card-in)).
+An empty slot gives the runner no card. The bytes the card and the firmware exchange do not go on
+the link; the card going in and coming out does: `sd_card.remove()` and `sd_card.insert(image)`
+with the board on go to the runner in the next turn, and the runner acknowledges each
+([pytest plugin](pytest-plugin-user.md#taking-the-card-out-and-putting-one-in)). The slot
+is on the link for the card's fault rules too: what the test gives with `sd_card.fail` and
+`sd_card.delay` goes to the runner at the board's current instant, and what each rule did comes back
+([pytest plugin](pytest-plugin-user.md#making-the-card-fail-or-slow-down)).
 
 The chip's Wi-Fi station is on the link once the test gives it an access point
 (`wifi.access_point(...)`, [pytest plugin](pytest-plugin-user.md#the-wifi-fixture)): the backend
@@ -240,6 +244,8 @@ The profile's routes are checked when the test asks for `gnss`, and its slot whe
 `sd_card`. `sd_card.insert` checks the image; one that changes after it so that the runner's
 card cannot open it, removed or made read-only, stops the runner at power-on with exit code 2,
 which the test sees as `RunEnded` or at teardown ([when the runner exits](#when-the-runner-exits)).
+One inserted while the board is on is refused by the runner instead, which fails the link:
+`sd_card: the runner refused the card at T ns: PATH: ERROR`.
 
 ## See also
 

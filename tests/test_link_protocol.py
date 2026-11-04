@@ -25,6 +25,8 @@ from esp32tl.link.protocol import (
     Release,
     Reset,
     RunnerHello,
+    SdCardAck,
+    SdCardChange,
     SdClear,
     SdFault,
     SdOp,
@@ -65,6 +67,8 @@ EVERY_MESSAGE: list[tuple[Sender, Message]] = [
     ("runner", SdOp(2_200_000_000, 2, "erase", (64, 127), "delay", 250_000_000, True)),
     ("runner", Sync(2_000_000_000)),
     ("runner", Console(812_345_678, b"Hello world!\n")),
+    ("runner", SdCardAck(2_500_000_000, "/tmp/card.img")),
+    ("runner", SdCardAck(2_600_000_000, None, "/tmp/b.img: the slot holds /tmp/card.img already")),
     ("runner", Warn(1_000_000_000, "frm_err", "baud", port=1, pin=5, baud=115200, nbytes=3)),
     ("runner", Warn(1_000_000_000, "a kind of a later version", "detail")),
     (
@@ -99,6 +103,8 @@ EVERY_MESSAGE: list[tuple[Sender, Message]] = [
     ("harness", SdFault(0, 2, "read", "delay", 50_000_000, None, (0, 63))),
     ("harness", SdClear(3_000_000_000, (1, 2))),
     ("harness", SdClear(3_000_000_000)),
+    ("harness", SdCardChange(7_000_000_000, "/tmp/card.img")),
+    ("harness", SdCardChange(8_000_000_000, None)),
     ("harness", Wait(9, 3_000_000_000, 1_000_000)),
     ("harness", Wait(0, None, None)),
     ("harness", Stop()),
@@ -138,7 +144,9 @@ def test_the_examples_of_the_protocol_document_decode_and_encode_back() -> None:
             obj["type"] != "hello" or "clock" in obj
         )
         message = decode(json.dumps(obj).encode(), "runner" if runner else "harness")
-        assert {k: v for k, v in as_json(message).items() if v is not None} == obj
+        assert {k: v for k, v in as_json(message).items() if v is not None} == {
+            k: v for k, v in obj.items() if v is not None
+        }
 
 
 def test_null_and_an_absent_field_are_the_same_and_unknown_fields_are_ignored() -> None:

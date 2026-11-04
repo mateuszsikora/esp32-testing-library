@@ -76,6 +76,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The SD card is validated on ESP-IDF's sdspi example, unmodified](firmware.md#the-sd-card-is-validated-on-esp-idfs-sdspi-example-unmodified) | `firmware.md` | decided (#32) |
 | [Examples share the pinned builder and have their own assembly profiles](firmware.md#examples-share-the-pinned-builder-and-have-their-own-assembly-profiles) | `firmware.md` | decided (#71) |
 | [The SD logger uses each RMC's date and closes every appended row](firmware.md#the-sd-logger-uses-each-rmcs-date-and-closes-every-appended-row) | `firmware.md` | decided (#73) |
+| [A card that comes and goes is validated on a firmware of this repository's](firmware.md#a-card-that-comes-and-goes-is-validated-on-a-firmware-of-this-repositorys) | `firmware.md` | decided (#106) |
 | [The position tracker reuses the pinned modem component and reports without a fix](firmware.md#the-position-tracker-reuses-the-pinned-modem-component-and-reports-without-a-fix) | `firmware.md` | decided (#72) |
 
 ## The esp32tl package and its pytest plugin
@@ -163,7 +164,10 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Whether a backend can drive a board's lines is not declared yet](harness.md#whether-a-backend-can-drive-a-boards-lines-is-not-declared-yet) | `harness.md` | postponed (#25) |
 | [An SD card is inserted by the test, as a model source holding an image file](harness.md#an-sd-card-is-inserted-by-the-test-as-a-model-source-holding-an-image-file) | `harness.md` | decided (#32) |
 | [The test makes the SD card fail or slow down with sd_card.fail and sd_card.delay](harness.md#the-test-makes-the-sd-card-fail-or-slow-down-with-sd_cardfail-and-sd_carddelay) | `harness.md` | decided (#107) |
-| [Inserting and removing the SD card while the firmware runs is postponed](harness.md#inserting-and-removing-the-sd-card-while-the-firmware-runs-is-postponed) | `harness.md` | postponed (#32) |
+| [Inserting and removing the SD card while the firmware runs is postponed](harness.md#inserting-and-removing-the-sd-card-while-the-firmware-runs-is-postponed) | `harness.md` | superseded (#106) |
+| [The test takes the SD card out and puts one in at the board's current instant](harness.md#the-test-takes-the-sd-card-out-and-puts-one-in-at-the-boards-current-instant) | `harness.md` | decided (#106) |
+| [The backend always gives the runner the profile's SD card slot](harness.md#the-backend-always-gives-the-runner-the-profiles-sd-card-slot) | `harness.md` | decided (#106) |
+| [The SD card slot has no card-detect line yet](harness.md#the-sd-card-slot-has-no-card-detect-line-yet) | `harness.md` | postponed (#106) |
 | [The SD card tests skip without mtools, and CI makes sure it is there](harness.md#the-sd-card-tests-skip-without-mtools-and-ci-makes-sure-it-is-there) | `harness.md` | decided (#32) |
 | [The esp32tl command takes no SD card yet](harness.md#the-esp32tl-command-takes-no-sd-card-yet) | `harness.md` | postponed (#32) |
 | [The Bluetooth peer runs Bumble in the harness, on the board's clock](harness.md#the-bluetooth-peer-runs-bumble-in-the-harness-on-the-boards-clock) | `harness.md` | decided (#33) |
@@ -246,6 +250,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The SD card answers at once and has no CMD6](runner.md#the-sd-card-answers-at-once-and-has-no-cmd6) | `runner.md` | decided (#32), busy time by fault rules (#107) |
 | [SD faults are the peer's rules, applied by the card on the bus's clock](runner.md#sd-faults-are-the-peers-rules-applied-by-the-card-on-the-buss-clock) | `runner.md` | decided (#107) |
 | [The SD card's fault messages keep protocol version 1](runner.md#the-sd-cards-fault-messages-keep-protocol-version-1) | `runner.md` | decided (#107) |
+| [The SD card slot changes its card between transactions, and a new card starts unpowered](runner.md#the-sd-card-slot-changes-its-card-between-transactions-and-a-new-card-starts-unpowered) | `runner.md` | decided (#106) |
 | [Under --realtime the runner waits at each block point until wall time reaches it](runner.md#under---realtime-the-runner-waits-at-each-block-point-until-wall-time-reaches-it) | `runner.md` | decided (#27) |
 | [The runner starts its wall clock with esp32sim's pacing, and then follows esp32sim's resyncs](runner.md#the-runner-starts-its-wall-clock-with-esp32sims-pacing-and-then-follows-esp32sims-resyncs) | `runner.md` | decided (#27) |
 | [The network behind the access point is the peer's, over the link](runner.md#the-network-behind-the-access-point-is-the-peers-over-the-link) | `runner.md` | decided (#31) |

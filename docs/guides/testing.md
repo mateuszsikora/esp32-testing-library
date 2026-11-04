@@ -94,7 +94,9 @@ No test of the suite carries the marker. The only marked tests are the ones
 A test that makes or reads a FAT image carries `@pytest.mark.requires_mtools`: the same hook
 checks once (`mtools_missing`) that `mformat`, `mcopy`, `mdir`, `mtype` and `mmd` are on `PATH`, and
 skips every marked test without them, with the reason `requires_mtools: no mformat, mcopy, mdir,
-mtype, mmd on PATH (mtools)`, naming those missing. The tests of `tests/test_sdspi.py` carry it, and so do the two tests of `tests/test_power.py` with a card in the slot. In
+mtype, mmd on PATH (mtools)`, naming those missing. The tests of `tests/test_sdspi.py` and
+`tests/test_sd_remount.py` carry it, and so do the two tests of `tests/test_power.py` with a card
+in the slot. In
 CI the test job installs mtools first, so there they run ([cicd.md](../cicd.md#test)).
 
 ## What each test file needs
@@ -105,13 +107,15 @@ CI the test job installs mtools first, so there they run ([cicd.md](../cicd.md#t
 | `tests/test_cli.py` | `esp32tl run` and `esp32tl replay`: the arguments they refuse and the runs that cannot start (exit 2), in this process; runs of `hello_world`, `nmea_reader` and `gpio_echo` (the LilyGO profile's pull-down on RI) in a subprocess, a baud mismatch (exit 1) and Ctrl-C (exit 130), also before the runner connects, against a fake runner that never does; the profile's `--psram-mb`, against a fake runner that prints its arguments | The refusals nothing beyond the package; the runs the built images, the runner and the ROM ELF |
 | `tests/test_boards.py` | The board profiles esp32tl ships, the profile schema's refusals, the capability declaration and the requests it refuses | The package installed |
 | `tests/test_firmware_build.py` | `firmware/build.sh` run against a fake `docker` and a fake `idf.py` that record how they were called; the `requires_docker` marker | Neither Docker nor ESP-IDF; milliseconds |
-| `tests/test_firmware_images.py` | The `hello_world`, `nmea_reader`, `gpio_echo`, `sdspi`, `nvs_reader`, `persistence`, `pppos_client` and `http_request` images as `make firmware` built them: target `esp32`, bootloader at `0x1000`, partition table at `0x8000`, app at `0x10000`, the ELF; `nmea_reader`'s UART settings, `gpio_echo`'s pins, `sdspi`'s SD card pins and `http_request`'s default Wi-Fi SSID and passphrase in their `sdkconfig` | The built images |
+| `tests/test_firmware_images.py` | The `hello_world`, `nmea_reader`, `gpio_echo`, `sdspi`, `sd_remount`, `nvs_reader`, `persistence`, `pppos_client` and `http_request` images as `make firmware` built them: target `esp32`, bootloader at `0x1000`, partition table at `0x8000`, app at `0x10000`, the ELF; `nmea_reader`'s UART settings, `gpio_echo`'s pins, `sdspi`'s SD card pins and `http_request`'s default Wi-Fi SSID and passphrase in their `sdkconfig` | The built images |
 | `tests/test_flash.py` | Partition tables, NVS value validation, blobs above 64 KiB, UTF-8 page boundaries and CRCs, real generator, pre-boot overrides and errors | Python dependencies only |
 | `tests/test_nvs_reader.py` | Firmware reads all NVS value types through ESP-IDF | The built `nvs_reader` image, runner and ROM ELF |
 | `tests/test_power.py` | `persistence` through `esp_restart()`, `board.reset()` and a power cycle: reset causes, NVS, RTC and RAM counts, the card's lines, `board.boots`, `board.now` while off, the errors of the power calls, the build's files unchanged | The built `persistence` image, runner and ROM ELF; mtools for the two tests with a card (`requires_mtools`) |
 | `tests/test_sdspi.py` | ESP-IDF's `sdspi` with the runner's SD card: a FAT image mounted, written and read back with mtools, one without a file system, an empty slot, the LilyGO profile's slot with the GNSS and modem models selected; through `pytester`, the `sd_card` fixture used out of order and images it refuses | The built `sdspi` image, the runner, the ROM ELF and mtools (`requires_mtools`) |
+| `tests/test_sd_remount.py` | `sd_remount` with the card taken out and put back while it runs: the I/O error it sees, the lines kept on the card that went out, another card and the same one again mounted afresh, `sd_card.changes`, the report and `board.properties()["sd_card"]` with a change the run did not reach; a slot empty at power-on that takes a card later; a card swapped with the supply off, which the next boot finds; through `pytester`, a card the runner cannot open ending the run, a fault rule that stays through a change of card until it is cleared | The built `sd_remount` image, the runner, the ROM ELF and mtools (`requires_mtools`) |
+| `tests/test_sd_card_slot.py` | The `SdCard` slot without the emulator: a card in and out before power-on and with the board on, the `sd_card` inputs it sends on a `BoardLink` at their instants, the runner's `sd_card_ack` taken in order, the card the run has (`held`) and the changes it has not reached, a refused or mismatched acknowledgement failing the link, one card at a time, the checks of every insertion, one slot per link | Nothing beyond the package; milliseconds |
 | `tests/test_http_request.py` | ESP-IDF's unmodified `http_request` through the `wifi` fixture: joining the test's access point and fetching from its HTTP server, joining again after `wifi.access_point_off()` and `wifi.access_point_on()` and after `board.reset()` and a power cycle, no access point, a wrong password that gets no lease, the report and `board.properties()["wifi"]`; through `pytester`, `wifi` refused after `board.power_on()` | The built `http_request` image, the runner and the ROM ELF |
-| `tests/test_sd_faults.py` | The SD card's fault rules without the emulator: `sd_card.fail`, `sd_card.delay` and the clears in the link's turns at the test's instants, what they refuse, the runner's `sd_op` into the rules' hits, the report and the properties, a spent rule, a run that has ended, and an `sd_fault` from another interface | Nothing beyond the package; milliseconds |
+| `tests/test_sd_faults.py` | The SD card's fault rules without the emulator: `sd_card.fail`, `sd_card.delay` and the clears in the link's turns at the test's instants, what they refuse, the runner's `sd_op` into the rules' hits, the report and the properties, a spent rule, a run that has ended, rules in order with the card's changes, and an `sd_fault` from another interface | Nothing beyond the package; milliseconds |
 | `tests/test_wifi.py` | The `Wifi` interface without the emulator: the runner's `--wifi` and `--wifi-nearby` arguments, the parameters it refuses, one access point and networks around that are not it, a backend that refuses the access point, the `wifi_ap` inputs at the instants of the switches | Nothing beyond the package; milliseconds |
 | `tests/test_net_ethernet.py`, `tests/test_net_http.py` | The network behind the access point with handmade Ethernet frames and independent checksums: DHCP, ARP, IPv4 to the services, other ethertypes dropped; the HTTP server's side of a connection without TCP: what it serves, keeps and refuses | Nothing beyond the package; milliseconds |
 | `tests/test_hello_world.py` | ESP-IDF's `hello_world`, unmodified, powered on and printing `Hello world!` through the backend | The built image, the runner and the ROM ELF |
@@ -143,7 +147,7 @@ the runs of `tests/test_cli.py`, the `pytester` tests of `tests/test_gnss_fixtur
 `test_hello_world_fails_on_an_image_that_prints_something_else`,
 and the backend's `esp32sim: <build> holds no ESP-IDF build: no flasher_args.json` from
 `tests/test_hello_world.py`, `tests/test_nmea_reader.py`, `tests/test_nmea_reader_model.py`,
-`tests/test_gpio_echo.py`, `tests/test_sdspi.py`, `tests/test_nvs_reader.py`, `tests/test_power.py`,
+`tests/test_gpio_echo.py`, `tests/test_sdspi.py`, `tests/test_sd_remount.py`, `tests/test_nvs_reader.py`, `tests/test_power.py`,
 `tests/test_http_request.py`, `tests/test_determinism.py` and
 `test_a_replay_reaches_nmea_reader_on_the_gnss_route`.
 `tests/test_firmware_images.py` also fails
@@ -248,7 +252,7 @@ files of their own, declared with `#[cfg(test)] mod tests;` in the module they t
 - `runner/src/cli/tests.rs`, for `runner/src/cli.rs`: the command-line parser, from a minimal
   command line to `--help` and every usage error.
 - `runner/src/sd_card/tests.rs`, for `runner/src/sd_card.rs`: the SD card against a host that
-  sends what ESP-IDF's `sdspi` sends.
+  sends what ESP-IDF's `sdspi` sends, and the slot it goes in and out of.
 
 New tests go into these files, or a `tests.rs` beside a new module, not into inline
 `mod tests { ... }` blocks: `make docs-check` leaves `runner/src/**/tests.rs` out of what counts as

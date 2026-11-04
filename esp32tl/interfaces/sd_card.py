@@ -2,7 +2,8 @@
 
 On the `esp32sim` backend the card is a model in the runner, holding an image file: an SD card in
 SPI mode on the slot's pins, which writes what the firmware writes into the file as it goes. The
-image builder and reader use mtools; external image paths remain supported.
+test puts a card in before power-on, and may take it out and put one in while the firmware runs.
+The image builder and reader use mtools; external image paths remain supported.
 
 The test can also make the card fail or slow down at block level, from the board's current
 instant on: `sd_card.fail("write")`, `sd_card.delay("read", ms(50))`. The rules go to the runner on
@@ -14,6 +15,7 @@ import os
 import shutil
 import subprocess
 import threading
+from collections import deque
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
@@ -24,8 +26,16 @@ from esp32tl.boards import SdCardRoute
 from esp32tl.boards.capabilities import Request
 from esp32tl.interfaces import RunEnded, SourceError
 from esp32tl.interfaces.uart import same_file
-from esp32tl.link.boardlink import Interface, counted
-from esp32tl.link.protocol import SD_COUNT_MAX, SD_DELAY_MAX, Input, SdClear, SdFault, SdOp
+from esp32tl.link.boardlink import Interface, LinkError, counted
+from esp32tl.link.protocol import (
+    SD_COUNT_MAX,
+    SD_DELAY_MAX,
+    Input,
+    SdCardChange,
+    SdClear,
+    SdFault,
+    SdOp,
+)
 from esp32tl.report import RunLog
 from esp32tl.units import Duration
 
@@ -209,6 +219,15 @@ class CardImageBuilder:
 
 
 @dataclass(frozen=True)
+class CardChange:
+    """What the slot held from `t`, once the board was on: the card with the image `image`, or
+    no card (`None`), as the runner acknowledged it."""
+
+    t: int
+    image: Path | None
+
+
+@dataclass(frozen=True)
 class FaultedOperation:
     """A block operation of the card that one of the test's rules applied to: `fault`, at `at`
     on the board's clock, the `op` on `blocks` (one block for a read or a write), and what the
@@ -292,17 +311,24 @@ class CardFault:
 class SdCard(Interface):
     """The slot on `route`, empty until the test inserts a card.
 
-    `asked` is called with the `Request` of a `model` source before the card goes in,
-    and refuses it by raising: the backend's checks, that the board is still off and that a
-    backend gives that source. A relative image path is taken from `directory`, the test file's.
-    `log`, when given, gets the test's `insert` as a step, at 0: it comes before power-on.
-    `files` holds the files the run reads and writes, shared with the routes, so that no tap
-    writes over the card's image and the card writes over no recording. `now` is the board's
-    clock, which stamps the fault rules the test gives, and `ended` says whether the run is over,
-    when no rule reaches the card any more.
+    Before the first `board.power_on()`, `insert` puts a card in the slot from power-on and
+    `remove` takes it out again. After it, both act at the board's current instant (`now`): the link
+    sends them in its next turn (`sd_card`), the runner applies them at the first slice boundary
+    at or after that instant, between two of the chip's SPI transactions, and says what the slot
+    holds then (`sd_card_ack`), which `changes` keeps. `started` says whether the run has started:
+    with the board's supply off after that, the card still goes through the link.
 
-    On the link the slot is the card's fault rules (`Interface.sd_card`): it has no wire, sends
-    the rules the test gave in the next turn, and takes what the runner reports of them.
+    `asked` is called with the `Request` of a `model` source before a card goes in or comes out,
+    and refuses it by raising: the backend's checks, that a backend gives that source. A relative
+    image path is taken from `directory`, the test file's. `log`, when given, gets the test's
+    `insert` and `remove` as steps. `files` holds the files the run reads and writes, shared with
+    the routes, so that no tap writes over the card's image and the card writes over no
+    recording. `now`
+    is the board's clock, which stamps the changes and the fault rules, and `ended` says whether
+    the run is over, when no rule reaches the card any more.
+
+    On the link the slot is the card's fault rules too: it sends the rules the test gave in the next
+    turn, and takes what the runner reports of them.
     """
 
     name = "sd_card"
@@ -317,6 +343,7 @@ class SdCard(Interface):
         files: dict[Path, tuple[str, str]] | None = None,
         now: Callable[[], int] = lambda: 0,
         ended: Callable[[], bool] = lambda: False,
+        started: Callable[[], bool] = lambda: False,
     ) -> None:
         super().__init__(self.name, None)
         self.route = route
@@ -324,19 +351,34 @@ class SdCard(Interface):
         self.asked = asked
         self.log = log
         self.files = {} if files is None else files
-        # The image of the card in the slot, absolute; None while the slot is empty.
+        self._now = now
+        self._started = started
+        # The image of the card in the slot, absolute, as the test last put it; None while the
+        # slot is empty.
         self.image_path: Path | None = None
         self._temporary: TemporaryDirectory[str] | None = None
         self._closed = False
         self._now = now
         self._ended = ended
+        self._started = started
         self._lock = threading.Lock()
+        # The changes the test made with the board on, and the rules and clears it gave, in order:
+        # not sent yet; then the changes not acknowledged yet.
+        self._pending: list[SdCardChange | SdFault | SdClear] = []
+        self._sent: deque[SdCardChange] = deque()
+        self._changes: list[CardChange] = []
+        self._refused: list[CardChange] = []
+        # The image of the card in the slot at power-on, kept by the first change made with the
+        # board on; empty until then.
+        self._at_power_on: list[Path | None] = []
         # The card's size in blocks, once it is in.
         self._blocks = 0
         self._faults: dict[int, CardFault] = {}
         self._faulted: list[FaultedOperation] = []
-        # The rules and clears the test gave that the link has not sent.
-        self._pending: list[SdFault | SdClear] = []
+
+    @property
+    def card_slot(self) -> bool:
+        return True
 
     def image(self, *, size_mb: int = 32) -> CardImageBuilder:
         """Start a FAT image builder. Building and insertion are separate operations."""
@@ -363,13 +405,14 @@ class SdCard(Interface):
             self._temporary.cleanup()
 
     def insert(self, image: str | os.PathLike[str]) -> Path:
-        """Puts a card holding the image file `image` in the slot, before `board.power_on()`.
-        The firmware's writes go into the file, which must be readable and writable. The image is
-        a whole number of 512 KiB units, from one to 2 TiB; its contents are the test's, a FAT
-        file system or anything else. Returns the image's absolute path."""
+        """Puts a card holding the image file `image` in the empty slot: from power-on before
+        `board.power_on()`, from the board's current instant after it. The firmware's writes go
+        into the file, which must be readable and writable. The image is a whole number of 512
+        KiB units, from one to 2 TiB; its contents are the test's, a FAT file system or anything
+        else. Returns the image's absolute path."""
         self._check_open()
         if self.image_path is not None:
-            raise SourceError(f"{self.name} has a card already: one per test")
+            raise SourceError(f"{self.name} has a card already: remove it first")
         self.asked(Request(self.name, source="model"))
         path = (self.directory / image).resolve()
         try:
@@ -387,7 +430,7 @@ class SdCard(Interface):
             raise SourceError(
                 f"{self.name}: {path} has {size} bytes; an SD card image is at most 2 TiB"
             )
-        # The card writes into it, and the runner opens it for writing at power-on.
+        # The card writes into it, and the runner opens it for writing when it goes in.
         if not os.access(path, os.R_OK | os.W_OK):
             raise SourceError(
                 f"{self.name}: {path} cannot be read and written: the card writes into it"
@@ -398,11 +441,76 @@ class SdCard(Interface):
                     f"{self.name}: cannot hold {path}: it is the {kind} of {interface}"
                 )
         self.files[path] = ("card", self.name)
+        t = self._change(None, str(path))
         self.image_path = path
         self._blocks = size // BLOCK
         if self.log is not None:
-            self.log.test(0, f"{self.name}.insert({os.fspath(image)!r})")
+            self.log.test(t, f"{self.name}.insert({os.fspath(image)!r})")
         return path
+
+    def remove(self) -> Path:
+        """Takes the card out of the slot: before `board.power_on()`, so that the slot is empty
+        at power-on; after it, from the board's current instant. The firmware sees no answer
+        from the slot from then on. What the card had written stays in its image; what it had
+        not finished, it never writes. Returns the image's absolute path."""
+        self._check_open()
+        # Asked first: on a backend that has no card model the call skips, whatever is in the slot.
+        self.asked(Request(self.name, source="model"))
+        path = self.image_path
+        if path is None:
+            raise SourceError(f"{self.name} is empty: there is no card to remove")
+        self.files.pop(path, None)
+        t = self._change(path, None)
+        self.image_path = None
+        if self.log is not None:
+            self.log.test(t, f"{self.name}.remove()")
+        return path
+
+    def _change(self, before: Path | None, image: str | None) -> int:
+        """Queues the change from `before` to `image` for the link once the run has started; its
+        instant, 0 before."""
+        if not self._started():
+            return 0
+        t = self._now()
+        with self._lock:
+            if not self._at_power_on:
+                self._at_power_on.append(before)
+            self._pending.append(SdCardChange(t, image))
+        return t
+
+    @property
+    def held(self) -> Path | None:
+        """The image of the card in the slot as the run has it: after the last change the runner
+        acknowledged, else from power-on. A change the run has not reached does not count."""
+        with self._lock:
+            if self._changes:
+                return self._changes[-1].image
+            if self._at_power_on:
+                return self._at_power_on[0]
+        return self.image_path
+
+    @property
+    def not_reached(self) -> list[CardChange]:
+        """The changes the test made with the board on that the runner has not acknowledged, in
+        order, at the instants the test made them: those the run ended before, once it has."""
+        with self._lock:
+            pending = [m for m in self._pending if isinstance(m, SdCardChange)]
+            unacknowledged = [*self._sent, *pending]
+        return [_card_change(change.t, change.image) for change in unacknowledged]
+
+    @property
+    def refused(self) -> list[CardChange]:
+        """The changes the runner refused, at the instants it did, each with the image the test
+        asked for: a refusal fails the link, so there is one at most."""
+        with self._lock:
+            return list(self._refused)
+
+    @property
+    def changes(self) -> list[CardChange]:
+        """What the slot held after each change the test made with the board on, as the runner
+        acknowledged it, in order: a change the run has not reached yet is not there."""
+        with self._lock:
+            return list(self._changes)
 
     # Fault rules: the test's side.
 
@@ -538,15 +646,32 @@ class SdCard(Interface):
 
     # The link's side.
 
-    @property
-    def sd_card(self) -> bool:
-        return True
-
     def inputs(self, now: int) -> Iterable[Input]:
         with self._lock:
             pending, self._pending = self._pending, []
-        # Given before power-on, or while the link was between turns: at the turn's instant.
-        return [replace(message, t=max(message.t, now)) for message in pending]
+            # Given before power-on, or while the link was between turns: at the turn's instant.
+            sent = [replace(message, t=max(message.t, now)) for message in pending]
+            self._sent.extend(m for m in sent if isinstance(m, SdCardChange))
+        return sent
+
+    def card_changed(self, t: int, image: str | None, error: str | None) -> None:
+        with self._lock:
+            change = self._sent.popleft() if self._sent else None
+        if change is None:
+            raise LinkError(f"{self.name}: the runner acknowledged a change nobody asked for")
+        if error is not None:
+            with self._lock:
+                self._refused.append(_card_change(t, change.image))
+            raise LinkError(f"{self.name}: the runner refused the card at {t} ns: {error}")
+        # What the runner says the slot holds, also when it is not what the test asked for.
+        with self._lock:
+            self._changes.append(_card_change(t, image))
+        if image != change.image:
+            wanted = "no card" if change.image is None else change.image
+            raise LinkError(
+                f"{self.name}: the runner says the slot holds {image or 'no card'} at {t} ns,"
+                f" where the test asked for {wanted}"
+            )
 
     def sd_op(self, message: SdOp) -> None:
         with self._lock:
@@ -599,3 +724,7 @@ class SdCard(Interface):
             }
             for fault in self.faults
         ]
+
+
+def _card_change(t: int, image: str | None) -> CardChange:
+    return CardChange(t, None if image is None else Path(image))

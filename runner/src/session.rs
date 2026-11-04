@@ -23,6 +23,10 @@
 //! With `--sd-rw` the peer's fault rules go to the SD card when they come due (`sd_fault`,
 //! `sd_clear`), and what they did comes back through the board's log (`sd_op`).
 //!
+//! With `--sd-spi` the peer takes the card out of the slot and puts one in (`sd_card`) when its
+//! time comes, at a slice boundary, between two of the chip's SPI transactions; the runner says
+//! what the slot holds then (`sd_card_ack`).
+//!
 //! [`Guest`] and [`Link`] stand for the machine and the socket, so the tests run the loop
 //! against a scripted guest and a fake peer.
 use crate::cli;
@@ -242,7 +246,8 @@ pub struct Options<'a> {
     pub wifi: Option<&'a cli::Wifi>,
     /// The mask ROM's ELF, for a power-on reset.
     pub rom: &'a [u8],
-    /// The SD card of `--sd-rw`, which loses its power with the board's.
+    /// `--sd-spi`: the SD card slot, which the peer's `sd_card` empties and fills, and whose card
+    /// loses its power with the board's.
     pub card: Option<sd_card::Shared>,
 }
 
@@ -291,6 +296,13 @@ enum Item {
         cycle: u64,
         data: Vec<u8>,
     },
+    /// What the slot holds after the peer's `sd_card`, applied at `cycle`, and why it was
+    /// refused, if it was.
+    SdCard {
+        cycle: u64,
+        image: Option<String>,
+        error: Option<String>,
+    },
 }
 
 impl Item {
@@ -300,7 +312,8 @@ impl Item {
             | Item::Board(Recorded::UartTx { cycle, .. } | Recorded::Gpio { cycle, .. })
             | Item::Reset { cycle, .. }
             | Item::Routes { cycle, .. }
-            | Item::Eth { cycle, .. } => *cycle,
+            | Item::Eth { cycle, .. }
+            | Item::SdCard { cycle, .. } => *cycle,
         }
     }
 }
@@ -351,6 +364,7 @@ enum Input {
     ChipReset,
     SdFault(sd_card::Fault),
     SdClear(Option<Vec<u64>>),
+    SdCard(Option<String>),
 }
 
 struct Paced {
@@ -803,6 +817,12 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                     self.close_open()?;
                     self.send(&protocol::sd_op(t, &faulted))?;
                 }
+                Item::SdCard { image, error, .. } => {
+                    // not an event: nothing answers it
+                    self.close_open()?;
+                    let line = protocol::sd_card_ack(t, image.as_deref(), error.as_deref());
+                    self.send(&line)?;
+                }
             }
         }
         Ok(())
@@ -995,19 +1015,8 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                 }
                 Incoming::SdFault { t, fault } => {
                     check(t, Vec::new())?;
-                    let Some(card) = &self.opts.card else {
-                        return Err(protocol_error("sd_fault without --sd-rw", &line));
-                    };
-                    let blocks = card.borrow().blocks();
-                    if let Some((first, last)) = fault.blocks
-                        && last >= blocks
-                    {
-                        return Err(protocol_error(
-                            &format!(
-                                "sd_fault: blocks {first} to {last}, and the card has {blocks}"
-                            ),
-                            &line,
-                        ));
+                    if self.opts.card.is_none() {
+                        return Err(protocol_error("sd_fault without --sd-spi", &line));
                     }
                     if !self.sd_ids.insert(fault.id) {
                         return Err(protocol_error(
@@ -1020,9 +1029,16 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                 Incoming::SdClear { t, ids } => {
                     check(t, Vec::new())?;
                     if self.opts.card.is_none() {
-                        return Err(protocol_error("sd_clear without --sd-rw", &line));
+                        return Err(protocol_error("sd_clear without --sd-spi", &line));
                     }
                     inputs.push((t, Input::SdClear(ids)));
+                }
+                Incoming::SdCard { t, image } => {
+                    check(t, Vec::new())?;
+                    if self.opts.card.is_none() {
+                        return Err(protocol_error("sd_card without --sd-spi", &line));
+                    }
+                    inputs.push((t, Input::SdCard(image)));
                 }
                 Incoming::Wait {
                     ack,
@@ -1139,12 +1155,59 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                         card.borrow_mut().clear(ids.as_deref());
                     }
                 }
+                Input::SdCard(image) => self.change_card(now, image),
             }
         }
         if gpio {
             self.guest.take_gpio_inputs();
         }
         Ok(reset)
+    }
+
+    /// Takes the card out of the slot, or puts one holding `image` in, at `now`; what the slot
+    /// holds then goes to the peer in its order (`sd_card_ack`). A card for a slot that holds one
+    /// already, or one whose image cannot be opened or is not a card's size, is refused, and the
+    /// slot stays as it was; taking the card out of an empty slot changes nothing.
+    fn change_card(&mut self, now: u64, image: Option<String>) {
+        let Some(slot) = &self.opts.card else {
+            return;
+        };
+        let mut slot = slot.borrow_mut();
+        let at = ns(now) as f64 / 1e9;
+        let error = match &image {
+            Some(image) => match slot.insert_file(image) {
+                Ok(len) => {
+                    slot.inserted += 1;
+                    eprintln!(
+                        "esp32tl-runner: SD card in at {at:.6} s: {image} ({} KiB, write-through)",
+                        len >> 10
+                    );
+                    None
+                }
+                Err(e) => {
+                    eprintln!("esp32tl-runner: SD card refused at {at:.6} s: {image}: {e}");
+                    Some(format!("{image}: {e}"))
+                }
+            },
+            None => {
+                let held = slot.image().map(str::to_string);
+                if slot.remove() {
+                    slot.removed += 1;
+                    eprintln!(
+                        "esp32tl-runner: SD card out at {at:.6} s: {}",
+                        held.unwrap_or_default()
+                    );
+                }
+                None
+            }
+        };
+        let image = slot.image().map(str::to_string);
+        drop(slot);
+        self.pending.push_back(Item::SdCard {
+            cycle: now,
+            image,
+            error,
+        });
     }
 
     /// Hands the station's link the frames that came due, in order, as many as its queue takes;

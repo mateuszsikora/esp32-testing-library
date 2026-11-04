@@ -113,6 +113,29 @@ def test_sdspi_has_the_classic_esp32_flash_layout() -> None:
     assert app.elf_file == str((build / "sd_card.elf").resolve())
 
 
+def test_sd_remount_has_the_classic_esp32_flash_layout() -> None:
+    app = idf_app("sd_remount")
+    build = FIRMWARE / "sd_remount" / "build"
+    assert app.target == "esp32"
+    assert [(f.offset, Path(f.file_path).relative_to(build)) for f in app.flash_files] == [
+        (0x1000, Path("bootloader/bootloader.bin")),
+        (0x8000, Path("partition_table/partition-table.bin")),
+        (0x10000, Path("sd_remount.bin")),
+    ]
+    assert all(Path(f.file_path).is_file() for f in app.flash_files)
+    assert app.elf_file == str((build / "sd_remount.elf").resolve())
+
+
+def test_sd_remount_takes_the_devkit_sd_card_slot() -> None:
+    # its pins are in its source, as the logger example's are
+    source = (FIRMWARE / "sd_remount" / "main" / "main.c").read_text()
+    slot = boards.profile("esp32-devkitc").sd_card
+    assert slot is not None
+    for name, pin in [("mosi", slot.mosi), ("miso", slot.miso), ("sclk", slot.sclk)]:
+        assert f".{name}_io_num = {pin}," in source
+    assert f"slot.gpio_cs = {slot.cs};" in source
+
+
 def test_sdspi_takes_the_devkit_sd_card_slot_from_sdkconfig() -> None:
     config = idf_app("sdspi").sdkconfig
     slot = boards.profile("esp32-devkitc").sd_card

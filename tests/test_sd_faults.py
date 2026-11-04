@@ -13,6 +13,8 @@ from esp32tl.interfaces.sd_card import UNIT, SdCard
 from esp32tl.link.boardlink import BoardLink, Interface
 from esp32tl.link.protocol import (
     RunnerHello,
+    SdCardAck,
+    SdCardChange,
     SdClear,
     SdFault,
     SdOp,
@@ -245,6 +247,43 @@ def test_a_run_that_has_ended_takes_no_rule(tmp_path: Path) -> None:
     assert not fault.active
 
 
+def test_rules_and_card_changes_go_out_in_order_and_only_changes_are_acknowledged(
+    tmp_path: Path,
+) -> None:
+    big, small = tmp_path / "big.img", tmp_path / "small.img"
+    big.write_bytes(bytes(2 * UNIT))
+    small.write_bytes(bytes(UNIT))
+    slot = SdCard(ROUTE, directory=tmp_path, now=lambda: MS, started=lambda: True)
+    slot.insert(big)
+    link = started(slot)
+    link.receive(Sync(0))
+    assert link.receive(SdCardAck(MS, str(big))) == []
+    fault = slot.fail("write", blocks=2047)
+    slot.remove()
+    with pytest.raises(SourceError, match="the slot is empty"):
+        slot.fail("read")
+    slot.insert(small)
+    # against the card now in the slot: 1024 blocks
+    with pytest.raises(ValueError, match="the card has blocks 0 to 1023"):
+        slot.fail("read", blocks=2047)
+    later = slot.delay("read", ms(1))
+    assert len(slot.not_reached) == 2, "the changes, not the rules"
+    assert link.receive(Sync(MS)) == [
+        SdFault(MS, 1, "write", "error", None, None, (2047, 2047)),
+        SdCardChange(MS, None),
+        SdCardChange(MS, str(small)),
+        SdFault(MS, 2, "read", "delay", MS, None, None),
+        Wait(0, None, None),
+    ]
+    assert len(slot.not_reached) == 2
+    link.receive(SdCardAck(2 * MS, None))
+    link.receive(SdCardAck(2 * MS, str(small)))
+    assert slot.not_reached == []
+    assert link.error is None
+    # a rule outlives the card it was given on
+    assert fault.active and later.active
+
+
 def test_only_the_card_sends_sd_fault_and_sd_op_needs_a_card(card: SdCard) -> None:
     class Impostor(Interface):
         def inputs(self, now: int) -> list[SdFault]:
@@ -252,13 +291,13 @@ def test_only_the_card_sends_sd_fault_and_sd_op_needs_a_card(card: SdCard) -> No
 
     link = started(Impostor("lines", None))
     assert link.receive(Sync(0)) == [Stop()]
-    assert link.error == "lines sent sd_fault, and is not the SD card"
+    assert link.error == "lines sent sd_fault, and is not the SD card slot"
 
     link = started()
     link.receive(SdOp(0, 1, "read", (0, 0), "error", None, False))
-    assert link.error == "the runner sent sd_op, and the link has no SD card"
+    assert link.error == "the runner sent sd_op, and no interface is the SD card slot"
 
-    with pytest.raises(ValueError, match="one SD card, not sd_card, sd_card"):
+    with pytest.raises(ValueError, match="one SD card slot, not sd_card, sd_card"):
         BoardLink("esp32-devkitc", [card, card])
 
 
