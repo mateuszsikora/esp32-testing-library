@@ -1841,12 +1841,32 @@ fixture. Existing AT-only tests retain their immediate `+++` escape and unanswer
 Network data mode instead requires a second of idle time before and after `+++`, preserving
 binary PPP bytes. Power, registration and functionality loss reset PPP, queued replies and TCP
 sessions; a fresh dial negotiates again. The broker retains its test-side history and retained
-messages, while connection loss emits Wills once. No unsolicited `NO CARRIER` is emitted yet.
+messages, while connection loss emits Wills once. Registration, functionality and power loss emit
+no unsolicited `NO CARRIER`; [`drop_call`](#a-dropped-call-says-no-carrier-and-offers-a-terminate-request-only-if-asked)
+does.
 
 **Rejected:** enabling PPP for every AT-model call, because existing firmware tests deliberately
 dial and escape without a PPP stack; and recognizing every binary `+++` as an escape, because
-valid PPP/TLS payloads may contain it. Fully model-specific escape timing and unsolicited modem
-notifications wait for a firmware test that needs them.
+valid PPP/TLS payloads may contain it. Fully model-specific escape timing and other unsolicited
+modem notifications wait for a firmware test that needs them.
+
+## A dropped call says NO CARRIER, and offers a Terminate-Request only if asked
+
+Status: decided (#128)
+
+`modem.drop_call()` ends a data call with the modem registered: it sends `NO CARRIER` and returns to
+command mode. `terminate=True` first offers an LCP Terminate-Request. No vendor document says whether
+a carrier or SIMCom sends one, so it is the test's choice, off by default. It matters to the
+firmware: with esp_modem modem-v1.4.1 and ESP-IDF v5.3.6, `NO CARRIER` in data mode goes unnoticed
+and the firmware learns from its own timeout, while a Terminate-Request gives
+`IP_EVENT_PPP_LOST_IP` 6 s later. `lose_registration()` stays silent. The command parser did not
+change: `+++` without an answer in command mode costs `esp_modem` 5 s, and its `\n` before `AT`
+clears PPP bytes left on the line.
+
+**Rejected:** a `NO CARRIER` from `lose_registration()` too, because no source says a modem sends one
+and existing tests rely on the silence; a Terminate-Request by default, because it would make every
+dropped call prompt and hide the firmware's timeout path; waiting for the Terminate-Ack before
+`NO CARRIER`, because no document gives that order and the firmware's behaviour does not depend on it.
 
 ## The MQTT service implements ephemeral sessions and QoS zero and one
 

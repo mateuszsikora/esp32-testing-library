@@ -199,6 +199,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Unseen replay requests retain raw occurrences alongside normalised counts](harness.md#unseen-replay-requests-retain-raw-occurrences-alongside-normalised-counts) | `harness.md` | decided (#20) |
 | [Serial adapters preserve skips for modem models and NVS replacement](harness.md#serial-adapters-preserve-skips-for-modem-models-and-nvs-replacement) | `harness.md` | decided (#25) |
 | [The network is selected explicitly, and resets with its modem](harness.md#the-network-is-selected-explicitly-and-resets-with-its-modem) | `harness.md` | decided (#30) |
+| [A dropped call says NO CARRIER, and offers a Terminate-Request only if asked](harness.md#a-dropped-call-says-no-carrier-and-offers-a-terminate-request-only-if-asked) | `harness.md` | decided (#128) |
 | [The MQTT service implements ephemeral sessions and QoS zero and one](harness.md#the-mqtt-service-implements-ephemeral-sessions-and-qos-zero-and-one) | `harness.md` | decided (#30, #104) |
 | [MQTT CONNECT policy runs before accepted session state is installed](harness.md#mqtt-connect-policy-runs-before-accepted-session-state-is-installed) | `harness.md` | decided (#103) |
 | [TLS determinism compares explicit plaintext transcripts](harness.md#tls-determinism-compares-explicit-plaintext-transcripts) | `harness.md` | decided (#30) |

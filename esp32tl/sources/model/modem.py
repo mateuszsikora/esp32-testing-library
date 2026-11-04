@@ -108,6 +108,8 @@ class Modem:
         self._pluses = bytearray()
         self._last_data = 0
         self._escape_at: int | None = None
+        # What the test's own call sends, for the next poll.
+        self._queued: list[Output] = []
         self._commands: list[Command] = []
         self._data_received: list[tuple[Duration, bytes]] = []
 
@@ -201,7 +203,24 @@ class Modem:
             self._pwrkey_works = pwrkey
             if not pwrkey:
                 self._pressed = None
+            self._queued.clear()
             self._end_data()
+
+    def drop_call(self, *, terminate: bool = False) -> None:
+        """End the data call and stay registered: NO CARRIER, then command mode. With `terminate`,
+        first an LCP Terminate-Request."""
+        if not isinstance(terminate, bool):
+            raise TypeError(f"modem.drop_call: terminate is {terminate!r}, not True or False")
+        with self._lock:
+            if not self.data_mode:
+                raise SourceError("modem.drop_call: the modem is not in data mode")
+            t = self._now()
+            if terminate:
+                if not isinstance(self.data, Internet):
+                    raise SourceError("modem.drop_call: terminate needs modem.network(): no PPP")
+                self._queued += self.data.terminate(t)
+            self._end_data(t)
+            self._queued.append((t + LATENCY_NS, b"\r\nNO CARRIER\r\n"))
 
     def lose_registration(self) -> None:
         """Remove coverage and end data mode silently; queries report status 0."""
@@ -257,6 +276,7 @@ class Modem:
         self.powered = powered
         self.hung = False
         self._pwrkey_works = True
+        self._queued.clear()
         self.registered = powered and self._coverage
         self._function = 1
         self._end_data(t)
@@ -452,10 +472,12 @@ class Modem:
     def poll(self, now: int) -> Iterable[Output]:
         """Poll the optional data peer while in data mode."""
         with self._lock:
+            queued, self._queued = self._queued, []
             if self._escape_at is not None and now >= self._escape_at:
                 self._end_data(now)
-                return [(now, b"\r\nOK\r\n")]
-            return list(self.data.poll(now)) if self.data_mode and self.data is not None else ()
+                return [*queued, (now, b"\r\nOK\r\n")]
+            polled = self.data.poll(now) if self.data_mode and self.data is not None else ()
+            return [*queued, *polled]
 
     def quiet_until(self) -> int | None:
         """The optional data peer's next deadline, or no deadline in command mode."""

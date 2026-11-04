@@ -153,6 +153,15 @@ class Internet:
         finally:
             self._at = previous
 
+    def terminate(self, t: int) -> list[Output]:
+        """What the far end sends at `t` to end the link behind a modem."""
+        self._at = t
+        try:
+            self.ppp.terminate()
+            return self._take()
+        finally:
+            self._at = None
+
     def receive(self, t: int, data: bytes) -> list[Output]:
         """What the device sent at `t`: bytes of the modem's line, or one Ethernet frame."""
         self._at = t

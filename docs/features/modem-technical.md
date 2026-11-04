@@ -89,10 +89,17 @@ installs `esp32tl.net.Internet` before power-on. The `broker` fixture selects it
 In data mode its payload reaches `data.receive`, and `poll`, `quiet_until` and `latency` delegate
 to that source (latency remains at most 1 ms). With no peer, payload is retained and unanswered.
 A network dial starts PPP after CONNECT; power, registration and functionality loss reset it,
-clear queued replies and close TCP sessions. Established connection loss emits no unsolicited
-`NO CARRIER`. Network data mode guards `+++` with one second of silence before and after it;
+clear queued replies and close TCP sessions. Only `drop_call` emits an unsolicited `NO CARRIER`:
+registration, functionality and power loss stay silent. Network data mode guards `+++` with one second of silence before and after it;
 `poll` completes the escape and `quiet_until` exposes its deadline. Other data sources retain
 the immediate escape recognizer. See [network internals](network-technical.md).
+
+`drop_call` runs in the test's thread, while the link is held. With `terminate`, it takes
+`Internet.terminate(t)`'s output, an LCP Terminate-Request stamped one latency later, before
+`_end_data` calls `Internet.stop`, which would clear it. It appends `NO CARRIER`, stamped the same,
+to `_queued`, which `poll` returns ahead of anything else; the link polls in the same turn, right
+after the hold returns, so `quiet_until` has no bound to give for it. `hang` and `_set_power` empty
+`_queued`.
 
 ## Failure modes
 
@@ -103,6 +110,9 @@ the immediate escape recognizer. See [network internals](network-technical.md).
 - The refusals of `clock`, `clock_not_set` and `operator`, verbatim in
   [the guide](modem-user.md#clock-and-operator): they come from the model's method, which
   `_tell` calls on a new model before giving it to the route, so a refused first call selects none.
+- `modem.drop_call: the modem is not in data mode`, `modem.drop_call: terminate needs
+  modem.network(): no PPP` (`SourceError`), `modem.drop_call: terminate is 1, not True or False`
+  (`TypeError`).
 - `modem.hang: the modem is off` (`SourceError`), `modem.hang: pwrkey is 1, not True or False`
   (`TypeError`).
 - `uart.modem has its source already: one per test`: replay and model are mutually exclusive.
@@ -115,7 +125,7 @@ the immediate escape recognizer. See [network internals](network-technical.md).
 
 `tests/test_modem_model.py` checks every required command, fallbacks, ignored noise, chunking and
 answer timestamps, the clock's time, zone and refusals, the operator's formats and refusals, a
-hung modem, RESET's threshold and polarity, `restarts`, escape and data handoff, signal mapping, registration, power loss, profile
+hung modem, RESET's threshold and polarity, `restarts`, a dropped call on both paths, escape and data handoff, signal mapping, registration, power loss, profile
 pulse timing, RI ownership, taps and unbounded command history, and a real `BoardLink` exchange.
 `tests/test_modem_fixture.py` runs `modem_at` on the LilyGO profile, checks physical PWRKEY and
 RI, starts powered, off and after restored supply, changes signal/registration/power on the
@@ -124,7 +134,7 @@ firmware's PWRKEY pulse (and `tests/test_modem_model.py` keeps the board's suppl
 `lose_power()` apart), reads the operator's code and a right, a wrong and an unset clock through
 the firmware, compares two complete taps byte for byte, and checks missing-route and late-source
 errors. `tests/test_modem_recovery.py` runs `firmware/modem_recovery` through `esp_modem` and PPP, and
-recovers a hung modem with and without PWRKEY. `tests/test_boards.py` checks timing validation. The validation firmware and tests have
+recovers a hung modem with and without PWRKEY, and redials after a dropped call on both paths. `tests/test_boards.py` checks timing validation. The validation firmware and tests have
 no network dependency.
 
 ## See also

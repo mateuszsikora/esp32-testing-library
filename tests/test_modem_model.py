@@ -12,6 +12,7 @@ from esp32tl.interfaces.lines import Lines
 from esp32tl.interfaces.modem import Modem as ModemRoute
 from esp32tl.link.boardlink import BoardLink, Wire
 from esp32tl.link.protocol import GpioIn, GpioOut, RunnerHello, Sync, UartCfg, UartTx, Wait
+from esp32tl.net import Internet
 from esp32tl.report import RunLog
 from esp32tl.sources.model.modem import LATENCY_NS, MAX_COMMAND, Modem, Restart
 from esp32tl.units import Duration, hours, minutes, ms, seconds
@@ -971,3 +972,97 @@ def test_power_enable_has_no_effect_on_the_modem(tmp_path: Path) -> None:
     lines.driven(seconds(3).ns, [(12, 1)], frozenset({12}))
     assert lines.level("board.power_enable") == 1
     assert modem.powered and modem.hung and modem.restarts == ()
+
+
+def dialled(tmp_path: Path, now: list[int]) -> tuple[ModemRoute, Modem, Internet]:
+    """A route with its network, which has dialled and has an open LCP."""
+    modem, _, _ = route(tmp_path, now)
+    network = modem.network()
+    model = modem.model()
+    reply(model, "ATD*99#", now[0])
+    list(model.poll(now[0]))
+    network.ppp.lcp_open = True
+    return modem, model, network
+
+
+def test_a_dropped_call_stays_registered_says_no_carrier_and_leaves_data_mode(
+    tmp_path: Path,
+) -> None:
+    now = [seconds(1).ns]
+    modem, model, network = dialled(tmp_path, now)
+    modem.drop_call()
+    assert modem.registered and modem.powered and not modem.data_mode and not network.active
+    assert list(model.poll(now[0])) == [(now[0] + LATENCY_NS, b"\r\nNO CARRIER\r\n")]
+    assert list(model.poll(now[0])) == []
+    # command mode: AT works again, and the firmware can dial
+    assert reply(model, "AT", now[0]) == b"\r\nOK\r\n"
+    assert b"+CEREG: 0,1" in reply(model, "AT+CEREG?", now[0])
+    assert reply(model, "ATD*99#", now[0]) == b"\r\nCONNECT\r\n"
+    assert model.data_mode and network.active
+
+
+def test_a_dropped_call_offers_a_terminate_request_first_when_the_test_asks(
+    tmp_path: Path,
+) -> None:
+    now = [seconds(1).ns]
+    modem, model, _ = dialled(tmp_path, now)
+    modem.drop_call(terminate=True)
+    first, second = list(model.poll(now[0]))
+    assert first[0] == second[0] == now[0] + LATENCY_NS
+    assert first[1].startswith(b"\x7e\xff}#\xc0!}%")  # LCP, code 5, escaped
+    assert second[1] == b"\r\nNO CARRIER\r\n"
+    assert modem.registered and not modem.data_mode
+
+
+def test_a_call_dropped_without_terminate_offers_no_terminate_request(tmp_path: Path) -> None:
+    modem, model, _ = dialled(tmp_path, [0])
+    modem.drop_call(terminate=False)
+    assert [data for _, data in model.poll(0)] == [b"\r\nNO CARRIER\r\n"]
+
+
+def test_a_dropped_call_goes_out_through_the_link_in_the_test_s_turn(tmp_path: Path) -> None:
+    now = [seconds(1).ns]
+    modem, _, _ = dialled(tmp_path, now)
+    link = BoardLink(LILYGO.name, [modem])
+    link.receive(RunnerHello(1, "esp32", "emulated-fifo-write", "revision"))
+    link.receive(Sync(now[0]))
+    modem.drop_call()
+    outputs = link.receive(Sync(now[0] + 1))
+    assert link.error is None, link.error
+    assert any(getattr(output, "data", None) == b"\r\nNO CARRIER\r\n" for output in outputs)
+    assert modem.source is not None and modem.source.quiet_until() is None
+
+
+def test_lose_registration_stays_silent(tmp_path: Path) -> None:
+    modem, model, _ = dialled(tmp_path, [0])
+    modem.lose_registration()
+    assert list(model.poll(0)) == []
+    assert not modem.registered and not modem.data_mode
+
+
+def test_drop_call_refuses_a_modem_with_no_call_and_a_terminate_with_no_ppp(
+    tmp_path: Path,
+) -> None:
+    modem, _, _ = route(tmp_path, [0])
+    with pytest.raises(SourceError, match=r"modem\.drop_call: the modem is not in data mode"):
+        modem.drop_call()
+    assert modem.source is None
+    with pytest.raises(TypeError, match="terminate is 1, not True or False"):
+        Modem(lambda: 0).drop_call(terminate=1)  # type: ignore[arg-type]
+    model = Modem(lambda: 0)
+    reply(model, "ATD*99#")
+    with pytest.raises(SourceError, match=r"terminate needs modem\.network\(\)"):
+        model.drop_call(terminate=True)
+    assert model.data_mode
+    model.drop_call()
+    assert [data for _, data in model.poll(0)] == [b"\r\nNO CARRIER\r\n"]
+
+
+@pytest.mark.parametrize("after", ["hang", "lose_power"])
+def test_a_hang_or_a_power_loss_takes_back_what_a_dropped_call_had_queued(
+    tmp_path: Path, after: str
+) -> None:
+    modem, model, _ = dialled(tmp_path, [0])
+    modem.drop_call()
+    getattr(modem, after)()
+    assert list(model.poll(0)) == []

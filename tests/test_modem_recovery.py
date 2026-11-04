@@ -1,5 +1,7 @@
 """modem_recovery through esp_modem and PPP on the LilyGO wires: real firmware at the pin."""
 
+from pathlib import Path
+
 import pytest
 
 from esp32tl.backends.esp32sim import Esp32Sim
@@ -70,3 +72,48 @@ def test_recovers_a_hung_modem(
     assert ms(99) <= key[3][1] - key[2][1] <= ms(101)
     assert key[0][1] < enable[0][1] < reset[0][1] < key[2][1] <= recovered.at
     assert modem.restarts[0].at == (key[1][1] if pwrkey else reset[1][1]) + ms(1)
+
+
+@pytest.mark.parametrize(
+    ("terminate", "noticed"),
+    [(False, "modem_recovery: no answer"), (True, "modem_recovery: lost ip")],
+)
+def test_redials_after_a_dropped_call(
+    board: Esp32Sim, modem: Modem, console: Console, tmp_path: Path, terminate: bool, noticed: str
+) -> None:
+    network = modem.network()
+    tap = modem.tap(tmp_path / "modem.jsonl")
+    board.power_on()
+    board.wait_until(console.line("modem_recovery: connected"), within=seconds(60))
+    board.wait_until(lambda: network.ntp.requests > 0, within=seconds(5))
+
+    dropped_at = board.now
+    modem.drop_call(terminate=terminate)
+    assert modem.registered and not modem.data_mode and modem.powered
+    line = board.wait_until(console.line("modem_recovery: (no answer|lost ip)"), within=seconds(60))
+    assert line.text == noticed
+    assert modem.registered and not modem.data_mode
+    if terminate:
+        # lwIP's FSM_DEFTIMEOUT at the pin, between the Terminate-Request and IP_EVENT_PPP_LOST_IP
+        assert seconds(6) <= line.at - dropped_at < seconds(7)
+    else:
+        # NO CARRIER alone goes unnoticed: the firmware's own requests time out
+        assert line.at - dropped_at > seconds(10)
+
+    back = board.wait_until(console.line(r"modem_recovery: command mode"), within=seconds(60))
+    assert "+CEREG: 0,1" in "\n".join(entry.text for entry in console.lines(since=back.at))
+    assert modem.registered
+    requests = network.ntp.requests
+    board.wait_until(console.line("modem_recovery: connected"), within=seconds(60))
+    board.wait_until(lambda: network.ntp.requests > requests, within=seconds(5))
+    assert modem.data_mode and modem.registered
+
+    # nothing took the modem down: it answered every command, and did not restart
+    assert not modem.restarts
+    assert all(c.response for c in modem.commands)
+    dials = [c.response for c in modem.commands if c.text == "ATD*99#"]
+    assert dials == [b"\r\nCONNECT\r\n", b"\r\nCONNECT\r\n"]
+    # what crossed the wire: lwIP's Terminate-Ack (code 6, escaped) only to a Terminate-Request
+    after = [(d, data) for t, d, data in tap.events if t >= dropped_at.ns]
+    assert b"".join(data for d, data in after if d == "in").find(b"\r\nNO CARRIER\r\n") >= 0
+    assert any(d == "out" and b"\xc0!}&" in data for d, data in after) is terminate

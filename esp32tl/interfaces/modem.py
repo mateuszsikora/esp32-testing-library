@@ -100,6 +100,14 @@ class Modem(Uart):
         PWRKEY does nothing either, until RESET or a loss of supply."""
         self._tell(lambda model: model.hang(pwrkey=pwrkey), f"hang(pwrkey={pwrkey!r})")
 
+    def drop_call(self, *, terminate: bool = False) -> None:
+        """End the data call and stay registered: NO CARRIER, then command mode. With `terminate`,
+        first an LCP Terminate-Request."""
+        self._tell(
+            lambda model: model.drop_call(terminate=terminate),
+            f"drop_call(terminate={terminate!r})",
+        )
+
     def lose_registration(self) -> None:
         """Remove coverage and end data mode silently; queries report status 0."""
         self._tell(ModemModel.lose_registration, "lose_registration()")

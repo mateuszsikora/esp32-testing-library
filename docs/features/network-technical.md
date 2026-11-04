@@ -226,7 +226,10 @@ expiry and HTTP keep-alive or chunked bodies. Protocol references:
 
 Modem dial resets and starts PPP. Supply, registration, functionality or power loss clears its
 queued data, resets TCP and delivers connection-loss notifications to services. Link termination
-also resets TCP. Network data mode guards `+++` with a second of idle time on each side, using
+also resets TCP. `Internet.terminate(t)` calls `Ppp.terminate`, which sends an LCP Terminate-Request
+on an open link and changes nothing else, and returns the output for
+[`modem.drop_call(terminate=True)`](modem-technical.md#interfaces), which stops the network next.
+`Internet.ppp` raises behind an access point. Network data mode guards `+++` with a second of idle time on each side, using
 `quiet_until`/`poll`; a fourth plus or another byte cancels a pending escape. AT-only operation
 retains its earlier immediate escape behavior.
 

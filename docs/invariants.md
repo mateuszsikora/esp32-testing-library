@@ -730,6 +730,18 @@ that references to its number keep their meaning.
     modem that is off is no restart, nor is a call before the board's first instant.
     `tests/test_modem_model.py::test_restarts_name_what_ended_each_run_and_a_start_is_no_restart`,
     `tests/test_modem_model.py::test_a_route_watches_pwrkey_and_reset_through_lines`
+- **178.** `modem.drop_call` keeps registration, sends `NO CARRIER` and leaves data mode, with an LCP
+    Terminate-Request first only when asked; AT works again and a new dial connects.
+    `lose_registration` stays silent.
+    `tests/test_modem_model.py::test_a_dropped_call_stays_registered_says_no_carrier_and_leaves_data_mode`,
+    `tests/test_modem_model.py::test_a_dropped_call_offers_a_terminate_request_first_when_the_test_asks`,
+    `tests/test_modem_model.py::test_a_call_dropped_without_terminate_offers_no_terminate_request`,
+    `tests/test_modem_model.py::test_lose_registration_stays_silent`,
+    `tests/test_net_ppp.py::test_the_far_end_offers_to_terminate_an_open_link_only`
+- **179.** At the pin, firmware on `esp_modem` learns of a call dropped with a Terminate-Request from
+    `IP_EVENT_PPP_LOST_IP` 6 s later, and of one without it from its own timeout, and redials on
+    both, with the modem registered and not restarted.
+    `tests/test_modem_recovery.py::test_redials_after_a_dropped_call`
 
 ## Flash contents
 

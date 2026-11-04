@@ -42,7 +42,8 @@ board power-on instead starts it off, for firmware that boots it with PWRKEY.
 | Call or property | Meaning |
 |---|---|
 | `signal(dbm=...)` | Finite signal strength in dBm; CSQ is clamped to 0–31, in 2 dB steps from -113 dBm; BER is 99 |
-| `lose_registration()` | Lose registration, end data mode; queries return registration status 0 |
+| `lose_registration()` | Lose registration, end data mode silently; queries return registration status 0 |
+| `drop_call(terminate=False)` | End a data call and stay registered: `NO CARRIER`, then command mode ([below](#a-dropped-data-call)) |
 | `register()` | Restore coverage; status becomes 1 if powered and `CFUN` is 1 |
 | `power_off()` | Switch off; the supply remains available to PWRKEY |
 | `power_on()` | Supply and power on, resetting command mode and AT settings |
@@ -59,8 +60,8 @@ board power-on instead starts it off, for firmware that boots it with PWRKEY.
 
 Registration changes affect the next query; there are no unsolicited registration notifications.
 Losing registration or power in data mode ends that mode silently: this model sends no unsolicited
-`NO CARRIER` for an established connection's loss. Firmware waiting for a disconnect indication
-may time out. With `modem.network()`, loss resets PPP and closes TCP connections, publishing
+`NO CARRIER` for those losses, only for [`drop_call`](#a-dropped-data-call). Firmware waiting for a
+disconnect indication may time out. With `modem.network()`, loss resets PPP and closes TCP connections, publishing
 MQTT Wills once; no old connection or queued reply survives a new dial. A dial attempted
 while unregistered does return `NO CARRIER`.
 Power loss silences the UART, clears any partial command and ends data mode. RI is 1 while
@@ -196,6 +197,41 @@ did. `cause` is `"reset"` (a RESET pulse), `"pwrkey"` (an off pulse), `"supply"`
 the board's supply going) or `"test"` (`modem.power_off()`, or `modem.power_on()` on a running
 modem). Starting a modem that is off is no restart, and nor is a call before the board's first
 instant, which says how the modem starts. A PWRKEY recovery, off then on, is one entry.
+
+## A dropped data call
+
+```python
+modem.drop_call()  # stays registered, sends NO CARRIER, leaves data mode
+modem.drop_call(terminate=True)  # first an LCP Terminate-Request
+```
+
+`drop_call` ends a data call while the modem stays registered. It sends `NO CARRIER`, 1 ms after the
+test's instant, and returns to command mode. With `modem.network()`, PPP and its TCP sessions end at
+that instant, as with any loss, and a new dial negotiates again. `lose_registration()` stays silent.
+
+`terminate=True` offers an LCP Terminate-Request ([RFC 1661](https://www.rfc-editor.org/rfc/rfc1661),
+section 5.5) just before `NO CARRIER`. No vendor document says whether a carrier or SIMCom sends one,
+and none says when a real modem sends `NO CARRIER` unprompted: both are the test's choice, the first
+off by default. What the firmware sends after the call has ended, such as lwIP's Terminate-Ack, is
+noise on the command line, which the next newline clears.
+
+It raises `SourceError: modem.drop_call: the modem is not in data mode` with no call to drop, as on
+a hung modem; `SourceError: modem.drop_call: terminate needs modem.network(): no PPP` when
+`terminate=True` has no network; and `TypeError` for a `terminate` that is not `True` or `False`.
+
+What the firmware sees, read in `esp_modem` modem-v1.4.1 and in lwIP and esp_netif of ESP-IDF v5.3.6,
+and shown by `firmware/modem_recovery` on that pin:
+
+- In data mode `Netif::receive` hands every byte to `pppos_input`, where text without a valid frame
+  raises no event. `esp_modem` looks for `NO CARRIER` only while the firmware itself leaves data
+  mode (`exit_data`, `set_command_mode`). So `NO CARRIER` alone goes unnoticed: what it adds is that
+  registration stays and AT works again. The firmware learns from its own timeout, a TCP or MQTT
+  one, or from LCP echo, which is off by default.
+- A Terminate-Request is the prompt signal. lwIP answers Terminate-Ack, takes the link down and,
+  after `FSM_DEFTIMEOUT` (6 s), ends with `PPPERR_CONNECT`, on which esp_netif posts
+  `IP_EVENT_PPP_LOST_IP`.
+- `+++` with no answer in command mode is survivable: after a 5 s timeout `esp_modem` writes `\n` and
+  `AT`, which also clears PPP bytes left in the command line. The parser needed no change for it.
 
 ## PWRKEY and reporting
 

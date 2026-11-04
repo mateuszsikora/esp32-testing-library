@@ -67,8 +67,8 @@ GPIO 12 and RI 33, fixed in `firmware/modem_recovery/main/main.c`. Run it with `
 
 It holds GPIO 12 high, starts the modem with a nominal 100 ms PWRKEY pulse if RI reads low, and
 dials. Once it has an address it prints `modem_recovery: connected` and sends an NTP request to
-`10.64.0.1` about every 2 s, with a 1 s timeout. Ten requests in a row without an answer print
-`modem_recovery: no answer`. It then leaves data mode with `esp_modem_set_mode` and sends `AT`. If
+`10.64.0.1` about every 2 s, with a 1 s timeout. `IP_EVENT_PPP_LOST_IP` prints `modem_recovery: lost ip`, and ten requests in a row without an answer
+print `modem_recovery: no answer`. Either way it then leaves data mode with `esp_modem_set_mode` and sends `AT`. If
 the modem answers, it prints `modem_recovery: command mode <reply to AT+CEREG?>` and dials again.
 If it does not, it prints `modem_recovery: hung RI=<level>` and runs the
 [recovery procedure](modem-user.md#a-hung-modem-and-reset): a nominal 3000 ms PWRKEY pulse unless
@@ -78,8 +78,10 @@ dials again. A dial that gets no `CONNECT` is followed by the same `AT`.
 
 On v5.3.6 a hung modem takes about 35 s from the last request to `modem_recovery: hung`:
 `esp_modem`'s `exit_data` waits for lwIP's Terminate-Requests to run out, 12 s here, then 2 s and
-three rounds of a 1 s pause, `+++`, 5 s and `\n` `AT`. No part of this is the model's; it is the
-firmware's own timing.
+three rounds of a 1 s pause, `+++`, 5 s and `\n` `AT`. After `modem.drop_call()` it takes about 21 s
+to `modem_recovery: no answer` and 41 s to the next dial, and after `modem.drop_call(terminate=True)`
+6 s to `modem_recovery: lost ip` and 14 s to the next dial. No part of this is the model's; it is
+the firmware's own timing.
 
 ## `nvs_reader`
 
