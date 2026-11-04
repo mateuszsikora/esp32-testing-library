@@ -77,9 +77,9 @@ def test_a_body_by_content_length_bytes_head_and_absolute_form(server: HttpServe
     assert server.requests[-1].path == "/data"
 
 
-def test_an_unserved_path_is_404_and_requested_filters(server: HttpServer) -> None:
-    by_path = server.requested("/a")
-    by_method = server.requested(method="POST")
+def test_an_unserved_path_is_404_and_next_request_filters(server: HttpServer) -> None:
+    by_path = server.next_request("/a")
+    by_method = server.next_request(method="POST")
     client = Client(server)
     client.send(b"GET /b HTTP/1.1\r\n\r\n")
     assert client.head[0] == "HTTP/1.1 404 Not Found" and client.body == b"not found\n"
@@ -87,6 +87,78 @@ def test_an_unserved_path_is_404_and_requested_filters(server: HttpServer) -> No
     Client(server).send(b"GET /a HTTP/1.1\r\n\r\n")
     request = by_path()
     assert request is not None and request.path == "/a"
+    assert server.find_request("/b") is server.requests[0]
+    assert server.find_request(method="POST") is None
+    assert server.find_request("/a", method="GET") is request
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_history_and_next_requests_use_append_order_without_consuming(
+    server: HttpServer, legacy: bool
+) -> None:
+    condition = server.requested if legacy else server.next_request
+    assert server.find_request() is None
+    waiting = condition("/a", method="GET")
+    Client(server).send(b"GET /a HTTP/1.1\r\n\r\n")
+    first = server.requests[0]
+    later = condition("/a", method="GET")
+    assert later() is None
+    Client(server).send(b"POST /a HTTP/1.1\r\n\r\n")
+    Client(server).send(b"GET /b HTTP/1.1\r\n\r\n")
+    assert later() is None and len(server.requests) == 3
+    # the same board time as the first request: append order, not the timestamp, is the boundary
+    Client(server).send(b"GET /a HTTP/1.1\r\n\r\n")
+    second = server.requests[-1]
+    assert first.at == second.at
+    for _ in range(2):
+        assert later() is second
+        assert waiting() is first
+        assert server.find_request("/a", method="GET") is first
+
+
+@pytest.mark.parametrize(
+    ("method", "args", "kwargs", "description"),
+    [
+        ("next_request", (), {}, "the next HTTP request"),
+        ("next_request", ("/",), {}, "the next HTTP request for '/'"),
+        ("requested", ("/",), {"method": "GET"}, "the next HTTP request for '/' with method 'GET'"),
+        ("requested", (), {"method": "GET"}, "the next HTTP request with method 'GET'"),
+    ],
+)
+def test_http_conditions_are_named_and_reject_truth_testing(
+    server: HttpServer,
+    method: str,
+    args: tuple[str, ...],
+    kwargs: dict[str, str],
+    description: str,
+) -> None:
+    condition = getattr(server, method)(*args, **kwargs)
+    assert repr(condition) == description
+    assert condition() is None
+    with pytest.raises(TypeError, match=r"call the HTTP condition with \(\), or pass it to"):
+        bool(condition)
+    Client(server).send(b"GET / HTTP/1.1\r\n\r\n")
+    assert condition() is server.requests[0]
+    with pytest.raises(TypeError, match="call the HTTP condition"):
+        bool(condition)
+
+
+@pytest.mark.parametrize("method", ["next_request", "requested", "find_request"])
+def test_a_path_filter_holding_a_query_is_refused(server: HttpServer, method: str) -> None:
+    Client(server).send(b"GET /update?v=2 HTTP/1.1\r\n\r\n")
+    named = "find_request" if method == "find_request" else "next_request"
+    with pytest.raises(ValueError, match=rf"http\.{named}: '/update\?v=2' holds a query"):
+        getattr(server, method)("/update?v=2")
+    request = server.find_request("/update")
+    assert request is not None and request.target == "/update?v=2"
+
+
+def test_a_refused_request_satisfies_no_condition_or_query(server: HttpServer) -> None:
+    waiting = server.next_request("/upload")
+    client = Client(server)
+    client.send(b"POST /upload HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n")
+    assert client.head[0] == "HTTP/1.1 501 Not Implemented"
+    assert waiting() is None and server.find_request("/upload") is None
 
 
 @pytest.mark.parametrize(
@@ -134,6 +206,15 @@ def test_serve_refuses_what_is_not_http(
 ) -> None:
     with pytest.raises(ValueError):
         call(server)
+
+
+def test_serve_refuses_a_path_holding_a_query(server: HttpServer) -> None:
+    with pytest.raises(ValueError, match=r"http\.serve: '/a\?b' holds a query"):
+        server.serve("/a?b", "x")
+    server.serve("/a", "x")
+    client = Client(server)
+    client.send(b"GET /a?b HTTP/1.1\r\n\r\n")
+    assert client.head[0] == "HTTP/1.1 200 OK" and client.body == b"x"
 
 
 def test_a_content_length_with_leading_zeros_is_its_value(server: HttpServer) -> None:

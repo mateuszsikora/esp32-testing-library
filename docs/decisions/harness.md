@@ -2077,9 +2077,9 @@ Also rejected: falling back to another build, rebuilding, relocating artifacts o
 sources, because a test or CI job must run exactly the artifact it selected. Pytest's raw
 `--build-dir` remains refused; allowing two competing selectors would obscure that selection.
 
-## MQTT and TLS event APIs name history queries and next-event conditions explicitly
+## MQTT, TLS, HTTP and DHCP event APIs name history queries and next-event conditions explicitly
 
-Status: decided (#108)
+Status: decided (#108, #116)
 
 MQTT exposes immediate `find_message` / `find_connection` history queries and callable
 `next_message` / `next_connection` conditions. The existing `message` / `connected` names keep
@@ -2098,15 +2098,24 @@ Application payload schemas stay in the consumer's adapters. `connection_attempt
 takes the same condition object and boundary but keeps its name; it gets no `next_*` alias and
 no `find_*` query beside the public `connection_attempts` history.
 
-**Postponed:** the same names and condition objects for HTTP and DHCP. `HttpServer.requested()`
-and `Dhcp.leased()` stay future-only conditions with no `next_*` or `find_*` counterpart, no
-boolean-coercion guard and a timeout that names the local function, until #116.
+HTTP and DHCP (#116) take the same boundary, names and condition object: `next_request` /
+`find_request` and `next_lease` / `find_lease`, with `requested` / `leased` kept as aliases of the
+`next_*` names. `find_request` filters by path and method as `next_request` does; `find_lease`
+reads the first lease, as `find_connection` reads the first CONNECT. The condition object lives in
+`esp32tl/net/condition.py`, shared by MQTT, HTTP and DHCP, and its `TypeError` names the service.
+TLS keeps `_HandshakeCondition`: it already names its event and rejects boolean coercion, so
+folding it in would change code without changing behaviour. `next_request` and `find_request`
+refuse a path filter holding `?` with `ValueError`, because `Request.path` has no query and
+`assert find_request("/a?b") is None` would otherwise pass for a request the firmware did send.
+`serve` refuses one too, since it could only ever lead to a `404`.
 
 **Rejected:** changing existing MQTT defaults to include history, which could silently satisfy
 reconnect waits with stale events; making every condition future-only, which loses useful
 current-state and cumulative queries. A public shared cursor is unnecessary for these scopes:
 explicit methods express them without requiring callers to compare timestamps, edit counters
-or manage cursor ownership across brokers and TLS listeners.
+or manage cursor ownership across brokers and TLS listeners. Also rejected: matching a filter
+holding `?` against `Request.target`, which would give `path` two meanings depending on its
+content.
 
 ## A reset and a power cycle go on in the run they happen in, on its clock
 

@@ -7,29 +7,13 @@ import struct
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from enum import IntEnum
-from typing import Generic, Literal, TypeVar
+from typing import Literal
 
+from esp32tl.net.condition import Condition
 from esp32tl.units import Duration
 
 CONNECT, CONNACK, PUBLISH, PUBACK, PUBREC, PUBREL, PUBCOMP = 1, 2, 3, 4, 5, 6, 7
 SUBSCRIBE, SUBACK, UNSUBSCRIBE, UNSUBACK, PINGREQ, PINGRESP, DISCONNECT = 8, 9, 10, 11, 12, 13, 14
-
-T = TypeVar("T")
-
-
-@dataclass(frozen=True, repr=False)
-class _Condition(Generic[T]):
-    find: Callable[[], T]
-    description: str
-
-    def __call__(self) -> T:
-        return self.find()
-
-    def __repr__(self) -> str:
-        return self.description
-
-    def __bool__(self) -> bool:
-        raise TypeError("call the MQTT condition with (), or pass it to board.wait_until")
 
 
 @dataclass(frozen=True)
@@ -282,7 +266,7 @@ class Broker:
         description = f"the next MQTT message on {topic!r}" + (
             f" saying {wanted!r}" if wanted is not None else ""
         )
-        return _Condition(lambda: self._find_message(topic, wanted, start), description)
+        return Condition(lambda: self._find_message(topic, wanted, start), description, "MQTT")
 
     def find_message(self, topic: str = "#", payload: bytes | str | None = None) -> Message | None:
         """Return the first match in recorded history now, or None; consume nothing."""
@@ -301,7 +285,7 @@ class Broker:
         def find() -> bool:
             return any(topic in session.subscriptions for session in self._sessions)
 
-        return _Condition(find, f"an active MQTT subscription to {topic!r}")
+        return Condition(find, f"an active MQTT subscription to {topic!r}", "MQTT")
 
     def connected(self) -> Callable[[], Client | None]:
         """Alias of `next_connection`."""
@@ -314,7 +298,7 @@ class Broker:
         def find() -> Client | None:
             return self.clients[start] if len(self.clients) > start else None
 
-        return _Condition(find, "the next MQTT client connection")
+        return Condition(find, "the next MQTT client connection", "MQTT")
 
     def find_connection(self) -> Client | None:
         """Return the first recorded CONNECT, even if it has closed, or None."""
@@ -330,7 +314,7 @@ class Broker:
                 self.connection_attempts[start] if len(self.connection_attempts) > start else None
             )
 
-        return _Condition(find, "the next MQTT connection attempt")
+        return Condition(find, "the next MQTT connection attempt", "MQTT")
 
     def publish(
         self, topic: str, payload: bytes | str, *, retain: bool = False, qos: int = 0

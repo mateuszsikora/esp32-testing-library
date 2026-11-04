@@ -8,6 +8,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from ipaddress import IPv4Address
 
+from esp32tl.net.condition import Condition
 from esp32tl.units import Duration
 
 COOKIE = b"\x63\x82\x53\x63"
@@ -49,14 +50,21 @@ class Dhcp:
         self.leases: list[Lease] = []
 
     def leased(self) -> Callable[[], Lease | None]:
-        """A condition for `board.wait_until`: the next lease from now on."""
+        """Alias of `next_lease`."""
+        return self.next_lease()
+
+    def next_lease(self) -> Callable[[], Lease | None]:
+        """A non-consuming condition for the first lease appended after this call."""
         start = len(self.leases)
 
         def find() -> Lease | None:
             return self.leases[start] if len(self.leases) > start else None
 
-        find.description = "a DHCP lease"  # type: ignore[attr-defined]
-        return find
+        return Condition(find, "the next DHCP lease", "DHCP")
+
+    def find_lease(self) -> Lease | None:
+        """Return the first lease acknowledged so far, or None."""
+        return self.leases[0] if self.leases else None
 
     def on_message(self, data: bytes) -> tuple[bytes, bool] | None:
         """The answer to one message from a client, and whether it goes to the broadcast address

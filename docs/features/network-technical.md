@@ -83,6 +83,12 @@ the test made, stamped at its instant or at the turn's `now`, whichever is later
   `ethernet: dropped an IPv4 packet of <n> bytes: over the MTU`. A DHCP reply goes from
   `10.64.0.1:67` to `10.64.0.2:68`, or to `255.255.255.255` and `ff:ff:ff:ff:ff:ff` when `Dhcp`
   says broadcast, with its UDP and IPv4 checksums computed here.
+- `condition.py`: `Condition(find, description, service)`, the frozen object that the MQTT,
+  HTTP and DHCP condition factories return. Calling it calls `find`; `repr` is `description`,
+  which `board.wait_until` takes because the object has no `__qualname__`; `__bool__` raises
+  `TypeError("call the <service> condition with (), or pass it to board.wait_until")`, `service`
+  being `MQTT`, `HTTP` or `DHCP`. TLS keeps its own `_HandshakeCondition`, which behaves the same
+  way and computes its `repr` from its fields.
 - `dhcp.py`: a server for one device (RFC 2131, options of RFC 2132).
   `Dhcp(now, log, *, local="10.64.0.1", device="10.64.0.2", dns="10.64.0.1", mask="255.255.255.0")`,
   `LEASE_SECONDS = 86400`. `on_message` reads a BOOTREQUEST of at least 240 bytes with Ethernet
@@ -94,11 +100,14 @@ the test made, stamped at its instant or at the turn's `now`, whichever is later
   `yiaddr` `device` and `siaddr` `local`, and is padded to 300 bytes (RFC 1542). It is broadcast
   when the client set the broadcast flag and for a NAK (RFC 2131, 4.1). Each answer logs
   `dhcp: <type> from <mac> → <OFFER|ACK|NAK> 10.64.0.2`; each ACK appends a
-  `Lease(at, mac, address, hostname)` to `leases`, `hostname` from option 12. `leased()` returns a
-  condition for the first lease after the index it was created at.
+  `Lease(at, mac, address, hostname)` to `leases`, `hostname` from option 12. `next_lease()`
+  captures the length of `leases` at construction and returns a `Condition` reading the entry at
+  that index, named `the next DHCP lease`; `leased()` delegates to it. `find_lease()` reads the
+  first lease.
 - `http.py`: `HttpServer(now, log)`, a `StreamService` on TCP 80 of every network (RFC 9110,
   9112). `serve(path, body, *, status, content_type, headers)` stores a `Response` per path, after
-  checking that the path starts with `/`, the status is in `REASONS` and no header holds CR, LF
+  checking that the path starts with `/` and holds no `?`, since a request is looked up by its
+  path without the query, that the status is in `REASONS` and that no header holds CR, LF
   or, in its name, `:`. Each connection is an `_Exchange` that reads one request: the head up to
   `\r\n\r\n` (`MAX_HEAD`, 64 KiB, else 431), parsed by `_head` (else 400), `Transfer-Encoding`
   refused with 501, the distinct `Content-Length` values (more than one, or not all ASCII digits, 400; over
@@ -113,8 +122,13 @@ the test made, stamped at its instant or at the turn's `now`, whichever is later
   `NO_CONTENT`, 204 and 304, whose response ends with its head, RFC 9112 6.3), `Connection: close`,
   the test's headers and the body (not for `HEAD`; `serve` refuses one for 204 and 304), then
   closes; later data on the connection is
-  ignored. `requested(path, method=...)` returns a condition for the first matching request after
-  the index it was created at.
+  ignored. `next_request(path, method=...)` captures the length of `requests` at construction and
+  returns a `Condition` scanning from that index for an exact `path` and `method` match, named
+  `the next HTTP request`, then ` for '<path>'` and ` with method '<method>'` for the filters
+  given; `requested` delegates to it. `find_request` scans from index zero with the same filters.
+  Both refuse a `path` holding `?` with `ValueError`, through `_refuse_query`: `_path` strips the
+  query of origin-form and absolute-form targets, so such a filter would match nothing. A target
+  of no form `_path` knows, as `foo?bar`, keeps its `?` in `path`; only `requests` reaches it.
 - `ntp.py`: accepts NTP v3/v4 client requests; returns a v4 stratum-1 server response. The
   origin timestamp copies the client's transmit field. Reference, receive and transmit stamps
   use world UTC plus emulated time, including fractions and the 32-bit NTP era wrap.
@@ -152,9 +166,9 @@ the test made, stamped at its instant or at the turn's `now`, whichever is later
   `connection_attempt` captures `connection_attempts` the same way. Matching uses append order,
   not timestamps, and polling does not change the captured offset. `find_message` scans
   from index zero with the same topic/payload filters; `find_connection` reads the first CONNECT.
-  These are immediate queries returning records or `None`. `_Condition` wraps the MQTT
-  callables with useful `repr` output and rejects boolean coercion, including for the live
-  subscription query. Subscriptions continue to read active sessions, without latching matches.
+  These are immediate queries returning records or `None`. Every MQTT condition, the live
+  subscription query included, is a `Condition` of `condition.py` with service `MQTT`.
+  Subscriptions continue to read active sessions, without latching matches.
   Each accepted stream receives a broker-local increasing `connection_id`, independent of the
   client ID and listener. Every incoming PUBLISH records its packet ID and DUP bit; `_handle`
   rejects DUP on QoS 0 as malformed. QoS 1 receipts reference a public `Publication`; the
@@ -293,20 +307,26 @@ services.
 
 `tests/test_net_ethernet.py` builds Ethernet frames by hand, with independent checksums: DHCP
 DISCOVER/OFFER and REQUEST/ACK with router and DNS, a NAK for another address and silence for
-another server, `leased()`, ARP answered for every address but the device's, IPv4 reaching the
-services and other ethertypes logged once, nothing sent to a station that has sent nothing, and a
-SYN to port 80 through `Internet(link="ethernet")` answered with a SYN-ACK to the station's MAC one
-`LATENCY_NS` later. `tests/test_net_http.py` drives
-`HttpServer` connections without TCP: serving and keeping a request, a body by `Content-Length`,
-bytes, `HEAD` and absolute form, 404 and `requested`'s filters, the refused requests, what
-`serve` refuses, the path of each form of target (`/proxy/http://example.com/fw.bin` among them),
-and `204` and `304` ending with their head. `tests/test_wifi.py` checks the `Wifi` interface without the emulator: the
-runner's flags, the refusals, a backend that refuses the access point, and the `WifiAp` inputs at
-the instants of the switches. `tests/test_http_request.py` runs ESP-IDF's unmodified
-`http_request` in the runner: the fetch, a rejoin after `access_point_off()` and `access_point_on()`
-(with `Wi-Fi disconnected 3` printed), no access point, a wrong password that gets no lease, the
-report and properties, and `wifi` refused after power-on. Not covered: MQTT, NTP and TLS behind
-the access point; the layer tests cover them without a link or over PPP.
+another server, `next_lease()` and its `leased()` alias with append order at equal timestamps,
+non-consuming polls, `find_lease()`, the condition's name and its refusal of `bool()`, ARP
+answered for every address but the device's, IPv4 reaching the services and other ethertypes
+logged once, nothing sent to a station that has sent nothing, and a SYN to port 80 through
+`Internet(link="ethernet")` answered with a SYN-ACK to the station's MAC one `LATENCY_NS` later.
+`tests/test_net_http.py` drives `HttpServer` connections without TCP: serving and keeping a
+request, a body by `Content-Length`, bytes, `HEAD` and absolute form, 404 and `next_request`'s
+filters, `find_request`, `next_request` and its `requested` alias with append order at equal
+timestamps and non-consuming polls, each condition's name and its refusal of `bool()`, a filter
+holding a query refused while the query stays in `target`, `serve` refusing a path with a query,
+the refused requests, unseen by the conditions and queries, what `serve` refuses, the path of each form of target
+(`/proxy/http://example.com/fw.bin` among them), and `204` and `304` ending with their head.
+`tests/test_wifi.py` checks the `Wifi` interface without the emulator: the runner's flags, the
+refusals, a backend that refuses the access point, and the `WifiAp` inputs at the instants of the
+switches. `tests/test_http_request.py` runs ESP-IDF's unmodified `http_request` in the runner:
+the fetch, a rejoin after `access_point_off()` and `access_point_on()` (with
+`Wi-Fi disconnected 3` printed), a `board.wait_until` timeout and run report naming
+`the next HTTP request for '/'` and `the next DHCP lease`, no access point, a wrong password that
+gets no lease, the report and properties, and `wifi` refused after power-on. Not covered: MQTT,
+NTP and TLS behind the access point; the layer tests cover them without a link or over PPP.
 
 ## See also
 

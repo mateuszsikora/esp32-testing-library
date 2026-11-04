@@ -644,7 +644,7 @@ def test_joins_and_fetches_from_the_tests_server(board, wifi, console):
     network = wifi.access_point("myssid", password="mypassword")
     network.http.serve("/", "hello from the test\n")
     board.power_on()
-    request = board.wait_until(network.http.requested("/"), within=seconds(30))
+    request = board.wait_until(network.http.next_request("/"), within=seconds(30))
     assert request.header("Host") == "example.com:80"
 ```
 

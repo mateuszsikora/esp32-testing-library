@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from esp32tl.backends.esp32sim import Esp32Sim
+from esp32tl.interfaces import NeverHappened
 from esp32tl.interfaces.console import Console
 from esp32tl.interfaces.wifi import Wifi
 from esp32tl.units import seconds
@@ -23,7 +24,7 @@ def test_joins_and_fetches_from_the_tests_server(
     printed = console.line(r"^hello from the test$")
     done = console.line(r"done reading from socket\. Last read return=0")
     board.power_on()
-    request = board.wait_until(network.http.requested("/"), within=seconds(30))
+    request = board.wait_until(network.http.next_request("/"), within=seconds(30))
     assert (request.method, request.version) == ("GET", "HTTP/1.0")
     assert request.header("Host") == "example.com:80"
     board.wait_until(printed, within=seconds(5))
@@ -45,7 +46,7 @@ def test_rejoins_once_the_access_point_is_back(
     wifi.access_point_off()
     # the access point deauthenticates the station as it leaves: reason 3, leaving
     board.wait_until(console.line(r"Wi-Fi disconnected 3"), within=seconds(1))
-    rejoined = network.dhcp.leased()
+    rejoined = network.dhcp.next_lease()
     board.wait(seconds(2))
     assert rejoined() is None, "nothing to join while the access point is off"
     network.http.serve("/", "second\n")
@@ -66,7 +67,7 @@ def test_rejoins_an_access_point_switched_off_and_on_at_one_instant(
     board.power_on()
     board.wait_until(console.line(r"^first$"), within=seconds(30))
     disconnected = console.line(r"Wi-Fi disconnected 3")
-    rejoined = network.dhcp.leased()
+    rejoined = network.dhcp.next_lease()
     # the station still gets its deauthentication: the fresh one waits for the old one to leave
     wifi.access_point_off()
     wifi.access_point_on()
@@ -74,6 +75,22 @@ def test_rejoins_an_access_point_switched_off_and_on_at_one_instant(
     board.wait_until(disconnected, within=seconds(1))
     board.wait_until(rejoined, within=seconds(30))
     board.wait_until(console.line(r"^second$"), within=seconds(30))
+
+
+@pytest.mark.parametrize(
+    ("service", "expected"),
+    [("http", "the next HTTP request for '/'"), ("dhcp", "the next DHCP lease")],
+)
+def test_a_timeout_names_the_expected_request_or_lease(
+    board: Esp32Sim, wifi: Wifi, service: str, expected: str
+) -> None:
+    network = wifi.access_point(SSID, password=PASSWORD)
+    board.power_on()
+    condition = network.http.next_request("/") if service == "http" else network.dhcp.next_lease()
+    # the station joins at about 2.8 s: nothing is leased or requested in the first 0.1 s
+    with pytest.raises(NeverHappened, match=f"{expected} did not happen within"):
+        board.wait_until(condition, within=seconds(0.1))
+    assert f"waits up to 0.1 s for {expected}" in board.report(run=True)
 
 
 def test_without_an_access_point_the_station_finds_nothing_to_join(
@@ -100,7 +117,7 @@ def test_the_report_and_properties_carry_the_access_point_and_its_network(
     network = wifi.access_point(SSID, password=PASSWORD)
     wifi.nearby("cafe", channel=3, rssi=-70, secure=False)
     board.power_on()
-    board.wait_until(network.dhcp.leased(), within=seconds(30))
+    board.wait_until(network.dhcp.next_lease(), within=seconds(30))
     report = board.report()
     assert "wifi: access point 'myssid', channel 6, WPA2-PSK" in report
     assert "  around: 'cafe', channel 3, -70 dBm, open" in report
@@ -136,7 +153,7 @@ def test_joins_again_after_a_reset_or_a_power_cycle(
     network.http.serve("/", "first\n")
     board.power_on()
     board.wait_until(console.line(r"^first$"), within=seconds(30))
-    rejoined = network.dhcp.leased()
+    rejoined = network.dhcp.next_lease()
     network.http.serve("/", "second\n")
     if how == "reset":
         board.reset()

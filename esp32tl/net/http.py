@@ -6,6 +6,7 @@ time, for the test to look at.
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
+from esp32tl.net.condition import Condition
 from esp32tl.units import Duration
 
 # The statuses whose response ends with its head (RFC 9112 6.3): no body, and no Content-Length.
@@ -90,6 +91,11 @@ class HttpServer:
         and is sent without `Content-Type` and `Content-Length`."""
         if not path.startswith("/"):
             raise ValueError(f"http.serve: {path!r} is not a path, which starts with /")
+        if "?" in path:
+            raise ValueError(
+                f"http.serve: {path!r} holds a query, which a path does not:"
+                " serving the path answers it whatever the query"
+            )
         if status not in REASONS:
             raise ValueError(f"http.serve: status {status} is not one of {sorted(REASONS)}")
         if status in NO_CONTENT and body:
@@ -106,22 +112,37 @@ class HttpServer:
     def requested(
         self, path: str | None = None, *, method: str | None = None
     ) -> Callable[[], Request | None]:
-        """A condition for `board.wait_until`: the first request from now on, for `path` and
-        with `method` when given."""
+        """Alias of `next_request`."""
+        return self.next_request(path, method=method)
+
+    def next_request(
+        self, path: str | None = None, *, method: str | None = None
+    ) -> Callable[[], Request | None]:
+        """A non-consuming condition for the first request, for `path` and with `method` when
+        given, appended after this call. The boundary is append order, even at equal
+        timestamps. Polling never advances that boundary. A refused request is not recorded,
+        so it satisfies no condition."""
+        _refuse_query(path, "next_request")
         start = len(self.requests)
-
-        def find() -> Request | None:
-            for request in self.requests[start:]:
-                if (path is None or request.path == path) and (
-                    method is None or request.method == method
-                ):
-                    return request
-            return None
-
-        find.description = "an HTTP request" + (  # type: ignore[attr-defined]
-            f" for {path!r}" if path is not None else ""
+        description = (
+            "the next HTTP request"
+            + (f" for {path!r}" if path is not None else "")
+            + (f" with method {method!r}" if method is not None else "")
         )
-        return find
+        return Condition(lambda: self._find_request(path, method, start), description, "HTTP")
+
+    def find_request(self, path: str | None = None, *, method: str | None = None) -> Request | None:
+        """Return the first match among the requests recorded so far, or None; consume nothing."""
+        _refuse_query(path, "find_request")
+        return self._find_request(path, method, 0)
+
+    def _find_request(self, path: str | None, method: str | None, start: int) -> Request | None:
+        for request in self.requests[start:]:
+            if (path is None or request.path == path) and (
+                method is None or request.method == method
+            ):
+                return request
+        return None
 
     def accept(
         self, peer: tuple[str, int], write: Callable[[bytes], None], close: Callable[[], None]
@@ -217,6 +238,16 @@ class _Exchange:
 
     def on_close(self) -> None:
         self._done = True
+
+
+def _refuse_query(path: str | None, what: str) -> None:
+    """A filter is compared with a request's path, which has no query: one with `?` would match
+    nothing, and `find_request(...) is None` would pass for a request the firmware did send."""
+    if path is not None and "?" in path:
+        raise ValueError(
+            f"http.{what}: {path!r} holds a query, which a path does not: filter by the path"
+            " and read the request's target"
+        )
 
 
 def _path(target: str) -> str:
