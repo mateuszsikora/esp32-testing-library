@@ -95,11 +95,15 @@ to the simulated network behind the access point, on the test's clock, and that 
 back ([network](network-user.md)). Without an access point the runner gets neither flag and the
 station finds nothing to join.
 
+A test that gives a route a [real source](real-source-user.md), as `gnss.real(port)` does, puts the
+whole run on the wall clock: the runner starts with `--realtime`, every recording says `clock: wall`,
+and the board's time costs its own length in wall time. The test still holds the clock, as above.
+
 ## Console recordings
 
 `console.tap(path)` captures link console messages with their emulated times and writes them at
-teardown as `interface: console`, `source: none`, with the app hash and runner revision, just as
-UART taps do. It shares their file collision checks and no-power-on guard.
+teardown as `interface: console`, `source: none`, with the app hash and runner revision, on the run's
+clock, just as UART taps do. It shares their file collision checks and no-power-on guard.
 
 The `console.tap(...)` call appears in the run log. A tapped console also gets
 `console: <n> bytes out; tapped into <path>` in the report and a `console` object containing
@@ -219,6 +223,8 @@ but the run, is in the test's `esp32sim_link` user property, a JSON string with 
 `<property>`; `wifi` is `null` without an access point, and `sd_card`, without a slot, else the
 card's `image` and its `faults`. With a slot the report also names the card and lists each fault
 rule the test gave with what it did.
+With a [real source](real-source-user.md#what-the-report-says), the statistics have a line for the
+lags the run skipped, and the route's line and entry its port and the bytes it dropped.
 
 ## When the backend cannot start
 

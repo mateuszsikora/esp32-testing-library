@@ -40,7 +40,8 @@ def test_reports_a_fix(board, gnss, console, tmp_path):
 
 `console.tap(path)` records firmware console output on both backends, from `board.power_on()`
 through teardown. It has the same path, duplicate and file collision checks as UART taps. On
-esp32sim it writes `interface: console`, `source: none` and `clock: emulated-fifo-write`. On
+esp32sim it writes `interface: console`, `source: none` and `clock: emulated-fifo-write`, or
+`clock: wall` in a run with a [real source](real-source-user.md). On
 serial it writes `interface: console`, `source: real` and `clock: wall`, stamping batches
 after the serial reader polls, with up to 10 ms polling delay plus USB, driver and host
 scheduling delays. Every event is `out`; setup and flash-tool messages are excluded. Serial
@@ -58,10 +59,10 @@ A recording, [version 1](../recording-format.md):
 ```
 
 - `source` is what was at the far end: `replay`, `model:modem` for the modem, `model:gnss` for the
-  GNSS receiver the test described ([models and units](models-user.md)), or `none` for a route
-  the test gave nothing.
-- `clock` is the backend's, `emulated-fifo-write`: times are the board's nanoseconds since
-  power-on.
+  GNSS receiver the test described ([models and units](models-user.md)), `real` for a
+  [device on a host serial port](real-source-user.md), or `none` for a route the test gave nothing.
+- `clock` is the backend's, `emulated-fifo-write`, or `wall` in a run with a real source: times are
+  the board's nanoseconds since power-on.
 - `app_sha256` is the SHA-256 of the app image the run flashed, the file `flasher_args.json`
   names under `app`; `tools` the esp32tl version and the esp32sim revision the runner reported;
   `created` when the file was written, in UTC.

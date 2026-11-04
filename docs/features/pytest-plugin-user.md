@@ -341,6 +341,8 @@ the adapter, and `board.power_off()` and `board.boots` skip the test.
   receiver, and must come before `board.power_on()`; every later one changes it from the board's
   current instant ([models and units](models-user.md#the-gnss-receiver)). Reading
   `gnss.position` makes no receiver.
+- `gnss.real(port)` puts a device on a host serial port there, and the whole run on the wall clock
+  ([real source](real-source-user.md)). Only on `esp32sim`: `serial` skips the test at the call.
 - One source per test: a model call after `gnss.replay`, or a replay after a model call, raises
   `SourceError`.
 - `gnss.tap(path)` records what crosses the route from power-on, both ways, and writes it to
@@ -785,8 +787,8 @@ clock; the wall-time timeout says only that something is stuck.
 
 `console.tap(path)` before `board.power_on()` records the console on either backend. It returns
 a `Tap` and writes at teardown, with paths relative to the test file, one tap per console, and the
-same file collision checks as `gnss.tap`. Its clock is `emulated-fifo-write` on esp32sim and
-`wall` on serial, stamped after reader polls with polling, USB, driver and scheduling delays.
+same file collision checks as `gnss.tap`. Its clock is `emulated-fifo-write` on esp32sim, `wall` in
+a run with a [real source](real-source-user.md), and `wall` on serial, stamped after reader polls with polling, USB, driver and scheduling delays.
 See [taps](run-report-user.md).
 
 ## Backends and test ids

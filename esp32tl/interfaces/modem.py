@@ -25,7 +25,7 @@ class Modem(Uart):
         name: str,
         wire: Wire,
         *,
-        clock: str,
+        clock: str | Callable[[], str],
         directory: Path,
         now: Callable[[], int],
         lines: Lines,

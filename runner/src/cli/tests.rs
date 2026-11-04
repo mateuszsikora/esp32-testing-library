@@ -22,6 +22,7 @@ fn minimal_command_line() {
             peer_timeout: Some(Duration::from_secs(60)),
             sd_card: None,
             wifi: None,
+            realtime: false,
         }
     );
 }
@@ -243,4 +244,30 @@ fn wifi_refuses_what_esp32sim_refuses_and_what_needs_another_flag() {
             other => panic!("{args}: {other:?}"),
         }
     }
+}
+
+#[test]
+fn realtime_needs_a_board() {
+    let args = |extra: &[&str]| {
+        [
+            "--chip",
+            "esp32",
+            "--max-seconds",
+            "3",
+            "--flash-at",
+            "0x1000=b.bin",
+        ]
+        .iter()
+        .chain(extra)
+        .map(|s| s.to_string())
+        .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        parse(args(&["--realtime"])),
+        Err(Error::Usage(
+            "--realtime paces a run for the peer's real device: it needs --board".into()
+        ))
+    );
+    let opts = parse(args(&["--realtime", "--board", "socket:/tmp/b"])).unwrap();
+    assert!(opts.realtime);
 }

@@ -224,8 +224,9 @@ def test_reports_a_fix(board, gnss, console, tmp_path):
   `gnss.fix(at=...)` or another call of the receiver model a `model`
   ([models and units](models-user.md#the-gnss-receiver)), `sd_card.insert(image)` a `model`,
   the runner's card holding the image, and `wifi.access_point(...)` or `wifi.nearby(...)` a
-  `model`, esp32sim's access point with the simulated network behind it; `real` gets its call
-  later.
+  `model`, esp32sim's access point with the simulated network behind it. `gnss.real(port)` asks for
+  a `real` source, a device on a host serial port, which on `serial` skips all the same: the `real`
+  declared there is the device wired to the board ([real source](real-source-user.md)).
 - A tap is the call that asks for it: `gnss.tap(path)` taps `uart.gnss`
   ([taps and the run report](run-report-user.md)); `console.tap(path)` records the console on
   both backends, in addition to `dut.log` and the run report. Nothing taps the SD card slot:

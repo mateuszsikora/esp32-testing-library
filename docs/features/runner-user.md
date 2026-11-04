@@ -67,6 +67,8 @@ usage: esp32tl-runner --chip esp32 --flash-at OFFSET=FILE... --max-seconds S [op
   --wifi-nearby ssid=…,chan=…,rssi=…,secure=0|1,bssid=…   a network around the
                         station that a scan lists and nothing can join; repeatable,
                         needs --wifi
+  --realtime            pace the run to wall time, for a real device at the peer's end
+                        of a route (docs/protocol.md, section 12): needs --board
 ```
 
 | Flag | Default | Accepts |
@@ -84,6 +86,7 @@ usage: esp32tl-runner --chip esp32 --flash-at OFFSET=FILE... --max-seconds S [op
 | `--sd-spi sclk=N,mosi=N,miso=N,cs=N` | none: no slot | the four pins in any order, each once, four different GPIOs of the ESP32 (0 to 39 but 24 and 28 to 31); `sclk`, `mosi` and `cs` not input-only (34 to 39) |
 | `--wifi SPEC` | none: no access point | esp32sim's `key=value,...`, every key optional, an empty `SPEC` included: `ssid` (default `esp32sim`), `psk` (also `password` or `pass`; WPA2-PSK with it, open without), `chan` (also `channel` or `ch`; 1 to 14, default 6), `bssid` (default `02:53:49:4d:00:01`). `epoch` is refused. Only with `--board` |
 | `--wifi-nearby SPEC` | none | esp32sim's `key=value,...`: `ssid` (1 to 32 bytes, required), `chan` (1 to 14, default 1), `rssi` in dBm (-128 to 127, default -60), `secure` (`0` or `1`, also `false`/`true` or `no`/`yes`; default `1`), `bssid` (default: one derived from the SSID, the same every run). Repeatable, at most 32, each on a BSSID of its own and not the access point's SSID or BSSID. Only with `--wifi` |
+| `--realtime` | off: the guest runs as fast as it can | Paces the run to wall time. Only with `--board`: `--realtime paces a run for the peer's real device: it needs --board` |
 
 A flag given twice keeps its last value, except `--flash-at` and `--wifi-nearby`, which add one
 each time. Flags
@@ -124,6 +127,14 @@ run's time does not restart. While the supply is off the guest runs nothing, and
 still passes from one turn of the peer to the next. The flash is the runner's copy of the
 `--flash-at` files: the files are read once, at the start, and never written.
 [The protocol](../protocol.md#517-power-ext-105) says what a power cycle keeps and what it clears.
+
+With `--realtime` the run follows wall time, for a peer with a real device at the far end of a
+route: its `hello` says `clock: wall`, it waits for wall time at each block point before the peer's
+turn, and its `stats` carries `rt_resyncs`, the lags it skipped. The times on the socket stay emulated
+nanoseconds, and the run does not repeat, whatever the peer does.
+[The protocol](../protocol.md#12-wall-time---realtime-and-the-real-source-m5) has the rules; the
+`esp32sim` backend passes the flag when a test gives a route a
+[real source](real-source-user.md).
 
 `--peer-timeout` bounds, in wall time, how long the runner waits for the peer's turn to end and
 how long a write to the socket may make no progress because the peer does not read; for `tcp:` it

@@ -10,6 +10,8 @@ pub const VERSION: i64 = 1;
 pub const CHIP: &str = "esp32";
 /// What the times of `uart_tx` mean (protocol 5.1): emulated time, at the FIFO write.
 pub const CLOCK: &str = "emulated-fifo-write";
+/// The same times under `--realtime`, paced to wall time (protocol 12.1).
+pub const WALL: &str = "wall";
 /// The esp32sim revision of the `[dependencies]` in Cargo.toml, for the recording header's
 /// `tools`. A test checks that the two agree.
 pub const ESP32SIM: &str = "8c652151dd5a521249a785ca147f20a9f8eda68f";
@@ -424,9 +426,9 @@ fn escape(s: &str) -> String {
     esp_soc::web::json_escape(s)
 }
 
-pub fn hello() -> String {
+pub fn hello(clock: &str) -> String {
     format!(
-        r#"{{"type":"hello","version":{VERSION},"chip":"{CHIP}","clock":"{CLOCK}","esp32sim":"{ESP32SIM}"}}"#
+        r#"{{"type":"hello","version":{VERSION},"chip":"{CHIP}","clock":"{clock}","esp32sim":"{ESP32SIM}"}}"#
     )
 }
 
@@ -623,6 +625,8 @@ pub struct Stats {
     pub rx_bytes_not_paced: u64,
     /// With `--wifi` only.
     pub wifi: Option<WifiStats>,
+    /// With `--realtime` only: how many times esp32sim skipped a lag behind wall time.
+    pub rt_resyncs: Option<u64>,
 }
 
 /// `end` and its extra fields: `stop` and `detail` for `emulator`, `detail` for `protocol_error`.
@@ -658,6 +662,9 @@ pub fn stats(t: u64, end: &str, extra: &[(&str, &str)], s: &Stats) -> String {
             r#","wifi":{{"eth_tx":{},"eth_tx_dropped":{},"eth_rx":{},"eth_rx_dropped":{},"rx_dropped":{}}}"#,
             w.eth_tx, w.eth_tx_dropped, w.eth_rx, w.eth_rx_dropped, w.rx_dropped
         );
+    }
+    if let Some(resyncs) = s.rt_resyncs {
+        let _ = write!(out, r#","rt_resyncs":{resyncs}"#);
     }
     out.push('}');
     out

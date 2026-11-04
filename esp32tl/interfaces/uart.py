@@ -14,13 +14,14 @@ from esp32tl.interfaces import SourceError
 from esp32tl.link.boardlink import Direction, Interface, Output, Wire
 from esp32tl.matching import Protocol as ReplayProtocol
 from esp32tl.report import RunLog
+from esp32tl.sources.real import Real
 from esp32tl.sources.replay import Replay
 from esp32tl.tap import NO_SOURCE, Tap
 
 
 class Source(Protocol):
-    """What drives a UART from its far end: a replay now, a model or a real device later. The
-    methods are those of the link's `Interface`, without the wire."""
+    """What drives a UART from its far end: a replay, a model or a real device. The methods are
+    those of the link's `Interface`, without the wire."""
 
     def receive(self, t: int, data: bytes) -> Iterable[Output]: ...
 
@@ -41,20 +42,31 @@ class Supplied(Protocol):
         ...
 
 
+@runtime_checkable
+class RateBound(Protocol):
+    """A source that cannot take what the firmware transmits at any rate: a real device, behind a
+    port whose rate is fixed for the run."""
+
+    def transmitted(self, t: int, baud: int | None) -> None:
+        """The firmware transmits at `baud` next, `None` with none set. Raises to fail the run."""
+        ...
+
+
 class Uart(Interface):
     """The interface `name` (`uart.gnss`) on `wire`, whose source the test gives in its body.
 
-    What the test does with it decides what is at the far end: `replay(path)` a recording. Until
-    then the UART hears everything and says nothing. `tap(path)` records what crosses it, both
-    ways, whatever is at the far end. `clock` is the backend's: a recording on another one is
-    refused. A relative path is taken from `directory`, the test file's. `asked` is called with
-    the request, a source (`replay`) or a tap on this interface, before the source or the tap is
-    made, and refuses it by raising: the backend's checks, that the board is still off and that a
-    backend gives it. `log`, when given, gets every byte that crosses the wire, and the test's
-    steps on the UART, at 0: they come before power-on. `files` holds the files the run reads and
-    writes, by path, with what each is for, the kind (`replay`, `tap`) and the route. The backend
-    gives its UARTs one mapping, so that a tap never writes over a recording a replay read, or
-    over another route's tap.
+    What the test does with it decides what is at the far end: `replay(path)` a recording,
+    `real(port)` a device on a host serial port. Until then the UART hears everything and says
+    nothing. `tap(path)` records what crosses it, both ways, whatever is at the far end. `clock` is
+    the backend's, or how to ask it, for one that depends on the sources given: a recording on
+    another one is refused. A relative path is taken from `directory`, the test file's. `asked` is
+    called with the request, a source (`replay`, `real`) or a tap on this interface, before the
+    source or the tap is made, and refuses it by raising: the backend's checks, that the board is
+    still off and that a backend gives it. `log`, when given, gets every byte that crosses the wire,
+    and the test's steps on the UART, at 0: they come before power-on. `files` holds the files the
+    run reads and writes, by path, with what each is for, the kind (`replay`, `tap`) and the route.
+    The backend gives its UARTs one mapping, so that a tap never writes over a recording a replay
+    read, or over another route's tap.
     """
 
     def __init__(
@@ -62,14 +74,14 @@ class Uart(Interface):
         name: str,
         wire: Wire,
         *,
-        clock: str,
+        clock: str | Callable[[], str],
         directory: Path,
         asked: Callable[[Request], None] = lambda request: None,
         log: RunLog | None = None,
         files: dict[Path, tuple[str, str]] | None = None,
     ) -> None:
         super().__init__(name, wire)
-        self.clock = clock
+        self._clock = clock
         self.directory = directory
         self.asked = asked
         self.log = log
@@ -81,6 +93,11 @@ class Uart(Interface):
         self.tapped: Tap | None = None
         self.files = {} if files is None else files
         self._giving = threading.Lock()
+
+    @property
+    def clock(self) -> str:
+        """The clock this route's recordings are on."""
+        return self._clock() if callable(self._clock) else self._clock
 
     def replay(
         self, path: str | os.PathLike[str], *, protocol: ReplayProtocol | None = None
@@ -98,6 +115,20 @@ class Uart(Interface):
         )
         self._give(replay, "replay", str(path), file)
         return replay
+
+    def real(self, port: str) -> Real:
+        """Puts the device on the host serial port `port` at the far end, at the route's baud.
+        The whole run is then on the wall clock (protocol §12.4). Returns the `Real`, whose
+        `dropped` counts the bytes the run could not carry."""
+        self._ask("real")
+        assert self.wire is not None
+        source = Real(self.name, port, self.wire.baud)
+        try:
+            self._give(source, "real", port)
+        except SourceError:
+            source.close()
+            raise
+        return source
 
     def tap(self, path: str | os.PathLike[str]) -> Tap:
         """Records what crosses the UART from power-on, both ways, and writes it to `path`,
@@ -124,7 +155,7 @@ class Uart(Interface):
 
     def recorded_source(self) -> str:
         """What a tap's recording says was at the far end (`docs/recording-format.md`): the
-        kind of source, `replay`, or `none` for nothing."""
+        kind of source, `replay` or `real`, or `none` for nothing."""
         return self.source_kind or NO_SOURCE
 
     def _ask(self, source: str) -> None:
@@ -172,6 +203,16 @@ class Uart(Interface):
         if self.source is None:
             return ()
         return self._sent(self.source.receive(t, data))
+
+    def transmitted(self, t: int, baud: int | None, data: bytes) -> None:
+        """A source that refuses the rate fails the run; the bytes that did it still crossed the
+        guest's wire, for the tap and the run's log."""
+        if isinstance(self.source, RateBound):
+            try:
+                self.source.transmitted(t, baud)
+            except Exception:
+                self._crossed(t, "out", data)
+                raise
 
     def poll(self, now: int) -> Iterable[Output]:
         return () if self.source is None else self._sent(self.source.poll(now))

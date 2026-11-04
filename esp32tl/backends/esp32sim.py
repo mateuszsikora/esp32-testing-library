@@ -33,6 +33,10 @@ also while it is off; `boots` are the chip's boots, from the link's `reset` mess
 
 What the test does on the board, what the firmware prints and the bytes on every route go into a
 `RunLog` (`esp32tl.report`), which the report of a test that failed shows after the link's.
+
+A route with a real source, `gnss.real(port)`, puts the whole run on the wall clock (protocol
+§12.4): the runner starts with `--realtime`, its `hello` says `wall`, and every recording of the run
+says so too. The run stays on the test's clock.
 """
 
 import contextlib
@@ -70,6 +74,7 @@ from esp32tl.link.boardlink import BoardLink, Wire
 from esp32tl.link.protocol import ChipReset, Power, Reset
 from esp32tl.net import Internet
 from esp32tl.report import RunLog, board_time, shown
+from esp32tl.sources.real import Real
 from esp32tl.sources.replay import Replay
 from esp32tl.tap import Tap, app_image_sha256
 from esp32tl.units import Duration
@@ -166,6 +171,7 @@ def runner_command(
     sd_card: SdCard | None = None,
     extra_flash: tuple[tuple[int, Path], ...] = (),
     wifi: Wifi | None = None,
+    realtime: bool = False,
 ) -> list[str]:
     """The runner's command line: every file of `flasher_args.json` at its offset, its board the
     socket at `link`. A `held` run is on the test's clock: its console also goes on the link, and
@@ -174,7 +180,8 @@ def runner_command(
     the runner's default. An `sd_card` puts the runner's card slot on its pins, and a card
     holding its image in it when the test has inserted one. `extra_flash` overrides the build's
     flash contents at the supplied offsets, in order. A `wifi` with an access point puts it, and
-    the networks around, on the runner's air, with the network behind it on the link."""
+    the networks around, on the runner's air, with the network behind it on the link. A `realtime`
+    run is paced to wall time, for a real device at the far end of a route."""
     command = [str(runner), "--chip", "esp32", "--rom", str(rom), "--max-seconds", str(max_seconds)]
     if held:
         command += ["--console", "both", "--peer-timeout", "0"]
@@ -192,6 +199,8 @@ def runner_command(
             command += ["--sd-rw", str(sd_card.image_path)]
     if wifi is not None:
         command += wifi.runner_args()
+    if realtime:
+        command.append("--realtime")
     return command
 
 
@@ -281,8 +290,6 @@ class Esp32Sim(Board):
     name = "esp32sim"
     report_section = "esp32sim link"
     report_property = "esp32sim_link"
-    # The clock the run's times are on, which the runner's `hello` must name (protocol 5.1).
-    clock = recording.EMULATED
 
     def __init__(
         self,
@@ -321,7 +328,7 @@ class Esp32Sim(Board):
             "console",
             Wire(1, 3, 115200),
             log=self.log,
-            clock=self.clock,
+            clock=self._run_clock,
             directory=self.directory,
             asked=self._asked,
             files=self._files,
@@ -355,7 +362,7 @@ class Esp32Sim(Board):
             on_error=self._end_run,
             hold=self._hold,
             console=self._printed,
-            clock=self.clock,
+            clock=self._run_clock,
             on_reset=self._reset,
         )
         self.process: RunnerPopen | None = None
@@ -372,7 +379,7 @@ class Esp32Sim(Board):
             return Gnss(
                 interface,
                 wire,
-                clock=self.clock,
+                clock=self._run_clock,
                 directory=self.directory,
                 now=lambda: self._hold.now,
                 world=lambda: self._utc,
@@ -384,7 +391,7 @@ class Esp32Sim(Board):
             return Modem(
                 interface,
                 wire,
-                clock=self.clock,
+                clock=self._run_clock,
                 directory=self.directory,
                 now=lambda: self._hold.now,
                 lines=self._lines,
@@ -397,7 +404,7 @@ class Esp32Sim(Board):
         return Uart(
             interface,
             wire,
-            clock=self.clock,
+            clock=self._run_clock,
             directory=self.directory,
             asked=self._asked,
             log=self.log,
@@ -470,6 +477,22 @@ class Esp32Sim(Board):
         reason = capabilities.refusal(self.name, [request], declared)
         if reason is not None:
             self._skip(f"{self.name}: {reason}")
+        if request.source == "real":
+            self._refuse_replays(request.interface)
+
+    def _refuse_replays(self, interface: str) -> None:
+        """A real source on `interface` would put the whole run on the wall clock, and a replay
+        given before it read a recording on the emulated clock, whose times would no longer mean
+        what they say. A replay given once the run is on the wall clock read one on that clock."""
+        if self.clock == recording.WALL:
+            return
+        for name, uart in self._uarts.items():
+            if isinstance(uart.source, Replay):
+                raise SourceError(
+                    f"{interface}: a real source puts the run on the {recording.WALL} clock, and"
+                    f" {name} replays a recording on the {self.clock} clock: replaying it would"
+                    " compare times across clocks"
+                )
 
     def nvs(self, namespaces: flash.Namespaces, partition: str = "nvs") -> None:
         """Replace a named NVS partition with the test's values before power-on."""
@@ -508,7 +531,7 @@ class Esp32Sim(Board):
         modem.ri`, `a card in sd_card`, and `the NVS partition 'nvs'`."""
         driven = dict.fromkeys(e.name for e in self._lines.events() if e.by == "test")
         set_up = [
-            f"the {kind} of {name}"
+            f"the {'real device' if kind == 'real' else kind} of {name}"
             for name, uart in self._uarts.items()
             for kind, given in ((uart.source_kind, uart.source), ("tap", uart.tapped))
             if given is not None
@@ -522,6 +545,18 @@ class Esp32Sim(Board):
 
         set_up += [f"the NVS partition {name!r}" for name in self._nvs]
         return set_up
+
+    @property
+    def clock(self) -> str:
+        """The clock the run's times are on, which the runner's `hello` must name (protocol 5.1):
+        the wall clock with a real source on any route, for the whole run (protocol 12.4), else
+        the emulated clock."""
+        real = any(uart.source_kind == "real" for uart in self._uarts.values())
+        return recording.WALL if real else recording.EMULATED
+
+    def _run_clock(self) -> str:
+        """`clock`, for the routes and the link to ask when a recording or the runner comes."""
+        return self.clock
 
     @property
     def powered(self) -> bool:
@@ -581,6 +616,7 @@ class Esp32Sim(Board):
             sd_card=self._sd_card,
             extra_flash=tuple(self._nvs.values()),
             wifi=self._wifi,
+            realtime=self.clock == recording.WALL,
         )
         try:
             process = RunnerPopen(self._msg_queue, command, self._meta)
@@ -752,11 +788,33 @@ class Esp32Sim(Board):
         )
 
     def close(self) -> None:
+        """Ends the run, then lets go of what the test gave the board. What could not be let go
+        fails the test, unless the end of the run has already said why it fails."""
         try:
             self._close()
         finally:
-            if self._sd_card is not None:
-                self._sd_card.close()
+            problems = self._release()
+        if problems:
+            raise BackendError("; ".join(problems))
+
+    def _release(self) -> list[str]:
+        """Closes the SD card and every real source's port, each whatever another one raises: a
+        port left open holds its thread, and its lock against the next test. Returns what raised."""
+        closing = [("sd_card", self._sd_card.close)] if self._sd_card is not None else []
+        closing += [
+            (uart.name, uart.source.close)
+            for uart in self._uarts.values()
+            if isinstance(uart.source, Real)
+        ]
+        problems = []
+        for name, close in closing:
+            try:
+                close()
+            except SourceError as error:
+                problems.append(str(error))
+            except Exception as error:
+                problems.append(f"{name} cannot be closed: {error}")
+        return problems
 
     def _close(self) -> None:
         """Ends the run (protocol §9): `stop` at the turn the test left it at, on which the
@@ -863,6 +921,9 @@ class Esp32Sim(Board):
             crossed = (
                 f"{traffic.bytes_in} bytes in, {traffic.bytes_out} out" if traffic else "no bytes"
             )
+            if isinstance(uart.source, Real):
+                source = f"the real device on {uart.source.port}"
+                crossed += f", {uart.source.dropped} dropped"
             tap = f"; tapped into {uart.tapped.path}" if uart.tapped is not None else ""
             lines.append(f"  {name}: {source}; {crossed}{tap}")
             if isinstance(uart.source, Replay) and uart.source.unseen_count:
@@ -922,6 +983,8 @@ class Esp32Sim(Board):
                 "bytes_out": traffic.bytes_out if traffic else 0,
                 "tap": None if uart.tapped is None else str(uart.tapped.path),
             }
+            if isinstance(uart.source, Real):
+                routes[name]["dropped"] = uart.source.dropped
             if isinstance(uart, Modem) and uart.source_kind == "model":
                 routes[name]["commands"] = [
                     {

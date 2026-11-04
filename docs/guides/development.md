@@ -80,6 +80,7 @@ version-only bump needs no document ([documentation.md](documentation.md#the-che
 | `pytest-embedded-idf[serial]` | `IdfApp`, which reads a build's `flasher_args.json`. pytest-embedded declares no extras, so each service is a package of its own; the `serial` extra pulls `pytest-embedded-serial-esp` and, through it, `pytest-embedded-serial` | Compatible release (`~=`), the same as `pytest-embedded` |
 | `pytest-timeout` | The wall-time timeout the plugin gives every test that uses `board`, which ends a run that hangs ([the test's timeout](../features/pytest-plugin-user.md#the-tests-timeout)); the plugin reads its settings through `pytest_timeout.get_env_settings` | Lower bound |
 | `esp-idf-nvs-partition-gen` | Encodes NVS entries for `board.nvs()` through its Python API, without the CLI's interpretation of Wi-Fi keys ([flash contents](../features/flash-contents-user.md)) | Exact (`==`): API changes require checking entry contents and deterministic output |
+| `pyserial` | The host serial port of a [real source](../features/real-source-technical.md); it comes through `pytest-embedded-serial` too, which also chooses its version | Lower bound |
 | `bumble` | The Bluetooth stack of the peers in `esp32tl/bluetooth/`: their devices, and the virtual controller that `esp32tl/bluetooth/controller.py` extends ([bluetooth-peer-technical.md](../features/bluetooth-peer-technical.md)) | Exact (`==`): at 0.0.x any release may change the controller's internals that esp32tl overrides |
 
 The `dev` extra, which `make setup` installs, adds the tools:
@@ -88,6 +89,7 @@ The `dev` extra, which `make setup` installs, adds the tools:
 |---|---|---|
 | `ruff`, `mypy` | `make lint` and the hooks | Exact (`==`), so every worktree and CI lint alike |
 | `types-pexpect` | pexpect's annotations, for mypy | Exact |
+| `types-pyserial` | pyserial's annotations, for mypy | Exact |
 | `pre-commit` | `make hooks` | Lower bound |
 | `esptool` | Imported by the tests | Unpinned: `pytest-embedded-idf[serial]` brings it and chooses its version |
 

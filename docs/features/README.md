@@ -17,6 +17,7 @@ templates.
 | Link protocol between the runner and the harness: the runner's `--board` and the backend's `BoardLink` | | [protocol](../protocol.md) | `esp32tl/link/`, `runner/src/protocol.rs`, `runner/src/socket_board.rs` |
 | Recording format: the `.jsonl` files a replay reads | | [format](../recording-format.md) | `esp32tl/recording.py` |
 | Replay: a recording at the far end of an interface, `gnss.replay(path)` | [user](replay-user.md) | [technical](replay-technical.md) | `esp32tl/sources/replay.py` |
+| Real source: a device on a host serial port at the far end of an emulated route, `gnss.real(port)` | [user](real-source-user.md) | [technical](real-source-technical.md) | `esp32tl/sources/real.py` |
 | Matching engine: AT, PMTK and UBX requests, recorded answers and timing | [user](matching-user.md) | [technical](matching-technical.md) | `esp32tl/matching.py` |
 | Taps and the run report: `gnss.tap(path)`, the run on the board's clock in a failing test's report | [user](run-report-user.md) | [technical](run-report-technical.md) | `esp32tl/tap.py`, `esp32tl/report.py` |
 | Models and units: the GNSS receiver a test describes, `gnss.fix(at=...)`, and quantities with their unit | [user](models-user.md) | [technical](models-technical.md) | `esp32tl/units.py`, `esp32tl/sources/model/` except `modem.py` |
@@ -52,7 +53,7 @@ GitHub Action, a pre-commit hook or a Python dependency.
 | F9 | `^runner/src/protocol\.rs$` | `^docs/protocol\.md$` | Link protocol changed in runner/src/protocol.rs: update docs/protocol.md, and its version if the wire changes |
 | F10 | `^runner/src/socket_board\.rs$` | `^docs/protocol\.md$` | Link protocol changed in runner/src/socket_board.rs: update docs/protocol.md, and its version if the wire changes |
 | F11 | `^firmware/` | `^docs/features/validation-firmware-` | Validation firmware or its build changed: update docs/features/validation-firmware-*.md |
-| F12 | `^esp32tl/`, without the paths of F1 to F11, F13 to F23 and `esp32tl/py.typed` | `^docs/features/[a-z0-9-]+\.md$`, a new file only | This path has no owning doc yet: add its feature docs, a new docs/features/<feature>-user.md or -technical.md, and add it to the ownership map (scripts/check-docs.py, docs/features/README.md, AGENTS.md) |
+| F12 | `^esp32tl/`, without the paths of F1 to F11, F13 to F23, F25 and `esp32tl/py.typed` | `^docs/features/[a-z0-9-]+\.md$`, a new file only | This path has no owning doc yet: add its feature docs, a new docs/features/<feature>-user.md or -technical.md, and add it to the ownership map (scripts/check-docs.py, docs/features/README.md, AGENTS.md) |
 | F13 | `^esp32tl/boards/` | `^docs/features/board-profiles-` | Board profiles or the capability declaration changed (schema, pins, sources, taps): update docs/features/board-profiles-*.md |
 | F14 | `^esp32tl/recording\.py$` | `^docs/recording-format\.md$` | Recording format changed: docs/recording-format.md is its specification; update it, and its version if the format changes |
 | F15 | `^esp32tl/sources/replay\.py$` | `^docs/features/replay-` | Replay changed (what it replays, when, what it refuses): update docs/features/replay-*.md |
@@ -64,6 +65,7 @@ GitHub Action, a pre-commit hook or a Python dependency.
 | F21 | `^esp32tl/matching\.py$` | `^docs/features/matching-` | Matching engine changed (protocols, requests, timing): update docs/features/matching-*.md |
 | F22 | `^esp32tl/net/` | `^docs/features/network-` | Simulated network changed: update docs/features/network-*.md |
 | F24 | `^examples/` | `^docs/features/examples-` | Examples changed: update docs/features/examples-*.md |
+| F25 | `^esp32tl/sources/real\.py$` | `^docs/features/real-source-` | Real source changed (the port, its stamps, the bound, what it refuses): update docs/features/real-source-*.md |
 | C1 | `^\.github/workflows/` | `^docs/cicd\.md$` | CI workflow changed: update docs/cicd.md |
 | C2 | `^Makefile$` | `^docs/guides/development\.md$` | Makefile changed: update the make targets in docs/guides/development.md |
 | C3 | `^\.pre-commit-config\.yaml$` | `^docs/guides/development\.md$` | Pre-commit hooks changed: update docs/guides/development.md |
@@ -82,7 +84,8 @@ Where one directory has several owners, the map lists its files by name: `script
 the development guide, C9, C10 for the documentation guide, C12 for the validation firmware, C13
 for the testing guide) and the runner's top level (F7 for `Cargo.toml`, C6 for the toolchain;
 `Cargo.lock` is nobody's), and `esp32tl/sources/` (F15 for `replay.py`, F17 for `model/` except
-`modem.py`, F19 for that modem; its other files are F12's until they have documents of their own).
+`modem.py`, F19 for that modem, F25 for `real.py`; its other files are F12's until they have
+documents of their own).
 `runner/src/` instead carves the protocol files out of F6, so that a new runner file is owned from
 its first line. `pyproject.toml` has several owners in one file: C7 accepts any of their
 documents, and review checks the choice.

@@ -144,6 +144,9 @@ not generate or flash a replacement partition. Examples:
 - `serial: uart.gnss takes no replay source on this backend, only real`
 - `serial: uart.gnss cannot be tapped on this backend`
 - `serial: sd_card takes no model source on this backend, only real`
+- `serial: uart.gnss has the device wired to the board at its far end: a host serial port goes there
+  on the emulator only`, for `gnss.real(port)`, which leaves `port` closed:
+  [the real source](real-source-user.md#on-the-serial-backend) is not attempted here
 
 These skips happen after fixture setup, which may flash the board. A profile's missing interface
 is an error. Requesting `lines` on a profile that has GPIO lines skips with

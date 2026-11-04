@@ -217,6 +217,7 @@ class Stats:
     stop: str | None = None
     detail: str | None = None
     wifi: WifiStats | None = None
+    rt_resyncs: int | None = None
 
 
 @dataclass(frozen=True)
@@ -373,8 +374,9 @@ def as_json(message: Message | UartStats | WifiStats) -> dict[str, Any]:
         obj["type"] = message.TYPE
     for field in fields(message):
         value = getattr(message, field.name)
-        # `stats.wifi` is there with `--wifi` only
-        if not (isinstance(message, Stats) and field.name == "wifi" and value is None):
+        # `stats.wifi` is there with `--wifi` only, `stats.rt_resyncs` with `--realtime` only
+        optional = field.name in ("wifi", "rt_resyncs")
+        if not (isinstance(message, Stats) and optional and value is None):
             obj[JSON_NAMES.get(field.name, field.name)] = _to_json(value)
     return obj
 
@@ -653,6 +655,7 @@ def _stats(f: Fields) -> Stats:
         stop=f.opt_string("stop"),
         detail=f.opt_string("detail"),
         wifi=_wifi_stats(f.obj.get("wifi")),
+        rt_resyncs=f.opt_integer("rt_resyncs"),
     )
 
 

@@ -82,7 +82,7 @@ here raises `ReplayError`, `{path}` being the path as the test gave it:
 | Message | Cause |
 |---|---|
 | `{path} is a recording of {interface}, not of uart.gnss` | The header's `interface` is another one |
-| `{path} has times on the wall clock, and uart.gnss runs on the emulated-fifo-write clock: replaying it would compare times across clocks` | The recording was made on a real board or device. `{clocks}` lists every clock it uses, `emulated-fifo-write and wall` for one with a clock switch |
+| `{path} has times on the wall clock, and uart.gnss runs on the emulated-fifo-write clock: replaying it would compare times across clocks` | The recording was made on a real board or device. `{clocks}` lists every clock it uses, `emulated-fifo-write and wall` for one with a clock switch. A run with a [real source](real-source-user.md) on another route is on the wall clock from that call on, and takes such a recording and refuses an emulated one |
 
 Malformed request framing also raises `ReplayError`, prefixed with `{path}:`, including
 `the recording ends with an incomplete request`. A nonempty loop of duration zero raises

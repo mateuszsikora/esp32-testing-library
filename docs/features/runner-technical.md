@@ -454,6 +454,32 @@ in the peer's turn, on a protocol error or a `stop`, leaves the rest of that tur
 Linux a Unix socket closed with unread input resets the connection: the peer's read to end of file
 then fails with `ECONNRESET` instead of returning `stats`.
 
+## --realtime
+
+`--realtime` sets `Options.realtime`, and needs `--board`. Without it nothing below happens: no wall
+clock is read, the guest is not paced, and the `hello` says `emulated-fifo-write`.
+
+- `Session::handshake` sends `protocol::hello(protocol::WALL)`.
+- `Session::start_pacing`, called in `drive` just before `run_until`, at the first slice boundary at
+  or after `PACING_FROM`, 2¹⁶ bus cycles, calls `Guest::start_pacing`, which sets `rt.enabled`, and
+  sets `anchor` to `(Instant::now(), 0)`: that instant is emulated time 0, esp32sim's convention. It
+  comes after any turn taken at that boundary, so a turn held before does not count. A slice with
+  the supply off calls neither: it does not run the guest, and esp32sim would take its anchor only
+  when it next does.
+- `Session::follow_resyncs`, at the start of `boundary`, moves `anchor` to `(Instant::now(), ns(now))`
+  when `Guest::resyncs`, `rt.resyncs`, has grown. esp32sim's own anchor is private, so this is the
+  only way to learn it moved.
+- `Session::wait_for_wall_time`, before each `take_turn` in `boundary`, calls `Link::wait_until` with
+  `anchor + (b - at)`. A guest behind wall time gets an instant already past, and goes on at once.
+  Turn 0 in `drive` does not come here, and nothing waits before `anchor` is set.
+- `SocketLink::wait_until` reads the socket in `POLL` steps, keeping what it reads for `recv`, while
+  more than `POLL` is left, then sleeps what remains. A signal is `LinkError::Signal` and end of file
+  `LinkError::Gone`, as in `recv`.
+- `Session::finish` puts `Guest::resyncs` in `Stats::rt_resyncs`, which `protocol::stats` writes.
+
+esp32sim's pacing itself is `Machine::rt_pace`
+([protocol 12.1](../protocol.md#121-the-runner-under---realtime)).
+
 ## Interfaces
 
 The command line and the usage text: [runner-user.md](runner-user.md#run-an-image).
@@ -659,7 +685,17 @@ A failure to write the last messages does not change the exit code: the first ca
 
 ## Tests
 
-`make test-runner` runs the Rust tests (`cargo test --locked`), 121 of them:
+`make test-runner` runs the Rust tests (`cargo test --locked`). `--realtime` is covered
+by `realtime_needs_a_board` in `runner/src/cli/tests.rs`; the `wait_until` tests in
+`runner/src/transport/tests.rs`, with a real socket pair; and, in `runner/src/session/tests.rs`,
+against a `FakePeer` whose `wait_until` returns at once and records the instant asked for:
+`realtime_says_wall_in_hello_and_rt_resyncs_in_stats`,
+`without_realtime_the_clock_is_emulated_and_nothing_waits_for_wall_time`,
+`pacing_starts_at_the_first_boundary_past_2_16_cycles_after_the_turn_there`,
+`a_turn_held_before_pacing_starts_does_not_count_against_the_wall_clock`,
+`a_resync_moves_the_wall_clock_to_the_boundary_it_is_seen_at`,
+`a_board_switched_off_before_pacing_starts_starts_it_when_the_guest_runs_again` and
+`a_signal_or_the_peer_gone_ends_the_wait_for_wall_time`. The rest:
 
 - `runner/src/cli/tests.rs`: `cli::parse` only. `minimal_command_line` checks the defaults
   (`rom: None`, flash 4 MiB, PSRAM 0, console `Stdout`, no board, `--peer-timeout` 60 s);
