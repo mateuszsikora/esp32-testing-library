@@ -556,14 +556,23 @@ that references to its number keep their meaning.
 - **171.** A remote name request nobody answers ends in `PAGE_TIMEOUT` exactly at the page timeout; a
     second to the same peer while one is pending ends when the first does.
     `tests/test_spp_peer.py::test_a_remote_name_request_to_a_peer_that_left_ends_at_the_page_timeout`,
+    `tests/test_spp_peer.py::test_a_second_remote_name_request_ends_when_the_first_does`,
     `tests/test_spp_peer.py::test_a_remote_name_request_is_answered_at_once_when_the_peer_is_there`
 - **172.** A target that heard a page loses contact when the pager leaves, and its end falls at the
     supervision timeout counted from then. A target whose host has not answered tells it of no link
-    when its end goes, and a host that answers later gets no link, without failing the air.
+    when its end goes, and a host that answers later gets a failed `Connection_Complete`: a late
+    answer makes no link, completes no later page, leaves a working link as it is, and does not fail
+    the air.
     `tests/test_spp_peer.py::test_a_target_that_heard_the_page_loses_contact_when_the_pager_leaves`,
     `tests/test_spp_peer.py::test_a_pager_whose_power_cycles_before_the_host_answers_gets_no_link`,
     `tests/test_spp_peer.py::test_a_target_that_leaves_before_its_host_answers_tells_its_host_of_no_link`,
     `tests/test_spp_peer.py::test_a_host_that_answers_a_page_after_its_end_fell_gets_no_link`,
+    `tests/test_spp_peer.py::test_a_late_answer_does_not_connect_the_next_page`,
+    `tests/test_spp_peer.py::test_an_answer_that_came_in_time_is_not_counted_late_afterwards`,
+    `tests/test_spp_peer.py::test_a_late_answer_leaves_a_working_link_alone`,
+    `tests/test_spp_peer.py::test_a_late_answer_does_not_complete_a_page_to_a_device_that_left`,
+    `tests/test_spp_peer.py::test_a_page_tried_again_with_a_slow_host_does_not_fail_the_air`,
+    `tests/test_spp_peer.py::test_two_answers_to_pages_that_ended_do_not_fail_the_air`,
     `tests/test_spp_peer.py::test_a_power_loss_at_the_instant_a_page_is_heard_does_not_fail_the_air`
 
 ## The esp32tl command

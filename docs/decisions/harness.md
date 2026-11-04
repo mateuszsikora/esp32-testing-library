@@ -1501,8 +1501,10 @@ Status: postponed (#34)
 
 The page's timer runs until the target's host accepts, and a target's host has no time limit (Vol 4,
 Part E, 6.7, is not modelled). A host that accepts after the page ended makes a link although the
-pager reported `PAGE_TIMEOUT`. Bumble's host accepts at the instant it hears, so this takes a slowed
-host, and firmware behind #34 is the first that will be slow: what it needs can be seen then.
+pager reported `PAGE_TIMEOUT`, and when the pager has tried again, the first answer connects the
+second page. Bumble's host accepts at the instant it hears, so this takes a slowed host, and firmware
+behind #34 is the first that will be slow: what it needs can be seen then. Until then an answer with
+nothing left to answer gets a failed `Connection_Complete`, and changes nothing else.
 
 **Rejected:** ignoring the late answer on the pager's side, because the target would be left holding
 a link with no other end, and adding the timeout now, because nothing would exercise it but its own

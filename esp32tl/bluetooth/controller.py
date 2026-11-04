@@ -31,6 +31,7 @@ numbers come from a generator seeded with the controller's address, so two runs 
 import asyncio
 import hashlib
 import random
+from collections import Counter
 from dataclasses import dataclass, field
 
 from bumble import hci, lmp
@@ -166,8 +167,10 @@ class Controller(BumbleController):
         self._paging: dict[hci.Address, asyncio.TimerHandle] = {}
         # The remote name request this side made of each peer, until it is answered.
         self._naming: dict[hci.Address, asyncio.TimerHandle] = {}
-        # Who paged this side and is gone, with this side's host yet to answer.
-        self._unanswered: set[hci.Address] = set()
+        # How many answers this side's host owes each peer that paged it, and how many of those
+        # are late, for an entry that went before they came. An answer names only the address.
+        self._answers_due: Counter[hci.Address] = Counter()
+        self._late_answers: Counter[hci.Address] = Counter()
         # Each link's timeout in slots, where a host or the central changed it; 0 for none.
         self._supervision_timeouts: dict[hci.Address, int] = {}
         # The time each link lost contact, on the loop's clock, and the timer it falls by.
@@ -329,13 +332,34 @@ class Controller(BumbleController):
         self, command: hci.HCI_Accept_Connection_Request_Command
     ) -> None:
         peer = command.bd_addr
-        if peer not in self.classic_connections and peer in self._unanswered:
-            # The page it answers ended meanwhile, and no link came of it.
-            self._unanswered.discard(peer)
-            self._send_hci_command_status(hci.HCI_ErrorCode.SUCCESS, command.op_code)
-            self.on_classic_connection_complete(peer, hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR)
+        entry = self.classic_connections.get(peer)
+        was_late = self._late_answers[peer] > 0
+        if self._answers_due[peer] > 0:
+            self._answers_due[peer] -= 1
+        if was_late:
+            self._late_answers[peer] -= 1
+        if not was_late and (entry is None or entry.handle == 0):
+            super().on_hci_accept_connection_request_command(command)
             return
-        super().on_hci_accept_connection_request_command(command)
+        # The page it answers ended, or was answered: no link comes of it, and what this side holds
+        # for the peer now is not this answer's.
+        self._send_hci_command_status(hci.HCI_ErrorCode.SUCCESS, command.op_code)
+        if peer not in self._paging:
+            # The event names only the address: to the host it would end this side's own page.
+            self.send_hci_packet(
+                hci.HCI_Connection_Complete_Event(
+                    status=hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR,
+                    connection_handle=0,
+                    bd_addr=peer,
+                    encryption_enabled=False,
+                    link_type=hci.HCI_Connection_Complete_Event.LinkType.ACL,
+                )
+            )
+
+    def on_classic_connection_request(self, peer_address: hci.Address, link_type: int) -> None:
+        if link_type == hci.HCI_Connection_Complete_Event.LinkType.ACL:
+            self._answers_due[peer_address] += 1
+        super().on_classic_connection_request(peer_address, link_type)
 
     # Remote name requests: a page too, so one nobody answers ends at the page timeout.
 
@@ -749,10 +773,11 @@ class Controller(BumbleController):
             timer.cancel()
         connection = self.classic_connections.get(peer_address)
         if connection is not None and connection.handle == 0:
-            # A page this side's host has yet to answer: handles start at 1, and no link was made
-            # to tell it of.
+            # A page this side heard, whose host has yet to answer: handles start at 1, and no link
+            # was made to tell it of. A page of this side's own also has handle 0, but ends through
+            # `on_classic_connection_complete` and never comes here.
             del self.classic_connections[peer_address]
-            self._unanswered.add(peer_address)
+            self._late_answers[peer_address] = self._answers_due[peer_address]
         else:
             super().on_classic_disconnected(peer_address, reason)
         self._let_go(peer_address)

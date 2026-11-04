@@ -164,14 +164,25 @@ link; `controller.py`, Bumble's virtual controller with what Classic devices nee
      no timer of theirs outlives the power and ends the next one; then it runs `_link_timed_out` on
      each of this side's links at once, so that an authentication under way ends with its status.
      `BluetoothDevice._become` first clears Bumble's `Device.auto_restart_inquiry`, or its host
-     would start another inquiry at the completion. `Controller.returned` calls `Link.back`.
+     would start another inquiry at the completion; the controller has no model of its power, so one
+     started through `peer.device` after that runs, and restarts, as on a device switched on.
+     `Controller.returned` calls `Link.back`.
    - **A page this side's host has not answered.** Bumble makes the target's entry in
      `classic_connections` with handle 0 when it hears a page, and gives handles from 1 when a link
      is made. `on_classic_disconnected` removes such an entry without telling the host, since no
-     link was made, and keeps the peer in `_unanswered`. A host that accepts later, as firmware may,
-     gets a command status of `SUCCESS` and `Connection_Complete` with `CONNECTION_TIMEOUT_ERROR`;
-     Bumble's own handler would answer `UNKNOWN_CONNECTION_IDENTIFIER_ERROR`, which fails the air
-     from Bumble's accepting task.
+     link was made. `_answers_due` counts the answers the host owes each peer, from
+     `on_classic_connection_request`, and such a removal makes all of them late, in `_late_answers`.
+     `on_hci_accept_connection_request_command` takes an answer as late when one is counted late, or
+     when the entry already has a link: the host gets a command status of `SUCCESS` and, unless this
+     side is itself paging that peer, `Connection_Complete` with `CONNECTION_TIMEOUT_ERROR`, since the
+     event names only the address and would end that page in the host's eyes. The entry is left as it
+     is, so that a late answer completes neither a new page nor a working link. Given to Bumble's
+     handler it would do so, or answer `UNKNOWN_CONNECTION_IDENTIFIER_ERROR`, which fails the air from
+     Bumble's accepting task, or send the pager a second `LMP_accepted`, whose future is already done,
+     which fails it with `InvalidStateError`. An answer names only the address, so answers are told
+     apart only by their order: the oldest is taken as the late one, and with a page tried again while
+     the first answer is on its way, that first answer connects the second page, and the second answer
+     is the late one.
    - `Write_Secure_Connections_Host_Support` is answered with `SUCCESS` and changes nothing.
      `lmp_features` loses Bumble's `BR_EDR_NOT_SUPPORTED`.
 
@@ -224,7 +235,8 @@ link; `controller.py`, Bumble's virtual controller with what Classic devices nee
 `bumble.link.LocalLink`: `send_acl_data`, `send_lmp_packet`, `controllers`,
 `find_classic_controller`. `bumble.controller.Controller`: `classic_connections`,
 `on_classic_connection_complete`, `on_classic_disconnected`, `on_classic_remote_name_response`,
-`on_hci_create_connection_command`, `on_hci_accept_connection_request_command`,
+`on_classic_connection_request`, `on_hci_create_connection_command`,
+`on_hci_accept_connection_request_command`,
 `on_hci_remote_name_request_command`, handle 0 for an entry with no link, the
 `on_hci_<command>` dispatch by name, `on_lmp_packet`, `send_lmp_packet`, `send_hci_packet`.
 `bumble.device.Device`: `auto_restart_inquiry`. Connection state is keyed by address, so a refused
