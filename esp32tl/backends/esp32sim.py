@@ -338,6 +338,7 @@ class Esp32Sim(Board):
                 log=self.log,
                 files=self._files,
                 now=lambda: self._hold.now,
+                ended=lambda: self._hold.ended,
                 started=lambda: self.started,
             )
             if profile.sd_card is not None
@@ -895,6 +896,7 @@ class Esp32Sim(Board):
                 )
                 for change in changes
             ]
+            lines += self._sd_card.report()
         for uart in self._uarts.values():
             if isinstance(uart, Modem):
                 lines += uart.command_report()
@@ -962,6 +964,7 @@ class Esp32Sim(Board):
                         ("not_reached", card.not_reached),
                     )
                 },
+                "faults": card.properties(),
             }
         )
         properties = self.link.properties() | {

@@ -1,5 +1,7 @@
 /* Append dated GNSS fixes to an SPI SD card. GPIO18 stays high when storage is
- * unavailable; the receiver is still serviced, even with an empty card slot. */
+ * unavailable; the receiver is still serviced, even with an empty card slot. A
+ * row that cannot be written raises GPIO18 too, and the next fix tries again:
+ * the first row written after a failure lowers it. */
 #include <stdio.h>
 #include <string.h>
 
@@ -110,7 +112,8 @@ void app_main(void) {
     ESP_ERROR_CHECK(uart_driver_install(GNSS, 2048, 0, 0, NULL, 0));
     ESP_ERROR_CHECK(uart_param_config(GNSS, &config));
     ESP_ERROR_CHECK(uart_set_pin(GNSS, 4, 5, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
-    bool available = mount_card();
+    const bool available = mount_card();
+    bool failing = false;
     ESP_ERROR_CHECK(gpio_set_level(ERROR_PIN, !available));
     printf("sd_data_logger: ready\n");
 
@@ -131,13 +134,18 @@ void app_main(void) {
             nmea_fix_t fix;
             char date[9];
             if (!dated_fix(sentence, &fix, date)) continue;
-            if (available && !append_fix(date, &fix)) {
-                available = false;
-                ESP_ERROR_CHECK(gpio_set_level(ERROR_PIN, 1));
-                printf("sd_data_logger: SD card write failed\n");
+            const char *outcome = "card unavailable";
+            if (available) {
+                const bool saved = append_fix(date, &fix);
+                if (saved == failing) {
+                    failing = !saved;
+                    ESP_ERROR_CHECK(gpio_set_level(ERROR_PIN, failing));
+                    printf("sd_data_logger: SD card %s\n",
+                           failing ? "write failed" : "writes again");
+                }
+                outcome = saved ? "saved" : "not saved";
             }
-            printf("sd_data_logger: fix %s %s (%s)\n", date, fix.time,
-                   available ? "saved" : "card unavailable");
+            printf("sd_data_logger: fix %s %s (%s)\n", date, fix.time, outcome);
         } else if (reading) {
             if (length < sizeof sentence - 1) sentence[length++] = (char)byte;
             else reading = false;

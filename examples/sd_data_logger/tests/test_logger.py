@@ -7,7 +7,7 @@ import pytest
 
 from esp32tl import Board, recording
 from esp32tl.interfaces.console import Console
-from esp32tl.units import Duration, Position, seconds
+from esp32tl.units import Duration, Position, ms, seconds
 
 pytestmark = [pytest.mark.app_path(".."), pytest.mark.board_profile("sd-data-logger")]
 START = datetime(2026, 11, 2, 12, tzinfo=UTC)
@@ -138,6 +138,124 @@ def test_bad_sentences_cannot_create_files(board: Board, tmp_path: Path) -> None
     board.wait(last_sentence_at + WRITE_MARGIN)
     assert card.list_files() == ["20261102.CSV"]
     assert card.read_text("20261102.CSV") == "120003.00,52.229677,21.012233\n"
+
+
+def test_a_failed_write_raises_the_error_pin_and_the_next_fix_writes_again(board: Board) -> None:
+    card = board.sd_card.image(size_mb=32).build()
+    error = board.lines.output("logger.error")
+    board.sd_card.insert(card)
+    board.gnss.fix(at=WARSAW)
+    board.power_on(utc=START)
+    board.wait(2 * FIX_INTERVAL + WRITE_MARGIN)
+    saved = "120001.00,52.229677,21.012233\n120002.00,52.229677,21.012233\n"
+    assert card.read_text("20261102.CSV") == saved
+    error.assert_off()
+
+    # The card answers the next block written "write error" and leaves the image alone.
+    given = board.now
+    fault = board.sd_card.fail("write", count=1)
+    failed = board.wait_until(board.console.line("SD card write failed"), within=FIX_INTERVAL)
+    (write,) = fault.hits
+    assert (write.op, write.action, write.written) == ("write", "error", False)
+    assert given <= write.at <= failed.at
+    board.console.expect_exact("sd_data_logger: fix 20261102 120003.00 (not saved)")
+    error.assert_on()
+    # The image is a FAT the tools read: what the card accepted, nothing of the failed block.
+    assert card.read_text("20261102.CSV") == saved
+
+    # The rule is spent: the next fix is written, and the pin goes down.
+    board.wait_until(board.console.line("SD card writes again"), within=FIX_INTERVAL)
+    board.console.expect_exact("sd_data_logger: fix 20261102 120004.00 (saved)")
+    error.assert_off()
+    assert not fault.active
+    assert card.read_text("20261102.CSV") == saved + "120004.00,52.229677,21.012233\n"
+
+
+def test_a_failed_read_reaches_the_firmware_as_the_driver_s_read_timeout(board: Board) -> None:
+    card = board.sd_card.image(size_mb=32).build()
+    error = board.lines.output("logger.error")
+    board.sd_card.insert(card)
+    board.gnss.fix(at=WARSAW)
+    board.power_on(utc=START)
+    board.wait(FIX_INTERVAL + WRITE_MARGIN)
+    saved = "120001.00,52.229677,21.012233\n"
+    assert card.read_text("20261102.CSV") == saved
+
+    # Appending reads the row's sector first. ESP-IDF scans the bytes it clocked with the command
+    # for the start token alone, so it misses the error token and times out, after 1 s.
+    fault = board.sd_card.fail("read", count=1)
+    failed = board.wait_until(board.console.line("SD card write failed"), within=2 * FIX_INTERVAL)
+    (read,) = fault.hits
+    assert (read.op, read.action, read.written) == ("read", "error", False)
+    assert seconds(1) <= failed.at - read.at < seconds(1) + ms(10)
+    assert board.console.lines(r"sdmmc_read_blocks failed \(0x107\)", since=read.at)
+
+    # The next fix came during that second: it reads and writes as usual, right after.
+    board.wait(WRITE_MARGIN)
+    assert board.console.lines("SD card writes again", since=failed.at)
+    assert [event.level for event in error.events() if event.t >= read.at] == [1, 0]
+    assert card.read_text("20261102.CSV").startswith(saved + "120003.00,")
+
+
+def test_a_slow_write_saves_its_row_later(board: Board) -> None:
+    card = board.sd_card.image(size_mb=32).build()
+    error = board.lines.output("logger.error")
+    board.sd_card.insert(card)
+    board.gnss.fix(at=WARSAW)
+    board.power_on(utc=START)
+    board.wait(FIX_INTERVAL + WRITE_MARGIN)
+    healthy_since = board.now
+
+    # Busy for 300 ms after each block written, well within ESP-IDF's 5 s write timeout: a row
+    # writes two blocks, its data and its directory entry.
+    fault = board.sd_card.delay("write", ms(300))
+    row = board.wait_until(
+        board.console.line(r"fix 20261102 120002\.00 \(saved\)"), within=2 * FIX_INTERVAL
+    )
+    hits = fault.hits
+    assert hits and all(hit.written and hit.delay == ms(300) for hit in hits)
+    assert row.at - hits[-1].at >= ms(300)
+    fault.clear()
+    board.wait(FIX_INTERVAL)
+    assert card.read_text("20261102.CSV") == (
+        "120001.00,52.229677,21.012233\n"
+        "120002.00,52.229677,21.012233\n"
+        "120003.00,52.229677,21.012233\n"
+    )
+    assert len(fault.hits) == len(hits), "a cleared rule delays nothing"
+    error.assert_stayed_off(since=healthy_since)
+
+
+def test_a_write_slower_than_the_driver_s_timeout_fails_on_the_board_s_clock(
+    board: Board,
+) -> None:
+    card = board.sd_card.image(size_mb=32).build()
+    error = board.lines.output("logger.error")
+    board.sd_card.insert(card)
+    board.gnss.fix(at=WARSAW)
+    board.power_on(utc=START)
+    board.wait(FIX_INTERVAL + WRITE_MARGIN)
+
+    fault = board.sd_card.delay("write", seconds(6), count=1)
+    failed = board.wait_until(board.console.line("SD card write failed"), within=seconds(7))
+    (write,) = fault.hits
+    # ESP-IDF polls the busy card for its 5 s write timeout, on the board's clock.
+    assert seconds(5) <= failed.at - write.at < seconds(6)
+    # The card programmed the block; the firmware gave up on it before it was done.
+    assert write.written
+    error.assert_on()
+
+    # Once the card is no longer busy, the fixes queued meanwhile are written again.
+    again = board.wait_until(board.console.line("SD card writes again"), within=seconds(5))
+    assert again.at >= write.at + seconds(6)
+    board.wait(WRITE_MARGIN)
+    error.assert_off()
+    rows = card.read_text("20261102.CSV").splitlines()
+    since = board.console.lines(r"fix 20261102 (\d{6}\.00) \(saved\)", since=again.at)
+    assert since
+    for line in since:
+        assert line.match is not None
+        assert f"{line.match.group(1)},52.229677,21.012233" in rows
 
 
 def test_without_a_card_the_error_pin_stays_on_and_fixes_keep_arriving(board: Board) -> None:

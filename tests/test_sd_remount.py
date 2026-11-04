@@ -100,7 +100,32 @@ def test_writes_fail_once_the_card_is_out_and_go_on_on_the_card_put_in(
         ],
         "refused": [],
         "not_reached": [{"t_ns": board.now.ns, "image": None}],
+        "faults": [],
     }
+
+
+def test_a_fault_rule_stays_through_a_change_of_card_until_it_is_cleared(
+    board: Esp32Sim, sd_card: SdCard, console: Console
+) -> None:
+    first = sd_card.image(size_mb=32).build()
+    sd_card.insert(first)
+    board.power_on()
+    console.expect_exact("sd_remount: wrote 2", timeout=TIMEOUT)
+    fault = sd_card.fail("write")
+    sd_card.remove()
+    second = sd_card.image(size_mb=32).build()
+    sd_card.insert(second)
+    console.expect_exact("sd_remount: mounted 2", timeout=TIMEOUT)
+
+    # the firmware mounts the new card, and its writes meet the rule given on the old one
+    board.wait_until(lambda: fault.hits, within=seconds(TIMEOUT))
+    assert all(hit.op == "write" and not hit.written for hit in fault.hits)
+    assert second.list_files() == []
+
+    fault.clear()
+    wrote = board.wait_until(console.line(r"^sd_remount: wrote \d+$"), within=seconds(TIMEOUT))
+    assert wrote.match is not None
+    assert "LOG.TXT" in second.list_files()
 
 
 def test_a_slot_empty_at_power_on_takes_a_card_later(

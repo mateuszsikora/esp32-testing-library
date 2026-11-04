@@ -1,6 +1,7 @@
 //! The link protocol's wire format (`docs/protocol.md`, version 1): time in nanoseconds, base64,
 //! the messages the peer sends and the lines the runner writes. JSON is parsed with esp32sim's own
 //! parser (`esp_soc::json`, which its Cooja NDJSON link uses), so the runner adds no JSON crate.
+use crate::sd_card::{Action, Fault, Faulted, Op};
 use esp_soc::json::{Json, parse_json};
 use esp_soc::uart::UartRoute;
 use std::fmt::Write;
@@ -18,6 +19,9 @@ pub const MAX_LINE: usize = 1 << 20;
 /// most 1500 bytes of payload.
 pub const ETH_MIN: usize = 14;
 pub const ETH_MAX: usize = 1518;
+/// The longest delay an `sd_fault` may give (5.20): 10 emulated seconds, twice ESP-IDF's longest
+/// SD timeout, its 5 s for a write.
+pub const SD_DELAY_MAX: u64 = 10_000_000_000;
 
 const CPU_HZ: u128 = esp32::periph::CPU_HZ as u128;
 const NS_PER_S: u128 = 1_000_000_000;
@@ -129,6 +133,16 @@ pub enum Incoming {
     ChipReset {
         t: u64,
     },
+    /// A fault rule for the SD card of `--sd-rw` (5.20).
+    SdFault {
+        t: u64,
+        fault: Fault,
+    },
+    /// The SD card's rules with these ids, or all of them, gone (5.20).
+    SdClear {
+        t: u64,
+        ids: Option<Vec<u64>>,
+    },
     /// A card holding the image file `image` into the slot of `--sd-spi`, or, with `None`, the
     /// card out of it (5.19).
     SdCard {
@@ -212,6 +226,14 @@ pub fn parse(line: &str) -> Result<Incoming, String> {
         "chip_reset" => Incoming::ChipReset {
             t: field("t").time()?,
         },
+        "sd_fault" => Incoming::SdFault {
+            t: field("t").time()?,
+            fault: sd_fault(&field)?,
+        },
+        "sd_clear" => Incoming::SdClear {
+            t: field("t").time()?,
+            ids: field("ids").numbers()?,
+        },
         "sd_card" => Incoming::SdCard {
             t: field("t").time()?,
             image: field("image").optional_string()?,
@@ -219,6 +241,61 @@ pub fn parse(line: &str) -> Result<Incoming, String> {
         "stop" => Incoming::Stop,
         "adc" => Incoming::NotYet("adc"),
         _ => return Err(format!("unknown type {kind:?}")),
+    })
+}
+
+/// The rule of an `sd_fault`, checked as far as it can be without the card (5.20).
+fn sd_fault<'a>(field: &impl Fn(&'static str) -> Field<'a>) -> Result<Fault, String> {
+    let op = match field("op").string()?.as_str() {
+        "read" => Op::Read,
+        "write" => Op::Write,
+        "erase" => Op::Erase,
+        op => {
+            return Err(format!(
+                "sd_fault: \"op\" {op:?} is not read, write or erase"
+            ));
+        }
+    };
+    let delay = field("delay").optional()?;
+    let action = match (field("action").string()?.as_str(), delay) {
+        ("error", None) if op == Op::Erase => {
+            return Err("sd_fault: an erase cannot fail, only be delayed".into());
+        }
+        ("error", None) => Action::Error,
+        ("error", Some(_)) => return Err("sd_fault: an error takes no \"delay\"".into()),
+        ("delay", Some(ns @ 1..=SD_DELAY_MAX)) => Action::Delay(ns),
+        ("delay", Some(ns)) => {
+            return Err(format!(
+                "sd_fault: a delay of {ns} ns; one is 1 ns to {SD_DELAY_MAX} ns (10 s)"
+            ));
+        }
+        ("delay", None) => return Err("sd_fault: a delay takes \"delay\"".into()),
+        (action, _) => {
+            return Err(format!(
+                "sd_fault: \"action\" {action:?} is not error or delay"
+            ));
+        }
+    };
+    let count = match field("count").optional()? {
+        Some(0) => return Err("sd_fault: a \"count\" of 0".into()),
+        count => count,
+    };
+    let blocks = match field("blocks").numbers()?.as_deref() {
+        None => None,
+        Some(&[first, last]) if first <= last => Some((first, last)),
+        Some(&[first, last]) => {
+            return Err(format!(
+                "sd_fault: \"blocks\" {first} to {last}: the last before the first"
+            ));
+        }
+        Some(_) => return Err("sd_fault: \"blocks\" is not [first, last]".into()),
+    };
+    Ok(Fault {
+        id: field("id").time()?,
+        op,
+        action,
+        blocks,
+        count,
     })
 }
 
@@ -269,6 +346,24 @@ impl Field<'_> {
     }
     fn pin(&self) -> Result<u8, String> {
         pin(self.int()?).ok_or_else(|| self.error("is not a GPIO number"))
+    }
+    /// An array of non-negative integers; `None` when absent or `null`.
+    fn numbers(&self) -> Result<Option<Vec<u64>>, String> {
+        let Some(value) = self.value() else {
+            return Ok(None);
+        };
+        let items = value
+            .as_arr()
+            .ok_or_else(|| self.error("is not an array"))?;
+        items
+            .iter()
+            .map(|v| match v {
+                Json::Int(n) => u64::try_from(*n).ok(),
+                _ => None,
+            })
+            .collect::<Option<_>>()
+            .map(Some)
+            .ok_or_else(|| self.error("holds something other than non-negative integers"))
     }
     /// A pin set; absent or `null` is the empty set.
     fn pins(&self) -> Result<Vec<u8>, String> {
@@ -380,6 +475,22 @@ pub fn eth_tx(seq: u64, t: u64, data: &[u8]) -> String {
     format!(
         r#"{{"type":"eth_tx","seq":{seq},"t":{t},"data":"{}"}}"#,
         base64(data)
+    )
+}
+
+/// What one of the peer's rules did to the SD card (5.20): not an event.
+pub fn sd_op(t: u64, f: &Faulted) -> String {
+    let (action, delay) = match f.action {
+        Action::Error => ("error", "null".to_string()),
+        Action::Delay(ns) => ("delay", ns.to_string()),
+    };
+    format!(
+        r#"{{"type":"sd_op","t":{t},"fault":{},"op":"{}","blocks":[{},{}],"action":"{action}","delay":{delay},"written":{}}}"#,
+        f.fault,
+        f.op.name(),
+        f.blocks.0,
+        f.blocks.1,
+        f.written
     )
 }
 

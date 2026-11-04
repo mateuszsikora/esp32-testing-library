@@ -25,6 +25,9 @@ message goes out in the harness's answer to the turn the link is held at, or to 
 before the run reaches it, before what the interfaces send. Every `reset` the
 runner sends is kept in `resets`, in order, and given to `on_reset`.
 
+What the runner reports of the SD card's fault rules (`sd_op`) goes to the same interface, which
+alone may send `sd_fault` and `sd_clear`.
+
 Warnings and the run's `stats` are kept for the test report. What the harness finds wrong with
 the run is kept in `error`, the first cause only; the harness then ends the run with `stop` at the
 runner's next turn, and still reads to end of file. A `frm_err` warning is such an error: bytes
@@ -58,6 +61,9 @@ from esp32tl.link.protocol import (
     RunnerMessage,
     SdCardAck,
     SdCardChange,
+    SdClear,
+    SdFault,
+    SdOp,
     Stats,
     Stop,
     Sync,
@@ -130,7 +136,8 @@ class Interface:
     def card_slot(self) -> bool:
         """Whether the interface is the SD card slot: it has no wire, its `inputs` may change the
         card in it (`sd_card`), and `card_changed` gets what the runner says the slot holds after
-        each change (`sd_card_ack`)."""
+        each change (`sd_card_ack`). Its `inputs` may also be fault rules for the card (`sd_fault`,
+        `sd_clear`), and `sd_op` gets what they did."""
         return False
 
     @property
@@ -176,6 +183,9 @@ class Interface:
     def driven(self, t: int, changes: Sequence[tuple[int, int]], enabled: frozenset[int]) -> None:
         """The guest changed the output of this interface's pins at `t`: the `[pin, level]`
         changes in the order written, and the pins whose output driver is enabled after them."""
+
+    def sd_op(self, message: SdOp) -> None:
+        """One of the interface's SD fault rules applied to a block operation (`sd_op`)."""
 
     def card_changed(self, t: int, image: str | None, error: str | None) -> None:
         """The runner applied the slot's next `sd_card` at `t`, in the order they were sent: the
@@ -419,6 +429,12 @@ class BoardLink:
             if self.console is not None:
                 with calling(CONSOLE, "console"):
                     self.console(message.t, message.data)
+        elif isinstance(message, SdOp):
+            card = next((i for i in self.interfaces if i.card_slot), None)
+            if card is None:
+                raise LinkError("the runner sent sd_op, and no interface is the SD card slot")
+            with calling(card.name, "sd_op"):
+                card.sd_op(message)
         elif isinstance(message, Sync):
             return self._turn(message.t)
         elif isinstance(message, Reset):
@@ -484,7 +500,7 @@ class BoardLink:
         and whatever it should have done with them would fail later as a timeout (5.8)."""
         rate = "with no baud set" if warning.baud is None else f"at {warning.baud} baud"
         uart = "UART" if warning.port is None else f"UART{warning.port}"
-        dropped = "bytes" if warning.nbytes is None else _count(warning.nbytes, "byte")
+        dropped = "bytes" if warning.nbytes is None else counted(warning.nbytes, "byte")
         pin = warning.pin
         owner = (
             None
@@ -594,7 +610,10 @@ class BoardLink:
         is not a message of version 1, one stamped before the turn, one on a pin the link does not
         watch; and one on a pin another interface is wired to, which the runner would take."""
         source = interface.name
-        if not isinstance(message, UartRx | GpioIn | Release | Adc | EthRx | WifiAp | SdCardChange):
+        if not isinstance(
+            message,
+            UartRx | GpioIn | Release | Adc | EthRx | WifiAp | SdCardChange | SdFault | SdClear,
+        ):
             raise LinkError(f"{source} sent {message!r}, which is not an input")
         try:
             # What the runner reads, through the same codec: types, ranges, the line's length.
@@ -614,9 +633,9 @@ class BoardLink:
                     f"{source} sent {message.TYPE}, and is not the network behind the access point"
                 )
             return
-        if isinstance(message, SdCardChange):
+        if isinstance(message, SdCardChange | SdFault | SdClear):
             if not interface.card_slot:
-                raise LinkError(f"{source} sent sd_card, and is not the SD card slot")
+                raise LinkError(f"{source} sent {message.TYPE}, and is not the SD card slot")
             return
         if isinstance(message, GpioIn):
             pins = {pin for pin, _ in message.levels}
@@ -655,7 +674,7 @@ class BoardLink:
         elif runner is not None:
             lines.append(
                 f"runner: protocol version {runner.version}, esp32sim {runner.esp32sim},"
-                f" clock {runner.clock}; {_count(self.turns, 'turn')} taken by the harness"
+                f" clock {runner.clock}; {counted(self.turns, 'turn')} taken by the harness"
             )
         if self.warnings:
             lines.append(f"warnings ({len(self.warnings)}):")
@@ -665,7 +684,7 @@ class BoardLink:
             end = stats.end + "".join(f", {extra}" for extra in (stats.stop, stats.detail) if extra)
             lines.append(
                 f"stats: the run ended at {_time(stats.t)} ({end});"
-                f" {_count(stats.turns, 'turn')}, {_count(stats.resets, 'reset')}"
+                f" {counted(stats.turns, 'turn')}, {counted(stats.resets, 'reset')}"
             )
             lines += [
                 f"  UART{u.port}: {u.tx_bytes} bytes sent, {u.rx_bytes} received,"
@@ -681,10 +700,10 @@ class BoardLink:
             if stats.wifi is not None:
                 w = stats.wifi
                 lines.append(
-                    f"  Wi-Fi: {_count(w.eth_tx, 'Ethernet frame')} sent"
+                    f"  Wi-Fi: {counted(w.eth_tx, 'Ethernet frame')} sent"
                     f" ({w.eth_tx_dropped} dropped by the relay), {w.eth_rx} received"
                     f" ({w.eth_rx_dropped} with the access point off the air);"
-                    f" {_count(w.rx_dropped, 'frame')} from the air with no receive descriptor"
+                    f" {counted(w.rx_dropped, 'frame')} from the air with no receive descriptor"
                 )
         elif self.connected:
             lines.append("no stats: the link ended without them (the runner was killed, or died)")
@@ -741,7 +760,7 @@ def _raised(error: Exception) -> str:
     return f"{type(error).__name__}: {error}"
 
 
-def _count(n: int, noun: str) -> str:
+def counted(n: int, noun: str) -> str:
     return f"{n} {noun}" + ("" if n == 1 else "s")
 
 

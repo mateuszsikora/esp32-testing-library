@@ -20,6 +20,9 @@
 //! `reset` with cause 1. While the supply is off the guest runs nothing and its time still passes:
 //! the slices go on, without the guest, so that the peer's turns and inputs keep their times.
 //!
+//! With `--sd-rw` the peer's fault rules go to the SD card when they come due (`sd_fault`,
+//! `sd_clear`), and what they did comes back through the board's log (`sd_op`).
+//!
 //! With `--sd-spi` the peer takes the card out of the slot and puts one in (`sd_card`) when its
 //! time comes, at a slice boundary, between two of the chip's SPI transactions; the runner says
 //! what the slot holds then (`sd_card_ack`).
@@ -34,7 +37,7 @@ use crate::transport::{Link, LinkError};
 use esp_soc::uart::{UartInput, UartRoute};
 use esp_soc::wifi::{self, StaState};
 use esp_soc::{SocBus, Stop};
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::convert::Infallible;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -305,7 +308,8 @@ enum Item {
 impl Item {
     fn cycle(&self) -> u64 {
         match self {
-            Item::Board(Recorded::UartTx { cycle, .. } | Recorded::Gpio { cycle, .. })
+            Item::Board(Recorded::Sd(sd_card::Faulted { cycle, .. }))
+            | Item::Board(Recorded::UartTx { cycle, .. } | Recorded::Gpio { cycle, .. })
             | Item::Reset { cycle, .. }
             | Item::Routes { cycle, .. }
             | Item::Eth { cycle, .. }
@@ -358,6 +362,8 @@ enum Input {
     WifiAp(bool),
     Power(bool),
     ChipReset,
+    SdFault(sd_card::Fault),
+    SdClear(Option<Vec<u64>>),
     SdCard(Option<String>),
 }
 
@@ -411,6 +417,8 @@ pub struct Session<'a, G: Guest, L: Link> {
     eth: VecDeque<Vec<u8>>,
     /// The board's supply is off, as the peer last switched it (`power`).
     off: bool,
+    /// Every `sd_fault` id the peer has given, queued rules' included: an id is used once.
+    sd_ids: BTreeSet<u64>,
     stats: Stats,
 }
 
@@ -439,6 +447,7 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
             leaving: false,
             eth: VecDeque::new(),
             off: false,
+            sd_ids: BTreeSet::new(),
             stats: Stats {
                 wifi: opts.wifi.map(|_| WifiStats::default()),
                 ..Stats::default()
@@ -803,6 +812,11 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                     }
                     self.event(t, |seq| protocol::eth_tx(seq, t, &data))?;
                 }
+                // not an event: the peer answers nothing
+                Item::Board(Recorded::Sd(faulted)) => {
+                    self.close_open()?;
+                    self.send(&protocol::sd_op(t, &faulted))?;
+                }
                 Item::SdCard { image, error, .. } => {
                     // not an event: nothing answers it
                     self.close_open()?;
@@ -999,6 +1013,26 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                     check(t, Vec::new())?;
                     inputs.push((t, Input::ChipReset));
                 }
+                Incoming::SdFault { t, fault } => {
+                    check(t, Vec::new())?;
+                    if self.opts.card.is_none() {
+                        return Err(protocol_error("sd_fault without --sd-spi", &line));
+                    }
+                    if !self.sd_ids.insert(fault.id) {
+                        return Err(protocol_error(
+                            &format!("sd_fault: id {} is in use already", fault.id),
+                            &line,
+                        ));
+                    }
+                    inputs.push((t, Input::SdFault(fault)));
+                }
+                Incoming::SdClear { t, ids } => {
+                    check(t, Vec::new())?;
+                    if self.opts.card.is_none() {
+                        return Err(protocol_error("sd_clear without --sd-spi", &line));
+                    }
+                    inputs.push((t, Input::SdClear(ids)));
+                }
                 Incoming::SdCard { t, image } => {
                     check(t, Vec::new())?;
                     if self.opts.card.is_none() {
@@ -1110,6 +1144,17 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                     reset = true;
                 }
                 Input::Power(_) | Input::ChipReset => {}
+                // the transactions from here on meet them (take_turn checked for the card)
+                Input::SdFault(fault) => {
+                    if let Some(card) = &self.opts.card {
+                        card.borrow_mut().install(fault);
+                    }
+                }
+                Input::SdClear(ids) => {
+                    if let Some(card) = &self.opts.card {
+                        card.borrow_mut().clear(ids.as_deref());
+                    }
+                }
                 Input::SdCard(image) => self.change_card(now, image),
             }
         }

@@ -157,14 +157,24 @@ a repeated RMC; there is no retransmission deduplication.
 GPIO18 starts high and goes low only after a successful mount. A missing or unmountable card
 leaves it high and prints `sd_data_logger: SD card unavailable (<ESP-IDF error name>)`.
 The firmware then prints `sd_data_logger: ready` and continues receiving fixes. Each accepted
-fix prints, for example, `sd_data_logger: fix 20261102 120001.00 (saved)` or
-`sd_data_logger: fix 20261102 120001.00 (card unavailable)`. A write/close failure raises GPIO18,
-prints `sd_data_logger: SD card write failed` and disables further writes until reboot.
+fix prints, for example, `sd_data_logger: fix 20261102 120001.00 (saved)`,
+`sd_data_logger: fix 20261102 120001.00 (not saved)` when its row could not be written, or
+`sd_data_logger: fix 20261102 120001.00 (card unavailable)` without a mounted card. A row that
+cannot be written raises GPIO18 and prints `sd_data_logger: SD card write failed` before its fix
+line; the next fix tries again, and the first row written after a failure lowers GPIO18 and
+prints `sd_data_logger: SD card writes again`. A row that failed is not written again.
 Mounting is attempted once at boot; insertion/removal during a run is not supported.
 
 Tests verify existing rows and new coordinates byte for byte, a new file across New Year and
 leap-day midnight, no files without a fix, pause/recovery after fix loss, malformed input, and
-continued reception with the error pin continuously high after an empty-slot failure.
+continued reception with the error pin continuously high after an empty-slot failure. With the
+card's fault rules ([pytest plugin](pytest-plugin-user.md#the-fixtures)) they also verify, after a
+successful mount and first rows: a failed block write that raises GPIO18, loses its row and
+leaves the image readable, and the next fix that writes again and lowers the pin; a failed block
+read, which ESP-IDF reports as its read timeout 1 s later, with the same recovery; a write busy
+for 300 ms, whose row is saved later with the pin low throughout; and a write busy for 6 s, past
+ESP-IDF's 5 s write timeout, which the firmware reports as a failure 5 s after the write on the
+board's clock, then writes again once the card is no longer busy.
 
 ## Position tracker over a cellular modem
 

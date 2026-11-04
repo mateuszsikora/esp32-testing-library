@@ -12,6 +12,14 @@
 //! SPI. It answers at once: no busy time after a write or an erase, no wait before a data block
 //! beyond one byte. Without CMD6 (CCC without class 10) the host stays at default speed, and
 //! there is no locking, write protection or CMD23.
+//!
+//! The peer's fault rules (`sd_fault`, protocol 5.20) change that for the block operations they
+//! apply to: a read answers an error token, a write the data response "write error" and leaves the
+//! image as it was, and a delay holds a read's data block back, or keeps the card busy after a
+//! write or an erase, for that long on the bus's clock. The board tells the card the bus cycle at
+//! every tick (`advance`), so a transaction sees the time it happens at, and a firmware that polls
+//! sees time pass between its transactions.
+use crate::protocol::cycles;
 use esp_periph::sdmmc::SdStore;
 use esp_periph::sdmmc::card::BLOCK;
 use esp_soc::board::{BoardModel, SpiPins};
@@ -55,9 +63,12 @@ const STOP_TRAN: u8 = 0xfd;
 const DATA_ACCEPTED: u8 = 0x05;
 const DATA_CRC_ERROR: u8 = 0x0b;
 const DATA_WRITE_ERROR: u8 = 0x0d;
-/// Data error tokens: card controller error, out of range.
+/// Data error tokens: card controller error, card ECC failed, out of range.
 const ERROR_CC: u8 = 0x02;
+const ERROR_ECC: u8 = 0x04;
 const ERROR_RANGE: u8 = 0x08;
+/// What a card sends while it is busy programming (SD spec §7.2.4).
+const BUSY: u8 = 0x00;
 
 /// OCR (SD spec §5.1): 2.7-3.6 V, card capacity status, power-up done.
 const OCR_VOLTAGE: u32 = 0x00ff_8000;
@@ -79,6 +90,68 @@ pub struct Stats {
     pub blocks_written: u64,
     /// Reads and writes of the image that failed.
     pub errors: u64,
+    /// Block operations a fault rule applied to.
+    pub faults: u64,
+}
+
+/// The block operations a fault rule applies to (`sd_fault`'s `op`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Op {
+    /// A block read, of CMD17 or of each block of CMD18 the host clocks on for.
+    Read,
+    /// A block written, of CMD24 or of each block of CMD25.
+    Write,
+    /// A CMD38, over its whole range.
+    Erase,
+}
+
+impl Op {
+    pub fn name(self) -> &'static str {
+        match self {
+            Op::Read => "read",
+            Op::Write => "write",
+            Op::Erase => "erase",
+        }
+    }
+}
+
+/// What a fault rule does to an operation it applies to (`sd_fault`'s `action`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Action {
+    /// A read answers the data error token "card ECC failed", a write the data response "write
+    /// error"; neither touches the image. Not for an erase.
+    Error,
+    /// So many nanoseconds more: before a read's data block, or busy after a write's data
+    /// response or an erase's R1.
+    Delay(u64),
+}
+
+/// A rule of the peer's (`sd_fault`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Fault {
+    pub id: u64,
+    pub op: Op,
+    pub action: Action,
+    /// The first and last block it applies to; `None` for any.
+    pub blocks: Option<(u64, u64)>,
+    /// The operations it applies to before it is gone; `None` until it is cleared.
+    pub count: Option<u64>,
+}
+
+/// An operation a rule applied to (`sd_op`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Faulted {
+    /// The bus cycle it started at: a read's command, or for a next block of CMD18 the first
+    /// byte clocked for it, a write's data response, an erase's CMD38.
+    pub cycle: u64,
+    /// The rule's `id`.
+    pub fault: u64,
+    pub op: Op,
+    /// The first and last block of the operation.
+    pub blocks: (u64, u64),
+    pub action: Action,
+    /// Whether the card wrote the image: a delayed write or erase it carried out.
+    pub written: bool,
 }
 
 /// What the card does with the bytes that come in.
@@ -118,6 +191,16 @@ pub struct SdCard {
     command: Vec<u8>,
     /// What goes out on MISO next; 0xff when empty.
     out: VecDeque<u8>,
+    /// The bus cycle, as the board last said it (`advance`).
+    now: u64,
+    /// The peer's rules, in the order it gave them; the last one first applies.
+    faults: Vec<Fault>,
+    /// What the rules did, for the run loop (`take_faulted`).
+    faulted: Vec<Faulted>,
+    /// A delayed read: the cycle its data block may go out at, and the block.
+    access: Option<(u64, u64)>,
+    /// The cycle a delayed write or erase is done at: until then the card is busy.
+    busy_until: Option<u64>,
     pub stats: Stats,
 }
 
@@ -153,6 +236,11 @@ impl SdCard {
             phase: Phase::Command,
             command: Vec::with_capacity(6),
             out: VecDeque::new(),
+            now: 0,
+            faults: Vec::new(),
+            faulted: Vec::new(),
+            access: None,
+            busy_until: None,
             stats: Stats::default(),
         })
     }
@@ -164,7 +252,8 @@ impl SdCard {
 
     /// The board's supply went off: the card is back where it was when it was inserted, out of
     /// SPI mode and uninitialised, and a block it had not received whole is lost. What it wrote
-    /// is in the image already: a block goes there whole once its CRC is in.
+    /// is in the image already: a block goes there whole once its CRC is in. A delayed read and a
+    /// busy time end with the power; the peer's rules are the test's, and stay.
     pub fn power_off(&mut self) {
         self.spi = false;
         self.ready = false;
@@ -177,6 +266,71 @@ impl SdCard {
         self.phase = Phase::Command;
         self.command.clear();
         self.out.clear();
+        self.access = None;
+        self.busy_until = None;
+    }
+
+    /// The bus has reached `cycle`: the transactions from now on happen there.
+    pub fn advance(&mut self, cycle: u64) {
+        self.now = cycle;
+    }
+
+    /// Adds a rule, before the others: of the rules an operation matches, the one given last
+    /// applies. The operations that start from now on may meet it; one already under way keeps
+    /// what it met when it started.
+    pub fn install(&mut self, fault: Fault) {
+        self.faults.push(fault);
+    }
+
+    /// Removes the rules with these ids, or every rule; an id no rule has, one that has run
+    /// out among them, is no error.
+    pub fn clear(&mut self, ids: Option<&[u64]>) {
+        match ids {
+            Some(ids) => self.faults.retain(|f| !ids.contains(&f.id)),
+            None => self.faults.clear(),
+        }
+    }
+
+    /// What the rules did since the last call, in order.
+    pub fn take_faulted(&mut self) -> Vec<Faulted> {
+        std::mem::take(&mut self.faulted)
+    }
+
+    /// The rule given last for `op` on a block from `lo` to `hi`, which counts the operation;
+    /// its id and action.
+    fn fault(&mut self, op: Op, lo: u64, hi: u64) -> Option<(u64, Action)> {
+        let i = self.faults.iter().rposition(|f| {
+            f.op == op
+                && f.blocks
+                    .is_none_or(|(first, last)| first <= hi && lo <= last)
+        })?;
+        let rule = &mut self.faults[i];
+        let hit = (rule.id, rule.action);
+        if let Some(left) = &mut rule.count {
+            *left -= 1;
+            if *left == 0 {
+                self.faults.remove(i);
+            }
+        }
+        self.stats.faults += 1;
+        Some(hit)
+    }
+
+    fn report(
+        &mut self,
+        (fault, action): (u64, Action),
+        op: Op,
+        blocks: (u64, u64),
+        written: bool,
+    ) {
+        self.faulted.push(Faulted {
+            cycle: self.now,
+            fault,
+            op,
+            blocks,
+            action,
+            written,
+        });
     }
 
     /// One SPI transaction on the chip's routes `pins`: `tx` out on MOSI, `rx_len` bytes back
@@ -207,7 +361,15 @@ impl SdCard {
     /// One byte each way: what the card sends while `mosi` comes in.
     fn exchange(&mut self, mosi: u8) -> u8 {
         if self.out.is_empty() {
-            self.next_block();
+            if self.busy_until.is_some_and(|until| self.now < until) {
+                // programming: MISO held low, and what comes in is not heard
+                return BUSY;
+            }
+            self.busy_until = None;
+            // a command coming in ends a read: no block is begun, and no rule met, for it
+            if self.command.is_empty() && mosi & 0xc0 != 0x40 {
+                self.next_block();
+            }
         }
         let miso = self.out.pop_front().unwrap_or(0xff);
         match &mut self.phase {
@@ -241,21 +403,35 @@ impl SdCard {
         };
     }
 
-    /// A block written, with its CRC: the data response, then the next block of a CMD25.
+    /// A block written, with its CRC: the data response, then the next block of a CMD25. A rule
+    /// meets a block that came in whole and in range: an error leaves the image as it was, a
+    /// delay keeps the card busy after the data response of a block it wrote.
     fn block_in(&mut self, lba: u64, multi: bool, buf: &[u8]) {
         let (data, crc) = buf.split_at(BLOCK);
         let response = if self.crc && crc16(data) != u16::from_be_bytes([crc[0], crc[1]]) {
             DATA_CRC_ERROR
         } else if lba >= self.blocks {
             DATA_WRITE_ERROR
-        } else if let Err(e) = self.store.write(lba, data.try_into().unwrap()) {
-            self.stats.errors += 1;
-            eprintln!("esp32tl-runner: SD card: writing block {lba}: {e}");
-            DATA_WRITE_ERROR
         } else {
-            self.stats.blocks_written += 1;
-            self.written += 1;
-            DATA_ACCEPTED
+            let fault = self.fault(Op::Write, lba, lba);
+            let response = if matches!(fault, Some((_, Action::Error))) {
+                DATA_WRITE_ERROR
+            } else if let Err(e) = self.store.write(lba, data.try_into().unwrap()) {
+                self.stats.errors += 1;
+                eprintln!("esp32tl-runner: SD card: writing block {lba}: {e}");
+                DATA_WRITE_ERROR
+            } else {
+                self.stats.blocks_written += 1;
+                self.written += 1;
+                DATA_ACCEPTED
+            };
+            if let Some(hit) = fault {
+                if let (Action::Delay(ns), DATA_ACCEPTED) = (hit.1, response) {
+                    self.busy_until = Some(self.now + cycles(ns));
+                }
+                self.report(hit, Op::Write, (lba, lba), response == DATA_ACCEPTED);
+            }
+            response
         };
         self.out.push_back(response);
         // after an error a multiple block write waits for its stop token (SD spec §7.3.3.1)
@@ -269,8 +445,17 @@ impl SdCard {
         };
     }
 
-    /// The next block of a CMD18, once the one before is out.
+    /// A delayed block once its time has come, else the next block of a CMD18, once the one
+    /// before is out.
     fn next_block(&mut self) {
+        if let Some((at, lba)) = self.access {
+            // until then, 0xff: the access time goes on (N_AC)
+            if self.now >= at {
+                self.access = None;
+                self.read_block(lba);
+            }
+            return;
+        }
         let Phase::Reading { next } = self.phase else {
             return;
         };
@@ -280,7 +465,24 @@ impl SdCard {
             return;
         }
         self.phase = Phase::Reading { next: next + 1 };
-        self.read_block(next);
+        self.start_read(next);
+    }
+
+    /// The read of the block at `lba`, as a rule has it: an error token, the block later, or the
+    /// block now.
+    fn start_read(&mut self, lba: u64) {
+        match self.fault(Op::Read, lba, lba) {
+            Some(hit @ (_, Action::Error)) => {
+                self.report(hit, Op::Read, (lba, lba), false);
+                self.out.extend([0xff, ERROR_ECC]);
+                self.phase = Phase::Command;
+            }
+            Some(hit @ (_, Action::Delay(ns))) => {
+                self.report(hit, Op::Read, (lba, lba), false);
+                self.access = Some((self.now + cycles(ns), lba));
+            }
+            None => self.read_block(lba),
+        }
     }
 
     /// The block at `lba` as a data block, after one byte of access time; an error token when
@@ -335,8 +537,9 @@ impl SdCard {
         self.stats.commands += 1;
         let app = std::mem::take(&mut self.app_cmd);
         // A command ends what the card was sending, a read in progress included (SD spec
-        // §7.2.3), and a write that never got its token.
+        // §7.2.3), a delayed one too, and a write that never got its token.
         self.out.clear();
+        self.access = None;
         self.phase = Phase::Command;
         // the command response time, one byte (SD spec §7.5.4)
         self.out.push_back(0xff);
@@ -466,7 +669,7 @@ impl SdCard {
                 if index == 18 {
                     self.phase = Phase::Reading { next: lba + 1 };
                 }
-                self.read_block(lba);
+                self.start_read(lba);
             }
             // CMD24 WRITE_BLOCK, CMD25 WRITE_MULTIPLE_BLOCK
             24 | 25 => {
@@ -506,9 +709,21 @@ impl SdCard {
                     self.r1(PARAMETER);
                     return;
                 }
-                if let Err(e) = self.store.erase(lo, hi) {
-                    self.stats.errors += 1;
-                    eprintln!("esp32tl-runner: SD card: erasing blocks {lo} to {hi}: {e}");
+                let fault = self.fault(Op::Erase, lo, hi);
+                let erased = match self.store.erase(lo, hi) {
+                    Ok(()) => true,
+                    Err(e) => {
+                        self.stats.errors += 1;
+                        eprintln!("esp32tl-runner: SD card: erasing blocks {lo} to {hi}: {e}");
+                        false
+                    }
+                };
+                if let Some(hit) = fault {
+                    if let (Action::Delay(ns), true) = (hit.1, erased) {
+                        // R1b: busy after the R1
+                        self.busy_until = Some(self.now + cycles(ns));
+                    }
+                    self.report(hit, Op::Erase, (lo, hi), erased);
                 }
                 self.r1(0);
             }
@@ -574,6 +789,10 @@ pub struct Slot {
     image: Option<String>,
     /// What the cards that have left the slot did.
     retired: Stats,
+    /// The bus cycle, for the card that goes in next.
+    now: u64,
+    /// The peer's rules while the slot is empty: they are the test's, and go on to the next card.
+    faults: Vec<Fault>,
     /// Cards put in and taken out while the guest ran.
     pub inserted: u64,
     pub removed: u64,
@@ -589,6 +808,8 @@ impl Slot {
             card: None,
             image: None,
             retired: Stats::default(),
+            now: 0,
+            faults: Vec::new(),
             inserted: 0,
             removed: 0,
         }
@@ -600,8 +821,10 @@ impl Slot {
         if let Some(held) = &self.image {
             return Err(format!("the slot holds {held} already"));
         }
-        let card = SdCard::new(self.wiring, store)?;
+        let mut card = SdCard::new(self.wiring, store)?;
         let len = card.len();
+        card.now = self.now;
+        card.faults = std::mem::take(&mut self.faults);
         self.card = Some(card);
         self.image = Some(image.to_string());
         Ok(len)
@@ -620,15 +843,17 @@ impl Slot {
 
     /// Takes the card out, closing its image; `false` for an empty slot.
     pub fn remove(&mut self) -> bool {
-        let Some(card) = self.card.take() else {
+        let Some(mut card) = self.card.take() else {
             return false;
         };
         self.image = None;
+        self.faults = std::mem::take(&mut card.faults);
         let s = card.stats;
         self.retired.commands += s.commands;
         self.retired.blocks_read += s.blocks_read;
         self.retired.blocks_written += s.blocks_written;
         self.retired.errors += s.errors;
+        self.retired.faults += s.faults;
         true
     }
 
@@ -652,8 +877,44 @@ impl Slot {
             s.blocks_read += card.stats.blocks_read;
             s.blocks_written += card.stats.blocks_written;
             s.errors += card.stats.errors;
+            s.faults += card.stats.faults;
         }
         s
+    }
+
+    /// The bus has reached `cycle` (`SdCard::advance`).
+    pub fn advance(&mut self, cycle: u64) {
+        self.now = cycle;
+        if let Some(card) = &mut self.card {
+            card.advance(cycle);
+        }
+    }
+
+    /// Adds a rule (`SdCard::install`), for the card in the slot and the ones after it.
+    pub fn install(&mut self, fault: Fault) {
+        match &mut self.card {
+            Some(card) => card.install(fault),
+            None => self.faults.push(fault),
+        }
+    }
+
+    /// Removes rules (`SdCard::clear`).
+    pub fn clear(&mut self, ids: Option<&[u64]>) {
+        match &mut self.card {
+            Some(card) => card.clear(ids),
+            None => match ids {
+                Some(ids) => self.faults.retain(|f| !ids.contains(&f.id)),
+                None => self.faults.clear(),
+            },
+        }
+    }
+
+    /// What the rules did since the last call (`SdCard::take_faulted`).
+    pub fn take_faulted(&mut self) -> Vec<Faulted> {
+        match &mut self.card {
+            Some(card) => card.take_faulted(),
+            None => Vec::new(),
+        }
     }
 
     /// One SPI transaction (`SdCard::transfer`); all 0xff back from an empty slot.

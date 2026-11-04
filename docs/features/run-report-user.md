@@ -143,6 +143,20 @@ the time it refused it: `  0.900000000 s  refused: PATH put in`. The test's
 `sd_card.insert(PATH)` and `sd_card.remove()` are among its steps
 ([pytest plugin](pytest-plugin-user.md#taking-the-card-out-and-putting-one-in)).
 
+Under those lines comes each fault rule the test gave the card, in the words of its call, when it
+gave it, when it cleared it if it did, and how many operations the rule met, then one line for each
+of them, at the board's time it started:
+
+```text
+  fault 1: sd_card.fail('write', count=1) at 2.5 s; 1 operation
+    3.0681844 s  write of block 541 failed, not written
+  fault 2: sd_card.delay('read', seconds(0.1)) at 3.5 s, cleared at 5 s; 1 operation
+    4.067868737 s  read of block 541 delayed 0.1 s, not written
+```
+
+`sd_card.fail`, `sd_card.delay`, `clear()` and `sd_card.clear_faults()` are among the test's steps
+too ([pytest plugin](pytest-plugin-user.md#making-the-card-fail-or-slow-down)).
+
 A test that passed gets the `routes:` lines and the slot's, without the run; `pytest -rA` shows
 them.
 

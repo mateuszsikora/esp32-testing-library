@@ -82,7 +82,10 @@ writes into the image file as the firmware writes ([runner](runner-user.md#put-a
 An empty slot gives the runner no card. The bytes the card and the firmware exchange do not go on
 the link; the card going in and coming out does: `sd_card.remove()` and `sd_card.insert(image)`
 with the board on go to the runner in the next turn, and the runner acknowledges each
-([pytest plugin](pytest-plugin-user.md#taking-the-card-out-and-putting-one-in)).
+([pytest plugin](pytest-plugin-user.md#taking-the-card-out-and-putting-one-in)). The slot
+is on the link for the card's fault rules too: what the test gives with `sd_card.fail` and
+`sd_card.delay` goes to the runner at the board's current instant, and what each rule did comes back
+([pytest plugin](pytest-plugin-user.md#making-the-card-fail-or-slow-down)).
 
 The chip's Wi-Fi station is on the link once the test gives it an access point
 (`wifi.access_point(...)`, [pytest plugin](pytest-plugin-user.md#the-wifi-fixture)): the backend
@@ -213,7 +216,9 @@ board's clock after it
 ([the run on the board's clock](run-report-user.md#the-run-on-the-boards-clock)). The same data,
 but the run, is in the test's `esp32sim_link` user property, a JSON string with `board`, `watch`,
 `warnings`, `stats`, `error`, `routes`, `sd_card` and `wifi`, which `--junitxml` writes as a
-`<property>`; `wifi` is `null` without an access point.
+`<property>`; `wifi` is `null` without an access point, and `sd_card`, without a slot, else the
+card's `image` and its `faults`. With a slot the report also names the card and lists each fault
+rule the test gave with what it did.
 
 ## When the backend cannot start
 

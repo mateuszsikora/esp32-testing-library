@@ -163,6 +163,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The lines declare no latency, and a wait sees a line's change at its next look](harness.md#the-lines-declare-no-latency-and-a-wait-sees-a-lines-change-at-its-next-look) | `harness.md` | decided (#24) |
 | [Whether a backend can drive a board's lines is not declared yet](harness.md#whether-a-backend-can-drive-a-boards-lines-is-not-declared-yet) | `harness.md` | postponed (#25) |
 | [An SD card is inserted by the test, as a model source holding an image file](harness.md#an-sd-card-is-inserted-by-the-test-as-a-model-source-holding-an-image-file) | `harness.md` | decided (#32) |
+| [The test makes the SD card fail or slow down with sd_card.fail and sd_card.delay](harness.md#the-test-makes-the-sd-card-fail-or-slow-down-with-sd_cardfail-and-sd_carddelay) | `harness.md` | decided (#107) |
 | [Inserting and removing the SD card while the firmware runs is postponed](harness.md#inserting-and-removing-the-sd-card-while-the-firmware-runs-is-postponed) | `harness.md` | superseded (#106) |
 | [The test takes the SD card out and puts one in at the board's current instant](harness.md#the-test-takes-the-sd-card-out-and-puts-one-in-at-the-boards-current-instant) | `harness.md` | decided (#106) |
 | [The backend always gives the runner the profile's SD card slot](harness.md#the-backend-always-gives-the-runner-the-profiles-sd-card-slot) | `harness.md` | decided (#106) |
@@ -246,7 +247,9 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [input_on_output looks at GPIO_ENABLE only](runner.md#input_on_output-looks-at-gpio_enable-only) | `runner.md` | decided (#23) |
 | [adc waits for an example with an analog pin](runner.md#adc-waits-for-an-example-with-an-analog-pin) | `runner.md` | postponed (#23) |
 | [The SD card is a model of SPI mode in the runner, not esp32sim's card](runner.md#the-sd-card-is-a-model-of-spi-mode-in-the-runner-not-esp32sims-card) | `runner.md` | decided (#32) |
-| [The SD card answers at once and has no CMD6](runner.md#the-sd-card-answers-at-once-and-has-no-cmd6) | `runner.md` | decided (#32) |
+| [The SD card answers at once and has no CMD6](runner.md#the-sd-card-answers-at-once-and-has-no-cmd6) | `runner.md` | decided (#32), busy time by fault rules (#107) |
+| [SD faults are the peer's rules, applied by the card on the bus's clock](runner.md#sd-faults-are-the-peers-rules-applied-by-the-card-on-the-buss-clock) | `runner.md` | decided (#107) |
+| [The SD card's fault messages keep protocol version 1](runner.md#the-sd-cards-fault-messages-keep-protocol-version-1) | `runner.md` | decided (#107) |
 | [The SD card slot changes its card between transactions, and a new card starts unpowered](runner.md#the-sd-card-slot-changes-its-card-between-transactions-and-a-new-card-starts-unpowered) | `runner.md` | decided (#106) |
 | [Under --realtime the runner waits at each block point until wall time reaches it](runner.md#under---realtime-the-runner-waits-at-each-block-point-until-wall-time-reaches-it) | `runner.md` | decided (#27) |
 | [The runner starts its wall clock with esp32sim's pacing, and then follows esp32sim's resyncs](runner.md#the-runner-starts-its-wall-clock-with-esp32sims-pacing-and-then-follows-esp32sims-resyncs) | `runner.md` | decided (#27) |

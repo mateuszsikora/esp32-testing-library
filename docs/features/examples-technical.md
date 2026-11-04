@@ -60,11 +60,14 @@ The separate `gps-alarm-clock` profile gives this assembly's wiring without chan
 ## SD logger implementation
 
 `examples/sd_data_logger/main/main.c` uses ESP-IDF's SDSPI host and FAT VFS, with SPI2 on
-GPIO14/15/2/13 and `format_if_mount_failed = false`. GPIO18 starts high, becomes low only when
-the mount succeeds, and latches high on any `fopen`, `fprintf` or `fclose` failure. The UART
-driver is installed before mounting so it can buffer incoming sentences during card discovery.
-The application continues its UART loop after storage failure and reports accepted fixes on
-the console. It does not retry mounting or writing after failure.
+GPIO14/15/2/13 and `format_if_mount_failed = false`. GPIO18 starts high and becomes low only when
+the mount succeeds. After that, `failing` follows the last `append_fix`: an `fopen`, `fprintf` or
+`fclose` failure sets it and GPIO18, a success clears both, and each change prints its line
+(`SD card write failed`, `SD card writes again`). The UART driver is installed before mounting so
+it can buffer incoming sentences during card discovery, and while a slow card keeps a write
+waiting. The application continues its UART loop after storage failure and reports accepted
+fixes on the console. It does not retry mounting, nor the row that failed: the next fix is the
+next attempt.
 
 Like the alarm, this project compiles `firmware/nmea_reader/main/nmea.c` from the checkout.
 `dated_fix` accepts RMC only, delegates checksum/status/coordinate parsing, and validates its
@@ -79,7 +82,10 @@ and preventing the receiver from selecting an arbitrary path.
 coordinates rounded to microdegrees, and closes it before printing `(saved)`. Closing flushes
 stdio and synchronizes the FAT file. There is no cached open file across dates, no GGA-derived
 date carryover and no duplicate-sentence suppression. A write failure can leave a partial row;
-the example promises neither atomic rows under power loss nor recovery from a damaged FAT.
+the example promises neither atomic rows under power loss nor recovery from a damaged FAT. With
+the runner's card failing one block write, the block that fails is the row's data block (block
+541 on the tests' 32 MiB image, then the directory entry's, 509, is not written), the file reads
+as it was before the row, and the next fix's row is appended after the last one saved.
 
 The tests use the public `Board` API, with `board.gnss`, `board.sd_card`, `board.lines` and
 `board.console`. They prepare 32 MiB FAT images through `board.sd_card.image(...).build()`;
@@ -103,6 +109,23 @@ The malformed-input scenario keeps its raw NMEA bytes visible, including deliber
 checksums. `write_gnss_recording` packages them into a recording without modifying the bytes;
 the scenario specifies the first send time and spacing in units, then waits until the last
 sentence's scheduled time plus the same write margin.
+
+The storage-failure scenarios give the card a rule after the first rows are on the image, then
+wait for the firmware's console line with `board.wait_until(board.console.line(...))`, whose
+`Line.at` they compare with the rule's `hits`. The failed-write scenario uses
+`fail("write", count=1)` and checks the hit (`write`, `error`, not written), the `(not saved)`
+fix, GPIO18 high, the image unchanged, then `SD card writes again` at the next fix, GPIO18 low,
+the rule spent and the next row appended. The failed-read scenario uses `fail("read", count=1)`:
+appending reads the row's sector first, the driver misses the error token and times out, so the
+failure comes 1 s after the hit, with `sdmmc_read_blocks failed (0x107)` on the console. The next
+fix arrived during that second, so GPIO18 goes high and low again within milliseconds, and the
+scenario checks the pin's events, not its level. The slow-write scenario uses `delay("write", ms(300))`,
+lasting: a row writes two blocks, its data and its directory entry, so its `(saved)` line comes
+at least 300 ms after the last hit; then `clear()` and one more row with no more hits. The
+timeout scenario uses `delay("write", seconds(6), count=1)` and checks that the failure comes 5 to
+6 s after the hit, the hit `written`, and that `SD card writes again` comes no earlier than 6 s
+after it; the rows saved from then on are on the image. It takes about 10 wall seconds: ESP-IDF
+polls the busy card one byte per transaction for 5 emulated seconds.
 
 ## Documentation and builder checks
 

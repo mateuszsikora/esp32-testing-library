@@ -136,6 +136,10 @@ sd_card: a card holding {image}
   {seconds}.{nanoseconds:09d} s  {image} put in
   {seconds}.{nanoseconds:09d} s  refused: {image} put in
   {seconds}.{nanoseconds:09d} s  not reached: taken out
+  fault {id}: {call} at {at}[, cleared at {cleared}]; {n} operation(s)
+    {at}  {op} of block {block} failed, not written
+    {at}  {op} of block {block} delayed {delay}, {written|not written}
+    {at}  erase of blocks {first} to {last} delayed {delay}, {written|not written}
 the run on the board's clock, {kept}:
   {seconds}.{nanoseconds:09d} s  {who}  {text}
 ```
@@ -147,7 +151,13 @@ the run on the board's clock, {kept}:
 acknowledged, else the one at power-on; after it, one line per change the runner acknowledged
 while the board was on (`SdCard.changes`), at its time, then the one it refused
 (`SdCard.refused`), at that time, with `refused: ` before it, then one per change it did not
-reach (`SdCard.not_reached`), at the time the test made it, with `not reached: ` before it. `{kept}` is `{n} entries` (`1 entry`), every entry of the run,
+reach (`SdCard.not_reached`), at the time the test made it, with `not reached: ` before it. Then
+`SdCard.report()`: one `fault` line per rule the test gave, cleared and spent ones too, in order, and
+under it one line per operation the rule met (`FaultedOperation.__str__`). `{call}` is the call in
+the test's words, as `sd_card.fail('write', count=1)` or
+`sd_card.delay('read', seconds(0.02), blocks=range(0, 4))`; `{at}`, `{cleared}` and `{delay}` are
+`Duration`s as `str` shows them, as `2.5 s` or `3.0681844 s`, and `{n} operation(s)` is `1 operation`
+or `2 operations`. `{kept}` is `{n} entries` (`1 entry`), every entry of the run,
 the steps included; when the `deque` has dropped some,
 `: every step of the test, and the last {kept} of the console and the routes` follows. With no entry
 the heading is `the run on the board's clock: nothing happened`. `{who}` is `test`, `chip`,
@@ -159,9 +169,12 @@ the console is tapped. Serial instead uses the [serial schema](serial-backend-te
 The esp32sim user property's `routes`, by interface: `{"source": kind or null, "detail": what
 the source was made from or null, "bytes_in": n, "bytes_out": n, "tap": path or null}`;
 and `sd_card`, `{"image": path or null, "changes": [{"t_ns": t, "image": path or null}, ...],
-"refused": [...], "not_reached": [{"t_ns": t, "image": path or null}, ...]}`, `image` being
+"refused": [...], "not_reached": [{"t_ns": t, "image": path or null}, ...], "faults": [...]}`, `image` being
 `SdCard.held`, or null
-on a profile without a slot.
+on a profile without a slot. `faults` is `SdCard.properties()`, per rule `{"id": n, "call": text,
+"t_ns": t, "cleared_t_ns": t or null, "operations": [{"t_ns": t, "op": "read" or "write" or "erase",
+"blocks": [first, last], "action": "error" or "delay", "delay_ns": ns or null, "written": bool},
+...]}`.
 
 `RunLog.line(t, name, level, direction="out")` records firmware GPIO output by default.
 `Lines.inputs` calls it with `direction="in"` when a model's pending GPIO response is due and
@@ -239,7 +252,10 @@ Serial errors and its report properties are specified in
   a replay of a tapped file, refused; the test's steps on a `Uart` logged at 0.
 - `tests/test_sdspi.py`: the card's line and `sd_card.insert` step in the report of a run with a
   card, and the `sd_card` property; a tap into the card's image, a replay of it, and a card
-  holding a tap's file, refused, with `sd_card: empty` in the report.
+  holding a tap's file, refused, with `sd_card: empty` in the report; a rule's `fault` line in the
+  report of a run on `sdspi`.
+- `tests/test_sd_faults.py`: the `fault` lines and operation lines of `SdCard.report()`, a spent
+  rule that shows no `cleared at`, and the entries of `SdCard.properties()`.
 - `tests/test_run_report.py`: entries in the order of the board's time, ties in the order they
   came; the console cut into lines at their first byte's time, colour codes dropped, an unfinished
   line shown; every step and the last `entries` of the rest kept, with the heading that says so,

@@ -16,6 +16,22 @@ const PWRKEY: u8 = 13;
 const RI: u8 = 33;
 /// One emulated second, in bus cycles.
 const SECOND: u64 = esp32::periph::CPU_HZ;
+const MS_CYCLES: u64 = SECOND / 1000;
+/// A data block's 512 bytes, its CRC16 and a byte to spare.
+const BLOCK_AND_CRC: usize = 512 + 3;
+const CARD: sd_card::Wiring = sd_card::Wiring {
+    sclk: 14,
+    mosi: 15,
+    miso: 2,
+    cs: 13,
+};
+/// The routes of a transaction to the card, its CS low.
+const CARD_PINS: esp_soc::board::SpiPins = esp_soc::board::SpiPins {
+    sclk: 1 << 14,
+    mosi: 1 << 15,
+    miso: Some(2),
+    cs: 1 << 13,
+};
 
 fn route(port: usize, tx: Option<u8>, rx: Option<u8>, baud: Option<u32>) -> UartRoute {
     UartRoute::new(port, tx.map_or(0, |p| 1 << p), rx, baud)
@@ -38,6 +54,8 @@ enum Act {
     /// peripheral drives through the GPIO matrix, whatever the two words say.
     Pads(Vec<(u8, bool)>, u64, u64),
     Fault,
+    /// An SPI transaction to the SD card, at the bus's tick for that cycle.
+    Spi(Vec<u8>),
 }
 
 /// A guest that does what its script says at the cycles it says, and records UART bytes the way
@@ -62,6 +80,8 @@ struct FakeGuest {
     power_resets: Vec<u64>,
     /// Where each slice with the supply off ended.
     idles: Vec<u64>,
+    /// What came back of each `Act::Spi`, with the cycle.
+    spi: Vec<(u64, Vec<u8>)>,
 }
 
 impl FakeGuest {
@@ -82,7 +102,13 @@ impl FakeGuest {
             slices: Vec::new(),
             power_resets: Vec::new(),
             idles: Vec::new(),
+            spi: Vec::new(),
         }
+    }
+
+    fn with_card(mut self, card: &sd_card::Shared) -> Self {
+        self.board = SocketBoard::new(self.shared.clone(), Some(card.clone()));
+        self
     }
 
     fn with_routes(mut self, routes: &[UartRoute]) -> Self {
@@ -138,6 +164,11 @@ impl Guest for FakeGuest {
                     self.board.gpio_output_at(self.now, &changes, enable, out);
                 }
                 Act::Fault => return Stop::Exceptions(3),
+                Act::Spi(tx) => {
+                    self.board.advance_to(self.now);
+                    let rx = self.board.spi_transfer_pins(2, CARD_PINS, &tx, tx.len());
+                    self.spi.push((self.now, rx));
+                }
             }
         }
         self.now = end;
@@ -363,7 +394,17 @@ struct Run {
     peer: FakePeer,
 }
 
-fn run_for(seconds: f64, mut guest: FakeGuest, mut peer: FakePeer, console: bool) -> Run {
+fn run_for(seconds: f64, guest: FakeGuest, peer: FakePeer, console: bool) -> Run {
+    run_with_card(seconds, guest, peer, console, None)
+}
+
+fn run_with_card(
+    seconds: f64,
+    mut guest: FakeGuest,
+    mut peer: FakePeer,
+    console: bool,
+    card: Option<&sd_card::Shared>,
+) -> Run {
     let signal = AtomicBool::new(false);
     let shared = guest.shared.clone();
     let opts = Options {
@@ -373,7 +414,7 @@ fn run_for(seconds: f64, mut guest: FakeGuest, mut peer: FakePeer, console: bool
         signal: &signal,
         wifi: None,
         rom: &[],
-        card: None,
+        card: card.cloned(),
     };
     let (end, stats) = Session::new(&mut guest, &mut peer, shared, opts).run();
     Run {
@@ -2560,6 +2601,128 @@ fn sd_card_without_a_slot_is_a_protocol_error() {
     let r = run(1.0, FakeGuest::new(Vec::new()), peer);
     assert!(
         matches!(&r.end, End::Protocol(m) if m.contains("sd_card without --sd-spi")),
+        "{:?}",
+        r.end
+    );
+}
+
+/// A command to the SD card, with its CRC7, and `answer` bytes of 0xff after it.
+fn sd_command(index: u8, arg: u32, answer: usize) -> Vec<u8> {
+    let mut f = vec![0x40 | index, 0, 0, 0, 0, 0];
+    f[1..5].copy_from_slice(&arg.to_be_bytes());
+    f[5] = sd_card::crc7(&f[..5]) << 1 | 1;
+    f.resize(6 + answer, 0xff);
+    f
+}
+
+/// A 1 MiB card, initialised as sdspi does it.
+fn ready_card() -> sd_card::Shared {
+    let store = esp_periph::sdmmc::MemStore(vec![0; 2 * sd_card::UNIT as usize]);
+    let mut slot = sd_card::Slot::new(CARD);
+    slot.insert("card", Box::new(store)).unwrap();
+    for (index, arg) in [
+        (0, 0),
+        (8, 0x1aa),
+        (55, 0),
+        (41, 1 << 30),
+        (55, 0),
+        (41, 1 << 30),
+    ] {
+        slot.transfer(CARD_PINS, &sd_command(index, arg, 8), 14);
+    }
+    let answer = slot.transfer(CARD_PINS, &sd_command(58, 0, 8), 14);
+    assert_eq!(answer[8] >> 7, 1, "initialised: {answer:?}");
+    Rc::new(RefCell::new(slot))
+}
+
+fn sd_fault(t: u64, id: u64, rest: &str) -> String {
+    format!(r#"{{"type":"sd_fault","t":{t},"id":{id},{rest}}}"#)
+}
+
+#[test]
+fn an_sd_fault_comes_due_on_the_card_and_what_it_did_goes_out_as_sd_op() {
+    let card = ready_card();
+    // a read of block 5 at 0.5, 2 and 3 ms, the bytes of its data block clocked with it
+    let read = || Act::Spi(sd_command(17, 5, 8 + BLOCK_AND_CRC));
+    let guest = FakeGuest::new(vec![
+        (MS_CYCLES / 2, read()),
+        (2 * MS_CYCLES, read()),
+        (3 * MS_CYCLES, read()),
+    ])
+    .with_card(&card);
+    let mut first = true;
+    let peer = FakePeer::new(&[], move |turn| {
+        let mut out = Vec::new();
+        if std::mem::take(&mut first) {
+            // from 1 ms, one read fails
+            out.push(sd_fault(MS, 1, r#""op":"read","action":"error","count":1"#));
+        }
+        out.push(wait(turn.seq, None, None));
+        out
+    });
+    let r = run_with_card(0.01, guest, peer, false, Some(&card));
+    assert!(matches!(r.end, End::MaxSeconds), "{:?}", r.end);
+    let ops = r.peer.of("sd_op");
+    assert_eq!(ops.len(), 1, "{:?}", r.peer.types());
+    let op = ops[0];
+    assert_eq!(num(op, "t"), ns(2 * MS_CYCLES));
+    assert_eq!(num(op, "fault"), 1);
+    assert_eq!(op.get("op").and_then(Json::as_str), Some("read"));
+    assert_eq!(op.get("action").and_then(Json::as_str), Some("error"));
+    assert_eq!(op.get("written"), Some(&Json::Bool(false)));
+    assert!(op.get("seq").is_none(), "not an event");
+    // the card's answers: the block, the error token, the block again
+    let tokens: Vec<u8> = r
+        .guest
+        .spi
+        .iter()
+        .map(|(_, rx)| *rx[8..].iter().find(|&&b| b != 0xff).unwrap())
+        .collect();
+    assert_eq!(tokens, [0xfe, 0x04, 0xfe]);
+    assert_eq!(card.borrow().stats().faults, 1);
+}
+
+#[test]
+fn sd_fault_and_sd_clear_need_the_slot_and_an_id_is_used_once() {
+    for (line, error) in [
+        (
+            sd_fault(0, 1, r#""op":"read","action":"error""#),
+            "sd_fault without --sd-spi",
+        ),
+        (
+            r#"{"type":"sd_clear","t":0}"#.to_string(),
+            "sd_clear without --sd-spi",
+        ),
+    ] {
+        let peer = FakePeer::new(&[], move |turn| {
+            vec![line.clone(), wait(turn.seq, None, None)]
+        });
+        let r = run(0.01, FakeGuest::new(Vec::new()), peer);
+        assert!(
+            matches!(&r.end, End::Protocol(m) if m.contains(error)),
+            "{:?}",
+            r.end
+        );
+    }
+    // an id is used once, a rule spent or cleared included
+    let card = ready_card();
+    let mut turns = 0;
+    let peer = FakePeer::new(&[], move |turn| {
+        turns += 1;
+        let mut out = match turns {
+            1 => vec![
+                sd_fault(0, 7, r#""op":"read","action":"error""#),
+                r#"{"type":"sd_clear","t":0,"ids":[7]}"#.to_string(),
+            ],
+            _ => vec![sd_fault(turn.t, 7, r#""op":"write","action":"error""#)],
+        };
+        out.push(wait(turn.seq, Some(turn.t + MS), None));
+        out
+    });
+    let guest = FakeGuest::new(Vec::new()).with_card(&card);
+    let r = run_with_card(0.01, guest, peer, false, Some(&card));
+    assert!(
+        matches!(&r.end, End::Protocol(m) if m.contains("sd_fault: id 7 is in use already")),
         "{:?}",
         r.end
     );
