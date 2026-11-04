@@ -21,7 +21,13 @@ from bumble.transport.common import AsyncPipeSink
 
 from esp32tl.bluetooth.air import Air, AirError
 from esp32tl.bluetooth.controller import INQUIRY_UNIT_S, Controller
-from esp32tl.bluetooth.peer import CHANNEL, CLASS_OF_DEVICE, PeerError, SppPeer
+from esp32tl.bluetooth.peer import (
+    CHANNEL,
+    CLASS_OF_DEVICE,
+    BluetoothDevice,
+    PeerError,
+    SppPeer,
+)
 from esp32tl.interfaces import NeverHappened
 from esp32tl.units import ms, seconds
 
@@ -84,6 +90,8 @@ class Initiator:
         self.air = air
         self.delegate = Pin(pin)
         self.found: list[tuple[int, str, int, str | None]] = []
+        # The signal strength of each result, as (address, rssi).
+        self.heard_at: list[tuple[str, int]] = []
         self.received: list[tuple[int, bytes]] = []
         self.inquiry_complete: list[int] = []
         # Each link of this device that fell, as (t, reason).
@@ -122,6 +130,7 @@ class Initiator:
         name = eir.get(core.AdvertisingData.COMPLETE_LOCAL_NAME)
         assert name is None or isinstance(name, str)
         self.found.append((self.air.loop.now, str(address), class_of_device, name))
+        self.heard_at.append((str(address), rssi))
 
     async def discover(self, name: str) -> hci.Address:
         """An inquiry until a device called `name` answers; then the inquiry is cancelled."""
@@ -1194,3 +1203,198 @@ def test_two_runs_lose_the_peer_at_the_same_instants() -> None:
     assert first[2] == [(21_000 * MS, hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR)]
     assert first[3] == [(22_000 * MS, hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR)]
     assert first == run()
+
+
+# Other devices.
+
+PHONE = "00:00:00:00:5C:01"
+SPEAKER = "00:00:00:00:5C:02"
+
+
+async def one_inquiry(esp32: Initiator) -> None:
+    """One inquiry, whole, in the extended mode: `start_discovery` writes it each time."""
+    await esp32.device.start_discovery(auto_restart=False)
+    await asyncio.sleep(11)
+
+
+async def one_inquiry_in_mode(esp32: Initiator, mode: int) -> None:
+    """One inquiry, whole, in `mode`, as a host that does not ask for the extended one."""
+    esp32.device.auto_restart_inquiry = False
+    await esp32.device.host.send_sync_command(hci.HCI_Write_Inquiry_Mode_Command(inquiry_mode=mode))
+    await esp32.device.send_async_command(
+        hci.HCI_Inquiry_Command(lap=hci.HCI_GENERAL_INQUIRY_LAP, inquiry_length=8, num_responses=0)
+    )
+    await asyncio.sleep(11)
+
+
+def test_one_inquiry_finds_several_devices_each_with_its_own_rssi_and_class(air: Air) -> None:
+    BluetoothDevice(air, name="phone", class_of_device=0x5A020C, rssi=-70, address=PHONE)
+    BluetoothDevice(air, name="speaker", class_of_device=0x240404, rssi=-40, address=SPEAKER)
+    SppPeer(air, name="peer", pin="1234", source=Echo(), rssi=-90)
+    esp32 = Initiator(air)
+    air.run(one_inquiry(esp32), within=seconds(20))
+
+    # In the order of their addresses, at the instant the inquiry starts, then completes once.
+    assert esp32.found == [
+        (0, "00:00:00:00:5B:01/P", CLASS_OF_DEVICE, "peer"),
+        (0, PHONE + "/P", 0x5A020C, "phone"),
+        (0, SPEAKER + "/P", 0x240404, "speaker"),
+    ]
+    assert esp32.heard_at == [
+        ("00:00:00:00:5B:01/P", -90),
+        (PHONE + "/P", -70),
+        (SPEAKER + "/P", -40),
+    ]
+    assert esp32.inquiry_complete == [10_240 * MS]
+
+
+def test_a_device_answers_with_the_rssi_it_has_at_each_inquiry(air: Air) -> None:
+    phone = BluetoothDevice(air, name="phone", rssi=-70, address=PHONE)
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo())
+    assert peer.rssi == -50
+    esp32 = Initiator(air)
+    air.run(one_inquiry(esp32), within=seconds(20))
+    phone.rssi = -80
+    peer.rssi = -60
+    assert phone.rssi == -80
+    air.run(one_inquiry(esp32), within=seconds(20))
+    assert esp32.heard_at == [
+        ("00:00:00:00:5B:01/P", -50),
+        (PHONE + "/P", -70),
+        ("00:00:00:00:5B:01/P", -60),
+        (PHONE + "/P", -80),
+    ]
+
+
+def test_the_rssi_is_given_in_the_mode_that_has_it_and_not_in_the_plain_one(air: Air) -> None:
+    BluetoothDevice(air, name="phone", class_of_device=0x5A020C, rssi=-70, address=PHONE)
+    esp32 = Initiator(air)
+    air.run(one_inquiry_in_mode(esp32, hci.HCI_INQUIRY_WITH_RSSI_MODE), within=seconds(20))
+    assert esp32.heard_at == [(PHONE + "/P", -70)]
+    # This mode has no extended inquiry response, so no name: it was not the extended result.
+    assert esp32.found == [(0, PHONE + "/P", 0x5A020C, None)]
+
+    # Bumble's host has no handler for the plain event, so the test is the one: it reaches the
+    # host as the plain event, with the class and no such field.
+    plain: list[hci.HCI_Inquiry_Result_Event] = []
+    esp32.device.host.on_hci_inquiry_result_event = plain.append  # type: ignore[attr-defined]
+    air.run(one_inquiry_in_mode(esp32, hci.HCI_STANDARD_INQUIRY_MODE), within=seconds(20))
+    assert [(str(e.bd_addr[0]), e.class_of_device[0]) for e in plain] == [(PHONE + "/P", 0x5A020C)]
+    assert not hasattr(plain[0], "rssi")
+
+
+def test_a_device_without_spp_says_so_in_sdp_and_has_no_channel(air: Air) -> None:
+    BluetoothDevice(air, name="phone", address=PHONE)
+    esp32 = Initiator(air)
+
+    async def look_for_spp() -> None:
+        connection = await esp32.device.connect(
+            hci.Address(PHONE + "/P"), transport=core.PhysicalTransport.BR_EDR
+        )
+        channel = await rfcomm.find_rfcomm_channel_with_uuid(
+            connection, core.BT_SERIAL_PORT_SERVICE
+        )
+        assert channel is None
+        with pytest.raises(core.ProtocolError):
+            await rfcomm.Client(connection).start()
+
+    air.run(look_for_spp(), within=seconds(10))
+
+
+def test_a_device_without_a_pin_fails_a_pairing(air: Air) -> None:
+    phone = BluetoothDevice(air, name="phone", address=PHONE)
+    esp32 = Initiator(air)
+    with pytest.raises(hci.HCI_Error) as raised:
+        air.run(esp32.connect(hci.Address(PHONE + "/P")), within=seconds(10))
+    assert raised.value.error_code == hci.HCI_ErrorCode.PIN_OR_KEY_MISSING_ERROR
+    assert keys_of(phone.device) == {}
+
+
+def test_a_device_with_a_pin_pairs_and_keeps_its_key_across_a_return(air: Air) -> None:
+    phone = BluetoothDevice(air, name="phone", pin="0000", address=PHONE)
+    esp32 = Initiator(air, pin="0000")
+    air.run(esp32.connect(hci.Address(PHONE + "/P")), within=seconds(10))
+    phone.switch_off()
+    air.wait(seconds(21))
+    phone.switch_on()
+    air.run(esp32.connect(hci.Address(PHONE + "/P")), within=seconds(10))
+    assert esp32.delegate.asked == 1
+
+
+def test_a_device_without_spp_leaves_as_a_peer_does(air: Air) -> None:
+    phone = BluetoothDevice(air, name="phone", address=PHONE)
+    esp32 = Initiator(air)
+    address = hci.Address(PHONE + "/P")
+    air.run(
+        esp32.device.connect(address, transport=core.PhysicalTransport.BR_EDR), within=seconds(1)
+    )
+    phone.out_of_range()
+    assert not phone.present
+    air.advance(seconds(30))
+    assert esp32.fell == [(20_000 * MS, hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR)]
+    with pytest.raises(core.ConnectionError):
+        air.run(
+            esp32.device.connect(address, transport=core.PhysicalTransport.BR_EDR),
+            within=seconds(10),
+        )
+    assert air.now == ms(35_120)
+
+
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    [
+        ({"name": ""}, "BluetoothDevice: name is '', not a string of 1 to 238 bytes"),
+        ({"pin": ""}, "BluetoothDevice: pin is '', not a string of 1 to 16 bytes"),
+        ({"pin": 1234}, "BluetoothDevice: pin is 1234, not a string of 1 to 16 bytes"),
+        (
+            {"class_of_device": 0x1000000},
+            "BluetoothDevice: class_of_device is 16777216, not three octets, 0 to 0xFFFFFF",
+        ),
+        (
+            {"class_of_device": True},
+            "BluetoothDevice: class_of_device is True, not three octets, 0 to 0xFFFFFF",
+        ),
+        ({"rssi": 21}, "BluetoothDevice: rssi is 21, not a signal strength in dBm, -127 to 20"),
+        ({"rssi": -128}, "BluetoothDevice: rssi is -128, not a signal strength in dBm, -127 to 20"),
+        ({"rssi": True}, "BluetoothDevice: rssi is True, not a signal strength in dBm, -127 to 20"),
+        (
+            {"rssi": -70.5},
+            "BluetoothDevice: rssi is -70.5, not a signal strength in dBm, -127 to 20",
+        ),
+        (
+            {"address": "nonsense"},
+            "BluetoothDevice: address is 'nonsense', not a Bluetooth address, as 00:00:00:00:5B:01",
+        ),
+    ],
+)
+def test_a_device_refuses_what_it_cannot_be(
+    air: Air, arguments: dict[str, object], message: str
+) -> None:
+    given: dict[str, object] = {"name": "phone", **arguments}
+    with pytest.raises(PeerError) as raised:
+        BluetoothDevice(air, **given)  # type: ignore[arg-type]
+    assert str(raised.value) == message
+
+
+def test_a_peer_needs_a_pin(air: Air) -> None:
+    with pytest.raises(PeerError) as raised:
+        SppPeer(air, name="peer", pin=None, source=Echo())  # type: ignore[arg-type]
+    assert str(raised.value) == "SppPeer: pin is None, not a string of 1 to 16 bytes"
+
+
+def test_setting_an_rssi_it_cannot_have_is_refused_and_changes_nothing(air: Air) -> None:
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo(), rssi=-60)
+    with pytest.raises(PeerError) as raised:
+        peer.rssi = 100
+    assert str(raised.value) == "SppPeer: rssi is 100, not a signal strength in dBm, -127 to 20"
+    assert peer.rssi == -60
+
+
+def test_a_second_device_at_an_address_on_the_air_is_refused_in_its_own_words(air: Air) -> None:
+    SppPeer(air, name="peer", pin="1234", source=Echo())
+    with pytest.raises(PeerError) as raised:
+        BluetoothDevice(air, name="phone")
+    assert str(raised.value) == (
+        "BluetoothDevice: address 00:00:00:00:5B:01 is another device's on the air: give each its"
+        " own"
+    )

@@ -1,12 +1,14 @@
-"""A Bluetooth Classic device with one Serial Port Profile service, whose bytes a source answers.
+"""Bluetooth Classic devices on the air: any device, and one with a Serial Port Profile service.
 
-`SppPeer` is a Bumble device on the air: it can be discovered by its name, pairs with its PIN
-(legacy pairing; it does not do Secure Simple Pairing, as Bluetooth 2.0 devices do not), keeps
-the link keys it pairs to, and offers SPP on one RFCOMM channel, to one device at a time and,
-unless told otherwise, only on a link the device has authenticated. What the device writes on the
-channel goes to the source, a `Source` as at the far end of a UART, and what the source sends goes
-out on the channel at the board's time it gives. A peer can be switched off and go out of range,
-and come back, with the link keys it had.
+`BluetoothDevice` is a Bumble device on the air: it can be discovered by its name, with its class
+of device and its signal strength, pairs with its PIN if it has one (legacy pairing; it does not do
+Secure Simple Pairing, as Bluetooth 2.0 devices do not), keeps the link keys it pairs to, offers no
+service, and can be switched off and go out of range, and come back, with the link keys it had.
+
+`SppPeer` adds SPP on one RFCOMM channel, to one device at a time and, unless told otherwise, only
+on a link the device has authenticated. What the device writes on the channel goes to the source, a
+`Source` as at the far end of a UART, and what the source sends goes out on the channel at the
+board's time it gives.
 """
 
 import bisect
@@ -24,7 +26,7 @@ from bumble.transport.common import AsyncPipeSink
 
 from esp32tl.backends.clock import seconds
 from esp32tl.bluetooth.air import Air
-from esp32tl.bluetooth.controller import Controller
+from esp32tl.bluetooth.controller import RSSI, Controller
 from esp32tl.interfaces.uart import Source, Supplied
 from esp32tl.link.boardlink import Direction, Output
 from esp32tl.units import Duration
@@ -46,15 +48,16 @@ T = TypeVar("T")
 
 
 class PeerError(ValueError):
-    """What the test tells a peer that it cannot be, or what its source does that the peer
+    """What the test tells a device that it cannot be, or what its source does that the peer
     cannot take: a call that raises, a result that is not bytes at a time, bytes stamped before
     the instant they are given at."""
 
 
 class _Pin(PairingDelegate):
-    """Answers a PIN request with the peer's PIN, as a device with a fixed PIN does."""
+    """Answers a PIN request with the device's PIN, as a device with a fixed PIN does; without one,
+    the pairing fails."""
 
-    def __init__(self, pin: str) -> None:
+    def __init__(self, pin: str | None) -> None:
         super().__init__(io_capability=PairingDelegate.KEYBOARD_INPUT_ONLY)
         self.pin = pin
 
@@ -62,22 +65,15 @@ class _Pin(PairingDelegate):
         return self.pin
 
 
-class SppPeer:
-    """A Classic device on `air` at `address`, discoverable and connectable from the start,
-    called `name`, paired with `pin`, with SPP on RFCOMM `channel`, whose bytes `source` answers.
-
-    The channel opens to one device at a time; with `secure`, the default, only on a link that
-    device has authenticated. A channel the peer refuses is in `refused`, with its
-    time and why. What the device writes reaches `source.receive` at the board's time it arrives,
-    and what `source` returns, or sends from `poll`, goes out on the channel at its own time,
-    never earlier. What the source sends while no channel is open is lost, as it would be on the
-    air; `lost` counts its bytes. `events` holds what crossed the channel, in order: `out` of the
-    device, `in` to it, as a tap's recording names them.
+class BluetoothDevice:
+    """A Classic device on `air` at `address`, discoverable and connectable from the start, called
+    `name`, of class `class_of_device`, heard at `rssi` dBm, paired with `pin` if it has one, and
+    offering no service: a device that is there to be found. `rssi` can be changed at any time, and
+    the next inquiry gets it; the plain `Inquiry_Result` has no such field.
 
     `switch_off` and `out_of_range` take it off the air without a word, until `switch_on` and
-    `in_range` have both undone what was done; `present` says whether it is on the air. To a device
-    the two look the same. The source gets `supply` on a power loss, when it is `Supplied`; out of
-    range it runs on, and what it sends is lost. The link keys stay until `forget_keys`.
+    `in_range` have both undone what was done; `present` says whether it is on the air. To another
+    device the two look the same. The link keys stay until `forget_keys`.
     """
 
     def __init__(
@@ -85,77 +81,87 @@ class SppPeer:
         air: Air,
         *,
         name: str,
-        pin: str,
-        source: Source,
+        pin: str | None = None,
+        class_of_device: int = CLASS_OF_DEVICE,
+        rssi: int = RSSI,
         address: str = ADDRESS,
-        channel: int = CHANNEL,
-        secure: bool = True,
     ) -> None:
+        kind = type(self).__name__
         if not isinstance(name, str) or not 1 <= len(name.encode()) <= NAME_MAX:
-            raise PeerError(f"SppPeer: name is {name!r}, not a string of 1 to {NAME_MAX} bytes")
-        if not isinstance(pin, str) or not 1 <= len(pin.encode()) <= 16:
-            raise PeerError(f"SppPeer: pin is {pin!r}, not a string of 1 to 16 bytes")
-        if isinstance(channel, bool) or not isinstance(channel, int) or not 1 <= channel <= 30:
-            raise PeerError(f"SppPeer: channel is {channel!r}, not an RFCOMM channel, 1 to 30")
-        public = _address(address)
+            raise PeerError(f"{kind}: name is {name!r}, not a string of 1 to {NAME_MAX} bytes")
+        if pin is not None and (not isinstance(pin, str) or not 1 <= len(pin.encode()) <= 16):
+            raise PeerError(f"{kind}: pin is {pin!r}, not a string of 1 to 16 bytes")
+        if (
+            isinstance(class_of_device, bool)
+            or not isinstance(class_of_device, int)
+            or not 0 <= class_of_device <= 0xFFFFFF
+        ):
+            raise PeerError(
+                f"{kind}: class_of_device is {class_of_device!r}, not three octets, 0 to 0xFFFFFF"
+            )
+        self._check_rssi(rssi)
+        public = _address(kind, address)
         if air.link.find_classic_controller(public) is not None:
             raise PeerError(
-                f"SppPeer: address {address} is another device's on the air: give each its own"
+                f"{kind}: address {address} is another device's on the air: give each its own"
             )
         self.air = air
         self.name = name
         self.pin = pin
-        self.source = source
-        self.channel = channel
-        self.secure = secure
-        self.events: list[tuple[int, Direction, bytes]] = []
-        self.refused: list[tuple[int, str]] = []
-        self.lost = 0
+        self.class_of_device = class_of_device
         self._on = True
         self._in_range = True
-        self._pending: list[Output] = []
-        self._dlc: rfcomm.DLC | None = None
-        # The link the channel is given to, from the moment the peer accepts it until it closes:
-        # two devices that ask at one instant are both accepted before either channel opens.
-        self._holder: Connection | None = None
         self._controller: Controller | None = None
         self.device = air.call(lambda: self._make(public))
+        self.rssi = rssi
         air.run(self._power_on(), within=Duration(0), description=f"{name}'s power-on")
-        air.join(self)
 
     @property
     def address(self) -> str:
         return str(self.device.public_address).removesuffix("/P")
 
     @property
-    def channel_open(self) -> bool:
-        """Whether a device holds the SPP channel now."""
-        return self._dlc is not None
+    def rssi(self) -> int:
+        """The signal strength, in dBm, this device answers an inquiry with."""
+        assert self._controller is not None
+        return self._controller.rssi
+
+    @rssi.setter
+    def rssi(self, rssi: int) -> None:
+        self._check_rssi(rssi)
+        assert self._controller is not None
+        self._controller.rssi = rssi
+
+    def _check_rssi(self, rssi: int) -> None:
+        if isinstance(rssi, bool) or not isinstance(rssi, int) or not -127 <= rssi <= 20:
+            raise PeerError(
+                f"{type(self).__name__}: rssi is {rssi!r}, not a signal strength in dBm, -127 to 20"
+            )
 
     @property
     def present(self) -> bool:
-        """Whether the peer is on the air: switched on and in range."""
+        """Whether the device is on the air: switched on and in range."""
         return self._on and self._in_range
 
     def switch_off(self) -> None:
-        """The peer loses its power, at the air's time: gone from the air, its source told."""
+        """The device loses its power, at the air's time: gone from the air."""
         self.air.call(lambda: self._become(False, self._in_range))
 
     def switch_on(self) -> None:
-        """The peer has its power back, at the air's time; on the air if it is in range."""
+        """The device has its power back, at the air's time; on the air if it is in range."""
         self.air.call(lambda: self._become(True, self._in_range))
 
     def out_of_range(self) -> None:
-        """The peer is out of reach, at the air's time: gone from the air, its source running."""
+        """The device is out of reach, at the air's time: gone from the air, still running."""
         self.air.call(lambda: self._become(self._on, False))
 
     def in_range(self) -> None:
-        """The peer is within reach again, at the air's time; on the air if it is switched on."""
+        """The device is within reach again, at the air's time; on the air if it is switched on."""
         self.air.call(lambda: self._become(self._on, True))
 
     def forget_keys(self) -> None:
-        """The peer loses the link keys it keeps: from its next link on, a device that kept one
-        fails to authenticate, and a device pairs with the PIN again."""
+        """The device loses the link keys it keeps: from its next link on, another device that
+        kept one fails to authenticate, and one pairs with the PIN again."""
         self.device.keystore = MemoryKeyStore()
 
     def _become(self, on: bool, in_range: bool) -> None:
@@ -173,13 +179,7 @@ class SppPeer:
             self._controller.returned()
 
     def _supply(self, on: bool) -> None:
-        """A source that is `Supplied` loses its power with the peer, and what it had queued
-        with it; any other runs on, and what it sends is lost."""
-        if isinstance(self.source, Supplied):
-            self._pending.clear()
-            source = self.source
-            with self._failing():
-                self._call("supply", lambda: source.supply(on))
+        """The device's power went off, or came back: nothing else here depends on it."""
 
     def _make(self, address: Address) -> Device:
         controller = Controller(self.name, self.air.link, str(address))
@@ -187,7 +187,7 @@ class SppPeer:
         config = DeviceConfiguration(
             name=self.name,
             address=address,
-            class_of_device=CLASS_OF_DEVICE,
+            class_of_device=self.class_of_device,
             classic_enabled=True,
             le_enabled=False,
             classic_ssp_enabled=False,
@@ -198,6 +198,87 @@ class SppPeer:
         device.pairing_config_factory = lambda connection: PairingConfig(
             sc=False, mitm=False, bonding=True, delegate=delegate
         )
+        self._serve(device)
+        return device
+
+    def _serve(self, device: Device) -> None:
+        """The services `device` offers: none."""
+
+    async def _power_on(self) -> None:
+        await self.device.power_on()
+        await self.device.set_discoverable(True)
+        await self.device.set_connectable(True)
+
+
+class SppPeer(BluetoothDevice):
+    """A `BluetoothDevice` paired with `pin`, with SPP on RFCOMM `channel`, whose bytes `source`
+    answers.
+
+    The channel opens to one device at a time; with `secure`, the default, only on a link that
+    device has authenticated. A channel the peer refuses is in `refused`, with its
+    time and why. What the device writes reaches `source.receive` at the board's time it arrives,
+    and what `source` returns, or sends from `poll`, goes out on the channel at its own time,
+    never earlier. What the source sends while no channel is open is lost, as it would be on the
+    air; `lost` counts its bytes. `events` holds what crossed the channel, in order: `out` of the
+    device, `in` to it, as a tap's recording names them.
+
+    The source gets `supply` on a power loss, when it is `Supplied`; out of range it runs on, and
+    what it sends is lost.
+    """
+
+    def __init__(
+        self,
+        air: Air,
+        *,
+        name: str,
+        pin: str,
+        source: Source,
+        address: str = ADDRESS,
+        channel: int = CHANNEL,
+        secure: bool = True,
+        class_of_device: int = CLASS_OF_DEVICE,
+        rssi: int = RSSI,
+    ) -> None:
+        if pin is None:
+            raise PeerError(f"SppPeer: pin is {pin!r}, not a string of 1 to 16 bytes")
+        if isinstance(channel, bool) or not isinstance(channel, int) or not 1 <= channel <= 30:
+            raise PeerError(f"SppPeer: channel is {channel!r}, not an RFCOMM channel, 1 to 30")
+        self.source = source
+        self.channel = channel
+        self.secure = secure
+        self.events: list[tuple[int, Direction, bytes]] = []
+        self.refused: list[tuple[int, str]] = []
+        self.lost = 0
+        self._pending: list[Output] = []
+        self._dlc: rfcomm.DLC | None = None
+        # The link the channel is given to, from the moment the peer accepts it until it closes:
+        # two devices that ask at one instant are both accepted before either channel opens.
+        self._holder: Connection | None = None
+        super().__init__(
+            air,
+            name=name,
+            pin=pin,
+            class_of_device=class_of_device,
+            rssi=rssi,
+            address=address,
+        )
+        air.join(self)
+
+    @property
+    def channel_open(self) -> bool:
+        """Whether a device holds the SPP channel now."""
+        return self._dlc is not None
+
+    def _supply(self, on: bool) -> None:
+        """A source that is `Supplied` loses its power with the peer, and what it had queued
+        with it; any other runs on, and what it sends is lost."""
+        if isinstance(self.source, Supplied):
+            self._pending.clear()
+            source = self.source
+            with self._failing():
+                self._call("supply", lambda: source.supply(on))
+
+    def _serve(self, device: Device) -> None:
         device.sdp_service_records = {
             RECORD_HANDLE: rfcomm.make_service_sdp_records(
                 RECORD_HANDLE, self.channel, core.BT_SERIAL_PORT_SERVICE
@@ -220,12 +301,6 @@ class SppPeer:
             l2cap.on(l2cap.EVENT_CLOSE, ended)
 
         server.on(server.EVENT_START, started)
-        return device
-
-    async def _power_on(self) -> None:
-        await self.device.power_on()
-        await self.device.set_discoverable(True)
-        await self.device.set_connectable(True)
 
     # The channel.
 
@@ -370,12 +445,12 @@ def _named(connection: Connection) -> str:
     return str(connection.peer_address).removesuffix("/P")
 
 
-def _address(address: str) -> Address:
+def _address(kind: str, address: str) -> Address:
     """`address`, `XX:XX:XX:XX:XX:XX` in hex, as Bumble's public address; a `PeerError` for
-    anything else."""
+    anything else, in the words of `kind`, the class of the device."""
     parts = address.split(":") if isinstance(address, str) else []
     if len(parts) != 6 or not all(
         len(part) == 2 and all(c in "0123456789abcdefABCDEF" for c in part) for part in parts
     ):
-        raise PeerError(f"SppPeer: address is {address!r}, not a Bluetooth address, as {ADDRESS}")
+        raise PeerError(f"{kind}: address is {address!r}, not a Bluetooth address, as {ADDRESS}")
     return Address(address, Address.PUBLIC_DEVICE_ADDRESS)

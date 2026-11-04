@@ -534,6 +534,13 @@ that references to its number keep their meaning.
     `tests/test_spp_peer.py::test_a_supervision_timeout_of_zero_means_the_link_never_falls`
 - **167.** Two runs in which a peer leaves and returns do the same at the same instants.
     `tests/test_spp_peer.py::test_two_runs_lose_the_peer_at_the_same_instants`
+- **168.** One inquiry finds every device present, each with its own class of device and RSSI, in the
+    modes that carry an RSSI; the next inquiry gets an RSSI set meanwhile.
+    `tests/test_spp_peer.py::test_one_inquiry_finds_several_devices_each_with_its_own_rssi_and_class`,
+    `tests/test_spp_peer.py::test_a_device_answers_with_the_rssi_it_has_at_each_inquiry`,
+    `tests/test_spp_peer.py::test_the_rssi_is_given_in_the_mode_that_has_it_and_not_in_the_plain_one`
+- **169.** A `BluetoothDevice` does not answer for SPP in SDP, and has no RFCOMM channel.
+    `tests/test_spp_peer.py::test_a_device_without_spp_says_so_in_sdp_and_has_no_channel`
 
 ## The esp32tl command
 

@@ -1445,6 +1445,32 @@ and the API on the air (`air.remove(peer)`), because leaving is what a peer does
 under it may change.
 
 
+## Devices on the air have a base class without SPP, and an RSSI of their own
+
+Status: decided (#129)
+
+`BluetoothDevice` is a device on the air with a name, a class of device, an RSSI, an optional PIN
+and the calls by which it leaves; `SppPeer` adds the channel and the source, so a test can have a
+device that offers no SPP among those an inquiry finds. RSSI replaces the fixed value of the
+controller's inquiry results, and stays -50 unless given: nothing in the air depends on it, so it
+says only what a firmware reads. It is a plain number that the test sets, with no model of distance
+or of a value that moves by itself.
+
+**Rejected:** a flag on `SppPeer` that turns SPP off, because a device without SPP then has to be
+given a source and a channel it does not use; and tying RSSI to `out_of_range`, because no source
+says at what strength a device goes out of reach.
+
+
+## Secure Simple Pairing on the peer's side is postponed
+
+Status: postponed (#129)
+
+Peers pair with a PIN only, and the Bumble controller's own Secure Simple Pairing is used only
+between two devices that both support it, which no `BluetoothDevice` does. What a firmware's stack
+does with a device that has it can only be seen with firmware, so it waits for #34, whose checklist
+holds it.
+
+
 ## A bt fixture, an HCI tap and a replayed peer are postponed
 
 Status: postponed (#33)

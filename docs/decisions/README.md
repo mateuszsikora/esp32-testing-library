@@ -175,6 +175,8 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [A model answers the SPP channel as the far end of a UART does](harness.md#a-model-answers-the-spp-channel-as-the-far-end-of-a-uart-does) | `harness.md` | decided (#33) |
 | [The SPP peer opens its channel to one device, on a link that device authenticated](harness.md#the-spp-peer-opens-its-channel-to-one-device-on-a-link-that-device-authenticated) | `harness.md` | decided (#33) |
 | [A peer leaves without a word, keeps its keys, and its old link stays dead until it falls](harness.md#a-peer-leaves-without-a-word-keeps-its-keys-and-its-old-link-stays-dead-until-it-falls) | `harness.md` | decided (#129) |
+| [Devices on the air have a base class without SPP, and an RSSI of their own](harness.md#devices-on-the-air-have-a-base-class-without-spp-and-an-rssi-of-their-own) | `harness.md` | decided (#129) |
+| [Secure Simple Pairing on the peer's side is postponed](harness.md#secure-simple-pairing-on-the-peers-side-is-postponed) | `harness.md` | postponed (#129) |
 | [A bt fixture, an HCI tap and a replayed peer are postponed](harness.md#a-bt-fixture-an-hci-tap-and-a-replayed-peer-are-postponed) | `harness.md` | postponed (#33) |
 | [bumble is a dependency of esp32tl, pinned exactly](harness.md#bumble-is-a-dependency-of-esp32tl-pinned-exactly) | `harness.md` | decided (#33) |
 | [Serial is opt-in and pytest-embedded owns flashing and the port](harness.md#serial-is-opt-in-and-pytest-embedded-owns-flashing-and-the-port) | `harness.md` | decided (#25) |

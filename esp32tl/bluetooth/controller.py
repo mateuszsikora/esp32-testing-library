@@ -6,9 +6,10 @@ with a PIN, takes a stored link key without checking it with the peer, and has n
 Classic link. `Controller` adds them, for links whose controllers are all of this class:
 
 - Inquiry: every other controller on the link whose inquiry scan is on answers at the instant
-  the inquiry starts, in the order of their addresses, with its class of device and its extended
-  inquiry response; `Inquiry_Complete` follows `inquiry_length` times 1.28 s later, or at once when
-  `num_responses` have answered. `Inquiry_Cancel` ends it without one.
+  the inquiry starts, in the order of their addresses, with its class of device, its signal
+  strength and its extended inquiry response; `Inquiry_Complete` follows `inquiry_length` times
+  1.28 s later, or at once when `num_responses` have answered. `Inquiry_Cancel` ends it without
+  one.
 - Authentication, as the specification orders it (Vol 2, Part C, 4.2; Vol 2, Part F, 4): the
   host is asked for a link key first; with one, the peer proves it holds the same key; without,
   the link pairs with Secure Simple Pairing when both hosts support it, as Bumble does, and with
@@ -39,6 +40,9 @@ from esp32tl.bluetooth.air import Link
 
 # Bluetooth's inquiry length unit: 1.28 s.
 INQUIRY_UNIT_S = 1.28
+
+# The signal strength a device answers an inquiry with, in dBm, unless the test gives another.
+RSSI = -50
 
 # A baseband slot, the unit of the page and link supervision timeouts, and their defaults: 5.12 s
 # and 20 s (Vol 4, Part E, 7.3.16 and 7.3.42).
@@ -150,6 +154,7 @@ class Controller(BumbleController):
         self.class_of_device = 0
         self.extended_inquiry_response = bytes(240)
         self.inquiry_mode = 0
+        self.rssi = RSSI
         self._random = random.Random(str(self.public_address))
         self._inquiry: asyncio.TimerHandle | None = None
         self._security: dict[hci.Address, Security] = {}
@@ -240,7 +245,7 @@ class Controller(BumbleController):
                 reserved=0,
                 class_of_device=other.class_of_device,
                 clock_offset=0,
-                rssi=-50,
+                rssi=other.rssi,
                 extended_inquiry_response=other.extended_inquiry_response,
             )
         if self.inquiry_mode == hci.HCI_INQUIRY_WITH_RSSI_MODE:
@@ -250,7 +255,7 @@ class Controller(BumbleController):
                 reserved=[0],
                 class_of_device=[other.class_of_device],
                 clock_offset=[0],
-                rssi=[-50],
+                rssi=[other.rssi],
             )
         return hci.HCI_Inquiry_Result_Event(
             bd_addr=[other.public_address],

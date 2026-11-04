@@ -1,9 +1,9 @@
 # Bluetooth peer
 
-A Bluetooth Classic device for the firmware to talk to: it can be discovered by its name, pairs
-with a PIN, and offers the Serial Port Profile (SPP), whose bytes a model in the test answers, on
-the board's clock. It runs on [Bumble](https://github.com/google/bumble)'s virtual link, in the
-harness's process.
+Bluetooth Classic devices for the firmware to talk to, or to find: `SppPeer` can be discovered by
+its name, pairs with a PIN, and offers the Serial Port Profile (SPP), whose bytes a model in the
+test answers, on the board's clock; `BluetoothDevice` is the same device with no SPP. They run on
+[Bumble](https://github.com/google/bumble)'s virtual link, in the harness's process.
 
 esp32sim has no Bluetooth Classic controller for the firmware yet, so no fixture puts a peer in
 front of firmware: today a peer is used from Python, on an `Air`, with another Bumble device in the
@@ -43,7 +43,8 @@ assert peer.events == [(1_000_000_000, "out", b"ATZ\r"), (1_050_000_000, "in", b
 air.close()
 ```
 
-`SppPeer(air, *, name, pin, source, address="00:00:00:00:5B:01", channel=1, secure=True)`:
+`SppPeer(air, *, name, pin, source, address="00:00:00:00:5B:01", channel=1, secure=True,
+class_of_device=0x001F00, rssi=-50)`:
 
 | Argument | What it is |
 |---|---|
@@ -53,12 +54,14 @@ air.close()
 | `address` | Its Bluetooth address, six pairs of hex digits separated by colons; no other device on the air may have it, so a second peer needs its own |
 | `channel` | The RFCOMM channel of its SPP service, 1 to 30 |
 | `secure` | Whether the channel opens only on a link the device has authenticated |
+| `class_of_device` | Its class of device, three octets, which an inquiry reports |
+| `rssi` | The signal strength an inquiry hears it at, in dBm, -127 to 20, the range of the specification's inquiry results |
 
 From the moment it is made, at the air's current instant, and until the test takes it off the air
 ([below](#a-peer-that-leaves)), the peer is:
 
 - **Discoverable and connectable.** An inquiry finds it with its address, its class of device,
-  `0x001F00` (uncategorised), and its name.
+  `0x001F00` (uncategorised) unless given another, its signal strength and its name.
 - **Paired with its PIN.** It pairs the way Bluetooth 2.0 devices do, with a PIN (legacy
   pairing), and never with Secure Simple Pairing. A device that gives another PIN fails to
   authenticate and is disconnected. The peer keeps the key of each device it paired with until
@@ -75,6 +78,34 @@ From the moment it is made, at the air's current instant, and until the test tak
   `(0, "24:0A:C4:00:00:02: the channel is held by 24:0A:C4:00:00:01")`. With `secure=False`, any
   device opens it. `peer.channel_open` says whether a device holds it now; the channel closes when
   the device closes it or the link.
+
+## Other devices
+
+A device that offers no SPP, there to be found among others, or to be the wrong one:
+
+```python
+from esp32tl.bluetooth.peer import BluetoothDevice
+
+phone = BluetoothDevice(
+    air, name="phone", class_of_device=0x5A020C, rssi=-70, address="00:00:00:00:5C:01"
+)
+peer.rssi = -80
+```
+
+`BluetoothDevice(air, *, name, pin=None, class_of_device=0x001F00, rssi=-50,
+address="00:00:00:00:5B:01")` takes the arguments of the same name in the table above; two devices
+on one air need their own addresses. It has what `SppPeer` has apart from the channel and the source:
+it leaves and returns as [below](#a-peer-that-leaves), and keeps its keys. It offers no service: an
+SDP search for the Serial Port service finds nothing, and RFCOMM cannot be opened to it. Without a
+`pin`, a device that tries to pair with it fails with `PIN_OR_KEY_MISSING`.
+
+An inquiry finds every device on the air, each with its own class and signal strength, in the order
+of their addresses. `rssi` can be set at any time, on either class, and the next inquiry gets it. It
+reaches the device in the RSSI and extended inquiry modes (Bumble asks for extended); the plain
+`Inquiry_Result` has no such field. Nothing else depends on it: a device at -127 dBm connects as one
+at 20.
+
+Secure Simple Pairing is not modelled on these devices: they pair with a PIN, as `SppPeer` does.
 
 ## A peer that leaves
 
@@ -183,6 +214,8 @@ On the air:
 | `SppPeer: name is '', not a string of 1 to 238 bytes` | `PeerError` | A name that is not a string, empty, or longer than 238 bytes |
 | `SppPeer: pin is 1234, not a string of 1 to 16 bytes` | `PeerError` | A PIN that is not a string, empty, or longer than 16 bytes |
 | `SppPeer: channel is 31, not an RFCOMM channel, 1 to 30` | `PeerError` | A channel out of range, or not a whole number |
+| `SppPeer: class_of_device is 16777216, not three octets, 0 to 0xFFFFFF` | `PeerError` | A class of device out of range, or not a whole number |
+| `SppPeer: rssi is 21, not a signal strength in dBm, -127 to 20` | `PeerError` | An `rssi` out of range, or not a whole number, given when it is made or set later, which then leaves it as it was |
 | `SppPeer: address is 'nonsense', not a Bluetooth address, as 00:00:00:00:5B:01` | `PeerError` | An address that is not six pairs of hex digits |
 | `SppPeer: address 00:00:00:00:5B:01 is another device's on the air: give each its own` | `PeerError` | A second device at an address already on the air |
 | `OBDII: source.receive raised KeyError: 'model bug'` | `AirError`, from `PeerError`, from the source's exception | The source raised, in `receive`, `poll`, `quiet_until` or `supply` |
@@ -202,7 +235,8 @@ On the air:
 | `HCI_Error(hci/CONNECTION_ALREADY_EXISTS_ERROR [0xB])` | Bumble's `HCI_Error`, on the device's side | The device paged a peer while it holds a link to it, as one that lost contact and has not fallen |
 | `HCI_Error(hci/CONNECTION_TIMEOUT_ERROR [0x8])` | Bumble's `HCI_Error`, on the device's side | The link fell during `Connection.authenticate()` |
 
-`PeerError` is a `ValueError`, in `esp32tl.bluetooth.peer`; `AirError` a `RuntimeError`, in
+A `BluetoothDevice` says the same of its arguments, starting `BluetoothDevice:` rather than
+`SppPeer:`. `PeerError` is a `ValueError`, in `esp32tl.bluetooth.peer`; `AirError` a `RuntimeError`, in
 `esp32tl.bluetooth.air`, whose `__cause__` is what failed: whatever raises on the air, in a model
 or in Bumble, is raised from the call that moved the time. What the peer finds wrong with its
 source keeps the peer's message; anything else that raises on the air, in Bumble or in the test's
