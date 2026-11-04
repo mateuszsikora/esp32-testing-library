@@ -1,5 +1,6 @@
 """Deterministic AT dialogue, independent of the runner and of the simulated network."""
 
+import struct
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
@@ -14,6 +15,7 @@ from esp32tl.interfaces.modem import Modem as ModemRoute
 from esp32tl.link.boardlink import BoardLink, Wire
 from esp32tl.link.protocol import GpioIn, GpioOut, RunnerHello, Sync, UartCfg, UartTx, Wait
 from esp32tl.net import Internet
+from esp32tl.net.ntp import NTP_EPOCH
 from esp32tl.report import RunLog
 from esp32tl.sources.model.modem import LATENCY_NS, MAX_COMMAND, Modem, Restart
 from esp32tl.units import Duration, hours, minutes, ms, seconds
@@ -1147,3 +1149,13 @@ def test_a_route_and_a_bare_model_start_from_the_same_world(tmp_path: Path) -> N
     modem, _, _ = route(tmp_path, [0])
     modem.signal(dbm=-73)
     assert reply(modem.model(), "AT+CCLK?") == reply(Modem(lambda: 0), "AT+CCLK?")
+
+
+def test_the_clock_and_ntp_tell_the_same_time_with_their_defaults() -> None:
+    model = Modem(lambda: 0, data=Internet(lambda: 0))
+    assert isinstance(model.data, Internet)
+    answer = model.data.ntp.on_datagram(b"\x23" + bytes(47))
+    assert answer is not None
+    seconds_since_1900 = struct.unpack(">I", answer[40:44])[0]
+    told = NTP_EPOCH + timedelta(seconds=seconds_since_1900)
+    assert f"{told:%y/%m/%d,%H:%M:%S}".encode() in reply(model, "AT+CCLK?")

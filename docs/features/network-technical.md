@@ -12,7 +12,7 @@ deadlines; `quiet_until` bounds the next turn by the earliest of those deadlines
 
 ## The link
 
-`Internet(now, world, *, link="ppp")` takes `link`, `"ppp"` or `"ethernet"` (the `Link` type),
+`Internet(now, world, *, link="ppp")`, whose `world` defaults to `esp32tl.net.ntp.DEFAULT_UTC`, as the modem's and `Wifi`'s do, takes `link`, `"ppp"` or `"ethernet"` (the `Link` type),
 and keeps it for its life. `_peer()` builds the link object from it: a `Ppp` whose `ended`
 callback resets TCP, or an `Ethernet` given the network's `Dhcp`. Both send through the same
 closure, which queues each frame or chunk at `now + LATENCY_NS`, and both hand IPv4 datagrams to

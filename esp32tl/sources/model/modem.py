@@ -44,13 +44,16 @@ class Command:
     fallback: bool = False
 
 
+RestartCause = Literal["reset", "pwrkey", "supply", "test"]
+
+
 @dataclass(frozen=True)
 class Restart:
     """A run of the modem that ended at `at`, by `cause`: a RESET pulse, which starts the next at
     once; a PWRKEY pulse that switched it off; its supply going; or a power call of the test's."""
 
     at: Duration
-    cause: Literal["reset", "pwrkey", "supply", "test"]
+    cause: RestartCause
 
 
 class Modem:
@@ -269,9 +272,7 @@ class Modem:
             if not on and self.powered:
                 self._set_power(self._now(), False, "supply")
 
-    def _set_power(
-        self, t: int, powered: bool, cause: Literal["reset", "pwrkey", "supply", "test"]
-    ) -> None:
+    def _set_power(self, t: int, powered: bool, cause: RestartCause) -> None:
         # What the test says before the board's first instant is how the modem starts.
         if self.powered and t > 0:
             self._restarts.append(Restart(Duration(t), cause))

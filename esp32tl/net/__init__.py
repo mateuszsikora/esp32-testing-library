@@ -2,7 +2,7 @@
 turns."""
 
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Literal, cast, overload
 
 from esp32tl.link.boardlink import Output
@@ -12,7 +12,7 @@ from esp32tl.net.ethernet import Ethernet
 from esp32tl.net.http import HttpServer
 from esp32tl.net.ip import Connection, Network, StreamService
 from esp32tl.net.mqtt import Broker
-from esp32tl.net.ntp import Ntp
+from esp32tl.net.ntp import DEFAULT_UTC, Ntp
 from esp32tl.net.ppp import Ppp
 from esp32tl.net.tls import CertificateAuthority, Tls
 from esp32tl.report import board_time
@@ -34,7 +34,7 @@ class Internet:
     def __init__(
         self,
         now: Callable[[], int],
-        world: Callable[[], datetime] = lambda: datetime(2026, 1, 1, tzinfo=UTC),
+        world: Callable[[], datetime] = lambda: DEFAULT_UTC,
         *,
         link: Link = "ppp",
     ) -> None:

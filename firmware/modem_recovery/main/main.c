@@ -11,6 +11,7 @@
 #include "freertos/event_groups.h"
 #include "freertos/task.h"
 #include "lwip/sockets.h"
+#include "sdkconfig.h"
 
 #define PWRKEY GPIO_NUM_4
 #define RESET GPIO_NUM_5
@@ -132,7 +133,8 @@ void app_main(void) {
             recover();
             continue;
         }
-        char registration[64] = "";
+        /* esp_modem_at copies up to this many bytes, whatever the buffer. */
+        char registration[CONFIG_ESP_MODEM_C_API_STR_MAX] = "";
         esp_modem_at(modem, "AT+CEREG?", registration, 1000);
         printf("modem_recovery: command mode %s\n", registration);
     }

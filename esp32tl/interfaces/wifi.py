@@ -11,13 +11,14 @@ board's current instant.
 import threading
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 
 from esp32tl.boards.capabilities import Request
 from esp32tl.interfaces import SourceError
 from esp32tl.link.boardlink import Direction, Interface, Output
 from esp32tl.link.protocol import Input, WifiAp
 from esp32tl.net import LATENCY_NS, Internet
+from esp32tl.net.ntp import DEFAULT_UTC
 from esp32tl.report import RunLog
 
 NAME = "wifi"
@@ -78,7 +79,7 @@ class Wifi(Interface):
         self,
         *,
         now: Callable[[], int],
-        world: Callable[[], datetime] = lambda: datetime(2026, 1, 1, tzinfo=UTC),
+        world: Callable[[], datetime] = lambda: DEFAULT_UTC,
         asked: Callable[[Request], None] = lambda request: None,
         log: RunLog | None = None,
     ) -> None:
