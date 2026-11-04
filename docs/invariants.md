@@ -730,7 +730,7 @@ that references to its number keep their meaning.
     `tests/test_modem_model.py::test_reset_is_judged_at_release_and_at_the_profile_s_threshold`,
     `tests/test_modem_model.py::test_reset_is_active_high_at_the_pad`,
     `tests/test_modem_model.py::test_reset_takes_its_polarity_and_threshold_from_the_profile`,
-    `tests/test_modem_model.py::test_reset_of_a_modem_in_data_mode_ends_the_call_and_leaves_command_mode`,
+    `tests/test_modem_model.py::test_reset_of_a_modem_in_data_mode_ends_the_call_and_returns_to_command_mode`,
     `tests/test_modem_model.py::test_reset_of_a_modem_that_is_off_does_nothing`,
     `tests/test_modem_model.py::test_power_enable_has_no_effect_on_the_modem`,
     `tests/test_modem_recovery.py::test_recovers_a_hung_modem`,

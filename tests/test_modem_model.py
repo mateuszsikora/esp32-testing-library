@@ -1148,16 +1148,21 @@ def test_a_second_hang_is_refused_and_keeps_the_first_s_choice(second: bool) -> 
 
 
 def test_a_wrong_and_an_unset_clock_survive_a_power_cycle() -> None:
+    now = [0]
     world = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
-    model = Modem(lambda: 0, world=lambda: world)
+    model = Modem(lambda: now[0], world=lambda: world)
     model.clock(wrong_by=hours(-1), zone=hours(2))
+    now[0] = seconds(5).ns
     model.power_off()
     model.power_on()
-    assert b'"26/01/01,13:00:00+08"' in reply(model, "AT+CCLK?")
+    assert b'"26/01/01,13:00:07+08"' in reply(model, "AT+CCLK?", seconds(7).ns)
+    # set at 10 s and cycled at 20 s, it goes on from the first: the cycle does not start it again
+    now[0] = seconds(10).ns
     model.clock_not_set(reads=datetime(2000, 1, 1, tzinfo=UTC))
+    now[0] = seconds(20).ns
     model.power_off()
     model.power_on()
-    assert b'"00/01/01,00:00:00"' in reply(model, "AT+CCLK?")
+    assert b'"00/01/01,00:00:15"' in reply(model, "AT+CCLK?", seconds(25).ns)
 
 
 def test_reset_takes_its_polarity_and_threshold_from_the_profile() -> None:
@@ -1172,7 +1177,7 @@ def test_reset_takes_its_polarity_and_threshold_from_the_profile() -> None:
     assert model.restarts == (Restart(seconds(6) + ms(501), "reset"),)
 
 
-def test_reset_of_a_modem_in_data_mode_ends_the_call_and_leaves_command_mode(
+def test_reset_of_a_modem_in_data_mode_ends_the_call_and_returns_to_command_mode(
     tmp_path: Path,
 ) -> None:
     now = [seconds(1).ns]

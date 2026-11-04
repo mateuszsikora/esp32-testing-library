@@ -153,8 +153,8 @@ A call that cannot hold raises and, as the first call, selects no model:
 - `modem.operator: act is True, not a whole number` (`ValueError`).
 
 A `wrong_by` or `reads` that takes the date beyond what `datetime` holds is not refused at the call:
-the `AT+CCLK?` that reaches it fails the run with `uart.modem.receive raised OverflowError: date value
-out of range`.
+the `AT+CCLK?` that reaches it fails the run with an `OverflowError`, for example `uart.modem.receive
+raised OverflowError: date value out of range`.
 
 ## A hung modem and RESET
 
@@ -247,7 +247,7 @@ and shown by `firmware/modem_recovery` on that pin:
   `IP_EVENT_PPP_LOST_IP`.
 - `+++` with no answer in command mode is survivable: after a 5 s timeout `esp_modem` writes `\n` and
   `AT`, which also clears PPP bytes left in the command line. The parser needed no change for it.
-- Under esp32sim these bytes reach `esp_modem` one byte per read, and `exit_data` looks for `NO
+- Under esp32sim the modem's answers reach `esp_modem` one byte per read, and `exit_data` looks for `NO
   CARRIER` within each read, so there it never finds it. A read on a real UART can hold the whole
   text, and by the code `exit_data` would then skip `+++`; that has not been measured. As measured
   with `modem_recovery`, whose `exit_data` stops listening 14 s into leaving data mode: a call
