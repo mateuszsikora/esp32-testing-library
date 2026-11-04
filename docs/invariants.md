@@ -745,8 +745,10 @@ that references to its number keep their meaning.
     `tests/test_net_ppp.py::test_the_far_end_offers_to_terminate_an_open_link_only`
 - **179.** At the pin, firmware on `esp_modem` learns of a call dropped with a Terminate-Request from
     `IP_EVENT_PPP_LOST_IP` 6 s later, and of one without it from its own timeout, and redials on
-    both, with the modem registered and not restarted.
-    `tests/test_modem_recovery.py::test_redials_after_a_dropped_call`
+    both, with the modem registered and not restarted. A call dropped while it is leaving data mode
+    restarts nothing either: `+++` gets no answer, and `esp_modem` writes `\n` before its `AT`.
+    `tests/test_modem_recovery.py::test_redials_after_a_dropped_call`,
+    `tests/test_modem_recovery.py::test_a_call_dropped_while_the_firmware_leaves_data_mode_restarts_nothing`
 - **180.** A command stuck to bytes left on the command line is lost whole, with no answer and no
     entry in the history, on a hung modem and a healthy one; the next newline clears the line.
     `tests/test_modem_model.py::test_a_command_stuck_to_ppp_bytes_is_lost_whole`

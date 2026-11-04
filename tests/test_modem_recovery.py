@@ -141,3 +141,28 @@ def test_redials_after_a_dropped_call(
     after = [(d, data) for t, d, data in tap.events if t >= dropped_at.ns]
     assert b"".join(data for d, data in after if d == "in").find(b"\r\nNO CARRIER\r\n") >= 0
     assert any(d == "out" and b"\xc0!}&" in data for d, data in after) is terminate
+
+
+@pytest.mark.parametrize("delay", [None, 0, 5, 13])
+def test_a_call_dropped_while_the_firmware_leaves_data_mode_restarts_nothing(
+    board: Esp32Sim, modem: Modem, console: Console, tmp_path: Path, delay: int | None
+) -> None:
+    network = modem.network()
+    tap = modem.tap(tmp_path / "modem.jsonl")
+    board.power_on()
+    board.wait_until(console.line("modem_recovery: connected"), within=seconds(60))
+    board.wait_until(lambda: network.ntp.requests > 0, within=seconds(5))
+    # NTP goes silent, so the firmware leaves data mode with the call still up
+    network.ntp.go_silent()
+    board.wait_until(console.line("modem_recovery: no answer"), within=seconds(60))
+    leaving = board.now
+    if delay is not None:
+        board.wait(seconds(delay))
+        assert modem.data_mode
+        modem.drop_call()
+    board.wait_until(console.line("modem_recovery: command mode"), within=seconds(60))
+    assert not modem.restarts and not console.lines("modem_recovery: hung")
+    sent = [data for t, d, data in tap.events if t >= leaving.ns and d == "out"]
+    # with a call to escape from, +++ gets its OK, and AT needs no newline before it
+    assert (b"\nAT\r" in sent) is (delay is not None)
+    assert b"AT\r" in sent
