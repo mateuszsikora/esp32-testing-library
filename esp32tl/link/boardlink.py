@@ -157,10 +157,10 @@ class Interface:
         Its outputs may lie in the future: the runner queues them (protocol §8)."""
         return ()
 
-    def transmitted(self, t: int, baud: int | None) -> None:
-        """The guest's UART transmits the bytes of the next `receive` at `baud`, `None` when it
-        has none set: the rate of the `uart_tx`, which `configured` does not give when two ports
-        share the wire. Raising fails the run."""
+    def transmitted(self, t: int, baud: int | None, data: bytes) -> None:
+        """The guest's UART transmits `data`, the bytes of the next `receive`, at `baud`, `None`
+        when it has none set: the rate of the `uart_tx`, which `configured` does not give when two
+        ports share the wire. Raising fails the run, and `receive` does not come."""
 
     def inputs(self, now: int) -> Iterable[Input]:
         """The GPIO inputs (`gpio_in`, `release`) the interface sends in the turn at `now`, on
@@ -464,7 +464,7 @@ class BoardLink:
             wire = interface.wire
             if wire is not None and wire.tx is not None and wire.tx in message.tx_pins:
                 with calling(interface.name, "transmitted"):
-                    interface.transmitted(message.t, message.baud)
+                    interface.transmitted(message.t, message.baud, message.data)
                 with calling(interface.name, "receive"):
                     answers = _outputs(
                         interface.name, "receive", interface.receive(message.t, "out", message.data)

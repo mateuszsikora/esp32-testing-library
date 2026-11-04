@@ -10,6 +10,7 @@ paced to wall time from one that is not.
 with `ESP32TL_REAL_GNSS_PORT` set.
 """
 
+import contextlib
 import os
 import select
 import statistics
@@ -32,6 +33,7 @@ from esp32tl.interfaces.gnss import Gnss
 from esp32tl.interfaces.uart import Uart
 from esp32tl.link.boardlink import BoardLink, Wire
 from esp32tl.link.protocol import RunnerHello, Sync, UartRx, UartTx, Wait
+from esp32tl.report import RunLog
 from esp32tl.sources import real as real_source
 from esp32tl.sources.real import MS, Real
 from esp32tl.tap import Tap
@@ -114,14 +116,19 @@ def real(device: Device) -> Iterator[Real]:
     source.close()
 
 
+def seen(source: Real) -> int:
+    """The bytes the reading thread has had from the port, since the first turn."""
+    return len(source._read) + source.dropped + source._cut
+
+
 def given(
     device: Device, source: Real, now: int, data: bytes, timeout: float = 5
 ) -> list[tuple[int, bytes]]:
     """The source's turn at `now`, once the reading thread has `data` from the device."""
-    expected = len(source._read) + source.dropped + len(data)
+    expected = seen(source) + len(data)
     os.write(device.fd, data)
     deadline = time.monotonic() + timeout
-    while len(source._read) + source.dropped < expected:
+    while seen(source) < expected:
         assert time.monotonic() < deadline, f"the port gave {len(source._read)} bytes"
         time.sleep(0.001)
     return list(source.poll(now))
@@ -246,15 +253,32 @@ def test_what_the_device_sent_before_the_first_turn_is_not_counted_as_dropped(
         source.close()
 
 
+def test_what_comes_after_the_last_turn_is_not_counted_as_dropped(
+    device: Device, real: Real
+) -> None:
+    assert given(device, real, MS, b"$GP") == [(MS, b"$GP")]
+    expected = seen(real) + 3000
+    os.write(device.fd, bytes(3000))
+    deadline = time.monotonic() + 5
+    while seen(real) < expected:
+        assert time.monotonic() < deadline
+        time.sleep(0.001)
+    real.close()
+    assert real.dropped == 0
+
+
 def test_what_a_held_turn_leaves_in_the_reader_is_bounded(device: Device, real: Real) -> None:
     # Before the turn looks at them, the thread keeps no more than a turn can send.
     expected = 3000
     os.write(device.fd, bytes(expected))
     deadline = time.monotonic() + 5
-    while len(real._read) + real.dropped < expected:
+    while seen(real) < expected:
         assert time.monotonic() < deadline
         time.sleep(0.001)
     assert len(real._read) == 128
+    # Dropped only by a turn: until one comes, nothing has been kept from the firmware.
+    assert real.dropped == 0
+    assert list(real.poll(MS)) == [(MS, bytes(128))]
     assert real.dropped == expected - 128
 
 
@@ -319,6 +343,27 @@ def test_a_port_that_takes_nothing_fails_the_next_turn(
             source.poll(0)
     finally:
         source.close()
+
+
+def test_closing_discards_what_the_driver_holds_even_on_a_port_that_is_gone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    device = Device()
+    source = Real("uart.gnss", device.port, BAUD)
+    flushed = []
+    flush = source._port.reset_output_buffer
+
+    def flushing() -> None:
+        flushed.append(source._port.is_open)
+        flush()
+
+    monkeypatch.setattr(source._port, "reset_output_buffer", flushing)
+    device.close()
+    # What the thread found wrong with the port gone is for `close` to say; the port closes first.
+    with contextlib.suppress(SourceError):
+        source.close()
+    assert flushed == [True]
+    assert not source._port.is_open
 
 
 def test_closing_does_not_wait_for_what_the_port_has_not_taken(device: Device) -> None:
@@ -453,7 +498,7 @@ def test_a_tap_records_the_source_s_stamps_and_not_what_it_dropped(
         data = bytes(i % 251 for i in range(300))
         os.write(device.fd, data)
         deadline = time.monotonic() + 5
-        while len(source._read) + source.dropped < 300:
+        while seen(source) < 300:
             assert time.monotonic() < deadline
             time.sleep(0.001)
         assert list(uart.poll(2 * MS)) == [(2 * MS, data[-128:])]
@@ -470,9 +515,11 @@ def test_a_tap_records_the_source_s_stamps_and_not_what_it_dropped(
 def test_the_link_fails_the_run_on_a_transmission_at_another_baud(
     device: Device, tmp_path: Path
 ) -> None:
-    uart = Uart("uart.gnss", Wire(4, 5, BAUD), clock=recording.WALL, directory=tmp_path)
+    log = RunLog()
+    uart = Uart("uart.gnss", Wire(4, 5, BAUD), clock=recording.WALL, directory=tmp_path, log=log)
     source = uart.real(device.port)
     try:
+        tap = uart.tap("tap.jsonl")
         link = BoardLink("esp32-devkitc", [uart])
         link.receive(RunnerHello(1, "esp32", recording.WALL, "abc"))
         link.receive(UartTx(1, 0, 1, (4,), 115200, b"AT"))
@@ -480,6 +527,10 @@ def test_the_link_fails_the_run_on_a_transmission_at_another_baud(
             f"uart.gnss.transmitted raised SourceError: uart.gnss: the firmware transmits at 115200"
             f" baud, and the serial port {device.port} runs at 9600 baud"
         )
+        # What did it is in the tap and the log, and did not go to the port.
+        assert tap.events == [(0, "out", b"AT")]
+        assert log.traffic["uart.gnss"].bytes_out == 2
+        assert source._to_write.empty()
     finally:
         source.close()
 

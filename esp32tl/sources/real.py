@@ -10,6 +10,7 @@ run's first turn is no loss of the run's, and is not counted. What the firmware 
 the port's queue as soon as the link hands it over.
 """
 
+import contextlib
 import queue
 import termios
 import threading
@@ -58,9 +59,11 @@ class Real:
         self.baud = baud
         # Rounded up, so that the line carries all of BURST_BYTES in it.
         self.backlog_ns = max(BACKLOG_NS, -(-BURST_BYTES * CHAR_NS_AT_1_BAUD // baud))
-        # The bytes dropped to keep the line within the bound, from the first turn on, for the test
-        # report.
+        # The bytes dropped to keep the line within the bound, from the first turn to the last, for
+        # the test report.
         self.dropped = 0
+        # What the reading thread has cut since the last turn: dropped only if another turn comes.
+        self._cut = 0
         # Whether the first turn has looked at the port: until then there is no run to lose bytes.
         self._turned = False
         self._now = 0
@@ -104,7 +107,7 @@ class Real:
                     if over > 0:
                         del self._read[:over]
                         if self._turned:
-                            self.dropped += over
+                            self._cut += over
 
     def _write_port(self) -> None:
         while (data := self._to_write.get()) is not None:
@@ -142,6 +145,8 @@ class Real:
         with self._lock:
             self._raise_failed()
             self._turned = True
+            self.dropped += self._cut
+            self._cut = 0
             data = bytes(self._read)
             self._read.clear()
             start = max(now, self._line_free)
@@ -194,8 +199,8 @@ class Real:
         return None
 
     def close(self) -> None:
-        """Ends the reading and the writing, and closes the port; what the port has not taken yet
-        is not written: the run is over. A failure no turn was left to raise is raised here, once
+        """Ends the reading and the writing, and closes the port; what the port has not sent yet is
+        not sent: the run is over. A failure no turn was left to raise is raised here, once
         the port is closed: the last seconds of a run can stall a write. Closing twice does
         nothing."""
         self._closing.set()
@@ -203,6 +208,10 @@ class Real:
         self._port.cancel_write()
         self._writer.join()
         self._reader.join()
+        # What the driver holds goes too: on Linux closing a tty can wait up to 30 s for it. A port
+        # already gone has nothing to flush, and is closed all the same.
+        with contextlib.suppress(OSError, termios.error):
+            self._port.reset_output_buffer()
         self._port.close()
         with self._lock:
             self._raise_failed()

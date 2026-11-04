@@ -204,9 +204,15 @@ class Uart(Interface):
             return ()
         return self._sent(self.source.receive(t, data))
 
-    def transmitted(self, t: int, baud: int | None) -> None:
+    def transmitted(self, t: int, baud: int | None, data: bytes) -> None:
+        """A source that refuses the rate fails the run; the bytes that did it still crossed the
+        guest's wire, for the tap and the run's log."""
         if isinstance(self.source, RateBound):
-            self.source.transmitted(t, baud)
+            try:
+                self.source.transmitted(t, baud)
+            except Exception:
+                self._crossed(t, "out", data)
+                raise
 
     def poll(self, now: int) -> Iterable[Output]:
         return () if self.source is None else self._sent(self.source.poll(now))

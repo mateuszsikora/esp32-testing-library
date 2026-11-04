@@ -31,6 +31,8 @@ def test_reads_the_receiver(board, gnss, console):
   example. esp32tl takes the advisory lock on it, which stops a second route and any program that
   asks for the same lock, not one that does not: such a program takes bytes from the firmware without
   a word, and `dropped` does not count them, since they never reached the source.
+- Opening the port leaves its DTR and RTS lines at pyserial's defaults. A device with them wired to
+  its reset may start again at `gnss.real(port)`. A T-A7670G, measured on its CH9102, does not.
 - One source per route, as for a replay or a model.
 
 ## What changes in the run
@@ -85,8 +87,8 @@ What the firmware transmits leaves through the port within about a millisecond o
 as it transmits no faster than the line. Nothing holds it back to that rate as a real UART's FIFO
 does, since the emulated UART always reads as idle: a burst, a kilobyte of assistance data for one,
 leaves over as long as the line takes to carry it, while the firmware has already gone on. The run
-does not wait for it. What the port has not sent when the run ends is not sent. The port's rate does
-not change during the run.
+does not wait for it. What the port has not sent when the run ends is not sent, also what its driver
+held. The port's rate does not change during the run.
 
 ## Recording what crosses the route
 
@@ -110,7 +112,8 @@ routes:
 ```
 
 - `dropped`, also `real.dropped` and the route's `dropped` in the `esp32sim_link` property: the bytes
-  that went over the bound, from the run's first turn on.
+  that went over the bound, from the run's first turn to its last. What the device sends once no
+  turn is left is no loss of the firmware's, and is not counted.
 - `resyncs`, `stats.rt_resyncs`: each is a stretch of over half a second of wall time the guest did
   not see, from a held turn or a guest that fell behind.
 

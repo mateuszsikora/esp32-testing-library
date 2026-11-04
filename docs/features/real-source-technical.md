@@ -27,8 +27,9 @@ Code: `esp32tl/sources/real.py`, `Uart.real` in `esp32tl/interfaces/uart.py`, `E
    `runner_command`, which adds `--realtime`. The runner's `hello` then says `wall`.
 4. `_read_port` reads whatever the port has, up to `READ_SECONDS` at a time, into `_read` under the
    lock. It keeps at most `_carried(backlog_ns)` bytes, the most a turn can send, so a long hold costs
-   no memory; what it trims goes into `dropped` once `_turned` is set, by the first `poll`. Until then
-   there is no run to lose bytes. Any exception is kept in `_failed` and ends the thread.
+   no memory; what it trims goes into `_cut` once `_turned` is set, by the first `poll`, and each
+   `poll` moves `_cut` into `dropped`. Before the first turn there is no run to lose bytes, and after
+   the last none to lose them from. Any exception is kept in `_failed` and ends the thread.
 5. Each turn, `BoardLink._turn` calls `Uart.poll(now)`, which calls `Real.poll(now)`:
    - raises `SourceError` if the thread kept a failure;
    - takes all of `_read`;
@@ -41,7 +42,7 @@ Code: `esp32tl/sources/real.py`, `Uart.real` in `esp32tl/interfaces/uart.py`, `E
 6. `Uart._sent` records the output in the tap and the run's log, so neither holds a dropped byte.
 7. `Real.quiet_until()` returns `(now // MS + 1) * MS`, the next whole millisecond, where the runner
    ends a slice anyway. `latency()` is `None`.
-8. For each `uart_tx` on the route, `BoardLink._uart_tx` calls `Interface.transmitted(t, baud)` before
+8. For each `uart_tx` on the route, `BoardLink._uart_tx` calls `Interface.transmitted(t, baud, data)` before
    `receive`. `Uart.transmitted` hands it to a source that is `RateBound`, a protocol as `Supplied`
    is, which `Real` is; `Real.transmitted` raises `SourceError` on a `None`
    baud or one further from the port's than 3 % of the port's, `UartRoute::matches_baud`'s test. Then
@@ -53,7 +54,10 @@ Code: `esp32tl/sources/real.py`, `Uart.real` in `esp32tl/interfaces/uart.py`, `E
 9. `Esp32Sim.close` calls `_release` in its `finally`, which closes the SD card and every `Real`,
    each whatever another raises, and reports what raised unless the end of the run has failed first.
    `Real.close` sets `_closing`, wakes the writer with `None` and `cancel_write`, joins both threads,
-   the reader within `READ_SECONDS`, and closes the port; what is still queued is not written. Then it
+   the reader within `READ_SECONDS`, discards what the driver holds, and closes the port; what is still
+   queued is not written. The flush is for Linux, where closing a tty can wait for its buffer for up to
+   a driver's `closing_wait`, 30 s by default for usb-serial; that comes from the kernel's documentation
+   and is not measured here. On macOS, measured on a CH9102, closing takes no time with or without it. Then it
    raises what is in `_failed`: `BoardLink._turn` returns `Stop` before it polls the sources, so a
    failure after the last turn has no other way out. It may be called twice.
 
@@ -73,7 +77,7 @@ off, which the runner counts as `unrouted_rx`.
 | `Real.transmitted(t, baud)` | Refuses a transmission the port cannot carry |
 | `Real.close()` | Ends the reading, closes the port; idempotent |
 | `Uart.real(port)` | The test's call |
-| `Interface.transmitted(t, baud)` | The link's hook, a no-op by default; called before `receive` for each `uart_tx` |
+| `Interface.transmitted(t, baud, data)` | The link's hook, a no-op by default; called before `receive` for each `uart_tx` |
 
 ## Configuration
 
@@ -101,7 +105,10 @@ source's 1000 turns a second leave the guest room to keep up.
 
 `os.openpty` stands in for the adapter in the tests and hides what a real adapter does on its modem
 lines at open: pyserial leaves DTR and RTS at their defaults, which can reset a device that wires them
-to its reset.
+to its reset. A T-A7670G does not reset on that open, on its CH9102, and does when they are cleared.
+
+A `uart_tx` a `RateBound` source refuses still reaches the tap and the run's log, from
+`Uart.transmitted`, since the firmware did transmit it, and does not reach `receive`, so not the port.
 
 ## Tests
 
@@ -110,15 +117,16 @@ to its reset.
 - The source alone, milliseconds: a turn's stamp and bytes; `quiet_until` at the next whole
   millisecond; no loss at the line rate, nor with whole USB packets as a CH9102 delivers them; the
   bound, with the exact bytes kept and the exact count dropped; the line never more than the bound behind; the reader's own bound; what came before the
-  first turn not counted; a burst larger than the port takes not holding the turn, and reaching the
+  first turn or after the last not counted; a burst larger than the port takes not holding the turn, and reaching the
   device in order; a slow port that makes progress not failing; a stalled one failing the next turn;
-  closing without waiting for what is queued, and raising a failure no turn raised, once; settings the port refuses; writes reaching the
+  closing without waiting for what is queued, discarding what the driver holds, and raising a failure
+  no turn raised, once; settings the port refuses; writes reaching the
   port; the 3 % at both edges, and no baud; a failed port; a port that cannot be opened, is not named,
   or is taken; a second close.
 - On the `Uart` and `BoardLink`, milliseconds: the protocol's millisecond, exactly
   (`test_on_the_link_a_byte_gets_the_time_of_the_next_turn_within_a_millisecond`: each turn's
   `quiet_until` and the stamp of a byte between two turns); the tap's events and `source`; the run
-  failing on another baud.
+  failing on another baud, with its bytes in the tap and the log and not in the port's queue.
 - The backend's refusals and clock, with `nmea_reader` or `modem_at`: `wall` from the call on, and
   nothing moved by a call that failed; only a real source passes `--realtime`; one source per route;
   before power-on; replays before and after; one port that cannot be closed not keeping another open.

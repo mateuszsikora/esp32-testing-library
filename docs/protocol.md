@@ -1254,7 +1254,8 @@ do: the bound limits how late the guest hears the device, not what of it arrives
 needs room for one on a line still carrying the last, so while the guest keeps up with wall time no
 byte is dropped. A device that delivers faster than the wire's line rate, a receiver with native USB
 handing over its epoch at once for one, does lose bytes to the bound, in every burst the line cannot
-carry within it. The bound is what the test report's `dropped` counts, from the run's first turn on.
+carry within it. The bound is what the test report's `dropped` counts, from the run's first turn to
+its last.
 What the device sent before that is no loss of the run's: the source keeps the last of it the bound
 carries, for the first turn to hand over, and discards the rest without counting it.
 
@@ -1271,7 +1272,7 @@ for the run. A `uart_tx` whose `baud` is `null`, or further from the port's than
 `matches_baud` allows, would give the device what a wire does not carry intact, which the port
 cannot reproduce: the run fails on it, as it does on a `frm_err` (5.8). The source writes 64 bytes
 at a time, and a port that has not taken them after 5 wall seconds fails the run as a failed port does.
-What it has not taken when the run ends is not written.
+What it has not sent when the run ends, in the queue or in its driver, is not sent.
 
 The source's turns are the run's cost: a thousand per emulated second, each a round trip through
 `BoardLink`. A harness that takes close to a millisecond of wall time per turn keeps the guest
