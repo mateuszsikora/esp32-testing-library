@@ -505,6 +505,79 @@ that references to its number keep their meaning.
     `tests/test_spp_peer.py::test_the_channel_opens_only_on_a_link_the_device_authenticated`,
     `tests/test_spp_peer.py::test_an_authenticated_link_needs_no_encryption_for_the_channel`,
     `tests/test_spp_peer.py::test_a_peer_that_is_not_secure_opens_the_channel_on_any_link`
+- **162.** A peer that leaves, switched off or out of range, sends nothing: the device's link falls
+    with `CONNECTION_TIMEOUT` exactly at the supervision timeout after it left, a page ends in
+    `PAGE_TIMEOUT` exactly at the page timeout, and an inquiry does not find it until it returns.
+    `tests/test_spp_peer.py::test_a_link_to_a_peer_that_left_falls_at_the_supervision_timeout_without_a_detach`,
+    `tests/test_spp_peer.py::test_a_page_to_a_peer_that_left_ends_at_the_page_timeout`,
+    `tests/test_spp_peer.py::test_an_inquiry_does_not_find_a_peer_that_left_until_it_returns`
+- **163.** A peer keeps its link keys across leaving and returning, however it left; only
+    `forget_keys` loses them.
+    `tests/test_spp_peer.py::test_a_device_authenticates_with_its_key_after_the_peer_returns`,
+    `tests/test_spp_peer.py::test_a_peer_that_forgot_its_keys_refuses_after_it_returns`
+- **164.** Coming back does not revive a link: nothing crosses it, it falls at its timeout counted
+    from when contact was lost, and the peer can be discovered and connected to by another device
+    meanwhile.
+    `tests/test_spp_peer.py::test_coming_back_before_the_timeout_does_not_revive_the_link`,
+    `tests/test_spp_peer.py::test_another_device_can_connect_to_a_peer_back_before_the_old_link_falls`,
+    `tests/test_spp_peer.py::test_leaving_again_does_not_restart_the_timeout_of_a_link_that_lost_contact`
+- **165.** A power loss calls `supply` on a source that has it and drops what it queued; out of range
+    the source runs on, and what it sends counts in `lost`.
+    `tests/test_spp_peer.py::test_a_power_loss_tells_a_supplied_source_and_drops_what_it_had_queued`,
+    `tests/test_spp_peer.py::test_out_of_range_does_not_tell_a_supplied_source_and_what_it_sends_is_lost`,
+    `tests/test_spp_peer.py::test_a_power_loss_leaves_a_source_that_is_not_supplied_running_and_it_is_lost`
+- **166.** The page timeout and link supervision timeout a host writes take effect; only a central
+    may write the second, on both ends, and 0 means no supervision.
+    `tests/test_spp_peer.py::test_the_page_timeout_a_host_writes_takes_effect`,
+    `tests/test_spp_peer.py::test_the_supervision_timeout_a_central_writes_takes_effect_on_both_ends`,
+    `tests/test_spp_peer.py::test_a_peripheral_may_not_write_the_supervision_timeout`,
+    `tests/test_spp_peer.py::test_a_supervision_timeout_of_zero_means_the_link_never_falls`
+- **167.** Two runs in which a peer leaves and returns do the same at the same instants.
+    `tests/test_spp_peer.py::test_two_runs_lose_the_peer_at_the_same_instants`
+- **168.** One inquiry finds every device present, each with its own class of device and RSSI, in the
+    modes that carry an RSSI; the next inquiry gets an RSSI set meanwhile.
+    `tests/test_spp_peer.py::test_one_inquiry_finds_several_devices_each_with_its_own_rssi_and_class`,
+    `tests/test_spp_peer.py::test_a_device_answers_with_the_rssi_it_has_at_each_inquiry`,
+    `tests/test_spp_peer.py::test_the_rssi_is_given_in_the_mode_that_has_it_and_not_in_the_plain_one`
+- **169.** A `BluetoothDevice` does not answer for SPP in SDP, and has no RFCOMM channel.
+    `tests/test_spp_peer.py::test_a_device_without_spp_says_so_in_sdp_and_has_no_channel`
+- **170.** A device that leaves during its own page can be reached again once both are back, and a
+    power loss ends a page, a remote name request and an inquiry, whose timers do not end the next;
+    a device that left finds nobody.
+    `tests/test_spp_peer.py::test_a_device_that_leaves_during_its_own_page_can_be_reached_again`,
+    `tests/test_spp_peer.py::test_a_device_that_left_during_its_own_page_can_be_paged_once_both_are_back`,
+    `tests/test_spp_peer.py::test_a_page_that_outlasts_the_link_falling_at_the_other_end_lets_the_pair_go`,
+    `tests/test_spp_peer.py::test_a_power_loss_ends_a_page_and_its_timer_does_not_end_the_next`,
+    `tests/test_spp_peer.py::test_a_power_loss_ends_a_remote_name_request_and_its_timer_does_not_end_the_next`,
+    `tests/test_spp_peer.py::test_a_power_loss_ends_an_inquiry`,
+    `tests/test_spp_peer.py::test_a_power_loss_ends_an_inquiry_that_would_restart_itself`,
+    `tests/test_spp_peer.py::test_a_power_loss_ends_an_authentication_with_a_status`,
+    `tests/test_spp_peer.py::test_a_device_that_left_finds_nothing_in_its_own_inquiry`
+- **171.** A remote name request nobody answers ends in `PAGE_TIMEOUT` exactly at the page timeout; a
+    second to the same peer while one is pending ends when the first does.
+    `tests/test_spp_peer.py::test_a_remote_name_request_to_a_peer_that_left_ends_at_the_page_timeout`,
+    `tests/test_spp_peer.py::test_a_second_remote_name_request_ends_when_the_first_does`,
+    `tests/test_spp_peer.py::test_a_remote_name_request_is_answered_at_once_when_the_peer_is_there`
+- **172.** A target that heard a page loses contact when the pager leaves, and its end falls at the
+    supervision timeout counted from then. A target whose host has not answered tells it of no link
+    when its end goes, and a host that answers later gets a failed `Connection_Complete`: a late
+    answer makes no link, completes no later page, leaves a working link as it is, and does not fail
+    the air.
+    `tests/test_spp_peer.py::test_a_target_that_heard_the_page_loses_contact_when_the_pager_leaves`,
+    `tests/test_spp_peer.py::test_a_pager_whose_power_cycles_before_the_host_answers_gets_no_link`,
+    `tests/test_spp_peer.py::test_a_target_that_leaves_before_its_host_answers_tells_its_host_of_no_link`,
+    `tests/test_spp_peer.py::test_a_host_that_answers_a_page_after_its_end_fell_gets_no_link`,
+    `tests/test_spp_peer.py::test_a_late_answer_does_not_connect_the_next_page`,
+    `tests/test_spp_peer.py::test_an_answer_that_came_in_time_is_not_counted_late_afterwards`,
+    `tests/test_spp_peer.py::test_a_late_answer_leaves_a_working_link_alone`,
+    `tests/test_spp_peer.py::test_a_late_answer_does_not_complete_a_page_to_a_device_that_left`,
+    `tests/test_spp_peer.py::test_a_page_tried_again_with_a_slow_host_does_not_fail_the_air`,
+    `tests/test_spp_peer.py::test_two_answers_to_pages_that_ended_do_not_fail_the_air`,
+    `tests/test_spp_peer.py::test_every_late_answer_is_counted_before_a_new_page_is_answered`,
+    `tests/test_spp_peer.py::test_an_answer_owed_after_the_link_was_ended_does_not_fail_the_air`,
+    `tests/test_spp_peer.py::test_an_answer_owed_after_a_crossing_page_ended_does_not_fail_the_air`,
+    `tests/test_spp_peer.py::test_an_answer_nothing_is_owed_for_is_the_hosts_own_error`,
+    `tests/test_spp_peer.py::test_a_power_loss_at_the_instant_a_page_is_heard_does_not_fail_the_air`
 
 ## The esp32tl command
 

@@ -2,22 +2,24 @@
 
 Three modules in `esp32tl/bluetooth/`: `air.py`, the loop on the board's clock and the virtual
 link; `controller.py`, Bumble's virtual controller with what Classic devices need and Bumble
-0.0.236 lacks; `peer.py`, the SPP peer. What the user sees is in
+0.0.236 lacks; `peer.py`, the device and the SPP peer. What the user sees is in
 [bluetooth-peer-user.md](bluetooth-peer-user.md).
 
 ## Data flow
 
 1. **The air.** `Air()` makes a `BoardLoop`, an `asyncio.SelectorEventLoop` whose `time()` is
-   `now / 1e9`, `now` an `int` of nanoseconds that only `Air` moves, and a Bumble `LocalLink`.
+   `now / 1e9`, `now` an `int` of nanoseconds that only `Air` moves, and a `Link`, a Bumble
+   `LocalLink` that refuses delivery (below).
    The loop's selector, `_Selector`, never blocks: when asyncio asks it to wait, with a timeout
    other than 0, nothing is left to do at this instant, so it stops the loop and keeps the
    timeout, the distance to the loop's next timer (`None` for none). `BoardLoop.run_idle` runs the
-   loop until that happens and returns the next timer's time, rounded up to the nanosecond and at
-   least a nanosecond on. `_clock_resolution` is 1 ns, so a timer that rounds to the instant
-   fires there.
+   loop until that happens and returns the next timer's time, rounded to the nearest nanosecond and
+   at least a nanosecond on. `_clock_resolution` is 1 ns, so a timer that rounds to the instant
+   fires there. Rounding up would stop a nanosecond late wherever the float lands above it: a timer
+   5.12 s after 49 ms, for one.
 2. **Settling an instant.** `Air._settle` schedules every party's `poll(now)` with `call_soon`,
-   then runs the loop idle. `Air.call(function)` runs `function` inside the loop the same way;
-   `Air.start(coroutine)` makes a task there. Bumble's `Controller` takes the running loop in its
+   then runs the loop idle. `Air.call(function)` runs `function` inside the loop the same way, or
+   at once when called from inside it; `Air.start(coroutine)` makes a task there. Bumble's `Controller` takes the running loop in its
    constructor, so everything Bumble is made through `call`.
 3. **Moving time.** `Air.advance(until)`, a `Duration` checked by `nanoseconds`, goes to
    `Air._advance(ns)`, which settles the current instant, then, while
@@ -32,19 +34,24 @@ link; `controller.py`, Bumble's virtual controller with what Classic devices nee
    raises it as an `AirError`, `{asyncio's message}: {error}` or `{error}`, with the exception as
    its cause, and from then on every settle raises it again. A party whose `quiet_until` raises
    fails the air the same way, from `Air.quiet_until`.
-5. **The peer is made** by `SppPeer.__init__`: inside the loop, a `Controller` at `address` on the
+5. **A device is made** by `BluetoothDevice.__init__`, which `SppPeer.__init__` calls once it has
+   checked `pin` and `channel`: inside the loop, a `Controller` at `address` on the
    air's link, a Bumble `Device` on it through a `Host` and an `AsyncPipeSink`, configured Classic
    only (`le_enabled=False`), with `classic_ssp_enabled=False` and `classic_sc_enabled=False`, its
-   class of device `CLASS_OF_DEVICE`; a pairing delegate, `_Pin`, of IO capability
-   `KEYBOARD_INPUT_ONLY`, which Bumble's host asks for the PIN on a PIN request; an SDP record from
-   `rfcomm.make_service_sdp_records(RECORD_HANDLE, channel, BT_SERIAL_PORT_SERVICE)`; and an
+   class of device `class_of_device`; and a pairing delegate, `_Pin`, of IO capability
+   `KEYBOARD_INPUT_ONLY`, which Bumble's host asks for the PIN on a PIN request, and which gives
+   none for a device without one. Then `_serve(device)`, the services: nothing in
+   `BluetoothDevice`, so its SDP server has no record and no `rfcomm.Server` listens. `SppPeer._serve`
+   adds an SDP record from
+   `rfcomm.make_service_sdp_records(RECORD_HANDLE, channel, BT_SERIAL_PORT_SERVICE)` and an
    `rfcomm.Server` listening on `channel`, whose `EVENT_START`, emitted with each new
    multiplexer, replaces the multiplexer's `acceptor` with `SppPeer._accept` for that link. Before
    any of it, the address is parsed by `_address` and looked up with
    `LocalLink.find_classic_controller`. Then `power_on`, `set_discoverable` and
    `set_connectable` run with `air.run(..., within=Duration(0))`: they must complete at the
-   instant. The keystore is Bumble's default, a `MemoryKeyStore`. Last, the peer joins the air as
-   a party.
+   instant. The keystore is Bumble's default, a `MemoryKeyStore`. Last, an `SppPeer` joins the air
+   as a party; a `BluetoothDevice` has no schedule of its own. `BluetoothDevice.rssi` reads and,
+   checked by `_check_rssi`, writes `Controller.rssi`.
 6. **The channel.** Bumble's multiplexer asks its acceptor when the device's PN command names the
    channel. `_accept` refuses, by returning `None`, so that Bumble answers DM, while another link
    holds the channel, and, with `secure`, on a link the peer's controller does not count as
@@ -71,15 +78,15 @@ link; `controller.py`, Bumble's virtual controller with what Classic devices nee
    and returns the earliest of it and the next pending output. These are the checks `BoardLink`
    makes of a UART's source, with the peer's own messages.
 8. **The controller.** `Controller` subclasses Bumble's `Controller`. Both ends of every link are
-   of this class: its additions talk to each other over `LocalLink.send_lmp_packet`, which hands
+   of this class: its additions talk to each other over `Link.send_lmp_packet`, which hands
    the packet object to the other controller with `call_soon`. Bumble's own handlers do the rest:
    paging, connection, ACL data, name requests, Secure Simple Pairing.
    - **Inquiry.** `on_hci_inquiry_command` answers with a command status, starts a timer of
      `inquiry_length * INQUIRY_UNIT_S`, and sends one result per other `Controller` on the link
      whose `classic_scan_enable` has inquiry scan (bit 0), sorted by address, in the form
-     `inquiry_mode` asks for: `Extended_Inquiry_Result` with the other's `class_of_device` and
-     `extended_inquiry_response` in extended mode (2), `Inquiry_Result_With_RSSI` in mode 1,
-     `Inquiry_Result` in mode 0; RSSI −50, clock offset 0. `num_responses` answers, when not 0,
+     `inquiry_mode` asks for: `Extended_Inquiry_Result` with the other's `class_of_device`, `rssi` and
+     `extended_inquiry_response` in extended mode (2), `Inquiry_Result_With_RSSI` with its `rssi` in
+     mode 1, `Inquiry_Result`, which has no such field, in mode 0; clock offset 0. `num_responses` answers, when not 0,
      complete it at once. `Inquiry_Complete` comes from the timer; `Inquiry_Cancel` cancels it and
      sends none. `Write_Class_Of_Device`, `Read_Class_Of_Device`,
      `Write_Extended_Inquiry_Response` and `Write_Inquiry_Mode` keep and give what they are given.
@@ -122,26 +129,120 @@ link; `controller.py`, Bumble's virtual controller with what Classic devices nee
      length-prefixed and tagged, cut to 16, 16 and 4 bytes: they stand in for E22, E21 and E1,
      whose SAFER+ the link has no use for, since both ends are this class and only the hosts see
      a key. The random numbers come from `random.Random(str(public_address))`.
+   - **Paging.** `on_hci_create_connection_command` answers `CONNECTION_ALREADY_EXISTS_ERROR` when
+     `classic_connections` holds the peer; otherwise Bumble's handler sends `LmpHostConnectionReq`
+     and this one starts a timer of `page_timeout * SLOT_S`, kept in `_paging`. A connection that
+     completes cancels it. At the timer, `on_classic_connection_complete` gets
+     `PAGE_TIMEOUT_ERROR`; on any failure it drops the entry Bumble's handler made and Bumble's own
+     completion leaves. `Write_Page_Timeout` sets `page_timeout`, default `PAGE_TIMEOUT_SLOTS`, and
+     refuses 0 with `INVALID_COMMAND_PARAMETERS_ERROR`: the specification's range starts at 1.
+     TODO(owner): Vol 1, Part F, 2.11 defines `CONNECTION_ALREADY_EXISTS`, and 7.1.5 does not say
+     how a controller reports it for `Create_Connection`; here it is the command status. #34 can see
+     what ESP32's controller does.
+   - **Remote name requests.** `on_hci_remote_name_request_command` starts a timer of the same
+     length, kept in `_naming`, before Bumble's handler sends `LmpNameReq`; the answer cancels it, and
+     at the timer the host gets `Remote_Name_Request_Complete` with `PAGE_TIMEOUT_ERROR`, which Vol 1,
+     Part F, 2.4 names for this command. A second request to a peer with one pending keeps the
+     first's timer, so both end when the first does.
+   - **Link supervision.** Nothing polls on this link, so a link is in contact until a device
+     leaves, and the specification's "no packets are received for a duration longer than the
+     `Link_Supervision_Timeout`" counts from there. `Controller.left`, on the controller of the
+     device that leaves, calls `Link.leave` with the peers it holds a link to, leaving out a page of its own that the
+     target has not heard (`_held_by`), and `_lose_contact` on both ends of each link, which keeps the time in `_lost_contact` and, through `_supervise`, starts a timer to
+     `_link_timed_out`; a link that lost contact already keeps its time, and one still being paged
+     is left to its page. `_link_timed_out` sends `Authentication_Complete` with
+     `CONNECTION_TIMEOUT_ERROR` to an initiator's host still authenticating, then
+     `on_classic_disconnected` with that reason. `Write_Link_Supervision_Timeout` needs the central:
+     it keeps the value in `_supervision_timeouts`, by peer, sends `LmpSupervisionTimeout`, and
+     on a link that lost contact starts the timer again from `_lost_contact`. The peripheral keeps
+     what the packet says and sends its host `Link_Supervision_Timeout_Changed`; a packet the link
+     refuses leaves the other end at its old value. 0 starts no timer.
+     `on_classic_disconnected` cancels the timer and, once neither end holds the link, calls
+     `Link.let_go`, as a page that fails does: a target that left when it heard the page may let
+     go of its end first. `Controller.power_lost` ends what this side's host has under way, a page
+     or a remote name request with `PAGE_TIMEOUT_ERROR`, an inquiry with `Inquiry_Complete`, so that
+     no timer of theirs outlives the power and ends the next one; then it runs `_link_timed_out` on
+     each of this side's links at once, so that an authentication under way ends with its status.
+     `BluetoothDevice._become` first clears Bumble's `Device.auto_restart_inquiry`, or its host
+     would start another inquiry at the completion; the controller has no model of its power, so one
+     started through `peer.device` after that runs, and restarts, as on a device switched on.
+     `Controller.returned` calls `Link.back`.
+   - **A page this side's host has not answered.** Bumble makes the target's entry in
+     `classic_connections` with handle 0 when it hears a page, and gives handles from 1 when a link
+     is made. `on_classic_disconnected` removes such an entry without telling the host, since no
+     link was made. `_answers_due` counts the answers the host owes each peer, from
+     `on_classic_connection_request`, and such a removal makes all of them late, in `_late_answers`.
+     `on_hci_accept_connection_request_command` takes an answer as late when one is counted late, when
+     the entry already has a link, or when there is no entry and an answer was owed, as after the link
+     ended or a crossing page took the entry with it. An answer nothing was owed for goes to Bumble's
+     handler, as the host's own error. A late one: the host gets a command status of `SUCCESS` and, unless this
+     side is itself paging that peer, `Connection_Complete` with `CONNECTION_TIMEOUT_ERROR`, since the
+     event names only the address and would end that page in the host's eyes. The entry is left as it
+     is, so that a late answer completes neither a new page nor a working link. Given to Bumble's
+     handler it would do so, or answer `UNKNOWN_CONNECTION_IDENTIFIER_ERROR`, which fails the air from
+     Bumble's accepting task, or send the pager a second `LMP_accepted`, whose future is already done,
+     which fails it with `InvalidStateError`. An answer names only the address, so answers are told
+     apart only by their order: the oldest is taken as the late one, and with a page tried again while
+     the first answer is on its way, that first answer connects the second page, and the second answer
+     is the late one.
    - `Write_Secure_Connections_Host_Support` is answered with `SUCCESS` and changes nothing.
      `lmp_features` loses Bumble's `BR_EDR_NOT_SUPPORTED`.
+
+9. **The link that refuses.** `Link` subclasses Bumble's `LocalLink`, which raises
+   `InvalidArgumentError` from `send_lmp_packet` for an address it does not hold and delivers to
+   any it does; `remove_controller` alone would fail the air on the next packet, and neither end
+   would time out. Whether a device can be reached is decided in `Link.reaches(sender, receiver)`
+   and nowhere else: neither is in `_absent`, and the pair is not in `_severed`. `send_acl_data` and
+   `send_lmp_packet` drop what it refuses, and `send_lmp_packet` what is for an address nobody has.
+   `leave(address, peers)` adds to both; `back(address)` takes the address out of `_absent` and
+   leaves `_severed`, so that a link is not revived; `let_go(one, other)` takes the pair out.
+   `Controller.on_hci_inquiry_command` asks `Link.present` of both the device that asks, which
+   then hears nobody, and each that would answer. If #34 chooses another controller, this
+   class is what moves; `SppPeer`'s calls do not.
+10. **A device that leaves.** `switch_off`, `switch_on`, `out_of_range` and `in_range` call
+    `BluetoothDevice._become(on, in_range)` through `Air.call`. It keeps `_on` and `_in_range`, whose
+    conjunction is `present`, and calls `Controller.left` on a change to absent, `power_lost` on a
+    change to off, `_supply` on any change of power, and `Controller.returned` on a change to
+    present, in that order. `_supply` does nothing in `BluetoothDevice`; `SppPeer._supply` calls
+    `source.supply(on)` when the source is `Supplied` (`esp32tl/interfaces/uart.py`), through
+    `_call`, and clears `_pending` first. `_flush` counts an
+    output in `lost` when no DLC is open or `Link.reaches` refuses the holder's address, so what goes
+    out on a link that lost contact does not enter `events`. `forget_keys` puts a new
+    `MemoryKeyStore` in `device.keystore`; a link under way keeps the key in its `Security`.
 
 ## Interfaces
 
 | Name | What |
 |---|---|
-| `Air()` | `esp32tl/bluetooth/air.py`: `loop`, a `BoardLoop`; `link`, a `LocalLink`; `now`, a `Duration`; `join(party)`, which settles the current instant with the party in it; `call(function)`; `start(coroutine)`, a task; `fail(error)`; `quiet_until()`, nanoseconds or `None`; `advance(until)`, a `Duration`; `wait(duration)`; `run(awaitable, *, within, description="")`; `close()` |
+| `Air()` | `esp32tl/bluetooth/air.py`: `loop`, a `BoardLoop`; `link`, a `Link`; `now`, a `Duration`; `join(party)`, which settles the current instant with the party in it; `call(function)`; `start(coroutine)`, a task; `fail(error)`; `quiet_until()`, nanoseconds or `None`; `advance(until)`, a `Duration`; `wait(duration)`; `run(awaitable, *, within, description="")`; `close()` |
 | `Party` | A protocol: `poll(now)`, inside the loop at every instant the air stops at, returning nothing; `quiet_until()`, later than `now`, or `None` |
 | `BoardLoop()` | `now`, an `int` of nanoseconds; `time()`; `run_idle()`, the next timer's time or `None` |
 | `AirError` | A `RuntimeError`: what failed on the air, as its `__cause__` |
-| `Controller(name, link, address)` | `esp32tl/bluetooth/controller.py`: Bumble's `Controller` with the additions above; `class_of_device`, `extended_inquiry_response` (240 bytes), `inquiry_mode`; `authenticated(peer)`; `random_bytes(n)` |
+| `Link()` | `esp32tl/bluetooth/air.py`: Bumble's `LocalLink`; `present(address)`, `reaches(sender, receiver)`, `leave(address, peers)`, `back(address)`, `let_go(one, other)` |
+| `Controller(name, link, address)` | `esp32tl/bluetooth/controller.py`: Bumble's `Controller` with the additions above; `link`, a `Link`; `class_of_device`, `extended_inquiry_response` (240 bytes), `inquiry_mode`, `rssi`, `page_timeout`, in slots; `authenticated(peer)`; `random_bytes(n)`; `left()`, `returned()`, `power_lost()` |
 | `Security` | Dataclass: one link's authentication on one side: `initiator`, `init_key`, `local_rand`, `peer_rand`, `link_key`, `pairing`, `challenge`, `peer_challenge`, `authenticated` |
-| `LmpInRand`, `LmpCombKey`, `LmpSres`, `LmpEncryptionModeReq` | LMP packets Bumble does not define, registered with `lmp.Packet.subclass` |
+| `LmpInRand`, `LmpCombKey`, `LmpSres`, `LmpEncryptionModeReq`, `LmpSupervisionTimeout` | LMP packets Bumble does not define, registered with `lmp.Packet.subclass` |
 | `init_key(pin, in_rand, responder)`, `combination_key(init, initiator_rand, responder_rand, initiator, responder)`, `response(link_key, challenge, claimant)` | The keys and the response, above |
 | `INQUIRY_UNIT_S` | 1.28 |
-| `SppPeer(air, *, name, pin, source, address=ADDRESS, channel=CHANNEL, secure=True)` | `esp32tl/bluetooth/peer.py`: `device`, the Bumble `Device`; `address`; `name`, `pin`, `source`, `channel`, `secure`; `events`; `refused`, `(t, why)` pairs; `lost`; `channel_open`; the party's `poll(now)` and `quiet_until()` |
+| `RSSI` | `esp32tl/bluetooth/controller.py`: `-50`, in dBm, a value of ours: nothing says what a device's should be |
+| `SLOT_S`, `PAGE_TIMEOUT_SLOTS`, `LINK_SUPERVISION_TIMEOUT_SLOTS` | `0.000625`; `0x2000`, 5.12 s; `0x7D00`, 20 s: Bluetooth Core 5.4, Vol 4, Part E, 7.3.16 and 7.3.42 |
+| `BluetoothDevice(air, *, name, pin=None, class_of_device=CLASS_OF_DEVICE, rssi=RSSI, address=ADDRESS)` | `esp32tl/bluetooth/peer.py`: `device`, the Bumble `Device`; `address`; `name`, `pin`, `class_of_device`; `rssi`, read and written; `present`; `switch_off()`, `switch_on()`, `out_of_range()`, `in_range()`, `forget_keys()` |
+| `SppPeer(air, *, name, pin, source, address=ADDRESS, channel=CHANNEL, secure=True, class_of_device=CLASS_OF_DEVICE, rssi=RSSI)` | A `BluetoothDevice`, also: `source`, `channel`, `secure`; `events`; `refused`, `(t, why)` pairs; `lost`; `channel_open`; the party's `poll(now)` and `quiet_until()` |
 | `ADDRESS`, `CLASS_OF_DEVICE`, `CHANNEL`, `NAME_MAX`, `RECORD_HANDLE` | `"00:00:00:00:5B:01"`, an address no real device in a test is likely to have; `0x001F00`; `1`; `238`, the extended inquiry response's 240 bytes less the name field's length and type; `0x00010001`, the first SDP record handle a server may give a record of its own |
 | `PeerError` | A `ValueError`: what a peer cannot be, or what its source sent that it cannot send |
 | `Source` | `esp32tl/interfaces/uart.py`: `receive(t, data)`, `poll(now)`, `quiet_until()`, `latency()`; the peer never calls `latency` |
+
+## Bumble's internals it relies on
+
+`bumble.link.LocalLink`: `send_acl_data`, `send_lmp_packet`, `controllers`,
+`find_classic_controller`. `bumble.controller.Controller`: `classic_connections`,
+`on_classic_connection_complete`, `on_classic_disconnected`, `on_classic_remote_name_response`,
+`on_classic_connection_request`, `on_hci_create_connection_command`,
+`on_hci_accept_connection_request_command`,
+`on_hci_remote_name_request_command`, handle 0 for an entry with no link, the
+`on_hci_<command>` dispatch by name, `on_lmp_packet`, `send_lmp_packet`, `send_hci_packet`.
+`bumble.device.Device`: `auto_restart_inquiry`. Connection state is keyed by address, so a refused
+delivery is by address too.
 
 ## Configuration
 
@@ -152,12 +253,14 @@ None. `bumble` is a dependency of esp32tl, pinned exactly in `pyproject.toml`
 
 | Message | Exception | Cause |
 |---|---|---|
-| `SppPeer: name is {name!r}, not a string of 1 to 238 bytes` | `PeerError` | `name` not a `str`, or its UTF-8 empty or over `NAME_MAX` bytes |
-| `SppPeer: pin is {pin!r}, not a string of 1 to 16 bytes` | `PeerError` | `pin` not a `str`, or its UTF-8 empty or over 16 bytes |
+| `{kind}: name is {name!r}, not a string of 1 to 238 bytes` | `PeerError` | `name` not a `str`, or its UTF-8 empty or over `NAME_MAX` bytes |
+| `{kind}: pin is {pin!r}, not a string of 1 to 16 bytes` | `PeerError` | `pin` not a `str`, or its UTF-8 empty or over 16 bytes; `None` too for an `SppPeer` |
 | `SppPeer: channel is {channel!r}, not an RFCOMM channel, 1 to 30` | `PeerError` | `channel` a `bool`, not an `int`, or out of range |
-| `SppPeer: address is {address!r}, not a Bluetooth address, as 00:00:00:00:5B:01` | `PeerError` | `_address`: not a `str` of six colon-separated pairs of hex digits |
-| `SppPeer: address {address} is another device's on the air: give each its own` | `PeerError` | A controller on the link has that public address |
-| `{name}: source.{method} raised {type}: {error}` | `PeerError`, from the source's exception, raised on the air | `_call`, for `receive`, `poll` and `quiet_until` |
+| `{kind}: class_of_device is {class_of_device!r}, not three octets, 0 to 0xFFFFFF` | `PeerError` | `class_of_device` a `bool`, not an `int`, or out of range |
+| `{kind}: rssi is {rssi!r}, not a signal strength in dBm, -127 to 20` | `PeerError` | `_check_rssi`, from the constructor and the setter: `rssi` a `bool`, not an `int`, or out of range |
+| `{kind}: address is {address!r}, not a Bluetooth address, as 00:00:00:00:5B:01` | `PeerError` | `_address`: not a `str` of six colon-separated pairs of hex digits |
+| `{kind}: address {address} is another device's on the air: give each its own` | `PeerError` | A controller on the link has that public address |
+| `{name}: source.{method} raised {type}: {error}` | `PeerError`, from the source's exception, raised on the air | `_call`, for `receive`, `poll`, `quiet_until` and `supply` |
 | `{name}: source.{method} returned {output!r:.80}, not a (t_ns, bytes) pair` | `PeerError`, raised on the air | `_queue` |
 | `{name}: source.{method} sent {data!r:.80} at {t}, and the air is at {now}: it cannot send into the past` | `PeerError`, raised on the air | `_queue` |
 | `{name}: source.quiet_until returned {bound!r}, not nanoseconds` | `PeerError`, raised on the air | `quiet_until`: not an `int`, or a `bool` |
@@ -168,10 +271,14 @@ None. `bumble` is a dependency of esp32tl, pinned exactly in `pyproject.toml`
 | `{description} did not complete within {within}: waited from {start} to {end} of the board's time` | `NeverHappened` | `run`; `description` is `the awaitable` when not given |
 | `air.advance takes a Duration, as seconds(1), not 1`, `air.run: within takes a Duration of 0 or more, not …` | `TypeError`, `ValueError` | From `nanoseconds` in `esp32tl/backends/clock.py`, for `advance`, `wait` and `run` |
 
-On the device's side, Bumble's host raises `HCI_Error` from `Connection.authenticate()` with the
+`{kind}` is the class's name, `BluetoothDevice` or `SppPeer`. On the device's side, Bumble's host
+raises `HCI_Error` from `Connection.authenticate()` with the
 status of `Authentication_Complete`, and from `Connection.encrypt()` with the command status; its
 `Multiplexer.open_dlc` raises `core.ConnectionError` with `CONNECTION_REFUSED` on the DM of a
-channel the peer refused.
+channel the peer refused. `Device.connect` raises `core.ConnectionError` with `PAGE_TIMEOUT_ERROR`
+in `error_code` on a failed `Connection_Complete`, and `HCI_Error` with
+`CONNECTION_ALREADY_EXISTS_ERROR` on the command status. A connection's `EVENT_DISCONNECTION` gives
+`CONNECTION_TIMEOUT_ERROR` as its reason when a link falls.
 
 ## Tests
 
@@ -194,11 +301,40 @@ channel the peer refused.
   `quiet_until`; two runs with the same `events`; Bumble's Secure Simple Pairing between two
   controllers that support it; encryption refused on a link not authenticated, and turned off on
   both sides; the air quiet until the device writes; the peer's refusals of its arguments and of an
-  address taken.
+  address taken. A peer that leaves, either way: the link falling at exactly the supervision timeout
+  with no detach; a page ending at exactly the page timeout, also to an address nobody has; an
+  inquiry not finding it until it returns; the key kept across a return, and `forget_keys`; a return
+  before the timeout reviving nothing, with `CONNECTION_ALREADY_EXISTS`, another device connecting
+  meanwhile, and the old channel still held; a timeout not restarted by leaving again; each timeout
+  a host writes, 0, a peripheral's and one for no link; the source told or running on, with
+  `lost`; `present`; the calls from a coroutine; a remote name request ending at the page timeout,
+  and answered with no timer left; a device leaving during its own page and being reached again,
+  also when the target's end falls before the page ends; a target that heard the page losing contact
+  when the pager leaves; a power loss ending a page, a name request, an authentication and an
+  inquiry, also one that would restart itself, without their timers ending the next; a target leaving
+  before its host answers, with no link told of, and a host answering after its end fell; a device
+  that left finding nothing; two runs with the same `events`, `lost` and
+  instants.
+  Other devices: several in one inquiry, each with its own class and RSSI; a new `rssi` at the next
+  inquiry; RSSI in the RSSI mode and none in the plain one; a device without SPP that has no SDP
+  record and no RFCOMM; one without a PIN refusing a pairing, and one with a PIN keeping its key
+  across a return; leaving; their refusals of their arguments.
+- `tests/test_air.py` also: a timer falling on its exact nanosecond.
 
 Not covered: firmware. esp32sim has no Classic controller for the guest, so no ESP32 image talks
-to a peer yet. Nor are a remote name request, or an RSSI or clock offset other than the
-constants. Two devices searching the peer's SDP at the same instant fail the air with
+to a peer yet, and no firmware has seen a peer leave. Nor is a clock offset other than 0. A page does not look at
+the target's page scan: Bumble's controller delivers it whatever `classic_scan_enable` says, so a
+device with `set_connectable(False)` still connects, though an inquiry respects inquiry scan.
+Bumble 0.0.236 has no handler for `Reject_Connection_Request`, so a host that rejects a page, as
+Bumble's does with `classic_accept_any = False`, gets `UNKNOWN_HCI_COMMAND_ERROR` logged and no
+answer: its next command waits for ever, its entry stays, and the pager gets `PAGE_TIMEOUT`.
+There is no `Connection_Accept_Timeout` (Vol 4, Part E, 6.7), and the page's timer runs until the
+target's host accepts rather than until its baseband answers: a host that accepts after the page
+ended, as after 6 s, makes a link on both ends when the pager has already reported `PAGE_TIMEOUT`,
+and the pager's next page gets `CONNECTION_ALREADY_EXISTS`. Bumble's host accepts at the instant it
+hears, so only a slowed host reaches this.
+`Create_Connection_Cancel` for Classic is not in Bumble 0.0.236, so `Device.connect(timeout=)` cannot
+end a page early. Two devices searching the peer's SDP at the same instant fail the air with
 `Exception in callback Host.on_packet(): invalid state`: Bumble 0.0.236's `sdp.Server` keeps one
 channel at a time.
 
@@ -207,3 +343,6 @@ channel at a time.
 - [Bluetooth peer](bluetooth-peer-user.md)
 - [Decisions: the Bluetooth peer](../decisions/harness.md#the-bluetooth-peer-runs-bumble-in-the-harness-on-the-boards-clock)
 - [Bumble](https://github.com/google/bumble), 0.0.236: `bumble/controller.py`, `bumble/link.py`
+- [Bluetooth Core 5.4, Vol 4, Part E](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host-controller-interface/host-controller-interface-functional-specification.html),
+  read on 2026-11-04: 6.6, 6.7, 6.21, 7.3.16, 7.3.42, 7.7.33, 7.7.38, 7.7.46; [Vol 1, Part F](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/architecture,-mixing,-and-conventions/controller-error-codes.html):
+  2.4, 2.8, 2.11

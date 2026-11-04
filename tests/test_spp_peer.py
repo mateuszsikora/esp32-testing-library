@@ -8,7 +8,8 @@ answers what it writes, on the board's clock."""
 
 import asyncio
 import re
-from collections.abc import Iterable, Iterator
+from collections.abc import Coroutine, Iterable, Iterator
+from typing import Any
 
 import pytest
 from bumble import core, hci, rfcomm
@@ -20,9 +21,15 @@ from bumble.transport.common import AsyncPipeSink
 
 from esp32tl.bluetooth.air import Air, AirError
 from esp32tl.bluetooth.controller import INQUIRY_UNIT_S, Controller
-from esp32tl.bluetooth.peer import CHANNEL, CLASS_OF_DEVICE, PeerError, SppPeer
+from esp32tl.bluetooth.peer import (
+    CHANNEL,
+    CLASS_OF_DEVICE,
+    BluetoothDevice,
+    PeerError,
+    SppPeer,
+)
 from esp32tl.interfaces import NeverHappened
-from esp32tl.units import ms, seconds
+from esp32tl.units import Duration, ms, seconds
 
 MS = 1_000_000
 DEVICE = "24:0A:C4:00:00:01"
@@ -83,8 +90,12 @@ class Initiator:
         self.air = air
         self.delegate = Pin(pin)
         self.found: list[tuple[int, str, int, str | None]] = []
+        # The signal strength of each result, as (address, rssi).
+        self.heard_at: list[tuple[str, int]] = []
         self.received: list[tuple[int, bytes]] = []
         self.inquiry_complete: list[int] = []
+        # Each link of this device that fell, as (t, reason).
+        self.fell: list[tuple[int, int]] = []
         self.device = air.call(lambda: self._make(ssp, address, name))
         air.run(self.device.power_on(), within=seconds(0))
 
@@ -104,7 +115,14 @@ class Initiator:
         )
         device.on("inquiry_result", self._on_result)
         device.on("inquiry_complete", lambda: self.inquiry_complete.append(self.air.loop.now))
+        device.on(device.EVENT_CONNECTION, self._on_connection)
         return device
+
+    def _on_connection(self, connection: Connection) -> None:
+        def fell(reason: int) -> None:
+            self.fell.append((self.air.loop.now, reason))
+
+        connection.on(connection.EVENT_DISCONNECTION, fell)
 
     def _on_result(
         self, address: hci.Address, class_of_device: int, eir: core.AdvertisingData, rssi: int
@@ -112,6 +130,7 @@ class Initiator:
         name = eir.get(core.AdvertisingData.COMPLETE_LOCAL_NAME)
         assert name is None or isinstance(name, str)
         self.found.append((self.air.loop.now, str(address), class_of_device, name))
+        self.heard_at.append((str(address), rssi))
 
     async def discover(self, name: str) -> hci.Address:
         """An inquiry until a device called `name` answers; then the inquiry is cancelled."""
@@ -229,7 +248,7 @@ def test_a_peer_that_lost_the_key_refuses_the_device_that_kept_it(air: Air) -> N
         await connection.disconnect()
 
     air.run(pair_and_disconnect(), within=seconds(10))
-    peer.device.keystore = MemoryKeyStore()
+    peer.forget_keys()
     with pytest.raises(hci.HCI_Error) as raised:
         air.run(esp32.connect(peer.device.public_address), within=seconds(10))
     assert raised.value.error_code == hci.HCI_ErrorCode.PIN_OR_KEY_MISSING_ERROR
@@ -645,3 +664,1294 @@ def test_a_peer_with_something_due_at_once_leaves_the_air_well(air: Air) -> None
     # What was due when the peer joined went out then, to nobody.
     assert peer.lost == 2
     assert air.quiet_until() is None
+
+
+# A peer that leaves: the same to the device whichever way it goes.
+
+LEAVING = ["switch_off", "out_of_range"]
+RETURNING = {"switch_off": "switch_on", "out_of_range": "in_range"}
+PEER = hci.Address("00:00:00:00:5B:01/P")
+Echo = Elm
+
+
+def leave(device: BluetoothDevice, how: str) -> None:
+    getattr(device, how)()
+
+
+def come_back(device: BluetoothDevice, how: str) -> None:
+    getattr(device, RETURNING[how])()
+
+
+async def link_to(esp32: Initiator) -> Connection:
+    """A link to the peer, not authenticated."""
+    return await esp32.device.connect(PEER, transport=core.PhysicalTransport.BR_EDR)
+
+
+async def write_timeout(esp32: Initiator, command: hci.HCI_SyncCommand[Any]) -> int:
+    """The status the controller answers `command` with."""
+    result = await esp32.device.host.send_sync_command_raw(command)
+    parameters = result.return_parameters
+    assert isinstance(parameters, hci.HCI_StatusReturnParameters)
+    return parameters.status
+
+
+@pytest.mark.parametrize("how", LEAVING)
+def test_a_link_to_a_peer_that_left_falls_at_the_supervision_timeout_without_a_detach(
+    air: Air, how: str
+) -> None:
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo())
+    esp32 = Initiator(air)
+    air.run(esp32.connect(PEER), within=seconds(10))
+    air.advance(seconds(2))
+
+    leave(peer, how)
+    assert not peer.present
+    air.advance(ms(21_999))
+    # No LMP_detach: the device goes on holding the link for the whole of the timeout.
+    assert esp32.fell == []
+    assert esp32.device.connections
+
+    air.advance(seconds(22))
+    assert esp32.fell == [(22_000 * MS, hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR)]
+    assert not esp32.device.connections
+
+
+@pytest.mark.parametrize("how", LEAVING)
+def test_a_page_to_a_peer_that_left_ends_at_the_page_timeout(air: Air, how: str) -> None:
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo())
+    esp32 = Initiator(air)
+    air.advance(seconds(1))
+    leave(peer, how)
+    ended: list[int] = []
+
+    async def page() -> None:
+        try:
+            await link_to(esp32)
+        finally:
+            ended.append(air.loop.now)
+
+    with pytest.raises(core.ConnectionError) as raised:
+        air.run(page(), within=seconds(10))
+    assert raised.value.error_code == hci.HCI_ErrorCode.PAGE_TIMEOUT_ERROR
+    assert ended == [6_120 * MS]
+    assert not esp32.device.connections
+
+
+def test_a_page_to_an_address_nobody_has_ends_at_the_page_timeout(air: Air) -> None:
+    esp32 = Initiator(air)
+    with pytest.raises(core.ConnectionError) as raised:
+        air.run(link_to(esp32), within=seconds(10))
+    assert raised.value.error_code == hci.HCI_ErrorCode.PAGE_TIMEOUT_ERROR
+    assert air.now == ms(5_120)
+
+
+def test_a_page_started_while_the_peer_is_away_does_not_find_it_when_it_returns(air: Air) -> None:
+    """The page is one delivery, refused: the model has no page train that goes on repeating."""
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo())
+    esp32 = Initiator(air)
+    peer.out_of_range()
+    task = air.start(link_to(esp32))
+    air.advance(seconds(1))
+    peer.in_range()
+    air.advance(ms(5_120))
+    assert isinstance(task.exception(), core.ConnectionError)
+    # The next page finds it.
+    air.run(link_to(esp32), within=seconds(1))
+
+
+@pytest.mark.parametrize("how", LEAVING)
+def test_an_inquiry_does_not_find_a_peer_that_left_until_it_returns(air: Air, how: str) -> None:
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo())
+    esp32 = Initiator(air)
+
+    async def inquiry() -> None:
+        await esp32.device.start_discovery(auto_restart=False)
+        await asyncio.sleep(11)
+
+    leave(peer, how)
+    air.run(inquiry(), within=seconds(20))
+    assert esp32.found == []
+    assert esp32.inquiry_complete == [10_240 * MS]
+
+    come_back(peer, how)
+    assert peer.present
+    air.run(inquiry(), within=seconds(20))
+    assert [name for _, _, _, name in esp32.found] == ["peer"]
+
+
+@pytest.mark.parametrize("how", LEAVING)
+def test_a_device_authenticates_with_its_key_after_the_peer_returns(air: Air, how: str) -> None:
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo())
+    esp32 = Initiator(air)
+    air.run(esp32.connect(PEER), within=seconds(10))
+    kept = keys_of(peer.device)
+
+    leave(peer, how)
+    air.wait(seconds(21))
+    assert keys_of(peer.device) == kept
+    come_back(peer, how)
+    assert keys_of(peer.device) == kept
+
+    dlc = air.run(esp32.session("peer"), within=seconds(10))
+    # The PIN was asked for once, by the first pairing.
+    assert esp32.delegate.asked == 1
+    assert isinstance(dlc, rfcomm.DLC)
+    assert peer.channel_open
+
+
+def test_a_peer_that_forgot_its_keys_refuses_after_it_returns(air: Air) -> None:
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo())
+    esp32 = Initiator(air)
+    air.run(esp32.connect(PEER), within=seconds(10))
+    peer.switch_off()
+    peer.forget_keys()
+    air.wait(seconds(21))
+    peer.switch_on()
+    with pytest.raises(hci.HCI_Error) as raised:
+        air.run(esp32.connect(PEER), within=seconds(10))
+    assert raised.value.error_code == hci.HCI_ErrorCode.PIN_OR_KEY_MISSING_ERROR
+
+
+@pytest.mark.parametrize("how", LEAVING)
+def test_coming_back_before_the_timeout_does_not_revive_the_link(air: Air, how: str) -> None:
+    echo = Echo()
+    peer = SppPeer(air, name="peer", pin="1234", source=echo)
+    esp32 = Initiator(air)
+    dlc = air.run(esp32.session("peer"), within=seconds(10))
+
+    leave(peer, how)
+    air.wait(seconds(5))
+    come_back(peer, how)
+    assert peer.present
+    dlc.write(b"PING\r")
+    air.wait(seconds(1))
+    # The peer can be discovered again, and what the device writes on the old link is gone.
+    assert echo.heard == []
+    assert peer.events == []
+    air.run(esp32.discover("peer"), within=seconds(1))
+
+    # The device still holds the link, so it cannot page the peer yet.
+    with pytest.raises(hci.HCI_Error) as raised:
+        air.run(link_to(esp32), within=seconds(1))
+    assert raised.value.error_code == hci.HCI_ErrorCode.CONNECTION_ALREADY_EXISTS_ERROR
+
+    assert esp32.fell == []
+    air.advance(seconds(20))
+    assert esp32.fell == [(20_000 * MS, hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR)]
+
+    # Fallen, the link can be made anew, with the key.
+    dlc = air.run(esp32.session("peer"), within=seconds(10))
+    dlc.write(b"PING\r")
+    air.wait(seconds(1))
+    assert echo.heard == [(20_000 * MS, b"PING\r")]
+    assert esp32.delegate.asked == 1
+
+
+def test_another_device_can_connect_to_a_peer_back_before_the_old_link_falls(air: Air) -> None:
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo())
+    first = Initiator(air)
+    second = Initiator(air, address="24:0A:C4:00:00:02", name="second")
+    air.run(first.session("peer"), within=seconds(10))
+
+    peer.out_of_range()
+    air.wait(seconds(5))
+    peer.in_range()
+    connection = air.run(second.connect(PEER), within=seconds(10))
+    assert connection.is_encrypted
+    # The peer's end of the old link has not fallen, so its channel is still that link's.
+    with pytest.raises(core.ConnectionError):
+        air.run(second.open(connection, CHANNEL), within=seconds(1))
+    assert peer.refused == [(5_000 * MS, "24:0A:C4:00:00:02: the channel is held by " + DEVICE)]
+
+    air.advance(seconds(20))
+    assert not peer.channel_open
+    dlc = air.run(second.open(connection, CHANNEL), within=seconds(1))
+    assert isinstance(dlc, rfcomm.DLC)
+
+
+def test_a_device_that_ends_its_link_to_an_absent_peer_pages_it_once_the_peer_let_go(
+    air: Air,
+) -> None:
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo())
+    esp32 = Initiator(air)
+    connection = air.run(esp32.connect(PEER), within=seconds(10))
+    peer.out_of_range()
+    air.wait(seconds(1))
+    air.run(connection.disconnect(), within=seconds(1))
+    assert air.now == seconds(1)
+    assert not esp32.device.connections
+    peer.in_range()
+
+    # The peer's end still holds the link: nobody answers the page.
+    with pytest.raises(core.ConnectionError) as raised:
+        air.run(link_to(esp32), within=seconds(10))
+    assert raised.value.error_code == hci.HCI_ErrorCode.PAGE_TIMEOUT_ERROR
+
+    air.advance(seconds(20))
+    assert not peer.device.connections
+    air.run(link_to(esp32), within=seconds(1))
+    assert air.now == seconds(20)
+
+
+def test_leaving_again_does_not_restart_the_timeout_of_a_link_that_lost_contact(air: Air) -> None:
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo())
+    esp32 = Initiator(air)
+    air.run(link_to(esp32), within=seconds(1))
+    peer.out_of_range()
+    air.wait(seconds(5))
+    peer.in_range()
+    air.wait(seconds(5))
+    peer.out_of_range()
+    air.advance(seconds(30))
+    assert esp32.fell == [(20_000 * MS, hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR)]
+
+
+def test_an_authentication_under_way_ends_when_the_link_falls(air: Air) -> None:
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo())
+    esp32 = Initiator(air)
+    connection = air.run(link_to(esp32), within=seconds(1))
+    peer.out_of_range()
+    with pytest.raises(hci.HCI_Error) as raised:
+        air.run(connection.authenticate(), within=seconds(30))
+    assert raised.value.error_code == hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR
+    assert air.now == seconds(20)
+
+
+# The timeouts a host writes.
+
+
+def test_the_page_timeout_a_host_writes_takes_effect(air: Air) -> None:
+    esp32 = Initiator(air)
+    write = hci.HCI_Write_Page_Timeout_Command(page_timeout=0x0800)  # 1.28 s
+    assert air.run(write_timeout(esp32, write), within=seconds(0)) == hci.HCI_SUCCESS
+    with pytest.raises(core.ConnectionError):
+        air.run(link_to(esp32), within=seconds(10))
+    assert air.now == ms(1_280)
+
+
+def test_a_page_timeout_of_zero_is_refused_and_changes_nothing(air: Air) -> None:
+    esp32 = Initiator(air)
+    write = hci.HCI_Write_Page_Timeout_Command(page_timeout=0)
+    status = air.run(write_timeout(esp32, write), within=seconds(0))
+    assert status == hci.HCI_ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR
+    with pytest.raises(core.ConnectionError):
+        air.run(link_to(esp32), within=seconds(10))
+    assert air.now == ms(5_120)
+
+
+def test_the_supervision_timeout_a_central_writes_takes_effect_on_both_ends(air: Air) -> None:
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo())
+    esp32 = Initiator(air)
+    connection = air.run(link_to(esp32), within=seconds(1))
+    write = hci.HCI_Write_Link_Supervision_Timeout_Command(
+        handle=connection.handle,
+        link_supervision_timeout=0x0C80,  # 2 s
+    )
+    assert air.run(write_timeout(esp32, write), within=seconds(0)) == hci.HCI_SUCCESS
+
+    fell_at_peer: list[int] = []
+    for link in peer.device.connections.values():
+        link.on(link.EVENT_DISCONNECTION, lambda reason: fell_at_peer.append(air.loop.now))
+    air.advance(seconds(1))
+    peer.out_of_range()
+    air.advance(seconds(10))
+    assert esp32.fell == [(3_000 * MS, hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR)]
+    assert fell_at_peer == [3_000 * MS]
+
+
+def test_a_supervision_timeout_written_after_contact_is_lost_counts_from_that_instant(
+    air: Air,
+) -> None:
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo())
+    esp32 = Initiator(air)
+    connection = air.run(link_to(esp32), within=seconds(1))
+    peer.out_of_range()
+    air.wait(seconds(1))
+    write = hci.HCI_Write_Link_Supervision_Timeout_Command(
+        handle=connection.handle,
+        link_supervision_timeout=0x0C80,  # 2 s
+    )
+    air.run(write_timeout(esp32, write), within=seconds(0))
+    air.wait(seconds(5))
+    assert esp32.fell == [(2_000 * MS, hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR)]
+
+
+def test_a_supervision_timeout_of_zero_means_the_link_never_falls(air: Air) -> None:
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo())
+    esp32 = Initiator(air)
+    connection = air.run(link_to(esp32), within=seconds(1))
+    write = hci.HCI_Write_Link_Supervision_Timeout_Command(
+        handle=connection.handle, link_supervision_timeout=0
+    )
+    air.run(write_timeout(esp32, write), within=seconds(0))
+    peer.out_of_range()
+    air.wait(seconds(100))
+    assert esp32.fell == []
+    assert esp32.device.connections
+
+
+def test_a_peripheral_may_not_write_the_supervision_timeout(air: Air) -> None:
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo())
+    esp32 = Initiator(air)
+    air.run(link_to(esp32), within=seconds(1))
+    handle = next(iter(peer.device.connections))
+    write = hci.HCI_Write_Link_Supervision_Timeout_Command(
+        handle=handle, link_supervision_timeout=0x0C80
+    )
+
+    async def status() -> int:
+        result = await peer.device.host.send_sync_command_raw(write)
+        parameters = result.return_parameters
+        assert isinstance(parameters, hci.HCI_StatusReturnParameters)
+        return parameters.status
+
+    assert air.run(status(), within=seconds(0)) == hci.HCI_ErrorCode.COMMAND_DISALLOWED_ERROR
+
+
+def test_a_supervision_timeout_for_no_link_is_refused(air: Air) -> None:
+    esp32 = Initiator(air)
+    write = hci.HCI_Write_Link_Supervision_Timeout_Command(
+        handle=0x0123, link_supervision_timeout=0x0C80
+    )
+    status = air.run(write_timeout(esp32, write), within=seconds(0))
+    assert status == hci.HCI_ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR
+
+
+# What happens to the source.
+
+
+class Powered(Echo):
+    """A model on the peer's supply: silent without it, as a model of a part with no power is."""
+
+    def __init__(self, delay: int = 50 * MS, greeting: bytes = b"", at: int = 0) -> None:
+        super().__init__(delay, greeting, at)
+        self.supplied: list[bool] = []
+
+    def supply(self, on: bool) -> None:
+        self.supplied.append(on)
+
+
+def test_a_power_loss_tells_a_supplied_source_and_drops_what_it_had_queued(air: Air) -> None:
+    source = Powered(delay=500 * MS)
+    peer = SppPeer(air, name="peer", pin="1234", source=source)
+    esp32 = Initiator(air)
+    dlc = air.run(esp32.session("peer"), within=seconds(10))
+    dlc.write(b"PING\r")
+    air.wait(ms(100))
+
+    peer.switch_off()
+    assert source.supplied == [False]
+    # Its end of the link went with the power.
+    assert not peer.channel_open
+    assert not peer.device.connections
+    air.wait(seconds(1))
+    assert peer.lost == 0
+    assert peer.events == [(0, "out", b"PING\r")]
+    assert esp32.received == []
+
+    peer.switch_on()
+    assert source.supplied == [False, True]
+
+
+def test_out_of_range_does_not_tell_a_supplied_source_and_what_it_sends_is_lost(air: Air) -> None:
+    source = Powered(delay=500 * MS)
+    peer = SppPeer(air, name="peer", pin="1234", source=source)
+    esp32 = Initiator(air)
+    dlc = air.run(esp32.session("peer"), within=seconds(10))
+    dlc.write(b"PING\r")
+    air.wait(ms(100))
+
+    peer.out_of_range()
+    air.wait(seconds(1))
+    assert source.supplied == []
+    # The peer does not know yet: its channel stays open until its end of the link falls.
+    assert peer.channel_open
+    assert peer.lost == len(b"PING\r\r>")
+    assert peer.events == [(0, "out", b"PING\r")]
+    assert esp32.received == []
+
+    air.advance(ms(20_100))
+    assert not peer.channel_open
+
+
+def test_what_a_source_sends_after_the_peer_returns_on_the_old_link_is_lost(air: Air) -> None:
+    source = Echo(greeting=b"hello\r", at=2_000 * MS)
+    peer = SppPeer(air, name="peer", pin="1234", source=source)
+    esp32 = Initiator(air)
+    air.run(esp32.session("peer"), within=seconds(10))
+    peer.out_of_range()
+    air.wait(seconds(1))
+    peer.in_range()
+    air.wait(seconds(2))
+    assert peer.lost == len(b"hello\r")
+    assert peer.events == []
+    assert esp32.received == []
+
+
+def test_a_power_loss_leaves_a_source_that_is_not_supplied_running_and_it_is_lost(
+    air: Air,
+) -> None:
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo(greeting=b"hello\r", at=1_000 * MS))
+    peer.switch_off()
+    air.wait(seconds(2))
+    assert peer.lost == len(b"hello\r")
+
+
+def test_a_supplied_source_that_raises_fails_the_air_naming_the_peer(air: Air) -> None:
+    class Broken(Echo):
+        def supply(self, on: bool) -> None:
+            raise KeyError("model bug")
+
+    peer = SppPeer(air, name="peer", pin="1234", source=Broken())
+    with pytest.raises(AirError) as raised:
+        peer.switch_off()
+    assert str(raised.value) == "peer: source.supply raised KeyError: 'model bug'"
+
+
+# The two pairs of calls.
+
+
+def test_a_peer_is_present_only_when_it_is_on_and_in_range(air: Air) -> None:
+    source = Powered()
+    peer = SppPeer(air, name="peer", pin="1234", source=source)
+    assert peer.present
+    peer.switch_off()
+    peer.out_of_range()
+    assert not peer.present
+    peer.switch_on()
+    # Back on, still out of range; the source has its power.
+    assert not peer.present
+    assert source.supplied == [False, True]
+    peer.in_range()
+    assert peer.present
+
+
+def test_saying_it_twice_changes_nothing(air: Air) -> None:
+    source = Powered()
+    peer = SppPeer(air, name="peer", pin="1234", source=source)
+    peer.switch_on()
+    peer.in_range()
+    assert source.supplied == []
+    peer.switch_off()
+    peer.switch_off()
+    assert source.supplied == [False]
+    peer.switch_on()
+    peer.switch_on()
+    assert source.supplied == [False, True]
+    peer.out_of_range()
+    peer.out_of_range()
+    peer.in_range()
+    assert peer.present
+
+
+def test_a_peer_can_leave_from_a_coroutine_on_the_air(air: Air) -> None:
+    echo = Echo()
+    peer = SppPeer(air, name="peer", pin="1234", source=echo)
+    esp32 = Initiator(air)
+
+    async def scenario() -> None:
+        dlc = await esp32.session("peer")
+        await asyncio.sleep(1)
+        peer.switch_off()
+        # At the same instant, and on the same call: refused.
+        dlc.write(b"PING\r")
+        await asyncio.sleep(25)
+
+    air.run(scenario(), within=seconds(30))
+    assert echo.heard == []
+    assert esp32.fell == [(21_000 * MS, hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR)]
+
+
+def test_two_runs_lose_the_peer_at_the_same_instants() -> None:
+    def run() -> list[object]:
+        air = Air()
+        try:
+            source = Powered(delay=7 * MS, greeting=b"hello\r", at=1_500 * MS)
+            peer = SppPeer(air, name="peer", pin="1234", source=source)
+            esp32 = Initiator(air)
+            other = Initiator(air, address="24:0A:C4:00:00:02", name="other")
+            dlc = air.run(esp32.session("peer"), within=seconds(10))
+            dlc.write(b"PING\r")
+            air.wait(seconds(1))
+            peer.out_of_range()
+            air.wait(seconds(1))
+            peer.in_range()
+            air.run(other.connect(PEER), within=seconds(10))
+            peer.switch_off()
+            pages: list[int] = []
+
+            async def page() -> None:
+                with pytest.raises(core.ConnectionError):
+                    await esp32.device.connect(
+                        hci.Address("00:00:00:00:5B:7F/P"),
+                        transport=core.PhysicalTransport.BR_EDR,
+                    )
+                pages.append(air.loop.now)
+
+            air.advance(seconds(5))
+            air.run(page(), within=seconds(10))
+            air.advance(seconds(40))
+            peer.switch_on()
+            air.run(esp32.session("peer"), within=seconds(10))
+            return [peer.events, peer.lost, esp32.fell, other.fell, pages, esp32.found]
+        finally:
+            air.close()
+
+    first = run()
+    # The first link fell 20 s after the peer went out of range; the second 20 s after the power
+    # loss.
+    assert first[2] == [(21_000 * MS, hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR)]
+    assert first[3] == [(22_000 * MS, hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR)]
+    assert first == run()
+
+
+# Other devices.
+
+PHONE = "00:00:00:00:5C:01"
+SPEAKER = "00:00:00:00:5C:02"
+
+
+async def one_inquiry(esp32: Initiator) -> None:
+    """One inquiry, whole, in the extended mode: `start_discovery` writes it each time."""
+    await esp32.device.start_discovery(auto_restart=False)
+    await asyncio.sleep(11)
+
+
+async def one_inquiry_in_mode(esp32: Initiator, mode: int) -> None:
+    """One inquiry, whole, in `mode`, as a host that does not ask for the extended one."""
+    esp32.device.auto_restart_inquiry = False
+    await esp32.device.host.send_sync_command(hci.HCI_Write_Inquiry_Mode_Command(inquiry_mode=mode))
+    await esp32.device.send_async_command(
+        hci.HCI_Inquiry_Command(lap=hci.HCI_GENERAL_INQUIRY_LAP, inquiry_length=8, num_responses=0)
+    )
+    await asyncio.sleep(11)
+
+
+def test_one_inquiry_finds_several_devices_each_with_its_own_rssi_and_class(air: Air) -> None:
+    BluetoothDevice(air, name="phone", class_of_device=0x5A020C, rssi=-70, address=PHONE)
+    BluetoothDevice(air, name="speaker", class_of_device=0x240404, rssi=-40, address=SPEAKER)
+    SppPeer(air, name="peer", pin="1234", source=Echo(), rssi=-90)
+    esp32 = Initiator(air)
+    air.run(one_inquiry(esp32), within=seconds(20))
+
+    # In the order of their addresses, at the instant the inquiry starts, then completes once.
+    assert esp32.found == [
+        (0, "00:00:00:00:5B:01/P", CLASS_OF_DEVICE, "peer"),
+        (0, PHONE + "/P", 0x5A020C, "phone"),
+        (0, SPEAKER + "/P", 0x240404, "speaker"),
+    ]
+    assert esp32.heard_at == [
+        ("00:00:00:00:5B:01/P", -90),
+        (PHONE + "/P", -70),
+        (SPEAKER + "/P", -40),
+    ]
+    assert esp32.inquiry_complete == [10_240 * MS]
+
+
+def test_a_device_answers_with_the_rssi_it_has_at_each_inquiry(air: Air) -> None:
+    phone = BluetoothDevice(air, name="phone", rssi=-70, address=PHONE)
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo())
+    assert peer.rssi == -50
+    esp32 = Initiator(air)
+    air.run(one_inquiry(esp32), within=seconds(20))
+    phone.rssi = -80
+    peer.rssi = -60
+    assert phone.rssi == -80
+    air.run(one_inquiry(esp32), within=seconds(20))
+    assert esp32.heard_at == [
+        ("00:00:00:00:5B:01/P", -50),
+        (PHONE + "/P", -70),
+        ("00:00:00:00:5B:01/P", -60),
+        (PHONE + "/P", -80),
+    ]
+
+
+def test_the_rssi_is_given_in_the_mode_that_has_it_and_not_in_the_plain_one(air: Air) -> None:
+    BluetoothDevice(air, name="phone", class_of_device=0x5A020C, rssi=-70, address=PHONE)
+    esp32 = Initiator(air)
+    air.run(one_inquiry_in_mode(esp32, hci.HCI_INQUIRY_WITH_RSSI_MODE), within=seconds(20))
+    assert esp32.heard_at == [(PHONE + "/P", -70)]
+    # This mode has no extended inquiry response, so no name: it was not the extended result.
+    assert esp32.found == [(0, PHONE + "/P", 0x5A020C, None)]
+
+    # Bumble's host has no handler for the plain event, so the test is the one: it reaches the
+    # host as the plain event, with the class and no such field.
+    plain: list[hci.HCI_Inquiry_Result_Event] = []
+    esp32.device.host.on_hci_inquiry_result_event = plain.append  # type: ignore[attr-defined]
+    air.run(one_inquiry_in_mode(esp32, hci.HCI_STANDARD_INQUIRY_MODE), within=seconds(20))
+    assert [(str(e.bd_addr[0]), e.class_of_device[0]) for e in plain] == [(PHONE + "/P", 0x5A020C)]
+    assert not hasattr(plain[0], "rssi")
+
+
+def test_a_device_without_spp_says_so_in_sdp_and_has_no_channel(air: Air) -> None:
+    BluetoothDevice(air, name="phone", address=PHONE)
+    esp32 = Initiator(air)
+
+    async def look_for_spp() -> None:
+        connection = await esp32.device.connect(
+            hci.Address(PHONE + "/P"), transport=core.PhysicalTransport.BR_EDR
+        )
+        channel = await rfcomm.find_rfcomm_channel_with_uuid(
+            connection, core.BT_SERIAL_PORT_SERVICE
+        )
+        assert channel is None
+        with pytest.raises(core.ProtocolError):
+            await rfcomm.Client(connection).start()
+
+    air.run(look_for_spp(), within=seconds(10))
+
+
+def test_a_device_without_a_pin_fails_a_pairing(air: Air) -> None:
+    phone = BluetoothDevice(air, name="phone", address=PHONE)
+    esp32 = Initiator(air)
+    with pytest.raises(hci.HCI_Error) as raised:
+        air.run(esp32.connect(hci.Address(PHONE + "/P")), within=seconds(10))
+    assert raised.value.error_code == hci.HCI_ErrorCode.PIN_OR_KEY_MISSING_ERROR
+    assert keys_of(phone.device) == {}
+
+
+def test_a_device_with_a_pin_pairs_and_keeps_its_key_across_a_return(air: Air) -> None:
+    phone = BluetoothDevice(air, name="phone", pin="0000", address=PHONE)
+    esp32 = Initiator(air, pin="0000")
+    air.run(esp32.connect(hci.Address(PHONE + "/P")), within=seconds(10))
+    phone.switch_off()
+    air.wait(seconds(21))
+    phone.switch_on()
+    air.run(esp32.connect(hci.Address(PHONE + "/P")), within=seconds(10))
+    assert esp32.delegate.asked == 1
+
+
+def test_a_device_without_spp_leaves_as_a_peer_does(air: Air) -> None:
+    phone = BluetoothDevice(air, name="phone", address=PHONE)
+    esp32 = Initiator(air)
+    address = hci.Address(PHONE + "/P")
+    air.run(
+        esp32.device.connect(address, transport=core.PhysicalTransport.BR_EDR), within=seconds(1)
+    )
+    phone.out_of_range()
+    assert not phone.present
+    air.advance(seconds(30))
+    assert esp32.fell == [(20_000 * MS, hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR)]
+    with pytest.raises(core.ConnectionError):
+        air.run(
+            esp32.device.connect(address, transport=core.PhysicalTransport.BR_EDR),
+            within=seconds(10),
+        )
+    assert air.now == ms(35_120)
+
+
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    [
+        ({"name": ""}, "BluetoothDevice: name is '', not a string of 1 to 238 bytes"),
+        ({"pin": ""}, "BluetoothDevice: pin is '', not a string of 1 to 16 bytes"),
+        ({"pin": 1234}, "BluetoothDevice: pin is 1234, not a string of 1 to 16 bytes"),
+        (
+            {"class_of_device": 0x1000000},
+            "BluetoothDevice: class_of_device is 16777216, not three octets, 0 to 0xFFFFFF",
+        ),
+        (
+            {"class_of_device": True},
+            "BluetoothDevice: class_of_device is True, not three octets, 0 to 0xFFFFFF",
+        ),
+        ({"rssi": 21}, "BluetoothDevice: rssi is 21, not a signal strength in dBm, -127 to 20"),
+        ({"rssi": -128}, "BluetoothDevice: rssi is -128, not a signal strength in dBm, -127 to 20"),
+        ({"rssi": True}, "BluetoothDevice: rssi is True, not a signal strength in dBm, -127 to 20"),
+        (
+            {"rssi": -70.5},
+            "BluetoothDevice: rssi is -70.5, not a signal strength in dBm, -127 to 20",
+        ),
+        (
+            {"address": "nonsense"},
+            "BluetoothDevice: address is 'nonsense', not a Bluetooth address, as 00:00:00:00:5B:01",
+        ),
+    ],
+)
+def test_a_device_refuses_what_it_cannot_be(
+    air: Air, arguments: dict[str, object], message: str
+) -> None:
+    given: dict[str, object] = {"name": "phone", **arguments}
+    with pytest.raises(PeerError) as raised:
+        BluetoothDevice(air, **given)  # type: ignore[arg-type]
+    assert str(raised.value) == message
+
+
+def test_a_peer_needs_a_pin(air: Air) -> None:
+    with pytest.raises(PeerError) as raised:
+        SppPeer(air, name="peer", pin=None, source=Echo())  # type: ignore[arg-type]
+    assert str(raised.value) == "SppPeer: pin is None, not a string of 1 to 16 bytes"
+
+
+def test_setting_an_rssi_it_cannot_have_is_refused_and_changes_nothing(air: Air) -> None:
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo(), rssi=-60)
+    with pytest.raises(PeerError) as raised:
+        peer.rssi = 100
+    assert str(raised.value) == "SppPeer: rssi is 100, not a signal strength in dBm, -127 to 20"
+    assert peer.rssi == -60
+
+
+def test_a_second_device_at_an_address_on_the_air_is_refused_in_its_own_words(air: Air) -> None:
+    SppPeer(air, name="peer", pin="1234", source=Echo())
+    with pytest.raises(PeerError) as raised:
+        BluetoothDevice(air, name="phone")
+    assert str(raised.value) == (
+        "BluetoothDevice: address 00:00:00:00:5B:01 is another device's on the air: give each its"
+        " own"
+    )
+
+
+# A device that leaves with something of its own under way.
+
+
+def phone_and_speaker(air: Air) -> tuple[BluetoothDevice, BluetoothDevice]:
+    phone = BluetoothDevice(air, name="phone", address=PHONE)
+    speaker = BluetoothDevice(air, name="speaker", address=SPEAKER)
+    return phone, speaker
+
+
+def page(device: BluetoothDevice, address: str) -> Coroutine[Any, Any, Connection]:
+    return device.device.connect(
+        hci.Address(address + "/P"), transport=core.PhysicalTransport.BR_EDR
+    )
+
+
+def test_a_device_that_leaves_during_its_own_page_can_be_reached_again(air: Air) -> None:
+    phone, speaker = phone_and_speaker(air)
+    speaker.out_of_range()
+    task = air.start(page(phone, SPEAKER))
+    air.wait(seconds(1))
+    phone.out_of_range()
+    air.advance(seconds(6))
+    assert isinstance(task.exception(), core.ConnectionError)
+    phone.in_range()
+    speaker.in_range()
+    assert phone.present and speaker.present
+    # Once both are back and neither holds a link, a page connects.
+    air.run(page(phone, SPEAKER), within=seconds(1))
+    assert air.now == seconds(6)
+
+
+def test_a_device_that_left_during_its_own_page_can_be_paged_once_both_are_back(air: Air) -> None:
+    phone, speaker = phone_and_speaker(air)
+    speaker.out_of_range()
+    task = air.start(page(phone, SPEAKER))
+    air.wait(seconds(1))
+    phone.out_of_range()
+    phone.in_range()
+    speaker.in_range()
+    # A page under way is no link: nothing was severed by leaving during it.
+    air.run(page(speaker, PHONE), within=seconds(1))
+    assert air.now == seconds(1)
+    assert task.done()
+
+
+def test_a_page_that_outlasts_the_link_falling_at_the_other_end_lets_the_pair_go(
+    air: Air, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The target leaves at the instant it hears the page, before its host answers. Its end falls
+    at 20 s, while the page goes on until 40.96 s; only then does neither hold anything."""
+    phone, speaker = phone_and_speaker(air)
+    target = air.link.find_classic_controller(hci.Address(SPEAKER + "/P"))
+    assert target is not None
+    heard = target.on_classic_connection_request
+
+    def hear_and_leave(peer: hci.Address, link_type: int) -> None:
+        heard(peer, link_type)
+        speaker.out_of_range()
+
+    with monkeypatch.context() as patch:
+        patch.setattr(target, "on_classic_connection_request", hear_and_leave)
+        write = hci.HCI_Write_Page_Timeout_Command(page_timeout=0xFFFF)
+        air.run(phone.device.host.send_sync_command(write), within=seconds(0))
+        with pytest.raises(core.ConnectionError):
+            air.run(page(phone, SPEAKER), within=seconds(60))
+    assert air.now == Duration(40_959_375_000)
+    speaker.in_range()
+    air.run(page(phone, SPEAKER), within=seconds(1))
+
+
+def test_a_power_loss_ends_a_page_and_its_timer_does_not_end_the_next(air: Air) -> None:
+    phone, speaker = phone_and_speaker(air)
+    speaker.out_of_range()
+    first = air.start(page(phone, SPEAKER))
+    air.wait(seconds(4))
+    phone.switch_off()
+    # The page is over with the power, and its host hears of it once.
+    error = first.exception()
+    assert isinstance(error, core.ConnectionError)
+    assert error.error_code == hci.HCI_ErrorCode.PAGE_TIMEOUT_ERROR
+    assert not phone.device.connections
+    phone.switch_on()
+    ended: list[int] = []
+
+    async def second() -> None:
+        with pytest.raises(core.ConnectionError):
+            await page(phone, SPEAKER)
+        ended.append(air.loop.now)
+
+    air.run(second(), within=seconds(10))
+    assert ended == [9_120 * MS]
+
+
+def test_a_power_loss_ends_an_inquiry(air: Air) -> None:
+    phone, _ = phone_and_speaker(air)
+    completed: list[int] = []
+    phone.device.on("inquiry_complete", lambda: completed.append(air.loop.now))
+    air.run(phone.device.start_discovery(auto_restart=False), within=seconds(0))
+    air.wait(seconds(1))
+    phone.switch_off()
+    assert completed == [1_000 * MS]
+    phone.switch_on()
+    # Nothing is left of it: another can start, and completes after its own length.
+    air.run(phone.device.start_discovery(auto_restart=False), within=seconds(0))
+    air.wait(seconds(20))
+    assert completed == [1_000 * MS, 11_240 * MS]
+
+
+@pytest.mark.parametrize("how", LEAVING)
+def test_a_device_that_left_finds_nothing_in_its_own_inquiry(air: Air, how: str) -> None:
+    phone, _ = phone_and_speaker(air)
+    found: list[str] = []
+    phone.device.on("inquiry_result", lambda address, *_: found.append(str(address)))
+    completed: list[int] = []
+    phone.device.on("inquiry_complete", lambda: completed.append(air.loop.now))
+    leave(phone, how)
+    air.run(phone.device.start_discovery(auto_restart=False), within=seconds(0))
+    air.wait(seconds(11))
+    assert found == []
+    assert completed == [10_240 * MS]
+
+
+@pytest.mark.parametrize("how", LEAVING)
+def test_a_remote_name_request_to_a_peer_that_left_ends_at_the_page_timeout(
+    air: Air, how: str
+) -> None:
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo())
+    esp32 = Initiator(air)
+    air.advance(seconds(1))
+    leave(peer, how)
+    with pytest.raises(hci.HCI_Error) as raised:
+        air.run(esp32.device.request_remote_name(PEER), within=seconds(60))
+    assert raised.value.error_code == hci.HCI_ErrorCode.PAGE_TIMEOUT_ERROR
+    assert air.now == ms(6_120)
+
+
+def test_a_second_remote_name_request_ends_when_the_first_does(air: Air) -> None:
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo())
+    esp32 = Initiator(air)
+    peer.out_of_range()
+    first = air.start(esp32.device.request_remote_name(PEER))
+    air.advance(seconds(4))
+    second = air.start(esp32.device.request_remote_name(PEER))
+    air.advance(ms(5_119))
+    assert not first.done()
+    assert not second.done()
+    air.advance(ms(5_120))
+    assert isinstance(first.exception(), hci.HCI_Error)
+    assert isinstance(second.exception(), hci.HCI_Error)
+    assert air.quiet_until() is None
+
+
+def test_a_remote_name_request_is_answered_at_once_when_the_peer_is_there(air: Air) -> None:
+    SppPeer(air, name="peer", pin="1234", source=Echo())
+    esp32 = Initiator(air)
+    assert air.run(esp32.device.request_remote_name(PEER), within=seconds(60)) == "peer"
+    # The answer cancelled the timeout: nothing is due.
+    assert air.quiet_until() is None
+
+
+def test_a_power_loss_ends_a_remote_name_request_and_its_timer_does_not_end_the_next(
+    air: Air,
+) -> None:
+    phone, speaker = phone_and_speaker(air)
+    speaker.out_of_range()
+    first = air.start(phone.device.request_remote_name(hci.Address(SPEAKER + "/P")))
+    air.wait(seconds(4))
+    phone.switch_off()
+    assert isinstance(first.exception(), hci.HCI_Error)
+    phone.switch_on()
+    with pytest.raises(hci.HCI_Error):
+        air.run(phone.device.request_remote_name(hci.Address(SPEAKER + "/P")), within=seconds(10))
+    assert air.now == ms(9_120)
+
+
+# A target whose host takes its time to answer a page.
+
+
+def slow_to_accept(target: BluetoothDevice, patch: pytest.MonkeyPatch, *delays: float) -> None:
+    """The host of `target` answers each page it hears after the next of `delays` seconds, as
+    firmware may, and 0.1 s after those run out. Its other commands go on meanwhile."""
+    host = target.device.host
+    send = host.send_async_command
+    left = list(delays)
+
+    async def later(command: hci.HCI_AsyncCommand, *arguments: Any) -> Any:
+        if isinstance(command, hci.HCI_Accept_Connection_Request_Command):
+            await asyncio.sleep(left.pop(0) if left else 0.1)
+        return await send(command, *arguments)
+
+    patch.setattr(host, "send_async_command", later)
+
+
+def falls_of(air: Air, device: BluetoothDevice) -> list[tuple[int, int]]:
+    """The links of `device` that fall from now on, as (t, reason)."""
+    fell: list[tuple[int, int]] = []
+
+    def connected(connection: Connection) -> None:
+        def down(reason: int) -> None:
+            fell.append((air.loop.now, reason))
+
+        connection.on(connection.EVENT_DISCONNECTION, down)
+
+    device.device.on(device.device.EVENT_CONNECTION, connected)
+    return fell
+
+
+@pytest.mark.parametrize("how", LEAVING)
+def test_a_target_that_heard_the_page_loses_contact_when_the_pager_leaves(
+    air: Air, how: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    phone, speaker = phone_and_speaker(air)
+    slow_to_accept(speaker, monkeypatch)
+    fell = falls_of(air, speaker)
+    task = air.start(page(phone, SPEAKER))
+    air.advance(ms(50))
+    leave(phone, how)
+    air.advance(ms(120_000))
+    assert task.done()
+    # Accepted at 0.1 s, with nobody left: its end falls 20 s after the pager left.
+    assert fell == [(20_050 * MS, hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR)]
+    assert not speaker.device.connections
+    come_back(phone, how)
+    # It holds nothing, so it can page the one that returned.
+    monkeypatch.undo()
+    air.run(page(speaker, PHONE), within=seconds(1))
+
+
+def test_a_pager_whose_power_cycles_before_the_host_answers_gets_no_link(
+    air: Air, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    phone, speaker = phone_and_speaker(air)
+    slow_to_accept(speaker, monkeypatch)
+    fell = falls_of(air, speaker)
+    task = air.start(page(phone, SPEAKER))
+    air.advance(ms(50))
+    phone.switch_off()
+    phone.switch_on()
+    assert isinstance(task.exception(), core.ConnectionError)
+    air.advance(ms(200))
+    # The target's host accepted a page that was over: the pager has no link, and the target's end
+    # falls by itself.
+    assert not phone.device.connections
+    air.advance(seconds(21))
+    assert fell == [(20_050 * MS, hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR)]
+    monkeypatch.undo()
+    air.run(page(phone, SPEAKER), within=seconds(1))
+
+
+def test_a_power_loss_ends_an_authentication_with_a_status(air: Air) -> None:
+    phone = BluetoothDevice(air, name="phone", pin="0000", address=PHONE)
+    speaker = BluetoothDevice(air, name="speaker", pin="0000", address=SPEAKER)
+    connection = air.run(page(phone, SPEAKER), within=seconds(1))
+    speaker.out_of_range()
+    task = air.start(connection.authenticate())
+    air.wait(seconds(1))
+    phone.switch_off()
+    error = task.exception()
+    assert isinstance(error, hci.HCI_Error)
+    assert error.error_code == hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR
+
+
+@pytest.mark.parametrize("how", LEAVING)
+def test_a_target_that_leaves_before_its_host_answers_tells_its_host_of_no_link(
+    air: Air, how: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    phone, speaker = phone_and_speaker(air)
+    # Later than the supervision timeout, so that the end goes before the host answers either way.
+    slow_to_accept(speaker, monkeypatch, 30)
+    told: list[int] = []
+    host = speaker.device.host
+    heard = host.on_hci_disconnection_complete_event
+
+    def disconnection(event: hci.HCI_Disconnection_Complete_Event) -> None:
+        told.append(event.connection_handle)
+        heard(event)
+
+    monkeypatch.setattr(host, "on_hci_disconnection_complete_event", disconnection)
+    task = air.start(page(phone, SPEAKER))
+    air.advance(ms(50))
+    leave(speaker, how)
+    air.advance(seconds(31))
+    assert task.done()
+    assert told == []
+    assert not speaker.device.connections
+
+
+def failures_of(air: Air, device: BluetoothDevice) -> list[tuple[int, int]]:
+    """The connections `device` fails to make from now on, as (t, status)."""
+    failed: list[tuple[int, int]] = []
+
+    def failure(error: core.ConnectionError) -> None:
+        assert error.error_code is not None
+        failed.append((air.loop.now, error.error_code))
+
+    device.device.on(device.device.EVENT_CONNECTION_FAILURE, failure)
+    return failed
+
+
+def test_a_host_that_answers_a_page_after_its_end_fell_gets_no_link(
+    air: Air, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    phone, speaker = phone_and_speaker(air)
+    slow_to_accept(speaker, monkeypatch, 30)
+    failed = failures_of(air, speaker)
+    task = air.start(page(phone, SPEAKER))
+    air.advance(ms(50))
+    speaker.out_of_range()
+    air.advance(seconds(31))
+    assert task.done()
+    assert failed == [(30_000 * MS, hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR)]
+    assert not speaker.device.connections
+    speaker.in_range()
+    # Nothing is left of it on either side.
+    monkeypatch.undo()
+    air.run(page(phone, SPEAKER), within=seconds(1))
+
+
+def test_a_late_answer_does_not_connect_the_next_page(
+    air: Air, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    phone, speaker = phone_and_speaker(air)
+    slow_to_accept(speaker, monkeypatch, 6, 1)
+    failed = failures_of(air, speaker)
+    first = air.start(page(phone, SPEAKER))
+    air.advance(ms(50))
+    speaker.switch_off()
+    speaker.switch_on()
+    air.advance(ms(5_500))
+    assert isinstance(first.exception(), core.ConnectionError)
+
+    second = air.start(page(phone, SPEAKER))
+    air.advance(ms(6_100))
+    # The first answer, at 6 s, failed; the second page is still waiting for its own.
+    assert failed == [(6_000 * MS, hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR)]
+    assert not second.done()
+    air.advance(ms(6_500))
+    assert second.done()
+    assert second.exception() is None
+    assert phone.device.connections
+
+
+def test_an_answer_that_came_in_time_is_not_counted_late_afterwards(
+    air: Air, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    phone, speaker = phone_and_speaker(air)
+    slow_to_accept(speaker, monkeypatch, 0, 6)
+    connection = air.run(page(phone, SPEAKER), within=seconds(1))
+    air.run(connection.disconnect(), within=seconds(1))
+    second = air.start(page(phone, SPEAKER))
+    air.advance(ms(50))
+    speaker.switch_off()
+    speaker.switch_on()
+    air.advance(seconds(7))
+    assert isinstance(second.exception(), core.ConnectionError)
+    # Only the second answer was late: the third, to this page, connects.
+    air.run(page(phone, SPEAKER), within=seconds(1))
+    assert phone.device.connections
+
+
+def test_a_late_answer_leaves_a_working_link_alone(
+    air: Air, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    phone, speaker = phone_and_speaker(air)
+    slow_to_accept(speaker, monkeypatch, 6)
+    failed = failures_of(air, speaker)
+    first = air.start(page(phone, SPEAKER))
+    air.advance(ms(50))
+    speaker.switch_off()
+    speaker.switch_on()
+    air.advance(ms(5_500))
+    assert first.done()
+    # A link the other way, made while the answer to the first page is on its way.
+    air.run(page(speaker, PHONE), within=seconds(1))
+    handles = list(phone.device.connections), list(speaker.device.connections)
+    assert handles == ([1], [1])
+
+    air.advance(seconds(7))
+    assert failed == [(6_000 * MS, hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR)]
+    assert (list(phone.device.connections), list(speaker.device.connections)) == handles
+    controller = air.link.find_classic_controller(speaker.device.public_address)
+    assert controller is not None
+    assert [c.handle for c in controller.classic_connections.values()] == [1]
+
+
+def test_a_late_answer_does_not_complete_a_page_to_a_device_that_left(
+    air: Air, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    phone, speaker = phone_and_speaker(air)
+    slow_to_accept(speaker, monkeypatch, 6)
+    first = air.start(page(phone, SPEAKER))
+    air.advance(ms(50))
+    speaker.switch_off()
+    speaker.switch_on()
+    phone.out_of_range()
+    air.advance(ms(5_500))
+    assert first.done()
+
+    ended: list[int] = []
+
+    async def page_back() -> None:
+        with pytest.raises(core.ConnectionError) as raised:
+            await page(speaker, PHONE)
+        assert raised.value.error_code == hci.HCI_ErrorCode.PAGE_TIMEOUT_ERROR
+        ended.append(air.loop.now)
+
+    air.run(page_back(), within=seconds(10))
+    assert ended == [10_620 * MS]
+    assert not speaker.device.connections
+
+
+def test_a_page_tried_again_with_a_slow_host_does_not_fail_the_air(
+    air: Air, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With no accept timeout, the first answer connects the second page: the second answer is
+    the late one, and the link stays."""
+    phone, speaker = phone_and_speaker(air)
+    slow_to_accept(speaker, monkeypatch, 6, 6)
+    failed = failures_of(air, speaker)
+    first = air.start(page(phone, SPEAKER))
+    air.advance(ms(5_500))
+    assert isinstance(first.exception(), core.ConnectionError)
+    second = air.start(page(phone, SPEAKER))
+    air.advance(seconds(7))
+    assert second.done()
+    assert second.exception() is None
+    air.advance(seconds(12))
+    assert failed == [(11_500 * MS, hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR)]
+    assert list(phone.device.connections) == [1]
+    assert list(speaker.device.connections) == [1]
+
+
+def test_every_late_answer_is_counted_before_a_new_page_is_answered(
+    air: Air, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    phone, speaker = phone_and_speaker(air)
+    slow_to_accept(speaker, monkeypatch, 6, 6, 1)
+    first = air.start(page(phone, SPEAKER))
+    air.advance(ms(5_500))
+    assert isinstance(first.exception(), core.ConnectionError)
+    second = air.start(page(phone, SPEAKER))
+    air.advance(ms(5_700))
+    speaker.switch_off()
+    speaker.switch_on()
+    air.advance(ms(10_700))
+    assert isinstance(second.exception(), core.ConnectionError)
+
+    third = air.start(page(phone, SPEAKER))
+    air.advance(ms(11_600))
+    # The answers at 6 s and 11.5 s were both to pages that ended; this page waits for its own.
+    assert not third.done()
+    air.advance(ms(11_700))
+    assert third.done()
+    assert third.exception() is None
+
+
+def test_an_answer_owed_after_the_link_was_ended_does_not_fail_the_air(
+    air: Air, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    phone, speaker = phone_and_speaker(air)
+    slow_to_accept(speaker, monkeypatch, 6, 6)
+    failed = failures_of(air, speaker)
+    first = air.start(page(phone, SPEAKER))
+    air.advance(ms(5_500))
+    assert isinstance(first.exception(), core.ConnectionError)
+    second = air.start(page(phone, SPEAKER))
+    air.advance(seconds(7))
+    # The first answer connected the second page; the link ends before the second answer comes.
+    air.run(second.result().disconnect(), within=seconds(1))
+    assert not speaker.device.connections
+    air.advance(seconds(12))
+    assert failed == [(11_500 * MS, hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR)]
+    assert not speaker.device.connections
+
+
+def test_an_answer_owed_after_a_crossing_page_ended_does_not_fail_the_air(
+    air: Air, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    phone, speaker = phone_and_speaker(air)
+    slow_to_accept(speaker, monkeypatch, 5.5)
+    failed = failures_of(air, speaker)
+    phone.out_of_range()
+    outgoing = air.start(page(speaker, PHONE))
+    air.advance(seconds(1))
+    phone.in_range()
+    incoming = air.start(page(phone, SPEAKER))
+    air.advance(seconds(7))
+    assert isinstance(outgoing.exception(), core.ConnectionError)
+    assert isinstance(incoming.exception(), core.ConnectionError)
+    # The speaker's page ended at its timeout, taking the entry the phone's page had replaced it
+    # with; the answer to that page comes after.
+    assert failed == [
+        (5_120 * MS, hci.HCI_ErrorCode.PAGE_TIMEOUT_ERROR),
+        (6_500 * MS, hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR),
+    ]
+    assert not speaker.device.connections
+
+
+def test_an_answer_nothing_is_owed_for_is_the_hosts_own_error(air: Air) -> None:
+    phone, _ = phone_and_speaker(air)
+    accept = hci.HCI_Accept_Connection_Request_Command(
+        bd_addr=hci.Address(SPEAKER + "/P"), role=hci.Role.PERIPHERAL
+    )
+    with pytest.raises(hci.HCI_Error) as raised:
+        air.run(phone.device.host.send_async_command(accept), within=seconds(0))
+    assert raised.value.error_code == hci.HCI_ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR
+
+
+def test_two_answers_to_pages_that_ended_do_not_fail_the_air(
+    air: Air, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    phone, speaker = phone_and_speaker(air)
+    slow_to_accept(speaker, monkeypatch, 6, 6)
+    failed = failures_of(air, speaker)
+    first = air.start(page(phone, SPEAKER))
+    air.advance(ms(5_500))
+    assert isinstance(first.exception(), core.ConnectionError)
+    second = air.start(page(phone, SPEAKER))
+    air.advance(ms(5_700))
+    speaker.switch_off()
+    air.advance(seconds(12))
+    assert isinstance(second.exception(), core.ConnectionError)
+    timeout = hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR
+    assert failed == [(6_000 * MS, timeout), (11_500 * MS, timeout)]
+    assert not speaker.device.connections
+
+
+def test_a_power_loss_at_the_instant_a_page_is_heard_does_not_fail_the_air(
+    air: Air, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    phone, speaker = phone_and_speaker(air)
+    target = air.link.find_classic_controller(speaker.device.public_address)
+    assert target is not None
+    heard = target.on_classic_connection_request
+
+    def hear_and_lose_power(peer: hci.Address, link_type: int) -> None:
+        heard(peer, link_type)
+        speaker.switch_off()
+
+    monkeypatch.setattr(target, "on_classic_connection_request", hear_and_lose_power)
+    with pytest.raises(core.ConnectionError) as raised:
+        air.run(page(phone, SPEAKER), within=seconds(10))
+    assert raised.value.error_code == hci.HCI_ErrorCode.PAGE_TIMEOUT_ERROR
+    assert air.now == ms(5_120)
+
+
+def test_a_power_loss_ends_an_inquiry_that_would_restart_itself(air: Air) -> None:
+    phone, _ = phone_and_speaker(air)
+    air.run(phone.device.start_discovery(), within=seconds(0))
+    air.wait(seconds(1))
+    phone.switch_off()
+    air.wait(seconds(1))
+    phone.switch_on()
+    # A device switched off starts no inquiry by itself, so this one is not refused.
+    air.run(phone.device.start_discovery(auto_restart=False), within=seconds(0))

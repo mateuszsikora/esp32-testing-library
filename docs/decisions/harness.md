@@ -1368,6 +1368,15 @@ it is, because the peer could then be neither discovered nor paired with a PIN; 
 specification's E1, E21 and E22, because SAFER+ would be code nobody outside the link can tell
 from the stand-in.
 
+Bumble also has neither a Classic page timeout nor link supervision: a page nobody answers never
+ends, and a link never falls. (#129) The controller adds both, with the defaults and the commands
+of Bluetooth Core 5.4 (Vol 4, Part E, 7.3.16 and 7.3.42), so that a host's values take effect. No
+packet goes round on this link unless something sends one, so supervision does not watch for
+packets: contact is lost when a device leaves, and the timer starts there.
+
+**Rejected:** a poll on the link that the timer watches, because it would add instants and packets
+to every run and change nothing a test sees.
+
 ## A model answers the SPP channel as the far end of a UART does
 
 Status: decided (#33)
@@ -1408,6 +1417,100 @@ mode 3), because Bumble's RFCOMM acceptor answers at once, without waiting, and 
 link setup would need the controller to pair before `Connection_Complete`. Until a firmware is
 seen to rely on the peer starting it, the device must.
 
+## A peer leaves without a word, keeps its keys, and its old link stays dead until it falls
+
+Status: decided (#129)
+
+`switch_off` and `out_of_range` look the same to a device: no `LMP_detach`, no answer to an inquiry
+or a page, and each end's link falling at its supervision timeout. They differ in the source, which
+gets `supply` on a power loss when it is `Supplied`, and runs on out of range, with what it sends
+counted in `lost`. The peer's own end goes at once on a power loss, because nothing is left to hold
+it, and at its timeout out of range. Link keys stay in both cases, and `forget_keys` is the only way
+to lose them: no specification or vendor document says what a given device keeps after losing
+power, so this is the model's assumption, and a test states the other case by calling it. Coming
+back before the timeout does not revive the old link: the peer can be discovered again, and the
+link still falls at its timeout. Delivery is refused in one place, `Link` in
+`esp32tl/bluetooth/air.py`, so that the mechanism can move if #34 chooses another controller while
+the API stays on the peer. A page is answered or not at the instant it starts, so a peer that
+returns during a page answers only the next one, which is later than a real controller's repeated
+page would find it.
+
+**Rejected:** `remove_controller`, because `LocalLink.send_lmp_packet` then raises
+`InvalidArgumentError` for the address, which fails the air, and neither end times out; resuming the
+link when the peer returns in time, because it would need baseband retransmission for what was lost
+meanwhile; dropping the keys on a power loss, or one call that does both, because the two are
+separate facts about a device; repeating a page until its timeout, because it is the same baseband
+repetition, for a difference of when a retry connects, until a firmware is seen to depend on it,
+and for now also having `Controller.returned` send `LmpHostConnectionReq` again to whoever is paging
+that address, which adds no instants to other runs but has not been tried, for the same reason;
+and the API on the air (`air.remove(peer)`), because leaving is what a peer does, and the mechanism
+under it may change.
+
+
+## Devices on the air have a base class without SPP, and an RSSI of their own
+
+Status: decided (#129)
+
+`BluetoothDevice` is a device on the air with a name, a class of device, an RSSI, an optional PIN
+and the calls by which it leaves; `SppPeer` adds the channel and the source, so a test can have a
+device that offers no SPP among those an inquiry finds. RSSI replaces the fixed value of the
+controller's inquiry results, and stays -50 unless given: nothing in the air depends on it, so it
+says only what a firmware reads. It is a plain number that the test sets, with no model of distance
+or of a value that moves by itself.
+
+**Rejected:** a flag on `SppPeer` that turns SPP off, because a device without SPP then has to be
+given a source and a channel it does not use; and tying RSSI to `out_of_range`, because no source
+says at what strength a device goes out of reach.
+
+
+## Secure Simple Pairing on the peer's side is postponed
+
+Status: postponed (#129)
+
+Peers pair with a PIN only, and the Bumble controller's own Secure Simple Pairing is used only
+between two devices that both support it, which no `BluetoothDevice` does. What a firmware's stack
+does with a device that has it can only be seen with firmware, so it waits for #34, whose checklist
+holds it.
+
+
+## A remote name request nobody answers ends at the page timeout
+
+Status: decided (#129)
+
+A device in the ESP32's place can ask a peer that left for its name, and Bumble then waits for an
+answer that never comes. The controller ends the request in `PAGE_TIMEOUT` at the page timeout, the
+same mechanism as a page's, and the error Bluetooth Core 5.4 names for this command (Vol 1, Part F,
+2.4). The issue named only the page.
+
+**Rejected:** documenting the hang, because a test would learn of it from a test that hangs.
+
+
+## A page that respects page scan is postponed
+
+Status: postponed (#135)
+
+Bumble's controller answers a page whatever the target's page scan says, though an inquiry respects
+inquiry scan, so `set_connectable(False)` does not stop a device that knows the address. It predates
+#129, and is reachable only through `peer.device`, because the peer's API has no call that turns page
+scan off.
+
+
+## Connection_Accept_Timeout is postponed
+
+Status: postponed (#34)
+
+The page's timer runs until the target's host accepts, and a target's host has no time limit (Vol 4,
+Part E, 6.7, is not modelled). A host that accepts after the page ended makes a link although the
+pager reported `PAGE_TIMEOUT`, and when the pager has tried again, the first answer connects the
+second page. Bumble's host accepts at the instant it hears, so this takes a slowed host, and firmware
+behind #34 is the first that will be slow: what it needs can be seen then. Until then an answer with
+nothing left to answer gets a failed `Connection_Complete`, and changes nothing else.
+
+**Rejected:** ignoring the late answer on the pager's side, because the target would be left holding
+a link with no other end, and adding the timeout now, because nothing would exercise it but its own
+test.
+
+
 ## A bt fixture, an HCI tap and a replayed peer are postponed
 
 Status: postponed (#33)
@@ -1423,8 +1526,9 @@ Status: decided (#33)
 
 `pyproject.toml` requires `bumble==0.0.236`. Bumble is at 0.0.x, where any release may change
 the internals esp32tl reaches into: the controller's, which `esp32tl/bluetooth/controller.py`
-overrides, and the RFCOMM multiplexer's acceptor and DLC's DISC handling, which
-`esp32tl/bluetooth/peer.py` replaces. A new version is taken by changing the pin, running the
+overrides, the RFCOMM multiplexer's acceptor and DLC's DISC handling, which
+`esp32tl/bluetooth/peer.py` replaces, and `LocalLink`'s delivery, which `esp32tl/bluetooth/air.py`
+overrides. A new version is taken by changing the pin, running the
 tests, and checking whether each of those is still needed.
 
 **Rejected:** an optional extra, because the Bluetooth fixture will be the plugin's and the plugin
