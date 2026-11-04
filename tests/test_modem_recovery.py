@@ -132,7 +132,7 @@ def test_redials_after_a_dropped_call(
     assert modem.data_mode and modem.registered and network.ppp.ipcp_open
     board.wait_until(lambda: network.ntp.requests > requests, within=seconds(5))
 
-    # nothing took the modem down: it answered every command, and did not restart
+    # nothing took the modem down: every command in its history has an answer, and no restart
     assert not modem.restarts
     assert all(c.response for c in modem.commands)
     dials = [c.response for c in modem.commands if c.text == "ATD*99#"]

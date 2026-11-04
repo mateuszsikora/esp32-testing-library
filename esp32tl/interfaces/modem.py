@@ -98,7 +98,7 @@ class Modem(Uart):
 
     def hang(self, *, pwrkey: bool = True) -> None:
         """Stop answering, passing data and moving RI until a restart; with `pwrkey` False,
-        PWRKEY does nothing either, until RESET or a loss of supply."""
+        PWRKEY does nothing either, until that restart."""
         self._tell(lambda model: model.hang(pwrkey=pwrkey), f"hang(pwrkey={pwrkey!r})")
 
     def drop_call(self, *, terminate: bool = False) -> None:

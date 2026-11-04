@@ -73,6 +73,7 @@ from esp32tl.interfaces.wifi import Wifi
 from esp32tl.link.boardlink import BoardLink, Wire
 from esp32tl.link.protocol import ChipReset, Power, Reset
 from esp32tl.net import Internet
+from esp32tl.net.ntp import DEFAULT_UTC
 from esp32tl.report import RunLog, board_time, shown
 from esp32tl.sources.real import Real
 from esp32tl.sources.replay import Replay
@@ -102,7 +103,7 @@ HELD_MAX_SECONDS = 86400
 
 # The world's time at power-on, unless the test gives another: runs repeat whatever the host's
 # clock says.
-POWER_ON_UTC = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
+POWER_ON_UTC = DEFAULT_UTC
 
 # How long, in wall seconds, the runner has after SIGTERM to send its stats, close the link and
 # exit, before SIGKILL (protocol §9). It needs at most one emulated millisecond.

@@ -183,8 +183,8 @@ SIM7600 commands, UART1 on TX 26 and RX 27 without flow control and the APN `int
 `CMakeLists.txt` runs `firmware/pppos_client/prepare.py` with `dependencies/` in the build directory
 as the output, as `examples/position_tracker` does, and takes `esp_modem` from there, with
 `IDF_COMPONENT_MANAGER=0`; so `firmware/build.sh` is enough and the read-only `/project` stays
-unwritten; a build from scratch downloads the archive again, as `pppos_client`'s does, one copy per
-build tree. Its `sdkconfig.defaults` enables PPP. It has no firmware-specific Kconfig.
+unwritten; a build from scratch downloads the archive again, one copy per build tree, as
+`examples/position_tracker`'s does; `pppos_client`'s copy is the one in `$FIRMWARE_OUT`. Its `sdkconfig.defaults` enables PPP. It has no firmware-specific Kconfig.
 
 `IP_EVENT` handling sets `GOT_IP` and `LOST_IP` bits. `dial` clears both first: leaving data mode
 posts no `IP_EVENT_PPP_LOST_IP`, so the last address's `GOT_IP` may still be set. After 30 s with no

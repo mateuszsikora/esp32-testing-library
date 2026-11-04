@@ -219,8 +219,9 @@ off by default. What the firmware sends after the call has ended, such as lwIP's
 noise on the command line, which the next newline clears. A command sent before that newline is part
 of the noise and lost whole: it gets no answer and is not in `commands`, on a hung modem or a healthy
 one, and the next `AT` gets its `OK`. `esp_modem` writes that newline when it leaves data mode, and
-`esp_modem_sync` alone does not. No source says what a real modem does here: this is the model's
-assumption.
+`esp_modem_sync` alone does not. The [A76XX manual](https://eicut.com/wp-content/uploads/2025/10/A76XX_Series_AT_Command_Manual_V1.12.pdf),
+section 1.5.2, requires the `AT` prefix at the beginning of each command line and does not say what
+happens to bytes before it: losing the line is the model's assumption.
 
 It raises `SourceError: modem.drop_call: the modem is not in data mode` with no call to drop, as on
 a hung modem; `SourceError: modem.drop_call: terminate needs modem.network(): no PPP` when

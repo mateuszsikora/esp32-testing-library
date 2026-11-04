@@ -252,8 +252,7 @@ model call selects `sources.model.modem.Modem`; the existing source and
 tap checks still apply. See [modem-technical.md](modem-technical.md) for the AT parser and report.
 
 `Lines.attach` reserves a model output and installs a callback for each firmware input it watches.
-`driven`
-collects callbacks under the line lock and invokes them after releasing it; the modem can then
+`driven` collects callbacks under the line lock and invokes them after releasing it; the modem can then
 queue RI with `model_drive` without a lock cycle. `quiet_until` names the earliest pending model
 change, and `inputs` sends only those due, recording `LineEvent`s with `by="model"`. A new model
 change replaces a pending response on the same pin, allowing the test to cancel an RI transition

@@ -1862,7 +1862,8 @@ and the firmware learns from its own timeout, while a Terminate-Request gives
 `IP_EVENT_PPP_LOST_IP` 6 s later. `lose_registration()` stays silent. The command parser did not
 change: `+++` without an answer in command mode costs `esp_modem` 5 s, and its `\n` before `AT`
 clears PPP bytes left on the line. A command stuck to those bytes, with no newline between, is lost
-whole, with no answer and no entry in `commands`. No source says what a real modem does, so this is
+whole, with no answer and no entry in `commands`. The A76XX manual, section 1.5.2, requires the prefix
+at the beginning of each command line and does not say what happens to bytes before it, so this is
 the model's assumption, and no firmware here needs otherwise: `modem_recovery` always leaves data
 mode through `esp_modem`, which writes the newline.
 

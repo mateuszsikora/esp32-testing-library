@@ -196,7 +196,7 @@ class Modem:
 
     def hang(self, *, pwrkey: bool = True) -> None:
         """Stop answering, passing data and moving RI until a restart; with `pwrkey` False,
-        PWRKEY does nothing either, until RESET or a loss of supply."""
+        PWRKEY does nothing either, until that restart."""
         if not isinstance(pwrkey, bool):
             raise TypeError(f"modem.hang: pwrkey is {pwrkey!r}, not True or False")
         with self._lock:
