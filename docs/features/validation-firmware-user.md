@@ -35,6 +35,7 @@ whatever `FIRMWARE_OUT` the shell exports, because the tests read the images the
 | `sdspi` | ESP-IDF's `examples/storage/sd_card/sdspi`, unmodified, for target `esp32`: mounts the FAT file system of an SD card on SPI and writes, renames and reads files on it ([below](#sdspi)) |
 | `sd_remount` | `firmware/sd_remount`: appends a line to a file on an SD card every 100 ms, and mounts the card again after a failure, for a card taken out and put back while it runs ([below](#sd_remount)) |
 | `modem_at` | `firmware/modem_at`: AT dialogue, PWRKEY and RI on the LilyGO profile, without a network ([below](#modem_at)) |
+| `modem_recovery` | `firmware/modem_recovery`: PPP through `esp_modem`; recovers a modem that answers nothing and redials ([below](#modem_recovery)) |
 | `pppos_client` | esp-protocols `modem-v1.4.1`, unchanged except sdkconfig: PPP and plain MQTT on the LilyGO modem route ([below](#pppos_client)) |
 | `http_request` | ESP-IDF's `examples/protocols/http_request`, unmodified, with its default `sdkconfig`, for target `esp32`: joins a Wi-Fi access point and fetches `http://example.com/` over and over ([below](#http_request)) |
 | `persistence` | `firmware/persistence`: counts its boots in NVS, RTC memory, RAM and on an SD card, prints them with its reset reason, and restarts itself once ([below](#persistence)) |
@@ -56,6 +57,29 @@ is printed as `modem_at: <command> => <reply>`, or `TIMEOUT` after a read waits 
 no byte. It prints `modem_at: dialogue complete`, then queries CSQ, CEREG and CCLK repeatedly,
 with 250 ms waits, and prints `modem_at: RI=<level>`. The tests change the modem on the test's
 clock and read those ordinary console messages. It does not use esp_modem or PPP.
+
+## `modem_recovery`
+
+`modem_recovery` runs PPP through `esp_modem` at `modem-v1.4.1`, the revision `pppos_client` fetches,
+with lwIP and esp_netif of the pinned ESP-IDF. Build it with `firmware/build.sh modem_recovery`;
+`make firmware` and `make test` include it. It uses the LilyGO profile's UART1, PWRKEY 4, RESET 5,
+GPIO 12 and RI 33, fixed in `firmware/modem_recovery/main/main.c`. Run it with `modem.network()`.
+
+It holds GPIO 12 high, starts the modem with a nominal 100 ms PWRKEY pulse if RI reads low, and
+dials. Once it has an address it prints `modem_recovery: connected` and sends an NTP request to
+`10.64.0.1` about every 2 s, with a 1 s timeout. Ten requests in a row without an answer print
+`modem_recovery: no answer`. It then leaves data mode with `esp_modem_set_mode` and sends `AT`. If
+the modem answers, it prints `modem_recovery: command mode <reply to AT+CEREG?>` and dials again.
+If it does not, it prints `modem_recovery: hung RI=<level>` and runs the
+[recovery procedure](modem-user.md#a-hung-modem-and-reset): a nominal 3000 ms PWRKEY pulse unless
+RI reads low, then `modem_recovery: after PWRKEY RI=<level>`; GPIO 12 low for 1 s and back up; RESET
+high for 2600 ms; 10 s later a 100 ms PWRKEY pulse, then `modem_recovery: recovered RI=<level>`. It
+dials again. A dial that gets no `CONNECT` is followed by the same `AT`.
+
+On v5.3.6 a hung modem takes about 35 s from the last request to `modem_recovery: hung`:
+`esp_modem`'s `exit_data` waits for lwIP's Terminate-Requests to run out, 12 s here, then 2 s and
+three rounds of a 1 s pause, `+++`, 5 s and `\n` `AT`. No part of this is the model's; it is the
+firmware's own timing.
 
 ## `nvs_reader`
 
@@ -238,7 +262,7 @@ every image those are:
 |---|---|
 | `0x1000` | `bootloader/bootloader.bin` |
 | `0x8000` | `partition_table/partition-table.bin` |
-| `0x10000` | `IMAGE.bin` (`hello_world.bin`, `nmea_reader.bin`, `gpio_echo.bin`, `sd_remount.bin`, `modem_at.bin`, `nvs_reader.bin`, `pppos_client.bin`, `http_request.bin`), `sd_card.bin` for `sdspi` |
+| `0x10000` | `IMAGE.bin` (`hello_world.bin`, `nmea_reader.bin`, `gpio_echo.bin`, `sd_remount.bin`, `modem_at.bin`, `modem_recovery.bin`, `nvs_reader.bin`, `pppos_client.bin`, `http_request.bin`), `sd_card.bin` for `sdspi` |
 
 and the ELF is `IMAGE.elf`, `sd_card.elf` for `sdspi`: the files take the project's name, and
 the `sdspi` example's project is called `sd_card`. Two more files say how the build was made:
@@ -286,7 +310,7 @@ The second one ends every finished build.
 
 `tests/test_firmware_images.py` reads `firmware/hello_world/build/`,
 `firmware/nmea_reader/build/`, `firmware/gpio_echo/build/`, `firmware/sdspi/build/`,
-`firmware/sd_remount/build/`, `firmware/nvs_reader/build/`, `firmware/pppos_client/build/` and `firmware/http_request/build/`,
+`firmware/sd_remount/build/`, `firmware/nvs_reader/build/`, `firmware/modem_recovery/build/`, `firmware/pppos_client/build/` and `firmware/http_request/build/`,
 and for each:
 
 - passes on a build from the pinned container;
@@ -311,7 +335,7 @@ run `make firmware`.
 `firmware/build.sh` exits 1 with one of these on stderr, before writing anything, or with the exit
 code of `idf.py` when the build itself fails:
 
-- `firmware/build.sh: unknown image 'NAME'; the images are: hello_world nmea_reader gpio_echo sdspi sd_remount modem_at nvs_reader pppos_client http_request`
+- `firmware/build.sh: unknown image 'NAME'; the images are: hello_world nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client http_request persistence`
 - `firmware/build.sh: needs Docker, or IDF_LOCAL=1 to build with a local ESP-IDF`
 - `firmware/build.sh: the Docker daemon is not reachable ('docker info' failed); is Docker running?`
 - `firmware/build.sh: IDF_LOCAL=1 needs ESP-IDF in the environment: source $IDF_PATH/export.sh first`

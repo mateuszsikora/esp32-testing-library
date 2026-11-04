@@ -64,6 +64,8 @@ class Line:
     active: int | None = None
     on_ms: int | None = None
     off_ms: int | None = None
+    # A line whose pulse has one threshold, with `active`, in place of on_ms and off_ms.
+    pulse_ms: int | None = None
 
 
 @dataclass(frozen=True)
@@ -237,19 +239,25 @@ class Reader:
             if not isinstance(line, dict):
                 lines[role] = Line(self.gpio(where, line))
                 continue
-            self.keys(where, line, {"pin"}, {"pull", "active", "on_ms", "off_ms"})
+            self.keys(where, line, {"pin"}, {"pull", "active", "on_ms", "off_ms", "pulse_ms"})
             pull = line.get("pull")
             if pull is not None and pull not in PULLS:
                 raise self.fail(f"{where}.pull", f"{pull!r} is not one of {', '.join(PULLS)}")
-            timing = {"active", "on_ms", "off_ms"} & line.keys()
-            if timing and timing != {"active", "on_ms", "off_ms"}:
-                raise self.fail(where, "pulse timing needs active, on_ms and off_ms together")
+            timing = {"active", "on_ms", "off_ms", "pulse_ms"} & line.keys()
+            if timing and timing not in ({"active", "on_ms", "off_ms"}, {"active", "pulse_ms"}):
+                raise self.fail(
+                    where,
+                    "pulse timing needs active with on_ms and off_ms, or active with pulse_ms",
+                )
             lines[role] = Line(
                 self.gpio(f"{where}.pin", line["pin"], output=bool(timing)),
                 pull,
                 self.integer(f"{where}.active", line["active"], 0, 1) if timing else None,
-                self.integer(f"{where}.on_ms", line["on_ms"], 1) if timing else None,
-                self.integer(f"{where}.off_ms", line["off_ms"], 1) if timing else None,
+                self.integer(f"{where}.on_ms", line["on_ms"], 1) if "on_ms" in timing else None,
+                self.integer(f"{where}.off_ms", line["off_ms"], 1) if "off_ms" in timing else None,
+                self.integer(f"{where}.pulse_ms", line["pulse_ms"], 1)
+                if "pulse_ms" in timing
+                else None,
             )
         return lines
 

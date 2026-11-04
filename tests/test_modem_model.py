@@ -13,7 +13,7 @@ from esp32tl.interfaces.modem import Modem as ModemRoute
 from esp32tl.link.boardlink import BoardLink, Wire
 from esp32tl.link.protocol import GpioIn, GpioOut, RunnerHello, Sync, UartCfg, UartTx, Wait
 from esp32tl.report import RunLog
-from esp32tl.sources.model.modem import LATENCY_NS, MAX_COMMAND, Modem
+from esp32tl.sources.model.modem import LATENCY_NS, MAX_COMMAND, Modem, Restart
 from esp32tl.units import Duration, hours, minutes, ms, seconds
 
 LILYGO = boards.profile("lilygo-t-a7670g-r2")
@@ -214,7 +214,6 @@ def test_named_controls_are_observable_without_changing_modem_state(tmp_path: Pa
     reply(modem.model(), "ATE1")
     controls = {
         "modem.dtr": 25,
-        "modem.reset": 5,
         "gnss.wake": 19,
         "gnss.pps": 23,
         "board.power_enable": 12,
@@ -746,3 +745,229 @@ def test_a_refused_clock_or_operator_leaves_the_route_without_a_source(tmp_path:
     with pytest.raises(ValueError):
         modem.operator(numeric="2600")
     assert modem.source is None
+
+
+def lilygo() -> Modem:
+    return Modem(
+        lambda: 0, pwrkey=LILYGO.lines["modem"]["pwrkey"], reset=LILYGO.lines["modem"]["reset"]
+    )
+
+
+def pulse(driven: Callable[[int, int | None], None], at: Duration, length: Duration) -> None:
+    driven(at.ns, 1)
+    driven((at + length).ns, 0)
+
+
+def test_a_hung_modem_answers_nothing_and_keeps_its_commands() -> None:
+    model = Modem(lambda: 0)
+    assert not model.hung
+    model.hang()
+    assert model.hung and model.powered and model.registered
+    assert reply(model, "AT", 5) == b""
+    assert reply(model, "ATE1", 6) == b""
+    assert [(c.at, c.text, c.response, c.fallback) for c in model.commands] == [
+        (Duration(5), "AT", b"", False),
+        (Duration(6), "ATE1", b"", False),
+    ]
+    assert list(model.poll(7)) == [] and model.quiet_until() is None
+
+
+def test_a_hung_modem_passes_no_data_and_sends_no_no_carrier(tmp_path: Path) -> None:
+    now = [seconds(1).ns]
+    modem, lines, _ = route(tmp_path, now)
+    network = modem.network()
+    model = modem.model()
+    assert b"CONNECT" in reply(model, "ATD*99#", now[0])
+    list(model.poll(now[0]))
+    received = len(model.data_received)
+    modem.hang()
+    assert not modem.data_mode and not network.active
+    # what the firmware's PPP goes on sending, as esp_modem ends it: a newline before its AT
+    assert list(model.receive(now[0], b"\x7e\xff\x03PPP\x7e\n")) == []
+    assert len(model.data_received) == received
+    assert list(model.poll(now[0])) == [] and model.quiet_until() is None
+    assert reply(model, "AT", now[0]) == b""
+    assert modem.commands[-1].response == b""
+    # RI stays high
+    assert not [e for e in lines.events() if e.by == "model" and e.level == 0]
+
+
+def test_the_report_shows_a_command_with_no_answer(tmp_path: Path) -> None:
+    modem, _, _ = route(tmp_path, [0])
+    modem.hang()
+    reply(modem.model(), "AT")
+    assert modem.command_report()[-1].endswith("'AT' (no answer)")
+
+
+def test_hang_refuses_a_modem_that_is_off_and_a_pwrkey_that_is_no_bool(tmp_path: Path) -> None:
+    model = Modem(lambda: 0)
+    model.power_off()
+    with pytest.raises(SourceError, match=r"modem\.hang: the modem is off"):
+        model.hang()
+    assert not model.hung
+    modem, _, _ = route(tmp_path, [0])
+    with pytest.raises(TypeError, match="pwrkey is 1, not True or False"):
+        modem.hang(pwrkey=1)  # type: ignore[arg-type]
+    assert modem.source is None
+
+
+def test_pwrkey_recovers_a_hung_modem_that_honours_it() -> None:
+    model = lilygo()
+    model.hang(pwrkey=True)
+    # A short pulse does nothing to a running modem, hung or not.
+    pulse(model.driven, seconds(1), ms(100))
+    assert model.hung and model.powered
+    pulse(model.driven, seconds(2), ms(3000))
+    assert not model.powered and not model.hung
+    pulse(model.driven, seconds(10), ms(100))
+    assert model.powered and not model.hung
+    assert reply(model, "AT") == b"\r\nOK\r\n"
+    assert model.restarts == (Restart(seconds(5) + ms(1), "pwrkey"),)
+
+
+def test_pwrkey_does_nothing_to_a_hung_modem_that_ignores_it() -> None:
+    model = lilygo()
+    model.hang(pwrkey=False)
+    pulse(model.driven, seconds(1), ms(3000))
+    assert model.hung and model.powered
+    assert model.restarts == ()
+    assert reply(model, "AT") == b""
+
+
+def test_a_pwrkey_pulse_begun_before_the_hang_does_not_end_after_it() -> None:
+    model = lilygo()
+    model.driven(0, 1)
+    model.hang(pwrkey=False)
+    model.driven(seconds(3).ns, 0)
+    assert model.hung and model.powered
+    # and the next pulse after RESET is timed from its own start
+    pulse(model.reset_driven, seconds(4), ms(2000))
+    model.driven(seconds(7).ns, 1)
+    model.driven(seconds(7).ns + ms(100).ns, 0)
+    assert model.powered
+
+
+@pytest.mark.parametrize("pwrkey", [True, False])
+def test_reset_restarts_a_hung_modem_in_command_mode(pwrkey: bool) -> None:
+    model = lilygo()
+    reply(model, "ATE1")
+    reply(model, "AT+COPS=3,2")
+    model.hang(pwrkey=pwrkey)
+    pulse(model.reset_driven, seconds(1), ms(2600))
+    assert not model.hung and model.powered and model.registered and not model.data_mode
+    assert model.restarts == (Restart(seconds(1) + ms(2601), "reset"),)
+    # echo and format are back at their power-on values
+    assert reply(model, "AT") == b"\r\nOK\r\n"
+    assert b'+COPS: 0,0,"ESP32TL",7' in reply(model, "AT+COPS?")
+    # PWRKEY works again: the later short pulse changes nothing, a long one switches it off
+    pulse(model.driven, seconds(14), ms(100))
+    assert model.powered
+    pulse(model.driven, seconds(20), ms(3000))
+    assert not model.powered
+
+
+def test_reset_is_judged_at_release_and_at_the_profile_s_threshold() -> None:
+    model = lilygo()
+    reply(model, "ATE1")
+    pulse(model.reset_driven, seconds(1), ms(1999))
+    assert not model.restarts
+    assert reply(model, "AT") == b"AT\r\n\r\nOK\r\n"
+    # held, nothing has happened yet
+    model.reset_driven(seconds(5).ns, 1)
+    model.reset_driven(seconds(9).ns, 1)
+    assert reply(model, "AT") == b"AT\r\n\r\nOK\r\n" and not model.restarts
+    model.reset_driven(seconds(9).ns, None)  # an output that stops driving ends the pulse too
+    assert model.restarts == (Restart(seconds(9) + ms(1), "reset"),)
+    pulse(model.reset_driven, seconds(20), ms(2000))
+    assert len(model.restarts) == 2
+
+
+def test_reset_is_active_high_at_the_pad() -> None:
+    model = lilygo()
+    # Low for 3 s, as an active-low RESET would be pressed: nothing.
+    model.reset_driven(seconds(1).ns, 0)
+    model.reset_driven(seconds(4).ns, 1)
+    assert not model.restarts
+    model.reset_driven(seconds(6).ns + ms(500).ns, 0)
+    assert len(model.restarts) == 1
+
+
+def test_reset_of_a_modem_that_is_off_does_nothing() -> None:
+    model = lilygo()
+    model.power_off()
+    pulse(model.reset_driven, seconds(1), ms(3000))
+    assert not model.powered and model.restarts == ()
+    model = lilygo()
+    model.hang(pwrkey=True)
+    pulse(model.driven, seconds(1), ms(3000))
+    restarts = model.restarts
+    pulse(model.reset_driven, seconds(5), ms(2600))
+    assert not model.powered and model.restarts == restarts
+
+
+def test_a_loss_of_supply_ends_the_hang_and_a_later_start_has_pwrkey() -> None:
+    now = [seconds(1).ns]
+    model = Modem(
+        lambda: now[0],
+        pwrkey=LILYGO.lines["modem"]["pwrkey"],
+        reset=LILYGO.lines["modem"]["reset"],
+    )
+    model.hang(pwrkey=False)
+    model.lose_power()
+    assert not model.hung and not model.powered
+    model.restore_power()
+    pulse(model.driven, seconds(2), ms(100))
+    assert model.powered
+    model.hang(pwrkey=False)
+    now[0] = seconds(5).ns
+    model.supply(False)
+    assert not model.hung
+    assert [(r.at, r.cause) for r in model.restarts] == [
+        (seconds(1), "supply"),
+        (seconds(5), "supply"),
+    ]
+
+
+def test_restarts_name_what_ended_each_run_and_a_start_is_no_restart() -> None:
+    now = [0]
+    model = Modem(lambda: now[0], pwrkey=LILYGO.lines["modem"]["pwrkey"])
+    # Before the board's first instant, this says how the modem starts.
+    model.power_off()
+    assert not model.restarts
+    now[0] = seconds(1).ns
+    model.power_on()
+    assert not model.restarts
+    now[0] = seconds(2).ns
+    model.power_on()  # on a running modem: a restart
+    now[0] = seconds(3).ns
+    model.power_off()
+    model.power_off()  # already off
+    assert [(r.at, r.cause) for r in model.restarts] == [
+        (seconds(2), "test"),
+        (seconds(3), "test"),
+    ]
+
+
+def test_a_route_watches_pwrkey_and_reset_through_lines(tmp_path: Path) -> None:
+    now = [0]
+    modem, lines, log = route(tmp_path, now)
+    modem.hang(pwrkey=False)
+    assert modem.hung and not modem.restarts
+    assert "uart.modem.hang(pwrkey=False)" in "\n".join(log.lines())
+    lines.driven(seconds(1).ns, [(4, 1)], frozenset({4}))
+    lines.driven(seconds(4).ns, [(4, 0)], frozenset({4}))
+    assert modem.hung
+    lines.driven(seconds(5).ns, [(5, 1)], frozenset({5}))
+    lines.driven(seconds(7).ns + ms(600).ns, [(5, 0)], frozenset({5}))
+    assert not modem.hung and modem.powered
+    assert modem.restarts == (Restart(seconds(7) + ms(601), "reset"),)
+
+
+def test_power_enable_has_no_effect_on_the_modem(tmp_path: Path) -> None:
+    modem, lines, _ = route(tmp_path, [0])
+    modem.hang()
+    lines.driven(seconds(1).ns, [(12, 1)], frozenset({12}))
+    lines.driven(seconds(2).ns, [(12, 0)], frozenset({12}))
+    lines.driven(seconds(3).ns, [(12, 1)], frozenset({12}))
+    assert lines.level("board.power_enable") == 1
+    assert modem.powered and modem.hung and modem.restarts == ()

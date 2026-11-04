@@ -72,7 +72,7 @@ the container, and once inside it, which builds. With `IDF_LOCAL=1` it runs once
      ([`http_request`](#http_request)), `pppos_client` what `firmware/pppos_client/prepare.py`
      prints ([Pinned esp-protocols source](#pinned-esp-protocols-source)), `nmea_reader` is `$PWD/firmware/nmea_reader`,
      `gpio_echo` `$PWD/firmware/gpio_echo`, `sd_remount` `$PWD/firmware/sd_remount`, `modem_at`
-     `$PWD/firmware/modem_at`, and `nvs_reader` `$PWD/firmware/nvs_reader`, the working directory being the repository's
+     `$PWD/firmware/modem_at`, `modem_recovery` `$PWD/firmware/modem_recovery`, and `nvs_reader` `$PWD/firmware/nvs_reader`, the working directory being the repository's
      root: in
      the container `/project/firmware/nmea_reader`, in a local build the checkout's own path), the
      build directory `$out/IMAGE/build`. If
@@ -104,7 +104,7 @@ next build is still incremental; the marker, removed first, is what says it fini
 The Makefile's `firmware` target runs `FIRMWARE_OUT= firmware/build.sh`; the pattern rule
 `firmware/%/build/esp32tl-built` runs `FIRMWARE_OUT= firmware/build.sh $*`, and `test` depends on
 `$(FIRMWARE_IMAGES:%=firmware/%/build/esp32tl-built)` with `FIRMWARE_IMAGES := hello_world
-nmea_reader gpio_echo sdspi sd_remount modem_at nvs_reader pppos_client http_request`. `determinism` depends on
+nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client http_request persistence`. `determinism` depends on
 the markers of `nmea_reader`, `pppos_client` and `http_request`. The rule has no prerequisites, so make rebuilds
 an image only when its marker is missing: an edit to `firmware/nmea_reader/` needs `make firmware`, or
 `firmware/build.sh nmea_reader`, before `make test` sees it.
@@ -175,6 +175,20 @@ matrix (`rtc_gpio_deinit`, `components/esp_driver_gpio/src/gpio.c:372` in ESP-ID
 interrupt reaches the CPU in esp32sim, where a level on an RTC pad raises no GPIO interrupt
 (`set_input`, `esp32/src/periph.rs:373`). Its pulls disabled, the input reads whatever level the
 harness drives on it: the board's pull from the profile, or the test's.
+
+## Modem recovery validation
+
+`firmware/modem_recovery/` is an ESP-IDF project on `esp_modem`, `esp_netif` and lwIP, with the
+SIM7600 commands, UART1 on TX 26 and RX 27 without flow control and the APN `internet`. Its
+`CMakeLists.txt` runs `firmware/pppos_client/prepare.py` with `dependencies/` in the build directory
+as the output, as `examples/position_tracker` does, and takes `esp_modem` from there, with
+`IDF_COMPONENT_MANAGER=0`; so `firmware/build.sh` is enough and the read-only `/project` stays
+unwritten. Its `sdkconfig.defaults` enables PPP. It has no firmware-specific Kconfig.
+
+`IP_EVENT` handling sets `GOT_IP` and `LOST_IP` bits. `wait_for_loss` ends after `SILENT_PROBES`,
+10, requests without an answer; that is longer than lwIP's `FSM_DEFTIMEOUT`, 6 s, so
+`IP_EVENT_PPP_LOST_IP` is heard first when it comes. RI is read 20 ms after a pulse's end, as
+`modem_at` does, because the model's RI follows 1 ms after the release.
 
 ## Modem AT validation
 
@@ -402,7 +416,7 @@ top of each build directory, `config/sdkconfig.json`, and the `.bin` and `.elf` 
 |---|---|---|---|
 | `IDF_VERSION` | script constant | `v5.3.6` | the ESP-IDF tag of the container |
 | `CONTAINER` | script constant | `espressif/idf:$IDF_VERSION@sha256:cee52f0c4fdaf088992a7a739f5993154e95cf1d3ab61c24f5b40e6d56a3a070` | the image the build runs in, pinned by digest (a multi-arch index) |
-| `IMAGES` | script constant | `hello_world nmea_reader gpio_echo sdspi sd_remount modem_at nvs_reader pppos_client http_request` | the images, in build order; `project_of` maps each to its project |
+| `IMAGES` | script constant | `hello_world nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client http_request persistence` | the images, in build order; `project_of` maps each to its project |
 | `FIRMWARE_OUT` | environment | `firmware/` | where `IMAGE/build/` goes; empty means the default; `/out` inside the container |
 | `IDF_LOCAL` | environment | unset | `1` builds with the ESP-IDF of the calling shell |
 | `ESP32TL_CONTAINER` | environment, set by the host side | unset | marks the container side and names the image it records |
@@ -419,7 +433,7 @@ regular expressions, so each has to stay on a line of its own. Changing either, 
 
 | Message | Cause |
 |---|---|
-| `unknown image 'NAME'; the images are: hello_world nmea_reader gpio_echo sdspi sd_remount modem_at nvs_reader pppos_client http_request` | an argument not in `IMAGES`; nothing written |
+| `unknown image 'NAME'; the images are: hello_world nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client http_request persistence` | an argument not in `IMAGES`; nothing written |
 | `ESP32TL_CONTAINER is set outside a container; unset it` | `ESP32TL_CONTAINER` set and no `/.dockerenv`; nothing written |
 | `IDF_LOCAL=1 needs ESP-IDF in the environment: source $IDF_PATH/export.sh first` | `IDF_LOCAL=1` without `idf.py` on `PATH` or without `IDF_PATH`; nothing written |
 | `needs Docker, or IDF_LOCAL=1 to build with a local ESP-IDF` | no `docker` on `PATH`; nothing written |
@@ -454,7 +468,7 @@ write their arguments to `$FAKE_LOG`, with a `PATH` holding only them and `cat`,
 - `test_build_starts_the_pinned_container`: the `docker run` arguments, exactly;
 - `test_local_build_runs_idf_py_and_records_how`: with no image named, every image in order,
   `hello_world` and `sdspi` from the fake `IDF_PATH`, `nmea_reader`, `gpio_echo`, `sd_remount`,
-  `modem_at` and `nvs_reader` from `firmware/`, `pppos_client` from what a fake `python3` prints,
+  `modem_at`, `modem_recovery` and `nvs_reader` from `firmware/`, `pppos_client` from what a fake `python3` prints,
   `persistence` from `firmware/`, and `http_request` from its copy, `.http_request-v9.9.9` in the output directory, which holds the
   fake example's `CMakeLists.txt`; the `idf.py` arguments of each, the records with `"container": null`, the markers,
   the "not for goldens" warning and the `built in` lines;

@@ -122,7 +122,7 @@ CI the test job installs mtools first, so there they run ([cicd.md](../cicd.md#t
 | `tests/test_cli.py` | `esp32tl run` and `esp32tl replay`: the arguments they refuse and the runs that cannot start (exit 2), in this process; runs of `hello_world`, `nmea_reader` and `gpio_echo` (the LilyGO profile's pull-down on RI) in a subprocess, a baud mismatch (exit 1) and Ctrl-C (exit 130), also before the runner connects, against a fake runner that never does; the profile's `--psram-mb`, against a fake runner that prints its arguments | The refusals nothing beyond the package; the runs the built images, the runner and the ROM ELF |
 | `tests/test_boards.py` | The board profiles esp32tl ships, the profile schema's refusals, the capability declaration and the requests it refuses | The package installed |
 | `tests/test_firmware_build.py` | `firmware/build.sh` run against a fake `docker` and a fake `idf.py` that record how they were called; the `requires_docker` marker | Neither Docker nor ESP-IDF; milliseconds |
-| `tests/test_firmware_images.py` | The `hello_world`, `nmea_reader`, `gpio_echo`, `sdspi`, `sd_remount`, `nvs_reader`, `persistence`, `pppos_client` and `http_request` images as `make firmware` built them: target `esp32`, bootloader at `0x1000`, partition table at `0x8000`, app at `0x10000`, the ELF; `nmea_reader`'s UART settings, `gpio_echo`'s pins, `sdspi`'s SD card pins and `http_request`'s default Wi-Fi SSID and passphrase in their `sdkconfig` | The built images |
+| `tests/test_firmware_images.py` | The `hello_world`, `nmea_reader`, `gpio_echo`, `sdspi`, `sd_remount`, `nvs_reader`, `persistence`, `modem_recovery`, `pppos_client` and `http_request` images as `make firmware` built them: target `esp32`, bootloader at `0x1000`, partition table at `0x8000`, app at `0x10000`, the ELF; `nmea_reader`'s UART settings, `gpio_echo`'s pins, `sdspi`'s SD card pins and `http_request`'s default Wi-Fi SSID and passphrase in their `sdkconfig` | The built images |
 | `tests/test_flash.py` | Partition tables, NVS value validation, blobs above 64 KiB, UTF-8 page boundaries and CRCs, real generator, pre-boot overrides and errors | Python dependencies only |
 | `tests/test_nvs_reader.py` | Firmware reads all NVS value types through ESP-IDF | The built `nvs_reader` image, runner and ROM ELF |
 | `tests/test_power.py` | `persistence` through `esp_restart()`, `board.reset()` and a power cycle: reset causes, NVS, RTC and RAM counts, the card's lines, `board.boots`, `board.now` while off, the errors of the power calls, the build's files unchanged | The built `persistence` image, runner and ROM ELF; mtools for the two tests with a card (`requires_mtools`) |
@@ -163,7 +163,7 @@ the runs of `tests/test_cli.py`, the `pytester` tests of `tests/test_gnss_fixtur
 `test_hello_world_fails_on_an_image_that_prints_something_else`,
 and the backend's `esp32sim: <build> holds no ESP-IDF build: no flasher_args.json` from
 `tests/test_hello_world.py`, `tests/test_nmea_reader.py`, `tests/test_nmea_reader_model.py`,
-`tests/test_gpio_echo.py`, `tests/test_sdspi.py`, `tests/test_sd_remount.py`, `tests/test_nvs_reader.py`, `tests/test_power.py`,
+`tests/test_gpio_echo.py`, `tests/test_modem_recovery.py`, `tests/test_sdspi.py`, `tests/test_sd_remount.py`, `tests/test_nvs_reader.py`, `tests/test_power.py`,
 `tests/test_http_request.py`, `tests/test_determinism.py` and
 `test_a_replay_reaches_nmea_reader_on_the_gnss_route`.
 `tests/test_firmware_images.py` also fails
@@ -183,6 +183,9 @@ ownership without an emulator or network. `tests/test_modem_fixture.py` runs `fi
 `lilygo-t-a7670g-r2`, including two byte-for-byte identical UART taps, and the modem through `board.reset()` and a power cycle. Build it with
 `firmware/build.sh modem_at`; `make firmware` and `make test` include it. It uses only the runner,
 the ROM and its firmware image at test time; PPP and host network services are not involved.
+`tests/test_modem_recovery.py` runs `firmware/modem_recovery` with the simulated network, through
+`esp_modem` and PPP: the recovery of a hung modem, with its pulses read from `lines.events()`. Build
+it with `firmware/build.sh modem_recovery`.
 
 ## Determinism
 

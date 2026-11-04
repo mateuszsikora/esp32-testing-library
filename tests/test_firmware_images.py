@@ -173,6 +173,18 @@ def test_persistence_has_a_writable_nvs_partition_where_its_boots_are_counted() 
     assert all(f.offset != nvs.offset for f in app.flash_files)
 
 
+def test_modem_recovery_has_the_classic_layout_and_ppp() -> None:
+    app = idf_app("modem_recovery")
+    build = FIRMWARE / "modem_recovery" / "build"
+    assert app.target == "esp32"
+    assert [(f.offset, Path(f.file_path).relative_to(build)) for f in app.flash_files] == [
+        (0x1000, Path("bootloader/bootloader.bin")),
+        (0x8000, Path("partition_table/partition-table.bin")),
+        (0x10000, Path("modem_recovery.bin")),
+    ]
+    assert app.sdkconfig["LWIP_PPP_SUPPORT"] is True
+
+
 def test_pppos_client_has_the_classic_layout_and_lilygo_route() -> None:
     app = idf_app("pppos_client")
     build = FIRMWARE / "pppos_client" / "build"

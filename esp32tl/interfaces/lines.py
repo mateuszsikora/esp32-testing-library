@@ -261,22 +261,24 @@ class Lines(Interface):
         owner: str,
         *,
         output: str,
-        watch: str,
-        driven: Callable[[int, int | None], None],
+        watch: Mapping[str, Callable[[int, int | None], None]],
         latency: int,
     ) -> None:
-        """Give a model one output and the firmware changes of one input, before power-on.
+        """Give a model one output and the firmware changes of each line in `watch`, before
+        power-on.
 
         Lines stays the GPIO owner on BoardLink. A test cannot also drive the model's output.
         Callbacks run outside the lock, so a response may enqueue a model_drive.
         """
-        pin, observed = self._pin(output), self._pin(watch)
+        pin = self._pin(output)
+        observers = {self._pin(line): driven for line, driven in watch.items()}
         with self._lock:
             self._unowned(pin)
             if pin in self._driving:
                 raise SourceError(f"{output} is driven by the test already")
             self._owners[pin] = owner
-            self._observers.setdefault(observed, []).append(driven)
+            for observed, driven in observers.items():
+                self._observers.setdefault(observed, []).append(driven)
             self._latency = latency if self._latency is None else min(latency, self._latency)
 
     def model_drive(self, owner: str, line: str, t: int, level: int) -> None:

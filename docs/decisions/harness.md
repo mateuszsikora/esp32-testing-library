@@ -1678,6 +1678,27 @@ given. The default operator's numeric code is `26000`, which matches the model's
 **Rejected:** a default such as 2000-01-01, because no source for this modem
 gives it; `00101` as the default code, because it would not match the IMSI.
 
+## A hung modem keeps its commands, and RESET restarts it while power_enable stays observed
+
+Status: decided (#128)
+
+`modem.hang(pwrkey=)` stops answers, data and RI, keeps every AT command with an empty response,
+and ends data mode for the model so that the parser sees what the firmware sends next. The test
+chooses whether PWRKEY still works, because no document says what PWRKEY does to a hung modem. A
+RESET pulse, active high at the pad with SIMCom's 2 s minimum as its threshold, restarts a running
+modem in command mode, and does nothing to one that is off. The pulse is judged at release, as
+PWRKEY's is; no document gives the state during a pulse, and the modem goes on as it was.
+`modem.restarts` records what ended each run, at the instant it did, so `supply` has a meaning and
+a start from off is no restart.
+
+`lines.board.power_enable` (GPIO 12) stays an observed line with no effect on the modem.
+
+**Rejected:** modelling GPIO 12's power gating, because a recovery can be validated without it and
+it would have to invent what the gate does; LilyGO's 2600 ms as the threshold, because it is a
+firmware's delay, not the document's minimum, and a tick-based delay can end nearly a tick early;
+recording a restart at each start, because a modem's first start is no restart and a loss of supply
+would have no entry until PWRKEY started it again.
+
 ## The modem data peer and realistic escape timing wait for network integration
 
 Status: superseded (#30)

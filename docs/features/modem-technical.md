@@ -41,12 +41,13 @@ as a snapshot through `model().data_received`.
 
 ## Schema
 
-The model reads PWRKEY's `active`, `on_ms` and `off_ms` fields from the
-[profile schema](board-profiles-technical.md#pulse-timing-on-a-line). The
-[modem guide](modem-user.md#pwrkey-and-reporting) documents the LilyGO thresholds and their
-hardware sources.
+The model reads PWRKEY's `active`, `on_ms` and `off_ms` fields and RESET's `active` and `pulse_ms`
+from the [profile schema](board-profiles-technical.md#pulse-timing-on-a-line). The
+modem guide documents [PWRKEY's](modem-user.md#pwrkey-and-reporting) and
+[RESET's](modem-user.md#a-hung-modem-and-reset) LilyGO thresholds and their hardware sources.
 No protocol or recording-format version changes: UART bytes and GPIO input use version 1.
 
+`Restart` is frozen: `at: Duration`, `cause`: `"reset"`, `"pwrkey"`, `"supply"` or `"test"`.
 `Command` is frozen: `at: Duration`, `text: str`, `response: bytes`, `fallback: bool`. The JSON
 report converts time to `t_ns` and the reply to `response` text, replacing non-ASCII bytes in
 JSON. The `Command.response` and tap retain the original bytes. The modem identity replies
@@ -55,8 +56,9 @@ operator is `ESP32TL`, numeric `26000`, access technology 7.
 
 ## Interfaces
 
-`Lines.attach(owner, output, watch, driven, latency)` reserves the model's output and observes a
-firmware-driven input. It refuses an output already driven by the test or claimed by a model.
+`Lines.attach(owner, output, watch, latency)` reserves the model's output and observes firmware-driven
+inputs: `watch` maps each line's name to its callback, `modem.pwrkey` to `Modem.driven`, and
+`modem.reset`, when the profile names it, to `Modem.reset_driven`. It refuses an output already driven by the test or claimed by a model.
 `Lines` remains the sole link interface owning GPIOs; it calls observers outside its lock.
 `model_drive` queues RI through `Lines.inputs`. `quiet_until` bounds the next turn by the
 earliest pending RI change; only changes due at that turn go to the runner. A newer power change
@@ -69,7 +71,16 @@ lines visible to the test, but direct drive/release of RI is refused.
 
 PWRKEY starts timing on its active edge and compares the elapsed time on the inactive edge or
 output disable. It takes the on/off threshold from the current power state and changes RI one
-latency later. A lost supply prevents PWRKEY from restarting the modem. Power transitions clear
+latency later. A lost supply prevents PWRKEY from restarting the modem. `Modem.reset_driven` times
+RESET the same way against `pulse_ms`, and on a powered modem calls `_set_power(t + LATENCY_NS,
+True, "reset")`. `_set_power` appends a `Restart` when the modem was powered and `t` is after 0,
+clears `hung` and sets `_pwrkey_works` again.
+
+`hang` sets `hung` and `_pwrkey_works`, forgets a PWRKEY pulse in progress when PWRKEY stops working,
+and calls `_end_data`, so the parser is in command mode whatever the firmware sends next, and
+`Internet.stop` ends PPP and its TCP sessions with no output. In `_command`, a hung modem appends
+the `Command` with an empty response and returns nothing. PPP bytes the firmware goes on sending
+are noise in the command line, as for any loss of data mode. Power transitions clear
 partial commands, echo, registration query modes, the operator format, data mode and pulse state.
 Signal, coverage, clock and operator survive a power cycle; functionality resets to 1.
 
@@ -92,6 +103,8 @@ the immediate escape recognizer. See [network internals](network-technical.md).
 - The refusals of `clock`, `clock_not_set` and `operator`, verbatim in
   [the guide](modem-user.md#clock-and-operator): they come from the model's method, which
   `_tell` calls on a new model before giving it to the route, so a refused first call selects none.
+- `modem.hang: the modem is off` (`SourceError`), `modem.hang: pwrkey is 1, not True or False`
+  (`TypeError`).
 - `uart.modem has its source already: one per test`: replay and model are mutually exclusive.
 - `uart.modem has no modem model: select it before board.power_on()`: a property was read before
   model selection or on a replay.
@@ -101,7 +114,8 @@ the immediate escape recognizer. See [network internals](network-technical.md).
 ## Tests
 
 `tests/test_modem_model.py` checks every required command, fallbacks, ignored noise, chunking and
-answer timestamps, the clock's time, zone and refusals, the operator's formats and refusals, escape and data handoff, signal mapping, registration, power loss, profile
+answer timestamps, the clock's time, zone and refusals, the operator's formats and refusals, a
+hung modem, RESET's threshold and polarity, `restarts`, escape and data handoff, signal mapping, registration, power loss, profile
 pulse timing, RI ownership, taps and unbounded command history, and a real `BoardLink` exchange.
 `tests/test_modem_fixture.py` runs `modem_at` on the LilyGO profile, checks physical PWRKEY and
 RI, starts powered, off and after restored supply, changes signal/registration/power on the
@@ -109,7 +123,8 @@ test's clock, keeps the modem on through `board.reset()` and off after a power c
 firmware's PWRKEY pulse (and `tests/test_modem_model.py` keeps the board's supply and the test's
 `lose_power()` apart), reads the operator's code and a right, a wrong and an unset clock through
 the firmware, compares two complete taps byte for byte, and checks missing-route and late-source
-errors. `tests/test_boards.py` checks timing validation. The validation firmware and tests have
+errors. `tests/test_modem_recovery.py` runs `firmware/modem_recovery` through `esp_modem` and PPP, and
+recovers a hung modem with and without PWRKEY. `tests/test_boards.py` checks timing validation. The validation firmware and tests have
 no network dependency.
 
 ## See also

@@ -88,23 +88,24 @@ The slot starts empty; inserting an image enables the runner's SPI card model. S
 ### LilyGO control lines and simulation limits
 
 These names are accepted by the `lines` fixture, for example `lines.level("modem.reset")`
-observes the firmware's output on GPIO 5. New entries declare neither pulls nor pulse timings.
+observes the firmware's output on GPIO 5. Of the new entries, only `modem.reset` declares a pulse
+timing, and none a pull.
 
 | Line | GPIO | Role | Effect in esp32sim |
 |---|---|---|---|
 | `modem.pwrkey` | 4 | Modem power key | With the modem model selected, firmware pulses change modem power state using the thresholds below |
 | `modem.ri` | 33 | Modem ring indication | Board pull-down; the selected modem model drives RI and reserves it against test drives |
 | `modem.dtr` | 25 | Modem DTR | Observational only; no modem sleep/wake effect |
-| `modem.reset` | 5 | Modem reset | Observational only; no reset of modem state |
+| `modem.reset` | 5 | Modem reset | With the modem model selected, a firmware pulse restarts a running modem, using the threshold below; [the modem guide](modem-user.md#a-hung-modem-and-reset) says what it does |
 | `gnss.wake` | 19 | L76K wake/standby control | Observational only; no gating of GNSS messages or fix state |
 | `gnss.pps` | 23 | L76K pulse-per-second output | Named GPIO only; no model-generated PPS pulses |
-| `board.power_enable` | 12 | Peripheral supply enable | Observational only; no gating of the modem, GNSS or SD slot |
+| `board.power_enable` | 12 | Peripheral supply enable | Observational only; no gating of the modem, GNSS or SD slot; a recovery that pulses it changes nothing on the modem |
 
 Observational lines still support `lines.drive`, `lines.release`, `lines.level` and `lines.events`
 through the generic GPIO interface. Tests can supply PPS transitions explicitly; naming the pin
 does not create a pulse generator. The GNSS and modem models and an inserted SD image operate
 without firmware asserting these additional controls. This cannot validate the real board's
-power-up, sleep or reset sequence.
+power-up or sleep sequence, or its reset sequence beyond the pulse the model checks.
 
 `board.power_enable` (GPIO 12), `modem.reset` (GPIO 5), the slot's MISO (GPIO 2) and MOSI
 (GPIO 15) are strapping pins. esp32sim reads the strapping from a fixed value, not from the pins'
@@ -122,8 +123,10 @@ records the sources and discrepancies.
 
 The LilyGO PWRKEY entry carries `active = 1`, `on_ms = 50`, `off_ms = 2500`. These are model
 acceptance thresholds at the ESP32 pad, distinct from firmware's nominal delays. The
-[modem guide](modem-user.md#pwrkey-and-reporting) explains their sources and limits. Plain integer
-line entries and untimed `{ pin, pull }` tables continue to work for other lines.
+[modem guide](modem-user.md#pwrkey-and-reporting) explains their sources and limits. The RESET
+entry carries `active = 1`, `pulse_ms = 2000`: a pulse of at least that length, judged at its
+release ([sources](modem-user.md#a-hung-modem-and-reset)). Plain integer line entries and untimed
+`{ pin, pull }` tables continue to work for other lines.
 
 ## Choosing a profile
 

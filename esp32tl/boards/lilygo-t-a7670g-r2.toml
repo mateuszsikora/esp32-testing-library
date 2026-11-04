@@ -25,9 +25,10 @@ baud = 9600
 # ESP32 pad polarity from LilyGO; model thresholds from SIMCom (see modem-user.md).
 pwrkey = { pin = 4, active = 1, on_ms = 50, off_ms = 2500 }
 ri = { pin = 33, pull = "down" }   # pulled down on the board: docs/stage0-findings.md, gap 6
-# Named GPIOs only: no modeled sleep or reset effects, no assumed pulls or pulse timings.
+# A named GPIO only: no modeled sleep effect, no assumed pull or pulse timing.
 dtr = 25
-reset = 5
+# ESP32 pad polarity from LilyGO; the model's threshold is SIMCom's minimum (see modem-user.md).
+reset = { pin = 5, active = 1, pulse_ms = 2000 }
 
 [lines.gnss]
 wake = 19                 # receiver wake/standby control; no modeled effect

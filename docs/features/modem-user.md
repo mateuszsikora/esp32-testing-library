@@ -11,8 +11,8 @@ at the call. Merely requesting `modem` on a profile with that route does not ski
 
 Select the model with its first call before `board.power_on()`. Merely requesting `modem` leaves
 its UART silent; `modem.replay(path)` selects a recording instead. The LilyGO profile has the
-modem's route: UART1, TX GPIO 26, RX GPIO 27, 115200 baud, PWRKEY GPIO 4 and RI GPIO 33; its
-DTR and reset lines are named GPIOs without a model effect
+modem's route: UART1, TX GPIO 26, RX GPIO 27, 115200 baud, PWRKEY GPIO 4, RESET GPIO 5 and RI
+GPIO 33; its DTR line is a named GPIO without a model effect
 ([control lines](board-profiles-user.md#lilygo-control-lines-and-simulation-limits)). The devkit
 profile has no modem route.
 
@@ -52,7 +52,9 @@ board power-on instead starts it off, for firmware that boots it with PWRKEY.
 | `clock_not_set(reads=...)` | `AT+CCLK?` tells `reads`, running on from this call, with no zone; `reads` is required |
 | `clock_set_by_network()` | The same as `clock()`: the world's time, zone `+00` |
 | `operator(name="ESP32TL", numeric="26000", short=None, act=7)` | What `AT+COPS?` names; `short=None` is `name` |
-| `powered`, `registered`, `data_mode` | Current model state; reading does not select a model |
+| `hang(pwrkey=True)` | The modem stops answering ([below](#a-hung-modem-and-reset)); `pwrkey=False`: PWRKEY does nothing either |
+| `powered`, `registered`, `data_mode`, `hung` | Current model state; reading does not select a model |
+| `restarts` | Each time a run of the modem ended, as `Restart(at, cause)`, oldest first ([below](#a-hung-modem-and-reset)) |
 | `commands` | Every complete AT command while powered, as `Command(at, text, response, fallback)`; `at` is a `Duration` |
 
 Registration changes affect the next query; there are no unsolicited registration notifications.
@@ -148,6 +150,52 @@ A call that cannot hold raises and, as the first call, selects no model:
 - `modem.operator: name is '', not text for quotes` (`ValueError`), and the same for `short`, for
   anything but non-empty text without a `"`;
 - `modem.operator: act is True, not a whole number` (`ValueError`).
+
+## A hung modem and RESET
+
+```python
+modem.hang(pwrkey=False)
+assert modem.hung
+```
+
+A hung modem answers nothing and passes no data, sends no `NO CARRIER`, and keeps RI high. Data
+mode ends for the model, as with any loss: `data_mode` reads false, and with `modem.network()` PPP
+and its TCP sessions end at the hang, publishing MQTT Wills once. The AT commands the firmware
+sends stay in `commands`, with an empty `response`, and the report shows them as `(no answer)`.
+`hang` raises `SourceError: modem.hang: the modem is off` on a modem that is off, and `TypeError`
+for a `pwrkey` that is not `True` or `False`.
+
+`hang(pwrkey=True)` leaves PWRKEY working: an off pulse switches the modem off, and the next on
+pulse starts it, no longer hung. `hang(pwrkey=False)` ignores PWRKEY until RESET or a loss of
+supply. Any restart ends the hang: a RESET pulse, an off pulse where PWRKEY works, `lose_power()`,
+`board.power_off()`, `modem.power_off()` and `modem.power_on()`.
+
+`modem.reset` is active high at the ESP32 pad, with a threshold of 2000 ms. SIMCom's
+[Hardware Design V1.03](https://files.waveshare.com/wiki/A7670E-Cat-1-GNSS-HAT/A7672X_A7670X_Series_Hardware_Design_V1.03.pdf),
+section 3.2.3 and table 12, gives RESET active low at the module, 2 s minimum and 2.5 s typical;
+LilyGO drives it [`MODEM_RESET_LEVEL HIGH`](https://github.com/Xinyuan-LilyGO/LilyGO-T-A76XX/blob/63af963038e93c91baf39d89a3a736d6bc26ff13/examples/ATdebug/utilities.h#L99-L105)
+for [2600 ms](https://github.com/Xinyuan-LilyGO/LilyGO-T-A76XX/blob/63af963038e93c91baf39d89a3a736d6bc26ff13/examples/ATdebug/ATdebug.ino#L79-L85).
+The pulse is judged at its release, as PWRKEY's is, and restarts a running modem in command mode,
+with echo, query modes and the operator format at their power-on values. A shorter pulse does
+nothing, and RESET on a modem that is off does nothing. RI stays high through a restart.
+
+`lines.board.power_enable` (GPIO 12) stays an observed line: driving it has no effect on the
+modem. A firmware's recovery can pulse it, and a test can check the pulses with `lines.events()`.
+`firmware/modem_recovery` [validates](validation-firmware-user.md#modem_recovery) a procedure on
+this model: PWRKEY power-off unless RI reads low; GPIO 12 low for 1 s and back up; RESET high for
+2.6 s, then low; 10 s later a PWRKEY power-on. With `hang(pwrkey=True)` PWRKEY recovers the modem
+and RESET finds it off. With `hang(pwrkey=False)` RESET recovers it and the later short pulse
+changes nothing.
+
+No source says what PWRKEY does to a hung modem, or what state a modem is in during a RESET pulse.
+These are the model's assumptions: PWRKEY works unless the test says otherwise, and a modem goes on
+as it was until the pulse's release.
+
+`restarts` holds one `Restart(at, cause)` for each time a run of the modem ended, at the instant it
+did. `cause` is `"reset"` (a RESET pulse), `"pwrkey"` (an off pulse), `"supply"` (`lose_power()` or
+the board's supply going) or `"test"` (`modem.power_off()`, or `modem.power_on()` on a running
+modem). Starting a modem that is off is no restart, and nor is a call before the board's first
+instant, which says how the modem starts. A PWRKEY recovery, off then on, is one entry.
 
 ## PWRKEY and reporting
 

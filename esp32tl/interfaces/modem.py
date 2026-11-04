@@ -12,7 +12,7 @@ from esp32tl.interfaces.uart import Uart
 from esp32tl.link.boardlink import Wire
 from esp32tl.net import Internet
 from esp32tl.report import RunLog, board_time
-from esp32tl.sources.model.modem import LATENCY_NS, NO_OFFSET, Command
+from esp32tl.sources.model.modem import LATENCY_NS, NO_OFFSET, Command, Restart
 from esp32tl.sources.model.modem import Modem as ModemModel
 from esp32tl.units import Duration
 
@@ -95,6 +95,11 @@ class Modem(Uart):
             f"operator(name={name!r}, numeric={numeric!r}, short={short!r}, act={act!r})",
         )
 
+    def hang(self, *, pwrkey: bool = True) -> None:
+        """Stop answering, passing data and moving RI until a restart; with `pwrkey` False,
+        PWRKEY does nothing either, until RESET or a loss of supply."""
+        self._tell(lambda model: model.hang(pwrkey=pwrkey), f"hang(pwrkey={pwrkey!r})")
+
     def lose_registration(self) -> None:
         """Remove coverage and end data mode silently; queries report status 0."""
         self._tell(ModemModel.lose_registration, "lose_registration()")
@@ -135,6 +140,16 @@ class Modem(Uart):
         return self.model().data_mode
 
     @property
+    def hung(self) -> bool:
+        """Whether the selected model is hung."""
+        return self.model().hung
+
+    @property
+    def restarts(self) -> tuple[Restart, ...]:
+        """Each time a run of the selected model ended, with what ended it."""
+        return self.model().restarts
+
+    @property
     def commands(self) -> list[Command]:
         """Every completed AT command and reply, as a snapshot."""
         return self.model().commands
@@ -153,7 +168,8 @@ class Modem(Uart):
         if not isinstance(self.source, ModemModel):
             return []
         commands = ["modem AT commands:"] + [
-            f"  {board_time(c.at.ns)}  {c.text!r}" + (" (fallback OK)" if c.fallback else "")
+            f"  {board_time(c.at.ns)}  {c.text!r}"
+            + (" (fallback OK)" if c.fallback else "" if c.response else " (no answer)")
             for c in self.commands
         ]
         if isinstance(self.source.data, Internet):
@@ -173,8 +189,11 @@ class Modem(Uart):
                 f"{self.name}: the modem model needs pwrkey pulse timing and ri in the profile"
             )
         # Apply and validate the first call without touching the lines on failure.
-        model = ModemModel(self._now, pwrkey=key, world=self._world)
+        model = ModemModel(self._now, pwrkey=key, reset=self._pins.get("reset"), world=self._world)
         call(model)
+        watch = {"modem.pwrkey": model.driven}
+        if "reset" in self._pins:
+            watch["modem.reset"] = model.reset_driven
         self._give(
             model,
             "model",
@@ -183,8 +202,7 @@ class Modem(Uart):
             prepare=lambda: self._lines.attach(
                 self.name,
                 output="modem.ri",
-                watch="modem.pwrkey",
-                driven=model.driven,
+                watch=watch,
                 latency=LATENCY_NS,
             ),
         )

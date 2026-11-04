@@ -9,8 +9,10 @@ import threading
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from typing import Literal
 
 from esp32tl.boards import Line
+from esp32tl.interfaces import SourceError
 from esp32tl.interfaces.uart import Source
 from esp32tl.link.boardlink import Output
 from esp32tl.net import Internet
@@ -42,12 +44,22 @@ class Command:
     fallback: bool = False
 
 
+@dataclass(frozen=True)
+class Restart:
+    """A run of the modem that ended at `at`, by `cause`: a RESET pulse, which starts the next at
+    once; a PWRKEY pulse that switched it off; its supply going; or a power call of the test's."""
+
+    at: Duration
+    cause: Literal["reset", "pwrkey", "supply", "test"]
+
+
 class Modem:
     """An initially powered, registered modem with -73 dBm signal and echo off.
 
     `power` receives (time in ns, powered) whenever RI should change. A firmware-triggered
-    change answers after LATENCY_NS; a test's change is at its current instant. `pwrkey` holds
-    the profile's pulse timing. `data` receives the data phase, never a host serial port.
+    change answers after LATENCY_NS; a test's change is at its current instant. `pwrkey` and
+    `reset` hold the profile's pulse timing. `data` receives the data phase, never a host serial
+    port.
     """
 
     def __init__(
@@ -55,6 +67,7 @@ class Modem:
         now: Callable[[], int],
         *,
         pwrkey: Line | None = None,
+        reset: Line | None = None,
         power: Callable[[int, bool], None] = lambda t, powered: None,
         data: Source | None = None,
         world: Callable[[], datetime] = lambda: DEFAULT_UTC,
@@ -65,10 +78,15 @@ class Modem:
         self._power = power
         self._key = pwrkey
         self._pressed: int | None = None
+        self._reset = reset
+        self._reset_pressed: int | None = None
         self._supply = True
         # The board's supply, which the modem is on: apart from the test's `lose_power`.
         self._board = True
         self.powered = True
+        self.hung = False
+        self._pwrkey_works = True
+        self._restarts: list[Restart] = []
         self.registered = True
         self._coverage = True
         self._function = 1
@@ -110,6 +128,12 @@ class Modem:
         """Data-mode payloads received so far, as a snapshot."""
         with self._lock:
             return list(self._data_received)
+
+    @property
+    def restarts(self) -> tuple[Restart, ...]:
+        """Each time a run of the modem ended, with what ended it."""
+        with self._lock:
+            return tuple(self._restarts)
 
     def signal(self, *, dbm: float) -> None:
         """Set the measured signal strength in dBm for subsequent CSQ queries."""
@@ -165,6 +189,20 @@ class Modem:
         with self._lock:
             self._operator, self._act = (name, short, numeric), act
 
+    def hang(self, *, pwrkey: bool = True) -> None:
+        """Stop answering, passing data and moving RI until a restart; with `pwrkey` False,
+        PWRKEY does nothing either, until RESET or a loss of supply."""
+        if not isinstance(pwrkey, bool):
+            raise TypeError(f"modem.hang: pwrkey is {pwrkey!r}, not True or False")
+        with self._lock:
+            if not self.powered:
+                raise SourceError("modem.hang: the modem is off")
+            self.hung = True
+            self._pwrkey_works = pwrkey
+            if not pwrkey:
+                self._pressed = None
+            self._end_data()
+
     def lose_registration(self) -> None:
         """Remove coverage and end data mode silently; queries report status 0."""
         with self._lock:
@@ -180,7 +218,7 @@ class Modem:
     def power_off(self) -> None:
         """Switch off with the supply still available for PWRKEY."""
         with self._lock:
-            self._set_power(self._now(), False)
+            self._set_power(self._now(), False, "test")
 
     def power_on(self) -> None:
         """Restore supply and start the modem in command mode; with the board's supply off it
@@ -188,13 +226,13 @@ class Modem:
         with self._lock:
             self._supply = True
             if self._board:
-                self._set_power(self._now(), True)
+                self._set_power(self._now(), True, "test")
 
     def lose_power(self) -> None:
         """Remove supply, silence the UART and prevent PWRKEY from starting the modem."""
         with self._lock:
             self._supply = False
-            self._set_power(self._now(), False)
+            self._set_power(self._now(), False, "supply")
 
     def restore_power(self) -> None:
         """Restore the supply; a PWRKEY pulse (or power_on) still has to start the modem."""
@@ -208,10 +246,17 @@ class Modem:
         with self._lock:
             self._board = on
             if not on and self.powered:
-                self._set_power(self._now(), False)
+                self._set_power(self._now(), False, "supply")
 
-    def _set_power(self, t: int, powered: bool) -> None:
+    def _set_power(
+        self, t: int, powered: bool, cause: Literal["reset", "pwrkey", "supply", "test"]
+    ) -> None:
+        # What the test says before the board's first instant is how the modem starts.
+        if self.powered and t > 0:
+            self._restarts.append(Restart(Duration(t), cause))
         self.powered = powered
+        self.hung = False
+        self._pwrkey_works = True
         self.registered = powered and self._coverage
         self._function = 1
         self._end_data(t)
@@ -221,14 +266,14 @@ class Modem:
         self._line.clear()
         self._pluses.clear()
         self._overflow = self._skip_lf = False
-        self._pressed = None
+        self._pressed = self._reset_pressed = None
         self._power(t, powered)
 
     def driven(self, t: int, level: int | None) -> None:
         """PWRKEY at the ESP32 pad: toggle power on release of a sufficiently long pulse."""
         with self._lock:
             key = self._key
-            if key is None or key.active is None:
+            if key is None or key.active is None or not self._pwrkey_works:
                 return
             if level == key.active:
                 if self._pressed is None:
@@ -243,7 +288,23 @@ class Modem:
                 and self._supply
                 and self._board
             ):
-                self._set_power(t + LATENCY_NS, not self.powered)
+                self._set_power(t + LATENCY_NS, not self.powered, "pwrkey")
+
+    def reset_driven(self, t: int, level: int | None) -> None:
+        """RESET at the ESP32 pad: restart a running modem on release of a sufficiently long
+        pulse. A modem that is off stays off."""
+        with self._lock:
+            line = self._reset
+            if line is None or line.active is None:
+                return
+            if level == line.active:
+                if self._reset_pressed is None:
+                    self._reset_pressed = t
+                return
+            since, self._reset_pressed = self._reset_pressed, None
+            assert line.pulse_ms is not None
+            if since is not None and t - since >= line.pulse_ms * 1_000_000 and self.powered:
+                self._set_power(t + LATENCY_NS, True, "reset")
 
     def receive(self, t: int, data: bytes) -> Iterable[Output]:
         """Consume UART bytes at their chunk timestamp and return timed replies."""
@@ -316,6 +377,9 @@ class Modem:
         command = raw.decode("ascii", errors="replace")
         upper = command.upper()
         if not upper.startswith("AT"):
+            return b""
+        if self.hung:
+            self._commands.append(Command(Duration(t), command, b""))
             return b""
         echo = raw + b"\r\n" if self._echo else b""
         answer = ANSWERS.get(upper, "")

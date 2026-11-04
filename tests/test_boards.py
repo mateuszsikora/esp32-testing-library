@@ -62,7 +62,7 @@ def test_the_lilygo_profile_holds_the_specification_and_lilygo_s_documentation()
                     "pwrkey": {"pin": 4, "active": 1, "on_ms": 50, "off_ms": 2500},
                     "ri": {"pin": 33, "pull": "down"},
                     "dtr": 25,
-                    "reset": 5,
+                    "reset": {"pin": 5, "active": 1, "pulse_ms": 2000},
                 },
                 "gnss": {"wake": 19, "pps": 23},
                 "board": {"power_enable": 12},
@@ -80,7 +80,7 @@ def test_the_lilygo_profile_holds_the_specification_and_lilygo_s_documentation()
             "pwrkey": Line(4, active=1, on_ms=50, off_ms=2500),
             "ri": Line(33, "down"),
             "dtr": Line(25),
-            "reset": Line(5),
+            "reset": Line(5, active=1, pulse_ms=2000),
         },
         "gnss": {"wake": Line(19), "pps": Line(23)},
         "board": {"power_enable": Line(12)},
@@ -383,10 +383,18 @@ def test_a_declaration_that_breaks_the_schema_is_refused(
     assert str(error.value) == message
 
 
+TIMING = "pulse timing needs active with on_ms and off_ms, or active with pulse_ms"
+
+
 @pytest.mark.parametrize(
     ("timing", "message"),
     [
-        ("active = 1", "pulse timing needs active, on_ms and off_ms together"),
+        ("active = 1", TIMING),
+        ("active = 1, on_ms = 100", TIMING),
+        ("pulse_ms = 2000", TIMING),
+        ("active = 1, on_ms = 100, off_ms = 3000, pulse_ms = 2000", TIMING),
+        ("active = 1, pulse_ms = 0", "pulse_ms: 0 is out of range"),
+        ("active = 1, pulse_ms = 2.0", "pulse_ms: 2.0 is not an integer"),
         ("active = 2, on_ms = 100, off_ms = 3000", "active: 2 is out of range"),
         ("active = true, on_ms = 100, off_ms = 3000", "active: True is not an integer"),
         ("active = 1, on_ms = 0, off_ms = 3000", "on_ms: 0 is out of range"),
