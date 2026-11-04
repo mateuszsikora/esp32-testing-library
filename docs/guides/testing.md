@@ -122,7 +122,7 @@ CI the test job installs mtools first, so there they run ([cicd.md](../cicd.md#t
 | `tests/test_cli.py` | `esp32tl run` and `esp32tl replay`: the arguments they refuse and the runs that cannot start (exit 2), in this process; runs of `hello_world`, `nmea_reader` and `gpio_echo` (the LilyGO profile's pull-down on RI) in a subprocess, a baud mismatch (exit 1) and Ctrl-C (exit 130), also before the runner connects, against a fake runner that never does; the profile's `--psram-mb`, against a fake runner that prints its arguments | The refusals nothing beyond the package; the runs the built images, the runner and the ROM ELF |
 | `tests/test_boards.py` | The board profiles esp32tl ships, the profile schema's refusals, the capability declaration and the requests it refuses | The package installed |
 | `tests/test_firmware_build.py` | `firmware/build.sh` run against a fake `docker` and a fake `idf.py` that record how they were called; the `requires_docker` marker | Neither Docker nor ESP-IDF; milliseconds |
-| `tests/test_firmware_images.py` | The `hello_world`, `nmea_reader`, `gpio_echo`, `sdspi`, `sd_remount`, `nvs_reader`, `persistence`, `pppos_client` and `http_request` images as `make firmware` built them: target `esp32`, bootloader at `0x1000`, partition table at `0x8000`, app at `0x10000`, the ELF; `nmea_reader`'s UART settings, `gpio_echo`'s pins, `sdspi`'s SD card pins and `http_request`'s default Wi-Fi SSID and passphrase in their `sdkconfig` | The built images |
+| `tests/test_firmware_images.py` | The `hello_world`, `nmea_reader`, `gpio_echo`, `sdspi`, `sd_remount`, `nvs_reader`, `persistence`, `pppos_client`, `mqtt_session` and `http_request` images as `make firmware` built them: target `esp32`, bootloader at `0x1000`, partition table at `0x8000`, app at `0x10000`, the ELF; `nmea_reader`'s UART settings, `gpio_echo`'s pins, `sdspi`'s SD card pins and `http_request`'s default Wi-Fi SSID and passphrase in their `sdkconfig` | The built images |
 | `tests/test_flash.py` | Partition tables, NVS value validation, blobs above 64 KiB, UTF-8 page boundaries and CRCs, real generator, pre-boot overrides and errors | Python dependencies only |
 | `tests/test_nvs_reader.py` | Firmware reads all NVS value types through ESP-IDF | The built `nvs_reader` image, runner and ROM ELF |
 | `tests/test_power.py` | `persistence` through `esp_restart()`, `board.reset()` and a power cycle: reset causes, NVS, RTC and RAM counts, the card's lines, `board.boots`, `board.now` while off, the errors of the power calls, the build's files unchanged | The built `persistence` image, runner and ROM ELF; mtools for the two tests with a card (`requires_mtools`) |
@@ -132,6 +132,8 @@ CI the test job installs mtools first, so there they run ([cicd.md](../cicd.md#t
 | `tests/test_http_request.py` | ESP-IDF's unmodified `http_request` through the `wifi` fixture: joining the test's access point and fetching from its HTTP server, joining again after `wifi.access_point_off()` and `wifi.access_point_on()` and after `board.reset()` and a power cycle, no access point, a wrong password that gets no lease, the report and `board.properties()["wifi"]`; through `pytester`, `wifi` refused after `board.power_on()` | The built `http_request` image, the runner and the ROM ELF |
 | `tests/test_sd_faults.py` | The SD card's fault rules without the emulator: `sd_card.fail`, `sd_card.delay` and the clears in the link's turns at the test's instants, what they refuse, the runner's `sd_op` into the rules' hits, the report and the properties, a spent rule, a run that has ended, rules in order with the card's changes, and an `sd_fault` from another interface or one the runner would refuse | Nothing beyond the package; milliseconds |
 | `tests/test_wifi.py` | The `Wifi` interface without the emulator: the runner's `--wifi` and `--wifi-nearby` arguments, the parameters it refuses, one access point and networks around that are not it, a backend that refuses the access point, the `wifi_ap` inputs at the instants of the switches | Nothing beyond the package; milliseconds |
+| `tests/test_net_mqtt_sessions.py` | The broker's sessions by client ID in raw MQTT packets, exact bytes, flags and packet IDs: Session Present, the queue, DUP and original packet IDs on redelivery, CleanSession=1, a refused CONNECT, `session`, `forget_session`, `deliveries` and `next_delivery` | Nothing beyond the package; milliseconds |
+| `tests/test_mqtt_session.py` | esp-mqtt with CleanSession=0 in `mqtt_session`: Session Present, a QoS 1 message published while offline, one redelivered with DUP after `broker.disconnect` in the same instant | The built `mqtt_session` image, the runner and the ROM ELF |
 | `tests/test_net_ethernet.py`, `tests/test_net_http.py` | The network behind the access point with handmade Ethernet frames and independent checksums: DHCP, ARP, IPv4 to the services, other ethertypes dropped; the HTTP server's side of a connection without TCP: what it serves, keeps and refuses | Nothing beyond the package; milliseconds |
 | `tests/test_hello_world.py` | ESP-IDF's `hello_world`, unmodified, powered on and printing `Hello world!` through the backend | The built image, the runner and the ROM ELF |
 | `tests/test_nmea_reader.py` | The first milestone (plan M1): `nmea_reader` fed the generated GNSS recordings, and sentences it must ignore, through `gnss.replay` before `board.power_on()`: `test_reports_a_fix`, `test_fix_follows_the_recording`, `test_time_is_emulated` (ten fixes in under five wall seconds, and `board.now` just past 10 s) | The built image, the runner and the ROM ELF |
@@ -164,7 +166,7 @@ the runs of `tests/test_cli.py`, the `pytester` tests of `tests/test_gnss_fixtur
 and the backend's `esp32sim: <build> holds no ESP-IDF build: no flasher_args.json` from
 `tests/test_hello_world.py`, `tests/test_nmea_reader.py`, `tests/test_nmea_reader_model.py`,
 `tests/test_gpio_echo.py`, `tests/test_sdspi.py`, `tests/test_sd_remount.py`, `tests/test_nvs_reader.py`, `tests/test_power.py`,
-`tests/test_http_request.py`, `tests/test_determinism.py` and
+`tests/test_http_request.py`, `tests/test_mqtt_session.py`, `tests/test_determinism.py` and
 `test_a_replay_reaches_nmea_reader_on_the_gnss_route`.
 `tests/test_firmware_images.py` also fails
 on an image built in a container other than the one `firmware/build.sh` pins
@@ -300,7 +302,9 @@ network behind the Wi-Fi access point (Ethernet, ARP, DHCP) and the HTTP server,
 `tests/test_wifi.py` for the `wifi` interface. `tests/test_net_mqtt_failures.py` drives held,
 released and delayed PUBACKs over PPP/TCP with both plain and TLS clients, then disconnects before
 ACK and retransmits after reconnect. Another stream and NTP remain usable on the same PPP link.
-These tests need no firmware; the existing firmware examples publish QoS 0.
+`tests/test_net_mqtt_sessions.py` checks the broker's stored sessions with raw packets. These tests
+need no firmware; `tests/test_mqtt_session.py` needs `firmware/mqtt_session/build/`, the runner and
+ROM ELF, and runs esp-mqtt against those sessions.
 `tests/test_pppos_client.py` needs `firmware/pppos_client/build/`, the runner and ROM ELF; it
 validates plain MQTT in both directions. `tests/test_http_request.py` needs
 `firmware/http_request/build/`, the runner and ROM ELF; it validates joining over WPA2, DHCP, DNS

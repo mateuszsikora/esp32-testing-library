@@ -137,7 +137,9 @@ the test made, stamped at its instant or at the turn's `now`, whichever is later
   each state transition is logged once, and resuming never replays unanswered datagrams.
 - `mqtt.py`: incremental MQTT 3.1.1 parsing (up to 1 MiB per packet); CONNECT, QoS 0/1 PUBLISH,
   PUBACK, SUBSCRIBE/SUBACK, UNSUBSCRIBE/UNSUBACK, PING and DISCONNECT. Retained state belongs to
-  the test's broker; subscriptions belong to a connection. Empty clean-session client IDs are
+  the test's broker; session state (`_State`: subscriptions, the queue, the packet IDs in use and
+  what was sent unacknowledged) to a client ID, in `Broker._states`, and `_Session` is one
+  connection. Empty clean-session client IDs are
   replaced before Will construction and takeover checks with `esp32tl-anonymous-<n>`. A per-broker
   counter and the accepted-client history prevent reuse or collision with an earlier accepted ID;
   an ID supplied only in a rejected attempt may still be allocated.
@@ -156,14 +158,30 @@ the test made, stamped at its instant or at the turn's `now`, whichever is later
   Present zero and close before allocating an anonymous ID, installing a Will, setting keepalive
   or taking over an existing client. The parser stops processing buffered packets on closure.
   Only accepted connections install session state and enter `clients`; replacing the policy
-  affects subsequent CONNECTs only. Network reset retains both histories and the policy.
+  affects subsequent CONNECTs only. `session_present` is worked out before the attempt is appended:
+  CleanSession=0 and a stored `_State` that is not `clean`. A clean one exists only while its
+  connection does, and the takeover ends it. After the takeover, CleanSession=1 replaces any
+  `_State`, and CleanSession=0 makes one if there is none; `_connect` sets `state.connection`, writes
+  CONNACK and, with Session Present, calls `_resume`: every entry of `state.sent`, in insertion
+  order with DUP set, then `state.queue` through `deliver`, each message leaving the queue only
+  once it has gone. `_route` calls `Broker._offer` for each `_State`: a connected one goes to
+  `deliver`, a stored one queues a message by the message's QoS or logs dropping it, and a clean
+  one closed while routing takes nothing. `deliver` allocates from `state.packet_id`, skipping
+  `state.unacked`, and `_publish` appends a `Delivery` and fills `state.sent` before it writes.
+  When 65535 IDs are in use `_packet_id` logs `mqtt: <id> exhausted packet identifiers` and closes;
+  `deliver` returns `False` and the message stays queued for a stored session. PUBACK discards the
+  ID, pops `state.sent` and stamps that `Delivery`'s `acknowledged_at`; a connection already closed
+  ignores its data, PUBACK included, in `on_data`. `_end` clears `state.connection` and removes a
+  `clean` state from `_states`. `session` copies a `_State` into a frozen `SessionState`;
+  `forget_session` refuses a connected one. Network reset retains both histories and the policy.
   Will is published once with the time
   of disconnect, not the time of CONNECT. A replacement client ID closes the old connection.
-  Session persistence and QoS 2 publication are unsupported. Credentials are observed by default;
+  QoS 2 publication is unsupported. Credentials are observed by default;
   authentication is performed only by an installed test policy, with no external auth service.
   `next_message` and `next_connection` capture the length of their respective append-only
   histories at construction; `message` and `connected` delegate to them, and
-  `connection_attempt` captures `connection_attempts` the same way. Matching uses append order,
+  `connection_attempt` captures `connection_attempts` the same way, and `next_delivery` captures
+  `deliveries`, filtering as `next_message` does. Matching uses append order,
   not timestamps, and polling does not change the captured offset. `find_message` scans
   from index zero with the same topic/payload filters; `find_connection` reads the first CONNECT.
   These are immediate queries returning records or `None`. Every MQTT condition, the live
@@ -188,8 +206,8 @@ the test made, stamped at its instant or at the turn's `now`, whichever is later
   clears pending handles before closing the stream, so closure through TLS cannot resurrect
   them. `Broker.disconnect(client_id)` uses the same loss/Will path as transport loss and
   never resets the network. An emitted handle survives closure as an emission record, not
-  evidence of device processing. Histories and retained messages survive reconnect; incoming
-  ACK state, outgoing unacknowledged deliveries and subscriptions do not.
+  evidence of device processing. Histories, retained messages and stored sessions survive
+  reconnect; incoming ACK state does not.
 - `tls.py`: a generated RSA-2048 CA and server certificate, SHA-256 signatures, DNS/IP subject
   alternative names, CA key usage and server extended key usage. Optional `server_not_before`
   and `server_not_after` apply only to the leaf certificate; the CA retains its fixed validity.
@@ -214,7 +232,7 @@ the test made, stamped at its instant or at the turn's `now`, whichever is later
   No deterministic replacement for OpenSSL randomness is attempted (#68).
 
 These are a lossless test network, not a general Internet stack. TCP congestion control, packet
-reassembly, retransmission, persistent MQTT sessions, MQTT QoS 2 and bridging to host services
+reassembly, retransmission, MQTT QoS 2 and bridging to host services
 are outside this implementation, and so are IPv6, VLANs, DHCP for more than one device, lease
 expiry and HTTP keep-alive or chunked bodies. Protocol references:
 [PPP](https://www.rfc-editor.org/rfc/rfc1661),
@@ -288,11 +306,19 @@ session-ending path. These tests use the clock directly to check exact deadlines
 timestamps.
 `tests/test_net_mqtt_failures.py` negotiates PPP and drives real TCP frames with independent
 checksums, both with plaintext and a verifying MemoryBIO TLS client. It receives without ACK,
-releases and delays PUBACK, disconnects before ACK, then reconnects and retransmits with DUP.
-During the outage another stream still answers PING and a new NTP request traverses the same
-open PPP session. It also checks that CONNACK has no restored session and subscriptions are
-gone. These are protocol-client tests; the existing firmware examples publish QoS 0 and cannot
-validate firmware processing of a QoS 1 PUBACK.
+releases and delays PUBACK, disconnects before ACK, then reconnects with CleanSession=0 and
+retransmits with DUP. During the outage another stream still answers PING and a new NTP request
+traverses the same open PPP session. It also checks that CONNACK has Session Present, that the
+routed copies come again in order and that the subscription is restored. These are
+protocol-client tests.
+`tests/test_net_mqtt_sessions.py` asserts the broker's sessions in exact bytes, flags and packet
+IDs from raw packets: Session Present, the queue and its order, QoS 0 dropped, DUP and original IDs
+on redelivery before the queue, CleanSession=1 at CONNECT and at disconnection, takeover, a refused
+CONNECT and the policy leaving a session alone, a `Publication` staying with its connection, retained
+messages and RETAIN, running out of packet IDs, `session`, `forget_session`, `deliveries` and
+`next_delivery`. `tests/test_mqtt_session.py` runs esp-mqtt: Session Present, a QoS 1 message
+published while offline, and one redelivered with DUP after a `broker.disconnect` in the same
+instant as the publication, with both PUBACKs in the transcript.
 NTP tests cover silence from startup, idempotent transitions and resumed replies using elapsed
 world time. A MemoryBIO handshake with verification disabled solely for certificate inspection
 checks independent leaf validity dates, UTC normalization and a signature from the unchanged CA;
@@ -337,4 +363,6 @@ NTP and TLS behind the access point; the layer tests cover them without a link o
   [behind the access point it speaks Ethernet, ARP and
   DHCP](../decisions/harness.md#behind-the-access-point-the-network-speaks-ethernet-arp-and-dhcp),
   [an HTTP server on port 80 of every
-  network](../decisions/harness.md#an-http-server-answers-on-port-80-of-every-simulated-network).
+  network](../decisions/harness.md#an-http-server-answers-on-port-80-of-every-simulated-network),
+  [the broker keeps a session by client ID when CleanSession is
+  0](../decisions/harness.md#the-broker-keeps-a-session-by-client-id-when-cleansession-is-0).

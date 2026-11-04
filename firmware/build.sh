@@ -28,7 +28,7 @@ set -eu
 
 IDF_VERSION=v5.3.6
 CONTAINER=espressif/idf:$IDF_VERSION@sha256:cee52f0c4fdaf088992a7a739f5993154e95cf1d3ab61c24f5b40e6d56a3a070
-IMAGES="hello_world nmea_reader gpio_echo sdspi sd_remount modem_at nvs_reader pppos_client http_request persistence"
+IMAGES="hello_world nmea_reader gpio_echo sdspi sd_remount modem_at nvs_reader pppos_client mqtt_session http_request persistence"
 family=firmware
 if [ "${1:-}" = --examples ]; then
 	shift
@@ -74,6 +74,7 @@ project_of() {
 	gpio_echo) echo "$PWD/firmware/gpio_echo" ;;
 	modem_at) echo "$PWD/firmware/modem_at" ;;
 	pppos_client) python3 firmware/pppos_client/prepare.py "$out" ;;
+	mqtt_session) echo "$PWD/firmware/mqtt_session" ;;
 	nvs_reader) echo "$PWD/firmware/nvs_reader" ;;
 	persistence) echo "$PWD/firmware/persistence" ;;
 	sd_remount) echo "$PWD/firmware/sd_remount" ;;

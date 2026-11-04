@@ -756,6 +756,21 @@ that references to its number keep their meaning.
 
 ## Simulated network
 
+- **181.** The broker keeps a session by client ID when CleanSession is 0: a resumed CONNECT says Session Present 1 and sends
+    what is unacknowledged with DUP and the original packet IDs, in the order first sent, then the queue in order, with DUP 0;
+    an offline client's QoS 1 messages are queued and its QoS 0 dropped. CleanSession=1 discards the state at CONNECT and at
+    disconnection, and says Session Present 0, as does a refused CONNECT, which leaves a stored session alone.
+    `tests/test_net_mqtt_sessions.py::test_first_clean_session_zero_has_no_session_and_the_second_does`,
+    `tests/test_net_mqtt_sessions.py::test_offline_qos1_is_queued_in_order_and_qos0_is_dropped`,
+    `tests/test_net_mqtt_sessions.py::test_unacknowledged_go_again_with_dup_and_their_ids_before_the_queue`,
+    `tests/test_net_mqtt_sessions.py::test_clean_session_discards_a_stored_session_at_connect`,
+    `tests/test_net_mqtt_sessions.py::test_clean_session_discards_its_state_at_disconnection`,
+    `tests/test_net_mqtt_sessions.py::test_a_refused_connect_says_no_session_and_touches_none`
+- **182.** esp-mqtt with CleanSession=0 sees Session Present, receives a QoS 1 message published while it was offline, and one
+    redelivered with DUP after `broker.disconnect` in the same instant as its publication, whose first PUBACK counts for nothing.
+    `tests/test_mqtt_session.py::test_first_connection_finds_no_session_and_the_next_one_does`,
+    `tests/test_mqtt_session.py::test_receives_a_qos1_message_published_while_it_was_offline`,
+    `tests/test_mqtt_session.py::test_a_message_whose_puback_is_lost_comes_again_with_dup`
 - **90.** PPP delivers IPv4 only after both sides acknowledge LCP and IPCP; acknowledgments must match
     the pending request, including after termination and renegotiation. Framing survives arbitrary byte splits, escaping and compressed headers.
     `tests/test_net_ppp.py::test_ack_must_match_request_and_ipcp_waits_for_lcp`,

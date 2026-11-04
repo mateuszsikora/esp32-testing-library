@@ -1814,15 +1814,54 @@ notifications wait for a firmware test that needs them.
 
 ## The MQTT service implements ephemeral sessions and QoS zero and one
 
-Status: decided (#30, #104)
+Status: decided (#30, #104), sessions amended (#130)
 
-The broker grants subscription QoS at most 1 and refuses QoS 2 publications. Subscriptions and
-unacknowledged deliveries belong to a connection and are not restored on reconnect; CONNACK
-reports no session present. Retained publications belong to the test's broker and survive modem
-power cycles. Credentials are recorded without authentication by default; #103 adds an optional
-test-controlled CONNECT policy (see below). The current validation example uses clean sessions.
-Persistent session restoration still waits for a test that needs it, rather than pretending to
-have full broker persistence.
+The broker grants subscription QoS at most 1 and refuses QoS 2 publications. Retained publications
+belong to the test's broker and survive modem power cycles. Credentials are recorded without
+authentication by default; #103 adds an optional test-controlled CONNECT policy (see below). Since
+#130 [the broker keeps a session by client ID when CleanSession is
+0](#the-broker-keeps-a-session-by-client-id-when-cleansession-is-0): sessions are no longer
+ephemeral for such a client.
+
+## The broker keeps a session by client ID when CleanSession is 0
+
+Status: decided (#130)
+
+Firmware that connects with CleanSession=0, subscribes on every connection and receives non-retained
+QoS 1 messages could not be tested: Session Present was always 0, and a QoS 1 message for an offline
+client was lost. Session state moves out of the connection and is keyed by client ID: subscriptions,
+the QoS 1 messages waiting for the client, and what was sent to it unacknowledged. A CleanSession=0
+CONNECT resumes it, first what is unacknowledged with DUP and the original packet IDs (MQTT-4.4.0-1,
+MQTT-3.3.1-1), then the queue in order (MQTT-4.6.0-6). CleanSession=1 discards it at CONNECT and at
+disconnection (MQTT-3.1.2-6). MQTT 3.1.1 writes its re-send order as a rule for the client
+(MQTT-4.6.0-1); MQTT-4.6.0-6 applies the same rules to a server delivering an Ordered Topic.
+
+The queue has no limit, because the specification sets none, and no session expires. A QoS 0
+message for an offline client is dropped: MQTT-3.1.2-5 lets a server store it and does not ask it
+to. The test is what ends a stored session, with a CleanSession=1 CONNECT or `forget_session`,
+which refuses a connected client instead of disconnecting it, so that one call does not do two
+things. The rule for a queued message goes by the message's QoS, as MQTT-3.1.2-5 does: a QoS 1
+message that matches a QoS 0 subscription is stored, and goes at QoS 0.
+
+A stored session outlives the network's reset, since the broker is the test's and not the link's,
+like its retained messages and histories. `subscribed()` keeps speaking of active clients, because
+tests use it to wait until a client is ready to receive. An incoming `Publication` keeps belonging
+to its connection: it is the test's control over one exchange on one stream, not state the client
+asked the broker to keep. `connection_policy` still runs before any state is installed or discarded,
+so that a refused CleanSession=1 CONNECT leaves a stored session alone.
+
+`deliveries`, `next_delivery` and `find_delivery` take the names, boundary and condition object of
+[the other event APIs](#mqtt-tls-http-and-dhcp-event-apis-name-history-queries-and-next-event-conditions-explicitly).
+A `Delivery` is mutable where the other records are frozen, because its `acknowledged_at` is learned
+later, and a test holding the record should see it. It belongs to one PUBLISH: a redelivery has its
+own, and the first keeps `None`.
+
+**Rejected:** keeping sessions ephemeral and having the test publish again after a reconnect,
+because the firmware's own handling of Session Present and DUP would then go unexercised, which is
+what such a test is for. Also rejected: a limit on the queue with a chosen overflow, which would be
+a number with no source; storing QoS 0 for an offline client, which the specification leaves open
+and nothing here needs; and bringing a pending `Publication` back with
+its session, because the client retransmits what it published, and a new handle says so truthfully.
 
 ## MQTT CONNECT policy runs before accepted session state is installed
 
@@ -1863,7 +1902,7 @@ and a second connection while the first reconnects. Existing firmware examples u
 **Rejected:** resetting the modem to simulate a broker fault, because it destroys the independent
 network path under test; using client ID plus packet ID as a permanent publication identity,
 because both can be reused; hiding duplicate receipts or treating PUBACK emission as exactly-once
-delivery. Persistent sessions remain unsupported, including when CleanSession is zero.
+delivery.
 
 ## TLS determinism compares explicit plaintext transcripts
 

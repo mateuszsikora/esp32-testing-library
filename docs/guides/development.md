@@ -27,7 +27,7 @@ That one command needs:
   and `tar` to download it.
 - Docker, for the first `make test`. The tests read the validation firmware, which `make test`
   builds when it is missing: it pulls the ESP-IDF image and builds `hello_world`, `nmea_reader`,
-  `gpio_echo`, `sdspi`, `sd_remount`, `modem_at`, `nvs_reader`, `pppos_client`, `http_request`, `persistence` and the projects in `examples/`, a few minutes. What the firmware build expects of Docker,
+  `gpio_echo`, `sdspi`, `sd_remount`, `modem_at`, `nvs_reader`, `pppos_client`, `mqtt_session`, `http_request`, `persistence` and the projects in `examples/`, a few minutes. What the firmware build expects of Docker,
   and how to build without it, is in
   [validation-firmware-user.md](../features/validation-firmware-user.md).
 
@@ -48,7 +48,7 @@ After `make setup` and `make firmware examples`, `.venv/bin/pytest` runs the tes
 | `make test-runner` | The runner's Rust unit tests, `cargo test --locked`, in `RUNNER_PROFILE` like `build-runner`; `RUNNER_PROFILE=dev` skips the fat-LTO link while iterating |
 | `make firmware` | Builds every validation image in the pinned ESP-IDF container, into `firmware/<image>/build/` |
 | `make examples` | Builds every project discovered at `examples/*/CMakeLists.txt` in the pinned ESP-IDF container, into `examples/<name>/build/` |
-| `make test` | Runs `make setup` and `make test-runner`, builds the validation images that are missing (`FIRMWARE_IMAGES`: `hello_world`, `nmea_reader`, `gpio_echo`, `sdspi`, `sd_remount`, `modem_at`, `nvs_reader`, `pppos_client`, `http_request` and `persistence`), builds missing examples, then runs `.venv/bin/pytest` on both suites |
+| `make test` | Runs `make setup` and `make test-runner`, builds the validation images that are missing (`FIRMWARE_IMAGES`: `hello_world`, `nmea_reader`, `gpio_echo`, `sdspi`, `sd_remount`, `modem_at`, `nvs_reader`, `pppos_client`, `mqtt_session`, `http_request` and `persistence`), builds missing examples, then runs `.venv/bin/pytest` on both suites |
 | `make determinism` | Runs `tests/test_determinism.py` twice through `scripts/check-determinism.py` and compares the two runs ([testing.md](testing.md#determinism)); builds the `nmea_reader`, `pppos_client` and `http_request` images when missing and `.venv` when it is missing or stale, but not the runner or the ROM ELF: run `make setup` first |
 | `make lint` | `ruff check`, `ruff format --check` and `mypy`; `cargo fmt --check` and `cargo clippy --locked --all-targets -- -D warnings` on the runner |
 | `make hooks` | Installs the pre-commit hooks ([Pre-commit hooks](#pre-commit-hooks)) |
@@ -237,9 +237,9 @@ Git ignores what the builds leave behind: `.venv/`, `.cache/` (the ROM ELF), `ru
 
 `cryptography>=42` is a direct runtime dependency: `esp32tl.net.tls.CertificateAuthority`
 generates per-test certificates. TLS itself uses standard-library `ssl`/MemoryBIO; no external
-broker or network daemon is needed. `make firmware` and `make test` include `pppos_client` and
-`http_request`; `make determinism` requires both images as well as `nmea_reader`. Its first build fetches the pinned
-esp-protocols source archive, verified by SHA-256, under `firmware/.esp-protocols-<commit>/`
+broker or network daemon is needed. `make firmware` and `make test` include `pppos_client`, `mqtt_session` and
+`http_request`; `make determinism` requires `pppos_client` and `http_request` as well as `nmea_reader`. The first build of `pppos_client` fetches the pinned
+esp-protocols source archive, and `mqtt_session` fetches the same archive into its own build directory, verified by SHA-256, under `firmware/.esp-protocols-<commit>/`
 (or `$FIRMWARE_OUT`). The preparation script uses Python's tarfile `data` extraction filter; the pinned ESP-IDF
 container supplies a Python with that filter.
 See [validation firmware](../features/validation-firmware-technical.md#pinned-esp-protocols-source).
