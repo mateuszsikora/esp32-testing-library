@@ -202,7 +202,7 @@ The `model` on `wifi` is esp32sim's access point (`--wifi`) with the harness's n
 | `BoardProfile` | frozen dataclass | `name`, `chip`, `flash_mb: int \| None`, `psram_mb: int \| None`, `uart: Mapping[str, UartRoute]`, `lines: Mapping[str, Mapping[str, Line]]`, `sd_card: SdCardRoute \| None = None`; property `interfaces`: `["console", "uart.<role>", ..., "lines.<role>", ..., "sd_card", "wifi"]`, in file order, `sd_card` only with a slot, `wifi` always: every classic ESP32 has it. Not hashable: its mappings are not |
 | `UartRoute` | frozen dataclass | `port`, `tx`, `rx`, `baud` |
 | `SdCardRoute` | frozen dataclass | `sclk`, `mosi`, `miso`, `cs` |
-| `Line` | frozen dataclass | `pin`, `pull: "up" \| "down" \| None = None`, `active`, `on_ms`, `off_ms` (each `int \| None = None`); [pulse schema](#pulse-timing-on-a-line) |
+| `Line` | frozen dataclass | `pin`, `pull: "up" \| "down" \| None = None`, `active`, `on_ms`, `off_ms`, `pulse_ms` (each `int \| None = None`); [pulse schema](#pulse-timing-on-a-line) |
 | `capabilities.declared()` | function, cached | The shipped declaration: backend name, then kind, then `Capability` |
 | `capabilities.load(path)` | function | A declaration in any file |
 | `Capability` | frozen dataclass | `sources: tuple[str, ...] = ()`, `tap: bool = False` |

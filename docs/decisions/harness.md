@@ -1861,12 +1861,16 @@ firmware: with esp_modem modem-v1.4.1 and ESP-IDF v5.3.6, `NO CARRIER` in data m
 and the firmware learns from its own timeout, while a Terminate-Request gives
 `IP_EVENT_PPP_LOST_IP` 6 s later. `lose_registration()` stays silent. The command parser did not
 change: `+++` without an answer in command mode costs `esp_modem` 5 s, and its `\n` before `AT`
-clears PPP bytes left on the line.
+clears PPP bytes left on the line. A command stuck to those bytes, with no newline between, is lost
+whole, with no answer and no entry in `commands`. No source says what a real modem does, so this is
+the model's assumption, and no firmware here needs otherwise: `modem_recovery` always leaves data
+mode through `esp_modem`, which writes the newline.
 
 **Rejected:** a `NO CARRIER` from `lose_registration()` too, because no source says a modem sends one
 and existing tests rely on the silence; a Terminate-Request by default, because it would make every
 dropped call prompt and hide the firmware's timeout path; waiting for the Terminate-Ack before
-`NO CARRIER`, because no document gives that order and the firmware's behaviour does not depend on it.
+`NO CARRIER`, because no document gives that order and the firmware's behaviour does not depend on it;
+looking for `AT` at the end of a noisy line, because PPP's binary bytes could then match as a command.
 
 ## The MQTT service implements ephemeral sessions and QoS zero and one
 

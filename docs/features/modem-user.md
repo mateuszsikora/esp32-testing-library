@@ -149,7 +149,7 @@ A call that cannot hold raises and, as the first call, selects no model:
   timezone` (`TypeError`);
 - `modem.operator: numeric is '2600', not 5 or 6 digits` (`ValueError`);
 - `modem.operator: name is '', not text for quotes` (`ValueError`), and the same for `short`, for
-  anything but non-empty text without a `"`;
+  anything but non-empty printable text without a `"`: a line ending in it would end the answer;
 - `modem.operator: act is True, not a whole number` (`ValueError`).
 
 ## A hung modem and RESET
@@ -162,7 +162,9 @@ assert modem.hung
 A hung modem answers nothing and passes no data, sends no `NO CARRIER`, and keeps RI high. Data
 mode ends for the model, as with any loss: `data_mode` reads false, and with `modem.network()` PPP
 and its TCP sessions end at the hang, publishing MQTT Wills once. The AT commands the firmware
-sends stay in `commands`, with an empty `response`, and the report shows them as `(no answer)`.
+sends stay in `commands`, with an empty `response`, and the report shows them as `(no answer)`, but
+for one stuck to PPP bytes, which [is lost whole](#a-dropped-data-call). An answer the model gave
+before the hang is already on its way, and still arrives within its 1 ms.
 `hang` raises `SourceError: modem.hang: the modem is off` on a modem that is off, and `TypeError`
 for a `pwrkey` that is not `True` or `False`.
 
@@ -213,11 +215,17 @@ that instant, as with any loss, and a new dial negotiates again. `lose_registrat
 section 5.5) just before `NO CARRIER`. No vendor document says whether a carrier or SIMCom sends one,
 and none says when a real modem sends `NO CARRIER` unprompted: both are the test's choice, the first
 off by default. What the firmware sends after the call has ended, such as lwIP's Terminate-Ack, is
-noise on the command line, which the next newline clears.
+noise on the command line, which the next newline clears. A command sent before that newline is part
+of the noise and lost whole: it gets no answer and is not in `commands`, on a hung modem or a healthy
+one, and the next `AT` gets its `OK`. `esp_modem` writes that newline when it leaves data mode, and
+`esp_modem_sync` alone does not. No source says what a real modem does here: this is the model's
+assumption.
 
 It raises `SourceError: modem.drop_call: the modem is not in data mode` with no call to drop, as on
 a hung modem; `SourceError: modem.drop_call: terminate needs modem.network(): no PPP` when
-`terminate=True` has no network; and `TypeError` for a `terminate` that is not `True` or `False`.
+`terminate=True` has no network; `SourceError: modem.drop_call: terminate needs LCP open: it is not
+yet` when PPP has not opened LCP, right after `CONNECT`; and `TypeError` for a `terminate` that is not
+`True` or `False`. A refused call leaves the data call as it was.
 
 What the firmware sees, read in `esp_modem` modem-v1.4.1 and in lwIP and esp_netif of ESP-IDF v5.3.6,
 and shown by `firmware/modem_recovery` on that pin:

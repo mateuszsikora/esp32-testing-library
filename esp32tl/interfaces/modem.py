@@ -196,8 +196,14 @@ class Modem(Uart):
             raise SourceError(
                 f"{self.name}: the modem model needs pwrkey pulse timing and ri in the profile"
             )
+        reset = self._pins.get("reset")
+        if reset is not None and reset.active is not None and reset.pulse_ms is None:
+            raise SourceError(
+                f"{self.name}: the modem model needs reset with pulse_ms in the profile,"
+                " not on_ms and off_ms"
+            )
         # Apply and validate the first call without touching the lines on failure.
-        model = ModemModel(self._now, pwrkey=key, reset=self._pins.get("reset"), world=self._world)
+        model = ModemModel(self._now, pwrkey=key, reset=reset, world=self._world)
         call(model)
         watch = {"modem.pwrkey": model.driven}
         if "reset" in self._pins:

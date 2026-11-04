@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from esp32tl import boards, recording
+from esp32tl.boards import Line
 from esp32tl.interfaces import SourceError
 from esp32tl.interfaces.lines import Lines
 from esp32tl.interfaces.modem import Modem as ModemRoute
@@ -710,6 +711,8 @@ def test_an_unregistered_modem_names_no_operator() -> None:
         ({"numeric": 26000}, "modem.operator: numeric is 26000, not 5 or 6 digits"),
         ({"name": ""}, "modem.operator: name is '', not text for quotes"),
         ({"short": 'a"b'}, "modem.operator: short is 'a\"b', not text for quotes"),
+        ({"name": "X\r\nOK"}, "modem.operator: name is 'X\\r\\nOK', not text for quotes"),
+        ({"short": "X\n"}, "modem.operator: short is 'X\\n', not text for quotes"),
         ({"act": True}, "modem.operator: act is True, not a whole number"),
         ({"act": -1}, "modem.operator: act is -1, not a whole number"),
     ],
@@ -1066,3 +1069,61 @@ def test_a_hang_or_a_power_loss_takes_back_what_a_dropped_call_had_queued(
     modem.drop_call()
     getattr(modem, after)()
     assert list(model.poll(0)) == []
+
+
+def test_drop_call_refuses_a_terminate_before_lcp_is_open(tmp_path: Path) -> None:
+    modem, _, _ = route(tmp_path, [0])
+    network = modem.network()
+    model = modem.model()
+    reply(model, "ATD*99#")
+    assert not network.ppp.lcp_open
+    with pytest.raises(SourceError, match="terminate needs LCP open"):
+        modem.drop_call(terminate=True)
+    assert model.data_mode and network.active
+
+
+@pytest.mark.parametrize("hung", [False, True])
+def test_a_command_stuck_to_ppp_bytes_is_lost_whole(hung: bool) -> None:
+    model = Modem(lambda: 0)
+    if hung:
+        model.hang()
+    before = len(model.commands)
+    assert list(model.receive(0, b"\x7e\xff\x03PPP\x7eAT\r")) == []
+    assert len(model.commands) == before
+    # the terminator cleared the line: the next command is read
+    assert reply(model, "AT") == (b"" if hung else b"\r\nOK\r\n")
+    assert [c.text for c in model.commands] == ["AT"]
+
+
+def test_the_model_refuses_a_reset_line_with_two_thresholds(tmp_path: Path) -> None:
+    lines = Lines(LILYGO.name, LILYGO.lines, lambda: 0)
+    modem = ModemRoute(
+        "uart.modem",
+        Wire(tx=26, rx=27, baud=115200),
+        clock=recording.EMULATED,
+        directory=tmp_path,
+        now=lambda: 0,
+        lines=lines,
+        pins={**LILYGO.lines["modem"], "reset": Line(5, active=1, on_ms=50, off_ms=2500)},
+    )
+    with pytest.raises(SourceError, match="needs reset with pulse_ms in the profile"):
+        modem.power_on()
+    assert modem.source is None
+
+
+def test_a_reset_line_with_no_timing_is_only_observed(tmp_path: Path) -> None:
+    now = [0]
+    lines = Lines(LILYGO.name, LILYGO.lines, lambda: now[0])
+    modem = ModemRoute(
+        "uart.modem",
+        Wire(tx=26, rx=27, baud=115200),
+        clock=recording.EMULATED,
+        directory=tmp_path,
+        now=lambda: now[0],
+        lines=lines,
+        pins={**LILYGO.lines["modem"], "reset": Line(5)},
+    )
+    modem.hang()
+    lines.driven(seconds(1).ns, [(5, 1)], frozenset({5}))
+    lines.driven(seconds(4).ns, [(5, 0)], frozenset({5}))
+    assert modem.hung and not modem.restarts

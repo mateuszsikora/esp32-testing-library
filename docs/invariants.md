@@ -743,6 +743,9 @@ that references to its number keep their meaning.
     `IP_EVENT_PPP_LOST_IP` 6 s later, and of one without it from its own timeout, and redials on
     both, with the modem registered and not restarted.
     `tests/test_modem_recovery.py::test_redials_after_a_dropped_call`
+- **180.** A command stuck to bytes left on the command line is lost whole, with no answer and no
+    entry in the history, on a hung modem and a healthy one; the next newline clears the line.
+    `tests/test_modem_model.py::test_a_command_stuck_to_ppp_bytes_is_lost_whole`
 
 ## Flash contents
 

@@ -80,7 +80,9 @@ clears `hung` and sets `_pwrkey_works` again.
 and calls `_end_data`, so the parser is in command mode whatever the firmware sends next, and
 `Internet.stop` ends PPP and its TCP sessions with no output. In `_command`, a hung modem appends
 the `Command` with an empty response and returns nothing. PPP bytes the firmware goes on sending
-are noise in the command line, as for any loss of data mode. Power transitions clear
+are noise in the command line, as for any loss of data mode. `_command` sees that noise and an `AT`
+stuck to it as one line that does not start with `AT`, and neither answers nor records it; clearing
+`_line` in `_end_data` would not help, because the noise comes after it. Power transitions clear
 partial commands, echo, registration query modes, the operator format, data mode and pulse state.
 Signal, coverage, clock and operator survive a power cycle; functionality resets to 1.
 
@@ -110,8 +112,11 @@ after the hold returns, so `quiet_until` has no bound to give for it. `hang` and
 - The refusals of `clock`, `clock_not_set` and `operator`, verbatim in
   [the guide](modem-user.md#clock-and-operator): they come from the model's method, which
   `_tell` calls on a new model before giving it to the route, so a refused first call selects none.
+- `uart.modem: the modem model needs reset with pulse_ms in the profile, not on_ms and off_ms`: the
+  model times RESET against one threshold, and the schema also lets a line have two. A `reset` with
+  no timing is an observed line.
 - `modem.drop_call: the modem is not in data mode`, `modem.drop_call: terminate needs
-  modem.network(): no PPP` (`SourceError`), `modem.drop_call: terminate is 1, not True or False`
+  modem.network(): no PPP`, `modem.drop_call: terminate needs LCP open: it is not yet` (`SourceError`), `modem.drop_call: terminate is 1, not True or False`
   (`TypeError`).
 - `modem.hang: the modem is off` (`SourceError`), `modem.hang: pwrkey is 1, not True or False`
   (`TypeError`).

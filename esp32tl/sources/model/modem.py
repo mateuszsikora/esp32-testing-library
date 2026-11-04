@@ -184,7 +184,7 @@ class Modem:
             raise ValueError(f"modem.operator: numeric is {numeric!r}, not 5 or 6 digits")
         short = name if short is None else short
         for what, value in (("name", name), ("short", short)):
-            if not isinstance(value, str) or not value or '"' in value:
+            if not isinstance(value, str) or not value or not value.isprintable() or '"' in value:
                 raise ValueError(f"modem.operator: {what} is {value!r}, not text for quotes")
         if isinstance(act, bool) or not isinstance(act, int) or act < 0:
             raise ValueError(f"modem.operator: act is {act!r}, not a whole number")
@@ -218,6 +218,8 @@ class Modem:
             if terminate:
                 if not isinstance(self.data, Internet):
                     raise SourceError("modem.drop_call: terminate needs modem.network(): no PPP")
+                if not self.data.ppp.lcp_open:
+                    raise SourceError("modem.drop_call: terminate needs LCP open: it is not yet")
                 self._queued += self.data.terminate(t)
             self._end_data(t)
             self._queued.append((t + LATENCY_NS, b"\r\nNO CARRIER\r\n"))
