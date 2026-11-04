@@ -134,7 +134,7 @@ firmware's PWRKEY pulse (and `tests/test_modem_model.py` keeps the board's suppl
 `lose_power()` apart), reads the operator's code and a right, a wrong and an unset clock through
 the firmware, compares two complete taps byte for byte, and checks missing-route and late-source
 errors. `tests/test_modem_recovery.py` runs `firmware/modem_recovery` through `esp_modem` and PPP, and
-recovers a hung modem with and without PWRKEY, and redials after a dropped call on both paths. `tests/test_boards.py` checks timing validation. The validation firmware and tests have
+recovers a hung modem with and without PWRKEY, also one that hangs while it dials, and redials after a dropped call on both paths. `tests/test_boards.py` checks timing validation. The validation firmware and tests have
 no network dependency.
 
 ## See also

@@ -83,9 +83,15 @@ static void recover(void) {
 }
 
 static bool dial(void) {
-    xEventGroupClearBits(events, LOST_IP);
+    /* Leaving data mode posts no IP_EVENT_PPP_LOST_IP: the last address's bit may still be set. */
+    xEventGroupClearBits(events, GOT_IP | LOST_IP);
     if (esp_modem_set_mode(modem, ESP_MODEM_MODE_DATA) != ESP_OK) return false;
-    return xEventGroupWaitBits(events, GOT_IP, pdFALSE, pdTRUE, pdMS_TO_TICKS(30000)) & GOT_IP;
+    if (xEventGroupWaitBits(events, GOT_IP, pdFALSE, pdTRUE, pdMS_TO_TICKS(30000)) & GOT_IP) {
+        return true;
+    }
+    /* esp_modem stays in data mode until told, and would hand the next answer to PPP. */
+    esp_modem_set_mode(modem, ESP_MODEM_MODE_COMMAND);
+    return false;
 }
 
 void app_main(void) {

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.19)
-# Reuse pppos_client's checksum-verified esp_modem 1.4.1 download, in the writable build tree.
+# esp_modem 1.4.1 by pppos_client's checksum-verifying script, into the writable build tree.
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/dependencies")
 execute_process(

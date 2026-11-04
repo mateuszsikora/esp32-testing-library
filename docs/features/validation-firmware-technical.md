@@ -183,9 +183,13 @@ SIM7600 commands, UART1 on TX 26 and RX 27 without flow control and the APN `int
 `CMakeLists.txt` runs `firmware/pppos_client/prepare.py` with `dependencies/` in the build directory
 as the output, as `examples/position_tracker` does, and takes `esp_modem` from there, with
 `IDF_COMPONENT_MANAGER=0`; so `firmware/build.sh` is enough and the read-only `/project` stays
-unwritten. Its `sdkconfig.defaults` enables PPP. It has no firmware-specific Kconfig.
+unwritten; a build from scratch downloads the archive again, as `pppos_client`'s does, one copy per
+build tree. Its `sdkconfig.defaults` enables PPP. It has no firmware-specific Kconfig.
 
-`IP_EVENT` handling sets `GOT_IP` and `LOST_IP` bits. `wait_for_loss` ends after `SILENT_PROBES`,
+`IP_EVENT` handling sets `GOT_IP` and `LOST_IP` bits. `dial` clears both first: leaving data mode
+posts no `IP_EVENT_PPP_LOST_IP`, so the last address's `GOT_IP` may still be set. After 30 s with no
+address it calls `esp_modem_set_mode(..., ESP_MODEM_MODE_COMMAND)`, because `esp_modem` stays in data
+mode until told, refuses another dial and hands the next answer to PPP. `wait_for_loss` ends after `SILENT_PROBES`,
 10, requests without an answer; that is longer than lwIP's `FSM_DEFTIMEOUT`, 6 s, so
 `IP_EVENT_PPP_LOST_IP` is heard first when it comes. RI is read 20 ms after a pulse's end, as
 `modem_at` does, because the model's RI follows 1 ms after the release.

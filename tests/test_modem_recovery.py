@@ -28,7 +28,7 @@ def firmware_pulses(lines: Lines, name: str, since: Duration) -> list[tuple[int,
 def test_recovers_a_hung_modem(
     board: Esp32Sim, modem: Modem, lines: Lines, console: Console, pwrkey: bool
 ) -> None:
-    modem.network()
+    network = modem.network()
     board.power_on()
     board.wait_until(console.line("modem_recovery: connected"), within=seconds(60))
     assert modem.data_mode and modem.restarts == ()
@@ -55,8 +55,10 @@ def test_recovers_a_hung_modem(
     )
     assert not modem.hung and modem.powered and modem.registered
     assert [r.cause for r in modem.restarts] == (["pwrkey"] if pwrkey else ["reset"])
+    requests = network.ntp.requests
     board.wait_until(console.line("modem_recovery: connected"), within=seconds(60))
-    assert modem.data_mode and modem.registered
+    assert modem.data_mode and modem.registered and network.ppp.ipcp_open
+    board.wait_until(lambda: network.ntp.requests > requests, within=seconds(5))
 
     # the procedure's pulses, on the board's clock
     key = firmware_pulses(lines, "modem.pwrkey", hung_at)
@@ -72,6 +74,28 @@ def test_recovers_a_hung_modem(
     assert ms(99) <= key[3][1] - key[2][1] <= ms(101)
     assert key[0][1] < enable[0][1] < reset[0][1] < key[2][1] <= recovered.at
     assert modem.restarts[0].at == (key[1][1] if pwrkey else reset[1][1]) + ms(1)
+
+
+@pytest.mark.parametrize("pwrkey", [True, False])
+def test_recovers_a_modem_that_hangs_while_the_firmware_dials(
+    board: Esp32Sim, modem: Modem, console: Console, pwrkey: bool
+) -> None:
+    network = modem.network()
+    board.power_on()
+    board.wait_until(lambda: network.ppp.lcp_open, within=seconds(60))
+    assert not network.ppp.ipcp_open
+    modem.hang(pwrkey=pwrkey)
+
+    board.wait_until(console.line("modem_recovery: recovered RI=1"), within=seconds(120))
+    assert not modem.hung and modem.registered
+    board.wait_until(console.line("modem_recovery: connected"), within=seconds(60))
+    assert modem.data_mode and network.ppp.ipcp_open
+    requests = network.ntp.requests
+    board.wait_until(lambda: network.ntp.requests > requests, within=seconds(5))
+    # one recovery: the modem answers from then on, and the firmware does not restart it again
+    board.wait(seconds(30))
+    assert [r.cause for r in modem.restarts] == (["pwrkey"] if pwrkey else ["reset"])
+    assert len(console.lines("modem_recovery: hung")) == 1
 
 
 @pytest.mark.parametrize(
@@ -105,8 +129,8 @@ def test_redials_after_a_dropped_call(
     assert modem.registered
     requests = network.ntp.requests
     board.wait_until(console.line("modem_recovery: connected"), within=seconds(60))
+    assert modem.data_mode and modem.registered and network.ppp.ipcp_open
     board.wait_until(lambda: network.ntp.requests > requests, within=seconds(5))
-    assert modem.data_mode and modem.registered
 
     # nothing took the modem down: it answered every command, and did not restart
     assert not modem.restarts

@@ -74,7 +74,8 @@ If it does not, it prints `modem_recovery: hung RI=<level>` and runs the
 [recovery procedure](modem-user.md#a-hung-modem-and-reset): a nominal 3000 ms PWRKEY pulse unless
 RI reads low, then `modem_recovery: after PWRKEY RI=<level>`; GPIO 12 low for 1 s and back up; RESET
 high for 2600 ms; 10 s later a 100 ms PWRKEY pulse, then `modem_recovery: recovered RI=<level>`. It
-dials again. A dial that gets no `CONNECT` is followed by the same `AT`.
+dials again. A dial that gets no `CONNECT` is followed by the same `AT`, and so is one that gets no
+address within 30 s, once it has left data mode.
 
 On v5.3.6 a hung modem takes about 35 s from the last request to `modem_recovery: hung`:
 `esp_modem`'s `exit_data` waits for lwIP's Terminate-Requests to run out, 12 s here, then 2 s and

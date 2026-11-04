@@ -184,8 +184,8 @@ ownership without an emulator or network. `tests/test_modem_fixture.py` runs `fi
 `firmware/build.sh modem_at`; `make firmware` and `make test` include it. It uses only the runner,
 the ROM and its firmware image at test time; PPP and host network services are not involved.
 `tests/test_modem_recovery.py` runs `firmware/modem_recovery` with the simulated network, through
-`esp_modem` and PPP: the recovery of a hung modem, with its pulses read from `lines.events()`, and
-the dial after a dropped call, with and without a Terminate-Request. Build it with `firmware/build.sh modem_recovery`.
+`esp_modem` and PPP: the recovery of a hung modem, with its pulses read from `lines.events()`, also of
+one that hangs while the firmware dials, and the dial after a dropped call, with and without a Terminate-Request. Build it with `firmware/build.sh modem_recovery`.
 
 ## Determinism
 

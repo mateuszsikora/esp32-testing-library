@@ -725,7 +725,8 @@ that references to its number keep their meaning.
     `tests/test_modem_model.py::test_reset_is_active_high_at_the_pad`,
     `tests/test_modem_model.py::test_reset_of_a_modem_that_is_off_does_nothing`,
     `tests/test_modem_model.py::test_power_enable_has_no_effect_on_the_modem`,
-    `tests/test_modem_recovery.py::test_recovers_a_hung_modem`
+    `tests/test_modem_recovery.py::test_recovers_a_hung_modem`,
+    `tests/test_modem_recovery.py::test_recovers_a_modem_that_hangs_while_the_firmware_dials`
 - **177.** `modem.restarts` holds what ended each run of the modem, at the instant it did; starting a
     modem that is off is no restart, nor is a call before the board's first instant.
     `tests/test_modem_model.py::test_restarts_name_what_ended_each_run_and_a_start_is_no_restart`,
