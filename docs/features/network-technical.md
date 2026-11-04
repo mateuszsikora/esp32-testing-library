@@ -6,17 +6,19 @@ by `interfaces.modem.Modem.network()`, or the network behind the Wi-Fi access po
 returns its `Broker`. All callbacks execute during link turns or while the test holds the board.
 There are no sockets, worker threads or host-clock timers. `Internet` uses the current UART chunk's
 or Ethernet frame's timestamp inside receive callbacks and the held board time for test calls.
-Responses carry a 1,000,000 ns latency (`LATENCY_NS`); the modem starts PPP after CONNECT, so LCP
-follows the AT response. `poll` drains queued replies and evaluates broker keepalive and PUBACK
-deadlines; `quiet_until` bounds the next turn by the earliest of those deadlines.
+Responses carry a 1,000,000 ns latency (`LATENCY_NS`), the path's RTT when the test sets one; the
+modem starts PPP after CONNECT, so LCP follows the AT response. `poll` takes what has come up the
+path, evaluates broker keepalive and PUBACK deadlines and drains queued replies; `quiet_until`
+bounds the next turn by the earliest of those deadlines and the path's next datagram.
 
 ## The link
 
 `Internet(now, world, *, link="ppp")` takes `link`, `"ppp"` or `"ethernet"` (the `Link` type),
 and keeps it for its life. `_peer()` builds the link object from it: a `Ppp` whose `ended`
-callback resets TCP, or an `Ethernet` given the network's `Dhcp`. Both send through the same
-closure, which queues each frame or chunk at `now + LATENCY_NS`, and both hand IPv4 datagrams to
-`Network.receive`. `Internet.link` is that object; `Internet.ppp` and `Internet.ethernet` return it
+callback is `_link_ended`, which resets TCP and clears the path, or an `Ethernet` given the
+network's `Dhcp`. Both send through the same closure, which queues each frame or chunk of the link's
+own at `now + LATENCY_NS` and takes an IPv4 datagram down the path, and both hand IPv4 datagrams to
+`_uplink`, up the path to `Network.receive`. `Internet.link` is that object; `Internet.ppp` and `Internet.ethernet` return it
 when it is of their kind and raise `AttributeError` otherwise. The IP layer's MTU callback reads
 `Ppp.peer_mru` or `Ethernet.mtu` (1500).
 
@@ -26,8 +28,8 @@ for the transcript, and one `Dhcp`. Only `Ethernet` calls the `Dhcp`; a network 
 one that nothing asks.
 
 `start(t)` stops the network first, then marks it active and, for PPP only, starts LCP. `stop(at)`
-marks it inactive, resets TCP (`Network.reset`, which notifies every connection once), drops the
-queued replies and replaces the link with a fresh one from `_peer()`. The `Dhcp`, the services and
+marks it inactive, resets TCP (`Network.reset`, which notifies every connection once), clears the
+path, drops the queued replies and replaces the link with a fresh one from `_peer()`. The `Dhcp`, the services and
 the transcript are not replaced.
 
 Behind the access point, `Wifi` is the link's `Interface` whose `ethernet` property is true: the
@@ -35,6 +37,44 @@ Behind the access point, `Wifi` is the link's `Interface` whose `ethernet` prope
 returns as one `eth_rx` ([protocol](../protocol.md)). `Wifi.receive` and `Wifi.poll` return
 nothing while the network is missing or inactive. `Wifi.inputs` returns a `WifiAp` for each switch
 the test made, stamped at its instant or at the turn's `now`, whichever is later.
+
+## The path
+
+`Internet` holds a `_Direction` each way, `_up` and `_down`: a `delay`, a `rate` (`None` for no
+limit), a FIFO `queue` of `(leaves, data)`, and the times its line is free (`_free`) and its last
+datagram leaves (`_last`). `leaves(at, size)` starts a datagram at `max(at, _free)`, adds
+`ceil(size * 8e9 / rate.bit_s)` nanoseconds to `_free`, and returns
+`_last = max(_last, _free + delay)`, so that none overtakes another when `set_path` shortens the
+delay. `set_path` sets `_up.delay` to `(rtt - LATENCY_NS) // 2` and `_down.delay` to the rest. The
+two add up to `rtt` to the nanosecond, and at the default `_up.delay` is 0.
+
+Up: `_uplink`, the link's `on_ip`, queues the datagram with `_up.leaves` at `now()` and calls
+`_arrive(now)`, which pops every entry whose time has come and calls `Network.receive` with `_at`
+set to that entry's time, not the turn's. A datagram can come due before the turn that takes it: the
+runner's turn comes up to `latency` after the request, so with an RTT of 1.5 ms a datagram 0.25 ms up
+is taken up to 0.75 ms late, stamped as it should be. Its answer leaves at `t + rtt`, which is at or
+after that turn, because `rtt >= latency`: that is the floor, and rule 2 of the
+[protocol](../protocol.md#6-rules) is why the check refuses less. `receive` and `poll` call
+`_arrive` first; at the default it runs inside `link.receive`, at the chunk's own `t`, as if there
+were no path.
+
+Down: `Network`'s `send_ip` is `_downlink`, which notes the datagram's size in `_datagram` around
+`link.send_ip`. The link's `send` closure finds `_datagram` set, puts the framed bytes in `_down`
+with `_down.leaves`, and calls `_release`, which moves to `_out`, with their own stamps, those that
+leave within `LATENCY_NS` of `now()`. The framing and the link's checks (the MRU, the MTU, no station
+yet) happen when the datagram enters, and a dropped one uses none of the rate. What stays in `_down`
+can still be dropped by a reset, which matters at a large RTT: after the modem loses registration,
+nothing on the path reaches the firmware. At the default every datagram is released in the call that
+made it, so `receive` returns it stamped `t + LATENCY_NS`, in the order it was made.
+
+`quiet_until` is the minimum of the broker's and the two heads: one turn per datagram. Each head is
+past `now` after `poll`, since `_arrive` and `_release` took all up to `now` and `now + LATENCY_NS`,
+as `BoardLink._turn` requires. `latency()` stays `LATENCY_NS`: PPP control answers in 1 ms, and a
+larger promise would break rule 2. The runner does not change. On the modem's route it paces bytes
+as it does (protocol, rule 5), and the rate is on top of that.
+
+Nothing here reads the host's clock, and the arithmetic is on integers but for the rate's division,
+so two runs give the same stamps (`tests/test_determinism.py::test_mqtt_session_on_a_path`).
 
 ## Layers
 
@@ -311,6 +351,12 @@ retransmits with DUP. During the outage another stream still answers PING and a 
 traverses the same open PPP session. It also checks that CONNACK has Session Present, that the
 routed copies come again in order and that the subscription is restored. These are
 protocol-client tests.
+`tests/test_net_path.py` asserts the path's stamps exactly, on PPP frames and Ethernet frames made by
+hand: the RTT from a request to its answer at odd nanoseconds, each direction's share, the rates
+each way, one datagram after another, a change that overtakes nothing, the floor's message, control
+traffic passing the queue, what a reset and the end of the link drop, and `quiet_until`.
+`tests/test_mqtt_session.py` also runs esp-mqtt on a path: the spacing of a backlog's exchanges at
+200 ms and 600 ms and their ratio, the rate, and a redelivery over 600 ms.
 `tests/test_net_mqtt_sessions.py` asserts the broker's sessions in exact bytes, flags and packet
 IDs from raw packets: Session Present, the queue and its order, QoS 0 dropped, DUP and original IDs
 on redelivery before the queue, CleanSession=1 at CONNECT and at disconnection, takeover, a refused
@@ -365,4 +411,7 @@ NTP and TLS behind the access point; the layer tests cover them without a link o
   [an HTTP server on port 80 of every
   network](../decisions/harness.md#an-http-server-answers-on-port-80-of-every-simulated-network),
   [the broker keeps a session by client ID when CleanSession is
-  0](../decisions/harness.md#the-broker-keeps-a-session-by-client-id-when-cleansession-is-0).
+  0](../decisions/harness.md#the-broker-keeps-a-session-by-client-id-when-cleansession-is-0),
+  [a path with RTT and rate sits between the link and the
+  network](../decisions/harness.md#a-path-with-rtt-and-rate-sits-between-the-link-and-the-network),
+  [packet loss on the path is postponed](../decisions/harness.md#packet-loss-on-the-network-path-is-postponed).

@@ -756,6 +756,26 @@ that references to its number keep their meaning.
 
 ## Simulated network
 
+- **183.** A stated RTT is exact: what the device sends at `t` reaches the network at `t` plus the delay up and is answered at `t + rtt`, the two
+    delays adding up to it; a rate adds each datagram's size in bits at that rate, one datagram after another; an RTT below 1 ms is refused. The default is
+    the network without a path. LCP, IPCP, ARP and DHCP are not delayed.
+    `tests/test_net_path.py::test_a_stated_rtt_is_exact_from_the_request_to_the_answers_stamp`,
+    `tests/test_net_path.py::test_the_two_directions_add_up_to_the_rtt`,
+    `tests/test_net_path.py::test_by_default_the_answer_is_stamped_1_ms_after_the_request_in_its_turn`,
+    `tests/test_net_path.py::test_the_rate_takes_its_time_each_way_from_the_size_of_the_datagram`,
+    `tests/test_net_path.py::test_an_rtt_below_the_floor_is_refused`,
+    `tests/test_net_path.py::test_ppp_control_is_not_delayed`,
+    `tests/test_net_path.py::test_arp_and_dhcp_are_not_delayed`
+- **184.** No datagram on the path overtakes another, when the path changes either; `quiet_until` holds the runner at the head of each queue, and a
+    reset or the end of the link drops what is on the path.
+    `tests/test_net_path.py::test_a_smaller_rtt_applies_to_what_enters_after_it_and_overtakes_nothing_going_up`,
+    `tests/test_net_path.py::test_a_smaller_rtt_overtakes_nothing_going_down`,
+    `tests/test_net_path.py::test_the_network_never_stamps_an_answer_before_the_turn_that_hands_it_over`,
+    `tests/test_net_path.py::test_a_reset_drops_what_is_on_the_path_and_keeps_the_path`,
+    `tests/test_net_path.py::test_the_end_of_the_ppp_link_drops_what_is_on_the_path`
+- **185.** A QoS 1 backlog from esp-mqtt, one message at a time, takes about three times as long at an RTT of 600 ms as at 200 ms, each exchange
+    spaced by the RTT and some 15 ms of UART and firmware.
+    `tests/test_mqtt_session.py::test_a_qos1_backlog_follows_the_rtt`
 - **181.** The broker keeps a session by client ID when CleanSession is 0: a resumed CONNECT says Session Present 1 and sends
     what is unacknowledged with DUP and the original packet IDs, in the order first sent, then the queue in order, with DUP 0;
     an offline client's QoS 1 messages are queued and its QoS 0 dropped. CleanSession=1 discards the state at CONNECT and at

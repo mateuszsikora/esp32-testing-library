@@ -9,7 +9,7 @@ from esp32tl.backends.esp32sim import Esp32Sim
 from esp32tl.interfaces import NeverHappened
 from esp32tl.interfaces.console import Console
 from esp32tl.interfaces.wifi import Wifi
-from esp32tl.units import seconds
+from esp32tl.units import kbit_s, ms, seconds
 
 pytestmark = pytest.mark.app_path("../firmware/http_request")
 
@@ -34,6 +34,23 @@ def test_joins_and_fetches_from_the_tests_server(
     assert (lease.mac, lease.address) == ("24:6f:28:00:11:22", "10.64.0.2")
     assert board.link.warnings == [] and board.link.error is None
     assert "http: GET / → 200" in board.report()
+
+
+def test_fetches_over_a_path_behind_the_access_point(
+    board: Esp32Sim, wifi: Wifi, console: Console
+) -> None:
+    network = wifi.access_point(SSID, password=PASSWORD)
+    network.set_path(rtt=ms(200), downlink=kbit_s(512), uplink=kbit_s(128))
+    network.http.serve("/", "over the path\n")
+    printed = console.line(r"^over the path$")
+    board.power_on()
+    request = board.wait_until(network.http.next_request("/"), within=seconds(30))
+    # DHCP is not delayed: the lease is as early as without a path.
+    assert network.dhcp.leases[0].at < seconds(3)
+    answered = board.wait_until(printed, within=seconds(5))
+    # The server answers when the request has come up the path, and the page goes back down it.
+    assert answered.at - request.at >= ms(100)
+    assert board.link.warnings == []
 
 
 def test_rejoins_once_the_access_point_is_back(

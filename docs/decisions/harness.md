@@ -1863,6 +1863,42 @@ a number with no source; storing QoS 0 for an offline client, which the specific
 and nothing here needs; and bringing a pending `Publication` back with
 its session, because the client retransmits what it published, and a new handle says so truthfully.
 
+## A path with RTT and rate sits between the link and the network
+
+Status: decided (#130)
+
+`network.set_path(rtt=, downlink=, uplink=)` is a FIFO each way between the link and `Network`, in
+`esp32tl/net/__init__.py`. Without it a QoS 1 backlog drains at the same speed whatever the link. A
+stated `rtt` is exact, from the device's request to the stamp of the answer. The values are the
+test's parameters: no vendor source stands behind them, and nothing models an operator.
+
+LCP, IPCP, ARP and DHCP stay on the link: they are between the device and its modem or access point,
+and a test of a slow network should not also change how long the link takes to come up. The default
+of 1 ms is the network as it was. The RTT's excess over that floor is shared between the directions,
+and the floor stays on the way down, so that the default takes a request at its own time and an
+answer 1 ms later. `latency()` stays 1 ms, since PPP control answers in 1 ms, and a larger promise
+would break rule 2 of the protocol; that is why an RTT below it is refused. `quiet_until` takes the
+queue's head, one turn per datagram. The runner does not change.
+
+A change applies to datagrams entering after it, and none overtakes another, because the link
+beneath TCP never reorders. A datagram waits in the network until its time, not in the runner's input
+queue as a future-dated `uart_rx` or `eth_rx`, so that a reset can still drop it: with an RTT of 600
+ms, a modem that loses registration would otherwise go on receiving for 300 ms.
+
+**Rejected:** a larger `latency()`, which would save turns but make PPP control late and break rule 2;
+future-dating answers in the runner's queue, which a reset cannot take back; a delay in one direction
+only, which would stamp a broker's receipt a whole RTT away from the device's request or from its
+answer; and delaying the link's own control, as above.
+
+## Packet loss on the network path is postponed
+
+Status: postponed (#130)
+
+The path loses nothing. Losing downlink datagrams needs retransmission timers in
+`esp32tl/net/ip.py`, whose TCP never retransmits because the link never loses a byte, and losing
+uplink only would be half a model: the firmware's retransmission would be exercised and the network's
+never. It waits for a test that needs it.
+
 ## MQTT CONNECT policy runs before accepted session state is installed
 
 Status: decided (#103)

@@ -36,7 +36,7 @@ whatever `FIRMWARE_OUT` the shell exports, because the tests read the images the
 | `sd_remount` | `firmware/sd_remount`: appends a line to a file on an SD card every 100 ms, and mounts the card again after a failure, for a card taken out and put back while it runs ([below](#sd_remount)) |
 | `modem_at` | `firmware/modem_at`: AT dialogue, PWRKEY and RI on the LilyGO profile, without a network ([below](#modem_at)) |
 | `pppos_client` | esp-protocols `modem-v1.4.1`, unchanged except sdkconfig: PPP and plain MQTT on the LilyGO modem route ([below](#pppos_client)) |
-| `mqtt_session` | `firmware/mqtt_session`: esp-mqtt with CleanSession=0 over the LilyGO modem route, which prints Session Present and each message's DUP ([below](#mqtt_session)) |
+| `mqtt_session` | `firmware/mqtt_session`: esp-mqtt with CleanSession=0 over the LilyGO modem route, which prints Session Present and each message's DUP, and publishes a QoS 1 backlog on command ([below](#mqtt_session)) |
 | `http_request` | ESP-IDF's `examples/protocols/http_request`, unmodified, with its default `sdkconfig`, for target `esp32`: joins a Wi-Fi access point and fetches `http://example.com/` over and over ([below](#http_request)) |
 | `persistence` | `firmware/persistence`: counts its boots in NVS, RTC memory, RAM and on an SD card, prints them with its reset reason, and restarts itself once ([below](#persistence)) |
 
@@ -399,8 +399,14 @@ mqtt_session: disconnected
 
 `session_present` is `event->session_present` of `MQTT_EVENT_CONNECTED`, and `dup`, `qos` and `id`
 are those of `MQTT_EVENT_DATA` (ESP-IDF v5.3.6, `components/mqtt/esp-mqtt/include/mqtt_client.h`).
+Told `backlog <n>` on `session/commands`, it publishes `report 1` to `report <n>` on
+`session/reports` at QoS 1, one at a time, waiting for `MQTT_EVENT_PUBLISHED` of each, and prints
+`mqtt_session: published <k> of <n>`, then `mqtt_session: backlog done`. A command that comes with
+DUP starts nothing.
+
 `tests/test_mqtt_session.py` runs it against the test's broker
-([keep a session across connections](network-user.md#keep-a-session-across-connections)).
+([keep a session across connections](network-user.md#keep-a-session-across-connections),
+[give the network a round trip and a rate](network-user.md#give-the-network-a-round-trip-and-a-rate)).
 
 ## `http_request`
 

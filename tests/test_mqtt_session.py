@@ -1,12 +1,14 @@
 """esp-mqtt of the pinned ESP-IDF with CleanSession=0, against the broker's stored session."""
 
+from itertools import pairwise
+
 import pytest
 
 from esp32tl.backends.esp32sim import Esp32Sim
 from esp32tl.interfaces.console import Console
 from esp32tl.interfaces.modem import Modem
-from esp32tl.net.mqtt import Broker
-from esp32tl.units import seconds
+from esp32tl.net.mqtt import Broker, Message
+from esp32tl.units import Duration, about, kbit_s, ms, seconds
 
 pytestmark = [
     pytest.mark.app_path("../firmware/mqtt_session"),
@@ -15,6 +17,8 @@ pytestmark = [
 
 CLIENT = "session-client"
 COMMANDS = "session/commands"
+REPORTS = "session/reports"
+COUNT = 10
 
 
 def connected(board: Esp32Sim, broker: Broker) -> None:
@@ -90,4 +94,67 @@ def test_a_message_whose_puback_is_lost_comes_again_with_dup(
     assert [e["stream"] for e in pubacks] == ["1883/1", "1883/2"]
     state = broker.session(CLIENT)
     assert state is not None and state.unacknowledged == ()
+    assert board.link.warnings == []
+
+
+def backlog(board: Esp32Sim, broker: Broker, console: Console) -> list[Message]:
+    """Has the firmware publish its backlog; the reports' first attempts, in order."""
+    done = console.line(r"mqtt_session: backlog done")
+    start = len(broker.messages)
+    broker.publish(COMMANDS, f"backlog {COUNT}", qos=1)
+    board.wait_until(done, within=seconds(60))
+    reports = [m for m in broker.messages[start:] if m.topic == REPORTS and not m.dup]
+    assert [m.text for m in reports] == [f"report {n}" for n in range(1, COUNT + 1)]
+    return reports
+
+
+def spacing(reports: list[Message]) -> list[Duration]:
+    """From one exchange to the next, leaving out the first, which waits a round trip behind the
+    PUBACK of the command: lwIP's Nagle holds it until that is acknowledged."""
+    return [b.at - a.at for a, b in pairwise(reports[1:])]
+
+
+def test_a_qos1_backlog_follows_the_rtt(
+    board: Esp32Sim, modem: Modem, broker: Broker, console: Console
+) -> None:
+    network = modem.network()
+    connected(board, broker)
+    network.set_path(rtt=ms(200))
+    at_200 = backlog(board, broker, console)
+    network.set_path(rtt=ms(600))
+    at_600 = backlog(board, broker, console)
+    # One exchange at a time: the RTT, and some 15 ms on the modem's UART and in the firmware.
+    assert spacing(at_200) == [about(ms(215), within=ms(3))] * (COUNT - 2)
+    assert spacing(at_600) == [about(ms(615), within=ms(3))] * (COUNT - 2)
+    ratio = (at_600[-1].at - at_600[1].at) / (at_200[-1].at - at_200[1].at)
+    assert 2.7 < ratio < 3.1
+    assert board.link.warnings == []
+
+
+def test_a_qos1_backlog_takes_the_rate_in_both_directions(
+    board: Esp32Sim, modem: Modem, broker: Broker, console: Console
+) -> None:
+    network = modem.network()
+    connected(board, broker)
+    network.set_path(rtt=ms(200), downlink=kbit_s(8), uplink=kbit_s(8))
+    # 215 ms, and at 8 kbit/s the PUBLISH going up and the ACK and PUBACK coming down.
+    assert spacing(backlog(board, broker, console)) == [about(ms(362), within=ms(3))] * (COUNT - 2)
+    assert board.link.warnings == []
+
+
+def test_sessions_work_across_a_long_path(
+    board: Esp32Sim, modem: Modem, broker: Broker, console: Console
+) -> None:
+    network = modem.network()
+    connected(board, broker)
+    network.set_path(rtt=ms(600), downlink=kbit_s(512), uplink=kbit_s(128))
+    reconnected = broker.next_connection()
+    first = console.line(r"data dup=0 qos=1 id=\d+ topic=session/commands payload=in flight")
+    again = console.line(r"data dup=1 qos=1 id=\d+ topic=session/commands payload=in flight")
+    broker.publish(COMMANDS, "in flight", qos=1)
+    assert broker.disconnect(CLIENT)
+    board.wait_until(first, within=seconds(5))
+    client = board.wait_until(reconnected, within=seconds(30))
+    assert client.session_present
+    board.wait_until(again, within=seconds(5))
     assert board.link.warnings == []

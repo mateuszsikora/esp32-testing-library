@@ -315,6 +315,70 @@ connection closed first, whose retransmission has a record of its own. A `next_d
 has the boundary, polling and naming of the
 [MQTT next-event conditions](#history-next-events-and-current-state).
 
+## Give the network a round trip and a rate
+
+```python
+from esp32tl.units import kbit_s, ms
+
+network = modem.network()  # Or what wifi.access_point(...) returned.
+network.set_path(rtt=ms(200), downlink=kbit_s(512), uplink=kbit_s(128))
+```
+
+`set_path` puts a path between the link and the network, for every IPv4 datagram either way: DNS,
+NTP, TCP and so MQTT and HTTP. What the device sends at time `t` is answered at exactly `t + rtt`,
+plus the time the datagrams take at the rates. LCP, IPCP, ARP and DHCP stay on the link and are not
+delayed, so the device still comes up in the same time; each such answer comes 1 ms after its
+request, even past datagrams on their way. These values are the test's parameters, not a model of
+an operator: no vendor source stands behind them.
+
+| Argument | Default | Meaning |
+|---|---|---|
+| `rtt` | `ms(1)`, the network without a path | From the device's request to the stamp of the answer. A `Duration`, 1 ms at the least |
+| `downlink` | `None`, no limit | A `Rate` towards the device: each datagram takes its size in bits at this rate, one after another |
+| `uplink` | `None`, no limit | The same from the device |
+
+`Rate`, `kbit_s` and `mbit_s` are [units](models-user.md#units). Each call states the whole path:
+what it leaves out goes back to its default. It works before power-on and between board advances,
+and it does not advance time. It applies to datagrams entering after it, and none overtakes another:
+a datagram behind one that left under a longer RTT leaves with it, not before it.
+
+An RTT below the floor raises `ValueError`:
+`network.set_path: rtt is 0.5 ms; the network answers 1 ms after a request at the least`.
+Something else raises `TypeError`: `network.set_path: rtt is 200, not a Duration, as ms(200)`,
+`network.set_path: downlink is 512, not a Rate, as kbit_s(512)`. The transcript logs each call, as
+`net: path: rtt 0.2 s, downlink 512 kbit/s, uplink 128 kbit/s`, with `any` for no limit.
+
+A broker's records have the times of the network's end: `message.at` is `t` plus what the datagram
+took going up, half of what the RTT has above 1 ms, and `puback_at`, `delivery.at` and the test's
+`broker.publish` are when the answer sets off down. A publication from the test reaches the device
+one way down later, half of what the RTT has above 1 ms, and 1 ms.
+
+Behind the modem the runner already paces received bytes at the UART's baud, about 11.5 kB/s (92
+kbit/s) at 115200: a `downlink` above that adds its time per datagram and is no limit on the rate
+of what arrives. Only a lower one is. The path has no queue limit and loses nothing. A reset, of the
+link or of the network, drops what is on the path and keeps the path's values.
+
+What the firmware does with the time is its own. With `firmware/mqtt_session`, publishing a QoS 1
+backlog one message at a time, each waiting for its PUBACK, on the modem's route:
+
+| `rtt` | From one report to the next, measured |
+|---|---|
+| default | 16.3 ms |
+| `ms(200)` | 215.3 ms |
+| `ms(600)` | 615.2 ms |
+| `ms(200)`, 8 kbit/s each way | 361.9 ms |
+
+The 15 ms above the RTT are the modem's UART and the firmware. In that run the first report comes
+two round trips after the command, not one: lwIP's Nagle algorithm holds it behind the command's
+PUBACK until that is acknowledged. At 600 ms that also passes esp-mqtt's 1 s
+`message_retransmit_timeout`, so the first report comes twice, the second time with DUP.
+
+The firmware's own timers can outrun a path: lwIP retransmitted segments at an RTT of 1.5 s, and
+the network answers each with an acknowledgement. Over a path whose rate is too low for what it
+carries, a client's timeouts can fire before a message has got through: the path has no queue limit
+and loses nothing, so each retransmission only adds to what it has to carry. esp-mqtt's
+`network.timeout_ms` is 10 s by default.
+
 ## Fetch a page behind a Wi-Fi access point
 
 Build ESP-IDF's unmodified `http_request` example with `firmware/build.sh http_request`
@@ -683,7 +747,8 @@ print `Wi-Fi disconnected 3, trying to reconnect...` when the access point leave
 A receive FIFO overflow on the modem's route immediately fails with
 `uart.modem: UART receive overflow (rxfifo_ovf) on GPIO 27: the simulated network requires a lossless route`.
 Other routes retain their existing overflow policy; frame errors remain fatal everywhere.
-The simulated TCP accepts connections but does not retransmit or recover packet loss.
+The simulated TCP accepts connections but does not retransmit or recover packet loss. The path
+loses nothing ([packet loss is postponed](../decisions/harness.md#packet-loss-on-the-network-path-is-postponed)).
 Malformed packets are discarded or their application connection is closed; events help explain
 why the firmware stopped progressing. The test's `within=` and wall-time timeout still bound waits.
 

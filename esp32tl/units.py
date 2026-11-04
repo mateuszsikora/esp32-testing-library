@@ -1,5 +1,5 @@
-"""Quantities a test states with their unit: the board's time, speed, distance, heading, and where
-on Earth.
+"""Quantities a test states with their unit: the board's time, speed, distance, a data rate,
+heading, and where on Earth.
 
 Each is a value type made by a constructor named after its unit, `seconds(20)`, `km_h(50)`,
 `miles(1)`, so that no number in a test leaves its unit to the reader. A `Duration` is also an
@@ -324,6 +324,46 @@ def miles(value: float) -> Distance:
 def feet(value: float) -> Distance:
     """`value` international feet, of 0.3048 m."""
     return Distance(number(value, "feet") * M_PER_FOOT)
+
+
+@total_ordering
+@dataclass(frozen=True)
+class Rate:
+    """A data rate above zero, in bits per second; `kbit_s` and `mbit_s` give it in those units,
+    of 1000 and 1000000 bits per second."""
+
+    bit_s: float
+
+    def __post_init__(self) -> None:
+        if number(self.bit_s, "Rate") <= 0:
+            raise ValueError(f"Rate: {self.bit_s!r} bit/s is not above 0")
+
+    @property
+    def kbit_s(self) -> float:
+        return self.bit_s / 1000
+
+    @property
+    def mbit_s(self) -> float:
+        return self.bit_s / 1_000_000
+
+    def __lt__(self, other: "Rate") -> bool:
+        return self.bit_s < other.bit_s if _same(self, other) else NotImplemented
+
+    def __str__(self) -> str:
+        return f"{shown(self.kbit_s)} kbit/s"
+
+    def __repr__(self) -> str:
+        return f"kbit_s({shown(self.kbit_s)})"
+
+
+def kbit_s(value: float) -> Rate:
+    """`value` kilobits per second, of 1000 bits."""
+    return Rate(number(value, "kbit_s") * 1000)
+
+
+def mbit_s(value: float) -> Rate:
+    """`value` megabits per second, of 1000000 bits."""
+    return Rate(number(value, "mbit_s") * 1_000_000)
 
 
 @dataclass(frozen=True)

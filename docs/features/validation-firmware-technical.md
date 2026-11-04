@@ -105,7 +105,7 @@ The Makefile's `firmware` target runs `FIRMWARE_OUT= firmware/build.sh`; the pat
 `firmware/%/build/esp32tl-built` runs `FIRMWARE_OUT= firmware/build.sh $*`, and `test` depends on
 `$(FIRMWARE_IMAGES:%=firmware/%/build/esp32tl-built)` with `FIRMWARE_IMAGES := hello_world
 nmea_reader gpio_echo sdspi sd_remount modem_at nvs_reader pppos_client mqtt_session http_request`. `determinism` depends on
-the markers of `nmea_reader`, `pppos_client` and `http_request`. The rule has no prerequisites, so make rebuilds
+the markers of `nmea_reader`, `pppos_client`, `mqtt_session` and `http_request`. The rule has no prerequisites, so make rebuilds
 an image only when its marker is missing: an edit to `firmware/nmea_reader/` needs `make firmware`, or
 `firmware/build.sh nmea_reader`, before `make test` sees it.
 
@@ -282,6 +282,12 @@ runs, through `pytester`, a test that inserts a card, deletes its image and wait
 `IP_EVENT_PPP_GOT_IP`. `mqtt_event` subscribes in `MQTT_EVENT_CONNECTED` and prints from the event
 structure. esp-mqtt writes its PUBACK after it has handed the message to `MQTT_EVENT_DATA`, in
 `mqtt_process_receive`, so a printed line and the PUBACK come in that order.
+
+`command` reads `backlog <n>` from a message without DUP into a queue of four, which `report_backlogs`,
+a task of its own, takes: it calls `esp_mqtt_client_publish` for each report and blocks in
+`xTaskNotifyWait` until `mqtt_event`, on `MQTT_EVENT_PUBLISHED`, notifies it with the same message
+ID. It is not done in the event handler, because that is esp-mqtt's task, and the PUBACK has to be
+read there.
 
 `tests/test_firmware_images.py::test_mqtt_session_has_the_classic_layout` checks the layout,
 `tests/test_firmware_build.py` where it is built from, and `tests/test_mqtt_session.py` what it does

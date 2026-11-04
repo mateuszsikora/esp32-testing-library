@@ -82,7 +82,8 @@ hemisphere's letter, `negative` for a value below 0.
 | `Heading(degrees)` | Frozen dataclass, `degrees` taken modulo 360, a result of 360.0 (`Heading(-1e-20)`) made 0; `str` `east` or `30°`, `repr` `EAST` or `Heading(30)`; `COMPASS` names the eight constants |
 | `Position(lat, lon)` | Frozen dataclass, `ValueError` outside −90…90 and −180…180; `moved(heading, distance)` (longitude from −180 up to 180), `distance_to(other)`, `bearing_to(other)`; `str` `52.229677° N, 21.012233° E` |
 | `about(value, *, within)` | `__eq__` true for the same kind within the tolerance, a `Position` within a `Distance`; false for any other kind; unhashable; `repr` `about(m(1000), within=m(15))` |
-| `ms`, `seconds`, `minutes`, `hours`, `m_s`, `km_h`, `mph`, `knots`, `m`, `km`, `miles`, `feet` | Constructors; an `int` duration is scaled exactly, a `float` one rounded to the nanosecond |
+| `Rate(bit_s)` | Frozen dataclass of a finite number above 0 (`Rate: 0 bit/s is not above 0`, a `ValueError`); ordering; `kbit_s`, `mbit_s`; `str` `512 kbit/s`, `repr` `kbit_s(512)`. `esp32tl/net/__init__.py` is what reads it |
+| `ms`, `seconds`, `minutes`, `hours`, `m_s`, `km_h`, `mph`, `knots`, `m`, `km`, `miles`, `feet`, `kbit_s`, `mbit_s` | Constructors; an `int` duration is scaled exactly, a `float` one rounded to the nanosecond |
 | `number(value, what)` | A finite `int` or `float`, not a `bool`: `TypeError` `{what}: {value!r} is not a number`, `ValueError` `{what}: {value!r} is not a finite number` |
 | `shown(value)` | A number with up to six decimals, without trailing zeros, as the `str` and `repr` above write it |
 | `NS_PER_S`, `EARTH_RADIUS_M`, `M_PER_MILE`, `M_PER_FOOT`, `M_PER_NAUTICAL_MILE` | `1_000_000_000`; 6371008.8, IUGG's mean radius R1; 1609.344; 0.3048; 1852 |
