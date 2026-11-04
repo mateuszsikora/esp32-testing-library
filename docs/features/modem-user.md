@@ -165,8 +165,9 @@ and its TCP sessions end at the hang, publishing MQTT Wills once. The AT command
 sends stay in `commands`, with an empty `response`, and the report shows them as `(no answer)`, but
 for one stuck to PPP bytes, which [is lost whole](#a-dropped-data-call). An answer the model gave
 before the hang is already on its way, and still arrives within its 1 ms.
-`hang` raises `SourceError: modem.hang: the modem is off` on a modem that is off, and `TypeError`
-for a `pwrkey` that is not `True` or `False`.
+`hang` raises `SourceError: modem.hang: the modem is off` on a modem that is off, `SourceError:
+modem.hang: the modem is hung already` on a hung one, whose `pwrkey` choice stays until a restart,
+and `TypeError` for a `pwrkey` that is not `True` or `False`.
 
 `hang(pwrkey=True)` leaves PWRKEY working: an off pulse switches the modem off, and the next on
 pulse starts it, no longer hung. `hang(pwrkey=False)` ignores PWRKEY until RESET or a loss of

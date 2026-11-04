@@ -1,7 +1,7 @@
 """The profile's uart.modem route, a replay or a cellular modem described by the test."""
 
 from collections.abc import Callable, Mapping
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 
 from esp32tl.boards import Line
@@ -11,6 +11,7 @@ from esp32tl.interfaces.lines import Lines
 from esp32tl.interfaces.uart import Uart
 from esp32tl.link.boardlink import Wire
 from esp32tl.net import Internet
+from esp32tl.net.ntp import DEFAULT_UTC
 from esp32tl.report import RunLog, board_time
 from esp32tl.sources.model.modem import LATENCY_NS, NO_OFFSET, Command, Restart
 from esp32tl.sources.model.modem import Modem as ModemModel
@@ -30,7 +31,7 @@ class Modem(Uart):
         directory: Path,
         now: Callable[[], int],
         lines: Lines,
-        world: Callable[[], datetime] = lambda: datetime(2026, 1, 1, tzinfo=UTC),
+        world: Callable[[], datetime] = lambda: DEFAULT_UTC,
         pins: Mapping[str, Line],
         asked: Callable[[Request], None] = lambda request: None,
         log: RunLog | None = None,

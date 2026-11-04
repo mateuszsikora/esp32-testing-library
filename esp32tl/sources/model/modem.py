@@ -199,10 +199,10 @@ class Modem:
         with self._lock:
             if not self.powered:
                 raise SourceError("modem.hang: the modem is off")
+            if self.hung:
+                raise SourceError("modem.hang: the modem is hung already")
             self.hung = True
             self._pwrkey_works = pwrkey
-            if not pwrkey:
-                self._pressed = None
             self._queued.clear()
             self._end_data()
 

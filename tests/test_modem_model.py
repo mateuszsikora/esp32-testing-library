@@ -1127,3 +1127,23 @@ def test_a_reset_line_with_no_timing_is_only_observed(tmp_path: Path) -> None:
     lines.driven(seconds(1).ns, [(5, 1)], frozenset({5}))
     lines.driven(seconds(4).ns, [(5, 0)], frozenset({5}))
     assert modem.hung and not modem.restarts
+
+
+@pytest.mark.parametrize("second", [True, False])
+def test_a_second_hang_is_refused_and_keeps_the_first_s_choice(second: bool) -> None:
+    model = lilygo()
+    model.hang(pwrkey=False)
+    with pytest.raises(SourceError, match=r"modem\.hang: the modem is hung already"):
+        model.hang(pwrkey=second)
+    pulse(model.driven, seconds(1), ms(3000))
+    assert model.hung and model.powered
+    # a restart ends it, and the modem can hang again
+    pulse(model.reset_driven, seconds(5), ms(2600))
+    model.hang()
+    assert model.hung
+
+
+def test_a_route_and_a_bare_model_start_from_the_same_world(tmp_path: Path) -> None:
+    modem, _, _ = route(tmp_path, [0])
+    modem.signal(dbm=-73)
+    assert reply(modem.model(), "AT+CCLK?") == reply(Modem(lambda: 0), "AT+CCLK?")

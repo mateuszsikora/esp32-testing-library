@@ -67,7 +67,7 @@ GPIO 12 and RI 33, fixed in `firmware/modem_recovery/main/main.c`. Run it with `
 
 It holds GPIO 12 high, starts the modem with a nominal 100 ms PWRKEY pulse if RI reads low, and
 dials. Once it has an address it prints `modem_recovery: connected` and sends an NTP request to
-`10.64.0.1` about every 2 s, with a 1 s timeout. `IP_EVENT_PPP_LOST_IP` prints `modem_recovery: lost ip`, and ten requests in a row without an answer
+`10.64.0.1` about every second while they are answered, and every 2 s when they time out, after 1 s. `IP_EVENT_PPP_LOST_IP` prints `modem_recovery: lost ip`, and ten requests in a row without an answer
 print `modem_recovery: no answer`. Either way it then leaves data mode with `esp_modem_set_mode` and sends `AT`. If
 the modem answers, it prints `modem_recovery: command mode <reply to AT+CEREG?>` and dials again.
 If it does not, it prints `modem_recovery: hung RI=<level>` and runs the

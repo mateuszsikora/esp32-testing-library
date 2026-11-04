@@ -709,13 +709,15 @@ that references to its number keep their meaning.
     `tests/test_modem_fixture.py::test_the_firmware_reads_the_five_digit_code_and_the_network_s_time`
 - **175.** A hung modem answers nothing and passes no data, sends no `NO CARRIER` and keeps RI high;
     its AT commands stay in the history with an empty response, shown as `(no answer)`. With
-    `pwrkey=False`, PWRKEY does nothing until RESET or a loss of supply, which end the hang.
+    `pwrkey=False`, PWRKEY does nothing until RESET or a loss of supply, which end the hang, and a
+    second `hang` is refused rather than change that.
     `tests/test_modem_model.py::test_a_hung_modem_answers_nothing_and_keeps_its_commands`,
     `tests/test_modem_model.py::test_a_hung_modem_passes_no_data_and_sends_no_no_carrier`,
     `tests/test_modem_model.py::test_the_report_shows_a_command_with_no_answer`,
     `tests/test_modem_model.py::test_pwrkey_recovers_a_hung_modem_that_honours_it`,
     `tests/test_modem_model.py::test_pwrkey_does_nothing_to_a_hung_modem_that_ignores_it`,
-    `tests/test_modem_model.py::test_a_loss_of_supply_ends_the_hang_and_a_later_start_has_pwrkey`
+    `tests/test_modem_model.py::test_a_loss_of_supply_ends_the_hang_and_a_later_start_has_pwrkey`,
+    `tests/test_modem_model.py::test_a_second_hang_is_refused_and_keeps_the_first_s_choice`
 - **176.** A RESET pulse at the profile's polarity, judged at release against its threshold, restarts
     a running modem in command mode and ends a hang; a shorter pulse, and any pulse on a modem that
     is off, do nothing. `lines.board.power_enable` has no effect on the modem. The firmware's

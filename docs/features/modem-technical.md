@@ -76,8 +76,7 @@ RESET the same way against `pulse_ms`, and on a powered modem calls `_set_power(
 True, "reset")`. `_set_power` appends a `Restart` when the modem was powered and `t` is after 0,
 clears `hung` and sets `_pwrkey_works` again.
 
-`hang` sets `hung` and `_pwrkey_works`, forgets a PWRKEY pulse in progress when PWRKEY stops working,
-and calls `_end_data`, so the parser is in command mode whatever the firmware sends next, and
+`hang` sets `hung` and `_pwrkey_works`, empties `_queued` and calls `_end_data`, so the parser is in command mode whatever the firmware sends next, and
 `Internet.stop` ends PPP and its TCP sessions with no output. In `_command`, a hung modem appends
 the `Command` with an empty response and returns nothing. PPP bytes the firmware goes on sending
 are noise in the command line, as for any loss of data mode. `_command` sees that noise and an `AT`
@@ -118,7 +117,7 @@ after the hold returns, so `quiet_until` has no bound to give for it. `hang` and
 - `modem.drop_call: the modem is not in data mode`, `modem.drop_call: terminate needs
   modem.network(): no PPP`, `modem.drop_call: terminate needs LCP open: it is not yet` (`SourceError`), `modem.drop_call: terminate is 1, not True or False`
   (`TypeError`).
-- `modem.hang: the modem is off` (`SourceError`), `modem.hang: pwrkey is 1, not True or False`
+- `modem.hang: the modem is off`, `modem.hang: the modem is hung already` (`SourceError`), `modem.hang: pwrkey is 1, not True or False`
   (`TypeError`).
 - `uart.modem has its source already: one per test`: replay and model are mutually exclusive.
 - `uart.modem has no modem model: select it before board.power_on()`: a property was read before
