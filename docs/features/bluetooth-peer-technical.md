@@ -172,8 +172,10 @@ link; `controller.py`, Bumble's virtual controller with what Classic devices nee
      is made. `on_classic_disconnected` removes such an entry without telling the host, since no
      link was made. `_answers_due` counts the answers the host owes each peer, from
      `on_classic_connection_request`, and such a removal makes all of them late, in `_late_answers`.
-     `on_hci_accept_connection_request_command` takes an answer as late when one is counted late, or
-     when the entry already has a link: the host gets a command status of `SUCCESS` and, unless this
+     `on_hci_accept_connection_request_command` takes an answer as late when one is counted late, when
+     the entry already has a link, or when there is no entry and an answer was owed, as after the link
+     ended or a crossing page took the entry with it. An answer nothing was owed for goes to Bumble's
+     handler, as the host's own error. A late one: the host gets a command status of `SUCCESS` and, unless this
      side is itself paging that peer, `Connection_Complete` with `CONNECTION_TIMEOUT_ERROR`, since the
      event names only the address and would end that page in the host's eyes. The entry is left as it
      is, so that a late answer completes neither a new page nor a working link. Given to Bumble's
@@ -323,6 +325,9 @@ Not covered: firmware. esp32sim has no Classic controller for the guest, so no E
 to a peer yet, and no firmware has seen a peer leave. Nor is a clock offset other than 0. A page does not look at
 the target's page scan: Bumble's controller delivers it whatever `classic_scan_enable` says, so a
 device with `set_connectable(False)` still connects, though an inquiry respects inquiry scan.
+Bumble 0.0.236 has no handler for `Reject_Connection_Request`, so a host that rejects a page, as
+Bumble's does with `classic_accept_any = False`, gets `UNKNOWN_HCI_COMMAND_ERROR` logged and no
+answer: its next command waits for ever, its entry stays, and the pager gets `PAGE_TIMEOUT`.
 There is no `Connection_Accept_Timeout` (Vol 4, Part E, 6.7), and the page's timer runs until the
 target's host accepts rather than until its baseband answers: a host that accepts after the page
 ended, as after 6 s, makes a link on both ends when the pager has already reported `PAGE_TIMEOUT`,

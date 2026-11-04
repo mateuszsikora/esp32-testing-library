@@ -334,11 +334,13 @@ class Controller(BumbleController):
         peer = command.bd_addr
         entry = self.classic_connections.get(peer)
         was_late = self._late_answers[peer] > 0
-        if self._answers_due[peer] > 0:
+        was_due = self._answers_due[peer] > 0
+        if was_due:
             self._answers_due[peer] -= 1
         if was_late:
             self._late_answers[peer] -= 1
-        if not was_late and (entry is None or entry.handle == 0):
+        # With no entry, only an answer nothing was owed for is the host's own error.
+        if not was_late and (entry.handle == 0 if entry is not None else not was_due):
             super().on_hci_accept_connection_request_command(command)
             return
         # The page it answers ended, or was answered: no link comes of it, and what this side holds

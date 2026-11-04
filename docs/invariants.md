@@ -573,6 +573,10 @@ that references to its number keep their meaning.
     `tests/test_spp_peer.py::test_a_late_answer_does_not_complete_a_page_to_a_device_that_left`,
     `tests/test_spp_peer.py::test_a_page_tried_again_with_a_slow_host_does_not_fail_the_air`,
     `tests/test_spp_peer.py::test_two_answers_to_pages_that_ended_do_not_fail_the_air`,
+    `tests/test_spp_peer.py::test_every_late_answer_is_counted_before_a_new_page_is_answered`,
+    `tests/test_spp_peer.py::test_an_answer_owed_after_the_link_was_ended_does_not_fail_the_air`,
+    `tests/test_spp_peer.py::test_an_answer_owed_after_a_crossing_page_ended_does_not_fail_the_air`,
+    `tests/test_spp_peer.py::test_an_answer_nothing_is_owed_for_is_the_hosts_own_error`,
     `tests/test_spp_peer.py::test_a_power_loss_at_the_instant_a_page_is_heard_does_not_fail_the_air`
 
 ## The esp32tl command
