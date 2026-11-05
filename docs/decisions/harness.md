@@ -1485,6 +1485,62 @@ same mechanism as a page's, and the error Bluetooth Core 5.4 names for this comm
 **Rejected:** documenting the hang, because a test would learn of it from a test that hangs.
 
 
+## A host that rejects a page gets the reason too
+
+Status: decided (#137)
+
+Bluetooth Core 5.4, Vol 4, Part E, 7.1.9, gives the status of `Connection_Complete` only for the
+device attempting the connection, which carries the reason, and says only that the local controller
+sends one to its host. Here that one carries the reason as well: it says why no link came, and a
+host's answer to a page that has ended keeps `CONNECTION_TIMEOUT` for a page that went some other
+way. What ESP32's controller reports can be seen behind #34.
+
+**Rejected:** `SUCCESS` on the rejecting side, because Bumble's host would take it for a link with
+handle 0; and `CONNECTION_TIMEOUT`, because nothing timed out.
+
+
+
+## Rejecting a synchronous link is postponed
+
+Status: postponed (#34)
+
+Vol 4, Part E, 7.1.9 also lets `Reject_Connection_Request` decline a synchronous link. Bumble's host
+does not send it for one, so nothing here asks for it but a command written by hand. It can be seen
+behind #34 whether firmware does.
+
+
+
+## A page of this side that fails leaves the entry of a page it heard
+
+Status: decided (#137)
+
+Two pages can cross: the entry of the page a device hears replaces the entry of its own, which has
+the same address. Its own page used to take that entry with it when it failed, so an answer owed to
+the other page found nothing, was taken as late, and the pager waited for `PAGE_TIMEOUT` although
+the host had answered in time. Now the entry stays until the answer comes or a timer of link
+supervision ends it. That takes each page a host hears to get one answer: `Connection_Accept_Timeout`,
+postponed below, is what would end the entry of one that gets none, and #34 is the first that may
+leave one unanswered.
+
+**Rejected:** keeping the old behaviour and narrowing the promise that a pager hears the reason,
+because a page still waiting got exactly the symptom #137 removes. Also rejected: telling a late
+answer by a counter alone, set whenever a link is made as well as when a heard page's entry goes,
+because an answer a host never gives then takes the answer to the next page, whose pager gets
+`PAGE_TIMEOUT`.
+
+
+
+## Keeping a heard page apart from this side's own is postponed
+
+Status: postponed (#144)
+
+Bumble writes a page a device hears over its own entry for that address, so who an entry belongs to
+is inferred from its handle, its role and the counts of answers. Keeping heard pages apart would end
+that inference, and the cases in "Not covered" that follow from it, but it replaces Bumble's handling
+of a page heard and of its answer, which is too much to land with the rejection of a page (#137).
+
+
+
 ## A page that respects page scan is postponed
 
 Status: postponed (#135)

@@ -22,6 +22,8 @@ Classic link. `Controller` adds them, for links whose controllers are all of thi
   not have for Classic: a page nobody answers ends in `PAGE_TIMEOUT` after `Page_Timeout`, and a
   link that lost contact falls with `CONNECTION_TIMEOUT` after `Link_Supervision_Timeout`. Nothing
   polls on this link, so a link is in contact until a device leaves, and its timer starts there.
+- Rejecting a page (Vol 4, Part E, 7.1.9), which Bumble has no handler for: the pager's
+  `Connection_Complete` carries the reason as its status, and this side's host gets one too.
 
 The keys are not the specification's: SAFER+ (E1, E21, E22) is replaced by SHA-256 over the same
 inputs, so a key or a response holds on this link only, and only the host sees a key. The random
@@ -50,6 +52,9 @@ RSSI = -50
 SLOT_S = 0.000625
 PAGE_TIMEOUT_SLOTS = 0x2000
 LINK_SUPERVISION_TIMEOUT_SLOTS = 0x7D00
+
+# The reasons a host may reject a page for (Vol 4, Part E, 7.1.9).
+REJECT_REASONS = range(0x0D, 0x10)
 
 
 @lmp.Packet.subclass
@@ -145,8 +150,8 @@ def response(link_key: bytes, challenge: bytes, claimant: hci.Address) -> bytes:
 
 class Controller(BumbleController):
     """A Bumble controller at `address` on `link`, named `name` in Bumble's logs, which also does
-    inquiry, legacy pairing, authentication with a stored key, encryption, a page timeout and link
-    supervision."""
+    inquiry, legacy pairing, authentication with a stored key, encryption, a page timeout, link
+    supervision and the rejection of a page."""
 
     link: Link
 
@@ -303,16 +308,19 @@ class Controller(BumbleController):
 
     def on_hci_create_connection_command(self, command: hci.HCI_Create_Connection_Command) -> None:
         peer = command.bd_addr
-        if peer in self.classic_connections:
-            # Bumble would make a second connection over the first.
+        if peer in self.classic_connections or peer in self._paging:
+            # Bumble would make a second connection over the first, and the page's timer would
+            # end the next one.
             self._send_hci_command_status(
                 hci.HCI_ErrorCode.CONNECTION_ALREADY_EXISTS_ERROR, command.op_code
             )
             return
         super().on_hci_create_connection_command(command)
-        self._paging[peer] = asyncio.get_running_loop().call_later(
-            self.page_timeout * SLOT_S, self._page_timed_out, peer
-        )
+        # Bumble refuses a page while an LE connection is pending, and makes no entry for it.
+        if peer in self.classic_connections:
+            self._paging[peer] = asyncio.get_running_loop().call_later(
+                self.page_timeout * SLOT_S, self._page_timed_out, peer
+            )
 
     def _page_timed_out(self, peer: hci.Address) -> None:
         self.on_classic_connection_complete(peer, hci.HCI_ErrorCode.PAGE_TIMEOUT_ERROR)
@@ -322,8 +330,13 @@ class Controller(BumbleController):
         if page is not None:
             page.cancel()
         if status != hci.HCI_ErrorCode.SUCCESS:
-            # Bumble keeps the connection it made for the page.
-            self.classic_connections.pop(peer_address, None)
+            owed = self._answers_due[peer_address] > self._late_answers[peer_address]
+            if page is None or self._is_own_page(peer_address) or not owed:
+                # Bumble keeps the connection it made for the page. With no page of this side under
+                # way the failure is of this host's own answer. Otherwise any other entry, with an
+                # answer still owed, is that of a page this side heard, which waits for the answer.
+                self._forget_link(peer_address)
+                self.classic_connections.pop(peer_address, None)
         super().on_classic_connection_complete(peer_address, status)
         if status != hci.HCI_ErrorCode.SUCCESS:
             self._let_go(peer_address)
@@ -331,32 +344,56 @@ class Controller(BumbleController):
     def on_hci_accept_connection_request_command(
         self, command: hci.HCI_Accept_Connection_Request_Command
     ) -> None:
-        peer = command.bd_addr
-        entry = self.classic_connections.get(peer)
-        was_late = self._late_answers[peer] > 0
-        was_due = self._answers_due[peer] > 0
-        if was_due:
-            self._answers_due[peer] -= 1
-        if was_late:
-            self._late_answers[peer] -= 1
-        # With no entry, only an answer nothing was owed for is the host's own error.
-        if not was_late and (entry.handle == 0 if entry is not None else not was_due):
+        if self._take_answer(command.bd_addr, command.op_code):
             super().on_hci_accept_connection_request_command(command)
-            return
-        # The page it answers ended, or was answered: no link comes of it, and what this side holds
-        # for the peer now is not this answer's.
-        self._send_hci_command_status(hci.HCI_ErrorCode.SUCCESS, command.op_code)
-        if peer not in self._paging:
-            # The event names only the address: to the host it would end this side's own page.
-            self.send_hci_packet(
-                hci.HCI_Connection_Complete_Event(
-                    status=hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR,
-                    connection_handle=0,
-                    bd_addr=peer,
-                    encryption_enabled=False,
-                    link_type=hci.HCI_Connection_Complete_Event.LinkType.ACL,
-                )
+
+    def on_hci_reject_connection_request_command(
+        self, command: hci.HCI_Reject_Connection_Request_Command
+    ) -> None:
+        peer = command.bd_addr
+        if command.reason not in REJECT_REASONS:
+            # A refused command answers nothing: the host still owes its answer.
+            self._send_hci_command_status(
+                hci.HCI_ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR, command.op_code
             )
+            return
+        if not self._take_answer(peer, command.op_code):
+            return
+        self._send_hci_command_status(hci.HCI_ErrorCode.SUCCESS, command.op_code)
+        self.send_lmp_packet(
+            peer, lmp.LmpNotAccepted(lmp.Opcode.LMP_HOST_CONNECTION_REQ, command.reason)
+        )
+        # The entry goes, with what a page whose pager left has running. What is still owed stays
+        # as it was: a host may never give it, and then it must not take the next page's answer.
+        self._forget_link(peer)
+        del self.classic_connections[peer]
+        self._let_go(peer)
+        self._tell_host_no_link(peer, command.reason)
+
+    def _take_answer(self, peer: hci.Address, op_code: int) -> bool:
+        """Counts an answer of this side's host to a page from `peer`, and says whether this side
+        still holds a page for it to answer. If not, this has told the host: an answer nothing was
+        owed for is its own error, and one with no page left makes no link, and what this side
+        holds for the peer now, a link or its own page, is not this answer's."""
+        if self._answers_due[peer] == 0:
+            self._send_hci_command_status(
+                hci.HCI_ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR, op_code
+            )
+            return False
+        self._answers_due[peer] -= 1
+        if self._late_answers[peer] > 0:
+            self._late_answers[peer] -= 1
+        elif self._is_heard_page(peer):
+            return True
+        self._send_hci_command_status(hci.HCI_ErrorCode.SUCCESS, op_code)
+        self._tell_host_no_link(peer, hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR)
+        return False
+
+    def _tell_host_no_link(self, peer: hci.Address, status: int) -> None:
+        """No link comes of the page this side's host answered. The event names only the address:
+        to the host it would end this side's own page, so that page goes on to end by itself."""
+        if peer not in self._paging:
+            super().on_classic_connection_complete(peer, status)
 
     def on_classic_connection_request(self, peer_address: hci.Address, link_type: int) -> None:
         if link_type == hci.HCI_Connection_Complete_Event.LinkType.ACL:
@@ -422,11 +459,11 @@ class Controller(BumbleController):
             self._supervise(peer)
 
     def _lose_contact(self, peer: hci.Address) -> None:
-        """No packet comes from `peer` from now on. A link still being paged has none to lose:
-        its page ends by itself; a link that lost it already goes on counting from then."""
+        """No packet comes from `peer` from now on. This side's own page has no contact to lose:
+        it ends by itself; a link that lost it already goes on counting from then."""
         if (
             peer in self.classic_connections
-            and peer not in self._paging
+            and not self._is_own_page(peer)
             and peer not in self._lost_contact
         ):
             self._lost_contact[peer] = asyncio.get_running_loop().time()
@@ -454,19 +491,37 @@ class Controller(BumbleController):
 
     def left(self) -> None:
         """This device is gone from the air, without a word: both ends of each of its links lose
-        contact. A page this side has under way that nobody heard is no link: it ends by itself;
-        one the target heard, the target holds, and only that end has a timeout to wait for."""
-        peers = [
-            peer
-            for peer in self.classic_connections
-            if peer not in self._paging or self._held_by(peer)
+        contact, and so does whoever holds a page of this device that it holds nothing for itself,
+        as after that page ended or crossed one this device rejected. A page of its own that nobody
+        heard is no link: it ends by itself; a page of another that it never heard is none either.
+        One the target heard, the target holds, and only that end has a timeout to wait for."""
+        mine = [peer for peer in self.classic_connections if not self._is_own_page(peer)]
+        holders = [
+            other.public_address
+            for other in self.link.controllers
+            if isinstance(other, Controller)
+            and other is not self
+            and self.public_address in other.classic_connections
+            and not other._is_own_page(self.public_address)
         ]
+        peers = mine + holders
         self.link.leave(self.public_address, peers)
         for peer in peers:
             self._lose_contact(peer)
             other = self.link.find_classic_controller(peer)
             if isinstance(other, Controller):
                 other._lose_contact(self.public_address)
+
+    def _is_own_page(self, peer: hci.Address) -> bool:
+        """Whether this side's entry for `peer` is a page of its own: it has no link yet, and a
+        page this side heard makes its entry as the peripheral."""
+        entry = self.classic_connections.get(peer)
+        return entry is not None and entry.handle == 0 and entry.role == hci.Role.CENTRAL
+
+    def _is_heard_page(self, peer: hci.Address) -> bool:
+        """Whether this side's entry for `peer` is a page it heard: the peripheral, with no link."""
+        entry = self.classic_connections.get(peer)
+        return entry is not None and entry.handle == 0 and entry.role != hci.Role.CENTRAL
 
     def _held_by(self, peer: hci.Address) -> bool:
         other = self.link.find_classic_controller(peer)
@@ -632,6 +687,11 @@ class Controller(BumbleController):
                 if security is not None and security.initiator:
                     self._authentication_complete(peer, error_code)
                 super().on_lmp_packet(sender_address, packet)
+            case lmp.LmpNotAccepted(lmp.Opcode.LMP_HOST_CONNECTION_REQ) if peer not in self._paging:
+                # The rejection of a page that ended: its host heard the end already.
+                self.classic_pending_commands.get(peer, {}).pop(
+                    lmp.Opcode.LMP_HOST_CONNECTION_REQ, None
+                )
             case lmp.LmpDetach(error_code):
                 security = self._security.pop(peer, None)
                 if security is not None and security.initiator and not security.authenticated:
@@ -765,14 +825,17 @@ class Controller(BumbleController):
             )
         )
 
-    def on_classic_disconnected(self, peer_address: hci.Address, reason: int) -> None:
-        self._security.pop(peer_address, None)
-        self._encryption.pop(peer_address, None)
-        self._supervision_timeouts.pop(peer_address, None)
-        self._lost_contact.pop(peer_address, None)
-        timer = self._supervision.pop(peer_address, None)
+    def _forget_link(self, peer: hci.Address) -> None:
+        self._security.pop(peer, None)
+        self._encryption.pop(peer, None)
+        self._supervision_timeouts.pop(peer, None)
+        self._lost_contact.pop(peer, None)
+        timer = self._supervision.pop(peer, None)
         if timer is not None:
             timer.cancel()
+
+    def on_classic_disconnected(self, peer_address: hci.Address, reason: int) -> None:
+        self._forget_link(peer_address)
         connection = self.classic_connections.get(peer_address)
         if connection is not None and connection.handle == 0:
             # A page this side heard, whose host has yet to answer: handles start at 1, and no link
@@ -785,8 +848,8 @@ class Controller(BumbleController):
         self._let_go(peer_address)
 
     def _let_go(self, peer: hci.Address) -> None:
-        """The link holds no more on this side: when `peer` holds none either, they may page."""
-        if not self._held_by(peer):
+        """When neither side holds anything for the other any more, they may page."""
+        if peer not in self.classic_connections and not self._held_by(peer):
             self.link.let_go(self.public_address, peer)
 
     def authenticated(self, peer: hci.Address) -> bool:

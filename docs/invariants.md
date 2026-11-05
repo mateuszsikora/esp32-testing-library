@@ -558,11 +558,13 @@ that references to its number keep their meaning.
     `tests/test_spp_peer.py::test_a_remote_name_request_to_a_peer_that_left_ends_at_the_page_timeout`,
     `tests/test_spp_peer.py::test_a_second_remote_name_request_ends_when_the_first_does`,
     `tests/test_spp_peer.py::test_a_remote_name_request_is_answered_at_once_when_the_peer_is_there`
-- **172.** A target that heard a page loses contact when the pager leaves, and its end falls at the
-    supervision timeout counted from then. A target whose host has not answered tells it of no link
-    when its end goes, and a host that answers later gets a failed `Connection_Complete`: a late
-    answer makes no link, completes no later page, leaves a working link as it is, and does not fail
-    the air.
+- **172.** A target that heard a page loses contact when the pager leaves, also after that page
+    ended, and its end falls at the supervision timeout counted from then. A target whose host has not
+    answered tells it of no link when its end goes, and a host that answers later gets a failed
+    `Connection_Complete`: such an answer, late because this side's entry for it went, makes no link,
+    completes no later page, leaves a working link as it is, and does not fail the air. An acceptance
+    that comes when only the pager's page has ended finds its entry, and makes a link, except with
+    `role=CENTRAL` (#141).
     `tests/test_spp_peer.py::test_a_target_that_heard_the_page_loses_contact_when_the_pager_leaves`,
     `tests/test_spp_peer.py::test_a_pager_whose_power_cycles_before_the_host_answers_gets_no_link`,
     `tests/test_spp_peer.py::test_a_target_that_leaves_before_its_host_answers_tells_its_host_of_no_link`,
@@ -575,9 +577,52 @@ that references to its number keep their meaning.
     `tests/test_spp_peer.py::test_two_answers_to_pages_that_ended_do_not_fail_the_air`,
     `tests/test_spp_peer.py::test_every_late_answer_is_counted_before_a_new_page_is_answered`,
     `tests/test_spp_peer.py::test_an_answer_owed_after_the_link_was_ended_does_not_fail_the_air`,
-    `tests/test_spp_peer.py::test_an_answer_owed_after_a_crossing_page_ended_does_not_fail_the_air`,
+    `tests/test_spp_peer.py::test_an_answer_after_both_crossing_pages_ended_makes_a_link`,
+    `tests/test_spp_peer.py::test_a_pager_that_leaves_after_its_page_ended_is_lost_to_the_target`,
+    `tests/test_spp_peer.py::test_a_pager_that_rejected_a_page_and_leaves_during_its_own_is_lost_to_the_target`,
+    `tests/test_spp_peer.py::test_a_device_that_leaves_is_not_lost_to_a_page_it_never_heard`,
+    `tests/test_spp_peer.py::test_a_page_that_ended_leaves_no_timer_to_fell_the_next_link`,
+    `tests/test_spp_peer.py::test_a_page_longer_than_the_supervision_timeout_keeps_its_entry_until_it_ends`,
+    `tests/test_spp_peer.py::test_an_entry_that_goes_with_a_failed_page_leaves_no_timer_to_fell_the_next_link`,
+    `tests/test_spp_peer.py::test_an_acceptance_on_a_working_link_is_the_hosts_own_error`,
     `tests/test_spp_peer.py::test_an_answer_nothing_is_owed_for_is_the_hosts_own_error`,
     `tests/test_spp_peer.py::test_a_power_loss_at_the_instant_a_page_is_heard_does_not_fail_the_air`
+- **189.** A host that rejects a page gets its answer, and the pager's `Connection_Complete` carries
+    the reason at the instant of the rejection; the target keeps no entry, its host goes on working,
+    and both can connect afterwards. A rejection is an answer: a late one reaches no pager, no later
+    page and no working link, and does not fail the air. A reason outside 0x0D to 0x0F is refused,
+    and the answer stays owed; one with nothing owed is the host's own error, also on a working link.
+    A page of this side's own that fails, or is under way when its entry goes, neither takes the
+    entry of a page it heard nor lets a second page start over it; one the controller refused has no
+    timer and stops no later page. An answer a host never gave takes no later page's, unless its end
+    fell meanwhile. A failed answer of this side's host leaves no entry, unless an answer never given
+    is still counted and a page of this side was under way; an entry that goes takes its timer along.
+    `tests/test_spp_peer.py::test_a_pager_gets_the_reason_at_the_instant_of_the_rejection`,
+    `tests/test_spp_peer.py::test_a_host_that_rejects_a_page_goes_on_working`,
+    `tests/test_spp_peer.py::test_both_can_connect_after_a_rejection`,
+    `tests/test_spp_peer.py::test_a_rejection_of_a_page_that_ended_is_not_heard_by_the_pager`,
+    `tests/test_spp_peer.py::test_a_rejection_after_the_end_fell_is_late_and_does_not_end_the_next_page`,
+    `tests/test_spp_peer.py::test_a_late_rejection_leaves_a_working_link_alone`,
+    `tests/test_spp_peer.py::test_the_answer_after_the_rejection_of_a_page_tried_again_is_late`,
+    `tests/test_spp_peer.py::test_a_rejection_leaves_this_sides_own_page_to_end_by_itself`,
+    `tests/test_spp_peer.py::test_an_answer_owed_while_this_side_pages_again_does_not_touch_that_page`,
+    `tests/test_spp_peer.py::test_a_rejection_ends_the_supervision_of_a_page_whose_pager_left`,
+    `tests/test_spp_peer.py::test_a_reason_outside_the_range_is_refused_and_the_answer_stays_owed`,
+    `tests/test_spp_peer.py::test_a_reason_in_the_range_reaches_both_hosts`,
+    `tests/test_spp_peer.py::test_a_rejection_nothing_is_owed_for_is_the_hosts_own_error`,
+    `tests/test_spp_peer.py::test_a_rejection_on_a_working_link_is_the_hosts_own_error`,
+    `tests/test_spp_peer.py::test_a_page_under_way_is_not_started_again_after_a_rejection_took_the_entry`,
+    `tests/test_spp_peer.py::test_a_page_the_controller_refused_leaves_no_timer_and_can_be_tried_again`,
+    `tests/test_spp_peer.py::test_a_page_this_side_failed_leaves_the_answer_to_a_crossing_page_its_entry`,
+    `tests/test_spp_peer.py::test_a_target_that_paged_too_loses_contact_with_a_pager_that_leaves`,
+    `tests/test_spp_peer.py::test_a_page_this_side_failed_does_not_mend_the_link_to_a_pager_that_lost_power`,
+    `tests/test_spp_peer.py::test_a_device_that_leaves_during_its_own_page_loses_contact_with_a_page_it_heard`,
+    `tests/test_spp_peer.py::test_an_answer_the_host_never_gave_does_not_spoil_a_later_page`,
+    `tests/test_spp_peer.py::test_a_rejection_after_the_pager_left_and_its_page_ended_lets_the_pair_go`,
+    `tests/test_spp_peer.py::test_a_page_of_this_side_that_fails_takes_its_entry_with_an_answer_never_given`,
+    `tests/test_spp_peer.py::test_an_acceptance_whose_role_switch_is_refused_leaves_no_entry`,
+    `tests/test_spp_peer.py::test_a_refused_role_switch_leaves_no_entry_with_an_answer_never_given`,
+    `tests/test_spp_peer.py::test_a_refused_role_switch_leaves_no_entry_while_this_side_pages_too`
 
 ## The esp32tl command
 

@@ -179,6 +179,10 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Devices on the air have a base class without SPP, and an RSSI of their own](harness.md#devices-on-the-air-have-a-base-class-without-spp-and-an-rssi-of-their-own) | `harness.md` | decided (#129) |
 | [Secure Simple Pairing on the peer's side is postponed](harness.md#secure-simple-pairing-on-the-peers-side-is-postponed) | `harness.md` | postponed (#129) |
 | [A remote name request nobody answers ends at the page timeout](harness.md#a-remote-name-request-nobody-answers-ends-at-the-page-timeout) | `harness.md` | decided (#129) |
+| [A host that rejects a page gets the reason too](harness.md#a-host-that-rejects-a-page-gets-the-reason-too) | `harness.md` | decided (#137) |
+| [Rejecting a synchronous link is postponed](harness.md#rejecting-a-synchronous-link-is-postponed) | `harness.md` | postponed (#34) |
+| [A page of this side that fails leaves the entry of a page it heard](harness.md#a-page-of-this-side-that-fails-leaves-the-entry-of-a-page-it-heard) | `harness.md` | decided (#137) |
+| [Keeping a heard page apart from this side's own is postponed](harness.md#keeping-a-heard-page-apart-from-this-sides-own-is-postponed) | `harness.md` | postponed (#144) |
 | [A page that respects page scan is postponed](harness.md#a-page-that-respects-page-scan-is-postponed) | `harness.md` | postponed (#135) |
 | [Connection_Accept_Timeout is postponed](harness.md#connection_accept_timeout-is-postponed) | `harness.md` | postponed (#34) |
 | [A bt fixture, an HCI tap and a replayed peer are postponed](harness.md#a-bt-fixture-an-hci-tap-and-a-replayed-peer-are-postponed) | `harness.md` | postponed (#33) |

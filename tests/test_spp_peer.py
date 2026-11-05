@@ -8,7 +8,7 @@ answers what it writes, on the board's clock."""
 
 import asyncio
 import re
-from collections.abc import Coroutine, Iterable, Iterator
+from collections.abc import Awaitable, Callable, Coroutine, Iterable, Iterator
 from typing import Any
 
 import pytest
@@ -1578,19 +1578,40 @@ def test_a_power_loss_ends_a_remote_name_request_and_its_timer_does_not_end_the_
 # A target whose host takes its time to answer a page.
 
 
-def slow_to_accept(target: BluetoothDevice, patch: pytest.MonkeyPatch, *delays: float) -> None:
-    """The host of `target` answers each page it hears after the next of `delays` seconds, as
-    firmware may, and 0.1 s after those run out. Its other commands go on meanwhile."""
+ANSWERS = (hci.HCI_Accept_Connection_Request_Command, hci.HCI_Reject_Connection_Request_Command)
+
+
+def changing_answers(
+    target: BluetoothDevice,
+    patch: pytest.MonkeyPatch,
+    change: Callable[[hci.HCI_AsyncCommand], Awaitable[hci.HCI_AsyncCommand | None]],
+) -> None:
+    """The host of `target` sends what `change` makes of each answer to a page it hears, nothing
+    for `None`. Its other commands go on meanwhile."""
     host = target.device.host
     send = host.send_async_command
-    left = list(delays)
 
-    async def later(command: hci.HCI_AsyncCommand, *arguments: Any) -> Any:
-        if isinstance(command, hci.HCI_Accept_Connection_Request_Command):
-            await asyncio.sleep(left.pop(0) if left else 0.1)
+    async def answer(command: hci.HCI_AsyncCommand, *arguments: Any) -> Any:
+        if isinstance(command, ANSWERS):
+            changed = await change(command)
+            if changed is None:
+                return None
+            command = changed
         return await send(command, *arguments)
 
-    patch.setattr(host, "send_async_command", later)
+    patch.setattr(host, "send_async_command", answer)
+
+
+def slow_to_accept(target: BluetoothDevice, patch: pytest.MonkeyPatch, *delays: float) -> None:
+    """The host of `target` answers each page it hears after the next of `delays` seconds, as
+    firmware may, and 0.1 s after those run out."""
+    left = list(delays)
+
+    async def later(command: hci.HCI_AsyncCommand) -> hci.HCI_AsyncCommand:
+        await asyncio.sleep(left.pop(0) if left else 0.1)
+        return command
+
+    changing_answers(target, patch, later)
 
 
 def falls_of(air: Air, device: BluetoothDevice) -> list[tuple[int, int]]:
@@ -1875,27 +1896,69 @@ def test_an_answer_owed_after_the_link_was_ended_does_not_fail_the_air(
     assert not speaker.device.connections
 
 
-def test_an_answer_owed_after_a_crossing_page_ended_does_not_fail_the_air(
+def test_an_answer_after_both_crossing_pages_ended_makes_a_link(
     air: Air, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     phone, speaker = phone_and_speaker(air)
     slow_to_accept(speaker, monkeypatch, 5.5)
     failed = failures_of(air, speaker)
-    phone.out_of_range()
-    outgoing = air.start(page(speaker, PHONE))
-    air.advance(seconds(1))
-    phone.in_range()
-    incoming = air.start(page(phone, SPEAKER))
+    outgoing, incoming = crossing_pages(air, phone, speaker)
     air.advance(seconds(7))
     assert isinstance(outgoing.exception(), core.ConnectionError)
     assert isinstance(incoming.exception(), core.ConnectionError)
-    # The speaker's page ended at its timeout, taking the entry the phone's page had replaced it
-    # with; the answer to that page comes after.
+    # The speaker's page ended at its timeout and left the phone's page its entry, which the
+    # answer finds: with no accept timeout the link is made though both pages reported an end.
+    assert failed == [(5_120 * MS, PAGE_TIMEOUT)]
+    assert list(phone.device.connections) == list(speaker.device.connections) == [1]
+
+
+def test_a_target_that_paged_too_loses_contact_with_a_pager_that_leaves(
+    air: Air, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    phone, speaker = phone_and_speaker(air)
+    slow_to_accept(speaker, monkeypatch, 30)
+    failed = failures_of(air, speaker)
+    outgoing, incoming = crossing_pages(air, phone, speaker)
+    air.advance(seconds(2))
+    phone.out_of_range()
+    air.advance(seconds(10))
+    assert isinstance(outgoing.exception(), core.ConnectionError)
+    assert isinstance(incoming.exception(), core.ConnectionError)
+    # The entry of the phone's page outlives the speaker's own page, and falls in its own time.
+    assert held_by(air, speaker) == [hci.Address(PHONE + "/P")]
+    air.advance(ms(21_999))
+    assert held_by(air, speaker) == [hci.Address(PHONE + "/P")]
+    air.advance(ms(22_001))
+    assert held_by(air, speaker) == []
+    air.advance(seconds(31))
     assert failed == [
-        (5_120 * MS, hci.HCI_ErrorCode.PAGE_TIMEOUT_ERROR),
-        (6_500 * MS, hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR),
+        (5_120 * MS, PAGE_TIMEOUT),
+        (31_000 * MS, hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR),
     ]
-    assert not speaker.device.connections
+    phone.in_range()
+    monkeypatch.undo()
+    air.run(page(phone, SPEAKER), within=seconds(1))
+
+
+def test_a_page_this_side_failed_does_not_mend_the_link_to_a_pager_that_lost_power(
+    air: Air, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    phone, speaker = phone_and_speaker(air)
+    slow_to_accept(speaker, monkeypatch, 9)
+    fell = falls_of(air, speaker)
+    outgoing, incoming = crossing_pages(air, phone, speaker)
+    air.advance(seconds(2))
+    phone.switch_off()
+    air.advance(seconds(6))
+    assert isinstance(outgoing.exception(), core.ConnectionError)
+    assert isinstance(incoming.exception(), core.ConnectionError)
+    phone.switch_on()
+    # The speaker still holds the phone's page, whose answer comes at 10 s: it reaches nobody.
+    air.advance(seconds(11))
+    assert not phone.device.connections
+    assert list(speaker.device.connections) == [1]
+    air.advance(seconds(23))
+    assert fell == [(22_000 * MS, hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR)]
 
 
 def test_an_answer_nothing_is_owed_for_is_the_hosts_own_error(air: Air) -> None:
@@ -1925,6 +1988,690 @@ def test_two_answers_to_pages_that_ended_do_not_fail_the_air(
     timeout = hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR
     assert failed == [(6_000 * MS, timeout), (11_500 * MS, timeout)]
     assert not speaker.device.connections
+
+
+LIMITED = hci.HCI_ErrorCode.CONNECTION_REJECTED_DUE_TO_LIMITED_RESOURCES_ERROR
+PAGE_TIMEOUT = hci.HCI_ErrorCode.PAGE_TIMEOUT_ERROR
+
+
+def rejecting(device: BluetoothDevice) -> BluetoothDevice:
+    """`device`, whose host rejects every page it hears, as Bumble's does with no one waiting."""
+    device.device.classic_accept_any = False
+    return device
+
+
+def crossing_pages(
+    air: Air, phone: BluetoothDevice, speaker: BluetoothDevice
+) -> tuple[asyncio.Task[Connection], asyncio.Task[Connection]]:
+    """The speaker pages the phone, which is away; the phone returns at 1 s, and pages it back. The
+    speaker's entry is then that of the phone's page, and its own page is still under way."""
+    phone.out_of_range()
+    outgoing = air.start(page(speaker, PHONE))
+    air.advance(seconds(1))
+    phone.in_range()
+    return outgoing, air.start(page(phone, SPEAKER))
+
+
+async def paging_each_other(phone: BluetoothDevice, speaker: BluetoothDevice) -> Any:
+    """Both page at one instant, so that each hears the other's page during its own."""
+    return await asyncio.gather(page(phone, SPEAKER), page(speaker, PHONE), return_exceptions=True)
+
+
+def reject_page(address: str, reason: int) -> hci.HCI_Reject_Connection_Request_Command:
+    return hci.HCI_Reject_Connection_Request_Command(
+        bd_addr=hci.Address(address + "/P"), reason=reason
+    )
+
+
+def write_page_timeout(air: Air, device: BluetoothDevice, slots: int) -> None:
+    command = hci.HCI_Write_Page_Timeout_Command(page_timeout=slots)
+    air.run(device.device.host.send_sync_command(command), within=seconds(0))
+
+
+def held_by(air: Air, device: BluetoothDevice) -> list[hci.Address]:
+    """The peers the controller of `device` holds an entry for."""
+    controller = air.link.find_classic_controller(device.device.public_address)
+    assert controller is not None
+    return list(controller.classic_connections)
+
+
+def test_a_pager_gets_the_reason_at_the_instant_of_the_rejection(
+    air: Air, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    phone, speaker = phone_and_speaker(air)
+    rejecting(speaker)
+    slow_to_accept(speaker, monkeypatch, 1)
+    paging = failures_of(air, phone)
+    rejected = failures_of(air, speaker)
+    with pytest.raises(core.ConnectionError) as raised:
+        air.run(page(phone, SPEAKER), within=seconds(2))
+    assert raised.value.error_code == LIMITED
+    assert air.now == seconds(1)
+    assert paging == [(1_000 * MS, LIMITED)]
+    assert rejected == [(1_000 * MS, LIMITED)]
+
+
+def test_a_host_that_rejects_a_page_goes_on_working(air: Air) -> None:
+    phone, speaker = phone_and_speaker(air)
+    rejecting(speaker)
+    with pytest.raises(core.ConnectionError):
+        air.run(page(phone, SPEAKER), within=seconds(1))
+    assert air.now == seconds(0)
+    assert held_by(air, phone) == []
+    assert held_by(air, speaker) == []
+    air.run(speaker.device.set_connectable(True), within=seconds(1))
+
+
+def test_both_can_connect_after_a_rejection(air: Air) -> None:
+    phone, speaker = phone_and_speaker(air)
+    rejecting(speaker)
+    with pytest.raises(core.ConnectionError):
+        air.run(page(phone, SPEAKER), within=seconds(1))
+    # The other way, while the host would still reject a page.
+    connection = air.run(page(speaker, PHONE), within=seconds(1))
+    air.run(connection.disconnect(), within=seconds(1))
+    speaker.device.classic_accept_any = True
+    air.run(page(phone, SPEAKER), within=seconds(1))
+    assert list(phone.device.connections) == list(speaker.device.connections) == [1]
+
+
+def test_a_rejection_of_a_page_that_ended_is_not_heard_by_the_pager(
+    air: Air, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    phone, speaker = phone_and_speaker(air)
+    rejecting(speaker)
+    slow_to_accept(speaker, monkeypatch, 6)
+    paging = failures_of(air, phone)
+    rejected = failures_of(air, speaker)
+    task = air.start(page(phone, SPEAKER))
+    air.advance(seconds(7))
+    assert isinstance(task.exception(), core.ConnectionError)
+    assert paging == [(5_120 * MS, PAGE_TIMEOUT)]
+    assert rejected == [(6_000 * MS, LIMITED)]
+    assert held_by(air, speaker) == []
+    speaker.device.classic_accept_any = True
+    air.run(page(phone, SPEAKER), within=seconds(1))
+
+
+def test_a_rejection_after_the_end_fell_is_late_and_does_not_end_the_next_page(
+    air: Air, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    phone, speaker = phone_and_speaker(air)
+    rejecting(speaker)
+    slow_to_accept(speaker, monkeypatch, 6, 1)
+    paging = failures_of(air, phone)
+    rejected = failures_of(air, speaker)
+    first = air.start(page(phone, SPEAKER))
+    air.advance(ms(50))
+    speaker.switch_off()
+    speaker.switch_on()
+    air.advance(ms(5_500))
+    assert isinstance(first.exception(), core.ConnectionError)
+
+    second = air.start(page(phone, SPEAKER))
+    air.advance(ms(6_100))
+    # The answer to the first, at 6 s, reaches nobody; the second page waits for its own.
+    assert rejected == [(6_000 * MS, hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR)]
+    assert paging == [(5_120 * MS, PAGE_TIMEOUT)]
+    assert not second.done()
+    air.advance(ms(6_500))
+    assert paging == [(5_120 * MS, PAGE_TIMEOUT), (6_500 * MS, LIMITED)]
+    assert rejected[1:] == [(6_500 * MS, LIMITED)]
+
+
+def test_a_late_rejection_leaves_a_working_link_alone(
+    air: Air, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    phone, speaker = phone_and_speaker(air)
+    rejecting(speaker)
+    slow_to_accept(speaker, monkeypatch, 6)
+    first = air.start(page(phone, SPEAKER))
+    air.advance(ms(50))
+    speaker.switch_off()
+    speaker.switch_on()
+    air.advance(ms(5_500))
+    assert first.done()
+    air.run(page(speaker, PHONE), within=seconds(1))
+    air.advance(seconds(7))
+    assert list(phone.device.connections) == list(speaker.device.connections) == [1]
+    assert held_by(air, speaker) == [hci.Address(PHONE + "/P")]
+
+
+def test_the_answer_after_the_rejection_of_a_page_tried_again_is_late(
+    air: Air, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The first answer ends the second page, as an acceptance would connect it, so the second
+    answer has nothing left to answer."""
+    phone, speaker = phone_and_speaker(air)
+    rejecting(speaker)
+    slow_to_accept(speaker, monkeypatch, 6, 6)
+    paging = failures_of(air, phone)
+    rejected = failures_of(air, speaker)
+    first = air.start(page(phone, SPEAKER))
+    air.advance(ms(5_500))
+    assert isinstance(first.exception(), core.ConnectionError)
+    second = air.start(page(phone, SPEAKER))
+    air.advance(seconds(12))
+    assert isinstance(second.exception(), core.ConnectionError)
+    assert paging == [(5_120 * MS, PAGE_TIMEOUT), (6_000 * MS, LIMITED)]
+    assert rejected == [
+        (6_000 * MS, LIMITED),
+        (11_500 * MS, hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR),
+    ]
+
+
+def test_a_rejection_leaves_this_sides_own_page_to_end_by_itself(air: Air) -> None:
+    phone, speaker = phone_and_speaker(air)
+    rejecting(speaker)
+    paging = failures_of(air, phone)
+    rejected = failures_of(air, speaker)
+    outgoing, incoming = crossing_pages(air, phone, speaker)
+    air.advance(ms(1_001))
+    assert isinstance(incoming.exception(), core.ConnectionError)
+    assert paging == [(1_000 * MS, LIMITED)]
+    # The event names only the address: to the speaker's host it would end its own page.
+    assert rejected == []
+    assert not outgoing.done()
+    air.advance(seconds(6))
+    assert isinstance(outgoing.exception(), core.ConnectionError)
+    assert rejected == [(5_120 * MS, PAGE_TIMEOUT)]
+
+
+@pytest.mark.parametrize("rejects", [False, True], ids=["accept", "reject"])
+def test_an_answer_owed_while_this_side_pages_again_does_not_touch_that_page(
+    air: Air, rejects: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    phone, speaker = phone_and_speaker(air)
+    slow_to_accept(speaker, monkeypatch, 6, 6)
+    failed = failures_of(air, speaker)
+    first = air.start(page(phone, SPEAKER))
+    air.advance(ms(5_500))
+    assert isinstance(first.exception(), core.ConnectionError)
+    # The answer to the first page connects this one, and the answer to this one is left owing.
+    speaker.device.classic_accept_any = not rejects
+    second = air.start(page(phone, SPEAKER))
+    air.advance(seconds(7))
+    air.run(second.result().disconnect(), within=seconds(1))
+    phone.out_of_range()
+    again = air.start(page(speaker, PHONE))
+    air.advance(seconds(8))
+    assert held_by(air, speaker) == [hci.Address(PHONE + "/P")]
+    # The answer comes at 11.5 s, and finds only this side's own page.
+    air.advance(ms(12_000))
+    assert held_by(air, speaker) == [hci.Address(PHONE + "/P")]
+    air.advance(ms(12_119))
+    assert not again.done()
+    air.advance(ms(12_121))
+    assert isinstance(again.exception(), core.ConnectionError)
+    assert [status for _, status in failed] == [PAGE_TIMEOUT]
+    assert not speaker.device.connections
+
+
+def test_a_page_the_controller_refused_leaves_no_timer_and_can_be_tried_again(
+    air: Air, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    phone, _ = phone_and_speaker(air)
+    failed = failures_of(air, phone)
+    controller = air.link.find_classic_controller(phone.device.public_address)
+    assert controller is not None
+    monkeypatch.setattr(controller, "pending_le_connection", object())
+    with pytest.raises(hci.HCI_Error) as raised:
+        air.run(page(phone, SPEAKER), within=seconds(0))
+    assert raised.value.error_code == hci.HCI_ErrorCode.CONTROLLER_BUSY_ERROR
+    monkeypatch.undo()
+    air.run(page(phone, SPEAKER), within=seconds(1))
+    assert list(phone.device.connections) == [1]
+    # Past the 5.12 s the refused page's timer would have ended at.
+    air.advance(seconds(6))
+    assert failed == []
+    assert list(phone.device.connections) == [1]
+
+
+def test_a_device_that_leaves_during_its_own_page_loses_contact_with_a_page_it_heard(
+    air: Air, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The pager's page ends first, so only the device that leaves holds anything of it."""
+    phone, speaker = phone_and_speaker(air)
+    write_page_timeout(air, phone, 1600)
+    slow_to_accept(speaker, monkeypatch, 19)
+    fell = falls_of(air, speaker)
+    outgoing, incoming = crossing_pages(air, phone, speaker)
+    air.advance(seconds(3))
+    assert isinstance(incoming.exception(), core.ConnectionError)
+    assert not outgoing.done()
+    speaker.out_of_range()
+    # The host answers at 20 s a page whose contact was lost at 3 s; that end falls 20 s after it.
+    air.advance(seconds(25))
+    assert isinstance(outgoing.exception(), core.ConnectionError)
+    assert fell == [(23_000 * MS, hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR)]
+    assert not speaker.device.connections
+    assert not phone.device.connections
+
+
+def skipping_answers(target: BluetoothDevice, patch: pytest.MonkeyPatch, skipped: int) -> None:
+    """The host of `target` does not answer the next `skipped` pages it hears, as firmware may."""
+    left = [skipped]
+
+    async def maybe(command: hci.HCI_AsyncCommand) -> hci.HCI_AsyncCommand | None:
+        if left[0] > 0:
+            left[0] -= 1
+            return None
+        return command
+
+    changing_answers(target, patch, maybe)
+
+
+@pytest.mark.parametrize("rejects", [False, True], ids=["accept", "reject"])
+def test_an_answer_the_host_never_gave_does_not_spoil_a_later_page(
+    air: Air, rejects: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    phone, speaker = phone_and_speaker(air)
+    skipping_answers(speaker, monkeypatch, 1)
+    paging = failures_of(air, phone)
+    first = air.start(page(phone, SPEAKER))
+    air.advance(seconds(6))
+    assert isinstance(first.exception(), core.ConnectionError)
+    assert paging == [(5_120 * MS, PAGE_TIMEOUT)]
+
+    # The second page gets its answer, and the third must get its own all the same.
+    speaker.device.classic_accept_any = not rejects
+    if rejects:
+        with pytest.raises(core.ConnectionError):
+            air.run(page(phone, SPEAKER), within=seconds(1))
+    else:
+        connection = air.run(page(phone, SPEAKER), within=seconds(1))
+        air.run(connection.disconnect(), within=seconds(1))
+    speaker.device.classic_accept_any = True
+    air.run(page(phone, SPEAKER), within=seconds(1))
+    assert list(phone.device.connections) == list(speaker.device.connections)
+    assert len(phone.device.connections) == 1
+
+
+def test_a_rejection_after_the_pager_left_and_its_page_ended_lets_the_pair_go(
+    air: Air, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    phone, speaker = phone_and_speaker(air)
+    rejecting(speaker)
+    slow_to_accept(speaker, monkeypatch, 6)
+    task = air.start(page(phone, SPEAKER))
+    air.advance(ms(50))
+    phone.out_of_range()
+    air.advance(seconds(7))
+    assert isinstance(task.exception(), core.ConnectionError)
+    assert held_by(air, speaker) == []
+    phone.in_range()
+    speaker.device.classic_accept_any = True
+    air.run(page(phone, SPEAKER), within=seconds(1))
+
+
+def test_a_page_of_this_side_that_fails_takes_its_entry_with_an_answer_never_given(
+    air: Air, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    phone, speaker = phone_and_speaker(air)
+    skipping_answers(speaker, monkeypatch, 1)
+    first = air.start(page(phone, SPEAKER))
+    air.advance(seconds(6))
+    assert isinstance(first.exception(), core.ConnectionError)
+    connection = air.run(page(phone, SPEAKER), within=seconds(1))
+    air.run(connection.disconnect(), within=seconds(1))
+
+    phone.out_of_range()
+    again = air.start(page(speaker, PHONE))
+    air.advance(seconds(12))
+    assert isinstance(again.exception(), core.ConnectionError)
+    assert held_by(air, speaker) == []
+    phone.in_range()
+    air.run(page(speaker, PHONE), within=seconds(1))
+
+
+def accepting_as_central_after(
+    target: BluetoothDevice, patch: pytest.MonkeyPatch, *skipped_then_delay: float
+) -> None:
+    """The host of `target` does not answer one page for each 0 given, then accepts a page after
+    the delay given, asking for the central's role."""
+    left = list(skipped_then_delay)
+
+    async def as_central(command: hci.HCI_AsyncCommand) -> hci.HCI_AsyncCommand | None:
+        delay = left.pop(0)
+        if delay == 0:
+            return None
+        await asyncio.sleep(delay)
+        assert isinstance(command, hci.HCI_Accept_Connection_Request_Command)
+        return hci.HCI_Accept_Connection_Request_Command(
+            bd_addr=command.bd_addr, role=hci.Role.CENTRAL
+        )
+
+    changing_answers(target, patch, as_central)
+
+
+def refusing_role_switch(air: Air, pager: BluetoothDevice, target: BluetoothDevice) -> None:
+    controller = air.link.find_classic_controller(pager.device.public_address)
+    assert controller is not None
+    entry = controller.classic_connections[target.device.public_address]
+    entry.classic_allow_role_switch = False
+
+
+def test_an_acceptance_whose_role_switch_is_refused_leaves_no_entry(
+    air: Air, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    phone, speaker = phone_and_speaker(air)
+    accepting_as_central_after(speaker, monkeypatch, 1)
+    task = air.start(page(phone, SPEAKER))
+    air.advance(ms(50))
+    refusing_role_switch(air, phone, speaker)
+    air.advance(seconds(2))
+    assert isinstance(task.exception(), core.ConnectionError)
+    assert held_by(air, speaker) == []
+    monkeypatch.undo()
+    air.run(page(phone, SPEAKER), within=seconds(1))
+
+
+def test_a_refused_role_switch_leaves_no_entry_with_an_answer_never_given(
+    air: Air, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    phone, speaker = phone_and_speaker(air)
+    accepting_as_central_after(speaker, monkeypatch, 0, 1)
+    first = air.start(page(phone, SPEAKER))
+    air.advance(seconds(6))
+    assert isinstance(first.exception(), core.ConnectionError)
+    second = air.start(page(phone, SPEAKER))
+    air.advance(ms(6_050))
+    refusing_role_switch(air, phone, speaker)
+    air.advance(seconds(8))
+    assert isinstance(second.exception(), core.ConnectionError)
+    assert held_by(air, speaker) == []
+
+
+def test_a_refused_role_switch_leaves_no_entry_while_this_side_pages_too(
+    air: Air, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    phone, speaker = phone_and_speaker(air)
+    accepting_as_central_after(speaker, monkeypatch, 1)
+    outgoing, incoming = crossing_pages(air, phone, speaker)
+    air.advance(ms(1_050))
+    refusing_role_switch(air, phone, speaker)
+    air.advance(seconds(3))
+    assert isinstance(incoming.exception(), core.ConnectionError)
+    assert isinstance(outgoing.exception(), core.ConnectionError)
+    assert held_by(air, speaker) == []
+    monkeypatch.undo()
+    air.run(page(speaker, PHONE), within=seconds(1))
+
+
+def test_a_pager_that_leaves_after_its_page_ended_is_lost_to_the_target(
+    air: Air, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    phone, speaker = phone_and_speaker(air)
+    slow_to_accept(speaker, monkeypatch, 10)
+    fell = falls_of(air, speaker)
+    task = air.start(page(phone, SPEAKER))
+    air.advance(seconds(6))
+    assert isinstance(task.exception(), core.ConnectionError)
+    phone.out_of_range()
+    # The answer at 10 s makes a link on the target's end only, which falls 20 s from the leaving.
+    air.advance(seconds(27))
+    assert fell == [(26_000 * MS, hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR)]
+    assert not speaker.device.connections
+    assert not phone.device.connections
+    phone.in_range()
+    monkeypatch.undo()
+    air.run(page(phone, SPEAKER), within=seconds(1))
+
+
+def test_a_pager_that_rejected_a_page_and_leaves_during_its_own_is_lost_to_the_target(
+    air: Air, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    phone, speaker = phone_and_speaker(air)
+    rejecting(phone)
+    slow_to_accept(speaker, monkeypatch, 3)
+    fell = falls_of(air, speaker)
+    task = air.start(paging_each_other(phone, speaker))
+    air.advance(ms(500))
+    assert held_by(air, phone) == []
+    phone.out_of_range()
+    air.advance(seconds(22))
+    assert task.done()
+    assert fell == [(20_500 * MS, hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR)]
+    assert not speaker.device.connections
+    assert not phone.device.connections
+
+
+def test_a_page_that_ended_leaves_no_timer_to_fell_the_next_link(
+    air: Air, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    phone, speaker = phone_and_speaker(air)
+    slow_to_accept(speaker, monkeypatch, 1)
+    fell = falls_of(air, phone)
+    task = air.start(page(phone, SPEAKER))
+    air.advance(ms(50))
+    phone.out_of_range()
+    # The target's end is a link by 1 s, and its host ends it after the phone's page has ended.
+    air.advance(seconds(6))
+    assert isinstance(task.exception(), core.ConnectionError)
+    held = list(speaker.device.connections.values())
+    assert len(held) == 1
+    air.run(held[0].disconnect(), within=seconds(1))
+    phone.in_range()
+    monkeypatch.undo()
+    air.run(page(phone, SPEAKER), within=seconds(1))
+    # Past the 20 s after the leaving that a timer of the old page would have ended this one at.
+    air.advance(seconds(25))
+    assert fell == []
+    assert len(phone.device.connections) == 1
+
+
+def test_an_entry_that_goes_with_a_failed_page_leaves_no_timer_to_fell_the_next_link(
+    air: Air, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    phone, speaker = phone_and_speaker(air)
+    rejecting(phone)
+    slow_to_accept(phone, monkeypatch, 3)
+    # An acceptance that waits for a role switch nobody can answer: the entry stays, lost at 1 s,
+    # with no answer owed, until the speaker's own page ends at 5.12 s and takes it.
+    accepting_as_central_after(speaker, monkeypatch, 2)
+    fell = falls_of(air, speaker)
+    task = air.start(paging_each_other(phone, speaker))
+    air.advance(seconds(1))
+    phone.out_of_range()
+    air.advance(seconds(6))
+    assert task.done()
+    assert held_by(air, speaker) == []
+    phone.in_range()
+    monkeypatch.undo()
+    air.run(page(phone, SPEAKER), within=seconds(1))
+    # Past the 20 s from the leaving, at which a timer of that entry would have felled this link.
+    air.advance(seconds(25))
+    assert fell == []
+    assert len(speaker.device.connections) == len(phone.device.connections) == 1
+
+
+def test_a_page_longer_than_the_supervision_timeout_keeps_its_entry_until_it_ends(
+    air: Air, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    phone, speaker = phone_and_speaker(air)
+    write_page_timeout(air, phone, 0xFFFF)
+    slow_to_accept(speaker, monkeypatch, 30)
+    task = air.start(page(phone, SPEAKER))
+    air.advance(seconds(1))
+    phone.out_of_range()
+    # The target's end falls at 21 s; the phone's own page has no contact to lose, and goes on.
+    air.advance(seconds(25))
+    assert held_by(air, speaker) == []
+    assert held_by(air, phone) == [hci.Address(SPEAKER + "/P")]
+    assert not task.done()
+    air.advance(seconds(41))
+    assert isinstance(task.exception(), core.ConnectionError)
+    assert held_by(air, phone) == []
+
+
+def test_a_device_that_leaves_is_not_lost_to_a_page_it_never_heard(air: Air) -> None:
+    phone, speaker = phone_and_speaker(air)
+    phone.out_of_range()
+    air.start(page(speaker, PHONE))
+    air.advance(seconds(1))
+    phone.in_range()
+    phone.out_of_range()
+    phone.in_range()
+    # Nothing is severed: the phone hears nothing of the old page, and can page the speaker at once.
+    air.run(page(phone, SPEAKER), within=seconds(1))
+    assert list(phone.device.connections) == [1]
+
+
+def test_a_rejection_on_a_working_link_is_the_hosts_own_error(air: Air) -> None:
+    phone, speaker = phone_and_speaker(air)
+    failed = failures_of(air, speaker)
+    air.run(page(phone, SPEAKER), within=seconds(1))
+    reject = reject_page(PHONE, LIMITED)
+    with pytest.raises(hci.HCI_Error) as raised:
+        air.run(speaker.device.host.send_async_command(reject), within=seconds(0))
+    assert raised.value.error_code == hci.HCI_ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR
+    air.wait(seconds(1))
+    assert failed == []
+    assert list(speaker.device.connections) == [1]
+
+
+def test_an_acceptance_on_a_working_link_is_the_hosts_own_error(air: Air) -> None:
+    phone, speaker = phone_and_speaker(air)
+    failed = failures_of(air, speaker)
+    air.run(page(phone, SPEAKER), within=seconds(1))
+    accept = hci.HCI_Accept_Connection_Request_Command(
+        bd_addr=hci.Address(PHONE + "/P"), role=hci.Role.PERIPHERAL
+    )
+    with pytest.raises(hci.HCI_Error) as raised:
+        air.run(speaker.device.host.send_async_command(accept), within=seconds(0))
+    assert raised.value.error_code == hci.HCI_ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR
+    air.wait(seconds(1))
+    assert failed == []
+    assert list(speaker.device.connections) == [1]
+
+
+def test_a_page_under_way_is_not_started_again_after_a_rejection_took_the_entry(air: Air) -> None:
+    phone, speaker = phone_and_speaker(air)
+    rejecting(speaker)
+    failed = failures_of(air, speaker)
+    outgoing, incoming = crossing_pages(air, phone, speaker)
+    air.advance(ms(1_001))
+    assert isinstance(incoming.exception(), core.ConnectionError)
+    assert held_by(air, speaker) == []
+
+    with pytest.raises(hci.HCI_Error) as raised:
+        air.run(page(speaker, PHONE), within=seconds(0))
+    assert raised.value.error_code == hci.HCI_ErrorCode.CONNECTION_ALREADY_EXISTS_ERROR
+    air.advance(seconds(6))
+    assert isinstance(outgoing.exception(), core.ConnectionError)
+    assert failed == [(5_120 * MS, PAGE_TIMEOUT)]
+    # Its timer ended it: the next page runs its whole length.
+    phone.out_of_range()
+    again = air.start(page(speaker, PHONE))
+    air.advance(ms(11_119))
+    assert not again.done()
+    air.advance(ms(11_121))
+    assert again.done()
+    assert [status for _, status in failed] == [PAGE_TIMEOUT, PAGE_TIMEOUT]
+
+
+@pytest.mark.parametrize("rejects", [False, True], ids=["accept", "reject"])
+def test_a_page_this_side_failed_leaves_the_answer_to_a_crossing_page_its_entry(
+    air: Air, rejects: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    phone, speaker = phone_and_speaker(air)
+    speaker.device.classic_accept_any = not rejects
+    slow_to_accept(speaker, monkeypatch, 4.5)
+    paging = failures_of(air, phone)
+    answering = failures_of(air, speaker)
+    outgoing, incoming = crossing_pages(air, phone, speaker)
+    air.advance(ms(5_200))
+    # The speaker's own page is over, and the phone's still waits for the speaker's host.
+    assert isinstance(outgoing.exception(), core.ConnectionError)
+    assert held_by(air, speaker) == [hci.Address(PHONE + "/P")]
+    assert not incoming.done()
+    # That entry refuses another page, though this one has reported its end.
+    with pytest.raises(hci.HCI_Error) as raised:
+        air.run(page(speaker, PHONE), within=seconds(0))
+    assert raised.value.error_code == hci.HCI_ErrorCode.CONNECTION_ALREADY_EXISTS_ERROR
+    air.advance(ms(5_600))
+    assert incoming.done()
+    if rejects:
+        assert paging == [(5_500 * MS, LIMITED)]
+        assert answering == [(5_120 * MS, PAGE_TIMEOUT), (5_500 * MS, LIMITED)]
+        assert held_by(air, speaker) == []
+    else:
+        assert incoming.exception() is None
+        assert paging == []
+        assert answering == [(5_120 * MS, PAGE_TIMEOUT)]
+        assert list(phone.device.connections) == list(speaker.device.connections) == [1]
+
+
+def test_a_rejection_ends_the_supervision_of_a_page_whose_pager_left(
+    air: Air, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    phone, speaker = phone_and_speaker(air)
+    rejecting(speaker)
+    slow_to_accept(speaker, monkeypatch, 1)
+    paging = failures_of(air, phone)
+    rejected = failures_of(air, speaker)
+    fell = falls_of(air, speaker)
+    task = air.start(page(phone, SPEAKER))
+    air.advance(ms(50))
+    phone.out_of_range()
+    air.advance(seconds(6))
+    assert isinstance(task.exception(), core.ConnectionError)
+    # The pager was out of reach of the rejection: its page ended by itself.
+    assert paging == [(5_120 * MS, PAGE_TIMEOUT)]
+    assert rejected == [(1_000 * MS, LIMITED)]
+    phone.in_range()
+    speaker.device.classic_accept_any = True
+    air.run(page(phone, SPEAKER), within=seconds(1))
+    # Past the 20 s the first page's timer would have fallen at.
+    air.advance(seconds(25))
+    assert fell == []
+    assert list(speaker.device.connections) == [1]
+
+
+@pytest.mark.parametrize("reason", [0x00, 0x0C, 0x10], ids=hex)
+def test_a_reason_outside_the_range_is_refused_and_the_answer_stays_owed(
+    air: Air, reason: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    phone, speaker = phone_and_speaker(air)
+    slow_to_accept(speaker, monkeypatch, 1, 0)
+    task = air.start(page(phone, SPEAKER))
+    air.advance(ms(50))
+    reject = reject_page(PHONE, reason)
+    with pytest.raises(hci.HCI_Error) as raised:
+        air.run(speaker.device.host.send_async_command(reject), within=seconds(0))
+    assert raised.value.error_code == hci.HCI_ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR
+    assert not task.done()
+    # The acceptance on its way is still the answer to this page.
+    air.advance(seconds(2))
+    assert task.exception() is None
+    assert list(speaker.device.connections) == [1]
+
+
+@pytest.mark.parametrize("reason", [0x0D, 0x0E, 0x0F], ids=hex)
+def test_a_reason_in_the_range_reaches_both_hosts(
+    air: Air, reason: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    phone, speaker = phone_and_speaker(air)
+    # The host's own acceptance waits, so that this rejection is the first answer.
+    slow_to_accept(speaker, monkeypatch, 1, 0)
+    paging = failures_of(air, phone)
+    rejected = failures_of(air, speaker)
+    task = air.start(page(phone, SPEAKER))
+    air.advance(ms(50))
+    reject = reject_page(PHONE, reason)
+    air.run(speaker.device.host.send_async_command(reject), within=seconds(0))
+    air.advance(ms(51))
+    assert isinstance(task.exception(), core.ConnectionError)
+    assert paging == [(50 * MS, reason)]
+    assert rejected == [(50 * MS, reason)]
+
+
+def test_a_rejection_nothing_is_owed_for_is_the_hosts_own_error(air: Air) -> None:
+    phone, _ = phone_and_speaker(air)
+    reject = reject_page(SPEAKER, LIMITED)
+    with pytest.raises(hci.HCI_Error) as raised:
+        air.run(phone.device.host.send_async_command(reject), within=seconds(0))
+    assert raised.value.error_code == hci.HCI_ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR
 
 
 def test_a_power_loss_at_the_instant_a_page_is_heard_does_not_fail_the_air(
