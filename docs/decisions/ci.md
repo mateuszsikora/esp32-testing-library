@@ -87,11 +87,32 @@ each flash image `flasher_args.json` names and the ELF `project_description.json
 (`app_elf`). The tarball holds only what `IdfApp` reads: 15 MB for `hello_world` against 116 MB
 for the whole build directory, about 1 MB once the cache compresses it. The cost of hashing the
 whole workflow is that any change to `ci.yml` or the `Makefile`, a comment included, rebuilds the
-firmware (about 3 min on hp600g1) and the runner. If that starts to hurt, the packing can move into
-a script whose hash replaces the workflow's.
+firmware (about 3 min on hp600g1 when this was decided, about 24 min with 14 projects) and the
+runner. If that starts to hurt, the packing can move into a script whose hash replaces the
+workflow's.
 
 **Rejected:** keys over a hand-picked list of files, because a key that misses an input serves a
 stale build, and for the runner skips its tests, without any sign of it.
+
+## The firmware job's timeout is 60 minutes
+
+Status: decided (#145)
+
+A full build of 14 projects takes 24 to 25 minutes on hp600g1, about 100 s a project. Five times on
+4 and 5 November 2026 the machine ran two to three times slower for part of a build, for a reason
+the logs do not show, and the job hit its earlier limit of 30 minutes: on #123, #125, #138 and
+twice on #133, with 9 to 12 of the projects done. At those speeds a full build of 15 projects takes
+up to about 52 minutes, so 60 covers it with 8 to spare. A timeout is only a cap: a cache hit takes
+seconds, and a build that stops making progress holds the one machine for 30 minutes more.
+
+60 stops being enough when a whole build runs about 2.3 times slower than normal, and each new
+project lowers that. No measured run held that speed for a whole build, though single projects
+reached 3 times.
+
+`test` keeps its 20 minutes. It reached that limit three times in such slow periods, so a slow run
+can still fit the build and then end red there.
+
+**Rejected:** 45 minutes, because it is under the estimate for the slow run it has to fit.
 
 ## The runner job caches the binary, not runner/target
 

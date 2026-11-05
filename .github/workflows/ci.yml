@@ -46,7 +46,8 @@ concurrency:
 jobs:
   firmware:
     runs-on: [self-hosted, Linux, X64]
-    timeout-minutes: 30
+    # Why 60: "The firmware job's timeout is 60 minutes" in docs/decisions/ci.md.
+    timeout-minutes: 60
     outputs:
       key: ${{ steps.key.outputs.key }}
       rom-elf-key: ${{ steps.key.outputs.rom-elf-key }}
