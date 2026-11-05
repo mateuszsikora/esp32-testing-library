@@ -1,7 +1,9 @@
 """The `wifi` interface without the emulator: what it asks of the backend, what it gives the
 runner, and what it sends on the link."""
 
+import struct
 from collections.abc import Callable
+from datetime import timedelta
 
 import pytest
 
@@ -9,6 +11,7 @@ from esp32tl.boards.capabilities import Request
 from esp32tl.interfaces import SourceError
 from esp32tl.interfaces.wifi import Wifi
 from esp32tl.link.protocol import WifiAp
+from esp32tl.net.ntp import DEFAULT_UTC, NTP_EPOCH
 
 MS = 1_000_000
 
@@ -127,3 +130,12 @@ def test_switches_go_out_at_the_instant_the_test_made_them(wifi: Wifi, clock: Cl
     properties = wifi.properties()
     assert properties is not None
     assert properties["switches"] == [{"t_ns": 2 * MS, "on": False}, {"t_ns": 4 * MS, "on": True}]
+
+
+def test_ntp_behind_an_access_point_tells_the_default_world() -> None:
+    wifi = Wifi(now=lambda: 0)
+    wifi.access_point("home")
+    answer = wifi.network.ntp.on_datagram(b"\x23" + bytes(47))
+    assert answer is not None
+    told = struct.unpack(">I", answer[40:44])[0]
+    assert NTP_EPOCH + timedelta(seconds=told) == DEFAULT_UTC

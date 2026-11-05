@@ -424,7 +424,7 @@ repository makes.
 | `ROM_ELF` | `"esp32_rev300_rom.elf"` | `rom_path()` |
 | `HELD_MAX_SECONDS` | `86400`, emulated seconds, passed as `--max-seconds` | `Esp32Sim.power_on` |
 | `MAX_SECONDS` | `300`, emulated seconds: the default `--max-seconds` of the `esp32tl` command, whose clock runs free | `esp32tl/cli.py` |
-| `POWER_ON_UTC` | `datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)`: the world's time at power-on unless the test gives one | `Esp32Sim.power_on` |
+| `POWER_ON_UTC` | `esp32tl.net.ntp.DEFAULT_UTC`, `datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)`: the world's time at power-on unless the test gives one | `Esp32Sim.power_on` |
 | `STEP_NS` | `100_000_000`, 100 emulated milliseconds: the longest step of `wait_until` | `HeldClock` |
 | `LAST_OUTPUT_BYTES` | `2048` | `last_output` |
 | `EXIT_SECONDS` | `5`, wall seconds: for the runner's exit after `stop` at teardown, for its `hello`, then for its exit after `SIGTERM`, and for each join of the link thread | `close`, `_mark_end_of_run`, `_close_link` |

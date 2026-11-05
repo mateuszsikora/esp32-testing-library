@@ -20,7 +20,7 @@ puts it on the link, and the `gnss` fixture hands that interface to the test
    profiles](board-profiles-technical.md#data-flow)). It refuses a file a route is tapped into,
    which `Uart.files` holds (`SourceError`), but not one another route replays, then reads
    `directory / path` with `recording.read`, builds
-   `Replay(recording, self.name, self.clock, name=str(path), protocol=protocol)`, and gives it: under a lock, a UART
+   `Replay(recording, self.name, self.recording_clock, name=str(path), protocol=protocol)`, and gives it: under a lock, a UART
    that has a source already raises `SourceError`; otherwise `Uart.source` is set,
    `Uart.source_kind` is `"replay"` and `Uart.source_detail` the path as the test gave it, and the
    run's log, when the UART has one, gets `{name}.replay({path!r})` at 0.

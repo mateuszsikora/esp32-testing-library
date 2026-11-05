@@ -702,7 +702,8 @@ reads PWRKEY and drives RI through `lines`; the test can inspect all GPIO events
 or release the model's RI. Model changes use `by="model"` in `lines.events()`; `level()` continues
 to read only the firmware side. The model adds a 1 ms response latency to the lines interface.
 
-See [the modem guide](modem-user.md) for signal, registration, power, command history and limits.
+See [the modem guide](modem-user.md) for signal, registration, power, clock and operator, a hung
+modem and RESET, command history and limits.
 There is no default modem route on `esp32-devkitc`: requesting the fixture there fails with
 `the board profile esp32-devkitc has no uart.modem; its interfaces are console, uart.gnss, sd_card, wifi`.
 

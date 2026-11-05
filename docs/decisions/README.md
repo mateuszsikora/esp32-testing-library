@@ -189,6 +189,8 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Serial validation accepts unencrypted classic ESP32 builds only](harness.md#serial-validation-accepts-unencrypted-classic-esp32-builds-only) | `harness.md` | decided (#25) |
 | [The modem drives RI through Lines and observes PWRKEY through it](harness.md#the-modem-drives-ri-through-lines-and-observes-pwrkey-through-it) | `harness.md` | decided (#29) |
 | [The modem begins powered and registered and keeps every AT command](harness.md#the-modem-begins-powered-and-registered-and-keeps-every-at-command) | `harness.md` | decided (#29) |
+| [The modem's unset clock reads what the test says, with no zone](harness.md#the-modems-unset-clock-reads-what-the-test-says-with-no-zone) | `harness.md` | decided (#128) |
+| [A hung modem keeps its commands, and RESET restarts it while power_enable stays observed](harness.md#a-hung-modem-keeps-its-commands-and-reset-restarts-it-while-power_enable-stays-observed) | `harness.md` | decided (#128) |
 | [The modem data peer and realistic escape timing wait for network integration](harness.md#the-modem-data-peer-and-realistic-escape-timing-wait-for-network-integration) | `harness.md` | superseded (#30) |
 | [NVS generation treats every key and namespace literally](harness.md#nvs-generation-treats-every-key-and-namespace-literally) | `harness.md` | decided (#70) |
 | [Request answers wrap independently of the unprompted timeline](harness.md#request-answers-wrap-independently-of-the-unprompted-timeline) | `harness.md` | decided (#20) |
@@ -197,6 +199,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Unseen replay requests retain raw occurrences alongside normalised counts](harness.md#unseen-replay-requests-retain-raw-occurrences-alongside-normalised-counts) | `harness.md` | decided (#20) |
 | [Serial adapters preserve skips for modem models and NVS replacement](harness.md#serial-adapters-preserve-skips-for-modem-models-and-nvs-replacement) | `harness.md` | decided (#25) |
 | [The network is selected explicitly, and resets with its modem](harness.md#the-network-is-selected-explicitly-and-resets-with-its-modem) | `harness.md` | decided (#30) |
+| [A dropped call says NO CARRIER, and offers a Terminate-Request only if asked](harness.md#a-dropped-call-says-no-carrier-and-offers-a-terminate-request-only-if-asked) | `harness.md` | decided (#128) |
 | [The MQTT service implements ephemeral sessions and QoS zero and one](harness.md#the-mqtt-service-implements-ephemeral-sessions-and-qos-zero-and-one) | `harness.md` | decided (#30, #104), sessions amended (#130) |
 | [The broker keeps a session by client ID when CleanSession is 0](harness.md#the-broker-keeps-a-session-by-client-id-when-cleansession-is-0) | `harness.md` | decided (#130) |
 | [A path with RTT and rate sits between the link and the network](harness.md#a-path-with-rtt-and-rate-sits-between-the-link-and-the-network) | `harness.md` | decided (#130) |

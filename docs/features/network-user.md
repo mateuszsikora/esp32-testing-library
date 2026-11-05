@@ -763,7 +763,9 @@ Malformed packets are discarded or their application connection is closed; event
 why the firmware stopped progressing. The test's `within=` and wall-time timeout still bound waits.
 
 Registration or power loss discards PPP state, queued replies and TCP sessions, and emits MQTT
-Wills once. The modem still emits no unsolicited `NO CARRIER` for that loss. A new dial starts a
+Wills once. The modem emits no unsolicited `NO CARRIER` for that loss;
+[`modem.drop_call()`](modem-user.md#a-dropped-data-call) does, and stays registered, and with
+`terminate=True` offers an LCP Terminate-Request first. A new dial starts a
 fresh PPP negotiation. In network data mode, `+++` requires at least one second of silence before
 and after it; pluses inside ordinary PPP payload remain bytes. The AT-only escape behavior is
 unchanged. See [the modem](modem-user.md) and [determinism](../guides/testing.md#determinism).

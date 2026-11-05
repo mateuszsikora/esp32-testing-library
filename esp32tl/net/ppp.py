@@ -75,6 +75,12 @@ class Ppp:
         self.started = True
         self._request(LCP, b"")
 
+    def terminate(self) -> None:
+        """The far end offers to end an open link: a Terminate-Request, and nothing else changes."""
+        if self.lcp_open:
+            self._log("ppp: the far end ended the link")
+            self._control(LCP, TERM_REQ, self._next_id(), b"")
+
     def receive(self, data: bytes) -> None:
         for byte in data:
             if byte == FLAG:

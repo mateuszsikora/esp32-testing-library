@@ -125,3 +125,21 @@ def test_renegotiation_and_termination_invalidate_old_acknowledgments() -> None:
     ppp, _, _ = opened()
     ppp.receive(control(0xC021, 1, 52))
     assert not ppp.ipcp_open and not ppp.lcp_open
+
+
+def test_the_far_end_offers_to_terminate_an_open_link_only() -> None:
+    ppp, sent, _ = opened()
+    assert ppp.lcp_open
+    sent.clear()
+    ppp.terminate()
+    assert len(sent) == 1
+    assert sent[0].startswith(b"\x7e")
+    # LCP, Terminate-Request (RFC 1661, section 5.5), no data
+    body = unframe(sent[0])
+    assert body[0] == 5 and struct.unpack(">H", body[2:4])[0] == 4 and len(body) == 4
+    # and it waits for the device: it still counts as open until it answers
+    assert ppp.lcp_open
+    closed = Ppp(sent.append, lambda datagram: None)
+    sent.clear()
+    closed.terminate()
+    assert sent == []

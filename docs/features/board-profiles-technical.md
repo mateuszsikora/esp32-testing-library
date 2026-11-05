@@ -100,14 +100,17 @@ Integers are TOML integers: `true` is not a port.
 
 ### Pulse timing on a line
 
-A line table may also contain `active`, `on_ms` and `off_ms`, all together. `active` is integer
+A line table may also contain `active`, `on_ms` and `off_ms`, all together, for a line whose pulse
+toggles, or `active` and `pulse_ms`, for a line with one threshold. `active` is integer
 0 or 1; durations are positive integer milliseconds. A timed line must be on an output-capable
-ESP32 pin. `Reader.lines` stores them on `Line`, defaulting all three to `None` for untimed lines.
-Incomplete timing fails with `lines.modem.pwrkey: pulse timing needs active, on_ms and off_ms together`
+ESP32 pin. `Reader.lines` stores them on `Line`, defaulting all four to `None` for untimed lines.
+Any other set fails with `lines.modem.pwrkey: pulse timing needs active with on_ms and off_ms, or active with pulse_ms`
 (prefixed by the profile filename); invalid types and ranges use the usual key-specific errors.
 
 The LilyGO PWRKEY is `{ pin = 4, active = 1, on_ms = 50, off_ms = 2500 }`, with threshold
-provenance in [modem-user.md](modem-user.md#pwrkey-and-reporting). It describes the
+provenance in [modem-user.md](modem-user.md#pwrkey-and-reporting), and its RESET
+`{ pin = 5, active = 1, pulse_ms = 2000 }`, with provenance in
+[modem-user.md](modem-user.md#a-hung-modem-and-reset). They describe the
 ESP32 pad polarity. The modem model consumes these timings; `Lines` itself interprets no pulse.
 `tests/test_boards.py::test_pulse_timing_is_checked_as_a_complete_output_line` covers the schema.
 
@@ -126,7 +129,7 @@ using LilyGO revision `63af963038e93c91baf39d89a3a736d6bc26ff13` throughout:
 |---|---|---|
 | `sd_card` | SCLK 14, MOSI 15, MISO 2, CS 13 | Pin table, example's `BOARD_SDCARD_*`, schematic SD net labels |
 | `lines.modem.dtr` | 25 | Pin table and `BOARD_MODEM_DTR_PIN` |
-| `lines.modem.reset` | 5 | Pin table's modem RESET and example's `BOARD_RST_PIN` |
+| `lines.modem.reset` | 5, active high, 2000 ms | Pin table's modem RESET and example's `BOARD_RST_PIN`; polarity from LilyGO's `MODEM_RESET_LEVEL HIGH`, threshold from SIMCom's table 12 |
 | `lines.gnss.wake` | 19 | GPS-only pin table and `BOARD_GPS_WAKEUP_PIN` |
 | `lines.gnss.pps` | 23 | GPS-only pin table and `BOARD_GPS_PPS_PIN` |
 | `lines.board.power_enable` | 12 | Pin table's peripheral power control and `BOARD_POWER_ON_PIN` |
@@ -134,18 +137,19 @@ using LilyGO revision `63af963038e93c91baf39d89a3a736d6bc26ff13` throughout:
 The pin table's upload warning calls GPIO2 CS, contradicting its own table, the example and
 schematic, which agree on MISO=2 and CS=13. The profile uses the latter mapping. The same
 README links V1.4 and discusses ESP32 V1.x; it does not establish which PCB revision the
-repository's R2 name denotes. The example holds GPIO5 low during setup, but that alone does
-not establish reset polarity and pulse requirements across revisions. GPIO12's physical power
+repository's R2 name denotes. The example holds GPIO5 low during setup, and LilyGO's ATdebug
+example pulses it high for 2600 ms; the profile takes polarity and threshold from these and SIMCom's
+table 12, which do not establish them across revisions. GPIO12's physical power
 control and GPIO19's documented wake/standby behavior are not implemented as model effects.
 GPIO 12, 5, 2 and 15 are strapping pins; esp32sim at the pinned revision sets the strapping
 register to a constant (`gpio.strap = 0x13` in `esp32/src/periph.rs`), so their levels at reset
 change nothing in the emulator, whereas GPIO 12 high at reset breaks the WROVER-E's boot.
 TODO(maintainers): match the R2-labelled hardware to a manufacturer schematic and verify its
-reset polarity, pulls and power sequencing before modeling those controls.
+reset polarity, pulls and power sequencing; the model takes RESET's polarity from LilyGO's example.
 
-The five new lines are bare integer entries. `Lines` watches and exposes them without attaching
-model callbacks, assigning default pulls, or generating PPS. The modem interface attaches its
-existing PWRKEY observer and RI driver only; GNSS models generate UART messages independently
+Four of the five new lines are bare integer entries, and `modem.reset` carries its pulse timing.
+`Lines` watches and exposes them without assigning default pulls, or generating PPS. The modem
+interface attaches its PWRKEY and RESET observers and RI driver only; GNSS models generate UART messages independently
 of these GPIOs. The slot still passes `--sd-spi sclk=14,mosi=15,miso=2,cs=13` to the runner at
 power-on, and `--sd-rw` with a card in it, with no dependency on GPIO12. No schema or protocol change is needed.
 The physical 8 MB PSRAM remains represented by `psram_mb = 4`, the runner's supported maximum;
@@ -198,7 +202,7 @@ The `model` on `wifi` is esp32sim's access point (`--wifi`) with the harness's n
 | `BoardProfile` | frozen dataclass | `name`, `chip`, `flash_mb: int \| None`, `psram_mb: int \| None`, `uart: Mapping[str, UartRoute]`, `lines: Mapping[str, Mapping[str, Line]]`, `sd_card: SdCardRoute \| None = None`; property `interfaces`: `["console", "uart.<role>", ..., "lines.<role>", ..., "sd_card", "wifi"]`, in file order, `sd_card` only with a slot, `wifi` always: every classic ESP32 has it. Not hashable: its mappings are not |
 | `UartRoute` | frozen dataclass | `port`, `tx`, `rx`, `baud` |
 | `SdCardRoute` | frozen dataclass | `sclk`, `mosi`, `miso`, `cs` |
-| `Line` | frozen dataclass | `pin`, `pull: "up" \| "down" \| None = None`, `active`, `on_ms`, `off_ms` (each `int \| None = None`); [pulse schema](#pulse-timing-on-a-line) |
+| `Line` | frozen dataclass | `pin`, `pull: "up" \| "down" \| None = None`, `active`, `on_ms`, `off_ms`, `pulse_ms` (each `int \| None = None`); [pulse schema](#pulse-timing-on-a-line) |
 | `capabilities.declared()` | function, cached | The shipped declaration: backend name, then kind, then `Capability` |
 | `capabilities.load(path)` | function | A declaration in any file |
 | `Capability` | frozen dataclass | `sources: tuple[str, ...] = ()`, `tap: bool = False` |

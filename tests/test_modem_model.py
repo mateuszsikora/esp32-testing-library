@@ -1,19 +1,24 @@
 """Deterministic AT dialogue, independent of the runner and of the simulated network."""
 
+import struct
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
 from esp32tl import boards, recording
+from esp32tl.boards import Line
 from esp32tl.interfaces import SourceError
 from esp32tl.interfaces.lines import Lines
 from esp32tl.interfaces.modem import Modem as ModemRoute
 from esp32tl.link.boardlink import BoardLink, Wire
 from esp32tl.link.protocol import GpioIn, GpioOut, RunnerHello, Sync, UartCfg, UartTx, Wait
+from esp32tl.net import Internet
+from esp32tl.net.ntp import NTP_EPOCH
 from esp32tl.report import RunLog
-from esp32tl.sources.model.modem import LATENCY_NS, MAX_COMMAND, Modem
-from esp32tl.units import Duration, ms, seconds
+from esp32tl.sources.model.modem import LATENCY_NS, MAX_COMMAND, Modem, Restart
+from esp32tl.units import Duration, hours, minutes, ms, seconds
 
 LILYGO = boards.profile("lilygo-t-a7670g-r2")
 
@@ -36,6 +41,7 @@ def reply(model: Modem, command: str, t: int = 0) -> bytes:
         ("AT+CFUN=1", b"\r\nOK\r\n"),
         ("AT+CTZU=1", b"\r\nOK\r\n"),
         ("AT+COPS=0", b"\r\nOK\r\n"),
+        ("AT+COPS=?", b"\r\nOK\r\n"),
         ("AT+COPS?", b'\r\n+COPS: 0,0,"ESP32TL",7\r\n\r\nOK\r\n'),
         ("ATD*99#", b"\r\nCONNECT\r\n"),
         ('AT+CGDATA="PPP",1', b"\r\nCONNECT\r\n"),
@@ -212,7 +218,6 @@ def test_named_controls_are_observable_without_changing_modem_state(tmp_path: Pa
     reply(modem.model(), "ATE1")
     controls = {
         "modem.dtr": 25,
-        "modem.reset": 5,
         "gnss.wake": 19,
         "gnss.pps": 23,
         "board.power_enable": 12,
@@ -554,6 +559,674 @@ def test_a_modem_on_the_board_s_supply_waits_for_pwrkey_when_it_comes_back(
     lines.driven(seconds(1).ns, [(4, 1)], frozenset({4}))
     lines.driven(seconds(1).ns + ms(100).ns, [(4, 0)], frozenset({4}))
     assert modem.powered
+
+
+def test_cclk_is_the_world_s_clock_at_the_command_s_instant() -> None:
+    world = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
+    model = Modem(lambda: 0, world=lambda: world)
+    assert reply(model, "AT+CCLK?") == b'\r\n+CCLK: "26/01/01,12:00:00+00"\r\n\r\nOK\r\n'
+    assert not model.commands[-1].fallback
+    assert b'"26/01/01,12:00:05+00"' in reply(model, "AT+CCLK?", seconds(5.9).ns)
+    assert b'"26/01/01,12:01:05+00"' in reply(model, "AT+CCLK?", seconds(65).ns)
+
+
+@pytest.mark.parametrize(
+    ("wrong_by", "zone", "answer"),
+    [
+        (hours(-1), hours(2), b'"26/01/01,13:00:05+08"'),
+        (seconds(0), hours(-2), b'"26/01/01,10:00:05-08"'),
+        (seconds(0), minutes(15), b'"26/01/01,12:15:05+01"'),
+        (seconds(0), minutes(-15), b'"26/01/01,11:45:05-01"'),
+        (seconds(0), seconds(0), b'"26/01/01,12:00:05+00"'),
+        (seconds(0), hours(24), b'"26/01/02,12:00:05+96"'),
+        (seconds(0), hours(-24), b'"25/12/31,12:00:05-96"'),
+        (hours(24), seconds(0), b'"26/01/02,12:00:05+00"'),
+    ],
+)
+def test_cclk_offsets_the_time_and_gives_the_zone_in_quarters_of_an_hour(
+    wrong_by: Duration, zone: Duration, answer: bytes
+) -> None:
+    world = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
+    model = Modem(lambda: 0, world=lambda: world)
+    model.clock(wrong_by=wrong_by, zone=zone)
+    assert answer in reply(model, "AT+CCLK?", seconds(5).ns)
+
+
+@pytest.mark.parametrize(
+    ("zone", "shown"),
+    [
+        (minutes(20), "20"),
+        (minutes(-20), "-20"),
+        (hours(24) + minutes(15), "1455"),
+        (hours(-25), "-1500"),
+        (hours(-24) - minutes(15), "-1455"),
+        (seconds(1), "0.016667"),
+    ],
+)
+def test_clock_refuses_a_zone_that_is_no_quarter_of_an_hour_or_out_of_range(
+    zone: Duration, shown: str
+) -> None:
+    with pytest.raises(ValueError) as refused:
+        Modem(lambda: 0).clock(zone=zone)
+    assert str(refused.value) == (
+        f"modem.clock: zone is {shown} minutes: a whole number of quarters of an hour"
+        " from -24 to +24 hours"
+    )
+
+
+@pytest.mark.parametrize("arguments", [{"zone": 2}, {"wrong_by": 3600.0}])
+def test_clock_takes_durations_only(arguments: dict[str, object]) -> None:
+    with pytest.raises(TypeError, match="not a Duration"):
+        Modem(lambda: 0).clock(**arguments)  # type: ignore[arg-type]
+
+
+def test_an_unset_clock_has_no_zone_and_runs_on_from_the_call() -> None:
+    now = [seconds(10).ns]
+    model = Modem(lambda: now[0], world=lambda: datetime(2026, 1, 1, tzinfo=UTC))
+    model.clock(wrong_by=hours(1), zone=hours(2))
+    model.clock_not_set(reads=datetime(2000, 1, 1, tzinfo=UTC))
+    assert reply(model, "AT+CCLK?", seconds(10).ns) == (
+        b'\r\n+CCLK: "00/01/01,00:00:00"\r\n\r\nOK\r\n'
+    )
+    assert b'"00/01/01,00:01:05"' in reply(model, "AT+CCLK?", seconds(75).ns)
+    model.clock_set_by_network()
+    assert b'"26/01/01,00:01:15+00"' in reply(model, "AT+CCLK?", seconds(75).ns)
+
+
+def test_an_unset_clock_needs_what_it_reads() -> None:
+    model = Modem(lambda: 0)
+    with pytest.raises(TypeError, match="reads"):
+        model.clock_not_set()  # type: ignore[call-arg]
+    naive = datetime(2000, 1, 1)
+    with pytest.raises(TypeError, match="not a datetime with a timezone"):
+        model.clock_not_set(reads=naive)
+    other = datetime(2000, 1, 1, 12, tzinfo=timezone(timedelta(hours=2)))
+    model.clock_not_set(reads=other)
+    assert b'"00/01/01,12:00:00"' in reply(model, "AT+CCLK?")
+
+
+def test_setting_the_clock_stays_a_fallback() -> None:
+    model = Modem(lambda: 0)
+    assert reply(model, 'AT+CCLK="26/01/01,12:00:00+00"') == b"\r\nOK\r\n"
+    assert model.commands[-1].fallback
+    assert b'"26/01/01,12:00:00+00"' in reply(model, "AT+CCLK?")
+
+
+@pytest.mark.parametrize(
+    ("command", "answer"),
+    [
+        ("AT+COPS=3,0", b'+COPS: 0,0,"Example Mobile",7'),
+        ("AT+COPS=3,1", b'+COPS: 0,1,"EXM",7'),
+        ("AT+COPS=3,2", b'+COPS: 0,2,"26001",7'),
+    ],
+)
+def test_the_operator_format_chooses_what_cops_names(command: str, answer: bytes) -> None:
+    model = Modem(lambda: 0)
+    model.operator(name="Example Mobile", numeric="26001", short="EXM", act=7)
+    assert reply(model, command) == b"\r\nOK\r\n"
+    assert not model.commands[-1].fallback
+    assert answer in reply(model, "AT+COPS?")
+
+
+def test_the_default_operator_s_code_matches_the_imsi_and_short_falls_back_to_the_name() -> None:
+    model = Modem(lambda: 0)
+    assert b'+COPS: 0,1,"ESP32TL",7' in reply(model, "AT+COPS=3,1") + reply(model, "AT+COPS?")
+    assert b'+COPS: 0,2,"26000",7' in reply(model, "AT+COPS=3,2") + reply(model, "AT+COPS?")
+    assert reply(model, "AT+CIMI").startswith(b"\r\n26000")
+
+
+@pytest.mark.parametrize("command", ["AT+COPS=3", "AT+COPS=3,3", "AT+COPS=3,", "AT+COPS=3,2,1"])
+def test_any_other_operator_format_is_an_error_and_changes_nothing(command: str) -> None:
+    model = Modem(lambda: 0)
+    reply(model, "AT+COPS=3,2")
+    assert reply(model, command) == b"\r\nERROR\r\n"
+    assert not model.commands[-1].fallback
+    assert b'+COPS: 0,2,"26000",7' in reply(model, "AT+COPS?")
+
+
+def test_the_operator_format_goes_back_at_a_power_cycle_and_clock_and_operator_stay() -> None:
+    world = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
+    model = Modem(lambda: 0, world=lambda: world)
+    model.operator(name="Example Mobile", numeric="260010", act=2)
+    model.clock(zone=hours(2))
+    reply(model, "AT+COPS=3,2")
+    model.power_off()
+    model.power_on()
+    assert b'+COPS: 0,0,"Example Mobile",2' in reply(model, "AT+COPS?")
+    assert b'+08"' in reply(model, "AT+CCLK?")
+    reply(model, "AT+COPS=3,2")
+    assert b'+COPS: 0,2,"260010",2' in reply(model, "AT+COPS?")
+
+
+def test_an_unregistered_modem_names_no_operator() -> None:
+    model = Modem(lambda: 0)
+    reply(model, "AT+COPS=3,2")
+    model.lose_registration()
+    assert reply(model, "AT+COPS?") == b"\r\n+COPS: 0\r\n\r\nOK\r\n"
+
+
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    [
+        ({"numeric": "2600"}, "modem.operator: numeric is '2600', not 5 or 6 digits"),
+        ({"numeric": "2600000"}, "modem.operator: numeric is '2600000', not 5 or 6 digits"),
+        ({"numeric": "2600a"}, "modem.operator: numeric is '2600a', not 5 or 6 digits"),
+        ({"numeric": 26000}, "modem.operator: numeric is 26000, not 5 or 6 digits"),
+        ({"name": ""}, "modem.operator: name is '', not text for quotes"),
+        ({"short": 'a"b'}, "modem.operator: short is 'a\"b', not text for quotes"),
+        ({"name": "X\r\nOK"}, "modem.operator: name is 'X\\r\\nOK', not text for quotes"),
+        ({"short": "X\n"}, "modem.operator: short is 'X\\n', not text for quotes"),
+        ({"act": True}, "modem.operator: act is True, not a whole number"),
+        ({"act": -1}, "modem.operator: act is -1, not a whole number"),
+    ],
+)
+def test_operator_refuses_what_cops_could_not_say(
+    arguments: dict[str, object], message: str
+) -> None:
+    with pytest.raises(ValueError) as refused:
+        Modem(lambda: 0).operator(**arguments)  # type: ignore[arg-type]
+    assert str(refused.value) == message
+
+
+def test_the_clock_and_operator_are_steps_of_the_run(tmp_path: Path) -> None:
+    modem, _, log = route(tmp_path, [0])
+    modem.clock(zone=hours(2))
+    modem.clock_not_set(reads=datetime(2000, 1, 1, tzinfo=UTC))
+    modem.clock_set_by_network()
+    modem.operator(numeric="26001")
+    logged = "\n".join(log.lines())
+    for step in (
+        "clock(wrong_by=",
+        "clock_not_set(reads=",
+        "clock_set_by_network()",
+        "operator(name=",
+    ):
+        assert f"uart.modem.{step}" in logged
+    modem.model()
+
+
+def test_a_refused_clock_or_operator_leaves_the_route_without_a_source(tmp_path: Path) -> None:
+    modem, _, _ = route(tmp_path, [0])
+    with pytest.raises(ValueError):
+        modem.clock(zone=minutes(20))
+    with pytest.raises(ValueError):
+        modem.operator(numeric="2600")
+    assert modem.source is None
+
+
+def lilygo() -> Modem:
+    return Modem(
+        lambda: 0, pwrkey=LILYGO.lines["modem"]["pwrkey"], reset=LILYGO.lines["modem"]["reset"]
+    )
+
+
+def pulse(driven: Callable[[int, int | None], None], at: Duration, length: Duration) -> None:
+    driven(at.ns, 1)
+    driven((at + length).ns, 0)
+
+
+def test_a_hung_modem_answers_nothing_and_keeps_its_commands() -> None:
+    model = Modem(lambda: 0)
+    assert not model.hung
+    model.hang()
+    assert model.hung and model.powered and model.registered
+    assert reply(model, "AT", 5) == b""
+    assert reply(model, "ATE1", 6) == b""
+    assert [(c.at, c.text, c.response, c.fallback) for c in model.commands] == [
+        (Duration(5), "AT", b"", False),
+        (Duration(6), "ATE1", b"", False),
+    ]
+    assert list(model.poll(7)) == [] and model.quiet_until() is None
+
+
+def test_a_hung_modem_passes_no_data_and_sends_no_no_carrier(tmp_path: Path) -> None:
+    now = [seconds(1).ns]
+    modem, lines, _ = route(tmp_path, now)
+    network = modem.network()
+    model = modem.model()
+    assert b"CONNECT" in reply(model, "ATD*99#", now[0])
+    list(model.poll(now[0]))
+    received = len(model.data_received)
+    modem.hang()
+    assert not modem.data_mode and not network.active
+    # what the firmware's PPP goes on sending, as esp_modem ends it: a newline before its AT
+    assert list(model.receive(now[0], b"\x7e\xff\x03PPP\x7e\n")) == []
+    assert len(model.data_received) == received
+    assert list(model.poll(now[0])) == [] and model.quiet_until() is None
+    assert reply(model, "AT", now[0]) == b""
+    assert modem.commands[-1].response == b""
+    # RI stays high: it went out once, at its start
+    list(lines.inputs(now[0] + LATENCY_NS))
+    assert [e.level for e in lines.events() if e.name == "modem.ri"] == [1]
+
+
+def test_the_report_shows_a_command_with_no_answer(tmp_path: Path) -> None:
+    modem, _, _ = route(tmp_path, [0])
+    modem.hang()
+    reply(modem.model(), "AT")
+    assert modem.command_report()[-1].endswith("'AT' (no answer)")
+
+
+def test_hang_refuses_a_modem_that_is_off_and_a_pwrkey_that_is_no_bool(tmp_path: Path) -> None:
+    model = Modem(lambda: 0)
+    model.power_off()
+    with pytest.raises(SourceError, match=r"modem\.hang: the modem is off"):
+        model.hang()
+    assert not model.hung
+    modem, _, _ = route(tmp_path, [0])
+    with pytest.raises(TypeError, match="pwrkey is 1, not True or False"):
+        modem.hang(pwrkey=1)  # type: ignore[arg-type]
+    assert modem.source is None
+
+
+def test_pwrkey_recovers_a_hung_modem_that_honours_it() -> None:
+    model = lilygo()
+    model.hang(pwrkey=True)
+    # A short pulse does nothing to a running modem, hung or not.
+    pulse(model.driven, seconds(1), ms(100))
+    assert model.hung and model.powered
+    pulse(model.driven, seconds(2), ms(3000))
+    assert not model.powered and not model.hung
+    pulse(model.driven, seconds(10), ms(100))
+    assert model.powered and not model.hung
+    assert reply(model, "AT") == b"\r\nOK\r\n"
+    assert model.restarts == (Restart(seconds(5) + ms(1), "pwrkey"),)
+
+
+def test_pwrkey_does_nothing_to_a_hung_modem_that_ignores_it() -> None:
+    model = lilygo()
+    model.hang(pwrkey=False)
+    pulse(model.driven, seconds(1), ms(3000))
+    assert model.hung and model.powered
+    assert model.restarts == ()
+    assert reply(model, "AT") == b""
+
+
+def test_a_pwrkey_pulse_begun_before_the_hang_does_not_end_after_it() -> None:
+    model = lilygo()
+    model.driven(0, 1)
+    model.hang(pwrkey=False)
+    model.driven(seconds(3).ns, 0)
+    assert model.hung and model.powered
+    # and the next pulse after RESET is timed from its own start
+    pulse(model.reset_driven, seconds(4), ms(2000))
+    model.driven(seconds(7).ns, 1)
+    model.driven(seconds(7).ns + ms(100).ns, 0)
+    assert model.powered
+
+
+@pytest.mark.parametrize("pwrkey", [True, False])
+def test_reset_restarts_a_hung_modem_in_command_mode(pwrkey: bool) -> None:
+    model = lilygo()
+    reply(model, "ATE1")
+    reply(model, "AT+COPS=3,2")
+    model.hang(pwrkey=pwrkey)
+    pulse(model.reset_driven, seconds(1), ms(2600))
+    assert not model.hung and model.powered and model.registered and not model.data_mode
+    assert model.restarts == (Restart(seconds(1) + ms(2601), "reset"),)
+    # echo and format are back at their power-on values
+    assert reply(model, "AT") == b"\r\nOK\r\n"
+    assert b'+COPS: 0,0,"ESP32TL",7' in reply(model, "AT+COPS?")
+    # PWRKEY works again: the later short pulse changes nothing, a long one switches it off
+    pulse(model.driven, seconds(14), ms(100))
+    assert model.powered
+    pulse(model.driven, seconds(20), ms(3000))
+    assert not model.powered
+
+
+def test_reset_is_judged_at_release_and_at_the_profile_s_threshold() -> None:
+    model = lilygo()
+    reply(model, "ATE1")
+    pulse(model.reset_driven, seconds(1), ms(1999))
+    assert not model.restarts
+    assert reply(model, "AT") == b"AT\r\n\r\nOK\r\n"
+    # held, nothing has happened yet
+    model.reset_driven(seconds(5).ns, 1)
+    model.reset_driven(seconds(9).ns, 1)
+    assert reply(model, "AT") == b"AT\r\n\r\nOK\r\n" and not model.restarts
+    model.reset_driven(seconds(9).ns, None)  # an output that stops driving ends the pulse too
+    assert model.restarts == (Restart(seconds(9) + ms(1), "reset"),)
+    pulse(model.reset_driven, seconds(20), ms(2000))
+    assert len(model.restarts) == 2
+
+
+def test_reset_is_active_high_at_the_pad() -> None:
+    model = lilygo()
+    # Low for 3 s, as an active-low RESET would be pressed: nothing.
+    model.reset_driven(seconds(1).ns, 0)
+    model.reset_driven(seconds(4).ns, 1)
+    assert not model.restarts
+    model.reset_driven(seconds(6).ns + ms(500).ns, 0)
+    assert len(model.restarts) == 1
+
+
+def test_reset_of_a_modem_that_is_off_does_nothing() -> None:
+    model = lilygo()
+    model.power_off()
+    pulse(model.reset_driven, seconds(1), ms(3000))
+    assert not model.powered and model.restarts == ()
+    model = lilygo()
+    model.hang(pwrkey=True)
+    pulse(model.driven, seconds(1), ms(3000))
+    restarts = model.restarts
+    pulse(model.reset_driven, seconds(5), ms(2600))
+    assert not model.powered and model.restarts == restarts
+
+
+def test_a_loss_of_supply_ends_the_hang_and_a_later_start_has_pwrkey() -> None:
+    now = [seconds(1).ns]
+    model = Modem(
+        lambda: now[0],
+        pwrkey=LILYGO.lines["modem"]["pwrkey"],
+        reset=LILYGO.lines["modem"]["reset"],
+    )
+    model.hang(pwrkey=False)
+    model.lose_power()
+    assert not model.hung and not model.powered
+    model.restore_power()
+    pulse(model.driven, seconds(2), ms(100))
+    assert model.powered
+    model.hang(pwrkey=False)
+    now[0] = seconds(5).ns
+    model.supply(False)
+    assert not model.hung
+    assert [(r.at, r.cause) for r in model.restarts] == [
+        (seconds(1), "supply"),
+        (seconds(5), "supply"),
+    ]
+
+
+def test_restarts_name_what_ended_each_run_and_a_start_is_no_restart() -> None:
+    now = [0]
+    model = Modem(lambda: now[0], pwrkey=LILYGO.lines["modem"]["pwrkey"])
+    # Before the board's first instant, this says how the modem starts.
+    model.power_off()
+    assert not model.restarts
+    now[0] = seconds(1).ns
+    model.power_on()
+    assert not model.restarts
+    now[0] = seconds(2).ns
+    model.power_on()  # on a running modem: a restart
+    now[0] = seconds(3).ns
+    model.power_off()
+    model.power_off()  # already off
+    assert [(r.at, r.cause) for r in model.restarts] == [
+        (seconds(2), "test"),
+        (seconds(3), "test"),
+    ]
+
+
+def test_a_route_watches_pwrkey_and_reset_through_lines(tmp_path: Path) -> None:
+    now = [0]
+    modem, lines, log = route(tmp_path, now)
+    modem.hang(pwrkey=False)
+    assert modem.hung and not modem.restarts
+    assert "uart.modem.hang(pwrkey=False)" in "\n".join(log.lines())
+    lines.driven(seconds(1).ns, [(4, 1)], frozenset({4}))
+    lines.driven(seconds(4).ns, [(4, 0)], frozenset({4}))
+    assert modem.hung
+    lines.driven(seconds(5).ns, [(5, 1)], frozenset({5}))
+    lines.driven(seconds(7).ns + ms(600).ns, [(5, 0)], frozenset({5}))
+    assert not modem.hung and modem.powered
+    assert modem.restarts == (Restart(seconds(7) + ms(601), "reset"),)
+
+
+def test_power_enable_has_no_effect_on_the_modem(tmp_path: Path) -> None:
+    modem, lines, _ = route(tmp_path, [0])
+    modem.hang()
+    lines.driven(seconds(1).ns, [(12, 1)], frozenset({12}))
+    lines.driven(seconds(2).ns, [(12, 0)], frozenset({12}))
+    lines.driven(seconds(3).ns, [(12, 1)], frozenset({12}))
+    assert lines.level("board.power_enable") == 1
+    assert modem.powered and modem.hung and modem.restarts == ()
+
+
+def dialled(tmp_path: Path, now: list[int]) -> tuple[ModemRoute, Modem, Internet]:
+    """A route with its network, which has dialled and has an open LCP."""
+    modem, _, _ = route(tmp_path, now)
+    network = modem.network()
+    model = modem.model()
+    reply(model, "ATD*99#", now[0])
+    list(model.poll(now[0]))
+    network.ppp.lcp_open = True
+    return modem, model, network
+
+
+def test_a_dropped_call_stays_registered_says_no_carrier_and_leaves_data_mode(
+    tmp_path: Path,
+) -> None:
+    now = [seconds(1).ns]
+    modem, model, network = dialled(tmp_path, now)
+    modem.drop_call()
+    assert modem.registered and modem.powered and not modem.data_mode and not network.active
+    assert list(model.poll(now[0])) == [(now[0] + LATENCY_NS, b"\r\nNO CARRIER\r\n")]
+    assert list(model.poll(now[0])) == []
+    # command mode: AT works again, and the firmware can dial
+    assert reply(model, "AT", now[0]) == b"\r\nOK\r\n"
+    assert b"+CEREG: 0,1" in reply(model, "AT+CEREG?", now[0])
+    assert reply(model, "ATD*99#", now[0]) == b"\r\nCONNECT\r\n"
+    assert model.data_mode and network.active
+
+
+def test_a_dropped_call_offers_a_terminate_request_first_when_the_test_asks(
+    tmp_path: Path,
+) -> None:
+    now = [seconds(1).ns]
+    modem, model, _ = dialled(tmp_path, now)
+    modem.drop_call(terminate=True)
+    first, second = list(model.poll(now[0]))
+    assert first[0] == second[0] == now[0] + LATENCY_NS
+    assert first[1].startswith(b"\x7e\xff}#\xc0!}%")  # LCP, code 5, escaped
+    assert second[1] == b"\r\nNO CARRIER\r\n"
+    assert modem.registered and not modem.data_mode
+
+
+def test_a_call_dropped_without_terminate_offers_no_terminate_request(tmp_path: Path) -> None:
+    modem, model, _ = dialled(tmp_path, [0])
+    modem.drop_call(terminate=False)
+    assert [data for _, data in model.poll(0)] == [b"\r\nNO CARRIER\r\n"]
+
+
+def test_a_dropped_call_goes_out_through_the_link_in_the_test_s_turn(tmp_path: Path) -> None:
+    now = [seconds(1).ns]
+    modem, _, _ = dialled(tmp_path, now)
+    link = BoardLink(LILYGO.name, [modem])
+    link.receive(RunnerHello(1, "esp32", "emulated-fifo-write", "revision"))
+    link.receive(Sync(now[0]))
+    modem.drop_call()
+    outputs = link.receive(Sync(now[0] + 1))
+    assert link.error is None, link.error
+    assert any(getattr(output, "data", None) == b"\r\nNO CARRIER\r\n" for output in outputs)
+    assert modem.source is not None and modem.source.quiet_until() is None
+
+
+def test_lose_registration_stays_silent(tmp_path: Path) -> None:
+    modem, model, _ = dialled(tmp_path, [0])
+    modem.lose_registration()
+    assert list(model.poll(0)) == []
+    assert not modem.registered and not modem.data_mode
+
+
+def test_drop_call_refuses_a_modem_with_no_call_and_a_terminate_with_no_ppp(
+    tmp_path: Path,
+) -> None:
+    modem, _, _ = route(tmp_path, [0])
+    with pytest.raises(SourceError, match=r"modem\.drop_call: the modem is not in data mode"):
+        modem.drop_call()
+    assert modem.source is None
+    with pytest.raises(TypeError, match="terminate is 1, not True or False"):
+        Modem(lambda: 0).drop_call(terminate=1)  # type: ignore[arg-type]
+    model = Modem(lambda: 0)
+    reply(model, "ATD*99#")
+    with pytest.raises(SourceError, match=r"terminate needs modem\.network\(\)"):
+        model.drop_call(terminate=True)
+    assert model.data_mode
+    model.drop_call()
+    assert [data for _, data in model.poll(0)] == [b"\r\nNO CARRIER\r\n"]
+
+
+@pytest.mark.parametrize("after", ["hang", "lose_power"])
+def test_a_hang_or_a_power_loss_takes_back_what_a_dropped_call_had_queued(
+    tmp_path: Path, after: str
+) -> None:
+    modem, model, _ = dialled(tmp_path, [0])
+    modem.drop_call()
+    getattr(modem, after)()
+    assert list(model.poll(0)) == []
+
+
+def test_drop_call_refuses_a_terminate_before_lcp_is_open(tmp_path: Path) -> None:
+    modem, _, _ = route(tmp_path, [0])
+    network = modem.network()
+    model = modem.model()
+    reply(model, "ATD*99#")
+    assert not network.ppp.lcp_open
+    with pytest.raises(SourceError, match="terminate needs LCP open"):
+        modem.drop_call(terminate=True)
+    assert model.data_mode and network.active
+
+
+@pytest.mark.parametrize("hung", [False, True])
+def test_a_command_stuck_to_ppp_bytes_is_lost_whole(hung: bool) -> None:
+    model = Modem(lambda: 0)
+    if hung:
+        model.hang()
+    before = len(model.commands)
+    assert list(model.receive(0, b"\x7e\xff\x03PPP\x7eAT\r")) == []
+    assert len(model.commands) == before
+    # the terminator cleared the line: the next command is read
+    assert reply(model, "AT") == (b"" if hung else b"\r\nOK\r\n")
+    assert [c.text for c in model.commands] == ["AT"]
+
+
+def test_the_model_refuses_a_reset_line_with_two_thresholds(tmp_path: Path) -> None:
+    lines = Lines(LILYGO.name, LILYGO.lines, lambda: 0)
+    modem = ModemRoute(
+        "uart.modem",
+        Wire(tx=26, rx=27, baud=115200),
+        clock=recording.EMULATED,
+        directory=tmp_path,
+        now=lambda: 0,
+        lines=lines,
+        pins={**LILYGO.lines["modem"], "reset": Line(5, active=1, on_ms=50, off_ms=2500)},
+    )
+    with pytest.raises(SourceError, match="needs reset with pulse_ms in the profile"):
+        modem.power_on()
+    assert modem.source is None
+
+
+def test_a_reset_line_with_no_timing_is_only_observed(tmp_path: Path) -> None:
+    now = [0]
+    lines = Lines(LILYGO.name, LILYGO.lines, lambda: now[0])
+    modem = ModemRoute(
+        "uart.modem",
+        Wire(tx=26, rx=27, baud=115200),
+        clock=recording.EMULATED,
+        directory=tmp_path,
+        now=lambda: now[0],
+        lines=lines,
+        pins={**LILYGO.lines["modem"], "reset": Line(5)},
+    )
+    modem.hang()
+    lines.driven(seconds(1).ns, [(5, 1)], frozenset({5}))
+    lines.driven(seconds(4).ns, [(5, 0)], frozenset({5}))
+    assert modem.hung and not modem.restarts
+
+
+@pytest.mark.parametrize("second", [True, False])
+def test_a_second_hang_is_refused_and_keeps_the_first_s_choice(second: bool) -> None:
+    model = lilygo()
+    model.hang(pwrkey=False)
+    with pytest.raises(SourceError, match=r"modem\.hang: the modem is hung already"):
+        model.hang(pwrkey=second)
+    pulse(model.driven, seconds(1), ms(3000))
+    assert model.hung and model.powered
+    # a restart ends it, and the modem can hang again
+    pulse(model.reset_driven, seconds(5), ms(2600))
+    model.hang()
+    assert model.hung
+
+
+def test_a_wrong_and_an_unset_clock_survive_a_power_cycle() -> None:
+    now = [0]
+    world = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
+    model = Modem(lambda: now[0], world=lambda: world)
+    model.clock(wrong_by=hours(-1), zone=hours(2))
+    now[0] = seconds(5).ns
+    model.power_off()
+    model.power_on()
+    assert b'"26/01/01,13:00:07+08"' in reply(model, "AT+CCLK?", seconds(7).ns)
+    # set at 10 s and cycled at 20 s, it goes on from the first: the cycle does not start it again
+    now[0] = seconds(10).ns
+    model.clock_not_set(reads=datetime(2000, 1, 1, tzinfo=UTC))
+    now[0] = seconds(20).ns
+    model.power_off()
+    model.power_on()
+    assert b'"00/01/01,00:00:15"' in reply(model, "AT+CCLK?", seconds(25).ns)
+
+
+def test_reset_takes_its_polarity_and_threshold_from_the_profile() -> None:
+    model = Modem(lambda: 0, reset=Line(5, active=0, pulse_ms=500))
+    # high is the idle level here, however long
+    model.reset_driven(seconds(1).ns, 1)
+    model.reset_driven(seconds(5).ns, 0)
+    model.reset_driven(seconds(5).ns + ms(499).ns, 1)
+    assert not model.restarts
+    model.reset_driven(seconds(6).ns, 0)
+    model.reset_driven(seconds(6).ns + ms(500).ns, 1)
+    assert model.restarts == (Restart(seconds(6) + ms(501), "reset"),)
+
+
+def test_reset_of_a_modem_in_data_mode_ends_the_call_and_returns_to_command_mode(
+    tmp_path: Path,
+) -> None:
+    now = [seconds(1).ns]
+    modem, model, network = dialled(tmp_path, now)
+    assert modem.data_mode and network.active
+    pulse(model.reset_driven, seconds(2), ms(2600))
+    assert not modem.data_mode and not network.active
+    assert modem.powered and modem.registered
+    assert reply(model, "AT", seconds(5).ns) == b"\r\nOK\r\n"
+    assert reply(model, "ATD*99#", seconds(5).ns) == b"\r\nCONNECT\r\n"
+
+
+def test_the_test_s_power_calls_end_a_hang_and_restore_power_does_not() -> None:
+    model = lilygo()
+    model.hang(pwrkey=False)
+    model.restore_power()
+    assert model.hung
+    pulse(model.driven, seconds(1), ms(3000))
+    assert model.hung and model.powered
+    # power_on restarts it: it answers, and PWRKEY works again
+    model.power_on()
+    assert not model.hung and model.powered
+    assert reply(model, "AT") == b"\r\nOK\r\n"
+    pulse(model.driven, seconds(5), ms(3000))
+    assert not model.powered
+    # power_off ends it too: the next start has PWRKEY, and is not hung
+    model.power_on()
+    model.hang(pwrkey=False)
+    model.power_off()
+    assert not model.hung and not model.powered
+    pulse(model.driven, seconds(10), ms(100))
+    assert model.powered and not model.hung
+    assert reply(model, "AT") == b"\r\nOK\r\n"
+
+
+def test_a_route_and_a_bare_model_start_from_the_same_world(tmp_path: Path) -> None:
+    modem, _, _ = route(tmp_path, [0])
+    modem.signal(dbm=-73)
+    assert reply(modem.model(), "AT+CCLK?") == reply(Modem(lambda: 0), "AT+CCLK?")
+
+
+def test_the_clock_and_ntp_tell_the_same_time_with_their_defaults() -> None:
+    model = Modem(lambda: 0, data=Internet(lambda: 0))
+    assert isinstance(model.data, Internet)
+    answer = model.data.ntp.on_datagram(b"\x23" + bytes(47))
+    assert answer is not None
+    seconds_since_1900 = struct.unpack(">I", answer[40:44])[0]
+    told = NTP_EPOCH + timedelta(seconds=seconds_since_1900)
+    assert f"{told:%y/%m/%d,%H:%M:%S}".encode() in reply(model, "AT+CCLK?")
 
 
 def test_the_modems_interface_has_the_name_the_link_reports_its_errors_with(

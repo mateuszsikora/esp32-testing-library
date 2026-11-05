@@ -1663,6 +1663,42 @@ Noncommands, including command-mode `+++`, never get `OK`.
 peer can run firmware whose modem initialization includes unrelated settings; and relying on the
 rolling wire log for the command list, because earlier setup commands would disappear.
 
+## The modem's unset clock reads what the test says, with no zone
+
+Status: decided (#128)
+
+`modem.clock_not_set(reads=...)` has a required argument. No document gives the value `AT+CCLK?`
+returns before the network sets the clock, so any default would look like a fact about the modem.
+The manuals say only that the factory time zone is invalid and that `+CCLK?` returns the zone when
+it is valid: leaving the zone out is an inference, and the
+[guide](../features/modem-user.md#clock-and-operator) says so. The clock runs on from the value
+given. The default operator's numeric code is `26000`, which matches the model's IMSI,
+`260000000000000`. `AT+CCLK=` stays a fallback until a firmware needs it.
+
+**Rejected:** a default such as 2000-01-01, because no source for this modem
+gives it; `00101` as the default code, because it would not match the IMSI.
+
+## A hung modem keeps its commands, and RESET restarts it while power_enable stays observed
+
+Status: decided (#128)
+
+`modem.hang(pwrkey=)` stops answers, data and RI, keeps every AT command with an empty response,
+and ends data mode for the model so that the parser sees what the firmware sends next. The test
+chooses whether PWRKEY still works, because no document says what PWRKEY does to a hung modem. A
+RESET pulse, active high at the pad with SIMCom's 2 s minimum as its threshold, restarts a running
+modem in command mode, and does nothing to one that is off. The pulse is judged at release, as
+PWRKEY's is; no document gives the state during a pulse, and the modem goes on as it was.
+`modem.restarts` records what ended each run, at the instant it did, so `supply` has a meaning and
+a start from off is no restart.
+
+`lines.board.power_enable` (GPIO 12) stays an observed line with no effect on the modem.
+
+**Rejected:** modelling GPIO 12's power gating, because a recovery can be validated without it and
+it would have to invent what the gate does; LilyGO's 2600 ms as the threshold, because it is a
+firmware's delay, not the document's minimum, and a tick-based delay can end nearly a tick early;
+recording a restart at each start, because a modem's first start is no restart and a loss of supply
+would have no entry until PWRKEY started it again.
+
 ## The modem data peer and realistic escape timing wait for network integration
 
 Status: superseded (#30)
@@ -1805,12 +1841,40 @@ fixture. Existing AT-only tests retain their immediate `+++` escape and unanswer
 Network data mode instead requires a second of idle time before and after `+++`, preserving
 binary PPP bytes. Power, registration and functionality loss reset PPP, queued replies and TCP
 sessions; a fresh dial negotiates again. The broker retains its test-side history and retained
-messages, while connection loss emits Wills once. No unsolicited `NO CARRIER` is emitted yet.
+messages, while connection loss emits Wills once. Registration, functionality and power loss emit
+no unsolicited `NO CARRIER`; [`drop_call`](#a-dropped-call-says-no-carrier-and-offers-a-terminate-request-only-if-asked)
+does.
 
 **Rejected:** enabling PPP for every AT-model call, because existing firmware tests deliberately
 dial and escape without a PPP stack; and recognizing every binary `+++` as an escape, because
-valid PPP/TLS payloads may contain it. Fully model-specific escape timing and unsolicited modem
-notifications wait for a firmware test that needs them.
+valid PPP/TLS payloads may contain it. Fully model-specific escape timing and other unsolicited
+modem notifications wait for a firmware test that needs them.
+
+## A dropped call says NO CARRIER, and offers a Terminate-Request only if asked
+
+Status: decided (#128)
+
+`modem.drop_call()` ends a data call with the modem registered: it sends `NO CARRIER` and returns to
+command mode. `terminate=True` first offers an LCP Terminate-Request. No vendor document says whether
+a carrier or SIMCom sends one, so it is the test's choice, off by default. It matters to the
+firmware: with esp_modem modem-v1.4.1 and ESP-IDF v5.3.6, `NO CARRIER` in data mode goes unnoticed
+and the firmware learns from its own timeout, while a Terminate-Request gives
+`IP_EVENT_PPP_LOST_IP` 6 s later. `lose_registration()` stays silent. The command parser did not
+change: `+++` without an answer in command mode costs `esp_modem` 5 s, and its `\n` before `AT`
+clears PPP bytes left on the line. A command stuck to those bytes, with no newline between, is lost
+whole, with no answer and no entry in `commands`. The A76XX manual, section 1.5.2, requires the prefix
+at the beginning of each command line and does not say what happens to bytes before it, so this is
+the model's assumption, and no firmware here needs otherwise: `modem_recovery` leaves data mode
+through `esp_modem`, which writes the newline when `+++` gets no answer. A call dropped so late that
+`NO CARRIER` answers `+++` leaves no newline, and nothing on the line for `AT` to stick to
+([measured](../features/modem-user.md#a-dropped-data-call), with what esp32sim's byte-sized reads
+change).
+
+**Rejected:** a `NO CARRIER` from `lose_registration()` too, because no source says a modem sends one
+and existing tests rely on the silence; a Terminate-Request by default, because it would make every
+dropped call prompt and hide the firmware's timeout path; waiting for the Terminate-Ack before
+`NO CARRIER`, because no document gives that order and the firmware's behaviour does not depend on it;
+looking for `AT` at the end of a noisy line, because PPP's binary bytes could then match as a command.
 
 ## The MQTT service implements ephemeral sessions and QoS zero and one
 

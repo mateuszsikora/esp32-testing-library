@@ -4,7 +4,7 @@ turns."""
 import math
 from collections import deque
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Literal, cast, overload
 
 from esp32tl.link.boardlink import Output
@@ -14,7 +14,7 @@ from esp32tl.net.ethernet import Ethernet
 from esp32tl.net.http import HttpServer
 from esp32tl.net.ip import Connection, Network, StreamService
 from esp32tl.net.mqtt import Broker
-from esp32tl.net.ntp import Ntp
+from esp32tl.net.ntp import DEFAULT_UTC, Ntp
 from esp32tl.net.ppp import Ppp
 from esp32tl.net.tls import CertificateAuthority, Tls
 from esp32tl.report import board_time
@@ -66,7 +66,7 @@ class Internet:
     def __init__(
         self,
         now: Callable[[], int],
-        world: Callable[[], datetime] = lambda: datetime(2026, 1, 1, tzinfo=UTC),
+        world: Callable[[], datetime] = lambda: DEFAULT_UTC,
         *,
         link: Link = "ppp",
     ) -> None:
@@ -256,6 +256,15 @@ class Internet:
             self.link = self._peer()
         finally:
             self._at = previous
+
+    def terminate(self, t: int) -> list[Output]:
+        """What the far end sends at `t` to end the link behind a modem."""
+        self._at = t
+        try:
+            self.ppp.terminate()
+            return self._take()
+        finally:
+            self._at = None
 
     def receive(self, t: int, data: bytes) -> list[Output]:
         """What the device sent at `t`: bytes of the modem's line, or one Ethernet frame."""

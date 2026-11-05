@@ -102,7 +102,7 @@ class Uart(Interface):
         self._giving = threading.Lock()
 
     @property
-    def clock(self) -> str:
+    def recording_clock(self) -> str:
         """The clock this route's recordings are on."""
         return self._clock() if callable(self._clock) else self._clock
 
@@ -118,7 +118,11 @@ class Uart(Interface):
         # write over does.
         self._unclaimed(file, f"{self.name}: cannot replay {path}", writers_only=True)
         replay = Replay(
-            recording.read(file), self.name, self.clock, name=str(path), protocol=protocol
+            recording.read(file),
+            self.name,
+            self.recording_clock,
+            name=str(path),
+            protocol=protocol,
         )
         self._give(replay, "replay", str(path), file)
         return replay

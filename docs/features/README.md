@@ -22,7 +22,7 @@ templates.
 | Taps and the run report: `gnss.tap(path)`, the run on the board's clock in a failing test's report | [user](run-report-user.md) | [technical](run-report-technical.md) | `esp32tl/tap.py`, `esp32tl/report.py` |
 | Models and units: the GNSS receiver a test describes, `gnss.fix(at=...)`, and quantities with their unit | [user](models-user.md) | [technical](models-technical.md) | `esp32tl/units.py`, `esp32tl/sources/model/` except `modem.py` |
 | Bluetooth peer: a Classic device with SPP on Bumble's virtual link, answered by a model on the board's clock | [user](bluetooth-peer-user.md) | [technical](bluetooth-peer-technical.md) | `esp32tl/bluetooth/` |
-| Cellular modem: AT dialogue, signal, registration, PWRKEY and RI | [user](modem-user.md) | [technical](modem-technical.md) | `esp32tl/sources/model/modem.py`, `esp32tl/interfaces/modem.py` |
+| Cellular modem: AT dialogue, signal, registration, clock and operator, PWRKEY, RESET and RI, a hung modem, a dropped call | [user](modem-user.md) | [technical](modem-technical.md) | `esp32tl/sources/model/modem.py`, `esp32tl/interfaces/modem.py` |
 | Flash contents: `board.nvs()` and typed integers, by partition name | [user](flash-contents-user.md) | [technical](flash-contents-technical.md) | `esp32tl/flash.py` |
 | Simulated network: PPP or Ethernet with ARP and DHCP, IPv4, TCP/UDP, DNS, NTP, TLS, MQTT and HTTP | [user](network-user.md) | [technical](network-technical.md) | `esp32tl/net/` |
 

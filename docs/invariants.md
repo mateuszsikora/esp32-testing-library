@@ -691,6 +691,73 @@ that references to its number keep their meaning.
     `tests/test_modem_model.py::test_only_sent_model_gpio_changes_appear_in_the_run_log`
 - **78.** A source selection that loses to another source must leave no GPIO ownership behind.
     `tests/test_modem_model.py::test_a_model_selection_that_loses_to_replay_does_not_claim_ri`
+- **173.** `AT+CCLK?` is the world's time at the command's instant plus the test's offset, with the
+    zone in quarters of an hour and `+00`, never `-00`, for none; an unset clock reads what the test
+    said, runs on from it and has no zone; a zone that is no whole quarter of an hour from -24 to
+    +24 hours is refused.
+    `tests/test_modem_model.py::test_cclk_is_the_world_s_clock_at_the_command_s_instant`,
+    `tests/test_modem_model.py::test_cclk_offsets_the_time_and_gives_the_zone_in_quarters_of_an_hour`,
+    `tests/test_modem_model.py::test_clock_refuses_a_zone_that_is_no_quarter_of_an_hour_or_out_of_range`,
+    `tests/test_modem_model.py::test_an_unset_clock_has_no_zone_and_runs_on_from_the_call`,
+    `tests/test_modem_fixture.py::test_the_firmware_reads_a_wrong_clock_and_then_the_network_s`,
+    `tests/test_modem_fixture.py::test_the_firmware_reads_an_unset_clock_with_no_zone_and_it_runs_on`
+- **174.** `AT+COPS=3,<0|1|2>` chooses what `AT+COPS?` names and any other format gets `ERROR`; the
+    format goes back to 0 at a power cycle, and the clock and the operator survive one.
+    `tests/test_modem_model.py::test_the_operator_format_chooses_what_cops_names`,
+    `tests/test_modem_model.py::test_any_other_operator_format_is_an_error_and_changes_nothing`,
+    `tests/test_modem_model.py::test_the_operator_format_goes_back_at_a_power_cycle_and_clock_and_operator_stay`,
+    `tests/test_modem_model.py::test_a_wrong_and_an_unset_clock_survive_a_power_cycle`,
+    `tests/test_modem_fixture.py::test_the_firmware_reads_the_five_digit_code_and_the_network_s_time`
+- **175.** A hung modem answers nothing and passes no data, sends no `NO CARRIER` and keeps RI high;
+    its AT commands stay in the history with an empty response, shown as `(no answer)`. With
+    `pwrkey=False`, PWRKEY does nothing until a restart: RESET, a loss of supply,
+    `modem.power_off()` or `modem.power_on()`, which end the hang; `restore_power()` does not. A
+    second `hang` is refused rather than change that.
+    `tests/test_modem_model.py::test_a_hung_modem_answers_nothing_and_keeps_its_commands`,
+    `tests/test_modem_model.py::test_a_hung_modem_passes_no_data_and_sends_no_no_carrier`,
+    `tests/test_modem_model.py::test_the_report_shows_a_command_with_no_answer`,
+    `tests/test_modem_model.py::test_pwrkey_recovers_a_hung_modem_that_honours_it`,
+    `tests/test_modem_model.py::test_pwrkey_does_nothing_to_a_hung_modem_that_ignores_it`,
+    `tests/test_modem_model.py::test_a_loss_of_supply_ends_the_hang_and_a_later_start_has_pwrkey`,
+    `tests/test_modem_model.py::test_a_second_hang_is_refused_and_keeps_the_first_s_choice`,
+    `tests/test_modem_recovery.py::test_recovers_a_hung_modem`,
+    `tests/test_modem_model.py::test_the_test_s_power_calls_end_a_hang_and_restore_power_does_not`
+- **176.** A RESET pulse at the profile's polarity, judged at release against its threshold, restarts
+    a running modem in command mode and ends a hang; a shorter pulse, and any pulse on a modem that
+    is off, do nothing. `lines.board.power_enable` has no effect on the modem. The firmware's
+    recovery procedure brings a hung modem back with PWRKEY working and with it ignored.
+    `tests/test_modem_model.py::test_reset_restarts_a_hung_modem_in_command_mode`,
+    `tests/test_modem_model.py::test_reset_is_judged_at_release_and_at_the_profile_s_threshold`,
+    `tests/test_modem_model.py::test_reset_is_active_high_at_the_pad`,
+    `tests/test_modem_model.py::test_reset_takes_its_polarity_and_threshold_from_the_profile`,
+    `tests/test_modem_model.py::test_reset_of_a_modem_in_data_mode_ends_the_call_and_returns_to_command_mode`,
+    `tests/test_modem_model.py::test_reset_of_a_modem_that_is_off_does_nothing`,
+    `tests/test_modem_model.py::test_power_enable_has_no_effect_on_the_modem`,
+    `tests/test_modem_recovery.py::test_recovers_a_hung_modem`,
+    `tests/test_modem_recovery.py::test_recovers_a_modem_that_hangs_while_the_firmware_dials`
+- **177.** `modem.restarts` holds what ended each run of the modem, at the instant it did; starting a
+    modem that is off is no restart, nor is a call before the board's first instant.
+    `tests/test_modem_model.py::test_restarts_name_what_ended_each_run_and_a_start_is_no_restart`,
+    `tests/test_modem_model.py::test_a_route_watches_pwrkey_and_reset_through_lines`
+- **178.** `modem.drop_call` keeps registration, sends `NO CARRIER` and leaves data mode, with an LCP
+    Terminate-Request first only when asked; AT works again and a new dial connects.
+    `lose_registration` stays silent.
+    `tests/test_modem_model.py::test_a_dropped_call_stays_registered_says_no_carrier_and_leaves_data_mode`,
+    `tests/test_modem_model.py::test_a_dropped_call_offers_a_terminate_request_first_when_the_test_asks`,
+    `tests/test_modem_model.py::test_a_call_dropped_without_terminate_offers_no_terminate_request`,
+    `tests/test_modem_model.py::test_lose_registration_stays_silent`,
+    `tests/test_net_ppp.py::test_the_far_end_offers_to_terminate_an_open_link_only`
+- **179.** At the pin, firmware on `esp_modem` learns of a call dropped with a Terminate-Request from
+    `IP_EVENT_PPP_LOST_IP` 6 s later, and of one without it from its own timeout, and redials on
+    both, with the modem registered and not restarted. A call dropped while it is leaving data mode
+    restarts nothing either, and every command is answered: until `exit_data` stops listening, 14 s
+    into leaving, `+++` gets no answer and `esp_modem` writes `\n` before its `AT`; later, `+++` takes
+    `NO CARRIER` as its answer and `AT` goes out alone.
+    `tests/test_modem_recovery.py::test_redials_after_a_dropped_call`,
+    `tests/test_modem_recovery.py::test_a_call_dropped_while_the_firmware_leaves_data_mode_restarts_nothing`
+- **180.** A command stuck to bytes left on the command line is lost whole, with no answer and no
+    entry in the history, on a hung modem and a healthy one; the next newline clears the line.
+    `tests/test_modem_model.py::test_a_command_stuck_to_ppp_bytes_is_lost_whole`
 
 ## Flash contents
 
