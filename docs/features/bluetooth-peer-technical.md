@@ -149,6 +149,18 @@ link; `controller.py`, Bumble's virtual controller with what Classic devices nee
      at the timer the host gets `Remote_Name_Request_Complete` with `PAGE_TIMEOUT_ERROR`, which Vol 1,
      Part F, 2.4 names for this command. A second request to a peer with one pending keeps the
      first's timer, so both end when the first does.
+   - **Page scan.** Bumble keeps `Write_Scan_Enable` in `classic_scan_enable` and delivers a page
+     whatever it says. `on_lmp_packet` first asks `_hears`: with page scan (bit 1, `PAGE_SCAN`) off,
+     `LmpHostConnectionReq` is dropped before Bumble's handler, so the target makes no entry, its
+     host hears nothing, and the pager's timer ends the page with `PAGE_TIMEOUT_ERROR`. `LmpNameReq`
+     is dropped too, unless `_linked`: this side holds an entry for the sender that is not its own
+     page, or the sender holds one for this side that is not its own page, a link made or a page one
+     of them heard, which the request goes over (Vol 4, Part E, 7.1.19 pages only when there is no
+     connection); the requester's timer then ends it. Every other packet goes over a link and is
+     delivered. Page scan is read when the packet arrives, which is the instant the page starts: one
+     turned on during the page does not hear it, as a device that returns does not, and one turned
+     off after the page was heard leaves it to its answer. Inquiry looks at bit 0, `INQUIRY_SCAN`,
+     only.
    - **Link supervision.** Nothing polls on this link, so a link is in contact until a device
      leaves, and the specification's "no packets are received for a duration longer than the
      `Link_Supervision_Timeout`" counts from there. `Controller.left`, on the controller of the
@@ -357,6 +369,12 @@ in `error_code` on a failed `Connection_Complete`, and `HCI_Error` with
   whose contact can still be lost, also by the device that leaves. A pager leaving after its page
   ended, or after rejecting a crossing page. A role switch refused, also with an answer never given
   and with this side paging too. An entry that goes with a failed page taking its timer along.
+  Page scan off: a page ending at exactly the page timeout with no entry on the target, one turned
+  on during the page answering only the next, and one turned back on paged at once; inquiry scan
+  and page scan each on alone; a remote name request ending at the page timeout, also to a target
+  paging the asker or paged by it when nobody heard that page, and answered with page scan off on
+  both ends over a link, either way, to a target that heard the page before its host answers, and
+  by one that turned page scan off after hearing it.
   Other devices: several in one inquiry, each with its own class and RSSI; a new `rssi` at the next
   inquiry; RSSI in the RSSI mode and none in the plain one; a device without SPP that has no SDP
   record and no RFCOMM; one without a PIN refusing a pairing, and one with a PIN keeping its key
@@ -364,14 +382,14 @@ in `error_code` on a failed `Connection_Complete`, and `HCI_Error` with
 - `tests/test_air.py` also: a timer falling on its exact nanosecond.
 
 Not covered: firmware. esp32sim has no Classic controller for the guest, so no ESP32 image talks
-to a peer yet, and no firmware has seen a peer leave. Nor is a clock offset other than 0. A page does not look at
-the target's page scan: Bumble's controller delivers it whatever `classic_scan_enable` says, so a
-device with `set_connectable(False)` still connects, though an inquiry respects inquiry scan.
+to a peer yet, and no firmware has seen a peer leave. Nor is a clock offset other than 0.
 There is no `Connection_Accept_Timeout` (Vol 4, Part E, 6.7), and the page's timer runs until the
 target's host accepts rather than until its baseband answers: a host that accepts after the page
 ended, as after 6 s, makes a link on both ends when the pager has already reported `PAGE_TIMEOUT`,
 and the pager's next page gets `CONNECTION_ALREADY_EXISTS`. Bumble's host accepts at the instant it
-hears, so only a slowed host reaches this.
+hears, so only a slowed host reaches this. For the same reason a target keeps the page it heard as a
+link after that page ended, so the pager's remote name request then gets the target's name, with
+page scan off too, where a real controller would page again and end in `PAGE_TIMEOUT`.
 An acceptance with `role=CENTRAL` after the page ended fails the air with Bumble's `AssertionError`,
 as the pager no longer has an entry for the role switch. So does one to a page still under way from
 a device that rejected a crossing page, which took its only entry (#141). A link that page then makes

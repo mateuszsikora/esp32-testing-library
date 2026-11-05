@@ -1541,14 +1541,21 @@ of a page heard and of its answer, which is too much to land with the rejection 
 
 
 
-## A page that respects page scan is postponed
+## A page respects page scan, read when the page starts
 
-Status: postponed (#135)
+Status: decided (#135)
 
-Bumble's controller answers a page whatever the target's page scan says, though an inquiry respects
-inquiry scan, so `set_connectable(False)` does not stop a device that knows the address. It predates
-#129, and is reachable only through `peer.device`, because the peer's API has no call that turns page
-scan off.
+Bumble's controller answered a page whatever the target's page scan said, though an inquiry respects
+inquiry scan, so `set_connectable(False)` did not stop a device that knew the address. Now a device
+whose page scan is off does not hear a page, nor a remote name request with no link to go over, and
+either ends at the page timeout (Bluetooth Core 5.4, Vol 4, Part E, 7.3.18 and 6.6). Page scan is
+read at the instant the page starts, as a device's presence is: one turned on during a page answers
+only the next. The peer's API still has no call for it; `peer.device.set_connectable` reaches it.
+
+**Rejected:** hearing the pages still under way when page scan comes on, for the reason a peer that
+returns during a page does not hear it: it is the baseband's repeated page, a difference of when a
+retry connects, until a firmware is seen to depend on it. Also rejected, for now: a call on the peer for
+page scan, because no test needs one yet, and `peer.device` reaches it meanwhile.
 
 
 ## Connection_Accept_Timeout is postponed
