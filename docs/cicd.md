@@ -96,7 +96,7 @@ and fails the job. The job then lists the tarball (`tar -tvf`), hit or miss.
 from, so a change to any of them, or to a project kept under `firmware/` or `examples/`, is a new key.
 
 Last, it restores `.cache/esp-rom-elfs` and runs `make rom-elf`, so the ROM ELF is fetched once
-here rather than by all the test jobs at the same time. Timeout: 30 minutes.
+here rather than by all the test jobs at the same time. Timeout: 60 minutes.
 
 ## `runner`
 
