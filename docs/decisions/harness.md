@@ -2632,3 +2632,36 @@ the port, since a program without the lock takes bytes from the firmware and `dr
 **Rejected:** adding `TIOCEXCL`, because it blocks later opens only: a program that already holds the
 port, the case that loses bytes in silence, goes unseen, and the lock already stops the later open that
 matters, a second route's.
+
+## A real board does not read its flash: the test skips
+
+Status: decided (#131)
+
+`board.flash()` on the serial backend skips the test, with
+`serial: flash contents cannot be read on this backend`, as `board.nvs` does.
+
+**Rejected:** reading through esptool, because it puts the chip in download mode, which stops the
+firmware and breaks the run the test is observing, and pytest-embedded owns the port. Having the
+firmware print its own state is a test's own choice, and reaches any backend through `console`.
+
+## The reader reads NVS itself, from the format
+
+Status: decided (#131)
+
+`esp32tl.flash.nvs_values` reads pages, the state bitmap, repeated entries and blobs by ESP-IDF's
+format and loader, on the same `FlashSnapshot` a test reads partitions from.
+
+**Rejected:** ESP-IDF's `nvs_partition_tool/nvs_parser.py` as a dependency: it is not in the pip
+package esp32tl installs, which has the generator only, and needs an ESP-IDF checkout. Its
+`NVS_Partition` also lists entries and leaves deciding what counts to the reader, so the rules would
+still be here. It served as a check while this was written.
+
+## A snapshot's errors are ValueError, not BackendError
+
+Status: decided (#131)
+
+`FlashSnapshot` reports an unknown partition and one that is not unencrypted NVS as `ValueError`, with
+the message `board.nvs` uses for a missing name, and `board.flash()` before power-on as `BoardOff`.
+
+**Rejected:** `BackendError`, because `FlashSnapshot` lives in `esp32tl/flash.py`, which the backends
+import, and a snapshot outlives its run; a class of its own would give a test nothing to catch.

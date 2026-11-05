@@ -170,3 +170,63 @@ def test_no_peer_listening_is_exit_code_4(socket_path: Path) -> None:
     run = subprocess.run(command(socket_path), capture_output=True, timeout=60)
     assert run.returncode == 4
     assert f"cannot connect to the peer at socket:{socket_path}" in run.stderr.decode()
+
+
+def test_a_flash_dump_writes_the_whole_flash_in_a_turn_and_the_run_goes_on(
+    socket_path: Path,
+) -> None:
+    out = socket_path.parent / "flash.bin"
+    peer = Peer(socket_path, "--flash-out", str(out), "--flash-mb", "2")
+    peer.hello()
+    peer.read_until("sync")
+    peer.write(type="flash_dump")
+    assert peer.read_until("flash_dump_ack") == {"type": "flash_dump_ack", "t": 0, "error": None}
+    flash = out.read_bytes()
+    app = esp32sim.load_app(str(FIRMWARE / "hello_world"))
+    assert len(flash) == 2 << 20
+    for file in app.flash_files:
+        image = Path(file.file_path).read_bytes()
+        assert flash[file.offset : file.offset + len(image)] == image
+    assert not (socket_path.parent / "flash.bin.partial").exists()
+    out.unlink()
+    peer.write(type="wait", ack=0, quiet_until=None, latency=None)
+    assert peer.rest()[-1]["end"] == "max_seconds"
+    assert peer.wait()[0] == 0
+    assert out.read_bytes() == flash, "hello_world writes nothing to its flash"
+
+
+def test_the_file_is_there_once_stats_have_come_whatever_ended_the_run(
+    socket_path: Path,
+) -> None:
+    out = socket_path.parent / "flash.bin"
+    peer = Peer(socket_path, "--flash-out", str(out))
+    peer.hello()
+    peer.read_until("sync")
+    peer.write(type="wait", ack=5)
+    assert peer.read_until("stats")["end"] == "protocol_error"
+    assert len(out.read_bytes()) == 4 << 20
+    assert peer.wait()[0] == 3
+
+
+def test_a_flash_dump_without_flash_out_is_a_protocol_error_with_exit_code_3(
+    socket_path: Path,
+) -> None:
+    peer = Peer(socket_path)
+    peer.hello()
+    peer.read_until("sync")
+    peer.write(type="flash_dump")
+    assert "flash_dump without --flash-out" in peer.read_until("stats")["detail"]
+    assert peer.wait()[0] == 3
+
+
+def test_flash_out_without_a_board_writes_the_flash_at_the_end_of_the_run(
+    socket_path: Path,
+) -> None:
+    out = socket_path.parent / "flash.bin"
+    app = esp32sim.load_app(str(FIRMWARE / "hello_world"))
+    command = [str(esp32sim.runner_path()), "--chip", "esp32", "--rom", str(esp32sim.rom_path())]
+    command += ["--max-seconds", "0.01", "--flash-out", str(out)]
+    for file in app.flash_files:
+        command += ["--flash-at", f"{file.offset:#x}={file.file_path}"]
+    subprocess.run(command, check=True, capture_output=True, timeout=60)
+    assert len(out.read_bytes()) == 4 << 20

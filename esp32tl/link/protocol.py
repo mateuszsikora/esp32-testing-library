@@ -147,6 +147,16 @@ class SdCardAck:
 
 
 @dataclass(frozen=True)
+class FlashDumpAck:
+    """The file of `--flash-out` holds the flash of the turn at `t`, unless `error` says why it
+    does not (5.21). Not an event: the turn it answers is still going on."""
+
+    TYPE: ClassVar[str] = "flash_dump_ack"
+    t: int
+    error: str | None = None
+
+
+@dataclass(frozen=True)
 class Sync:
     """The end of the runner's turn at the block point `t` (5.6)."""
 
@@ -329,6 +339,14 @@ class SdCardChange:
 
 
 @dataclass(frozen=True)
+class FlashDump:
+    """The whole flash into the file of `--flash-out`, now, in this turn (5.21): the runner answers
+    with `flash_dump_ack`, and the turn goes on."""
+
+    TYPE: ClassVar[str] = "flash_dump"
+
+
+@dataclass(frozen=True)
 class Wait:
     """The end of the peer's turn (5.13); `None` is no bound."""
 
@@ -346,7 +364,9 @@ class Stop:
 
 
 Event = UartTx | UartCfg | GpioOut | Reset | EthTx
-RunnerMessage = RunnerHello | Event | Sync | Console | Warn | SdCardAck | SdOp | Stats
+RunnerMessage = (
+    RunnerHello | Event | Sync | Console | Warn | SdCardAck | SdOp | FlashDumpAck | Stats
+)
 Input = (
     UartRx
     | GpioIn
@@ -360,7 +380,7 @@ Input = (
     | SdFault
     | SdClear
 )
-HarnessMessage = HarnessHello | Input | Wait | Stop
+HarnessMessage = HarnessHello | Input | FlashDump | Wait | Stop
 Message = RunnerMessage | HarnessMessage
 
 # The fields whose JSON name is not the attribute's.
@@ -702,6 +722,7 @@ DECODERS: dict[Sender, dict[str, Callable[[Fields], Message]]] = {
         "sd_card_ack": lambda f: SdCardAck(
             f.integer("t"), f.opt_string("image"), f.opt_string("error")
         ),
+        "flash_dump_ack": lambda f: FlashDumpAck(f.integer("t"), f.opt_string("error")),
         "stats": _stats,
     },
     "harness": {
@@ -722,6 +743,7 @@ DECODERS: dict[Sender, dict[str, Callable[[Fields], Message]]] = {
         "wait": lambda f: Wait(
             f.integer("ack"), f.opt_integer("quiet_until"), f.opt_integer("latency")
         ),
+        "flash_dump": lambda f: FlashDump(),
         "stop": lambda f: Stop(),
     },
 }

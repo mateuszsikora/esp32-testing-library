@@ -27,6 +27,9 @@
 //! time comes, at a slice boundary, between two of the chip's SPI transactions; the runner says
 //! what the slot holds then (`sd_card_ack`).
 //!
+//! With `--flash-out` the peer's `flash_dump` writes the whole flash to a file in the turn it comes
+//! in, which goes on, and so does the end of the run, however it ends (protocol 5.21).
+//!
 //! Under `--realtime` the run is paced to wall time (protocol 12): esp32sim paces `run` from the
 //! first slice boundary at or after 2^16 bus cycles, and the runner keeps a wall clock of its own
 //! from that moment, on which it waits for each block point before it takes the turn there.
@@ -43,6 +46,7 @@ use esp_soc::wifi::{self, StaState};
 use esp_soc::{SocBus, Stop};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::convert::Infallible;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
@@ -121,6 +125,12 @@ pub trait Guest {
     /// How many times esp32sim has skipped a lag behind wall time.
     fn resyncs(&self) -> u64 {
         0
+    }
+    // The flash, asked only with `--flash-out`: the default is a chip without any.
+
+    /// The whole flash, as the guest has left it.
+    fn flash(&self) -> &[u8] {
+        &[]
     }
 }
 
@@ -251,6 +261,9 @@ impl Guest for esp32::Machine {
     fn resyncs(&self) -> u64 {
         self.rt.resyncs
     }
+    fn flash(&self) -> &[u8] {
+        &self.bus.flash
+    }
 }
 
 pub struct Options<'a> {
@@ -272,6 +285,8 @@ pub struct Options<'a> {
     pub card: Option<sd_card::Shared>,
     /// `--realtime`: the run is paced to wall time.
     pub realtime: bool,
+    /// `--flash-out`: where `flash_dump` and the end of the run write the flash.
+    pub flash_out: Option<&'a Path>,
 }
 
 /// Why the run ended (protocol §9).
@@ -492,6 +507,10 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
             Err(end) => end,
             Ok(never) => match never {},
         };
+        // before `stats`: a peer that has them finds the file in place
+        if let Some(path) = self.opts.flash_out {
+            write_flash_at_end(path, self.guest.flash());
+        }
         let end = self.finish(end);
         (end, self.stats)
     }
@@ -1027,7 +1046,7 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
         self.acked = self.seq;
         self.first_unacked = None;
         self.stats.turns += 1;
-        let deadline = self.deadline();
+        let mut deadline = self.deadline();
         let mut inputs = Vec::new();
         loop {
             let line = self.recv(deadline)?;
@@ -1113,6 +1132,20 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                         return Err(protocol_error("sd_card without --sd-spi", &line));
                     }
                     inputs.push((t, Input::SdCard(image)));
+                }
+                Incoming::FlashDump => {
+                    let Some(path) = self.opts.flash_out else {
+                        return Err(protocol_error("flash_dump without --flash-out", &line));
+                    };
+                    let error = write_flash(path, self.guest.flash())
+                        .err()
+                        .map(|e| format!("{}: {e}", path.display()));
+                    // not an event, and the turn goes on: no input of it has been applied, and
+                    // the bus's clock has not moved
+                    self.send(&protocol::flash_dump_ack(b, error.as_deref()))?;
+                    self.flush()?;
+                    // the write was the runner's time, not the peer's
+                    deadline = self.deadline();
                 }
                 Incoming::Wait {
                     ack,
@@ -1476,6 +1509,26 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
 
     fn recv(&mut self, deadline: Option<Instant>) -> Result<String, End> {
         self.link.recv(deadline).map_err(link_end)
+    }
+}
+
+/// Writes the whole flash to `path`, through a file beside it and a rename: whoever reads `path`
+/// finds one instant's flash, or none (protocol 5.21).
+fn write_flash(path: &Path, flash: &[u8]) -> std::io::Result<()> {
+    let mut partial = path.as_os_str().to_owned();
+    partial.push(".partial");
+    std::fs::write(&partial, flash)?;
+    std::fs::rename(&partial, path)
+}
+
+/// The flash at the end of a run. A file that cannot be written changes nothing of how the run
+/// ended: the first cause decides the exit code.
+pub fn write_flash_at_end(path: &Path, flash: &[u8]) {
+    if let Err(e) = write_flash(path, flash) {
+        eprintln!(
+            "esp32tl-runner: cannot write the flash: {}: {e}",
+            path.display()
+        );
     }
 }
 

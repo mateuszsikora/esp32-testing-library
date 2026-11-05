@@ -117,7 +117,7 @@ next build is still incremental; the marker, removed first, is what says it fini
 The Makefile's `firmware` target runs `FIRMWARE_OUT= firmware/build.sh`; the pattern rule
 `firmware/%/build/esp32tl-built` runs `FIRMWARE_OUT= firmware/build.sh $*`, and `test` depends on
 `$(FIRMWARE_IMAGES:%=firmware/%/build/esp32tl-built)` with `FIRMWARE_IMAGES := hello_world
-nmea_reader gpio_echo sdspi sd_remount modem_at nvs_reader pppos_client mqtt_session http_request persistence`. `determinism` depends on
+nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request persistence ota_state`. `determinism` depends on
 the markers of `nmea_reader`, `pppos_client`, `mqtt_session` and `http_request`. The rule has no prerequisites, so make rebuilds
 an image only when its marker is missing: an edit to `firmware/nmea_reader/` needs `make firmware`, or
 `firmware/build.sh nmea_reader`, before `make test` sees it.
@@ -230,8 +230,9 @@ validation and the model's documented answers together.
 
 `firmware/nvs_reader/main/main.c` depends on `nvs_flash`. It calls `nvs_flash_init`, opens
 `config` with `NVS_READONLY`, and reads `broker_host`, `broker_port`, `enabled`, `count`,
-`delta` and `broker_ca` with `nvs_get_str`, `nvs_get_u16`, `nvs_get_u8`, `nvs_get_u32`,
-`nvs_get_i32` and `nvs_get_blob`. Buffers for the string and blob are 256 bytes. Every call
+`delta`, `small`, `medium`, `total`, `offset` and `broker_ca` with `nvs_get_str`, `nvs_get_u16`,
+`nvs_get_u8`, `nvs_get_u32`, `nvs_get_i32`, `nvs_get_i8`, `nvs_get_i16`, `nvs_get_u64`,
+`nvs_get_i64` and `nvs_get_blob`. Buffers for the string and blob are 256 bytes. Every call
 is checked with `ESP_ERROR_CHECK`; after printing the values it closes the handle and returns.
 The default ESP-IDF partition table puts `nvs` at `0x9000`, size `0x6000`.
 
@@ -257,6 +258,33 @@ What it proves on esp32sim, measured on the runs of `tests/test_power.py`: `esp_
 both memory counts (2 on the second boot) and gives `reason=3 rom=12`; `board.reset()` and a power
 cycle give `reason=1 rom=1` with both counts back at 1, the NVS count and the card's lines going on,
 and `uptime_ms` under a second at the print after a reset, while `board.now` goes on.
+
+## `ota_state`
+
+`firmware/ota_state/main/main.c` depends on `app_update`, `bootloader_support`, `spi_flash` and
+`esp_partition`. `firmware/ota_state/sdkconfig.defaults` sets `CONFIG_PARTITION_TABLE_TWO_OTA`,
+`CONFIG_ESPTOOLPY_FLASHSIZE_4MB`, which that table needs, and `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`.
+`build.sh` passes nothing for it: ESP-IDF takes `sdkconfig.defaults` from the project directory.
+
+`app_main` decides by what it runs, with no state of its own:
+
+| Running | State | What it does |
+|---|---|---|
+| `factory` | | `copy_app_to(esp_ota_get_next_update_partition(NULL))`, `esp_restart()` |
+| `ota_0` | `pending_verify` | `esp_ota_mark_app_valid_cancel_rollback()`, then the same copy, to `ota_1`, and restart |
+| `ota_1` | `pending_verify` | `esp_ota_mark_app_invalid_rollback_and_reboot()`, which restarts into `ota_0` |
+| any other | any other | Done |
+
+`copy_app_to` takes the image's length from `esp_image_verify` of the running partition, and copies
+that many bytes, 4 KiB at a time, through `esp_ota_begin`, `esp_partition_read`, `esp_ota_write` and
+`esp_ota_end`, then `esp_ota_set_boot_partition`. The bootloader moves the entry from `new` to
+`pending_verify`, which is why the first line of a new app already says so.
+
+What it proved on esp32sim at the pin, the first firmware to try: ESP-IDF's OTA works there with no
+workaround. The bootloader reads the OTA data, boots the slot it selects through the flash cache, and
+writes the entry's state back; `esp_ota_write` programs the slot; `esp_restart` and the rollback's
+reboot come back through it. The whole sequence takes about 2 emulated seconds, 200 ms of each step
+the firmware's own wait.
 
 ## `sd_remount`
 
@@ -460,7 +488,7 @@ top of each build directory, `config/sdkconfig.json`, and the `.bin` and `.elf` 
 |---|---|---|---|
 | `IDF_VERSION` | script constant | `v5.3.6` | the ESP-IDF tag of the container |
 | `CONTAINER` | script constant | `espressif/idf:$IDF_VERSION@sha256:cee52f0c4fdaf088992a7a739f5993154e95cf1d3ab61c24f5b40e6d56a3a070` | the image the build runs in, pinned by digest (a multi-arch index) |
-| `IMAGES` | script constant | `hello_world nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request persistence` | the images, in build order; `project_of` maps each to its project |
+| `IMAGES` | script constant | `hello_world nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request persistence ota_state` | the images, in build order; `project_of` maps each to its project |
 | `FIRMWARE_OUT` | environment | `firmware/` | where `IMAGE/build/` goes; empty means the default; `/out` inside the container |
 | `IDF_LOCAL` | environment | unset | `1` builds with the ESP-IDF of the calling shell |
 | `ESP32TL_CONTAINER` | environment, set by the host side | unset | marks the container side and names the image it records |
@@ -477,7 +505,7 @@ regular expressions, so each has to stay on a line of its own. Changing either, 
 
 | Message | Cause |
 |---|---|
-| `unknown image 'NAME'; the images are: hello_world nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request persistence` | an argument not in `IMAGES`; nothing written |
+| `unknown image 'NAME'; the images are: hello_world nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request persistence ota_state` | an argument not in `IMAGES`; nothing written |
 | `ESP32TL_CONTAINER is set outside a container; unset it` | `ESP32TL_CONTAINER` set and no `/.dockerenv`; nothing written |
 | `IDF_LOCAL=1 needs ESP-IDF in the environment: source $IDF_PATH/export.sh first` | `IDF_LOCAL=1` without `idf.py` on `PATH` or without `IDF_PATH`; nothing written |
 | `needs Docker, or IDF_LOCAL=1 to build with a local ESP-IDF` | no `docker` on `PATH`; nothing written |
@@ -513,7 +541,7 @@ write their arguments to `$FAKE_LOG`, with a `PATH` holding only them and `cat`,
 - `test_local_build_runs_idf_py_and_records_how`: with no image named, every image in order,
   `hello_world` and `sdspi` from the fake `IDF_PATH`, `nmea_reader`, `gpio_echo`, `sd_remount`,
   `modem_at`, `modem_recovery` and `nvs_reader` from `firmware/`, `pppos_client` from what a fake `python3` prints,
-  `mqtt_session` and `persistence` from `firmware/`, and `http_request` from its copy, `.http_request-v9.9.9` in the output directory, which holds the
+  `mqtt_session`, `persistence` and `ota_state` from `firmware/`, and `http_request` from its copy, `.http_request-v9.9.9` in the output directory, which holds the
   fake example's `CMakeLists.txt`; the `idf.py` arguments of each, the records with `"container": null`, the markers,
   the "not for goldens" warning and the `built in` lines;
 - reuse of a build directory with the same record, and removal of one with another record;
@@ -539,7 +567,9 @@ checks the same of `sdspi`, with `sd_card.bin` and `sd_card.elf`, and
 the `esp32-devkitc` profile's slot and that both of its formatting options are off.
 `test_persistence_has_a_writable_nvs_partition_where_its_boots_are_counted` checks that
 `persistence` has the default `nvs` partition at `0x9000`, writable, and that no file of the build
-is flashed there.
+is flashed there. `test_ota_state_has_a_factory_app_two_slots_and_the_initial_ota_data` checks
+`ota_state`'s table, that its `ota_data_initial.bin` is erased, and that rollback is on in its
+`sdkconfig`.
 
 `tests/test_gpio_echo.py` runs the real `gpio_echo` in the real runner on the
 `lilygo-t-a7670g-r2` profile, all but one through the `lines` fixture:

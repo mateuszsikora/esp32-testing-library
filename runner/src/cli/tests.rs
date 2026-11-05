@@ -23,7 +23,18 @@ fn minimal_command_line() {
             sd_card: None,
             wifi: None,
             realtime: false,
+            flash_out: None,
         }
+    );
+}
+
+#[test]
+fn flash_out_names_a_file_and_needs_no_board() {
+    let opts = parse_str(&format!("{MINIMAL} --flash-out out/flash.bin")).unwrap();
+    assert_eq!(opts.flash_out, Some("out/flash.bin".into()));
+    assert_eq!(
+        parse_str(&format!("{MINIMAL} --flash-out")),
+        Err(Error::Usage("--flash-out needs a value".into()))
     );
 }
 

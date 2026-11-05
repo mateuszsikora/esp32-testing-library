@@ -107,6 +107,7 @@ run log: the tap, power-on and wait steps, and received console lines.
 | `lines`, `sd_card` | Skip GPIO access, or return the slot whose model insertion skips; missing interfaces fail |
 | `wifi` | A `Wifi` made on first access with the backend's `asked`, on no link: `access_point` and `nearby` ask for a `model` source on `wifi`, which the declaration gives serial only as `real`, so they skip |
 | `nvs(namespaces, partition="nvs")` | Skip: hardware NVS replacement is unsupported |
+| `flash()` | Skip: reading a real board's flash is unsupported ([decision](../decisions/harness.md#a-real-board-does-not-read-its-flash-the-test-skips)) |
 | `tap_console(path)` | Console `Tap` via `Uart.tap`; before power-on, with path collision checks |
 | `set_up()` | `the tap of console` when tapped, otherwise empty |
 | `close()` | Stop capture, restore healthy redirection, write tap, report errors; idempotent |
@@ -167,6 +168,7 @@ from pytest-embedded propagate with their original messages.
 | `serial: the tap of console cannot be written: {error}` | Tap `OSError` or `RecordingError` at teardown |
 | `serial: the test set up the tap of console and never called board.power_on(): it ran no firmware` | Passing test with a tap but no successful power-on; no tap written |
 | `serial: NVS contents cannot be configured on this backend` | Skip before generating or writing a partition |
+| `serial: flash contents cannot be read on this backend` | Skip at `board.flash()` |
 | `serial: GPIO lines cannot be controlled or observed on this backend` | Skip for a profile with GPIO lines |
 | `serial: the board profile {name} has no lines`, `serial: the board profile {name} has no sd_card` | Missing profile interface; fixture error |
 | `this board cannot tap its console` | `SourceError` from `Console.tap` on an external board lacking `tap_console`; both shipped backends implement it |

@@ -16,11 +16,12 @@ from typing import NoReturn, TypeVar
 from pytest_embedded.log import MessageQueue
 from pytest_embedded_idf.dut import IdfDut
 
-from esp32tl import flash, recording
+from esp32tl import recording
 from esp32tl.backends.clock import nanoseconds, seconds
 from esp32tl.backends.esp32sim import BackendError, load_app, refuse, route_wire
 from esp32tl.boards import BoardProfile, capabilities
 from esp32tl.boards.capabilities import CapabilityError, Request
+from esp32tl.flash import FlashSnapshot, Namespaces
 from esp32tl.interfaces import BoardOff, NeverHappened, RunEnded, SourceError
 from esp32tl.interfaces.board import Board, Boot
 from esp32tl.interfaces.console import ConsoleLines
@@ -362,8 +363,11 @@ class Serial(Board):
     def tap_console(self, path: str | Path) -> Tap:
         return self._console.tap(path)
 
-    def nvs(self, namespaces: flash.Namespaces, partition: str = "nvs") -> None:
+    def nvs(self, namespaces: Namespaces, partition: str = "nvs") -> None:
         self._skip("serial: NVS contents cannot be configured on this backend")
+
+    def flash(self) -> FlashSnapshot:
+        self._skip("serial: flash contents cannot be read on this backend")
 
     def set_up(self) -> list[str]:
         return ["the tap of console"] if self._console.tapped is not None else []

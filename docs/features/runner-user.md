@@ -69,6 +69,8 @@ usage: esp32tl-runner --chip esp32 --flash-at OFFSET=FILE... --max-seconds S [op
                         needs --wifi
   --realtime            pace the run to wall time, for a real device at the peer's end
                         of a route (docs/protocol.md, section 12): needs --board
+  --flash-out PATH      write the whole flash to PATH when the peer's flash_dump asks for
+                        it, and at the end of the run (docs/protocol.md, section 5.21)
 ```
 
 | Flag | Default | Accepts |
@@ -87,6 +89,7 @@ usage: esp32tl-runner --chip esp32 --flash-at OFFSET=FILE... --max-seconds S [op
 | `--wifi SPEC` | none: no access point | esp32sim's `key=value,...`, every key optional, an empty `SPEC` included: `ssid` (default `esp32sim`), `psk` (also `password` or `pass`; WPA2-PSK with it, open without), `chan` (also `channel` or `ch`; 1 to 14, default 6), `bssid` (default `02:53:49:4d:00:01`). `epoch` is refused. Only with `--board` |
 | `--wifi-nearby SPEC` | none | esp32sim's `key=value,...`: `ssid` (1 to 32 bytes, required), `chan` (1 to 14, default 1), `rssi` in dBm (-128 to 127, default -60), `secure` (`0` or `1`, also `false`/`true` or `no`/`yes`; default `1`), `bssid` (default: one derived from the SSID, the same every run). Repeatable, at most 32, each on a BSSID of its own and not the access point's SSID or BSSID. Only with `--wifi` |
 | `--realtime` | off: the guest runs as fast as it can | Paces the run to wall time. Only with `--board`: `--realtime paces a run for the peer's real device: it needs --board` |
+| `--flash-out PATH` | none: the flash stays in the runner | A file to write the whole flash to, created or replaced; its directory must exist. With or without `--board` |
 
 A flag given twice keeps its last value, except `--flash-at` and `--wifi-nearby`, which add one
 each time. Flags
@@ -128,6 +131,12 @@ still passes from one turn of the peer to the next. The flash is the runner's co
 `--flash-at` files: the files are read once, at the start, and never written.
 [The protocol](../protocol.md#517-power-ext-105) says what a power cycle keeps and what it clears.
 
+With `--flash-out PATH` what the firmware wrote can be read: the file holds the whole flash, as big
+as `--flash-mb` says, once the run has ended, however it ended short of a panic. A peer can also ask
+for it in a turn, with `flash_dump`, as often as it likes: the guest does not run, and the run's time
+does not move. [The protocol](../protocol.md#521-flash_dump-and-flash_dump_ack-ext-131) has the rules;
+the `esp32sim` backend's way in is [`board.flash()`](flash-contents-user.md#read-the-flash-of-a-run).
+
 With `--realtime` the run follows wall time, for a peer with a real device at the far end of a
 route: its `hello` says `clock: wall`, it waits for wall time at each block point before the peer's
 turn, and its `stats` carries `rt_resyncs`, the lags it skipped. The times on the socket stay emulated
@@ -136,7 +145,8 @@ nanoseconds, and the run does not repeat, whatever the peer does.
 `esp32sim` backend passes the flag when a test gives a route a
 [real source](real-source-user.md).
 
-`--peer-timeout` bounds, in wall time, how long the runner waits for the peer's turn to end and
+`--peer-timeout` bounds, in wall time, how long the runner waits for the peer's turn to end, counted
+again after each answer to `flash_dump`, and
 how long a write to the socket may make no progress because the peer does not read; for `tcp:` it
 also bounds each connection attempt, though not the name lookup before it. A peer that hangs then
 fails the run with exit code 4 instead of hanging a CI job.
@@ -278,6 +288,8 @@ the peer instead. Everything the runner says goes to stderr, on lines that start
   cause `0x1`, follows the peer's `chip_reset` and its `power` that switches the supply back on;
 - `esp32tl-runner: power off at T s` when the peer switches the board's supply off.
   the run goes on. With `--board`, the peer gets a `reset` message as well.
+- `esp32tl-runner: cannot write the flash: PATH: ERROR` when the end of the run cannot write the
+  file of `--flash-out`; the exit code stays what the end of the run says.
 - `esp32tl-runner: SD card out at T s: IMAGE`, `esp32tl-runner: SD card in at T s: IMAGE (K KiB,
   write-through)` and `esp32tl-runner: SD card refused at T s: IMAGE: ERROR` when the peer's
   `sd_card` takes the card out, puts one in, or puts in one the slot cannot take; T in emulated

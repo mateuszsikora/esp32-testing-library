@@ -151,6 +151,8 @@ pub enum Incoming {
         t: u64,
         image: Option<String>,
     },
+    /// The whole flash into the file of `--flash-out`, now, in this turn (5.21).
+    FlashDump,
     Wait {
         ack: u64,
         quiet_until: Option<u64>,
@@ -240,6 +242,7 @@ pub fn parse(line: &str) -> Result<Incoming, String> {
             t: field("t").time()?,
             image: field("image").optional_string()?,
         },
+        "flash_dump" => Incoming::FlashDump,
         "stop" => Incoming::Stop,
         "adc" => Incoming::NotYet("adc"),
         _ => return Err(format!("unknown type {kind:?}")),
@@ -505,6 +508,13 @@ pub fn sd_card_ack(t: u64, image: Option<&str>, error: Option<&str>) -> String {
         quoted(image),
         quoted(error)
     )
+}
+
+/// The file of `--flash-out` holds the flash of the turn at `t`, unless `error` says why it does
+/// not (5.21). Not an event: the turn it answers is still going on.
+pub fn flash_dump_ack(t: u64, error: Option<&str>) -> String {
+    let error = error.map_or("null".into(), |e| format!(r#""{}""#, escape(e)));
+    format!(r#"{{"type":"flash_dump_ack","t":{t},"error":{error}}}"#)
 }
 
 pub fn console(t: u64, data: &[u8]) -> String {

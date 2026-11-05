@@ -19,7 +19,7 @@ from esp32tl.interfaces.console import Console, ConsoleLines, Line
 from esp32tl.interfaces.wifi import Wifi
 from esp32tl.link.boardlink import BoardLink, Interface
 from esp32tl.link.protocol import Console as ConsoleMessage
-from esp32tl.link.protocol import RunnerHello, Stop, Sync, Wait
+from esp32tl.link.protocol import FlashDump, FlashDumpAck, RunnerHello, Stop, Sync, Wait
 from esp32tl.net.ethernet import GATEWAY_MAC
 from esp32tl.net.mqtt import Broker
 from esp32tl.units import Duration, minutes, ms
@@ -55,6 +55,9 @@ class Run:
         self.end = end
         self.stats = stats
         self.syncs: list[int] = []
+        # The turns the runner answered a flash dump in, and what it answers.
+        self.dumps: list[int] = []
+        self.dump_error: str | None = None
         self.stopped = False
         self.runner = threading.Thread(target=self._run, daemon=True)
         self.runner.start()
@@ -65,6 +68,9 @@ class Run:
         while True:
             self.syncs.append(t)
             (reply,) = self.link.receive(Sync(t))
+            while isinstance(reply, FlashDump):
+                self.dumps.append(t)
+                (reply,) = self.link.receive(FlashDumpAck(t, self.dump_error))
             if reply == Stop():
                 self.stopped = True
                 break
@@ -469,3 +475,62 @@ def test_a_line_condition_finds_the_first_matching_line_from_when_it_was_made() 
     )
     with pytest.raises(TypeError, match="is not a regular expression on text"):
         console.line(b"fix")  # type: ignore[arg-type]
+
+
+def test_a_flash_dump_is_answered_in_the_turn_the_link_is_held_at_and_moves_no_time() -> None:
+    run = Run()
+    assert run.clock.dump_flash() == FlashDumpAck(0)
+    assert run.dumps == [0] and run.syncs == [0]
+    run.clock.wait(2 * S)
+    syncs = list(run.syncs)
+    assert run.clock.dump_flash() == FlashDumpAck(2 * S)
+    assert run.clock.dump_flash() == FlashDumpAck(2 * S)
+    assert run.dumps == [0, 2 * S, 2 * S]
+    assert run.syncs == syncs and run.clock.now == 2 * S
+    # the turn goes on: the next wait lets the run go from it
+    run.clock.wait(1 * S)
+    assert run.clock.now == 3 * S
+
+
+def test_a_flash_dump_says_what_the_runner_answered() -> None:
+    run = Run()
+    run.dump_error = "/tmp/flash.bin: no space"
+    assert run.clock.dump_flash() == FlashDumpAck(0, "/tmp/flash.bin: no space")
+
+
+def test_a_flash_dump_once_the_run_has_ended_asks_nothing_and_a_wait_gets_run_ended() -> None:
+    run = Run(end=1 * S)
+    with pytest.raises(RunEnded):
+        run.clock.wait(2 * S)
+    assert run.clock.dump_flash() is None
+    assert run.dumps == []
+    with pytest.raises(RunEnded):
+        run.clock.wait(1 * S)
+
+
+def test_a_flash_dump_the_end_of_the_run_cuts_short_returns() -> None:
+    clock = HeldClock()
+    answer: list[FlashDumpAck | None] = [FlashDumpAck(99)]
+    asking = threading.Thread(target=lambda: answer.__setitem__(0, clock.dump_flash()))
+    # before the first turn it waits for one, as `wait` does
+    asking.start()
+    asking.join(0.1)
+    assert asking.is_alive()
+    clock.end("the runner exited with code 1")
+    asking.join(5)
+    assert answer == [None]
+
+
+def test_the_test_is_over_while_the_runner_holds_a_dump_unanswered() -> None:
+    clock = HeldClock()
+    results: list[int | FlashDump | None] = []
+    link = threading.Thread(target=lambda: results.append(clock.turn(0)))
+    link.start()
+    answer: list[FlashDumpAck | None] = [FlashDumpAck(99)]
+    asking = threading.Thread(target=lambda: answer.__setitem__(0, clock.dump_flash()))
+    asking.start()
+    link.join(5)
+    assert results == [FlashDump()]
+    clock.end("the runner exited with code 101")
+    asking.join(5)
+    assert not asking.is_alive() and answer == [None]

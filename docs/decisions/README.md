@@ -242,6 +242,9 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The real source's bound is at least 128 bytes on the line, not 50 ms at any rate](harness.md#the-real-sources-bound-is-at-least-128-bytes-on-the-line-not-50-ms-at-any-rate) | `harness.md` | decided (#28) |
 | [The real source writes its port from a thread of its own, and limits only a port that takes nothing](harness.md#the-real-source-writes-its-port-from-a-thread-of-its-own-and-limits-only-a-port-that-takes-nothing) | `harness.md` | decided (#28) |
 | [The real source's port lock is the advisory one, not TIOCEXCL](harness.md#the-real-sources-port-lock-is-the-advisory-one-not-tiocexcl) | `harness.md` | decided (#28) |
+| [A real board does not read its flash: the test skips](harness.md#a-real-board-does-not-read-its-flash-the-test-skips) | `harness.md` | decided (#131) |
+| [The reader reads NVS itself, from the format](harness.md#the-reader-reads-nvs-itself-from-the-format) | `harness.md` | decided (#131) |
+| [A snapshot's errors are ValueError, not BackendError](harness.md#a-snapshots-errors-are-valueerror-not-backenderror) | `harness.md` | decided (#131) |
 
 ## The runner crate and esp32sim
 
@@ -285,3 +288,6 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The Wi-Fi messages keep the link protocol at version 1](runner.md#the-wi-fi-messages-keep-the-link-protocol-at-version-1) | `runner.md` | decided (#31) |
 | [A power-on reset is reboot() with SRAM and RTC memory zeroed, in the same machine](runner.md#a-power-on-reset-is-reboot-with-sram-and-rtc-memory-zeroed-in-the-same-machine) | `runner.md` | decided (#105) |
 | [With the supply off the run loop idles the guest and still takes the turns](runner.md#with-the-supply-off-the-run-loop-idles-the-guest-and-still-takes-the-turns) | `runner.md` | decided (#105) |
+| [The flash reaches the harness through a file, not the socket](runner.md#the-flash-reaches-the-harness-through-a-file-not-the-socket) | `runner.md` | decided (#131) |
+| [flash_dump keeps protocol version 1](runner.md#flash_dump-keeps-protocol-version-1) | `runner.md` | decided (#131) |
+| [board.flash() exchanges on the link's thread, in the turn](runner.md#boardflash-exchanges-on-the-links-thread-in-the-turn) | `runner.md` | decided (#131) |

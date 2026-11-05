@@ -5,6 +5,7 @@ use crate::socket_board::{Recorder, SocketBoard};
 use esp_soc::BoardModel;
 use esp_soc::json::{Json, parse_json};
 use std::cell::RefCell;
+use std::path::PathBuf;
 use std::rc::Rc;
 
 const GNSS_TX: u8 = 4;
@@ -56,6 +57,8 @@ enum Act {
     Fault,
     /// An SPI transaction to the SD card, at the bus's tick for that cycle.
     Spi(Vec<u8>),
+    /// The guest programs a byte of its flash.
+    Flash(usize, u8),
 }
 
 /// A guest that does what its script says at the cycles it says, and records UART bytes the way
@@ -86,6 +89,8 @@ struct FakeGuest {
     paced: Vec<(u64, Instant)>,
     /// The cycles esp32sim skips a lag at.
     lags: Vec<u64>,
+    /// The flash.
+    flash: Vec<u8>,
 }
 
 impl FakeGuest {
@@ -109,6 +114,7 @@ impl FakeGuest {
             spi: Vec::new(),
             paced: Vec::new(),
             lags: Vec::new(),
+            flash: vec![0xff; 16],
         }
     }
 
@@ -175,6 +181,7 @@ impl Guest for FakeGuest {
                     let rx = self.board.spi_transfer_pins(2, CARD_PINS, &tx, tx.len());
                     self.spi.push((self.now, rx));
                 }
+                Act::Flash(offset, byte) => self.flash[offset] = byte,
             }
         }
         self.now = end;
@@ -236,6 +243,9 @@ impl Guest for FakeGuest {
     fn resyncs(&self) -> u64 {
         self.lags.iter().filter(|&&at| at <= self.now).count() as u64
     }
+    fn flash(&self) -> &[u8] {
+        &self.flash
+    }
 }
 
 /// What the peer saw in one of its turns.
@@ -267,6 +277,8 @@ struct FakePeer {
     waits: Vec<(usize, Instant)>,
     /// What ends the first such wait, if anything does.
     wait_ends: Option<LinkError>,
+    /// The deadline of every read of the peer.
+    deadlines: Vec<Option<Instant>>,
 }
 
 const SIGNAL: &str = "SIGNAL";
@@ -295,6 +307,7 @@ impl FakePeer {
             idles: Vec::new(),
             waits: Vec::new(),
             wait_ends: None,
+            deadlines: Vec::new(),
         }
     }
 
@@ -359,7 +372,8 @@ impl Link for FakePeer {
     }
     fn close(&mut self) {}
     /// A queued [`SIGNAL`] stands for `SIGTERM` arriving while the runner waits for the peer.
-    fn recv(&mut self, _deadline: Option<Instant>) -> Result<String, LinkError> {
+    fn recv(&mut self, deadline: Option<Instant>) -> Result<String, LinkError> {
+        self.deadlines.push(deadline);
         match self.queue.pop_front() {
             Some(line) if line == SIGNAL => Err(LinkError::Signal),
             Some(line) => Ok(line),
@@ -424,10 +438,21 @@ fn run_for(seconds: f64, guest: FakeGuest, peer: FakePeer, console: bool) -> Run
 
 fn run_with_card(
     seconds: f64,
+    guest: FakeGuest,
+    peer: FakePeer,
+    console: bool,
+    card: Option<&sd_card::Shared>,
+) -> Run {
+    run_with(seconds, guest, peer, console, card, None)
+}
+
+fn run_with(
+    seconds: f64,
     mut guest: FakeGuest,
     mut peer: FakePeer,
     console: bool,
     card: Option<&sd_card::Shared>,
+    flash_out: Option<&Path>,
 ) -> Run {
     let signal = AtomicBool::new(false);
     let shared = guest.shared.clone();
@@ -440,6 +465,7 @@ fn run_with_card(
         rom: &[],
         card: card.cloned(),
         realtime: false,
+        flash_out,
     };
     let (end, stats) = Session::new(&mut guest, &mut peer, shared, opts).run();
     Run {
@@ -1244,6 +1270,7 @@ fn a_signal_ends_the_slice_in_progress_with_stats() {
         rom: &[],
         card: None,
         realtime: false,
+        flash_out: None,
     };
     let (end, _) = Session::new(&mut guest, &mut peer, shared, opts).run();
     assert!(matches!(end, End::Signal), "{end:?}");
@@ -1417,6 +1444,7 @@ fn on_the_emulator_the_slices_stop_a_guest_asleep_in_waiti_at_the_block_point() 
         rom: &[],
         card: None,
         realtime: false,
+        flash_out: None,
     };
     let (end, stats) = Session::new(&mut guest, &mut peer, shared, opts).run();
     assert!(matches!(end, End::MaxSeconds), "{end:?}");
@@ -1807,6 +1835,7 @@ fn on_the_emulator_gpio_in_reaches_the_guest_and_its_output_comes_back_as_gpio_o
         rom: &[],
         card: None,
         realtime: false,
+        flash_out: None,
     };
     let (end, stats) = Session::new(&mut m, &mut peer, shared, opts).run();
     assert!(matches!(end, End::MaxSeconds), "{end:?}");
@@ -2032,6 +2061,7 @@ fn run_wifi(end: u64, guest: &mut WifiGuest, peer: &mut FakePeer) -> (End, Stats
         rom: &[],
         card: None,
         realtime: false,
+        flash_out: None,
     };
     let shared = guest.inner.shared.clone();
     Session::new(guest, peer, shared, opts).run()
@@ -2475,6 +2505,7 @@ fn run_with_slot(seconds: f64, peer: FakePeer, slot: &sd_card::Shared) -> Run {
         rom: &[],
         card: Some(slot.clone()),
         realtime: false,
+        flash_out: None,
     };
     let (end, stats) = Session::new(&mut guest, &mut peer, shared, opts).run();
     Run {
@@ -2770,6 +2801,7 @@ fn run_realtime(seconds: f64, mut guest: FakeGuest, mut peer: FakePeer) -> Run {
         rom: &[],
         card: None,
         realtime: true,
+        flash_out: None,
     };
     let (end, stats) = Session::new(&mut guest, &mut peer, shared, opts).run();
     Run {
@@ -2926,4 +2958,266 @@ fn a_signal_or_the_peer_gone_ends_the_wait_for_wall_time() {
     peer.wait_ends = Some(LinkError::Gone("the peer closed the socket".into()));
     let run = run_realtime(0.001, FakeGuest::new(vec![]), peer);
     assert!(matches!(run.end, End::PeerGone(_)));
+}
+
+const FLASH_DUMP: &str = r#"{"type":"flash_dump"}"#;
+
+/// A file for `--flash-out`, in a directory of its own.
+struct FlashOut(PathBuf);
+
+impl FlashOut {
+    fn new(name: &str) -> Self {
+        let directory =
+            std::env::temp_dir().join(format!("esp32tl-flash-{}-{name}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        Self(directory.join("flash.bin"))
+    }
+    fn read(&self) -> Vec<u8> {
+        std::fs::read(&self.0).unwrap()
+    }
+}
+
+impl Drop for FlashOut {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(self.0.parent().unwrap());
+    }
+}
+
+fn flash_with(bytes: &[(usize, u8)]) -> Vec<u8> {
+    let mut flash = vec![0xff; 16];
+    for &(at, byte) in bytes {
+        flash[at] = byte;
+    }
+    flash
+}
+
+#[test]
+fn a_flash_dump_writes_the_flash_of_the_turn_and_the_turn_goes_on() {
+    let out = FlashOut::new("turn");
+    let path = out.0.clone();
+    let dumps = Rc::new(RefCell::new(Vec::new()));
+    let seen = dumps.clone();
+    let mut turns = 0;
+    let peer = FakePeer::new(&[], move |turn| {
+        turns += 1;
+        // what the turn before asked for is in the file by now, before this one asks again
+        if turns > 1 {
+            seen.borrow_mut().push(std::fs::read(&path).unwrap());
+        }
+        vec![
+            FLASH_DUMP.to_string(),
+            wait(turn.seq, Some(turn.t + 10 * MS), None),
+        ]
+    });
+    let script = vec![(5 * MS_CYCLES, Act::Flash(3, 0x42))];
+    let r = run_with(
+        0.025,
+        FakeGuest::new(script),
+        peer,
+        false,
+        None,
+        Some(out.0.as_path()),
+    );
+    assert!(matches!(r.end, End::MaxSeconds), "{:?}", r.end);
+    let dumps = dumps.borrow();
+    // not the flash the run started with: the current one, at each turn
+    assert_eq!(dumps[0], vec![0xff; 16]);
+    assert_eq!(dumps[1], flash_with(&[(3, 0x42)]));
+    assert_eq!(
+        r.peer
+            .msgs
+            .iter()
+            .filter(|m| matches!(kind(m), "sync" | "flash_dump_ack"))
+            .map(|m| (kind(m).to_string(), num(m, "t")))
+            .take(4)
+            .collect::<Vec<_>>(),
+        [
+            ("sync".to_string(), 0),
+            ("flash_dump_ack".to_string(), 0),
+            ("sync".to_string(), 10 * MS),
+            ("flash_dump_ack".to_string(), 10 * MS),
+        ]
+    );
+    let ack = r.peer.of("flash_dump_ack")[0];
+    assert_eq!(ack.get("error"), Some(&Json::Null));
+    assert_eq!(r.stats.turns, 3, "the dumps took no turn of their own");
+}
+
+#[test]
+fn a_flash_dump_moves_no_time_and_runs_no_guest() {
+    let out = FlashOut::new("still");
+    let mut first = true;
+    let peer = FakePeer::new(&[], move |turn| {
+        let mut lines = Vec::new();
+        if std::mem::take(&mut first) {
+            lines = vec![FLASH_DUMP.to_string(); 3];
+        }
+        lines.push(wait(turn.seq, None, None));
+        lines
+    });
+    let r = run_with(
+        0.001,
+        FakeGuest::new(vec![]),
+        peer,
+        false,
+        None,
+        Some(out.0.as_path()),
+    );
+    assert_eq!(r.peer.of("flash_dump_ack").len(), 3);
+    assert_eq!(r.stats.turns, 1);
+    assert_eq!(
+        r.guest.slices[0], MS_CYCLES,
+        "the first slice as without them"
+    );
+}
+
+#[test]
+fn a_flash_dump_that_cannot_be_written_says_why_and_the_run_goes_on() {
+    let out = FlashOut::new("unwritable");
+    let path = out.0.join("no-such-directory").join("flash.bin");
+    let mut first = true;
+    let peer = FakePeer::new(&[], move |turn| {
+        let mut lines = Vec::new();
+        if std::mem::take(&mut first) {
+            lines.push(FLASH_DUMP.to_string());
+        }
+        lines.push(wait(turn.seq, None, None));
+        lines
+    });
+    let r = run_with(
+        0.001,
+        FakeGuest::new(vec![]),
+        peer,
+        false,
+        None,
+        Some(path.as_path()),
+    );
+    let ack = r.peer.of("flash_dump_ack")[0];
+    let error = ack.get("error").and_then(Json::as_str).unwrap();
+    assert!(error.contains("no-such-directory"), "{error}");
+    // nor does a file that cannot be written at the end change how the run ended
+    assert!(matches!(r.end, End::MaxSeconds), "{:?}", r.end);
+}
+
+#[test]
+fn each_flash_dump_ack_starts_the_peer_timeout_again() {
+    let out = FlashOut::new("timeout");
+    let signal = AtomicBool::new(false);
+    let mut guest = FakeGuest::new(vec![]);
+    let shared = guest.shared.clone();
+    let mut first = true;
+    let mut peer = FakePeer::new(&[GNSS_RX], move |turn| {
+        let mut lines = Vec::new();
+        if std::mem::take(&mut first) {
+            lines = vec![FLASH_DUMP.to_string(); 2];
+            lines.push(uart_rx(0, GNSS_RX, 9600, b"x"));
+        }
+        lines.push(wait(turn.seq, None, None));
+        lines
+    });
+    let opts = Options {
+        end_cycle: MS_CYCLES,
+        console: false,
+        peer_timeout: Some(Duration::from_secs(3600)),
+        signal: &signal,
+        wifi: None,
+        rom: &[],
+        card: None,
+        realtime: false,
+        flash_out: Some(out.0.as_path()),
+    };
+    Session::new(&mut guest, &mut peer, shared, opts).run();
+    // the handshake's, the turn's first, then one after each answer; an input starts nothing
+    let d: Vec<Instant> = peer.deadlines.iter().map(|d| d.unwrap()).collect();
+    assert!(d[1] < d[2], "a write of the flash is not the peer's time");
+    assert!(d[2] < d[3]);
+    assert_eq!(d[3], d[4], "only an answer starts it again");
+}
+
+#[test]
+fn a_flash_dump_without_flash_out_is_a_protocol_error() {
+    let peer = FakePeer::new(&[], |_| vec![FLASH_DUMP.to_string()]);
+    let r = run(0.01, FakeGuest::new(vec![]), peer);
+    let End::Protocol(detail) = &r.end else {
+        panic!("{:?}", r.end)
+    };
+    assert!(
+        detail.contains("flash_dump without --flash-out"),
+        "{detail}"
+    );
+}
+
+/// A flash byte, then one of the ways a run can end, by its exit code.
+#[test]
+fn every_end_of_a_run_leaves_the_flash_in_the_file() {
+    let written = (MS_CYCLES / 2, Act::Flash(1, 0x17));
+    let ends = [
+        (
+            0,
+            vec![written.clone()],
+            FakePeer::new(&[], idle(None, None)),
+        ),
+        (
+            1,
+            vec![written.clone(), (MS_CYCLES, Act::Fault)],
+            FakePeer::new(&[], idle(None, None)),
+        ),
+        // the peer's second turn breaks the rules
+        (3, vec![written.clone()], {
+            let mut turns = 0;
+            FakePeer::new(&[], move |turn| {
+                turns += 1;
+                if turns == 1 {
+                    vec![wait(turn.seq, Some(MS), None)]
+                } else {
+                    vec![r#"{"type":"bogus"}"#.to_string()]
+                }
+            })
+        }),
+        // a stop in the second turn
+        (0, vec![written.clone()], {
+            let mut turns = 0;
+            FakePeer::new(&[], move |turn| {
+                turns += 1;
+                if turns == 1 {
+                    vec![wait(turn.seq, Some(MS), None)]
+                } else {
+                    vec![r#"{"type":"stop"}"#.to_string()]
+                }
+            })
+        }),
+        // gone after its first turn: nothing to say at the second
+        (4, vec![written.clone()], {
+            let mut turns = 0;
+            FakePeer::new(&[], move |turn| {
+                turns += 1;
+                if turns == 1 {
+                    vec![wait(turn.seq, Some(MS), None)]
+                } else {
+                    vec![]
+                }
+            })
+        }),
+    ];
+    for (index, (code, script, peer)) in ends.into_iter().enumerate() {
+        let out = FlashOut::new(&format!("end-{index}"));
+        let r = run_with(
+            0.01,
+            FakeGuest::new(script),
+            peer,
+            false,
+            None,
+            Some(out.0.as_path()),
+        );
+        assert_eq!(r.end.exit_code(), code, "{:?}", r.end);
+        assert_eq!(out.read(), flash_with(&[(1, 0x17)]), "exit code {code}");
+    }
+}
+
+#[test]
+fn a_run_without_flash_out_writes_no_flash() {
+    let peer = FakePeer::new(&[], idle(None, None));
+    let r = run(0.001, FakeGuest::new(vec![]), peer);
+    assert!(matches!(r.end, End::MaxSeconds));
+    assert!(r.peer.of("flash_dump_ack").is_empty());
 }
