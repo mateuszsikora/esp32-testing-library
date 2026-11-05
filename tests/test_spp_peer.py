@@ -308,7 +308,7 @@ class Faulty(Echo):
         if self.how == "pair":
             return [(t, "text")]  # type: ignore[list-item]
         if self.how == "empty":
-            return [(t, b""), (t, b"OK\r")]
+            return [(t, b""), (t, b"done\r")]
         return super().receive(t, data)
 
     def quiet_until(self) -> int | None:
@@ -319,9 +319,9 @@ class Faulty(Echo):
         return super().quiet_until()
 
 
-def write_hello(air: Air, esp32: Initiator) -> None:
+def write_hello(air: Air, esp32: Initiator, name: str = "peer") -> None:
     async def write() -> None:
-        dlc = await esp32.session()
+        dlc = await esp32.session(name)
         dlc.write(b"hello\r")
         await asyncio.sleep(1)
 
@@ -333,20 +333,20 @@ def write_hello(air: Air, esp32: Initiator) -> None:
     [
         (
             "past",
-            "peer: source.receive sent b'too early' at -0.000000001 s, and the air is at 0 s:"
+            "bench: source.receive sent b'too early' at -0.000000001 s, and the air is at 0 s:"
             " it cannot send into the past",
             None,
         ),
-        ("raises", "peer: source.receive raised KeyError: 'model bug'", KeyError),
-        ("pair", "peer: source.receive returned (0, 'text'), not a (t_ns, bytes) pair", None),
+        ("raises", "bench: source.receive raised KeyError: 'model bug'", KeyError),
+        ("pair", "bench: source.receive returned (0, 'text'), not a (t_ns, bytes) pair", None),
     ],
 )
 def test_a_source_that_gets_its_answer_wrong_fails_the_air_naming_the_peer(
     air: Air, how: str, message: str, cause: type[Exception] | None
 ) -> None:
-    SppPeer(air, name="peer", pin="1234", source=Faulty(how))
+    SppPeer(air, name="bench", pin="1234", source=Faulty(how))
     with pytest.raises(AirError) as raised:
-        write_hello(air, Initiator(air))
+        write_hello(air, Initiator(air), "bench")
     assert str(raised.value) == message
     error = raised.value.__cause__
     assert isinstance(error, PeerError)
@@ -357,10 +357,10 @@ def test_a_source_that_gets_its_answer_wrong_fails_the_air_naming_the_peer(
 @pytest.mark.parametrize(
     ("how", "message"),
     [
-        ("float", "peer: source.quiet_until returned 1.5, not nanoseconds"),
+        ("float", "bench: source.quiet_until returned 1.5, not nanoseconds"),
         (
             "now",
-            "peer: source.quiet_until returned 0 s, not after the air's 0 s: what it sends by"
+            "bench: source.quiet_until returned 0 s, not after the air's 0 s: what it sends by"
             " then belongs in the poll at 0 s",
         ),
     ],
@@ -368,7 +368,7 @@ def test_a_source_that_gets_its_answer_wrong_fails_the_air_naming_the_peer(
 def test_a_source_that_gets_its_quiet_until_wrong_fails_the_air(
     air: Air, how: str, message: str
 ) -> None:
-    SppPeer(air, name="peer", pin="1234", source=Faulty(how))
+    SppPeer(air, name="bench", pin="1234", source=Faulty(how))
     with pytest.raises(AirError) as raised:
         air.wait(seconds(1))
     assert str(raised.value) == message
@@ -379,8 +379,8 @@ def test_empty_answers_cross_nothing(air: Air) -> None:
     peer = SppPeer(air, name="peer", pin="1234", source=Faulty("empty"))
     esp32 = Initiator(air)
     write_hello(air, esp32)
-    assert peer.events == [(0, "out", b"hello\r"), (0, "in", b"OK\r")]
-    assert esp32.received == [(0, b"OK\r")]
+    assert peer.events == [(0, "out", b"hello\r"), (0, "in", b"done\r")]
+    assert esp32.received == [(0, b"done\r")]
 
 
 def test_two_runs_cross_the_channel_at_the_same_instants() -> None:
@@ -1101,10 +1101,10 @@ def test_a_supplied_source_that_raises_fails_the_air_naming_the_peer(air: Air) -
         def supply(self, on: bool) -> None:
             raise KeyError("model bug")
 
-    peer = SppPeer(air, name="peer", pin="1234", source=Broken())
+    peer = SppPeer(air, name="bench", pin="1234", source=Broken())
     with pytest.raises(AirError) as raised:
         peer.switch_off()
-    assert str(raised.value) == "peer: source.supply raised KeyError: 'model bug'"
+    assert str(raised.value) == "bench: source.supply raised KeyError: 'model bug'"
 
 
 # The two pairs of calls.
