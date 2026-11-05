@@ -64,10 +64,12 @@ the container, and once inside it, which builds. With `IDF_LOCAL=1` it runs once
      in `/tmp/.cache/ccache`. Every compile line and working directory names the image's build
      directory, which without these makes every image miss: 0 hits of 874 compilations for
      `gpio_echo` after `hello_world`, against 870 of 874 with them. The cache dies with the
-     container, and `firmware/build.sh --examples` runs in a container of its own. Objects that came
-     from the cache keep the working directory of the image that compiled them in their debug
-     information, so `gpio_echo.elf` also names `/out/hello_world/build`; the flash images are not
-     affected ([decisions/firmware.md](../decisions/firmware.md#images-of-one-container-share-their-ccache-hits)).
+     container, and `firmware/build.sh --examples` runs in a container of its own. So does each
+     image `make test` builds: its rules name one image at a time, and they get no hits. Objects that
+     came from the cache keep the working directory of the image that compiled them in their debug
+     information, so `gpio_echo.elf` also names `/out/hello_world/build`; `gpio_echo.bin` differs
+     only in its build time and SHA-256s
+     ([decisions/firmware.md](../decisions/firmware.md#images-of-one-container-share-their-ccache-hits)).
    - `--env ESP32TL_CONTAINER`: the pinned image reference, which the container side records.
    - `--env ESP32TL_HOST_OUT`: the host's path of `/out`, for the messages.
    - `--rm`: the container is removed when it exits. `--init`: Docker runs its init process as

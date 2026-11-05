@@ -325,15 +325,19 @@ The image turns ccache on, and one container builds a whole family, yet each ima
 as the first: its build directory is in every compile line and in the working directory ccache
 hashes, so `gpio_echo` after `hello_world` hit 0 of 874 compilations. `CCACHE_BASEDIR=/out` and
 `CCACHE_NOHASHDIR=1` on the `docker run` make that 870 of 874, measured on an aarch64 Mac with the
-pinned image: 44 s against 165 s for `gpio_echo`, 28 s for `nvs_reader` after it. The flash image
-is the same but for its build time and SHA-256: of the 168832 bytes of `gpio_echo.bin`, against a
-build with no hits, only bytes 116 to 120 (the time in the app description), 177 to 208 (the ELF's
-SHA-256) and the last 32 (the image's) differ, as they differ between two builds with no hits.
+pinned image: 44 s against 165 s for `gpio_echo`, 28 s for `nvs_reader` after it. `gpio_echo`'s
+flash image is the same but for its build time and SHA-256: of the 168832 bytes of `gpio_echo.bin`,
+against a build with no hits, only bytes 116 to 120 (the time in the app description), 177 to 208
+(the ELF's SHA-256) and the last 32 (the image's) differ, as they differ between two builds with no
+hits. Its sources are in `/project`. `http_request` and `pppos_client` are built from projects under
+`/out`, whose paths `CCACHE_BASEDIR` rewrites, and which may change the paths compiled into them;
+those two images were not compared. The suite passes on them.
 
 On hp600g1 a full build of 15 projects took 13m13s, 758 s of it compiling, against about 1530 s
 with no hits. The fastest images take 24 s, against about 100. Others take 46 to 84 s, for reasons
 not measured. `gps_alarm_clock` takes as long as ever, 106 s: it is the first of the examples, whose
-container starts with an empty cache.
+container starts with an empty cache. A first `make test` gains nothing: its rules build each image
+in a container of its own.
 
 The cost is in the debug information: an object from the cache keeps the working directory of the
 image that compiled it, so `gpio_echo.elf` also names `/out/hello_world/build`. The harness reads no

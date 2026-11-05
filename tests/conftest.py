@@ -70,10 +70,12 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     value = config.getoption("--shard")
     if value is not None:
         shard, count = parse_shard(value)
-        config.hook.pytest_deselected(
-            items=[item for item in items if not in_shard(item, shard, count)]
-        )
-        items[:] = [item for item in items if in_shard(item, shard, count)]
+        selected: list[pytest.Item] = []
+        deselected: list[pytest.Item] = []
+        for item in items:
+            (selected if in_shard(item, shard, count) else deselected).append(item)
+        config.hook.pytest_deselected(items=deselected)
+        items[:] = selected
     for marker, missing in (
         ("requires_docker", docker_missing),
         ("requires_mtools", mtools_missing),

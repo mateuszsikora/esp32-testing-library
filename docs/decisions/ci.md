@@ -152,7 +152,8 @@ shards at once, later, with no change to them.
 
 A test's shard is the hash of its node id, so a new test needs no list, and no file of measured
 durations has to be kept up to date. The hash balances test counts, not time: pytest took about 105 s
-in the shortest shard and 200 s in the longest.
+in the shortest shard and 200 s in the longest. The longest, at 4m26s, reaches 15 minutes at about
+3.4 times slower; a new slow test, or a renamed one that moves to another shard, lowers that.
 
 **Rejected:** three shards, because they take about 15 minutes at that speed, with nothing to spare;
 five, because 3 more jobs of setup buy little; splitting by file, because the 65 files differ too

@@ -27,7 +27,7 @@ That one command needs:
   and `tar` to download it.
 - Docker, for the first `make test`. The tests read the validation firmware, which `make test`
   builds when it is missing: it pulls the ESP-IDF image and builds `hello_world`, `nmea_reader`,
-  `gpio_echo`, `sdspi`, `sd_remount`, `modem_at`, `modem_recovery`, `nvs_reader`, `pppos_client`, `mqtt_session`, `http_request`, `persistence` and the projects in `examples/`, about 13 minutes on the CI machine, hp600g1. What the firmware build expects of Docker,
+  `gpio_echo`, `sdspi`, `sd_remount`, `modem_at`, `modem_recovery`, `nvs_reader`, `pppos_client`, `mqtt_session`, `http_request`, `persistence` and the projects in `examples/`, about 25 minutes on the CI machine, hp600g1, because it starts a container for each image. `make firmware examples` first takes about 13: one container for each family, whose images share their compiler cache. What the firmware build expects of Docker,
   and how to build without it, is in
   [validation-firmware-user.md](../features/validation-firmware-user.md).
 
@@ -148,8 +148,8 @@ default:
    `fetch-rom-elf: no esp32_rev300_rom.elf matching release 20241011 under <dir>; downloading <url>`,
    downloads `esp-rom-elfs-20241011.tar.gz` from the GitHub release with `curl`, and checks the
    tarball against `TARBALL_SHA256` and the extracted ELF against `ROM_SHA256`. The download gets 20 s
-   to connect and 120 s in all, retried 3 times, so that a stalled one fails instead of holding a CI
-   job until its limit.
+   to connect and 120 s for each of 4 tries, about 8 minutes at worst, so that a stalled one fails
+   instead of holding a CI job until its limit.
 
 The target is phony: the script checks the checksum on every run. It runs from any directory and
 always writes the repository's `.cache/`. Without `sha256sum` or `shasum` it stops with
