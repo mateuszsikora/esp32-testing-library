@@ -6,17 +6,19 @@ by `interfaces.modem.Modem.network()`, or the network behind the Wi-Fi access po
 returns its `Broker`. All callbacks execute during link turns or while the test holds the board.
 There are no sockets, worker threads or host-clock timers. `Internet` uses the current UART chunk's
 or Ethernet frame's timestamp inside receive callbacks and the held board time for test calls.
-Responses carry a 1,000,000 ns latency (`LATENCY_NS`); the modem starts PPP after CONNECT, so LCP
-follows the AT response. `poll` drains queued replies and evaluates broker keepalive and PUBACK
-deadlines; `quiet_until` bounds the next turn by the earliest of those deadlines.
+Responses carry a 1,000,000 ns latency (`LATENCY_NS`), the path's RTT when the test sets one; the
+modem starts PPP after CONNECT, so LCP follows the AT response. `poll` takes what has come up the
+path, evaluates broker keepalive and PUBACK deadlines and drains queued replies; `quiet_until`
+bounds the next turn by the earliest of those deadlines and the path's next datagram.
 
 ## The link
 
 `Internet(now, world, *, link="ppp")`, whose `world` defaults to `esp32tl.net.ntp.DEFAULT_UTC`, as the modem's and `Wifi`'s do, takes `link`, `"ppp"` or `"ethernet"` (the `Link` type),
 and keeps it for its life. `_peer()` builds the link object from it: a `Ppp` whose `ended`
-callback resets TCP, or an `Ethernet` given the network's `Dhcp`. Both send through the same
-closure, which queues each frame or chunk at `now + LATENCY_NS`, and both hand IPv4 datagrams to
-`Network.receive`. `Internet.link` is that object; `Internet.ppp` and `Internet.ethernet` return it
+callback is `_link_ended`, which resets TCP and clears the path, or an `Ethernet` given the
+network's `Dhcp`. Both send through the same closure, which queues each frame or chunk of the link's
+own at `now + LATENCY_NS` and takes an IPv4 datagram down the path, and both hand IPv4 datagrams to
+`_uplink`, up the path to `Network.receive`. `Internet.link` is that object; `Internet.ppp` and `Internet.ethernet` return it
 when it is of their kind and raise `AttributeError` otherwise. The IP layer's MTU callback reads
 `Ppp.peer_mru` or `Ethernet.mtu` (1500).
 
@@ -26,8 +28,8 @@ for the transcript, and one `Dhcp`. Only `Ethernet` calls the `Dhcp`; a network 
 one that nothing asks.
 
 `start(t)` stops the network first, then marks it active and, for PPP only, starts LCP. `stop(at)`
-marks it inactive, resets TCP (`Network.reset`, which notifies every connection once), drops the
-queued replies and replaces the link with a fresh one from `_peer()`. The `Dhcp`, the services and
+marks it inactive, resets TCP (`Network.reset`, which notifies every connection once), clears the
+path, drops the queued replies and replaces the link with a fresh one from `_peer()`. The `Dhcp`, the services and
 the transcript are not replaced.
 
 Behind the access point, `Wifi` is the link's `Interface` whose `ethernet` property is true: the
@@ -35,6 +37,55 @@ Behind the access point, `Wifi` is the link's `Interface` whose `ethernet` prope
 returns as one `eth_rx` ([protocol](../protocol.md)). `Wifi.receive` and `Wifi.poll` return
 nothing while the network is missing or inactive. `Wifi.inputs` returns a `WifiAp` for each switch
 the test made, stamped at its instant or at the turn's `now`, whichever is later.
+
+## The path
+
+`Internet` holds a `_Direction` each way, `_up` and `_down`: a `delay`, a `rate` (`None` for no
+limit), a FIFO `queue` of `(leaves, data)`, and the times its line is free (`_free`) and its last
+datagram leaves (`_last`). `leaves(at, size)` starts a datagram at `max(at, _free)`, adds
+`ceil(size * 8e9 / rate.bit_s)` nanoseconds to `_free`, and returns
+`_last = max(_last, _free + delay)`, so that none overtakes another when `set_path` shortens the
+delay. `set_path` sets `_up.delay` to `(rtt - LATENCY_NS) // 2` and `_down.delay` to the rest. The
+two add up to `rtt` to the nanosecond, and at the default `_up.delay` is 0.
+
+Up: `_uplink`, the link's `on_ip`, queues the datagram with `_up.leaves` at `now()` and calls
+`_arrive(now)`, which pops every entry whose time has come and calls `Network.receive` with `_at`
+set to that entry's time, not the turn's. A datagram can come due before the turn that takes it: the
+runner's turn comes up to `latency` after the request, so with an RTT of 1.5 ms a datagram 0.25 ms up
+is taken up to 0.75 ms late, stamped as it should be. Its answer leaves at `t + rtt`, which is at or
+after that turn, because `rtt >= latency`: that is the floor, and rule 2 of the
+[protocol](../protocol.md#6-rules) is why the check refuses less. `receive` and `poll` call
+`_arrive` first; at the default it runs inside `link.receive`, at the chunk's own `t`, as if there
+were no path.
+
+The test must see what has come up by the turn it holds. `BoardLink._turn` holds the turn before it
+polls, so a datagram taken in `poll` would be there only at the next step of the test's clock, with a
+stamp already behind `board.now`. So `_turn` first calls `Interface.arrive(now)` on each interface:
+`Uart.arrive` passes it to a source that is `Arriving`, `ModemModel.arrive` to its `Internet` in data
+mode, `Wifi.arrive` to its active network, and `Internet.arrive` runs `_arrive(now)`. Answers made
+there stay in `_out` until `poll`, after the hold, so what the test does in the turn comes after what
+the network took in it. The broker's own deadlines, keepalive and a delayed PUBACK, still run in
+`poll`, after the hold, as they did. `SppPeer` passes `poll` to its source and not `arrive`, so a
+modem model with a network as the source of a Bluetooth peer would take datagrams in `poll`; nothing
+makes that pair today.
+
+Down: `Network`'s `send_ip` is `_downlink`, which notes the datagram's size in `_datagram` around
+`link.send_ip`. The link's `send` closure finds `_datagram` set, puts the framed bytes in `_down`
+with `_down.leaves`, and calls `_release`, which moves to `_out`, with their own stamps, those that
+leave within `LATENCY_NS` of `now()`. The framing and the link's checks (the MRU, the MTU, no station
+yet) happen when the datagram enters, and a dropped one uses none of the rate. What stays in `_down`
+can still be dropped by a reset, which matters at a large RTT: after the modem loses registration,
+nothing on the path reaches the firmware. At the default every datagram is released in the call that
+made it, so `receive` returns it stamped `t + LATENCY_NS`, in the order it was made.
+
+`quiet_until` is the minimum of the broker's and the two heads: one turn per datagram. Each head is
+past `now` after `poll`, since `_arrive` and `_release` took all up to `now` and `now + LATENCY_NS`,
+as `BoardLink._turn` requires. `latency()` stays `LATENCY_NS`: PPP control answers in 1 ms, and a
+larger promise would break rule 2. The runner does not change. On the modem's route it paces bytes
+as it does (protocol, rule 5), and the rate is on top of that.
+
+Nothing here reads the host's clock, and the arithmetic is on integers but for the rate's division,
+so two runs give the same stamps (`tests/test_determinism.py::test_mqtt_session_on_a_path`).
 
 ## Layers
 
@@ -67,7 +118,9 @@ the test made, stamped at its instant or at the turn's `now`, whichever is later
   query ID and recursion-desired bit. IN A answers have TTL 60 and address `10.64.0.1`.
 - `ethernet.py`: Ethernet II without FCS, ARP and the hand-off to DHCP. `Ethernet.receive` drops
   frames under 14 bytes and frames from a multicast source, and learns `device_mac` from every
-  other frame. ARP (`0x0806`): only Ethernet/IPv4 requests of 28 bytes or more are read; each is
+  other frame. `_whole` cuts an IPv4 payload at its total length when that is possible (ESP-IDF's
+  frames carry 4 bytes more, [protocol 5.15](../protocol.md#515-eth_tx-and-eth_rx-ext-m7)), so that
+  the rate counts the datagram only. ARP (`0x0806`): only Ethernet/IPv4 requests of 28 bytes or more are read; each is
   answered with `GATEWAY_MAC` (`02:53:49:4d:00:02`, esp32sim's own network's gateway in
   `esp-soc/src/net/packet.rs`) unless its target is the `Dhcp.device` address (lwIP's RFC 5227
   probe before it takes the lease) or its sender's own address (an announcement). IPv4 (`0x0800`)
@@ -137,7 +190,9 @@ the test made, stamped at its instant or at the turn's `now`, whichever is later
   each state transition is logged once, and resuming never replays unanswered datagrams.
 - `mqtt.py`: incremental MQTT 3.1.1 parsing (up to 1 MiB per packet); CONNECT, QoS 0/1 PUBLISH,
   PUBACK, SUBSCRIBE/SUBACK, UNSUBSCRIBE/UNSUBACK, PING and DISCONNECT. Retained state belongs to
-  the test's broker; subscriptions belong to a connection. Empty clean-session client IDs are
+  the test's broker; session state (`_State`: subscriptions, the queue, the packet IDs in use and
+  what was sent unacknowledged) to a client ID, in `Broker._states`, and `_Session` is one
+  connection. Empty clean-session client IDs are
   replaced before Will construction and takeover checks with `esp32tl-anonymous-<n>`. A per-broker
   counter and the accepted-client history prevent reuse or collision with an earlier accepted ID;
   an ID supplied only in a rejected attempt may still be allocated.
@@ -148,7 +203,7 @@ the test made, stamped at its instant or at the turn's `now`, whichever is later
   malformed-packet exception handler: exceptions and invalid return types close the transport
   and leave `on_data` without CONNACK or an outcome. In a board run `on_data` is called from the
   link's `modem.receive` or `wifi.receive`, so `boardlink.calling` turns the error into the
-  `LinkError` `modem.receive raised <Type>: <message>`; the link fails with its traceback, ends
+  `LinkError` `uart.modem.receive raised <Type>: <message>`; the link fails with its traceback, ends
   the run, and the test's wait raises `RunEnded` naming it. A successfully selected code appends
   a `ConnectionAttempt` to `connection_attempts` before sending CONNACK. This history is separate
   from accepted `clients`; `connection_attempt()` captures a future cursor like `connected()`.
@@ -156,14 +211,34 @@ the test made, stamped at its instant or at the turn's `now`, whichever is later
   Present zero and close before allocating an anonymous ID, installing a Will, setting keepalive
   or taking over an existing client. The parser stops processing buffered packets on closure.
   Only accepted connections install session state and enter `clients`; replacing the policy
-  affects subsequent CONNECTs only. Network reset retains both histories and the policy.
+  affects subsequent CONNECTs only. `session_present` is worked out before the attempt is appended:
+  CleanSession=0 and a stored `_State` that is not `clean`. A clean one exists only while its
+  connection does, and the takeover ends it. After the takeover, CleanSession=1 replaces any
+  `_State`, and CleanSession=0 makes one if there is none; `_connect` sets `state.connection`, writes
+  CONNACK and, with Session Present, calls `_resume`: every entry of `state.sent`, in insertion
+  order with DUP set, then `_drain`, which sends `state.queue` through `deliver` while fewer than
+  65535 IDs are in use. Each PUBACK calls `_drain` again, so a queue longer than the IDs goes out as
+  they are freed, on a connection that stays open. `_route` calls `Broker._offer` for each `_State`: a connected one goes to
+  `deliver`, or for QoS 1 behind a queue still waiting for IDs, a stored one queues a message by the message's QoS or logs dropping it, and a clean
+  one closed while routing takes nothing. `deliver` allocates from `state.packet_id`, skipping
+  `state.unacked`, and `_publish` appends a `Delivery` and fills `state.sent` before it writes.
+  When 65535 IDs are in use `_packet_id` logs `mqtt: <id> exhausted packet identifiers` and closes;
+  this is what a QoS 1 message for a connected client with no ID free and no queue meets, and
+  `deliver` returns `False`, so that it stays queued for a stored session. A retained message on
+  SUBSCRIBE meets it too, and is not queued, because the queue goes out with RETAIN 0. PUBACK discards the
+  ID, pops `state.sent` and stamps that `Delivery`'s `acknowledged_at`; a connection already closed
+  ignores its data, PUBACK included, in `on_data`. `_end` clears `state.connection` and removes a
+  `clean` state from `_states`. `session` copies a `_State`'s collections into a frozen
+  `SessionState`, whose `Delivery` records stay the broker's;
+  `forget_session` refuses a connected one. Network reset retains both histories and the policy.
   Will is published once with the time
   of disconnect, not the time of CONNECT. A replacement client ID closes the old connection.
-  Session persistence and QoS 2 publication are unsupported. Credentials are observed by default;
+  QoS 2 publication is unsupported. Credentials are observed by default;
   authentication is performed only by an installed test policy, with no external auth service.
   `next_message` and `next_connection` capture the length of their respective append-only
   histories at construction; `message` and `connected` delegate to them, and
-  `connection_attempt` captures `connection_attempts` the same way. Matching uses append order,
+  `connection_attempt` captures `connection_attempts` the same way, and `next_delivery` captures
+  `deliveries`, filtering as `next_message` does. Matching uses append order,
   not timestamps, and polling does not change the captured offset. `find_message` scans
   from index zero with the same topic/payload filters; `find_connection` reads the first CONNECT.
   These are immediate queries returning records or `None`. Every MQTT condition, the live
@@ -188,8 +263,8 @@ the test made, stamped at its instant or at the turn's `now`, whichever is later
   clears pending handles before closing the stream, so closure through TLS cannot resurrect
   them. `Broker.disconnect(client_id)` uses the same loss/Will path as transport loss and
   never resets the network. An emitted handle survives closure as an emission record, not
-  evidence of device processing. Histories and retained messages survive reconnect; incoming
-  ACK state, outgoing unacknowledged deliveries and subscriptions do not.
+  evidence of device processing. Histories, retained messages and stored sessions survive
+  reconnect; incoming ACK state does not.
 - `tls.py`: a generated RSA-2048 CA and server certificate, SHA-256 signatures, DNS/IP subject
   alternative names, CA key usage and server extended key usage. Optional `server_not_before`
   and `server_not_after` apply only to the leaf certificate; the CA retains its fixed validity.
@@ -214,7 +289,7 @@ the test made, stamped at its instant or at the turn's `now`, whichever is later
   No deterministic replacement for OpenSSL randomness is attempted (#68).
 
 These are a lossless test network, not a general Internet stack. TCP congestion control, packet
-reassembly, retransmission, persistent MQTT sessions, MQTT QoS 2 and bridging to host services
+reassembly, retransmission, MQTT QoS 2 and bridging to host services
 are outside this implementation, and so are IPv6, VLANs, DHCP for more than one device, lease
 expiry and HTTP keep-alive or chunked bodies. Protocol references:
 [PPP](https://www.rfc-editor.org/rfc/rfc1661),
@@ -291,11 +366,28 @@ session-ending path. These tests use the clock directly to check exact deadlines
 timestamps.
 `tests/test_net_mqtt_failures.py` negotiates PPP and drives real TCP frames with independent
 checksums, both with plaintext and a verifying MemoryBIO TLS client. It receives without ACK,
-releases and delays PUBACK, disconnects before ACK, then reconnects and retransmits with DUP.
-During the outage another stream still answers PING and a new NTP request traverses the same
-open PPP session. It also checks that CONNACK has no restored session and subscriptions are
-gone. These are protocol-client tests; the existing firmware examples publish QoS 0 and cannot
-validate firmware processing of a QoS 1 PUBACK.
+releases and delays PUBACK, disconnects before ACK, then reconnects with CleanSession=0 and
+retransmits with DUP. During the outage another stream still answers PING and a new NTP request
+traverses the same open PPP session. It also checks that CONNACK has Session Present, that the
+routed copies come again in order and that the subscription is restored. These are
+protocol-client tests.
+`tests/test_net_path.py` asserts the path's stamps exactly, on PPP frames and Ethernet frames made by
+hand: the RTT from a request to its answer at odd nanoseconds, each direction's share, the rates
+each way, one datagram after another, a change that overtakes nothing, the floor's message, control
+traffic passing the queue, what a reset and the end of the link drop, and `quiet_until`.
+`tests/test_clock.py` holds real turns on `HeldClock` with a datagram on the path: a wait that ends at
+its time finds it taken, and `wait_until` returns at it. `tests/test_boardlink.py` checks
+`arrive`, the hold and `poll` in that order.
+`tests/test_mqtt_session.py` also runs esp-mqtt on a path: the spacing of a backlog's exchanges at
+200 ms and 600 ms and their ratio, the rate, and a redelivery over 600 ms.
+`tests/test_net_mqtt_sessions.py` asserts the broker's sessions in exact bytes, flags and packet
+IDs from raw packets: Session Present, the queue and its order, QoS 0 dropped, DUP and original IDs
+on redelivery before the queue, CleanSession=1 at CONNECT and at disconnection, takeover, a refused
+CONNECT and the policy leaving a session alone, a `Publication` staying with its connection, retained
+messages and RETAIN, running out of packet IDs, `session`, `forget_session`, `deliveries` and
+`next_delivery`. `tests/test_mqtt_session.py` runs esp-mqtt: Session Present, a QoS 1 message
+published while offline, and one redelivered with DUP after a `broker.disconnect` in the same
+instant as the publication, with both PUBACKs in the transcript.
 NTP tests cover silence from startup, idempotent transitions and resumed replies using elapsed
 world time. A MemoryBIO handshake with verification disabled solely for certificate inspection
 checks independent leaf validity dates, UTC normalization and a signature from the unchanged CA;
@@ -340,4 +432,9 @@ NTP and TLS behind the access point; the layer tests cover them without a link o
   [behind the access point it speaks Ethernet, ARP and
   DHCP](../decisions/harness.md#behind-the-access-point-the-network-speaks-ethernet-arp-and-dhcp),
   [an HTTP server on port 80 of every
-  network](../decisions/harness.md#an-http-server-answers-on-port-80-of-every-simulated-network).
+  network](../decisions/harness.md#an-http-server-answers-on-port-80-of-every-simulated-network),
+  [the broker keeps a session by client ID when CleanSession is
+  0](../decisions/harness.md#the-broker-keeps-a-session-by-client-id-when-cleansession-is-0),
+  [a path with RTT and rate sits between the link and the
+  network](../decisions/harness.md#a-path-with-rtt-and-rate-sits-between-the-link-and-the-network),
+  [packet loss on the path is postponed](../decisions/harness.md#packet-loss-on-the-network-path-is-postponed).

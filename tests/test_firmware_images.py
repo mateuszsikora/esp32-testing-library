@@ -205,6 +205,19 @@ def test_pppos_client_has_the_classic_layout_and_lilygo_route() -> None:
     assert all(Path(f.file_path).is_file() for f in app.flash_files)
 
 
+def test_mqtt_session_has_the_classic_layout() -> None:
+    app = idf_app("mqtt_session")
+    build = FIRMWARE / "mqtt_session" / "build"
+    assert app.target == "esp32"
+    assert [(f.offset, Path(f.file_path).relative_to(build)) for f in app.flash_files] == [
+        (0x1000, Path("bootloader/bootloader.bin")),
+        (0x8000, Path("partition_table/partition-table.bin")),
+        (0x10000, Path("mqtt_session.bin")),
+    ]
+    assert app.sdkconfig["LWIP_PPP_SUPPORT"] is True
+    assert all(Path(f.file_path).is_file() for f in app.flash_files)
+
+
 def test_http_request_is_esp_idfs_example_with_its_default_wifi() -> None:
     app = idf_app("http_request")
     build = FIRMWARE / "http_request" / "build"

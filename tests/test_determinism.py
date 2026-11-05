@@ -22,7 +22,7 @@ from esp32tl.interfaces.modem import Modem
 from esp32tl.interfaces.wifi import Wifi
 from esp32tl.net.mqtt import Broker
 from esp32tl.report import board_time
-from esp32tl.units import EAST, NORTH, Position, km, km_h, seconds
+from esp32tl.units import EAST, NORTH, Position, kbit_s, km, km_h, ms, seconds
 
 pytestmark = pytest.mark.app_path("../firmware/nmea_reader")
 
@@ -76,6 +76,30 @@ def test_plain_mqtt(board: Esp32Sim, modem: Modem, broker: Broker, tmp_path: Pat
     message = board.wait_until(broker.next_message("/topic/esp-pppos"), within=seconds(60))
     assert message.text == "esp32-pppos"
     (tmp_path / "network.json").write_text(json.dumps(modem.network().transcript()))
+
+
+@pytest.mark.app_path("../firmware/mqtt_session")
+@pytest.mark.board_profile("lilygo-t-a7670g-r2")
+def test_mqtt_session_on_a_path(
+    board: Esp32Sim, modem: Modem, broker: Broker, console: Console, tmp_path: Path
+) -> None:
+    network = modem.network()
+    network.set_path(rtt=ms(200), downlink=kbit_s(512), uplink=kbit_s(128))
+    modem.tap(tmp_path / "uart.modem.jsonl")
+    board.power_on()
+    board.wait_until(broker.subscribed("session/commands"), within=seconds(60))
+    done = console.line(r"mqtt_session: backlog done")
+    broker.publish("session/commands", "backlog 5", qos=1)
+    board.wait_until(done, within=seconds(30))
+    reconnected = broker.next_connection()
+    broker.publish("session/commands", "in flight", qos=1)
+    assert broker.disconnect("session-client")
+    assert board.wait_until(reconnected, within=seconds(30)).session_present
+    board.wait(seconds(2))
+    write_console(tmp_path, console)
+    assert console.lines(r"data dup=1 qos=1 .* payload=in flight$")
+    assert sum(m.topic == "session/reports" and not m.dup for m in broker.messages) == 5
+    (tmp_path / "network.json").write_text(json.dumps(network.transcript()))
 
 
 def test_tls_plaintext(tmp_path: Path) -> None:

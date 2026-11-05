@@ -114,7 +114,8 @@ while the runner is blocked on writing `console` or `uart_tx` to it is a deadloc
 The first `sync` has `t = 0` and comes before the guest executes its first instruction (rule 4).
 A peer may take its time over any turn, turn 0 included, since the guest does not run while it
 does: `BoardLink`, made with a `hold`, asks it at the start of every turn until the link fails,
-before it polls the interfaces, and takes the turn only once it returns. The `esp32sim` backend's hold is the test's
+after `Interface.arrive(now)` has let each interface take in what came due by that turn, and before
+it polls the interfaces, and takes the turn only once it returns. The `esp32sim` backend's hold is the test's
 clock, which returns once the test waits, with the latest time of the next turn, so emulated time
 moves only while the test waits; `None` answers the turn with `stop`, as at the end of the test.
 The wait is wall time, bounded by `--peer-timeout` (section 9), which the backend sets to 0 so
@@ -543,7 +544,10 @@ DNS, NTP, NAT to the host) answers nothing. The example is an ARP request from t
 `02:53:49:4d:00:02`, a millisecond later.
 
 `data` is one Ethernet II frame without its FCS: destination, source, EtherType and payload, 14 to
-1518 bytes. An `eth_rx` outside that range is a protocol error, as is `eth_rx` on a run without
+1518 bytes. ESP-IDF's frames from the station, as `http_request` on v5.3.6 sends them, carry 4 bytes
+more after an IPv4 datagram, always `ef be ad de`. They are no CRC-32 of the frame. `Ethernet.receive`
+leaves them out. TODO(owner): where they come from; esp32sim's `esp-soc/src/wifi.rs` does not hold
+that value. An `eth_rx` outside that range is a protocol error, as is `eth_rx` on a run without
 `--wifi`; the harness's codec refuses an `eth_tx` outside the range too.
 
 `eth_tx`: a frame the station sent. It is an event: it carries `seq`, sets the block point, and an

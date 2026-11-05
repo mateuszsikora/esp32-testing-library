@@ -1227,3 +1227,10 @@ def test_the_clock_and_ntp_tell_the_same_time_with_their_defaults() -> None:
     seconds_since_1900 = struct.unpack(">I", answer[40:44])[0]
     told = NTP_EPOCH + timedelta(seconds=seconds_since_1900)
     assert f"{told:%y/%m/%d,%H:%M:%S}".encode() in reply(model, "AT+CCLK?")
+
+
+def test_the_modems_interface_has_the_name_the_link_reports_its_errors_with(
+    tmp_path: Path,
+) -> None:
+    modem, _, _ = route(tmp_path, [0])
+    assert modem.name == "uart.modem"

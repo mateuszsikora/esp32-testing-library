@@ -242,6 +242,11 @@ class Wifi(Interface):
             return ()
         return network.receive(t, data)
 
+    def arrive(self, now: int) -> None:
+        network = self._network
+        if network is not None and network.active:
+            network.arrive(now)
+
     def poll(self, now: int) -> Iterable[Output]:
         network = self._network
         if network is None or not network.active:

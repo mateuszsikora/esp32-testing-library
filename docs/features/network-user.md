@@ -58,13 +58,19 @@ silent; an AT-only model still works without PPP. The network's broker is `modem
 | `puback` | Policy for new incoming QoS 1 exchanges: `"immediate"` (default), `"hold"`, or a nonnegative `Duration` |
 | `pending` | Tuple of pending `Publication` handles, grouped by connection, then first receipt |
 | `disconnect(client_id)` | Close that client's stream as a connection loss; return `True` if connected, otherwise `False` |
+| `session(client_id)` | The session the broker has for this client ID now, a `SessionState`, or `None` ([sessions](#keep-a-session-across-connections)) |
+| `forget_session(client_id)` | Discard a stored session; return `True` if there was one, otherwise `False`. A connected client raises `ValueError` (`mqtt: c is connected: disconnect it first`) |
+| `deliveries` | Every PUBLISH the broker wrote to a client, each a `Delivery` |
+| `next_delivery(topic="#", payload=None)` | Condition returning the first matching delivery recorded **after this method call**; the same filters as `next_message` |
+| `find_delivery(topic="#", payload=None)` | Immediate history query returning the first recorded match, or `None` |
 
 A message has `at` (`Duration`), `client`, `topic`, `payload` (bytes), `qos`, `retain`, and
 `text` (UTF-8 with replacement). Incoming publications also expose `connection_id`, `packet_id`
 (`None` for QoS 0), `dup` and `publication` (a `Publication` handle for QoS 1, otherwise `None`).
 Test publications use client `(test)` and have no connection, packet ID or handle. Wills carry
 their original connection ID but have no packet ID or handle. A client record has `at`,
-`client_id`, `username`, `password`, `keepalive`, `will_topic` and `connection_id`. Connection
+`client_id`, `username`, `password`, `keepalive`, `will_topic`, `connection_id` and
+`session_present`, what its CONNACK said. Connection
 IDs are increasing integers local to this broker, allocated when streams are accepted (so a
 rejected CONNECT also uses one), shared across plain and TLS listeners and never reused,
 including after a network reset. By default, credentials are observed, not authenticated;
@@ -94,7 +100,7 @@ assert broker.find_message("device/report") is report
 later_report = broker.next_message("device/report")  # Excludes that already recorded report.
 ```
 
-`find_message` and `find_connection` return records now, not conditions; they never wait or
+`find_message`, `find_connection` and `find_delivery` return records now, not conditions; they never wait or
 advance time. They include all history, including closed connections, test publications and
 Wills. The public `messages` and `clients` lists expose all records in append order; treat them
 as read-only histories. Network resets do not clear them. Payload decoding and application
@@ -106,10 +112,11 @@ calls and waits return the same first match; construct a new `next_*` condition 
 a previously true condition false.
 
 All MQTT conditions have timeout representations such as `the next MQTT message on 'a/+' saying
-b'new'`, `the next MQTT client connection`, `the next MQTT connection attempt` and
+b'new'`, `the next MQTT client connection`, `the next MQTT connection attempt`,
+`the next MQTT delivery on 'a/+' saying b'new'` and
 `an active MQTT subscription to 'a/#'`. Call a condition with `()` or pass it to
 `board.wait_until`. Boolean coercion of any MQTT condition, including those from `message`,
-`connected`, `connection_attempt` and `subscribed`, raises
+`connected`, `connection_attempt`, `next_delivery` and `subscribed`, raises
 `TypeError("call the MQTT condition with (), or pass it to board.wait_until")`, before and after
 a match, so an unevaluated `assert broker.connected()` fails. Use
 `assert broker.find_connection() is not None` to inspect past connections.
@@ -120,7 +127,7 @@ deletion, unsubscribe, PING and Will on connection loss are supported. Keepalive
 1.5 times its advertised interval on the board's clock. DISCONNECT suppresses the Will.
 QoS 2 publications are refused, and so is a QoS 0 PUBLISH with the DUP flag set (MQTT 3.1.1
 requires DUP 0 for QoS 0): the broker logs `mqtt: malformed or unsupported packet, closing` and
-closes the connection. Sessions are not persisted across connections.
+closes the connection.
 
 A CONNECT with an empty client ID and `CleanSession=1` receives a generated ID such as
 `esp32tl-anonymous-1`, visible in accepted-client history, messages and Wills. IDs use a
@@ -188,8 +195,9 @@ The policy can simulate any of these responses to a supported MQTT 3.1.1 request
 protocol versions and malformed packets still close without invoking it or sending CONNACK.
 An empty client ID without CleanSession is rejected with `IDENTIFIER_REJECTED` before the policy;
 the policy cannot override that rule. Every rejection sends CONNACK with Session Present zero,
-then closes. It cannot take over another client, route pipelined publications, subscribe or
-emit a Will.
+then closes. It cannot take over another client, route pipelined publications, subscribe, emit a
+Will or touch a stored session, even with CleanSession=1: the policy runs before any session state
+is installed or discarded.
 
 `Connect` contains `at` (`Duration`, on the board clock), `peer` (IP string and source port),
 `client_id`, `clean_session`, `username` (text or `None`), `password` (bytes or `None`),
@@ -199,8 +207,8 @@ sent, including an empty string; an anonymous ID is allocated only after accepta
 in `clients`.
 
 Each immutable `ConnectionAttempt` in `connection_attempts` has `connect` (the metadata),
-`return_code`, `at` (the CONNECT timestamp) and `accepted` (boolean). This includes the built-in
-empty-ID rejection. Histories survive connection loss and network reset. `clients` and
+`return_code`, `session_present` (what its CONNACK said), `at` (the CONNECT timestamp) and
+`accepted` (boolean). This includes the built-in empty-ID rejection. Histories survive connection loss and network reset. `clients` and
 `next_connection()` include accepted connections only. `connection_attempt()` observes future
 outcomes without consuming them; a timeout names `the next MQTT connection attempt`. Malformed or
 incomplete CONNECTs, TCP accepts and TLS handshake failures do not create outcomes.
@@ -211,10 +219,175 @@ test error. It sends no CONNACK, records no outcome and does not become a simula
 authentication failure. In a board test the policy runs in the link, not in the test: the link
 fails and the run ends, so the waiting `board.wait_until(...)` raises `RunEnded`, not the
 policy's exception. Its message names the error, as in
-`the link failed: modem.receive raised TypeError: MQTT connection_policy must return a ConnackCode`
+`the link failed: uart.modem.receive raised TypeError: MQTT connection_policy must return a ConnackCode`
 (`wifi.receive` behind an access point), and the traceback is in the link's report. Only a
 `Broker` driven directly, without a board, raises the policy's own exception from `on_data`, after
 closing that connection.
+
+## Keep a session across connections
+
+A client that connects with CleanSession=0 keeps its session on the broker, by client ID, from one
+connection to the next. Build the validation firmware with `firmware/build.sh mqtt_session`
+([validation firmware](validation-firmware-user.md#mqtt_session)): esp-mqtt with
+`disable_clean_session`, which subscribes on every connection and prints Session Present and each
+message's DUP. A test publishes while the client is offline, and it arrives after it reconnects:
+
+```python
+import pytest
+from esp32tl.units import seconds
+
+pytestmark = [
+    pytest.mark.app_path("../firmware/mqtt_session"),
+    pytest.mark.board_profile("lilygo-t-a7670g-r2"),
+]
+
+
+def test_receives_what_was_published_while_it_was_offline(board, broker, console):
+    board.power_on()
+    board.wait_until(broker.subscribed("session/commands"), within=seconds(60))
+    reconnected = broker.next_connection()
+    received = console.line(r"data dup=0 qos=1 .* payload=while offline")
+    broker.disconnect("session-client")
+    broker.publish("session/commands", "while offline", qos=1)
+    client = board.wait_until(reconnected, within=seconds(30))
+    assert client.session_present
+    board.wait_until(received, within=seconds(5))
+```
+
+To lose a PUBACK, publish and disconnect in the same instant. The PUBLISH and the close travel in
+that order, so the firmware receives the message and answers it; the PUBACK comes to a connection
+already closed, which counts for nothing, and the message comes again on the next connection:
+
+```python
+broker.publish("session/commands", "in flight", qos=1)
+broker.disconnect("session-client")
+first = console.line(r"data dup=0 qos=1 id=1 .* payload=in flight")
+again = console.line(r"data dup=1 qos=1 id=1 .* payload=in flight")
+```
+
+What the broker does on each CONNECT it accepts ([MQTT 3.1.1](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html)):
+
+| CONNECT | Session Present | What happens to the session |
+|---|---|---|
+| CleanSession=0, a stored session | 1 | Resumed: after CONNACK, first what the client has not acknowledged, in the order first sent, with DUP=1 and the same packet IDs; then the queue, in order, with DUP=0 and new packet IDs (MQTT-3.1.2-4, MQTT-3.2.2-2, MQTT-4.4.0-1, MQTT-4.6.0-6) |
+| CleanSession=0, none stored | 0 | A new session, kept after the connection ends (MQTT-3.2.2-3) |
+| CleanSession=1 | 0 | Any stored session discarded, and a new one that ends with the connection (MQTT-3.1.2-6, MQTT-3.2.2-1) |
+
+A client still connected with the same ID is disconnected first (MQTT-3.1.4-2). If that connection
+had CleanSession=1 its session ends with it, so a CleanSession=0 CONNECT finds none.
+
+While a client with a stored session is offline:
+
+- a QoS 1 publication that matches one of its subscriptions is queued, in order, whatever QoS the
+  subscription has (MQTT-3.1.2-5), and goes at the subscription's QoS when it reconnects. The queue
+  has no limit, because the specification sets none. What packet IDs limit is what is unacknowledged
+  at once, 65535 messages: a resumed session sends that many, and the rest as PUBACKs free their
+  IDs. A QoS 1 message published meanwhile goes behind them. A retained message that a SUBSCRIBE
+  matches while no ID is free still closes the connection, so a client that subscribes before its
+  first PUBACK gets the same messages again on every connection (#140);
+- a QoS 0 publication is dropped, logged as
+  `mqtt: session-client is offline: dropped a QoS 0 message on session/commands`;
+- `subscribed` is false: it speaks of active clients. It is true again from the CONNECT on, without
+  a SUBSCRIBE.
+
+A queued message goes with RETAIN 0, since it matches an established subscription (MQTT-3.3.1-9),
+and DUP 0, since it is a first attempt (MQTT-3.3.1-3). A message sent again keeps the RETAIN it had.
+A SUBSCRIBE that repeats a filter replaces its QoS and sends matching retained messages again,
+leaving the queue and what is unacknowledged as they are (MQTT-3.8.4-3).
+
+A session lasts until a CleanSession=1 CONNECT with that ID or `forget_session`. It survives a
+disconnection of any kind, keepalive expiry, and the network's reset: the broker is the test's,
+not the link's, like its retained messages. A session never expires, and a refused CONNECT changes
+nothing. An incoming QoS 1 `Publication` stays with its connection and is not part of the session:
+a pending one is cancelled when the connection closes and does not come back
+([below](#withhold-puback-and-disconnect-a-client)).
+
+`broker.session(client_id)` returns the state now, a frozen `SessionState`, or `None`. Its dict and
+tuples are copies, so they stay as they were at the call; the `Delivery` records in `unacknowledged`
+are the broker's own, so a later PUBACK still sets `acknowledged_at` on them:
+
+| `SessionState` | Meaning |
+|---|---|
+| `connected` | Whether a connection holds this session now |
+| `subscriptions` | Filter to granted QoS, a `dict` |
+| `queued` | The `Message`s waiting for the client, oldest first |
+| `unacknowledged` | The `Delivery`s the client has not acknowledged, in the order first sent |
+
+A `Delivery` in `broker.deliveries` is one PUBLISH written to a client's stream, stamped when the
+broker wrote it: `at`, `client`, `connection_id`, `topic`, `payload`, `qos`, `packet_id` (`None` for
+QoS 0), `dup`, `retain`, `text` and `acknowledged_at`. The last is when the PUBACK for this PUBLISH
+reached the broker on this connection, or `None`: always for QoS 0, and for a delivery whose
+connection closed first, whose retransmission has a record of its own. A `next_delivery` condition
+has the boundary, polling and naming of the
+[MQTT next-event conditions](#history-next-events-and-current-state).
+
+## Give the network a round trip and a rate
+
+```python
+from esp32tl.units import kbit_s, ms
+
+network = modem.network()  # Or what wifi.access_point(...) returned.
+network.set_path(rtt=ms(200), downlink=kbit_s(512), uplink=kbit_s(128))
+```
+
+`set_path` puts a path between the link and the network, for every IPv4 datagram either way: DNS,
+NTP, TCP and so MQTT and HTTP. What the device sends at time `t` is answered at exactly `t + rtt`,
+plus the time the datagrams take at the rates. LCP, IPCP, ARP and DHCP stay on the link and are not
+delayed, so the device still comes up in the same time; each such answer comes 1 ms after its
+request, even past datagrams on their way. These values are the test's parameters, not a model of
+an operator: no vendor source stands behind them.
+
+| Argument | Default | Meaning |
+|---|---|---|
+| `rtt` | `ms(1)`, the network without a path | From the device's request to the stamp of the answer. A `Duration`, 1 ms at the least |
+| `downlink` | `None`, no limit | A `Rate` towards the device: each datagram takes its size in bits at this rate, one after another |
+| `uplink` | `None`, no limit | The same from the device |
+
+`Rate`, `kbit_s` and `mbit_s` are [units](models-user.md#units). Each call states the whole path:
+what it leaves out goes back to its default. It works before power-on and between board advances,
+and it does not advance time. It applies to datagrams entering after it, and none overtakes another:
+a datagram behind one that left under a longer RTT leaves with it, not before it.
+
+An RTT below the floor raises `ValueError`:
+`network.set_path: rtt is 0.5 ms; the network answers 1 ms after a request at the least`.
+Something else raises `TypeError`: `network.set_path: rtt is 200, not a Duration, as ms(200)`,
+`network.set_path: downlink is 512, not a Rate, as kbit_s(512)`. The transcript logs each call, as
+`net: path: rtt 0.2 s, downlink 512 kbit/s, uplink 128 kbit/s`, with `any` for no limit.
+
+A broker's records have the times of the network's end: `message.at` is `t` plus what the datagram
+took going up, half of what the RTT has above 1 ms, and `puback_at`, `delivery.at` and the test's
+`broker.publish` are when the answer sets off down. A publication from the test reaches the device
+one way down later, half of what the RTT has above 1 ms, and 1 ms. A record is there when `board.now`
+reaches its stamp: `board.wait_until(broker.next_message("a/b"), ...)` returns with `board.now`
+equal to `message.at`, and what the test does at that instant comes after it. On a path, a
+`connection_policy` that raises fails the link as `uart.modem.arrive raised` (`wifi.arrive` behind
+an access point) when its CONNECT took time going up.
+
+Behind the modem the runner already paces received bytes at the UART's baud, about 11.5 kB/s (92
+kbit/s) at 115200: a `downlink` above that adds its time per datagram and is no limit on the rate
+of what arrives. Only a lower one is. The path has no queue limit and loses nothing. A reset, of the
+link or of the network, drops what is on the path and keeps the path's values.
+
+What the firmware does with the time is its own. With `firmware/mqtt_session`, publishing a QoS 1
+backlog one message at a time, each waiting for its PUBACK, on the modem's route:
+
+| `rtt` | From one report to the next, measured |
+|---|---|
+| default | 16.3 ms |
+| `ms(200)` | 215.3 ms |
+| `ms(600)` | 615.2 ms |
+| `ms(200)`, 8 kbit/s each way | 361.9 ms |
+
+The 15 ms above the RTT are the modem's UART and the firmware. In that run the first report comes
+two round trips after the command, not one: lwIP's Nagle algorithm holds it behind the command's
+PUBACK until that is acknowledged. At 600 ms that also passes esp-mqtt's 1 s
+`message_retransmit_timeout`, so the first report comes twice, the second time with DUP.
+
+The firmware's own timers can outrun a path: lwIP retransmitted segments at an RTT of 1.5 s, and
+the network answers each with an acknowledgement. Over a path whose rate is too low for what it
+carries, a client's timeouts can fire before a message has got through: the path has no queue limit
+and loses nothing, so each retransmission only adds to what it has to carry. esp-mqtt's
+`network.timeout_ms` is 10 s by default.
 
 ## Fetch a page behind a Wi-Fi access point
 
@@ -404,24 +577,24 @@ This model permits duplicate application messages; it promises no exactly-once d
 content deduplication.
 
 `broker.disconnect(message.client)` closes only that client's active stream, including when it
-uses TLS. It publishes the Will once, cancels pending ACKs, removes subscriptions and leaves PPP,
-other streams and DNS/NTP usable. Graceful MQTT DISCONNECT cancels ACKs but suppresses the Will.
+uses TLS. It publishes the Will once, cancels pending ACKs, makes the client's subscriptions
+inactive (with CleanSession=1, removes them) and leaves PPP, other streams and DNS/NTP usable. Graceful MQTT DISCONNECT cancels ACKs but suppresses the Will.
 Transport loss, keepalive expiry, client-ID takeover and network reset also cancel pending ACKs.
 Expiry wins if keepalive and PUBACK have the same deadline. An already emitted ACK stays emitted;
 closing does not retract bytes already queued in the transport.
 
 A reconnect gets a new `connection_id`. Reusing a client ID and packet ID cannot make an old
-handle valid again. Retained messages and receipt history survive, but subscriptions and pending
-exchanges are ephemeral, even for `CleanSession=0`; CONNACK always reports no session present.
-The client can retransmit, producing a new receipt and handle. Broker-side session restoration
-is not provided.
+handle valid again. Retained messages and receipt history survive; a pending exchange does not,
+even with CleanSession=0, whose [session](#keep-a-session-across-connections) holds what the broker
+sends the client, not what the client sent. The client can retransmit, producing a new receipt and
+handle.
 
 Keep three observations separate: `message.at` proves broker receipt; `puback_at` proves that
 PUBACK was handed to the stream (before TCP buffering, simulated link latency and device
 scheduling); neither proves firmware processing or durable delivery bookkeeping. After emission,
 wait for a device-visible result appropriate to that firmware to establish processing. The
 broker cannot assert that the device committed delivery. The shipped `pppos_client` and position
-tracker publish QoS 0; a QoS 1 scenario needs firmware that actually requests QoS 1.
+tracker publish QoS 0; `mqtt_session` subscribes at QoS 1, so it answers a PUBACK for each message.
 
 ## DNS, time and services
 
@@ -584,7 +757,8 @@ print `Wi-Fi disconnected 3, trying to reconnect...` when the access point leave
 A receive FIFO overflow on the modem's route immediately fails with
 `uart.modem: UART receive overflow (rxfifo_ovf) on GPIO 27: the simulated network requires a lossless route`.
 Other routes retain their existing overflow policy; frame errors remain fatal everywhere.
-The simulated TCP accepts connections but does not retransmit or recover packet loss.
+The simulated TCP accepts connections but does not retransmit or recover packet loss. The path
+loses nothing ([packet loss is postponed](../decisions/harness.md#packet-loss-on-the-network-path-is-postponed)).
 Malformed packets are discarded or their application connection is closed; events help explain
 why the firmware stopped progressing. The test's `within=` and wall-time timeout still bound waits.
 
@@ -602,4 +776,5 @@ unchanged. See [the modem](modem-user.md) and [determinism](../guides/testing.md
   around it and switching it off the air.
 - [The modem](modem-user.md): the AT model the network behind the modem sits on.
 - [network-technical.md](network-technical.md): the layers and their lifecycle.
-- [Validation firmware](validation-firmware-user.md): `pppos_client` and `http_request`.
+- [Validation firmware](validation-firmware-user.md): `pppos_client`, `mqtt_session` and
+  `http_request`.

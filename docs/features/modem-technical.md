@@ -87,7 +87,8 @@ Signal, coverage, clock and operator survive a power cycle; functionality resets
 
 The model's optional constructor `data: Source | None` accepts a data peer; `modem.network()`
 installs `esp32tl.net.Internet` before power-on. The `broker` fixture selects it automatically.
-In data mode its payload reaches `data.receive`, and `poll`, `quiet_until` and `latency` delegate
+In data mode `arrive` reaches an `Internet` before the test holds the turn
+([the path](network-technical.md#the-path)), its payload reaches `data.receive`, and `poll`, `quiet_until` and `latency` delegate
 to that source (latency remains at most 1 ms). With no peer, payload is retained and unanswered.
 A network dial starts PPP after CONNECT; power, registration and functionality loss reset it,
 clear queued replies and close TCP sessions. Only `drop_call` emits an unsolicited `NO CARRIER`:
