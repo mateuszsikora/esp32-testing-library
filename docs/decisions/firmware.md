@@ -316,3 +316,24 @@ modem; modem power sequencing and PPP redial are left outside its scope.
 modem version; waiting indefinitely for GNSS before the connect report, which would hide a
 receiver outage; and carrying old coordinates as a current fix after GNSS silence. The report
 period is fixed in firmware, rather than adding configuration unrelated to the demonstration.
+
+## Images of one container share their ccache hits
+
+Status: decided (#146)
+
+The image turns ccache on, and one container builds a whole family, yet each image compiled as long
+as the first: its build directory is in every compile line and in the working directory ccache
+hashes, so `gpio_echo` after `hello_world` hit 0 of 874 compilations. `CCACHE_BASEDIR=/out` and
+`CCACHE_NOHASHDIR=1` on the `docker run` make that 870 of 874, measured on an aarch64 Mac with the
+pinned image: 44 s against 165 s for `gpio_echo`, 28 s for `nvs_reader` after it. The flash image
+is the same but for its build time and SHA-256: of the 168832 bytes of `gpio_echo.bin`, against a
+build with no hits, only bytes 116 to 120 (the time in the app description), 177 to 208 (the ELF's
+SHA-256) and the last 32 (the image's) differ, as they differ between two builds with no hits.
+
+The cost is in the debug information: an object from the cache keeps the working directory of the
+image that compiled it, so `gpio_echo.elf` also names `/out/hello_world/build`. The harness reads no
+debug information.
+
+**Rejected:** a cache kept between runs, on a volume or in the Actions cache, for now, because it
+needs a directory on hp600g1 or a cache entry to manage, and hits within a container may be enough;
+it measured 872 of 874 for a rebuild of one image in a new container, and can be added to this.

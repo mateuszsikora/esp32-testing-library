@@ -147,7 +147,9 @@ default:
 3. Without one, it prints
    `fetch-rom-elf: no esp32_rev300_rom.elf matching release 20241011 under <dir>; downloading <url>`,
    downloads `esp-rom-elfs-20241011.tar.gz` from the GitHub release with `curl`, and checks the
-   tarball against `TARBALL_SHA256` and the extracted ELF against `ROM_SHA256`.
+   tarball against `TARBALL_SHA256` and the extracted ELF against `ROM_SHA256`. The download gets 20 s
+   to connect and 120 s in all, retried 3 times, so that a stalled one fails instead of holding a CI
+   job until its limit.
 
 The target is phony: the script checks the checksum on every run. It runs from any directory and
 always writes the repository's `.cache/`. Without `sha256sum` or `shasum` it stops with

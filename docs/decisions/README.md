@@ -18,6 +18,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The firmware job's timeout is 60 minutes](ci.md#the-firmware-jobs-timeout-is-60-minutes) | `ci.md` | decided (#145) |
 | [The runner job caches the binary, not runner/target](ci.md#the-runner-job-caches-the-binary-not-runnertarget) | `ci.md` | decided (#48) |
 | [The test jobs run pytest, not make test](ci.md#the-test-jobs-run-pytest-not-make-test) | `ci.md` | decided (#48) |
+| [The test jobs run four shards of the suite](ci.md#the-test-jobs-run-four-shards-of-the-suite) | `ci.md` | decided (#146) |
 | [The ROM ELF is fetched once, by the firmware job](ci.md#the-rom-elf-is-fetched-once-by-the-firmware-job) | `ci.md` | decided (#48) |
 | [Every commit on main gets its own concurrency group](ci.md#every-commit-on-main-gets-its-own-concurrency-group) | `ci.md` | decided (#48) |
 | [Clippy runs in the lint job, with no cache](ci.md#clippy-runs-in-the-lint-job-with-no-cache) | `ci.md` | decided (#50) |
@@ -79,6 +80,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The SD logger uses each RMC's date and closes every appended row](firmware.md#the-sd-logger-uses-each-rmcs-date-and-closes-every-appended-row) | `firmware.md` | decided (#73) |
 | [A card that comes and goes is validated on a firmware of this repository's](firmware.md#a-card-that-comes-and-goes-is-validated-on-a-firmware-of-this-repositorys) | `firmware.md` | decided (#106) |
 | [The position tracker reuses the pinned modem component and reports without a fix](firmware.md#the-position-tracker-reuses-the-pinned-modem-component-and-reports-without-a-fix) | `firmware.md` | decided (#72) |
+| [Images of one container share their ccache hits](firmware.md#images-of-one-container-share-their-ccache-hits) | `firmware.md` | decided (#146) |
 
 ## The esp32tl package and its pytest plugin
 

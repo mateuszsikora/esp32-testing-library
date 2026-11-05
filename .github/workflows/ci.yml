@@ -170,8 +170,11 @@ jobs:
       matrix:
         platform: ${{ fromJSON(github.event.repository.private && '["linux"]' || '["linux", "macos"]') }}
         python: ["3.11", "3.13", "3.14"]
+        # Why four, and why 15 minutes: "The test jobs run four shards of the
+        # suite" in docs/decisions/ci.md.
+        shard: ["1/4", "2/4", "3/4", "4/4"]
     runs-on: ${{ matrix.platform == 'macos' && 'macos-latest' || fromJSON('["self-hosted", "Linux", "X64"]') }}
-    timeout-minutes: 20
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
 
@@ -227,7 +230,7 @@ jobs:
             }
           done
 
-      - run: .venv/bin/pytest
+      - run: .venv/bin/pytest --shard=${{ matrix.shard }}
 
   # Plan §6: two runs of one recording are identical. `make determinism` runs
   # tests/test_determinism.py twice and compares the consoles, the taps and the

@@ -109,8 +109,8 @@ seconds, and a build that stops making progress holds the one machine for 30 min
 project lowers that. No measured run held that speed for a whole build, though single projects
 reached 3 times.
 
-`test` keeps its 20 minutes. It reached that limit three times in such slow periods, so a slow run
-can still fit the build and then end red there.
+`test` kept its 20 minutes then, and reached that limit three times in such slow periods;
+[its shards](#the-test-jobs-run-four-shards-of-the-suite) came later.
 
 **Rejected:** 45 minutes, because it is under the estimate for the slow run it has to fit.
 
@@ -136,6 +136,27 @@ The runner's own tests already ran in the `runner` job.
 
 **Rejected:** `make test`, because after a checkout cargo sees the runner's sources as newer than
 the cached binary and links it again.
+
+## The test jobs run four shards of the suite
+
+Status: decided (#146)
+
+A `test` job ran the whole suite: about 11 minutes, 17 to 20 when hp600g1 was slow, and three times
+over its limit of 20. A job cancelled there cost its 20 minutes and all of its work. Each Python now
+runs four shards, `--shard=K/4` in `tests/conftest.py`, so a failed shard is re-run alone: pytest
+takes about 11 minutes in all, so about 3 a shard, plus about 1 of setup. At the three times slower
+seen in those periods a shard takes about 11 to 12 minutes, which 15 covers. The cost is setup: 12
+jobs spend about 12 minutes on it on the one machine, where 3 spent 3. Several machines could run the
+shards at once, later, with no change to them.
+
+A test's shard is the hash of its node id, so a new test needs no list, and no file of measured
+durations has to be kept up to date.
+
+**Rejected:** three shards, because they take about 15 minutes at that speed, with nothing to spare;
+five, because 3 more jobs of setup buy little; splitting by file, because the 65 files differ too
+much in length: hashed into four, their times were 55, 165, 228 and 218 s; `pytest-split`, which
+balances better but needs that file of durations; a higher limit on one job, because it makes a
+cancelled job cost more.
 
 ## The ROM ELF is fetched once, by the firmware job
 
