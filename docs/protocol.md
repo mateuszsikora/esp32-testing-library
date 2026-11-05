@@ -17,8 +17,9 @@ Who implements what: the runner side in #11 (M1: UART, `reset`, `uart_cfg`, `war
 `sd_card_ack`, the SD card coming and going while the firmware runs. `adc` waits for an
 issue of its own, opened when an example needs an analog pin. Wall time under `--realtime`, for a
 real device at the far end of a route (section 12), came with #28. #105 adds `power` and
-`chip_reset`, the board's supply and the chip's EN pin, on both sides, and #107 the SD card's fault
-rules, `sd_fault`, `sd_clear` and `sd_op`.
+`chip_reset`, the board's supply and the chip's EN pin, on both sides, #107 the SD card's fault
+rules, `sd_fault`, `sd_clear` and `sd_op`, and #131 `flash_dump` and `flash_dump_ack`, a read of the
+flash in a turn.
 
 ## 1. Transport
 
@@ -102,7 +103,8 @@ every end of a run, so the runner's `stats` is written before the socket closes.
 
 **Turns.** After the handshake the runner and the peer take turns. The runner's turn ends with a
 `sync` whose `t` is the block point `B` it stopped at (rule 1). The peer's turn follows: any number
-of input messages, then exactly one `wait` (or `stop`, section 9), which ends it. The runner reads
+of input messages, then exactly one `wait` (or `stop`, section 9), which ends it. A `flash_dump`
+(5.21) may come among them, and the runner answers it within the turn. The runner reads
 the socket only between its `sync` and the peer's `wait`, never while the guest runs, so how fast
 a peer answers in wall time cannot change what the guest sees (section 6 of the plan: two runs of
 one recording give identical output).
@@ -141,6 +143,7 @@ seen exactly the events up to the block point, however the emulator schedules it
 | runner → harness | `eth_tx` *ext* | `seq`, `t`, `data` | M7 |
 | runner → harness | `sd_card_ack` *ext* | `t`, `image`, `error` | #106 |
 | runner → harness | `sd_op` *ext* | `t`, `fault`, `op`, `blocks`, `action`, `delay`, `written` | #107 |
+| runner → harness | `flash_dump_ack` *ext* | `t`, `error` | #131 |
 | runner → harness | `stats` *ext* | `t`, `end`, `resets`, `turns`, `uart`, `unrouted_rx_bytes`, `inputs_on_output`, `inputs_not_applied`, `rx_bytes_not_paced`; `wifi` with `--wifi` (M7); under `--realtime` also `rt_resyncs` (M5) | M1 |
 | harness → runner | `uart_rx` | `t`, `pin`, `baud`, `data` | M1 |
 | harness → runner | `gpio_in` | `t`, `levels` | M3 |
@@ -153,6 +156,7 @@ seen exactly the events up to the block point, however the emulator schedules it
 | harness → runner | `sd_card` *ext* | `t`, `image` | #106 |
 | harness → runner | `sd_fault` *ext* | `t`, `id`, `op`, `action`, `delay`, `count`, `blocks` | #107 |
 | harness → runner | `sd_clear` *ext* | `t`, `ids` | #107 |
+| harness → runner | `flash_dump` *ext* | none | #131 |
 | harness → runner | `wait` | `ack`, `quiet_until`, `latency` | M1 |
 | harness → runner | `stop` | none | M1 |
 
@@ -180,10 +184,13 @@ without it `sd_fault` and `sd_clear` are protocol errors. The runner sends `sd_o
 the peer gave. The version stays 1
 ([decision](decisions/runner.md#the-sd-cards-fault-messages-keep-protocol-version-1)).
 
+`flash_dump` and `flash_dump_ack` (5.21) leave the version at 1 too: the runner sends the answer only
+to a peer that asked, and without `--flash-out` the message is a protocol error.
+
 **Events** are the runner messages that carry `seq`: `uart_tx`, `uart_cfg`, `gpio_out`, `reset`
 and `eth_tx`. They are what a peer may answer, so they set the block point (rule 1). `seq` is one
 counter over all five, starting at 1 and growing by 1. `sync`, `console`, `warn`, `sd_card_ack`,
-`sd_op` and `stats` carry no `seq` and ask for nothing.
+`sd_op`, `flash_dump_ack` and `stats` carry no `seq` and ask for nothing.
 
 ### 5.1 `hello`
 
@@ -808,6 +815,44 @@ firmware's driver polls: ESP-IDF's `sdspi` polls a busy card one byte per transa
 timeout, `esp_timer_get_time()` on the same clock, and gives up with `ESP_ERR_TIMEOUT` once
 it has passed (its write timeout is 5 s, its read timeout 1 s).
 
+### 5.21 `flash_dump` and `flash_dump_ack` *ext* (#131)
+
+```json
+{"type": "flash_dump"}
+{"type": "flash_dump_ack", "t": 2000000000, "error": null}
+{"type": "flash_dump_ack", "t": 2000000000, "error": "/tmp/esp32tl-x1/flash.bin: No space left on device (os error 28)"}
+```
+
+The flash goes to the peer through a file, the same way `--flash-at` and an SD card's image reach
+the runner: a path both sides can read. `--flash-out PATH` names it.
+
+`flash_dump`, from the peer in its turn, asks for the flash now. It carries no `t` and does not go
+into the input queue: the runner writes the whole flash to `PATH` while it reads the turn, answers
+`flash_dump_ack`, and goes on reading the same turn, up to its `wait` or `stop`. No slice runs, so
+the bus's clock does not move, and an input the peer sent before it in the turn has not been
+applied. A peer may send any number of them in a turn. Each answer starts `--peer-timeout` again
+(section 9): the write is the runner's time, not the peer's. `flash_dump` without `--flash-out` is a
+protocol error (`flash_dump without --flash-out`).
+
+`flash_dump_ack`, from the runner, says that `PATH` holds the flash: `t` is the `sync`'s, and `error`,
+`null` or absent unless the file could not be written, says why, as the path and the error. The run
+goes on either way. It is not an event: it carries no `seq` and sets no block point.
+
+The runner writes `PATH.partial` and renames it, so whoever reads `PATH` finds one instant's flash
+whole, or the file from before. `PATH` is the flash as the guest has it at the slice boundary the
+turn was taken at, which may lie past the `sync`'s `t` (section 6.1): a write of the guest's after
+the block point is already there, though its `uart_tx` or `console` goes out after the `wait`.
+
+**At the end of the run** the runner writes `PATH` on its own, however the run ended, exit codes 1,
+3 and 4 included (section 9), before it sends `stats`: a peer that has read `stats` finds the file in
+place. That covers what the guest wrote after the peer's last turn, when no turn is left to ask in.
+A file that cannot be written then is a line on stderr, `esp32tl-runner: cannot write the flash:
+PATH: ERROR`, and changes no exit code. A panic (101), a signal that kills the process and a failed
+connection write nothing. Without `--board` the end of the run writes it too.
+
+**Rejected:** base64 chunks on the socket
+([decision](decisions/runner.md#the-flash-reaches-the-harness-through-a-file-not-the-socket)).
+
 ## 6. Rules
 
 1. **Block point.** After each `wait` the runner runs the guest until the block point
@@ -966,7 +1011,7 @@ the runner at or before its `t` (rule 1).
 | `SIGTERM` or `SIGINT` | ends the slice in progress (at most one emulated millisecond), or at once if it is waiting for the peer's turn or, under `--realtime`, for wall time on its own clock (12.2). A sleep inside esp32sim's pacing comes to its end first, which is about 2 ms at most but for the board kept off from power-on (12.2); sends the events and `warn`s not yet sent, `stats` with `end: signal`, closes | 0 |
 | any other `Stop` (`esp-soc/src/soc.rs:9`: `MaxInsns`, `Breakpoint`, `Unimplemented`, `Simcall`, `Ebreak`, `Watch`, `Exceptions`, `CostModel`, `CostModelLifecycle`) | events not yet sent, `stats` with `end: emulator` and the variant, closes | 1 |
 | usage error, or an image or ROM that cannot be loaded | nothing on the socket (it may not be connected yet) | 2 |
-| protocol error by the peer: malformed or oversized line, unknown `type`, version or chip mismatch, late `t`, wrong `ack`, `quiet_until` not after the `sync`, a `baud` of `0`, a `watch` with a pin the chip does not have, a message the runner does not implement yet, `eth_rx` or `wifi_ap` without `--wifi` (`eth_rx without --wifi`, `wifi_ap without --wifi`), an `eth_rx` frame outside 14 to 1518 bytes (`eth_rx: an Ethernet frame of N bytes; one without FCS has 14 to 1518`), an `on` that is not `true` or `false`, `sd_card` without `--sd-spi` (`sd_card without --sd-spi`), an `image` that is not a string, `sd_fault` or `sd_clear` without `--sd-spi` (`sd_fault without --sd-spi`, `sd_clear without --sd-spi`), an `sd_fault` that 5.20 does not allow (an `op` or `action` it does not list, an erase that fails, a `delay` missing, out of range or with `error`, a `count` out of range, `blocks` that are not `[first, last]`, an `id` in use already) | `stats` with `end: protocol_error`, closes | 3 |
+| protocol error by the peer: malformed or oversized line, unknown `type`, version or chip mismatch, late `t`, wrong `ack`, `quiet_until` not after the `sync`, a `baud` of `0`, a `watch` with a pin the chip does not have, a message the runner does not implement yet, `eth_rx` or `wifi_ap` without `--wifi` (`eth_rx without --wifi`, `wifi_ap without --wifi`), an `eth_rx` frame outside 14 to 1518 bytes (`eth_rx: an Ethernet frame of N bytes; one without FCS has 14 to 1518`), an `on` that is not `true` or `false`, `sd_card` without `--sd-spi` (`sd_card without --sd-spi`), an `image` that is not a string, `sd_fault` or `sd_clear` without `--sd-spi` (`sd_fault without --sd-spi`, `sd_clear without --sd-spi`), an `sd_fault` that 5.20 does not allow (an `op` or `action` it does not list, an erase that fails, a `delay` missing, out of range or with `error`, a `count` out of range, `blocks` that are not `[first, last]`, an `id` in use already), `flash_dump` without `--flash-out` (`flash_dump without --flash-out`) | `stats` with `end: protocol_error`, closes | 3 |
 | the peer is gone: the connection failed, the socket closed, a read or write failed, the peer's turn took longer than `--peer-timeout`, or a write made no progress for that long (in or outside a turn) | nothing more | 4 |
 | a second `SIGTERM` or `SIGINT` | ends the process at once | 128 + the signal's number |
 
@@ -1000,13 +1045,16 @@ runner's next turn to send `stop`, which may come only at the end of the test's 
 the exception: the runner finds it in the harness's `hello` and ends the run itself, with code 3.
 
 `--peer-timeout SECONDS` bounds, in wall time, how long the runner waits for the peer's turn to
-end, and how long a write may make no progress because the peer does not read (default 60; `0`
-waits for ever). For `tcp:` it also bounds each connection attempt, though not the name lookup
+end, counted again after each `flash_dump_ack` (5.21), and how long a write may make no progress
+because the peer does not read (default 60; `0` waits for ever). For `tcp:` it also bounds each connection attempt, though not the name lookup
 before it. A hung peer, say a model in another process, then fails the
 run with code 4 instead of hanging a CI job. It acts only on that error path, so it cannot change a
 run that completes. The `esp32sim` backend passes `0`: its turns last as long as the test body
 runs, and the test's own wall-time timeout ends a run that hangs
 ([pytest plugin](features/pytest-plugin-user.md#the-tests-timeout)).
+
+With `--flash-out`, every end in the table from `--max-seconds` to the peer gone, once the run has
+started, writes the whole flash to the file, before `stats` where there is one (5.21).
 
 `Stop::SwReset` is not an end: the runner sends `reset` and continues (5.5), and neither is the
 supply going off (5.17). `stats` is the last

@@ -1239,6 +1239,54 @@ that references to its number keep their meaning.
      `tests/test_clock.py::test_a_step_on_the_board_after_the_end_of_the_run_raises_run_ended_at_once`,
      `tests/test_pytest_plugin.py::test_the_board_s_power_and_reset_after_the_run_ended_raise_run_ended_and_log_nothing`
 
+## Reading the flash
+
+- **190.** A `flash_dump` writes the guest's flash as it is at that turn, not the build's, and the
+     turn goes on: no time moves, no slice runs and no turn is counted, for the runner and for
+     `board.flash()`. Its answer starts `--peer-timeout` again.
+     `runner/src/session/tests.rs::a_flash_dump_writes_the_flash_of_the_turn_and_the_turn_goes_on`,
+     `runner/src/session/tests.rs::a_flash_dump_moves_no_time_and_runs_no_guest`,
+     `runner/src/session/tests.rs::each_flash_dump_ack_starts_the_peer_timeout_again`,
+     `tests/test_clock.py::test_a_flash_dump_is_answered_in_the_turn_the_link_is_held_at_and_moves_no_time`,
+     `tests/test_flash_snapshot.py::test_boots_read_as_the_current_value_with_the_board_s_time_unmoved`
+- **191.** With `--flash-out`, a run that ends at `--max-seconds`, on `stop`, in the emulator, on a
+     protocol error or with the peer gone leaves the file, in place by the time `stats` has come; a
+     file that cannot be written changes no exit code.
+     `runner/src/session/tests.rs::every_end_of_a_run_leaves_the_flash_in_the_file`,
+     `runner/src/session/tests.rs::a_flash_dump_that_cannot_be_written_says_why_and_the_run_goes_on`,
+     `tests/test_runner_link.py::test_the_file_is_there_once_stats_have_come_whatever_ended_the_run`
+- **192.** `board.flash()` reads the current value after a reset, after a power-off and after
+     `RunEnded`; a read in a turn removes the file, so a run that later leaves none says so.
+     `tests/test_flash_snapshot.py::test_boots_read_as_the_current_value_with_the_board_s_time_unmoved`,
+     `tests/test_flash_snapshot.py::test_boots_read_after_a_power_off_and_while_the_board_stays_off`,
+     `tests/test_flash_snapshot.py::test_boots_read_after_the_run_has_ended`,
+     `tests/test_flash_snapshot.py::test_a_run_that_left_no_flash_says_so_and_a_read_of_a_turn_leaves_no_file`
+- **193.** The NVS reader reads what `nvs_get_*` would find: pages by sequence number, only entries
+     the bitmap says are written and whose CRCs hold, the later of two writes of a key, a blob only
+     with all of its chunks, without the partial copy of a page being freed, and never a broken
+     item's data as entries. What `nvs_image` writes it reads back, with every type.
+     `tests/test_flash.py::test_pages_are_read_by_sequence_number_not_by_their_place_in_the_partition`,
+     `tests/test_flash.py::test_the_state_bitmap_decides_what_is_there`,
+     `tests/test_flash.py::test_a_key_written_twice_reads_as_the_later_write`,
+     `tests/test_flash.py::test_a_string_whose_span_or_data_is_incomplete_is_not_there`,
+     `tests/test_flash.py::test_the_data_of_a_string_or_a_blob_is_never_read_as_entries`,
+     `tests/test_flash.py::test_an_entry_whose_header_is_inconsistent_is_one_entry_of_nothing`,
+     `tests/test_flash.py::test_a_blob_needs_all_of_its_chunks_and_a_new_version_replaces_the_old`,
+     `tests/test_flash.py::test_the_partial_copy_of_a_page_being_freed_is_dropped`,
+     `tests/test_flash.py::test_a_round_trip_through_the_generator_reads_what_went_in`
+- **194.** `ota()` selects as `esp_ota_get_boot_partition()` does: the highest valid `seq`, over the
+     slots from `ota_0` to the first gap, an entry in state `invalid` or `aborted` or with a broken CRC
+     left out, else the factory app or the first slot. Through an update and a rollback it matches
+     what the firmware reports. It says what the OTA data selects now: a power cycle while an entry
+     is `pending_verify` boots the slot before it, and the entry then reads `aborted`.
+     `tests/test_flash.py::test_ota_boots_the_slot_of_the_highest_valid_sequence`,
+     `tests/test_flash.py::test_ota_leaves_out_an_entry_that_failed`,
+     `tests/test_flash.py::test_ota_leaves_out_an_entry_whose_crc_fails_and_names_a_state_it_does_not_know`,
+     `tests/test_flash.py::test_ota_with_erased_data_boots_the_factory_app_or_the_first_slot`,
+     `tests/test_flash.py::test_ota_counts_the_slots_from_ota_0_to_the_first_gap_as_esp_idf_does`,
+     `tests/test_ota_state.py::test_the_ota_state_read_matches_what_the_firmware_reports`,
+     `tests/test_ota_state.py::test_a_power_cycle_before_the_app_confirms_itself_boots_the_slot_before_it`
+
 ## The real source
 
 - **155.** A `real` source hands over what the port gave stamped with the turn's time, promises no

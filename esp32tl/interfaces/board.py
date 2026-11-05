@@ -8,8 +8,8 @@ from functools import cached_property
 from pathlib import Path
 from typing import TypeVar, cast
 
-from esp32tl import flash
 from esp32tl.boards import BoardProfile
+from esp32tl.flash import FlashSnapshot, Namespaces
 from esp32tl.interfaces.console import Clocked, Console
 from esp32tl.interfaces.gnss import Gnss
 from esp32tl.interfaces.lines import Lines
@@ -162,7 +162,10 @@ class Board(ABC):
     ) -> T: ...
 
     @abstractmethod
-    def nvs(self, namespaces: flash.Namespaces, partition: str = "nvs") -> None: ...
+    def nvs(self, namespaces: Namespaces, partition: str = "nvs") -> None: ...
+
+    @abstractmethod
+    def flash(self) -> FlashSnapshot: ...
 
     @abstractmethod
     def tap_console(self, path: str | Path) -> Tap: ...

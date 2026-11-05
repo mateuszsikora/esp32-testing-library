@@ -255,12 +255,24 @@ line on stderr, and an `Item::SdCard { cycle, image, error }` on `pending`, whic
 `process_pending` sends as `sd_card_ack` in its `t` order, with no `seq`
 ([protocol 5.19](../protocol.md#519-sd_card-and-sd_card_ack-ext-106)).
 
+With `--flash-out`, `Options.flash_out` is the path. `Session::take_turn` answers `flash_dump` where
+it reads it, without queueing anything: `write_flash` writes `Guest::flash` to `PATH.partial` and
+renames it, and `protocol::flash_dump_ack` goes out at the turn's `b`, flushed, with the error's text
+if there is one; the loop goes on reading the same turn, with a new deadline, since the write was
+not the peer's time. No slice runs, and
+what the turn has read so far stays unapplied until its `wait`. Without the flag it is a protocol
+error. `Session::run` calls `write_flash_at_end` after `drive` has returned and before `finish` sends
+`stats`, whatever `End` it holds, `End::PeerGone` included; `main` does the same after a run without
+`--board`. It logs a failure to stderr and returns nothing, so the exit code stays the first cause's
+([protocol 5.21](../protocol.md#521-flash_dump-and-flash_dump_ack-ext-131)).
+
 `Session` runs the protocol over two traits, `Guest` (the machine: cycles, `run_until`,
 `chip_reset`, `power_on_reset`, `idle_until`, `uart_route`, `rx_pending`, `uart_input`,
 `gpio_drive`, `take_gpio_inputs`, and for Wi-Fi `take_eth_frames`, `eth_input`,
 `wifi_access_point`, `wifi_leave`, `wifi_drops` and `wifi_forget`, whose defaults are a chip
 without Wi-Fi: no frames, nothing taken, nothing attached, left at once, no drops, nothing to
-forget) and
+forget, and `flash`, for `--flash-out`, whose default is an empty slice and which reads `bus.flash`
+on the machine) and
 `Link` (the socket: `send`, `flush`, `idle`, `closing`, `recv`), so that its tests drive it with a
 scripted guest and a fake peer. `impl Guest for esp32::Machine` sets `max_cycles` and calls
 `run(u64::MAX)`, calls `reboot()` for `chip_reset`, reads `bus.periph.uart_route(port)` and
@@ -695,7 +707,16 @@ against a `FakePeer` whose `wait_until` returns at once and records the instant 
 `a_turn_held_before_pacing_starts_does_not_count_against_the_wall_clock`,
 `a_resync_moves_the_wall_clock_to_the_boundary_it_is_seen_at`,
 `a_board_switched_off_before_pacing_starts_starts_it_when_the_guest_runs_again` and
-`a_signal_or_the_peer_gone_ends_the_wait_for_wall_time`. The rest:
+`a_signal_or_the_peer_gone_ends_the_wait_for_wall_time`. `--flash-out` is covered in
+`runner/src/session/tests.rs` by `a_flash_dump_writes_the_flash_of_the_turn_and_the_turn_goes_on`,
+a guest that programs a byte between two dumps;
+`a_flash_dump_moves_no_time_and_runs_no_guest`;
+`each_flash_dump_ack_starts_the_peer_timeout_again`;
+`a_flash_dump_that_cannot_be_written_says_why_and_the_run_goes_on`;
+`a_flash_dump_without_flash_out_is_a_protocol_error`; and
+`every_end_of_a_run_leaves_the_flash_in_the_file`, with exit codes 0, 1, 3 and 4; and in
+`tests/test_runner_link.py`, against the real binary, which also checks that the file is there once
+`stats` has come, and that a run without `--board` writes it. The rest:
 
 - `runner/src/cli/tests.rs`: `cli::parse` only. `minimal_command_line` checks the defaults
   (`rom: None`, flash 4 MiB, PSRAM 0, console `Stdout`, no board, `--peer-timeout` 60 s);

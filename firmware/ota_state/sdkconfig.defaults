@@ -1,0 +1,5 @@
+# A factory app and two OTA slots, 1 MiB each, on the 4 MiB flash the runner gives by default.
+CONFIG_PARTITION_TABLE_TWO_OTA=y
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+# A new app boots as pending_verify, and may mark itself valid or roll back.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y

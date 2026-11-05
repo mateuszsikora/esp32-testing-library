@@ -22,11 +22,21 @@ void app_main(void)
     ESP_ERROR_CHECK(nvs_get_u32(config, "count", &count));
     int32_t delta;
     ESP_ERROR_CHECK(nvs_get_i32(config, "delta", &delta));
+    int8_t small;
+    ESP_ERROR_CHECK(nvs_get_i8(config, "small", &small));
+    int16_t medium;
+    ESP_ERROR_CHECK(nvs_get_i16(config, "medium", &medium));
+    uint64_t total;
+    ESP_ERROR_CHECK(nvs_get_u64(config, "total", &total));
+    int64_t offset;
+    ESP_ERROR_CHECK(nvs_get_i64(config, "offset", &offset));
     uint8_t blob[256];
     size = sizeof(blob);
     ESP_ERROR_CHECK(nvs_get_blob(config, "broker_ca", blob, &size));
     printf("nvs_reader: host=%s port=%" PRIu16 " enabled=%" PRIu8
            " count=%" PRIu32 " delta=%" PRId32 "\n", host, port, enabled, count, delta);
+    printf("nvs_reader: small=%" PRId8 " medium=%" PRId16 " total=%" PRIu64 " offset=%" PRId64 "\n",
+           small, medium, total, offset);
     printf("nvs_reader: blob=");
     for (size_t i = 0; i < size; ++i) {
         printf("%02x", blob[i]);

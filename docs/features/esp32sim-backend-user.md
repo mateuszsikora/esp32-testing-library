@@ -51,7 +51,9 @@ One runner serves the whole test, from the first `power_on()` to teardown. `boar
 calls them, and the run goes on through them on the same clock
 ([resets and power cycles](pytest-plugin-user.md#resets-and-power-cycles)). The flash the firmware
 writes to, NVS and OTA data among them, is the runner's copy of the build's files: a power cycle
-keeps it, and the build's files are never written. The card in the slot is the test's image file,
+keeps it, and the build's files are never written. The test reads it with
+[`board.flash()`](flash-contents-user.md#read-the-flash-of-a-run), while the board stands still and
+after the run. The card in the slot is the test's image file,
 which keeps what the firmware wrote through every reset and power cycle; with the supply off the
 card loses its power, and the firmware's driver has to mount it again. Each reset goes into the
 run's log as `boot N: REASON (reset cause C)`, and into the link's statistics as one of its

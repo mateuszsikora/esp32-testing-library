@@ -79,6 +79,14 @@ so the test overrides any NVS image the build supplies. The call adds
 `the NVS partition 'NAME'` so a passing test that never powers on fails teardown.
 [Flash contents](flash-contents-technical.md) owns the formats and failures.
 
+**`Esp32Sim.flash()`** raises `BoardOff` before the first `power_on`, reads the build's table through
+`_partition_table`, the helper `nvs` shares, and asks `HeldClock.dump_flash` for the file of
+`--flash-out`, `flash.bin` beside the link's socket: in a held turn the runner writes it on the link's
+`flash_dump`, and once the run has ended the file is what the runner wrote at its end. A read of a
+turn's file removes it, so a runner that dies later leaves no stale one. The backend passes the flag
+to every run: 4 MiB written at the end of each, gone with the socket's directory in `_close_link`.
+[Flash contents](flash-contents-technical.md#data-flow) has the exchange.
+
 **`Esp32Sim.power_on(utc=None)`** raises `BoardOff` when the supply is on
 (`the board is on already: call board.power_off() first`). After a `power_off`, with the runner
 started, it switches the supply back on (below), and refuses a `utc` with a `ValueError`. The
@@ -92,7 +100,7 @@ or `POWER_ON_UTC`, for `Esp32Sim.utc` and the GNSS receiver's dates, and logs
    is `SUN_PATH_MAX` (104) bytes or longer, and listens with a backlog of 1. It binds before the
    runner starts, because the runner connects once (protocol §1).
 2. **`runner_command(runner, rom, app, HELD_MAX_SECONDS, link, held=True, psram_mb=profile.psram_mb)`** builds
-   `[runner, "--chip", "esp32", "--rom", rom, "--max-seconds", "86400", "--console", "both", "--peer-timeout", "0", "--board", "socket:<link>", "--flash-at", "0x1000=<path>", ..., "--psram-mb", "<psram_mb>"]`,
+   `[runner, "--chip", "esp32", "--rom", rom, "--max-seconds", "86400", "--console", "both", "--peer-timeout", "0", "--board", "socket:<link>", "--flash-at", "0x1000=<path>", ..., "--psram-mb", "<psram_mb>", "--flash-out", "<beside the link>/flash.bin"]`,
    one `--flash-at {offset:#x}={file_path}` per entry of `app.flash_files`, which `IdfApp` sorts by
    offset; the paths are absolute. `--psram-mb` is the board profile's `psram_mb`, `0` on
    `esp32-devkitc` and `4` on `lilygo-t-a7670g-r2`; a profile without `psram_mb` leaves the pair
@@ -182,7 +190,9 @@ the turn, sets `_held`, wakes the test, and waits on a condition variable until 
 `_until`, how far the run may go, or the clock is stopped or ended. It returns `_until`, which the
 link adds to the turn's bounds as `the test's clock`, or `None`, on which the link answers the
 turn with `stop`. So the runner stands still in every turn for as long as the test does not wait.
-The test's side runs in the test's thread:
+`turn` may also return `FlashDump`, when the test has asked for the flash: the link sends it, and
+gives the answer to `dumped(ack)`, which holds the same turn on, and neither moves the board's time
+nor counts a turn. The test's side runs in the test's thread:
 
 - `wait(duration)` first waits until the link is held at a turn (from power-on to the runner's
   first `sync` the runner loads its images), then, until `now` reaches `now + duration`, sets
@@ -387,6 +397,7 @@ repository makes.
 | `Esp32Sim(dut, app_path, msg_queue, meta, profile, directory=None, skip=None, *, build_dir=None)` | The board, off. Attributes: `name = "esp32sim"`, `clock` (`"emulated-fifo-write"`, or `"wall"` with a real source on a route: the clock the runner's `hello` must name, a replayed recording must be on, and a tap's recording is on), `dut`, `profile` (the `BoardProfile`), `directory`, `app` (the `IdfApp`), `console_output` (a `bytearray`), `console_lines` (a `ConsoleLines`), `log` (the `RunLog`), `process` (the `RunnerPopen`, `None` until power-on), `link` (the `BoardLink`, complete once `close` returns) |
 | `Esp32Sim.power_on(utc=None)` | The first time, starts the runner; after `power_off`, switches the supply back on (no `utc`); `BoardOff` with the supply on |
 | `Esp32Sim.power_off()`, `Esp32Sim.reset()` | The supply off; a pulse of EN. Both at the held clock's `now`, sent with the turn the link is held at; `BoardOff` when the board is not in the state they need, `RunEnded` once the run has ended |
+| `Esp32Sim.flash()` | A `FlashSnapshot` of the runner's flash at the board's time now, or as the run left it; `BoardOff` before the first `power_on` |
 | `Esp32Sim.powered`, `Esp32Sim.started` | Whether the supply is on, from `power_on` to `power_off`; whether `power_on` has started the runner |
 | `Esp32Sim.boots`, `Esp32Sim.boot` | The chip's boots as `Boot`s, the first at 0 with cause 1 and one per `reset` the link has read; the last. `BoardOff` before the first `power_on` |
 | `Esp32Sim.wait(duration)`, `Esp32Sim.wait_until(condition, *, within)`, `Esp32Sim.wait_on_clock(condition, within, description)` | The test's waits, each a `Duration` of the board's time, logged as steps of the test |
@@ -399,14 +410,14 @@ repository makes.
 | `Esp32Sim.close()` | Ends the run and writes the taps; raises `BackendError` for a tap that cannot be written, a failing exit code, a killed runner or a link error |
 | `Esp32Sim.report(run=False)`, `Esp32Sim.properties()` | The `esp32sim link` report section, with the run on the board's clock when `run`; the `esp32sim_link` user property's data |
 | `BackendError` | What keeps the backend from starting, or a failing end |
-| `HeldClock(step=STEP_NS)` | `esp32tl/backends/clock.py`: the link's `Hold`, `turn(now)`; `stop()`, `end(reason, at=None)`; the test's `now`, `wait(ns)`, `wait_until(condition, within_ns, description)`, and `check(step)`, which raises `RunEnded` (`the run ended {when} before {step}: {reason}`) once the run has ended |
+| `HeldClock(step=STEP_NS)` | `esp32tl/backends/clock.py`: the link's `Hold`, `turn(now)`, `dumped(ack)`; `stop()`, `end(reason, at=None)`; the test's `now`, `wait(ns)`, `wait_until(condition, within_ns, description)`, `dump_flash()`, which returns the runner's `FlashDumpAck`, or `None` once the run has ended, and `check(step)`, which raises `RunEnded` (`the run ended {when} before {step}: {reason}`) once the run has ended |
 | `nanoseconds(value, what)`, `seconds(ns)` | `esp32tl/backends/clock.py`: a `Duration` of the board's time to nanoseconds, checked; nanoseconds shown as `12.5 s`, as `str(Duration(ns))` |
 | `listen()` | The listening socket and its path, or `BackendError` |
 | `runner_path()`, `rom_path()` | The runner and the ROM ELF, or `BackendError` |
 | `load_app(app_path, *, build_dir=None, backend="esp32sim")` | The checked `IdfApp` of the selected directory (default `<app_path>/build`); `backend` chooses target/encryption error wording |
 | `profile_uart(profile, interface, *, clock, directory, asked=..., log=None, files=None)` | The `Uart` on the route the profile gives `interface` (`uart.gnss`), at its pins and baud; `BackendError` when the profile has no such route. The [`esp32tl` command](cli-user.md) makes its UARTs with it |
 | `route_wire(profile, interface)` | The `Wire` of that route, or the same `BackendError`; `Esp32Sim` makes its `Uart`s and its `Gnss` on it |
-| `runner_command(runner, rom, app, max_seconds, link, *, held=False, psram_mb=None, sd_card=None, extra_flash=(), wifi=None)` | The runner's argument list; with `psram_mb`, `--psram-mb` of that size; with an `SdCard` holding a card, the runner's card on its pins; with a `Wifi` holding an access point, `--wifi` and `--wifi-nearby` |
+| `runner_command(runner, rom, app, max_seconds, link, *, held=False, psram_mb=None, sd_card=None, extra_flash=(), wifi=None, realtime=False, flash_out=None)` | The runner's argument list; with `psram_mb`, `--psram-mb` of that size; with an `SdCard` holding a card, the runner's card on its pins; with a `Wifi` holding an access point, `--wifi` and `--wifi-nearby`; with `realtime`, `--realtime`; with `flash_out`, `--flash-out` |
 | `Esp32Sim.wifi` | The chip's `Wifi`, on the link from construction |
 | `RunnerPopen(msg_queue, cmd, meta)` | `DuplicateStdoutPopen` that closes its log when the start fails |
 | `refuse(reason)` | Raises `SourceError(reason)`: `Esp32Sim`'s `skip` outside pytest |
@@ -572,6 +583,8 @@ without a card, through `board.reset()` with one, and through a power cycle with
 causes, NVS, RTC and RAM counts and the card's
 lines the firmware prints, `boots`, `now` across the power-off, every `BoardOff` and the `utc`
 refusal, and that the build's flash files are unchanged.
+`tests/test_flash_snapshot.py` reads what the same firmware wrote, with `board.flash()`, after a
+reset, after a power-off and after the end of the run.
 `tests/test_modem_fixture.py::test_the_modem_keeps_its_power_through_a_reset_and_loses_it_with_the_board`,
 `tests/test_nmea_reader_model.py::test_the_receiver_loses_its_power_with_the_board_and_keeps_its_fix`
 and `tests/test_http_request.py::test_joins_again_after_a_reset_or_a_power_cycle` check what the

@@ -196,6 +196,9 @@ def test_serial_capabilities_skip_at_the_call(pytester: pytest.Pytester, local: 
             sd_card.remove()
         def test_nvs(board):
             board.nvs({"config": {"host": "test"}})
+
+        def test_flash(board):
+            board.flash()
         @pytest.mark.board_profile("lilygo-t-a7670g-r2")
         def test_modem_model(modem):
             modem.signal(dbm=-73)
@@ -243,7 +246,7 @@ def test_serial_capabilities_skip_at_the_call(pytester: pytest.Pytester, local: 
     """)
     )
     result = run_serial(pytester, "-rs")
-    result.assert_outcomes(skipped=23)
+    result.assert_outcomes(skipped=24)
     result.stdout.fnmatch_lines(
         [
             "*serial: uart.gnss takes no model source on this backend, only real*",
@@ -253,6 +256,7 @@ def test_serial_capabilities_skip_at_the_call(pytester: pytest.Pytester, local: 
             " port goes there on the emulator only*",
             "*serial: sd_card takes no model source on this backend, only real*",
             "*serial: NVS contents cannot be configured on this backend*",
+            "*serial: flash contents cannot be read on this backend*",
             "*serial: uart.modem takes no model source on this backend, only real*",
             "*serial: uart.modem takes no replay source on this backend, only real*",
             "*serial: uart.modem cannot be tapped on this backend*",

@@ -28,6 +28,10 @@ runner sends is kept in `resets`, in order, and given to `on_reset`.
 What the runner reports of the SD card's fault rules (`sd_op`) goes to the same interface, which
 alone may send `sd_fault` and `sd_clear`.
 
+A hold may also ask for the flash (`flash_dump`, 5.21) in the turn it holds: the link sends the
+message, reads to the runner's `flash_dump_ack` and gives it to the hold, which holds the same
+turn on.
+
 Warnings and the run's `stats` are kept for the test report. What the harness finds wrong with
 the run is kept in `error`, the first cause only; the harness then ends the run with `stop` at the
 runner's next turn, and still reads to end of file. A `frm_err` warning is such an error: bytes
@@ -49,6 +53,8 @@ from esp32tl.link.protocol import (
     EthRx,
     EthTx,
     Event,
+    FlashDump,
+    FlashDumpAck,
     GpioIn,
     GpioOut,
     HarnessMessage,
@@ -206,10 +212,16 @@ class Interface:
 class Hold(Protocol):
     """What holds the run in the harness's turns: the test's clock."""
 
-    def turn(self, now: int) -> int | None:
+    def turn(self, now: int) -> int | FlashDump | None:
         """Called at the start of the turn at `now`, before the interfaces are polled; returns,
         once the run may go on, the latest time of the next turn, later than `now`, or `None`
-        to end the run with `stop` in this turn."""
+        to end the run with `stop` in this turn. Or `FlashDump`, for the link to ask the runner
+        for the flash in this turn, and call `dumped` with its answer."""
+        ...
+
+    def dumped(self, ack: FlashDumpAck) -> int | FlashDump | None:
+        """The runner has answered the `FlashDump` that `turn`, or this, returned; returns as
+        `turn` does, in the same turn."""
         ...
 
 
@@ -288,6 +300,8 @@ class BoardLink:
         self.error: str | None = None
         self.error_traceback: str | None = None
         self.connected = False
+        # The turn a `flash_dump` is out in, until the runner answers it.
+        self._dumping: int | None = None
         self._seq = 0
         self._t = 0
         self._stopped = False
@@ -345,7 +359,7 @@ class BoardLink:
                     # for a turn that never ends.
                     self._fail(f"the harness cannot encode its turn: {_raised(error)}", error)
                     payload = b""
-                    if isinstance(message, Sync) and not self._stopped:
+                    if self._awaits_answer(message):
                         self._stopped = True
                         payload = encode(Stop())
                 if payload:
@@ -368,10 +382,15 @@ class BoardLink:
             # A fault of the harness's own: it fails the link all the same, so that the runner
             # is not left waiting for a turn that never ends.
             self._fail(f"the harness failed on {message.TYPE}: {_raised(error)}", error)
-        if isinstance(message, Sync) and not self._stopped:
+        if self._awaits_answer(message):
             self._stopped = True
             return [Stop()]
         return []
+
+    def _awaits_answer(self, message: RunnerMessage) -> bool:
+        """Whether the runner stays in the turn after `message` until the harness writes, and the
+        harness has not stopped the run yet: a turn left without an answer never ends."""
+        return isinstance(message, Sync | FlashDumpAck) and not self._stopped
 
     def _receive(self, message: RunnerMessage) -> list[HarnessMessage]:
         if self.stats is not None:
@@ -399,7 +418,7 @@ class BoardLink:
             self.stats = message
         if self.error is not None:
             # Only the end of the run is of interest now.
-            if isinstance(message, Sync) and not self._stopped:
+            if self._awaits_answer(message):
                 self._stopped = True
                 return [Stop()]
             return []
@@ -453,6 +472,8 @@ class BoardLink:
                 card.sd_op(message)
         elif isinstance(message, Sync):
             return self._turn(message.t)
+        elif isinstance(message, FlashDumpAck):
+            return self._flash_dumped(message)
         elif isinstance(message, Reset):
             # The interfaces need nothing of it: the board persists across it (5.5), and the
             # routes and pins it resets come again as uart_cfg and gpio_out.
@@ -555,14 +576,34 @@ class BoardLink:
         for interface in self.interfaces:
             with calling(interface.name, "arrive"):
                 interface.arrive(now)
-        bounds: list[tuple[str, int | None]] = []
-        if self.hold is not None:
-            with calling(HOLD, "turn"):
-                bound = self.hold.turn(now)
-            if bound is None:
-                self._stopped = True
-                return [Stop()]
-            bounds.append((HOLD, bound))
+        if self.hold is None:
+            return self._end_turn(now, None)
+        with calling(HOLD, "turn"):
+            bound = self.hold.turn(now)
+        return self._held(now, bound)
+
+    def _flash_dumped(self, ack: FlashDumpAck) -> list[HarnessMessage]:
+        """The runner has answered a `flash_dump`, and is still in the turn it came in."""
+        now, self._dumping = self._dumping, None
+        if now is None or self.hold is None:
+            raise LinkError("the runner sent flash_dump_ack, and the harness asked for none")
+        with calling(HOLD, "dumped"):
+            bound = self.hold.dumped(ack)
+        return self._held(now, bound)
+
+    def _held(self, now: int, bound: int | FlashDump | None) -> list[HarnessMessage]:
+        """What the hold returned of the turn at `now`, once the run may go on."""
+        if isinstance(bound, FlashDump):
+            self._dumping = now
+            return [bound]
+        if bound is None:
+            self._stopped = True
+            return [Stop()]
+        return self._end_turn(now, bound)
+
+    def _end_turn(self, now: int, hold: int | None) -> list[HarnessMessage]:
+        """The inputs of the turn at `now`, then the `wait`, bounded by `hold`, if any."""
+        bounds: list[tuple[str, int | None]] = [(HOLD, hold)] if hold is not None else []
         board, self._board_inputs = self._board_inputs, []
         for switch in board:
             if switch.t < now:

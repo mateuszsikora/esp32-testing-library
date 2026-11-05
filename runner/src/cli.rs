@@ -35,6 +35,8 @@ usage: esp32tl-runner --chip esp32 --flash-at OFFSET=FILE... --max-seconds S [op
                         needs --wifi
   --realtime            pace the run to wall time, for a real device at the peer's end
                         of a route (docs/protocol.md, section 12): needs --board
+  --flash-out PATH      write the whole flash to PATH when the peer's flash_dump asks for
+                        it, and at the end of the run (docs/protocol.md, section 5.21)
 ";
 
 /// Where the peer is (protocol §1).
@@ -82,6 +84,8 @@ pub struct Opts {
     pub wifi: Option<Wifi>,
     /// `--realtime`.
     pub realtime: bool,
+    /// `--flash-out`.
+    pub flash_out: Option<PathBuf>,
 }
 
 /// esp32sim's virtual access point (`--wifi`), as esp32sim parses it, and the networks around
@@ -128,6 +132,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Opts, Error> {
         sd_card: None,
         wifi: None,
         realtime: false,
+        flash_out: None,
     };
     let mut sd_image = None;
     let mut sd_wiring = None;
@@ -216,6 +221,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Opts, Error> {
             }
             "--wifi-nearby" => nearby.push(value()?),
             "--realtime" => opts.realtime = true,
+            "--flash-out" => opts.flash_out = Some(PathBuf::from(value()?)),
             "-h" | "--help" => return Err(Error::Help),
             _ => return Err(usage(format!("unknown argument {flag:?}"))),
         }

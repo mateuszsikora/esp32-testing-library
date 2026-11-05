@@ -40,6 +40,7 @@ whatever `FIRMWARE_OUT` the shell exports, because the tests read the images the
 | `mqtt_session` | `firmware/mqtt_session`: esp-mqtt with CleanSession=0 over the LilyGO modem route, which prints Session Present and each message's DUP, and publishes a QoS 1 backlog on command ([below](#mqtt_session)) |
 | `http_request` | ESP-IDF's `examples/protocols/http_request`, unmodified, with its default `sdkconfig`, for target `esp32`: joins a Wi-Fi access point and fetches `http://example.com/` over and over ([below](#http_request)) |
 | `persistence` | `firmware/persistence`: counts its boots in NVS, RTC memory, RAM and on an SD card, prints them with its reset reason, and restarts itself once ([below](#persistence)) |
+| `ota_state` | `firmware/ota_state`: copies its app to the next OTA slot, boots it, marks it valid, then does it again and rolls back, reporting its state at each step ([below](#ota_state)) |
 
 ## `modem_at`
 
@@ -90,11 +91,13 @@ the firmware's own timing.
 
 `nvs_reader` reads namespace `config` from the default `nvs` partition at boot, without
 writing or erasing it. Supply `broker_host` (string, at most 255 UTF-8 bytes), `broker_port`
-(`u16`), `enabled` (`u8`), `count` (`u32`), `delta` (`i32`) and `broker_ca` (binary, at most
-256 bytes) with [`board.nvs()`](flash-contents-user.md). It prints:
+(`u16`), `enabled` (`u8`), `count` (`u32`), `delta` (`i32`), `small` (`i8`), `medium` (`i16`),
+`total` (`u64`), `offset` (`i64`) and `broker_ca` (binary, at most 256 bytes) with
+[`board.nvs()`](flash-contents-user.md). It prints:
 
 ```text
 nvs_reader: host=broker.test port=8883 enabled=255 count=4294967295 delta=-2147483648
+nvs_reader: small=-128 medium=-32768 total=18446744073709551615 offset=-9223372036854775808
 nvs_reader: blob=00ff0d0a434180
 ```
 
@@ -121,7 +124,35 @@ persistence: boot=2 reason=3 rom=12 rtc=2 ram=2 sd=2 uptime_ms=63
 for core 0, `esp_rom_get_reset_reason(0)` (1 `POWERON_RESET`, 12 `SW_CPU_RESET`), and `uptime_ms`
 `esp_timer_get_time()` in milliseconds, the firmware's time since its boot. On the boot NVS counts
 as the first it prints `persistence: restarting` and calls `esp_restart()`; on every other boot it
-prints `persistence: done` and returns. `tests/test_power.py` runs it.
+prints `persistence: done` and returns. `tests/test_power.py` runs it, and
+`tests/test_flash_snapshot.py` reads `boots` from its flash.
+
+## `ota_state`
+
+`ota_state` goes through an OTA update and a rollback with no network, for the tests of
+[`snapshot.ota()`](flash-contents-user.md#read-the-flash-of-a-run). Build it with
+`firmware/build.sh ota_state`; `make firmware` and `make test` include it. Its table is ESP-IDF's
+`partitions_two_ota.csv`, a `factory` app and `ota_0` and `ota_1`, and rollback is on
+(`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`). At each step it prints one line, then stands still for
+200 ms for a test to read the flash:
+
+```text
+ota_state: booted running=factory boot=factory state=none
+ota_state: updated running=factory boot=ota_0 state=none
+ota_state: booted running=ota_0 boot=ota_0 state=pending_verify
+ota_state: marked_valid running=ota_0 boot=ota_0 state=valid
+ota_state: updated running=ota_0 boot=ota_1 state=valid
+ota_state: booted running=ota_1 boot=ota_1 state=pending_verify
+ota_state: rolling_back running=ota_1
+ota_state: booted running=ota_0 boot=ota_0 state=valid
+ota_state: done running=ota_0 boot=ota_0 state=valid
+```
+
+`running` is `esp_ota_get_running_partition()`, `boot` `esp_ota_get_boot_partition()`, and `state`
+the running image's `esp_ota_get_state_partition()`, `none` for the factory app, which has none. An
+`updated` line comes once the copy is in the next slot and selected, before it restarts. It stops at
+`done`. `tests/test_ota_state.py` runs it, also with a power cycle before `ota_1` has confirmed
+itself, which boots `ota_0`.
 
 ## `sdspi`
 
@@ -267,7 +298,8 @@ every image those are:
 |---|---|
 | `0x1000` | `bootloader/bootloader.bin` |
 | `0x8000` | `partition_table/partition-table.bin` |
-| `0x10000` | `IMAGE.bin` (`hello_world.bin`, `nmea_reader.bin`, `gpio_echo.bin`, `sd_remount.bin`, `modem_at.bin`, `modem_recovery.bin`, `nvs_reader.bin`, `pppos_client.bin`, `mqtt_session.bin`, `http_request.bin`), `sd_card.bin` for `sdspi` |
+| `0xd000` | `ota_data_initial.bin`, for `ota_state` only |
+| `0x10000` | `IMAGE.bin` (`hello_world.bin`, `nmea_reader.bin`, `gpio_echo.bin`, `sd_remount.bin`, `modem_at.bin`, `modem_recovery.bin`, `nvs_reader.bin`, `pppos_client.bin`, `mqtt_session.bin`, `http_request.bin`, `persistence.bin`, `ota_state.bin`), `sd_card.bin` for `sdspi` |
 
 and the ELF is `IMAGE.elf`, `sd_card.elf` for `sdspi`: the files take the project's name, and
 the `sdspi` example's project is called `sd_card`. Two more files say how the build was made:
@@ -315,7 +347,7 @@ The second one ends every finished build.
 
 `tests/test_firmware_images.py` reads `firmware/hello_world/build/`,
 `firmware/nmea_reader/build/`, `firmware/gpio_echo/build/`, `firmware/sdspi/build/`,
-`firmware/sd_remount/build/`, `firmware/nvs_reader/build/`, `firmware/modem_recovery/build/`, `firmware/pppos_client/build/`, `firmware/mqtt_session/build/` and `firmware/http_request/build/`,
+`firmware/sd_remount/build/`, `firmware/nvs_reader/build/`, `firmware/persistence/build/`, `firmware/ota_state/build/`, `firmware/modem_recovery/build/`, `firmware/pppos_client/build/`, `firmware/mqtt_session/build/` and `firmware/http_request/build/`,
 and for each:
 
 - passes on a build from the pinned container;
@@ -340,7 +372,7 @@ run `make firmware`.
 `firmware/build.sh` exits 1 with one of these on stderr, before writing anything, or with the exit
 code of `idf.py` when the build itself fails:
 
-- `firmware/build.sh: unknown image 'NAME'; the images are: hello_world nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request persistence`
+- `firmware/build.sh: unknown image 'NAME'; the images are: hello_world nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request persistence ota_state`
 - `firmware/build.sh: needs Docker, or IDF_LOCAL=1 to build with a local ESP-IDF`
 - `firmware/build.sh: the Docker daemon is not reachable ('docker info' failed); is Docker running?`
 - `firmware/build.sh: IDF_LOCAL=1 needs ESP-IDF in the environment: source $IDF_PATH/export.sh first`

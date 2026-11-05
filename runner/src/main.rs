@@ -20,6 +20,9 @@
 //! - 3: a protocol error by the peer;
 //! - 4: the peer is gone, or never answered the connection.
 //!
+//! With `--flash-out PATH` the end of the run writes the whole flash to `PATH` (protocol 5.21),
+//! unless the connection failed, the process panicked or a signal killed it.
+//!
 //! A usage error, or an input that cannot be loaded, exits 2 before the run starts, without the
 //! stop line. esp32sim exits 2 on a usage error too, but not on every bad input: it panics on a
 //! ROM ELF it cannot load.
@@ -82,6 +85,9 @@ fn main() -> ExitCode {
     let wall = std::time::Instant::now();
     let stop = run(&mut m);
     report_card(card.as_ref());
+    if let Some(path) = &opts.flash_out {
+        session::write_flash_at_end(path, &m.bus.flash);
+    }
     eprintln!(
         "esp32tl-runner: stop: {} at {:.6} s ({:.1} s wall, {} resets)",
         stop_name(&stop),
@@ -159,6 +165,7 @@ fn run_with_board(
             rom,
             card: card.clone(),
             realtime: opts.realtime,
+            flash_out: opts.flash_out.as_deref(),
         },
     );
     let (end, stats) = session.run();

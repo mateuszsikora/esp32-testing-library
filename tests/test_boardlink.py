@@ -17,6 +17,8 @@ from esp32tl.link.protocol import (
     Console,
     EthRx,
     EthTx,
+    FlashDump,
+    FlashDumpAck,
     GpioIn,
     GpioOut,
     HarnessHello,
@@ -398,6 +400,9 @@ def test_arrivals_come_before_the_hold_and_the_poll_after_it() -> None:
             order.append(f"hold {now}")
             return now + 100
 
+        def dumped(self, ack: FlashDumpAck) -> int | None:
+            return None
+
     link = BoardLink("esp32-devkitc", [Ordered()], hold=Hold())
     link.receive(HELLO)
     link.receive(Sync(0))
@@ -750,14 +755,19 @@ def test_pins_that_are_not_gpio_numbers_are_refused() -> None:
 class Holder:
     """A `Hold` that returns its `bounds` one per turn, after `entered` is set for the turn."""
 
-    def __init__(self, *bounds: int | None) -> None:
+    def __init__(self, *bounds: int | FlashDump | None) -> None:
         self.bounds = list(bounds)
         self.turns: list[int] = []
+        self.acks: list[FlashDumpAck] = []
         self.go = threading.Event()
 
-    def turn(self, now: int) -> int | None:
+    def turn(self, now: int) -> int | FlashDump | None:
         self.turns.append(now)
         assert self.go.wait(5)
+        return self.bounds.pop(0)
+
+    def dumped(self, ack: FlashDumpAck) -> int | FlashDump | None:
+        self.acks.append(ack)
         return self.bounds.pop(0)
 
 
@@ -804,10 +814,65 @@ def test_a_hold_that_raises_fails_the_link_naming_the_clock() -> None:
         def turn(self, now: int) -> int | None:
             raise RuntimeError("broken")
 
+        def dumped(self, ack: FlashDumpAck) -> int | None:
+            raise RuntimeError("broken")
+
     link = BoardLink("esp32-devkitc", hold=Broken())
     link.receive(HELLO)
     assert link.receive(Sync(0)) == [Stop()]
     assert link.error == "the test's clock.turn raised RuntimeError: broken"
+
+
+def test_a_hold_asks_for_the_flash_and_the_turn_goes_on_with_what_it_had_to_send() -> None:
+    gnss = Peer(schedule=[(5 * MS, b"$GPGGA\r\n")])
+    hold = Holder(FlashDump(), FlashDump(), 100 * MS)
+    hold.go.set()
+    link = BoardLink("esp32-devkitc", [gnss], hold=hold)
+    link.receive(HELLO)
+    link.receive(Sync(5 * MS))
+    # no input, no wait: nothing of the turn has gone out yet, and the interfaces wait for its end
+    assert link.turns == 1 and gnss.polls == []
+    assert link.receive(FlashDumpAck(5 * MS, "no space")) == [FlashDump()]
+    assert link.receive(FlashDumpAck(5 * MS)) == [
+        UartRx(5 * MS, 5, 9600, b"$GPGGA\r\n"),
+        Wait(0, 100 * MS, None),
+    ]
+    assert hold.acks == [FlashDumpAck(5 * MS, "no space"), FlashDumpAck(5 * MS)]
+    assert link.turns == 1 and hold.turns == [5 * MS] and gnss.polls == [5 * MS]
+    assert link.error is None
+
+
+def test_the_first_answer_of_a_turn_is_flash_dump_and_a_stop_can_follow_it() -> None:
+    hold = Holder(FlashDump(), None)
+    hold.go.set()
+    link = BoardLink("esp32-devkitc", hold=hold)
+    link.receive(HELLO)
+    assert link.receive(Sync(0)) == [FlashDump()]
+    assert link.receive(FlashDumpAck(0)) == [Stop()]
+    assert link.error is None
+
+
+def test_an_answer_the_harness_did_not_ask_for_fails_the_link() -> None:
+    link = BoardLink("esp32-devkitc", hold=Holder())
+    link.receive(HELLO)
+    # the runner waits in its turn all the same: the link ends it
+    assert link.receive(FlashDumpAck(0)) == [Stop()]
+    assert link.error == "the runner sent flash_dump_ack, and the harness asked for none"
+
+
+def test_a_hold_that_raises_on_the_answer_ends_the_turn_it_is_in() -> None:
+    class Broken:
+        def turn(self, now: int) -> FlashDump:
+            return FlashDump()
+
+        def dumped(self, ack: FlashDumpAck) -> int | None:
+            raise RuntimeError("broken")
+
+    link = BoardLink("esp32-devkitc", hold=Broken())
+    link.receive(HELLO)
+    assert link.receive(Sync(0)) == [FlashDump()]
+    assert link.receive(FlashDumpAck(0)) == [Stop()]
+    assert link.error == "the test's clock.dumped raised RuntimeError: broken"
 
 
 def test_console_messages_reach_the_console_s_reader() -> None:

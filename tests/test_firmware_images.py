@@ -185,6 +185,30 @@ def test_modem_recovery_has_the_classic_layout_and_ppp() -> None:
     assert app.sdkconfig["LWIP_PPP_SUPPORT"] is True
 
 
+def test_ota_state_has_a_factory_app_two_slots_and_the_initial_ota_data() -> None:
+    from esp32tl.flash import partitions
+
+    app = idf_app("ota_state")
+    assert app.target == "esp32"
+    table = next(
+        Path(f.file_path) for f in app.flash_files if f.file_path.endswith("partition-table.bin")
+    )
+    found = partitions(table.read_bytes())
+    assert [(p.name, p.type, p.subtype) for p in found.values()] == [
+        ("nvs", 1, 2),
+        ("otadata", 1, 0),
+        ("phy_init", 1, 1),
+        ("factory", 0, 0),
+        ("ota_0", 0, 0x10),
+        ("ota_1", 0, 0x11),
+    ]
+    # flashed erased: a first boot from the factory app, with no OTA entry
+    data = next(f for f in app.flash_files if f.offset == found["otadata"].offset)
+    assert Path(data.file_path).read_bytes() == b"\xff" * 0x2000
+    sdkconfig = (FIRMWARE / "ota_state" / "build" / "config" / "sdkconfig.json").read_text()
+    assert json.loads(sdkconfig)["BOOTLOADER_APP_ROLLBACK_ENABLE"] is True
+
+
 def test_pppos_client_has_the_classic_layout_and_lilygo_route() -> None:
     app = idf_app("pppos_client")
     build = FIRMWARE / "pppos_client" / "build"

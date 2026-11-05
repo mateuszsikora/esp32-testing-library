@@ -114,6 +114,11 @@ a replacement partition. See [flash contents](flash-contents-user.md).
 A test that supplies NVS and passes without calling `board.power_on()` fails teardown:
 it ran no firmware.
 
+From `board.power_on()` on, `board.flash()` returns an immutable copy of the flash: a partition by
+name, NVS in the shape `board.nvs` takes, and the OTA state. Reading it moves none of the board's
+time, works with the board off, and works after `RunEnded`. On serial it skips.
+See [read the flash of a run](flash-contents-user.md#read-the-flash-of-a-run).
+
 What the backend needs besides the build, the runner and the ROM ELF, is in
 [the esp32sim backend](esp32sim-backend-user.md#what-it-needs).
 
@@ -240,7 +245,8 @@ def test_the_count_survives_a_power_cut(board: Board):
   is the world's time at the first power-on; it has run on since, and the board's clock with it`.
 - Sources and taps are still given before the first `power_on()` only:
   `SourceError: uart.gnss: the board has been on: give an interface its source before
-  board.power_on()`. So is `board.nvs()`.
+  board.power_on()`. So is `board.nvs()`. What the firmware wrote to flash, a test reads with
+  [`board.flash()`](flash-contents-user.md#read-the-flash-of-a-run), through both.
 - `board.boots` is the chip's boots, in order, as `Boot`s (`esp32tl.interfaces.board`): `number`,
   1 for the first; `at`, the board's time the boot started, a `Duration`; `cause`, the reset cause
   the ROM reports for it (`RESET_REASON` in ESP-IDF's `esp32/rom/rtc.h`); and `reason`, its name,

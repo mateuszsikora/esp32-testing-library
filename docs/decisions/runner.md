@@ -574,3 +574,42 @@ whatever its registers hold; bytes and frames for it are dropped and counted.
 
 **Rejected:** stopping the run loop until the supply comes back, because the peer's turns, and
 with them the test's waits and the models' times, would stop with it.
+
+## The flash reaches the harness through a file, not the socket
+
+Status: decided (#131)
+
+The runner writes the whole flash to the file of `--flash-out`, on the peer's `flash_dump` in a turn
+and on its own at the end of a run, and the harness reads the file
+([protocol 5.21](../protocol.md#521-flash_dump-and-flash_dump_ack-ext-131)). `--flash-at` and the SD
+card's image already assume a path both sides can read. The file is written through a rename, and
+before `stats`. The flash is read whole on every turn that asks, since a read of a 4 MiB file on a
+held board costs no emulated time, and a test does it a few times.
+
+**Rejected:** base64 chunks on the socket, because that is a second mechanism beside the file the
+end of a run needs: after `stats` the socket carries nothing more, and a guest that kept writing
+after the last turn would be out of reach. A partition's offset and size in `flash_dump`, because the
+harness has the table and the whole flash is one more `read_bytes` away.
+
+**Rejected:** writing the file only when a test asks, by a flag the test sets before power-on, because
+a test finds out after a failure what it wanted to read, and the cost is one 4 MiB write per run.
+
+## flash_dump keeps protocol version 1
+
+Status: decided (#131)
+
+`flash_dump` and `flash_dump_ack` add no version, as the SD card's messages did not: the runner sends
+the answer only to a peer that asked, and the two sides come from one checkout. The message has no `t`
+because it goes into no queue: the runner answers it where it reads it, in the turn.
+
+## board.flash() exchanges on the link's thread, in the turn
+
+Status: decided (#131)
+
+`HeldClock` makes the exchange: `turn` returns `FlashDump` to the link, which sends it and reads the
+answer as any other message, then calls `dumped` to hold the turn on. Only the link's thread touches
+the socket, and `BoardLink.run`'s one loop of reading and answering stays one loop.
+
+**Rejected:** the test's thread writing on the socket while the link is held, because the link would
+have to give up its reader for the time of an answer, and a read of a `flash_dump_ack` would race the
+link's next `readline`.

@@ -31,6 +31,10 @@ through a power-on reset. Its flash keeps what the firmware wrote, in the runner
 files are never written. The board's clock runs on from the first power-on whatever the board does,
 also while it is off; `boots` are the chip's boots, from the link's `reset` messages.
 
+`flash()` reads the runner's flash through a file, `--flash-out`, beside the link's socket: in a
+held turn the runner writes it on the link's `flash_dump` and the board's time does not move, and
+after the run the file is what the runner wrote as the run ended (protocol 5.21).
+
 What the test does on the board, what the firmware prints and the bytes on every route go into a
 `RunLog` (`esp32tl.report`), which the report of a test that failed shows after the link's.
 
@@ -50,6 +54,7 @@ import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import MappingProxyType
 from typing import NoReturn, TypeVar
 
 from pytest_embedded.dut import Dut
@@ -61,6 +66,7 @@ from esp32tl import flash, recording
 from esp32tl.backends.clock import HeldClock, nanoseconds, seconds
 from esp32tl.boards import BoardProfile, capabilities
 from esp32tl.boards.capabilities import CapabilityError, Request
+from esp32tl.flash import FlashSnapshot, Namespaces, Partition
 from esp32tl.interfaces import BoardOff, NeverHappened, RunEnded, SourceError
 from esp32tl.interfaces.board import POWERON_RESET, Board, Boot
 from esp32tl.interfaces.console import ConsoleLines
@@ -173,6 +179,7 @@ def runner_command(
     extra_flash: tuple[tuple[int, Path], ...] = (),
     wifi: Wifi | None = None,
     realtime: bool = False,
+    flash_out: Path | None = None,
 ) -> list[str]:
     """The runner's command line: every file of `flasher_args.json` at its offset, its board the
     socket at `link`. A `held` run is on the test's clock: its console also goes on the link, and
@@ -182,7 +189,8 @@ def runner_command(
     holding its image in it when the test has inserted one. `extra_flash` overrides the build's
     flash contents at the supplied offsets, in order. A `wifi` with an access point puts it, and
     the networks around, on the runner's air, with the network behind it on the link. A `realtime`
-    run is paced to wall time, for a real device at the far end of a route."""
+    run is paced to wall time, for a real device at the far end of a route. `flash_out` is the file
+    the runner writes the whole flash to when the link asks, and at the end of the run."""
     command = [str(runner), "--chip", "esp32", "--rom", str(rom), "--max-seconds", str(max_seconds)]
     if held:
         command += ["--console", "both", "--peer-timeout", "0"]
@@ -202,6 +210,8 @@ def runner_command(
         command += wifi.runner_args()
     if realtime:
         command.append("--realtime")
+    if flash_out is not None:
+        command += ["--flash-out", str(flash_out)]
     return command
 
 
@@ -495,25 +505,27 @@ class Esp32Sim(Board):
                     " compare times across clocks"
                 )
 
-    def nvs(self, namespaces: flash.Namespaces, partition: str = "nvs") -> None:
-        """Replace a named NVS partition with the test's values before power-on."""
-        if self.started:
-            raise BackendError("board.nvs: write the flash before board.power_on()")
+    def _partition_table(self, call: str) -> dict[str, Partition]:
+        """The build's partition table, by name; `call` names the board's call in the errors."""
         tables = [
             Path(f.file_path)
             for f in self.app.flash_files
             if Path(f.file_path).name == "partition-table.bin"
         ]
         if len(tables) != 1:
-            raise BackendError("board.nvs: the build must flash one partition-table.bin")
+            raise BackendError(f"{call}: the build must flash one partition-table.bin")
         try:
-            found = flash.partitions(tables[0].read_bytes())
+            return flash.partitions(tables[0].read_bytes())
         except (OSError, ValueError) as error:
-            raise BackendError(f"board.nvs: cannot read {tables[0]}: {error}") from error
+            raise BackendError(f"{call}: cannot read {tables[0]}: {error}") from error
+
+    def nvs(self, namespaces: Namespaces, partition: str = "nvs") -> None:
+        """Replace a named NVS partition with the test's values before power-on."""
+        if self.started:
+            raise BackendError("board.nvs: write the flash before board.power_on()")
+        found = self._partition_table("board.nvs")
         if partition not in found:
-            raise BackendError(
-                f"the build has no partition {partition!r}: it has {', '.join(found)}"
-            )
+            raise BackendError(flash.no_partition(partition, found))
         entry = found[partition]
         if (entry.type, entry.subtype) != (1, 2) or entry.flags:
             raise BackendError(
@@ -525,6 +537,33 @@ class Esp32Sim(Board):
         path.write_bytes(image)
         self._nvs[partition] = (entry.offset, path)
         self.log.test(0, f"board.nvs(partition={partition!r})")
+
+    def flash(self) -> FlashSnapshot:
+        """An immutable copy of the whole flash at this instant: at the turn the link is held at,
+        the board's time not moving, whether the board is on or off; once the run has ended, as
+        the run left it. Each read in a turn removes the file, so that a later end of the run that
+        wrote none says so. A runner that dies in the very turn it wrote one, before its answer
+        comes, leaves that file, and it is what the run left: the guest has not run since."""
+        if not self.started:
+            raise BoardOff(
+                "board.flash: read the flash after board.power_on(): until then it holds the build"
+                " and the test's NVS"
+            )
+        table = self._partition_table("board.flash")
+        ack = self._hold.dump_flash()
+        if ack is not None and ack.error is not None:
+            raise BackendError(f"board.flash: the runner cannot write the flash: {ack.error}")
+        try:
+            contents = self._flash_out.read_bytes()
+            if ack is not None:
+                self._flash_out.unlink()
+        except OSError as error:
+            raise BackendError(
+                f"board.flash: the run left no flash to read: {error.strerror}; its output is in"
+                f" {self.dut.logfile}"
+            ) from error
+        self.log.test(self._hold.now, "board.flash()")
+        return FlashSnapshot(contents, MappingProxyType(table))
 
     def set_up(self) -> list[str]:
         """What the test has set up that only a run uses: the sources it gave and the taps it
@@ -606,6 +645,8 @@ class Esp32Sim(Board):
         # Bound before the runner starts, which connects once (protocol §1).
         self._listener, self._socket = listen()
         self._conn: socket.socket | None = None
+        # Beside the socket, and gone with it: the whole flash, written once for every run.
+        self._flash_out = self._socket.parent / "flash.bin"
         command = runner_command(
             self._runner,
             self._rom,
@@ -618,6 +659,7 @@ class Esp32Sim(Board):
             extra_flash=tuple(self._nvs.values()),
             wifi=self._wifi,
             realtime=self.clock == recording.WALL,
+            flash_out=self._flash_out,
         )
         try:
             process = RunnerPopen(self._msg_queue, command, self._meta)

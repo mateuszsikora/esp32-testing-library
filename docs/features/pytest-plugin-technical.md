@@ -239,6 +239,11 @@ are in [models-technical.md](models-technical.md).
    `insert` also keeps the card's size in blocks, which `fail` and `delay` check `blocks` against
    ([the SD card's fault rules](#the-sd-cards-fault-rules)).
 
+`Board.flash()` is abstract, as `Board.nvs()` is: `Esp32Sim.flash` reads the runner's flash
+([flash contents](flash-contents-technical.md)), `Serial.flash` skips. The interface imports
+`FlashSnapshot` and `Namespaces` by name from `esp32tl.flash`, because inside the class `flash` is the
+method.
+
 `Console.tap` delegates to the backend's `tap_console`. Both backends reuse `Uart.tap`'s file
 checks for a console-only route and include it in teardown and the no-power-on guard. Serial's
 console properties drain the reader queue before returning; waits also drain before checking

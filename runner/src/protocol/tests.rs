@@ -434,3 +434,16 @@ fn the_esp32sim_revision_is_the_one_cargo_builds() {
         assert!(line.contains(&format!("rev = \"{ESP32SIM}\"")), "{line}");
     }
 }
+
+#[test]
+fn flash_dump_and_its_ack() {
+    assert_eq!(parse(r#"{"type":"flash_dump"}"#), Ok(Incoming::FlashDump));
+    assert_eq!(
+        flash_dump_ack(7, None),
+        r#"{"type":"flash_dump_ack","t":7,"error":null}"#
+    );
+    assert_eq!(
+        flash_dump_ack(7, Some(r#"a "b": no space"#)),
+        r#"{"type":"flash_dump_ack","t":7,"error":"a \"b\": no space"}"#
+    );
+}
