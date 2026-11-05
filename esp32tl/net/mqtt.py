@@ -8,7 +8,7 @@ from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from enum import IntEnum
-from typing import Literal
+from typing import Literal, TypeVar
 
 from esp32tl.net.condition import Condition
 from esp32tl.units import Duration
@@ -73,12 +73,16 @@ class Delivery:
 
 @dataclass(frozen=True)
 class SessionState:
-    """What `Broker.session` reports: a copy of the state at the call."""
+    """What `Broker.session` reports: the state at the call, in copies of its collections. The
+    `Delivery` records are the broker's own, so `acknowledged_at` still changes on them."""
 
     connected: bool
     subscriptions: dict[str, int]
     queued: tuple[Message, ...]
     unacknowledged: tuple[Delivery, ...]
+
+
+Record = TypeVar("Record", Message, Delivery)
 
 
 class Publication:
@@ -190,6 +194,14 @@ def matches(pattern: str, topic: str) -> bool:
     return len(p) == len(t)
 
 
+def _first(history: list[Record], topic: str, wanted: bytes | None, start: int) -> Record | None:
+    """The first record from `start` on this topic filter, with this payload if one is wanted."""
+    for record in history[start:]:
+        if matches(topic, record.topic) and (wanted is None or record.payload == wanted):
+            return record
+    return None
+
+
 def _string(data: bytes, at: int) -> tuple[str, int]:
     raw, end = _blob(data, at)
     text = raw.decode("utf-8")
@@ -287,7 +299,7 @@ class Broker:
         return False
 
     def session(self, client_id: str) -> SessionState | None:
-        """A copy of the state the broker has for this client ID now, or None."""
+        """The state the broker has for this client ID now, or None."""
         state = self._states.get(client_id)
         if state is None:
             return None
@@ -328,18 +340,12 @@ class Broker:
         description = f"the next MQTT message on {topic!r}" + (
             f" saying {wanted!r}" if wanted is not None else ""
         )
-        return Condition(lambda: self._find_message(topic, wanted, start), description, "MQTT")
+        return Condition(lambda: _first(self.messages, topic, wanted, start), description, "MQTT")
 
     def find_message(self, topic: str = "#", payload: bytes | str | None = None) -> Message | None:
         """Return the first match in recorded history now, or None; consume nothing."""
         wanted = payload.encode() if isinstance(payload, str) else payload
-        return self._find_message(topic, wanted, 0)
-
-    def _find_message(self, topic: str, wanted: bytes | None, start: int) -> Message | None:
-        for message in self.messages[start:]:
-            if matches(topic, message.topic) and (wanted is None or message.payload == wanted):
-                return message
-        return None
+        return _first(self.messages, topic, wanted, 0)
 
     def next_delivery(
         self, topic: str = "#", payload: bytes | str | None = None
@@ -351,20 +357,14 @@ class Broker:
         description = f"the next MQTT delivery on {topic!r}" + (
             f" saying {wanted!r}" if wanted is not None else ""
         )
-        return Condition(lambda: self._find_delivery(topic, wanted, start), description, "MQTT")
+        return Condition(lambda: _first(self.deliveries, topic, wanted, start), description, "MQTT")
 
     def find_delivery(
         self, topic: str = "#", payload: bytes | str | None = None
     ) -> Delivery | None:
         """Return the first match in the delivery history now, or None; consume nothing."""
         wanted = payload.encode() if isinstance(payload, str) else payload
-        return self._find_delivery(topic, wanted, 0)
-
-    def _find_delivery(self, topic: str, wanted: bytes | None, start: int) -> Delivery | None:
-        for delivery in self.deliveries[start:]:
-            if matches(topic, delivery.topic) and (wanted is None or delivery.payload == wanted):
-                return delivery
-        return None
+        return _first(self.deliveries, topic, wanted, 0)
 
     def subscribed(self, topic: str) -> Callable[[], bool]:
         """A live condition: an active client currently subscribes to exactly `topic`."""
@@ -445,7 +445,8 @@ class Broker:
         if not any(matches(f, message.topic) for f in state.subscriptions):
             return
         if state.connection is not None:
-            if not state.connection.deliver(message):
+            # A resumed session's queue may still be waiting for packet IDs: QoS 1 goes behind it.
+            if (state.queue and message.qos) or not state.connection.deliver(message):
                 state.queue.append(message)
         elif state.clean:
             return  # closed while this message was being routed: its state is gone
@@ -559,7 +560,8 @@ class _Session:
 
     def _resume(self) -> None:
         """What the session owes the client, after CONNACK: what it never acknowledged, with its
-        packet IDs and DUP (MQTT-4.4.0-1, MQTT-3.3.1-1), then the queue, in order (MQTT-4.6.0-6).
+        packet IDs and DUP (MQTT-4.4.0-1, MQTT-3.3.1-1), then the queue, in order (MQTT-4.6.0-6),
+        as far as packet IDs allow.
         The queue goes out as a first attempt to established subscriptions, DUP and RETAIN 0
         (MQTT-3.3.1-3, MQTT-3.3.1-9); what is sent again keeps the RETAIN it had."""
         state = self.state
@@ -568,7 +570,16 @@ class _Session:
             if self.closed:
                 return
             self._publish(sent.topic, sent.payload, sent.qos, packet_id, True, sent.retain)
-        while state.queue and not self.closed and self.deliver(state.queue[0]):
+        self._drain()
+
+    def _drain(self) -> None:
+        """Send the queue in order while a packet ID is free: each PUBACK frees one for the next.
+        Waiting, not closing: the client's PUBACKs could not reach a closed connection, and it
+        would get the same messages again on every connection."""
+        state = self.state
+        assert state is not None
+        while state.queue and not self.closed and len(state.unacked) < 65535:
+            self.deliver(state.queue[0])
             state.queue.popleft()
 
     def on_data(self, data: bytes) -> None:
@@ -810,7 +821,8 @@ class _Session:
                 filters.append(topic)
             broker._log(f"mqtt: {self.client_id} subscribed to {', '.join(filters)}")
             self.write(_packet(SUBACK, 0, packet_id + bytes(granted)))
-            for message in broker.retained.values():
+            # A copy: running out of packet IDs closes, and the Will can change what is retained.
+            for message in list(broker.retained.values()):
                 if any(matches(f, message.topic) for f in filters):
                     self.deliver(message, retained=True)
         elif kind == UNSUBSCRIBE:
@@ -839,6 +851,7 @@ class _Session:
             sent = self.state.sent.pop(packet_id, None)
             if sent is not None:
                 sent.acknowledged_at = now
+            self._drain()
         else:
             raise ValueError("unsupported MQTT packet")
 

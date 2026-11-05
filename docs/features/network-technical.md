@@ -58,6 +58,15 @@ after that turn, because `rtt >= latency`: that is the floor, and rule 2 of the
 `_arrive` first; at the default it runs inside `link.receive`, at the chunk's own `t`, as if there
 were no path.
 
+The test must see what has come up by the turn it holds. `BoardLink._turn` holds the turn before it
+polls, so a datagram taken in `poll` would be there only at the next step of the test's clock, with a
+stamp already behind `board.now`. So `_turn` first calls `Interface.arrive(now)` on each interface:
+`Uart.arrive` passes it to a source that is `Arriving`, `ModemModel.arrive` to its `Internet` in data
+mode, `Wifi.arrive` to its active network, and `Internet.arrive` runs `_arrive(now)`. Answers made
+there stay in `_out` until `poll`, after the hold, so what the test does in the turn comes after what
+the network took in it. The broker's own deadlines, keepalive and a delayed PUBACK, still run in
+`poll`, after the hold, as they did.
+
 Down: `Network`'s `send_ip` is `_downlink`, which notes the datagram's size in `_datagram` around
 `link.send_ip`. The link's `send` closure finds `_datagram` set, puts the framed bytes in `_down`
 with `_down.leaves`, and calls `_release`, which moves to `_out`, with their own stamps, those that
@@ -107,7 +116,9 @@ so two runs give the same stamps (`tests/test_determinism.py::test_mqtt_session_
   query ID and recursion-desired bit. IN A answers have TTL 60 and address `10.64.0.1`.
 - `ethernet.py`: Ethernet II without FCS, ARP and the hand-off to DHCP. `Ethernet.receive` drops
   frames under 14 bytes and frames from a multicast source, and learns `device_mac` from every
-  other frame. ARP (`0x0806`): only Ethernet/IPv4 requests of 28 bytes or more are read; each is
+  other frame. `_whole` cuts an IPv4 payload at its total length when that is possible (ESP-IDF's
+  frames carry 4 bytes more, [protocol 5.15](../protocol.md#515-eth_tx-and-eth_rx-ext-m7)), so that
+  the rate counts the datagram only. ARP (`0x0806`): only Ethernet/IPv4 requests of 28 bytes or more are read; each is
   answered with `GATEWAY_MAC` (`02:53:49:4d:00:02`, esp32sim's own network's gateway in
   `esp-soc/src/net/packet.rs`) unless its target is the `Dhcp.device` address (lwIP's RFC 5227
   probe before it takes the lease) or its sender's own address (an announcement). IPv4 (`0x0800`)
@@ -203,16 +214,19 @@ so two runs give the same stamps (`tests/test_determinism.py::test_mqtt_session_
   connection does, and the takeover ends it. After the takeover, CleanSession=1 replaces any
   `_State`, and CleanSession=0 makes one if there is none; `_connect` sets `state.connection`, writes
   CONNACK and, with Session Present, calls `_resume`: every entry of `state.sent`, in insertion
-  order with DUP set, then `state.queue` through `deliver`, each message leaving the queue only
-  once it has gone. `_route` calls `Broker._offer` for each `_State`: a connected one goes to
-  `deliver`, a stored one queues a message by the message's QoS or logs dropping it, and a clean
+  order with DUP set, then `_drain`, which sends `state.queue` through `deliver` while fewer than
+  65535 IDs are in use. Each PUBACK calls `_drain` again, so a queue longer than the IDs goes out as
+  they are freed, on a connection that stays open. `_route` calls `Broker._offer` for each `_State`: a connected one goes to
+  `deliver`, or for QoS 1 behind a queue still waiting for IDs, a stored one queues a message by the message's QoS or logs dropping it, and a clean
   one closed while routing takes nothing. `deliver` allocates from `state.packet_id`, skipping
   `state.unacked`, and `_publish` appends a `Delivery` and fills `state.sent` before it writes.
   When 65535 IDs are in use `_packet_id` logs `mqtt: <id> exhausted packet identifiers` and closes;
-  `deliver` returns `False` and the message stays queued for a stored session. PUBACK discards the
+  this is what a QoS 1 message for a connected client with no ID free and no queue meets, and
+  `deliver` returns `False`, so that it stays queued for a stored session. PUBACK discards the
   ID, pops `state.sent` and stamps that `Delivery`'s `acknowledged_at`; a connection already closed
   ignores its data, PUBACK included, in `on_data`. `_end` clears `state.connection` and removes a
-  `clean` state from `_states`. `session` copies a `_State` into a frozen `SessionState`;
+  `clean` state from `_states`. `session` copies a `_State`'s collections into a frozen
+  `SessionState`, whose `Delivery` records stay the broker's;
   `forget_session` refuses a connected one. Network reset retains both histories and the policy.
   Will is published once with the time
   of disconnect, not the time of CONNECT. A replacement client ID closes the old connection.
@@ -355,6 +369,9 @@ protocol-client tests.
 hand: the RTT from a request to its answer at odd nanoseconds, each direction's share, the rates
 each way, one datagram after another, a change that overtakes nothing, the floor's message, control
 traffic passing the queue, what a reset and the end of the link drop, and `quiet_until`.
+`tests/test_clock.py` holds real turns on `HeldClock` with a datagram on the path: a wait that ends at
+its time finds it taken, and `wait_until` returns at it. `tests/test_boardlink.py` checks
+`arrive`, the hold and `poll` in that order.
 `tests/test_mqtt_session.py` also runs esp-mqtt on a path: the spacing of a backlog's exchanges at
 200 ms and 600 ms and their ratio, the rate, and a redelivery over 600 ms.
 `tests/test_net_mqtt_sessions.py` asserts the broker's sessions in exact bytes, flags and packet

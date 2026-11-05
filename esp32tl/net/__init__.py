@@ -267,6 +267,16 @@ class Internet:
         finally:
             self._at = None
 
+    def arrive(self, now: int) -> None:
+        """Take in what has come up the path by `now`, before the test looks at the turn at
+        `now`: a record stamped `now` is there when `board.now` says it. What this answers goes out
+        in `poll`."""
+        self._at = now
+        try:
+            self._arrive(now)
+        finally:
+            self._at = None
+
     def poll(self, now: int) -> list[Output]:
         self._at = now
         try:

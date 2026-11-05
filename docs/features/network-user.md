@@ -280,7 +280,9 @@ While a client with a stored session is offline:
 
 - a QoS 1 publication that matches one of its subscriptions is queued, in order, whatever QoS the
   subscription has (MQTT-3.1.2-5), and goes at the subscription's QoS when it reconnects. The queue
-  has no limit, because the specification sets none;
+  has no limit, because the specification sets none. What packet IDs limit is what is unacknowledged
+  at once, 65535 messages: a resumed session sends that many, and the rest as PUBACKs free their
+  IDs. A QoS 1 message published meanwhile goes behind them;
 - a QoS 0 publication is dropped, logged as
   `mqtt: session-client is offline: dropped a QoS 0 message on session/commands`;
 - `subscribed` is false: it speaks of active clients. It is true again from the CONNECT on, without
@@ -298,7 +300,9 @@ nothing. An incoming QoS 1 `Publication` stays with its connection and is not pa
 a pending one is cancelled when the connection closes and does not come back
 ([below](#withhold-puback-and-disconnect-a-client)).
 
-`broker.session(client_id)` returns a copy of the state now, a frozen `SessionState`, or `None`:
+`broker.session(client_id)` returns the state now, a frozen `SessionState`, or `None`. Its dict and
+tuples are copies, so they stay as they were at the call; the `Delivery` records in `unacknowledged`
+are the broker's own, so a later PUBACK still sets `acknowledged_at` on them:
 
 | `SessionState` | Meaning |
 |---|---|
@@ -351,7 +355,11 @@ Something else raises `TypeError`: `network.set_path: rtt is 200, not a Duration
 A broker's records have the times of the network's end: `message.at` is `t` plus what the datagram
 took going up, half of what the RTT has above 1 ms, and `puback_at`, `delivery.at` and the test's
 `broker.publish` are when the answer sets off down. A publication from the test reaches the device
-one way down later, half of what the RTT has above 1 ms, and 1 ms.
+one way down later, half of what the RTT has above 1 ms, and 1 ms. A record is there when `board.now`
+reaches its stamp: `board.wait_until(broker.next_message("a/b"), ...)` returns with `board.now`
+equal to `message.at`, and what the test does at that instant comes after it. On a path, a
+`connection_policy` that raises fails the link as `modem.arrive raised` (`wifi.arrive` behind an
+access point) when its CONNECT took time going up.
 
 Behind the modem the runner already paces received bytes at the UART's baud, about 11.5 kB/s (92
 kbit/s) at 115200: a `downlink` above that adds its time per datagram and is no limit on the rate

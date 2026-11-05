@@ -142,6 +142,20 @@ def test_a_qos1_backlog_takes_the_rate_in_both_directions(
     assert board.link.warnings == []
 
 
+def test_a_record_is_there_when_the_board_says_its_time(
+    board: Esp32Sim, modem: Modem, broker: Broker, console: Console
+) -> None:
+    network = modem.network()
+    connected(board, broker)
+    network.set_path(rtt=ms(601))
+    report = broker.next_message(REPORTS)
+    broker.publish(COMMANDS, "backlog 1", qos=1)
+    message = board.wait_until(report, within=seconds(10))
+    assert board.now == message.at
+    # And what the test does at that instant comes after what the network took at it.
+    assert broker.find_message(REPORTS) is message
+
+
 def test_sessions_work_across_a_long_path(
     board: Esp32Sim, modem: Modem, broker: Broker, console: Console
 ) -> None:

@@ -357,17 +357,52 @@ def test_running_out_of_packet_ids_keeps_the_message_for_a_stored_session(broker
     assert state is not None and [m.payload for m in state.queued] == [b"x"]
 
 
-def test_running_out_of_packet_ids_on_resuming_keeps_the_queue_in_order(broker: Broker) -> None:
-    wire = Wire(broker, KEEP, SUBSCRIBE_QOS1)
-    wire.session.unacked.update(range(2, 65536))
+def test_a_resumed_queue_waits_for_packet_ids_and_each_puback_frees_one(broker: Broker) -> None:
+    Wire(broker, KEEP, SUBSCRIBE_QOS1)
+    for n in range(65535):
+        broker.publish("a/b", str(n), qos=1)
     broker.disconnect("c")
     broker.publish("a/b", "first", qos=1)
     broker.publish("a/b", "second", qos=1)
     again = Wire(broker, KEEP)
-    assert again.closed
+    assert len(again.take()) == 65536  # CONNACK, and all that was never acknowledged.
+    assert not again.closed
     state = broker.session("c")
-    assert state is not None and [m.payload for m in state.queued] == [b"second"]
-    assert [d.payload for d in state.unacknowledged] == [b"first"]
+    assert state is not None and [m.payload for m in state.queued] == [b"first", b"second"]
+    # A message published now goes behind them, and QoS 0, which needs no ID, goes at once.
+    broker.publish("a/b", "third", qos=1)
+    broker.publish("a/b", "zero", qos=0)
+    assert again.take() == [b"\x30\x09\0\x03a/bzero"]
+    assert again.send(b"\x40\x02\0\x05") == [b"\x32\x0c\0\x03a/b\0\x05first"]
+    assert again.send(b"\x40\x02\0\x07") == [b"\x32\x0d\0\x03a/b\0\x07second"]
+    assert again.send(b"\x40\x02\0\x01") == [b"\x32\x0c\0\x03a/b\0\x01third"]
+    assert again.send(b"\x40\x02\0\x02") == []
+    state = broker.session("c")
+    assert state is not None and state.queued == ()
+    assert len(state.unacknowledged) == 65534
+
+
+def test_a_retained_will_on_closing_during_a_subscribe_is_no_error(broker: Broker) -> None:
+    will = b"\x10\x18\0\x04MQTT\x04\x2c\0\x0a\0\x01c\0\x03w/w\0\x04gone"  # Retained, QoS 1
+    broker.publish("a/kept", "x", retain=True, qos=1)
+    wire = Wire(broker, will)
+    wire.session.unacked.update(range(1, 65536))
+    wire.session.on_data(SUBSCRIBE_QOS1)
+    assert wire.closed
+    assert broker.retained["w/w"].payload == b"gone"
+
+
+def test_session_copies_its_collections_and_keeps_the_delivery_records(broker: Broker) -> None:
+    wire = Wire(broker, KEEP, SUBSCRIBE_QOS1)
+    broker.publish("a/b", "x", qos=1)
+    before = broker.session("c")
+    assert before is not None
+    wire.session.on_data(b"\x40\x02\0\x01")
+    after = broker.session("c")
+    assert after is not None and after.unacknowledged == ()
+    assert len(before.unacknowledged) == 1  # The tuple is the state at the call.
+    assert before.unacknowledged[0] is broker.deliveries[0]  # The record is the broker's.
+    assert before.unacknowledged[0].acknowledged_at == Duration(1000)
 
 
 def test_session_reports_a_copy_and_none_for_an_unknown_client(broker: Broker) -> None:

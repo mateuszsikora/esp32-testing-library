@@ -28,6 +28,13 @@ def mac(raw: bytes) -> str:
     return ":".join(f"{b:02x}" for b in raw)
 
 
+def _whole(payload: bytes) -> bytes:
+    """The IPv4 datagram of a frame, without what follows it: the station's frames carry 4 bytes
+    more. One whose total length is not possible stays as it is, for the IP layer to drop."""
+    total = int.from_bytes(payload[2:4], "big")
+    return payload[:total] if 20 <= total <= len(payload) else payload
+
+
 class Ethernet:
     """The access point's side of the station's link. `send` takes each Ethernet frame for the
     station; `on_ip` gets each IPv4 datagram the station sends, but its DHCP; `log` gets a line per
@@ -66,8 +73,9 @@ class Ethernet:
         elif kind == IPV4:
             if destination not in (GATEWAY_MAC, BROADCAST_MAC) and not destination[0] & 1:
                 return
-            if not self._dhcp(payload):
-                self._on_ip(payload)
+            datagram = _whole(payload)
+            if not self._dhcp(datagram):
+                self._on_ip(datagram)
         else:
             self.ignored[kind] = self.ignored.get(kind, 0) + 1
             if self.ignored[kind] == 1:

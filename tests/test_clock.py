@@ -4,21 +4,25 @@ messages a runner would, taking each turn at the block point the harness's `wait
 test waits on the clock from its own thread."""
 
 import re
+import struct
 import threading
 from collections.abc import Callable, Sequence
 from typing import Any, TypeVar
 
 import pexpect
 import pytest
+from test_net_ip import packet
 
 from esp32tl.backends.clock import HeldClock, nanoseconds, seconds
 from esp32tl.interfaces import NeverHappened, RunEnded
 from esp32tl.interfaces.console import Console, ConsoleLines, Line
-from esp32tl.link.boardlink import BoardLink
+from esp32tl.interfaces.wifi import Wifi
+from esp32tl.link.boardlink import BoardLink, Interface
 from esp32tl.link.protocol import Console as ConsoleMessage
 from esp32tl.link.protocol import RunnerHello, Stop, Sync, Wait
+from esp32tl.net.ethernet import GATEWAY_MAC
 from esp32tl.net.mqtt import Broker
-from esp32tl.units import Duration, minutes
+from esp32tl.units import Duration, minutes, ms
 from esp32tl.units import seconds as secs
 
 HELLO = RunnerHello(1, "esp32", "emulated-fifo-write", "0" * 40)
@@ -35,12 +39,18 @@ class Run:
     `syncs` are the block points it took turns at."""
 
     def __init__(
-        self, console: Sequence[tuple[int, bytes]] = (), end: int = 3600 * S, stats: bool = True
+        self,
+        console: Sequence[tuple[int, bytes]] = (),
+        end: int = 3600 * S,
+        stats: bool = True,
+        *,
+        clock: HeldClock | None = None,
+        interfaces: Sequence[Interface] = (),
     ) -> None:
-        self.clock = HeldClock()
+        self.clock = clock or HeldClock()
         self.console_output = bytearray()
         self.console_lines = ConsoleLines()
-        self.link = BoardLink("esp32-devkitc", hold=self.clock, console=self._console)
+        self.link = BoardLink("esp32-devkitc", interfaces, hold=self.clock, console=self._console)
         self.pending = list(console)
         self.end = end
         self.stats = stats
@@ -140,6 +150,50 @@ def test_mqtt_immediate_response_is_visible_after_waiting_for_connection() -> No
         with pytest.raises(NeverHappened) as raised:
             run.clock.wait_until(next_response, 100 * MS, repr(next_response))
         assert "the next MQTT message on 'a/b' saying b'fast' did not happen" in str(raised.value)
+    finally:
+        run.clock.stop()
+        run.runner.join(5)
+
+
+def a_datagram_on_the_path() -> tuple[Run, list[int]]:
+    """A run on the test's clock, with one datagram on its way up a path, due at 110 ms; and the
+    times the network took datagrams at."""
+    clock = HeldClock()
+    wifi = Wifi(now=lambda: clock.now, asked=lambda request: None)
+    network = wifi.access_point("myssid", password="mypassword")
+    taken: list[int] = []
+
+    class Stamped:
+        def on_datagram(self, data: bytes) -> bytes | None:
+            taken.append(network.now())
+            return None
+
+    network.ip.udp[7000] = Stamped()
+    network.set_path(rtt=ms(201))  # 100 ms up
+    station = bytes.fromhex("246f28001122")
+    datagram = packet(17, struct.pack(">HHHH", 5000, 7000, 8, 0))
+    assert network.receive(10 * MS, GATEWAY_MAC + station + b"\x08\x00" + datagram) == []
+    return Run(clock=clock, interfaces=[wifi]), taken
+
+
+def test_a_wait_that_ends_at_a_datagrams_time_finds_it_taken() -> None:
+    run, taken = a_datagram_on_the_path()
+    try:
+        run.clock.wait(110 * MS - 1)
+        assert taken == []
+        run.clock.wait(1)
+        assert run.clock.now == 110 * MS
+        assert taken == [110 * MS]
+    finally:
+        run.clock.stop()
+        run.runner.join(5)
+
+
+def test_a_wait_until_returns_at_the_datagrams_time() -> None:
+    run, taken = a_datagram_on_the_path()
+    try:
+        assert run.clock.wait_until(lambda: taken, 110 * MS, "the datagram") == [110 * MS]
+        assert run.clock.now == 110 * MS
     finally:
         run.clock.stop()
         run.runner.join(5)

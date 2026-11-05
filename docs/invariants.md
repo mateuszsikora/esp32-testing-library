@@ -773,6 +773,18 @@ that references to its number keep their meaning.
     `tests/test_net_path.py::test_the_network_never_stamps_an_answer_before_the_turn_that_hands_it_over`,
     `tests/test_net_path.py::test_a_reset_drops_what_is_on_the_path_and_keeps_the_path`,
     `tests/test_net_path.py::test_the_end_of_the_ppp_link_drops_what_is_on_the_path`
+- **186.** What has come up the path by a turn is taken in before the test holds that turn: a record is there when `board.now` reaches its stamp, and
+    what the test does at that instant comes after it.
+    `tests/test_boardlink.py::test_arrivals_come_before_the_hold_and_the_poll_after_it`,
+    `tests/test_clock.py::test_a_wait_that_ends_at_a_datagrams_time_finds_it_taken`,
+    `tests/test_clock.py::test_a_wait_until_returns_at_the_datagrams_time`,
+    `tests/test_mqtt_session.py::test_a_record_is_there_when_the_board_says_its_time`
+- **187.** A rate counts the IPv4 datagram alone, not what follows it in its Ethernet frame.
+    `tests/test_net_path.py::test_what_follows_a_datagram_in_its_frame_takes_no_time_at_the_rate`,
+    `tests/test_net_ethernet.py::test_what_follows_an_ipv4_datagram_in_its_frame_is_not_part_of_it`
+- **188.** A resumed session stays connected while its queue waits for packet IDs: each PUBACK sends the next message, and a QoS 1 message published
+    meanwhile goes behind the queue.
+    `tests/test_net_mqtt_sessions.py::test_a_resumed_queue_waits_for_packet_ids_and_each_puback_frees_one`
 - **185.** A QoS 1 backlog from esp-mqtt, one message at a time, takes about three times as long at an RTT of 600 ms as at 200 ms, each exchange
     spaced by the RTT and some 15 ms of UART and firmware.
     `tests/test_mqtt_session.py::test_a_qos1_backlog_follows_the_rtt`

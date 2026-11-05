@@ -1836,7 +1836,10 @@ MQTT-3.3.1-1), then the queue in order (MQTT-4.6.0-6). CleanSession=1 discards i
 disconnection (MQTT-3.1.2-6). MQTT 3.1.1 writes its re-send order as a rule for the client
 (MQTT-4.6.0-1); MQTT-4.6.0-6 applies the same rules to a server delivering an Ordered Topic.
 
-The queue has no limit, because the specification sets none, and no session expires. A QoS 0
+The queue has no limit, because the specification sets none, and no session expires. A resumed
+session whose queue outruns the 65535 packet IDs waits for PUBACKs rather than closing, because a
+client's PUBACKs could not reach a closed connection, and it would get the same messages on every
+connection. A QoS 0
 message for an offline client is dropped: MQTT-3.1.2-5 lets a server store it and does not ask it
 to. The test is what ends a stored session, with a CleanSession=1 CONNECT or `forget_session`,
 which refuses a connected client instead of disconnecting it, so that one call does not do two
@@ -1879,6 +1882,12 @@ and the floor stays on the way down, so that the default takes a request at its 
 answer 1 ms later. `latency()` stays 1 ms, since PPP control answers in 1 ms, and a larger promise
 would break rule 2 of the protocol; that is why an RTT below it is refused. `quiet_until` takes the
 queue's head, one turn per datagram. The runner does not change.
+
+A datagram going up is taken in at the start of the turn, through `Interface.arrive`, before the
+test holds it, so that a record is there when `board.now` reaches its stamp. Rule 1 lets the peer
+stop the runner at the datagram's time, and without this the test would stand at that time and not
+see it. The alternative was to call `poll` before the hold as well: that would also move what
+replays and models do, and the broker's deadlines, past what this path needs.
 
 A change applies to datagrams entering after it, and none overtakes another, because the link
 beneath TCP never reorders. A datagram waits in the network until its time, not in the runner's input

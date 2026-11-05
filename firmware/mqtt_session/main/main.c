@@ -46,13 +46,17 @@ static void report_backlogs(void *arg) {
             char report[32];
             int length = snprintf(report, sizeof report, "report %d", n);
             int id = esp_mqtt_client_publish(client, REPORTS, report, length, 1, 0);
+            if (id < 0) {
+                printf("mqtt_session: publish failed: %d\n", id);
+                break;
+            }
             uint32_t acknowledged;
             do {
                 xTaskNotifyWait(0, 0, &acknowledged, portMAX_DELAY);
             } while ((int)acknowledged != id);
             printf("mqtt_session: published %d of %d\n", n, count);
+            if (n == count) printf("mqtt_session: backlog done\n");
         }
-        printf("mqtt_session: backlog done\n");
     }
 }
 

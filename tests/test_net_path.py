@@ -87,6 +87,19 @@ def test_the_two_directions_add_up_to_the_rtt(rtt: Duration, up: int, down: int)
     assert answered(replies) == [t + rtt.ns]
 
 
+def test_arrive_takes_what_has_come_up_and_leaves_the_answer_to_poll() -> None:
+    net = opened()
+    net.set_path(rtt=ms(3))  # 1 ms up, 2 ms down
+    net.receive(0, REQUEST)
+    net.arrive(MS - 1)
+    assert net.ntp.requests == 0
+    net.arrive(MS)
+    assert net.ntp.requests == 1
+    assert net.quiet_until() == 3 * MS
+    assert answered(net.poll(MS)) == []
+    assert answered(net.poll(3 * MS)) == [3 * MS]
+
+
 def test_a_service_is_stamped_at_the_datagrams_time_when_its_turn_comes_later() -> None:
     net = opened()
     net.set_path(rtt=ms(1.5))
@@ -347,6 +360,13 @@ def test_ethernet_datagrams_take_the_path() -> None:
     [(t, raw)] = net.poll(200 * MS)
     assert t == 200 * MS
     assert raw[:6] == DEVICE_MAC and raw[12:14] == b"\x08\x00"
+
+
+def test_what_follows_a_datagram_in_its_frame_takes_no_time_at_the_rate() -> None:
+    net = ethernet_opened()
+    net.set_path(uplink=kbit_s(128))
+    assert net.receive(0, eth_ip(packet(17, UDP) + b"\xef\xbe\xad\xde")) == []
+    assert net.quiet_until() == 4_750_000  # The 76 bytes of the datagram, not 80.
 
 
 def test_arp_and_dhcp_are_not_delayed() -> None:

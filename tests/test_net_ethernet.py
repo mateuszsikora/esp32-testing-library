@@ -248,3 +248,19 @@ def test_dhcp_checks_the_datagram_as_the_ip_layer_does(link: Link) -> None:
     fragment[14 + 10 : 14 + 12] = check(bytes(fragment[14 : 14 + 20])).to_bytes(2, "big")
     ethernet.receive(bytes(fragment))
     assert len(sent) == 1 and ip[-1] == bytes(fragment[14:])
+
+
+def test_what_follows_an_ipv4_datagram_in_its_frame_is_not_part_of_it() -> None:
+    seen: list[bytes] = []
+    ethernet = Ethernet(lambda data: None, seen.append, Dhcp(lambda: 0))
+    source = bytes.fromhex("246f28001122")
+    head = GATEWAY_MAC + source + b"\x08\x00"
+    datagram = bytes([0x45, 0]) + (24).to_bytes(2, "big") + bytes(20)
+    ethernet.receive(head + datagram + b"\xef\xbe\xad\xde")
+    assert seen == [datagram]
+    # A total length that cannot be stays as it is: the IP layer drops such a datagram.
+    too_long = bytes([0x45, 0]) + (99).to_bytes(2, "big") + bytes(20)
+    too_short = bytes([0x45, 0]) + (19).to_bytes(2, "big") + bytes(20)
+    ethernet.receive(head + too_long)
+    ethernet.receive(head + too_short)
+    assert seen[1:] == [too_long, too_short]
