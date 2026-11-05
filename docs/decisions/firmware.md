@@ -330,6 +330,11 @@ is the same but for its build time and SHA-256: of the 168832 bytes of `gpio_ech
 build with no hits, only bytes 116 to 120 (the time in the app description), 177 to 208 (the ELF's
 SHA-256) and the last 32 (the image's) differ, as they differ between two builds with no hits.
 
+On hp600g1 a full build of 15 projects took 13m13s, 758 s of it compiling, against about 1530 s
+with no hits. The fastest images take 24 s, against about 100. Others take 46 to 84 s, for reasons
+not measured. `gps_alarm_clock` takes as long as ever, 106 s: it is the first of the examples, whose
+container starts with an empty cache.
+
 The cost is in the debug information: an object from the cache keeps the working directory of the
 image that compiled it, so `gpio_echo.elf` also names `/out/hello_world/build`. The harness reads no
 debug information.
