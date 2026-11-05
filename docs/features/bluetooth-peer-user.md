@@ -107,6 +107,11 @@ at 20. A device that has left hears nobody in its own inquiry, which still takes
 
 Secure Simple Pairing is not modelled on these devices: they pair with a PIN, as `SppPeer` does.
 
+A peer or a device accepts every page: nothing in their API rejects one. Bumble's host rejects what
+it does not expect once told to, with `peer.device.classic_accept_any = False`, for the reason
+`CONNECTION_REJECTED_DUE_TO_LIMITED_RESOURCES`. The device that paged gets that reason at once, in
+`error_code`, rather than `PAGE_TIMEOUT` at the page timeout; both can connect afterwards.
+
 ## A peer that leaves
 
 ```python
@@ -235,8 +240,9 @@ On the air:
 | `HCI_Error(hci/PIN_OR_KEY_MISSING_ERROR [0x6])` | Bumble's `HCI_Error`, on the device's side | The device authenticated with a key the peer does not keep |
 | `HCI_Error(hci/INSUFFICIENT_SECURITY_ERROR [0x2F])` | Bumble's `HCI_Error`, on the device's side | The device asked for encryption on a link it had not authenticated |
 | `hci/PAGE_TIMEOUT_ERROR`, in `error_code` | Bumble's `core.ConnectionError`, on the device's side | Nobody answered the page: the peer has left, its end of an old link has not fallen, or no device has the address |
+| `hci/CONNECTION_REJECTED_DUE_TO_LIMITED_RESOURCES_ERROR`, in `error_code` | Bumble's `core.ConnectionError`, on the device's side | The host of the device it paged rejected the page, with the reason its `Reject_Connection_Request` gave |
 | `HCI_Error(hci/PAGE_TIMEOUT_ERROR [0x4])` | Bumble's `HCI_Error`, on the device's side | Nobody answered `Device.request_remote_name` |
-| `HCI_Error(hci/CONNECTION_ALREADY_EXISTS_ERROR [0xB])` | Bumble's `HCI_Error`, on the device's side | The device paged a peer while it holds a link to it, as one that lost contact and has not fallen |
+| `HCI_Error(hci/CONNECTION_ALREADY_EXISTS_ERROR [0xB])` | Bumble's `HCI_Error`, on the device's side | The device paged a peer while it holds a link to it, as one that lost contact and has not fallen; while a page of its own to that peer is under way; or while its host has yet to answer a page from that peer, which outlasts a page of its own that has already reported its end |
 | `HCI_Error(hci/CONNECTION_TIMEOUT_ERROR [0x8])` | Bumble's `HCI_Error`, on the device's side | The link fell during `Connection.authenticate()` |
 
 A `BluetoothDevice` says the same of its arguments, starting `BluetoothDevice:` rather than

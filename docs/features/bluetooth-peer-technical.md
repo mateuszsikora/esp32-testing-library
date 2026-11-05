@@ -130,12 +130,17 @@ link; `controller.py`, Bumble's virtual controller with what Classic devices nee
      whose SAFER+ the link has no use for, since both ends are this class and only the hosts see
      a key. The random numbers come from `random.Random(str(public_address))`.
    - **Paging.** `on_hci_create_connection_command` answers `CONNECTION_ALREADY_EXISTS_ERROR` when
-     `classic_connections` holds the peer; otherwise Bumble's handler sends `LmpHostConnectionReq`
-     and this one starts a timer of `page_timeout * SLOT_S`, kept in `_paging`. A connection that
-     completes cancels it. At the timer, `on_classic_connection_complete` gets
-     `PAGE_TIMEOUT_ERROR`; on any failure it drops the entry Bumble's handler made and Bumble's own
-     completion leaves. `Write_Page_Timeout` sets `page_timeout`, default `PAGE_TIMEOUT_SLOTS`, and
-     refuses 0 with `INVALID_COMMAND_PARAMETERS_ERROR`: the specification's range starts at 1.
+     `classic_connections` holds the peer or `_paging` has a page to it under way, whose timer would
+     end the next page; otherwise Bumble's handler sends `LmpHostConnectionReq` and this one starts a
+     timer of `page_timeout * SLOT_S`, kept in `_paging`, unless Bumble refused the page with
+     `CONTROLLER_BUSY_ERROR`, as it does while an LE connection is pending, and made no entry for it.
+     A connection that completes cancels it. At the timer, `on_classic_connection_complete` gets
+     `PAGE_TIMEOUT_ERROR`; on a failure it drops the entry Bumble's handler made and Bumble's own
+     completion leaves, with any timer it has (`_forget_link`), unless a page of this side ended and
+     an answer to a page it heard is still owed: that page's entry replaced this one, and waits for
+     the answer. `Write_Page_Timeout` sets `page_timeout`, default
+     `PAGE_TIMEOUT_SLOTS`, and refuses 0 with `INVALID_COMMAND_PARAMETERS_ERROR`: the specification's
+     range starts at 1.
      TODO(owner): Vol 1, Part F, 2.11 defines `CONNECTION_ALREADY_EXISTS`, and 7.1.5 does not say
      how a controller reports it for `Create_Connection`; here it is the command status. #34 can see
      what ESP32's controller does.
@@ -147,11 +152,16 @@ link; `controller.py`, Bumble's virtual controller with what Classic devices nee
    - **Link supervision.** Nothing polls on this link, so a link is in contact until a device
      leaves, and the specification's "no packets are received for a duration longer than the
      `Link_Supervision_Timeout`" counts from there. `Controller.left`, on the controller of the
-     device that leaves, calls `Link.leave` with the peers it holds a link to, leaving out a page of its own that the
-     target has not heard (`_held_by`), and `_lose_contact` on both ends of each link, which keeps the time in `_lost_contact` and, through `_supervise`, starts a timer to
-     `_link_timed_out`; a link that lost contact already keeps its time, and one still being paged
-     is left to its page. `_link_timed_out` sends `Authentication_Complete` with
-     `CONNECTION_TIMEOUT_ERROR` to an initiator's host still authenticating, then
+     device that leaves, calls `Link.leave` with the peers it holds an entry for, leaving out a page of
+     its own (`_is_own_page`: the central, with no handle yet), and with each other controller that
+     holds an entry for it other than that controller's own page: a pager whose page ended holds
+     nothing, nor does one that rejected a crossing page, yet the target holds their page. It calls
+     `_lose_contact` on both ends of each, which keeps the time in `_lost_contact` and, through
+     `_supervise`, starts a timer to
+     `_link_timed_out`; a link that lost contact already keeps its time, and this side's own page
+     is left to end by itself, though the entry of a page it heard meanwhile has a timer of its own.
+     `_link_timed_out` sends `Authentication_Complete` with `CONNECTION_TIMEOUT_ERROR` to an
+     initiator's host still authenticating, then
      `on_classic_disconnected` with that reason. `Write_Link_Supervision_Timeout` needs the central:
      it keeps the value in `_supervision_timeouts`, by peer, sends `LmpSupervisionTimeout`, and
      on a link that lost contact starts the timer again from `_lost_contact`. The peripheral keeps
@@ -172,19 +182,41 @@ link; `controller.py`, Bumble's virtual controller with what Classic devices nee
      is made. `on_classic_disconnected` removes such an entry without telling the host, since no
      link was made. `_answers_due` counts the answers the host owes each peer, from
      `on_classic_connection_request`, and such a removal makes all of them late, in `_late_answers`.
-     `on_hci_accept_connection_request_command` takes an answer as late when one is counted late, when
-     the entry already has a link, or when there is no entry and an answer was owed, as after the link
-     ended or a crossing page took the entry with it. An answer nothing was owed for goes to Bumble's
-     handler, as the host's own error. A late one: the host gets a command status of `SUCCESS` and, unless this
-     side is itself paging that peer, `Connection_Complete` with `CONNECTION_TIMEOUT_ERROR`, since the
-     event names only the address and would end that page in the host's eyes. The entry is left as it
-     is, so that a late answer completes neither a new page nor a working link. Given to Bumble's
-     handler it would do so, or answer `UNKNOWN_CONNECTION_IDENTIFIER_ERROR`, which fails the air from
-     Bumble's accepting task, or send the pager a second `LMP_accepted`, whose future is already done,
-     which fails it with `InvalidStateError`. An answer names only the address, so answers are told
-     apart only by their order: the oldest is taken as the late one, and with a page tried again while
-     the first answer is on its way, that first answer connects the second page, and the second answer
-     is the late one.
+     `_take_answer`, which both handlers of an answer call, counts the answer. One nothing was
+     owed for gets `UNKNOWN_CONNECTION_IDENTIFIER_ERROR`, as the host's own error, on a working link
+     and during this side's own page too, where Bumble's handler would give the link a second handle
+     or complete the page. It takes an answer as late when one is counted late, or when the entry is
+     not a page this side heard (`_is_heard_page`: the peripheral, with no handle yet): there is none,
+     as after the link ended, or it has a link, or it is this side's own page. A page that ended at its pager's timer is not
+     among these: this side does not hear of it, so an acceptance then makes a link, and a rejection
+     goes to a pager that drops it. A late answer: the host gets a command
+     status of `SUCCESS` and, unless this side is itself paging that peer, `Connection_Complete` with
+     `CONNECTION_TIMEOUT_ERROR`, since the event names only the address and would end that page in
+     the host's eyes. The entry is left as it is, so that a late answer completes neither a new page
+     nor a working link. Given to Bumble's handler it would do so, or send the pager a second
+     `LMP_accepted`, whose future is already done, which fails it with `InvalidStateError`. An answer
+     names only the address, so answers are told apart only by their order: the oldest is taken as
+     the late one, and with a page tried again while the first answer is on its way, that first
+     answer connects the second page, and the second answer is the late one. A link being made marks
+     nothing late, so that an answer a host never gives does not take the next page's.
+   - **Rejecting a page.** Bumble 0.0.236 has no handler for `Reject_Connection_Request`, so its
+     `on_hci_command` would return `UNKNOWN_HCI_COMMAND_ERROR` where an asynchronous command has
+     nowhere to put it, and the host would wait for ever. `on_hci_reject_connection_request_command`
+     refuses a reason outside `REJECT_REASONS`, 0x0D to 0x0F as Vol 4, Part E, 7.1.9 has it, with
+     `INVALID_COMMAND_PARAMETERS_ERROR`, and the host still owes its answer. Then `_take_answer`, so a
+     rejection is an answer like an acceptance. One for a page that still waits: a command status of
+     `SUCCESS`, `LMP_not_accepted` for `LMP_HOST_CONNECTION_REQ` with the reason, the entry removed
+     with whatever a page whose pager left has running (`_forget_link`), and `Connection_Complete` to
+     this side's host with the reason as its status, unless this side is itself paging that peer, for
+     the same reason as a late answer. With a page tried again, the first rejection ends the second
+     page, and the second answer finds no entry and is late. Bumble's
+     completion of the page gives the pager's host `Connection_Complete` with the reason, as 7.1.9
+     requires. A pager whose page already ended has told its host: `on_lmp_packet` drops the rejection
+     and the page's future, or its host would hear of that page twice. A pager out of reach hears
+     nothing, and its page ends at its timer. TODO(owner): 7.1.9 says this side's host gets
+     `Connection_Complete` and gives its status only for the pager's; here it is the reason, as
+     [the decision](../decisions/harness.md#a-host-that-rejects-a-page-gets-the-reason-too) says. #34
+     can see what ESP32's controller does.
    - `Write_Secure_Connections_Host_Support` is answered with `SUCCESS` and changes nothing.
      `lmp_features` loses Bumble's `BR_EDR_NOT_SUPPORTED`.
 
@@ -315,6 +347,16 @@ in `error_code` on a failed `Connection_Complete`, and `HCI_Error` with
   before its host answers, with no link told of, and a host answering after its end fell; a device
   that left finding nothing; two runs with the same `events`, `lost` and
   instants.
+  A host that rejects a page: the pager getting the reason at that instant, not `PAGE_TIMEOUT`; the
+  host's next command answered; both connecting afterwards; a rejection after the page ended, after
+  the target's end fell, and of a page tried again, none of them failing the air or reaching a later
+  page or a working link; this side's own page left to end by itself, and not started again; the
+  supervision of a page whose pager left ending with the rejection; each edge of the reason's range;
+  an answer nothing is owed for, also on a working link; an answer never given not taking a later
+  page's. Crossing pages: a page of this side that failed leaving the answer to the other its entry,
+  whose contact can still be lost, also by the device that leaves. A pager leaving after its page
+  ended, or after rejecting a crossing page. A role switch refused, also with an answer never given
+  and with this side paging too. An entry that goes with a failed page taking its timer along.
   Other devices: several in one inquiry, each with its own class and RSSI; a new `rssi` at the next
   inquiry; RSSI in the RSSI mode and none in the plain one; a device without SPP that has no SDP
   record and no RFCOMM; one without a PIN refusing a pairing, and one with a PIN keeping its key
@@ -325,14 +367,31 @@ Not covered: firmware. esp32sim has no Classic controller for the guest, so no E
 to a peer yet, and no firmware has seen a peer leave. Nor is a clock offset other than 0. A page does not look at
 the target's page scan: Bumble's controller delivers it whatever `classic_scan_enable` says, so a
 device with `set_connectable(False)` still connects, though an inquiry respects inquiry scan.
-Bumble 0.0.236 has no handler for `Reject_Connection_Request`, so a host that rejects a page, as
-Bumble's does with `classic_accept_any = False`, gets `UNKNOWN_HCI_COMMAND_ERROR` logged and no
-answer: its next command waits for ever, its entry stays, and the pager gets `PAGE_TIMEOUT`.
 There is no `Connection_Accept_Timeout` (Vol 4, Part E, 6.7), and the page's timer runs until the
 target's host accepts rather than until its baseband answers: a host that accepts after the page
 ended, as after 6 s, makes a link on both ends when the pager has already reported `PAGE_TIMEOUT`,
 and the pager's next page gets `CONNECTION_ALREADY_EXISTS`. Bumble's host accepts at the instant it
 hears, so only a slowed host reaches this.
+An acceptance with `role=CENTRAL` after the page ended fails the air with Bumble's `AssertionError`,
+as the pager no longer has an entry for the role switch. So does one to a page still under way from
+a device that rejected a crossing page, which took its only entry (#141). A link that page then makes
+does not allow a role switch, whatever its `Create_Connection` asked. A host that accepts with
+`role=CENTRAL` a pager that has left gets only the command status: the role switch is lost, and its
+entry goes at the supervision timeout with no `Connection_Complete` (#141).
+Every page a host hears is taken to get one answer, as Bumble's host gives. One that never answers:
+its entry stays with nothing to end it, so this device's own pages to that peer get
+`CONNECTION_ALREADY_EXISTS`, also after a page of its own has reported `PAGE_TIMEOUT`; and an answer
+counted late stays owed, so after its end fell, as across a restart of its firmware, the answer to
+the next page is taken for it and that pager gets `PAGE_TIMEOUT`. With such an answer still counted,
+a role switch refused during this device's own page leaves the entry the same way, as the failure
+is not told from the end of that page.
+Two pages at one instant, both accepted, give each side two handles for one link. A late answer on a
+working link, as with crossing pages, gives the host a failed `Connection_Complete` for that address
+(both #141). What a timer sets off can run a nanosecond after it (#142).
+An answer to a synchronous link is not modelled: 7.1.9 lets `Reject_Connection_Request` decline one,
+and here, when no answer to a page is owed, it gets `UNKNOWN_CONNECTION_IDENTIFIER_ERROR`, leaving the
+entry in `sco_links` and the requester waiting; when one is owed, it is taken as that answer. Bumble's
+host does not send it, so only a command written by hand reaches this.
 `Create_Connection_Cancel` for Classic is not in Bumble 0.0.236, so `Device.connect(timeout=)` cannot
 end a page early. Two devices searching the peer's SDP at the same instant fail the air with
 `Exception in callback Host.on_packet(): invalid state`: Bumble 0.0.236's `sdp.Server` keeps one
@@ -344,5 +403,5 @@ channel at a time.
 - [Decisions: the Bluetooth peer](../decisions/harness.md#the-bluetooth-peer-runs-bumble-in-the-harness-on-the-boards-clock)
 - [Bumble](https://github.com/google/bumble), 0.0.236: `bumble/controller.py`, `bumble/link.py`
 - [Bluetooth Core 5.4, Vol 4, Part E](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host-controller-interface/host-controller-interface-functional-specification.html),
-  read on 2026-11-04: 6.6, 6.7, 6.21, 7.3.16, 7.3.42, 7.7.33, 7.7.38, 7.7.46; [Vol 1, Part F](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/architecture,-mixing,-and-conventions/controller-error-codes.html):
+  read on 2026-11-04: 6.6, 6.7, 6.21, 7.1.9, 7.3.16, 7.3.42, 7.7.33, 7.7.38, 7.7.46; [Vol 1, Part F](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/architecture,-mixing,-and-conventions/controller-error-codes.html):
   2.4, 2.8, 2.11
