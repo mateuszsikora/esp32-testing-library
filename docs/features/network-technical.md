@@ -65,7 +65,9 @@ stamp already behind `board.now`. So `_turn` first calls `Interface.arrive(now)`
 mode, `Wifi.arrive` to its active network, and `Internet.arrive` runs `_arrive(now)`. Answers made
 there stay in `_out` until `poll`, after the hold, so what the test does in the turn comes after what
 the network took in it. The broker's own deadlines, keepalive and a delayed PUBACK, still run in
-`poll`, after the hold, as they did.
+`poll`, after the hold, as they did. `SppPeer` passes `poll` to its source and not `arrive`, so a
+modem model with a network as the source of a Bluetooth peer would take datagrams in `poll`; nothing
+makes that pair today.
 
 Down: `Network`'s `send_ip` is `_downlink`, which notes the datagram's size in `_datagram` around
 `link.send_ip`. The link's `send` closure finds `_datagram` set, puts the framed bytes in `_down`
@@ -201,7 +203,7 @@ so two runs give the same stamps (`tests/test_determinism.py::test_mqtt_session_
   malformed-packet exception handler: exceptions and invalid return types close the transport
   and leave `on_data` without CONNACK or an outcome. In a board run `on_data` is called from the
   link's `modem.receive` or `wifi.receive`, so `boardlink.calling` turns the error into the
-  `LinkError` `modem.receive raised <Type>: <message>`; the link fails with its traceback, ends
+  `LinkError` `uart.modem.receive raised <Type>: <message>`; the link fails with its traceback, ends
   the run, and the test's wait raises `RunEnded` naming it. A successfully selected code appends
   a `ConnectionAttempt` to `connection_attempts` before sending CONNACK. This history is separate
   from accepted `clients`; `connection_attempt()` captures a future cursor like `connected()`.
@@ -222,7 +224,8 @@ so two runs give the same stamps (`tests/test_determinism.py::test_mqtt_session_
   `state.unacked`, and `_publish` appends a `Delivery` and fills `state.sent` before it writes.
   When 65535 IDs are in use `_packet_id` logs `mqtt: <id> exhausted packet identifiers` and closes;
   this is what a QoS 1 message for a connected client with no ID free and no queue meets, and
-  `deliver` returns `False`, so that it stays queued for a stored session. PUBACK discards the
+  `deliver` returns `False`, so that it stays queued for a stored session. A retained message on
+  SUBSCRIBE meets it too, and is not queued, because the queue goes out with RETAIN 0. PUBACK discards the
   ID, pops `state.sent` and stamps that `Delivery`'s `acknowledged_at`; a connection already closed
   ignores its data, PUBACK included, in `on_data`. `_end` clears `state.connection` and removes a
   `clean` state from `_states`. `session` copies a `_State`'s collections into a frozen

@@ -554,3 +554,10 @@ def test_a_modem_on_the_board_s_supply_waits_for_pwrkey_when_it_comes_back(
     lines.driven(seconds(1).ns, [(4, 1)], frozenset({4}))
     lines.driven(seconds(1).ns + ms(100).ns, [(4, 0)], frozenset({4}))
     assert modem.powered
+
+
+def test_the_modems_interface_has_the_name_the_link_reports_its_errors_with(
+    tmp_path: Path,
+) -> None:
+    modem, _, _ = route(tmp_path, [0])
+    assert modem.name == "uart.modem"

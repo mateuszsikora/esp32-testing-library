@@ -142,6 +142,16 @@ def test_a_qos1_backlog_takes_the_rate_in_both_directions(
     assert board.link.warnings == []
 
 
+def test_an_empty_backlog_is_done_at_once(
+    board: Esp32Sim, broker: Broker, console: Console
+) -> None:
+    connected(board, broker)
+    done = console.line(r"mqtt_session: backlog done")
+    broker.publish(COMMANDS, "backlog 0", qos=1)
+    board.wait_until(done, within=seconds(5))
+    assert broker.find_message(REPORTS) is None
+
+
 def test_a_record_is_there_when_the_board_says_its_time(
     board: Esp32Sim, modem: Modem, broker: Broker, console: Console
 ) -> None:

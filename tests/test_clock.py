@@ -155,6 +155,13 @@ def test_mqtt_immediate_response_is_visible_after_waiting_for_connection() -> No
         run.runner.join(5)
 
 
+def datagram_frame() -> bytes:
+    """A UDP datagram to port 7000, in an Ethernet frame from the station."""
+    station = bytes.fromhex("246f28001122")
+    datagram = packet(17, struct.pack(">HHHH", 5000, 7000, 8, 0))
+    return GATEWAY_MAC + station + b"\x08\x00" + datagram
+
+
 def a_datagram_on_the_path() -> tuple[Run, list[int]]:
     """A run on the test's clock, with one datagram on its way up a path, due at 110 ms; and the
     times the network took datagrams at."""
@@ -170,9 +177,7 @@ def a_datagram_on_the_path() -> tuple[Run, list[int]]:
 
     network.ip.udp[7000] = Stamped()
     network.set_path(rtt=ms(201))  # 100 ms up
-    station = bytes.fromhex("246f28001122")
-    datagram = packet(17, struct.pack(">HHHH", 5000, 7000, 8, 0))
-    assert network.receive(10 * MS, GATEWAY_MAC + station + b"\x08\x00" + datagram) == []
+    assert network.receive(10 * MS, datagram_frame()) == []
     return Run(clock=clock, interfaces=[wifi]), taken
 
 
@@ -197,6 +202,25 @@ def test_a_wait_until_returns_at_the_datagrams_time() -> None:
     finally:
         run.clock.stop()
         run.runner.join(5)
+
+
+def test_a_service_that_raises_on_a_datagram_from_the_path_names_the_arrival() -> None:
+    clock = HeldClock()
+    wifi = Wifi(now=lambda: clock.now, asked=lambda request: None)
+    network = wifi.access_point("myssid", password="mypassword")
+
+    class Raises:
+        def on_datagram(self, data: bytes) -> bytes | None:
+            raise RuntimeError("a test's bug")
+
+    network.ip.udp[7000] = Raises()
+    network.set_path(rtt=ms(201))
+    network.receive(0, datagram_frame())
+    run = Run(clock=clock, interfaces=[wifi])
+    with pytest.raises(RunEnded):
+        run.clock.wait(S)
+    assert run.link.error == "wifi.arrive raised RuntimeError: a test's bug"
+    run.runner.join(5)
 
 
 def test_a_condition_that_never_holds_raises_never_happened_naming_it_and_the_window() -> None:

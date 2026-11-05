@@ -219,7 +219,7 @@ test error. It sends no CONNACK, records no outcome and does not become a simula
 authentication failure. In a board test the policy runs in the link, not in the test: the link
 fails and the run ends, so the waiting `board.wait_until(...)` raises `RunEnded`, not the
 policy's exception. Its message names the error, as in
-`the link failed: modem.receive raised TypeError: MQTT connection_policy must return a ConnackCode`
+`the link failed: uart.modem.receive raised TypeError: MQTT connection_policy must return a ConnackCode`
 (`wifi.receive` behind an access point), and the traceback is in the link's report. Only a
 `Broker` driven directly, without a board, raises the policy's own exception from `on_data`, after
 closing that connection.
@@ -282,7 +282,9 @@ While a client with a stored session is offline:
   subscription has (MQTT-3.1.2-5), and goes at the subscription's QoS when it reconnects. The queue
   has no limit, because the specification sets none. What packet IDs limit is what is unacknowledged
   at once, 65535 messages: a resumed session sends that many, and the rest as PUBACKs free their
-  IDs. A QoS 1 message published meanwhile goes behind them;
+  IDs. A QoS 1 message published meanwhile goes behind them. A retained message that a SUBSCRIBE
+  matches while no ID is free still closes the connection, so a client that subscribes before its
+  first PUBACK gets the same messages again on every connection (#140);
 - a QoS 0 publication is dropped, logged as
   `mqtt: session-client is offline: dropped a QoS 0 message on session/commands`;
 - `subscribed` is false: it speaks of active clients. It is true again from the CONNECT on, without
@@ -358,8 +360,8 @@ took going up, half of what the RTT has above 1 ms, and `puback_at`, `delivery.a
 one way down later, half of what the RTT has above 1 ms, and 1 ms. A record is there when `board.now`
 reaches its stamp: `board.wait_until(broker.next_message("a/b"), ...)` returns with `board.now`
 equal to `message.at`, and what the test does at that instant comes after it. On a path, a
-`connection_policy` that raises fails the link as `modem.arrive raised` (`wifi.arrive` behind an
-access point) when its CONNECT took time going up.
+`connection_policy` that raises fails the link as `uart.modem.arrive raised` (`wifi.arrive` behind
+an access point) when its CONNECT took time going up.
 
 Behind the modem the runner already paces received bytes at the UART's baud, about 11.5 kB/s (92
 kbit/s) at 115200: a `downlink` above that adds its time per datagram and is no limit on the rate

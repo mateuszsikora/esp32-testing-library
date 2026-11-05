@@ -1839,7 +1839,8 @@ disconnection (MQTT-3.1.2-6). MQTT 3.1.1 writes its re-send order as a rule for 
 The queue has no limit, because the specification sets none, and no session expires. A resumed
 session whose queue outruns the 65535 packet IDs waits for PUBACKs rather than closing, because a
 client's PUBACKs could not reach a closed connection, and it would get the same messages on every
-connection. A QoS 0
+connection. A connected client with no free ID, on a new QoS 1 message or a retained one that a
+SUBSCRIBE matches, is still disconnected; #140 holds that question. A QoS 0
 message for an offline client is dropped: MQTT-3.1.2-5 lets a server store it and does not ask it
 to. The test is what ends a stored session, with a CleanSession=1 CONNECT or `forget_session`,
 which refuses a connected client instead of disconnecting it, so that one call does not do two
