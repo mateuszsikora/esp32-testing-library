@@ -153,8 +153,9 @@ A call that cannot hold raises and, as the first call, selects no model:
 - `modem.operator: act is True, not a whole number` (`ValueError`).
 
 A `wrong_by` or `reads` that takes the date beyond what `datetime` holds is not refused at the call:
-the `AT+CCLK?` that reaches it fails the run with an `OverflowError`, for example `uart.modem.receive
-raised OverflowError: date value out of range`.
+the `AT+CCLK?` that reaches it ends the run, and the waiting call raises `RunEnded`, whose message
+names it, for example `the link failed: uart.modem.receive raised OverflowError: date value out of
+range`.
 
 ## A hung modem and RESET
 
