@@ -277,16 +277,19 @@ class Internet:
             self._at = None
 
     def arrive(self, now: int) -> None:
-        """Take in what has come up the path by `now`, before the test looks at the turn at
-        `now`: a record stamped `now` is there when `board.now` says it. What this answers goes out
-        in `poll`."""
+        """Take in what has come up the path by `now`, then run the broker's deadlines due by it,
+        before the test looks at the turn at `now`: a record stamped `now`, a PUBACK or an expiry
+        due at `now`, is there when `board.now` says it. What this answers goes out in `poll`."""
         self._at = now
         try:
             self._arrive(now)
+            self.broker.poll()
         finally:
             self._at = None
 
     def poll(self, now: int) -> list[Output]:
+        # Finds nothing left after `arrive` at the same `now`: what calls `poll` alone still gets
+        # the same answers, at the same stamps.
         self._at = now
         try:
             self._arrive(now)

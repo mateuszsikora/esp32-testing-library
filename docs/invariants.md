@@ -891,6 +891,14 @@ that references to its number keep their meaning.
     `tests/test_clock.py::test_a_wait_that_ends_at_a_datagrams_time_finds_it_taken`,
     `tests/test_clock.py::test_a_wait_until_returns_at_the_datagrams_time`,
     `tests/test_mqtt_session.py::test_a_record_is_there_when_the_board_says_its_time`
+- **195.** The broker's deadlines run before the test holds the turn at their time: at the instant a delayed PUBACK is due it is emitted, at
+    the instant a keepalive expires the connection is closed and its Will published, and what the test does at that instant comes after them.
+    Expiry still wins a tie with a PUBACK deadline.
+    `tests/test_clock.py::test_a_wait_that_ends_at_a_puback_deadline_finds_it_emitted`,
+    `tests/test_clock.py::test_a_wait_until_returns_at_a_puback_deadline`,
+    `tests/test_clock.py::test_a_wait_that_ends_at_keepalive_expiry_finds_the_connection_closed_and_the_will`,
+    `tests/test_clock.py::test_a_wait_until_returns_at_keepalive_expiry`,
+    `tests/test_clock.py::test_keepalive_expiry_wins_a_tie_with_a_puback_deadline_in_a_held_turn`
 - **187.** A rate counts the IPv4 datagram alone, not what follows it in its Ethernet frame.
     `tests/test_net_path.py::test_what_follows_a_datagram_in_its_frame_takes_no_time_at_the_rate`,
     `tests/test_net_ethernet.py::test_what_follows_an_ipv4_datagram_in_its_frame_is_not_part_of_it`

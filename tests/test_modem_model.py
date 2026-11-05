@@ -6,6 +6,9 @@ from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+from test_net_mqtt import CONNECT, PUBLISH
+from test_net_mqtt_failures import Peer
+from test_net_mqtt_failures import Wire as PppWire
 
 from esp32tl import boards, recording
 from esp32tl.boards import Line
@@ -18,7 +21,7 @@ from esp32tl.net import Internet
 from esp32tl.net.ntp import NTP_EPOCH
 from esp32tl.report import RunLog
 from esp32tl.sources.model.modem import LATENCY_NS, MAX_COMMAND, Modem, Restart
-from esp32tl.units import Duration, hours, minutes, ms, seconds
+from esp32tl.units import NS_PER_S, Duration, hours, minutes, ms, seconds
 
 LILYGO = boards.profile("lilygo-t-a7670g-r2")
 
@@ -777,6 +780,43 @@ def test_a_hung_modem_answers_nothing_and_keeps_its_commands() -> None:
         (Duration(6), "ATE1", b"", False),
     ]
     assert list(model.poll(7)) == [] and model.quiet_until() is None
+
+
+@pytest.mark.parametrize("deadline", ["puback", "keepalive"])
+def test_a_broker_deadline_at_the_escapes_instant_runs_before_it(
+    tmp_path: Path, deadline: str
+) -> None:
+    now = [0]
+    modem, _, _ = route(tmp_path, now)
+    network = modem.network()
+    model = modem.model()
+    assert b"CONNECT" in reply(model, "ATD*99#")
+    wire = PppWire(network)
+    peer = Peer(wire, 4000)
+    peer.send(CONNECT)  # keepalive 10 s: it expires at 15 s
+    assert peer.read().startswith(b"\x20\x02")
+    broker = network.broker
+    at = 15 * NS_PER_S
+    publication = None
+    if deadline == "puback":
+        at = 3 * NS_PER_S
+        broker.puback = seconds(3)
+        peer.send(PUBLISH)
+        [message] = broker.messages
+        publication = message.publication
+        assert publication is not None
+    # One second of silence before and after the pluses: the escape is at `at`, with the deadline.
+    model.receive(at - NS_PER_S, b"+++")
+    assert model.quiet_until() == at
+    model.arrive(at)
+    if publication is not None:
+        assert (publication.status, publication.puback_at) == ("emitted", Duration(at))
+    else:
+        assert network.events[-1]["event"] == "mqtt: c keepalive expired"
+        assert broker.session("c") is None  # CleanSession=1: closing discards it
+    # Ending data mode drops what the deadline wrote: only the escape's OK reaches the firmware.
+    assert list(model.poll(at)) == [(at, b"\r\nOK\r\n")]
+    assert not model.data_mode
 
 
 def test_a_hung_modem_passes_no_data_and_sends_no_no_carrier(tmp_path: Path) -> None:

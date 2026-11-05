@@ -7,27 +7,32 @@ import re
 import struct
 import threading
 from collections.abc import Callable, Sequence
+from pathlib import Path
 from typing import Any, TypeVar
 
 import pexpect
 import pytest
 from test_net_ip import packet
 
+from esp32tl import boards, recording
 from esp32tl.backends.clock import HeldClock, nanoseconds, seconds
 from esp32tl.interfaces import NeverHappened, RunEnded
 from esp32tl.interfaces.console import Console, ConsoleLines, Line
+from esp32tl.interfaces.lines import Lines
+from esp32tl.interfaces.modem import Modem as ModemRoute
 from esp32tl.interfaces.wifi import Wifi
-from esp32tl.link.boardlink import BoardLink, Interface
+from esp32tl.link.boardlink import BoardLink, Interface, Wire
 from esp32tl.link.protocol import Console as ConsoleMessage
 from esp32tl.link.protocol import FlashDump, FlashDumpAck, RunnerHello, Stop, Sync, Wait
 from esp32tl.net.ethernet import GATEWAY_MAC
-from esp32tl.net.mqtt import Broker
+from esp32tl.net.mqtt import Broker, Publication
 from esp32tl.units import Duration, minutes, ms
 from esp32tl.units import seconds as secs
 
 HELLO = RunnerHello(1, "esp32", "emulated-fifo-write", "0" * 40)
 MS = 1_000_000
 S = 1_000_000_000
+LILYGO = boards.profile("lilygo-t-a7670g-r2")
 
 T = TypeVar("T")
 
@@ -205,6 +210,129 @@ def test_a_wait_until_returns_at_the_datagrams_time() -> None:
     try:
         assert run.clock.wait_until(lambda: taken, 110 * MS, "the datagram") == [110 * MS]
         assert run.clock.now == 110 * MS
+    finally:
+        run.clock.stop()
+        run.runner.join(5)
+
+
+# Keepalive 10 s, so it expires at 15 s, and a Will on a/w; then a QoS 1 PUBLISH on a/b.
+CONNECT_AND_PUBLISH = (
+    b"\x10\x16\0\x04MQTT\x04\x06\0\x0a\0\x01c\0\x03a/w\0\x02by" + b"\x32\x0a\0\x03a/b\0\x09new"
+)
+
+
+def a_broker_with_deadlines(
+    puback: Duration, behind: str, tmp_path: Path
+) -> tuple[Run, Broker, Publication]:
+    """A run on the test's clock, with a client connected at 0 whose keepalive expires at 15 s, and
+    a publication of it whose PUBACK is due `puback` later; on the network `behind` a Wi-Fi access
+    point or a modem in data mode."""
+    clock = HeldClock()
+    interface: Interface
+    if behind == "wifi":
+        wifi = Wifi(now=lambda: clock.now, asked=lambda request: None)
+        network = wifi.access_point("myssid", password="mypassword")
+        interface = wifi
+    else:
+        modem = ModemRoute(
+            "uart.modem",
+            Wire(tx=26, rx=27, baud=115200),
+            clock=recording.EMULATED,
+            directory=tmp_path,
+            now=lambda: clock.now,
+            lines=Lines(LILYGO.name, LILYGO.lines, lambda: clock.now),
+            pins=LILYGO.lines["modem"],
+        )
+        network = modem.network()
+        model = modem.model()
+        assert b"CONNECT" in b"".join(data for _, data in model.receive(0, b"ATD*99#\r\n"))
+        assert model.data_mode
+        # PPP's first LCP request: taken here, so that the runner's turns carry no input.
+        assert list(model.poll(0))
+        interface = modem
+    broker = network.broker
+    broker.puback = puback
+    session = broker.accept(("10.0.0.2", 4000), lambda data: None, lambda: None)
+    session.on_data(CONNECT_AND_PUBLISH)
+    [message] = broker.messages
+    assert message.publication is not None
+    return Run(clock=clock, interfaces=[interface]), broker, message.publication
+
+
+# Both ways a test's network reaches the board, as `Wifi.arrive` and `ModemModel.arrive` pass it on.
+BEHIND = pytest.mark.parametrize("behind", ["wifi", "modem"])
+
+
+@BEHIND
+def test_a_wait_that_ends_at_a_puback_deadline_finds_it_emitted(
+    behind: str, tmp_path: Path
+) -> None:
+    run, _, publication = a_broker_with_deadlines(ms(100), behind, tmp_path)
+    try:
+        run.clock.wait(100 * MS - 1)
+        assert (publication.status, publication.puback_at) == ("pending", None)
+        run.clock.wait(1)
+        assert run.clock.now == 100 * MS
+        assert publication.status == "emitted" and publication.puback_at == ms(100)
+        # The deadline came before what the test does at its instant.
+        assert not publication.release()
+    finally:
+        run.clock.stop()
+        run.runner.join(5)
+
+
+@BEHIND
+def test_a_wait_until_returns_at_a_puback_deadline(behind: str, tmp_path: Path) -> None:
+    run, _, publication = a_broker_with_deadlines(ms(100), behind, tmp_path)
+    try:
+        found = run.clock.wait_until(lambda: publication.puback_at, 100 * MS, "the PUBACK")
+        assert found == ms(100) and run.clock.now == 100 * MS
+    finally:
+        run.clock.stop()
+        run.runner.join(5)
+
+
+@BEHIND
+def test_a_wait_that_ends_at_keepalive_expiry_finds_the_connection_closed_and_the_will(
+    behind: str, tmp_path: Path
+) -> None:
+    run, broker, _ = a_broker_with_deadlines(ms(100), behind, tmp_path)
+    try:
+        run.clock.wait(15 * S - 1)
+        assert broker.session("c") is not None
+        assert broker.find_message("a/w") is None
+        run.clock.wait(1)
+        assert run.clock.now == 15 * S
+        assert broker.session("c") is None  # CleanSession=1: closing discards it
+        will = broker.find_message("a/w")
+        assert will is not None and will.at == secs(15)
+        assert not broker.disconnect("c")
+    finally:
+        run.clock.stop()
+        run.runner.join(5)
+
+
+@BEHIND
+def test_a_wait_until_returns_at_keepalive_expiry(behind: str, tmp_path: Path) -> None:
+    run, broker, _ = a_broker_with_deadlines(ms(100), behind, tmp_path)
+    try:
+        will = broker.next_message("a/w")
+        assert run.clock.wait_until(will, 15 * S, repr(will)).at == secs(15)
+        assert run.clock.now == 15 * S
+    finally:
+        run.clock.stop()
+        run.runner.join(5)
+
+
+@BEHIND
+def test_keepalive_expiry_wins_a_tie_with_a_puback_deadline_in_a_held_turn(
+    behind: str, tmp_path: Path
+) -> None:
+    run, broker, publication = a_broker_with_deadlines(secs(15), behind, tmp_path)
+    try:
+        run.clock.wait(15 * S)
+        assert broker.session("c") is None
+        assert publication.status == "cancelled" and publication.puback_at is None
     finally:
         run.clock.stop()
         run.runner.join(5)

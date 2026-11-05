@@ -7,9 +7,10 @@ returns its `Broker`. All callbacks execute during link turns or while the test 
 There are no sockets, worker threads or host-clock timers. `Internet` uses the current UART chunk's
 or Ethernet frame's timestamp inside receive callbacks and the held board time for test calls.
 Responses carry a 1,000,000 ns latency (`LATENCY_NS`), the path's RTT when the test sets one; the
-modem starts PPP after CONNECT, so LCP follows the AT response. `poll` takes what has come up the
-path, evaluates broker keepalive and PUBACK deadlines and drains queued replies; `quiet_until`
-bounds the next turn by the earliest of those deadlines and the path's next datagram.
+modem starts PPP after CONNECT, so LCP follows the AT response. `arrive`, before the test holds the
+turn, takes what has come up the path and evaluates broker keepalive and PUBACK deadlines; `poll`,
+after the hold, drains queued replies; `quiet_until` bounds the next turn by the earliest of those
+deadlines and the path's next datagram.
 
 ## The link
 
@@ -62,10 +63,15 @@ The test must see what has come up by the turn it holds. `BoardLink._turn` holds
 polls, so a datagram taken in `poll` would be there only at the next step of the test's clock, with a
 stamp already behind `board.now`. So `_turn` first calls `Interface.arrive(now)` on each interface:
 `Uart.arrive` passes it to a source that is `Arriving`, `ModemModel.arrive` to its `Internet` in data
-mode, `Wifi.arrive` to its active network, and `Internet.arrive` runs `_arrive(now)`. Answers made
-there stay in `_out` until `poll`, after the hold, so what the test does in the turn comes after what
-the network took in it. The broker's own deadlines, keepalive and a delayed PUBACK, still run in
-`poll`, after the hold, as they did. `SppPeer` passes `poll` to its source and not `arrive`, so a
+mode, `Wifi.arrive` to its active network, and `Internet.arrive` runs `_arrive(now)`, then
+`Broker.poll()`, with `_at` set to `now`. Answers made there stay in `_out` until `poll`, after the
+hold, so what the test does in the turn comes after what the network took in it. The broker's own
+deadlines, keepalive and a delayed PUBACK, run there too, for the same reason: the runner stops at
+the deadline, which `quiet_until` gives, and the test holding that turn sees the PUBACK emitted, the
+connection closed and its Will in `messages`. A PUBACK goes out in `poll`, like any answer. `poll`
+still runs `_arrive(now)` and `Broker.poll()` before it takes `_out`: after `arrive` at the same
+`now` they find nothing, and a caller that polls alone, as the network's unit tests do, gets the
+same answers at the same stamps. `SppPeer` passes `poll` to its source and not `arrive`, so a
 modem model with a network as the source of a Bluetooth peer would take datagrams in `poll`; nothing
 makes that pair today.
 
@@ -254,9 +260,10 @@ so two runs give the same stamps (`tests/test_determinism.py::test_mqtt_session_
   their original timestamps and DUP bits.
   `Broker.puback` is sampled when a handle is created: immediate and zero delays release it
   after routing, `"hold"` has no deadline, and a `Duration` supplies an absolute deadline from
-  the first receipt. Duplicates and policy changes leave that deadline unchanged. `poll`
-  expires keepalives first, then releases due handles in connection/receipt order. A late poll
-  stamps emission at its actual current time, never backdates it to the deadline.
+  the first receipt. Duplicates and policy changes leave that deadline unchanged. `Broker.poll`,
+  which `Internet.arrive` calls before the hold, expires keepalives first, then releases due
+  handles in connection/receipt order. A late poll stamps emission at its actual current time,
+  never backdates it to the deadline.
   `Publication.release()` writes PUBACK to the stream, marks it `"emitted"` and records
   `puback_at`; a synchronous TLS write failure closes the session and leaves it `"cancelled"`
   instead. Releasing a finished handle returns `False` without writing. `_end` cancels and
@@ -376,8 +383,11 @@ hand: the RTT from a request to its answer at odd nanoseconds, each direction's 
 each way, one datagram after another, a change that overtakes nothing, the floor's message, control
 traffic passing the queue, what a reset and the end of the link drop, and `quiet_until`.
 `tests/test_clock.py` holds real turns on `HeldClock` with a datagram on the path: a wait that ends at
-its time finds it taken, and `wait_until` returns at it. `tests/test_boardlink.py` checks
-`arrive`, the hold and `poll` in that order.
+its time finds it taken, and `wait_until` returns at it. It does the same for the broker's deadlines,
+a PUBACK delayed by `ms(100)` and a keepalive of 10 s, with the Will at expiry, behind an access
+point and behind a modem in data mode, and checks that `release()` and `disconnect` at that instant
+come after them and that expiry wins a tie with a PUBACK due at the same time.
+`tests/test_boardlink.py` checks `arrive`, the hold and `poll` in that order.
 `tests/test_mqtt_session.py` also runs esp-mqtt on a path: the spacing of a backlog's exchanges at
 200 ms and 600 ms and their ratio, the rate, and a redelivery over 600 ms.
 `tests/test_net_mqtt_sessions.py` asserts the broker's sessions in exact bytes, flags and packet

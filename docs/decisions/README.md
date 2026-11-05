@@ -210,6 +210,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The MQTT service implements ephemeral sessions and QoS zero and one](harness.md#the-mqtt-service-implements-ephemeral-sessions-and-qos-zero-and-one) | `harness.md` | decided (#30, #104), sessions amended (#130) |
 | [The broker keeps a session by client ID when CleanSession is 0](harness.md#the-broker-keeps-a-session-by-client-id-when-cleansession-is-0) | `harness.md` | decided (#130) |
 | [A path with RTT and rate sits between the link and the network](harness.md#a-path-with-rtt-and-rate-sits-between-the-link-and-the-network) | `harness.md` | decided (#130) |
+| [A broker deadline runs before the test holds its turn](harness.md#a-broker-deadline-runs-before-the-test-holds-its-turn) | `harness.md` | decided (#139) |
 | [Packet loss on the network path is postponed](harness.md#packet-loss-on-the-network-path-is-postponed) | `harness.md` | postponed (#130) |
 | [MQTT CONNECT policy runs before accepted session state is installed](harness.md#mqtt-connect-policy-runs-before-accepted-session-state-is-installed) | `harness.md` | decided (#103) |
 | [TLS determinism compares explicit plaintext transcripts](harness.md#tls-determinism-compares-explicit-plaintext-transcripts) | `harness.md` | decided (#30) |
