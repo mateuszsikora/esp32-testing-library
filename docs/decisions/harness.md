@@ -1228,6 +1228,35 @@ initially FAT helpers in esp32tl, because mtools already makes and reads images 
 superseded by [library-owned image builders](#board-owns-interfaces-and-sd-image-builders)); and naming the slot `[spi.<role>]`, because a profile
 names what is at the end of the wires, and the card is not any SPI device.
 
+Since #132 the builder takes `size_mb` up to 1 TiB and `cluster_kb`, and `insert` stays at 2 TiB:
+#132 saw an assertion in mformat on nearly 2 TiB with `-c 128`, which later runs have not reproduced
+([what was measured](../features/pytest-plugin-technical.md#shared-board-and-fat-image-api)), and a
+test that needs more can still format its own image. A cluster the card's FAT32 cannot have is refused at `image()`, rather than
+left to a firmware that would fail to mount. This decision stands for a card from
+[the card cache](#prepared-cards-are-kept-in-a-cache-of-the-tests-choosing): the image in the slot
+writes through, and a clone is the test's explicit choice.
+
+## Prepared cards are kept in a cache of the test's choosing
+
+Status: decided (#132)
+
+Firmware that prepares a card on its first mount took 56 s of board time and 20 s of wall time on a
+2048 MiB card, on every fresh card. The session fixture `card_cache` keeps a card a test prepared,
+in `config.cache`, keyed by the test's name for it and the app image's hash. `get` returns a clone
+in the test's directory or `None`, and `put` keeps a copy. A clone is the file system's where it
+can (APFS, reflink on Linux) and otherwise a copy that skips zeros. The limit,
+`esp32tl_card_cache_mib`, is 4096 by default, the tool's choice with no source behind it, counted
+from `st_blocks`, and evicts the card least recently used. Writes are atomic. On a miss the test has
+one boot more, which a test that counts boots allows for.
+
+**Rejected:** preparing the card on a separate board in a session fixture, for the cost of one more
+run in every session, and because no such board could be the test's; relying on test order, so that
+an earlier test prepares what a later one reads, for the dependency it creates between tests;
+`os.link` rather than a clone, because writes would reach the cache; a limit by the files' size,
+because a 32 GiB card takes 8 MiB; a key without the application, because a new build may prepare
+the card differently; and a function-scoped fixture, because the limit and the directory are the
+session's, though the operations do work on the running test's board.
+
 ## The test makes the SD card fail or slow down with sd_card.fail and sd_card.delay
 
 Status: decided (#107)

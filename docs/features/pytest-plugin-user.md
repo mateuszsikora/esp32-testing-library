@@ -379,7 +379,16 @@ def test_the_example_writes_its_files_into_the_image(board: Board):
     assert card.read_bytes("config.bin") == b"\x01\x02"
 ```
 
-- `image(size_mb=32)` starts a builder; `size_mb` is a whole number from 1 to 2048 MiB.
+- `image(size_mb=32, cluster_kb=None)` starts a builder. `size_mb` is a whole number from 1 to
+  1048576 MiB (1 TiB), or `ValueError`: `size_mb must be a whole number from 1 to 1048576 (MiB)`.
+  `insert` takes larger images, up to 2 TiB, made elsewhere. The image is sparse: a card of 32 GiB
+  with 32 KiB clusters takes 8 MiB of disk until the firmware writes to it, and one of 1 TiB 256 MiB.
+- `cluster_kb` is the size of the clusters, without it mformat's choice (4 KiB at 512 MiB, 32 KiB
+  from 32 GiB on), or `ValueError`: `cluster_kb must be one of 1, 2, 4, 8, 16, 32, 64 (KiB)`. From
+  512 MiB on the card is FAT32, and a FAT32 file system has 65525 to 268435445 clusters, so that a
+  cluster too large for the card, or too small, is refused:
+  `a FAT32 card of 512 MiB with 64 KiB clusters has 8190 clusters; FAT32 takes 65525 to 268435445: choose another size_mb or cluster_kb`.
+  Below 512 MiB mformat chooses the FAT that suits the count. `minfo -i IMAGE ::` shows them.
   `with_text(name, contents, encoding="utf-8")` and `with_bytes(name, contents)` declare initial
   files and return the same builder. Subdirectories are created automatically. Paths are relative
   with `/` separators; traversal, wildcards (`*`, `?`, `[` and `]`), FAT-invalid characters and
@@ -443,6 +452,60 @@ def test_the_example_writes_its_files_into_the_image(board: Board):
   ([the run report](run-report-user.md)).
 - On a board profile without a slot, `sd_card` is an error at setup:
   `esp32sim: the board profile gps-alarm-clock has no sd_card; its interfaces are console, uart.gnss, lines.alarm, wifi`.
+
+#### Keeping a prepared card
+
+Firmware that prepares a card on its first mount, preallocating files say, spends that time on every
+fresh card: 56 s of the board's time and 20 s of wall time on one firmware and a 2048 MiB card. The
+`card_cache` fixture keeps the card a test prepared, for the tests after it and the sessions after
+this one:
+
+```python
+def test_logs_to_a_prepared_card(board, sd_card, card_cache, console):
+    card = card_cache.get("first-mount")
+    if card is None:
+        card = sd_card.image(size_mb=32768, cluster_kb=32).build()
+        sd_card.insert(card)
+        board.power_on()
+        console.expect_exact("logger: card ready")
+        board.power_off()
+        card_cache.put("first-mount", card)
+    else:
+        sd_card.insert(card)
+    board.power_on()
+    ...
+```
+
+- `card_cache.get(name)` returns a `CardImage`, a clone of the card kept as `name` for this
+  application, in the same temporary directory as the builder's images and gone when the board
+  closes; or `None`, when no card is kept: never put, evicted, or put by another build. The key is
+  the name and the SHA-256 of the app image, so a new build of the firmware starts again. Anything
+  else that shapes the card, its size, the board profile or what `board.nvs(...)` gave the firmware,
+  belongs in the name.
+- The clone is the test's own. The image in the slot still writes through, and what the firmware
+  writes reaches that clone only: not the cache, nor another clone.
+- `card_cache.put(name, image)` keeps a copy of the image, a `CardImage` or a path relative to the
+  test file's directory, in place of one kept before. What the firmware writes to the image after
+  that is not kept. Power the board off first, or take the card out: a card in the slot of a board
+  that is on is refused, because the firmware may have files open on it:
+  `card_cache: 'first-mount': PATH is in the slot of a board that is on: call board.power_off() first`.
+  Nor is a missing image kept (`card_cache: 'first-mount': no image at PATH`).
+- **A miss costs one more boot.** A test that counts boots, or reads `board.boots`, allows for the
+  boot that prepares the card, or powers the board off and asserts on what comes after. The cache
+  holds the card alone: NVS and the rest of the flash start as they always do.
+- The cards take at most `esp32tl_card_cache_mib` MiB of disk, an ini option, 4096 by default,
+  counted from what the files have allocated rather than from their size. When a card needs room,
+  those least recently used go first, and using one with `get` counts. A card that alone is above
+  the limit is refused, and evicts nothing:
+  `card_cache: 'first-mount' needs N bytes on disk; the limit is M: raise esp32tl_card_cache_mib`,
+  with both in bytes. Anything but a whole number of MiB from 1 is a usage error:
+  `esp32tl_card_cache_mib must be a whole number of MiB, not 'none'`.
+- The cards are in pytest's cache, `.pytest_cache/d/esp32tl-card-cache/`, which `--cache-clear`
+  empties. Under `-p no:cacheprovider` they last for the session. A card appears whole under its
+  name, and pytest-xdist's workers, or another session, may share the directory.
+- `card_cache` is a session fixture that works on the test's board: a test that uses it without
+  `board` gets `card_cache: no board is running: use it in a test that uses board`.
+- On serial the fixture works and `sd_card.insert` skips, as it does for any other image.
 
 #### Taking the card out and putting one in
 
@@ -896,13 +959,14 @@ under `[tool.pytest.ini_options]`.
 
 ## Names the plugin takes
 
-- **`board`, `console`, `gnss`, `lines`, `sd_card`, `wifi`**: the plugin's fixtures; a project's own fixture of one of these
+- **`board`, `console`, `gnss`, `lines`, `sd_card`, `card_cache`, `wifi`**: the plugin's fixtures; a project's own fixture of one of these
   names overrides it, as pytest has it.
 - **`board`**: esp32tl parametrises every test that asks for a fixture of that name, matched by
   name. A project's own `board` fixture, in a session where esp32tl is installed, gets the
   backend's id (`test_mine[esp32sim]`) and the plugin's parameters as well.
 - **The `app_path` and `board_profile` markers**: esp32tl registers them and reads them on every
   test that uses `board`. A project's own marker of one of these names means esp32tl's there.
+- **The `esp32tl_card_cache_mib` ini option**: esp32tl's, for [`card_cache`](#keeping-a-prepared-card).
 - **The `timeout` marker**: pytest-timeout's; esp32tl adds it to a test that uses `board` and has
   none, unless the session sets a timeout.
 - **`app_path`, `build_dir` and `embedded_services`**: esp32tl parametrises them for a test that

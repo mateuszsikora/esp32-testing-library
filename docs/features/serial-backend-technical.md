@@ -81,7 +81,7 @@ proves artifact/reference identity, not flash contents. It does not replay conso
 | Field | Value |
 |---|---|
 | `clock` | `wall` |
-| `app_sha256` | Required hash of the selected local app image |
+| `app_sha256` | Required hash of the selected local app image; also `Serial.app_sha256`, the key of [the card cache](pytest-plugin-technical.md#the-card-cache) |
 | `console_bytes` | Number of captured console bytes |
 | `error` | Connection/reader error string, or null |
 | `tap` | Console tap path, or null |
@@ -104,7 +104,7 @@ run log: the tap, power-on and wait steps, and received console lines.
 | `wait_on_clock(condition, within, description)` | Console-facing wait with a description used in logs and errors |
 | `console_output`, `console_lines` | Drain queued input, then return the shared bytearray / `ConsoleLines` |
 | `uart(role)` | Profile's UART object, a `Gnss` for `gnss` or `Modem` for `modem`; unsupported source/tap requests skip, and so does `real(port)`: `_asked` skips a `real` source on a UART before the port is opened, since the declaration's `real` is the device wired to the board |
-| `lines`, `sd_card` | Skip GPIO access, or return the slot whose model insertion skips; missing interfaces fail |
+| `lines`, `sd_card` | Skip GPIO access, or return the slot whose model insertion skips; missing interfaces fail. `card_cache` works, on that slot's temporary directory |
 | `wifi` | A `Wifi` made on first access with the backend's `asked`, on no link: `access_point` and `nearby` ask for a `model` source on `wifi`, which the declaration gives serial only as `real`, so they skip |
 | `nvs(namespaces, partition="nvs")` | Skip: hardware NVS replacement is unsupported |
 | `flash()` | Skip: reading a real board's flash is unsupported ([decision](../decisions/harness.md#a-real-board-does-not-read-its-flash-the-test-skips)) |

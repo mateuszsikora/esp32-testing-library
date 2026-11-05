@@ -19,6 +19,8 @@ from esp32tl.units import Duration, ms, seconds
 
 pytestmark = pytest.mark.app_path("../firmware/persistence")
 
+ROOT = Path(__file__).resolve().parent.parent
+
 BOOT = (
     rb"persistence: boot=(\d+) reason=(\d+) rom=(\d+) rtc=(\d+) ram=(\d+) sd=(-?\d+)"
     rb" uptime_ms=(\d+)"
@@ -158,3 +160,56 @@ def test_the_board_cannot_be_reset_or_read_for_boots_before_power_on(board: Esp3
         board.reset()
     with pytest.raises(BoardOff, match=r"call board.power_on\(\) first"):
         assert board.boots
+
+
+@pytest.mark.requires_mtools
+def test_a_second_test_takes_a_kept_card_and_writes_to_its_own_clone(
+    pytester: pytest.Pytester,
+) -> None:
+    if not (ROOT / "firmware/persistence/build/esp32tl-built").is_file():
+        pytest.fail(
+            "firmware/persistence holds no finished build: run make firmware", pytrace=False
+        )
+    pytester.makeini("[pytest]\nesp32tl_card_cache_mib = 64\n")
+    pytester.makepyfile(
+        test_kept=f"""
+        import pytest
+
+        pytestmark = pytest.mark.app_path({str(ROOT / "firmware/persistence")!r})
+
+        # Each run of the firmware boots twice: it restarts once, and NVS starts empty every test.
+        TWO = "boot 1\\nboot 2\\n"
+
+        def test_the_first_prepares_it_and_has_its_boots_besides(
+            board, sd_card, console, card_cache
+        ):
+            assert card_cache.get("prepared") is None
+            card = sd_card.image(size_mb=32768, cluster_kb=32).build()
+            sd_card.insert(card)
+            board.power_on()
+            console.expect_exact("persistence: done")
+            board.power_off()
+            card_cache.put("prepared", card)
+            assert card.read_text("BOOTS.TXT") == TWO
+
+        def test_the_second_finds_it_and_writes_to_its_clone_only(
+            board, sd_card, console, card_cache
+        ):
+            card = card_cache.get("prepared")
+            untouched = card_cache.get("prepared")
+            assert card.read_text("BOOTS.TXT") == TWO
+            sd_card.insert(card)
+            board.power_on()
+            console.expect_exact("persistence: done")
+            assert [boot.number for boot in board.boots] == [1, 2], "no boot for a first mount"
+            assert card.read_text("BOOTS.TXT") == TWO + TWO
+            assert untouched.read_text("BOOTS.TXT") == TWO
+            assert card_cache.get("prepared").read_text("BOOTS.TXT") == TWO
+
+        def test_the_third_finds_it_as_it_was_kept(board, card_cache):
+            assert card_cache.get("prepared").read_text("BOOTS.TXT") == TWO
+        """
+    )
+    pytester.runpytest_subprocess().assert_outcomes(passed=3)
+    kept = (pytester.path / ".pytest_cache/d/esp32tl-card-cache").iterdir()
+    assert sum(path.stat().st_blocks * 512 for path in kept) <= 64 << 20

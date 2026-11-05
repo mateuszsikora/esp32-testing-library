@@ -599,6 +599,14 @@ class Esp32Sim(Board):
         return self.clock
 
     @property
+    def app_sha256(self) -> str | None:
+        """The app image's hash, as a recording's header has it; `None` if the build has none."""
+        try:
+            return app_image_sha256(self.app)
+        except OSError:
+            return None
+
+    @property
     def powered(self) -> bool:
         """Whether the board's supply is on: from `power_on` to `power_off`."""
         return self.process is not None and self._supply
@@ -926,11 +934,6 @@ class Esp32Sim(Board):
             return []
         runner = self.link.runner
         tools = {"esp32sim": runner.esp32sim} if runner and runner.esp32sim else {}
-        # The app image alone, as the format has it: the header's app_sha256 (plan §4.3).
-        try:
-            app_sha256 = app_image_sha256(self.app)
-        except OSError:
-            app_sha256 = None
         problems = []
         for uart in tapped:
             assert uart.tapped is not None
@@ -939,7 +942,8 @@ class Esp32Sim(Board):
                     board=self.profile.name,
                     source=uart.recorded_source(),
                     clock=self.clock,
-                    app_sha256=app_sha256,
+                    # The app image alone, as the format has it (plan §4.3).
+                    app_sha256=self.app_sha256,
                     tools=tools,
                 )
                 recording.write(uart.tapped.path, made)

@@ -127,6 +127,10 @@ class Board(ABC):
 
     @property
     @abstractmethod
+    def app_sha256(self) -> str | None: ...
+
+    @property
+    @abstractmethod
     def powered(self) -> bool: ...
 
     @property

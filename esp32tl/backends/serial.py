@@ -91,7 +91,7 @@ class Serial(Board):
         self.dut = dut
         self.profile = profile
         self.directory = directory
-        self.app_sha256 = app_sha256
+        self._app_sha256 = app_sha256
         self._skip = skip
         self._msg_queue = msg_queue
         self._output = bytearray()
@@ -126,6 +126,11 @@ class Serial(Board):
             if profile.sd_card is not None
             else None
         )
+
+    @property
+    def app_sha256(self) -> str:
+        """The app image's hash, checked before the port opened."""
+        return self._app_sha256
 
     @property
     def powered(self) -> bool:

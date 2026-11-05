@@ -496,7 +496,8 @@ instance, is not a `BackendError` and fails the setup with its own traceback.
 
 `load_app(app_path, build_dir=build_dir, backend="esp32sim")` is also used by serial with
 `backend="serial"`: its target and encryption errors name that backend. The default retains the
-runner-specific messages above. `app_image_sha256(app)` in `esp32tl/tap.py` hashes the app entry for
+runner-specific messages above. `Esp32Sim.app_sha256` is that hash, `None` when the build has none, for a tap's header and
+[the card cache](pytest-plugin-technical.md#the-card-cache). `app_image_sha256(app)` in `esp32tl/tap.py` hashes the app entry for
 both backends; no app entry returns `None`, and read failures raise `OSError` (tap writing catches
 those).
 
