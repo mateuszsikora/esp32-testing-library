@@ -152,6 +152,11 @@ class Interface:
         Returns the answers, each stamped at least `latency()` after the request it answers."""
         return ()
 
+    def arrive(self, now: int) -> None:
+        """What has come due by `now` reaches the interface's far end, asked at the start of every
+        turn, before the hold, so that the test holding this turn sees it. It sends nothing: what
+        it makes goes out in `poll`, after the hold."""
+
     def poll(self, now: int) -> Iterable[Output]:
         """What the interface sends unprompted, asked at every turn; none stamped before `now`.
         Its outputs may lie in the future: the runner queues them (protocol §8)."""
@@ -547,6 +552,9 @@ class BoardLink:
         """The harness's turn at the block point `now`: the inputs, then the `wait`; or `stop`,
         when the hold ends the run."""
         self.turns += 1
+        for interface in self.interfaces:
+            with calling(interface.name, "arrive"):
+                interface.arrive(now)
         bounds: list[tuple[str, int | None]] = []
         if self.hold is not None:
             with calling(HOLD, "turn"):

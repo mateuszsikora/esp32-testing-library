@@ -104,12 +104,12 @@ next build is still incremental; the marker, removed first, is what says it fini
 The Makefile's `firmware` target runs `FIRMWARE_OUT= firmware/build.sh`; the pattern rule
 `firmware/%/build/esp32tl-built` runs `FIRMWARE_OUT= firmware/build.sh $*`, and `test` depends on
 `$(FIRMWARE_IMAGES:%=firmware/%/build/esp32tl-built)` with `FIRMWARE_IMAGES := hello_world
-nmea_reader gpio_echo sdspi sd_remount modem_at nvs_reader pppos_client http_request`. `determinism` depends on
-the markers of `nmea_reader`, `pppos_client` and `http_request`. The rule has no prerequisites, so make rebuilds
+nmea_reader gpio_echo sdspi sd_remount modem_at nvs_reader pppos_client mqtt_session http_request persistence`. `determinism` depends on
+the markers of `nmea_reader`, `pppos_client`, `mqtt_session` and `http_request`. The rule has no prerequisites, so make rebuilds
 an image only when its marker is missing: an edit to `firmware/nmea_reader/` needs `make firmware`, or
 `firmware/build.sh nmea_reader`, before `make test` sees it.
 
-`nmea_reader`, `gpio_echo`, `sd_remount`, `modem_at` and `nvs_reader` are built from the read-only `/project`
+`nmea_reader`, `gpio_echo`, `sd_remount`, `modem_at`, `mqtt_session` and `nvs_reader` are built from the read-only `/project`
 mount like any other project. They take no components from the component manager, and with `sdkconfig` and the
 build in the build directory ESP-IDF v5.3.6 writes nothing into their directories.
 
@@ -267,6 +267,33 @@ runs, through `pytester`, a test that inserts a card, deletes its image and wait
 `RunEnded` with `sd_card: the runner refused the card at T ns: PATH: No such file or directory
 (os error 2)`.
 
+## `mqtt_session`
+
+`firmware/mqtt_session/` is an ESP-IDF project that needs `esp_modem`, `mqtt` and `esp_netif`. Its
+`CMakeLists.txt` takes the esp_modem component as `examples/position_tracker` does: it runs
+`firmware/pppos_client/prepare.py` on `dependencies/` in the build directory, adds the
+`components/` directory that holds esp_modem to `EXTRA_COMPONENT_DIRS` and sets
+`IDF_COMPONENT_MANAGER` to `0`, since ESP-IDF and that download provide every dependency.
+`project_of` maps it to `$PWD/firmware/mqtt_session`, and `/project` stays read-only.
+`sdkconfig.defaults` enables PPP, as the position tracker's does, and sets 4 MB of flash.
+
+`main.c` uses fixed LilyGO pins (TX 26, RX 27, no flow control), `ESP_MODEM_DCE_SIM7600` and the APN
+`internet`. `esp_modem_set_mode(ESP_MODEM_MODE_DATA)` goes to data mode and `app_main` waits for
+`IP_EVENT_PPP_GOT_IP`. `mqtt_event` subscribes in `MQTT_EVENT_CONNECTED` and prints from the event
+structure. esp-mqtt writes its PUBACK after it has handed the message to `MQTT_EVENT_DATA`, in
+`mqtt_process_receive`, so a printed line and the PUBACK come in that order.
+
+`command` reads `backlog <n>` from a message without DUP into a queue of four, which `report_backlogs`,
+a task of its own, takes: it calls `esp_mqtt_client_publish` for each report and blocks in
+`xTaskNotifyWait` until `mqtt_event`, on `MQTT_EVENT_PUBLISHED`, notifies it with the same message
+ID. A publish that returns an error prints `mqtt_session: publish failed: <code>` and ends that
+backlog without `backlog done`. It is not done in the event handler, because that is esp-mqtt's task, and the PUBACK has to be
+read there.
+
+`tests/test_firmware_images.py::test_mqtt_session_has_the_classic_layout` checks the layout,
+`tests/test_firmware_build.py` where it is built from, and `tests/test_mqtt_session.py` what it does
+against the broker.
+
 ## `http_request`
 
 ESP-IDF's `examples/protocols/http_request`, built as it is: no file of this repository goes into
@@ -402,7 +429,7 @@ top of each build directory, `config/sdkconfig.json`, and the `.bin` and `.elf` 
 |---|---|---|---|
 | `IDF_VERSION` | script constant | `v5.3.6` | the ESP-IDF tag of the container |
 | `CONTAINER` | script constant | `espressif/idf:$IDF_VERSION@sha256:cee52f0c4fdaf088992a7a739f5993154e95cf1d3ab61c24f5b40e6d56a3a070` | the image the build runs in, pinned by digest (a multi-arch index) |
-| `IMAGES` | script constant | `hello_world nmea_reader gpio_echo sdspi sd_remount modem_at nvs_reader pppos_client http_request` | the images, in build order; `project_of` maps each to its project |
+| `IMAGES` | script constant | `hello_world nmea_reader gpio_echo sdspi sd_remount modem_at nvs_reader pppos_client mqtt_session http_request persistence` | the images, in build order; `project_of` maps each to its project |
 | `FIRMWARE_OUT` | environment | `firmware/` | where `IMAGE/build/` goes; empty means the default; `/out` inside the container |
 | `IDF_LOCAL` | environment | unset | `1` builds with the ESP-IDF of the calling shell |
 | `ESP32TL_CONTAINER` | environment, set by the host side | unset | marks the container side and names the image it records |
@@ -419,7 +446,7 @@ regular expressions, so each has to stay on a line of its own. Changing either, 
 
 | Message | Cause |
 |---|---|
-| `unknown image 'NAME'; the images are: hello_world nmea_reader gpio_echo sdspi sd_remount modem_at nvs_reader pppos_client http_request` | an argument not in `IMAGES`; nothing written |
+| `unknown image 'NAME'; the images are: hello_world nmea_reader gpio_echo sdspi sd_remount modem_at nvs_reader pppos_client mqtt_session http_request persistence` | an argument not in `IMAGES`; nothing written |
 | `ESP32TL_CONTAINER is set outside a container; unset it` | `ESP32TL_CONTAINER` set and no `/.dockerenv`; nothing written |
 | `IDF_LOCAL=1 needs ESP-IDF in the environment: source $IDF_PATH/export.sh first` | `IDF_LOCAL=1` without `idf.py` on `PATH` or without `IDF_PATH`; nothing written |
 | `needs Docker, or IDF_LOCAL=1 to build with a local ESP-IDF` | no `docker` on `PATH`; nothing written |
@@ -455,7 +482,7 @@ write their arguments to `$FAKE_LOG`, with a `PATH` holding only them and `cat`,
 - `test_local_build_runs_idf_py_and_records_how`: with no image named, every image in order,
   `hello_world` and `sdspi` from the fake `IDF_PATH`, `nmea_reader`, `gpio_echo`, `sd_remount`,
   `modem_at` and `nvs_reader` from `firmware/`, `pppos_client` from what a fake `python3` prints,
-  `persistence` from `firmware/`, and `http_request` from its copy, `.http_request-v9.9.9` in the output directory, which holds the
+  `mqtt_session` and `persistence` from `firmware/`, and `http_request` from its copy, `.http_request-v9.9.9` in the output directory, which holds the
   fake example's `CMakeLists.txt`; the `idf.py` arguments of each, the records with `"container": null`, the markers,
   the "not for goldens" warning and the `built in` lines;
 - reuse of a build directory with the same record, and removal of one with another record;

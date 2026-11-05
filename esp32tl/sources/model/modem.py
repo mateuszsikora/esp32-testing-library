@@ -302,6 +302,12 @@ class Modem:
         self._commands.append(Command(Duration(t), command, response, fallback))
         return response
 
+    def arrive(self, now: int) -> None:
+        """What has come up the network's path by `now`, while in data mode."""
+        with self._lock:
+            if self.data_mode and isinstance(self.data, Internet):
+                self.data.arrive(now)
+
     def poll(self, now: int) -> Iterable[Output]:
         """Poll the optional data peer while in data mode."""
         with self._lock:

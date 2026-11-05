@@ -14,6 +14,7 @@ Everything below is in `esp32tl.units`.
 |---|---|---|---|
 | `Duration` | `ms(x)`, `seconds(x)`, `minutes(x)`, `hours(x)` | `.seconds`, `.ns` | whole nanoseconds |
 | `Speed` | `m_s(x)`, `km_h(x)`, `mph(x)`, `knots(x)` | `.m_s`, `.km_h`, `.mph`, `.knots` | metres per second |
+| `Rate` | `kbit_s(x)`, `mbit_s(x)`, of 1000 and 1000000 bits per second | `.bit_s`, `.kbit_s`, `.mbit_s` | bits per second; above 0, else `ValueError`. It compares and has no arithmetic: [`network.set_path`](network-user.md#give-the-network-a-round-trip-and-a-rate) is what it is for |
 | `Distance` | `m(x)`, `km(x)`, `miles(x)`, `feet(x)` | `.m`, `.km`, `.miles`, `.feet` | metres |
 | `Heading` | `NORTH`, `NORTH_EAST`, `EAST`, `SOUTH_EAST`, `SOUTH`, `SOUTH_WEST`, `WEST`, `NORTH_WEST`, `Heading(degrees)` | `.degrees`, from 0 up to 360 | degrees clockwise from true north |
 | `Position` | `Position(lat, lon)`, decimal degrees, north and east positive | `.lat`, `.lon` | degrees |

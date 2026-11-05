@@ -36,6 +36,7 @@ whatever `FIRMWARE_OUT` the shell exports, because the tests read the images the
 | `sd_remount` | `firmware/sd_remount`: appends a line to a file on an SD card every 100 ms, and mounts the card again after a failure, for a card taken out and put back while it runs ([below](#sd_remount)) |
 | `modem_at` | `firmware/modem_at`: AT dialogue, PWRKEY and RI on the LilyGO profile, without a network ([below](#modem_at)) |
 | `pppos_client` | esp-protocols `modem-v1.4.1`, unchanged except sdkconfig: PPP and plain MQTT on the LilyGO modem route ([below](#pppos_client)) |
+| `mqtt_session` | `firmware/mqtt_session`: esp-mqtt with CleanSession=0 over the LilyGO modem route, which prints Session Present and each message's DUP, and publishes a QoS 1 backlog on command ([below](#mqtt_session)) |
 | `http_request` | ESP-IDF's `examples/protocols/http_request`, unmodified, with its default `sdkconfig`, for target `esp32`: joins a Wi-Fi access point and fetches `http://example.com/` over and over ([below](#http_request)) |
 | `persistence` | `firmware/persistence`: counts its boots in NVS, RTC memory, RAM and on an SD card, prints them with its reset reason, and restarts itself once ([below](#persistence)) |
 
@@ -237,7 +238,7 @@ every image those are:
 |---|---|
 | `0x1000` | `bootloader/bootloader.bin` |
 | `0x8000` | `partition_table/partition-table.bin` |
-| `0x10000` | `IMAGE.bin` (`hello_world.bin`, `nmea_reader.bin`, `gpio_echo.bin`, `sd_remount.bin`, `modem_at.bin`, `nvs_reader.bin`, `pppos_client.bin`, `http_request.bin`), `sd_card.bin` for `sdspi` |
+| `0x10000` | `IMAGE.bin` (`hello_world.bin`, `nmea_reader.bin`, `gpio_echo.bin`, `sd_remount.bin`, `modem_at.bin`, `nvs_reader.bin`, `pppos_client.bin`, `mqtt_session.bin`, `http_request.bin`), `sd_card.bin` for `sdspi` |
 
 and the ELF is `IMAGE.elf`, `sd_card.elf` for `sdspi`: the files take the project's name, and
 the `sdspi` example's project is called `sd_card`. Two more files say how the build was made:
@@ -285,7 +286,7 @@ The second one ends every finished build.
 
 `tests/test_firmware_images.py` reads `firmware/hello_world/build/`,
 `firmware/nmea_reader/build/`, `firmware/gpio_echo/build/`, `firmware/sdspi/build/`,
-`firmware/sd_remount/build/`, `firmware/nvs_reader/build/`, `firmware/pppos_client/build/` and `firmware/http_request/build/`,
+`firmware/sd_remount/build/`, `firmware/nvs_reader/build/`, `firmware/pppos_client/build/`, `firmware/mqtt_session/build/` and `firmware/http_request/build/`,
 and for each:
 
 - passes on a build from the pinned container;
@@ -310,7 +311,7 @@ run `make firmware`.
 `firmware/build.sh` exits 1 with one of these on stderr, before writing anything, or with the exit
 code of `idf.py` when the build itself fails:
 
-- `firmware/build.sh: unknown image 'NAME'; the images are: hello_world nmea_reader gpio_echo sdspi sd_remount modem_at nvs_reader pppos_client http_request`
+- `firmware/build.sh: unknown image 'NAME'; the images are: hello_world nmea_reader gpio_echo sdspi sd_remount modem_at nvs_reader pppos_client mqtt_session http_request persistence`
 - `firmware/build.sh: needs Docker, or IDF_LOCAL=1 to build with a local ESP-IDF`
 - `firmware/build.sh: the Docker daemon is not reachable ('docker info' failed); is Docker running?`
 - `firmware/build.sh: IDF_LOCAL=1 needs ESP-IDF in the environment: source $IDF_PATH/export.sh first`
@@ -380,6 +381,32 @@ The image lands at `firmware/pppos_client/build/`, with the same provenance and 
 marker as other images. `tests/test_pppos_client.py` checks the firmware publishing and receiving
 from the test's broker. [The network guide](network-user.md) shows both tests. This example uses
 plain MQTT; tracker firmware TLS/NTP validation is #72.
+
+## mqtt_session
+
+`firmware/build.sh mqtt_session` builds `firmware/mqtt_session`, on the LilyGO modem route at 115200
+baud, with the pinned esp_modem that `pppos_client` downloads. It is included in `make firmware` and
+`make test`. It dials, resolves `broker.test` and connects esp-mqtt with
+`.session.disable_clean_session = true`, the client ID `session-client` and a reconnection after
+1 s (`.network.reconnect_timeout_ms`), then subscribes to `session/commands` at QoS 1 on every
+connection, as a client that does not trust the session would. It prints:
+
+```text
+mqtt_session: connected session_present=0
+mqtt_session: data dup=0 qos=1 id=1 topic=session/commands payload=hello
+mqtt_session: disconnected
+```
+
+`session_present` is `event->session_present` of `MQTT_EVENT_CONNECTED`, and `dup`, `qos` and `id`
+are those of `MQTT_EVENT_DATA` (ESP-IDF v5.3.6, `components/mqtt/esp-mqtt/include/mqtt_client.h`).
+Told `backlog <n>` on `session/commands`, it publishes `report 1` to `report <n>` on
+`session/reports` at QoS 1, one at a time, waiting for `MQTT_EVENT_PUBLISHED` of each, and prints
+`mqtt_session: published <k> of <n>`, then `mqtt_session: backlog done`. A command that comes with
+DUP starts nothing.
+
+`tests/test_mqtt_session.py` runs it against the test's broker
+([keep a session across connections](network-user.md#keep-a-session-across-connections),
+[give the network a round trip and a rate](network-user.md#give-the-network-a-round-trip-and-a-rate)).
 
 ## `http_request`
 

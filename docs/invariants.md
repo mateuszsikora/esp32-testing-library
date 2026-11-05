@@ -756,6 +756,53 @@ that references to its number keep their meaning.
 
 ## Simulated network
 
+- **183.** A stated RTT is exact: what the device sends at `t` reaches the network at `t` plus the delay up and is answered at `t + rtt`, the two
+    delays adding up to it; a rate adds each datagram's size in bits at that rate, one datagram after another; an RTT below 1 ms is refused. The default is
+    the network without a path. LCP, IPCP, ARP and DHCP are not delayed.
+    `tests/test_net_path.py::test_a_stated_rtt_is_exact_from_the_request_to_the_answers_stamp`,
+    `tests/test_net_path.py::test_the_two_directions_add_up_to_the_rtt`,
+    `tests/test_net_path.py::test_by_default_the_answer_is_stamped_1_ms_after_the_request_in_its_turn`,
+    `tests/test_net_path.py::test_the_rate_takes_its_time_each_way_from_the_size_of_the_datagram`,
+    `tests/test_net_path.py::test_an_rtt_below_the_floor_is_refused`,
+    `tests/test_net_path.py::test_ppp_control_is_not_delayed`,
+    `tests/test_net_path.py::test_arp_and_dhcp_are_not_delayed`
+- **184.** No datagram on the path overtakes another, when the path changes either; `quiet_until` holds the runner at the head of each queue, and a
+    reset or the end of the link drops what is on the path.
+    `tests/test_net_path.py::test_a_smaller_rtt_applies_to_what_enters_after_it_and_overtakes_nothing_going_up`,
+    `tests/test_net_path.py::test_a_smaller_rtt_overtakes_nothing_going_down`,
+    `tests/test_net_path.py::test_the_network_never_stamps_an_answer_before_the_turn_that_hands_it_over`,
+    `tests/test_net_path.py::test_a_reset_drops_what_is_on_the_path_and_keeps_the_path`,
+    `tests/test_net_path.py::test_the_end_of_the_ppp_link_drops_what_is_on_the_path`
+- **186.** What has come up the path by a turn is taken in before the test holds that turn: a record is there when `board.now` reaches its stamp, and
+    what the test does at that instant comes after it.
+    `tests/test_boardlink.py::test_arrivals_come_before_the_hold_and_the_poll_after_it`,
+    `tests/test_clock.py::test_a_wait_that_ends_at_a_datagrams_time_finds_it_taken`,
+    `tests/test_clock.py::test_a_wait_until_returns_at_the_datagrams_time`,
+    `tests/test_mqtt_session.py::test_a_record_is_there_when_the_board_says_its_time`
+- **187.** A rate counts the IPv4 datagram alone, not what follows it in its Ethernet frame.
+    `tests/test_net_path.py::test_what_follows_a_datagram_in_its_frame_takes_no_time_at_the_rate`,
+    `tests/test_net_ethernet.py::test_what_follows_an_ipv4_datagram_in_its_frame_is_not_part_of_it`
+- **188.** A resumed session stays connected while its queue waits for packet IDs: each PUBACK sends the next message, and a QoS 1 message published
+    meanwhile goes behind the queue.
+    `tests/test_net_mqtt_sessions.py::test_a_resumed_queue_waits_for_packet_ids_and_each_puback_frees_one`
+- **185.** A QoS 1 backlog from esp-mqtt, one message at a time, takes about three times as long at an RTT of 600 ms as at 200 ms, each exchange
+    spaced by the RTT and some 15 ms of UART and firmware.
+    `tests/test_mqtt_session.py::test_a_qos1_backlog_follows_the_rtt`
+- **181.** The broker keeps a session by client ID when CleanSession is 0: a resumed CONNECT says Session Present 1 and sends
+    what is unacknowledged with DUP and the original packet IDs, in the order first sent, then the queue in order, with DUP 0;
+    an offline client's QoS 1 messages are queued and its QoS 0 dropped. CleanSession=1 discards the state at CONNECT and at
+    disconnection, and says Session Present 0, as does a refused CONNECT, which leaves a stored session alone.
+    `tests/test_net_mqtt_sessions.py::test_first_clean_session_zero_has_no_session_and_the_second_does`,
+    `tests/test_net_mqtt_sessions.py::test_offline_qos1_is_queued_in_order_and_qos0_is_dropped`,
+    `tests/test_net_mqtt_sessions.py::test_unacknowledged_go_again_with_dup_and_their_ids_before_the_queue`,
+    `tests/test_net_mqtt_sessions.py::test_clean_session_discards_a_stored_session_at_connect`,
+    `tests/test_net_mqtt_sessions.py::test_clean_session_discards_its_state_at_disconnection`,
+    `tests/test_net_mqtt_sessions.py::test_a_refused_connect_says_no_session_and_touches_none`
+- **182.** esp-mqtt with CleanSession=0 sees Session Present, receives a QoS 1 message published while it was offline, and one
+    redelivered with DUP after `broker.disconnect` in the same instant as its publication, whose first PUBACK counts for nothing.
+    `tests/test_mqtt_session.py::test_first_connection_finds_no_session_and_the_next_one_does`,
+    `tests/test_mqtt_session.py::test_receives_a_qos1_message_published_while_it_was_offline`,
+    `tests/test_mqtt_session.py::test_a_message_whose_puback_is_lost_comes_again_with_dup`
 - **90.** PPP delivers IPv4 only after both sides acknowledge LCP and IPCP; acknowledgments must match
     the pending request, including after termination and renegotiation. Framing survives arbitrary byte splits, escaping and compressed headers.
     `tests/test_net_ppp.py::test_ack_must_match_request_and_ipcp_waits_for_lcp`,

@@ -43,6 +43,13 @@ class Supplied(Protocol):
 
 
 @runtime_checkable
+class Arriving(Protocol):
+    """A source whose far end takes things in on its own time: the network, on its path."""
+
+    def arrive(self, now: int) -> None: ...
+
+
+@runtime_checkable
 class RateBound(Protocol):
     """A source that cannot take what the firmware transmits at any rate: a real device, behind a
     port whose rate is fixed for the run."""
@@ -213,6 +220,10 @@ class Uart(Interface):
             except Exception:
                 self._crossed(t, "out", data)
                 raise
+
+    def arrive(self, now: int) -> None:
+        if isinstance(self.source, Arriving):
+            self.source.arrive(now)
 
     def poll(self, now: int) -> Iterable[Output]:
         return () if self.source is None else self._sent(self.source.poll(now))

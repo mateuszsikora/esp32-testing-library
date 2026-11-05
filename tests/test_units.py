@@ -18,15 +18,18 @@ from esp32tl.units import (
     Duration,
     Heading,
     Position,
+    Rate,
     Speed,
     about,
     feet,
     hours,
+    kbit_s,
     km,
     km_h,
     knots,
     m,
     m_s,
+    mbit_s,
     miles,
     minutes,
     mph,
@@ -184,3 +187,24 @@ def test_about_compares_within_a_tolerance_of_the_same_kind() -> None:
 
 def test_a_speed_and_a_distance_are_kept_in_si_units() -> None:
     assert Speed(10) == m_s(10) and Distance(5) == m(5)
+
+
+def test_a_rate_is_stated_in_its_units_and_shown_in_kilobits() -> None:
+    assert kbit_s(512) == Rate(512_000)
+    assert mbit_s(2) == Rate(2_000_000)
+    assert mbit_s(2).kbit_s == 2000 and kbit_s(512).mbit_s == 0.512
+    assert kbit_s(512).bit_s == 512_000
+    assert kbit_s(512) < mbit_s(1)
+    assert str(kbit_s(512)) == "512 kbit/s" and repr(kbit_s(0.5)) == "kbit_s(0.5)"
+
+
+@pytest.mark.parametrize("value", [0, -1])
+def test_a_rate_is_above_zero(value: float) -> None:
+    with pytest.raises(ValueError, match="is not above 0"):
+        kbit_s(value)
+
+
+@pytest.mark.parametrize("value", [True, "512", None])
+def test_a_rate_is_a_number(value: object) -> None:
+    with pytest.raises(TypeError, match="is not a number"):
+        kbit_s(value)  # type: ignore[arg-type]

@@ -116,7 +116,8 @@ def test_puback_faults_reconnect_and_other_network_activity(secure: bool) -> Non
         net.listen(8883, broker, tls=ca)
     broker.puback = "hold"
     peer = Peer(wire, 4000, ca)
-    peer.send(CONNECT + SUBSCRIBE)
+    keep_session = CONNECT[:9] + b"\0" + CONNECT[10:]  # CleanSession=0
+    peer.send(keep_session + SUBSCRIBE)
     assert peer.read() == b"\x20\x02\0\0\x90\x03\0\x01\x01"
     observer = Peer(wire, 4001, ca)
     observer.send(CONNECT[:-1] + b"d")
@@ -169,16 +170,24 @@ def test_puback_faults_reconnect_and_other_network_activity(secure: bool) -> Non
     assert net.ntp.requests == 1 and net.ppp is ppp and ppp.ipcp_open
 
     replacement = Peer(wire, 4002, ca)
-    # CleanSession=0 still does not promise persistent broker sessions.
-    replacement.send(CONNECT[:9] + b"\0" + CONNECT[10:])
-    assert replacement.read() == b"\x20\x02\0\0"
+    # CleanSession=0 resumes: Session Present, and the routed copies that were never acknowledged
+    # again with DUP and their packet IDs, in the order first sent.
+    replacement.send(keep_session)
+    assert replacement.read() == (
+        b"\x20\x02\x01\0"
+        b"\x3a\x0a\0\x03a/b\0\x01new"
+        b"\x3a\x0a\0\x03a/b\0\x02new"
+        b"\x3a\x0a\0\x03a/b\0\x03new"
+    )
+    assert broker.subscribed("a/#")()
     assert next_client() is not None
     assert next_client().connection_id != stale.connection_id  # type: ignore[union-attr]
     replacement.send(DUPLICATE)
     retried = broker.pending[0]
     assert retried.packet_id == stale.packet_id and retried.connection_id != stale.connection_id
     assert retried.messages[0].dup and retried.messages[0].payload == b"new"
-    assert replacement.read() == b""  # No restored subscription, no premature ACK.
+    # The restored subscription routes it; its own handle holds the PUBACK.
+    assert replacement.read() == b"\x32\x0a\0\x03a/b\0\x04new"
     assert not stale.release() and retried.puback_at is None
     assert retried.release()
     wire.poll()

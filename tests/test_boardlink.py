@@ -382,6 +382,39 @@ def test_gpio_out_reaches_the_interfaces_on_its_pins() -> None:
     assert modem.drives == [(30, [(26, 0)], frozenset({26}))]
 
 
+def test_arrivals_come_before_the_hold_and_the_poll_after_it() -> None:
+    order: list[str] = []
+
+    class Ordered(Peer):
+        def arrive(self, now: int) -> None:
+            order.append(f"arrive {now}")
+
+        def poll(self, now: int) -> Iterable[Output]:
+            order.append(f"poll {now}")
+            return ()
+
+    class Hold:
+        def turn(self, now: int) -> int | None:
+            order.append(f"hold {now}")
+            return now + 100
+
+    link = BoardLink("esp32-devkitc", [Ordered()], hold=Hold())
+    link.receive(HELLO)
+    link.receive(Sync(0))
+    assert order == ["arrive 0", "hold 0", "poll 0"]
+
+
+def test_an_arrival_that_raises_fails_the_link_naming_it() -> None:
+    class Broken(Peer):
+        def arrive(self, now: int) -> None:
+            raise RuntimeError("no parser for that")
+
+    link = BoardLink("esp32-devkitc", [Broken()])
+    link.receive(HELLO)
+    assert link.receive(Sync(0)) == [Stop()]
+    assert link.error == "gnss.arrive raised RuntimeError: no parser for that"
+
+
 def test_an_interface_that_raises_fails_the_link_with_its_traceback() -> None:
     class Broken(Peer):
         def receive(self, t: int, direction: Direction, data: bytes) -> Iterator[Output]:
