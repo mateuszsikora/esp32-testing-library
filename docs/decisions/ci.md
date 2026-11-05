@@ -87,7 +87,7 @@ each flash image `flasher_args.json` names and the ELF `project_description.json
 (`app_elf`). The tarball holds only what `IdfApp` reads: 15 MB for `hello_world` against 116 MB
 for the whole build directory, about 1 MB once the cache compresses it. The cost of hashing the
 whole workflow is that any change to `ci.yml` or the `Makefile`, a comment included, rebuilds the
-firmware (about 3 min on hp600g1 when this was decided, about 24 min with 14 projects) and the
+firmware (about 3 min on hp600g1 when this was decided, about 13 min with 15 projects now) and the
 runner. If that starts to hurt, the packing can move into a script whose hash replaces the
 workflow's.
 
@@ -98,19 +98,20 @@ stale build, and for the runner skips its tests, without any sign of it.
 
 Status: decided (#145)
 
-A full build of 14 projects takes 24 to 25 minutes on hp600g1, about 100 s a project. Five times on
+A full build of 14 projects took 24 to 25 minutes on hp600g1, about 100 s a project. Five times on
 4 and 5 November 2026 the machine ran two to three times slower for part of a build, for a reason
 the logs do not show, and the job hit its earlier limit of 30 minutes: on #123, #125, #138 and
-twice on #133, with 9 to 12 of the projects done. At those speeds a full build of 15 projects takes
-up to about 52 minutes, so 60 covers it with 8 to spare. A timeout is only a cap: a cache hit takes
+twice on #133, with 9 to 12 of the projects done. At those speeds a full build of 15 projects took
+up to about 52 minutes, so 60 covered it with 8 to spare. A timeout is only a cap: a cache hit takes
 seconds, and a build that stops making progress holds the one machine for 30 minutes more.
 
-60 stops being enough when a whole build runs about 2.3 times slower than normal, and each new
-project lowers that. No measured run held that speed for a whole build, though single projects
-reached 3 times.
+60 stopped being enough when a whole build ran about 2.3 times slower than normal. No measured run
+held that speed for a whole build, though single projects reached 3 times. Since
+[images share their ccache hits](firmware.md#images-of-one-container-share-their-ccache-hits), a
+full build takes 13m13s, which moves that to about 4.7 times. The limit was not lowered with it.
 
-`test` keeps its 20 minutes. It reached that limit three times in such slow periods, so a slow run
-can still fit the build and then end red there.
+`test` kept its 20 minutes then, and reached that limit three times in such slow periods;
+[its shards](#the-test-jobs-run-four-shards-of-the-suite) came later.
 
 **Rejected:** 45 minutes, because it is under the estimate for the slow run it has to fit.
 
@@ -136,6 +137,29 @@ The runner's own tests already ran in the `runner` job.
 
 **Rejected:** `make test`, because after a checkout cargo sees the runner's sources as newer than
 the cached binary and links it again.
+
+## The test jobs run four shards of the suite
+
+Status: decided (#146)
+
+A `test` job ran the whole suite: about 11 minutes, 17 to 20 when hp600g1 was slow, and three times
+over its limit of 20. A job cancelled there cost its 20 minutes and all of its work. Each Python now
+runs four shards, `--shard=K/4` in `tests/conftest.py`, so a failed shard is re-run alone. Measured
+at normal speed, a shard took 2m41s to 4m26s, about 1 minute of it setup. At the three times slower
+seen in those periods the longest takes about 13 minutes, which 15 covers. The cost is setup: 12
+jobs spend about 12 minutes on it on the one machine, where 3 spent 3. Several machines could run the
+shards at once, later, with no change to them.
+
+A test's shard is the hash of its node id, so a new test needs no list, and no file of measured
+durations has to be kept up to date. The hash balances test counts, not time: pytest took about 105 s
+in the shortest shard and 200 s in the longest. The longest, at 4m26s, reaches 15 minutes at about
+3.4 times slower; a new slow test, or a renamed one that moves to another shard, lowers that.
+
+**Rejected:** three shards, because they take about 15 minutes at that speed, with nothing to spare;
+five, because 3 more jobs of setup buy little; splitting by file, because the 65 files differ too
+much in length: hashed into four, their times were 55, 165, 228 and 218 s; `pytest-split`, which
+balances better but needs that file of durations; a higher limit on one job, because it makes a
+cancelled job cost more.
 
 ## The ROM ELF is fetched once, by the firmware job
 

@@ -25,7 +25,7 @@ The test jobs then run only the runner and Python: they build nothing.
 |---|---|---|
 | `firmware` | self-hosted Linux | `make firmware examples` once per content of `firmware/`, `examples/`, the workflow and the `Makefile`; fetches the ROM ELF once per revision of `scripts/fetch-rom-elf` |
 | `runner` | self-hosted Linux; `macos-latest` only when the repository is public | `make build-runner test-runner`, once per content of `runner/` (its sources, its esp32sim pin, its toolchain), the workflow and the `Makefile` |
-| `test` | self-hosted Linux; `macos-latest` only when the repository is public; Python 3.11, 3.13, 3.14 | Unpacks the images and the runner, restores the ROM ELF, and runs pytest; builds nothing |
+| `test` | self-hosted Linux; `macos-latest` only when the repository is public; Python 3.11, 3.13, 3.14; shards 1/4 to 4/4 | Unpacks the images and the runner, restores the ROM ELF, and runs one shard of pytest's suite; builds nothing |
 | `determinism` | self-hosted Linux; Python 3.11 | Unpacks the images and the runner as `test` does, and runs `make determinism`: the determinism tests twice, the two runs compared |
 | `lint` | self-hosted Linux; Python 3.11 | `make lint`, clippy included |
 | `docs` | self-hosted Linux; pull requests only | `make docs-check` against the pull request's base branch |
@@ -111,15 +111,16 @@ cargo's `runner/target/` is not cached. Timeout: 30 minutes.
 
 ## `test`
 
-For each platform and Python version: sets up Python with pip's cache keyed on `pyproject.toml`,
+For each platform, Python version and shard: sets up Python with pip's cache keyed on `pyproject.toml`,
 restores the two tarballs and the ROM ELF, unpacks the tarballs (the images land in
 `firmware/<image>/build/`, where the tests read them), and runs `esp32tl-runner --help` to check
 that the binary starts. It then runs `make PYTHON=<that Python> .venv/.installed rom-elf`, which is
-`make setup` without `build-runner`. Before `.venv/bin/pytest` the `mtools` step makes sure
+`make setup` without `build-runner`. Before `.venv/bin/pytest --shard=K/4` the `mtools` step makes sure
 `mformat`, `mcopy`, `mdir` and `mtype` are on `PATH`, for the SD card tests, which skip without
 them: on macOS it installs mtools with Homebrew; on the self-hosted runner, which has no root for
 apt, it fails the job with `no TOOL on PATH: install mtools on this runner (apt-get install
-mtools)` until someone installs it there. Timeout: 20 minutes.
+mtools)` until someone installs it there. A shard that fails can be re-run alone with "Re-run failed
+jobs". Timeout: 15 minutes.
 
 ## `determinism`
 

@@ -4,9 +4,12 @@ Tests that need a container carry the `requires_docker` marker and are skipped, 
 marker's name and what is missing as the reason, where Docker is absent: GitHub-hosted macOS
 runners have none (plan M0). Tests that make or read a FAT image carry `requires_mtools` and are
 skipped the same way where mtools is not installed.
+
+`--shard=K/N` runs only the tests of shard K of N, which is how CI splits the suite into short jobs.
 """
 
 import functools
+import hashlib
 import shutil
 import subprocess
 
@@ -41,7 +44,38 @@ def mtools_missing() -> str | None:
     return f"no {', '.join(missing)} on PATH (mtools)" if missing else None
 
 
-def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption(
+        "--shard",
+        metavar="K/N",
+        help="run only the tests of shard K of N, counted from 1; a test's shard comes from its id",
+    )
+
+
+def parse_shard(value: str) -> tuple[int, int]:
+    """K and N of a `--shard` value."""
+    shard, _, count = value.partition("/")
+    if not (shard.isdecimal() and count.isdecimal() and 1 <= int(shard) <= int(count)):
+        raise pytest.UsageError(f"--shard must be K/N with 1 <= K <= N, not {value!r}")
+    return int(shard), int(count)
+
+
+def in_shard(item: pytest.Item, shard: int, count: int) -> bool:
+    # SHA-256, not hash(): every job must put a test in the same shard.
+    digest = hashlib.sha256(item.nodeid.encode()).digest()
+    return int.from_bytes(digest, "big") % count == shard - 1
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    value = config.getoption("--shard")
+    if value is not None:
+        shard, count = parse_shard(value)
+        selected: list[pytest.Item] = []
+        deselected: list[pytest.Item] = []
+        for item in items:
+            (selected if in_shard(item, shard, count) else deselected).append(item)
+        config.hook.pytest_deselected(items=deselected)
+        items[:] = selected
     for marker, missing in (
         ("requires_docker", docker_missing),
         ("requires_mtools", mtools_missing),

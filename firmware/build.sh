@@ -126,9 +126,15 @@ if [ -z "$container" ]; then
 	# writes dependencies.lock and managed_components/ into its own, and needs
 	# that directory writable first. The host's uid owns what the build
 	# writes; HOME=/tmp gives that uid, unknown to the image, a writable home.
+	# The image turns ccache on, and the container shares its cache between
+	# images, but every compile line and working directory names the image's
+	# build directory: CCACHE_BASEDIR and CCACHE_NOHASHDIR leave those out of
+	# the hash, or no image would hit what another compiled.
 	exec docker run --rm --init \
 		--user "$(id -u):$(id -g)" \
 		--env HOME=/tmp \
+		--env CCACHE_BASEDIR=/out \
+		--env CCACHE_NOHASHDIR=1 \
 		--env ESP32TL_CONTAINER="$CONTAINER" \
 		--env FIRMWARE_OUT=/out \
 		--env ESP32TL_HOST_OUT="$out" \

@@ -14,6 +14,7 @@ make test                                   # everything, from a clean checkout
 make test-runner                            # the runner's Rust unit tests only
 make test-runner RUNNER_PROFILE=dev         # the same, without the fat-LTO link
 make determinism                            # tests/test_determinism.py twice, the runs compared
+.venv/bin/pytest --shard=2/4                # the second of four shards, as one CI job runs it
 ```
 
 `make test` runs `make setup`, then `make test-runner`, builds the validation images that are
@@ -89,6 +90,12 @@ or `PYTEST_TIMEOUT` overrides it for a run.
 of the plugin and of the marker use to run pytest on a generated suite. They run it in a
 subprocess (`pytester.runpytest_subprocess`), because pytest-embedded starts a multiprocessing
 manager for every session.
+
+`tests/conftest.py` also adds `--shard=K/N`: of the tests collected, only those of shard K of N run,
+and the rest are deselected. A test's shard is the SHA-256 of its node id modulo N, so every job puts
+it in the same shard, and a new test needs no list. Anything but `1 <= K <= N` is a usage error:
+`--shard must be K/N with 1 <= K <= N, not '<value>'`. The option exists only where
+`tests/conftest.py` is loaded: a bare `pytest`, or one given a path under `tests/`.
 
 ### `requires_docker` and `requires_mtools`
 
@@ -285,8 +292,8 @@ a behaviour change ([documentation.md](documentation.md#the-check)).
 
 ## In CI
 
-The `runner` job runs `make build-runner test-runner`; the `test` jobs run `.venv/bin/pytest` on
-Python 3.11, 3.13 and 3.14 with the images, the runner and the ROM ELF the build jobs left in the
+The `runner` job runs `make build-runner test-runner`; the `test` jobs run `.venv/bin/pytest
+--shard=K/4` for each K on Python 3.11, 3.13 and 3.14 with the images, the runner and the ROM ELF the build jobs left in the
 Actions cache; the `determinism` job runs `make determinism` with the same builds; the `lint` job
 runs `make lint`. [docs/cicd.md](../cicd.md) describes each job.
 
