@@ -1373,7 +1373,11 @@ times. A replay in such a run takes only a
 which puts the backend on that clock; the `real` source refuses a replay already given, on a route
 of its own, which was checked against the emulated clock. Recordings on the wall clock are never
 compared with emulated ones, and tests with a `real` source stay out of the determinism job
-([testing](guides/testing.md#determinism)).
+([testing](guides/testing.md#determinism)). A bridge from a simulated network to a real service
+([network](features/network-user.md#bridge-a-port-to-a-real-service)) puts the run on the wall
+clock in the same way, under the same rules; its stream's bytes go to the guest in `eth_rx` or
+`uart_rx` stamped from the turn that hands them over, and its network asks for a turn at the next
+whole emulated millisecond while a bridged connection is open.
 
 The run stays on the test's clock: it is held while the test body runs, and `board.wait(d)` lets
 it go for `d` of the board's time, which under `--realtime` is also about `d` of wall time. The

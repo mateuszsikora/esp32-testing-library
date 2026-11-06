@@ -73,7 +73,8 @@ class Wifi(Interface):
     network around. Until the test gives an access point there is none, and the station finds
     nothing to join. `now` is the board's clock, `world` the world's time at power-on, which the
     network's NTP tells. `asked` is called with the request before the access point is made, and
-    refuses it by raising, as for a UART's source."""
+    refuses it by raising, as for a UART's source. `bridging` goes to the network, which calls it
+    before a bridge to a real service is made (`Internet.bridge`)."""
 
     def __init__(
         self,
@@ -82,9 +83,11 @@ class Wifi(Interface):
         world: Callable[[], datetime] = lambda: DEFAULT_UTC,
         asked: Callable[[Request], None] = lambda request: None,
         log: RunLog | None = None,
+        bridging: Callable[[str], None] = lambda call: None,
     ) -> None:
         super().__init__(NAME, None)
         self._now = now
+        self._bridging = bridging
         self._world = world
         self.asked = asked
         self.log = log
@@ -128,7 +131,7 @@ class Wifi(Interface):
         self.asked(Request(NAME, source="model"))
         if any(n.ssid == ssid or (bssid and n.bssid == bssid) for n in self._nearby):
             raise ValueError(f"wifi.access_point: {ssid!r} is a network around already")
-        network = Internet(self._now, self._world, link="ethernet")
+        network = Internet(self._now, self._world, link="ethernet", bridging=self._bridging)
         with self._lock:
             if self._access_point is not None:
                 raise SourceError("wifi has its access point already: one per test")

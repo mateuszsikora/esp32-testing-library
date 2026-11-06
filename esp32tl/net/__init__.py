@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Literal, cast, overload
 
 from esp32tl.link.boardlink import Output
+from esp32tl.net.bridge import Bridge, address
 from esp32tl.net.dhcp import Dhcp
 from esp32tl.net.dns import Dns
 from esp32tl.net.ethernet import Ethernet
@@ -56,11 +57,12 @@ class _Direction:
 class Internet:
     """One per modem, over PPP, or per Wi-Fi access point, over Ethernet with ARP and DHCP. DNS
     and NTP always listen, the broker on TCP 1883 and the HTTP server on 80; the test registers
-    other TCP services by port.
+    other TCP services by port, and bridges a port to a real service with `bridge`.
 
     Responses are stamped 1 ms after the request's UART chunk or Ethernet frame, or the path's RTT
     after it (`set_path`). Public calls run while the board is held, and callbacks while it
-    advances: neither uses host time or sockets.
+    advances: neither uses host time or sockets, but for a bridge's. `bridging` is called with the
+    call before a bridge is made, and refuses it by raising: the backend's say on the wall clock.
     """
 
     def __init__(
@@ -69,8 +71,10 @@ class Internet:
         world: Callable[[], datetime] = lambda: DEFAULT_UTC,
         *,
         link: Link = "ppp",
+        bridging: Callable[[str], None] = lambda call: None,
     ) -> None:
         self._now = now
+        self._bridging = bridging
         self._at: int | None = None
         self._out: list[Output] = []
         self._kind = link
@@ -86,6 +90,9 @@ class Internet:
         self.listen(1883, self.broker)
         self.http = HttpServer(self.now, self.log)
         self.listen(80, self.http)
+        # The services a bridge may take the place of, by port.
+        self._builtin: dict[int, str] = {1883: "the broker", 80: "the HTTP server"}
+        self.bridges: dict[int, Bridge] = {}
         # Serves behind an access point only; its leases outlive the link's restarts.
         self.dhcp = Dhcp(self.now, self.log)
         self.link: Ppp | Ethernet = self._peer()
@@ -115,7 +122,8 @@ class Internet:
         self.events.append({"t_ns": self.now(), "event": event})
 
     def transcript(self) -> dict[str, object]:
-        """Plain application traffic and network events, with no TLS keys or ciphertext."""
+        """Application traffic and network events, with no TLS keys: plaintext, but on a bridged
+        port that carries TLS, where it is the ciphertext the bridge relays."""
         return {"esp32tl_network": 1, "events": [dict(e) for e in self.events]}
 
     def report(self) -> list[str]:
@@ -149,6 +157,11 @@ class Internet:
             raise ValueError("TCP port must be between 1 and 65535")
         if port in self.ip.tcp:
             raise ValueError(f"TCP port {port} already has a service")
+        return self._install(port, service, tls)
+
+    def _install(
+        self, port: int, service: StreamService, tls: CertificateAuthority | None
+    ) -> Tls | None:
         traced = _Traced(self, port, service)
         if tls is not None:
             listener = Tls(traced, tls, self.log)
@@ -156,6 +169,38 @@ class Internet:
             return listener
         self.ip.tcp[port] = traced
         return None
+
+    def bridge(self, port: int, to: tuple[str, int]) -> Bridge:
+        """Relays TCP `port`, on every destination address, to the real service at `to`, a host
+        and a port: each connection the device opens there is one the harness opens to `to`, and
+        the bytes go both ways as they are, TLS included. Takes the place of the broker on 1883 or
+        the HTTP server on 80; another port must be free. The whole run is then on the wall
+        clock, so a bridge is given before `board.power_on()`. Returns the `Bridge`."""
+        call = f"network.bridge({port!r}, {to!r})"
+        if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
+            raise ValueError(f"{call}: the TCP port must be between 1 and 65535")
+        host, host_port = address(to, call)
+        replaced = self._builtin.get(port)
+        if port in self.ip.tcp and replaced is None:
+            raise ValueError(f"{call}: TCP port {port} already has a service")
+        self._bridging(call)
+        bridge = Bridge(port, (host, host_port), self.log)
+        self._builtin.pop(port, None)
+        self.ip.tcp.pop(port, None)
+        self._install(port, bridge, None)
+        self.bridges[port] = bridge
+        instead = f", in place of {replaced}" if replaced is not None else ""
+        self.log(f"bridge: TCP {port} → {host}:{host_port}{instead}")
+        return bridge
+
+    def _pump(self) -> None:
+        for bridge in self.bridges.values():
+            bridge.pump()
+
+    def close(self) -> None:
+        """Ends every bridge's connections to its service: the run is over."""
+        for bridge in self.bridges.values():
+            bridge.close()
 
     def set_path(
         self,
@@ -277,13 +322,15 @@ class Internet:
             self._at = None
 
     def arrive(self, now: int) -> None:
-        """Take in what has come up the path by `now`, then run the broker's deadlines due by it,
-        before the test looks at the turn at `now`: a record stamped `now`, a PUBACK or an expiry
-        due at `now`, is there when `board.now` says it. What this answers goes out in `poll`."""
+        """Take in what has come up the path by `now`, then run the broker's deadlines due by it
+        and hand over what bridged services sent, before the test looks at the turn at `now`: a
+        record stamped `now`, a PUBACK or an expiry due at `now`, is there when `board.now` says
+        it. What this answers goes out in `poll`."""
         self._at = now
         try:
             self._arrive(now)
             self.broker.poll()
+            self._pump()
         finally:
             self._at = None
 
@@ -294,6 +341,7 @@ class Internet:
         try:
             self._arrive(now)
             self.broker.poll()
+            self._pump()
             return self._take()
         finally:
             self._at = None
@@ -304,10 +352,16 @@ class Internet:
         return out
 
     def quiet_until(self) -> int | None:
-        """The earliest of the broker's deadlines and the path's next datagram, either way."""
+        """The earliest of the broker's deadlines, the path's next datagram, either way, and the
+        next whole millisecond while a bridged connection is open."""
         if not self.active:
             return None
-        bounds = (self.broker.quiet_until(), self._up.head(), self._down.head())
+        bounds = (
+            self.broker.quiet_until(),
+            self._up.head(),
+            self._down.head(),
+            *(bridge.quiet_until(self._now()) for bridge in self.bridges.values()),
+        )
         return min((bound for bound in bounds if bound is not None), default=None)
 
     def latency(self) -> int:

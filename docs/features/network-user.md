@@ -5,7 +5,9 @@ the same network in two places: behind the modem, over PPP on the modem's UART, 
 access point, over Ethernet frames with ARP and DHCP. Both answer DNS, NTP, an MQTT broker on TCP
 1883, an HTTP server on TCP 80 and the TCP services the test adds. The firmware keeps its Wi-Fi,
 PPP, IP, DNS, MQTT and HTTP stacks and its configured destination names. There is no host network
-connection, external broker or web server, `pppd`, real-time mode or clock switch.
+connection, external broker or web server, `pppd`, real-time mode or clock switch, unless the test
+[bridges a port to a real service](#bridge-a-port-to-a-real-service), which puts the run on the
+wall clock.
 
 ## Exchange MQTT messages behind the modem
 
@@ -753,12 +755,93 @@ repeat. Provisioning firmware credentials is separate from this API. `pppos_clie
 plain MQTT; [the position tracker](examples-user.md#position-tracker-over-a-cellular-modem)
 validates firmware PPP, NTP and MQTT over TLS, with its broker CA provisioned through NVS.
 
+## Bridge a port to a real service
+
+A test that needs its own backend's behaviour, rather than a service it reads in the test, can put
+that backend at the far end of one TCP port: a server in a container or on the host.
+`network.bridge(port, to)` relays the port, on every destination address, to the host and port
+`to`. Each connection the device opens there is one the harness opens to `to`, and the bytes go
+both ways as they are:
+
+```python
+def test_publishes_to_our_broker(board, modem):
+    network = modem.network()
+    network.bridge(1883, ("127.0.0.1", 1883))  # a broker started by the test or by CI
+    board.power_on()
+    ...
+```
+
+The same call works behind the access point, on the network `wifi.access_point()` returns.
+`tests/test_http_request.py` has unmodified `http_request` fetch a page from Python's
+`http.server` on the host this way, and `tests/test_pppos_client.py` has `pppos_client` publish, over
+PPP, to a broker listening on a host socket.
+
+What changes with a bridge:
+
+- **The whole run is on the wall clock,** as with a [real source](real-source-user.md): the runner
+  starts with `--realtime`, every recording says `clock: wall`, and a second of the board's time
+  takes a second of wall time. The service answers when it answers, so runs do not repeat, and
+  such a test does not belong in the determinism job. The test still holds the clock while its
+  body runs; `board.wait` and `board.wait_until` let it go.
+- **Give the bridge before `board.power_on()`.** After it the call raises
+  `network.bridge(1883, ('127.0.0.1', 1883)): the board is on already: a bridge puts the run on the
+  wall clock, from power-on, so give it before board.power_on()`. A replay given before the bridge
+  is refused as a real source refuses it: `network.bridge(1883, ('127.0.0.1', 1883)): a bridge puts
+  the run on the wall clock, and uart.gnss replays a recording on the emulated-fifo-write clock:
+  replaying it would compare times across clocks`. A replay given after it takes only a recording
+  on the wall clock.
+- **It takes the place of the broker on 1883 or the HTTP server on 80.** Their objects stay, and
+  see nothing on that port; `network.broker` and the `broker` fixture then describe a broker the
+  device does not reach. Any other port must be free: `network.bridge(8883, ('127.0.0.1', 8883)):
+  TCP port 8883 already has a service`, and `network.listen` refuses a bridged port. `to` is a
+  tuple, `("127.0.0.1", 1883)` or `("localhost", 8080)`; a string raises `TypeError`, a port out of
+  1 to 65535 `ValueError`.
+- **DNS still answers every name with `10.64.0.1`.** The device keeps its configured names; only the
+  port picks the service. The bridge connects to `to`, not to the name the device asked for.
+- **TLS goes through as it is.** The bridge does not end TLS: the device must trust the real
+  service's certificate, and the transcript holds ciphertext for that port. `tls=` is for
+  `listen`, not for a bridge.
+
+`network.bridge` returns the `Bridge`: `port`, `to`, and `connections`, the connections the device
+opened. `network.bridges` holds them by port. The network's transcript and the report log each step:
+
+```text
+bridge: TCP 80 → 127.0.0.1:8080, in place of the HTTP server
+net: TCP 10.64.0.2:61332 → 10.64.0.1:80 accepted
+bridge: 80/1 connected to 127.0.0.1:8080
+bridge: 80/1 closed by 127.0.0.1:8080
+```
+
+The device's connection is accepted before the harness reaches the service. When the service cannot
+be reached within 5 wall seconds, or refuses, the device sees its connection accepted and then
+closed with no data, and the transcript says why:
+`bridge: 80/1 cannot connect to 127.0.0.1:8080: Connection refused`. A service that closes its end
+closes the device's after the bytes it sent (`closed by`); one that fails mid-stream logs
+`bridge: 80/1 lost 127.0.0.1:8080: <reason>`, and a write the service does not take logs
+`bridge: 80/1 cannot write to 127.0.0.1:8080: <reason>`; either closes the device's end. The device
+closing its end, a lost link (power or registration loss, `wifi.access_point_off()`) and the end of
+the test end the stream at the service: it reads the end of the stream, as from a device that sent
+its FIN. None of these fails the test by itself; the firmware's reaction is what the test asserts.
+
+The device's FIN closes the connection both ways: the network's TCP has no half-close, and closes
+its own end as soon as the device closes its. A service that answers only after it has read the
+end of the stream, as for a client that sends its request and then `shutdown(SHUT_WR)`, never
+reaches the device. What the service sends after the device closed is dropped, and the transcript
+counts it: `bridge: 80/1 dropped 512 bytes 127.0.0.1:8080 sent after the device closed its end`.
+
+Only TCP is bridged. DNS, NTP and DHCP stay the network's own, and UDP to any other port is
+answered by what `network.ip.udp` holds. The [path](#give-the-network-a-round-trip-and-a-rate)
+still applies between the device and the bridge, on top of whatever the real service's own network
+takes.
+
 ## Failures and reports
 
 The test's `esp32sim link` report includes every network event, with emulated times, and the
 modem's complete AT command history. `board.properties()["routes"]["uart.modem"]["network"]`
 contains the same structured transcript; `network.transcript()` returns it directly.
-Application stream bytes are hex-encoded plaintext, both directions, with connection identifiers.
+Application stream bytes are hex-encoded plaintext, both directions, with connection identifiers,
+except on a [bridged](#bridge-a-port-to-a-real-service) port that carries TLS, where they are the
+ciphertext the bridge relays.
 A raw `modem.tap(path)` still records UART/PPP bytes, including ciphertext for TLS.
 
 Behind the access point the report has `wifi: access point 'myssid', channel 6, WPA2-PSK` (or

@@ -149,7 +149,8 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Models describe the world in its own terms, in units](harness.md#models-describe-the-world-in-its-own-terms-in-units) | `harness.md` | decided (#64) |
 | [Tests observe the device from outside, and product knowledge stays in the consumer's tests](harness.md#tests-observe-the-device-from-outside-and-product-knowledge-stays-in-the-consumers-tests) | `harness.md` | decided (#64) |
 | [The network the device reaches is simulated in the harness, in emulated time](harness.md#the-network-the-device-reaches-is-simulated-in-the-harness-in-emulated-time) | `harness.md` | decided (#64) |
-| [A bridge from the simulated network to a real service is postponed](harness.md#a-bridge-from-the-simulated-network-to-a-real-service-is-postponed) | `harness.md` | postponed (#67) |
+| [A bridge from the simulated network to a real service is postponed](harness.md#a-bridge-from-the-simulated-network-to-a-real-service-is-postponed) | `harness.md` | superseded (#67) |
+| [A bridge relays a TCP port to a real service, and puts the run on the wall clock](harness.md#a-bridge-relays-a-tcp-port-to-a-real-service-and-puts-the-run-on-the-wall-clock) | `harness.md` | decided (#67) |
 | [A TLS stack with a seeded random source is postponed](harness.md#a-tls-stack-with-a-seeded-random-source-is-postponed) | `harness.md` | postponed (#68) |
 | [Flash contents besides the build go into a partition of the build's own table, by name](harness.md#flash-contents-besides-the-build-go-into-a-partition-of-the-builds-own-table-by-name) | `harness.md` | decided (#64) |
 | [The LilyGO profile takes its GNSS route, flash and PSRAM from LilyGO's documentation](harness.md#the-lilygo-profile-takes-its-gnss-route-flash-and-psram-from-lilygos-documentation) | `harness.md` | decided (#64) |
