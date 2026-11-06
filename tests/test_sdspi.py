@@ -93,6 +93,19 @@ def test_the_example_writes_its_files_into_the_image(
     }
 
 
+def test_the_example_mounts_a_32_gib_card_with_32_kib_clusters(
+    board: Esp32Sim, sd_card: SdCard, console: Console
+) -> None:
+    card = sd_card.image(size_mb=32768, cluster_kb=32).build()
+    sd_card.insert(card)
+    board.power_on()
+    console.expect_exact("example: Filesystem mounted", timeout=TIMEOUT)
+    for line in ("Type: SDHC/SDXC", "Size: 32768MB"):
+        console.expect_exact(line, timeout=TIMEOUT)
+    console.expect_exact("example: Card unmounted", timeout=TIMEOUT)
+    assert card.read_text("nihao.txt") == "Nihao SIMSD!\n"
+
+
 @pytest.mark.board_profile("lilygo-t-a7670g-r2")
 def test_the_lilygo_slot_writes_an_image_alongside_both_uart_models(
     tmp_path: Path,

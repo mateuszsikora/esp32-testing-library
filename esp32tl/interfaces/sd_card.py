@@ -43,6 +43,23 @@ from esp32tl.units import Duration
 UNIT = 512 * 1024
 # The most a card holds: 2^22 units (CSD C_SIZE).
 MAX_SIZE = UNIT << 22
+# The most the builder makes, in MiB: 1 TiB, as #132 chose after mformat asserted near 2 TiB, which
+# mtools 4.0.43 and 4.0.50 have not repeated; `insert` goes further
+# (docs/features/pytest-plugin-technical.md).
+BUILD_MAX_MB = 1 << 20
+# The clusters the builder makes, in KiB: mformat's -c takes 2 to 128 sectors.
+CLUSTER_KB = (1, 2, 4, 8, 16, 32, 64)
+# From here on the builder makes FAT32 whatever the clusters, in the geometry its BPB usually has.
+FAT32_FROM_MB = 512
+FAT32_HEADS = 255
+FAT32_SECTORS = 63
+# What a FAT32 volume's count of clusters may be (Microsoft's FAT specification): a file system
+# with fewer is FAT16 to whoever mounts it, whatever it says of itself.
+FAT32_CLUSTERS = range(65525, 0x0FFFFFF5 + 1)
+# mformat's FAT32: its reserved sectors and FATs, and the FAT entries a sector holds.
+FAT32_RESERVED = 32
+FAT32_FATS = 2
+FAT32_ENTRIES = 128
 
 MTOOLS = ("mformat", "mcopy", "mmd", "mtype", "mdir")
 
@@ -152,14 +169,38 @@ class CardImage(os.PathLike[str]):
         return parent, is_directory
 
 
-class CardImageBuilder:
-    """Declare initial files; build creates a fresh image without inserting it."""
+def fat32_clusters(size_mb: int, cluster_kb: int) -> int:
+    """The clusters of a FAT32 file system on a whole card, with FATs just long enough for them,
+    as mformat makes them (tests/test_card_image.py)."""
+    sectors = (size_mb << 11) - FAT32_RESERVED
+    per_cluster = cluster_kb * 2
+    per_fat_sector = FAT32_ENTRIES * per_cluster + FAT32_FATS
+    fat = (sectors + 2 * per_cluster + per_fat_sector - 1) // per_fat_sector
+    return (sectors - FAT32_FATS * fat) // per_cluster
 
-    def __init__(self, slot: "SdCard", size_mb: int) -> None:
-        if type(size_mb) is not int or not 1 <= size_mb <= 2048:
-            raise ValueError("size_mb must be a whole number from 1 to 2048 (MiB)")
+
+class CardImageBuilder:
+    """Declare initial files; build creates a fresh image without inserting it. `cluster_kb` is
+    the size of its clusters; `None` leaves them to mformat."""
+
+    def __init__(self, slot: "SdCard", size_mb: int, cluster_kb: int | None = None) -> None:
+        if type(size_mb) is not int or not 1 <= size_mb <= BUILD_MAX_MB:
+            raise ValueError(f"size_mb must be a whole number from 1 to {BUILD_MAX_MB} (MiB)")
+        if cluster_kb is not None:
+            if type(cluster_kb) is not int or cluster_kb not in CLUSTER_KB:
+                choices = ", ".join(str(kb) for kb in CLUSTER_KB)
+                raise ValueError(f"cluster_kb must be one of {choices} (KiB)")
+            if size_mb >= FAT32_FROM_MB:
+                clusters = fat32_clusters(size_mb, cluster_kb)
+                if clusters not in FAT32_CLUSTERS:
+                    raise ValueError(
+                        f"a FAT32 card of {size_mb} MiB with {cluster_kb} KiB clusters has"
+                        f" {clusters} clusters; FAT32 takes {FAT32_CLUSTERS[0]} to"
+                        f" {FAT32_CLUSTERS[-1]}: choose another size_mb or cluster_kb"
+                    )
         self._slot = slot
         self._size_mb = size_mb
+        self._cluster_kb = cluster_kb
         self._files: dict[PurePosixPath, bytes] = {}
 
     def with_text(self, name: str, contents: str, *, encoding: str = "utf-8") -> "CardImageBuilder":
@@ -187,18 +228,20 @@ class CardImageBuilder:
         try:
             with path.open("wb") as image:
                 image.truncate(self._size_mb << 20)
-            fat32 = ("-F",) if self._size_mb >= 512 else ()
+            fat32 = self._size_mb >= FAT32_FROM_MB
+            cluster = () if self._cluster_kb is None else ("-c", str(self._cluster_kb * 2))
             _mtools(
                 "mformat",
                 "-i",
                 str(path),
-                *fat32,
+                *(("-F",) if fat32 else ()),
                 "-T",
                 str(self._size_mb << 11),
                 "-h",
-                "64",
+                str(FAT32_HEADS if fat32 else 64),
                 "-s",
-                "32",
+                str(FAT32_SECTORS if fat32 else 32),
+                *cluster,
                 "::",
             )
             directories: set[str] = set()
@@ -380,10 +423,16 @@ class SdCard(Interface):
     def card_slot(self) -> bool:
         return True
 
-    def image(self, *, size_mb: int = 32) -> CardImageBuilder:
+    def image(self, *, size_mb: int = 32, cluster_kb: int | None = None) -> CardImageBuilder:
         """Start a FAT image builder. Building and insertion are separate operations."""
         self._can_build()
-        return CardImageBuilder(self, size_mb)
+        return CardImageBuilder(self, size_mb, cluster_kb)
+
+    def owned_image(self) -> CardImage:
+        """A path for an image the slot owns, with nothing at it yet: gone when the board closes,
+        as a built image is. Asks no backend: the card goes in, or skips, at `insert`."""
+        self._check_open()
+        return CardImage(self._image_directory() / "card.img", self._check_open)
 
     def _check_open(self) -> None:
         if self._closed:

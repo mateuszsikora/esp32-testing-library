@@ -284,6 +284,14 @@ the existing no-latency behavior and board pulls are unchanged.
 | `LineEvent(t, name, pin, by, level)` | frozen dataclass, `esp32tl/interfaces/lines.py` | `t` a `Duration`, an instant of the board's time, `name` as `modem.ri`, `by` `"firmware"`, `"test"` or `"model"`, `level` 0, 1 or `None` |
 | `PULLED` | `dict`, `esp32tl/interfaces/lines.py` | `{"up": 1, "down": 0}`: the level a board's pull gives an undriven line |
 | `sd_card(board)` | fixture, function scope | Returns `board.sd_card` |
+| `card_cache(request)` | fixture, session scope | A `CardCache` on `config.cache.mkdir("esp32tl-card-cache")`, or on a `TemporaryDirectory` of the session under `-p no:cacheprovider`, with `card_cache_limit(config)`, and the running test's board from `config.stash[RUNNING_BOARD]`, which `board` sets and removes |
+| `CardCache(directory, limit, board)` | class, `esp32tl/interfaces/card_cache.py` | `get(name)` a `CardImage` or `None`; `put(name, image)`; `limit` in bytes; `board` a callable, the running `Board` or `None` |
+| `clone(source, target)`, `allocated(path)` | functions, `esp32tl/interfaces/card_cache.py` | The new file `target`, which reads as `source` and shares no write with it, mode `0o600`; `st_blocks * 512` |
+| `CARD_CACHE_MIB` | `int`, `esp32tl/interfaces/card_cache.py` | 4096, the default of `esp32tl_card_cache_mib` |
+| `Board.app_sha256` | abstract property, `esp32tl/interfaces/board.py` | The app image's SHA-256, from `app_image_sha256`, or `None` when the build has none: `CardCache`'s key |
+| `SdCard.owned_image()` | method, `esp32tl/interfaces/sd_card.py` | A `CardImage` with nothing at its path yet, in the slot's temporary directory |
+| `fat32_clusters(size_mb, cluster_kb)` | function, `esp32tl/interfaces/sd_card.py` | The clusters of a FAT32 file system on a whole card, with FATs just long enough, as mformat makes them |
+| `BUILD_MAX_MB`, `CLUSTER_KB`, `FAT32_FROM_MB`, `FAT32_CLUSTERS` | `esp32tl/interfaces/sd_card.py` | 1048576; 1 to 64 in powers of two; 512; 65525 to 268435445, from Microsoft's FAT specification |
 | `SdCard(route, *, directory, asked=..., log=None, files=None, now=..., started=..., ended=...)` | class, `esp32tl/interfaces/sd_card.py`, a `BoardLink` `Interface` named `sd_card` with no wire and `card_slot` true | The `sd_card` slot on `route` (an `SdCardRoute`): attributes `name` (`"sd_card"`), `route`, `directory`, `asked`, `log` (the `RunLog` its steps go to), `files` (shared with the routes), `image_path` (`None` while the slot is empty, else the image's absolute `Path`, as the test last put it), `changes` (`list[CardChange]`, acknowledged), `held` (the image the run has: after the last acknowledged change, else the one at power-on, which the first change with the board on keeps), `not_reached` (`list[CardChange]`, sent or queued and not acknowledged, at the instants the test made them), `refused` (`list[CardChange]`, the change the runner refused, with the image the test asked for); `insert(image)` and `remove()` return the image's path. `now` is the board's clock and `started` whether the run has started, `0` and `False` by default. `ended` says whether the run is over, `False` by default: `fail(op, *, count=None, blocks=None)` and `delay(op, by, *, count=None, blocks=None)` return a `CardFault`, with `clear_faults()`, `faults` and `faulted`; `report()` and `properties()` for the run's report |
 | `CardChange(t, image)` | frozen dataclass, `esp32tl/interfaces/sd_card.py` | What the slot held from `t`, in nanoseconds, after a change made with the board on: the image's `Path`, or `None` |
 | `CardFault`, `FaultedOperation` | classes, `esp32tl/interfaces/sd_card.py` | A rule (`id`, `at`, `op`, `action`, `delay`, `count`, `blocks`, `call`, `cleared_at`, `hits`, `active`, `clear()`) and an operation it met (`at`, `fault`, `op`, `blocks`, `action`, `delay`, `written`) |
@@ -323,6 +331,7 @@ second entry in `SERVICES` without a change to `board` fails that assertion.
 | `--esp32tl-backend` | unset: `esp32sim` | `pytest_generate_tests` |
 | `app_path` marker | the test file's directory | `pytest_generate_tests` |
 | `board_profile` marker | `esp32-devkitc` (`DEFAULT_PROFILE`) | `pytest_generate_tests`, `board` |
+| `esp32tl_card_cache_mib` ini option | 4096 (`CARD_CACHE_MIB`), the tool's choice | `pytest_configure`, which checks it, and `card_cache` |
 | pytest-timeout's `--timeout`, `PYTEST_TIMEOUT`, `timeout` ini option, `timeout` marker | unset: `DEFAULT_TIMEOUT`, 600 s, for a test that uses `board` | `pytest_collection_modifyitems`, then pytest-timeout |
 | pytest-embedded's `embedded_services`, `app_path`, `build_dir` | set per test by the parametrisation | pytest-embedded's fixtures |
 | pytest-embedded's `--embedded-services`, `--app-path`, `--build-dir`, `--count` | must be unset (`--count` 1) when a selected test uses `board` | `pytest_collection_modifyitems` |
@@ -365,6 +374,12 @@ The backend's own environment variables are in
 | `sd_card.fail: the slot is empty: insert a card first` (`SourceError`); `sd_card.fail: op {op!r} is not 'read' or 'write'`, `sd_card.delay: op {op!r} is not 'read', 'write' or 'erase'`, `sd_card.delay: a delay of {by}; one is 1 ns to 10 s`, `{method}: a count of {count}; it is 1 to 2**63 - 1, or None`, `{method}: blocks {blocks!r}, and the card has blocks 0 to {last}`, `{method}: blocks {blocks!r} is not a non-empty range of step 1` (`ValueError`); `sd_card.delay: by is {by!r}, not a Duration`, `{method}: count is {count!r}, not a whole number`, `{method}: blocks is {blocks!r}, not a block number or a range` (`TypeError`); `{method}: the run has ended: no rule reaches the card any more` (`RunEnded`) | `SdCard.fail` and `SdCard.delay` refuse the rule before it is given | Fails the test |
 | `sd_card has a card already: remove it first`, `sd_card: no image at {path}: {strerror}`, `sd_card: {path} is not a file`, `sd_card: {path} has {size} bytes; an SD card image is a whole number of 512 KiB units`, `sd_card: {path} has {size} bytes; an SD card image is at most 2 TiB`, `sd_card: {path} cannot be read and written: the card writes into it`, `sd_card: cannot hold {path}: it is the {kind} of {interface}` | `SourceError` from `SdCard.insert` | Fails the test |
 | `sd_card is empty: there is no card to remove` | `SourceError` from `SdCard.remove` | Fails the test |
+| `size_mb must be a whole number from 1 to 1048576 (MiB)`, `cluster_kb must be one of 1, 2, 4, 8, 16, 32, 64 (KiB)`, `a FAT32 card of {size_mb} MiB with {cluster_kb} KiB clusters has {clusters} clusters; FAT32 takes 65525 to 268435445: choose another size_mb or cluster_kb` | `ValueError` from `SdCard.image`, before any file exists | Fails the test |
+| `card_cache: {name!r} needs {needed} bytes on disk; the limit is {limit}: raise esp32tl_card_cache_mib` | `SourceError` from `CardCache.put`, a card alone above the limit | Fails the test; nothing evicted, unless the copy came out larger than its source |
+| `card_cache: {name!r}: {source} is in the slot of a board that is on: call board.power_off() first`, `card_cache: {name!r}: no image at {source}`, `card_cache: {name!r}: {error}` for an `OSError` | `SourceError` from `CardCache.put` or `get` | Fails the test; a failed `put` leaves no card under that name |
+| `card_cache: no board is running: use it in a test that uses board`, `card_cache: the build names no app image to keep a card for` | `SourceError` from `CardCache.get` or `put` | Fails the test |
+| `card_cache: a card's name is a non-empty string, not {name!r}` | `ValueError` from `CardCache.get` or `put` | Fails the test |
+| `esp32tl_card_cache_mib must be a whole number of MiB, not {value!r}` | `pytest.UsageError` from `pytest_configure` | Exit code 4, before any test |
 | `sd_card: the runner refused the card at {t} ns: {error}`, `sd_card: the runner says the slot holds {image} at {t} ns, where the test asked for {wanted}`, `sd_card: the runner acknowledged a change nobody asked for` | `LinkError` from `SdCard.card_changed`, the link's `error` | Ends the run; a waiting test gets `RunEnded`, and the test fails at teardown |
 | `{description} did not happen within {within}: waited from {start} to {end} of the board's time` | `NeverHappened` from `wait_until` or an expect | Fails the test |
 | `the run ended {when} while the test waited {what}: {reason}` | `RunEnded` from a wait or an expect; `{when}` is `at {time}` from the runner's `stats`, `after the turn at {time}` without them, the last held turn being only a bound, or `before its first turn`; `{what}` is `until {time}` or `for {description}`, `{reason}` the backend's ([esp32sim-backend-technical.md](esp32sim-backend-technical.md#failure-modes)) | Fails the test |
@@ -473,6 +488,12 @@ emulator;
 `test_runner_command_puts_a_card_in_the_slot_once_the_test_inserts_one` in
 `tests/test_pytest_plugin.py` checks the runner's flags. Not covered: an image path that is a
 directory, and one above 2 TiB.
+`tests/test_card_image.py` builds cards up to 1 TiB and reads what their boot sector says of them.
+`tests/test_card_cache.py` tests `CardCache` without an emulator, every clone both by the file
+system and by the sparse copy, and through `pytester` the fixture's scope and option;
+`test_a_second_test_takes_a_kept_card_and_writes_to_its_own_clone` in `tests/test_power.py` runs
+`persistence` on a clone, and `test_the_example_mounts_a_32_gib_card_with_32_kib_clusters` in
+`tests/test_sdspi.py` mounts a 32 GiB card. Not covered: two sessions contending for the lock.
 
 `tests/test_nmea_reader_model.py` runs the receiver model into `nmea_reader` on the real runner,
 with `console.line` and `console.lines` ([models-technical.md](models-technical.md#tests)).
@@ -557,7 +578,7 @@ the slot is open and call `asked(Request("sd_card", source="model"))`. A saved b
 cannot bypass the backend-capability check. On esp32sim `asked` is the backend's `_declared`,
 without the before-power-on check, so a test can build a card to put in while the firmware runs. Declaring files allocates no
 image. Each build creates a unique subdirectory of a lazily allocated `TemporaryDirectory`,
-truncates `card.img`, formats it with `mformat` (FAT32 forced from 512 MiB), creates parents with
+truncates `card.img`, formats it with `mformat`, creates parents with
 `mmd`, and copies bytes through temporary host files using `mcopy`. Failed builds remove their
 partial directory. Duplicate and file/parent conflicts are checked case-insensitively.
 
@@ -573,6 +594,71 @@ into several files. No FAT state or file contents are cached. All commands run w
 translation. `SdCard.close()` invalidates handles and removes only builder-owned directories;
 backends call it after stopping the run, including on teardown errors. The path of the card in the
 slot at the end stays in `image_path` for reporting, even after the owned image has been removed.
+
+From 512 MiB the builder forces FAT32 (`-F`), with 255 heads and 63 sectors per track, the geometry
+FAT32 volumes usually carry; below it, it leaves the FAT to mformat, with 64 heads and 32 sectors.
+FatFs reads neither. `cluster_kb` is `-c`, in sectors, and mformat keeps to it at every size; it
+chooses a FAT by the count of clusters below 512 MiB, and its default cluster gives a valid count at
+every size up to 1 TiB (mtools 4.0.50, checked by a sweep of sizes). The check at `image()` uses
+`fat32_clusters`, because formatting first would write the FATs of a refused card. FatFs takes a
+volume's type from the count, whatever its boot sector says: `sdspi` on 512 MiB with 64 KiB
+clusters, formatted by hand, logs `vfs_fat_sdmmc: failed to mount card (13)`, `FR_NO_FILESYSTEM`.
+mformat itself refuses too many (`Too many clusters for 32 bit FAT`, at 264193 MiB with 1 KiB
+clusters, where `fat32_clusters` gives 268436456; 264192 MiB is accepted by both). `fat32_clusters`
+agreed with the boot sector to the cluster on each of 27 sizes and clusters compared, 512 MiB to 1
+TiB. The builder stops at 1 TiB, a limit #132 chose after an assertion in `mformat` on nearly 2 TiB
+with `-c 128`. mtools 4.0.50 here formats every size tried up to 2097151 MiB with `-c 128`, and so
+does 4.0.43 on Ubuntu 24.04, both refusing 2 TiB itself (`Bad number 4294967296 for -T`), so that
+assertion has not been reproduced; the limit stays as #132 chose it. `insert` stays at 2 TiB, the
+card's limit (CSD `C_SIZE`, SD specification section 5.3.3), and the runner reads and writes block
+by block, so a card's size does not limit it.
+
+### The card cache
+
+`CardCache` keeps one file per card, `<sha256(app image hash, NUL, name)>.img`, in its directory,
+with a `lock` beside them. What `get` and `put` do in the directory runs under `flock` on that file,
+so that a card does not go while another worker clones it, and any `*.tmp` found under the lock is a
+dead run's and goes.
+
+`put` measures the source's `allocated`, refuses it above the limit, removes the name's old card,
+evicts down to the room it needs, clones to `<key>.tmp`, measures what came out and evicts again,
+sets the modification time, syncs the file and renames it into place. So a reader sees the old card,
+none, or the whole new one. A failed `put` removes the temporary file, and the old card stays gone,
+which is a miss. Last use is the modification time, set with `os.utime` from `time.time_ns()` by
+`put` and `get`, because a volume may not keep access times; ties go by file name. `st_blocks` of a
+clone counts blocks it shares with the card it came from, so the limit is conservative when both are
+on disk, and APFS fills in the holes of a small file, so a source of a few MiB can measure more than
+its clone. The check before the copy counts the source as it is allocated: blocks of zeros that
+firmware wrote count, though the sparse copy would leave them out.
+
+`clone` tries `clonefile(2)` on macOS and the `FICLONE` ioctl on Linux, and on any error copies,
+which reports a failure that is not about cloning: `SEEK_DATA` and `SEEK_HOLE` skip the holes
+unread, and a chunk of 64 KiB of data that is all zeros stays a hole. It sets mode `0o600`, because
+a clone takes its source's mode and the card must be able to write.
+
+A clone shares blocks only within one file system: the cache is under the rootdir's `.pytest_cache`,
+and a card from `get`, or one the builder made for `put`, is in `$TMPDIR`. When the two are on
+different file systems, `clonefile` and `FICLONE` fail with `EXDEV` and every `get` and `put` is the
+sparse copy. That is common on Linux, where `/tmp` is often tmpfs: there a copy also takes memory,
+as much as the card has written. Point `TMPDIR` at the project's file system to clone instead.
+
+Measured with a card of 32 GiB and 32 KiB clusters, where format and allocation include the FATs,
+with the card and its clone in one directory of the file system named:
+
+| Where | mtools | Format, allocated | `clonefile` / `FICLONE` | Sparse copy |
+|---|---|---|---|---|
+| macOS 27.0.1, APFS | 4.0.50 | 0.02 s, 8 MiB | 0.3 ms, 8 MiB | 4.6 ms, 4 MiB |
+| Ubuntu 24.04 in Docker Desktop, kernel 5.15, xfs with reflink | 4.0.43 | 0.02 s, 8 MiB | 5 ms, 8 MiB | 5 ms, under 1 MiB |
+| The same, btrfs | 4.0.43 | 0.02 s, 8 MiB | 5 ms, 8 MiB | not measured |
+| The same, overlayfs | 4.0.43 | 0.02 s, 8 MiB | `ENOTSUP` | 5 ms, under 1 MiB |
+| The same, tmpfs | 4.0.43 | 0.02 s, 8 MiB | `ENOTSUP` | 5 ms, under 1 MiB |
+
+On APFS 1 TiB takes 0.15 s and 256 MiB with 32 KiB clusters, and 0.08 s and 128 MiB with 64 KiB;
+`clonefile` stays at 0.3 ms and the sparse copy takes 114 and 58 ms, because it has FATs to read.
+`tests/test_card_image.py` and the tests of `tests/test_card_cache.py` that need no firmware pass in
+that container on xfs, overlayfs and tmpfs. TODO(mateuszsikora): #151, measure ext4 on bare metal,
+where `FICLONE` should be refused and the sparse copy taken; `tests/test_card_cache.py` runs both
+paths on hp600g1, with no time measured.
 
 ### The SD card's fault rules
 

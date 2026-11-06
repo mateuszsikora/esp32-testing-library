@@ -190,6 +190,13 @@ def test_serial_capabilities_skip_at_the_call(pytester: pytest.Pytester, local: 
             gnss.real("/dev/not-opened")
         def test_card_builder(board):
             board.sd_card.image().build()
+        def test_card_cache_and_its_card(board, card_cache, tmp_path):
+            assert card_cache.get("prepared") is None
+            image = tmp_path / "card.img"
+            image.write_bytes(bytes(512 * 1024))
+            card_cache.put("prepared", image)
+            assert card_cache.get("prepared").path.read_bytes() == image.read_bytes()
+            board.sd_card.insert(card_cache.get("prepared"))
         def test_card(sd_card):
             sd_card.insert("not-read.img")
         def test_card_removal(sd_card):
@@ -246,7 +253,7 @@ def test_serial_capabilities_skip_at_the_call(pytester: pytest.Pytester, local: 
     """)
     )
     result = run_serial(pytester, "-rs")
-    result.assert_outcomes(skipped=24)
+    result.assert_outcomes(skipped=25)
     result.stdout.fnmatch_lines(
         [
             "*serial: uart.gnss takes no model source on this backend, only real*",
@@ -254,6 +261,7 @@ def test_serial_capabilities_skip_at_the_call(pytester: pytest.Pytester, local: 
             "*serial: uart.gnss cannot be tapped on this backend*",
             "*serial: uart.gnss has the device wired to the board at its far end: a host serial"
             " port goes there on the emulator only*",
+            "*serial: sd_card takes no model source on this backend, only real*",
             "*serial: sd_card takes no model source on this backend, only real*",
             "*serial: NVS contents cannot be configured on this backend*",
             "*serial: flash contents cannot be read on this backend*",

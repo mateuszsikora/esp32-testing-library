@@ -1,7 +1,7 @@
 """The esp32tl pytest plugin, loaded through the `pytest11` entry point.
 
-It provides the `board`, `console`, `gnss`, `modem`, `broker`, `lines`, `sd_card` and `wifi`
-fixtures on top of pytest-embedded's classes (plan §3); `bt` comes with a later milestone.
+It provides the `board`, `console`, `gnss`, `modem`, `broker`, `lines`, `sd_card`, `card_cache` and
+`wifi` fixtures on top of pytest-embedded's classes (plan §3); `bt` comes with a later milestone.
 The board runs a board profile, `esp32-devkitc` unless the `board_profile` marker names another
 (plan §4.5).
 
@@ -34,6 +34,7 @@ import os
 from collections.abc import Generator, Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import NoReturn
 
 import pytest
@@ -49,6 +50,7 @@ from esp32tl.backends.esp32sim import BackendError, Esp32Sim, ended_while_waitin
 from esp32tl.backends.serial import Serial, check_artifact
 from esp32tl.boards import DEFAULT_PROFILE, BoardProfile, ProfileError
 from esp32tl.interfaces.board import Board as Board
+from esp32tl.interfaces.card_cache import CARD_CACHE_MIB, CardCache
 from esp32tl.interfaces.console import Console
 from esp32tl.interfaces.gnss import Gnss
 from esp32tl.interfaces.lines import Lines
@@ -62,6 +64,10 @@ from esp32tl.net.mqtt import Broker
 # measured for CPU-bound code (docs/stage0-findings.md), and far more of an idle board.
 DEFAULT_TIMEOUT = 600
 
+CARD_CACHE_LIMIT = "esp32tl_card_cache_mib"
+# The board of the test that is running, for the session's `card_cache`.
+RUNNING_BOARD = pytest.StashKey[Board]()
+
 
 def pytest_addoption(parser: pytest.Parser) -> None:
     group = parser.getgroup("esp32tl")
@@ -70,9 +76,23 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         choices=list(SERVICES),
         help="run board tests on this backend (default: esp32sim; serial is opt-in)",
     )
+    parser.addini(
+        CARD_CACHE_LIMIT,
+        "the most disk the card_cache fixture's cards take, in MiB",
+        default=str(CARD_CACHE_MIB),
+    )
+
+
+def card_cache_limit(config: pytest.Config) -> int:
+    """`esp32tl_card_cache_mib`, in bytes."""
+    value = str(config.getini(CARD_CACHE_LIMIT)).strip()
+    if not value.isdecimal() or int(value) < 1:
+        raise pytest.UsageError(f"{CARD_CACHE_LIMIT} must be a whole number of MiB, not {value!r}")
+    return int(value) << 20
 
 
 def pytest_configure(config: pytest.Config) -> None:
+    card_cache_limit(config)
     config.addinivalue_line(
         "markers",
         "app_path(path, build_dir='build'): the ESP-IDF app, relative to the test file's"
@@ -471,9 +491,11 @@ def board(
         backend_failed(error, name)
     # Whether the teardown fails the test: its report then shows the run, as for a failed call.
     failing = True
+    request.config.stash[RUNNING_BOARD] = backend
     try:
         yield backend
     finally:
+        del request.config.stash[RUNNING_BOARD]
         try:
             backend.close()
         except BackendError as error:
@@ -569,6 +591,26 @@ def sd_card(board: Board) -> SdCard:
         return board.sd_card
     except BackendError as error:
         backend_failed(error, board.name)
+
+
+@pytest.fixture(scope="session")
+def card_cache(request: pytest.FixtureRequest) -> Iterator[CardCache]:
+    """Prepared SD cards, kept between tests and sessions for the running test's application:
+    `card_cache.get(name)` is a clone of one for the test to insert, or `None`, and
+    `card_cache.put(name, image)` keeps a copy of the image, with the board off."""
+    config = request.config
+    limit = card_cache_limit(config)
+
+    def running() -> Board | None:
+        return config.stash.get(RUNNING_BOARD, None)
+
+    cache = getattr(config, "cache", None)
+    if cache is not None:
+        yield CardCache(cache.mkdir("esp32tl-card-cache"), limit, running)
+        return
+    # -p no:cacheprovider: nothing outlives the session.
+    with TemporaryDirectory(prefix="esp32tl-card-cache-") as directory:
+        yield CardCache(Path(directory), limit, running)
 
 
 @pytest.fixture

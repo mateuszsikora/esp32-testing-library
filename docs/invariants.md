@@ -1025,6 +1025,46 @@ that references to its number keep their meaning.
     `tests/test_board_api.py::test_a_build_after_power_on_is_a_replacement_and_close_removes_images`
 
 
+- **195.** The builder makes cards of 1 to 1048576 MiB, and clusters of 1 to 64 KiB in powers of two, as
+    asked: `-c` reaches the boot sector, on a card too of the size where mformat would choose that
+    cluster by itself. From 512 MiB a card is FAT32, with 255 heads and 63 sectors, and a count of
+    clusters outside 65525 to 268435445 is refused at `image()`, agreeing with what mformat makes on
+    either side of the limit. A 32 GiB card with 32 KiB clusters mounts in ESP-IDF's unmodified
+    `sdspi`, and takes what its FATs and files take of the disk.
+    `tests/test_card_image.py::test_a_size_the_builder_does_not_make_is_refused`,
+    `tests/test_card_image.py::test_a_cluster_mformat_does_not_make_is_refused`,
+    `tests/test_card_image.py::test_a_fat32_card_with_a_count_of_clusters_it_cannot_have_is_refused`,
+    `tests/test_card_image.py::test_a_32_gib_card_has_the_cluster_asked_for_and_stays_sparse`,
+    `tests/test_card_image.py::test_the_builder_makes_a_card_of_1_tib`,
+    `tests/test_card_image.py::test_the_smallest_card_a_cluster_is_allowed_has_the_clusters_fat32_asks_for`,
+    `tests/test_sdspi.py::test_the_example_mounts_a_32_gib_card_with_32_kib_clusters`
+- **196.** What a test takes from `card_cache` is its own: whether the file system clones or the harness
+    copies, what is written to a clone reaches neither the cache nor another clone, nor does a later
+    write to the image a card was kept from. The clone is writable, sparse where its source is, and gone
+    with the board. A card is kept for a name and an application: another of either is a miss. A
+    second test finds what the first prepared, without the first's boots, and what the firmware then
+    writes stays on its clone.
+    `tests/test_card_cache.py::test_what_is_written_reaches_neither_the_cache_nor_another_clone`,
+    `tests/test_card_cache.py::test_a_hit_is_a_clone_in_the_test_s_directory_gone_with_its_board`,
+    `tests/test_card_cache.py::test_a_clone_of_a_read_only_image_can_be_written`,
+    `tests/test_card_cache.py::test_a_card_belongs_to_its_name_and_its_application`,
+    `tests/test_card_cache.py::test_the_sparse_copy_leaves_holes_and_reads_the_same`,
+    `tests/test_card_cache.py::test_a_session_keeps_a_card_for_the_next_test_and_the_next_session`,
+    `tests/test_power.py::test_a_second_test_takes_a_kept_card_and_writes_to_its_own_clone`
+- **197.** The cards `card_cache` keeps stay within `esp32tl_card_cache_mib`, counted from what they
+    have allocated: the card least recently used goes first, and `get` counts as use. A card alone above
+    the limit is refused and evicts nothing. A card appears under its name whole, a failed `put` leaves
+    no part of one and fails with the card's name, and what a run that died left is removed. A card in
+    the slot of a board that is on is not kept.
+    `tests/test_card_cache.py::test_the_card_least_recently_used_goes_first`,
+    `tests/test_card_cache.py::test_disk_use_stays_within_the_limit_from_what_is_allocated`,
+    `tests/test_card_cache.py::test_a_card_above_the_limit_is_refused_and_evicts_nothing`,
+    `tests/test_card_cache.py::test_a_put_that_fails_leaves_no_part_of_a_card`,
+    `tests/test_card_cache.py::test_a_cache_directory_that_fails_fails_with_the_card_s_name`,
+    `tests/test_card_cache.py::test_a_card_appears_whole_under_its_name_and_a_dead_run_s_part_is_removed`,
+    `tests/test_card_cache.py::test_a_card_in_the_slot_of_a_board_that_is_on_is_not_kept`,
+    `tests/test_card_cache.py::test_a_limit_that_is_no_whole_number_is_a_usage_error`
+
 - **110.** FAT paths never expand into multiple entries: readers and builders reject bracket patterns,
     even when a matching literal filename exists. Missing paths, file-as-directory paths and
     directory-as-file reads raise the corresponding standard filesystem exceptions. An invalid
