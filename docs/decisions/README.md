@@ -175,6 +175,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The SD card tests skip without mtools, and CI makes sure it is there](harness.md#the-sd-card-tests-skip-without-mtools-and-ci-makes-sure-it-is-there) | `harness.md` | decided (#32) |
 | [The esp32tl command takes no SD card yet](harness.md#the-esp32tl-command-takes-no-sd-card-yet) | `harness.md` | postponed (#32) |
 | [The Bluetooth peer runs Bumble in the harness, on the board's clock](harness.md#the-bluetooth-peer-runs-bumble-in-the-harness-on-the-boards-clock) | `harness.md` | decided (#33) |
+| [The air's timers are put on the nanosecond, not judged by the selector](harness.md#the-airs-timers-are-put-on-the-nanosecond-not-judged-by-the-selector) | `harness.md` | decided (#142) |
 | [esp32tl adds inquiry, legacy pairing, key checks and encryption to Bumble's virtual controller](harness.md#esp32tl-adds-inquiry-legacy-pairing-key-checks-and-encryption-to-bumbles-virtual-controller) | `harness.md` | decided (#33) |
 | [A model answers the SPP channel as the far end of a UART does](harness.md#a-model-answers-the-spp-channel-as-the-far-end-of-a-uart-does) | `harness.md` | decided (#33) |
 | [The SPP peer opens its channel to one device, on a link that device authenticated](harness.md#the-spp-peer-opens-its-channel-to-one-device-on-a-link-that-device-authenticated) | `harness.md` | decided (#33) |

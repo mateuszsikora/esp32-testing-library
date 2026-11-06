@@ -9,9 +9,11 @@ clock. Nothing here reads the host's clock, so two runs do the same at the same 
 """
 
 import asyncio
+import math
 import selectors
 from collections.abc import Awaitable, Callable, Coroutine, Iterable
-from typing import Any, Protocol, TypeVar
+from contextvars import Context
+from typing import Any, Protocol, TypeVar, TypeVarTuple
 
 from bumble import controller, core, hci, lmp
 from bumble.link import LocalLink
@@ -21,6 +23,7 @@ from esp32tl.interfaces import NeverHappened
 from esp32tl.units import Duration
 
 T = TypeVar("T")
+Ts = TypeVarTuple("Ts")
 
 
 class AirError(RuntimeError):
@@ -61,7 +64,8 @@ class _Selector(selectors.DefaultSelector):
 
 class BoardLoop(asyncio.SelectorEventLoop):
     """An asyncio loop on the board's clock: `time()` is `now`, in seconds, and only `Air`
-    moves it. `run_idle` runs it until nothing is left to do at `now`."""
+    moves it. Every timer falls on a nanosecond. `run_idle` runs it until nothing is left to do
+    at `now`."""
 
     def __init__(self) -> None:
         selector = _Selector()
@@ -69,10 +73,30 @@ class BoardLoop(asyncio.SelectorEventLoop):
         selector.loop = self
         self._idle_selector = selector
         self.now = 0
-        self._clock_resolution = 1e-9
+        # Under the nanosecond between two timers: the loop fires those due at `now`, never one
+        # due at the next nanosecond, whose float may land a hair under `time()` + 1 ns.
+        self._clock_resolution = 0.5e-9
 
     def time(self) -> float:
         return self.now / 1e9
+
+    def call_at(
+        self,
+        when: float,
+        callback: Callable[[*Ts], object],
+        *args: *Ts,
+        context: Context | None = None,
+    ) -> asyncio.TimerHandle:
+        """Schedules `callback` at the nanosecond nearest `when`, as the float `now / 1e9` that
+        `time()` gives there. Otherwise a sum of floats, 6 s and 5.12 s, lands a hair above the
+        instant: the loop fires the timer there, within `_clock_resolution`, but its selector
+        sees a wait left and stops the loop, and what the timer schedules runs a nanosecond
+        later. `call_later` comes through here. A `when` with no nanosecond, as `math.inf` from
+        `asyncio.timeout(math.inf)`, stays as it is: such a timer never fires."""
+        ns = when * 1e9
+        if math.isfinite(ns):
+            when = round(ns) / 1e9
+        return super().call_at(when, callback, *args, context=context)
 
     def run_idle(self) -> int | None:
         """Runs what is due at `now` until nothing is left; returns the time of the loop's next
@@ -82,9 +106,9 @@ class BoardLoop(asyncio.SelectorEventLoop):
         self.run_forever()
         if not selector.idle or selector.next_in is None:
             return None
-        # A float of seconds, whose error is far under a nanosecond: the nearest nanosecond is the
-        # timer's own, and the loop fires what is due within `_clock_resolution`. At least a
-        # nanosecond on, so that a timer whose time rounds to this instant still moves the air.
+        # A difference of floats, whose error is far under a nanosecond: the nearest nanosecond is
+        # the timer's own, which is after `now`, as it is not due there. At least a nanosecond on
+        # all the same, so that the air always moves.
         return max(round((self.now / 1e9 + selector.next_in) * 1e9), self.now + 1)
 
 
