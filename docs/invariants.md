@@ -917,9 +917,14 @@ that references to its number keep their meaning.
     `tests/test_clock.py::test_a_wait_that_ends_at_keepalive_expiry_finds_the_connection_closed_and_the_will`,
     `tests/test_clock.py::test_a_wait_until_returns_at_keepalive_expiry`,
     `tests/test_clock.py::test_keepalive_expiry_wins_a_tie_with_a_puback_deadline_in_a_held_turn`
-- **187.** A rate counts the IPv4 datagram alone, not what follows it in its Ethernet frame.
+- **187.** A rate counts the IPv4 datagram alone, not what follows it in its Ethernet frame, and a
+    frame without anything after its datagram gives the same datagram.
     `tests/test_net_path.py::test_what_follows_a_datagram_in_its_frame_takes_no_time_at_the_rate`,
     `tests/test_net_ethernet.py::test_what_follows_an_ipv4_datagram_in_its_frame_is_not_part_of_it`
+- **198.** The frame of a 1500-byte datagram from the station, with the 4 bytes of libpp's guard
+    word after it, is an `eth_tx` of 1518 bytes: the codec takes it, refuses one of 1519, and
+    `Ethernet.receive` gives the datagram alone.
+    `tests/test_net_ethernet.py::test_a_full_size_datagram_and_the_guard_word_are_an_eth_tx_of_1518_bytes`
 - **188.** A resumed session stays connected while its queue waits for packet IDs: each PUBACK sends the next message, and a QoS 1 message published
     meanwhile goes behind the queue.
     `tests/test_net_mqtt_sessions.py::test_a_resumed_queue_waits_for_packet_ids_and_each_puback_frees_one`

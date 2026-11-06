@@ -613,3 +613,25 @@ the socket, and `BoardLink.run`'s one loop of reading and answering stays one lo
 **Rejected:** the test's thread writing on the socket while the link is held, because the link would
 have to give up its reader for the time of an answer, and a read of a `flash_dump_ack` would race the
 link's next `readline`.
+
+## The station's frames keep the 4 bytes esp32sim leaves, and nothing goes upstream yet
+
+Status: postponed (#143)
+
+Every frame the station sends reaches the harness with libpp's guard word after it ([protocol
+5.15](../protocol.md#515-eth_tx-and-eth_rx-ext-m7)): libpp counts 4 bytes more than the frame in its
+transmit descriptor's length, taken to be its FCS, and a CCMP MIC too, while esp32sim takes that
+length for the frame and cuts only the MIC. esp32sim's cut is short by those 4 bytes, and esp32sim,
+which reads the descriptor, is the place to correct it. Nothing in the harness needs that now:
+`Ethernet.receive` leaves the 4 bytes out and takes a frame without them alike, and a full-size
+datagram fits the relay's 1518 bytes with them. What was measured covers one ESP-IDF version, the
+classic ESP32, and no capture from a real board. The question goes to mikroverk/esp32sim when
+something needs the station's frames to be exact, with what was measured: a 24-byte null data frame
+has a descriptor length of 28, and a protected data frame one 12 bytes over its frame. Protocol 5.15
+says how to measure it again. The pin then moves.
+
+**Rejected:** cutting 4 bytes off every `eth_tx` in the runner, because the runner would hold the
+arithmetic of one ESP-IDF version's libpp, and a firmware whose libpp counts its length otherwise
+would lose 4 bytes of every frame without a sign. It would gain nothing: the harness takes frames
+with the 4 bytes and without them alike. And the runner would no longer hand over what esp32sim
+gives, which hides the very behaviour that is to go upstream.

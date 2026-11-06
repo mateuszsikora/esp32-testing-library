@@ -123,15 +123,19 @@ so two runs give the same stamps (`tests/test_determinism.py::test_mqtt_session_
 - `dns.py`: one bounded question, including compressed names with loop detection; preserves the
   query ID and recursion-desired bit. IN A answers have TTL 60 and address `10.64.0.1`.
 - `ethernet.py`: Ethernet II without FCS, ARP and the hand-off to DHCP. `Ethernet.receive` drops
-  frames under 14 bytes and frames from a multicast source, and learns `device_mac` from every
-  other frame. `_whole` cuts an IPv4 payload at its total length when that is possible (ESP-IDF's
-  frames carry 4 bytes more, [protocol 5.15](../protocol.md#515-eth_tx-and-eth_rx-ext-m7)), so that
-  the rate counts the datagram only. ARP (`0x0806`): only Ethernet/IPv4 requests of 28 bytes or more are read; each is
-  answered with `GATEWAY_MAC` (`02:53:49:4d:00:02`, esp32sim's own network's gateway in
-  `esp-soc/src/net/packet.rs`) unless its target is the `Dhcp.device` address (lwIP's RFC 5227
-  probe before it takes the lease) or its sender's own address (an announcement). IPv4 (`0x0800`)
-  to `GATEWAY_MAC`, broadcast or a multicast address goes on; unicast to another MAC is dropped. A
-  datagram that `ip.ipv4` and `ip.udp` take, the checks `Network.receive` makes of every datagram
+  frames under 14 bytes and frames from a multicast source, and learns `device_mac` from every other
+  frame. In esp32sim every frame from the station ends in 4 bytes more, libpp's guard word
+  `ef be ad de`, because libpp counts 4 bytes more than the frame, taken to be its FCS, in its
+  transmit descriptor's length ([protocol 5.15](../protocol.md#515-eth_tx-and-eth_rx-ext-m7)).
+  `_whole` cuts an IPv4 payload at its total length when that is possible, so that the rate counts
+  the datagram only; a frame without the 4 bytes gives the same datagram. A 1500-byte datagram's
+  frame is 1518 bytes with them, the longest the relay and the codec take. ARP (`0x0806`): only
+  Ethernet/IPv4 requests of 28 bytes or more are read; each is answered with `GATEWAY_MAC`
+  (`02:53:49:4d:00:02`, esp32sim's own network's gateway in `esp-soc/src/net/packet.rs`) unless its
+  target is the `Dhcp.device` address (lwIP's RFC 5227 probe before it takes the lease) or its
+  sender's own address (an announcement). IPv4 (`0x0800`) to `GATEWAY_MAC`, broadcast or a multicast
+  address goes on; unicast to another MAC is dropped.
+  A datagram that `ip.ipv4` and `ip.udp` take, the checks `Network.receive` makes of every datagram
   (header checksum, lengths, no fragment, the UDP checksum unless it is zero), from port 68 to 67,
   is DHCP: `Dhcp.on_message` answers it and nothing else sees it. Everything else goes to `on_ip`,
   where the IP layer drops what fails those checks. Other ethertypes are

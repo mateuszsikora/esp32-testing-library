@@ -336,8 +336,10 @@ def test_the_answer_to_a_datagram_is_held_while_ppp_control_passes_it() -> None:
     assert answered(net.poll(601 * MS)) == [601 * MS]
 
 
-# The access point's link, in hand-made frames: ARP and DHCP pass, IPv4 takes the path.
+# The access point's link, in hand-made frames: ARP and DHCP pass, IPv4 takes the path. The
+# station's frames end in libpp's guard word, as esp32sim hands them over (protocol 5.15).
 DEVICE_MAC = bytes.fromhex("246f28001122")
+GUARD = b"\xef\xbe\xad\xde"
 
 
 def ethernet_opened() -> Internet:
@@ -347,7 +349,7 @@ def ethernet_opened() -> Internet:
 
 
 def eth_ip(datagram: bytes) -> bytes:
-    return GATEWAY_MAC + DEVICE_MAC + b"\x08\x00" + datagram
+    return GATEWAY_MAC + DEVICE_MAC + b"\x08\x00" + datagram + GUARD
 
 
 def test_ethernet_datagrams_take_the_path() -> None:
@@ -365,7 +367,7 @@ def test_ethernet_datagrams_take_the_path() -> None:
 def test_what_follows_a_datagram_in_its_frame_takes_no_time_at_the_rate() -> None:
     net = ethernet_opened()
     net.set_path(uplink=kbit_s(128))
-    assert net.receive(0, eth_ip(packet(17, UDP) + b"\xef\xbe\xad\xde")) == []
+    assert net.receive(0, eth_ip(packet(17, UDP))) == []
     assert net.quiet_until() == 4_750_000  # The 76 bytes of the datagram, not 80.
 
 
@@ -381,6 +383,7 @@ def test_arp_and_dhcp_are_not_delayed() -> None:
         + bytes([10, 64, 0, 2])
         + b"\0" * 6
         + bytes([10, 64, 0, 1])
+        + GUARD
     )
     [(t, reply)] = net.receive(5 * MS, arp)
     assert t == 6 * MS and reply[12:14] == b"\x08\x06"

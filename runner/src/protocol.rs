@@ -18,7 +18,8 @@ pub const ESP32SIM: &str = "8c652151dd5a521249a785ca147f20a9f8eda68f";
 /// The longest line either side may send (protocol §2).
 pub const MAX_LINE: usize = 1 << 20;
 /// An Ethernet frame without FCS, as esp32sim's relay takes and gives it (5.15): a header, and at
-/// most 1500 bytes of payload.
+/// most 1504 bytes of payload. The station's frames end in 4 bytes more, libpp's guard word, which
+/// the relay's limit counts: a 1500-byte datagram's frame is 1518 bytes with them.
 pub const ETH_MIN: usize = 14;
 pub const ETH_MAX: usize = 1518;
 /// The longest delay an `sd_fault` may give (5.20): 10 emulated seconds, twice ESP-IDF's longest

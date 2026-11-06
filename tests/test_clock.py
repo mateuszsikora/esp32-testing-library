@@ -167,10 +167,11 @@ def test_mqtt_immediate_response_is_visible_after_waiting_for_connection() -> No
 
 
 def datagram_frame() -> bytes:
-    """A UDP datagram to port 7000, in an Ethernet frame from the station."""
+    """A UDP datagram to port 7000, in an Ethernet frame from the station, which ends in libpp's
+    guard word as esp32sim hands it over (protocol 5.15)."""
     station = bytes.fromhex("246f28001122")
     datagram = packet(17, struct.pack(">HHHH", 5000, 7000, 8, 0))
-    return GATEWAY_MAC + station + b"\x08\x00" + datagram
+    return GATEWAY_MAC + station + b"\x08\x00" + datagram + b"\xef\xbe\xad\xde"
 
 
 def a_datagram_on_the_path() -> tuple[Run, list[int]]:
