@@ -254,7 +254,7 @@ because a second `SIGTERM` kills the runner with 128 + 15. A mismatched handshak
 `esp32tl/link/`.
 
 **The recordings' clock.** `Esp32Sim.clock` is `recording.EMULATED`, `"emulated-fifo-write"`, unless
-a route has a real source ([below](#a-run-with-a-real-source)), and `BoardLink` asks it as its `clock`
+a route has a real source or a network has a bridge ([below](#a-run-with-a-real-source)), and `BoardLink` asks it as its `clock`
 when the runner says hello: a runner whose `hello` names another clock fails the link
 (`the runner's clock is {clock}, the backend's emulated-fifo-write`), since the UARTs check their
 recordings against `Esp32Sim.clock`.
@@ -353,14 +353,19 @@ GPIO responses and the command report are specified in [modem-technical.md](mode
 
 ### A run with a real source
 
-`Esp32Sim.clock` is a property, `recording.WALL` while any route's `source_kind` is `real`, else
-`recording.EMULATED`, so a `real` call that failed moves nothing. `_asked` calls `_refuse_replays` for
-a request with `source="real"`, which raises `SourceError` if the run is still on the emulated clock
-and a route has a `Replay`. Every `Uart` and the `BoardLink` get `clock=self._run_clock`, and ask
+`Esp32Sim.clock` is a property, `recording.WALL` while any route's `source_kind` is `real` or any
+network of `_networks()` has `bridges`, else `recording.EMULATED`, so a `real` or `bridge` call that
+failed moves nothing. `_networks()` gives the `Internet` of each `Modem` whose model has one and of
+`wifi` once it has an access point. `_asked` calls `_refuse_replays("{route}: a real source")` for a
+request with `source="real"`, which raises `SourceError` if the run is still on the emulated clock
+and a route has a `Replay`. The `Modem`s and the `Wifi` get `bridging=self._bridging`, which their
+networks call from `Internet.bridge` before the bridge is made: it refuses once `started`, then calls
+`_refuse_replays("{call}: a bridge")`, and logs the call as a step of the test at 0. Every `Uart` and the `BoardLink` get `clock=self._run_clock`, and ask
 when a replay is given and when the runner says hello; a tap's recording takes it at the end of the
 run. `power_on` passes `realtime=self.clock == recording.WALL` to `runner_command`, which appends
 `--realtime`. `close` closes
-every `Real` in its `finally`, through `_release`, also for a board never powered on. `report` and `properties` add the
+every `Real` and every network with a bridge (`Internet.close`) in its `finally`, through `_release`,
+also for a board never powered on. `report` and `properties` add the
 port and `dropped`, and `set_up` calls the source `the real device of {route}`.
 [real-source-technical.md](real-source-technical.md) has the rest.
 
@@ -394,7 +399,7 @@ repository makes.
 
 | Name | What |
 |---|---|
-| `Esp32Sim(dut, app_path, msg_queue, meta, profile, directory=None, skip=None, *, build_dir=None)` | The board, off. Attributes: `name = "esp32sim"`, `clock` (`"emulated-fifo-write"`, or `"wall"` with a real source on a route: the clock the runner's `hello` must name, a replayed recording must be on, and a tap's recording is on), `dut`, `profile` (the `BoardProfile`), `directory`, `app` (the `IdfApp`), `console_output` (a `bytearray`), `console_lines` (a `ConsoleLines`), `log` (the `RunLog`), `process` (the `RunnerPopen`, `None` until power-on), `link` (the `BoardLink`, complete once `close` returns) |
+| `Esp32Sim(dut, app_path, msg_queue, meta, profile, directory=None, skip=None, *, build_dir=None)` | The board, off. Attributes: `name = "esp32sim"`, `clock` (`"emulated-fifo-write"`, or `"wall"` with a real source on a route or a bridge on a network: the clock the runner's `hello` must name, a replayed recording must be on, and a tap's recording is on), `dut`, `profile` (the `BoardProfile`), `directory`, `app` (the `IdfApp`), `console_output` (a `bytearray`), `console_lines` (a `ConsoleLines`), `log` (the `RunLog`), `process` (the `RunnerPopen`, `None` until power-on), `link` (the `BoardLink`, complete once `close` returns) |
 | `Esp32Sim.power_on(utc=None)` | The first time, starts the runner; after `power_off`, switches the supply back on (no `utc`); `BoardOff` with the supply on |
 | `Esp32Sim.power_off()`, `Esp32Sim.reset()` | The supply off; a pulse of EN. Both at the held clock's `now`, sent with the turn the link is held at; `BoardOff` when the board is not in the state they need, `RunEnded` once the run has ended |
 | `Esp32Sim.flash()` | A `FlashSnapshot` of the runner's flash at the board's time now, or as the run left it; `BoardOff` before the first `power_on` |
@@ -504,7 +509,11 @@ those).
 ## Tests
 
 `tests/test_real_source.py` covers the run with a real source
-([real-source-technical.md](real-source-technical.md#tests)).
+([real-source-technical.md](real-source-technical.md#tests)), and `tests/test_http_request.py` a run
+with a bridge: the wall clock in the runner's `hello`, and the refusal after power-on and after
+power-off. `tests/test_pppos_client.py::test_a_bridge_refuses_a_replay_given_before_it` checks the
+replay refusal, and `test_a_replay_given_after_a_bridge_takes_the_wall_clock_only` the replay after
+it.
 `tests/test_pytest_plugin.py::test_console_tap_preserves_emulated_output` checks the console
 recording after passing and failing assertions, its path and byte count in the report and JUnit
 property, and its `console.tap` step in the failure log.

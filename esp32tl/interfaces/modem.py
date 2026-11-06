@@ -20,7 +20,8 @@ from esp32tl.units import Duration
 
 class Modem(Uart):
     """The first successful model call before power-on selects the model; later calls change it
-    on the test's clock. Merely requesting the fixture keeps the route silent."""
+    on the test's clock. Merely requesting the fixture keeps the route silent. `bridging` goes to
+    the network, which calls it before a bridge to a real service is made (`Internet.bridge`)."""
 
     def __init__(
         self,
@@ -36,11 +37,13 @@ class Modem(Uart):
         asked: Callable[[Request], None] = lambda request: None,
         log: RunLog | None = None,
         files: dict[Path, tuple[str, str]] | None = None,
+        bridging: Callable[[str], None] = lambda call: None,
     ) -> None:
         super().__init__(
             name, wire, clock=clock, directory=directory, asked=asked, log=log, files=files
         )
         self._now = now
+        self._bridging = bridging
         self._world = world
         self._lines = lines
         self._pins = pins
@@ -51,7 +54,7 @@ class Modem(Uart):
             return self.source.data
         self.asked(Request(self.name, source="model"))
         self._tell(lambda model: None, "network()")
-        network = Internet(self._now, self._world)
+        network = Internet(self._now, self._world, bridging=self._bridging)
         self.model().data = network
         return network
 

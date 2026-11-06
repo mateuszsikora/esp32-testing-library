@@ -40,7 +40,8 @@ What the test does on the board, what the firmware prints and the bytes on every
 
 A route with a real source, `gnss.real(port)`, puts the whole run on the wall clock (protocol
 §12.4): the runner starts with `--realtime`, its `hello` says `wall`, and every recording of the run
-says so too. The run stays on the test's clock.
+says so too. So does a bridge from a simulated network to a real service, `network.bridge(port,
+to)`. The run stays on the test's clock.
 """
 
 import contextlib
@@ -363,7 +364,11 @@ class Esp32Sim(Board):
             else None
         )
         self._wifi = Wifi(
-            now=lambda: self._hold.now, world=lambda: self._utc, asked=self._asked, log=self.log
+            now=lambda: self._hold.now,
+            world=lambda: self._utc,
+            asked=self._asked,
+            log=self.log,
+            bridging=self._bridging,
         )
         slot = [] if self._sd_card is None else [self._sd_card]
         self.link = BoardLink(
@@ -411,6 +416,7 @@ class Esp32Sim(Board):
                 asked=self._asked,
                 log=self.log,
                 files=self._files,
+                bridging=self._bridging,
             )
         return Uart(
             interface,
@@ -489,18 +495,31 @@ class Esp32Sim(Board):
         if reason is not None:
             self._skip(f"{self.name}: {reason}")
         if request.source == "real":
-            self._refuse_replays(request.interface)
+            self._refuse_replays(f"{request.interface}: a real source")
 
-    def _refuse_replays(self, interface: str) -> None:
-        """A real source on `interface` would put the whole run on the wall clock, and a replay
-        given before it read a recording on the emulated clock, whose times would no longer mean
-        what they say. A replay given once the run is on the wall clock read one on that clock."""
+    def _bridging(self, call: str) -> None:
+        """Refuses a bridge to a real service once the board has been on, since the runner is on
+        its clock from power-on, then a replay given before it, as a real source does."""
+        if self.started:
+            state = "is on already" if self.powered else "has been on"
+            raise SourceError(
+                f"{call}: the board {state}: a bridge puts the run on the {recording.WALL} clock,"
+                " from power-on, so give it before board.power_on()"
+            )
+        self._refuse_replays(f"{call}: a bridge")
+        self.log.test(0, call)
+
+    def _refuse_replays(self, cause: str) -> None:
+        """`cause`, a real source or a bridge, would put the whole run on the wall clock, and a
+        replay given before it read a recording on the emulated clock, whose times would no longer
+        mean what they say. A replay given once the run is on the wall clock read one on that
+        clock."""
         if self.clock == recording.WALL:
             return
         for name, uart in self._uarts.items():
             if isinstance(uart.source, Replay):
                 raise SourceError(
-                    f"{interface}: a real source puts the run on the {recording.WALL} clock, and"
+                    f"{cause} puts the run on the {recording.WALL} clock, and"
                     f" {name} replays a recording on the {self.clock} clock: replaying it would"
                     " compare times across clocks"
                 )
@@ -589,10 +608,23 @@ class Esp32Sim(Board):
     @property
     def clock(self) -> str:
         """The clock the run's times are on, which the runner's `hello` must name (protocol 5.1):
-        the wall clock with a real source on any route, for the whole run (protocol 12.4), else
-        the emulated clock."""
+        the wall clock with a real source on any route or a bridge on any network, for the whole
+        run (protocol 12.4), else the emulated clock."""
         real = any(uart.source_kind == "real" for uart in self._uarts.values())
-        return recording.WALL if real else recording.EMULATED
+        bridged = any(network.bridges for _, network in self._networks())
+        return recording.WALL if real or bridged else recording.EMULATED
+
+    def _networks(self) -> list[tuple[str, Internet]]:
+        """The simulated networks the test gave, by what they are behind: the modem's route or
+        `wifi`."""
+        networks = [
+            (uart.name, uart.model().data)
+            for uart in self._uarts.values()
+            if isinstance(uart, Modem) and uart.lossless
+        ]
+        if self._wifi.configuration is not None:
+            networks.append(("wifi", self._wifi.network))
+        return [(name, network) for name, network in networks if isinstance(network, Internet)]
 
     def _run_clock(self) -> str:
         """`clock`, for the routes and the link to ask when a recording or the runner comes."""
@@ -849,14 +881,16 @@ class Esp32Sim(Board):
             raise BackendError("; ".join(problems))
 
     def _release(self) -> list[str]:
-        """Closes the SD card and every real source's port, each whatever another one raises: a
-        port left open holds its thread, and its lock against the next test. Returns what raised."""
+        """Closes the SD card, every real source's port and every bridge's connections, each
+        whatever another one raises: a port left open holds its thread, and its lock against the
+        next test. Returns what raised."""
         closing = [("sd_card", self._sd_card.close)] if self._sd_card is not None else []
         closing += [
             (uart.name, uart.source.close)
             for uart in self._uarts.values()
             if isinstance(uart.source, Real)
         ]
+        closing += [(name, network.close) for name, network in self._networks() if network.bridges]
         problems = []
         for name, close in closing:
             try:

@@ -128,8 +128,9 @@ A `uart_tx` a `RateBound` source refuses still reaches the tap and the run's log
   `quiet_until` and the stamp of a byte between two turns); the tap's events and `source`; the run
   failing on another baud, with its bytes in the tap and the log and not in the port's queue.
 - The backend's refusals and clock, with `nmea_reader` or `modem_at`: `wall` from the call on, and
-  nothing moved by a call that failed; only a real source passes `--realtime`; one source per route;
-  before power-on; replays before and after; one port that cannot be closed not keeping another open.
+  nothing moved by a call that failed; a run on the emulated clock does not pass `--realtime`; one
+  source per route; before power-on; replays before and after; one port that cannot be closed not
+  keeping another open.
 - Whole runs, a few seconds each, whose devices say a sentence again until it is heard, since a stall
   of a busy host costs bytes: the firmware reads a sentence from the device while the run follows
   wall time, with every recording on the wall clock; most stamps within 10 ms of their arrivals, around

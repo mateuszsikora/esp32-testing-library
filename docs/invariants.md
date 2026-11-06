@@ -1252,6 +1252,26 @@ that references to its number keep their meaning.
     `tests/test_net_ethernet.py::test_dhcp_next_lease_uses_append_order_without_consuming`,
     `tests/test_net_ethernet.py::test_dhcp_conditions_are_named_and_reject_truth_testing`,
     `tests/test_http_request.py::test_a_timeout_names_the_expected_request_or_lease`
+- **203.** A bridge puts the whole run on the wall clock: the runner's `hello` says `wall`. It is
+    refused after power-on, also once the board is off again, and in front of a replay already
+    given; a replay after it takes only a wall recording. A refused bridge leaves the port's
+    service and the run's clock as they were.
+    `tests/test_http_request.py::test_fetches_from_a_real_service_through_a_bridge`,
+    `tests/test_http_request.py::test_a_bridge_comes_before_power_on`,
+    `tests/test_pppos_client.py::test_a_bridge_refuses_a_replay_given_before_it`,
+    `tests/test_pppos_client.py::test_a_replay_given_after_a_bridge_takes_the_wall_clock_only`,
+    `tests/test_net_bridge.py::test_the_backend_may_refuse_a_bridge`
+- **204.** A bridged connection carries the bytes both ways in order, each handed to the device in
+    a turn and stamped from it; the service's end of the stream closes the device's after its last
+    bytes, and the device's close, a lost link and the end of the run end the stream at the service.
+    What the service sends after the device's close reaches nothing and is counted in the transcript.
+    `tests/test_net_bridge.py::test_a_connection_goes_to_the_service_and_its_answer_comes_back`,
+    `tests/test_net_bridge.py::test_the_service_closing_closes_the_devices_end_after_its_last_bytes`,
+    `tests/test_net_bridge.py::test_the_device_closing_ends_the_stream_at_the_service`,
+    `tests/test_net_bridge.py::test_what_the_service_sends_after_the_device_closed_is_dropped_and_logged`,
+    `tests/test_net_bridge.py::test_a_lost_link_ends_the_stream_at_the_service`,
+    `tests/test_net_bridge.py::test_close_ends_a_connection_the_service_keeps_open`,
+    `tests/test_net_bridge.py::test_the_services_answer_reaches_the_station_in_a_tcp_segment_stamped_at_the_turn`
 
 ## Explicit build selection
 

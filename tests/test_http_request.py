@@ -1,12 +1,15 @@
 """ESP-IDF's unmodified http_request example joins the test's access point and fetches from the
 test's HTTP server (plan M7), with ESP-IDF's default SSID and passphrase."""
 
+import http.server
+import threading
 from pathlib import Path
 
 import pytest
 
+from esp32tl import recording
 from esp32tl.backends.esp32sim import Esp32Sim
-from esp32tl.interfaces import NeverHappened
+from esp32tl.interfaces import NeverHappened, SourceError
 from esp32tl.interfaces.console import Console
 from esp32tl.interfaces.wifi import Wifi
 from esp32tl.units import kbit_s, ms, seconds
@@ -182,3 +185,59 @@ def test_joins_again_after_a_reset_or_a_power_cycle(
     board.wait_until(rejoined, within=seconds(30))
     board.wait_until(console.line(r"^second$"), within=seconds(30))
     assert board.link.error is None
+
+
+class _Page(http.server.BaseHTTPRequestHandler):
+    """The real service: a page, with the request's Host header in it."""
+
+    def do_GET(self) -> None:
+        body = f"hello from the host, asked for {self.headers['Host']}\n".encode()
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format: str, *args: object) -> None:
+        pass
+
+
+def test_fetches_from_a_real_service_through_a_bridge(
+    board: Esp32Sim, wifi: Wifi, console: Console
+) -> None:
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Page)
+    serving = threading.Thread(target=server.serve_forever, daemon=True)
+    serving.start()
+    try:
+        network = wifi.access_point(SSID, password=PASSWORD)
+        port = server.server_address[1]
+        bridge = network.bridge(80, ("127.0.0.1", port))
+        assert board.clock == recording.WALL
+        printed = console.line(r"^hello from the host, asked for example\.com:80$")
+        board.power_on()
+        board.wait_until(printed, within=seconds(30))
+        assert board.link.runner is not None and board.link.runner.clock == recording.WALL
+        assert bridge.connections >= 1
+        assert network.http.requests == [], "the bridge took the HTTP server's place"
+        events = [e.get("event") for e in network.events]
+        assert f"bridge: TCP 80 → 127.0.0.1:{port}, in place of the HTTP server" in events
+        assert f"bridge: 80/1 connected to 127.0.0.1:{port}" in events
+        assert board.link.warnings == [] and board.link.error is None
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_a_bridge_comes_before_power_on(board: Esp32Sim, wifi: Wifi) -> None:
+    network = wifi.access_point(SSID, password=PASSWORD)
+    board.power_on()
+    with pytest.raises(SourceError) as error:
+        network.bridge(80, ("127.0.0.1", 8080))
+    assert str(error.value) == (
+        "network.bridge(80, ('127.0.0.1', 8080)): the board is on already: a bridge puts the run"
+        " on the wall clock, from power-on, so give it before board.power_on()"
+    )
+    assert network.bridges == {} and board.clock == recording.EMULATED
+    board.power_off()
+    with pytest.raises(SourceError, match=r"the board has been on: a bridge puts the run"):
+        network.bridge(80, ("127.0.0.1", 8080))
+    assert network.bridges == {} and board.clock == recording.EMULATED

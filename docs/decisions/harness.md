@@ -970,11 +970,39 @@ broker such as mosquitto as the default, which brings wall time back.
 
 ## A bridge from the simulated network to a real service is postponed
 
-Status: postponed (#67)
+Status: superseded (#67)
 
 A consumer may want its real backend at the far end, in a container or on the host, at the cost
-of wall time and of repeatable runs, as with the `real` source. Nothing needs it yet: the services
-in the harness are enough for every test written so far.
+of wall time and of repeatable runs, as with the `real` source. Nothing needed it then: the
+services in the harness were enough for every test written so far. See [a bridge relays a TCP port
+to a real service, and puts the run on the wall
+clock](#a-bridge-relays-a-tcp-port-to-a-real-service-and-puts-the-run-on-the-wall-clock).
+
+## A bridge relays a TCP port to a real service, and puts the run on the wall clock
+
+Status: decided (#67)
+
+`network.bridge(port, to)` makes the service at a host address the far end of one TCP port of a
+simulated network, behind the modem or the access point. The harness's own TCP still ends the
+device's connection; the bridge opens one connection to `to` for each, and relays the stream both
+ways, bytes as they are, TLS included. Threads connect, read and write, so that no turn waits on
+the service, and each turn hands over what came since the last one, stamped with the turn's time,
+renewing its turn every emulated millisecond while a connection is open, as the real source does.
+The service lives in wall time, so a bridge puts the whole run on the wall clock from power-on,
+under the rules of a run with a real source: given before `board.power_on()`, refused in front of
+a replay given before it. It may take the place of the broker on 1883 and the HTTP server on 80,
+since unmodified firmware talks to the ports it was built with; any other port must be free. Built
+at the owner's request, before a consumer's test named the need.
+
+**Rejected:** holding the emulated clock while a request waits for the service, because the
+service also sends unprompted, as a broker does, and the firmware's own timeouts would run on in
+emulated time against an answer that takes wall time. Also rejected: connecting to the service
+before the harness accepts the device's connection, so that a refusal reaches the device as a
+reset, because the accept would wait on the host in a turn or need a TCP that accepts later than
+the SYN; the device sees its connection accepted and closed instead, and the transcript says why.
+And ending TLS at the bridge, because the device would then have to trust the test's CA in front
+of a service that has a certificate of its own. UDP is not bridged: DNS, NTP and DHCP stay the
+network's, which every test so far needs repeatable, and no consumer has a UDP service of its own.
 
 ## A TLS stack with a seeded random source is postponed
 

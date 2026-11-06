@@ -99,7 +99,12 @@ station finds nothing to join.
 
 A test that gives a route a [real source](real-source-user.md), as `gnss.real(port)` does, puts the
 whole run on the wall clock: the runner starts with `--realtime`, every recording says `clock: wall`,
-and the board's time costs its own length in wall time. The test still holds the clock, as above.
+and the board's time costs its own length in wall time. The test still holds the clock, as above. A
+[bridge to a real service](network-user.md#bridge-a-port-to-a-real-service), as
+`network.bridge(80, ("127.0.0.1", 8080))`, does the same, and is refused after `board.power_on()`
+with `network.bridge(80, ('127.0.0.1', 8080)): the board is on already: a bridge puts the run on the
+wall clock, from power-on, so give it before board.power_on()` (`has been on` once the board is off
+again).
 
 ## Console recordings
 

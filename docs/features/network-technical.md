@@ -4,7 +4,8 @@
 by `interfaces.modem.Modem.network()`, or the network behind the Wi-Fi access point that
 `interfaces.wifi.Wifi.access_point()` creates. The `broker` fixture calls `modem.network()` and
 returns its `Broker`. All callbacks execute during link turns or while the test holds the board.
-There are no sockets, worker threads or host-clock timers. `Internet` uses the current UART chunk's
+There are no sockets, worker threads or host-clock timers, but for a bridge's
+([below](#the-bridge)). `Internet` uses the current UART chunk's
 or Ethernet frame's timestamp inside receive callbacks and the held board time for test calls.
 Responses carry a 1,000,000 ns latency (`LATENCY_NS`), the path's RTT when the test sets one; the
 modem starts PPP after CONNECT, so LCP follows the AT response. `arrive`, before the test holds the
@@ -14,8 +15,10 @@ deadlines and the path's next datagram.
 
 ## The link
 
-`Internet(now, world, *, link="ppp")`, whose `world` defaults to `esp32tl.net.ntp.DEFAULT_UTC`, as the modem's and `Wifi`'s do, takes `link`, `"ppp"` or `"ethernet"` (the `Link` type),
-and keeps it for its life. `_peer()` builds the link object from it: a `Ppp` whose `ended`
+`Internet(now, world, *, link="ppp", bridging=...)`, whose `world` defaults to `esp32tl.net.ntp.DEFAULT_UTC`, as the modem's and `Wifi`'s do, takes `link`, `"ppp"` or `"ethernet"` (the `Link` type),
+and keeps it for its life. `bridging(call)` is called by `bridge` before it makes a bridge, and
+refuses it by raising; it does nothing by default, and the `esp32sim` backend's refuses after
+power-on and in front of a replay ([backend](esp32sim-backend-technical.md#a-run-with-a-real-source)). `_peer()` builds the link object from it: a `Ppp` whose `ended`
 callback is `_link_ended`, which resets TCP and clears the path, or an `Ethernet` given the
 network's `Dhcp`. Both send through the same closure, which queues each frame or chunk of the link's
 own at `now + LATENCY_NS` and takes an IPv4 datagram down the path, and both hand IPv4 datagrams to
@@ -31,7 +34,7 @@ one that nothing asks.
 `start(t)` stops the network first, then marks it active and, for PPP only, starts LCP. `stop(at)`
 marks it inactive, resets TCP (`Network.reset`, which notifies every connection once), clears the
 path, drops the queued replies and replaces the link with a fresh one from `_peer()`. The `Dhcp`, the services and
-the transcript are not replaced.
+the transcript are not replaced, and neither are the bridges.
 
 Behind the access point, `Wifi` is the link's `Interface` whose `ethernet` property is true: the
 `BoardLink` hands it each `eth_tx` frame as `receive(t, "out", frame)`, and sends each output it
@@ -92,6 +95,53 @@ as it does (protocol, rule 5), and the rate is on top of that.
 
 Nothing here reads the host's clock, and the arithmetic is on integers but for the rate's division,
 so two runs give the same stamps (`tests/test_determinism.py::test_mqtt_session_on_a_path`).
+
+## The bridge
+
+`esp32tl/net/bridge.py`. `Internet.bridge(port, to)` checks `port` (an `int` from 1 to 65535, else
+`ValueError` `<call>: the TCP port must be between 1 and 65535`) and `to` with `address(to, call)`
+(a tuple of a non-empty `str` and an `int`, else `TypeError`; a port out of range, `ValueError`),
+`call` being `network.bridge(<port!r>, <to!r>)`. A port in `ip.tcp` that is not in `_builtin`
+(`{1883: "the broker", 80: "the HTTP server"}`) raises `<call>: TCP port <port> already has a
+service`. Then it calls `bridging(call)`, and only then takes the port out of `_builtin` and
+`ip.tcp`, installs the `Bridge` through `_install`, the same `_Traced` wrapper `listen` uses, keeps
+it in `bridges` by port, and logs `bridge: TCP <port> → <host>:<port>`, with
+`, in place of <the broker|the HTTP server>` when it replaced one. A refusal changes nothing.
+
+`Bridge(port, to, log)` is a `StreamService`. `accept` counts the connection in `connections` and
+makes a `_Relay` named `<port>/<n>`, the same identifier as the transcript's stream. Each relay has
+a thread that connects with `socket.create_connection(to, timeout=CONNECT_SECONDS)` (5 wall
+seconds), then starts a reader thread and writes, with `sendall`, what `on_data` puts in a
+`SimpleQueue`, in order; data sent before the connection is up waits there. The reader reads up to
+`READ_BYTES` (65536) at a time. The threads never touch the network: they append to the relay's
+`_arrived` list, under its lock, each read's bytes and each line (`connected to`, `cannot connect
+to`, `closed by`, `lost`, `cannot write to`); every line but `connected to` sets `_ended`, after
+which nothing more is appended. Once the device's end is closed, the reader appends no bytes: it
+adds their count to `_dropped`. A writer whose `sendall` failed clears `_writing`, and `on_data`
+drops what the device sends from then on, so that nothing fills a queue nobody reads. Failures carry `OSError.strerror`, else its text, else its type's name; one that
+comes after `end` is not noted.
+
+`Internet.arrive` and `Internet.poll` call `_pump` after `broker.poll()`, with `_at` set to the
+turn's `now`: each bridge's `pump` takes every relay's `_arrived` in order, logs its lines, writes
+its bytes to the device's connection, which `Network` segments and the path stamps from `now`, and
+closes the device's end once `_ended` is set and its bytes are written. Bytes taken after the
+device's end closed, and `_dropped`, make one line,
+`bridge: <port>/<n> dropped <count> bytes <host>:<port> sent after the device closed its end`,
+after the turn's other lines of that relay. Bytes thus carry the turn
+they are handed over in, never the instant they came, as the real source's do
+([decision](../decisions/harness.md#the-real-source-stamps-what-the-port-gave-with-the-turn-it-hands-it-over-in-every-emulated-millisecond)).
+`on_close`, from the device's FIN, an RST, `Network.reset` or the relay's own close, marks the
+device's end closed, under the lock, and puts `None` in the queue: the writer sends what is left,
+then `shutdown(SHUT_WR)`, and what the service sends after that is read and dropped. `Network._tcp`
+closes its own end on the device's FIN, so a bridged connection has no half-close. A relay leaves
+the turns' list once it is `done`: its device end closed, `_ended` set, and nothing left to log. `Bridge.quiet_until(now)` is the next whole emulated
+millisecond while any relay's device end is open, else `None`, and `Internet.quiet_until` takes
+the minimum with its other bounds; `latency()` stays `LATENCY_NS`.
+
+`Internet.close()` calls each bridge's `close`, which sets every relay's `_closing`, ends its
+writer with `None`, shuts the socket both ways so that the reader's `recv` returns, and joins both
+threads; a connect in progress ends within `CONNECT_SECONDS`. The backend calls it from
+`_release` at teardown. Calling it twice does nothing.
 
 ## Layers
 
@@ -311,7 +361,7 @@ so two runs give the same stamps (`tests/test_determinism.py::test_mqtt_session_
   No deterministic replacement for OpenSSL randomness is attempted (#68).
 
 These are a lossless test network, not a general Internet stack. TCP congestion control, packet
-reassembly, retransmission, MQTT QoS 2 and bridging to host services
+reassembly, retransmission, MQTT QoS 2 and bridging UDP to host services
 are outside this implementation, and so are IPv6, VLANs, DHCP for more than one device, lease
 expiry and HTTP keep-alive or chunked bodies. Protocol references:
 [PPP](https://www.rfc-editor.org/rfc/rfc1661),
@@ -352,7 +402,8 @@ appends it when an access point was given, and `Wifi.properties()` puts the tran
 `Internet.transcript()` is `{"esp32tl_network": 1, "events": [...]}`. Events have `t_ns` and either
 `event` text or `stream`, `direction` (`in` to the device, `out` from it), and hex `data`. A stream
 identifier is `<port>/<connection-number>`. A service wrapper records plaintext after TLS is
-removed; TLS logs `tls: handshake started` and `tls: handshake done, TLSv1.2` (or the negotiated
+removed, and a bridge's wrapper what it relays, ciphertext when the device speaks TLS to the real
+service; TLS logs `tls: handshake started` and `tls: handshake done, TLSv1.2` (or the negotiated
 version). This is a diagnostic transcript, distinct from the version-1 UART recording format.
 The determinism checker recognizes this explicit header, compares everything before the first
 handshake starts exactly, and thereafter compares event order and each connection/direction's
@@ -430,6 +481,17 @@ server behind the access point with its `network.json` transcript. Firmware TLS/
 `examples/position_tracker/tests/test_tracker.py`, using NVS credentials and the same in-process
 services.
 
+`tests/test_net_bridge.py` runs the bridge against services on loopback sockets, in wall time: an
+answer coming back and both directions in the transcript, the service closing after its last bytes,
+a refused connection, the device's close and a lost link reaching the service as the end of the
+stream, what the service sends after the device closed dropped and counted in the transcript, the
+millisecond renewal while a connection is open and none once it is closed, `close`
+ending a connection the service holds open, the broker's and the HTTP server's ports taken, what
+`bridge` refuses, a refusal by `bridging`, and an answer reaching the station as a TCP segment
+stamped `LATENCY_NS` after the turn. `tests/test_http_request.py` and `tests/test_pppos_client.py`
+run unmodified firmware through a bridge, behind the access point to `http.server` and behind the
+modem to esp32tl's broker on a host socket.
+
 `tests/test_net_ethernet.py` builds Ethernet frames by hand, with independent checksums: DHCP
 DISCOVER/OFFER and REQUEST/ACK with router and DNS, a NAK for another address and silence for
 another server, `next_lease()` and its `leased()` alias with append order at equal timestamps,
@@ -467,4 +529,6 @@ NTP and TLS behind the access point; the layer tests cover them without a link o
   0](../decisions/harness.md#the-broker-keeps-a-session-by-client-id-when-cleansession-is-0),
   [a path with RTT and rate sits between the link and the
   network](../decisions/harness.md#a-path-with-rtt-and-rate-sits-between-the-link-and-the-network),
-  [packet loss on the path is postponed](../decisions/harness.md#packet-loss-on-the-network-path-is-postponed).
+  [packet loss on the path is postponed](../decisions/harness.md#packet-loss-on-the-network-path-is-postponed),
+  [a bridge relays a TCP port to a real service, on the wall
+  clock](../decisions/harness.md#a-bridge-relays-a-tcp-port-to-a-real-service-and-puts-the-run-on-the-wall-clock).
