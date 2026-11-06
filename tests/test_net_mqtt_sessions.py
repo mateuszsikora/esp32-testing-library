@@ -348,13 +348,21 @@ def test_dup_of_an_incoming_publish_is_not_propagated(broker: Broker) -> None:
     ]
 
 
-def test_running_out_of_packet_ids_keeps_the_message_for_a_stored_session(broker: Broker) -> None:
+def test_a_connected_client_with_no_free_id_keeps_the_message_and_its_connection(
+    broker: Broker,
+) -> None:
     wire = Wire(broker, KEEP, SUBSCRIBE_QOS1)
     wire.session.unacked.update(range(1, 65536))
+    wire.take()
     broker.publish("a/b", "x", qos=1)
-    assert wire.closed
+    assert not wire.closed and wire.take() == []
     state = broker.session("c")
-    assert state is not None and [m.payload for m in state.queued] == [b"x"]
+    assert state is not None and state.connected and [m.payload for m in state.queued] == [b"x"]
+    # It is the session's queue: it waits through a reconnection too, until a PUBACK frees an ID.
+    broker.disconnect("c")
+    again = Wire(broker, KEEP)
+    assert again.take() == [SESSION_PRESENT] and not again.closed
+    assert again.send(b"\x40\x02\0\x09") == [b"\x32\x08\0\x03a/b\0\x09x"]
 
 
 def test_a_resumed_queue_waits_for_packet_ids_and_each_puback_frees_one(broker: Broker) -> None:
@@ -382,13 +390,100 @@ def test_a_resumed_queue_waits_for_packet_ids_and_each_puback_frees_one(broker: 
     assert len(state.unacknowledged) == 65534
 
 
+def test_qos1_to_a_qos0_subscription_goes_at_once_when_nothing_waits(broker: Broker) -> None:
+    wire = Wire(broker, KEEP, SUBSCRIBE_QOS0)
+    wire.session.unacked.update(range(1, 65536))
+    wire.take()
+    broker.publish("a/b", "now", qos=1)
+    assert wire.take() == [b"\x30\x08\0\x03a/bnow"]
+    state = broker.session("c")
+    assert state is not None and state.queued == ()
+
+
+def test_qos1_to_a_qos0_subscription_keeps_its_place_behind_a_queue_that_waits(
+    broker: Broker,
+) -> None:
+    wire = Wire(broker, KEEP, b"\x82\x10\0\x01\0\x04a/q1\x01\0\x04a/q0\x00")
+    assert wire.take() == [NO_SESSION, b"\x90\x04\0\x01\x01\x00"]
+    wire.session.unacked.update(range(1, 65536))
+    broker.publish("a/q1", "one", qos=1)
+    broker.publish("a/q0", "two", qos=1)  # Needs no ID at QoS 0, but goes behind "one".
+    assert wire.take() == []
+    state = broker.session("c")
+    assert state is not None and [m.payload for m in state.queued] == [b"one", b"two"]
+    # At the head of the queue it takes no ID, so it goes with the one in front of it.
+    assert wire.send(b"\x40\x02\0\x05") == [
+        b"\x32\x0b\0\x04a/q1\0\x05one",
+        b"\x30\x09\0\x04a/q0two",
+    ]
+    state = broker.session("c")
+    assert state is not None and state.queued == ()
+
+
+def test_a_retained_message_waiting_after_a_subscribe_keeps_retain_one(broker: Broker) -> None:
+    broker.publish("a/kept", "x", retain=True, qos=1)
+    broker.publish("a/more", "z", retain=True, qos=1)
+    wire = Wire(broker, KEEP)
+    wire.session.unacked.update(range(1, 65536))
+    wire.take()
+    assert wire.send(SUBSCRIBE_QOS1) == [SUBACK_QOS1]
+    broker.publish("a/b", "y", retain=True, qos=1)  # Matches an established subscription.
+    assert not wire.closed
+    state = broker.session("c")
+    assert state is not None and [m.payload for m in state.queued] == [b"x", b"z", b"y"]
+    # MQTT-3.3.1-8 keeps RETAIN 1 for those the SUBSCRIBE matched, on this connection and the next;
+    # x, never acknowledged, goes again with it and DUP.
+    assert wire.send(b"\x40\x02\0\x03") == [b"\x33\x0b\0\x06a/kept\0\x03x"]
+    broker.disconnect("c")
+    again = Wire(broker, KEEP)
+    assert again.take() == [SESSION_PRESENT, b"\x3b\x0b\0\x06a/kept\0\x03x"]
+    assert again.send(b"\x40\x02\0\x04") == [b"\x33\x0b\0\x06a/more\0\x04z"]
+    assert again.send(b"\x40\x02\0\x05") == [b"\x32\x08\0\x03a/b\0\x05y"]  # MQTT-3.3.1-9
+
+
+def test_a_subscribe_on_every_connection_while_waiting_queues_its_retained_message_once(
+    broker: Broker,
+) -> None:
+    broker.publish("a/kept", "x", retain=True, qos=1)
+    wire = Wire(broker, KEEP)
+    wire.session.unacked.update(range(1, 65536))
+    for _ in range(3):
+        wire.take()
+        assert wire.send(SUBSCRIBE_QOS1) == [SUBACK_QOS1]
+        state = broker.session("c")
+        assert state is not None and [m.payload for m in state.queued] == [b"x"]
+        broker.disconnect("c")
+        wire = Wire(broker, KEEP)
+    assert wire.take() == [SESSION_PRESENT]
+    # One that changed meanwhile is another message: it joins, as published and as retained.
+    broker.publish("a/kept", "new", retain=True, qos=1)
+    assert wire.send(SUBSCRIBE_QOS1) == [SUBACK_QOS1]
+    state = broker.session("c")
+    assert state is not None and [m.payload for m in state.queued] == [b"x", b"new", b"new"]
+    assert wire.send(b"\x40\x02\0\x03") == [b"\x33\x0b\0\x06a/kept\0\x03x"]
+    assert wire.send(b"\x40\x02\0\x04") == [b"\x32\x0d\0\x06a/kept\0\x04new"]
+    assert wire.send(b"\x40\x02\0\x05") == [b"\x33\x0d\0\x06a/kept\0\x05new"]
+    assert wire.send(b"\x40\x02\0\x06") == []
+    # Once sent it waits no more, so a SUBSCRIBE with no ID free queues it again (MQTT-3.8.4-3).
+    wire.session.unacked.add(6)
+    assert wire.send(SUBSCRIBE_QOS1) == [SUBACK_QOS1]
+    state = broker.session("c")
+    assert state is not None and [m.payload for m in state.queued] == [b"new"]
+
+
 def test_a_retained_will_on_closing_during_a_subscribe_is_no_error(broker: Broker) -> None:
     will = b"\x10\x18\0\x04MQTT\x04\x2c\0\x0a\0\x01c\0\x03w/w\0\x04gone"  # Retained, QoS 1
-    broker.publish("a/kept", "x", retain=True, qos=1)
-    wire = Wire(broker, will)
-    wire.session.unacked.update(range(1, 65536))
-    wire.session.on_data(SUBSCRIBE_QOS1)
-    assert wire.closed
+    broker.publish("a/one", "x", retain=True, qos=1)
+    broker.publish("a/two", "y", retain=True, qos=1)
+
+    def write(data: bytes) -> None:
+        if data[0] >> 4 == 3:  # A write that fails on the first PUBLISH, as a TLS one can.
+            session.on_close()
+
+    session = broker.accept(("10.64.0.2", 4000), write, lambda: None)
+    session.on_data(will)
+    session.on_data(SUBSCRIBE_QOS1)
+    assert session.closed
     assert broker.retained["w/w"].payload == b"gone"
 
 

@@ -119,13 +119,31 @@ def test_invalid_connect_does_not_publish_an_unaccepted_will() -> None:
     assert session.closed and not broker.clients and not broker.messages
 
 
-def test_qos_one_id_exhaustion_closes_instead_of_reusing_an_unacknowledged_id() -> None:
-    broker = Broker(lambda: 0)
-    session = broker.accept(("10.0.0.2", 100), lambda b: None, lambda: None)
-    session.on_data(CONNECT + SUBSCRIBE)
+def test_qos_one_with_no_free_id_waits_for_a_puback_instead_of_reusing_one() -> None:
+    lines: list[str] = []
+    broker = Broker(lambda: 0, lines.append)
+    sent: list[bytes] = []
+    session = broker.accept(("10.0.0.2", 100), sent.append, lambda: None)
+    session.on_data(CONNECT + SUBSCRIBE)  # CleanSession=1
     session.unacked.update(range(1, 65536))
-    broker.publish("a/b", "test", qos=1)
-    assert session.closed
+    sent.clear()
+    broker.publish("a/b", "one", qos=1)
+    broker.publish("a/b", "two", qos=1)
+    assert not session.closed and sent == []
+    state = broker.session("c")
+    assert state is not None and [m.text for m in state.queued] == ["one", "two"]
+    waits = [line for line in lines if "no free packet identifier" in line]
+    assert waits == ["mqtt: c has no free packet identifier: waiting for a PUBACK, 1 queued"]
+    session.on_data(b"\x40\x02\0\x05")
+    assert sent == [b"\x32\x0a\0\x03a/b\0\x05one"]
+    session.on_data(b"\x40\x02\0\x07")
+    assert sent[1:] == [b"\x32\x0a\0\x03a/b\0\x07two"]
+    state = broker.session("c")
+    assert state is not None and state.queued == ()
+    # A new wait is logged again, and the queue ends with the connection that holds it.
+    broker.publish("a/b", "three", qos=1)
+    assert len([line for line in lines if "no free packet identifier" in line]) == 2
+    assert broker.disconnect("c") and broker.session("c") is None
 
 
 @pytest.mark.parametrize("will", [False, True])

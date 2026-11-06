@@ -928,6 +928,14 @@ that references to its number keep their meaning.
 - **188.** A resumed session stays connected while its queue waits for packet IDs: each PUBACK sends the next message, and a QoS 1 message published
     meanwhile goes behind the queue.
     `tests/test_net_mqtt_sessions.py::test_a_resumed_queue_waits_for_packet_ids_and_each_puback_frees_one`
+- **201.** A connected client with no free packet ID is not disconnected: a QoS 1 message for it, a retained one that a SUBSCRIBE
+    matched included, waits in its session's queue, and each PUBACK sends the next; one that a SUBSCRIBE matched goes with RETAIN 1, the
+    rest with RETAIN 0. A SUBSCRIBE again while one waits does not queue it twice. CleanSession=1 loses the queue with the connection;
+    CleanSession=0 keeps it for the next.
+    `tests/test_net_mqtt.py::test_qos_one_with_no_free_id_waits_for_a_puback_instead_of_reusing_one`,
+    `tests/test_net_mqtt_sessions.py::test_a_connected_client_with_no_free_id_keeps_the_message_and_its_connection`,
+    `tests/test_net_mqtt_sessions.py::test_a_retained_message_waiting_after_a_subscribe_keeps_retain_one`,
+    `tests/test_net_mqtt_sessions.py::test_a_subscribe_on_every_connection_while_waiting_queues_its_retained_message_once`
 - **185.** A QoS 1 backlog from esp-mqtt, one message at a time, takes about three times as long at an RTT of 600 ms as at 200 ms, each exchange
     spaced by the RTT and some 15 ms of UART and firmware.
     `tests/test_mqtt_session.py::test_a_qos1_backlog_follows_the_rtt`

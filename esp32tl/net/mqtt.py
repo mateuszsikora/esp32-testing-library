@@ -306,7 +306,7 @@ class Broker:
         return SessionState(
             state.connection is not None,
             dict(state.subscriptions),
-            tuple(state.queue),
+            tuple(message for message, _ in state.queue),
             tuple(state.sent.values()),
         )
 
@@ -445,14 +445,12 @@ class Broker:
         if not any(matches(f, message.topic) for f in state.subscriptions):
             return
         if state.connection is not None:
-            # A resumed session's queue may still be waiting for packet IDs: QoS 1 goes behind it.
-            if (state.queue and message.qos) or not state.connection.deliver(message):
-                state.queue.append(message)
+            state.connection.deliver(message)
         elif state.clean:
             return  # closed while this message was being routed: its state is gone
         elif message.qos:
             # MQTT-3.1.2-5 stores by the message's QoS; the subscription's lowers it when it goes.
-            state.queue.append(message)
+            state.queue.append((message, False))
             self._log(f"mqtt: {client_id} is offline: queued a message on {message.topic}")
         else:
             self._log(f"mqtt: {client_id} is offline: dropped a QoS 0 message on {message.topic}")
@@ -466,7 +464,10 @@ class _State:
         self.clean = clean
         self.connection: _Session | None = None
         self.subscriptions: dict[str, int] = {}
-        self.queue: deque[Message] = deque()
+        # Each message with the RETAIN it goes with: 1 only for a retained one a SUBSCRIBE matched.
+        self.queue: deque[tuple[Message, bool]] = deque()
+        # `id` of each queued message with RETAIN 1: the queue holds it, so the `id` stays unique.
+        self.queued_retained: set[int] = set()
         # Every packet ID in use; `sent` holds, in the order first sent, what to send again.
         self.unacked: set[int] = set()
         self.sent: dict[int, Delivery] = {}
@@ -494,6 +495,7 @@ class _Session:
         self.will: Message | None = None
         self.closed = False
         self.connected = False
+        self.waiting = False
         self.keepalive = 0
         self.deadline: int | None = None
 
@@ -505,29 +507,51 @@ class _Session:
     def unacked(self) -> set[int]:
         return set() if self.state is None else self.state.unacked
 
-    def deliver(self, message: Message, retained: bool = False) -> bool:
-        """Send a message that matches a subscription. False, having closed, when the packet IDs
-        have run out: QoS 1 used them up, so a session that stays keeps the message."""
-        granted = [q for f, q in self.subscriptions.items() if matches(f, message.topic)]
-        if not granted or self.closed:
-            return True
-        qos = min(max(granted), message.qos)
-        packet_id = None
-        if qos:
-            packet_id = self._packet_id()
-            if packet_id is None:
-                return False
-        self._publish(message.topic, message.payload, qos, packet_id, False, retained)
-        return True
-
-    def _packet_id(self) -> int | None:
-        """The next packet ID free in this session; `None`, having closed, when none is."""
+    def deliver(self, message: Message, retained: bool = False) -> None:
+        """Send a message that matches a subscription, or queue it while no packet ID is free.
+        QoS 1 goes behind a queue that is waiting, in order (MQTT-4.6.0-6), and QoS 0, which needs
+        no ID, goes at once. `retained` is RETAIN 1, for a retained message a SUBSCRIBE matched."""
+        qos = self._qos(message)
+        if qos is None:
+            return
         state = self.state
         assert state is not None
-        if len(state.unacked) == 65535:
-            self.broker._log(f"mqtt: {self.client_id} exhausted packet identifiers")
-            self.on_close()
+        if (state.queue and message.qos) or (qos and len(state.unacked) == 65535):
+            # A SUBSCRIBE again while this retained message still waits from the last one: the
+            # copy waiting is the re-send (MQTT-3.8.4-3), so the queue does not grow with each.
+            if not (retained and id(message) in state.queued_retained):
+                state.queue.append((message, retained))
+                if retained:
+                    state.queued_retained.add(id(message))
+            self._wait()
+            return
+        self._send(message, qos, retained)
+
+    def _qos(self, message: Message) -> int | None:
+        """The QoS this message goes at, or `None` if no subscription matches or it has closed."""
+        granted = [q for f, q in self.subscriptions.items() if matches(f, message.topic)]
+        if not granted or self.closed:
             return None
+        return min(max(granted), message.qos)
+
+    def _send(self, message: Message, qos: int, retained: bool) -> None:
+        packet_id = self._packet_id() if qos else None
+        self._publish(message.topic, message.payload, qos, packet_id, False, retained)
+
+    def _wait(self) -> None:
+        """Log the start of a wait for a packet ID, once until the queue is empty again."""
+        if not self.waiting:
+            self.waiting = True
+            assert self.state is not None
+            self.broker._log(
+                f"mqtt: {self.client_id} has no free packet identifier:"
+                f" waiting for a PUBACK, {len(self.state.queue)} queued"
+            )
+
+    def _packet_id(self) -> int:
+        """The next packet ID free in this session; the caller has made sure that one is."""
+        state = self.state
+        assert state is not None and len(state.unacked) < 65535
         state.packet_id = state.packet_id % 0xFFFF + 1
         while state.packet_id in state.unacked:
             state.packet_id = state.packet_id % 0xFFFF + 1
@@ -562,8 +586,9 @@ class _Session:
         """What the session owes the client, after CONNACK: what it never acknowledged, with its
         packet IDs and DUP (MQTT-4.4.0-1, MQTT-3.3.1-1), then the queue, in order (MQTT-4.6.0-6),
         as far as packet IDs allow.
-        The queue goes out as a first attempt to established subscriptions, DUP and RETAIN 0
-        (MQTT-3.3.1-3, MQTT-3.3.1-9); what is sent again keeps the RETAIN it had."""
+        The queue goes out as a first attempt, DUP 0 (MQTT-3.3.1-3), and RETAIN 0 to established
+        subscriptions (MQTT-3.3.1-9) but 1 for a retained message a SUBSCRIBE matched
+        (MQTT-3.3.1-8); what is sent again keeps the RETAIN it had."""
         state = self.state
         assert state is not None
         for packet_id, sent in list(state.sent.items()):
@@ -573,14 +598,26 @@ class _Session:
         self._drain()
 
     def _drain(self) -> None:
-        """Send the queue in order while a packet ID is free: each PUBACK frees one for the next.
+        """Send the queue in order until the head would go at QoS 1 with no packet ID free: each
+        PUBACK frees one for the next, and one going at QoS 0 takes none.
         Waiting, not closing: the client's PUBACKs could not reach a closed connection, and it
         would get the same messages again on every connection."""
         state = self.state
         assert state is not None
-        while state.queue and not self.closed and len(state.unacked) < 65535:
-            self.deliver(state.queue[0])
+        while state.queue and not self.closed:
+            message, retained = state.queue[0]
+            qos = self._qos(message)
+            if qos and len(state.unacked) == 65535:
+                break
             state.queue.popleft()
+            if retained:
+                state.queued_retained.discard(id(message))
+            if qos is not None:
+                self._send(message, qos, retained)
+        if not state.queue:
+            self.waiting = False
+        elif not self.closed:
+            self._wait()
 
     def on_data(self, data: bytes) -> None:
         if self.closed:
@@ -821,7 +858,7 @@ class _Session:
                 filters.append(topic)
             broker._log(f"mqtt: {self.client_id} subscribed to {', '.join(filters)}")
             self.write(_packet(SUBACK, 0, packet_id + bytes(granted)))
-            # A copy: running out of packet IDs closes, and the Will can change what is retained.
+            # A copy: a TLS write that fails closes, and the Will can change what is retained.
             for message in list(broker.retained.values()):
                 if any(matches(f, message.topic) for f in filters):
                     self.deliver(message, retained=True)
