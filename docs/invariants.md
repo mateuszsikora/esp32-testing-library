@@ -593,16 +593,17 @@ that references to its number keep their meaning.
     `tests/test_spp_peer.py::test_an_acceptance_on_a_working_link_is_the_hosts_own_error`,
     `tests/test_spp_peer.py::test_an_answer_nothing_is_owed_for_is_the_hosts_own_error`,
     `tests/test_spp_peer.py::test_a_power_loss_at_the_instant_a_page_is_heard_does_not_fail_the_air`
-- **189.** A host that rejects a page gets its answer, and the pager's `Connection_Complete` carries
-    the reason at the instant of the rejection; the target keeps no entry, its host goes on working,
-    and both can connect afterwards. A rejection is an answer: a late one reaches no pager, no later
-    page and no working link, and does not fail the air. A reason outside 0x0D to 0x0F is refused,
-    and the answer stays owed; one with nothing owed is the host's own error, also on a working link.
-    A page of this side's own that fails, or is under way when its entry goes, neither takes the
-    entry of a page it heard nor lets a second page start over it; one the controller refused has no
-    timer and stops no later page. An answer a host never gave takes no later page's, unless its end
-    fell meanwhile. A failed answer of this side's host leaves no entry, unless an answer never given
-    is still counted and a page of this side was under way; an entry that goes takes its timer along.
+- **189.** A host that rejects a page gets its answer, and the pager's `Connection_Complete`
+    carries the reason at the instant of the rejection; the target keeps no entry of the page it
+    rejected, its host goes on working, and both can connect afterwards. A rejection is an answer: a
+    late one reaches no pager, no later page and no working link, and does not fail the air. A
+    reason outside 0x0D to 0x0F is refused, and the answer stays owed; one with nothing owed is the
+    host's own error, also on a working link. A page of this side's own that fails does not take the
+    page it heard, and neither that page nor one of this side's own under way lets a second page
+    start over it; one the controller refused has no timer and stops no later page. An answer a host
+    never gave takes no later page's, unless its end fell meanwhile. A failed answer of this side's
+    host leaves no entry, also with an answer never given still counted and a page of this side
+    under way; an entry that goes takes its timer along.
     `tests/test_spp_peer.py::test_a_pager_gets_the_reason_at_the_instant_of_the_rejection`,
     `tests/test_spp_peer.py::test_a_host_that_rejects_a_page_goes_on_working`,
     `tests/test_spp_peer.py::test_both_can_connect_after_a_rejection`,
@@ -617,7 +618,7 @@ that references to its number keep their meaning.
     `tests/test_spp_peer.py::test_a_reason_in_the_range_reaches_both_hosts`,
     `tests/test_spp_peer.py::test_a_rejection_nothing_is_owed_for_is_the_hosts_own_error`,
     `tests/test_spp_peer.py::test_a_rejection_on_a_working_link_is_the_hosts_own_error`,
-    `tests/test_spp_peer.py::test_a_page_under_way_is_not_started_again_after_a_rejection_took_the_entry`,
+    `tests/test_spp_peer.py::test_a_page_under_way_keeps_its_entry_after_a_rejection_of_a_crossing_page`,
     `tests/test_spp_peer.py::test_a_page_the_controller_refused_leaves_no_timer_and_can_be_tried_again`,
     `tests/test_spp_peer.py::test_a_page_this_side_failed_leaves_the_answer_to_a_crossing_page_its_entry`,
     `tests/test_spp_peer.py::test_a_target_that_paged_too_loses_contact_with_a_pager_that_leaves`,
@@ -628,7 +629,8 @@ that references to its number keep their meaning.
     `tests/test_spp_peer.py::test_a_page_of_this_side_that_fails_takes_its_entry_with_an_answer_never_given`,
     `tests/test_spp_peer.py::test_an_acceptance_whose_role_switch_is_refused_leaves_no_entry`,
     `tests/test_spp_peer.py::test_a_refused_role_switch_leaves_no_entry_with_an_answer_never_given`,
-    `tests/test_spp_peer.py::test_a_refused_role_switch_leaves_no_entry_while_this_side_pages_too`
+    `tests/test_spp_peer.py::test_a_refused_role_switch_leaves_no_entry_while_this_side_pages_too`,
+    `tests/test_spp_peer.py::test_a_refused_role_switch_during_this_sides_page_with_an_answer_never_given_leaves_nothing`
 - **200.** A device whose page scan is off does not hear a page: the page ends in `PAGE_TIMEOUT`
     exactly at the page timeout, and the target holds no entry for it. Page scan is read when the
     page starts, so one turned on during it answers only the next page. Inquiry scan and page scan
@@ -647,6 +649,15 @@ that references to its number keep their meaning.
     `tests/test_spp_peer.py::test_a_remote_name_request_over_a_link_needs_no_page_scan`,
     `tests/test_spp_peer.py::test_a_target_that_heard_the_page_gets_the_pager_s_name_without_its_page_scan`,
     `tests/test_spp_peer.py::test_a_target_that_turns_page_scan_off_after_hearing_the_page_still_gives_its_name`
+- **202.** A page a device hears does not take the place of its own page to that address: a
+    rejection of the page heard leaves its own page its entry, which takes the role switch of the
+    other's acceptance as the central, and the link a plain acceptance makes switches roles as
+    `Create_Connection` allowed. When its own page makes the link, the page heard goes with it, so
+    that after the link ends the pair can page again.
+    `tests/test_spp_peer.py::test_a_device_that_rejects_a_crossing_page_takes_the_role_switch_on_its_own`,
+    `tests/test_spp_peer.py::test_a_link_made_after_a_rejection_of_a_crossing_page_switches_roles_as_asked`,
+    `tests/test_spp_peer.py::test_a_page_under_way_keeps_its_entry_after_a_rejection_of_a_crossing_page`,
+    `tests/test_spp_peer.py::test_a_page_heard_during_this_sides_own_goes_when_that_page_makes_the_link`
 
 ## The esp32tl command
 

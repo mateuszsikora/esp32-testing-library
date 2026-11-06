@@ -1562,8 +1562,10 @@ behind #34 whether firmware does.
 
 Status: decided (#137)
 
-Two pages can cross: the entry of the page a device hears replaces the entry of its own, which has
-the same address. Its own page used to take that entry with it when it failed, so an answer owed to
+Two pages can cross: until #144 the entry of the page a device hears replaced the entry of its own,
+which has the same address (see
+[A page a device hears is kept apart from its own](#a-page-a-device-hears-is-kept-apart-from-its-own)).
+Its own page used to take that entry with it when it failed, so an answer owed to
 the other page found nothing, was taken as late, and the pager waited for `PAGE_TIMEOUT` although
 the host had answered in time. Now the entry stays until the answer comes or a timer of link
 supervision ends it. That takes each page a host hears to get one answer: `Connection_Accept_Timeout`,
@@ -1580,12 +1582,42 @@ because an answer a host never gives then takes the answer to the next page, who
 
 ## Keeping a heard page apart from this side's own is postponed
 
-Status: postponed (#144)
+Status: superseded (#144)
 
 Bumble writes a page a device hears over its own entry for that address, so who an entry belongs to
-is inferred from its handle, its role and the counts of answers. Keeping heard pages apart would end
-that inference, and the cases in "Not covered" that follow from it, but it replaces Bumble's handling
-of a page heard and of its answer, which is too much to land with the rejection of a page (#137).
+was inferred from its handle, its role and the counts of answers. Keeping heard pages apart replaces
+Bumble's handling of a page heard and of its answer, which was too much to land with the rejection
+of a page (#137). It landed with #144: see
+[A page a device hears is kept apart from its own](#a-page-a-device-hears-is-kept-apart-from-its-own).
+
+
+
+## A page a device hears is kept apart from its own
+
+Status: decided (#144)
+
+The controller keeps a page it hears in `_heard`, a dictionary of its own, and moves it to
+`classic_connections` when its host accepts. Until then this side's own page to that address keeps
+its entry, with the `allow_role_switch` its `Create_Connection` asked, so a rejection of the page
+heard takes nothing of it, and an entry in `classic_connections` is this side's own page while
+`_paging` holds the peer, and a link otherwise. Who an entry belongs to is no longer inferred from
+its handle, its role and the counts of answers. The counts stay: a page tried again gets two
+answers for one address, and an answer names only the address.
+
+When one of two crossing pages is accepted, the link takes the place of this side's own page, which
+ends with it, as before: Bumble's host gets one `Connection_Complete` for the address, which ends
+both in its eyes. When the other side accepts this side's own page instead, the page heard goes, and
+the answers owed for it are late: it can make no link, and kept, it would refuse this side's next
+page after the link ended. An acceptance as the central keeps the page in `_heard`, marked
+`switching`, until the pager answers the role switch, so that losing contact with the pager still
+reaches it; a failure of this side's own page meanwhile ends it too, since the host cannot tell the
+two apart, and a refused switch ends this side's own page for the same reason.
+
+**Rejected:** giving the page heard to Bumble's `on_hci_accept_connection_request_command` by
+writing it into `classic_connections` at the moment of the answer, because during a role switch it
+would stand over this side's own page again, which is the inference this removes; and a mark on
+Bumble's `Connection` saying whose entry it is, because Bumble's handler would still write the page
+heard over this side's own.
 
 
 
