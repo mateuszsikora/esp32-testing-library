@@ -359,9 +359,11 @@ took going up, half of what the RTT has above 1 ms, and `puback_at`, `delivery.a
 `broker.publish` are when the answer sets off down. A publication from the test reaches the device
 one way down later, half of what the RTT has above 1 ms, and 1 ms. A record is there when `board.now`
 reaches its stamp: `board.wait_until(broker.next_message("a/b"), ...)` returns with `board.now`
-equal to `message.at`, and what the test does at that instant comes after it. On a path, a
-`connection_policy` that raises fails the link as `uart.modem.arrive raised` (`wifi.arrive` behind
-an access point) when its CONNECT took time going up.
+equal to `message.at`, and what the test does at that instant comes after it. The broker's
+deadlines are the same: a delayed PUBACK and a keepalive expiry are there at the instant they are
+due ([Withhold PUBACK](#withhold-puback-and-disconnect-a-client)). On a path, a
+`connection_policy` that raises fails the link as `uart.modem.arrive raised`
+(`wifi.arrive` behind an access point) when its CONNECT took time going up.
 
 Behind the modem the runner already paces received bytes at the UART's baud, about 11.5 kB/s (92
 kbit/s) at 115200: a `downlink` above that adds its time per datagram and is no limit on the rate
@@ -550,8 +552,10 @@ assert ack.status == "emitted" and ack.puback_at == board.now
 
 `broker.puback = seconds(2)` instead schedules PUBACK two emulated seconds after the first
 receipt. `seconds(0)` behaves like `"immediate"`. The delay participates in the network's next
-deadline; waiting advances it, host time does not. Manual `release()` can emit a scheduled ACK
-early. A policy change applies only to new exchanges: it neither releases existing held handles
+deadline; waiting advances it, host time does not. When `board.now` reaches the deadline the ACK is
+emitted, `puback_at` equal to it, so a `board.wait_until` whose window ends exactly there finds it.
+Manual `release()` can emit a scheduled ACK early; at the deadline's instant or after, it returns
+`False`. A policy change applies only to new exchanges: it neither releases existing held handles
 nor reschedules delayed ones. Negative durations raise `PUBACK delay must be nonnegative`;
 other values raise `PUBACK policy must be 'immediate', 'hold', or a Duration`.
 
@@ -580,8 +584,10 @@ content deduplication.
 uses TLS. It publishes the Will once, cancels pending ACKs, makes the client's subscriptions
 inactive (with CleanSession=1, removes them) and leaves PPP, other streams and DNS/NTP usable. Graceful MQTT DISCONNECT cancels ACKs but suppresses the Will.
 Transport loss, keepalive expiry, client-ID takeover and network reset also cancel pending ACKs.
-Expiry wins if keepalive and PUBACK have the same deadline. An already emitted ACK stays emitted;
-closing does not retract bytes already queued in the transport.
+A keepalive expires at 1.5 times the keepalive after the client's last packet; when `board.now`
+reaches that instant the connection is closed, its Will is in `messages`, and `broker.disconnect`
+at that instant returns `False`. Expiry wins if keepalive and PUBACK have the same deadline. An
+already emitted ACK stays emitted; closing does not retract bytes already queued in the transport.
 
 A reconnect gets a new `connection_id`. Reusing a client ID and packet ID cannot make an old
 handle valid again. Retained messages and receipt history survive; a pending exchange does not,

@@ -2049,6 +2049,24 @@ future-dating answers in the runner's queue, which a reset cannot take back; a d
 only, which would stamp a broker's receipt a whole RTT away from the device's request or from its
 answer; and delaying the link's own control, as above.
 
+## A broker deadline runs before the test holds its turn
+
+Status: decided (#139)
+
+`Internet.arrive` runs `Broker.poll()` after taking in the path, so a delayed PUBACK and a keepalive
+expiry, with its Will, are there when `board.now` reaches their deadline, as a datagram from the
+path is. Before, they ran in `poll`, after the hold: the test standing at the deadline saw nothing,
+and saw it only one step of its clock later, so a `wait_until` whose window ended on the deadline
+raised `NeverHappened`. What the deadline writes, a PUBACK, still goes out in `poll`.
+
+What moves: a `Publication.release()` at the deadline's instant returns `False`, since the
+deadline came first, and a `broker.publish` or `broker.disconnect` at that instant comes after an
+expiry. Events with equal stamps may be in another order in a network transcript than before this
+change; two runs of one version still agree. Expiry still wins a tie with a PUBACK deadline.
+
+**Rejected:** documenting the order as it was, which left the broker the one part of the network a
+test sees a step late, against the rule that a record is there when `board.now` reaches its stamp.
+
 ## Packet loss on the network path is postponed
 
 Status: postponed (#130)

@@ -17,11 +17,14 @@ from esp32tl.units import Duration
 
 
 class Wire:
-    def __init__(self) -> None:
+    """PPP opened at 0 on `net`, a network of its own unless given one whose link is up."""
+
+    def __init__(self, net: Internet | None = None) -> None:
         self.now = 0
-        self.net = Internet(lambda: self.now)
+        self.net = Internet(lambda: self.now) if net is None else net
         self.peers: dict[int, Peer] = {}
-        self.net.start(0)
+        if net is None:
+            self.net.start(0)
         self.net.poll(0)
         self.net.receive(0, control(0xC021, 1, 7))
         self.net.receive(0, control(0xC021, 2, 1))

@@ -93,8 +93,11 @@ to that source (latency remains at most 1 ms). With no peer, payload is retained
 A network dial starts PPP after CONNECT; power, registration and functionality loss reset it,
 clear queued replies and close TCP sessions. Only `drop_call` emits an unsolicited `NO CARRIER`:
 registration, functionality and power loss stay silent. Network data mode guards `+++` with one second of silence before and after it;
-`poll` completes the escape and `quiet_until` exposes its deadline. Other data sources retain
-the immediate escape recognizer. See [network internals](network-technical.md).
+`poll` completes the escape and `quiet_until` exposes its deadline. A broker deadline at the
+escape's instant runs first, in `arrive`: a PUBACK due then is `"emitted"`, though ending data mode
+drops its bytes before they reach the firmware, and a keepalive due then closes the connection as an
+expiry. Other data sources retain the immediate escape recognizer. See
+[network internals](network-technical.md).
 
 `drop_call` runs in the test's thread, while the link is held. With `terminate`, it takes
 `Internet.terminate(t)`'s output, an LCP Terminate-Request stamped one latency later, before
@@ -132,6 +135,9 @@ after the hold returns, so `quiet_until` has no bound to give for it. `hang` and
 answer timestamps, the clock's time, zone and refusals, the operator's formats and refusals, a
 hung modem, RESET's threshold and polarity, `restarts`, a dropped call on both paths, escape and data handoff, signal mapping, registration, power loss, profile
 pulse timing, RI ownership, taps and unbounded command history, and a real `BoardLink` exchange.
+`test_a_broker_deadline_at_the_escapes_instant_runs_before_it` opens PPP and an MQTT connection
+through the model's network, then puts a delayed PUBACK and a keepalive expiry each at the escape's
+instant: `arrive` runs the deadline, and `poll` returns the escape's `OK` alone.
 `tests/test_modem_fixture.py` runs `modem_at` on the LilyGO profile, checks physical PWRKEY and
 RI, starts powered, off and after restored supply, changes signal/registration/power on the
 test's clock, keeps the modem on through `board.reset()` and off after a power cycle until the
