@@ -281,19 +281,21 @@ While a client with a stored session is offline:
 - a QoS 1 publication that matches one of its subscriptions is queued, in order, whatever QoS the
   subscription has (MQTT-3.1.2-5), and goes at the subscription's QoS when it reconnects. The queue
   has no limit, because the specification sets none. What packet IDs limit is what is unacknowledged
-  at once, 65535 messages: a resumed session sends that many, and the rest as PUBACKs free their
-  IDs. A QoS 1 message published meanwhile goes behind them. A retained message that a SUBSCRIBE
-  matches while no ID is free still closes the connection, so a client that subscribes before its
-  first PUBACK gets the same messages again on every connection (#140);
+  at once: see [below](#a-client-with-no-free-packet-id);
 - a QoS 0 publication is dropped, logged as
   `mqtt: session-client is offline: dropped a QoS 0 message on session/commands`;
 - `subscribed` is false: it speaks of active clients. It is true again from the CONNECT on, without
   a SUBSCRIBE.
 
 A queued message goes with RETAIN 0, since it matches an established subscription (MQTT-3.3.1-9),
-and DUP 0, since it is a first attempt (MQTT-3.3.1-3). A message sent again keeps the RETAIN it had.
+and DUP 0, since it is a first attempt (MQTT-3.3.1-3). A retained message that a SUBSCRIBE matched
+and that is waiting for a packet ID keeps RETAIN 1 (MQTT-3.3.1-8). A message sent again keeps the
+RETAIN it had.
 A SUBSCRIBE that repeats a filter replaces its QoS and sends matching retained messages again,
-leaving the queue and what is unacknowledged as they are (MQTT-3.8.4-3).
+leaving what is unacknowledged as it is (MQTT-3.8.4-3). It leaves the queue as it is too, unless
+no packet ID is free: then a matching retained message published at QoS 1 can join the queue, but
+one still waiting from an earlier SUBSCRIBE is not queued twice
+([below](#a-client-with-no-free-packet-id)).
 
 A session lasts until a CleanSession=1 CONNECT with that ID or `forget_session`. It survives a
 disconnection of any kind, keepalive expiry, and the network's reset: the broker is the test's,
@@ -301,6 +303,31 @@ not the link's, like its retained messages. A session never expires, and a refus
 nothing. An incoming QoS 1 `Publication` stays with its connection and is not part of the session:
 a pending one is cancelled when the connection closes and does not come back
 ([below](#withhold-puback-and-disconnect-a-client)).
+
+### A client with no free packet ID
+
+A client has at most 65535 QoS 1 messages unacknowledged at once, one per packet ID (MQTT-2.3.1-2).
+When all of them are in use, a connected client is not disconnected: a message that would go to it
+at QoS 1 waits in its session's queue, and each PUBACK sends the next one, in order. This is the
+same whether the message is published now, is a retained one that a SUBSCRIBE matched, or was
+queued while the client was offline and its session was resumed. A message published at QoS 1 while
+the queue waits goes behind it, even to a QoS 0 subscription, to keep its place in the order; it
+takes no packet ID, so it goes as soon as what is in front of it has gone. A
+message published at QoS 0 needs no packet ID and goes at once, and so does one published at QoS 1
+to a QoS 0 subscription when nothing is waiting yet. A retained message that a SUBSCRIBE matches
+follows the same rules, except that one already waiting from an earlier SUBSCRIBE is not queued
+again: that copy is the one sent again, so a client that subscribes on every connection gets it
+once when it acknowledges, not once per connection. A retained message that has changed since is
+another message, and joins the queue. The broker logs the start of each wait once:
+
+```text
+mqtt: session-client has no free packet identifier: waiting for a PUBACK, 1 queued
+```
+
+With CleanSession=1 the queue ends with the connection, like the rest of the session; with
+CleanSession=0 it stays, and waits on the next connection until a PUBACK frees an ID. A client that
+never acknowledges keeps its connection and its queue grows without limit; a test sees it in that
+log line and in `broker.session(client_id).queued`.
 
 `broker.session(client_id)` returns the state now, a frozen `SessionState`, or `None`. Its dict and
 tuples are copies, so they stay as they were at the call; the `Delivery` records in `unacknowledged`
@@ -310,7 +337,7 @@ are the broker's own, so a later PUBACK still sets `acknowledged_at` on them:
 |---|---|
 | `connected` | Whether a connection holds this session now |
 | `subscriptions` | Filter to granted QoS, a `dict` |
-| `queued` | The `Message`s waiting for the client, oldest first |
+| `queued` | The `Message`s waiting for the client, oldest first: while it is offline, or while it is connected with no free packet ID. Each is the `Message` as published, so its `retain` is the publisher's flag, not the one it will go with |
 | `unacknowledged` | The `Delivery`s the client has not acknowledged, in the order first sent |
 
 A `Delivery` in `broker.deliveries` is one PUBLISH written to a client's stream, stamped when the

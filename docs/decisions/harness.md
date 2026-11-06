@@ -2014,8 +2014,8 @@ disconnection (MQTT-3.1.2-6). MQTT 3.1.1 writes its re-send order as a rule for 
 The queue has no limit, because the specification sets none, and no session expires. A resumed
 session whose queue outruns the 65535 packet IDs waits for PUBACKs rather than closing, because a
 client's PUBACKs could not reach a closed connection, and it would get the same messages on every
-connection. A connected client with no free ID, on a new QoS 1 message or a retained one that a
-SUBSCRIBE matches, is still disconnected; #140 holds that question. A QoS 0
+connection. Since #140 [a connected client with no free ID waits
+too](#a-connected-client-with-no-free-packet-id-waits-for-a-puback). A QoS 0
 message for an offline client is dropped: MQTT-3.1.2-5 lets a server store it and does not ask it
 to. The test is what ends a stored session, with a CleanSession=1 CONNECT or `forget_session`,
 which refuses a connected client instead of disconnecting it, so that one call does not do two
@@ -2041,6 +2041,45 @@ what such a test is for. Also rejected: a limit on the queue with a chosen overf
 a number with no source; storing QoS 0 for an offline client, which the specification leaves open
 and nothing here needs; and bringing a pending `Publication` back with
 its session, because the client retransmits what it published, and a new handle says so truthfully.
+
+## A connected client with no free packet ID waits for a PUBACK
+
+Status: decided (#140)
+
+When a connected client has 65535 QoS 1 messages unacknowledged, a QoS 1 message for it goes into
+its session's queue, and the next PUBACK sends it, as a resumed session's queue already did. MQTT
+3.1.1 requires a packet ID that is not in use (MQTT-2.3.1-2, applied to a server by MQTT-2.3.1-4)
+and says nothing of what a server does when none is free. Waiting is what a client can recover
+from, since its PUBACKs still reach the broker; closing sent a client that subscribes on every
+connection the same retained messages on every connection, and its queue never drained. One rule
+now covers a new message, a retained one that a SUBSCRIBE matches and a resumed queue.
+
+- CleanSession=1 keeps the queue in its `_State` for the life of the connection, and loses it with
+  the session, as it loses everything else.
+- `broker.session(client_id).queued` is every message waiting for the client: offline, or online
+  with no free ID.
+- A retained message that a SUBSCRIBE matched keeps RETAIN 1 in the queue (MQTT-3.3.1-8), across a
+  reconnection too; the rest of the queue goes with RETAIN 0 (MQTT-3.3.1-9).
+- A message published at QoS 0, which needs no ID, goes at once, as it did behind a resumed queue;
+  one published at QoS 1 waits behind a queue that is waiting even for a QoS 0 subscription, to
+  keep its place in the order, and goes at once to it when nothing is waiting yet. Once at the
+  head of the queue it goes without waiting for a PUBACK, since it takes no ID.
+- A SUBSCRIBE while the queue waits does not queue a retained message that already waits from an
+  earlier SUBSCRIBE: MQTT-3.8.4-3 asks for the retained message to be sent again, and the copy
+  waiting is that send. Otherwise a client that subscribes on every connection before its first
+  PUBACK would get one copy per connection. A retained message that has changed since is a
+  different message and joins the queue, behind what is there.
+- A client that never acknowledges keeps its connection and an unlimited queue. The sign a test
+  has is the log line `mqtt: <client-id> has no free packet identifier: waiting for a PUBACK, <n>
+  queued`, once each time a connection starts to wait, and `queued` growing.
+
+**Rejected:** closing, the behaviour before #140, as a clear signal in a test that the client has
+stopped acknowledging. A test that wants that signal can watch `queued` or the log, while a client
+that does acknowledge, only slowly, could not get past a closed connection. Also rejected: closing
+on a live connection and waiting on a resumed one, as #138 left it, two rules for one state. And
+for a SUBSCRIBE while waiting, queueing every matching retained message again, which grows the
+queue by one copy per SUBSCRIBE, and replacing a waiting retained entry of the same topic with the
+newest, which would move a message to another place in the order.
 
 ## A path with RTT and rate sits between the link and the network
 

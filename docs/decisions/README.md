@@ -211,6 +211,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [A dropped call says NO CARRIER, and offers a Terminate-Request only if asked](harness.md#a-dropped-call-says-no-carrier-and-offers-a-terminate-request-only-if-asked) | `harness.md` | decided (#128) |
 | [The MQTT service implements ephemeral sessions and QoS zero and one](harness.md#the-mqtt-service-implements-ephemeral-sessions-and-qos-zero-and-one) | `harness.md` | decided (#30, #104), sessions amended (#130) |
 | [The broker keeps a session by client ID when CleanSession is 0](harness.md#the-broker-keeps-a-session-by-client-id-when-cleansession-is-0) | `harness.md` | decided (#130) |
+| [A connected client with no free packet ID waits for a PUBACK](harness.md#a-connected-client-with-no-free-packet-id-waits-for-a-puback) | `harness.md` | decided (#140) |
 | [A path with RTT and rate sits between the link and the network](harness.md#a-path-with-rtt-and-rate-sits-between-the-link-and-the-network) | `harness.md` | decided (#130) |
 | [A broker deadline runs before the test holds its turn](harness.md#a-broker-deadline-runs-before-the-test-holds-its-turn) | `harness.md` | decided (#139) |
 | [Packet loss on the network path is postponed](harness.md#packet-loss-on-the-network-path-is-postponed) | `harness.md` | postponed (#130) |

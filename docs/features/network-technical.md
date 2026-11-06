@@ -226,17 +226,28 @@ so two runs give the same stamps (`tests/test_determinism.py::test_mqtt_session_
   connection does, and the takeover ends it. After the takeover, CleanSession=1 replaces any
   `_State`, and CleanSession=0 makes one if there is none; `_connect` sets `state.connection`, writes
   CONNACK and, with Session Present, calls `_resume`: every entry of `state.sent`, in insertion
-  order with DUP set, then `_drain`, which sends `state.queue` through `deliver` while fewer than
-  65535 IDs are in use. Each PUBACK calls `_drain` again, so a queue longer than the IDs goes out as
-  they are freed, on a connection that stays open. `_route` calls `Broker._offer` for each `_State`: a connected one goes to
-  `deliver`, or for QoS 1 behind a queue still waiting for IDs, a stored one queues a message by the message's QoS or logs dropping it, and a clean
-  one closed while routing takes nothing. `deliver` allocates from `state.packet_id`, skipping
-  `state.unacked`, and `_publish` appends a `Delivery` and fills `state.sent` before it writes.
-  When 65535 IDs are in use `_packet_id` logs `mqtt: <id> exhausted packet identifiers` and closes;
-  this is what a QoS 1 message for a connected client with no ID free and no queue meets, and
-  `deliver` returns `False`, so that it stays queued for a stored session. A retained message on
-  SUBSCRIBE meets it too, and is not queued, because the queue goes out with RETAIN 0. PUBACK discards the
-  ID, pops `state.sent` and stamps that `Delivery`'s `acknowledged_at`; a connection already closed
+  order with DUP set, then `_drain`, which pops `state.queue` and sends each entry through `_send`
+  until the head would go at QoS 1 with 65535 IDs in use, so an entry going at QoS 0 does not wait
+  for an ID, and skips one that no subscription matches any more. Each
+  PUBACK calls `_drain` again, so a queue longer than the IDs goes out as they are freed, on a
+  connection that stays open. `state.queue` holds `(Message, retained)` pairs: `retained` is the
+  RETAIN the entry goes with, `True` only for a retained message a SUBSCRIBE matched, and `session`
+  reports the `Message`s alone. `_route` calls `Broker._offer` for each `_State`: a connected one
+  goes to `deliver`, a stored one queues a message by the message's QoS or logs dropping it, and a
+  clean one closed while routing takes nothing. `deliver` works out the QoS in `_qos` and queues
+  the message, never closing, when it is QoS 1 behind a queue that is waiting or goes at QoS 1 with
+  65535 IDs in use; otherwise `_send` allocates from `state.packet_id`, skipping `state.unacked`,
+  and `_publish` appends a `Delivery` and fills `state.sent` before it writes. SUBSCRIBE sends its
+  retained messages through `deliver` with `retained=True`, so one that waits keeps RETAIN 1, and
+  `deliver` does not queue one that is already in the queue as the same object with `retained`
+  set, which `state.queued_retained` holds by `id` while the queue holds the object; a retained
+  message replaced since is another object. SUBSCRIBE iterates over a copy of
+  `broker.retained`, because a write that fails, as a TLS one can, closes the session and its Will
+  can change the dict. A
+  CleanSession=1 `_State` holds its queue for its one connection. `_wait` logs
+  `mqtt: <id> has no free packet identifier: waiting for a PUBACK, <n> queued` when a connection
+  starts to wait, and `_Session.waiting` keeps it from logging again until `_drain` empties the
+  queue. PUBACK discards the ID, pops `state.sent` and stamps that `Delivery`'s `acknowledged_at`; a connection already closed
   ignores its data, PUBACK included, in `on_data`. `_end` clears `state.connection` and removes a
   `clean` state from `_states`. `session` copies a `_State`'s collections into a frozen
   `SessionState`, whose `Delivery` records stay the broker's;
@@ -373,7 +384,9 @@ handshake already in progress can satisfy a later-created completion condition.
 `test_net_mqtt.py` also checks held/delayed/default PUBACK, duplicate routing, identifier reuse
 (including the log for a pending ID reused with other content), DUP on QoS 0, connection IDs
 taken by rejected CONNECTs, policy changes, early release and cancellation on every
-session-ending path. These tests use the clock directly to check exact deadlines and release
+session-ending path, and a CleanSession=1 client with no free packet ID waiting for PUBACKs in
+exact bytes, its log line once per wait and its queue ending with the connection. These tests use
+the clock directly to check exact deadlines and release
 timestamps.
 `tests/test_net_mqtt_failures.py` negotiates PPP and drives real TCP frames with independent
 checksums, both with plaintext and a verifying MemoryBIO TLS client. It receives without ACK,
@@ -398,7 +411,10 @@ come after them and that expiry wins a tie with a PUBACK due at the same time.
 IDs from raw packets: Session Present, the queue and its order, QoS 0 dropped, DUP and original IDs
 on redelivery before the queue, CleanSession=1 at CONNECT and at disconnection, takeover, a refused
 CONNECT and the policy leaving a session alone, a `Publication` staying with its connection, retained
-messages and RETAIN, running out of packet IDs, `session`, `forget_session`, `deliveries` and
+messages and RETAIN, a connected client and a resumed session with no free packet ID waiting for
+PUBACKs with RETAIN kept, a SUBSCRIBE on every connection while waiting queueing its retained
+message once and again once it is sent, QoS 1 to a QoS 0 subscription going at once with no ID free, and
+behind a queue that waits, then with the entry in front of it, a retained Will from a write that fails during SUBSCRIBE, `session`, `forget_session`, `deliveries` and
 `next_delivery`. `tests/test_mqtt_session.py` runs esp-mqtt: Session Present, a QoS 1 message
 published while offline, and one redelivered with DUP after a `broker.disconnect` in the same
 instant as the publication, with both PUBACKs in the transcript.
