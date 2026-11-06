@@ -240,22 +240,14 @@ def test_an_out_directory_with_other_files_is_refused_and_an_earlier_check_s_rem
     assert not (tmp_path / "run-1" / "old.txt").exists()
 
 
-def test_network_tls_compares_plaintext_without_times_only_after_handshake() -> None:
-    def transcript(late: int, data: str, *, early: int = 1, split: bool = False) -> bytes:
+def test_a_network_transcript_compares_exactly_after_a_tls_handshake_too() -> None:
+    def transcript(late: int) -> bytes:
         events = [
-            {"t_ns": early, "event": "ppp: LCP open"},
             {"t_ns": 2, "event": "tls: handshake started"},
             {"t_ns": late, "event": "tls: handshake done, TLSv1.2"},
+            {"t_ns": late, "stream": "8883/1", "direction": "out", "data": "616263"},
         ]
-        chunks = [data[:2], data[2:]] if split else [data]
-        for chunk in chunks:
-            events.append({"t_ns": late, "stream": "8883/1", "direction": "out", "data": chunk})
         return json.dumps({"esp32tl_network": 1, "events": events}).encode()
 
-    a = check.comparable(transcript(3, "616263"))
-    assert a == check.comparable(transcript(999, "616263", split=True))
-    assert a != check.comparable(transcript(999, "616264"))
-    assert a != check.comparable(transcript(999, "616263", early=2))
-    plain_a = json.dumps({"esp32tl_network": 1, "events": [{"t_ns": 1, "event": "dns"}]}).encode()
-    plain_b = plain_a.replace(b'"t_ns": 1', b'"t_ns": 2')
-    assert check.comparable(plain_a) != check.comparable(plain_b)
+    assert check.comparable(transcript(3)) == transcript(3)
+    assert check.comparable(transcript(3)) != check.comparable(transcript(4))

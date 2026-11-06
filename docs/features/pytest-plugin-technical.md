@@ -88,8 +88,9 @@ are in [models-technical.md](models-technical.md).
    `--timeout`, then `PYTEST_TIMEOUT`, then the `timeout` ini option, as pytest-timeout itself
    does, so a configured 0 counts as set. pytest-timeout reads the marker per item in its
    `pytest_runtest_protocol` hook, after collection, and times setup, call and teardown together.
-5. **`board` fixture**, at setup: validates serial's artifact (and optional `app_recording`
-   reference), then obtains `dut` with `request.getfixturevalue`. A `pytest_fixture_setup` hook
+5. **`board` fixture**, at setup, after `pytest_runtest_setup` (`tryfirst=True`) has called
+   `esp32tl.net.tls.number_authorities_from_zero()` for every test, `board` or not: validates
+   serial's artifact (and optional `app_recording` reference), then obtains `dut` with `request.getfixturevalue`. A `pytest_fixture_setup` hook
    validates before pytest-embedded's `app` too, covering tests that request `dut` directly.
    The digest is cached in the item's `SERIAL_ARTIFACT` stash. It refuses a non-single `Dut`,
    then constructs `Esp32Sim` or `Serial`, with the profile, the test file's directory and

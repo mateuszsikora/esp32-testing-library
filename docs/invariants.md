@@ -986,17 +986,30 @@ that references to its number keep their meaning.
     `tests/test_net_mqtt.py::test_keepalive_expires_on_the_board_clock`,
     `tests/test_net_mqtt.py::test_topic_filters`
 - **93.** NTP returns world UTC plus emulated time; TLS verifies the per-test CA and named server and
-    exposes application plaintext in its transcript.
+    exposes application plaintext in its transcript. The server completes TLS 1.2 over each suite
+    and group it lists and refuses, with an alert and a logged reason, a ClientHello it cannot
+    serve and a record that does not decrypt.
     `tests/test_net_services.py::test_ntp_world_time_fraction_origin_and_era`,
     `tests/test_net_tls.py::test_tls_mqtt_and_transcript`,
-    `tests/test_net_tls.py::test_tls_rejects_unknown_ca_or_wrong_hostname`
+    `tests/test_net_tls.py::test_tls_rejects_unknown_ca_or_wrong_hostname`,
+    `tests/test_net_tls.py::test_every_suite_and_group_carries_data_both_ways`,
+    `tests/test_net_tls.py::test_a_client_without_tls_1_2_is_refused_with_an_alert`,
+    `tests/test_net_tls.py::test_a_client_hello_the_server_cannot_serve_is_refused`,
+    `tests/test_net_tls.py::test_a_record_that_does_not_decrypt_closes_the_connection`,
+    `tests/test_net_tls.py::test_a_maximum_fragment_length_limits_the_servers_records`
 - **94.** Only a modem with a simulated network treats receive overflow as fatal; binary pluses do not
     escape data mode without idle guards. Losing registration or supply resets the network.
     `tests/test_modem_model.py::test_only_a_network_route_fails_on_receive_overflow`,
     `tests/test_modem_model.py::test_network_selection_guarded_escape_and_loss_reset`
-- **95.** TLS determinism ignores times only after handshake starts and compares plaintext streams;
-    changed plaintext or pre-handshake times still fail.
-    `tests/test_check_determinism.py::test_network_tls_compares_plaintext_without_times_only_after_handshake`
+- **95.** The harness's TLS server draws nothing from the system: after the CAs are numbered from 0
+    again, the same ClientHello gets the same bytes, and another connection or CA other bytes; a
+    CA still held from an earlier test keeps its number, and a new CA never gets its keys. So
+    the determinism check compares a network transcript exactly, times after a handshake included,
+    and two runs of the position tracker over TLS leave the same transcript, tap and console.
+    `tests/test_net_tls.py::test_the_server_sends_the_same_bytes_in_every_run`,
+    `tests/test_net_tls.py::test_a_ca_that_outlives_its_test_keeps_its_number_and_its_keys_to_itself`,
+    `tests/test_check_determinism.py::test_a_network_transcript_compares_exactly_after_a_tls_handshake_too`,
+    `tests/test_determinism.py::test_tls_on_the_device` (under `make determinism`)
 
 - **96.** Anonymous MQTT clients have distinct deterministic IDs before Will construction or takeover;
     they do not disconnect each other or collide with IDs already supplied by named clients.

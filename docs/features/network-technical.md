@@ -337,18 +337,46 @@ threads; a connect in progress ends within `CONNECT_SECONDS`. The backend calls 
   never resets the network. An emitted handle survives closure as an emission record, not
   evidence of device processing. Histories, retained messages and stored sessions survive
   reconnect; incoming ACK state does not.
-- `tls.py`: a generated RSA-2048 CA and server certificate, SHA-256 signatures, DNS/IP subject
+- `tls.py`: an RSA-2048 CA and server certificate, SHA-256 signatures, DNS/IP subject
   alternative names, CA key usage and server extended key usage. Optional `server_not_before`
   and `server_not_after` apply only to the leaf certificate; the CA retains its fixed validity.
   Inputs must be timezone-aware, are normalized to UTC, and must form a forward interval;
-  validation happens before key generation. Temporary key files are removed
-  after `SSLContext.load_cert_chain`. TLS uses `SSLObject` and two `MemoryBIO`s; plaintext reaches
-  the inner service only after handshake completion. TLS errors close the connection and notify
-  the inner service once. `Internet.listen(..., tls=ca)` returns the installed `Tls` object;
+  validation happens before the CA takes a number. `CertificateAuthority.number` is the first
+  number of a module counter that is not a key of `_held`, a `WeakValueDictionary` of every CA of
+  the process by number; `number_authorities_from_zero()` (the plugin's `pytest_runtest_setup`)
+  restarts the counter, after `gc.collect()` when `_held` is not empty, since a CA in a reference
+  cycle (through its `Tls` and `Internet`) is gone only after a collection. Over the whole suite
+  (1860 tests) that is 70 collections, 2.6 s in all on an M2 Pro. `_rsa_key(label)`, cached per process, takes its two 1024-bit primes,
+  top two bits set, from `_Stream("rsa " + label)`, SHAKE-256 over `esp32tl tls: <label> <block>`:
+  candidates sharing a factor with the primes below 4000, or with `p - 1` divisible by 65537, are
+  skipped, then Miller-Rabin with base 2 and four bases from the stream; `private_key()`
+  validates the result. The labels are `authority <number> ca` and `authority <number> server`;
+  a key costs about 0.4 s the first time on an M2 Pro. `chain` holds the server's and the CA's DER, sent in that
+  order.
+  The server is TLS 1.2 (RFC 5246) over the record layer of its own: `_Session` reassembles
+  records and handshake messages split anywhere, answers a ClientHello with ServerHello,
+  Certificate, ServerKeyExchange and ServerHelloDone in one write, then takes ClientKeyExchange,
+  ChangeCipherSpec and Finished and sends its own. Each connection's `_Stream` is
+  `authority <number> connection <n>`, `n` counting the listener's accepts: 32 bytes of server
+  random, then the X25519 private key (32 bytes) or a NIST curve's scalar (64 bytes reduced into
+  `[1, order - 1]`). `SUITES`, `GROUPS` and `SIGNATURES` list what is served; the first of the
+  client's that is listed wins. Without `supported_groups` the group is secp256r1; without
+  `signature_algorithms`, SHA-1. The master secret is the extended one (RFC 7627) when the
+  client offers it; PRF and keys follow the suite's hash. AES-GCM's explicit nonce is the
+  sequence number (RFC 5288); ChaCha20-Poly1305 XORs it into the IV (RFC 7905). The ServerHello
+  echoes `renegotiation_info` (empty, on the extension or the SCSV), `extended_master_secret`,
+  `ec_point_formats` (uncompressed) and `max_fragment_length`, which then bounds every record the
+  server writes. Its session ID is empty, so no session resumes, and it sends no ticket. Any
+  error is a `_Fatal(alert, message)`: the server sends the fatal alert, encrypted once its
+  ChangeCipherSpec is out, logs `tls: handshake failed: <message>` before completion, and closes.
+  A fatal alert from the client logs `tls: handshake failed: the client sent the alert <name>`
+  before completion and closes, after completion it closes without a log line; a `close_notify`
+  closes; other warnings are ignored. Plaintext reaches the inner service only
+  after handshake completion. TLS errors close the connection and notify the inner service once. `Internet.listen(..., tls=ca)` returns the installed `Tls` object;
   plain listeners return `None`. Its cumulative `handshakes_started` counter increments on the
   first nonempty `on_data` per session, before TLS parsing. Empty input, TCP accept alone,
   subsequent fragments and data after closure do not increment it. Invalid first input does.
-  `handshakes_completed` increments once when `SSLObject.do_handshake()` returns successfully,
+  `handshakes_completed` increments once when the client's Finished verifies,
   before handing the plaintext stream to the inner service. Session closure and network reset
   leave both counters intact. Callable `handshake_started` / `handshake_completed` properties
   observe whether the corresponding live count is positive; they do not capture a future cursor.
@@ -358,7 +386,6 @@ threads; a connect in progress ends within `CONNECT_SECONDS`. The backend calls 
   occurs. Completion after construction includes handshakes already in progress. These counters
   describe events across the listener, not the lifecycle of a selected connection.
   Their representations name the desired event, and `__bool__` rejects unevaluated truth tests.
-  No deterministic replacement for OpenSSL randomness is attempted (#68).
 
 These are a lossless test network, not a general Internet stack. TCP congestion control, packet
 reassembly, retransmission, MQTT QoS 2 and bridging UDP to host services
@@ -403,12 +430,10 @@ appends it when an access point was given, and `Wifi.properties()` puts the tran
 `event` text or `stream`, `direction` (`in` to the device, `out` from it), and hex `data`. A stream
 identifier is `<port>/<connection-number>`. A service wrapper records plaintext after TLS is
 removed, and a bridge's wrapper what it relays, ciphertext when the device speaks TLS to the real
-service; TLS logs `tls: handshake started` and `tls: handshake done, TLSv1.2` (or the negotiated
-version). This is a diagnostic transcript, distinct from the version-1 UART recording format.
-The determinism checker recognizes this explicit header, compares everything before the first
-handshake starts exactly, and thereafter compares event order and each connection/direction's
-plaintext stream without times or chunk boundaries. Raw taps and link properties are not silently
-relaxed. See [testing](../guides/testing.md#determinism).
+service; TLS logs `tls: handshake started` and `tls: handshake done, TLSv1.2`. This is a
+diagnostic transcript, distinct from the version-1 UART recording format.
+The determinism checker compares it exactly, times after a TLS handshake included. See
+[testing](../guides/testing.md#determinism).
 
 ## Validation
 
@@ -416,6 +441,11 @@ relaxed. See [testing](../guides/testing.md#determinism).
 `test_net_tls.py` use handmade packets, independent checksum/framing calculations and a real TLS
 client in memory. They check malformed inputs, partial frames, flow control, sequence wrap,
 connection loss, keepalive, retained delivery, topic filters, Wills, UTC and certificate trust.
+`test_net_tls.py` also completes the handshake with OpenSSL's client over every suite and group,
+with and without the extended master secret, and carries data both ways; it checks that the
+server writes the same bytes for the same ClientHello after the CAs are numbered from 0 again,
+other bytes on another connection or CA, and the alert and log line of each ClientHello it
+cannot serve, a record that does not decrypt and a maximum fragment length.
 `tests/test_net_mqtt_policy.py` drives TCP packets with both plain MQTT and a verified MemoryBIO
 TLS client. It checks all CONNACK codes, retries after credential/policy changes, accepted-client
 and attempt histories, rejection before takeover, pipelined packet isolation and Will suppression.
@@ -476,7 +506,8 @@ firmware tests enforce those dates against its NTP clock.
 `tests/test_modem_model.py` checks network selection, binary pluses, guarded escape, reset and the
 route-specific overflow policy. `tests/test_pppos_client.py` exercises unmodified firmware in
 both directions. `tests/test_determinism.py` includes plain PPP/MQTT with a raw tap, a TLS
-handshake with a plaintext transcript, and `test_wifi_http`, `http_request` fetching from the HTTP
+handshake with a plaintext transcript, the position tracker's TLS session over PPP
+(`test_tls_on_the_device`), and `test_wifi_http`, `http_request` fetching from the HTTP
 server behind the access point with its `network.json` transcript. Firmware TLS/NTP validation lives in
 `examples/position_tracker/tests/test_tracker.py`, using NVS credentials and the same in-process
 services.

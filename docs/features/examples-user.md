@@ -285,8 +285,10 @@ server certificates (with a valid CA). Each rejection case waits on
 `tls.handshake_started`, then checks the complete broker history after 30 seconds of simulated time
 for any connection or publication, including short-lived ones. It does not match firmware log
 wording. Other cases check no-fix, lost-fix, receiver silence, missing
-configuration and a nonresponding NTP server. TLS uses system randomness, so these tests
-assert application behavior with small timing tolerances, not identical ciphertext.
+configuration and a nonresponding NTP server. These tests assert application behavior with
+small timing tolerances. The harness's TLS server repeats its bytes, so two runs of a test give
+the same times; `make determinism` runs the tracker over TLS and checks that
+([testing](../guides/testing.md#determinism)).
 
 ## Adding an example
 

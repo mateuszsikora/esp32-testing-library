@@ -967,6 +967,9 @@ under `[tool.pytest.ini_options]`.
 - **The `app_path` and `board_profile` markers**: esp32tl registers them and reads them on every
   test that uses `board`. A project's own marker of one of these names means esp32tl's there.
 - **The `esp32tl_card_cache_mib` ini option**: esp32tl's, for [`card_cache`](#keeping-a-prepared-card).
+- **`pytest_runtest_setup`**: esp32tl's runs first and numbers the TLS certificate authorities
+  from 0 again, skipping the numbers of CAs still held, so that a test's own CAs have the same
+  keys alone as in the suite ([TLS](network-user.md#dns-time-and-services)).
 - **The `timeout` marker**: pytest-timeout's; esp32tl adds it to a test that uses `board` and has
   none, unless the session sets a timeout.
 - **`app_path`, `build_dir` and `embedded_services`**: esp32tl parametrises them for a test that

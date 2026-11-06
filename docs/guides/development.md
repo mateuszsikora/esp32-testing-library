@@ -49,7 +49,7 @@ After `make setup` and `make firmware examples`, `.venv/bin/pytest` runs the tes
 | `make firmware` | Builds every validation image in the pinned ESP-IDF container, into `firmware/<image>/build/` |
 | `make examples` | Builds every project discovered at `examples/*/CMakeLists.txt` in the pinned ESP-IDF container, into `examples/<name>/build/` |
 | `make test` | Runs `make setup` and `make test-runner`, builds the validation images that are missing (`FIRMWARE_IMAGES`: `hello_world`, `nmea_reader`, `gpio_echo`, `sdspi`, `sd_remount`, `modem_at`, `modem_recovery`, `nvs_reader`, `pppos_client`, `mqtt_session`, `http_request`, `persistence` and `ota_state`), builds missing examples, then runs `.venv/bin/pytest` on both suites |
-| `make determinism` | Runs `tests/test_determinism.py` twice through `scripts/check-determinism.py` and compares the two runs ([testing.md](testing.md#determinism)); builds the `nmea_reader`, `pppos_client`, `mqtt_session` and `http_request` images when missing and `.venv` when it is missing or stale, but not the runner or the ROM ELF: run `make setup` first |
+| `make determinism` | Runs `tests/test_determinism.py` twice through `scripts/check-determinism.py` and compares the two runs ([testing.md](testing.md#determinism)); builds the `nmea_reader`, `pppos_client`, `mqtt_session` and `http_request` images and the `position_tracker` example when missing and `.venv` when it is missing or stale, but not the runner or the ROM ELF: run `make setup` first |
 | `make lint` | `ruff check`, `ruff format --check` and `mypy`; `cargo fmt --check` and `cargo clippy --locked --all-targets -- -D warnings` on the runner |
 | `make hooks` | Installs the pre-commit hooks ([Pre-commit hooks](#pre-commit-hooks)) |
 | `make docs-check` | Checks that the changes on this branch update the documentation they need ([documentation.md](documentation.md#the-check)); `BASE=REF` (passed as `--base REF`) compares with the merge base with `REF` rather than with the default branch |
@@ -238,9 +238,9 @@ Git ignores what the builds leave behind: `.venv/`, `.cache/` (the ROM ELF), `ru
 ### Network dependencies and firmware
 
 `cryptography>=42` is a direct runtime dependency: `esp32tl.net.tls.CertificateAuthority`
-generates per-test certificates. TLS itself uses standard-library `ssl`/MemoryBIO; no external
-broker or network daemon is needed. `make firmware` and `make test` include `pppos_client`, `modem_recovery`, `mqtt_session` and
-`http_request`; `make determinism` requires `pppos_client`, `mqtt_session` and `http_request` as well as `nmea_reader`. The first build of `pppos_client` fetches the pinned
+generates per-test certificates, and the harness's TLS server takes its AEADs, ECDHE and RSA
+signatures from it; no external broker or network daemon is needed. `make firmware` and `make test` include `pppos_client`, `modem_recovery`, `mqtt_session` and
+`http_request`; `make determinism` requires `pppos_client`, `mqtt_session` and `http_request` as well as `nmea_reader`, and the `position_tracker` example. The first build of `pppos_client` fetches the pinned
 esp-protocols source archive, and `modem_recovery` and `mqtt_session` fetch the same archive into their own build directories, verified by SHA-256, under `firmware/.esp-protocols-<commit>/`
 (or `$FIRMWARE_OUT`). The preparation script uses Python's tarfile `data` extraction filter; the pinned ESP-IDF
 container supplies a Python with that filter.

@@ -20,8 +20,8 @@ nothing. Both runs must pass. They must then have left:
 Each difference is printed as `✗ <what>`, with a diff where both runs have the file or the test,
 and the script exits 1; so does a run that fails, before anything is compared, and two runs that
 left no file and no test that used the board, since nothing was compared. Network transcripts
-keep exact times before TLS starts; after it starts, compare plaintext streams and events without
-their times. Raw files and link reports still compare exactly. Standard library only.
+compare exactly, times after a TLS handshake included: the harness's TLS server draws its
+randomness from a seed (esp32tl/net/tls.py). Standard library only.
 """
 
 from __future__ import annotations
@@ -154,13 +154,6 @@ def files_under(directory: Path) -> set[str]:
 
 def comparable(data: bytes) -> bytes:
     """`data`, or, when it is a recording, the recording without its header's `created`."""
-    # A network transcript contains application bytes, never TLS ciphertext or keys.
-    try:
-        network = json.loads(data)
-    except ValueError:
-        network = None
-    if isinstance(network, dict) and network.get("esp32tl_network") == 1:
-        return json.dumps(comparable_network(network), sort_keys=True).encode()
     first, newline, rest = data.partition(b"\n")
     try:
         header = json.loads(first)
@@ -170,37 +163,6 @@ def comparable(data: bytes) -> bytes:
         return data
     header.pop("created", None)
     return json.dumps(header, sort_keys=True).encode() + newline + rest
-
-
-def comparable_network(network: dict[str, object]) -> dict[str, object]:
-    """Keep exact events before TLS; thereafter compare logs and each plaintext byte stream.
-
-    The first handshake's start marks where system randomness can affect timing. TCP/TLS may
-    divide the same stream into different chunks, so compare bytes per connection/direction.
-    Warnings and failures in the link report remain subject to the ordinary comparison.
-    """
-    events = network.get("events")
-    if not isinstance(events, list):
-        raise ValueError("network transcript has no events list")
-    before: list[object] = []
-    after: list[object] = []
-    streams: dict[str, str] = {}
-    tls = False
-    for original in events:
-        if not isinstance(original, dict):
-            raise ValueError("network transcript event is not an object")
-        event = dict(original)
-        if not tls:
-            before.append(event)
-            tls = event.get("event") == "tls: handshake started"
-            continue
-        event.pop("t_ns", None)
-        if "stream" in event:
-            key = f"{event['stream']} {event['direction']}"
-            streams[key] = streams.get(key, "") + event["data"]
-        else:
-            after.append(event)
-    return {"esp32tl_network": 1, "before_tls": before, "after_tls": after, "streams": streams}
 
 
 def diff(a: bytes, b: bytes, path: str) -> str:

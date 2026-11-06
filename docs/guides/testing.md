@@ -161,7 +161,7 @@ CI the test job installs mtools first, so there they run ([cicd.md](../cicd.md#t
 | `tests/test_gnss_fixture.py` | `gnss.replay` and `gnss.tap` into `nmea_reader` through the `gnss` fixture, and, through `pytester`, a source given out of order with `board.power_on()`, and `test_nmea_reader.py`'s `test_reports_a_fix` failing on a changed recording and on a baud mismatch | The built `nmea_reader` image, the runner and the ROM ELF |
 | `tests/test_gnss_recordings.py` | `recordings/gnss-*.jsonl` are what `scripts/generate-gnss-recordings.py` writes, `--check` names a stale one, and every recording is one valid sentence per emulated second | Nothing beyond Python |
 | `tests/test_pytest_plugin.py` | The plugin's parametrisation and refused options, the `board_profile` marker, the wall-time timeout it gives, the runner's command line, `load_app`'s refusals, the runner and ROM paths, power-on, sources and taps, the `lines` fixture's refusals and how a runner's exit is reported (against a fake runner, a shell script), how the backend serves the link, holds it on the test's clock, ends the run, writes a tap and reports the run (against a fake runner that speaks the link protocol, a Python script) | Most tests nothing beyond the package; `test_hello_world_fails_on_an_image_that_prints_something_else` the built image, the runner and the ROM ELF |
-| `tests/test_determinism.py` | The runs the determinism job runs twice: `nmea_reader` fed each generated recording, and fed the receiver model through a fix, a move, a lost fix and a new one, each run tapped and ended at a time the test chose; `pppos_client` publishing to the broker; a TLS exchange without firmware; `mqtt_session` on a path with a backlog and a redelivery (`test_mqtt_session_on_a_path`); `http_request` fetching behind the access point (`test_wifi_http`); each test leaves its console, its tap or its network transcript in its `tmp_path` ([Determinism](#determinism)) and checks that its run did what it should | The built `nmea_reader`, `pppos_client`, `mqtt_session` and `http_request` images, the runner and the ROM ELF |
+| `tests/test_determinism.py` | The runs the determinism job runs twice: `nmea_reader` fed each generated recording, and fed the receiver model through a fix, a move, a lost fix and a new one, each run tapped and ended at a time the test chose; `pppos_client` publishing to the broker; a TLS exchange without firmware; the `position_tracker` example publishing over TLS through the modem (`test_tls_on_the_device`); `mqtt_session` on a path with a backlog and a redelivery (`test_mqtt_session_on_a_path`); `http_request` fetching behind the access point (`test_wifi_http`); each test leaves its console, its tap or its network transcript in its `tmp_path` ([Determinism](#determinism)) and checks that its run did what it should | The built `nmea_reader`, `pppos_client`, `mqtt_session` and `http_request` images and the `position_tracker` example, the runner and the ROM ELF |
 | `tests/test_check_determinism.py` | `scripts/check-determinism.py` on two runs made up in the test: the files, a tap's `created` left out, the links in the JUnit XML without the run's basetemp, and the check itself against a stand-in for pytest (its arguments, a run that fails, the `--out` it refuses) | Nothing beyond Python; milliseconds |
 | `tests/test_tap.py`, `tests/test_run_report.py` | A tap's recording and a tapped `Uart` on a `BoardLink`; the run's log and how the report shows it | Nothing beyond the package; milliseconds |
 | `tests/test_link_protocol.py`, `tests/test_boardlink.py` | The link protocol's codec and handshake; `BoardLink`'s turns, routing and errors, fed messages directly or over a socket pair | Nothing beyond the package; milliseconds |
@@ -247,7 +247,7 @@ After them comes `determinism: the two runs differ in <n> places` (`1 place` for
 that left no file and no test that used the board compared nothing, and fail too:
 `✗ the runs left no file and no test that used the board: nothing was compared`.
 Two identical runs end with
-`determinism: the two runs are identical: 14 files, and the link of 6 tests that used the board`,
+`determinism: the two runs are identical: 17 files, and the link of 7 tests that used the board`,
 and exit 0. One run of the three GNSS tests took 2.3 to 5.3 s of wall time on an M2 Pro.
 
 A test of `tests/test_determinism.py` ends its run at a time it chose (`board.wait`), so that the
@@ -255,8 +255,10 @@ two runs end at the same instant, and checks that its run printed its fixes, so 
 both did nothing do not pass. `test_plain_mqtt` additionally runs `pppos_client`, leaves its raw modem tap and network
 transcript, and compares bytes and times exactly. `test_tls_plaintext` performs a real TLS 1.2
 handshake and bidirectional MQTT exchange using MemoryBIO, validates the CA and server name,
-and leaves `network.json`. This test needs no firmware; `examples/position_tracker/tests/test_tracker.py` separately
-validates firmware TLS/NTP through the modem.
+and leaves `network.json`. This test needs no firmware. `test_tls_on_the_device` runs the
+`position_tracker` example through the modem: the firmware verifies the CA from NVS, does its
+ECDHE and publishes three reports over TLS, and the test leaves its `console.txt`, raw modem tap
+and network transcript, so the times after the handshake are compared too.
 `test_mqtt_session_on_a_path` runs `mqtt_session` with `set_path(rtt=ms(200), downlink=kbit_s(512),
 uplink=kbit_s(128))`, a backlog of five and a redelivery, and leaves its `console.txt`, raw modem tap
 and network transcript, compared exactly: two runs give the same stamps on a path.
@@ -265,16 +267,11 @@ and network transcript, compared exactly: two runs give the same stamps on a pat
 `console.txt` and the network's transcript as `network.json`; it checks that the firmware printed
 the page. With no TLS on that network, its transcript is compared exactly.
 
-Files with `"esp32tl_network": 1` are explicit plaintext network transcripts. Before the first
-`tls: handshake started` event, every event and time is compared exactly, including that event's
-time. Afterwards the checker compares event order without `t_ns` and concatenated plaintext
-bytes per stream/direction, ignoring chunk boundaries. Changed messages, missing events, changed
-pre-handshake times and changed plain-network times still fail. This accounts for system TLS
-randomness ([the postponed seeded TLS](../decisions/harness.md#a-tls-stack-with-a-seeded-random-source-is-postponed)).
-Raw UART taps and `esp32sim_link` properties are still compared exactly; do not save ciphertext
-or random CA files as determinism artifacts expecting the checker to discard them. The current
-TLS determinism test has no board link property; a firmware TLS test must explicitly choose its
-plaintext artifact rather than weaken the checker for unrelated routes or warnings.
+Network transcripts (`"esp32tl_network": 1`) are compared exactly like any other file, times
+after a TLS handshake included: the harness's TLS server draws its keys and nonces from a seed,
+so the bytes on the wire, PPP's escapes of them and the device's work on them repeat
+([the decision](../decisions/harness.md#the-harnesss-tls-server-draws-every-random-value-from-a-seed)).
+A tap of a TLS route holds the same ciphertext in both runs.
 
 ## The runner's Rust tests
 
@@ -343,7 +340,8 @@ and the ROM ELF. Run it alone with `.venv/bin/pytest examples/gps_alarm_clock/te
 from NVS, GNSS movement, report deadlines on the test clock and UTC from the simulated world.
 It also checks certificate rejection and missing/stale GNSS data. Build with
 `firmware/build.sh --examples position_tracker` and run with
-`.venv/bin/pytest examples/position_tracker/tests`. TLS ciphertext is not a determinism artifact.
+`.venv/bin/pytest examples/position_tracker/tests`. `make determinism` runs it over TLS too
+(`test_tls_on_the_device`).
 See [the example guide](../features/examples-user.md) for the scenarios and wiring.
 
 `examples/sd_data_logger/tests/test_logger.py` prepares FAT images with mtools and verifies

@@ -27,6 +27,10 @@ on the board's clock after it when the test failed.
 Every test that uses `board` gets pytest-timeout's `timeout` marker of `DEFAULT_TIMEOUT` seconds of
 wall time, unless the session or the test sets a timeout of its own: the runner waits for the test
 for as long as the body runs, so this is what ends a run that hangs.
+
+Before each test, the TLS certificate authorities are numbered from 0 again, skipping the numbers of
+CAs still held, so that a test's own CAs get the same keys alone as in the suite
+(`esp32tl.net.tls`).
 """
 
 import json
@@ -58,6 +62,7 @@ from esp32tl.interfaces.modem import Modem
 from esp32tl.interfaces.sd_card import SdCard
 from esp32tl.interfaces.wifi import Wifi
 from esp32tl.net.mqtt import Broker
+from esp32tl.net.tls import number_authorities_from_zero
 
 # The wall-time timeout of a test that uses `board`, in seconds, unless one is configured: 600 s
 # covers at least three minutes of the board's busiest work, at the 0.3 times real time stage 0
@@ -427,6 +432,11 @@ def serial_artifact(request: pytest.FixtureRequest) -> str:
         except BackendError as error:
             backend_failed(error, Serial.name)
     return node.stash[SERIAL_ARTIFACT]
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_setup(item: pytest.Item) -> None:
+    number_authorities_from_zero()
 
 
 @pytest.hookimpl(tryfirst=True)
