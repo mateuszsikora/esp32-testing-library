@@ -112,6 +112,14 @@ it does not expect once told to, with `peer.device.classic_accept_any = False`, 
 `CONNECTION_REJECTED_DUE_TO_LIMITED_RESOURCES`. The device that paged gets that reason at once, in
 `error_code`, rather than `PAGE_TIMEOUT` at the page timeout; both can connect afterwards.
 
+Nor does their API turn page scan off. Through Bumble, `await peer.device.set_connectable(False)`
+does, inside `air.run`: the device no longer hears a page, and a device that pages it gets
+`PAGE_TIMEOUT` at the page timeout, 5.12 s unless its host wrote another; a remote name request
+ends the same way, unless the two already have a link. Page scan counts when the page starts: a
+device that turns it back on with `set_connectable(True)` answers the next page, not the one under
+way. `set_discoverable(False)` turns inquiry scan off alone: the device is not found, and can still
+be paged.
+
 ## A peer that leaves
 
 ```python

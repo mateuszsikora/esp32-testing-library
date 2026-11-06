@@ -24,6 +24,10 @@ Classic link. `Controller` adds them, for links whose controllers are all of thi
   polls on this link, so a link is in contact until a device leaves, and its timer starts there.
 - Rejecting a page (Vol 4, Part E, 7.1.9), which Bumble has no handler for: the pager's
   `Connection_Complete` carries the reason as its status, and this side's host gets one too.
+- Page scan (Vol 4, Part E, 7.3.18), which Bumble's controller ignores: a device whose page scan is
+  off does not hear a page, nor a remote name request without a link, which pages too, so either
+  ends at the page timeout. As for a device that left, this is decided at the instant the page
+  starts: one that turns page scan on during it answers only the next.
 
 The keys are not the specification's: SAFER+ (E1, E21, E22) is replaced by SHA-256 over the same
 inputs, so a key or a response holds on this link only, and only the host sees a key. The random
@@ -55,6 +59,10 @@ LINK_SUPERVISION_TIMEOUT_SLOTS = 0x7D00
 
 # The reasons a host may reject a page for (Vol 4, Part E, 7.1.9).
 REJECT_REASONS = range(0x0D, 0x10)
+
+# The bits of `Scan_Enable` (Vol 4, Part E, 7.3.18).
+INQUIRY_SCAN = 0x01
+PAGE_SCAN = 0x02
 
 
 @lmp.Packet.subclass
@@ -151,7 +159,7 @@ def response(link_key: bytes, challenge: bytes, claimant: hci.Address) -> bytes:
 class Controller(BumbleController):
     """A Bumble controller at `address` on `link`, named `name` in Bumble's logs, which also does
     inquiry, legacy pairing, authentication with a stored key, encryption, a page timeout, link
-    supervision and the rejection of a page."""
+    supervision, the rejection of a page and page scan."""
 
     link: Link
 
@@ -239,7 +247,7 @@ class Controller(BumbleController):
                 for c in heard
                 if c is not self
                 and isinstance(c, Controller)
-                and c.classic_scan_enable & 0x01
+                and c.classic_scan_enable & INQUIRY_SCAN
                 and self.link.present(c.public_address)
             ),
             key=lambda c: bytes(reversed(bytes(c.public_address))),
@@ -399,6 +407,31 @@ class Controller(BumbleController):
         if link_type == hci.HCI_Connection_Complete_Event.LinkType.ACL:
             self._answers_due[peer_address] += 1
         super().on_classic_connection_request(peer_address, link_type)
+
+    # Page scan: a device whose page scan is off hears no page.
+
+    def _hears(self, sender: hci.Address, packet: lmp.Packet) -> bool:
+        """Whether `packet` from `sender` reaches this side's link manager: a page needs page
+        scan, and so does a name request that has no link to go over."""
+        if self.classic_scan_enable & PAGE_SCAN:
+            return True
+        if isinstance(packet, lmp.LmpHostConnectionReq):
+            return False
+        if isinstance(packet, lmp.LmpNameReq):
+            return self._linked(sender)
+        return True
+
+    def _linked(self, peer: hci.Address) -> bool:
+        """Whether this side and `peer` have a link, made or being made: one of them heard the
+        other's page."""
+        if peer in self.classic_connections and not self._is_own_page(peer):
+            return True
+        other = self.link.find_classic_controller(peer)
+        return (
+            isinstance(other, Controller)
+            and self.public_address in other.classic_connections
+            and not other._is_own_page(self.public_address)
+        )
 
     # Remote name requests: a page too, so one nobody answers ends at the page timeout.
 
@@ -659,6 +692,9 @@ class Controller(BumbleController):
 
     def on_lmp_packet(self, sender_address: hci.Address, packet: lmp.Packet) -> None:
         peer = sender_address
+        if not self._hears(peer, packet):
+            # Unheard, as on the air: the pager's timer ends it.
+            return
         if isinstance(packet, OURS_PACKETS) and peer not in self.classic_connections:
             # Sent before the link was detached on this side, as a challenge that crosses the
             # detach of a failed check.

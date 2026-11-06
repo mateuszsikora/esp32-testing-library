@@ -186,7 +186,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Rejecting a synchronous link is postponed](harness.md#rejecting-a-synchronous-link-is-postponed) | `harness.md` | postponed (#34) |
 | [A page of this side that fails leaves the entry of a page it heard](harness.md#a-page-of-this-side-that-fails-leaves-the-entry-of-a-page-it-heard) | `harness.md` | decided (#137) |
 | [Keeping a heard page apart from this side's own is postponed](harness.md#keeping-a-heard-page-apart-from-this-sides-own-is-postponed) | `harness.md` | postponed (#144) |
-| [A page that respects page scan is postponed](harness.md#a-page-that-respects-page-scan-is-postponed) | `harness.md` | postponed (#135) |
+| [A page respects page scan, read when the page starts](harness.md#a-page-respects-page-scan-read-when-the-page-starts) | `harness.md` | decided (#135) |
 | [Connection_Accept_Timeout is postponed](harness.md#connection_accept_timeout-is-postponed) | `harness.md` | postponed (#34) |
 | [A bt fixture, an HCI tap and a replayed peer are postponed](harness.md#a-bt-fixture-an-hci-tap-and-a-replayed-peer-are-postponed) | `harness.md` | postponed (#33) |
 | [bumble is a dependency of esp32tl, pinned exactly](harness.md#bumble-is-a-dependency-of-esp32tl-pinned-exactly) | `harness.md` | decided (#33) |

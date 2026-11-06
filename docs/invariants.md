@@ -623,6 +623,24 @@ that references to its number keep their meaning.
     `tests/test_spp_peer.py::test_an_acceptance_whose_role_switch_is_refused_leaves_no_entry`,
     `tests/test_spp_peer.py::test_a_refused_role_switch_leaves_no_entry_with_an_answer_never_given`,
     `tests/test_spp_peer.py::test_a_refused_role_switch_leaves_no_entry_while_this_side_pages_too`
+- **195.** A device whose page scan is off does not hear a page: the page ends in `PAGE_TIMEOUT`
+    exactly at the page timeout, and the target holds no entry for it. Page scan is read when the
+    page starts, so one turned on during it answers only the next page. Inquiry scan and page scan
+    are separate: a device with only inquiry scan on is found and not paged, one with only page scan
+    on is paged and not found. A remote name request ends the same way, unless the two already have
+    a link, or one of them heard the other's page, which it goes over without page scan; a page
+    nobody heard, either way, is no link.
+    `tests/test_spp_peer.py::test_a_page_to_a_device_with_page_scan_off_ends_at_the_page_timeout`,
+    `tests/test_spp_peer.py::test_a_device_that_turns_page_scan_back_on_can_be_paged`,
+    `tests/test_spp_peer.py::test_page_scan_turned_on_during_a_page_answers_only_the_next`,
+    `tests/test_spp_peer.py::test_a_device_with_only_page_scan_on_is_paged_and_not_found`,
+    `tests/test_spp_peer.py::test_a_device_with_only_inquiry_scan_on_is_found_and_not_paged`,
+    `tests/test_spp_peer.py::test_a_remote_name_request_to_a_device_with_page_scan_off_ends_at_the_page_timeout`,
+    `tests/test_spp_peer.py::test_a_pager_does_not_get_the_name_of_a_target_that_did_not_hear_its_page`,
+    `tests/test_spp_peer.py::test_a_page_nobody_heard_carries_no_name_request_to_its_pager`,
+    `tests/test_spp_peer.py::test_a_remote_name_request_over_a_link_needs_no_page_scan`,
+    `tests/test_spp_peer.py::test_a_target_that_heard_the_page_gets_the_pager_s_name_without_its_page_scan`,
+    `tests/test_spp_peer.py::test_a_target_that_turns_page_scan_off_after_hearing_the_page_still_gives_its_name`
 
 ## The esp32tl command
 

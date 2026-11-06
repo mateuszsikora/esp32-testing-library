@@ -1574,6 +1574,169 @@ def test_a_power_loss_ends_a_remote_name_request_and_its_timer_does_not_end_the_
     assert air.now == ms(9_120)
 
 
+# Page scan: a device whose page scan is off hears no page.
+
+
+def scanning(air: Air, device: BluetoothDevice, *, inquiry: bool, page: bool) -> None:
+    async def write() -> None:
+        await device.device.set_discoverable(inquiry)
+        await device.device.set_connectable(page)
+
+    air.run(write(), within=seconds(0))
+
+
+def test_a_page_to_a_device_with_page_scan_off_ends_at_the_page_timeout(air: Air) -> None:
+    phone, speaker = phone_and_speaker(air)
+    scanning(air, speaker, inquiry=True, page=False)
+    task = air.start(page(phone, SPEAKER))
+    # Unheard: the speaker holds no entry for the page.
+    assert held_by(air, speaker) == []
+    air.advance(ms(5_119))
+    assert not task.done()
+    air.advance(ms(5_120))
+    error = task.exception()
+    assert isinstance(error, core.ConnectionError)
+    assert error.error_code == hci.HCI_ErrorCode.PAGE_TIMEOUT_ERROR
+    assert held_by(air, phone) == []
+    assert held_by(air, speaker) == []
+
+
+def test_a_device_that_turns_page_scan_back_on_can_be_paged(air: Air) -> None:
+    phone, speaker = phone_and_speaker(air)
+    scanning(air, speaker, inquiry=True, page=False)
+    with pytest.raises(core.ConnectionError):
+        air.run(page(phone, SPEAKER), within=seconds(10))
+    scanning(air, speaker, inquiry=True, page=True)
+    air.run(page(phone, SPEAKER), within=seconds(0))
+    assert air.now == ms(5_120)
+    assert list(phone.device.connections) == list(speaker.device.connections) == [1]
+
+
+def test_page_scan_turned_on_during_a_page_answers_only_the_next(air: Air) -> None:
+    """Decided at the instant the page starts, as for a device that left."""
+    phone, speaker = phone_and_speaker(air)
+    scanning(air, speaker, inquiry=True, page=False)
+    task = air.start(page(phone, SPEAKER))
+    air.wait(seconds(1))
+    scanning(air, speaker, inquiry=True, page=True)
+    assert held_by(air, speaker) == []
+    air.advance(ms(5_119))
+    assert not task.done()
+    air.advance(ms(5_120))
+    error = task.exception()
+    assert isinstance(error, core.ConnectionError)
+    assert error.error_code == hci.HCI_ErrorCode.PAGE_TIMEOUT_ERROR
+    air.run(page(phone, SPEAKER), within=seconds(0))
+    assert air.now == ms(5_120)
+
+
+def test_a_device_with_only_page_scan_on_is_paged_and_not_found(air: Air) -> None:
+    _, speaker = phone_and_speaker(air)
+    esp32 = Initiator(air)
+    scanning(air, speaker, inquiry=False, page=True)
+    air.run(one_inquiry(esp32), within=seconds(20))
+    assert [address for _, address, _, _ in esp32.found] == [PHONE + "/P"]
+    connect = esp32.device.connect(
+        hci.Address(SPEAKER + "/P"), transport=core.PhysicalTransport.BR_EDR
+    )
+    air.run(connect, within=seconds(0))
+
+
+def test_a_device_with_only_inquiry_scan_on_is_found_and_not_paged(air: Air) -> None:
+    _, speaker = phone_and_speaker(air)
+    esp32 = Initiator(air)
+    scanning(air, speaker, inquiry=True, page=False)
+    assert air.run(esp32.discover("speaker"), within=seconds(20)) == hci.Address(SPEAKER + "/P")
+    connect = esp32.device.connect(
+        hci.Address(SPEAKER + "/P"), transport=core.PhysicalTransport.BR_EDR
+    )
+    with pytest.raises(core.ConnectionError) as raised:
+        air.run(connect, within=seconds(10))
+    assert raised.value.error_code == hci.HCI_ErrorCode.PAGE_TIMEOUT_ERROR
+
+
+def test_a_remote_name_request_to_a_device_with_page_scan_off_ends_at_the_page_timeout(
+    air: Air,
+) -> None:
+    phone, speaker = phone_and_speaker(air)
+    scanning(air, speaker, inquiry=True, page=False)
+    with pytest.raises(hci.HCI_Error) as raised:
+        air.run(phone.device.request_remote_name(hci.Address(SPEAKER + "/P")), within=seconds(10))
+    assert raised.value.error_code == hci.HCI_ErrorCode.PAGE_TIMEOUT_ERROR
+    assert air.now == ms(5_120)
+
+
+def test_a_pager_does_not_get_the_name_of_a_target_that_did_not_hear_its_page(air: Air) -> None:
+    """The pager's own page, unheard, is no link for the request to go over."""
+    phone, speaker = phone_and_speaker(air)
+    scanning(air, speaker, inquiry=True, page=False)
+    task = air.start(page(phone, SPEAKER))
+    with pytest.raises(hci.HCI_Error) as raised:
+        air.run(phone.device.request_remote_name(hci.Address(SPEAKER + "/P")), within=seconds(10))
+    assert raised.value.error_code == hci.HCI_ErrorCode.PAGE_TIMEOUT_ERROR
+    assert air.now == ms(5_120)
+    assert isinstance(task.exception(), core.ConnectionError)
+
+
+def test_a_page_nobody_heard_carries_no_name_request_to_its_pager(
+    air: Air,
+) -> None:
+    """The target's own page, which nobody heard, is no link for the request either."""
+    phone, speaker = phone_and_speaker(air)
+    scanning(air, phone, inquiry=True, page=False)
+    scanning(air, speaker, inquiry=True, page=False)
+    task = air.start(page(speaker, PHONE))
+    with pytest.raises(hci.HCI_Error) as raised:
+        air.run(phone.device.request_remote_name(hci.Address(SPEAKER + "/P")), within=seconds(10))
+    assert raised.value.error_code == hci.HCI_ErrorCode.PAGE_TIMEOUT_ERROR
+    assert air.now == ms(5_120)
+    assert isinstance(task.exception(), core.ConnectionError)
+
+
+@pytest.mark.parametrize("asker", ["central", "peripheral"])
+def test_a_remote_name_request_over_a_link_needs_no_page_scan(air: Air, asker: str) -> None:
+    phone, speaker = phone_and_speaker(air)
+    air.run(page(phone, SPEAKER), within=seconds(0))
+    scanning(air, phone, inquiry=False, page=False)
+    scanning(air, speaker, inquiry=False, page=False)
+    if asker == "central":
+        name = phone.device.request_remote_name(hci.Address(SPEAKER + "/P"))
+        assert air.run(name, within=seconds(0)) == "speaker"
+    else:
+        name = speaker.device.request_remote_name(hci.Address(PHONE + "/P"))
+        assert air.run(name, within=seconds(0)) == "phone"
+    assert air.quiet_until() is None
+
+
+def test_a_target_that_heard_the_page_gets_the_pager_s_name_without_its_page_scan(
+    air: Air, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The page the target heard is the link the request goes over, before its host answers."""
+    phone, speaker = phone_and_speaker(air)
+    scanning(air, phone, inquiry=False, page=False)
+    slow_to_accept(speaker, monkeypatch, 1)
+    task = air.start(page(phone, SPEAKER))
+    name = speaker.device.request_remote_name(hci.Address(PHONE + "/P"))
+    assert air.run(name, within=seconds(0)) == "phone"
+    assert not task.done()
+    air.wait(seconds(1))
+    assert task.done() and task.exception() is None
+
+
+def test_a_target_that_turns_page_scan_off_after_hearing_the_page_still_gives_its_name(
+    air: Air, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    phone, speaker = phone_and_speaker(air)
+    slow_to_accept(speaker, monkeypatch, 1)
+    task = air.start(page(phone, SPEAKER))
+    scanning(air, speaker, inquiry=False, page=False)
+    name = phone.device.request_remote_name(hci.Address(SPEAKER + "/P"))
+    assert air.run(name, within=seconds(0)) == "speaker"
+    # The page it heard goes on to its answer.
+    air.wait(seconds(1))
+    assert task.done() and task.exception() is None
+
+
 # A target whose host takes its time to answer a page.
 
 
