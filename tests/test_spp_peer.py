@@ -744,6 +744,32 @@ def test_a_page_to_an_address_nobody_has_ends_at_the_page_timeout(air: Air) -> N
     assert air.now == ms(5_120)
 
 
+@pytest.mark.parametrize("start", [1_000, 3_000, 6_000, 10_000])
+def test_a_page_ends_exactly_at_the_page_timeout_whatever_instant_it_starts_at(
+    air: Air, start: int
+) -> None:
+    """6 s and 5.12 s are 11.120000000000001 s as floats, 1 s and 5.12 s are 6.12 s exactly: the
+    page fails at the page timeout either way, not a nanosecond after it."""
+    esp32 = Initiator(air)
+    air.advance(ms(start))
+    ended: list[int] = []
+
+    async def page() -> None:
+        try:
+            await link_to(esp32)
+        finally:
+            ended.append(air.loop.now)
+
+    task = air.start(page())
+    air.advance(ms(start + 5_120) - Duration(1))
+    assert ended == []
+    # Past the end: an advance that stops at it would settle it a second time, and hide a page
+    # ended at the next nanosecond.
+    air.advance(ms(start + 6_000))
+    assert ended == [(start + 5_120) * MS]
+    assert isinstance(task.exception(), core.ConnectionError)
+
+
 def test_a_page_started_while_the_peer_is_away_does_not_find_it_when_it_returns(air: Air) -> None:
     """The page is one delivery, refused: the model has no page train that goes on repeating."""
     peer = SppPeer(air, name="peer", pin="1234", source=Echo())
@@ -1533,6 +1559,34 @@ def test_a_remote_name_request_to_a_peer_that_left_ends_at_the_page_timeout(
         air.run(esp32.device.request_remote_name(PEER), within=seconds(60))
     assert raised.value.error_code == hci.HCI_ErrorCode.PAGE_TIMEOUT_ERROR
     assert air.now == ms(6_120)
+
+
+@pytest.mark.parametrize("start", [1_000, 6_000])
+def test_a_remote_name_request_ends_exactly_at_the_page_timeout_whatever_instant_it_starts_at(
+    air: Air, start: int
+) -> None:
+    """From 1 s the end is 6.12 s exactly as a float; from 6 s it is 11.120000000000001 s. No
+    peer on the air: a party's poll, scheduled at every instant, would run the loop once more
+    there and hide an end a nanosecond late."""
+    esp32 = Initiator(air)
+    air.advance(ms(start))
+    ended: list[int] = []
+
+    async def request() -> str:
+        try:
+            return await esp32.device.request_remote_name(PEER)
+        finally:
+            ended.append(air.loop.now)
+
+    task = air.start(request())
+    air.advance(ms(start + 5_120) - Duration(1))
+    assert ended == []
+    # Past the end, as an advance that stops at it settles it twice.
+    air.advance(ms(start + 6_000))
+    assert ended == [(start + 5_120) * MS]
+    error = task.exception()
+    assert isinstance(error, hci.HCI_Error)
+    assert error.error_code == hci.HCI_ErrorCode.PAGE_TIMEOUT_ERROR
 
 
 def test_a_second_remote_name_request_ends_when_the_first_does(air: Air) -> None:
@@ -2361,11 +2415,11 @@ def test_an_answer_owed_while_this_side_pages_again_does_not_touch_that_page(
     # The answer comes at 11.5 s, and finds only this side's own page.
     air.advance(ms(12_000))
     assert held_by(air, speaker) == [hci.Address(PHONE + "/P")]
-    air.advance(ms(12_119))
+    air.advance(ms(12_120) - Duration(1))
     assert not again.done()
-    air.advance(ms(12_121))
+    air.advance(ms(13_000))
     assert isinstance(again.exception(), core.ConnectionError)
-    assert [status for _, status in failed] == [PAGE_TIMEOUT]
+    assert failed == [(12_120 * MS, PAGE_TIMEOUT)]
     assert not speaker.device.connections
 
 
@@ -2725,11 +2779,10 @@ def test_a_page_under_way_is_not_started_again_after_a_rejection_took_the_entry(
     # Its timer ended it: the next page runs its whole length.
     phone.out_of_range()
     again = air.start(page(speaker, PHONE))
-    air.advance(ms(11_119))
+    air.advance(ms(11_120) - Duration(1))
     assert not again.done()
-    air.advance(ms(11_121))
-    assert again.done()
-    assert [status for _, status in failed] == [PAGE_TIMEOUT, PAGE_TIMEOUT]
+    air.advance(ms(12_000))
+    assert failed == [(5_120 * MS, PAGE_TIMEOUT), (11_120 * MS, PAGE_TIMEOUT)]
 
 
 @pytest.mark.parametrize("rejects", [False, True], ids=["accept", "reject"])

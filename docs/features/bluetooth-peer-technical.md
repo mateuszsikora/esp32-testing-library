@@ -12,15 +12,33 @@ link; `controller.py`, Bumble's virtual controller with what Classic devices nee
    `LocalLink` that refuses delivery (below).
    The loop's selector, `_Selector`, never blocks: when asyncio asks it to wait, with a timeout
    other than 0, nothing is left to do at this instant, so it stops the loop and keeps the
-   timeout, the distance to the loop's next timer (`None` for none). `BoardLoop.run_idle` runs the
-   loop until that happens and returns the next timer's time, rounded to the nearest nanosecond and
-   at least a nanosecond on. `_clock_resolution` is 1 ns, so a timer that rounds to the instant
-   fires there. Rounding up would stop a nanosecond late wherever the float lands above it: a timer
-   5.12 s after 49 ms, for one.
+   timeout, the distance to the loop's next timer (`None` for none). `BoardLoop.call_at`, which
+   `call_later` and asyncio's own timeouts go through, puts every timer on the nanosecond nearest
+   its `when`, as `round(when * 1e9) / 1e9`: the same float that `time()` gives at that
+   nanosecond. A sum of floats lands a hair off it: 6 s and 5.12 s are 11.120000000000001 s. Were
+   the timer kept there, asyncio would see a wait of about 2e-15 s at 11.12 s, and the selector
+   would stop the loop; asyncio would still fire the timer in that iteration, within
+   `_clock_resolution`, and what the timer schedules with `call_soon`, such as the
+   `Connection_Complete` that ends a page, would run a nanosecond later. So a timer due at the
+   instant gives a timeout of exactly 0 and one due later a timeout of about a nanosecond or more.
+   A `when` with no nanosecond, as `math.inf` from `asyncio.timeout(math.inf)` or one whose
+   nanoseconds overflow a float, stays as it is and never fires.
+   `_clock_resolution` is half a nanosecond: the loop fires what is due at the instant, never a
+   timer due at the next nanosecond, whose float may land a hair under `time()` plus 1 ns.
+   `BoardLoop.run_idle` runs the loop until the selector stops it and returns the next timer's
+   time, rounded to the nearest nanosecond and at least a nanosecond on. asyncio waits at most
+   `MAXIMUM_SELECT_TIMEOUT`, 24 hours, so for a timer further away, `math.inf` too, it returns
+   `now` plus 24 hours: the air stops there at an instant with nothing due, and `quiet_until()` is
+   not `None` while such a timer is set.
 2. **Settling an instant.** `Air._settle` schedules every party's `poll(now)` with `call_soon`,
-   then runs the loop idle. `Air.call(function)` runs `function` inside the loop the same way, or
-   at once when called from inside it; `Air.start(coroutine)` makes a task there. Bumble's `Controller` takes the running loop in its
-   constructor, so everything Bumble is made through `call`.
+   then runs the loop idle: what the parties, the timers due at `now` and what those schedule
+   with `call_soon` all run at `now`, and the loop stops only when what is left is a timer after
+   it. An advance that stops at an instant and then ends there settles it twice, so only an
+   advance past an instant shows whether everything due at it ran there; and a party's poll runs
+   the loop once more at every instant, so only an air without parties shows it.
+   `Air.call(function)` runs `function` inside the loop the same way, or at once when called from
+   inside it; `Air.start(coroutine)` makes a task there. Bumble's `Controller` takes the running
+   loop in its constructor, so everything Bumble is made through `call`.
 3. **Moving time.** `Air.advance(until)`, a `Duration` checked by `nanoseconds`, goes to
    `Air._advance(ns)`, which settles the current instant, then, while
    `quiet_until()`, the minimum of the loop's next timer and every party's `quiet_until`, is at or
@@ -379,10 +397,22 @@ in `error_code` on a failed `Connection_Complete`, and `HCI_Error` with
   inquiry; RSSI in the RSSI mode and none in the plain one; a device without SPP that has no SDP
   record and no RFCOMM; one without a PIN refusing a pairing, and one with a PIN keeping its key
   across a return; leaving; their refusals of their arguments.
-- `tests/test_air.py` also: a timer falling on its exact nanosecond.
+- `tests/test_air.py` also: a timer falling on its exact nanosecond; what it schedules running at
+  that nanosecond, whether its float lands on the instant or above it; a timer a nanosecond away
+  firing at the next nanosecond; a timeout of `math.inf` or 1e300 s, which never fires and stops
+  the air 24 hours on.
+  `tests/test_spp_peer.py`: a page started at 1 s, 3 s, 6 s or 10 s, and a remote name request
+  started at 1 s or 6 s, ending at exactly the page timeout, with no peer on the air, measured by
+  an advance past the end, which settles it only once.
 
 Not covered: firmware. esp32sim has no Classic controller for the guest, so no ESP32 image talks
-to a peer yet, and no firmware has seen a peer leave. Nor is a clock offset other than 0.
+to a peer yet, and no firmware has seen a peer leave. Nor is a clock offset other than 0. The
+air's time is exact to the nanosecond up to 2^22 s, about 48 days: from there `round(when * 1e9)`
+works on a count of nanoseconds near 2^52, where a float's own error and the product's add up to
+more than half a nanosecond, so a timer can fire a nanosecond early or late. From 2^23 s, about 97
+days, a float of seconds no longer tells one nanosecond from the next, timers a nanosecond apart
+fall together, and where `time()` plus `_clock_resolution` rounds back to `time()` the loop spins
+at one instant, with no error. No test goes that far.
 There is no `Connection_Accept_Timeout` (Vol 4, Part E, 6.7), and the page's timer runs until the
 target's host accepts rather than until its baseband answers: a host that accepts after the page
 ended, as after 6 s, makes a link on both ends when the pager has already reported `PAGE_TIMEOUT`,
@@ -405,7 +435,7 @@ a role switch refused during this device's own page leaves the entry the same wa
 is not told from the end of that page.
 Two pages at one instant, both accepted, give each side two handles for one link. A late answer on a
 working link, as with crossing pages, gives the host a failed `Connection_Complete` for that address
-(both #141). What a timer sets off can run a nanosecond after it (#142).
+(both #141).
 An answer to a synchronous link is not modelled: 7.1.9 lets `Reject_Connection_Request` decline one,
 and here, when no answer to a page is owed, it gets `UNKNOWN_CONNECTION_IDENTIFIER_ERROR`, leaving the
 entry in `sco_links` and the requester waiting; when one is owed, it is taken as that answer. Bumble's

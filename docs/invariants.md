@@ -479,9 +479,13 @@ that references to its number keep their meaning.
 ## Bluetooth peer
 
 - **68.** Time on the air moves only when the test moves it, and asyncio's timers fire at their time on
-    the board's clock, never the host's.
+    the board's clock, never the host's, on its exact nanosecond; what a timer sets off runs at the
+    timer's instant, wherever the float of its time lands.
     `tests/test_air.py::test_timers_fire_at_their_board_time_and_only_while_the_test_moves_it`,
-    `tests/test_air.py::test_a_party_is_polled_at_every_instant_the_air_stops_at`
+    `tests/test_air.py::test_a_party_is_polled_at_every_instant_the_air_stops_at`,
+    `tests/test_air.py::test_a_timer_set_at_any_instant_falls_on_its_exact_nanosecond`,
+    `tests/test_air.py::test_what_a_timer_sets_off_runs_at_the_timer_s_instant`,
+    `tests/test_air.py::test_a_timer_a_nanosecond_away_fires_at_the_next_nanosecond`
 - **69.** The SPP peer is found by its name and pairs only with its PIN: another PIN fails the
     authentication, detaches the link and leaves no key on either side; a device that paired
     authenticates later with its key and no PIN, and one whose key the peer lost is refused.
@@ -510,6 +514,7 @@ that references to its number keep their meaning.
     `PAGE_TIMEOUT` exactly at the page timeout, and an inquiry does not find it until it returns.
     `tests/test_spp_peer.py::test_a_link_to_a_peer_that_left_falls_at_the_supervision_timeout_without_a_detach`,
     `tests/test_spp_peer.py::test_a_page_to_a_peer_that_left_ends_at_the_page_timeout`,
+    `tests/test_spp_peer.py::test_a_page_ends_exactly_at_the_page_timeout_whatever_instant_it_starts_at`,
     `tests/test_spp_peer.py::test_an_inquiry_does_not_find_a_peer_that_left_until_it_returns`
 - **163.** A peer keeps its link keys across leaving and returning, however it left; only
     `forget_keys` loses them.
@@ -556,6 +561,7 @@ that references to its number keep their meaning.
 - **171.** A remote name request nobody answers ends in `PAGE_TIMEOUT` exactly at the page timeout; a
     second to the same peer while one is pending ends when the first does.
     `tests/test_spp_peer.py::test_a_remote_name_request_to_a_peer_that_left_ends_at_the_page_timeout`,
+    `tests/test_spp_peer.py::test_a_remote_name_request_ends_exactly_at_the_page_timeout_whatever_instant_it_starts_at`,
     `tests/test_spp_peer.py::test_a_second_remote_name_request_ends_when_the_first_does`,
     `tests/test_spp_peer.py::test_a_remote_name_request_is_answered_at_once_when_the_peer_is_there`
 - **172.** A target that heard a page loses contact when the pager leaves, also after that page

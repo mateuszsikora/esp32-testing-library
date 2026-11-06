@@ -1376,6 +1376,25 @@ hold it, and it would have to be built or downloaded. Which controller the ESP32
 is #34's to choose, once esp32sim has an HCI transport for Classic. Also rejected: a delay per
 packet on the link, because no test needs one and any value would be invented.
 
+## The air's timers are put on the nanosecond, not judged by the selector
+
+Status: decided (#142)
+
+`BoardLoop.call_at` rounds every timer's `when` to the nearest nanosecond, the float `time()` gives
+there, and `_clock_resolution` is half a nanosecond. A timer due at the instant then leaves asyncio
+no wait at all, and one at the next nanosecond is never fired early, so what a timer sets off runs
+at its instant wherever the sum of floats behind it lands.
+
+**Rejected:** a selector that takes a timeout under 1 ns as 0, the direction the issue's probe
+showed, because it leaves two judgements of one float: the selector's `when - time()` against
+asyncio's `when < time() + _clock_resolution`. Where they disagree, a timer the selector counts as
+due that asyncio does not fire spins the loop at one instant, and one asyncio fires that the selector
+counts as later makes its `call_soon` late again. Only the timer's time on the nanosecond grid
+gives both the same answer. The grid holds up to 2^22 s, about 48 days of the air's time, where
+`round(when * 1e9)` stops finding a timer's nanosecond; from 2^23 s a float of seconds no longer
+tells nanoseconds apart and the loop can spin. No test goes that far, so nothing refuses a time
+past it.
+
 ## esp32tl adds inquiry, legacy pairing, key checks and encryption to Bumble's virtual controller
 
 Status: decided (#33)

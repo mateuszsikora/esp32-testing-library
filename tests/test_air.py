@@ -4,6 +4,7 @@ party is polled at every instant and stops the air at its own, and what fails on
 to the test."""
 
 import asyncio
+import math
 import time
 from collections.abc import Iterator
 
@@ -11,7 +12,7 @@ import pytest
 
 from esp32tl.bluetooth.air import Air, AirError
 from esp32tl.interfaces import NeverHappened
-from esp32tl.units import hours, ms, seconds
+from esp32tl.units import Duration, hours, ms, seconds
 
 MS = 1_000_000
 
@@ -32,6 +33,52 @@ def test_a_timer_set_at_any_instant_falls_on_its_exact_nanosecond(air: Air) -> N
     assert air.quiet_until() == 5_169 * MS
     air.advance(seconds(6))
     assert fired == [5_169 * MS]
+
+
+@pytest.mark.parametrize("start", [1_000, 6_000])
+def test_what_a_timer_sets_off_runs_at_the_timer_s_instant(air: Air, start: int) -> None:
+    """At 6 s, 5.12 s later is 11.120000000000001 s, a hair above the instant the air stops at;
+    at 1 s it is 6.12 s exactly. Either way, what the timer schedules runs where it fires."""
+    air.advance(ms(start))
+    log: list[int] = []
+
+    def timer() -> None:
+        log.append(air.loop.now)
+        air.loop.call_soon(lambda: log.append(air.loop.now))
+
+    air.call(lambda: air.loop.call_later(5.12, timer))
+    air.advance(ms(start + 6_000))
+    assert log == [(start + 5_120) * MS] * 2
+
+
+def test_a_timer_a_nanosecond_away_fires_at_the_next_nanosecond(air: Air) -> None:
+    """At 269 272 418 ns, `time()` and 1 ns come to a hair above the timer's float: a loop that
+    fired what is due within 1 ns would fire it at once."""
+    air.advance(Duration(269_272_418))
+    fired: list[int] = []
+    air.call(lambda: air.loop.call_later(1e-9, lambda: fired.append(air.loop.now)))
+    assert fired == []
+    air.advance(ms(300))
+    assert fired == [269_272_419]
+
+
+@pytest.mark.parametrize("limit", [math.inf, 1e300], ids=["infinite", "huge"])
+def test_a_timer_with_no_nanosecond_never_fires(air: Air, limit: float) -> None:
+    """A timeout of `math.inf`, or one whose nanoseconds overflow a float, is asyncio's own: the
+    awaitable completes, and the timer never fires. Like any timer more than 24 hours away, it
+    stops the air at an empty instant 24 hours on, asyncio's longest wait."""
+
+    async def bounded() -> str:
+        return await asyncio.wait_for(asyncio.sleep(1, "slept"), timeout=limit)
+
+    assert air.run(bounded(), within=seconds(2)) == "slept"
+    assert air.now == seconds(1)
+    fired: list[int] = []
+    air.call(lambda: air.loop.call_at(limit, lambda: fired.append(air.loop.now)))
+    air.advance(seconds(3))
+    assert air.quiet_until() == (seconds(3) + hours(24)).ns
+    air.advance(hours(49))
+    assert fired == []
 
 
 def test_timers_fire_at_their_board_time_and_only_while_the_test_moves_it(air: Air) -> None:
