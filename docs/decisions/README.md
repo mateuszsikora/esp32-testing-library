@@ -293,3 +293,4 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The flash reaches the harness through a file, not the socket](runner.md#the-flash-reaches-the-harness-through-a-file-not-the-socket) | `runner.md` | decided (#131) |
 | [flash_dump keeps protocol version 1](runner.md#flash_dump-keeps-protocol-version-1) | `runner.md` | decided (#131) |
 | [board.flash() exchanges on the link's thread, in the turn](runner.md#boardflash-exchanges-on-the-links-thread-in-the-turn) | `runner.md` | decided (#131) |
+| [The station's frames keep the 4 bytes esp32sim leaves, and nothing goes upstream yet](runner.md#the-stations-frames-keep-the-4-bytes-esp32sim-leaves-and-nothing-goes-upstream-yet) | `runner.md` | postponed (#143) |

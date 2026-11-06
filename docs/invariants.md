@@ -623,7 +623,7 @@ that references to its number keep their meaning.
     `tests/test_spp_peer.py::test_an_acceptance_whose_role_switch_is_refused_leaves_no_entry`,
     `tests/test_spp_peer.py::test_a_refused_role_switch_leaves_no_entry_with_an_answer_never_given`,
     `tests/test_spp_peer.py::test_a_refused_role_switch_leaves_no_entry_while_this_side_pages_too`
-- **195.** A device whose page scan is off does not hear a page: the page ends in `PAGE_TIMEOUT`
+- **200.** A device whose page scan is off does not hear a page: the page ends in `PAGE_TIMEOUT`
     exactly at the page timeout, and the target holds no entry for it. Page scan is read when the
     page starts, so one turned on during it answers only the next page. Inquiry scan and page scan
     are separate: a device with only inquiry scan on is found and not paged, one with only page scan
@@ -909,7 +909,7 @@ that references to its number keep their meaning.
     `tests/test_clock.py::test_a_wait_that_ends_at_a_datagrams_time_finds_it_taken`,
     `tests/test_clock.py::test_a_wait_until_returns_at_the_datagrams_time`,
     `tests/test_mqtt_session.py::test_a_record_is_there_when_the_board_says_its_time`
-- **195.** The broker's deadlines run before the test holds the turn at their time: at the instant a delayed PUBACK is due it is emitted, at
+- **199.** The broker's deadlines run before the test holds the turn at their time: at the instant a delayed PUBACK is due it is emitted, at
     the instant a keepalive expires the connection is closed and its Will published, and what the test does at that instant comes after them.
     Expiry still wins a tie with a PUBACK deadline.
     `tests/test_clock.py::test_a_wait_that_ends_at_a_puback_deadline_finds_it_emitted`,
@@ -917,9 +917,14 @@ that references to its number keep their meaning.
     `tests/test_clock.py::test_a_wait_that_ends_at_keepalive_expiry_finds_the_connection_closed_and_the_will`,
     `tests/test_clock.py::test_a_wait_until_returns_at_keepalive_expiry`,
     `tests/test_clock.py::test_keepalive_expiry_wins_a_tie_with_a_puback_deadline_in_a_held_turn`
-- **187.** A rate counts the IPv4 datagram alone, not what follows it in its Ethernet frame.
+- **187.** A rate counts the IPv4 datagram alone, not what follows it in its Ethernet frame, and a
+    frame without anything after its datagram gives the same datagram.
     `tests/test_net_path.py::test_what_follows_a_datagram_in_its_frame_takes_no_time_at_the_rate`,
     `tests/test_net_ethernet.py::test_what_follows_an_ipv4_datagram_in_its_frame_is_not_part_of_it`
+- **198.** The frame of a 1500-byte datagram from the station, with the 4 bytes of libpp's guard
+    word after it, is an `eth_tx` of 1518 bytes: the codec takes it, refuses one of 1519, and
+    `Ethernet.receive` gives the datagram alone.
+    `tests/test_net_ethernet.py::test_a_full_size_datagram_and_the_guard_word_are_an_eth_tx_of_1518_bytes`
 - **188.** A resumed session stays connected while its queue waits for packet IDs: each PUBACK sends the next message, and a QoS 1 message published
     meanwhile goes behind the queue.
     `tests/test_net_mqtt_sessions.py::test_a_resumed_queue_waits_for_packet_ids_and_each_puback_frees_one`

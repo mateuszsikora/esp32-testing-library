@@ -551,10 +551,38 @@ DNS, NTP, NAT to the host) answers nothing. The example is an ARP request from t
 `02:53:49:4d:00:02`, a millisecond later.
 
 `data` is one Ethernet II frame without its FCS: destination, source, EtherType and payload, 14 to
-1518 bytes. ESP-IDF's frames from the station, as `http_request` on v5.3.6 sends them, carry 4 bytes
-more after an IPv4 datagram, always `ef be ad de`. They are no CRC-32 of the frame. `Ethernet.receive`
-leaves them out. TODO(owner): where they come from; esp32sim's `esp-soc/src/wifi.rs` does not hold
-that value. An `eth_rx` outside that range is a protocol error, as is `eth_rx` on a run without
+1518 bytes. An `eth_rx` is that. An `eth_tx` from ESP-IDF's station is that and 4 bytes more,
+`ef be ad de`, within the same limit: the frame of a 1500-byte datagram is an `eth_tx` of 1518
+bytes. The 4 bytes are libpp's guard word, which is not part of the frame:
+
+- libpp allocates the frames the station sends with `esf_buf_alloc_dynamic` (`esf_buf.o` in
+  `libpp.a`), as the layout of every transmit buffer measured shows: the descriptor 48 bytes into
+  the buffer's header, the data 92. It stores `0xDEADBEEF`, `ef be ad de` in memory, right after
+  the buffer's data. A data frame fills its buffer to the end, so the guard word follows the
+  frame's last byte.
+- libpp counts more than the frame in the length of its transmit descriptor: 4 bytes more for
+  every frame measured, data, null data and authentication, taken to be its FCS, and for a
+  CCMP-protected frame the 8 of its MIC as well, which `ppProcTxSecFrame` adds. A 24-byte null data
+  frame has a length of 28, and a protected data frame a length 12 bytes over its frame.
+  TODO(owner): where libpp adds the 4. On a real board the MAC presumably writes the MIC and the
+  FCS there, so that the guard word never goes on the air. TODO(owner): no capture of a real
+  board's frames was compared.
+- esp32sim reads the descriptor's length in bytes (`esp32/src/wifi.rs:181`), and
+  `VirtualAp::on_station_tx` takes the last 8 off a protected frame, as its MIC, and nothing off an
+  open one (`esp-soc/src/wifi.rs:329-337`). Either way 4 bytes past the frame remain: on an open
+  network where its FCS would be, on WPA2 where the first 4 bytes of the MIC would be. Both hold
+  the guard word.
+
+`http_request`, built with ESP-IDF v5.3.6 and run at esp32sim's pin, showed this over WPA2, and a
+build of it with an empty password on an open network: every data frame the station sent, IPv4,
+ARP and IPv6 alike, ended in the guard word, and an ICMP echo reply of 1500 bytes came through as
+an `eth_tx` of 1518. Other ESP-IDF versions were not checked. To check it again, at another pin or
+ESP-IDF version: with `ESP_EMU_DEBUG=wifi-frames` the runner logs each frame the station sends as
+`[wifi] TX queue {queue} desc {address} {length} bytes {kind} …`, the descriptor's length, so a
+null data frame shows `28 bytes null (2/4)`; the 4 bytes themselves are the end of each `eth_tx`.
+
+`Ethernet.receive` leaves the 4 bytes out: ARP reads 28 bytes, and an IPv4 datagram ends at its
+total length. An `eth_rx` outside the range is a protocol error, as is `eth_rx` on a run without
 `--wifi`; the harness's codec refuses an `eth_tx` outside the range too.
 
 `eth_tx`: a frame the station sent. It is an event: it carries `seq`, sets the block point, and an

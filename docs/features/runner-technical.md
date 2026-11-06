@@ -580,11 +580,16 @@ The socket's limits are constants, not options:
 
 **Wi-Fi** is configured on the command line only: `--wifi` and `--wifi-nearby`
 ([runner-user.md](runner-user.md#put-a-wi-fi-access-point-on-the-air)). The frame limits are
-`protocol::ETH_MIN` (14) and `protocol::ETH_MAX` (1518), an Ethernet frame without FCS as
-esp32sim's relay takes it; the 64-frame queues and the 400 µs between received frames are
-esp32sim's (`esp-soc/src/wifi.rs:520-523`). esp32sim's `wifi-frames` debug area
+`protocol::ETH_MIN` (14) and `protocol::ETH_MAX` (1518), an Ethernet frame without FCS as esp32sim's
+relay takes it. The relay's own limit, `RELAY_FRAME_MAX` (`esp-soc/src/wifi.rs:520`), counts the 4
+bytes of libpp's guard word that end every frame from the station, so a 1500-byte datagram's frame,
+1518 bytes with them, is the longest it passes ([protocol
+5.15](../protocol.md#515-eth_tx-and-eth_rx-ext-m7)). The 64-frame queues and the 400 µs between
+received frames are esp32sim's (`esp-soc/src/wifi.rs:520-523`). esp32sim's `wifi-frames` debug area
 (`ESP_EMU_DEBUG=wifi-frames`, or `ESP_EMU_DEBUG_WIFI_FRAMES`) logs the access point's frames on
-stderr, `[wifi] AP -> …`: `attach_new` takes the machine's debug flags.
+stderr, `[wifi] AP -> …`: `attach_new` takes the machine's debug flags. It also logs each frame
+the station sends, `[wifi] TX queue {queue} desc {address} {length} bytes …`, with its transmit
+descriptor's length (`esp32/src/wifi.rs:171-192`).
 
 **The SD card's image** comes from `esp-periph`, the esp32sim crate of the peripheral models,
 pinned like the others: its `SdStore` trait and `FileStore`, the store of esp32sim's own

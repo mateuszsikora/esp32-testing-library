@@ -1,10 +1,13 @@
 """Handmade Ethernet frames behind the access point: ARP, DHCP and IPv4 to the network's
-services, with independent checksums."""
+services, with independent checksums. The station's frames end in the 4 bytes its frames carry in
+esp32sim, libpp's guard word (protocol 5.15)."""
 
+import base64
 import struct
 
 import pytest
 
+from esp32tl.link.protocol import ETH_MAX, EthTx, ProtocolError, decode, encode
 from esp32tl.net import LATENCY_NS, Internet
 from esp32tl.net.dhcp import Dhcp
 from esp32tl.net.ethernet import GATEWAY_MAC, Ethernet
@@ -12,6 +15,8 @@ from esp32tl.net.ethernet import GATEWAY_MAC, Ethernet
 STATION = bytes.fromhex("246f28001122")
 BROADCAST = b"\xff" * 6
 DEVICE, GATEWAY = bytes([10, 64, 0, 2]), bytes([10, 64, 0, 1])
+# What follows the frame in what esp32sim reads from the station's descriptor (protocol 5.15).
+GUARD = b"\xef\xbe\xad\xde"
 
 
 def check(data: bytes) -> int:
@@ -36,7 +41,8 @@ def udp(source: bytes, destination: bytes, ports: tuple[int, int], data: bytes) 
 
 
 def frame(destination: bytes, kind: int, payload: bytes, source: bytes = STATION) -> bytes:
-    return destination + source + struct.pack(">H", kind) + payload
+    """A frame from the station, as the relay hands it over: with the guard word after it."""
+    return destination + source + struct.pack(">H", kind) + payload + GUARD
 
 
 def dhcp(kind: int, *, flags: int = 0, options: bytes = b"", ciaddr: bytes = bytes(4)) -> bytes:
@@ -235,7 +241,7 @@ def test_dhcp_checks_the_datagram_as_the_ip_layer_does(link: Link) -> None:
     corrupt[14 + 20 + 8 + 4] ^= 1  # the xid, under the UDP checksum
     ethernet.receive(bytes(corrupt))
     # not DHCP: it goes on to the IP layer, which drops it for its checksum
-    assert sent == [] and ethernet.dhcp.leases == [] and ip == [bytes(corrupt[14:])]
+    assert sent == [] and ethernet.dhcp.leases == [] and ip == [bytes(corrupt[14:-4])]
     # a zero checksum is no checksum in IPv4 (RFC 768)
     unchecked = bytearray(dhcp(3))
     unchecked[14 + 20 + 6 : 14 + 20 + 8] = b"\0\0"
@@ -247,7 +253,7 @@ def test_dhcp_checks_the_datagram_as_the_ip_layer_does(link: Link) -> None:
     fragment[14 + 10 : 14 + 12] = b"\0\0"
     fragment[14 + 10 : 14 + 12] = check(bytes(fragment[14 : 14 + 20])).to_bytes(2, "big")
     ethernet.receive(bytes(fragment))
-    assert len(sent) == 1 and ip[-1] == bytes(fragment[14:])
+    assert len(sent) == 1 and ip[-1] == bytes(fragment[14:-4])
 
 
 def test_what_follows_an_ipv4_datagram_in_its_frame_is_not_part_of_it() -> None:
@@ -256,11 +262,31 @@ def test_what_follows_an_ipv4_datagram_in_its_frame_is_not_part_of_it() -> None:
     source = bytes.fromhex("246f28001122")
     head = GATEWAY_MAC + source + b"\x08\x00"
     datagram = bytes([0x45, 0]) + (24).to_bytes(2, "big") + bytes(20)
-    ethernet.receive(head + datagram + b"\xef\xbe\xad\xde")
+    ethernet.receive(head + datagram + GUARD)
     assert seen == [datagram]
+    # a frame without the guard word, as esp32sim would give one if it cut the FCS, is the same
+    ethernet.receive(head + datagram)
+    assert seen == [datagram, datagram]
+    seen.clear()
     # A total length that cannot be stays as it is: the IP layer drops such a datagram.
     too_long = bytes([0x45, 0]) + (99).to_bytes(2, "big") + bytes(20)
     too_short = bytes([0x45, 0]) + (19).to_bytes(2, "big") + bytes(20)
     ethernet.receive(head + too_long)
     ethernet.receive(head + too_short)
-    assert seen[1:] == [too_long, too_short]
+    assert seen == [too_long, too_short]
+
+
+def test_a_full_size_datagram_and_the_guard_word_are_an_eth_tx_of_1518_bytes() -> None:
+    # Measured on http_request: an echo reply of 1500 bytes came through as a frame of 1518.
+    seen: list[bytes] = []
+    ethernet = Ethernet(lambda data: None, seen.append, Dhcp(lambda: 0))
+    datagram = udp(DEVICE, GATEWAY, (5000, 9), bytes(1472))
+    sent = frame(GATEWAY_MAC, 0x0800, datagram)
+    assert (len(datagram), len(sent)) == (1500, ETH_MAX)
+    event = decode(encode(EthTx(1, 0, sent)), "runner")
+    assert isinstance(event, EthTx)
+    ethernet.receive(event.data)
+    assert seen == [datagram]
+    longer = b'{"type":"eth_tx","seq":1,"t":0,"data":"' + base64.b64encode(sent + b"\0") + b'"}'
+    with pytest.raises(ProtocolError, match="1519 bytes"):
+        decode(longer, "runner")

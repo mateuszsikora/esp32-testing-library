@@ -19,7 +19,9 @@ VERSION = 1
 # The longest line either side accepts, its newline not counted (§2).
 MAX_LINE = 1 << 20
 
-# An Ethernet frame without FCS, as esp32sim's relay takes and gives it (5.15).
+# An Ethernet frame without FCS, as esp32sim's relay takes and gives it (5.15). The station's
+# frames end in 4 bytes more, libpp's guard word, within the same limit: a 1500-byte datagram's
+# frame is 1518 bytes with them.
 ETH_MIN = 14
 ETH_MAX = 1518
 

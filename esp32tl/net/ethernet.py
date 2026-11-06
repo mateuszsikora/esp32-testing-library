@@ -29,8 +29,11 @@ def mac(raw: bytes) -> str:
 
 
 def _whole(payload: bytes) -> bytes:
-    """The IPv4 datagram of a frame, without what follows it: the station's frames carry 4 bytes
-    more. One whose total length is not possible stays as it is, for the IP layer to drop."""
+    """The IPv4 datagram of a frame, without what follows it. In esp32sim the station's frames
+    carry 4 bytes more, libpp's guard word `ef be ad de`: libpp counts 4 bytes more than the frame,
+    taken to be its FCS, and a CCMP MIC in its transmit descriptor's length, and esp32sim cuts the
+    MIC only (protocol 5.15). One whose total length is not possible stays as it is, for the IP
+    layer to drop."""
     total = int.from_bytes(payload[2:4], "big")
     return payload[:total] if 20 <= total <= len(payload) else payload
 
@@ -60,7 +63,9 @@ class Ethernet:
         self.ignored: dict[int, int] = {}
 
     def receive(self, frame: bytes) -> None:
-        """One Ethernet frame the station sent, without FCS."""
+        """One Ethernet frame the station sent, without FCS, and what follows it: in esp32sim, 4
+        bytes of libpp's guard word (protocol 5.15). ARP reads its first 28 bytes and IPv4 its
+        total length, so neither sees them."""
         if len(frame) < HEADER:
             return
         destination, source, kind = frame[:6], frame[6:12], struct.unpack(">H", frame[12:14])[0]
