@@ -2245,10 +2245,11 @@ def write_page_timeout(air: Air, device: BluetoothDevice, slots: int) -> None:
 
 
 def held_by(air: Air, device: BluetoothDevice) -> list[hci.Address]:
-    """The peers the controller of `device` holds an entry for."""
+    """The peers the controller of `device` holds an entry for: a page of its own, a link or a
+    page it heard."""
     controller = air.link.find_classic_controller(device.device.public_address)
-    assert controller is not None
-    return list(controller.classic_connections)
+    assert isinstance(controller, Controller)
+    return controller.held()
 
 
 def test_a_pager_gets_the_reason_at_the_instant_of_the_rejection(
@@ -2614,6 +2615,105 @@ def test_a_refused_role_switch_leaves_no_entry_while_this_side_pages_too(
     air.run(page(speaker, PHONE), within=seconds(1))
 
 
+def create_connection(address: str) -> hci.HCI_Create_Connection_Command:
+    """The page `Device.connect` starts, for a host that sends it itself."""
+    return hci.HCI_Create_Connection_Command(
+        bd_addr=hci.Address(address + "/P"),
+        packet_type=0xCC18,
+        page_scan_repetition_mode=hci.HCI_R2_PAGE_SCAN_REPETITION_MODE,
+        clock_offset=0,
+        allow_role_switch=1,
+        reserved=0,
+    )
+
+
+def test_a_device_that_rejects_a_crossing_page_takes_the_role_switch_on_its_own(
+    air: Air, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The speaker's host sends its page itself: when `Device.connect` fails, Bumble's host
+    forgets the page it accepted from that address too, and the role change finds no connection."""
+    phone, speaker = phone_and_speaker(air)
+    rejecting(phone)
+    accepting_as_central_after(speaker, monkeypatch, 1)
+    failed = failures_of(air, speaker)
+
+    async def crossing() -> Connection:
+        paged, _ = await asyncio.gather(
+            page(phone, SPEAKER),
+            speaker.device.host.send_async_command(create_connection(PHONE)),
+        )
+        assert isinstance(paged, Connection)
+        return paged
+
+    task = air.start(crossing())
+    air.advance(ms(500))
+    # The rejection took the speaker's page, and left the phone's own for the role switch.
+    assert failed == [(0, LIMITED)]
+    assert held_by(air, phone) == [hci.Address(SPEAKER + "/P")]
+    air.advance(seconds(2))
+    assert task.result().role == hci.Role.PERIPHERAL
+    assert list(phone.device.connections) == list(speaker.device.connections) == [1]
+    assert speaker.device.connections[1].role == hci.Role.CENTRAL
+
+
+def test_a_link_made_after_a_rejection_of_a_crossing_page_switches_roles_as_asked(
+    air: Air, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`Device.connect` asks `Create_Connection` to allow a role switch."""
+    phone, speaker = phone_and_speaker(air)
+    rejecting(phone)
+    slow_to_accept(speaker, monkeypatch, 1)
+    task = air.start(paging_each_other(phone, speaker))
+    air.advance(seconds(2))
+    outgoing, _ = task.result()
+    assert isinstance(outgoing, Connection)
+    link = speaker.device.connections[1]
+    assert (outgoing.role, link.role) == (hci.Role.CENTRAL, hci.Role.PERIPHERAL)
+    air.run(link.switch_role(hci.Role.CENTRAL), within=seconds(1))
+    assert (outgoing.role, link.role) == (hci.Role.PERIPHERAL, hci.Role.CENTRAL)
+
+
+def test_a_refused_role_switch_during_this_sides_page_with_an_answer_never_given_leaves_nothing(
+    air: Air, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    phone, speaker = phone_and_speaker(air)
+    write_page_timeout(air, phone, 1600)
+    # The phone's first page gets no answer; its second, the central's after 0.5 s.
+    accepting_as_central_after(speaker, monkeypatch, 0, 0.5)
+    outgoing, first = crossing_pages(air, phone, speaker)
+    air.advance(ms(2_100))
+    assert isinstance(first.exception(), core.ConnectionError)
+    second = air.start(page(phone, SPEAKER))
+    air.advance(ms(2_200))
+    refusing_role_switch(air, phone, speaker)
+    air.advance(seconds(3))
+    assert isinstance(second.exception(), core.ConnectionError)
+    # The speaker's own page ended with the refusal, as its host heard it.
+    assert isinstance(outgoing.exception(), core.ConnectionError)
+    assert held_by(air, speaker) == []
+    monkeypatch.undo()
+    air.run(page(speaker, PHONE), within=seconds(1))
+    assert list(phone.device.connections) == list(speaker.device.connections) == [1]
+
+
+def test_a_page_heard_during_this_sides_own_goes_when_that_page_makes_the_link(
+    air: Air, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    phone, speaker = phone_and_speaker(air)
+    slow_to_accept(speaker, monkeypatch, 1)
+    task = air.start(paging_each_other(phone, speaker))
+    air.advance(seconds(2))
+    assert task.done()
+    # The phone accepted at once, which made the speaker's own page the link; the speaker's answer
+    # at 1 s is late.
+    assert list(phone.device.connections) == list(speaker.device.connections) == [1]
+    air.run(speaker.device.connections[1].disconnect(), within=seconds(1))
+    assert held_by(air, speaker) == held_by(air, phone) == []
+    monkeypatch.undo()
+    air.run(page(speaker, PHONE), within=seconds(1))
+    assert list(phone.device.connections) == list(speaker.device.connections) == [1]
+
+
 def test_a_pager_that_leaves_after_its_page_ended_is_lost_to_the_target(
     air: Air, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2643,7 +2743,8 @@ def test_a_pager_that_rejected_a_page_and_leaves_during_its_own_is_lost_to_the_t
     fell = falls_of(air, speaker)
     task = air.start(paging_each_other(phone, speaker))
     air.advance(ms(500))
-    assert held_by(air, phone) == []
+    # The rejection took the speaker's page; the phone's own is still under way.
+    assert held_by(air, phone) == [hci.Address(SPEAKER + "/P")]
     phone.out_of_range()
     air.advance(seconds(22))
     assert task.done()
@@ -2761,14 +2862,15 @@ def test_an_acceptance_on_a_working_link_is_the_hosts_own_error(air: Air) -> Non
     assert list(speaker.device.connections) == [1]
 
 
-def test_a_page_under_way_is_not_started_again_after_a_rejection_took_the_entry(air: Air) -> None:
+def test_a_page_under_way_keeps_its_entry_after_a_rejection_of_a_crossing_page(air: Air) -> None:
     phone, speaker = phone_and_speaker(air)
     rejecting(speaker)
     failed = failures_of(air, speaker)
     outgoing, incoming = crossing_pages(air, phone, speaker)
     air.advance(ms(1_001))
     assert isinstance(incoming.exception(), core.ConnectionError)
-    assert held_by(air, speaker) == []
+    # The rejection took the phone's page, and left the speaker's own.
+    assert held_by(air, speaker) == [hci.Address(PHONE + "/P")]
 
     with pytest.raises(hci.HCI_Error) as raised:
         air.run(page(speaker, PHONE), within=seconds(0))
