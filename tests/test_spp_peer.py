@@ -35,7 +35,7 @@ MS = 1_000_000
 DEVICE = "24:0A:C4:00:00:01"
 
 
-class Elm:
+class Echo:
     """A model as a test writes one: it answers every line the device sends with the line,
     `delay` later, and a prompt; it sends `greeting` at `at`, unprompted."""
 
@@ -48,7 +48,7 @@ class Elm:
 
     def receive(self, t: int, data: bytes) -> Iterable[tuple[int, bytes]]:
         self.heard.append((t, data))
-        return [(t + self.delay, data.rstrip(b"\r") + b"\r\r>")]
+        return [(t + self.delay, data.rstrip(b"\r") + b"\r\n> ")]
 
     def poll(self, now: int) -> Iterable[tuple[int, bytes]]:
         if self._greeted or now < self.at:
@@ -160,7 +160,7 @@ class Initiator:
         dlc.sink = lambda data: self.received.append((self.air.loop.now, data))
         return dlc
 
-    async def session(self, name: str = "OBDII") -> rfcomm.DLC:
+    async def session(self, name: str = "peer") -> rfcomm.DLC:
         return await self.open(await self.connect(await self.discover(name)))
 
 
@@ -185,33 +185,33 @@ def keys_of(device: Device) -> dict[str, bytes]:
 def test_the_device_finds_the_peer_by_its_name_and_its_answer_comes_on_the_boards_clock(
     air: Air,
 ) -> None:
-    elm = Elm(delay=50 * MS)
-    peer = SppPeer(air, name="OBDII", pin="1234", source=elm)
+    echo = Echo(delay=50 * MS)
+    peer = SppPeer(air, name="peer", pin="1234", source=echo)
     esp32 = Initiator(air, pin="1234")
 
     async def scenario() -> None:
         dlc = await esp32.session()
         await asyncio.sleep(1)
-        dlc.write(b"ATZ\r")
+        dlc.write(b"hello\r")
         await asyncio.sleep(1)
 
     air.run(scenario(), within=seconds(10))
 
-    assert esp32.found == [(0, "00:00:00:00:5B:01/P", CLASS_OF_DEVICE, "OBDII")]
+    assert esp32.found == [(0, "00:00:00:00:5B:01/P", CLASS_OF_DEVICE, "peer")]
     assert esp32.delegate.asked == 1
     assert peer.channel_open
     # What the device wrote reached the model at the instant it was written, and the answer
     # came back at the time the model gave it.
-    assert elm.heard == [(1000 * MS, b"ATZ\r")]
-    assert esp32.received == [(1050 * MS, b"ATZ\r\r>")]
-    assert peer.events == [(1000 * MS, "out", b"ATZ\r"), (1050 * MS, "in", b"ATZ\r\r>")]
+    assert echo.heard == [(1000 * MS, b"hello\r")]
+    assert esp32.received == [(1050 * MS, b"hello\r\n> ")]
+    assert peer.events == [(1000 * MS, "out", b"hello\r"), (1050 * MS, "in", b"hello\r\n> ")]
     # Both sides keep the same key, under each other's address.
     assert keys_of(esp32.device) == {"00:00:00:00:5B:01/P": keys_of(peer.device)[DEVICE + "/P"]}
 
 
 def test_a_wrong_pin_fails_the_authentication_and_detaches_the_link(air: Air) -> None:
-    elm = Elm()
-    peer = SppPeer(air, name="OBDII", pin="1234", source=elm)
+    echo = Echo()
+    peer = SppPeer(air, name="peer", pin="1234", source=echo)
     esp32 = Initiator(air, pin="0000")
 
     with pytest.raises(hci.HCI_Error) as raised:
@@ -221,15 +221,15 @@ def test_a_wrong_pin_fails_the_authentication_and_detaches_the_link(air: Air) ->
     assert not peer.device.connections
     assert keys_of(esp32.device) == {}
     assert keys_of(peer.device) == {}
-    assert elm.heard == []
+    assert echo.heard == []
 
 
 def test_a_device_that_paired_authenticates_with_its_key_without_a_pin(air: Air) -> None:
-    peer = SppPeer(air, name="OBDII", pin="1234", source=Elm())
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo())
     esp32 = Initiator(air)
 
     async def twice() -> None:
-        connection = await esp32.connect(await esp32.discover("OBDII"))
+        connection = await esp32.connect(await esp32.discover("peer"))
         await connection.disconnect()
         connection = await esp32.connect(peer.device.public_address)
         await esp32.open(connection)
@@ -240,11 +240,11 @@ def test_a_device_that_paired_authenticates_with_its_key_without_a_pin(air: Air)
 
 
 def test_a_peer_that_lost_the_key_refuses_the_device_that_kept_it(air: Air) -> None:
-    peer = SppPeer(air, name="OBDII", pin="1234", source=Elm())
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo())
     esp32 = Initiator(air)
 
     async def pair_and_disconnect() -> None:
-        connection = await esp32.connect(await esp32.discover("OBDII"))
+        connection = await esp32.connect(await esp32.discover("peer"))
         await connection.disconnect()
 
     air.run(pair_and_disconnect(), within=seconds(10))
@@ -255,8 +255,8 @@ def test_a_peer_that_lost_the_key_refuses_the_device_that_kept_it(air: Air) -> N
 
 
 def test_an_inquiry_that_is_not_cancelled_completes_after_its_length(air: Air) -> None:
-    SppPeer(air, name="OBDII", pin="1234", source=Elm())
-    SppPeer(air, name="OBDII-2", pin="1234", source=Elm(), address="00:00:00:00:5B:00")
+    SppPeer(air, name="peer", pin="1234", source=Echo())
+    SppPeer(air, name="peer-2", pin="1234", source=Echo(), address="00:00:00:00:5B:00")
     esp32 = Initiator(air)
 
     async def inquiry() -> None:
@@ -266,14 +266,14 @@ def test_an_inquiry_that_is_not_cancelled_completes_after_its_length(air: Air) -
     air.run(inquiry(), within=seconds(30))
     # Every device that scans answers at once, in the order of their addresses; the stand-in
     # does not find itself.
-    assert [(t, name) for t, _, _, name in esp32.found] == [(0, "OBDII-2"), (0, "OBDII")]
+    assert [(t, name) for t, _, _, name in esp32.found] == [(0, "peer-2"), (0, "peer")]
     # Bumble asks for 8 units of 1.28 s.
     assert esp32.inquiry_complete == [round(8 * INQUIRY_UNIT_S * 1e9)]
 
 
 def test_what_the_source_sends_unprompted_goes_out_at_its_time_or_is_lost(air: Air) -> None:
-    early = Elm(greeting=b"ELM327 v1.5\r", at=100 * MS)
-    late = Elm(greeting=b"ELM327 v1.5\r", at=3000 * MS)
+    early = Echo(greeting=b"ready\r", at=100 * MS)
+    late = Echo(greeting=b"ready\r", at=3000 * MS)
     lost = SppPeer(air, name="early", pin="1234", source=early, address="00:00:00:00:5B:02")
     kept = SppPeer(air, name="late", pin="1234", source=late, address="00:00:00:00:5B:03")
     esp32 = Initiator(air)
@@ -286,14 +286,14 @@ def test_what_the_source_sends_unprompted_goes_out_at_its_time_or_is_lost(air: A
 
     air.run(connect_to_both(), within=seconds(10))
     # The first greeting went out before any device held its channel.
-    assert lost.lost == len(b"ELM327 v1.5\r")
+    assert lost.lost == len(b"ready\r")
     assert lost.events == []
     assert kept.lost == 0
-    assert kept.events == [(3000 * MS, "in", b"ELM327 v1.5\r")]
-    assert esp32.received == [(3000 * MS, b"ELM327 v1.5\r")]
+    assert kept.events == [(3000 * MS, "in", b"ready\r")]
+    assert esp32.received == [(3000 * MS, b"ready\r")]
 
 
-class Faulty(Elm):
+class Faulty(Echo):
     """A source that gets one thing wrong, `how`."""
 
     def __init__(self, how: str) -> None:
@@ -308,7 +308,7 @@ class Faulty(Elm):
         if self.how == "pair":
             return [(t, "text")]  # type: ignore[list-item]
         if self.how == "empty":
-            return [(t, b""), (t, b"OK\r")]
+            return [(t, b""), (t, b"done\r")]
         return super().receive(t, data)
 
     def quiet_until(self) -> int | None:
@@ -319,10 +319,10 @@ class Faulty(Elm):
         return super().quiet_until()
 
 
-def write_atz(air: Air, esp32: Initiator) -> None:
+def write_hello(air: Air, esp32: Initiator, name: str = "peer") -> None:
     async def write() -> None:
-        dlc = await esp32.session()
-        dlc.write(b"ATZ\r")
+        dlc = await esp32.session(name)
+        dlc.write(b"hello\r")
         await asyncio.sleep(1)
 
     air.run(write(), within=seconds(10))
@@ -333,20 +333,20 @@ def write_atz(air: Air, esp32: Initiator) -> None:
     [
         (
             "past",
-            "OBDII: source.receive sent b'too early' at -0.000000001 s, and the air is at 0 s:"
+            "bench: source.receive sent b'too early' at -0.000000001 s, and the air is at 0 s:"
             " it cannot send into the past",
             None,
         ),
-        ("raises", "OBDII: source.receive raised KeyError: 'model bug'", KeyError),
-        ("pair", "OBDII: source.receive returned (0, 'text'), not a (t_ns, bytes) pair", None),
+        ("raises", "bench: source.receive raised KeyError: 'model bug'", KeyError),
+        ("pair", "bench: source.receive returned (0, 'text'), not a (t_ns, bytes) pair", None),
     ],
 )
 def test_a_source_that_gets_its_answer_wrong_fails_the_air_naming_the_peer(
     air: Air, how: str, message: str, cause: type[Exception] | None
 ) -> None:
-    SppPeer(air, name="OBDII", pin="1234", source=Faulty(how))
+    SppPeer(air, name="bench", pin="1234", source=Faulty(how))
     with pytest.raises(AirError) as raised:
-        write_atz(air, Initiator(air))
+        write_hello(air, Initiator(air), "bench")
     assert str(raised.value) == message
     error = raised.value.__cause__
     assert isinstance(error, PeerError)
@@ -357,10 +357,10 @@ def test_a_source_that_gets_its_answer_wrong_fails_the_air_naming_the_peer(
 @pytest.mark.parametrize(
     ("how", "message"),
     [
-        ("float", "OBDII: source.quiet_until returned 1.5, not nanoseconds"),
+        ("float", "bench: source.quiet_until returned 1.5, not nanoseconds"),
         (
             "now",
-            "OBDII: source.quiet_until returned 0 s, not after the air's 0 s: what it sends by"
+            "bench: source.quiet_until returned 0 s, not after the air's 0 s: what it sends by"
             " then belongs in the poll at 0 s",
         ),
     ],
@@ -368,7 +368,7 @@ def test_a_source_that_gets_its_answer_wrong_fails_the_air_naming_the_peer(
 def test_a_source_that_gets_its_quiet_until_wrong_fails_the_air(
     air: Air, how: str, message: str
 ) -> None:
-    SppPeer(air, name="OBDII", pin="1234", source=Faulty(how))
+    SppPeer(air, name="bench", pin="1234", source=Faulty(how))
     with pytest.raises(AirError) as raised:
         air.wait(seconds(1))
     assert str(raised.value) == message
@@ -376,23 +376,23 @@ def test_a_source_that_gets_its_quiet_until_wrong_fails_the_air(
 
 
 def test_empty_answers_cross_nothing(air: Air) -> None:
-    peer = SppPeer(air, name="OBDII", pin="1234", source=Faulty("empty"))
+    peer = SppPeer(air, name="peer", pin="1234", source=Faulty("empty"))
     esp32 = Initiator(air)
-    write_atz(air, esp32)
-    assert peer.events == [(0, "out", b"ATZ\r"), (0, "in", b"OK\r")]
-    assert esp32.received == [(0, b"OK\r")]
+    write_hello(air, esp32)
+    assert peer.events == [(0, "out", b"hello\r"), (0, "in", b"done\r")]
+    assert esp32.received == [(0, b"done\r")]
 
 
 def test_two_runs_cross_the_channel_at_the_same_instants() -> None:
     def run() -> list[tuple[int, str, bytes]]:
         air = Air()
         try:
-            peer = SppPeer(air, name="OBDII", pin="1234", source=Elm(delay=7 * MS))
+            peer = SppPeer(air, name="peer", pin="1234", source=Echo(delay=7 * MS))
             esp32 = Initiator(air)
 
             async def chat() -> None:
                 dlc = await esp32.session()
-                for command in (b"ATZ\r", b"ATE0\r", b"0100\r"):
+                for command in (b"one\r", b"two\r", b"three\r"):
                     dlc.write(command)
                     await asyncio.sleep(0.02)
 
@@ -420,22 +420,22 @@ def test_simple_pairing_still_works_between_two_devices_that_support_it(air: Air
 
 def test_a_device_with_simple_pairing_pairs_with_the_peer_s_pin(air: Air) -> None:
     """ESP-IDF's default, `CONFIG_BT_SSP_ENABLED`, against a peer that has only a PIN."""
-    elm = Elm()
-    SppPeer(air, name="OBDII", pin="1234", source=elm)
+    echo = Echo()
+    SppPeer(air, name="peer", pin="1234", source=echo)
     esp32 = Initiator(air, ssp=True)
 
     async def write() -> None:
         dlc = await esp32.session()
-        dlc.write(b"ATZ\r")
+        dlc.write(b"hello\r")
         await asyncio.sleep(1)
 
     air.run(write(), within=seconds(10))
     assert esp32.delegate.asked == 1
-    assert elm.heard == [(0, b"ATZ\r")]
+    assert echo.heard == [(0, b"hello\r")]
 
 
 def test_encryption_needs_an_authenticated_link(air: Air) -> None:
-    peer = SppPeer(air, name="OBDII", pin="1234", source=Elm())
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo())
     esp32 = Initiator(air)
 
     async def encrypt_first() -> None:
@@ -450,7 +450,7 @@ def test_encryption_needs_an_authenticated_link(air: Air) -> None:
 
 
 def test_nothing_happens_on_the_air_until_the_device_writes(air: Air) -> None:
-    peer = SppPeer(air, name="OBDII", pin="1234", source=Elm())
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo())
     esp32 = Initiator(air)
     air.run(esp32.session(), within=seconds(10))
     assert peer.quiet_until() is None
@@ -477,15 +477,15 @@ def test_nothing_happens_on_the_air_until_the_device_writes(air: Air) -> None:
 def test_the_peer_refuses_what_it_cannot_be(
     air: Air, arguments: dict[str, object], message: str
 ) -> None:
-    given: dict[str, object] = {"name": "OBDII", "pin": "1234", **arguments}
+    given: dict[str, object] = {"name": "peer", "pin": "1234", **arguments}
     with pytest.raises(PeerError, match=re.escape(message)):
-        SppPeer(air, source=Elm(), **given)  # type: ignore[arg-type]
+        SppPeer(air, source=Echo(), **given)  # type: ignore[arg-type]
 
 
 def test_two_devices_on_the_air_cannot_share_an_address(air: Air) -> None:
-    SppPeer(air, name="A", pin="1234", source=Elm())
+    SppPeer(air, name="A", pin="1234", source=Echo())
     with pytest.raises(PeerError) as raised:
-        SppPeer(air, name="B", pin="1234", source=Elm())
+        SppPeer(air, name="B", pin="1234", source=Echo())
     assert str(raised.value) == (
         "SppPeer: address 00:00:00:00:5B:01 is another device's on the air: give each its own"
     )
@@ -493,15 +493,15 @@ def test_two_devices_on_the_air_cannot_share_an_address(air: Air) -> None:
 
 def test_the_longest_name_is_found_whole(air: Air) -> None:
     name = "N" * 238
-    SppPeer(air, name=name, pin="1234", source=Elm())
+    SppPeer(air, name=name, pin="1234", source=Echo())
     esp32 = Initiator(air)
     air.run(esp32.discover(name), within=seconds(1))
     assert esp32.found[0][3] == name
 
 
 def test_the_channel_opens_to_one_device_at_a_time(air: Air) -> None:
-    elm = Elm()
-    peer = SppPeer(air, name="OBDII", pin="1234", source=elm)
+    echo = Echo()
+    peer = SppPeer(air, name="peer", pin="1234", source=echo)
     first = Initiator(air)
     second = Initiator(air, address="24:0A:C4:00:00:02", name="second")
 
@@ -514,14 +514,14 @@ def test_the_channel_opens_to_one_device_at_a_time(air: Air) -> None:
 
     air.run(both(), within=seconds(10))
     assert peer.refused == [(0, "24:0A:C4:00:00:02: the channel is held by 24:0A:C4:00:00:01")]
-    assert elm.heard == [(0, b"ONE\r")]
-    assert first.received == [(50 * MS, b"ONE\r\r>")]
+    assert echo.heard == [(0, b"ONE\r")]
+    assert first.received == [(50 * MS, b"ONE\r\n> ")]
     assert second.received == []
 
 
 def test_two_devices_that_ask_for_the_channel_at_one_instant_get_it_one(air: Air) -> None:
-    elm = Elm()
-    peer = SppPeer(air, name="OBDII", pin="1234", source=elm)
+    echo = Echo()
+    peer = SppPeer(air, name="peer", pin="1234", source=echo)
     first = Initiator(air)
     second = Initiator(air, address="24:0A:C4:00:00:02", name="second")
 
@@ -538,13 +538,13 @@ def test_two_devices_that_ask_for_the_channel_at_one_instant_get_it_one(air: Air
 
     air.run(at_once(), within=seconds(10))
     assert peer.refused == [(0, "24:0A:C4:00:00:02: the channel is held by 24:0A:C4:00:00:01")]
-    assert first.received == [(50 * MS, b"ONE\r\r>")]
+    assert first.received == [(50 * MS, b"ONE\r\n> ")]
     assert second.received == []
 
 
 def test_the_channel_opens_only_on_a_link_the_device_authenticated(air: Air) -> None:
-    elm = Elm()
-    peer = SppPeer(air, name="OBDII", pin="1234", source=elm)
+    echo = Echo()
+    peer = SppPeer(air, name="peer", pin="1234", source=echo)
     esp32 = Initiator(air)
 
     async def without_pairing() -> None:
@@ -561,8 +561,8 @@ def test_the_channel_opens_only_on_a_link_the_device_authenticated(air: Air) -> 
 
 
 def test_an_authenticated_link_needs_no_encryption_for_the_channel(air: Air) -> None:
-    elm = Elm()
-    peer = SppPeer(air, name="OBDII", pin="1234", source=elm)
+    echo = Echo()
+    peer = SppPeer(air, name="peer", pin="1234", source=echo)
     esp32 = Initiator(air)
 
     async def authenticated_only() -> None:
@@ -571,17 +571,17 @@ def test_an_authenticated_link_needs_no_encryption_for_the_channel(air: Air) -> 
         )
         await connection.authenticate()
         dlc = await esp32.open(connection)
-        dlc.write(b"ATZ\r")
+        dlc.write(b"hello\r")
         await asyncio.sleep(1)
 
     air.run(authenticated_only(), within=seconds(10))
     assert peer.refused == []
-    assert elm.heard == [(0, b"ATZ\r")]
+    assert echo.heard == [(0, b"hello\r")]
 
 
 def test_a_peer_that_is_not_secure_opens_the_channel_on_any_link(air: Air) -> None:
-    elm = Elm()
-    peer = SppPeer(air, name="OBDII", pin="1234", source=elm, secure=False)
+    echo = Echo()
+    peer = SppPeer(air, name="peer", pin="1234", source=echo, secure=False)
     esp32 = Initiator(air)
 
     async def without_pairing() -> None:
@@ -589,22 +589,22 @@ def test_a_peer_that_is_not_secure_opens_the_channel_on_any_link(air: Air) -> No
             peer.device.public_address, transport=core.PhysicalTransport.BR_EDR
         )
         dlc = await esp32.open(connection)
-        dlc.write(b"ATZ\r")
+        dlc.write(b"hello\r")
         await asyncio.sleep(1)
 
     air.run(without_pairing(), within=seconds(10))
     assert esp32.delegate.asked == 0
-    assert elm.heard == [(0, b"ATZ\r")]
+    assert echo.heard == [(0, b"hello\r")]
 
 
 @pytest.mark.parametrize("closes", ["channel", "link"])
 def test_what_the_source_sends_after_the_channel_closes_is_lost(air: Air, closes: str) -> None:
-    peer = SppPeer(air, name="OBDII", pin="1234", source=Elm(delay=500 * MS))
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo(delay=500 * MS))
     esp32 = Initiator(air)
 
     async def write_and_leave() -> None:
         dlc = await esp32.session()
-        dlc.write(b"ATZ\r")
+        dlc.write(b"hello\r")
         if closes == "channel":
             await dlc.disconnect()
         else:
@@ -613,12 +613,12 @@ def test_what_the_source_sends_after_the_channel_closes_is_lost(air: Air, closes
 
     air.run(write_and_leave(), within=seconds(10))
     assert not peer.channel_open
-    assert peer.lost == len(b"ATZ\r\r>")
-    assert peer.events == [(0, "out", b"ATZ\r")]
+    assert peer.lost == len(b"hello\r\n> ")
+    assert peer.events == [(0, "out", b"hello\r")]
 
 
 def test_a_device_that_gives_no_pin_fails_the_authentication(air: Air) -> None:
-    peer = SppPeer(air, name="OBDII", pin="1234", source=Elm())
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo())
     esp32 = Initiator(air, pin=None)
     with pytest.raises(hci.HCI_Error) as raised:
         air.run(esp32.connect(peer.device.public_address), within=seconds(10))
@@ -627,7 +627,7 @@ def test_a_device_that_gives_no_pin_fails_the_authentication(air: Air) -> None:
 
 
 def test_encryption_turned_off_is_off_on_both_sides(air: Air) -> None:
-    peer = SppPeer(air, name="OBDII", pin="1234", source=Elm())
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo())
     esp32 = Initiator(air)
 
     async def on_and_off() -> Connection:
@@ -641,8 +641,8 @@ def test_encryption_turned_off_is_off_on_both_sides(air: Air) -> None:
 
 
 def test_a_device_opens_the_channel_again_after_closing_it(air: Air) -> None:
-    elm = Elm()
-    peer = SppPeer(air, name="OBDII", pin="1234", source=elm)
+    echo = Echo()
+    peer = SppPeer(air, name="peer", pin="1234", source=echo)
     esp32 = Initiator(air)
 
     async def twice() -> None:
@@ -651,16 +651,16 @@ def test_a_device_opens_the_channel_again_after_closing_it(air: Air) -> None:
         connection = dlc.multiplexer.l2cap_channel.connection
         await connection.disconnect()
         dlc = await esp32.open(await esp32.connect(peer.device.public_address))
-        dlc.write(b"ATZ\r")
+        dlc.write(b"hello\r")
         await asyncio.sleep(1)
 
     air.run(twice(), within=seconds(10))
     assert peer.refused == []
-    assert elm.heard == [(0, b"ATZ\r")]
+    assert echo.heard == [(0, b"hello\r")]
 
 
 def test_a_peer_with_something_due_at_once_leaves_the_air_well(air: Air) -> None:
-    peer = SppPeer(air, name="OBDII", pin="1234", source=Elm(greeting=b"hi", at=0))
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo(greeting=b"hi", at=0))
     # What was due when the peer joined went out then, to nobody.
     assert peer.lost == 2
     assert air.quiet_until() is None
@@ -671,7 +671,6 @@ def test_a_peer_with_something_due_at_once_leaves_the_air_well(air: Air) -> None
 LEAVING = ["switch_off", "out_of_range"]
 RETURNING = {"switch_off": "switch_on", "out_of_range": "in_range"}
 PEER = hci.Address("00:00:00:00:5B:01/P")
-Echo = Elm
 
 
 def leave(device: BluetoothDevice, how: str) -> None:
@@ -1066,7 +1065,7 @@ def test_out_of_range_does_not_tell_a_supplied_source_and_what_it_sends_is_lost(
     assert source.supplied == []
     # The peer does not know yet: its channel stays open until its end of the link falls.
     assert peer.channel_open
-    assert peer.lost == len(b"PING\r\r>")
+    assert peer.lost == len(b"PING\r\n> ")
     assert peer.events == [(0, "out", b"PING\r")]
     assert esp32.received == []
 
@@ -1102,10 +1101,10 @@ def test_a_supplied_source_that_raises_fails_the_air_naming_the_peer(air: Air) -
         def supply(self, on: bool) -> None:
             raise KeyError("model bug")
 
-    peer = SppPeer(air, name="peer", pin="1234", source=Broken())
+    peer = SppPeer(air, name="bench", pin="1234", source=Broken())
     with pytest.raises(AirError) as raised:
         peer.switch_off()
-    assert str(raised.value) == "peer: source.supply raised KeyError: 'model bug'"
+    assert str(raised.value) == "bench: source.supply raised KeyError: 'model bug'"
 
 
 # The two pairs of calls.
