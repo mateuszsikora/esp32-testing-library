@@ -25,6 +25,8 @@ says what each is for.
 
 The [runnable examples](docs/features/examples-user.md) show complete firmware with readable
 tests, starting with a [GPS alarm clock](examples/gps_alarm_clock/).
+[Writing tests for your firmware](https://github.com/mateuszsikora/esp32-testing-library/blob/main/docs/guides/writing-tests.md)
+goes from a first test of your own project to running the suite in CI.
 
 ## Writing a test
 

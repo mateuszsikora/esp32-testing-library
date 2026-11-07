@@ -187,8 +187,9 @@ rather than kept by hand.
 
 ### Guides: `docs/guides/<topic>.md`
 
-How to work on the repository: setting up, testing, writing documentation. They follow no template
-beyond a title and an opening paragraph that says who the guide is for.
+How to work on the repository (setting up, testing, writing documentation) or with esp32tl
+(`writing-tests.md`, testing your own firmware). They follow no template beyond a title and an
+opening paragraph that says who the guide is for.
 
 ## Style
 

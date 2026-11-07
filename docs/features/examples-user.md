@@ -285,7 +285,11 @@ server certificates (with a valid CA). Each rejection case waits on
 `tls.handshake_started`, then checks the complete broker history after 30 seconds of simulated time
 for any connection or publication, including short-lived ones. It does not match firmware log
 wording. Other cases check no-fix, lost-fix, receiver silence, missing
-configuration and a nonresponding NTP server. These tests assert application behavior with
+configuration and a nonresponding NTP server. One puts a service of the test's own on the
+broker's port, over TLS, that takes each connection and answers nothing: the tracker's MQTT
+CONNECT, with its client ID, reaches it, and the tracker closes that connection and opens
+another within 30 seconds
+([writing a model](../guides/writing-tests.md#writing-a-model)). These tests assert application behavior with
 small timing tolerances. The harness's TLS server repeats its bytes, so two runs of a test give
 the same times; `make determinism` runs the tracker over TLS and checks that
 ([testing](../guides/testing.md#determinism)).

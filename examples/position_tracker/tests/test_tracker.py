@@ -1,9 +1,17 @@
 """Positions and UTC at the broker, through GNSS, PPP, NTP and real TLS."""
 
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from tracker_support import BROKER_HOST, TOPIC, Reports, configure_tracker, serve_broker
+from tracker_support import (
+    BROKER_HOST,
+    BROKER_PORT,
+    TOPIC,
+    Reports,
+    configure_tracker,
+    serve_broker,
+)
 
 from esp32tl import Board
 from esp32tl.net.tls import CertificateAuthority
@@ -18,6 +26,8 @@ JITTER = seconds(0.25)  # RTOS scheduling, TLS records and UART transport, on th
 NTP_OUTAGE = seconds(30)
 REJECTION_WINDOW = seconds(30)  # Covers the MQTT client's 10-second reconnect delay.
 UTC_TOLERANCE = timedelta(seconds=1.25)  # Whole-second timestamps and NTP/transport latency.
+# The client's wait for a CONNACK, its reconnect delay and a new TLS handshake.
+RECONNECT_WINDOW = seconds(30)
 
 
 def test_reports_on_connect(board: Board) -> None:
@@ -228,3 +238,46 @@ def test_missing_configuration_does_not_connect(board: Board) -> None:
     assert not network.broker.clients
     assert not network.broker.messages
     assert network.ntp.requests == 0
+
+
+def test_a_broker_that_never_answers_gets_tried_again(board: Board) -> None:
+    network = board.modem.network()
+    broker = SilentBroker()
+    ca = CertificateAuthority([BROKER_HOST])
+    network.listen(BROKER_PORT, broker, tls=ca)
+    configure_tracker(board, trusted_ca=ca.ca_pem)
+    board.power_on(utc=WORLD)
+
+    board.wait_until(lambda: broker.connections and broker.connections[0].heard, within=STARTUP)
+    connect = bytes(broker.connections[0].heard)  # The whole CONNECT: it comes in one TLS record.
+    assert connect[0] == 0x10  # MQTT CONNECT
+    assert b"position-tracker" in connect
+    board.wait_until(lambda: len(broker.connections) > 1, within=RECONNECT_WINDOW)
+    assert broker.open_when_accepted[1] == 0  # The first was closed before the second opened.
+
+
+class SilentBroker:
+    """Takes every connection and answers nothing, as a broker hung before its CONNACK."""
+
+    def __init__(self) -> None:
+        self.connections: list[Connection] = []
+        self.open_when_accepted: list[int] = []  # Connections still open at each accept.
+
+    def accept(
+        self, peer: tuple[str, int], write: Callable[[bytes], None], close: Callable[[], None]
+    ) -> "Connection":
+        self.open_when_accepted.append(sum(not c.closed for c in self.connections))
+        self.connections.append(Connection())
+        return self.connections[-1]
+
+
+class Connection:
+    def __init__(self) -> None:
+        self.heard = bytearray()
+        self.closed = False
+
+    def on_data(self, data: bytes) -> None:
+        self.heard += data
+
+    def on_close(self) -> None:
+        self.closed = True
