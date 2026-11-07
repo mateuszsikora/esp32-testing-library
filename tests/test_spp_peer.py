@@ -2015,7 +2015,8 @@ def test_a_late_answer_leaves_a_working_link_alone(
     assert handles == ([1], [1])
 
     air.advance(seconds(7))
-    assert failed == [(6_000 * MS, hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR)]
+    # The event names only the address: a failure would read as the end of the working link.
+    assert failed == []
     assert (list(phone.device.connections), list(speaker.device.connections)) == handles
     controller = air.link.find_classic_controller(speaker.device.public_address)
     assert controller is not None
@@ -2052,7 +2053,7 @@ def test_a_page_tried_again_with_a_slow_host_does_not_fail_the_air(
     air: Air, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """With no accept timeout, the first answer connects the second page: the second answer is
-    the late one, and the link stays."""
+    the late one, and the link stays, with no failure told of it."""
     phone, speaker = phone_and_speaker(air)
     slow_to_accept(speaker, monkeypatch, 6, 6)
     failed = failures_of(air, speaker)
@@ -2064,7 +2065,7 @@ def test_a_page_tried_again_with_a_slow_host_does_not_fail_the_air(
     assert second.done()
     assert second.exception() is None
     air.advance(seconds(12))
-    assert failed == [(11_500 * MS, hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR)]
+    assert failed == []
     assert list(phone.device.connections) == [1]
     assert list(speaker.device.connections) == [1]
 
@@ -2712,6 +2713,216 @@ def test_a_page_heard_during_this_sides_own_goes_when_that_page_makes_the_link(
     monkeypatch.undo()
     air.run(page(speaker, PHONE), within=seconds(1))
     assert list(phone.device.connections) == list(speaker.device.connections) == [1]
+
+
+def roles_of(air: Air, device: BluetoothDevice) -> list[hci.Role]:
+    """The role the controller of `device` has on each of its entries."""
+    controller = air.link.find_classic_controller(device.device.public_address)
+    assert controller is not None
+    return [entry.role for entry in controller.classic_connections.values()]
+
+
+@pytest.mark.parametrize(
+    "central", [None, "phone", "speaker", "both"], ids=["plain", "phone", "speaker", "both"]
+)
+def test_two_pages_at_one_instant_both_accepted_make_one_link(
+    air: Air, central: str | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both hosts accept at once, plainly or as the central: the first acceptance makes the link
+    of its page, and the other, which comes after it at the same instant, is late. Which runs
+    first is the loop's order, which differs between Python versions."""
+    phone, speaker = phone_and_speaker(air)
+    if central in ("phone", "both"):
+        accepting_as_central_after(phone, monkeypatch, 0.001)
+    if central in ("speaker", "both"):
+        accepting_as_central_after(speaker, monkeypatch, 0.001)
+    phone_failed = failures_of(air, phone)
+    speaker_failed = failures_of(air, speaker)
+    task = air.start(paging_each_other(phone, speaker))
+    air.advance(seconds(1))
+    assert task.done()
+    assert list(phone.device.connections) == list(speaker.device.connections) == [1]
+    roles = roles_of(air, phone) + roles_of(air, speaker)
+    assert sorted(roles) == [hci.Role.CENTRAL, hci.Role.PERIPHERAL]
+    # A host that alone asks for the central's role has it, whichever page makes the link: as the
+    # target of the other's page, by the switch, or as the pager of its own.
+    if central == "phone":
+        assert roles_of(air, phone) == [hci.Role.CENTRAL]
+    if central == "speaker":
+        assert roles_of(air, speaker) == [hci.Role.CENTRAL]
+    assert phone_failed == speaker_failed == []
+    air.run(phone.device.connections[1].disconnect(), within=seconds(1))
+    assert held_by(air, speaker) == held_by(air, phone) == []
+    monkeypatch.undo()
+    air.run(page(speaker, PHONE), within=seconds(1))
+    assert list(phone.device.connections) == list(speaker.device.connections) == [1]
+
+
+def test_a_late_answer_to_a_crossing_page_tells_no_failure_on_the_link_it_made(
+    air: Air, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    phone, speaker = phone_and_speaker(air)
+    slow_to_accept(phone, monkeypatch, 2)
+    slow_to_accept(speaker, monkeypatch, 3)
+    phone_failed = failures_of(air, phone)
+    speaker_failed = failures_of(air, speaker)
+    task = air.start(paging_each_other(phone, speaker))
+    air.advance(seconds(4))
+    assert task.done()
+    # The phone's answer at 2 s made the speaker's page the link; the speaker's at 3 s is late.
+    assert speaker_failed == phone_failed == []
+    assert list(phone.device.connections) == list(speaker.device.connections) == [1]
+    assert roles_of(air, speaker) == [hci.Role.CENTRAL]
+    assert roles_of(air, phone) == [hci.Role.PERIPHERAL]
+
+
+@pytest.mark.parametrize("phone_central", [False, True], ids=["plain", "central"])
+def test_a_crossing_acceptance_whose_role_switch_would_be_refused_leaves_the_other_its_link(
+    air: Air, phone_central: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The speaker accepts first, as the central, and the phone's page allows no role switch: the
+    phone's acceptance at the same instant makes the link of the speaker's page. A plain one keeps
+    that page's roles, and the switch, which comes after it, is refused; one as the central switches
+    them, and the refusal of the speaker's switch ends nothing."""
+    phone, speaker = phone_and_speaker(air)
+    accepting_as_central_after(speaker, monkeypatch, 0.001)
+    if phone_central:
+        accepting_as_central_after(phone, monkeypatch, 0.001)
+    else:
+        slow_to_accept(phone, monkeypatch, 0.001)
+    phone_failed = failures_of(air, phone)
+    speaker_failed = failures_of(air, speaker)
+    task = air.start(paging_each_other(phone, speaker))
+    air.advance(Duration(1))
+    refusing_role_switch(air, phone, speaker)
+    air.advance(seconds(8))
+    assert all(isinstance(result, Connection) for result in task.result())
+    assert phone_failed == speaker_failed == []
+    assert list(phone.device.connections) == list(speaker.device.connections) == [1]
+    central, peripheral = (phone, speaker) if phone_central else (speaker, phone)
+    assert roles_of(air, central) == [hci.Role.CENTRAL]
+    assert roles_of(air, peripheral) == [hci.Role.PERIPHERAL]
+
+
+def test_two_crossing_acceptances_as_the_central_that_neither_page_allows_make_no_link(
+    air: Air, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Neither page allows the role switch both hosts ask for, so no role can be had."""
+    phone, speaker = phone_and_speaker(air)
+    accepting_as_central_after(speaker, monkeypatch, 0.001)
+    accepting_as_central_after(phone, monkeypatch, 0.001)
+    phone_failed = failures_of(air, phone)
+    speaker_failed = failures_of(air, speaker)
+    task = air.start(paging_each_other(phone, speaker))
+    air.advance(Duration(1))
+    refusing_role_switch(air, phone, speaker)
+    refusing_role_switch(air, speaker, phone)
+    air.advance(seconds(8))
+    assert all(isinstance(result, core.ConnectionError) for result in task.result())
+    refused = hci.HCI_ErrorCode.ROLE_CHANGE_NOT_ALLOWED_ERROR
+    assert phone_failed == speaker_failed == [(1 * MS, refused)]
+    assert held_by(air, phone) == held_by(air, speaker) == []
+    monkeypatch.undo()
+    air.run(page(phone, SPEAKER), within=seconds(1))
+
+
+def test_an_answer_to_a_crossing_page_after_this_sides_own_ended_makes_the_link(
+    air: Air, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The phone's page ends at 1 s. At 2 s the speaker's host accepts it as the central, and the
+    phone's host answers the speaker's page while that role switch is on its way: the phone has no
+    page of its own left for the switch, so its answer makes the link of the speaker's page."""
+    phone, speaker = phone_and_speaker(air)
+    write_page_timeout(air, phone, 1600)
+    skipping_answers(phone, monkeypatch, 1)
+    skipping_answers(speaker, monkeypatch, 1)
+    phone_failed = failures_of(air, phone)
+    speaker_failed = failures_of(air, speaker)
+    task = air.start(paging_each_other(phone, speaker))
+    air.advance(seconds(2))
+    monkeypatch.undo()
+    accept = hci.HCI_Accept_Connection_Request_Command
+
+    def both_answer() -> None:
+        speaker_answer = accept(bd_addr=hci.Address(PHONE + "/P"), role=hci.Role.CENTRAL)
+        phone_answer = accept(bd_addr=hci.Address(SPEAKER + "/P"), role=hci.Role.PERIPHERAL)
+        air.loop.create_task(speaker.device.host.send_async_command(speaker_answer))
+        air.loop.create_task(phone.device.host.send_async_command(phone_answer))
+
+    air.call(both_answer)
+    air.advance(seconds(3))
+    assert task.done()
+    assert phone_failed == [(1_000 * MS, PAGE_TIMEOUT)]
+    assert speaker_failed == []
+    assert list(phone.device.connections) == list(speaker.device.connections) == [1]
+    assert roles_of(air, speaker) == [hci.Role.CENTRAL]
+    assert roles_of(air, phone) == [hci.Role.PERIPHERAL]
+
+
+def test_an_acceptance_as_the_central_lost_during_this_sides_own_page_ends_with_that_page(
+    air: Air, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The phone leaves before the switch reaches it, and the speaker's own page to it outlasts the
+    entry's fall at 20.05 s: the host hears only that page's end, which ends both in its eyes."""
+    phone, speaker = phone_and_speaker(air)
+    write_page_timeout(air, speaker, 0xFFFF)
+    skipping_answers(phone, monkeypatch, 1)
+    accepting_as_central_after(speaker, monkeypatch, 1)
+    failed = failures_of(air, speaker)
+    task = air.start(paging_each_other(phone, speaker))
+    air.advance(ms(50))
+    phone.out_of_range()
+    air.advance(seconds(25))
+    assert held_by(air, speaker) == [hci.Address(PHONE + "/P")]
+    assert failed == []
+    air.advance(seconds(41))
+    assert task.done()
+    assert failed == [(0xFFFF * 625_000, PAGE_TIMEOUT)]
+    assert held_by(air, speaker) == []
+
+
+def test_an_acceptance_as_the_central_after_the_page_ended_is_refused(
+    air: Air, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    phone, speaker = phone_and_speaker(air)
+    accepting_as_central_after(speaker, monkeypatch, 6)
+    paging = failures_of(air, phone)
+    accepting = failures_of(air, speaker)
+    task = air.start(page(phone, SPEAKER))
+    air.advance(seconds(7))
+    assert isinstance(task.exception(), core.ConnectionError)
+    # The pager holds nothing to switch: it refuses, and no link comes of the acceptance.
+    assert paging == [(5_120 * MS, PAGE_TIMEOUT)]
+    assert accepting == [(6_000 * MS, hci.HCI_ErrorCode.ROLE_CHANGE_NOT_ALLOWED_ERROR)]
+    assert held_by(air, phone) == held_by(air, speaker) == []
+    assert not phone.device.connections
+    assert not speaker.device.connections
+    monkeypatch.undo()
+    air.run(page(phone, SPEAKER), within=seconds(1))
+    assert list(phone.device.connections) == list(speaker.device.connections) == [1]
+
+
+@pytest.mark.parametrize("how", LEAVING)
+def test_a_host_that_accepted_as_the_central_a_pager_that_left_hears_of_it_when_its_end_falls(
+    air: Air, how: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    phone, speaker = phone_and_speaker(air)
+    accepting_as_central_after(speaker, monkeypatch, 1)
+    failed = failures_of(air, speaker)
+    task = air.start(page(phone, SPEAKER))
+    air.advance(ms(50))
+    leave(phone, how)
+    # The role switch at 1 s is lost on the way; the entry falls 20 s after the pager left.
+    air.advance(ms(20_050) - Duration(1))
+    assert failed == []
+    air.advance(seconds(40))
+    assert task.done()
+    assert failed == [(20_050 * MS, hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR)]
+    assert held_by(air, speaker) == []
+    assert not speaker.device.connections
+    come_back(phone, how)
+    monkeypatch.undo()
+    air.run(page(phone, SPEAKER), within=seconds(1))
 
 
 def test_a_pager_that_leaves_after_its_page_ended_is_lost_to_the_target(

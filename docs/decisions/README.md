@@ -192,6 +192,8 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [A page a device hears is kept apart from its own](harness.md#a-page-a-device-hears-is-kept-apart-from-its-own) | `harness.md` | decided (#144) |
 | [A page respects page scan, read when the page starts](harness.md#a-page-respects-page-scan-read-when-the-page-starts) | `harness.md` | decided (#135) |
 | [Connection_Accept_Timeout is postponed](harness.md#connection_accept_timeout-is-postponed) | `harness.md` | postponed (#34) |
+| [Two pages at one instant make one link, the page accepted first](harness.md#two-pages-at-one-instant-make-one-link-the-page-accepted-first) | `harness.md` | decided (#141) |
+| [A role switch asked of a pager whose page ended is refused](harness.md#a-role-switch-asked-of-a-pager-whose-page-ended-is-refused) | `harness.md` | decided (#141) |
 | [A bt fixture, an HCI tap and a replayed peer are postponed](harness.md#a-bt-fixture-an-hci-tap-and-a-replayed-peer-are-postponed) | `harness.md` | postponed (#33) |
 | [bumble is a dependency of esp32tl, pinned exactly](harness.md#bumble-is-a-dependency-of-esp32tl-pinned-exactly) | `harness.md` | decided (#33) |
 | [Serial is opt-in and pytest-embedded owns flashing and the port](harness.md#serial-is-opt-in-and-pytest-embedded-owns-flashing-and-the-port) | `harness.md` | decided (#25) |
