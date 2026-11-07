@@ -20,6 +20,8 @@ from esp32tl.link.protocol import RunnerHello, Sync, UartRx, UartTx, Wait
 from esp32tl.report import RunLog
 from esp32tl.units import ms, seconds
 
+ROOT = Path(__file__).resolve().parent.parent
+PROFILE = ROOT / "tests" / "boards" / "aux-uart.toml"
 AUX = Wire(tx=26, rx=27, baud=115200)
 HELLO = RunnerHello(1, "esp32", recording.EMULATED, "8c652151dd5a521249a785ca147f20a9f8eda68f")
 # How long the part takes to answer a command, from the end of its line.
@@ -66,6 +68,36 @@ class AtResponder:
 class OnlyReceives:
     def receive(self, t: int, data: bytes) -> Iterable[Output]:
         return []
+
+
+class Silent:
+    """Hears everything and says nothing; it is on no supply."""
+
+    def receive(self, t: int, data: bytes) -> Iterable[Output]:
+        return []
+
+    def poll(self, now: int) -> Iterable[Output]:
+        return []
+
+    def quiet_until(self) -> int | None:
+        return None
+
+    def latency(self) -> int | None:
+        return None
+
+
+class NotCallable(Silent):
+    poll = 3  # type: ignore[assignment]
+
+
+class Wrapped:
+    """A model behind a proxy, as a wrapper that logs every call would put it."""
+
+    def __init__(self, inner: object) -> None:
+        self._inner = inner
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._inner, name)
 
 
 def aux(tmp_path: Path, asked: list[Request] | None = None) -> tuple[Uart, RunLog]:
@@ -121,7 +153,27 @@ def test_what_is_no_source_is_refused_and_leaves_the_route_as_it_was(tmp_path: P
         r" quiet_until, latency$",
     ):
         uart.model(OnlyReceives())  # type: ignore[type-var]
+    with pytest.raises(
+        TypeError, match=r"^uart\.aux\.model: <.*NotCallable.*> is not a Source: it has no poll$"
+    ):
+        uart.model(NotCallable())  # type: ignore[type-var]
     assert uart.source is None and asked == [] and log.lines()[1:] == []
+
+
+def test_a_model_behind_a_proxy_is_a_source(tmp_path: Path) -> None:
+    uart, _ = aux(tmp_path)
+    model = AtResponder()
+    uart.model(Wrapped(model))  # type: ignore[type-var]
+    assert list(uart.receive(0, "out", b"AT\r\n")) == [(ANSWER, b"\r\nOK\r\n")]
+    assert uart.source_detail == "Wrapped" and model.lines == [b"AT"]
+
+
+def test_a_model_on_no_supply_keeps_going_through_a_power_cycle(tmp_path: Path) -> None:
+    uart, _ = aux(tmp_path)
+    model = uart.model(Silent())
+    uart.supply(False)
+    uart.supply(True)
+    assert uart.source is model
 
 
 def test_one_source_per_test_whichever_comes_first(tmp_path: Path) -> None:
@@ -168,10 +220,15 @@ def test_a_model_of_the_test_s_on_the_modem_route_is_no_modem(tmp_path: Path) ->
     modem.model(AtResponder())
     assert modem.recorded_source() == "model:AtResponder"
     assert modem.command_report() == []
-    with pytest.raises(SourceError, match=r"^uart\.modem has its source already: one per test$"):
+    refused = (
+        r"^uart\.modem has a model of the test's: it has no modem to describe; one source per test$"
+    )
+    with pytest.raises(SourceError, match=refused):
         modem.signal(dbm=-73)
-    with pytest.raises(SourceError, match=r"^uart\.modem has no modem model"):
-        modem.modem_model()
+    with pytest.raises(SourceError, match=refused):
+        modem.network()
+    with pytest.raises(SourceError, match=refused):
+        assert modem.powered
     assert lines.events() == []
 
 
@@ -221,3 +278,33 @@ def test_a_model_comes_before_power_on(board: Board) -> None:
     ):
         board.uart("aux").model(AtResponder())
     assert board.uart("aux").source is None
+
+
+def test_a_tap_records_the_test_s_model_by_its_class(pytester: pytest.Pytester) -> None:
+    pytester.makepyfile(f"""
+        import pytest
+        from esp32tl.units import seconds
+        pytestmark = [pytest.mark.app_path({str(ROOT / "firmware" / "modem_at")!r}),
+                      pytest.mark.board_profile(path={str(PROFILE)!r})]
+
+        class Ok:
+            def receive(self, t, data):
+                return [(t + 1_000_000, b"\\r\\nOK\\r\\n")] if data.endswith(b"\\n") else []
+            def poll(self, now):
+                return []
+            def quiet_until(self):
+                return None
+            def latency(self):
+                return 1_000_000
+
+        def test_dialogue(board):
+            board.uart("aux").model(Ok())
+            board.uart("aux").tap("aux.jsonl")
+            board.power_on()
+            board.console.expect_exact("modem_at: dialogue complete", timeout=seconds(5))
+    """)
+    result = pytester.runpytest_subprocess("-p", "no:cacheprovider")
+    result.assert_outcomes(passed=1)
+    made = recording.read(pytester.path / "aux.jsonl")
+    assert (made.header.source, made.header.interface) == ("model:Ok", "uart.aux")
+    assert {event.dir for event in made.events} == {"in", "out"}

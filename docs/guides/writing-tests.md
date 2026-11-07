@@ -313,7 +313,6 @@ Where a test can put a model of its own today:
           return ANSWER
 
 
-  @pytest.mark.board_profile(path="boards/aux-uart.toml")
   def test_the_firmware_talks_to_the_test_s_model_on_its_own_uart(board: Board) -> None:
       part = board.uart("aux").model(AtResponder())
       board.power_on()
@@ -321,10 +320,21 @@ Where a test can put a model of its own today:
       assert part.lines[1] == b"ATE0"
   ```
 
+  The route is one your profile names, `boards/my-board.toml` of the test file's `pytestmark`
+  ([where the tests go](#where-the-tests-go)), with the UART's port, pins and baud:
+
+  ```toml
+  [uart.aux]
+  port = 1
+  tx = 26                   # ESP32 TX → the part's RX
+  rx = 27
+  baud = 115200
+  ```
+
   This is esp32tl's own `tests/test_uart_model.py`, shortened, where `Iterable` comes from
   `collections.abc`, `Output` from `esp32tl.link.boardlink`, and `ms` and `seconds` from
-  `esp32tl.units`: `modem_at` writes its AT commands to `uart.aux` of a local profile and reads
-  the answers. `latency()` is the shortest time the model
+  `esp32tl.units`: its firmware, `modem_at`, writes AT commands to `uart.aux` of
+  `tests/boards/aux-uart.toml` and reads the answers. `latency()` is the shortest time the model
   takes to answer, and the board runs that far ahead of it; an answer stamped sooner fails the run.
   `poll(now)` and `quiet_until()` are for what the part sends unprompted, as a sensor reporting
   every second: `quiet_until()` says when the next report is due, and `poll` returns it then. Add

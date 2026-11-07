@@ -839,15 +839,29 @@ def test_the_firmware_talks_to_the_test_s_model_on_its_own_uart(board):
   lost.
 - The model is called from the link's thread, inside the test's waits, while the runner waits for
   its answer: it must not block, and must not wait on the wall clock.
-- What it refuses, at the call: an object that lacks a method, with
+- What it refuses, at the call: an object without one of the methods, or with one that cannot be
+  called, with
   `TypeError: uart.aux.model: <...> is not a Source: it has no poll, quiet_until, latency`; a
   second source, `SourceError: uart.aux has its source already: one per test`; and a model after
   power-on, `SourceError: uart.aux: the board is on already: give an interface its source before
   board.power_on()`. On `uart.gnss` or `uart.modem` it goes in place of esp32tl's model, whose
   calls then raise `SourceError` (`uart.gnss has a model of the test's: it has no receiver to
-  describe; one source per test`, `uart.modem has its source already: one per test`). The
+  describe; one source per test`, `uart.modem has a model of the test's: it has no modem to
+  describe; one source per test`). The
   `serial` backend skips the test at the call: `serial: uart.aux takes no model source on this
   backend, only real`.
+- What the model does wrong during the run ends the run, as a link error: a test that waits gets
+  `RunEnded`, which names it, and the teardown `the link failed: ...`. The run's log has what
+  crossed the wire until then.
+
+  | The model | The link's error |
+  |---|---|
+  | Raises in a method | `uart.aux.receive raised ValueError: ...`, and so for `poll`, `quiet_until` and `latency` |
+  | Returns from `receive` or `poll` something that is not a `(t, bytes)` pair, `t` an `int` | `uart.aux.receive returned [1, 2], not a (t_ns, bytes) pair` |
+  | Stamps an answer sooner than its `latency()`, or sends before the `quiet_until()` it gave | `uart.aux sent bytes stamped {t} ns in the turn at {now} ns: it answered sooner than its latency, or sent past its quiet_until` |
+  | Returns from `quiet_until()` what is not an `int`, or a time not after the turn | `uart.aux.quiet_until returned 1.5, not nanoseconds`; `uart.aux is quiet until {t} ns, not after the turn at {now} ns: what it sends by then belongs in this turn` |
+  | Returns from `latency()` what is not an `int` of 0 or more | `uart.aux declares a latency of -1 ns` |
+
 - The report names it by its class, `uart.aux: the model of AtResponder; 156 bytes in, 233 out`,
   the run's log has the step `uart.aux.model(AtResponder)`, and a tap of the route records it as
   `model:AtResponder` ([taps](run-report-user.md#what-a-tap-writes)).

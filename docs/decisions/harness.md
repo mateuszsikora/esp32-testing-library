@@ -2885,7 +2885,10 @@ the route's other sources and the SPP peer's already use: `receive(t, data)`, `p
 source of kind `model`, asked as one, so the backends' capability checks apply and `serial` skips
 it; before power-on, one per route. The report and a tap name it by its class
 (`model:AtResponder`), which is what the test called it. An object that lacks one of the four
-methods is a `TypeError` at the call, naming what it lacks, before the backend is asked anything.
+methods, or has one that cannot be called, is a `TypeError` at the call, naming them, before the
+backend is asked anything; a method a proxy's `__getattr__` gives counts. The check is
+`callable(getattr(...))` per method, not `isinstance` on a `runtime_checkable` protocol, which
+since Python 3.12 asks only whether the attributes exist.
 The call returns the source, typed as given, so the test reads its own model's state without a
 cast. `Modem.model()`, which returned the modem model, became `Modem.modem_model()`: `Uart.model`
 is the call that parallels `replay(path)` and `real(port)`, and a subclass cannot take the name

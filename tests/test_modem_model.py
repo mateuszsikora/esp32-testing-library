@@ -335,7 +335,11 @@ def test_a_replay_and_model_are_exclusive_and_reading_state_selects_neither(tmp_
         ),
     )
     modem.replay("input.jsonl")
-    with pytest.raises(SourceError, match="has its source already"):
+    with pytest.raises(
+        SourceError,
+        match=r"^uart\.modem replays a recording: it has no modem to describe;"
+        r" one source per test$",
+    ):
         modem.signal(dbm=-73)
     assert modem.source_kind == "replay"
     assert modem.recorded_source() == "replay"

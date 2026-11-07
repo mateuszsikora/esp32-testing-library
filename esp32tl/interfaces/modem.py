@@ -170,7 +170,19 @@ class Modem(Uart):
         """The selected model; reading this never selects a source."""
         if isinstance(self.source, ModemModel):
             return self.source
+        self._refuse_other()
         raise SourceError(f"{self.name} has no modem model: select it before board.power_on()")
+
+    def _refuse_other(self) -> None:
+        """Refuses a model call on a route whose source is not the modem model, saying what it
+        is: there is no modem there to tell anything."""
+        if self.source is not None and not isinstance(self.source, ModemModel):
+            what = {"real": "has a real device", "model": "has a model of the test's"}.get(
+                self.source_kind or "", "replays a recording"
+            )
+            raise SourceError(
+                f"{self.name} {what}: it has no modem to describe; one source per test"
+            )
 
     def recorded_source(self) -> str:
         if isinstance(self.source, ModemModel):
@@ -196,6 +208,7 @@ class Modem(Uart):
             if self.log is not None:
                 self.log.test(self._now(), f"{self.name}.{step}")
             return
+        self._refuse_other()
         self._ask("model")
         key = self._pins.get("pwrkey")
         if key is None or key.on_ms is None or "ri" not in self._pins:

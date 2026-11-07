@@ -19,7 +19,6 @@ from esp32tl.sources.replay import Replay
 from esp32tl.tap import NO_SOURCE, Tap
 
 
-@runtime_checkable
 class Source(Protocol):
     """What drives a UART from its far end: a replay, a model or a real device. The methods are
     those of the link's `Interface`, without the wire."""
@@ -153,8 +152,8 @@ class Uart(Interface):
         goes to its `receive`, and what it returns, or sends from `poll`, goes into the chip at
         its own time. One that is `Supplied` loses its power with the board's supply, and gets it
         back. Returns `source`."""
-        if not isinstance(source, Source):
-            missing = [m for m in SOURCE_METHODS if not callable(getattr(source, m, None))]
+        missing = [m for m in SOURCE_METHODS if not callable(getattr(source, m, None))]
+        if missing:
             raise TypeError(
                 f"{self.name}.model: {source!r} is not a Source: it has no {', '.join(missing)}"
             )
@@ -294,7 +293,7 @@ class Uart(Interface):
         return None if self.source is None else self.source.latency()
 
 
-# What `Source` asks of a model, as `model` names what one lacks.
+# What `Source` asks of a model: `model` refuses one without each of them, callable.
 SOURCE_METHODS = ("receive", "poll", "quiet_until", "latency")
 
 # The kinds of `files` entry whose file the run writes: a replay must not read one of them.
