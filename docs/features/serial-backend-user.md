@@ -162,6 +162,64 @@ requires a modem model, which this backend cannot provide. So do `wifi.access_po
 board's station hears whatever access points are around it, and the host puts none on its air.
 Requesting the `wifi` fixture alone does not skip.
 
+## Comparing the two backends
+
+`scripts/compare-backends.py` runs the same tests on both backends and lists, for each test that
+uses `board`, whether it ran on both and whether the two runs agreed: the specification's "Every
+test that a real board can run, runs on one too, and the two results are compared". It needs everything both
+backends need: the runner and the ROM ELF for esp32sim, the board on the port for serial, and the
+builds of the apps the tests name.
+
+```sh
+.venv/bin/python scripts/compare-backends.py --port /dev/ttyUSB0
+.venv/bin/python scripts/compare-backends.py --port /dev/ttyUSB0 tests/test_hello_world.py
+ESPBAUD=230400 .venv/bin/python scripts/compare-backends.py --port /dev/cu.usbserial-5C854994151 -k hello
+```
+
+It runs `python -m pytest` twice on its other arguments, pytest's options included, or on
+`tests/test_hello_world.py tests/test_nmea_reader.py` when it is given none: first with
+`--esp32tl-backend=esp32sim`, then with `--esp32tl-backend=serial --port=PORT`. Without `--port`
+the serial run would stop on `serial requires an explicit --port (or a parametrised port) without
+wildcards: automatic port discovery is disabled`, so the script requires it before running
+anything (`the following arguments are required: --port`, exit 2). Arguments after a `--` go after
+the script's own options. Each run writes its JUnit XML
+under `build/backends/` (`--out DIR` names another directory), as `esp32sim.xml` and
+`serial.xml`; each run first removes its file from an earlier comparison. A `--out` that is a file
+is refused with `✗ <DIR> is not a directory: name a directory with --out`, exit 2. The serial run
+flashes the board as any serial run does ([builds and flashing](#builds-and-flashing)).
+
+Tests that fail do not stop the script: their failures are what it compares. A run whose pytest
+exits with any code other than 0 or 1 (interrupted, an internal or a usage error, or no test
+collected) ends it before anything is compared, with
+`✗ <backend>: pytest exited with code <code>; the backends were not compared`, exit 1.
+
+The two cases of a test (`test_hello_world[esp32sim]` and `test_hello_world[serial]`) are matched
+by the test's id without the backend. A test whose id is the same in both runs does not use
+`board`, and is left out. Each test that uses `board` gets one line, in the order of the esp32sim
+run; an error at setup or teardown counts as a failure, and a message is its first line, cut after
+200 characters:
+
+| Line | Means |
+|---|---|
+| `✓ <test>: passed on both` | Ran on both and agreed |
+| `✗ <test>: failed on both: on esp32sim: <message>; on serial: <message>` | Ran on both and agreed, but failed |
+| `✗ <test>: passed on esp32sim, failed on serial: <message>` | Ran on both and disagreed; or the other way round |
+| `- <test>: esp32sim only (passed): skipped on serial: <reason>` | The capability table skipped it on serial, as `serial: uart.gnss takes no replay source on this backend, only real`; `✗` and `(failed: <message>)` when it failed on esp32sim |
+| `✗ <test>: serial only (passed): skipped on esp32sim: <reason>` | A test the real board ran and the emulator did not: there is no result to compare with |
+| `- <test>: skipped on both: <reason>` | Ran on neither; the reason is the esp32sim run's |
+| `✗ <test>: collected on esp32sim only` | One run collected a case the other did not; or the other way round |
+
+The last line counts them, with `1 test` for one:
+
+```text
+backends: <n> tests ran on both backends, <a> agreed and <d> did not; <s> ran on esp32sim only, <r> on serial only, <k> on neither; <l> tests without `board` left out
+```
+
+The script exits 1 when a line starts with `✗`, and when no test ran on both backends, with
+`✗ no test ran on both backends: nothing was compared`; it exits 0 otherwise. Agreeing means the
+same outcome, passed or failed: the script compares neither console output nor times, which run on
+the board's emulated clock on one backend and on wall time on the other.
+
 ## Validation status
 
 The console smoke tests passed on 2026-11-02 on a LilyGO board with a classic ESP32-D0WD-V3

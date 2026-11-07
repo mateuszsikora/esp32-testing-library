@@ -51,6 +51,7 @@ paths, names, defaults and messages quoted verbatim, and `TODO(owner): …` wher
 | `tools/` | Reproducing in `docs/stage0-findings.md`; measure again if results change (C11) |
 | `scripts/generate-gnss-recordings.py` | `docs/features/validation-firmware-user.md` and/or `-technical.md` (C12) |
 | `scripts/check-determinism.py` | `docs/guides/testing.md` (C13) |
+| `scripts/compare-backends.py` | `docs/features/serial-backend-user.md` and/or `-technical.md` (C14) |
 | A decision: an alternative rejected, scope postponed | `docs/decisions/<domain>.md`, then `python3 scripts/decisions-index.py` |
 | A domain rule that a test enforces | `docs/invariants.md` |
 
