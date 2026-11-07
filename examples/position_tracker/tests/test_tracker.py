@@ -1,9 +1,17 @@
 """Positions and UTC at the broker, through GNSS, PPP, NTP and real TLS."""
 
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from tracker_support import BROKER_HOST, TOPIC, Reports, configure_tracker, serve_broker
+from tracker_support import (
+    BROKER_HOST,
+    BROKER_PORT,
+    TOPIC,
+    Reports,
+    configure_tracker,
+    serve_broker,
+)
 
 from esp32tl import Board
 from esp32tl.net.tls import CertificateAuthority
@@ -228,3 +236,42 @@ def test_missing_configuration_does_not_connect(board: Board) -> None:
     assert not network.broker.clients
     assert not network.broker.messages
     assert network.ntp.requests == 0
+
+
+def test_a_broker_that_never_answers_gets_tried_again(board: Board) -> None:
+    network = board.modem.network()
+    broker = SilentBroker()
+    ca = CertificateAuthority([BROKER_HOST])
+    network.listen(BROKER_PORT, broker, tls=ca)
+    configure_tracker(board, trusted_ca=ca.ca_pem)
+    board.power_on(utc=WORLD)
+
+    board.wait_until(lambda: broker.heard and broker.heard[0], within=STARTUP)
+    connect = bytes(broker.heard[0])
+    assert connect[0] == 0x10  # MQTT CONNECT
+    assert b"position-tracker" in connect
+    board.wait_until(lambda: len(broker.heard) > 1, within=REJECTION_WINDOW)
+
+
+class SilentBroker:
+    """Takes every connection and answers nothing, as a broker hung before its CONNACK."""
+
+    def __init__(self) -> None:
+        self.heard: list[bytearray] = []
+
+    def accept(
+        self, peer: tuple[str, int], write: Callable[[bytes], None], close: Callable[[], None]
+    ) -> "Connection":
+        self.heard.append(bytearray())
+        return Connection(self.heard[-1])
+
+
+class Connection:
+    def __init__(self, heard: bytearray) -> None:
+        self.heard = heard
+
+    def on_data(self, data: bytes) -> None:
+        self.heard += data
+
+    def on_close(self) -> None:
+        pass
