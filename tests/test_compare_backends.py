@@ -118,11 +118,12 @@ def test_each_test_that_uses_board_gets_a_line_and_the_others_are_left_out() -> 
         "esp32sim": 2,
         "serial": 1,
         "neither": 1,
+        "one run": 2,
         "left out": 2,
     }
     assert compare.summary(counts) == (
         "3 tests ran on both backends, 2 agreed and 1 did not; 2 ran on esp32sim only,"
-        " 1 on serial only, 1 on neither; 2 tests without `board` left out"
+        " 1 on serial only, 1 on neither, 2 collected on one only; 2 tests without `board` left out"
     )
 
 
@@ -133,7 +134,8 @@ def test_a_long_message_is_cut_and_a_missing_one_named() -> None:
 
 class Pytest:
     """Stands in for `subprocess.run` of pytest: records each command, writes the JUnit XML that
-    `left` gives for that run unless it is None, and exits with the run's code."""
+    `left` gives for that run unless it is None, and exits with the run's code. The runs are in
+    the script's order, serial first."""
 
     def __init__(self, left: Sequence[str | None], codes: tuple[int, ...] | None = None) -> None:
         self.left = left
@@ -150,21 +152,22 @@ class Pytest:
 
 
 AGREE = [
-    junit({"t::test_hello[esp32sim]": "passed", "t::test_units": "passed"}),
     junit({"t::test_hello[serial]": "passed", "t::test_units": "passed"}),
+    junit({"t::test_hello[esp32sim]": "passed", "t::test_units": "passed"}),
 ]
 
 
 def test_pytest_runs_on_each_backend_with_the_arguments_and_the_smoke_tests_by_default(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    pytest_ = Pytest(AGREE * 3)
+    pytest_ = Pytest(AGREE * 4)
     monkeypatch.setattr(compare.subprocess, "run", pytest_)
     out = tmp_path / "out"
     port = ["--port", "/dev/ttyUSB0", "--out", str(out)]
     assert compare.main([*port, "tests/test_hello_world.py", "-k", "hello"]) == 0
     assert compare.main(port) == 0
     assert compare.main([*port, "-k", "hello", "--", "tests/t.py"]) == 0
+    assert compare.main([*port, "--"]) == 0
 
     def ours(backend: str) -> list[str]:
         serial = ["--port=/dev/ttyUSB0"] if backend == "serial" else []
@@ -176,19 +179,23 @@ def test_pytest_runs_on_each_backend_with_the_arguments_and_the_smoke_tests_by_d
             "junit_family=xunit1",
         ]
 
+    smoke = ["tests/test_hello_world.py", "tests/test_nmea_reader.py"]
     assert [c[3:] for c in pytest_.commands] == [
-        ["tests/test_hello_world.py", "-k", "hello", *ours("esp32sim")],
         ["tests/test_hello_world.py", "-k", "hello", *ours("serial")],
-        ["tests/test_hello_world.py", "tests/test_nmea_reader.py", *ours("esp32sim")],
-        ["tests/test_hello_world.py", "tests/test_nmea_reader.py", *ours("serial")],
+        ["tests/test_hello_world.py", "-k", "hello", *ours("esp32sim")],
+        [*smoke, *ours("serial")],
+        [*smoke, *ours("esp32sim")],
         # After a `--` pytest takes every argument as a path: the script's options come before.
-        ["-k", "hello", *ours("esp32sim"), "--", "tests/t.py"],
         ["-k", "hello", *ours("serial"), "--", "tests/t.py"],
+        ["-k", "hello", *ours("esp32sim"), "--", "tests/t.py"],
+        # A `--` with nothing after it is no argument: the smoke tests.
+        [*smoke, *ours("serial")],
+        [*smoke, *ours("esp32sim")],
     ]
     assert capsys.readouterr().out.splitlines()[-2:] == [
         "✓ t::test_hello: passed on both",
         "backends: 1 test ran on both backends, 1 agreed and 0 did not; 0 ran on esp32sim only,"
-        " 0 on serial only, 0 on neither; 1 test without `board` left out",
+        " 0 on serial only, 0 on neither, 0 collected on one only; 1 test without `board` left out",
     ]
 
 
@@ -204,28 +211,35 @@ def test_failing_tests_are_compared_but_a_run_that_could_not_test_ends_the_scrip
 ) -> None:
     port = ["--port", "/dev/ttyUSB0", "--out", str(tmp_path)]
     differ = junit({"t::test_hello[serial]": "failure: serial: no such port"})
-    monkeypatch.setattr(compare.subprocess, "run", Pytest([AGREE[0], differ], codes=(0, 1)))
+    monkeypatch.setattr(compare.subprocess, "run", Pytest([differ, AGREE[1]], codes=(1, 0)))
     assert compare.main(port) == 1
     assert capsys.readouterr().out.splitlines()[-2] == (
         "✗ t::test_hello: passed on esp32sim, failed on serial: serial: no such port"
     )
-    # A usage error, as a missing firmware build: the serial run is not attempted.
+    # A usage error, as the plugin's for a port with a wildcard or an ESPPORT that names another:
+    # the esp32sim run is not attempted.
     pytest_ = Pytest([None, None], codes=(4, 0))
     monkeypatch.setattr(compare.subprocess, "run", pytest_)
     assert compare.main(port) == 1
     assert len(pytest_.commands) == 1
     assert capsys.readouterr().out.endswith(
-        "✗ esp32sim: pytest exited with code 4; the backends were not compared\n"
+        "✗ serial: pytest exited with code 4; the backends were not compared\n"
     )
     # The report of the run before is not compared in place of the one this run did not write.
-    assert not (tmp_path / "esp32sim.xml").exists()
+    assert not (tmp_path / "serial.xml").exists()
+    # Nor is it when pytest exits 0 or 1 and writes none.
+    monkeypatch.setattr(compare.subprocess, "run", Pytest([AGREE[0], None], codes=(0, 1)))
+    assert compare.main(port) == 1
+    assert capsys.readouterr().out.endswith(
+        "✗ esp32sim: pytest exited with code 1; the backends were not compared\n"
+    )
 
 
 def test_no_test_on_both_backends_fails_the_script(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     skipped = junit({"t::test_fix[serial]": "skipped: serial: uart.gnss takes no replay"})
-    left = [junit({"t::test_fix[esp32sim]": "passed"}), skipped]
+    left = [skipped, junit({"t::test_fix[esp32sim]": "passed"})]
     monkeypatch.setattr(compare.subprocess, "run", Pytest(left))
     assert compare.main(["--port", "/dev/ttyUSB0", "--out", str(tmp_path)]) == 1
     assert capsys.readouterr().out.splitlines()[-1] == (

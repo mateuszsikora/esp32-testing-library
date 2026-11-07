@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
 """Runs the board tests on both backends and lists which ran on both and whether they agreed
-(plan M4, from the specification: "Every test that a real board can run, runs on one too, and
-the two results are compared").
+(plan M4, from the specification in issue #1: "Every test that a real board can run, runs on one
+too, and the two results are compared").
 
     .venv/bin/python scripts/compare-backends.py --port PORT [--out DIR] [PYTEST_ARG...]
 
 Each run is `python -m pytest` on the PYTEST_ARGs, options included, `tests/test_hello_world.py
-tests/test_nmea_reader.py` when there are none, first with `--esp32tl-backend esp32sim`, then
-with `--esp32tl-backend serial --port PORT`, each with a `--junitxml` of its own under DIR
-(`build/backends` unless given); after a `--`, the arguments come after the script's own options.
-A run whose pytest exits with a code other than 0 or 1 (interrupted, an internal or usage error,
-no test collected) ends the script, exit 1, before anything is compared; tests that fail do not.
+tests/test_nmea_reader.py` when there are none (options alone select from pytest's `testpaths`),
+first with `--esp32tl-backend serial --port PORT`, then with `--esp32tl-backend esp32sim`, each
+with a `--junitxml` of its own under DIR (`build/backends` unless given); after a `--`, the
+arguments come after the script's own options. Serial goes first so that a port the plugin
+refuses ends the script before the esp32sim run. A run whose pytest exits with a code
+other than 0 or 1 (interrupted, an internal or usage error, no test collected), or leaves no
+JUnit XML, ends the script, exit 1, before anything is compared; tests that fail do not.
 
 A test that uses `board` has the backend in its id (`test_hello_world[esp32sim]`); its two cases
 are matched without it. A test whose id is the same in both runs does not use `board` and is left
@@ -42,6 +44,8 @@ ROOT = Path(__file__).resolve().parent.parent
 TESTS = ["tests/test_hello_world.py", "tests/test_nmea_reader.py"]
 OUT = ROOT / "build" / "backends"
 BACKENDS = ("esp32sim", "serial")
+# The order of the runs: serial's port checks are usage errors, which end the script at once.
+RUNS = ("serial", "esp32sim")
 # pytest's exit codes for a run whose tests all passed, and for one where some failed.
 COMPARABLE = (0, 1)
 # How much of a failure's message a line shows.
@@ -82,7 +86,7 @@ def main(argv: list[str] | None = None) -> int:
     before, after = pytest_args[:split], pytest_args[split:]
     if not before and after[1:] == []:
         before, after = TESTS, []
-    for backend in BACKENDS:
+    for backend in RUNS:
         report = out / f"{backend}.xml"
         # A run that ends before it writes its report must not leave an earlier one to compare.
         report.unlink(missing_ok=True)
@@ -165,7 +169,9 @@ def compare(sim: dict[str, Outcome], real: dict[str, Outcome]) -> tuple[list[str
                 left_out += test not in shared
                 continue
             by_test.setdefault(name, {})[backend] = result
-    counts = dict.fromkeys(("both", "agreed", "esp32sim", "serial", "neither", "left out"), 0)
+    counts = dict.fromkeys(
+        ("both", "agreed", "esp32sim", "serial", "neither", "one run", "left out"), 0
+    )
     counts["left out"] = left_out
     lines = []
     for test, results in by_test.items():
@@ -181,7 +187,7 @@ def describe(test: str, sim: Outcome | None, real: Outcome | None) -> tuple[str,
     first, second = BACKENDS
     if sim is None or real is None:
         only = first if real is None else second
-        return f"✗ {test}: collected on {only} only", []
+        return f"✗ {test}: collected on {only} only", ["one run"]
     if sim.status == "skipped" and real.status == "skipped":
         return f"- {test}: skipped on both: {short(sim.message)}", ["neither"]
     if sim.status == "skipped" or real.status == "skipped":
@@ -220,8 +226,8 @@ def summary(counts: dict[str, int]) -> str:
     return (
         f"{count(both, 'test')} ran on both backends, {agreed} agreed and {both - agreed} did not;"
         f" {counts['esp32sim']} ran on esp32sim only, {counts['serial']} on serial only,"
-        f" {counts['neither']} on neither; {count(counts['left out'], 'test')} without `board`"
-        " left out"
+        f" {counts['neither']} on neither, {counts['one run']} collected on one only;"
+        f" {count(counts['left out'], 'test')} without `board` left out"
     )
 
 

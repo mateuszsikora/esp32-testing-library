@@ -165,33 +165,39 @@ Requesting the `wifi` fixture alone does not skip.
 ## Comparing the two backends
 
 `scripts/compare-backends.py` runs the same tests on both backends and lists, for each test that
-uses `board`, whether it ran on both and whether the two runs agreed: the specification's "Every
-test that a real board can run, runs on one too, and the two results are compared". It needs everything both
-backends need: the runner and the ROM ELF for esp32sim, the board on the port for serial, and the
-builds of the apps the tests name.
+uses `board`, whether it ran on both and whether the two runs agreed. This is the specification's
+"Every test that a real board can run, runs on one too, and the two results are compared"
+(issue #1). It needs everything both backends need: the runner and the ROM ELF for esp32sim, the
+board on the port for serial, and the builds of the apps the tests name.
 
 ```sh
 .venv/bin/python scripts/compare-backends.py --port /dev/ttyUSB0
 .venv/bin/python scripts/compare-backends.py --port /dev/ttyUSB0 tests/test_hello_world.py
-ESPBAUD=230400 .venv/bin/python scripts/compare-backends.py --port /dev/cu.usbserial-5C854994151 -k hello
+ESPBAUD=230400 .venv/bin/python scripts/compare-backends.py --port /dev/cu.usbserial-5C854994151 tests/test_nmea_reader.py -k starts_uart
 ```
 
 It runs `python -m pytest` twice on its other arguments, pytest's options included, or on
-`tests/test_hello_world.py tests/test_nmea_reader.py` when it is given none: first with
-`--esp32tl-backend=esp32sim`, then with `--esp32tl-backend=serial --port=PORT`. Without `--port`
-the serial run would stop on `serial requires an explicit --port (or a parametrised port) without
+`tests/test_hello_world.py tests/test_nmea_reader.py` when it is given none. Options without a
+path, as `-k hello` alone, select from pytest's `testpaths`, the whole suite: name the test files
+as well. The first run is `--esp32tl-backend=serial --port=PORT`, the second
+`--esp32tl-backend=esp32sim`, so that a port the plugin refuses (one with a wildcard, or an
+`ESPPORT` that names another) ends the script before the esp32sim run. Without `--port` the
+serial run would stop on `serial requires an explicit --port (or a parametrised port) without
 wildcards: automatic port discovery is disabled`, so the script requires it before running
-anything (`the following arguments are required: --port`, exit 2). Arguments after a `--` go after
-the script's own options. Each run writes its JUnit XML
-under `build/backends/` (`--out DIR` names another directory), as `esp32sim.xml` and
-`serial.xml`; each run first removes its file from an earlier comparison. A `--out` that is a file
-is refused with `✗ <DIR> is not a directory: name a directory with --out`, exit 2. The serial run
-flashes the board as any serial run does ([builds and flashing](#builds-and-flashing)).
+anything (`the following arguments are required: --port`, exit 2). Arguments after a `--` go
+after the script's own options.
+
+Each run writes its JUnit XML under `build/backends/` (`--out DIR` names another directory), as
+`serial.xml` and `esp32sim.xml`; each run first removes its file from an earlier comparison. A
+`--out` that is a file is refused with `✗ <DIR> is not a directory: name a directory with --out`,
+exit 2. The serial run flashes the board as any serial run does
+([builds and flashing](#builds-and-flashing)).
 
 Tests that fail do not stop the script: their failures are what it compares. A run whose pytest
 exits with any code other than 0 or 1 (interrupted, an internal or a usage error, or no test
-collected) ends it before anything is compared, with
-`✗ <backend>: pytest exited with code <code>; the backends were not compared`, exit 1.
+collected), or leaves no JUnit XML, ends it before anything is compared, with
+`✗ <backend>: pytest exited with code <code>; the backends were not compared`, exit 1. A missing
+app build is not one of those: it fails the test at setup, exit 1, and the comparison shows it.
 
 The two cases of a test (`test_hello_world[esp32sim]` and `test_hello_world[serial]`) are matched
 by the test's id without the backend. A test whose id is the same in both runs does not use
@@ -209,16 +215,21 @@ run; an error at setup or teardown counts as a failure, and a message is its fir
 | `- <test>: skipped on both: <reason>` | Ran on neither; the reason is the esp32sim run's |
 | `✗ <test>: collected on esp32sim only` | One run collected a case the other did not; or the other way round |
 
-The last line counts them, with `1 test` for one:
+The last line counts each kind of line, with `1 test` for one:
 
 ```text
-backends: <n> tests ran on both backends, <a> agreed and <d> did not; <s> ran on esp32sim only, <r> on serial only, <k> on neither; <l> tests without `board` left out
+backends: <n> tests ran on both backends, <a> agreed and <d> did not; <s> ran on esp32sim only, <r> on serial only, <k> on neither, <c> collected on one only; <l> tests without `board` left out
 ```
 
 The script exits 1 when a line starts with `✗`, and when no test ran on both backends, with
 `✗ no test ran on both backends: nothing was compared`; it exits 0 otherwise. Agreeing means the
 same outcome, passed or failed: the script compares neither console output nor times, which run on
 the board's emulated clock on one backend and on wall time on the other.
+
+pytest-embedded opens the port at setup, before a test reaches the call that the capability table
+skips. With no board on the port, every serial case therefore fails at setup, those that would skip
+included, and the lines say
+`passed on esp32sim, failed on serial: failed on setup with "esptool.util.FatalError: Could not open <PORT>, the port is busy or doesn't exist.`
 
 ## Validation status
 

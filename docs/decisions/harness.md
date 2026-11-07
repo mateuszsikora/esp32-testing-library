@@ -2879,13 +2879,14 @@ import, and a snapshot outlives its run; a class of its own would give a test no
 
 Status: decided (#26)
 
-`scripts/compare-backends.py` runs pytest once with `--esp32tl-backend=esp32sim` and once with
-`--esp32tl-backend=serial`, and compares each test's outcome in the two JUnit XML files: passed,
-failed or skipped. It matches a test's two cases by their id without the backend's parameter, and
+`scripts/compare-backends.py` runs pytest once with `--esp32tl-backend=serial`, then once with
+`--esp32tl-backend=esp32sim`, and compares each test's outcome in the two JUnit XML files: passed,
+failed or skipped. Serial goes first, so that a port the plugin refuses ends the script before the
+esp32sim run. It matches a test's two cases by their id without the backend's parameter, and
 leaves out an id that is the same in both runs, which is a test without `board`. A test that failed
 on both agrees and still fails the script; so does one that ran on serial and was skipped on
-esp32sim, which leaves the result of the real board's nothing to be compared with. The
-specification's claim is "Every test that a real board can run, runs on one too, and the two
+esp32sim, which leaves the real board's result with nothing to be compared with. The
+specification (issue #1) says "Every test that a real board can run, runs on one too, and the two
 results are compared".
 
 **Rejected:** one pytest session on both backends, because `--esp32tl-backend` names one backend
@@ -2893,4 +2894,6 @@ and serial stays opt-in: a session without the option runs esp32sim alone. Compa
 output or times, because esp32sim stamps the console on the emulated clock and serial after a
 reader poll on wall time, with USB, driver and host scheduling delays. A property the plugin
 records with the backend of each case, because the id already carries it, and the properties the
-`board` fixture records are missing from a test skipped before the fixture runs.
+`board` fixture records are missing from a test skipped before the fixture runs. Checking the port
+in the script before the first run, because the plugin's checks would then live in two places, and
+the script uses the standard library only; running serial first gets the plugin's answer as soon.
