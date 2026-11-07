@@ -534,6 +534,10 @@ LilyGO profile ([validation firmware](features/validation-firmware-user.md#gpio_
 - A comparison script lists which tests ran on both backends and whether they agreed. This is
   the spec's "every test that a real board can run, runs on one too", so it is its own milestone.
 
+*Update, 2026-11-07:* the comparison is `scripts/compare-backends.py` (#26), which runs pytest once
+on each backend and compares the outcomes in the two JUnit XML files
+([comparing the two backends](features/serial-backend-user.md#comparing-the-two-backends)).
+
 ### M5. The `real` source on the emulator
 
 *Amended by section 11: M6 no longer depends on this milestone.*

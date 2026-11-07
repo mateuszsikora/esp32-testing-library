@@ -254,6 +254,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [A real board does not read its flash: the test skips](harness.md#a-real-board-does-not-read-its-flash-the-test-skips) | `harness.md` | decided (#131) |
 | [The reader reads NVS itself, from the format](harness.md#the-reader-reads-nvs-itself-from-the-format) | `harness.md` | decided (#131) |
 | [A snapshot's errors are ValueError, not BackendError](harness.md#a-snapshots-errors-are-valueerror-not-backenderror) | `harness.md` | decided (#131) |
+| [The backend comparison compares outcomes of one run on each backend](harness.md#the-backend-comparison-compares-outcomes-of-one-run-on-each-backend) | `harness.md` | decided (#26) |
 
 ## The runner crate and esp32sim
 

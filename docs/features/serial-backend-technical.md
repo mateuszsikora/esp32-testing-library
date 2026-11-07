@@ -191,6 +191,34 @@ reference hashes before port creation, console reset/capture, waits and their re
 skips, failed reset with retry, disconnected open ports and a blocked reader released after close.
 `tests/test_pytest_plugin.py` covers console tap reports on esp32sim and ignoring references there.
 
+### The backend comparison
+
+`scripts/compare-backends.py` ([user guide](serial-backend-user.md#comparing-the-two-backends))
+reads only the two JUnit XML files its pytest runs write, with `-o junit_family=xunit1` for the
+reason `scripts/check-determinism.py` gives: pytest-embedded's `app_path` fixture records an XML
+attribute, on which xunit2 warns. A test case's outcome is `failed` when it has a `<failure>` or an
+`<error>`, which wins over a `<skipped>` (a test that skipped in its body and failed at teardown has
+both), then `skipped`, else `passed`. pytest writes an expected failure as
+`<skipped type="pytest.xfail">`, so an `xfail` test counts as skipped; no test of the suite that
+uses `board` has one. Its id is `classname::name`. The serial run goes first: the plugin's
+refusals of a port are usage errors at collection (`pytest_collection_modifyitems`), exit 4,
+which end the script before the esp32sim run.
+
+The plugin gives a test that uses `board` its backend as one parameter, whose id is the backend's
+name (`pytest_generate_tests` in `esp32tl/pytest_plugin.py`), and pytest joins the ids of a case's
+parameters with `-`. `without_backend` removes the first part equal to the run's backend from the
+bracket: `test_a_replay[esp32sim-gnss-generated-1]` and `test_a_replay[serial-gnss-generated-1]`
+both become `test_a_replay[gnss-generated-1]`. An id that is the same in both runs is left out
+first, so that a test without `board` parametrised over the backends' names by itself, as
+`tests/test_boards.py::test_a_backend_refuses_what_it_does_not_declare[esp32sim-request_0-None]`,
+is not taken for one of the esp32sim run's board tests. A parameter of another kind whose id is a
+backend's name, as `serial`, would collide with the backend's; no test of the suite has one.
+
+`tests/test_compare_backends.py` covers the outcomes read from made-up XML, the ids without the
+backend, every kind of line and the counts, and `main` against a stand-in for pytest: the
+arguments of each run, the required `--port`, a run that cannot test, and a comparison with no
+test on both backends. Neither the runner nor a board runs.
+
 ### Physical validation
 
 On 2026-11-02, both console smoke tests passed on a user-identified LilyGO board. esptool

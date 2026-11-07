@@ -79,13 +79,14 @@ GitHub Action, a pre-commit hook or a Python dependency.
 | C11 | `^tools/` | `^docs/stage0-findings\.md$` | Benchmark tool changed: update Reproducing in docs/stage0-findings.md; re-measure if results change |
 | C12 | `^scripts/generate-gnss-recordings\.py$` | `^docs/features/validation-firmware-` | GNSS recording generator changed: update docs/features/validation-firmware-*.md |
 | C13 | `^scripts/check-determinism\.py$` | `^docs/guides/testing\.md$` | Determinism check changed: update docs/guides/testing.md |
+| C14 | `^scripts/compare-backends\.py$` | `^docs/features/serial-backend-` | Backend comparison changed: update docs/features/serial-backend-*.md |
 
 Where one directory has several owners, the map lists its files by name: `scripts/` (C4, C5 for
 the development guide, C9, C10 for the documentation guide, C12 for the validation firmware, C13
-for the testing guide) and the runner's top level (F7 for `Cargo.toml`, C6 for the toolchain;
-`Cargo.lock` is nobody's), and `esp32tl/sources/` (F15 for `replay.py`, F17 for `model/` except
-`modem.py`, F19 for that modem, F25 for `real.py`; its other files are F12's until they have
-documents of their own).
+for the testing guide, C14 for the serial backend) and the runner's top level (F7 for
+`Cargo.toml`, C6 for the toolchain; `Cargo.lock` is nobody's), and `esp32tl/sources/` (F15 for
+`replay.py`, F17 for `model/` except `modem.py`, F19 for that modem, F25 for `real.py`; its other
+files are F12's until they have documents of their own).
 `runner/src/` instead carves the protocol files out of F6, so that a new runner file is owned from
 its first line. `pyproject.toml` has several owners in one file: C7 accepts any of their
 documents, and review checks the choice.

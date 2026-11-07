@@ -266,9 +266,10 @@ CROSS_CUTTING = [
         r"^docs/guides/development\.md$",
         "Pre-commit hooks changed: update docs/guides/development.md",
     ),
-    # scripts/ has four owners, the development guide (C4, C5), the documentation guide (C9,
-    # C10), the validation firmware documents (C12) and the testing guide (C13), so its files are
-    # listed by name. A new script matches no rule: add it here.
+    # scripts/ has five owners, the development guide (C4, C5), the documentation guide (C9,
+    # C10), the validation firmware documents (C12), the testing guide (C13) and the serial
+    # backend documents (C14), so its files are listed by name. A new script matches no rule: add
+    # it here.
     Rule(
         "C4",
         r"^scripts/fetch-rom-elf$",
@@ -334,6 +335,12 @@ CROSS_CUTTING = [
         r"^scripts/check-determinism\.py$",
         r"^docs/guides/testing\.md$",
         "Determinism check changed: update docs/guides/testing.md",
+    ),
+    Rule(
+        "C14",
+        r"^scripts/compare-backends\.py$",
+        r"^docs/features/serial-backend-",
+        "Backend comparison changed: update docs/features/serial-backend-*.md",
     ),
 ]
 
