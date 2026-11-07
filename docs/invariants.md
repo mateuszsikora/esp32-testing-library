@@ -567,10 +567,11 @@ that references to its number keep their meaning.
 - **172.** A target that heard a page loses contact when the pager leaves, also after that page
     ended, and its end falls at the supervision timeout counted from then. A target whose host has not
     answered tells it of no link when its end goes, and a host that answers later gets a failed
-    `Connection_Complete`: such an answer, late because this side's entry for it went, makes no link,
+    `Connection_Complete`, unless this side holds a link or its own page for that address (205):
+    such an answer, late because this side's entry for it went, makes no link,
     completes no later page, leaves a working link as it is, and does not fail the air. An acceptance
     that comes when only the pager's page has ended finds its entry, and makes a link, except with
-    `role=CENTRAL` (#141).
+    `role=CENTRAL` (205).
     `tests/test_spp_peer.py::test_a_target_that_heard_the_page_loses_contact_when_the_pager_leaves`,
     `tests/test_spp_peer.py::test_a_pager_whose_power_cycles_before_the_host_answers_gets_no_link`,
     `tests/test_spp_peer.py::test_a_target_that_leaves_before_its_host_answers_tells_its_host_of_no_link`,
@@ -658,6 +659,22 @@ that references to its number keep their meaning.
     `tests/test_spp_peer.py::test_a_link_made_after_a_rejection_of_a_crossing_page_switches_roles_as_asked`,
     `tests/test_spp_peer.py::test_a_page_under_way_keeps_its_entry_after_a_rejection_of_a_crossing_page`,
     `tests/test_spp_peer.py::test_a_page_heard_during_this_sides_own_goes_when_that_page_makes_the_link`
+- **205.** Two pages at one instant that both hosts accept, plainly or as the central on either side,
+    make one link, with one handle on each side and one central: the page accepted first, or the
+    other when that acceptance asks for a role switch the page it accepted does not allow. A late
+    answer tells its host of no failure on a working link or during its own page. A role switch asked of a pager
+    whose page ended is refused, and no link comes of that acceptance; a host that accepted as the
+    central a pager that left gets a failed `Connection_Complete` when its end falls, or when its
+    own page to that pager ends, if that is later.
+    `tests/test_spp_peer.py::test_two_pages_at_one_instant_both_accepted_make_one_link`,
+    `tests/test_spp_peer.py::test_a_crossing_acceptance_whose_role_switch_would_be_refused_leaves_the_other_its_link`,
+    `tests/test_spp_peer.py::test_an_answer_to_a_crossing_page_after_this_sides_own_ended_makes_the_link`,
+    `tests/test_spp_peer.py::test_a_late_answer_to_a_crossing_page_tells_no_failure_on_the_link_it_made`,
+    `tests/test_spp_peer.py::test_a_late_answer_leaves_a_working_link_alone`,
+    `tests/test_spp_peer.py::test_a_page_tried_again_with_a_slow_host_does_not_fail_the_air`,
+    `tests/test_spp_peer.py::test_an_acceptance_as_the_central_after_the_page_ended_is_refused`,
+    `tests/test_spp_peer.py::test_a_host_that_accepted_as_the_central_a_pager_that_left_hears_of_it_when_its_end_falls`,
+    `tests/test_spp_peer.py::test_an_acceptance_as_the_central_lost_during_this_sides_own_page_ends_with_that_page`
 
 ## The esp32tl command
 

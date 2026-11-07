@@ -26,7 +26,10 @@ Classic link. `Controller` adds them, for links whose controllers are all of thi
   `Connection_Complete` carries the reason as its status, and this side's host gets one too.
 - A page this side hears is kept apart from its own page to the same address, which Bumble's
   handler writes it over, until its host accepts it: this side's own page keeps what its
-  `Create_Connection` asked, whatever becomes of the page heard.
+  `Create_Connection` asked, whatever becomes of the page heard. Two pages at one instant, both
+  accepted, make one link: the page accepted first. A late answer tells the host of no failure
+  where this side holds an entry for the peer, and a role switch asked of a side that holds none
+  is refused, where Bumble's handler asserts one.
 - Page scan (Vol 4, Part E, 7.3.18), which Bumble's controller ignores: a device whose page scan is
   off does not hear a page, nor a remote name request without a link, which pages too, so either
   ends at the page timeout. As for a device that left, this is decided at the instant the page
@@ -426,6 +429,31 @@ class Controller(BumbleController):
         self.send_lmp_packet(peer, lmp.LmpNotAccepted(lmp.Opcode.LMP_HOST_CONNECTION_REQ, status))
         self.on_classic_connection_complete(peer, status)
 
+    def on_classic_role_change_request(self, peer_address: hci.Address) -> None:
+        if peer_address not in self.classic_connections or (
+            peer_address not in self._paging and self._switching_for_a_page(peer_address)
+        ):
+            # A switch the peer asks before it accepts this side's page belongs to that page: one
+            # that ended here, which left no entry, where Bumble's handler asserts one, or a link
+            # made of the peer's own page instead, whose roles are its own.
+            self.send_lmp_packet(
+                peer_address,
+                lmp.LmpNotAccepted(
+                    lmp.Opcode.LMP_SWITCH_REQ, hci.HCI_ErrorCode.ROLE_CHANGE_NOT_ALLOWED_ERROR
+                ),
+            )
+            return
+        super().on_classic_role_change_request(peer_address)
+
+    def _switching_for_a_page(self, peer: hci.Address) -> bool:
+        """Whether `peer`'s host accepted a page of this side as the central, and waits for the
+        role switch."""
+        other = self.link.find_classic_controller(peer)
+        if not isinstance(other, Controller):
+            return False
+        heard = other._heard.get(self.public_address)
+        return heard is not None and heard.switching
+
     def _accepted(self, peer: hci.Address, heard: HeardPage) -> None:
         """The page `heard` becomes the link, in place of this side's own page to `peer`, which
         ends with it."""
@@ -460,10 +488,10 @@ class Controller(BumbleController):
 
     def _take_answer(self, peer: hci.Address, op_code: int) -> HeardPage | None:
         """Counts an answer of this side's host to a page from `peer`, and gives the page it
-        answers, if this side still holds one with no link to `peer`. If not, this has told the
-        host: an answer nothing was owed for is its own error, and one with no page left makes no
-        link, and what this side holds for the peer now, a link or its own page, is not this
-        answer's."""
+        answers, if this side still holds one with no link to `peer`, and the peer has not accepted
+        this side's own page. If not, this has told the host: an answer nothing was owed for is its
+        own error, and one with no page left makes no link, and what this side holds for the peer
+        now, a link or its own page, is not this answer's."""
         if self._answers_due[peer] == 0:
             self._send_hci_command_status(
                 hci.HCI_ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR, op_code
@@ -474,16 +502,34 @@ class Controller(BumbleController):
         if self._late_answers[peer] > 0:
             self._late_answers[peer] -= 1
         elif heard is not None and not heard.switching and not self._has_link(peer):
-            return heard
+            if not self._own_page_accepted(peer):
+                return heard
+            # This side's own page makes the link, or fails with the peer's acceptance.
+            self._drop_heard(peer)
         self._send_hci_command_status(hci.HCI_ErrorCode.SUCCESS, op_code)
         self._tell_host_no_link(peer, hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR)
         return None
 
     def _tell_host_no_link(self, peer: hci.Address, status: int) -> None:
         """No link comes of the page this side's host answered. The event names only the address:
-        to the host it would end this side's own page, so that page goes on to end by itself."""
-        if peer not in self._paging:
+        to the host it would end this side's own page, so that page goes on to end by itself, and
+        it would fail a working link, which goes on as it is."""
+        if peer not in self.classic_connections:
             super().on_classic_connection_complete(peer, status)
+
+    def _own_page_accepted(self, peer: hci.Address) -> bool:
+        """Whether the peer's host accepted this side's own page, while that page is under way: the
+        acceptance, or the role switch before it, is on its way, and a page heard from the peer can
+        make no link. With two pages at one instant, the first acceptance makes the one link."""
+        other = self.link.find_classic_controller(peer)
+        if peer not in self._paging or not isinstance(other, Controller):
+            return False
+        if other._has_link(self.public_address):
+            return True
+        # The role switch goes to this side's own entry, which refuses it unless `Create_Connection`
+        # allowed one, and a refusal ends both pages: then the page heard makes the link.
+        own = self.classic_connections[peer]
+        return self._switching_for_a_page(peer) and own.classic_allow_role_switch
 
     def _drop_heard(self, peer: hci.Address) -> None:
         """The page this side heard from `peer`, if any, goes with no link. The answers still owed
@@ -605,12 +651,17 @@ class Controller(BumbleController):
 
     def _link_timed_out(self, peer: hci.Address) -> None:
         """The link to `peer` falls, and so does a page this side heard from it: no link was made
-        of that page to tell the host of. This side's own page ends by itself."""
+        of that page to tell the host of, unless the host accepted it as the central, and waits.
+        This side's own page ends by itself."""
         reason = hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR
         security = self._security.get(peer)
         if security is not None and security.initiator and not security.authenticated:
             self._authentication_complete(peer, reason)
+        heard = self._heard.get(peer)
         self._drop_heard(peer)
+        if heard is not None and heard.switching:
+            # The role switch was lost on the way: the acceptance ends here.
+            self._tell_host_no_link(peer, reason)
         if self._has_link(peer):
             self.on_classic_disconnected(peer, reason)
         else:

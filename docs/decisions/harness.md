@@ -1708,11 +1708,48 @@ Part E, 6.7, is not modelled). A host that accepts after the page ended makes a 
 pager reported `PAGE_TIMEOUT`, and when the pager has tried again, the first answer connects the
 second page. Bumble's host accepts at the instant it hears, so this takes a slowed host, and firmware
 behind #34 is the first that will be slow: what it needs can be seen then. Until then an answer with
-nothing left to answer gets a failed `Connection_Complete`, and changes nothing else.
+nothing left to answer changes nothing, and its host gets a failed `Connection_Complete` unless its
+side holds an entry for that address, a link or its own page, which the event would end in the
+host's eyes (#141).
 
 **Rejected:** ignoring the late answer on the pager's side, because the target would be left holding
 a link with no other end, and adding the timeout now, because nothing would exercise it but its own
 test.
+
+
+## Two pages at one instant make one link, the page accepted first
+
+Status: decided (#141)
+
+When two devices paged each other at one instant and both hosts accepted, each controller made the
+page it heard its link and then completed its own page as well, so each host had two handles for one
+link. Now the acceptance that runs first makes the link. A host that answers the page it heard after
+the peer's host has accepted this side's own page, by making the link or by asking for the role
+switch first, gives a late answer, and this side's own page makes the link, with the roles the
+peer's host asked for: one handle on each side, and one central. At that instant the `LMP_accepted`
+or `LMP_switch_req` is still on its way, so the controller reads the peer's controller to know, as
+it does for page scan. A role switch that this side's own page does not allow would end both pages,
+so then this side's answer makes the link, and the switch, which reaches that link afterwards, is
+refused as belonging to a page that is over.
+
+**Rejected:** ignoring a completion when the entry already has a handle, the direction #141 gave,
+because it leaves one handle but each side keeps the page it heard, so both are the peripheral, and
+with a role switch on either side both can be the central.
+
+
+## A role switch asked of a pager whose page ended is refused
+
+Status: decided (#141)
+
+A host that accepts as the central after the pager's page ended sends `LMP_switch_req` to a pager
+that has no entry for it, and Bumble's handler asserted one, which failed the air. The pager now
+refuses with `ROLE_CHANGE_NOT_ALLOWED`: the target's host gets `Connection_Complete` with it, and no
+link comes of the acceptance. A plain acceptance at that point still makes a link, as
+[Connection_Accept_Timeout is postponed](#connection_accept_timeout-is-postponed) says.
+
+**Rejected:** making a link of it, because the pager would need an entry with an
+`allow_role_switch` no `Create_Connection` asked for; and `CONNECTION_TIMEOUT` or
+`LMP_RESPONSE_TIMEOUT`, because the pager is there and answers.
 
 
 ## A bt fixture, an HCI tap and a replayed peer are postponed

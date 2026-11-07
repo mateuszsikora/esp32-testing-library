@@ -195,10 +195,14 @@ link; `controller.py`, Bumble's virtual controller with what Classic devices nee
      is left to end by itself, though the entry of a page it heard meanwhile has a timer of its own.
      `_link_timed_out` sends `Authentication_Complete` with `CONNECTION_TIMEOUT_ERROR` to an
      initiator's host still authenticating, drops the page heard from that peer, if any
-     (`_drop_heard`), then runs `on_classic_disconnected` with that reason on a link, and otherwise
-     only drops the timers and lets the pair go. `Write_Link_Supervision_Timeout` needs the central:
-     it keeps the value in `_supervision_timeouts`, by peer, sends `LmpSupervisionTimeout`, and
-     on a link that lost contact starts the timer again from `_lost_contact`. The peripheral keeps
+     (`_drop_heard`), and, when its host accepted that page as the central and waits for the role
+     switch, which was lost on the way to a pager that left, sends the host `Connection_Complete`
+     with `CONNECTION_TIMEOUT_ERROR`, unless this side holds an entry of its own for the peer, as
+     for a late answer; then it runs `on_classic_disconnected` with that reason on a link, and
+     otherwise only drops the timers and lets the pair go.
+     `Write_Link_Supervision_Timeout` needs the central: it keeps the value in
+     `_supervision_timeouts`, by peer, sends `LmpSupervisionTimeout`, and on a link that lost
+     contact starts the timer again from `_lost_contact`. The peripheral keeps
      what the packet says and sends its host `Link_Supervision_Timeout_Changed`; a packet the link
      refuses leaves the other end at its old value. 0 starts no timer.
      `on_classic_disconnected` cancels the timer and, once neither end holds the link, calls
@@ -226,14 +230,25 @@ link; `controller.py`, Bumble's virtual controller with what Classic devices nee
      and during this side's own page too. It gives the page the answer is for, from `_heard`, unless
      one is counted late, or `_heard` holds no page from the peer still waiting for an answer, as
      after its end fell or after an acceptance as the central, or this side already has a link to
-     the peer, as when its own page completed after it heard the other's: then the answer is late.
+     the peer, as when its own page completed after it heard the other's, or the peer's host has
+     accepted this side's own page, which is still under way here (`_own_page_accepted`, which reads
+     the peer's controller): the peer has a link to this side, or holds this side's page marked
+     `switching` (`_switching_for_a_page`) and this side's own entry allows the role switch, as its
+     `Create_Connection` asked. Then the answer is late, and the page heard goes through
+     `_drop_heard`, since this side's own page makes the link. A switch this side's own entry would
+     refuse ends both pages, so then the page heard is still the answer's, and makes the link. That last is two
+     pages at one instant, both accepted: the first acceptance sends `LMP_accepted`, or
+     `LMP_switch_req` first, and the second, at the same instant, finds it on the other side while
+     that is on its way, so the one link is the page accepted first, with the roles its target's
+     host asked, and one handle on each side.
      A page that ended at its pager's timer is not
      among these: this side does not hear of it, so an acceptance then makes a link, and a rejection
      goes to a pager that drops it. A late answer: the host gets a command
-     status of `SUCCESS` and, unless this side is itself paging that peer, `Connection_Complete` with
-     `CONNECTION_TIMEOUT_ERROR`, since the event names only the address and would end that page in
-     the host's eyes. What this side holds is left as it is, so that a late answer completes neither
-     a new page nor a working link. An answer
+     status of `SUCCESS` and, unless this side holds an entry for that peer in
+     `classic_connections`, its own page or a link, `Connection_Complete` with
+     `CONNECTION_TIMEOUT_ERROR` (`_tell_host_no_link`): the event names only the address, so it
+     would end that page or fail that link in the host's eyes. What this side holds is left as it
+     is, so that a late answer completes neither a new page nor a working link. An answer
      names only the address, so answers are told apart only by their order: the oldest is taken as
      the late one, and with a page tried again while the first answer is on its way, that first
      answer connects the second page, and the second answer is the late one. A link being made marks
@@ -254,7 +269,17 @@ link; `controller.py`, Bumble's virtual controller with what Classic devices nee
      status, which ends this side's own page too, as the host cannot tell the two apart. A page that
      went before the switch's answer leaves the answer nothing to do. The pager's own page keeps the
      entry `Create_Connection` made, also when it heard a page from the target and rejected it, so
-     it takes the switch with the `allow_role_switch` it asked.
+     it takes the switch with the `allow_role_switch` it asked. A switch the target asks before it
+     accepts belongs to the pager's own page, and only that page, while under way, takes it:
+     `Controller.on_classic_role_change_request` answers `LMP_not_accepted` for `LMP_SWITCH_REQ`
+     with `ROLE_CHANGE_NOT_ALLOWED_ERROR` when the pager has no entry for the target, as after its
+     page ended, where Bumble's handler asserts one, and when the target holds the pager's page
+     marked `switching` while the pager's entry is a link, made of the target's own page, which the
+     pager accepted at the same instant. In the first case the target's host gets
+     `Connection_Complete` with that status, and no link comes of the acceptance; the pager drops
+     the `LMP_not_accepted` that follows, as for a rejection of a page that ended. In the second,
+     the pager's `LMP_accepted` reaches the target first and its own page makes the link, so the
+     refusal finds no page waiting, and each side keeps the role of that page.
    - **Rejecting a page.** Bumble 0.0.236 has no handler for `Reject_Connection_Request`, so its
      `on_hci_command` would return `UNKNOWN_HCI_COMMAND_ERROR` where an asynchronous command has
      nowhere to put it, and the host would wait for ever. `on_hci_reject_connection_request_command`
@@ -419,6 +444,14 @@ in `error_code` on a failed `Connection_Complete`, and `HCI_Error` with
   roles as `Create_Connection` allowed. A pager leaving after its page ended, or after rejecting a
   crossing page. A role switch refused, also with an answer never given, with this side paging too,
   and with both, leaving nothing. An entry that goes with a failed page taking its timer along.
+  Two pages at one instant, both accepted at once, plainly or as the central on either side or
+  both, making one link with one handle on each end and one central, also when the first asks for a
+  role switch the other's page does not allow, or comes after the other's page ended, and both
+  accepted 1 s apart, with no failure told of the later answer; a late answer on a working link, also to a page tried
+  again, telling no failure. An acceptance as the
+  central after the page ended refused with no link; one of a pager that left told at the
+  supervision timeout, either way of leaving, or at the end of this side's own page when that page
+  outlasts it.
   Page scan off: a page ending at exactly the page timeout with no entry on the target, one turned
   on during the page answering only the next, and one turned back on paged at once; inquiry scan
   and page scan each on alone; a remote name request ending at the page timeout, also to a target
@@ -452,24 +485,27 @@ and the pager's next page gets `CONNECTION_ALREADY_EXISTS`. Bumble's host accept
 hears, so only a slowed host reaches this. For the same reason a target keeps the page it heard as a
 link after that page ended, so the pager's remote name request then gets the target's name, with
 page scan off too, where a real controller would page again and end in `PAGE_TIMEOUT`.
-An acceptance with `role=CENTRAL` after the page ended fails the air with Bumble's `AssertionError`,
-as the pager no longer has an entry for the role switch (#141). Bumble's host fails the air with
+An acceptance with `role=CENTRAL` after the page ended makes no link, where a plain one does: the
+pager refuses the role switch. Bumble's host fails the air with
 `ObjectLookupError` when it accepts a peer's page with `role=CENTRAL` after its own
 `Device.connect` to that peer failed, as when the peer rejected this side's page while both paged:
 `connect` forgets the page waiting under that address, and `Role_Change` then finds no connection.
 The controller makes the link; a host that sends `Create_Connection` itself, as the test of this
-does, does not meet it. A host that accepts with `role=CENTRAL` a pager that has left gets only the
-command status: the role switch is lost, and its entry goes at the supervision timeout with no
-`Connection_Complete` (#141).
+does, does not meet it.
 Every page a host hears is taken to get one answer, as Bumble's host gives. One that never answers:
 its entry stays with nothing to end it, so this device's own pages to that peer get
 `CONNECTION_ALREADY_EXISTS`, also after a page of its own has reported `PAGE_TIMEOUT`; and an answer
 counted late stays owed, so after its end fell, as across a restart of its firmware, or after this
 device's own page to that peer made the link, the answer to the next page is taken for it and that
 pager gets `PAGE_TIMEOUT`.
-Two pages at one instant, both accepted, give each side two handles for one link. A late answer on a
-working link, as with crossing pages, gives the host a failed `Connection_Complete` for that address
-(both #141).
+When two pages cross, the controllers agree on one link and its central, but Bumble's host of a
+device that heard the other's page during its own `Device.connect` may take itself for the
+peripheral where its controller is the central: its `on_connection_request`, which accepts the page
+heard, puts a peripheral's `Connection` in `pending_connections` over the central's that
+`Device.connect` left there, and the `Connection_Complete` of either page takes it. Only a
+`Role_Change` corrects it. Two pages at one instant are told apart by the order the loop runs them
+in, and their link is the page whose acceptance runs first; a real controller is paging or scanning
+at a given moment, and which page it answers is its own.
 An answer to a synchronous link is not modelled: 7.1.9 lets `Reject_Connection_Request` decline one,
 and here, when no answer to a page is owed, it gets `UNKNOWN_CONNECTION_IDENTIFIER_ERROR`, leaving the
 entry in `sco_links` and the requester waiting; when one is owed, it is taken as that answer. Bumble's

@@ -112,6 +112,18 @@ it does not expect once told to, with `peer.device.classic_accept_any = False`, 
 `CONNECTION_REJECTED_DUE_TO_LIMITED_RESOURCES`. The device that paged gets that reason at once, in
 `error_code`, rather than `PAGE_TIMEOUT` at the page timeout; both can connect afterwards.
 
+Two devices that page each other at the same instant get one link, with one handle on each side
+and one central: the page whose target's host answers first makes it, and its pager is the central,
+unless that host asked for the central's role. When it asked for it and the page it answered allows
+no role switch, the other host's answer makes the link instead, of the asking device's own page,
+which has that device as its central all the same. The answer that makes no link changes nothing and
+reports no failure, as does an answer to an earlier page that comes when the two already have a
+link. Bumble's host on a device that heard the other's page during its own `connect` may give
+`connection.role` as the peripheral where the link has it as the central. A host that accepts a page as the central after the page ended gets
+`Connection_Complete` with `ROLE_CHANGE_NOT_ALLOWED`, and no link; one that accepts as the central
+a device that has left gets it with `CONNECTION_TIMEOUT` when its end falls, 20 s after the device
+left.
+
 Nor does their API turn page scan off. Through Bumble, `await peer.device.set_connectable(False)`
 does, inside `air.run`: the device no longer hears a page, and a device that pages it gets
 `PAGE_TIMEOUT` at the page timeout, 5.12 s unless its host wrote another; a remote name request
