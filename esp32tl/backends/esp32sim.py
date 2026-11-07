@@ -82,6 +82,7 @@ from esp32tl.link.protocol import ChipReset, Power, Reset
 from esp32tl.net import Internet
 from esp32tl.net.ntp import DEFAULT_UTC
 from esp32tl.report import RunLog, board_time, shown
+from esp32tl.sources.model.modem import Modem as ModemModel
 from esp32tl.sources.real import Real
 from esp32tl.sources.replay import Replay
 from esp32tl.tap import Tap, app_image_sha256
@@ -618,7 +619,7 @@ class Esp32Sim(Board):
         """The simulated networks the test gave, by what they are behind: the modem's route or
         `wifi`."""
         networks = [
-            (uart.name, uart.model().data)
+            (uart.name, uart.modem_model().data)
             for uart in self._uarts.values()
             if isinstance(uart, Modem) and uart.lossless
         ]
@@ -1066,7 +1067,7 @@ class Esp32Sim(Board):
             }
             if isinstance(uart.source, Real):
                 routes[name]["dropped"] = uart.source.dropped
-            if isinstance(uart, Modem) and uart.source_kind == "model":
+            if isinstance(uart, Modem) and isinstance(uart.source, ModemModel):
                 routes[name]["commands"] = [
                     {
                         "t_ns": c.at.ns,
@@ -1076,7 +1077,7 @@ class Esp32Sim(Board):
                     }
                     for c in uart.commands
                 ]
-                data = uart.model().data
+                data = uart.modem_model().data
                 if isinstance(data, Internet):
                     routes[name]["network"] = data.transcript()
             if isinstance(uart.source, Replay) and uart.source.unseen_count:

@@ -34,10 +34,12 @@ takes with `lose_power()` and gives back with `restore_power()` or `power_on()`.
 running modem down as `lose_power()` does; back, it starts nothing. A PWRKEY pulse starts the
 modem only with both, and `power_on()` with `_board` off restores `_supply` and starts nothing.
 
-The model keeps every `Command` under an RLock. `commands` returns a snapshot. With a model,
-`Esp32Sim.report` appends the command section; `properties` adds all commands to the modem route.
-The rolling wire log still keeps only its normal last entries. Raw data-mode payloads are available
-as a snapshot through `model().data_received`.
+The model keeps every `Command` under an RLock. `commands` returns a snapshot. With the modem
+model, `Esp32Sim.report` appends the command section; `properties` adds all commands to the modem
+route. Both check the route's source by type, so a model of the test's on `uart.modem`
+(`Uart.model`) adds neither. The rolling wire log still keeps only its normal last entries. Raw
+data-mode payloads are available as a snapshot through `modem_model().data_received`, the route's
+`ModemModel`; it was `model()` until `Uart.model(source)` took that name.
 
 ## Schema
 

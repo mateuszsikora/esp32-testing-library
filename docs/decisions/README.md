@@ -252,6 +252,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [A real board does not read its flash: the test skips](harness.md#a-real-board-does-not-read-its-flash-the-test-skips) | `harness.md` | decided (#131) |
 | [The reader reads NVS itself, from the format](harness.md#the-reader-reads-nvs-itself-from-the-format) | `harness.md` | decided (#131) |
 | [A snapshot's errors are ValueError, not BackendError](harness.md#a-snapshots-errors-are-valueerror-not-backenderror) | `harness.md` | decided (#131) |
+| [A UART takes a model of the test's as the four-method Source, through Uart.model](harness.md#a-uart-takes-a-model-of-the-tests-as-the-four-method-source-through-uartmodel) | `harness.md` | decided (#161) |
 
 ## The runner crate and esp32sim
 

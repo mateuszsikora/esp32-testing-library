@@ -2874,3 +2874,30 @@ the message `board.nvs` uses for a missing name, and `board.flash()` before powe
 
 **Rejected:** `BackendError`, because `FlashSnapshot` lives in `esp32tl/flash.py`, which the backends
 import, and a snapshot outlives its run; a class of its own would give a test nothing to catch.
+
+## A UART takes a model of the test's as the four-method Source, through Uart.model
+
+Status: decided (#161)
+
+`board.uart(role).model(source)` gives a route a model the test wrote, with the `Source` protocol
+the route's other sources and the SPP peer's already use: `receive(t, data)`, `poll(now)`,
+`quiet_until()` and `latency()`, and `supply(on)` when the part is on the board's supply. It is a
+source of kind `model`, asked as one, so the backends' capability checks apply and `serial` skips
+it; before power-on, one per route. The report and a tap name it by its class
+(`model:AtResponder`), which is what the test called it. An object that lacks one of the four
+methods is a `TypeError` at the call, naming what it lacks, before the backend is asked anything.
+The call returns the source, typed as given, so the test reads its own model's state without a
+cast. `Modem.model()`, which returned the modem model, became `Modem.modem_model()`: `Uart.model`
+is the call that parallels `replay(path)` and `real(port)`, and a subclass cannot take the name
+for something else.
+
+**Rejected:** a smaller protocol for a model that only answers, `answer(t, data)` with a fixed
+latency, because the link needs `latency()` and `quiet_until()` to know how far the board may run
+ahead, and a fixed default would be wrong for a part that answers slowly or sends unprompted; the
+four methods cost such a model two one-line returns. Calling a model that lacks `poll`,
+`quiet_until` or `latency` with defaults filled in, because a misspelt method would then be a model
+that silently does nothing. Refusing a `Replay` or a `Real` given to `model`, because
+`replay(path)` and `real(port)` are the calls a test has for them, and building one by hand is not
+a mistake a test makes by accident.
+A name of the test's for the report (`model(source, name=...)`), because no test needs one yet and
+the class's name says what it is.

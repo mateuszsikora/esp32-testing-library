@@ -59,7 +59,9 @@ A recording, [version 1](../recording-format.md):
 ```
 
 - `source` is what was at the far end: `replay`, `model:modem` for the modem, `model:gnss` for the
-  GNSS receiver the test described ([models and units](models-user.md)), `real` for a
+  GNSS receiver the test described ([models and units](models-user.md)), `model:<class>` for a
+  model the test wrote, by its class's name, as `model:AtResponder`
+  ([a UART's own model](pytest-plugin-user.md#a-uarts-own-model)), `real` for a
   [device on a host serial port](real-source-user.md), or `none` for a route the test gave nothing.
 - `clock` is the backend's, `emulated-fifo-write`, or `wall` in a run with a real source: times are
   the board's nanoseconds since power-on.

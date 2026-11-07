@@ -82,7 +82,7 @@ class Gnss(Uart):
 
     def recorded_source(self) -> str:
         """`model:gnss` for the receiver model, as the recording format names a model."""
-        return self.MODEL if self.source_kind == "model" else super().recorded_source()
+        return self.MODEL if isinstance(self.source, GnssReceiver) else super().recorded_source()
 
     @property
     def position(self) -> Position | None:
@@ -119,7 +119,9 @@ class Gnss(Uart):
 
     def _refuse_replay(self) -> None:
         if self.source is not None:
-            what = "has a real device" if self.source_kind == "real" else "replays a recording"
+            what = {"real": "has a real device", "model": "has a model of the test's"}.get(
+                self.source_kind or "", "replays a recording"
+            )
             raise SourceError(
                 f"{self.name} {what}: it has no receiver to describe; one source per test"
             )

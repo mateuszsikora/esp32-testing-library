@@ -278,13 +278,65 @@ Where a test can put a model of its own today:
   nanoseconds ([the model that answers](../features/bluetooth-peer-user.md#the-model-that-answers)).
   esp32sim has no Bluetooth Classic controller, so no firmware talks to a peer yet; esp32tl's own
   tests drive one from Python (`tests/test_spp_peer.py`).
-- **A UART route** takes the GNSS receiver on `uart.gnss` and the modem on `uart.modem`, a
-  recording or a real device, but no model a test writes: there is no public call that gives a
-  route one ([#161](https://github.com/mateuszsikora/esp32-testing-library/issues/161)). For
-  another part on a UART, `board.uart(role).replay(path)` gives the route a recording: requests in
-  AT, PMTK or UBX get their recorded answers, and a recording with no requests plays at its
-  recorded times ([replay](../features/replay-user.md), [matching](../features/matching-user.md)).
-  An ordinary run takes a recording on the emulated clock only, written to the
+- **The far end of a UART.** `board.uart(role).model(source)`, before power-on, puts a model of
+  your own on any `uart.<role>` route of the profile, for a sensor, a display controller or a
+  second modem esp32tl has no model for. The source has the same four methods as an SPP peer's;
+  what it returns from `receive` and `poll` goes into the chip at its own time:
+
+  ```python
+  ANSWER = ms(1).ns
+
+
+  class AtResponder:
+      """Answers every command line with OK, ANSWER after its CR LF."""
+
+      def __init__(self) -> None:
+          self.lines: list[bytes] = []
+          self._heard = b""
+
+      def receive(self, t: int, data: bytes) -> Iterable[Output]:
+          self._heard += data
+          answers = []
+          while b"\r\n" in self._heard:
+              line, _, self._heard = self._heard.partition(b"\r\n")
+              self.lines.append(line)
+              answers.append((t + ANSWER, b"\r\nOK\r\n"))
+          return answers
+
+      def poll(self, now: int) -> Iterable[Output]:
+          return []
+
+      def quiet_until(self) -> int | None:
+          return None
+
+      def latency(self) -> int | None:
+          return ANSWER
+
+
+  @pytest.mark.board_profile(path="boards/aux-uart.toml")
+  def test_the_firmware_talks_to_the_test_s_model_on_its_own_uart(board: Board) -> None:
+      part = board.uart("aux").model(AtResponder())
+      board.power_on()
+      board.console.expect_exact("modem_at: dialogue complete", timeout=seconds(5))
+      assert part.lines[1] == b"ATE0"
+  ```
+
+  This is esp32tl's own `tests/test_uart_model.py`, shortened, where `Iterable` comes from
+  `collections.abc`, `Output` from `esp32tl.link.boardlink`, and `ms` and `seconds` from
+  `esp32tl.units`: `modem_at` writes its AT commands to `uart.aux` of a local profile and reads
+  the answers. `latency()` is the shortest time the model
+  takes to answer, and the board runs that far ahead of it; an answer stamped sooner fails the run.
+  `poll(now)` and `quiet_until()` are for what the part sends unprompted, as a sensor reporting
+  every second: `quiet_until()` says when the next report is due, and `poll` returns it then. Add
+  `supply(on)` for a part on the board's supply: `board.power_off()` and the `power_on()` after it
+  call it, as they switch the GNSS receiver and the modem. `model` returns the source, so the test
+  reads what it heard; the details and what the call refuses are in
+  [a UART's own model](../features/pytest-plugin-user.md#a-uarts-own-model).
+
+  Instead of a model, `board.uart(role).replay(path)` gives the route a recording: requests in AT,
+  PMTK or UBX get their recorded answers, and a recording with no requests plays at its recorded
+  times ([replay](../features/replay-user.md), [matching](../features/matching-user.md)). An
+  ordinary run takes a recording on the emulated clock only, written to the
   [recording format](../recording-format.md) as `scripts/generate-gnss-recordings.py` writes those
   of `uart.gnss`. What a `tap` records while a `real(port)` device is on the route is on the wall
   clock, and replays only in a run on the wall clock

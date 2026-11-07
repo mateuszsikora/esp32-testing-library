@@ -645,8 +645,10 @@ def test_a_failed_write_raises_the_error_pin(board: Board):
   `3.0681844 s  write of block 541 failed, not written`), and `fail`, `delay`, `clear` and
   `clear_faults` are steps of the run. The `esp32sim_link` property's `sd_card` has `faults`, one
   entry per rule with its operations.
+
 `board.uart(role)` is the same for any `uart.<role>` route of the profile: `gnss` is
-`board.uart("gnss")`.
+`board.uart("gnss")`. It takes `replay(path)`, `real(port)` and `tap(path)` as `gnss` does, and
+`model(source)`, a model the test wrote ([a UART's own model](#a-uarts-own-model)).
 
 `lines` is every GPIO line of the board profile's `[lines.<role>]` sets, wires to the board's
 other parts; the console's lines of text, `console.line` and `console.lines()` above, are another
@@ -761,6 +763,94 @@ Names are checked when the handle is created, with the same errors as `lines.lev
 An invalid polarity raises `ValueError: lines.output: active 2 is not 0 or 1`, or
 `TypeError: lines.output: active '1' is not 0 or 1` for a non-integer; booleans count as 0/1,
 as in `lines.drive`. Existing `drive`, `release`, `level` and `events` calls remain available.
+
+### A UART's own model
+
+`board.uart(role).model(source)` puts a model the test wrote at the far end of a route, for a part
+esp32tl ships no model for. Shortened from `tests/test_uart_model.py`, where `modem_at` writes AT
+commands to `uart.aux` of a local profile and reads the answers
+([validation firmware](validation-firmware-user.md#modem_at)):
+
+```python
+from collections.abc import Iterable
+
+from esp32tl.link.boardlink import Output
+from esp32tl.units import ms, seconds
+
+ANSWER = ms(1).ns
+
+
+class AtResponder:
+    """OK to every command line, ANSWER after its CR LF."""
+
+    def __init__(self) -> None:
+        self.lines: list[bytes] = []
+        self._heard = b""
+
+    def receive(self, t: int, data: bytes) -> Iterable[Output]:
+        self._heard += data
+        answers = []
+        while b"\r\n" in self._heard:
+            line, _, self._heard = self._heard.partition(b"\r\n")
+            self.lines.append(line)
+            answers.append((t + ANSWER, b"\r\nOK\r\n"))
+        return answers
+
+    def poll(self, now: int) -> Iterable[Output]:
+        return []
+
+    def quiet_until(self) -> int | None:
+        return None
+
+    def latency(self) -> int | None:
+        return ANSWER
+
+
+@pytest.mark.app_path("../firmware/modem_at")
+@pytest.mark.board_profile(path="boards/aux-uart.toml")
+def test_the_firmware_talks_to_the_test_s_model_on_its_own_uart(board):
+    part = board.uart("aux").model(AtResponder())
+    board.power_on()
+    board.console.expect_exact("modem_at: dialogue complete", timeout=seconds(5))
+    assert part.lines[1] == b"ATE0"
+```
+
+- `model(source)` returns `source`, so the test keeps it to read what it heard. It must come
+  before `board.power_on()`, and is the route's one source, as a replay or a real device is.
+- `source` is any object with the four methods of `esp32tl.interfaces.uart.Source`; times are
+  nanoseconds of the board's clock, an `Output` is a `(t, bytes)` pair:
+
+  | Method | Called | Returns |
+  |---|---|---|
+  | `receive(t, data)` | When the firmware's bytes cross the wire, `t` when they did. They come cut anywhere: find a request by its terminator | The answers, each stamped `latency()` or more after `t` |
+  | `poll(now)` | At every turn of the link | What the part sends unprompted, each stamped `now` or later |
+  | `quiet_until()` | After `poll(now)` | The next time it sends unprompted, later than `now`; `None` for nothing scheduled |
+  | `latency()` | At every turn | The shortest time in which it answers, in nanoseconds; `None` when it answers nothing |
+
+  The board runs ahead of the model by up to `latency()` and up to `quiet_until()`: an answer
+  stamped sooner than its latency, or something sent before the `quiet_until()` it gave, ends the
+  run with `{interface} sent bytes stamped {t} ns in the turn at {now} ns: it answered sooner
+  than its latency, or sent past its quiet_until`. A model that answers nothing returns `[]` from
+  `receive`, and `None` from `latency()`.
+- A model with a fifth method, `supply(on)`, is a part on the board's supply, as the GNSS receiver
+  and the modem are: `board.power_off()` calls `supply(False)`, and the `power_on()` after it
+  `supply(True)`, at the board's time. It starts with power: the first `power_on()` calls nothing.
+  A model without it keeps going through a power cycle; what it sends while the chip is off is
+  lost.
+- The model is called from the link's thread, inside the test's waits, while the runner waits for
+  its answer: it must not block, and must not wait on the wall clock.
+- What it refuses, at the call: an object that lacks a method, with
+  `TypeError: uart.aux.model: <...> is not a Source: it has no poll, quiet_until, latency`; a
+  second source, `SourceError: uart.aux has its source already: one per test`; and a model after
+  power-on, `SourceError: uart.aux: the board is on already: give an interface its source before
+  board.power_on()`. On `uart.gnss` or `uart.modem` it goes in place of esp32tl's model, whose
+  calls then raise `SourceError` (`uart.gnss has a model of the test's: it has no receiver to
+  describe; one source per test`, `uart.modem has its source already: one per test`). The
+  `serial` backend skips the test at the call: `serial: uart.aux takes no model source on this
+  backend, only real`.
+- The report names it by its class, `uart.aux: the model of AtResponder; 156 bytes in, 233 out`,
+  the run's log has the step `uart.aux.model(AtResponder)`, and a tap of the route records it as
+  `model:AtResponder` ([taps](run-report-user.md#what-a-tap-writes)).
 
 ### The modem fixture
 
@@ -917,7 +1007,8 @@ A test that parametrises pytest-embedded's `count` itself above 1, as in
   See [esp32sim](esp32sim-backend-user.md#when-the-backend-cannot-start) and
   [serial](serial-backend-technical.md#failure-modes) for their setup errors.
 - A source or a tap given after `board.power_on()`, or a second one on the same route, or a card
-  for a slot that holds one: the test fails with `SourceError`; a recording that cannot be replayed fails it with `RecordingError` or
+  for a slot that holds one: the test fails with `SourceError`; an object given to
+  `board.uart(role).model` that is not a `Source` with `TypeError`; a recording that cannot be replayed fails it with `RecordingError` or
   `ReplayError` ([replay](replay-user.md#what-a-replay-refuses)), a tap into a directory that
   does not exist with `FileNotFoundError` ([taps](run-report-user.md#when-the-test-gets-it-wrong)),
   and the receiver model told what it cannot be with `ModelError`
