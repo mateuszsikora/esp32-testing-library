@@ -151,7 +151,8 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The network the device reaches is simulated in the harness, in emulated time](harness.md#the-network-the-device-reaches-is-simulated-in-the-harness-in-emulated-time) | `harness.md` | decided (#64) |
 | [A bridge from the simulated network to a real service is postponed](harness.md#a-bridge-from-the-simulated-network-to-a-real-service-is-postponed) | `harness.md` | superseded (#67) |
 | [A bridge relays a TCP port to a real service, and puts the run on the wall clock](harness.md#a-bridge-relays-a-tcp-port-to-a-real-service-and-puts-the-run-on-the-wall-clock) | `harness.md` | decided (#67) |
-| [A TLS stack with a seeded random source is postponed](harness.md#a-tls-stack-with-a-seeded-random-source-is-postponed) | `harness.md` | postponed (#68) |
+| [A TLS stack with a seeded random source is postponed](harness.md#a-tls-stack-with-a-seeded-random-source-is-postponed) | `harness.md` | superseded (#68) |
+| [The harness's TLS server draws every random value from a seed](harness.md#the-harnesss-tls-server-draws-every-random-value-from-a-seed) | `harness.md` | decided (#68) |
 | [Flash contents besides the build go into a partition of the build's own table, by name](harness.md#flash-contents-besides-the-build-go-into-a-partition-of-the-builds-own-table-by-name) | `harness.md` | decided (#64) |
 | [The LilyGO profile takes its GNSS route, flash and PSRAM from LilyGO's documentation](harness.md#the-lilygo-profile-takes-its-gnss-route-flash-and-psram-from-lilygos-documentation) | `harness.md` | decided (#64) |
 | [The LilyGO SD slot and additional controls declare wiring without new model effects](harness.md#the-lilygo-sd-slot-and-additional-controls-declare-wiring-without-new-model-effects) | `harness.md` | decided (#100) |
@@ -218,7 +219,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [A broker deadline runs before the test holds its turn](harness.md#a-broker-deadline-runs-before-the-test-holds-its-turn) | `harness.md` | decided (#139) |
 | [Packet loss on the network path is postponed](harness.md#packet-loss-on-the-network-path-is-postponed) | `harness.md` | postponed (#130) |
 | [MQTT CONNECT policy runs before accepted session state is installed](harness.md#mqtt-connect-policy-runs-before-accepted-session-state-is-installed) | `harness.md` | decided (#103) |
-| [TLS determinism compares explicit plaintext transcripts](harness.md#tls-determinism-compares-explicit-plaintext-transcripts) | `harness.md` | decided (#30) |
+| [TLS determinism compares explicit plaintext transcripts](harness.md#tls-determinism-compares-explicit-plaintext-transcripts) | `harness.md` | superseded (#68) |
 | [pppos_client is fetched by pinned commit and checksum](harness.md#pppos_client-is-fetched-by-pinned-commit-and-checksum) | `harness.md` | decided (#30) |
 | [Peer MRU limits TCP segmentation and oversized UDP replies are dropped](harness.md#peer-mru-limits-tcp-segmentation-and-oversized-udp-replies-are-dropped) | `harness.md` | decided (#30) |
 | [Anonymous MQTT clients get deterministic distinct identifiers](harness.md#anonymous-mqtt-clients-get-deterministic-distinct-identifiers) | `harness.md` | decided (#30) |

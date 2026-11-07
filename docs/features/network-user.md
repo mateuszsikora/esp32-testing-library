@@ -749,9 +749,29 @@ An empty or reversed interval raises `TLS server_not_before must be earlier than
 The CA's own dates stay unchanged. Firmware must enable certificate date verification and
 synchronize its clock for the validity check to take effect.
 
-Names may be DNS names or IP addresses. TLS 1.2 and later use Python's `ssl` in memory, with
-system randomness. The harness sees application plaintext; TLS ciphertext and timing do not
-repeat. Provisioning firmware credentials is separate from this API. `pppos_client` validates
+Names may be DNS names or IP addresses. Provisioning firmware credentials is separate from this API.
+
+The server's side of TLS repeats from run to run, so a test over TLS gets the same times in every
+run, after the handshake too. The keys of a CA follow from `ca.number`: the plugin numbers the CAs
+from 0 again before each test, and a new CA takes the lowest number that neither the test nor a
+CA still held elsewhere has. So the first CA of every test has the same keys, a second CA in a
+test (an untrusted one, say) has keys of its own, and so does one made while a CA from an earlier
+test is still held, by a `scope="module"` fixture or a failed test's traceback: it never gets the
+keys of the CA it should not be. A test whose CAs are its own gets the same keys alone as in the
+suite; numbering skips held CAs in the same way in two runs of the same tests. Each connection's
+server random and ECDHE key follow from the CA's number and the connection's place on its
+listener. These keys are anyone's: never
+trust such a CA outside a test.
+
+The server speaks TLS 1.2 only, with ECDHE-RSA and AES-128-GCM, AES-256-GCM or
+ChaCha20-Poly1305 (the client's order picks one), over x25519, secp256r1 or secp384r1, signing with
+RSA PKCS #1 v1.5 and SHA-512, SHA-384, SHA-256 or SHA-1. It takes the extended master secret,
+secure renegotiation's empty extension and a maximum fragment length, resumes no session and
+refuses a renegotiation with a `no_renegotiation` warning. A handshake that fails logs why, as in
+`tls: handshake failed: the client sent the alert unknown_ca` (the device did not trust the CA),
+`tls: handshake failed: the client does not offer TLS 1.2, the only version served` or
+`tls: handshake failed: no cipher suite in common; the server has ECDHE-RSA-AES128-GCM-SHA256, ECDHE-RSA-AES256-GCM-SHA384, ECDHE-RSA-CHACHA20-POLY1305`.
+Why the server is the harness's own: [the decision](../decisions/harness.md#the-harnesss-tls-server-draws-every-random-value-from-a-seed). `pppos_client` validates
 plain MQTT; [the position tracker](examples-user.md#position-tracker-over-a-cellular-modem)
 validates firmware PPP, NTP and MQTT over TLS, with its broker CA provisioned through NVS.
 

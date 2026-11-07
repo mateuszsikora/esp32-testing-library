@@ -1006,18 +1006,51 @@ network's, which every test so far needs repeatable, and no consumer has a UDP s
 
 ## A TLS stack with a seeded random source is postponed
 
-Status: postponed (#68)
+Status: superseded (#68)
 
-The device's side of a TLS session repeats: esp32sim's random number generator is a xorshift from a
-fixed seed and the cycle count (`esp-periph/src/rng.rs`), so the firmware draws the same bytes in
-every run. The harness's side does not: Python's `ssl` takes its keys and nonces from the system. On
-the spike two runs were identical up to the TLS handshake and differed by 1 to 3 emulated
-milliseconds after it, with the same messages in the same order. Why the times move was not
-measured; the likely cause is the device's arithmetic on the server's fresh keys, which takes a
-different time for different values. What would fix it is on the harness's side only: a TLS server
-with a seeded random source, or fixed ephemeral keys. Until that proves worth its cost, the
-determinism job (`make determinism`) is to compare what crossed the link in plain text and leave out
-the times after a handshake; the simulated network brings the TLS part of the check (#30).
+The harness's side of a TLS session took its keys and nonces from the system, and the determinism
+job compared what crossed the link in plain text, without the times after a handshake. See
+[The harness's TLS server draws every random value from a seed](#the-harnesss-tls-server-draws-every-random-value-from-a-seed).
+
+## The harness's TLS server draws every random value from a seed
+
+Status: decided (#68)
+
+`esp32tl/net/tls.py` is a TLS 1.2 server of its own on `cryptography`'s primitives, in place of
+Python's `ssl`. The CA's and the server's RSA-2048 keys come from primes found in a SHAKE-256 stream
+named after the CA's number in the test; the server random and the ephemeral ECDHE key of each
+connection from a stream named after the CA and the connection's number; AES-GCM's explicit nonce is
+the record's sequence number. Two runs put the same bytes on the wire, and the determinism job
+compares every time exactly, the position tracker's TLS session over PPP included.
+
+Measured on the position tracker over the modem with Python's `ssl` (two runs on an M2 Pro): the
+runs were identical up to the server's first flight, then 1.25 ms apart at `tls: handshake done`,
+1.77 ms at most and 1.42 ms for the rest of the run. Two causes, both in the server's bytes. PPP
+escapes control characters, so random bytes take a random number of UART bytes: the server's first
+flight was 2645 bytes on the UART in one run and 2653 in the other, and the device's next frame came
+0.694 ms later, the time of 8 bytes at 115200 baud. Then another 0.555 ms appeared while the device
+worked on the server's keys and signature before its key exchange, with its own frames the same
+length in both runs: its arithmetic on the server's fresh values. Every encrypted record after the
+handshake moved the times again (6 UART bytes more, 0.521 ms later; 4 fewer, 0.347 ms sooner). With
+the seeded server, the two runs' modem taps, network transcripts and consoles are identical.
+
+What it costs: 723 lines in place of 258, a handshake checked against mbedTLS (the position
+tracker) and OpenSSL (`tests/test_net_tls.py`, every suite and group), and about 0.4 s of wall
+time per key on an M2 Pro (0.25 to 0.67 s over ten keys) the first time a process needs it: two
+keys per CA number, so about 1.6 s for a session whose tests make two CAs at most.
+What it serves is narrower than OpenSSL: TLS 1.2 only, ECDHE-RSA with AES-128-GCM, AES-256-GCM or
+ChaCha20-Poly1305, groups x25519, secp256r1 and secp384r1, RSA PKCS #1 v1.5 signatures, no
+session resumption. A firmware that needs more (TLS 1.3, CBC suites, an ECDSA certificate) brings
+it.
+
+**Rejected:** seeding OpenSSL's random source under Python's `ssl`, because Python has no call for
+it, and replacing libcrypto's random method through `ctypes` is process-wide and depends on which
+OpenSSL `_ssl` links; fixed ephemeral keys under Python's `ssl`, because it has no call for those
+either, and the server random alone changes every key of the session, so the ciphertext and its PPP
+escapes would still differ; `tlslite-ng`, because it takes its randomness from `os.urandom` in
+module after module, which only patching could seed, and is a dependency for one module; and
+comparing the plain text without the times after a handshake, what the determinism job did, because
+it leaves a change of timing after a handshake on the device unseen.
 
 ## Flash contents besides the build go into a partition of the build's own table, by name
 
@@ -2244,7 +2277,11 @@ delivery.
 
 ## TLS determinism compares explicit plaintext transcripts
 
-Status: decided (#30)
+Status: superseded (#68)
+
+Once the TLS server's randomness is seeded, network transcripts compare exactly, times after a
+handshake included: see
+[The harness's TLS server draws every random value from a seed](#the-harnesss-tls-server-draws-every-random-value-from-a-seed).
 
 The network records events and application stream bytes after TLS termination. Its diagnostic
 `esp32tl_network: 1` transcript is compared exactly before the first handshake starts, then by

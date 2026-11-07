@@ -238,5 +238,7 @@ SNTP's retry delay. The recovered report must contain Warsaw's position and curr
 within the same 1.25-second tolerance; an NTP reply and TLS attempt must have occurred.
 Transport assertions (TLS, QoS and retention) are separate from the immediate-report scenario.
 
-These are functional TLS tests. The existing determinism checker still compares raw UART and
-board-link statistics exactly; this example does not feed random TLS ciphertext to that check.
+These are functional TLS tests. `tests/test_determinism.py::test_tls_on_the_device` runs this
+example, with the same NVS keys, through `make determinism`, which compares its raw modem tap,
+console and network transcript exactly: the harness's TLS server draws its keys and nonces from
+a seed.
