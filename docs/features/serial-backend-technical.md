@@ -200,8 +200,9 @@ attribute, on which xunit2 warns. A test case's outcome is `failed` when it has 
 `<error>`, which wins over a `<skipped>` (a test that skipped in its body and failed at teardown has
 both), then `skipped`, else `passed`. pytest writes an expected failure as
 `<skipped type="pytest.xfail">`, so an `xfail` test counts as skipped; no test of the suite that
-uses `board` has one. Its id is `classname::name`. The serial run goes first: the plugin's refusals of a port are usage errors at
-collection (`pytest_collection_modifyitems`), exit 4, which end the script before the esp32sim run.
+uses `board` has one. Its id is `classname::name`. The serial run goes first: the plugin's
+refusals of a port are usage errors at collection (`pytest_collection_modifyitems`), exit 4,
+which end the script before the esp32sim run.
 
 The plugin gives a test that uses `board` its backend as one parameter, whose id is the backend's
 name (`pytest_generate_tests` in `esp32tl/pytest_plugin.py`), and pytest joins the ids of a case's

@@ -2896,4 +2896,5 @@ reader poll on wall time, with USB, driver and host scheduling delays. A propert
 records with the backend of each case, because the id already carries it, and the properties the
 `board` fixture records are missing from a test skipped before the fixture runs. Checking the port
 in the script before the first run, because the plugin's checks would then live in two places, and
-the script uses the standard library only; running serial first gets the plugin's answer as soon.
+the script uses the standard library only; running serial first gets the plugin's answer before
+any test has run.
