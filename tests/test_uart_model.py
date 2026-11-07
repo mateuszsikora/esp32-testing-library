@@ -21,6 +21,7 @@ from esp32tl.report import RunLog
 from esp32tl.units import ms, seconds
 
 ROOT = Path(__file__).resolve().parent.parent
+MODEM_AT = ROOT / "firmware" / "modem_at"
 PROFILE = ROOT / "tests" / "boards" / "aux-uart.toml"
 AUX = Wire(tx=26, rx=27, baud=115200)
 HELLO = RunnerHello(1, "esp32", recording.EMULATED, "8c652151dd5a521249a785ca147f20a9f8eda68f")
@@ -215,6 +216,14 @@ def test_a_model_of_the_test_s_on_the_gnss_route_is_no_receiver(tmp_path: Path) 
         gnss.lose_fix()
 
 
+def refuse_after_power_on(request: Request) -> None:
+    """What esp32sim's `asked` says once the board is on."""
+    raise SourceError(
+        f"{request.interface}: the board is on already: give an interface its source before"
+        " board.power_on()"
+    )
+
+
 def test_a_model_of_the_test_s_on_the_modem_route_is_no_modem(tmp_path: Path) -> None:
     modem, lines, _ = route(tmp_path, [0])
     modem.model(AtResponder())
@@ -229,6 +238,9 @@ def test_a_model_of_the_test_s_on_the_modem_route_is_no_modem(tmp_path: Path) ->
         modem.network()
     with pytest.raises(SourceError, match=refused):
         assert modem.powered
+    modem.asked = refuse_after_power_on
+    with pytest.raises(SourceError, match=refused):
+        modem.network()
     assert lines.events() == []
 
 
@@ -281,10 +293,12 @@ def test_a_model_comes_before_power_on(board: Board) -> None:
 
 
 def test_a_tap_records_the_test_s_model_by_its_class(pytester: pytest.Pytester) -> None:
+    if not (MODEM_AT / "build" / "esp32tl-built").is_file():
+        pytest.fail(f"{MODEM_AT}/build holds no finished build: run make firmware", pytrace=False)
     pytester.makepyfile(f"""
         import pytest
         from esp32tl.units import seconds
-        pytestmark = [pytest.mark.app_path({str(ROOT / "firmware" / "modem_at")!r}),
+        pytestmark = [pytest.mark.app_path({str(MODEM_AT)!r}),
                       pytest.mark.board_profile(path={str(PROFILE)!r})]
 
         class Ok:

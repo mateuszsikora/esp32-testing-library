@@ -96,7 +96,7 @@ class Gnss(Uart):
         source = self.source
         if isinstance(source, GnssReceiver):
             return source
-        self._refuse_replay()
+        self._refuse_source("receiver")
         raise SourceError(f"{self.name} has no receiver: give it one with gnss.fix(at=...)")
 
     def _tell(self, call: Callable[[GnssReceiver], None], step: str) -> None:
@@ -110,18 +110,9 @@ class Gnss(Uart):
             if self.log is not None:
                 self.log.test(self._clock_now(), step)
             return
-        self._refuse_replay()
+        self._refuse_source("receiver")
         # First: it refuses a source after power-on, and skips a backend that gives no model.
         self._ask("model")
         receiver = GnssReceiver(self._clock_now, self._world)
         call(receiver)
         self._give(receiver, "model", self.DETAIL, step=step)
-
-    def _refuse_replay(self) -> None:
-        if self.source is not None:
-            what = {"real": "has a real device", "model": "has a model of the test's"}.get(
-                self.source_kind or "", "replays a recording"
-            )
-            raise SourceError(
-                f"{self.name} {what}: it has no receiver to describe; one source per test"
-            )

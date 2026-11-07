@@ -198,6 +198,17 @@ class Uart(Interface):
             raise SourceError(f"{self.name} has its source already: one per test")
         self.asked(Request(self.name, source=source))
 
+    def _refuse_source(self, part: str) -> None:
+        """Refuses a call to esp32tl's model of `part` (`receiver`, `modem`) on a route whose
+        source is another one, saying what the route has: there is no `part` there to tell
+        anything. The caller has checked that the source is not that model."""
+        if self.source is None:
+            return
+        what = {"real": "has a real device", "model": "has a model of the test's"}.get(
+            self.source_kind or "", "replays a recording"
+        )
+        raise SourceError(f"{self.name} {what}: it has no {part} to describe; one source per test")
+
     def _unclaimed(self, file: Path, what: str, writers_only: bool = False) -> None:
         """Refuses `file` when the run reads or writes it already, or, with `writers_only`, when
         a route is tapped into it or it is the SD card's image: either would write over it."""
