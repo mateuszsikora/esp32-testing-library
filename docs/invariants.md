@@ -659,15 +659,18 @@ that references to its number keep their meaning.
     `tests/test_spp_peer.py::test_a_link_made_after_a_rejection_of_a_crossing_page_switches_roles_as_asked`,
     `tests/test_spp_peer.py::test_a_page_under_way_keeps_its_entry_after_a_rejection_of_a_crossing_page`,
     `tests/test_spp_peer.py::test_a_page_heard_during_this_sides_own_goes_when_that_page_makes_the_link`
-- **205.** Two pages at one instant that both hosts accept, plainly or as the central on either side,
-    make one link, with one handle on each side and one central: the page accepted first, or the
-    other when that acceptance asks for a role switch the page it accepted does not allow. A late
-    answer tells its host of no failure on a working link or during its own page. A role switch asked of a pager
-    whose page ended is refused, and no link comes of that acceptance; a host that accepted as the
-    central a pager that left gets a failed `Connection_Complete` when its end falls, or when its
-    own page to that pager ends, if that is later.
+- **205.** Two pages at one instant that both hosts accept, plainly or as the central on either
+    side, make one link, with one handle on each side and one central: the page accepted first, or
+    the other when that acceptance asks for a role switch the page it accepted does not allow; none
+    when both ask for the central's role and neither page allows a switch, and then both hosts hear
+    `ROLE_CHANGE_NOT_ALLOWED`. A late answer tells its host of no failure on a working link or
+    during its own page. A role switch asked of a pager whose page ended is refused, and no link
+    comes of that acceptance; a host that accepted as the central a pager that left gets a failed
+    `Connection_Complete` when its end falls, or when its own page to that pager ends, if that is
+    later.
     `tests/test_spp_peer.py::test_two_pages_at_one_instant_both_accepted_make_one_link`,
     `tests/test_spp_peer.py::test_a_crossing_acceptance_whose_role_switch_would_be_refused_leaves_the_other_its_link`,
+    `tests/test_spp_peer.py::test_two_crossing_acceptances_as_the_central_that_neither_page_allows_make_no_link`,
     `tests/test_spp_peer.py::test_an_answer_to_a_crossing_page_after_this_sides_own_ended_makes_the_link`,
     `tests/test_spp_peer.py::test_a_late_answer_to_a_crossing_page_tells_no_failure_on_the_link_it_made`,
     `tests/test_spp_peer.py::test_a_late_answer_leaves_a_working_link_alone`,

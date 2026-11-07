@@ -426,6 +426,10 @@ class Controller(BumbleController):
             self._accepted(peer, heard)
             return
         del self._heard[peer]
+        if self._own_page_accepted(peer):
+            # The peer accepted this side's own page meanwhile, which makes the link: this
+            # acceptance goes as a late answer, since the event names only the address.
+            return
         self.send_lmp_packet(peer, lmp.LmpNotAccepted(lmp.Opcode.LMP_HOST_CONNECTION_REQ, status))
         self.on_classic_connection_complete(peer, status)
 

@@ -1730,7 +1730,12 @@ peer's host asked for: one handle on each side, and one central. At that instant
 or `LMP_switch_req` is still on its way, so the controller reads the peer's controller to know, as
 it does for page scan. A role switch that this side's own page does not allow would end both pages,
 so then this side's answer makes the link, and the switch, which reaches that link afterwards, is
-refused as belonging to a page that is over.
+refused as belonging to a page that is over. When this side's answer asks for the central's role
+too, its switch can pass where the first could not: the refusal of the first then ends nothing,
+neither this side's own page nor the peer's, since the peer accepted that page, which makes the
+link; the refused acceptance goes as a late answer. This is the one case where a refused switch
+does not end this side's own page. When neither page allows a switch, both acceptances fail, and
+there is no link.
 
 **Rejected:** ignoring a completion when the entry already has a handle, the direction #141 gave,
 because it leaves one handle but each side keeps the page it heard, so both are the peripheral, and

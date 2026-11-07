@@ -2773,15 +2773,20 @@ def test_a_late_answer_to_a_crossing_page_tells_no_failure_on_the_link_it_made(
     assert roles_of(air, phone) == [hci.Role.PERIPHERAL]
 
 
+@pytest.mark.parametrize("phone_central", [False, True], ids=["plain", "central"])
 def test_a_crossing_acceptance_whose_role_switch_would_be_refused_leaves_the_other_its_link(
-    air: Air, monkeypatch: pytest.MonkeyPatch
+    air: Air, phone_central: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The speaker accepts first, as the central, and the phone's page allows no role switch: the
-    phone's acceptance at the same instant makes the link, and the switch, which comes after it, is
-    refused, so that each side keeps the role of the speaker's page."""
+    phone's acceptance at the same instant makes the link of the speaker's page. A plain one keeps
+    that page's roles, and the switch, which comes after it, is refused; one as the central switches
+    them, and the refusal of the speaker's switch ends nothing."""
     phone, speaker = phone_and_speaker(air)
     accepting_as_central_after(speaker, monkeypatch, 0.001)
-    slow_to_accept(phone, monkeypatch, 0.001)
+    if phone_central:
+        accepting_as_central_after(phone, monkeypatch, 0.001)
+    else:
+        slow_to_accept(phone, monkeypatch, 0.001)
     phone_failed = failures_of(air, phone)
     speaker_failed = failures_of(air, speaker)
     task = air.start(paging_each_other(phone, speaker))
@@ -2791,8 +2796,31 @@ def test_a_crossing_acceptance_whose_role_switch_would_be_refused_leaves_the_oth
     assert all(isinstance(result, Connection) for result in task.result())
     assert phone_failed == speaker_failed == []
     assert list(phone.device.connections) == list(speaker.device.connections) == [1]
-    assert roles_of(air, speaker) == [hci.Role.CENTRAL]
-    assert roles_of(air, phone) == [hci.Role.PERIPHERAL]
+    central, peripheral = (phone, speaker) if phone_central else (speaker, phone)
+    assert roles_of(air, central) == [hci.Role.CENTRAL]
+    assert roles_of(air, peripheral) == [hci.Role.PERIPHERAL]
+
+
+def test_two_crossing_acceptances_as_the_central_that_neither_page_allows_make_no_link(
+    air: Air, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Neither page allows the role switch both hosts ask for, so no role can be had."""
+    phone, speaker = phone_and_speaker(air)
+    accepting_as_central_after(speaker, monkeypatch, 0.001)
+    accepting_as_central_after(phone, monkeypatch, 0.001)
+    phone_failed = failures_of(air, phone)
+    speaker_failed = failures_of(air, speaker)
+    task = air.start(paging_each_other(phone, speaker))
+    air.advance(Duration(1))
+    refusing_role_switch(air, phone, speaker)
+    refusing_role_switch(air, speaker, phone)
+    air.advance(seconds(8))
+    assert all(isinstance(result, core.ConnectionError) for result in task.result())
+    refused = hci.HCI_ErrorCode.ROLE_CHANGE_NOT_ALLOWED_ERROR
+    assert phone_failed == speaker_failed == [(1 * MS, refused)]
+    assert held_by(air, phone) == held_by(air, speaker) == []
+    monkeypatch.undo()
+    air.run(page(phone, SPEAKER), within=seconds(1))
 
 
 def test_an_answer_to_a_crossing_page_after_this_sides_own_ended_makes_the_link(

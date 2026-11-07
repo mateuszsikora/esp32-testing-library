@@ -236,8 +236,8 @@ link; `controller.py`, Bumble's virtual controller with what Classic devices nee
      `switching` (`_switching_for_a_page`) and this side's own entry allows the role switch, as its
      `Create_Connection` asked. Then the answer is late, and the page heard goes through
      `_drop_heard`, since this side's own page makes the link. A switch this side's own entry would
-     refuse ends both pages, so then the page heard is still the answer's, and makes the link. That last is two
-     pages at one instant, both accepted: the first acceptance sends `LMP_accepted`, or
+     refuse ends both pages, so then the page heard is still the answer's, and makes the link. These
+     are two pages at one instant, both accepted: the first acceptance sends `LMP_accepted`, or
      `LMP_switch_req` first, and the second, at the same instant, finds it on the other side while
      that is on its way, so the one link is the page accepted first, with the roles its target's
      host asked, and one handle on each side.
@@ -266,16 +266,19 @@ link; `controller.py`, Bumble's virtual controller with what Classic devices nee
      marked `switching`. `_role_switched` then changes the entry's role, with `Role_Change` to the
      host, and accepts; on a refusal it drops the page, sends `LMP_not_accepted` for
      `LMP_HOST_CONNECTION_REQ` with the refusal's status, and completes the connection with that
-     status, which ends this side's own page too, as the host cannot tell the two apart. A page that
-     went before the switch's answer leaves the answer nothing to do. The pager's own page keeps the
-     entry `Create_Connection` made, also when it heard a page from the target and rejected it, so
-     it takes the switch with the `allow_role_switch` it asked. A switch the target asks before it
-     accepts belongs to the pager's own page, and only that page, while under way, takes it:
-     `Controller.on_classic_role_change_request` answers `LMP_not_accepted` for `LMP_SWITCH_REQ`
-     with `ROLE_CHANGE_NOT_ALLOWED_ERROR` when the pager has no entry for the target, as after its
-     page ended, where Bumble's handler asserts one, and when the target holds the pager's page
-     marked `switching` while the pager's entry is a link, made of the target's own page, which the
-     pager accepted at the same instant. In the first case the target's host gets
+     status, which ends this side's own page too, as the host cannot tell the two apart, unless the
+     peer has accepted this side's own page meanwhile (`_own_page_accepted`), as when both hosts
+     accept as the central at one instant and only one page allows the switch: then that page
+     makes the link, and the refused acceptance goes as a late answer, with nothing sent and
+     nothing told. A page that went before the switch's answer leaves the answer nothing to do. The
+     pager's own page keeps the entry `Create_Connection` made, also when it heard a page from the
+     target and rejected it, so it takes the switch with the `allow_role_switch` it asked. A switch
+     the target asks before it accepts belongs to the pager's own page, and only that page, while
+     under way, takes it: `Controller.on_classic_role_change_request` answers `LMP_not_accepted` for
+     `LMP_SWITCH_REQ` with `ROLE_CHANGE_NOT_ALLOWED_ERROR` when the pager has no entry for the
+     target, as after its page ended, where Bumble's handler asserts one, and when the target holds
+     the pager's page marked `switching` while the pager's entry is a link, made of the target's own
+     page, which the pager accepted at the same instant. In the first case the target's host gets
      `Connection_Complete` with that status, and no link comes of the acceptance; the pager drops
      the `LMP_not_accepted` that follows, as for a rejection of a page that ended. In the second,
      the pager's `LMP_accepted` reaches the target first and its own page makes the link, so the
@@ -444,11 +447,12 @@ in `error_code` on a failed `Connection_Complete`, and `HCI_Error` with
   roles as `Create_Connection` allowed. A pager leaving after its page ended, or after rejecting a
   crossing page. A role switch refused, also with an answer never given, with this side paging too,
   and with both, leaving nothing. An entry that goes with a failed page taking its timer along.
-  Two pages at one instant, both accepted at once, plainly or as the central on either side or
-  both, making one link with one handle on each end and one central, also when the first asks for a
-  role switch the other's page does not allow, or comes after the other's page ended, and both
-  accepted 1 s apart, with no failure told of the later answer; a late answer on a working link, also to a page tried
-  again, telling no failure. An acceptance as the
+  Two pages at one instant, both accepted at once, plainly or as the central on either side or both,
+  making one link with one handle on each end and one central, also when the first asks for a role
+  switch the other's page does not allow, whether the other accepts plainly or as the central, or
+  comes after the other's page ended, and making none when both ask for the central's role and
+  neither page allows it; both accepted 1 s apart, with no failure told of the later answer; a late
+  answer on a working link, also to a page tried again, telling no failure. An acceptance as the
   central after the page ended refused with no link; one of a pager that left told at the
   supervision timeout, either way of leaving, or at the end of this side's own page when that page
   outlasts it.
