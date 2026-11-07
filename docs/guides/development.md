@@ -212,7 +212,7 @@ its preflight, push and PR operations; the session's permissions must allow thos
 | `recordings/` | Committed recordings for the tests: `gnss-generated-1.jsonl` and `gnss-generated-2.jsonl`, which `scripts/generate-gnss-recordings.py` writes ([validation-firmware-user.md](../features/validation-firmware-user.md#the-gnss-recordings)) |
 | `tests/` | The pytest suite ([testing.md](testing.md)) |
 | `tools/` | Stage 0 measurement firmware (`cryptobench`, `deepsleep`, ESP-IDF projects) and `benchtime.py`, which times their runs ([stage0-findings.md](../stage0-findings.md#reproducing)) |
-| `scripts/` | `fetch-rom-elf` (`make rom-elf`), `venv-tool` (the pre-commit hooks), `check-docs.py` (`make docs-check`), `decisions-index.py` (the decisions index), `generate-gnss-recordings.py` (the GNSS recordings in `recordings/`), `check-determinism.py` (`make determinism`) |
+| `scripts/` | `fetch-rom-elf` (`make rom-elf`), `venv-tool` (the pre-commit hooks), `check-docs.py` (`make docs-check`), `decisions-index.py` (the decisions index), `generate-gnss-recordings.py` (the GNSS recordings in `recordings/`), `check-determinism.py` (`make determinism`), `compare-backends.py` (the tests on both backends, [serial-backend-user.md](../features/serial-backend-user.md#comparing-the-two-backends)) |
 | `docs/` | The implementation plan, the link protocol, the Stage 0 findings and the CI description; `docs/README.md` says what lives where |
 | `docs/features/` | One user and one technical document per feature |
 | `docs/decisions/` | Why things are the way they are, one file per domain, with a generated index |

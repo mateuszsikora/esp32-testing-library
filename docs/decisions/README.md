@@ -192,6 +192,8 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [A page a device hears is kept apart from its own](harness.md#a-page-a-device-hears-is-kept-apart-from-its-own) | `harness.md` | decided (#144) |
 | [A page respects page scan, read when the page starts](harness.md#a-page-respects-page-scan-read-when-the-page-starts) | `harness.md` | decided (#135) |
 | [Connection_Accept_Timeout is postponed](harness.md#connection_accept_timeout-is-postponed) | `harness.md` | postponed (#34) |
+| [Two pages at one instant make one link, the page accepted first](harness.md#two-pages-at-one-instant-make-one-link-the-page-accepted-first) | `harness.md` | decided (#141) |
+| [A role switch asked of a pager whose page ended is refused](harness.md#a-role-switch-asked-of-a-pager-whose-page-ended-is-refused) | `harness.md` | decided (#141) |
 | [A bt fixture, an HCI tap and a replayed peer are postponed](harness.md#a-bt-fixture-an-hci-tap-and-a-replayed-peer-are-postponed) | `harness.md` | postponed (#33) |
 | [bumble is a dependency of esp32tl, pinned exactly](harness.md#bumble-is-a-dependency-of-esp32tl-pinned-exactly) | `harness.md` | decided (#33) |
 | [Serial is opt-in and pytest-embedded owns flashing and the port](harness.md#serial-is-opt-in-and-pytest-embedded-owns-flashing-and-the-port) | `harness.md` | decided (#25) |
@@ -252,6 +254,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [A real board does not read its flash: the test skips](harness.md#a-real-board-does-not-read-its-flash-the-test-skips) | `harness.md` | decided (#131) |
 | [The reader reads NVS itself, from the format](harness.md#the-reader-reads-nvs-itself-from-the-format) | `harness.md` | decided (#131) |
 | [A snapshot's errors are ValueError, not BackendError](harness.md#a-snapshots-errors-are-valueerror-not-backenderror) | `harness.md` | decided (#131) |
+| [The backend comparison compares outcomes of one run on each backend](harness.md#the-backend-comparison-compares-outcomes-of-one-run-on-each-backend) | `harness.md` | decided (#26) |
 | [A UART takes a model of the test's as the four-method Source, through Uart.model](harness.md#a-uart-takes-a-model-of-the-tests-as-the-four-method-source-through-uartmodel) | `harness.md` | decided (#161) |
 
 ## The runner crate and esp32sim

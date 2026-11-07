@@ -1708,11 +1708,53 @@ Part E, 6.7, is not modelled). A host that accepts after the page ended makes a 
 pager reported `PAGE_TIMEOUT`, and when the pager has tried again, the first answer connects the
 second page. Bumble's host accepts at the instant it hears, so this takes a slowed host, and firmware
 behind #34 is the first that will be slow: what it needs can be seen then. Until then an answer with
-nothing left to answer gets a failed `Connection_Complete`, and changes nothing else.
+nothing left to answer changes nothing, and its host gets a failed `Connection_Complete` unless its
+side holds an entry for that address, a link or its own page, which the event would end in the
+host's eyes (#141).
 
 **Rejected:** ignoring the late answer on the pager's side, because the target would be left holding
 a link with no other end, and adding the timeout now, because nothing would exercise it but its own
 test.
+
+
+## Two pages at one instant make one link, the page accepted first
+
+Status: decided (#141)
+
+When two devices paged each other at one instant and both hosts accepted, each controller made the
+page it heard its link and then completed its own page as well, so each host had two handles for one
+link. Now the acceptance that runs first makes the link. A host that answers the page it heard after
+the peer's host has accepted this side's own page, by making the link or by asking for the role
+switch first, gives a late answer, and this side's own page makes the link, with the roles the
+peer's host asked for: one handle on each side, and one central. At that instant the `LMP_accepted`
+or `LMP_switch_req` is still on its way, so the controller reads the peer's controller to know, as
+it does for page scan. A role switch that this side's own page does not allow would end both pages,
+so then this side's answer makes the link, and the switch, which reaches that link afterwards, is
+refused as belonging to a page that is over. When this side's answer asks for the central's role
+too, its switch can pass where the first could not: the refusal of the first then ends nothing,
+neither this side's own page nor the peer's, since the peer accepted that page, which makes the
+link; the refused acceptance goes as a late answer. This is the one case where a refused switch
+does not end this side's own page. When neither page allows a switch, both acceptances fail, and
+there is no link.
+
+**Rejected:** ignoring a completion when the entry already has a handle, the direction #141 gave,
+because it leaves one handle but each side keeps the page it heard, so both are the peripheral, and
+with a role switch on either side both can be the central.
+
+
+## A role switch asked of a pager whose page ended is refused
+
+Status: decided (#141)
+
+A host that accepts as the central after the pager's page ended sends `LMP_switch_req` to a pager
+that has no entry for it, and Bumble's handler asserted one, which failed the air. The pager now
+refuses with `ROLE_CHANGE_NOT_ALLOWED`: the target's host gets `Connection_Complete` with it, and no
+link comes of the acceptance. A plain acceptance at that point still makes a link, as
+[Connection_Accept_Timeout is postponed](#connection_accept_timeout-is-postponed) says.
+
+**Rejected:** making a link of it, because the pager would need an entry with an
+`allow_role_switch` no `Create_Connection` asked for; and `CONNECTION_TIMEOUT` or
+`LMP_RESPONSE_TIMEOUT`, because the pager is there and answers.
 
 
 ## A bt fixture, an HCI tap and a replayed peer are postponed
@@ -2874,6 +2916,30 @@ the message `board.nvs` uses for a missing name, and `board.flash()` before powe
 
 **Rejected:** `BackendError`, because `FlashSnapshot` lives in `esp32tl/flash.py`, which the backends
 import, and a snapshot outlives its run; a class of its own would give a test nothing to catch.
+
+## The backend comparison compares outcomes of one run on each backend
+
+Status: decided (#26)
+
+`scripts/compare-backends.py` runs pytest once with `--esp32tl-backend=serial`, then once with
+`--esp32tl-backend=esp32sim`, and compares each test's outcome in the two JUnit XML files: passed,
+failed or skipped. Serial goes first, so that a port the plugin refuses ends the script before the
+esp32sim run. It matches a test's two cases by their id without the backend's parameter, and
+leaves out an id that is the same in both runs, which is a test without `board`. A test that failed
+on both agrees and still fails the script; so does one that ran on serial and was skipped on
+esp32sim, which leaves the real board's result with nothing to be compared with. The
+specification (issue #1) says "Every test that a real board can run, runs on one too, and the two
+results are compared".
+
+**Rejected:** one pytest session on both backends, because `--esp32tl-backend` names one backend
+and serial stays opt-in: a session without the option runs esp32sim alone. Comparing console
+output or times, because esp32sim stamps the console on the emulated clock and serial after a
+reader poll on wall time, with USB, driver and host scheduling delays. A property the plugin
+records with the backend of each case, because the id already carries it, and the properties the
+`board` fixture records are missing from a test skipped before the fixture runs. Checking the port
+in the script before the first run, because the plugin's checks would then live in two places, and
+the script uses the standard library only; running serial first gets the plugin's answer before
+any test has run.
 
 ## A UART takes a model of the test's as the four-method Source, through Uart.model
 

@@ -44,6 +44,7 @@ the two differ. How to write each document: `docs/guides/documentation.md`.
 - `tools/` → Reproducing in `docs/stage0-findings.md`
 - `scripts/generate-gnss-recordings.py` → `docs/features/validation-firmware-*.md`
 - `scripts/check-determinism.py` → `docs/guides/testing.md`
+- `scripts/compare-backends.py` → `docs/features/serial-backend-*.md`
 - a rejected alternative or postponed scope → `docs/decisions/<domain>.md`, then
   `python3 scripts/decisions-index.py`
 - a domain rule that a test enforces → `docs/invariants.md`

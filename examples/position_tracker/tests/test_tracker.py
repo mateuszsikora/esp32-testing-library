@@ -249,12 +249,11 @@ def test_a_broker_that_never_answers_gets_tried_again(board: Board) -> None:
     board.power_on(utc=WORLD)
 
     board.wait_until(lambda: broker.connections and broker.connections[0].heard, within=STARTUP)
-    first = broker.connections[0]
-    connect = bytes(first.heard)  # The whole CONNECT: it comes in one TLS record.
+    connect = bytes(broker.connections[0].heard)  # The whole CONNECT: it comes in one TLS record.
     assert connect[0] == 0x10  # MQTT CONNECT
     assert b"position-tracker" in connect
     board.wait_until(lambda: len(broker.connections) > 1, within=RECONNECT_WINDOW)
-    assert first.closed  # The client gave up on the first before it opened the second.
+    assert broker.open_when_accepted[1] == 0  # The first was closed before the second opened.
 
 
 class SilentBroker:
@@ -262,10 +261,12 @@ class SilentBroker:
 
     def __init__(self) -> None:
         self.connections: list[Connection] = []
+        self.open_when_accepted: list[int] = []  # Connections still open at each accept.
 
     def accept(
         self, peer: tuple[str, int], write: Callable[[bytes], None], close: Callable[[], None]
     ) -> "Connection":
+        self.open_when_accepted.append(sum(not c.closed for c in self.connections))
         self.connections.append(Connection())
         return self.connections[-1]
 
