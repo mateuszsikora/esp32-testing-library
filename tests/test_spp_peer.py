@@ -2729,7 +2729,8 @@ def test_two_pages_at_one_instant_both_accepted_make_one_link(
     air: Air, central: str | None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Both hosts accept at once, plainly or as the central: the first acceptance makes the link
-    of its page, and the other, which comes after it at the same instant, is late."""
+    of its page, and the other, which comes after it at the same instant, is late. Which runs
+    first is the loop's order, which differs between Python versions."""
     phone, speaker = phone_and_speaker(air)
     if central in ("phone", "both"):
         accepting_as_central_after(phone, monkeypatch, 0.001)
@@ -2741,12 +2742,14 @@ def test_two_pages_at_one_instant_both_accepted_make_one_link(
     air.advance(seconds(1))
     assert task.done()
     assert list(phone.device.connections) == list(speaker.device.connections) == [1]
-    # The speaker heard the phone's page first, so its host answered first: the one link is the
-    # phone's page, with the roles the speaker's host asked for.
-    roles = [hci.Role.CENTRAL], [hci.Role.PERIPHERAL]
-    if central in ("speaker", "both"):
-        roles = roles[::-1]
-    assert (roles_of(air, phone), roles_of(air, speaker)) == roles
+    roles = roles_of(air, phone) + roles_of(air, speaker)
+    assert sorted(roles) == [hci.Role.CENTRAL, hci.Role.PERIPHERAL]
+    # A host that alone asks for the central's role has it, whichever page makes the link: as the
+    # target of the other's page, by the switch, or as the pager of its own.
+    if central == "phone":
+        assert roles_of(air, phone) == [hci.Role.CENTRAL]
+    if central == "speaker":
+        assert roles_of(air, speaker) == [hci.Role.CENTRAL]
     assert phone_failed == speaker_failed == []
     air.run(phone.device.connections[1].disconnect(), within=seconds(1))
     assert held_by(air, speaker) == held_by(air, phone) == []

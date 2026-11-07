@@ -509,7 +509,9 @@ heard, puts a peripheral's `Connection` in `pending_connections` over the centra
 `Device.connect` left there, and the `Connection_Complete` of either page takes it. Only a
 `Role_Change` corrects it. Two pages at one instant are told apart by the order the loop runs them
 in, and their link is the page whose acceptance runs first; a real controller is paging or scanning
-at a given moment, and which page it answers is its own.
+at a given moment, and which page it answers is its own. That order can differ between Python
+versions: two Bumble hosts that accept at once make the link of one page on 3.14 and of the other
+on 3.11, so which device is the central then is not part of what a test can rely on.
 An answer to a synchronous link is not modelled: 7.1.9 lets `Reject_Connection_Request` decline one,
 and here, when no answer to a page is owed, it gets `UNKNOWN_CONNECTION_IDENTIFIER_ERROR`, leaving the
 entry in `sco_links` and the requester waiting; when one is owed, it is taken as that answer. Bumble's
