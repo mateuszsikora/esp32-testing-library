@@ -217,12 +217,12 @@ production images.
    P4's SDMMC host. *Since #32* the runner has a card on the SPI pins, and the example runs to its end
    ([runner](features/runner-user.md#put-an-sd-card-in)).
 4. **Deep-sleep timer wake.** `tools/deepsleep` sleeps with a 5 s timer, and in a 60 s run it boots
-   once and never wakes, which rules out a timer running up to 12 times slow. The replay image's runs
-   agree: 600 s and 2400 s execute the same instruction count. The guest also calibrates its slow
-   clock to the nominal value (3 495 245 in IDF's Q13.19 format, 6.667 µs per cycle, 150 kHz), but
-   that is what the guest believes, not a measurement of the emulator's timer. Rechecked on 2026-11-07
-   on `8c65215`, through `esp32tl-runner` with `--max-seconds 60`: the same single boot, `wake
-   cause 0`, and `stop: Halted at 60.000000 s (0.2 s wall, 0 resets)`.
+   once and never wakes, which rules out a timer running up to 12 times slow. The replay image's
+   runs agree: 600 s and 2400 s execute the same instruction count. The guest also calibrates its
+   slow clock to the nominal value (3 495 245 in IDF's Q13.19 format, 6.667 µs per cycle, 150 kHz),
+   but that is what the guest believes, not a measurement of the emulator's timer. Rechecked on
+   2026-11-07 on `8c65215`, through `esp32tl-runner` with `--max-seconds 60`: the same single boot,
+   `wake cause 0`, and `stop: Halted at 60.000000 s (0.2 s wall, 0 resets)`.
 5. **External attachment.** The release image's GNSS UART reports no data and its modem UART has
    nothing on it: there is no way to put a process at the far end of a UART or a GPIO line from the
    stock CLI. Proposed in [mikroverk/esp32sim#325](https://github.com/mikroverk/esp32sim/issues/325).
