@@ -83,17 +83,26 @@ same run, and `board.boots` says why each boot happened
 
 ## The world before power-on
 
-What is at the far end of each wire is what the test does with it before the first
-`board.power_on()`. A source given later is refused with `SourceError`, and so is a second source
-on the same interface. A test that sets something up and never powers on fails at teardown, since
-it ran no firmware.
+What is at the far end of each wire is what the test does with it, and most of it comes before
+the first `board.power_on()`:
+
+- A UART route's source (a model, a replay or a real device), the Wi-Fi access point and a bridge
+  are given before it. One given later is refused with `SourceError`, and so is a second source on
+  the same route.
+- `board.nvs(...)` is written before it too; after it, it raises
+  `BackendError: board.nvs: write the flash before board.power_on()`. A second call for the same
+  partition replaces the first.
+- A card in the SD card slot and the levels on the lines can be given before power-on, and changed
+  at any time after it.
+
+A test that sets something up and never powers on fails at teardown, since it ran no firmware.
 
 | Your board has | The test gives it | Shown in |
 |---|---|---|
 | Configuration in NVS | `board.nvs({"namespace": {"key": value}})`, integers with their width, `u16(8883)` from `esp32tl.flash` ([flash contents](../features/flash-contents-user.md)) | `configure_alarm` in the [GPS alarm clock](../../examples/gps_alarm_clock/tests/test_alarm.py), `configure_tracker` in the [position tracker](../../examples/position_tracker/tests/tracker_support.py) |
-| A GNSS receiver | `board.gnss.fix(at=...)`, `move(...)`, `lose_fix()`: a receiver the test describes ([models](../features/models-user.md#the-gnss-receiver)); `replay(path)`: a recording ([replay](../features/replay-user.md)); `real(port)`: a device on a host serial port ([real source](../features/real-source-user.md)) | [GPS alarm clock](../../examples/gps_alarm_clock/tests/test_alarm.py) |
+| A GNSS receiver | `board.gnss.fix(at=...)`, `move(...)`, `lose_fix()`: a receiver the test describes ([models](../features/models-user.md#the-gnss-receiver)); `replay(path)`: a recording ([replay](../features/replay-user.md)); `real(port)`: a device on a host serial port ([real source](../features/real-source-user.md)) | The model in the [GPS alarm clock](../../examples/gps_alarm_clock/tests/test_alarm.py); a replay in the [SD data logger](../../examples/sd_data_logger/tests/test_logger.py) |
 | An SD card | `board.sd_card.image(size_mb=32).with_text(name, text).build()`, then `board.sd_card.insert(card)`; nothing, for an empty slot ([SD card](../features/pytest-plugin-user.md#the-fixtures)) | [SD data logger](../../examples/sd_data_logger/tests/test_logger.py) |
-| A cellular modem | `board.modem.signal(dbm=...)`, `register()`, `power_off()` and the model's other calls ([modem](../features/modem-user.md)); `board.modem.network()` for the network behind it | [Position tracker](../../examples/position_tracker/tests/test_tracker.py) |
+| A cellular modem | `board.modem.signal(dbm=...)`, `register()`, `power_off()` and the model's other calls ([modem](../features/modem-user.md)); `board.modem.network()` for the network behind it | The network in the [position tracker](../../examples/position_tracker/tests/tracker_support.py); the model's calls in `tests/test_modem_fixture.py` |
 | Wi-Fi | `board.wifi.access_point(ssid, password=...)`, which returns the network behind it ([the wifi fixture](../features/pytest-plugin-user.md#the-wifi-fixture)) | `tests/test_http_request.py` |
 | Services on the network | The network's broker, HTTP server, DNS and NTP, all there by default; `network.listen(port, service, tls=ca)` for TLS or a service of your own; `network.bridge(port, to=...)` for a real one ([network](../features/network-user.md)) | [Position tracker](../../examples/position_tracker/tests/tracker_support.py) |
 | Inputs on GPIO lines | `board.lines.drive(line, level)`, which holds from power-on when called before it ([lines](../features/pytest-plugin-user.md#the-fixtures)) | `tests/test_gpio_echo.py` |
@@ -159,12 +168,13 @@ assert report.received_at == about(deadline, within=seconds(0.25))
 ## What a failure tells you
 
 - **`NeverHappened`** says what the test waited for, how long, and from when to when on the board's
-  clock: `alarm.buzzer is on (GPIO 18, level 1) did not happen within 2 s`, then the window. Give
-  your own conditions a `__repr__` and the message names them in your words: the position tracker's
-  says `a tracker report with a position`.
+  clock: `alarm.buzzer is on (GPIO 18, level 1) did not happen within 2 s`, then the window. A
+  function or a lambda is named by its qualified name, `the condition test_x.<locals>.<lambda>`;
+  give a condition object a `__repr__` and the message names it in your words: the position
+  tracker's says `a tracker report with a position`.
 - **The run on the board's clock.** A failed test's `esp32sim link` report section ends with every
-  step of the test, the console's lines, the bytes on every route and the levels on every line, in
-  the order they happened ([the run on the board's clock](../features/run-report-user.md#the-run-on-the-boards-clock)).
+  step of the test and the last 200 entries of the console, the routes and the lines, in the order
+  they happened ([the run on the board's clock](../features/run-report-user.md#the-run-on-the-boards-clock)).
   Behind a modem or an access point it also has the network's transcript: DNS lookups, TCP
   connections, TLS and MQTT ([failures and reports](../features/network-user.md#failures-and-reports)).
   `pytest -rA` prints the section for a test that passed too, without the run on the board's
@@ -178,7 +188,7 @@ assert report.received_at == about(deadline, within=seconds(0.25))
   with what to do ([when the backend cannot start](../features/esp32sim-backend-user.md#when-the-backend-cannot-start)).
 - **A tap** keeps what crossed a route as a recording: `board.gnss.tap(path)` before power-on
   writes it when the run ends, and `replay(path)` plays it back in a later test
-  ([taps](../features/run-report-user.md)).
+  ([replaying a tap](../features/run-report-user.md#replaying-a-tap)).
 
 ## Knowledge of your product stays in your tests
 
@@ -216,24 +226,25 @@ Where a test can put a model of its own today:
       """Takes every connection and answers nothing, as a broker hung before its CONNACK."""
 
       def __init__(self) -> None:
-          self.heard: list[bytearray] = []
+          self.connections: list[Connection] = []
 
       def accept(
           self, peer: tuple[str, int], write: Callable[[bytes], None], close: Callable[[], None]
       ) -> "Connection":
-          self.heard.append(bytearray())
-          return Connection(self.heard[-1])
+          self.connections.append(Connection())
+          return self.connections[-1]
 
 
   class Connection:
-      def __init__(self, heard: bytearray) -> None:
-          self.heard = heard
+      def __init__(self) -> None:
+          self.heard = bytearray()
+          self.closed = False
 
       def on_data(self, data: bytes) -> None:
           self.heard += data
 
       def on_close(self) -> None:
-          pass
+          self.closed = True
 
 
   def test_a_broker_that_never_answers_gets_tried_again(board: Board) -> None:
@@ -244,18 +255,23 @@ Where a test can put a model of its own today:
       configure_tracker(board, trusted_ca=ca.ca_pem)
       board.power_on(utc=WORLD)
 
-      board.wait_until(lambda: broker.heard and broker.heard[0], within=STARTUP)
-      connect = bytes(broker.heard[0])
+      board.wait_until(lambda: broker.connections and broker.connections[0].heard, within=STARTUP)
+      first = broker.connections[0]
+      connect = bytes(first.heard)  # The whole CONNECT: it comes in one TLS record.
       assert connect[0] == 0x10  # MQTT CONNECT
       assert b"position-tracker" in connect
-      board.wait_until(lambda: len(broker.heard) > 1, within=REJECTION_WINDOW)
+      board.wait_until(lambda: len(broker.connections) > 1, within=RECONNECT_WINDOW)
+      assert first.closed  # The client gave up on the first before it opened the second.
   ```
 
   This is the [position tracker](../../examples/position_tracker/tests/test_tracker.py)'s, on port
-  8883 over TLS: the firmware's MQTT client sends its CONNECT, hears nothing, and connects again.
+  8883 over TLS; the constants, `Callable` and `configure_tracker` come from that file and its
+  `tracker_support.py`. The firmware's MQTT client sends its CONNECT, hears nothing, closes the
+  connection, and connects again.
   `write(bytes)` answers the device and `close()` ends the connection. UDP services go in
   `network.ip.udp[port]`, with `on_datagram(bytes)`, which returns the reply or `None`. The
-  callbacks run while the board stands still, so they must not block or wait on the wall clock
+  callbacks run inside the test's waits, while the board's clock advances, so they must not block
+  or wait on the wall clock
   ([DNS, time and services](../features/network-user.md#dns-time-and-services)).
 - **The far end of a Bluetooth SPP channel.** `SppPeer(air, name=..., pin=..., source=...)` takes
   a source with `receive(t, data)`, `poll(now)`, `quiet_until()` and `latency()`, times in
@@ -265,10 +281,14 @@ Where a test can put a model of its own today:
 - **A UART route** takes the GNSS receiver on `uart.gnss` and the modem on `uart.modem`, a
   recording or a real device, but no model a test writes: there is no public call that gives a
   route one ([#161](https://github.com/mateuszsikora/esp32-testing-library/issues/161)). For
-  another part on a UART, record it once with `board.uart(role).real(port)` and `tap(path)`, then
-  give tests the recording with `board.uart(role).replay(path)`: requests in AT, PMTK or UBX get
-  their recorded answers, and a recording with no requests plays at its recorded times
-  ([replay](../features/replay-user.md), [matching](../features/matching-user.md)).
+  another part on a UART, `board.uart(role).replay(path)` gives the route a recording: requests in
+  AT, PMTK or UBX get their recorded answers, and a recording with no requests plays at its
+  recorded times ([replay](../features/replay-user.md), [matching](../features/matching-user.md)).
+  An ordinary run takes a recording on the emulated clock only, written to the
+  [recording format](../recording-format.md) as `scripts/generate-gnss-recordings.py` writes those
+  of `uart.gnss`. What a `tap` records while a `real(port)` device is on the route is on the wall
+  clock, and replays only in a run on the wall clock
+  ([real source](../features/real-source-user.md#recording-what-crosses-the-route)).
 
 A model belongs in your tests when it speaks your product's vocabulary, as a service that answers
 your backend's API does; one that speaks only a protocol or a part's datasheet belongs in esp32tl.
@@ -301,30 +321,32 @@ idf.py -C my_project build                # or your own build, in your own conta
   neither ([what it needs](../features/esp32sim-backend-user.md#what-it-needs)).
 - The SD card's image builder needs mtools: `sudo apt-get install mtools`.
 - Your build needs `flasher_args.json` and every file it lists; a CI job that builds the firmware
-  in one job and tests it in another hands over the whole `build/` top level with
-  `bootloader/`, `partition_table/` and `config/sdkconfig.json`, as esp32tl's own CI does
+  in one job and tests it in another hands over the files at the top of `build/`, `config/sdkconfig.json` and the `.bin` and
+  `.elf` files of `bootloader/` and `partition_table/`, as esp32tl's own CI does
   ([`firmware`](../cicd.md#firmware)).
 
 What to cache, and on what key:
 
 | What | Key | Without it |
 |---|---|---|
-| `esp32tl/runner/target/release/esp32tl-runner` | The esp32tl commit | `make build-runner` builds it again; esp32tl's CI measures a cold build under a minute ([`runner`](../cicd.md#runner)) |
+| `esp32tl/runner/target/release/esp32tl-runner` | The esp32tl commit | `make build-runner` builds it again; a cold build takes under a minute on esp32tl's CI machine ([`runner`](../cicd.md#runner)) |
 | `esp32tl/.cache/esp-rom-elfs/` | The esp32tl commit, or `scripts/fetch-rom-elf`'s hash | `make rom-elf` downloads it again |
 | Your firmware's build | Its sources and `sdkconfig.defaults` | It is built again |
 | `.pytest_cache/d/esp32tl-card-cache/`, if you use `card_cache` | Any: each card is kept under its name and the SHA-256 of the app image, so a new build misses by itself | Each card is prepared again ([keeping a prepared card](../features/pytest-plugin-user.md#keeping-a-prepared-card)) |
 
-A run on esp32sim without a real source or a bridge repeats: the board's clock moves only while
-the test waits, and everything the far ends send comes from a model or a recording
-([determinism](testing.md#determinism)). A test that fails in CI fails the same way on your
-machine.
+A run on esp32sim without a real source or a bridge repeats on one machine: the board's clock
+moves only while the test waits, and everything the far ends send comes from a model or a
+recording ([determinism](testing.md#determinism)). esp32tl checks that one machine runs a test the
+same way twice, not that two machines agree ([`determinism`](../cicd.md#determinism)): a failure in
+CI is a run to reproduce locally from the same build and the same esp32tl commit, not one known
+to repeat there.
 
 ## Not covered yet
 
 - **Bluetooth Classic.** No firmware talks to a Bluetooth peer, as esp32sim has no Classic
   controller ([Bluetooth peer](../features/bluetooth-peer-user.md)).
-- **Deep sleep with a timer wake.** On the pinned esp32sim a firmware that sleeps with a timer
-  wake never wakes ([stage 0, gap 4](../stage0-findings.md#gaps)).
+- **Deep sleep with a timer wake.** A firmware that sleeps with a timer wake never wakes on
+  the pinned esp32sim ([stage 0, gap 4](../stage0-findings.md#gaps)).
 
 ## See also
 

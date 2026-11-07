@@ -26,6 +26,8 @@ JITTER = seconds(0.25)  # RTOS scheduling, TLS records and UART transport, on th
 NTP_OUTAGE = seconds(30)
 REJECTION_WINDOW = seconds(30)  # Covers the MQTT client's 10-second reconnect delay.
 UTC_TOLERANCE = timedelta(seconds=1.25)  # Whole-second timestamps and NTP/transport latency.
+# The client's wait for a CONNACK, its reconnect delay and a new TLS handshake.
+RECONNECT_WINDOW = seconds(30)
 
 
 def test_reports_on_connect(board: Board) -> None:
@@ -246,32 +248,35 @@ def test_a_broker_that_never_answers_gets_tried_again(board: Board) -> None:
     configure_tracker(board, trusted_ca=ca.ca_pem)
     board.power_on(utc=WORLD)
 
-    board.wait_until(lambda: broker.heard and broker.heard[0], within=STARTUP)
-    connect = bytes(broker.heard[0])
+    board.wait_until(lambda: broker.connections and broker.connections[0].heard, within=STARTUP)
+    first = broker.connections[0]
+    connect = bytes(first.heard)  # The whole CONNECT: it comes in one TLS record.
     assert connect[0] == 0x10  # MQTT CONNECT
     assert b"position-tracker" in connect
-    board.wait_until(lambda: len(broker.heard) > 1, within=REJECTION_WINDOW)
+    board.wait_until(lambda: len(broker.connections) > 1, within=RECONNECT_WINDOW)
+    assert first.closed  # The client gave up on the first before it opened the second.
 
 
 class SilentBroker:
     """Takes every connection and answers nothing, as a broker hung before its CONNACK."""
 
     def __init__(self) -> None:
-        self.heard: list[bytearray] = []
+        self.connections: list[Connection] = []
 
     def accept(
         self, peer: tuple[str, int], write: Callable[[bytes], None], close: Callable[[], None]
     ) -> "Connection":
-        self.heard.append(bytearray())
-        return Connection(self.heard[-1])
+        self.connections.append(Connection())
+        return self.connections[-1]
 
 
 class Connection:
-    def __init__(self, heard: bytearray) -> None:
-        self.heard = heard
+    def __init__(self) -> None:
+        self.heard = bytearray()
+        self.closed = False
 
     def on_data(self, data: bytes) -> None:
         self.heard += data
 
     def on_close(self) -> None:
-        pass
+        self.closed = True
