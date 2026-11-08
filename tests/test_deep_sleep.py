@@ -17,8 +17,10 @@ SLEEP = seconds(20)
 # From the chip's wake to the line that reports it: the ROM, the bootloader and app_main at the
 # example's 80 MHz, which calibrates two touch pads first; 143 ms on the pin.
 BOOT_TIME = seconds(0.2)
-# From the sleep's line to the sleep itself, and between the instant the firmware reads its clock
-# and the line's end.
+# The chip's RTC runs some 200 to 250 ppm slow of the board's time, measured: the 20 s timer
+# wakes it 4 ms late, and the sleep it reports on that clock is 5 ms short of the board's time to
+# its line, whose bytes are stamped as the firmware writes them (protocol, emulated-fifo-write).
+# Both grow with the sleep.
 MARGIN = ms(10)
 WOKE = r"^Wake up from timer\. Time spent in deep sleep: (?P<ms>\d+)ms$"
 

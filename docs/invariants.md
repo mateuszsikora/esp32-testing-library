@@ -1399,6 +1399,7 @@ that references to its number keep their meaning.
      `tests/test_clock.py::test_a_wait_for_an_event_takes_a_turn_only_at_the_event`,
      `tests/test_clock.py::test_the_latency_of_a_wait_for_an_event_lasts_for_that_wait_only`,
      `tests/test_clock.py::test_a_wait_for_an_event_that_never_comes_raises_never_happened_at_its_end`,
+     `tests/test_clock.py::test_a_wait_for_an_event_the_run_ends_before_raises_run_ended`,
      `tests/test_timer_wake.py::test_wait_for_wake_runs_the_board_through_its_sleep_to_the_wake`,
      `tests/test_timer_wake.py::test_wait_for_wake_raises_never_happened_for_a_board_that_does_not_sleep`,
      `tests/test_timer_wake.py::test_wait_for_wake_fails_on_a_boot_that_is_no_wake`,

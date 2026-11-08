@@ -740,7 +740,10 @@ def test_reports_after_its_sleep(board: Board):
 - It takes no 100 ms steps, as `board.wait_until` does: nothing happens in a deep sleep, so the
   board runs to the wake in one stretch, and an hour's sleep costs no more of the test's turns
   than a second's. It works the same when the firmware is still awake at the call: the wait goes
-  on through whatever comes before the sleep.
+  on through whatever comes before the sleep, with a turn of the link at most 1 ms after each event
+  on it (a level on a line of the profile, a byte on a watched UART, a frame of the station), where
+  `wait_until` takes at least one every 100 ms. The console's bytes bring no turn. When the
+  firmware is busy before its sleep, wait for the sleep's last line first, then for the wake.
 - A boot through another reset, `esp_restart()` or a watchdog, fails the test with an
   `AssertionError`:
   `board.wait_for_wake: boot 2 at 11.0429706 s is SW_CPU_RESET (reset cause 12), not a wake from deep sleep (DEEPSLEEP_RESET)`.

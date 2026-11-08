@@ -61,13 +61,15 @@ run's log as `boot N: REASON (reset cause C)`, and into the link's statistics as
 `resets`.
 
 A chip in deep sleep with a timer wake wakes on its RTC timer, through a `DEEPSLEEP_RESET` (5).
-`board.wait_for_wake(within=...)` runs the board to that wake in one stretch: the runner skips
-the sleep as fast as it skips any idle time, and the harness takes no turn until the wake, where
+`board.wait_for_wake(within=...)` runs the board to that wake in one stretch: the runner runs
+the sleep as fast as esp32sim runs idle time, and the harness takes no turn until the wake, where
 `board.wait_until` would look every 100 ms of the board's time
 ([waking from deep sleep](pytest-plugin-user.md#waking-from-deep-sleep)). ESP-IDF's
 `system/deep_sleep` example sleeps 20 s: on an M2 Pro, `wait_for_wake` takes one turn of the link
 and 0.07 s of wall time through it, and returns 1 ms after the wake, where `wait_until` takes 200
-turns and returns at its next 100 ms step.
+turns and returns at its next 100 ms step. The sleep's emulated time is still run, not skipped,
+so its wall time grows with its length: 15 minutes of sleep take about 3.7 s, measured on a
+firmware with a 15-minute timer wake.
 
 The console reaches the test over the link, in emulated-time order with the runner's turns
 (`--console both`). The runner's stdout gets it too, and with it the runner's own lines

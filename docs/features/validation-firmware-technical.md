@@ -318,8 +318,12 @@ What it proves on esp32sim, measured on the runs of `tests/test_deep_sleep.py` a
 `afcfba6`: the touch pads read an average of 1000 and arm a threshold of 900, the EXT1 pins
 neither wake the chip nor keep it from sleeping, and the timer wakes it 20.004 s after
 `Entering deep sleep`; the wake's line comes 143 ms after the reset, and its measure, 20 142 ms,
-is the board's time from `Entering deep sleep` to that line, to within 10 ms. Two sleeps take 42.5
-s of the board's time, 29 turns of the link and 0.3 s of wall time on an M2 Pro.
+is the board's time from `Entering deep sleep` to that line, to within 10 ms. Both differences,
+the 4 ms of the wake and the 5 ms by which the measure falls short of the board's 20.147 s, are
+the chip's RTC running some 200 to 250 ppm slow of the board's time; they grow with the sleep.
+The line's bytes take no time of their own: they are stamped as the firmware writes them
+(`emulated-fifo-write`, [protocol 5.1](../protocol.md#51-hello)). Two sleeps take 42.5 s of the
+board's time, 29 turns of the link and 0.3 s of wall time on an M2 Pro.
 
 ## `sd_remount`
 
