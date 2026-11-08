@@ -1,0 +1,16 @@
+# modem_at's wires as a part esp32tl has no model for: UART1 on GPIO 26 and 27, at 115200, named
+# `aux` so that no model esp32tl ships is behind it. RI is pulled down, as on the LilyGO board, so
+# the firmware takes it for a part that is off and starts it with a short pulse.
+name = "aux-uart"
+chip = "esp32"
+flash_mb = 4
+
+[uart.aux]
+port = 1
+tx = 26
+rx = 27
+baud = 115200
+
+[lines.aux]
+pwrkey = 4
+ri = { pin = 33, pull = "down" }

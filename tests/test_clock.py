@@ -245,7 +245,7 @@ def a_broker_with_deadlines(
             pins=LILYGO.lines["modem"],
         )
         network = modem.network()
-        model = modem.model()
+        model = modem.modem_model()
         assert b"CONNECT" in b"".join(data for _, data in model.receive(0, b"ATD*99#\r\n"))
         assert model.data_mode
         # PPP's first LCP request: taken here, so that the runner's turns carry no input.

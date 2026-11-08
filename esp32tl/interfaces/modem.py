@@ -52,10 +52,13 @@ class Modem(Uart):
         """Select the modem and its simulated network before power-on, or return it later."""
         if isinstance(self.source, ModemModel) and isinstance(self.source.data, Internet):
             return self.source.data
+        if not isinstance(self.source, ModemModel):
+            # Before the backend's checks: after power-on they would say a source can still come.
+            self._refuse_source("modem")
         self.asked(Request(self.name, source="model"))
         self._tell(lambda model: None, "network()")
         network = Internet(self._now, self._world, bridging=self._bridging)
-        self.model().data = network
+        self.modem_model().data = network
         return network
 
     @property
@@ -139,41 +142,44 @@ class Modem(Uart):
     @property
     def powered(self) -> bool:
         """Whether the selected model is powered."""
-        return self.model().powered
+        return self.modem_model().powered
 
     @property
     def registered(self) -> bool:
         """Whether the selected model is registered."""
-        return self.model().registered
+        return self.modem_model().registered
 
     @property
     def data_mode(self) -> bool:
         """Whether the selected model is in data mode."""
-        return self.model().data_mode
+        return self.modem_model().data_mode
 
     @property
     def hung(self) -> bool:
         """Whether the selected model is hung."""
-        return self.model().hung
+        return self.modem_model().hung
 
     @property
     def restarts(self) -> tuple[Restart, ...]:
         """Each time a run of the selected model ended, with what ended it."""
-        return self.model().restarts
+        return self.modem_model().restarts
 
     @property
     def commands(self) -> list[Command]:
         """Every completed AT command and reply, as a snapshot."""
-        return self.model().commands
+        return self.modem_model().commands
 
-    def model(self) -> ModemModel:
+    def modem_model(self) -> ModemModel:
         """The selected model; reading this never selects a source."""
         if isinstance(self.source, ModemModel):
             return self.source
+        self._refuse_source("modem")
         raise SourceError(f"{self.name} has no modem model: select it before board.power_on()")
 
     def recorded_source(self) -> str:
-        return "model:modem" if self.source_kind == "model" else super().recorded_source()
+        if isinstance(self.source, ModemModel):
+            return "model:modem"
+        return super().recorded_source()
 
     def command_report(self) -> list[str]:
         """Every AT command with its time and fallback marker for the report."""
@@ -194,6 +200,7 @@ class Modem(Uart):
             if self.log is not None:
                 self.log.test(self._now(), f"{self.name}.{step}")
             return
+        self._refuse_source("modem")
         self._ask("model")
         key = self._pins.get("pwrkey")
         if key is None or key.on_ms is None or "ri" not in self._pins:

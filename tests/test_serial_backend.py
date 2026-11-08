@@ -250,10 +250,21 @@ def test_serial_capabilities_skip_at_the_call(pytester: pytest.Pytester, local: 
         def test_boots(board):
             board.power_on()
             board.boot
+        class Silent:
+            def receive(self, t, data):
+                return ()
+            def poll(self, now):
+                return ()
+            def quiet_until(self):
+                return None
+            def latency(self):
+                return None
+        def test_own_model(board):
+            board.uart("gnss").model(Silent())
     """)
     )
     result = run_serial(pytester, "-rs")
-    result.assert_outcomes(skipped=25)
+    result.assert_outcomes(skipped=26)
     result.stdout.fnmatch_lines(
         [
             "*serial: uart.gnss takes no model source on this backend, only real*",
@@ -280,6 +291,7 @@ def test_serial_capabilities_skip_at_the_call(pytester: pytest.Pytester, local: 
             "*serial: wifi takes no model source on this backend, only real*",
             "*serial: the backend cannot switch the board's power*",
             "*serial: the backend does not see the chip's resets*",
+            "*serial: uart.gnss takes no model source on this backend, only real*",
         ]
     )
     assert not (pytester.path / "not-written.jsonl").exists()

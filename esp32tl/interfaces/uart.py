@@ -6,7 +6,7 @@ import os
 import threading
 from collections.abc import Callable, Iterable
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Protocol, TypeVar, runtime_checkable
 
 from esp32tl import recording
 from esp32tl.boards.capabilities import Request
@@ -32,10 +32,15 @@ class Source(Protocol):
     def latency(self) -> int | None: ...
 
 
+# A model the test gives, which `Uart.model` returns as it was given.
+S = TypeVar("S", bound=Source)
+
+
 @runtime_checkable
 class Supplied(Protocol):
     """A source that is a part of the board, on the board's supply: a model of the receiver or
-    the modem soldered on, or wired to the board's power."""
+    the modem soldered on, or wired to the board's power, or a model of the test's with this
+    method. It starts with power; the first power-on calls nothing."""
 
     def supply(self, on: bool) -> None:
         """The board's supply went off, or came back, at the board's time now."""
@@ -63,14 +68,15 @@ class Uart(Interface):
     """The interface `name` (`uart.gnss`) on `wire`, whose source the test gives in its body.
 
     What the test does with it decides what is at the far end: `replay(path)` a recording,
-    `real(port)` a device on a host serial port. Until then the UART hears everything and says
-    nothing. `tap(path)` records what crosses it, both ways, whatever is at the far end. `clock` is
-    the backend's, or how to ask it, for one that depends on the sources given: a recording on
-    another one is refused. A relative path is taken from `directory`, the test file's. `asked` is
-    called with the request, a source (`replay`, `real`) or a tap on this interface, before the
-    source or the tap is made, and refuses it by raising: the backend's checks, that the board is
-    still off and that a backend gives it. `log`, when given, gets every byte that crosses the wire,
-    and the test's steps on the UART, at 0: they come before power-on. `files` holds the files the
+    `real(port)` a device on a host serial port, `model(source)` a model the test wrote. Until
+    then the UART hears everything and says nothing. `tap(path)` records what crosses it, both
+    ways, whatever is at the far end. `clock` is the backend's, or how to ask it, for one that
+    depends on the sources given: a recording on another one is refused. A relative path is taken
+    from `directory`, the test file's. `asked` is called with the request, a source (`replay`,
+    `real`, `model`) or a tap on this interface, before the source or the tap is made, and
+    refuses it by raising: the backend's checks, that the board is still off and that a backend
+    gives it. `log`, when given, gets every byte that crosses the wire, and the test's steps on
+    the UART, at 0: they come before power-on. `files` holds the files the
     run reads and writes, by path, with what each is for, the kind (`replay`, `tap`) and the route.
     The backend gives its UARTs one mapping, so that a tap never writes over a recording a replay
     read, or over another route's tap.
@@ -141,6 +147,21 @@ class Uart(Interface):
             raise
         return source
 
+    def model(self, source: S) -> S:
+        """Puts `source`, a model the test wrote, at the far end: what the firmware transmits
+        goes to its `receive`, and what it returns, or sends from `poll`, goes into the chip at
+        its own time. One that is `Supplied` loses its power with the board's supply, and gets it
+        back. Returns `source`."""
+        missing = [m for m in SOURCE_METHODS if not callable(getattr(source, m, None))]
+        if missing:
+            raise TypeError(
+                f"{self.name}.model: {source!r} is not a Source: it has no {', '.join(missing)}"
+            )
+        self._ask("model")
+        name = type(source).__name__
+        self._give(source, "model", name, step=f"{self.name}.model({name})")
+        return source
+
     def tap(self, path: str | os.PathLike[str]) -> Tap:
         """Records what crosses the UART from power-on, both ways, and writes it to `path`,
         relative to the test file's directory, as a recording once the run has ended: what the
@@ -166,13 +187,27 @@ class Uart(Interface):
 
     def recorded_source(self) -> str:
         """What a tap's recording says was at the far end (`docs/recording-format.md`): the
-        kind of source, `replay` or `real`, or `none` for nothing."""
+        kind of source, `replay` or `real`, `model:<class>` for a model the test gave, or `none`
+        for nothing."""
+        if self.source_kind == "model":
+            return f"model:{self.source_detail}"
         return self.source_kind or NO_SOURCE
 
     def _ask(self, source: str) -> None:
         if self.source is not None:
             raise SourceError(f"{self.name} has its source already: one per test")
         self.asked(Request(self.name, source=source))
+
+    def _refuse_source(self, part: str) -> None:
+        """Refuses a call to esp32tl's model of `part` (`receiver`, `modem`) on a route whose
+        source is another one, saying what the route has: there is no `part` there to tell
+        anything. The caller has checked that the source is not that model."""
+        if self.source is None:
+            return
+        what = {"real": "has a real device", "model": "has a model of the test's"}.get(
+            self.source_kind or "", "replays a recording"
+        )
+        raise SourceError(f"{self.name} {what}: it has no {part} to describe; one source per test")
 
     def _unclaimed(self, file: Path, what: str, writers_only: bool = False) -> None:
         """Refuses `file` when the run reads or writes it already, or, with `writers_only`, when
@@ -268,6 +303,9 @@ class Uart(Interface):
     def latency(self) -> int | None:
         return None if self.source is None else self.source.latency()
 
+
+# What `Source` asks of a model: `model` refuses one without each of them, callable.
+SOURCE_METHODS = ("receive", "poll", "quiet_until", "latency")
 
 # The kinds of `files` entry whose file the run writes: a replay must not read one of them.
 WRITERS = ("tap", "card")

@@ -34,10 +34,12 @@ takes with `lose_power()` and gives back with `restore_power()` or `power_on()`.
 running modem down as `lose_power()` does; back, it starts nothing. A PWRKEY pulse starts the
 modem only with both, and `power_on()` with `_board` off restores `_supply` and starts nothing.
 
-The model keeps every `Command` under an RLock. `commands` returns a snapshot. With a model,
-`Esp32Sim.report` appends the command section; `properties` adds all commands to the modem route.
-The rolling wire log still keeps only its normal last entries. Raw data-mode payloads are available
-as a snapshot through `model().data_received`.
+The model keeps every `Command` under an RLock. `commands` returns a snapshot. With the modem
+model, `Esp32Sim.report` appends the command section; `properties` adds all commands to the modem
+route. Both check the route's source by type, so a model of the test's on `uart.modem`
+(`Uart.model`) adds neither. The rolling wire log still keeps only its normal last entries. Raw
+data-mode payloads are available as a snapshot through `modem_model().data_received`, the route's
+`ModemModel`; it was `model()` until `Uart.model(source)` took that name.
 
 ## Schema
 
@@ -123,9 +125,13 @@ after the hold returns, so `quiet_until` has no bound to give for it. `hang` and
   (`TypeError`).
 - `modem.hang: the modem is off`, `modem.hang: the modem is hung already` (`SourceError`), `modem.hang: pwrkey is 1, not True or False`
   (`TypeError`).
-- `uart.modem has its source already: one per test`: replay and model are mutually exclusive.
+- `uart.modem has its source already: one per test`: replay and model are mutually exclusive; a
+  replay or a real source given after the modem model.
+- `uart.modem replays a recording: it has no modem to describe; one source per test` (`has a real
+  device`, `has a model of the test's` for the others): a model call, `network()` or a property
+  read on a route with another source.
 - `uart.modem has no modem model: select it before board.power_on()`: a property was read before
-  model selection or on a replay.
+  any source was given.
 - `uart.modem: the board is on already: give an interface its source before board.power_on()`
   (`the board has been on` after `board.power_off()`): first source selection was too late. Later calls on an existing model remain allowed.
 

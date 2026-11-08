@@ -218,7 +218,7 @@ def test_named_controls_are_observable_without_changing_modem_state(tmp_path: Pa
     now = [0]
     modem, lines, _ = route(tmp_path, now)
     modem.register()
-    reply(modem.model(), "ATE1")
+    reply(modem.modem_model(), "ATE1")
     controls = {
         "modem.dtr": 25,
         "gnss.wake": 19,
@@ -232,7 +232,7 @@ def test_named_controls_are_observable_without_changing_modem_state(tmp_path: Pa
         )
         assert all(lines.level(name) == level for name in controls)
         assert modem.powered and modem.registered
-        assert reply(modem.model(), "AT", now[0]) == b"AT\r\n\r\nOK\r\n"
+        assert reply(modem.modem_model(), "AT", now[0]) == b"AT\r\n\r\nOK\r\n"
 
 
 def test_powerkey_uses_profile_timing_and_power_loss_prevents_restart(tmp_path: Path) -> None:
@@ -272,16 +272,16 @@ def test_powerkey_uses_profile_timing_and_power_loss_prevents_restart(tmp_path: 
 def test_power_loss_clears_partial_commands_and_data_mode(tmp_path: Path) -> None:
     modem, lines, _ = route(tmp_path, [0])
     modem.power_on()
-    reply(modem.model(), "ATD*99#")
+    reply(modem.modem_model(), "ATD*99#")
     modem.lose_power()
     assert not modem.data_mode and not modem.registered
-    assert reply(modem.model(), "AT") == b""
+    assert reply(modem.modem_model(), "AT") == b""
     assert list(lines.inputs(0))[-1] == GpioIn(0, ((33, 0),))
     modem.power_on()
-    list(modem.model().receive(0, b"AT+"))
+    list(modem.modem_model().receive(0, b"AT+"))
     modem.power_off()
     modem.power_on()
-    assert reply(modem.model(), "AT") == b"\r\nOK\r\n"
+    assert reply(modem.modem_model(), "AT") == b"\r\nOK\r\n"
 
 
 def test_a_tap_and_report_keep_commands_even_after_the_wire_log_rolls_over(tmp_path: Path) -> None:
@@ -335,7 +335,11 @@ def test_a_replay_and_model_are_exclusive_and_reading_state_selects_neither(tmp_
         ),
     )
     modem.replay("input.jsonl")
-    with pytest.raises(SourceError, match="has its source already"):
+    with pytest.raises(
+        SourceError,
+        match=r"^uart\.modem replays a recording: it has no modem to describe;"
+        r" one source per test$",
+    ):
         modem.signal(dbm=-73)
     assert modem.source_kind == "replay"
     assert modem.recorded_source() == "replay"
@@ -483,7 +487,7 @@ def test_network_selection_guarded_escape_and_loss_reset(tmp_path: Path) -> None
     modem, _, _ = route(tmp_path, now)
     network = modem.network()
     assert modem.network() is network and modem.lossless
-    model = modem.model()
+    model = modem.modem_model()
     assert b"CONNECT" in reply(model, "ATD*99#")
     model.poll(1_000_000)
     # Pluses within an ordinary binary stream never escape, across UART chunks.
@@ -745,7 +749,7 @@ def test_the_clock_and_operator_are_steps_of_the_run(tmp_path: Path) -> None:
         "operator(name=",
     ):
         assert f"uart.modem.{step}" in logged
-    modem.model()
+    modem.modem_model()
 
 
 def test_a_refused_clock_or_operator_leaves_the_route_without_a_source(tmp_path: Path) -> None:
@@ -789,7 +793,7 @@ def test_a_broker_deadline_at_the_escapes_instant_runs_before_it(
     now = [0]
     modem, _, _ = route(tmp_path, now)
     network = modem.network()
-    model = modem.model()
+    model = modem.modem_model()
     assert b"CONNECT" in reply(model, "ATD*99#")
     wire = PppWire(network)
     peer = Peer(wire, 4000)
@@ -823,7 +827,7 @@ def test_a_hung_modem_passes_no_data_and_sends_no_no_carrier(tmp_path: Path) -> 
     now = [seconds(1).ns]
     modem, lines, _ = route(tmp_path, now)
     network = modem.network()
-    model = modem.model()
+    model = modem.modem_model()
     assert b"CONNECT" in reply(model, "ATD*99#", now[0])
     list(model.poll(now[0]))
     received = len(model.data_received)
@@ -843,7 +847,7 @@ def test_a_hung_modem_passes_no_data_and_sends_no_no_carrier(tmp_path: Path) -> 
 def test_the_report_shows_a_command_with_no_answer(tmp_path: Path) -> None:
     modem, _, _ = route(tmp_path, [0])
     modem.hang()
-    reply(modem.model(), "AT")
+    reply(modem.modem_model(), "AT")
     assert modem.command_report()[-1].endswith("'AT' (no answer)")
 
 
@@ -1025,7 +1029,7 @@ def dialled(tmp_path: Path, now: list[int]) -> tuple[ModemRoute, Modem, Internet
     """A route with its network, which has dialled and has an open LCP."""
     modem, _, _ = route(tmp_path, now)
     network = modem.network()
-    model = modem.model()
+    model = modem.modem_model()
     reply(model, "ATD*99#", now[0])
     list(model.poll(now[0]))
     network.ppp.lcp_open = True
@@ -1118,7 +1122,7 @@ def test_a_hang_or_a_power_loss_takes_back_what_a_dropped_call_had_queued(
 def test_drop_call_refuses_a_terminate_before_lcp_is_open(tmp_path: Path) -> None:
     modem, _, _ = route(tmp_path, [0])
     network = modem.network()
-    model = modem.model()
+    model = modem.modem_model()
     reply(model, "ATD*99#")
     assert not network.ppp.lcp_open
     with pytest.raises(SourceError, match="terminate needs LCP open"):
@@ -1256,7 +1260,7 @@ def test_the_test_s_power_calls_end_a_hang_and_restore_power_does_not() -> None:
 def test_a_route_and_a_bare_model_start_from_the_same_world(tmp_path: Path) -> None:
     modem, _, _ = route(tmp_path, [0])
     modem.signal(dbm=-73)
-    assert reply(modem.model(), "AT+CCLK?") == reply(Modem(lambda: 0), "AT+CCLK?")
+    assert reply(modem.modem_model(), "AT+CCLK?") == reply(Modem(lambda: 0), "AT+CCLK?")
 
 
 def test_the_clock_and_ntp_tell_the_same_time_with_their_defaults() -> None:

@@ -157,8 +157,10 @@ cannot fail with this backend; it is there for another caller:
 - `power_off()`, once started and with the supply on, and `power_on()` after it, go through
   `_switch(on)`: `Power(now, on)`, `_supply`, then `supply(on)` on every UART of the profile,
   which hands it to a source that is `Supplied` (`esp32tl/interfaces/uart.py`): the GNSS receiver
-  model and the modem model ([models](models-technical.md), [modem](modem-technical.md)). A replay
-  or a real source is not, and keeps sending. The step goes into the run's log as
+  model, the modem model ([models](models-technical.md), [modem](modem-technical.md)), and a model
+  of the test's with a `supply(on)` method (`Uart.model`). A replay or a real source is not, and
+  keeps sending. The first `power_on()` starts the runner and calls no `supply`: a model starts
+  powered. The step goes into the run's log as
   `board.power_off()` or `board.power_on()`. `power_off()` before the runner has started raises
   `BoardOff: the board is off; call board.power_on() first`, and on a supply that is off
   `BoardOff: the board is off already: call board.power_on() to switch it on`.

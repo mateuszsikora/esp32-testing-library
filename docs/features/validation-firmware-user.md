@@ -60,6 +60,11 @@ no byte. It prints `modem_at: dialogue complete`, then queries CSQ, CEREG and CC
 with 250 ms waits, and prints `modem_at: RI=<level>`. The tests change the modem on the test's
 clock and read those ordinary console messages. It does not use esp_modem or PPP.
 
+`tests/test_uart_model.py` runs it on `tests/boards/aux-uart.toml` too, a profile whose UART1 on
+the same pins is `uart.aux`, with RI pulled down and no modem model: the far end is a model the
+test writes, which answers `OK` to every command ([a UART's own
+model](pytest-plugin-user.md#a-uarts-own-model)).
+
 ## `modem_recovery`
 
 `modem_recovery` runs PPP through `esp_modem` at `modem-v1.4.1`, the revision `pppos_client` fetches,
