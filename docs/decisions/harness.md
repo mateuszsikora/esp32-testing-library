@@ -2996,4 +2996,5 @@ multiplies the slices of the whole sleep. Returning any boot, a restart or a wat
 because a test that waits for a wake and gets a crash should fail at the call that assumed the
 sleep, not at a later expect that cannot say why. Skipping the sleep's emulated time without
 running it, because the chip's RTC timer is what wakes it and what the firmware reads after the
-wake; the runner skips idle time as fast as esp32sim lets it.
+wake; the runner runs the sleep as fast as esp32sim runs idle time, so a sleep's wall time grows
+with its length.

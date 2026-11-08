@@ -245,10 +245,18 @@ nothing wakes a chip without its supply. It counts the link's `resets`, and call
 from `boots`, the description `a wake from deep sleep`, and `WAKE_LATENCY_NS`, 1 ms. The runner
 ends a slice at every whole emulated millisecond while the board is on (protocol §6.1), so that
 latency adds no slice: the sleep costs the runner what it costs any wait, and the test none of the
-100 ms steps `wait_until` would take. The wait returns at the turn the reset brings, at most 1 ms
-after it, or sooner when an interface's latency is smaller. A boot whose `cause` is not
-`DEEPSLEEP_RESET` (5) raises `AssertionError`: `board.wait_for_wake: boot {number} at {at} is
-{reason} (reset cause {cause}), not a wake from deep sleep (DEEPSLEEP_RESET)`. It logs
+100 ms steps `wait_until` would take. Before the sleep it costs more turns than `wait_until`: every
+event the link sends but the console's bytes, `gpio_out`, `uart_tx`, `uart_cfg` and `eth_tx` among
+them, brings a turn at most 1 ms after it (protocol rule 1). The wait returns at the turn the reset
+brings, at most 1 ms after it, or sooner when an interface's latency is smaller. The sleep is not
+skipped: esp32sim runs it, and its wall time grows with its length, 0.07 s for 20 s and about
+3.7 s for 15 minutes on an M2 Pro, measured on a firmware with a 15-minute timer wake. At the pin
+`afcfba6`, esp32sim's `run` advances idle cores in rounds of `IDLE_CHUNK`, 512 cycles on the
+classic ESP32 (`esp32/src/soc.rs`, `esp-soc/src/machine.rs`), and the RTC timer's wake is no
+device deadline (`ClassicRtc` gives no `next_deadline`, `esp32/src/periph.rs`): the runner's own
+slices are not what a sleep costs. A boot whose `cause` is not `DEEPSLEEP_RESET` (5) raises
+`AssertionError`: `board.wait_for_wake: boot {number} at {at} is {reason} (reset cause {cause}),
+not a wake from deep sleep (DEEPSLEEP_RESET)`. It logs
 `board.wait_for_wake(), up to {within}`, then `a wake from deep sleep: boot {number} at {at}`,
 `a wake from deep sleep: boot {number} is {reason}, not a wake` before the `AssertionError`, or
 the `did not happen` and `the run ended first` lines of `wait_on_clock`.
@@ -524,7 +532,7 @@ In the test body:
 | `{description} did not happen within {within}: waited from {start} to {end} of the board's time` | `NeverHappened` | `wait_until`'s deadline, and `wait_for_wake`'s, with `a wake from deep sleep` |
 | `board.wait_for_wake: boot {number} at {at} is {reason} (reset cause {cause}), not a wake from deep sleep (DEEPSLEEP_RESET)` | `AssertionError` | The chip booted again through another reset: `esp_restart()`, a watchdog |
 | `the board is off: board.wait_for_wake() waits for a board that is on` | `BoardOff` | `wait_for_wake` after `power_off()` |
-| `the run ended {when} while the test waited {what}: {reason}` | `RunEnded` | The run ended during, or before, a wait. `{when}` is `at {time}` from the runner's `stats`, `after the turn at {time}` without them, the last held turn being only a bound, or `before its first turn`. `{what}` is `until {time}` for `wait`, `for {description}` for `wait_until`; `{reason}` is `[the link failed: {error}; ]the runner exited with code {code}; its last output:` and the tail |
+| `the run ended {when} while the test waited {what}: {reason}` | `RunEnded` | The run ended during, or before, a wait. `{when}` is `at {time}` from the runner's `stats`, `after the turn at {time}` without them, the last held turn being only a bound, or `before its first turn`. `{what}` is `until {time}` for `wait`, `for {description}` for `wait_until`, `for a wake from deep sleep` for `wait_for_wake`; `{reason}` is `[the link failed: {error}; ]the runner exited with code {code}; its last output:` and the tail |
 
 Times in these messages are `seconds(ns)`: seconds without trailing zeros, `1.5 s`, `0 s`.
 Anything else `IdfApp` raises, a `flasher_args.json` that is not JSON or has no `flash_files` for
