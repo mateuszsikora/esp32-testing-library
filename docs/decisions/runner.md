@@ -3,21 +3,59 @@
 Why the `esp32tl-runner` crate in `runner/`, its esp32sim pin and the link protocol it speaks
 with the harness ([`docs/protocol.md`](../protocol.md)) are the way they are.
 
+## esp32sim is pinned at the merge commit of the deep-sleep timer wake
+
+Status: decided (#35)
+
+`runner/Cargo.toml` takes `esp32`, `esp-soc`, `esp-periph` and, as a dev-dependency, `emu-core`
+from git at `afcfba65da0da30a35fb0a7c381854c62b92e338`, the merge of mikroverk/esp32sim#336, with
+which a classic chip in deep sleep wakes on its RTC timer
+([stage 0, gap 4](../stage0-findings.md#gaps)). On it, `tools/deepsleep` boots 12 times in a 60 s
+run, every boot after the first with wake cause 4 (`ESP_SLEEP_WAKEUP_TIMER`) after a
+`DEEPSLEEP_RESET`; on the previous pin it boots once. `tests/test_timer_wake.py` keeps it so: it
+runs `firmware/timer_wake` through two sleeps, and fails with `NeverHappened` on the previous pin.
+
+Besides #336, these changes beyond the previous pin are on the classic chip's paths that every
+firmware, or a part of esp32tl, goes through:
+
+- mikroverk/esp32sim#314: the timer-group interrupt lines ignore `INT_ENA`. #35 was to run the
+  deep-sleep validation again on it.
+- mikroverk/esp32sim#290: `Timer::step` of the timer groups (`esp-periph/src/timg.rs`) skips the
+  prescaler division below the divisor, on the same timer path.
+- mikroverk/esp32sim#315: a received Wi-Fi frame raises MAC cause bits 24, 5 and 2
+  (`EVENT_RX` in `esp32/src/wifi.rs`), the interrupt every `eth_rx` reaches the station through.
+- mikroverk/esp32sim#323: `CCOUNT` restarts at a CPU reset, so also at every wake from deep sleep.
+- mikroverk/esp32sim#332: IO_MUX function 0 is GPIO on the 24 pads whose ESP-IDF header says so
+  (`GPIO_AT_FUNCTION_0` in `esp32/src/periph.rs`).
+- mikroverk/esp32sim#313: SPI1 starts with its reset command phase, `USR_COMMAND` and an 8-bit
+  command (`SpiMem::new` in `esp-periph/src/spi_mem.rs`), which the classic chip's SPI model
+  wraps.
+- mikroverk/esp32sim#329, which brings #316 (a sleeping classic core tests its armed timer lines
+  inline) and #321 (`QUOU`, `QUOS`, `REMU` and `REMS` compiled to native AArch64 code).
+
+The evidence that none of them changes what esp32tl relies on is the whole test suite, which
+passes on the pin unchanged, and every esp32sim line the documentation cites, which is still
+there, moved at most. The production images of stage 0 are not in this repository and were not
+run again. That revision in `runner/Cargo.toml` is the project's esp32sim pin.
+
+**Rejected:** upstream's head at the time, `0437f14`, because it also carries
+mikroverk/esp32sim#344 (the ROM's UART download mode), which changes what a byte on a UART's RX
+pin does when the 128-byte receive FIFO is full: `ClassicUart::host_input` queues it and releases
+it at the baud rate instead of dropping it. The runner counts such a byte as dropped and sends
+`rxfifo_ovf` ([protocol, 5.8](../protocol.md#58-warn-ext)) before it hands it over, so on that
+revision it would report a drop that did not happen, and a firmware that falls behind its UART
+would not lose bytes as the chip does. The merge commit is the smallest step that was checked.
+
 ## esp32sim is pinned at the merge commit of the chip-revision fix
 
-Status: decided (#43)
+Status: superseded (#35)
 
-`runner/Cargo.toml` takes `esp32`, `esp-soc` and, as a dev-dependency, `emu-core` from git at
-`8c652151dd5a521249a785ca147f20a9f8eda68f`, the merge of mikroverk/esp32sim#322. Beyond stage 0's
-fix build it brings mikroverk/esp32sim#300 (LL Privacy in the virtual BLE controller) and #307
-(roadmap documentation). On it, `hello_world` built for v3.0 boots after its power-on reset only,
-and every stage 0 run of the production images executes the same instructions as on the fix
-build. That revision in `runner/Cargo.toml` is the project's esp32sim pin.
-
-**Rejected:** upstream's head at the time, because it is one pull request further,
-mikroverk/esp32sim#314 (classic timer-group interrupt lines ignore `INT_ENA`), which no firmware
-had been run on and which touches the timer path M9 depends on. The merge commit is the smallest
-step that was checked.
+`runner/Cargo.toml` took the esp32sim crates from git at
+`8c652151dd5a521249a785ca147f20a9f8eda68f`, the merge of mikroverk/esp32sim#322, with which
+`hello_world` built for v3.0 boots after its power-on reset only. Upstream's head at the time was
+rejected because it carried mikroverk/esp32sim#314 as well, which touches the timer path M9 depends
+on. The pin moved for the deep-sleep timer wake: see
+[esp32sim is pinned at the merge commit of the deep-sleep timer wake](#esp32sim-is-pinned-at-the-merge-commit-of-the-deep-sleep-timer-wake).
 
 ## The esp32sim command-line crate is not a dependency
 
@@ -296,8 +334,9 @@ A chip reset calls no hook, so the runner reports the watched pins itself
 `GPIO_OUT` read from the bus (`Guest::gpio_drive`), and `changes` holds every watched pin whose
 pad level differs from the one the peer last saw in `changes` (`Recorder::levels_reported`),
 taking a pad as driven high where both words have its bit. That is the pad's state right after
-`reboot()` at the pin, which leaves both words 0 and IO_MUX at function 0, through which esp32sim
-drives no pad; `on_the_emulator_no_pad_is_driven_after_a_chip_reset` checks it.
+`reboot()` at the pin, which leaves both words 0 and IO_MUX at function 0: a GPIO with its output
+disabled on the pads whose function 0 is GPIO, a function through which esp32sim drives no pad on
+the others; `on_the_emulator_no_pad_is_driven_after_a_chip_reset` checks it.
 
 **Rejected:** comparing the new state with the last report's `enabled` and `output`, because
 `changes` are pad levels and the two words are not: a pad UART TX drove high, with `GPIO_OUT` at

@@ -28,7 +28,7 @@ set -eu
 
 IDF_VERSION=v5.3.6
 CONTAINER=espressif/idf:$IDF_VERSION@sha256:cee52f0c4fdaf088992a7a739f5993154e95cf1d3ab61c24f5b40e6d56a3a070
-IMAGES="hello_world nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request persistence ota_state"
+IMAGES="hello_world nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request persistence ota_state timer_wake"
 family=firmware
 if [ "${1:-}" = --examples ]; then
 	shift
@@ -79,6 +79,7 @@ project_of() {
 	nvs_reader) echo "$PWD/firmware/nvs_reader" ;;
 	persistence) echo "$PWD/firmware/persistence" ;;
 	ota_state) echo "$PWD/firmware/ota_state" ;;
+	timer_wake) echo "$PWD/firmware/timer_wake" ;;
 	sd_remount) echo "$PWD/firmware/sd_remount" ;;
 	esac
 }

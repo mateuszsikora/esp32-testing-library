@@ -25,7 +25,7 @@ from esp32tl.link.protocol import (
 from esp32tl.report import RunLog
 from esp32tl.units import Duration, ms, seconds
 
-HELLO = RunnerHello(1, "esp32", "emulated-fifo-write", "8c652151dd5a521249a785ca147f20a9f8eda68f")
+HELLO = RunnerHello(1, "esp32", "emulated-fifo-write", "afcfba65da0da30a35fb0a7c381854c62b92e338")
 ROUTE = SdCardRoute(sclk=14, mosi=15, miso=2, cs=13)
 MS = 1_000_000
 

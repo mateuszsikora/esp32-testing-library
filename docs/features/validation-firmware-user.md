@@ -41,6 +41,7 @@ whatever `FIRMWARE_OUT` the shell exports, because the tests read the images the
 | `http_request` | ESP-IDF's `examples/protocols/http_request`, unmodified, with its default `sdkconfig`, for target `esp32`: joins a Wi-Fi access point and fetches `http://example.com/` over and over ([below](#http_request)) |
 | `persistence` | `firmware/persistence`: counts its boots in NVS, RTC memory, RAM and on an SD card, prints them with its reset reason, and restarts itself once ([below](#persistence)) |
 | `ota_state` | `firmware/ota_state`: copies its app to the next OTA slot, boots it, marks it valid, then does it again and rolls back, reporting its state at each step ([below](#ota_state)) |
+| `timer_wake` | `firmware/timer_wake`: sleeps in deep sleep twice with a 2 s timer wake, counting its boots in RTC memory ([below](#timer_wake)) |
 
 ## `modem_at`
 
@@ -158,6 +159,23 @@ the running image's `esp_ota_get_state_partition()`, `none` for the factory app,
 `updated` line comes once the copy is in the next slot and selected, before it restarts. It stops at
 `done`. `tests/test_ota_state.py` runs it, also with a power cycle before `ota_1` has confirmed
 itself, which boots `ota_0`.
+
+## `timer_wake`
+
+`timer_wake` checks that a deep sleep with a timer wake ends in a boot of its own. Build it with
+`firmware/build.sh timer_wake`; `make firmware` and `make test` include it. At every boot it adds
+one to a count in RTC slow memory (`RTC_DATA_ATTR`), which the bootloader loads at every boot but a
+wake from deep sleep, and prints:
+
+```text
+timer_wake: boot=2 rom=5 wake=4
+```
+
+`rom` is the ROM's reset reason for core 0, `esp_rom_get_reset_reason(0)` (1 `POWERON_RESET`, 5
+`DEEPSLEEP_RESET`), and `wake` is `esp_sleep_get_wakeup_cause()` (0 none, 4 the timer). On its
+first two boots it prints `timer_wake: sleeping 2000 ms`, arms a 2 s timer wake and calls
+`esp_deep_sleep_start()`; on the third it prints `timer_wake: done` and returns.
+`tests/test_timer_wake.py` runs it.
 
 ## `sdspi`
 
@@ -304,7 +322,7 @@ every image those are:
 | `0x1000` | `bootloader/bootloader.bin` |
 | `0x8000` | `partition_table/partition-table.bin` |
 | `0xd000` | `ota_data_initial.bin`, for `ota_state` only |
-| `0x10000` | `IMAGE.bin` (`hello_world.bin`, `nmea_reader.bin`, `gpio_echo.bin`, `sd_remount.bin`, `modem_at.bin`, `modem_recovery.bin`, `nvs_reader.bin`, `pppos_client.bin`, `mqtt_session.bin`, `http_request.bin`, `persistence.bin`, `ota_state.bin`), `sd_card.bin` for `sdspi` |
+| `0x10000` | `IMAGE.bin` (`hello_world.bin`, `nmea_reader.bin`, `gpio_echo.bin`, `sd_remount.bin`, `modem_at.bin`, `modem_recovery.bin`, `nvs_reader.bin`, `pppos_client.bin`, `mqtt_session.bin`, `http_request.bin`, `persistence.bin`, `ota_state.bin`, `timer_wake.bin`), `sd_card.bin` for `sdspi` |
 
 and the ELF is `IMAGE.elf`, `sd_card.elf` for `sdspi`: the files take the project's name, and
 the `sdspi` example's project is called `sd_card`. Two more files say how the build was made:
@@ -377,7 +395,7 @@ run `make firmware`.
 `firmware/build.sh` exits 1 with one of these on stderr, before writing anything, or with the exit
 code of `idf.py` when the build itself fails:
 
-- `firmware/build.sh: unknown image 'NAME'; the images are: hello_world nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request persistence ota_state`
+- `firmware/build.sh: unknown image 'NAME'; the images are: hello_world nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request persistence ota_state timer_wake`
 - `firmware/build.sh: needs Docker, or IDF_LOCAL=1 to build with a local ESP-IDF`
 - `firmware/build.sh: the Docker daemon is not reachable ('docker info' failed); is Docker running?`
 - `firmware/build.sh: IDF_LOCAL=1 needs ESP-IDF in the environment: source $IDF_PATH/export.sh first`

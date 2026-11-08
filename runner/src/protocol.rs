@@ -14,7 +14,7 @@ pub const CLOCK: &str = "emulated-fifo-write";
 pub const WALL: &str = "wall";
 /// The esp32sim revision of the `[dependencies]` in Cargo.toml, for the recording header's
 /// `tools`. A test checks that the two agree.
-pub const ESP32SIM: &str = "8c652151dd5a521249a785ca147f20a9f8eda68f";
+pub const ESP32SIM: &str = "afcfba65da0da30a35fb0a7c381854c62b92e338";
 /// The longest line either side may send (protocol §2).
 pub const MAX_LINE: usize = 1 << 20;
 /// An Ethernet frame without FCS, as esp32sim's relay takes and gives it (5.15): a header, and at

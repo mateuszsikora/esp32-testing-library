@@ -56,7 +56,9 @@ Each item names the fact, where it was checked, and what changes.
    instructions as on the fix build in every configuration stage 0 ran them in: the release image
    with empty NVS, and with NVS naming a Bluetooth peer with and without `--ble`, and the replay
    image. Those images need no patch branch either. The branch is first needed for whichever of BT
-   Classic (M8) and the timer wake (M9) is declined upstream.
+   Classic (M8) and the timer wake (M9) is declined upstream. *Update, 2026-11-08:* the timer wake
+   was not declined: mikroverk/esp32sim#336 was merged as `afcfba6`, which is now the pin (#35,
+   [decisions](decisions/runner.md#esp32sim-is-pinned-at-the-merge-commit-of-the-deep-sleep-timer-wake)).
 
 6. **`pppos_client` is not in ESP-IDF.** It lives in `espressif/esp-protocols` under
    `components/esp_modem/examples/pppos_client`. The validation list stays, the build recipe fetches
@@ -646,11 +648,13 @@ the controller for the ESP32's side is still #34's to choose.
 ### M9. Deep sleep and time skip
 
 - Upstream issue for the missing timer wake (esp32sim notes LACT sleep-time stepping as not
-  modelled). Patch on the branch if declined.
-- `scenario.skip_to_next_wake()`; validation with `system/deep_sleep`. A deep sleep that never
-  wakes ends today in `Stop::Halted` at `max_cycles`, a normal end, so the test asserts on the
-  wake-up itself (the post-wake console line) and treats a run that only halts as a failure;
-  otherwise the unpatched emulator passes silently.
+  modelled). Patch on the branch if declined. *Update, 2026-11-08:* reported upstream as
+  mikroverk/esp32sim#331 from another firmware, fixed in mikroverk/esp32sim#336 and pinned in #35
+  ([stage 0, gap 4](stage0-findings.md#gaps)); no patch branch.
+- `scenario.skip_to_next_wake()`; validation with `system/deep_sleep`. A deep sleep that does not
+  wake ends in `Stop::Halted` at `max_cycles`, a normal end, so the test asserts on the wake-up
+  itself (the post-wake console line) and treats a run that only halts as a failure; otherwise an
+  emulator that does not wake passes silently. `tests/test_timer_wake.py` does so since #35.
 
 ### M10. Upstreaming and stabilisation
 

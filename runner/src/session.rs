@@ -54,8 +54,8 @@ use std::time::{Duration, Instant};
 pub const PORTS: usize = 3;
 /// The classic chip's GPIOs, as a mask: 0 to 39 but 24 and 28 to 31, as the board profiles have
 /// them (`esp32tl/boards`, `GPIOS`). esp32sim's `gpio_state` also leaves out GPIO 20, which only
-/// some packages bond (`esp32/src/soc.rs:191`), but its `set_input` takes a level there; it
-/// ignores one on 40 and above (`esp32/src/periph.rs:373-376`).
+/// some packages bond (`esp32/src/soc.rs:195`), but its `set_input` takes a level there; it
+/// ignores one on 40 and above (`esp32/src/periph.rs:386-389`).
 const GPIOS: u64 = ((1 << 40) - 1) & !(1 << 24 | 0xf << 28);
 /// The classic RX FIFO (`esp-periph/src/uart.rs`): what does not fit is dropped.
 const RX_FIFO: usize = 128;
@@ -723,10 +723,10 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
 
     /// The watched pins' output state after a chip reset, read from the bus, as a `gpio_out`
     /// (protocol 5.5). `reboot()` leaves `GPIO_ENABLE` and `GPIO_OUT` 0 and IO_MUX at function 0,
-    /// through which esp32sim drives no pad: no pad is driven, and taking a pad as driven high
-    /// where both words have its bit agrees with that. `changes` holds every watched pin whose
-    /// level differs from the one last reported in `changes`. With the supply off nothing drives
-    /// a pad either.
+    /// GPIO with its output disabled on some pads and driving nothing on the others: no pad is
+    /// driven, and taking a pad as driven high where both words have its bit agrees with that.
+    /// `changes` holds every watched pin whose level differs from the one last reported in
+    /// `changes`. With the supply off nothing drives a pad either.
     fn reset_gpio(&mut self, cycle: u64) -> Recorded {
         let (enable, out) = self.pads();
         let mut shared = self.shared.borrow_mut();

@@ -1387,6 +1387,10 @@ that references to its number keep their meaning.
      `board.power_on()` raise `RunEnded` without waiting, and log and switch nothing.
      `tests/test_clock.py::test_a_step_on_the_board_after_the_end_of_the_run_raises_run_ended_at_once`,
      `tests/test_pytest_plugin.py::test_the_board_s_power_and_reset_after_the_run_ended_raise_run_ended_and_log_nothing`
+- **206.** A deep sleep with a timer wake ends in a boot of its own, after `DEEPSLEEP_RESET`, with the
+     timer as its wake cause, RTC slow memory kept, and the sleep's length between it and the boot
+     before: a chip that never wakes fails the test instead of halting at the end of the run.
+     `tests/test_timer_wake.py::test_a_timer_wake_boots_the_chip_again_after_its_sleep`
 
 ## Reading the flash
 

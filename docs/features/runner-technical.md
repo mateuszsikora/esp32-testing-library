@@ -18,7 +18,7 @@ Each module's unit tests are in a `tests.rs` of its own: `runner/src/tests.rs` f
 `UartRoute`, the Wi-Fi access point and station link of `esp_soc::wifi`, and the JSON parser
 `esp_soc::json` the protocol module reads with), and takes the
 SD card's image store from a third, `esp-periph` (`esp_periph::sdmmc::{SdStore, FileStore}`). esp32sim lines below are at
-its pin, `8c65215`.
+its pin, `afcfba6`.
 
 ## Data flow
 
@@ -106,7 +106,7 @@ MOSI bytes are known, from the W registers or the DMA out-link, `run_gp_spi`
 `uses_spi_pins` is true, and puts the bytes it returns into the W registers or the DMA in-link.
 `SpiPins` carries the routes at that moment: the pads the master's SCLK and MOSI signals drive,
 the pad its MISO signal is read from, and as `cs` every low, enabled output among GPIO 0 to 33,
-which is how a software CS, a GPIO the driver sets low, shows (`esp32/src/periph.rs:414-427`).
+which is how a software CS, a GPIO the driver sets low, shows (`esp32/src/periph.rs:427-440`).
 `SocketBoard` and `CardBoard` answer `uses_spi_pins` with true when they hold a slot and pass the
 transaction to `Slot::transfer`, which hands it to `SdCard::transfer` when the slot holds a card
 and returns 0xff for every byte when it is empty. With `uses_spi_pins` false, esp32sim's default
@@ -218,7 +218,7 @@ before. Every command clears `access` along with `out`, as it ends a read under 
 
 `now` is the card's clock, in bus cycles: `SocketBoard::advance_to(cycle)`, which the bus calls at
 every tick through `advance_inputs_with_clock` in `deliver_board_inputs`
-(`esp32/src/bus.rs:349-351`, `:630-641`), passes it through `Slot::advance` to `SdCard::advance`. `bus.cycles` changes only
+(`esp32/src/bus.rs:349-351`, `:630-642`), passes it through `Slot::advance` to `SdCard::advance`. `bus.cycles` changes only
 in `tick`, so at the register write that starts a transaction (`run_gp_spi`, `:316-319`) `now` is
 `bus.cycles`. `CardBoard`, without `--board`, has no `advance_to`: no rule can reach its card.
 
@@ -360,22 +360,22 @@ Times on the socket are nanoseconds, from `protocol::ns` (cycles to ns, rounded 
 
 With `--wifi`, the chip's station joins esp32sim's `VirtualAp`, and the network behind it is the
 peer's ([protocol, 5.15 and 5.16](../protocol.md#515-eth_tx-and-eth_rx-ext-m7)). esp32sim's
-`StationLink` (`esp-soc/src/wifi.rs:490-514`) holds the access point, the network behind it and
+`StationLink` (`esp-soc/src/wifi.rs:492-516`) holds the access point, the network behind it and
 the relay mode. `setup` attaches a fresh access point through `Guest::wifi_access_point`, which
-calls `StationLink::attach_new(cfg, None, debug)` (`:538-543`: the access point, and esp32sim's
+calls `StationLink::attach_new(cfg, None, debug)` (`:540-545`: the access point, and esp32sim's
 `VirtualNet` behind it without NAT) and then sets the networks around with `set_beacons`
-(`:565-575`), and turns the relay on (`SocBus::set_ethernet_relay(true)`,
-`esp32/src/soc.rs:92-95`). In relay mode `StationLink::net_step` does nothing (`:634-635`), so
+(`:567-577`), and turns the relay on (`SocBus::set_ethernet_relay(true)`,
+`esp32/src/soc.rs:92-95`). In relay mode `StationLink::net_step` does nothing (`:636-637`), so
 esp32sim's own network, with its DHCP server, DNS, NTP and NAT, never answers; the frames the
 access point passes on as data stay in the relay's queue, at most 64 of at most 1518 bytes
-(`RELAY_QUEUE`, `RELAY_FRAME_MAX`, `:520-521`; `station_tx`, `:578-583`, counts the rest in
+(`RELAY_QUEUE`, `RELAY_FRAME_MAX`, `:522-523`; `station_tx`, `:580-585`, counts the rest in
 `tx_dropped`). `SocBus::attach_wifi` (`esp32/src/soc.rs:88-91`) does the same `attach_new` on the
 classic chip; the runner calls `attach_new` on the link directly. `Wifi::access_point` refuses no
 spec at run time: `cli::parse` has checked it, and an unparsable one is a panic.
 
 **Frames from the station.** `collect`, at every slice boundary, right before a chip reset and in
 `finish`, calls `Guest::take_eth_frames` (`SocBus::take_ethernet_frames`, `esp32/src/soc.rs:96`,
-which is `StationLink::take_relay_frames`, `esp-soc/src/wifi.rs:651-653`). The relay keeps no
+which is `StationLink::take_relay_frames`, `esp-soc/src/wifi.rs:655-657`). The relay keeps no
 time, so every frame taken becomes an `Item::Eth` stamped with the cycle it was taken at, after the
 board's log of the same slice. `process_pending` turns each into an `eth_tx` event, counted in
 `stats.wifi.eth_tx`, and the event sets the block point as any other. The slice rules of the
@@ -386,14 +386,14 @@ own.
 **Frames for the station.** An `eth_rx` goes into the input queue as `Input::Eth`; when it comes
 due, `apply_inputs` appends it to `Session::eth`, the runner's own queue, and calls `deliver_eth`,
 which hands the frames at its front to `Guest::eth_input` (`SocBus::receive_ethernet_frame`,
-`esp32/src/soc.rs:97-99`, which is `StationLink::receive_relay_frame`, `esp-soc/src/wifi.rs:656-662`)
+`esp32/src/soc.rs:97-99`, which is `StationLink::receive_relay_frame`, `esp-soc/src/wifi.rs:660-666`)
 in order, until one is refused because esp32sim's queue holds 64 already. The rest wait in
 `Session::eth` and are offered again at every slice boundary (`boundary` calls `deliver_eth`
 after `deliver`). Each frame taken counts in `stats.wifi.eth_rx`. esp32sim then puts the frames
 on the air one at a time, at least `RX_GAP_US` (400 µs) apart, and only when the access point has
-nothing of its own due, management frames before beacons (`StationLink::next_rx`, `:608-624`); a
+nothing of its own due, management frames before beacons (`StationLink::next_rx`, `:610-626`); a
 frame that comes off the queue while the station is not associated is discarded by
-`VirtualAp::data_from_ds` (`:436-437`), uncounted. While the access point is off the air
+`VirtualAp::data_from_ds` (`:438-439`), uncounted. While the access point is off the air
 (`ap_on` false), `deliver_eth` drops every frame in `Session::eth` and counts it in
 `stats.wifi.eth_rx_dropped`.
 
@@ -415,7 +415,7 @@ just before. On the machine, `wifi_leave`:
 - otherwise returns `false` while anything but beacons is in its queue: the deauthentication, or
   answers queued before (probe responses, with no station joined);
 - otherwise detaches the access point, and with it the networks around, which esp32sim keeps on
-  the access point (`StationLink::attach(None, None)`, `esp-soc/src/wifi.rs:534-536`, which also
+  the access point (`StationLink::attach(None, None)`, `esp-soc/src/wifi.rs:536-538`, which also
   empties the link's queues and starts its counts again), and returns `true`.
 
 While `leaving`, `boundary` calls `leave` at every slice boundary, before `apply_inputs`; on
@@ -424,7 +424,7 @@ thus leaves at the first boundary after esp32sim has put the deauthentication on
 Switching on sets `ap_on` true and, unless the old access point is still `leaving`, calls
 `Guest::wifi_access_point`, which attaches a fresh `VirtualAp` from the same spec with
 `attach_new`, so the station must scan, authenticate, associate and run the WPA2 handshake again;
-the relay mode stays (`attach`, `:534-536`). While the old one is leaving, `leave` does that
+the relay mode stays (`attach`, `:536-538`). While the old one is leaving, `leave` does that
 once `wifi_leave` returns `true`: attaching at once would replace the queue that holds the
 deauthentication, and the station, never told, would keep sending to an access point that has
 forgotten it (an `off` and an `on` at one instant did exactly that, and the station's TCP
@@ -443,7 +443,7 @@ switch and joins again once the access point is back (`tests/test_http_request.p
 **Counts.** `stats.wifi` is `Some` from the start with `--wifi` (`protocol::WifiStats`), and
 `protocol::stats` writes it after `rx_bytes_not_paced`, only then. esp32sim's `rx_dropped` and
 `tx_dropped` start again whenever the link is attached anew (`attach`) and at a chip reset
-(`surviving_reboot`, `esp-soc/src/wifi.rs:546`, from `reboot`, `esp32/src/soc.rs:145`), so
+(`surviving_reboot`, `esp-soc/src/wifi.rs:548`, from `reboot`, `esp32/src/soc.rs:145`), so
 `Guest::wifi_drops` is read and added up just before each: before `chip_reset`, before a fresh
 access point, in `leave` before the detach, and in `finish`. `eth_tx`, `eth_rx` and
 `eth_rx_dropped` are the runner's own counts.
@@ -581,15 +581,15 @@ The socket's limits are constants, not options:
 **Wi-Fi** is configured on the command line only: `--wifi` and `--wifi-nearby`
 ([runner-user.md](runner-user.md#put-a-wi-fi-access-point-on-the-air)). The frame limits are
 `protocol::ETH_MIN` (14) and `protocol::ETH_MAX` (1518), an Ethernet frame without FCS as esp32sim's
-relay takes it. The relay's own limit, `RELAY_FRAME_MAX` (`esp-soc/src/wifi.rs:520`), counts the 4
+relay takes it. The relay's own limit, `RELAY_FRAME_MAX` (`esp-soc/src/wifi.rs:522`), counts the 4
 bytes of libpp's guard word that end every frame from the station, so a 1500-byte datagram's frame,
 1518 bytes with them, is the longest it passes ([protocol
 5.15](../protocol.md#515-eth_tx-and-eth_rx-ext-m7)). The 64-frame queues and the 400 µs between
-received frames are esp32sim's (`esp-soc/src/wifi.rs:520-523`). esp32sim's `wifi-frames` debug area
+received frames are esp32sim's (`esp-soc/src/wifi.rs:522-525`). esp32sim's `wifi-frames` debug area
 (`ESP_EMU_DEBUG=wifi-frames`, or `ESP_EMU_DEBUG_WIFI_FRAMES`) logs the access point's frames on
 stderr, `[wifi] AP -> …`: `attach_new` takes the machine's debug flags. It also logs each frame
 the station sends, `[wifi] TX queue {queue} desc {address} {length} bytes …`, with its transmit
-descriptor's length (`esp32/src/wifi.rs:171-192`).
+descriptor's length (`esp32/src/wifi.rs:176-197`).
 
 **The SD card's image** comes from `esp-periph`, the esp32sim crate of the peripheral models,
 pinned like the others: its `SdStore` trait and `FileStore`, the store of esp32sim's own
@@ -602,9 +602,12 @@ its Cooja link uses) and `esp_soc::web::json_escape`, so the crate adds no JSON 
 **The esp32sim pin.** esp32sim is not on crates.io, so `runner/Cargo.toml` takes `esp32` and
 `esp-soc` (and `emu-core`, a dev-dependency for `Stop::CostModelLifecycle` in a test) from
 `https://github.com/mikroverk/esp32sim`, with `esp-periph` for the SD card's image store, each at
-`rev = "8c652151dd5a521249a785ca147f20a9f8eda68f"`: the merge of mikroverk/esp32sim#322, from
-which images built for chip revision v3.0 boot
+`rev = "afcfba65da0da30a35fb0a7c381854c62b92e338"`: the merge of mikroverk/esp32sim#336, with
+which a deep sleep wakes on its RTC timer ([stage 0, gap 4](../stage0-findings.md#gaps)). Images
+built for chip revision v3.0 boot from mikroverk/esp32sim#322 on
 ([plan, findings 3 and 5](../implementation-plan.md#1-findings-that-amend-the-specification)).
+Why this revision and not upstream's head:
+[decisions](../decisions/runner.md#esp32sim-is-pinned-at-the-merge-commit-of-the-deep-sleep-timer-wake).
 Every esp32sim crate is pinned to the same revision, and `runner/Cargo.lock` resolves all of them
 from that one source; the Makefile builds with `--locked`. This revision is the project's esp32sim
 pin: changing it here changes it everywhere.
