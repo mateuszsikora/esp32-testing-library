@@ -15,7 +15,7 @@ from esp32tl.link.protocol import GpioIn, GpioOut, Release, RunnerHello, Sync, W
 from esp32tl.report import RunLog
 from esp32tl.units import Duration, seconds
 
-HELLO = RunnerHello(1, "esp32", "emulated-fifo-write", "8c652151dd5a521249a785ca147f20a9f8eda68f")
+HELLO = RunnerHello(1, "esp32", "emulated-fifo-write", "afcfba65da0da30a35fb0a7c381854c62b92e338")
 LILYGO = boards.profile("lilygo-t-a7670g-r2")
 S = 1_000_000_000
 

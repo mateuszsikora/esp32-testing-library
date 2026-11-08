@@ -117,7 +117,7 @@ next build is still incremental; the marker, removed first, is what says it fini
 The Makefile's `firmware` target runs `FIRMWARE_OUT= firmware/build.sh`; the pattern rule
 `firmware/%/build/esp32tl-built` runs `FIRMWARE_OUT= firmware/build.sh $*`, and `test` depends on
 `$(FIRMWARE_IMAGES:%=firmware/%/build/esp32tl-built)` with `FIRMWARE_IMAGES := hello_world
-nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request persistence ota_state`. `determinism` depends on
+nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request persistence ota_state timer_wake`. `determinism` depends on
 the markers of `nmea_reader`, `pppos_client`, `mqtt_session` and `http_request`. The rule has no prerequisites, so make rebuilds
 an image only when its marker is missing: an edit to `firmware/nmea_reader/` needs `make firmware`, or
 `firmware/build.sh nmea_reader`, before `make test` sees it.
@@ -186,7 +186,7 @@ from the last one it printed.
 `gpio_config` on GPIO 33, an RTC-capable pad, hands it from the RTC mux back to the digital GPIO
 matrix (`rtc_gpio_deinit`, `components/esp_driver_gpio/src/gpio.c:372` in ESP-IDF v5.3.6), so its
 interrupt reaches the CPU in esp32sim, where a level on an RTC pad raises no GPIO interrupt
-(`set_input`, `esp32/src/periph.rs:373`). Its pulls disabled, the input reads whatever level the
+(`set_input`, `esp32/src/periph.rs:386`). Its pulls disabled, the input reads whatever level the
 harness drives on it: the board's pull from the profile, or the test's.
 
 ## Modem recovery validation
@@ -285,6 +285,21 @@ workaround. The bootloader reads the OTA data, boots the slot it selects through
 writes the entry's state back; `esp_ota_write` programs the slot; `esp_restart` and the rollback's
 reboot come back through it. The whole sequence takes about 2 emulated seconds, 200 ms of each step
 the firmware's own wait.
+
+## `timer_wake`
+
+`firmware/timer_wake/main/main.c` depends on `esp_hw_support` (`esp_sleep.h`) and uses ESP-IDF's
+default `sdkconfig` and partition table. `boots`, `RTC_DATA_ATTR`, is in `.rtc.data`: the
+bootloader loads it from the image, as 0, at every boot but a wake from deep sleep, so the count
+goes on through the sleeps and starts again at a power-on or a reset. `BOOTS` (3) and `SLEEP_US`
+(2 000 000) set the number of boots and the timer: `esp_sleep_enable_timer_wakeup(SLEEP_US)` and
+`esp_deep_sleep_start()`, with no other wake source armed.
+
+What it proves on esp32sim, measured on the runs of `tests/test_timer_wake.py`: from the pin
+`afcfba6` on, each sleep ends in a `reset` with cause 5 (`DEEPSLEEP_RESET`), the boots 2.045 and
+2.046 s apart on the board's clock, and the image reports `rom=5 wake=4` with the count going on.
+On the previous pin, `8c65215`, the chip never wakes, and the test fails with `NeverHappened` on
+the second boot.
 
 ## `sd_remount`
 
@@ -488,7 +503,7 @@ top of each build directory, `config/sdkconfig.json`, and the `.bin` and `.elf` 
 |---|---|---|---|
 | `IDF_VERSION` | script constant | `v5.3.6` | the ESP-IDF tag of the container |
 | `CONTAINER` | script constant | `espressif/idf:$IDF_VERSION@sha256:cee52f0c4fdaf088992a7a739f5993154e95cf1d3ab61c24f5b40e6d56a3a070` | the image the build runs in, pinned by digest (a multi-arch index) |
-| `IMAGES` | script constant | `hello_world nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request persistence ota_state` | the images, in build order; `project_of` maps each to its project |
+| `IMAGES` | script constant | `hello_world nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request persistence ota_state timer_wake` | the images, in build order; `project_of` maps each to its project |
 | `FIRMWARE_OUT` | environment | `firmware/` | where `IMAGE/build/` goes; empty means the default; `/out` inside the container |
 | `IDF_LOCAL` | environment | unset | `1` builds with the ESP-IDF of the calling shell |
 | `ESP32TL_CONTAINER` | environment, set by the host side | unset | marks the container side and names the image it records |
@@ -505,7 +520,7 @@ regular expressions, so each has to stay on a line of its own. Changing either, 
 
 | Message | Cause |
 |---|---|
-| `unknown image 'NAME'; the images are: hello_world nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request persistence ota_state` | an argument not in `IMAGES`; nothing written |
+| `unknown image 'NAME'; the images are: hello_world nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request persistence ota_state timer_wake` | an argument not in `IMAGES`; nothing written |
 | `ESP32TL_CONTAINER is set outside a container; unset it` | `ESP32TL_CONTAINER` set and no `/.dockerenv`; nothing written |
 | `IDF_LOCAL=1 needs ESP-IDF in the environment: source $IDF_PATH/export.sh first` | `IDF_LOCAL=1` without `idf.py` on `PATH` or without `IDF_PATH`; nothing written |
 | `needs Docker, or IDF_LOCAL=1 to build with a local ESP-IDF` | no `docker` on `PATH`; nothing written |
@@ -541,7 +556,7 @@ write their arguments to `$FAKE_LOG`, with a `PATH` holding only them and `cat`,
 - `test_local_build_runs_idf_py_and_records_how`: with no image named, every image in order,
   `hello_world` and `sdspi` from the fake `IDF_PATH`, `nmea_reader`, `gpio_echo`, `sd_remount`,
   `modem_at`, `modem_recovery` and `nvs_reader` from `firmware/`, `pppos_client` from what a fake `python3` prints,
-  `mqtt_session`, `persistence` and `ota_state` from `firmware/`, and `http_request` from its copy, `.http_request-v9.9.9` in the output directory, which holds the
+  `mqtt_session`, `persistence`, `ota_state` and `timer_wake` from `firmware/`, and `http_request` from its copy, `.http_request-v9.9.9` in the output directory, which holds the
   fake example's `CMakeLists.txt`; the `idf.py` arguments of each, the records with `"container": null`, the markers,
   the "not for goldens" warning and the `built in` lines;
 - reuse of a build directory with the same record, and removal of one with another record;
@@ -570,6 +585,10 @@ the `esp32-devkitc` profile's slot and that both of its formatting options are o
 is flashed there. `test_ota_state_has_a_factory_app_two_slots_and_the_initial_ota_data` checks
 `ota_state`'s table, that its `ota_data_initial.bin` is erased, and that rollback is on in its
 `sdkconfig`.
+
+`tests/test_timer_wake.py` runs the real `timer_wake` in the real runner: the three boots it
+prints, with their ROM reset reason and wake cause, `board.boots` with causes 1, 5 and 5, and
+between two boots at least the 2 s sleep and at most 0.1 s more.
 
 `tests/test_gpio_echo.py` runs the real `gpio_echo` in the real runner on the
 `lilygo-t-a7670g-r2` profile, all but one through the `lines` fixture:

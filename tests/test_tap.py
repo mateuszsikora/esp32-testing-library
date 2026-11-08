@@ -20,7 +20,7 @@ from esp32tl.report import RunLog
 from esp32tl.sources.replay import ReplayError
 from esp32tl.tap import Tap, sha256, utc_time
 
-HELLO = RunnerHello(1, "esp32", "emulated-fifo-write", "8c652151dd5a521249a785ca147f20a9f8eda68f")
+HELLO = RunnerHello(1, "esp32", "emulated-fifo-write", "afcfba65da0da30a35fb0a7c381854c62b92e338")
 GNSS = Wire(tx=4, rx=5, baud=9600)
 CLOCK = "emulated-fifo-write"
 S = 1_000_000_000

@@ -408,8 +408,10 @@ to repeat there.
 
 - **Bluetooth Classic.** No firmware talks to a Bluetooth peer, as esp32sim has no Classic
   controller ([Bluetooth peer](../features/bluetooth-peer-user.md)).
-- **Deep sleep with a timer wake.** A firmware that sleeps with a timer wake never wakes on
-  the pinned esp32sim ([stage 0, gap 4](../stage0-findings.md#gaps)).
+- **Skipping a deep sleep.** A firmware that sleeps with a timer wake wakes on the pinned
+  esp32sim ([stage 0, gap 4](../stage0-findings.md#gaps)), but the test's clock has no call that
+  runs a sleeping board to its next wake: the test waits through the sleep as through any other
+  time (#36).
 
 ## See also
 

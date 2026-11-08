@@ -261,7 +261,8 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 
 | Decision | File | Status |
 |---|---|---|
-| [esp32sim is pinned at the merge commit of the chip-revision fix](runner.md#esp32sim-is-pinned-at-the-merge-commit-of-the-chip-revision-fix) | `runner.md` | decided (#43) |
+| [esp32sim is pinned at the merge commit of the deep-sleep timer wake](runner.md#esp32sim-is-pinned-at-the-merge-commit-of-the-deep-sleep-timer-wake) | `runner.md` | decided (#35) |
+| [esp32sim is pinned at the merge commit of the chip-revision fix](runner.md#esp32sim-is-pinned-at-the-merge-commit-of-the-chip-revision-fix) | `runner.md` | superseded (#35) |
 | [The esp32sim command-line crate is not a dependency](runner.md#the-esp32sim-command-line-crate-is-not-a-dependency) | `runner.md` | decided (#45) |
 | [Cargo runs in runner/, against a pinned toolchain](runner.md#cargo-runs-in-runner-against-a-pinned-toolchain) | `runner.md` | decided (#45) |
 | [The dev profile is optimised, without fat LTO](runner.md#the-dev-profile-is-optimised-without-fat-lto) | `runner.md` | decided (#45) |

@@ -234,7 +234,7 @@ def test_a_line_is_at_most_one_mebibyte() -> None:
         decode(b" " * (MAX_LINE + 1), "runner")
 
 
-RUNNER = RunnerHello(1, "esp32", "emulated-fifo-write", "8c652151dd5a521249a785ca147f20a9f8eda68f")
+RUNNER = RunnerHello(1, "esp32", "emulated-fifo-write", "afcfba65da0da30a35fb0a7c381854c62b92e338")
 
 
 def test_the_handshake_answers_with_the_board_and_the_watched_pins() -> None:

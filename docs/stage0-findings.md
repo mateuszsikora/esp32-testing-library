@@ -222,7 +222,16 @@ production images.
    slow clock to the nominal value (3 495 245 in IDF's Q13.19 format, 6.667 µs per cycle, 150 kHz),
    but that is what the guest believes, not a measurement of the emulator's timer. Rechecked on
    2026-11-07 on `8c65215`, through `esp32tl-runner` with `--max-seconds 60`: the same single boot,
-   `wake cause 0`, and `stop: Halted at 60.000000 s (0.2 s wall, 0 resets)`.
+   `wake cause 0`, and `stop: Halted at 60.000000 s (0.2 s wall, 0 resets)`. *Since #35* it wakes:
+   reported in [mikroverk/esp32sim#331](https://github.com/mikroverk/esp32sim/issues/331), from
+   another firmware, and fixed in [mikroverk/esp32sim#336](https://github.com/mikroverk/esp32sim/pull/336),
+   merged on 2026-11-07 as
+   [`afcfba6`](https://github.com/mikroverk/esp32sim/commit/afcfba65da0da30a35fb0a7c381854c62b92e338),
+   the pin since #35. Rechecked on 2026-11-08 at that commit, the same way: 12 boots, each after the
+   first with `rst:0x5 (DEEPSLEEP_RESET)` and `wake cause 4` (`ESP_SLEEP_WAKEUP_TIMER`), and
+   `stop: Halted at 60.000000 s (0.8 s wall, 11 resets)`. Through the harness, a test that waits
+   605 s on the board's clock sees the second boot at 5.045 s and one every 5.047 s after it, 120
+   in all, in 8.5 s of wall time.
 5. **External attachment.** The release image's GNSS UART reports no data and its modem UART has
    nothing on it: there is no way to put a process at the far end of a UART or a GPIO line from the
    stock CLI. Proposed in [mikroverk/esp32sim#325](https://github.com/mikroverk/esp32sim/issues/325).

@@ -200,9 +200,9 @@ are in [models-technical.md](models-technical.md).
    its pull (`PULLED`, `up` 1 and `down` 0), then each queued change, stamped `max(t, now)` so that
    one asked for after its turn goes out in the next: a `gpio_in` with its level, a `gpio_in` with
    the pull for the release of a pulled line, a `release` for any other. The chip knows only its own
-   pulls: a `release` puts the pad back to them (`release_input`, `esp32/src/periph.rs:384`), so the
+   pulls: a `release` puts the pad back to them (`release_input`, `esp32/src/periph.rs:397`), so the
    board's pull is a level the harness drives, and, as an external level, it takes the pad from the
-   chip's pulls (`sync_pull` skips an external pad, `:394`); the firmware's output still wins over
+   chip's pulls (`sync_pull` skips an external pad, `:407`); the firmware's output still wins over
    it, as `pad_level` prefers `driven`. The link calls `driven(t, changes, enabled)` on `gpio_out`:
    `Lines` keeps each pin's last reported pad level and counts a line as the firmware's while its
    bit is in `enabled` or its pad is reported at 1, since a pad a peripheral drives through the GPIO
