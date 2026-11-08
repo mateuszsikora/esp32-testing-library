@@ -2970,3 +2970,30 @@ that silently does nothing. Refusing a `Replay` or a `Real` given to `model`, be
 a mistake a test makes by accident.
 A name of the test's for the report (`model(source, name=...)`), because no test needs one yet and
 the class's name says what it is.
+
+## The wait for a wake from deep sleep is a board call that asks for a turn after each event
+
+Status: decided (#36)
+
+`board.wait_for_wake(within=...)` runs the board to the chip's next boot and returns it; the boot
+must be a `DEEPSLEEP_RESET`. It is a call on the test's clock, beside `wait` and `wait_until`
+([the board's clock is the test's](#the-boards-clock-is-the-tests-emulated-time-moves-only-while-the-test-waits)),
+not a `scenario` call as plan M9 named it: there is no `scenario` fixture since #64. The test's
+clock lets the run go to the end of `within` at once and returns a `RunTo` with a `latency` of
+1 ms to the link, so the runner, which sets the block point at most `latency` after each event,
+takes a turn right after the `reset` and none in the sleep. The runner already ends a slice at
+every emulated millisecond while the board is on, so 1 ms costs it nothing. The wire is version 1
+as it was: `latency` is the `wait`'s own field.
+
+**Rejected:** `board.wait_until(lambda: len(board.boots) > n, within=...)`, which a test can
+already write, because its 100 ms steps cost a turn of the link each, 20 000 for the 2000 s sleep
+the production image takes, and return up to 100 ms after the wake. A runner change that makes
+every `reset` a block point, because a hold's latency gets the same turn without a new rule in the
+protocol, and only while the test asks for it: other waits keep their turns, and a determinism
+check's turn counts stay the same. A latency of 0 or of a microsecond, because while no event is
+unacknowledged the runner's slices are at most `latency` long (protocol §6.1), so a smaller one
+multiplies the slices of the whole sleep. Returning any boot, a restart or a watchdog's included,
+because a test that waits for a wake and gets a crash should fail at the call that assumed the
+sleep, not at a later expect that cannot say why. Skipping the sleep's emulated time without
+running it, because the chip's RTC timer is what wakes it and what the firmware reads after the
+wake; the runner skips idle time as fast as esp32sim lets it.

@@ -96,8 +96,9 @@ may retry.
 across it, and the run's log gets `board.reset(): hard reset`. Before power-on it raises
 `BoardOff: the board is off; call board.power_on() first`. The backend cannot switch the board's
 supply, nor see the chip's resets: `board.power_off()` skips the test with
-`serial: the backend cannot switch the board's power`, and `board.boots` and `board.boot` with
-`serial: the backend does not see the chip's resets`, at the line that asks, as an unsupported
+`serial: the backend cannot switch the board's power`, and `board.boots`, `board.boot` and
+`board.wait_for_wake()` with `serial: the backend does not see the chip's resets`, at the line that
+asks, as an unsupported
 source does ([resets and power cycles](pytest-plugin-user.md#resets-and-power-cycles)).
 
 `board.clock` is `wall`. `board.now` uses monotonic elapsed time from the reset request, including

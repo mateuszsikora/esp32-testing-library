@@ -44,6 +44,8 @@ RESET_REASONS = {
 
 # The cause of a power-on reset: the run's first boot, board.reset(), and power coming back.
 POWERON_RESET = 1
+# The cause of a wake from deep sleep, whatever woke the chip.
+DEEPSLEEP_RESET = 5
 
 
 @dataclass(frozen=True)
@@ -159,6 +161,9 @@ class Board(ABC):
 
     @abstractmethod
     def wait_until(self, condition: Callable[[], T | None], *, within: Duration) -> T: ...
+
+    @abstractmethod
+    def wait_for_wake(self, *, within: Duration) -> Boot: ...
 
     @abstractmethod
     def wait_on_clock(

@@ -124,11 +124,16 @@ Every wait is on the board's clock, and every limit a test states is part of wha
 | A console line, with its time | `board.wait_until(board.console.line(r"^fix lat=(?P<lat>\S+)"), within=seconds(2))` | A `Line`, with `at`, `text` and the groups |
 | A pin | `buzzer = board.lines.output("alarm.buzzer")`, then `board.wait_until(buzzer.is_on, within=seconds(2))` | `True` |
 | A message at the broker | `board.wait_until(broker.next_message("tracker/position"), within=seconds(60))` | The message, with `at` |
+| The wake from a deep sleep | `board.wait_for_wake(within=minutes(35))` | The wake's `Boot` |
 | Anything else | `board.wait_until(lambda: ..., within=...)`, any function of no arguments | What it returned, once true |
 
 - `board.wait_until` asks the condition at once, then at least every 100 ms of the board's time. A
   condition that never holds raises `NeverHappened` when `within` runs out
   ([the fixtures](../features/pytest-plugin-user.md#the-fixtures)).
+- A firmware that sleeps between its reports, with a timer wake, is run through each sleep by
+  `board.wait_for_wake`, at no cost of turns however long the sleep; then expect what it prints
+  once awake. A restart or a watchdog in its place fails the test, and so does a chip that never
+  wakes ([waking from deep sleep](../features/pytest-plugin-user.md#waking-from-deep-sleep)).
 - A `next_*` condition of the network sees only what happens after the call that makes it, so make
   it before the action that causes the event, as `test_reports_on_connect` in the position
   tracker does with `network.broker.next_connection()`
@@ -408,10 +413,6 @@ to repeat there.
 
 - **Bluetooth Classic.** No firmware talks to a Bluetooth peer, as esp32sim has no Classic
   controller ([Bluetooth peer](../features/bluetooth-peer-user.md)).
-- **Skipping a deep sleep.** A firmware that sleeps with a timer wake wakes on the pinned
-  esp32sim ([stage 0, gap 4](../stage0-findings.md#gaps)), but the test's clock has no call that
-  runs a sleeping board to its next wake: the test waits through the sleep as through any other
-  time (#36).
 
 ## See also
 

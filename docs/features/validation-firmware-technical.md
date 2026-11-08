@@ -117,7 +117,7 @@ next build is still incremental; the marker, removed first, is what says it fini
 The Makefile's `firmware` target runs `FIRMWARE_OUT= firmware/build.sh`; the pattern rule
 `firmware/%/build/esp32tl-built` runs `FIRMWARE_OUT= firmware/build.sh $*`, and `test` depends on
 `$(FIRMWARE_IMAGES:%=firmware/%/build/esp32tl-built)` with `FIRMWARE_IMAGES := hello_world
-nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request persistence ota_state timer_wake`. `determinism` depends on
+nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request persistence ota_state timer_wake deep_sleep`. `determinism` depends on
 the markers of `nmea_reader`, `pppos_client`, `mqtt_session` and `http_request`. The rule has no prerequisites, so make rebuilds
 an image only when its marker is missing: an edit to `firmware/nmea_reader/` needs `make firmware`, or
 `firmware/build.sh nmea_reader`, before `make test` sees it.
@@ -300,6 +300,26 @@ What it proves on esp32sim, measured on the runs of `tests/test_timer_wake.py`: 
 2.046 s apart on the board's clock, and the image reports `rom=5 wake=4` with the count going on.
 On the previous pin, `8c65215`, the chip never wakes, and the test fails with `NeverHappened` on
 the second boot.
+
+## `deep_sleep`
+
+`project_of` maps `deep_sleep` to `$IDF_PATH/examples/system/deep_sleep`, built in place as
+`hello_world` and `sdspi` are: the example takes no component from the component manager, so it
+writes nothing into its read-only project directory. Its `sdkconfig.defaults` in v5.3.6 sets
+`CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_80`, `CONFIG_ULP_COPROC_ENABLED` with 512 bytes reserved,
+`CONFIG_NEWLIB_TIME_SYSCALL_USE_RTC_HRT`, `CONFIG_RTC_CLK_SRC_INT_RC` and
+`CONFIG_BOOTLOADER_SKIP_VALIDATE_IN_DEEP_SLEEP`; its Kconfig leaves `CONFIG_EXAMPLE_TOUCH_WAKEUP`
+and `CONFIG_EXAMPLE_EXT1_WAKEUP` (pins 2 and 4, no internal pull-ups) on, and ext0 off on the
+classic chip. It has no partition table of its own in v5.3.6, so it flashes the default three
+files. `sleep_enter_time` is `RTC_SLOW_ATTR`, and the time it prints is `gettimeofday` after the
+wake minus `gettimeofday` before the sleep, both on the RTC (`RTC_HRT`).
+
+What it proves on esp32sim, measured on the runs of `tests/test_deep_sleep.py` at the pin
+`afcfba6`: the touch pads read an average of 1000 and arm a threshold of 900, the EXT1 pins
+neither wake the chip nor keep it from sleeping, and the timer wakes it 20.004 s after
+`Entering deep sleep`; the wake's line comes 143 ms after the reset, and its measure, 20 142 ms,
+is the board's time from `Entering deep sleep` to that line, to within 10 ms. Two sleeps take 42.5
+s of the board's time, 29 turns of the link and 0.3 s of wall time on an M2 Pro.
 
 ## `sd_remount`
 
@@ -503,7 +523,7 @@ top of each build directory, `config/sdkconfig.json`, and the `.bin` and `.elf` 
 |---|---|---|---|
 | `IDF_VERSION` | script constant | `v5.3.6` | the ESP-IDF tag of the container |
 | `CONTAINER` | script constant | `espressif/idf:$IDF_VERSION@sha256:cee52f0c4fdaf088992a7a739f5993154e95cf1d3ab61c24f5b40e6d56a3a070` | the image the build runs in, pinned by digest (a multi-arch index) |
-| `IMAGES` | script constant | `hello_world nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request persistence ota_state timer_wake` | the images, in build order; `project_of` maps each to its project |
+| `IMAGES` | script constant | `hello_world nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request persistence ota_state timer_wake deep_sleep` | the images, in build order; `project_of` maps each to its project |
 | `FIRMWARE_OUT` | environment | `firmware/` | where `IMAGE/build/` goes; empty means the default; `/out` inside the container |
 | `IDF_LOCAL` | environment | unset | `1` builds with the ESP-IDF of the calling shell |
 | `ESP32TL_CONTAINER` | environment, set by the host side | unset | marks the container side and names the image it records |
@@ -520,7 +540,7 @@ regular expressions, so each has to stay on a line of its own. Changing either, 
 
 | Message | Cause |
 |---|---|
-| `unknown image 'NAME'; the images are: hello_world nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request persistence ota_state timer_wake` | an argument not in `IMAGES`; nothing written |
+| `unknown image 'NAME'; the images are: hello_world nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request persistence ota_state timer_wake deep_sleep` | an argument not in `IMAGES`; nothing written |
 | `ESP32TL_CONTAINER is set outside a container; unset it` | `ESP32TL_CONTAINER` set and no `/.dockerenv`; nothing written |
 | `IDF_LOCAL=1 needs ESP-IDF in the environment: source $IDF_PATH/export.sh first` | `IDF_LOCAL=1` without `idf.py` on `PATH` or without `IDF_PATH`; nothing written |
 | `needs Docker, or IDF_LOCAL=1 to build with a local ESP-IDF` | no `docker` on `PATH`; nothing written |
@@ -556,9 +576,11 @@ write their arguments to `$FAKE_LOG`, with a `PATH` holding only them and `cat`,
 - `test_local_build_runs_idf_py_and_records_how`: with no image named, every image in order,
   `hello_world` and `sdspi` from the fake `IDF_PATH`, `nmea_reader`, `gpio_echo`, `sd_remount`,
   `modem_at`, `modem_recovery` and `nvs_reader` from `firmware/`, `pppos_client` from what a fake `python3` prints,
-  `mqtt_session`, `persistence`, `ota_state` and `timer_wake` from `firmware/`, and `http_request` from its copy, `.http_request-v9.9.9` in the output directory, which holds the
-  fake example's `CMakeLists.txt`; the `idf.py` arguments of each, the records with `"container": null`, the markers,
-  the "not for goldens" warning and the `built in` lines;
+  `mqtt_session`, `persistence`, `ota_state` and `timer_wake` from `firmware/`, `http_request`
+  from its copy, `.http_request-v9.9.9` in the output directory, which holds the fake example's
+  `CMakeLists.txt`, and `deep_sleep` from the fake `IDF_PATH`; the `idf.py` arguments of each,
+  the records with `"container": null`, the markers, the "not for goldens" warning and the
+  `built in` lines;
 - reuse of a build directory with the same record, and removal of one with another record;
 - no marker when `flasher_args.json` is missing, and a failed build removing the marker of an
   earlier one (exit code 2, the fake's).
@@ -588,7 +610,13 @@ is flashed there. `test_ota_state_has_a_factory_app_two_slots_and_the_initial_ot
 
 `tests/test_timer_wake.py` runs the real `timer_wake` in the real runner: the three boots it
 prints, with their ROM reset reason and wake cause, `board.boots` with causes 1, 5 and 5, and
-between two boots at least the 2 s sleep and at most 0.1 s more.
+between two boots at least the 2 s sleep and at most 0.1 s more; then the same sleeps through
+`board.wait_for_wake` ([esp32sim backend](esp32sim-backend-technical.md#tests)).
+`tests/test_deep_sleep.py` runs the real `deep_sleep`: for each of two sleeps, the wake 20 s after
+`Entering deep sleep` with at most 10 ms more, as boot 2 and 3 with cause 5, at most two turns of
+the link in `board.wait_for_wake`, the line
+`Wake up from timer. Time spent in deep sleep: <ms>ms` within 0.2 s of the wake, and `<ms>` within
+10 ms of the board's time from `Entering deep sleep` to that line.
 
 `tests/test_gpio_echo.py` runs the real `gpio_echo` in the real runner on the
 `lilygo-t-a7670g-r2` profile, all but one through the `lines` fixture:

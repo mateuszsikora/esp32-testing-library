@@ -140,7 +140,7 @@ def test_build_refuses_an_unknown_image(tmp_path: Path) -> None:
     assert result.stderr == (
         "firmware/build.sh: unknown image 'nope'; the images are:"
         " hello_world nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader"
-        " pppos_client mqtt_session http_request persistence ota_state timer_wake\n"
+        " pppos_client mqtt_session http_request persistence ota_state timer_wake deep_sleep\n"
     )
     assert not (tmp_path / "out").exists()
 
@@ -259,6 +259,7 @@ def test_local_build_runs_idf_py_and_records_how(tmp_path: Path, local_idf: dict
         "persistence": str(ROOT / "firmware" / "persistence"),
         "ota_state": str(ROOT / "firmware" / "ota_state"),
         "timer_wake": str(ROOT / "firmware" / "timer_wake"),
+        "deep_sleep": f"{tmp_path}/idf/examples/system/deep_sleep",
     }
     builds = {image: (tmp_path / "out" / image / "build").resolve() for image in projects}
     assert logged(tmp_path / "idf.log") == [

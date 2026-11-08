@@ -1379,8 +1379,8 @@ that references to its number keep their meaning.
      `tests/test_boardlink.py::test_the_board_s_power_and_en_go_out_first_in_the_answer_to_a_turn`,
      `tests/test_boardlink.py::test_a_board_input_stamped_before_its_turn_fails_the_link`,
      `tests/test_boardlink.py::test_an_interface_cannot_switch_the_board_s_power`
-- **135.** On serial, `board.reset()` pulses EN again, and `board.power_off()` and `board.boot` skip the
-     test with their reasons.
+- **135.** On serial, `board.reset()` pulses EN again, and `board.power_off()`, `board.boot` and
+     `board.wait_for_wake()` skip the test with their reasons.
      `tests/test_serial_backend.py::test_console_reset_clock_tap_and_autoflash`,
      `tests/test_serial_backend.py::test_serial_capabilities_skip_at_the_call`
 - **136.** Once the backend has ended the test's clock, `board.reset()`, `board.power_off()` and
@@ -1391,6 +1391,18 @@ that references to its number keep their meaning.
      timer as its wake cause, RTC slow memory kept, and the sleep's length between it and the boot
      before: a chip that never wakes fails the test instead of halting at the end of the run.
      `tests/test_timer_wake.py::test_a_timer_wake_boots_the_chip_again_after_its_sleep`
+- **207.** `board.wait_for_wake` returns the chip's next boot at most 1 ms after it, takes no turn of
+     the link in a sleep without events, carries its latency in its own waits only, and fails on a
+     boot that is no wake from deep sleep and on a chip that does not boot within its time: a run
+     that only halts at its end is a failure, and the line the firmware prints after its wake is
+     still to come.
+     `tests/test_clock.py::test_a_wait_for_an_event_takes_a_turn_only_at_the_event`,
+     `tests/test_clock.py::test_the_latency_of_a_wait_for_an_event_lasts_for_that_wait_only`,
+     `tests/test_clock.py::test_a_wait_for_an_event_that_never_comes_raises_never_happened_at_its_end`,
+     `tests/test_timer_wake.py::test_wait_for_wake_runs_the_board_through_its_sleep_to_the_wake`,
+     `tests/test_timer_wake.py::test_wait_for_wake_raises_never_happened_for_a_board_that_does_not_sleep`,
+     `tests/test_timer_wake.py::test_wait_for_wake_fails_on_a_boot_that_is_no_wake`,
+     `tests/test_deep_sleep.py::test_the_deep_sleep_example_wakes_on_its_timer_and_says_how_long_it_slept`
 
 ## Reading the flash
 
