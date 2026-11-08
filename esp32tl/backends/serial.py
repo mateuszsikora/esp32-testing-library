@@ -23,6 +23,7 @@ from esp32tl.boards import BoardProfile, capabilities
 from esp32tl.boards.capabilities import CapabilityError, Request
 from esp32tl.flash import FlashSnapshot, Namespaces
 from esp32tl.interfaces import BoardOff, NeverHappened, RunEnded, SourceError
+from esp32tl.interfaces.bluetooth import Bluetooth
 from esp32tl.interfaces.board import Board, Boot
 from esp32tl.interfaces.console import ConsoleLines
 from esp32tl.interfaces.gnss import Gnss
@@ -367,6 +368,12 @@ class Serial(Board):
         if self._wifi is None:
             self._wifi = Wifi(now=lambda: self.now.ns if self.powered else 0, asked=self._asked)
         return self._wifi
+
+    def _get_bluetooth(self) -> Bluetooth:
+        """The real board's controller is on a real air, which the harness puts no device on: the
+        capability declaration gives it no source, so the test skips."""
+        self._asked(Request("bluetooth", source="model"))
+        raise BackendError("serial: the chip's Bluetooth has no interface on this backend")
 
     def tap_console(self, path: str | Path) -> Tap:
         return self._console.tap(path)

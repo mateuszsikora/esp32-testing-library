@@ -180,7 +180,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The air's timers are put on the nanosecond, not judged by the selector](harness.md#the-airs-timers-are-put-on-the-nanosecond-not-judged-by-the-selector) | `harness.md` | decided (#142) |
 | [esp32tl adds inquiry, legacy pairing, key checks and encryption to Bumble's virtual controller](harness.md#esp32tl-adds-inquiry-legacy-pairing-key-checks-and-encryption-to-bumbles-virtual-controller) | `harness.md` | decided (#33) |
 | [A model answers the SPP channel as the far end of a UART does](harness.md#a-model-answers-the-spp-channel-as-the-far-end-of-a-uart-does) | `harness.md` | decided (#33) |
-| [The SPP peer opens its channel to one device, on a link that device authenticated](harness.md#the-spp-peer-opens-its-channel-to-one-device-on-a-link-that-device-authenticated) | `harness.md` | decided (#33) |
+| [The SPP peer opens its channel to one device, on a link that device authenticated](harness.md#the-spp-peer-opens-its-channel-to-one-device-on-a-link-that-device-authenticated) | `harness.md` | decided (#33, #34) |
 | [A peer leaves without a word, keeps its keys, and its old link stays dead until it falls](harness.md#a-peer-leaves-without-a-word-keeps-its-keys-and-its-old-link-stays-dead-until-it-falls) | `harness.md` | decided (#129) |
 | [Devices on the air have a base class without SPP, and an RSSI of their own](harness.md#devices-on-the-air-have-a-base-class-without-spp-and-an-rssi-of-their-own) | `harness.md` | decided (#129) |
 | [Secure Simple Pairing on the peer's side is postponed](harness.md#secure-simple-pairing-on-the-peers-side-is-postponed) | `harness.md` | postponed (#129) |
@@ -191,10 +191,19 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Keeping a heard page apart from this side's own is postponed](harness.md#keeping-a-heard-page-apart-from-this-sides-own-is-postponed) | `harness.md` | superseded (#144) |
 | [A page a device hears is kept apart from its own](harness.md#a-page-a-device-hears-is-kept-apart-from-its-own) | `harness.md` | decided (#144) |
 | [A page respects page scan, read when the page starts](harness.md#a-page-respects-page-scan-read-when-the-page-starts) | `harness.md` | decided (#135) |
-| [Connection_Accept_Timeout is postponed](harness.md#connection_accept_timeout-is-postponed) | `harness.md` | postponed (#34) |
+| [Connection_Accept_Timeout is postponed](harness.md#connection_accept_timeout-is-postponed) | `harness.md` | postponed (#166) |
 | [Two pages at one instant make one link, the page accepted first](harness.md#two-pages-at-one-instant-make-one-link-the-page-accepted-first) | `harness.md` | decided (#141) |
 | [A role switch asked of a pager whose page ended is refused](harness.md#a-role-switch-asked-of-a-pager-whose-page-ended-is-refused) | `harness.md` | decided (#141) |
-| [A bt fixture, an HCI tap and a replayed peer are postponed](harness.md#a-bt-fixture-an-hci-tap-and-a-replayed-peer-are-postponed) | `harness.md` | postponed (#33) |
+| [An HCI tap and a replayed peer are postponed](harness.md#an-hci-tap-and-a-replayed-peer-are-postponed) | `harness.md` | postponed (#33, #34) |
+| [The firmware's controller is a controller of the air, with the guest's features and buffer](harness.md#the-firmwares-controller-is-a-controller-of-the-air-with-the-guests-features-and-buffer) | `harness.md` | decided (#34) |
+| [The air of the bt fixture is moved by the board's link alone](harness.md#the-air-of-the-bt-fixture-is-moved-by-the-boards-link-alone) | `harness.md` | decided (#34) |
+| [An answer of the firmware's controller goes out 10 µs after it is made, and never before its turn](harness.md#an-answer-of-the-firmwares-controller-goes-out-10-µs-after-it-is-made-and-never-before-its-turn) | `harness.md` | decided (#34) |
+| [HCI_Reset takes the controller off the air for an instant](harness.md#hci_reset-takes-the-controller-off-the-air-for-an-instant) | `harness.md` | decided (#34) |
+| [A command the controller does not know is answered in the event its host waits for](harness.md#a-command-the-controller-does-not-know-is-answered-in-the-event-its-host-waits-for) | `harness.md` | decided (#34) |
+| [A setting that would change what is not modelled is refused, one that changes nothing is taken](harness.md#a-setting-that-would-change-what-is-not-modelled-is-refused-one-that-changes-nothing-is-taken) | `harness.md` | decided (#34) |
+| [Controller-to-host flow control is postponed](harness.md#controller-to-host-flow-control-is-postponed) | `harness.md` | postponed (#34) |
+| [The bt fixture gives the air, and the test makes its devices on it](harness.md#the-bt-fixture-gives-the-air-and-the-test-makes-its-devices-on-it) | `harness.md` | decided (#34) |
+| [The SPP peer has a service name and offers basic mode only](harness.md#the-spp-peer-has-a-service-name-and-offers-basic-mode-only) | `harness.md` | decided (#34) |
 | [bumble is a dependency of esp32tl, pinned exactly](harness.md#bumble-is-a-dependency-of-esp32tl-pinned-exactly) | `harness.md` | decided (#33) |
 | [Serial is opt-in and pytest-embedded owns flashing and the port](harness.md#serial-is-opt-in-and-pytest-embedded-owns-flashing-and-the-port) | `harness.md` | decided (#25) |
 | [Reference recordings check the serial artifact before opening the port](harness.md#reference-recordings-check-the-serial-artifact-before-opening-the-port) | `harness.md` | decided (#25) |

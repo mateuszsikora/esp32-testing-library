@@ -6,9 +6,9 @@ Secure Simple Pairing, as Bluetooth 2.0 devices do not), keeps the link keys it 
 service, and can be switched off and go out of range, and come back, with the link keys it had.
 
 `SppPeer` adds SPP on one RFCOMM channel, to one device at a time and, unless told otherwise, only
-on a link the device has authenticated. What the device writes on the channel goes to the source, a
-`Source` as at the far end of a UART, and what the source sends goes out on the channel at the
-board's time it gives.
+on a link the device has authenticated by the time it opens the channel. What the device writes on
+the channel goes to the source, a `Source` as at the far end of a UART, and what the source sends
+goes out on the channel at the board's time it gives.
 """
 
 import bisect
@@ -16,11 +16,12 @@ from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from typing import TypeVar
 
-from bumble import core, rfcomm
+from bumble import core, rfcomm, sdp
 from bumble.device import Connection, Device, DeviceConfiguration
 from bumble.hci import Address
 from bumble.host import Host
 from bumble.keys import MemoryKeyStore
+from bumble.l2cap import L2CAP_Information_Request
 from bumble.pairing import PairingConfig, PairingDelegate
 from bumble.transport.common import AsyncPipeSink
 
@@ -29,7 +30,6 @@ from esp32tl.bluetooth.air import Air
 from esp32tl.bluetooth.controller import RSSI, Controller
 from esp32tl.interfaces.uart import Source, Supplied
 from esp32tl.link.boardlink import Direction, Output
-from esp32tl.units import Duration
 
 # Unless the test gives another: an address no real device in a test is likely to have, and the
 # class of device of a device that says nothing about itself (major class Uncategorized).
@@ -43,6 +43,22 @@ NAME_MAX = 238
 
 # The SDP record's handle: the first one a server may give a record of its own.
 RECORD_HANDLE = 0x00010001
+
+# The name of the SPP service in its SDP record, unless the test gives another: what SPP adapters
+# commonly call theirs.
+SERVICE_NAME = "Serial Port"
+
+# The primary language of the SDP record, English in UTF-8 (IANA MIBenum 106), and its attributes'
+# base, from which the service's name is attribute 0x0100 (Vol 3, Part B, 5.1.7 and 5.1.8).
+LANGUAGE = (0x656E, 106, 0x0100)
+
+# The L2CAP features a device names (Vol 3, Part A, 4.12): Bumble's default without Enhanced
+# Retransmission Mode, which its RFCOMM server does not take: it disconnects when a device such as
+# Bluedroid asks for it. Without it in the features, the device stays in basic mode.
+L2CAP_FEATURES = (
+    L2CAP_Information_Request.ExtendedFeatures.FIXED_CHANNELS,
+    L2CAP_Information_Request.ExtendedFeatures.FCS_OPTION,
+)
 
 T = TypeVar("T")
 
@@ -114,7 +130,7 @@ class BluetoothDevice:
         self._controller: Controller | None = None
         self.device = air.call(lambda: self._make(public))
         self.rssi = rssi
-        air.run(self._power_on(), within=Duration(0), description=f"{name}'s power-on")
+        air.at_once(self._power_on(), description=f"{name}'s power-on")
 
     @property
     def address(self) -> str:
@@ -194,6 +210,7 @@ class BluetoothDevice:
             le_enabled=False,
             classic_ssp_enabled=False,
             classic_sc_enabled=False,
+            l2cap_extended_features=L2CAP_FEATURES,
         )
         device = Device(config=config, host=Host(controller, AsyncPipeSink(controller)))
         delegate = _Pin(self.pin)
@@ -214,10 +231,11 @@ class BluetoothDevice:
 
 class SppPeer(BluetoothDevice):
     """A `BluetoothDevice` paired with `pin`, with SPP on RFCOMM `channel`, whose bytes `source`
-    answers.
+    answers, and whose SDP record names the service `service_name`, none for `None`.
 
     The channel opens to one device at a time; with `secure`, the default, only on a link that
-    device has authenticated. A channel the peer refuses is in `refused`, with its
+    device has authenticated by the time it opens the channel (RFCOMM's SABM), which may be after
+    it asked for it (PN), as Bluedroid does. A channel the peer refuses is in `refused`, with its
     time and why. What the device writes reaches `source.receive` at the board's time it arrives,
     and what `source` returns, or sends from `poll`, goes out on the channel at its own time,
     never earlier. What the source sends while no channel is open is lost, as it would be on the
@@ -240,14 +258,22 @@ class SppPeer(BluetoothDevice):
         secure: bool = True,
         class_of_device: int = CLASS_OF_DEVICE,
         rssi: int = RSSI,
+        service_name: str | None = SERVICE_NAME,
     ) -> None:
         if pin is None:
             raise PeerError(f"SppPeer: pin is {pin!r}, not a string of 1 to 16 bytes")
         if isinstance(channel, bool) or not isinstance(channel, int) or not 1 <= channel <= 30:
             raise PeerError(f"SppPeer: channel is {channel!r}, not an RFCOMM channel, 1 to 30")
+        if service_name is not None and (
+            not isinstance(service_name, str) or not 1 <= len(service_name.encode()) <= 255
+        ):
+            raise PeerError(
+                f"SppPeer: service_name is {service_name!r}, not None or a string of 1 to 255 bytes"
+            )
         self.source = source
         self.channel = channel
         self.secure = secure
+        self.service_name = service_name
         self.events: list[tuple[int, Direction, bytes]] = []
         self.refused: list[tuple[int, str]] = []
         self.lost = 0
@@ -281,19 +307,54 @@ class SppPeer(BluetoothDevice):
                 self._call("supply", lambda: source.supply(on))
 
     def _serve(self, device: Device) -> None:
-        device.sdp_service_records = {
-            RECORD_HANDLE: rfcomm.make_service_sdp_records(
-                RECORD_HANDLE, self.channel, core.BT_SERIAL_PORT_SERVICE
-            )
-        }
+        record = rfcomm.make_service_sdp_records(
+            RECORD_HANDLE, self.channel, core.BT_SERIAL_PORT_SERVICE
+        )
+        if self.service_name is not None:
+            language, encoding, base = LANGUAGE
+            record += [
+                sdp.ServiceAttribute(
+                    sdp.SDP_LANGUAGE_BASE_ATTRIBUTE_ID_LIST_ATTRIBUTE_ID,
+                    sdp.DataElement.sequence(
+                        [
+                            sdp.DataElement.unsigned_integer_16(language),
+                            sdp.DataElement.unsigned_integer_16(encoding),
+                            sdp.DataElement.unsigned_integer_16(base),
+                        ]
+                    ),
+                ),
+                sdp.ServiceAttribute(
+                    base + sdp.SDP_SERVICE_NAME_ATTRIBUTE_ID_OFFSET,
+                    sdp.DataElement.text_string(self.service_name.encode()),
+                ),
+            ]
+        device.sdp_service_records = {RECORD_HANDLE: record}
         server = rfcomm.Server(device)
         server.listen(self._opened, self.channel)
 
         def started(multiplexer: rfcomm.Multiplexer) -> None:
-            # Bumble's server accepts every channel it listens on; this one asks the peer first.
+            # Bumble's server accepts every channel it listens on; this one asks the peer first,
+            # at PN for the holder, and at SABM for the authentication.
             l2cap = multiplexer.l2cap_channel
             connection = l2cap.connection
             multiplexer.acceptor = lambda channel: self._accept(server, connection, channel)
+            deliver = l2cap.sink
+            assert deliver is not None
+
+            def screened(pdu: bytes) -> None:
+                frame = rfcomm.RFCOMM_Frame.from_bytes(pdu)
+                if frame.type == rfcomm.FrameType.SABM and frame.dlci != 0:
+                    # The DLC that PN made, which waits for this SABM to open.
+                    dlc = multiplexer.dlcs.get(frame.dlci)
+                    if (
+                        dlc is not None
+                        and dlc.state == rfcomm.DLC.State.CONNECTING
+                        and not self._opens(multiplexer, connection, dlc)
+                    ):
+                        return
+                deliver(pdu)
+
+            l2cap.sink = screened
 
             def ended() -> None:
                 # A channel accepted and never opened is let go with its RFCOMM session.
@@ -309,25 +370,39 @@ class SppPeer(BluetoothDevice):
     def _accept(
         self, server: rfcomm.Server, connection: Connection, channel: int
     ) -> tuple[int, int] | None:
-        """The channel's frame size and credits for `connection`, or `None` to refuse it."""
-        device = _named(connection)
-        assert self._controller is not None
+        """The channel's frame size and credits for `connection`, which holds it from now until
+        it opens or goes, or `None` to refuse it: at the device's PN, which comes first."""
         if self._holder is not None:
-            why = f"{device}: the channel is held by {_named(self._holder)}"
-        elif self.secure and not self._controller.authenticated(connection.peer_address):
-            why = f"{device}: the link is not authenticated"
-        else:
-            self._holder = connection
+            self._refuse(connection, f"the channel is held by {_named(self._holder)}")
+            return None
+        self._holder = connection
 
-            def disconnected(reason: int) -> None:
-                # A channel accepted and never opened is let go with its link.
-                if self._holder is connection:
-                    self._holder = None
+        def disconnected(reason: int) -> None:
+            # A channel accepted and never opened is let go with its link.
+            if self._holder is connection:
+                self._holder = None
 
-            connection.on(connection.EVENT_DISCONNECTION, disconnected)
-            return server.dlc_configs.get(channel)
-        self.refused.append((self.air.loop.now, why))
-        return None
+        connection.on(connection.EVENT_DISCONNECTION, disconnected)
+        return server.dlc_configs.get(channel)
+
+    def _opens(
+        self, multiplexer: rfcomm.Multiplexer, connection: Connection, dlc: rfcomm.DLC
+    ) -> bool:
+        """Whether the channel opens at the device's SABM: with `secure`, only on a link it has
+        authenticated by now. One that has not gets DM, as Bumble's multiplexer answers a PN it
+        refuses, and lets the channel go: the device may authenticate and ask again."""
+        assert self._controller is not None
+        if not self.secure or self._controller.authenticated(connection.peer_address):
+            return True
+        self._refuse(connection, "the link is not authenticated")
+        multiplexer.dlcs.pop(dlc.dlci, None)
+        multiplexer.send_frame(rfcomm.RFCOMM_Frame.dm(c_r=1 - dlc.c_r, dlci=dlc.dlci))
+        if self._holder is connection:
+            self._holder = None
+        return False
+
+    def _refuse(self, connection: Connection, why: str) -> None:
+        self.refused.append((self.air.loop.now, f"{_named(connection)}: {why}"))
 
     def _opened(self, dlc: rfcomm.DLC) -> None:
         self._dlc = dlc

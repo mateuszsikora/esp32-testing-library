@@ -5,7 +5,8 @@ The plugin is `esp32tl/pytest_plugin.py`, with the backend registry in
 interface in `esp32tl/interfaces/uart.py` and the one behind `gnss` in
 `esp32tl/interfaces/gnss.py`, the GPIO lines behind `lines` in `esp32tl/interfaces/lines.py`, the
 SD card slot behind `sd_card` in `esp32tl/interfaces/sd_card.py`, the Wi-Fi station behind
-`wifi` in `esp32tl/interfaces/wifi.py`, the exceptions a test sees in
+`wifi` in `esp32tl/interfaces/wifi.py`, the chip's Bluetooth behind `bt` in
+`esp32tl/interfaces/bluetooth.py`, the exceptions a test sees in
 `esp32tl/interfaces/__init__.py`, the taps and the run's log in `esp32tl/tap.py` and
 `esp32tl/report.py` ([run-report-technical.md](run-report-technical.md)), and the board
 profiles and capability declaration in `esp32tl/boards/`
@@ -299,6 +300,8 @@ the existing no-latency behavior and board pulls are unchanged.
 | `UNIT`, `MAX_SIZE` | `int`, `esp32tl/interfaces/sd_card.py` | 524288: an SD card image is a whole number of them; 2^41, the most it may be |
 | `BLOCK`, `MAX_DELAY` | `int`, `Duration`, `esp32tl/interfaces/sd_card.py` | 512, the block the rules count in; 10 s, the longest delay (`SD_DELAY_MAX` of `esp32tl.link.protocol`) |
 | `wifi(board)` | fixture, function scope | Returns `board.wifi` |
+| `bt(board)` | fixture, function scope | Returns `board.bluetooth`; a `BackendError`, as for a build with no ELF, fails the test as `esp32sim: {error}` without a traceback, as `gnss` does |
+| `Bluetooth(*, asked=..., log=None, address=ADDRESS, latency=LATENCY_NS)` | class, `esp32tl/interfaces/bluetooth.py`, a `BoardLink` `Interface` named `bluetooth`, with no wire and `bluetooth` true | The firmware's controller on `air`, an `Air` on the board's clock made by `use()`, which calls `asked(Request("bluetooth", source="model"))` once; `used`, `controller`; `supply(on)`, `chip_reset(t)`; the counts, `unknown_commands()`, `devices()`, `report()`, `properties()`, `close()`. For the link: `receive`, `arrive`, `poll`, `quiet_until`, `latency`, as [bluetooth-peer-technical.md](bluetooth-peer-technical.md#data-flow) (item 12) has them |
 | `Wifi(*, now, world=..., asked=..., log=None, bridging=...)` | class, `esp32tl/interfaces/wifi.py`, a `BoardLink` `Interface` named `wifi`, whose `arrive` reaches its network, with no wire and `ethernet` true | The station's air. `access_point(ssid, *, password=None, channel=6, bssid=None)` returns the `Internet(now, world, link="ethernet")` behind it and starts it at 0; `nearby(ssid, *, channel=1, rssi=-60, secure=True, bssid=None)`; `access_point_off()`, `access_point_on()`; `network`, `on_air`, `configuration` (`AccessPoint \| None`), `around` (`tuple[Nearby, ...]`), `events` (`list[AirEvent]`); `runner_args()`, the runner's `--wifi` and `--wifi-nearby`; `report()` and `properties()`. For the link: `receive(t, direction, frame)` and `poll(now)` are the network's while it is active, `inputs(now)` the switches as `WifiAp`, `quiet_until()` the network's, `latency()` `LATENCY_NS` (1 ms) once there is an access point. `asked(Request("wifi", source="model"))` is called by `access_point` and `nearby`. `bridging` goes to the network, as the `Modem`'s does |
 | `AccessPoint(ssid, password, channel, bssid)`, `Nearby(ssid, channel, rssi, secure, bssid)`, `AirEvent(t, on)` | frozen dataclasses, `esp32tl/interfaces/wifi.py` | What the test gave; `spec()` is the runner flag's value. `AirEvent.t` in nanoseconds of the board's time |
 | `Console(board)` | class, `esp32tl/interfaces/console.py` | `expect(pattern, timeout=30, *, return_what_before_match=False)`, `expect_exact(...)` with the same arguments, `timeout` a `Duration` or a number of seconds; `line(pattern)`, `lines(pattern=None, *, since=None)`, `tap(path)`; no `write`. `board` is a `Clocked`: `console_output`, `console_lines` and `wait_on_clock(condition, within, description)`, `within` a `Duration` |
@@ -721,6 +724,23 @@ in the network's events and the `RunLog`, and queue a `WifiAp` that `inputs` sen
 next turn, at that instant or the turn's, the later of the two. While the network is not active
 the station's frames reach nothing. On serial `board.wifi` is a `Wifi` that is on no link: its
 `asked` skips `access_point` and `nearby` through the capability declaration.
+
+### The chip's Bluetooth
+
+`Bluetooth` is on every backend's `Board` as `board.bluetooth`, through the abstract
+`_get_bluetooth()`. On esp32sim it is one of the `BoardLink`'s interfaces from construction, the
+only one whose `bluetooth` is true, so the link hands it every `hci_tx` packet and sends what it
+returns as `hci_rx` ([protocol](../protocol.md)). `Esp32Sim._get_bluetooth()`, the first time,
+checks `app.elf_file`, then calls `use()`, whose `asked` is `_asked`: it refuses after power-on and
+skips on a backend whose declaration has no `model` source for `bluetooth`. Before power-on the
+backend passes `--bt` for a `Bluetooth` that is `used`. On serial `_get_bluetooth()` calls `_asked`
+with the same request, which skips, since `serial` declares no `bluetooth`; were it declared, it
+would raise `BackendError: serial: the chip's Bluetooth has no interface on this backend`. The
+air, its devices and the controller are in [bluetooth-peer-technical.md](bluetooth-peer-technical.md).
+
+`tests/test_bluetooth_guest.py` covers the interface through a real `BoardLink`, without the
+emulator; `tests/test_pytest_plugin.py` the `--bt` of the runner's command line; and
+`tests/test_serial_backend.py` the skip on serial.
 
 `tests/test_wifi.py` covers the flags, the parameter checks, the capability request, the switches
 and their timing without the emulator; `tests/test_http_request.py` runs the station against

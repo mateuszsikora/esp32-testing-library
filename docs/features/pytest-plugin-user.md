@@ -135,11 +135,13 @@ def test_hello_world(board: Board):
     board.console.expect_exact("Hello world!")
 ```
 
-`board.console`, `board.gnss`, `board.modem`, `board.lines`, `board.sd_card` and `board.wifi`
-expose the profile's interfaces. Access does not power on the board or select a UART source.
-Missing profile interfaces fail when accessed; serial capabilities still skip unsupported calls.
-The existing `console`, `gnss`, `modem`, `lines`, `sd_card` and `wifi` fixtures remain shortcuts
-to these same objects. Mixing the two styles shares state, including the console's match cursor.
+`board.console`, `board.gnss`, `board.modem`, `board.lines`, `board.sd_card`, `board.wifi` and
+`board.bluetooth` expose the profile's interfaces. Access does not power on the board or select a
+UART source, with one exception: the first access to `board.bluetooth` puts the firmware's
+controller on the air, so it must come before `board.power_on()`. Missing profile interfaces fail
+when accessed; serial capabilities still skip unsupported calls.
+The existing `console`, `gnss`, `modem`, `lines`, `sd_card`, `wifi` and `bt` fixtures remain
+shortcuts to these same objects. Mixing the two styles shares state, including the console's match cursor.
 For MQTT, use `board.modem.network().broker`: `network()` explicitly selects the modem's
 simulated network before power-on. The existing `broker` fixture remains a shortcut to that
 service. There is no `board.broker` property that implicitly configures a network.
@@ -454,7 +456,7 @@ def test_the_example_writes_its_files_into_the_image(board: Board):
   or None}, ...], "refused": [...], "not_reached": [...], "faults": [...]}`
   ([the run report](run-report-user.md)).
 - On a board profile without a slot, `sd_card` is an error at setup:
-  `esp32sim: the board profile gps-alarm-clock has no sd_card; its interfaces are console, uart.gnss, lines.alarm, wifi`.
+  `esp32sim: the board profile gps-alarm-clock has no sd_card; its interfaces are console, uart.gnss, lines.alarm, wifi, bluetooth`.
 
 #### Keeping a prepared card
 
@@ -708,7 +710,7 @@ def test_the_firmware_follows_ri_and_drives_pwrkey(board, lines, console):
   A level other than 0 or 1 raises `ValueError: lines.drive: level 2 is not 0 or 1`, or
   `TypeError` with the same message for one that is not an integer.
 - On a board profile without lines, `lines` is an error at setup:
-  `esp32sim: the board profile esp32-devkitc has no lines; its interfaces are console, uart.gnss, sd_card, wifi`.
+  `esp32sim: the board profile esp32-devkitc has no lines; its interfaces are console, uart.gnss, sd_card, wifi, bluetooth`.
 
 `NeverHappened`, `RunEnded`, `BoardOff` and `SourceError` are in `esp32tl.interfaces`, `LineEvent`
 in `esp32tl.interfaces.lines`.
@@ -926,7 +928,7 @@ to read only the firmware side. The model adds a 1 ms response latency to the li
 See [the modem guide](modem-user.md) for signal, registration, power, clock and operator, a hung
 modem and RESET, command history and limits.
 There is no default modem route on `esp32-devkitc`: requesting the fixture there fails with
-`the board profile esp32-devkitc has no uart.modem; its interfaces are console, uart.gnss, sd_card, wifi`.
+`the board profile esp32-devkitc has no uart.modem; its interfaces are console, uart.gnss, sd_card, wifi, bluetooth`.
 
 ### The wifi fixture
 
@@ -986,6 +988,35 @@ def test_joins_and_fetches_from_the_tests_server(board, wifi, console):
 - The report of the run has `wifi: access point 'myssid', channel 6, WPA2-PSK`, a line per network
   around, then the network's events; the `esp32sim_link` property has `wifi`
   ([the esp32sim backend](esp32sim-backend-user.md#the-links-report)).
+
+### The bt fixture
+
+`bt` is the chip's Bluetooth (`board.bluetooth`), which every board profile has, as every classic
+ESP32 does. On esp32sim it puts the firmware's controller on an air around the board, on the
+board's clock, where the test puts the devices the firmware talks to or finds, `SppPeer` and
+`BluetoothDevice`, and the run forwards the firmware's HCI to that controller:
+
+```python
+from esp32tl.bluetooth.peer import SppPeer
+from esp32tl.units import seconds
+
+
+def test_the_firmware_opens_spp(board, bt):
+    peer = SppPeer(bt.air, name="ESP_SPP_ACCEPTOR", pin="1234", source=model)
+    board.power_on()
+    board.wait_until(lambda: peer.channel_open, within=seconds(20))
+```
+
+- The fixture comes before `board.power_on()`, as fixtures do: the runner then gets `--bt` and the
+  application's ELF. `board.bluetooth` asked for the first time after it raises `SourceError:
+  bluetooth: the board is on already: give an interface its source before board.power_on()`.
+- Time on `bt.air` is the board's: the test waits through the board, and what it does on the air,
+  making a device, switching one off, setting its `rssi`, happens at the board's current instant.
+  `bt.air.wait`, `bt.air.advance` and `bt.air.run` raise `AirError`.
+- On [serial](serial-backend-user.md) the test skips at the fixture: `serial: bluetooth takes no
+  model source on this backend`.
+- What the devices are, what the firmware's controller does and what the report says are in
+  [Bluetooth peer](bluetooth-peer-user.md#in-front-of-the-firmware-the-bt-fixture).
 
 ## The test's timeout
 

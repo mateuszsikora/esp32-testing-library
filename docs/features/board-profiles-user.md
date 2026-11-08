@@ -16,9 +16,11 @@ with the reason.
 | `sd-data-logger` | `esp32` | 4 MB, none | `console`; `uart.gnss`: UART1, TX GPIO4, RX GPIO5, 9600 baud; `sd_card`: SCLK GPIO14, MOSI GPIO15, MISO GPIO2, CS GPIO13; `lines.logger`: error GPIO18 |
 | `lilygo-t-a7670g-r2` | `esp32` (ESP32-WROVER-E) | 4 MB, 4 MB | `console`; `uart.modem`: UART1, TX GPIO 26, RX GPIO 27, 115200 baud; `uart.gnss`: UART2, TX GPIO 21, RX GPIO 22, 9600 baud; `sd_card`: SCLK GPIO 14, MOSI GPIO 15, MISO GPIO 2, CS GPIO 13; `lines.modem`, `lines.gnss`, `lines.board` ([control lines](#lilygo-control-lines-and-simulation-limits)) |
 
-Every profile also has `wifi`, the chip's Wi-Fi station: every classic ESP32 has the radio, so a
-profile does not list it, and it comes last in a profile's interfaces
-([the wifi fixture](pytest-plugin-user.md#the-wifi-fixture)).
+Every profile also has `wifi`, the chip's Wi-Fi station, and `bluetooth`, its Bluetooth
+controller: every classic ESP32 has both radios, so a profile does not list them, and they come
+last in a profile's interfaces, in that order
+([the wifi fixture](pytest-plugin-user.md#the-wifi-fixture),
+[the bt fixture](pytest-plugin-user.md#the-bt-fixture)).
 
 Everything a profile lists is on the board's supply: `board.power_off()` takes the power of the
 chip, the card in its slot, and the GNSS receiver and modem models at the far end of its routes
@@ -213,7 +215,7 @@ so choose distinct names if recordings need distinguishable board labels.
 A test says what is at the far end of an interface, and whether it records what crosses it, by
 what it does with it before `board.power_on()`. An interface is `console`, or the name of a route
 or a set of lines in the profile: `uart.gnss`, `uart.modem`, `lines.modem`, `sd_card`, the SD
-card slot, or `wifi`, the chip's Wi-Fi station.
+card slot, `wifi`, the chip's Wi-Fi station, or `bluetooth`, its Bluetooth controller.
 
 ```python
 def test_reports_a_fix(board, gnss, console, tmp_path):
@@ -227,7 +229,9 @@ def test_reports_a_fix(board, gnss, console, tmp_path):
   `gnss.fix(at=...)` or another call of the receiver model a `model`
   ([models and units](models-user.md#the-gnss-receiver)), `sd_card.insert(image)` a `model`,
   the runner's card holding the image, and `wifi.access_point(...)` or `wifi.nearby(...)` a
-  `model`, esp32sim's access point with the simulated network behind it. `gnss.real(port)` asks for
+  `model`, esp32sim's access point with the simulated network behind it; the `bt` fixture asks for
+  a `model` on `bluetooth`, the firmware's controller in the harness on the air of the test's
+  devices. `gnss.real(port)` asks for
   a `real` source, a device on a host serial port, which on `serial` skips all the same: the `real`
   declared there is the device wired to the board ([real source](real-source-user.md)).
 - A tap is the call that asks for it: `gnss.tap(path)` taps `uart.gnss`
@@ -246,6 +250,7 @@ Each backend declares what it can give:
 | `lines.*` | nothing | nothing |
 | `sd_card` | `model`: a card holding an image file; no tap | `real`: the card in the slot; no tap |
 | `wifi` | `model`: esp32sim's access point, the network behind it the harness's; no tap | `real`: the access points around the board; no tap |
+| `bluetooth` | `model`: the firmware's controller in the harness, with the test's devices on its air; no tap | nothing: the `bt` fixture skips |
 
 On a real board the on-board peripherals are soldered on, so only the real part answers, and a tap
 on them would need a hardware sniffer. The `lines` fixture is no source in this table: on

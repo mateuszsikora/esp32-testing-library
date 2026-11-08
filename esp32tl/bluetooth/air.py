@@ -6,11 +6,18 @@ host's, and moves that time only in `advance`: it runs everything due at one ins
 is left to do there, then goes to the next instant something is due, a timer of the loop or a
 party's `quiet_until`, as the link goes from turn to turn. Times are nanoseconds on the board's
 clock. Nothing here reads the host's clock, so two runs do the same at the same instants.
+
+An air made with `board_clock` is the one the guest's Bluetooth controller is on, on the emulator:
+the board's link alone moves it, with `follow`, as the run goes from turn to turn, and the test
+waits through the board. Its `advance`, `wait` and `run` refuse. The test reaches it from its own
+thread while the board holds the link in a turn, and the link from the link's thread: a lock keeps
+the two apart.
 """
 
 import asyncio
 import math
 import selectors
+import threading
 from collections.abc import Awaitable, Callable, Coroutine, Iterable
 from contextvars import Context
 from typing import Any, Protocol, TypeVar, TypeVarTuple
@@ -28,7 +35,8 @@ Ts = TypeVarTuple("Ts")
 
 class AirError(RuntimeError):
     """Something on the air failed while time moved: a callback or a task raised, or a party
-    asked to be woken at an instant that has passed. Raised to whoever moved the time."""
+    asked to be woken at an instant that has passed. Raised to whoever moved the time. Also what
+    `advance`, `wait` and `run` raise on an air on the board's clock, which they cannot move."""
 
 
 class Party(Protocol):
@@ -177,12 +185,16 @@ class Link(LocalLink):
 class Air:
     """One virtual Bluetooth link, and the loop its controllers run on, at the board's time.
 
-    The air's time starts at 0 when it is made and moves only in `advance`, `wait` and `run`.
-    What fails on the air, a callback, a task, a party, is raised from the call that moved the
-    time, as an `AirError` whose cause is the failure.
+    The air's time starts at 0 when it is made and moves only in `advance`, `wait` and `run`; with
+    `board_clock`, only in `follow`, which the board's link calls, and those three refuse. What
+    fails on the air, a callback, a task, a party, is raised from the call that moved the time, as
+    an `AirError` whose cause is the failure. Every call holds the air's lock, so that the test's
+    thread and the link's take turns on it.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, board_clock: bool = False) -> None:
+        self.board_clock = board_clock
+        self._lock = threading.RLock()
         self.loop = BoardLoop()
         self.loop.set_exception_handler(self._failed)
         self.link = Link()
@@ -200,20 +212,22 @@ class Air:
     def join(self, party: Party) -> None:
         """`party` is polled at every instant the air stops at from now on, the current one
         first, so that what it has due now is sent before anyone asks the air's next instant."""
-        self._parties.append(party)
-        self._settle()
+        with self._lock:
+            self._parties.append(party)
+            self._settle()
 
     def call(self, function: Callable[[], T]) -> T:
         """`function`, called inside the loop at the current instant, and everything it sets
         off there; returns what it returned. From inside the loop, as from a coroutine on the
         air, `function` runs at once, and what it sets off follows when the caller yields."""
-        if self.loop.is_running():
-            return function()
-        result: list[T] = []
-        self.loop.call_soon(lambda: result.append(function()))
-        # A function that raised fails the settle.
-        self._settle()
-        return result[0]
+        with self._lock:
+            if self.loop.is_running():
+                return function()
+            result: list[T] = []
+            self.loop.call_soon(lambda: result.append(function()))
+            # A function that raised fails the settle.
+            self._settle()
+            return result[0]
 
     def start(self, coroutine: Coroutine[Any, Any, T]) -> "asyncio.Task[T]":
         """A task for `coroutine` on the loop, run as far as it goes at the current instant."""
@@ -229,74 +243,106 @@ class Air:
     def quiet_until(self) -> int | None:
         """The next instant something on the air is due: the loop's next timer or a party's
         `quiet_until`; `None` when nothing is. A party that raises fails the air."""
-        times = [self._next_timer]
-        for party in self._parties:
-            try:
-                times.append(party.quiet_until())
-            except Exception as error:
-                self.fail(error)
-                raise AirError(str(error)) from error
-        due = [t for t in times if t is not None]
-        return min(due) if due else None
+        with self._lock:
+            times = [self._next_timer]
+            for party in self._parties:
+                try:
+                    times.append(party.quiet_until())
+                except Exception as error:
+                    self.fail(error)
+                    raise AirError(str(error)) from error
+            due = [t for t in times if t is not None]
+            return min(due) if due else None
 
     def advance(self, until: Duration) -> None:
         """Moves the air's time to `until`, a `Duration` since the air was made, stopping at
         every instant on the way that something is due at."""
+        self._test_moves("air.advance")
         self._advance(nanoseconds(until, "air.advance"))
 
+    def follow(self, until: int) -> None:
+        """Moves the air's time to `until`, nanoseconds of the board's time, as `advance` does:
+        the board's link, at each instant the run reaches, on an air on the board's clock."""
+        self._advance(until)
+
     def _advance(self, until: int) -> None:
-        if until < self.loop.now:
-            raise ValueError(
-                f"the air is at {seconds(self.loop.now)}: it cannot go back to {seconds(until)}"
-            )
-        self._settle()
-        while (next_time := self.quiet_until()) is not None and next_time <= until:
-            if next_time <= self.loop.now:
-                raise AirError(
-                    f"something on the air is due at {seconds(next_time)}, and the air is at"
-                    f" {seconds(self.loop.now)} already"
+        with self._lock:
+            if until < self.loop.now:
+                raise ValueError(
+                    f"the air is at {seconds(self.loop.now)}: it cannot go back to {seconds(until)}"
                 )
-            self.loop.now = next_time
             self._settle()
-        self.loop.now = until
-        self._settle()
+            while (next_time := self.quiet_until()) is not None and next_time <= until:
+                if next_time <= self.loop.now:
+                    raise AirError(
+                        f"something on the air is due at {seconds(next_time)}, and the air is at"
+                        f" {seconds(self.loop.now)} already"
+                    )
+                self.loop.now = next_time
+                self._settle()
+            self.loop.now = until
+            self._settle()
+
+    def _test_moves(self, call: str) -> None:
+        """Refuses `call`, which would move the air, on an air on the board's clock."""
+        if self.board_clock:
+            raise AirError(
+                f"{call}: this air is on the board's clock, which only the board's link moves:"
+                " let the board run with board.wait() or board.wait_until()"
+            )
 
     def wait(self, duration: Duration) -> None:
         """Lets the air run for `duration` from now."""
+        self._test_moves("air.wait")
         self._advance(self.loop.now + nanoseconds(duration, "air.wait"))
 
     def run(self, awaitable: Awaitable[T], *, within: Duration, description: str = "") -> T:
         """Runs `awaitable` on the loop until it completes, for at most `within` of the board's
         time from now; returns its result, or raises what it raised. When `within` runs out
         first, the task is cancelled and `NeverHappened` names `description`."""
-        limit = nanoseconds(within, "air.run: within")
+        try:
+            self._test_moves("air.run")
+        except AirError:
+            # It will never run: closed, so that Python does not warn it was never awaited.
+            if isinstance(awaitable, Coroutine):
+                awaitable.close()
+            raise
+        return self._run(awaitable, nanoseconds(within, "air.run: within"), description)
 
+    def at_once(self, awaitable: Awaitable[T], description: str = "") -> T:
+        """Runs `awaitable` at the current instant, where it must complete, as `run` with a
+        `within` of 0 does; on an air on the board's clock too, since the time does not move."""
+        return self._run(awaitable, 0, description)
+
+    def _run(self, awaitable: Awaitable[T], limit: int, description: str) -> T:
         async def awaited() -> T:
             return await awaitable
 
-        start = self.loop.now
-        deadline = start + limit
-        task = self.start(awaited())
-        while not task.done():
-            next_time = self.quiet_until()
-            if next_time is None or next_time > deadline:
-                self._advance(deadline)
-                if task.done():
-                    break
-                task.cancel()
-                self._settle()
-                what = description or "the awaitable"
-                raise NeverHappened(
-                    f"{what} did not complete within {seconds(limit)}: waited from"
-                    f" {seconds(start)} to {seconds(self.loop.now)} of the board's time"
-                )
-            self._advance(next_time)
-        return task.result()
+        with self._lock:
+            start = self.loop.now
+            deadline = start + limit
+            task = self.start(awaited())
+            while not task.done():
+                next_time = self.quiet_until()
+                if next_time is None or next_time > deadline:
+                    self._advance(deadline)
+                    if task.done():
+                        break
+                    task.cancel()
+                    self._settle()
+                    what = description or "the awaitable"
+                    raise NeverHappened(
+                        f"{what} did not complete within {seconds(limit)}: waited from"
+                        f" {seconds(start)} to {seconds(self.loop.now)} of the board's time"
+                    )
+                self._advance(next_time)
+            return task.result()
 
     def close(self) -> None:
         """Closes the loop: the air is over."""
-        if not self.loop.is_closed():
-            self.loop.close()
+        with self._lock:
+            if not self.loop.is_closed():
+                self.loop.close()
 
     def _settle(self) -> None:
         """Runs the loop at the current instant until nothing is left to do there, the parties

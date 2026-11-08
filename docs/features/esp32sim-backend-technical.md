@@ -50,16 +50,20 @@ without starting anything:
    fault rules; it is on the link, last, as the one interface whose `card_slot` is true. The chip's
    station becomes a
    `Wifi(now=lambda: hold.now, world=lambda: self._utc, asked=self._asked, log=self.log)`
-   (`esp32tl/interfaces/wifi.py`), on every profile.
+   (`esp32tl/interfaces/wifi.py`), on every profile, and the chip's Bluetooth a
+   `Bluetooth(asked=self._asked, log=self.log)` (`esp32tl/interfaces/bluetooth.py`), with no air
+   until the test asks for it ([bluetooth-peer-technical.md](bluetooth-peer-technical.md#data-flow),
+   item 12).
 5. **The lines.** One `Lines(profile.name, profile.lines, now, log=self.log)`
    (`esp32tl/interfaces/lines.py`) for every `[lines.<role>]` set, also on a profile with none,
    with `now` the `HeldClock`'s, so that what the test drives before power-on holds from `t = 0`
    ([pytest-plugin-technical.md](pytest-plugin-technical.md#data-flow)).
-6. **`BoardLink(profile.name, [*uarts, lines, wifi, sd_card], chip=profile.chip, on_error=self._end_run, hold=clock, console=self._printed, clock=self.clock, on_reset=self._reset)`**, `sd_card` only with a slot,
+6. **`BoardLink(profile.name, [*uarts, lines, wifi, bluetooth, sd_card], chip=profile.chip, on_error=self._end_run, hold=clock, console=self._printed, clock=self.clock, on_reset=self._reset)`**, `sd_card` only with a slot,
    (`esp32tl/link/boardlink.py`) is the harness's end of the link: `Esp32Sim.link`. The harness's
    `hello` names the profile and its chip; `watch` is the pins of every UART route and every
    line; the `Wifi` has no pins, and is the link's one interface whose `ethernet` is true, which
-   gets the station's `eth_tx` frames; the `SdCard` has none either, and is the one whose
+   gets the station's `eth_tx` frames; the `Bluetooth` has none either, and is the one whose
+   `bluetooth` is true, which gets the firmware's `hci_tx` packets; the `SdCard` has none either, and is the one whose
    `sd_card` is true, which sends the fault rules as `sd_fault` and `sd_clear` and gets the
    runner's `sd_op` ([pytest-plugin-technical.md](pytest-plugin-technical.md#the-sd-cards-fault-rules)).
    It checks that no two interfaces share a pin. `hold` holds
@@ -67,7 +71,7 @@ without starting anything:
    waits; `_printed` appends each console message's bytes to `console_output`, feeds them to
    `console_lines` and hands them to `log.console`, in the link's thread. `_reset` puts each
    `reset` the runner sends into the run's log, `boot N: REASON (reset cause C)`, through
-   `RunLog.chip`, also in the link's thread.
+   `RunLog.chip`, and calls `Bluetooth.chip_reset(t)`, also in the link's thread.
 
 **`Esp32Sim.nvs(namespaces, partition="nvs")`** reads the build's `partition-table.bin`
 from `app.flash_files`, resolves the name and generates a whole NVS image through
@@ -111,7 +115,8 @@ or `POWER_ON_UTC`, for `Esp32Sim.utc` and the GNSS receiver's dates, and logs
    card can go in while the firmware runs. With an access point, `wifi=` adds `wifi.runner_args()` after that:
    `--wifi ssid=<ssid>,chan=<channel>[,psk=<password>][,bssid=<bssid>]` and one
    `--wifi-nearby ssid=<ssid>,chan=<channel>,rssi=<dBm>,secure=<0|1>[,bssid=<bssid>]` per network
-   around. Without `held`, as the [`esp32tl` command](cli-user.md) calls
+   around. With a `bluetooth` the test used (`Bluetooth.used`), `bluetooth=` adds
+   `--bt <app.elf_file>` after that. Without `held`, as the [`esp32tl` command](cli-user.md) calls
    it, the `--console` and `--peer-timeout` pairs are left out, and so is the card; the command
    passes its profile's `psram_mb` too. The runner's options are in
    [runner-user.md](runner-user.md).
@@ -359,7 +364,10 @@ rule `id`, `call`, `t_ns`, `cleared_t_ns` and `operations` (`t_ns`, `op`, `block
 `delay_ns`, `written` each); and `wifi`:
 `None` without an access point, else `Wifi.properties()`, `access_point` (`ssid`, `channel`,
 `secure`), `nearby` (`ssid`, `channel`, `rssi`, `secure` each), `switches` (`t_ns`, `on` each) and
-`network`, the network's `esp32tl_network: 1` transcript. With an access point `report` ends with
+`network`, the network's `esp32tl_network: 1` transcript; and `bluetooth`, `Bluetooth.properties()`,
+`None` until the test used it ([bluetooth-peer-technical.md](bluetooth-peer-technical.md#data-flow),
+item 12). With `bt`, `report` has `Bluetooth.report()` after the Wi-Fi's lines and before the
+run. With an access point `report` has
 `Wifi.report()`: `wifi: access point '<ssid>', channel <n>, <WPA2-PSK|open>`, a line
 `  around: '<ssid>', channel <n>, <rssi> dBm, <WPA2-PSK|open>` per network around, then the
 network's `network events:`. With a slot, the `sd_card: a card holding <path>` or
@@ -446,7 +454,7 @@ repository makes.
 | `Esp32Sim.uart(role)` | The `Uart` of `uart.<role>` on the link, a `Gnss` for `gnss`; `BackendError` when the profile has no such route |
 | `Esp32Sim.lines` | The `Lines` of the profile's `[lines.<role>]` sets on the link; `BackendError` when the profile has none |
 | `Esp32Sim.sd_card` | The `SdCard` of the profile's slot; `BackendError` when the profile has none |
-| `Esp32Sim.set_up()` | What the test gave that only a run uses: `the replay of uart.gnss` or `the model of uart.gnss` per route with a source, `the tap of uart.gnss` per tapped route, `the level of modem.ri` per line the test drove, `a card in sd_card`, `the access point of wifi`, `the tap of console`, `the NVS partition 'nvs'` |
+| `Esp32Sim.set_up()` | What the test gave that only a run uses: `the replay of uart.gnss` or `the model of uart.gnss` per route with a source, `the tap of uart.gnss` per tapped route, `the level of modem.ri` per line the test drove, `a card in sd_card`, `the access point of wifi`, `the devices on the Bluetooth air`, `the tap of console`, `the NVS partition 'nvs'` |
 | `Esp32Sim.tap_console(path)` | The console `Tap`; before power-on only, shares file collision checks with UARTs and the SD card |
 | `Esp32Sim.close()` | Ends the run and writes the taps; raises `BackendError` for a tap that cannot be written, a failing exit code, a killed runner or a link error |
 | `Esp32Sim.report(run=False)`, `Esp32Sim.properties()` | The `esp32sim link` report section, with the run on the board's clock when `run`; the `esp32sim_link` user property's data |
@@ -458,8 +466,9 @@ repository makes.
 | `load_app(app_path, *, build_dir=None, backend="esp32sim")` | The checked `IdfApp` of the selected directory (default `<app_path>/build`); `backend` chooses target/encryption error wording |
 | `profile_uart(profile, interface, *, clock, directory, asked=..., log=None, files=None)` | The `Uart` on the route the profile gives `interface` (`uart.gnss`), at its pins and baud; `BackendError` when the profile has no such route. The [`esp32tl` command](cli-user.md) makes its UARTs with it |
 | `route_wire(profile, interface)` | The `Wire` of that route, or the same `BackendError`; `Esp32Sim` makes its `Uart`s and its `Gnss` on it |
-| `runner_command(runner, rom, app, max_seconds, link, *, held=False, psram_mb=None, sd_card=None, extra_flash=(), wifi=None, realtime=False, flash_out=None)` | The runner's argument list; with `psram_mb`, `--psram-mb` of that size; with an `SdCard` holding a card, the runner's card on its pins; with a `Wifi` holding an access point, `--wifi` and `--wifi-nearby`; with `realtime`, `--realtime`; with `flash_out`, `--flash-out` |
+| `runner_command(runner, rom, app, max_seconds, link, *, held=False, psram_mb=None, sd_card=None, extra_flash=(), wifi=None, bluetooth=None, realtime=False, flash_out=None)` | The runner's argument list; with `psram_mb`, `--psram-mb` of that size; with an `SdCard` holding a card, the runner's card on its pins; with a `Wifi` holding an access point, `--wifi` and `--wifi-nearby`; with a `Bluetooth` the test used, `--bt` and the application's ELF; with `realtime`, `--realtime`; with `flash_out`, `--flash-out` |
 | `Esp32Sim.wifi` | The chip's `Wifi`, on the link from construction |
+| `Esp32Sim.bluetooth` | The chip's `Bluetooth`, on the link from construction; the first look checks `app.elf_file` and calls `Bluetooth.use()`, which asks `_asked` for `Request("bluetooth", source="model")` |
 | `RunnerPopen(msg_queue, cmd, meta)` | `DuplicateStdoutPopen` that closes its log when the start fails |
 | `refuse(reason)` | Raises `SourceError(reason)`: `Esp32Sim`'s `skip` outside pytest |
 | `ended_while_waiting(error)` | Whether `error`'s chain holds a `RunEnded` |
@@ -501,6 +510,7 @@ the first problem shows; the socket and the start come at `power_on()`, in the t
 |---|---|---|
 | `the board profile {name} has no {interface}; its interfaces are {interfaces}` | `Esp32Sim.uart` | The `gnss` fixture on a route the profile does not have; `{interfaces}` is `BoardProfile.interfaces`, comma-separated |
 | `the board profile {name} has no lines; its interfaces are {interfaces}` | `Esp32Sim.lines` | The `lines` fixture on a profile without `[lines.<role>]` sets |
+| `bluetooth: {build} holds no ELF of the application, whose symbols the runner's --bt needs` | `Esp32Sim.bluetooth` | `IdfApp.elf_file` is `None` or not a file: no `.elf` in the build directory |
 | `{build} holds no ESP-IDF build: no flasher_args.json` | `load_app` | No `build/flasher_args.json` in the app |
 | `{build} is built for {app.target}; esp32sim runs the classic esp32` | `load_app` | Target other than `esp32` |
 | `{build} asks for flash encryption, which the runner does not do` | `load_app` | A flash file marked encrypted |
@@ -568,7 +578,8 @@ proving serial-only validation does not reach the simulator.
   `test_runner_command_gives_the_chip_the_profile_s_psram`: `--psram-mb 4` for `psram_mb=4`, and
   no `--psram-mb` without it. `test_runner_command_puts_the_tests_access_point_on_the_air`: no
   `--wifi` without an access point, then `--wifi` and `--wifi-nearby` as `Wifi.runner_args()`
-  gives them.
+  gives them. `test_runner_command_forwards_the_guests_hci_once_the_test_uses_bluetooth`: no `--bt`
+  for a `Bluetooth` the test has not used, then `--bt` and the fake build's `app.elf`.
 - `test_load_app_refuses_what_the_runner_cannot_run`: the four `load_app` messages.
 - `test_runner_and_rom_paths_name_what_is_missing`: both messages, a runner that is not
   executable, and the environment variables taking effect.
@@ -679,10 +690,13 @@ PPP and TLS wire bytes. The route advertises `lossless=True`; its receive FIFO o
 through `BoardLink` immediately.
 
 
-`Esp32Sim` implements the public `Board` base. Its `lines`, `sd_card` and `wifi` properties
-delegate to `_get_lines()`, `_get_sd_card()` and `_get_wifi()`; the first two replace the former
+`Esp32Sim` implements the public `Board` base. Its `lines`, `sd_card`, `wifi` and `bluetooth`
+properties delegate to `_get_lines()`, `_get_sd_card()`, `_get_wifi()` and `_get_bluetooth()`; the first two replace the former
 callable backend accessors. `set_up()` lists `the access point of wifi` once the test has given
-one, so that a test that gives one and never powers on fails teardown, as for a source. The
+one, and `the devices on the Bluetooth air` once the air holds a device besides the firmware's
+controller, so that a test that gives one and never powers on fails teardown, as for a source.
+`_switch(on)` calls `Bluetooth.supply(on)` after the UARTs' `supply`; `close()` closes the
+`Bluetooth`'s air in its `finally`, after `_release`. The
 runner command, setup guard and reports read the slot's `image_path`. `close()` stops and joins
 the runner before closing the SD slot in a `finally` block, so owned images are removed on both
 successful and failed teardown. An uninserted built image is also cleaned; merely building does

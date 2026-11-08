@@ -12,7 +12,7 @@ from collections.abc import Awaitable, Callable, Coroutine, Iterable, Iterator
 from typing import Any
 
 import pytest
-from bumble import core, hci, rfcomm
+from bumble import core, hci, l2cap, rfcomm, sdp
 from bumble.device import Connection, Device, DeviceConfiguration
 from bumble.host import Host
 from bumble.keys import MemoryKeyStore
@@ -24,6 +24,7 @@ from esp32tl.bluetooth.controller import INQUIRY_UNIT_S, Controller
 from esp32tl.bluetooth.peer import (
     CHANNEL,
     CLASS_OF_DEVICE,
+    SERVICE_NAME,
     BluetoothDevice,
     PeerError,
     SppPeer,
@@ -472,6 +473,11 @@ def test_nothing_happens_on_the_air_until_the_device_writes(air: Air) -> None:
             "SppPeer: address is 'nonsense', not a Bluetooth address, as 00:00:00:00:5B:01",
         ),
         ({"address": "00:00:00:00:5B:0G"}, "not a Bluetooth address"),
+        (
+            {"service_name": ""},
+            "SppPeer: service_name is '', not None or a string of 1 to 255 bytes",
+        ),
+        ({"service_name": 7}, "service_name is 7, not None or a string of 1 to 255 bytes"),
     ],
 )
 def test_the_peer_refuses_what_it_cannot_be(
@@ -558,6 +564,126 @@ def test_the_channel_opens_only_on_a_link_the_device_authenticated(air: Air) -> 
     assert peer.refused == [(0, "24:0A:C4:00:00:01: the link is not authenticated")]
     assert not peer.channel_open
     assert esp32.delegate.asked == 0
+
+
+def test_the_channel_opens_when_the_device_authenticates_between_pn_and_sabm(
+    air: Air, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Bluedroid's order as initiator with ESP_SPP_SEC_AUTHENTICATE: PN, then authentication,
+    then SABM. The peer checks at SABM."""
+    echo = Echo()
+    peer = SppPeer(air, name="peer", pin="1234", source=echo)
+    esp32 = Initiator(air)
+    order: list[str] = []
+    connect = rfcomm.DLC.connect
+
+    def authenticate_first(dlc: rfcomm.DLC) -> None:
+        order.append("pn answered")
+
+        async def later() -> None:
+            await dlc.multiplexer.l2cap_channel.connection.authenticate()
+            order.append("authenticated")
+            connect(dlc)
+
+        asyncio.get_running_loop().create_task(later())
+
+    monkeypatch.setattr(rfcomm.DLC, "connect", authenticate_first)
+
+    async def scenario() -> None:
+        connection = await esp32.device.connect(
+            peer.device.public_address, transport=core.PhysicalTransport.BR_EDR
+        )
+        dlc = await esp32.open(connection, channel=CHANNEL)
+        dlc.write(b"hello\r")
+        await asyncio.sleep(1)
+
+    air.run(scenario(), within=seconds(10))
+    assert order == ["pn answered", "authenticated"]
+    assert peer.refused == [] and peer.channel_open
+    assert echo.heard == [(0, b"hello\r")]
+
+
+def test_a_device_refused_at_sabm_may_authenticate_and_open_the_channel(air: Air) -> None:
+    echo = Echo()
+    peer = SppPeer(air, name="peer", pin="1234", source=echo)
+    esp32 = Initiator(air)
+    second = Initiator(air, address="24:0A:C4:00:00:02")
+
+    async def scenario() -> None:
+        connection = await esp32.device.connect(
+            peer.device.public_address, transport=core.PhysicalTransport.BR_EDR
+        )
+        multiplexer = await rfcomm.Client(connection).start()
+        with pytest.raises(core.ConnectionError):
+            await multiplexer.open_dlc(CHANNEL)
+        # The refusal let the channel go: another device is not told it is held.
+        assert not peer.channel_open and peer._holder is None
+        await connection.authenticate()
+        dlc = await multiplexer.open_dlc(CHANNEL)
+        dlc.write(b"hello\r")
+        await asyncio.sleep(1)
+        other = await second.device.connect(
+            peer.device.public_address, transport=core.PhysicalTransport.BR_EDR
+        )
+        await other.authenticate()
+        with pytest.raises(core.ConnectionError):
+            await second.open(other, channel=CHANNEL)
+
+    air.run(scenario(), within=seconds(10))
+    assert peer.refused == [
+        (0, "24:0A:C4:00:00:01: the link is not authenticated"),
+        (1_000 * MS, "24:0A:C4:00:00:02: the channel is held by 24:0A:C4:00:00:01"),
+    ]
+    assert echo.heard == [(0, b"hello\r")]
+
+
+def sdp_record(air: Air, esp32: Initiator, peer: BluetoothDevice) -> dict[int, Any]:
+    """The peer's SPP record, attribute by attribute, as the device's SDP search finds it."""
+
+    async def search() -> dict[int, Any]:
+        connection = await esp32.device.connect(
+            peer.device.public_address, transport=core.PhysicalTransport.BR_EDR
+        )
+        async with sdp.Client(connection) as client:
+            (record,) = await client.search_attributes(
+                [core.BT_SERIAL_PORT_SERVICE], [sdp.SDP_ALL_ATTRIBUTES_RANGE]
+            )
+        return {attribute.id: attribute.value for attribute in record}
+
+    return air.run(search(), within=seconds(10))
+
+
+@pytest.mark.parametrize(
+    ("name", "found"), [(SERVICE_NAME, b"Serial Port"), ("Dev B", b"Dev B"), (None, None)]
+)
+def test_the_sdp_record_names_the_service(air: Air, name: str | None, found: bytes | None) -> None:
+    """bt_spp_initiator prints the name with %s, and newlib's printf faults on the NULL of a
+    record without one."""
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo(), service_name=name)
+    record = sdp_record(air, Initiator(air), peer)
+    if found is None:
+        assert 0x0100 not in record and 0x0006 not in record
+        return
+    assert record[0x0100].value == found
+    language = [element.value for element in record[0x0006].value]
+    assert language == [0x656E, 106, 0x0100]
+
+
+def test_the_peer_names_no_enhanced_retransmission_mode_among_its_l2cap_features(
+    air: Air,
+) -> None:
+    """Bumble's RFCOMM server is in basic mode and disconnects a device that asks for ERTM, as
+    Bluedroid does when the features name it."""
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo())
+    features = peer.device.l2cap_channel_manager.extended_features
+    ertm = l2cap.L2CAP_Information_Request.ExtendedFeatures.ENHANCED_RETRANSMISSION_MODE
+    assert ertm not in features and features
+    assert (
+        BluetoothDevice(
+            air, name="phone", address=PHONE
+        ).device.l2cap_channel_manager.extended_features
+        == features
+    )
 
 
 def test_an_authenticated_link_needs_no_encryption_for_the_channel(air: Air) -> None:

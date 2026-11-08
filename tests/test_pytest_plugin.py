@@ -31,6 +31,7 @@ from esp32tl.backends import esp32sim
 from esp32tl.backends.esp32sim import BackendError
 from esp32tl.boards import SdCardRoute
 from esp32tl.interfaces import RunEnded
+from esp32tl.interfaces.bluetooth import Bluetooth
 from esp32tl.interfaces.sd_card import SdCard
 from esp32tl.interfaces.wifi import Wifi
 
@@ -585,6 +586,24 @@ def test_runner_command_puts_the_tests_access_point_on_the_air(tmp_path: Path) -
         "--wifi-nearby",
         "ssid=cafe,chan=1,rssi=-60,secure=0",
     ]
+
+
+def test_runner_command_forwards_the_guests_hci_once_the_test_uses_bluetooth(
+    tmp_path: Path,
+) -> None:
+    build = fake_build(tmp_path)
+    app = esp32sim.load_app(str(tmp_path))
+    bluetooth = Bluetooth()
+    command = esp32sim.runner_command(
+        Path("/r/runner"), Path("/r/rom.elf"), app, 300, Path("/l.sock"), bluetooth=bluetooth
+    )
+    assert "--bt" not in command
+    bluetooth.use()
+    command = esp32sim.runner_command(
+        Path("/r/runner"), Path("/r/rom.elf"), app, 300, Path("/l.sock"), bluetooth=bluetooth
+    )
+    assert command[-2:] == ["--bt", str(build.resolve() / "app.elf")]
+    bluetooth.close()
 
 
 def test_runner_command_gives_the_chip_the_profile_s_psram(tmp_path: Path) -> None:
@@ -1233,7 +1252,7 @@ def test_the_lines_fixture_needs_a_profile_with_lines_and_a_drive_needs_power_on
     result.stdout.fnmatch_lines_random(
         [
             "*esp32sim: the board profile esp32-devkitc has no lines;"
-            " its interfaces are console, uart.gnss, sd_card, wifi",
+            " its interfaces are console, uart.gnss, sd_card, wifi, bluetooth",
             "*esp32sim: the test set up the level of modem.ri and the level of modem.pwrkey and"
             " never called board.power_on(): it ran no firmware",
         ]

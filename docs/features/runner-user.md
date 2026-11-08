@@ -302,8 +302,9 @@ What the guest sees:
   that sizes its ACL buffer to 491 bytes lets the host fill each packet.
 - A chip reset or a power-on reset loses the packets the host has not read yet.
 
-The harness's side, the controller on the air of its Bluetooth peers, is not in esp32tl yet
-(#34); running it by hand needs a peer that speaks the two messages and is a controller.
+The harness's side is the `bt` fixture, which passes `--bt` and puts the guest's controller on the
+air of the test's Bluetooth devices ([Bluetooth peer](bluetooth-peer-user.md#in-front-of-the-firmware-the-bt-fixture));
+running the runner by hand needs a peer that speaks the two messages and is a controller.
 
 The command line refuses `--bt` without `--board`, with exit code 2. An ELF esp32sim refuses, one
 that is not an ELF or lacks a symbol the hooks need, ends the run before it starts with exit code

@@ -333,6 +333,6 @@ def test_the_slot_used_out_of_order_fails_the_test(
             " number of 512 KiB units",
             "*SourceError: sd_card: */ro.img cannot be read and written: the card writes into it",
             "*esp32sim: the board profile gps-alarm-clock has no sd_card; its interfaces are"
-            " console, uart.gnss, lines.alarm, wifi",
+            " console, uart.gnss, lines.alarm, wifi, bluetooth",
         ]
     )

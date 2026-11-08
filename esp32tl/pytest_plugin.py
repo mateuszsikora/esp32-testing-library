@@ -1,7 +1,7 @@
 """The esp32tl pytest plugin, loaded through the `pytest11` entry point.
 
-It provides the `board`, `console`, `gnss`, `modem`, `broker`, `lines`, `sd_card`, `card_cache` and
-`wifi` fixtures on top of pytest-embedded's classes (plan §3); `bt` comes with a later milestone.
+It provides the `board`, `console`, `gnss`, `modem`, `broker`, `lines`, `sd_card`, `card_cache`,
+`wifi` and `bt` fixtures on top of pytest-embedded's classes (plan §3).
 The board runs a board profile, `esp32-devkitc` unless the `board_profile` marker names another
 (plan §4.5).
 
@@ -53,6 +53,7 @@ from esp32tl.backends import SERVICES
 from esp32tl.backends.esp32sim import BackendError, Esp32Sim, ended_while_waiting
 from esp32tl.backends.serial import Serial, check_artifact
 from esp32tl.boards import DEFAULT_PROFILE, BoardProfile, ProfileError
+from esp32tl.interfaces.bluetooth import Bluetooth
 from esp32tl.interfaces.board import Board as Board
 from esp32tl.interfaces.card_cache import CARD_CACHE_MIB, CardCache
 from esp32tl.interfaces.console import Console
@@ -636,3 +637,14 @@ def wifi(board: Board) -> Wifi:
     it; `wifi.access_point_off()` and `wifi.access_point_on()` switch it at the board's current
     instant."""
     return board.wifi
+
+
+@pytest.fixture
+def bt(board: Board) -> Bluetooth:
+    """The chip's Bluetooth: its controller on `bt.air`, on the board's clock, where the test puts
+    the devices around the board, as `SppPeer(bt.air, ...)` and `BluetoothDevice(bt.air, ...)`,
+    and switches them at the board's current instant. The run forwards the firmware's HCI to it."""
+    try:
+        return board.bluetooth
+    except BackendError as error:
+        backend_failed(error, board.name)

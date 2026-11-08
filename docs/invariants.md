@@ -521,13 +521,19 @@ that references to its number keep their meaning.
     `tests/test_spp_peer.py::test_a_source_that_gets_its_answer_wrong_fails_the_air_naming_the_peer`,
     `tests/test_spp_peer.py::test_two_runs_cross_the_channel_at_the_same_instants`
 - **71.** The SPP channel opens to one device at a time, and, unless the peer is made with
-    `secure=False`, only on a link that device authenticated; two that ask at one instant get it
-    one.
+    `secure=False`, only on a link that device authenticated by the time it opens the channel, at
+    its SABM, also when it authenticates after asking for it, at its PN; one refused at the SABM
+    may authenticate and open it, and a refusal lets the channel go. Two that ask at one instant
+    get it one.
     `tests/test_spp_peer.py::test_the_channel_opens_to_one_device_at_a_time`,
     `tests/test_spp_peer.py::test_two_devices_that_ask_for_the_channel_at_one_instant_get_it_one`,
     `tests/test_spp_peer.py::test_the_channel_opens_only_on_a_link_the_device_authenticated`,
     `tests/test_spp_peer.py::test_an_authenticated_link_needs_no_encryption_for_the_channel`,
-    `tests/test_spp_peer.py::test_a_peer_that_is_not_secure_opens_the_channel_on_any_link`
+    `tests/test_spp_peer.py::test_a_peer_that_is_not_secure_opens_the_channel_on_any_link`,
+    `tests/test_spp_peer.py::test_the_channel_opens_when_the_device_authenticates_between_pn_and_sabm`,
+    `tests/test_spp_peer.py::test_a_device_refused_at_sabm_may_authenticate_and_open_the_channel`,
+    `tests/test_bluetooth_guest.py::test_bt_spp_initiator_s_session_finds_pairs_and_opens_the_channel`,
+    `tests/test_bluetooth_guest.py::test_the_channel_is_refused_at_sabm_on_a_link_that_never_authenticated`
 - **162.** A peer that leaves, switched off or out of range, sends nothing: the device's link falls
     with `CONNECTION_TIMEOUT` exactly at the supervision timeout after it left, a page ends in
     `PAGE_TIMEOUT` exactly at the page timeout, and an inquiry does not find it until it returns.
@@ -697,6 +703,56 @@ that references to its number keep their meaning.
     `tests/test_spp_peer.py::test_an_acceptance_as_the_central_after_the_page_ended_is_refused`,
     `tests/test_spp_peer.py::test_a_host_that_accepted_as_the_central_a_pager_that_left_hears_of_it_when_its_end_falls`,
     `tests/test_spp_peer.py::test_an_acceptance_as_the_central_lost_during_this_sides_own_page_ends_with_that_page`
+- **209.** The firmware's controller reports three pages of features, 0 to 2, the fourth refused,
+    page 0 with its BR/EDR features and without LE, and an ACL buffer of 491 bytes. Every packet it
+    sends its host is 1 to 496 bytes; ACL data from a peer is cut to 491 bytes, and to the host's
+    `Host_Buffer_Size` when that is less, and reaches the host whole.
+    `tests/test_bluetooth_guest.py::test_the_host_powers_on_through_the_link_and_reads_three_pages_of_features`,
+    `tests/test_bluetooth_guest.py::test_bt_spp_initiator_s_session_finds_pairs_and_opens_the_channel`,
+    `tests/test_bluetooth_guest.py::test_acl_data_for_the_host_is_cut_to_its_buffer_size`,
+    `tests/test_bluetooth_guest.py::test_a_packet_longer_than_the_vhci_carries_is_an_error`
+- **210.** A controller answers every command: one it does not know with
+    `UNKNOWN_HCI_COMMAND_ERROR` in `Command_Status` for an asynchronous command and in
+    `Command_Complete` for any other, kept with its time; Bluedroid's settings that change nothing on
+    the link succeed, and one that would filter events or write an inquiry access code outside the
+    range is refused. `Host_Number_Of_Completed_Packets` gets no event. An inquiry is answered only by
+    a device that scans for its access code. The commands about a link answer with the link, the
+    peer's version included, and refuse a handle that is no link.
+    `tests/test_bluetooth_guest.py::test_an_unknown_command_is_answered_in_the_event_the_host_waits_for_and_kept`,
+    `tests/test_bluetooth_guest.py::test_a_setting_bluedroid_writes_succeeds`,
+    `tests/test_bluetooth_guest.py::test_a_setting_that_would_change_what_is_not_modelled_is_refused`,
+    `tests/test_bluetooth_guest.py::test_host_number_of_completed_packets_gets_no_event`,
+    `tests/test_bluetooth_guest.py::test_an_inquiry_finds_only_devices_scanning_for_its_access_code`,
+    `tests/test_bluetooth_guest.py::test_the_commands_about_a_link_are_answered_with_the_peer_s_version`,
+    `tests/test_bluetooth_guest.py::test_a_command_about_no_link_is_refused_with_unknown_connection_identifier`
+- **211.** `HCI_Reset`, a chip reset and the board's supply going off leave the controller holding
+    nothing and its host told nothing: a page under way ends with no `Connection_Complete`, the
+    answers its host owed are gone, so the next page connects, and the host's settings are back at
+    their defaults. A peer's end of a link falls at its supervision timeout, and until then the
+    firmware's page to it ends in `PAGE_TIMEOUT`.
+    `tests/test_bluetooth_guest.py::test_a_reset_in_the_middle_of_a_link_tells_the_host_nothing_and_the_peer_s_end_falls`,
+    `tests/test_bluetooth_guest.py::test_a_reset_in_the_middle_of_a_page_ends_it_with_no_word_and_no_timer`,
+    `tests/test_bluetooth_guest.py::test_a_reset_clears_the_answers_the_host_owed_so_the_next_page_connects`,
+    `tests/test_bluetooth_guest.py::test_a_reset_brings_back_the_defaults`,
+    `tests/test_bluetooth_guest.py::test_the_supply_and_a_chip_reset_take_the_controller_off_the_air_and_back`
+- **212.** The air of the `bt` fixture is on the board's clock: only the board's link moves it, and
+    `advance`, `wait` and `run` refuse. What the firmware's controller makes goes out exactly
+    `LATENCY_NS` after the instant it made it, and an output due before its turn fails the link. Two
+    runs cross the same packets at the same instants.
+    `tests/test_bluetooth_guest.py::test_the_air_on_the_board_s_clock_moves_only_with_the_link`,
+    `tests/test_bluetooth_guest.py::test_every_answer_comes_at_the_latency_and_no_turn_waits_longer`,
+    `tests/test_bluetooth_guest.py::test_an_output_due_before_its_turn_fails_the_link`,
+    `tests/test_bluetooth_guest.py::test_two_runs_cross_the_same_packets_at_the_same_instants`
+- **213.** The SPP peer's SDP record names its service, `Serial Port` unless given another or none,
+    and no device on the air names Enhanced Retransmission Mode among its L2CAP features.
+    `tests/test_spp_peer.py::test_the_sdp_record_names_the_service`,
+    `tests/test_spp_peer.py::test_the_peer_names_no_enhanced_retransmission_mode_among_its_l2cap_features`
+- **214.** The runner gets `--bt` with the application's ELF only once the test has used the chip's
+    Bluetooth; an interface never used asks for nothing and bounds no turn, and the `bt` fixture
+    skips on serial.
+    `tests/test_pytest_plugin.py::test_runner_command_forwards_the_guests_hci_once_the_test_uses_bluetooth`,
+    `tests/test_bluetooth_guest.py::test_an_interface_the_test_never_used_asks_for_nothing_and_bounds_no_turn`,
+    `tests/test_serial_backend.py::test_serial_capabilities_skip_at_the_call`
 
 ## The esp32tl command
 

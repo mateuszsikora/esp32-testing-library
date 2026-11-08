@@ -649,6 +649,10 @@ the controller for the ESP32's side is still #34's to choose.
 board socket, as `hci_tx` and `hci_rx`, so that the guest's controller is the harness's, on the
 board's clock
 ([decision](decisions/runner.md#the-guests-hci-goes-over-the-board-socket-on-the-boards-clock)).
+The harness's side followed: the `bt` fixture, the firmware's controller on the air of the test's
+devices, on the board's clock
+([decision](decisions/harness.md#the-firmwares-controller-is-a-controller-of-the-air-with-the-guests-features-and-buffer)).
+The btsnoop tap and the validation with `bt_spp_initiator` are still to come.
 
 ### M9. Deep sleep and time skip
 

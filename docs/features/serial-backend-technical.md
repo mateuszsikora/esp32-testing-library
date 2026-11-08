@@ -106,6 +106,7 @@ run log: the tap, power-on and wait steps, and received console lines.
 | `uart(role)` | Profile's UART object, a `Gnss` for `gnss` or `Modem` for `modem`; unsupported source/tap requests skip, and so does `real(port)`: `_asked` skips a `real` source on a UART before the port is opened, since the declaration's `real` is the device wired to the board |
 | `lines`, `sd_card` | Skip GPIO access, or return the slot whose model insertion skips; missing interfaces fail. `card_cache` works, on that slot's temporary directory |
 | `wifi` | A `Wifi` made on first access with the backend's `asked`, on no link: `access_point` and `nearby` ask for a `model` source on `wifi`, which the declaration gives serial only as `real`, so they skip |
+| `bluetooth` | `_get_bluetooth()` asks `_asked` for `Request("bluetooth", source="model")`, which the declaration does not give serial, so it skips; were it given, `BackendError: serial: the chip's Bluetooth has no interface on this backend` |
 | `nvs(namespaces, partition="nvs")` | Skip: hardware NVS replacement is unsupported |
 | `flash()` | Skip: reading a real board's flash is unsupported ([decision](../decisions/harness.md#a-real-board-does-not-read-its-flash-the-test-skips)) |
 | `tap_console(path)` | Console `Tap` via `Uart.tap`; before power-on, with path collision checks |

@@ -109,6 +109,21 @@ to the simulated network behind the access point, on the test's clock, and that 
 back ([network](network-user.md)). Without an access point the runner gets neither flag and the
 station finds nothing to join.
 
+### Bluetooth
+
+The chip's Bluetooth is on the link once the test asks for it with the `bt` fixture
+([Bluetooth peer](bluetooth-peer-user.md#in-front-of-the-firmware-the-bt-fixture)), which it must
+do before `board.power_on()`: the backend passes the runner `--bt` with the application's ELF,
+the first `.elf` file in the build directory, which `IdfApp` takes for it (`IdfApp.elf_file`)
+([runner](runner-user.md#give-the-guest-a-bluetooth-controller)), and the link carries every H4
+packet the firmware's Bluetooth host sends to the firmware's controller in the harness, on the
+test's clock, and the controller's packets back, 10 µs after the instant each was made. Without
+`bt` the runner gets no `--bt`, and the link carries no Bluetooth. `board.power_off()` takes the
+controller off the air, as a device switched off, and `board.power_on()` puts it back; a reset of
+the chip, `board.reset()` or the firmware's own, restarts it. Neither tells the firmware's host
+anything: it starts again with the chip. A build with no ELF fails the `bt` fixture
+([below](#when-the-backend-cannot-start)).
+
 A test that gives a route a [real source](real-source-user.md), as `gnss.real(port)` does, puts the
 whole run on the wall clock: the runner starts with `--realtime`, every recording says `clock: wall`,
 and the board's time costs its own length in wall time. The test still holds the clock, as above. A
@@ -234,12 +249,18 @@ profile, what the test put at its far end, the bytes that went in and came out, 
 was tapped into. With an access point, the statistics have a `Wi-Fi:` line, the frames the
 station sent and received, and the report ends with the access point
 (`wifi: access point 'myssid', channel 6, WPA2-PSK`), a line per network around and the network's
-events (`network events:`, as for the modem's network). A test that failed gets the run on the
+events (`network events:`, as for the modem's network). With `bt`, it then has the Bluetooth's
+lines: `bluetooth: the guest's controller at 24:6F:28:00:11:24; N packets (B bytes) from its host,
+M packets (B bytes) to it`, the commands the controller did not know under `unknown commands (N):`,
+and the devices on the air, `on the air: ESP_SPP_ACCEPTOR (00:00:00:00:5B:01)`
+([Bluetooth peer](bluetooth-peer-user.md#in-front-of-the-firmware-the-bt-fixture)). A test that
+failed gets the run on the
 board's clock after it
 ([the run on the board's clock](run-report-user.md#the-run-on-the-boards-clock)). The same data,
 but the run, is in the test's `esp32sim_link` user property, a JSON string with `board`, `watch`,
-`warnings`, `stats`, `error`, `routes`, `sd_card` and `wifi`, which `--junitxml` writes as a
-`<property>`; `wifi` is `null` without an access point, and `sd_card`, without a slot, else the
+`warnings`, `stats`, `error`, `routes`, `sd_card`, `wifi` and `bluetooth`, which `--junitxml`
+writes as a `<property>`; `wifi` is `null` without an access point, `bluetooth` without `bt`, and
+`sd_card`, without a slot, else the
 card's `image` and its `faults`. With a slot the report also names the card and lists each fault
 rule the test gave with what it did.
 With a [real source](real-source-user.md#what-the-report-says), the statistics have a line for the
@@ -260,6 +281,7 @@ its body instead, as `BackendError: cannot ...`, without the prefix:
 | `{build} is not a finished build, missing {files}` | Finish the build; `{files}` is a comma-separated list |
 | `no runner at {path}: run make setup, or set ESP32TL_RUNNER` | Build the runner, or point `ESP32TL_RUNNER` at an executable one |
 | `no ROM ELF at {path}: run make setup, or set ESP32TL_ROM` | Fetch the ROM ELF, or point `ESP32TL_ROM` at it |
+| `bluetooth: {build} holds no ELF of the application, whose symbols the runner's --bt needs` | At the `bt` fixture: the build directory has no `.elf` file; build the app again, or keep its ELF beside the image |
 | `cannot listen on {path}: {reason}` | At `board.power_on()`, which raises `BackendError` in the test body: the backend cannot bind the link's socket in a new directory under the system's temporary directory or `/tmp`; check that it is writable |
 | `cannot start {runner}: {reason}` | At `board.power_on()`, which raises `BackendError` in the test body: the runner exists but the system cannot run it, for example `Exec format error` |
 

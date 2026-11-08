@@ -96,14 +96,15 @@ class BoardProfile:
     @property
     def interfaces(self) -> list[str]:
         """`console`, which every board has, then `uart.<role>` and `lines.<role>`, as the
-        profile lists them, then `sd_card` when the board has a slot, then `wifi`, which every
-        classic ESP32 has."""
+        profile lists them, then `sd_card` when the board has a slot, then `wifi` and
+        `bluetooth`, which every classic ESP32 has."""
         return [
             "console",
             *(f"uart.{role}" for role in self.uart),
             *(f"lines.{role}" for role in self.lines),
             *(["sd_card"] if self.sd_card is not None else []),
             "wifi",
+            "bluetooth",
         ]
 
 

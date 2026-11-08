@@ -1013,8 +1013,9 @@ the harness's network: a fetch, a rejoin after the access point goes off and com
 point, a wrong passphrase. It checks no runner line either; the `Wi-Fi` lines on stderr, the
 `--wifi-nearby` networks in a real scan, frames dropped by the relay or the receive ring, and an
 access point that leaves during a chip reset are not covered. No test runs the real binary with
-`--bt`: the harness's controller is not in esp32tl yet, and at esp32sim's pin the Classic firmware
-it is for cannot enable its controller (above). The `Bluetooth controller` line on stderr is not
+`--bt`: at esp32sim's pin the Classic firmware the harness's controller (the `bt` fixture,
+[bluetooth-peer-technical.md](bluetooth-peer-technical.md)) is for cannot enable its controller
+(above). The `Bluetooth controller` line on stderr is not
 covered.
 
 ## See also
