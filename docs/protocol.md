@@ -120,6 +120,11 @@ after `Interface.arrive(now)` has let each interface take in what came due by th
 it polls the interfaces, and takes the turn only once it returns. The `esp32sim` backend's hold is the test's
 clock, which returns once the test waits, with the latest time of the next turn, so emulated time
 moves only while the test waits; `None` answers the turn with `stop`, as at the end of the test.
+A hold may also return a `RunTo`, the latest time of the next turn and a `latency`, which the link
+folds into the `wait`'s `latency` with the interfaces' (5.13): the test's clock does so while the
+test waits for a wake from deep sleep, with 1 ms, so that the turn comes right after the `reset`
+(5.5) without a `quiet_until` step in the sleep. The hold answers no event, so its `latency` is a
+promise nothing can break; the messages on the wire are those of version 1.
 The wait is wall time, bounded by `--peer-timeout` (section 9), which the backend sets to 0 so
 that a test body can take as long as it does.
 

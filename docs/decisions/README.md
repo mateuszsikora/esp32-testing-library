@@ -256,6 +256,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [A snapshot's errors are ValueError, not BackendError](harness.md#a-snapshots-errors-are-valueerror-not-backenderror) | `harness.md` | decided (#131) |
 | [The backend comparison compares outcomes of one run on each backend](harness.md#the-backend-comparison-compares-outcomes-of-one-run-on-each-backend) | `harness.md` | decided (#26) |
 | [A UART takes a model of the test's as the four-method Source, through Uart.model](harness.md#a-uart-takes-a-model-of-the-tests-as-the-four-method-source-through-uartmodel) | `harness.md` | decided (#161) |
+| [The wait for a wake from deep sleep is a board call that asks for a turn after each event](harness.md#the-wait-for-a-wake-from-deep-sleep-is-a-board-call-that-asks-for-a-turn-after-each-event) | `harness.md` | decided (#36) |
 
 ## The runner crate and esp32sim
 

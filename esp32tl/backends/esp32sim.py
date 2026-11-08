@@ -69,7 +69,7 @@ from esp32tl.boards import BoardProfile, capabilities
 from esp32tl.boards.capabilities import CapabilityError, Request
 from esp32tl.flash import FlashSnapshot, Namespaces, Partition
 from esp32tl.interfaces import BoardOff, NeverHappened, RunEnded, SourceError
-from esp32tl.interfaces.board import POWERON_RESET, Board, Boot
+from esp32tl.interfaces.board import DEEPSLEEP_RESET, POWERON_RESET, Board, Boot
 from esp32tl.interfaces.console import ConsoleLines
 from esp32tl.interfaces.gnss import Gnss
 from esp32tl.interfaces.lines import Lines
@@ -112,6 +112,11 @@ HELD_MAX_SECONDS = 86400
 # The world's time at power-on, unless the test gives another: runs repeat whatever the host's
 # clock says.
 POWER_ON_UTC = DEFAULT_UTC
+
+# How soon after the chip's reset `wait_for_wake` returns, 1 ms of the board's time: the longest
+# slice the runner runs while the board is on anyway, so asking for it adds no slice (protocol
+# 6.1), and a sleep without events takes no turn at all.
+WAKE_LATENCY_NS = 1_000_000
 
 # How long, in wall seconds, the runner has after SIGTERM to send its stats, close the link and
 # exit, before SIGKILL (protocol §9). It needs at most one emulated millisecond.
@@ -782,6 +787,43 @@ class Esp32Sim(Board):
         name = getattr(condition, "__qualname__", None)
         description = f"the condition {name}" if name else repr(condition)
         return self._waited(condition, within, description, "board.wait_until: within")
+
+    def wait_for_wake(self, *, within: Duration) -> Boot:
+        """Lets the board run to the chip's next boot, for at most `within` of its time, and
+        returns it; the boot must be a wake from deep sleep. Unlike `wait_until`, it asks no
+        condition every 100 ms: the run goes to the end of `within` at once, and the link takes a
+        turn at most `WAKE_LATENCY_NS` after each event, the reset among them, so a deep sleep
+        costs no turns. Raises `NeverHappened` when `within` runs out, `RunEnded` when the run
+        ends first, and `AssertionError` for a boot through another reset."""
+        clock = self._on()
+        if not self._supply:
+            raise BoardOff("the board is off: board.wait_for_wake() waits for a board that is on")
+        ns = nanoseconds(within, "board.wait_for_wake: within")
+        known = len(self.link.resets)
+
+        def booted() -> Boot | None:
+            return self.boots[known + 1] if len(self.link.resets) > known else None
+
+        description = "a wake from deep sleep"
+        self.log.test(clock.now, f"board.wait_for_wake(), up to {seconds(ns)}")
+        try:
+            boot = clock.wait_for_event(booted, ns, description, WAKE_LATENCY_NS)
+        except NeverHappened:
+            self.log.test(clock.now, f"{description}: did not happen within {seconds(ns)}")
+            raise
+        except RunEnded:
+            self.log.test(clock.now, f"{description}: the run ended first")
+            raise
+        if boot.cause != DEEPSLEEP_RESET:
+            self.log.test(
+                clock.now, f"{description}: boot {boot.number} is {boot.reason}, not a wake"
+            )
+            raise AssertionError(
+                f"board.wait_for_wake: boot {boot.number} at {boot.at} is {boot.reason} (reset"
+                f" cause {boot.cause}), not a wake from deep sleep (DEEPSLEEP_RESET)"
+            )
+        self.log.test(clock.now, f"{description}: boot {boot.number} at {boot.at}")
+        return boot
 
     def wait_on_clock(
         self, condition: Callable[[], T | None], within: Duration, description: str

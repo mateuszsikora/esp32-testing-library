@@ -252,6 +252,9 @@ class Serial(Board):
         description = f"the condition {name}" if name else repr(condition)
         return self._waited(condition, within, description, "board.wait_until: within")
 
+    def wait_for_wake(self, *, within: Duration) -> Boot:
+        self._skip("serial: the backend does not see the chip's resets")
+
     def wait_on_clock(
         self, condition: Callable[[], T | None], within: Duration, description: str
     ) -> T:

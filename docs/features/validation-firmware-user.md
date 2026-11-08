@@ -42,6 +42,7 @@ whatever `FIRMWARE_OUT` the shell exports, because the tests read the images the
 | `persistence` | `firmware/persistence`: counts its boots in NVS, RTC memory, RAM and on an SD card, prints them with its reset reason, and restarts itself once ([below](#persistence)) |
 | `ota_state` | `firmware/ota_state`: copies its app to the next OTA slot, boots it, marks it valid, then does it again and rolls back, reporting its state at each step ([below](#ota_state)) |
 | `timer_wake` | `firmware/timer_wake`: sleeps in deep sleep twice with a 2 s timer wake, counting its boots in RTC memory ([below](#timer_wake)) |
+| `deep_sleep` | ESP-IDF's `examples/system/deep_sleep`, unmodified, with its own `sdkconfig.defaults`, for target `esp32`: sleeps 20 s at a time with a timer wake, and reports after each wake how long it slept ([below](#deep_sleep)) |
 
 ## `modem_at`
 
@@ -176,6 +177,35 @@ timer_wake: boot=2 rom=5 wake=4
 first two boots it prints `timer_wake: sleeping 2000 ms`, arms a 2 s timer wake and calls
 `esp_deep_sleep_start()`; on the third it prints `timer_wake: done` and returns.
 `tests/test_timer_wake.py` runs it.
+
+## `deep_sleep`
+
+ESP-IDF's example as it is, with the `sdkconfig.defaults` it ships: the CPU at 80 MHz, the RTC
+slow clock on its internal RC oscillator, and the bootloader skipping the image's validation on a
+wake. Build it with `firmware/build.sh deep_sleep`; `make firmware` and `make test` include it.
+It arms three wake sources, a 20 s timer, EXT1 on GPIO 2 and 4, and touch pads 8 and 9, then
+sleeps a second after `app_main`:
+
+```text
+Enabling timer wakeup, 20s
+Enabling EXT1 wakeup on pins GPIO2, GPIO4
+Touch pad #8 average: 1000, wakeup threshold set to 900.
+Touch pad #9 average: 1000, wakeup threshold set to 900.
+Enabling touch pad wakeup
+Not a deep sleep reset
+Entering deep sleep
+```
+
+On esp32sim only the timer wakes it, 20 s after `Entering deep sleep`, through a
+`DEEPSLEEP_RESET`; after the boot it prints the sleep it measured on its RTC, from its clock
+before the sleep to its clock after the wake, and sleeps again:
+
+```text
+Wake up from timer. Time spent in deep sleep: 20142ms
+```
+
+`tests/test_deep_sleep.py` runs it through two sleeps with
+[`board.wait_for_wake`](pytest-plugin-user.md#waking-from-deep-sleep).
 
 ## `sdspi`
 
@@ -322,7 +352,7 @@ every image those are:
 | `0x1000` | `bootloader/bootloader.bin` |
 | `0x8000` | `partition_table/partition-table.bin` |
 | `0xd000` | `ota_data_initial.bin`, for `ota_state` only |
-| `0x10000` | `IMAGE.bin` (`hello_world.bin`, `nmea_reader.bin`, `gpio_echo.bin`, `sd_remount.bin`, `modem_at.bin`, `modem_recovery.bin`, `nvs_reader.bin`, `pppos_client.bin`, `mqtt_session.bin`, `http_request.bin`, `persistence.bin`, `ota_state.bin`, `timer_wake.bin`), `sd_card.bin` for `sdspi` |
+| `0x10000` | `IMAGE.bin` (`hello_world.bin`, `nmea_reader.bin`, `gpio_echo.bin`, `sd_remount.bin`, `modem_at.bin`, `modem_recovery.bin`, `nvs_reader.bin`, `pppos_client.bin`, `mqtt_session.bin`, `http_request.bin`, `persistence.bin`, `ota_state.bin`, `timer_wake.bin`, `deep_sleep.bin`), `sd_card.bin` for `sdspi` |
 
 and the ELF is `IMAGE.elf`, `sd_card.elf` for `sdspi`: the files take the project's name, and
 the `sdspi` example's project is called `sd_card`. Two more files say how the build was made:
@@ -395,7 +425,7 @@ run `make firmware`.
 `firmware/build.sh` exits 1 with one of these on stderr, before writing anything, or with the exit
 code of `idf.py` when the build itself fails:
 
-- `firmware/build.sh: unknown image 'NAME'; the images are: hello_world nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request persistence ota_state timer_wake`
+- `firmware/build.sh: unknown image 'NAME'; the images are: hello_world nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request persistence ota_state timer_wake deep_sleep`
 - `firmware/build.sh: needs Docker, or IDF_LOCAL=1 to build with a local ESP-IDF`
 - `firmware/build.sh: the Docker daemon is not reachable ('docker info' failed); is Docker running?`
 - `firmware/build.sh: IDF_LOCAL=1 needs ESP-IDF in the environment: source $IDF_PATH/export.sh first`

@@ -21,9 +21,9 @@ from esp32tl.interfaces.console import Console, ConsoleLines, Line
 from esp32tl.interfaces.lines import Lines
 from esp32tl.interfaces.modem import Modem as ModemRoute
 from esp32tl.interfaces.wifi import Wifi
-from esp32tl.link.boardlink import BoardLink, Interface, Wire
+from esp32tl.link.boardlink import BoardLink, Interface, RunTo, Wire
 from esp32tl.link.protocol import Console as ConsoleMessage
-from esp32tl.link.protocol import FlashDump, FlashDumpAck, RunnerHello, Stop, Sync, Wait
+from esp32tl.link.protocol import FlashDump, FlashDumpAck, Reset, RunnerHello, Stop, Sync, Wait
 from esp32tl.net.ethernet import GATEWAY_MAC
 from esp32tl.net.mqtt import Broker, Publication
 from esp32tl.units import Duration, minutes, ms
@@ -38,10 +38,11 @@ T = TypeVar("T")
 
 
 class Run:
-    """A run on the test's clock: `console`, `(t, bytes)` printed at their times, and a runner
-    thread that ends the run at `end` ns, as --max-seconds does, then ends the clock as the
-    backend does once the runner has exited, with the end's time when `stats` says it.
-    `syncs` are the block points it took turns at."""
+    """A run on the test's clock: `console`, `(t, bytes)` printed at their times, `resets`,
+    `(t, cause)`, the chip's resets, each an event, and a runner thread that ends the run at
+    `end` ns, as --max-seconds does, then ends the clock as the backend does once the runner has
+    exited, with the end's time when `stats` says it. `syncs` are the block points it took turns
+    at, and `latencies` the `latency` of each `wait`."""
 
     def __init__(
         self,
@@ -51,12 +52,16 @@ class Run:
         *,
         clock: HeldClock | None = None,
         interfaces: Sequence[Interface] = (),
+        resets: Sequence[tuple[int, int]] = (),
     ) -> None:
         self.clock = clock or HeldClock()
         self.console_output = bytearray()
         self.console_lines = ConsoleLines()
         self.link = BoardLink("esp32-devkitc", interfaces, hold=self.clock, console=self._console)
         self.pending = list(console)
+        self.resets = list(resets)
+        self.seq = 0
+        self.latencies: list[int | None] = []
         self.end = end
         self.stats = stats
         self.syncs: list[int] = []
@@ -80,7 +85,11 @@ class Run:
                 self.stopped = True
                 break
             assert isinstance(reply, Wait)
+            self.latencies.append(reply.latency)
             bound = reply.quiet_until if reply.quiet_until is not None else self.end
+            # A reset is an event: the block point is at most `latency` after it (rule 1).
+            if self.resets and reply.latency is not None:
+                bound = min(bound, self.resets[0][0] + reply.latency)
             if bound >= self.end:
                 self._print(self.end)
                 break
@@ -91,7 +100,16 @@ class Run:
     def _print(self, until: int) -> None:
         while self.pending and self.pending[0][0] <= until:
             t, data = self.pending.pop(0)
+            while self.resets and self.resets[0][0] <= t:
+                self._reset()
             self.link.receive(ConsoleMessage(t, data))
+        while self.resets and self.resets[0][0] <= until:
+            self._reset()
+
+    def _reset(self) -> None:
+        t, cause = self.resets.pop(0)
+        self.seq += 1
+        self.link.receive(Reset(self.seq, t, cause))
 
     # What the console needs of the board.
 
@@ -356,6 +374,43 @@ def test_a_service_that_raises_on_a_datagram_from_the_path_names_the_arrival() -
         run.clock.wait(S)
     assert run.link.error == "wifi.arrive raised RuntimeError: a test's bug"
     run.runner.join(5)
+
+
+def test_a_wait_for_an_event_takes_a_turn_only_at_the_event() -> None:
+    # A deep sleep of an hour: wait_until would look every 100 ms, 36 000 turns.
+    run = Run(resets=[(3600 * S, 5)], end=2 * 3600 * S)
+
+    def reset() -> int | None:
+        return run.link.resets[0].t if run.link.resets else None
+
+    assert run.clock.wait_for_event(reset, 3 * 3600 * S, "a reset", MS) == 3600 * S
+    # Turn 0, then the turn the reset's latency brings, and no other.
+    assert run.syncs == [0, 3600 * S + MS] and run.clock.now == 3600 * S + MS
+    assert run.latencies == [MS]
+
+
+def test_the_latency_of_a_wait_for_an_event_lasts_for_that_wait_only() -> None:
+    run = Run(resets=[(2 * S, 5)])
+    run.clock.wait_for_event(lambda: run.link.resets, 10 * S, "a reset", MS)
+    run.clock.wait(S)
+    run.clock.wait_until(lambda: run.clock.now >= 4 * S, 10 * S, "4 s")
+    assert run.latencies[0] == MS and run.latencies[1:] == [None] * (len(run.latencies) - 1)
+
+
+def test_a_wait_for_an_event_that_never_comes_raises_never_happened_at_its_end() -> None:
+    run = Run()
+    with pytest.raises(NeverHappened) as raised:
+        run.clock.wait_for_event(lambda: run.link.resets, 600 * S, "a reset", MS)
+    assert str(raised.value) == (
+        "a reset did not happen within 600 s: waited from 0 s to 600 s of the board's time"
+    )
+    assert run.syncs == [0, 600 * S]
+
+
+def test_a_wait_for_an_event_the_run_ends_before_raises_run_ended() -> None:
+    run = Run(end=60 * S)
+    with pytest.raises(RunEnded, match="the run ended at 60 s while the test waited for a reset"):
+        run.clock.wait_for_event(lambda: run.link.resets, 600 * S, "a reset", MS)
 
 
 def test_a_condition_that_never_holds_raises_never_happened_naming_it_and_the_window() -> None:
@@ -652,7 +707,7 @@ def test_a_flash_dump_the_end_of_the_run_cuts_short_returns() -> None:
 
 def test_the_test_is_over_while_the_runner_holds_a_dump_unanswered() -> None:
     clock = HeldClock()
-    results: list[int | FlashDump | None] = []
+    results: list[int | RunTo | FlashDump | None] = []
     link = threading.Thread(target=lambda: results.append(clock.turn(0)))
     link.start()
     answer: list[FlashDumpAck | None] = [FlashDumpAck(99)]

@@ -186,15 +186,18 @@ reset: right after `board.reset()`, or the `power_on()` after a `power_off()`, `
 the boot before it, until the test waits.
 
 **The test's clock.** `HeldClock` is the link's `Hold`: `BoardLink` calls `turn(now)` at the start
-of every turn until the link fails, before it polls the interfaces, from the link thread; after
-an error the link answers the next `sync` with `stop` without asking. `turn` records `now`, counts
-the turn, sets `_held`, wakes the test, and waits on a condition variable until the test sets
-`_until`, how far the run may go, or the clock is stopped or ended. It returns `_until`, which the
-link adds to the turn's bounds as `the test's clock`, or `None`, on which the link answers the
-turn with `stop`. So the runner stands still in every turn for as long as the test does not wait.
-`turn` may also return `FlashDump`, when the test has asked for the flash: the link sends it, and
-gives the answer to `dumped(ack)`, which holds the same turn on, and neither moves the board's time
-nor counts a turn. The test's side runs in the test's thread:
+of every turn until the link fails, before it polls the interfaces, from the link thread; after an
+error the link answers the next `sync` with `stop` without asking. `turn` records `now`, counts the
+turn, sets `_held`, wakes the test, and waits on a condition variable until the test sets `_until`,
+how far the run may go, or the clock is stopped or ended. It returns `_until`, which the link adds
+to the turn's bounds as `the test's clock`, or `None`, on which the link answers the turn with
+`stop`. When the wait has also set `_latency`, it returns `RunTo(_until, _latency)`
+(`esp32tl/link/boardlink.py`) instead, and the link folds `_latency` into the turn's `latency` with
+the interfaces' ([protocol §4](../protocol.md#4-session)); `turn` clears both. So the runner stands
+still in every turn for as long as the test does not wait. `turn` may also return `FlashDump`, when
+the test has asked for the flash: the link sends it, and gives the answer to `dumped(ack)`, which
+holds the same turn on, and neither moves the board's time nor counts a turn. The test's side runs
+in the test's thread:
 
 - `wait(duration)` first waits until the link is held at a turn (from power-on to the runner's
   first `sync` the runner loads its images), then, until `now` reaches `now + duration`, sets
@@ -207,6 +210,13 @@ nor counts a turn. The test's side runs in the test's thread:
   true value, and at the deadline raises `NeverHappened`. When the run ends while it waits, or has
   ended before, it asks the condition once more and raises the `RunEnded` unless it holds. An exception from the
   condition propagates to the test, and the link stays held.
+- `wait_for_event(condition, within, description, latency)` is `wait_until` without the steps: it
+  asks `condition()` at once, then sets `_until` to the deadline and `_latency` to `latency`, and
+  asks it again at every turn the link takes, until it holds or the deadline is reached, with the
+  same `NeverHappened` and `RunEnded`. The runner sets the block point at most `latency` after
+  each event (protocol §6, rule 1), so a turn comes soon after a `reset`, and a stretch without
+  events, as a deep sleep, takes no turn at all. Only the waits of `wait_for_event` carry the
+  latency: every other `wait` the link sends has the interfaces' alone.
 - `now` is the block point of the last held turn, 0 until the first.
 - `stop()` is the link's side only: the held turn, or the next, answers `stop`, and no turn is held
   after it. It returns whether the link was held at that moment. `end(reason, at=None)` is the
@@ -216,17 +226,32 @@ nor counts a turn. The test's side runs in the test's thread:
 
 `Esp32Sim` takes the test's durations with `nanoseconds(value, what)`, which takes a `Duration`
 (`esp32tl/units.py`) of 0 or more and returns its `ns`, and refuses anything else, naming `what`
-(`board.wait`, `board.wait_until: within`, and `within` for `wait_on_clock`, whose callers pass a
-`Duration` they have checked). `now` is the clock's time as a `Duration`; `utc` adds
-it, in microseconds, to the UTC instant at power-on. `wait`,
-`wait_until`, `wait_on_clock`, `now` and `utc` raise `BoardOff` before `power_on()`. `wait_until`
-describes its condition as `the condition {condition.__qualname__}`, or by its `repr` when it has
-no qualified name; `wait_on_clock(condition, within, description)` takes the description from the
-caller, as the console does. `wait` logs `board.wait({seconds})` at the board's time it starts
-from, and `the run ended while the test waited` when it raises `RunEnded`; `wait_on_clock`, and
-with it `wait_until` and the console's expects, logs `waits up to {within} for {description}`, then
-`{description}: happened`, `{description}: did not happen within {within}` or
-`{description}: the run ended first`, at the board's time it returns or raises at.
+(`board.wait`, `board.wait_until: within`, `board.wait_for_wake: within`, and `within` for
+`wait_on_clock`, whose callers pass a `Duration` they have checked). `now` is the clock's time as a
+`Duration`; `utc` adds it, in microseconds, to the UTC instant at power-on. `wait`, `wait_until`,
+`wait_on_clock`, `now` and `utc` raise `BoardOff` before `power_on()`. `wait_until` describes its
+condition as `the condition {condition.__qualname__}`, or by its `repr` when it has no qualified
+name; `wait_on_clock(condition, within, description)` takes the description from the caller, as the
+console does. `wait` logs `board.wait({seconds})` at the board's time it starts from, and `the run
+ended while the test waited` when it raises `RunEnded`; `wait_on_clock`, and with it `wait_until`
+and the console's expects, logs `waits up to {within} for {description}`, then `{description}:
+happened`, `{description}: did not happen within {within}` or `{description}: the run ended first`,
+at the board's time it returns or raises at.
+
+**The wait for a wake.** `wait_for_wake(*, within)` raises `BoardOff` before `power_on()`, and on
+a board that is off (`the board is off: board.wait_for_wake() waits for a board that is on`):
+nothing wakes a chip without its supply. It counts the link's `resets`, and calls
+`HeldClock.wait_for_event` with the condition that one more has come, which returns that boot
+from `boots`, the description `a wake from deep sleep`, and `WAKE_LATENCY_NS`, 1 ms. The runner
+ends a slice at every whole emulated millisecond while the board is on (protocol §6.1), so that
+latency adds no slice: the sleep costs the runner what it costs any wait, and the test none of the
+100 ms steps `wait_until` would take. The wait returns at the turn the reset brings, at most 1 ms
+after it, or sooner when an interface's latency is smaller. A boot whose `cause` is not
+`DEEPSLEEP_RESET` (5) raises `AssertionError`: `board.wait_for_wake: boot {number} at {at} is
+{reason} (reset cause {cause}), not a wake from deep sleep (DEEPSLEEP_RESET)`. It logs
+`board.wait_for_wake(), up to {within}`, then `a wake from deep sleep: boot {number} at {at}`,
+`a wake from deep sleep: boot {number} is {reason}, not a wake` before the `AssertionError`, or
+the `did not happen` and `the run ended first` lines of `wait_on_clock`.
 
 **Sources and taps.** `Uart.replay` calls `asked(Request(interface, source="replay"))` before it
 reads the recording, `Gnss`'s first model call `asked(Request(interface, source="model"))` before
@@ -408,6 +433,7 @@ repository makes.
 | `Esp32Sim.powered`, `Esp32Sim.started` | Whether the supply is on, from `power_on` to `power_off`; whether `power_on` has started the runner |
 | `Esp32Sim.boots`, `Esp32Sim.boot` | The chip's boots as `Boot`s, the first at 0 with cause 1 and one per `reset` the link has read; the last. `BoardOff` before the first `power_on` |
 | `Esp32Sim.wait(duration)`, `Esp32Sim.wait_until(condition, *, within)`, `Esp32Sim.wait_on_clock(condition, within, description)` | The test's waits, each a `Duration` of the board's time, logged as steps of the test |
+| `Esp32Sim.wait_for_wake(*, within)` | Runs the board to the chip's next boot, for at most `within`, and returns its `Boot`; `AssertionError` when that boot is not a wake from deep sleep, `NeverHappened` and `RunEnded` as `wait_until`'s, `BoardOff` before `power_on` and while the supply is off |
 | `Esp32Sim.now`, `Esp32Sim.utc` | The board's time since the first power-on, a `Duration`, through every reset and while the board is off; the world's time, a `datetime` in UTC |
 | `Esp32Sim.uart(role)` | The `Uart` of `uart.<role>` on the link, a `Gnss` for `gnss`; `BackendError` when the profile has no such route |
 | `Esp32Sim.lines` | The `Lines` of the profile's `[lines.<role>]` sets on the link; `BackendError` when the profile has none |
@@ -417,7 +443,7 @@ repository makes.
 | `Esp32Sim.close()` | Ends the run and writes the taps; raises `BackendError` for a tap that cannot be written, a failing exit code, a killed runner or a link error |
 | `Esp32Sim.report(run=False)`, `Esp32Sim.properties()` | The `esp32sim link` report section, with the run on the board's clock when `run`; the `esp32sim_link` user property's data |
 | `BackendError` | What keeps the backend from starting, or a failing end |
-| `HeldClock(step=STEP_NS)` | `esp32tl/backends/clock.py`: the link's `Hold`, `turn(now)`, `dumped(ack)`; `stop()`, `end(reason, at=None)`; the test's `now`, `wait(ns)`, `wait_until(condition, within_ns, description)`, `dump_flash()`, which returns the runner's `FlashDumpAck`, or `None` once the run has ended, and `check(step)`, which raises `RunEnded` (`the run ended {when} before {step}: {reason}`) once the run has ended |
+| `HeldClock(step=STEP_NS)` | `esp32tl/backends/clock.py`: the link's `Hold`, `turn(now)`, `dumped(ack)`; `stop()`, `end(reason, at=None)`; the test's `now`, `wait(ns)`, `wait_until(condition, within_ns, description)`, `wait_for_event(condition, within_ns, description, latency_ns)`, `dump_flash()`, which returns the runner's `FlashDumpAck`, or `None` once the run has ended, and `check(step)`, which raises `RunEnded` (`the run ended {when} before {step}: {reason}`) once the run has ended |
 | `nanoseconds(value, what)`, `seconds(ns)` | `esp32tl/backends/clock.py`: a `Duration` of the board's time to nanoseconds, checked; nanoseconds shown as `12.5 s`, as `str(Duration(ns))` |
 | `listen()` | The listening socket and its path, or `BackendError` |
 | `runner_path()`, `rom_path()` | The runner and the ROM ELF, or `BackendError` |
@@ -444,6 +470,7 @@ repository makes.
 | `MAX_SECONDS` | `300`, emulated seconds: the default `--max-seconds` of the `esp32tl` command, whose clock runs free | `esp32tl/cli.py` |
 | `POWER_ON_UTC` | `esp32tl.net.ntp.DEFAULT_UTC`, `datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)`: the world's time at power-on unless the test gives one | `Esp32Sim.power_on` |
 | `STEP_NS` | `100_000_000`, 100 emulated milliseconds: the longest step of `wait_until` | `HeldClock` |
+| `WAKE_LATENCY_NS` | `1_000_000`, 1 emulated millisecond: how soon after the chip's reset `wait_for_wake` takes a turn | `Esp32Sim.wait_for_wake` |
 | `LAST_OUTPUT_BYTES` | `2048` | `last_output` |
 | `EXIT_SECONDS` | `5`, wall seconds: for the runner's exit after `stop` at teardown, for its `hello`, then for its exit after `SIGTERM`, and for each join of the link thread | `close`, `_mark_end_of_run`, `_close_link` |
 | `SUN_PATH_MAX` | `104`, the longest Unix socket path on macOS with its NUL; Linux takes 108 | `listen` |
@@ -494,7 +521,9 @@ In the test body:
 | the message of `capabilities.check`, as `no backend takes a 'replay' source on uart.gnss; the sources there are model` or `no backend can tap uart.gnss` | `SourceError` | A source or a tap no backend declares |
 | `esp32sim: {reason}`, as `esp32sim: uart.gnss takes no replay source on this backend, only model` or `esp32sim: uart.gnss cannot be tapped on this backend` | the `skip` given: pytest's skip under the plugin | A source or a tap this backend does not declare |
 | `{what} takes a Duration, as seconds({value!r}), not {value!r}` (`as seconds(5)` for what is not a number), `{what} takes a Duration of 0 or more, not {duration}` | `TypeError`, `ValueError` | A duration that is not a `Duration`, or is below 0 |
-| `{description} did not happen within {within}: waited from {start} to {end} of the board's time` | `NeverHappened` | `wait_until`'s deadline |
+| `{description} did not happen within {within}: waited from {start} to {end} of the board's time` | `NeverHappened` | `wait_until`'s deadline, and `wait_for_wake`'s, with `a wake from deep sleep` |
+| `board.wait_for_wake: boot {number} at {at} is {reason} (reset cause {cause}), not a wake from deep sleep (DEEPSLEEP_RESET)` | `AssertionError` | The chip booted again through another reset: `esp_restart()`, a watchdog |
+| `the board is off: board.wait_for_wake() waits for a board that is on` | `BoardOff` | `wait_for_wake` after `power_off()` |
 | `the run ended {when} while the test waited {what}: {reason}` | `RunEnded` | The run ended during, or before, a wait. `{when}` is `at {time}` from the runner's `stats`, `after the turn at {time}` without them, the last held turn being only a bound, or `before its first turn`. `{what}` is `until {time}` for `wait`, `for {description}` for `wait_until`; `{reason}` is `[the link failed: {error}; ]the runner exited with code {code}; its last output:` and the tail |
 
 Times in these messages are `seconds(ns)`: seconds without trailing zeros, `1.5 s`, `0 s`.
@@ -584,7 +613,9 @@ proving serial-only validation does not reach the simulator.
   `test_a_held_run_whose_runner_is_gone_releases_the_link` (exit 4 in a held turn).
 
 `tests/test_clock.py` tests `HeldClock`, `nanoseconds` and `seconds` against a runner thread that
-feeds `BoardLink`. `tests/test_hello_world.py`, `tests/test_nmea_reader.py` and
+feeds `BoardLink`, and that honours a `wait`'s `latency` for the resets it sends:
+`wait_for_event` through an hour without events takes one turn, at the reset's latency, and only
+its own waits carry the latency. `tests/test_hello_world.py`, `tests/test_nmea_reader.py` and
 `tests/test_gpio_echo.py` run the real images on the real runner and ROM, `test_time_is_emulated`
 with `board.now` after the tenth fix, `gpio_echo` with the LilyGO profile's pulled RI.
 `tests/test_gnss_fixture.py` runs `nmea_reader` with a replay, and the ordering errors above
@@ -595,6 +626,12 @@ without a card, through `board.reset()` with one, and through a power cycle with
 causes, NVS, RTC and RAM counts and the card's
 lines the firmware prints, `boots`, `now` across the power-off, every `BoardOff` and the `utc`
 refusal, and that the build's flash files are unchanged.
+`tests/test_timer_wake.py` runs `firmware/timer_wake` through its two sleeps with
+`board.wait_for_wake`: the boot it returns, the board's time at most 1 ms after it, at most two
+turns of the link per sleep, `NeverHappened` once the firmware sleeps no more, the `BoardOff` and
+`TypeError` refusals; and `hello_world`, whose `esp_restart()` gives the `AssertionError`.
+`tests/test_deep_sleep.py` runs ESP-IDF's `system/deep_sleep` example through two of its 20 s
+sleeps, each in at most two turns of the link.
 `tests/test_flash_snapshot.py` reads what the same firmware wrote, with `board.flash()`, after a
 reset, after a power-off and after the end of the run.
 `tests/test_modem_fixture.py::test_the_modem_keeps_its_power_through_a_reset_and_loses_it_with_the_board`,

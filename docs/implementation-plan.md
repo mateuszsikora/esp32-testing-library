@@ -655,6 +655,10 @@ the controller for the ESP32's side is still #34's to choose.
   wake ends in `Stop::Halted` at `max_cycles`, a normal end, so the test asserts on the wake-up
   itself (the post-wake console line) and treats a run that only halts as a failure; otherwise an
   emulator that does not wake passes silently. `tests/test_timer_wake.py` does so since #35.
+  *Update, 2026-11-08:* the call is `board.wait_for_wake(within=...)` on the test's clock (#36;
+  there is no `scenario` since #64), and `tests/test_deep_sleep.py` runs ESP-IDF's
+  `system/deep_sleep` through two sleeps with it
+  ([decisions](decisions/harness.md#the-wait-for-a-wake-from-deep-sleep-is-a-board-call-that-asks-for-a-turn-after-each-event)).
 
 ### M10. Upstreaming and stabilisation
 

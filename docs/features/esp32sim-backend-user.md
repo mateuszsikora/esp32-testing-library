@@ -38,13 +38,14 @@ every file of `flasher_args.json` at its offset; teardown stops it. A test that 
 4 MB, whatever the profile says.
 
 From power-on the run is on the test's clock: the firmware runs only while the test waits, in
-`board.wait`, `board.wait_until` or a console expect, and stands still in between, however long
-the test body takes. Every limit a test states, an expect's `timeout` included, is a time on
-that clock ([pytest plugin](pytest-plugin-user.md#the-fixtures)). The runner waits for the test
-without a limit of its own (`--peer-timeout 0`); a run that hangs is ended by the test's
-wall-time timeout, 600 s by default ([the test's timeout](pytest-plugin-user.md#the-tests-timeout)).
-A run lasts as long as the test waits, up to a day of emulated time (`--max-seconds 86400`), at
-which the runner ends it and a waiting test gets `RunEnded`.
+`board.wait`, `board.wait_until`, `board.wait_for_wake` or a console expect, and stands still in
+between, however long the test body takes. Every limit a test states, an expect's `timeout`
+included, is a time on that clock ([pytest plugin](pytest-plugin-user.md#the-fixtures)). The
+runner waits for the test without a limit of its own (`--peer-timeout 0`); a run that hangs is
+ended by the test's wall-time timeout, 600 s by default
+([the test's timeout](pytest-plugin-user.md#the-tests-timeout)). A run lasts as long as the test
+waits, up to a day of emulated time (`--max-seconds 86400`), at which the runner ends it and a
+waiting test gets `RunEnded`.
 
 One runner serves the whole test, from the first `power_on()` to teardown. `board.reset()`,
 `board.power_off()` and a `power_on()` after it go to it over the link, at the board's time the test
@@ -58,6 +59,15 @@ which keeps what the firmware wrote through every reset and power cycle; with th
 card loses its power, and the firmware's driver has to mount it again. Each reset goes into the
 run's log as `boot N: REASON (reset cause C)`, and into the link's statistics as one of its
 `resets`.
+
+A chip in deep sleep with a timer wake wakes on its RTC timer, through a `DEEPSLEEP_RESET` (5).
+`board.wait_for_wake(within=...)` runs the board to that wake in one stretch: the runner skips
+the sleep as fast as it skips any idle time, and the harness takes no turn until the wake, where
+`board.wait_until` would look every 100 ms of the board's time
+([waking from deep sleep](pytest-plugin-user.md#waking-from-deep-sleep)). ESP-IDF's
+`system/deep_sleep` example sleeps 20 s: on an M2 Pro, `wait_for_wake` takes one turn of the link
+and 0.07 s of wall time through it, and returns 1 ms after the wake, where `wait_until` takes 200
+turns and returns at its next 100 ms step.
 
 The console reaches the test over the link, in emulated-time order with the runner's turns
 (`--console both`). The runner's stdout gets it too, and with it the runner's own lines

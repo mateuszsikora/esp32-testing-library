@@ -5,9 +5,12 @@ The runner stops at every turn of the link and waits for the harness's `wait` (p
 guest stands still while the test body runs, and whatever the test changes lands at the emulated
 instant the test saw. `wait` lets the run go to a time; `wait_until` lets it go in steps of at
 most `STEP_NS`, and asks the test's condition at every turn, in the test's own thread, while the
-link is held. `dump_flash` has the link ask the runner for the flash in the turn it is held at, on
-the link's thread, and the turn goes on: the board's time does not move. Times here are nanoseconds
-on the board's clock, from power-on.
+link is held. `wait_for_event` lets it go to its deadline at once, with a `latency` that has the
+runner take a turn soon after each event, and asks its condition at those turns only: the wait
+through a deep sleep, in which nothing happens until the chip wakes. `dump_flash` has the link
+ask the runner for the flash in the turn it is held at, on the link's thread, and the turn goes
+on: the board's time does not move. Times here are nanoseconds on the board's clock, from
+power-on.
 """
 
 import threading
@@ -15,6 +18,7 @@ from collections.abc import Callable
 from typing import TypeVar
 
 from esp32tl.interfaces import NeverHappened, RunEnded
+from esp32tl.link.boardlink import RunTo
 from esp32tl.link.protocol import FlashDump, FlashDumpAck
 from esp32tl.units import Duration
 
@@ -44,6 +48,8 @@ class HeldClock:
         self._held = False
         # How far the test lets the run go from the turn it is held at; None while it does not.
         self._until: int | None = None
+        # How soon after an event the test wants the next turn; None for no sooner than _until.
+        self._latency: int | None = None
         # The test asks for the flash in the turn; the runner's answer, once it has come.
         self._dump_asked = False
         self._dumped: FlashDumpAck | None = None
@@ -54,23 +60,25 @@ class HeldClock:
 
     # The link's side.
 
-    def turn(self, now: int) -> int | FlashDump | None:
+    def turn(self, now: int) -> int | RunTo | FlashDump | None:
         """Holds the link's turn at the block point `now` until the test waits; then returns
-        the latest time of the next turn, or `None` once the test is over or the run has ended,
-        for the link to stop the run. Returns `FlashDump` when the test asks for the flash."""
+        the latest time of the next turn, as a `RunTo` when the wait asks for a turn soon after
+        each event, or `None` once the test is over or the run has ended, for the link to stop
+        the run. Returns `FlashDump` when the test asks for the flash."""
         with self._cv:
             self._now = now
             self._turns += 1
             self._until = None
+            self._latency = None
             return self._hold_turn()
 
-    def dumped(self, ack: FlashDumpAck) -> int | FlashDump | None:
+    def dumped(self, ack: FlashDumpAck) -> int | RunTo | FlashDump | None:
         """The runner's answer goes to the test, and the same turn is held on: as `turn`."""
         with self._cv:
             self._dumped = ack
             return self._hold_turn()
 
-    def _hold_turn(self) -> int | FlashDump | None:
+    def _hold_turn(self) -> int | RunTo | FlashDump | None:
         self._held = True
         self._cv.notify_all()
         while (
@@ -86,6 +94,8 @@ class HeldClock:
         if self._dump_asked:
             self._dump_asked = False
             return FlashDump()
+        if self._latency is not None and self._until is not None:
+            return RunTo(self._until, self._latency)
         return self._until
 
     def stop(self) -> bool:
@@ -155,6 +165,25 @@ class HeldClock:
         """Lets the run go until `condition` returns something true, asked now and at every
         turn, for at most `within` from now; returns what it returned. `description` names it
         in `NeverHappened` and `RunEnded`."""
+        return self._wait(condition, within, description, self._step, None)
+
+    def wait_for_event(
+        self, condition: Callable[[], T | None], within: int, description: str, latency: int
+    ) -> T:
+        """`wait_until` without its steps: lets the run go to `within` from now, and asks
+        `condition` now and at every turn the link takes, which comes no later than `latency`
+        after each event the runner sends. For a condition only an event can make true, as a
+        chip's reset; a wait through a stretch without events takes no turn."""
+        return self._wait(condition, within, description, None, latency)
+
+    def _wait(
+        self,
+        condition: Callable[[], T | None],
+        within: int,
+        description: str,
+        step: int | None,
+        latency: int | None,
+    ) -> T:
         what = f"for {description}"
         with self._cv:
             try:
@@ -182,8 +211,9 @@ class HeldClock:
                         f"{description} did not happen within {seconds(within)}: waited from"
                         f" {seconds(start)} to {seconds(self._now)} of the board's time"
                     )
+                until = deadline if step is None else min(deadline, self._now + step)
                 try:
-                    self._advance(min(deadline, self._now + self._step), what)
+                    self._advance(until, what, latency)
                 except RunEnded as ended:
                     error = ended
                 else:
@@ -202,11 +232,13 @@ class HeldClock:
         if not self._held:
             raise self._run_ended(what)
 
-    def _advance(self, until: int, what: str) -> None:
-        """Lets the run go to `until` at most, holding the lock, and returns at the next turn."""
+    def _advance(self, until: int, what: str, latency: int | None = None) -> None:
+        """Lets the run go to `until` at most, with a turn no later than `latency` after each
+        event when it is given, holding the lock, and returns at the next turn."""
         self._settle(what)
         turns = self._turns
         self._until = until
+        self._latency = latency
         self._cv.notify_all()
         while self._turns == turns and self._ended is None:
             self._cv.wait()

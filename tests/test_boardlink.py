@@ -9,7 +9,7 @@ from collections.abc import Iterable, Iterator, Sequence
 import pytest
 
 from esp32tl.link import boardlink
-from esp32tl.link.boardlink import BoardLink, Direction, Interface, Output, Wire
+from esp32tl.link.boardlink import BoardLink, Direction, Interface, Output, RunTo, Wire
 from esp32tl.link.protocol import (
     MAX_LINE,
     Adc,
@@ -48,6 +48,7 @@ HELLO = RunnerHello(1, "esp32", "emulated-fifo-write", "afcfba65da0da30a35fb0a7c
 GNSS = Wire(tx=4, rx=5, baud=9600)
 MODEM = Wire(tx=26, rx=27, baud=115200)
 MS = 1_000_000
+S = 1_000_000_000
 
 
 class Peer(Interface):
@@ -755,18 +756,18 @@ def test_pins_that_are_not_gpio_numbers_are_refused() -> None:
 class Holder:
     """A `Hold` that returns its `bounds` one per turn, after `entered` is set for the turn."""
 
-    def __init__(self, *bounds: int | FlashDump | None) -> None:
+    def __init__(self, *bounds: int | RunTo | FlashDump | None) -> None:
         self.bounds = list(bounds)
         self.turns: list[int] = []
         self.acks: list[FlashDumpAck] = []
         self.go = threading.Event()
 
-    def turn(self, now: int) -> int | FlashDump | None:
+    def turn(self, now: int) -> int | RunTo | FlashDump | None:
         self.turns.append(now)
         assert self.go.wait(5)
         return self.bounds.pop(0)
 
-    def dumped(self, ack: FlashDumpAck) -> int | FlashDump | None:
+    def dumped(self, ack: FlashDumpAck) -> int | RunTo | FlashDump | None:
         self.acks.append(ack)
         return self.bounds.pop(0)
 
@@ -796,6 +797,27 @@ def test_the_hold_bounds_the_next_turn_with_the_interfaces() -> None:
     link.receive(HELLO)
     assert link.receive(Sync(0)) == [Wait(0, 5 * MS, None)]
     assert link.receive(Sync(5 * MS)) == [Wait(0, 20 * MS, None)]
+
+
+def test_a_hold_s_latency_is_one_of_the_next_turn_s_with_the_interfaces() -> None:
+    hold = Holder(RunTo(5 * S, MS), RunTo(5 * S, 50 * MS), 5 * S)
+    hold.go.set()
+    link = BoardLink("esp32-devkitc", [Peer(latency=20 * MS)], hold=hold)
+    link.receive(HELLO)
+    # The smallest latency of the hold's and the interfaces' bounds the turn, and a hold that
+    # returns a time adds none.
+    assert link.receive(Sync(0)) == [Wait(0, 5 * S, MS)]
+    assert link.receive(Sync(MS)) == [Wait(0, 5 * S, 20 * MS)]
+    assert link.receive(Sync(2 * MS)) == [Wait(0, 5 * S, 20 * MS)]
+
+
+def test_a_hold_s_negative_latency_fails_the_link_naming_the_clock() -> None:
+    hold = Holder(RunTo(5 * S, -1))
+    hold.go.set()
+    link = BoardLink("esp32-devkitc", hold=hold)
+    link.receive(HELLO)
+    assert link.receive(Sync(0)) == [Stop()]
+    assert link.error == "the test's clock declares a latency of -1 ns"
 
 
 def test_a_hold_that_returns_none_stops_the_run() -> None:

@@ -180,6 +180,9 @@ For esp32sim:
   read anything the test can. When `within` runs out it raises `NeverHappened`, an
   `AssertionError`:
   `the condition test_x.<locals>.<lambda> did not happen within 2 s: waited from 10 s to 12 s of the board's time`.
+- `board.wait_for_wake(within=duration)` lets the board run to the chip's next boot, which must be
+  a wake from deep sleep, and returns its `Boot`
+  ([waking from deep sleep](#waking-from-deep-sleep)).
 - `board.now` is the board's time since the first power-on, a `Duration`; `board.utc` the
   world's time, the UTC instant at the first power-on plus `board.now`. Neither restarts at a
   reset or a power cycle.
@@ -298,7 +301,7 @@ a sentence that was on the line when the chip reset or the power went. Every int
 profile is on the board's supply ([board profiles](board-profiles-user.md#the-profiles-esp32tl-ships)).
 
 On [serial](serial-backend-user.md#power-on-time-and-console), `board.reset()` pulses EN through
-the adapter, and `board.power_off()` and `board.boots` skip the test.
+the adapter, and `board.power_off()`, `board.boots` and `board.wait_for_wake()` skip the test.
 
 `console` is the firmware's console, its UART0, read on the board's clock:
 
@@ -709,6 +712,48 @@ def test_the_firmware_follows_ri_and_drives_pwrkey(board, lines, console):
 
 `NeverHappened`, `RunEnded`, `BoardOff` and `SourceError` are in `esp32tl.interfaces`, `LineEvent`
 in `esp32tl.interfaces.lines`.
+
+### Waking from deep sleep
+
+A firmware that goes to deep sleep with a timer wake (`esp_sleep_enable_timer_wakeup()`, then
+`esp_deep_sleep_start()`) wakes on the board's clock, through a boot of its own with cause 5,
+`DEEPSLEEP_RESET` (`esp32tl.interfaces.board.DEEPSLEEP_RESET`). `board.wait_for_wake` runs the
+board through the sleep to that boot:
+
+```python
+from esp32tl import Board
+from esp32tl.units import seconds
+
+
+def test_reports_after_its_sleep(board: Board):
+    board.power_on()
+    asleep = board.wait_until(board.console.line("^Entering deep sleep$"), within=seconds(2))
+    wake = board.wait_for_wake(within=seconds(21))
+    assert wake.at - asleep.at >= seconds(20)
+    board.console.expect(r"Time spent in deep sleep: 2\d{4}ms", timeout=1)
+```
+
+- `board.wait_for_wake(within=duration)` lets the board run until the chip boots again, for at
+  most `within` of the board's time, and returns that boot, the new `board.boot`. The board's
+  clock then stands at most 1 ms after the boot's `at`: what the firmware prints after its wake is
+  still to come, and the test expects it on the console as usual.
+- It takes no 100 ms steps, as `board.wait_until` does: nothing happens in a deep sleep, so the
+  board runs to the wake in one stretch, and an hour's sleep costs no more of the test's turns
+  than a second's. It works the same when the firmware is still awake at the call: the wait goes
+  on through whatever comes before the sleep.
+- A boot through another reset, `esp_restart()` or a watchdog, fails the test with an
+  `AssertionError`:
+  `board.wait_for_wake: boot 2 at 11.0429706 s is SW_CPU_RESET (reset cause 12), not a wake from deep sleep (DEEPSLEEP_RESET)`.
+- A chip that does not boot within `within` raises `NeverHappened`:
+  `a wake from deep sleep did not happen within 21 s: waited from 1.2 s to 22.2 s of the board's time`.
+  A run that ends first raises `RunEnded`, as one does that reaches its limit, a day of the
+  board's time: a chip that never wakes fails the test rather than passing it in silence.
+- Before the first `power_on()` it raises
+  `BoardOff: the board is off; call board.power_on() first`, and after `power_off()`
+  `BoardOff: the board is off: board.wait_for_wake() waits for a board that is on`.
+- ESP-IDF's `system/deep_sleep` arms EXT1 on two pins and two touch pads beside its timer, and on
+  esp32sim only the timer wakes it ([`deep_sleep`](validation-firmware-user.md#deep_sleep)).
+  TODO(owner): whether esp32sim wakes the chip on a GPIO or a touch pad at all is not checked.
 
 ### Named output conditions
 

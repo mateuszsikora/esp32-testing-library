@@ -11,8 +11,10 @@ A link made with a `hold` asks it at the start of every turn, the first at `t = 
 guest's first instruction (§6, rule 4), and takes the turn only once it returns: the `esp32sim`
 backend holds the run there for as long as the test is not waiting, and emulated time does not
 move meanwhile. What the hold returns bounds the next turn, as an interface's `quiet_until` does,
-and `None` ends the run with `stop`. With `console`, the guest's console reaches it as the
-runner's `console` messages carry it (`--console socket` or `both`).
+and `None` ends the run with `stop`; a `RunTo` bounds it with a `latency` too, as an interface's
+`latency` does, so that a turn comes soon after each event of the runner's. With `console`, the
+guest's console reaches it as the runner's `console` messages carry it (`--console socket` or
+`both`).
 
 With `--wifi`, the Ethernet frames the station sends (`eth_tx`) go to the one interface that is the
 network behind the access point (`Interface.ethernet`), a frame per call, and what it answers goes
@@ -209,17 +211,28 @@ class Interface:
         change, which left the slot as it was."""
 
 
+@dataclass(frozen=True)
+class RunTo:
+    """What a hold returns to let the run go on to `until` at the latest, and to a turn no
+    later than `latency` after each event: the link folds `latency` into the turn's `wait` with
+    the interfaces' (5.13). The hold answers no event, so a promise it makes cannot be broken."""
+
+    until: int
+    latency: int
+
+
 class Hold(Protocol):
     """What holds the run in the harness's turns: the test's clock."""
 
-    def turn(self, now: int) -> int | FlashDump | None:
+    def turn(self, now: int) -> int | RunTo | FlashDump | None:
         """Called at the start of the turn at `now`, before the interfaces are polled; returns,
-        once the run may go on, the latest time of the next turn, later than `now`, or `None`
-        to end the run with `stop` in this turn. Or `FlashDump`, for the link to ask the runner
-        for the flash in this turn, and call `dumped` with its answer."""
+        once the run may go on, the latest time of the next turn, later than `now`, or a `RunTo`
+        that adds a `latency`, or `None` to end the run with `stop` in this turn. Or
+        `FlashDump`, for the link to ask the runner for the flash in this turn, and call
+        `dumped` with its answer."""
         ...
 
-    def dumped(self, ack: FlashDumpAck) -> int | FlashDump | None:
+    def dumped(self, ack: FlashDumpAck) -> int | RunTo | FlashDump | None:
         """The runner has answered the `FlashDump` that `turn`, or this, returned; returns as
         `turn` does, in the same turn."""
         ...
@@ -591,7 +604,7 @@ class BoardLink:
             bound = self.hold.dumped(ack)
         return self._held(now, bound)
 
-    def _held(self, now: int, bound: int | FlashDump | None) -> list[HarnessMessage]:
+    def _held(self, now: int, bound: int | RunTo | FlashDump | None) -> list[HarnessMessage]:
         """What the hold returned of the turn at `now`, once the run may go on."""
         if isinstance(bound, FlashDump):
             self._dumping = now
@@ -599,10 +612,15 @@ class BoardLink:
         if bound is None:
             self._stopped = True
             return [Stop()]
+        if isinstance(bound, RunTo):
+            return self._end_turn(now, bound.until, bound.latency)
         return self._end_turn(now, bound)
 
-    def _end_turn(self, now: int, hold: int | None) -> list[HarnessMessage]:
-        """The inputs of the turn at `now`, then the `wait`, bounded by `hold`, if any."""
+    def _end_turn(
+        self, now: int, hold: int | None, hold_latency: int | None = None
+    ) -> list[HarnessMessage]:
+        """The inputs of the turn at `now`, then the `wait`, bounded by `hold` and
+        `hold_latency`, if any."""
         bounds: list[tuple[str, int | None]] = [(HOLD, hold)] if hold is not None else []
         board, self._board_inputs = self._board_inputs, []
         for switch in board:
@@ -652,14 +670,16 @@ class BoardLink:
                     " sends by then belongs in this turn"
                 )
             quiet_until = bound if quiet_until is None else min(quiet_until, bound)
-        latency = None
+        latencies: list[tuple[str, int | None]] = [(HOLD, hold_latency)]
         for interface in self.interfaces:
             with calling(interface.name, "latency"):
-                bound = interface.latency()
+                latencies.append((interface.name, interface.latency()))
+        latency = None
+        for name, bound in latencies:
             if bound is None:
                 continue
             if isinstance(bound, bool) or not isinstance(bound, int) or bound < 0:
-                raise LinkError(f"{interface.name} declares a latency of {bound!r} ns")
+                raise LinkError(f"{name} declares a latency of {bound!r} ns")
             latency = bound if latency is None else min(latency, bound)
         return [
             *board,

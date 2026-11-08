@@ -572,9 +572,10 @@ pulse, unknown/released outputs, starting/end boundaries, input filtering and in
 `esp32tl.interfaces.board.Board` is the abstract base of `Esp32Sim` and `Serial`, re-exported
 from `esp32tl` and, for existing imports, `esp32tl.pytest_plugin`. It declares the common clock,
 waiting, NVS, reporting and lifecycle API: `power_on`, `power_off`, `reset`, `powered`, `started`
-and `boots` are abstract, and `boot` is `boots[-1]`. `Boot(number, at, cause)` and its `reason`,
-from `RESET_REASONS`, the classic chip's ROM names, are in the same module, with
-`POWERON_RESET = 1`. Interface properties reuse each backend's existing
+and `boots` are abstract, as are the waits, `wait`, `wait_until`, `wait_for_wake` and
+`wait_on_clock`, and `boot` is `boots[-1]`. `Boot(number, at, cause)` and its `reason`, from
+`RESET_REASONS`, the classic chip's ROM names, are in the same module, with `POWERON_RESET = 1`
+and `DEEPSLEEP_RESET = 5`. Interface properties reuse each backend's existing
 UART/line/slot objects; `console` is a `cached_property` wrapping that backend's console buffers.
 Fixture functions return the properties, preserving object identity and the console cursor.
 The `broker` fixture delegates to `modem.network().broker`, which selects a model source.
