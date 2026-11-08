@@ -20,6 +20,10 @@
 //! - 3: a protocol error by the peer;
 //! - 4: the peer is gone, or never answered the connection.
 //!
+//! With `--bt ELF` the guest's Bluetooth controller is the peer's: esp32sim's VHCI hooks, over the
+//! symbols of `ELF`, hand the guest's H4 packets to the [`hci::Forwarder`], and the run loop sends
+//! them to the peer as `hci_tx` and gives the guest the peer's `hci_rx` (protocol 5.22).
+//!
 //! With `--flash-out PATH` the end of the run writes the whole flash to `PATH` (protocol 5.21),
 //! unless the connection failed, the process panicked or a signal killed it.
 //!
@@ -38,6 +42,7 @@
 //! `SIGTERM` and `SIGINT` end the run with `stats` and exit 0 (protocol §9), and a second one ends
 //! the process at once, with 128 + the signal's number.
 mod cli;
+mod hci;
 mod protocol;
 mod sd_card;
 mod session;
@@ -75,12 +80,13 @@ fn main() -> ExitCode {
         Some(Err(message)) => return fail(&message),
         None => None,
     };
-    let (mut m, rom) = match setup(&opts, shared.clone(), card.clone()) {
+    let hci = opts.bt.as_ref().map(|_| hci::Shared::default());
+    let (mut m, rom) = match setup(&opts, shared.clone(), card.clone(), hci.clone()) {
         Ok(loaded) => loaded,
         Err(message) => return fail(&message),
     };
     if let (Some(board), Some(shared)) = (&opts.board, shared) {
-        return run_with_board(&opts, board, shared, card, &mut m, &rom);
+        return run_with_board(&opts, board, shared, card, hci, &mut m, &rom);
     }
     let wall = std::time::Instant::now();
     let stop = run(&mut m);
@@ -121,6 +127,7 @@ fn run_with_board(
     board: &cli::Board,
     shared: socket_board::Shared,
     card: Option<sd_card::Shared>,
+    hci: Option<hci::Shared>,
     m: &mut esp32::Machine,
     rom: &[u8],
 ) -> ExitCode {
@@ -166,6 +173,7 @@ fn run_with_board(
             card: card.clone(),
             realtime: opts.realtime,
             flash_out: opts.flash_out.as_deref(),
+            hci,
         },
     );
     let (end, stats) = session.run();
@@ -252,11 +260,13 @@ fn report_card(card: Option<&sd_card::Shared>) {
 
 /// The machine with its ROM and flash loaded, at the reset vector, and the ROM's ELF, which a
 /// power-on reset loads again. With `shared`, the socket board is on its pins; with `card`, the
-/// SD card slot, on the socket board or on a board of its own.
+/// SD card slot, on the socket board or on a board of its own; with `hci`, the forwarder of
+/// `--bt` is the guest's Bluetooth controller.
 fn setup(
     opts: &cli::Opts,
     shared: Option<socket_board::Shared>,
     card: Option<sd_card::Shared>,
+    hci: Option<hci::Shared>,
 ) -> Result<(esp32::Machine, Vec<u8>), String> {
     let flash_size = opts.flash_mb << 20;
     let mut m = esp32::machine(MAC, flash_size);
@@ -319,6 +329,9 @@ fn setup(
             data.len()
         );
     }
+    if let (Some(path), Some(hci)) = (&opts.bt, hci) {
+        bluetooth(&mut m, path, hci)?;
+    }
 
     m.boot_rom();
     m.console.mask = if opts.console == cli::Console::Socket {
@@ -328,6 +341,25 @@ fn setup(
     };
     m.max_cycles = end_cycle(opts);
     Ok((m, elf))
+}
+
+/// `--bt`: esp32sim's VHCI hooks over the symbols of the application's ELF, as its `--ble` installs
+/// them, with the forwarder in place of esp32sim's virtual controller. `enable_ble` replaces the
+/// whole `Ble`, its session included, so the forwarder goes in after it; `reboot()` keeps the
+/// session from then on, and resets it (`Ble::reset`).
+fn bluetooth(m: &mut esp32::Machine, path: &Path, hci: hci::Shared) -> Result<(), String> {
+    let at = |e: String| format!("--bt {}: {e}", path.display());
+    let elf = esp_soc::elf::parse(&read(path)?).map_err(at)?;
+    m.bus.enable_ble(&elf).map_err(at)?;
+    m.bus.ble.session = esp_soc::ble::peer::Session::new(
+        Box::new(hci::Forwarder(hci)),
+        esp_soc::ble::Link::default(),
+    );
+    eprintln!(
+        "esp32tl-runner: Bluetooth controller on the socket, VHCI hooks from {}",
+        path.display()
+    );
+    Ok(())
 }
 
 fn read(path: &Path) -> Result<Vec<u8>, String> {

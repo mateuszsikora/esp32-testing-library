@@ -24,6 +24,7 @@ fn minimal_command_line() {
             wifi: None,
             realtime: false,
             flash_out: None,
+            bt: None,
         }
     );
 }
@@ -281,4 +282,20 @@ fn realtime_needs_a_board() {
     );
     let opts = parse(args(&["--realtime", "--board", "socket:/tmp/b"])).unwrap();
     assert!(opts.realtime);
+}
+
+#[test]
+fn bt_names_the_application_elf_and_needs_a_board() {
+    assert_eq!(
+        parse_str(&format!("{MINIMAL} --bt app.elf")),
+        Err(Error::Usage(
+            "--bt makes the peer the guest's Bluetooth controller: it needs --board".into()
+        ))
+    );
+    assert_eq!(
+        parse_str(&format!("{MINIMAL} --board socket:s --bt")),
+        Err(Error::Usage("--bt needs a value".into()))
+    );
+    let opts = parse_str(&format!("{MINIMAL} --board socket:s --bt build/app.elf")).unwrap();
+    assert_eq!(opts.bt, Some("build/app.elf".into()));
 }

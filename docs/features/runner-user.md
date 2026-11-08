@@ -8,7 +8,7 @@ the pins the peer watches, and sends bytes and levels back. With `--sd-spi`, an 
 on four of the chip's pins, with or without `--board`, holding a card with the image file of
 `--sd-rw`; with `--board` the peer can take the card out and put one in while the guest runs. With
 `--wifi`, a Wi-Fi access point is on the air for the chip's station, and the network behind it is
-the peer's.
+the peer's. With `--bt`, the guest's Bluetooth controller is the peer's.
 The `esp32sim` backend of the pytest plugin starts it, with `--board socket:PATH` and itself as
 the peer, for every test that uses `board` or `console`. This document is for running it by hand, to watch an image boot,
 to drive it from a peer of your own, or to see why a run ended the way it did.
@@ -71,6 +71,9 @@ usage: esp32tl-runner --chip esp32 --flash-at OFFSET=FILE... --max-seconds S [op
                         of a route (docs/protocol.md, section 12): needs --board
   --flash-out PATH      write the whole flash to PATH when the peer's flash_dump asks for
                         it, and at the end of the run (docs/protocol.md, section 5.21)
+  --bt ELF              the guest's Bluetooth controller is the peer's, over the socket
+                        (hci_tx, hci_rx): esp32sim's VHCI hooks take their symbols from
+                        ELF, the application's; needs --board
 ```
 
 | Flag | Default | Accepts |
@@ -90,6 +93,7 @@ usage: esp32tl-runner --chip esp32 --flash-at OFFSET=FILE... --max-seconds S [op
 | `--wifi-nearby SPEC` | none | esp32sim's `key=value,...`: `ssid` (1 to 32 bytes, required), `chan` (1 to 14, default 1), `rssi` in dBm (-128 to 127, default -60), `secure` (`0` or `1`, also `false`/`true` or `no`/`yes`; default `1`), `bssid` (default: one derived from the SSID, the same every run). Repeatable, at most 32, each on a BSSID of its own and not the access point's SSID or BSSID. Only with `--wifi` |
 | `--realtime` | off: the guest runs as fast as it can | Paces the run to wall time. Only with `--board`: `--realtime paces a run for the peer's real device: it needs --board` |
 | `--flash-out PATH` | none: the flash stays in the runner | A file to write the whole flash to, created or replaced; its directory must exist. With or without `--board` |
+| `--bt ELF` | none: the guest has no Bluetooth controller | The application's ELF, from the same build as its image, with the controller's symbols in it (`esp_bt_controller_init` and the others of esp32sim's `--ble`). Only with `--board`: `--bt makes the peer the guest's Bluetooth controller: it needs --board` |
 
 A flag given twice keeps its last value, except `--flash-at` and `--wifi-nearby`, which add one
 each time. Flags
@@ -259,6 +263,53 @@ The command line refuses, with exit code 2:
   point` (or `BSSID`), where esp32sim's own command line would leave that network out with a line
   on stderr.
 
+## Give the guest a Bluetooth controller
+
+`--bt ELF` makes the peer the guest's Bluetooth controller. esp32sim installs its VHCI hooks over
+the controller functions of the application's ELF, as its own `--ble` does, and the runner puts
+itself where esp32sim's virtual BLE controller would be: each H4 packet the guest's Bluetooth host
+sends goes to the peer as an `hci_tx` message, at the time the host sent it, and each `hci_rx` the
+peer sends reaches the host as a packet from its controller
+([protocol, 5.22](../protocol.md#522-hci_tx-and-hci_rx-ext-34)). esp32sim's own controller, its
+`--ble-nearby` devices and its script's `ble` commands are not there.
+
+For an ESP-IDF project `app` built in `build/`, the ELF from the same build as the image:
+
+```sh
+runner/target/release/esp32tl-runner --chip esp32 \
+  --rom .cache/esp-rom-elfs/20241011/esp32_rev300_rom.elf \
+  --flash-at 0x1000=build/bootloader/bootloader.bin \
+  --flash-at 0x8000=build/partition_table/partition-table.bin \
+  --flash-at 0x10000=build/app.bin \
+  --board socket:/tmp/peer.sock \
+  --bt build/app.elf \
+  --max-seconds 20
+```
+
+No validation image uses Bluetooth yet.
+
+What the guest sees:
+
+- `esp_bt_controller_init`, `esp_bt_controller_enable` and the VHCI functions answer as esp32sim's
+  `--ble` makes them answer. At esp32sim's pin, `esp_bt_controller_enable` takes mode 1 (BLE) and
+  3 (dual mode) only: a firmware built for Classic alone (`CONFIG_BTDM_CTRL_MODE_BR_EDR_ONLY`)
+  asks for mode 2 and gets `ESP_ERR_INVALID_ARG`, and never sends a packet. That changes with
+  mikroverk/esp32sim#347 and a later pin.
+- The host reads the peer's packets at its controller task's VHCI polls, not at the instant the
+  peer stamped them: at most one packet a FreeRTOS tick, 10 ms at ESP-IDF's default
+  `CONFIG_FREERTOS_HZ=100`, while packets wait.
+- A packet is 1 to 496 bytes either way, what esp32sim's VHCI buffer carries. A peer's controller
+  that sizes its ACL buffer to 491 bytes lets the host fill each packet.
+- A chip reset or a power-on reset loses the packets the host has not read yet.
+
+The harness's side, the controller on the air of its Bluetooth peers, is not in esp32tl yet
+(#34); running it by hand needs a peer that speaks the two messages and is a controller.
+
+The command line refuses `--bt` without `--board`, with exit code 2. An ELF that cannot be read,
+is not an ELF, or lacks a symbol the hooks need ends the run before it starts with exit code 2:
+`esp32tl-runner: --bt ELF: BLE requires ELF symbol esp_bt_controller_init`, with esp32sim's own
+message after the path.
+
 ## What it prints
 
 stdout carries the guest's UART0 output and nothing else, unless `--console socket` sends it to
@@ -281,6 +332,8 @@ the peer instead. Everything the runner says goes to stderr, on lines that start
 
 - `esp32tl-runner: ROM PATH` once the ROM ELF is loaded;
 - `esp32tl-runner: flash 0x1000: PATH (N bytes)` for each `--flash-at` file, offset in hex;
+- `esp32tl-runner: Bluetooth controller on the socket, VHCI hooks from ELF` with `--bt`, once its
+  ELF is loaded;
 - `esp32tl-runner: chip reset at T s, cause CAUSE` each time the firmware resets the chip, as
   `esp_restart()` does: T in emulated seconds with six decimals, CAUSE the reset cause the ROM
   reports, in hex (`0x...`). The runner restarts the guest from the ROM, as the chip would, and
@@ -335,8 +388,8 @@ to `--board`, and nothing after it.
 | 0 | with `--board`: `SIGTERM` or `SIGINT` | `end: signal at ...` |
 | 1 | the emulator stopped for any other reason | the stop line, then `esp32tl-runner: the emulator stopped before --max-seconds: STOP`, the stop with its fields; with `--board`, `end: the emulator stopped before --max-seconds: STOP at ...` |
 | 2 | a usage error | `esp32tl-runner: MESSAGE`, then `run esp32tl-runner --help for the usage` |
-| 2 | an input that cannot be loaded: no ROM found, a file that cannot be read, a ROM that is not an ELF, an image that does not fit in flash, an SD card image that cannot be opened for writing or is not a whole number of 512 KiB units | `esp32tl-runner: MESSAGE`, no stop line |
-| 3 | with `--board`: a protocol error by the peer, such as a malformed line, a version or chip mismatch, an input stamped before its turn's `sync`, an `eth_rx` or `wifi_ap` on a run without `--wifi`, an `sd_card` on a run without `--sd-spi` | `end: protocol error by the peer at BOARD: WHAT: LINE at ...`, `LINE` cut after 200 characters |
+| 2 | an input that cannot be loaded: no ROM found, a file that cannot be read, a ROM that is not an ELF, an image that does not fit in flash, a `--bt` ELF that is not an ELF or lacks the controller's symbols, an SD card image that cannot be opened for writing or is not a whole number of 512 KiB units | `esp32tl-runner: MESSAGE`, no stop line |
+| 3 | with `--board`: a protocol error by the peer, such as a malformed line, a version or chip mismatch, an input stamped before its turn's `sync`, an `eth_rx` or `wifi_ap` on a run without `--wifi`, an `hci_rx` on a run without `--bt` or outside 1 to 496 bytes, an `sd_card` on a run without `--sd-spi` | `end: protocol error by the peer at BOARD: WHAT: LINE at ...`, `LINE` cut after 200 characters |
 | 4 | with `--board`: the connection failed, or the peer is gone: it closed the socket, a read or write failed, or `--peer-timeout` ran out | `end: cannot connect to the peer at ...`, or `end: the peer at BOARD is gone: WHY at ...` |
 | 101 | a panic, in the runner or in esp32sim during the run | Rust's panic message, no stop line |
 | 128 + N | with `--board`: a second `SIGTERM` or `SIGINT` (signal number N) | whatever came before it |

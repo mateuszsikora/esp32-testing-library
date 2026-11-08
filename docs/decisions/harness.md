@@ -1434,7 +1434,8 @@ board's time in it took about 20 ms of wall time
 fall in wall time, and runs would not repeat; Root Canal, Android's virtual controller, for the
 peer, because it is a separate binary that keeps its own time in wall time, so the test could not
 hold it, and it would have to be built or downloaded. Which controller the ESP32's side talks to
-is #34's to choose, once esp32sim has an HCI transport for Classic. Also rejected: a delay per
+is #34's to choose, once esp32sim has an HCI transport for Classic; #34 chose the board socket
+([decision](runner.md#the-guests-hci-goes-over-the-board-socket-on-the-boards-clock)). Also rejected: a delay per
 packet on the link, because no test needs one and any value would be invented.
 
 ## The air's timers are put on the nanosecond, not judged by the selector

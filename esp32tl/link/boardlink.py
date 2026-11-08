@@ -18,7 +18,10 @@ With `--wifi`, the Ethernet frames the station sends (`eth_tx`) go to the one in
 network behind the access point (`Interface.ethernet`), a frame per call, and what it answers goes
 in as `eth_rx`, a frame per output. With `--sd-spi`, the one interface that is the SD card slot
 (`Interface.card_slot`) changes the card in it with its `inputs` (`sd_card`), and gets what the
-runner says the slot holds after each change (`sd_card_ack`).
+runner says the slot holds after each change (`sd_card_ack`). With `--bt`, the H4 packets the
+guest's Bluetooth host sends (`hci_tx`) go to the one interface that is its controller
+(`Interface.bluetooth`), a packet per call, and what it answers goes in as `hci_rx`, a packet per
+output.
 
 The backend can also switch the board's supply and pulse the chip's EN pin (`board_input`): the
 message goes out in the harness's answer to the turn the link is held at, or to the first turn
@@ -58,6 +61,8 @@ from esp32tl.link.protocol import (
     GpioIn,
     GpioOut,
     HarnessMessage,
+    HciRx,
+    HciTx,
     Input,
     Power,
     ProtocolError,
@@ -136,6 +141,14 @@ class Interface:
         `receive` gets each Ethernet frame the station sends (`eth_tx`), and each output it
         returns is one frame for the station (`eth_rx`). Its `inputs` may switch the access
         point (`wifi_ap`)."""
+        return False
+
+    @property
+    def bluetooth(self) -> bool:
+        """Whether the interface is the guest's Bluetooth controller, with `--bt`: it has no wire,
+        `receive` gets each H4 packet the guest's host sends (`hci_tx`), with its packet-type
+        byte, and each output it returns is one H4 packet for the host (`hci_rx`), at most
+        `HCI_MAX` bytes."""
         return False
 
     @property
@@ -275,6 +288,9 @@ class BoardLink:
         ethernet = [interface.name for interface in interfaces if interface.ethernet]
         if len(ethernet) > 1:
             raise ValueError(f"one network behind the access point, not {', '.join(ethernet)}")
+        controllers = [interface.name for interface in interfaces if interface.bluetooth]
+        if len(controllers) > 1:
+            raise ValueError(f"one Bluetooth controller, not {', '.join(controllers)}")
         slots = [interface.name for interface in interfaces if interface.card_slot]
         if len(slots) > 1:
             raise ValueError(f"one SD card slot, not {', '.join(slots)}")
@@ -435,8 +451,8 @@ class BoardLink:
             self._seq = message.seq
         if isinstance(message, UartTx):
             self._uart_tx(message)
-        elif isinstance(message, EthTx):
-            self._eth_tx(message)
+        elif isinstance(message, EthTx | HciTx):
+            self._packet(message)
         elif isinstance(message, UartCfg):
             self._uart_cfg(message)
         elif isinstance(message, GpioOut):
@@ -497,9 +513,11 @@ class BoardLink:
                     )
                 self._answers += [(interface, t, data) for t, data in answers]
 
-    def _eth_tx(self, message: EthTx) -> None:
+    def _packet(self, message: EthTx | HciTx) -> None:
+        """An Ethernet frame to the network behind the access point, or an H4 packet to the
+        guest's Bluetooth controller."""
         for interface in self.interfaces:
-            if interface.ethernet:
+            if interface.ethernet if isinstance(message, EthTx) else interface.bluetooth:
                 with calling(interface.name, "receive"):
                     answers = _outputs(
                         interface.name, "receive", interface.receive(message.t, "out", message.data)
@@ -628,6 +646,9 @@ class BoardLink:
             if interface.ethernet:
                 inputs.append((interface, EthRx(t, data)))
                 continue
+            if interface.bluetooth:
+                inputs.append((interface, HciRx(t, data)))
+                continue
             wire = interface.wire
             if wire is None or wire.rx is None:
                 raise LinkError(f"{interface.name} sent bytes, and has no RX pin to send them on")
@@ -674,7 +695,16 @@ class BoardLink:
         source = interface.name
         if not isinstance(
             message,
-            UartRx | GpioIn | Release | Adc | EthRx | WifiAp | SdCardChange | SdFault | SdClear,
+            UartRx
+            | GpioIn
+            | Release
+            | Adc
+            | EthRx
+            | HciRx
+            | WifiAp
+            | SdCardChange
+            | SdFault
+            | SdClear,
         ):
             raise LinkError(f"{source} sent {message!r}, which is not an input")
         try:
@@ -693,6 +723,12 @@ class BoardLink:
             if not interface.ethernet:
                 raise LinkError(
                     f"{source} sent {message.TYPE}, and is not the network behind the access point"
+                )
+            return
+        if isinstance(message, HciRx):
+            if not interface.bluetooth:
+                raise LinkError(
+                    f"{source} sent {message.TYPE}, and is not the guest's Bluetooth controller"
                 )
             return
         if isinstance(message, SdCardChange | SdFault | SdClear):

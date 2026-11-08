@@ -25,6 +25,10 @@ MAX_LINE = 1 << 20
 ETH_MIN = 14
 ETH_MAX = 1518
 
+# The longest H4 packet esp32sim's VHCI carries either way (5.22): its 512-byte buffer less the 16
+# its length word takes (`esp-soc/src/ble/vhci.rs`).
+HCI_MAX = 496
+
 # The longest delay an `sd_fault` may give, in nanoseconds (5.20): 10 s.
 SD_DELAY_MAX = 10_000_000_000
 # The largest `count` an `sd_fault` may give (5.20): what the runner's JSON integers hold.
@@ -116,6 +120,17 @@ class EthTx:
     """An Ethernet frame the Wi-Fi station sent, with `--wifi` (5.15)."""
 
     TYPE: ClassVar[str] = "eth_tx"
+    seq: int
+    t: int
+    data: bytes
+
+
+@dataclass(frozen=True)
+class HciTx:
+    """An H4 packet the guest's Bluetooth host sent its controller, with its packet-type byte,
+    with `--bt` (5.22)."""
+
+    TYPE: ClassVar[str] = "hci_tx"
     seq: int
     t: int
     data: bytes
@@ -281,6 +296,16 @@ class EthRx:
 
 
 @dataclass(frozen=True)
+class HciRx:
+    """From `t` this H4 packet, with its packet-type byte, is for the guest's Bluetooth host,
+    which reads it at its next VHCI poll (5.22)."""
+
+    TYPE: ClassVar[str] = "hci_rx"
+    t: int
+    data: bytes
+
+
+@dataclass(frozen=True)
 class WifiAp:
     """From `t` the access point is on the air, or off it (5.16)."""
 
@@ -365,7 +390,7 @@ class Stop:
     TYPE: ClassVar[str] = "stop"
 
 
-Event = UartTx | UartCfg | GpioOut | Reset | EthTx
+Event = UartTx | UartCfg | GpioOut | Reset | EthTx | HciTx
 RunnerMessage = (
     RunnerHello | Event | Sync | Console | Warn | SdCardAck | SdOp | FlashDumpAck | Stats
 )
@@ -375,6 +400,7 @@ Input = (
     | Release
     | Adc
     | EthRx
+    | HciRx
     | WifiAp
     | Power
     | ChipReset
@@ -567,6 +593,15 @@ class Fields:
             )
         return data
 
+    def packet(self, name: str) -> bytes:
+        data = self.data(name)
+        if not 1 <= len(data) <= HCI_MAX:
+            raise ProtocolError(
+                f"{name} is an H4 packet of {len(data)} bytes; esp32sim's VHCI carries 1 to"
+                f" {HCI_MAX}"
+            )
+        return data
+
     def number(self, name: str) -> float:
         value = self._get(name)
         if isinstance(value, bool) or not isinstance(value, int | float):
@@ -709,6 +744,7 @@ DECODERS: dict[Sender, dict[str, Callable[[Fields], Message]]] = {
         ),
         "reset": lambda f: Reset(f.integer("seq", 1), f.integer("t"), f.integer("cause")),
         "eth_tx": lambda f: EthTx(f.integer("seq", 1), f.integer("t"), f.frame("data")),
+        "hci_tx": lambda f: HciTx(f.integer("seq", 1), f.integer("t"), f.packet("data")),
         "sync": lambda f: Sync(f.integer("t")),
         "console": lambda f: Console(f.integer("t"), f.data("data")),
         "warn": lambda f: Warn(
@@ -736,6 +772,7 @@ DECODERS: dict[Sender, dict[str, Callable[[Fields], Message]]] = {
         "release": lambda f: Release(f.integer("t"), f.pins("pins")),
         "adc": lambda f: Adc(f.integer("t"), f.integer("pin"), f.number("volts")),
         "eth_rx": lambda f: EthRx(f.integer("t"), f.frame("data")),
+        "hci_rx": lambda f: HciRx(f.integer("t"), f.packet("data")),
         "wifi_ap": lambda f: WifiAp(f.integer("t"), f.boolean("on")),
         "power": lambda f: Power(f.integer("t"), f.boolean("on")),
         "chip_reset": lambda f: ChipReset(f.integer("t")),

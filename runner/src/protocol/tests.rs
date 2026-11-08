@@ -118,6 +118,13 @@ fn parses_the_peer_messages() {
         })
     );
     assert_eq!(
+        parse(r#"{"type": "hci_rx", "t": 7, "data": "BA4EAQMMAA=="}"#),
+        Ok(Incoming::HciRx {
+            t: 7,
+            data: vec![0x04, 0x0e, 0x04, 0x01, 0x03, 0x0c, 0x00]
+        })
+    );
+    assert_eq!(
         parse(r#"{"type": "wifi_ap", "t": 8, "on": false}"#),
         Ok(Incoming::WifiAp { t: 8, on: false })
     );
@@ -220,6 +227,9 @@ fn refuses_malformed_messages() {
         r#"{"type":"release","t":0,"pins":[-1]}"#,
         r#"{"type":"eth_rx","t":0,"data":"AAAAAAAAAAAAAAAAAA=="}"#,
         r#"{"type":"eth_rx","data":"AAAAAAAAAAAAAAAAAAA="}"#,
+        r#"{"type":"hci_rx","t":0,"data":""}"#,
+        r#"{"type":"hci_rx","t":0,"data":"Zg"}"#,
+        r#"{"type":"hci_rx","data":"BA=="}"#,
         r#"{"type":"wifi_ap","t":0,"on":1}"#,
         r#"{"type":"wifi_ap","t":0}"#,
         r#"{"type":"power","t":0}"#,
@@ -419,6 +429,35 @@ fn writes_the_runner_messages() {
     assert!(parse(&longest).is_ok());
     for line in [hello(CLOCK), sync(3)] {
         assert!(parse_json(&line).is_ok(), "{line}");
+    }
+}
+
+#[test]
+fn hci_packets_both_ways_and_the_limits_of_the_vhci() {
+    // HCI_Reset, as the guest's host sends it first
+    assert_eq!(
+        hci_tx(4, 5, &[0x01, 0x03, 0x0c, 0x00]),
+        r#"{"type":"hci_tx","seq":4,"t":5,"data":"AQMMAA=="}"#
+    );
+    let hci_rx = |len: usize| {
+        format!(
+            r#"{{"type":"hci_rx","t":0,"data":"{}"}}"#,
+            base64(&vec![2; len])
+        )
+    };
+    assert_eq!(
+        parse(&hci_rx(0)),
+        Err("hci_rx: an H4 packet of 0 bytes; esp32sim's VHCI carries 1 to 496".into())
+    );
+    assert!(parse(&hci_rx(497)).unwrap_err().contains("497 bytes"));
+    for len in [1, HCI_MAX] {
+        assert_eq!(
+            parse(&hci_rx(len)),
+            Ok(Incoming::HciRx {
+                t: 0,
+                data: vec![2; len]
+            })
+        );
     }
 }
 
