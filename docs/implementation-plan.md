@@ -645,6 +645,11 @@ has no inquiry, legacy pairing or Classic encryption, so esp32tl's controller ad
 ([decisions](decisions/harness.md#esp32tl-adds-inquiry-legacy-pairing-key-checks-and-encryption-to-bumbles-virtual-controller));
 the controller for the ESP32's side is still #34's to choose.
 
+*Update, 2026-11-08:* #34 chose it: the runner forwards the guest's HCI to the harness over the
+board socket, as `hci_tx` and `hci_rx`, so that the guest's controller is the harness's, on the
+board's clock
+([decision](decisions/runner.md#the-guests-hci-goes-over-the-board-socket-on-the-boards-clock)).
+
 ### M9. Deep sleep and time skip
 
 - Upstream issue for the missing timer wake (esp32sim notes LACT sleep-time stepping as not

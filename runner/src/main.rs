@@ -92,7 +92,7 @@ fn main() -> ExitCode {
     let stop = run(&mut m);
     report_card(card.as_ref());
     if let Some(path) = &opts.flash_out {
-        session::write_flash_at_end(path, &m.bus.flash);
+        session::write_flash_at_end(path, &session::Guest::flash(&m));
     }
     eprintln!(
         "esp32tl-runner: stop: {} at {:.6} s ({:.1} s wall, {} resets)",
@@ -343,21 +343,31 @@ fn setup(
     Ok((m, elf))
 }
 
-/// `--bt`: esp32sim's VHCI hooks over the symbols of the application's ELF, as its `--ble` installs
-/// them, with the forwarder in place of esp32sim's virtual controller. `enable_ble` replaces the
-/// whole `Ble`, its session included, so the forwarder goes in after it; `reboot()` keeps the
-/// session from then on, and resets it (`Ble::reset`).
+/// `--bt`: the application's ELF, then [`forward`].
 fn bluetooth(m: &mut esp32::Machine, path: &Path, hci: hci::Shared) -> Result<(), String> {
     let at = |e: String| format!("--bt {}: {e}", path.display());
     let elf = esp_soc::elf::parse(&read(path)?).map_err(at)?;
-    m.bus.enable_ble(&elf).map_err(at)?;
-    m.bus.ble.session = esp_soc::ble::peer::Session::new(
-        Box::new(hci::Forwarder(hci)),
-        esp_soc::ble::Link::default(),
-    );
+    forward(m, &elf, hci).map_err(at)?;
     eprintln!(
         "esp32tl-runner: Bluetooth controller on the socket, VHCI hooks from {}",
         path.display()
+    );
+    Ok(())
+}
+
+/// esp32sim's VHCI hooks over the symbols of `elf`, as its `--ble` installs them, with the
+/// forwarder in place of esp32sim's virtual controller. `enable_ble` replaces the whole `Ble`, its
+/// session included, so the forwarder goes in after it; `reboot()` keeps the session from then
+/// on, and resets it (`Ble::reset`).
+fn forward(
+    m: &mut esp32::Machine,
+    elf: &esp_soc::elf::Elf,
+    hci: hci::Shared,
+) -> Result<(), String> {
+    m.bus.enable_ble(elf)?;
+    m.bus.ble.session = esp_soc::ble::peer::Session::new(
+        Box::new(hci::Forwarder(hci)),
+        esp_soc::ble::Link::default(),
     );
     Ok(())
 }

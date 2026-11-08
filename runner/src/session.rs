@@ -49,6 +49,7 @@ use crate::transport::{Link, LinkError};
 use esp_soc::uart::{UartInput, UartRoute};
 use esp_soc::wifi::{self, StaState};
 use esp_soc::{SocBus, Stop};
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::convert::Infallible;
 use std::path::Path;
@@ -134,8 +135,8 @@ pub trait Guest {
     // The flash, asked only with `--flash-out`: the default is a chip without any.
 
     /// The whole flash, as the guest has left it.
-    fn flash(&self) -> &[u8] {
-        &[]
+    fn flash(&self) -> Cow<'_, [u8]> {
+        Cow::Borrowed(&[])
     }
 }
 
@@ -266,8 +267,16 @@ impl Guest for esp32::Machine {
     fn resyncs(&self) -> u64 {
         self.rt.resyncs
     }
-    fn flash(&self) -> &[u8] {
-        &self.bus.flash
+    /// With `--bt`, from the guest's `esp_bt_controller_init` until the next `reboot()`,
+    /// esp32sim's trampoline sits in the flash over the function's code (`install`,
+    /// `esp-soc/src/ble/vhci.rs:168-191`), which the guest never wrote: the copy has the code.
+    fn flash(&self) -> Cow<'_, [u8]> {
+        let Some((offset, code)) = &self.bus.ble.original_flash else {
+            return Cow::Borrowed(&self.bus.flash);
+        };
+        let mut flash = self.bus.flash.to_vec();
+        flash[*offset..*offset + code.len()].copy_from_slice(code);
+        Cow::Owned(flash)
     }
 }
 
@@ -523,7 +532,7 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
         };
         // before `stats`: a peer that has them finds the file in place
         if let Some(path) = self.opts.flash_out {
-            write_flash_at_end(path, self.guest.flash());
+            write_flash_at_end(path, &self.guest.flash());
         }
         let end = self.finish(end);
         (end, self.stats)
@@ -1176,7 +1185,7 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                     let Some(path) = self.opts.flash_out else {
                         return Err(protocol_error("flash_dump without --flash-out", &line));
                     };
-                    let error = write_flash(path, self.guest.flash())
+                    let error = write_flash(path, &self.guest.flash())
                         .err()
                         .map(|e| format!("{}: {e}", path.display()));
                     // not an event, and the turn goes on: no input of it has been applied, and

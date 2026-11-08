@@ -517,7 +517,8 @@ class BoardLink:
         """An Ethernet frame to the network behind the access point, or an H4 packet to the
         guest's Bluetooth controller."""
         for interface in self.interfaces:
-            if interface.ethernet if isinstance(message, EthTx) else interface.bluetooth:
+            receives = interface.ethernet if isinstance(message, EthTx) else interface.bluetooth
+            if receives:
                 with calling(interface.name, "receive"):
                     answers = _outputs(
                         interface.name, "receive", interface.receive(message.t, "out", message.data)

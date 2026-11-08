@@ -26,7 +26,8 @@ ETH_MIN = 14
 ETH_MAX = 1518
 
 # The longest H4 packet esp32sim's VHCI carries either way (5.22): its 512-byte buffer less the 16
-# its length word takes (`esp-soc/src/ble/vhci.rs`).
+# bytes before the packet, which hold its length word and the controller task's name
+# (`esp-soc/src/ble/vhci.rs`).
 HCI_MAX = 496
 
 # The longest delay an `sd_fault` may give, in nanoseconds (5.20): 10 s.

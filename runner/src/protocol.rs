@@ -23,7 +23,8 @@ pub const MAX_LINE: usize = 1 << 20;
 pub const ETH_MIN: usize = 14;
 pub const ETH_MAX: usize = 1518;
 /// The longest H4 packet esp32sim's VHCI carries either way (5.22): its buffer, `BUFFER_SIZE`
-/// 512 bytes, less the 16 its length word takes (`esp-soc/src/ble/vhci.rs`).
+/// 512 bytes, less the 16 before the packet, which hold its length word and the controller task's
+/// name (`esp-soc/src/ble/vhci.rs`).
 pub const HCI_MAX: usize = 496;
 /// The longest delay an `sd_fault` may give (5.20): 10 emulated seconds, twice ESP-IDF's longest
 /// SD timeout, its 5 s for a write.

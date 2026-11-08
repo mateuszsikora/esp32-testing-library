@@ -910,8 +910,9 @@ millisecond later.
 
 `data` is one H4 packet with its packet-type byte first: `01` a command, `02` ACL data, `03` SCO
 data, `04` an event (`05` ISO data with LE Audio). Neither side looks into it further. It is 1 to
-496 bytes, the most esp32sim's VHCI carries either way: its buffer is `BUFFER_SIZE`, 512 bytes, and
-its length word takes 16 (`esp-soc/src/ble/vhci.rs:9`). esp32sim drops a longer packet from the
+496 bytes, the most esp32sim's VHCI carries either way: its buffer is `BUFFER_SIZE`, 512 bytes
+(`esp-soc/src/ble/vhci.rs:9`), and the packet starts 16 bytes into it, after its 4-byte length word
+and the controller task's name, `vhci` (`:189`, `:302-304`). esp32sim drops a longer packet from the
 host with `[ble] rejected invalid VHCI packet pointer, length or controller state`
 (`esp-soc/src/ble/vhci.rs:273-280`), and one for the host with `[ble] rejected oversized or
 unmapped controller packet` (`:302-309`), so the runner refuses an `hci_rx` outside the range as a
@@ -934,7 +935,9 @@ currently services controllers only at guest adapter polls", `esp-soc/src/ble.rs
 task delivers at most one packet a poll: after a packet its next poll returns nothing, so that the
 host finishes with it, and with nothing to deliver the task sleeps one FreeRTOS tick
 (`vTaskDelay(1)`, the trampoline described at `esp-soc/src/ble/vhci.rs:18-20`; the `Poll` hook at
-`:292-312`). The host gets at most one controller packet a tick, 10 ms at ESP-IDF's default
+`:292-315`). Nothing reaches the host either before `esp_bt_controller_enable`, or after
+`esp_bt_controller_disable` (`:240-244`), or before it registers its callbacks (`:299`): packets
+wait, and a later `enable` delivers those from before the `disable`. The host gets at most one controller packet a tick, 10 ms at ESP-IDF's default
 `CONFIG_FREERTOS_HZ=100`; what comes due meanwhile waits, in order. Nothing in the runner changes
 that pace. A chip reset or a power-on reset, and the guest's `esp_bt_controller_deinit`, lose the
 packets the host has not read (`Ble::reset`, `esp-soc/src/ble/vhci.rs:137-144`); the host's packets
@@ -942,7 +945,13 @@ from before the reset still go out, before its `reset`.
 
 A peer answers a packet within its `latency` like any event. `BoardLink` gives every `hci_tx` to
 the one interface that is the guest's Bluetooth controller (`Interface.bluetooth`), and sends each
-output of it as one `hci_rx`.
+output of it as one `hci_rx`. Without such an interface the packets go nowhere, and the host waits
+for answers that never come.
+
+`flash_dump` and the end of the run (5.21) write the flash as the guest has it: from the guest's
+`esp_bt_controller_init` on, esp32sim's controller task runs from a trampoline it wrote into the
+flash over the function's code (`install`, `esp-soc/src/ble/vhci.rs:168-191`), and the runner
+writes the code esp32sim keeps for `reboot()` to put back (`Ble::original_flash`) in its place.
 
 At esp32sim's pin `esp_bt_controller_enable` accepts mode 1 (BLE) and 3 (dual mode) only
 (`esp-soc/src/ble/vhci.rs:233-239`): a firmware that enables mode 2, BR/EDR only, gets

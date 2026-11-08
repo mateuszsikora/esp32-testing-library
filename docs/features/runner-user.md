@@ -305,10 +305,16 @@ What the guest sees:
 The harness's side, the controller on the air of its Bluetooth peers, is not in esp32tl yet
 (#34); running it by hand needs a peer that speaks the two messages and is a controller.
 
-The command line refuses `--bt` without `--board`, with exit code 2. An ELF that cannot be read,
-is not an ELF, or lacks a symbol the hooks need ends the run before it starts with exit code 2:
-`esp32tl-runner: --bt ELF: BLE requires ELF symbol esp_bt_controller_init`, with esp32sim's own
-message after the path.
+The command line refuses `--bt` without `--board`, with exit code 2. An ELF esp32sim refuses, one
+that is not an ELF or lacks a symbol the hooks need, ends the run before it starts with exit code
+2 and esp32sim's message after the path: `esp32tl-runner: --bt ELF: BLE requires ELF symbol
+esp_bt_controller_init`. One that cannot be read does too, as `esp32tl-runner: ELF: ERROR`. esp32sim
+checks the rest when the firmware calls `esp_bt_controller_init`: a failure then is a `[ble] …`
+line on stderr, the call fails, and the run goes on without a controller.
+
+With `--flash-out`, the file holds the flash as the firmware has it, although esp32sim has written
+its controller task's code over `esp_bt_controller_init` in the emulated flash: the runner puts
+the function's own code back in the copy it writes.
 
 ## What it prints
 

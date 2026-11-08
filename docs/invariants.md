@@ -353,6 +353,7 @@ that references to its number keep their meaning.
      `runner/src/session/tests.rs::a_power_on_reset_loses_the_hci_packets_the_host_has_not_read`,
      `runner/src/session/tests.rs::hci_rx_needs_bt_and_fits_the_vhci`,
      `runner/src/hci/tests.rs::a_chip_reset_loses_what_the_host_has_not_read_and_keeps_the_forwarder`,
+     `runner/src/tests.rs::forward_leaves_the_forwarder_as_the_guests_controller`,
      `tests/test_link_protocol.py::test_an_h4_packet_is_1_to_496_bytes_either_way`,
      `tests/test_boardlink.py::test_one_bluetooth_controller`,
      `tests/test_boardlink.py::test_hci_rx_from_an_interface_that_is_not_the_controller_fails_the_link`
@@ -1414,8 +1415,10 @@ that references to its number keep their meaning.
 
 - **190.** A `flash_dump` writes the guest's flash as it is at that turn, not the build's, and the
      turn goes on: no time moves, no slice runs and no turn is counted, for the runner and for
-     `board.flash()`. Its answer starts `--peer-timeout` again.
+     `board.flash()`. Its answer starts `--peer-timeout` again. With `--bt`, the code esp32sim's
+     controller trampoline covers in the flash is written in its place.
      `runner/src/session/tests.rs::a_flash_dump_writes_the_flash_of_the_turn_and_the_turn_goes_on`,
+     `runner/src/session/tests.rs::on_the_emulator_the_flash_read_has_the_code_esp32sims_trampoline_covers`,
      `runner/src/session/tests.rs::a_flash_dump_moves_no_time_and_runs_no_guest`,
      `runner/src/session/tests.rs::each_flash_dump_ack_starts_the_peer_timeout_again`,
      `tests/test_clock.py::test_a_flash_dump_is_answered_in_the_turn_the_link_is_held_at_and_moves_no_time`,

@@ -480,7 +480,20 @@ controller puts on the link. Every error of the two calls ends the run before it
 as `--bt {path}: {error}`, `{error}` esp32sim's: `not an ELF file`, `BLE requires ELF symbol
 {name}`, `BLE controller init has no room for the guest task trampoline`, `BLE controller BSS is
 too small or outside DRAM`. A file that cannot be read is `{path}: {error}`, as for the other
-inputs.
+inputs. esp32sim checks the rest only when the guest calls `esp_bt_controller_init`, which installs
+the controller task's trampoline (`install`, `esp-soc/src/ble/vhci.rs:168-191`): a failure there
+is a line on stderr, `[ble] BLE controller init does not match the guest calling convention`,
+`[ble] BLE controller init crosses a noncontiguous flash mapping` or `[ble] BLE cannot read
+trampoline memory`, the guest's call returns `u32::MAX` (`:217-220`), and the run goes on, with
+no controller. A run that starts is no proof the controller works; the `Send` and `Poll` hooks'
+refusals are lines on stderr too (protocol 5.22).
+
+**The flash.** `install` writes the trampoline over `esp_bt_controller_init`'s code. When that is in
+flash, the bus writes into `m.bus.flash` itself and esp32sim keeps the code it covered in
+`Ble::original_flash`, which `reboot()` puts back (`Ble::restore_flash`, `esp32/src/soc.rs:135`).
+`Guest::flash`, which `flash_dump` and the end of the run write (protocol 5.21), returns a copy
+with the code in place while `original_flash` holds it, and the flash itself otherwise; the guest
+goes on running the trampoline.
 
 **The forwarder.** `hci::Hci`, shared as `hci::Shared` (`Rc<RefCell<Hci>>`) by the `Forwarder` in
 the machine and the session (`Options::hci`), holds `tx`, the host's packets with their bus cycle,
@@ -510,7 +523,7 @@ any other. A packet sent in the slice that the block point ends goes out before 
 and `apply_inputs` pushes the packet onto `rx`. The guest's host reads it at its controller task's
 next VHCI poll: esp32sim's task polls, delivers at most one packet a poll and then makes its next
 poll return nothing (`yield_to_host`), and sleeps one FreeRTOS tick when a poll returns nothing
-(`vTaskDelay(1)`; the trampoline, `esp-soc/src/ble/vhci.rs:18-20`, and the `Poll` hook, `:292-312`).
+(`vTaskDelay(1)`; the trampoline, `esp-soc/src/ble/vhci.rs:18-20`, and the `Poll` hook, `:292-315`).
 At ESP-IDF's default `CONFIG_FREERTOS_HZ=100` that is one packet every 10 ms at most while packets
 wait; the runner changes nothing in that. A packet pushed while the supply is off waits in `rx` and
 is cleared by the power-on reset.
@@ -830,6 +843,11 @@ a guest that programs a byte between two dumps;
 - `runner/src/tests.rs`: `stop_names_are_the_variant_names` builds every `Stop` variant and
   checks that `stop_name` is the start of its `Debug` text, followed by nothing, a space or `(`,
   so that `CostModelLifecycle` reported as `CostModel` fails.
+  `forward_leaves_the_forwarder_as_the_guests_controller` runs `forward` on a real
+  `esp32::Machine` with an ELF that has the controller's symbols, as esp32sim's own tests give
+  them, and checks that a packet the hooks send reaches `tx` and that nothing answers it, as
+  esp32sim's controller would; `forward_refuses_an_elf_without_the_controller` checks esp32sim's
+  message.
 - `runner/src/protocol/tests.rs`: time conversion in both directions and past 76 emulated
   seconds, character times, base64 against RFC 4648's vectors and malformed input, parsing every
   message the peer may send and refusing malformed ones (`eth_rx` of 13 bytes or without `t`,
@@ -933,7 +951,10 @@ a guest that programs a byte between two dumps;
   nothing, two polls at the time read the two packets in order);
   `a_chip_reset_loses_the_hci_packets_the_host_has_not_read` (and the host's packet from before
   the reset goes out before `reset`); `a_power_on_reset_loses_the_hci_packets_the_host_has_not_read`;
-  `hci_rx_needs_bt_and_fits_the_vhci` (without `--bt`, 497 bytes, and 496 taken).
+  `hci_rx_needs_bt_and_fits_the_vhci` (without `--bt`, 497 bytes, and 496 taken);
+  `on_the_emulator_the_flash_read_has_the_code_esp32sims_trampoline_covers` (`Guest::flash` on a
+  real `esp32::Machine` with `original_flash` set: the code in the copy, the trampoline in the
+  flash).
   The SD card slot: `the_peer_takes_the_card_out_and_puts_cards_in_at_their_times` (a card out,
   another in, then out and the first in again at one instant, each acknowledged at its time in
   the order sent, no `seq`, no turn of their own);

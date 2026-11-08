@@ -279,8 +279,8 @@ impl Guest for FakeGuest {
     fn resyncs(&self) -> u64 {
         self.lags.iter().filter(|&&at| at <= self.now).count() as u64
     }
-    fn flash(&self) -> &[u8] {
-        &self.flash
+    fn flash(&self) -> Cow<'_, [u8]> {
+        Cow::Borrowed(&self.flash)
     }
 }
 
@@ -3451,4 +3451,20 @@ fn hci_rx_needs_bt_and_fits_the_vhci() {
         peer(hci_rx(0, &[0x02; protocol::HCI_MAX])),
     );
     assert!(matches!(r.end, End::MaxSeconds), "{:?}", r.end);
+}
+
+#[test]
+fn on_the_emulator_the_flash_read_has_the_code_esp32sims_trampoline_covers() {
+    let mut m = esp32::machine([0x24, 0x6f, 0x28, 0x00, 0x11, 0x22], 4 << 20);
+    assert!(matches!(Guest::flash(&m), Cow::Borrowed(_)));
+    // as `install` leaves it: the trampoline in the flash, the code it covers in `original_flash`
+    m.bus.flash[0x10020..0x10024].copy_from_slice(&[0x36, 0x41, 0x00, 0x90]);
+    m.bus.ble.original_flash = Some((0x10020, vec![1, 2, 3, 4]));
+    let flash = Guest::flash(&m);
+    assert_eq!(flash.len(), m.bus.flash.len());
+    assert_eq!(flash[0x10020..0x10024], [1, 2, 3, 4]);
+    assert_eq!(flash[..0x10020], m.bus.flash[..0x10020]);
+    assert_eq!(flash[0x10024..], m.bus.flash[0x10024..]);
+    // the guest still runs the trampoline
+    assert_eq!(m.bus.flash[0x10020..0x10024], [0x36, 0x41, 0x00, 0x90]);
 }
