@@ -682,9 +682,10 @@ Status: decided (#34)
 With `--bt`, the runner puts a controller of its own, `hci::Forwarder`, in esp32sim's VHCI session
 in place of esp32sim's virtual BLE controller, and forwards every H4 packet of the guest's host to
 the peer as `hci_tx`, stamped with the bus cycle the host sent it at; the peer's `hci_rx` reaches
-the host as any input does, at its `t` ([protocol 5.22](../protocol.md#522-hci_tx-and-hci_rx-ext-34)).
-The guest's controller is then the harness's, on the board's clock, on the same air as the
-Bluetooth peers, which are Bumble devices on that clock already
+the host as any input does, at its `t`
+([protocol 5.22](../protocol.md#522-hci_tx-and-hci_rx-ext-34)). The guest's controller is then the
+harness's, on the board's clock, on the same air as the Bluetooth peers, which are Bumble devices on
+that clock already
 ([decision](harness.md#the-bluetooth-peer-runs-bumble-in-the-harness-on-the-boards-clock)). The
 hooks need nothing new of esp32sim: `Session::new` and the `HciController` trait are public at the
 pin. A spike on 2026-11-08 ran ESP-IDF v5.3.6's `bt_spp_initiator`, unmodified, through inquiry,

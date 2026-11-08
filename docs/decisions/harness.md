@@ -1433,10 +1433,10 @@ board's time in it took about 20 ms of wall time
 **Rejected:** Bumble on asyncio's own loop, because its timers and the peer's answers would then
 fall in wall time, and runs would not repeat; Root Canal, Android's virtual controller, for the
 peer, because it is a separate binary that keeps its own time in wall time, so the test could not
-hold it, and it would have to be built or downloaded. Which controller the ESP32's side talks to
-was #34's to choose; #34 chose the board socket, with no HCI transport in esp32sim
-([decision](runner.md#the-guests-hci-goes-over-the-board-socket-on-the-boards-clock)). Also rejected: a delay per
-packet on the link, because no test needs one and any value would be invented.
+hold it, and it would have to be built or downloaded. Which controller the ESP32's side talks to was
+#34's to choose; #34 chose the board socket, with no HCI transport in esp32sim
+([decision](runner.md#the-guests-hci-goes-over-the-board-socket-on-the-boards-clock)). Also
+rejected: a delay per packet on the link, because no test needs one and any value would be invented.
 
 ## The air's timers are put on the nanosecond, not judged by the selector
 

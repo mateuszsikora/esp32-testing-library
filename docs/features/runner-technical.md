@@ -33,8 +33,9 @@ its pin, `afcfba6`.
    that there is at least one `--flash-at`, that `--sd-rw` comes with `--sd-spi`, that
    `--wifi` comes with `--board` and its `--wifi-nearby` specs parse and differ from the access
    point (`--wifi-nearby` without `--wifi` is refused there too), that `--bt` comes with
-   `--board`, that `--realtime` does, and that `--console socket` or `both` comes with `--board`. A `--wifi` spec is checked as the flag is read (`access_point`:
-   esp32sim's `ApConfig::parse`, then no `epoch`); `cli::Wifi` keeps the spec as given, since
+   `--board`, that `--realtime` does, and that `--console socket` or `both` comes with `--board`.
+   A `--wifi` spec is checked as the flag is read (`access_point`: esp32sim's `ApConfig::parse`,
+   then no `epoch`); `cli::Wifi` keeps the spec as given, since
    `ApConfig` has no `PartialEq`, and `Wifi::access_point` parses it again each time a fresh access
    point is made. The `--wifi-nearby` specs become `BeaconAp`s through `BeaconAp::parse_all`.
 2. **Make the slot**, with `--sd-spi` (`slot`): an empty `Slot` on the wiring; with `--sd-rw`,
@@ -528,10 +529,11 @@ At ESP-IDF's default `CONFIG_FREERTOS_HZ=100` that is one packet every 10 ms at 
 wait; the runner changes nothing in that. A packet pushed while the supply is off waits in `rx` and
 is cleared by the power-on reset.
 
-At esp32sim's pin the `Enable` hook accepts mode 1 and mode 3 only (`esp-soc/src/ble/vhci.rs:233-239`),
-so a firmware built for BR/EDR alone, which enables mode 2, fails there with
-`ESP_ERR_INVALID_ARG` (0x102) and never reaches the forwarder. mikroverk/esp32sim#347, not merged,
-makes the hook take the mode of init's config; the runner needs no change for it.
+At esp32sim's pin the `Enable` hook accepts mode 1 and mode 3 only
+(`esp-soc/src/ble/vhci.rs:233-239`), so a firmware built for BR/EDR alone, which enables mode 2,
+fails there with `ESP_ERR_INVALID_ARG` (0x102) and never reaches the forwarder.
+mikroverk/esp32sim#347, not merged, makes the hook take the mode of init's config; the runner needs
+no change for it.
 
 Why the socket, and not an HCI transport in esp32sim:
 [decision](../decisions/runner.md#the-guests-hci-goes-over-the-board-socket-on-the-boards-clock).
@@ -950,7 +952,8 @@ a guest that programs a byte between two dumps;
   `an_hci_rx_reaches_the_guests_host_at_its_time_and_not_before` (a poll a cycle before finds
   nothing, two polls at the time read the two packets in order);
   `a_chip_reset_loses_the_hci_packets_the_host_has_not_read` (and the host's packet from before
-  the reset goes out before `reset`); `a_power_on_reset_loses_the_hci_packets_the_host_has_not_read`;
+  the reset goes out before `reset`);
+  `a_power_on_reset_loses_the_hci_packets_the_host_has_not_read`;
   `hci_rx_needs_bt_and_fits_the_vhci` (without `--bt`, 497 bytes, and 496 taken);
   `on_the_emulator_the_flash_read_has_the_code_esp32sims_trampoline_covers` (`Guest::flash` on a
   real `esp32::Machine` with `original_flash` set: the code in the copy, the trampoline in the

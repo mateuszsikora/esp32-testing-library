@@ -196,8 +196,8 @@ harness that speaks both gives it, and without `--bt` `hci_rx` is a protocol err
 
 **Events** are the runner messages that carry `seq`: `uart_tx`, `uart_cfg`, `gpio_out`, `reset`,
 `eth_tx` and `hci_tx`. They are what a peer may answer, so they set the block point (rule 1). `seq`
-is one counter over all six, starting at 1 and growing by 1. `sync`, `console`, `warn`, `sd_card_ack`,
-`sd_op`, `flash_dump_ack` and `stats` carry no `seq` and ask for nothing.
+is one counter over all six, starting at 1 and growing by 1. `sync`, `console`, `warn`,
+`sd_card_ack`, `sd_op`, `flash_dump_ack` and `stats` carry no `seq` and ask for nothing.
 
 ### 5.1 `hello`
 
@@ -928,20 +928,21 @@ esp32sim's hook moves the controller to the bus's cycle before it hands it the p
 go out in the order the host sent them, merged by `t` with the `uart_tx`, `console` and `gpio_out`
 of the same slice; at the same `t` a UART byte or a pin change goes first.
 
-`hci_rx`: from `t` the packet is for the guest's host. It goes into the input queue (section 8),
-and when it comes due the runner queues it for the host, which reads it at its controller task's
-next VHCI poll, not at `t`. esp32sim services the controller only at the task's polls ("The machine
+`hci_rx`: from `t` the packet is for the guest's host. It goes into the input queue (section 8), and
+when it comes due the runner queues it for the host, which reads it at its controller task's next
+VHCI poll, not at `t`. esp32sim services the controller only at the task's polls ("The machine
 currently services controllers only at guest adapter polls", `esp-soc/src/ble.rs:9-10`), and the
 task delivers at most one packet a poll: after a packet its next poll returns nothing, so that the
 host finishes with it, and with nothing to deliver the task sleeps one FreeRTOS tick
 (`vTaskDelay(1)`, the trampoline described at `esp-soc/src/ble/vhci.rs:18-20`; the `Poll` hook at
-`:292-315`). Nothing reaches the host either before `esp_bt_controller_enable`, or after
-`esp_bt_controller_disable` (`:240-244`), or before it registers its callbacks (`:299`): packets
-wait, and a later `enable` delivers those from before the `disable`. The host gets at most one controller packet a tick, 10 ms at ESP-IDF's default
+`:292-315`). The host gets at most one controller packet a tick, 10 ms at ESP-IDF's default
 `CONFIG_FREERTOS_HZ=100`; what comes due meanwhile waits, in order. Nothing in the runner changes
-that pace. A chip reset or a power-on reset, and the guest's `esp_bt_controller_deinit`, lose the
-packets the host has not read (`Ble::reset`, `esp-soc/src/ble/vhci.rs:137-144`); the host's packets
-from before the reset still go out, before its `reset`.
+that pace. Nothing reaches the host either before `esp_bt_controller_enable`, or after
+`esp_bt_controller_disable` (`:240-244`), or before it registers its callbacks (`:299`): packets
+wait, and a later `enable` delivers those from before the `disable`. A chip reset or a power-on
+reset, and the guest's `esp_bt_controller_deinit`, lose the packets the host has not read
+(`Ble::reset`, `esp-soc/src/ble/vhci.rs:137-144`); the host's packets from before the reset still go
+out, before its `reset`.
 
 A peer answers a packet within its `latency` like any event. `BoardLink` gives every `hci_tx` to
 the one interface that is the guest's Bluetooth controller (`Interface.bluetooth`), and sends each
