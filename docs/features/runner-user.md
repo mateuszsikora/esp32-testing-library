@@ -135,6 +135,18 @@ still passes from one turn of the peer to the next. The flash is the runner's co
 `--flash-at` files: the files are read once, at the start, and never written.
 [The protocol](../protocol.md#517-power-ext-105) says what a power cycle keeps and what it clears.
 
+A chip in deep sleep runs nothing either, and its RTC goes on: the runner moves the RTC through the
+sleep in long steps, up to just before the alarm of a timer wake, and the chip wakes at the alarm's
+tick through a `reset` with cause 5. A 15-minute sleep takes a few microseconds of wall time on an
+M2 Pro, so a day of 15-minute wakes takes about 7 s, nearly all of it in the boots. Under
+`--realtime` the sleep follows wall time like the rest of the run
+([protocol 6.1](../protocol.md#61-how-the-runner-meets-the-block-point)). A sleep with the RTC
+watchdog on is not stepped through: it runs in esp32sim's idle rounds, at what they cost a sleep
+without the steps (about 3.7 s of wall time for 15 minutes on an M2 Pro, measured with the
+watchdog off), and the watchdog counts through it, so a stage that resets before the timer's
+alarm ends the sleep in that reset
+([decision](../decisions/runner.md#a-deep-sleep-runs-in-long-steps-of-the-rtc-to-just-short-of-its-alarm)).
+
 With `--flash-out PATH` what the firmware wrote can be read: the file holds the whole flash, as big
 as `--flash-mb` says, once the run has ended, however it ended short of a panic. A peer can also ask
 for it in a turn, with `flash_dump`, as often as it likes: the guest does not run, and the run's time
@@ -415,11 +427,12 @@ of the signal, so a shell reports 128 plus its number (130 for `SIGINT`, 143 for
 Python's `Popen` its negative.
 
 With `--board`, once the runner has connected, `SIGTERM` or `SIGINT` ends the run at the end of
-the slice in progress, at most one emulated millisecond, or at once if the runner is waiting for
-the peer. The peer gets the events not yet sent and `stats` with `end: signal`, and the runner
-exits 0. Those last messages get two wall seconds; a peer that does not read them by then is given
-up on, and the exit code stays 0. A second `SIGTERM` or `SIGINT` ends the process at once, with
-128 plus the signal's number. Before the connection is made, a signal ends the process as it does
+the slice in progress, at most one emulated millisecond, or the rest of a deep sleep, which takes
+a few wall microseconds, or at once if the runner is waiting for the peer. The peer gets the
+events not yet sent and `stats` with `end: signal`, and the runner exits 0. Those last messages
+get two wall seconds; a peer that does not read them by then is given up on, and the exit code
+stays 0. A second `SIGTERM` or `SIGINT` ends the process at once, with 128 plus the signal's
+number. Before the connection is made, a signal ends the process as it does
 without `--board`. A test run usually ends otherwise: the backend starts the runner with
 `--max-seconds 86400 --console both --peer-timeout 0` at `board.power_on()`, holds it in a turn
 whenever the test is not waiting, and at teardown answers that turn with `stop`. A runner in no

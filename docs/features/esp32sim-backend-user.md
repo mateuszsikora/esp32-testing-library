@@ -61,15 +61,23 @@ run's log as `boot N: REASON (reset cause C)`, and into the link's statistics as
 `resets`.
 
 A chip in deep sleep with a timer wake wakes on its RTC timer, through a `DEEPSLEEP_RESET` (5).
-`board.wait_for_wake(within=...)` runs the board to that wake in one stretch: the runner runs
-the sleep as fast as esp32sim runs idle time, and the harness takes no turn until the wake, where
+`board.wait_for_wake(within=...)` runs the board to that wake in one stretch: the runner moves
+the chip's RTC through the sleep in long steps, up to just before the timer's alarm
+([runner](runner-user.md#connect-a-peer)), and the harness takes no turn until the wake, where
 `board.wait_until` would look every 100 ms of the board's time
 ([waking from deep sleep](pytest-plugin-user.md#waking-from-deep-sleep)). ESP-IDF's
 `system/deep_sleep` example sleeps 20 s: on an M2 Pro, `wait_for_wake` takes one turn of the link
-and 0.07 s of wall time through it, and returns 1 ms after the wake, where `wait_until` takes 200
-turns and returns at its next 100 ms step. The sleep's emulated time is still run, not skipped,
-so its wall time grows with its length: 15 minutes of sleep take about 3.7 s, measured on a
-firmware with a 15-minute timer wake.
+and 1.0 to 1.6 ms of wall time through it, measured around the call, and returns 1 ms after the
+wake, where `wait_until` takes 200 turns and returns at its next 100 ms step. The length of the
+sleep costs next to nothing: the [periodic wake example](examples-user.md#periodic-wake) runs a
+day of 15-minute sleeps, 96 boots, in about 7 s on an M2 Pro, nearly all of it in the boots
+([decision](../decisions/runner.md#a-deep-sleep-runs-in-long-steps-of-the-rtc-to-just-short-of-its-alarm)).
+A sleep with the RTC watchdog on is not stepped through: it runs in esp32sim's idle rounds, at
+what they cost a sleep without the steps (about 3.7 s of wall time for 15 minutes on an M2 Pro,
+measured with the watchdog off), and the watchdog counts through it, so a stage that resets before
+the timer's alarm ends the sleep in that reset, which `wait_for_wake` reports as no wake from deep
+sleep ([runner](runner-user.md#connect-a-peer)). Under a [real source](real-source-user.md) the
+run follows wall time, the sleep's included.
 
 The console reaches the test over the link, in emulated-time order with the runner's turns
 (`--console both`). The runner's stdout gets it too, and with it the runner's own lines

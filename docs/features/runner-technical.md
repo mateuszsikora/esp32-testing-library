@@ -355,6 +355,24 @@ specifies it:
    the bytes it paces, as `unrouted_rx`, without handing them to the machine, and `deliver_eth`
    the frames, as `eth_rx_dropped`; `switch_access_point` only sets `ap_on`, which the power-on
    reset then follows.
+
+   While the chip is in a deep sleep the loop steps through (`Guest::sleeps_through`), `slice_end`
+   leaves out the next whole millisecond and the `latency` bound, and the loop calls
+   `Guest::sleep_until` with the slice's end before `run_until`; without `--realtime` only. For
+   `esp32::Machine`, `sleeps_through` is `SLEEP_EN` (`RTC_CNTL_STATE0`, bit 31) and
+   `DG_WRAP_PD_EN` (`RTC_CNTL_DIG_PWC`, bit 31) both set in esp32sim's RTC register RAM, with every
+   core waiting and `intenable` 0, as esp32sim's `enter_deep_sleep` and `peripheral_event` leave
+   them, no reset pending, and the RTC watchdog off (`RTC_CNTL_WDTCONFIG0`, bit 31): a sleep with
+   the watchdog on keeps an awake chip's slice ends. `sleep_until` calls `emu_core::Bus::tick`
+   on the bus in steps of at most `SLEEP_STEP`, 2^31 bus cycles, converted with
+   `cpu_cycles_for_bus`, until the slice's end or `WAKE_MARGIN_TICKS`, 2, RTC slow ticks before
+   the alarm, at `SLOW_TICK` bus cycles each, the `RtcSlow` divider of
+   `esp32::periph::Peripherals::CLOCKS`, 1600 at the pin: the alarm is `SLP_TIMER0` and the low
+   16 bits of `SLP_TIMER1`, when `WAKEUP_ENA` has `RTC_TIMER_TRIG_EN` and the target is not 0,
+   less the RTC's `slow_ticks`, and it checks `sleeps_through` before each step. `run_until` then
+   runs the last ticks in esp32sim's idle rounds, which raise the wake's `Stop::SwReset`; when
+   `sleep_until` has reached the slice's end, the loop goes to the next boundary without it
+   ([decision](../decisions/runner.md#a-deep-sleep-runs-in-long-steps-of-the-rtc-to-just-short-of-its-alarm)).
 3. `finish` calls `Link::closing`, sends what is left where the end calls for it (after a last
    `collect` for `max_seconds`, a signal and an emulator stop), adds up the station link's drops,
    and sends `stats`, then `Link::close`.
@@ -687,7 +705,8 @@ handlers: std cannot install one. JSON goes through esp-soc's own parser (`esp_s
 its Cooja link uses) and `esp_soc::web::json_escape`, so the crate adds no JSON crate.
 
 **The esp32sim pin.** esp32sim is not on crates.io, so `runner/Cargo.toml` takes `esp32` and
-`esp-soc` (and `emu-core`, a dev-dependency for `Stop::CostModelLifecycle` in a test) from
+`esp-soc` (and `emu-core`, for the `Bus` trait whose `tick` runs a deep sleep in long steps and for
+`Stop::CostModelLifecycle` in a test) from
 `https://github.com/mikroverk/esp32sim`, with `esp-periph` for the SD card's image store, each at
 `rev = "afcfba65da0da30a35fb0a7c381854c62b92e338"`: the merge of mikroverk/esp32sim#336, with
 which a deep sleep wakes on its RTC timer ([stage 0, gap 4](../stage0-findings.md#gaps)). Images
@@ -934,6 +953,21 @@ a guest that programs a byte between two dumps;
   `on_the_emulator_no_pad_is_driven_after_a_chip_reset` drives GPIO 4 as a plain GPIO and GPIO 26
   from UART1's TX signal, and checks that after `reboot()` no output signal drives any pad and
   `GPIO_ENABLE` and `GPIO_OUT` are 0, which `reset_gpio` relies on.
+  Deep sleep: `a_deep_sleep_is_one_slice_to_its_wake` (a `FakeGuest` asleep from 1 ms to its
+  reset at 10 s, with the 1 ms latency of `wait_for_wake`: one `sleep_until` to a cycle before the
+  wake, no slice ending in the sleep, the `reset` at its cycle and the turn 1 ms after it);
+  `a_deep_sleep_without_a_wake_goes_on_to_the_block_point` (two `sleep_until`s, to each turn);
+  `a_deep_sleep_the_run_loop_cannot_step_through_keeps_its_slices` (no `sleep_until`, a slice to
+  each millisecond, the `reset` at its cycle);
+  `realtime_paces_a_deep_sleep_like_any_other_stretch` (no `sleep_until`, a slice to each
+  millisecond). On the real `esp32::Machine`, with a core in `waiti` and the RTC registers written
+  as ESP-IDF writes them for a timer wake:
+  `on_the_emulator_a_skipped_sleep_wakes_at_the_tick_of_its_alarm` (a 20 s alarm, more than two
+  steps of `sleep_until`, which stops at most three slow ticks before the wake, and the wake after
+  it, like the one without the skip, comes in the first idle round, 512 CPU cycles, at or after
+  the alarm's tick) and `on_the_emulator_only_a_deep_sleep_is_skipped` (an awake chip and one with
+  the RTC watchdog on are not moved, and one without an alarm goes to the end it is given, still
+  asleep).
   Wi-Fi runs against `WifiGuest`, a `FakeGuest` with a scripted relay and a link that takes a
   given number of frames between two slices:
   `the_station_frames_go_out_as_eth_tx_events_stamped_at_the_slice_boundary` (two frames stamped

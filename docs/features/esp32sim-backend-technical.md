@@ -243,18 +243,14 @@ a board that is off (`the board is off: board.wait_for_wake() waits for a board 
 nothing wakes a chip without its supply. It counts the link's `resets`, and calls
 `HeldClock.wait_for_event` with the condition that one more has come, which returns that boot
 from `boots`, the description `a wake from deep sleep`, and `WAKE_LATENCY_NS`, 1 ms. The runner
-ends a slice at every whole emulated millisecond while the board is on (protocol §6.1), so that
-latency adds no slice: the sleep costs the runner what it costs any wait, and the test none of the
-100 ms steps `wait_until` would take. Before the sleep it costs more turns than `wait_until`: every
-event the link sends but the console's bytes, `gpio_out`, `uart_tx`, `uart_cfg` and `eth_tx` among
-them, brings a turn at most 1 ms after it (protocol rule 1). The wait returns at the turn the reset
-brings, at most 1 ms after it, or sooner when an interface's latency is smaller. The sleep is not
-skipped: esp32sim runs it, and its wall time grows with its length, 0.07 s for 20 s and about
-3.7 s for 15 minutes on an M2 Pro, measured on a firmware with a 15-minute timer wake. At the pin
-`afcfba6`, esp32sim's `run` advances idle cores in rounds of `IDLE_CHUNK`, 512 cycles on the
-classic ESP32 (`esp32/src/soc.rs`, `esp-soc/src/machine.rs`), and the RTC timer's wake is no
-device deadline (`ClassicRtc` gives no `next_deadline`, `esp32/src/periph.rs`): the runner's own
-slices are not what a sleep costs. A boot whose `cause` is not `DEEPSLEEP_RESET` (5) raises
+ends a slice at every whole emulated millisecond while the chip runs, and, without `--realtime`
+and with the RTC watchdog off, ends a deep sleep's slices neither there nor at the latency
+(protocol §6.1), so that latency adds no slice: the runner moves the RTC through the sleep in long
+steps, and the test takes none of the 100 ms steps `wait_until` would take. Before the sleep it
+costs more turns than `wait_until`: every event the link sends but the console's bytes,
+`gpio_out`, `uart_tx`, `uart_cfg` and `eth_tx` among them, brings a turn at most 1 ms after it
+(protocol rule 1). The wait returns at the turn the reset brings, at most 1 ms after it, or sooner
+when an interface's latency is smaller. A boot whose `cause` is not `DEEPSLEEP_RESET` (5) raises
 `AssertionError`: `board.wait_for_wake: boot {number} at {at} is {reason} (reset cause {cause}),
 not a wake from deep sleep (DEEPSLEEP_RESET)`. It logs
 `board.wait_for_wake(), up to {within}`, then `a wake from deep sleep: boot {number} at {at}`,
@@ -642,6 +638,9 @@ turns of the link per sleep, `NeverHappened` once the firmware sleeps no more, t
 `TypeError` refusals; and `hello_world`, whose `esp_restart()` gives the `AssertionError`.
 `tests/test_deep_sleep.py` runs ESP-IDF's `system/deep_sleep` example through two of its 20 s
 sleeps, each in at most two turns of the link.
+`examples/periodic_wake/tests/test_periodic_wake.py` runs a day of 15-minute sleeps through
+`wait_for_wake` in under 60 s of wall time
+([examples](examples-technical.md#periodic-wake-implementation)).
 `tests/test_flash_snapshot.py` reads what the same firmware wrote, with `board.flash()`, after a
 reset, after a power-off and after the end of the run.
 `tests/test_modem_fixture.py::test_the_modem_keeps_its_power_through_a_reset_and_loses_it_with_the_board`,
