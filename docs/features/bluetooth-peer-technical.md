@@ -669,32 +669,33 @@ Not covered: firmware, in esp32tl's tests. Until esp32sim's pin has mikroverk/es
 Classic alone, as `bt_spp_initiator` does, gets `ESP_ERR_INVALID_ARG` and sends no packet: the `bt`
 fixture's controller has been seen working with firmware only on a local esp32sim with that change
 (the spike of 2026-11-08), and no firmware has seen a peer leave. Nor is a clock offset other than
-zero. The air's time is exact to the nanosecond up to 2^22 s, about 48 days: from there `round(when *
-1e9)` works on a count of nanoseconds near 2^52, where a float's own error and the product's add up
-to more than half a nanosecond, so a timer can fire a nanosecond early or late. From 2^23 s, about
-97 days, a float of seconds no longer tells one nanosecond from the next, timers a nanosecond apart
-fall together, and where `time()` plus `_clock_resolution` rounds back to `time()` the loop spins at
-one instant, with no error. No test goes that far. There is no `Connection_Accept_Timeout` (Vol 4,
-Part E, 6.7), and the page's timer runs until the target's host accepts rather than until its
-baseband answers: a host that accepts after the page ended, as after 6 s, makes a link on both ends
-when the pager has already reported `PAGE_TIMEOUT`, and the pager's next page gets
-`CONNECTION_ALREADY_EXISTS`. Bumble's host accepts at the instant it hears, so only a slowed host
-reaches this. For the same reason a target keeps the page it heard as a link after that page ended,
-so the pager's remote name request then gets the target's name, with page scan off too, where a real
-controller would page again and end in `PAGE_TIMEOUT`. An acceptance with `role=CENTRAL` after the
-page ended makes no link, where a plain one does: the pager refuses the role switch. Bumble's host
-fails the air with `ObjectLookupError` when it accepts a peer's page with `role=CENTRAL` after its
-own `Device.connect` to that peer failed, as when the peer rejected this side's page while both
-paged: `connect` forgets the page waiting under that address, and `Role_Change` then finds no
-connection. The controller makes the link; a host that sends `Create_Connection` itself, as the test
-of this does, does not meet it. Every page a host hears is taken to get one answer, as Bumble's host
-gives. One that never answers and never resets: its entry stays with nothing to end it, so this
-device's own pages to that peer get `CONNECTION_ALREADY_EXISTS`, also after a page of its own has
-reported `PAGE_TIMEOUT`; and an answer counted late stays owed, so after its end fell, or after this
-device's own page to that peer made the link, the answer to the next page is taken for it and that
-pager gets `PAGE_TIMEOUT`. `HCI_Reset`, which Bluedroid sends at every start, clears both (#166 is
-the timeout that would end them without one). The controller does not hold ACL data back for the
-host's `Host_Total_Num_ACL_Data_Packets` (7.3.38 to 7.3.40): Bluedroid turns controller-to-host flow
+zero. The air's time is exact to the nanosecond up to 2^22 s, about 48 days: from there
+`round(when * 1e9)` works on a count of nanoseconds near 2^52, where a float's own error and the
+product's add up to more than half a nanosecond, so a timer can fire a nanosecond early or late.
+From 2^23 s, about 97 days, a float of seconds no longer tells one nanosecond from the next, timers
+a nanosecond apart fall together, and where `time()` plus `_clock_resolution` rounds back to
+`time()` the loop spins at one instant, with no error. No test goes that far. There is no
+`Connection_Accept_Timeout` (Vol 4, Part E, 6.7), and the page's timer runs until the target's host
+accepts rather than until its baseband answers: a host that accepts after the page ended, as after 6
+s, makes a link on both ends when the pager has already reported `PAGE_TIMEOUT`, and the pager's
+next page gets `CONNECTION_ALREADY_EXISTS`. Bumble's host accepts at the instant it hears, so only a
+slowed host reaches this. For the same reason a target keeps the page it heard as a link after that
+page ended, so the pager's remote name request then gets the target's name, with page scan off too,
+where a real controller would page again and end in `PAGE_TIMEOUT`. An acceptance with
+`role=CENTRAL` after the page ended makes no link, where a plain one does: the pager refuses the
+role switch. Bumble's host fails the air with `ObjectLookupError` when it accepts a peer's page with
+`role=CENTRAL` after its own `Device.connect` to that peer failed, as when the peer rejected this
+side's page while both paged: `connect` forgets the page waiting under that address, and
+`Role_Change` then finds no connection. The controller makes the link; a host that sends
+`Create_Connection` itself, as the test of this does, does not meet it. Every page a host hears is
+taken to get one answer, as Bumble's host gives. One that never answers and never resets: its entry
+stays with nothing to end it, so this device's own pages to that peer get
+`CONNECTION_ALREADY_EXISTS`, also after a page of its own has reported `PAGE_TIMEOUT`; and an answer
+counted late stays owed, so after its end fell, or after this device's own page to that peer made
+the link, the answer to the next page is taken for it and that pager gets `PAGE_TIMEOUT`.
+`HCI_Reset`, which Bluedroid sends at every start, clears both (#166 is the timeout that would end
+them without one). The controller does not hold ACL data back for the host's
+`Host_Total_Num_ACL_Data_Packets` (7.3.38 to 7.3.40): Bluedroid turns controller-to-host flow
 control on and counts its buffers, and the controller sends what it has.
 `Read_Local_Supported_Commands` gives Bumble 0.0.236's list, which does not name every command the
 controller answers, and `Read_Local_Version_Information` Bumble's version, 5.0. TODO(owner): what
@@ -703,8 +704,19 @@ it finds no DLC in Bumble 0.0.236's multiplexer, which drops the frame; Bluedroi
 reset the firmware makes itself (a panic, the watchdog, `esp_restart()`) reaches the controller only
 with the runner's `reset` message: a packet the harness sent in the turn before, due after the
 reset, is in the runner's queue already, and the new host reads it first, within the 10 µs of the
-latency. When two pages cross, the controllers agree on one link and its central, but Bumble's host
-of a device that heard the other's page during its own `Device.connect` may take itself for the
+latency. The firmware's controller leaves the air only at a chip reset, `board.reset()` included,
+and when the board's supply goes off: the runner sends nothing when the chip goes into a deep sleep,
+or when the firmware calls `esp_bt_controller_disable` or `esp_bt_controller_deinit`. Through a deep
+sleep, and after either call, the controller stays on the air with its scans and its links, as if
+its radio were on: a device can find it and page it, and a link made before does not lose contact. A
+deep sleep ends with a reset, `DEEPSLEEP_RESET`, at which the controller leaves the air and comes
+back; the peer's end of a link then falls at its supervision timeout counted from the wake, not from
+the sleep. After `esp_bt_controller_disable`, what the controller sends waits in the runner's queue,
+and a later `enable` delivers it; after `deinit`, the runner drops it
+([protocol, 5.22](../protocol.md#522-hci_tx-and-hci_rx-ext-34)).
+([Decision](../decisions/harness.md#the-firmwares-controller-does-not-follow-a-deep-sleep-or-a-disabled-controller).)
+When two pages cross, the controllers agree on one link and its central, but Bumble's host of a
+device that heard the other's page during its own `Device.connect` may take itself for the
 peripheral where its controller is the central: its `on_connection_request`, which accepts the page
 heard, puts a peripheral's `Connection` in `pending_connections` over the central's that
 `Device.connect` left there, and the `Connection_Complete` of either page takes it. Only a

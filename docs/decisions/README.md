@@ -204,6 +204,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Controller-to-host flow control is postponed](harness.md#controller-to-host-flow-control-is-postponed) | `harness.md` | postponed (#34) |
 | [The bt fixture gives the air, and the test makes its devices on it](harness.md#the-bt-fixture-gives-the-air-and-the-test-makes-its-devices-on-it) | `harness.md` | decided (#34) |
 | [The SPP peer has a service name and offers basic mode only](harness.md#the-spp-peer-has-a-service-name-and-offers-basic-mode-only) | `harness.md` | decided (#34) |
+| [The firmware's controller does not follow a deep sleep or a disabled controller](harness.md#the-firmwares-controller-does-not-follow-a-deep-sleep-or-a-disabled-controller) | `harness.md` | postponed (#34) |
 | [bumble is a dependency of esp32tl, pinned exactly](harness.md#bumble-is-a-dependency-of-esp32tl-pinned-exactly) | `harness.md` | decided (#33) |
 | [Serial is opt-in and pytest-embedded owns flashing and the port](harness.md#serial-is-opt-in-and-pytest-embedded-owns-flashing-and-the-port) | `harness.md` | decided (#25) |
 | [Reference recordings check the serial artifact before opening the port](harness.md#reference-recordings-check-the-serial-artifact-before-opening-the-port) | `harness.md` | decided (#25) |

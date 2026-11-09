@@ -62,6 +62,11 @@ a fixture does. From then on:
   central wrote another (`bt_spp_initiator`'s Bluedroid writes 5 s); until then the firmware's page
   to it ends in `PAGE_TIMEOUT`, and `bt_spp_initiator` does not page again: seen on 2026-11-08 with
   `board.reset()` 10 s into the stream.
+- **A deep sleep or a disabled controller does not take it off the air.** The runner sends nothing
+  when the chip goes into a deep sleep or when the firmware calls `esp_bt_controller_disable` or
+  `esp_bt_controller_deinit`, so the controller stays on the air with its scans and links until the
+  next reset: a device can still find it, and a link to it does not lose contact. The wake from a
+  deep sleep is a reset: there the controller restarts, and a peer's link loses contact.
 
 On the serial backend the test skips at the fixture: `serial: bluetooth takes no model source on
 this backend`. A `bt` asked for after `board.power_on()`, through `board.bluetooth`, is refused:

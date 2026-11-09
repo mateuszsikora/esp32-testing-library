@@ -1922,6 +1922,22 @@ Bluedroid stays in basic mode.
 **Rejected:** no name by default, because the firmware a test is most likely to start from would
 fault; and Enhanced Retransmission Mode in the peer, which is Bumble's RFCOMM server's to do.
 
+## The firmware's controller does not follow a deep sleep or a disabled controller
+
+Status: postponed (#34)
+
+On a real chip the radio stops in a deep sleep and after `esp_bt_controller_disable`, and a peer's
+link loses contact there. The runner sends nothing at either, nor at `esp_bt_controller_deinit`,
+which resets esp32sim's VHCI session: the harness knows of a deep sleep only at the wake, which is
+a reset. The firmware's controller therefore stays on the air until the next chip reset, its
+scans and links as they were. A message from the runner for each would be needed, a change of the
+runner and the protocol; the first test that depends on what a peer sees during a sleep or after
+`disable` is what would bring that message.
+
+**Rejected, for now:** taking the controller off the air when the host stops polling the VHCI,
+because a host idle for a while polls rarely too, and the controller would leave the air under a
+firmware that only waits.
+
 ## bumble is a dependency of esp32tl, pinned exactly
 
 Status: decided (#33)
