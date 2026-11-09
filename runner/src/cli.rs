@@ -37,6 +37,9 @@ usage: esp32tl-runner --chip esp32 --flash-at OFFSET=FILE... --max-seconds S [op
                         of a route (docs/protocol.md, section 12): needs --board
   --flash-out PATH      write the whole flash to PATH when the peer's flash_dump asks for
                         it, and at the end of the run (docs/protocol.md, section 5.21)
+  --bt ELF              the guest's Bluetooth controller is the peer's, over the socket
+                        (hci_tx, hci_rx): esp32sim's VHCI hooks take their symbols from
+                        ELF, the application's; needs --board
 ";
 
 /// Where the peer is (protocol §1).
@@ -86,6 +89,8 @@ pub struct Opts {
     pub realtime: bool,
     /// `--flash-out`.
     pub flash_out: Option<PathBuf>,
+    /// `--bt`: the application's ELF, whose symbols esp32sim's VHCI hooks take.
+    pub bt: Option<PathBuf>,
 }
 
 /// esp32sim's virtual access point (`--wifi`), as esp32sim parses it, and the networks around
@@ -133,6 +138,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Opts, Error> {
         wifi: None,
         realtime: false,
         flash_out: None,
+        bt: None,
     };
     let mut sd_image = None;
     let mut sd_wiring = None;
@@ -222,6 +228,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Opts, Error> {
             "--wifi-nearby" => nearby.push(value()?),
             "--realtime" => opts.realtime = true,
             "--flash-out" => opts.flash_out = Some(PathBuf::from(value()?)),
+            "--bt" => opts.bt = Some(PathBuf::from(value()?)),
             "-h" | "--help" => return Err(Error::Help),
             _ => return Err(usage(format!("unknown argument {flag:?}"))),
         }
@@ -274,6 +281,11 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Opts, Error> {
         }
         None => None,
     };
+    if opts.bt.is_some() && opts.board.is_none() {
+        return Err(usage(
+            "--bt makes the peer the guest's Bluetooth controller: it needs --board",
+        ));
+    }
     if opts.realtime && opts.board.is_none() {
         return Err(usage(
             "--realtime paces a run for the peer's real device: it needs --board",

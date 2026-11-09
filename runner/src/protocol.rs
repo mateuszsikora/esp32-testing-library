@@ -22,6 +22,10 @@ pub const MAX_LINE: usize = 1 << 20;
 /// the relay's limit counts: a 1500-byte datagram's frame is 1518 bytes with them.
 pub const ETH_MIN: usize = 14;
 pub const ETH_MAX: usize = 1518;
+/// The longest H4 packet esp32sim's VHCI carries either way (5.22): its buffer, `BUFFER_SIZE`
+/// 512 bytes, less the 16 before the packet, which hold its length word and the controller task's
+/// name (`esp-soc/src/ble/vhci.rs`).
+pub const HCI_MAX: usize = 496;
 /// The longest delay an `sd_fault` may give (5.20): 10 emulated seconds, twice ESP-IDF's longest
 /// SD timeout, its 5 s for a write.
 pub const SD_DELAY_MAX: u64 = 10_000_000_000;
@@ -122,6 +126,11 @@ pub enum Incoming {
         t: u64,
         data: Vec<u8>,
     },
+    /// An H4 packet for the guest's Bluetooth host, from the controller of `--bt` (5.22).
+    HciRx {
+        t: u64,
+        data: Vec<u8>,
+    },
     /// The access point of `--wifi` on the air or off it (5.16).
     WifiAp {
         t: u64,
@@ -216,6 +225,19 @@ pub fn parse(line: &str) -> Result<Incoming, String> {
                 ));
             }
             Incoming::EthRx {
+                t: field("t").time()?,
+                data,
+            }
+        }
+        "hci_rx" => {
+            let data = unbase64(&field("data").string()?).map_err(|e| format!("hci_rx: {e}"))?;
+            if !(1..=HCI_MAX).contains(&data.len()) {
+                return Err(format!(
+                    "hci_rx: an H4 packet of {} bytes; esp32sim's VHCI carries 1 to {HCI_MAX}",
+                    data.len()
+                ));
+            }
+            Incoming::HciRx {
                 t: field("t").time()?,
                 data,
             }
@@ -480,6 +502,14 @@ pub fn reset(seq: u64, t: u64, cause: u32) -> String {
 pub fn eth_tx(seq: u64, t: u64, data: &[u8]) -> String {
     format!(
         r#"{{"type":"eth_tx","seq":{seq},"t":{t},"data":"{}"}}"#,
+        base64(data)
+    )
+}
+
+/// An H4 packet the guest's Bluetooth host sent its controller, with its packet-type byte (5.22).
+pub fn hci_tx(seq: u64, t: u64, data: &[u8]) -> String {
+    format!(
+        r#"{{"type":"hci_tx","seq":{seq},"t":{t},"data":"{}"}}"#,
         base64(data)
     )
 }

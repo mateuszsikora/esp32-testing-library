@@ -15,6 +15,10 @@
 //! each slice boundary (`eth_tx`), and the peer's frames go to the station's link when they come
 //! due (`eth_rx`), as does the access point going off the air and coming back (`wifi_ap`).
 //!
+//! With `--bt` the guest's H4 packets go to the peer (`hci_tx`), each at the cycle the guest's
+//! host sent it, merged into the board's log by time; the peer's packets go to the guest's host
+//! when they come due (`hci_rx`), and it reads them at its controller task's next VHCI poll.
+//!
 //! The peer can also pulse the chip's EN pin (`chip_reset`) and switch the board's supply
 //! (`power`). Either way the chip comes back through a power-on reset, which the peer sees as
 //! `reset` with cause 1. While the supply is off the guest runs nothing and its time still passes:
@@ -37,6 +41,7 @@
 //! [`Guest`] and [`Link`] stand for the machine and the socket, so the tests run the loop
 //! against a scripted guest and a fake peer.
 use crate::cli;
+use crate::hci;
 use crate::protocol::{self, Incoming, Stats, Warn, WarnKind, WifiStats, char_ns, cycles, ns};
 use crate::sd_card;
 use crate::socket_board::{Recorded, Shared};
@@ -44,6 +49,7 @@ use crate::transport::{Link, LinkError};
 use esp_soc::uart::{UartInput, UartRoute};
 use esp_soc::wifi::{self, StaState};
 use esp_soc::{SocBus, Stop};
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::convert::Infallible;
 use std::path::Path;
@@ -129,8 +135,8 @@ pub trait Guest {
     // The flash, asked only with `--flash-out`: the default is a chip without any.
 
     /// The whole flash, as the guest has left it.
-    fn flash(&self) -> &[u8] {
-        &[]
+    fn flash(&self) -> Cow<'_, [u8]> {
+        Cow::Borrowed(&[])
     }
 }
 
@@ -261,8 +267,16 @@ impl Guest for esp32::Machine {
     fn resyncs(&self) -> u64 {
         self.rt.resyncs
     }
-    fn flash(&self) -> &[u8] {
-        &self.bus.flash
+    /// With `--bt`, from the guest's `esp_bt_controller_init` until the next `reboot()`,
+    /// esp32sim's trampoline sits in the flash over the function's code (`install`,
+    /// `esp-soc/src/ble/vhci.rs:168-191`), which the guest never wrote: the copy has the code.
+    fn flash(&self) -> Cow<'_, [u8]> {
+        let Some((offset, code)) = &self.bus.ble.original_flash else {
+            return Cow::Borrowed(&self.bus.flash);
+        };
+        let mut flash = self.bus.flash.to_vec();
+        flash[*offset..*offset + code.len()].copy_from_slice(code);
+        Cow::Owned(flash)
     }
 }
 
@@ -287,6 +301,8 @@ pub struct Options<'a> {
     pub realtime: bool,
     /// `--flash-out`: where `flash_dump` and the end of the run write the flash.
     pub flash_out: Option<&'a Path>,
+    /// `--bt`: what the forwarder, the guest's Bluetooth controller, shares with the run loop.
+    pub hci: Option<hci::Shared>,
 }
 
 /// Why the run ended (protocol §9).
@@ -334,6 +350,11 @@ enum Item {
         cycle: u64,
         data: Vec<u8>,
     },
+    /// An H4 packet the guest's Bluetooth host sent, at the cycle it sent it.
+    Hci {
+        cycle: u64,
+        data: Vec<u8>,
+    },
     /// What the slot holds after the peer's `sd_card`, applied at `cycle`, and why it was
     /// refused, if it was.
     SdCard {
@@ -351,6 +372,7 @@ impl Item {
             | Item::Reset { cycle, .. }
             | Item::Routes { cycle, .. }
             | Item::Eth { cycle, .. }
+            | Item::Hci { cycle, .. }
             | Item::SdCard { cycle, .. } => *cycle,
         }
     }
@@ -397,6 +419,7 @@ enum Input {
     Gpio(Vec<(u8, bool)>),
     Release(Vec<u8>),
     Eth(Vec<u8>),
+    Hci(Vec<u8>),
     WifiAp(bool),
     Power(bool),
     ChipReset,
@@ -509,7 +532,7 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
         };
         // before `stats`: a peer that has them finds the file in place
         if let Some(path) = self.opts.flash_out {
-            write_flash_at_end(path, self.guest.flash());
+            write_flash_at_end(path, &self.guest.flash());
         }
         let end = self.finish(end);
         (end, self.stats)
@@ -836,11 +859,26 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
         route.tx_pins & self.watch != 0 || route.rx_pin.is_some_and(|p| self.watched(p))
     }
 
-    /// Takes what the board recorded, then the frames the station sent, which the relay holds
-    /// without their time: they are stamped with the cycle they are taken at.
+    /// Takes what the board recorded, with the H4 packets the guest's host sent merged in by
+    /// their cycles, then the frames the station sent, which the relay holds without their time:
+    /// they are stamped with the cycle they are taken at.
     fn collect(&mut self) {
         let log = std::mem::take(&mut self.shared.borrow_mut().log);
-        self.pending.extend(log.into_iter().map(Item::Board));
+        let mut items: Vec<Item> = log.into_iter().map(Item::Board).collect();
+        if let Some(hci) = &self.opts.hci {
+            let packets = std::mem::take(&mut hci.borrow_mut().tx);
+            if !packets.is_empty() {
+                // both in order already: a stable sort keeps each one's order, and the messages
+                // stay in order of `t` (protocol §4)
+                items.extend(
+                    packets
+                        .into_iter()
+                        .map(|(cycle, data)| Item::Hci { cycle, data }),
+                );
+                items.sort_by_key(Item::cycle);
+            }
+        }
+        self.pending.extend(items);
         if self.opts.wifi.is_some() {
             let cycle = self.guest.cycles();
             let frames = self.guest.take_eth_frames();
@@ -904,6 +942,9 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                         wifi.eth_tx += 1;
                     }
                     self.event(t, |seq| protocol::eth_tx(seq, t, &data))?;
+                }
+                Item::Hci { data, .. } => {
+                    self.event(t, |seq| protocol::hci_tx(seq, t, &data))?;
                 }
                 // not an event: the peer answers nothing
                 Item::Board(Recorded::Sd(faulted)) => {
@@ -1091,6 +1132,13 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                     }
                     inputs.push((t, Input::Eth(data)));
                 }
+                Incoming::HciRx { t, data } => {
+                    check(t, Vec::new())?;
+                    if self.opts.hci.is_none() {
+                        return Err(protocol_error("hci_rx without --bt", &line));
+                    }
+                    inputs.push((t, Input::Hci(data)));
+                }
                 Incoming::WifiAp { t, on } => {
                     check(t, Vec::new())?;
                     if self.opts.wifi.is_none() {
@@ -1137,7 +1185,7 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                     let Some(path) = self.opts.flash_out else {
                         return Err(protocol_error("flash_dump without --flash-out", &line));
                     };
-                    let error = write_flash(path, self.guest.flash())
+                    let error = write_flash(path, &self.guest.flash())
                         .err()
                         .map(|e| format!("{}: {e}", path.display()));
                     // not an event, and the turn goes on: no input of it has been applied, and
@@ -1236,6 +1284,12 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                 Input::Eth(data) => {
                     self.eth.push_back(data);
                     self.deliver_eth();
+                }
+                // for the guest's host, at its next VHCI poll; a reset before it loses the packet
+                Input::Hci(data) => {
+                    if let Some(hci) = &self.opts.hci {
+                        hci.borrow_mut().rx.push_back(data);
+                    }
                 }
                 Input::WifiAp(on) => self.switch_access_point(on),
                 Input::Power(on) if on == self.off => {

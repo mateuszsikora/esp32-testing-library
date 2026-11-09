@@ -18,8 +18,8 @@ Who implements what: the runner side in #11 (M1: UART, `reset`, `uart_cfg`, `war
 issue of its own, opened when an example needs an analog pin. Wall time under `--realtime`, for a
 real device at the far end of a route (section 12), came with #28. #105 adds `power` and
 `chip_reset`, the board's supply and the chip's EN pin, on both sides, #107 the SD card's fault
-rules, `sd_fault`, `sd_clear` and `sd_op`, and #131 `flash_dump` and `flash_dump_ack`, a read of the
-flash in a turn.
+rules, `sd_fault`, `sd_clear` and `sd_op`, #131 `flash_dump` and `flash_dump_ack`, a read of the
+flash in a turn, and #34 `hci_tx` and `hci_rx`, the guest's Bluetooth HCI with `--bt`.
 
 ## 1. Transport
 
@@ -146,6 +146,7 @@ seen exactly the events up to the block point, however the emulator schedules it
 | runner → harness | `console` | `t`, `data` | M1 |
 | runner → harness | `warn` *ext* | `t`, `kind`, `detail`, and per kind `port`, `pin`, `baud`, `bytes` | M1 |
 | runner → harness | `eth_tx` *ext* | `seq`, `t`, `data` | M7 |
+| runner → harness | `hci_tx` *ext* | `seq`, `t`, `data` | #34 |
 | runner → harness | `sd_card_ack` *ext* | `t`, `image`, `error` | #106 |
 | runner → harness | `sd_op` *ext* | `t`, `fault`, `op`, `blocks`, `action`, `delay`, `written` | #107 |
 | runner → harness | `flash_dump_ack` *ext* | `t`, `error` | #131 |
@@ -155,6 +156,7 @@ seen exactly the events up to the block point, however the emulator schedules it
 | harness → runner | `release` | `t`, `pins` | M3 |
 | harness → runner | `adc` *ext* | `t`, `pin`, `volts` | M3 |
 | harness → runner | `eth_rx` *ext* | `t`, `data` | M7 |
+| harness → runner | `hci_rx` *ext* | `t`, `data` | #34 |
 | harness → runner | `wifi_ap` *ext* | `t`, `on` | M7 |
 | harness → runner | `power` *ext* | `t`, `on` | #105 |
 | harness → runner | `chip_reset` *ext* | `t` | #105 |
@@ -192,10 +194,15 @@ the peer gave. The version stays 1
 `flash_dump` and `flash_dump_ack` (5.21) leave the version at 1 too: the runner sends the answer only
 to a peer that asked, and without `--flash-out` the message is a protocol error.
 
-**Events** are the runner messages that carry `seq`: `uart_tx`, `uart_cfg`, `gpio_out`, `reset`
-and `eth_tx`. They are what a peer may answer, so they set the block point (rule 1). `seq` is one
-counter over all five, starting at 1 and growing by 1. `sync`, `console`, `warn`, `sd_card_ack`,
-`sd_op`, `flash_dump_ack` and `stats` carry no `seq` and ask for nothing.
+The Bluetooth messages (`hci_tx`, `hci_rx`, 5.22) pass only on a run started with `--bt`, and the
+version stays 1, as with the Wi-Fi ones: the runner sends `hci_tx` only with `--bt`, which only a
+harness that speaks both gives it, and without `--bt` `hci_rx` is a protocol error
+([decision](decisions/runner.md#the-bluetooth-messages-keep-the-link-protocol-at-version-1)).
+
+**Events** are the runner messages that carry `seq`: `uart_tx`, `uart_cfg`, `gpio_out`, `reset`,
+`eth_tx` and `hci_tx`. They are what a peer may answer, so they set the block point (rule 1). `seq`
+is one counter over all six, starting at 1 and growing by 1. `sync`, `console`, `warn`,
+`sd_card_ack`, `sd_op`, `flash_dump_ack` and `stats` carry no `seq` and ask for nothing.
 
 ### 5.1 `hello`
 
@@ -888,6 +895,75 @@ connection write nothing. Without `--board` the end of the run writes it too.
 **Rejected:** base64 chunks on the socket
 ([decision](decisions/runner.md#the-flash-reaches-the-harness-through-a-file-not-the-socket)).
 
+### 5.22 `hci_tx` and `hci_rx` *ext* (#34)
+
+```json
+{"type": "hci_tx", "seq": 3, "t": 412345678, "data": "AQMMAA=="}
+{"type": "hci_rx", "t": 413345678, "data": "BA4EAQMMAA=="}
+```
+
+With `--bt ELF`, the guest's Bluetooth controller is the peer's. esp32sim's VHCI hooks, installed
+over the symbols of the application's ELF as its `--ble` installs them, take the place of the
+controller: the guest's host (Bluedroid or NimBLE) sends its H4 packets through
+`esp_vhci_host_send_packet`, and esp32sim's controller task, in the guest, hands it the
+controller's through the host's receive callback. The runner puts a controller of its own in
+esp32sim's session, in place of esp32sim's virtual BLE controller, that forwards each packet to
+the peer and gives the host the peer's (`runner/src/hci.rs`,
+[runner-technical.md](features/runner-technical.md#bluetooth-the-guests-hci-on-the-socket)). The
+example is the host's first command, `HCI_Reset`, and the controller's `Command_Complete` for it a
+millisecond later.
+
+`data` is one H4 packet with its packet-type byte first: `01` a command, `02` ACL data, `03` SCO
+data, `04` an event (`05` ISO data with LE Audio). Neither side looks into it further. It is 1 to
+496 bytes, the most esp32sim's VHCI carries either way: its buffer is `BUFFER_SIZE`, 512 bytes
+(`esp-soc/src/ble/vhci.rs:9`), and the packet starts 16 bytes into it, after its 4-byte length word
+and the controller task's name, `vhci` (`:189`, `:302-304`). esp32sim drops a longer packet from the
+host with `[ble] rejected invalid VHCI packet pointer, length or controller state`
+(`esp-soc/src/ble/vhci.rs:273-280`), and one for the host with `[ble] rejected oversized or
+unmapped controller packet` (`:302-309`), so the runner refuses an `hci_rx` outside the range as a
+protocol error, `hci_rx: an H4 packet of N bytes; esp32sim's VHCI carries 1 to 496`, as it does
+`hci_rx` on a run without `--bt` (`hci_rx without --bt`); the harness's codec refuses an `hci_tx`
+outside the range too. A controller that wants the host's ACL packets to fit sizes its ACL buffer
+to 491 bytes: 496 less the 5 of the packet-type byte and the ACL header.
+
+`hci_tx`: a packet the guest's host sent. It is an event: it carries `seq`, sets the block point,
+and an answer stamped `t + latency` is on time (rule 2). Unlike `eth_tx`, `t` is the packet's own:
+esp32sim's hook moves the controller to the bus's cycle before it hands it the packet
+(`intercept`, `esp-soc/src/ble/vhci.rs:198-199`), and the runner keeps that cycle with it. Packets
+go out in the order the host sent them, merged by `t` with the `uart_tx`, `console` and `gpio_out`
+of the same slice; at the same `t` a UART byte or a pin change goes first.
+
+`hci_rx`: from `t` the packet is for the guest's host. It goes into the input queue (section 8), and
+when it comes due the runner queues it for the host, which reads it at its controller task's next
+VHCI poll, not at `t`. esp32sim services the controller only at the task's polls ("The machine
+currently services controllers only at guest adapter polls", `esp-soc/src/ble.rs:9-10`), and the
+task delivers at most one packet a poll: after a packet its next poll returns nothing, so that the
+host finishes with it, and with nothing to deliver the task sleeps one FreeRTOS tick
+(`vTaskDelay(1)`, the trampoline described at `esp-soc/src/ble/vhci.rs:18-20`; the `Poll` hook at
+`:292-315`). The host gets at most one controller packet a tick, 10 ms at ESP-IDF's default
+`CONFIG_FREERTOS_HZ=100`; what comes due meanwhile waits, in order. Nothing in the runner changes
+that pace. Nothing reaches the host either before `esp_bt_controller_enable`, or after
+`esp_bt_controller_disable` (`:240-244`), or before it registers its callbacks (`:299`): packets
+wait, and a later `enable` delivers those from before the `disable`. A chip reset or a power-on
+reset, and the guest's `esp_bt_controller_deinit`, lose the packets the host has not read
+(`Ble::reset`, `esp-soc/src/ble/vhci.rs:137-144`); the host's packets from before the reset still go
+out, before its `reset`.
+
+A peer answers a packet within its `latency` like any event. `BoardLink` gives every `hci_tx` to
+the one interface that is the guest's Bluetooth controller (`Interface.bluetooth`), and sends each
+output of it as one `hci_rx`. Without such an interface the packets go nowhere, and the host waits
+for answers that never come.
+
+`flash_dump` and the end of the run (5.21) write the flash as the guest has it: from the guest's
+`esp_bt_controller_init` on, esp32sim's controller task runs from a trampoline it wrote into the
+flash over the function's code (`install`, `esp-soc/src/ble/vhci.rs:168-191`), and the runner
+writes the code esp32sim keeps for `reboot()` to put back (`Ble::original_flash`) in its place.
+
+At esp32sim's pin `esp_bt_controller_enable` accepts mode 1 (BLE) and 3 (dual mode) only
+(`esp-soc/src/ble/vhci.rs:233-239`): a firmware that enables mode 2, BR/EDR only, gets
+`ESP_ERR_INVALID_ARG` and never sends a packet. mikroverk/esp32sim#347 makes it take the mode of the
+config given to `esp_bt_controller_init`, as ESP-IDF does; a later pin brings it.
+
 ## 6. Rules
 
 1. **Block point.** After each `wait` the runner runs the guest until the block point
@@ -972,7 +1048,10 @@ runs at about 30 wall seconds per emulated second on an M2 Pro, against 0.3 with
   baud and the FIFO's `rx_pending()`, which is how it sees the drops `warn` reports;
 - applies the queued inputs now due: received bytes onto their lines, GPIO levels and releases
   through the board (5.11), Ethernet frames to the station's link and the access point's switches
-  (5.15, 5.16), the SD card's rules to the card (5.20);
+  (5.15, 5.16), the SD card's rules to the card (5.20), H4 packets to the queue the guest's host
+  reads at its next VHCI poll (5.22);
+- with `--bt`, takes the H4 packets the guest's host sent in the slice, each with its cycle
+  (`hci_tx`);
 - with `--wifi`, takes the station's Ethernet frames from the relay (`eth_tx`), asks an access
   point on its way off the air whether it has left, and offers the station's link the frames that
   are due and that it has not taken yet;
@@ -1026,7 +1105,7 @@ The `lines` interface, which drives GPIO lines at the instant the test does, dec
 
 ## 8. Future-dated inputs
 
-Any input (`uart_rx`, `gpio_in`, `release`, `adc`, `eth_rx`, `wifi_ap`, `sd_card`, `sd_fault`, `sd_clear`) may carry a `t`
+Any input (`uart_rx`, `gpio_in`, `release`, `adc`, `eth_rx`, `hci_rx`, `wifi_ap`, `sd_card`, `sd_fault`, `sd_clear`) may carry a `t`
 later than the turn's `sync`: the runner keeps it in a queue of its own, ordered by `t` and, at equal `t`, by arrival, and
 applies it at its time (section 6.1). This is how an interface's output that lies in the future, a
 replay's next sentence for one, reaches the guest.
@@ -1046,7 +1125,7 @@ the runner at or before its `t` (rule 1).
 | `SIGTERM` or `SIGINT` | ends the slice in progress (at most one emulated millisecond), or at once if it is waiting for the peer's turn or, under `--realtime`, for wall time on its own clock (12.2). A sleep inside esp32sim's pacing comes to its end first, which is about 2 ms at most but for the board kept off from power-on (12.2); sends the events and `warn`s not yet sent, `stats` with `end: signal`, closes | 0 |
 | any other `Stop` (`esp-soc/src/soc.rs:9`: `MaxInsns`, `Breakpoint`, `Unimplemented`, `Simcall`, `Ebreak`, `Watch`, `Exceptions`, `CostModel`, `CostModelLifecycle`) | events not yet sent, `stats` with `end: emulator` and the variant, closes | 1 |
 | usage error, or an image or ROM that cannot be loaded | nothing on the socket (it may not be connected yet) | 2 |
-| protocol error by the peer: malformed or oversized line, unknown `type`, version or chip mismatch, late `t`, wrong `ack`, `quiet_until` not after the `sync`, a `baud` of `0`, a `watch` with a pin the chip does not have, a message the runner does not implement yet, `eth_rx` or `wifi_ap` without `--wifi` (`eth_rx without --wifi`, `wifi_ap without --wifi`), an `eth_rx` frame outside 14 to 1518 bytes (`eth_rx: an Ethernet frame of N bytes; one without FCS has 14 to 1518`), an `on` that is not `true` or `false`, `sd_card` without `--sd-spi` (`sd_card without --sd-spi`), an `image` that is not a string, `sd_fault` or `sd_clear` without `--sd-spi` (`sd_fault without --sd-spi`, `sd_clear without --sd-spi`), an `sd_fault` that 5.20 does not allow (an `op` or `action` it does not list, an erase that fails, a `delay` missing, out of range or with `error`, a `count` out of range, `blocks` that are not `[first, last]`, an `id` in use already), `flash_dump` without `--flash-out` (`flash_dump without --flash-out`) | `stats` with `end: protocol_error`, closes | 3 |
+| protocol error by the peer: malformed or oversized line, unknown `type`, version or chip mismatch, late `t`, wrong `ack`, `quiet_until` not after the `sync`, a `baud` of `0`, a `watch` with a pin the chip does not have, a message the runner does not implement yet, `eth_rx` or `wifi_ap` without `--wifi` (`eth_rx without --wifi`, `wifi_ap without --wifi`), an `eth_rx` frame outside 14 to 1518 bytes (`eth_rx: an Ethernet frame of N bytes; one without FCS has 14 to 1518`), `hci_rx` without `--bt` (`hci_rx without --bt`), an `hci_rx` packet outside 1 to 496 bytes (`hci_rx: an H4 packet of N bytes; esp32sim's VHCI carries 1 to 496`), an `on` that is not `true` or `false`, `sd_card` without `--sd-spi` (`sd_card without --sd-spi`), an `image` that is not a string, `sd_fault` or `sd_clear` without `--sd-spi` (`sd_fault without --sd-spi`, `sd_clear without --sd-spi`), an `sd_fault` that 5.20 does not allow (an `op` or `action` it does not list, an erase that fails, a `delay` missing, out of range or with `error`, a `count` out of range, `blocks` that are not `[first, last]`, an `id` in use already), `flash_dump` without `--flash-out` (`flash_dump without --flash-out`) | `stats` with `end: protocol_error`, closes | 3 |
 | the peer is gone: the connection failed, the socket closed, a read or write failed, the peer's turn took longer than `--peer-timeout`, or a write made no progress for that long (in or outside a turn) | nothing more | 4 |
 | a second `SIGTERM` or `SIGINT` | ends the process at once | 128 + the signal's number |
 
@@ -1113,6 +1192,7 @@ codec change (#37). What #325 does not have:
 | `console` | the console for the peer, opt-in: the `esp32sim` backend's console expects read it, in emulated-time order with the turns |
 | `reset` comes from the runner's run loop | #325 proposes a `guest_reset` trait method; the peer sees the same message either way (plan, finding 4) |
 | `eth_tx`, `eth_rx`, `wifi_ap` and `stats.wifi` (*ext*), with `--wifi` | #325 has nothing of Wi-Fi. They carry the Ethernet frames of esp32sim's station link in relay mode, and switch its access point, so that the network behind the access point is the peer's, in emulated time ([decision](decisions/harness.md#the-network-the-device-reaches-is-simulated-in-the-harness-in-emulated-time)) |
+| `hci_tx` and `hci_rx` (*ext*), with `--bt` | #325 has nothing of Bluetooth. They carry the guest's HCI, so that its controller is the peer's, in emulated time ([decision](decisions/runner.md#the-guests-hci-goes-over-the-board-socket-on-the-boards-clock)) |
 | `power` and `chip_reset` (*ext*) | #325's board has no supply and no EN pin of its own; a test resets or power-cycles the board it describes, and the runner does both in one run, on one clock (5.17, 5.18) |
 | The SD card slot of `--sd-spi` answers SPI on `SocketBoard`, in the runner; `sd_card` and `sd_card_ack` (*ext*) change the card in it, and `sd_fault`, `sd_clear` and `sd_op` (*ext*) make it fail or slow down | a card answers every byte of a transaction in the same transaction (`spi_transfer_pins`), which a peer a turn away could not; only the card going in and coming out, the peer's fault rules and what they did go on the socket (5.19, 5.20, [runner-technical.md](features/runner-technical.md#the-sd-card)) |
 

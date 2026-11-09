@@ -674,3 +674,38 @@ arithmetic of one ESP-IDF version's libpp, and a firmware whose libpp counts its
 would lose 4 bytes of every frame without a sign. It would gain nothing: the harness takes frames
 with the 4 bytes and without them alike. And the runner would no longer hand over what esp32sim
 gives, which hides the very behaviour that is to go upstream.
+
+## The guest's HCI goes over the board socket, on the board's clock
+
+Status: decided (#34)
+
+With `--bt`, the runner puts a controller of its own, `hci::Forwarder`, in esp32sim's VHCI session
+in place of esp32sim's virtual BLE controller, and forwards every H4 packet of the guest's host to
+the peer as `hci_tx`, stamped with the bus cycle the host sent it at; the peer's `hci_rx` reaches
+the host as any input does, at its `t`
+([protocol 5.22](../protocol.md#522-hci_tx-and-hci_rx-ext-34)). The guest's controller is then the
+harness's, on the board's clock, on the same air as the Bluetooth peers, which are Bumble devices on
+that clock already
+([decision](harness.md#the-bluetooth-peer-runs-bumble-in-the-harness-on-the-boards-clock)). The
+hooks need nothing new of esp32sim: `Session::new` and the `HciController` trait are public at the
+pin. A spike on 2026-11-08 ran ESP-IDF v5.3.6's `bt_spp_initiator`, unmodified, through inquiry,
+SDP, legacy pairing and an SPP channel against `SppPeer` this way, with esp32sim's `Enable` hook
+taking mode 2 (mikroverk/esp32sim#347), and two runs exchanged the same packets byte for byte.
+
+**Rejected:** an HCI transport in esp32sim to an external controller (a `--hci tcp:HOST:PORT`),
+because what would sit at its other end, Root Canal or a real controller, keeps its own time in
+wall time, so a run would not repeat and a test could not hold the controller while it is not
+waiting; the peer the controller talks to is Bumble on the board's clock already. Also rejected: a
+second socket between the runner and the harness for the HCI, because it would need an ordering of
+its own against the board socket's turns, where one socket has the order of its lines.
+
+## The Bluetooth messages keep the link protocol at version 1
+
+Status: decided (#34)
+
+`hci_tx` and `hci_rx` pass only in a run started with `--bt`, which only a harness that speaks them
+gives the runner, as the Wi-Fi messages pass only with `--wifi`
+([decision](#the-wi-fi-messages-keep-the-link-protocol-at-version-1)). No message of version 1
+changes its meaning, and there is no peer of another checkout to keep apart.
+
+**Rejected:** version 2, for the same reason as with the Wi-Fi messages.

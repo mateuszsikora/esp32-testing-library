@@ -21,6 +21,8 @@ from esp32tl.link.protocol import (
     GpioIn,
     GpioOut,
     HarnessHello,
+    HciRx,
+    HciTx,
     Message,
     Power,
     ProtocolError,
@@ -61,6 +63,8 @@ EVERY_MESSAGE: list[tuple[Sender, Message]] = [
     ("runner", GpioOut(9, 2_000_000_000, ((4, 1), (5, 0)), (4,), (4,))),
     ("runner", Reset(12, 4_100_000_000, 12)),
     ("runner", EthTx(13, 4_200_000_000, b"\xff" * 6 + b"\x24\x6f\x28\x00\x11\x22\x08\x06")),
+    ("runner", HciTx(14, 4_300_000_000, b"\x01\x03\x0c\x00")),
+    ("runner", HciTx(15, 4_300_000_000, b"\x02" * protocol.HCI_MAX)),
     (
         "runner",
         Stats(5, "stop", 0, 2, (), 0, 0, 0, 0, wifi=WifiStats(3, 0, 2, 1, 0)),
@@ -98,6 +102,8 @@ EVERY_MESSAGE: list[tuple[Sender, Message]] = [
     ("harness", Release(3_500_000_000, (33,))),
     ("harness", Adc(3_000_000_000, 34, 1.25)),
     ("harness", EthRx(4_201_000_000, bytes(14))),
+    ("harness", HciRx(4_301_000_000, b"\x04\x0e\x04\x01\x03\x0c\x00")),
+    ("harness", HciRx(4_301_000_000, b"\x04")),
     ("harness", WifiAp(5_000_000_000, False)),
     ("harness", WifiAp(6_000_000_000, True)),
     ("harness", Power(7_000_000_000, False)),
@@ -315,3 +321,16 @@ def test_stats_without_wifi_has_no_wifi_field() -> None:
     stats = Stats(5, "stop", 0, 2, (), 0, 0, 0, 0)
     assert "wifi" not in as_json(stats)
     assert decode(encode(stats), "runner") == stats
+
+
+@pytest.mark.parametrize("sender", ["runner", "harness"])
+@pytest.mark.parametrize("length", [0, protocol.HCI_MAX + 1])
+def test_an_h4_packet_is_1_to_496_bytes_either_way(sender: Sender, length: int) -> None:
+    data = base64.b64encode(bytes(length)).decode()
+    kind = "hci_tx" if sender == "runner" else "hci_rx"
+    line = f'{{"type":"{kind}","seq":1,"t":0,"data":"{data}"}}'
+    with pytest.raises(
+        ProtocolError,
+        match=f"^{kind}: data is an H4 packet of {length} bytes; esp32sim's VHCI carries 1 to 496$",
+    ):
+        decode(line.encode(), sender)

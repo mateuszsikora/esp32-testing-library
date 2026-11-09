@@ -338,6 +338,25 @@ that references to its number keep their meaning.
      `runner/src/session/tests.rs::on_the_emulator_the_access_point_deauthenticates_the_station_before_it_leaves`,
      `runner/src/session/tests.rs::an_access_point_put_back_while_it_is_leaving_comes_back_once_it_has_left`,
      `tests/test_http_request.py::test_rejoins_an_access_point_switched_off_and_on_at_one_instant`
+- **207.** With `--bt`, every H4 packet the guest's host sends goes to the peer as an `hci_tx` event
+     stamped with the cycle it was sent at, in order of `t` with the board's other messages and
+     after a UART byte or pin change of the same cycle; its block point is `t + latency`. An
+     `hci_rx` reaches the host's queue at its `t` and not before, the host reads one packet a
+     poll, in order, and a chip reset or a power-on reset loses what it has not read. `hci_rx`
+     without `--bt`, and one of 0 or more than 496 bytes, are protocol errors; the harness's codec
+     refuses such an `hci_tx` or `hci_rx` too, and `BoardLink` takes `hci_rx` only from its one
+     Bluetooth controller.
+     `runner/src/session/tests.rs::each_hci_packet_goes_out_as_an_hci_tx_at_its_own_cycle_in_order_of_t`,
+     `runner/src/session/tests.rs::an_hci_tx_sets_the_block_point_at_its_t_plus_latency`,
+     `runner/src/session/tests.rs::an_hci_rx_reaches_the_guests_host_at_its_time_and_not_before`,
+     `runner/src/session/tests.rs::a_chip_reset_loses_the_hci_packets_the_host_has_not_read`,
+     `runner/src/session/tests.rs::a_power_on_reset_loses_the_hci_packets_the_host_has_not_read`,
+     `runner/src/session/tests.rs::hci_rx_needs_bt_and_fits_the_vhci`,
+     `runner/src/hci/tests.rs::a_chip_reset_loses_what_the_host_has_not_read_and_keeps_the_forwarder`,
+     `runner/src/tests.rs::forward_leaves_the_forwarder_as_the_guests_controller`,
+     `tests/test_link_protocol.py::test_an_h4_packet_is_1_to_496_bytes_either_way`,
+     `tests/test_boardlink.py::test_one_bluetooth_controller`,
+     `tests/test_boardlink.py::test_hci_rx_from_an_interface_that_is_not_the_controller_fails_the_link`
 
 - **154.** Without a fault rule the SD card answers at once, as it always has. A rule applies to the
      operations that start once it is in place, at most one per operation, the one given last
@@ -1409,8 +1428,10 @@ that references to its number keep their meaning.
 
 - **190.** A `flash_dump` writes the guest's flash as it is at that turn, not the build's, and the
      turn goes on: no time moves, no slice runs and no turn is counted, for the runner and for
-     `board.flash()`. Its answer starts `--peer-timeout` again.
+     `board.flash()`. Its answer starts `--peer-timeout` again. With `--bt`, the code esp32sim's
+     controller trampoline covers in the flash is written in its place.
      `runner/src/session/tests.rs::a_flash_dump_writes_the_flash_of_the_turn_and_the_turn_goes_on`,
+     `runner/src/session/tests.rs::on_the_emulator_the_flash_read_has_the_code_esp32sims_trampoline_covers`,
      `runner/src/session/tests.rs::a_flash_dump_moves_no_time_and_runs_no_guest`,
      `runner/src/session/tests.rs::each_flash_dump_ack_starts_the_peer_timeout_again`,
      `tests/test_clock.py::test_a_flash_dump_is_answered_in_the_turn_the_link_is_held_at_and_moves_no_time`,

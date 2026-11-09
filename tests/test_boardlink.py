@@ -11,6 +11,7 @@ import pytest
 from esp32tl.link import boardlink
 from esp32tl.link.boardlink import BoardLink, Direction, Interface, Output, RunTo, Wire
 from esp32tl.link.protocol import (
+    HCI_MAX,
     MAX_LINE,
     Adc,
     ChipReset,
@@ -23,6 +24,8 @@ from esp32tl.link.protocol import (
     GpioOut,
     HarnessHello,
     HarnessMessage,
+    HciRx,
+    HciTx,
     Input,
     Power,
     Release,
@@ -1028,3 +1031,70 @@ def test_every_reset_is_kept_in_order_and_given_to_on_reset() -> None:
     link.receive(Sync(0))
     feed(link, Reset(1, 100, 12), Reset(2, 200, 1), Sync(200))
     assert link.resets == seen == [Reset(1, 100, 12), Reset(2, 200, 1)]
+
+
+class Controller(Interface):
+    """The guest's Bluetooth controller: answers each H4 packet with `answers` after a
+    millisecond, a packet per output."""
+
+    def __init__(self, name: str = "bt", *, answers: Sequence[bytes] = ()) -> None:
+        super().__init__(name, None)
+        self.received: list[tuple[int, Direction, bytes]] = []
+        self._answers = list(answers)
+
+    @property
+    def bluetooth(self) -> bool:
+        return True
+
+    def receive(self, t: int, direction: Direction, data: bytes) -> Iterable[Output]:
+        self.received.append((t, direction, data))
+        return [(t + MS, answer) for answer in self._answers]
+
+    def latency(self) -> int | None:
+        return MS
+
+
+HCI_RESET = b"\x01\x03\x0c\x00"
+RESET_DONE = b"\x04\x0e\x04\x01\x03\x0c\x00"
+
+
+def test_hci_tx_reaches_the_controller_and_each_answer_goes_in_as_one_hci_rx() -> None:
+    bt = Controller(answers=[RESET_DONE, b"\x04\x0f"])
+    air = Air(answer=b"")
+    link = started(Peer(), air, bt)
+    out = feed(link, HciTx(1, 5 * MS, HCI_RESET), Sync(6 * MS))
+    assert bt.received == [(5 * MS, "out", HCI_RESET)]
+    # not to the network, nor to a UART
+    assert air.received == []
+    assert out == [HciRx(6 * MS, RESET_DONE), HciRx(6 * MS, b"\x04\x0f"), Wait(1, None, MS)]
+
+
+def test_one_bluetooth_controller() -> None:
+    with pytest.raises(ValueError, match="one Bluetooth controller, not a, b"):
+        BoardLink("esp32-devkitc", [Controller("a"), Controller("b")])
+
+
+def test_hci_rx_from_an_interface_that_is_not_the_controller_fails_the_link() -> None:
+    link = started(Driver([HciRx(MS, RESET_DONE)]), Controller())
+    assert feed(link, Sync(MS)) == [Stop()]
+    assert link.error == "lines sent hci_rx, and is not the guest's Bluetooth controller"
+
+
+@pytest.mark.parametrize("length", [0, HCI_MAX + 1])
+def test_hci_rx_the_vhci_cannot_carry_fails_the_link(length: int) -> None:
+    class Sends(Controller):
+        def inputs(self, now: int) -> Iterable[Input]:
+            return [HciRx(now, bytes(length))] if now == MS else []
+
+    link = started(Sends())
+    assert feed(link, Sync(MS)) == [Stop()]
+    assert link.error == (
+        f"bt sent a hci_rx the link cannot carry: hci_rx: data is an H4 packet of {length}"
+        " bytes; esp32sim's VHCI carries 1 to 496"
+    )
+
+
+def test_an_answer_of_the_controller_the_vhci_cannot_carry_fails_the_link() -> None:
+    link = started(Controller(answers=[bytes(HCI_MAX + 1)]))
+    assert feed(link, HciTx(1, 0, HCI_RESET), Sync(MS)) == [Stop()]
+    assert link.error is not None and "an H4 packet of 497 bytes" in link.error

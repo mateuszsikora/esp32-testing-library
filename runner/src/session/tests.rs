@@ -3,6 +3,7 @@
 use super::*;
 use crate::socket_board::{Recorder, SocketBoard};
 use esp_soc::BoardModel;
+use esp_soc::ble::HciController;
 use esp_soc::json::{Json, parse_json};
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -59,6 +60,10 @@ enum Act {
     Spi(Vec<u8>),
     /// The guest programs a byte of its flash.
     Flash(usize, u8),
+    /// The guest's Bluetooth host sends an H4 packet, through the forwarder of `--bt`.
+    HciTx(Vec<u8>),
+    /// The guest's controller task polls the VHCI, as esp32sim's `Poll` hook does.
+    HciPoll,
 }
 
 /// A guest that does what its script says at the cycles it says, and records UART bytes the way
@@ -91,6 +96,10 @@ struct FakeGuest {
     lags: Vec<u64>,
     /// The flash.
     flash: Vec<u8>,
+    /// With `--bt`: the guest's Bluetooth controller, and what each `Act::HciPoll` read of it,
+    /// with the cycle.
+    hci: Option<hci::Shared>,
+    hci_read: Vec<(u64, Option<Vec<u8>>)>,
 }
 
 impl FakeGuest {
@@ -115,7 +124,18 @@ impl FakeGuest {
             paced: Vec::new(),
             lags: Vec::new(),
             flash: vec![0xff; 16],
+            hci: None,
+            hci_read: Vec::new(),
         }
+    }
+
+    fn with_bt(mut self) -> Self {
+        self.hci = Some(hci::Shared::default());
+        self
+    }
+
+    fn forwarder(&self) -> hci::Forwarder {
+        hci::Forwarder(self.hci.clone().expect("a guest with --bt"))
     }
 
     fn with_card(mut self, card: &sd_card::Shared) -> Self {
@@ -182,6 +202,16 @@ impl Guest for FakeGuest {
                     self.spi.push((self.now, rx));
                 }
                 Act::Flash(offset, byte) => self.flash[offset] = byte,
+                // as esp32sim's `Send` hook: the controller to the bus's cycle, then the packet
+                Act::HciTx(packet) => {
+                    let mut forwarder = self.forwarder();
+                    forwarder.advance_to(self.now);
+                    forwarder.send_h4(&packet);
+                }
+                Act::HciPoll => {
+                    let packet = self.forwarder().poll_h4();
+                    self.hci_read.push((self.now, packet));
+                }
             }
         }
         self.now = end;
@@ -191,6 +221,9 @@ impl Guest for FakeGuest {
         let Some((_, Act::Reset(cause))) = self.script.pop_front() else {
             panic!("a reset with none in the script");
         };
+        if self.hci.is_some() {
+            self.forwarder().reset();
+        }
         self.routes = std::array::from_fn(|port| UartRoute::new(port, 0, None, None));
         self.fifo = Default::default();
         self.drive = (0, 0);
@@ -198,6 +231,9 @@ impl Guest for FakeGuest {
     }
     fn power_on_reset(&mut self, _rom: &[u8]) -> u32 {
         self.power_resets.push(self.now);
+        if self.hci.is_some() {
+            self.forwarder().reset();
+        }
         self.routes = std::array::from_fn(|port| UartRoute::new(port, 0, None, None));
         self.fifo = Default::default();
         self.drive = (0, 0);
@@ -243,8 +279,8 @@ impl Guest for FakeGuest {
     fn resyncs(&self) -> u64 {
         self.lags.iter().filter(|&&at| at <= self.now).count() as u64
     }
-    fn flash(&self) -> &[u8] {
-        &self.flash
+    fn flash(&self) -> Cow<'_, [u8]> {
+        Cow::Borrowed(&self.flash)
     }
 }
 
@@ -466,6 +502,7 @@ fn run_with(
         card: card.cloned(),
         realtime: false,
         flash_out,
+        hci: guest.hci.clone(),
     };
     let (end, stats) = Session::new(&mut guest, &mut peer, shared, opts).run();
     Run {
@@ -1271,6 +1308,7 @@ fn a_signal_ends_the_slice_in_progress_with_stats() {
         card: None,
         realtime: false,
         flash_out: None,
+        hci: None,
     };
     let (end, _) = Session::new(&mut guest, &mut peer, shared, opts).run();
     assert!(matches!(end, End::Signal), "{end:?}");
@@ -1445,6 +1483,7 @@ fn on_the_emulator_the_slices_stop_a_guest_asleep_in_waiti_at_the_block_point() 
         card: None,
         realtime: false,
         flash_out: None,
+        hci: None,
     };
     let (end, stats) = Session::new(&mut guest, &mut peer, shared, opts).run();
     assert!(matches!(end, End::MaxSeconds), "{end:?}");
@@ -1836,6 +1875,7 @@ fn on_the_emulator_gpio_in_reaches_the_guest_and_its_output_comes_back_as_gpio_o
         card: None,
         realtime: false,
         flash_out: None,
+        hci: None,
     };
     let (end, stats) = Session::new(&mut m, &mut peer, shared, opts).run();
     assert!(matches!(end, End::MaxSeconds), "{end:?}");
@@ -2062,6 +2102,7 @@ fn run_wifi(end: u64, guest: &mut WifiGuest, peer: &mut FakePeer) -> (End, Stats
         card: None,
         realtime: false,
         flash_out: None,
+        hci: None,
     };
     let shared = guest.inner.shared.clone();
     Session::new(guest, peer, shared, opts).run()
@@ -2506,6 +2547,7 @@ fn run_with_slot(seconds: f64, peer: FakePeer, slot: &sd_card::Shared) -> Run {
         card: Some(slot.clone()),
         realtime: false,
         flash_out: None,
+        hci: None,
     };
     let (end, stats) = Session::new(&mut guest, &mut peer, shared, opts).run();
     Run {
@@ -2802,6 +2844,7 @@ fn run_realtime(seconds: f64, mut guest: FakeGuest, mut peer: FakePeer) -> Run {
         card: None,
         realtime: true,
         flash_out: None,
+        hci: None,
     };
     let (end, stats) = Session::new(&mut guest, &mut peer, shared, opts).run();
     Run {
@@ -3125,6 +3168,7 @@ fn each_flash_dump_ack_starts_the_peer_timeout_again() {
         card: None,
         realtime: false,
         flash_out: Some(out.0.as_path()),
+        hci: None,
     };
     Session::new(&mut guest, &mut peer, shared, opts).run();
     // the handshake's, the turn's first, then one after each answer; an input starts nothing
@@ -3220,4 +3264,207 @@ fn a_run_without_flash_out_writes_no_flash() {
     let r = run(0.001, FakeGuest::new(vec![]), peer);
     assert!(matches!(r.end, End::MaxSeconds));
     assert!(r.peer.of("flash_dump_ack").is_empty());
+}
+
+fn hci_rx(t: u64, packet: &[u8]) -> String {
+    format!(
+        r#"{{"type":"hci_rx","t":{t},"data":"{}"}}"#,
+        protocol::base64(packet)
+    )
+}
+
+const HCI_RESET: [u8; 4] = [0x01, 0x03, 0x0c, 0x00];
+/// The Command_Complete for HCI_Reset.
+const RESET_DONE: [u8; 7] = [0x04, 0x0e, 0x04, 0x01, 0x03, 0x0c, 0x00];
+
+#[test]
+fn each_hci_packet_goes_out_as_an_hci_tx_at_its_own_cycle_in_order_of_t() {
+    let ms = cycles(MS);
+    let mut script = tx(ms, 0, b"ab\n", 100);
+    script.extend([
+        (ms + 50, Act::HciTx(HCI_RESET.to_vec())),
+        // at the cycle of the byte before it in the board's log: the byte goes first
+        (ms + 100, Act::HciTx(vec![0x01, 0x01, 0x10, 0x00])),
+        (ms + 150, Act::Tx(1, b'X')),
+        (2 * ms, Act::HciTx(vec![0x02, 0x01, 0x20])),
+    ]);
+    let guest = FakeGuest::new(script)
+        .with_routes(&[route(0, Some(1), Some(3), Some(115_200)), modem(115_200)])
+        .with_bt();
+    let r = run_for(
+        0.01,
+        guest,
+        FakePeer::new(&[MODEM_TX], idle(None, None)),
+        true,
+    );
+    assert!(matches!(r.end, End::MaxSeconds), "{:?}", r.end);
+    let sent: Vec<(&str, u64, Vec<u8>)> = r
+        .peer
+        .msgs
+        .iter()
+        .filter(|m| matches!(kind(m), "uart_tx" | "console" | "hci_tx"))
+        .map(|m| (kind(m), num(m, "t"), data(m)))
+        .collect();
+    assert_eq!(
+        sent,
+        [
+            ("console", ns(ms), b"a".to_vec()),
+            ("hci_tx", ns(ms + 50), HCI_RESET.to_vec()),
+            ("console", ns(ms + 100), b"b".to_vec()),
+            ("hci_tx", ns(ms + 100), vec![0x01, 0x01, 0x10, 0x00]),
+            ("uart_tx", ns(ms + 150), b"X".to_vec()),
+            ("console", ns(ms + 200), b"\n".to_vec()),
+            ("hci_tx", ns(2 * ms), vec![0x02, 0x01, 0x20]),
+        ]
+    );
+    // events: each has its seq, which the fake peer checks is the next one
+    assert!(r.peer.of("hci_tx").iter().all(|m| m.get("seq").is_some()));
+}
+
+#[test]
+fn an_hci_tx_sets_the_block_point_at_its_t_plus_latency() {
+    let at = cycles(MS) + 12_345;
+    let guest = FakeGuest::new(vec![(at, Act::HciTx(HCI_RESET.to_vec()))]).with_bt();
+    let latency = 300_000;
+    let r = run(0.01, guest, FakePeer::new(&[], idle(None, Some(latency))));
+    assert!(matches!(r.end, End::MaxSeconds), "{:?}", r.end);
+    let syncs: Vec<u64> = r.peer.of("sync").iter().map(|m| num(m, "t")).collect();
+    assert_eq!(syncs, [0, ns(at) + latency]);
+    assert!(r.guest.slices.contains(&cycles(ns(at) + latency)));
+}
+
+#[test]
+fn an_hci_rx_reaches_the_guests_host_at_its_time_and_not_before() {
+    let due = cycles(5 * MS);
+    let guest = FakeGuest::new(vec![
+        (cycles(2 * MS), Act::HciPoll),
+        (due - 1, Act::HciPoll),
+        (due, Act::HciPoll),
+        (due, Act::HciPoll),
+        (cycles(6 * MS), Act::HciPoll),
+    ])
+    .with_bt();
+    let peer = FakePeer::new(
+        &[],
+        scripted(vec![
+            (0, hci_rx(5 * MS, &RESET_DONE)),
+            (0, hci_rx(5 * MS, &[0x04, 0x0f])),
+        ]),
+    );
+    let r = run(0.01, guest, peer);
+    assert!(matches!(r.end, End::MaxSeconds), "{:?}", r.end);
+    // one packet a poll, in the order the peer sent them
+    assert_eq!(
+        r.guest.hci_read,
+        [
+            (cycles(2 * MS), None),
+            (due - 1, None),
+            (due, Some(RESET_DONE.to_vec())),
+            (due, Some(vec![0x04, 0x0f])),
+            (cycles(6 * MS), None),
+        ]
+    );
+    assert!(r.guest.slices.contains(&due));
+}
+
+#[test]
+fn a_chip_reset_loses_the_hci_packets_the_host_has_not_read() {
+    let guest = FakeGuest::new(vec![
+        (cycles(MS) + 7, Act::HciTx(HCI_RESET.to_vec())),
+        (cycles(2 * MS), Act::Reset(0xc)),
+        (cycles(3 * MS), Act::HciPoll),
+        (cycles(5 * MS), Act::HciPoll),
+    ])
+    .with_bt();
+    let peer = FakePeer::new(
+        &[],
+        scripted(vec![
+            (0, hci_rx(MS, &RESET_DONE)),
+            (0, hci_rx(4 * MS, &[0x04, 0x0f])),
+        ]),
+    );
+    let r = run(0.01, guest, peer);
+    assert!(matches!(r.end, End::MaxSeconds), "{:?}", r.end);
+    // the packet due before the reset is gone; the one due after it is read
+    assert_eq!(
+        r.guest.hci_read,
+        [
+            (cycles(3 * MS), None),
+            (cycles(5 * MS), Some(vec![0x04, 0x0f]))
+        ]
+    );
+    // what the host sent before the reset goes out before it
+    let order: Vec<&str> = r
+        .peer
+        .types()
+        .into_iter()
+        .filter(|k| matches!(*k, "hci_tx" | "reset"))
+        .collect();
+    assert_eq!(order, ["hci_tx", "reset"]);
+}
+
+#[test]
+fn a_power_on_reset_loses_the_hci_packets_the_host_has_not_read() {
+    let guest = FakeGuest::new(vec![(cycles(3 * MS), Act::HciPoll)]).with_bt();
+    let peer = FakePeer::new(
+        &[],
+        scripted(vec![(0, hci_rx(MS, &RESET_DONE)), (0, chip_reset(2 * MS))]),
+    );
+    let r = run(0.01, guest, peer);
+    assert!(matches!(r.end, End::MaxSeconds), "{:?}", r.end);
+    assert_eq!(r.guest.power_resets, [cycles(2 * MS)]);
+    assert_eq!(r.guest.hci_read, [(cycles(3 * MS), None)]);
+}
+
+#[test]
+fn hci_rx_needs_bt_and_fits_the_vhci() {
+    let peer = |line: String| {
+        FakePeer::new(&[], move |turn| {
+            vec![line.clone(), wait(turn.seq, None, None)]
+        })
+    };
+    let r = run(
+        1.0,
+        FakeGuest::new(Vec::new()),
+        peer(hci_rx(0, &RESET_DONE)),
+    );
+    assert!(
+        matches!(&r.end, End::Protocol(m) if m.starts_with("hci_rx without --bt: ")),
+        "{:?}",
+        r.end
+    );
+    let r = run(
+        1.0,
+        FakeGuest::new(Vec::new()).with_bt(),
+        peer(hci_rx(0, &[0x02; protocol::HCI_MAX + 1])),
+    );
+    assert!(
+        matches!(&r.end, End::Protocol(m) if m.starts_with(
+            "hci_rx: an H4 packet of 497 bytes; esp32sim's VHCI carries 1 to 496: "
+        )),
+        "{:?}",
+        r.end
+    );
+    let r = run(
+        0.01,
+        FakeGuest::new(Vec::new()).with_bt(),
+        peer(hci_rx(0, &[0x02; protocol::HCI_MAX])),
+    );
+    assert!(matches!(r.end, End::MaxSeconds), "{:?}", r.end);
+}
+
+#[test]
+fn on_the_emulator_the_flash_read_has_the_code_esp32sims_trampoline_covers() {
+    let mut m = esp32::machine([0x24, 0x6f, 0x28, 0x00, 0x11, 0x22], 4 << 20);
+    assert!(matches!(Guest::flash(&m), Cow::Borrowed(_)));
+    // as `install` leaves it: the trampoline in the flash, the code it covers in `original_flash`
+    m.bus.flash[0x10020..0x10024].copy_from_slice(&[0x36, 0x41, 0x00, 0x90]);
+    m.bus.ble.original_flash = Some((0x10020, vec![1, 2, 3, 4]));
+    let flash = Guest::flash(&m);
+    assert_eq!(flash.len(), m.bus.flash.len());
+    assert_eq!(flash[0x10020..0x10024], [1, 2, 3, 4]);
+    assert_eq!(flash[..0x10020], m.bus.flash[..0x10020]);
+    assert_eq!(flash[0x10024..], m.bus.flash[0x10024..]);
+    // the guest still runs the trampoline
+    assert_eq!(m.bus.flash[0x10020..0x10024], [0x36, 0x41, 0x00, 0x90]);
 }
