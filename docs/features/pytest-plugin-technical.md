@@ -636,12 +636,12 @@ none, or the whole new one. It measures the clone only once it is synced: ext4 a
 file's blocks then, and may take more than `st_blocks` showed before, presumably a block for the
 file's extents. Measured before the sync, the cache ended 4096 bytes over an 8 MiB limit on the CI
 runner's disk, in one run of three. A failed `put` removes the temporary file, and the old card
-stays gone, which is a miss. Last use is the modification time, set with `os.utime` from `time.time_ns()` by
-`put` and `get`, because a volume may not keep access times; ties go by file name. `st_blocks` of a
-clone counts blocks it shares with the card it came from, so the limit is conservative when both are
-on disk, and APFS fills in the holes of a small file, so a source of a few MiB can measure more than
-its clone. The check before the copy counts the source as it is allocated: blocks of zeros that
-firmware wrote count, though the sparse copy would leave them out.
+stays gone, which is a miss. Last use is the modification time, set with `os.utime` from
+`time.time_ns()` by `put` and `get`, because a volume may not keep access times; ties go by file
+name. `st_blocks` of a clone counts blocks it shares with the card it came from, so the limit is
+conservative when both are on disk, and APFS fills in the holes of a small file, so a source of a
+few MiB can measure more than its clone. The check before the copy counts the source as it is
+allocated: blocks of zeros that firmware wrote count, though the sparse copy would leave them out.
 
 `clone` tries `clonefile(2)` on macOS and the `FICLONE` ioctl on Linux, and on any error copies,
 which reports a failure that is not about cloning: `SEEK_DATA` and `SEEK_HOLE` skip the holes
