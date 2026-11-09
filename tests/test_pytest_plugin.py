@@ -1916,15 +1916,28 @@ def test_a_hung_run_is_ended_by_the_test_s_timeout(
     monkeypatch.setenv("FAKE_LINK", "stall")
     link_runner.makepyfile(
         test_fake="""
-        from esp32tl.units import hours
+        import pytest
 
-        def test_hung(board):
+        from esp32tl.units import hours, ms
+
+
+        @pytest.fixture
+        def running(board):
             board.power_on()
+            # Returns at the first turn, once the runner has connected; no time passes.
+            board.wait(ms(0))
+
+
+        def test_hung(board, running):
             board.wait(hours(1))
         """
     )
     started = time.monotonic()
-    result = link_runner.runpytest_subprocess("-p", "no:cacheprovider", "-rA", "--timeout", "2")
+    # The timeout counts the hang alone: the runner starting is in the fixture, which on a slow
+    # machine took longer than the 2 s before the fake runner had connected.
+    result = link_runner.runpytest_subprocess(
+        "-p", "no:cacheprovider", "-rA", "--timeout", "2", "-o", "timeout_func_only=true"
+    )
     assert time.monotonic() - started < 15
     result.assert_outcomes(failed=1)
     result.stdout.fnmatch_lines(
