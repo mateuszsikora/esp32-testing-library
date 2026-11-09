@@ -191,7 +191,7 @@ def test_the_limit_counts_what_a_card_has_allocated_once_it_is_synced(
     tmp_path: Path, running: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # ext4 allocates a written file's blocks when it is synced, and may then need one more for
-    # its extents: here each card takes a block more once it is synced.
+    # its extents: here each card takes more once it is synced, what 4 KiB written takes.
     def grow(path: Path) -> None:
         with path.open("r+b") as stream:
             stream.seek(512 * MIB)
@@ -201,6 +201,7 @@ def test_the_limit_counts_what_a_card_has_allocated_once_it_is_synced(
 
     def grows(path: Path) -> None:
         grow(path)
+        module._touch(path)  # the write moved the modification time `put` set
         synced(path)
 
     def card(number: int) -> Path:

@@ -635,8 +635,8 @@ measures what came out and evicts again, and renames it into place. So a reader 
 none, or the whole new one. It measures the clone only once it is synced: ext4 allocates a written
 file's blocks then, and may take more than `st_blocks` showed before, presumably a block for the
 file's extents. Measured before the sync, the cache ended 4096 bytes over an 8 MiB limit on the CI
-runner's disk, in one run of three. A failed `put` removes the temporary file, and the old card stays gone,
-which is a miss. Last use is the modification time, set with `os.utime` from `time.time_ns()` by
+runner's disk, in one run of three. A failed `put` removes the temporary file, and the old card
+stays gone, which is a miss. Last use is the modification time, set with `os.utime` from `time.time_ns()` by
 `put` and `get`, because a volume may not keep access times; ties go by file name. `st_blocks` of a
 clone counts blocks it shares with the card it came from, so the limit is conservative when both are
 on disk, and APFS fills in the holes of a small file, so a source of a few MiB can measure more than
