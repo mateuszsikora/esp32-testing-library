@@ -392,7 +392,7 @@ that references to its number keep their meaning.
      `tests/test_sd_remount.py::test_a_fault_rule_stays_through_a_change_of_card_until_it_is_cleared`,
      `tests/test_sdspi.py::test_fault_rules_are_the_test_s_and_outlast_a_power_cycle`,
      `tests/test_sdspi.py::test_fault_rules_outlast_a_reset_of_the_chip`
-- **209.** A deep sleep is one slice to its wake: neither the next millisecond nor `latency` ends a
+- **217.** A deep sleep is one slice to its wake: neither the next millisecond nor `latency` ends a
   slice in it, the runner moves the RTC through it in long steps to short of its alarm, and the wake
   still comes in esp32sim's first idle round at or after the alarm's tick, through a `reset` at its
   cycle, with the turn its latency calls for after it. An awake chip is not stepped through; a

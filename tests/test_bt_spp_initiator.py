@@ -56,15 +56,14 @@ def test_the_firmware_finds_pairs_with_and_streams_to_the_peer(
     source = Heard()
     peer = SppPeer(bt.air, name=NAME, pin=PIN, source=source)
     assert peer.secure
+    # made before power-on, so that it sees the line whatever turn brings it
+    opening = console.line(r"ESP_SPP_OPEN_EVT handle:\d+ rem_bda:\[00:00:00:00:5b:01\]")
     board.power_on()
     console.expect_exact("ESP_SPP_DISCOVERY_COMP_EVT scn_num:1", timeout=seconds(5))
     console.expect_exact("-- [0] scn:1 service_name:Serial Port", timeout=1)
     console.expect_exact(f"Input pin code: {PIN}", timeout=1)
     console.expect_exact(f"authentication success: {NAME}", timeout=1)
-    opened = board.wait_until(
-        console.line(r"ESP_SPP_OPEN_EVT handle:\d+ rem_bda:\[00:00:00:00:5b:01\]"),
-        within=seconds(1),
-    )
+    opened = board.wait_until(opening, within=seconds(1))
     # The peer checked at SABM, after the authentication, and let the channel open.
     assert peer.channel_open and peer.refused == []
 
@@ -78,6 +77,7 @@ def test_the_firmware_finds_pairs_with_and_streams_to_the_peer(
     heard = source.between(opened.at.ns, speed.at.ns)
     assert abs(heard - written) <= len(BLOCK), (heard, written)
     stream = b"".join(data for _, data in source.heard)
+    # 3 s or more at about 299 kbit/s is about 113 blocks
     assert len(stream) >= 100 * len(BLOCK)
     assert stream == (BLOCK * (len(stream) // len(BLOCK) + 1))[: len(stream)]
     assert bt.unknown_commands() == []

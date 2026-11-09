@@ -37,8 +37,11 @@ Between `afcfba6` and `c99fb28` come 14 commits, which bring three changes besid
   `tests/test_wifi.py`, `tests/test_http_request.py` and `test_wifi_http` of the determinism job
   pass.
 - mikroverk/esp32sim#344 (`0437f14`): the classic ROM's UART download mode, for esptool. Its SLC
-  (`ClassicSlc`) and its autobaud counters serve the ROM's download boot alone, which a run that
-  boots from flash never enters. Three changes are on every firmware's UART path: `RXFIFO_FULL`
+  (`ClassicSlc`) serves the ROM's download boot alone, which a run that boots from flash never
+  enters. Its autobaud counters count the bytes `ClassicUart::host_input` takes while
+  `UART_AUTOBAUD_EN` is set, and stand in for `RXD_CNT`, `LOWPULSE` and `HIGHPULSE` then
+  (`esp32/src/periph.rs:593-599`, `:646-647`); ESP-IDF's application driver does not set it, and
+  the bytes from the peer do not go through that method (below). Three changes are on every firmware's UART path: `RXFIFO_FULL`
   falls when a read leaves the FIFO below its threshold (`Uart::lower_rx_full_when_drained`,
   `esp-periph/src/uart.rs:55-61`, with `irq_dirty` from the bus's FIFO read,
   `esp32/src/bus.rs:252-265`), a byte or halfword store to a TX FIFO no longer reads the RX FIFO
@@ -48,15 +51,24 @@ Between `afcfba6` and `c99fb28` come 14 commits, which bring three changes besid
   over UART1 pass. The fourth change is the one the previous pin's decision rejected `0437f14`
   for: `uart_pin_input` hands a byte to `ClassicUart::host_input` (`esp32/src/periph.rs:960-970`),
   which queues what does not fit the 128-byte FIFO and releases it at the baud rate. The runner now
-  delivers each byte to each port itself, `ClassicUart::host_input` only for a port whose FIFO has
-  room, and for a full FIFO raises `UART_RXFIFO_OVF_INT_RAW` in the port's `int_raw`, a public field,
-  without handing the byte over ([runner](../features/runner-technical.md#received-bytes)). A byte
-  that finds the FIFO full is lost, counted and warned (`rxfifo_ovf`,
-  [protocol 5.8](../protocol.md#58-warn-ext)), as on the chip, and ESP-IDF's driver gets the
-  interrupt it turns into `UART_FIFO_OVF`, as on the previous pin.
+  delivers each byte to each port itself, through the shared `Uart` that `ClassicUart` wraps, its
+  public field `.0`: `Uart::host_input` (`esp-periph/src/uart.rs:43-50`), which the previous pin's
+  `uart_pin_input` called, drops a byte that finds the FIFO full and raises
+  `UART_RXFIFO_OVF_INT_RAW`, and has neither the queue nor the autobaud counting
+  ([runner](../features/runner-technical.md#received-bytes)). A byte that finds the FIFO full is
+  lost, counted and warned (`rxfifo_ovf`, [protocol 5.8](../protocol.md#58-warn-ext)), as on the
+  chip, and ESP-IDF's driver gets the interrupt it turns into `UART_FIFO_OVF`, as on the previous
+  pin.
   `on_the_emulator_a_byte_into_a_full_rx_fifo_is_lost_and_raises_the_overflow_interrupt` in
   `runner/src/session/tests.rs` keeps it so, on the real `esp32::Machine`: on the runner's code of
-  the previous pin, which handed esp32sim every byte, it fails on the two bytes in esp32sim's queue.
+  the previous pin, which handed `uart_pin_input` every byte, and with `ClassicUart::host_input`, it
+  fails on the two bytes in esp32sim's queue.
+
+The runner's steps through a deep sleep (#173, merged after this decision was written) drive
+esp32sim code that is the same at both pins: `esp32/src/sleep.rs`, `esp32/src/soc.rs`, `emu-core`,
+and the `RtcSlow` divider of 1600; `Peripherals::tick` only adds the pacing of a UART's queue,
+which stays empty. `examples/periodic_wake` measures the same on both pins: pulses 900.266 s
+apart, a day ending 85 525 s into the run, 192 turns.
 
 The evidence that none of them changes what else esp32tl relies on is the whole test suite, which
 passes on the pin, and every esp32sim line the documentation cites, which is still there, moved at
@@ -67,7 +79,11 @@ That revision in `runner/Cargo.toml` is the project's esp32sim pin.
 than #347, and the merge commit of the change the project needs is the smallest step that was
 checked, as with the pins before. Also rejected: a pin without #344, since every revision with #347
 has it: #347's branch was built on `0437f14`. Also rejected: asking esp32sim for a way to drop a
-byte instead of queueing it, since the runner can do it with what is public at the pin.
+byte instead of queueing it, since one is public at the pin: the `Uart` inside `ClassicUart`. Also
+rejected: `ClassicUart::host_input` for a port with room, and `UART_RXFIFO_OVF_INT_RAW` set by the
+runner for a full one, because it leans on the runner never handing over a byte that does not fit,
+copies esp32sim's bit, and counts the peer's bytes as autobaud edges, which the previous pin did
+not.
 
 ## esp32sim is pinned at the merge commit of the deep-sleep timer wake
 

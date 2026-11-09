@@ -16,8 +16,8 @@ rust-version = "1.95"
 # on its RTC timer from mikroverk/esp32sim#336 on, and images built for chip
 # revision v3.0 boot from mikroverk/esp32sim#322 on. It also carries
 # mikroverk/esp32sim#344, whose UART queues what does not fit the RX FIFO: the
-# run loop hands a port a byte only when there is room. This revision is the
-# project's esp32sim pin; changing it here changes it everywhere.
+# run loop hands each byte to the `Uart` inside it, which drops it. This revision
+# is the project's esp32sim pin; changing it here changes it everywhere.
 [dependencies]
 esp32 = { git = "https://github.com/mikroverk/esp32sim", rev = "c99fb286c4378fcfa6d304b754d31e542ba3035a" }
 esp-soc = { git = "https://github.com/mikroverk/esp32sim", rev = "c99fb286c4378fcfa6d304b754d31e542ba3035a" }

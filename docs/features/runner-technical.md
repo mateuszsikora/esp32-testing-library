@@ -273,7 +273,7 @@ error. `Session::run` calls `write_flash_at_end` after `drive` has returned and 
 ([protocol 5.21](../protocol.md#521-flash_dump-and-flash_dump_ack-ext-131)).
 
 `Session` runs the protocol over two traits, `Guest` (the machine: cycles, `run_until`,
-`chip_reset`, `power_on_reset`, `idle_until`, `uart_route`, `rx_pending`, `uart_receive`, `uart_lose`,
+`chip_reset`, `power_on_reset`, `idle_until`, `uart_route`, `rx_pending`, `uart_receive`, `uart_frame_error`,
 `gpio_drive`, `take_gpio_inputs`, and for Wi-Fi `take_eth_frames`, `eth_input`,
 `wifi_access_point`, `wifi_leave`, `wifi_drops` and `wifi_forget`, whose defaults are a chip
 without Wi-Fi: no frames, nothing taken, nothing attached, left at once, no drops, nothing to
@@ -282,10 +282,9 @@ on the machine) and
 `Link` (the socket: `send`, `flush`, `idle`, `closing`, `recv`), so that its tests drive it with a
 scripted guest and a fake peer. `impl Guest for esp32::Machine` sets `max_cycles` and calls
 `run(u64::MAX)`, calls `reboot()` for `chip_reset`, reads `bus.periph.uart_route(port)` and
-`uart[port].rx_pending()`, delivers a byte to one port with `uart[port].host_input` and
-`irq_dirty = true`, raises the bit of `RxLoss` in that port's `int_raw` for a byte it loses
-(`UART_RXFIFO_OVF_INT` for a full FIFO, `UART_FRM_ERR_INT` for a baud that does not match) and
-`irq_dirty = true`, reads `GPIO_ENABLE` and `GPIO_OUT` (`bus.periph.gpio.gpio.enable` and `.out`)
+`uart[port].rx_pending()`, delivers a byte to one port with `uart[port].0.host_input` and
+`irq_dirty = true`, raises `UART_FRM_ERR_INT_RAW` in that port's `int_raw` for a byte at a baud
+that does not match and `irq_dirty = true`, reads `GPIO_ENABLE` and `GPIO_OUT` (`bus.periph.gpio.gpio.enable` and `.out`)
 for `gpio_drive`, and for `take_gpio_inputs` does what the bus's `deliver_board_inputs` does at
 its tick: `SocBus::gpio_set_input` for each of the board's `take_edges`, then
 `SocBus::gpio_release_input` for each of its `released_inputs`. `idle_until` sets `bus.cycles`
@@ -293,28 +292,28 @@ and runs nothing; `wifi_forget` detaches the access point (`StationLink::attach(
 
 #### Received bytes
 
-`deliver` decides, for each paced byte now due and each port whose route has its pin as the RX
-pin, what the chip does with it, and tells the guest: a route whose baud does not match the
-message's (`UartRoute::matches_baud`) loses it as a frame error (`frm_err`,
-`Guest::uart_lose(port, RxLoss::FrameError)`); a FIFO that holds 128 bytes (`rx_pending()`
-against `RX_FIFO`) loses it as an overflow (`rxfifo_ovf`, `RxLoss::Overflow`); any other port
-receives it (`rx_bytes`, `Guest::uart_receive`). A byte no route has is `unrouted_rx` and reaches
-no port. With the supply off the counts and warnings are the same and the guest is told nothing.
+`deliver` takes, for each paced byte now due, each port whose route has its pin as the RX pin:
+a route whose baud does not match the message's (`UartRoute::matches_baud`) loses it as a frame
+error (`frm_err`, `Guest::uart_frame_error`); otherwise the port gets it (`Guest::uart_receive`),
+counted as `rxfifo_ovf` when its FIFO already holds 128 bytes (`rx_pending()` against `RX_FIFO`),
+which the UART then drops, and as `rx_bytes` otherwise. A byte no route has is `unrouted_rx` and
+reaches no port. With the supply off the counts and warnings are the same and the guest is told
+nothing.
 
-The run loop decides rather than esp32sim because esp32sim no longer drops a byte that does not
-fit: from mikroverk/esp32sim#344 on, `esp32::periph::Peripherals::uart_pin_input`
+The run loop goes to each port itself because esp32sim's own call no longer drops a byte that
+does not fit: from mikroverk/esp32sim#344 on, `esp32::periph::Peripherals::uart_pin_input`
 (`esp32/src/periph.rs:960-970`) hands a byte to `ClassicUart::host_input`, which queues what does
 not fit behind the FIFO and releases it at the baud rate as the guest reads (`:593-630`), for esptool's
-download mode, whose host waits on the line. A peer's line does not wait. So the runner calls
-`host_input` only for a port with room, where the byte goes into the FIFO at once and the queue
-stays empty, and for a full FIFO raises `UART_RXFIFO_OVF_INT_RAW` (bit 4) in the port's `int_raw`
-itself, as the chip does and as esp32sim's `Uart::host_input` does for a byte it drops
-(`esp-periph/src/uart.rs:43-50`); `irq_dirty` makes the core see the line. ESP-IDF's driver takes
+download mode, whose host waits on the line; while `UART_AUTOBAUD_EN` is set it also counts each
+byte as nine autobaud edges. A peer's line does not wait. So the runner calls the `host_input` of
+the shared `Uart` that `ClassicUart` wraps, its public field `.0`, as the previous pin's
+`uart_pin_input` did: it drops a byte that finds the FIFO full and raises `UART_RXFIFO_OVF_INT_RAW`
+(bit 4), as the chip does (`esp-periph/src/uart.rs:43-50`), and nothing waits in `ClassicUart`'s
+queue; `irq_dirty` makes the core see the line. ESP-IDF's driver takes
 that interrupt as `UART_FIFO_OVF`: it resets the RX FIFO and posts the event
 (`components/esp_driver_uart/src/uart.c:1323-1335` in v5.3.6), which the firmware sees as it would
 on the chip. A frame error raises `UART_FRM_ERR_INT_RAW` (`esp_periph::uart::INT_FRM_ERR`), as
-esp32sim's `uart_pin_input` does. `int_raw` is a public field of the `Uart` that `ClassicUart`
-wraps, also public; the queue and its pacing are private, and the runner needs neither.
+esp32sim's `uart_pin_input` does; `int_raw` is a public field of that `Uart`.
 
 `power_on_reset` is the chip's power-on reset, which esp32sim has no call for: `reboot()` resets
 the cores (core 1 held), the digital peripherals and PSRAM, but keeps SRAM, the RTC memories and
@@ -714,8 +713,7 @@ The socket's limits are constants, not options:
 | `transport::TEARDOWN` | 2 s (wall) | how long the last messages of a run may take to write |
 | `protocol::MAX_LINE` | 1 MiB | the longest line from the peer; a longer one is a protocol error |
 | `session::MAX_DATA` | 48 KiB | the most bytes one `uart_tx` or `console` message carries |
-| `session::RX_FIFO` | 128 | the classic RX FIFO's size: a byte that finds it full is lost and counted as `rxfifo_ovf` |
-| `session::RXFIFO_OVF_INT` | `1 << 4` | `UART_RXFIFO_OVF_INT_RAW`, the bit the runner raises in a port's `int_raw` for a byte it loses to a full FIFO |
+| `session::RX_FIFO` | 128 | the classic RX FIFO's size: a byte that finds it full is lost, and counted as `rxfifo_ovf` |
 
 **Wi-Fi** is configured on the command line only: `--wifi` and `--wifi-nearby`
 ([runner-user.md](runner-user.md#put-a-wi-fi-access-point-on-the-air)). The frame limits are
@@ -749,7 +747,7 @@ wakes on its RTC timer from mikroverk/esp32sim#336 on (gap 4), and images built 
 v3.0 boot from mikroverk/esp32sim#322 on
 ([plan, findings 3 and 5](../implementation-plan.md#1-findings-that-amend-the-specification)).
 The revision also carries mikroverk/esp32sim#344, whose `ClassicUart::host_input` queues a byte
-that does not fit the RX FIFO; the run loop hands a port a byte only when its FIFO has room
+that does not fit the RX FIFO; the run loop hands each byte to the `Uart` inside it, which drops it
 ([the session](#the-session)). Why this revision and not upstream's head:
 [decisions](../decisions/runner.md#esp32sim-is-pinned-at-the-merge-commit-of-the-bluetooth-classic-enable).
 Every esp32sim crate is pinned to the same revision, and `runner/Cargo.lock` resolves all of them
@@ -989,8 +987,8 @@ a guest that programs a byte between two dumps;
   `on_the_emulator_a_byte_into_a_full_rx_fifo_is_lost_and_raises_the_overflow_interrupt` sends
   130 bytes to UART1 of a guest that never reads them: 128 in the FIFO, two counted and warned as
   `rxfifo_ovf`, `UART_RXFIFO_OVF_INT_RAW` raised, nothing in `ClassicUart`'s queue, and, once the
-  FIFO is read empty and 10 ms more have run, still nothing in it (on the code that handed esp32sim
-  every byte, as before this pin, it fails at the queue);
+  FIFO is read empty and 10 ms more have run, still nothing in it (with `ClassicUart::host_input`,
+  or `uart_pin_input` as before this pin, it fails at the queue);
   `on_the_emulator_gpio_in_reaches_the_guest_and_its_output_comes_back_as_gpio_out` runs a loop
   that copies GPIO 33, which the fake peer drives, to GPIO 4, and checks the two `gpio_out`s;
   `on_the_emulator_no_pad_is_driven_after_a_chip_reset` drives GPIO 4 as a plain GPIO and GPIO 26

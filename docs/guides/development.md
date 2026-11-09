@@ -27,7 +27,7 @@ That one command needs:
   and `tar` to download it.
 - Docker, for the first `make test`. The tests read the validation firmware, which `make test`
   builds when it is missing: it pulls the ESP-IDF image and builds `hello_world`, `nmea_reader`,
-  `gpio_echo`, `sdspi`, `sd_remount`, `modem_at`, `modem_recovery`, `nvs_reader`, `pppos_client`, `mqtt_session`, `http_request`, `persistence`, `ota_state`, `timer_wake`, `deep_sleep`, `bt_spp_initiator` and the projects in `examples/`, about 25 minutes on the CI machine, hp600g1, because it starts a container for each image. `make firmware examples` first takes about 13: one container for each family, whose images share their compiler cache. What the firmware build expects of Docker,
+  `gpio_echo`, `sdspi`, `sd_remount`, `modem_at`, `modem_recovery`, `nvs_reader`, `pppos_client`, `mqtt_session`, `http_request`, `persistence`, `ota_state`, `timer_wake`, `deep_sleep`, `bt_spp_initiator` and the projects in `examples/`, about 25 minutes on the CI machine, hp600g1, because it starts a container for each image. `make firmware examples` first takes about 13: one container for each family, whose images share their compiler cache. TODO(owner): both measured before `bt_spp_initiator`, whose Bluedroid is the largest component the images compile; measure again on hp600g1. What the firmware build expects of Docker,
   and how to build without it, is in
   [validation-firmware-user.md](../features/validation-firmware-user.md).
 

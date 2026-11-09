@@ -394,7 +394,7 @@ people; the fields are for code. Kinds in version 1:
 
 | `kind` | When | Fields |
 |---|---|---|
-| `rxfifo_ovf` | a paced byte found the 128-byte RX FIFO full and was lost: the runner does not hand it to the chip, and raises the UART's `UART_RXFIFO_OVF_INT` | `port`, `pin`, `bytes` |
+| `rxfifo_ovf` | a paced byte found the 128-byte RX FIFO full and was dropped, and the UART raised `UART_RXFIFO_OVF_INT` (`esp-periph/src/uart.rs:43-50`) | `port`, `pin`, `bytes` |
 | `frm_err` | the route's baud differs from the `uart_rx` message's by more than 3 % of the message's, or is `null` (`UartRoute::matches_baud`, `esp-soc/src/uart.rs:21`); the UART raises `FRM_ERR` and drops the byte | `port`, `pin`, `baud` (the route's), `bytes` |
 | `unrouted_rx` | a `uart_rx` byte on a pin no UART receives on ("Unrouted input is dropped", `esp-soc/src/board.rs:61`) | `pin`, `bytes` |
 | `input_on_output` | `gpio_in` on a pin whose bit is set in `GPIO_ENABLE` when the level comes due; the level is still applied. Not a drop: one `warn` per pin and message, never merged, with no `bytes`. A pad a peripheral drives with its output enable, or an IO_MUX function, gives none: the runner sees `GPIO_ENABLE` only | `pin` |
@@ -407,10 +407,10 @@ esp32sim's `uart_pin_input` hands it (`esp32/src/periph.rs:960-970`), each port 
 two ports on one pin there is one `warn` per port. A lost byte is lost for good, as on the chip:
 the UART raises `UART_RXFIFO_OVF_INT` for a full FIFO and `UART_FRM_ERR_INT` for the baud, as the
 chip does, and a firmware's driver sees them (ESP-IDF's resets the FIFO on the first and reports
-`UART_FIFO_OVF`). The runner hands esp32sim only a byte that fits: from mikroverk/esp32sim#344 on,
-esp32sim's classic UART would queue one that does not and release it at the baud rate once the
-firmware reads, which a peer's line, which does not wait, never does
-([runner](features/runner-technical.md#received-bytes)).
+`UART_FIFO_OVF`). The runner hands each byte to the shared `Uart` inside esp32sim's classic UART,
+which drops what does not fit: from mikroverk/esp32sim#344 on, the classic UART itself would queue
+it and release it at the baud rate once the firmware reads, which a peer's line, which does not
+wait, never does ([runner](features/runner-technical.md#received-bytes)).
 
 Consecutive drops of one kind on one pin and port are merged into one `warn` with their count in
 `bytes` and the first drop's `t`; `input_on_output` is not merged. The merged `warn` goes out when any other message is due (an
@@ -1062,8 +1062,8 @@ runs at about 30 wall seconds per emulated second on an M2 Pro, against 0.3 with
 
 - compares the UART routes (`uart_cfg`);
 - delivers the bytes now due, port by port, after checking the route, the baud and the FIFO's
-  `rx_pending()`: into the FIFO with the port's `host_input` when it has room, or as a drop `warn`
-  reports, with the interrupt the chip raises for it (5.8);
+  `rx_pending()`, which is how it sees the drops `warn` reports: to the port's `Uart`, which drops
+  a byte that finds the FIFO full, or as a frame error (5.8);
 - applies the queued inputs now due: received bytes onto their lines, GPIO levels and releases
   through the board (5.11), Ethernet frames to the station's link and the access point's switches
   (5.15, 5.16), the SD card's rules to the card (5.20), H4 packets to the queue the guest's host
@@ -1254,7 +1254,7 @@ Section 4.1 of the plan is superseded by this document. What changed, and why:
     need; the run loop's slices give it to them and stop for `B` as well. For #11 this means:
     `SocketBoard` implements `uses_uart_pins`, `uart_tx` and `gpio_output_at` (recording only),
     not `uart_rx`, `next_deadline` or `advance_to`; bytes reach the chip through
-    the port's `host_input` from the run loop (5.8); no `sync` between turns; `Unimplemented` and
+    each port's `Uart` from the run loop (5.8); no `sync` between turns; `Unimplemented` and
     `Exceptions` go into `stats.end`, not `warn`. The WFI test case stays, as a test of the slices.
     #23 adds `input_levels`, `take_edges` and `released_inputs` for GPIO inputs (item 16).
 11. **`quiet_until` must be later than the turn's `sync`**: one at or before it would make the

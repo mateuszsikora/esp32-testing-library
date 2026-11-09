@@ -63,13 +63,8 @@ pub const PORTS: usize = 3;
 /// some packages bond (`esp32/src/soc.rs:195`), but its `set_input` takes a level there; it
 /// ignores one on 40 and above (`esp32/src/periph.rs:386-389`).
 const GPIOS: u64 = ((1 << 40) - 1) & !(1 << 24 | 0xf << 28);
-/// The classic RX FIFO (`esp-periph/src/uart.rs:9`): a byte that finds it full is lost, which
-/// the run loop decides, because esp32sim's `ClassicUart::host_input` would queue it instead.
+/// The classic RX FIFO (`esp-periph/src/uart.rs:9`): what does not fit is dropped.
 const RX_FIFO: usize = 128;
-/// `UART_RXFIFO_OVF_INT_RAW`, bit 4 of `UART_INT_RAW_REG` (ESP-IDF v5.3.6,
-/// `components/soc/esp32/include/soc/uart_reg.h:132`), which ESP-IDF's driver turns into
-/// `UART_FIFO_OVF`; esp32sim's own constant is private (`esp-periph/src/uart.rs:13`).
-const RXFIFO_OVF_INT: u32 = 1 << 4;
 /// The longest `data` of one message, so that a line stays well under the 1 MiB limit.
 const MAX_DATA: usize = 48 << 10;
 const MS: u64 = 1_000_000;
@@ -94,11 +89,13 @@ pub trait Guest {
     fn idle_until(&mut self, cycle: u64);
     fn uart_route(&self, port: usize) -> UartRoute;
     fn rx_pending(&self, port: usize) -> usize;
-    /// One received byte into `port`'s RX FIFO, which has room for it.
+    /// One received byte into `port`'s RX FIFO, at a baud its route matches; with the FIFO full
+    /// the UART drops it and raises `UART_RXFIFO_OVF_INT`, and it reaches the chip neither now nor
+    /// later.
     fn uart_receive(&mut self, port: usize, byte: u8);
-    /// A received byte that `port` loses: the UART raises the interrupt `loss` names, and the
-    /// byte reaches the chip neither now nor later.
-    fn uart_lose(&mut self, port: usize, loss: RxLoss);
+    /// A received byte at a baud `port`'s route does not match: the UART drops it and raises
+    /// `UART_FRM_ERR_INT`.
+    fn uart_frame_error(&mut self, port: usize);
     /// `GPIO_ENABLE` and `GPIO_OUT`, the words `gpio_output_at` reports.
     fn gpio_drive(&self) -> (u64, u64);
     /// Has the chip take the levels and releases the run loop handed the board, now rather than
@@ -158,25 +155,6 @@ pub trait Guest {
     /// in long steps, and stops short of the RTC timer's alarm, so that esp32sim's own rounds wake
     /// the chip at its tick. Does nothing otherwise.
     fn sleep_until(&mut self, _cycle: u64) {}
-}
-
-/// Why a UART loses a received byte, as the chip has it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RxLoss {
-    /// The 128-byte RX FIFO is full: `UART_RXFIFO_OVF_INT`.
-    Overflow,
-    /// The line's baud is not the UART's: `UART_FRM_ERR_INT`.
-    FrameError,
-}
-
-impl RxLoss {
-    /// The bit of `UART_INT_RAW_REG` the chip raises for it.
-    fn int_raw(self) -> u32 {
-        match self {
-            RxLoss::Overflow => RXFIFO_OVF_INT,
-            RxLoss::FrameError => esp_periph::uart::INT_FRM_ERR,
-        }
-    }
 }
 
 /// Where the classic chip's SRAM and RTC memories are on the data bus, besides the DRAM, which
@@ -272,14 +250,15 @@ impl Guest for esp32::Machine {
         self.bus.periph.uart[port].rx_pending()
     }
     fn uart_receive(&mut self, port: usize, byte: u8) {
-        // what `uart_pin_input` does for a port whose route and baud match; with room in the FIFO
-        // the byte goes in at once and nothing waits in `ClassicUart`'s queue, which would release
-        // it at the baud rate later (`esp32/src/periph.rs:593-599`)
-        self.bus.periph.uart[port].host_input(&[byte]);
+        // the shared `Uart` that `ClassicUart` wraps, which drops what does not fit and raises
+        // RXFIFO_OVF (`esp-periph/src/uart.rs:43-50`), as the previous pin's `uart_pin_input` did;
+        // `ClassicUart::host_input` would queue it and release it at the baud rate, and count it
+        // as an autobaud edge (`esp32/src/periph.rs:593-599`)
+        self.bus.periph.uart[port].0.host_input(&[byte]);
         self.bus.irq_dirty = true;
     }
-    fn uart_lose(&mut self, port: usize, loss: RxLoss) {
-        self.bus.periph.uart[port].int_raw |= loss.int_raw();
+    fn uart_frame_error(&mut self, port: usize) {
+        self.bus.periph.uart[port].0.int_raw |= esp_periph::uart::INT_FRM_ERR;
         self.bus.irq_dirty = true;
     }
     fn gpio_drive(&self) -> (u64, u64) {
@@ -1608,31 +1587,30 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                 .get_mut(&pin)
                 .and_then(|line| line.bytes.pop_front())
                 .expect("front exists");
-            // into every UART whose RX pin it is, each deciding for itself
+            // into every UART whose RX pin it is, each on its own
             let mut routed = false;
             for (port, route) in routes.iter().enumerate() {
                 if route.rx_pin != Some(pin) {
                     continue;
                 }
                 routed = true;
-                let loss = if !route.matches_baud(paced.baud) {
+                let matches = route.matches_baud(paced.baud);
+                if !matches {
                     self.stats.uart[port].frm_err += 1;
                     self.warn(t, WarnKind::FrmErr, Some(port), pin, route.baud)?;
-                    Some(RxLoss::FrameError)
                 } else if self.guest.rx_pending(port) >= RX_FIFO {
                     self.stats.uart[port].rxfifo_ovf += 1;
                     self.warn(t, WarnKind::RxFifoOvf, Some(port), pin, None)?;
-                    Some(RxLoss::Overflow)
                 } else {
                     self.stats.uart[port].rx_bytes += 1;
-                    None
-                };
+                }
                 if self.off {
                     continue;
                 }
-                match loss {
-                    None => self.guest.uart_receive(port, paced.byte),
-                    Some(loss) => self.guest.uart_lose(port, loss),
+                if matches {
+                    self.guest.uart_receive(port, paced.byte);
+                } else {
+                    self.guest.uart_frame_error(port);
                 }
             }
             if !routed {
