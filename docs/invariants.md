@@ -1166,6 +1166,7 @@ that references to its number keep their meaning.
     the slot of a board that is on is not kept.
     `tests/test_card_cache.py::test_the_card_least_recently_used_goes_first`,
     `tests/test_card_cache.py::test_disk_use_stays_within_the_limit_from_what_is_allocated`,
+    `tests/test_card_cache.py::test_the_limit_counts_what_a_card_has_allocated_once_it_is_synced`,
     `tests/test_card_cache.py::test_a_card_above_the_limit_is_refused_and_evicts_nothing`,
     `tests/test_card_cache.py::test_a_put_that_fails_leaves_no_part_of_a_card`,
     `tests/test_card_cache.py::test_a_cache_directory_that_fails_fails_with_the_card_s_name`,
