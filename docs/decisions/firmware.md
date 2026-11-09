@@ -317,6 +317,22 @@ modem version; waiting indefinitely for GNSS before the connect report, which wo
 receiver outage; and carrying old coordinates as a current fix after GNSS silence. The report
 period is fixed in firmware, rather than adding configuration unrelated to the demonstration.
 
+## The periodic wake sleeps a fixed 15 minutes and brings its own profile
+
+Status: decided (#74)
+
+The `periodic_wake` example sleeps 15 minutes after each boot's pulse, with the timer as its only
+wake source, and counts its wakes in `RTC_DATA_ATTR` memory. Its tests hold each interval from
+pulse to pulse to 15 minutes and at most a second more. Its board profile is a file beside its
+tests, selected with `board_profile(path=...)`, as a project of its own selects one.
+
+**Rejected:** waking on a schedule kept on the RTC, so that the boot's time does not add up from
+wake to wake, because what it would take away, 42 ms a wake, is less than the sleep's own error on
+esp32sim, about 0.22 s, and the schedule would only be as good as the RTC slow clock it is kept on.
+The interval from NVS, because the GPS alarm already shows NVS configuration, and every wake would
+open NVS for it. A profile esp32tl ships, because one GPIO line belongs to this example's assembly
+only, and the example shows instead the way a project describes its own wiring.
+
 ## Images of one container share their ccache hits
 
 Status: decided (#146)

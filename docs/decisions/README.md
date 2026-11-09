@@ -80,6 +80,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The SD logger uses each RMC's date and closes every appended row](firmware.md#the-sd-logger-uses-each-rmcs-date-and-closes-every-appended-row) | `firmware.md` | decided (#73) |
 | [A card that comes and goes is validated on a firmware of this repository's](firmware.md#a-card-that-comes-and-goes-is-validated-on-a-firmware-of-this-repositorys) | `firmware.md` | decided (#106) |
 | [The position tracker reuses the pinned modem component and reports without a fix](firmware.md#the-position-tracker-reuses-the-pinned-modem-component-and-reports-without-a-fix) | `firmware.md` | decided (#72) |
+| [The periodic wake sleeps a fixed 15 minutes and brings its own profile](firmware.md#the-periodic-wake-sleeps-a-fixed-15-minutes-and-brings-its-own-profile) | `firmware.md` | decided (#74) |
 | [Images of one container share their ccache hits](firmware.md#images-of-one-container-share-their-ccache-hits) | `firmware.md` | decided (#146) |
 
 ## The esp32tl package and its pytest plugin
@@ -286,6 +287,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Writes go out at sync, at 64 KiB and after 20 wall milliseconds](runner.md#writes-go-out-at-sync-at-64-kib-and-after-20-wall-milliseconds) | `runner.md` | decided (#11) |
 | [The last messages of a run ignore the signal and get two seconds](runner.md#the-last-messages-of-a-run-ignore-the-signal-and-get-two-seconds) | `runner.md` | decided (#11) |
 | [A slice is at most latency long while no event is unacknowledged](runner.md#a-slice-is-at-most-latency-long-while-no-event-is-unacknowledged) | `runner.md` | decided (#11) |
+| [A deep sleep runs in long steps of the RTC, to just short of its alarm](runner.md#a-deep-sleep-runs-in-long-steps-of-the-rtc-to-just-short-of-its-alarm) | `runner.md` | decided (#74) |
 | [The runner reads the socket only in the peer's turn](runner.md#the-runner-reads-the-socket-only-in-the-peers-turn) | `runner.md` | decided (#53) |
 | [sync is sent only at the block point, and lateness is measured against it](runner.md#sync-is-sent-only-at-the-block-point-and-lateness-is-measured-against-it) | `runner.md` | decided (#53) |
 | [The run loop works in slices instead of BoardModel::next_deadline](runner.md#the-run-loop-works-in-slices-instead-of-boardmodelnext_deadline) | `runner.md` | decided (#53) |

@@ -285,12 +285,12 @@ tap) join the bytes of one route and find requests by their protocol's terminato
 
 A route's configuration, read with `bus.periph.uart_route(port)` (`esp32/src/periph.rs:843`). The
 runner compares the routes at every slice boundary (section 6.1, at most one emulated millisecond
-apart) and in every `uart_tx` callback, which carries the route. It sends `uart_cfg` when a port's
-route differs from the last one it sent for that port and either of the two touches a watched pin;
-before the first, every port counts as having no pins and `null` baud. `t` is where the runner saw
-the change, at most one millisecond after the firmware made it. A peer on a receive-only route
-(GNSS: the firmware never transmits) learns the baud from it instead of trusting the board
-profile; a mismatch is otherwise a silent frame error.
+apart while the chip runs) and in every `uart_tx` callback, which carries the route. It sends
+`uart_cfg` when a port's route differs from the last one it sent for that port and either of the
+two touches a watched pin; before the first, every port counts as having no pins and `null` baud.
+`t` is where the runner saw the change, at most one millisecond after the firmware made it. A
+peer on a receive-only route (GNSS: the firmware never transmits) learns the baud from it instead
+of trusting the board profile; a mismatch is otherwise a silent frame error.
 
 `rx_pin` and `baud` are `null` until the firmware configures them; that is the valid initial
 state, not an error. A guest reset sends the reset routes again.
@@ -1038,7 +1038,16 @@ queued input, the next whole emulated millisecond, and the end of the run, each 
 cycles (section 3); while the board's supply is off the guest does not run, and the next
 millisecond is left out (5.17). While no event is unacknowledged, so that `B` has no `latency` term yet, a
 slice is also at most `latency` long: an event in it sets `B = t + latency`, and the callback
-that records it cannot stop `run`, so a longer slice would carry the guest past that `B`. With a
+that records it cannot stop `run`, so a longer slice would carry the guest past that `B`.
+Without `--realtime`, while the chip is in a deep sleep with the RTC watchdog off, neither the
+next millisecond nor `latency` ends a slice: its digital domain is off, so no route changes and
+nothing is recorded, and the only event, the wake, stops `run` at its cycle with the `reset`. The
+runner moves the bus through such a sleep in long steps of its own, which tick the RTC, to two RTC
+slow ticks before the timer's alarm, and esp32sim's idle rounds run the rest and wake the chip at
+the alarm's tick; what the peer sees is the run it would see without the steps, but for a wake up
+to one idle round, 512 CPU cycles, from where it would come. Under `--realtime`, and with the RTC
+watchdog on, a sleep's slices end as an awake chip's do
+([decision](decisions/runner.md#a-deep-sleep-runs-in-long-steps-of-the-rtc-to-just-short-of-its-alarm)). With a
 `latency` of `0` a slice is one bus cycle until the next event, which is slow: `hello_world`
 runs at about 30 wall seconds per emulated second on an M2 Pro, against 0.3 with a `latency` of
 1 µs and 0.1 with none. Between slices, where it has the bus, the runner:
@@ -1122,7 +1131,7 @@ the runner at or before its `t` (rule 1).
 |---|---|---|
 | `--max-seconds` reached (`Stop::Halted`, `esp-soc/src/machine.rs:584`) | sends events not yet sent, `stats` with `end: max_seconds`, closes | 0 |
 | `stop` from the peer | drops the events held after `B`, sends `stats` with `end: stop`, closes | 0 |
-| `SIGTERM` or `SIGINT` | ends the slice in progress (at most one emulated millisecond), or at once if it is waiting for the peer's turn or, under `--realtime`, for wall time on its own clock (12.2). A sleep inside esp32sim's pacing comes to its end first, which is about 2 ms at most but for the board kept off from power-on (12.2); sends the events and `warn`s not yet sent, `stats` with `end: signal`, closes | 0 |
+| `SIGTERM` or `SIGINT` | ends the slice in progress (at most one emulated millisecond, or the rest of a deep sleep, a few wall microseconds), or at once if it is waiting for the peer's turn or, under `--realtime`, for wall time on its own clock (12.2). A sleep inside esp32sim's pacing comes to its end first, which is about 2 ms at most but for the board kept off from power-on (12.2); sends the events and `warn`s not yet sent, `stats` with `end: signal`, closes | 0 |
 | any other `Stop` (`esp-soc/src/soc.rs:9`: `MaxInsns`, `Breakpoint`, `Unimplemented`, `Simcall`, `Ebreak`, `Watch`, `Exceptions`, `CostModel`, `CostModelLifecycle`) | events not yet sent, `stats` with `end: emulator` and the variant, closes | 1 |
 | usage error, or an image or ROM that cannot be loaded | nothing on the socket (it may not be connected yet) | 2 |
 | protocol error by the peer: malformed or oversized line, unknown `type`, version or chip mismatch, late `t`, wrong `ack`, `quiet_until` not after the `sync`, a `baud` of `0`, a `watch` with a pin the chip does not have, a message the runner does not implement yet, `eth_rx` or `wifi_ap` without `--wifi` (`eth_rx without --wifi`, `wifi_ap without --wifi`), an `eth_rx` frame outside 14 to 1518 bytes (`eth_rx: an Ethernet frame of N bytes; one without FCS has 14 to 1518`), `hci_rx` without `--bt` (`hci_rx without --bt`), an `hci_rx` packet outside 1 to 496 bytes (`hci_rx: an H4 packet of N bytes; esp32sim's VHCI carries 1 to 496`), an `on` that is not `true` or `false`, `sd_card` without `--sd-spi` (`sd_card without --sd-spi`), an `image` that is not a string, `sd_fault` or `sd_clear` without `--sd-spi` (`sd_fault without --sd-spi`, `sd_clear without --sd-spi`), an `sd_fault` that 5.20 does not allow (an `op` or `action` it does not list, an erase that fails, a `delay` missing, out of range or with `error`, a `count` out of range, `blocks` that are not `[first, last]`, an `id` in use already), `flash_dump` without `--flash-out` (`flash_dump without --flash-out`) | `stats` with `end: protocol_error`, closes | 3 |

@@ -11,6 +11,9 @@ Small ESP-IDF applications tested through their wires with esp32tl. Each project
 - [Position tracker](position_tracker/): GNSS positions and NTP time sent through a cellular
   modem to MQTT over TLS, with the broker CA in NVS. Start with
   [its tests](position_tracker/tests/test_tracker.py).
+- [Periodic wake](periodic_wake/): deep sleep with a timer wake every 15 minutes, a count in
+  RTC memory and a pulse on a pin at every boot; a day of wakes runs in seconds. Start with
+  [its tests](periodic_wake/tests/test_periodic_wake.py).
 
 See the [examples guide](../docs/features/examples-user.md) for wiring, configuration and commands.
 

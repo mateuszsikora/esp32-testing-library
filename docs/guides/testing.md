@@ -357,6 +357,12 @@ empty-slot test still runs and observes the error GPIO and continued GNSS proces
 Build with `firmware/build.sh --examples sd_data_logger`, then run
 `.venv/bin/pytest examples/sd_data_logger/tests`. It needs the runner and ROM ELF as well.
 
+`examples/periodic_wake/tests/test_periodic_wake.py` runs deep sleep with a timer wake: a pulse
+on GPIO18 every 15 minutes, the wake count in RTC memory through sleeps, a reset and a power
+cycle, and a day of wakes in under 60 s of wall time, about 7 s on an M2 Pro. Build with
+`firmware/build.sh --examples periodic_wake`, then run
+`.venv/bin/pytest examples/periodic_wake/tests`.
+
 
 `tests/test_card_image.py` checks builder/reader behavior against real FAT images and marks the
 cases needing mtools with `requires_mtools`. `tests/test_board_api.py` checks the shared `Board`

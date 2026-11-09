@@ -127,6 +127,43 @@ timeout scenario uses `delay("write", seconds(6), count=1)` and checks that the 
 after it; the rows saved from then on are on the image. It takes about 10 wall seconds: ESP-IDF
 polls the busy card one byte per transaction for 5 emulated seconds.
 
+## Periodic wake implementation
+
+`examples/periodic_wake/main/main.c` depends on `esp_driver_gpio` and `esp_hw_support`. `wakes`,
+`RTC_DATA_ATTR`, is in `.rtc.data`: the bootloader loads it from the image, as 0, at every boot but
+a wake from deep sleep, so the count starts again at a power-on and a reset, and `app_main` adds
+one when `esp_sleep_get_wakeup_cause()` is `ESP_SLEEP_WAKEUP_TIMER`. The firmware never sets it to
+0 itself: the reset test shows what RTC memory does, not what the firmware does. The pulse resets
+GPIO18, sets it low, enables the output, then holds it high for `PULSE_US`, 20 000, with
+`esp_rom_delay_us`, a busy wait rather than a FreeRTOS delay so that its length is not rounded to a
+10 ms tick. `SLEEP_US`, 15 minutes, goes to `esp_sleep_enable_timer_wakeup` after the count's line,
+with no other wake source armed. `sdkconfig.defaults` adds
+`CONFIG_BOOTLOADER_SKIP_VALIDATE_IN_DEEP_SLEEP=y` to the 4 MB flash: a wake boots the image it slept
+in, so the bootloader does not check it again.
+
+Measured on esp32sim at the pin `afcfba6`, on an M2 Pro: the first pulse starts 45 ms after
+power-on, and each later one 21.6 ms after its wake. An interval from pulse to pulse is 900.266 s:
+the 900 s the firmware asks, the boot and the 20 ms pulse, and about 0.22 s, 0.025 % of the sleep,
+by which the sleep lasts longer than asked, as `deep_sleep`'s 20 s sleep wakes 20.004 s after its
+line ([validation firmware](validation-firmware-technical.md#deep_sleep)). The day, 95 wakes, ends
+85 525 s into the run, 875 s short of the backend's `--max-seconds 86400`, and takes 287 turns of
+the link and about 7 s of wall time; before the runner stepped through the sleeps
+([decision](../decisions/runner.md#a-deep-sleep-runs-in-long-steps-of-the-rtc-to-just-short-of-its-alarm))
+it took 330 s.
+
+`tests/test_periodic_wake.py` uses the public `Board`, with `board.lines.output("wake.pulse")`
+and `board.console.line`. `next_count` waits up to `BOOT_TIME` for the count's line, the first
+that ends after the call, so it reads each boot's line once. `pulse_starts` walks the line's
+firmware events: each high level starts a pulse, and the next low or undriven level ends it, which
+must come 20 to 21 ms later; a pin still high at the end fails it. `assert_every_interval` checks
+each pair of pulse starts, naming the pulse that broke the interval. The day's test reads
+`time.monotonic()` around the run, from before `power_on()` to the last count, against
+`WALL_TIME_A_DAY`, 60 s: the runner's skip takes the sleeps' wall time to microseconds each, and
+without it the test takes minutes. The reset test calls `board.reset()` five minutes into the
+second sleep, and reads `board.boot.cause` only after the count's line, since the reset reaches the
+runner at the next wait. The profile is a file beside the tests, not one esp32tl ships
+([decision](../decisions/firmware.md#the-periodic-wake-sleeps-a-fixed-15-minutes-and-brings-its-own-profile)).
+
 ## Documentation and builder checks
 
 `scripts/check-docs.py` owns `examples/` through F24; Python test files under each example's
