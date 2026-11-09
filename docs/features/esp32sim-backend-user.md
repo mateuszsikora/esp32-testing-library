@@ -75,9 +75,9 @@ day of 15-minute sleeps, 96 boots, in about 7 s on an M2 Pro, nearly all of it i
 A sleep with the RTC watchdog on is not stepped through: it runs in esp32sim's idle rounds, at
 what they cost a sleep without the steps (about 3.7 s of wall time for 15 minutes on an M2 Pro,
 measured with the watchdog off), and the watchdog counts through it, so a stage that resets before
-the timer's alarm ends the sleep in that reset, which `wait_for_wake` reports as no wake from deep
-sleep ([runner](runner-user.md#connect-a-peer)). Under a [real source](real-source-user.md) the
-run follows wall time, the sleep's included.
+the timer's alarm ends the sleep in that reset, which `wait_for_wake` fails as no wake from deep
+sleep ([waking from deep sleep](pytest-plugin-user.md#waking-from-deep-sleep)). Under a
+[real source](real-source-user.md) the run follows wall time, the sleep's included.
 
 The console reaches the test over the link, in emulated-time order with the runner's turns
 (`--console both`). The runner's stdout gets it too, and with it the runner's own lines
