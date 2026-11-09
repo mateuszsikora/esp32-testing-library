@@ -272,7 +272,8 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 
 | Decision | File | Status |
 |---|---|---|
-| [esp32sim is pinned at the merge commit of the deep-sleep timer wake](runner.md#esp32sim-is-pinned-at-the-merge-commit-of-the-deep-sleep-timer-wake) | `runner.md` | decided (#35) |
+| [esp32sim is pinned at the merge commit of the Bluetooth Classic enable](runner.md#esp32sim-is-pinned-at-the-merge-commit-of-the-bluetooth-classic-enable) | `runner.md` | decided (#34) |
+| [esp32sim is pinned at the merge commit of the deep-sleep timer wake](runner.md#esp32sim-is-pinned-at-the-merge-commit-of-the-deep-sleep-timer-wake) | `runner.md` | superseded (#34) |
 | [esp32sim is pinned at the merge commit of the chip-revision fix](runner.md#esp32sim-is-pinned-at-the-merge-commit-of-the-chip-revision-fix) | `runner.md` | superseded (#35) |
 | [The esp32sim command-line crate is not a dependency](runner.md#the-esp32sim-command-line-crate-is-not-a-dependency) | `runner.md` | decided (#45) |
 | [Cargo runs in runner/, against a pinned toolchain](runner.md#cargo-runs-in-runner-against-a-pinned-toolchain) | `runner.md` | decided (#45) |

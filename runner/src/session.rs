@@ -46,7 +46,7 @@ use crate::protocol::{self, Incoming, Stats, Warn, WarnKind, WifiStats, char_ns,
 use crate::sd_card;
 use crate::socket_board::{Recorded, Shared};
 use crate::transport::{Link, LinkError};
-use esp_soc::uart::{UartInput, UartRoute};
+use esp_soc::uart::UartRoute;
 use esp_soc::wifi::{self, StaState};
 use esp_soc::{SocBus, Stop};
 use std::borrow::Cow;
@@ -63,8 +63,13 @@ pub const PORTS: usize = 3;
 /// some packages bond (`esp32/src/soc.rs:195`), but its `set_input` takes a level there; it
 /// ignores one on 40 and above (`esp32/src/periph.rs:386-389`).
 const GPIOS: u64 = ((1 << 40) - 1) & !(1 << 24 | 0xf << 28);
-/// The classic RX FIFO (`esp-periph/src/uart.rs`): what does not fit is dropped.
+/// The classic RX FIFO (`esp-periph/src/uart.rs:9`): a byte that finds it full is lost, which
+/// the run loop decides, because esp32sim's `ClassicUart::host_input` would queue it instead.
 const RX_FIFO: usize = 128;
+/// `UART_RXFIFO_OVF_INT_RAW`, bit 4 of `UART_INT_RAW_REG` (ESP-IDF v5.3.6,
+/// `components/soc/esp32/include/soc/uart_reg.h:132`), which ESP-IDF's driver turns into
+/// `UART_FIFO_OVF`; esp32sim's own constant is private (`esp-periph/src/uart.rs:13`).
+const RXFIFO_OVF_INT: u32 = 1 << 4;
 /// The longest `data` of one message, so that a line stays well under the 1 MiB limit.
 const MAX_DATA: usize = 48 << 10;
 const MS: u64 = 1_000_000;
@@ -89,8 +94,11 @@ pub trait Guest {
     fn idle_until(&mut self, cycle: u64);
     fn uart_route(&self, port: usize) -> UartRoute;
     fn rx_pending(&self, port: usize) -> usize;
-    /// One received byte on `pin`, into every UART whose RX pin it is.
-    fn uart_input(&mut self, pin: u8, baud: u32, byte: u8);
+    /// One received byte into `port`'s RX FIFO, which has room for it.
+    fn uart_receive(&mut self, port: usize, byte: u8);
+    /// A received byte that `port` loses: the UART raises the interrupt `loss` names, and the
+    /// byte reaches the chip neither now nor later.
+    fn uart_lose(&mut self, port: usize, loss: RxLoss);
     /// `GPIO_ENABLE` and `GPIO_OUT`, the words `gpio_output_at` reports.
     fn gpio_drive(&self) -> (u64, u64);
     /// Has the chip take the levels and releases the run loop handed the board, now rather than
@@ -137,6 +145,25 @@ pub trait Guest {
     /// The whole flash, as the guest has left it.
     fn flash(&self) -> Cow<'_, [u8]> {
         Cow::Borrowed(&[])
+    }
+}
+
+/// Why a UART loses a received byte, as the chip has it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RxLoss {
+    /// The 128-byte RX FIFO is full: `UART_RXFIFO_OVF_INT`.
+    Overflow,
+    /// The line's baud is not the UART's: `UART_FRM_ERR_INT`.
+    FrameError,
+}
+
+impl RxLoss {
+    /// The bit of `UART_INT_RAW_REG` the chip raises for it.
+    fn int_raw(self) -> u32 {
+        match self {
+            RxLoss::Overflow => RXFIFO_OVF_INT,
+            RxLoss::FrameError => esp_periph::uart::INT_FRM_ERR,
+        }
     }
 }
 
@@ -193,10 +220,15 @@ impl Guest for esp32::Machine {
     fn rx_pending(&self, port: usize) -> usize {
         self.bus.periph.uart[port].rx_pending()
     }
-    fn uart_input(&mut self, pin: u8, baud: u32, byte: u8) {
-        self.bus
-            .periph
-            .uart_pin_input(&UartInput::new(pin, baud, vec![byte]));
+    fn uart_receive(&mut self, port: usize, byte: u8) {
+        // what `uart_pin_input` does for a port whose route and baud match; with room in the FIFO
+        // the byte goes in at once and nothing waits in `ClassicUart`'s queue, which would release
+        // it at the baud rate later (`esp32/src/periph.rs:593-599`)
+        self.bus.periph.uart[port].host_input(&[byte]);
+        self.bus.irq_dirty = true;
+    }
+    fn uart_lose(&mut self, port: usize, loss: RxLoss) {
+        self.bus.periph.uart[port].int_raw |= loss.int_raw();
         self.bus.irq_dirty = true;
     }
     fn gpio_drive(&self) -> (u64, u64) {
@@ -269,7 +301,7 @@ impl Guest for esp32::Machine {
     }
     /// With `--bt`, from the guest's `esp_bt_controller_init` until the next `reboot()`,
     /// esp32sim's trampoline sits in the flash over the function's code (`install`,
-    /// `esp-soc/src/ble/vhci.rs:168-191`), which the guest never wrote: the copy has the code.
+    /// `esp-soc/src/ble/vhci.rs:174-197`), which the guest never wrote: the copy has the code.
     fn flash(&self) -> Cow<'_, [u8]> {
         let Some((offset, code)) = &self.bus.ble.original_flash else {
             return Cow::Borrowed(&self.bus.flash);
@@ -1471,28 +1503,36 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                 .get_mut(&pin)
                 .and_then(|line| line.bytes.pop_front())
                 .expect("front exists");
+            // into every UART whose RX pin it is, each deciding for itself
             let mut routed = false;
             for (port, route) in routes.iter().enumerate() {
                 if route.rx_pin != Some(pin) {
                     continue;
                 }
                 routed = true;
-                if !route.matches_baud(paced.baud) {
+                let loss = if !route.matches_baud(paced.baud) {
                     self.stats.uart[port].frm_err += 1;
                     self.warn(t, WarnKind::FrmErr, Some(port), pin, route.baud)?;
+                    Some(RxLoss::FrameError)
                 } else if self.guest.rx_pending(port) >= RX_FIFO {
                     self.stats.uart[port].rxfifo_ovf += 1;
                     self.warn(t, WarnKind::RxFifoOvf, Some(port), pin, None)?;
+                    Some(RxLoss::Overflow)
                 } else {
                     self.stats.uart[port].rx_bytes += 1;
+                    None
+                };
+                if self.off {
+                    continue;
+                }
+                match loss {
+                    None => self.guest.uart_receive(port, paced.byte),
+                    Some(loss) => self.guest.uart_lose(port, loss),
                 }
             }
             if !routed {
                 self.stats.unrouted_rx_bytes += 1;
                 self.warn(t, WarnKind::UnroutedRx, None, pin, None)?;
-            }
-            if !self.off {
-                self.guest.uart_input(pin, paced.baud, paced.byte);
             }
         }
         Ok(())

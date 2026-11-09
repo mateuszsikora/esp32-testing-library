@@ -82,6 +82,8 @@ struct FakeGuest {
     routes: [UartRoute; PORTS],
     /// What reached each RX FIFO, with the cycle.
     fifo: [Vec<(u64, u8)>; PORTS],
+    /// The bytes each UART lost, with the cycle and the interrupt it raised for each.
+    lost: [Vec<(u64, RxLoss)>; PORTS],
     /// Where each slice was asked to end.
     slices: Vec<u64>,
     /// The cycles of each power-on reset.
@@ -117,6 +119,7 @@ impl FakeGuest {
             script: script.into(),
             routes: std::array::from_fn(|port| UartRoute::new(port, 0, None, None)),
             fifo: Default::default(),
+            lost: Default::default(),
             slices: Vec::new(),
             power_resets: Vec::new(),
             idles: Vec::new(),
@@ -254,13 +257,15 @@ impl Guest for FakeGuest {
     fn rx_pending(&self, port: usize) -> usize {
         self.fifo[port].len()
     }
-    fn uart_input(&mut self, pin: u8, baud: u32, byte: u8) {
-        for port in 0..PORTS {
-            let r = self.routes[port];
-            if r.rx_pin == Some(pin) && r.matches_baud(baud) && self.fifo[port].len() < RX_FIFO {
-                self.fifo[port].push((self.now, byte));
-            }
-        }
+    fn uart_receive(&mut self, port: usize, byte: u8) {
+        assert!(
+            self.fifo[port].len() < RX_FIFO,
+            "a byte into UART{port}'s full FIFO"
+        );
+        self.fifo[port].push((self.now, byte));
+    }
+    fn uart_lose(&mut self, port: usize, loss: RxLoss) {
+        self.lost[port].push((self.now, loss));
     }
     fn gpio_drive(&self) -> (u64, u64) {
         self.drive
@@ -1065,6 +1070,12 @@ fn a_baud_mismatch_is_one_merged_frm_err_warning() {
     });
     let r = run(0.05, guest, peer);
     assert!(r.guest.received(1).is_empty());
+    assert_eq!(r.guest.lost[1].len(), 11);
+    assert!(
+        r.guest.lost[1]
+            .iter()
+            .all(|&(_, l)| l == RxLoss::FrameError)
+    );
     let warns = r.peer.of("warn");
     assert_eq!(warns.len(), 1);
     let w = warns[0];
@@ -1121,6 +1132,10 @@ fn a_full_rx_fifo_drops_bytes_and_a_warning_is_cut_by_other_messages() {
     assert!(warns[0].0 < 2 * MS && warns[1].0 >= 2 * MS);
     assert_eq!(r.stats.uart[1].rxfifo_ovf, 12);
     assert_eq!(r.stats.uart[1].rx_bytes, 128);
+    // each lost byte raised the overflow interrupt, and none reached the FIFO after the drain
+    assert_eq!(r.guest.lost[1].len(), 12);
+    assert!(r.guest.lost[1].iter().all(|&(_, l)| l == RxLoss::Overflow));
+    assert!(r.guest.received(1).is_empty());
 }
 
 #[test]
@@ -1283,8 +1298,11 @@ fn a_signal_ends_the_slice_in_progress_with_stats() {
         fn rx_pending(&self, port: usize) -> usize {
             self.0.rx_pending(port)
         }
-        fn uart_input(&mut self, pin: u8, baud: u32, byte: u8) {
-            self.0.uart_input(pin, baud, byte)
+        fn uart_receive(&mut self, port: usize, byte: u8) {
+            self.0.uart_receive(port, byte)
+        }
+        fn uart_lose(&mut self, port: usize, loss: RxLoss) {
+            self.0.uart_lose(port, loss)
         }
         fn gpio_drive(&self) -> (u64, u64) {
             self.0.gpio_drive()
@@ -1409,8 +1427,11 @@ fn on_the_emulator_the_slices_stop_a_guest_asleep_in_waiti_at_the_block_point() 
         fn rx_pending(&self, port: usize) -> usize {
             Guest::rx_pending(&self.m, port)
         }
-        fn uart_input(&mut self, pin: u8, baud: u32, byte: u8) {
-            Guest::uart_input(&mut self.m, pin, baud, byte)
+        fn uart_receive(&mut self, port: usize, byte: u8) {
+            Guest::uart_receive(&mut self.m, port, byte)
+        }
+        fn uart_lose(&mut self, port: usize, loss: RxLoss) {
+            Guest::uart_lose(&mut self.m, port, loss)
         }
         fn gpio_drive(&self) -> (u64, u64) {
             Guest::gpio_drive(&self.m)
@@ -1505,6 +1526,85 @@ fn on_the_emulator_the_slices_stop_a_guest_asleep_in_waiti_at_the_block_point() 
     assert_eq!(Guest::rx_pending(&guest.m, 1), 2);
     assert_eq!(stats.uart[1].rx_bytes, 2);
     assert!(peer.of("warn").is_empty());
+}
+
+/// On the emulator: a byte that finds the RX FIFO full is lost, as on the chip, and raises
+/// `UART_RXFIFO_OVF_INT`. esp32sim's `ClassicUart::host_input` queues what does not fit and
+/// releases it at the baud rate once the firmware reads (mikroverk/esp32sim#344), so the run loop
+/// must not hand it the byte: the two that overflow here never reach the FIFO, not even after the
+/// firmware has drained it and the line has had the time to bring them.
+#[test]
+fn on_the_emulator_a_byte_into_a_full_rx_fifo_is_lost_and_raises_the_overflow_interrupt() {
+    use emu_core::Bus;
+    use esp_soc::Soc;
+    const ENTRY: u32 = 0x4008_0000;
+    const UART1: u32 = 0x3ff5_0000;
+
+    let shared = Shared::default();
+    let mut m = esp32::machine([0x24, 0x6f, 0x28, 0x00, 0x11, 0x22], 4 << 20);
+    m.bus.board = Box::new(SocketBoard::new(shared.clone(), None));
+    m.bus.attach_board_devices();
+    // UART1 RX on GPIO 27 through the GPIO matrix, 115200 baud from APB, as above
+    for (addr, value) in [
+        (0x3ff4_902c, 2 << 12 | 1 << 9), // IO_MUX GPIO27: GPIO function, input enabled
+        (0x3ff4_4130 + 4 * 17, 0x80 | 27), // GPIO_FUNC17_IN_SEL_CFG: U1RXD_IN from GPIO27
+        (UART1 + 0x14, 694),             // UART1 CLKDIV
+    ] {
+        m.bus.write32(addr, value).unwrap();
+    }
+    let baud = Guest::uart_route(&m, 1).baud.unwrap();
+    // `j .`: the firmware never reads its FIFO
+    m.bus.load_bytes(ENTRY, &[0x06, 0xff, 0xff]).unwrap();
+    <esp32::Esp32 as Soc>::boot_core(&mut m.cores[0], ENTRY);
+
+    let mut first = true;
+    let mut peer = FakePeer::new(&[MODEM_RX], move |turn| {
+        let mut out = Vec::new();
+        if std::mem::take(&mut first) {
+            // 130 bytes at 115200 baud take 11.3 ms
+            let data: Vec<u8> = (0..130).collect();
+            out.push(uart_rx(0, MODEM_RX, baud, &data));
+        }
+        out.push(wait(turn.seq, None, None));
+        out
+    });
+    let signal = AtomicBool::new(false);
+    let opts = Options {
+        end_cycle: cycles(20 * MS),
+        console: false,
+        peer_timeout: None,
+        signal: &signal,
+        wifi: None,
+        rom: &[],
+        card: None,
+        realtime: false,
+        flash_out: None,
+        hci: None,
+    };
+    let (end, stats) = Session::new(&mut m, &mut peer, shared, opts).run();
+    assert!(matches!(end, End::MaxSeconds), "{end:?}");
+    assert_eq!((stats.uart[1].rx_bytes, stats.uart[1].rxfifo_ovf), (128, 2));
+    let warns = peer.of("warn");
+    assert_eq!(warns.len(), 1, "{warns:?}");
+    assert_eq!(warns[0].str_or("kind", ""), "rxfifo_ovf");
+    assert_eq!(num(warns[0], "bytes"), 2);
+
+    let uart = &m.bus.periph.uart[1];
+    assert_eq!(uart.rx_pending(), 128);
+    assert!(!uart.has_queued(), "nothing waits behind the FIFO");
+    assert_ne!(uart.int_raw & RXFIFO_OVF_INT, 0, "UART_RXFIFO_OVF_INT_RAW");
+    // the firmware drains the FIFO, and the line has 10 ms to bring anything more
+    let fifo: Vec<u8> = (0..128)
+        .map(|_| m.bus.read32(UART1).unwrap() as u8)
+        .collect();
+    assert_eq!(fifo, (0..128).collect::<Vec<u8>>());
+    let later = Guest::cycles(&m) + cycles(10 * MS);
+    Guest::run_until(&mut m, later);
+    assert_eq!(
+        m.bus.periph.uart[1].rx_pending(),
+        0,
+        "the lost bytes stay lost"
+    );
 }
 
 #[test]
@@ -2026,8 +2126,11 @@ impl Guest for WifiGuest {
     fn rx_pending(&self, port: usize) -> usize {
         self.inner.rx_pending(port)
     }
-    fn uart_input(&mut self, pin: u8, baud: u32, byte: u8) {
-        self.inner.uart_input(pin, baud, byte)
+    fn uart_receive(&mut self, port: usize, byte: u8) {
+        self.inner.uart_receive(port, byte)
+    }
+    fn uart_lose(&mut self, port: usize, loss: RxLoss) {
+        self.inner.uart_lose(port, loss)
     }
     fn gpio_drive(&self) -> (u64, u64) {
         self.inner.gpio_drive()

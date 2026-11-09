@@ -19,7 +19,7 @@ from esp32tl.link.protocol import RunnerHello, Sync, UartRx, UartTx, Wait
 from esp32tl.sources.replay import Replay, ReplayError
 
 ROOT = Path(__file__).resolve().parent.parent
-HELLO = RunnerHello(1, "esp32", "emulated-fifo-write", "afcfba65da0da30a35fb0a7c381854c62b92e338")
+HELLO = RunnerHello(1, "esp32", "emulated-fifo-write", "c99fb286c4378fcfa6d304b754d31e542ba3035a")
 GNSS = Wire(tx=4, rx=5, baud=9600)
 CLOCK = "emulated-fifo-write"
 S = 1_000_000_000

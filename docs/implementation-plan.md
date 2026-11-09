@@ -57,8 +57,10 @@ Each item names the fact, where it was checked, and what changes.
    with empty NVS, and with NVS naming a Bluetooth peer with and without `--ble`, and the replay
    image. Those images need no patch branch either. The branch is first needed for whichever of BT
    Classic (M8) and the timer wake (M9) is declined upstream. *Update, 2026-11-08:* the timer wake
-   was not declined: mikroverk/esp32sim#336 was merged as `afcfba6`, which is now the pin (#35,
-   [decisions](decisions/runner.md#esp32sim-is-pinned-at-the-merge-commit-of-the-deep-sleep-timer-wake)).
+   was not declined: mikroverk/esp32sim#336 was merged as `afcfba6`, the pin from #35
+   ([decisions](decisions/runner.md#esp32sim-is-pinned-at-the-merge-commit-of-the-deep-sleep-timer-wake))
+   until #34 moved it to `c99fb28`, the merge of mikroverk/esp32sim#347
+   ([decisions](decisions/runner.md#esp32sim-is-pinned-at-the-merge-commit-of-the-bluetooth-classic-enable)).
 
 6. **`pppos_client` is not in ESP-IDF.** It lives in `espressif/esp-protocols` under
    `components/esp_modem/examples/pppos_client`. The validation list stays, the build recipe fetches
@@ -213,7 +215,7 @@ whatever happens upstream (finding 10).
 |---|---|---|
 | both | `hello` | `version`, `chip`, `clock` (`emulated-fifo-write` or `wall`); the harness adds `board` (the runner does not know the profile, its board is the socket) |
 | runner → harness | `uart_tx` | `seq`, `t`, `port`, `tx_pins`, `baud`, `data` (base64). The trait fires per byte; the runner coalesces consecutive bytes on one route into one message, `t` being the first byte's, and flushes at the latest at the block point of rule 1 and on any route change |
-| runner → harness | `uart_cfg` *ext* | `seq`, `t`, `port`, `tx_pins`, `rx_pin`, `baud`: sent when a route's configuration changes, so a peer on a receive-only route (the GNSS case: the firmware never transmits) learns the baud instead of trusting the profile; a mismatch is otherwise a silent `FRM_ERR`. The runner reads `bus.periph.uart_route(port)` (public, `esp32/src/periph.rs:808`) in `advance_to` and sends the message when the result changes. `baud` and `rx_pin` are `null` until the firmware configures them; that is the valid initial state, not an error |
+| runner → harness | `uart_cfg` *ext* | `seq`, `t`, `port`, `tx_pins`, `rx_pin`, `baud`: sent when a route's configuration changes, so a peer on a receive-only route (the GNSS case: the firmware never transmits) learns the baud instead of trusting the profile; a mismatch is otherwise a silent `FRM_ERR`. The runner reads `bus.periph.uart_route(port)` (public, `esp32/src/periph.rs:921`) in `advance_to` and sends the message when the result changes. `baud` and `rx_pin` are `null` until the firmware configures them; that is the valid initial state, not an error |
 | runner → harness | `gpio_out` | `seq`, `t`, `changes: [[pin, level]]`, `enabled`, `output` |
 | runner → harness | `reset` | `seq`, `t`, `cause` |
 | runner → harness | `sync` | `t` (how far emulated time has advanced) |
@@ -281,13 +283,13 @@ ending a run with `stats`. Its sections 6.1 and 11 say why.*
   `uses_uart_pins`.
 - Time units: the protocol speaks nanoseconds, the trait `VirtualCycle`. `bus.cycles()` runs at a
   fixed reference independent of the momentary CPU clock (`tick` scales through
-  `cpu_scale_half`, `esp32/src/bus.rs:631`; `Machine::seconds` divides by `S::CPU_HZ`,
+  `cpu_scale_half`, `esp32/src/bus.rs:642`; `Machine::seconds` divides by `S::CPU_HZ`,
   `esp-soc/src/machine.rs:166`), so `ns = cycles × 10⁹ / CPU_HZ` holds for the whole run,
   including across the XTAL to PLL switch at boot. `docs/protocol.md` states the formula and
   where `CPU_HZ` comes from (`esp32::periph::CPU_HZ`), so a peer in another language need not
   discover it.
 - Owns the run loop: `run` → on `Stop::SwReset` send `reset` with the cause `reboot()` returns,
-  continue; `Stop::Halted` (reached `max_cycles`, `esp-soc/src/machine.rs:584`) is the normal end
+  continue; `Stop::Halted` (reached `max_cycles`, `esp-soc/src/machine.rs:589`) is the normal end
   after `--max-seconds`, as is `stop` from the peer. Every other `Stop` variant
   (`esp-soc/src/soc.rs:9`: `MaxInsns`, `Breakpoint`, `Unimplemented`, `Simcall`, `Ebreak`,
   `Watch`, `Exceptions`, `CostModel`, `CostModelLifecycle`) ends the run with `stats`, the variant

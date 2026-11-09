@@ -15,7 +15,7 @@ A recording is a `.jsonl` file: UTF-8 text, one JSON object per line, each line 
 clock switch, in the order they happened.
 
 ```json
-{"esp32tl_recording": 1, "board": "esp32-devkitc", "interface": "uart.gnss", "source": "model:nmea", "clock": "emulated-fifo-write", "end": "hold", "app_sha256": null, "tools": {"esp32tl": "0.1.0", "esp32sim": "afcfba65da0da30a35fb0a7c381854c62b92e338"}, "created": "2026-10-29T18:00:00Z"}
+{"esp32tl_recording": 1, "board": "esp32-devkitc", "interface": "uart.gnss", "source": "model:nmea", "clock": "emulated-fifo-write", "end": "hold", "app_sha256": null, "tools": {"esp32tl": "0.1.0", "esp32sim": "c99fb286c4378fcfa6d304b754d31e542ba3035a"}, "created": "2026-10-29T18:00:00Z"}
 {"t": 1000000000, "dir": "in", "data": "JEdQR0dBLDEyMDAwMC4wMCw1MjEzLjc4MDYsTiwwMjEwMC43MzQwLEUsMSwwOCwwLjksMTEwLjAsTSwzNC4wLE0sLCo2Ng0K"}
 {"t": 2000000000, "dir": "in", "data": "JEdQUk1DLDEyMDAwMS4wMCxBLDUyMTMuNzc5NCxOLDAyMTAwLjczNTYsRSwwLjAsLDI5MTAyNiwsLEEqNzANCg=="}
 ```

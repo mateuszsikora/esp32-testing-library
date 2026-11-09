@@ -20,7 +20,7 @@ Each module's unit tests are in a `tests.rs` of its own: `runner/src/tests.rs` f
 `HciController` of `esp_soc::ble`, and the JSON parser
 `esp_soc::json` the protocol module reads with), and takes the
 SD card's image store from a third, `esp-periph` (`esp_periph::sdmmc::{SdStore, FileStore}`). esp32sim lines below are at
-its pin, `afcfba6`.
+its pin, `c99fb28`.
 
 ## Data flow
 
@@ -108,7 +108,7 @@ upstream fails the build instead of being reported under another name.
 
 esp32sim's classic SPI masters hand each transaction to the board: once its command, address and
 MOSI bytes are known, from the W registers or the DMA out-link, `run_gp_spi`
-(`esp32/src/bus.rs:504-568`) calls `spi_transfer_pins(host, pins, tx, rx_len)` on a board whose
+(`esp32/src/bus.rs:515-579`) calls `spi_transfer_pins(host, pins, tx, rx_len)` on a board whose
 `uses_spi_pins` is true, and puts the bytes it returns into the W registers or the DMA in-link.
 `SpiPins` carries the routes at that moment: the pads the master's SCLK and MOSI signals drive,
 the pad its MISO signal is read from, and as `cs` every low, enabled output among GPIO 0 to 33,
@@ -224,8 +224,8 @@ before. Every command clears `access` along with `out`, as it ends a read under 
 
 `now` is the card's clock, in bus cycles: `SocketBoard::advance_to(cycle)`, which the bus calls at
 every tick through `advance_inputs_with_clock` in `deliver_board_inputs`
-(`esp32/src/bus.rs:349-351`, `:630-642`), passes it through `Slot::advance` to `SdCard::advance`. `bus.cycles` changes only
-in `tick`, so at the register write that starts a transaction (`run_gp_spi`, `:316-319`) `now` is
+(`esp32/src/bus.rs:360-362`, `:641-653`), passes it through `Slot::advance` to `SdCard::advance`. `bus.cycles` changes only
+in `tick`, so at the register write that starts a transaction (`run_gp_spi`, `:327-330`) `now` is
 `bus.cycles`. `CardBoard`, without `--board`, has no `advance_to`: no rule can reach its card.
 
 ESP-IDF's `sdspi` scans the bytes it clocked with a command, and the two after a block's CRC, for
@@ -273,7 +273,7 @@ error. `Session::run` calls `write_flash_at_end` after `drive` has returned and 
 ([protocol 5.21](../protocol.md#521-flash_dump-and-flash_dump_ack-ext-131)).
 
 `Session` runs the protocol over two traits, `Guest` (the machine: cycles, `run_until`,
-`chip_reset`, `power_on_reset`, `idle_until`, `uart_route`, `rx_pending`, `uart_input`,
+`chip_reset`, `power_on_reset`, `idle_until`, `uart_route`, `rx_pending`, `uart_receive`, `uart_lose`,
 `gpio_drive`, `take_gpio_inputs`, and for Wi-Fi `take_eth_frames`, `eth_input`,
 `wifi_access_point`, `wifi_leave`, `wifi_drops` and `wifi_forget`, whose defaults are a chip
 without Wi-Fi: no frames, nothing taken, nothing attached, left at once, no drops, nothing to
@@ -282,12 +282,39 @@ on the machine) and
 `Link` (the socket: `send`, `flush`, `idle`, `closing`, `recv`), so that its tests drive it with a
 scripted guest and a fake peer. `impl Guest for esp32::Machine` sets `max_cycles` and calls
 `run(u64::MAX)`, calls `reboot()` for `chip_reset`, reads `bus.periph.uart_route(port)` and
-`uart[port].rx_pending()`, delivers a byte with `bus.periph.uart_pin_input` and
+`uart[port].rx_pending()`, delivers a byte to one port with `uart[port].host_input` and
+`irq_dirty = true`, raises the bit of `RxLoss` in that port's `int_raw` for a byte it loses
+(`UART_RXFIFO_OVF_INT` for a full FIFO, `UART_FRM_ERR_INT` for a baud that does not match) and
 `irq_dirty = true`, reads `GPIO_ENABLE` and `GPIO_OUT` (`bus.periph.gpio.gpio.enable` and `.out`)
 for `gpio_drive`, and for `take_gpio_inputs` does what the bus's `deliver_board_inputs` does at
 its tick: `SocBus::gpio_set_input` for each of the board's `take_edges`, then
 `SocBus::gpio_release_input` for each of its `released_inputs`. `idle_until` sets `bus.cycles`
 and runs nothing; `wifi_forget` detaches the access point (`StationLink::attach(None, None)`).
+
+#### Received bytes
+
+`deliver` decides, for each paced byte now due and each port whose route has its pin as the RX
+pin, what the chip does with it, and tells the guest: a route whose baud does not match the
+message's (`UartRoute::matches_baud`) loses it as a frame error (`frm_err`,
+`Guest::uart_lose(port, RxLoss::FrameError)`); a FIFO that holds 128 bytes (`rx_pending()`
+against `RX_FIFO`) loses it as an overflow (`rxfifo_ovf`, `RxLoss::Overflow`); any other port
+receives it (`rx_bytes`, `Guest::uart_receive`). A byte no route has is `unrouted_rx` and reaches
+no port. With the supply off the counts and warnings are the same and the guest is told nothing.
+
+The run loop decides rather than esp32sim because esp32sim no longer drops a byte that does not
+fit: from mikroverk/esp32sim#344 on, `esp32::periph::Peripherals::uart_pin_input`
+(`esp32/src/periph.rs:960-970`) hands a byte to `ClassicUart::host_input`, which queues what does
+not fit behind the FIFO and releases it at the baud rate as the guest reads (`:593-630`), for esptool's
+download mode, whose host waits on the line. A peer's line does not wait. So the runner calls
+`host_input` only for a port with room, where the byte goes into the FIFO at once and the queue
+stays empty, and for a full FIFO raises `UART_RXFIFO_OVF_INT_RAW` (bit 4) in the port's `int_raw`
+itself, as the chip does and as esp32sim's `Uart::host_input` does for a byte it drops
+(`esp-periph/src/uart.rs:43-50`); `irq_dirty` makes the core see the line. ESP-IDF's driver takes
+that interrupt as `UART_FIFO_OVF`: it resets the RX FIFO and posts the event
+(`components/esp_driver_uart/src/uart.c:1323-1335` in v5.3.6), which the firmware sees as it would
+on the chip. A frame error raises `UART_FRM_ERR_INT_RAW` (`esp_periph::uart::INT_FRM_ERR`), as
+esp32sim's `uart_pin_input` does. `int_raw` is a public field of the `Uart` that `ClassicUart`
+wraps, also public; the queue and its pacing are private, and the runner needs neither.
 
 `power_on_reset` is the chip's power-on reset, which esp32sim has no call for: `reboot()` resets
 the cores (core 1 held), the digital peripherals and PSRAM, but keeps SRAM, the RTC memories and
@@ -309,7 +336,7 @@ a chip reset, and the peer's GPIO levels. `Recorder::drive` and `Recorder::relea
 queue a level or a release for `take_edges` and `released_inputs` and keep the driven levels that
 `input_levels` returns; since the chip takes edges before releases, a level drops a release of the
 same pin queued before it. `uses_gpio_edges` is `true`; it changes nothing on the classic bus,
-where `uses_uart_pins` already turns the board's callbacks on (`esp32/src/bus.rs:418`).
+where `uses_uart_pins` already turns the board's callbacks on (`esp32/src/bus.rs:429`).
 
 The order of a run, as [the protocol, section 6.1](../protocol.md#61-how-the-runner-meets-the-block-point)
 specifies it:
@@ -328,7 +355,7 @@ specifies it:
    access point switches, [below](#wi-fi); the SD card's rules to the card,
    [above](#fault-rules)),
    delivers the paced bytes now due (`deliver`, which counts and warns about drops against the
-   routes it read), offers the station's link the Ethernet frames it has not taken yet
+   routes it read, [below](#received-bytes)), offers the station's link the Ethernet frames it has not taken yet
    (`deliver_eth`), and lets the link write what has waited (`Link::idle`). Then `slice_end`
    picks the earliest of the block point, `latency` after now while no event is unacknowledged,
    the next whole emulated millisecond, the next queued input, the next paced byte and the end of
@@ -370,18 +397,18 @@ peer's ([protocol, 5.15 and 5.16](../protocol.md#515-eth_tx-and-eth_rx-ext-m7)).
 the relay mode. `setup` attaches a fresh access point through `Guest::wifi_access_point`, which
 calls `StationLink::attach_new(cfg, None, debug)` (`:540-545`: the access point, and esp32sim's
 `VirtualNet` behind it without NAT) and then sets the networks around with `set_beacons`
-(`:567-577`), and turns the relay on (`SocBus::set_ethernet_relay(true)`,
-`esp32/src/soc.rs:92-95`). In relay mode `StationLink::net_step` does nothing (`:636-637`), so
+(`:572-582`), and turns the relay on (`SocBus::set_ethernet_relay(true)`,
+`esp32/src/soc.rs:92-95`). In relay mode `StationLink::net_step` does nothing (`:641-642`), so
 esp32sim's own network, with its DHCP server, DNS, NTP and NAT, never answers; the frames the
 access point passes on as data stay in the relay's queue, at most 64 of at most 1518 bytes
-(`RELAY_QUEUE`, `RELAY_FRAME_MAX`, `:522-523`; `station_tx`, `:580-585`, counts the rest in
+(`RELAY_QUEUE`, `RELAY_FRAME_MAX`, `:522-523`; `station_tx`, `:585-590`, counts the rest in
 `tx_dropped`). `SocBus::attach_wifi` (`esp32/src/soc.rs:88-91`) does the same `attach_new` on the
 classic chip; the runner calls `attach_new` on the link directly. `Wifi::access_point` refuses no
 spec at run time: `cli::parse` has checked it, and an unparsable one is a panic.
 
 **Frames from the station.** `collect`, at every slice boundary, right before a chip reset and in
 `finish`, calls `Guest::take_eth_frames` (`SocBus::take_ethernet_frames`, `esp32/src/soc.rs:96`,
-which is `StationLink::take_relay_frames`, `esp-soc/src/wifi.rs:655-657`). The relay keeps no
+which is `StationLink::take_relay_frames`, `esp-soc/src/wifi.rs:660-662`). The relay keeps no
 time, so every frame taken becomes an `Item::Eth` stamped with the cycle it was taken at, after the
 board's log of the same slice. `process_pending` turns each into an `eth_tx` event, counted in
 `stats.wifi.eth_tx`, and the event sets the block point as any other. The slice rules of the
@@ -392,12 +419,12 @@ own.
 **Frames for the station.** An `eth_rx` goes into the input queue as `Input::Eth`; when it comes
 due, `apply_inputs` appends it to `Session::eth`, the runner's own queue, and calls `deliver_eth`,
 which hands the frames at its front to `Guest::eth_input` (`SocBus::receive_ethernet_frame`,
-`esp32/src/soc.rs:97-99`, which is `StationLink::receive_relay_frame`, `esp-soc/src/wifi.rs:660-666`)
+`esp32/src/soc.rs:97-99`, which is `StationLink::receive_relay_frame`, `esp-soc/src/wifi.rs:665-671`)
 in order, until one is refused because esp32sim's queue holds 64 already. The rest wait in
 `Session::eth` and are offered again at every slice boundary (`boundary` calls `deliver_eth`
 after `deliver`). Each frame taken counts in `stats.wifi.eth_rx`. esp32sim then puts the frames
 on the air one at a time, at least `RX_GAP_US` (400 µs) apart, and only when the access point has
-nothing of its own due, management frames before beacons (`StationLink::next_rx`, `:610-626`); a
+nothing of its own due, management frames before beacons (`StationLink::next_rx`, `:615-631`); a
 frame that comes off the queue while the station is not associated is discarded by
 `VirtualAp::data_from_ds` (`:438-439`), uncounted. While the access point is off the air
 (`ap_on` false), `deliver_eth` drops every frame in `Session::eth` and counts it in
@@ -449,7 +476,7 @@ switch and joins again once the access point is back (`tests/test_http_request.p
 **Counts.** `stats.wifi` is `Some` from the start with `--wifi` (`protocol::WifiStats`), and
 `protocol::stats` writes it after `rx_bytes_not_paced`, only then. esp32sim's `rx_dropped` and
 `tx_dropped` start again whenever the link is attached anew (`attach`) and at a chip reset
-(`surviving_reboot`, `esp-soc/src/wifi.rs:548`, from `reboot`, `esp32/src/soc.rs:145`), so
+(`surviving_reboot`, `esp-soc/src/wifi.rs:549-553`, from `reboot`, `esp32/src/soc.rs:145`), so
 `Guest::wifi_drops` is read and added up just before each: before `chip_reset`, before a fresh
 access point, in `leave` before the detach, and in `finish`. `eth_tx`, `eth_rx` and
 `eth_rx_dropped` are the runner's own counts.
@@ -464,7 +491,7 @@ With `--bt ELF`, the guest's Bluetooth controller is the peer's
 ([protocol, 5.22](../protocol.md#522-hci_tx-and-hci_rx-ext-34)). esp32sim's classic chip has no
 radio model for Bluetooth: its `--ble` hooks the controller functions of ESP-IDF's
 `components/bt` (`esp_bt_controller_init`, `esp_bt_controller_enable`, the VHCI functions and the
-others `Ble::enable` lists, `esp-soc/src/ble/vhci.rs:91-135`) and runs a controller task of its own
+others `Ble::enable` lists, `esp-soc/src/ble/vhci.rs:97-141`) and runs a controller task of its own
 in the guest, which hands H4 packets between the host and a boxed `HciController`
 (`esp-soc/src/ble.rs:15-21`) in `Ble::session`, an `esp_soc::ble::peer::Session`
 (`esp-soc/src/ble/peer.rs:560-596`). The runner uses the hooks and the task and replaces the
@@ -475,17 +502,17 @@ controller.
 `esp_bt_controller_init`. Only then does it set `m.bus.ble.session` to
 `Session::new(Box::new(Forwarder(hci)), Link::default())`: `Ble::enable` builds a fresh `Ble` and
 replaces the whole of it, its default session with esp32sim's virtual controller included
-(`*self = next`, `esp-soc/src/ble/vhci.rs:133`). The `Link` is the session's packet link to
+(`*self = next`, `esp-soc/src/ble/vhci.rs:139`). The `Link` is the session's packet link to
 esp32sim's scripted peer, which nothing drives here: that peer reacts only to what esp32sim's own
 controller puts on the link. Every error of the two calls ends the run before it starts, exit 2,
 as `--bt {path}: {error}`, `{error}` esp32sim's: `not an ELF file`, `BLE requires ELF symbol
 {name}`, `BLE controller init has no room for the guest task trampoline`, `BLE controller BSS is
 too small or outside DRAM`. A file that cannot be read is `{path}: {error}`, as for the other
 inputs. esp32sim checks the rest only when the guest calls `esp_bt_controller_init`, which installs
-the controller task's trampoline (`install`, `esp-soc/src/ble/vhci.rs:168-191`): a failure there
+the controller task's trampoline (`install`, `esp-soc/src/ble/vhci.rs:174-197`): a failure there
 is a line on stderr, `[ble] BLE controller init does not match the guest calling convention`,
 `[ble] BLE controller init crosses a noncontiguous flash mapping` or `[ble] BLE cannot read
-trampoline memory`, the guest's call returns `u32::MAX` (`:217-220`), and the run goes on, with
+trampoline memory`, the guest's call returns `u32::MAX` (`:242-245`), and the run goes on, with
 no controller. A run that starts is no proof the controller works; the `Send` and `Poll` hooks'
 refusals are lines on stderr too (protocol 5.22).
 
@@ -499,15 +526,15 @@ goes on running the trampoline.
 **The forwarder.** `hci::Hci`, shared as `hci::Shared` (`Rc<RefCell<Hci>>`) by the `Forwarder` in
 the machine and the session (`Options::hci`), holds `tx`, the host's packets with their bus cycle,
 and `rx`, the peer's packets that have come due. esp32sim's hooks move the controller to the bus's
-cycle before anything else (`intercept`, `esp-soc/src/ble/vhci.rs:198-199`, then
+cycle before anything else (`intercept`, `esp-soc/src/ble/vhci.rs:223-224`, then
 `Session::send`, `esp-soc/src/ble/peer.rs:589-592`), so `advance_to` stores the cycle and
 `send_h4` pushes each packet with it. `poll_h4` pops the front of `rx`. `next_deadline` is `None`:
 esp32sim does not schedule a wake from it anyway (`esp-soc/src/ble.rs:9-11`), and the peer's
 packets come due at slice boundaries. `reset` clears `rx` and keeps `tx`. esp32sim's `reboot()`
 calls `Ble::reset` (`esp32/src/soc.rs:132-136`), which resets the session and so the forwarder,
-and keeps the session itself (`esp-soc/src/ble/vhci.rs:137-144`); the runner's chip reset and its
+and keeps the session itself (`esp-soc/src/ble/vhci.rs:143-150`); the runner's chip reset and its
 power-on reset both go through `reboot()` (`Guest::power_on_reset` calls it first). The guest's
-`esp_bt_controller_deinit` resets the session too (`:245-256`).
+`esp_bt_controller_deinit` resets the session too (`:278-289`).
 
 **Packets from the host.** `collect` takes `tx` with the board's log, at every slice boundary, right
 before a chip reset or a power-on reset, before the supply goes off, and in `finish`. Each packet
@@ -524,16 +551,22 @@ any other. A packet sent in the slice that the block point ends goes out before 
 and `apply_inputs` pushes the packet onto `rx`. The guest's host reads it at its controller task's
 next VHCI poll: esp32sim's task polls, delivers at most one packet a poll and then makes its next
 poll return nothing (`yield_to_host`), and sleeps one FreeRTOS tick when a poll returns nothing
-(`vTaskDelay(1)`; the trampoline, `esp-soc/src/ble/vhci.rs:18-20`, and the `Poll` hook, `:292-315`).
+(`vTaskDelay(1)`; the trampoline, `esp-soc/src/ble/vhci.rs:18-20`, and the `Poll` hook, `:325-348`).
 At ESP-IDF's default `CONFIG_FREERTOS_HZ=100` that is one packet every 10 ms at most while packets
 wait; the runner changes nothing in that. A packet pushed while the supply is off waits in `rx` and
 is cleared by the power-on reset.
 
-At esp32sim's pin the `Enable` hook accepts mode 1 and mode 3 only
-(`esp-soc/src/ble/vhci.rs:233-239`), so a firmware built for BR/EDR alone, which enables mode 2,
-fails there with `ESP_ERR_INVALID_ARG` (0x102) and never reaches the forwarder.
-mikroverk/esp32sim#347, not merged, makes the hook take the mode of init's config; the runner needs
-no change for it.
+The `Init` hook keeps the mode of the config the firmware hands `esp_bt_controller_init`
+(`take_mode`, `esp-soc/src/ble/vhci.rs:199-216`, reading `mode` at offset 20 of
+`esp_bt_controller_config_t` on the classic chip, `esp32/src/ble.rs:23`), and the `Enable` hook
+takes that mode and no other, as ESP-IDF does (`:258-272`, from mikroverk/esp32sim#347): a firmware built for BR/EDR alone enables mode 2 and
+reaches the forwarder, as `bt_spp_initiator` does
+([validation firmware](validation-firmware-technical.md#bt_spp_initiator)). Before the pin had it the
+hook took mode 1 and 3 only, and such a firmware got `ESP_ERR_INVALID_ARG` (0x102). The runner needed
+no change for it. At an enable in mode 2 esp32sim prints `[ble] the virtual controller is LE-only:
+enabled in mode 2 (BR/EDR), its commands get Unknown HCI Command` on stderr, also with `--bt`, where
+it does not hold: the hook does not know that the runner replaced its controller, and the runner
+cannot keep the line from its stderr.
 
 Why the socket, and not an HCI transport in esp32sim:
 [decision](../decisions/runner.md#the-guests-hci-goes-over-the-board-socket-on-the-boards-clock).
@@ -663,7 +696,8 @@ The socket's limits are constants, not options:
 | `transport::TEARDOWN` | 2 s (wall) | how long the last messages of a run may take to write |
 | `protocol::MAX_LINE` | 1 MiB | the longest line from the peer; a longer one is a protocol error |
 | `session::MAX_DATA` | 48 KiB | the most bytes one `uart_tx` or `console` message carries |
-| `session::RX_FIFO` | 128 | the classic RX FIFO's size, against which `rxfifo_ovf` is counted |
+| `session::RX_FIFO` | 128 | the classic RX FIFO's size: a byte that finds it full is lost and counted as `rxfifo_ovf` |
+| `session::RXFIFO_OVF_INT` | `1 << 4` | `UART_RXFIFO_OVF_INT_RAW`, the bit the runner raises in a port's `int_raw` for a byte it loses to a full FIFO |
 
 **Wi-Fi** is configured on the command line only: `--wifi` and `--wifi-nearby`
 ([runner-user.md](runner-user.md#put-a-wi-fi-access-point-on-the-air)). The frame limits are
@@ -689,12 +723,16 @@ its Cooja link uses) and `esp_soc::web::json_escape`, so the crate adds no JSON 
 **The esp32sim pin.** esp32sim is not on crates.io, so `runner/Cargo.toml` takes `esp32` and
 `esp-soc` (and `emu-core`, a dev-dependency for `Stop::CostModelLifecycle` in a test) from
 `https://github.com/mikroverk/esp32sim`, with `esp-periph` for the SD card's image store, each at
-`rev = "afcfba65da0da30a35fb0a7c381854c62b92e338"`: the merge of mikroverk/esp32sim#336, with
-which a deep sleep wakes on its RTC timer ([stage 0, gap 4](../stage0-findings.md#gaps)). Images
-built for chip revision v3.0 boot from mikroverk/esp32sim#322 on
+`rev = "c99fb286c4378fcfa6d304b754d31e542ba3035a"`: the merge of mikroverk/esp32sim#347, with
+which `esp_bt_controller_enable` takes the mode of init's config, so that a firmware for Bluetooth
+Classic alone gets its controller ([stage 0, gap 2](../stage0-findings.md#gaps)). A deep sleep
+wakes on its RTC timer from mikroverk/esp32sim#336 on (gap 4), and images built for chip revision
+v3.0 boot from mikroverk/esp32sim#322 on
 ([plan, findings 3 and 5](../implementation-plan.md#1-findings-that-amend-the-specification)).
-Why this revision and not upstream's head:
-[decisions](../decisions/runner.md#esp32sim-is-pinned-at-the-merge-commit-of-the-deep-sleep-timer-wake).
+The revision also carries mikroverk/esp32sim#344, whose `ClassicUart::host_input` queues a byte
+that does not fit the RX FIFO; the run loop hands a port a byte only when its FIFO has room
+([the session](#the-session)). Why this revision and not upstream's head:
+[decisions](../decisions/runner.md#esp32sim-is-pinned-at-the-merge-commit-of-the-bluetooth-classic-enable).
 Every esp32sim crate is pinned to the same revision, and `runner/Cargo.lock` resolves all of them
 from that one source; the Makefile builds with `--locked`. This revision is the project's esp32sim
 pin: changing it here changes it everywhere.
@@ -929,6 +967,11 @@ a guest that programs a byte between two dumps;
   `on_the_emulator_the_slices_stop_a_guest_asleep_in_waiti_at_the_block_point` runs the real
   `esp32::Machine` on a few instructions in IRAM that write one byte to UART1 and sleep in
   `waiti`, at the 40 MHz the core starts at;
+  `on_the_emulator_a_byte_into_a_full_rx_fifo_is_lost_and_raises_the_overflow_interrupt` sends
+  130 bytes to UART1 of a guest that never reads them: 128 in the FIFO, two counted and warned as
+  `rxfifo_ovf`, `UART_RXFIFO_OVF_INT_RAW` raised, nothing in `ClassicUart`'s queue, and, once the
+  FIFO is read empty and 10 ms more have run, still nothing in it (on the code that handed esp32sim
+  every byte, as before this pin, it fails at the queue);
   `on_the_emulator_gpio_in_reaches_the_guest_and_its_output_comes_back_as_gpio_out` runs a loop
   that copies GPIO 33, which the fake peer drives, to GPIO 4, and checks the two `gpio_out`s;
   `on_the_emulator_no_pad_is_driven_after_a_chip_reset` drives GPIO 4 as a plain GPIO and GPIO 26

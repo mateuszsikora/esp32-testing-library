@@ -257,3 +257,26 @@ def test_http_request_is_esp_idfs_example_with_its_default_wifi() -> None:
     assert config["EXAMPLE_WIFI_SSID"] == "myssid"
     assert config["EXAMPLE_WIFI_PASSWORD"] == "mypassword"
     assert all(Path(f.file_path).is_file() for f in app.flash_files)
+
+
+def test_bt_spp_initiator_has_the_classic_esp32_flash_layout() -> None:
+    app = idf_app("bt_spp_initiator")
+    build = FIRMWARE / "bt_spp_initiator" / "build"
+    assert app.target == "esp32"
+    # the example's project is called bt_spp_initiator_demo
+    assert [(f.offset, Path(f.file_path).relative_to(build)) for f in app.flash_files] == [
+        (0x1000, Path("bootloader/bootloader.bin")),
+        (0x8000, Path("partition_table/partition-table.bin")),
+        (0x10000, Path("bt_spp_initiator_demo.bin")),
+    ]
+    assert all(Path(f.file_path).is_file() for f in app.flash_files)
+    # the runner's --bt reads the VHCI hooks' addresses from it
+    assert app.elf_file == str((build / "bt_spp_initiator_demo.elf").resolve())
+
+
+def test_bt_spp_initiator_runs_its_controller_for_classic_alone() -> None:
+    config = idf_app("bt_spp_initiator").sdkconfig
+    # mode 2 at esp_bt_controller_enable, which esp32sim takes from mikroverk/esp32sim#347 on
+    assert config["BTDM_CTRL_MODE_BR_EDR_ONLY"] is True
+    assert config["BT_CLASSIC_ENABLED"] is True and config["BT_SPP_ENABLED"] is True
+    assert config["EXAMPLE_PEER_DEVICE_NAME"] == "ESP_SPP_ACCEPTOR"

@@ -210,7 +210,21 @@ production images.
    ([`esp-soc/src/ble/vhci.rs:236`](https://github.com/mikroverk/esp32sim/blob/2e36224d34decc2fc9d2bba5fa4c5fdf2171b0a6/esp-soc/src/ble/vhci.rs#L236)).
    It needs BR/EDR at the VHCI boundary and HCI forwarded to an external controller. An upstream
    issue is drafted, to follow
-   [mikroverk/esp32sim#325](https://github.com/mikroverk/esp32sim/issues/325).
+   [mikroverk/esp32sim#325](https://github.com/mikroverk/esp32sim/issues/325). *Since #34* it runs
+   unmodified, with `--ble`'s hooks and the controller outside esp32sim: the runner's `--bt`
+   forwards the guest's HCI to the harness, whose `bt` fixture is the controller, on the same air as
+   the test's Bluetooth devices ([runner](features/runner-user.md#give-the-guest-a-bluetooth-controller),
+   [Bluetooth peer](features/bluetooth-peer-user.md#in-front-of-the-firmware-the-bt-fixture)), and
+   `esp_bt_controller_enable` takes mode 2 from
+   [mikroverk/esp32sim#347](https://github.com/mikroverk/esp32sim/pull/347) on (issue
+   [mikroverk/esp32sim#346](https://github.com/mikroverk/esp32sim/issues/346)), merged on
+   2026-11-08 as
+   [`c99fb28`](https://github.com/mikroverk/esp32sim/commit/c99fb286c4378fcfa6d304b754d31e542ba3035a),
+   the pin since #34. There, against an `SppPeer` named `ESP_SPP_ACCEPTOR` with the PIN `1234`, it
+   finds the peer, pairs, opens the channel 1.37 s after power-on and streams to it at about
+   299 kbit/s of the board's time ([validation firmware](features/validation-firmware-user.md#bt_spp_initiator)).
+   Without `--ble` or `--bt` nothing changed for the controller in mask ROM; that run was not made
+   again.
 3. **SD card over SPI.** `examples/storage/sd_card/sdspi` makes fourteen transfers on SPI2, then
    `sdmmc_card_init failed (0x107)` and `Failed to initialize the card (ESP_ERR_TIMEOUT)`: the classic
    chip has no card model on its general-purpose SPI. esp32sim has an SD card model, wired only to the

@@ -256,8 +256,8 @@ event the link sends but the console's bytes, `gpio_out`, `uart_tx`, `uart_cfg` 
 them, brings a turn at most 1 ms after it (protocol rule 1). The wait returns at the turn the reset
 brings, at most 1 ms after it, or sooner when an interface's latency is smaller. The sleep is not
 skipped: esp32sim runs it, and its wall time grows with its length, 0.07 s for 20 s and about
-3.7 s for 15 minutes on an M2 Pro, measured on a firmware with a 15-minute timer wake. At the pin
-`afcfba6`, esp32sim's `run` advances idle cores in rounds of `IDLE_CHUNK`, 512 cycles on the
+3.7 s for 15 minutes on an M2 Pro, measured on a firmware with a 15-minute timer wake at the pin
+`afcfba6`. At the pin `c99fb28`, as there, esp32sim's `run` advances idle cores in rounds of `IDLE_CHUNK`, 512 cycles on the
 classic ESP32 (`esp32/src/soc.rs`, `esp-soc/src/machine.rs`), and the RTC timer's wake is no
 device deadline (`ClassicRtc` gives no `next_deadline`, `esp32/src/periph.rs`): the runner's own
 slices are not what a sleep costs. A boot whose `cause` is not `DEEPSLEEP_RESET` (5) raises

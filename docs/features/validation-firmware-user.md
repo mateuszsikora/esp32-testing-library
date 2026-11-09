@@ -43,6 +43,7 @@ whatever `FIRMWARE_OUT` the shell exports, because the tests read the images the
 | `ota_state` | `firmware/ota_state`: copies its app to the next OTA slot, boots it, marks it valid, then does it again and rolls back, reporting its state at each step ([below](#ota_state)) |
 | `timer_wake` | `firmware/timer_wake`: sleeps in deep sleep twice with a 2 s timer wake, counting its boots in RTC memory ([below](#timer_wake)) |
 | `deep_sleep` | ESP-IDF's `examples/system/deep_sleep`, unmodified, with its own `sdkconfig.defaults`, for target `esp32`: sleeps 20 s at a time with a timer wake, and reports after each wake how long it slept ([below](#deep_sleep)) |
+| `bt_spp_initiator` | ESP-IDF's `examples/bluetooth/bluedroid/classic_bt/bt_spp_initiator`, unmodified, with its own `sdkconfig.defaults`, for target `esp32`: finds a device named `ESP_SPP_ACCEPTOR` over Bluetooth Classic, pairs with it, opens SPP and writes to it without end ([below](#bt_spp_initiator)) |
 
 ## `modem_at`
 
@@ -207,6 +208,43 @@ Wake up from timer. Time spent in deep sleep: 20142ms
 `tests/test_deep_sleep.py` runs it through two sleeps with
 [`board.wait_for_wake`](pytest-plugin-user.md#waking-from-deep-sleep).
 
+## `bt_spp_initiator`
+
+ESP-IDF's example as it is, with the `sdkconfig.defaults` it ships: Bluedroid with Bluetooth
+Classic and SPP, no BLE, and the controller for BR/EDR alone (`CONFIG_BTDM_CTRL_MODE_BR_EDR_ONLY`,
+mode 2), and its own Kconfig defaults: the peer's name `ESP_SPP_ACCEPTOR`
+(`CONFIG_EXAMPLE_PEER_DEVICE_NAME`) and Secure Simple Pairing on (`CONFIG_EXAMPLE_SSP_ENABLED`).
+Build it with `firmware/build.sh bt_spp_initiator`; `make firmware` and `make test` include it. It
+needs a run with the [`bt` fixture](bluetooth-peer-user.md#in-front-of-the-firmware-the-bt-fixture),
+which gives the firmware its controller; its project is called `bt_spp_initiator_demo`, and so are
+its files.
+
+It starts one inquiry, 30 × 1.28 s long, and looks in each device's extended inquiry response for
+the name. On finding it, it stops the inquiry, finds the SPP service with SDP, and opens it with
+`ESP_SPP_SEC_AUTHENTICATE`; asked for a PIN in a legacy pairing it answers `1234`. Once the channel
+is open it writes `ESP_SPP_MAX_MTU`, 990 bytes, at a time, the bytes 0, 1, 2, … in turn, as fast as
+the channel takes them, and every 3 s or more prints what it measured. Against an `SppPeer` with the
+PIN `1234` (`tests/test_bt_spp_initiator.py`):
+
+```text
+I (883) SPP_INITIATOR_DEMO: ESP_BT_GAP_DISC_RES_EVT
+I (883) SPP_INITIATOR_DEMO: ESP_SPP_ACCEPTOR
+I (1153) SPP_INITIATOR_DEMO: ESP_SPP_DISCOVERY_COMP_EVT scn_num:1
+I (1153) SPP_INITIATOR_DEMO: -- [0] scn:1 service_name:Serial Port
+I (1313) SPP_INITIATOR_DEMO: Input pin code: 1234
+I (1353) SPP_INITIATOR_DEMO: authentication success: ESP_SPP_ACCEPTOR
+I (1373) SPP_INITIATOR_DEMO: ESP_SPP_OPEN_EVT handle:129 rem_bda:[00:00:00:00:5b:01]
+I (4393) SPP_INITIATOR_DEMO: speed(1.272643s ~ 4.292801s): 298.951263 kbit/s
+```
+
+With another PIN on the peer the authentication fails, `authentication failed, status:9`, and the
+link closes before the channel opens. With nobody named `ESP_SPP_ACCEPTOR` on the air the inquiry
+runs its 38.4 s, `ESP_BT_GAP_DISC_STATE_CHANGED_EVT` at its start and at its end, and the firmware
+starts no other: it then waits for ever. It does not page or pair with a device it finds by
+another name. The commands it lists on its console, `spp ok;` and `spp key …;`, which it reads on
+UART0 (`main/console_uart.c`), answer Secure Simple Pairing, which an `SppPeer` never asks for: it
+pairs with a PIN.
+
 ## `sdspi`
 
 ESP-IDF's example as it is, with its default `sdkconfig`: SPI2 with SCLK on GPIO 14, MOSI 15,
@@ -352,10 +390,11 @@ every image those are:
 | `0x1000` | `bootloader/bootloader.bin` |
 | `0x8000` | `partition_table/partition-table.bin` |
 | `0xd000` | `ota_data_initial.bin`, for `ota_state` only |
-| `0x10000` | `IMAGE.bin` (`hello_world.bin`, `nmea_reader.bin`, `gpio_echo.bin`, `sd_remount.bin`, `modem_at.bin`, `modem_recovery.bin`, `nvs_reader.bin`, `pppos_client.bin`, `mqtt_session.bin`, `http_request.bin`, `persistence.bin`, `ota_state.bin`, `timer_wake.bin`, `deep_sleep.bin`), `sd_card.bin` for `sdspi` |
+| `0x10000` | `IMAGE.bin` (`hello_world.bin`, `nmea_reader.bin`, `gpio_echo.bin`, `sd_remount.bin`, `modem_at.bin`, `modem_recovery.bin`, `nvs_reader.bin`, `pppos_client.bin`, `mqtt_session.bin`, `http_request.bin`, `persistence.bin`, `ota_state.bin`, `timer_wake.bin`, `deep_sleep.bin`), `sd_card.bin` for `sdspi`, `bt_spp_initiator_demo.bin` for `bt_spp_initiator` |
 
-and the ELF is `IMAGE.elf`, `sd_card.elf` for `sdspi`: the files take the project's name, and
-the `sdspi` example's project is called `sd_card`. Two more files say how the build was made:
+and the ELF is `IMAGE.elf`, `sd_card.elf` for `sdspi` and `bt_spp_initiator_demo.elf` for
+`bt_spp_initiator`: the files take the project's name, and those two examples' projects are called
+`sd_card` and `bt_spp_initiator_demo`. Two more files say how the build was made:
 `esp32tl-build.json` (the ESP-IDF version, the container, and the project it was built from) and
 `esp32tl-built`, present only when the build finished. `firmware/**/build/` is ignored by git.
 
@@ -425,7 +464,7 @@ run `make firmware`.
 `firmware/build.sh` exits 1 with one of these on stderr, before writing anything, or with the exit
 code of `idf.py` when the build itself fails:
 
-- `firmware/build.sh: unknown image 'NAME'; the images are: hello_world nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request persistence ota_state timer_wake deep_sleep`
+- `firmware/build.sh: unknown image 'NAME'; the images are: hello_world nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request persistence ota_state timer_wake deep_sleep bt_spp_initiator`
 - `firmware/build.sh: needs Docker, or IDF_LOCAL=1 to build with a local ESP-IDF`
 - `firmware/build.sh: the Docker daemon is not reachable ('docker info' failed); is Docker running?`
 - `firmware/build.sh: IDF_LOCAL=1 needs ESP-IDF in the environment: source $IDF_PATH/export.sh first`

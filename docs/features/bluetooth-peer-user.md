@@ -37,11 +37,13 @@ a fixture does. From then on:
   Bluetooth host sends (ESP-IDF's Bluedroid, through esp32sim's VHCI) to a controller on the air of
   the test's devices, and its answers back, on the board's clock: the backend passes the runner
   `--bt` with the application's ELF ([esp32sim backend](esp32sim-backend-user.md#bluetooth)). The
-  firmware finds, pairs with and opens SPP to an `SppPeer` as it would a device on a real air.
-  TODO(owner): until esp32sim's pin has mikroverk/esp32sim#347, a firmware that enables its
-  controller for Classic alone (mode 2, `CONFIG_BTDM_CTRL_MODE_BR_EDR_ONLY`) gets
-  `ESP_ERR_INVALID_ARG` from `esp_bt_controller_enable` and sends nothing
-  ([runner](runner-user.md#give-the-guest-a-bluetooth-controller)).
+  firmware finds, pairs with and opens SPP to an `SppPeer` as it would a device on a real air: a
+  firmware that runs its controller for Classic alone (mode 2, `CONFIG_BTDM_CTRL_MODE_BR_EDR_ONLY`)
+  gets it ([runner](runner-user.md#give-the-guest-a-bluetooth-controller)). ESP-IDF's
+  `bt_spp_initiator`, unmodified, does all of it against the peer of the example above, with
+  `secure=True`, and streams to it at about 299 kbit/s of the board's time; with another PIN on the
+  peer its authentication fails (`authentication failed, status:9`) and it opens nothing
+  ([validation firmware](validation-firmware-user.md#bt_spp_initiator)).
 - **`bt.air` is on the board's clock.** Its time is `board.now`; the test moves it only by letting
   the board run, with `board.wait(...)`, `board.wait_until(...)` or `console.expect(...)`.
   `bt.air.wait`, `bt.air.advance` and `bt.air.run` refuse, with `AirError`: `air.wait: this air is

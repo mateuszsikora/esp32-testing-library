@@ -3,9 +3,75 @@
 Why the `esp32tl-runner` crate in `runner/`, its esp32sim pin and the link protocol it speaks
 with the harness ([`docs/protocol.md`](../protocol.md)) are the way they are.
 
+## esp32sim is pinned at the merge commit of the Bluetooth Classic enable
+
+Status: decided (#34)
+
+`runner/Cargo.toml` takes `esp32`, `esp-soc`, `esp-periph` and, as a dev-dependency, `emu-core`
+from git at `c99fb286c4378fcfa6d304b754d31e542ba3035a`, the merge of mikroverk/esp32sim#347
+(2026-11-08, upstream issue mikroverk/esp32sim#346), with which `esp_bt_controller_enable` takes
+the mode of the config given to `esp_bt_controller_init`, as ESP-IDF does, and no other
+(`esp-soc/src/ble/vhci.rs:199-216` and `:258-272`), and says on stderr that esp32sim's own
+controller is LE-only when the mode is 2. On it, ESP-IDF's `bt_spp_initiator`, unmodified and
+built for BR/EDR alone, enables its controller in mode 2 and, with the `bt` fixture's controller in
+the harness, finds an `SppPeer`, pairs with its PIN and streams to it;
+`tests/test_bt_spp_initiator.py` keeps it so. On the previous pin the `Enable` hook took mode 1
+and 3 only, and the same image stopped at `enable controller failed: ESP_ERR_INVALID_ARG` and sent
+no packet, as the spike of 2026-11-08 saw.
+
+Between `afcfba6` and `c99fb28` come 14 commits, which bring three changes besides #347:
+
+- mikroverk/esp32sim#262: the Seeed Studio XIAO ESP32-C6 board model and its browser demo, in
+  `esp32c6/`, `web/`, `wasm/` and `examples/`, and a `hex` field in the web console's messages
+  (`esp-soc/src/machine.rs:359-364`). Not on a path esp32tl uses: the runner builds neither the C6
+  crate nor the web console.
+- mikroverk/esp32sim#318, with `--hostfwd` (mikroverk/esp32sim#278) on it: the user-mode NAT's
+  host side behind a transport trait (`esp-soc/src/nat.rs`, `nat/transport.rs`,
+  `nat/std_transport.rs`), DNS answered by a transport that resolves names itself and SNTP answered
+  locally on request (`esp-soc/src/net.rs`), and a chip reset that aborts the NAT's flows
+  (`StationLink::surviving_reboot`, `esp-soc/src/wifi.rs:549-553`). The runner builds against it
+  unchanged: `StationLink::attach_new(cfg, None, debug)` has the same signature, and the runner
+  gives it no NAT, so `abort_all` has nothing to abort. All of it is `VirtualNet`'s, the network
+  esp32sim answers for itself, which the runner never feeds: in relay mode `net_step` returns at
+  once (`:641-642`) and the station's frames go to the peer.
+  `tests/test_wifi.py`, `tests/test_http_request.py` and `test_wifi_http` of the determinism job
+  pass.
+- mikroverk/esp32sim#344 (`0437f14`): the classic ROM's UART download mode, for esptool. Its SLC
+  (`ClassicSlc`) and its autobaud counters serve the ROM's download boot alone, which a run that
+  boots from flash never enters. Three changes are on every firmware's UART path: `RXFIFO_FULL`
+  falls when a read leaves the FIFO below its threshold (`Uart::lower_rx_full_when_drained`,
+  `esp-periph/src/uart.rs:55-61`, with `irq_dirty` from the bus's FIFO read,
+  `esp32/src/bus.rs:252-265`), a byte or halfword store to a TX FIFO no longer reads the RX FIFO
+  first (`:282-285`), and `TX_DONE` can be cleared and rises with the next byte written. ESP-IDF's
+  `uart_wait_tx_done` clears `TX_DONE` and then returns at once, since the transmitter reads as idle
+  (`components/esp_driver_uart/src/uart.c:1464-1477` in v5.3.6); the GNSS, modem and PPP tests
+  over UART1 pass. The fourth change is the one the previous pin's decision rejected `0437f14`
+  for: `uart_pin_input` hands a byte to `ClassicUart::host_input` (`esp32/src/periph.rs:960-970`),
+  which queues what does not fit the 128-byte FIFO and releases it at the baud rate. The runner now
+  delivers each byte to each port itself, `ClassicUart::host_input` only for a port whose FIFO has
+  room, and for a full FIFO raises `UART_RXFIFO_OVF_INT_RAW` in the port's `int_raw`, a public field,
+  without handing the byte over ([runner](../features/runner-technical.md#received-bytes)). A byte
+  that finds the FIFO full is lost, counted and warned (`rxfifo_ovf`,
+  [protocol 5.8](../protocol.md#58-warn-ext)), as on the chip, and ESP-IDF's driver gets the
+  interrupt it turns into `UART_FIFO_OVF`, as on the previous pin.
+  `on_the_emulator_a_byte_into_a_full_rx_fifo_is_lost_and_raises_the_overflow_interrupt` in
+  `runner/src/session/tests.rs` keeps it so, on the real `esp32::Machine`: on the runner's code of
+  the previous pin, which handed esp32sim every byte, it fails on the two bytes in esp32sim's queue.
+
+The evidence that none of them changes what else esp32tl relies on is the whole test suite, which
+passes on the pin, and every esp32sim line the documentation cites, which is still there, moved at
+most; the two whose code changed, `surviving_reboot` and the `Enable` hook, are described anew.
+That revision in `runner/Cargo.toml` is the project's esp32sim pin.
+
+**Rejected:** upstream's head at the time, `88895c9`, because the project needs nothing more of it
+than #347, and the merge commit of the change the project needs is the smallest step that was
+checked, as with the pins before. Also rejected: a pin without #344, since every revision with #347
+has it: #347's branch was built on `0437f14`. Also rejected: asking esp32sim for a way to drop a
+byte instead of queueing it, since the runner can do it with what is public at the pin.
+
 ## esp32sim is pinned at the merge commit of the deep-sleep timer wake
 
-Status: decided (#35)
+Status: superseded (#34)
 
 `runner/Cargo.toml` takes `esp32`, `esp-soc`, `esp-periph` and, as a dev-dependency, `emu-core`
 from git at `afcfba65da0da30a35fb0a7c381854c62b92e338`, the merge of mikroverk/esp32sim#336, with
@@ -45,6 +111,8 @@ it at the baud rate instead of dropping it. The runner counts such a byte as dro
 `rxfifo_ovf` ([protocol, 5.8](../protocol.md#58-warn-ext)) before it hands it over, so on that
 revision it would report a drop that did not happen, and a firmware that falls behind its UART
 would not lose bytes as the chip does. The merge commit is the smallest step that was checked.
+The pin moved for Bluetooth Classic, and the runner keeps a full FIFO's drops itself: see
+[esp32sim is pinned at the merge commit of the Bluetooth Classic enable](#esp32sim-is-pinned-at-the-merge-commit-of-the-bluetooth-classic-enable).
 
 ## esp32sim is pinned at the merge commit of the chip-revision fix
 
@@ -243,7 +311,7 @@ Status: decided (#53)
 
 The runner calls `Machine::run` in slices bounded by `max_cycles` and does the work that needs the
 bus between them: `uart_cfg`, the drop warnings, delivering paced bytes and `adc`. `run` cuts its
-last round at the ceiling (`esp-soc/src/machine.rs:691` at `8c65215`). `SocketBoard`'s callbacks
+last round at the ceiling (`esp-soc/src/machine.rs:696` at `8c65215`). `SocketBoard`'s callbacks
 only record events (protocol §11, item 10).
 
 **Rejected:** `BoardModel::next_deadline`, as plan 4.2 had it, because `BoardModel` callbacks get

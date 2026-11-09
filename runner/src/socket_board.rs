@@ -1,8 +1,8 @@
 //! `SocketBoard`, the board on the runner's socket (protocol 6.1). Its callbacks get no access to
 //! the bus, so they do no socket work: they record what the guest did, with its bus cycle, into a
 //! log the run loop takes between slices. Received bytes do not go through the board either
-//! (`uart_rx`): the run loop delivers them with `bus.periph.uart_pin_input`, where it can see the
-//! route and the FIFO and report what is dropped. Nor does it need `next_deadline`: the run
+//! (`uart_rx`): the run loop delivers them to each port itself, where it can see the route and
+//! the FIFO, and decides and reports what is dropped. Nor does it need `next_deadline`: the run
 //! loop's slices stop for the block point (protocol 11.10). GPIO inputs do go through it: the run
 //! loop hands the peer's `gpio_in` and `release` to the board when they come due, and the chip
 //! takes them through `take_edges` and `released_inputs`. With `--sd-spi`, the SD card slot is on
