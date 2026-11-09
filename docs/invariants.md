@@ -338,7 +338,7 @@ that references to its number keep their meaning.
      `runner/src/session/tests.rs::on_the_emulator_the_access_point_deauthenticates_the_station_before_it_leaves`,
      `runner/src/session/tests.rs::an_access_point_put_back_while_it_is_leaving_comes_back_once_it_has_left`,
      `tests/test_http_request.py::test_rejoins_an_access_point_switched_off_and_on_at_one_instant`
-- **207.** With `--bt`, every H4 packet the guest's host sends goes to the peer as an `hci_tx` event
+- **208.** With `--bt`, every H4 packet the guest's host sends goes to the peer as an `hci_tx` event
      stamped with the cycle it was sent at, in order of `t` with the board's other messages and
      after a UART byte or pin change of the same cycle; its block point is `t + latency`. An
      `hci_rx` reaches the host's queue at its `t` and not before, the host reads one packet a
@@ -1166,6 +1166,7 @@ that references to its number keep their meaning.
     the slot of a board that is on is not kept.
     `tests/test_card_cache.py::test_the_card_least_recently_used_goes_first`,
     `tests/test_card_cache.py::test_disk_use_stays_within_the_limit_from_what_is_allocated`,
+    `tests/test_card_cache.py::test_the_limit_counts_what_a_card_has_allocated_once_it_is_synced`,
     `tests/test_card_cache.py::test_a_card_above_the_limit_is_refused_and_evicts_nothing`,
     `tests/test_card_cache.py::test_a_put_that_fails_leaves_no_part_of_a_card`,
     `tests/test_card_cache.py::test_a_cache_directory_that_fails_fails_with_the_card_s_name`,

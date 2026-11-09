@@ -92,6 +92,11 @@ def clone(source: Path, target: Path) -> None:
     target.chmod(0o600)
 
 
+def _sync(path: Path) -> None:
+    with path.open("rb") as file:
+        os.fsync(file.fileno())
+
+
 def _touch(path: Path) -> None:
     # Last use is in the modification time: a volume may not keep access times.
     now = time.time_ns()
@@ -156,13 +161,14 @@ class CardCache:
                 self._evict(needed)
                 try:
                     clone(source, temporary)
-                    # A sparse copy may round differently from the file it copies.
+                    _touch(temporary)
+                    # Measured once synced: a file system that allocates a file's blocks then, as
+                    # ext4 does, may take more than it counted before. A sparse copy may also
+                    # round differently from the file it copies.
+                    _sync(temporary)
                     written = allocated(temporary)
                     self._check_limit(name, written)
                     self._evict(written)
-                    _touch(temporary)
-                    with temporary.open("rb") as file:
-                        os.fsync(file.fileno())
                     os.replace(temporary, entry)
                 finally:
                     temporary.unlink(missing_ok=True)
