@@ -165,7 +165,8 @@ class Bluetooth(Interface):
 
     def poll(self, now: int) -> Iterable[Output]:
         """What the controller made by `now`, each `latency` after the instant it made it: never
-        before the turn, by rule 1 of the protocol (§7), so one that would be is an error."""
+        before the turn, by rule 1 of the protocol (§6) and its bound on the turn (§7), so one that
+        would be is an error."""
         air = self._air
         if air is None:
             return ()
@@ -178,7 +179,7 @@ class Bluetooth(Interface):
                 raise BluetoothError(
                     f"the guest's controller made {_named(packet)} at {seconds(at)}, due at"
                     f" {seconds(due)}, before the turn at {seconds(now)}: the link bounds every"
-                    " turn by the interfaces' quiet_until and latency (protocol §7)"
+                    " turn by the interfaces' quiet_until and latency (protocol §6, rule 1, and §7)"
                 )
             if not 1 <= len(packet) <= HCI_MAX:
                 raise BluetoothError(
@@ -209,8 +210,9 @@ class Bluetooth(Interface):
             return []
         return [(c.t, c.op_code, c.name) for c in self._controller.unknown_commands]
 
-    def devices(self) -> list[tuple[str, str]]:
-        """The other devices on the air, `(name, address)`, in the order of their addresses."""
+    def devices(self) -> list[tuple[str, str, bool]]:
+        """The other devices made on the air, `(name, address, present)`, in the order of their
+        addresses: `present` is false for one switched off or out of range now."""
         if self._air is None:
             return []
         others = [
@@ -219,11 +221,15 @@ class Bluetooth(Interface):
             if isinstance(c, Controller) and c is not self._controller
         ]
         others.sort(key=lambda c: bytes(reversed(bytes(c.public_address))))
-        return [(c.name, str(c.public_address).removesuffix("/P")) for c in others]
+        link = self._air.link
+        return [
+            (c.name, str(c.public_address).removesuffix("/P"), link.present(c.public_address))
+            for c in others
+        ]
 
     def report(self) -> list[str]:
         """The guest's controller, the packets each way, the commands it did not know and the
-        devices on the air."""
+        devices made on the air, those off it now marked."""
         if self._air is None:
             return ["bluetooth: not used"]
         lines = [
@@ -236,10 +242,8 @@ class Bluetooth(Interface):
         if unknown:
             lines.append(f"  unknown commands ({len(unknown)}):")
             lines += [f"    {board_time(t)}  {name} ({op:#06x})" for t, op, name in unknown]
-        devices = self.devices()
-        lines.append(
-            "  on the air: " + (", ".join(f"{n} ({a})" for n, a in devices) or "no other device")
-        )
+        devices = [f"{n} ({a}{'' if on else ', off the air'})" for n, a, on in self.devices()]
+        lines.append("  devices: " + (", ".join(devices) or "none but the guest's"))
         return lines
 
     def properties(self) -> dict[str, object] | None:
@@ -254,7 +258,7 @@ class Bluetooth(Interface):
             "unknown_commands": [
                 {"t_ns": t, "op_code": op, "name": name} for t, op, name in self.unknown_commands()
             ],
-            "devices": [{"name": n, "address": a} for n, a in self.devices()],
+            "devices": [{"name": n, "address": a, "present": on} for n, a, on in self.devices()],
         }
 
 

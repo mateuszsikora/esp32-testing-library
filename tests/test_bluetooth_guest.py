@@ -10,7 +10,8 @@ an air of its own, on the same clock, so that its time and the board's are one."
 import asyncio
 import threading
 from collections.abc import Callable, Coroutine, Iterable, Iterator
-from typing import Any, TypeVar
+from types import SimpleNamespace
+from typing import Any, TypeVar, cast
 
 import pytest
 from bumble import core, hci, rfcomm, sdp
@@ -19,23 +20,27 @@ from bumble.host import Host
 from bumble.pairing import PairingConfig, PairingDelegate
 
 from esp32tl.backends.clock import HeldClock
+from esp32tl.backends.esp32sim import BackendError, Esp32Sim
 from esp32tl.bluetooth.air import Air, AirError
 from esp32tl.bluetooth.controller import GIAC, Controller
 from esp32tl.bluetooth.guest import ACL_LENGTH, ADDRESS, GuestController
 from esp32tl.bluetooth.peer import SERVICE_NAME, BluetoothDevice, SppPeer
 from esp32tl.boards.capabilities import Request
-from esp32tl.interfaces import NeverHappened
+from esp32tl.interfaces import NeverHappened, SourceError
 from esp32tl.interfaces.bluetooth import LATENCY_NS, Bluetooth, BluetoothError
 from esp32tl.link.boardlink import BoardLink
 from esp32tl.link.protocol import (
     HCI_MAX,
+    ChipReset,
     HciRx,
     HciTx,
+    Reset,
     RunnerHello,
     Stop,
     Sync,
     Wait,
 )
+from esp32tl.report import RunLog
 from esp32tl.units import Duration, seconds
 
 T = TypeVar("T")
@@ -431,6 +436,18 @@ def test_an_inquiry_finds_only_devices_scanning_for_its_access_code(
     assert limited._controller is not None and limited._controller.iac_laps == [0x9E8B00]
 
 
+def test_the_host_reads_back_the_access_codes_it_wrote(runner: Runner) -> None:
+    supported = complete(runner, hci.HCI_Read_Number_Of_Supported_IAC_Command())
+    assert supported.return_parameters.num_support_iac == 0x40
+    write = hci.HCI_Command(
+        op_code=hci.HCI_WRITE_CURRENT_IAC_LAP_COMMAND, parameters=bytes.fromhex("02338b9e008b9e")
+    )
+    complete(runner, write)
+    current = complete(runner, hci.HCI_Read_Current_IAC_LAP_Command()).return_parameters
+    assert (current.num_support_iac, current.iac_lap) == (2, bytes.fromhex("338b9e008b9e"))
+    assert runner.bt.unknown_commands() == []
+
+
 def test_the_commands_about_a_link_are_answered_with_the_peer_s_version(
     runner: Runner, bt: Bluetooth
 ) -> None:
@@ -544,14 +561,30 @@ def test_a_reset_in_the_middle_of_a_link_tells_the_host_nothing_and_the_peer_s_e
     assert connection.peer_address == public(PEER)
 
 
+# The three ways the controller starts again: the host's command, the chip's reset, and the
+# board's supply going off and back.
+RESTARTS = ["HCI_Reset", "chip reset", "power cycle"]
+
+
+def restart(runner: Runner, bt: Bluetooth, how: str) -> None:
+    if how == "HCI_Reset":
+        complete(runner, hci.HCI_Reset_Command())
+    elif how == "chip reset":
+        bt.chip_reset(runner.now)
+    else:
+        bt.supply(False)
+        bt.supply(True)
+
+
+@pytest.mark.parametrize("how", RESTARTS)
 def test_a_reset_in_the_middle_of_a_page_ends_it_with_no_word_and_no_timer(
-    runner: Runner, bt: Bluetooth
+    runner: Runner, bt: Bluetooth, how: str
 ) -> None:
     nobody = "00:00:00:00:5B:09"
     page = runner.guest.air.start(link_to(runner.guest, nobody))
     runner.advance(runner.now + S)
     assert public(nobody) in bt.controller.classic_connections
-    complete(runner, hci.HCI_Reset_Command())
+    restart(runner, bt, how)
     assert bt.controller.classic_connections == {} and bt.controller._paging == {}
     page.cancel()
     runner.advance(runner.now + 6 * S)
@@ -569,8 +602,9 @@ def test_a_reset_in_the_middle_of_a_page_ends_it_with_no_word_and_no_timer(
     assert status.status == hci.HCI_COMMAND_STATUS_PENDING
 
 
+@pytest.mark.parametrize("how", RESTARTS)
 def test_a_reset_clears_the_answers_the_host_owed_so_the_next_page_connects(
-    runner: Runner, bt: Bluetooth
+    runner: Runner, bt: Bluetooth, how: str
 ) -> None:
     """#34's second comment: an answer counted late outlived the host's restart, and took the
     answer to the next page, whose pager got PAGE_TIMEOUT."""
@@ -582,7 +616,7 @@ def test_a_reset_clears_the_answers_the_host_owed_so_the_next_page_connects(
     runner.advance(runner.now + MS)
     assert bt.controller._answers_due[phone.device.public_address] == 1
     runner.guest.drop = lambda packet: False
-    complete(runner, hci.HCI_Reset_Command())
+    restart(runner, bt, how)
     assert bt.controller._answers_due == {} and bt.controller._late_answers == {}
     runner.run(runner.guest.device.set_connectable(True))
     runner.wait_for(first.done)
@@ -593,17 +627,22 @@ def test_a_reset_clears_the_answers_the_host_owed_so_the_next_page_connects(
     assert second.result().peer_address == GUEST
 
 
-def test_a_reset_brings_back_the_defaults(runner: Runner, bt: Bluetooth) -> None:
+@pytest.mark.parametrize("how", RESTARTS)
+def test_a_reset_brings_back_the_defaults(runner: Runner, bt: Bluetooth, how: str) -> None:
     controller = bt.controller
     runner.run(runner.guest.device.set_discoverable(True))
     complete(runner, hci.HCI_Write_Page_Timeout_Command(page_timeout=0x1000))
     complete(runner, hci.HCI_Host_Buffer_Size_Command(100, 0, 10, 0))
+    complete(runner, hci.HCI_Write_Local_Name_Command(local_name=b"renamed".ljust(248, b"\0")))
+    complete(runner, hci.HCI_Set_Event_Mask_Command(event_mask=bytes.fromhex("ffffffffffffbf1d")))
     assert controller.classic_scan_enable and controller.page_timeout == 0x1000
-    complete(runner, hci.HCI_Reset_Command())
+    assert controller.local_name == "renamed" and controller.event_mask
+    restart(runner, bt, how)
     assert controller.classic_scan_enable == 0
     assert controller.page_timeout == 0x2000
     assert controller.host_acl_length is None and controller.iac_laps == [GIAC]
     assert not controller.lmp_features & hci.LmpFeatureMask.SECURE_SIMPLE_PAIRING_HOST_SUPPORT
+    assert controller.local_name == "Bumble" and controller.event_mask == 0
 
 
 # The SPP peer, as bt_spp_initiator meets it.
@@ -732,7 +771,7 @@ def test_an_output_due_before_its_turn_fails_the_link() -> None:
     assert link.error == (
         "bluetooth.poll raised BluetoothError: the guest's controller made an event at 0.001 s,"
         " due at 0.00101 s, before the turn at 0.002 s: the link bounds every turn by the"
-        " interfaces' quiet_until and latency (protocol §7)"
+        " interfaces' quiet_until and latency (protocol §6, rule 1, and §7)"
     )
     bt.close()
 
@@ -803,20 +842,20 @@ def test_the_report_names_the_traffic_and_the_devices_on_the_air(
     runner: Runner, bt: Bluetooth
 ) -> None:
     spp_peer(bt)
-    BluetoothDevice(bt.air, name="phone", address="00:00:00:00:5C:01")
+    phone = BluetoothDevice(bt.air, name="phone", address="00:00:00:00:5C:01")
+    phone.switch_off()
     report = bt.report()
     assert report[0].startswith(f"bluetooth: the guest's controller at {ADDRESS}; ")
     assert f"{bt.packets_from_host} packets ({bt.bytes_from_host} bytes) from its host" in report[0]
-    assert (
-        report[-1]
-        == "  on the air: ESP_SPP_ACCEPTOR (00:00:00:00:5B:01), phone (00:00:00:00:5C:01)"
+    assert report[-1] == (
+        "  devices: ESP_SPP_ACCEPTOR (00:00:00:00:5B:01), phone (00:00:00:00:5C:01, off the air)"
     )
     properties = bt.properties()
     assert properties is not None
     assert properties["packets_to_host"] == bt.packets_to_host > 0
     assert properties["devices"] == [
-        {"name": "ESP_SPP_ACCEPTOR", "address": PEER},
-        {"name": "phone", "address": "00:00:00:00:5C:01"},
+        {"name": "ESP_SPP_ACCEPTOR", "address": PEER, "present": True},
+        {"name": "phone", "address": "00:00:00:00:5C:01", "present": False},
     ]
 
 
@@ -844,3 +883,69 @@ def test_the_guest_controller_is_a_controller_of_the_air() -> None:
     assert isinstance(controller, Controller)
     assert controller.public_address == GUEST and controller.lmp_features_max_page_number == 2
     air.close()
+
+
+# The backend's side: what Esp32Sim does with the interface.
+
+
+def backend_with(bt: Bluetooth) -> Esp32Sim:
+    """An `Esp32Sim` past power-on, with only what its supply, its reset and its Bluetooth read."""
+    backend = Esp32Sim.__new__(Esp32Sim)
+    backend._bluetooth = bt
+    backend._hold = HeldClock()
+    backend.process = cast(Any, object())
+    backend._supply = True
+    backend._uarts = {}
+    backend.log = RunLog()
+    backend.link = BoardLink("esp32-devkitc", [bt])
+    backend.link.receive(HELLO)
+    return backend
+
+
+def test_board_reset_drops_what_the_controller_made_for_the_old_host(bt: Bluetooth) -> None:
+    """The runner's reboot empties its queue at the reset, and what goes in after it reaches
+    the new host: the turn of the reset must carry none of the old host's packets."""
+    backend = backend_with(bt)
+    command_complete = bytes.fromhex("040e0401030c00")
+    bt.air.call(lambda: bt.on_packet(command_complete))
+    backend.reset()
+    turn = backend.link.receive(Sync(0))
+    assert turn[0] == ChipReset(0)
+    assert not [message for message in turn if isinstance(message, HciRx)]
+    assert backend.link.error is None
+
+
+def test_the_backend_s_supply_and_the_runner_s_resets_reach_the_controller(
+    bt: Bluetooth,
+) -> None:
+    backend = backend_with(bt)
+    peer = spp_peer(bt)
+    backend._switch(False)
+    assert not bt.air.link.present(GUEST)
+    backend._switch(True)
+    assert bt.air.link.present(GUEST)
+    bt.air.call(lambda: bt.on_packet(bytes.fromhex("040e0401030c00")))
+    backend._reset(Reset(1, 5 * MS, 1))
+    assert bt.air.now == Duration(5 * MS) and list(bt.poll(5 * MS)) == []
+    assert peer.present
+
+
+def test_bluetooth_asked_for_after_power_on_says_so_before_anything_else() -> None:
+    backend = Esp32Sim.__new__(Esp32Sim)
+    backend._bluetooth = Bluetooth()
+    backend.process = cast(Any, object())
+    backend._supply = True
+    backend.app = cast(Any, SimpleNamespace(elf_file=None, binary_path="/b/build"))
+    with pytest.raises(SourceError) as late:
+        backend._get_bluetooth()
+    assert str(late.value) == (
+        "bluetooth: the board is on already: give an interface its source before board.power_on()"
+    )
+    backend.process = None
+    backend._asked = lambda request: None  # type: ignore[method-assign]
+    with pytest.raises(BackendError) as no_elf:
+        backend._get_bluetooth()
+    assert str(no_elf.value) == (
+        "bluetooth: /b/build holds no ELF of the application, whose symbols the runner's --bt needs"
+    )
+    assert not backend._bluetooth.used

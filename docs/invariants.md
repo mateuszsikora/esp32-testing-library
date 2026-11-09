@@ -711,30 +711,34 @@ that references to its number keep their meaning.
     `tests/test_bluetooth_guest.py::test_bt_spp_initiator_s_session_finds_pairs_and_opens_the_channel`,
     `tests/test_bluetooth_guest.py::test_acl_data_for_the_host_is_cut_to_its_buffer_size`,
     `tests/test_bluetooth_guest.py::test_a_packet_longer_than_the_vhci_carries_is_an_error`
-- **210.** A controller answers every command: one it does not know with
-    `UNKNOWN_HCI_COMMAND_ERROR` in `Command_Status` for an asynchronous command and in
-    `Command_Complete` for any other, kept with its time; Bluedroid's settings that change nothing on
-    the link succeed, and one that would filter events or write an inquiry access code outside the
-    range is refused. `Host_Number_Of_Completed_Packets` gets no event. An inquiry is answered only by
-    a device that scans for its access code. The commands about a link answer with the link, the
-    peer's version included, and refuse a handle that is no link.
-    `tests/test_bluetooth_guest.py::test_an_unknown_command_is_answered_in_the_event_the_host_waits_for_and_kept`,
-    `tests/test_bluetooth_guest.py::test_a_setting_bluedroid_writes_succeeds`,
-    `tests/test_bluetooth_guest.py::test_a_setting_that_would_change_what_is_not_modelled_is_refused`,
-    `tests/test_bluetooth_guest.py::test_host_number_of_completed_packets_gets_no_event`,
-    `tests/test_bluetooth_guest.py::test_an_inquiry_finds_only_devices_scanning_for_its_access_code`,
-    `tests/test_bluetooth_guest.py::test_the_commands_about_a_link_are_answered_with_the_peer_s_version`,
-    `tests/test_bluetooth_guest.py::test_a_command_about_no_link_is_refused_with_unknown_connection_identifier`
+- **210.** A controller answers every command: one it does not know with `UNKNOWN_HCI_COMMAND_ERROR`
+  in `Command_Status` for an asynchronous command and in `Command_Complete` for any other, kept with
+  its time; Bluedroid's settings that change nothing on the link succeed, and one that would filter
+  events or write an inquiry access code outside the range is refused.
+  `Host_Number_Of_Completed_Packets` gets no event. An inquiry is answered only by a device that
+  scans for its access code. The commands about a link answer with the link, the peer's version
+  included, and refuse a handle that is no link.
+  `tests/test_bluetooth_guest.py::test_an_unknown_command_is_answered_in_the_event_the_host_waits_for_and_kept`,
+  `tests/test_bluetooth_guest.py::test_a_setting_bluedroid_writes_succeeds`,
+  `tests/test_bluetooth_guest.py::test_a_setting_that_would_change_what_is_not_modelled_is_refused`,
+  `tests/test_bluetooth_guest.py::test_host_number_of_completed_packets_gets_no_event`,
+  `tests/test_bluetooth_guest.py::test_an_inquiry_finds_only_devices_scanning_for_its_access_code`,
+  `tests/test_bluetooth_guest.py::test_the_commands_about_a_link_are_answered_with_the_peer_s_version`,
+  `tests/test_bluetooth_guest.py::test_a_command_about_no_link_is_refused_with_unknown_connection_identifier`,
+  `tests/test_bluetooth_guest.py::test_the_host_reads_back_the_access_codes_it_wrote`
 - **211.** `HCI_Reset`, a chip reset and the board's supply going off leave the controller holding
     nothing and its host told nothing: a page under way ends with no `Connection_Complete`, the
     answers its host owed are gone, so the next page connects, and the host's settings are back at
     their defaults. A peer's end of a link falls at its supervision timeout, and until then the
-    firmware's page to it ends in `PAGE_TIMEOUT`.
+    firmware's page to it ends in `PAGE_TIMEOUT`. `board.reset()` sends none of the packets made for
+    the old host in its turn.
     `tests/test_bluetooth_guest.py::test_a_reset_in_the_middle_of_a_link_tells_the_host_nothing_and_the_peer_s_end_falls`,
     `tests/test_bluetooth_guest.py::test_a_reset_in_the_middle_of_a_page_ends_it_with_no_word_and_no_timer`,
     `tests/test_bluetooth_guest.py::test_a_reset_clears_the_answers_the_host_owed_so_the_next_page_connects`,
     `tests/test_bluetooth_guest.py::test_a_reset_brings_back_the_defaults`,
-    `tests/test_bluetooth_guest.py::test_the_supply_and_a_chip_reset_take_the_controller_off_the_air_and_back`
+    `tests/test_bluetooth_guest.py::test_the_supply_and_a_chip_reset_take_the_controller_off_the_air_and_back`,
+    `tests/test_bluetooth_guest.py::test_board_reset_drops_what_the_controller_made_for_the_old_host`,
+    `tests/test_bluetooth_guest.py::test_the_backend_s_supply_and_the_runner_s_resets_reach_the_controller`
 - **212.** The air of the `bt` fixture is on the board's clock: only the board's link moves it, and
     `advance`, `wait` and `run` refuse. What the firmware's controller makes goes out exactly
     `LATENCY_NS` after the instant it made it, and an output due before its turn fails the link. Two
@@ -749,10 +753,11 @@ that references to its number keep their meaning.
     `tests/test_spp_peer.py::test_the_peer_names_no_enhanced_retransmission_mode_among_its_l2cap_features`
 - **214.** The runner gets `--bt` with the application's ELF only once the test has used the chip's
     Bluetooth; an interface never used asks for nothing and bounds no turn, and the `bt` fixture
-    skips on serial.
+    skips on serial. Asked for after power-on, it is refused for that, whatever the build holds.
     `tests/test_pytest_plugin.py::test_runner_command_forwards_the_guests_hci_once_the_test_uses_bluetooth`,
     `tests/test_bluetooth_guest.py::test_an_interface_the_test_never_used_asks_for_nothing_and_bounds_no_turn`,
-    `tests/test_serial_backend.py::test_serial_capabilities_skip_at_the_call`
+    `tests/test_serial_backend.py::test_serial_capabilities_skip_at_the_call`,
+    `tests/test_bluetooth_guest.py::test_bluetooth_asked_for_after_power_on_says_so_before_anything_else`
 
 ## The esp32tl command
 

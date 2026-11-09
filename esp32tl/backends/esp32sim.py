@@ -480,6 +480,8 @@ class Esp32Sim(Board):
         """The chip's Bluetooth: its controller on the air, from the test's first look on, which
         must come before power-on, since the runner then needs `--bt` and the application's ELF."""
         if not self._bluetooth.used:
+            # After power-on, the reason is that it is too late, whatever the build holds.
+            self._asked(Request("bluetooth", source="model"))
             elf = self.app.elf_file
             if elf is None or not Path(elf).is_file():
                 raise BackendError(
@@ -767,6 +769,9 @@ class Esp32Sim(Board):
             raise BoardOff("the board is off: board.reset() resets a board that is on")
         self._hold.check("board.reset()")
         now = self._hold.now
+        # The Bluetooth controller resets with the chip, now: what it made for the old host must
+        # not reach the new one, after the reboot that empties the runner's queue.
+        self._bluetooth.chip_reset(now)
         self.link.board_input(ChipReset(now))
         self.log.test(now, "board.reset()")
 

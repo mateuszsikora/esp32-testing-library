@@ -139,13 +139,13 @@ def test_hello_world(board: Board):
 `board.bluetooth` expose the profile's interfaces. Access does not power on the board or select a
 UART source, with one exception: the first access to `board.bluetooth` puts the firmware's
 controller on the air, so it must come before `board.power_on()`. Missing profile interfaces fail
-when accessed; serial capabilities still skip unsupported calls.
-The existing `console`, `gnss`, `modem`, `lines`, `sd_card`, `wifi` and `bt` fixtures remain
-shortcuts to these same objects. Mixing the two styles shares state, including the console's match cursor.
-For MQTT, use `board.modem.network().broker`: `network()` explicitly selects the modem's
-simulated network before power-on. The existing `broker` fixture remains a shortcut to that
-service. There is no `board.broker` property that implicitly configures a network.
-`board.uart(role)` remains available for arbitrary UART roles.
+when accessed; serial capabilities still skip unsupported calls. The existing `console`, `gnss`,
+`modem`, `lines`, `sd_card`, `wifi` and `bt` fixtures remain shortcuts to these same objects. Mixing
+the two styles shares state, including the console's match cursor. For MQTT, use
+`board.modem.network().broker`: `network()` explicitly selects the modem's simulated network before
+power-on. The existing `broker` fixture remains a shortcut to that service. There is no
+`board.broker` property that implicitly configures a network. `board.uart(role)` remains available
+for arbitrary UART roles.
 
 For code using backend accessors directly, replace `board.lines()` with `board.lines` and
 `board.sd_card()` with `board.sd_card`. The inserted image's host path is now

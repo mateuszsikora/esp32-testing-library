@@ -166,8 +166,9 @@ or `bluetooth` is the interface itself:
 | `sources` | list of `SOURCES`: `model`, `replay`, `real` | `[]` |
 | `tap` | boolean | `false` |
 
-A kind is one of `KINDS`: `console`, `uart`, `lines`, `sd_card`, `wifi`, `bluetooth`. A kind a backend does not list is
-`Capability()`: no source, no tap. The file declares `esp32sim` and `serial`:
+A kind is one of `KINDS`: `console`, `uart`, `lines`, `sd_card`, `wifi`, `bluetooth`. A kind a
+backend does not list is `Capability()`: no source, no tap. The file declares `esp32sim` and
+`serial`:
 
 ```toml
 [esp32sim]

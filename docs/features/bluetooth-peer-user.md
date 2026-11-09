@@ -44,8 +44,8 @@ a fixture does. From then on:
   ([runner](runner-user.md#give-the-guest-a-bluetooth-controller)).
 - **`bt.air` is on the board's clock.** Its time is `board.now`; the test moves it only by letting
   the board run, with `board.wait(...)`, `board.wait_until(...)` or `console.expect(...)`.
-  `bt.air.wait`, `bt.air.advance` and `bt.air.run` refuse, with `AirError`: `air.wait: this air is on
-  the board's clock, which only the board's link moves: let the board run with board.wait() or
+  `bt.air.wait`, `bt.air.advance` and `bt.air.run` refuse, with `AirError`: `air.wait: this air is
+  on the board's clock, which only the board's link moves: let the board run with board.wait() or
   board.wait_until()`.
 - **What the test does on the air happens at the board's current instant:** a device made with
   `SppPeer(bt.air, ...)` or `BluetoothDevice(bt.air, ...)`, before power-on or after, `peer.rssi`
@@ -57,8 +57,11 @@ a fixture does. From then on:
   the chip, `board.reset()` or one of the firmware's own, ends what it had under way the same way,
   and so does the firmware's `HCI_Reset`, which Bluedroid sends whenever it starts
   ([below](#the-firmwares-controller)). The firmware's host is told nothing: it starts again too.
-  A peer that had a link to the board loses contact, and its end falls at its supervision timeout,
-  20 s unless written otherwise; until then the firmware's page to it ends in `PAGE_TIMEOUT`.
+  What the controller had made for the old host and not yet sent is dropped. A peer that had a link
+  to the board loses contact, and its end falls at its supervision timeout, 20 s unless the link's
+  central wrote another (`bt_spp_initiator`'s Bluedroid writes 5 s); until then the firmware's page
+  to it ends in `PAGE_TIMEOUT`, and `bt_spp_initiator` does not page again: seen on 2026-11-08 with
+  `board.reset()` 10 s into the stream.
 
 On the serial backend the test skips at the fixture: `serial: bluetooth takes no model source on
 this backend`. A `bt` asked for after `board.power_on()`, through `board.bluetooth`, is refused:
@@ -71,16 +74,17 @@ of the application, whose symbols the runner's --bt needs`.
 | `bt.air` | The `Air` of the board's devices, on its clock |
 | `bt.controller` | The firmware's controller, a `GuestController` at `24:6F:28:00:11:24` |
 | `bt.unknown_commands()` | The commands of the firmware's host the controller did not know, `(t, op_code, name)` each |
-| `bt.devices()` | The other devices on the air, `(name, address)` each, in the order of their addresses |
+| `bt.devices()` | The other devices made on the air, `(name, address, present)` each, in the order of their addresses; `present` is false for one switched off or out of range now |
 | `bt.packets_from_host`, `bt.bytes_from_host`, `bt.packets_to_host`, `bt.bytes_to_host` | What crossed the VHCI, each way |
 
-The test's report ends with what the Bluetooth did: `bluetooth: the guest's controller at
-24:6F:28:00:11:24; N packets (B bytes) from its host, M packets (B bytes) to it`, then
+The test's report has what the Bluetooth did, after the Wi-Fi's lines: `bluetooth: the guest's
+controller at 24:6F:28:00:11:24; N packets (B bytes) from its host, M packets (B bytes) to it`, then
 `unknown commands (N):` with one line per command, its board time, Bumble's name for it and its op
-code, as `0.300220000 s  HCI_TRUNCATED_PAGE_COMMAND (0x043f)`, and `on the air:` with each device,
-as `ESP_SPP_ACCEPTOR (00:00:00:00:5B:01)`. The `esp32sim_link` property has the same under
-`bluetooth`: `address`, the four counts, `unknown_commands` (`t_ns`, `op_code`, `name` each) and
-`devices` (`name`, `address` each); `null` without `bt`.
+code, as `0.300220000 s  HCI_TRUNCATED_PAGE_COMMAND (0x043f)`, and `devices:` with each device made
+on the air, as `ESP_SPP_ACCEPTOR (00:00:00:00:5B:01)`, and `phone (00:00:00:00:5C:01, off the air)`
+for one switched off or out of range. The `esp32sim_link` property has the same under `bluetooth`:
+`address`, the four counts, `unknown_commands` (`t_ns`, `op_code`, `name` each) and `devices`
+(`name`, `address`, `present` each); `null` without `bt`.
 
 ### The firmware's controller
 
@@ -89,8 +93,8 @@ It does what the devices' controllers do ([time on the air](#time-on-the-air),
 
 - Three pages of features, 0 to 2, as the classic ESP32's controller has (Bluedroid stops on a
   fourth), page 0 with the BR/EDR features: encryption, role switch, the RSSI and extended inquiry
-  results, Secure Simple Pairing, and none for LE, since the firmware runs its controller for Classic
-  alone. TODO(owner): what the classic ESP32's controller reports on page 0.
+  results, Secure Simple Pairing, and none for LE, since the firmware runs its controller for
+  Classic alone. TODO(owner): what the classic ESP32's controller reports on page 0.
 - An ACL buffer of 491 bytes, the most a packet of esp32sim's VHCI holds (496 bytes, 5 of them the
   packet's header), both ways: the firmware's own data, and the peer's data cut to fit, also to the
   firmware's `Host_Buffer_Size` when that is smaller. TODO(owner): what the classic ESP32's
@@ -100,8 +104,6 @@ It does what the devices' controllers do ([time on the air](#time-on-the-air),
   for any other, and is listed in `bt.unknown_commands()`.
 - Each answer `10 µs` after the instant the packet it answers was sent, which the firmware reads at
   its next poll of the VHCI.
-
-## Putting a peer on the air
 
 ## Putting a peer on the air
 
@@ -165,21 +167,21 @@ From the moment it is made, at the air's current instant, and until the test tak
   encrypted.
 - **Offering SPP.** Its SDP record names the Serial Port service (`0x1101`) on RFCOMM `channel`, and
   the service, `Serial Port` unless given another (ESP-IDF's `bt_spp_initiator` prints the name it
-  finds with `%s`, and a record without one makes it fault). The
-  channel opens to one device at a time, also when two ask at the same instant, and, with `secure`,
-  only on a link that device has authenticated, with its PIN or its key, by the time it opens the
-  channel: Bluedroid asks for the channel (RFCOMM's PN), then authenticates, then opens it (SABM),
-  and the peer checks at the opening. Encryption is the device's choice: ESP-IDF's `bt_spp_initiator`,
-  which asks for `ESP_SPP_SEC_AUTHENTICATE`, paired with the PIN and did not encrypt the link
-  (seen on 2026-11-08, ESP-IDF v5.3.6). The peer does not start the pairing itself, so a
-  device that opens the channel without pairing is refused, as is a second device that asks while
-  the first holds it; one refused at the opening may authenticate and open it again. The device sees
-  its channel refused (Bumble raises `ConnectionError` with `CONNECTION_REFUSED`), and `peer.refused`
-  lists each refusal as `(t, why)`, as `(0, "24:0A:C4:00:00:01: the link is not authenticated")` or
-  `(0, "24:0A:C4:00:00:02: the channel is held by 24:0A:C4:00:00:01")`. With `secure=False`, any
-  device opens it. `peer.channel_open` says whether a device holds it now; the channel closes when
-  the device closes it or the link. The channel is RFCOMM in L2CAP's basic mode: the peer does not
-  offer Enhanced Retransmission Mode, so a device that would ask for it stays in basic mode.
+  finds with `%s`, and a record without one makes it fault). The channel opens to one device at a
+  time, also when two ask at the same instant, and, with `secure`, only on a link that device has
+  authenticated, with its PIN or its key, by the time it opens the channel: Bluedroid asks for the
+  channel (RFCOMM's PN), then authenticates, then opens it (SABM), and the peer checks at the
+  opening. Encryption is the device's choice: ESP-IDF's `bt_spp_initiator`, which asks for
+  `ESP_SPP_SEC_AUTHENTICATE`, paired with the PIN and did not encrypt the link (seen on 2026-11-08,
+  ESP-IDF v5.3.6). The peer does not start the pairing itself, so a device that opens the channel
+  without pairing is refused, as is a second device that asks while the first holds it; one refused
+  at the opening may authenticate and open it again. The device sees its channel refused (Bumble
+  raises `ConnectionError` with `CONNECTION_REFUSED`), and `peer.refused` lists each refusal as `(t,
+  why)`, as `(0, "24:0A:C4:00:00:01: the link is not authenticated")` or `(0, "24:0A:C4:00:00:02:
+  the channel is held by 24:0A:C4:00:00:01")`. With `secure=False`, any device opens it.
+  `peer.channel_open` says whether a device holds it now; the channel closes when the device closes
+  it or the link. The channel is RFCOMM in L2CAP's basic mode: the peer does not offer Enhanced
+  Retransmission Mode, so a device that would ask for it stays in basic mode.
 
 ## Other devices
 

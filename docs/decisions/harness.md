@@ -1770,11 +1770,11 @@ link comes of the acceptance. A plain acceptance at that point still makes a lin
 
 Status: postponed (#33, #34)
 
-The `bt` fixture came with #34 ([below](#the-bt-fixture-gives-the-air-and-the-test-makes-its-devices-on-it)).
-The btsnoop tap of the HCI between the firmware and its controller, and the validation with
-`bt_spp_initiator`, which needs esp32sim's pin to have mikroverk/esp32sim#347, are still #34's;
-replaying a recorded SPP exchange needs the matching engine (#20), and plan M8's replayed peer waits
-for it.
+The `bt` fixture came with #34
+([below](#the-bt-fixture-gives-the-air-and-the-test-makes-its-devices-on-it)). The btsnoop tap of
+the HCI between the firmware and its controller, and the validation with `bt_spp_initiator`, which
+needs esp32sim's pin to have mikroverk/esp32sim#347, are still #34's; replaying a recorded SPP
+exchange needs the matching engine (#20), and plan M8's replayed peer waits for it.
 
 ## The firmware's controller is a controller of the air, with the guest's features and buffer
 
@@ -1842,8 +1842,10 @@ default values". The controller now does that as a device that leaves and comes 
 instant: each peer loses contact and its end falls at its supervision timeout, this side ends what
 it had under way and holds nothing, the answers owed are gone, and the host's settings are back at
 their defaults. Its host hears nothing but the `Command_Complete`, which is all 7.3.2 gives it. A
-chip reset and the board's supply do the same to the firmware's controller, without the command:
-the controller is part of the chip.
+chip reset and the board's supply do the same to the firmware's controller, without the command: the
+controller is part of the chip. For `board.reset()` the backend restarts it in the held turn, before
+it sends the reset, so that nothing made for the old host goes out with the reset to reach the new
+one.
 
 **Rejected:** clearing the controller's state alone, because a peer would keep a link to a
 controller that forgot it, and what it sent would reach no entry; an `LMP_detach` to each peer,

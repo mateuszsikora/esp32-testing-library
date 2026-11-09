@@ -735,8 +735,8 @@ checks `app.elf_file`, then calls `use()`, whose `asked` is `_asked`: it refuses
 skips on a backend whose declaration has no `model` source for `bluetooth`. Before power-on the
 backend passes `--bt` for a `Bluetooth` that is `used`. On serial `_get_bluetooth()` calls `_asked`
 with the same request, which skips, since `serial` declares no `bluetooth`; were it declared, it
-would raise `BackendError: serial: the chip's Bluetooth has no interface on this backend`. The
-air, its devices and the controller are in [bluetooth-peer-technical.md](bluetooth-peer-technical.md).
+would raise `BackendError: serial: the chip's Bluetooth has no interface on this backend`. The air,
+its devices and the controller are in [bluetooth-peer-technical.md](bluetooth-peer-technical.md).
 
 `tests/test_bluetooth_guest.py` covers the interface through a real `BoardLink`, without the
 emulator; `tests/test_pytest_plugin.py` the `--bt` of the runner's command line; and

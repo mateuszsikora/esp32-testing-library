@@ -271,7 +271,12 @@ class Controller(BumbleController):
 
     def _defaults(self) -> None:
         """The values the specification gives the host's settings, which `HCI_Reset` brings back
-        (Vol 4, Part E, 7.3.2)."""
+        (Vol 4, Part E, 7.3.2); where it gives none, the ones the controller starts with."""
+        # Bumble's, not the specification's (7.3.1 gives an event mask of 0x00001FFFFFFFFFFF):
+        # its controller reads neither mask, but a host may read the name back.
+        self.event_mask = BumbleController.event_mask
+        self.event_mask_page_2 = BumbleController.event_mask_page_2
+        self.local_name = BumbleController.local_name
         self.class_of_device = 0
         self.extended_inquiry_response = bytes(240)
         self.inquiry_mode = 0
@@ -414,6 +419,24 @@ class Controller(BumbleController):
             return hci.HCI_StatusReturnParameters(hci.HCI_ErrorCode.SUCCESS)
         return hci.HCI_StatusReturnParameters(
             hci.HCI_ErrorCode.UNSUPPORTED_FEATURE_OR_PARAMETER_VALUE_ERROR
+        )
+
+    def on_hci_read_number_of_supported_iac_command(
+        self, _command: hci.HCI_Read_Number_Of_Supported_IAC_Command
+    ) -> hci.HCI_Read_Number_Of_Supported_IAC_ReturnParameters:
+        """7.3.43: as many as `Write_Current_IAC_LAP` takes, every one of `IAC_LAPS`."""
+        return hci.HCI_Read_Number_Of_Supported_IAC_ReturnParameters(
+            status=hci.HCI_ErrorCode.SUCCESS, num_support_iac=len(IAC_LAPS)
+        )
+
+    def on_hci_read_current_iac_lap_command(
+        self, _command: hci.HCI_Read_Current_IAC_LAP_Command
+    ) -> hci.HCI_Read_Current_IAC_LAP_ReturnParameters:
+        """7.3.44: the codes `iac_laps` holds, 3 bytes each."""
+        return hci.HCI_Read_Current_IAC_LAP_ReturnParameters(
+            status=hci.HCI_ErrorCode.SUCCESS,
+            num_support_iac=len(self.iac_laps),
+            iac_lap=b"".join(lap.to_bytes(3, "little") for lap in self.iac_laps),
         )
 
     def on_hci_write_current_iac_lap_command(self, command: hci.HCI_Command) -> None:

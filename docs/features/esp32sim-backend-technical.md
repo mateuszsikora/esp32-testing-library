@@ -58,20 +58,21 @@ without starting anything:
    (`esp32tl/interfaces/lines.py`) for every `[lines.<role>]` set, also on a profile with none,
    with `now` the `HeldClock`'s, so that what the test drives before power-on holds from `t = 0`
    ([pytest-plugin-technical.md](pytest-plugin-technical.md#data-flow)).
-6. **`BoardLink(profile.name, [*uarts, lines, wifi, bluetooth, sd_card], chip=profile.chip, on_error=self._end_run, hold=clock, console=self._printed, clock=self.clock, on_reset=self._reset)`**, `sd_card` only with a slot,
-   (`esp32tl/link/boardlink.py`) is the harness's end of the link: `Esp32Sim.link`. The harness's
-   `hello` names the profile and its chip; `watch` is the pins of every UART route and every
-   line; the `Wifi` has no pins, and is the link's one interface whose `ethernet` is true, which
-   gets the station's `eth_tx` frames; the `Bluetooth` has none either, and is the one whose
-   `bluetooth` is true, which gets the firmware's `hci_tx` packets; the `SdCard` has none either, and is the one whose
-   `sd_card` is true, which sends the fault rules as `sd_fault` and `sd_clear` and gets the
-   runner's `sd_op` ([pytest-plugin-technical.md](pytest-plugin-technical.md#the-sd-cards-fault-rules)).
-   It checks that no two interfaces share a pin. `hold` holds
-   every turn until the test
-   waits; `_printed` appends each console message's bytes to `console_output`, feeds them to
-   `console_lines` and hands them to `log.console`, in the link's thread. `_reset` puts each
-   `reset` the runner sends into the run's log, `boot N: REASON (reset cause C)`, through
-   `RunLog.chip`, and calls `Bluetooth.chip_reset(t)`, also in the link's thread.
+6. **`BoardLink(profile.name, [*uarts, lines, wifi, bluetooth, sd_card], chip=profile.chip,
+   on_error=self._end_run, hold=clock, console=self._printed, clock=self.clock,
+   on_reset=self._reset)`**, `sd_card` only with a slot, (`esp32tl/link/boardlink.py`) is the
+   harness's end of the link: `Esp32Sim.link`. The harness's `hello` names the profile and its chip;
+   `watch` is the pins of every UART route and every line; the `Wifi` has no pins, and is the link's
+   one interface whose `ethernet` is true, which gets the station's `eth_tx` frames; the `Bluetooth`
+   has none either, and is the one whose `bluetooth` is true, which gets the firmware's `hci_tx`
+   packets; the `SdCard` has none either, and is the one whose `sd_card` is true, which sends the
+   fault rules as `sd_fault` and `sd_clear` and gets the runner's `sd_op`
+   ([pytest-plugin-technical.md](pytest-plugin-technical.md#the-sd-cards-fault-rules)). It checks
+   that no two interfaces share a pin. `hold` holds every turn until the test waits; `_printed`
+   appends each console message's bytes to `console_output`, feeds them to `console_lines` and hands
+   them to `log.console`, in the link's thread. `_reset` puts each `reset` the runner sends into the
+   run's log, `boot N: REASON (reset cause C)`, through `RunLog.chip`, and calls
+   `Bluetooth.chip_reset(t)`, also in the link's thread.
 
 **`Esp32Sim.nvs(namespaces, partition="nvs")`** reads the build's `partition-table.bin`
 from `app.flash_files`, resolves the name and generates a whole NVS image through
@@ -468,7 +469,7 @@ repository makes.
 | `route_wire(profile, interface)` | The `Wire` of that route, or the same `BackendError`; `Esp32Sim` makes its `Uart`s and its `Gnss` on it |
 | `runner_command(runner, rom, app, max_seconds, link, *, held=False, psram_mb=None, sd_card=None, extra_flash=(), wifi=None, bluetooth=None, realtime=False, flash_out=None)` | The runner's argument list; with `psram_mb`, `--psram-mb` of that size; with an `SdCard` holding a card, the runner's card on its pins; with a `Wifi` holding an access point, `--wifi` and `--wifi-nearby`; with a `Bluetooth` the test used, `--bt` and the application's ELF; with `realtime`, `--realtime`; with `flash_out`, `--flash-out` |
 | `Esp32Sim.wifi` | The chip's `Wifi`, on the link from construction |
-| `Esp32Sim.bluetooth` | The chip's `Bluetooth`, on the link from construction; the first look checks `app.elf_file` and calls `Bluetooth.use()`, which asks `_asked` for `Request("bluetooth", source="model")` |
+| `Esp32Sim.bluetooth` | The chip's `Bluetooth`, on the link from construction; the first look asks `_asked` for `Request("bluetooth", source="model")`, which refuses after power-on, then checks `app.elf_file`, then calls `Bluetooth.use()`, which asks again |
 | `RunnerPopen(msg_queue, cmd, meta)` | `DuplicateStdoutPopen` that closes its log when the start fails |
 | `refuse(reason)` | Raises `SourceError(reason)`: `Esp32Sim`'s `skip` outside pytest |
 | `ended_while_waiting(error)` | Whether `error`'s chain holds a `RunEnded` |
@@ -691,13 +692,14 @@ through `BoardLink` immediately.
 
 
 `Esp32Sim` implements the public `Board` base. Its `lines`, `sd_card`, `wifi` and `bluetooth`
-properties delegate to `_get_lines()`, `_get_sd_card()`, `_get_wifi()` and `_get_bluetooth()`; the first two replace the former
-callable backend accessors. `set_up()` lists `the access point of wifi` once the test has given
-one, and `the devices on the Bluetooth air` once the air holds a device besides the firmware's
-controller, so that a test that gives one and never powers on fails teardown, as for a source.
-`_switch(on)` calls `Bluetooth.supply(on)` after the UARTs' `supply`; `close()` closes the
-`Bluetooth`'s air in its `finally`, after `_release`. The
-runner command, setup guard and reports read the slot's `image_path`. `close()` stops and joins
-the runner before closing the SD slot in a `finally` block, so owned images are removed on both
-successful and failed teardown. An uninserted built image is also cleaned; merely building does
-not count as firmware setup for the no-power-on guard.
+properties delegate to `_get_lines()`, `_get_sd_card()`, `_get_wifi()` and `_get_bluetooth()`; the
+first two replace the former callable backend accessors. `set_up()` lists `the access point of wifi`
+once the test has given one, and `the devices on the Bluetooth air` once the air holds a device
+besides the firmware's controller, so that a test that gives one and never powers on fails teardown,
+as for a source. `_switch(on)` calls `Bluetooth.supply(on)` after the UARTs' `supply`, and `reset()`
+calls `Bluetooth.chip_reset(now)` before it sends `ChipReset`, so that no packet of the old host
+goes out in the turn of the reset; `close()` closes the `Bluetooth`'s air in its `finally`, after
+`_release`. The runner command, setup guard and reports read the slot's `image_path`. `close()`
+stops and joins the runner before closing the SD slot in a `finally` block, so owned images are
+removed on both successful and failed teardown. An uninserted built image is also cleaned; merely
+building does not count as firmware setup for the no-power-on guard.
