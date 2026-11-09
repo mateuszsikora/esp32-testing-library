@@ -1932,13 +1932,19 @@ def test_a_hung_run_is_ended_by_the_test_s_timeout(
             board.wait(hours(1))
         """
     )
-    started = time.monotonic()
-    # The timeout counts the hang alone: the runner starting is in the fixture, which on a slow
-    # machine took longer than the 2 s before the fake runner had connected.
+    # The timeout counts the hang alone, not the runner's start in the fixture: on a slow
+    # machine the fake runner once took longer than the 2 s to connect. The fixture has no
+    # timeout, so the inner run as a whole gets one.
     result = link_runner.runpytest_subprocess(
-        "-p", "no:cacheprovider", "-rA", "--timeout", "2", "-o", "timeout_func_only=true"
+        "-p",
+        "no:cacheprovider",
+        "-rA",
+        "--timeout",
+        "2",
+        "-o",
+        "timeout_func_only=true",
+        timeout=15,
     )
-    assert time.monotonic() - started < 15
     result.assert_outcomes(failed=1)
     result.stdout.fnmatch_lines(
         [
