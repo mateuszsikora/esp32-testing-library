@@ -19,7 +19,9 @@ profile, `uart.gnss` a `Gnss`, which says nothing until the test gives it a sour
 `gnss.replay(path)` or `gnss.fix(at=...)` does before power-on, and the profile's GPIO lines as one
 `Lines`, which puts the board's pulls on them from power-on and what the test drives at the instant
 it does, and the chip's Wi-Fi station as one `Wifi`, the simulated network behind the access point
-that `wifi.access_point(...)` puts on the runner's air. The backend also owns the end of the run
+that `wifi.access_point(...)` puts on the runner's air, and the chip's Bluetooth as one `Bluetooth`,
+whose controller is on the air of the test's devices once the test asks for it with `bt`: the
+runner then has `--bt` and the application's ELF. The backend also owns the end of the run
 (§9), before the dut is torn down: `stop` at the turn the test left the run at, `SIGTERM` for a
 runner that is not there, the link read to end of file, the runner waited for, `SIGKILL` only as a
 last resort. Then it writes the recordings of the routes the test tapped.
@@ -69,6 +71,7 @@ from esp32tl.boards import BoardProfile, capabilities
 from esp32tl.boards.capabilities import CapabilityError, Request
 from esp32tl.flash import FlashSnapshot, Namespaces, Partition
 from esp32tl.interfaces import BoardOff, NeverHappened, RunEnded, SourceError
+from esp32tl.interfaces.bluetooth import Bluetooth
 from esp32tl.interfaces.board import DEEPSLEEP_RESET, POWERON_RESET, Board, Boot
 from esp32tl.interfaces.console import ConsoleLines
 from esp32tl.interfaces.gnss import Gnss
@@ -185,6 +188,7 @@ def runner_command(
     sd_card: SdCard | None = None,
     extra_flash: tuple[tuple[int, Path], ...] = (),
     wifi: Wifi | None = None,
+    bluetooth: Bluetooth | None = None,
     realtime: bool = False,
     flash_out: Path | None = None,
 ) -> list[str]:
@@ -195,7 +199,9 @@ def runner_command(
     the runner's default. An `sd_card` puts the runner's card slot on its pins, and a card
     holding its image in it when the test has inserted one. `extra_flash` overrides the build's
     flash contents at the supplied offsets, in order. A `wifi` with an access point puts it, and
-    the networks around, on the runner's air, with the network behind it on the link. A `realtime`
+    the networks around, on the runner's air, with the network behind it on the link. A `bluetooth`
+    the test uses makes the runner forward the guest's HCI on the link (`--bt`), with the symbols of
+    the application's ELF, `app.elf_file`. A `realtime`
     run is paced to wall time, for a real device at the far end of a route. `flash_out` is the file
     the runner writes the whole flash to when the link asks, and at the end of the run."""
     command = [str(runner), "--chip", "esp32", "--rom", str(rom), "--max-seconds", str(max_seconds)]
@@ -215,6 +221,8 @@ def runner_command(
             command += ["--sd-rw", str(sd_card.image_path)]
     if wifi is not None:
         command += wifi.runner_args()
+    if bluetooth is not None and bluetooth.used:
+        command += ["--bt", str(app.elf_file)]
     if realtime:
         command.append("--realtime")
     if flash_out is not None:
@@ -376,10 +384,11 @@ class Esp32Sim(Board):
             log=self.log,
             bridging=self._bridging,
         )
+        self._bluetooth = Bluetooth(asked=self._asked, log=self.log)
         slot = [] if self._sd_card is None else [self._sd_card]
         self.link = BoardLink(
             profile.name,
-            [*self._uarts.values(), self._lines, self._wifi, *slot],
+            [*self._uarts.values(), self._lines, self._wifi, self._bluetooth, *slot],
             chip=profile.chip,
             on_error=self._end_run,
             hold=self._hold,
@@ -466,6 +475,21 @@ class Esp32Sim(Board):
     def _get_wifi(self) -> Wifi:
         """The chip's Wi-Fi station."""
         return self._wifi
+
+    def _get_bluetooth(self) -> Bluetooth:
+        """The chip's Bluetooth: its controller on the air, from the test's first look on, which
+        must come before power-on, since the runner then needs `--bt` and the application's ELF."""
+        if not self._bluetooth.used:
+            # After power-on, the reason is that it is too late, whatever the build holds.
+            self._asked(Request("bluetooth", source="model"))
+            elf = self.app.elf_file
+            if elf is None or not Path(elf).is_file():
+                raise BackendError(
+                    f"bluetooth: {self.app.binary_path} holds no ELF of the application, whose"
+                    " symbols the runner's --bt needs"
+                )
+            self._bluetooth.use()
+        return self._bluetooth
 
     def tap_console(self, path: str | Path) -> Tap:
         return self._console.tap(path)
@@ -605,6 +629,8 @@ class Esp32Sim(Board):
             set_up.append(f"a card in {self._sd_card.name}")
         if self._wifi.configuration is not None:
             set_up.append("the access point of wifi")
+        if self._bluetooth.devices():
+            set_up.append("the devices on the Bluetooth air")
         if self._console.tapped is not None:
             set_up.append("the tap of console")
 
@@ -667,6 +693,7 @@ class Esp32Sim(Board):
         """The chip reset: into the run's log, from the link's thread."""
         boot = Boot(len(self.link.resets) + 1, Duration(message.t), message.cause)
         self.log.chip(message.t, f"boot {boot.number}: {boot.reason} (reset cause {boot.cause})")
+        self._bluetooth.chip_reset(message.t)
 
     def power_on(self, utc: datetime | None = None) -> None:
         """The board's supply on. The first time, starts the runner, which boots the guest: the
@@ -704,6 +731,7 @@ class Esp32Sim(Board):
             sd_card=self._sd_card,
             extra_flash=tuple(self._nvs.values()),
             wifi=self._wifi,
+            bluetooth=self._bluetooth,
             realtime=self.clock == recording.WALL,
             flash_out=self._flash_out,
         )
@@ -741,6 +769,9 @@ class Esp32Sim(Board):
             raise BoardOff("the board is off: board.reset() resets a board that is on")
         self._hold.check("board.reset()")
         now = self._hold.now
+        # The Bluetooth controller resets with the chip, now: what it made for the old host must
+        # not reach the new one, after the reboot that empties the runner's queue.
+        self._bluetooth.chip_reset(now)
         self.link.board_input(ChipReset(now))
         self.log.test(now, "board.reset()")
 
@@ -754,6 +785,7 @@ class Esp32Sim(Board):
         self._supply = on
         for uart in self._uarts.values():
             uart.supply(on)
+        self._bluetooth.supply(on)
         self.log.test(now, step)
 
     @property
@@ -920,6 +952,7 @@ class Esp32Sim(Board):
             self._close()
         finally:
             problems = self._release()
+            self._bluetooth.close()
         if problems:
             raise BackendError("; ".join(problems))
 
@@ -1087,6 +1120,8 @@ class Esp32Sim(Board):
                 lines += uart.command_report()
         if self._wifi.configuration is not None:
             lines += self._wifi.report()
+        if self._bluetooth.used:
+            lines += self._bluetooth.report()
         if run:
             lines += self.log.lines()
         return "\n".join(lines)
@@ -1158,6 +1193,7 @@ class Esp32Sim(Board):
             "routes": routes,
             "sd_card": sd_card,
             "wifi": self._wifi.properties(),
+            "bluetooth": self._bluetooth.properties(),
         }
         if self._console.tapped is not None:
             properties["console"] = {

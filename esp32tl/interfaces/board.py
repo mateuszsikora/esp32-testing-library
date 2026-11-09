@@ -10,6 +10,7 @@ from typing import TypeVar, cast
 
 from esp32tl.boards import BoardProfile
 from esp32tl.flash import FlashSnapshot, Namespaces
+from esp32tl.interfaces.bluetooth import Bluetooth
 from esp32tl.interfaces.console import Clocked, Console
 from esp32tl.interfaces.gnss import Gnss
 from esp32tl.interfaces.lines import Lines
@@ -106,6 +107,10 @@ class Board(ABC):
     def wifi(self) -> Wifi:
         return self._get_wifi()
 
+    @property
+    def bluetooth(self) -> Bluetooth:
+        return self._get_bluetooth()
+
     @abstractmethod
     def uart(self, role: str) -> Uart: ...
 
@@ -117,6 +122,9 @@ class Board(ABC):
 
     @abstractmethod
     def _get_wifi(self) -> Wifi: ...
+
+    @abstractmethod
+    def _get_bluetooth(self) -> Bluetooth: ...
 
     @abstractmethod
     def power_on(self, utc: datetime | None = None) -> None: ...

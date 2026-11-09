@@ -1,10 +1,10 @@
 """What each backend can put at the far end of an interface, and what it can tap (plan §4.5).
 
 The declaration is `capabilities.toml`, beside the profiles: per backend, per interface kind
-(`console`, `uart`, `lines`, `sd_card`, `wifi`), the sources it takes (`model`, `replay`,
-`real`) and whether it can tap them. A test asks for sources and taps through `Request`s; `check`
-refuses what no backend can give, so that a misspelt request fails instead of skipping everywhere,
-and `refusal` says why one backend cannot give the rest.
+(`console`, `uart`, `lines`, `sd_card`, `wifi`, `bluetooth`), the sources it takes (`model`,
+`replay`, `real`) and whether it can tap them. A test asks for sources and taps through
+`Request`s; `check` refuses what no backend can give, so that a misspelt request fails instead of
+skipping everywhere, and `refusal` says why one backend cannot give the rest.
 """
 
 import tomllib
@@ -20,7 +20,7 @@ DECLARATION = PROFILES / "capabilities.toml"
 
 # The words a declaration may use: the kinds of interface a profile has, and the sources of the
 # specification.
-KINDS = ("console", "uart", "lines", "sd_card", "wifi")
+KINDS = ("console", "uart", "lines", "sd_card", "wifi", "bluetooth")
 SOURCES = ("model", "replay", "real")
 
 

@@ -1,10 +1,11 @@
 # What each backend can put at the far end of a board's interfaces, and which of them it can tap
 # (plan §4.5; the table "Backends and what each can swap" of the specification, issue #1).
 # `console` is the firmware's UART0, which every board has; `uart` is every [uart.<role>] route
-# of a board profile; `sd_card` is a profile's [sd_card] slot; `wifi` is the chip's station,
-# which every classic ESP32 has. A source or a tap that a backend does not list here skips the
-# test on that backend, with the reason, at the call in the test's body that asks for it
-# (`gnss.replay`, `gnss.tap`, `sd_card.insert`, `wifi.access_point`).
+# of a board profile; `sd_card` is a profile's [sd_card] slot; `wifi` is the chip's station and
+# `bluetooth` its controller, which every classic ESP32 has. A source or a tap that a backend does
+# not list here skips the test on that backend, with the reason, at the call in the test's body that
+# asks for it (`gnss.replay`, `gnss.tap`, `sd_card.insert`, `wifi.access_point`), or at the
+# `bt` fixture.
 
 # The emulator: whatever is at the far end of a route is esp32tl's to choose.
 [esp32sim]
@@ -14,6 +15,8 @@ uart = { sources = ["model", "replay", "real"], tap = true }
 sd_card = { sources = ["model"] }
 # esp32sim's access point, with the simulated network behind it (wifi.access_point).
 wifi = { sources = ["model"] }
+# The guest's controller in the harness, on the air with the test's devices (the bt fixture).
+bluetooth = { sources = ["model"] }
 
 # A real board: its on-board peripherals are soldered on, so only the real part answers, and only
 # the console can be tapped (finding 11). Every UART counts as on-board, also one wired to a
@@ -26,3 +29,4 @@ uart = { sources = ["real"], tap = false }
 sd_card = { sources = ["real"] }
 # Whatever access points are around the real board.
 wifi = { sources = ["real"] }
+# No bluetooth: the real board's controller is on a real air, which the harness has no device on.

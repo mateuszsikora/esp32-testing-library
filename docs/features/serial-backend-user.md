@@ -161,7 +161,9 @@ smoke tests run. Host-side hardware to drive off-board peripherals remains postp
 requires a modem model, which this backend cannot provide. So do `wifi.access_point(...)` and
 `wifi.nearby(...)`, with `serial: wifi takes no model source on this backend, only real`: the real
 board's station hears whatever access points are around it, and the host puts none on its air.
-Requesting the `wifi` fixture alone does not skip.
+Requesting the `wifi` fixture alone does not skip. The `bt` fixture does, at once, with
+`serial: bluetooth takes no model source on this backend`: the real board's controller is on a real
+air, where the harness has no device, and the capability declaration gives serial no `bluetooth`.
 
 ## Comparing the two backends
 

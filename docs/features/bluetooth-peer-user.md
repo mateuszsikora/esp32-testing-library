@@ -5,9 +5,110 @@ its name, pairs with a PIN, and offers the Serial Port Profile (SPP), whose byte
 test answers, on the board's clock; `BluetoothDevice` is the same device with no SPP. They run on
 [Bumble](https://github.com/google/bumble)'s virtual link, in the harness's process.
 
-esp32sim has no Bluetooth Classic controller for the firmware yet, so no fixture puts a peer in
-front of firmware: today a peer is used from Python, on an `Air`, with another Bumble device in the
-ESP32's place, as esp32tl's own tests do (`tests/test_spp_peer.py`).
+On the emulator the `bt` fixture puts them in front of the firmware: the firmware's Bluetooth host
+talks to a controller in the harness, on the same air as the test's devices
+([below](#in-front-of-the-firmware-the-bt-fixture)). Without a board, a peer is used from Python on
+an `Air` of its own, with another Bumble device in the ESP32's place, as esp32tl's own tests do
+(`tests/test_spp_peer.py`).
+
+## In front of the firmware: the `bt` fixture
+
+```python
+import pytest
+
+from esp32tl.bluetooth.peer import SppPeer
+from esp32tl.units import seconds
+
+
+@pytest.mark.app_path("path/to/an/spp/initiator")
+def test_the_firmware_sends_to_the_peer(board, bt):
+    source = Echo()  # a model, as in "The model that answers" below
+    peer = SppPeer(bt.air, name="ESP_SPP_ACCEPTOR", pin="1234", source=source)
+    board.power_on()
+    board.wait_until(lambda: peer.channel_open, within=seconds(20))
+    board.wait(seconds(1))
+    assert source.heard
+```
+
+`bt` is the chip's Bluetooth (`board.bluetooth`), asked for before `board.power_on()`, which is what
+a fixture does. From then on:
+
+- **The firmware's controller is in the harness.** The run forwards every HCI packet the firmware's
+  Bluetooth host sends (ESP-IDF's Bluedroid, through esp32sim's VHCI) to a controller on the air of
+  the test's devices, and its answers back, on the board's clock: the backend passes the runner
+  `--bt` with the application's ELF ([esp32sim backend](esp32sim-backend-user.md#bluetooth)). The
+  firmware finds, pairs with and opens SPP to an `SppPeer` as it would a device on a real air.
+  TODO(owner): until esp32sim's pin has mikroverk/esp32sim#347, a firmware that enables its
+  controller for Classic alone (mode 2, `CONFIG_BTDM_CTRL_MODE_BR_EDR_ONLY`) gets
+  `ESP_ERR_INVALID_ARG` from `esp_bt_controller_enable` and sends nothing
+  ([runner](runner-user.md#give-the-guest-a-bluetooth-controller)).
+- **`bt.air` is on the board's clock.** Its time is `board.now`; the test moves it only by letting
+  the board run, with `board.wait(...)`, `board.wait_until(...)` or `console.expect(...)`.
+  `bt.air.wait`, `bt.air.advance` and `bt.air.run` refuse, with `AirError`: `air.wait: this air is
+  on the board's clock, which only the board's link moves: let the board run with board.wait() or
+  board.wait_until()`.
+- **What the test does on the air happens at the board's current instant:** a device made with
+  `SppPeer(bt.air, ...)` or `BluetoothDevice(bt.air, ...)`, before power-on or after, `peer.rssi`
+  set, `peer.switch_off()` and the other calls of [a peer that leaves](#a-peer-that-leaves), and a
+  coroutine on a device's Bumble side started with `bt.air.start(...)`, which then runs as the board
+  runs. `board.wait_until` can wait for what the devices do, as `peer.channel_open`.
+- **The board's supply and resets reach the controller.** `board.power_off()` takes it off the air
+  at once, as a device switched off; `board.power_on()` puts it back, with nothing kept. A reset of
+  the chip, `board.reset()` or one of the firmware's own, ends what it had under way the same way,
+  and so does the firmware's `HCI_Reset`, which Bluedroid sends whenever it starts
+  ([below](#the-firmwares-controller)). The firmware's host is told nothing: it starts again too.
+  What the controller had made for the old host and not yet sent is dropped. A peer that had a link
+  to the board loses contact, and its end falls at its supervision timeout, 20 s unless the link's
+  central wrote another (`bt_spp_initiator`'s Bluedroid writes 5 s); until then the firmware's page
+  to it ends in `PAGE_TIMEOUT`, and `bt_spp_initiator` does not page again: seen on 2026-11-08 with
+  `board.reset()` 10 s into the stream.
+- **A deep sleep or a disabled controller does not take it off the air.** The runner sends nothing
+  when the chip goes into a deep sleep or when the firmware calls `esp_bt_controller_disable` or
+  `esp_bt_controller_deinit`, so the controller stays on the air with its scans and links until the
+  next reset: a device can still find it, and a link to it does not lose contact. The wake from a
+  deep sleep is a reset: there the controller restarts, and a peer's link loses contact.
+
+On the serial backend the test skips at the fixture: `serial: bluetooth takes no model source on
+this backend`. A `bt` asked for after `board.power_on()`, through `board.bluetooth`, is refused:
+`bluetooth: the board is on already: give an interface its source before board.power_on()`. A
+build with no ELF of the application fails the fixture: `esp32sim: bluetooth: BUILD holds no ELF
+of the application, whose symbols the runner's --bt needs`.
+
+| Name | What |
+|---|---|
+| `bt.air` | The `Air` of the board's devices, on its clock |
+| `bt.controller` | The firmware's controller, a `GuestController` at `24:6F:28:00:11:24` |
+| `bt.unknown_commands()` | The commands of the firmware's host the controller did not know, `(t, op_code, name)` each |
+| `bt.devices()` | The other devices made on the air, `(name, address, present)` each, in the order of their addresses; `present` is false for one switched off or out of range now |
+| `bt.packets_from_host`, `bt.bytes_from_host`, `bt.packets_to_host`, `bt.bytes_to_host` | What crossed the VHCI, each way |
+
+The test's report has what the Bluetooth did, after the Wi-Fi's lines: `bluetooth: the guest's
+controller at 24:6F:28:00:11:24; N packets (B bytes) from its host, M packets (B bytes) to it`, then
+`unknown commands (N):` with one line per command, its board time, Bumble's name for it and its op
+code, as `0.300220000 s  HCI_TRUNCATED_PAGE_COMMAND (0x043f)`, and `devices:` with each device made
+on the air, as `ESP_SPP_ACCEPTOR (00:00:00:00:5B:01)`, and `phone (00:00:00:00:5C:01, off the air)`
+for one switched off or out of range. The `esp32sim_link` property has the same under `bluetooth`:
+`address`, the four counts, `unknown_commands` (`t_ns`, `op_code`, `name` each) and `devices`
+(`name`, `address`, `present` each); `null` without `bt`.
+
+### The firmware's controller
+
+It does what the devices' controllers do ([time on the air](#time-on-the-air),
+[a peer that leaves](#a-peer-that-leaves)), and what Bluedroid needs of a controller:
+
+- Three pages of features, 0 to 2, as the classic ESP32's controller has (Bluedroid stops on a
+  fourth), page 0 with the BR/EDR features: encryption, role switch, the RSSI and extended inquiry
+  results, Secure Simple Pairing, and none for LE, since the firmware runs its controller for
+  Classic alone. TODO(owner): what the classic ESP32's controller reports on page 0.
+- An ACL buffer of 491 bytes, the most a packet of esp32sim's VHCI holds (496 bytes, 5 of them the
+  packet's header), both ways: the firmware's own data, and the peer's data cut to fit, also to the
+  firmware's `Host_Buffer_Size` when that is smaller. TODO(owner): what the classic ESP32's
+  controller reports in `Read_Buffer_Size`.
+- An answer to every command: one it does not know gets `UNKNOWN_HCI_COMMAND_ERROR` in the event the
+  host waits for, `Command_Status` for a command answered so before it completes, `Command_Complete`
+  for any other, and is listed in `bt.unknown_commands()`.
+- Each answer `10 µs` after the instant the packet it answers was sent, which the firmware reads at
+  its next poll of the VHCI.
 
 ## Putting a peer on the air
 
@@ -44,7 +145,7 @@ air.close()
 ```
 
 `SppPeer(air, *, name, pin, source, address="00:00:00:00:5B:01", channel=1, secure=True,
-class_of_device=0x001F00, rssi=-50)`:
+class_of_device=0x001F00, rssi=-50, service_name="Serial Port")`:
 
 | Argument | What it is |
 |---|---|
@@ -53,9 +154,10 @@ class_of_device=0x001F00, rssi=-50)`:
 | `source` | What answers the bytes on the SPP channel (below) |
 | `address` | Its Bluetooth address, six pairs of hex digits separated by colons; no other device on the air may have it, so a second peer needs its own |
 | `channel` | The RFCOMM channel of its SPP service, 1 to 30 |
-| `secure` | Whether the channel opens only on a link the device has authenticated |
+| `secure` | Whether the channel opens only on a link the device has authenticated by the time it opens it |
 | `class_of_device` | Its class of device, three octets, which an inquiry reports |
 | `rssi` | The signal strength an inquiry hears it at, in dBm, -127 to 20, the range of the specification's inquiry results |
+| `service_name` | The name of the SPP service in its SDP record, a string of 1 to 255 bytes in UTF-8, or `None` for a record without one |
 
 From the moment it is made, at the air's current instant, and until the test takes it off the air
 ([below](#a-peer-that-leaves)), the peer is:
@@ -68,16 +170,23 @@ From the moment it is made, at the air's current instant, and until the test tak
   `peer.forget_keys()`, so a device that paired once authenticates later without a PIN; a device
   that kept a key the peer does not have fails to authenticate. A link the device authenticated can be
   encrypted.
-- **Offering SPP.** Its SDP record names the Serial Port service (`0x1101`) on RFCOMM `channel`. The
-  channel opens to one device at a time, also when two ask at the same instant, and, with `secure`,
-  only on a link that device has authenticated, with its PIN or its key; encryption is the device's
-  choice. The peer does not start the pairing itself, so a device that opens the channel without
-  pairing is refused, as is a second device while the first holds it. The device sees its channel
-  refused (Bumble raises `ConnectionError` with `CONNECTION_REFUSED`), and `peer.refused` lists each
-  refusal as `(t, why)`, as `(0, "24:0A:C4:00:00:01: the link is not authenticated")` or
-  `(0, "24:0A:C4:00:00:02: the channel is held by 24:0A:C4:00:00:01")`. With `secure=False`, any
-  device opens it. `peer.channel_open` says whether a device holds it now; the channel closes when
-  the device closes it or the link.
+- **Offering SPP.** Its SDP record names the Serial Port service (`0x1101`) on RFCOMM `channel`, and
+  the service, `Serial Port` unless given another (ESP-IDF's `bt_spp_initiator` prints the name it
+  finds with `%s`, and a record without one makes it fault). The channel opens to one device at a
+  time, also when two ask at the same instant, and, with `secure`, only on a link that device has
+  authenticated, with its PIN or its key, by the time it opens the channel: Bluedroid asks for the
+  channel (RFCOMM's PN), then authenticates, then opens it (SABM), and the peer checks at the
+  opening. Encryption is the device's choice: ESP-IDF's `bt_spp_initiator`, which asks for
+  `ESP_SPP_SEC_AUTHENTICATE`, paired with the PIN and did not encrypt the link (seen on 2026-11-08,
+  ESP-IDF v5.3.6). The peer does not start the pairing itself, so a device that opens the channel
+  without pairing is refused, as is a second device that asks while the first holds it; one refused
+  at the opening may authenticate and open it again. The device sees its channel refused (Bumble
+  raises `ConnectionError` with `CONNECTION_REFUSED`), and `peer.refused` lists each refusal as `(t,
+  why)`, as `(0, "24:0A:C4:00:00:01: the link is not authenticated")` or `(0, "24:0A:C4:00:00:02:
+  the channel is held by 24:0A:C4:00:00:01")`. With `secure=False`, any device opens it.
+  `peer.channel_open` says whether a device holds it now; the channel closes when the device closes
+  it or the link. The channel is RFCOMM in L2CAP's basic mode: the peer does not offer Enhanced
+  Retransmission Mode, so a device that would ask for it stays in basic mode.
 
 ## Other devices
 
@@ -188,8 +297,9 @@ losing power: that it keeps its keys is this model's assumption, as are the sour
 what a power loss does to what a source had queued. A test about a device that loses them calls
 `forget_keys()`.
 
-All of this has been exercised only on an `Air`, with a Bumble device in the ESP32's place: no
-firmware has seen a peer leave. What ESP-IDF does with these events is not known yet.
+All of this has been exercised on an `Air` with a Bumble device in the ESP32's place, and through
+the `bt` fixture's controller with a Bumble host in Bluedroid's: no firmware has seen a peer leave
+yet. What ESP-IDF does with these events is not known.
 
 ## The model that answers
 
@@ -214,15 +324,17 @@ device, `in` to it, as a tap's recording names them.
 
 ## Time on the air
 
-The air has a clock of its own, which starts at 0 when the `Air` is made and moves only when the
-test moves it; no board runs beside it yet, so it is not `board.now`. Nothing on the air reads the
-host's clock, so two runs do the same at the same instants.
+An `Air()` has a clock of its own, which starts at 0 when it is made and moves only when the test
+moves it; `bt.air` is the board's, [above](#in-front-of-the-firmware-the-bt-fixture), and only the
+board moves it. Nothing on the air reads the host's clock, so two runs do the same at the same
+instants.
 
 | Call | What it does |
 |---|---|
 | `air.run(awaitable, *, within, description="")` | Runs a coroutine on the air, the device's side, until it completes, for at most `within`, a `Duration`, from now; returns its result or raises what it raised |
 | `air.wait(duration)` | Lets the air run for `duration` |
 | `air.advance(until)` | Moves the air to `until`, a `Duration` since 0 |
+| `air.start(coroutine)` | Starts a coroutine on the air, as a task, run as far as it goes at the current instant; it goes on as the air's time moves, also on `bt.air` |
 | `air.now` | The air's time, a `Duration` |
 | `air.close()` | Ends the air |
 
@@ -254,6 +366,8 @@ On the air:
 | `bench: source.quiet_until returned 1.5, not nanoseconds` | `AirError`, from `PeerError` | `quiet_until` returned something other than an `int` or `None` |
 | `bench: source.quiet_until returned 0 s, not after the air's 0 s: what it sends by then belongs in the poll at 0 s` | `AirError`, from `PeerError` | `quiet_until` returned a time not after the air's |
 | `{description} did not complete within 10 s: waited from 0 s to 10 s of the board's time` | `NeverHappened` | `air.run` ran out of `within`; `the awaitable` without a `description` |
+| `air.wait: this air is on the board's clock, which only the board's link moves: let the board run with board.wait() or board.wait_until()` | `AirError` | `air.wait`, `air.advance` or `air.run`, each named, on `bt.air` |
+| `SppPeer: service_name is '', not None or a string of 1 to 255 bytes` | `PeerError` | A service name that is not a string or `None`, empty, or longer than 255 bytes |
 | `the air is at 1 s: it cannot go back to 0.5 s` | `ValueError` | `air.advance` to a time before the air's |
 | `air.advance takes a Duration, as seconds(1), not 1` | `TypeError` | `air.advance(1)`: a plain number where a `Duration` belongs |
 | `air.wait takes a Duration, as seconds(1), not 1` | `TypeError` | `air.wait(1)` |
@@ -282,3 +396,5 @@ own coroutine's callbacks, is prefixed with asyncio's description of where it wa
 - [Models and units](models-user.md): `Duration` and the other units
 - [Decisions: the Bluetooth peer](../decisions/harness.md#the-bluetooth-peer-runs-bumble-in-the-harness-on-the-boards-clock)
 - [Decisions: how a peer leaves](../decisions/harness.md#a-peer-leaves-without-a-word-keeps-its-keys-and-its-old-link-stays-dead-until-it-falls)
+- [Decisions: the air of the `bt` fixture is on the board's clock](../decisions/harness.md#the-air-of-the-bt-fixture-is-moved-by-the-boards-link-alone)
+- [esp32sim backend: Bluetooth](esp32sim-backend-user.md#bluetooth)

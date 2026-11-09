@@ -41,7 +41,7 @@ def test_esp32_devkitc_routes_the_gnss_on_uart1_gpio_4_and_5() -> None:
         # ESP-IDF's sdspi example's defaults for the ESP32
         sd_card=SdCardRoute(sclk=14, mosi=15, miso=2, cs=13),
     )
-    assert profile.interfaces == ["console", "uart.gnss", "sd_card", "wifi"]
+    assert profile.interfaces == ["console", "uart.gnss", "sd_card", "wifi", "bluetooth"]
 
 
 def test_the_lilygo_profile_holds_the_specification_and_lilygo_s_documentation() -> None:
@@ -95,6 +95,7 @@ def test_the_lilygo_profile_holds_the_specification_and_lilygo_s_documentation()
         "lines.board",
         "sd_card",
         "wifi",
+        "bluetooth",
     ]
 
 
@@ -222,7 +223,7 @@ def test_a_profile_without_sizes_or_interfaces_has_only_the_console(tmp_path: Pa
     assert (profile.flash_mb, profile.psram_mb, profile.interfaces) == (
         None,
         None,
-        ["console", "wifi"],
+        ["console", "wifi", "bluetooth"],
     )
     (tmp_path / "x.toml").write_text(GOOD)
     assert boards.load(tmp_path / "x.toml").interfaces == [
@@ -230,6 +231,7 @@ def test_a_profile_without_sizes_or_interfaces_has_only_the_console(tmp_path: Pa
         "uart.gnss",
         "lines.modem",
         "wifi",
+        "bluetooth",
     ]
 
 
@@ -237,7 +239,7 @@ def test_an_sd_card_slot_may_take_an_input_only_pin_for_miso(tmp_path: Path) -> 
     (tmp_path / "x.toml").write_text(GOOD + SD_CARD.replace("miso = 2", "miso = 39"))
     profile = boards.load(tmp_path / "x.toml")
     assert profile.sd_card == SdCardRoute(sclk=14, mosi=15, miso=39, cs=13)
-    assert profile.interfaces[-2:] == ["sd_card", "wifi"]
+    assert profile.interfaces[-3:] == ["sd_card", "wifi", "bluetooth"]
 
 
 def test_every_backend_has_a_declaration() -> None:
@@ -255,6 +257,8 @@ def test_the_declaration_is_the_specification_s_table() -> None:
             "sd_card": Capability(("model",)),
             # esp32sim's access point, with the simulated network behind it
             "wifi": Capability(("model",)),
+            # the guest's controller in the harness, on the air with the test's devices
+            "bluetooth": Capability(("model",)),
         },
         "serial": {
             "console": Capability(tap=True),
@@ -293,6 +297,12 @@ LILYGO = boards.profile("lilygo-t-a7670g-r2")
             Request("sd_card", source="model"),
             "sd_card takes no model source on this backend, only real",
         ),
+        ("esp32sim", Request("bluetooth", source="model"), None),
+        (
+            "serial",
+            Request("bluetooth", source="model"),
+            "bluetooth takes no model source on this backend",
+        ),
     ],
 )
 def test_a_backend_refuses_what_it_does_not_declare(
@@ -320,13 +330,13 @@ def test_the_first_request_a_backend_cannot_give_is_the_reason() -> None:
             DEVKITC,
             Request("uart.modem", source="model"),
             "the board profile esp32-devkitc has no uart.modem;"
-            " its interfaces are console, uart.gnss, sd_card, wifi",
+            " its interfaces are console, uart.gnss, sd_card, wifi, bluetooth",
         ),
         (
             boards.profile("gps-alarm-clock"),
             Request("sd_card", source="model"),
             "the board profile gps-alarm-clock has no sd_card;"
-            " its interfaces are console, uart.gnss, lines.alarm, wifi",
+            " its interfaces are console, uart.gnss, lines.alarm, wifi, bluetooth",
         ),
         (DEVKITC, Request("sd_card", tap=True), "no backend can tap sd_card"),
         (
@@ -366,7 +376,7 @@ def test_a_request_no_backend_can_give_is_an_error_not_a_skip(
         (
             "[serial]\nuarts = { tap = true }",
             "c.toml: serial.uarts: no such kind of interface;"
-            " the kinds are console, uart, lines, sd_card, wifi",
+            " the kinds are console, uart, lines, sd_card, wifi, bluetooth",
         ),
         (
             "[serial]\nuart = { sources = ['modle'] }",

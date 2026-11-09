@@ -244,6 +244,8 @@ def test_serial_capabilities_skip_at_the_call(pytester: pytest.Pytester, local: 
             lines.drive("modem.ri", True)
         def test_wifi(wifi):
             wifi.access_point("myssid", password="mypassword")
+        def test_bt(bt):
+            pass
         def test_power_off(board):
             board.power_on()
             board.power_off()
@@ -267,7 +269,7 @@ def test_serial_capabilities_skip_at_the_call(pytester: pytest.Pytester, local: 
     """)
     )
     result = run_serial(pytester, "-rs")
-    result.assert_outcomes(skipped=27)
+    result.assert_outcomes(skipped=28)
     result.stdout.fnmatch_lines(
         [
             "*serial: uart.gnss takes no model source on this backend, only real*",
@@ -292,6 +294,7 @@ def test_serial_capabilities_skip_at_the_call(pytester: pytest.Pytester, local: 
             "*serial: uart.modem takes no model source on this backend, only real*",
             "*serial: GPIO lines cannot be controlled or observed on this backend*",
             "*serial: wifi takes no model source on this backend, only real*",
+            "*serial: bluetooth takes no model source on this backend*",
             "*serial: the backend cannot switch the board's power*",
             "*serial: the backend does not see the chip's resets*",
             "*serial: the backend does not see the chip's resets*",

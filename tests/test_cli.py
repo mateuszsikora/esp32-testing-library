@@ -98,7 +98,7 @@ def test_the_help_names_run_and_replay(
         (
             [*REPLAY, "--interface", "modem", "--recording", str(RECORDING)],
             "esp32tl: the board profile esp32-devkitc has no uart.modem; its interfaces are"
-            " console, uart.gnss, sd_card, wifi\n",
+            " console, uart.gnss, sd_card, wifi, bluetooth\n",
         ),
         (
             [*REPLAY, "--interface", "uart.gnss", "--recording", "recordings/none.jsonl"],

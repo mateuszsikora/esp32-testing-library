@@ -11,6 +11,7 @@ import pytest
 from esp32tl import recording
 from esp32tl.boards.capabilities import Request
 from esp32tl.interfaces import SourceError
+from esp32tl.interfaces.bluetooth import Bluetooth
 from esp32tl.interfaces.uart import Uart
 from esp32tl.interfaces.wifi import Wifi
 from esp32tl.link.boardlink import BoardLink, Wire
@@ -238,6 +239,7 @@ def test_unseen_requests_are_in_the_backend_report_and_json_properties(tmp_path:
     backend._uarts = {"uart.gnss": gnss}
     backend._sd_card = None
     backend._wifi = Wifi(now=lambda: 0)
+    backend._bluetooth = Bluetooth()
     backend.log = RunLog(entries=1)
     gnss.log = backend.log
     backend.link = BoardLink("esp32-devkitc", [gnss])

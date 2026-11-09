@@ -158,16 +158,17 @@ The physical 8 MB PSRAM remains represented by `psram_mb = 4`, the runner's supp
 ### The capability declaration: `esp32tl/boards/capabilities.toml`
 
 One table per backend, keyed by the backend's name in `SERVICES`; in it, one inline table per
-interface kind, where the kind of `uart.gnss` is `uart` and that of `console`, `sd_card` or `wifi`
-is the interface itself:
+interface kind, where the kind of `uart.gnss` is `uart` and that of `console`, `sd_card`, `wifi`
+or `bluetooth` is the interface itself:
 
 | Key | Type | Default |
 |---|---|---|
 | `sources` | list of `SOURCES`: `model`, `replay`, `real` | `[]` |
 | `tap` | boolean | `false` |
 
-A kind is one of `KINDS`: `console`, `uart`, `lines`, `sd_card`, `wifi`. A kind a backend does not list is
-`Capability()`: no source, no tap. The file declares `esp32sim` and `serial`:
+A kind is one of `KINDS`: `console`, `uart`, `lines`, `sd_card`, `wifi`, `bluetooth`. A kind a
+backend does not list is `Capability()`: no source, no tap. The file declares `esp32sim` and
+`serial`:
 
 ```toml
 [esp32sim]
@@ -175,6 +176,7 @@ console = { tap = true }
 uart = { sources = ["model", "replay", "real"], tap = true }
 sd_card = { sources = ["model"] }
 wifi = { sources = ["model"] }
+bluetooth = { sources = ["model"] }
 
 [serial]
 console = { tap = true }
@@ -186,7 +188,10 @@ wifi = { sources = ["real"] }
 The `model` on `sd_card` is the runner's card model holding an image file
 ([runner-technical.md](runner-technical.md#the-sd-card)); on `serial` it is the card in the slot.
 The `model` on `wifi` is esp32sim's access point (`--wifi`) with the harness's network behind it;
-`wifi.access_point` and `wifi.nearby` ask for it, so on `serial` they skip.
+`wifi.access_point` and `wifi.nearby` ask for it, so on `serial` they skip. The `model` on
+`bluetooth` is the firmware's controller in the harness, behind the runner's `--bt`
+([bluetooth-peer-technical.md](bluetooth-peer-technical.md)); the `bt` fixture asks for it, and
+`serial` lists no `bluetooth`, so there it skips.
 
 `serial` is in `SERVICES` with services `esp,idf`; tests select it explicitly with
 `--esp32tl-backend serial`. Both backends are counted by `check`.
@@ -199,7 +204,7 @@ The `model` on `wifi` is esp32sim's access point (`--wifi`) with the harness's n
 | `boards.load(path)` | function | The profile in any file, checked against [Schema](#schema) |
 | `boards.names()` | function | The shipped profiles' names, sorted |
 | `boards.DEFAULT_PROFILE` | `str` | `"esp32-devkitc"` |
-| `BoardProfile` | frozen dataclass | `name`, `chip`, `flash_mb: int \| None`, `psram_mb: int \| None`, `uart: Mapping[str, UartRoute]`, `lines: Mapping[str, Mapping[str, Line]]`, `sd_card: SdCardRoute \| None = None`; property `interfaces`: `["console", "uart.<role>", ..., "lines.<role>", ..., "sd_card", "wifi"]`, in file order, `sd_card` only with a slot, `wifi` always: every classic ESP32 has it. Not hashable: its mappings are not |
+| `BoardProfile` | frozen dataclass | `name`, `chip`, `flash_mb: int \| None`, `psram_mb: int \| None`, `uart: Mapping[str, UartRoute]`, `lines: Mapping[str, Mapping[str, Line]]`, `sd_card: SdCardRoute \| None = None`; property `interfaces`: `["console", "uart.<role>", ..., "lines.<role>", ..., "sd_card", "wifi", "bluetooth"]`, in file order, `sd_card` only with a slot, `wifi` and `bluetooth` always: every classic ESP32 has them. Not hashable: its mappings are not |
 | `UartRoute` | frozen dataclass | `port`, `tx`, `rx`, `baud` |
 | `SdCardRoute` | frozen dataclass | `sclk`, `mosi`, `miso`, `cs` |
 | `Line` | frozen dataclass | `pin`, `pull: "up" \| "down" \| None = None`, `active`, `on_ms`, `off_ms`, `pulse_ms` (each `int \| None = None`); [pulse schema](#pulse-timing-on-a-line) |
@@ -251,7 +256,7 @@ The ones `tests/test_boards.py` checks, verbatim:
 
 Declaration errors, `CapabilityError` from `capabilities.load`, are `<file>: <backend>[.<kind>]:
 is not a table`, `...: unknown key <key>`, `...: no such kind of interface; the kinds are console,
-uart, lines, sd_card, wifi`, `....sources: is not a list of names`, `....sources: 'modle' is not one of model,
+uart, lines, sd_card, wifi, bluetooth`, `....sources: is not a list of names`, `....sources: 'modle' is not one of model,
 replay, real` and `....tap: is not true or false`. The request errors of `check` and the skip reasons of `refusal`
 are listed in [board-profiles-user.md](board-profiles-user.md#when-no-backend-can-give-it) and
 [above it](board-profiles-user.md#when-a-backend-cannot-give-it).

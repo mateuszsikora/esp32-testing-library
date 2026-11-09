@@ -34,6 +34,15 @@ Classic link. `Controller` adds them, for links whose controllers are all of thi
   off does not hear a page, nor a remote name request without a link, which pages too, so either
   ends at the page timeout. As for a device that left, this is decided at the instant the page
   starts: one that turns page scan on during it answers only the next.
+- What a host such as ESP-IDF's Bluedroid sends that Bumble has no handler for: the link's policy
+  and packet types, its clock offset and the peer's version, the host's flow control, the event
+  filters and the inquiry access codes, the scan activities and types (Vol 4, Part E, 7.1.14,
+  7.1.23, 7.1.24, 7.2.10, 7.2.12, 7.3.3, 7.3.20, 7.3.22, 7.3.40, 7.3.45, 7.3.48, 7.3.52). A
+  command this class does not know is answered as 4.5 requires, and kept in `unknown_commands`.
+- `HCI_Reset` (7.3.2), which Bumble 0.0.236 answers and does nothing for: the controller loses
+  what it had under way and goes back to its defaults.
+- ACL data for the host cut to the host's buffer (7.3.39), where Bumble sends each L2CAP PDU whole.
+- Page 0 of the features with the BR/EDR features it has.
 
 The keys are not the specification's: SAFER+ (E1, E21, E22) is replaced by SHA-256 over the same
 inputs, so a key or a response holds on this link only, and only the host sees a key. The random
@@ -70,6 +79,40 @@ REJECT_REASONS = range(0x0D, 0x10)
 # The bits of `Scan_Enable` (Vol 4, Part E, 7.3.18).
 INQUIRY_SCAN = 0x01
 PAGE_SCAN = 0x02
+
+# The inquiry access code every controller scans for until its host writes others (7.3.45): the
+# General Inquiry Access Code. Those a host may write are 0x9E8B00 to 0x9E8B3F.
+GIAC = hci.HCI_GENERAL_INQUIRY_LAP
+IAC_LAPS = range(0x9E8B00, 0x9E8B40)
+
+# Page 0 of the features: what this controller does on a BR/EDR link (Vol 2, Part C, 3.3).
+# Multi-slot packets only name what the host may ask for in `Change_Connection_Packet_Type`: the
+# link carries data whole, with no slots.
+BR_EDR_FEATURES = (
+    hci.LmpFeatureMask.LMP_3_SLOT_PACKETS
+    | hci.LmpFeatureMask.LMP_5_SLOT_PACKETS
+    | hci.LmpFeatureMask.ENCRYPTION
+    | hci.LmpFeatureMask.ROLE_SWITCH
+    | hci.LmpFeatureMask.RSSI_WITH_INQUIRY_RESULTS
+    | hci.LmpFeatureMask.EXTENDED_INQUIRY_RESPONSE
+    | hci.LmpFeatureMask.SECURE_SIMPLE_PAIRING_CONTROLLER_SUPPORT
+    | hci.LmpFeatureMask.HCI_LINK_SUPERVISION_TIMEOUT_CHANGED_EVENT
+    | hci.LmpFeatureMask.EXTENDED_FEATURES
+)
+
+# The settings of `Set_Event_Filter` that filter nothing (7.3.3): clear every filter; return the
+# inquiry responses of all devices; and let connections from all devices through to the host,
+# with `Auto_Accept_Flag` off (0x01). Others are refused.
+CLEAR_ALL_FILTERS = 0x00
+INQUIRY_RESULT_FILTER = 0x01
+CONNECTION_SETUP_FILTER = 0x02
+ALL_DEVICES = 0x00
+NO_AUTO_ACCEPT = 0x01
+
+# The packet boundary flags of ACL data for the host (Vol 4, Part E, 5.4.2): the first packet of
+# an automatically flushable L2CAP PDU, and a continuing fragment.
+FIRST_FLUSHABLE = 0b10
+CONTINUING = 0b01
 
 
 @lmp.Packet.subclass
@@ -143,6 +186,16 @@ class HeardPage:
     switching: bool = False
 
 
+@dataclass(frozen=True)
+class UnknownCommand:
+    """A command the controller does not know, at `t`, nanoseconds of the air's time: answered
+    with `UNKNOWN_HCI_COMMAND_ERROR`."""
+
+    t: int
+    op_code: int
+    name: str
+
+
 def _hash(*parts: bytes) -> bytes:
     digest = hashlib.sha256()
     for part in parts:
@@ -176,24 +229,29 @@ def response(link_key: bytes, challenge: bytes, claimant: hci.Address) -> bytes:
 class Controller(BumbleController):
     """A Bumble controller at `address` on `link`, named `name` in Bumble's logs, which also does
     inquiry, legacy pairing, authentication with a stored key, encryption, a page timeout, link
-    supervision, the rejection of a page and page scan, and keeps a page it hears apart from its
-    own."""
+    supervision, the rejection of a page and page scan, keeps a page it hears apart from its
+    own, resets, answers the commands it does not know and cuts ACL data to the host's buffer.
+
+    `acl_to_host` is the most ACL data a packet to the host carries, besides what the host's
+    `Host_Buffer_Size` says: `None` for no bound of the transport's."""
 
     link: Link
+    acl_to_host: int | None = None
 
     def __init__(self, name: str, link: Link, address: str) -> None:
         super().__init__(name, link=link, public_address=address)
-        self.lmp_features &= ~hci.LmpFeatureMask.BR_EDR_NOT_SUPPORTED
-        self.class_of_device = 0
-        self.extended_inquiry_response = bytes(240)
-        self.inquiry_mode = 0
+        self.lmp_features = hci.LmpFeatureMask(
+            (self.lmp_features & ~hci.LmpFeatureMask.BR_EDR_NOT_SUPPORTED) | BR_EDR_FEATURES
+        )
+        # What the controller's host was told it does not know, in order.
+        self.unknown_commands: list[UnknownCommand] = []
         self.rssi = RSSI
+        self._defaults()
         self._random = random.Random(str(self.public_address))
         self._inquiry: asyncio.TimerHandle | None = None
         self._security: dict[hci.Address, Security] = {}
         # The encryption mode this side asked of each peer, until the peer accepts it.
         self._encryption: dict[hci.Address, int] = {}
-        self.page_timeout = PAGE_TIMEOUT_SLOTS
         # The page this side started to each peer, until it ends. Its entry in
         # `classic_connections` is this side's own page while the page is here, and a link after.
         self._paging: dict[hci.Address, asyncio.TimerHandle] = {}
@@ -210,6 +268,38 @@ class Controller(BumbleController):
         # The time each link lost contact, on the loop's clock, and the timer it falls by.
         self._lost_contact: dict[hci.Address, float] = {}
         self._supervision: dict[hci.Address, asyncio.TimerHandle] = {}
+
+    def _defaults(self) -> None:
+        """The values the specification gives the host's settings, which `HCI_Reset` brings back
+        (Vol 4, Part E, 7.3.2); where it gives none, the ones the controller starts with."""
+        # Bumble's, not the specification's (7.3.1 gives an event mask of 0x00001FFFFFFFFFFF):
+        # its controller reads neither mask, but a host may read the name back.
+        self.event_mask = BumbleController.event_mask
+        self.event_mask_page_2 = BumbleController.event_mask_page_2
+        self.local_name = BumbleController.local_name
+        self.class_of_device = 0
+        self.extended_inquiry_response = bytes(240)
+        self.inquiry_mode = 0
+        self.page_timeout = PAGE_TIMEOUT_SLOTS
+        self.classic_scan_enable = 0
+        # The inquiry access codes this side's inquiry scan answers (7.3.45).
+        self.iac_laps = [GIAC]
+        # Kept, and change nothing: the link has no hold or sniff mode, and a role switch is
+        # allowed or not as `Create_Connection` and Bumble's `classic_allow_role_switch` say.
+        self.default_link_policy = 0
+        self.link_policies: dict[int, int] = {}
+        # Kept, and change nothing: the link has no radio, so no scan has a timing or a type.
+        self.inquiry_scan_activity = (0x1000, 0x0012)
+        self.page_scan_activity = (0x0800, 0x0012)
+        self.inquiry_scan_type = 0
+        self.page_scan_type = 0
+        # The host's buffer for ACL data from this side, from `Host_Buffer_Size` (7.3.39): until it
+        # says, the host takes any length.
+        self.host_acl_length: int | None = None
+        self.lmp_features &= ~(
+            hci.LmpFeatureMask.SECURE_SIMPLE_PAIRING_HOST_SUPPORT
+            | hci.LmpFeatureMask.LE_SUPPORTED_HOST
+        )
 
     def random_bytes(self, n: int) -> bytes:
         return self._random.randbytes(n)
@@ -247,6 +337,318 @@ class Controller(BumbleController):
         # Secure Connections over BR/EDR is not modelled; legacy pairing and Bumble's SSP are.
         return hci.HCI_StatusReturnParameters(hci.HCI_ErrorCode.SUCCESS)
 
+    # What the controller says of itself.
+
+    def on_hci_read_local_extended_features_command(
+        self, command: hci.HCI_Read_Local_Extended_Features_Command
+    ) -> hci.HCI_Read_Local_Extended_Features_ReturnParameters:
+        # Bumble's handler gives empty features for the page after the last, which is not one.
+        if command.page_number > self.lmp_features_max_page_number:
+            return hci.HCI_Read_Local_Extended_Features_ReturnParameters(
+                status=hci.HCI_ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR,
+                page_number=command.page_number,
+                maximum_page_number=self.lmp_features_max_page_number,
+                extended_lmp_features=bytes(8),
+            )
+        return super().on_hci_read_local_extended_features_command(command)
+
+    # Settings that change nothing on this link, which has no radio: no scan has a timing or a
+    # type, and no link a hold or a sniff mode.
+
+    def on_hci_write_default_link_policy_settings_command(
+        self, command: hci.HCI_Write_Default_Link_Policy_Settings_Command
+    ) -> hci.HCI_StatusReturnParameters:
+        """Vol 4, Part E, 7.2.12: the policy of the links to come, kept."""
+        self.default_link_policy = command.default_link_policy_settings
+        return hci.HCI_StatusReturnParameters(hci.HCI_ErrorCode.SUCCESS)
+
+    def on_hci_write_link_policy_settings_command(
+        self, command: hci.HCI_Write_Link_Policy_Settings_Command
+    ) -> hci.HCI_StatusAndConnectionHandleReturnParameters:
+        """7.2.10: one link's policy, kept."""
+        handle = command.connection_handle
+        if self._link_of(handle) is None:
+            status = hci.HCI_ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR
+        else:
+            status = hci.HCI_ErrorCode.SUCCESS
+            self.link_policies[handle] = command.link_policy_settings
+        return hci.HCI_StatusAndConnectionHandleReturnParameters(status, handle)
+
+    def on_hci_write_inquiry_scan_activity_command(
+        self, command: hci.HCI_Write_Inquiry_Scan_Activity_Command
+    ) -> hci.HCI_StatusReturnParameters:
+        """7.3.22: kept."""
+        self.inquiry_scan_activity = (command.inquiry_scan_interval, command.inquiry_scan_window)
+        return hci.HCI_StatusReturnParameters(hci.HCI_ErrorCode.SUCCESS)
+
+    def on_hci_write_page_scan_activity_command(
+        self, command: hci.HCI_Write_Page_Scan_Activity_Command
+    ) -> hci.HCI_StatusReturnParameters:
+        """7.3.20: kept."""
+        self.page_scan_activity = (command.page_scan_interval, command.page_scan_window)
+        return hci.HCI_StatusReturnParameters(hci.HCI_ErrorCode.SUCCESS)
+
+    def on_hci_write_inquiry_scan_type_command(
+        self, command: hci.HCI_Write_Inquiry_Scan_Type_Command
+    ) -> hci.HCI_StatusReturnParameters:
+        """7.3.48: kept."""
+        self.inquiry_scan_type = command.scan_type
+        return hci.HCI_StatusReturnParameters(hci.HCI_ErrorCode.SUCCESS)
+
+    def on_hci_write_page_scan_type_command(
+        self, command: hci.HCI_Write_Page_Scan_Type_Command
+    ) -> hci.HCI_StatusReturnParameters:
+        """7.3.52: kept."""
+        self.page_scan_type = command.page_scan_type
+        return hci.HCI_StatusReturnParameters(hci.HCI_ErrorCode.SUCCESS)
+
+    def on_hci_set_event_filter_command(
+        self, command: hci.HCI_Set_Event_Filter_Command
+    ) -> hci.HCI_StatusReturnParameters:
+        """7.3.3: the settings that filter nothing are taken, as no filter is set until a host
+        sets one; one that would filter is refused with `UNSUPPORTED_FEATURE_OR_PARAMETER_VALUE`,
+        since no event is filtered here. Bluedroid's discovery fails unless the first is taken."""
+        condition = bytes(command.filter_condition)
+        filters_nothing = command.filter_type == CLEAR_ALL_FILTERS or (
+            command.filter_type == INQUIRY_RESULT_FILTER and condition[:1] == bytes([ALL_DEVICES])
+        )
+        filters_nothing |= command.filter_type == CONNECTION_SETUP_FILTER and condition == bytes(
+            [ALL_DEVICES, NO_AUTO_ACCEPT]
+        )
+        if filters_nothing:
+            return hci.HCI_StatusReturnParameters(hci.HCI_ErrorCode.SUCCESS)
+        return hci.HCI_StatusReturnParameters(
+            hci.HCI_ErrorCode.UNSUPPORTED_FEATURE_OR_PARAMETER_VALUE_ERROR
+        )
+
+    def on_hci_read_number_of_supported_iac_command(
+        self, _command: hci.HCI_Read_Number_Of_Supported_IAC_Command
+    ) -> hci.HCI_Read_Number_Of_Supported_IAC_ReturnParameters:
+        """7.3.43: as many as `Write_Current_IAC_LAP` takes, every one of `IAC_LAPS`."""
+        return hci.HCI_Read_Number_Of_Supported_IAC_ReturnParameters(
+            status=hci.HCI_ErrorCode.SUCCESS, num_support_iac=len(IAC_LAPS)
+        )
+
+    def on_hci_read_current_iac_lap_command(
+        self, _command: hci.HCI_Read_Current_IAC_LAP_Command
+    ) -> hci.HCI_Read_Current_IAC_LAP_ReturnParameters:
+        """7.3.44: the codes `iac_laps` holds, 3 bytes each."""
+        return hci.HCI_Read_Current_IAC_LAP_ReturnParameters(
+            status=hci.HCI_ErrorCode.SUCCESS,
+            num_support_iac=len(self.iac_laps),
+            iac_lap=b"".join(lap.to_bytes(3, "little") for lap in self.iac_laps),
+        )
+
+    def on_hci_write_current_iac_lap_command(self, command: hci.HCI_Command) -> None:
+        """7.3.45: the inquiry access codes this side's inquiry scan answers from now on, which
+        an inquiry's `LAP` must be among. Bumble 0.0.236 has no class for the command, so its
+        `Command_Complete` is sent here."""
+        parameters = bytes(command.parameters)
+        count = parameters[0] if parameters else 0
+        laps = [
+            int.from_bytes(parameters[at : at + 3], "little")
+            for at in range(1, len(parameters) - 2, 3)
+        ]
+        if (
+            not 1 <= count <= 0x40
+            or len(parameters) != 1 + 3 * count
+            or not all(lap in IAC_LAPS for lap in laps)
+        ):
+            status = hci.HCI_ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR
+        else:
+            status = hci.HCI_ErrorCode.SUCCESS
+            self.iac_laps = laps
+        self._command_complete(command, status)
+
+    # Flow control of the host.
+
+    def on_hci_host_buffer_size_command(
+        self, command: hci.HCI_Host_Buffer_Size_Command
+    ) -> hci.HCI_StatusReturnParameters:
+        """7.3.39: this side cuts the ACL data it sends the host to the host's packet length."""
+        length = command.host_acl_data_packet_length
+        self.host_acl_length = length if length > 0 else None
+        return hci.HCI_StatusReturnParameters(hci.HCI_ErrorCode.SUCCESS)
+
+    def on_hci_host_number_of_completed_packets_command(self, command: hci.HCI_Command) -> None:
+        """7.3.40: the host frees its buffers. No event comes of it; this side does not hold its
+        data back for the host's count of buffers (`Host_Total_Num_ACL_Data_Packets`)."""
+
+    # The link: commands about one link, answered by this side's link manager.
+
+    def on_hci_change_connection_packet_type_command(
+        self, command: hci.HCI_Change_Connection_Packet_Type_Command
+    ) -> None:
+        """7.1.14: the packet types are kept by no one, since the link carries data whole, and
+        `Connection_Packet_Type_Changed` (7.7.29) follows at once."""
+        connection = self._linked_command(command.connection_handle, command.op_code)
+        if connection is not None:
+            self.send_hci_packet(
+                hci.HCI_Connection_Packet_Type_Changed_Event(
+                    status=hci.HCI_ErrorCode.SUCCESS,
+                    connection_handle=connection.handle,
+                    packet_type=command.packet_type,
+                )
+            )
+
+    def on_hci_read_clock_offset_command(self, command: hci.HCI_Read_Clock_Offset_Command) -> None:
+        """7.1.24: the offset is 0, as in an inquiry's results: the link has no clocks."""
+        connection = self._linked_command(command.connection_handle, command.op_code)
+        if connection is not None:
+            self.send_hci_packet(
+                hci.HCI_Read_Clock_Offset_Complete_Event(
+                    status=hci.HCI_ErrorCode.SUCCESS,
+                    connection_handle=connection.handle,
+                    clock_offset=0,
+                )
+            )
+
+    def on_hci_read_remote_version_information_command(
+        self, command: hci.HCI_Read_Remote_Version_Information_Command
+    ) -> None:
+        """7.1.23: the version the peer's controller has, what `LMP_version_req` would tell, read
+        from it on the link. A peer that cannot be reached does not answer: the link falls at its
+        timeout."""
+        connection = self._linked_command(command.connection_handle, command.op_code)
+        if connection is None:
+            return
+        peer = connection.peer_address
+        other = self.link.find_classic_controller(peer)
+        if other is None or not self.link.reaches(peer, self.public_address):
+            return
+        self.send_hci_packet(
+            hci.HCI_Read_Remote_Version_Information_Complete_Event(
+                status=hci.HCI_ErrorCode.SUCCESS,
+                connection_handle=connection.handle,
+                version=other.lmp_version,
+                manufacturer_name=other.manufacturer_company_identifier,
+                subversion=other.lmp_subversion,
+            )
+        )
+
+    def _link_of(self, handle: int) -> Connection | None:
+        """The link with `handle`, if there is one: not a page, whose entry has handle 0."""
+        connection = self.find_classic_connection_by_handle(handle)
+        if connection is None or not self._has_link(connection.peer_address):
+            return None
+        return connection
+
+    def _linked_command(self, handle: int, op_code: int) -> Connection | None:
+        """The command status of a command about the link with `handle`, and the link, or
+        `UNKNOWN_CONNECTION_IDENTIFIER` and `None` when there is none."""
+        connection = self._link_of(handle)
+        if connection is None:
+            self._send_hci_command_status(
+                hci.HCI_ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR, op_code
+            )
+            return None
+        self._send_hci_command_status(hci.HCI_COMMAND_STATUS_PENDING, op_code)
+        return connection
+
+    # What the controller does not know.
+
+    def on_hci_command(  # type: ignore[override]
+        self, command: hci.HCI_Command
+    ) -> hci.HCI_StatusReturnParameters | None:
+        """A command with no handler (Vol 4, Part E, 4.5): `UNKNOWN_HCI_COMMAND_ERROR`, in the
+        event the host waits for, `Command_Status` for a command that has one before its
+        completion, `Command_Complete` for any other, also one Bumble has no class for. 4.5
+        leaves the event to the vendor; Bumble 0.0.236 answers nothing to the first kind, and the
+        host waits for ever. Kept in `unknown_commands`."""
+        loop = asyncio.get_running_loop()
+        self.unknown_commands.append(
+            UnknownCommand(round(loop.time() * 1e9), command.op_code, command.name)
+        )
+        status = hci.HCI_ErrorCode.UNKNOWN_HCI_COMMAND_ERROR
+        if isinstance(command, hci.HCI_SyncCommand):
+            return hci.HCI_StatusReturnParameters(status)
+        if isinstance(command, hci.HCI_AsyncCommand):
+            self._send_hci_command_status(status, command.op_code)
+        else:
+            self._command_complete(command, status)
+        return None
+
+    def _command_complete(self, command: hci.HCI_Command, status: hci.HCI_ErrorCode) -> None:
+        """`Command_Complete` with only a status, for a command Bumble has no class for, which
+        its dispatch does not answer."""
+        self.send_hci_packet(
+            hci.HCI_Command_Complete_Event(
+                num_hci_command_packets=1,
+                command_opcode=command.op_code,
+                return_parameters=hci.HCI_StatusReturnParameters(status),
+            )
+        )
+
+    # Reset.
+
+    def on_hci_reset_command(
+        self, command: hci.HCI_Reset_Command
+    ) -> hci.HCI_StatusReturnParameters:
+        """Vol 4, Part E, 7.3.2: "the current operational state will be lost, the Controller will
+        enter standby mode and the Controller will automatically revert to the default values".
+        The radio stops for a moment: each peer loses contact, and its end falls at its
+        supervision timeout, as when this device leaves; this side ends what it had under way and
+        lets every link go, as on a power loss. Its host hears nothing of it: it asked for the
+        reset, and the `Command_Complete` is all 7.3.2 gives it. Bumble 0.0.236's own handler keeps
+        everything."""
+        self._restart()
+        self._defaults()
+        return super().on_hci_reset_command(command)
+
+    def _restart(self, back: bool = True) -> None:
+        """The controller starts again, with its host told nothing: every peer loses contact,
+        and this side keeps nothing it held for one, nor any answer its host owed. Without
+        `back` it stays off the air, until `returned`."""
+        host = self.host
+        self.host = None
+        try:
+            present = self.link.present(self.public_address)
+            if present:
+                self.left()
+            self.power_lost()
+            if present and back:
+                self.returned()
+        finally:
+            self.host = host
+        self._heard.clear()
+        self._answers_due.clear()
+        self._late_answers.clear()
+        self._security.clear()
+        self._encryption.clear()
+        self._supervision_timeouts.clear()
+        self._lost_contact.clear()
+        for timer in self._supervision.values():
+            timer.cancel()
+        self._supervision.clear()
+        # What the link manager waited for from a peer: an answer that comes now finds nothing.
+        self.classic_pending_commands.clear()
+        self.sco_links.clear()
+
+    # ACL data for the host, cut to its buffer.
+
+    def on_link_acl_data(
+        self, sender_address: hci.Address, transport: core.PhysicalTransport, data: bytes
+    ) -> None:
+        """An L2CAP PDU from `sender_address`, sent to the host in packets of at most the host's
+        `Host_Buffer_Size` and `acl_to_host`, which 7.3.39 requires: Bumble sends it whole."""
+        connection = self.classic_connections.get(sender_address)
+        if transport != core.PhysicalTransport.BR_EDR or connection is None:
+            super().on_link_acl_data(sender_address, transport, data)
+            return
+        bounds = [b for b in (self.host_acl_length, self.acl_to_host) if b is not None]
+        size = min(bounds) if bounds else max(len(data), 1)
+        for at in range(0, max(len(data), 1), size):
+            fragment = data[at : at + size]
+            self.send_hci_packet(
+                hci.HCI_AclDataPacket(
+                    connection.handle,
+                    FIRST_FLUSHABLE if at == 0 else CONTINUING,
+                    0,
+                    len(fragment),
+                    fragment,
+                )
+            )
+
     # Inquiry.
 
     def on_hci_inquiry_command(self, command: hci.HCI_Inquiry_Command) -> None:
@@ -269,6 +671,7 @@ class Controller(BumbleController):
                 if c is not self
                 and isinstance(c, Controller)
                 and c.classic_scan_enable & INQUIRY_SCAN
+                and command.lap in c.iac_laps
                 and self.link.present(c.public_address)
             ),
             key=lambda c: bytes(reversed(bytes(c.public_address))),

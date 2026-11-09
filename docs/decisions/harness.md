@@ -1506,19 +1506,24 @@ received.
 
 ## The SPP peer opens its channel to one device, on a link that device authenticated
 
-Status: decided (#33)
+Status: decided (#33, #34)
 
 A second device that asks for the channel while one holds it, or has been given it, is refused,
 as a device with one serial port refuses it. Unless the test says `secure=False`, the channel
 opens only on a link the device has authenticated, with the PIN or a key, which the peer checks
-when the device asks for the channel; the peer does not start the pairing itself. A firmware that
-never pairs then fails against the peer, as it would against a device that requires pairing,
-instead of passing. Encryption is not required: what a firmware that never pairs lacks is the
-authentication, and whether ESP-IDF's Bluedroid encrypts a link to a device without Secure Simple
-Pairing when SPP asks for `ESP_SPP_SEC_AUTHENTICATE` is not known; requiring it could fail
-firmware that a real device accepts. #34 can find out on `bt_spp_initiator`.
+when the device opens the channel, at its RFCOMM SABM; who holds the channel is decided earlier,
+when the device asks for it, at its PN. The peer does not start the pairing itself. A firmware
+that never pairs then fails against the peer, as it would against a device that requires pairing,
+instead of passing. (#34) The check was at PN until `bt_spp_initiator` showed Bluedroid's order as
+initiator: PN, then authentication, then SABM, so a device that would have authenticated was
+refused. Encryption is not required: what a firmware that never pairs lacks is the authentication,
+and `bt_spp_initiator`, which asks for `ESP_SPP_SEC_AUTHENTICATE`, sent `Authentication_Requested`,
+a negative link-key reply and the PIN, and no `Set_Connection_Encryption`: the link stayed
+unencrypted (seen on 2026-11-08, ESP-IDF v5.3.6), so requiring encryption would fail firmware that a
+real device without Secure Simple Pairing accepts.
 
-**Rejected:** requiring encryption, for the reason above; giving the channel to the last device
+**Rejected:** the check at PN, for the reason above; requiring encryption, for the reason above;
+giving the channel to the last device
 that asked, because the source's answers to
 the first device would go to the second; opening to any device by default, because a firmware
 that skips pairing would pass a test that a real device fails; and the peer starting
@@ -1603,7 +1608,8 @@ Bluetooth Core 5.4, Vol 4, Part E, 7.1.9, gives the status of `Connection_Comple
 device attempting the connection, which carries the reason, and says only that the local controller
 sends one to its host. Here that one carries the reason as well: it says why no link came, and a
 host's answer to a page that has ended keeps `CONNECTION_TIMEOUT` for a page that went some other
-way. What ESP32's controller reports can be seen behind #34.
+way. What ESP32's controller reports only a real board shows: the `bt` fixture puts this controller
+in its place (#34).
 
 **Rejected:** `SUCCESS` on the rejecting side, because Bumble's host would take it for a link with
 handle 0; and `CONNECTION_TIMEOUT`, because nothing timed out.
@@ -1615,8 +1621,8 @@ handle 0; and `CONNECTION_TIMEOUT`, because nothing timed out.
 Status: postponed (#34)
 
 Vol 4, Part E, 7.1.9 also lets `Reject_Connection_Request` decline a synchronous link. Bumble's host
-does not send it for one, so nothing here asks for it but a command written by hand. It can be seen
-behind #34 whether firmware does.
+does not send it for one, so nothing here asks for it but a command written by hand. Whether
+firmware does can be seen behind the `bt` fixture, once firmware runs there.
 
 
 
@@ -1702,13 +1708,15 @@ page scan, because no test needs one yet, and `peer.device` reaches it meanwhile
 
 ## Connection_Accept_Timeout is postponed
 
-Status: postponed (#34)
+Status: postponed (#166)
 
 The page's timer runs until the target's host accepts, and a target's host has no time limit (Vol 4,
 Part E, 6.7, is not modelled). A host that accepts after the page ended makes a link although the
 pager reported `PAGE_TIMEOUT`, and when the pager has tried again, the first answer connects the
 second page. Bumble's host accepts at the instant it hears, so this takes a slowed host, and firmware
-behind #34 is the first that will be slow: what it needs can be seen then. Until then an answer with
+behind the `bt` fixture is the first that will be slow: what it needs can be seen there, in #166.
+`HCI_Reset`, which Bluedroid sends at every start, clears the entries and the answers owed meanwhile
+([below](#hci_reset-takes-the-controller-off-the-air-for-an-instant)). Until then an answer with
 nothing left to answer changes nothing, and its host gets a failed `Connection_Complete` unless its
 side holds an entry for that address, a link or its own page, which the event would end in the
 host's eyes (#141).
@@ -1758,14 +1766,177 @@ link comes of the acceptance. A plain acceptance at that point still makes a lin
 `LMP_RESPONSE_TIMEOUT`, because the pager is there and answers.
 
 
-## A bt fixture, an HCI tap and a replayed peer are postponed
+## An HCI tap and a replayed peer are postponed
 
-Status: postponed (#33)
+Status: postponed (#33, #34)
 
-The peer is used from Python on an `Air`, and tested with a Bumble device in the ESP32's place,
-because esp32sim has no Classic controller for the guest (plan finding 9, #34). The `bt` fixture,
-the btsnoop tap and the validation with `bt_spp_initiator` come with #34; replaying a recorded SPP
+The `bt` fixture came with #34
+([below](#the-bt-fixture-gives-the-air-and-the-test-makes-its-devices-on-it)). The btsnoop tap of
+the HCI between the firmware and its controller, and the validation with `bt_spp_initiator`, which
+needs esp32sim's pin to have mikroverk/esp32sim#347, are still #34's; replaying a recorded SPP
 exchange needs the matching engine (#20), and plan M8's replayed peer waits for it.
+
+## The firmware's controller is a controller of the air, with the guest's features and buffer
+
+Status: decided (#34)
+
+The controller the firmware's Bluedroid talks to through the runner's `--bt` is a
+`GuestController`, an esp32tl `Controller` on the air of the test's devices: it pages, pairs and
+leaves as their controllers do, so a device does not tell the board from another device on the air.
+What Bluedroid needs of a controller and Bumble 0.0.236 lacks goes into `Controller`, so the
+devices' controllers have it too: the commands with no handler in Bumble, an answer to an unknown
+command, `HCI_Reset`, ACL data cut to the host's buffer, page 0 with the BR/EDR features. Only what
+is the classic ESP32's stays in `GuestController`: three pages of features, no LE, and an ACL buffer
+of 491 bytes, what esp32sim's VHCI carries in a packet of 496 less the 5 of its header, both ways.
+Bumble's 27 bytes gave about 21 kbit/s of SPP on the emulator, 491 about 259 kbit/s.
+
+**Rejected:** esp32sim's own virtual controller, which is BLE only; a controller of the guest's own
+beside the air, because the peers would then need a second link to reach it; Bumble's controller
+for the guest with only the guest's patches, because a fix the firmware needs would then be missing
+on the devices, where the same host commands reach it from Bumble's host; and copying what the
+classic ESP32's controller reports, which is not known yet: the values are esp32tl's, marked
+TODO(owner) where the ESP32's would differ.
+
+## The air of the bt fixture is moved by the board's link alone
+
+Status: decided (#34)
+
+On the emulator the air's time is the board's, and the run goes from turn to turn only while the
+test waits on the board: an `Air(board_clock=True)` is moved by `follow`, which the `Bluetooth`
+interface calls at every packet and every turn, and its `advance`, `wait` and `run` raise `AirError`
+with a message that names `board.wait()` and `board.wait_until()`. The test reaches the air from its
+own thread, as it reaches the Wi-Fi network, while the board holds the link in a turn, or before
+the first one: what it does there, a device made, switched off or given another RSSI, happens at
+the board's current instant, which the air is at, and goes out in that turn. The air's calls hold a
+lock, so that the link's thread, at the first turn, and the test's do not meet on it.
+
+**Rejected:** letting `air.wait` wait on the board, because the air would then have two ways to
+move the same clock, and a test written for an `Air` of its own would run differently on a board;
+and a `bt.wait`, for the same reason: the board's waits are the test's clock.
+
+## An answer of the firmware's controller goes out 10 µs after it is made, and never before its turn
+
+Status: decided (#34)
+
+What the firmware's controller sends its host goes out `LATENCY_NS`, 10 µs, after the instant it
+made it, which is also the interface's `latency`: within the microseconds a controller takes to
+answer a command, and far below the 10 ms the host sleeps between two polls of the VHCI when it has
+nothing to read, so the host reads the answer at its next poll. By rule 1 of the protocol the turn's
+block point is at most the first unacknowledged event plus the latency, and every event of the turn
+is at or after that event, so an answer is never due before the turn it goes out in; one that would
+be is a `BluetoothError`, which fails the link.
+
+**Rejected:** a latency of 0, because every packet would then take a turn of its own; and stamping
+an answer due before the turn at the turn's time, as the spike did, because it would hide a runner
+or a harness that broke the rule.
+
+## HCI_Reset takes the controller off the air for an instant
+
+Status: decided (#34)
+
+Bumble 0.0.236's `HCI_Reset` keeps everything, so after a reboot of the firmware its pages to the
+peer got `CONNECTION_ALREADY_EXISTS`, and an answer its host owed before the reboot took the answer
+to the next page. Bluetooth Core 5.4, Vol 4, Part E, 7.3.2 says "the current operational state will
+be lost, the Controller will enter standby mode and the Controller will automatically revert to the
+default values". The controller now does that as a device that leaves and comes back at the same
+instant: each peer loses contact and its end falls at its supervision timeout, this side ends what
+it had under way and holds nothing, the answers owed are gone, and the host's settings are back at
+their defaults. Its host hears nothing but the `Command_Complete`, which is all 7.3.2 gives it. A
+chip reset and the board's supply do the same to the firmware's controller, without the command: the
+controller is part of the chip. For `board.reset()` the backend restarts it in the held turn, before
+it sends the reset, so that nothing made for the old host goes out with the reset to reach the new
+one.
+
+**Rejected:** clearing the controller's state alone, because a peer would keep a link to a
+controller that forgot it, and what it sent would reach no entry; an `LMP_detach` to each peer,
+because a controller that resets does not send one, and the peer's link falls at its timeout as
+after a power loss; and `Disconnection_Complete` to the host, which asked for the reset.
+
+## A command the controller does not know is answered in the event its host waits for
+
+Status: decided (#34)
+
+Vol 4, Part E, 4.5: "If the Controller does not support an issued command, it shall return the
+error code Unknown HCI command (0x01) in the Status parameter of either an HCI_Command_Complete
+event or an HCI_Command_Status event; which event is used is vendor-specific." Bumble 0.0.236
+answers nothing to an asynchronous command it has no handler for, and the host waits for ever. The
+controller answers `Command_Status` for a command the specification answers so before its
+completion, and `Command_Complete` for any other, also one Bumble has no class for, and keeps each
+in `unknown_commands`, which the report shows.
+
+**Rejected:** `Command_Complete` for all, which 4.5 allows too, because a host that waits for a
+status would wait on; and failing the run on an unknown command, because a real controller answers
+and the firmware goes on.
+
+## A setting that would change what is not modelled is refused, one that changes nothing is taken
+
+Status: decided (#34)
+
+Bluedroid writes settings Bumble has no handler for: the link policies, the scan activities and
+types, the event filter, the inquiry access codes. The link has no radio, so the scan activities and
+types and the link policies change nothing: they are kept and answered with `SUCCESS`. The event
+filter is taken when it filters nothing, as Bluedroid's clearing of the inquiry filter does (its
+discovery fails without it), and refused with `UNSUPPORTED_FEATURE_OR_PARAMETER_VALUE` when it would
+filter, since no event is filtered here. The inquiry access codes are modelled: an inquiry is
+answered only by a device that scans for its code.
+
+**Rejected:** taking every setting, because a firmware that filters inquiry results by class would
+then get results its filter excludes, and a test would not see why.
+
+## Controller-to-host flow control is postponed
+
+Status: postponed (#34)
+
+Bluedroid turns controller-to-host flow control on and gives its buffers with `Host_Buffer_Size`,
+20 ACL packets of 1691 bytes on `bt_spp_initiator`. The controller cuts what it sends to the
+packet length, as 7.3.39 requires, and takes `Host_Number_Of_Completed_Packets`, which gets no
+event (7.3.40), but does not hold data back when the host's buffers are all in use: esp32sim's VHCI
+delivers one packet per poll of the host anyway. A firmware that relies on it can be seen behind the
+`bt` fixture.
+
+## The bt fixture gives the air, and the test makes its devices on it
+
+Status: decided (#34)
+
+`bt` is the chip's Bluetooth, `board.bluetooth`, as `wifi` is its station: the test makes its
+devices with `SppPeer(bt.air, ...)` and `BluetoothDevice(bt.air, ...)`, the same calls as on an
+`Air` of its own. Asking for it is what makes the run forward the firmware's HCI (`--bt` with the
+application's ELF), so it comes before power-on, as an access point does. The serial backend's
+capability declaration gives no `bluetooth`, so the fixture skips there.
+
+**Rejected:** factories on the fixture, `bt.spp_peer(...)`, because they would repeat the
+devices' arguments; and `--bt` on every run, because a firmware without Bluetooth has no
+`esp_bt_controller_init`, and the runner refuses its ELF.
+
+## The SPP peer has a service name and offers basic mode only
+
+Status: decided (#34)
+
+ESP-IDF's `bt_spp_initiator` prints the service name it finds in the SDP record with `%s`, and
+newlib's `printf` faults on the NULL of a record without one, so the peer's record names its
+service, `Serial Port` unless the test gives another or `None`. Bumble's default L2CAP features name
+Enhanced Retransmission Mode, which its RFCOMM server, in basic mode, does not take: it disconnects
+when Bluedroid asks for it. The peer's devices name fixed channels and the FCS option only, and
+Bluedroid stays in basic mode.
+
+**Rejected:** no name by default, because the firmware a test is most likely to start from would
+fault; and Enhanced Retransmission Mode in the peer, which is Bumble's RFCOMM server's to do.
+
+## The firmware's controller does not follow a deep sleep or a disabled controller
+
+Status: postponed (#34)
+
+On a real chip the radio stops in a deep sleep and after `esp_bt_controller_disable`, and a peer's
+link loses contact there. The runner sends nothing at either, nor at `esp_bt_controller_deinit`,
+which resets esp32sim's VHCI session: the harness knows of a deep sleep only at the wake, which is
+a reset. The firmware's controller therefore stays on the air until the next chip reset, its
+scans and links as they were. A message from the runner for each would be needed, a change of the
+runner and the protocol; the first test that depends on what a peer sees during a sleep or after
+`disable` is what would bring that message.
+
+**Rejected, for now:** taking the controller off the air when the host stops polling the VHCI,
+because a host idle for a while polls rarely too, and the controller would leave the air under a
+firmware that only waits.
 
 ## bumble is a dependency of esp32tl, pinned exactly
 
