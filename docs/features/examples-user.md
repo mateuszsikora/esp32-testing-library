@@ -294,6 +294,52 @@ small timing tolerances. The harness's TLS server repeats its bytes, so two runs
 the same times; `make determinism` runs the tracker over TLS and checks that
 ([testing](../guides/testing.md#determinism)).
 
+## Periodic wake
+
+Read [the firmware](../../examples/periodic_wake/main/main.c) and
+[its tests](../../examples/periodic_wake/tests/test_periodic_wake.py). The chip spends its time in
+deep sleep and wakes on its RTC timer every 15 minutes. At every boot it counts the wake in RTC
+memory, pulses GPIO18 high for 20 ms, prints the count and sleeps again:
+
+```sh
+firmware/build.sh --examples periodic_wake
+.venv/bin/pytest examples/periodic_wake/tests
+```
+
+The board profile is the example's own file,
+[`tests/boards/periodic-wake.toml`](../../examples/periodic_wake/tests/boards/periodic-wake.toml),
+which the tests select with `board_profile(path="boards/periodic-wake.toml")`, as a project of
+its own does ([a project-local profile](board-profiles-user.md#a-project-local-profile)):
+
+| Connection | ESP32 side |
+|---|---|
+| Wake pulse | GPIO18, high for 20 ms at every boot |
+| Console | UART0, the default ESP-IDF console |
+
+GPIO18 can drive a logic input, or an LED through a suitable resistor. Between pulses the pin is
+low while the chip is awake and undriven while it sleeps. The tests observe it with
+`board.lines.output("wake.pulse")`.
+
+After its pulse the firmware prints one line, `periodic_wake: wakes=N`. `N` is 0 at a power-on or
+a reset and goes up by one at every wake from the timer: RTC slow memory keeps the count through
+a deep sleep, and loses it with the power. The sleep is a fixed 15 minutes after the pulse
+(`esp_sleep_enable_timer_wakeup`, then `esp_deep_sleep_start`), so each wake comes a little over
+15 minutes after the one before: by the boot and the pulse, about 42 ms, and on esp32sim by a
+sleep about 0.025 % longer than the firmware asks, 0.22 s. The tests hold each interval to 15
+minutes and at most one second more (`TOLERANCE = seconds(1)`), and each pulse to 20 ms and at most
+1 ms more.
+
+`board.wait_for_wake(within=INTERVAL + TOLERANCE)` runs the board through each sleep to the wake
+([waking from deep sleep](pytest-plugin-user.md#waking-from-deep-sleep)); the count on the console
+comes within `BOOT_TIME = seconds(0.1)` after it. The tests demonstrate:
+
+- The pin pulses every 15 minutes: four pulses, from power-on and three wakes, and the count from
+  0 to 3.
+- A day of wakes takes seconds of wall time: 95 wakes, 96 pulses, in under 24 hours of the board's
+  time and under 60 s of wall time (about 7 s on an M2 Pro), every interval within the tolerance.
+- The count survives deep sleep, not a reset (`board.reset()` five minutes into a sleep starts it
+  at 0 again) nor a power cycle.
+
 ## Adding an example
 
 Add `examples/<name>/CMakeLists.txt`, `main/`, `sdkconfig.defaults` and `tests/test_*.py`.

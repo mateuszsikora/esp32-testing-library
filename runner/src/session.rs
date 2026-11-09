@@ -146,6 +146,18 @@ pub trait Guest {
     fn flash(&self) -> Cow<'_, [u8]> {
         Cow::Borrowed(&[])
     }
+    // Deep sleep: the defaults are a chip that never sleeps.
+
+    /// Whether the chip is in a deep sleep the run loop steps through: its digital domain off,
+    /// nothing running in it, so that nothing but its wake can happen there, and nothing in the
+    /// RTC that would act later in a long step than in the chip's own rounds.
+    fn sleeps_through(&self) -> bool {
+        false
+    }
+    /// While `sleeps_through`: the bus's clock moves on towards `cycle` without running the cores,
+    /// in long steps, and stops short of the RTC timer's alarm, so that esp32sim's own rounds wake
+    /// the chip at its tick. Does nothing otherwise.
+    fn sleep_until(&mut self, _cycle: u64) {}
 }
 
 /// Why a UART loses a received byte, as the chip has it.
@@ -172,6 +184,45 @@ impl RxLoss {
 const CACHE_RAM: u32 = 0x4007_0000;
 const RTC_FAST: u32 = 0x3ff8_0000;
 const RTC_SLOW: u32 = 0x5000_0000;
+
+/// RTC_CNTL, as esp32sim keeps it: offsets into its register RAM (`esp32/src/periph.rs`,
+/// `ClassicRtc`), which keeps WAKEUP_STATE, at 0x38 on the bus, at 0x34. The registers are ESP-IDF
+/// v5.3's `components/soc/esp32/register/soc/rtc_cntl_reg.h`.
+mod rtc {
+    /// SLP_TIMER0 and SLP_TIMER1: the sleep timer's target, 48 bits of RTC slow ticks.
+    pub const SLP_TIMER0: u32 = 0x04;
+    pub const SLP_TIMER1: u32 = 0x08;
+    /// STATE0: SLEEP_EN, bit 31, set to sleep; esp32sim clears it at the wake.
+    pub const STATE0: u32 = 0x18;
+    /// WAKEUP_STATE, whose WAKEUP_ENA, `[21:11]`, has RTC_TIMER_TRIG_EN as its bit 3.
+    pub const WAKEUP_ENA: u32 = 0x34;
+    pub const TIMER_TRIG_EN: u32 = 1 << (11 + 3);
+    /// DIG_PWC: DG_WRAP_PD_EN, bit 31, the digital domain powered down, which makes the sleep a
+    /// deep one (`esp32/src/sleep.rs`, `enter_deep_sleep`).
+    pub const DIG_PWC: u32 = 0x84;
+    /// WDTCONFIG0: the RTC watchdog, enabled with bit 31.
+    pub const WDTCONFIG0: u32 = 0x8c;
+    /// Bus cycles in one RTC slow tick: the divider of esp32sim's `RtcSlow` clock domain, 1600 at
+    /// the pin, for 150 kHz (`esp32/src/periph.rs`, `device_set!`). A pin without the domain fails
+    /// the build here.
+    pub const SLOW_TICK: u64 = {
+        let clocks = esp32::periph::Peripherals::CLOCKS;
+        let mut i = 0;
+        loop {
+            if matches!(clocks[i].0, emu_core::ClockDomain::RtcSlow) {
+                break clocks[i].1;
+            }
+            i += 1;
+        }
+    };
+}
+/// How many RTC slow ticks before the alarm `sleep_until` stops: esp32sim's clock tree carries a
+/// phase between bus cycles and slow ticks that the runner cannot read, so the last ticks go
+/// through esp32sim's own idle rounds, which wake the chip at the tick its alarm is due.
+const WAKE_MARGIN_TICKS: u64 = 2;
+/// The longest step of `sleep_until`, in bus cycles, about 9 s: `Bus::tick` takes a `u32` of CPU
+/// cycles, and the CPU's clock is at most the bus's.
+const SLEEP_STEP: u64 = 1 << 31;
 
 impl Guest for esp32::Machine {
     fn cycles(&self) -> u64 {
@@ -309,6 +360,43 @@ impl Guest for esp32::Machine {
         let mut flash = self.bus.flash.to_vec();
         flash[*offset..*offset + code.len()].copy_from_slice(code);
         Cow::Owned(flash)
+    }
+    fn sleeps_through(&self) -> bool {
+        // what esp32sim's `enter_deep_sleep` asks of the RTC registers, and what its
+        // `peripheral_event` does to the cores then (`esp32/src/soc.rs`); a reset not yet taken
+        // ends the sleep, and the RTC watchdog counts through it, so a stage due in a long step
+        // would fire at the step's end, up to 9 s late
+        let rtc = &self.bus.periph.rtc.0;
+        rtc.ram.read(rtc::STATE0) & 1 << 31 != 0
+            && rtc.ram.read(rtc::DIG_PWC) & 1 << 31 != 0
+            && self.cores.iter().all(|c| c.waiting && c.intenable == 0)
+            && !rtc.sw_reset
+            && rtc.ram.read(rtc::WDTCONFIG0) & 1 << 31 == 0
+    }
+    fn sleep_until(&mut self, cycle: u64) {
+        use emu_core::Bus;
+        while self.sleeps_through() {
+            let rtc = &self.bus.periph.rtc.0;
+            let mut stop = cycle;
+            if rtc.ram.read(rtc::WAKEUP_ENA) & rtc::TIMER_TRIG_EN != 0 {
+                let target = u64::from(rtc.ram.read(rtc::SLP_TIMER1) & 0xffff) << 32
+                    | u64::from(rtc.ram.read(rtc::SLP_TIMER0));
+                // a target of 0 was never written, and wakes nothing (`sleep_ticks_left`)
+                if target != 0 {
+                    let left = target.saturating_sub(rtc.slow_ticks);
+                    if left <= WAKE_MARGIN_TICKS {
+                        return;
+                    }
+                    stop = stop.min(self.bus.cycles + (left - WAKE_MARGIN_TICKS) * rtc::SLOW_TICK);
+                }
+            }
+            if self.bus.cycles >= stop {
+                return;
+            }
+            let step = (stop - self.bus.cycles).min(SLEEP_STEP);
+            let cpu = SocBus::cpu_cycles_for_bus(&self.bus, step);
+            Bus::tick(&mut self.bus, cpu as u32);
+        }
     }
 }
 
@@ -592,7 +680,14 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                 continue;
             }
             self.start_pacing(now);
-            match self.guest.run_until(self.slice_end(now)) {
+            let end = self.slice_end(now);
+            if self.skips_sleep() {
+                self.guest.sleep_until(end);
+                if self.guest.cycles() >= end {
+                    continue;
+                }
+            }
+            match self.guest.run_until(end) {
                 Stop::Halted => {}
                 Stop::SwReset => {
                     // what the guest did before the reset goes out before it
@@ -738,6 +833,12 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
         Ok(())
     }
 
+    /// Whether the run skips a deep sleep in long steps: not under `--realtime`, which paces the
+    /// sleep to wall time like any other stretch of the run.
+    fn skips_sleep(&self) -> bool {
+        !self.opts.realtime
+    }
+
     /// Where the next slice ends.
     fn slice_end(&self, now: u64) -> u64 {
         let t = ns(now);
@@ -745,13 +846,17 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
         if let Some(b) = self.block_point() {
             end = end.min(cycles(b));
         }
+        // in deep sleep the only event is the wake, which ends the slice at its cycle, and the
+        // routes cannot change: the slice goes on to the next input, turn or end of the run
+        let asleep = !self.off && self.skips_sleep() && self.guest.sleeps_through();
         if self.first_unacked.is_none()
+            && !asleep
             && let Some(latency) = self.latency
         {
             end = end.min(cycles(t.saturating_add(latency)));
         }
         // a slice without the guest takes no wall time, so nothing waits for its end
-        if !self.off {
+        if !self.off && !asleep {
             end = end.min(cycles((t / MS + 1) * MS));
         }
         if let Some((&(t, _), _)) = self.inputs.first_key_value() {

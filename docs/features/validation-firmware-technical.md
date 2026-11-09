@@ -324,7 +324,7 @@ the 4 ms of the wake and the 5 ms by which the measure falls short of the board'
 the chip's RTC running some 200 to 250 ppm slow of the board's time; they grow with the sleep.
 The line's bytes take no time of their own: they are stamped as the firmware writes them
 (`emulated-fifo-write`, [protocol 5.1](../protocol.md#51-hello)). Two sleeps take 42.5 s of the
-board's time, 29 turns of the link and 0.3 s of wall time on an M2 Pro.
+board's time, 29 turns of the link and 0.2 s of wall time on an M2 Pro.
 
 ## `bt_spp_initiator`
 

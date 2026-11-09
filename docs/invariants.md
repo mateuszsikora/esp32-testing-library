@@ -392,6 +392,19 @@ that references to its number keep their meaning.
      `tests/test_sd_remount.py::test_a_fault_rule_stays_through_a_change_of_card_until_it_is_cleared`,
      `tests/test_sdspi.py::test_fault_rules_are_the_test_s_and_outlast_a_power_cycle`,
      `tests/test_sdspi.py::test_fault_rules_outlast_a_reset_of_the_chip`
+- **209.** A deep sleep is one slice to its wake: neither the next millisecond nor `latency` ends a
+  slice in it, the runner moves the RTC through it in long steps to short of its alarm, and the wake
+  still comes in esp32sim's first idle round at or after the alarm's tick, through a `reset` at its
+  cycle, with the turn its latency calls for after it. An awake chip is not stepped through; a
+  sleep with the RTC watchdog on, and any sleep under `--realtime`, keeps an awake chip's slice
+  ends.
+  `runner/src/session/tests.rs::a_deep_sleep_is_one_slice_to_its_wake`,
+  `runner/src/session/tests.rs::a_deep_sleep_without_a_wake_goes_on_to_the_block_point`,
+  `runner/src/session/tests.rs::a_deep_sleep_the_run_loop_cannot_step_through_keeps_its_slices`,
+  `runner/src/session/tests.rs::realtime_paces_a_deep_sleep_like_any_other_stretch`,
+  `runner/src/session/tests.rs::on_the_emulator_a_skipped_sleep_wakes_at_the_tick_of_its_alarm`,
+  `runner/src/session/tests.rs::on_the_emulator_only_a_deep_sleep_is_skipped`,
+  `examples/periodic_wake/tests/test_periodic_wake.py::test_a_day_of_wakes_takes_seconds_of_wall_time`
 - **215.** A received byte that finds a UART's 128-byte RX FIFO full is lost: the runner counts and
     warns it as `rxfifo_ovf`, the UART raises `UART_RXFIFO_OVF_INT_RAW`, and the byte never reaches
     the FIFO, not even once the firmware has read it empty; a byte at another baud is lost as a

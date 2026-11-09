@@ -47,7 +47,9 @@ pytestmark = [
   your own wiring, write a TOML file beside the tests and select it with `path=`
   ([a project-local profile](../features/board-profiles-user.md#a-project-local-profile)).
 - Each example has a profile of its own for its assembly: the
-  [GPS alarm clock](../features/examples-user.md#gps-alarm-clock) uses `gps-alarm-clock`.
+  [GPS alarm clock](../features/examples-user.md#gps-alarm-clock) uses `gps-alarm-clock`, and the
+  [periodic wake](../features/examples-user.md#periodic-wake) keeps its own in
+  `tests/boards/periodic-wake.toml`, selected with `path=`.
 
 pytest loads the plugin by itself once esp32tl is installed ([In CI](#in-ci) says how). In your
 `pyproject.toml`, `-ra` shows why a test was skipped, and one filter silences a warning
@@ -133,7 +135,9 @@ Every wait is on the board's clock, and every limit a test states is part of wha
 - A firmware that sleeps between its reports, with a timer wake, is run through each sleep by
   `board.wait_for_wake`, at no cost of turns however long the sleep; then expect what it prints
   once awake. A restart or a watchdog in its place fails the test, and so does a chip that never
-  wakes ([waking from deep sleep](../features/pytest-plugin-user.md#waking-from-deep-sleep)).
+  wakes ([waking from deep sleep](../features/pytest-plugin-user.md#waking-from-deep-sleep)). The
+  [periodic wake](../../examples/periodic_wake/tests/test_periodic_wake.py) runs a day of
+  15-minute sleeps that way in seconds.
 - A `next_*` condition of the network sees only what happens after the call that makes it, so make
   it before the action that causes the event, as `test_reports_on_connect` in the position
   tracker does with `network.broker.next_connection()`

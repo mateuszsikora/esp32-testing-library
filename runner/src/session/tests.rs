@@ -102,6 +102,12 @@ struct FakeGuest {
     /// with the cycle.
     hci: Option<hci::Shared>,
     hci_read: Vec<(u64, Option<Vec<u8>>)>,
+    /// From when to when the chip is in deep sleep, if it ever is, and whether the run loop may
+    /// step through it.
+    sleep: Option<(u64, u64)>,
+    steppable: bool,
+    /// Where each `sleep_until` started and where it left the clock.
+    skips: Vec<(u64, u64)>,
 }
 
 impl FakeGuest {
@@ -129,6 +135,9 @@ impl FakeGuest {
             flash: vec![0xff; 16],
             hci: None,
             hci_read: Vec::new(),
+            sleep: None,
+            steppable: true,
+            skips: Vec::new(),
         }
     }
 
@@ -139,6 +148,19 @@ impl FakeGuest {
 
     fn forwarder(&self) -> hci::Forwarder {
         hci::Forwarder(self.hci.clone().expect("a guest with --bt"))
+    }
+
+    /// In deep sleep from `from` to `to`, where its script should wake it with a reset.
+    fn asleep_between(mut self, from: u64, to: u64) -> Self {
+        self.sleep = Some((from, to));
+        self
+    }
+
+    /// Asleep, but with something in the RTC, as its watchdog, that keeps the sleep from being
+    /// stepped through.
+    fn not_steppable(mut self) -> Self {
+        self.steppable = false;
+        self
     }
 
     fn with_card(mut self, card: &sd_card::Shared) -> Self {
@@ -286,6 +308,20 @@ impl Guest for FakeGuest {
     }
     fn flash(&self) -> Cow<'_, [u8]> {
         Cow::Borrowed(&self.flash)
+    }
+    fn sleeps_through(&self) -> bool {
+        self.steppable
+            && self
+                .sleep
+                .is_some_and(|(from, to)| (from..to).contains(&self.now))
+    }
+    fn sleep_until(&mut self, cycle: u64) {
+        // as esp32sim's machine does: short of the wake, which its own rounds bring
+        if let Some((_, to)) = self.sleep.filter(|_| self.sleeps_through()) {
+            let from = self.now;
+            self.now = cycle.min(to - 1);
+            self.skips.push((from, self.now));
+        }
     }
 }
 
@@ -2059,6 +2095,98 @@ fn on_the_emulator_no_pad_is_driven_after_a_chip_reset() {
     assert_eq!(Guest::gpio_drive(&m), (0, 0));
 }
 
+/// A machine whose core 0 waits in `waiti 0` (`2: waiti 0; j 2b`) and, with `alarm`, a chip in
+/// deep sleep with its RTC timer armed for that many slow ticks from power-on, as ESP-IDF arms it
+/// (esp32sim's `esp32/src/sleep.rs` tests); the first millisecond parks the cores.
+fn waiting_machine(alarm: Option<u64>) -> esp32::Machine {
+    use emu_core::Bus;
+    use esp_soc::Soc;
+    const WAIT: [u8; 6] = [0x00, 0x70, 0x00, 0x46, 0xfe, 0xff];
+    const ENTRY: u32 = 0x4008_0000;
+    let mut m = esp32::machine([0x24, 0x6f, 0x28, 0x00, 0x11, 0x22], 4 << 20);
+    m.bus.load_bytes(ENTRY, &WAIT).unwrap();
+    <esp32::Esp32 as Soc>::boot_core(&mut m.cores[0], ENTRY);
+    if let Some(target) = alarm {
+        for (addr, value) in [
+            (0x3ff4_8004, target as u32),         // RTC_CNTL_SLP_TIMER0_REG
+            (0x3ff4_8008, (target >> 32) as u32), // RTC_CNTL_SLP_TIMER1_REG
+            (0x3ff4_8038, 1 << (11 + 3)),         // WAKEUP_ENA: RTC_TIMER_TRIG_EN
+            (0x3ff4_8084, 1 << 31),               // DIG_PWC: DG_WRAP_PD_EN
+            (0x3ff4_8018, 1 << 31),               // STATE0: SLEEP_EN
+        ] {
+            m.bus.write32(addr, value).unwrap();
+        }
+    }
+    assert!(matches!(Guest::run_until(&mut m, MS_CYCLES), Stop::Halted));
+    m
+}
+
+/// On the emulator: `sleep_until` stops short of the RTC alarm, and the wake that esp32sim's own
+/// rounds bring after it comes, as it does without the skip, at the end of the first round at or
+/// after the alarm's slow tick: the two runs end their rounds at other cycles, so the wakes are
+/// at most a round apart.
+#[test]
+fn on_the_emulator_a_skipped_sleep_wakes_at_the_tick_of_its_alarm() {
+    // 20 s of the 150 kHz RTC slow clock: more than one step of `sleep_until`
+    let alarm = 3_000_000;
+    assert!(alarm * rtc::SLOW_TICK > 2 * SLEEP_STEP);
+    let mut through = waiting_machine(Some(alarm));
+    assert!(through.sleeps_through());
+    assert!(matches!(
+        Guest::run_until(&mut through, 21 * SECOND),
+        Stop::SwReset
+    ));
+    let woke = through.bus.cycles;
+    assert_eq!(through.bus.periph.rtc.0.reset_cause, 5);
+    // esp32sim's idle round, 512 CPU cycles, in bus cycles at the 40 MHz the CPU has from reset
+    let round = 512 * 6;
+    let due = alarm * rtc::SLOW_TICK;
+    assert!((due..due + round).contains(&woke), "{woke}");
+
+    let mut skipped = waiting_machine(Some(alarm));
+    skipped.sleep_until(21 * SECOND);
+    let short = woke - skipped.bus.cycles;
+    assert!(
+        short > 0 && short <= (WAKE_MARGIN_TICKS + 1) * rtc::SLOW_TICK,
+        "{short}"
+    );
+    assert!(skipped.sleeps_through());
+    assert!(matches!(
+        Guest::run_until(&mut skipped, 21 * SECOND),
+        Stop::SwReset
+    ));
+    assert!(
+        (due..due + round).contains(&skipped.bus.cycles),
+        "{}",
+        skipped.bus.cycles
+    );
+}
+
+/// On the emulator: an awake chip, and one asleep with its RTC watchdog on, are not skipped; one
+/// asleep without an alarm is, to the end it is given.
+#[test]
+fn on_the_emulator_only_a_deep_sleep_is_skipped() {
+    use emu_core::Bus;
+    let mut awake = waiting_machine(None);
+    assert!(!awake.sleeps_through());
+    awake.sleep_until(SECOND);
+    assert_eq!(awake.bus.cycles, MS_CYCLES);
+
+    let mut watched = waiting_machine(Some(300_000));
+    watched.bus.write32(0x3ff4_80a4, 0x50d8_3aa1).unwrap(); // WDTWPROTECT: unlocked
+    watched.bus.write32(0x3ff4_808c, 1 << 31).unwrap(); // WDTCONFIG0: enabled
+    assert!(!watched.sleeps_through());
+    watched.sleep_until(SECOND);
+    assert_eq!(watched.bus.cycles, MS_CYCLES);
+
+    // a target never written wakes nothing (`sleep_ticks_left`)
+    let mut forever = waiting_machine(Some(0));
+    assert!(forever.sleeps_through());
+    forever.sleep_until(60 * SECOND);
+    assert!(forever.bus.cycles >= 60 * SECOND && forever.bus.cycles < 60 * SECOND + 16);
+    assert!(forever.sleeps_through());
+}
+
 /// A guest with a Wi-Fi station: it sends the scripted Ethernet frames at their cycles into the
 /// relay, and its link takes at most `room` frames between two slices, as esp32sim's queue of 64
 /// does, handing one to the station per slice.
@@ -2441,6 +2569,74 @@ fn with_the_supply_off_the_guest_runs_nothing_and_its_time_goes_on() {
     assert_eq!((num(reset[0], "t"), num(reset[0], "cause")), (40 * MS, 1));
     assert_eq!(r.guest.power_resets, [on]);
     assert_eq!(r.stats.resets, 1);
+}
+
+/// What `board.wait_for_wake` asks for: a turn at the end of its time, and one a millisecond after
+/// each event.
+fn waking(until: u64) -> impl FnMut(&Turn) -> Vec<String> {
+    move |turn| vec![wait(turn.seq, Some(until), Some(MS))]
+}
+
+#[test]
+fn a_deep_sleep_is_one_slice_to_its_wake() {
+    let wake = 10 * SECOND;
+    let guest = FakeGuest::new(vec![(wake, Act::Reset(5))]).asleep_between(MS_CYCLES, wake);
+    let r = run(12.0, guest, FakePeer::new(&[], waking(20_000 * MS)));
+    assert!(matches!(r.end, End::MaxSeconds), "{:?}", r.end);
+    // neither the next millisecond nor the latency ends a slice in the sleep
+    assert_eq!(r.guest.skips, [(MS_CYCLES, wake - 1)]);
+    let asleep = r
+        .guest
+        .slices
+        .iter()
+        .filter(|&&end| end > MS_CYCLES && end <= wake)
+        .count();
+    assert_eq!(asleep, 0, "{:?}", r.guest.slices);
+    // the wake still comes at its cycle, and the turn a latency after it
+    let reset = r.peer.of("reset");
+    assert_eq!(reset.len(), 1);
+    assert_eq!((num(reset[0], "t"), num(reset[0], "cause")), (ns(wake), 5));
+    let syncs: Vec<u64> = r.peer.of("sync").iter().map(|m| num(m, "t")).collect();
+    assert!(syncs.contains(&(ns(wake) + MS)), "{syncs:?}");
+}
+
+#[test]
+fn a_deep_sleep_the_run_loop_cannot_step_through_keeps_its_slices() {
+    let wake = 10 * MS_CYCLES;
+    let guest = FakeGuest::new(vec![(wake, Act::Reset(5))])
+        .asleep_between(MS_CYCLES, wake)
+        .not_steppable();
+    let r = run(0.02, guest, FakePeer::new(&[], waking(20 * MS)));
+    assert!(matches!(r.end, End::MaxSeconds), "{:?}", r.end);
+    assert!(r.guest.skips.is_empty(), "{:?}", r.guest.skips);
+    // a slice to each millisecond of the sleep, as awake
+    for t in 2..10 {
+        assert!(
+            r.guest.slices.contains(&cycles(t * MS)),
+            "{:?}",
+            r.guest.slices
+        );
+    }
+    let reset = r.peer.of("reset");
+    assert_eq!(num(reset[0], "t"), ns(wake));
+}
+
+#[test]
+fn a_deep_sleep_without_a_wake_goes_on_to_the_block_point() {
+    let guest = FakeGuest::new(vec![]).asleep_between(MS_CYCLES, 60 * SECOND);
+    // a turn every 5 s, as a wait that never sees the wake it waits for
+    let r = run(
+        10.0,
+        guest,
+        FakePeer::new(&[], idle(Some(5_000 * MS), Some(MS))),
+    );
+    assert!(matches!(r.end, End::MaxSeconds), "{:?}", r.end);
+    assert_eq!(
+        r.guest.skips,
+        [(MS_CYCLES, 5 * SECOND), (5 * SECOND, 10 * SECOND)]
+    );
+    let syncs: Vec<u64> = r.peer.of("sync").iter().map(|m| num(m, "t")).collect();
+    assert!(syncs.contains(&(5_000 * MS)), "{syncs:?}");
 }
 
 #[test]
@@ -2961,6 +3157,21 @@ fn run_realtime(seconds: f64, mut guest: FakeGuest, mut peer: FakePeer) -> Run {
 /// `quiet_until` every `step` nanoseconds, as the `real` source renews its turn.
 fn every(step: u64) -> impl FnMut(&Turn) -> Vec<String> {
     move |turn| vec![wait(turn.seq, Some(turn.t + step), None)]
+}
+
+#[test]
+fn realtime_paces_a_deep_sleep_like_any_other_stretch() {
+    let guest = FakeGuest::new(vec![]).asleep_between(MS_CYCLES, SECOND);
+    let run = run_realtime(0.004, guest, FakePeer::new(&[], waking(SECOND)));
+    assert!(run.guest.skips.is_empty(), "{:?}", run.guest.skips);
+    // a slice to each emulated millisecond, the sleep's as well
+    for t in 2..4 {
+        assert!(
+            run.guest.slices.contains(&cycles(t * MS)),
+            "{:?}",
+            run.guest.slices
+        );
+    }
 }
 
 #[test]

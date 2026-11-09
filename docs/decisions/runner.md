@@ -278,6 +278,46 @@ of 0, 0.3 with 1 µs and 0.1 without, on an M2 Pro.
 asleep in WFI would be seen only at the next millisecond, and an answer stamped `t + latency`
 would reach the chip up to that late.
 
+## A deep sleep runs in long steps of the RTC, to just short of its alarm
+
+Status: decided (#74)
+
+While the chip is in deep sleep, the runner moves esp32sim's bus on itself, with `Bus::tick` in
+steps of up to 2^31 bus cycles (about 9 s), and stops two RTC slow ticks before the sleep timer's
+alarm; esp32sim's own idle rounds then run the last ticks and wake the chip, as they would without
+the skip. A tick of the bus ticks every peripheral, the RTC among them, so the RTC timer still
+wakes the chip and the firmware's clock still counts the sleep. In a sleep the runner steps through,
+neither the next emulated millisecond nor `latency` ends a slice: the digital domain is off, so the
+only event is the wake, which ends `run` at its cycle, and no UART route can change. Turns, queued
+inputs, paced bytes and the end of the run still end it. esp32sim's idle loop advances a sleeping
+chip in rounds of 512 CPU cycles (`IDLE_CHUNK`), and the RTC timer's wake is no deadline its idle
+skip stops at, so the sleep's cost was esp32sim's, not the run loop's slices: a day of
+15-minute sleeps took 330 s of wall time on an M2 Pro, and takes 7 s with the skip, nearly all of it
+in the 96 boots; a 15-minute sleep takes 2.4 µs.
+
+The runner tells a deep sleep by what esp32sim's `enter_deep_sleep` asks of the RTC registers,
+`SLEEP_EN` and `DG_WRAP_PD_EN` both set, and by what its `peripheral_event` then does to the cores,
+which wait with no interrupt enabled. It reads the alarm from `SLP_TIMER0`/`SLP_TIMER1` and
+`WAKEUP_ENA`, as esp32sim's `sleep_ticks_left` does, and converts slow ticks to bus cycles with
+esp32sim's `RtcSlow` divider, 1600, which it reads from `esp32::periph::Peripherals::CLOCKS`. It
+does not step through a sleep under `--realtime`, which paces the sleep to wall time, nor with the
+RTC watchdog on, which counts through the sleep in esp32sim: a stage due in a step would fire at
+the step's end, up to 9 s late, with its reset. Such a sleep keeps an awake chip's slice ends, so
+that a signal still ends its slice within a millisecond.
+The wake comes in esp32sim's first round at or after the alarm's tick either way, but the rounds end
+at other cycles after a skip: a wake can come up to one round, 512 CPU cycles, from where it would
+without one, a few microseconds of emulated time.
+
+**Rejected:** leaving the sleep to esp32sim's idle rounds, because a day of the board's time costs
+minutes of wall time, where a test of a day of wakes is to take seconds (#74). Setting the bus's
+cycle counter forward, as the run loop does with the supply off, because the RTC would not count the
+sleep: the timer would never wake the chip, and the firmware's clock after the wake would lose the
+sleep. Jumping to the alarm's exact cycle, because the phase between bus cycles and slow ticks is in
+esp32sim's clock tree, which the runner cannot read; two ticks short of it, esp32sim's own rounds
+wake the chip at its tick. Asking esp32sim to skip a deep sleep in its idle loop, the place for it
+in the end, because the runner can do it with what esp32sim exposes, and an upstream change waits
+until it is shown to be needed there.
+
 ## The runner reads the socket only in the peer's turn
 
 Status: decided (#53)

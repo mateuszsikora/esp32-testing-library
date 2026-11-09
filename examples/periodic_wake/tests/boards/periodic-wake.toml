@@ -1,0 +1,8 @@
+# The assembly in examples/periodic_wake: a devkit and whatever its wake pulse drives on GPIO18.
+name = "periodic-wake"
+chip = "esp32"
+flash_mb = 4
+psram_mb = 0
+
+[lines.wake]
+pulse = 18
