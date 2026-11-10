@@ -16,7 +16,7 @@ sd_card = { sources = ["model"] }
 # esp32sim's access point, with the simulated network behind it (wifi.access_point).
 wifi = { sources = ["model"] }
 # The guest's controller in the harness, on the air with the test's devices (the bt fixture).
-bluetooth = { sources = ["model"] }
+bluetooth = { sources = ["model"], tap = true }
 
 # A real board: its on-board peripherals are soldered on, so only the real part answers, and only
 # the console can be tapped (finding 11). Every UART counts as on-board, also one wired to a

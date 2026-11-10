@@ -4,11 +4,14 @@ with the peer's `secure=True`, the default. A peer of another PIN fails the auth
 with no peer the firmware's one inquiry runs its length and finds nothing. Needs `make firmware`
 (bt_spp_initiator). On the serial backend the `bt` fixture skips these."""
 
+import json
 import re
 from collections.abc import Iterable
+from pathlib import Path
 
 import pytest
 
+from esp32tl import recording
 from esp32tl.backends.esp32sim import Esp32Sim
 from esp32tl.bluetooth.peer import BluetoothDevice, SppPeer
 from esp32tl.interfaces.bluetooth import Bluetooth
@@ -16,6 +19,8 @@ from esp32tl.interfaces.console import Console
 from esp32tl.units import seconds
 
 pytestmark = pytest.mark.app_path("../firmware/bt_spp_initiator")
+
+FIRMWARE = Path(__file__).parent.parent / "firmware" / "bt_spp_initiator"
 
 # CONFIG_EXAMPLE_PEER_DEVICE_NAME, and the PIN main.c answers ESP_BT_GAP_PIN_REQ_EVT with.
 NAME = "ESP_SPP_ACCEPTOR"
@@ -99,6 +104,74 @@ def test_a_peer_with_another_pin_fails_the_authentication(
     assert not peer.channel_open and source.heard == []
     # The link fell before the firmware asked for the channel: nothing was refused at SABM.
     assert peer.refused == []
+
+
+def test_the_tap_writes_the_hci_both_ways_as_btsnoop(pytester: pytest.Pytester) -> None:
+    if not (FIRMWARE / "build" / "esp32tl-built").is_file():
+        pytest.fail(f"{FIRMWARE}/build holds no finished build: run make firmware", pytrace=False)
+    tapped = pytester.path / "hci.btsnoop"
+    seen = pytester.path / "seen.json"
+    pytester.makepyfile(
+        test_tap=f"""
+        import json
+
+        import pytest
+
+        from esp32tl.bluetooth.peer import SppPeer
+        from esp32tl.units import seconds
+
+        pytestmark = pytest.mark.app_path({str(FIRMWARE)!r})
+
+        class Heard:
+            def receive(self, t, data):
+                return ()
+
+            def poll(self, now):
+                return ()
+
+            def quiet_until(self):
+                return None
+
+            def latency(self):
+                return 0
+
+        def test_tapped(board, bt, console):
+            SppPeer(bt.air, name={NAME!r}, pin={PIN!r}, source=Heard())
+            tap = bt.tap({str(tapped)!r})
+            board.power_on()
+            board.wait_until(console.line("ESP_SPP_OPEN_EVT"), within=seconds(5))
+            board.power_off()
+            assert len(tap.events) == bt.packets_from_host + bt.packets_to_host
+            assert "tapped into" in bt.report()[0]
+            events = [(t, d, data.hex()) for t, d, data in tap.events]
+            open({str(seen)!r}, "w").write(json.dumps(events))
+        """
+    )
+    result = pytester.runpytest_subprocess("-p", "no:cacheprovider")
+    result.assert_outcomes(passed=1)
+    # Written at teardown: every packet the tap saw, in time order, to the microsecond.
+    hci = recording.read_btsnoop(tapped)
+    events = [(e.t, e.dir, e.data) for e in hci.events]
+    seen_events = sorted(json.loads(seen.read_text()), key=lambda event: event[0])
+    assert events == [(t // 1000 * 1000, d, bytes.fromhex(data)) for t, d, data in seen_events]
+    header = json.loads(recording.sidecar(tapped).read_text())
+    assert (header["interface"], header["source"], header["clock"]) == (
+        "bluetooth",
+        "model:bluetooth",
+        "emulated-fifo-write",
+    )
+    assert header["devices"] == [{"name": NAME, "address": "00:00:00:00:5B:01"}]
+    assert re.fullmatch("[0-9a-f]{40}", header["tools"]["esp32sim"])
+    # Bluedroid's first command is HCI_Reset, and its Command_Complete the first answer, 10 µs
+    # after it (LATENCY_NS).
+    first, answer = hci.events[0], next(e for e in hci.events if e.dir == "in")
+    assert (first.dir, first.data) == ("out", bytes.fromhex("01030c00"))
+    assert answer.data[:2] == b"\x04\x0e" and answer.data[4:6] == bytes.fromhex("030c")
+    assert answer.t - first.t == 10_000
+    # The firmware's PIN reached the controller (PIN_Code_Request_Reply), and the peer's name the
+    # firmware.
+    assert any(e.dir == "out" and e.data[1:3] == bytes.fromhex("0d04") for e in hci.events)
+    assert any(e.dir == "in" and NAME.encode() in e.data for e in hci.events)
 
 
 @pytest.mark.parametrize("around", ["nobody", "a phone"])

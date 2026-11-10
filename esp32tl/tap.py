@@ -12,6 +12,7 @@ import hashlib
 import os
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from pytest_embedded_idf.app import IdfApp
 
@@ -51,9 +52,10 @@ class Tap:
         app_sha256: str | None = None,
         tools: dict[str, str] | None = None,
         created: datetime | None = None,
+        extra: dict[str, Any] | None = None,
     ) -> Recording:
         """The events as a recording made on `board` with `source` at the far end, on `clock`.
-        `created` is now unless given."""
+        `created` is now unless given; `extra` holds the header's fields of the tap's own."""
         header = Header(
             board=board,
             interface=self.interface,
@@ -62,6 +64,7 @@ class Tap:
             created=utc_time(created or datetime.now(UTC)),
             app_sha256=app_sha256,
             tools={"esp32tl": __version__} | (tools or {}),
+            extra=extra or {},
         )
         events = sorted(self.events, key=lambda event: event[0])
         return Recording(header, tuple(Event(t, d, data, clock) for t, d, data in events))

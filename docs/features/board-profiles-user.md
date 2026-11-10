@@ -250,7 +250,7 @@ Each backend declares what it can give:
 | `lines.*` | nothing | nothing |
 | `sd_card` | `model`: a card holding an image file; no tap | `real`: the card in the slot; no tap |
 | `wifi` | `model`: esp32sim's access point, the network behind it the harness's; no tap | `real`: the access points around the board; no tap |
-| `bluetooth` | `model`: the firmware's controller in the harness, with the test's devices on its air; no tap | nothing: the `bt` fixture skips |
+| `bluetooth` | `model`: the firmware's controller in the harness, with the test's devices on its air; the tap of the HCI between the firmware's host and it (`bt.tap`) | nothing: the `bt` fixture skips |
 
 On a real board the on-board peripherals are soldered on, so only the real part answers, and a tap
 on them would need a hardware sniffer. The `lines` fixture is no source in this table: on

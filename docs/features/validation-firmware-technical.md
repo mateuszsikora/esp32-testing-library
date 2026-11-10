@@ -672,8 +672,10 @@ failed, status:9`, `ESP_SPP_CLOSE_EVT` with `close_by_remote:1`, and no channel 
 with no device on the air, and with a `BluetoothDevice` named `phone`, which it finds and logs by
 name, an inquiry 38.4 s long, to within 0.1 s, and no other in the 2 s after it, no SDP and no
 channel. Each run checks that `bt.unknown_commands()` is empty where it gets that far.
-`tests/test_determinism.py::test_spp_to_a_peer` runs the first case to 5 s and writes its console
-and each write the peer heard, with its time, for the determinism job.
+`tests/test_determinism.py::test_spp_to_a_peer` runs the first case to 5 s and writes its console,
+each write the peer heard, with its time, and the tap of the HCI, for the determinism job.
+`test_the_tap_writes_the_hci_both_ways_as_btsnoop` runs it to the channel's opening with the HCI
+tapped, and reads the btsnoop file back.
 
 `tests/test_gpio_echo.py` runs the real `gpio_echo` in the real runner on the
 `lilygo-t-a7670g-r2` profile, all but one through the `lines` fixture:

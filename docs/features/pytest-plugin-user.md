@@ -1020,6 +1020,9 @@ def test_the_firmware_opens_spp(board, bt):
   `bt.air.wait`, `bt.air.advance` and `bt.air.run` raise `AirError`.
 - On [serial](serial-backend-user.md) the test skips at the fixture: `serial: bluetooth takes no
   model source on this backend`.
+- `bt.tap(path)` before `board.power_on()` records the HCI between the firmware's host and its
+  controller, every packet both ways, and writes it at teardown as a btsnoop file, with its
+  header in `path` with `.json` added ([tapping the HCI](run-report-user.md#tapping-the-hci)).
 - What the devices are, what the firmware's controller does and what the report says are in
   [Bluetooth peer](bluetooth-peer-user.md#in-front-of-the-firmware-the-bt-fixture).
 

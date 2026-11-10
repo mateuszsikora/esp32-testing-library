@@ -72,10 +72,11 @@ M2 asked for it.
    `Esp32Sim.report(run)` is the link's report, `routes:` with one line per route, the slot's line
    on a profile with an SD card slot, then, with `run`, `RunLog.lines()`.
 
-**`Tap.recording(board, source, clock, app_sha256=None, tools=None, created=None)`** sorts the
-events by `t` with a stable sort, so that events of one time keep the order they were recorded
-in, and builds a `Recording` of `Header(board, interface, source, clock, created, app_sha256,
-tools={"esp32tl": __version__} | tools)` and one `Event(t, dir, data, clock)` per event. `created`
+**`Tap.recording(board, source, clock, app_sha256=None, tools=None, created=None, extra=None)`**
+sorts the events by `t` with a stable sort, so that events of one time keep the order they were
+recorded in, and builds a `Recording` of `Header(board, interface, source, clock, created,
+app_sha256, tools={"esp32tl": __version__} | tools, extra=extra or {})` and one `Event(t, dir,
+data, clock)` per event. `created`
 is `utc_time(created or datetime.now(UTC))`, to the second. The events arrive out of time order
 when a source answers ahead: an answer stamped `t_req + latency` can be recorded before a byte
 the firmware transmits at a time between the two.
@@ -104,6 +105,20 @@ plus USB/driver/host scheduling delay); `_drain` records them on the test thread
 writes them. Serial also logs `waits up to ...`, success, timeout and run-end steps.
 A console tap's path is in both backends' human report and JSON property. Their `report_section`
 and `report_property` attributes choose the names; serial uses `serial console` / `serial_console`.
+
+### The HCI tap
+
+`Bluetooth.tap(path)` (`esp32tl/interfaces/bluetooth.py`) makes a `Tap("bluetooth", path)` and
+records into it from the link's thread: `receive` each `hci_tx` packet as `out` at its `t`, `poll`
+each packet it returns as `in` at its due time, the `hci_rx`'s `t`
+([pytest-plugin-technical.md](pytest-plugin-technical.md#the-chips-bluetooth)). `_write_taps` makes
+its `Tap.recording` with `source="model:bluetooth"` (`TAP_SOURCE`), the backend's clock, the app's
+hash, the tools, and `extra={"devices": [...]}`, the name and address of each device
+`Bluetooth.devices()` lists at the end of the run, in the order of their addresses; it writes it
+with `recording.write_btsnoop`, which writes the btsnoop file and its sidecar
+([recording format](../recording-format.md#hci-taps)). Its errors are a problem of the test's as a
+UART's are, `the tap of bluetooth cannot be written: {error}`, and come before the UARTs'. A
+packet's bytes are not split or joined: one record is one H4 packet, its packet-type byte first.
 
 ## Schema
 
@@ -189,11 +204,13 @@ checks the timing and cancellation. The modem's separate command history is desc
 |---|---|
 | `Tap(interface, path)` | `esp32tl/tap.py`. Attributes `interface`, `path`, `events` (`(t, dir, data)` in the order recorded) |
 | `Tap.record(t, direction, data)` | One event; nothing for empty `data` |
-| `Tap.recording(*, board, source, clock, app_sha256=None, tools=None, created=None)` | The `Recording`, events in time order |
+| `Tap.recording(*, board, source, clock, app_sha256=None, tools=None, created=None, extra=None)` | The `Recording`, events in time order; `extra` the header's fields of the tap's own |
 | `NO_SOURCE` | `"none"`: the header's `source` for a route without one |
 | `utc_time(moment)`, `sha256(path)`, `app_image_sha256(app)` | The header's `created` and app-image hash; the last reads exactly `flasher_args["app"]["file"]`, returns `None` without an app entry, and propagates file errors |
 | `Console.tap(path)` | Delegates to the backend's `tap_console`; the same path and duplicate checks as a UART tap |
 | `Uart.tap(path)` | `esp32tl/interfaces/uart.py`: the route's `Tap`, `Uart.tapped` |
+| `Bluetooth.tap(path)` | `esp32tl/interfaces/bluetooth.py`: the HCI's `Tap`, `Bluetooth.tapped`; claims the path and its sidecar in `Bluetooth.files`, the backend's one mapping |
+| `TAP_SOURCE` | `esp32tl/interfaces/bluetooth.py`: `"model:bluetooth"`, the HCI tap's `source` |
 | `Uart.files` | `dict[Path, tuple[str, str]]`: the files the run replays from and taps into, by path, with what each is for, the kind (`replay`, `tap`) and the route; one mapping for every `Uart` of an `Esp32Sim` |
 | `same_file(a, b)` | `esp32tl/interfaces/uart.py`: whether two paths name one file: `os.path.samefile` when both exist, else the same directory and the same name but for its case |
 | `RunLog(entries=ENTRIES)` | `esp32tl/report.py`. `test(t, text)`, `chip(t, text)`, `console(t, data)`, `route(t, interface, direction, data)`, `line(t, name, level, *, direction="out")`, `lines()`; attribute `traffic`, by interface |
@@ -214,6 +231,10 @@ From `Uart.tap`, in the test body:
 | `esp32sim: {interface} cannot be tapped on this backend` | pytest's skip | `capabilities.refusal` for this backend |
 | `{interface}: cannot tap into {path}: {directory} is not a directory` | `FileNotFoundError` | The file's directory does not exist; checked after the backend's checks |
 | `{interface}: cannot tap into {path}: it is the {kind} of {route}` | `SourceError` | The file is in `files`: `{kind}` is `replay`, `tap` or `card` (the SD card's image, `{route}` then `sd_card`) |
+
+From `Bluetooth.tap`, the same but for the files: `bluetooth is tapped already: one tap per test`;
+`bluetooth: cannot tap into {path}: {directory} is not a directory`; and `bluetooth: cannot tap
+into {path}: {file} is the {kind} of {route}`, `{file}` the path or its sidecar.
 
 From `Uart.replay`: `{interface}: cannot replay {path}: it is the tap of {route}`, or
 `... it is the card of sd_card`, a `SourceError`.
@@ -250,6 +271,16 @@ Serial errors and its report properties are specified in
   refuses leaving none; outputs the link would refuse as no pair (a `bool` time, a negative one,
   text) left out of the tap and the log; a tap into a route's replay or another route's tap, and
   a replay of a tapped file, refused; the test's steps on a `Uart` logged at 0.
+- `tests/test_bluetooth_guest.py`, without an emulator: a tapped `Bluetooth` recording every
+  packet both ways through a `BoardLink`'s turns, as many as it counts, an answer at the latency
+  after its command, with the report's `tapped into` and the `tap` property; a second tap, a
+  missing directory, a path or a sidecar another file's, refused; a tap the backend refuses
+  leaving none.
+- `tests/test_bt_spp_initiator.py::test_the_tap_writes_the_hci_both_ways_as_btsnoop`, on the real
+  runner and `bt_spp_initiator`, through `pytester`: the btsnoop file written at teardown holds
+  what the `Tap` held, to the microsecond, from `HCI_Reset` and its `Command_Complete` 10 µs later
+  on, the firmware's `PIN_Code_Request_Reply` and the peer's name among them; the sidecar's
+  `interface`, `source`, `clock`, `devices` and esp32sim revision.
 - `tests/test_sdspi.py`: the card's line and `sd_card.insert` step in the report of a run with a
   card, and the `sd_card` property; a tap into the card's image, a replay of it, and a card
   holding a tap's file, refused, with `sd_card: empty` in the report; a rule's `fault` line in the

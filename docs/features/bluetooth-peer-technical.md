@@ -429,7 +429,7 @@ interface that puts the firmware's controller on the board's link is
     four (`lmp_features_max_page_number = 3`). TODO(owner): `ADDRESS`, `24:6F:28:00:11:24`, is the
     spike's; what the classic ESP32's eFuse gives the controller on esp32sim, the base MAC plus 2,
     is not read.
-12. **The interface.** `Bluetooth(*, asked, log, address, latency=LATENCY_NS)`
+12. **The interface.** `Bluetooth(*, asked, log, address, latency=LATENCY_NS, directory, files)`
     (`esp32tl/interfaces/bluetooth.py`) is an `Interface` named `bluetooth`, with no wire, whose
     `bluetooth` is true. `use()`, from `Board.bluetooth` the first time, calls
     `asked(Request("bluetooth", source="model"))`, then makes an `Air(board_clock=True)` and a
@@ -463,6 +463,10 @@ interface that puts the firmware's controller on the board's link is
     has nothing to read (protocol 5.22), so the answer is there for its next poll; at 0 every packet
     would take a turn of its own. The spike measured 259 kbit/s of SPP with it; `bt_spp_initiator`
     reports about 299 kbit/s at the pin `c99fb28` (`tests/test_bt_spp_initiator.py`).
+    `tap(path)` makes `tapped`, a `Tap("bluetooth", directory / path)`; `receive` records each
+    packet into it as `out` at `t`, and `poll` each packet it returns as `in` at its due time. The
+    backend writes it as btsnoop ([run-report-technical.md](run-report-technical.md#the-hci-tap)).
+    `report()`'s first line ends with `; tapped into {path}` and `properties()` has `tap`.
 
 ## Interfaces
 
@@ -478,7 +482,7 @@ interface that puts the firmware's controller on the board's link is
 | `GIAC`, `IAC_LAPS`, `BR_EDR_FEATURES` | `0x9E8B33`; `range(0x9E8B00, 0x9E8B40)`; page 0's features, above |
 | `GuestController(name, link, address=ADDRESS)` | `esp32tl/bluetooth/guest.py`: a `Controller`, BR/EDR only, pages 0 to 2, `acl_to_host` `ACL_LENGTH`; `chip_reset()`, `chip_off()`, `chip_on()` |
 | `ADDRESS`, `ACL_LENGTH`, `MAX_PAGE` | `esp32tl/bluetooth/guest.py`: `"24:6F:28:00:11:24"`; `491`, `HCI_MAX - 5`; `2` |
-| `Bluetooth(*, asked=..., log=None, address=ADDRESS, latency=LATENCY_NS)` | `esp32tl/interfaces/bluetooth.py`: the `Interface` above; `use()`, `used`, `air`, `controller`, `address`; `supply(on)`, `chip_reset(t)`; `packets_from_host`, `bytes_from_host`, `packets_to_host`, `bytes_to_host`; `unknown_commands()`, `devices()`; `report()`, `properties()`; `close()` |
+| `Bluetooth(*, asked=..., log=None, address=ADDRESS, latency=LATENCY_NS, directory=None, files=None)` | `esp32tl/interfaces/bluetooth.py`: the `Interface` above; `use()`, `used`, `air`, `controller`, `address`; `tap(path)`, `tapped`, `directory` (the working directory unless given), `files`; `supply(on)`, `chip_reset(t)`; `packets_from_host`, `bytes_from_host`, `packets_to_host`, `bytes_to_host`; `unknown_commands()`, `devices()`; `report()`, `properties()`; `close()` |
 | `LATENCY_NS`, `BluetoothError` | `esp32tl/interfaces/bluetooth.py`: `10_000`; a `RuntimeError`, what the controller sent that the link cannot carry |
 | `Security` | Dataclass: one link's authentication on one side: `initiator`, `init_key`, `local_rand`, `peer_rand`, `link_key`, `pairing`, `challenge`, `peer_challenge`, `authenticated` |
 | `LmpInRand`, `LmpCombKey`, `LmpSres`, `LmpEncryptionModeReq`, `LmpSupervisionTimeout` | LMP packets Bumble does not define, registered with `lmp.Packet.subclass` |

@@ -273,10 +273,12 @@ and network transcript, compared exactly: two runs give the same stamps on a pat
 `console.txt` and the network's transcript as `network.json`; it checks that the firmware printed
 the page. With no TLS on that network, its transcript is compared exactly.
 `test_spp_to_a_peer` runs `bt_spp_initiator` against an `SppPeer` named `ESP_SPP_ACCEPTOR` with
-the PIN `1234` for 5 s of the board's time, and leaves its `console.txt` and `spp.txt`, each write
-the peer heard on the SPP channel with its board time and its bytes in hex; it checks that the
-channel is open and that the firmware printed a `speed(...)` line. The two runs then also compare
-what crossed the HCI, which the link's report counts under `bluetooth`.
+the PIN `1234` for 5 s of the board's time, and leaves its `console.txt`, `spp.txt`, each write
+the peer heard on the SPP channel with its board time and its bytes in hex, and `hci.btsnoop` with
+its sidecar `hci.btsnoop.json`, the tap of the HCI, every packet both ways at its time
+([tapping the HCI](../features/run-report-user.md#tapping-the-hci)); it checks that the channel is
+open and that the firmware printed a `speed(...)` line. The btsnoop file is compared byte for
+byte, and the sidecar as a recording's header is, without its `created`.
 
 Network transcripts (`"esp32tl_network": 1`) are compared exactly like any other file, times
 after a TLS handshake included: the harness's TLS server draws its keys and nonces from a seed,

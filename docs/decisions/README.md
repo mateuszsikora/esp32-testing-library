@@ -195,7 +195,8 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Connection_Accept_Timeout is postponed](harness.md#connection_accept_timeout-is-postponed) | `harness.md` | postponed (#166) |
 | [Two pages at one instant make one link, the page accepted first](harness.md#two-pages-at-one-instant-make-one-link-the-page-accepted-first) | `harness.md` | decided (#141) |
 | [A role switch asked of a pager whose page ended is refused](harness.md#a-role-switch-asked-of-a-pager-whose-page-ended-is-refused) | `harness.md` | decided (#141) |
-| [An HCI tap and a replayed peer are postponed](harness.md#an-hci-tap-and-a-replayed-peer-are-postponed) | `harness.md` | postponed (#33, #34) |
+| [A replayed peer is postponed](harness.md#a-replayed-peer-is-postponed) | `harness.md` | postponed (#33, #34) |
+| [The HCI tap is a btsnoop file on the board's time, with its header beside it](harness.md#the-hci-tap-is-a-btsnoop-file-on-the-boards-time-with-its-header-beside-it) | `harness.md` | decided (#34) |
 | [The firmware's controller is a controller of the air, with the guest's features and buffer](harness.md#the-firmwares-controller-is-a-controller-of-the-air-with-the-guests-features-and-buffer) | `harness.md` | decided (#34) |
 | [The air of the bt fixture is moved by the board's link alone](harness.md#the-air-of-the-bt-fixture-is-moved-by-the-boards-link-alone) | `harness.md` | decided (#34) |
 | [An answer of the firmware's controller goes out 10 µs after it is made, and never before its turn](harness.md#an-answer-of-the-firmwares-controller-goes-out-10-µs-after-it-is-made-and-never-before-its-turn) | `harness.md` | decided (#34) |

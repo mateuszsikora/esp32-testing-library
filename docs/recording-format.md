@@ -6,7 +6,9 @@ firmware ([replay](features/replay-user.md)), and a tap writes one of what cross
 run ([taps](features/run-report-user.md#tapping-a-route));
 `scripts/generate-gnss-recordings.py` writes the committed ones in `recordings/`
 ([validation firmware](features/validation-firmware-user.md#the-gnss-recordings)).
-This document is the format; `esp32tl/recording.py` reads and writes it.
+This document is the format; `esp32tl/recording.py` reads and writes it. An HCI tap, of the
+firmware's Bluetooth, is a btsnoop file with this format's header beside it
+([HCI taps](#hci-taps)).
 
 ## The file
 
@@ -113,6 +115,9 @@ clock other than its backend's ([replay](features/replay-user.md#what-a-replay-r
 | `RecordingError` | A recording that breaks the format. Attributes: `what`, the error alone; `file`, the file, `None` for a recording built in code; `line`, the line's number, `None` for an error about the whole file |
 | `ClockError` | Times compared across clocks |
 | `VERSION`, `CLOCKS`, `ENDS`, `DIRECTIONS` | `1`, `("emulated-fifo-write", "wall")`, `("hold", "loop")`, `("in", "out")`; `EMULATED` and `WALL` are the two clocks |
+| `write_btsnoop(path, recording)`, `dumps_btsnoop(recording)` | An HCI tap: the btsnoop file at `path` and its sidecar; `dumps_btsnoop` gives the file's bytes and the sidecar's text |
+| `read_btsnoop(path)`, `loads_btsnoop(data, header, name="<btsnoop>")` | The `Recording` in a btsnoop file and its sidecar, or in their contents |
+| `sidecar(path)` | The sidecar of the btsnoop file at `path`: `path` with `.json` added |
 
 ## Errors
 
@@ -151,12 +156,66 @@ messages come only from code: `line {n}: an event on the {clock} clock, in a rec
 for an `Event` whose `clock` is not the one in effect, and `extra: {fields} is a field of the
 format`.
 
+## HCI taps
+
+`bt.tap(path)` ([taps](features/run-report-user.md#tapping-the-hci)) writes what crossed the HCI
+between the firmware's Bluetooth host and its controller as two files: `path`, a btsnoop file, and
+`path` with `.json` added, the sidecar, which holds the header.
+
+The sidecar is one line, a header of this format with its `\n`, as the first line of a recording:
+`interface` is `bluetooth`, `source` is `model:bluetooth` (esp32tl's controller), and a tap adds a
+field of its own, `devices`, a list of `{"name": ..., "address": ...}`, the devices the test put on
+the air.
+
+```json
+{"esp32tl_recording": 1, "board": "esp32-devkitc", "interface": "bluetooth", "source": "model:bluetooth", "clock": "emulated-fifo-write", "end": "hold", "app_sha256": "9a1c…", "tools": {"esp32tl": "0.1.0", "esp32sim": "c99fb286c4378fcfa6d304b754d31e542ba3035a"}, "created": "2026-11-10T08:00:00Z", "devices": [{"name": "ESP_SPP_ACCEPTOR", "address": "00:00:00:00:5B:01"}]}
+```
+
+The btsnoop file is version 1 with datalink 1002, HCI UART (H4), as Bumble's `BtSnooper` and
+Android write it, all integers big-endian:
+
+- the file's header: `btsnoop` and a zero byte, the version (4 bytes, `1`), the datalink (4
+  bytes, `1002`);
+- then a record per packet: its length on the HCI and its length in the file (4 bytes each, the
+  same: no packet is cut), the flags (4 bytes), the cumulative drops (4 bytes, `0`), the timestamp
+  (8 bytes), and the packet, its H4 packet-type byte first.
+- flags: bit 0 set for a packet the host received (`in`, an event or ACL data from the
+  controller), clear for one it sent (`out`, a command or ACL data); bit 1 set for a command or an
+  event.
+- timestamp: microseconds from midnight, 1 January of the year 0, as btsnoop counts them; a time
+  of 0 ns is written as `0x00DCDDB30F2F8000`, 1970-01-01T00:00:00Z on that scale. So a reader
+  such as Wireshark shows the time since power-on as a time after 1970-01-01 00:00:00 UTC, on the
+  header's clock, not the wall clock's. `created` in the sidecar is when the file was written.
+  The writer cuts each time down to the microsecond, and the reader gives it back in
+  nanoseconds: `read_btsnoop` of what `write_btsnoop` wrote is the recording, but for the
+  nanoseconds below the microsecond.
+
+`read_btsnoop` gives a `Recording` with the sidecar's header and an event per record, at its
+time on the header's clock, `in` or `out` by bit 0; bit 1 is not read. A btsnoop file has no clock
+switch, and `dumps_btsnoop` refuses a recording with one:
+`a clock switch at {t}: an HCI tap is on its header's clock alone`. The JSON Lines format is
+unchanged by HCI taps, and its version is still 1.
+
+`read_btsnoop` raises `RecordingError` with the file: `{file}: {what}`, where `{file}` is the
+btsnoop file, or the sidecar for an error in the sidecar.
+
+| `{what}` | Cause |
+|---|---|
+| the `OSError`'s text, as `[Errno 2] No such file or directory: ...` | Either file cannot be read, or the sidecar is not UTF-8 |
+| the [errors](#errors) of a header line | The sidecar's line is not a header of this format |
+| `not a btsnoop file: it does not start with btsnoop and a zero byte` | Another file |
+| `btsnoop version {n}: esp32tl reads version 1` | |
+| `datalink {n}: esp32tl reads 1002, HCI UART (H4)` | Another datalink, such as 1001, packets without their type byte |
+| `record {n}: the file ends in its header`, `record {n}: the file ends in its packet` | A cut file |
+| `record {n}: {included} of the packet's {original} bytes: a cut packet` | A record whose two lengths differ |
+| `record {n}: timestamp {ts} is before 62168256000000000, the time of 0 ns` | A time before power-on |
+| `record {n}: data: an event carries at least one byte` | An empty record |
+| `record {n}: t {t} is before {since}, ...` | Times going back, as in a recording |
+
 ## What the format leaves out
 
 - The baud of a UART recording: the bytes go in at the line rate of the board profile's route,
   and a firmware configured otherwise sees the frame errors it would see on a wire.
-- HCI taps: plan §4.3 records them as btsnoop files with the header in a sidecar `.json`.
-  `esp32tl/recording.py` reads neither.
 
 ## Tests
 
@@ -166,6 +225,14 @@ events after it on the new clock, and round-tripping; `Event.since` within a clo
 `ClockError` across; `write` then `read` through a file; each error of the table above (but the
 non-UTF-8 file) with its line; the file named in the errors; and a `Recording` and a `Header`
 built in code checked as a read one.
+
+HCI taps, in the same file: a recording written as btsnoop and read back whole, the sidecar the
+header's line, the file's header and first record byte for byte; the file as Bumble's `BtSnooper`
+writes it, but for the timestamps, and Bumble's `SnoopPacketReader` reading each packet with its
+direction at its time after 1970-01-01; a time cut to the microsecond; a clock switch refused;
+each error of the table above but the unreadable sidecar's encoding, a missing sidecar, one that is
+no header, and a missing file. `tests/test_bt_spp_initiator.py` reads the tap of a run of the
+firmware.
 
 ## See also
 

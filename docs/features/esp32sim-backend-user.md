@@ -259,7 +259,9 @@ station sent and received, and the report ends with the access point
 (`wifi: access point 'myssid', channel 6, WPA2-PSK`), a line per network around and the network's
 events (`network events:`, as for the modem's network). With `bt`, it then has the Bluetooth's
 lines: `bluetooth: the guest's controller at 24:6F:28:00:11:24; N packets (B bytes) from its host,
-M packets (B bytes) to it`, the commands the controller did not know under `unknown commands (N):`,
+M packets (B bytes) to it`, with `; tapped into {path}` after `bt.tap(path)`
+([tapping the HCI](run-report-user.md#tapping-the-hci)), the commands the controller did not know
+under `unknown commands (N):`,
 and the devices made on the air, `devices: ESP_SPP_ACCEPTOR (00:00:00:00:5B:01)`
 ([Bluetooth peer](bluetooth-peer-user.md#in-front-of-the-firmware-the-bt-fixture)). A test that
 failed gets the run on the

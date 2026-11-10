@@ -71,7 +71,7 @@ from esp32tl.boards import BoardProfile, capabilities
 from esp32tl.boards.capabilities import CapabilityError, Request
 from esp32tl.flash import FlashSnapshot, Namespaces, Partition
 from esp32tl.interfaces import BoardOff, NeverHappened, RunEnded, SourceError
-from esp32tl.interfaces.bluetooth import Bluetooth
+from esp32tl.interfaces.bluetooth import TAP_SOURCE, Bluetooth
 from esp32tl.interfaces.board import DEEPSLEEP_RESET, POWERON_RESET, Board, Boot
 from esp32tl.interfaces.console import ConsoleLines
 from esp32tl.interfaces.gnss import Gnss
@@ -384,7 +384,9 @@ class Esp32Sim(Board):
             log=self.log,
             bridging=self._bridging,
         )
-        self._bluetooth = Bluetooth(asked=self._asked, log=self.log)
+        self._bluetooth = Bluetooth(
+            asked=self._asked, log=self.log, directory=self.directory, files=self._files
+        )
         slot = [] if self._sd_card is None else [self._sd_card]
         self.link = BoardLink(
             profile.name,
@@ -633,6 +635,8 @@ class Esp32Sim(Board):
             set_up.append("the devices on the Bluetooth air")
         if self._console.tapped is not None:
             set_up.append("the tap of console")
+        if self._bluetooth.tapped is not None:
+            set_up.append("the tap of bluetooth")
 
         set_up += [f"the NVS partition {name!r}" for name in self._nvs]
         return set_up
@@ -1036,15 +1040,36 @@ class Esp32Sim(Board):
             raise BackendError("; ".join(problems) + f"; its output is in {self.dut.logfile}")
 
     def _write_taps(self) -> list[str]:
-        """Writes the recording of every tapped route; returns what could not be written."""
+        """Writes the recording of every tapped route, and the btsnoop file of the Bluetooth
+        tap; returns what could not be written."""
         tapped = [
             uart for uart in [self._console, *self._uarts.values()] if uart.tapped is not None
         ]
-        if not tapped:
+        if not tapped and self._bluetooth.tapped is None:
             return []
         runner = self.link.runner
         tools = {"esp32sim": runner.esp32sim} if runner and runner.esp32sim else {}
         problems = []
+        hci = self._bluetooth.tapped
+        if hci is not None:
+            try:
+                made = hci.recording(
+                    board=self.profile.name,
+                    source=TAP_SOURCE,
+                    clock=self.clock,
+                    app_sha256=self.app_sha256,
+                    tools=tools,
+                    # The devices the test made on the air, by their names: whom the packets
+                    # name by address.
+                    extra={
+                        "devices": [
+                            {"name": n, "address": a} for n, a, _ in self._bluetooth.devices()
+                        ]
+                    },
+                )
+                recording.write_btsnoop(hci.path, made)
+            except (OSError, recording.RecordingError) as error:
+                problems.append(f"the tap of bluetooth cannot be written: {error}")
         for uart in tapped:
             assert uart.tapped is not None
             try:

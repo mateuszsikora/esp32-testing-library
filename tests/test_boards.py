@@ -257,8 +257,9 @@ def test_the_declaration_is_the_specification_s_table() -> None:
             "sd_card": Capability(("model",)),
             # esp32sim's access point, with the simulated network behind it
             "wifi": Capability(("model",)),
-            # the guest's controller in the harness, on the air with the test's devices
-            "bluetooth": Capability(("model",)),
+            # the guest's controller in the harness, on the air with the test's devices, and the
+            # HCI between it and the firmware's host, tapped as btsnoop
+            "bluetooth": Capability(("model",), tap=True),
         },
         "serial": {
             "console": Capability(tap=True),
@@ -298,11 +299,13 @@ LILYGO = boards.profile("lilygo-t-a7670g-r2")
             "sd_card takes no model source on this backend, only real",
         ),
         ("esp32sim", Request("bluetooth", source="model"), None),
+        ("esp32sim", Request("bluetooth", tap=True), None),
         (
             "serial",
             Request("bluetooth", source="model"),
             "bluetooth takes no model source on this backend",
         ),
+        ("serial", Request("bluetooth", tap=True), "bluetooth cannot be tapped on this backend"),
     ],
 )
 def test_a_backend_refuses_what_it_does_not_declare(

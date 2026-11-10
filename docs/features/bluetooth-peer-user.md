@@ -83,6 +83,7 @@ of the application, whose symbols the runner's --bt needs`.
 | `bt.unknown_commands()` | The commands of the firmware's host the controller did not know, `(t, op_code, name)` each |
 | `bt.devices()` | The other devices made on the air, `(name, address, present)` each, in the order of their addresses; `present` is false for one switched off or out of range now |
 | `bt.packets_from_host`, `bt.bytes_from_host`, `bt.packets_to_host`, `bt.bytes_to_host` | What crossed the VHCI, each way |
+| `bt.tap(path)` | Before `board.power_on()`: the HCI between the firmware's host and its controller, every packet both ways, written at teardown as a btsnoop file at `path` and its header in `path` with `.json` added ([tapping the HCI](run-report-user.md#tapping-the-hci)); returns the `Tap` |
 
 The test's report has what the Bluetooth did, after the Wi-Fi's lines: `bluetooth: the guest's
 controller at 24:6F:28:00:11:24; N packets (B bytes) from its host, M packets (B bytes) to it`, then
@@ -90,8 +91,9 @@ controller at 24:6F:28:00:11:24; N packets (B bytes) from its host, M packets (B
 code, as `0.300220000 s  HCI_TRUNCATED_PAGE_COMMAND (0x043f)`, and `devices:` with each device made
 on the air, as `ESP_SPP_ACCEPTOR (00:00:00:00:5B:01)`, and `phone (00:00:00:00:5C:01, off the air)`
 for one switched off or out of range. The `esp32sim_link` property has the same under `bluetooth`:
-`address`, the four counts, `unknown_commands` (`t_ns`, `op_code`, `name` each) and `devices`
-(`name`, `address`, `present` each); `null` without `bt`.
+`address`, the four counts, `tap` (the btsnoop file's path, or `null`), `unknown_commands` (`t_ns`,
+`op_code`, `name` each) and `devices` (`name`, `address`, `present` each); `null` without `bt`.
+After `bt.tap(path)` the first line ends with `; tapped into {path}`.
 
 ### The firmware's controller
 

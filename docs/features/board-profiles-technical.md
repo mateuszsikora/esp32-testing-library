@@ -176,7 +176,7 @@ console = { tap = true }
 uart = { sources = ["model", "replay", "real"], tap = true }
 sd_card = { sources = ["model"] }
 wifi = { sources = ["model"] }
-bluetooth = { sources = ["model"] }
+bluetooth = { sources = ["model"], tap = true }
 
 [serial]
 console = { tap = true }
@@ -191,7 +191,9 @@ The `model` on `wifi` is esp32sim's access point (`--wifi`) with the harness's n
 `wifi.access_point` and `wifi.nearby` ask for it, so on `serial` they skip. The `model` on
 `bluetooth` is the firmware's controller in the harness, behind the runner's `--bt`
 ([bluetooth-peer-technical.md](bluetooth-peer-technical.md)); the `bt` fixture asks for it, and
-`serial` lists no `bluetooth`, so there it skips.
+`serial` lists no `bluetooth`, so there it skips. Its tap is the HCI between the firmware's host
+and that controller, which `bt.tap(path)` asks for and writes as btsnoop
+([run-report-technical.md](run-report-technical.md#the-hci-tap)).
 
 `serial` is in `SERVICES` with services `esp,idf`; tests select it explicitly with
 `--esp32tl-backend serial`. Both backends are counted by `check`.

@@ -738,8 +738,19 @@ with the same request, which skips, since `serial` declares no `bluetooth`; were
 would raise `BackendError: serial: the chip's Bluetooth has no interface on this backend`. The air,
 its devices and the controller are in [bluetooth-peer-technical.md](bluetooth-peer-technical.md).
 
+`Bluetooth.tap(path)` calls `use()`, then `asked` with `Request("bluetooth", tap=True)`, which
+esp32sim declares; it refuses a second tap, a path whose directory is missing, and a path or
+sidecar (`recording.sidecar(path)`, the path with `.json` added) that the backend's `files`
+mapping already holds, the mapping the UARTs and the SD card share; it claims both as `("tap",
+"bluetooth")`. The interface records each packet in `receive` as `out` at the `hci_tx`'s time, and
+each one `poll` hands the link as `in` at its due time, the `hci_rx`'s; a packet the controller
+made and a chip reset or a power loss threw away is not recorded, as it never reached the host.
+`Esp32Sim._write_taps` writes it with `recording.write_btsnoop` once the runner has gone, as it
+writes the UARTs' recordings ([run-report-technical.md](run-report-technical.md#the-hci-tap)).
+
 `tests/test_bluetooth_guest.py` covers the interface through a real `BoardLink`, without the
-emulator; `tests/test_pytest_plugin.py` the `--bt` of the runner's command line; and
+emulator, its tap included; `tests/test_pytest_plugin.py` the `--bt` of the runner's command line;
+`tests/test_bt_spp_initiator.py` the tap's files after a run of the firmware; and
 `tests/test_serial_backend.py` the skip on serial.
 
 `tests/test_wifi.py` covers the flags, the parameter checks, the capability request, the switches

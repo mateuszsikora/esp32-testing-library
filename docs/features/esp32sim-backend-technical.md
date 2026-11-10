@@ -51,7 +51,8 @@ without starting anything:
    station becomes a
    `Wifi(now=lambda: hold.now, world=lambda: self._utc, asked=self._asked, log=self.log)`
    (`esp32tl/interfaces/wifi.py`), on every profile, and the chip's Bluetooth a
-   `Bluetooth(asked=self._asked, log=self.log)` (`esp32tl/interfaces/bluetooth.py`), with no air
+   `Bluetooth(asked=self._asked, log=self.log, directory=self.directory, files=self._files)`
+   (`esp32tl/interfaces/bluetooth.py`), which shares the routes' files for its tap, with no air
    until the test asks for it ([bluetooth-peer-technical.md](bluetooth-peer-technical.md#data-flow),
    item 12).
 5. **The lines.** One `Lines(profile.name, profile.lines, now, log=self.log)`
@@ -341,6 +342,11 @@ cut at its start, rather than dropped. A log it cannot read gives
    refuses, is a problem of its own, `the tap of {interface} cannot be written: {error}`, and the
    other taps are still written; the link's error and the exit code still come after it. The
    recording is written whatever the run's outcome, so a failed run leaves what crossed the wire.
+   Before them, when `bt.tap` was called, the HCI tap: `Tap.recording` of `Bluetooth.tapped` with
+   `source="model:bluetooth"`, the same clock, `app_sha256` and `tools`, and `extra={"devices":
+   [...]}`, the name and address of each device on the air, written with
+   `recording.write_btsnoop` to the tap's path and its sidecar, `the tap of bluetooth cannot be
+   written: {error}` for its problem ([run-report-technical.md](run-report-technical.md#the-hci-tap)).
 7. Raises one `BackendError` naming every problem, joined by `; `: a tap that cannot be written,
    the runner was killed, or its exit code is not 0, and the link has an error. The code is judged
    after the runner has stopped: a runner that crashed just before the signal keeps its own code.
@@ -451,7 +457,7 @@ repository makes.
 | `Esp32Sim.uart(role)` | The `Uart` of `uart.<role>` on the link, a `Gnss` for `gnss`; `BackendError` when the profile has no such route |
 | `Esp32Sim.lines` | The `Lines` of the profile's `[lines.<role>]` sets on the link; `BackendError` when the profile has none |
 | `Esp32Sim.sd_card` | The `SdCard` of the profile's slot; `BackendError` when the profile has none |
-| `Esp32Sim.set_up()` | What the test gave that only a run uses: `the replay of uart.gnss` or `the model of uart.gnss` per route with a source, `the tap of uart.gnss` per tapped route, `the level of modem.ri` per line the test drove, `a card in sd_card`, `the access point of wifi`, `the devices on the Bluetooth air`, `the tap of console`, `the NVS partition 'nvs'` |
+| `Esp32Sim.set_up()` | What the test gave that only a run uses: `the replay of uart.gnss` or `the model of uart.gnss` per route with a source, `the tap of uart.gnss` per tapped route, `the level of modem.ri` per line the test drove, `a card in sd_card`, `the access point of wifi`, `the devices on the Bluetooth air`, `the tap of console`, `the tap of bluetooth`, `the NVS partition 'nvs'` |
 | `Esp32Sim.tap_console(path)` | The console `Tap`; before power-on only, shares file collision checks with UARTs and the SD card |
 | `Esp32Sim.close()` | Ends the run and writes the taps; raises `BackendError` for a tap that cannot be written, a failing exit code, a killed runner or a link error |
 | `Esp32Sim.report(run=False)`, `Esp32Sim.properties()` | The `esp32sim link` report section, with the run on the board's clock when `run`; the `esp32sim_link` user property's data |

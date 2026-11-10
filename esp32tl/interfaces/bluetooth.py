@@ -8,19 +8,28 @@ goes out `LATENCY_NS` after the instant it made it. The controller is a `GuestCo
 `Air` whose time is the board's: the link moves it from turn to turn, and the test reaches it, to
 put an `SppPeer` or a `BluetoothDevice` on it or to switch one off, while the board holds the link
 in a turn, at the board's current instant.
+
+`tap(path)` records the HCI between the firmware's host and its controller, every packet both ways
+at the time it crossed the link, for a btsnoop file the backend writes at the end of the run.
 """
 
+import os
 import threading
 from collections.abc import Callable, Iterable
+from pathlib import Path
 
+from esp32tl import recording
 from esp32tl.backends.clock import seconds
 from esp32tl.bluetooth.air import Air
 from esp32tl.bluetooth.controller import Controller
 from esp32tl.bluetooth.guest import ADDRESS, GuestController
 from esp32tl.boards.capabilities import Request
+from esp32tl.interfaces import SourceError
+from esp32tl.interfaces.uart import same_file
 from esp32tl.link.boardlink import Direction, Interface, Output, counted
 from esp32tl.link.protocol import HCI_MAX
 from esp32tl.report import RunLog, board_time
+from esp32tl.tap import Tap
 
 NAME = "bluetooth"
 
@@ -29,6 +38,10 @@ NAME = "bluetooth"
 # between two polls of the VHCI when it has nothing to read (protocol 5.22), so that it reads every
 # answer at its next poll. At 0 every packet would take a turn of its own.
 LATENCY_NS = 10_000
+
+# What a tap's header says was at the far end of the firmware's host: esp32tl's controller, on the
+# air with the test's devices.
+TAP_SOURCE = "model:bluetooth"
 
 
 class BluetoothError(RuntimeError):
@@ -40,7 +53,9 @@ class Bluetooth(Interface):
     """The guest's Bluetooth controller at `address`, as the link drives it, on `air`, which is
     made on the test's first look at it, `use`. Until then the interface is not there: it asks
     for no `--bt`, sends nothing and bounds no turn. `asked` is called with the request at that
-    first look, and refuses it by raising, as for a UART's source.
+    first look, and refuses it by raising, as for a UART's source, and with the request of a tap
+    at `tap`. A tap's path is taken from `directory`, the test file's, and claimed in `files`, the
+    backend's mapping of the files the run reads and writes, with the routes' and the SD card's.
 
     The link calls `receive`, `arrive`, `poll`, `quiet_until` and `latency` from its thread; the
     backend calls `supply` and `chip_reset` when the board's supply switches and the chip resets.
@@ -53,10 +68,15 @@ class Bluetooth(Interface):
         log: RunLog | None = None,
         address: str = ADDRESS,
         latency: int = LATENCY_NS,
+        directory: Path | None = None,
+        files: dict[Path, tuple[str, str]] | None = None,
     ) -> None:
         super().__init__(NAME, None)
         self.asked = asked
         self.log = log
+        self.directory = Path.cwd() if directory is None else directory
+        self.files = {} if files is None else files
+        self.tapped: Tap | None = None
         self.address = address
         self._latency = latency
         self._lock = threading.Lock()
@@ -91,6 +111,38 @@ class Bluetooth(Interface):
                 if self.log is not None:
                     self.log.test(0, f"bluetooth: the guest's controller at {self.address}")
             return self._air
+
+    def tap(self, path: str | os.PathLike[str]) -> Tap:
+        """Records the HCI between the firmware's host and its controller from power-on, every H4
+        packet both ways, and writes it once the run has ended to `path`, relative to the test
+        file's directory, as a btsnoop file, with its header in `path` and `.json`
+        (`docs/recording-format.md`). The directory must exist; both files are replaced. Returns
+        the `Tap`, whose `events` the run fills: `out` from the host, `in` to it."""
+        self.use()
+        if self.tapped is not None:
+            raise SourceError(f"{NAME} is tapped already: one tap per test")
+        self.asked(Request(NAME, tap=True))
+        file = self.directory / path
+        if not file.parent.is_dir():
+            raise FileNotFoundError(
+                f"{NAME}: cannot tap into {path}: {file.parent} is not a directory"
+            )
+        header = recording.sidecar(file)
+        for claimed, (kind, route) in self.files.items():
+            for mine in (file, header):
+                if same_file(mine, claimed):
+                    raise SourceError(
+                        f"{NAME}: cannot tap into {path}: {mine} is the {kind} of {route}"
+                    )
+        with self._lock:
+            if self.tapped is not None:
+                raise SourceError(f"{NAME} is tapped already: one tap per test")
+            self.tapped = Tap(NAME, file)
+            self.files[file.resolve()] = ("tap", NAME)
+            self.files[header.resolve()] = ("tap", NAME)
+        if self.log is not None:
+            self.log.test(0, f"{NAME}.tap({str(path)!r})")
+        return self.tapped
 
     @property
     def used(self) -> bool:
@@ -156,6 +208,8 @@ class Bluetooth(Interface):
         air.follow(t)
         self.packets_from_host += 1
         self.bytes_from_host += len(data)
+        if self.tapped is not None:
+            self.tapped.record(t, "out", data)
         air.call(lambda: controller.on_packet(data))
         return ()
 
@@ -188,6 +242,8 @@ class Bluetooth(Interface):
                 )
             self.packets_to_host += 1
             self.bytes_to_host += len(packet)
+            if self.tapped is not None:
+                self.tapped.record(due, "in", packet)
             outputs.append((due, packet))
         return outputs
 
@@ -236,7 +292,7 @@ class Bluetooth(Interface):
             f"bluetooth: the guest's controller at {self.address};"
             f" {counted(self.packets_from_host, 'packet')} ({self.bytes_from_host} bytes) from"
             f" its host, {counted(self.packets_to_host, 'packet')} ({self.bytes_to_host} bytes)"
-            " to it"
+            " to it" + ("" if self.tapped is None else f"; tapped into {self.tapped.path}")
         ]
         unknown = self.unknown_commands()
         if unknown:
@@ -255,6 +311,7 @@ class Bluetooth(Interface):
             "bytes_from_host": self.bytes_from_host,
             "packets_to_host": self.packets_to_host,
             "bytes_to_host": self.bytes_to_host,
+            "tap": None if self.tapped is None else str(self.tapped.path),
             "unknown_commands": [
                 {"t_ns": t, "op_code": op, "name": name} for t, op, name in self.unknown_commands()
             ],

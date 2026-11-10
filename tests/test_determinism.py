@@ -157,6 +157,7 @@ def test_wifi_http(board: Esp32Sim, wifi: Wifi, console: Console, tmp_path: Path
 def test_spp_to_a_peer(board: Esp32Sim, bt: Bluetooth, console: Console, tmp_path: Path) -> None:
     source = Heard()
     peer = SppPeer(bt.air, name=NAME, pin=PIN, source=source)
+    bt.tap(tmp_path / "hci.btsnoop")
     board.power_on()
     board.wait(seconds(5))
     write_console(tmp_path, console)

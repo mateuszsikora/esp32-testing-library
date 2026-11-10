@@ -786,6 +786,14 @@ that references to its number keep their meaning.
     `tests/test_bt_spp_initiator.py::test_a_peer_with_another_pin_fails_the_authentication`,
     `tests/test_bt_spp_initiator.py::test_with_no_peer_the_inquiry_runs_its_length_and_opens_nothing`,
     `tests/test_determinism.py::test_spp_to_a_peer`
+- **218.** A tap of the chip's Bluetooth holds every H4 packet the link carried between the
+    firmware's host and its controller, both ways, at the times the link carried them, and nothing
+    else; its btsnoop file holds the same to the microsecond, with its header in the sidecar, and
+    Bumble reads it. A second tap, a missing directory and a file another's are refused.
+    `tests/test_bluetooth_guest.py::test_a_tap_records_every_packet_both_ways_at_the_time_it_crossed`,
+    `tests/test_bluetooth_guest.py::test_a_tap_is_one_per_test_needs_its_directory_and_writes_over_nothing`,
+    `tests/test_bt_spp_initiator.py::test_the_tap_writes_the_hci_both_ways_as_btsnoop`,
+    `tests/test_recording.py::test_bumble_reads_the_tap_as_it_writes_one`
 
 ## The esp32tl command
 
