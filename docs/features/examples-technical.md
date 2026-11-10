@@ -147,7 +147,8 @@ the 900 s the firmware asks, the boot and the 20 ms pulse, and about 0.22 s, 0.0
 by which the sleep lasts longer than asked, as `deep_sleep`'s 20 s sleep wakes 20.004 s after its
 line ([validation firmware](validation-firmware-technical.md#deep_sleep)). The day, 95 wakes, ends
 85 525 s into the run, 875 s short of the backend's `--max-seconds 86400`, and takes 192 turns of
-the link (`board.link.turns`, on both pins) and about 7 s of wall time, 0.4 s of it in the waits for the wakes and 6.6 s in the boots; before the runner stepped through the sleeps
+the link (`board.link.turns`, on both pins) and about 7 s of wall time, 0.4 s of it in the waits
+for the wakes and 6.6 s in the boots; before the runner stepped through the sleeps
 ([decision](../decisions/runner.md#a-deep-sleep-runs-in-long-steps-of-the-rtc-to-just-short-of-its-alarm))
 it took 330 s.
 

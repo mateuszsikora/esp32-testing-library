@@ -1053,13 +1053,12 @@ a guest that programs a byte between two dumps;
   as one `sd_op` with no `seq`); `sd_fault_and_sd_clear_need_the_card_and_fit_it` (both without
   `--sd-rw`, blocks past the card, an id used twice).
 
-`tests/test_runner_link.py` runs the real binary on `hello_world` with `--board socket:`, against
-a minimal peer in Python: a run to `--max-seconds` with `--console socket` (the console on the
-socket and not on stdout, `stats`, the `end` line), `SIGTERM` while the runner waits for the
-peer under `--peer-timeout 0`, which nothing else would end (exit 0 with `stats`, `end: signal`, at the
-turn's 200 ms), a late input and a version mismatch (exit 3 with
-`stats`), a peer that does not answer within `--peer-timeout 0.2` (exit 4, nothing more), and no
-peer listening (exit 4).
+`tests/test_runner_link.py` runs the real binary on `hello_world` with `--board socket:`, against a
+minimal peer in Python: a run to `--max-seconds` with `--console socket` (the console on the socket
+and not on stdout, `stats`, the `end` line), `SIGTERM` while the runner waits for the peer under
+`--peer-timeout 0`, which nothing else would end (exit 0 with `stats`, `end: signal`, at the turn's
+200 ms), a late input and a version mismatch (exit 3 with `stats`), a peer that does not answer
+within `--peer-timeout 0.2` (exit 4, nothing more), and no peer listening (exit 4).
 
 Not covered: the text of the usage messages but those of the SD card and of Wi-Fi
 (`usage_errors` checks only the error kind),

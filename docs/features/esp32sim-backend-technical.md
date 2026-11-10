@@ -589,9 +589,9 @@ proving serial-only validation does not reach the simulator.
 - `test_rom_is_the_one_make_setup_fetches`: `ROM_RELEASE` and `ROM_ELF` equal `RELEASE=` and
   `ROM=` in `scripts/fetch-rom-elf`.
 - With a shell script as the runner (`FAKE_RUNNER`, through `ESP32TL_RUNNER`), which exits without
-  connecting: `test_a_wait_fails_at_once_when_the_runner_has_exited` (the `RunEnded` before the first
-  turn, with the tail, within 120 s of an inner run that would otherwise wait for the plugin's
-  600 s), `test_a_runner_that_fails_to_start_is_reported_once` (exit 2),
+  connecting: `test_a_wait_fails_at_once_when_the_runner_has_exited` (the `RunEnded` before the
+  first turn, with the tail, within 120 s of an inner run that would otherwise wait for the
+  plugin's 600 s), `test_a_runner_that_fails_to_start_is_reported_once` (exit 2),
   `test_the_runner_starts_at_power_on_on_the_test_s_clock`
   (`--max-seconds 86400 --console both --peer-timeout 0`),
   `test_the_board_runs_the_profile_the_test_chose_and_starts_no_runner_unpowered`,

@@ -3232,7 +3232,8 @@ In the CI run of #174 one shard on hp600g1 took 353 s and 440 s on Python 3.13, 
 else, and every test file in the shard was 2.1 to 3.4 times slower. What failed were wall-clock
 bounds only: a day of periodic wakes against 60 s, and the long-hold test of the `real` source,
 whose answer came 856 and 1210 ms after the hold against 500 ms. A test in the suite reads the wall
-clock for one of three reasons, and each has its rule ([testing](../guides/testing.md#wall-time-in-the-tests)):
+clock for one of three reasons, and each has its rule
+([testing](../guides/testing.md#wall-time-in-the-tests)):
 
 - A hang guard, a deadline or a timeout that fails only when something never happens, keeps a
   generous margin. The inner run of `test_a_hung_run_is_ended_by_the_test_s_timeout` took 11.2 s
@@ -3246,14 +3247,15 @@ clock for one of three reasons, and each has its rule ([testing](../guides/testi
   80 busy loops, and some 47 times it without the runner's steps through the sleeps.
 - Under `--realtime` wall time is the feature. The bound on stamps holds only while the guest kept
   up at the turns that stamped the bytes, which the test measures from the wall time at which the
-  harness took each turn: the runner sends no turn before its wall clock reaches it (protocol
-  12.2), so the earliest turn, by wall time less the board's, is one that kept up. The test skips
-  when half or more of the bytes' turns are more than 5 ms behind it and none more than 500 ms, the
-  lag a paced guest can have, and on a resync as before; a lag at fewer of them moves none of the
-  stamps its median holds. The skip cannot tell a busy host from a harness slow to take its
-  turns: its reason, with the lags, is in the short summary of every run (`-ra`). The long hold's bound was on the board's clock all along: the excess was the test's own
-  device thread, slow to say the answer on a busy host, and the bound now runs from the stamp of
-  the answer's line ending, which no host speed moves.
+  harness took each turn: the runner sends no turn before its wall clock reaches it (protocol 12.2),
+  so the earliest turn, by wall time less the board's, is one that kept up. The test skips when half
+  or more of the bytes' turns are more than 5 ms behind it and none more than 500 ms, the lag a
+  paced guest can have, and on a resync as before; a lag at fewer of them moves none of the stamps
+  its median holds. The skip cannot tell a busy host from a harness slow to take its turns: its
+  reason, with the lags, is in the short summary of every run (`-ra`). The long hold's bound was on
+  the board's clock all along: the excess was the test's own device thread, slow to say the answer
+  on a busy host, and the bound now runs from the stamp of the answer's line ending, which no host
+  speed moves.
 
 Lower bounds, at least `AT_LEAST_S` of wall time for a second of the board's, only grow on a slow
 host, and stay.

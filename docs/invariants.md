@@ -446,8 +446,8 @@ that references to its number keep their meaning.
     when one digit of the recording changes.
     `tests/test_nmea_reader.py::test_reports_a_fix`,
     `tests/test_gnss_fixture.py::test_reports_a_fix_fails_on_a_changed_recording`
-- **37.** A replay runs on the emulated clock: ten fixes, ten emulated seconds, reach the console, the
-    board's clock reads just past 10 s, the runner says the emulated clock and counts no
+- **37.** A replay runs on the emulated clock: ten fixes, ten emulated seconds, reach the console,
+    the board's clock reads just past 10 s, the runner says the emulated clock and counts no
     resyncs, and the ten emulated seconds take less than ten wall seconds: nothing paced the run
     to wall time.
     `tests/test_nmea_reader.py::test_time_is_emulated`
