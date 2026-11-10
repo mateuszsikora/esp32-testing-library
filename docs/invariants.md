@@ -404,7 +404,7 @@ that references to its number keep their meaning.
   `runner/src/session/tests.rs::realtime_paces_a_deep_sleep_like_any_other_stretch`,
   `runner/src/session/tests.rs::on_the_emulator_a_skipped_sleep_wakes_at_the_tick_of_its_alarm`,
   `runner/src/session/tests.rs::on_the_emulator_only_a_deep_sleep_is_skipped`,
-  `examples/periodic_wake/tests/test_periodic_wake.py::test_a_day_of_wakes_takes_seconds_of_wall_time`
+  `examples/periodic_wake/tests/test_periodic_wake.py::test_a_day_of_wakes_spends_less_wall_time_asleep_than_booting`
 - **215.** A received byte that finds a UART's 128-byte RX FIFO full is lost: the runner counts and
     warns it as `rxfifo_ovf`, the UART raises `UART_RXFIFO_OVF_INT_RAW`, and the byte never reaches
     the FIFO, not even once the firmware has read it empty; a byte at another baud is lost as a
@@ -446,8 +446,10 @@ that references to its number keep their meaning.
     when one digit of the recording changes.
     `tests/test_nmea_reader.py::test_reports_a_fix`,
     `tests/test_gnss_fixture.py::test_reports_a_fix_fails_on_a_changed_recording`
-- **37.** A replay runs on the emulated clock: ten fixes, ten emulated seconds, reach the console in
-    under five wall seconds, and the board's clock reads just past 10 s.
+- **37.** A replay runs on the emulated clock: ten fixes, ten emulated seconds, reach the console,
+    the board's clock reads just past 10 s, the runner says the emulated clock and counts no
+    resyncs, and the ten emulated seconds take less than ten wall seconds: nothing paced the run
+    to wall time.
     `tests/test_nmea_reader.py::test_time_is_emulated`
 - **52.** A tap records every byte that crossed its route, `out` of the ESP32 and `in` from whatever is
     at the far end, at the time it crossed, and writes it once the run has ended as a recording in

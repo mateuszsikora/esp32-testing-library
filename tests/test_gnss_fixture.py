@@ -9,7 +9,6 @@ import hashlib
 import json
 import re
 import shutil
-import time
 from pathlib import Path
 
 import pytest
@@ -208,17 +207,16 @@ def test_reports_a_fix_fails_on_a_baud_mismatch(pytester: pytest.Pytester) -> No
         pytest_plugin.board_profile = lambda node: mismatched
         """
     )
-    started = time.monotonic()
     result = pytester.runpytest_subprocess(
         "-p", "no:cacheprovider", "tests", "-k", "test_reports_a_fix"
     )
-    # Not silence: the run ends on the first frame error, and the expect with it, well before
-    # its 30 s of the board's time.
-    assert time.monotonic() - started < 20
     result.assert_outcomes(failed=1, deselected=4)
+    # Not silence: the run ends on the first frame errors, at the turn after the first sentence at
+    # 1 s, and the expect with it, long before its 30 s of the board's time.
     result.stdout.fnmatch_lines(
         [
-            "*the link failed: uart.gnss sends at 115200 baud on GPIO 5, and the firmware's UART1"
+            "*RunEnded: the run ended at 1.1 s while the test waited for 'fix acquired*: the link"
+            " failed: uart.gnss sends at 115200 baud on GPIO 5, and the firmware's UART1"
             " receives there at 9600 baud: * bytes dropped as frame errors (frm_err)*"
         ]
     )

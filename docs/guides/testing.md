@@ -121,6 +121,32 @@ mtype, mmd on PATH (mtools)`, naming those missing. The tests of `tests/test_sds
 in the slot. In
 CI the test job installs mtools first, so there they run ([cicd.md](../cicd.md#test)).
 
+## Wall time in the tests
+
+A busy host slows every test down, and a test that reads the wall clock must not fail for that
+alone ([decision](../decisions/harness.md#a-tests-wall-time-bound-proves-what-was-not-waited-for-and-a-paced-one-holds-only-while-the-host-kept-up)).
+Each such read is one of three kinds:
+
+- A hang guard: a deadline loop, an `Event.wait`, a `join`, or the `timeout` of `communicate` or
+  `runpytest_subprocess`, which fails only when what it waits for never happens. Its margin is
+  generous.
+- A check that something is skipped or not waited for. It reads what the run leaves behind rather
+  than how long it took: the board's time at which a run ended
+  (`test_reports_a_fix_fails_on_a_baud_mismatch`, 1.1 s of 30), the runner's clock
+  (`test_time_is_emulated`, with ten emulated seconds in under the ten wall seconds a paced run
+  takes), the child still holding the link
+  (`test_a_link_left_open_after_the_runner_exits_is_shut_down`), the reader still stuck
+  (`test_stuck_reader_has_bounded_teardown_and_no_late_capture`), the runner gone
+  (`test_ctrl_c_before_the_runner_connects_exits_130`). Where nothing shows it, the bound is
+  relative to what is avoided, and the comment says to what: half of the `WRITE_SECONDS` a port
+  that takes nothing is given, a sixtieth of the hour on the air, a hang guard of a fifth of the
+  plugin's 600 s or of a fake runner's 300 s, the sleeps of a day of wakes against its boots.
+- Under `--realtime` wall time is the feature (`tests/test_real_source.py`). A bound on it holds
+  only while the host kept up, and the test skips, saying by how much the host fell behind, when it
+  did not; one on the board's clock needs no skip.
+
+A lower bound, at least `AT_LEAST_S` of wall time, only grows on a slow host, and stays as it is.
+
 ## What each test file needs
 
 | File | What it covers | What it needs |
@@ -151,7 +177,7 @@ CI the test job installs mtools first, so there they run ([cicd.md](../cicd.md#t
 | `tests/test_net_bridge.py` | `network.bridge` against services on loopback sockets, in wall time: the stream both ways, each end's close, what the service sends after the device closed, a refused connection, a lost link, the turns it asks for, what it refuses, and an answer reaching the station in a TCP segment | Loopback TCP; under a second |
 | `tests/test_net_ethernet.py`, `tests/test_net_http.py` | The network behind the access point with handmade Ethernet frames and independent checksums: DHCP, ARP, IPv4 to the services, other ethertypes dropped; the HTTP server's side of a connection without TCP: what it serves, keeps and refuses | Nothing beyond the package; milliseconds |
 | `tests/test_hello_world.py` | ESP-IDF's `hello_world`, unmodified, powered on and printing `Hello world!` through the backend | The built image, the runner and the ROM ELF |
-| `tests/test_nmea_reader.py` | The first milestone (plan M1): `nmea_reader` fed the generated GNSS recordings, and sentences it must ignore, through `gnss.replay` before `board.power_on()`: `test_reports_a_fix`, `test_fix_follows_the_recording`, `test_time_is_emulated` (ten fixes in under five wall seconds, and `board.now` just past 10 s) | The built image, the runner and the ROM ELF |
+| `tests/test_nmea_reader.py` | The first milestone (plan M1): `nmea_reader` fed the generated GNSS recordings, and sentences it must ignore, through `gnss.replay` before `board.power_on()`: `test_reports_a_fix`, `test_fix_follows_the_recording`, `test_time_is_emulated` (ten fixes, `board.now` just past 10 s, and a runner on the emulated clock, with no `rt_resyncs` in its stats, in under the ten wall seconds a paced run takes) | The built image, the runner and the ROM ELF |
 | `tests/test_nmea_reader_model.py` | `nmea_reader` fed by the GNSS receiver model: a fix in both hemispheres, a kilometre of movement, the fix lost and coming back, silence, a power cycle of the board, read with `console.line` and compared in units | The built image, the runner and the ROM ELF |
 | `tests/test_gpio_echo.py` | `gpio_echo` on the `lilygo-t-a7670g-r2` profile through the `lines` fixture: RI at the board's pull-down from power-on, PWRKEY following RI as the test drives and releases it, the lines' events with their times, a level driven before `board.power_on()` | The built image, the runner and the ROM ELF |
 | `tests/test_lines.py` | The `Lines` interface: line names, refused lines and levels, the board's pulls in the first turn and on release, the stamps of what the test drives, the firmware's level from `gpio_out`, on a `BoardLink` | Nothing beyond the package; milliseconds |
@@ -162,7 +188,7 @@ CI the test job installs mtools first, so there they run ([cicd.md](../cicd.md#t
 | `tests/test_matching.py` | Synthetic request/answer recordings: per-command cycling, silence, deadlines, loops, fragmentation, prompts and AT/PMTK/UBX defaults | Nothing beyond the package |
 | `tests/test_recording.py`, `tests/test_replay.py` | The recording format's reader and writer, its errors and clocks; the replay's timing and refusals, GNSS configuration responses and unseen-request reporting, and the `Uart` interface that puts it on a `BoardLink` | Nothing beyond the package; milliseconds |
 | `tests/test_uart_model.py` | `board.uart(role).model(source)`: a model the test wrote on `Uart` alone, on a `BoardLink`, and on the GNSS and modem routes, with what it refuses; then `modem_at`, unmodified, writing its AT commands to `uart.aux` of `tests/boards/aux-uart.toml` and reading the model's answers, through a power cycle of the board | Nothing beyond the package for the first; the built `modem_at` image, the runner and the ROM ELF for the others |
-| `tests/test_real_source.py` | `gnss.real(port)` on a pseudo-terminal pair: the source alone, the backend's refusals and clock, and whole runs paced to wall time, each of which takes a few wall seconds and holds wall-time bounds with wide margins ([details](../features/real-source-technical.md#tests)) | The built `nmea_reader` and `modem_at` images, the runner and the ROM ELF for the runs; the source alone needs nothing beyond the package. One test needs a real receiver, and skips without `ESP32TL_REAL_GNSS_PORT` |
+| `tests/test_real_source.py` | `gnss.real(port)` on a pseudo-terminal pair: the source alone, the backend's refusals and clock, and whole runs paced to wall time, each of which takes a few wall seconds and holds wall-time bounds with wide margins, and skips the bound on stamps when the host fell behind wall time ([details](../features/real-source-technical.md#tests)) | The built `nmea_reader` and `modem_at` images, the runner and the ROM ELF for the runs; the source alone needs nothing beyond the package. One test needs a real receiver, and skips without `ESP32TL_REAL_GNSS_PORT` |
 | `tests/test_gnss_fixture.py` | `gnss.replay` and `gnss.tap` into `nmea_reader` through the `gnss` fixture, and, through `pytester`, a source given out of order with `board.power_on()`, and `test_nmea_reader.py`'s `test_reports_a_fix` failing on a changed recording and on a baud mismatch | The built `nmea_reader` image, the runner and the ROM ELF |
 | `tests/test_gnss_recordings.py` | `recordings/gnss-*.jsonl` are what `scripts/generate-gnss-recordings.py` writes, `--check` names a stale one, and every recording is one valid sentence per emulated second | Nothing beyond Python |
 | `tests/test_pytest_plugin.py` | The plugin's parametrisation and refused options, the `board_profile` marker, the wall-time timeout it gives, the runner's command line, `load_app`'s refusals, the runner and ROM paths, power-on, sources and taps, the `lines` fixture's refusals and how a runner's exit is reported (against a fake runner, a shell script), how the backend serves the link, holds it on the test's clock, ends the run, writes a tap and reports the run (against a fake runner that speaks the link protocol, a Python script) | Most tests nothing beyond the package; `test_hello_world_fails_on_an_image_that_prints_something_else` the built image, the runner and the ROM ELF |
@@ -367,7 +393,8 @@ Build with `firmware/build.sh --examples sd_data_logger`, then run
 
 `examples/periodic_wake/tests/test_periodic_wake.py` runs deep sleep with a timer wake: a pulse
 on GPIO18 every 15 minutes, the wake count in RTC memory through sleeps, a reset and a power
-cycle, and a day of wakes in under 60 s of wall time, about 7 s on an M2 Pro. Build with
+cycle, and a day of wakes whose sleeps take less wall time than its boots: about 0.4 s against
+6.6 s on an M2 Pro, where without the runner's steps through the sleeps they take 330 s. Build with
 `firmware/build.sh --examples periodic_wake`, then run
 `.venv/bin/pytest examples/periodic_wake/tests`.
 

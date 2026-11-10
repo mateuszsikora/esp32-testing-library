@@ -304,10 +304,12 @@ def test_ctrl_c_ends_the_run_and_exits_130() -> None:
     assert "Traceback" not in err
 
 
-# A runner that never connects: it says it is loading, and sleeps.
+# A runner that never connects: it writes its pid beside itself, says it is loading, and sleeps
+# for longer than `finished` waits for the command.
 LOADING_RUNNER = """#!/bin/sh
+echo $$ > "$0.pid"
 echo "fake runner: loading" >&2
-exec sleep 30
+exec sleep 300
 """
 
 
@@ -317,12 +319,13 @@ def test_ctrl_c_before_the_runner_connects_exits_130(tmp_path: Path) -> None:
     runner.chmod(0o755)
     process = esp32tl("run", "--app", "firmware/hello_world", env={"ESP32TL_RUNNER": str(runner)})
     before = stderr_until(process, "fake runner: loading")
-    started = time.monotonic()
     process.send_signal(signal.SIGINT)
+    # The command did not wait for the runner's sleep, which outlasts `finished`'s 60 s, and the
+    # SIGTERM killed the runner, without stats.
     code, _, err = finished(process)
     err = before + err
-    # The SIGTERM killed it, without stats, and the command did not wait for its sleep.
-    assert time.monotonic() - started < 10
+    with pytest.raises(ProcessLookupError):
+        os.kill(int(Path(f"{runner}.pid").read_text()), 0)
     assert code == 130, err
     assert "esp32tl: the runner never connected" in err
     assert "Traceback" not in err

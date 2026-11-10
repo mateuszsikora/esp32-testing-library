@@ -589,8 +589,9 @@ proving serial-only validation does not reach the simulator.
 - `test_rom_is_the_one_make_setup_fetches`: `ROM_RELEASE` and `ROM_ELF` equal `RELEASE=` and
   `ROM=` in `scripts/fetch-rom-elf`.
 - With a shell script as the runner (`FAKE_RUNNER`, through `ESP32TL_RUNNER`), which exits without
-  connecting: `test_a_wait_fails_at_once_when_the_runner_has_exited` (under 15 s, with the tail in
-  the `RunEnded`), `test_a_runner_that_fails_to_start_is_reported_once` (exit 2),
+  connecting: `test_a_wait_fails_at_once_when_the_runner_has_exited` (the `RunEnded` before the
+  first turn, with the tail, within 120 s of an inner run that would otherwise wait for the
+  plugin's 600 s), `test_a_runner_that_fails_to_start_is_reported_once` (exit 2),
   `test_the_runner_starts_at_power_on_on_the_test_s_clock`
   (`--max-seconds 86400 --console both --peer-timeout 0`),
   `test_the_board_runs_the_profile_the_test_chose_and_starts_no_runner_unpowered`,
@@ -629,12 +630,13 @@ proving serial-only validation does not reach the simulator.
   `test_a_runner_that_ignores_stop_and_sigterm_is_killed_and_fails_the_test` (`EXIT_SECONDS` set
   to 0.5), `test_a_hung_run_is_ended_by_the_test_s_timeout` (`--timeout 2` on the test function
   alone, `timeout_func_only`, with the runner started and at its first turn in a fixture, and the
-  teardown's `SIGTERM`, the inner run killed after 15 s),
-  `test_a_link_left_open_after_the_runner_exits_is_shut_down` (a child holds the socket for 30 s;
-  the whole run under 15 s, the child still there, then killed),
+  teardown's `SIGTERM`, the inner run killed after 60 s),
+  `test_a_link_left_open_after_the_runner_exits_is_shut_down` (a child holds the socket for 300 s;
+  the child still there after the run, which is killed after 60 s, then the child killed),
   `test_a_test_that_ends_while_the_runner_loads_waits_for_its_hello` (it connects after 0.5 s and
   dies of `SIGTERM` until then) and
-  `test_a_held_run_whose_runner_is_gone_releases_the_link` (exit 4 in a held turn).
+  `test_a_held_run_whose_runner_is_gone_releases_the_link` (exit 4 in a held turn, the inner run
+  killed after 120 s).
 
 `tests/test_clock.py` tests `HeldClock`, `nanoseconds` and `seconds` against a runner thread that
 feeds `BoardLink`, and that honours a `wait`'s `latency` for the resets it sends:

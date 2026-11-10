@@ -29,11 +29,6 @@ pytestmark = pytest.mark.app_path("../firmware/nmea_reader")
 # would match.
 FIX = re.compile(rb"fix(?: acquired)? lat=\S+ lon=\S+(?=\r?\n)")
 
-# How many wall seconds ten emulated seconds of fixes may take: the emulator runs 15 to 37 times
-# faster than real time, but every recorded sentence is an exchange with the harness, a wall-time
-# block, so the margin is deliberate (plan §7).
-TEN_FIXES_WALL_SECONDS = 5
-
 
 def test_starts_uart(board: Board, console: Console) -> None:
     """The console-only smoke test also runs on a devkit without a receiver attached."""
@@ -70,7 +65,15 @@ def test_time_is_emulated(board: Esp32Sim, gnss: Gnss, console: Console) -> None
     elapsed = time.monotonic() - started
     assert fixes == expected_fixes("gnss-generated-1.jsonl")[:10]
     assert seconds(10) < board.now <= ms(10_100)
-    assert elapsed < TEN_FIXES_WALL_SECONDS, f"ten fixes took {elapsed:.2f} wall seconds"
+    # Less than the ten seconds a run paced to wall time takes, which is what a wait for wall time
+    # anywhere, in the runner or the harness, would cost.
+    assert elapsed < 10, f"ten emulated seconds took {elapsed:.2f} wall seconds"
+    # Not paced to wall time: the runner says the emulated clock, and was not asked for
+    # --realtime, the only pacing it has (protocol 12.1), whose stats count resyncs.
+    assert board.link.runner is not None
+    assert board.link.runner.clock == recording.EMULATED
+    board.close()
+    assert board.link.stats is not None and board.link.stats.rt_resyncs is None
 
 
 def test_only_well_formed_fixes_count_and_an_epoch_prints_once(
