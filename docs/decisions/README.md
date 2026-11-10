@@ -193,7 +193,8 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Keeping a heard page apart from this side's own is postponed](harness.md#keeping-a-heard-page-apart-from-this-sides-own-is-postponed) | `harness.md` | superseded (#144) |
 | [A page a device hears is kept apart from its own](harness.md#a-page-a-device-hears-is-kept-apart-from-its-own) | `harness.md` | decided (#144) |
 | [A page respects page scan, read when the page starts](harness.md#a-page-respects-page-scan-read-when-the-page-starts) | `harness.md` | decided (#135) |
-| [Connection_Accept_Timeout is postponed](harness.md#connection_accept_timeout-is-postponed) | `harness.md` | postponed (#166) |
+| [Connection_Accept_Timeout is postponed](harness.md#connection_accept_timeout-is-postponed) | `harness.md` | superseded (#166) |
+| [A page its host does not answer in time ends at the connection accept timeout](harness.md#a-page-its-host-does-not-answer-in-time-ends-at-the-connection-accept-timeout) | `harness.md` | decided (#166) |
 | [Two pages at one instant make one link, the page accepted first](harness.md#two-pages-at-one-instant-make-one-link-the-page-accepted-first) | `harness.md` | decided (#141) |
 | [A role switch asked of a pager whose page ended is refused](harness.md#a-role-switch-asked-of-a-pager-whose-page-ended-is-refused) | `harness.md` | decided (#141) |
 | [A replayed peer is postponed](harness.md#a-replayed-peer-is-postponed) | `harness.md` | postponed (#33, #34) |

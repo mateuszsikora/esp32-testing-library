@@ -1979,11 +1979,15 @@ def changing_answers(
     target: BluetoothDevice,
     patch: pytest.MonkeyPatch,
     change: Callable[[hci.HCI_AsyncCommand], Awaitable[hci.HCI_AsyncCommand | None]],
-) -> None:
+    refusable: bool = False,
+) -> list[int]:
     """The host of `target` sends what `change` makes of each answer to a page it hears, nothing
-    for `None`. Its other commands go on meanwhile."""
+    for `None`. Its other commands go on meanwhile. An answer its controller refuses as owed for
+    nothing, as one after its connection accept timeout, raises from Bumble's task and fails the
+    air, unless `refusable`: then its time goes in the list this gives."""
     host = target.device.host
     send = host.send_async_command
+    refused: list[int] = []
 
     async def answer(command: hci.HCI_AsyncCommand, *arguments: Any) -> Any:
         if isinstance(command, ANSWERS):
@@ -1991,21 +1995,52 @@ def changing_answers(
             if changed is None:
                 return None
             command = changed
+            try:
+                return await send(command, *arguments)
+            except hci.HCI_Error as error:
+                unknown = hci.HCI_ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR
+                if not refusable or error.error_code != unknown:
+                    raise
+                refused.append(round(asyncio.get_running_loop().time() * 1e9))
+                return None
         return await send(command, *arguments)
 
     patch.setattr(host, "send_async_command", answer)
+    return refused
 
 
-def slow_to_accept(target: BluetoothDevice, patch: pytest.MonkeyPatch, *delays: float) -> None:
+def slow_to_accept(
+    target: BluetoothDevice, patch: pytest.MonkeyPatch, *delays: float, refusable: bool = False
+) -> list[int]:
     """The host of `target` answers each page it hears after the next of `delays` seconds, as
-    firmware may, and 0.1 s after those run out."""
+    firmware may, and 0.1 s after those run out. `refusable` and what it gives are
+    `changing_answers`'s."""
     left = list(delays)
 
     async def later(command: hci.HCI_AsyncCommand) -> hci.HCI_AsyncCommand:
         await asyncio.sleep(left.pop(0) if left else 0.1)
         return command
 
-    changing_answers(target, patch, later)
+    return changing_answers(target, patch, later, refusable)
+
+
+# The longest connection accept timeout a host may write, 29 s (Vol 4, Part E, 7.3.14).
+LONGEST_ACCEPT_TIMEOUT = 0xB540
+
+
+def write_accept_timeout(air: Air, device: BluetoothDevice, slots: int) -> int:
+    """The status the controller of `device` answers `Write_Connection_Accept_Timeout` with."""
+    command = hci.HCI_Write_Connection_Accept_Timeout_Command(connection_accept_timeout=slots)
+    result = air.run(device.device.host.send_sync_command_raw(command), within=seconds(0))
+    parameters = result.return_parameters
+    assert isinstance(parameters, hci.HCI_StatusReturnParameters)
+    return parameters.status
+
+
+def patient(air: Air, target: BluetoothDevice) -> None:
+    """The host of `target` takes up to 29 s to answer a page, past the pager's page timeout,
+    which ends a page heard before its answer comes."""
+    assert write_accept_timeout(air, target, LONGEST_ACCEPT_TIMEOUT) == hci.HCI_ErrorCode.SUCCESS
 
 
 def falls_of(air: Air, device: BluetoothDevice) -> list[tuple[int, int]]:
@@ -2082,8 +2117,9 @@ def test_a_target_that_leaves_before_its_host_answers_tells_its_host_of_no_link(
     air: Air, how: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     phone, speaker = phone_and_speaker(air)
+    patient(air, speaker)
     # Later than the supervision timeout, so that the end goes before the host answers either way.
-    slow_to_accept(speaker, monkeypatch, 30)
+    slow_to_accept(speaker, monkeypatch, 25)
     told: list[int] = []
     host = speaker.device.host
     heard = host.on_hci_disconnection_complete_event
@@ -2096,7 +2132,7 @@ def test_a_target_that_leaves_before_its_host_answers_tells_its_host_of_no_link(
     task = air.start(page(phone, SPEAKER))
     air.advance(ms(50))
     leave(speaker, how)
-    air.advance(seconds(31))
+    air.advance(seconds(26))
     assert task.done()
     assert told == []
     assert not speaker.device.connections
@@ -2118,14 +2154,15 @@ def test_a_host_that_answers_a_page_after_its_end_fell_gets_no_link(
     air: Air, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     phone, speaker = phone_and_speaker(air)
-    slow_to_accept(speaker, monkeypatch, 30)
+    patient(air, speaker)
+    slow_to_accept(speaker, monkeypatch, 25)
     failed = failures_of(air, speaker)
     task = air.start(page(phone, SPEAKER))
     air.advance(ms(50))
     speaker.out_of_range()
-    air.advance(seconds(31))
+    air.advance(seconds(26))
     assert task.done()
-    assert failed == [(30_000 * MS, hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR)]
+    assert failed == [(25_000 * MS, hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR)]
     assert not speaker.device.connections
     speaker.in_range()
     # Nothing is left of it on either side.
@@ -2137,6 +2174,7 @@ def test_a_late_answer_does_not_connect_the_next_page(
     air: Air, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     phone, speaker = phone_and_speaker(air)
+    patient(air, speaker)
     slow_to_accept(speaker, monkeypatch, 6, 1)
     failed = failures_of(air, speaker)
     first = air.start(page(phone, SPEAKER))
@@ -2161,6 +2199,7 @@ def test_an_answer_that_came_in_time_is_not_counted_late_afterwards(
     air: Air, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     phone, speaker = phone_and_speaker(air)
+    patient(air, speaker)
     slow_to_accept(speaker, monkeypatch, 0, 6)
     connection = air.run(page(phone, SPEAKER), within=seconds(1))
     air.run(connection.disconnect(), within=seconds(1))
@@ -2179,6 +2218,7 @@ def test_a_late_answer_leaves_a_working_link_alone(
     air: Air, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     phone, speaker = phone_and_speaker(air)
+    patient(air, speaker)
     slow_to_accept(speaker, monkeypatch, 6)
     failed = failures_of(air, speaker)
     first = air.start(page(phone, SPEAKER))
@@ -2205,6 +2245,7 @@ def test_a_late_answer_does_not_complete_a_page_to_a_device_that_left(
     air: Air, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     phone, speaker = phone_and_speaker(air)
+    patient(air, speaker)
     slow_to_accept(speaker, monkeypatch, 6)
     first = air.start(page(phone, SPEAKER))
     air.advance(ms(50))
@@ -2230,9 +2271,10 @@ def test_a_late_answer_does_not_complete_a_page_to_a_device_that_left(
 def test_a_page_tried_again_with_a_slow_host_does_not_fail_the_air(
     air: Air, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """With no accept timeout, the first answer connects the second page: the second answer is
-    the late one, and the link stays, with no failure told of it."""
+    """With an accept timeout past the page's end, the first answer connects the second page: the
+    second answer is the late one, and the link stays, with no failure told of it."""
     phone, speaker = phone_and_speaker(air)
+    patient(air, speaker)
     slow_to_accept(speaker, monkeypatch, 6, 6)
     failed = failures_of(air, speaker)
     first = air.start(page(phone, SPEAKER))
@@ -2252,6 +2294,7 @@ def test_every_late_answer_is_counted_before_a_new_page_is_answered(
     air: Air, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     phone, speaker = phone_and_speaker(air)
+    patient(air, speaker)
     slow_to_accept(speaker, monkeypatch, 6, 6, 1)
     first = air.start(page(phone, SPEAKER))
     air.advance(ms(5_500))
@@ -2276,6 +2319,7 @@ def test_an_answer_owed_after_the_link_was_ended_does_not_fail_the_air(
     air: Air, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     phone, speaker = phone_and_speaker(air)
+    patient(air, speaker)
     slow_to_accept(speaker, monkeypatch, 6, 6)
     failed = failures_of(air, speaker)
     first = air.start(page(phone, SPEAKER))
@@ -2295,6 +2339,7 @@ def test_an_answer_after_both_crossing_pages_ended_makes_a_link(
     air: Air, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     phone, speaker = phone_and_speaker(air)
+    patient(air, speaker)
     slow_to_accept(speaker, monkeypatch, 5.5)
     failed = failures_of(air, speaker)
     outgoing, incoming = crossing_pages(air, phone, speaker)
@@ -2302,7 +2347,8 @@ def test_an_answer_after_both_crossing_pages_ended_makes_a_link(
     assert isinstance(outgoing.exception(), core.ConnectionError)
     assert isinstance(incoming.exception(), core.ConnectionError)
     # The speaker's page ended at its timeout and left the phone's page its entry, which the
-    # answer finds: with no accept timeout the link is made though both pages reported an end.
+    # answer finds: with an accept timeout past the page's end the link is made though both pages
+    # reported an end.
     assert failed == [(5_120 * MS, PAGE_TIMEOUT)]
     assert list(phone.device.connections) == list(speaker.device.connections) == [1]
 
@@ -2311,7 +2357,8 @@ def test_a_target_that_paged_too_loses_contact_with_a_pager_that_leaves(
     air: Air, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     phone, speaker = phone_and_speaker(air)
-    slow_to_accept(speaker, monkeypatch, 30)
+    patient(air, speaker)
+    slow_to_accept(speaker, monkeypatch, 25)
     failed = failures_of(air, speaker)
     outgoing, incoming = crossing_pages(air, phone, speaker)
     air.advance(seconds(2))
@@ -2325,10 +2372,10 @@ def test_a_target_that_paged_too_loses_contact_with_a_pager_that_leaves(
     assert held_by(air, speaker) == [hci.Address(PHONE + "/P")]
     air.advance(ms(22_001))
     assert held_by(air, speaker) == []
-    air.advance(seconds(31))
+    air.advance(seconds(27))
     assert failed == [
         (5_120 * MS, PAGE_TIMEOUT),
-        (31_000 * MS, hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR),
+        (26_000 * MS, hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR),
     ]
     phone.in_range()
     monkeypatch.undo()
@@ -2339,6 +2386,7 @@ def test_a_page_this_side_failed_does_not_mend_the_link_to_a_pager_that_lost_pow
     air: Air, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     phone, speaker = phone_and_speaker(air)
+    patient(air, speaker)
     slow_to_accept(speaker, monkeypatch, 9)
     fell = falls_of(air, speaker)
     outgoing, incoming = crossing_pages(air, phone, speaker)
@@ -2370,6 +2418,7 @@ def test_two_answers_to_pages_that_ended_do_not_fail_the_air(
     air: Air, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     phone, speaker = phone_and_speaker(air)
+    patient(air, speaker)
     slow_to_accept(speaker, monkeypatch, 6, 6)
     failed = failures_of(air, speaker)
     first = air.start(page(phone, SPEAKER))
@@ -2475,6 +2524,7 @@ def test_a_rejection_of_a_page_that_ended_is_not_heard_by_the_pager(
     air: Air, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     phone, speaker = phone_and_speaker(air)
+    patient(air, speaker)
     rejecting(speaker)
     slow_to_accept(speaker, monkeypatch, 6)
     paging = failures_of(air, phone)
@@ -2493,6 +2543,7 @@ def test_a_rejection_after_the_end_fell_is_late_and_does_not_end_the_next_page(
     air: Air, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     phone, speaker = phone_and_speaker(air)
+    patient(air, speaker)
     rejecting(speaker)
     slow_to_accept(speaker, monkeypatch, 6, 1)
     paging = failures_of(air, phone)
@@ -2519,6 +2570,7 @@ def test_a_late_rejection_leaves_a_working_link_alone(
     air: Air, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     phone, speaker = phone_and_speaker(air)
+    patient(air, speaker)
     rejecting(speaker)
     slow_to_accept(speaker, monkeypatch, 6)
     first = air.start(page(phone, SPEAKER))
@@ -2539,6 +2591,7 @@ def test_the_answer_after_the_rejection_of_a_page_tried_again_is_late(
     """The first answer ends the second page, as an acceptance would connect it, so the second
     answer has nothing left to answer."""
     phone, speaker = phone_and_speaker(air)
+    patient(air, speaker)
     rejecting(speaker)
     slow_to_accept(speaker, monkeypatch, 6, 6)
     paging = failures_of(air, phone)
@@ -2578,6 +2631,7 @@ def test_an_answer_owed_while_this_side_pages_again_does_not_touch_that_page(
     air: Air, rejects: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     phone, speaker = phone_and_speaker(air)
+    patient(air, speaker)
     slow_to_accept(speaker, monkeypatch, 6, 6)
     failed = failures_of(air, speaker)
     first = air.start(page(phone, SPEAKER))
@@ -2628,6 +2682,7 @@ def test_a_device_that_leaves_during_its_own_page_loses_contact_with_a_page_it_h
 ) -> None:
     """The pager's page ends first, so only the device that leaves holds anything of it."""
     phone, speaker = phone_and_speaker(air)
+    patient(air, speaker)
     write_page_timeout(air, phone, 1600)
     slow_to_accept(speaker, monkeypatch, 19)
     fell = falls_of(air, speaker)
@@ -2662,6 +2717,7 @@ def test_an_answer_the_host_never_gave_does_not_spoil_a_later_page(
     air: Air, rejects: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     phone, speaker = phone_and_speaker(air)
+    patient(air, speaker)
     skipping_answers(speaker, monkeypatch, 1)
     paging = failures_of(air, phone)
     first = air.start(page(phone, SPEAKER))
@@ -2687,6 +2743,7 @@ def test_a_rejection_after_the_pager_left_and_its_page_ended_lets_the_pair_go(
     air: Air, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     phone, speaker = phone_and_speaker(air)
+    patient(air, speaker)
     rejecting(speaker)
     slow_to_accept(speaker, monkeypatch, 6)
     task = air.start(page(phone, SPEAKER))
@@ -2704,6 +2761,7 @@ def test_a_page_of_this_side_that_fails_takes_its_entry_with_an_answer_never_giv
     air: Air, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     phone, speaker = phone_and_speaker(air)
+    patient(air, speaker)
     skipping_answers(speaker, monkeypatch, 1)
     first = air.start(page(phone, SPEAKER))
     air.advance(seconds(6))
@@ -2718,6 +2776,154 @@ def test_a_page_of_this_side_that_fails_takes_its_entry_with_an_answer_never_giv
     assert held_by(air, speaker) == []
     phone.in_range()
     air.run(page(speaker, PHONE), within=seconds(1))
+
+
+# The connection accept timeout: a page the host does not answer in time.
+
+ACCEPT_TIMEOUT = hci.HCI_ErrorCode.CONNECTION_ACCEPT_TIMEOUT_ERROR
+
+
+def test_a_page_its_host_does_not_answer_ends_on_both_sides_at_the_accept_timeout(
+    air: Air, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    phone, speaker = phone_and_speaker(air)
+    skipping_answers(speaker, monkeypatch, 1)
+    paging = failures_of(air, phone)
+    refused = failures_of(air, speaker)
+    task = air.start(page(phone, SPEAKER))
+    air.advance(ms(5_000) - Duration(1))
+    assert not task.done()
+    assert held_by(air, speaker) == [hci.Address(PHONE + "/P")]
+    air.advance(ms(6_000))
+    error = task.exception()
+    assert isinstance(error, core.ConnectionError)
+    assert error.error_code == ACCEPT_TIMEOUT
+    # The target's 5 s come before the pager's page timeout, 5.12 s, and both hosts hear them.
+    assert paging == [(5_000 * MS, ACCEPT_TIMEOUT)]
+    assert refused == [(5_000 * MS, ACCEPT_TIMEOUT)]
+    assert held_by(air, phone) == held_by(air, speaker) == []
+    air.run(page(phone, SPEAKER), within=seconds(1))
+    assert list(phone.device.connections) == list(speaker.device.connections) == [1]
+
+
+def test_an_answer_after_the_accept_timeout_counts_for_nothing(
+    air: Air, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    phone, speaker = phone_and_speaker(air)
+    refused = slow_to_accept(speaker, monkeypatch, 6, refusable=True)
+    failed = failures_of(air, speaker)
+    first = air.start(page(phone, SPEAKER))
+    air.advance(seconds(7))
+    assert isinstance(first.exception(), core.ConnectionError)
+    # The host heard at 5 s that the page ended: its answer at 6 s answers nothing.
+    assert failed == [(5_000 * MS, ACCEPT_TIMEOUT)]
+    assert refused == [6_000 * MS]
+    assert not phone.device.connections and not speaker.device.connections
+    assert held_by(air, phone) == held_by(air, speaker) == []
+    # The next page gets its own answer, 0.1 s on.
+    second = air.start(page(phone, SPEAKER))
+    air.advance(ms(7_100))
+    assert second.done() and second.exception() is None
+    assert list(phone.device.connections) == list(speaker.device.connections) == [1]
+
+
+def test_a_crossing_page_its_host_does_not_answer_ends_and_the_next_page_is_not_refused(
+    air: Air, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The speaker's own page reports `PAGE_TIMEOUT`, and the phone's, which its host leaves
+    unanswered, ends at 6 s: the speaker's next page no longer gets `CONNECTION_ALREADY_EXISTS`."""
+    phone, speaker = phone_and_speaker(air)
+    skipping_answers(speaker, monkeypatch, 1)
+    phone_failed = failures_of(air, phone)
+    speaker_failed = failures_of(air, speaker)
+    outgoing, incoming = crossing_pages(air, phone, speaker)
+    air.advance(seconds(7))
+    assert isinstance(outgoing.exception(), core.ConnectionError)
+    assert isinstance(incoming.exception(), core.ConnectionError)
+    assert phone_failed == [(6_000 * MS, ACCEPT_TIMEOUT)]
+    assert speaker_failed == [(5_120 * MS, PAGE_TIMEOUT), (6_000 * MS, ACCEPT_TIMEOUT)]
+    assert held_by(air, phone) == held_by(air, speaker) == []
+    air.run(page(speaker, PHONE), within=seconds(1))
+    assert list(phone.device.connections) == list(speaker.device.connections) == [1]
+
+
+def test_a_late_answer_the_host_never_gives_ends_at_its_accept_timeout(
+    air: Air, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A power cycle takes the page heard and leaves the answer owed, which ends at 5 s: it does not
+    take the answer to the next page, whose pager would get `PAGE_TIMEOUT`."""
+    phone, speaker = phone_and_speaker(air)
+    skipping_answers(speaker, monkeypatch, 1)
+    paging = failures_of(air, phone)
+    failed = failures_of(air, speaker)
+    first = air.start(page(phone, SPEAKER))
+    air.advance(ms(50))
+    speaker.switch_off()
+    speaker.switch_on()
+    air.advance(seconds(6))
+    assert isinstance(first.exception(), core.ConnectionError)
+    assert paging == [(5_120 * MS, PAGE_TIMEOUT)]
+    assert failed == [(5_000 * MS, ACCEPT_TIMEOUT)]
+    air.run(page(phone, SPEAKER), within=seconds(1))
+    assert list(phone.device.connections) == list(speaker.device.connections) == [1]
+
+
+def test_an_answer_given_in_time_leaves_no_timer_to_end_the_link(air: Air) -> None:
+    phone, speaker = phone_and_speaker(air)
+    failed = failures_of(air, speaker)
+    fell = falls_of(air, speaker)
+    air.run(page(phone, SPEAKER), within=seconds(1))
+    # Past the 5 s at which the answer's accept timeout would have ended.
+    air.advance(seconds(6))
+    assert failed == [] and fell == []
+    assert list(phone.device.connections) == list(speaker.device.connections) == [1]
+
+
+def test_the_accept_timeout_a_host_writes_takes_effect_from_the_next_page(
+    air: Air, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    phone, speaker = phone_and_speaker(air)
+    skipping_answers(speaker, monkeypatch, 2)
+    paging = failures_of(air, phone)
+    first = air.start(page(phone, SPEAKER))
+    air.advance(seconds(1))
+    # 1 s; the page heard already keeps its 5 s.
+    assert write_accept_timeout(air, speaker, 0x0640) == hci.HCI_ErrorCode.SUCCESS
+    air.advance(seconds(6))
+    assert isinstance(first.exception(), core.ConnectionError)
+    second = air.start(page(phone, SPEAKER))
+    air.advance(seconds(8))
+    assert isinstance(second.exception(), core.ConnectionError)
+    assert paging == [(5_000 * MS, ACCEPT_TIMEOUT), (7_000 * MS, ACCEPT_TIMEOUT)]
+
+
+def test_a_page_timeout_shorter_than_the_accept_timeout_ends_the_pager_s_side_first(
+    air: Air, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The pager hears nothing of the target's timeout, since its page is over."""
+    phone, speaker = phone_and_speaker(air)
+    write_page_timeout(air, phone, 1600)
+    skipping_answers(speaker, monkeypatch, 1)
+    paging = failures_of(air, phone)
+    refused = failures_of(air, speaker)
+    task = air.start(page(phone, SPEAKER))
+    air.advance(seconds(6))
+    assert isinstance(task.exception(), core.ConnectionError)
+    assert paging == [(1_000 * MS, PAGE_TIMEOUT)]
+    assert refused == [(5_000 * MS, ACCEPT_TIMEOUT)]
+    assert held_by(air, phone) == held_by(air, speaker) == []
+
+
+@pytest.mark.parametrize("slots", [0, 0xB541, 0xFFFF])
+def test_an_accept_timeout_out_of_its_range_is_refused_and_changes_nothing(
+    air: Air, slots: int
+) -> None:
+    _, speaker = phone_and_speaker(air)
+    status = write_accept_timeout(air, speaker, slots)
+    assert status == hci.HCI_ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR
+    controller = air.link.find_classic_controller(speaker.device.public_address)
+    assert isinstance(controller, Controller)
+    assert controller.connection_accept_timeout == 0x1F40
 
 
 def accepting_as_central_after(
@@ -2766,6 +2972,7 @@ def test_a_refused_role_switch_leaves_no_entry_with_an_answer_never_given(
     air: Air, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     phone, speaker = phone_and_speaker(air)
+    patient(air, speaker)
     accepting_as_central_after(speaker, monkeypatch, 0, 1)
     first = air.start(page(phone, SPEAKER))
     air.advance(seconds(6))
@@ -2856,6 +3063,7 @@ def test_a_refused_role_switch_during_this_sides_page_with_an_answer_never_given
     air: Air, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     phone, speaker = phone_and_speaker(air)
+    patient(air, speaker)
     write_page_timeout(air, phone, 1600)
     # The phone's first page gets no answer; its second, the central's after 0.5 s.
     accepting_as_central_after(speaker, monkeypatch, 0, 0.5)
@@ -3063,6 +3271,7 @@ def test_an_acceptance_as_the_central_after_the_page_ended_is_refused(
     air: Air, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     phone, speaker = phone_and_speaker(air)
+    patient(air, speaker)
     accepting_as_central_after(speaker, monkeypatch, 6)
     paging = failures_of(air, phone)
     accepting = failures_of(air, speaker)
@@ -3107,6 +3316,7 @@ def test_a_pager_that_leaves_after_its_page_ended_is_lost_to_the_target(
     air: Air, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     phone, speaker = phone_and_speaker(air)
+    patient(air, speaker)
     slow_to_accept(speaker, monkeypatch, 10)
     fell = falls_of(air, speaker)
     task = air.start(page(phone, SPEAKER))
@@ -3195,8 +3405,9 @@ def test_a_page_longer_than_the_supervision_timeout_keeps_its_entry_until_it_end
     air: Air, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     phone, speaker = phone_and_speaker(air)
+    patient(air, speaker)
     write_page_timeout(air, phone, 0xFFFF)
-    slow_to_accept(speaker, monkeypatch, 30)
+    slow_to_accept(speaker, monkeypatch, 25)
     task = air.start(page(phone, SPEAKER))
     air.advance(seconds(1))
     phone.out_of_range()

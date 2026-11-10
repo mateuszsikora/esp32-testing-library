@@ -292,13 +292,16 @@ interface that puts the firmware's controller on the board's link is
      as a `HeardPage` that holds the `Connection` the link will be, the peripheral with the
      controller's `classic_allow_role_switch`, and sends the host `Connection_Request` as Bumble
      does; a synchronous link still goes to Bumble's handler. A second page from the same peer
-     replaces the first. `_answers_due` counts the answers the host owes each peer. When the page's
-     end falls, `_link_timed_out` drops it through `_drop_heard` without telling the host, since no
-     link was made, and that makes all the answers still owed for it late, in `_late_answers`.
-     `_take_answer`, which both handlers of an answer call, counts the answer. One nothing was
-     owed for gets `UNKNOWN_CONNECTION_IDENTIFIER_ERROR`, as the host's own error, on a working link
-     and during this side's own page too. It gives the page the answer is for, from `_heard`, unless
-     one is counted late, or `_heard` holds no page from the peer still waiting for an answer, as
+     replaces the first. Each `Connection_Request` adds an `Answer` to `_owed`, the list of answers
+     the host owes that peer, oldest first, with its connection accept timer (below). When the
+     page's end falls, `_link_timed_out` drops it through `_drop_heard` without telling the host,
+     since no link was made, and that marks every answer still owed for it `late`.
+     `_take_answer`, which both handlers of an answer call, takes the oldest answer owed and
+     cancels its timer. With none owed the answer gets `UNKNOWN_CONNECTION_IDENTIFIER_ERROR`, as the
+     host's own error, on a working link and during this side's own page too, and so does one that
+     comes after its connection accept timeout, which took it off `_owed`. It gives the page the
+     answer is for, from `_heard`, unless the answer is late, or `_heard` holds no page from the
+     peer still waiting for an answer, as
      after its end fell or after an acceptance as the central, or this side already has a link to
      the peer, as when its own page completed after it heard the other's, or the peer's host has
      accepted this side's own page, which is still under way here (`_own_page_accepted`, which reads
@@ -319,14 +322,45 @@ interface that puts the firmware's controller on the board's link is
      `CONNECTION_TIMEOUT_ERROR` (`_tell_host_no_link`): the event names only the address, so it
      would end that page or fail that link in the host's eyes. What this side holds is left as it
      is, so that a late answer completes neither a new page nor a working link. An answer
-     names only the address, so answers are told apart only by their order: the oldest is taken as
-     the late one, and with a page tried again while the first answer is on its way, that first
-     answer connects the second page, and the second answer is the late one. A link being made marks
+     names only the address, so answers are told apart only by their order: the oldest is taken
+     first, and the late ones are always the oldest, since `_drop_heard` marks all those owed. An
+     answer that is not late answers the page in `_heard`, whichever page it was owed for: with a
+     page tried again while the first answer is on its way, as when the pager's page timeout is
+     shorter than this side's connection accept timeout, that first answer connects the second
+     page, and the second answer finds the link and is told no link. A link being made marks
      nothing late, so that an answer a host never gives does not take the next page's, except when
      this side's own page makes the link while it holds a page heard from that peer: that page can
      make no link any more, so `on_classic_connection_complete` drops it through `_drop_heard`, and
      the answers still owed for it are late. Without that it would stay in `_heard` after the link
      ended, and refuse this side's next page with `CONNECTION_ALREADY_EXISTS`.
+   - **The connection accept timeout** (Vol 4, Part E, 6.7). `on_classic_connection_request` starts
+     each `Answer`'s timer with `call_later(connection_accept_timeout * SLOT_S)`, the timeout read
+     at that instant, so a page heard keeps the time it had when the host writes another. Taking the
+     answer cancels it, and so does `_restart`, which empties `_owed`; a power loss does not, since
+     the answers owed outlive it here: a `BluetoothDevice` switched off for longer than the timeout
+     has its host, which runs on, hear `CONNECTION_ACCEPT_TIMEOUT_EXCEEDED` while the device is off,
+     as it hears the end of its own pages at the power loss. At the timer `_accept_timed_out` takes
+     the answer off `_owed`, so a later answer from the host is owed for nothing. When the answer
+     was the last one not late and the page in `_heard` still waits, not `switching`, with no link
+     to the peer, `_refuse` refuses the page with `CONNECTION_ACCEPT_TIMEOUT_ERROR`, as a host's
+     rejection does: `LMP_not_accepted` for `LMP_HOST_CONNECTION_REQ` with that reason, which a
+     pager still paging reports in its `Connection_Complete` and one whose page ended drops, the
+     page removed with what it had running, and `Connection_Complete` with the reason to this side's
+     host unless it holds an entry for the peer. With the defaults, 5 s against the pager's 5.12 s,
+     the pager hears this before its own timer. When the peer has accepted this side's own page
+     meanwhile (`_own_page_accepted`) the page heard goes through `_drop_heard` instead, as for an
+     answer. For a late answer, or one not late while another not late is still owed, nothing is
+     sent to the peer, and the host gets `Connection_Complete` with
+     `CONNECTION_ACCEPT_TIMEOUT_ERROR` under the same rule as a late answer (`_tell_host_no_link`).
+     The page's own timer is unchanged: it runs until the target's host accepts, so a pager whose
+     page timeout is shorter than the target's connection accept timeout ends at its own, and a host
+     that accepts between the two still makes a link. `Write_Connection_Accept_Timeout` (7.3.14)
+     sets `connection_accept_timeout`, default `ACCEPT_TIMEOUT_SLOTS`, and refuses a value outside
+     `ACCEPT_TIMEOUTS`, 0x0001 to 0xB540, with `INVALID_COMMAND_PARAMETERS_ERROR`.
+     `Read_Connection_Accept_Timeout` (7.3.13), which Bumble has no class for, is a generic
+     `HCI_Command`: `on_hci_read_connection_accept_timeout_command` sends its own
+     `Command_Complete`, with `SUCCESS` and the timeout in 2 bytes, little-endian, as
+     `HCI_GenericReturnParameters`.
    - **Accepting a page.** `on_hci_accept_connection_request_command` replaces Bumble's, which
      works on `classic_connections` only. After the command status, `_accepted` takes the page from
      `_heard`, sends `LMP_accepted`, puts its `Connection` in `classic_connections`, in place of
@@ -426,17 +460,17 @@ interface that puts the firmware's controller on the board's link is
      `power_lost()` always, and `returned()` if it was on the air and `back` is true, and puts the
      host back: each peer loses contact and its end falls at its supervision timeout, and this side
      ends its pages, name requests, inquiry and links at once, as on a power loss. Then it clears
-     what `power_lost` leaves: `_heard`, `_answers_due`, `_late_answers` (a page heard that goes
-     marks its answers late), `_security`, `_encryption`, `_supervision_timeouts`, `_lost_contact`,
+     what `power_lost` leaves: `_heard`, `_owed` with its timers (a page heard that goes marks its
+     answers late), `_security`, `_encryption`, `_supervision_timeouts`, `_lost_contact`,
      the `_supervision` timers, Bumble's `classic_pending_commands`, whose futures are dropped
      without being resolved, so that an answer that comes later finds nothing, and `sco_links`.
      `_defaults` puts back the host's settings, as `__init__` sets them: Bumble's `event_mask`,
      `event_mask_page_2` and `local_name`, which Bumble's controller reads nowhere,
      `class_of_device`, `extended_inquiry_response`, `inquiry_mode`, `page_timeout`,
-     `classic_scan_enable`, `iac_laps`, the link policies, the scan activities and types,
-     `host_acl_length`, and the host feature bits `SECURE_SIMPLE_PAIRING_HOST_SUPPORT` and
-     `LE_SUPPORTED_HOST`. `rssi`, the device's own, stays. `_restart(back=False)` leaves the
-     controller off the air, for the guest's supply.
+     `connection_accept_timeout`, `classic_scan_enable`, `iac_laps`, the link policies, the scan
+     activities and types, `host_acl_length`, and the host feature bits
+     `SECURE_SIMPLE_PAIRING_HOST_SUPPORT` and `LE_SUPPORTED_HOST`. `rssi`, the device's own, stays.
+     `_restart(back=False)` leaves the controller off the air, for the guest's supply.
    - **ACL data for the host.** `on_link_acl_data` cuts an L2CAP PDU from a Classic peer into
      packets of at most the smallest of `host_acl_length` and the class's `acl_to_host`, `None` in
      `Controller` and `ACL_LENGTH` in `GuestController`, the first with packet boundary flag
@@ -524,7 +558,7 @@ interface that puts the firmware's controller on the board's link is
 | `BoardLoop()` | `now`, an `int` of nanoseconds; `time()`; `run_idle()`, the next timer's time or `None` |
 | `AirError` | A `RuntimeError`: what failed on the air, as its `__cause__` |
 | `Link()` | `esp32tl/bluetooth/air.py`: Bumble's `LocalLink`; `present(address)`, `reaches(sender, receiver)`, `leave(address, peers)`, `back(address)`, `let_go(one, other)` |
-| `Controller(name, link, address)` | `esp32tl/bluetooth/controller.py`: Bumble's `Controller` with the additions above; `link`, a `Link`; `acl_to_host`, a class attribute, `None`; `class_of_device`, `extended_inquiry_response` (240 bytes), `inquiry_mode`, `rssi`, `page_timeout`, in slots; `iac_laps`; `default_link_policy`, `link_policies`; `inquiry_scan_activity`, `page_scan_activity`, `(interval, window)`; `inquiry_scan_type`, `page_scan_type`; `host_acl_length`; `unknown_commands`; `authenticated(peer)`; `random_bytes(n)`; `left()`, `returned()`, `power_lost()` |
+| `Controller(name, link, address)` | `esp32tl/bluetooth/controller.py`: Bumble's `Controller` with the additions above; `link`, a `Link`; `acl_to_host`, a class attribute, `None`; `class_of_device`, `extended_inquiry_response` (240 bytes), `inquiry_mode`, `rssi`, `page_timeout`, `connection_accept_timeout`, in slots; `iac_laps`; `default_link_policy`, `link_policies`; `inquiry_scan_activity`, `page_scan_activity`, `(interval, window)`; `inquiry_scan_type`, `page_scan_type`; `host_acl_length`; `unknown_commands`; `authenticated(peer)`; `random_bytes(n)`; `left()`, `returned()`, `power_lost()` |
 | `Pairing(t, peer, initiator, method, number, status, authenticated=False)` | `esp32tl/bluetooth/controller.py`: frozen dataclass, a pairing that ended; `succeeded` |
 | `UnderWay(initiator, method, number=None, authenticated=False)` | A pairing under way; `Controller.under_way`, by peer, and `Controller.pairings` |
 | `LEGACY`, `JUST_WORKS`, `NUMERIC_COMPARISON`, `PASSKEY_ENTRY`, `SIMPLE_PAIRING` | The methods' names: `"legacy"`, `"just_works"`, `"numeric_comparison"`, `"passkey_entry"`, `"simple_pairing"` |
@@ -541,7 +575,9 @@ interface that puts the firmware's controller on the board's link is
 | `init_key(pin, in_rand, responder)`, `combination_key(init, initiator_rand, responder_rand, initiator, responder)`, `response(link_key, challenge, claimant)` | The keys and the response, above |
 | `INQUIRY_UNIT_S` | 1.28 |
 | `RSSI` | `esp32tl/bluetooth/controller.py`: `-50`, in dBm, a value of ours: nothing says what a device's should be |
-| `SLOT_S`, `PAGE_TIMEOUT_SLOTS`, `LINK_SUPERVISION_TIMEOUT_SLOTS` | `0.000625`; `0x2000`, 5.12 s; `0x7D00`, 20 s: Bluetooth Core 5.4, Vol 4, Part E, 7.3.16 and 7.3.42 |
+| `SLOT_S`, `PAGE_TIMEOUT_SLOTS`, `ACCEPT_TIMEOUT_SLOTS`, `LINK_SUPERVISION_TIMEOUT_SLOTS` | `0.000625`; `0x2000`, 5.12 s; `0x1F40`, 5 s; `0x7D00`, 20 s: Bluetooth Core 5.4, Vol 4, Part E, 7.3.16, 7.3.14 and 7.3.42 |
+| `ACCEPT_TIMEOUTS` | `range(0x0001, 0xB541)`: the connection accept timeouts a host may write, up to 29 s |
+| `HeardPage(connection, switching=False)`, `Answer(late=False, timer=None)` | `esp32tl/bluetooth/controller.py`: dataclasses, a page this side heard, in `_heard`, and an answer its host owes, in `_owed` |
 | `BluetoothDevice(air, *, name, pin=None, class_of_device=CLASS_OF_DEVICE, rssi=RSSI, address=ADDRESS, io_capability=None, confirms=True, passkey=None)` | `esp32tl/bluetooth/peer.py`: `device`, the Bumble `Device`; `address`; `name`, `pin`, `class_of_device`, `io_capability`, `confirms`, `passkey`; `rssi`, read and written; `present`; `pairing`, the controller's latest `UnderWay` or `None`; `pairings`, a copy of the controller's; `switch_off()`, `switch_on()`, `out_of_range()`, `in_range()`, `forget_keys()` |
 | `IO_CAPABILITIES` | `esp32tl/bluetooth/peer.py`: the four names a test gives, to Bumble's `PairingDelegate.IoCapability`: `DISPLAY_OUTPUT_ONLY`, `DISPLAY_OUTPUT_AND_YES_NO_INPUT`, `KEYBOARD_INPUT_ONLY`, `NO_OUTPUT_NO_INPUT` |
 | `SppPeer(air, *, name, pin, source, address=ADDRESS, channel=CHANNEL, secure=True, class_of_device=CLASS_OF_DEVICE, rssi=RSSI, service_name=SERVICE_NAME, io_capability=None, confirms=True, passkey=None)` | A `BluetoothDevice`, also: `source`, `channel`, `secure`, `service_name`; `events`; `refused`, `(t, why)` pairs; `lost`; `channel_open`; the party's `poll(now)` and `quiet_until()` |
@@ -683,7 +719,19 @@ in `error_code` on a failed `Connection_Complete`, and `HCI_Error` with
   answer on a working link, also to a page tried again, telling no failure. An acceptance as the
   central after the page ended refused with no link; one of a pager that left told at the
   supervision timeout, either way of leaving, or at the end of this side's own page when that page
-  outlasts it.
+  outlasts it. The tests of a host that answers after the page ended, or never, write the longest
+  connection accept timeout, 29 s, so that the page's end comes first, as their names say, and
+  answer within it: an answer the controller refuses as owed for nothing fails the air there, as
+  Bumble's host raises it from a task, and only the test of that refusal takes it.
+  The connection accept timeout, at its default: a page the host leaves unanswered ending at exactly
+  5 s on both sides with `CONNECTION_ACCEPT_TIMEOUT_EXCEEDED`, before the pager's page timeout, and
+  the next page connecting; an answer after it refused as owed for nothing, with no link on either
+  side; the crossing pages of #166, this side's own page reporting `PAGE_TIMEOUT` and the other
+  ending at its timeout, so this side's next page connects; a late answer the host never gives,
+  after a power cycle, ending at its timeout and leaving the next page its answer; an answer given
+  in time leaving no timer; a timeout written during a page taking effect from the next; a pager's
+  shorter page timeout ending its side first, with the target's host hearing its own timeout; 0,
+  0xB541 and 0xFFFF refused.
   Page scan off: a page ending at exactly the page timeout with no entry on the target, one turned
   on during the page answering only the next, and one turned back on paged at once; inquiry scan
   and page scan each on alone; a remote name request ending at the page timeout, also to a target
@@ -715,10 +763,11 @@ in `error_code` on a failed `Connection_Complete`, and `HCI_Error` with
   peer's end falling 20 s later and a page meanwhile ending in `PAGE_TIMEOUT`; in the middle of a
   page, with no `Connection_Complete` at its timeout and the next page started; with an answer owed,
   so the next page connects; and the defaults back, the last three after `HCI_Reset`, a chip reset
-  and a power cycle each; the access codes read back. `bt_spp_initiator`'s session: inquiry by name,
-  a link, SDP with the service name, PN, authentication with the PIN, SABM, no encryption, 2000
-  bytes to the peer and its answers back, every packet within 496 bytes and the ACL data within 491;
-  the channel refused at SABM without an authentication; ACL data cut to the host's
+  and a power cycle each, the connection accept timeout among them; the access codes read back, and
+  the connection accept timeout, 5 s at first, written, and 0 refused. `bt_spp_initiator`'s session:
+  inquiry by name, a link, SDP with the service name, PN, authentication with the PIN, SABM, no
+  encryption, 2000 bytes to the peer and its answers back, every packet within 496 bytes and the ACL
+  data within 491; the channel refused at SABM without an authentication; ACL data cut to the host's
   `Host_Buffer_Size`. An output due before its turn failing the link; a packet longer than the VHCI
   carries; an interface never used asking for nothing; `bt.air` refusing `wait`, `advance` and
   `run`, and following the link; the supply and a chip reset taking the controller off the air and
@@ -775,46 +824,53 @@ controller takes and nothing here gives. Nor is a clock offset other than zero. 
 product's add up to more than half a nanosecond, so a timer can fire a nanosecond early or late.
 From 2^23 s, about 97 days, a float of seconds no longer tells one nanosecond from the next, timers
 a nanosecond apart fall together, and where `time()` plus `_clock_resolution` rounds back to
-`time()` the loop spins at one instant, with no error. No test goes that far. There is no
-`Connection_Accept_Timeout` (Vol 4, Part E, 6.7), and the page's timer runs until the target's host
-accepts rather than until its baseband answers: a host that accepts after the page ended, as after 6
-s, makes a link on both ends when the pager has already reported `PAGE_TIMEOUT`, and the pager's
-next page gets `CONNECTION_ALREADY_EXISTS`. Bumble's host accepts at the instant it hears, so only a
-slowed host reaches this. For the same reason a target keeps the page it heard as a link after that
-page ended, so the pager's remote name request then gets the target's name, with page scan off too,
-where a real controller would page again and end in `PAGE_TIMEOUT`. An acceptance with
+`time()` the loop spins at one instant, with no error. No test goes that far. The page's timer runs
+until the target's host accepts rather than until its baseband answers. With the defaults the
+target's connection accept timeout, 5 s, ends a page its host leaves unanswered before the pager's
+5.12 s, on both sides; but when the pager's page timeout is the shorter, as when the target's host
+writes up to 29 s with `Write_Connection_Accept_Timeout`, a host that accepts after the page ended,
+as after 6 s, makes a link on both ends when the pager has already reported `PAGE_TIMEOUT`, and the
+pager's next page gets `CONNECTION_ALREADY_EXISTS`. Bumble's host accepts at the instant it hears,
+so only a slowed host reaches this. For the same reason a target keeps the page it heard as a link
+after that page ended, until its host answers or its connection accept timeout ends it, so the
+pager's remote name request then gets the target's name, with page scan off too, where a real
+controller would page again and end in `PAGE_TIMEOUT`. An acceptance with
 `role=CENTRAL` after the page ended makes no link, where a plain one does: the pager refuses the
 role switch. Bumble's host fails the air with `ObjectLookupError` when it accepts a peer's page with
 `role=CENTRAL` after its own `Device.connect` to that peer failed, as when the peer rejected this
 side's page while both paged: `connect` forgets the page waiting under that address, and
 `Role_Change` then finds no connection. The controller makes the link; a host that sends
 `Create_Connection` itself, as the test of this does, does not meet it. Every page a host hears is
-taken to get one answer, as Bumble's host gives. One that never answers and never resets: its entry
-stays with nothing to end it, so this device's own pages to that peer get
-`CONNECTION_ALREADY_EXISTS`, also after a page of its own has reported `PAGE_TIMEOUT`; and an answer
-counted late stays owed, so after its end fell, or after this device's own page to that peer made
-the link, the answer to the next page is taken for it and that pager gets `PAGE_TIMEOUT`.
-`HCI_Reset`, which Bluedroid sends at every start, clears both (#166 is the timeout that would end
-them without one). The controller does not hold ACL data back for the host's
-`Host_Total_Num_ACL_Data_Packets` (7.3.38 to 7.3.40): Bluedroid turns controller-to-host flow
-control on and counts its buffers, and the controller sends what it has.
-`Read_Local_Supported_Commands` gives Bumble 0.0.236's list, which does not name every command the
-controller answers, and `Read_Local_Version_Information` Bumble's version, 5.0. TODO(owner): what
-the classic ESP32's controller reports in both. A device that sends SABM for a DLC with no PN before
-it finds no DLC in Bumble 0.0.236's multiplexer, which drops the frame; Bluedroid sends PN first. A
-reset the firmware makes itself (a panic, the watchdog, `esp_restart()`) reaches the controller only
-with the runner's `reset` message: a packet the harness sent in the turn before, due after the
-reset, is in the runner's queue already, and the new host reads it first, within the 10 µs of the
-latency. The firmware's controller leaves the air only at a chip reset, `board.reset()` included,
-and when the board's supply goes off: the runner sends nothing when the chip goes into a deep sleep,
-or when the firmware calls `esp_bt_controller_disable` or `esp_bt_controller_deinit`. Through a deep
-sleep, and after either call, the controller stays on the air with its scans and its links, as if
-its radio were on: a device can find it and page it, and a link made before does not lose contact. A
-deep sleep ends with a reset, `DEEPSLEEP_RESET`, at which the controller leaves the air and comes
-back; the peer's end of a link then falls at its supervision timeout counted from the wake, not from
-the sleep. After `esp_bt_controller_disable`, what the controller sends waits in the runner's queue,
-and a later `enable` delivers it; after `deinit`, the runner drops it
-([protocol, 5.22](../protocol.md#522-hci_tx-and-hci_rx-ext-34)).
+taken to get one answer, as Bumble's host gives, until the answer's connection accept timeout. A
+host that does not answer meanwhile: its entry stays until then, so this device's own pages to that
+peer get `CONNECTION_ALREADY_EXISTS`, also after a page of its own has reported `PAGE_TIMEOUT`; and
+an answer counted late stays owed until then, so after its end fell, or after this device's own page
+to that peer made the link, the answer to the next page is taken for it, and that page ends at its
+own connection accept timeout. `HCI_Reset`, which Bluedroid sends at every start, clears both at
+once. A host that answers after its connection accept timeout, having heard
+`CONNECTION_ACCEPT_TIMEOUT_EXCEEDED`, gets `UNKNOWN_CONNECTION_IDENTIFIER` when nothing else is
+owed, and when the peer has paged again meanwhile its answer is taken for that page: an answer names
+only the address. TODO(owner): Vol 4, Part E, 7.1.8 does not say what a controller answers an
+acceptance with no request pending; only a real board's controller shows what ESP32's does. The
+controller does not hold ACL data back for the host's `Host_Total_Num_ACL_Data_Packets` (7.3.38 to
+7.3.40): Bluedroid turns controller-to-host flow control on and counts its buffers, and the
+controller sends what it has. `Read_Local_Supported_Commands` gives Bumble 0.0.236's list, which
+does not name every command the controller answers, and `Read_Local_Version_Information` Bumble's
+version, 5.0. TODO(owner): what the classic ESP32's controller reports in both. A device that sends
+SABM for a DLC with no PN before it finds no DLC in Bumble 0.0.236's multiplexer, which drops the
+frame; Bluedroid sends PN first. A reset the firmware makes itself (a panic, the watchdog,
+`esp_restart()`) reaches the controller only with the runner's `reset` message: a packet the harness
+sent in the turn before, due after the reset, is in the runner's queue already, and the new host
+reads it first, within the 10 µs of the latency. The firmware's controller leaves the air only at a
+chip reset, `board.reset()` included, and when the board's supply goes off: the runner sends nothing
+when the chip goes into a deep sleep, or when the firmware calls `esp_bt_controller_disable` or
+`esp_bt_controller_deinit`. Through a deep sleep, and after either call, the controller stays on the
+air with its scans and its links, as if its radio were on: a device can find it and page it, and a
+link made before does not lose contact. A deep sleep ends with a reset, `DEEPSLEEP_RESET`, at which
+the controller leaves the air and comes back; the peer's end of a link then falls at its supervision
+timeout counted from the wake, not from the sleep. After `esp_bt_controller_disable`, what the
+controller sends waits in the runner's queue, and a later `enable` delivers it; after `deinit`, the
+runner drops it ([protocol, 5.22](../protocol.md#522-hci_tx-and-hci_rx-ext-34)).
 ([Decision](../decisions/harness.md#the-firmwares-controller-does-not-follow-a-deep-sleep-or-a-disabled-controller).)
 When two pages cross, the controllers agree on one link and its central, but Bumble's host of a
 device that heard the other's page during its own `Device.connect` may take itself for the

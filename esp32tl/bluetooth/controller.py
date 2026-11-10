@@ -32,6 +32,10 @@ Classic link. `Controller` adds them, for links whose controllers are all of thi
   polls on this link, so a link is in contact until a device leaves, and its timer starts there.
 - Rejecting a page (Vol 4, Part E, 7.1.9), which Bumble has no handler for: the pager's
   `Connection_Complete` carries the reason as its status, and this side's host gets one too.
+- The connection accept timeout (Vol 4, Part E, 6.7, 7.3.13, 7.3.14), which Bumble does not have:
+  a page whose host does not answer within `Connection_Accept_Timeout` of its `Connection_Request`
+  is refused with `CONNECTION_ACCEPT_TIMEOUT_EXCEEDED`, which both hosts hear, and an answer that
+  comes after it answers nothing.
 - A page this side hears is kept apart from its own page to the same address, which Bumble's
   handler writes it over, until its host accepts it: this side's own page keeps what its
   `Create_Connection` asked, whatever becomes of the page heard. Two pages at one instant, both
@@ -61,7 +65,6 @@ generator seeded with the controller's address, so two runs exchange the same.
 import asyncio
 import hashlib
 import random
-from collections import Counter
 from dataclasses import dataclass, field
 
 from bumble import core, crypto, hci, lmp
@@ -76,10 +79,13 @@ INQUIRY_UNIT_S = 1.28
 # The signal strength a device answers an inquiry with, in dBm, unless the test gives another.
 RSSI = -50
 
-# A baseband slot, the unit of the page and link supervision timeouts, and their defaults: 5.12 s
-# and 20 s (Vol 4, Part E, 7.3.16 and 7.3.42).
+# A baseband slot, the unit of the page, connection accept and link supervision timeouts, and
+# their defaults: 5.12 s, 5 s and 20 s (Vol 4, Part E, 7.3.16, 7.3.14 and 7.3.42). A connection
+# accept timeout is one of `ACCEPT_TIMEOUTS`, up to 29 s.
 SLOT_S = 0.000625
 PAGE_TIMEOUT_SLOTS = 0x2000
+ACCEPT_TIMEOUT_SLOTS = 0x1F40
+ACCEPT_TIMEOUTS = range(0x0001, 0xB541)
 LINK_SUPERVISION_TIMEOUT_SLOTS = 0x7D00
 
 # The reasons a host may reject a page for (Vol 4, Part E, 7.1.9).
@@ -195,6 +201,16 @@ class HeardPage:
     switching: bool = False
 
 
+@dataclass
+class Answer:
+    """An answer this side's host owes a peer that paged it, from its `Connection_Request` until
+    the host gives it or its connection accept timeout ends it."""
+
+    # Whether the page heard went before it came, with no answer given: it can make no link.
+    late: bool = False
+    timer: asyncio.TimerHandle | None = None
+
+
 # How a pairing went: legacy pairing, with a PIN; Secure Simple Pairing's association models (Vol 1,
 # Part A, 5.2.4); and Secure Simple Pairing that ended before its model was known.
 LEGACY = "legacy"
@@ -308,8 +324,9 @@ def response(link_key: bytes, challenge: bytes, claimant: hci.Address) -> bytes:
 class Controller(BumbleController):
     """A Bumble controller at `address` on `link`, named `name` in Bumble's logs, which also does
     inquiry, legacy pairing, authentication with a stored key, encryption, a page timeout, link
-    supervision, the rejection of a page and page scan, keeps a page it hears apart from its
-    own, resets, answers the commands it does not know and cuts ACL data to the host's buffer.
+    supervision, the rejection of a page, a connection accept timeout and page scan, keeps a page
+    it hears apart from its own, resets, answers the commands it does not know and cuts ACL data to
+    the host's buffer.
 
     `acl_to_host` is the most ACL data a packet to the host carries, besides what the host's
     `Host_Buffer_Size` says: `None` for no bound of the transport's."""
@@ -341,10 +358,10 @@ class Controller(BumbleController):
         self._heard: dict[hci.Address, HeardPage] = {}
         # The remote name request this side made of each peer, until it is answered.
         self._naming: dict[hci.Address, asyncio.TimerHandle] = {}
-        # How many answers this side's host owes each peer that paged it, and how many of those
-        # are late, for a page heard that went before they came. An answer names only the address.
-        self._answers_due: Counter[hci.Address] = Counter()
-        self._late_answers: Counter[hci.Address] = Counter()
+        # The answers this side's host owes each peer that paged it, oldest first: an answer names
+        # only the address, so the host's next one is taken for the oldest. One that is not late
+        # answers the page heard from that peer, whichever page it was owed for.
+        self._owed: dict[hci.Address, list[Answer]] = {}
         # Each link's timeout in slots, where a host or the central changed it; 0 for none.
         self._supervision_timeouts: dict[hci.Address, int] = {}
         # The time each link lost contact, on the loop's clock, and the timer it falls by.
@@ -363,6 +380,7 @@ class Controller(BumbleController):
         self.extended_inquiry_response = bytes(240)
         self.inquiry_mode = 0
         self.page_timeout = PAGE_TIMEOUT_SLOTS
+        self.connection_accept_timeout = ACCEPT_TIMEOUT_SLOTS
         self.classic_scan_enable = 0
         # The inquiry access codes this side's inquiry scan answers (7.3.45).
         self.iac_laps = [GIAC]
@@ -693,8 +711,11 @@ class Controller(BumbleController):
         finally:
             self.host = host
         self._heard.clear()
-        self._answers_due.clear()
-        self._late_answers.clear()
+        for answers in self._owed.values():
+            for answer in answers:
+                if answer.timer is not None:
+                    answer.timer.cancel()
+        self._owed.clear()
         self._security.clear()
         self._pairing.clear()
         self._encryption.clear()
@@ -821,6 +842,32 @@ class Controller(BumbleController):
         self.page_timeout = command.page_timeout
         return hci.HCI_StatusReturnParameters(hci.HCI_ErrorCode.SUCCESS)
 
+    def on_hci_write_connection_accept_timeout_command(
+        self, command: hci.HCI_Write_Connection_Accept_Timeout_Command
+    ) -> hci.HCI_StatusReturnParameters:
+        """7.3.14: how long this side's host has to answer each page it hears from now on, in
+        slots, 0x0001 to 0xB540. A page heard already keeps the time it had."""
+        if command.connection_accept_timeout not in ACCEPT_TIMEOUTS:
+            return hci.HCI_StatusReturnParameters(
+                hci.HCI_ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR
+            )
+        self.connection_accept_timeout = command.connection_accept_timeout
+        return hci.HCI_StatusReturnParameters(hci.HCI_ErrorCode.SUCCESS)
+
+    def on_hci_read_connection_accept_timeout_command(self, command: hci.HCI_Command) -> None:
+        """7.3.13: the timeout, in slots. Bumble 0.0.236 has no class for the command, so its
+        `Command_Complete` is sent here."""
+        timeout = self.connection_accept_timeout.to_bytes(2, "little")
+        self.send_hci_packet(
+            hci.HCI_Command_Complete_Event(
+                num_hci_command_packets=1,
+                command_opcode=command.op_code,
+                return_parameters=hci.HCI_GenericReturnParameters(
+                    data=bytes([hci.HCI_ErrorCode.SUCCESS]) + timeout
+                ),
+            )
+        )
+
     def on_hci_create_connection_command(self, command: hci.HCI_Create_Connection_Command) -> None:
         peer = command.bd_addr
         if peer in self.classic_connections or peer in self._heard:
@@ -880,7 +927,12 @@ class Controller(BumbleController):
                 classic_allow_role_switch=self.classic_allow_role_switch,
             )
         )
-        self._answers_due[peer_address] += 1
+        # The connection accept timeout runs from the event on (Vol 4, Part E, 6.7).
+        answer = Answer()
+        answer.timer = asyncio.get_running_loop().call_later(
+            self.connection_accept_timeout * SLOT_S, self._accept_timed_out, peer_address, answer
+        )
+        self._owed.setdefault(peer_address, []).append(answer)
         self.send_hci_packet(
             hci.HCI_Connection_Request_Event(
                 bd_addr=peer_address, class_of_device=0, link_type=link_type
@@ -965,33 +1017,69 @@ class Controller(BumbleController):
         if self._take_answer(peer, command.op_code) is None:
             return
         self._send_hci_command_status(hci.HCI_ErrorCode.SUCCESS, command.op_code)
-        self.send_lmp_packet(
-            peer, lmp.LmpNotAccepted(lmp.Opcode.LMP_HOST_CONNECTION_REQ, command.reason)
-        )
-        # The page goes, with what a page whose pager left has running; this side's own page stays.
-        # What is still owed stays as it was: a host may never give it, and then it must not take
-        # the next page's answer.
+        self._refuse(peer, command.reason)
+
+    def _refuse(self, peer: hci.Address, reason: int) -> None:
+        """The page heard from `peer` goes with no link, for `reason`, which the pager and this
+        side's host hear. What a page whose pager left has running goes with it; this side's own
+        page stays."""
+        self.send_lmp_packet(peer, lmp.LmpNotAccepted(lmp.Opcode.LMP_HOST_CONNECTION_REQ, reason))
         del self._heard[peer]
         self._forget_link(peer)
         self._let_go(peer)
-        self._tell_host_no_link(peer, command.reason)
+        self._tell_host_no_link(peer, reason)
+
+    def _accept_timed_out(self, peer: hci.Address, answer: Answer) -> None:
+        """The connection accept timeout of `answer` ran out before this side's host gave it (Vol
+        4, Part E, 6.7): it is owed no longer, and the host hears so with
+        `CONNECTION_ACCEPT_TIMEOUT_EXCEEDED` where `_tell_host_no_link` lets it, which it does not
+        while this side holds an entry for `peer`, its own page or a link. When it was the last
+        answer that could answer the page heard from `peer`, that page is refused with the same
+        reason, which the pager hears as it would hear the host's rejection."""
+        self._remove_answer(peer, answer)
+        reason = hci.HCI_ErrorCode.CONNECTION_ACCEPT_TIMEOUT_ERROR
+        heard = self._heard.get(peer)
+        waiting = heard is not None and not heard.switching and not self._has_link(peer)
+        if answer.late or not waiting or any(not a.late for a in self._owed.get(peer, ())):
+            # Its page went before it, or another answer owed may still answer the page heard.
+            self._tell_host_no_link(peer, reason)
+        elif self._own_page_accepted(peer):
+            # This side's own page makes the link: the page heard goes, as when the host answers,
+            # and the host hears nothing, since that page holds the entry for `peer`.
+            self._drop_heard(peer)
+        else:
+            self._refuse(peer, reason)
+
+    def _remove_answer(self, peer: hci.Address, answer: Answer) -> None:
+        answers = self._owed[peer]
+        answers.remove(answer)
+        if not answers:
+            del self._owed[peer]
+        if answer.timer is not None:
+            answer.timer.cancel()
 
     def _take_answer(self, peer: hci.Address, op_code: int) -> HeardPage | None:
-        """Counts an answer of this side's host to a page from `peer`, and gives the page it
-        answers, if this side still holds one with no link to `peer`, and the peer has not accepted
-        this side's own page. If not, this has told the host: an answer nothing was owed for is its
-        own error, and one with no page left makes no link, and what this side holds for the peer
-        now, a link or its own page, is not this answer's."""
-        if self._answers_due[peer] == 0:
+        """Takes an answer of this side's host to a page from `peer` for the oldest it owes, and
+        gives the page it answers, if this side still holds one with no link to `peer`, and the peer
+        has not accepted this side's own page. If not, this has told the host: an answer nothing is
+        owed for is its own error, also one whose connection accept timeout ran out, and one with no
+        page left makes no link, and what this side holds for the peer now, a link or its own page,
+        is not this answer's."""
+        answers = self._owed.get(peer)
+        if not answers:
             self._send_hci_command_status(
                 hci.HCI_ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR, op_code
             )
             return None
-        self._answers_due[peer] -= 1
+        answer = answers[0]
+        self._remove_answer(peer, answer)
         heard = self._heard.get(peer)
-        if self._late_answers[peer] > 0:
-            self._late_answers[peer] -= 1
-        elif heard is not None and not heard.switching and not self._has_link(peer):
+        if (
+            not answer.late
+            and heard is not None
+            and not heard.switching
+            and not self._has_link(peer)
+        ):
             if not self._own_page_accepted(peer):
                 return heard
             # This side's own page makes the link, or fails with the peer's acceptance.
@@ -1023,10 +1111,11 @@ class Controller(BumbleController):
 
     def _drop_heard(self, peer: hci.Address) -> None:
         """The page this side heard from `peer`, if any, goes with no link. The answers still owed
-        for it are late; one given already is not owed."""
+        for it are late, each until its connection accept timeout; one given already is not owed."""
         heard = self._heard.pop(peer, None)
         if heard is not None and not heard.switching:
-            self._late_answers[peer] = self._answers_due[peer]
+            for answer in self._owed.get(peer, ()):
+                answer.late = True
 
     def _has_link(self, peer: hci.Address) -> bool:
         """Whether this side's entry for `peer` in `classic_connections` is a link: its own page
