@@ -667,13 +667,22 @@ with the card and its clone in one directory of the file system named:
 | The same, btrfs | 4.0.43 | 0.02 s, 8 MiB | 5 ms, 8 MiB | not measured |
 | The same, overlayfs | 4.0.43 | 0.02 s, 8 MiB | `ENOTSUP` | 5 ms, under 1 MiB |
 | The same, tmpfs | 4.0.43 | 0.02 s, 8 MiB | `ENOTSUP` | 5 ms, under 1 MiB |
+| hp600g1, Ubuntu 24.04, kernel 6.8, ext4 on NVMe | 4.0.43 | 0.03 s, 8 MiB | `ENOTSUP` | 16.5 ms, under 1 MiB |
 
 On APFS 1 TiB takes 0.15 s and 256 MiB with 32 KiB clusters, and 0.08 s and 128 MiB with 64 KiB;
 `clonefile` stays at 0.3 ms and the sparse copy takes 114 and 58 ms, because it has FATs to read.
+The sparse copy in hp600g1's row is the median of nine, three in each of `.pytest_cache`, `/tmp`
+and `$RUNNER_TEMP`: they took from 7 to 23 ms. On hp600g1 1 TiB takes 0.3 s and 256 MiB with
+32 KiB clusters, and 0.15 s and 128 MiB with 64 KiB. Its sparse copy took 180 to 185 ms and 91 to
+97 ms, except the first in each directory, which took 189 to 228 ms and 107 to 157 ms.
 `tests/test_card_image.py` and the tests of `tests/test_card_cache.py` that need no firmware pass in
-that container on xfs, overlayfs and tmpfs. TODO(mateuszsikora): #151, measure ext4 on bare metal,
-where `FICLONE` should be refused and the sparse copy taken; `tests/test_card_cache.py` runs both
-paths on hp600g1, with no time measured.
+the Docker Desktop container on xfs, overlayfs and tmpfs.
+
+ext4 has no clones, so on hp600g1 every `get` and `put` is the sparse copy, and both parameters of
+`tests/test_card_cache.py`, the file system's clone and the sparse copy, run the copy. There the
+runner's checkout, with its `.pytest_cache`, and `/tmp` are on one ext4 file system, and the runner
+sets no `TMPDIR`. If `TMPDIR` pointed at another file system, `FICLONE` would fail with `EXDEV`
+instead of `ENOTSUP`, and `get` and `put` would make the same sparse copy.
 
 ### The SD card's fault rules
 
