@@ -5,13 +5,16 @@ the board's time, for the test to look at; the test can publish too.
 
 import struct
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field, replace
 from enum import IntEnum
 from typing import Literal, TypeVar
 
 from esp32tl.interfaces.condition import Condition
 from esp32tl.units import Duration
+
+TEST_CLIENT = "(test)"
+"""The `client` of every message `Broker.publish` records: the test's own publications."""
 
 CONNECT, CONNACK, PUBLISH, PUBACK, PUBREC, PUBREL, PUBCOMP = 1, 2, 3, 4, 5, 6, 7
 SUBSCRIBE, SUBACK, UNSUBSCRIBE, UNSUBACK, PINGREQ, PINGRESP, DISCONNECT = 8, 9, 10, 11, 12, 13, 14
@@ -194,12 +197,33 @@ def matches(pattern: str, topic: str) -> bool:
     return len(p) == len(t)
 
 
-def _first(history: list[Record], topic: str, wanted: bytes | None, start: int) -> Record | None:
-    """The first record from `start` on this topic filter, with this payload if one is wanted."""
+def _matching(
+    history: list[Record], topic: str, wanted: bytes | None, start: int
+) -> Iterator[Record]:
+    """The records from `start` on this topic filter, with this payload if one is wanted."""
     for record in history[start:]:
         if matches(topic, record.topic) and (wanted is None or record.payload == wanted):
-            return record
-    return None
+            yield record
+
+
+def _first(history: list[Record], topic: str, wanted: bytes | None, start: int) -> Record | None:
+    return next(_matching(history, topic, wanted, start), None)
+
+
+class Mark:
+    """A position in one broker's message history, at its end when `Broker.mark` was called.
+
+    Opaque: pass it to `Broker.find_messages(since=...)` of the broker that made it.
+    """
+
+    __slots__ = ("_broker", "_index")
+
+    def __init__(self, broker: "Broker", index: int) -> None:
+        self._broker = broker
+        self._index = index
+
+    def __repr__(self) -> str:
+        return f"<MQTT message history mark at {self._index}>"
 
 
 def _string(data: bytes, at: int) -> tuple[str, int]:
@@ -347,6 +371,33 @@ class Broker:
         wanted = payload.encode() if isinstance(payload, str) else payload
         return _first(self.messages, topic, wanted, 0)
 
+    def mark(self) -> Mark:
+        """A position at the end of `messages` now, for `find_messages(since=...)`."""
+        return Mark(self, len(self.messages))
+
+    def find_messages(
+        self,
+        topic: str = "#",
+        payload: bytes | str | None = None,
+        *,
+        since: Mark | None = None,
+        client: str | None = None,
+    ) -> list[Message]:
+        """Every match in recorded history now, in append order; consume nothing.
+
+        `since` keeps the messages appended after that mark was made, even at its board time;
+        `None` reads from the start. `client` keeps one client ID's messages: `TEST_CLIENT` for
+        the test's own publications.
+        """
+        if since is not None and not isinstance(since, Mark):
+            raise TypeError("mqtt: since takes a mark from broker.mark()")
+        if since is not None and since._broker is not self:
+            raise ValueError("mqtt: this mark belongs to another broker")
+        wanted = payload.encode() if isinstance(payload, str) else payload
+        start = 0 if since is None else since._index
+        found = _matching(self.messages, topic, wanted, start)
+        return [m for m in found if client is None or m.client == client]
+
     def next_delivery(
         self, topic: str = "#", payload: bytes | str | None = None
     ) -> Callable[[], Delivery | None]:
@@ -411,7 +462,7 @@ class Broker:
         if qos not in (0, 1):
             raise ValueError("MQTT supports QoS 0 and 1")
         data = payload.encode() if isinstance(payload, str) else payload
-        self._route(Message(Duration(self._now()), "(test)", topic, data, qos, retain))
+        self._route(Message(Duration(self._now()), TEST_CLIENT, topic, data, qos, retain))
 
     def poll(self) -> None:
         for session in list(self._sessions):

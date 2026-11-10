@@ -262,7 +262,10 @@ def test_losing_the_fix_clears_the_reported_position(board: Board) -> None:
 `reports.when_received(with_position=True)` additionally requires a fix. Neither call consumes
 a message: each creates a condition, whose repeated polls return the same first match. A position
 condition can wait past the initial no-fix report without assuming which numbered message has a position. `reports.history` includes only
-tracker reports from firmware, excluding unrelated topics and publications made by the test.
+tracker reports from the firmware's client ID, `position-tracker`, excluding unrelated topics,
+publications made by the test and any other client. The adapter reads them with
+`broker.mark()` and `broker.find_messages(..., since=mark, client=...)`
+([every message since a point](network-user.md#every-message-since-a-point)).
 Malformed reports fail decoding instead of disappearing from a position wait. This application
 adapter lives in `tests/tracker_support.py`; `board` remains the only clock and power control.
 Timeouts and the run report describe the expected result as `a tracker report` or

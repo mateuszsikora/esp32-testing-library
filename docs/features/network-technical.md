@@ -313,9 +313,19 @@ threads; a connect in progress ends within `CONNECT_SECONDS`. The backend calls 
   `deliveries`, filtering as `next_message` does. Matching uses append order,
   not timestamps, and polling does not change the captured offset. `find_message` scans
   from index zero with the same topic/payload filters; `find_connection` reads the first CONNECT.
-  These are immediate queries returning records or `None`. Every MQTT condition, the live
-  subscription query included, is a `Condition` with service `MQTT`.
-  Subscriptions continue to read active sessions, without latching matches.
+  `mark()` returns a `Mark` holding the broker and `len(messages)` at the call;
+  `find_messages(topic, payload, since=, client=)` walks `messages` from that index (zero for
+  `None`) through `_matching`, the generator `_first` takes its first record from, keeps
+  `message.client == client` when a client is given, and returns a new list. A `since` that is not
+  a `Mark` raises `TypeError` before anything is read, and a `Mark` made by another broker raises
+  `ValueError` rather than reading an index into a history it was not taken from. The index is a
+  valid boundary because `messages` is append-only and never cleared, network reset included.
+  `publish` stamps its messages with `TEST_CLIENT`, `"(test)"`, a name the broker does not reserve:
+  a client that connects with client ID `(test)` is indistinguishable from the test by `client`
+  alone (its messages have a `connection_id`). These are immediate queries returning records, a
+  list of them, or `None`. Every MQTT condition, the live subscription query included, is a
+  `Condition` with service `MQTT`. Subscriptions continue to read active sessions, without
+  latching matches.
   Each accepted stream receives a broker-local increasing `connection_id`, independent of the
   client ID and listener. Every incoming PUBLISH records its packet ID and DUP bit; `_handle`
   rejects DUP on QoS 0 as malformed. QoS 1 receipts reference a public `Publication`; the

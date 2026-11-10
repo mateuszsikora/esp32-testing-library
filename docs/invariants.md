@@ -1404,6 +1404,14 @@ that references to its number keep their meaning.
     `tests/test_net_mqtt.py::test_mqtt_conditions_are_named_and_reject_truth_testing`,
     `tests/test_clock.py::test_mqtt_immediate_response_is_visible_after_waiting_for_connection`,
     `examples/position_tracker/tests/test_tracker_support.py::test_mqtt_timeout_names_the_expected_connection`
+- **223.** `broker.find_messages(since=broker.mark())` returns every matching message appended
+    after the mark, in append order, those at the mark's board time included and those appended
+    before it excluded; `client=` keeps one client ID's messages, and the test's publications carry
+    `TEST_CLIENT`. Reading consumes nothing; a mark from another broker, and a `since` that is not
+    a mark, are refused.
+    `tests/test_net_mqtt.py::test_find_messages_reads_every_match_after_a_mark_by_topic_payload_and_client`,
+    `tests/test_net_mqtt.py::test_find_messages_refuses_a_mark_from_another_broker_and_an_index`,
+    `examples/position_tracker/tests/test_tracker_support.py::test_waits_start_now_filter_the_topic_and_preserve_the_first_match`
 
 - **126.** TLS next-event conditions require a started/completed counter increment after construction.
     Prior successes cannot satisfy them after closure or reset, and a failed new attempt does

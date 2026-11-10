@@ -47,6 +47,8 @@ silent; an AT-only model still works without PPP. The network's broker is `modem
 |---|---|
 | `next_message(topic="#", payload=None)` | Condition returning the first matching message recorded **after this method call**; MQTT topic filters are accepted, payload is bytes or text |
 | `find_message(topic="#", payload=None)` | Immediate history query returning the first recorded match, or `None`; the same filters as `next_message` |
+| `mark()` | A `Mark`: an opaque position at the end of `messages` now, for `find_messages(since=...)` ([every message since a point](#every-message-since-a-point)) |
+| `find_messages(topic="#", payload=None, *, since=None, client=None)` | Immediate history query returning a new list of every recorded match after `since` (from the start when `None`), in append order; `client` keeps one client ID's messages |
 | `message(topic="#", payload=None)` | Alias of `next_message` |
 | `subscribed(topic)` | Condition true while an active client has this exact subscription filter, including an existing subscription |
 | `next_connection()` | Condition returning the first accepted MQTT CONNECT recorded **after this method call** |
@@ -54,7 +56,7 @@ silent; an AT-only model still works without PPP. The network's broker is `modem
 | `connected()` | Alias of `next_connection` |
 | `connection_attempt()` | Condition returning the first accepted or rejected CONNECT outcome recorded **after this method call** |
 | `connection_policy` | Callable receiving `Connect` and returning `ConnackCode`; `None` (default) accepts supported requests |
-| `publish(topic, payload, retain=False, qos=0)` | Publish from the test at the board's current time; bytes or UTF-8 text, QoS 0 or 1 |
+| `publish(topic, payload, retain=False, qos=0)` | Publish from the test at the board's current time; bytes or UTF-8 text, QoS 0 or 1. The message's `client` is `TEST_CLIENT` |
 | `messages`, `clients`, `retained` | Message history, accepted-client history and currently retained messages |
 | `connection_attempts` | CONNECT outcome history, including accepted and rejected attempts |
 | `puback` | Policy for new incoming QoS 1 exchanges: `"immediate"` (default), `"hold"`, or a nonnegative `Duration` |
@@ -69,8 +71,9 @@ silent; an AT-only model still works without PPP. The network's broker is `modem
 A message has `at` (`Duration`), `client`, `topic`, `payload` (bytes), `qos`, `retain`, and
 `text` (UTF-8 with replacement). Incoming publications also expose `connection_id`, `packet_id`
 (`None` for QoS 0), `dup` and `publication` (a `Publication` handle for QoS 1, otherwise `None`).
-Test publications use client `(test)` and have no connection, packet ID or handle. Wills carry
-their original connection ID but have no packet ID or handle. A client record has `at`,
+Test publications use client `TEST_CLIENT` (`"(test)"`, exported by `esp32tl.net.mqtt`) and
+have no connection, packet ID or handle. Wills carry their original connection ID but have no
+packet ID or handle. A client record has `at`,
 `client_id`, `username`, `password`, `keepalive`, `will_topic`, `connection_id` and
 `session_present`, what its CONNACK said. Connection
 IDs are increasing integers local to this broker, allocated when streams are accepted (so a
@@ -87,7 +90,7 @@ or the start of `board.wait_until`. Events already recorded are excluded; events
 afterwards are included even if their board timestamps equal an earlier event's timestamp.
 Within each history, append order breaks timestamp ties and the first matching entry wins.
 There is no timestamp cursor shared across MQTT, TLS, HTTP and DHCP, nor a cross-history
-ordering API.
+ordering API; the MQTT message history has [a mark of its own](#every-message-since-a-point).
 
 For example, a device may connect and publish within one run slice. Arm both conditions before
 power-on so waiting for the connection cannot miss the immediate publication:
@@ -107,6 +110,42 @@ advance time. They include all history, including closed connections, test publi
 Wills. The public `messages` and `clients` lists expose all records in append order; treat them
 as read-only histories. Network resets do not clear them. Payload decoding and application
 schema assertions belong in consumer code, as in the position tracker's `Reports` adapter.
+
+### Every message since a point
+
+`next_message` and `find_message` give the first match only. A check over a stream of
+publications (every batch a closing message names arrived, nothing of a kind after a wake,
+sequence numbers without a gap across an outage) takes a mark before the action and reads every
+match after it:
+
+```python
+import json
+
+from esp32tl.net.mqtt import TEST_CLIENT
+from esp32tl.units import seconds
+
+DEVICE = "logger-1"  # The client ID the firmware connects with.
+
+mark = broker.mark()
+broker.publish("device/config", "interval=10", retain=True)
+board.wait(seconds(60))
+published = broker.find_messages("device/telemetry/#", since=mark, client=DEVICE)
+assert [json.loads(m.payload)["seq"] for m in published] == list(range(1, 7))
+assert broker.find_messages(since=mark, client=TEST_CLIENT)[0].topic == "device/config"
+```
+
+The mark is the end of `messages` at the `mark()` call, as a `next_*` boundary is: a message
+appended after it is included even when its board time equals the mark's, or that of a message
+before it, and a message appended before it is excluded. The list is in append order, a new list
+each call, and reading it consumes nothing; take a new mark for a new point. `client` is a client
+ID, compared exactly: a Will carries its client's ID, so `client=DEVICE` keeps the device's Will
+too, and `client=TEST_CLIENT` keeps the test's own publications. Without `client`, every client's
+messages are included, test publications too, as in `find_message`. A QoS 1 retransmission is a
+record of its own, with `dup` set. A mark belongs to the broker that made it: another broker's
+`find_messages` raises `ValueError` (`mqtt: this mark belongs to another broker`), and a `since`
+that is not a mark, an index into `messages` for one, raises `TypeError`
+(`mqtt: since takes a mark from broker.mark()`). `next_message` takes no mark, and the mark is
+the message history's own: it orders nothing against `clients`, `deliveries` or another service.
 
 Polling any MQTT event condition does **not** consume a match or move its boundary. Repeated
 calls and waits return the same first match; construct a new `next_*` condition for a new wait.
