@@ -738,8 +738,9 @@ with the same request, which skips, since `serial` declares no `bluetooth`; were
 would raise `BackendError: serial: the chip's Bluetooth has no interface on this backend`. The air,
 its devices and the controller are in [bluetooth-peer-technical.md](bluetooth-peer-technical.md).
 
-`Bluetooth.tap(path)` calls `use()`, then `asked` with `Request("bluetooth", tap=True)`, which
-esp32sim declares; it refuses a second tap, a path whose directory is missing, and a path or
+`Bluetooth.tap(path)` calls `asked` with `Request("bluetooth", tap=True)`, which esp32sim declares,
+then `use()`, so that a tap asked for after power-on is refused as a tap, `bluetooth: the board is
+on already: tap a route before board.power_on()`, as a UART's is; it refuses a second tap, a path whose directory is missing, and a path or
 sidecar (`recording.sidecar(path)`, the path with `.json` added) that the backend's `files`
 mapping already holds, the mapping the UARTs and the SD card share; it claims both as `("tap",
 "bluetooth")`. The interface records each packet in `receive` as `out` at the `hci_tx`'s time, and

@@ -3569,8 +3569,11 @@ YES_NO = PairingDelegate.DISPLAY_OUTPUT_AND_YES_NO_INPUT
     ("peer_has", "peer_confirms", "esp32_has", "esp32_confirms", "esp32_saw", "status"),
     [
         ("no_input_no_output", True, NO_IO, True, [("auto", None)], SUCCESS),
-        # The side with a yes and a no is asked to allow it, the other is not.
+        # Against no input and no output, a side with a yes and a no is asked to allow it; the
+        # side with none, as the peer here, allows it by itself.
         ("no_input_no_output", False, YES_NO, True, [("confirm", None)], SUCCESS),
+        # Bumble asks a display with no yes or no too, which allows it whatever `confirms` says.
+        ("display_only", False, NO_IO, True, [("auto", None)], SUCCESS),
         ("no_input_no_output", True, YES_NO, False, [("confirm", None)], AUTHENTICATION_FAILURE),
         ("display_yes_no", False, NO_IO, True, [("auto", None)], AUTHENTICATION_FAILURE),
     ],

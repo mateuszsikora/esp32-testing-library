@@ -18,7 +18,7 @@ from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from typing import TypeVar
 
-from bumble import core, hci, rfcomm, sdp
+from bumble import core, hci, rfcomm, sdp, utils
 from bumble.device import Connection, Device, DeviceConfiguration, with_connection_from_address
 from bumble.hci import Address
 from bumble.host import Host
@@ -83,8 +83,10 @@ class PeerError(ValueError):
 class _User(PairingDelegate):
     """The device's user. Answers a PIN request with the device's PIN, as a device with a fixed PIN
     does; without one, the pairing fails. With Secure Simple Pairing, of `io_capability`: says
-    yes to a number to compare, or to a pairing it is asked to allow, when it `confirms`; types
-    `passkey` when asked for one, and refuses without one; and reads what its display shows."""
+    yes to a number to compare, or to a pairing it is asked to allow, when it `confirms`, unless
+    it has a display only, with no yes or no to say, which allows whatever it is asked (Vol 3,
+    Part C, 5.2.2.6, Table 5.7: automatic confirmation); types `passkey` when asked for one, and
+    refuses without one; and reads what its display shows."""
 
     def __init__(
         self,
@@ -102,8 +104,11 @@ class _User(PairingDelegate):
         return self.pin
 
     async def confirm(self, auto: bool = False) -> bool:
-        # Asked to allow a pairing, or told one that needs no word from the user.
-        return True if auto else self.confirms
+        # Asked to allow a pairing, or told one that needs no word from the user. Bumble asks a
+        # display with no yes or no too, against a device with no input and no output.
+        if auto or self.io_capability == PairingDelegate.DISPLAY_OUTPUT_ONLY:
+            return True
+        return self.confirms
 
     async def compare_numbers(self, number: int, digits: int) -> bool:
         return self.confirms
@@ -137,7 +142,8 @@ class _Device(Device):
                 )
             await self.host.send_sync_command(command)  # type: ignore[arg-type]
 
-        connection.cancel_on_disconnection(answer())
+        # As Bumble's own handler does: a task it keeps until it is done.
+        utils.AsyncRunner.spawn(answer())  # type: ignore[no-untyped-call]
 
 
 class BluetoothDevice:
@@ -147,11 +153,12 @@ class BluetoothDevice:
 
     With `io_capability`, one of `IO_CAPABILITIES`, it has Secure Simple Pairing, which a device
     that has it too pairs with, by the association model of the two capabilities: its user says
-    yes to a number or to the pairing when it `confirms`, the default, and no otherwise, and types
-    `passkey`, six digits, when asked for one (`keyboard_only`); a device that has none pairs with
-    the PIN. Without it the device pairs with the PIN only. `pairings` is the history of the
-    device's pairings that ended, each a `Pairing`. `rssi` can be changed at any time, and
-    the next inquiry gets it; the plain `Inquiry_Result` has no such field.
+    yes to a number or to the pairing when it `confirms`, the default, and no otherwise, but for a
+    `display_only` user, who has no yes or no and allows every pairing; and it types `passkey`,
+    six digits, when asked for one (`keyboard_only`). A device that has none pairs with the PIN.
+    Without it the device pairs with the PIN only. `pairings` is the history of the device's
+    pairings that ended, each a `Pairing`. `rssi` can be changed at any time, and the next inquiry
+    gets it; the plain `Inquiry_Result` has no such field.
 
     `switch_off` and `out_of_range` take it off the air without a word, until `switch_on` and
     `in_range` have both undone what was done; `present` says whether it is on the air. To another

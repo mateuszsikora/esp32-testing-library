@@ -956,7 +956,8 @@ def test_a_tap_records_every_packet_both_ways_at_the_time_it_crossed(tmp_path: P
     asked: list[Request] = []
     bt = Bluetooth(asked=asked.append, directory=tmp_path)
     tap = bt.tap("hci.btsnoop")
-    assert asked == [Request("bluetooth", source="model"), Request("bluetooth", tap=True)]
+    # The tap is asked for first, so that one too late is refused as a tap.
+    assert asked == [Request("bluetooth", tap=True), Request("bluetooth", source="model")]
     guest = Bluedroid()
     runner = Runner(guest, bt)
     try:
@@ -1014,4 +1015,19 @@ def test_a_tap_the_backend_refuses_is_not_made(tmp_path: Path) -> None:
     with pytest.raises(SourceError, match="cannot be tapped"):
         bt.tap("hci.btsnoop")
     assert bt.tapped is None and bt.files == {}
+    # Refused before the interface was used: the run gets no --bt for it.
+    assert not bt.used
     bt.close()
+
+
+def test_a_tap_of_an_unused_interface_after_power_on_is_refused_as_a_tap(tmp_path: Path) -> None:
+    backend = Esp32Sim.__new__(Esp32Sim)
+    backend.process = cast(Any, object())
+    backend._supply = True
+    bt = Bluetooth(asked=backend._asked, directory=tmp_path)
+    with pytest.raises(
+        SourceError,
+        match=r"^bluetooth: the board is on already: tap a route before board\.power_on\(\)$",
+    ):
+        bt.tap("hci.btsnoop")
+    assert not bt.used and bt.tapped is None

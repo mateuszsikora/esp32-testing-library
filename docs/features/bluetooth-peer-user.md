@@ -168,7 +168,7 @@ confirms=True, passkey=None)`:
 | `rssi` | The signal strength an inquiry hears it at, in dBm, -127 to 20, the range of the specification's inquiry results |
 | `service_name` | The name of the SPP service in its SDP record, a string of 1 to 255 bytes in UTF-8, or `None` for a record without one |
 | `io_capability` | `None`, the default, for a peer that pairs with its PIN only; or what its user has for Secure Simple Pairing: `display_only`, `display_yes_no`, `keyboard_only` or `no_input_no_output` ([below](#secure-simple-pairing)) |
-| `confirms` | With Secure Simple Pairing, whether its user says yes to the number to compare, or to a pairing it is asked to allow |
+| `confirms` | With Secure Simple Pairing, whether its user says yes to the number to compare, or to a pairing it is asked to allow; a `display_only` user has no yes or no, and allows every pairing whatever `confirms` says |
 | `passkey` | With `keyboard_only`, the passkey its user types when asked, 0 to 999999; `None`, the default, for a user who types none, and the pairing fails |
 
 From the moment it is made, at the air's current instant, and until the test takes it off the air
@@ -219,10 +219,10 @@ Bluetooth Core 5.4 orders it (Vol 3, Part C, 5.2.2.6):
 
 | Either side has | How they pair | The key |
 |---|---|---|
-| `no_input_no_output` | **Just Works.** Nobody compares or types: a side that has a yes and a no (`display_yes_no`) is asked to allow it, and says yes when it `confirms`; the other allows it by itself | unauthenticated |
+| `no_input_no_output` | **Just Works.** Nobody compares or types: against a side with no input and no output, a `display_yes_no` side is asked to allow it, and says yes when it `confirms`; every other side allows it by itself, `display_only` too, which has no yes or no to say | unauthenticated |
 | `keyboard_only` (and neither has `no_input_no_output`) | **Passkey Entry.** A side with a display shows a six-digit passkey, and the side with the keyboard types it; with two keyboards, each user types one, and they must be the same. A peer with a keyboard types its `passkey` | authenticated |
 | `display_yes_no`, both | **Numeric Comparison.** Both show one six-digit number, and each user says yes when it `confirms` | authenticated |
-| `display_only` and a display | **Numeric Comparison**, which the side with a display only confirms by itself; the other user says yes when it `confirms` | unauthenticated |
+| `display_only` and a display | **Numeric Comparison**, which a side with a display only confirms by itself; a `display_yes_no` side compares the number and says yes when it `confirms` | unauthenticated |
 
 A user who says no, a passkey that differs from the other side's, and a keyboard with no `passkey`
 fail the pairing on both sides with `AUTHENTICATION_FAILURE`; the link stays up, and what comes next

@@ -120,10 +120,11 @@ class Bluetooth(Interface):
         file's directory, as a btsnoop file, with its header in `path` and `.json`
         (`docs/recording-format.md`). The directory must exist; both files are replaced. Returns
         the `Tap`, whose `events` the run fills: `out` from the host, `in` to it."""
-        self.use()
         if self.tapped is not None:
             raise SourceError(f"{NAME} is tapped already: one tap per test")
+        # The tap first, so that one asked for too late is refused as a tap, as a UART's is.
         self.asked(Request(NAME, tap=True))
+        self.use()
         file = self.directory / path
         if not file.parent.is_dir():
             raise FileNotFoundError(

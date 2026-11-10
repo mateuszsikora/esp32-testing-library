@@ -1362,7 +1362,10 @@ class Controller(BumbleController):
                 super().on_lmp_packet(sender_address, packet)
             case lmp.LmpNotAccepted(response_opcode, error_code) if response_opcode in OURS:
                 security = self._security.pop(peer, None)
-                self._pairing_ended(peer, error_code)
+                # A refusal of legacy pairing's ends it; Secure Simple Pairing ends otherwise.
+                under_way = self._pairing.get(peer)
+                if under_way is not None and under_way.method == LEGACY:
+                    self._pairing_ended(peer, error_code)
                 if security is not None and security.initiator:
                     self._authentication_complete(peer, error_code)
                 super().on_lmp_packet(sender_address, packet)

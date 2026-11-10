@@ -762,8 +762,8 @@ only the initiator's host told the authentication is complete; a number either u
 failing on both sides with no key; the stand-in typing the passkey the peer shows, read off
 `peer.pairing`; a wrong passkey failing on both sides at one instant, neither left waiting; two
 keyboards, with and without a passkey on the peer; Just Works from either side with no input and
-output, allowed or refused by the side asked, unauthenticated; a peer with Secure Simple Pairing
-pairing with its PIN with a device without; a failed legacy pairing in both histories; and two
+output, allowed or refused by the side asked, a display only allowing it whatever it confirms,
+unauthenticated; a peer with Secure Simple Pairing pairing with its PIN with a device without; a failed legacy pairing in both histories; and two
 runs of two pairings, each with new numbers, showing the same. The `PeerError`s of the four new
 arguments.
 
