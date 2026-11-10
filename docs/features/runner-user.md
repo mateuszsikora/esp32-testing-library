@@ -122,6 +122,13 @@ short, the runner sends `hello`, the peer answers with its own `hello` and the p
 then on the peer answers each `sync` with its inputs and one `wait`; between its turns it only
 reads.
 
+The bytes the peer sends to a UART's RX pin reach its receive FIFO at the line's rate, as on the
+chip: a byte that finds the 128-byte FIFO full is lost, and the UART raises its overflow interrupt
+(`UART_RXFIFO_OVF_INT`, which ESP-IDF's driver reports as `UART_FIFO_OVF`); nothing brings it
+later. The runner tells the peer with an `rxfifo_ovf` warning and counts it in `stats`
+([protocol, 5.8](../protocol.md#58-warn-ext)), as it does a byte lost to a baud that is not the
+UART's (`frm_err`).
+
 With `--console socket` the guest's UART0 goes to the peer as `console` messages and not to
 stdout; with `--console both` it goes to both. Messages written outside the peer's turn reach the
 socket within about 20 wall milliseconds, so a peer can read the console as it comes.
@@ -298,15 +305,18 @@ runner/target/release/esp32tl-runner --chip esp32 \
   --max-seconds 20
 ```
 
-No validation image uses Bluetooth yet.
+The validation image `bt_spp_initiator`, ESP-IDF's example unmodified, runs this way under the
+harness's `bt` fixture ([validation firmware](validation-firmware-user.md#bt_spp_initiator)).
 
 What the guest sees:
 
 - `esp_bt_controller_init`, `esp_bt_controller_enable` and the VHCI functions answer as esp32sim's
-  `--ble` makes them answer. At esp32sim's pin, `esp_bt_controller_enable` takes mode 1 (BLE) and
-  3 (dual mode) only: a firmware built for Classic alone (`CONFIG_BTDM_CTRL_MODE_BR_EDR_ONLY`)
-  asks for mode 2 and gets `ESP_ERR_INVALID_ARG`, and never sends a packet. That changes with
-  mikroverk/esp32sim#347 and a later pin.
+  `--ble` makes them answer. `esp_bt_controller_enable` takes the mode the config given to
+  `esp_bt_controller_init` names, and no other, as ESP-IDF does: mode 1 (BLE), 2 (Classic alone,
+  `CONFIG_BTDM_CTRL_MODE_BR_EDR_ONLY`) or 3 (dual mode). Another mode gets `ESP_ERR_INVALID_ARG`.
+- At an enable in mode 2 esp32sim prints `[ble] the virtual controller is LE-only: enabled in mode
+  2 (BR/EDR), its commands get Unknown HCI Command` on stderr. With `--bt` it is not so: the
+  controller is the peer, and the runner cannot keep esp32sim's line out of its stderr.
 - The host reads the peer's packets at its controller task's VHCI polls, not at the instant the
   peer stamped them: at most one packet a FreeRTOS tick, 10 ms at ESP-IDF's default
   `CONFIG_FREERTOS_HZ=100`, while packets wait.

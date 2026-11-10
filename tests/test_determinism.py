@@ -13,10 +13,13 @@ import json
 from pathlib import Path
 
 import pytest
+from test_bt_spp_initiator import NAME, PIN, Heard
 from test_net_tls import tls_exchange
 
 from esp32tl.backends.esp32sim import Esp32Sim
+from esp32tl.bluetooth.peer import SppPeer
 from esp32tl.flash import u16
+from esp32tl.interfaces.bluetooth import Bluetooth
 from esp32tl.interfaces.console import Console
 from esp32tl.interfaces.gnss import Gnss
 from esp32tl.interfaces.modem import Modem
@@ -148,3 +151,16 @@ def test_wifi_http(board: Esp32Sim, wifi: Wifi, console: Console, tmp_path: Path
     write_console(tmp_path, console)
     assert console.lines(r"^hello from the test$")
     (tmp_path / "network.json").write_text(json.dumps(network.transcript()))
+
+
+@pytest.mark.app_path("../firmware/bt_spp_initiator")
+def test_spp_to_a_peer(board: Esp32Sim, bt: Bluetooth, console: Console, tmp_path: Path) -> None:
+    source = Heard()
+    peer = SppPeer(bt.air, name=NAME, pin=PIN, source=source)
+    board.power_on()
+    board.wait(seconds(5))
+    write_console(tmp_path, console)
+    assert console.lines(r"speed\(") and peer.channel_open
+    # Each write the peer heard: its time and its bytes, which are the firmware's blocks.
+    writes = (f"{board_time(t)}  {data.hex()}\n" for t, data in source.heard)
+    (tmp_path / "spp.txt").write_text("".join(writes))

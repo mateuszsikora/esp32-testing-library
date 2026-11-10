@@ -48,7 +48,7 @@ E = TypeVar("E", bound=hci.HCI_Event)
 
 MS = 1_000_000
 S = 1_000_000_000
-HELLO = RunnerHello(1, "esp32", "emulated-fifo-write", "afcfba65da0da30a35fb0a7c381854c62b92e338")
+HELLO = RunnerHello(1, "esp32", "emulated-fifo-write", "c99fb286c4378fcfa6d304b754d31e542ba3035a")
 PEER = "00:00:00:00:5B:01"
 
 

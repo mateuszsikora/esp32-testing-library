@@ -117,8 +117,9 @@ next build is still incremental; the marker, removed first, is what says it fini
 The Makefile's `firmware` target runs `FIRMWARE_OUT= firmware/build.sh`; the pattern rule
 `firmware/%/build/esp32tl-built` runs `FIRMWARE_OUT= firmware/build.sh $*`, and `test` depends on
 `$(FIRMWARE_IMAGES:%=firmware/%/build/esp32tl-built)` with `FIRMWARE_IMAGES := hello_world
-nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request persistence ota_state timer_wake deep_sleep`. `determinism` depends on
-the markers of `nmea_reader`, `pppos_client`, `mqtt_session` and `http_request`. The rule has no prerequisites, so make rebuilds
+nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request persistence ota_state timer_wake deep_sleep bt_spp_initiator`. `determinism` depends on
+the markers of `nmea_reader`, `pppos_client`, `mqtt_session`, `http_request` and `bt_spp_initiator`,
+and of the `position_tracker` example. The rule has no prerequisites, so make rebuilds
 an image only when its marker is missing: an edit to `firmware/nmea_reader/` needs `make firmware`, or
 `firmware/build.sh nmea_reader`, before `make test` sees it.
 
@@ -325,6 +326,41 @@ The line's bytes take no time of their own: they are stamped as the firmware wri
 (`emulated-fifo-write`, [protocol 5.1](../protocol.md#51-hello)). Two sleeps take 42.5 s of the
 board's time, 29 turns of the link and 0.2 s of wall time on an M2 Pro.
 
+## `bt_spp_initiator`
+
+`project_of` maps `bt_spp_initiator` to
+`$IDF_PATH/examples/bluetooth/bluedroid/classic_bt/bt_spp_initiator`, built in place as
+`deep_sleep` is: it takes no component from the component manager. Its `sdkconfig.defaults` in
+v5.3.6 sets `CONFIG_BT_ENABLED`, `CONFIG_BTDM_CTRL_MODE_BR_EDR_ONLY` (and the other two modes
+off), `CONFIG_BT_CLASSIC_ENABLED`, `CONFIG_BT_SPP_ENABLED` and `CONFIG_BT_BLE_ENABLED=n`; its
+Kconfig leaves `CONFIG_EXAMPLE_PEER_DEVICE_NAME` at `ESP_SPP_ACCEPTOR` and
+`CONFIG_EXAMPLE_SSP_ENABLED` on. Its project is `bt_spp_initiator_demo`, and it flashes the default
+three files. `main/main.c` asks for `ESP_SPP_SEC_AUTHENTICATE`, `ESP_SPP_ROLE_MASTER` and L2CAP
+ERTM (`esp_spp_enable_l2cap_ertm`), inquires with `inq_len` 30 (38.4 s), compares the name in each
+result's extended inquiry response with the peer's, and writes `ESP_SPP_MAX_MTU` (990) bytes of
+`spp_data`, `spp_data[i] = i`, from each `ESP_SPP_WRITE_EVT` to the next; in `SPP_SHOW_SPEED` mode,
+the default, it prints `speed(...)` when 3 s or more have passed since the last.
+
+What it proves on esp32sim at the pin `c99fb28`, through the `bt` fixture's controller in the
+harness ([Bluetooth peer](bluetooth-peer-technical.md)), measured on the runs of
+`tests/test_bt_spp_initiator.py`: `esp_bt_controller_enable` takes mode 2, which esp32sim's hook
+refused before mikroverk/esp32sim#347; the inquiry finds an `SppPeer` 20 ms after it starts, and the
+firmware connects, finds the service by SDP, falls back from ERTM to L2CAP's basic mode (`BT_L2CAP:
+l2c_fcr_adj_our_req_options (mode 3): ERROR: No FCR options set using BASIC mode`), asks for the
+channel, pairs with the PIN after RFCOMM's PN and opens the channel at SABM, 1.374 s after power-on,
+with the peer's `secure=True`. It then writes about 299 kbit/s, which is what the peer's source
+hears in the same window, to within one block. With another PIN on the peer it fails the
+authentication with HCI's `AUTHENTICATION_FAILURE` (`Authentication fail reason 5`, then
+`authentication failed, status:9`, `ESP_BT_STATUS_AUTH_FAILURE`) and the link falls before SABM, so
+the peer refuses nothing. With nobody of the name on the air, the inquiry's two
+`ESP_BT_GAP_DISC_STATE_CHANGED_EVT` are 38.4 s apart, and nothing follows. The controller knows
+every command the firmware's Bluedroid sends: `bt.unknown_commands()` is empty in each run. A run
+to the first `speed(...)` takes 4.4 s of the board's time and about 1 s of wall time on an M2 Pro,
+the 39.4 s of the inquiry with nobody 2.7 s; esp32sim prints `[ble] the virtual controller is LE-only:
+enabled in mode 2 (BR/EDR), its commands get Unknown HCI Command` on the runner's stderr at the
+enable, which with `--bt` does not hold: the controller is the harness's
+([runner](runner-technical.md#bluetooth-the-guests-hci-on-the-socket)).
+
 ## `sd_remount`
 
 `firmware/sd_remount/main/main.c` depends on `esp_driver_spi`, `fatfs` and `sdmmc`, with the
@@ -527,7 +563,7 @@ top of each build directory, `config/sdkconfig.json`, and the `.bin` and `.elf` 
 |---|---|---|---|
 | `IDF_VERSION` | script constant | `v5.3.6` | the ESP-IDF tag of the container |
 | `CONTAINER` | script constant | `espressif/idf:$IDF_VERSION@sha256:cee52f0c4fdaf088992a7a739f5993154e95cf1d3ab61c24f5b40e6d56a3a070` | the image the build runs in, pinned by digest (a multi-arch index) |
-| `IMAGES` | script constant | `hello_world nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request persistence ota_state timer_wake deep_sleep` | the images, in build order; `project_of` maps each to its project |
+| `IMAGES` | script constant | `hello_world nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request persistence ota_state timer_wake deep_sleep bt_spp_initiator` | the images, in build order; `project_of` maps each to its project |
 | `FIRMWARE_OUT` | environment | `firmware/` | where `IMAGE/build/` goes; empty means the default; `/out` inside the container |
 | `IDF_LOCAL` | environment | unset | `1` builds with the ESP-IDF of the calling shell |
 | `ESP32TL_CONTAINER` | environment, set by the host side | unset | marks the container side and names the image it records |
@@ -544,7 +580,7 @@ regular expressions, so each has to stay on a line of its own. Changing either, 
 
 | Message | Cause |
 |---|---|
-| `unknown image 'NAME'; the images are: hello_world nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request persistence ota_state timer_wake deep_sleep` | an argument not in `IMAGES`; nothing written |
+| `unknown image 'NAME'; the images are: hello_world nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request persistence ota_state timer_wake deep_sleep bt_spp_initiator` | an argument not in `IMAGES`; nothing written |
 | `ESP32TL_CONTAINER is set outside a container; unset it` | `ESP32TL_CONTAINER` set and no `/.dockerenv`; nothing written |
 | `IDF_LOCAL=1 needs ESP-IDF in the environment: source $IDF_PATH/export.sh first` | `IDF_LOCAL=1` without `idf.py` on `PATH` or without `IDF_PATH`; nothing written |
 | `needs Docker, or IDF_LOCAL=1 to build with a local ESP-IDF` | no `docker` on `PATH`; nothing written |
@@ -582,7 +618,7 @@ write their arguments to `$FAKE_LOG`, with a `PATH` holding only them and `cat`,
   `modem_at`, `modem_recovery` and `nvs_reader` from `firmware/`, `pppos_client` from what a fake `python3` prints,
   `mqtt_session`, `persistence`, `ota_state` and `timer_wake` from `firmware/`, `http_request`
   from its copy, `.http_request-v9.9.9` in the output directory, which holds the fake example's
-  `CMakeLists.txt`, and `deep_sleep` from the fake `IDF_PATH`; the `idf.py` arguments of each,
+  `CMakeLists.txt`, and `deep_sleep` and `bt_spp_initiator` from the fake `IDF_PATH`; the `idf.py` arguments of each,
   the records with `"container": null`, the markers, the "not for goldens" warning and the
   `built in` lines;
 - reuse of a build directory with the same record, and removal of one with another record;
@@ -610,7 +646,10 @@ the `esp32-devkitc` profile's slot and that both of its formatting options are o
 `persistence` has the default `nvs` partition at `0x9000`, writable, and that no file of the build
 is flashed there. `test_ota_state_has_a_factory_app_two_slots_and_the_initial_ota_data` checks
 `ota_state`'s table, that its `ota_data_initial.bin` is erased, and that rollback is on in its
-`sdkconfig`.
+`sdkconfig`. `test_bt_spp_initiator_has_the_classic_esp32_flash_layout` checks the three files of
+`bt_spp_initiator`, with `bt_spp_initiator_demo.bin` and `bt_spp_initiator_demo.elf`, and
+`test_bt_spp_initiator_runs_its_controller_for_classic_alone` that its `sdkconfig` has
+`BTDM_CTRL_MODE_BR_EDR_ONLY`, Classic and SPP on, and the peer's name `ESP_SPP_ACCEPTOR`.
 
 `tests/test_timer_wake.py` runs the real `timer_wake` in the real runner: the three boots it
 prints, with their ROM reset reason and wake cause, `board.boots` with causes 1, 5 and 5, and
@@ -621,6 +660,20 @@ between two boots at least the 2 s sleep and at most 0.1 s more; then the same s
 the link in `board.wait_for_wake`, the line
 `Wake up from timer. Time spent in deep sleep: <ms>ms` within 0.2 s of the wake, and `<ms>` within
 10 ms of the board's time from `Entering deep sleep` to that line.
+
+`tests/test_bt_spp_initiator.py` runs the real `bt_spp_initiator` with the `bt` fixture: against
+an `SppPeer` named `ESP_SPP_ACCEPTOR` with the PIN `1234` and `secure=True`, the console's
+`ESP_SPP_DISCOVERY_COMP_EVT scn_num:1`, the service name `Serial Port`, `Input pin code: 1234`,
+`authentication success: ESP_SPP_ACCEPTOR` and `ESP_SPP_OPEN_EVT` with the peer's address, the
+channel open and nothing refused, then the first `speed(...)` line, its rate times its window within
+one block of what the peer's source heard between the open and that line, and at least 100 blocks
+in all, each the firmware's `spp_data`; against a peer with the PIN `0000`, `authentication
+failed, status:9`, `ESP_SPP_CLOSE_EVT` with `close_by_remote:1`, and no channel two seconds later;
+with no device on the air, and with a `BluetoothDevice` named `phone`, which it finds and logs by
+name, an inquiry 38.4 s long, to within 0.1 s, and no other in the 2 s after it, no SDP and no
+channel. Each run checks that `bt.unknown_commands()` is empty where it gets that far.
+`tests/test_determinism.py::test_spp_to_a_peer` runs the first case to 5 s and writes its console
+and each write the peer heard, with its time, for the determinism job.
 
 `tests/test_gpio_echo.py` runs the real `gpio_echo` in the real runner on the
 `lilygo-t-a7670g-r2` profile, all but one through the `lines` fixture:

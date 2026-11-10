@@ -141,13 +141,13 @@ with no other wake source armed. `sdkconfig.defaults` adds
 `CONFIG_BOOTLOADER_SKIP_VALIDATE_IN_DEEP_SLEEP=y` to the 4 MB flash: a wake boots the image it slept
 in, so the bootloader does not check it again.
 
-Measured on esp32sim at the pin `afcfba6`, on an M2 Pro: the first pulse starts 45 ms after
+Measured on esp32sim at the pin `afcfba6`, and the same at `c99fb28`, on an M2 Pro: the first pulse starts 45 ms after
 power-on, and each later one 21.6 ms after its wake. An interval from pulse to pulse is 900.266 s:
 the 900 s the firmware asks, the boot and the 20 ms pulse, and about 0.22 s, 0.025 % of the sleep,
 by which the sleep lasts longer than asked, as `deep_sleep`'s 20 s sleep wakes 20.004 s after its
 line ([validation firmware](validation-firmware-technical.md#deep_sleep)). The day, 95 wakes, ends
-85 525 s into the run, 875 s short of the backend's `--max-seconds 86400`, and takes 287 turns of
-the link and about 7 s of wall time; before the runner stepped through the sleeps
+85 525 s into the run, 875 s short of the backend's `--max-seconds 86400`, and takes 192 turns of
+the link (`board.link.turns`, on both pins) and about 7 s of wall time; before the runner stepped through the sleeps
 ([decision](../decisions/runner.md#a-deep-sleep-runs-in-long-steps-of-the-rtc-to-just-short-of-its-alarm))
 it took 330 s.
 

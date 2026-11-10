@@ -461,7 +461,8 @@ interface that puts the firmware's controller on the board's link is
     address as an inquiry sorts them. `close()` closes the air. `LATENCY_NS` is 10 µs: a controller
     answers a command within microseconds, and the host sleeps 10 ms between two VHCI polls when it
     has nothing to read (protocol 5.22), so the answer is there for its next poll; at 0 every packet
-    would take a turn of its own. The spike measured 259 kbit/s of SPP with it.
+    would take a turn of its own. The spike measured 259 kbit/s of SPP with it; `bt_spp_initiator`
+    reports about 299 kbit/s at the pin `c99fb28` (`tests/test_bt_spp_initiator.py`).
 
 ## Interfaces
 
@@ -664,12 +665,23 @@ in `error_code` on a failed `Connection_Complete`, and `HCI_Error` with
   started at 1 s or 6 s, ending at exactly the page timeout, with no peer on the air, measured by
   an advance past the end, which settles it only once.
 
-Not covered: firmware, in esp32tl's tests. Until esp32sim's pin has mikroverk/esp32sim#347,
-`esp_bt_controller_enable` takes modes 1 and 3 only, and a firmware that runs its controller for
-Classic alone, as `bt_spp_initiator` does, gets `ESP_ERR_INVALID_ARG` and sends no packet: the `bt`
-fixture's controller has been seen working with firmware only on a local esp32sim with that change
-(the spike of 2026-11-08), and no firmware has seen a peer leave. Nor is a clock offset other than
-zero. The air's time is exact to the nanosecond up to 2^22 s, about 48 days: from there
+With firmware: `tests/test_bt_spp_initiator.py` runs ESP-IDF's `bt_spp_initiator`, unmodified,
+through the `bt` fixture's controller, against an `SppPeer` with `secure=True`, the default
+([validation firmware](validation-firmware-technical.md#bt_spp_initiator)). Bluedroid discovers
+the peer by the name in its extended inquiry response, connects, reads its SDP record and prints
+the service's name, asks for ERTM and stays in basic mode, sends RFCOMM's PN, pairs with the PIN
+`1234` (legacy pairing, though the firmware has Secure Simple Pairing on), and opens the channel at
+SABM, which the peer allows on the authenticated link; then it streams 990-byte writes at about
+299 kbit/s, and the source hears each as written, at its time. With another PIN on the peer the
+authentication fails (`AUTHENTICATION_FAILURE`), the link falls, and the firmware never sends SABM,
+so `peer.refused` stays empty. With no peer, and with a `BluetoothDevice` of another name, its one
+inquiry runs 38.4 s and it pages nobody. The controller knows every command Bluedroid sends in
+these runs (`bt.unknown_commands()` is empty), and two runs are the same
+(`tests/test_determinism.py::test_spp_to_a_peer`).
+
+Not covered: a firmware that sees a peer leave, a firmware that receives on the channel (the
+example only writes), encryption, and Secure Simple Pairing, which `SppPeer` does not do. Nor is a
+clock offset other than zero. The air's time is exact to the nanosecond up to 2^22 s, about 48 days: from there
 `round(when * 1e9)` works on a count of nanoseconds near 2^52, where a float's own error and the
 product's add up to more than half a nanosecond, so a timer can fire a nanosecond early or late.
 From 2^23 s, about 97 days, a float of seconds no longer tells one nanosecond from the next, timers

@@ -5,7 +5,7 @@ version = 4
 [[package]]
 name = "emu-core"
 version = "0.3.0"
-source = "git+https://github.com/mikroverk/esp32sim?rev=afcfba65da0da30a35fb0a7c381854c62b92e338#afcfba65da0da30a35fb0a7c381854c62b92e338"
+source = "git+https://github.com/mikroverk/esp32sim?rev=c99fb286c4378fcfa6d304b754d31e542ba3035a#c99fb286c4378fcfa6d304b754d31e542ba3035a"
 
 [[package]]
 name = "errno"
@@ -20,7 +20,7 @@ dependencies = [
 [[package]]
 name = "esp-periph"
 version = "0.3.0"
-source = "git+https://github.com/mikroverk/esp32sim?rev=afcfba65da0da30a35fb0a7c381854c62b92e338#afcfba65da0da30a35fb0a7c381854c62b92e338"
+source = "git+https://github.com/mikroverk/esp32sim?rev=c99fb286c4378fcfa6d304b754d31e542ba3035a#c99fb286c4378fcfa6d304b754d31e542ba3035a"
 dependencies = [
  "emu-core",
 ]
@@ -28,7 +28,7 @@ dependencies = [
 [[package]]
 name = "esp-soc"
 version = "0.3.0"
-source = "git+https://github.com/mikroverk/esp32sim?rev=afcfba65da0da30a35fb0a7c381854c62b92e338#afcfba65da0da30a35fb0a7c381854c62b92e338"
+source = "git+https://github.com/mikroverk/esp32sim?rev=c99fb286c4378fcfa6d304b754d31e542ba3035a#c99fb286c4378fcfa6d304b754d31e542ba3035a"
 dependencies = [
  "emu-core",
  "esp-periph",
@@ -37,7 +37,7 @@ dependencies = [
 [[package]]
 name = "esp32"
 version = "0.3.0"
-source = "git+https://github.com/mikroverk/esp32sim?rev=afcfba65da0da30a35fb0a7c381854c62b92e338#afcfba65da0da30a35fb0a7c381854c62b92e338"
+source = "git+https://github.com/mikroverk/esp32sim?rev=c99fb286c4378fcfa6d304b754d31e542ba3035a#c99fb286c4378fcfa6d304b754d31e542ba3035a"
 dependencies = [
  "emu-core",
  "esp-periph",
@@ -100,7 +100,7 @@ dependencies = [
 [[package]]
 name = "xtensa-lx7"
 version = "0.3.0"
-source = "git+https://github.com/mikroverk/esp32sim?rev=afcfba65da0da30a35fb0a7c381854c62b92e338#afcfba65da0da30a35fb0a7c381854c62b92e338"
+source = "git+https://github.com/mikroverk/esp32sim?rev=c99fb286c4378fcfa6d304b754d31e542ba3035a#c99fb286c4378fcfa6d304b754d31e542ba3035a"
 dependencies = [
  "emu-core",
 ]

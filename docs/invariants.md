@@ -392,7 +392,7 @@ that references to its number keep their meaning.
      `tests/test_sd_remount.py::test_a_fault_rule_stays_through_a_change_of_card_until_it_is_cleared`,
      `tests/test_sdspi.py::test_fault_rules_are_the_test_s_and_outlast_a_power_cycle`,
      `tests/test_sdspi.py::test_fault_rules_outlast_a_reset_of_the_chip`
-- **209.** A deep sleep is one slice to its wake: neither the next millisecond nor `latency` ends a
+- **217.** A deep sleep is one slice to its wake: neither the next millisecond nor `latency` ends a
   slice in it, the runner moves the RTC through it in long steps to short of its alarm, and the wake
   still comes in esp32sim's first idle round at or after the alarm's tick, through a `reset` at its
   cycle, with the turn its latency calls for after it. An awake chip is not stepped through; a
@@ -405,6 +405,13 @@ that references to its number keep their meaning.
   `runner/src/session/tests.rs::on_the_emulator_a_skipped_sleep_wakes_at_the_tick_of_its_alarm`,
   `runner/src/session/tests.rs::on_the_emulator_only_a_deep_sleep_is_skipped`,
   `examples/periodic_wake/tests/test_periodic_wake.py::test_a_day_of_wakes_takes_seconds_of_wall_time`
+- **215.** A received byte that finds a UART's 128-byte RX FIFO full is lost: the runner counts and
+    warns it as `rxfifo_ovf`, the UART raises `UART_RXFIFO_OVF_INT_RAW`, and the byte never reaches
+    the FIFO, not even once the firmware has read it empty; a byte at another baud is lost as a
+    frame error and raises `UART_FRM_ERR_INT_RAW`.
+    `runner/src/session/tests.rs::on_the_emulator_a_byte_into_a_full_rx_fifo_is_lost_and_raises_the_overflow_interrupt`,
+    `runner/src/session/tests.rs::a_full_rx_fifo_drops_bytes_and_a_warning_is_cut_by_other_messages`,
+    `runner/src/session/tests.rs::a_baud_mismatch_is_one_merged_frm_err_warning`
 
 ## Recordings and replay
 
@@ -771,6 +778,14 @@ that references to its number keep their meaning.
     `tests/test_bluetooth_guest.py::test_an_interface_the_test_never_used_asks_for_nothing_and_bounds_no_turn`,
     `tests/test_serial_backend.py::test_serial_capabilities_skip_at_the_call`,
     `tests/test_bluetooth_guest.py::test_bluetooth_asked_for_after_power_on_says_so_before_anything_else`
+- **216.** ESP-IDF's `bt_spp_initiator`, unmodified, finds an `SppPeer` with `secure=True` by its name,
+    pairs with its PIN, opens the channel, and what it writes reaches the peer's source as written;
+    with another PIN its authentication fails and it opens nothing; with no such peer its one
+    inquiry runs its 38.4 s and it pages nobody; two runs are the same.
+    `tests/test_bt_spp_initiator.py::test_the_firmware_finds_pairs_with_and_streams_to_the_peer`,
+    `tests/test_bt_spp_initiator.py::test_a_peer_with_another_pin_fails_the_authentication`,
+    `tests/test_bt_spp_initiator.py::test_with_no_peer_the_inquiry_runs_its_length_and_opens_nothing`,
+    `tests/test_determinism.py::test_spp_to_a_peer`
 
 ## The esp32tl command
 

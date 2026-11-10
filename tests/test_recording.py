@@ -22,7 +22,7 @@ HEADER = {
     "clock": "emulated-fifo-write",
     "end": "hold",
     "app_sha256": "ab" * 32,
-    "tools": {"esp32tl": "0.1.0", "esp32sim": "afcfba65da0da30a35fb0a7c381854c62b92e338"},
+    "tools": {"esp32tl": "0.1.0", "esp32sim": "c99fb286c4378fcfa6d304b754d31e542ba3035a"},
     "created": "2026-10-29T18:00:00Z",
 }
 

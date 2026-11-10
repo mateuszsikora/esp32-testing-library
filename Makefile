@@ -53,7 +53,7 @@ firmware:
 # esp32tl-built when a build finishes. The CI test jobs receive the images
 # from the firmware job, so they build nothing (and the macOS ones have no
 # Docker). `make firmware` rebuilds them.
-FIRMWARE_IMAGES := hello_world nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request persistence ota_state timer_wake deep_sleep
+FIRMWARE_IMAGES := hello_world nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request persistence ota_state timer_wake deep_sleep bt_spp_initiator
 firmware/%/build/esp32tl-built:
 	FIRMWARE_OUT= firmware/build.sh $*
 
@@ -72,7 +72,7 @@ test: setup test-runner $(FIRMWARE_IMAGES:%=firmware/%/build/esp32tl-built) $(EX
 # two runs compared; the position tracker example brings TLS on the device.
 # Not after `setup`: the runner and the ROM ELF are taken
 # as they are, as in the CI job, which receives the runner from the runner job.
-determinism: $(VENV)/.installed firmware/nmea_reader/build/esp32tl-built firmware/pppos_client/build/esp32tl-built firmware/mqtt_session/build/esp32tl-built firmware/http_request/build/esp32tl-built examples/position_tracker/build/esp32tl-built
+determinism: $(VENV)/.installed firmware/nmea_reader/build/esp32tl-built firmware/pppos_client/build/esp32tl-built firmware/mqtt_session/build/esp32tl-built firmware/http_request/build/esp32tl-built firmware/bt_spp_initiator/build/esp32tl-built examples/position_tracker/build/esp32tl-built
 	$(BIN)/python scripts/check-determinism.py
 
 lint: $(VENV)/.installed

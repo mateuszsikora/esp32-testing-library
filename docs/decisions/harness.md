@@ -1771,9 +1771,10 @@ link comes of the acceptance. A plain acceptance at that point still makes a lin
 Status: postponed (#33, #34)
 
 The `bt` fixture came with #34
-([below](#the-bt-fixture-gives-the-air-and-the-test-makes-its-devices-on-it)). The btsnoop tap of
-the HCI between the firmware and its controller, and the validation with `bt_spp_initiator`, which
-needs esp32sim's pin to have mikroverk/esp32sim#347, are still #34's; replaying a recorded SPP
+([below](#the-bt-fixture-gives-the-air-and-the-test-makes-its-devices-on-it)), and the validation
+with `bt_spp_initiator` with the pin at mikroverk/esp32sim#347
+([validation firmware](../features/validation-firmware-user.md#bt_spp_initiator)). The btsnoop tap
+of the HCI between the firmware and its controller is still #34's; replaying a recorded SPP
 exchange needs the matching engine (#20), and plan M8's replayed peer waits for it.
 
 ## The firmware's controller is a controller of the air, with the guest's features and buffer
