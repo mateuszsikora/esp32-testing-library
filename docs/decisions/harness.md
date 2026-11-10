@@ -1663,9 +1663,9 @@ which has the same address (see
 Its own page used to take that entry with it when it failed, so an answer owed to
 the other page found nothing, was taken as late, and the pager waited for `PAGE_TIMEOUT` although
 the host had answered in time. Now the entry stays until the answer comes or a timer of link
-supervision ends it. That takes each page a host hears to get one answer: `Connection_Accept_Timeout`,
-postponed below, is what would end the entry of one that gets none, and #34 is the first that may
-leave one unanswered.
+supervision ends it. That takes each page a host hears to get one answer, or its connection accept
+timeout, which ends the entry of one that gets none in time (#166,
+[below](#a-page-its-host-does-not-answer-in-time-ends-at-the-connection-accept-timeout)).
 
 **Rejected:** keeping the old behaviour and narrowing the promise that a pager hears the reason,
 because a page still waiting got exactly the symptom #137 removes. Also rejected: telling a late
@@ -1735,7 +1735,11 @@ page scan, because no test needs one yet, and `peer.device` reaches it meanwhile
 
 ## Connection_Accept_Timeout is postponed
 
-Status: postponed (#166)
+Status: superseded (#166)
+
+It landed with #166: see
+[A page its host does not answer in time ends at the connection accept timeout](#a-page-its-host-does-not-answer-in-time-ends-at-the-connection-accept-timeout). What
+follows is what the controller did until then.
 
 The page's timer runs until the target's host accepts, and a target's host has no time limit (Vol 4,
 Part E, 6.7, is not modelled). A host that accepts after the page ended makes a link although the
@@ -1751,6 +1755,32 @@ host's eyes (#141).
 **Rejected:** ignoring the late answer on the pager's side, because the target would be left holding
 a link with no other end, and adding the timeout now, because nothing would exercise it but its own
 test.
+
+
+## A page its host does not answer in time ends at the connection accept timeout
+
+Status: decided (#166)
+
+Each `Connection_Request` starts a timer of `Connection_Accept_Timeout` (Bluetooth Core 5.4, Vol 4,
+Part E, 6.7), 5 s unless the host writes another, up to 29 s. When it runs out before the host
+answers, the controller refuses the page with `CONNECTION_ACCEPT_TIMEOUT_EXCEEDED`, which both hosts
+hear, as they hear a host's rejection, and the answer is owed no longer: one that comes later gets
+`UNKNOWN_CONNECTION_IDENTIFIER`, or is taken for a page the same peer made meanwhile, since an
+answer names only the address. An answer counted late, whose page went before it came, ends at its
+own timeout too, and the host is told. So a host that never answers holds the entry, or takes the
+next page's answer, until its timeout and no longer until `HCI_Reset`. The page's own timer still
+runs until the target's host accepts: with the defaults, 5 s against 5.12 s, the target's timeout
+ends a page its host leaves unanswered first, and the pager reports its reason; a host that writes
+a timeout longer than the pager's page timeout meets what the postponed decision described.
+
+**Rejected:** stopping the pager's timer when the target's baseband answers, as the specification
+has it, because a page whose target then left would need supervision of its own, and nothing seen
+yet depends on it; keeping a late answer owed until the host gives it, because a host that never
+does then takes the answer to every later page from that peer; marking the answers owed for a page
+its pager gave up late when it pages again, because a host that skipped the first page would then
+lose its answer to the second; and answering an acceptance after the timeout as a late answer is
+answered, with `SUCCESS` and a failed `Connection_Complete`, because the host has heard that page
+end already.
 
 
 ## Two pages at one instant make one link, the page accepted first
@@ -1785,8 +1815,9 @@ Status: decided (#141)
 A host that accepts as the central after the pager's page ended sends `LMP_switch_req` to a pager
 that has no entry for it, and Bumble's handler asserted one, which failed the air. The pager now
 refuses with `ROLE_CHANGE_NOT_ALLOWED`: the target's host gets `Connection_Complete` with it, and no
-link comes of the acceptance. A plain acceptance at that point still makes a link, as
-[Connection_Accept_Timeout is postponed](#connection_accept_timeout-is-postponed) says.
+link comes of the acceptance. A plain acceptance at that point still makes a link, when it comes
+within the target's connection accept timeout, as
+[A page its host does not answer in time ends at the connection accept timeout](#a-page-its-host-does-not-answer-in-time-ends-at-the-connection-accept-timeout) says.
 
 **Rejected:** making a link of it, because the pager would need an entry with an
 `allow_role_switch` no `Create_Connection` asked for; and `CONNECTION_TIMEOUT` or

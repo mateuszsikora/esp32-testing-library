@@ -285,6 +285,19 @@ it does not expect once told to, with `peer.device.classic_accept_any = False`, 
 `CONNECTION_REJECTED_DUE_TO_LIMITED_RESOURCES`. The device that paged gets that reason at once, in
 `error_code`, rather than `PAGE_TIMEOUT` at the page timeout; both can connect afterwards.
 
+A page whose host does not answer within its connection accept timeout, 5 s from the
+`Connection_Request` unless that host wrote another with `Write_Connection_Accept_Timeout`, 0x0001
+to 0xB540 slots (up to 29 s), ends on both sides: both hosts get `Connection_Complete` with
+`CONNECTION_ACCEPT_TIMEOUT_EXCEEDED`, the pager before its own page timeout of 5.12 s, and both can
+page again at once. The target's host does not get it while its own page to the pager is still under
+way, as when the two pages cross: the event names only the address, and would end that page in its
+eyes. An answer after that is refused with `UNKNOWN_CONNECTION_IDENTIFIER`, unless the
+pager has paged again meanwhile: it names only the address, so it is then the answer to that page. A
+peer's and a device's host answers at the instant it hears, so only firmware behind the `bt`
+fixture, or a host a test slows, meets this. With a connection accept timeout longer than the
+pager's page timeout the pager reports `PAGE_TIMEOUT` first, and a host that accepts after that
+still makes a link.
+
 Two devices that page each other at the same instant get one link, with one handle on each side and
 one central: the page whose target's host answers first makes it, and its pager is the central,
 unless that host asked for the central's role. When it asked for it and the page it answered allows
@@ -447,8 +460,9 @@ On the air:
 | `HCI_Error(hci/INSUFFICIENT_SECURITY_ERROR [0x2F])` | Bumble's `HCI_Error`, on the device's side | The device asked for encryption on a link it had not authenticated |
 | `hci/PAGE_TIMEOUT_ERROR`, in `error_code` | Bumble's `core.ConnectionError`, on the device's side | Nobody answered the page: the peer has left, its end of an old link has not fallen, or no device has the address |
 | `hci/CONNECTION_REJECTED_DUE_TO_LIMITED_RESOURCES_ERROR`, in `error_code` | Bumble's `core.ConnectionError`, on the device's side | The host of the device it paged rejected the page, with the reason its `Reject_Connection_Request` gave |
+| `hci/CONNECTION_ACCEPT_TIMEOUT_ERROR`, in `error_code` | Bumble's `core.ConnectionError`, on the device's side | The host of the device it paged did not answer within its connection accept timeout, 5 s unless it wrote another |
 | `HCI_Error(hci/PAGE_TIMEOUT_ERROR [0x4])` | Bumble's `HCI_Error`, on the device's side | Nobody answered `Device.request_remote_name` |
-| `HCI_Error(hci/CONNECTION_ALREADY_EXISTS_ERROR [0xB])` | Bumble's `HCI_Error`, on the device's side | The device paged a peer while it holds a link to it, as one that lost contact and has not fallen; while a page of its own to that peer is under way; or while its host has yet to answer a page from that peer, which outlasts a page of its own that has already reported its end |
+| `HCI_Error(hci/CONNECTION_ALREADY_EXISTS_ERROR [0xB])` | Bumble's `HCI_Error`, on the device's side | The device paged a peer while it holds a link to it, as one that lost contact and has not fallen; while a page of its own to that peer is under way; or while its host has yet to answer a page from that peer, which outlasts a page of its own that has already reported its end, until its connection accept timeout |
 | `HCI_Error(hci/CONNECTION_TIMEOUT_ERROR [0x8])` | Bumble's `HCI_Error`, on the device's side | The link fell during `Connection.authenticate()` |
 
 A `BluetoothDevice` says the same of its arguments, starting `BluetoothDevice:` rather than

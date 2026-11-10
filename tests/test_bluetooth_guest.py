@@ -437,6 +437,27 @@ def test_an_inquiry_finds_only_devices_scanning_for_its_access_code(
     assert limited._controller is not None and limited._controller.iac_laps == [0x9E8B00]
 
 
+def accept_timeout(runner: Runner) -> int:
+    """The connection accept timeout `Read_Connection_Accept_Timeout` gives, in slots."""
+    read = hci.HCI_Command(op_code=hci.HCI_READ_CONNECTION_ACCEPT_TIMEOUT_COMMAND)
+    event = complete(runner, read)
+    assert status_of(event) == hci.HCI_ErrorCode.SUCCESS
+    parameters = event.return_parameters
+    data = parameters if isinstance(parameters, bytes) else parameters.data
+    return int.from_bytes(data[1:3], "little")
+
+
+def test_the_host_reads_back_the_accept_timeout_it_wrote(runner: Runner) -> None:
+    assert accept_timeout(runner) == 0x1F40
+    write = hci.HCI_Write_Connection_Accept_Timeout_Command
+    assert status_of(complete(runner, write(connection_accept_timeout=0x3E80))) == 0
+    assert accept_timeout(runner) == 0x3E80
+    refused = complete(runner, write(connection_accept_timeout=0))
+    assert status_of(refused) == hci.HCI_ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR
+    assert accept_timeout(runner) == 0x3E80
+    assert runner.bt.unknown_commands() == []
+
+
 def test_the_host_reads_back_the_access_codes_it_wrote(runner: Runner) -> None:
     supported = complete(runner, hci.HCI_Read_Number_Of_Supported_IAC_Command())
     assert supported.return_parameters.num_support_iac == 0x40
@@ -615,10 +636,10 @@ def test_a_reset_clears_the_answers_the_host_owed_so_the_next_page_connects(
     runner.guest.drop = lambda packet: isinstance(packet, hci.HCI_Connection_Request_Event)
     first = bt.air.start(phone.device.connect(ADDRESS, transport=core.PhysicalTransport.BR_EDR))
     runner.advance(runner.now + MS)
-    assert bt.controller._answers_due[phone.device.public_address] == 1
+    assert len(bt.controller._owed[phone.device.public_address]) == 1
     runner.guest.drop = lambda packet: False
     restart(runner, bt, how)
-    assert bt.controller._answers_due == {} and bt.controller._late_answers == {}
+    assert bt.controller._owed == {}
     runner.run(runner.guest.device.set_connectable(True))
     runner.wait_for(first.done)
     with pytest.raises(core.ConnectionError):
@@ -633,6 +654,9 @@ def test_a_reset_brings_back_the_defaults(runner: Runner, bt: Bluetooth, how: st
     controller = bt.controller
     runner.run(runner.guest.device.set_discoverable(True))
     complete(runner, hci.HCI_Write_Page_Timeout_Command(page_timeout=0x1000))
+    complete(
+        runner, hci.HCI_Write_Connection_Accept_Timeout_Command(connection_accept_timeout=0x1000)
+    )
     complete(runner, hci.HCI_Host_Buffer_Size_Command(100, 0, 10, 0))
     complete(runner, hci.HCI_Write_Local_Name_Command(local_name=b"renamed".ljust(248, b"\0")))
     complete(runner, hci.HCI_Set_Event_Mask_Command(event_mask=bytes.fromhex("ffffffffffffbf1d")))
@@ -640,7 +664,7 @@ def test_a_reset_brings_back_the_defaults(runner: Runner, bt: Bluetooth, how: st
     assert controller.local_name == "renamed" and controller.event_mask
     restart(runner, bt, how)
     assert controller.classic_scan_enable == 0
-    assert controller.page_timeout == 0x2000
+    assert controller.page_timeout == 0x2000 and controller.connection_accept_timeout == 0x1F40
     assert controller.host_acl_length is None and controller.iac_laps == [GIAC]
     assert not controller.lmp_features & hci.LmpFeatureMask.SECURE_SIMPLE_PAIRING_HOST_SUPPORT
     assert controller.local_name == "Bumble" and controller.event_mask == 0

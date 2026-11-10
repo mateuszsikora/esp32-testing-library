@@ -613,8 +613,9 @@ that references to its number keep their meaning.
     `tests/test_spp_peer.py::test_a_remote_name_request_is_answered_at_once_when_the_peer_is_there`
 - **172.** A target that heard a page loses contact when the pager leaves, also after that page
     ended, and its end falls at the supervision timeout counted from then. A target whose host has not
-    answered tells it of no link when its end goes, and a host that answers later gets a failed
-    `Connection_Complete`, unless this side holds a link or its own page for that address (205):
+    answered tells it of no link when its end goes, and a host that answers later, within its
+    connection accept timeout (221), gets a failed `Connection_Complete`, unless this side holds a
+    link or its own page for that address (205):
     such an answer, late because this side's entry for it went, makes no link,
     completes no later page, leaves a working link as it is, and does not fail the air. An acceptance
     that comes when only the pager's page has ended finds its entry, and makes a link, except with
@@ -649,7 +650,8 @@ that references to its number keep their meaning.
     host's own error, also on a working link. A page of this side's own that fails does not take the
     page it heard, and neither that page nor one of this side's own under way lets a second page
     start over it; one the controller refused has no timer and stops no later page. An answer a host
-    never gave takes no later page's, unless its end fell meanwhile. A failed answer of this side's
+    never gave takes no later page's, unless its end fell meanwhile, and then only until its
+    connection accept timeout (221). A failed answer of this side's
     host leaves no entry, also with an answer never given still counted and a page of this side
     under way; an entry that goes takes its timer along.
     `tests/test_spp_peer.py::test_a_pager_gets_the_reason_at_the_instant_of_the_rejection`,
@@ -725,6 +727,24 @@ that references to its number keep their meaning.
     `tests/test_spp_peer.py::test_an_acceptance_as_the_central_after_the_page_ended_is_refused`,
     `tests/test_spp_peer.py::test_a_host_that_accepted_as_the_central_a_pager_that_left_hears_of_it_when_its_end_falls`,
     `tests/test_spp_peer.py::test_an_acceptance_as_the_central_lost_during_this_sides_own_page_ends_with_that_page`
+- **221.** A page whose host does not answer within its connection accept timeout, 5 s unless the
+    host wrote another of 0x0001 to 0xB540 slots, ends at exactly that instant with
+    `CONNECTION_ACCEPT_TIMEOUT_EXCEEDED` on the target's side and, when the pager's page timeout is
+    the longer, as by default, on the pager's too; a pager with the shorter ends at its own page
+    timeout. Both can page again: an unanswered crossing page no longer refuses this side's next
+    page with `CONNECTION_ALREADY_EXISTS`. An answer after it is owed for nothing, and makes no
+    link; a late answer the host never gives ends at its own timeout and takes no later page's; one
+    given in time leaves no timer. A timeout written takes effect from the next page; one out of
+    range is refused, and `Read_Connection_Accept_Timeout` gives the value written.
+    `tests/test_spp_peer.py::test_a_page_its_host_does_not_answer_ends_on_both_sides_at_the_accept_timeout`,
+    `tests/test_spp_peer.py::test_an_answer_after_the_accept_timeout_counts_for_nothing`,
+    `tests/test_spp_peer.py::test_a_crossing_page_its_host_does_not_answer_ends_and_the_next_page_is_not_refused`,
+    `tests/test_spp_peer.py::test_a_late_answer_the_host_never_gives_ends_at_its_accept_timeout`,
+    `tests/test_spp_peer.py::test_an_answer_given_in_time_leaves_no_timer_to_end_the_link`,
+    `tests/test_spp_peer.py::test_the_accept_timeout_a_host_writes_takes_effect_from_the_next_page`,
+    `tests/test_spp_peer.py::test_a_page_timeout_shorter_than_the_accept_timeout_ends_the_pager_s_side_first`,
+    `tests/test_spp_peer.py::test_an_accept_timeout_out_of_its_range_is_refused_and_changes_nothing`,
+    `tests/test_bluetooth_guest.py::test_the_host_reads_back_the_accept_timeout_it_wrote`
 - **209.** The firmware's controller reports three pages of features, 0 to 2, the fourth refused,
     page 0 with its BR/EDR features and without LE, and an ACL buffer of 491 bytes. Every packet it
     sends its host is 1 to 496 bytes; ACL data from a peer is cut to 491 bytes, and to the host's
