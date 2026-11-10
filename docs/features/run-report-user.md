@@ -49,6 +49,37 @@ writes the selected artifact's app hash, which does not prove the device's flash
 `--skip-autoflash y`. See [serial](serial-backend-user.md) for reference-recording checks and the
 `serial console` report / `serial_console` JSON property.
 
+## Tapping the HCI
+
+```python
+def test_the_firmware_opens_spp(board, bt, console, tmp_path):
+    SppPeer(bt.air, name="ESP_SPP_ACCEPTOR", pin="1234", source=model)
+    bt.tap(tmp_path / "hci.btsnoop")
+    board.power_on()
+    board.wait_until(console.line("ESP_SPP_OPEN_EVT"), within=seconds(5))
+```
+
+`bt.tap(path)` records the HCI between the firmware's Bluetooth host and its controller on
+esp32sim ([the bt fixture](pytest-plugin-user.md#the-bt-fixture)): every H4 packet the host sent,
+commands and ACL data, and every one it received, events and ACL data, from power-on. It writes two
+files at teardown, as a UART tap does: `path`, a btsnoop file, which Wireshark and Bumble's
+`bumble-show --format snoop` open, and `path` with `.json` added (`hci.btsnoop.json`), the recording's header.
+The same rules hold as for `gnss.tap`: before `board.power_on()`, relative to the test file's
+directory or absolute, its directory must exist, one per test, and neither file may be one the run
+replays from or another tap writes. On serial the `bt` fixture skips the test first.
+
+- In the btsnoop file each packet is `sent` (host to controller) or `received` (controller to
+  host), and its time is the board's since power-on, to the microsecond: Wireshark shows it as a
+  time after 1970-01-01 00:00:00 UTC. A packet reaches the controller at the instant the host
+  wrote it to the VHCI, and an answer reaches the host 10 µs after the controller made it.
+- The header has `interface: bluetooth`, `source: model:bluetooth`, the board's `clock`, and a
+  field of its own, `devices`: the devices the test made on the air, as `{"name": ..., "address":
+  ...}`, so that a reader can tell whom a packet names by its address.
+- `bt.tap` returns the `Tap`, whose `events` hold the packets as `(t, dir, data)`, `out` from the
+  host, `in` to it, each with its packet-type byte; times there are in nanoseconds.
+- The report's `bluetooth:` line ends with `; tapped into {path}`, and the `bluetooth` property has
+  `tap`.
+
 ## What a tap writes
 
 A recording, [version 1](../recording-format.md):
@@ -203,6 +234,8 @@ UART route.
 
 A tap that cannot be written at teardown is an error there:
 `esp32sim: the tap of uart.gnss cannot be written: {reason}; its output is in {logfile}`.
+For the HCI tap: `esp32sim: the tap of bluetooth cannot be written: {reason}; its output is in
+{logfile}`.
 
 ## Replaying a tap
 
@@ -218,6 +251,7 @@ part-way through a request is refused ([replay errors](replay-user.md#what-a-rep
   ([the esp32tl command](cli-user.md)).
 - The run report has a line per UART route; esp32tl simulates no network service yet, so there
   are none of those.
+- An HCI tap is not replayed: no source plays a btsnoop file back to the firmware.
 
 ## See also
 

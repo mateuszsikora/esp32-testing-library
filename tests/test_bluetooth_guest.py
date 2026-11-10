@@ -10,6 +10,7 @@ an air of its own, on the same clock, so that its time and the board's are one."
 import asyncio
 import threading
 from collections.abc import Callable, Coroutine, Iterable, Iterator
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, TypeVar, cast
 
@@ -949,3 +950,84 @@ def test_bluetooth_asked_for_after_power_on_says_so_before_anything_else() -> No
         "bluetooth: /b/build holds no ELF of the application, whose symbols the runner's --bt needs"
     )
     assert not backend._bluetooth.used
+
+
+def test_a_tap_records_every_packet_both_ways_at_the_time_it_crossed(tmp_path: Path) -> None:
+    asked: list[Request] = []
+    bt = Bluetooth(asked=asked.append, directory=tmp_path)
+    tap = bt.tap("hci.btsnoop")
+    # The tap is asked for first, so that one too late is refused as a tap.
+    assert asked == [Request("bluetooth", tap=True), Request("bluetooth", source="model")]
+    guest = Bluedroid()
+    runner = Runner(guest, bt)
+    try:
+        runner.run(guest.device.power_on())
+        sent = runner.now
+        complete(runner, hci.HCI_Read_Local_Version_Information_Command())
+    finally:
+        runner.stop()
+        guest.air.close()
+        bt.close()
+    assert len(tap.events) == bt.packets_from_host + bt.packets_to_host
+    assert sum(len(d) for _, way, d in tap.events if way == "out") == bt.bytes_from_host
+    assert sum(len(d) for _, way, d in tap.events if way == "in") == bt.bytes_to_host
+    # The host's first command, HCI_Reset, and the last exchange: each answer at the latency.
+    assert tap.events[0][1:] == ("out", bytes.fromhex("01030c00"))
+    (t_out, _, command), (t_in, _, answer) = tap.events[-2:]
+    assert command[1:3] == hci.HCI_READ_LOCAL_VERSION_INFORMATION_COMMAND.to_bytes(2, "little")
+    assert (t_out, t_in - t_out) == (sent, LATENCY_NS)
+    assert answer[:2] == b"\x04\x0e"
+    assert bt.report()[0].endswith(f"; tapped into {tmp_path / 'hci.btsnoop'}")
+    properties = bt.properties()
+    assert properties is not None and properties["tap"] == str(tmp_path / "hci.btsnoop")
+
+
+def test_a_tap_is_one_per_test_needs_its_directory_and_writes_over_nothing(
+    tmp_path: Path,
+) -> None:
+    files = {
+        (tmp_path / "gnss.jsonl").resolve(): ("replay", "uart.gnss"),
+        (tmp_path / "taken.btsnoop.json").resolve(): ("tap", "uart.gnss"),
+    }
+    bt = Bluetooth(directory=tmp_path, files=files)
+    with pytest.raises(FileNotFoundError, match=r"bluetooth: cannot tap into nowhere/hci\.btsnoop"):
+        bt.tap("nowhere/hci.btsnoop")
+    with pytest.raises(SourceError, match=r"gnss\.jsonl is the replay of uart\.gnss"):
+        bt.tap("gnss.jsonl")
+    # The sidecar is claimed as well.
+    with pytest.raises(SourceError, match=r"taken\.btsnoop\.json is the tap of uart\.gnss"):
+        bt.tap("taken.btsnoop")
+    assert bt.tapped is None
+    bt.tap("hci.btsnoop")
+    assert files[(tmp_path / "hci.btsnoop").resolve()] == ("tap", "bluetooth")
+    assert files[(tmp_path / "hci.btsnoop.json").resolve()] == ("tap", "bluetooth")
+    with pytest.raises(SourceError, match="bluetooth is tapped already: one tap per test"):
+        bt.tap("other.btsnoop")
+    bt.close()
+
+
+def test_a_tap_the_backend_refuses_is_not_made(tmp_path: Path) -> None:
+    def refuse(request: Request) -> None:
+        if request.tap:
+            raise SourceError("bluetooth cannot be tapped on this backend")
+
+    bt = Bluetooth(asked=refuse, directory=tmp_path)
+    with pytest.raises(SourceError, match="cannot be tapped"):
+        bt.tap("hci.btsnoop")
+    assert bt.tapped is None and bt.files == {}
+    # Refused before the interface was used: the run gets no --bt for it.
+    assert not bt.used
+    bt.close()
+
+
+def test_a_tap_of_an_unused_interface_after_power_on_is_refused_as_a_tap(tmp_path: Path) -> None:
+    backend = Esp32Sim.__new__(Esp32Sim)
+    backend.process = cast(Any, object())
+    backend._supply = True
+    bt = Bluetooth(asked=backend._asked, directory=tmp_path)
+    with pytest.raises(
+        SourceError,
+        match=r"^bluetooth: the board is on already: tap a route before board\.power_on\(\)$",
+    ):
+        bt.tap("hci.btsnoop")
+    assert not bt.used and bt.tapped is None

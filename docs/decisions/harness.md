@@ -1580,12 +1580,39 @@ says at what strength a device goes out of reach.
 
 ## Secure Simple Pairing on the peer's side is postponed
 
-Status: postponed (#129)
+Status: superseded (#34)
 
-Peers pair with a PIN only, and the Bumble controller's own Secure Simple Pairing is used only
-between two devices that both support it, which no `BluetoothDevice` does. What a firmware's stack
-does with a device that has it can only be seen with firmware, so it waits for #34, whose checklist
-holds it.
+Peers paired with a PIN only, and the Bumble controller's own Secure Simple Pairing was used only
+between two devices that both support it, which no `BluetoothDevice` did. What a firmware's stack
+does with a device that has it can only be seen with firmware, so it waited for #34: see
+[Secure Simple Pairing is Bumble's, with esp32tl's numbers, key types and failures](#secure-simple-pairing-is-bumbles-with-esp32tls-numbers-key-types-and-failures).
+
+## Secure Simple Pairing is Bumble's, with esp32tl's numbers, key types and failures
+
+Status: decided (#34)
+
+A `BluetoothDevice` or an `SppPeer` given an `io_capability` has Secure Simple Pairing, and its
+user's answers are arguments: `confirms` for a number or a pairing to allow, `passkey` for a
+keyboard. The pairing itself is Bumble's controller's, which has the association models and the LMP
+exchange, with what a test run needs changed in `Controller`: the nonces and the passkey come from
+the controller's seeded generator, so that two runs show the same numbers, where Bumble draws them
+from `secrets`; a pairing starts with a fresh state, where Bumble reuses the nonce of the one
+before; the key's type is P-192's, authenticated or not by the specification's table, since the
+controller has no Secure Connections, where Bumble names an authenticated P-256 key whatever the
+model, which tells the host that a key Just Works made is protected from a man in the middle; only the
+initiator's host gets `Authentication_Complete`, as for legacy pairing and as Vol 2, Part F, 4.2
+has it, where Bumble sends both; and a DHKey check that fails is told to the peer with
+`LMP_not_accepted`, where Bumble tells only its own host and the other side waits for ever. Every
+pairing that ends goes into `pairings`, on the guest's controller too (`bt.pairings()`), with its
+model and the number shown or typed, since the number is what a test checks and a pairing under
+way is visible as `pairing`. The DHKey stays Bumble's all-zero stand-in: the link has no attacker,
+and both ends are this class, as for legacy pairing's SHA-256 keys.
+
+**Rejected:** a delegate the test writes, Bumble's `PairingDelegate`, because each test would
+write the same few answers again; patching `secrets` in Bumble's module, which would change every Bumble device in
+the process, the test's stand-ins included; the P-256 Diffie-Hellman exchange of the
+specification, which nothing on this air can tell from the stand-in; and a peer that starts
+pairing itself, as `SppPeer` does not for legacy pairing either.
 
 
 ## A remote name request nobody answers ends at the page timeout
@@ -1766,16 +1793,39 @@ link comes of the acceptance. A plain acceptance at that point still makes a lin
 `LMP_RESPONSE_TIMEOUT`, because the pager is there and answers.
 
 
-## An HCI tap and a replayed peer are postponed
+## A replayed peer is postponed
 
 Status: postponed (#33, #34)
 
 The `bt` fixture came with #34
-([below](#the-bt-fixture-gives-the-air-and-the-test-makes-its-devices-on-it)), and the validation
+([below](#the-bt-fixture-gives-the-air-and-the-test-makes-its-devices-on-it)), the validation
 with `bt_spp_initiator` with the pin at mikroverk/esp32sim#347
-([validation firmware](../features/validation-firmware-user.md#bt_spp_initiator)). The btsnoop tap
-of the HCI between the firmware and its controller is still #34's; replaying a recorded SPP
-exchange needs the matching engine (#20), and plan M8's replayed peer waits for it.
+([validation firmware](../features/validation-firmware-user.md#bt_spp_initiator)), and the tap of
+the HCI between the firmware and its controller
+([below](#the-hci-tap-is-a-btsnoop-file-on-the-boards-time-with-its-header-beside-it)).
+Replaying a recorded SPP exchange needs the matching engine (#20), and plan M8's replayed peer
+waits for it; nor does any source play an HCI tap back.
+
+## The HCI tap is a btsnoop file on the board's time, with its header beside it
+
+Status: decided (#34)
+
+`bt.tap(path)` writes the HCI between the firmware's host and its controller as btsnoop version 1
+with datalink 1002 (H4), the format Bumble's `BtSnooper` and Android write, which Wireshark,
+and `bumble-show` read, and puts the recording's header, the same fields
+as a UART tap's, in `path` with `.json` added, as plan §4.3 has it. A record's time is the board's
+since power-on, written from btsnoop's 1970-01-01, so that a reader shows the time since power-on
+and two runs write the same file; `created` in the header says when it was written. The packets
+are recorded where the link carries them, in the `Bluetooth` interface, at the `hci_tx` and
+`hci_rx` times, so the tap holds what the firmware's host sent and read, not what the controller
+made and a reset threw away.
+
+**Rejected:** a recording of this format with an event per packet, which no Bluetooth tool reads;
+pcap with the link type of Bluetooth H4 with a direction header, which Wireshark reads too, and
+`bumble-show` does not; timestamps on the wall clock at the moment written, as `BtSnooper` writes
+them, which would make two runs' files differ and say nothing of the board's time; a time since
+the year 2000, Bumble's anchor, under which a time since power-on reads as a date in 2000; and
+nanoseconds in the sidecar beside the microseconds of the file, a second copy of every time.
 
 ## The firmware's controller is a controller of the air, with the guest's features and buffer
 

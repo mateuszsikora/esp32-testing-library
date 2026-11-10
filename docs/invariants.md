@@ -786,6 +786,34 @@ that references to its number keep their meaning.
     `tests/test_bt_spp_initiator.py::test_a_peer_with_another_pin_fails_the_authentication`,
     `tests/test_bt_spp_initiator.py::test_with_no_peer_the_inquiry_runs_its_length_and_opens_nothing`,
     `tests/test_determinism.py::test_spp_to_a_peer`
+- **218.** A tap of the chip's Bluetooth holds every H4 packet the link carried between the
+    firmware's host and its controller, both ways, at the times the link carried them, and nothing
+    else; its btsnoop file holds the same to the microsecond, with its header in the sidecar, and
+    Bumble reads it. A second tap, a missing directory and a file another's are refused.
+    `tests/test_bluetooth_guest.py::test_a_tap_records_every_packet_both_ways_at_the_time_it_crossed`,
+    `tests/test_bluetooth_guest.py::test_a_tap_is_one_per_test_needs_its_directory_and_writes_over_nothing`,
+    `tests/test_bt_spp_initiator.py::test_the_tap_writes_the_hci_both_ways_as_btsnoop`,
+    `tests/test_recording.py::test_bumble_reads_the_tap_as_it_writes_one`
+- **219.** A device with Secure Simple Pairing pairs with one that has it by the association model
+    of their IO capabilities: two that compare one number get an authenticated key, a passkey
+    shown is the one to type, Just Works gives an unauthenticated key; a user's no, a wrong
+    passkey or none fails the pairing on both sides, neither left waiting, and a device without it
+    pairs with the PIN. Every pairing that ends is in both sides' histories, with its number, and
+    two runs show the same numbers.
+    `tests/test_spp_peer.py::test_two_users_compare_one_number_and_the_key_is_authenticated`,
+    `tests/test_spp_peer.py::test_a_number_a_user_says_no_to_fails_the_pairing_on_both_sides`,
+    `tests/test_spp_peer.py::test_the_device_types_the_passkey_the_peer_shows`,
+    `tests/test_spp_peer.py::test_a_wrong_passkey_fails_the_pairing_on_both_sides_and_neither_waits`,
+    `tests/test_spp_peer.py::test_two_keyboards_each_type_the_passkey`,
+    `tests/test_spp_peer.py::test_a_side_without_display_or_keyboard_pairs_by_just_works_unauthenticated`,
+    `tests/test_spp_peer.py::test_a_peer_with_simple_pairing_pairs_with_its_pin_with_a_device_without`,
+    `tests/test_spp_peer.py::test_each_pairing_starts_anew_and_two_runs_show_the_same_numbers`
+- **220.** ESP-IDF's `bt_spp_initiator` pairs by Just Works with an `SppPeer` that has no input and
+    output, and streams to it; with one that shows a passkey it asks for it, and Bluedroid gives up
+    35 s later; both sides' histories agree, and two runs are the same.
+    `tests/test_bt_spp_initiator.py::test_a_peer_with_simple_pairing_and_no_display_pairs_by_just_works_and_streams`,
+    `tests/test_bt_spp_initiator.py::test_a_peer_that_shows_a_passkey_waits_for_the_firmware_s_user_until_bluedroid_gives_up`,
+    `tests/test_determinism.py::test_spp_with_simple_pairing`
 
 ## The esp32tl command
 

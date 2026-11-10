@@ -656,6 +656,14 @@ devices, on the board's clock
 ([decision](decisions/harness.md#the-firmwares-controller-is-a-controller-of-the-air-with-the-guests-features-and-buffer)).
 The btsnoop tap and the validation with `bt_spp_initiator` are still to come.
 
+*Update, 2026-11-10:* the validation with `bt_spp_initiator` came with the pin at
+mikroverk/esp32sim#347 (#174), against a modelled peer; and the btsnoop tap with `bt.tap(path)`,
+the header in a sidecar `.json`
+([decision](decisions/harness.md#the-hci-tap-is-a-btsnoop-file-on-the-boards-time-with-its-header-beside-it)).
+`bt.model(peer)` became `SppPeer(bt.air, ...)`; `bt.replay(path)` and the replayed peer wait for
+#20. Peers have Secure Simple Pairing too, given an IO capability
+([decision](decisions/harness.md#secure-simple-pairing-is-bumbles-with-esp32tls-numbers-key-types-and-failures)).
+
 ### M9. Deep sleep and time skip
 
 - Upstream issue for the missing timer wake (esp32sim notes LACT sleep-time stepping as not

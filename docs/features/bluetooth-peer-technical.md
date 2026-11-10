@@ -120,7 +120,7 @@ interface that puts the firmware's controller on the board's link is
 8. **The controller.** `Controller` subclasses Bumble's `Controller`. Both ends of every link are
    of this class: its additions talk to each other over `Link.send_lmp_packet`, which hands
    the packet object to the other controller with `call_soon`. Bumble's own handlers do the rest:
-   paging, connection, ACL data, name requests, Secure Simple Pairing.
+   paging, connection, ACL data, name requests, most of Secure Simple Pairing.
    - **Inquiry.** `on_hci_inquiry_command` answers with a command status, starts a timer of
      `inquiry_length * INQUIRY_UNIT_S`, and sends one result per other `Controller` on the link
      whose `classic_scan_enable` has inquiry scan (bit 0), sorted by address, in the form
@@ -159,8 +159,55 @@ interface that puts the firmware's controller on the board's link is
      initiator's host. LMP packets of these
      kinds for a link already detached on this side are dropped: the responder's challenge
      crosses the initiator's detach.
+   - **Secure Simple Pairing.** Bumble's handlers carry it from the IO capability exchange
+     (`LMP_io_capability_req` and `_res`) through `LMP_simple_pairing_confirm`,
+     `LMP_simple_pairing_number` and `LMP_dhkey_check`; the controller replaces five of Bumble's
+     methods and catches two packets. The initiator's negative reply to `Link_Key_Request`, and the
+     responder's `LMP_io_capability_req`, give the connection a fresh `SspState` first, since
+     Bumble keeps the nonce of the pairing before and its `sent_dhkey_check`.
+     `_start_ssp_exchange` takes the local nonce from `random_bytes(16)`, where Bumble takes it
+     from `crypto.r()`, `secrets.token_bytes`. `_on_ssp_confirm_or_nonce_received`, once both
+     nonces are there, picks the association model with `association(local, peer)`, Bumble's
+     choice: Just Works when either IO capability is `NO_INPUT_NO_OUTPUT`, Passkey Entry when
+     either is `KEYBOARD_ONLY`, Numeric Comparison otherwise; a side with a display in Passkey
+     Entry draws the passkey with `self._random.randrange(1_000_000)`, where Bumble calls
+     `secrets.randbelow`, and sends `User_Passkey_Notification`, a side with a keyboard
+     `User_Passkey_Request`; in the other two the host gets `User_Confirmation_Request` with
+     Bumble's `g2` of the two addresses and nonces, mod 10⁶. `_check_ssp_completion` is Bumble's,
+     the DHKey check with `f6` over an all-zero DHKey once this side's host confirmed, and the key
+     with `f5` once both have, but the key's type is P-192's, as the controller has no Secure
+     Connections: `AUTHENTICATED_COMBINATION_KEY_GENERATED_FROM_P_192` when
+     `authenticated_by(model, local, peer)`, Passkey Entry, or Numeric Comparison between two
+     `DISPLAY_YES_NO` (Vol 3, Part C, 5.2.2.6, Table 5.7), `UNAUTHENTICATED_..._P_192` otherwise,
+     where Bumble always names `AUTHENTICATED_..._P_256`; and only the initiator's host gets
+     `Authentication_Complete`, as Vol 2, Part F, 4.2 has it and legacy pairing does here, where
+     Bumble sends both. `_on_ssp_failed` sends `Simple_Pairing_Complete` with the reason, and
+     `Authentication_Complete` to the initiator's host alone, once per pairing: both sides may
+     find a DHKey check wrong. `_verify_peer_dhkey_check` is Bumble's, and on a check that fails
+     also sends the peer `LMP_not_accepted` for `LMP_dhkey_check` with
+     `AUTHENTICATION_FAILURE_ERROR` (Vol 2, Part C, 4.2.7.4), on which the peer fails its own
+     pairing: Bumble tells only its own host, and the peer's waited for ever, as with two
+     passkeys that differ. An `LMP_detach` during Secure Simple Pairing fails it with the
+     detach's reason. `User_Passkey_Request_Reply` notes the passkey typed. A user's
+     `User_Confirmation_Request_Negative_Reply` or `User_Passkey_Request_Negative_Reply` is
+     Bumble's: `LMP_numeric_comparison_failed` or `LMP_passkey_failed` to the peer, and the
+     failure on both sides, with the link left up. The DHKey is 32 zero bytes, Bumble's: there is
+     no Diffie-Hellman exchange, so the key holds on this link only, as legacy pairing's does.
+   - **The history of pairings.** `pairings` holds each pairing that ended, a `Pairing(t, peer,
+     initiator, method, number, status, authenticated)`, `t` the loop's time in nanoseconds, and
+     `under_way` the ones that have not, an `UnderWay(initiator, method, number, authenticated)`
+     by peer. A legacy pairing starts when this side's host is sent `PIN_Code_Request`, on either
+     side, and ends at `Link_Key_Notification` with `SUCCESS`, at the failed check with
+     `AUTHENTICATION_FAILURE_ERROR`, at a negative reply to the PIN request with
+     `PIN_OR_KEY_MISSING_ERROR`, or at the peer's `LMP_not_accepted` or `LMP_detach` with its
+     error. Secure Simple Pairing starts as `simple_pairing` at the negative reply or the
+     `LMP_io_capability_req`, takes the model's name and number when it is picked, and the
+     passkey typed, and ends in `_check_ssp_completion` or `_on_ssp_failed`. A pairing under way
+     when its link falls ends with the link's reason, also when `HCI_Reset`, a chip reset or a
+     power loss takes this side's end of the link down. `authenticated` is the key's, and
+     `False` for a pairing that failed and for legacy pairing.
    - **Encryption.** `Set_Connection_Encryption` on a link authenticated by legacy pairing, by a
-     key, or by Bumble's Secure Simple Pairing (`ssp_state.authenticated`) sends
+     key, or by Secure Simple Pairing (`ssp_state.authenticated`) sends
      `LMP_encryption_mode_req` with the mode asked for, which this side keeps until it is
      accepted; the other side sends its host `Encryption_Change` with that mode and
      `LMP_accepted`, on which this side sends its own, with the same mode. On a link not
@@ -429,7 +476,7 @@ interface that puts the firmware's controller on the board's link is
     four (`lmp_features_max_page_number = 3`). TODO(owner): `ADDRESS`, `24:6F:28:00:11:24`, is the
     spike's; what the classic ESP32's eFuse gives the controller on esp32sim, the base MAC plus 2,
     is not read.
-12. **The interface.** `Bluetooth(*, asked, log, address, latency=LATENCY_NS)`
+12. **The interface.** `Bluetooth(*, asked, log, address, latency=LATENCY_NS, directory, files)`
     (`esp32tl/interfaces/bluetooth.py`) is an `Interface` named `bluetooth`, with no wire, whose
     `bluetooth` is true. `use()`, from `Board.bluetooth` the first time, calls
     `asked(Request("bluetooth", source="model"))`, then makes an `Air(board_clock=True)` and a
@@ -463,6 +510,10 @@ interface that puts the firmware's controller on the board's link is
     has nothing to read (protocol 5.22), so the answer is there for its next poll; at 0 every packet
     would take a turn of its own. The spike measured 259 kbit/s of SPP with it; `bt_spp_initiator`
     reports about 299 kbit/s at the pin `c99fb28` (`tests/test_bt_spp_initiator.py`).
+    `tap(path)` makes `tapped`, a `Tap("bluetooth", directory / path)`; `receive` records each
+    packet into it as `out` at `t`, and `poll` each packet it returns as `in` at its due time. The
+    backend writes it as btsnoop ([run-report-technical.md](run-report-technical.md#the-hci-tap)).
+    `report()`'s first line ends with `; tapped into {path}` and `properties()` has `tap`.
 
 ## Interfaces
 
@@ -474,11 +525,16 @@ interface that puts the firmware's controller on the board's link is
 | `AirError` | A `RuntimeError`: what failed on the air, as its `__cause__` |
 | `Link()` | `esp32tl/bluetooth/air.py`: Bumble's `LocalLink`; `present(address)`, `reaches(sender, receiver)`, `leave(address, peers)`, `back(address)`, `let_go(one, other)` |
 | `Controller(name, link, address)` | `esp32tl/bluetooth/controller.py`: Bumble's `Controller` with the additions above; `link`, a `Link`; `acl_to_host`, a class attribute, `None`; `class_of_device`, `extended_inquiry_response` (240 bytes), `inquiry_mode`, `rssi`, `page_timeout`, in slots; `iac_laps`; `default_link_policy`, `link_policies`; `inquiry_scan_activity`, `page_scan_activity`, `(interval, window)`; `inquiry_scan_type`, `page_scan_type`; `host_acl_length`; `unknown_commands`; `authenticated(peer)`; `random_bytes(n)`; `left()`, `returned()`, `power_lost()` |
+| `Pairing(t, peer, initiator, method, number, status, authenticated=False)` | `esp32tl/bluetooth/controller.py`: frozen dataclass, a pairing that ended; `succeeded` |
+| `UnderWay(initiator, method, number=None, authenticated=False)` | A pairing under way; `Controller.under_way`, by peer, and `Controller.pairings` |
+| `LEGACY`, `JUST_WORKS`, `NUMERIC_COMPARISON`, `PASSKEY_ENTRY`, `SIMPLE_PAIRING` | The methods' names: `"legacy"`, `"just_works"`, `"numeric_comparison"`, `"passkey_entry"`, `"simple_pairing"` |
+| `association(local, peer)`, `authenticated_by(model, local, peer)` | The association model of two IO capabilities, and whether its key is authenticated |
+| `SIX_DIGITS` | `1_000_000`: the range of a number to compare and of a passkey |
 | `UnknownCommand(t, op_code, name)` | Frozen dataclass: a command the controller answered with `UNKNOWN_HCI_COMMAND_ERROR`, `t` in nanoseconds of the air's time |
 | `GIAC`, `IAC_LAPS`, `BR_EDR_FEATURES` | `0x9E8B33`; `range(0x9E8B00, 0x9E8B40)`; page 0's features, above |
 | `GuestController(name, link, address=ADDRESS)` | `esp32tl/bluetooth/guest.py`: a `Controller`, BR/EDR only, pages 0 to 2, `acl_to_host` `ACL_LENGTH`; `chip_reset()`, `chip_off()`, `chip_on()` |
 | `ADDRESS`, `ACL_LENGTH`, `MAX_PAGE` | `esp32tl/bluetooth/guest.py`: `"24:6F:28:00:11:24"`; `491`, `HCI_MAX - 5`; `2` |
-| `Bluetooth(*, asked=..., log=None, address=ADDRESS, latency=LATENCY_NS)` | `esp32tl/interfaces/bluetooth.py`: the `Interface` above; `use()`, `used`, `air`, `controller`, `address`; `supply(on)`, `chip_reset(t)`; `packets_from_host`, `bytes_from_host`, `packets_to_host`, `bytes_to_host`; `unknown_commands()`, `devices()`; `report()`, `properties()`; `close()` |
+| `Bluetooth(*, asked=..., log=None, address=ADDRESS, latency=LATENCY_NS, directory=None, files=None)` | `esp32tl/interfaces/bluetooth.py`: the `Interface` above; `use()`, `used`, `air`, `controller`, `address`; `tap(path)`, `tapped`, `directory` (the working directory unless given), `files`; `pairings()`, the guest's controller's; `supply(on)`, `chip_reset(t)`; `packets_from_host`, `bytes_from_host`, `packets_to_host`, `bytes_to_host`; `unknown_commands()`, `devices()`; `report()`, `properties()`; `close()` |
 | `LATENCY_NS`, `BluetoothError` | `esp32tl/interfaces/bluetooth.py`: `10_000`; a `RuntimeError`, what the controller sent that the link cannot carry |
 | `Security` | Dataclass: one link's authentication on one side: `initiator`, `init_key`, `local_rand`, `peer_rand`, `link_key`, `pairing`, `challenge`, `peer_challenge`, `authenticated` |
 | `LmpInRand`, `LmpCombKey`, `LmpSres`, `LmpEncryptionModeReq`, `LmpSupervisionTimeout` | LMP packets Bumble does not define, registered with `lmp.Packet.subclass` |
@@ -486,8 +542,9 @@ interface that puts the firmware's controller on the board's link is
 | `INQUIRY_UNIT_S` | 1.28 |
 | `RSSI` | `esp32tl/bluetooth/controller.py`: `-50`, in dBm, a value of ours: nothing says what a device's should be |
 | `SLOT_S`, `PAGE_TIMEOUT_SLOTS`, `LINK_SUPERVISION_TIMEOUT_SLOTS` | `0.000625`; `0x2000`, 5.12 s; `0x7D00`, 20 s: Bluetooth Core 5.4, Vol 4, Part E, 7.3.16 and 7.3.42 |
-| `BluetoothDevice(air, *, name, pin=None, class_of_device=CLASS_OF_DEVICE, rssi=RSSI, address=ADDRESS)` | `esp32tl/bluetooth/peer.py`: `device`, the Bumble `Device`; `address`; `name`, `pin`, `class_of_device`; `rssi`, read and written; `present`; `switch_off()`, `switch_on()`, `out_of_range()`, `in_range()`, `forget_keys()` |
-| `SppPeer(air, *, name, pin, source, address=ADDRESS, channel=CHANNEL, secure=True, class_of_device=CLASS_OF_DEVICE, rssi=RSSI, service_name=SERVICE_NAME)` | A `BluetoothDevice`, also: `source`, `channel`, `secure`, `service_name`; `events`; `refused`, `(t, why)` pairs; `lost`; `channel_open`; the party's `poll(now)` and `quiet_until()` |
+| `BluetoothDevice(air, *, name, pin=None, class_of_device=CLASS_OF_DEVICE, rssi=RSSI, address=ADDRESS, io_capability=None, confirms=True, passkey=None)` | `esp32tl/bluetooth/peer.py`: `device`, the Bumble `Device`; `address`; `name`, `pin`, `class_of_device`, `io_capability`, `confirms`, `passkey`; `rssi`, read and written; `present`; `pairing`, the controller's latest `UnderWay` or `None`; `pairings`, a copy of the controller's; `switch_off()`, `switch_on()`, `out_of_range()`, `in_range()`, `forget_keys()` |
+| `IO_CAPABILITIES` | `esp32tl/bluetooth/peer.py`: the four names a test gives, to Bumble's `PairingDelegate.IoCapability`: `DISPLAY_OUTPUT_ONLY`, `DISPLAY_OUTPUT_AND_YES_NO_INPUT`, `KEYBOARD_INPUT_ONLY`, `NO_OUTPUT_NO_INPUT` |
+| `SppPeer(air, *, name, pin, source, address=ADDRESS, channel=CHANNEL, secure=True, class_of_device=CLASS_OF_DEVICE, rssi=RSSI, service_name=SERVICE_NAME, io_capability=None, confirms=True, passkey=None)` | A `BluetoothDevice`, also: `source`, `channel`, `secure`, `service_name`; `events`; `refused`, `(t, why)` pairs; `lost`; `channel_open`; the party's `poll(now)` and `quiet_until()` |
 | `SERVICE_NAME`, `LANGUAGE`, `L2CAP_FEATURES` | `esp32tl/bluetooth/peer.py`: `"Serial Port"`; `(0x656E, 106, 0x0100)`; `(FIXED_CHANNELS, FCS_OPTION)` |
 | `ADDRESS`, `CLASS_OF_DEVICE`, `CHANNEL`, `NAME_MAX`, `RECORD_HANDLE` | `"00:00:00:00:5B:01"`, an address no real device in a test is likely to have; `0x001F00`; `1`; `238`, the extended inquiry response's 240 bytes less the name field's length and type; `0x00010001`, the first SDP record handle a server may give a record of its own |
 | `PeerError` | A `ValueError`: what a peer cannot be, or what its source sent that it cannot send |
@@ -508,8 +565,16 @@ interface that puts the firmware's controller on the board's link is
 is set; `host`, `find_classic_connection_by_handle`, `on_link_acl_data`, `sco_links`,
 `lmp_features_max_page_number`, `lmp_version`, `lmp_subversion`,
 `manufacturer_company_identifier`, `acl_data_packet_length`,
-`on_hci_read_local_extended_features_command`, `on_hci_reset_command`.
-`bumble.controller.Connection`, which a page heard is made of. `bumble.device.Device`:
+`on_hci_read_local_extended_features_command`, `on_hci_reset_command`; for Secure Simple Pairing,
+`_start_ssp_exchange`, `_on_ssp_confirm_or_nonce_received`, `_check_ssp_completion`,
+`_verify_peer_dhkey_check` and `_on_ssp_failed`, private methods it replaces or wraps, and which
+the rest of Bumble's handlers call, `on_hci_user_passkey_request_reply_command`, and `SspState`'s
+fields. `bumble.controller.Connection`, which a page heard is made of, and its `ssp_state`.
+`bumble.crypto`: `f5`, `f6`, `g2`. `bumble.device.with_connection_from_address`, and the device's
+host event `pin_code_request`, which Bumble's `Device` subscribes to by the name of its
+`on_pin_code_request` method, so that the peer's `Device` subclass answers it; the delegate's
+`confirm`, `compare_numbers`, `get_number` and `display_number`, which Bumble's `Device` calls by
+the table of Vol 3, Part C, 5.2.2.6. `bumble.device.Device`:
 `auto_restart_inquiry`. `bumble.device.DeviceConfiguration.l2cap_extended_features`.
 `bumble.rfcomm`: `Multiplexer.acceptor`, `Multiplexer.dlcs`, `Multiplexer.send_frame`,
 `Multiplexer.l2cap_channel`, whose `sink` is the multiplexer's `on_pdu`, `DLC.state`, `DLC.c_r`,
@@ -544,6 +609,10 @@ None. `bumble` is a dependency of esp32tl, pinned exactly in `pyproject.toml`
 | `air.advance takes a Duration, as seconds(1), not 1`, `air.run: within takes a Duration of 0 or more, not …` | `TypeError`, `ValueError` | From `nanoseconds` in `esp32tl/backends/clock.py`, for `advance`, `wait` and `run` |
 | `{call}: this air is on the board's clock, which only the board's link moves: let the board run with board.wait() or board.wait_until()` | `AirError` | `_test_moves`, for `air.advance`, `air.wait` and `air.run` on an `Air(board_clock=True)` |
 | `SppPeer: service_name is {service_name!r}, not None or a string of 1 to 255 bytes` | `PeerError` | `service_name` neither `None` nor a `str` of 1 to 255 bytes in UTF-8 |
+| `{kind}: io_capability is {io_capability!r}, not None or one of display_only, display_yes_no, keyboard_only, no_input_no_output` | `PeerError` | `io_capability` not `None` nor a key of `IO_CAPABILITIES` |
+| `{kind}: confirms is {confirms!r}, not True or False` | `PeerError` | `confirms` not a `bool` |
+| `{kind}: passkey is {passkey!r}, not six digits, 0 to 999999` | `PeerError` | `passkey` a `bool`, not an `int`, or out of range |
+| `{kind}: passkey is typed on a keyboard: give io_capability='keyboard_only'` | `PeerError` | A `passkey` with another `io_capability` |
 | `the guest's controller made {kind} at {t}, due at {t + latency}, before the turn at {now}: the link bounds every turn by the interfaces' quiet_until and latency (protocol §6, rule 1, and §7)` | `BluetoothError`, which the link turns into its error `bluetooth.poll raised BluetoothError: …` | `Bluetooth.poll`: a packet due before the turn; `{kind}` is `a command`, `ACL data`, `SCO data`, `an event`, `ISO data` or `a packet` by its first byte, `an empty packet` for one with none |
 | `the guest's controller made {kind} of {n} bytes at {t}; esp32sim's VHCI carries 1 to 496` | `BluetoothError`, as above | `Bluetooth.poll`: a packet the VHCI cannot carry |
 | `the runner sent hci_tx, and the test gave the board no Bluetooth: the run has no --bt` | `BluetoothError`, as above, from `receive` | An `hci_tx` before `use()` |
@@ -575,8 +644,8 @@ in `error_code` on a failed `Connection_Complete`, and `HCI_Error` with
   the device's DISC or by the link, and opened again; a peer with something due the instant it
   joins; unprompted bytes lost before the channel opens and answers lost after it closes; sources
   that raise, answer into the past, return what is not a pair or an empty answer, or give a wrong
-  `quiet_until`; two runs with the same `events`; Bumble's Secure Simple Pairing between two
-  controllers that support it; encryption refused on a link not authenticated, and turned off on
+  `quiet_until`; two runs with the same `events`; Secure Simple Pairing between two
+  controllers that support it, with the stand-ins' keyboards, which both type Bumble's default 0; encryption refused on a link not authenticated, and turned off on
   both sides; the air quiet until the device writes; the peer's refusals of its arguments and of an
   address taken. A peer that leaves, either way: the link falling at exactly the supervision timeout
   with no detach; a page ending at exactly the page timeout, also to an address nobody has; an
@@ -677,11 +746,31 @@ authentication fails (`AUTHENTICATION_FAILURE`), the link falls, and the firmwar
 so `peer.refused` stays empty. With no peer, and with a `BluetoothDevice` of another name, its one
 inquiry runs 38.4 s and it pages nobody. The controller knows every command Bluedroid sends in
 these runs (`bt.unknown_commands()` is empty), and two runs are the same
-(`tests/test_determinism.py::test_spp_to_a_peer`).
+(`tests/test_determinism.py::test_spp_to_a_peer`). Against a peer with `io_capability`
+`no_input_no_output` the firmware pairs by Just Works, which Bluedroid allows by itself, with no
+PIN and no number printed, and streams; both sides' `pairings` hold the one pairing, with the same
+number and time, unauthenticated, and the report and the `bluetooth` property list it. Against a
+peer with `display_only` or `display_yes_no` it asks for the passkey the peer shows
+(`ESP_BT_GAP_KEY_REQ_EVT`), which the run cannot type, and Bluedroid's security timer ends it
+35 s later with `User_Passkey_Request_Negative_Reply`: both sides' pairings fail with
+`AUTHENTICATION_FAILURE`, the peer's with the passkey it showed. Two runs of the first are the
+same, the numbers included (`tests/test_determinism.py::test_spp_with_simple_pairing`).
+
+`tests/test_spp_peer.py`, for Secure Simple Pairing, with the stand-in's user playing the
+firmware's: two users comparing one number, the key authenticated and the same on both sides,
+only the initiator's host told the authentication is complete; a number either user says no to,
+failing on both sides with no key; the stand-in typing the passkey the peer shows, read off
+`peer.pairing`; a wrong passkey failing on both sides at one instant, neither left waiting; two
+keyboards, with and without a passkey on the peer; Just Works from either side with no input and
+output, allowed or refused by the side asked, a display only allowing it whatever it confirms,
+unauthenticated; a peer with Secure Simple Pairing pairing with its PIN with a device without; a failed legacy pairing in both histories; and two
+runs of two pairings, each with new numbers, showing the same. The `PeerError`s of the four new
+arguments.
 
 Not covered: a firmware that sees a peer leave, a firmware that receives on the channel (the
-example only writes), encryption, and Secure Simple Pairing, which `SppPeer` does not do. Nor is a
-clock offset other than zero. The air's time is exact to the nanosecond up to 2^22 s, about 48 days: from there
+example only writes), encryption, a firmware that types a passkey or confirms a number, which
+needs input on its console (#51), Secure Connections, and out-of-band data, which Bumble's
+controller takes and nothing here gives. Nor is a clock offset other than zero. The air's time is exact to the nanosecond up to 2^22 s, about 48 days: from there
 `round(when * 1e9)` works on a count of nanoseconds near 2^52, where a float's own error and the
 product's add up to more than half a nanosecond, so a timer can fire a nanosecond early or late.
 From 2^23 s, about 97 days, a float of seconds no longer tells one nanosecond from the next, timers

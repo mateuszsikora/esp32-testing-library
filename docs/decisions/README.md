@@ -184,7 +184,8 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The SPP peer opens its channel to one device, on a link that device authenticated](harness.md#the-spp-peer-opens-its-channel-to-one-device-on-a-link-that-device-authenticated) | `harness.md` | decided (#33, #34) |
 | [A peer leaves without a word, keeps its keys, and its old link stays dead until it falls](harness.md#a-peer-leaves-without-a-word-keeps-its-keys-and-its-old-link-stays-dead-until-it-falls) | `harness.md` | decided (#129) |
 | [Devices on the air have a base class without SPP, and an RSSI of their own](harness.md#devices-on-the-air-have-a-base-class-without-spp-and-an-rssi-of-their-own) | `harness.md` | decided (#129) |
-| [Secure Simple Pairing on the peer's side is postponed](harness.md#secure-simple-pairing-on-the-peers-side-is-postponed) | `harness.md` | postponed (#129) |
+| [Secure Simple Pairing on the peer's side is postponed](harness.md#secure-simple-pairing-on-the-peers-side-is-postponed) | `harness.md` | superseded (#34) |
+| [Secure Simple Pairing is Bumble's, with esp32tl's numbers, key types and failures](harness.md#secure-simple-pairing-is-bumbles-with-esp32tls-numbers-key-types-and-failures) | `harness.md` | decided (#34) |
 | [A remote name request nobody answers ends at the page timeout](harness.md#a-remote-name-request-nobody-answers-ends-at-the-page-timeout) | `harness.md` | decided (#129) |
 | [A host that rejects a page gets the reason too](harness.md#a-host-that-rejects-a-page-gets-the-reason-too) | `harness.md` | decided (#137) |
 | [Rejecting a synchronous link is postponed](harness.md#rejecting-a-synchronous-link-is-postponed) | `harness.md` | postponed (#34) |
@@ -195,7 +196,8 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Connection_Accept_Timeout is postponed](harness.md#connection_accept_timeout-is-postponed) | `harness.md` | postponed (#166) |
 | [Two pages at one instant make one link, the page accepted first](harness.md#two-pages-at-one-instant-make-one-link-the-page-accepted-first) | `harness.md` | decided (#141) |
 | [A role switch asked of a pager whose page ended is refused](harness.md#a-role-switch-asked-of-a-pager-whose-page-ended-is-refused) | `harness.md` | decided (#141) |
-| [An HCI tap and a replayed peer are postponed](harness.md#an-hci-tap-and-a-replayed-peer-are-postponed) | `harness.md` | postponed (#33, #34) |
+| [A replayed peer is postponed](harness.md#a-replayed-peer-is-postponed) | `harness.md` | postponed (#33, #34) |
+| [The HCI tap is a btsnoop file on the board's time, with its header beside it](harness.md#the-hci-tap-is-a-btsnoop-file-on-the-boards-time-with-its-header-beside-it) | `harness.md` | decided (#34) |
 | [The firmware's controller is a controller of the air, with the guest's features and buffer](harness.md#the-firmwares-controller-is-a-controller-of-the-air-with-the-guests-features-and-buffer) | `harness.md` | decided (#34) |
 | [The air of the bt fixture is moved by the board's link alone](harness.md#the-air-of-the-bt-fixture-is-moved-by-the-boards-link-alone) | `harness.md` | decided (#34) |
 | [An answer of the firmware's controller goes out 10 µs after it is made, and never before its turn](harness.md#an-answer-of-the-firmwares-controller-goes-out-10-µs-after-it-is-made-and-never-before-its-turn) | `harness.md` | decided (#34) |

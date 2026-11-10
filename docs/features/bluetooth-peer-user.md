@@ -1,8 +1,8 @@
 # Bluetooth peer
 
 Bluetooth Classic devices for the firmware to talk to, or to find: `SppPeer` can be discovered by
-its name, pairs with a PIN, and offers the Serial Port Profile (SPP), whose bytes a model in the
-test answers, on the board's clock; `BluetoothDevice` is the same device with no SPP. They run on
+its name, pairs with a PIN or with Secure Simple Pairing, and offers the Serial Port Profile (SPP),
+whose bytes a model in the test answers, on the board's clock; `BluetoothDevice` is the same device with no SPP. They run on
 [Bumble](https://github.com/google/bumble)'s virtual link, in the harness's process.
 
 On the emulator the `bt` fixture puts them in front of the firmware: the firmware's Bluetooth host
@@ -81,8 +81,10 @@ of the application, whose symbols the runner's --bt needs`.
 | `bt.air` | The `Air` of the board's devices, on its clock |
 | `bt.controller` | The firmware's controller, a `GuestController` at `24:6F:28:00:11:24` |
 | `bt.unknown_commands()` | The commands of the firmware's host the controller did not know, `(t, op_code, name)` each |
+| `bt.pairings()` | The firmware's pairings that ended, each a `Pairing` ([Secure Simple Pairing](#secure-simple-pairing)) |
 | `bt.devices()` | The other devices made on the air, `(name, address, present)` each, in the order of their addresses; `present` is false for one switched off or out of range now |
 | `bt.packets_from_host`, `bt.bytes_from_host`, `bt.packets_to_host`, `bt.bytes_to_host` | What crossed the VHCI, each way |
+| `bt.tap(path)` | Before `board.power_on()`: the HCI between the firmware's host and its controller, every packet both ways, written at teardown as a btsnoop file at `path` and its header in `path` with `.json` added ([tapping the HCI](run-report-user.md#tapping-the-hci)); returns the `Tap` |
 
 The test's report has what the Bluetooth did, after the Wi-Fi's lines: `bluetooth: the guest's
 controller at 24:6F:28:00:11:24; N packets (B bytes) from its host, M packets (B bytes) to it`, then
@@ -90,8 +92,12 @@ controller at 24:6F:28:00:11:24; N packets (B bytes) from its host, M packets (B
 code, as `0.300220000 s  HCI_TRUNCATED_PAGE_COMMAND (0x043f)`, and `devices:` with each device made
 on the air, as `ESP_SPP_ACCEPTOR (00:00:00:00:5B:01)`, and `phone (00:00:00:00:5C:01, off the air)`
 for one switched off or out of range. The `esp32sim_link` property has the same under `bluetooth`:
-`address`, the four counts, `unknown_commands` (`t_ns`, `op_code`, `name` each) and `devices`
-(`name`, `address`, `present` each); `null` without `bt`.
+`address`, the four counts, `tap` (the btsnoop file's path, or `null`), `unknown_commands` (`t_ns`,
+`op_code`, `name` each), `pairings` (`t_ns`, `peer`, `initiator`, `method`, `number`, `status`,
+`authenticated` each; [Secure Simple Pairing](#secure-simple-pairing)) and `devices` (`name`,
+`address`, `present` each); `null` without `bt`. Between `unknown commands` and `devices` the report
+lists the firmware's pairings under `pairings (N):`.
+After `bt.tap(path)` the first line ends with `; tapped into {path}`.
 
 ### The firmware's controller
 
@@ -147,7 +153,8 @@ air.close()
 ```
 
 `SppPeer(air, *, name, pin, source, address="00:00:00:00:5B:01", channel=1, secure=True,
-class_of_device=0x001F00, rssi=-50, service_name="Serial Port")`:
+class_of_device=0x001F00, rssi=-50, service_name="Serial Port", io_capability=None,
+confirms=True, passkey=None)`:
 
 | Argument | What it is |
 |---|---|
@@ -160,6 +167,9 @@ class_of_device=0x001F00, rssi=-50, service_name="Serial Port")`:
 | `class_of_device` | Its class of device, three octets, which an inquiry reports |
 | `rssi` | The signal strength an inquiry hears it at, in dBm, -127 to 20, the range of the specification's inquiry results |
 | `service_name` | The name of the SPP service in its SDP record, a string of 1 to 255 bytes in UTF-8, or `None` for a record without one |
+| `io_capability` | `None`, the default, for a peer that pairs with its PIN only; or what its user has for Secure Simple Pairing: `display_only`, `display_yes_no`, `keyboard_only` or `no_input_no_output` ([below](#secure-simple-pairing)) |
+| `confirms` | With Secure Simple Pairing, whether its user says yes to the number to compare, or to a pairing it is asked to allow; a `display_only` user has no yes or no, and allows every pairing whatever `confirms` says |
+| `passkey` | With `keyboard_only`, the passkey its user types when asked, 0 to 999999; `None`, the default, for a user who types none, and the pairing fails |
 
 From the moment it is made, at the air's current instant, and until the test takes it off the air
 ([below](#a-peer-that-leaves)), the peer is:
@@ -167,8 +177,9 @@ From the moment it is made, at the air's current instant, and until the test tak
 - **Discoverable and connectable.** An inquiry finds it with its address, its class of device,
   `0x001F00` (uncategorised) unless given another, its signal strength and its name.
 - **Paired with its PIN.** It pairs the way Bluetooth 2.0 devices do, with a PIN (legacy
-  pairing), and never with Secure Simple Pairing. A device that gives another PIN fails to
-  authenticate and is disconnected. The peer keeps the key of each device it paired with until
+  pairing), unless it has an `io_capability` and the device has Secure Simple Pairing too
+  ([below](#secure-simple-pairing)). A device that gives another PIN fails to authenticate and is
+  disconnected. The peer keeps the key of each device it paired with until
   `peer.forget_keys()`, so a device that paired once authenticates later without a PIN; a device
   that kept a key the peer does not have fails to authenticate. A link the device authenticated can be
   encrypted.
@@ -190,6 +201,58 @@ From the moment it is made, at the air's current instant, and until the test tak
   it or the link. The channel is RFCOMM in L2CAP's basic mode: the peer does not offer Enhanced
   Retransmission Mode, so a device that would ask for it stays in basic mode.
 
+### Secure Simple Pairing
+
+```python
+peer = SppPeer(
+    bt.air, name="ESP_SPP_ACCEPTOR", pin="1234", source=model, io_capability="no_input_no_output"
+)
+board.power_on()
+board.wait_until(lambda: peer.channel_open, within=seconds(5))
+assert [p.method for p in peer.pairings] == ["just_works"]
+```
+
+With an `io_capability`, a peer or a [device](#other-devices) has Secure Simple Pairing, and a
+device that has it too pairs with it that way; one that has not, such as a firmware built without
+`CONFIG_BT_SSP_ENABLED`, pairs with the PIN. How the two pair follows from what each user has, as
+Bluetooth Core 5.4 orders it (Vol 3, Part C, 5.2.2.6):
+
+| Either side has | How they pair | The key |
+|---|---|---|
+| `no_input_no_output` | **Just Works.** Nobody compares or types: against a side with no input and no output, a `display_yes_no` side is asked to allow it, and says yes when it `confirms`; every other side allows it by itself, `display_only` too, which has no yes or no to say | unauthenticated |
+| `keyboard_only` (and neither has `no_input_no_output`) | **Passkey Entry.** A side with a display shows a six-digit passkey, and the side with the keyboard types it; with two keyboards, each user types one, and they must be the same. A peer with a keyboard types its `passkey` | authenticated |
+| `display_yes_no`, both | **Numeric Comparison.** Both show one six-digit number, and each user says yes when it `confirms` | authenticated |
+| `display_only` and a display | **Numeric Comparison**, which a side with a display only confirms by itself; a `display_yes_no` side compares the number and says yes when it `confirms` | unauthenticated |
+
+A user who says no, a passkey that differs from the other side's, and a keyboard with no `passkey`
+fail the pairing on both sides with `AUTHENTICATION_FAILURE`; the link stays up, and what comes next
+is the device's to choose. The numbers come from a generator seeded
+with the device's address, so two runs show the same numbers; each pairing draws new ones.
+
+- `peer.pairing` is the pairing under way, `None` while there is none: what the user's display
+  shows is its `number`, as `peer.pairing.number`, once the pairing is that far. A test that plays
+  the other side's user reads the passkey off it.
+- `peer.pairings` is the history of the peer's pairings that ended, in order, each a `Pairing`:
+  `t`, the air's time it ended at, in nanoseconds, the board's on `bt.air`; `peer`, the other side's address; `initiator`,
+  whether the peer asked for it (the peer never does: always `False`); `method`, `legacy`,
+  `just_works`, `numeric_comparison`, `passkey_entry`, or `simple_pairing` for one that ended
+  before its method was known; `number`, the number shown or the passkey typed, `None` for none;
+  `status`, an HCI error code, `0` for success, `succeeded` its test; and `authenticated`, whether
+  the key it made is. A legacy pairing is in it too, with no number; one under way when its link
+  falls ends with the reason the link fell for.
+
+Against ESP-IDF's `bt_spp_initiator`, which has Secure Simple Pairing with a keyboard only (on its
+console, `spp key …;`): a peer with `no_input_no_output` pairs by Just Works, which Bluedroid allows
+by itself, and the firmware opens SPP and streams as with the PIN; a peer with a display shows a
+passkey, the firmware prints `ESP_BT_GAP_KEY_REQ_EVT Please enter passkey!`, and, since the run
+cannot type on its console, Bluedroid gives up 35 s later (`authentication failed, status:9`)
+([validation firmware](validation-firmware-user.md#bt_spp_initiator)).
+
+`bt.pairings()` is the same history on the firmware's side, the firmware's controller's, and the
+test's report lists it under `pairings (N):`, one line each, as `1.383592800 s  with
+00:00:00:00:5B:01, by just_works, 238680: succeeded`, `from` for one the other side asked for, and
+the error's name and code, as `AUTHENTICATION_FAILURE_ERROR (0x05)`, for one that failed.
+
 ## Other devices
 
 A device that offers no SPP, there to be found among others, or to be the wrong one:
@@ -204,7 +267,8 @@ peer.rssi = -80
 ```
 
 `BluetoothDevice(air, *, name, pin=None, class_of_device=0x001F00, rssi=-50,
-address="00:00:00:00:5B:01")` takes the arguments of the same name in the table above; two devices
+address="00:00:00:00:5B:01", io_capability=None, confirms=True, passkey=None)` takes the arguments
+of the same name in the table above, and pairs as a peer does, with `pairing` and `pairings`; two devices
 on one air need their own addresses. It has what `SppPeer` has apart from the channel and the source:
 it leaves and returns as [below](#a-peer-that-leaves), and keeps its keys. It offers no service: an
 SDP search for the Serial Port service finds nothing, and RFCOMM cannot be opened to it. Without a
@@ -215,8 +279,6 @@ of their addresses. `rssi` can be set at any time, on either class, and the next
 reaches the device in the RSSI and extended inquiry modes (Bumble asks for extended); the plain
 `Inquiry_Result` has no such field. Nothing else depends on it: a device at -127 dBm connects as one
 at 20. A device that has left hears nobody in its own inquiry, which still takes its whole length.
-
-Secure Simple Pairing is not modelled on these devices: they pair with a PIN, as `SppPeer` does.
 
 A peer or a device accepts every page: nothing in their API rejects one. Bumble's host rejects what
 it does not expect once told to, with `peer.device.classic_accept_any = False`, for the reason
@@ -349,7 +411,9 @@ On the air:
   starts, in the order of their addresses; it completes after its length, a multiple of 1.28 s
   (Bumble asks for 8, 10.24 s), unless cancelled.
 - The link keys are not the ones the Bluetooth specification would derive: a key or a response
-  holds on this air only.
+  holds on this air only. Secure Simple Pairing has no Diffie-Hellman exchange either: its numbers
+  and passkeys are those a user sees, and its keys hold on this air only, of the type
+  (authenticated or not) the specification gives them.
 
 ## When something goes wrong
 
@@ -374,7 +438,11 @@ On the air:
 | `air.advance takes a Duration, as seconds(1), not 1` | `TypeError` | `air.advance(1)`: a plain number where a `Duration` belongs |
 | `air.wait takes a Duration, as seconds(1), not 1` | `TypeError` | `air.wait(1)` |
 | `air.run: within takes a Duration, as seconds(1), not 1` | `TypeError` | `air.run(..., within=1)` |
-| `HCI_Error(hci/AUTHENTICATION_FAILURE_ERROR [0x5])` | Bumble's `HCI_Error`, on the device's side | The device gave a PIN other than the peer's |
+| `HCI_Error(hci/AUTHENTICATION_FAILURE_ERROR [0x5])` | Bumble's `HCI_Error`, on the device's side | The device gave a PIN other than the peer's; or, with Secure Simple Pairing, a user said no, a passkey typed differs from the one shown or the other side's, or a keyboard had none to type |
+| `SppPeer: io_capability is 'keyboard', not None or one of display_only, display_yes_no, keyboard_only, no_input_no_output` | `PeerError` | An IO capability of another name |
+| `SppPeer: confirms is 1, not True or False` | `PeerError` | |
+| `SppPeer: passkey is 1000000, not six digits, 0 to 999999` | `PeerError` | A passkey out of range, or not a whole number |
+| `SppPeer: passkey is typed on a keyboard: give io_capability='keyboard_only'` | `PeerError` | A passkey for a peer without a keyboard, which never types one |
 | `HCI_Error(hci/PIN_OR_KEY_MISSING_ERROR [0x6])` | Bumble's `HCI_Error`, on the device's side | The device authenticated with a key the peer does not keep |
 | `HCI_Error(hci/INSUFFICIENT_SECURITY_ERROR [0x2F])` | Bumble's `HCI_Error`, on the device's side | The device asked for encryption on a link it had not authenticated |
 | `hci/PAGE_TIMEOUT_ERROR`, in `error_code` | Bumble's `core.ConnectionError`, on the device's side | Nobody answered the page: the peer has left, its end of an old link has not fallen, or no device has the address |

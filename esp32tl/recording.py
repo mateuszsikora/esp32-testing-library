@@ -2,8 +2,10 @@
 
 A recording is a `.jsonl` file: a header line, then one line per event, `{t, dir, data}`, and a
 `{t, clock}` line wherever the clock the times are on changes. Times on two clocks do not compare:
-`Event.since` refuses to, with `ClockError`. HCI taps are btsnoop files with a sidecar header, and
-are not read here.
+`Event.since` refuses to, with `ClockError`.
+
+An HCI tap is a btsnoop file of H4 packets, with the recording's header in a sidecar `.json` beside
+it: `write_btsnoop` writes the two, `read_btsnoop` reads them back as a `Recording`.
 """
 
 import base64
@@ -11,6 +13,7 @@ import binascii
 import json
 import os
 import re
+import struct
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -322,15 +325,19 @@ def _line(data: dict[str, Any], clock: str) -> Line:
     return Event(data["t"], data["dir"], decoded, clock)
 
 
-def dumps(recording: Recording) -> str:
-    """`recording` as the text of its file. The header's fields come in the format's order, then
-    its `extra` ones; `loads(dumps(r)) == r`."""
-    header = recording.header
+def _header_line(header: Header) -> str:
+    """`header` as its line: the format's fields in order, then the `extra` ones."""
     fields: dict[str, Any] = {"esp32tl_recording": VERSION}
     fields |= {f: getattr(header, f) for f in HEADER_FIELDS[1:]}
     fields["tools"] = dict(header.tools)
     fields |= header.extra
-    lines = [json.dumps(fields)]
+    return json.dumps(fields)
+
+
+def dumps(recording: Recording) -> str:
+    """`recording` as the text of its file. The header's fields come in the format's order, then
+    its `extra` ones; `loads(dumps(r)) == r`."""
+    lines = [_header_line(recording.header)]
     for line in recording.lines:
         if isinstance(line, ClockSwitch):
             lines.append(json.dumps({"t": line.t, "clock": line.clock}))
@@ -343,3 +350,132 @@ def dumps(recording: Recording) -> str:
 def write(path: str | os.PathLike[str], recording: Recording) -> None:
     """Writes `recording` to the file at `path`."""
     Path(path).write_text(dumps(recording), encoding="utf-8")
+
+
+# HCI taps: btsnoop version 1 (RFC 1761's snoop, as Bluetooth stacks write it), whose datalink 1002
+# is HCI UART: each record is one H4 packet, its packet-type byte first.
+BTSNOOP_MAGIC = b"btsnoop\0"
+BTSNOOP_VERSION = 1
+BTSNOOP_H4 = 1002
+# The file's header, `magic, version, datalink`, and each record's, `original length, included
+# length, flags, cumulative drops, timestamp`, all big-endian.
+_BTSNOOP_HEADER = struct.Struct(">8sII")
+_BTSNOOP_RECORD = struct.Struct(">IIIIq")
+# A record's timestamp is in microseconds from midnight, 1 January of the year 0; this is
+# 1970-01-01T00:00:00Z on that scale, the instant a time of 0 ns is written at, so that a reader
+# such as Wireshark shows the time since power-on.
+BTSNOOP_EPOCH_US = 0x00DCDDB30F2F8000
+# The flags: bit 0, the packet went from the controller to the host (`in`), not from the host to
+# the controller (`out`); bit 1, a command or an event, not data.
+BTSNOOP_RECEIVED = 0x1
+BTSNOOP_COMMAND_OR_EVENT = 0x2
+# The H4 packet types of a command and an event (Vol 4, Part A, 2).
+H4_COMMAND = 0x01
+H4_EVENT = 0x04
+# What the name of the sidecar adds to the btsnoop file's.
+SIDECAR = ".json"
+
+
+def sidecar(path: str | os.PathLike[str]) -> Path:
+    """The sidecar of the btsnoop file at `path`: its name with `.json` added."""
+    return Path(os.fspath(path) + SIDECAR)
+
+
+def dumps_btsnoop(recording: Recording) -> tuple[bytes, str]:
+    """`recording` as an HCI tap: the btsnoop file's bytes, every event a record, `out` sent by
+    the host and `in` received by it, each time cut down to the microsecond; and the sidecar's
+    text, the header's line. Refuses a recording with a clock switch: a btsnoop file has one
+    clock."""
+    switch = next((line for line in recording.lines if isinstance(line, ClockSwitch)), None)
+    if switch is not None:
+        raise RecordingError(
+            f"a clock switch at {switch.t}: an HCI tap is on its header's clock alone"
+        )
+    out = bytearray(_BTSNOOP_HEADER.pack(BTSNOOP_MAGIC, BTSNOOP_VERSION, BTSNOOP_H4))
+    for event in recording.events:
+        flags = BTSNOOP_RECEIVED if event.dir == "in" else 0
+        if event.data[0] in (H4_COMMAND, H4_EVENT):
+            flags |= BTSNOOP_COMMAND_OR_EVENT
+        length = len(event.data)
+        out += _BTSNOOP_RECORD.pack(length, length, flags, 0, BTSNOOP_EPOCH_US + event.t // 1000)
+        out += event.data
+    return bytes(out), _header_line(recording.header) + "\n"
+
+
+def write_btsnoop(path: str | os.PathLike[str], recording: Recording) -> None:
+    """Writes `recording` as an HCI tap: the btsnoop file at `path`, and its sidecar."""
+    data, header = dumps_btsnoop(recording)
+    Path(path).write_bytes(data)
+    sidecar(path).write_text(header, encoding="utf-8")
+
+
+def loads_btsnoop(data: bytes, header: str, name: str = "<btsnoop>") -> Recording:
+    """The HCI tap in the btsnoop file's `data`, with the sidecar's text `header`, whose errors
+    name `name` as the file: each record an event at its timestamp's microsecond, in
+    nanoseconds, on the header's clock."""
+    try:
+        head = _header(_object(header.strip("\n")))
+    except RecordingError as error:
+        raise RecordingError(error.what, file=str(sidecar(name))) from None
+    if len(data) < _BTSNOOP_HEADER.size or data[:8] != BTSNOOP_MAGIC:
+        raise RecordingError(
+            "not a btsnoop file: it does not start with btsnoop and a zero byte", file=name
+        )
+    _, version, datalink = _BTSNOOP_HEADER.unpack_from(data)
+    if version != BTSNOOP_VERSION:
+        raise RecordingError(
+            f"btsnoop version {version}: esp32tl reads version {BTSNOOP_VERSION}", file=name
+        )
+    if datalink != BTSNOOP_H4:
+        raise RecordingError(
+            f"datalink {datalink}: esp32tl reads {BTSNOOP_H4}, HCI UART (H4)", file=name
+        )
+    events: list[Line] = []
+    at = _BTSNOOP_HEADER.size
+    while at < len(data):
+        number = len(events) + 1
+        if len(data) - at < _BTSNOOP_RECORD.size:
+            raise RecordingError(f"record {number}: the file ends in its header", file=name)
+        original, included, flags, _, timestamp = _BTSNOOP_RECORD.unpack_from(data, at)
+        at += _BTSNOOP_RECORD.size
+        if included != original:
+            raise RecordingError(
+                f"record {number}: {included} of the packet's {original} bytes: a cut packet",
+                file=name,
+            )
+        if len(data) - at < included:
+            raise RecordingError(f"record {number}: the file ends in its packet", file=name)
+        if timestamp < BTSNOOP_EPOCH_US:
+            raise RecordingError(
+                f"record {number}: timestamp {timestamp} is before {BTSNOOP_EPOCH_US}, the time"
+                " of 0 ns",
+                file=name,
+            )
+        packet = data[at : at + included]
+        at += included
+        direction: Direction = "in" if flags & BTSNOOP_RECEIVED else "out"
+        t = (timestamp - BTSNOOP_EPOCH_US) * 1000
+        try:
+            events.append(Event(t, direction, packet, head.clock))
+        except RecordingError as error:
+            raise RecordingError(f"record {number}: {error.what}", file=name) from None
+    try:
+        return Recording(head, tuple(events))
+    except RecordingError as error:
+        what = error.what
+        if error.line is not None:
+            what = f"record {error.line - 1}: {what}"
+        raise RecordingError(what, file=name) from None
+
+
+def read_btsnoop(path: str | os.PathLike[str]) -> Recording:
+    """The HCI tap in the btsnoop file at `path` and its sidecar."""
+    try:
+        data = Path(path).read_bytes()
+    except OSError as error:
+        raise RecordingError(str(error), file=os.fspath(path)) from None
+    try:
+        header = sidecar(path).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        raise RecordingError(str(error), file=str(sidecar(path))) from None
+    return loads_btsnoop(data, header, os.fspath(path))

@@ -1,7 +1,10 @@
 """The recording format, `esp32tl/recording.py` (docs/recording-format.md): reading, writing, the
 errors that name the file and the line, and times that do not compare across clocks."""
 
+import datetime
+import io
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -252,3 +255,140 @@ def test_a_recording_built_in_code_is_checked_as_a_read_one() -> None:
             "2026-10-29T18:00:00Z",
             extra={"clock": "wall"},
         )
+
+
+# HCI taps: btsnoop files with the header in a sidecar.
+
+HCI_HEADER = Header(
+    board="esp32-devkitc",
+    interface="bluetooth",
+    source="model:bluetooth",
+    clock=CLOCK,
+    created="2026-11-10T08:00:00Z",
+    extra={"devices": [{"name": "ESP_SPP_ACCEPTOR", "address": "00:00:00:00:5B:01"}]},
+)
+# HCI_Reset, its Command_Complete, ACL data each way.
+RESET = bytes.fromhex("01030c00")
+COMPLETE = bytes.fromhex("040e0401030c00")
+ACL_OUT = bytes.fromhex("0201200500010002aa")
+ACL_IN = bytes.fromhex("0201200400000001bb")
+HCI_EVENTS = (
+    Event(1_234_000, "out", RESET, CLOCK),
+    Event(1_244_000, "in", COMPLETE, CLOCK),
+    Event(2_000_000_000, "out", ACL_OUT, CLOCK),
+    Event(2_000_010_000, "in", ACL_IN, CLOCK),
+)
+
+
+def test_an_hci_tap_writes_a_btsnoop_file_and_its_header_beside_it(tmp_path: Path) -> None:
+    tap = Recording(HCI_HEADER, HCI_EVENTS)
+    recording.write_btsnoop(tmp_path / "hci.btsnoop", tap)
+    assert recording.sidecar(tmp_path / "hci.btsnoop") == tmp_path / "hci.btsnoop.json"
+    assert recording.read_btsnoop(tmp_path / "hci.btsnoop") == tap
+    sidecar = (tmp_path / "hci.btsnoop.json").read_text()
+    assert sidecar == recording.dumps(Recording(HCI_HEADER, ()))
+    data = (tmp_path / "hci.btsnoop").read_bytes()
+    assert data[:16] == b"btsnoop\0" + (1).to_bytes(4, "big") + (1002).to_bytes(4, "big")
+    # The first record: lengths, flags (sent, a command), no drops, 1234 µs after 1970.
+    record = data[16:40]
+    assert record[:16] == bytes.fromhex("00000004000000040000000200000000")
+    assert int.from_bytes(record[16:], "big") == 0x00DCDDB30F2F8000 + 1234
+    assert data[40:44] == RESET
+
+
+def test_bumble_reads_the_tap_as_it_writes_one(tmp_path: Path) -> None:
+    """The format is the one Bumble's `BtSnooper` writes, and its reader takes it: each packet
+    with its direction, at the time it was written at."""
+    from bumble.apps.show import SnoopPacketReader
+    from bumble.snoop import BtSnooper, Snooper
+
+    data, _ = recording.dumps_btsnoop(Recording(HCI_HEADER, HCI_EVENTS))
+    theirs = tmp_path / "bumble.btsnoop"
+    with theirs.open("wb") as output:
+        snooper = BtSnooper(output)
+        for event in HCI_EVENTS:
+            direction = Snooper.Direction.CONTROLLER_TO_HOST if event.dir == "in" else 0
+            snooper.snoop(event.data, Snooper.Direction(direction))
+    mine, other = data, theirs.read_bytes()
+    assert mine[:16] == other[:16]
+    # Record by record, all but the timestamps, which are Bumble's wall time.
+    at = 16
+    for event in HCI_EVENTS:
+        length = 24 + len(event.data)
+        a, b = mine[at : at + length], other[at : at + length]
+        assert a[:16] == b[:16] and a[24:] == b[24:]
+        at += length
+    reader = SnoopPacketReader(io.BytesIO(data))  # type: ignore[no-untyped-call]
+    read = []
+    while True:
+        at_time, direction, packet = reader.next_packet()  # type: ignore[no-untyped-call]
+        if reader.at_end:
+            break
+        read.append((at_time, direction, bytes(packet)))
+    # Bumble shows each time as one after 1970-01-01, the time since power-on.
+    epoch = datetime.datetime(1970, 1, 1)
+    assert read == [
+        (epoch + datetime.timedelta(microseconds=e.t // 1000), 1 if e.dir == "in" else 0, e.data)
+        for e in HCI_EVENTS
+    ]
+
+
+def test_an_hci_tap_keeps_times_to_the_microsecond(tmp_path: Path) -> None:
+    tap = Recording(HCI_HEADER, (Event(1_234_999, "out", RESET, CLOCK),))
+    recording.write_btsnoop(tmp_path / "hci.btsnoop", tap)
+    assert recording.read_btsnoop(tmp_path / "hci.btsnoop").events[0].t == 1_234_000
+
+
+def test_an_hci_tap_has_one_clock() -> None:
+    switched = Recording(HCI_HEADER, (*HCI_EVENTS[:2], ClockSwitch(5, "wall")))
+    with pytest.raises(RecordingError, match="a clock switch at 5: an HCI tap is on its header"):
+        recording.dumps_btsnoop(switched)
+
+
+def btsnoop(*records: tuple[int, int, int, int, bytes], head: bytes | None = None) -> bytes:
+    """A btsnoop file of `(original length, flags, timestamp in µs from 1970, drops, packet)`."""
+    data = head if head is not None else b"btsnoop\0" + bytes.fromhex("00000001000003ea")
+    for original, flags, timestamp, drops, packet in records:
+        data += original.to_bytes(4, "big") + len(packet).to_bytes(4, "big")
+        data += flags.to_bytes(4, "big") + drops.to_bytes(4, "big")
+        data += (0x00DCDDB30F2F8000 + timestamp).to_bytes(8, "big", signed=True) + packet
+    return data
+
+
+@pytest.mark.parametrize(
+    ("data", "what"),
+    [
+        (b"pcap", "not a btsnoop file: it does not start with btsnoop and a zero byte"),
+        (btsnoop(head=b"btsnoop\0" + bytes.fromhex("00000002000003ea")), "btsnoop version 2"),
+        (btsnoop(head=b"btsnoop\0" + bytes.fromhex("00000001000003e9")), "datalink 1001"),
+        (btsnoop((4, 2, 0, 0, RESET))[:30], "record 1: the file ends in its header"),
+        (btsnoop((4, 2, 0, 0, RESET))[:-1], "record 1: the file ends in its packet"),
+        (btsnoop((9, 2, 0, 0, RESET)), "record 1: 4 of the packet's 9 bytes: a cut packet"),
+        (btsnoop((4, 2, -1, 0, RESET)), "record 1: timestamp .* is before"),
+        (btsnoop((0, 2, 0, 0, b"")), "record 1: data: an event carries at least one byte"),
+        (
+            btsnoop((4, 2, 5, 0, RESET), (4, 2, 4, 0, RESET)),
+            "record 2: t 4000 is before 5000",
+        ),
+    ],
+)
+def test_a_btsnoop_file_the_reader_cannot_take_is_refused_naming_it(
+    tmp_path: Path, data: bytes, what: str
+) -> None:
+    path = tmp_path / "hci.btsnoop"
+    path.write_bytes(data)
+    recording.sidecar(path).write_text(recording.dumps(Recording(HCI_HEADER, ())))
+    with pytest.raises(RecordingError, match=f"^{re.escape(str(path))}: {what}"):
+        recording.read_btsnoop(path)
+
+
+def test_an_hci_tap_without_its_sidecar_or_with_a_wrong_one_is_refused(tmp_path: Path) -> None:
+    path = tmp_path / "hci.btsnoop"
+    path.write_bytes(btsnoop((4, 2, 0, 0, RESET)))
+    with pytest.raises(RecordingError, match=r"hci\.btsnoop\.json: \[Errno 2\]"):
+        recording.read_btsnoop(path)
+    recording.sidecar(path).write_text('{"board": "x"}\n')
+    with pytest.raises(RecordingError, match=r"hci\.btsnoop\.json: no esp32tl_recording"):
+        recording.read_btsnoop(path)
+    with pytest.raises(RecordingError, match=r"missing\.btsnoop: \[Errno 2\]"):
+        recording.read_btsnoop(tmp_path / "missing.btsnoop")
