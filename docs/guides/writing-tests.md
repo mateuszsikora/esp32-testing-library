@@ -128,6 +128,7 @@ Every wait is on the board's clock, and every limit a test states is part of wha
 | A message at the broker | `board.wait_until(broker.next_message("tracker/position"), within=seconds(60))` | The message, with `at` |
 | The wake from a deep sleep | `board.wait_for_wake(within=minutes(35))` | The wake's `Boot` |
 | Anything else | `board.wait_until(lambda: ..., within=...)`, any function of no arguments | What it returned, once true |
+| Anything else, in your words | `board.wait_until(condition(find, "a trip/end from the device"), within=...)`, with `from esp32tl import condition` | What `find` returned, once true |
 
 - `board.wait_until` asks the condition at once, then at least every 100 ms of the board's time. A
   condition that never holds raises `NeverHappened` when `within` runs out
@@ -179,8 +180,10 @@ assert report.received_at == about(deadline, within=seconds(0.25))
 - **`NeverHappened`** says what the test waited for, how long, and from when to when on the board's
   clock: `alarm.buzzer is on (GPIO 18, level 1) did not happen within 2 s`, then the window. A
   function or a lambda is named by its qualified name, `the condition test_x.<locals>.<lambda>`;
-  give a condition object a `__repr__` and the message names it in your words: the position
-  tracker's says `a tracker report with a position`.
+  wrap it in `esp32tl.condition(find, "a tracker report with a position")` and the message names
+  it in your words, as the position tracker's helper does. Such a condition also raises
+  `TypeError` on `assert reports.when_received()`, where a plain function would pass unasked
+  ([described conditions](../features/pytest-plugin-user.md#described-conditions)).
 - **The run on the board's clock.** A failed test's `esp32sim link` report section ends with every
   step of the test and the last 200 entries of the console, the routes and the lines, in the order
   they happened ([the run on the board's clock](../features/run-report-user.md#the-run-on-the-boards-clock)).
@@ -212,8 +215,8 @@ your product's words:
 - `serve_broker(board)`, `configure_tracker(board, trusted_ca=...)` and `Reports(network.broker)` in
   the [position tracker's support module](../../examples/position_tracker/tests/tracker_support.py)
   serve the broker over TLS, write the NVS schema, and turn MQTT messages into `Report`s with a
-  `Position` and a UTC time. Its conditions reject a malformed report rather than skip it, and
-  raise `TypeError` when used as a boolean without being called.
+  `Position` and a UTC time. Its conditions, made with `esp32tl.condition`, reject a malformed
+  report rather than skip it, and raise `TypeError` when used as a boolean without being called.
 
 Keep `board` the only clock and power control: a helper prepares the world or reads what happened,
 and leaves the waiting to the test. The examples' own documents say why each helper looks the way

@@ -58,6 +58,13 @@ that references to its number keep their meaning.
     test runs on goes unchecked.
     `tests/test_pytest_plugin.py::test_a_board_marker_in_a_pytest_param_is_refused`,
     `tests/test_pytest_plugin.py::test_a_board_marker_a_hook_adds_is_refused`
+- **222.** `board.wait_until` names a described condition, `esp32tl.condition(find, description)`,
+    by its description, in `NeverHappened` and in the run report, on both backends; `bool()` of
+    one raises `TypeError` naming the description, or its `service`, before and after a match.
+    `tests/test_condition.py::test_bool_raises_before_and_after_a_match_naming_the_description`,
+    `tests/test_condition.py::test_a_service_names_the_condition_in_the_type_error`,
+    `tests/test_board_api.py::test_a_described_condition_names_its_timeout_and_refuses_bool`,
+    `tests/test_serial_backend.py::test_console_reset_clock_tap_and_autoflash`
 
 ## Board profiles
 

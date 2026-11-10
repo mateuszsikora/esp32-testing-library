@@ -10,7 +10,7 @@ from dataclasses import dataclass, field, replace
 from enum import IntEnum
 from typing import Literal, TypeVar
 
-from esp32tl.net.condition import Condition
+from esp32tl.interfaces.condition import Condition
 from esp32tl.units import Duration
 
 CONNECT, CONNACK, PUBLISH, PUBACK, PUBREC, PUBREL, PUBCOMP = 1, 2, 3, 4, 5, 6, 7

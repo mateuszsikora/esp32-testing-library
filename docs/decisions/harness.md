@@ -2937,14 +2937,15 @@ no `find_*` query beside the public `connection_attempts` history.
 
 HTTP and DHCP (#116) take the same boundary, names and condition object: `next_request` /
 `find_request` and `next_lease` / `find_lease`, with `requested` / `leased` kept as aliases of the
-`next_*` names. `find_request` filters by path and method as `next_request` does; `find_lease`
-reads the first lease, as `find_connection` reads the first CONNECT. The condition object lives in
-`esp32tl/net/condition.py`, shared by MQTT, HTTP and DHCP, and its `TypeError` names the service.
-TLS keeps `_HandshakeCondition`: it already names its event and rejects boolean coercion, so
-folding it in would change code without changing behaviour. `next_request` and `find_request`
-refuse a path filter holding `?` with `ValueError`, because `Request.path` has no query and
-`assert find_request("/a?b") is None` would otherwise pass for a request the firmware did send.
-`serve` refuses one too, since it could only ever lead to a `404`.
+`next_*` names. `find_request` filters by path and method as `next_request` does; `find_lease` reads
+the first lease, as `find_connection` reads the first CONNECT. The condition object, shared by MQTT,
+HTTP and DHCP, names the service in its `TypeError`; since #181 it is the public one of [A consumer
+names a condition with esp32tl.condition, not with a description on the
+wait](#a-consumer-names-a-condition-with-esp32tlcondition-not-with-a-description-on-the-wait), which
+TLS uses too. `next_request` and `find_request` refuse a path filter holding `?` with `ValueError`,
+because `Request.path` has no query and `assert find_request("/a?b") is None` would otherwise pass
+for a request the firmware did send. `serve` refuses one too, since it could only ever lead to a
+`404`.
 
 **Rejected:** changing existing MQTT defaults to include history, which could silently satisfy
 reconnect waits with stale events; making every condition future-only, which loses useful
@@ -3308,3 +3309,35 @@ ESP-IDF's own deep sleep is one, which the ratio shows. Ten fixes in five wall s
 emulated clock, and no `rt_resyncs` in its `stats`, show that the runner did not pace the run, and
 the ten emulated seconds in under ten wall seconds, what a paced run takes, that nothing else
 waited for wall time either.
+
+## A consumer names a condition with esp32tl.condition, not with a description on the wait
+
+Status: decided (#181)
+
+A condition that a test or its helper writes is a function, and `board.wait_until` names a
+function by its `__qualname__`: it times out as `the condition test_drive.<locals>.<lambda> did
+not happen within 180 s`, never in the consumer's words, and `assert reports.when_received()`
+passes on the truth of the function without asking it. The network's services already had the
+object that avoids both, `Condition(find, description, service)`; `esp32tl.condition(find,
+description, *, service=None)` now makes it public, and `esp32tl.Condition` is its type. With no
+`service`, the `TypeError` of `bool()` names the description:
+`call the condition 'a trip/end from the device' with (), or pass it to board.wait_until`.
+
+The class moved from `esp32tl/net/condition.py` to `esp32tl/interfaces/condition.py`: nothing in it
+is about a network, and at `esp32tl/condition.py` the function and a submodule of the same name
+would shadow each other: `import esp32tl.condition as c` would give the function. The MQTT, HTTP and
+DHCP conditions keep their messages, `service` still naming the protocol. TLS's
+`_HandshakeCondition` and the GPIO `OutputCondition` are folded into it too, with their descriptions
+and messages unchanged; only their equality changes, since each property call makes a new `find`, so
+`out.is_on == out.is_on` is now false, which nothing relied on. With a public constructor, a class
+that repeats it is a second way of doing the same thing, which the earlier choice to keep
+`_HandshakeCondition` (#116) did not have to weigh. The position tracker's `_ReportCondition` became
+`condition(find, description)`, the way a consumer writes one. `console.line` keeps `LineCondition`,
+which moves its cursor after each match.
+
+**Rejected:** a `description=` argument on `board.wait_until`. It names the wait, but the name
+stays at the call: a helper that returns a condition, or an adapter that turns a `find_*` query
+into one, cannot carry it to the wait, and a condition made that way still passes `assert`
+unasked. Also rejected: keeping the class in `esp32tl.net` and re-exporting it, which leaves a
+general object in a module about networks; and naming the condition through `__qualname__`, the
+consumer's workaround, which is an attribute of the function, not a description of the event.

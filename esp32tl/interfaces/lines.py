@@ -8,6 +8,7 @@ from typing import Literal
 
 from esp32tl.boards import Line
 from esp32tl.interfaces import SourceError
+from esp32tl.interfaces.condition import Condition
 from esp32tl.link.boardlink import Interface
 from esp32tl.link.protocol import GpioIn, Input, Release
 from esp32tl.report import RunLog
@@ -31,28 +32,6 @@ class LineEvent:
 
 
 @dataclass(frozen=True)
-class OutputCondition:
-    """A live firmware-output condition, callable directly or passed to board.wait_until."""
-
-    output: "OutputLine"
-    on: bool
-
-    @property
-    def _level(self) -> int:
-        return self.output.active if self.on else 1 - self.output.active
-
-    def __call__(self) -> bool:
-        return self.output._lines.level(self.output.pin) == self._level
-
-    def __repr__(self) -> str:
-        state = "on" if self.on else "off"
-        return f"{self.output.name} is {state} (GPIO {self.output.pin}, level {self._level})"
-
-    def __bool__(self) -> bool:
-        raise TypeError("call the output condition with (), or pass it to board.wait_until")
-
-
-@dataclass(frozen=True)
 class OutputLine:
     """A read-only view of one firmware output; creating it configures no GPIO."""
 
@@ -62,14 +41,24 @@ class OutputLine:
     active: int
 
     @property
-    def is_on(self) -> OutputCondition:
+    def is_on(self) -> Condition[bool]:
         """A condition for the active level; false while the firmware leaves it undriven."""
-        return OutputCondition(self, on=True)
+        return self._condition(on=True)
 
     @property
-    def is_off(self) -> OutputCondition:
+    def is_off(self) -> Condition[bool]:
         """A condition for the inactive level; false while the firmware leaves it undriven."""
-        return OutputCondition(self, on=False)
+        return self._condition(on=False)
+
+    def _condition(self, *, on: bool) -> Condition[bool]:
+        """Whether the firmware drives the line at its active level, `on`, or its other one."""
+        level = self.active if on else 1 - self.active
+        state = "on" if on else "off"
+        return Condition(
+            lambda: self._lines.level(self.pin) == level,
+            f"{self.name} is {state} (GPIO {self.pin}, level {level})",
+            "output",
+        )
 
     def events(self) -> list[LineEvent]:
         """This line's changes by firmware, test and model, on the board's clock."""

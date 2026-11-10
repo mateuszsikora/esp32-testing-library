@@ -108,11 +108,11 @@ def test_report_conditions_reject_truth_testing_even_after_a_match(with_position
     broker = Broker(lambda: 0)
     condition = Reports(broker).when_received(with_position=with_position)
     assert condition() is None
-    with pytest.raises(TypeError, match="call the report condition"):
+    with pytest.raises(TypeError, match="call the condition 'a tracker report"):
         bool(condition)
     received(broker, POSITION)
     assert condition() is not None
-    with pytest.raises(TypeError, match="call the report condition"):
+    with pytest.raises(TypeError, match="call the condition 'a tracker report"):
         bool(condition)
 
 

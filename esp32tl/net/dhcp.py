@@ -8,7 +8,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from ipaddress import IPv4Address
 
-from esp32tl.net.condition import Condition
+from esp32tl.interfaces.condition import Condition
 from esp32tl.units import Duration
 
 COOKIE = b"\x63\x82\x53\x63"

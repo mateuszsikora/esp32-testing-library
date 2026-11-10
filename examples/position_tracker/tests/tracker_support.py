@@ -1,11 +1,11 @@
 """Tracker broker setup, NVS schema and report format; no waits or firmware startup."""
 
 import json
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from esp32tl import Board
+from esp32tl import Board, Condition, condition
 from esp32tl.flash import u16
 from esp32tl.net import Internet
 from esp32tl.net.mqtt import Broker, Message
@@ -88,33 +88,18 @@ class Reports:
     def history(self) -> list[Report]:
         return list(self._since(0))
 
-    def when_received(self, *, with_position: bool = False) -> Callable[[], Report | None]:
+    def when_received(self, *, with_position: bool = False) -> Condition[Report | None]:
         """Create a condition for the first future report, optionally requiring a position.
 
         Creating or polling it never consumes a report. Repeated polls retain the first
         match; create a new condition to observe publications after that point.
         """
-        return _ReportCondition(self, len(self._broker.messages), with_position)
+        start = len(self._broker.messages)
 
+        def find() -> Report | None:
+            wanted = (r for r in self._since(start) if not with_position or r.position is not None)
+            return next(wanted, None)
 
-@dataclass(frozen=True, repr=False)
-class _ReportCondition:
-    reports: Reports
-    start: int
-    with_position: bool
-
-    def __call__(self) -> Report | None:
-        return next(
-            (
-                report
-                for report in self.reports._since(self.start)
-                if not self.with_position or report.position is not None
-            ),
-            None,
+        return condition(
+            find, "a tracker report with a position" if with_position else "a tracker report"
         )
-
-    def __repr__(self) -> str:
-        return "a tracker report with a position" if self.with_position else "a tracker report"
-
-    def __bool__(self) -> bool:
-        raise TypeError("call the report condition with (), or pass it to board.wait_until")

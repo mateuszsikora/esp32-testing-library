@@ -307,6 +307,7 @@ the existing no-latency behavior and board pulls are unchanged.
 | `Console(board)` | class, `esp32tl/interfaces/console.py` | `expect(pattern, timeout=30, *, return_what_before_match=False)`, `expect_exact(...)` with the same arguments, `timeout` a `Duration` or a number of seconds; `line(pattern)`, `lines(pattern=None, *, since=None)`, `tap(path)`; no `write`. `board` is a `Clocked`: `console_output`, `console_lines` and `wait_on_clock(condition, within, description)`, `within` a `Duration` |
 | `Line(at, text, match=None)` | frozen dataclass, `esp32tl/interfaces/console.py` | A console line: `at` a `Duration`, `text` a `str`, `match` an `re.Match[str]`, left out of comparisons; `line[group]` is `match[group]`, a `TypeError` without a match |
 | `ConsoleLines()` | class, `esp32tl/interfaces/console.py` | `feed(t, data)`, `lines`: the console cut into `Line`s |
+| `Condition(find, description, service=None)`, `condition(find, description, *, service=None)` | frozen generic dataclass and its constructor, `esp32tl/interfaces/condition.py`, exported as `esp32tl.Condition` and `esp32tl.condition` | A described condition: called, it calls `find`; `repr` is `description`, which `board.wait_until` names it by because an instance has no `__qualname__`; `__bool__` raises `TypeError("call the condition {description!r} with (), or pass it to board.wait_until")`, or `call the {service} condition` with a `service`. `__post_init__` refuses with `TypeError` a `find` that is not callable (`condition: find is {find!r}, not a function of no arguments`), a `description` that is not non-empty `str` (`condition: description is {description!r}, not text naming the event`) and an empty or non-`str` `service` (`condition: service is {service!r}, not text naming it`). The MQTT, HTTP, DHCP and TLS conditions and `OutputLine.is_on` / `is_off` are instances |
 | `LineCondition(lines, pattern)` | class, `esp32tl/interfaces/console.py` | What `console.line` returns: called, the first matching `Line` since it was made, or since the last it found, or `None` |
 | `DEFAULT_TIMEOUT` | `int`, `esp32tl/interfaces/console.py` | 30: an expect's `timeout`, in seconds of the board's time |
 | `Gnss(name, wire, *, clock, directory, now, world, asked=..., log=None, files=None)` | class, `esp32tl/interfaces/gnss.py`, a `Uart` | `fix(at, *, hdop=0.9, satellites=8)`, `move(*, heading, speed)`, `stand_still()`, `degrade(*, hdop=None, satellites=None)`, `lose_fix()`, `go_silent()`, `resume()`, `position`, each the `GnssReceiver`'s; `receiver()` the receiver, made by the first call that succeeds |
@@ -538,19 +539,47 @@ session, and `power_on(utc=...)` with a timezone other than UTC.
 - [Invariants](../invariants.md)
 
 
+## Described conditions
+
+`esp32tl/interfaces/condition.py` holds `Condition`, a frozen generic dataclass of `find`,
+`description` and `service`, and `condition(find, description, *, service=None)`, which only
+builds one; `esp32tl/__init__.py` re-exports both. The backends need nothing of their own for it:
+`Esp32Sim.wait_until` and `Serial.wait_until` name a condition by `__qualname__` and fall back
+to `repr` when there is none, and an instance has none, since `__qualname__` is an attribute of
+the class, not of its instances. So the description is what `_waited` logs (`waits up to … for
+{description}`, `{description}: happened`, `{description}: did not happen within …`) and what
+`NeverHappened` starts with, on both backends. `__bool__` raises whether or not `find` has found
+anything, because it never calls `find`.
+
+The module sits in `esp32tl/interfaces/`, not at `esp32tl/condition.py`: the function and a
+submodule of the same name would shadow each other, and `import esp32tl.condition as c` would give
+the function. The MQTT, HTTP and DHCP services (`esp32tl/net/`), TLS's handshake conditions and the
+GPIO output conditions build their conditions with it; `LineCondition` stays a class of its own,
+since it keeps a cursor that moves after a match. A `Condition` compares by its fields, `find`
+among them, so two conditions made by two calls of `is_on` or of a TLS property are not equal.
+
+`tests/test_condition.py` checks the call, the `repr`, the refusal of `bool()` before and after a
+match, `service`, the frozen fields and the argument checks. `tests/test_board_api.py::
+test_a_described_condition_names_its_timeout_and_refuses_bool` checks the `NeverHappened`
+message and the run report through `board.wait_until` on esp32sim, and
+`tests/test_serial_backend.py::test_console_reset_clock_tap_and_autoflash` the message and the
+refusal on the serial backend.
+
 ## Named GPIO output conditions
 
 `Lines.output(line, active=1)` in `esp32tl/interfaces/lines.py` resolves and validates the line
-immediately and returns an immutable `OutputLine`. The handle creates callable
-`OutputCondition` values through `is_on` and `is_off`. Each call reads `Lines.level(pin)` under
+immediately and returns an immutable `OutputLine`. The handle creates
+[`Condition`](#described-conditions) values through `is_on` and `is_off`, with the service
+`output`. Each call reads `Lines.level(pin)` under
 its existing lock and compares it to the configured active or inactive level. `None` matches
 neither. The handle's `events()` filters a snapshot of `Lines.events()` by pin, preserving the
 origin and timestamp; it queues no messages and reserves no pins.
 
 Conditions have a stable `repr`, such as `modem.pwrkey is on (GPIO 4, level 1)`. The existing
 `Esp32Sim.wait_until` uses that representation in the run log and timeout errors; no new clock
-or polling path is involved. Their boolean conversion raises a `TypeError` to catch assertions
-that forgot to call the condition. The existing `Lines.level` API retains its 0/1/None semantics.
+or polling path is involved. Their boolean conversion raises
+`TypeError("call the output condition with (), or pass it to board.wait_until")` to catch
+assertions that forgot to call the condition. The existing `Lines.level` API retains its 0/1/None semantics.
 
 `tests/test_lines.py` checks both polarities, unknown/released outputs, live updates, name and
 polarity validation, event filtering and the absence of input writes. The real-firmware test

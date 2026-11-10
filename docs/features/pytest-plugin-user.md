@@ -180,7 +180,9 @@ For esp32sim:
   link: at least every 100 ms of the board's time, and at every other turn the link takes, such
   as the one at which a replayed sentence goes in. It runs in the test's thread while the board stands still, so it can
   read anything the test can. When `within` runs out it raises `NeverHappened`, an
-  `AssertionError`:
+  `AssertionError`, which names the condition by its description when it is a
+  [described condition](#described-conditions), by `repr` when it is an object without a
+  `__qualname__`, and otherwise by its qualified name:
   `the condition test_x.<locals>.<lambda> did not happen within 2 s: waited from 10 s to 12 s of the board's time`.
 - `board.wait_for_wake(within=duration)` lets the board run to the chip's next boot, which must be
   a wake from deep sleep, and returns its `Boot`
@@ -215,6 +217,48 @@ Durations are `Duration`s, made by `ms()`, `seconds()`, `minutes()` and `hours()
 `TypeError`, as in `board.wait takes a Duration, as seconds(2.5), not 2.5`, and one below 0
 `ValueError`, as in `board.wait takes a Duration of 0 or more, not -1 s`. An expect's `timeout` is
 the exception: it takes a `Duration`, or a number of seconds as in pytest-embedded.
+
+### Described conditions
+
+`esp32tl.condition(find, description)` makes a condition for `board.wait_until` that speaks in the
+test's words. `find` is a function of no arguments, as for any condition; `description` names
+the event:
+
+```python
+from esp32tl import Condition, condition
+
+
+def trip_end(broker: Broker, device: str) -> Condition[Message | None]:
+    start = len(broker.messages)
+    topic = f"carlog/{device}/trip/end"
+    return condition(
+        lambda: next((m for m in broker.messages[start:] if m.topic == topic), None),
+        f"a trip/end from {device}",
+    )
+
+
+end = board.wait_until(trip_end(broker, "car-1"), within=minutes(3))
+```
+
+- Called, the condition calls `find` and returns what it returns. `repr` is the description,
+  and `board.wait_until` names the condition by it, on both backends: in the run report,
+  `waits up to 180 s for a trip/end from car-1`, and when it times out,
+  `NeverHappened: a trip/end from car-1 did not happen within 180 s: waited from …`.
+- It refuses to be read as a boolean, before and after a match:
+  `assert trip_end(broker, "car-1")` raises
+  `TypeError: call the condition 'a trip/end from car-1' with (), or pass it to board.wait_until`
+  instead of passing on the truth of a function. The optional `service=` names it there instead
+  of the description: `condition(find, "the next MQTT message", service="MQTT")` raises
+  `TypeError: call the MQTT condition with (), or pass it to board.wait_until`.
+- It is a frozen `esp32tl.Condition`, generic in what `find` returns, for annotating helpers.
+  The conditions of the network's services, of TLS and of `lines.output(...).is_on` and
+  `.is_off` are the same type.
+- What it checks is up to `find`: it consumes nothing, and remembers nothing between calls.
+  Capture a boundary, as `start` above, when the condition makes it, so that a message already
+  received does not satisfy it.
+- `find` that is not callable, a `description` that is not non-empty text, or an empty
+  `service` raises `TypeError` at once, as
+  `condition: description is '', not text naming the event`.
 
 ### Resets and power cycles
 
