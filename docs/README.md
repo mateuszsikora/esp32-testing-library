@@ -7,7 +7,7 @@ guide](guides/documentation.md) says how to write each kind.
 | Path | What it holds |
 |---|---|
 | [`features/`](features/README.md) | One pair of documents per feature: `-user.md`, what you can do with it, and `-technical.md`, how it works. Its README holds the ownership map that `make docs-check` enforces |
-| [`features/examples-user.md`](features/examples-user.md) | Runnable examples: build commands, GPS alarm, SD logger, position tracker and periodic wake wiring, configuration and tests |
+| [`features/examples-user.md`](features/examples-user.md) | Runnable examples: build commands, GPS alarm, SD logger, position tracker, periodic wake and OBD-II reader wiring, configuration and tests |
 | [`guides/writing-tests.md`](guides/writing-tests.md) | Testing your own firmware with esp32tl: where the tests go, power-on, the world before it, waiting, units, failures, product helpers, models of your own, CI |
 | [`guides/development.md`](guides/development.md) | Requirements, setup, make targets, the Rust toolchain, the ROM ELF, pre-commit hooks, the repository layout |
 | [`guides/testing.md`](guides/testing.md) | This repository's own test suite: how to run it, its configuration, what each test file needs |

@@ -167,6 +167,99 @@ second sleep, and reads `board.boot.cause` only after the count's line, since th
 runner at the next wait. The profile is a file beside the tests, not one esp32tl ships
 ([decision](../decisions/firmware.md#the-periodic-wake-sleeps-a-fixed-15-minutes-and-brings-its-own-profile)).
 
+## OBD-II reader implementation
+
+`examples/obd_reader/main/main.c` depends on `bt` and `nvs_flash`. Its `sdkconfig.defaults` are
+those of ESP-IDF's `bt_spp_initiator` (`CONFIG_BT_ENABLED`, `CONFIG_BTDM_CTRL_MODE_BR_EDR_ONLY` and
+the other two modes off, `CONFIG_BT_CLASSIC_ENABLED`, `CONFIG_BT_SPP_ENABLED`,
+`CONFIG_BT_BLE_ENABLED=n`), with the 4 MB flash. ESP-IDF v5.3.6 has no `CONFIG_BT_SSP_ENABLED`
+symbol, so Secure Simple Pairing is turned off in code, with `ssp_en = false` in the
+`esp_bluedroid_config_t` given to `esp_bluedroid_init_with_cfg`. `app_main` initialises NVS,
+releases the LE memory, enables the controller in `ESP_BT_MODE_CLASSIC_BT`, sets a variable PIN
+type, and starts SPP in callback mode (`ESP_SPP_MODE_CB`) with L2CAP ERTM off, so the channel is in
+L2CAP's basic mode, which is all an `SppPeer` offers.
+
+Bluedroid runs the GAP and SPP callbacks in its own task, one at a time, and they keep the state:
+`IDLE`, `SEARCHING`, `CONNECTING`, `CONNECTED` and `PAUSED`. `ESP_SPP_INIT_EVT` sets the scan mode
+to neither connectable nor discoverable and starts the first search. `search()` starts an inquiry
+(`ESP_BT_INQ_MODE_GENERAL_INQUIRY`, length 4, no limit on responses) unless one is still under way,
+which it knows from `ESP_BT_GAP_DISC_STATE_CHANGED_EVT`; when the inquiry stops while the state is
+`SEARCHING`, the next one starts. `ESP_BT_GAP_DISC_RES_EVT` compares the complete local name in
+the extended inquiry response (or the short one) with `ADAPTER_NAME`, byte for byte. On a match it
+keeps the address, cancels the inquiry and starts the SDP search at once, as `bt_spp_initiator`
+does. `ESP_SPP_DISCOVERY_COMP_EVT` connects to the first channel found. `ESP_BT_GAP_PIN_REQ_EVT`
+answers with `ADAPTER_PIN`. A failed pairing ends in `ESP_SPP_CLOSE_EVT` while the state is still
+`CONNECTING`; that close, a failed `ESP_SPP_OPEN_EVT` and an SDP search with no channel all call
+`search_later()`, which sets `PAUSED` and the event group's `PAUSE` bit. The reader task then waits
+`SEARCH_PAUSE_MS`, 5000, and calls `search()`: it changes the state only while it is `PAUSED`,
+when no callback changes it.
+
+Each session that opens gets a number: `ESP_SPP_OPEN_EVT` counts it in `sessions`, puts it in
+`session`, keeps its `handle`, clears `pause_after_close`, so that the session's close starts a
+search at once unless the reader sets it again, and sets `OPENED`. A close while `CONNECTED` sets
+`session` to 0, then the `CLOSED` bit, and starts the next search: at once, or through
+`search_later()` when the reader set `pause_after_close` before it disconnected. The reader takes
+`OPENED`, keeps the session's number as `mine`, and runs `talk(mine)`; every `ask()` and every pause
+in it checks that `session` is still `mine`. A session that closed, and another that opened in its
+place during one of the reader's waits, therefore ends the old `talk()` at its next check, and the
+reader starts the new one from `ATZ` when it takes the `OPENED` the new one left. `rest()` waits on
+`CLOSED` with the pause as its timeout, so a close wakes it at once; a `CLOSED` from an earlier
+session wakes it too, and it waits on to the end of the pause.
+
+`ESP_SPP_DATA_IND_EVT` copies the bytes into a stream buffer of 256 bytes, without waiting: what
+does not fit is dropped. `ask()` empties the stream buffer, writes the command and its `\r` with
+`esp_spp_write`, and reads in steps of at most 50 ms until the last byte is `>`, until
+`ANSWER_TIMEOUT_MS`, 2000, has passed in FreeRTOS ticks since the write, until 255 bytes have come
+without a prompt, or until the session has closed. The steps let it see a session that closed
+during a wait. It then splits what it read at `\r` and `\n`, drops empty pieces and the echo of
+the command, and joins the rest with `\n`. A failure other than the close names itself in
+`failure`: `stopped answering`, `sent an answer too long to read` or `could not be written to`.
+`mode01_answer` reads each line in turn as hex bytes, with or without spaces, and takes the first
+that starts with `41` and the PID, so `SEARCHING...` and other lines before it are skipped. Bit
+32 − n of the four bytes answering `0100` says whether PID n is supported. `talk()` ends with
+`LOST` when an `ask()` fails or the session closed, and with `NOTHING_TO_READ` after
+`not an ELM327 adapter` or a vehicle with none of the three readings. While the session is still
+open, the reader prints `the adapter` and the `failure` for `LOST`, sets `pause_after_close` for
+`NOTHING_TO_READ`, calls `esp_spp_disconnect` and waits on `CLOSED` until `session` is no longer
+`mine`. The firmware's times are whole 10 ms ticks, counted from the instant it wrote or the
+instant the session closed.
+
+Measured on esp32sim at the pin `c99fb28`, on an M2 Pro, with the adapter on the air at power-on:
+the first search starts 0.281 s after power-on, the adapter is found 0.1 s later, the pairing ends
+at 0.752 s, the channel opens at 0.871 s and the adapter hears `ATZ` at 0.901 s. With the model's
+50 ms answers and 0.5 s reset, the first reading is printed at 1.771 s, and each round of three
+readings takes 0.18 s plus the 1 s pause, so their lines are 1.18 s apart. With another PIN, each
+attempt takes about 0.4 s, from the search to `could not connect`, and the attempts are 5.4 s
+apart. In the hang-up test's steps, `board.wait_until` returns on the board's next poll after the
+reading line, at 1.871 s, 0.1 s after the line at 1.771 s, and the adapter ends its link then; the
+firmware prints `disconnected` 11 ms later, finds the adapter 29 ms after that, and is connected
+again at 2.332 s, 0.56 s after the reading, inside the 1 s pause.
+The nineteen tests, twelve on the board and seven of the model alone, take about 10.5 s of wall
+time.
+
+`tests/elm327.py` is a dataclass with no board and no waits. `receive` buffers what the reader
+writes up to each `\r`, records the command and its time, and returns the answer at
+`t + answer_time` (`reset_time` for `ATZ`); `poll` returns nothing and `quiet_until` returns `None`,
+since the adapter never speaks unprompted. `Vehicle.supported()` encodes the readings it has, by
+PID. The echo uses the setting from before the command, so `ATE0` is still echoed, as an ELM327
+does. `protocol_found` is false after `ATZ` and `ATSP`; the first mode 01 request with the
+ignition on prefixes `SEARCHING...` and sets it, and with the ignition off it stays false.
+
+`tests/test_obd_reader.py` uses the public `Board`, `board.bluetooth` and `board.console`. Each
+console condition is made before the action that causes its line: `disconnected` and `searching`
+are made before the silent adapter's timeout, since the firmware prints `disconnected` and
+`searching` at the same instant. The timeouts and the pause are checked to within `TICK`, 10 ms,
+from the time the adapter heard the command (the time a line came, for the pause). The searches are
+checked to within 0.1 s and the ignition retries to within 0.2 s, since each retry also waits for an
+answer. `next_reading` waits at most one pause and a second for the next reading line and returns
+its `name=value` pairs. The tests of a silent adapter and of one that ends its link count
+`bt.pairings()`: the reconnection adds none. `hang_up(peer)` disconnects every link of
+`peer.device`, Bumble's `Device`, through `Connection.disconnect()`, in a coroutine started on the
+air; the test checks that the new connection comes less than `READ_PERIOD` after the last reading,
+inside the reader's pause, which is where the old session's `talk()` would otherwise carry on. The
+two endings with nothing to read share one parametrised test, with the model's keyword arguments
+as its parameter.
+
 ## Documentation and builder checks
 
 `scripts/check-docs.py` owns `examples/` through F24; Python test files under each example's

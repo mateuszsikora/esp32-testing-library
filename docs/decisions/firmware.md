@@ -333,6 +333,33 @@ The interval from NVS, because the GPS alarm already shows NVS configuration, an
 open NVS for it. A profile esp32tl ships, because one GPIO line belongs to this example's assembly
 only, and the example shows instead the way a project describes its own wiring.
 
+## The OBD-II reader pairs with a PIN alone and pauses after a failed attempt
+
+Status: decided (#75)
+
+The `obd_reader` example is a Bluetooth Classic client of an ELM327-compatible OBD-II adapter.
+It finds the adapter by its name, pairs with a PIN with Secure Simple Pairing off, opens SPP and
+talks the adapter's own AT and OBD-II commands. Its next command depends on the answers it gets.
+The name and the PIN are constants in `main.c`. A failed pairing or connection, a device that is no
+ELM327 and a vehicle with none of the readings it knows start the next search 5 s later; a search
+that found nothing, or a session that closed or went unanswered, starts it at once. Each session
+has a number, so that a session that closes and another that opens during one of the reader's
+waits are never taken for one. The adapter's model lives in the example's tests, as the tracker's
+report adapter does, and sends `SEARCHING...` before its first OBD-II answer, as an adapter on
+protocol 0 does.
+
+**Rejected:** a line protocol made up for the example, because no adapter speaks one, and ELM327 is
+what serial-over-Bluetooth adapters of this kind answer. Secure Simple Pairing, because the
+adapters it stands for pair with a PIN, and `bt_spp_initiator` already shows Just Works and
+Passkey Entry against a peer. The name and the PIN in NVS, because the GPS alarm already shows NVS
+configuration. Searching again at once after a failed pairing, because with a wrong PIN that pairs
+and fails every 0.4 s for as long as the adapter is there; the same holds for an adapter the reader
+connects to only to disconnect. A flag that says only whether a session is open, because a session
+that closes and another that opens within one pause leave it set, and the reader would carry on with
+the new session as the old one, without `ATZ`. An OBD-II model in `esp32tl`, because
+the library models the board's hardware and the air, not what a peer on the air knows of a
+vehicle.
+
 ## Images of one container share their ccache hits
 
 Status: decided (#146)

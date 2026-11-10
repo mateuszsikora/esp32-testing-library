@@ -1824,6 +1824,19 @@ within the target's connection accept timeout, as
 `LMP_RESPONSE_TIMEOUT`, because the pager is there and answers.
 
 
+## A peer's own call that ends its link is postponed
+
+Status: postponed (#75)
+
+A peer leaves with `switch_off` or `out_of_range`, after which nothing is sent and each end's link
+falls at its supervision timeout ([above](#a-peer-leaves-without-a-word-keeps-its-keys-and-its-old-link-stays-dead-until-it-falls)).
+A peer that ends a link itself, as an adapter that drops its connection and is there again at once,
+has no call on `SppPeer` or `BluetoothDevice`: the OBD-II reader's test ends it through Bumble,
+with `Connection.disconnect()` on each of `peer.device.connections`, in a coroutine started on the
+air. One example needs it so far; a call of the peer's own, the counterpart of the SD card's
+`remove()`, waits until a second test does, so that what it ends (the RFCOMM channel or the link)
+and with which reason is chosen from more than one case.
+
 ## A replayed peer is postponed
 
 Status: postponed (#33, #34)
