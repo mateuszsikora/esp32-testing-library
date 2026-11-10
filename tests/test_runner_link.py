@@ -10,7 +10,6 @@ import signal
 import socket
 import subprocess
 import tempfile
-import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -116,14 +115,14 @@ def test_sigterm_while_the_runner_waits_for_the_peer_ends_the_run_with_stats(
     peer.read_until("sync")
     peer.write(type="wait", ack=0, quiet_until=200_000_000, latency=None)
     assert peer.read_until("sync")["t"] == 200_000_000
-    # the peer does not answer: the runner is blocked in its turn
-    start = time.monotonic()
+    # the peer does not answer: the runner is blocked in its turn, which --peer-timeout 0 never
+    # ends, and only the signal ends the run, at that turn, within the 30 s the peer reads for
     peer.process.send_signal(signal.SIGTERM)
     rest = peer.rest()
     code, _, err = peer.wait()
     assert code == 0, err
-    assert time.monotonic() - start < 2
     assert rest[-1]["type"] == "stats" and rest[-1]["end"] == "signal"
+    assert rest[-1]["t"] == 200_000_000
     assert "end: signal" in err.splitlines()[-1]
 
 

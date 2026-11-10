@@ -224,20 +224,25 @@ def test_while_a_connection_is_open_the_network_asks_for_a_turn_every_millisecon
 
 def test_close_ends_a_connection_the_service_keeps_open(network: Internet) -> None:
     held = threading.Event()
+    ended = threading.Event()
 
     def holds(connection: socket.socket) -> None:
         held.set()
         while connection.recv(1024):
             pass
+        ended.set()
 
     service = Service(holds)
     try:
         bridge = network.bridge(7000, service.address)
         Device(network, 7000)
         assert held.wait(WAIT_SECONDS)
-        started = time.monotonic()
-        network.close()
-        assert time.monotonic() - started < 1
+        # The service never ends the connection: a close that waited for it would not return.
+        closing = threading.Thread(target=network.close, daemon=True)
+        closing.start()
+        closing.join(WAIT_SECONDS)
+        assert not closing.is_alive(), "close waited for the service to end the connection"
+        assert ended.wait(WAIT_SECONDS), "close left the service's connection open"
         assert all(not r._writer.is_alive() for r in bridge._all)
         network.close()  # twice does nothing
     finally:

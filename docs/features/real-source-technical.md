@@ -136,11 +136,19 @@ A `uart_tx` a `RateBound` source refuses still reaches the tap and the run's log
   wall time, with every recording on the wall clock; most stamps within 10 ms of their arrivals, around
   the run's offset between the clocks, and all within the 500 ms a guest may lag
   (`test_in_a_paced_run_bytes_are_stamped_close_to_their_arrival`, the margin being the host's
-  scheduler, and skipped when the run skipped a lag, whose premise is a guest that keeps up); a turn
+  scheduler). Its premise is a guest that keeps up, so it skips when the run skipped a lag, and when
+  the harness took a turn that stamped one of the bytes more than `KEPT_UP_S`, 5 ms, and at most
+  `LAG_S`, 500 ms, behind wall time. It measures that from the wall time at which each of the
+  source's turns began (`turn_walls`): the runner sends no turn before its wall clock reaches it
+  (protocol 12.2), so the earliest turn, by wall time less the board's, kept up, and the others are
+  behind it by the guest's lag and the harness's. More than 500 ms is no lag a paced guest has, but
+  a run not paced, and fails. A turn
   held before the first 2¹⁶ bus cycles still waits at the
-  block points; a turn held for 2 s against a device at its full line rate, with the bytes dropped
-  counted, a resync, and an answer reaching the guest with the line within the bound; `modem_at` and
-  the device talking both ways on `lilygo-t-a7670g-r2`.
+  block points. A turn held for 2 s against a device at its full line rate, with a resync, the
+  bytes it sent then dropped but for what the line carries in the bound, and the firmware's fix
+  less than the bound and 10 ms after the stamp of the answer's line ending: on the board's clock,
+  from the stamp, since on a busy host the device's own thread is slow to say the answer.
+  `modem_at` and the device talking both ways on `lilygo-t-a7670g-r2`.
 - `test_a_receiver_on_a_usb_adapter` is the validation with real hardware, and runs only with
   `ESP32TL_REAL_GNSS_PORT` set ([testing](../guides/testing.md#real-device-checks)).
 

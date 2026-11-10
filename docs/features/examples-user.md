@@ -335,8 +335,9 @@ comes within `BOOT_TIME = seconds(0.1)` after it. The tests demonstrate:
 
 - The pin pulses every 15 minutes: four pulses, from power-on and three wakes, and the count from
   0 to 3.
-- A day of wakes takes seconds of wall time: 95 wakes, 96 pulses, in under 24 hours of the board's
-  time and under 60 s of wall time (about 7 s on an M2 Pro), every interval within the tolerance.
+- A day of wakes spends less wall time asleep than booting: 95 wakes, 96 pulses, in under 24 hours
+  of the board's time, every interval within the tolerance, and the sleeps take less wall time
+  than the boots between them (about 0.4 s against 6.6 s on an M2 Pro).
 - The count survives deep sleep, not a reset (`board.reset()` five minutes into a sleep starts it
   at 0 again) nor a power cycle.
 

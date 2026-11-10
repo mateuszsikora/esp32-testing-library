@@ -104,6 +104,7 @@ def test_an_hour_on_the_air_takes_no_hour_of_the_host_s(air: Air) -> None:
     started = time.monotonic()
     air.run(asyncio.sleep(3600), within=hours(2))
     assert air.now == hours(1)
+    # A sixtieth of the hour a loop on the host's clock would take; the run takes milliseconds.
     assert time.monotonic() - started < 60
 
 

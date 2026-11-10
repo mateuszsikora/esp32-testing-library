@@ -1056,7 +1056,8 @@ a guest that programs a byte between two dumps;
 `tests/test_runner_link.py` runs the real binary on `hello_world` with `--board socket:`, against
 a minimal peer in Python: a run to `--max-seconds` with `--console socket` (the console on the
 socket and not on stdout, `stats`, the `end` line), `SIGTERM` while the runner waits for the
-peer (exit 0 with `stats` within 2 s), a late input and a version mismatch (exit 3 with
+peer under `--peer-timeout 0`, which nothing else would end (exit 0 with `stats`, `end: signal`, at the
+turn's 200 ms), a late input and a version mismatch (exit 3 with
 `stats`), a peer that does not answer within `--peer-timeout 0.2` (exit 4, nothing more), and no
 peer listening (exit 4).
 

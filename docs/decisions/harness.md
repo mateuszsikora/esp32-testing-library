@@ -3222,3 +3222,52 @@ sleep, not at a later expect that cannot say why. Skipping the sleep's emulated 
 running it, because the chip's RTC timer is what wakes it and what the firmware reads after the
 wake; the runner runs the RTC through the sleep in long steps instead
 ([decision](runner.md#a-deep-sleep-runs-in-long-steps-of-the-rtc-to-just-short-of-its-alarm)).
+
+## A test's wall-time bound proves what was not waited for, and a paced one holds only while the host kept up
+
+Status: decided (after the CI run of #174)
+
+In the CI run of #174 one shard on hp600g1 took 353 s and 440 s on Python 3.13, against 169 s and
+185 s for the same 487 tests on 3.11 and 3.14 in the same run: the host was busy with something
+else, and every test file in the shard was 2.1 to 3.4 times slower. What failed were wall-clock
+bounds only: a day of periodic wakes against 60 s, and the long-hold test of the `real` source,
+whose answer came 856 and 1210 ms after the hold against 500 ms. A test in the suite reads the wall
+clock for one of three reasons, and each has its rule ([testing](../guides/testing.md#wall-time-in-the-tests)):
+
+- A hang guard, a deadline or a timeout that fails only when something never happens, keeps a
+  generous margin. The inner run of `test_a_hung_run_is_ended_by_the_test_s_timeout` took 11.2 s
+  of its 15 s under load, and gets 60 s.
+- A speed bound that proves something is skipped or not waited for gives way to what the run leaves
+  behind: the board's time at which the run ended, the runner's clock, the child still holding
+  the link, the reader still stuck, the runner process gone. Where nothing is left to show it, the
+  bound is relative to what is avoided, and says so: half of `WRITE_SECONDS`, a hang guard of a
+  fifth of the plugin's 600 s or of the fake runner's 300 s sleep, and a day of wakes whose sleeps
+  take less wall time than its boots in the same run, about 0.06 of it on an M2 Pro, 0.15 under
+  80 busy loops, and some 47 times it without the runner's steps through the sleeps.
+- Under `--realtime` wall time is the feature. The bound on stamps holds only while the guest kept
+  up at the turns that stamped the bytes, which the test measures from the wall time at which the
+  harness took each turn: the runner sends no turn before its wall clock reaches it (protocol
+  12.2), so the earliest turn, by wall time less the board's, is one that kept up. The test skips
+  when one of the bytes' turns is more than 5 ms and at most 500 ms behind it, and on a resync as
+  before. The long hold's bound was on the board's clock all along: the excess was the test's own
+  device thread, slow to say the answer on a busy host, and the bound now runs from the stamp of
+  the answer's line ending, which no host speed moves.
+
+Lower bounds, at least `AT_LEAST_S` of wall time for a second of the board's, only grow on a slow
+host, and stay.
+
+**Rejected:** raising the numbers, because the next heavier load fails them again, and a bound far
+above the cost stops proving anything. pytest-rerunfailures or `flaky` markers, because a real
+regression would pass on the second try. Moving the tests out of CI, or behind a marker CI does not
+select, because they are what shows the properties hold. Skipping the stamps' test on a resync
+alone, because a lag under the 500 ms esp32sim skips leaves none: under 80 busy loops a run with no
+resync had the guest 273 ms behind at a turn that stamped a byte, and failed. Taking the measured
+lag out of each stamp, because in a run that is not paced it would explain the stamps away too.
+A skip on host lag for the long hold, because its bound is on the board's clock once it starts at
+the stamp. A count of the sleeps the runner stepped through in `stats`, which would make the day of
+wakes exact, because it changes the wire for one test, and the runner's tests already prove the
+step for a sleep it recognises (`a_deep_sleep_is_one_slice_to_its_wake`,
+`on_the_emulator_a_skipped_sleep_wakes_at_the_tick_of_its_alarm`); what the example adds is that
+ESP-IDF's own deep sleep is one, which the ratio shows. Ten fixes in five wall seconds for
+`test_time_is_emulated`, because that is the speed of one host: the runner's `hello` naming the
+emulated clock, and no `rt_resyncs` in its `stats`, show that nothing paced the run.

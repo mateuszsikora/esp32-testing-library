@@ -147,7 +147,7 @@ the 900 s the firmware asks, the boot and the 20 ms pulse, and about 0.22 s, 0.0
 by which the sleep lasts longer than asked, as `deep_sleep`'s 20 s sleep wakes 20.004 s after its
 line ([validation firmware](validation-firmware-technical.md#deep_sleep)). The day, 95 wakes, ends
 85 525 s into the run, 875 s short of the backend's `--max-seconds 86400`, and takes 192 turns of
-the link (`board.link.turns`, on both pins) and about 7 s of wall time; before the runner stepped through the sleeps
+the link (`board.link.turns`, on both pins) and about 7 s of wall time, 0.4 s of it in the waits for the wakes and 6.6 s in the boots; before the runner stepped through the sleeps
 ([decision](../decisions/runner.md#a-deep-sleep-runs-in-long-steps-of-the-rtc-to-just-short-of-its-alarm))
 it took 330 s.
 
@@ -156,10 +156,12 @@ and `board.console.line`. `next_count` waits up to `BOOT_TIME` for the count's l
 that ends after the call, so it reads each boot's line once. `pulse_starts` walks the line's
 firmware events: each high level starts a pulse, and the next low or undriven level ends it, which
 must come 20 to 21 ms later; a pin still high at the end fails it. `assert_every_interval` checks
-each pair of pulse starts, naming the pulse that broke the interval. The day's test reads
-`time.monotonic()` around the run, from before `power_on()` to the last count, against
-`WALL_TIME_A_DAY`, 60 s: the runner's skip takes the sleeps' wall time to microseconds each, and
-without it the test takes minutes. The reset test calls `board.reset()` five minutes into the
+each pair of pulse starts, naming the pulse that broke the interval. The day's test,
+`test_a_day_of_wakes_spends_less_wall_time_asleep_than_booting`, reads `time.monotonic()` around
+each `wait_for_wake`, the sleep, and each `next_count` after it, the boot, and requires the
+sleeps' sum to be less than the boots': a busy host slows both down alike, the runner's skip
+takes each sleep to microseconds, and without it each costs about 3.4 s of wall time against a
+boot's 70 ms. The reset test calls `board.reset()` five minutes into the
 second sleep, and reads `board.boot.cause` only after the count's line, since the reset reaches the
 runner at the next wait. The profile is a file beside the tests, not one esp32tl ships
 ([decision](../decisions/firmware.md#the-periodic-wake-sleeps-a-fixed-15-minutes-and-brings-its-own-profile)).

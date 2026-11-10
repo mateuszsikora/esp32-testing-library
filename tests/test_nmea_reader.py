@@ -8,7 +8,6 @@ whose GNSS route runs at another baud than the firmware's, and checks that it fa
 """
 
 import re
-import time
 from pathlib import Path
 
 import pytest
@@ -28,11 +27,6 @@ pytestmark = pytest.mark.app_path("../firmware/nmea_reader")
 # Up to its end only: the console comes in pieces, and without the lookahead a line cut short
 # would match.
 FIX = re.compile(rb"fix(?: acquired)? lat=\S+ lon=\S+(?=\r?\n)")
-
-# How many wall seconds ten emulated seconds of fixes may take: the emulator runs 15 to 37 times
-# faster than real time, but every recorded sentence is an exchange with the harness, a wall-time
-# block, so the margin is deliberate (plan §7).
-TEN_FIXES_WALL_SECONDS = 5
 
 
 def test_starts_uart(board: Board, console: Console) -> None:
@@ -61,16 +55,19 @@ def test_fix_follows_the_recording(board: Esp32Sim, gnss: Gnss, console: Console
 
 
 def test_time_is_emulated(board: Esp32Sim, gnss: Gnss, console: Console) -> None:
-    started = time.monotonic()
     gnss.replay("../recordings/gnss-generated-1.jsonl")
     board.power_on()
     # One sentence per emulated second from 1 s: the tenth fix is at 10 emulated seconds, and the
     # expect sees it at the next turn, at most 100 emulated milliseconds later.
     fixes = [next_fix(console) for _ in range(10)]
-    elapsed = time.monotonic() - started
     assert fixes == expected_fixes("gnss-generated-1.jsonl")[:10]
     assert seconds(10) < board.now <= ms(10_100)
-    assert elapsed < TEN_FIXES_WALL_SECONDS, f"ten fixes took {elapsed:.2f} wall seconds"
+    # Not paced to wall time: the runner says the emulated clock, and was not asked for
+    # --realtime, the only pacing it has (protocol 12.1), whose stats count resyncs.
+    assert board.link.runner is not None
+    assert board.link.runner.clock == recording.EMULATED
+    board.close()
+    assert board.link.stats is not None and board.link.stats.rt_resyncs is None
 
 
 def test_only_well_formed_fixes_count_and_an_epoch_prints_once(

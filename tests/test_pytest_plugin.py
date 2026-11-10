@@ -822,11 +822,11 @@ def test_a_wait_fails_at_once_when_the_runner_has_exited(
 ) -> None:
     monkeypatch.setenv("FAKE_OUTPUT", "Goodbye\n")
     monkeypatch.setenv("FAKE_EXIT", "0")
-    started = time.monotonic()
-    result = fake_runner.runpytest_subprocess("-p", "no:cacheprovider")
-    assert time.monotonic() - started < 15
+    # A wait that missed the exit would hang until the plugin's DEFAULT_TIMEOUT, 600 s; the run
+    # gets a fifth of that.
+    result = fake_runner.runpytest_subprocess("-p", "no:cacheprovider", timeout=120)
     result.assert_outcomes(failed=1)
-    # The runner never took a turn: the board's clock is still at 0.
+    # The exit ended the wait, and the runner never took a turn: the board's clock is still at 0.
     result.stdout.fnmatch_lines(
         [
             "E *RunEnded: the run ended before its first turn while the test waited for"
@@ -1459,7 +1459,7 @@ def test_release(board, console):
 # others make it misbehave: `version` sends a hello of version 2, and exits 3 once it has
 # the harness's answer; `late` sends an event out of sequence after the console line; `deaf`
 # ignores the harness and SIGTERM after that line; `stall` takes no turn after it until SIGTERM;
-# `linger` leaves a child holding the link open for 30 s after it exits, and writes the child's pid
+# `linger` leaves a child holding the link open for 300 s after it exits, and writes the child's pid
 # to `linger.pid` beside the runner; `slow` loads for half a second before it connects, and dies of
 # SIGTERM until then, as the real runner does; `gone` exits 4 in turn 0 without reading it, as the
 # real runner does when the harness is gone. $FAKE_WATCH is the pins the harness's hello must
@@ -1503,7 +1503,7 @@ def end(how, code, detail=None):
     send(p.Stats(now, how, 0, 1, (), 72, 0, 0, 0, detail=detail))
     if mode == "linger":
         os.set_inheritable(conn.fileno(), True)
-        child = subprocess.Popen(["sleep", "30"], close_fds=False)
+        child = subprocess.Popen(["sleep", "300"], close_fds=False)
         Path(sys.argv[0]).with_name("linger.pid").write_text(str(child.pid))
     conn.close()
     print(f"esp32tl-runner: the run ended: {{how}}", file=sys.stderr)
@@ -1962,7 +1962,7 @@ def test_a_hung_run_is_ended_by_the_test_s_timeout(
         "2",
         "-o",
         "timeout_func_only=true",
-        timeout=15,
+        timeout=60,
     )
     result.assert_outcomes(failed=1)
     result.stdout.fnmatch_lines(
@@ -1988,20 +1988,17 @@ def test_a_link_left_open_after_the_runner_exits_is_shut_down(
     child = link_runner.path / "linger.pid"
     started = time.monotonic()
     try:
-        result = link_runner.runpytest_subprocess("-p", "no:cacheprovider", "-rA")
-        elapsed = time.monotonic() - started
-        # A child of the runner holds the link for 30 s; the teardown does not wait for it. The
-        # whole run, pytest's start-up included, takes a few seconds: 15 leaves room for a loaded
-        # machine, and is still half the hold.
-        assert elapsed < 15, f"the run took {elapsed:.1f} s: the teardown waited for the child"
-        # Nothing ended the child early: it held the link through the teardown.
+        # A child of the runner holds the link for 300 s; a teardown that waited for it would
+        # take them, and the run gets a fifth of that.
+        result = link_runner.runpytest_subprocess("-p", "no:cacheprovider", "-rA", timeout=60)
+        # The teardown did not wait for the child: it is still there, holding the link.
         try:
             os.kill(int(child.read_text()), 0)
         except ProcessLookupError:
-            pytest.fail("the child holding the link was gone before its 30 s were up")
+            pytest.fail("the child holding the link was gone: the teardown waited for it")
     finally:
-        # Nothing else ends it before its 30 s are up; past them, its pid may be another's.
-        if time.monotonic() - started < 30:
+        # Nothing else ends it before its 300 s are up; past them, its pid may be another's.
+        if time.monotonic() - started < 300:
             with contextlib.suppress(FileNotFoundError, ProcessLookupError):
                 os.kill(int(child.read_text()), signal.SIGKILL)
     result.assert_outcomes(passed=1)
@@ -2033,9 +2030,9 @@ def test_a_held_run_whose_runner_is_gone_releases_the_link(
             assert not board._linker.is_alive()
         """
     )
-    started = time.monotonic()
-    result = link_runner.runpytest_subprocess("-p", "no:cacheprovider", "-rA")
-    assert time.monotonic() - started < 15
+    # A held turn not let go would hang until the plugin's DEFAULT_TIMEOUT, 600 s; the run gets a
+    # fifth of that, and the test's own waits above end it sooner.
+    result = link_runner.runpytest_subprocess("-p", "no:cacheprovider", "-rA", timeout=120)
     result.assert_outcomes(passed=1, errors=1)
     result.stdout.fnmatch_lines(["*esp32sim: the runner exited with code 4; its output is in *"])
 

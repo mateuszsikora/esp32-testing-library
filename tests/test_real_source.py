@@ -18,7 +18,7 @@ import termios
 import threading
 import time
 import tty
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 
 import pytest
@@ -47,10 +47,14 @@ FIRST_LINE = "nmea_reader: UART1 RX GPIO5 TX GPIO4 9600 baud"
 FIX = b"$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*47\r\n"
 # What the firmware has read when it prints the fix: it parses at the line ending's first byte.
 HEARD = FIX[:-1]
-# A guest runs flat out for as long as it is behind wall time, under 500 ms before the lag is
-# skipped (protocol 12.2): this much of the board's time costs at least its excess over that.
+# A guest runs flat out for as long as it is behind wall time, under LAG_S before the lag is
+# skipped (protocol 12.2): PACED_S of the board's time costs at least its excess over that.
+LAG_S = 0.5
 PACED_S = 1.0
 AT_LEAST_S = 0.45
+# How far behind wall time the guest may be at a turn that stamps a byte for the stamps to be held
+# to their 10 ms: half of that.
+KEPT_UP_S = 0.005
 
 
 class Device:
@@ -308,7 +312,10 @@ def test_a_burst_larger_than_the_port_takes_does_not_hold_the_turn(
     assert list(real.receive(0, data)) == []
     assert list(real.receive(0, b"after")) == []
     assert list(real.poll(MS)) == []
-    assert time.monotonic() - started < 0.5
+    # Nothing reads the device's end until below, and a pseudo-terminal holds far less than 48 KiB:
+    # a turn that waited for the port would wait the WRITE_SECONDS it gives a port that takes
+    # nothing. The bound is half of that.
+    assert time.monotonic() - started < real_source.WRITE_SECONDS / 2
     assert read_all(device, len(data) + 5) == data + b"after"
     assert list(real.poll(2 * MS)) == []
 
@@ -757,6 +764,20 @@ def in_events(tap: Tap) -> list[tuple[int, bytes]]:
     return [(t, data) for t, direction, data in tap.events if direction == "in"]
 
 
+def turn_walls(source: Real) -> dict[int, float]:
+    """From now on, the wall time at which the harness took each of `source`'s turns, by the
+    turn's `t`: the turn stamps what the port gave with that `t`, at that wall time."""
+    walls: dict[int, float] = {}
+    poll = source.poll
+
+    def polled(now: int) -> Iterable[tuple[int, bytes]]:
+        walls.setdefault(now, time.monotonic())
+        return poll(now)
+
+    source.poll = polled  # type: ignore[method-assign]
+    return walls
+
+
 @NMEA_READER
 def test_the_firmware_reads_the_device_and_the_run_follows_wall_time(
     board: Esp32Sim, gnss: Gnss, console: Console, device: Device, tmp_path: Path
@@ -801,12 +822,13 @@ def test_the_firmware_reads_the_device_and_the_run_follows_wall_time(
 def test_in_a_paced_run_bytes_are_stamped_close_to_their_arrival(
     board: Esp32Sim, gnss: Gnss, console: Console, device: Device, tmp_path: Path
 ) -> None:
-    gnss.real(device.port)
+    walls = turn_walls(gnss.real(device.port))
     tap = gnss.tap(tmp_path / "gnss.jsonl")
     board.power_on()
     console.expect_exact(FIRST_LINE)
     # Let the boot's lag go first: the guest is CPU-bound until here.
     board.wait(seconds(0.2))
+    since = board.now.ns
     written: list[float] = []
 
     def write() -> None:
@@ -830,6 +852,18 @@ def test_in_a_paced_run_bytes_are_stamped_close_to_their_arrival(
         pytest.skip(f"the host fell behind wall time: {stats.rt_resyncs} resyncs")
     stamps = [t for t, data in in_events(tap) for _ in data]
     assert len(stamps) == 10
+    # Nor does a lag shorter than the one esp32sim skips: a byte that arrives while the guest is
+    # behind gets the turn's time, behind its arrival by the lag. The runner sends no turn before
+    # its wall clock has reached it (protocol 12.2), so the turn the harness took earliest, by wall
+    # time less the board's, is one at which the guest kept up, and every other is behind it by
+    # the guest's lag then, and the harness's. In a run that is not paced the board's time runs
+    # ahead of wall time, and the turns after the 1.2 s are behind its earliest by more than the
+    # LAG_S a paced guest can be: that is no host falling behind, and goes on to fail below.
+    offsets = {t: wall - t / 1e9 for t, wall in walls.items() if t >= since}
+    earliest = min(offsets.values())
+    behind = [round((offsets[t] - earliest) * 1e3, 1) for t in stamps]
+    if KEPT_UP_S * 1e3 < max(behind) <= LAG_S * 1e3:
+        pytest.skip(f"the host fell behind wall time: by {behind} ms at the turns of the bytes")
     # Each stamp against its arrival, around the run's own offset between the two clocks. This does
     # not hold the protocol's millisecond, which
     # test_on_the_link_a_byte_gets_the_time_of_the_next_turn_within_a_millisecond does: on a busy
@@ -870,11 +904,13 @@ def test_a_long_hold_drops_the_backlog_and_an_answer_reaches_the_guest_within_th
     console.expect_exact(FIRST_LINE)
     answer = threading.Event()
     heard = threading.Event()
+    sent: list[int] = []
 
     def stream() -> threading.Thread:
         # The device at its full line rate, until it answers.
         while not answer.is_set():
             device.send(b"x" * 8)
+            sent.append(8)
         time.sleep(3 * CHAR_SECONDS)
         return device.repeat(FIX, heard)
 
@@ -883,12 +919,9 @@ def test_a_long_hold_drops_the_backlog_and_an_answer_reaches_the_guest_within_th
     streamer.start()
     # A turn held for longer than the 500 ms esp32sim skips.
     time.sleep(2)
-    held_until = board.now.ns
     answer.set()
     console.expect_exact("fix acquired lat=48.117300 lon=11.516667", timeout=5)
-    # What the guest did with it comes after the line, at most 133 ms behind, and the sentence's 70
-    # ms on it; the rest of the margin is the device's thread and the firmware's parsing.
-    assert board.now.ns - held_until < 500 * MS
+    (fix,) = console.lines("fix acquired")
     heard.set()
     streamer.join()
     answering[0].join()
@@ -896,11 +929,20 @@ def test_a_long_hold_drops_the_backlog_and_an_answer_reaches_the_guest_within_th
     stats = board.link.stats
     assert stats is not None
     assert stats.rt_resyncs is not None and stats.rt_resyncs >= 1
-    # Two seconds of the device at up to 960 bytes a second, less the 128 the line carries; the
-    # device's thread sleeps longer than it asks.
-    assert source.dropped >= 500
+    # What the device sent through the hold, as much of its 960 bytes a second as the host let its
+    # thread send: the line carried the bound's 128 bytes of it at the first turn after the hold,
+    # and what reached the reading thread only after that turn, none on an idle host, as many again
+    # at most here; the source dropped the rest.
+    assert source.dropped >= sum(sent) - 2 * real_source.BURST_BYTES
     events = in_events(tap)
-    assert HEARD in b"".join(data for _, data in events)
+    stamps = [t for t, data in events for _ in data]
+    # The first whole sentence on the line, which the firmware printed the fix for; the device
+    # said it after the hold, as fast as the host let its thread. From the stamp of its line ending
+    # to the fix: at most the bound behind on the line, its last character, and the firmware's
+    # parsing. Without the drop it would wait behind the hold's bytes, two seconds of them.
+    ending = b"".join(data for _, data in events).index(HEARD) + len(HEARD) - 1
+    late = fix.at.ns - stamps[ending]
+    assert late < source.backlog_ns + 10 * MS, f"the fix came {late / MS} ms after its line ending"
     # As rule 5 of the protocol paces it: no message goes on the line more than the bound after
     # its stamp.
     free = 0

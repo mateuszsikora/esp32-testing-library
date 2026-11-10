@@ -828,7 +828,6 @@ def test_stuck_reader_has_bounded_teardown_and_no_late_capture(
     pytester.makeconftest(FAKE_SERIAL)
     pytester.makepyfile(f"""
         import pytest
-        import time
         import threading
         import esp32tl.backends.serial as backend
         from esp32tl.backends.esp32sim import BackendError
@@ -849,12 +848,20 @@ def test_stuck_reader_has_bounded_teardown_and_no_late_capture(
             monkeypatch.setattr(board.dut.serial.proc, "read_all", stuck)
             monkeypatch.setattr(board.dut.serial, "start_redirect_thread", must_not_restart)
             monkeypatch.setattr(backend, "READER_STOP_SECONDS", .02)
+            joins = []
+            join = board._reader.join
+            def joined(timeout=None):
+                joins.append(timeout)
+                join(timeout)
+            monkeypatch.setattr(board._reader, "join", joined)
             try:
                 assert entered.wait(1)
-                start = time.monotonic()
                 with pytest.raises(BackendError, match="console reader did not stop within 0.02 s"):
                     board.close()
-                assert time.monotonic() - start < .5
+                # The close waited READER_STOP_SECONDS for the reader, and not for the read, stuck
+                # until the test releases it, 5 s at most.
+                assert joins == [.02]
+                assert board._reader.is_alive()
                 captured = recording.read("console.jsonl")
                 assert captured.events
             finally:

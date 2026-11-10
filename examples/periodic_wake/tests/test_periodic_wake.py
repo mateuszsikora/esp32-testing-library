@@ -25,8 +25,6 @@ WAKES = r"^periodic_wake: wakes=(?P<count>\d+)$"
 # A day of the board's time with a pulse every 15 minutes: the one at power-on and 95 wakes.
 DAY = hours(24)
 PULSES_A_DAY = 96
-# Without the skip through each sleep the day takes 330 s of wall time on an M2 Pro; with it, 7.
-WALL_TIME_A_DAY = 60
 
 
 def test_the_pin_pulses_every_15_minutes(board: Board) -> None:
@@ -43,16 +41,24 @@ def test_the_pin_pulses_every_15_minutes(board: Board) -> None:
     assert_every_interval(starts)
 
 
-def test_a_day_of_wakes_takes_seconds_of_wall_time(board: Board) -> None:
+def test_a_day_of_wakes_spends_less_wall_time_asleep_than_booting(board: Board) -> None:
     pin = board.lines.output("wake.pulse")
-    started = time.monotonic()
     board.power_on()
     assert next_count(board) == 0
+    asleep = booting = 0.0
     for count in range(1, PULSES_A_DAY):
+        started = time.monotonic()
         board.wait_for_wake(within=INTERVAL + TOLERANCE)
+        woke = time.monotonic()
         assert next_count(board) == count
+        asleep += woke - started
+        booting += time.monotonic() - woke
     assert board.now < DAY
-    assert time.monotonic() - started < WALL_TIME_A_DAY
+    # Wall time, measured against the same run's boots, which a busy host slows down as much as the
+    # sleeps. The runner steps through each 15-minute sleep in microseconds, and the day's wall
+    # time goes into the boots: on an M2 Pro 0.4 s asleep and 6.6 s booting. Without the steps
+    # esp32sim runs each sleep in idle rounds, about 3.4 s of wall time, and the day takes 330 s.
+    assert asleep < booting, f"{asleep:.1f} s of wall time asleep, {booting:.1f} s booting"
 
     starts = pulse_starts(pin)
     assert len(starts) == PULSES_A_DAY

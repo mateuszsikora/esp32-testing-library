@@ -716,8 +716,10 @@ next fix line on the console, so none can come in between:
   first `fix acquired lat=-34.603700 lon=-58.381600`, after the line
   `nmea_reader: UART1 RX GPIO5 TX GPIO4 9600 baud`, with no warning on the link;
 - `test_time_is_emulated`: the first ten fixes of `gnss-generated-1.jsonl`, ten emulated seconds,
-  arrive in under five wall seconds from the replay (`TEN_FIXES_WALL_SECONDS`); the margin is
-  deliberate, since each sentence costs an exchange with the harness in wall time (plan §7);
+  with `board.now` just past 10 s, on a runner whose `hello` names the emulated clock and whose
+  `stats` carry no `rt_resyncs`: nothing paced the run to wall time. How many wall seconds the
+  fixes take is the host's speed, not the clock's
+  ([decision](../decisions/harness.md#a-tests-wall-time-bound-proves-what-was-not-waited-for-and-a-paced-one-holds-only-while-the-host-kept-up));
 - `test_only_well_formed_fixes_count_and_an_epoch_prints_once`, from a recording the test writes:
   a wrong checksum, `GGA` quality 0, `RMC` status `V`, an empty position, a `GSV`, an `RMC` with
   the time of the `GGA` before it, and a sentence over 82 characters print nothing; `$GN`
