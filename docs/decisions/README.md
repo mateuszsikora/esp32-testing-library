@@ -184,7 +184,8 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The SPP peer opens its channel to one device, on a link that device authenticated](harness.md#the-spp-peer-opens-its-channel-to-one-device-on-a-link-that-device-authenticated) | `harness.md` | decided (#33, #34) |
 | [A peer leaves without a word, keeps its keys, and its old link stays dead until it falls](harness.md#a-peer-leaves-without-a-word-keeps-its-keys-and-its-old-link-stays-dead-until-it-falls) | `harness.md` | decided (#129) |
 | [Devices on the air have a base class without SPP, and an RSSI of their own](harness.md#devices-on-the-air-have-a-base-class-without-spp-and-an-rssi-of-their-own) | `harness.md` | decided (#129) |
-| [Secure Simple Pairing on the peer's side is postponed](harness.md#secure-simple-pairing-on-the-peers-side-is-postponed) | `harness.md` | postponed (#129) |
+| [Secure Simple Pairing on the peer's side is postponed](harness.md#secure-simple-pairing-on-the-peers-side-is-postponed) | `harness.md` | superseded (#34) |
+| [Secure Simple Pairing is Bumble's, with esp32tl's numbers, key types and failures](harness.md#secure-simple-pairing-is-bumbles-with-esp32tls-numbers-key-types-and-failures) | `harness.md` | decided (#34) |
 | [A remote name request nobody answers ends at the page timeout](harness.md#a-remote-name-request-nobody-answers-ends-at-the-page-timeout) | `harness.md` | decided (#129) |
 | [A host that rejects a page gets the reason too](harness.md#a-host-that-rejects-a-page-gets-the-reason-too) | `harness.md` | decided (#137) |
 | [Rejecting a synchronous link is postponed](harness.md#rejecting-a-synchronous-link-is-postponed) | `harness.md` | postponed (#34) |

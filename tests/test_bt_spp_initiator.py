@@ -16,6 +16,7 @@ from esp32tl.backends.esp32sim import Esp32Sim
 from esp32tl.bluetooth.peer import BluetoothDevice, SppPeer
 from esp32tl.interfaces.bluetooth import Bluetooth
 from esp32tl.interfaces.console import Console
+from esp32tl.report import board_time
 from esp32tl.units import seconds
 
 pytestmark = pytest.mark.app_path("../firmware/bt_spp_initiator")
@@ -104,6 +105,75 @@ def test_a_peer_with_another_pin_fails_the_authentication(
     assert not peer.channel_open and source.heard == []
     # The link fell before the firmware asked for the channel: nothing was refused at SABM.
     assert peer.refused == []
+
+
+def test_a_peer_with_simple_pairing_and_no_display_pairs_by_just_works_and_streams(
+    board: Esp32Sim, bt: Bluetooth, console: Console
+) -> None:
+    source = Heard()
+    peer = SppPeer(bt.air, name=NAME, pin=PIN, source=source, io_capability="no_input_no_output")
+    opening = console.line(r"ESP_SPP_OPEN_EVT handle:\d+ rem_bda:\[00:00:00:00:5b:01\]")
+    board.power_on()
+    console.expect_exact(f"authentication success: {NAME}", timeout=seconds(5))
+    board.wait_until(opening, within=seconds(1))
+    board.wait_until(console.line(r"speed\("), within=seconds(5))
+    # Bluedroid confirms Just Works by itself: the example prints neither a PIN nor a number.
+    assert console.lines(re.compile("Input pin code|ESP_BT_GAP_CFM_REQ_EVT|KEY_REQ")) == []
+    [theirs] = peer.pairings
+    [mine] = bt.pairings()
+    assert (theirs.method, theirs.initiator, theirs.peer, theirs.authenticated) == (
+        "just_works",
+        False,
+        "24:6F:28:00:11:24",
+        False,
+    )
+    assert theirs.succeeded and mine.succeeded and mine.initiator
+    assert (mine.method, mine.number, mine.t) == ("just_works", theirs.number, theirs.t)
+    assert peer.channel_open and len(b"".join(data for _, data in source.heard)) > 0
+    assert bt.unknown_commands() == []
+    report = bt.report()
+    assert report[1:3] == [
+        "  pairings (1):",
+        f"    {board_time(mine.t)}  with 00:00:00:00:5B:01, by just_works,"
+        f" {mine.number:06d}: succeeded",
+    ]
+    properties = bt.properties()
+    assert properties is not None
+    assert properties["pairings"] == [
+        {
+            "t_ns": mine.t,
+            "peer": "00:00:00:00:5B:01",
+            "initiator": True,
+            "method": "just_works",
+            "number": mine.number,
+            "status": 0,
+            "authenticated": False,
+        }
+    ]
+
+
+@pytest.mark.parametrize("display", ["display_only", "display_yes_no"])
+def test_a_peer_that_shows_a_passkey_waits_for_the_firmware_s_user_until_bluedroid_gives_up(
+    board: Esp32Sim, bt: Bluetooth, console: Console, display: str
+) -> None:
+    peer = SppPeer(bt.air, name=NAME, pin=PIN, source=Heard(), io_capability=display)
+    board.power_on()
+    # The example has a keyboard only, on its console, which the run cannot type on.
+    asked = board.wait_until(
+        console.line("ESP_BT_GAP_KEY_REQ_EVT Please enter passkey!"), within=seconds(5)
+    )
+    shown = peer.pairing
+    assert shown is not None and shown.method == "passkey_entry" and shown.number is not None
+    failed = board.wait_until(console.line("authentication failed, status:9"), within=seconds(40))
+    # Bluedroid's security timer, 35 s, ends it with User_Passkey_Request_Negative_Reply.
+    assert seconds(35) <= failed.at - asked.at <= seconds(35.1)
+    [theirs] = peer.pairings
+    [mine] = bt.pairings()
+    assert (theirs.method, theirs.number) == ("passkey_entry", shown.number)
+    assert (theirs.status, mine.status) == (5, 5)
+    assert (mine.method, mine.number) == ("passkey_entry", None)
+    assert not peer.channel_open
+    assert bt.unknown_commands() == []
 
 
 def test_the_tap_writes_the_hci_both_ways_as_btsnoop(pytester: pytest.Pytester) -> None:

@@ -661,7 +661,8 @@ mikroverk/esp32sim#347 (#174), against a modelled peer; and the btsnoop tap with
 the header in a sidecar `.json`
 ([decision](decisions/harness.md#the-hci-tap-is-a-btsnoop-file-on-the-boards-time-with-its-header-beside-it)).
 `bt.model(peer)` became `SppPeer(bt.air, ...)`; `bt.replay(path)` and the replayed peer wait for
-#20.
+#20. Peers have Secure Simple Pairing too, given an IO capability
+([decision](decisions/harness.md#secure-simple-pairing-is-bumbles-with-esp32tls-numbers-key-types-and-failures)).
 
 ### M9. Deep sleep and time skip
 

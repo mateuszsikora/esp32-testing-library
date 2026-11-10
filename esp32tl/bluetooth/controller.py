@@ -12,11 +12,19 @@ Classic link. `Controller` adds them, for links whose controllers are all of thi
   one.
 - Authentication, as the specification orders it (Vol 2, Part C, 4.2; Vol 2, Part F, 4): the
   host is asked for a link key first; with one, the peer proves it holds the same key; without,
-  the link pairs with Secure Simple Pairing when both hosts support it, as Bumble does, and with
-  a PIN otherwise. Legacy pairing makes the initialisation key from the PIN, a combination key
-  from a random number of each side, and checks it both ways; a PIN that differs from the
-  peer's yields another key, and the check that fails detaches the link with
-  `AUTHENTICATION_FAILURE_ERROR`.
+  the link pairs with Secure Simple Pairing when both hosts support it, and with a PIN
+  otherwise. Legacy pairing makes the initialisation key from the PIN, a combination key from a
+  random number of each side, and checks it both ways; a PIN that differs from the peer's yields
+  another key, and the check that fails detaches the link with `AUTHENTICATION_FAILURE_ERROR`.
+- Secure Simple Pairing is Bumble's (Vol 2, Part C, 4.2.7), with its association model from the
+  two IO capabilities (Vol 3, Part C, 5.2.2.6), but its nonces and passkeys come from the
+  controller's generator, not `secrets`; the link key's type is P-192's, authenticated for a
+  passkey or a number both users compared, unauthenticated otherwise, where Bumble names P-256's;
+  only the initiator's host gets `Authentication_Complete`, as for legacy pairing; and a failed
+  DHKey check is told to the peer with `LMP_not_accepted`, where Bumble tells only its own host
+  and leaves the peer waiting. A pairing starts anew each time, where Bumble keeps the nonce of
+  the one before.
+- Every pairing that ends is kept in `pairings`, with how it went and the number it showed.
 - Encryption: `Set_Connection_Encryption` on an authenticated link changes it on both sides.
 - Page timeout and link supervision (Vol 4, Part E, 6.6, 6.21, 7.3.16, 7.3.42), which Bumble does
   not have for Classic: a page nobody answers ends in `PAGE_TIMEOUT` after `Page_Timeout`, and a
@@ -45,8 +53,9 @@ Classic link. `Controller` adds them, for links whose controllers are all of thi
 - Page 0 of the features with the BR/EDR features it has.
 
 The keys are not the specification's: SAFER+ (E1, E21, E22) is replaced by SHA-256 over the same
-inputs, so a key or a response holds on this link only, and only the host sees a key. The random
-numbers come from a generator seeded with the controller's address, so two runs exchange the same.
+inputs, so a key or a response holds on this link only, and only the host sees a key; Secure Simple
+Pairing has Bumble's stand-ins, with no Diffie-Hellman key. The random numbers come from a
+generator seeded with the controller's address, so two runs exchange the same.
 """
 
 import asyncio
@@ -55,8 +64,8 @@ import random
 from collections import Counter
 from dataclasses import dataclass, field
 
-from bumble import core, hci, lmp
-from bumble.controller import Connection
+from bumble import core, crypto, hci, lmp
+from bumble.controller import Connection, SspState
 from bumble.controller import Controller as BumbleController
 
 from esp32tl.bluetooth.air import Link
@@ -186,6 +195,76 @@ class HeardPage:
     switching: bool = False
 
 
+# How a pairing went: legacy pairing, with a PIN; Secure Simple Pairing's association models (Vol 1,
+# Part A, 5.2.4); and Secure Simple Pairing that ended before its model was known.
+LEGACY = "legacy"
+JUST_WORKS = "just_works"
+NUMERIC_COMPARISON = "numeric_comparison"
+PASSKEY_ENTRY = "passkey_entry"
+SIMPLE_PAIRING = "simple_pairing"
+
+# The IO capabilities of Secure Simple Pairing (Vol 4, Part E, 7.1.29).
+DISPLAY_ONLY = hci.IoCapability.DISPLAY_ONLY
+DISPLAY_YES_NO = hci.IoCapability.DISPLAY_YES_NO
+KEYBOARD_ONLY = hci.IoCapability.KEYBOARD_ONLY
+NO_INPUT_NO_OUTPUT = hci.IoCapability.NO_INPUT_NO_OUTPUT
+
+# The six digits of a number to compare and of a passkey.
+SIX_DIGITS = 1_000_000
+
+
+def association(local: int | None, peer: int | None) -> str:
+    """The association model of the two sides' IO capabilities, as Bumble's controller picks it
+    (Vol 3, Part C, 5.2.2.6): Just Works when either has no input and no output, Passkey Entry
+    when either has a keyboard only, Numeric Comparison otherwise."""
+    if NO_INPUT_NO_OUTPUT in (local, peer):
+        return JUST_WORKS
+    if KEYBOARD_ONLY in (local, peer):
+        return PASSKEY_ENTRY
+    return NUMERIC_COMPARISON
+
+
+def authenticated_by(model: str, local: int | None, peer: int | None) -> bool:
+    """Whether a pairing of `model` between the two IO capabilities gives an authenticated key
+    (Vol 3, Part C, 5.2.2.6, Table 5.7): Passkey Entry, and Numeric Comparison with a number both
+    users can say yes to, not one a side with a display only confirms by itself."""
+    return model == PASSKEY_ENTRY or (
+        model == NUMERIC_COMPARISON and local == peer == DISPLAY_YES_NO
+    )
+
+
+@dataclass(frozen=True)
+class Pairing:
+    """A pairing of this side's with `peer` that ended at `t`, nanoseconds of the air's time, with
+    `status`, an HCI error code, `0` when it succeeded. `initiator` says whether this side's host
+    asked for it; `method` is how it went, `legacy` or an association model of Secure Simple
+    Pairing, `simple_pairing` for one that ended before its model was known; `number` is the
+    six-digit number of a comparison, or the passkey this side showed or its host typed, `None`
+    for none; `authenticated` whether the key it made is, by the specification's rules."""
+
+    t: int
+    peer: str
+    initiator: bool
+    method: str
+    number: int | None
+    status: int
+    authenticated: bool = False
+
+    @property
+    def succeeded(self) -> bool:
+        return self.status == hci.HCI_ErrorCode.SUCCESS
+
+
+@dataclass
+class UnderWay:
+    """A pairing of this side's that has started and not ended."""
+
+    initiator: bool
+    method: str
+    number: int | None = None
+    authenticated: bool = False
+
+
 @dataclass(frozen=True)
 class UnknownCommand:
     """A command the controller does not know, at `t`, nanoseconds of the air's time: answered
@@ -245,6 +324,9 @@ class Controller(BumbleController):
         )
         # What the controller's host was told it does not know, in order.
         self.unknown_commands: list[UnknownCommand] = []
+        # Every pairing that ended, in order, and the one under way with each peer.
+        self.pairings: list[Pairing] = []
+        self._pairing: dict[hci.Address, UnderWay] = {}
         self.rssi = RSSI
         self._defaults()
         self._random = random.Random(str(self.public_address))
@@ -614,6 +696,7 @@ class Controller(BumbleController):
         self._answers_due.clear()
         self._late_answers.clear()
         self._security.clear()
+        self._pairing.clear()
         self._encryption.clear()
         self._supervision_timeouts.clear()
         self._lost_contact.clear()
@@ -1168,10 +1251,13 @@ class Controller(BumbleController):
                 ),
             )
         elif self._both_simple_pairing(peer):
-            # Bumble's Secure Simple Pairing, from its IO capability exchange on.
+            # Bumble's Secure Simple Pairing, from its IO capability exchange on, anew.
             del self._security[peer]
+            self.classic_connections[peer].ssp_state = SspState()
+            self._pairing_started(peer, SIMPLE_PAIRING, initiator=True)
             super().on_hci_link_key_request_negative_reply_command(command)
         else:
+            self._pairing_started(peer, LEGACY, initiator=True)
             self.send_hci_packet(hci.HCI_PIN_Code_Request_Event(bd_addr=peer))
         return self._status(hci.HCI_ErrorCode.SUCCESS, peer)
 
@@ -1201,6 +1287,7 @@ class Controller(BumbleController):
         security = self._security.pop(peer, None)
         if security is None or peer not in self.classic_connections:
             return self._status(hci.HCI_ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR, peer)
+        self._pairing_ended(peer, hci.HCI_ErrorCode.PIN_OR_KEY_MISSING_ERROR)
         if security.initiator:
             self._authentication_complete(peer, hci.HCI_ErrorCode.PIN_OR_KEY_MISSING_ERROR)
         else:
@@ -1246,7 +1333,19 @@ class Controller(BumbleController):
             case LmpInRand(random_number):
                 # The peer pairs: this side's host is asked for the PIN.
                 self._security[peer] = Security(peer_rand=random_number)
+                self._pairing_started(peer, LEGACY, initiator=False)
                 self.send_hci_packet(hci.HCI_PIN_Code_Request_Event(bd_addr=peer))
+            case lmp.LmpIoCapabilityReq() if peer in self.classic_connections:
+                # The peer starts Secure Simple Pairing, anew.
+                self.classic_connections[peer].ssp_state = SspState()
+                self._pairing_started(peer, SIMPLE_PAIRING, initiator=False)
+                super().on_lmp_packet(sender_address, packet)
+            case lmp.LmpNotAccepted(lmp.Opcode.LMP_DHKEY_CHECK, error_code):
+                # The peer found this side's DHKey check wrong.
+                connection = self.classic_connections.get(peer)
+                if connection is not None:
+                    self._on_ssp_failed(connection, error_code)
+                super().on_lmp_packet(sender_address, packet)
             case LmpCombKey(random_number):
                 self._on_comb_key(peer, random_number)
             case lmp.LmpAuRand(random_number):
@@ -1263,6 +1362,7 @@ class Controller(BumbleController):
                 super().on_lmp_packet(sender_address, packet)
             case lmp.LmpNotAccepted(response_opcode, error_code) if response_opcode in OURS:
                 security = self._security.pop(peer, None)
+                self._pairing_ended(peer, error_code)
                 if security is not None and security.initiator:
                     self._authentication_complete(peer, error_code)
                 super().on_lmp_packet(sender_address, packet)
@@ -1275,6 +1375,12 @@ class Controller(BumbleController):
                 security = self._security.pop(peer, None)
                 if security is not None and security.initiator and not security.authenticated:
                     self._authentication_complete(peer, error_code)
+                connection = self.classic_connections.get(peer)
+                under_way = self._pairing.get(peer)
+                if connection is not None and under_way is not None and under_way.method != LEGACY:
+                    self._on_ssp_failed(connection, error_code)
+                # A pairing under way ends with the peer's reason, not the detach's.
+                self._pairing_ended(peer, error_code)
                 super().on_lmp_packet(sender_address, packet)
             case _:
                 super().on_lmp_packet(sender_address, packet)
@@ -1366,6 +1472,7 @@ class Controller(BumbleController):
         assert security.link_key is not None
         security.authenticated = True
         security.pairing = False
+        self._pairing_ended(peer, hci.HCI_ErrorCode.SUCCESS)
         self.send_hci_packet(
             hci.HCI_Link_Key_Notification_Event(
                 bd_addr=peer,
@@ -1377,6 +1484,7 @@ class Controller(BumbleController):
     def _authentication_failed(self, peer: hci.Address, security: Security) -> None:
         reason = hci.HCI_ErrorCode.AUTHENTICATION_FAILURE_ERROR
         del self._security[peer]
+        self._pairing_ended(peer, reason)
         if security.initiator:
             self._authentication_complete(peer, reason)
         self.send_lmp_packet(peer, lmp.LmpDetach(reason))
@@ -1414,6 +1522,8 @@ class Controller(BumbleController):
             timer.cancel()
 
     def on_classic_disconnected(self, peer_address: hci.Address, reason: int) -> None:
+        # A pairing under way ends with the link.
+        self._pairing_ended(peer_address, reason)
         self._forget_link(peer_address)
         super().on_classic_disconnected(peer_address, reason)
         self._let_go(peer_address)
@@ -1433,6 +1543,160 @@ class Controller(BumbleController):
         security = self._security.get(peer)
         legacy = security is not None and security.authenticated
         return legacy or connection.ssp_state.authenticated
+
+    # Secure Simple Pairing: Bumble's, with its numbers from this side's generator, P-192's key
+    # types, `Authentication_Complete` for the initiator's host alone, and a failed DHKey check
+    # told to the peer.
+
+    def _start_ssp_exchange(self, connection: Connection) -> None:
+        if connection.ssp_state.local_nonce is None:
+            connection.ssp_state.local_nonce = self.random_bytes(16)
+        super()._start_ssp_exchange(connection)
+
+    def _on_ssp_confirm_or_nonce_received(self, connection: Connection) -> None:
+        """Bumble's, from the association model on: the host is asked to confirm a number, to
+        type a passkey, or shown one, drawn from the generator where Bumble draws it from
+        `secrets`."""
+        state = connection.ssp_state
+        if state.local_nonce is None or state.peer_nonce is None:
+            return
+        peer = connection.peer_address
+        local, remote = state.local_io_capability, state.peer_io_capability
+        model = association(local, remote)
+        under_way = self._pairing.get(peer)
+        if under_way is not None:
+            under_way.method = model
+            under_way.authenticated = authenticated_by(model, local, remote)
+        if model == PASSKEY_ENTRY:
+            if local in (DISPLAY_ONLY, DISPLAY_YES_NO):
+                state.passkey = self._random.randrange(SIX_DIGITS)
+                state.local_confirmed = True
+                if under_way is not None:
+                    under_way.number = state.passkey
+                self.send_hci_packet(
+                    hci.HCI_User_Passkey_Notification_Event(bd_addr=peer, passkey=state.passkey)
+                )
+                self._check_ssp_completion(connection)
+            else:
+                self.send_hci_packet(hci.HCI_User_Passkey_Request_Event(bd_addr=peer))
+            return
+        if state.is_initiator:
+            u, v = bytes(connection.self_address), bytes(peer)
+            x, y = state.local_nonce, state.peer_nonce
+        else:
+            u, v = bytes(peer), bytes(connection.self_address)
+            x, y = state.peer_nonce, state.local_nonce
+        number = crypto.g2(u, v, x, y) % SIX_DIGITS
+        if under_way is not None:
+            under_way.number = number
+        self.send_hci_packet(
+            hci.HCI_User_Confirmation_Request_Event(bd_addr=peer, numeric_value=number)
+        )
+
+    def on_hci_user_passkey_request_reply_command(
+        self, command: hci.HCI_User_Passkey_Request_Reply_Command
+    ) -> hci.HCI_StatusAndAddressReturnParameters:
+        under_way = self._pairing.get(command.bd_addr)
+        if under_way is not None:
+            under_way.number = command.numeric_value
+        return super().on_hci_user_passkey_request_reply_command(command)
+
+    def _check_ssp_completion(self, connection: Connection) -> None:
+        """Bumble's: this side's DHKey check once its host confirmed, and the key once both sides
+        have; with P-192's key type, and `Authentication_Complete` for the initiator alone."""
+        state = connection.ssp_state
+        peer = connection.peer_address
+        if state.local_confirmed and not state.sent_dhkey_check:
+            capabilities = bytes(
+                [
+                    state.local_io_capability or 0,
+                    state.local_oob_data_present or 0,
+                    state.local_auth_reqs or 0,
+                ]
+            )
+            check = crypto.f6(
+                bytes(32),
+                state.local_nonce or bytes(16),
+                state.peer_nonce or bytes(16),
+                (state.passkey or 0).to_bytes(16, "big"),
+                capabilities,
+                bytes(connection.self_address),
+                bytes(peer),
+            )
+            self.send_lmp_packet(peer, lmp.LmpDhkeyCheck(check_value=check))
+            state.sent_dhkey_check = True
+        if not (state.local_confirmed and state.peer_confirmed) or state.authenticated:
+            return
+        state.authenticated = True
+        if state.is_initiator:
+            n1, n2 = state.local_nonce or bytes(16), state.peer_nonce or bytes(16)
+            a1, a2 = bytes(connection.self_address), bytes(peer)
+        else:
+            n1, n2 = state.peer_nonce or bytes(16), state.local_nonce or bytes(16)
+            a1, a2 = bytes(peer), bytes(connection.self_address)
+        state.link_key = crypto.f5(bytes(32), n1, n2, a1, a2)[1]
+        under_way = self._pairing.get(peer)
+        key_type = (
+            hci.LinkKeyType.AUTHENTICATED_COMBINATION_KEY_GENERATED_FROM_P_192
+            if under_way is not None and under_way.authenticated
+            else hci.LinkKeyType.UNAUTHENTICATED_COMBINATION_KEY_GENERATED_FROM_P_192
+        )
+        success = hci.HCI_ErrorCode.SUCCESS
+        self.send_hci_packet(hci.HCI_Simple_Pairing_Complete_Event(status=success, bd_addr=peer))
+        self.send_hci_packet(
+            hci.HCI_Link_Key_Notification_Event(
+                bd_addr=peer, link_key=state.link_key, key_type=key_type
+            )
+        )
+        if state.is_initiator:
+            self._authentication_complete(peer, success)
+        self._pairing_ended(peer, success)
+
+    def _verify_peer_dhkey_check(self, connection: Connection, check_value: bytes) -> None:
+        """Bumble's; a check that fails is told to the peer, which Bumble leaves waiting."""
+        super()._verify_peer_dhkey_check(connection, check_value)
+        if not connection.ssp_state.peer_confirmed:
+            reason = hci.HCI_ErrorCode.AUTHENTICATION_FAILURE_ERROR
+            self.send_lmp_packet(
+                connection.peer_address, lmp.LmpNotAccepted(lmp.Opcode.LMP_DHKEY_CHECK, reason)
+            )
+
+    def _on_ssp_failed(self, connection: Connection, error_code: int) -> None:
+        """The pairing under way failed: `Simple_Pairing_Complete` with the reason, and
+        `Authentication_Complete` for the initiator's host. Once: both sides may find it."""
+        peer = connection.peer_address
+        if peer not in self._pairing:
+            return
+        self.send_hci_packet(hci.HCI_Simple_Pairing_Complete_Event(status=error_code, bd_addr=peer))
+        if connection.ssp_state.is_initiator:
+            self._authentication_complete(peer, error_code)
+        self._pairing_ended(peer, error_code)
+
+    # The history of pairings.
+
+    @property
+    def under_way(self) -> dict[hci.Address, UnderWay]:
+        """The pairings under way, by peer, in the order they started."""
+        return dict(self._pairing)
+
+    def _pairing_started(self, peer: hci.Address, method: str, initiator: bool) -> None:
+        self._pairing[peer] = UnderWay(initiator, method)
+
+    def _pairing_ended(self, peer: hci.Address, status: int) -> None:
+        under_way = self._pairing.pop(peer, None)
+        if under_way is None:
+            return
+        self.pairings.append(
+            Pairing(
+                round(asyncio.get_running_loop().time() * 1e9),
+                str(peer).removesuffix("/P"),
+                under_way.initiator,
+                under_way.method,
+                under_way.number,
+                status,
+                under_way.authenticated and status == hci.HCI_ErrorCode.SUCCESS,
+            )
+        )
 
     def _both_simple_pairing(self, peer: hci.Address) -> bool:
         """Whether both hosts support Secure Simple Pairing: what LMP's features exchange would

@@ -1580,12 +1580,39 @@ says at what strength a device goes out of reach.
 
 ## Secure Simple Pairing on the peer's side is postponed
 
-Status: postponed (#129)
+Status: superseded (#34)
 
-Peers pair with a PIN only, and the Bumble controller's own Secure Simple Pairing is used only
-between two devices that both support it, which no `BluetoothDevice` does. What a firmware's stack
-does with a device that has it can only be seen with firmware, so it waits for #34, whose checklist
-holds it.
+Peers paired with a PIN only, and the Bumble controller's own Secure Simple Pairing was used only
+between two devices that both support it, which no `BluetoothDevice` did. What a firmware's stack
+does with a device that has it can only be seen with firmware, so it waited for #34: see
+[Secure Simple Pairing is Bumble's, with esp32tl's numbers, key types and failures](#secure-simple-pairing-is-bumbles-with-esp32tls-numbers-key-types-and-failures).
+
+## Secure Simple Pairing is Bumble's, with esp32tl's numbers, key types and failures
+
+Status: decided (#34)
+
+A `BluetoothDevice` or an `SppPeer` given an `io_capability` has Secure Simple Pairing, and its
+user's answers are arguments: `confirms` for a number or a pairing to allow, `passkey` for a
+keyboard. The pairing itself is Bumble's controller's, which has the association models and the LMP
+exchange, with what a test run needs changed in `Controller`: the nonces and the passkey come from
+the controller's seeded generator, so that two runs show the same numbers, where Bumble draws them
+from `secrets`; a pairing starts with a fresh state, where Bumble reuses the nonce of the one
+before; the key's type is P-192's, authenticated or not by the specification's table, since the
+controller has no Secure Connections, where Bumble names an authenticated P-256 key whatever the
+model, which tells the host that a key Just Works made is protected from a man in the middle; only the
+initiator's host gets `Authentication_Complete`, as for legacy pairing and as Vol 2, Part F, 4.2
+has it, where Bumble sends both; and a DHKey check that fails is told to the peer with
+`LMP_not_accepted`, where Bumble tells only its own host and the other side waits for ever. Every
+pairing that ends goes into `pairings`, on the guest's controller too (`bt.pairings()`), with its
+model and the number shown or typed, since the number is what a test checks and a pairing under
+way is visible as `pairing`. The DHKey stays Bumble's all-zero stand-in: the link has no attacker,
+and both ends are this class, as for legacy pairing's SHA-256 keys.
+
+**Rejected:** a delegate the test writes, Bumble's `PairingDelegate`, because each test would
+write the same few answers again; patching `secrets` in Bumble's module, which would change every Bumble device in
+the process, the test's stand-ins included; the P-256 Diffie-Hellman exchange of the
+specification, which nothing on this air can tell from the stand-in; and a peer that starts
+pairing itself, as `SppPeer` does not for legacy pairing either.
 
 
 ## A remote name request nobody answers ends at the page timeout

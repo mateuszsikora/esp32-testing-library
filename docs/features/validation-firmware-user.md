@@ -241,9 +241,17 @@ With another PIN on the peer the authentication fails, `authentication failed, s
 link closes before the channel opens. With nobody named `ESP_SPP_ACCEPTOR` on the air the inquiry
 runs its 38.4 s, `ESP_BT_GAP_DISC_STATE_CHANGED_EVT` at its start and at its end, and the firmware
 starts no other: it then waits for ever. It does not page or pair with a device it finds by
-another name. The commands it lists on its console, `spp ok;` and `spp key …;`, which it reads on
-UART0 (`main/console_uart.c`), answer Secure Simple Pairing, which an `SppPeer` never asks for: it
-pairs with a PIN.
+another name.
+
+With Secure Simple Pairing on the peer ([Bluetooth peer](bluetooth-peer-user.md#secure-simple-pairing))
+it pairs that way, with a keyboard only (`ESP_BT_IO_CAP_IN`), the IO capability `main.c` sets. A
+peer with `io_capability="no_input_no_output"` pairs by Just Works, which Bluedroid allows by
+itself: the firmware prints no PIN and no number, `authentication success: ESP_SPP_ACCEPTOR`, and
+streams as with the PIN. A peer with a display shows a passkey and the firmware asks for it,
+`ESP_BT_GAP_KEY_REQ_EVT Please enter passkey!`; it reads the answer, `spp key …;`, and `spp ok;`
+for a number to confirm, on UART0 (`main/console_uart.c`), which the run cannot write
+([`console.write` is postponed](../decisions/harness.md#consolewrite-is-postponed-until-the-runner-reads-input)), so Bluedroid gives up 35 s later,
+`authentication failed, status:9`, and opens nothing.
 
 ## `sdspi`
 

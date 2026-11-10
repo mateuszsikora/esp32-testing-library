@@ -165,3 +165,19 @@ def test_spp_to_a_peer(board: Esp32Sim, bt: Bluetooth, console: Console, tmp_pat
     # Each write the peer heard: its time and its bytes, which are the firmware's blocks.
     writes = (f"{board_time(t)}  {data.hex()}\n" for t, data in source.heard)
     (tmp_path / "spp.txt").write_text("".join(writes))
+
+
+@pytest.mark.app_path("../firmware/bt_spp_initiator")
+def test_spp_with_simple_pairing(
+    board: Esp32Sim, bt: Bluetooth, console: Console, tmp_path: Path
+) -> None:
+    peer = SppPeer(bt.air, name=NAME, pin=PIN, source=Heard(), io_capability="no_input_no_output")
+    bt.tap(tmp_path / "hci.btsnoop")
+    board.power_on()
+    board.wait(seconds(3))
+    write_console(tmp_path, console)
+    assert peer.channel_open and [p.method for p in peer.pairings] == ["just_works"]
+    # Each pairing on both sides: its time, how it went, the number both showed.
+    pairings = [(p.t, p.initiator, p.method, p.number, int(p.status)) for p in peer.pairings]
+    pairings += [(p.t, p.initiator, p.method, p.number, int(p.status)) for p in bt.pairings()]
+    (tmp_path / "pairings.json").write_text(json.dumps(pairings))

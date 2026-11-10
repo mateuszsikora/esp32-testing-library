@@ -353,8 +353,15 @@ hears in the same window, to within one block. With another PIN on the peer it f
 authentication with HCI's `AUTHENTICATION_FAILURE` (`Authentication fail reason 5`, then
 `authentication failed, status:9`, `ESP_BT_STATUS_AUTH_FAILURE`) and the link falls before SABM, so
 the peer refuses nothing. With nobody of the name on the air, the inquiry's two
-`ESP_BT_GAP_DISC_STATE_CHANGED_EVT` are 38.4 s apart, and nothing follows. The controller knows
-every command the firmware's Bluedroid sends: `bt.unknown_commands()` is empty in each run. A run
+`ESP_BT_GAP_DISC_STATE_CHANGED_EVT` are 38.4 s apart, and nothing follows. With Secure Simple
+Pairing on the peer, `main.c`'s IO capability, `ESP_BT_IO_CAP_IN`, a keyboard only, decides: a peer
+with no input and output pairs by Just Works, which ESP-IDF's Bluedroid confirms without telling
+the example, and the channel opens 1.414 s after power-on; a peer with a display gets
+`ESP_BT_GAP_KEY_REQ_EVT` at 1.354 s, which the example answers only with `spp key …;` on its
+console, and Bluedroid's security timer ends the pairing 35.0 s later with
+`User_Passkey_Request_Negative_Reply` (`Authentication fail reason 5`, `authentication failed,
+status:9`). The controller knows every command the firmware's Bluedroid sends:
+`bt.unknown_commands()` is empty in each run. A run
 to the first `speed(...)` takes 4.4 s of the board's time and about 1 s of wall time on an M2 Pro,
 the 39.4 s of the inquiry with nobody 2.7 s; esp32sim prints `[ble] the virtual controller is LE-only:
 enabled in mode 2 (BR/EDR), its commands get Unknown HCI Command` on the runner's stderr at the

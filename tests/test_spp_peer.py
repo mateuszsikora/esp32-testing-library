@@ -77,6 +77,40 @@ class Pin(PairingDelegate):
         return self.pin
 
 
+class User(Pin):
+    """The stand-in's user with Secure Simple Pairing, of `io_capability`: says yes to a number or
+    a pairing when it `confirms`, types what `passkey` gives, and keeps what it was asked and
+    shown, as `(what, number)`."""
+
+    def __init__(
+        self,
+        io_capability: PairingDelegate.IoCapability,
+        confirms: bool = True,
+        passkey: Callable[[], Awaitable[int | None]] | None = None,
+    ) -> None:
+        super().__init__("1234")
+        self.io_capability = io_capability
+        self.confirms = confirms
+        self.passkey = passkey
+        self.seen: list[tuple[str, int | None]] = []
+
+    async def confirm(self, auto: bool = False) -> bool:
+        self.seen.append(("auto" if auto else "confirm", None))
+        return True if auto else self.confirms
+
+    async def compare_numbers(self, number: int, digits: int) -> bool:
+        self.seen.append(("compare", number))
+        return self.confirms
+
+    async def get_number(self) -> int | None:
+        number = None if self.passkey is None else await self.passkey()
+        self.seen.append(("type", number))
+        return number
+
+    async def display_number(self, number: int, digits: int) -> None:
+        self.seen.append(("show", number))
+
+
 class Initiator:
     """The ESP32's side, as `bt_spp_initiator` drives it, on a Bumble host."""
 
@@ -87,9 +121,10 @@ class Initiator:
         ssp: bool = False,
         address: str = DEVICE,
         name: str = "esp32",
+        user: User | None = None,
     ) -> None:
         self.air = air
-        self.delegate = Pin(pin)
+        self.delegate = Pin(pin) if user is None else user
         self.found: list[tuple[int, str, int, str | None]] = []
         # The signal strength of each result, as (address, rssi).
         self.heard_at: list[tuple[str, int]] = []
@@ -101,7 +136,9 @@ class Initiator:
         air.run(self.device.power_on(), within=seconds(0))
 
     def _make(self, ssp: bool, address: str, name: str) -> Device:
+        ssp = ssp or isinstance(self.delegate, User)
         controller = Controller(name, self.air.link, address)
+        self.controller = controller
         config = DeviceConfiguration(
             name=name,
             address=hci.Address(address),
@@ -478,6 +515,21 @@ def test_nothing_happens_on_the_air_until_the_device_writes(air: Air) -> None:
             "SppPeer: service_name is '', not None or a string of 1 to 255 bytes",
         ),
         ({"service_name": 7}, "service_name is 7, not None or a string of 1 to 255 bytes"),
+        (
+            {"io_capability": "keyboard"},
+            "SppPeer: io_capability is 'keyboard', not None or one of display_only,"
+            " display_yes_no, keyboard_only, no_input_no_output",
+        ),
+        ({"confirms": 1}, "SppPeer: confirms is 1, not True or False"),
+        (
+            {"io_capability": "keyboard_only", "passkey": 1_000_000},
+            "SppPeer: passkey is 1000000, not six digits, 0 to 999999",
+        ),
+        ({"io_capability": "keyboard_only", "passkey": True}, "passkey is True, not six digits"),
+        (
+            {"io_capability": "display_only", "passkey": 123456},
+            "SppPeer: passkey is typed on a keyboard: give io_capability='keyboard_only'",
+        ),
     ],
 )
 def test_the_peer_refuses_what_it_cannot_be(
@@ -3356,3 +3408,255 @@ def test_a_power_loss_ends_an_inquiry_that_would_restart_itself(air: Air) -> Non
     phone.switch_on()
     # A device switched off starts no inquiry by itself, so this one is not refused.
     air.run(phone.device.start_discovery(auto_restart=False), within=seconds(0))
+
+
+# Secure Simple Pairing with the peer.
+
+PEER_AT = "00:00:00:00:5B:01"
+SUCCESS = hci.HCI_ErrorCode.SUCCESS
+AUTHENTICATION_FAILURE = hci.HCI_ErrorCode.AUTHENTICATION_FAILURE_ERROR
+
+
+def authenticated_keys(device: Device) -> dict[str, bool]:
+    """Whether each link key `device` keeps is an authenticated one, by the peer's address."""
+    keystore = device.keystore
+    assert isinstance(keystore, MemoryKeyStore)
+    return {
+        address: pairing.link_key.authenticated
+        for address, pairing in keystore.all_keys.items()
+        if pairing.link_key is not None
+    }
+
+
+def pair(air: Air, esp32: Initiator) -> Connection:
+    """The stand-in connects to the peer and authenticates; what fails, fails here."""
+
+    async def connect() -> Connection:
+        connection = await esp32.device.connect(PEER, transport=core.PhysicalTransport.BR_EDR)
+        await connection.authenticate()
+        return connection
+
+    return air.run(connect(), within=seconds(10))
+
+
+def test_two_users_compare_one_number_and_the_key_is_authenticated(air: Air) -> None:
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo(), io_capability="display_yes_no")
+    user = User(PairingDelegate.DISPLAY_OUTPUT_AND_YES_NO_INPUT)
+    esp32 = Initiator(air, user=user)
+    pair(air, esp32)
+    [mine] = esp32.controller.pairings
+    [theirs] = peer.pairings
+    assert user.seen == [("compare", mine.number)]
+    assert (mine.method, mine.initiator, mine.status, mine.authenticated) == (
+        "numeric_comparison",
+        True,
+        SUCCESS,
+        True,
+    )
+    assert (theirs.method, theirs.initiator, theirs.number, theirs.peer) == (
+        "numeric_comparison",
+        False,
+        mine.number,
+        DEVICE,
+    )
+    assert theirs.succeeded and theirs.authenticated and peer.pairing is None
+    assert authenticated_keys(esp32.device) == {PEER_AT + "/P": True}
+    assert keys_of(esp32.device)[PEER_AT + "/P"] == keys_of(peer.device)[DEVICE + "/P"]
+    # Only the initiator's host is told the authentication is complete.
+    connection = next(iter(peer.device.connections.values()))
+    assert not connection.authenticated
+    device = hci.Address(DEVICE, hci.Address.PUBLIC_DEVICE_ADDRESS)
+    assert peer.air.call(lambda: peer._controller.authenticated(device))  # type: ignore[union-attr]
+
+
+@pytest.mark.parametrize("who", ["the peer", "the device"])
+def test_a_number_a_user_says_no_to_fails_the_pairing_on_both_sides(air: Air, who: str) -> None:
+    peer = SppPeer(
+        air,
+        name="peer",
+        pin="1234",
+        source=Echo(),
+        io_capability="display_yes_no",
+        confirms=who != "the peer",
+    )
+    user = User(PairingDelegate.DISPLAY_OUTPUT_AND_YES_NO_INPUT, confirms=who != "the device")
+    esp32 = Initiator(air, user=user)
+    with pytest.raises(hci.HCI_Error) as failed:
+        pair(air, esp32)
+    assert failed.value.error_code == AUTHENTICATION_FAILURE
+    [mine] = esp32.controller.pairings
+    [theirs] = peer.pairings
+    assert (mine.method, mine.status) == (theirs.method, theirs.status)
+    assert (mine.method, mine.status, mine.authenticated) == (
+        "numeric_comparison",
+        AUTHENTICATION_FAILURE,
+        False,
+    )
+    assert keys_of(peer.device) == {} and keys_of(esp32.device) == {}
+
+
+def test_the_device_types_the_passkey_the_peer_shows(air: Air) -> None:
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo(), io_capability="display_only")
+
+    async def read_it_off_the_peer() -> int | None:
+        while peer.pairing is None or peer.pairing.number is None:
+            await asyncio.sleep(0.001)
+        return peer.pairing.number
+
+    user = User(PairingDelegate.KEYBOARD_INPUT_ONLY, passkey=read_it_off_the_peer)
+    esp32 = Initiator(air, user=user)
+    pair(air, esp32)
+    [mine] = esp32.controller.pairings
+    [theirs] = peer.pairings
+    assert user.seen == [("type", theirs.number)]
+    assert theirs.number is not None and 0 <= theirs.number < 1_000_000
+    assert (mine.method, mine.number, mine.status, mine.authenticated) == (
+        "passkey_entry",
+        theirs.number,
+        SUCCESS,
+        True,
+    )
+    assert authenticated_keys(esp32.device) == {PEER_AT + "/P": True}
+
+
+def test_a_wrong_passkey_fails_the_pairing_on_both_sides_and_neither_waits(air: Air) -> None:
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo(), io_capability="display_only")
+
+    async def wrong() -> int:
+        while peer.pairing is None or peer.pairing.number is None:
+            await asyncio.sleep(0.001)
+        return (peer.pairing.number + 1) % 1_000_000
+
+    esp32 = Initiator(air, user=User(PairingDelegate.KEYBOARD_INPUT_ONLY, passkey=wrong))
+    with pytest.raises(hci.HCI_Error):
+        pair(air, esp32)
+    [mine] = esp32.controller.pairings
+    [theirs] = peer.pairings
+    assert (mine.status, theirs.status) == (AUTHENTICATION_FAILURE, AUTHENTICATION_FAILURE)
+    assert mine.t == theirs.t
+    assert peer.pairing is None
+
+
+@pytest.mark.parametrize(("typed", "status"), [(123456, SUCCESS), (None, AUTHENTICATION_FAILURE)])
+def test_two_keyboards_each_type_the_passkey(air: Air, typed: int | None, status: int) -> None:
+    peer = SppPeer(
+        air,
+        name="peer",
+        pin="1234",
+        source=Echo(),
+        io_capability="keyboard_only",
+        passkey=typed,
+    )
+
+    async def type_it() -> int:
+        return 123456
+
+    esp32 = Initiator(air, user=User(PairingDelegate.KEYBOARD_INPUT_ONLY, passkey=type_it))
+    if status == SUCCESS:
+        pair(air, esp32)
+    else:
+        with pytest.raises(hci.HCI_Error):
+            pair(air, esp32)
+    [theirs] = peer.pairings
+    assert (theirs.method, theirs.number, theirs.status) == ("passkey_entry", typed, status)
+
+
+NO_IO = PairingDelegate.NO_OUTPUT_NO_INPUT
+YES_NO = PairingDelegate.DISPLAY_OUTPUT_AND_YES_NO_INPUT
+
+
+@pytest.mark.parametrize(
+    ("peer_has", "peer_confirms", "esp32_has", "esp32_confirms", "esp32_saw", "status"),
+    [
+        ("no_input_no_output", True, NO_IO, True, [("auto", None)], SUCCESS),
+        # The side with a yes and a no is asked to allow it, the other is not.
+        ("no_input_no_output", False, YES_NO, True, [("confirm", None)], SUCCESS),
+        ("no_input_no_output", True, YES_NO, False, [("confirm", None)], AUTHENTICATION_FAILURE),
+        ("display_yes_no", False, NO_IO, True, [("auto", None)], AUTHENTICATION_FAILURE),
+    ],
+)
+def test_a_side_without_display_or_keyboard_pairs_by_just_works_unauthenticated(
+    air: Air,
+    peer_has: str,
+    peer_confirms: bool,
+    esp32_has: PairingDelegate.IoCapability,
+    esp32_confirms: bool,
+    esp32_saw: list[tuple[str, None]],
+    status: int,
+) -> None:
+    peer = SppPeer(
+        air,
+        name="peer",
+        pin="1234",
+        source=Echo(),
+        io_capability=peer_has,
+        confirms=peer_confirms,
+    )
+    user = User(esp32_has, confirms=esp32_confirms)
+    esp32 = Initiator(air, user=user)
+    if status == SUCCESS:
+        pair(air, esp32)
+        assert authenticated_keys(esp32.device) == {PEER_AT + "/P": False}
+    else:
+        with pytest.raises(hci.HCI_Error):
+            pair(air, esp32)
+    assert user.seen == esp32_saw
+    [mine] = esp32.controller.pairings
+    [theirs] = peer.pairings
+    assert (theirs.method, theirs.status, theirs.authenticated) == ("just_works", status, False)
+    assert (mine.method, mine.number) == ("just_works", theirs.number)
+    assert esp32.delegate.asked == 0
+
+
+def test_a_peer_with_simple_pairing_pairs_with_its_pin_with_a_device_without(air: Air) -> None:
+    echo = Echo()
+    peer = SppPeer(air, name="peer", pin="1234", source=echo, io_capability="display_yes_no")
+    esp32 = Initiator(air)
+
+    async def write() -> None:
+        dlc = await esp32.session()
+        dlc.write(b"hello\r")
+        await asyncio.sleep(1)
+
+    air.run(write(), within=seconds(10))
+    assert esp32.delegate.asked == 1
+    assert echo.heard == [(0, b"hello\r")]
+    [theirs] = peer.pairings
+    assert (theirs.method, theirs.number, theirs.status) == ("legacy", None, SUCCESS)
+
+
+def test_a_legacy_pairing_that_fails_is_in_the_history_on_both_sides(air: Air) -> None:
+    peer = SppPeer(air, name="peer", pin="0000", source=Echo())
+    esp32 = Initiator(air)
+    with pytest.raises(hci.HCI_Error):
+        pair(air, esp32)
+    [mine] = esp32.controller.pairings
+    [theirs] = peer.pairings
+    assert (mine.method, mine.initiator, mine.status) == ("legacy", True, AUTHENTICATION_FAILURE)
+    assert (theirs.method, theirs.initiator, theirs.status) == (
+        "legacy",
+        False,
+        AUTHENTICATION_FAILURE,
+    )
+
+
+def test_each_pairing_starts_anew_and_two_runs_show_the_same_numbers() -> None:
+    def run() -> list[tuple[int, str, int | None]]:
+        air = Air()
+        try:
+            peer = SppPeer(
+                air, name="peer", pin="1234", source=Echo(), io_capability="display_yes_no"
+            )
+            esp32 = Initiator(air, user=User(PairingDelegate.DISPLAY_OUTPUT_AND_YES_NO_INPUT))
+            connection = pair(air, esp32)
+            air.run(connection.disconnect(), within=seconds(1))
+            peer.forget_keys()
+            esp32.device.keystore = MemoryKeyStore()
+            pair(air, esp32)
+            return [(p.t, p.method, p.number) for p in peer.pairings]
+        finally:
+            air.close()
+
+    first = run()
+    assert len(first) == 2 and first[0][2] != first[1][2]
+    assert first == run()

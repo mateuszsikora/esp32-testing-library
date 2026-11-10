@@ -18,10 +18,12 @@ import threading
 from collections.abc import Callable, Iterable
 from pathlib import Path
 
+from bumble import hci
+
 from esp32tl import recording
 from esp32tl.backends.clock import seconds
 from esp32tl.bluetooth.air import Air
-from esp32tl.bluetooth.controller import Controller
+from esp32tl.bluetooth.controller import Controller, Pairing
 from esp32tl.bluetooth.guest import ADDRESS, GuestController
 from esp32tl.boards.capabilities import Request
 from esp32tl.interfaces import SourceError
@@ -266,6 +268,13 @@ class Bluetooth(Interface):
             return []
         return [(c.t, c.op_code, c.name) for c in self._controller.unknown_commands]
 
+    def pairings(self) -> list[Pairing]:
+        """The pairings of the guest's controller that ended, in order: with whom, how, and
+        whether they succeeded."""
+        if self._controller is None:
+            return []
+        return list(self._controller.pairings)
+
     def devices(self) -> list[tuple[str, str, bool]]:
         """The other devices made on the air, `(name, address, present)`, in the order of their
         addresses: `present` is false for one switched off or out of range now."""
@@ -284,8 +293,8 @@ class Bluetooth(Interface):
         ]
 
     def report(self) -> list[str]:
-        """The guest's controller, the packets each way, the commands it did not know and the
-        devices made on the air, those off it now marked."""
+        """The guest's controller, the packets each way, the commands it did not know, its
+        pairings and the devices made on the air, those off it now marked."""
         if self._air is None:
             return ["bluetooth: not used"]
         lines = [
@@ -298,6 +307,10 @@ class Bluetooth(Interface):
         if unknown:
             lines.append(f"  unknown commands ({len(unknown)}):")
             lines += [f"    {board_time(t)}  {name} ({op:#06x})" for t, op, name in unknown]
+        pairings = self.pairings()
+        if pairings:
+            lines.append(f"  pairings ({len(pairings)}):")
+            lines += [f"    {board_time(p.t)}  {_pairing(p)}" for p in pairings]
         devices = [f"{n} ({a}{'' if on else ', off the air'})" for n, a, on in self.devices()]
         lines.append("  devices: " + (", ".join(devices) or "none but the guest's"))
         return lines
@@ -315,8 +328,33 @@ class Bluetooth(Interface):
             "unknown_commands": [
                 {"t_ns": t, "op_code": op, "name": name} for t, op, name in self.unknown_commands()
             ],
+            "pairings": [
+                {
+                    "t_ns": p.t,
+                    "peer": p.peer,
+                    "initiator": p.initiator,
+                    "method": p.method,
+                    "number": p.number,
+                    "status": int(p.status),
+                    "authenticated": p.authenticated,
+                }
+                for p in self.pairings()
+            ],
             "devices": [{"name": n, "address": a, "present": on} for n, a, on in self.devices()],
         }
+
+
+def _pairing(pairing: Pairing) -> str:
+    """A pairing of the guest's, as the report shows it: `with 00:00:00:00:5B:01, by
+    just_works, 238680: succeeded`."""
+    who = "with" if pairing.initiator else "from"
+    number = "" if pairing.number is None else f", {pairing.number:06d}"
+    outcome = (
+        "succeeded"
+        if pairing.succeeded
+        else f"{hci.HCI_ErrorCode(pairing.status).name} ({pairing.status:#04x})"
+    )
+    return f"{who} {pairing.peer}, by {pairing.method}{number}: {outcome}"
 
 
 def _named(packet: bytes) -> str:

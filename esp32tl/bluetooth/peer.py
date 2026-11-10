@@ -1,9 +1,11 @@
 """Bluetooth Classic devices on the air: any device, and one with a Serial Port Profile service.
 
 `BluetoothDevice` is a Bumble device on the air: it can be discovered by its name, with its class
-of device and its signal strength, pairs with its PIN if it has one (legacy pairing; it does not do
-Secure Simple Pairing, as Bluetooth 2.0 devices do not), keeps the link keys it pairs to, offers no
-service, and can be switched off and go out of range, and come back, with the link keys it had.
+of device and its signal strength, pairs with its PIN if it has one (legacy pairing, as Bluetooth
+2.0 devices do), and, given an IO capability, with Secure Simple Pairing where the other side has
+it too: its user confirms a number or not, types a passkey, or reads one off its display. It keeps
+the link keys it pairs to and the history of its pairings, offers no service, and can be switched
+off and go out of range, and come back, with the link keys it had.
 
 `SppPeer` adds SPP on one RFCOMM channel, to one device at a time and, unless told otherwise, only
 on a link the device has authenticated by the time it opens the channel. What the device writes on
@@ -16,8 +18,8 @@ from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from typing import TypeVar
 
-from bumble import core, rfcomm, sdp
-from bumble.device import Connection, Device, DeviceConfiguration
+from bumble import core, hci, rfcomm, sdp
+from bumble.device import Connection, Device, DeviceConfiguration, with_connection_from_address
 from bumble.hci import Address
 from bumble.host import Host
 from bumble.keys import MemoryKeyStore
@@ -27,7 +29,7 @@ from bumble.transport.common import AsyncPipeSink
 
 from esp32tl.backends.clock import seconds
 from esp32tl.bluetooth.air import Air
-from esp32tl.bluetooth.controller import RSSI, Controller
+from esp32tl.bluetooth.controller import RSSI, SIX_DIGITS, Controller, Pairing, UnderWay
 from esp32tl.interfaces.uart import Source, Supplied
 from esp32tl.link.boardlink import Direction, Output
 
@@ -60,6 +62,15 @@ L2CAP_FEATURES = (
     L2CAP_Information_Request.ExtendedFeatures.FCS_OPTION,
 )
 
+# The IO capabilities a device's user has for Secure Simple Pairing (Vol 3, Part C, 5.2.2.4), by
+# the names a test gives them.
+IO_CAPABILITIES = {
+    "display_only": PairingDelegate.DISPLAY_OUTPUT_ONLY,
+    "display_yes_no": PairingDelegate.DISPLAY_OUTPUT_AND_YES_NO_INPUT,
+    "keyboard_only": PairingDelegate.KEYBOARD_INPUT_ONLY,
+    "no_input_no_output": PairingDelegate.NO_OUTPUT_NO_INPUT,
+}
+
 T = TypeVar("T")
 
 
@@ -69,22 +80,77 @@ class PeerError(ValueError):
     the instant they are given at."""
 
 
-class _Pin(PairingDelegate):
-    """Answers a PIN request with the device's PIN, as a device with a fixed PIN does; without one,
-    the pairing fails."""
+class _User(PairingDelegate):
+    """The device's user. Answers a PIN request with the device's PIN, as a device with a fixed PIN
+    does; without one, the pairing fails. With Secure Simple Pairing, of `io_capability`: says
+    yes to a number to compare, or to a pairing it is asked to allow, when it `confirms`; types
+    `passkey` when asked for one, and refuses without one; and reads what its display shows."""
 
-    def __init__(self, pin: str | None) -> None:
-        super().__init__(io_capability=PairingDelegate.KEYBOARD_INPUT_ONLY)
+    def __init__(
+        self,
+        pin: str | None,
+        io_capability: PairingDelegate.IoCapability,
+        confirms: bool,
+        passkey: int | None,
+    ) -> None:
+        super().__init__(io_capability=io_capability)
         self.pin = pin
+        self.confirms = confirms
+        self.passkey = passkey
 
     async def get_string(self, max_length: int) -> str | None:
         return self.pin
+
+    async def confirm(self, auto: bool = False) -> bool:
+        # Asked to allow a pairing, or told one that needs no word from the user.
+        return True if auto else self.confirms
+
+    async def compare_numbers(self, number: int, digits: int) -> bool:
+        return self.confirms
+
+    async def get_number(self) -> int | None:
+        return self.passkey
+
+    async def display_number(self, number: int, digits: int) -> None:
+        return None
+
+
+class _Device(Device):
+    """Bumble's device, which also answers a PIN request with Secure Simple Pairing on: Bumble's
+    answers it only for a keyboard, and a device with a display then fails a legacy pairing with
+    a device that has no Secure Simple Pairing, which pairs with the PIN."""
+
+    @with_connection_from_address  # type: ignore[untyped-decorator]
+    def on_pin_code_request(self, connection: Connection) -> None:
+        delegate = self.pairing_config_factory(connection).delegate
+
+        async def answer() -> None:
+            pin = await connection.cancel_on_disconnection(delegate.get_string(16))
+            if pin is None:
+                command: hci.HCI_Command = hci.HCI_PIN_Code_Request_Negative_Reply_Command(
+                    bd_addr=connection.peer_address
+                )
+            else:
+                code = pin.encode()
+                command = hci.HCI_PIN_Code_Request_Reply_Command(
+                    bd_addr=connection.peer_address, pin_code_length=len(code), pin_code=code
+                )
+            await self.host.send_sync_command(command)  # type: ignore[arg-type]
+
+        connection.cancel_on_disconnection(answer())
 
 
 class BluetoothDevice:
     """A Classic device on `air` at `address`, discoverable and connectable from the start, called
     `name`, of class `class_of_device`, heard at `rssi` dBm, paired with `pin` if it has one, and
-    offering no service: a device that is there to be found. `rssi` can be changed at any time, and
+    offering no service: a device that is there to be found.
+
+    With `io_capability`, one of `IO_CAPABILITIES`, it has Secure Simple Pairing, which a device
+    that has it too pairs with, by the association model of the two capabilities: its user says
+    yes to a number or to the pairing when it `confirms`, the default, and no otherwise, and types
+    `passkey`, six digits, when asked for one (`keyboard_only`); a device that has none pairs with
+    the PIN. Without it the device pairs with the PIN only. `pairings` is the history of the
+    device's pairings that ended, each a `Pairing`. `rssi` can be changed at any time, and
     the next inquiry gets it; the plain `Inquiry_Result` has no such field.
 
     `switch_off` and `out_of_range` take it off the air without a word, until `switch_on` and
@@ -101,6 +167,9 @@ class BluetoothDevice:
         class_of_device: int = CLASS_OF_DEVICE,
         rssi: int = RSSI,
         address: str = ADDRESS,
+        io_capability: str | None = None,
+        confirms: bool = True,
+        passkey: int | None = None,
     ) -> None:
         kind = type(self).__name__
         if not isinstance(name, str) or not 1 <= len(name.encode()) <= NAME_MAX:
@@ -116,6 +185,22 @@ class BluetoothDevice:
                 f"{kind}: class_of_device is {class_of_device!r}, not three octets, 0 to 0xFFFFFF"
             )
         self._check_rssi(rssi)
+        if io_capability is not None and io_capability not in IO_CAPABILITIES:
+            raise PeerError(
+                f"{kind}: io_capability is {io_capability!r}, not None or one of"
+                f" {', '.join(IO_CAPABILITIES)}"
+            )
+        if not isinstance(confirms, bool):
+            raise PeerError(f"{kind}: confirms is {confirms!r}, not True or False")
+        if passkey is not None:
+            if isinstance(passkey, bool) or not isinstance(passkey, int):
+                raise PeerError(f"{kind}: passkey is {passkey!r}, not six digits, 0 to 999999")
+            if not 0 <= passkey < SIX_DIGITS:
+                raise PeerError(f"{kind}: passkey is {passkey!r}, not six digits, 0 to 999999")
+            if io_capability != "keyboard_only":
+                raise PeerError(
+                    f"{kind}: passkey is typed on a keyboard: give io_capability='keyboard_only'"
+                )
         public = _address(kind, address)
         if air.link.find_classic_controller(public) is not None:
             raise PeerError(
@@ -125,6 +210,9 @@ class BluetoothDevice:
         self.name = name
         self.pin = pin
         self.class_of_device = class_of_device
+        self.io_capability = io_capability
+        self.confirms = confirms
+        self.passkey = passkey
         self._on = True
         self._in_range = True
         self._controller: Controller | None = None
@@ -153,6 +241,21 @@ class BluetoothDevice:
             raise PeerError(
                 f"{type(self).__name__}: rssi is {rssi!r}, not a signal strength in dBm, -127 to 20"
             )
+
+    @property
+    def pairings(self) -> list[Pairing]:
+        """The device's pairings that ended, in order: with whom, how, the number it showed or
+        its user typed, and whether it succeeded."""
+        assert self._controller is not None
+        return list(self._controller.pairings)
+
+    @property
+    def pairing(self) -> UnderWay | None:
+        """The pairing under way, the latest to start, as far as it has gone: its `number` is
+        what the device's display shows, or what its user typed; `None` while none is."""
+        assert self._controller is not None
+        under_way = list(self._controller.under_way.values())
+        return under_way[-1] if under_way else None
 
     @property
     def present(self) -> bool:
@@ -208,14 +311,19 @@ class BluetoothDevice:
             class_of_device=self.class_of_device,
             classic_enabled=True,
             le_enabled=False,
-            classic_ssp_enabled=False,
+            classic_ssp_enabled=self.io_capability is not None,
             classic_sc_enabled=False,
             l2cap_extended_features=L2CAP_FEATURES,
         )
-        device = Device(config=config, host=Host(controller, AsyncPipeSink(controller)))
-        delegate = _Pin(self.pin)
+        device = _Device(config=config, host=Host(controller, AsyncPipeSink(controller)))
+        capability = IO_CAPABILITIES.get(
+            self.io_capability or "", PairingDelegate.NO_OUTPUT_NO_INPUT
+        )
+        delegate = _User(self.pin, capability, self.confirms, self.passkey)
+        # Protection from a man in the middle asked for whenever the user can see or type a number.
+        mitm = capability != PairingDelegate.NO_OUTPUT_NO_INPUT
         device.pairing_config_factory = lambda connection: PairingConfig(
-            sc=False, mitm=False, bonding=True, delegate=delegate
+            sc=False, mitm=mitm, bonding=True, delegate=delegate
         )
         self._serve(device)
         return device
@@ -230,8 +338,9 @@ class BluetoothDevice:
 
 
 class SppPeer(BluetoothDevice):
-    """A `BluetoothDevice` paired with `pin`, with SPP on RFCOMM `channel`, whose bytes `source`
-    answers, and whose SDP record names the service `service_name`, none for `None`.
+    """A `BluetoothDevice` paired with `pin`, or with Secure Simple Pairing given `io_capability`,
+    with SPP on RFCOMM `channel`, whose bytes `source` answers, and whose SDP record names the
+    service `service_name`, none for `None`.
 
     The channel opens to one device at a time; with `secure`, the default, only on a link that
     device has authenticated by the time it opens the channel (RFCOMM's SABM), which may be after
@@ -259,6 +368,9 @@ class SppPeer(BluetoothDevice):
         class_of_device: int = CLASS_OF_DEVICE,
         rssi: int = RSSI,
         service_name: str | None = SERVICE_NAME,
+        io_capability: str | None = None,
+        confirms: bool = True,
+        passkey: int | None = None,
     ) -> None:
         if pin is None:
             raise PeerError(f"SppPeer: pin is {pin!r}, not a string of 1 to 16 bytes")
@@ -289,6 +401,9 @@ class SppPeer(BluetoothDevice):
             class_of_device=class_of_device,
             rssi=rssi,
             address=address,
+            io_capability=io_capability,
+            confirms=confirms,
+            passkey=passkey,
         )
         air.join(self)
 
