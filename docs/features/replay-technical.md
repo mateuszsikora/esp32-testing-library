@@ -89,7 +89,8 @@ link with `uart.gnss sent bytes stamped {t} ns in the turn at {now} ns: ...`.
   115200 baud, and require it to fail
   ([validation firmware](validation-firmware-technical.md)).
 - `tests/test_nmea_reader.py`, the first milestone's tests: the fixes of both generated
-  recordings, ten emulated seconds with `board.now` just past 10 s on a runner on the emulated clock, and
+  recordings, ten emulated seconds in under ten wall seconds with `board.now` just past 10 s on a runner on the
+  emulated clock, and
   the sentences `nmea_reader` must ignore, all through `gnss.replay` before `board.power_on()`.
 - `tests/test_boardlink.py::test_a_frame_error_fails_the_run_at_once`: a `frm_err` warning is the
   link's error, with the interface's name and both bauds, or the pin alone, and calls `on_error`

@@ -822,8 +822,9 @@ def test_a_wait_fails_at_once_when_the_runner_has_exited(
 ) -> None:
     monkeypatch.setenv("FAKE_OUTPUT", "Goodbye\n")
     monkeypatch.setenv("FAKE_EXIT", "0")
-    # A wait that missed the exit would hang until the plugin's DEFAULT_TIMEOUT, 600 s; the run
-    # gets a fifth of that.
+    # "At once": the runner's exit ends the wait, which no timeout of the board's clock can, since
+    # that clock never moves. A wait that missed the exit would hang until the plugin's
+    # DEFAULT_TIMEOUT, 600 s; the run gets a fifth of that.
     result = fake_runner.runpytest_subprocess("-p", "no:cacheprovider", timeout=120)
     result.assert_outcomes(failed=1)
     # The exit ended the wait, and the runner never took a turn: the board's clock is still at 0.

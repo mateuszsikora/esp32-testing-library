@@ -447,8 +447,9 @@ that references to its number keep their meaning.
     `tests/test_nmea_reader.py::test_reports_a_fix`,
     `tests/test_gnss_fixture.py::test_reports_a_fix_fails_on_a_changed_recording`
 - **37.** A replay runs on the emulated clock: ten fixes, ten emulated seconds, reach the console, the
-    board's clock reads just past 10 s, and the runner says the emulated clock and counts no
-    resyncs, since nothing paced it to wall time.
+    board's clock reads just past 10 s, the runner says the emulated clock and counts no
+    resyncs, and the ten emulated seconds take less than ten wall seconds: nothing paced the run
+    to wall time.
     `tests/test_nmea_reader.py::test_time_is_emulated`
 - **52.** A tap records every byte that crossed its route, `out` of the ESP32 and `in` from whatever is
     at the far end, at the time it crossed, and writes it once the run has ended as a recording in

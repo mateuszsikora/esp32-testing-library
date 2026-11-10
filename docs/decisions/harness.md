@@ -3248,8 +3248,10 @@ clock for one of three reasons, and each has its rule ([testing](../guides/testi
   up at the turns that stamped the bytes, which the test measures from the wall time at which the
   harness took each turn: the runner sends no turn before its wall clock reaches it (protocol
   12.2), so the earliest turn, by wall time less the board's, is one that kept up. The test skips
-  when one of the bytes' turns is more than 5 ms and at most 500 ms behind it, and on a resync as
-  before. The long hold's bound was on the board's clock all along: the excess was the test's own
+  when half or more of the bytes' turns are more than 5 ms behind it and none more than 500 ms, the
+  lag a paced guest can have, and on a resync as before; a lag at fewer of them moves none of the
+  stamps its median holds. The skip cannot tell a busy host from a harness slow to take its
+  turns: its reason, with the lags, is in the short summary of every run (`-ra`). The long hold's bound was on the board's clock all along: the excess was the test's own
   device thread, slow to say the answer on a busy host, and the bound now runs from the stamp of
   the answer's line ending, which no host speed moves.
 
@@ -3270,4 +3272,6 @@ step for a sleep it recognises (`a_deep_sleep_is_one_slice_to_its_wake`,
 `on_the_emulator_a_skipped_sleep_wakes_at_the_tick_of_its_alarm`); what the example adds is that
 ESP-IDF's own deep sleep is one, which the ratio shows. Ten fixes in five wall seconds for
 `test_time_is_emulated`, because that is the speed of one host: the runner's `hello` naming the
-emulated clock, and no `rt_resyncs` in its `stats`, show that nothing paced the run.
+emulated clock, and no `rt_resyncs` in its `stats`, show that the runner did not pace the run, and
+the ten emulated seconds in under ten wall seconds, what a paced run takes, that nothing else
+waited for wall time either.

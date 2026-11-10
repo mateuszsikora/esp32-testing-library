@@ -133,7 +133,8 @@ Each such read is one of three kinds:
 - A check that something is skipped or not waited for. It reads what the run leaves behind rather
   than how long it took: the board's time at which a run ended
   (`test_reports_a_fix_fails_on_a_baud_mismatch`, 1.1 s of 30), the runner's clock
-  (`test_time_is_emulated`), the child still holding the link
+  (`test_time_is_emulated`, with ten emulated seconds in under the ten wall seconds a paced run
+  takes), the child still holding the link
   (`test_a_link_left_open_after_the_runner_exits_is_shut_down`), the reader still stuck
   (`test_stuck_reader_has_bounded_teardown_and_no_late_capture`), the runner gone
   (`test_ctrl_c_before_the_runner_connects_exits_130`). Where nothing shows it, the bound is
@@ -176,7 +177,7 @@ A lower bound, at least `AT_LEAST_S` of wall time, only grows on a slow host, an
 | `tests/test_net_bridge.py` | `network.bridge` against services on loopback sockets, in wall time: the stream both ways, each end's close, what the service sends after the device closed, a refused connection, a lost link, the turns it asks for, what it refuses, and an answer reaching the station in a TCP segment | Loopback TCP; under a second |
 | `tests/test_net_ethernet.py`, `tests/test_net_http.py` | The network behind the access point with handmade Ethernet frames and independent checksums: DHCP, ARP, IPv4 to the services, other ethertypes dropped; the HTTP server's side of a connection without TCP: what it serves, keeps and refuses | Nothing beyond the package; milliseconds |
 | `tests/test_hello_world.py` | ESP-IDF's `hello_world`, unmodified, powered on and printing `Hello world!` through the backend | The built image, the runner and the ROM ELF |
-| `tests/test_nmea_reader.py` | The first milestone (plan M1): `nmea_reader` fed the generated GNSS recordings, and sentences it must ignore, through `gnss.replay` before `board.power_on()`: `test_reports_a_fix`, `test_fix_follows_the_recording`, `test_time_is_emulated` (ten fixes, `board.now` just past 10 s, and a runner on the emulated clock, with no `rt_resyncs` in its stats) | The built image, the runner and the ROM ELF |
+| `tests/test_nmea_reader.py` | The first milestone (plan M1): `nmea_reader` fed the generated GNSS recordings, and sentences it must ignore, through `gnss.replay` before `board.power_on()`: `test_reports_a_fix`, `test_fix_follows_the_recording`, `test_time_is_emulated` (ten fixes, `board.now` just past 10 s, and a runner on the emulated clock, with no `rt_resyncs` in its stats, in under the ten wall seconds a paced run takes) | The built image, the runner and the ROM ELF |
 | `tests/test_nmea_reader_model.py` | `nmea_reader` fed by the GNSS receiver model: a fix in both hemispheres, a kilometre of movement, the fix lost and coming back, silence, a power cycle of the board, read with `console.line` and compared in units | The built image, the runner and the ROM ELF |
 | `tests/test_gpio_echo.py` | `gpio_echo` on the `lilygo-t-a7670g-r2` profile through the `lines` fixture: RI at the board's pull-down from power-on, PWRKEY following RI as the test drives and releases it, the lines' events with their times, a level driven before `board.power_on()` | The built image, the runner and the ROM ELF |
 | `tests/test_lines.py` | The `Lines` interface: line names, refused lines and levels, the board's pulls in the first turn and on release, the stamps of what the test drives, the firmware's level from `gpio_out`, on a `BoardLink` | Nothing beyond the package; milliseconds |

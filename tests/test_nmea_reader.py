@@ -8,6 +8,7 @@ whose GNSS route runs at another baud than the firmware's, and checks that it fa
 """
 
 import re
+import time
 from pathlib import Path
 
 import pytest
@@ -55,13 +56,18 @@ def test_fix_follows_the_recording(board: Esp32Sim, gnss: Gnss, console: Console
 
 
 def test_time_is_emulated(board: Esp32Sim, gnss: Gnss, console: Console) -> None:
+    started = time.monotonic()
     gnss.replay("../recordings/gnss-generated-1.jsonl")
     board.power_on()
     # One sentence per emulated second from 1 s: the tenth fix is at 10 emulated seconds, and the
     # expect sees it at the next turn, at most 100 emulated milliseconds later.
     fixes = [next_fix(console) for _ in range(10)]
+    elapsed = time.monotonic() - started
     assert fixes == expected_fixes("gnss-generated-1.jsonl")[:10]
     assert seconds(10) < board.now <= ms(10_100)
+    # Less than the ten seconds a run paced to wall time takes, which is what a wait for wall time
+    # anywhere, in the runner or the harness, would cost.
+    assert elapsed < 10, f"ten emulated seconds took {elapsed:.2f} wall seconds"
     # Not paced to wall time: the runner says the emulated clock, and was not asked for
     # --realtime, the only pacing it has (protocol 12.1), whose stats count resyncs.
     assert board.link.runner is not None

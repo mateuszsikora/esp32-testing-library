@@ -859,10 +859,15 @@ def test_in_a_paced_run_bytes_are_stamped_close_to_their_arrival(
     # the guest's lag then, and the harness's. In a run that is not paced the board's time runs
     # ahead of wall time, and the turns after the 1.2 s are behind its earliest by more than the
     # LAG_S a paced guest can be: that is no host falling behind, and goes on to fail below.
+    # Most of the stamps are held to the margin, so a lag at fewer than half of the bytes' turns
+    # moves none of those and leaves the run to the bounds; at half or more it skips. A harness
+    # slow to take its turns looks the same as a busy host here: the skip's reason, with the lags,
+    # is in the short summary of every run (`-ra`), so a test that always skips shows.
     offsets = {t: wall - t / 1e9 for t, wall in walls.items() if t >= since}
     earliest = min(offsets.values())
     behind = [round((offsets[t] - earliest) * 1e3, 1) for t in stamps]
-    if KEPT_UP_S * 1e3 < max(behind) <= LAG_S * 1e3:
+    lagged = sum(lag > KEPT_UP_S * 1e3 for lag in behind)
+    if 2 * lagged >= len(behind) and max(behind) <= LAG_S * 1e3:
         pytest.skip(f"the host fell behind wall time: by {behind} ms at the turns of the bytes")
     # Each stamp against its arrival, around the run's own offset between the two clocks. This does
     # not hold the protocol's millisecond, which

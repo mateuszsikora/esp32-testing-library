@@ -828,6 +828,7 @@ def test_stuck_reader_has_bounded_teardown_and_no_late_capture(
     pytester.makeconftest(FAKE_SERIAL)
     pytester.makepyfile(f"""
         import pytest
+        import time
         import threading
         import esp32tl.backends.serial as backend
         from esp32tl.backends.esp32sim import BackendError
@@ -837,9 +838,10 @@ def test_stuck_reader_has_bounded_teardown_and_no_late_capture(
             board.power_on()
             console.expect("Hello world!")
             entered, release = threading.Event(), threading.Event()
+            STUCK_SECONDS = 5
             def stuck():
                 entered.set()
-                release.wait(5)
+                release.wait(STUCK_SECONDS)
                 if {late_error!r}:
                     raise OSError("late disconnect")
                 return b"late bytes"
@@ -856,11 +858,14 @@ def test_stuck_reader_has_bounded_teardown_and_no_late_capture(
             monkeypatch.setattr(board._reader, "join", joined)
             try:
                 assert entered.wait(1)
+                start = time.monotonic()
                 with pytest.raises(BackendError, match="console reader did not stop within 0.02 s"):
                     board.close()
-                # The close waited READER_STOP_SECONDS for the reader, and not for the read, stuck
-                # until the test releases it, 5 s at most.
+                # The close waited READER_STOP_SECONDS for the reader, and for nothing that waits
+                # on the read, stuck until the test releases it, STUCK_SECONDS at most: it took
+                # less than half of those, and the reader is still in the read.
                 assert joins == [.02]
+                assert time.monotonic() - start < STUCK_SECONDS / 2
                 assert board._reader.is_alive()
                 captured = recording.read("console.jsonl")
                 assert captured.events
