@@ -46,6 +46,19 @@ a fixture does. From then on:
   ([validation firmware](validation-firmware-user.md#bt_spp_initiator)). The
   [OBD-II reader example](examples-user.md#obd-ii-reader-over-bluetooth-classic) does the same with
   a PIN alone, then talks AT and OBD-II commands to a model of an ELM327 adapter.
+- **Not yet: Bluedroid's buffers in PSRAM.** A firmware built with
+  `CONFIG_BT_ALLOCATION_FROM_SPIRAM_FIRST`, run on a board profile with `psram_mb = 4`, gets no HCI
+  through. Its Bluedroid takes the buffers of the packets it sends from PSRAM, and esp32sim at the
+  pin `c99fb28` takes a packet from internal DRAM only. At the firmware's first command, `HCI_Reset`,
+  the runner's stderr has `[ble] rejected invalid VHCI packet pointer, length or controller state`;
+  `bt.packets_from_host` and `bt.packets_to_host` stay 0, and 8 s after power-on the firmware logs
+  `E (8176) BT_HCI: command_timed_out hci layer timeout waiting for response to a command. opcode:
+  0xc03`. A build without the option gets through, but it is not the image the firmware ships;
+  the fix belongs in esp32sim, and the pin waits for it
+  ([decision](../decisions/runner.md#vhci-packets-in-psram-are-esp32sims-to-take-and-the-pin-waits-for-it)).
+  `bt_spp_initiator_psram` is the case
+  ([validation firmware](validation-firmware-user.md#bt_spp_initiator_psram)). The fix is
+  [mikroverk/esp32sim#353](https://github.com/mikroverk/esp32sim/pull/353), open.
 - **`bt.air` is on the board's clock.** Its time is `board.now`; the test moves it only by letting
   the board run, with `board.wait(...)`, `board.wait_until(...)` or `console.expect(...)`.
   `bt.air.wait`, `bt.air.advance` and `bt.air.run` refuse, with `AirError`: `air.wait: this air is
@@ -475,6 +488,7 @@ On the air:
 | `HCI_Error(hci/PAGE_TIMEOUT_ERROR [0x4])` | Bumble's `HCI_Error`, on the device's side | Nobody answered `Device.request_remote_name` |
 | `HCI_Error(hci/CONNECTION_ALREADY_EXISTS_ERROR [0xB])` | Bumble's `HCI_Error`, on the device's side | The device paged a peer while it holds a link to it, as one that lost contact and has not fallen; while a page of its own to that peer is under way; or while its host has yet to answer a page from that peer, which outlasts a page of its own that has already reported its end, until its connection accept timeout |
 | `HCI_Error(hci/CONNECTION_TIMEOUT_ERROR [0x8])` | Bumble's `HCI_Error`, on the device's side | The link fell during `Connection.authenticate()` |
+| `[ble] rejected invalid VHCI packet pointer, length or controller state`, on the runner's stderr, then the firmware's `BT_HCI: command_timed_out … opcode: 0xc03` | none: the four counts stay 0 | The firmware's Bluedroid takes its buffers from PSRAM (`CONFIG_BT_ALLOCATION_FROM_SPIRAM_FIRST`), which esp32sim at the pin refuses ([above](#in-front-of-the-firmware-the-bt-fixture)) |
 
 A `BluetoothDevice` says the same of its arguments, starting `BluetoothDevice:` rather than
 `SppPeer:`. `PeerError` is a `ValueError`, in `esp32tl.bluetooth.peer`; `AirError` a `RuntimeError`, in

@@ -280,3 +280,16 @@ def test_bt_spp_initiator_runs_its_controller_for_classic_alone() -> None:
     assert config["BTDM_CTRL_MODE_BR_EDR_ONLY"] is True
     assert config["BT_CLASSIC_ENABLED"] is True and config["BT_SPP_ENABLED"] is True
     assert config["EXAMPLE_PEER_DEVICE_NAME"] == "ESP_SPP_ACCEPTOR"
+
+
+def test_bt_spp_initiator_psram_is_the_example_with_bluedroid_allocating_from_psram() -> None:
+    config = idf_app("bt_spp_initiator_psram").sdkconfig
+    # the example's own options, then firmware/bt_spp_initiator_psram/sdkconfig.defaults
+    assert config["BTDM_CTRL_MODE_BR_EDR_ONLY"] is True
+    assert config["BT_CLASSIC_ENABLED"] is True and config["BT_SPP_ENABLED"] is True
+    assert config["SPIRAM"] is True and config["SPIRAM_USE_MALLOC"] is True
+    assert config["BT_ALLOCATION_FROM_SPIRAM_FIRST"] is True
+    build = FIRMWARE / "bt_spp_initiator_psram" / "build"
+    assert idf_app("bt_spp_initiator_psram").elf_file == str(
+        (build / "bt_spp_initiator_demo.elf").resolve()
+    )

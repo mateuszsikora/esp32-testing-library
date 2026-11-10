@@ -833,3 +833,21 @@ gives the runner, as the Wi-Fi messages pass only with `--wifi`
 changes its meaning, and there is no peer of another checkout to keep apart.
 
 **Rejected:** version 2, for the same reason as with the Wi-Fi messages.
+
+## VHCI packets in PSRAM are esp32sim's to take, and the pin waits for it
+
+Status: decided
+
+A Bluedroid built with `CONFIG_BT_ALLOCATION_FROM_SPIRAM_FIRST` sends its HCI packets from PSRAM,
+and at the pin `c99fb28` esp32sim's `Send` hook refuses any packet outside internal DRAM on the
+classic ESP32, before the runner's `Forwarder` sees it; the S3's `VhciBus` already takes mapped
+PSRAM. The fix goes upstream: the classic ESP32's `valid_packet_range` taking a range whose pages
+map to installed PSRAM and that the cache can read, as a load of it would. Built locally, it lets
+`bt_spp_initiator_psram` pair, open SPP and stream. Until esp32sim merges it the pin stays, and the
+image's test is a strict `xfail`
+([validation firmware](../features/validation-firmware-technical.md#bt_spp_initiator_psram)).
+
+**Rejected:** handling it in the runner, which would mean replacing esp32sim's `Send` hook with a
+copy of its own; pinning a fork of esp32sim, which would hold the runner off upstream's fixes; and
+building the firmware without the option, which would test another image than the one a user
+ships.

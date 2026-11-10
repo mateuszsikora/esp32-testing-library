@@ -1,0 +1,7 @@
+# bt_spp_initiator, ESP-IDF's example unchanged, with Bluedroid's buffers in PSRAM: on top of the
+# example's own sdkconfig.defaults (firmware/build.sh names both). Bluedroid's osi_malloc and
+# osi_calloc then ask for SPIRAM first (components/bt/common/osi/include/osi/allocator.h), so the
+# HCI packets it hands esp_vhci_host_send_packet lie in the external RAM window, 0x3F80_0000 to
+# 0x3FC0_0000 on the classic ESP32. Board profiles with psram_mb = 4 run it.
+CONFIG_SPIRAM=y
+CONFIG_BT_ALLOCATION_FROM_SPIRAM_FIRST=y

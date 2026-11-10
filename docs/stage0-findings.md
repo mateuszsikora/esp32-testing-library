@@ -255,6 +255,17 @@ production images.
    emulator.
 7. **Minor:** `rtc_clk_init: Bogus XTAL frequency: 8 MHz` at every boot. The guest calibrates the
    slow clock to its nominal value (gap 4), and nothing seen so far depends on the XTAL detection.
+8. **Bluetooth HCI from PSRAM.** Found on 2026-11-10 on a production image built with
+   `CONFIG_BT_ALLOCATION_FROM_SPIRAM_FIRST`, and reproduced on public firmware with
+   `bt_spp_initiator_psram`, ESP-IDF's `bt_spp_initiator` with that option and PSRAM on, on
+   `lilygo-t-a7670g-r2` at the pin `c99fb28`. Bluedroid's first command, `HCI_Reset`, is 4 bytes
+   at `0x3f8010cf`, in PSRAM, and esp32sim's VHCI `Send` hook takes a packet from internal DRAM
+   only on the classic ESP32, so it refuses it (`[ble] rejected invalid VHCI packet pointer, length
+   or controller state`) and nothing crosses the VHCI; the S3 takes mapped PSRAM already. The fix
+   belongs in esp32sim: the classic ESP32's `valid_packet_range` taking PSRAM that is mapped and
+   readable, as the S3's does. Built locally, it lets the same image pair, open SPP and stream at
+   about 299 kbit/s ([validation firmware](features/validation-firmware-technical.md#bt_spp_initiator_psram)).
+   Proposed in [mikroverk/esp32sim#353](https://github.com/mikroverk/esp32sim/pull/353), opened on 2026-11-10.
 
 ## Reproducing
 
