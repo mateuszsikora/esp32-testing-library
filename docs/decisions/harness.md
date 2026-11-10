@@ -3225,7 +3225,7 @@ wake; the runner runs the RTC through the sleep in long steps instead
 
 ## A test's wall-time bound proves what was not waited for, and a paced one holds only while the host kept up
 
-Status: decided (after the CI run of #174)
+Status: decided (#176)
 
 In the CI run of #174 one shard on hp600g1 took 353 s and 440 s on Python 3.13, against 169 s and
 185 s for the same 487 tests on 3.11 and 3.14 in the same run: the host was busy with something
