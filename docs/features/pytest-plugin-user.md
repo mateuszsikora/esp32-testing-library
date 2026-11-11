@@ -230,7 +230,7 @@ from esp32tl import Condition, condition
 
 def trip_end(broker: Broker, device: str) -> Condition[Message | None]:
     start = len(broker.messages)
-    topic = f"carlog/{device}/trip/end"
+    topic = f"fleet/{device}/trip/end"
     return condition(
         lambda: next((m for m in broker.messages[start:] if m.topic == topic), None),
         f"a trip/end from {device}",
