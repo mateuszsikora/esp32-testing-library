@@ -117,7 +117,7 @@ next build is still incremental; the marker, removed first, is what says it fini
 The Makefile's `firmware` target runs `FIRMWARE_OUT= firmware/build.sh`; the pattern rule
 `firmware/%/build/esp32tl-built` runs `FIRMWARE_OUT= firmware/build.sh $*`, and `test` depends on
 `$(FIRMWARE_IMAGES:%=firmware/%/build/esp32tl-built)` with `FIRMWARE_IMAGES := hello_world
-nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request persistence ota_state timer_wake deep_sleep bt_spp_initiator`. `determinism` depends on
+nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request persistence ota_state timer_wake deep_sleep bt_spp_initiator bt_spp_initiator_psram`. `determinism` depends on
 the markers of `nmea_reader`, `pppos_client`, `mqtt_session`, `http_request` and `bt_spp_initiator`,
 and of the `position_tracker` example. The rule has no prerequisites, so make rebuilds
 an image only when its marker is missing: an edit to `firmware/nmea_reader/` needs `make firmware`, or
@@ -368,6 +368,39 @@ enabled in mode 2 (BR/EDR), its commands get Unknown HCI Command` on the runner'
 enable, which with `--bt` does not hold: the controller is the harness's
 ([runner](runner-technical.md#bluetooth-the-guests-hci-on-the-socket)).
 
+## `bt_spp_initiator_psram`
+
+`project_of` maps `bt_spp_initiator_psram` to the same
+`$IDF_PATH/examples/bluetooth/bluedroid/classic_bt/bt_spp_initiator`, built in place into its own
+build directory. As for `pppos_client`, `build.sh` passes the project's `sdkconfig.defaults`
+followed by `firmware/<image>/sdkconfig.defaults` through `SDKCONFIG_DEFAULTS`; for this image the
+second sets `CONFIG_SPIRAM` and `CONFIG_BT_ALLOCATION_FROM_SPIRAM_FIRST`, and Kconfig leaves the
+rest of PSRAM at v5.3.6's defaults, among them `CONFIG_SPIRAM_USE_MALLOC`. Its provenance record
+names the example's directory, as the plain image's does.
+
+In ESP-IDF v5.3.6 the option makes `osi_malloc_base` and `osi_calloc_base`
+`heap_caps_malloc_prefer` and `heap_caps_calloc_prefer` with `MALLOC_CAP_SPIRAM` first and
+`MALLOC_CAP_INTERNAL` second (`components/bt/common/osi/include/osi/allocator.h:38`). These ask
+the heap for those capabilities directly, so `CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL`, which applies
+to `malloc()`, does not keep small buffers internal. `make_command`
+(`components/bt/host/bluedroid/hci/hci_packet_factory.c:252`), which makes `HCI_Reset` and the
+other commands, takes its buffer from `HCI_GET_CMD_BUF`, `hci_get_cmd_buf`, an `osi_calloc`
+(`components/bt/host/bluedroid/stack/include/stack/hcimsgs.h:56`); `transmit_data` in
+`components/bt/host/bluedroid/hci/hci_hal_h4.c` hands a pointer into it to
+`hci_host_send_packet`, which calls `esp_vhci_host_send_packet`
+(`components/bt/host/bluedroid/api/esp_bluedroid_hci.c:106`). On the classic ESP32 the data bus
+sees PSRAM at `SOC_EXTRAM_DATA_LOW` to `SOC_EXTRAM_DATA_HIGH`, `0x3F80_0000` to `0x3FC0_0000`
+(`components/soc/esp32/include/soc/soc.h:193`).
+
+Measured on 2026-11-10 at the pin `c99fb28` on `lilygo-t-a7670g-r2`, with a temporary print in
+esp32sim's `Send` hook: the firmware's one packet is `HCI_Reset`, 4 bytes at `0x3f8010cf`, which
+the hook refuses; the plain image's `HCI_Reset` is at `0x3ffce0eb`, in DRAM, and all 423 of its
+packets pass. The firmware finds the PSRAM, runs its cache in low/high (2-core) mode and adds
+4096K of PSRAM to the heap, then times out waiting for the answer at 8.176 s. With esp32sim built
+locally from its `main` with the classic ESP32's `valid_packet_range` also taking PSRAM that is
+mapped and readable, the same test passes: the authentication at 1.418 s, the channel at 1.437 s,
+`speed(1.272723s ~ 4.292856s): 298.953674 kbit/s`, and 423 packets from the host, 432 to it.
+
 ## `sd_remount`
 
 `firmware/sd_remount/main/main.c` depends on `esp_driver_spi`, `fatfs` and `sdmmc`, with the
@@ -570,7 +603,7 @@ top of each build directory, `config/sdkconfig.json`, and the `.bin` and `.elf` 
 |---|---|---|---|
 | `IDF_VERSION` | script constant | `v5.3.6` | the ESP-IDF tag of the container |
 | `CONTAINER` | script constant | `espressif/idf:$IDF_VERSION@sha256:cee52f0c4fdaf088992a7a739f5993154e95cf1d3ab61c24f5b40e6d56a3a070` | the image the build runs in, pinned by digest (a multi-arch index) |
-| `IMAGES` | script constant | `hello_world nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request persistence ota_state timer_wake deep_sleep bt_spp_initiator` | the images, in build order; `project_of` maps each to its project |
+| `IMAGES` | script constant | `hello_world nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request persistence ota_state timer_wake deep_sleep bt_spp_initiator bt_spp_initiator_psram` | the images, in build order; `project_of` maps each to its project |
 | `FIRMWARE_OUT` | environment | `firmware/` | where `IMAGE/build/` goes; empty means the default; `/out` inside the container |
 | `IDF_LOCAL` | environment | unset | `1` builds with the ESP-IDF of the calling shell |
 | `ESP32TL_CONTAINER` | environment, set by the host side | unset | marks the container side and names the image it records |
@@ -587,7 +620,7 @@ regular expressions, so each has to stay on a line of its own. Changing either, 
 
 | Message | Cause |
 |---|---|
-| `unknown image 'NAME'; the images are: hello_world nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request persistence ota_state timer_wake deep_sleep bt_spp_initiator` | an argument not in `IMAGES`; nothing written |
+| `unknown image 'NAME'; the images are: hello_world nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request persistence ota_state timer_wake deep_sleep bt_spp_initiator bt_spp_initiator_psram` | an argument not in `IMAGES`; nothing written |
 | `ESP32TL_CONTAINER is set outside a container; unset it` | `ESP32TL_CONTAINER` set and no `/.dockerenv`; nothing written |
 | `IDF_LOCAL=1 needs ESP-IDF in the environment: source $IDF_PATH/export.sh first` | `IDF_LOCAL=1` without `idf.py` on `PATH` or without `IDF_PATH`; nothing written |
 | `needs Docker, or IDF_LOCAL=1 to build with a local ESP-IDF` | no `docker` on `PATH`; nothing written |
@@ -625,7 +658,9 @@ write their arguments to `$FAKE_LOG`, with a `PATH` holding only them and `cat`,
   `modem_at`, `modem_recovery` and `nvs_reader` from `firmware/`, `pppos_client` from what a fake `python3` prints,
   `mqtt_session`, `persistence`, `ota_state` and `timer_wake` from `firmware/`, `http_request`
   from its copy, `.http_request-v9.9.9` in the output directory, which holds the fake example's
-  `CMakeLists.txt`, and `deep_sleep` and `bt_spp_initiator` from the fake `IDF_PATH`; the `idf.py` arguments of each,
+  `CMakeLists.txt`, and `deep_sleep`, `bt_spp_initiator` and `bt_spp_initiator_psram` from the fake `IDF_PATH`; the `idf.py` arguments of each,
+  with `SDKCONFIG_DEFAULTS` naming the project's `sdkconfig.defaults` and then the image's own for
+  `pppos_client` and `bt_spp_initiator_psram`,
   the records with `"container": null`, the markers, the "not for goldens" warning and the
   `built in` lines;
 - reuse of a build directory with the same record, and removal of one with another record;
@@ -657,6 +692,9 @@ is flashed there. `test_ota_state_has_a_factory_app_two_slots_and_the_initial_ot
 `bt_spp_initiator`, with `bt_spp_initiator_demo.bin` and `bt_spp_initiator_demo.elf`, and
 `test_bt_spp_initiator_runs_its_controller_for_classic_alone` that its `sdkconfig` has
 `BTDM_CTRL_MODE_BR_EDR_ONLY`, Classic and SPP on, and the peer's name `ESP_SPP_ACCEPTOR`.
+`test_bt_spp_initiator_psram_is_the_example_with_bluedroid_allocating_from_psram` checks that
+`bt_spp_initiator_psram` has the same options of Classic and SPP, `SPIRAM`, `SPIRAM_USE_MALLOC`
+and `BT_ALLOCATION_FROM_SPIRAM_FIRST` on, and the same ELF name.
 
 `tests/test_timer_wake.py` runs the real `timer_wake` in the real runner: the three boots it
 prints, with their ROM reset reason and wake cause, `board.boots` with causes 1, 5 and 5, and

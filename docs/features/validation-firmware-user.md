@@ -44,6 +44,7 @@ whatever `FIRMWARE_OUT` the shell exports, because the tests read the images the
 | `timer_wake` | `firmware/timer_wake`: sleeps in deep sleep twice with a 2 s timer wake, counting its boots in RTC memory ([below](#timer_wake)) |
 | `deep_sleep` | ESP-IDF's `examples/system/deep_sleep`, unmodified, with its own `sdkconfig.defaults`, for target `esp32`: sleeps 20 s at a time with a timer wake, and reports after each wake how long it slept ([below](#deep_sleep)) |
 | `bt_spp_initiator` | ESP-IDF's `examples/bluetooth/bluedroid/classic_bt/bt_spp_initiator`, unmodified, with its own `sdkconfig.defaults`, for target `esp32`: finds a device named `ESP_SPP_ACCEPTOR` over Bluetooth Classic, pairs with it, opens SPP and writes to it without end ([below](#bt_spp_initiator)) |
+| `bt_spp_initiator_psram` | The same example, unmodified, with `firmware/bt_spp_initiator_psram/sdkconfig.defaults` after its own: PSRAM on, and Bluedroid's buffers taken from it first; on a profile with `psram_mb = 4` it does not get through yet ([below](#bt_spp_initiator_psram)) |
 
 ## `modem_at`
 
@@ -253,6 +254,24 @@ for a number to confirm, on UART0 (`main/console_uart.c`), which the run cannot 
 ([`console.write` is postponed](../decisions/harness.md#consolewrite-is-postponed-until-the-runner-reads-input)), so Bluedroid gives up 35 s later,
 `authentication failed, status:9`, and opens nothing.
 
+## `bt_spp_initiator_psram`
+
+The same example, unmodified, with two options on top of the ones it ships, in
+`firmware/bt_spp_initiator_psram/sdkconfig.defaults`: `CONFIG_SPIRAM=y`, PSRAM on, and
+`CONFIG_BT_ALLOCATION_FROM_SPIRAM_FIRST=y`, with which Bluedroid takes its buffers from PSRAM
+first, as a firmware short of internal RAM does. Build it with
+`firmware/build.sh bt_spp_initiator_psram`; `make firmware` and `make test` include it. Its files
+are called `bt_spp_initiator_demo`, as the plain image's are. It needs a board profile with
+`psram_mb = 4`, as `lilygo-t-a7670g-r2`; the firmware then logs `esp_psram: Found 4MB PSRAM
+device`.
+
+It does not get through yet. Every HCI packet its Bluedroid sends lies in PSRAM, and esp32sim at
+the pin refuses each one, so the first `HCI_Reset` is never answered and the firmware logs
+`E (8176) BT_HCI: command_timed_out hci layer timeout waiting for response to a command. opcode:
+0xc03` ([Bluetooth peer](bluetooth-peer-user.md#in-front-of-the-firmware-the-bt-fixture)). Its
+test in `tests/test_bt_spp_initiator.py` asks for what the plain image does and is a strict
+`xfail` until then.
+
 ## `sdspi`
 
 ESP-IDF's example as it is, with its default `sdkconfig`: SPI2 with SCLK on GPIO 14, MOSI 15,
@@ -398,10 +417,10 @@ every image those are:
 | `0x1000` | `bootloader/bootloader.bin` |
 | `0x8000` | `partition_table/partition-table.bin` |
 | `0xd000` | `ota_data_initial.bin`, for `ota_state` only |
-| `0x10000` | `IMAGE.bin` (`hello_world.bin`, `nmea_reader.bin`, `gpio_echo.bin`, `sd_remount.bin`, `modem_at.bin`, `modem_recovery.bin`, `nvs_reader.bin`, `pppos_client.bin`, `mqtt_session.bin`, `http_request.bin`, `persistence.bin`, `ota_state.bin`, `timer_wake.bin`, `deep_sleep.bin`), `sd_card.bin` for `sdspi`, `bt_spp_initiator_demo.bin` for `bt_spp_initiator` |
+| `0x10000` | `IMAGE.bin` (`hello_world.bin`, `nmea_reader.bin`, `gpio_echo.bin`, `sd_remount.bin`, `modem_at.bin`, `modem_recovery.bin`, `nvs_reader.bin`, `pppos_client.bin`, `mqtt_session.bin`, `http_request.bin`, `persistence.bin`, `ota_state.bin`, `timer_wake.bin`, `deep_sleep.bin`), `sd_card.bin` for `sdspi`, `bt_spp_initiator_demo.bin` for `bt_spp_initiator` and `bt_spp_initiator_psram` |
 
 and the ELF is `IMAGE.elf`, `sd_card.elf` for `sdspi` and `bt_spp_initiator_demo.elf` for
-`bt_spp_initiator`: the files take the project's name, and those two examples' projects are called
+`bt_spp_initiator` and `bt_spp_initiator_psram`: the files take the project's name, and those two examples' projects are called
 `sd_card` and `bt_spp_initiator_demo`. Two more files say how the build was made:
 `esp32tl-build.json` (the ESP-IDF version, the container, and the project it was built from) and
 `esp32tl-built`, present only when the build finished. `firmware/**/build/` is ignored by git.
@@ -472,7 +491,7 @@ run `make firmware`.
 `firmware/build.sh` exits 1 with one of these on stderr, before writing anything, or with the exit
 code of `idf.py` when the build itself fails:
 
-- `firmware/build.sh: unknown image 'NAME'; the images are: hello_world nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request persistence ota_state timer_wake deep_sleep bt_spp_initiator`
+- `firmware/build.sh: unknown image 'NAME'; the images are: hello_world nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request persistence ota_state timer_wake deep_sleep bt_spp_initiator bt_spp_initiator_psram`
 - `firmware/build.sh: needs Docker, or IDF_LOCAL=1 to build with a local ESP-IDF`
 - `firmware/build.sh: the Docker daemon is not reachable ('docker info' failed); is Docker running?`
 - `firmware/build.sh: IDF_LOCAL=1 needs ESP-IDF in the environment: source $IDF_PATH/export.sh first`

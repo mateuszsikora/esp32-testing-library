@@ -141,7 +141,7 @@ def test_build_refuses_an_unknown_image(tmp_path: Path) -> None:
         "firmware/build.sh: unknown image 'nope'; the images are:"
         " hello_world nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader"
         " pppos_client mqtt_session http_request persistence ota_state timer_wake deep_sleep"
-        " bt_spp_initiator\n"
+        " bt_spp_initiator bt_spp_initiator_psram\n"
     )
     assert not (tmp_path / "out").exists()
 
@@ -264,6 +264,10 @@ def test_local_build_runs_idf_py_and_records_how(tmp_path: Path, local_idf: dict
         "bt_spp_initiator": (
             f"{tmp_path}/idf/examples/bluetooth/bluedroid/classic_bt/bt_spp_initiator"
         ),
+        # the same project, with firmware/bt_spp_initiator_psram/sdkconfig.defaults after its own
+        "bt_spp_initiator_psram": (
+            f"{tmp_path}/idf/examples/bluetooth/bluedroid/classic_bt/bt_spp_initiator"
+        ),
     }
     builds = {image: (tmp_path / "out" / image / "build").resolve() for image in projects}
     assert logged(tmp_path / "idf.log") == [
@@ -279,9 +283,9 @@ def test_local_build_runs_idf_py_and_records_how(tmp_path: Path, local_idf: dict
             *(
                 [
                     f"-DSDKCONFIG_DEFAULTS={project}/sdkconfig.defaults;"
-                    f"{ROOT}/firmware/pppos_client/sdkconfig.defaults"
+                    f"{ROOT}/firmware/{image}/sdkconfig.defaults"
                 ]
-                if image == "pppos_client"
+                if image in ("pppos_client", "bt_spp_initiator_psram")
                 else []
             ),
             "build",

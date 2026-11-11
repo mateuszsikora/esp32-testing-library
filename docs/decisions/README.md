@@ -328,3 +328,4 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The station's frames keep the 4 bytes esp32sim leaves, and nothing goes upstream yet](runner.md#the-stations-frames-keep-the-4-bytes-esp32sim-leaves-and-nothing-goes-upstream-yet) | `runner.md` | postponed (#143) |
 | [The guest's HCI goes over the board socket, on the board's clock](runner.md#the-guests-hci-goes-over-the-board-socket-on-the-boards-clock) | `runner.md` | decided (#34) |
 | [The Bluetooth messages keep the link protocol at version 1](runner.md#the-bluetooth-messages-keep-the-link-protocol-at-version-1) | `runner.md` | decided (#34) |
+| [VHCI packets in PSRAM are esp32sim's to take, and the pin waits for it](runner.md#vhci-packets-in-psram-are-esp32sims-to-take-and-the-pin-waits-for-it) | `runner.md` | decided (#188) |

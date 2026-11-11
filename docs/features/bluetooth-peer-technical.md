@@ -663,6 +663,21 @@ None. `bumble` is a dependency of esp32tl, pinned exactly in `pyproject.toml`
 | `the guest's controller made {kind} of {n} bytes at {t}; esp32sim's VHCI carries 1 to 496` | `BluetoothError`, as above | `Bluetooth.poll`: a packet the VHCI cannot carry |
 | `the runner sent hci_tx, and the test gave the board no Bluetooth: the run has no --bt` | `BluetoothError`, as above, from `receive` | An `hci_tx` before `use()` |
 
+One failure is esp32sim's and raises nothing in the harness. Its `Send` hook
+(`esp-soc/src/ble/vhci.rs` at `c99fb28`) copies a packet out of the guest only when
+`VhciBus::valid_packet_range` holds for it, and the classic ESP32's `VhciBus` (`esp32/src/ble.rs`)
+keeps the default, internal DRAM, `0x3FFA_E000` to `0x4000_0000`. A Bluedroid built with
+`CONFIG_BT_ALLOCATION_FROM_SPIRAM_FIRST` sends from PSRAM, at `0x3F80_0000` to `0x3FC0_0000` (ESP-IDF
+v5.3.6 `components/bt/common/osi/include/osi/allocator.h` and
+`components/soc/esp32/include/soc/soc.h`), so the hook prints `[ble] rejected invalid VHCI packet
+pointer, length or controller state` and drops the packet. `Bluetooth.receive` is never called, the
+four counts stay 0, and Bluedroid's own timeout ends its wait for `HCI_Reset`. The other addresses
+the hooks touch are not affected: the callbacks table is read with no range check, and the
+receive buffer is the controller's BSS, which `components/bt/controller/linker_rw_bt_controller.lf`
+puts in `dram0_bss` whatever the PSRAM options; the S3 overrides `valid_packet_range` to take mapped
+PSRAM already. The fix, the classic ESP32's `valid_packet_range` taking mapped PSRAM, is
+[mikroverk/esp32sim#353](https://github.com/mikroverk/esp32sim/pull/353), open.
+
 `{kind}` is the class's name, `BluetoothDevice` or `SppPeer`. On the device's side, Bumble's host
 raises `HCI_Error` from `Connection.authenticate()` with the
 status of `Authentication_Complete`, and from `Connection.encrypt()` with the command status; its
@@ -797,6 +812,14 @@ in `error_code` on a failed `Connection_Complete`, and `HCI_Error` with
   `tests/test_spp_peer.py`: a page started at 1 s, 3 s, 6 s or 10 s, and a remote name request
   started at 1 s or 6 s, ending at exactly the page timeout, with no peer on the air, measured by
   an advance past the end, which settles it only once.
+
+`tests/test_bt_spp_initiator.py::test_with_its_hci_buffers_in_psram_the_firmware_pairs_with_and_streams_to_the_peer`
+runs `bt_spp_initiator_psram` on `lilygo-t-a7670g-r2`, whose profile has `psram_mb = 4`, and asks
+of it what the test of the plain image asks: the authentication, the channel, a `speed(...)` line,
+the firmware's blocks at the peer, packets both ways and no unknown command. It is a strict `xfail`
+at the pin, where nothing crosses the VHCI ([failure modes](#failure-modes)), so that a pin of
+esp32sim that takes these packets turns it into an `XPASS(strict)`, a failure, and the marker goes
+with that pin's change.
 
 With firmware: `tests/test_bt_spp_initiator.py` runs ESP-IDF's `bt_spp_initiator`, unmodified,
 through the `bt` fixture's controller, against an `SppPeer` with `secure=True`, the default, whose

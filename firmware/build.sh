@@ -28,7 +28,7 @@ set -eu
 
 IDF_VERSION=v5.3.6
 CONTAINER=espressif/idf:$IDF_VERSION@sha256:cee52f0c4fdaf088992a7a739f5993154e95cf1d3ab61c24f5b40e6d56a3a070
-IMAGES="hello_world nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request persistence ota_state timer_wake deep_sleep bt_spp_initiator"
+IMAGES="hello_world nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request persistence ota_state timer_wake deep_sleep bt_spp_initiator bt_spp_initiator_psram"
 family=firmware
 if [ "${1:-}" = --examples ]; then
 	shift
@@ -59,7 +59,9 @@ project_of() {
 	hello_world) echo "$IDF_PATH/examples/get-started/hello_world" ;;
 	sdspi) echo "$IDF_PATH/examples/storage/sd_card/sdspi" ;;
 	deep_sleep) echo "$IDF_PATH/examples/system/deep_sleep" ;;
-	bt_spp_initiator) echo "$IDF_PATH/examples/bluetooth/bluedroid/classic_bt/bt_spp_initiator" ;;
+	bt_spp_initiator | bt_spp_initiator_psram)
+		echo "$IDF_PATH/examples/bluetooth/bluedroid/classic_bt/bt_spp_initiator"
+		;;
 	http_request)
 		# Copied, unchanged, into the output: its component manager writes
 		# dependencies.lock into the project, and ESP-IDF's own examples are
@@ -173,9 +175,11 @@ for image in "$@"; do
 	printf '%s\n' "$provenance" >"$build/esp32tl-build.json"
 	# sdkconfig in the build directory: the project directory may be ESP-IDF's
 	# own examples, or read-only.
-	if [ "$family" = firmware ] && [ "$image" = pppos_client ]; then
+	# An image that adds options of its own to its project's keeps them in
+	# firmware/<image>/sdkconfig.defaults, read after the project's.
+	if [ "$family" = firmware ] && { [ "$image" = pppos_client ] || [ "$image" = bt_spp_initiator_psram ]; }; then
 		idf.py -C "$project" -B "$build" -DSDKCONFIG="$build/sdkconfig" -DIDF_TARGET=esp32 \
-			"-DSDKCONFIG_DEFAULTS=$project/sdkconfig.defaults;$PWD/firmware/pppos_client/sdkconfig.defaults" build
+			"-DSDKCONFIG_DEFAULTS=$project/sdkconfig.defaults;$PWD/firmware/$image/sdkconfig.defaults" build
 	else
 		idf.py -C "$project" -B "$build" -DSDKCONFIG="$build/sdkconfig" -DIDF_TARGET=esp32 build
 	fi

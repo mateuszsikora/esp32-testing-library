@@ -1,8 +1,10 @@
 """ESP-IDF's `bt_spp_initiator`, unmodified, against an `SppPeer` through the `bt` fixture: the
 firmware's Bluedroid finds the peer by its name, pairs with its PIN, opens SPP and streams to it,
 with the peer's `secure=True`, the default. A peer of another PIN fails the authentication, and
-with no peer the firmware's one inquiry runs its length and finds nothing. Needs `make firmware`
-(bt_spp_initiator). On the serial backend the `bt` fixture skips these."""
+with no peer the firmware's one inquiry runs its length and finds nothing. The same example built
+with its HCI buffers in PSRAM (bt_spp_initiator_psram) does not get through yet. Needs `make
+firmware` (bt_spp_initiator, bt_spp_initiator_psram). On the serial backend the `bt` fixture skips
+these."""
 
 import json
 import re
@@ -14,6 +16,7 @@ import pytest
 from esp32tl import recording
 from esp32tl.backends.esp32sim import Esp32Sim
 from esp32tl.bluetooth.peer import BluetoothDevice, SppPeer
+from esp32tl.interfaces import NeverHappened
 from esp32tl.interfaces.bluetooth import Bluetooth
 from esp32tl.interfaces.console import Console
 from esp32tl.report import board_time
@@ -87,6 +90,36 @@ def test_the_firmware_finds_pairs_with_and_streams_to_the_peer(
     # 3 s or more at about 299 kbit/s is about 113 blocks
     assert len(stream) >= 100 * len(BLOCK)
     assert stream == (BLOCK * (len(stream) // len(BLOCK) + 1))[: len(stream)]
+    assert bt.unknown_commands() == []
+
+
+@pytest.mark.app_path("../firmware/bt_spp_initiator_psram")
+@pytest.mark.board_profile("lilygo-t-a7670g-r2")
+# raises=: only the wait that never ends counts as the known failure; a missing image, a broken
+# fixture or a wrong assertion fails the test as usual.
+@pytest.mark.xfail(
+    strict=True,
+    raises=NeverHappened,
+    reason="esp32sim at the pin takes VHCI packets from internal DRAM only, and refuses the ones"
+    " Bluedroid sends from PSRAM (docs/features/bluetooth-peer-technical.md)",
+)
+def test_with_its_hci_buffers_in_psram_the_firmware_pairs_with_and_streams_to_the_peer(
+    board: Esp32Sim, bt: Bluetooth, console: Console
+) -> None:
+    # CONFIG_BT_ALLOCATION_FROM_SPIRAM_FIRST: every HCI packet Bluedroid sends is in PSRAM, which
+    # the profile's psram_mb = 4 gives the chip.
+    source = Heard()
+    peer = SppPeer(bt.air, name=NAME, pin=PIN, source=source)
+    opening = console.line(r"ESP_SPP_OPEN_EVT handle:\d+ rem_bda:\[00:00:00:00:5b:01\]")
+    board.power_on()
+    console.expect_exact(f"authentication success: {NAME}", timeout=seconds(5))
+    board.wait_until(opening, within=seconds(1))
+    board.wait_until(console.line(r"speed\("), within=seconds(5))
+    assert peer.channel_open
+    stream = b"".join(data for _, data in source.heard)
+    assert len(stream) >= len(BLOCK)
+    assert stream == (BLOCK * (len(stream) // len(BLOCK) + 1))[: len(stream)]
+    assert bt.packets_from_host > 0 and bt.packets_to_host > 0
     assert bt.unknown_commands() == []
 
 

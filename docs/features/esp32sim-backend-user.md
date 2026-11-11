@@ -130,7 +130,9 @@ test's clock, and the controller's packets back, 10 µs after the instant each w
 controller off the air, as a device switched off, and `board.power_on()` puts it back; a reset of
 the chip, `board.reset()` or the firmware's own, restarts it. Neither tells the firmware's host
 anything: it starts again with the chip. A build with no ELF fails the `bt` fixture
-([below](#when-the-backend-cannot-start)).
+([below](#when-the-backend-cannot-start)). A firmware whose Bluedroid takes its buffers from PSRAM
+(`CONFIG_BT_ALLOCATION_FROM_SPIRAM_FIRST`) gets no packet onto the link yet: esp32sim at the pin
+refuses them ([Bluetooth peer](bluetooth-peer-user.md#in-front-of-the-firmware-the-bt-fixture)).
 
 A test that gives a route a [real source](real-source-user.md), as `gnss.real(port)` does, puts the
 whole run on the wall clock: the runner starts with `--realtime`, every recording says `clock: wall`,
