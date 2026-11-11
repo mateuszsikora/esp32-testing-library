@@ -27,6 +27,7 @@ from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa, x25519
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM, ChaCha20Poly1305
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
+from esp32tl.interfaces.condition import Condition
 from esp32tl.net.ip import Connection, StreamService
 
 # Wide enough that a device whose clock is wrong, or not set, still finds the dates valid.
@@ -379,26 +380,37 @@ class Tls:
         self.handshakes_completed = 0
 
     @property
-    def handshake_started(self) -> "_HandshakeCondition":
+    def handshake_started(self) -> Condition[bool]:
         """A cumulative condition, including past connections with nonempty TLS input."""
-        return _HandshakeCondition(self, completed=False)
+        return self._handshake(completed=False)
 
     @property
-    def handshake_completed(self) -> "_HandshakeCondition":
+    def handshake_completed(self) -> Condition[bool]:
         """A cumulative condition, including past server-side handshake completions."""
-        return _HandshakeCondition(self, completed=True)
+        return self._handshake(completed=True)
 
-    def next_handshake_started(self) -> "_HandshakeCondition":
+    def next_handshake_started(self) -> Condition[bool]:
         """A non-consuming condition for a connection's first nonempty input after this call."""
-        return _HandshakeCondition(self, completed=False, after=self.handshakes_started)
+        return self._handshake(completed=False, after=self.handshakes_started)
 
-    def next_handshake_completed(self) -> "_HandshakeCondition":
+    def next_handshake_completed(self) -> Condition[bool]:
         """A non-consuming condition for a server-side completion after this call.
 
         A handshake already in progress can satisfy it. Arm before triggering a reconnect
         to exclude previous successes, including those at the same board timestamp.
         """
-        return _HandshakeCondition(self, completed=True, after=self.handshakes_completed)
+        return self._handshake(completed=True, after=self.handshakes_completed)
+
+    def _handshake(self, *, completed: bool, after: int | None = None) -> Condition[bool]:
+        """True once the started or completed count is past `after`, or past 0 without one."""
+
+        def find() -> bool:
+            count = self.handshakes_completed if completed else self.handshakes_started
+            return count > (after if after is not None else 0)
+
+        event = "complete" if completed else "start"
+        scope = "a" if after is None else "the next"
+        return Condition(find, f"{scope} TLS handshake to {event}", "TLS")
 
     def accept(
         self, peer: tuple[str, int], write: Callable[[bytes], None], close: Callable[[], None]
@@ -407,25 +419,6 @@ class Tls:
         stream = _Stream(f"authority {self.ca.number} connection {self._accepted}")
         self._accepted += 1
         return _Session(self, peer, write, close, stream)
-
-
-@dataclass(frozen=True, repr=False)
-class _HandshakeCondition:
-    tls: Tls
-    completed: bool
-    after: int | None = None
-
-    def __call__(self) -> bool:
-        count = self.tls.handshakes_completed if self.completed else self.tls.handshakes_started
-        return count > (self.after if self.after is not None else 0)
-
-    def __repr__(self) -> str:
-        event = "complete" if self.completed else "start"
-        scope = "a" if self.after is None else "the next"
-        return f"{scope} TLS handshake to {event}"
-
-    def __bool__(self) -> bool:
-        raise TypeError("call the TLS condition with (), or pass it to board.wait_until")
 
 
 class _Session:

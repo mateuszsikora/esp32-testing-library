@@ -12,7 +12,9 @@ There is no `python -m esp32tl`, and no `esp32tl record` yet. Nor does the comma
 [real source](real-source-user.md): its runs are on the emulated clock.
 For Python tests, the package also exports `Board`: `from esp32tl import Board` annotates the
 `board` fixture and exposes its interface properties; see the
-[pytest API](pytest-plugin-user.md#one-board-and-its-interfaces).
+[pytest API](pytest-plugin-user.md#one-board-and-its-interfaces). It exports `condition` and
+`Condition` too: `condition(find, description)` makes a condition for `board.wait_until` named
+in the test's words ([described conditions](pytest-plugin-user.md#described-conditions)).
 
 ## Running an app
 

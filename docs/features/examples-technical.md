@@ -331,12 +331,14 @@ and returns a condition observing only subsequent firmware publications on the e
 Neither construction nor polling consumes messages or advances time. Position waits skip valid
 no-fix reports, but reject malformed ones;
 later invalid messages cannot mask an earlier match. The history view validates every matching
-publication and filters out unrelated topics and the test publisher. The callable
-`_ReportCondition` keeps its captured cursor immutable and implements `__repr__` as
-`a tracker report` or `a tracker report with a position`. Both board backends already use this
-representation for callable objects in wait diagnostics. Its `__bool__` raises
-`TypeError("call the report condition with (), or pass it to board.wait_until")`, both before
-and after a match, to reject assertions on an unevaluated condition. `test_tracker_support.py` checks report
+publication and filters out unrelated topics and the test publisher. The
+condition is `esp32tl.condition(find, description)`, a
+[described condition](pytest-plugin-user.md#described-conditions): `find` closes over the
+captured cursor, and the description is `a tracker report` or `a tracker report with a position`,
+which both board backends name the wait by. Its `bool()` raises
+`TypeError("call the condition 'a tracker report' with (), or pass it to board.wait_until")`, or
+the same with the other description, both before and after a match, to reject assertions on an
+unevaluated condition. `test_tracker_support.py` checks report
 boundaries independently of firmware and exercises both timeout descriptions and their run-report
 entries through the simulated board.
 

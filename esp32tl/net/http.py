@@ -6,7 +6,7 @@ time, for the test to look at.
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from esp32tl.net.condition import Condition
+from esp32tl.interfaces.condition import Condition
 from esp32tl.units import Duration
 
 # The statuses whose response ends with its head (RFC 9112 6.3): no body, and no Content-Length.

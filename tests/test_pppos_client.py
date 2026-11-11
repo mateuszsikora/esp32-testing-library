@@ -9,9 +9,9 @@ import pytest
 from esp32tl import recording
 from esp32tl.backends.esp32sim import Esp32Sim
 from esp32tl.interfaces import SourceError
+from esp32tl.interfaces.condition import Condition
 from esp32tl.interfaces.console import Console
 from esp32tl.interfaces.modem import Modem
-from esp32tl.net.condition import Condition
 from esp32tl.net.mqtt import Broker, Message
 from esp32tl.sources.replay import ReplayError
 from esp32tl.units import seconds

@@ -196,12 +196,13 @@ threads; a connect in progress ends within `CONNECT_SECONDS`. The backend calls 
   `ethernet: dropped an IPv4 packet of <n> bytes: over the MTU`. A DHCP reply goes from
   `10.64.0.1:67` to `10.64.0.2:68`, or to `255.255.255.255` and `ff:ff:ff:ff:ff:ff` when `Dhcp`
   says broadcast, with its UDP and IPv4 checksums computed here.
-- `condition.py`: `Condition(find, description, service)`, the frozen object that the MQTT,
-  HTTP and DHCP condition factories return. Calling it calls `find`; `repr` is `description`,
-  which `board.wait_until` takes because the object has no `__qualname__`; `__bool__` raises
+- The conditions that the MQTT, HTTP, DHCP and TLS condition factories return are
+  `Condition(find, description, service)` of `esp32tl/interfaces/condition.py`, the public
+  [described condition](pytest-plugin-user.md#described-conditions), not a class of `esp32tl/net/`.
+  Calling it calls `find`; `repr` is `description`, which `board.wait_until` takes because the
+  object has no `__qualname__`; `__bool__` raises
   `TypeError("call the <service> condition with (), or pass it to board.wait_until")`, `service`
-  being `MQTT`, `HTTP` or `DHCP`. TLS keeps its own `_HandshakeCondition`, which behaves the same
-  way and computes its `repr` from its fields.
+  being `MQTT`, `HTTP`, `DHCP` or `TLS`.
 - `dhcp.py`: a server for one device (RFC 2131, options of RFC 2132).
   `Dhcp(now, log, *, local="10.64.0.1", device="10.64.0.2", dns="10.64.0.1", mask="255.255.255.0")`,
   `LEASE_SECONDS = 86400`. `on_message` reads a BOOTREQUEST of at least 240 bytes with Ethernet
@@ -313,7 +314,7 @@ threads; a connect in progress ends within `CONNECT_SECONDS`. The backend calls 
   not timestamps, and polling does not change the captured offset. `find_message` scans
   from index zero with the same topic/payload filters; `find_connection` reads the first CONNECT.
   These are immediate queries returning records or `None`. Every MQTT condition, the live
-  subscription query included, is a `Condition` of `condition.py` with service `MQTT`.
+  subscription query included, is a `Condition` with service `MQTT`.
   Subscriptions continue to read active sessions, without latching matches.
   Each accepted stream receives a broker-local increasing `connection_id`, independent of the
   client ID and listener. Every incoming PUBLISH records its packet ID and DUP bit; `_handle`
@@ -381,7 +382,8 @@ threads; a connect in progress ends within `CONNECT_SECONDS`. The backend calls 
   leave both counters intact. Callable `handshake_started` / `handshake_completed` properties
   observe whether the corresponding live count is positive; they do not capture a future cursor.
   `next_handshake_started()` / `next_handshake_completed()` instead capture the corresponding
-  count in `_HandshakeCondition.after` and compare the live count strictly against it. Event
+  count when they are made, in the closure that `Tls._handshake` gives the `Condition`, and
+  compare the live count strictly against it. Event
   processing order distinguishes equal-time events; no timestamp filtering or match consumption
   occurs. Completion after construction includes handshakes already in progress. These counters
   describe events across the listener, not the lifecycle of a selected connection.

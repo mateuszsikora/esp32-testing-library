@@ -2,14 +2,16 @@
 
 import pytest
 
+import esp32tl
 from esp32tl import Board
-from esp32tl.interfaces import SourceError
+from esp32tl.interfaces import NeverHappened, SourceError
 from esp32tl.interfaces.console import Console
 from esp32tl.interfaces.gnss import Gnss
 from esp32tl.interfaces.lines import Lines
 from esp32tl.interfaces.modem import Modem
 from esp32tl.interfaces.sd_card import SdCard
 from esp32tl.net.mqtt import Broker
+from esp32tl.units import seconds
 
 pytestmark = pytest.mark.app_path("../firmware/hello_world")
 
@@ -60,3 +62,16 @@ def test_a_build_after_power_on_is_a_replacement_and_close_removes_images(board:
     assert not card.path.exists() and not replacement.path.exists()
     with pytest.raises(SourceError, match="the board is closed"):
         builder.build()
+
+
+def test_a_described_condition_names_its_timeout_and_refuses_bool(board: Board) -> None:
+    condition = esp32tl.condition(lambda: None, "a trip/end from the device")
+    with pytest.raises(TypeError, match="call the condition 'a trip/end from the device' with"):
+        assert condition
+    board.power_on()
+    with pytest.raises(NeverHappened) as raised:
+        board.wait_until(condition, within=seconds(0.1))
+    assert str(raised.value).startswith("a trip/end from the device did not happen within 0.1 s:")
+    report = board.report(run=True)
+    assert "waits up to 0.1 s for a trip/end from the device" in report
+    assert "a trip/end from the device: did not happen within 0.1 s" in report

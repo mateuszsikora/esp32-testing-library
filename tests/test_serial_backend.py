@@ -102,6 +102,7 @@ def test_console_reset_clock_tap_and_autoflash(
     pytester.makepyfile(f"""
         import time
         import pytest
+        import esp32tl
         from esp32tl.interfaces import BoardOff, NeverHappened, SourceError
         from esp32tl.units import seconds
 
@@ -143,6 +144,15 @@ def test_console_reset_clock_tap_and_autoflash(
             condition = console.line("next")
             board.dut.serial.proc.write(b"next line\\n")
             assert board.wait_until(condition, within=seconds(1)).text == "next line"
+            described = esp32tl.condition(lambda: None, "a trip/end from the device")
+            with pytest.raises(TypeError, match="call the condition 'a trip/end"):
+                bool(described)
+            with pytest.raises(
+                NeverHappened, match="^a trip/end from the device did not happen within 0.01 s:"
+            ):
+                board.wait_until(described, within=seconds(.01))
+            with pytest.raises(TypeError, match="call the condition 'a trip/end"):
+                bool(described)
             with pytest.raises(NeverHappened):
                 console.expect("missing", timeout=.01)
             with pytest.raises(BoardOff):
