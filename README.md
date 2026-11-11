@@ -14,14 +14,14 @@ defined in [its test file](https://github.com/mateuszsikora/esp32-testing-librar
 
 ```python
 def test_moving_into_the_radius_turns_it_on(board, gnss, buzzer):
-    configure_alarm(board)                          # the destination, in NVS
-    gnss.fix(at=TARGET.moved(EAST, m(150)))         # a GNSS receiver 150 m away
+    configure_alarm(board)  # the destination, in NVS
+    gnss.fix(at=TARGET.moved(EAST, m(150)))  # a GNSS receiver 150 m away
     board.power_on()
     board.wait(seconds(3))
     buzzer.assert_off()
 
-    gnss.move(heading=WEST, speed=km_h(36))         # drive towards the target
-    board.wait(seconds(5))                          # the 50 m to the radius
+    gnss.move(heading=WEST, speed=km_h(36))  # drive towards the target
+    board.wait(seconds(5))  # the 50 m to the radius
     board.wait_until(buzzer.is_on, within=seconds(2))
 ```
 
@@ -63,7 +63,7 @@ Open [`examples/gps_alarm_clock/tests/test_alarm.py`](https://github.com/mateusz
 and bring the receiver of the first test inside the alarm's 100 m radius:
 
 ```python
-    gnss.fix(at=TARGET.moved(EAST, m(50)))   # was m(1000)
+gnss.fix(at=TARGET.moved(EAST, m(50)))  # was m(1000)
 ```
 
 Run `.venv/bin/pytest examples/gps_alarm_clock/tests` again. The test fails with what went wrong,
