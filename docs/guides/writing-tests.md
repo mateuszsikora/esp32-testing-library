@@ -81,7 +81,14 @@ unless given; the GNSS receiver model's sentences, NTP and the modem's `AT+CCLK?
 
 `board.reset()`, `board.power_off()` and `board.power_on()` again restart the board within the
 same run, and `board.boots` says why each boot happened
-([resets and power cycles](../features/pytest-plugin-user.md#resets-and-power-cycles)).
+([resets and power cycles](../features/pytest-plugin-user.md#resets-and-power-cycles)). The
+[periodic wake](../../examples/periodic_wake/tests/test_periodic_wake.py) resets and power-cycles
+its board in `test_the_count_survives_deep_sleep_but_not_a_reset_or_a_power_cycle`; the
+[SD data logger](../../examples/sd_data_logger/tests/test_logger.py) cuts the power between two
+rows in `test_a_power_cut_keeps_the_rows_before_it_and_logging_resumes_after_it`, then reads the
+card: the rows from before the cut are there, none from while the power was off, and the next fix
+after it is appended. The GNSS receiver is on the board's supply, so it sends nothing while the
+board is off.
 
 ## The world before power-on
 
@@ -166,8 +173,8 @@ Every quantity a test states carries its unit, from `esp32tl.units`: `seconds(2.
 `km_h(36)`, `m(100)`, `Position(52.229677, 21.012233)`, `NORTH`. A plain number where a unit
 belongs raises `TypeError`, as in `board.wait takes a Duration, as seconds(2.5), not 2.5`. Physics
 works across kinds: `(m(150) - m(100)) / km_h(36)` is the `Duration` the receiver takes to cover
-50 m, which is how the GPS alarm clock times its crossings. Compare with a tolerance through
-`about`:
+50 m, which is how the [GPS alarm clock](../../examples/gps_alarm_clock/tests/test_alarm.py)
+times its crossings. Compare with a tolerance through `about`:
 
 ```python
 assert report.position.distance_to(expected) == about(m(0), within=m(15))
@@ -182,7 +189,9 @@ assert report.received_at == about(deadline, within=seconds(0.25))
   clock: `alarm.buzzer is on (GPIO 18, level 1) did not happen within 2 s`, then the window. A
   function or a lambda is named by its qualified name, `the condition test_x.<locals>.<lambda>`;
   wrap it in `esp32tl.condition(find, "a tracker report with a position")` and the message names
-  it in your words, as the position tracker's helper does. Such a condition also raises
+  it in your words, as `Reports` in the
+  [position tracker's support module](../../examples/position_tracker/tests/tracker_support.py)
+  does. Such a condition also raises
   `TypeError` on `assert reports.when_received()`, where a plain function would pass unasked
   ([described conditions](../features/pytest-plugin-user.md#described-conditions)).
 - **The run on the board's clock.** A failed test's `esp32sim link` report section ends with every
@@ -287,43 +296,49 @@ Where a test can put a model of its own today:
   callbacks run inside the test's waits, while the board's clock advances, so they must not block
   or wait on the wall clock
   ([DNS, time and services](../features/network-user.md#dns-time-and-services)).
-- **The far end of a Bluetooth SPP channel.** `SppPeer(air, name=..., pin=..., source=...)` takes
-  a source with `receive(t, data)`, `poll(now)`, `quiet_until()` and `latency()`, times in
-  nanoseconds ([the model that answers](../features/bluetooth-peer-user.md#the-model-that-answers)).
-  esp32sim has no Bluetooth Classic controller, so no firmware talks to a peer yet; esp32tl's own
-  tests drive one from Python (`tests/test_spp_peer.py`).
+- **The far end of a Bluetooth SPP channel.** `SppPeer(board.bluetooth.air, name=..., pin=...,
+  source=...)` takes a model with `receive(at, data)`, `poll(now)`, `quiet_until()` and
+  `latency()` ([the model that answers](../features/bluetooth-peer-user.md#the-model-that-answers)).
+  Subclass `esp32tl.sources.model.Model` and every time it takes and returns is a `Duration` on
+  the board's clock, as in the rest of the test; a source in nanoseconds, `int`s, is taken too
+  ([a model of the test's, in Durations](../features/models-user.md#a-model-of-the-tests-in-durations)).
+  The [OBD-II reader](../../examples/obd_reader/tests/test_obd_reader.py) puts its adapter on the
+  air that way: `Elm327` in its [`tests/elm327.py`](../../examples/obd_reader/tests/elm327.py)
+  answers each command line the firmware writes, for a `Vehicle` the test describes, and keeps
+  every command it heard with its time, which the tests read. `test_elm327.py` beside it checks
+  the model on its own, without a board.
 - **The far end of a UART.** `board.uart(role).model(source)`, before power-on, puts a model of
   your own on any `uart.<role>` route of the profile, for a sensor, a display controller or a
-  second modem esp32tl has no model for. The source has the same four methods as an SPP peer's;
-  what it returns from `receive` and `poll` goes into the chip at its own time:
+  second modem esp32tl has no model for. The model is a `Model` with the same four methods as an
+  SPP peer's; what it returns from `receive` and `poll` goes into the chip at its own time:
 
   ```python
-  ANSWER = ms(1).ns
+  ANSWER = ms(1)
 
 
-  class AtResponder:
+  class AtResponder(Model):
       """Answers every command line with OK, ANSWER after its CR LF."""
 
       def __init__(self) -> None:
           self.lines: list[bytes] = []
           self._heard = b""
 
-      def receive(self, t: int, data: bytes) -> Iterable[Output]:
+      def receive(self, at: Duration, data: bytes) -> Iterable[Timed]:
           self._heard += data
           answers = []
           while b"\r\n" in self._heard:
               line, _, self._heard = self._heard.partition(b"\r\n")
               self.lines.append(line)
-              answers.append((t + ANSWER, b"\r\nOK\r\n"))
+              answers.append((at + ANSWER, b"\r\nOK\r\n"))
           return answers
 
-      def poll(self, now: int) -> Iterable[Output]:
+      def poll(self, now: Duration) -> Iterable[Timed]:
           return []
 
-      def quiet_until(self) -> int | None:
+      def quiet_until(self) -> Duration | None:
           return None
 
-      def latency(self) -> int | None:
+      def latency(self) -> Duration | None:
           return ANSWER
 
 
@@ -346,9 +361,12 @@ Where a test can put a model of its own today:
   ```
 
   This is esp32tl's own `tests/test_uart_model.py`, shortened, where `Iterable` comes from
-  `collections.abc`, `Output` from `esp32tl.link.boardlink`, and `ms` and `seconds` from
-  `esp32tl.units`: its firmware, `modem_at`, writes AT commands to `uart.aux` of
-  `tests/boards/aux-uart.toml` and reads the answers. `latency()` is the shortest time the model
+  `collections.abc`, `Model` and `Timed` from `esp32tl.sources.model`, and `Duration`, `ms` and
+  `seconds` from `esp32tl.units`: its firmware, `modem_at`, writes AT commands to `uart.aux` of
+  `tests/boards/aux-uart.toml` and reads the answers. No example has a part on a UART that esp32tl
+  has no model for; the OBD-II reader's `Elm327`, above, is a `Model` with the same four methods,
+  and a longer model of a part that answers command lines. A `Model` that lacks one of them, or
+  misspells it, raises `TypeError` when it is made. `latency()` is the shortest time the model
   takes to answer, and the board runs that far ahead of it; an answer stamped sooner fails the run.
   `poll(now)` and `quiet_until()` are for what the part sends unprompted, as a sensor reporting
   every second: `quiet_until()` says when the next report is due, and `poll` returns it then. Add
@@ -399,7 +417,9 @@ idf.py -C my_project build                # or your own build, in your own conta
 - Your build needs `flasher_args.json` and every file it lists; a CI job that builds the firmware in
   one job and tests it in another hands over the files at the top of `build/`,
   `config/sdkconfig.json` and the `.bin` and `.elf` files of `bootloader/` and `partition_table/`,
-  as esp32tl's own CI does ([`firmware`](../cicd.md#firmware)).
+  as esp32tl's own CI does ([`firmware`](../cicd.md#firmware)). That is how the tests in
+  [`examples/`](../../examples/README.md) run there: built in one job, tested in others from the
+  files it handed over ([examples in CI](../cicd.md#examples)).
 
 What to cache, and on what key:
 
@@ -417,14 +437,9 @@ same way twice, not that two machines agree ([`determinism`](../cicd.md#determin
 CI is a run to reproduce locally from the same build and the same esp32tl commit, not one known
 to repeat there.
 
-## Not covered yet
-
-- **Bluetooth Classic.** No firmware talks to a Bluetooth peer, as esp32sim has no Classic
-  controller ([Bluetooth peer](../features/bluetooth-peer-user.md)).
-
 ## See also
 
-- [Runnable examples](../features/examples-user.md): the three projects this guide links to.
+- [Runnable examples](../features/examples-user.md): the five projects this guide links to.
 - [pytest plugin](../features/pytest-plugin-user.md): every fixture, marker and message.
 - [Serial backend](../features/serial-backend-user.md): the same tests on a real board.
 - [Decisions](../decisions/README.md): why esp32tl works the way it does.
