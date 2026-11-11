@@ -137,6 +137,11 @@ class Interface:
         """Whether UART receive overflow must fail this route's run."""
         return False
 
+    def instant(self, t: int) -> str:
+        """`t`, nanoseconds, as the link's errors about this interface's times write it: as
+        nanoseconds, `1500 ns`, unless the interface states its times otherwise."""
+        return in_ns(t)
+
     @property
     def ethernet(self) -> bool:
         """Whether the interface is the network behind the Wi-Fi access point: it has no wire,
@@ -640,7 +645,10 @@ class BoardLink:
     ) -> list[HarnessMessage]:
         """The inputs of the turn at `now`, then the `wait`, bounded by `hold` and
         `hold_latency`, if any."""
-        bounds: list[tuple[str, int | None]] = [(HOLD, hold)] if hold is not None else []
+        # Each bound, with how the errors about it write a time: the hold's in nanoseconds.
+        bounds: list[tuple[str, int | None, Callable[[int], str]]] = (
+            [(HOLD, hold, in_ns)] if hold is not None else []
+        )
         board, self._board_inputs = self._board_inputs, []
         for switch in board:
             if switch.t < now:
@@ -659,8 +667,9 @@ class BoardLink:
                 continue
             if t < now:
                 raise LinkError(
-                    f"{interface.name} sent bytes stamped {t} ns in the turn at {now} ns: it"
-                    " answered sooner than its latency, or sent past its quiet_until"
+                    f"{interface.name} sent bytes stamped {interface.instant(t)} in the turn at"
+                    f" {interface.instant(now)}: it answered sooner than its latency, or sent past"
+                    " its quiet_until"
                 )
             if interface.ethernet:
                 inputs.append((interface, EthRx(t, data)))
@@ -677,19 +686,19 @@ class BoardLink:
                 inputs += [(interface, message) for message in interface.inputs(now)]
         for interface in self.interfaces:
             with calling(interface.name, "quiet_until"):
-                bounds.append((interface.name, interface.quiet_until()))
+                bounds.append((interface.name, interface.quiet_until(), interface.instant))
         for interface, message in inputs:
             self._check_input(interface, message, now)
         quiet_until = None
-        for name, bound in bounds:
+        for name, bound, instant in bounds:
             if bound is None:
                 continue
             if isinstance(bound, bool) or not isinstance(bound, int):
                 raise LinkError(f"{name}.quiet_until returned {bound!r}, not nanoseconds")
             if bound <= now:
                 raise LinkError(
-                    f"{name} is quiet until {bound} ns, not after the turn at {now} ns: what it"
-                    " sends by then belongs in this turn"
+                    f"{name} is quiet until {instant(bound)}, not after the turn at"
+                    f" {instant(now)}: what it sends by then belongs in this turn"
                 )
             quiet_until = bound if quiet_until is None else min(quiet_until, bound)
         latencies: list[tuple[str, int | None]] = [(HOLD, hold_latency)]
@@ -874,6 +883,11 @@ def _outputs(name: str, method: str, values: Iterable[Output]) -> list[Output]:
             raise LinkError(f"{name}.{method} returned {value!r:.80}, not a (t_ns, bytes) pair")
         outputs.append(value)
     return outputs
+
+
+def in_ns(t: int) -> str:
+    """`t` as nanoseconds: `1500 ns`."""
+    return f"{t} ns"
 
 
 def _chunks(data: bytes) -> list[bytes]:

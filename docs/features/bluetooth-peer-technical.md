@@ -105,18 +105,24 @@ interface that puts the firmware's controller on the board's link is
    link drops. Bumble 0.0.236's DLC answers the device's DISC with UA and stays open, so `_opened`
    wraps the DLC's `on_disc_frame` to also drop it from the multiplexer's `dlcs` and abort it, which
    closes it; a new Bumble may close it itself, and the wrapper is then to go. `_received(data)`
-   appends `(now, "out", data)` to `events`, gives `source.receive(now, data)` to `_queue`, and
-   flushes. `poll(now)`, the party's, does the same with `source.poll(now)`. Both run inside the
-   loop and hand a `PeerError` to `Air.fail`.
+   appends `(now, "out", data)` to `events`, gives `_driving.receive(now, data)` to `_queue`, and
+   flushes. `poll(now)`, the party's, does the same with `_driving.poll(now)`. Both run inside the
+   loop and hand a `PeerError` to `Air.fail`. `_driving`, a property, is `source`, or for a
+   `Model` (`esp32tl/sources/model/__init__.py`)
+   `in_nanoseconds(source, f"{name}: source", _Misreturned)`, made again whenever `source` is
+   another object: it converts each time at the edge, `Duration(now)` in and `.ns` out, and
+   refuses what is not a `Duration` with `_Misreturned`, a `PeerError` that `_call` raises as it
+   is rather than as something the source raised. `source` stays what the test gave.
 7. **The answers.** `_queue` calls the source's method through `_call`, which turns an exception
    into a `PeerError` naming the peer and the method, reads what it returns, checks each output,
    a `(t, bytes)` pair with `t` an `int` not before `now`, drops one with empty bytes, and inserts
    the rest into `_pending` by time with `bisect.insort_right`, after those of the same time.
    `_flush(now)` takes every pending output due by `now` in order: with a DLC, appends
    `(t, "in", data)` to `events` and writes it; without, adds its length to `lost`.
-   `quiet_until()` checks `source.quiet_until()`, an `int` after the air's instant or `None`,
+   `quiet_until()` checks `_driving.quiet_until()`, an `int` after the air's instant or `None`,
    and returns the earliest of it and the next pending output. These are the checks `BoardLink`
-   makes of a UART's source, with the peer's own messages.
+   makes of a UART's source, with the peer's own messages. For a `Model` the checks of order are
+   the same, on the converted times, and their messages, in seconds already, are the same.
 8. **The controller.** `Controller` subclasses Bumble's `Controller`. Both ends of every link are
    of this class: its additions talk to each other over `Link.send_lmp_packet`, which hands
    the packet object to the other controller with `call_soon`. Bumble's own handlers do the rest:
@@ -495,7 +501,8 @@ interface that puts the firmware's controller on the board's link is
     conjunction is `present`, and calls `Controller.left` on a change to absent, `power_lost` on a
     change to off, `_supply` on any change of power, and `Controller.returned` on a change to
     present, in that order. `_supply` does nothing in `BluetoothDevice`; `SppPeer._supply` calls
-    `source.supply(on)` when the source is `Supplied` (`esp32tl/interfaces/uart.py`), through
+    `supply(on)` of `_driving` when it is `Supplied` (`esp32tl/interfaces/uart.py`), a `Model`'s
+    when it has one, through
     `_call`, and clears `_pending` first. `_flush` counts an
     output in `lost` when no DLC is open or `Link.reaches` refuses the holder's address, so what goes
     out on a link that lost contact does not enter `events`. `forget_keys` puts a new
@@ -585,6 +592,7 @@ interface that puts the firmware's controller on the board's link is
 | `ADDRESS`, `CLASS_OF_DEVICE`, `CHANNEL`, `NAME_MAX`, `RECORD_HANDLE` | `"00:00:00:00:5B:01"`, an address no real device in a test is likely to have; `0x001F00`; `1`; `238`, the extended inquiry response's 240 bytes less the name field's length and type; `0x00010001`, the first SDP record handle a server may give a record of its own |
 | `PeerError` | A `ValueError`: what a peer cannot be, or what its source sent that it cannot send |
 | `Source` | `esp32tl/interfaces/uart.py`: `receive(t, data)`, `poll(now)`, `quiet_until()`, `latency()`; the peer never calls `latency` |
+| `Model` | `esp32tl/sources/model/__init__.py`: the same four in `Duration`s, which the peer takes as `source` too ([pytest-plugin-technical.md](pytest-plugin-technical.md#interfaces)) |
 
 ## Bumble's internals it relies on
 
@@ -635,8 +643,10 @@ None. `bumble` is a dependency of esp32tl, pinned exactly in `pyproject.toml`
 | `{kind}: address {address} is another device's on the air: give each its own` | `PeerError` | A controller on the link has that public address |
 | `{name}: source.{method} raised {type}: {error}` | `PeerError`, from the source's exception, raised on the air | `_call`, for `receive`, `poll`, `quiet_until` and `supply` |
 | `{name}: source.{method} returned {output!r:.80}, not a (t_ns, bytes) pair` | `PeerError`, raised on the air | `_queue` |
+| `{name}: source.{method} returned {output!r:.80}, not a (Duration, bytes) pair` | `_Misreturned`, a `PeerError`, raised on the air | `InNanoseconds._outputs`, for a `Model` |
 | `{name}: source.{method} sent {data!r:.80} at {t}, and the air is at {now}: it cannot send into the past` | `PeerError`, raised on the air | `_queue` |
 | `{name}: source.quiet_until returned {bound!r}, not nanoseconds` | `PeerError`, raised on the air | `quiet_until`: not an `int`, or a `bool` |
+| `{name}: source.quiet_until returned {bound!r}, not a Duration` | `_Misreturned`, a `PeerError`, raised on the air | `InNanoseconds.quiet_until`, for a `Model` |
 | `{name}: source.quiet_until returned {t}, not after the air's {now}: what it sends by then belongs in the poll at {now}` | `PeerError`, raised on the air | `quiet_until` |
 | `{error}`, `{message}: {error}` | `AirError` | `_settle` or `Air.quiet_until`, with what `Air.fail` kept, or with what the loop's exception handler kept and asyncio's `message`, such as `Exception in callback Host.on_packet()` or `Task exception was never retrieved` |
 | `something on the air is due at {t}, and the air is at {now} already` | `AirError` | A party's `quiet_until` at or before `now`; the peer checks its source's before this can happen |
@@ -747,6 +757,11 @@ in `error_code` on a failed `Connection_Complete`, and `HCI_Error` with
   the refusal so that a second device is refused only while the first holds it; the service name in
   the SDP record, the default, another and none, with the language attribute; no Enhanced
   Retransmission Mode among the L2CAP features of either class; the refusal of a service name.
+- `tests/test_duration_model.py`: a peer whose source is a `Model`, against the same exchange with
+  the same model in nanoseconds (a greeting at 1.5 s and three lines): the same `events`, the same
+  bytes received at the same instants, and the same instants heard; a `Model` with `supply`, told
+  by `switch_off` and `switch_on`; and what a `Model` returns wrong, in `receive` and
+  `quiet_until`, failing the air with its message.
 - `tests/test_bluetooth_guest.py`: a Bumble `Device` on a `Host` stands in for Bluedroid. Its
   packets go through a real `BoardLink` held by a `HeldClock` to a `Bluetooth`, from a thread,
   `Runner`, that makes the turns as the runner does (§6, rule 1), each ending at the earliest of the
@@ -784,7 +799,8 @@ in `error_code` on a failed `Connection_Complete`, and `HCI_Error` with
   an advance past the end, which settles it only once.
 
 With firmware: `tests/test_bt_spp_initiator.py` runs ESP-IDF's `bt_spp_initiator`, unmodified,
-through the `bt` fixture's controller, against an `SppPeer` with `secure=True`, the default
+through the `bt` fixture's controller, against an `SppPeer` with `secure=True`, the default, whose
+source, `Heard`, is a `Model`
 ([validation firmware](validation-firmware-technical.md#bt_spp_initiator)). Bluedroid discovers
 the peer by the name in its extended inquiry response, connects, reads its SDP record and prints
 the service's name, asks for ERTM and stays in basic mode, sends RFCOMM's PN, pairs with the PIN

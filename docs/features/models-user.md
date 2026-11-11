@@ -55,6 +55,44 @@ assert reported == about(WARSAW.moved(NORTH, km(1)), within=m(0.2))
 `ValueError`. Anything of another kind is never about it: `m(1) == about(seconds(1), within=seconds(1))`
 is false.
 
+## A model of the test's, in Durations
+
+A test that needs a part esp32tl has no model of writes one: at the far end of a UART, with
+`board.uart(role).model(...)` ([a UART's own model](pytest-plugin-user.md#a-uarts-own-model)), or
+behind an SPP channel, as an `SppPeer`'s `source`
+([the model that answers](bluetooth-peer-user.md#the-model-that-answers)). Subclassing
+`esp32tl.sources.model.Model` lets it state every time as a `Duration`, as the rest of a test does:
+
+```python
+from esp32tl.sources.model import Model
+from esp32tl.units import ms
+
+
+class Echo(Model):
+    def receive(self, at, data):
+        return [(at + ms(50), data)]
+
+    def poll(self, now):
+        return ()
+
+    def quiet_until(self):
+        return None
+
+    def latency(self):
+        return ms(50)
+```
+
+- `receive(at, data)`, `poll(now)`, `quiet_until()` and `latency()` take and return `Duration`s:
+  `at` and `now` are instants on the board's clock, each answer is an `(instant, bytes)` pair,
+  `Timed` in `esp32tl.sources.model`, and `quiet_until` and `latency` return a `Duration` or `None`.
+  All four are abstract: a subclass that lacks one, or misspells it, raises `TypeError` when it is
+  made.
+- A `supply(on)` method puts it on the board's supply, as for any source.
+- The route and the peer call it in nanoseconds, converting at the edge: it puts the same bytes on
+  the wire at the same instants as the same model written with `int` nanoseconds, which both
+  accept as well, and is checked the same way, with the messages in `Duration`s, as
+  `uart.aux.quiet_until returned 1.5, not a Duration`.
+
 ## The GNSS receiver
 
 `gnss` becomes a receiver the test describes at the first of these calls that succeeds, which must

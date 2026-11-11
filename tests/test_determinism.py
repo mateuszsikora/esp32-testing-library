@@ -163,7 +163,7 @@ def test_spp_to_a_peer(board: Esp32Sim, bt: Bluetooth, console: Console, tmp_pat
     write_console(tmp_path, console)
     assert console.lines(r"speed\(") and peer.channel_open
     # Each write the peer heard: its time and its bytes, which are the firmware's blocks.
-    writes = (f"{board_time(t)}  {data.hex()}\n" for t, data in source.heard)
+    writes = (f"{board_time(at.ns)}  {data.hex()}\n" for at, data in source.heard)
     (tmp_path / "spp.txt").write_text("".join(writes))
 
 

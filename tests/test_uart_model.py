@@ -18,7 +18,8 @@ from esp32tl.interfaces.uart import Uart
 from esp32tl.link.boardlink import BoardLink, Output, Wire
 from esp32tl.link.protocol import RunnerHello, Sync, UartRx, UartTx, Wait
 from esp32tl.report import RunLog
-from esp32tl.units import ms, seconds
+from esp32tl.sources.model import Model, Timed
+from esp32tl.units import Duration, ms, seconds
 
 ROOT = Path(__file__).resolve().parent.parent
 MODEM_AT = ROOT / "firmware" / "modem_at"
@@ -26,10 +27,10 @@ PROFILE = ROOT / "tests" / "boards" / "aux-uart.toml"
 AUX = Wire(tx=26, rx=27, baud=115200)
 HELLO = RunnerHello(1, "esp32", recording.EMULATED, "c99fb286c4378fcfa6d304b754d31e542ba3035a")
 # How long the part takes to answer a command, from the end of its line.
-ANSWER = ms(1).ns
+ANSWER = ms(1)
 
 
-class AtResponder:
+class AtResponder(Model):
     """A part that answers AT: `OK` to every command line, and a signal to `AT+CSQ`, `ANSWER`
     after the line's CR LF; nothing while it has no power. `lines` is every line it heard."""
 
@@ -39,7 +40,7 @@ class AtResponder:
         self._on = True
         self._heard = b""
 
-    def receive(self, t: int, data: bytes) -> Iterable[Output]:
+    def receive(self, at: Duration, data: bytes) -> Iterable[Timed]:
         if not self._on:
             return []
         self._heard += data
@@ -48,16 +49,16 @@ class AtResponder:
             line, _, self._heard = self._heard.partition(b"\r\n")
             self.lines.append(line)
             signal = b"\r\n+CSQ: 21,99\r\n" if line == b"AT+CSQ" else b""
-            answers.append((t + ANSWER, signal + b"\r\nOK\r\n"))
+            answers.append((at + ANSWER, signal + b"\r\nOK\r\n"))
         return answers
 
-    def poll(self, now: int) -> Iterable[Output]:
+    def poll(self, now: Duration) -> Iterable[Timed]:
         return []
 
-    def quiet_until(self) -> int | None:
+    def quiet_until(self) -> Duration | None:
         return None
 
-    def latency(self) -> int | None:
+    def latency(self) -> Duration | None:
         return ANSWER
 
     def supply(self, on: bool) -> None:
@@ -89,6 +90,13 @@ class Silent:
 
 class NotCallable(Silent):
     poll = 3  # type: ignore[assignment]
+
+
+class Ok(Silent):
+    """`OK` to every write, `ANSWER` later: a model in nanoseconds."""
+
+    def receive(self, t: int, data: bytes) -> Iterable[Output]:
+        return [(t + ANSWER.ns, b"\r\nOK\r\n")]
 
 
 class Wrapped:
@@ -125,11 +133,11 @@ def test_a_model_is_the_route_s_source_and_answers_through_the_link(tmp_path: Pa
     assert log.lines()[1:] == ["  0.000000000 s  test  uart.aux.model(AtResponder)"]
     link = BoardLink("aux-uart", [uart])
     link.receive(HELLO)
-    assert link.receive(Sync(0)) == [Wait(0, None, ANSWER)]
+    assert link.receive(Sync(0)) == [Wait(0, None, ANSWER.ns)]
     assert link.receive(UartTx(1, 500, 1, (26,), 115200, b"AT\r\n")) == []
-    assert link.receive(Sync(500 + ANSWER)) == [
-        UartRx(500 + ANSWER, 27, 115200, b"\r\nOK\r\n"),
-        Wait(1, None, ANSWER),
+    assert link.receive(Sync(500 + ANSWER.ns)) == [
+        UartRx(500 + ANSWER.ns, 27, 115200, b"\r\nOK\r\n"),
+        Wait(1, None, ANSWER.ns),
     ]
     assert link.error is None
     assert model.lines == [b"AT"]
@@ -141,7 +149,7 @@ def test_a_supplied_model_loses_its_power_with_the_board(tmp_path: Path) -> None
     uart.supply(False)
     assert list(uart.receive(0, "out", b"AT\r\n")) == []
     uart.supply(True)
-    assert list(uart.receive(1, "out", b"AT\r\n")) == [(1 + ANSWER, b"\r\nOK\r\n")]
+    assert list(uart.receive(1, "out", b"AT\r\n")) == [(1 + ANSWER.ns, b"\r\nOK\r\n")]
     assert model.supplied == [False, True]
 
 
@@ -163,10 +171,9 @@ def test_what_is_no_source_is_refused_and_leaves_the_route_as_it_was(tmp_path: P
 
 def test_a_model_behind_a_proxy_is_a_source(tmp_path: Path) -> None:
     uart, _ = aux(tmp_path)
-    model = AtResponder()
-    uart.model(Wrapped(model))  # type: ignore[type-var]
-    assert list(uart.receive(0, "out", b"AT\r\n")) == [(ANSWER, b"\r\nOK\r\n")]
-    assert uart.source_detail == "Wrapped" and model.lines == [b"AT"]
+    uart.model(Wrapped(Ok()))  # type: ignore[type-var]
+    assert list(uart.receive(0, "out", b"AT\r\n")) == [(ANSWER.ns, b"\r\nOK\r\n")]
+    assert uart.source_detail == "Wrapped"
 
 
 def test_a_model_on_no_supply_keeps_going_through_a_power_cycle(tmp_path: Path) -> None:

@@ -1,9 +1,11 @@
 # Models and units: how they work
 
 The units are `esp32tl/units.py`; the GNSS receiver model is `esp32tl/sources/model/gnss.py`, the
-first of `esp32tl/sources/model/`. The `gnss` fixture's side, `Gnss` in
-`esp32tl/interfaces/gnss.py`, is in [pytest-plugin-technical.md](pytest-plugin-technical.md#data-flow);
-the backend that gives the receiver its clock in
+first of `esp32tl/sources/model/`, whose `__init__.py` holds `Model`, the base of a model of the
+test's in `Duration`s, and its adapter to nanoseconds ([interfaces](#interfaces)). The `gnss`
+fixture's side, `Gnss` in `esp32tl/interfaces/gnss.py`, is in
+[pytest-plugin-technical.md](pytest-plugin-technical.md#data-flow); the backend that gives the
+receiver its clock in
 [esp32sim-backend-technical.md](esp32sim-backend-technical.md#data-flow). What the user sees is in
 [models-user.md](models-user.md).
 
@@ -93,6 +95,10 @@ hemisphere's letter, `negative` for a value below 0.
 | `HDOP`, `SATELLITES`, `NO_FIX_HDOP`, `MIN_HDOP`, `SENTENCE_MAX`, `TALKER` | `0.9`, `8`: a `fix`'s defaults; `99.99`; `0.01`, the lowest HDOP the GGA's two decimals say; `82`; `"GP"` |
 | `sentence(body)`, `angle(degrees, digits, positive, negative)` | The sentence and coordinate formatting above |
 | `ModelError` | A `ValueError`: what the receiver cannot be told |
+| `Model` | `esp32tl/sources/model/__init__.py`: an `ABC`, the base of a model of the test's in `Duration`s, whose `receive(at, data)`, `poll(now)`, `quiet_until()` and `latency()` are abstract methods: a subclass without one of them raises Python's `TypeError` when it is made |
+| `Timed` | `tuple[Duration, bytes]`: what a `Model`'s `receive` and `poll` return |
+| `InNanoseconds(model, name, fail)` | The `Model` as a source in nanoseconds: `receive(t, data)` and `poll(now)` give it `Duration(t)` and `Duration(now)` and return `(at.ns, bytes)`; `quiet_until()` and `latency()` return `.ns` or `None`. It refuses, with `fail(message)`: an output that is not a `Duration` and `bytes`, `{name}.{method} returned {value!r:.80}, not a (Duration, bytes) pair`; a `quiet_until` that is not a `Duration`, `{name}.quiet_until returned {bound!r}, not a Duration`; a `latency` that is not one, `{name} declares a latency of {bound!r}, not a Duration`, or is below 0, `{name} declares a latency of {bound}`. What the model raises goes through |
+| `in_nanoseconds(model, name, fail)` | An `InNanoseconds`, of the subclass with `supply(on)` when `model` has a callable `supply`, so that `Supplied` (`esp32tl/interfaces/uart.py`) finds it. `Uart.model` passes the route's name and `LinkError`, `SppPeer` `{name}: source` and its `_Misreturned` |
 
 ## Configuration
 
@@ -145,6 +151,12 @@ The `SourceError`s of the first model call are the backend's and `Gnss`'s
   the fix is lost, the fix coming back at the epoch of its instant, silence, and a power cycle
   of the board, through which no sentence reaches the chip and after which the fresh boot gets
   its fix again. Needs `make firmware`.
+- `tests/test_duration_model.py`: a `Model` and the same model in nanoseconds against one scripted
+  exchange, on a `Uart` through a `BoardLink` and on an `SppPeer` on an `Air`, with the same
+  messages to the runner, the same bytes on the channel at the same instants, and the same
+  instants heard; a `Model` with a misspelt method, which cannot be made; a `Model` with `supply`,
+  on a route and on a peer, and one without; a `Model` behind a proxy; and each thing a `Model`
+  can return wrong, with its message in `Duration`s, on both.
 - `tests/test_pytest_plugin.py`: the model's place among the sources (see
   [pytest-plugin-technical.md](pytest-plugin-technical.md#tests)).
 

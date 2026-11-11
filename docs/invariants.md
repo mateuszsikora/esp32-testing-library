@@ -523,6 +523,15 @@ that references to its number keep their meaning.
     only lines that end after it was made, and after the last line it found.
     `tests/test_clock.py::test_console_lines_are_stamped_with_the_time_their_ending_came_at`,
     `tests/test_clock.py::test_a_line_condition_finds_the_first_matching_line_from_when_it_was_made`
+- **224.** A model of the test's in `Duration`s and the same model in nanoseconds put the same bytes
+    in at the same instants and hear the same bytes at the same instants, at the far end of a UART
+    and of an SPP peer; what a model in `Duration`s returns wrong ends the run or fails the air as
+    it would in nanoseconds, with its message in `Duration`s.
+    `tests/test_duration_model.py::test_a_model_in_durations_says_on_a_uart_what_one_in_nanoseconds_says`,
+    `tests/test_duration_model.py::test_a_model_in_durations_says_on_an_spp_peer_what_one_in_nanoseconds_says`,
+    `tests/test_duration_model.py::test_what_a_model_in_durations_gets_wrong_on_a_uart_ends_the_run_in_durations`,
+    `tests/test_duration_model.py::test_what_a_model_in_durations_answers_wrong_fails_the_air_in_durations`,
+    `tests/test_duration_model.py::test_with_two_faults_in_one_turn_both_kinds_report_the_same_one`
 
 ## Bluetooth peer
 

@@ -9,8 +9,8 @@ off and go out of range, and come back, with the link keys it had.
 
 `SppPeer` adds SPP on one RFCOMM channel, to one device at a time and, unless told otherwise, only
 on a link the device has authenticated by the time it opens the channel. What the device writes on
-the channel goes to the source, a `Source` as at the far end of a UART, and what the source sends
-goes out on the channel at the board's time it gives.
+the channel goes to the source, a `Source` or a `Model` as at the far end of a UART, and what the
+source sends goes out on the channel at the board's time it gives.
 """
 
 import bisect
@@ -32,6 +32,7 @@ from esp32tl.bluetooth.air import Air
 from esp32tl.bluetooth.controller import RSSI, SIX_DIGITS, Controller, Pairing, UnderWay
 from esp32tl.interfaces.uart import Source, Supplied
 from esp32tl.link.boardlink import Direction, Output
+from esp32tl.sources.model import InNanoseconds, Model, in_nanoseconds
 
 # Unless the test gives another: an address no real device in a test is likely to have, and the
 # class of device of a device that says nothing about itself (major class Uncategorized).
@@ -78,6 +79,11 @@ class PeerError(ValueError):
     """What the test tells a device that it cannot be, or what its source does that the peer
     cannot take: a call that raises, a result that is not bytes at a time, bytes stamped before
     the instant they are given at."""
+
+
+class _Misreturned(PeerError):
+    """What a `Model` source returned that is not of its kind, as the peer's adapter refuses it:
+    the peer's own refusal, which it does not report as something the source raised."""
 
 
 class _User(PairingDelegate):
@@ -359,7 +365,8 @@ class SppPeer(BluetoothDevice):
     device, `in` to it, as a tap's recording names them.
 
     The source gets `supply` on a power loss, when it is `Supplied`; out of range it runs on, and
-    what it sends is lost.
+    what it sends is lost. A `Model` states its times in `Duration`s; any other source in
+    nanoseconds.
     """
 
     def __init__(
@@ -368,7 +375,7 @@ class SppPeer(BluetoothDevice):
         *,
         name: str,
         pin: str,
-        source: Source,
+        source: Source | Model,
         address: str = ADDRESS,
         channel: int = CHANNEL,
         secure: bool = True,
@@ -390,6 +397,7 @@ class SppPeer(BluetoothDevice):
                 f"SppPeer: service_name is {service_name!r}, not None or a string of 1 to 255 bytes"
             )
         self.source = source
+        self._adapter: InNanoseconds | None = None
         self.channel = channel
         self.secure = secure
         self.service_name = service_name
@@ -419,12 +427,23 @@ class SppPeer(BluetoothDevice):
         """Whether a device holds the SPP channel now."""
         return self._dlc is not None
 
+    @property
+    def _driving(self) -> Source:
+        """What the peer calls: `source`, or a `Model` in nanoseconds, whose refusals are
+        `_Misreturned`s naming the peer."""
+        source = self.source
+        if not isinstance(source, Model):
+            return source
+        if self._adapter is None or self._adapter.model is not source:
+            self._adapter = in_nanoseconds(source, f"{self.name}: source", _Misreturned)
+        return self._adapter
+
     def _supply(self, on: bool) -> None:
         """A source that is `Supplied` loses its power with the peer, and what it had queued
         with it; any other runs on, and what it sends is lost."""
-        if isinstance(self.source, Supplied):
+        if isinstance(self._driving, Supplied):
             self._pending.clear()
-            source = self.source
+            source = self._driving
             with self._failing():
                 self._call("supply", lambda: source.supply(on))
 
@@ -550,7 +569,7 @@ class SppPeer(BluetoothDevice):
         now = self.air.loop.now
         self.events.append((now, "out", data))
         with self._failing():
-            self._queue(now, "receive", lambda: self.source.receive(now, data))
+            self._queue(now, "receive", lambda: self._driving.receive(now, data))
             self._flush(now)
 
     # The air's `Party`.
@@ -558,14 +577,14 @@ class SppPeer(BluetoothDevice):
     def poll(self, now: int) -> None:
         """Sends what is due at `now`: the source's answers, and what it sends unprompted."""
         with self._failing():
-            self._queue(now, "poll", lambda: self.source.poll(now))
+            self._queue(now, "poll", lambda: self._driving.poll(now))
             self._flush(now)
 
     def quiet_until(self) -> int | None:
         """The next time the source has something to send: its next answer, or its own
         `quiet_until`, which must be nanoseconds after the air's instant."""
         now = self.air.loop.now
-        bound = self._call("quiet_until", self.source.quiet_until)
+        bound = self._call("quiet_until", self._driving.quiet_until)
         if bound is not None:
             if isinstance(bound, bool) or not isinstance(bound, int):
                 raise PeerError(
@@ -594,6 +613,8 @@ class SppPeer(BluetoothDevice):
     def _call(self, method: str, call: Callable[[], T]) -> T:
         try:
             return call()
+        except _Misreturned:
+            raise
         except Exception as error:
             raise PeerError(
                 f"{self.name}: source.{method} raised {type(error).__name__}: {error}"
