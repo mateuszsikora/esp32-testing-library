@@ -24,6 +24,13 @@ firmware/build.sh --examples gps_alarm_clock
 .venv/bin/pytest examples/gps_alarm_clock/tests
 ```
 
+On an Apple M2 Pro, from a new worktree, `make setup` took 38 s, the GPS alarm's build 2 minutes
+and its tests 5 s (`9 passed in 3.08s`). That machine already had the ESP-IDF image, the esp32sim
+sources and crates in `~/.cargo`, the ROM ELF in `~/.espressif` and pip's cache. On a new machine
+rustup also installs the pinned toolchain, `make setup` downloads esp32sim, the crates and the ROM
+ELF, and the first build pulls the ESP-IDF image, 7 GB once unpacked
+([validation firmware](validation-firmware-user.md#what-it-needs-docker)).
+
 `IDF_LOCAL=1 make examples` uses the shell's ESP-IDF for iteration. `FIRMWARE_OUT` overrides the
 output root for direct `firmware/build.sh --examples` calls; `make examples` clears it so the
 tests find their builds. The builder's provenance and completion markers work just like the

@@ -41,6 +41,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Version-only bumps need no documentation, except for pins the documentation states](docs.md#version-only-bumps-need-no-documentation-except-for-pins-the-documentation-states) | `docs.md` | decided (#54) |
 | [Test files are left out, and the runner's unit tests live in tests.rs files](docs.md#test-files-are-left-out-and-the-runners-unit-tests-live-in-testsrs-files) | `docs.md` | decided (#54) |
 | [The README is an entry point; the documents in docs/ own the facts](docs.md#the-readme-is-an-entry-point-the-documents-in-docs-own-the-facts) | `docs.md` | decided (#54) |
+| [The README walks a newcomer to a first green test, copying what it shows](docs.md#the-readme-walks-a-newcomer-to-a-first-green-test-copying-what-it-shows) | `docs.md` | decided (#189) |
 | [Format specifications stay at the top of docs/](docs.md#format-specifications-stay-at-the-top-of-docs) | `docs.md` | decided (#54) |
 | [The recording format is a document at the top of docs/, with a rule of its own](docs.md#the-recording-format-is-a-document-at-the-top-of-docs-with-a-rule-of-its-own) | `docs.md` | decided (#14) |
 | [The decisions index is generated](docs.md#the-decisions-index-is-generated) | `docs.md` | decided (#54) |

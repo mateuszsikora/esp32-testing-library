@@ -126,6 +126,29 @@ in `docs/`, where a rule of the map owns them.
 **Rejected:** keeping the README as the owner of those facts, because the README is no rule's
 document: two copies would drift, and the check could not say which one was stale.
 
+## The README walks a newcomer to a first green test, copying what it shows
+
+Status: decided (#189)
+
+Within the [entry-point decision](#the-readme-is-an-entry-point-the-documents-in-docs-own-the-facts),
+`README.md` takes someone who has just found the repository to a passing run of one example, the
+GPS alarm clock, in three commands, then has them break one line of its test and read the failure.
+Only after that does it link to the rest of `docs/`, whose documents are precise but long for a
+first visit. To show what the reader will see, it copies some things that `docs/` and the code own:
+the commands of [examples-user.md](../features/examples-user.md#build-and-run), the pytest output
+of that example, the message of its `assert_never_buzzed` helper and an excerpt of the run report
+([run-report-user.md](../features/run-report-user.md)). Requirements and timings stay a sentence with
+a link; the measurement lives in examples-user.md.
+
+The check cannot see these copies. Any change that alters what those three commands or the broken
+run print checks the README by hand and runs its commands again: among them, a change to the GPS
+alarm clock's firmware or tests, to the text of a test step (written by the backend and the
+interfaces, not by the report), to the run report, to the build commands, or to the esp32sim or
+ESP-IDF pin, which move the times on the board's clock.
+
+**Rejected:** moving the walk-through to a document under `docs/` and leaving the README a link to
+it, because the reader who most needs it has not yet decided to read anything past the README.
+
 ## Format specifications stay at the top of docs/
 
 Status: decided (#54)

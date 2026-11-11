@@ -1,70 +1,158 @@
 # esp32-testing-library
-Test unmodified ESP32 firmware through its wires: an emulated or real board, with modelled, replayed or real peripherals
 
-esp32tl is a pytest plugin. Today it runs an unmodified ESP-IDF image for the classic ESP32 in the
-[esp32sim](https://github.com/mikroverk/esp32sim) emulator, through the runner crate in `runner/`,
-replays a recorded GNSS stream into its UART on the emulated clock, or connects it to a device on a
-host serial port with the run paced to wall time, drives and reads its GPIO lines, puts an SD card
-holding an image file on its SPI pins, and lets a test read the firmware's console. The `esp32tl`
-command does the same outside pytest, but for the SD card and the host serial port. Beside the
-board, a Bluetooth Classic peer with the Serial Port Profile runs on Bumble's virtual link, where
-the firmware's Bluetooth host finds it, pairs with it and talks to it through a controller in the
-harness, and a model in the test answers it.
+Test unmodified ESP32 firmware through its wires, in pytest.
 
-## Getting started
+esp32tl runs your ESP-IDF image, as built, in the [esp32sim](https://github.com/mikroverk/esp32sim)
+emulator. The test sets up the world around the board, powers it on, and checks what the firmware
+does on its pins, UARTs, SD card and network. In the emulator, time is the board's own clock, not
+the wall's, so a run is fast and the same every time: all the tests of the GPS alarm clock below
+run in a few seconds. On a real ESP32 on a serial port, the same `board` and `console` tests run
+in wall time.
 
-From a clean checkout, one command sets everything up and runs the tests:
+A shortened test from that example; `configure_alarm`, `TARGET` and the `buzzer` fixture are
+defined in [its test file](https://github.com/mateuszsikora/esp32-testing-library/blob/main/examples/gps_alarm_clock/tests/test_alarm.py), not by esp32tl:
+
+```python
+def test_moving_into_the_radius_turns_it_on(board, gnss, buzzer):
+    configure_alarm(board)  # the destination, in NVS
+    gnss.fix(at=TARGET.moved(EAST, m(150)))  # a GNSS receiver 150 m away
+    board.power_on()
+    board.wait(seconds(3))
+    buzzer.assert_off()
+
+    gnss.move(heading=WEST, speed=km_h(36))  # drive towards the target
+    board.wait(seconds(5))  # the 50 m to the radius
+    board.wait_until(buzzer.is_on, within=seconds(2))
+```
+
+## Your first green test
+
+This runs the tests of the [GPS alarm clock](https://github.com/mateuszsikora/esp32-testing-library/tree/main/examples/gps_alarm_clock/),
+a small ESP-IDF application that sounds a buzzer inside a radius of a destination.
+
+You need Python 3.11 or newer, Rust through [rustup](https://rustup.rs), Docker running, and network
+access to GitHub ([what each is for](https://github.com/mateuszsikora/esp32-testing-library/blob/main/docs/guides/development.md#requirements)).
 
 ```sh
-make test
+git clone https://github.com/mateuszsikora/esp32-testing-library.git
+cd esp32-testing-library
+
+make setup                                       # .venv, the runner around esp32sim, the ESP32 ROM
+firmware/build.sh --examples gps_alarm_clock     # the firmware, in the pinned ESP-IDF container
+.venv/bin/pytest examples/gps_alarm_clock/tests  # its tests, in the emulator
 ```
 
-It needs Python 3.11 or newer, Rust through [rustup](https://rustup.rs), network access to GitHub,
-mtools for the SD card tests and, for the first run, Docker:
-[the development guide](https://github.com/mateuszsikora/esp32-testing-library/blob/main/docs/guides/development.md#requirements)
-says what each is for.
+The last command ends with:
 
-The [runnable examples](docs/features/examples-user.md) show complete firmware with readable
-tests, starting with a [GPS alarm clock](examples/gps_alarm_clock/).
-[Writing tests for your firmware](https://github.com/mateuszsikora/esp32-testing-library/blob/main/docs/guides/writing-tests.md)
-goes from a first test of your own project to running the suite in CI.
+```text
+examples/gps_alarm_clock/tests/test_alarm.py .........                   [100%]
 
-## Writing a test
+============================== 9 passed in 3.08s ===============================
+```
+
+Once Docker has the ESP-IDF image, the three commands take a few minutes; on a new machine the
+first build also pulls the image, 7 GB once unpacked, which can take longer than the rest
+([measured](https://github.com/mateuszsikora/esp32-testing-library/blob/main/docs/features/examples-user.md#build-and-run)).
+With a local ESP-IDF's `export.sh` sourced,
+`IDF_LOCAL=1 firmware/build.sh --examples gps_alarm_clock` builds without Docker
+([a local ESP-IDF](https://github.com/mateuszsikora/esp32-testing-library/blob/main/docs/features/validation-firmware-user.md#build-with-a-local-esp-idf)).
+
+### Make it fail
+
+Open [`examples/gps_alarm_clock/tests/test_alarm.py`](https://github.com/mateuszsikora/esp32-testing-library/blob/main/examples/gps_alarm_clock/tests/test_alarm.py)
+and bring the receiver of the first test inside the alarm's 100 m radius:
 
 ```python
-import pytest
-
-pytestmark = pytest.mark.app_path("../firmware/hello_world")
-
-
-def test_hello_world(board, console):
-    board.power_on()
-    console.expect("Hello world!")
+gnss.fix(at=TARGET.moved(EAST, m(50)))  # was m(1000)
 ```
 
-The test runs once on the selected backend, esp32sim by default, as
-`test_hello_world[esp32sim]`. On the emulator the firmware runs only while the test waits on it,
-here in `console.expect`, whose timeout is on the board's own clock: a `Duration`
-or a number of seconds.
-A test that replays a recording into the board's GNSS UART gives it before power-on:
+Run `.venv/bin/pytest examples/gps_alarm_clock/tests` again. The test fails with what went wrong,
+on the board's clock; `assert_never_buzzed`, a helper of the example's test file, raises it:
 
-```python
-@pytest.mark.app_path("../firmware/nmea_reader")
-def test_reports_a_fix(board, gnss, console):
-    gnss.replay("../recordings/gnss-generated-1.jsonl")
-    board.power_on()
-    console.expect_exact("fix acquired lat=52.229677 lon=21.012233")
+```text
+E               AssertionError: alarm.buzzer expected off after initialization (GPIO 18, level 0); first violation at 1.06781 s: level 1
 ```
 
-[The pytest plugin's documentation](https://github.com/mateuszsikora/esp32-testing-library/blob/main/docs/features/pytest-plugin-user.md)
-describes the fixtures, the `app_path` marker and the options.
+Below it, the section `Captured esp32sim link teardown` ends with the run on the board's clock:
+every step of the test and the last 200 entries of the console, the GNSS UART and the buzzer, in
+the order they happened. An excerpt, with the boot log left out:
 
-## Documentation
+```text
+the run on the board's clock, 69 entries:
+  0.000000000 s  test              board.nvs(partition='nvs')
+  0.000000000 s  test              uart.gnss.fix(at=Position(lat=52.22967699772281, lon=21.012967141827147), hdop=0.9, satellites=8)
+  0.000000000 s  test              board.power_on(), the world's time 2026-01-01T12:00:00Z
+  0.000000000 s  test              board.wait(5 s)
+  …
+  0.050060000 s  alarm.buzzer out  0
+  0.053891600 s  console           gps_alarm_clock: ready
+  1.000000000 s  uart.gnss in      $GPRMC,120001.00,A,5213.78062,N,02100.77803,E,0.00,,010126,,,A*40\r\n$GPGGA,120001.00,5213.78062,N,021... (139 bytes)
+  1.067806337 s  alarm.buzzer out  1
+  …
+```
 
-[`docs/README.md`](https://github.com/mateuszsikora/esp32-testing-library/blob/main/docs/README.md)
-says what lives where: the features, the guides for working on the repository, CI, the link
-protocol, the decisions and the
-[implementation plan](https://github.com/mateuszsikora/esp32-testing-library/blob/main/docs/implementation-plan.md).
-Contributions follow
-[`CONTRIBUTING.md`](https://github.com/mateuszsikora/esp32-testing-library/blob/main/CONTRIBUTING.md);
+Undo the change with `git restore examples/gps_alarm_clock/tests/test_alarm.py`.
+
+## What the test did
+
+Read [the firmware](https://github.com/mateuszsikora/esp32-testing-library/blob/main/examples/gps_alarm_clock/main/main.c)
+and [its tests](https://github.com/mateuszsikora/esp32-testing-library/blob/main/examples/gps_alarm_clock/tests/test_alarm.py)
+side by side. In each test:
+
+- `pytest.mark.app_path("..")` names the ESP-IDF project; the test runs its `build/` directory.
+  `board_profile("gps-alarm-clock")` says which UART the GNSS receiver is on and which pin is the
+  buzzer.
+- `configure_alarm(board, ...)`, a helper of the test file, turns a `Position` and a radius into
+  the firmware's NVS schema and writes it with `board.nvs(...)` before power-on, where the
+  firmware reads it.
+- `gnss.fix(...)`, `gnss.move(...)` and `gnss.lose_fix()` drive a model of a GNSS receiver, which
+  writes NMEA sentences into the firmware's UART.
+- `board.wait(...)` and `board.wait_until(...)` let the firmware run on the board's clock; the
+  emulated board runs only while the test waits.
+- `buzzer` is a fixture of the test file, `lines.output("alarm.buzzer")`: the GPIO line the
+  firmware drives, read from outside. `assert_never_buzzed`, another helper there, checks every
+  level the line took, not only the last one.
+
+Nothing in the firmware changes for the test, and the test reads nothing inside it.
+
+## Where to go next
+
+- **Test your own firmware**: [writing tests for your firmware](https://github.com/mateuszsikora/esp32-testing-library/blob/main/docs/guides/writing-tests.md)
+  goes from where the tests go to running them in CI.
+- **More examples**, each with readable tests ([how to build and run them](https://github.com/mateuszsikora/esp32-testing-library/blob/main/docs/features/examples-user.md)):
+  an [SD card data logger](https://github.com/mateuszsikora/esp32-testing-library/tree/main/examples/sd_data_logger/),
+  a [position tracker](https://github.com/mateuszsikora/esp32-testing-library/tree/main/examples/position_tracker/)
+  sending MQTT over TLS through a cellular modem, a
+  [periodic deep-sleep wake](https://github.com/mateuszsikora/esp32-testing-library/tree/main/examples/periodic_wake/)
+  and an [OBD-II reader](https://github.com/mateuszsikora/esp32-testing-library/tree/main/examples/obd_reader/)
+  over Bluetooth Classic.
+- **The fixtures, markers and options**: [the pytest plugin](https://github.com/mateuszsikora/esp32-testing-library/blob/main/docs/features/pytest-plugin-user.md).
+- **Everything else**: [`docs/README.md`](https://github.com/mateuszsikora/esp32-testing-library/blob/main/docs/README.md)
+  says what lives where.
+
+## What it can do today
+
+- Run an unmodified ESP-IDF image for the classic ESP32 in esp32sim, or the same `board` and
+  `console` tests on a real ESP32 on a serial port
+  ([the serial backend](https://github.com/mateuszsikora/esp32-testing-library/blob/main/docs/features/serial-backend-user.md)).
+- Feed a UART from a model, a recording, or a real device on a host serial port, such as a GNSS
+  receiver on a USB adapter.
+- Drive and read GPIO lines, read the console, and write the NVS partition before power-on.
+- Put an SD card holding a FAT image on the SPI pins.
+- Model a cellular modem the firmware talks AT to, and a network behind it or behind a Wi-Fi
+  access point, with DNS, NTP, an MQTT broker and an HTTP server in the test.
+- Wake the firmware from deep sleep on a timer, and run a day of wakes in seconds.
+- Put a Bluetooth Classic peer with the Serial Port Profile beside the board, which the firmware
+  finds, pairs with and talks to.
+
+The `esp32tl` command runs an image outside pytest ([the CLI](https://github.com/mateuszsikora/esp32-testing-library/blob/main/docs/features/cli-user.md)).
+
+## Working on esp32tl
+
+`make test` sets everything up and runs the whole suite, the repository's own tests and every
+example; the first run builds all the firmware in Docker, which takes much longer than one example,
+and the SD card tests need mtools
+([the development guide](https://github.com/mateuszsikora/esp32-testing-library/blob/main/docs/guides/development.md),
+[the test suite](https://github.com/mateuszsikora/esp32-testing-library/blob/main/docs/guides/testing.md)).
+Contributions follow [`CONTRIBUTING.md`](https://github.com/mateuszsikora/esp32-testing-library/blob/main/CONTRIBUTING.md);
 a change that alters behaviour updates its documentation in the same pull request.
