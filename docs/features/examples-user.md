@@ -341,6 +341,125 @@ comes within `BOOT_TIME = seconds(0.1)` after it. The tests demonstrate:
 - The count survives deep sleep, not a reset (`board.reset()` five minutes into a sleep starts it
   at 0 again) nor a power cycle.
 
+## OBD-II reader over Bluetooth Classic
+
+Read [the firmware](../../examples/obd_reader/main/main.c) and
+[its tests](../../examples/obd_reader/tests/test_obd_reader.py). The reader is the client of an
+ELM327-compatible OBD-II adapter, the kind that plugs into a vehicle's diagnostic port and offers a
+serial port over Bluetooth. It searches for a device named `OBDII`, pairs with PIN `1234`, opens
+the adapter's SPP channel, talks to it in the adapter's AT and OBD-II commands, and prints what the
+vehicle answers:
+
+```sh
+firmware/build.sh --examples obd_reader
+.venv/bin/pytest examples/obd_reader/tests
+```
+
+It has no wiring of its own: the Bluetooth is the chip's, and the console is the default ESP-IDF
+console on UART0. The tests run on the default profile, `esp32-devkitc`, and reach the air through
+`board.bluetooth` ([the `bt` fixture](bluetooth-peer-user.md#in-front-of-the-firmware-the-bt-fixture)).
+The firmware runs its controller for Bluetooth Classic alone (`CONFIG_BTDM_CTRL_MODE_BR_EDR_ONLY`)
+with Bluedroid and SPP, and turns Secure Simple Pairing off (`ssp_en = false`), so it always pairs
+with the PIN, as Bluetooth 2.0 adapters do. The name and the PIN are constants in `main.c`,
+`ADAPTER_NAME` and `ADAPTER_PIN`.
+
+| Step | What the firmware does | What it prints |
+|---|---|---|
+| Search | An inquiry of 5.12 s. A device whose name, in its extended inquiry response, is `OBDII` ends it; other devices are ignored. A search that found nothing starts the next one at once | `obd_reader: searching for OBDII`, then `obd_reader: found OBDII at 00:00:00:00:5b:01` |
+| Connect | An SDP search for the Serial Port service, then the first channel found, with `ESP_SPP_SEC_AUTHENTICATE`, as the central; the PIN when the adapter asks for one | `obd_reader: paired with OBDII`, `obd_reader: connected`; with another PIN, `obd_reader: pairing failed (status 9)` and `obd_reader: could not connect` |
+| Opening | `ATZ`, whose answer must start with `ELM327`; `ATE0`; `ATSP0` | `obd_reader: adapter ELM327 v1.5`; otherwise `obd_reader: not an ELM327 adapter: ...` with the answer's first line, and it disconnects |
+| Supported PIDs | `0100`. The first line of the answer that is `41 00` with four bytes counts, so the `SEARCHING...` an adapter on protocol 0 sends before its first answer is skipped. An answer with no such line, as `SEARCHING...` and `UNABLE TO CONNECT` with the ignition off, is asked again 2 s later. A vehicle with none of the three readings ends the session | `obd_reader: no answer from the vehicle: UNABLE TO CONNECT`, the answer's last line; then `obd_reader: the vehicle supports rpm speed coolant`, with the names of those it has, or `obd_reader: the vehicle supports none of rpm speed coolant`, and it disconnects |
+| Readings | For each of `010C` (rpm), `010D` (speed, km/h) and `0105` (coolant, °C) that the vehicle supports, in that order, one round; then 1 s, then the next round | `obd_reader: rpm=850 speed=0 coolant=90`; `name=?` for an answer it cannot read, as `NO DATA` |
+
+Each command is one line ending in `\r`. The reader reads up to the adapter's prompt, `>`, and
+drops empty lines and the echo of its command. An adapter that sends no prompt within 2 s of a
+command is disconnected (`obd_reader: the adapter stopped answering`, then
+`obd_reader: disconnected`), and so is one whose answer runs past 255 bytes without a prompt
+(`obd_reader: the adapter sent an answer too long to read`); the next search starts at once. A
+session the adapter closes ends at once, also during one of the reader's pauses: the next search
+starts at once, and the session after it starts again from `ATZ`. A failed pairing or connection,
+an adapter that offers no serial port, a device that is no ELM327 and a vehicle with none of the
+three readings start the next search 5 s after the end, so a wrong PIN does not repeat a pairing
+every 0.4 s. A successful pairing leaves Bluedroid a key, and the next connection to the same
+adapter authenticates with it instead of the PIN.
+
+The tests put the adapter on the air as an `SppPeer` named `OBDII` with PIN `1234`. Its source
+([the model that answers](bluetooth-peer-user.md#the-model-that-answers)) is this example's model
+of the adapter, `Elm327` in [`tests/elm327.py`](../../examples/obd_reader/tests/elm327.py), which
+answers for a `Vehicle` and keeps every command it hears:
+
+```python
+from elm327 import Elm327, Vehicle
+
+from esp32tl import Board
+from esp32tl.bluetooth.peer import SppPeer
+from esp32tl.units import seconds
+
+
+def test_a_vehicle_with_speed_only(board: Board) -> None:
+    adapter = Elm327(Vehicle(rpm=None, coolant=None, speed=42))
+    SppPeer(board.bluetooth.air, name="OBDII", pin="1234", source=adapter)
+    board.power_on()
+    board.wait_until(board.console.line("obd_reader: speed=42"), within=seconds(5))
+    assert adapter.commands()[:5] == ["ATZ", "ATE0", "ATSP0", "0100", "010D"]
+```
+
+`Vehicle(ignition=True, rpm=850.0, speed=0, coolant=90)` is what the diagnostic port answers. A
+reading of `None` is a PID the vehicle does not support. With `ignition` off, every mode 01
+request gets `SEARCHING...` and `UNABLE TO CONNECT`. The test can change it at any time, and the
+next answer has the change. `Elm327(vehicle, answer_time=ms(50), reset_time=ms(500),
+version="ELM327 v1.5", silent=False, echo=True)` answers:
+
+| Command | Answer |
+|---|---|
+| `ATZ` | `version`, `reset_time` after the command; echo on again, and the protocol to be searched for |
+| `ATI` | `version` |
+| `ATE0`, `ATE1` | `OK`; echo off, echo on |
+| `ATSP` and one digit | `OK`; the protocol to be searched for |
+| `0100` | `41 00` and four bytes, the PIDs 01 to 20 the vehicle supports, PID n at bit 32 − n |
+| `010C`, `010D`, `0105` | `41`, the PID and its data, encoded as OBD-II encodes them: rpm × 4 in two bytes, km/h in one, °C + 40 in one; `NO DATA` for a PID the vehicle does not support |
+| Any mode 01 request, the first after power-on, `ATZ` or `ATSP` | `SEARCHING...` on a line of its own, then the answer above; with the ignition off, `SEARCHING...` and `UNABLE TO CONNECT` every time, until a request finds the vehicle on |
+| Anything else | `?` |
+
+Every answer except `ATZ`'s comes `answer_time` after its command. While echo is on it starts with
+the command, then the answer's lines, each ending in `\r`, an empty line and `>`. With `silent`,
+the adapter hears every command and answers none. `adapter.requests` lists every command as a
+`Request` with `at`, its time on the board's clock, and `command`; `adapter.commands()` lists the
+commands alone, in upper case without spaces. The model belongs to this example, as the tracker's
+report adapter does; esp32tl itself has no OBD-II model. `tests/test_elm327.py` checks the model
+without a board.
+
+The tests demonstrate:
+
+- Without the adapter, the reader keeps searching: four searches 5.12 s apart, to within 0.1 s,
+  with a phone on the air that it does not take for the adapter, and no pairing. An adapter put on
+  the air during a search is found by the next one, within 5.12 s, and the session opens within
+  1 s after that.
+- With the adapter, the session opens: one legacy pairing, from the firmware's side, which
+  succeeds; the channel open and nothing refused; the adapter's name on the console; and `ATZ`,
+  `ATE0`, `ATSP0`, `0100` as the first commands the adapter hears, followed by `010C`: the reader
+  took the answer below the first `SEARCHING...`.
+- The vehicle's answer decides what the reader asks next, which the test reads at the adapter:
+  after `0100`, rounds of `010C`, `010D`, `0105` for a vehicle with all three, `010D` alone for one
+  with speed only, and `010C`, `0105` for one without speed. Each round's line has what the vehicle
+  answered, also after the test changes the vehicle between two rounds.
+- With the ignition off, the reader asks `0100` again every 2 s, to within 0.2 s, and nothing else;
+  once the ignition is on, it asks for the readings.
+- With another PIN on the adapter, no session opens: each attempt is one legacy pairing that fails
+  with `AUTHENTICATION_FAILURE`, the next search starts 5 s after it, to within a 10 ms tick, and
+  the adapter hears no command.
+- An adapter that stops answering is dropped 2 s after the command it left unanswered, to within a
+  tick, and the reader searches again at once. Once the adapter answers again, the reader finds
+  it, opens the session with the key of the first pairing, without pairing again, and starts again
+  with `ATZ`.
+- An adapter that ends its link between two rounds gets a new session: the reader finds it and
+  connects again before its 1 s pause is over, and starts the new session from `ATZ`, with the key
+  of the first pairing. The test ends the link through the peer's Bumble device,
+  `peer.device.connections`, in a coroutine started with `board.bluetooth.air.start(...)`.
+- A device that is no ELM327 (`Elm327(version="OK")`) and a vehicle with none of the three readings
+  end the session: the reader disconnects, searches again 5 s later, to within a tick, and the
+  next session ends the same way.
+
 ## Adding an example
 
 Add `examples/<name>/CMakeLists.txt`, `main/`, `sdkconfig.defaults` and `tests/test_*.py`.

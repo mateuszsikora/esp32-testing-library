@@ -81,6 +81,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [A card that comes and goes is validated on a firmware of this repository's](firmware.md#a-card-that-comes-and-goes-is-validated-on-a-firmware-of-this-repositorys) | `firmware.md` | decided (#106) |
 | [The position tracker reuses the pinned modem component and reports without a fix](firmware.md#the-position-tracker-reuses-the-pinned-modem-component-and-reports-without-a-fix) | `firmware.md` | decided (#72) |
 | [The periodic wake sleeps a fixed 15 minutes and brings its own profile](firmware.md#the-periodic-wake-sleeps-a-fixed-15-minutes-and-brings-its-own-profile) | `firmware.md` | decided (#74) |
+| [The OBD-II reader pairs with a PIN alone and pauses after a failed attempt](firmware.md#the-obd-ii-reader-pairs-with-a-pin-alone-and-pauses-after-a-failed-attempt) | `firmware.md` | decided (#75) |
 | [Images of one container share their ccache hits](firmware.md#images-of-one-container-share-their-ccache-hits) | `firmware.md` | decided (#146) |
 
 ## The esp32tl package and its pytest plugin
@@ -197,6 +198,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [A page its host does not answer in time ends at the connection accept timeout](harness.md#a-page-its-host-does-not-answer-in-time-ends-at-the-connection-accept-timeout) | `harness.md` | decided (#166) |
 | [Two pages at one instant make one link, the page accepted first](harness.md#two-pages-at-one-instant-make-one-link-the-page-accepted-first) | `harness.md` | decided (#141) |
 | [A role switch asked of a pager whose page ended is refused](harness.md#a-role-switch-asked-of-a-pager-whose-page-ended-is-refused) | `harness.md` | decided (#141) |
+| [A peer's own call that ends its link is postponed](harness.md#a-peers-own-call-that-ends-its-link-is-postponed) | `harness.md` | postponed (#75) |
 | [A replayed peer is postponed](harness.md#a-replayed-peer-is-postponed) | `harness.md` | postponed (#33, #34) |
 | [The HCI tap is a btsnoop file on the board's time, with its header beside it](harness.md#the-hci-tap-is-a-btsnoop-file-on-the-boards-time-with-its-header-beside-it) | `harness.md` | decided (#34) |
 | [The firmware's controller is a controller of the air, with the guest's features and buffer](harness.md#the-firmwares-controller-is-a-controller-of-the-air-with-the-guests-features-and-buffer) | `harness.md` | decided (#34) |

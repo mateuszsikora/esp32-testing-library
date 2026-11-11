@@ -14,6 +14,9 @@ Small ESP-IDF applications tested through their wires with esp32tl. Each project
 - [Periodic wake](periodic_wake/): deep sleep with a timer wake every 15 minutes, a count in
   RTC memory and a pulse on a pin at every boot; a day of wakes runs in seconds. Start with
   [its tests](periodic_wake/tests/test_periodic_wake.py).
+- [OBD-II reader](obd_reader/): Bluetooth Classic SPP to an ELM327-compatible adapter, found by
+  name and paired with a PIN, and the AT and OBD-II commands the vehicle's answers lead it to.
+  Start with [its tests](obd_reader/tests/test_obd_reader.py).
 
 See the [examples guide](../docs/features/examples-user.md) for wiring, configuration and commands.
 
