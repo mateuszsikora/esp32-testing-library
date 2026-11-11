@@ -2,7 +2,7 @@
 
 import pytest
 
-from esp32tl.net.mqtt import Broker, matches
+from esp32tl.net.mqtt import TEST_CLIENT, Broker, matches
 
 CONNECT = b"\x10\x0d\x00\x04MQTT\x04\x02\x00\x0a\x00\x01c"
 SUBSCRIBE = b"\x82\x08\x00\x01\x00\x03a/#\x01"
@@ -245,6 +245,42 @@ def test_history_and_next_events_use_append_order_without_consuming(legacy: bool
     assert first_client.at == broker.clients[-1].at
     assert broker.find_message("a/b", "new") is first_message
     assert broker.find_connection() is first_client
+
+
+def test_find_messages_reads_every_match_after_a_mark_by_topic_payload_and_client() -> None:
+    broker = Broker(lambda: 123)
+    assert broker.find_messages() == []
+    session = broker.accept(("10.64.0.2", 4000), lambda data: None, lambda: None)
+    session.on_data(CONNECT + b"\x30\x08\0\x03a/bold")
+    before = broker.mark()
+    assert broker.find_messages(since=before) == []
+    # Appended after the mark at the mark's own board time: included, in append order.
+    broker.publish("a/b", "config", retain=True)
+    session.on_data(b"\x30\x08\0\x03a/bnew" + b"\x30\x08\0\x03x/ynew" + b"\x30\x08\0\x03a/cnew")
+    after = broker.mark()
+    session.on_data(b"\x30\x0a\0\x03a/blater")
+    old, config, new_b, new_y, new_c, later = broker.messages
+    assert later.payload == b"later" and old.at == later.at
+    assert broker.find_messages() == list(broker.messages)
+    assert broker.find_messages(since=before) == [config, new_b, new_y, new_c, later]
+    assert broker.find_messages("a/+", since=before, client="c") == [new_b, new_c, later]
+    assert broker.find_messages("a/+", "new", since=before) == [new_b, new_c]
+    assert broker.find_messages("a/b", b"new", since=before, client="c") == [new_b]
+    assert broker.find_messages(since=before, client=TEST_CLIENT) == [config]
+    assert config.client == TEST_CLIENT == "(test)"
+    assert broker.find_messages(since=after) == [later]
+    assert broker.find_messages(client="absent") == []
+    # Reading consumes nothing; the returned list is the caller's.
+    broker.find_messages(since=before).clear()
+    assert len(broker.find_messages(since=before)) == 5 and len(broker.messages) == 6
+
+
+def test_find_messages_refuses_a_mark_from_another_broker_and_an_index() -> None:
+    mark, broker = Broker(lambda: 0).mark(), Broker(lambda: 0)
+    with pytest.raises(ValueError, match="mqtt: this mark belongs to another broker"):
+        broker.find_messages(since=mark)
+    with pytest.raises(TypeError, match=r"mqtt: since takes a mark from broker\.mark\(\)"):
+        broker.find_messages(since=0)  # type: ignore[arg-type]
 
 
 def test_subscription_condition_tracks_current_state_without_latching() -> None:

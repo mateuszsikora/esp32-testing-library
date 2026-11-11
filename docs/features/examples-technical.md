@@ -326,15 +326,17 @@ Using the shared board type does not add hardware network modeling support.
 seconds, numeric coordinates within the position bounds for a fix, and null coordinates without
 one. It returns an aware UTC datetime, a `Position` or `None`, and the message's `Duration`
 timestamp. Invalid data raises `ValueError` with the received time.
-`Reports.when_received(with_position=False)` captures the broker history length when constructed
-and returns a condition observing only subsequent firmware publications on the exact topic.
+`Reports.when_received(with_position=False)` takes `broker.mark()` when constructed and returns a
+condition reading `broker.find_messages(TOPIC, since=mark, client=CLIENT_ID)`: only subsequent
+publications on the exact topic by the firmware's client ID, `CLIENT_ID = "position-tracker"`.
 Neither construction nor polling consumes messages or advances time. Position waits skip valid
 no-fix reports, but reject malformed ones;
 later invalid messages cannot mask an earlier match. The history view validates every matching
-publication and filters out unrelated topics and the test publisher. The
+publication, reading `find_messages` with the same topic and client from the start, so unrelated
+topics, the test's publications and any other client are left out. The
 condition is `esp32tl.condition(find, description)`, a
 [described condition](pytest-plugin-user.md#described-conditions): `find` closes over the
-captured cursor, and the description is `a tracker report` or `a tracker report with a position`,
+captured mark, and the description is `a tracker report` or `a tracker report with a position`,
 which both board backends name the wait by. Its `bool()` raises
 `TypeError("call the condition 'a tracker report' with (), or pass it to board.wait_until")`, or
 the same with the other description, both before and after a match, to reject assertions on an

@@ -7,6 +7,7 @@ import pytest
 from tracker_support import (
     BROKER_HOST,
     BROKER_PORT,
+    CLIENT_ID,
     TOPIC,
     Reports,
     configure_tracker,
@@ -251,7 +252,7 @@ def test_a_broker_that_never_answers_gets_tried_again(board: Board) -> None:
     board.wait_until(lambda: broker.connections and broker.connections[0].heard, within=STARTUP)
     connect = bytes(broker.connections[0].heard)  # The whole CONNECT: it comes in one TLS record.
     assert connect[0] == 0x10  # MQTT CONNECT
-    assert b"position-tracker" in connect
+    assert CLIENT_ID.encode() in connect
     board.wait_until(lambda: len(broker.connections) > 1, within=RECONNECT_WINDOW)
     assert broker.open_when_accepted[1] == 0  # The first was closed before the second opened.
 

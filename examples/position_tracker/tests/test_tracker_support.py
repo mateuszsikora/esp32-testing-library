@@ -4,11 +4,11 @@ import json
 from datetime import UTC, datetime
 
 import pytest
-from tracker_support import TOPIC, Reports, serve_broker
+from tracker_support import CLIENT_ID, TOPIC, Reports, serve_broker
 
 from esp32tl import Board
 from esp32tl.interfaces import NeverHappened
-from esp32tl.net.mqtt import Broker, Message
+from esp32tl.net.mqtt import TEST_CLIENT, Broker, Message
 from esp32tl.units import Position, seconds
 
 POSITION = {"fix": True, "lat": 52.229677, "lon": 21.012233, "time": 1935837296}
@@ -16,7 +16,7 @@ NO_FIX = {**POSITION, "fix": False, "lat": None, "lon": None}
 
 
 def received(
-    broker: Broker, payload: object, *, topic: str = TOPIC, client: str = "tracker"
+    broker: Broker, payload: object, *, topic: str = TOPIC, client: str = CLIENT_ID
 ) -> None:
     broker.messages.append(
         Message(
@@ -32,7 +32,8 @@ def test_waits_start_now_filter_the_topic_and_preserve_the_first_match() -> None
     next_report, positioned = reports.when_received(), reports.when_received(with_position=True)
     assert next_report() is None and positioned() is None
     received(broker, "unrelated telemetry", topic="tracker/health")
-    received(broker, POSITION, client="(test)")
+    received(broker, POSITION, client=TEST_CLIENT)
+    received(broker, POSITION, client="another-device")
     assert next_report() is None and positioned() is None
     received(broker, NO_FIX)
     without_fix = next_report()
@@ -42,7 +43,7 @@ def test_waits_start_now_filter_the_topic_and_preserve_the_first_match() -> None
     with_fix = positioned()
     assert with_fix is not None and with_fix.position == Position(52.229677, 21.012233)
     assert with_fix.utc == datetime(2031, 5, 6, 12, 34, 56, tzinfo=UTC)
-    assert with_fix.received_at == seconds(4)
+    assert with_fix.received_at == seconds(5)
     assert next_report() == without_fix  # Repeated polling retains the first matching report.
     assert len(reports.history) == 3
     assert reports.when_received()() is None

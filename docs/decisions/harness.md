@@ -2929,7 +2929,7 @@ sources, because a test or CI job must run exactly the artifact it selected. Pyt
 
 ## MQTT, TLS, HTTP and DHCP event APIs name history queries and next-event conditions explicitly
 
-Status: decided (#108, #116)
+Status: decided (#108, #116, #182)
 
 MQTT exposes immediate `find_message` / `find_connection` history queries and callable
 `next_message` / `next_connection` conditions. The existing `message` / `connected` names keep
@@ -2960,6 +2960,17 @@ because `Request.path` has no query and `assert find_request("/a?b") is None` wo
 for a request the firmware did send. `serve` refuses one too, since it could only ever lead to a
 `404`.
 
+A check over a stream of MQTT publications, not one, needs every match after a point (#182).
+`broker.mark()` returns an opaque `Mark` at the end of `messages`, and `find_messages(topic="#",
+payload=None, *, since=None, client=None)` returns every match after it in append order. The mark
+is the message history's own boundary, taken as `next_message` takes its own: a message appended
+after the mark is included even at the mark's board time. A mark from another broker raises
+`ValueError`, and a `since` that is not a mark, such as the `len(broker.messages)` consumers took
+by hand, raises `TypeError` naming `broker.mark()`. `client=` takes a client ID, and the test's own
+client name is exported as `esp32tl.net.mqtt.TEST_CLIENT`, so neither the device-only case nor the
+test-only case needs index arithmetic or the `"(test)"` literal. `messages` stays the read-only
+history it was; the position tracker's `Reports` reads through `mark` and `find_messages`.
+
 **Rejected:** changing existing MQTT defaults to include history, which could silently satisfy
 reconnect waits with stale events; making every condition future-only, which loses useful
 current-state and cumulative queries. A public shared cursor is unnecessary for these scopes:
@@ -2967,6 +2978,13 @@ explicit methods express them without requiring callers to compare timestamps, e
 or manage cursor ownership across brokers and TLS listeners. Also rejected: matching a filter
 holding `?` against `Request.target`, which would give `path` two meanings depending on its
 content.
+
+**Rejected (#182):** a `from_test: bool` filter, because a client ID covers both the device-only
+and the test-only case and a boolean would cover neither when two devices publish; a timestamp
+as the mark, because equal-time records would fall on either side of it; a public index, which
+is the arithmetic consumers copied; and a `since=` on `next_message`, because a condition already
+takes its boundary at construction. The mark is not shared with `clients`, `deliveries` or the
+other services, so the shared cursor rejected above stays rejected.
 
 ## A reset and a power cycle go on in the run they happen in, on its clock
 

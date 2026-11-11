@@ -8,11 +8,12 @@ from datetime import UTC, datetime
 from esp32tl import Board, Condition, condition
 from esp32tl.flash import u16
 from esp32tl.net import Internet
-from esp32tl.net.mqtt import Broker, Message
+from esp32tl.net.mqtt import Broker, Mark, Message
 from esp32tl.net.tls import CertificateAuthority, Tls
 from esp32tl.units import Duration, Position
 
 TOPIC = "tracker/position"
+CLIENT_ID = "position-tracker"
 BROKER_HOST = "broker.test"
 BROKER_PORT = 8883
 
@@ -79,14 +80,13 @@ class Reports:
     def __init__(self, broker: Broker) -> None:
         self._broker = broker
 
-    def _since(self, start: int) -> Iterator[Report]:
-        for message in self._broker.messages[start:]:
-            if message.topic == TOPIC and message.client != "(test)":
-                yield Report.decode(message)
+    def _since(self, mark: Mark | None) -> Iterator[Report]:
+        for message in self._broker.find_messages(TOPIC, since=mark, client=CLIENT_ID):
+            yield Report.decode(message)
 
     @property
     def history(self) -> list[Report]:
-        return list(self._since(0))
+        return list(self._since(None))
 
     def when_received(self, *, with_position: bool = False) -> Condition[Report | None]:
         """Create a condition for the first future report, optionally requiring a position.
@@ -94,7 +94,7 @@ class Reports:
         Creating or polling it never consumes a report. Repeated polls retain the first
         match; create a new condition to observe publications after that point.
         """
-        start = len(self._broker.messages)
+        start = self._broker.mark()
 
         def find() -> Report | None:
             wanted = (r for r in self._since(start) if not with_position or r.position is not None)
