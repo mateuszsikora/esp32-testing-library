@@ -3257,6 +3257,34 @@ a mistake a test makes by accident.
 A name of the test's for the report (`model(source, name=...)`), because no test needs one yet and
 the class's name says what it is.
 
+## A model of the test's may state its times in Durations, as a subclass of Model
+
+Status: decided (#183)
+
+`esp32tl.sources.model.Model` is the base of a model whose `receive(at, data)`, `poll(now)`,
+`quiet_until()` and `latency()` take and return `Duration`s, as everything else a test states
+does. `Uart.model` and `SppPeer(source=...)` take one, or a source in nanoseconds as before: they
+tell them apart by `isinstance(source, Model)`, keep `source` as the test gave it, and call a
+`Model` through `in_nanoseconds`, which converts each time at the edge. The link and its protocol
+see nanoseconds either way, so the two kinds put the same bytes in at the same instants. What a
+`Model` gets wrong is checked as a source in nanoseconds is, with the messages in `Duration`s: the
+adapter refuses what is not a `Duration`, and the link keeps its checks of order, one set for both
+kinds, writing the times of its errors with the interface's `instant(t)`, which `Uart` makes a
+`Duration` while its source is a `Model`; `SppPeer`'s checks of order already spoke in seconds.
+The four methods are abstract, so a `Model` that lacks one, or misspells it, cannot be made.
+
+**Rejected:** changing `Source` itself to `Duration`s, because every existing model would break,
+for what the adapter gives as well. Defaults for the four methods on `Model`, for the reason the
+`Uart.model` decision above gives against filling them in: a misspelt method would be a model that
+silently does nothing. Telling a model in `Duration`s by what it returns, because a model that
+answers nothing has nothing to tell by, and the first wrong guess would be a confusing error. A
+proxy of a `Model` taken as one, because `isinstance` does not see through `__getattr__`; a proxy
+of a `Model` is called in nanoseconds, as any other proxy is, and the documentation says so; one
+whose `__class__` is the model's is a `Model`. Copying the link's checks of order into `Uart` for a
+`Model`, with the answers and the turn the link keeps, because the copy drifts when the link's
+checks change, and reports another fault first when two interfaces fail in one turn: the link
+polls every interface before it checks a stamp.
+
 ## The wait for a wake from deep sleep is a board call that asks for a turn after each event
 
 Status: decided (#36)

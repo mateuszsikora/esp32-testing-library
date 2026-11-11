@@ -389,7 +389,8 @@ adapter authenticates with it instead of the PIN.
 The tests put the adapter on the air as an `SppPeer` named `OBDII` with PIN `1234`. Its source
 ([the model that answers](bluetooth-peer-user.md#the-model-that-answers)) is this example's model
 of the adapter, `Elm327` in [`tests/elm327.py`](../../examples/obd_reader/tests/elm327.py), which
-answers for a `Vehicle` and keeps every command it hears:
+answers for a `Vehicle` and keeps every command it hears. It is a `Model`, so every time in it is a
+`Duration` ([a model of the test's, in Durations](models-user.md#a-model-of-the-tests-in-durations)):
 
 ```python
 from elm327 import Elm327, Vehicle

@@ -873,35 +873,35 @@ commands to `uart.aux` of a local profile and reads the answers
 ```python
 from collections.abc import Iterable
 
-from esp32tl.link.boardlink import Output
-from esp32tl.units import ms, seconds
+from esp32tl.sources.model import Model, Timed
+from esp32tl.units import Duration, ms, seconds
 
-ANSWER = ms(1).ns
+ANSWER = ms(1)
 
 
-class AtResponder:
+class AtResponder(Model):
     """OK to every command line, ANSWER after its CR LF."""
 
     def __init__(self) -> None:
         self.lines: list[bytes] = []
         self._heard = b""
 
-    def receive(self, t: int, data: bytes) -> Iterable[Output]:
+    def receive(self, at: Duration, data: bytes) -> Iterable[Timed]:
         self._heard += data
         answers = []
         while b"\r\n" in self._heard:
             line, _, self._heard = self._heard.partition(b"\r\n")
             self.lines.append(line)
-            answers.append((t + ANSWER, b"\r\nOK\r\n"))
+            answers.append((at + ANSWER, b"\r\nOK\r\n"))
         return answers
 
-    def poll(self, now: int) -> Iterable[Output]:
+    def poll(self, now: Duration) -> Iterable[Timed]:
         return []
 
-    def quiet_until(self) -> int | None:
+    def quiet_until(self) -> Duration | None:
         return None
 
-    def latency(self) -> int | None:
+    def latency(self) -> Duration | None:
         return ANSWER
 
 
@@ -916,26 +916,37 @@ def test_the_firmware_talks_to_the_test_s_model_on_its_own_uart(board):
 
 - `model(source)` returns `source`, so the test keeps it to read what it heard. It must come
   before `board.power_on()`, and is the route's one source, as a replay or a real device is.
-- `source` is any object with the four methods of `esp32tl.interfaces.uart.Source`; times are
-  nanoseconds of the board's clock, an `Output` is a `(t, bytes)` pair:
+- `source` is a subclass of `esp32tl.sources.model.Model`, whose times are `Duration`s on the
+  board's clock, or any object with the four methods of `esp32tl.interfaces.uart.Source`, whose
+  times are nanoseconds as `int`s. The methods are the same four, with the same names:
 
   | Method | Called | Returns |
   |---|---|---|
-  | `receive(t, data)` | When the firmware's bytes cross the wire, `t` when they did. They come cut anywhere: find a request by its terminator | The answers, each stamped `latency()` or more after `t` |
+  | `receive(at, data)` | When the firmware's bytes cross the wire, `at` when they did. They come cut anywhere: find a request by its terminator | The answers, `(at, bytes)` pairs (a `Timed`), each stamped `latency()` or more after `at` |
   | `poll(now)` | At every turn of the link | What the part sends unprompted, each stamped `now` or later |
   | `quiet_until()` | After `poll(now)` | The next time it sends unprompted, later than `now`; `None` for nothing scheduled |
-  | `latency()` | At every turn | The shortest time in which it answers, in nanoseconds; `None` when it answers nothing |
+  | `latency()` | At every turn | The shortest time in which it answers; `None` when it answers nothing |
+
+  A `Model` subclass defines all four: they are abstract, so one that lacks one, or misspells it,
+  cannot be made (`TypeError: Can't instantiate abstract class AtResponder without an
+  implementation for abstract method 'poll'`, as Python 3.12 on words it), rather than be a model
+  that silently says nothing. A source in nanoseconds has the same four, takes `t: int` and
+  `now: int`, and returns `(t, bytes)` pairs with `t` an `int`, an `Output` of
+  `esp32tl.link.boardlink`; the run is the same, to the nanosecond and the byte. Prefer it for a
+  source that exists already, for one that is itself a proxy of another (a `Model` behind a proxy
+  is not a `Model`, and is called in nanoseconds), and for one whose own cost matters: a `Model`
+  costs a `Duration` for every instant it is given and every one it returns, and a check of each.
+  Everywhere else, a `Model` keeps the unit arithmetic out of the test.
 
   The board runs ahead of the model by up to `latency()` and up to `quiet_until()`: an answer
   stamped sooner than its latency, or something sent before the `quiet_until()` it gave, ends the
-  run with `{interface} sent bytes stamped {t} ns in the turn at {now} ns: it answered sooner
-  than its latency, or sent past its quiet_until`. A model that answers nothing returns `[]` from
+  run, with the link's error in the table below. A model that answers nothing returns `[]` from
   `receive`, and `None` from `latency()`.
-- A model with a fifth method, `supply(on)`, is a part on the board's supply, as the GNSS receiver
-  and the modem are: `board.power_off()` calls `supply(False)`, and the `power_on()` after it
-  `supply(True)`, at the board's time. It starts with power: the first `power_on()` calls nothing.
-  A model without it keeps going through a power cycle; what it sends while the chip is off is
-  lost.
+- A model with a fifth method, `supply(on)`, of either kind, is a part on the board's supply, as
+  the GNSS receiver and the modem are: `board.power_off()` calls `supply(False)`, and the
+  `power_on()` after it `supply(True)`, at the board's time. It starts with power: the first
+  `power_on()` calls nothing. A model without it keeps going through a power cycle; what it sends
+  while the chip is off is lost.
 - The model is called from the link's thread, inside the test's waits, while the runner waits for
   its answer: it must not block, and must not wait on the wall clock.
 - What it refuses, at the call: an object without one of the methods, or with one that cannot be
@@ -951,15 +962,18 @@ def test_the_firmware_talks_to_the_test_s_model_on_its_own_uart(board):
   backend, only real`.
 - What the model does wrong during the run ends the run, as a link error: a test that waits gets
   `RunEnded`, which names it, and the teardown `the link failed: ...`. The run's log has what
-  crossed the wire until then.
+  crossed the wire until then. The checks are the same for both kinds; a `Model` is told in
+  `Duration`s, as `str` writes them (`0.0020005 s`), a source in nanoseconds in `int`s:
 
-  | The model | The link's error |
-  |---|---|
-  | Raises in a method | `uart.aux.receive raised ValueError: ...`, and so for `poll`, `quiet_until` and `latency` |
-  | Returns from `receive` or `poll` something that is not a `(t, bytes)` pair, `t` an `int` | `uart.aux.receive returned [1, 2], not a (t_ns, bytes) pair` |
-  | Stamps an answer sooner than its `latency()`, or sends before the `quiet_until()` it gave | `uart.aux sent bytes stamped {t} ns in the turn at {now} ns: it answered sooner than its latency, or sent past its quiet_until` |
-  | Returns from `quiet_until()` what is not an `int`, or a time not after the turn | `uart.aux.quiet_until returned 1.5, not nanoseconds`; `uart.aux is quiet until {t} ns, not after the turn at {now} ns: what it sends by then belongs in this turn` |
-  | Returns from `latency()` what is not an `int` of 0 or more | `uart.aux declares a latency of -1 ns` |
+  | The model | A `Model`'s error | A source in nanoseconds' error |
+  |---|---|---|
+  | Raises in a method | `uart.aux.receive raised ValueError: ...`, and so for `poll`, `quiet_until` and `latency` | The same |
+  | Is a `Model` behind a proxy, which is called in nanoseconds | — | `uart.aux.receive raised TypeError: unsupported operand type(s) for +: 'int' and 'Duration'`, or whatever the model's arithmetic on an `int` raises: give the route the `Model` itself, or a proxy whose `__class__` is the model's, which `isinstance` sees |
+  | Returns from `receive` or `poll` something that is not a `(t, bytes)` pair | `uart.aux.receive returned (2000500, b'OK'), not a (Duration, bytes) pair` | `uart.aux.receive returned [1, 2], not a (t_ns, bytes) pair`, `t` not an `int` |
+  | Stamps an answer sooner than its `latency()`, or sends before the `quiet_until()` it gave | `uart.aux sent bytes stamped 0.0020005 s in the turn at 0.0030005 s: it answered sooner than its latency, or sent past its quiet_until` | `uart.aux sent bytes stamped {t} ns in the turn at {now} ns: ...`, the rest the same |
+  | Returns from `quiet_until()` what is not of its kind | `uart.aux.quiet_until returned 1.5, not a Duration` | `uart.aux.quiet_until returned 1.5, not nanoseconds` |
+  | Returns from `quiet_until()` a time not after the turn | `uart.aux is quiet until 0.002 s, not after the turn at 0.002 s: what it sends by then belongs in this turn` | `uart.aux is quiet until {t} ns, not after the turn at {now} ns: ...`, the rest the same |
+  | Returns from `latency()` what is not of its kind, or below 0 | `uart.aux declares a latency of 1000000, not a Duration`; `uart.aux declares a latency of -0.001 s` | `uart.aux declares a latency of -1 ns`, for anything but an `int` of 0 or more |
 
 - The report names it by its class, `uart.aux: the model of AtResponder; 156 bytes in, 233 out`,
   the run's log has the step `uart.aux.model(AtResponder)`, and a tap of the route records it as

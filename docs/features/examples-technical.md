@@ -237,9 +237,11 @@ again at 2.332 s, 0.56 s after the reading, inside the 1 s pause.
 The nineteen tests, twelve on the board and seven of the model alone, take about 10.5 s of wall
 time.
 
-`tests/elm327.py` is a dataclass with no board and no waits. `receive` buffers what the reader
-writes up to each `\r`, records the command and its time, and returns the answer at
-`t + answer_time` (`reset_time` for `ATZ`); `poll` returns nothing and `quiet_until` returns `None`,
+`tests/elm327.py` is a dataclass with no board and no waits, a subclass of
+`esp32tl.sources.model.Model`: `receive(at, data)` gets the instant as a `Duration`, and every time
+it returns or keeps is one. `receive` buffers what the reader writes up to each `\r`, records the
+command and `at` as a `Request`, and returns the answer at `at + answer_time` (`reset_time` for
+`ATZ`); `latency()` is `answer_time`, `poll` returns nothing and `quiet_until` returns `None`,
 since the adapter never speaks unprompted. `Vehicle.supported()` encodes the readings it has, by
 PID. The echo uses the setting from before the command, so `ATE0` is still echoed, as an ELM327
 does. `protocol_found` is false after `ATZ` and `ATSP`; the first mode 01 request with the

@@ -1,10 +1,12 @@
 """An ELM327-compatible OBD-II adapter, as the source of an `SppPeer`: it answers the commands the
 reader writes on the SPP channel for a `Vehicle` the test changes, and keeps every command it was
-sent, which is what the tests read at the peer. No waits, no board."""
+sent, which is what the tests read at the peer. No waits, no board. A `Model`: its times are
+`Duration`s on the board's clock."""
 
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 
+from esp32tl.sources.model import Model, Timed
 from esp32tl.units import Duration, ms
 
 VERSION = "ELM327 v1.5"
@@ -52,7 +54,7 @@ class Request:
 
 
 @dataclass
-class Elm327:
+class Elm327(Model):
     """The adapter's command interpreter. Each command is a line ending in a carriage return; its
     answer is the command's echo while echo is on (`ATE1`, the state after `ATZ`), the answer's
     lines, each ending in a carriage return, an empty line and the prompt `>`, `answer_time` after
@@ -73,18 +75,18 @@ class Elm327:
         """What the reader asked, in order."""
         return [request.command for request in self.requests]
 
-    def receive(self, t: int, data: bytes) -> Iterable[tuple[int, bytes]]:
+    def receive(self, at: Duration, data: bytes) -> Iterable[Timed]:
         self._pending += data
         answers = []
         while b"\r" in self._pending:
             line, _, self._pending = self._pending.partition(b"\r")
             command = line.decode("ascii", "replace").strip().upper().replace(" ", "")
-            self.requests.append(Request(Duration(t), command))
+            self.requests.append(Request(at, command))
             if self.silent:
                 continue
             echo = line + b"\r" if self.echo else b""
             text, delay = self.answer(command)
-            answers.append((t + delay.ns, echo + text.encode("ascii") + b"\r\r" + PROMPT))
+            answers.append((at + delay, echo + text.encode("ascii") + b"\r\r" + PROMPT))
         return answers
 
     def answer(self, command: str) -> tuple[str, Duration]:
@@ -121,11 +123,11 @@ class Elm327:
             return searching + "NO DATA"
         return searching + " ".join(f"{byte:02X}" for byte in bytes([0x41, pid]) + data)
 
-    def poll(self, now: int) -> Iterable[tuple[int, bytes]]:
+    def poll(self, now: Duration) -> Iterable[Timed]:
         return ()
 
-    def quiet_until(self) -> int | None:
+    def quiet_until(self) -> Duration | None:
         return None
 
-    def latency(self) -> int:
-        return self.answer_time.ns
+    def latency(self) -> Duration:
+        return self.answer_time

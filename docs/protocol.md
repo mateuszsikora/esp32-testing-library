@@ -1120,6 +1120,11 @@ per event.
 When several interfaces share the socket, `BoardLink` sends the minimum `latency` over them, and the
 minimum `quiet_until` over them and the test's clock (section 4), a `null` counting as no bound.
 The `lines` interface, which drives GPIO lines at the instant the test does, declares neither.
+`BoardLink` checks each interface's outputs and `quiet_until` against the turn before it sends
+the `wait` (rule 2 of section 7 is the runner's side of it), and its error names the interface and
+writes the times as the interface states them, `Interface.instant(t)`: in nanoseconds (`1500 ns`),
+or, for a UART whose source is a `Model` (`esp32tl/sources/model/__init__.py`), as a `Duration`
+(`0.0000015 s`). The wire carries nanoseconds either way.
 
 ## 8. Future-dated inputs
 

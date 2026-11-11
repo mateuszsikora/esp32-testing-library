@@ -17,7 +17,8 @@ from esp32tl.bluetooth.peer import BluetoothDevice, SppPeer
 from esp32tl.interfaces.bluetooth import Bluetooth
 from esp32tl.interfaces.console import Console
 from esp32tl.report import board_time
-from esp32tl.units import seconds
+from esp32tl.sources.model import Model, Timed
+from esp32tl.units import Duration, seconds
 
 pytestmark = pytest.mark.app_path("../firmware/bt_spp_initiator")
 
@@ -32,28 +33,28 @@ BLOCK = bytes(i & 0xFF for i in range(990))
 INQUIRY = seconds(30 * 1.28)
 
 
-class Heard:
+class Heard(Model):
     """A source that answers nothing and keeps what the firmware writes."""
 
     def __init__(self) -> None:
-        self.heard: list[tuple[int, bytes]] = []
+        self.heard: list[tuple[Duration, bytes]] = []
 
-    def receive(self, t: int, data: bytes) -> Iterable[tuple[int, bytes]]:
-        self.heard.append((t, data))
+    def receive(self, at: Duration, data: bytes) -> Iterable[Timed]:
+        self.heard.append((at, data))
         return ()
 
-    def poll(self, now: int) -> Iterable[tuple[int, bytes]]:
+    def poll(self, now: Duration) -> Iterable[Timed]:
         return ()
 
-    def quiet_until(self) -> int | None:
+    def quiet_until(self) -> Duration | None:
         return None
 
-    def latency(self) -> int:
-        return 0
+    def latency(self) -> Duration | None:
+        return None
 
-    def between(self, start: int, end: int) -> int:
-        """The bytes heard from `start` to `end`, nanoseconds, both included."""
-        return sum(len(data) for t, data in self.heard if start <= t <= end)
+    def between(self, start: Duration, end: Duration) -> int:
+        """The bytes heard from `start` to `end`, both included."""
+        return sum(len(data) for at, data in self.heard if start <= at <= end)
 
 
 def test_the_firmware_finds_pairs_with_and_streams_to_the_peer(
@@ -80,7 +81,7 @@ def test_the_firmware_finds_pairs_with_and_streams_to_the_peer(
     start, end, kbit_s = (float(speed[group]) for group in (1, 2, 3))
     # What it counted reached the peer, in its blocks, as they were written.
     written = kbit_s * 1000 * (end - start) / 8
-    heard = source.between(opened.at.ns, speed.at.ns)
+    heard = source.between(opened.at, speed.at)
     assert abs(heard - written) <= len(BLOCK), (heard, written)
     stream = b"".join(data for _, data in source.heard)
     # 3 s or more at about 299 kbit/s is about 113 blocks

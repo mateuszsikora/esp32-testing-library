@@ -11,12 +11,14 @@ from typing import Protocol, TypeVar, runtime_checkable
 from esp32tl import recording
 from esp32tl.boards.capabilities import Request
 from esp32tl.interfaces import SourceError
-from esp32tl.link.boardlink import Direction, Interface, Output, Wire
+from esp32tl.link.boardlink import Direction, Interface, LinkError, Output, Wire
 from esp32tl.matching import Protocol as ReplayProtocol
 from esp32tl.report import RunLog
+from esp32tl.sources.model import InNanoseconds, Model, in_nanoseconds
 from esp32tl.sources.real import Real
 from esp32tl.sources.replay import Replay
 from esp32tl.tap import NO_SOURCE, Tap
+from esp32tl.units import Duration
 
 
 class Source(Protocol):
@@ -32,8 +34,8 @@ class Source(Protocol):
     def latency(self) -> int | None: ...
 
 
-# A model the test gives, which `Uart.model` returns as it was given.
-S = TypeVar("S", bound=Source)
+# A model the test gives, in nanoseconds or a `Model`, which `Uart.model` returns as it was given.
+S = TypeVar("S", bound=Source | Model)
 
 
 @runtime_checkable
@@ -98,7 +100,9 @@ class Uart(Interface):
         self.directory = directory
         self.asked = asked
         self.log = log
-        self.source: Source | None = None
+        # What the test gave; the route calls `_driving`, the same but for a `Model`.
+        self.source: Source | Model | None = None
+        self._adapter: InNanoseconds | None = None
         # The kind of source the test gave, as the capability declaration names it: `replay`.
         self.source_kind: str | None = None
         # What the source was made from, as the test named it: the replay's recording.
@@ -151,7 +155,8 @@ class Uart(Interface):
         """Puts `source`, a model the test wrote, at the far end: what the firmware transmits
         goes to its `receive`, and what it returns, or sends from `poll`, goes into the chip at
         its own time. One that is `Supplied` loses its power with the board's supply, and gets it
-        back. Returns `source`."""
+        back. A `Model` states its times in `Duration`s, and the link's errors about them are in
+        `Duration`s too (`instant`); any other source in nanoseconds. Returns `source`."""
         missing = [m for m in SOURCE_METHODS if not callable(getattr(source, m, None))]
         if missing:
             raise TypeError(
@@ -220,7 +225,7 @@ class Uart(Interface):
 
     def _give(
         self,
-        source: Source,
+        source: Source | Model,
         kind: str,
         detail: str,
         file: Path | None = None,
@@ -244,28 +249,44 @@ class Uart(Interface):
         if self.log is not None:
             self.log.test(0, step or f"{self.name}.{kind}({detail!r})")
 
+    @property
+    def _driving(self) -> Source | None:
+        """What the route calls: `source`, or a `Model` in nanoseconds, whose refusals are
+        `LinkError`s naming the route."""
+        source = self.source
+        if not isinstance(source, Model):
+            return source
+        if self._adapter is None or self._adapter.model is not source:
+            self._adapter = in_nanoseconds(source, self.name, LinkError)
+        return self._adapter
+
+    def instant(self, t: int) -> str:
+        """`t` as the link's errors write it: a `Duration`, `0.0020005 s`, for a `Model`, which
+        states its times so; nanoseconds otherwise."""
+        return str(Duration(t)) if isinstance(self.source, Model) else super().instant(t)
+
     def receive(self, t: int, direction: Direction, data: bytes) -> Iterable[Output]:
         self._crossed(t, "out", data)
-        if self.source is None:
+        if self._driving is None:
             return ()
-        return self._sent(self.source.receive(t, data))
+        return self._sent(self._driving.receive(t, data))
 
     def transmitted(self, t: int, baud: int | None, data: bytes) -> None:
         """A source that refuses the rate fails the run; the bytes that did it still crossed the
         guest's wire, for the tap and the run's log."""
-        if isinstance(self.source, RateBound):
+        if isinstance(self._driving, RateBound):
             try:
-                self.source.transmitted(t, baud)
+                self._driving.transmitted(t, baud)
             except Exception:
                 self._crossed(t, "out", data)
                 raise
 
     def arrive(self, now: int) -> None:
-        if isinstance(self.source, Arriving):
-            self.source.arrive(now)
+        if isinstance(self._driving, Arriving):
+            self._driving.arrive(now)
 
     def poll(self, now: int) -> Iterable[Output]:
-        return () if self.source is None else self._sent(self.source.poll(now))
+        return () if self._driving is None else self._sent(self._driving.poll(now))
 
     def _sent(self, outputs: Iterable[Output]) -> list[Output]:
         """`outputs`, read, each that is a `(t, bytes)` pair, `t` nanoseconds from 0, recorded as
@@ -291,17 +312,17 @@ class Uart(Interface):
             self.log.route(t, self.name, direction, data)
 
     def quiet_until(self) -> int | None:
-        return None if self.source is None else self.source.quiet_until()
+        return None if self._driving is None else self._driving.quiet_until()
 
     def supply(self, on: bool) -> None:
         """The board's supply went off, or came back: a model of a part of the board loses its
         power with it, and gets it back. A replay or a real device is not on it, and keeps
         sending; what it sends while the chip is off is lost."""
-        if isinstance(self.source, Supplied):
-            self.source.supply(on)
+        if isinstance(self._driving, Supplied):
+            self._driving.supply(on)
 
     def latency(self) -> int | None:
-        return None if self.source is None else self.source.latency()
+        return None if self._driving is None else self._driving.latency()
 
 
 # What `Source` asks of a model: `model` refuses one without each of them, callable.
