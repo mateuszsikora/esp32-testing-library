@@ -7,8 +7,9 @@ replays a recorded GNSS stream into its UART on the emulated clock, or connects 
 host serial port with the run paced to wall time, drives and reads its GPIO lines, puts an SD card
 holding an image file on its SPI pins, and lets a test read the firmware's console. The `esp32tl`
 command does the same outside pytest, but for the SD card and the host serial port. Beside the
-board, a Bluetooth Classic peer with the Serial Port Profile runs on Bumble's virtual link and a
-model in the test answers it; no firmware talks to it yet, as esp32sim has no Classic controller.
+board, a Bluetooth Classic peer with the Serial Port Profile runs on Bumble's virtual link, where
+the firmware's Bluetooth host finds it, pairs with it and talks to it through a controller in the
+harness, and a model in the test answers it.
 
 ## Getting started
 

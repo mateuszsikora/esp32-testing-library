@@ -112,6 +112,34 @@ def test_losing_the_fix_pauses_logging_and_recovery_appends(board: Board) -> Non
     )
 
 
+def test_a_power_cut_keeps_the_rows_before_it_and_logging_resumes_after_it(
+    board: Board,
+) -> None:
+    card = board.sd_card.image(size_mb=32).build()
+    error = board.lines.output("logger.error")
+    board.sd_card.insert(card)
+    board.gnss.fix(at=WARSAW)
+    board.power_on(utc=START)
+    board.wait(3 * FIX_INTERVAL + WRITE_MARGIN)
+    before = (
+        "120001.00,52.229677,21.012233\n"
+        "120002.00,52.229677,21.012233\n"
+        "120003.00,52.229677,21.012233\n"
+    )
+    assert card.read_text("20261102.CSV") == before
+
+    board.power_off()
+    board.wait(seconds(5))
+    board.power_on()  # At 8.5 s: the firmware mounts the card again before the epoch at 9 s.
+    # The error pin is high from boot until the mount, which lowers it before ready.
+    mounted = board.wait_until(board.console.line("sd_data_logger: ready"), within=FIX_INTERVAL)
+    # The receiver is on the board's supply too, so it has no epochs from the cut to send late.
+    saved = board.console.line(r"sd_data_logger: fix 20261102 120009\.00 \(saved\)")
+    board.wait_until(saved, within=FIX_INTERVAL)
+    assert card.read_text("20261102.CSV") == before + "120009.00,52.229677,21.012233\n"
+    error.assert_stayed_off(since=mounted.at)
+
+
 def test_bad_sentences_cannot_create_files(board: Board, tmp_path: Path) -> None:
     card = board.sd_card.image(size_mb=32).build()
     prefix = "GPRMC,{time},A,5213.78062,N,02100.73398,E,0.0,,{date},,,A"

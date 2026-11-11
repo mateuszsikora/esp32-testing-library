@@ -166,13 +166,16 @@ prints `sd_data_logger: SD card writes again`. A row that failed is not written 
 Mounting is attempted once at boot; insertion/removal during a run is not supported.
 
 Tests verify existing rows and new coordinates byte for byte, a new file across New Year and
-leap-day midnight, no files without a fix, pause/recovery after fix loss, malformed input, and
-continued reception with the error pin continuously high after an empty-slot failure. With the
-card's fault rules ([pytest plugin](pytest-plugin-user.md#the-fixtures)) they also verify, after a
-successful mount and first rows: a failed block write that raises GPIO18, loses its row and
+leap-day midnight, no files without a fix, pause/recovery after fix loss, a power cut between two
+rows (`board.power_off()` at 3.5 s, 5 s off, `board.power_on()`: the rows from before it are kept,
+none is written while the power is off, and the fix at 9 s, the first epoch after the card is
+mounted again, is appended to the same file, with the error pin low from the mount on), malformed
+input, and continued reception with the error pin continuously high after an empty-slot failure.
+With the card's fault rules ([pytest plugin](pytest-plugin-user.md#the-fixtures)) they also verify,
+after a successful mount and first rows: a failed block write that raises GPIO18, loses its row and
 leaves the image readable, and the next fix that writes again and lowers the pin; a failed block
-read, which ESP-IDF reports as its read timeout 1 s later, with the same recovery; a write busy
-for 300 ms, whose row is saved later with the pin low throughout; and a write busy for 6 s, past
+read, which ESP-IDF reports as its read timeout 1 s later, with the same recovery; a write busy for
+300 ms, whose row is saved later with the pin low throughout; and a write busy for 6 s, past
 ESP-IDF's 5 s write timeout, which the firmware reports as a failure 5 s after the write on the
 board's clock, then writes again once the card is no longer busy.
 
