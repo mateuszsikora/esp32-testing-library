@@ -73,6 +73,24 @@ stays until `gh cache delete <key>` removes it.
 "Artifact storage quota has been hit": that quota belongs to the account, is shared by all its
 private repositories and is full, while the cache has 10 GB per repository of its own.
 
+## A build job fails when the cache did not keep its tarball
+
+Status: decided (#190)
+
+The `firmware` and `runner` jobs restore their key with `actions/cache/restore` and, on a miss, save
+the tarball with `actions/cache/save` and look the key up again with `lookup-only` and
+`fail-on-cache-miss`. A save that did not land then fails the build job, whose log shows why, and a
+re-run of that job can save again. On `main` on 11 November 2026 the `runner` job could not save
+under its key (`Failed to save: Unable to reserve cache with key runner-dde51e…-Linux-X64, another
+job may be creating this cache.`), stayed green, and all 12 `test` jobs and `determinism` failed on
+the miss, where the cause was not in their logs.
+
+**Rejected:** `actions/cache` saving in its post step at the end of the job, as before, because it
+only warns when the save fails and the job stays green.
+
+**Rejected:** checking with `gh cache list`, because that needs `actions: read`, and the workflow's
+token has `contents: read` only.
+
 ## Each cache key hashes the whole workflow and the Makefile
 
 Status: decided (#48)

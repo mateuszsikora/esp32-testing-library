@@ -64,6 +64,14 @@ running twice: a job whose key is already cached builds nothing. The firmware an
 the workflow and the `Makefile` as well as the sources, so a change to how a build is made or packed
 is a new key too.
 
+On a miss, a build job saves its tarball with `actions/cache/save` right after building it, then
+checks that the cache kept it: the step "Check that the cache kept the tarball" looks the key up
+(`lookup-only`) and fails the build job on a miss with `Failed to restore cache entry. Exiting as
+fail-on-cache-miss is set. Input key: <key>`. A failed save is only a warning, such as `Failed to
+save: Unable to reserve cache with key <key>, another job may be creating this cache.`, so without
+the check the build job would stay green and every test job would fail on the miss instead. On a
+hit, a build job saves and checks nothing.
+
 | Cache entry | Key | Saved by | A miss in `test` |
 |---|---|---|---|
 | `build/ci/firmware.tar` | `firmware-` and the hash of `firmware/**`, `examples/**`, `Makefile`, `.github/workflows/ci.yml` | `firmware` | Fails the job |
@@ -78,6 +86,13 @@ until it is deleted:
 gh cache delete <key>
 ```
 
+When "Check that the cache kept the tarball" fails, re-run the build job. If it fails the same way
+again, the key is blocked: an entry under it was reserved and never finished. That happened on
+`main` on 11 November 2026: most likely a run whose test jobs never started left the runner key
+blocked, and the next run's `runner` job could not save under it. `gh cache list` does not show such
+an entry, so `gh cache delete` cannot remove it; a change to `ci.yml` makes new keys. TODO(owner):
+whether a blocked key frees itself, and after how long.
+
 ## `firmware`
 
 On a cache miss, it runs `make firmware examples` and packs into `build/ci/firmware.tar` only what
@@ -90,7 +105,8 @@ Before the tarball is written, and so before it is cached for good, a Python ste
 image for the files the tests need: `esp32tl-built`, `esp32tl-build.json`, `flasher_args.json`,
 `config/sdkconfig.json`, every flash image `flasher_args.json` names, `project_description.json`
 and the ELF it names. Each missing file is reported as `::error::<path> is missing from the tarball`
-and fails the job. The job then lists the tarball (`tar -tvf`), hit or miss.
+and fails the job. The job then lists the tarball (`tar -tvf`), hit or miss, and on a miss saves
+it and checks that the cache kept it ([above](#how-the-builds-reach-the-test-jobs)).
 
 `firmware/build.sh` holds the ESP-IDF tag, the container digest and the project each image is built
 from, so a change to any of them, or to a project kept under `firmware/` or `examples/`, is a new key.
@@ -103,7 +119,8 @@ here rather than by all the test jobs at the same time. Timeout: 60 minutes.
 On a cache miss, it installs rustup if it is missing (with no default toolchain: rustup installs the
 one `runner/rust-toolchain.toml` pins on the first build), runs `make build-runner test-runner`, and
 packs `runner/target/release/esp32tl-runner` into `build/ci/runner.tar`, which keeps its executable
-bit. The hosted images have rustup; on the self-hosted runner it is installed once and stays.
+bit, then saves it and checks that the cache kept it, as `firmware` does. The hosted images have
+rustup; on the self-hosted runner it is installed once and stays.
 
 The key covers all of `runner/`: the sources, the esp32sim pin in `Cargo.toml` and `Cargo.lock`,
 the toolchain, the profiles, and whatever else cargo reads. A cold build takes under a minute, so

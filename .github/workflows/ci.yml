@@ -10,7 +10,10 @@
 # key or fail. The key is also what keeps a build from running twice: a job
 # whose key is already cached builds nothing. Each key hashes this file and
 # the Makefile as well as the sources, so a change to how a build is made or
-# packed is a new key too.
+# packed is a new key too. A build job saves its tarball in a step of its own
+# and then checks that the cache kept it: actions/cache saving at the end of a
+# job only warns when the save fails, and the job stays green while every test
+# job fails on the miss.
 #
 # A cache entry unused for 7 days is evicted. A test job re-run on its own
 # after that fails on the cache miss: re-run all jobs instead, which builds
@@ -63,7 +66,7 @@ jobs:
           echo "rom-elf-key=rom-elf-${{ hashFiles('scripts/fetch-rom-elf') }}" >>"$GITHUB_OUTPUT"
 
       - id: cache
-        uses: actions/cache@v6
+        uses: actions/cache/restore@v6
         with:
           path: build/ci/firmware.tar
           key: ${{ steps.key.outputs.key }}
@@ -108,6 +111,23 @@ jobs:
 
       - run: tar -tvf build/ci/firmware.tar
 
+      # A failed save is only a warning, so the next step fails the job when
+      # the cache did not keep the tarball, rather than the test jobs.
+      - if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: build/ci/firmware.tar
+          key: ${{ steps.key.outputs.key }}
+
+      - name: Check that the cache kept the tarball
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@v6
+        with:
+          path: build/ci/firmware.tar
+          key: ${{ steps.key.outputs.key }}
+          lookup-only: true
+          fail-on-cache-miss: true
+
       # Fetched once here rather than by all the test jobs at the same time.
       - uses: actions/cache@v6
         with:
@@ -137,7 +157,7 @@ jobs:
         run: echo "key=runner-${{ hashFiles('runner/**', 'Makefile', '.github/workflows/ci.yml') }}" >>"$GITHUB_OUTPUT"
 
       - id: cache
-        uses: actions/cache@v6
+        uses: actions/cache/restore@v6
         with:
           path: build/ci/runner.tar
           key: ${{ steps.key.outputs.key }}-${{ runner.os }}-${{ runner.arch }}
@@ -162,6 +182,22 @@ jobs:
           make build-runner test-runner
           mkdir -p build/ci
           tar -cf build/ci/runner.tar runner/target/release/esp32tl-runner
+
+      # As in the firmware job.
+      - if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: build/ci/runner.tar
+          key: ${{ steps.key.outputs.key }}-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Check that the cache kept the tarball
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@v6
+        with:
+          path: build/ci/runner.tar
+          key: ${{ steps.key.outputs.key }}-${{ runner.os }}-${{ runner.arch }}
+          lookup-only: true
+          fail-on-cache-miss: true
 
   test:
     needs: [firmware, runner]

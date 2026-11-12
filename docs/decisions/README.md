@@ -14,6 +14,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The runs-on label is computed from the platform](ci.md#the-runs-on-label-is-computed-from-the-platform) | `ci.md` | decided (#52) |
 | [CI moves to GitHub-hosted runners before the repository goes public](ci.md#ci-moves-to-github-hosted-runners-before-the-repository-goes-public) | `ci.md` | decided (#52) |
 | [Builds reach the test jobs through the Actions cache, not artifacts](ci.md#builds-reach-the-test-jobs-through-the-actions-cache-not-artifacts) | `ci.md` | decided (#48) |
+| [A build job fails when the cache did not keep its tarball](ci.md#a-build-job-fails-when-the-cache-did-not-keep-its-tarball) | `ci.md` | decided (#190) |
 | [Each cache key hashes the whole workflow and the Makefile](ci.md#each-cache-key-hashes-the-whole-workflow-and-the-makefile) | `ci.md` | decided (#48) |
 | [The firmware job's timeout is 60 minutes](ci.md#the-firmware-jobs-timeout-is-60-minutes) | `ci.md` | decided (#145) |
 | [The runner job caches the binary, not runner/target](ci.md#the-runner-job-caches-the-binary-not-runnertarget) | `ci.md` | decided (#48) |
