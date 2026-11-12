@@ -11,9 +11,9 @@
 # whose key is already cached builds nothing. Each key hashes this file and
 # the Makefile as well as the sources, so a change to how a build is made or
 # packed is a new key too. A build job saves its tarball in a step of its own
-# and then checks that the cache kept it: actions/cache saving at the end of a
-# job only warns when the save fails, and the job stays green while every test
-# job fails on the miss.
+# and then checks that the cache kept it: a failed save does not fail its step
+# (a key it cannot reserve is a plain log line, not even a warning), so the
+# build job would stay green while every test job fails on the miss.
 #
 # A cache entry unused for 7 days is evicted. A test job re-run on its own
 # after that fails on the cache miss: re-run all jobs instead, which builds
@@ -111,9 +111,10 @@ jobs:
 
       - run: tar -tvf build/ci/firmware.tar
 
-      # A failed save is only a warning, so the next step fails the job when
-      # the cache did not keep the tarball, rather than the test jobs.
-      - if: steps.cache.outputs.cache-hit != 'true'
+      # A failed save does not fail this step, so the next one fails the job
+      # when the cache did not keep the tarball, rather than the test jobs.
+      - name: Save the tarball
+        if: steps.cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
         with:
           path: build/ci/firmware.tar
@@ -129,6 +130,8 @@ jobs:
           fail-on-cache-miss: true
 
       # Fetched once here rather than by all the test jobs at the same time.
+      # Saved at the end of the job and not checked: a miss in the test jobs
+      # only downloads the ELF.
       - uses: actions/cache@v6
         with:
           path: .cache/esp-rom-elfs
@@ -184,7 +187,8 @@ jobs:
           tar -cf build/ci/runner.tar runner/target/release/esp32tl-runner
 
       # As in the firmware job.
-      - if: steps.cache.outputs.cache-hit != 'true'
+      - name: Save the tarball
+        if: steps.cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
         with:
           path: build/ci/runner.tar

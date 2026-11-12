@@ -80,16 +80,20 @@ Status: decided (#190)
 The `firmware` and `runner` jobs restore their key with `actions/cache/restore` and, on a miss, save
 the tarball with `actions/cache/save` and look the key up again with `lookup-only` and
 `fail-on-cache-miss`. A save that did not land then fails the build job, whose log shows why, and a
-re-run of that job can save again. On `main` on 11 November 2026 the `runner` job could not save
-under its key (`Failed to save: Unable to reserve cache with key runner-dde51e…-Linux-X64, another
-job may be creating this cache.`), stayed green, and all 12 `test` jobs and `determinism` failed on
-the miss, where the cause was not in their logs.
+re-run of that job can save again. On `main` on 11 November 2026, most likely the `runner` job of
+the run for #188 reserved its key in its post-job save and never finished the entry: that job's log
+was lost and its test jobs never started. The `runner` job of the next run, for #189, could not
+save under the key (`Failed to save: Unable to reserve cache with key runner-dde51e…-Linux-X64,
+another job may be creating this cache.`), stayed green, and all 12 `test` jobs and `determinism`
+failed on the miss, where the cause was not in their logs.
 
-**Rejected:** `actions/cache` saving in its post step at the end of the job, as before, because it
-only warns when the save fails and the job stays green.
+**Rejected:** `actions/cache` saving in its post step at the end of the job, as before, because a
+failed save does not fail the step: a key it cannot reserve is a plain log line, not even a
+warning, so the job stays green.
 
-**Rejected:** checking with `gh cache list`, because that needs `actions: read`, and the workflow's
-token has `contents: read` only.
+**Rejected:** checking with `gh cache list`, because `actions/cache/restore` with `lookup-only` asks
+the same question with an action the job already uses, while `gh cache list` would also need
+`actions: read` on a token that has `contents: read` only.
 
 ## Each cache key hashes the whole workflow and the Makefile
 

@@ -64,13 +64,16 @@ running twice: a job whose key is already cached builds nothing. The firmware an
 the workflow and the `Makefile` as well as the sources, so a change to how a build is made or packed
 is a new key too.
 
-On a miss, a build job saves its tarball with `actions/cache/save` right after building it, then
-checks that the cache kept it: the step "Check that the cache kept the tarball" looks the key up
-(`lookup-only`) and fails the build job on a miss with `Failed to restore cache entry. Exiting as
-fail-on-cache-miss is set. Input key: <key>`. A failed save is only a warning, such as `Failed to
-save: Unable to reserve cache with key <key>, another job may be creating this cache.`, so without
-the check the build job would stay green and every test job would fail on the miss instead. On a
-hit, a build job saves and checks nothing.
+On a miss, a build job saves its tarball in the step "Save the tarball" (`actions/cache/save`)
+right after building it, then checks that the cache kept it: the step "Check that the cache kept
+the tarball" looks the key up (`lookup-only`) and fails the build job on a miss with `Failed to
+restore cache entry. Exiting as fail-on-cache-miss is set. Input key: <key>`. A failed save does not
+fail its step: `Failed to save: Unable to reserve cache with key <key>, another job may be creating
+this cache.` is a plain log line, not even a warning, and other failures are a warning or an error
+annotation. Without the check the build job would stay green and every test job would fail on the
+miss instead. On a hit, a build job saves and checks nothing. The ROM ELF entry is saved by
+`actions/cache` at the end of the `firmware` job and not checked, since a miss in `test` only
+downloads the ELF.
 
 | Cache entry | Key | Saved by | A miss in `test` |
 |---|---|---|---|
@@ -86,12 +89,12 @@ until it is deleted:
 gh cache delete <key>
 ```
 
-When "Check that the cache kept the tarball" fails, re-run the build job. If it fails the same way
-again, the key is blocked: an entry under it was reserved and never finished. That happened on
-`main` on 11 November 2026: most likely a run whose test jobs never started left the runner key
-blocked, and the next run's `runner` job could not save under it. `gh cache list` does not show such
-an entry, so `gh cache delete` cannot remove it; a change to `ci.yml` makes new keys. TODO(owner):
-whether a blocked key frees itself, and after how long.
+When "Check that the cache kept the tarball" fails, re-run the build job. A second job that built
+the same key at the same time and was still uploading it is gone by then, and the re-run hits its
+entry. If the re-run fails the same way, the key is blocked: an entry under it was reserved and
+never finished. `gh cache list` does not show such an entry, so `gh cache delete` cannot remove it;
+a change to `ci.yml` makes new keys. TODO(owner): whether a blocked key frees itself, and after how
+long.
 
 ## `firmware`
 
