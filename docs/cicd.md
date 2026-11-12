@@ -90,11 +90,11 @@ gh cache delete <key>
 ```
 
 When "Check that the cache kept the tarball" fails, re-run the build job. A second job that built
-the same key at the same time and was still uploading it is gone by then, and the re-run hits its
-entry. If the re-run fails the same way, the key is blocked: an entry under it was reserved and
-never finished. `gh cache list` does not show such an entry, so `gh cache delete` cannot remove it;
-a change to `ci.yml` makes new keys. TODO(owner): whether a blocked key frees itself, and after how
-long.
+the same key at the same time and was still uploading it has finished its upload by then, and the
+re-run hits its entry. If the re-run fails the same way, the key is blocked: an entry under it was
+reserved and never finished. `gh cache list` does not show such an entry, so `gh cache delete`
+cannot remove it; a change to `ci.yml` makes new keys. TODO(owner): whether a blocked key frees
+itself, and after how long.
 
 ## `firmware`
 
