@@ -73,7 +73,10 @@ without starting anything:
    appends each console message's bytes to `console_output`, feeds them to `console_lines` and hands
    them to `log.console`, in the link's thread. `_reset` puts each `reset` the runner sends into the
    run's log, `boot N: REASON (reset cause C)`, through `RunLog.chip`, and calls
-   `Bluetooth.chip_reset(t)`, also in the link's thread.
+   `Bluetooth.chip_reset(t)`, then `Internet.device_reset(t, "the device reset")` on every
+   simulated network the test gave (`_networks()`: the modem's, `wifi`'s), also in the link's
+   thread: the connections the test opened to the device are lost, and the device has no address
+   until it takes one again ([network](network-technical.md#connections-the-test-opens)).
 
 **`Esp32Sim.nvs(namespaces, partition="nvs")`** reads the build's `partition-table.bin`
 from `app.flash_files`, resolves the name and generates a whole NVS image through
@@ -162,7 +165,9 @@ cannot fail with this backend; it is there for another caller:
 - `reset()`, with the supply on, queues `ChipReset(now)` and logs `board.reset()`; otherwise
   `BoardOff` (`the board is off: board.reset() resets a board that is on`).
 - `power_off()`, once started and with the supply on, and `power_on()` after it, go through
-  `_switch(on)`: `Power(now, on)`, `_supply`, then `supply(on)` on every UART of the profile,
+  `_switch(on)`: `Power(now, on)`, `_supply`, for `power_off()`
+  `Internet.device_reset(now, "the device lost its power")` on every simulated network the test
+  gave, then `supply(on)` on every UART of the profile,
   which hands it to a source that is `Supplied` (`esp32tl/interfaces/uart.py`): the GNSS receiver
   model, the modem model ([models](models-technical.md), [modem](modem-technical.md)), and a model
   of the test's with a `supply(on)` method (`Uart.model`). A replay or a real source is not, and

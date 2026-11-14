@@ -505,6 +505,35 @@ Wi-Fi options in `config/sdkconfig.json`. `tests/test_http_request.py` and
 `examples/protocols/http_request` and checks that the local build builds it from
 `.http_request-v9.9.9` under the output directory, a copy of the fake example.
 
+## `http_server`
+
+`firmware/http_server/main/main.c`, one file; `main/CMakeLists.txt` asks for `esp_wifi`,
+`esp_netif`, `esp_event`, `esp_timer`, `nvs_flash`, `esp_http_server` and `json` (cJSON), and the
+project has no `sdkconfig.defaults`. `app_main` initialises NVS (erasing it when it has no free pages
+or a new version), the default event loop and the Wi-Fi station netif, registers `on_event` for
+every `WIFI_EVENT` and for `IP_EVENT_STA_GOT_IP`, and starts the station with `SSID` `myssid`,
+`PASSWORD` `mypassword` and an auth mode threshold of `WIFI_AUTH_WPA2_PSK`. `on_event` calls
+`esp_wifi_connect()` at `WIFI_EVENT_STA_START` and after every `WIFI_EVENT_STA_DISCONNECTED`, and at
+the first `IP_EVENT_STA_GOT_IP` calls `start_server`, which registers `/status` (`HTTP_GET`) and
+`/echo` (`HTTP_POST`) on `HTTPD_DEFAULT_CONFIG()`: port 80, seven sockets, no LRU purge and no TCP
+keep-alive, so the device sends nothing the test did not ask for.
+
+`respond` counts the request in `served`, sets the status and `application/json`, and when the
+request's `Connection` header is `close` (case-insensitive, read into 16 bytes) sets the same
+header and, after `httpd_resp_sendstr`, calls `httpd_sess_trigger_close`, which closes the socket
+once the handler returns. `echo` refuses a `content_len` over `MAX_BODY` (2048) before reading,
+then reads the body with `httpd_req_recv` until it has `content_len` bytes, retrying on
+`HTTPD_SOCK_ERR_TIMEOUT`, parses it with `cJSON_ParseWithLength` and answers it inside a new object
+printed unformatted. `uptime_ms` is `esp_timer_get_time() / 1000`, which is emulated time in the
+emulator.
+
+`tests/test_firmware_images.py::test_http_server_is_a_wifi_station_with_esp_http_server` checks
+target `esp32`, the flash files `0x1000` `bootloader/bootloader.bin`, `0x8000`
+`partition_table/partition-table.bin` and `0x10000` `http_server.bin`, all present, and ESP-IDF's
+default `HTTPD_MAX_REQ_HDR_LEN` of 512. `tests/test_http_server.py` runs it against the access
+point of the `wifi` fixture ([network](network-technical.md#connections-the-test-opens)).
+`tests/test_firmware_build.py` checks that the local build builds it from `firmware/http_server`.
+
 ## The GNSS recording generator
 
 `scripts/generate-gnss-recordings.py` holds the recordings in `RECORDINGS`, each a name, a seed

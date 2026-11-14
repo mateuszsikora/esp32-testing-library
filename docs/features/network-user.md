@@ -3,7 +3,8 @@
 The network the device reaches lives in the test process and on the board's emulated clock. It is
 the same network in two places: behind the modem, over PPP on the modem's UART, and behind a Wi-Fi
 access point, over Ethernet frames with ARP and DHCP. Both answer DNS, NTP, an MQTT broker on TCP
-1883, an HTTP server on TCP 80 and the TCP services the test adds. The firmware keeps its Wi-Fi,
+1883, an HTTP server on TCP 80 and the TCP services the test adds, and in both the test can
+[open a TCP connection to the device](#open-a-tcp-connection-to-the-device). The firmware keeps its Wi-Fi,
 PPP, IP, DNS, MQTT and HTTP stacks and its configured destination names. There is no host network
 connection, external broker or web server, `pppd`, real-time mode or clock switch, unless the test
 [bridges a port to a real service](#bridge-a-port-to-a-real-service), which puts the run on the
@@ -600,6 +601,150 @@ logged: ESP-IDF's IPv6 link-local traffic gives
 `ethernet: dropping frames of type 0x86dd (IPv6)`. The MTU is 1500 bytes; a packet for the device
 over it is dropped with `ethernet: dropped an IPv4 packet of <n> bytes: over the MTU`.
 
+## Open a TCP connection to the device
+
+Firmware that serves HTTP, WebSocket or a TCP protocol of its own is tested from its client's
+side: `network.connect(port)` opens a TCP connection to the device's `port`: its SYN enters the
+network's path at the board's current instant and reaches the device after the path's way down,
+1 ms by default ([the path](#give-the-network-a-round-trip-and-a-rate)). It works the same behind the access point and behind the modem.
+Build `firmware/build.sh http_server` ([validation firmware](validation-firmware-user.md#http_server)):
+a Wi-Fi station that serves `GET /status` and `POST /echo` on port 80 with ESP-IDF's
+`esp_http_server`.
+
+```python
+import json
+
+import pytest
+from esp32tl.units import seconds
+
+pytestmark = pytest.mark.app_path("../firmware/http_server")
+
+
+def test_answers_a_get(board, wifi, console):
+    network = wifi.access_point("myssid", password="mypassword")
+    listening = console.line(r"^http_server: listening on port 80$")
+    board.power_on()
+    board.wait_until(listening, within=seconds(30))
+    connection = network.connect(80)
+    connection.write(b"GET /status HTTP/1.1\r\nHost: device\r\nConnection: close\r\n\r\n")
+    board.wait_until(connection.closed(), within=seconds(5))
+    head, _, body = connection.received.partition(b"\r\n\r\n")
+    assert head.startswith(b"HTTP/1.1 200 OK\r\n")
+    assert json.loads(body)["status"] == "ok"
+```
+
+Wait for the firmware to say its server listens, as its own client would wait for it: a DHCP lease
+or IPCP gives the device its address, not its server, and a SYN that comes first is refused. In
+`tests/test_http_server.py` the station takes its address at about 2.03 emulated seconds and the
+server listens less than a millisecond later (measured with ESP-IDF v5.3.6 at esp32sim's pin in
+`runner/Cargo.toml`; a bump of either can move it). What the test writes before the device accepts the connection
+waits for the handshake.
+
+| Network API | Meaning |
+|---|---|
+| `connect(port, *, address=None)` | Open a TCP connection to the device's `port` (1 to 65535) and return its `TcpConnection`. `address` is the device's, `device_address` unless given, as for firmware with a static address behind the access point |
+| `device_address` | The device's address on the link now: the one IPCP gave it behind the modem, the one this link's DHCP acknowledged behind the access point, `10.64.0.2` either way; `None` before it has one, from the device's chip reset or power loss until IPCP opens again or DHCP acknowledges it again, and from any other DHCP message of the device's (a DISCOVER, a RELEASE) until the next ACK |
+| `connections` | Every `TcpConnection` the test opened, in order |
+
+| `TcpConnection` API | Meaning |
+|---|---|
+| `write(data)` | Send bytes, or `str` as UTF-8: now, once the connection is established and the device's window has room, else as soon as it does |
+| `close()` | Close the test's end, a FIN after what was written; a second call, or one after the connection ended, does nothing |
+| `received`, `text` | Every byte the device sent so far, in order; the same as UTF-8 with replacement |
+| `state` | `"connecting"`, `"established"`, then `"closed"` (both ends closed), `"refused"` (a RST answered the SYN), `"reset"` (a RST later) or `"lost"` (the link went down, or the device's chip reset or lost its power) |
+| `established()` | Condition returning when the device accepted the connection, a `Duration` |
+| `closed()` | Condition returning when the device closed its end (its FIN), whoever closed first |
+| `refused()` | Condition returning when the device answered the SYN with a RST |
+| `reset()` | Condition returning when the device reset the established connection |
+| `next_data(until=None, *, size=None, start=None)` | Condition on the bytes the device sends after `start`, an offset into `received`, which is where `received` ends at the call unless given: with `until` (bytes or text), returns them up to and including the first `until` among them; with `size`, the first `size` of them; with neither, whatever has arrived, once anything has |
+| `address`, `port`, `local`, `local_port` | The device's address and port, and the test's: `10.64.0.1` and the connection's ephemeral port |
+| `at`, `established_at`, `closed_at`, `ended_at` | When the test connected, the device accepted, the device closed its end and the connection ended, each a `Duration` or `None` |
+| `identity` | `device:<port>/<n>`, the connection's stream in the transcript |
+
+A connection is established, closed, refused or reset once at most, so those four conditions read
+its state: one returns its event's time however long ago it happened. `next_data` is a next-event
+condition, with the boundary and polling of the [MQTT next-event
+conditions](#history-next-events-and-current-state) at `start`. Every condition fails loudly: once it
+can no longer hold, it raises `ConnectionEnded` (an `AssertionError`, from `esp32tl.net.client`)
+instead of waiting out its time. Waiting for `established()` on a connection the device refused
+raises `TCP 10.64.0.1:49152 → 10.64.0.2:8080 was refused by the device before it was established`;
+`closed()` on a reset one, `... was reset by the device, not closed by the device`; `refused()` on
+an accepted one, `... was established, not refused by the device`; `next_data(until=b"!")` once
+the device closed without sending it, `... was closed by the device before the device sent b'!'`;
+and once the connection is lost, `... was lost with the link`, `... was lost when the device
+reset` or `... was lost when the device lost its power`, then what can no longer happen, as
+`before it was established`. A timeout names the condition: `TCP 10.64.0.1:49152 → 10.64.0.2:80
+established did not happen within 1 s`, and for `next_data`, `the next data on TCP
+10.64.0.1:49152 → 10.64.0.2:80 up to b'\r\n\r\n'`, with `after byte <start>` when `start` is
+not 0 and `, <size> bytes` for `size`. Boolean coercion raises
+`TypeError("call the TCP condition with (), or pass it to board.wait_until")`.
+
+A response read by its length takes `start`, because the segment that brought a head may bring the
+body's first bytes with it, and a new condition's boundary would leave those out:
+
+```python
+start = len(connection.received)
+connection.write(b"GET /status HTTP/1.1\r\nHost: device\r\n\r\n")
+head = board.wait_until(connection.next_data(until=b"\r\n\r\n", start=start), within=seconds(5))
+length = int(head.split(b"Content-Length: ")[1].split(b"\r\n")[0])
+body = board.wait_until(
+    connection.next_data(size=length, start=start + len(head)), within=seconds(5)
+)
+```
+
+`write` raises `ConnectionEnded` once the connection ended
+(`... was reset by the device: nothing more reaches the device`) or the device closed its end,
+which closes the test's end too (`... was closed by the device, which closed the test's end too`):
+there is no half-close. It raises `ValueError` after `close()` (`...: written after close()`) and
+`TypeError` for what is not bytes or text. `next_data` raises `ValueError` for an empty `until`, a
+`size` under 1, both at once (`...: next_data takes until or size, not both`), and a `start` beyond
+`received`.
+
+`connect` raises `NotReachable` (a `RuntimeError`, from `esp32tl.net.client`) when the network
+cannot reach the device yet, and `ValueError` for a port out of range
+(`network.connect(0): the TCP port must be between 1 and 65535`) or an address that is not IPv4
+(`network.connect(80, address='device'): 'device' is not an IPv4 address`):
+
+| When | `NotReachable` message |
+|---|---|
+| The access point is off the air | `network.connect(80): the access point is off the air: the network reaches no device` |
+| The modem has not dialled | `network.connect(80): the modem has not dialled: the network reaches no device` |
+| Behind the modem, before IPCP is open | `network.connect(80): the device has no address yet: PPP has not opened IPCP` |
+| Behind the modem, IPCP still open from before the device reset | `network.connect(80): the device has no address yet: PPP has not opened IPCP since the device reset` |
+| Behind the access point, no DHCP ACK on this link since the device's last reset or DHCP message | `network.connect(80): the device has no address yet: DHCP has acknowledged none on this link; wait for network.dhcp.next_lease(), or give address= for a static one`, with ` since the device last reset or gave its address up` after `this link` once DHCP has acknowledged an address on this link: not on a fresh one after `wifi.access_point_on()` |
+| Behind the access point with `address=`, before the station sent a frame | `network.connect(80, address='10.64.0.9'): the station has sent no frame yet: the network has no MAC to send to` |
+
+The test's side is `10.64.0.1`, from ephemeral ports counted from 49152 and never reused in the
+network's life, and its initial sequence number is fixed, so runs repeat. It offers an MSS of 1400
+and no other option, takes the device's MSS up to 1400 (536 when it offers none), and respects the
+device's window: a zero window holds what the test wrote until the device announces room, and
+nothing probes it. It does not retransmit and keeps no timers, and has no TIME_WAIT. A segment
+from the device ahead of its stream, which a link that loses nothing cannot produce, fails the run:
+the transcript logs `net: TCP 10.64.0.1:49152 → 10.64.0.2:80: the device sent sequence 5, 4 bytes
+ahead of 1, which a link that loses nothing cannot produce`, and behind the access point the
+link's error is `wifi.receive raised OutOfOrder: ` and that line. Losing the link, as `wifi.access_point_off()` or
+the modem's loss of registration does, ends every connection as `lost`, and so does the device's
+chip reset, whatever caused it (`board.reset()`, its own restart, a wake from deep sleep), and
+`board.power_off()`: the device's TCP is gone, and nothing would tell the test otherwise until it
+wrote. After `board.reset()` the device has no address until it takes one again, so wait for its
+server to listen again before connecting. Deep sleep ends them at the wake, the reset the
+runner reports, not when the chip goes to sleep: a `closed()` or `next_data()` waited for with a
+`within` shorter than the sleep times out. The connections the device opened are not ended by its
+reset, as no network would know of it: they go on until a RST from the device's new stack, which
+answers what their service writes, the service's end, or the link's loss. A SYN the new stack sends
+from the same port to the same service is dropped without an answer while the old connection
+stands. Why it is this TCP:
+[the test opens TCP connections to the
+device](../decisions/harness.md#the-test-opens-tcp-connections-to-the-device-on-the-same-tcp-with-no-timers).
+
+The transcript and the report carry the connection as they carry the device's: its bytes as stream
+`device:80/1`, `out` from the device as they arrive and `in` to it as each piece goes onto the
+network's path, so what waits for the handshake or for the device's window is there when it goes,
+and what never goes is not there; and the lines
+`net: TCP 10.64.0.1:49152 → 10.64.0.2:80 connecting`, `... established`, then `... closed`,
+`... refused by the device`, `... reset by the device`, `... link lost`, `... lost: the device
+reset` or `... lost: the device lost its power`.
+
 ## Withhold PUBACK and disconnect a client
 
 Set `broker.puback` before the publication arrives. Holding an acknowledgement still records,
@@ -932,7 +1077,8 @@ print `Wi-Fi disconnected 3, trying to reconnect...` when the access point leave
 A receive FIFO overflow on the modem's route immediately fails with
 `uart.modem: UART receive overflow (rxfifo_ovf) on GPIO 27: the simulated network requires a lossless route`.
 Other routes retain their existing overflow policy; frame errors remain fatal everywhere.
-The simulated TCP accepts connections but does not retransmit or recover packet loss. The path
+The simulated TCP accepts connections and [opens the test's](#open-a-tcp-connection-to-the-device),
+but does not retransmit or recover packet loss. The path
 loses nothing ([packet loss is postponed](../decisions/harness.md#packet-loss-on-the-network-path-is-postponed)).
 Malformed packets are discarded or their application connection is closed; events help explain
 why the firmware stopped progressing. The test's `within=` and wall-time timeout still bound waits.
@@ -951,5 +1097,5 @@ unchanged. See [the modem](modem-user.md) and [determinism](../guides/testing.md
   around it and switching it off the air.
 - [The modem](modem-user.md): the AT model the network behind the modem sits on.
 - [network-technical.md](network-technical.md): the layers and their lifecycle.
-- [Validation firmware](validation-firmware-user.md): `pppos_client`, `mqtt_session` and
-  `http_request`.
+- [Validation firmware](validation-firmware-user.md): `pppos_client`, `mqtt_session`,
+  `http_request` and `http_server`.

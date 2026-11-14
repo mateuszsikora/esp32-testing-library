@@ -698,6 +698,9 @@ class Esp32Sim(Board):
         boot = Boot(len(self.link.resets) + 1, Duration(message.t), message.cause)
         self.log.chip(message.t, f"boot {boot.number}: {boot.reason} (reset cause {boot.cause})")
         self._bluetooth.chip_reset(message.t)
+        # The chip's TCP and address go with it: the test's connections to it are lost.
+        for _, network in self._networks():
+            network.device_reset(message.t, "the device reset")
 
     def power_on(self, utc: datetime | None = None) -> None:
         """The board's supply on. The first time, starts the runner, which boots the guest: the
@@ -787,6 +790,11 @@ class Esp32Sim(Board):
         now = self._hold.now
         self.link.board_input(Power(now, on))
         self._supply = on
+        if not on:
+            # Before the models lose their power, the modem's network with them: the device's
+            # loss is the cause.
+            for _, network in self._networks():
+                network.device_reset(now, "the device lost its power")
         for uart in self._uarts.values():
             uart.supply(on)
         self._bluetooth.supply(on)

@@ -125,6 +125,17 @@ class Dhcp:
         return bytes(message), broadcast
 
 
+def message_type(data: bytes) -> int | None:
+    """The type (option 53) of a client's message that `Dhcp.on_message` reads, `None` for one
+    it does not."""
+    if len(data) < 240 or data[0] != 1 or data[1:3] != b"\x01\x06" or data[236:240] != COOKIE:
+        return None
+    options = _options(data[240:])
+    if options is None or len(options.get(53, b"")) != 1:
+        return None
+    return options[53][0]
+
+
 def _options(data: bytes) -> dict[int, bytes] | None:
     options: dict[int, bytes] = {}
     at = 0

@@ -259,6 +259,20 @@ def test_http_request_is_esp_idfs_example_with_its_default_wifi() -> None:
     assert all(Path(f.file_path).is_file() for f in app.flash_files)
 
 
+def test_http_server_is_a_wifi_station_with_esp_http_server() -> None:
+    app = idf_app("http_server")
+    build = FIRMWARE / "http_server" / "build"
+    assert app.target == "esp32"
+    assert [(f.offset, Path(f.file_path).relative_to(build)) for f in app.flash_files] == [
+        (0x1000, Path("bootloader/bootloader.bin")),
+        (0x8000, Path("partition_table/partition-table.bin")),
+        (0x10000, Path("http_server.bin")),
+    ]
+    # ESP-IDF's default limit on a request's head, which the tests' requests stay under
+    assert app.sdkconfig["HTTPD_MAX_REQ_HDR_LEN"] == 512
+    assert all(Path(f.file_path).is_file() for f in app.flash_files)
+
+
 def test_bt_spp_initiator_has_the_classic_esp32_flash_layout() -> None:
     app = idf_app("bt_spp_initiator")
     build = FIRMWARE / "bt_spp_initiator" / "build"

@@ -58,7 +58,9 @@ after the run. The card in the slot is the test's image file,
 which keeps what the firmware wrote through every reset and power cycle; with the supply off the
 card loses its power, and the firmware's driver has to mount it again. Each reset goes into the
 run's log as `boot N: REASON (reset cause C)`, and into the link's statistics as one of its
-`resets`.
+`resets`. A reset, whatever caused it, and `board.power_off()` end the TCP connections the test
+opened to the device, as `lost`, and leave the device without an address on the simulated network
+until it takes one again ([network](network-user.md#open-a-tcp-connection-to-the-device)).
 
 A chip in deep sleep with a timer wake wakes on its RTC timer, through a `DEEPSLEEP_RESET` (5).
 `board.wait_for_wake(within=...)` runs the board to that wake in one stretch: the runner moves

@@ -5,10 +5,12 @@ import math
 from collections import deque
 from collections.abc import Callable
 from datetime import datetime
+from ipaddress import IPv4Address
 from typing import Literal, cast, overload
 
 from esp32tl.link.boardlink import Output
 from esp32tl.net.bridge import Bridge, address
+from esp32tl.net.client import NotReachable, TcpConnection
 from esp32tl.net.dhcp import Dhcp
 from esp32tl.net.dns import Dns
 from esp32tl.net.ethernet import Ethernet
@@ -22,6 +24,7 @@ from esp32tl.report import board_time
 from esp32tl.units import NS_PER_S, Duration, Rate, shown
 
 LATENCY_NS = 1_000_000
+LOCAL = "10.64.0.1"  # the network's own address: its DNS, its router, the test's side of TCP
 DEFAULT_RTT = Duration(LATENCY_NS)
 
 Link = Literal["ppp", "ethernet"]
@@ -57,7 +60,8 @@ class _Direction:
 class Internet:
     """One per modem, over PPP, or per Wi-Fi access point, over Ethernet with ARP and DHCP. DNS
     and NTP always listen, the broker on TCP 1883 and the HTTP server on 80; the test registers
-    other TCP services by port, and bridges a port to a real service with `bridge`.
+    other TCP services by port, bridges a port to a real service with `bridge`, and opens a
+    connection to the device with `connect`.
 
     Responses are stamped 1 ms after the request's UART chunk or Ethernet frame, or the path's RTT
     after it (`set_path`). Public calls run while the board is held, and callbacks while it
@@ -93,6 +97,12 @@ class Internet:
         # The services a bridge may take the place of, by port.
         self._builtin: dict[int, str] = {1883: "the broker", 80: "the HTTP server"}
         self.bridges: dict[int, Bridge] = {}
+        # The connections the test opened, in order, and how many it opened to each port.
+        self.connections: list[TcpConnection] = []
+        self._opened: dict[int, int] = {}
+        # Behind the modem: how many times IPCP had opened when the device last reset, which the
+        # address it gave is from; `None` when the link is newer than the reset.
+        self._stale: int | None = None
         # Serves behind an access point only; its leases outlive the link's restarts.
         self.dhcp = Dhcp(self.now, self.log)
         self.link: Ppp | Ethernet = self._peer()
@@ -192,6 +202,94 @@ class Internet:
         instead = f", in place of {replaced}" if replaced is not None else ""
         self.log(f"bridge: TCP {port} → {host}:{host_port}{instead}")
         return bridge
+
+    @property
+    def device_address(self) -> str | None:
+        """The device's address on the link now: the one IPCP gave it behind the modem, the one
+        this link's DHCP acknowledged behind the access point; `None` before it has one."""
+        if isinstance(self.link, Ppp):
+            fresh = self.link.ipcp_open and self.link.ipcp_opened != self._stale
+            return self.link.peer if fresh else None
+        return self.link.device_address
+
+    def device_reset(self, t: int, why: str) -> None:
+        """The device's chip reset, or its power went, at `t`, `why` saying which, as `the device
+        reset`: its TCP and its address are gone. Every connection the test opened is lost, and
+        the device has no address until IPCP opens again or DHCP acknowledges one. The
+        connections the device opened stay, as no network knows of a reboot: a RST of the new
+        stack, in answer to what their service writes, ends them, or the service's end, or the
+        link's; a SYN of the new stack on one of them gets no answer."""
+        previous = self._at
+        self._at = t
+        try:
+            self.ip.lose_clients(why)
+            if isinstance(self.link, Ppp):
+                self._stale = self.link.ipcp_opened
+            else:
+                self.link.device_address = None
+        finally:
+            self._at = previous
+
+    def connect(self, port: int, *, address: str | None = None) -> TcpConnection:
+        """Open a TCP connection to the device's `port`, from `10.64.0.1`: the SYN enters the
+        network's path at the board's current instant, and reaches the device after the path's
+        way down. `address` is the device's, `device_address` unless given, as
+        for a device with a static address behind the access point. Returns the `TcpConnection`.
+        Raises `NotReachable` while the link is down, before the device has an address, and
+        behind the access point before the station has sent a frame."""
+        call = f"network.connect({port!r}" + (
+            f", address={address!r})" if address is not None else ")"
+        )
+        if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
+            raise ValueError(f"{call}: the TCP port must be between 1 and 65535")
+        if address is not None:
+            try:
+                address = str(IPv4Address(address))
+            except ValueError:
+                raise ValueError(f"{call}: {address!r} is not an IPv4 address") from None
+        if not self.active:
+            down = (
+                "the access point is off the air"
+                if self._kind == "ethernet"
+                else "the modem has not dialled"
+            )
+            raise NotReachable(f"{call}: {down}: the network reaches no device")
+        if isinstance(self.link, Ppp):
+            if self.device_address is None:
+                raise NotReachable(
+                    f"{call}: the device has no address yet: PPP has not opened IPCP"
+                    + (" since the device reset" if self.link.ipcp_open else "")
+                )
+        elif address is None and self.link.device_address is None:
+            # Only once this link has leased an address: a fresh link has had none to lose.
+            since = (
+                " since the device last reset or gave its address up" if self.link.leased else ""
+            )
+            raise NotReachable(
+                f"{call}: the device has no address yet: DHCP has acknowledged none on this"
+                f" link{since}; wait for network.dhcp.next_lease(), or give address= for a"
+                " static one"
+            )
+        elif self.link.device_mac is None:
+            raise NotReachable(
+                f"{call}: the station has sent no frame yet: the network has no MAC to send to"
+            )
+        device = address or self.device_address
+        assert device is not None
+        number = self._opened.get(port, 0) + 1
+        identity = f"device:{port}/{number}"
+
+        def record(direction: str, data: bytes) -> None:
+            self.events.append(
+                {"t_ns": self.now(), "stream": identity, "direction": direction, "data": data.hex()}
+            )
+
+        connection = TcpConnection(device, port, LOCAL, identity, self.now, record)
+        # Kept only once the network has taken it: it raises when it has no port left.
+        connection._opened(*self.ip.connect(device, port, LOCAL, connection))
+        self._opened[port] = number
+        self.connections.append(connection)
+        return connection
 
     def _pump(self) -> None:
         for bridge in self.bridges.values():
@@ -299,6 +397,7 @@ class Internet:
             self._link_ended()
             self._out.clear()
             self.link = self._peer()
+            self._stale = None
         finally:
             self._at = previous
 

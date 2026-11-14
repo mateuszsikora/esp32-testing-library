@@ -1171,7 +1171,8 @@ that references to its number keep their meaning.
     `tests/test_net_ppp.py::test_fcs_reference_and_compressed_frames_at_every_split`,
     `tests/test_net_ppp.py::test_renegotiation_and_termination_invalidate_old_acknowledgments`
 - **91.** TCP honors the peer's receive window and MSS, delivers a retransmitted payload once, wraps
-    sequence numbers, and notifies connection loss once.
+    sequence numbers, and notifies connection loss once. For the connections the test opens, see
+    225 and 226.
     `tests/test_net_ip.py::test_tcp_handshake_data_duplicate_flow_control_fin_and_wrap`,
     `tests/test_net_ip.py::test_reset_notifies_once_and_unbound_port_refuses`
 - **92.** MQTT Will is emitted once on connection loss at the loss time, never after DISCONNECT.
@@ -1499,6 +1500,42 @@ that references to its number keep their meaning.
     `tests/test_net_bridge.py::test_a_lost_link_ends_the_stream_at_the_service`,
     `tests/test_net_bridge.py::test_close_ends_a_connection_the_service_keeps_open`,
     `tests/test_net_bridge.py::test_the_services_answer_reaches_the_station_in_a_tcp_segment_stamped_at_the_turn`
+- **225.** A connection the test opens to the device comes from `10.64.0.1` and from the next
+     ephemeral port, 49152 first, never reused; what the test writes before the device accepts
+     waits for the handshake, and goes in pieces no larger than the device's MSS and window, a zero
+     window holding it until the device's update; behind PPP and behind Ethernet alike.
+     `tests/test_net_client.py::test_the_test_opens_exchanges_and_closes_a_connection`,
+     `tests/test_net_client.py::test_a_zero_window_holds_the_data_until_the_devices_update`,
+     `tests/test_net_client.py::test_ports_count_up_from_49152_and_a_lost_link_ends_every_connection`
+- **226.** A RST to the test's SYN is `refused`, a later one `reset`, and a lost link `lost`: each is
+     logged, and every condition that can then no longer hold raises `ConnectionEnded` rather than
+     wait; a segment from the device ahead of its stream fails the turn with `OutOfOrder`.
+     `tests/test_net_client.py::test_a_rst_to_the_syn_is_refused_in_the_condition_and_the_log`,
+     `tests/test_net_client.py::test_a_rst_on_an_established_connection_is_a_reset`,
+     `tests/test_net_client.py::test_the_device_closes_first_and_the_tests_end_follows`,
+     `tests/test_net_client.py::test_a_segment_ahead_of_the_stream_fails_the_turn`
+- **227.** `network.connect` refuses, with `NotReachable` naming what is missing, while the link is
+     down, before the device has an address (IPCP open, or a DHCP ACK on this link since the
+     device's last DHCP message), and, for an address the test gives, before the station has sent
+     a frame.
+     `tests/test_net_client.py::test_connecting_before_the_device_has_an_address_says_so`,
+     `tests/test_net_client.py::test_a_dhcp_release_gives_the_address_up`,
+     `tests/test_http_server.py::test_connecting_before_the_device_has_an_address_says_so`
+- **228.** The `http_server` image, behind the test's access point, answers a request the test
+     writes on a connection it opened to port 80, closes it when asked, takes a second request on a
+     connection kept open, refuses a body over its limit, and refuses a port nobody listens on.
+     `tests/test_http_server.py::test_answers_a_get_and_closes_when_asked`,
+     `tests/test_http_server.py::test_echoes_json_on_a_connection_kept_open`,
+     `tests/test_http_server.py::test_a_body_over_its_limit_is_refused_without_being_read`,
+     `tests/test_http_server.py::test_a_port_nobody_listens_on_refuses`
+- **229.** The device's chip reset and `board.power_off()` end every connection the test opened to
+     it as `lost`, with the reason in the log and in `ConnectionEnded`, leave the device's own
+     connections as they are, and leave the device without an address, so that `connect` raises
+     `NotReachable`, until IPCP opens again or DHCP acknowledges it again; what the test wrote is
+     in the transcript only once it went onto the path.
+     `tests/test_net_client.py::test_a_device_that_resets_loses_the_tests_connections_and_its_address`,
+     `tests/test_net_client.py::test_a_rst_to_the_syn_is_refused_in_the_condition_and_the_log`,
+     `tests/test_http_server.py::test_a_reset_loses_the_tests_connections_until_the_device_listens_again`
 
 ## Explicit build selection
 

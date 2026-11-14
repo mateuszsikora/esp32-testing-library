@@ -935,7 +935,9 @@ because it ties a test to the firmware's internals and cannot work on a real boa
 Status: decided (#64)
 
 When a modem model is dialled, the harness ends the link itself: PPP (LCP and IPCP, handing the
-device an address and a DNS server), IPv4, UDP, and a TCP that only accepts. The runner paces
+device an address and a DNS server), IPv4, UDP, and a TCP that accepts and, since #196, opens
+connections too ([the test opens TCP connections to the
+device](#the-test-opens-tcp-connections-to-the-device-on-the-same-tcp-with-no-timers)). The runner paces
 what goes into the device and reports every byte the device sends, so as long as the firmware
 drains its receive FIFO the link loses and reorders nothing, and that TCP needs no retransmission,
 congestion control or timers. A byte the device's FIFO drops is reported as an `rxfifo_ovf`
@@ -967,6 +969,85 @@ in the host's network rather than in front of the test. Also rejected: the TCP/I
 runner, with smoltcp or a stack like esp32sim's user-mode NAT, because the modem's bytes already
 reach the harness and a stack there would only add messages to the protocol; and a bridge to a
 broker such as mosquitto as the default, which brings wall time back.
+
+## The test opens TCP connections to the device, on the same TCP, with no timers
+
+Status: decided (#196)
+
+Firmware that serves HTTP, WebSocket or a protocol of its own is tested from its client's side:
+`network.connect(port, *, address=None)` opens a connection to the device behind the modem and
+behind the access point alike, and returns a `TcpConnection` that writes, closes and keeps what the
+device sent. It is the TCP that accepts the device's connections, with an active open added, so what
+[the network the device reaches](#the-network-the-device-reaches-is-simulated-in-the-harness-in-emulated-time)
+holds about a link that loses and reorders nothing holds here too, and decides what the client
+side supports:
+
+- no retransmission and no timers: the link loses nothing, and a segment is acknowledged in the
+  turn it arrives in;
+- the device's window is respected, and a zero window waits for the device's window update, with no
+  persist timer;
+- only the MSS option, 1400 offered and the device's taken up to 1400; no window scaling, SACK or
+  timestamps, which an 8192-byte window and a link that loses nothing do not need;
+- no TIME_WAIT on the test's side: its ports count up from 49152 and are never reused, so a segment
+  of an old connection cannot reach a new one;
+- no half-close: the device's FIN closes the test's end after what it has written, as it does for
+  the device's own connections.
+
+The test's side is `10.64.0.1`, the network's own address, and its initial sequence number is the
+fixed one, so runs repeat. A segment from the device ahead of its stream, which this link cannot
+produce, fails the turn with `OutOfOrder` rather than wait for a byte that never comes. Connecting
+before the device has an address, or, behind the access point, before the station has sent a frame
+to learn its MAC from, raises `NotReachable` saying which. The address is IPCP's behind the modem,
+and behind the access point the one this link's DHCP acknowledged, forgotten at the device's next
+DHCP message that is not acknowledged, a DISCOVER or a RELEASE among them: an earlier lease in
+`dhcp.leases` does not mean the device has its address now.
+
+The device's chip reset, whatever caused it, and `board.power_off()` take its TCP and its address
+with them, while the access point, the modem and their links stay. The backend tells every
+network, which loses the test's connections, as `lost` with the reason (`the device reset`, `the
+device lost its power`), and forgets the address until IPCP opens again or DHCP acknowledges one.
+Without that, a connection open across a reset would wait out its time for an answer from a stack
+that no longer exists, and `connect` right after `board.reset()` would send a SYN to an address the
+device no longer has, both timeouts that name the wrong cause. The connections the device opened
+are left as they are, since a network does not know of a reboot: a RST of the new stack, in answer
+to what their service writes, ends them, or the service's end, or the link's; MQTT's keepalive is
+the deadline the tests of the broker check. A SYN of the new stack from the same port to the same
+service falls on the old connection and gets no answer, where a real TCP would send a challenge ACK
+(RFC 9293, 3.10.7.4) and take the RST that follows: that is how the device's connections were before
+#196, and changing it is not part of it.
+
+The conditions follow [the rule of #108, #116 and
+#182](#mqtt-tls-http-and-dhcp-event-apis-name-history-queries-and-next-event-conditions-explicitly).
+A connection is established, closed by the device, refused or reset once at most, so
+`established()`, `closed()`, `refused()` and `reset()` are conditions on its state, each named for
+its event, and `received` is its history. `next_data(until=None, *, size=None, start=None)` is the
+next-event condition, its boundary the end of `received` at the call. Every one of them raises
+`ConnectionEnded` once it can no longer hold, a connection refused while the test waits for it to
+be established among them, so that a RST shows in the wait at once, not as a timeout.
+
+**Rejected:** a host socket the test connects to, relayed to the device, because it brings wall time
+back as a bridge does; retransmission and a persist timer, because the link loses nothing and
+timers would add turns that change nothing; a client that opens from another address per
+connection, because one address and fresh ports already keep connections apart. Also rejected:
+conditions that return `None` for ever once their event cannot happen, which turn a refused
+connection into a timeout that names the wrong cause.
+
+**Rejected:** leaving a reset to the test, documented as a limit (wait for
+`network.dhcp.next_lease()` after `board.reset()`, and expect the connections from before it to
+wait out their time), because a reset is a step the tests take, and the issue's rule is that what
+cannot happen fails at once; and ending the device's own connections at its reset too, which a
+network cannot know of and which would publish an MQTT Will that a real broker publishes only at
+its keepalive. Also rejected: recording what the test writes in the transcript at `write`, as
+`_Traced` records a service's writes, because a connection's first bytes are written before the
+handshake, and a refused connection would show bytes that never reached the device; the test's
+side records each piece as it goes.
+
+**Rejected:** `next_data` reading from a cursor that moves as the test reads, because polling a
+condition must consume nothing; and without `start`, because the bytes after a head that one
+segment brought with it are already in `received` when the head's condition returns, and a new
+condition's boundary would leave them out. `start` is an offset into the bytes received, the
+stream's own coordinate, not the `since=` on `next_message` that #182 rejected: a message list has
+no positions a test should count, a byte stream has nothing else.
 
 ## A bridge from the simulated network to a real service is postponed
 
