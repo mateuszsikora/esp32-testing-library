@@ -109,7 +109,7 @@ def test_connack_codes_and_rejection_isolation(
     connect_client: Callable[[Broker], WireClient], code: ConnackCode, wire_code: int
 ) -> None:
     broker = Broker(lambda: 42, connection_policy=lambda connect: code)
-    attempt, connected = broker.connection_attempt(), broker.connected()
+    attempt, connected = broker.next_connection_attempt(), broker.next_connection()
     assert attempt() is None and connected() is None
     client = connect_client(broker)
     # Rejection must also ignore packets pipelined after CONNECT, and a retained Will.
@@ -157,7 +157,7 @@ def test_retries_credentials_policy_changes_and_success(
         return ConnackCode.NOT_AUTHORIZED
 
     broker.connection_policy = policy
-    connected = broker.connected()
+    connected = broker.next_connection()
     for password, code in [
         (b"wrong", ConnackCode.SERVER_UNAVAILABLE),
         (b"wrong", ConnackCode.BAD_USERNAME_OR_PASSWORD),
@@ -173,7 +173,7 @@ def test_retries_credentials_policy_changes_and_success(
         ("user", b"wrong"),
         ("user", b"right"),
     ]
-    next_attempt = broker.connection_attempt()
+    next_attempt = broker.next_connection_attempt()
     broker.connection_policy = lambda connect: ConnackCode.ACCEPTED
     client = connect_client(broker)
     assert client.send(credential_connect(b"right")) == b"\x20\x02\0\0"

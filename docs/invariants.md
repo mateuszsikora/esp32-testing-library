@@ -1402,13 +1402,12 @@ that references to its number keep their meaning.
     `tests/test_net_mqtt_policy.py::test_policy_errors_in_a_board_run_fail_the_link_naming_them`
 
 - **125.** MQTT next-event conditions capture append order at creation, exclude earlier events even
-    at equal timestamps, and repeatedly return the first matching record without consuming it.
-    The `message` / `connected` aliases share these semantics, and so does `connection_attempt`.
-    History queries return the first matching recorded event even after closure. A pre-armed
-    publication condition sees a response delivered in the same slice as CONNECT; a condition
-    made after that slice does not. Subscription conditions read current state and do not latch previous subscriptions.
-    All MQTT conditions name the expected event and reject boolean coercion before and after
-    a match.
+    at equal timestamps, and repeatedly return the first matching record without consuming it. So
+    does `next_connection_attempt`. History queries return the first matching recorded event even
+    after closure. A pre-armed publication condition sees a response delivered in the same slice as
+    CONNECT; a condition made after that slice does not. Subscription conditions read current state
+    and do not latch previous subscriptions. All MQTT conditions name the expected event and reject
+    boolean coercion before and after a match.
     `tests/test_net_mqtt.py::test_history_and_next_events_use_append_order_without_consuming`,
     `tests/test_net_mqtt.py::test_subscription_condition_tracks_current_state_without_latching`,
     `tests/test_net_mqtt.py::test_mqtt_conditions_are_named_and_reject_truth_testing`,
@@ -1466,19 +1465,18 @@ that references to its number keep their meaning.
 
 - **150.** HTTP and DHCP next-event conditions capture append order at creation, exclude earlier
     requests or leases even at equal timestamps, and repeatedly return the first matching record
-    without consuming it. The `requested` / `leased` aliases share these semantics. History
-    queries return the first matching recorded request or lease. All HTTP and DHCP conditions
-    name the expected event, in a board timeout and in the run report too, and reject boolean
-    coercion before and after a match. A path filter holding a query is refused rather than
-    matching nothing, `serve` refuses such a path too, and a refused request satisfies no
-    condition or query.
+    without consuming it. History queries return the first matching recorded request or lease. All
+    HTTP and DHCP conditions name the expected event, in a board timeout and in the run report too,
+    and reject boolean coercion before and after a match. A path filter holding a query is refused
+    rather than matching nothing, `serve` refuses such a path too, and a refused request satisfies
+    no condition or query.
     `tests/test_net_http.py::test_history_and_next_requests_use_append_order_without_consuming`,
     `tests/test_net_http.py::test_http_conditions_are_named_and_reject_truth_testing`,
     `tests/test_net_http.py::test_a_path_filter_holding_a_query_is_refused`,
     `tests/test_net_http.py::test_serve_refuses_a_path_holding_a_query`,
     `tests/test_net_http.py::test_a_refused_request_satisfies_no_condition_or_query`,
     `tests/test_net_ethernet.py::test_dhcp_next_lease_uses_append_order_without_consuming`,
-    `tests/test_net_ethernet.py::test_dhcp_conditions_are_named_and_reject_truth_testing`,
+    `tests/test_net_ethernet.py::test_dhcp_next_lease_is_named_and_rejects_truth_testing`,
     `tests/test_http_request.py::test_a_timeout_names_the_expected_request_or_lease`
 - **203.** A bridge puts the whole run on the wall clock: the runner's `hello` says `wall`. It is
     refused after power-on, also once the board is off again, and in front of a replay already

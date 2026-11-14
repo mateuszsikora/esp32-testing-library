@@ -208,14 +208,11 @@ def test_empty_id_without_clean_session_gets_identifier_rejected() -> None:
     assert not broker.clients and not broker.messages
 
 
-@pytest.mark.parametrize("legacy", [False, True])
-def test_history_and_next_events_use_append_order_without_consuming(legacy: bool) -> None:
+def test_history_and_next_events_use_append_order_without_consuming() -> None:
     broker = Broker(lambda: 123)
-    message_condition = broker.message if legacy else broker.next_message
-    connection_condition = broker.connected if legacy else broker.next_connection
     assert broker.find_message() is None and broker.find_connection() is None
-    waiting = message_condition("a/+", "new")
-    connected = connection_condition()
+    waiting = broker.next_message("a/+", "new")
+    connected = broker.next_connection()
     assert waiting() is None and connected() is None
     session = broker.accept(("10.64.0.2", 4000), lambda data: None, lambda: None)
     # CONNECT and the immediate publication arrive together, before another test poll.
@@ -228,7 +225,7 @@ def test_history_and_next_events_use_append_order_without_consuming(legacy: bool
         assert broker.find_connection() is first_client
     assert broker.find_message("other/#") is None
     assert broker.find_message("a/b", "absent") is None
-    next_message, next_client = message_condition("a/+", "new"), connection_condition()
+    next_message, next_client = broker.next_message("a/+", "new"), broker.next_connection()
     assert next_message() is None and next_client() is None
     # The timestamp does not move. Unrelated and mismatched messages do not satisfy the wait.
     broker.publish("other/b", "new")
@@ -301,11 +298,10 @@ def test_subscription_condition_tracks_current_state_without_latching() -> None:
 @pytest.mark.parametrize(
     ("method", "args", "description"),
     [
-        ("message", ("a/+", "new"), "the next MQTT message on 'a/+' saying b'new'"),
+        ("next_message", ("a/+", "new"), "the next MQTT message on 'a/+' saying b'new'"),
         ("next_message", (), "the next MQTT message on '#'"),
-        ("connected", (), "the next MQTT client connection"),
         ("next_connection", (), "the next MQTT client connection"),
-        ("connection_attempt", (), "the next MQTT connection attempt"),
+        ("next_connection_attempt", (), "the next MQTT connection attempt"),
         ("subscribed", ("a/#",), "an active MQTT subscription to 'a/#'"),
     ],
 )

@@ -217,8 +217,7 @@ threads; a connect in progress ends within `CONNECT_SECONDS`. The backend calls 
   `dhcp: <type> from <mac> → <OFFER|ACK|NAK> 10.64.0.2`; each ACK appends a
   `Lease(at, mac, address, hostname)` to `leases`, `hostname` from option 12. `next_lease()`
   captures the length of `leases` at construction and returns a `Condition` reading the entry at
-  that index, named `the next DHCP lease`; `leased()` delegates to it. `find_lease()` reads the
-  first lease.
+  that index, named `the next DHCP lease`. `find_lease()` reads the first lease.
 - `http.py`: `HttpServer(now, log)`, a `StreamService` on TCP 80 of every network (RFC 9110,
   9112). `serve(path, body, *, status, content_type, headers)` stores a `Response` per path, after
   checking that the path starts with `/` and holds no `?`, since a request is looked up by its
@@ -240,7 +239,7 @@ threads; a connect in progress ends within `CONNECT_SECONDS`. The backend calls 
   ignored. `next_request(path, method=...)` captures the length of `requests` at construction and
   returns a `Condition` scanning from that index for an exact `path` and `method` match, named
   `the next HTTP request`, then ` for '<path>'` and ` with method '<method>'` for the filters
-  given; `requested` delegates to it. `find_request` scans from index zero with the same filters.
+  given. `find_request` scans from index zero with the same filters.
   Both refuse a `path` holding `?` with `ValueError`, through `_refuse_query`: `_path` strips the
   query of origin-form and absolute-form targets, so such a filter would match nothing. A target
   of no form `_path` knows, as `foo?bar`, keeps its `?` in `path`; only `requests` reaches it.
@@ -268,34 +267,33 @@ threads; a connect in progress ends within `CONNECT_SECONDS`. The backend calls 
   `LinkError` `uart.modem.receive raised <Type>: <message>`; the link fails with its traceback, ends
   the run, and the test's wait raises `RunEnded` naming it. A successfully selected code appends
   a `ConnectionAttempt` to `connection_attempts` before sending CONNACK. This history is separate
-  from accepted `clients`; `connection_attempt()` captures a future cursor like `connected()`.
-  Rejections log `mqtt: '<client-id>' rejected: <CODE_NAME> (<value>)`, send CONNACK with Session
-  Present zero and close before allocating an anonymous ID, installing a Will, setting keepalive
-  or taking over an existing client. The parser stops processing buffered packets on closure.
-  Only accepted connections install session state and enter `clients`; replacing the policy
-  affects subsequent CONNECTs only. `session_present` is worked out before the attempt is appended:
-  CleanSession=0 and a stored `_State` that is not `clean`. A clean one exists only while its
-  connection does, and the takeover ends it. After the takeover, CleanSession=1 replaces any
-  `_State`, and CleanSession=0 makes one if there is none; `_connect` sets `state.connection`, writes
-  CONNACK and, with Session Present, calls `_resume`: every entry of `state.sent`, in insertion
-  order with DUP set, then `_drain`, which pops `state.queue` and sends each entry through `_send`
-  until the head would go at QoS 1 with 65535 IDs in use, so an entry going at QoS 0 does not wait
-  for an ID, and skips one that no subscription matches any more. Each
-  PUBACK calls `_drain` again, so a queue longer than the IDs goes out as they are freed, on a
-  connection that stays open. `state.queue` holds `(Message, retained)` pairs: `retained` is the
-  RETAIN the entry goes with, `True` only for a retained message a SUBSCRIBE matched, and `session`
-  reports the `Message`s alone. `_route` calls `Broker._offer` for each `_State`: a connected one
-  goes to `deliver`, a stored one queues a message by the message's QoS or logs dropping it, and a
-  clean one closed while routing takes nothing. `deliver` works out the QoS in `_qos` and queues
-  the message, never closing, when it is QoS 1 behind a queue that is waiting or goes at QoS 1 with
-  65535 IDs in use; otherwise `_send` allocates from `state.packet_id`, skipping `state.unacked`,
-  and `_publish` appends a `Delivery` and fills `state.sent` before it writes. SUBSCRIBE sends its
-  retained messages through `deliver` with `retained=True`, so one that waits keeps RETAIN 1, and
-  `deliver` does not queue one that is already in the queue as the same object with `retained`
-  set, which `state.queued_retained` holds by `id` while the queue holds the object; a retained
-  message replaced since is another object. SUBSCRIBE iterates over a copy of
-  `broker.retained`, because a write that fails, as a TLS one can, closes the session and its Will
-  can change the dict. A
+  from accepted `clients`; `next_connection_attempt()` captures a future cursor like
+  `next_connection()`. Rejections log `mqtt: '<client-id>' rejected: <CODE_NAME> (<value>)`, send
+  CONNACK with Session Present zero and close before allocating an anonymous ID, installing a Will,
+  setting keepalive or taking over an existing client. The parser stops processing buffered packets
+  on closure. Only accepted connections install session state and enter `clients`; replacing the
+  policy affects subsequent CONNECTs only. `session_present` is worked out before the attempt is
+  appended: CleanSession=0 and a stored `_State` that is not `clean`. A clean one exists only while
+  its connection does, and the takeover ends it. After the takeover, CleanSession=1 replaces any
+  `_State`, and CleanSession=0 makes one if there is none; `_connect` sets `state.connection`,
+  writes CONNACK and, with Session Present, calls `_resume`: every entry of `state.sent`, in
+  insertion order with DUP set, then `_drain`, which pops `state.queue` and sends each entry through
+  `_send` until the head would go at QoS 1 with 65535 IDs in use, so an entry going at QoS 0 does
+  not wait for an ID, and skips one that no subscription matches any more. Each PUBACK calls
+  `_drain` again, so a queue longer than the IDs goes out as they are freed, on a connection that
+  stays open. `state.queue` holds `(Message, retained)` pairs: `retained` is the RETAIN the entry
+  goes with, `True` only for a retained message a SUBSCRIBE matched, and `session` reports the
+  `Message`s alone. `_route` calls `Broker._offer` for each `_State`: a connected one goes to
+  `deliver`, a stored one queues a message by the message's QoS or logs dropping it, and a clean one
+  closed while routing takes nothing. `deliver` works out the QoS in `_qos` and queues the message,
+  never closing, when it is QoS 1 behind a queue that is waiting or goes at QoS 1 with 65535 IDs in
+  use; otherwise `_send` allocates from `state.packet_id`, skipping `state.unacked`, and `_publish`
+  appends a `Delivery` and fills `state.sent` before it writes. SUBSCRIBE sends its retained
+  messages through `deliver` with `retained=True`, so one that waits keeps RETAIN 1, and `deliver`
+  does not queue one that is already in the queue as the same object with `retained` set, which
+  `state.queued_retained` holds by `id` while the queue holds the object; a retained message
+  replaced since is another object. SUBSCRIBE iterates over a copy of `broker.retained`, because a
+  write that fails, as a TLS one can, closes the session and its Will can change the dict. A
   CleanSession=1 `_State` holds its queue for its one connection. `_wait` logs
   `mqtt: <id> has no free packet identifier: waiting for a PUBACK, <n> queued` when a connection
   starts to wait, and `_Session.waiting` keeps it from logging again until `_drain` empties the
@@ -308,9 +306,8 @@ threads; a connect in progress ends within `CONNECT_SECONDS`. The backend calls 
   of disconnect, not the time of CONNECT. A replacement client ID closes the old connection.
   QoS 2 publication is unsupported. Credentials are observed by default;
   authentication is performed only by an installed test policy, with no external auth service.
-  `next_message` and `next_connection` capture the length of their respective append-only
-  histories at construction; `message` and `connected` delegate to them, and
-  `connection_attempt` captures `connection_attempts` the same way, and `next_delivery` captures
+  `next_message`, `next_connection` and `next_connection_attempt` capture the length of
+  `messages`, `clients` and `connection_attempts` at construction, and `next_delivery` captures
   `deliveries`, filtering as `next_message` does. Matching uses append order,
   not timestamps, and polling does not change the captured offset. `find_message` scans
   from index zero with the same topic/payload filters; `find_connection` reads the first CONNECT.
@@ -558,9 +555,8 @@ It also checks immutable wire metadata, anonymous-ID allocation only on acceptan
 empty-ID rejection precedence, malformed CONNECT exclusion and propagation of policy errors,
 both out of `on_data` and as a link failure in a `BoardLink` turn. A test through `Internet`
 covers its traced plain and TLS listeners and keeps the policy and both histories across reset.
-MQTT temporal tests send CONNECT and PUBLISH in one callback, check both the `message` /
-`connected` aliases and the `next_*` methods, history filtering, equal timestamps, repeated
-polls and boolean protection.
+MQTT temporal tests send CONNECT and PUBLISH in one callback, check the `next_*` methods,
+history filtering, equal timestamps, repeated polls and boolean protection.
 `tests/test_clock.py::test_mqtt_immediate_response_is_visible_after_waiting_for_connection`
 delivers both events in one runner slice, waits for CONNECT, then retrieves the pre-armed
 publication without advancing time; a newly created condition times out with its MQTT name.
@@ -630,17 +626,17 @@ modem to esp32tl's broker on a host socket.
 
 `tests/test_net_ethernet.py` builds Ethernet frames by hand, with independent checksums: DHCP
 DISCOVER/OFFER and REQUEST/ACK with router and DNS, a NAK for another address and silence for
-another server, `next_lease()` and its `leased()` alias with append order at equal timestamps,
-non-consuming polls, `find_lease()`, the condition's name and its refusal of `bool()`, ARP
-answered for every address but the device's, IPv4 reaching the services and other ethertypes
-logged once, nothing sent to a station that has sent nothing, and a SYN to port 80 through
-`Internet(link="ethernet")` answered with a SYN-ACK to the station's MAC one `LATENCY_NS` later.
+another server, `next_lease()` with append order at equal timestamps, non-consuming polls,
+`find_lease()`, the condition's name and its refusal of `bool()`, ARP answered for every address
+but the device's, IPv4 reaching the services and other ethertypes logged once, nothing sent to a
+station that has sent nothing, and a SYN to port 80 through `Internet(link="ethernet")` answered
+with a SYN-ACK to the station's MAC one `LATENCY_NS` later.
 `tests/test_net_http.py` drives `HttpServer` connections without TCP: serving and keeping a
 request, a body by `Content-Length`, bytes, `HEAD` and absolute form, 404 and `next_request`'s
-filters, `find_request`, `next_request` and its `requested` alias with append order at equal
-timestamps and non-consuming polls, each condition's name and its refusal of `bool()`, a filter
-holding a query refused while the query stays in `target`, `serve` refusing a path with a query,
-the refused requests, unseen by the conditions and queries, what `serve` refuses, the path of each form of target
+filters, `find_request`, `next_request` with append order at equal timestamps and non-consuming
+polls, each condition's name and its refusal of `bool()`, a filter holding a query refused while
+the query stays in `target`, `serve` refusing a path with a query, the refused requests, unseen by
+the conditions and queries, what `serve` refuses, the path of each form of target
 (`/proxy/http://example.com/fw.bin` among them), and `204` and `304` ending with their head.
 `tests/test_wifi.py` checks the `Wifi` interface without the emulator: the runner's flags, the
 refusals, a backend that refuses the access point, and the `WifiAp` inputs at the instants of the

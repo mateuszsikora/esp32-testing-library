@@ -261,6 +261,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [A Wi-Fi tap, signal changes and the esp32tl command's Wi-Fi are postponed](harness.md#a-wi-fi-tap-signal-changes-and-the-esp32tl-commands-wi-fi-are-postponed) | `harness.md` | postponed (#31) |
 | [Explicit build paths are relative to the application and never fall back](harness.md#explicit-build-paths-are-relative-to-the-application-and-never-fall-back) | `harness.md` | decided (#102) |
 | [MQTT, TLS, HTTP and DHCP event APIs name history queries and next-event conditions explicitly](harness.md#mqtt-tls-http-and-dhcp-event-apis-name-history-queries-and-next-event-conditions-explicitly) | `harness.md` | decided (#108, #116, #182) |
+| [Only a condition for the next event has the next prefix](harness.md#only-a-condition-for-the-next-event-has-the-next-prefix) | `harness.md` | decided |
 | [A reset and a power cycle go on in the run they happen in, on its clock](harness.md#a-reset-and-a-power-cycle-go-on-in-the-run-they-happen-in-on-its-clock) | `harness.md` | decided (#105) |
 | [board.reset() is EN, a power-on reset of the chip; power_off() is the board's supply](harness.md#boardreset-is-en-a-power-on-reset-of-the-chip-power_off-is-the-boards-supply) | `harness.md` | decided (#105) |
 | [Every interface of a profile is on the board's supply](harness.md#every-interface-of-a-profile-is-on-the-boards-supply) | `harness.md` | postponed (#105) |

@@ -109,12 +109,6 @@ class HttpServer:
         )
         self._served[path] = Response(status, data, kind, tuple((headers or {}).items()))
 
-    def requested(
-        self, path: str | None = None, *, method: str | None = None
-    ) -> Callable[[], Request | None]:
-        """Alias of `next_request`."""
-        return self.next_request(path, method=method)
-
     def next_request(
         self, path: str | None = None, *, method: str | None = None
     ) -> Callable[[], Request | None]:
