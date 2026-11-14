@@ -16,7 +16,7 @@ from typing import NoReturn, TypeVar
 from pytest_embedded.log import MessageQueue
 from pytest_embedded_idf.dut import IdfDut
 
-from esp32tl import recording
+from esp32tl import build, recording
 from esp32tl.backends.clock import nanoseconds, seconds
 from esp32tl.backends.esp32sim import BackendError, load_app, refuse, route_wire
 from esp32tl.boards import BoardProfile, capabilities
@@ -52,10 +52,15 @@ def check_artifact(
     establish what is on a board when autoflash is skipped.
     """
     app = load_app(app_path, build_dir=build_dir, backend=Serial.name)
+    if app.kind != build.ESP_IDF:
+        raise BackendError(
+            f"{app.directory} is a PlatformIO build, which the serial backend does not flash yet:"
+            " run it on esp32sim"
+        )
     try:
         digest = app_image_sha256(app)
         if digest is None:
-            raise BackendError(f"{app.binary_path}/flasher_args.json names no app image")
+            raise BackendError(f"{app.directory}/flasher_args.json names no app image")
         if reference is not None:
             expected = recording.read(reference).header.app_sha256
             if expected is None:

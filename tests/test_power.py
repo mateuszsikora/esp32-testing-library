@@ -58,8 +58,7 @@ def state(printed: Printed) -> tuple[int, int, int, int, int, int]:
 def digests(board: Esp32Sim) -> dict[str, str]:
     """The build's flash files, by name, as hashes of their contents."""
     return {
-        Path(f.file_path).name: hashlib.sha256(Path(f.file_path).read_bytes()).hexdigest()
-        for f in board.app.flash_files
+        f.path.name: hashlib.sha256(f.path.read_bytes()).hexdigest() for f in board.app.flash_files
     }
 
 

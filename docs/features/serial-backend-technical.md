@@ -26,9 +26,11 @@ the same indirect parametrisation. See [the user contract](serial-backend-user.m
    `dut` cannot flash before validation. `board` checks it too, then obtains `dut` dynamically.
    `serial_artifact` passes the resolved `build_dir` fixture to `check_artifact`; pytest-embedded
    receives the same fixture for its app and flashing. `check_artifact` calls
-   `load_app(app_path, build_dir=build_dir, backend="serial")` for finished-build checks, then
-   `app_image_sha256(app)` from `esp32tl/tap.py`. This hashes the app entry in `flasher_args.json`,
-   not `IdfApp.bin_file` (which may name another `.bin`), the ELF or its embedded digest.
+   `load_app(app_path, build_dir=build_dir, backend="serial")` for finished-build checks, refuses
+   a `Build` whose `kind` is not `esp32tl.build.ESP_IDF`, since `IdfSerial` flashes the files of
+   `flasher_args.json`, then `app_image_sha256(app)` from `esp32tl/tap.py`. This hashes the app
+   entry in `flasher_args.json` (`Build.app_image`), not `IdfApp.bin_file` (which may name another
+   `.bin`), the ELF or its embedded digest.
 3. pytest-embedded creates `IdfApp`, `IdfSerial` and `IdfDut`. `IdfSerial._start` owns autoflash,
    skip-autoflash and its session cache. `Serial` neither opens another port nor calls `flash`.
    The plugin requires an `IdfDut` and passes it the profile, message queue and artifact digest.
@@ -150,11 +152,12 @@ from pytest-embedded propagate with their original messages.
 | `serial requires pytest-embedded's cached port to match the explicit port` | Cached port differs from the resolved explicit port, including a missing, blank or wildcard value; setup error before opening a device |
 | `{nodeid}: serial does not support --flash-port: use one port for flashing and console` | A separate flashing port was supplied; same collection/setup error handling as the port check |
 | `{nodeid}: the app_recording marker takes one path, as in @pytest.mark.app_recording("hello-console.jsonl")` | Wrong arguments; collection error 2 |
-| `serial: {build} holds no ESP-IDF build: no flasher_args.json` | Missing build metadata |
+| `serial: {build} holds no ESP-IDF or PlatformIO build: no flasher_args.json and no firmware.bin` | Missing build metadata |
+| `serial: {build} is a PlatformIO build, which the serial backend does not flash yet: run it on esp32sim` | A PlatformIO build, which `esp32tl.build.load` reads but `IdfSerial` cannot flash; the PlatformIO checks of [builds](builds-technical.md#failure-modes) come first |
 | `serial: {build} is built for {target}; serial runs the classic esp32` | Non-classic target |
 | `serial: {build} asks for flash encryption, which serial does not support` | Encryption outside the supported workflow |
 | `serial: {build} is not a finished build, missing {files}` | Missing files listed for flashing |
-| `serial: {app.binary_path}/flasher_args.json names no app image` | No `app.file` entry |
+| `serial: {build}/flasher_args.json names no app image` | No `app.file` entry |
 | `serial: {reference}: recording has no app_sha256` | Reference missing its required hash |
 | `serial: {reference}: recording app_sha256 {expected} does not match artifact {digest}` | Reference mismatch |
 | `serial: the serial backend requires pytest-embedded's esp,idf services` | Cached serial options are absent (for example an overridden `embedded_services` fixture), or `dut` is not an `IdfDut` |
@@ -191,6 +194,9 @@ autoflash, marker errors,
 reference hashes before port creation, console reset/capture, waits and their reports, capability
 skips, failed reset with retry, disconnected open ports and a blocked reader released after close.
 `tests/test_pytest_plugin.py` covers console tap reports on esp32sim and ignoring references there.
+`tests/test_platformio_build.py::test_serial_refuses_a_platformio_build` covers the refusal of a
+PlatformIO build, and `test_an_image_for_another_chip_is_refused_by_its_name` its chip check on
+serial.
 
 ### The backend comparison
 

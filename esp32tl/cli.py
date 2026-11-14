@@ -49,13 +49,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     run_parser = commands.add_parser(
         "run",
         help="run an app on the emulator, its console on stdout",
-        description="Run an ESP-IDF app on the emulator, its console on stdout.",
+        description="Run an app on the emulator, its console on stdout.",
     )
     run_arguments(run_parser)
     replay_parser = commands.add_parser(
         "replay",
         help="run an app with a recording replayed into one of its board's interfaces",
-        description="Run an ESP-IDF app on the emulator, its console on stdout, with a recording"
+        description="Run an app on the emulator, its console on stdout, with a recording"
         " replayed into one of the board profile's interfaces at its recorded times.",
     )
     run_arguments(replay_parser)
@@ -84,12 +84,13 @@ def run_arguments(parser: argparse.ArgumentParser) -> None:
         "--app",
         required=True,
         type=Path,
-        help="the ESP-IDF app directory; its build defaults to APP/build",
+        help="the app directory; its build defaults to APP/build",
     )
     parser.add_argument(
         "--build-dir",
         type=build_path,
-        help="the existing ESP-IDF build directory, relative to APP or absolute (default: build)",
+        help="the existing ESP-IDF or PlatformIO build directory, relative to APP or absolute"
+        " (default: build)",
     )
     parser.add_argument(
         "--board",

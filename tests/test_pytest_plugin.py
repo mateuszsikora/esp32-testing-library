@@ -513,6 +513,11 @@ def fake_build(
     flasher_args = {
         "flash_settings": {"flash_mode": "dio", "flash_size": "2MB", "flash_freq": "40m"},
         "flash_files": files,
+        "partition-table": {
+            "offset": "0x8000",
+            "file": "partition_table/partition-table.bin",
+            "encrypted": "false",
+        },
         "app": {"offset": "0x10000", "file": "app.bin", "encrypted": str(encrypted).lower()},
     }
     (build / "flasher_args.json").write_text(json.dumps(flasher_args))
@@ -621,7 +626,10 @@ def test_runner_command_gives_the_chip_the_profile_s_psram(tmp_path: Path) -> No
 
 
 def test_load_app_refuses_what_the_runner_cannot_run(tmp_path: Path) -> None:
-    with pytest.raises(BackendError, match=r"holds no ESP-IDF build: no flasher_args\.json"):
+    with pytest.raises(
+        BackendError,
+        match=r"holds no ESP-IDF or PlatformIO build: no flasher_args\.json and no firmware\.bin$",
+    ):
         esp32sim.load_app(str(tmp_path / "none"))
 
     fake_build(tmp_path / "s3", target="esp32s3")
@@ -653,10 +661,9 @@ def test_load_app_selects_only_the_explicit_build(
     monkeypatch.chdir(cwd)
     selector = selected if absolute else Path("../CI builds/debug")
     app = esp32sim.load_app("../app source", build_dir=selector)
-    assert app.binary_path is not None
-    assert app.bin_file is not None
-    assert Path(app.binary_path) == selected
-    assert Path(app.bin_file).read_bytes() == b"debug"
+    assert app.directory == selected
+    assert app.app_image is not None
+    assert app.app_image.read_bytes() == b"debug"
     command = esp32sim.runner_command(Path("runner"), Path("rom"), app, 1, Path("link"))
     assert [command[i + 1] for i, value in enumerate(command) if value == "--flash-at"] == [
         f"0x1000={selected}/bootloader/bootloader.bin",
@@ -664,7 +671,9 @@ def test_load_app_selects_only_the_explicit_build(
         f"0x10000={selected}/app.bin",
     ]
     (selected / "flasher_args.json").unlink()
-    with pytest.raises(BackendError, match=re.escape(str(selected)) + " holds no ESP-IDF build"):
+    with pytest.raises(
+        BackendError, match=re.escape(str(selected)) + " holds no ESP-IDF or PlatformIO build"
+    ):
         esp32sim.load_app("../app source", build_dir=selector)
     assert (default / "app.bin").read_bytes() == b"default"
 
@@ -735,10 +744,10 @@ import pytest
 pytestmark = pytest.mark.app_path("../app source", build_dir="../CI builds/debug")
 
 def check(board, build_dir, expected):
-    assert Path(board.app.binary_path) == Path(build_dir)
+    assert board.app.directory == Path(build_dir)
     assert Path(build_dir).is_absolute()
     assert Path(board.dut.app.binary_path) == Path(build_dir)
-    assert Path(board.app.bin_file).read_bytes() == expected.encode()
+    assert board.app.app_image.read_bytes() == expected.encode()
 
 def test_debug(board, build_dir):
     check(board, build_dir, "../CI builds/debug")

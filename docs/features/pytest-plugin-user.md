@@ -67,9 +67,10 @@ What the receiver can be told, and the units, are in [models and units](models-u
 
 - The path is relative to the directory of the test file. Without the marker, the app is that
   directory itself.
-- By default, the backend runs the build in the app's `build/` directory:
-  every file `flasher_args.json` lists is flashed at its offset. For this repository's firmware,
-  `make firmware` builds it ([validation firmware](validation-firmware-user.md)).
+- By default, the backend runs the build in the app's `build/` directory: an ESP-IDF build,
+  every file `flasher_args.json` lists flashed at its offset, or a PlatformIO build
+  ([builds](builds-user.md)). For this repository's firmware, `make firmware` builds it
+  ([validation firmware](validation-firmware-user.md)).
 - The marker takes exactly one positional path (`str` or `pathlib.Path`), plus an optional
   `build_dir` keyword of the same types. An empty build string, another type, an unknown keyword
   or the wrong number of positional arguments is a collection error that names the test (the
@@ -90,7 +91,9 @@ def test_debug(board):
 
 `build_dir` is relative to the resolved **application directory**, or absolute. In this example,
 with a test in `project/tests/`, it selects `project/CI builds/debug/`, independently of pytest's
-working directory. The directory itself must contain `flasher_args.json`. Paths with spaces
+working directory. The directory itself must hold an ESP-IDF build, with `flasher_args.json`,
+or a PlatformIO build, as `build_dir=".pio/build/esp32"` selects ([builds](builds-user.md)); the
+serial backend flashes ESP-IDF builds only. Paths with spaces
 work without special handling in Python. The closest `app_path` marker wins as a whole (test,
 then class, then module); omitting `build_dir` on that marker selects its application's `build/`,
 without inheriting a more distant marker's keyword.
@@ -214,8 +217,9 @@ For esp32sim:
 - When the run ends while the test waits, because the runner exited or the harness found the link
   wrong, the wait raises `RunEnded`, which says when, as far as the harness knows, and why
   ([when the run ends](#what-a-failure-looks-like)).
-- `board.app` is the `IdfApp` (`pytest_embedded_idf.app.IdfApp`) the runner flashes, with its
-  `target`, `flash_files` and `flash_settings`.
+- `board.app` is the `Build` (`esp32tl.build.Build`) the runner flashes, with its `directory`,
+  `kind`, `flash_files`, `partition_table`, `app_image`, `elf` and `chip`
+  ([builds](builds-technical.md#interfaces)).
 - `board.profile` is the board profile the test runs on: `esp32-devkitc`, unless the
   `board_profile` marker selects another by bundled name or by
   `@pytest.mark.board_profile(path="boards/test-board.toml")`. A relative path starts at the test

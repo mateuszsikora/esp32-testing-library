@@ -24,8 +24,10 @@ def test_connects(board):
     board.console.expect_exact("connected")  # the firmware's own message
 ```
 
-The app still comes from the [`app_path` marker](pytest-plugin-user.md). Its build must flash
-`partition-table.bin`, as ESP-IDF builds do. `board.nvs(namespaces, partition="nvs")` resolves
+The app still comes from the [`app_path` marker](pytest-plugin-user.md). The partition table is
+the one the build flashes: the `partition-table` entry of an ESP-IDF build's `flasher_args.json`,
+or the table at `0x8000` of a PlatformIO build, in `partitions.bin` or `firmware.factory.bin`
+([builds](builds-user.md)). `board.nvs(namespaces, partition="nvs")` resolves
 `partition` by name in that table; use `partition="settings"` for another NVS partition.
 No flash offset belongs in the test.
 

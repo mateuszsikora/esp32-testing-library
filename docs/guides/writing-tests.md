@@ -42,6 +42,9 @@ pytestmark = [
   `build/` directory, or the one `build_dir=` names. esp32tl never builds it: build it first, for
   the `esp32` target, without flash encryption
   ([the `app_path` marker](../features/pytest-plugin-user.md#writing-a-test)).
+- A PlatformIO project names its build directory:
+  `pytest.mark.app_path("..", build_dir=".pio/build/esp32")` runs what `pio run -e esp32` left,
+  as it is, on esp32sim ([builds](../features/builds-user.md)).
 - The board profile says which UART and pins each part of your board uses. esp32tl ships four
   (`esp32-devkitc`, the default, `gps-alarm-clock`, `sd-data-logger`, `lilygo-t-a7670g-r2`); for
   your own wiring, write a TOML file beside the tests and select it with `path=`
@@ -432,6 +435,9 @@ idf.py -C my_project build                # or your own build, in your own conta
   as esp32tl's own CI does ([`firmware`](../cicd.md#firmware)). That is how the tests in
   [`examples/`](../../examples/README.md) run there: built in one job, tested in others from the
   files it handed over ([examples in CI](../cicd.md#examples)).
+- A PlatformIO build needs `firmware.bin` and either `firmware.factory.bin` or `bootloader.bin` and
+  `partitions.bin`, with `firmware.elf` for the `bt` fixture; a job that tests it elsewhere hands
+  over those files of `.pio/build/<env>/` ([builds](../features/builds-user.md)).
 
 What to cache, and on what key:
 

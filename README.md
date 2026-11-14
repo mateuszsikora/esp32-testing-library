@@ -135,6 +135,8 @@ Nothing in the firmware changes for the test, and the test reads nothing inside 
 - Run an unmodified ESP-IDF image for the classic ESP32 in esp32sim, or the same `board` and
   `console` tests on a real ESP32 on a serial port
   ([the serial backend](https://github.com/mateuszsikora/esp32-testing-library/blob/main/docs/features/serial-backend-user.md)).
+- Run a PlatformIO build, `.pio/build/<env>/`, in esp32sim as `pio run` left it
+  ([builds](https://github.com/mateuszsikora/esp32-testing-library/blob/main/docs/features/builds-user.md)).
 - Feed a UART from a model, a recording, or a real device on a host serial port, such as a GNSS
   receiver on a USB adapter.
 - Drive and read GPIO lines, read the console, and write the NVS partition before power-on.

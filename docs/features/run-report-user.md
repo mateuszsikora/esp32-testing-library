@@ -96,8 +96,8 @@ A recording, [version 1](../recording-format.md):
   [device on a host serial port](real-source-user.md), or `none` for a route the test gave nothing.
 - `clock` is the backend's, `emulated-fifo-write`, or `wall` in a run with a real source: times are
   the board's nanoseconds since power-on.
-- `app_sha256` is the SHA-256 of the app image the run flashed, the file `flasher_args.json`
-  names under `app`; `tools` the esp32tl version and the esp32sim revision the runner reported;
+- `app_sha256` is the SHA-256 of the app image the run flashed: the file `flasher_args.json`
+  names under `app`, or `firmware.bin` of a PlatformIO build ([builds](builds-user.md)); `tools` the esp32tl version and the esp32sim revision the runner reported;
   `created` when the file was written, in UTC.
 - An `out` event is bytes the firmware wrote to the route's UART, at the time it wrote them. An
   `in` event is bytes the far end gave, at the time it stamped them in the current run. Unprompted

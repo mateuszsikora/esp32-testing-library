@@ -46,8 +46,8 @@ command drives no line otherwise.
 
 | Option | Commands | Default | Accepts |
 |---|---|---|---|
-| `--app APP` | both | none, required | the ESP-IDF app directory, its build in `APP/build` by default, relative to the working directory or absolute. The build must be one the backend runs: for the `esp32` target, finished, without flash encryption |
-| `--build-dir DIR` | both | `build` | an existing directory containing `flasher_args.json`, relative to `APP` or absolute; an empty value is a usage error, `argument --build-dir: the build directory is an empty path` |
+| `--app APP` | both | none, required | the app directory, its build in `APP/build` by default, relative to the working directory or absolute. The build must be one the backend runs: for the classic ESP32 and finished, and, if an ESP-IDF build, without flash encryption ([builds](builds-user.md)) |
+| `--build-dir DIR` | both | `build` | an existing ESP-IDF build directory, containing `flasher_args.json`, or a PlatformIO one, as `.pio/build/esp32`, relative to `APP` or absolute; an empty value is a usage error, `argument --build-dir: the build directory is an empty path` |
 | `--board BOARD` | both | `esp32-devkitc` | the name of a [board profile](board-profiles-user.md#the-profiles-esp32tl-ships); the chip gets the profile's PSRAM, 4 MB on `lilygo-t-a7670g-r2` and none on `esp32-devkitc` |
 | `--max-seconds S` | both | `300` | a finite number of emulated seconds above 0; fractions are fine |
 | `--interface INTERFACE` | `replay`, required | none | a UART route of the profile: `uart.gnss`, or its role alone, `gnss` |
@@ -65,10 +65,18 @@ esp32tl replay --app /work/firmware --build-dir /artifacts/release \
   --interface gnss --recording recordings/gnss-generated-1.jsonl --max-seconds 3.5
 ```
 
+A PlatformIO project runs from its own directory the same way:
+
+```sh
+pio run -e esp32
+esp32tl run --app . --build-dir .pio/build/esp32 --max-seconds 2
+```
+
 The relative build directory is resolved against `--app`, not the shell's working directory.
-The resolved absolute directory is passed to the loader and all flash paths come from its
-`flasher_args.json`. A missing `flasher_args.json`, an unsupported target, flash encryption or
-missing flash files detected by the backend's validation fail with exit 2. Malformed build
+The resolved absolute directory is passed to the loader, and all flash paths come from its
+`flasher_args.json`, or from a PlatformIO build's file names ([builds](builds-user.md)). A
+directory that holds neither kind of build, an unsupported target, flash encryption or missing
+flash files detected by the backend's validation fail with exit 2. Malformed build
 metadata can instead raise an unhandled parser exception and exit 1 with a traceback
 ([exit codes](#exit-codes)). No other directory is tried and no build, artifact relocation or
 source modification is performed. The target, encryption, missing-file and recording checks
@@ -133,7 +141,7 @@ exit code 1; they are not converted to these messages.
 | `the board profile {board} has no {interface}; its interfaces are {interfaces}` | `--interface` names no UART route of the profile |
 | `{path}: [Errno 2] No such file or directory: '{path}'`, and every other `RecordingError` | the recording cannot be read, or breaks the [format](../recording-format.md#errors) |
 | `{path} is a recording of {recorded}, not of {interface}`, and every other `ReplayError` | the recording cannot be replayed into that interface ([replay](replay-user.md#what-a-replay-refuses)); `{path}` is the path as given |
-| `{build} holds no ESP-IDF build: no flasher_args.json`, and the backend's other build errors | the selected build is missing or invalid ([when the backend cannot start](esp32sim-backend-user.md#when-the-backend-cannot-start)) |
+| `{build} holds no ESP-IDF or PlatformIO build: no flasher_args.json and no firmware.bin`, and the other build errors | the selected build is missing or invalid ([when the build cannot be loaded](builds-user.md#when-the-build-cannot-be-loaded)) |
 | `no runner at {path}: run make setup, or set ESP32TL_RUNNER` | no runner |
 | `no ROM ELF at {path}: run make setup, or set ESP32TL_ROM` | no ROM ELF |
 | `cannot listen on {path}: {reason}` | the link's Unix socket could not be bound, in a new directory under the system's temporary directory, or under `/tmp` when that path would be too long |

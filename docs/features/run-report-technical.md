@@ -131,7 +131,7 @@ What a tap writes is a recording of [version 1 of the format](../recording-forma
 | `source` | UART source (`replay`, `model:gnss`, `real`, or `none`); console is `none` on esp32sim and `real` on serial |
 | `clock` | `emulated-fifo-write` on esp32sim, `wall` in a run with a real source there and on serial |
 | `end` | `hold` |
-| `app_sha256` | `app_image_sha256(app)`, hashing `binary_path / flasher_args["app"]["file"]`; on esp32sim `null` when `flasher_args.json` names no app or the file cannot be read |
+| `app_sha256` | `app_image_sha256(app)`, hashing `Build.app_image`: `flasher_args["app"]["file"]` in an ESP-IDF build directory, `firmware.bin` in a PlatformIO one; on esp32sim `null` when `flasher_args.json` names no app or the file cannot be read |
 | `tools` | `{"esp32tl": esp32tl.__version__}`, and `esp32sim`, the runner's `hello`'s revision, when it sent one |
 | `created` | The UTC time the recording was made, to the second |
 
@@ -206,7 +206,7 @@ checks the timing and cancellation. The modem's separate command history is desc
 | `Tap.record(t, direction, data)` | One event; nothing for empty `data` |
 | `Tap.recording(*, board, source, clock, app_sha256=None, tools=None, created=None, extra=None)` | The `Recording`, events in time order; `extra` the header's fields of the tap's own |
 | `NO_SOURCE` | `"none"`: the header's `source` for a route without one |
-| `utc_time(moment)`, `sha256(path)`, `app_image_sha256(app)` | The header's `created` and app-image hash; the last reads exactly `flasher_args["app"]["file"]`, returns `None` without an app entry, and propagates file errors |
+| `utc_time(moment)`, `sha256(path)`, `app_image_sha256(build)` | The header's `created` and app-image hash; the last reads exactly `build.app_image` (`esp32tl.build.Build`), returns `None` when it is `None`, and propagates file errors |
 | `Console.tap(path)` | Delegates to the backend's `tap_console`; the same path and duplicate checks as a UART tap |
 | `Uart.tap(path)` | `esp32tl/interfaces/uart.py`: the route's `Tap`, `Uart.tapped` |
 | `Bluetooth.tap(path)` | `esp32tl/interfaces/bluetooth.py`: the HCI's `Tap`, `Bluetooth.tapped`; claims the path and its sidecar in `Bluetooth.files`, the backend's one mapping |

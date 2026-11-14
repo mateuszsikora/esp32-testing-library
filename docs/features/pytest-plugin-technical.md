@@ -274,7 +274,7 @@ the existing no-latency behavior and board pulls are unchanged.
 |---|---|---|
 | `--esp32tl-backend NAME` | option | Choices `list(SERVICES)`; default unset, esp32sim only |
 | `app_recording(path)` | marker | One positional path, relative to the test file or absolute; on serial checks the recording app hash before port setup; ignored on esp32sim |
-| `app_path(path, build_dir="build")` | marker | One positional path, relative to the test file's directory; default that directory. The optional build path is relative to the app or absolute |
+| `app_path(path, build_dir="build")` | marker | One positional path, relative to the test file's directory; default that directory. The optional build path, an ESP-IDF or a PlatformIO build directory ([builds](builds-technical.md)), is relative to the app or absolute |
 | `board_profile(name)` or `board_profile(path=...)` | marker | One bundled name or a local string/`Path` relative to the test file's directory; mixing them is a collection error ([board-profiles-technical.md](board-profiles-technical.md#interfaces)) |
 | `board(request, app_path, build_dir, msg_queue, _meta)` | fixture, function scope | Yields an `Esp32Sim` or `Serial`; closes it at teardown, then adds its backend-specific report section and JSON property. Its methods (`power_on`, `wait`, `wait_until`, `now`, `utc`, `report`, `properties`) are in [esp32sim-backend-technical.md](esp32sim-backend-technical.md#interfaces) and [serial-backend-technical.md](serial-backend-technical.md#interfaces) |
 | `console(board)` | fixture, function scope | Returns the cached `board.console` |
@@ -344,7 +344,8 @@ second entry in `SERVICES` without a change to `board` fails that assertion.
 
 The marker's `build_dir` keyword defaults to `build`. The plugin resolves it against the app
 and parametrises pytest-embedded's `build_dir` fixture with the absolute directory. `board`
-passes that same value to `Esp32Sim`; serial's preflight and pytest-embedded's `IdfApp` use it too.
+passes that same value to `Esp32Sim`, whose `load_app` reads it with `esp32tl.build.load`;
+serial's preflight and pytest-embedded's `IdfApp` use it too.
 The backend's own environment variables are in
 [esp32sim-backend-technical.md](esp32sim-backend-technical.md#configuration).
 
@@ -781,7 +782,7 @@ the station's frames reach nothing. On serial `board.wifi` is a `Wifi` that is o
 `_get_bluetooth()`. On esp32sim it is one of the `BoardLink`'s interfaces from construction, the
 only one whose `bluetooth` is true, so the link hands it every `hci_tx` packet and sends what it
 returns as `hci_rx` ([protocol](../protocol.md)). `Esp32Sim._get_bluetooth()`, the first time,
-checks `app.elf_file`, then calls `use()`, whose `asked` is `_asked`: it refuses after power-on and
+checks `app.elf` (`Build.elf`), then calls `use()`, whose `asked` is `_asked`: it refuses after power-on and
 skips on a backend whose declaration has no `model` source for `bluetooth`. Before power-on the
 backend passes `--bt` for a `Bluetooth` that is `used`. On serial `_get_bluetooth()` calls `_asked`
 with the same request, which skips, since `serial` declares no `bluetooth`; were it declared, it

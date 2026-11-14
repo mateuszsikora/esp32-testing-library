@@ -184,7 +184,7 @@ def test_a_flash_dump_writes_the_whole_flash_in_a_turn_and_the_run_goes_on(
     app = esp32sim.load_app(str(FIRMWARE / "hello_world"))
     assert len(flash) == 2 << 20
     for file in app.flash_files:
-        image = Path(file.file_path).read_bytes()
+        image = file.path.read_bytes()
         assert flash[file.offset : file.offset + len(image)] == image
     assert not (socket_path.parent / "flash.bin.partial").exists()
     out.unlink()
@@ -226,6 +226,6 @@ def test_flash_out_without_a_board_writes_the_flash_at_the_end_of_the_run(
     command = [str(esp32sim.runner_path()), "--chip", "esp32", "--rom", str(esp32sim.rom_path())]
     command += ["--max-seconds", "0.01", "--flash-out", str(out)]
     for file in app.flash_files:
-        command += ["--flash-at", f"{file.offset:#x}={file.file_path}"]
+        command += ["--flash-at", f"{file.offset:#x}={file.path}"]
     subprocess.run(command, check=True, capture_output=True, timeout=60)
     assert len(out.read_bytes()) == 4 << 20

@@ -5,7 +5,7 @@ that runs the [esp32sim](https://github.com/mikroverk/esp32sim) emulator, on the
 is the default backend behind the `board`, `console`, `gnss`, `lines` and `sd_card` fixtures,
 with `[esp32sim]` in each test id ([pytest plugin](pytest-plugin-user.md)). A real board is selected
 explicitly through the [serial backend](serial-backend-user.md). The emulator runs an unmodified
-ESP-IDF build for the classic ESP32.
+ESP-IDF or PlatformIO build for the classic ESP32.
 
 ## What it needs
 
@@ -17,10 +17,11 @@ ESP-IDF build for the classic ESP32.
   `make setup` (or `make rom-elf`) puts there. `ESP32TL_ROM=PATH` names another. The backend
   always hands this file to the runner, so the runner's own ROM lookup is not used
   ([where the runner looks for it](runner-user.md#where-the-rom-comes-from)).
-- **An ESP-IDF build** in the directory selected by `app_path(..., build_dir=...)`, defaulting
-  to the app's `build/`. Relative build paths are relative to the app; absolute paths work too.
-  Built for the `esp32` target, finished, every file `flasher_args.json` lists present, and without
-  flash encryption.
+- **An ESP-IDF or a PlatformIO build** in the directory selected by
+  `app_path(..., build_dir=...)`, defaulting to the app's `build/`, as `build_dir=".pio/build/esp32"`
+  selects a PlatformIO one. Relative build paths are relative to the app; absolute paths work too.
+  Built for the classic ESP32 and finished; an ESP-IDF build without flash encryption.
+  [Builds](builds-user.md) says what each kind needs and how its files reach the flash.
 
 The two defaults are paths in the checkout esp32tl is installed from, which holds only with an
 editable install; `make setup` makes one. Installed any other way, from a wheel for instance,
@@ -31,7 +32,8 @@ A relative path in either resolves against pytest's working directory, not the t
 
 Each test that uses `board` gets a board that is off. The test body sets up what is around it, as
 `gnss.replay(path)` or `gnss.fix(at=...)` does, then calls `board.power_on()`, which starts the test's own runner with
-every file of `flasher_args.json` at its offset; teardown stops it. A test that never calls
+the build's files at their offsets, every file of `flasher_args.json` for an ESP-IDF build
+([builds](builds-user.md#what-each-kind-of-build-needs)); teardown stops it. A test that never calls
 `power_on()` starts no runner. The chip gets the board profile's PSRAM, passed to the runner as
 `--psram-mb`: 4 MB on `lilygo-t-a7670g-r2`, whose module carries 8, and none on `esp32-devkitc`
 ([board profiles](board-profiles-user.md#the-profiles-esp32tl-ships)). Its flash is the runner's
@@ -124,7 +126,7 @@ station finds nothing to join.
 The chip's Bluetooth is on the link once the test asks for it, as `board.bluetooth` or the `bt`
 fixture ([Bluetooth peer](bluetooth-peer-user.md#in-front-of-the-firmware-boardbluetooth)), which it
 must do before `board.power_on()`: the backend passes the runner `--bt` with the application's ELF,
-the first `.elf` file in the build directory, which `IdfApp` takes for it (`IdfApp.elf_file`)
+the first `.elf` file in an ESP-IDF build directory, `firmware.elf` in a PlatformIO one
 ([runner](runner-user.md#give-the-guest-a-bluetooth-controller)), and the link carries every H4
 packet the firmware's Bluetooth host sends to the firmware's controller in the harness, on the
 test's clock, and the controller's packets back, 10 µs after the instant each was made. Without it
@@ -292,17 +294,18 @@ its body instead, as `BackendError: cannot ...`, without the prefix:
 | Message | What to do |
 |---|---|
 | `the board profile {profile} has no {interface}; its interfaces are {interfaces}` | The test uses `gnss` on a profile without `uart.gnss`, or `sd_card` on one without a slot; choose a profile that has it. Through `board.gnss` or `board.sd_card` it fails the test in its body instead, as `BackendError: the board profile ...`, without the prefix ([where it fails](pytest-plugin-user.md#one-board-and-its-interfaces)) |
-| `{build} holds no ESP-IDF build: no flasher_args.json` | Build the app (`make firmware` for this repository's firmware), or fix the `app_path` marker and its `build_dir` keyword; no other build is tried |
+| `{build} holds no ESP-IDF or PlatformIO build: no flasher_args.json and no firmware.bin` | Build the app (`make firmware` for this repository's firmware), or fix the `app_path` marker and its `build_dir` keyword; no other build is tried |
 | `{build} is built for {target}; esp32sim runs the classic esp32` | Build for `esp32` |
 | `{build} asks for flash encryption, which the runner does not do` | Build without flash encryption |
 | `{build} is not a finished build, missing {files}` | Finish the build; `{files}` is a comma-separated list |
+| The other messages of [a build that cannot be loaded](builds-user.md#when-the-build-cannot-be-loaded) | As that table says |
 | `no runner at {path}: run make setup, or set ESP32TL_RUNNER` | Build the runner, or point `ESP32TL_RUNNER` at an executable one |
 | `no ROM ELF at {path}: run make setup, or set ESP32TL_ROM` | Fetch the ROM ELF, or point `ESP32TL_ROM` at it |
-| `bluetooth: {build} holds no ELF of the application, whose symbols the runner's --bt needs` | At the `bt` fixture, or in the test body at the first `board.bluetooth`, without the prefix: the build directory has no `.elf` file; build the app again, or keep its ELF beside the image |
+| `bluetooth: {build} holds no ELF of the application, whose symbols the runner's --bt needs` | At the `bt` fixture, or in the test body at the first `board.bluetooth`, without the prefix: the build directory has no `.elf` file, or a PlatformIO one no `firmware.elf`; build the app again, or keep its ELF beside the image |
 | `cannot listen on {path}: {reason}` | At `board.power_on()`, which raises `BackendError` in the test body: the backend cannot bind the link's socket in a new directory under the system's temporary directory or `/tmp`; check that it is writable |
 | `cannot start {runner}: {reason}` | At `board.power_on()`, which raises `BackendError` in the test body: the runner exists but the system cannot run it, for example `Exec format error` |
 
-`{build}` is the app's `build/` directory. The build is checked first, then the runner and the ROM
+`{build}` is the selected build directory, the app's `build/` by default. The build is checked first, then the runner and the ROM
 ELF, so only the first problem is reported; the socket and the runner's start come at power-on.
 The profile's routes are checked when the test asks for `gnss`, and its slot when it asks for
 `sd_card`. `sd_card.insert` checks the image; one that changes after it so that the runner's

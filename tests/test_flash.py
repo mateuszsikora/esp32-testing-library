@@ -1,6 +1,7 @@
 """Partition parsing, the NVS generator's input, pre-boot flash overrides, and what a snapshot of
 the flash reads: NVS by its format, OTA data."""
 
+import dataclasses
 import hashlib
 import io
 import struct
@@ -15,11 +16,11 @@ import pytest
 from pytest_embedded.dut import Dut
 from pytest_embedded.log import MessageQueue
 from pytest_embedded.utils import Meta
-from pytest_embedded_idf.app import FlashFile, IdfApp
 
 from esp32tl import boards, flash
 from esp32tl.backends import esp32sim
 from esp32tl.backends.esp32sim import BackendError, Esp32Sim
+from esp32tl.build import ESP_IDF, Build, FlashFile
 from esp32tl.flash import (
     FlashSnapshot,
     OtaData,
@@ -185,8 +186,14 @@ def test_generator_failure_is_visible_and_bad_sizes_are_refused() -> None:
 def device(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Esp32Sim:
     table = tmp_path / "partition-table.bin"
     table.write_bytes(table_bytes())
-    app = Mock(
-        spec=IdfApp, flash_files=[FlashFile(offset=0x8000, file_path=str(table), encrypted=False)]
+    app = Build(
+        directory=tmp_path,
+        kind=ESP_IDF,
+        flash_files=(FlashFile(0x8000, table),),
+        partition_table=0x8000,
+        app_image=None,
+        elf=None,
+        chip="esp32",
     )
     monkeypatch.setattr(esp32sim, "load_app", lambda _, *, build_dir=None: app)
     monkeypatch.setattr(esp32sim, "runner_path", lambda: Path("runner"))
@@ -219,7 +226,7 @@ def test_nvs_flashes_at_named_partition_after_build_and_replaces_previous_call(
     command = popen.call_args.args[1]
     assert command[command.index("--flash-at") : command.index("--flash-at") + 4] == [
         "--flash-at",
-        f"0x8000={device.app.flash_files[0].file_path}",
+        f"0x8000={device.app.flash_files[0].path}",
         "--flash-at",
         f"0x11000={image}",
     ]
@@ -231,7 +238,7 @@ def test_nvs_refuses_unknown_wrong_type_encrypted_and_late_calls(device: Esp32Si
         device.nvs({})
     with pytest.raises(BackendError, match="must be unencrypted, writable NVS"):
         device.nvs({}, partition="factory")
-    table = Path(device.app.flash_files[0].file_path)
+    table = device.app.flash_files[0].path
     table.write_bytes(entry("nvs", 0x9000, 0x6000, flags=1))
     with pytest.raises(BackendError, match="must be unencrypted, writable NVS"):
         device.nvs({})
@@ -250,26 +257,29 @@ def test_nvs_preserves_previous_image_on_bad_replacement(device: Esp32Sim) -> No
 
 
 def test_nvs_reports_missing_or_invalid_partition_table(device: Esp32Sim) -> None:
-    table = Path(device.app.flash_files[0].file_path)
+    table = device.app.flash_files[0].path
     table.write_bytes(b"broken")
     with pytest.raises(BackendError, match=r"cannot read .*truncated entry"):
         device.nvs({})
     table.unlink()
     with pytest.raises(BackendError, match="cannot read"):
         device.nvs({})
-    device.app.flash_files.clear()
-    with pytest.raises(BackendError, match=r"must flash one partition-table\.bin"):
+    device.app = dataclasses.replace(device.app, partition_table=None)
+    with pytest.raises(BackendError, match=r"flasher_args\.json names no partition table"):
+        device.nvs({})
+    device.app = dataclasses.replace(device.app, partition_table=0x9000, flash_files=())
+    with pytest.raises(BackendError, match=r"no file of .* is flashed at 0x9000"):
         device.nvs({})
 
 
 def test_nvs_partitions_are_independent_and_build_images_are_unchanged(device: Esp32Sim) -> None:
-    table = Path(device.app.flash_files[0].file_path)
+    table = device.app.flash_files[0].path
     layout = entry("nvs", 0x9000, 0x6000) + entry("settings", 0x11000, 0x6000)
     table.write_bytes(layout)
     built_nvs = table.parent / "built-nvs.bin"
     built_nvs.write_bytes(b"original build contents")
-    device.app.flash_files.append(
-        FlashFile(offset=0x9000, file_path=str(built_nvs), encrypted=False)
+    device.app = dataclasses.replace(
+        device.app, flash_files=(*device.app.flash_files, FlashFile(0x9000, built_nvs))
     )
     device.nvs({"config": {"host": "first"}})
     device.nvs({"config": {"host": "second"}}, partition="settings")

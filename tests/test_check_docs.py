@@ -509,3 +509,12 @@ def test_example_firmware_needs_its_documentation(repo: Path) -> None:
 def test_example_tests_only_need_no_documentation(repo: Path) -> None:
     write(repo, "examples/alarm/tests/test_alarm.py", "def test_alarm(): pass\n")
     assert passes(run(repo))
+
+
+def test_the_build_loader_owns_its_feature_documents(repo: Path) -> None:
+    write(repo, "esp32tl/build.py", '"""Builds."""\n')
+    result = run(repo)
+    assert "[F26]" in result.stdout
+    assert "[F12]" not in result.stdout
+    write(repo, "docs/features/builds-technical.md", "# Builds\n")
+    assert run(repo).returncode == 0

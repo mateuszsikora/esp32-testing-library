@@ -101,8 +101,9 @@ def pytest_configure(config: pytest.Config) -> None:
     card_cache_limit(config)
     config.addinivalue_line(
         "markers",
-        "app_path(path, build_dir='build'): the ESP-IDF app, relative to the test file's"
-        " directory (the default app); build_dir is relative to the app or absolute",
+        "app_path(path, build_dir='build'): the app, relative to the test file's directory (the"
+        " default app); build_dir, an ESP-IDF or a PlatformIO build directory, is relative to the"
+        " app or absolute",
     )
     config.addinivalue_line(
         "markers",

@@ -63,12 +63,12 @@ from typing import NoReturn, TypeVar
 from pytest_embedded.dut import Dut
 from pytest_embedded.log import DuplicateStdoutPopen, MessageQueue
 from pytest_embedded.utils import Meta, remove_asci_color_code
-from pytest_embedded_idf.app import IdfApp
 
-from esp32tl import flash, recording
+from esp32tl import build, flash, recording
 from esp32tl.backends.clock import HeldClock, nanoseconds, seconds
 from esp32tl.boards import BoardProfile, capabilities
 from esp32tl.boards.capabilities import CapabilityError, Request
+from esp32tl.build import Build, BuildError
 from esp32tl.flash import FlashSnapshot, Namespaces, Partition
 from esp32tl.interfaces import BoardOff, NeverHappened, RunEnded, SourceError
 from esp32tl.interfaces.bluetooth import TAP_SOURCE, Bluetooth
@@ -153,33 +153,21 @@ def rom_path() -> Path:
 
 def load_app(
     app_path: str, *, build_dir: str | Path | None = None, backend: str = "esp32sim"
-) -> IdfApp:
-    """The finished, unencrypted classic ESP32 build selected relative to `app_path`.
-
-    The build directory is given to `IdfApp` as an absolute path: given `build`, it would fall back
-    to a `build` directory in the working directory when the app has none.
+) -> Build:
+    """The finished, unencrypted classic ESP32 build selected relative to `app_path`, an ESP-IDF
+    or a PlatformIO build directory (`esp32tl.build`); `backend` names the backend in the errors.
     """
-    build = (Path(app_path) / (build_dir if build_dir is not None else "build")).resolve()
-    if not (build / "flasher_args.json").is_file():
-        raise BackendError(f"{build} holds no ESP-IDF build: no flasher_args.json")
-    app = IdfApp(app_path, build_dir=str(build))
-    if app.target != "esp32":
-        raise BackendError(f"{build} is built for {app.target}; {backend} runs the classic esp32")
-    if app.flash_settings.get("encrypt"):
-        reason = (
-            "the runner does not do" if backend == "esp32sim" else f"{backend} does not support"
-        )
-        raise BackendError(f"{build} asks for flash encryption, which {reason}")
-    missing = [f.file_path for f in app.flash_files if not Path(f.file_path).is_file()]
-    if missing:
-        raise BackendError(f"{build} is not a finished build, missing {', '.join(missing)}")
-    return app
+    directory = (Path(app_path) / (build_dir if build_dir is not None else "build")).resolve()
+    try:
+        return build.load(app_path, directory, backend=backend)
+    except BuildError as error:
+        raise BackendError(str(error)) from error
 
 
 def runner_command(
     runner: Path,
     rom: Path,
-    app: IdfApp,
+    app: Build,
     max_seconds: float,
     link: Path,
     *,
@@ -192,7 +180,7 @@ def runner_command(
     realtime: bool = False,
     flash_out: Path | None = None,
 ) -> list[str]:
-    """The runner's command line: every file of `flasher_args.json` at its offset, its board the
+    """The runner's command line: every flash file of the build at its offset, its board the
     socket at `link`. A `held` run is on the test's clock: its console also goes on the link, and
     the runner waits for the harness's turn for as long as it takes. `psram_mb`, the board
     profile's, is the PSRAM the runner gives the chip; `None`, a profile that does not say, leaves
@@ -201,7 +189,7 @@ def runner_command(
     flash contents at the supplied offsets, in order. A `wifi` with an access point puts it, and
     the networks around, on the runner's air, with the network behind it on the link. A `bluetooth`
     the test uses makes the runner forward the guest's HCI on the link (`--bt`), with the symbols of
-    the application's ELF, `app.elf_file`. A `realtime`
+    the application's ELF, `app.elf`. A `realtime`
     run is paced to wall time, for a real device at the far end of a route. `flash_out` is the file
     the runner writes the whole flash to when the link asks, and at the end of the run."""
     command = [str(runner), "--chip", "esp32", "--rom", str(rom), "--max-seconds", str(max_seconds)]
@@ -209,7 +197,7 @@ def runner_command(
         command += ["--console", "both", "--peer-timeout", "0"]
     command += ["--board", f"socket:{link}"]
     for file in app.flash_files:
-        command += ["--flash-at", f"{file.offset:#x}={file.file_path}"]
+        command += ["--flash-at", f"{file.offset:#x}={file.path}"]
     for offset, image in extra_flash:
         command += ["--flash-at", f"{offset:#x}={image}"]
     if psram_mb is not None:
@@ -222,7 +210,7 @@ def runner_command(
     if wifi is not None:
         command += wifi.runner_args()
     if bluetooth is not None and bluetooth.used:
-        command += ["--bt", str(app.elf_file)]
+        command += ["--bt", str(app.elf)]
     if realtime:
         command.append("--realtime")
     if flash_out is not None:
@@ -304,7 +292,7 @@ class Esp32Sim(Board):
     line of the profile, and the runner's SD card slot on the profile's slot's pins, which holds
     the card the test inserts, before power-on or while the firmware runs.
 
-    `app` is the `IdfApp` the runner flashes. The dut's own `app` is pytest-embedded's base `App`,
+    `app` is the `Build` the runner flashes. The dut's own `app` is pytest-embedded's base `App`,
     without `flash_files` or `target`: without a service, pytest-embedded builds nothing more.
     `profile`'s name and chip go into the harness's `hello`. `directory` is the test file's, which
     a relative recording path is taken from. `skip` is called with the reason when the test asks
@@ -484,10 +472,10 @@ class Esp32Sim(Board):
         if not self._bluetooth.used:
             # After power-on, the reason is that it is too late, whatever the build holds.
             self._asked(Request("bluetooth", source="model"))
-            elf = self.app.elf_file
-            if elf is None or not Path(elf).is_file():
+            elf = self.app.elf
+            if elf is None or not elf.is_file():
                 raise BackendError(
-                    f"bluetooth: {self.app.binary_path} holds no ELF of the application, whose"
+                    f"bluetooth: {self.app.directory} holds no ELF of the application, whose"
                     " symbols the runner's --bt needs"
                 )
             self._bluetooth.use()
@@ -557,18 +545,17 @@ class Esp32Sim(Board):
                 )
 
     def _partition_table(self, call: str) -> dict[str, Partition]:
-        """The build's partition table, by name; `call` names the board's call in the errors."""
-        tables = [
-            Path(f.file_path)
-            for f in self.app.flash_files
-            if Path(f.file_path).name == "partition-table.bin"
-        ]
-        if len(tables) != 1:
-            raise BackendError(f"{call}: the build must flash one partition-table.bin")
+        """The build's partition table, by name, read where the build flashes it; `call` names the
+        board's call in the errors."""
         try:
-            return flash.partitions(tables[0].read_bytes())
+            return flash.partitions(self.app.table())
+        except BuildError as error:
+            raise BackendError(f"{call}: {error}") from error
         except (OSError, ValueError) as error:
-            raise BackendError(f"{call}: cannot read {tables[0]}: {error}") from error
+            raise BackendError(
+                f"{call}: cannot read the partition table of {self.app.directory}"
+                f" at {self.app.partition_table:#x}: {error}"
+            ) from error
 
     def nvs(self, namespaces: Namespaces, partition: str = "nvs") -> None:
         """Replace a named NVS partition with the test's values before power-on."""
