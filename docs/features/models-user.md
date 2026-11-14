@@ -87,11 +87,87 @@ class Echo(Model):
   `Timed` in `esp32tl.sources.model`, and `quiet_until` and `latency` return a `Duration` or `None`.
   All four are abstract: a subclass that lacks one, or misspells it, raises `TypeError` when it is
   made.
+- On a UART, `receive`'s `at` is the instant the firmware wrote the first byte of `data` into the
+  UART's TX FIFO; each byte after it came within one character time of the one before, at the
+  route's baud. esp32sim does not pace a UART's transmission at the baud: what the firmware writes
+  in one go comes at about one instant, not one character time per byte, and `data` may be cut
+  anywhere, so a model finds a request by its protocol's terminator or by the silence after it
+  ([`uart_tx`](../protocol.md#52-uart_tx)). Behind an SPP channel, `at` is the instant `data`
+  arrived.
 - A `supply(on)` method puts it on the board's supply, as for any source.
 - The route and the peer call it in nanoseconds, converting at the edge: it puts the same bytes on
   the wire at the same instants as the same model written with `int` nanoseconds, which both
   accept as well, and is checked the same way, with the messages in `Duration`s, as
   `uart.aux.quiet_until returned 1.5, not a Duration`.
+
+### A model that only answers
+
+Most parts answer what they hear and send nothing unprompted, and their `poll`, `quiet_until` and
+`latency` say only that. `esp32tl.sources.model.ReactiveModel` says it for them: a subclass
+defines `receive` and sets `answer_after`, the shortest time it takes to answer, as a class
+attribute or in `__init__`:
+
+```python
+from esp32tl.sources.model import ReactiveModel
+from esp32tl.units import ms
+
+
+class Echo(ReactiveModel):
+    answer_after = ms(50)
+
+    def receive(self, at, data):
+        return [(at + self.answer_after, data)]
+```
+
+`latency()` returns `answer_after`, `poll` returns nothing and `quiet_until()` `None`.
+`answer_after = None` is a model that answers nothing. On a UART, one without `answer_after` fails
+the run at its first turn, with `uart.aux.latency raised TypeError: Echo has no answer_after: set
+it to the shortest time it takes to answer, as ms(1)`. The OBD-II reader's `Elm327` is one
+([OBD-II reader](examples-user.md#obd-ii-reader-over-bluetooth-classic)).
+
+### A model of a part that frames by silence
+
+A Modbus RTU slave, and many binary sensors, take the bytes up to a silence on the line as one
+frame: 3.5 character times for RTU. `esp32tl.sources.model.IdleFramedModel` cuts what the model
+hears into such frames: a subclass sets `gap`, the silence, and defines `on_frame(at, frame)`,
+which returns the answers, each at `at` or later:
+
+```python
+from esp32tl.sources.model import IdleFramedModel
+from esp32tl.units import ms
+
+
+class Slave(IdleFramedModel):
+    gap = ms(3.65)  # 3.5 characters of 10 bits (8N1) at 9600 baud
+
+    def __init__(self):
+        self.frames = []
+
+    def on_frame(self, at, frame):
+        self.frames.append((at, frame))
+        return [(at + ms(5), answer(frame))]
+```
+
+- `on_frame` is called at the turn that comes once `gap` has passed since the frame's last piece
+  came: `at` is that piece's `at` plus `gap`, or less than a CPU cycle later. A piece that comes
+  within `gap` of the one before goes into the same frame, however the link cut what the firmware
+  wrote.
+- The gap counts from the `at` of the last piece, the instant the firmware wrote its first byte:
+  what it writes in one go comes at about one instant (above), so the gap is the firmware's own
+  pause between writes. A frame the firmware writes in pieces less than a character time apart,
+  but over more than `gap` in all, ends `gap` after its first byte: the link reports such bytes as
+  one piece, at the first one's instant, so the model sees the pieces, not the line. `gap` is a
+  `Duration` the test computes from the route's baud: the model is not told the baud. 3.5
+  characters are `ms(3.65)` at 9600 baud with 10 bits a character, as 8N1, and `ms(4.02)` with
+  the 11 bits (parity, or two stop bits) the Modbus specification asks for.
+- `latency()` is `gap`, so that the board stops when a frame may have ended, and `quiet_until()`
+  the end of the frame heard so far; the model sends nothing else unprompted. On a UART, a model
+  without `gap` fails the run at its first turn, with `uart.aux.latency raised TypeError: Slave has
+  no gap: set it to the silence that ends a frame, as ms(3.65)`.
+- A frame not ended when the board's supply goes off is not dropped: it ends, and `on_frame` gets
+  it, `gap` after its last piece, as any other. A model of a part that loses what it heard with its
+  power calls `drop()` from its `supply(on)` when `on` is false: the frame heard so far is
+  forgotten, and `on_frame` never gets it.
 
 ## The GNSS receiver
 

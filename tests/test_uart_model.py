@@ -18,7 +18,7 @@ from esp32tl.interfaces.uart import Uart
 from esp32tl.link.boardlink import BoardLink, Output, Wire
 from esp32tl.link.protocol import RunnerHello, Sync, UartRx, UartTx, Wait, Warn
 from esp32tl.report import RunLog
-from esp32tl.sources.model import Model, Timed
+from esp32tl.sources.model import ReactiveModel, Timed
 from esp32tl.units import Duration, ms, seconds
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -30,9 +30,11 @@ HELLO = RunnerHello(1, "esp32", recording.EMULATED, "3bdb9582a910974e4e025d274d6
 ANSWER = ms(1)
 
 
-class AtResponder(Model):
+class AtResponder(ReactiveModel):
     """A part that answers AT: `OK` to every command line, and a signal to `AT+CSQ`, `ANSWER`
     after the line's CR LF; nothing while it has no power. `lines` is every line it heard."""
+
+    answer_after = ANSWER
 
     def __init__(self) -> None:
         self.lines: list[bytes] = []
@@ -49,17 +51,8 @@ class AtResponder(Model):
             line, _, self._heard = self._heard.partition(b"\r\n")
             self.lines.append(line)
             signal = b"\r\n+CSQ: 21,99\r\n" if line == b"AT+CSQ" else b""
-            answers.append((at + ANSWER, signal + b"\r\nOK\r\n"))
+            answers.append((at + self.answer_after, signal + b"\r\nOK\r\n"))
         return answers
-
-    def poll(self, now: Duration) -> Iterable[Timed]:
-        return []
-
-    def quiet_until(self) -> Duration | None:
-        return None
-
-    def latency(self) -> Duration | None:
-        return ANSWER
 
     def supply(self, on: bool) -> None:
         self.supplied.append(on)

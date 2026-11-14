@@ -900,14 +900,14 @@ commands to `uart.aux` of a local profile and reads the answers
 ```python
 from collections.abc import Iterable
 
-from esp32tl.sources.model import Model, Timed
+from esp32tl.sources.model import ReactiveModel, Timed
 from esp32tl.units import Duration, ms, seconds
 
-ANSWER = ms(1)
 
+class AtResponder(ReactiveModel):
+    """OK to every command line, answer_after its CR LF."""
 
-class AtResponder(Model):
-    """OK to every command line, ANSWER after its CR LF."""
+    answer_after = ms(1)
 
     def __init__(self) -> None:
         self.lines: list[bytes] = []
@@ -919,17 +919,8 @@ class AtResponder(Model):
         while b"\r\n" in self._heard:
             line, _, self._heard = self._heard.partition(b"\r\n")
             self.lines.append(line)
-            answers.append((at + ANSWER, b"\r\nOK\r\n"))
+            answers.append((at + self.answer_after, b"\r\nOK\r\n"))
         return answers
-
-    def poll(self, now: Duration) -> Iterable[Timed]:
-        return []
-
-    def quiet_until(self) -> Duration | None:
-        return None
-
-    def latency(self) -> Duration | None:
-        return ANSWER
 
 
 @pytest.mark.app_path("../firmware/modem_at")
@@ -949,13 +940,17 @@ def test_the_firmware_talks_to_the_test_s_model_on_its_own_uart(board):
 
   | Method | Called | Returns |
   |---|---|---|
-  | `receive(at, data)` | When the firmware's bytes cross the wire, `at` when they did. They come cut anywhere: find a request by its terminator | The answers, `(at, bytes)` pairs (a `Timed`), each stamped `latency()` or more after `at` |
+  | `receive(at, data)` | When the firmware's bytes cross the wire. `at` is the instant the firmware wrote the first byte of `data` into the TX FIFO; each byte after came within one character time of the one before. esp32sim does not pace the transmission at the baud, so what the firmware writes in one go comes at about one instant. The bytes come cut anywhere: find a request by its terminator, or by the silence after it with `IdleFramedModel` | The answers, `(at, bytes)` pairs (a `Timed`), each stamped `latency()` or more after `at` |
   | `poll(now)` | At every turn of the link | What the part sends unprompted, each stamped `now` or later |
   | `quiet_until()` | After `poll(now)` | The next time it sends unprompted, later than `now`; `None` for nothing scheduled |
   | `latency()` | At every turn | The shortest time in which it answers; `None` when it answers nothing |
 
-  A `Model` subclass defines all four: they are abstract, so one that lacks one, or misspells it,
-  cannot be made (`TypeError: Can't instantiate abstract class AtResponder without an
+  A model that only answers starts from `ReactiveModel`, as `AtResponder` above does: it defines
+  `receive` and sets `answer_after`, and the base answers the other three. One of a part that
+  frames by silence, as a Modbus RTU slave, starts from `IdleFramedModel`, which gets each frame
+  in `on_frame(at, frame)` ([the bases](models-user.md#a-model-that-only-answers)). A `Model`
+  subclass defines all four: they are abstract, so one that lacks one, or misspells it,
+  cannot be made (`TypeError: Can't instantiate abstract class Part without an
   implementation for abstract method 'poll'`, as Python 3.12 on words it), rather than be a model
   that silently says nothing. A source in nanoseconds has the same four, takes `t: int` and
   `now: int`, and returns `(t, bytes)` pairs with `t` an `int`, an `Output` of

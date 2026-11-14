@@ -2,7 +2,8 @@
 
 The units are `esp32tl/units.py`; the GNSS receiver model is `esp32tl/sources/model/gnss.py`, the
 first of `esp32tl/sources/model/`, whose `__init__.py` holds `Model`, the base of a model of the
-test's in `Duration`s, and its adapter to nanoseconds ([interfaces](#interfaces)). The `gnss`
+test's in `Duration`s, the bases `ReactiveModel` and `IdleFramedModel` built on it, and its adapter
+to nanoseconds ([interfaces](#interfaces)). The `gnss`
 fixture's side, `Gnss` in `esp32tl/interfaces/gnss.py`, is in
 [pytest-plugin-technical.md](pytest-plugin-technical.md#data-flow); the backend that gives the
 receiver its clock in
@@ -96,6 +97,8 @@ hemisphere's letter, `negative` for a value below 0.
 | `sentence(body)`, `angle(degrees, digits, positive, negative)` | The sentence and coordinate formatting above |
 | `ModelError` | A `ValueError`: what the receiver cannot be told |
 | `Model` | `esp32tl/sources/model/__init__.py`: an `ABC`, the base of a model of the test's in `Duration`s, whose `receive(at, data)`, `poll(now)`, `quiet_until()` and `latency()` are abstract methods: a subclass without one of them raises Python's `TypeError` when it is made |
+| `ReactiveModel` | A `Model` whose `poll` returns `()`, `quiet_until()` `None`, and `latency()` the instance's `answer_after`; `receive` stays abstract. Without `answer_after`, `latency()` raises `TypeError: {class} has no answer_after: set it to the shortest time it takes to answer, as ms(1)` (`_attribute`), which the link reports as the model's |
+| `IdleFramedModel` | A `Model` with an abstract `on_frame(at, frame)` and the instance's `gap`. `receive(at, data)` appends `data` to `_frame`, sets `_last` to `at` and returns `()`; `quiet_until()` is `_last + gap` while `_frame` holds bytes, `None` otherwise; `poll(now)`, once `now` is at or after that, empties `_frame` and returns `on_frame(now, frame)`; `latency()` is `gap`; `drop()` empties `_frame` and sets `_last` to `None`. `_frame` and `_last` have class defaults, `b""` and `None`, so a subclass's `__init__` need not call the base's. Without `gap`, `latency()` and every method that needs the frame's end raise `TypeError: {class} has no gap: set it to the silence that ends a frame, as ms(3.65)` |
 | `Timed` | `tuple[Duration, bytes]`: what a `Model`'s `receive` and `poll` return |
 | `InNanoseconds(model, name, fail)` | The `Model` as a source in nanoseconds: `receive(t, data)` and `poll(now)` give it `Duration(t)` and `Duration(now)` and return `(at.ns, bytes)`; `quiet_until()` and `latency()` return `.ns` or `None`. It refuses, with `fail(message)`: an output that is not a `Duration` and `bytes`, `{name}.{method} returned {value!r:.80}, not a (Duration, bytes) pair`; a `quiet_until` that is not a `Duration`, `{name}.quiet_until returned {bound!r}, not a Duration`; a `latency` that is not one, `{name} declares a latency of {bound!r}, not a Duration`, or is below 0, `{name} declares a latency of {bound}`. What the model raises goes through |
 | `in_nanoseconds(model, name, fail)` | An `InNanoseconds`, of the subclass with `supply(on)` when `model` has a callable `supply`, so that `Supplied` (`esp32tl/interfaces/uart.py`) finds it. `Uart.model` passes the route's name and `LinkError`, `SppPeer` `{name}: source` and its `_Misreturned` |
@@ -157,6 +160,16 @@ The `SourceError`s of the first model call are the backend's and `Gnss`'s
   instants heard; a `Model` with a misspelt method, which cannot be made; a `Model` with `supply`,
   on a route and on a peer, and one without; a `Model` behind a proxy; and each thing a `Model`
   can return wrong, with its message in `Duration`s, on both.
+- `tests/test_model_bases.py`: `ReactiveModel` and `IdleFramedModel` on a `Uart` through a
+  `BoardLink`, with the runner's messages scripted: the reactive model's answer and `wait`, and
+  `at` equal to the `uart_tx`'s `t`; two Modbus RTU read requests at 9600 baud, one cut in two
+  pieces 2 ms apart that stays one frame and ends `gap` after the second piece, and two 4 ms apart
+  that are two frames; a turn that comes after the gap's end; on the model alone, a frame dropped
+  before its end, which `on_frame` never gets, and the next one, which it does; and the `TypeError`
+  of a model without `answer_after` or `gap`. On the real runner, with `modem_at` (needs
+  `make firmware`), an `IdleFramedModel` at 115200 baud hears the escape `+++` and the first
+  command as two frames, 10 ms or more apart, and each command with the CR LF the firmware writes
+  in a second call as one.
 - `tests/test_pytest_plugin.py`: the model's place among the sources (see
   [pytest-plugin-technical.md](pytest-plugin-technical.md#tests)).
 
