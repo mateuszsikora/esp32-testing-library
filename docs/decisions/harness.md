@@ -3165,7 +3165,7 @@ other services, so the shared cursor rejected above stays rejected.
 
 ## Only a condition for the next event has the next prefix
 
-Status: decided
+Status: decided (#200)
 
 A condition that sees only what happens after the call that makes it is named `next_*`, and nothing
 else is: the aliases MQTT's `message` and `connected`, HTTP's `requested` and DHCP's `leased` are
