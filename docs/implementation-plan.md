@@ -60,7 +60,9 @@ Each item names the fact, where it was checked, and what changes.
    was not declined: mikroverk/esp32sim#336 was merged as `afcfba6`, the pin from #35
    ([decisions](decisions/runner.md#esp32sim-is-pinned-at-the-merge-commit-of-the-deep-sleep-timer-wake))
    until #34 moved it to `c99fb28`, the merge of mikroverk/esp32sim#347
-   ([decisions](decisions/runner.md#esp32sim-is-pinned-at-the-merge-commit-of-the-bluetooth-classic-enable)).
+   ([decisions](decisions/runner.md#esp32sim-is-pinned-at-the-merge-commit-of-the-bluetooth-classic-enable)),
+   and #180 to `3bdb958`, the merge of mikroverk/esp32sim#353
+   ([decisions](decisions/runner.md#esp32sim-is-pinned-at-the-merge-commit-of-the-classic-vhci-psram-fix)).
 
 6. **`pppos_client` is not in ESP-IDF.** It lives in `espressif/esp-protocols` under
    `components/esp_modem/examples/pppos_client`. The validation list stays, the build recipe fetches

@@ -10,23 +10,25 @@ publish = false
 rust-version = "1.95"
 
 # esp32sim is not on crates.io, so its crates come from git, every one at the
-# same revision: c99fb28, the merge of mikroverk/esp32sim#347, with which
-# esp_bt_controller_enable takes the mode of init's config, so a firmware for
-# Bluetooth Classic alone gets its controller (stage 0, gap 2). Deep sleep wakes
-# on its RTC timer from mikroverk/esp32sim#336 on, and images built for chip
-# revision v3.0 boot from mikroverk/esp32sim#322 on. It also carries
-# mikroverk/esp32sim#344, whose UART queues what does not fit the RX FIFO: the
-# run loop hands each byte to the `Uart` inside it, which drops it. This revision
-# is the project's esp32sim pin; changing it here changes it everywhere.
+# same revision: 3bdb958, the merge of mikroverk/esp32sim#353, with which the
+# classic ESP32's VHCI takes a packet from mapped PSRAM, so a Bluedroid that
+# allocates from PSRAM gets its HCI through (stage 0, gap 8).
+# esp_bt_controller_enable takes the mode of init's config from
+# mikroverk/esp32sim#347 on (gap 2), deep sleep wakes on its RTC timer from
+# mikroverk/esp32sim#336 on, and images built for chip revision v3.0 boot from
+# mikroverk/esp32sim#322 on. Its classic UART queues host bytes that do not fit
+# the RX FIFO (mikroverk/esp32sim#344): the run loop hands each byte to the
+# `Uart` inside it, which drops it. This revision is the project's esp32sim pin;
+# changing it here changes it everywhere.
 [dependencies]
-esp32 = { git = "https://github.com/mikroverk/esp32sim", rev = "c99fb286c4378fcfa6d304b754d31e542ba3035a" }
-esp-soc = { git = "https://github.com/mikroverk/esp32sim", rev = "c99fb286c4378fcfa6d304b754d31e542ba3035a" }
+esp32 = { git = "https://github.com/mikroverk/esp32sim", rev = "3bdb9582a910974e4e025d274d6ec61e5c481be6" }
+esp-soc = { git = "https://github.com/mikroverk/esp32sim", rev = "3bdb9582a910974e4e025d274d6ec61e5c481be6" }
 # For the SD card's image: esp32sim's `SdStore` and its write-through `FileStore`.
-esp-periph = { git = "https://github.com/mikroverk/esp32sim", rev = "c99fb286c4378fcfa6d304b754d31e542ba3035a" }
+esp-periph = { git = "https://github.com/mikroverk/esp32sim", rev = "3bdb9582a910974e4e025d274d6ec61e5c481be6" }
 # For its `Bus` trait, whose `tick` moves a sleeping chip's clock on in long
 # steps, and `Stop::CostModelLifecycle` in a test; neither crate above
 # re-exports them.
-emu-core = { git = "https://github.com/mikroverk/esp32sim", rev = "c99fb286c4378fcfa6d304b754d31e542ba3035a" }
+emu-core = { git = "https://github.com/mikroverk/esp32sim", rev = "3bdb9582a910974e4e025d274d6ec61e5c481be6" }
 # SIGTERM and SIGINT end a run with `stats` (docs/protocol.md, section 9); std
 # has no way to handle a signal.
 signal-hook = { version = "0.4.5", default-features = false }

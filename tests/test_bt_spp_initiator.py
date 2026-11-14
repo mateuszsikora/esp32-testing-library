@@ -2,7 +2,7 @@
 firmware's Bluedroid finds the peer by its name, pairs with its PIN, opens SPP and streams to it,
 with the peer's `secure=True`, the default. A peer of another PIN fails the authentication, and
 with no peer the firmware's one inquiry runs its length and finds nothing. The same example built
-with its HCI buffers in PSRAM (bt_spp_initiator_psram) does not get through yet. Needs `make
+with its HCI buffers in PSRAM (bt_spp_initiator_psram) pairs and streams as well. Needs `make
 firmware` (bt_spp_initiator, bt_spp_initiator_psram). On the serial backend the `bt` fixture skips
 these."""
 
@@ -16,7 +16,6 @@ import pytest
 from esp32tl import recording
 from esp32tl.backends.esp32sim import Esp32Sim
 from esp32tl.bluetooth.peer import BluetoothDevice, SppPeer
-from esp32tl.interfaces import NeverHappened
 from esp32tl.interfaces.bluetooth import Bluetooth
 from esp32tl.interfaces.console import Console
 from esp32tl.report import board_time
@@ -95,14 +94,6 @@ def test_the_firmware_finds_pairs_with_and_streams_to_the_peer(
 
 @pytest.mark.app_path("../firmware/bt_spp_initiator_psram")
 @pytest.mark.board_profile("lilygo-t-a7670g-r2")
-# raises=: only the wait that never ends counts as the known failure; a missing image, a broken
-# fixture or a wrong assertion fails the test as usual.
-@pytest.mark.xfail(
-    strict=True,
-    raises=NeverHappened,
-    reason="esp32sim at the pin takes VHCI packets from internal DRAM only, and refuses the ones"
-    " Bluedroid sends from PSRAM (docs/features/bluetooth-peer-technical.md)",
-)
 def test_with_its_hci_buffers_in_psram_the_firmware_pairs_with_and_streams_to_the_peer(
     board: Esp32Sim, bt: Bluetooth, console: Console
 ) -> None:
