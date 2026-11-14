@@ -361,14 +361,14 @@ The backend's own environment variables are in
 | `ERROR: {item.nodeid}: the {marker} marker reached the test after esp32tl read it, from a pytest.param or a hook: put it on the test, its class or its module` | A selected test that uses `board` carries a board marker from a `pytest.param` or a hook | Usage error, exit code 4 |
 | `count is above 1: esp32tl runs one board in a test` | The test parametrises `count` above 1 itself, so `dut` is a tuple | Error at setup |
 | `esp32sim: {error}` | `Esp32Sim(...)` raised a `BackendError` | Error at setup; messages in [esp32sim-backend-technical.md](esp32sim-backend-technical.md#failure-modes) |
-| `esp32sim: the board profile {name} has no uart.gnss; its interfaces are {interfaces}` | The test uses `gnss` on a profile without the route | Error at setup |
-| `esp32sim: the board profile {name} has no lines; its interfaces are {interfaces}` | The test uses `lines` on a profile without `[lines.<role>]` sets | Error at setup |
+| `esp32sim: the board profile {name} has no uart.gnss; its interfaces are {interfaces}` | The `gnss` fixture on a profile without the route | Error at setup; `board.gnss` raises the `BackendError` in the test body, which fails without the prefix |
+| `esp32sim: the board profile {name} has no lines; its interfaces are {interfaces}` | The `lines` fixture on a profile without `[lines.<role>]` sets | Error at setup; `board.lines` raises the `BackendError` in the test body, which fails without the prefix |
 | `esp32sim: the test set up the {kind} of {interface} and never called board.power_on(): it ran no firmware`, `the level of {line}` for a line, `a card in sd_card` for a card | A test whose setup and call passed, which gave a source, asked for a tap, drove a line or inserted a card and never powered on | Error at teardown |
 | `GPIO {pin} is no line of the board profile {board}; its lines are {name} (GPIO {pin}), ...`, `{line!r} is no line ...`, `{line!r}: the board profile {board} has no lines` | `ValueError` from `drive`, `release` or `level` | Fails the test |
 | `lines.drive: level {level!r} is not 0 or 1` | `ValueError` for an integer other than 0 or 1, `TypeError` for what is not an integer | Fails the test |
 | `{interface} sent {type} on GPIO {pin}, which another interface is wired to` | An interface's `inputs` returned a `gpio_in`, `release` or `adc` on a pin of another interface's; `Lines` sends only on its own | The link's error: the run ends with `stop`, a waiting test gets `RunEnded`, the teardown `the link failed: ...` |
 | `the pins of {interface} hold {pin!r}, not a GPIO number`, `GPIO {pin} is on {interface} and {other}` | `ValueError` from `BoardLink(...)`, for an interface whose `pins` hold something other than a GPIO number, or two interfaces on one pin; a profile cannot give either | Error at setup, with its traceback |
-| `esp32sim: the board profile {name} has no sd_card; its interfaces are {interfaces}` | The test uses `sd_card` on a profile without a slot | Error at setup |
+| `esp32sim: the board profile {name} has no sd_card; its interfaces are {interfaces}` | The `sd_card` fixture on a profile without a slot | Error at setup; `board.sd_card` raises the `BackendError` in the test body, which fails without the prefix |
 | `the board is off; call board.power_on() first` | `BoardOff` from a wait, an expect, `now` or `utc` before power-on; on esp32sim also from `boots` and `power_off()` (on serial these two skip the test) | Fails the test |
 | `the board is on already: call board.power_off() first` | `BoardOff` from `power_on()` on esp32sim with the supply on | Fails the test |
 | `the board is off already: call board.power_on() to switch it on`, `the board is off: board.reset() resets a board that is on` | `BoardOff` from `power_off()` with the supply off, `reset()` with it off ([resets and power cycles](pytest-plugin-user.md#resets-and-power-cycles)) | Fails the test |
@@ -489,7 +489,9 @@ through `pytester`, a source after power-on, an expect before it, a source never
 profile without the route ([replay-technical.md](replay-technical.md#tests)).
 `tests/test_replay.py` and `tests/test_tap.py` test `Uart` without an emulator.
 `tests/test_uart_model.py` tests `Uart.model` without an emulator, on `Uart`, `Gnss` and `Modem`,
-with a proxy, an attribute that cannot be called and a model on no supply, then runs `modem_at`
+with a proxy, an attribute that cannot be called and a model on no supply. It also checks that a
+model hears what the firmware sends at another rate than the profile's and answers at the
+profile's, and that the run fails on the frame errors that follow. It then runs `modem_at`
 against a model of the test's, `AtResponder`, a `Model`, on `uart.aux` of
 `tests/boards/aux-uart.toml`, through a power cycle, and, through `pytester`, a tap whose recording
 names the model `model:Ok`, one in nanoseconds; `tests/test_serial_backend.py` checks that `serial`

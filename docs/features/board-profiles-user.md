@@ -20,7 +20,7 @@ Every profile also has `wifi`, the chip's Wi-Fi station, and `bluetooth`, its Bl
 controller: every classic ESP32 has both radios, so a profile does not list them, and they come
 last in a profile's interfaces, in that order
 ([the wifi fixture](pytest-plugin-user.md#the-wifi-fixture),
-[the bt fixture](pytest-plugin-user.md#the-bt-fixture)).
+[`board.bluetooth`](pytest-plugin-user.md#the-bt-fixture)).
 
 Everything a profile lists is on the board's supply: `board.power_off()` takes the power of the
 chip, the card in its slot, and the GNSS receiver and modem models at the far end of its routes
@@ -76,10 +76,10 @@ import pytest
 
 
 @pytest.mark.board_profile("lilygo-t-a7670g-r2")
-def test_with_card(board, sd_card, gnss, modem):
-    sd_card.insert("card.img")  # existing writable image, relative to this test file
-    gnss.lose_fix()  # select the GNSS model, initially without a fix
-    modem.register()
+def test_with_card(board):
+    board.sd_card.insert("card.img")  # existing writable image, relative to this test file
+    board.gnss.lose_fix()  # select the GNSS model, initially without a fix
+    board.modem.register()
     board.power_on()
     # Observe your firmware through board.console and the other interfaces.
 ```
@@ -189,6 +189,29 @@ def test_wiring(board):
     assert board.profile.uart["gnss"].tx == 4
 ```
 
+### What a route's baud does
+
+`baud` is the line rate of the far end of the route: what the far end sends goes into the ESP32's
+RX pin at it, whatever the far end is. What the firmware sends is heard whatever its rate, except
+by a real device:
+
+| At the far end | What it sends goes in at | The firmware transmits at another rate |
+|---|---|---|
+| Nothing | It sends nothing | Heard, and answered by nothing |
+| A model: esp32tl's GNSS receiver or modem, or the test's own ([a UART's own model](pytest-plugin-user.md#a-uarts-own-model)) | The profile's `baud` | Heard: a model is not told the rate, and gets the bytes as they are |
+| A replay ([replay](replay-user.md)) | The profile's `baud`: a recording carries no baud | Heard, and matched against the recording |
+| A real device ([real source](real-source-user.md)) | The profile's `baud`: the host port runs at it | Fails the run at that byte: `uart.gnss.transmitted raised SourceError: uart.gnss: the firmware transmits at {baud} baud, and the serial port {port} runs at {rate} baud` |
+
+A firmware that receives at another rate than the profile's, more than 3 % off, loses what the far
+end sends as frame errors, and the run fails at the first of them, whatever the far end is:
+`the link failed: uart.aux sends at 115200 baud on GPIO 27, and the firmware's UART1 receives
+there at 9600 baud: 6 bytes dropped as frame errors (frm_err)`
+([protocol 5.8](../protocol.md#58-warn-ext)). So the profile's `baud` must be the rate the
+firmware sets in the test: a firmware that takes its rate from NVS, and a test that writes another
+one there with `board.nvs(...)`, needs a profile with that rate, one local profile per rate it
+tests. A model that answers at the rate the firmware set, whatever it is, is not there yet
+([decision](../decisions/harness.md#a-model-answers-at-the-profiles-baud-not-at-the-rate-the-firmware-set)).
+
 Relative paths always start at the **test file's directory**, including markers inherited from
 a class or module, or a `pytestmark` that a test module imports from a conftest. They do not start
 at the process working directory or the conftest's directory. Absolute paths work too; a shared
@@ -218,9 +241,9 @@ or a set of lines in the profile: `uart.gnss`, `uart.modem`, `lines.modem`, `sd_
 card slot, `wifi`, the chip's Wi-Fi station, or `bluetooth`, its Bluetooth controller.
 
 ```python
-def test_reports_a_fix(board, gnss, console, tmp_path):
-    gnss.replay("../recordings/gnss-generated-1.jsonl")  # a recording at the far end
-    gnss.tap(tmp_path / "gnss.jsonl")  # what crosses uart.gnss, recorded
+def test_reports_a_fix(board, tmp_path):
+    board.gnss.replay("../recordings/gnss-generated-1.jsonl")  # a recording at the far end
+    board.gnss.tap(tmp_path / "gnss.jsonl")  # what crosses uart.gnss, recorded
     board.power_on()
     ...
 ```
@@ -229,7 +252,7 @@ def test_reports_a_fix(board, gnss, console, tmp_path):
   `gnss.fix(at=...)` or another call of the receiver model a `model`
   ([models and units](models-user.md#the-gnss-receiver)), `sd_card.insert(image)` a `model`,
   the runner's card holding the image, and `wifi.access_point(...)` or `wifi.nearby(...)` a
-  `model`, esp32sim's access point with the simulated network behind it; the `bt` fixture asks for
+  `model`, esp32sim's access point with the simulated network behind it; `board.bluetooth` asks for
   a `model` on `bluetooth`, the firmware's controller in the harness on the air of the test's
   devices. `gnss.real(port)` asks for
   a `real` source, a device on a host serial port, which on `serial` skips all the same: the `real`
@@ -250,7 +273,7 @@ Each backend declares what it can give:
 | `lines.*` | nothing | nothing |
 | `sd_card` | `model`: a card holding an image file; no tap | `real`: the card in the slot; no tap |
 | `wifi` | `model`: esp32sim's access point, the network behind it the harness's; no tap | `real`: the access points around the board; no tap |
-| `bluetooth` | `model`: the firmware's controller in the harness, with the test's devices on its air; the tap of the HCI between the firmware's host and it (`bt.tap`) | nothing: the `bt` fixture skips |
+| `bluetooth` | `model`: the firmware's controller in the harness, with the test's devices on its air; the tap of the HCI between the firmware's host and it (`board.bluetooth.tap`) | nothing: `board.bluetooth` skips |
 
 On a real board the on-board peripherals are soldered on, so only the real part answers, and a tap
 on them would need a hardware sniffer. The `lines` fixture is no source in this table: on

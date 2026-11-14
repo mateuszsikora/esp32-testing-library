@@ -73,6 +73,14 @@ def test_boots(board: Board) -> None:
     board.console.expect_exact("my_project: ready")
 ```
 
+Every interface of the board is an attribute of `board`: `board.console`, `board.gnss`,
+`board.modem`, `board.lines`, `board.sd_card`, `board.wifi`, `board.bluetooth`, and
+`board.uart(role)` for any other route of the profile. This guide and the examples write them so,
+and a test asks for `board` alone. The plugin's `console`, `gnss`, `bt` and other fixtures are
+shortcuts to the same objects, for tests written with them; a missing interface fails differently
+through them, at setup
+([one board and its interfaces](../features/pytest-plugin-user.md#one-board-and-its-interfaces)).
+
 `board` is off until the test calls `board.power_on()`, which starts the run at 0 on the board's
 clock. From then on the firmware runs only while the test waits, and stands still while the test
 body runs: a test can read anything between two waits without the firmware moving under it.
@@ -130,7 +138,7 @@ Every wait is on the board's clock, and every limit a test states is part of wha
 | To wait for | Write | It returns |
 |---|---|---|
 | Time to pass | `board.wait(seconds(5))` | At exactly that instant: `board.now` moved by 5 s |
-| Text on the console | `board.console.expect_exact("ready", timeout=seconds(10))` | The match |
+| Text on the console | `board.console.expect_exact("ready", timeout=seconds(10))` | The `re.Match`, on bytes, as in pytest-embedded: `.group().decode()` for the text; after `expect(pattern)`, `.group(1).decode()` for a group |
 | A console line, with its time | `board.wait_until(board.console.line(r"^fix lat=(?P<lat>\S+)"), within=seconds(2))` | A `Line`, with `at`, `text` and the groups |
 | A pin | `buzzer = board.lines.output("alarm.buzzer")`, then `board.wait_until(buzzer.is_on, within=seconds(2))` | `True` |
 | A message at the broker | `board.wait_until(broker.next_message("tracker/position"), within=seconds(60))` | The message, with `at` |
@@ -208,6 +216,10 @@ assert report.received_at == about(deadline, within=seconds(0.25))
   ([when a backend cannot give it](../features/board-profiles-user.md#when-a-backend-cannot-give-it)).
 - **An error at setup** starting with `esp32sim: ` is about the build, the runner or the ROM ELF,
   with what to do ([when the backend cannot start](../features/esp32sim-backend-user.md#when-the-backend-cannot-start)).
+- **`BackendError: the board profile {name} has no {interface}`** in the test body: the test
+  reached `board.gnss`, `board.lines` or another interface the profile does not have; a fixture of
+  the same interface makes it an error at setup that starts with `esp32sim: `
+  ([where it fails](../features/pytest-plugin-user.md#one-board-and-its-interfaces)).
 - **A tap** keeps what crossed a route as a recording: `board.gnss.tap(path)` before power-on
   writes it when the run ends, and `replay(path)` plays it back in a later test
   ([replaying a tap](../features/run-report-user.md#replaying-a-tap)).

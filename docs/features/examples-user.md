@@ -370,7 +370,7 @@ firmware/build.sh --examples obd_reader
 
 It has no wiring of its own: the Bluetooth is the chip's, and the console is the default ESP-IDF
 console on UART0. The tests run on the default profile, `esp32-devkitc`, and reach the air through
-`board.bluetooth` ([the `bt` fixture](bluetooth-peer-user.md#in-front-of-the-firmware-the-bt-fixture)).
+`board.bluetooth` ([Bluetooth peer](bluetooth-peer-user.md#in-front-of-the-firmware-boardbluetooth)).
 The firmware runs its controller for Bluetooth Classic alone (`CONFIG_BTDM_CTRL_MODE_BR_EDR_ONLY`)
 with Bluedroid and SPP, and turns Secure Simple Pairing off (`ssp_en = false`), so it always pairs
 with the PIN, as Bluetooth 2.0 adapters do. The name and the PIN are constants in `main.c`,

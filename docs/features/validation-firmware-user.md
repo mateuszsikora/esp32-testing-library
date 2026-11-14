@@ -216,7 +216,7 @@ Classic and SPP, no BLE, and the controller for BR/EDR alone (`CONFIG_BTDM_CTRL_
 mode 2), and its own Kconfig defaults: the peer's name `ESP_SPP_ACCEPTOR`
 (`CONFIG_EXAMPLE_PEER_DEVICE_NAME`) and Secure Simple Pairing on (`CONFIG_EXAMPLE_SSP_ENABLED`).
 Build it with `firmware/build.sh bt_spp_initiator`; `make firmware` and `make test` include it. It
-needs a run with the [`bt` fixture](bluetooth-peer-user.md#in-front-of-the-firmware-the-bt-fixture),
+needs a run with [`board.bluetooth`](bluetooth-peer-user.md#in-front-of-the-firmware-boardbluetooth),
 which gives the firmware its controller; its project is called `bt_spp_initiator_demo`, and so are
 its files.
 
@@ -266,7 +266,7 @@ are called `bt_spp_initiator_demo`, as the plain image's are. It needs a board p
 device`.
 
 Every HCI packet its Bluedroid sends lies in PSRAM, which esp32sim at the pin takes
-([Bluetooth peer](bluetooth-peer-user.md#in-front-of-the-firmware-the-bt-fixture)). Against the
+([Bluetooth peer](bluetooth-peer-user.md#in-front-of-the-firmware-boardbluetooth)). Against the
 same `SppPeer` as the plain image it pairs, opens the channel and streams at the same speed:
 `authentication success: ESP_SPP_ACCEPTOR` 1.418 s after power-on, the channel at 1.437 s, and
 `speed(1.272723s ~ 4.292856s): 298.953674 kbit/s`. Its test in `tests/test_bt_spp_initiator.py`

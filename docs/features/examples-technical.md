@@ -35,8 +35,9 @@ two sentences or add hysteresis. It sends no configuration commands to the recei
 
 `examples/gps_alarm_clock/tests/test_alarm.py` boots the image through the public pytest plugin.
 Its local `configure_alarm` helper translates `Position`/`Distance` to the firmware's typed
-NVS keys before boot; the `buzzer` fixture returns an `OutputLine`, not a renamed board. Tests
-move the model on emulated time and pass its `is_on`/`is_off` conditions to `board.wait_until`.
+NVS keys before boot; the `buzzer` fixture returns `board.lines.output("alarm.buzzer")`, an
+`OutputLine`, and the tests reach the receiver as `board.gnss`. Tests move the model on emulated
+time and pass its `is_on`/`is_off` conditions to `board.wait_until`.
 They calculate travel time to the radius separately from the two-fix response budget and check
 the output's event history for unwanted pulses. Its non-default target/radius cases catch a firmware that ignores
 NVS, with separate tests for smaller and larger configured radii. Its silence and loss cases

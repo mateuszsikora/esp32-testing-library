@@ -165,6 +165,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The GNSS receiver's epochs fall on whole seconds of the world's time](harness.md#the-gnss-receivers-epochs-fall-on-whole-seconds-of-the-worlds-time) | `harness.md` | decided (#69) |
 | [A lost fix keeps the receiver moving, and a fix puts it at a place, standing](harness.md#a-lost-fix-keeps-the-receiver-moving-and-a-fix-puts-it-at-a-place-standing) | `harness.md` | decided (#69) |
 | [Console lines are stamped when they end, and console.line looks from when it was made](harness.md#console-lines-are-stamped-when-they-end-and-consoleline-looks-from-when-it-was-made) | `harness.md` | decided (#69) |
+| [The console's expect returns a match on bytes, and line returns text](harness.md#the-consoles-expect-returns-a-match-on-bytes-and-line-returns-text) | `harness.md` | decided (#198) |
 | [The GNSS receiver sends RMC and GGA only, at sea level](harness.md#the-gnss-receiver-sends-rmc-and-gga-only-at-sea-level) | `harness.md` | postponed (#69) |
 | [GPIO lines are an interface of the link, and the scenario timeline is gone](harness.md#gpio-lines-are-an-interface-of-the-link-and-the-scenario-timeline-is-gone) | `harness.md` | decided (#24) |
 | [A board's pull is a level the harness drives on the line](harness.md#a-boards-pull-is-a-level-the-harness-drives-on-the-line) | `harness.md` | decided (#24) |
@@ -245,11 +246,13 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Anonymous MQTT clients get deterministic distinct identifiers](harness.md#anonymous-mqtt-clients-get-deterministic-distinct-identifiers) | `harness.md` | decided (#30) |
 | [Output handles provide live named conditions without changing GPIO ownership](harness.md#output-handles-provide-live-named-conditions-without-changing-gpio-ownership) | `harness.md` | decided (#71) |
 | [Board owns interfaces and SD image builders](harness.md#board-owns-interfaces-and-sd-image-builders) | `harness.md` | decided (#73) |
+| [Tests reach the interfaces through board, and the fixtures stay as shortcuts](harness.md#tests-reach-the-interfaces-through-board-and-the-fixtures-stay-as-shortcuts) | `harness.md` | decided (#198) |
 | [Network selection stays explicit and FAT paths name one entry](harness.md#network-selection-stays-explicit-and-fat-paths-name-one-entry) | `harness.md` | decided (#73) |
 | [Network failure controls stay in the models and tracker reports stay in the example](harness.md#network-failure-controls-stay-in-the-models-and-tracker-reports-stay-in-the-example) | `harness.md` | decided (#72) |
 | [A run with a real source is on the wall clock from power-on, and stays on the test's clock](harness.md#a-run-with-a-real-source-is-on-the-wall-clock-from-power-on-and-stays-on-the-tests-clock) | `harness.md` | decided (#27) |
 | [The real source stamps what the port gave with the turn it hands it over in, every emulated millisecond](harness.md#the-real-source-stamps-what-the-port-gave-with-the-turn-it-hands-it-over-in-every-emulated-millisecond) | `harness.md` | decided (#27) |
 | [A real source's port keeps the wire's baud, and a transmit at another rate fails the run](harness.md#a-real-sources-port-keeps-the-wires-baud-and-a-transmit-at-another-rate-fails-the-run) | `harness.md` | decided (#27) |
+| [A model answers at the profile's baud, not at the rate the firmware set](harness.md#a-model-answers-at-the-profiles-baud-not-at-the-rate-the-firmware-set) | `harness.md` | postponed (#198) |
 | [A real source keeps at most 50 ms of bytes waiting on its line, and drops the oldest](harness.md#a-real-source-keeps-at-most-50-ms-of-bytes-waiting-on-its-line-and-drops-the-oldest) | `harness.md` | decided (#27) |
 | [The Wi-Fi station is an interface of every profile, and the access point a model source](harness.md#the-wi-fi-station-is-an-interface-of-every-profile-and-the-access-point-a-model-source) | `harness.md` | decided (#31) |
 | [Behind the access point the network speaks Ethernet, ARP and DHCP](harness.md#behind-the-access-point-the-network-speaks-ethernet-arp-and-dhcp) | `harness.md` | decided (#31) |

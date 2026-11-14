@@ -16,11 +16,11 @@ from esp32tl.units import seconds
 pytestmark = pytest.mark.app_path("../firmware/nmea_reader")
 
 
-def test_reads_the_receiver(board, gnss, console):
-    gnss.real("/dev/cu.usbserial-0001")
-    gnss.tap("receiver.jsonl")
+def test_reads_the_receiver(board):
+    board.gnss.real("/dev/cu.usbserial-0001")
+    board.gnss.tap("receiver.jsonl")
     board.power_on()
-    console.expect(r"fix acquired lat=\S+ lon=\S+", timeout=300)
+    board.console.expect(r"fix acquired lat=\S+ lon=\S+", timeout=300)
 ```
 
 - `gnss.real(port)`, or `board.uart(role).real(port)` for any UART route of the board profile,

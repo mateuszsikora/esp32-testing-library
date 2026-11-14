@@ -5,13 +5,13 @@ its name, pairs with a PIN or with Secure Simple Pairing, and offers the Serial 
 whose bytes a model in the test answers, on the board's clock; `BluetoothDevice` is the same device with no SPP. They run on
 [Bumble](https://github.com/google/bumble)'s virtual link, in the harness's process.
 
-On the emulator the `bt` fixture puts them in front of the firmware: the firmware's Bluetooth host
+On the emulator `board.bluetooth` puts them in front of the firmware: the firmware's Bluetooth host
 talks to a controller in the harness, on the same air as the test's devices
-([below](#in-front-of-the-firmware-the-bt-fixture)). Without a board, a peer is used from Python on
+([below](#in-front-of-the-firmware-boardbluetooth)). Without a board, a peer is used from Python on
 an `Air` of its own, with another Bumble device in the ESP32's place, as esp32tl's own tests do
 (`tests/test_spp_peer.py`).
 
-## In front of the firmware: the `bt` fixture
+## In front of the firmware: `board.bluetooth`
 
 ```python
 import pytest
@@ -21,17 +21,17 @@ from esp32tl.units import seconds
 
 
 @pytest.mark.app_path("path/to/an/spp/initiator")
-def test_the_firmware_sends_to_the_peer(board, bt):
+def test_the_firmware_sends_to_the_peer(board):
     source = Echo()  # a model, as in "The model that answers" below
-    peer = SppPeer(bt.air, name="ESP_SPP_ACCEPTOR", pin="1234", source=source)
+    peer = SppPeer(board.bluetooth.air, name="ESP_SPP_ACCEPTOR", pin="1234", source=source)
     board.power_on()
     board.wait_until(lambda: peer.channel_open, within=seconds(20))
     board.wait(seconds(1))
     assert source.heard
 ```
 
-`bt` is the chip's Bluetooth (`board.bluetooth`), asked for before `board.power_on()`, which is what
-a fixture does. From then on:
+`board.bluetooth` is the chip's Bluetooth, asked for before `board.power_on()`; the `bt` fixture is
+the same object, asked for at setup. Below, `bt` is short for either. From then on:
 
 - **The firmware's controller is in the harness.** The run forwards every HCI packet the firmware's
   Bluetooth host sends (ESP-IDF's Bluedroid, through esp32sim's VHCI) to a controller on the air of
@@ -80,21 +80,24 @@ a fixture does. From then on:
   next reset: a device can still find it, and a link to it does not lose contact. The wake from a
   deep sleep is a reset: there the controller restarts, and a peer's link loses contact.
 
-On the serial backend the test skips at the fixture: `serial: bluetooth takes no model source on
-this backend`. A `bt` asked for after `board.power_on()`, through `board.bluetooth`, is refused:
-`bluetooth: the board is on already: give an interface its source before board.power_on()`. A
-build with no ELF of the application fails the fixture: `esp32sim: bluetooth: BUILD holds no ELF
-of the application, whose symbols the runner's --bt needs`.
+On the serial backend the test skips where it first reaches `board.bluetooth`, at setup for the
+`bt` fixture: `serial: bluetooth takes no model source on this backend`. `board.bluetooth` asked
+for the first time after `board.power_on()` is refused: `bluetooth: the board is on already: give
+an interface its source before board.power_on()`. With a build that holds no ELF of the
+application, `board.bluetooth` raises `BackendError: bluetooth: BUILD holds no ELF of the
+application, whose symbols the runner's --bt needs` where the test body reaches it, and the `bt`
+fixture is an error at setup with the same message after `esp32sim: `
+([where it fails](pytest-plugin-user.md#one-board-and-its-interfaces)).
 
 | Name | What |
 |---|---|
-| `bt.air` | The `Air` of the board's devices, on its clock |
-| `bt.controller` | The firmware's controller, a `GuestController` at `24:6F:28:00:11:24` |
-| `bt.unknown_commands()` | The commands of the firmware's host the controller did not know, `(t, op_code, name)` each |
-| `bt.pairings()` | The firmware's pairings that ended, each a `Pairing` ([Secure Simple Pairing](#secure-simple-pairing)) |
-| `bt.devices()` | The other devices made on the air, `(name, address, present)` each, in the order of their addresses; `present` is false for one switched off or out of range now |
-| `bt.packets_from_host`, `bt.bytes_from_host`, `bt.packets_to_host`, `bt.bytes_to_host` | What crossed the VHCI, each way |
-| `bt.tap(path)` | Before `board.power_on()`: the HCI between the firmware's host and its controller, every packet both ways, written at teardown as a btsnoop file at `path` and its header in `path` with `.json` added ([tapping the HCI](run-report-user.md#tapping-the-hci)); returns the `Tap` |
+| `board.bluetooth.air` | The `Air` of the board's devices, on its clock |
+| `board.bluetooth.controller` | The firmware's controller, a `GuestController` at `24:6F:28:00:11:24` |
+| `board.bluetooth.unknown_commands()` | The commands of the firmware's host the controller did not know, `(t, op_code, name)` each |
+| `board.bluetooth.pairings()` | The firmware's pairings that ended, each a `Pairing` ([Secure Simple Pairing](#secure-simple-pairing)) |
+| `board.bluetooth.devices()` | The other devices made on the air, `(name, address, present)` each, in the order of their addresses; `present` is false for one switched off or out of range now |
+| `board.bluetooth.packets_from_host`, `.bytes_from_host`, `.packets_to_host`, `.bytes_to_host` | What crossed the VHCI, each way |
+| `board.bluetooth.tap(path)` | Before `board.power_on()`: the HCI between the firmware's host and its controller, every packet both ways, written at teardown as a btsnoop file at `path` and its header in `path` with `.json` added ([tapping the HCI](run-report-user.md#tapping-the-hci)); returns the `Tap` |
 
 The test's report has what the Bluetooth did, after the Wi-Fi's lines: `bluetooth: the guest's
 controller at 24:6F:28:00:11:24; N packets (B bytes) from its host, M packets (B bytes) to it`, then
@@ -105,9 +108,9 @@ for one switched off or out of range. The `esp32sim_link` property has the same 
 `address`, the four counts, `tap` (the btsnoop file's path, or `null`), `unknown_commands` (`t_ns`,
 `op_code`, `name` each), `pairings` (`t_ns`, `peer`, `initiator`, `method`, `number`, `status`,
 `authenticated` each; [Secure Simple Pairing](#secure-simple-pairing)) and `devices` (`name`,
-`address`, `present` each); `null` without `bt`. Between `unknown commands` and `devices` the report
-lists the firmware's pairings under `pairings (N):`.
-After `bt.tap(path)` the first line ends with `; tapped into {path}`.
+`address`, `present` each); `null` without `board.bluetooth`. Between `unknown commands` and
+`devices` the report lists the firmware's pairings under `pairings (N):`. After
+`board.bluetooth.tap(path)` the first line ends with `; tapped into {path}`.
 
 ### The firmware's controller
 
@@ -419,7 +422,7 @@ device, `in` to it, as a tap's recording names them.
 ## Time on the air
 
 An `Air()` has a clock of its own, which starts at 0 when it is made and moves only when the test
-moves it; `bt.air` is the board's, [above](#in-front-of-the-firmware-the-bt-fixture), and only the
+moves it; `bt.air` is the board's, [above](#in-front-of-the-firmware-boardbluetooth), and only the
 board moves it. Nothing on the air reads the host's clock, so two runs do the same at the same
 instants.
 

@@ -107,12 +107,12 @@ from esp32tl.units import NORTH, Position, km_h, minutes, seconds
 WARSAW = Position(52.229677, 21.012233)
 
 
-def test_follows_the_receiver_as_it_moves(board, gnss, console):
-    gnss.fix(at=WARSAW)
+def test_follows_the_receiver_as_it_moves(board):
+    board.gnss.fix(at=WARSAW)
     board.power_on()
     board.wait(seconds(10))
 
-    gnss.move(heading=NORTH, speed=km_h(36))  # 10 m/s
+    board.gnss.move(heading=NORTH, speed=km_h(36))  # 10 m/s
     board.wait(minutes(1) + seconds(40))  # 1 km
     ...
 ```

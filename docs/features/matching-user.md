@@ -11,10 +11,10 @@ firmware retry and timeout behaviour can be tested.
 from esp32tl.matching import AT, PMTK, UBX, GNSS, Protocol
 
 
-def test_configuration(board, gnss, console):
-    replay = gnss.replay("receiver.jsonl", protocol=PMTK)
+def test_configuration(board):
+    replay = board.gnss.replay("receiver.jsonl", protocol=PMTK)
     board.power_on()
-    console.expect_exact("configured")
+    board.console.expect_exact("configured")
     assert replay.unseen_count == 0
 ```
 
