@@ -3489,7 +3489,7 @@ polls every interface before it checks a stamp.
 
 ## A model that only answers, or frames by silence, starts from a base that fills in the rest
 
-Status: decided
+Status: decided (#202)
 
 `ReactiveModel` and `IdleFramedModel`, in `esp32tl.sources.model`, are `Model`s with all but one
 method defined. `ReactiveModel` sends nothing unprompted and takes `latency()` from its
