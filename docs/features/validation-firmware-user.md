@@ -39,6 +39,7 @@ whatever `FIRMWARE_OUT` the shell exports, because the tests read the images the
 | `pppos_client` | esp-protocols `modem-v1.4.1`, unchanged except sdkconfig: PPP and plain MQTT on the LilyGO modem route ([below](#pppos_client)) |
 | `mqtt_session` | `firmware/mqtt_session`: esp-mqtt with CleanSession=0 over the LilyGO modem route, which prints Session Present and each message's DUP, and publishes a QoS 1 backlog on command ([below](#mqtt_session)) |
 | `http_request` | ESP-IDF's `examples/protocols/http_request`, unmodified, with its default `sdkconfig`, for target `esp32`: joins a Wi-Fi access point and fetches `http://example.com/` over and over ([below](#http_request)) |
+| `http_server` | `firmware/http_server`, this repository's own project, for target `esp32`: a Wi-Fi station that serves `GET /status` and `POST /echo` as JSON on port 80 with ESP-IDF's `esp_http_server`, for a test that opens the connection ([below](#http_server)) |
 | `persistence` | `firmware/persistence`: counts its boots in NVS, RTC memory, RAM and on an SD card, prints them with its reset reason, and restarts itself once ([below](#persistence)) |
 | `ota_state` | `firmware/ota_state`: copies its app to the next OTA slot, boots it, marks it valid, then does it again and rolls back, reporting its state at each step ([below](#ota_state)) |
 | `timer_wake` | `firmware/timer_wake`: sleeps in deep sleep twice with a 2 s timer wake, counting its boots in RTC memory ([below](#timer_wake)) |
@@ -621,6 +622,34 @@ password, the report, and `wifi` refused after power-on. `tests/test_determinism
 runs it twice for [determinism](../guides/testing.md#determinism), and
 `tests/test_firmware_images.py::test_http_request_is_esp_idfs_example_with_its_default_wifi` checks
 the build's flash layout and its three Wi-Fi options in `config/sdkconfig.json`.
+
+## `http_server`
+
+`firmware/build.sh http_server` builds `firmware/http_server`, this repository's own project, with
+ESP-IDF's default `sdkconfig`. `make firmware` and `make test` include it. It joins `myssid` with
+`mypassword` over WPA2-PSK, the defaults of ESP-IDF's examples, and joins again whenever it is
+disconnected, printing `http_server: Wi-Fi disconnected <reason>`. At its first address it prints
+`http_server: got address 10.64.0.2`, starts `esp_http_server` with `HTTPD_DEFAULT_CONFIG()` and
+prints `http_server: listening on port 80`; a later address does not start it again.
+
+| Request | Response |
+|---|---|
+| `GET /status` | `200 OK`, `{"status":"ok","requests":<n>,"uptime_ms":<ms>}`, `<n>` counting this request among those served since boot |
+| `POST /echo` with a JSON body | `200 OK`, `{"echo":<the body, parsed>,"bytes":<its length>}` |
+| `POST /echo` with a body that is not JSON | `400 Bad Request`, `{"error":"invalid JSON"}` |
+| `POST /echo` with a body over 2048 bytes | `413 Content Too Large`, `{"error":"body over 2048 bytes"}` |
+
+Every response is `application/json`. The connection stays open for the next request, unless the
+request has `Connection: close`: then the response carries it too, and the server closes the
+connection after it. Each response prints `http_server: <method> <uri> -> <status>`, as
+`http_server: GET /status -> 200`. Any other path gets `esp_http_server`'s own `404`.
+
+`tests/test_http_server.py` runs it with the `wifi` fixture and is its client
+([network](network-user.md#open-a-tcp-connection-to-the-device)): a `GET` closed on request, two
+`POST`s on one connection, a body over 2048 bytes, a refused port, connecting before the lease, and
+connecting again after a reset and a power cycle.
+`tests/test_firmware_images.py::test_http_server_is_a_wifi_station_with_esp_http_server` checks the
+build's flash layout.
 
 ## Building runnable examples
 

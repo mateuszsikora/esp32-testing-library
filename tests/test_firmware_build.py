@@ -140,7 +140,8 @@ def test_build_refuses_an_unknown_image(tmp_path: Path) -> None:
     assert result.stderr == (
         "firmware/build.sh: unknown image 'nope'; the images are:"
         " hello_world nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader"
-        " pppos_client mqtt_session http_request persistence ota_state timer_wake deep_sleep"
+        " pppos_client mqtt_session http_request http_server persistence ota_state timer_wake"
+        " deep_sleep"
         " bt_spp_initiator bt_spp_initiator_psram\n"
     )
     assert not (tmp_path / "out").exists()
@@ -257,6 +258,7 @@ def test_local_build_runs_idf_py_and_records_how(tmp_path: Path, local_idf: dict
         "mqtt_session": str(ROOT / "firmware" / "mqtt_session"),
         # copied, unchanged, once per ESP-IDF version: its component manager writes into it
         "http_request": f"{(tmp_path / 'out').resolve()}/.http_request-v9.9.9",
+        "http_server": str(ROOT / "firmware" / "http_server"),
         "persistence": str(ROOT / "firmware" / "persistence"),
         "ota_state": str(ROOT / "firmware" / "ota_state"),
         "timer_wake": str(ROOT / "firmware" / "timer_wake"),

@@ -1,10 +1,11 @@
-"""The network the device reaches through its link: IPv4, UDP and a TCP that only ever accepts.
+"""The network the device reaches through its link: IPv4, UDP and TCP.
 
 Every destination address answers. A TCP connection goes to the service listening on its
 destination port, a UDP datagram to the one on its port, whatever the address: the device keeps
-the names and addresses it was built with, and the test decides what answers there. The link to
-the device never loses or reorders bytes, so TCP needs no retransmission, no congestion control
-and no timers: a segment is acknowledged in the turn it arrives in.
+the names and addresses it was built with, and the test decides what answers there. The test
+opens connections to the device too (`Network.connect`). The link to the device never loses or
+reorders bytes, so TCP needs no retransmission, no congestion control and no timers: a segment is
+acknowledged in the turn it arrives in, and a zero window waits for the device's update.
 """
 
 import struct
@@ -16,6 +17,8 @@ TCP, UDP, ICMP = 6, 17, 1
 FIN, SYN, RST, PSH, ACK = 0x01, 0x02, 0x04, 0x08, 0x10
 WINDOW = 8192
 ISN = 0x10000  # our initial sequence number: fixed, so runs repeat
+MSS = 1400  # what we offer, and the most we take from the device's offer
+EPHEMERAL = 49152  # the first port of the connections the test opens (RFC 6335)
 
 
 def checksum(data: bytes) -> int:
@@ -92,6 +95,36 @@ class DatagramService(Protocol):
     def on_datagram(self, data: bytes) -> bytes | None: ...
 
 
+class Client(Protocol):
+    """The test's side of a connection it opened: told when the device accepts it, each piece of
+    what the test wrote as it goes onto the link (`on_sent`), each in-order byte the device sends,
+    the device's FIN (`on_close`), and the connection's end, once, with its kind, `"closed"`,
+    `"refused"`, `"reset"` or `"lost"`, and for `"lost"` why, as `the link went down`."""
+
+    def on_established(self) -> None: ...
+
+    def on_sent(self, data: bytes) -> None: ...
+
+    def on_data(self, data: bytes) -> None: ...
+
+    def on_close(self) -> None: ...
+
+    def on_end(self, kind: str, why: str | None) -> None: ...
+
+
+class OutOfOrder(Exception):
+    """A segment from the device ahead of what it has sent: this link loses and reorders nothing,
+    so it cannot happen, and the run fails rather than wait for a byte that never comes."""
+
+
+_ENDS = {
+    "closed": "closed",
+    "refused": "refused by the device",
+    "reset": "reset by the device",
+    "lost": "link lost",
+}
+
+
 @dataclass
 class _Flow:
     key: tuple[str, int, str, int]  # device address, device port, our address, our port
@@ -107,6 +140,7 @@ class _Flow:
     peer_closed: bool = False
     established: bool = False
     notified: bool = False
+    client: Client | None = None  # set on a connection the test opened
 
 
 class Network:
@@ -126,6 +160,8 @@ class Network:
         self.udp: dict[int, DatagramService] = {}
         self._flows: dict[tuple[str, int, str, int], _Flow] = {}
         self._ident = 0
+        # The next port the test connects from: never reused, so no TIME_WAIT is needed.
+        self._port = EPHEMERAL
 
     def receive(self, datagram: bytes) -> None:
         try:
@@ -211,6 +247,22 @@ class Network:
         self._ip_send(ours, device, TCP, segment)
         flow.snd_nxt += len(data) + (1 if flags & (SYN | FIN) else 0)
 
+    def connect(
+        self, device: str, port: int, ours: str, client: Client
+    ) -> tuple[int, Callable[[bytes], None], Callable[[], None]]:
+        """Open a connection from `ours` to `device`:`port`: the SYN enters the path now. Returns
+        the port it comes from, the next ephemeral one, and the `write` and `close` of the test's
+        side."""
+        if self._port > 65535:
+            raise RuntimeError("net: the test has used every ephemeral port, 49152 to 65535")
+        local, self._port = self._port, self._port + 1
+        flow = _Flow((device, port, ours, local), 0, ISN, ISN, 0, 536, connection=client)
+        flow.client = client
+        self._flows[flow.key] = flow
+        self._log(f"net: TCP {ours}:{local} → {device}:{port} connecting")
+        self._segment(flow, SYN, options=struct.pack(">BBH", 2, 4, MSS))
+        return local, lambda out: self._write(flow, out), lambda: self._close(flow)
+
     def _tcp(self, src: str, dst: str, segment: bytes) -> None:
         sport, dport, seq, ack, offset, flags, window = struct.unpack(">HHIIBBH", segment[:16])
         header_length = (offset >> 4) * 4
@@ -219,26 +271,38 @@ class Network:
         data = segment[header_length:]
         key = (src, sport, dst, dport)
         flow = self._flows.get(key)
+        if flow is not None and flow.client is not None and not flow.established:
+            # Our SYN is out: only the device's answer to it counts (RFC 9293, 3.10.7.3).
+            if not flags & ACK or ack != (ISN + 1) & 0xFFFFFFFF:
+                return
+            if flags & RST:
+                self._drop(flow, "refused")
+                return
+            if not flags & SYN:
+                return
+            mss = _mss(segment[20:header_length])
+            if mss is None:
+                return
+            flow.mss = max(1, min(mss, MSS))
+            flow.rcv_nxt = (seq + 1) & 0xFFFFFFFF
+            flow.snd_una = ack
+            flow.peer_window = window
+            flow.established = True
+            self._segment(flow, ACK)
+            self._log(f"net: TCP {dst}:{dport} → {src}:{sport} established")
+            flow.client.on_established()
+            # What else the segment carries follows its SYN.
+            seq = (seq + 1) & 0xFFFFFFFF
+            flags &= ~SYN
         if flags & RST:
             if flow is not None:
-                self._drop(flow, "reset by the device")
+                self._drop(flow, "reset")
             return
         if flags & SYN and flow is None:
-            mss = 536
-            options = segment[20:header_length]
-            while options:
-                kind = options[0]
-                if kind == 0:
-                    break
-                if kind == 1:
-                    options = options[1:]
-                    continue
-                if len(options) < 2 or not 2 <= options[1] <= len(options):
-                    return
-                if kind == 2 and options[1] == 4:
-                    mss = struct.unpack(">H", options[2:4])[0]
-                options = options[options[1] :]
-            flow = _Flow(key, (seq + 1) & 0xFFFFFFFF, ISN, ISN, window, max(1, min(mss, 1400)))
+            mss = _mss(segment[20:header_length])
+            if mss is None:
+                return
+            flow = _Flow(key, (seq + 1) & 0xFFFFFFFF, ISN, ISN, window, max(1, min(mss, MSS)))
             service = self.tcp.get(dport)
             if service is None:
                 self._log(f"net: TCP {src}:{sport} → {dst}:{dport} refused, nothing listens there")
@@ -246,7 +310,7 @@ class Network:
                 self._segment(flow, RST | ACK)
                 return
             self._flows[key] = flow
-            self._segment(flow, SYN | ACK, options=struct.pack(">BBH", 2, 4, 1400))
+            self._segment(flow, SYN | ACK, options=struct.pack(">BBH", 2, 4, MSS))
             self._log(f"net: TCP {src}:{sport} → {dst}:{dport} accepted")
             flow.connection = service.accept(
                 (src, sport), lambda out: self._write(flow, out), lambda: self._close(flow)
@@ -265,6 +329,15 @@ class Network:
             flow.peer_window = window
         if not flow.established:
             return
+        ahead = (seq - flow.rcv_nxt) & 0xFFFFFFFF
+        if flow.client is not None and (data or flags & FIN) and 0 < ahead < 1 << 31:
+            line = (
+                f"net: TCP {dst}:{dport} → {src}:{sport}: the device sent sequence {seq},"
+                f" {ahead} bytes ahead of {flow.rcv_nxt}, which a link that loses nothing"
+                " cannot produce"
+            )
+            self._log(line)
+            raise OutOfOrder(line)
         if data and seq == flow.rcv_nxt:
             flow.rcv_nxt = (flow.rcv_nxt + len(data)) & 0xFFFFFFFF
             self._segment(flow, ACK)
@@ -303,6 +376,8 @@ class Network:
             chunk = bytes(flow.pending[:size])
             del flow.pending[:size]
             self._segment(flow, ACK | PSH, chunk)
+            if flow.client is not None:
+                flow.client.on_sent(chunk)
         if (
             flow.fin_pending
             and not flow.fin_sent
@@ -311,19 +386,54 @@ class Network:
             flow.fin_sent = True
             self._segment(flow, FIN | ACK)
 
-    def _drop(self, flow: _Flow, why: str) -> None:
+    def _drop(self, flow: _Flow, kind: str, why: str | None = None) -> None:
+        """End `flow`: `kind` is `"closed"`, `"refused"`, `"reset"` or `"lost"`, and for a client's
+        lost flow `why` says why, the link going down unless given."""
         self._flows.pop(flow.key, None)
-        self._notify(flow)
         device, dport, ours, oport = flow.key
-        self._log(f"net: TCP {device}:{dport} → {ours}:{oport} {why}")
+        if flow.client is not None:
+            # Before `_notify`, so that the client's `on_close` stands for a FIN only.
+            flow.client.on_end(kind, why)
+            self._notify(flow)
+            end = f"lost: {why}" if why is not None else _ENDS[kind]
+            self._log(f"net: TCP {ours}:{oport} → {device}:{dport} {end}")
+        else:
+            self._notify(flow)
+            self._log(f"net: TCP {device}:{dport} → {ours}:{oport} {_ENDS[kind]}")
 
     def _notify(self, flow: _Flow) -> None:
         if not flow.notified and flow.connection is not None:
             flow.notified = True
             flow.connection.on_close()
 
+    def lose_clients(self, why: str) -> None:
+        """Lose every connection the test opened, and none the device opened: the device's end of
+        them is gone, `why` saying how, as `the device reset`."""
+        for flow in list(self._flows.values()):
+            if flow.client is not None:
+                self._drop(flow, "lost", why)
+
     def reset(self) -> None:
         """Lose every TCP connection; notify services once, including MQTT Wills."""
         for flow in list(self._flows.values()):
-            self._drop(flow, "link lost")
+            self._drop(flow, "lost")
         self._ident = 0
+
+
+def _mss(options: bytes) -> int | None:
+    """The MSS a SYN's options offer, 536 when they offer none (RFC 9293, 3.7.1); `None` for
+    options that do not parse."""
+    mss = 536
+    while options:
+        kind = options[0]
+        if kind == 0:
+            break
+        if kind == 1:
+            options = options[1:]
+            continue
+        if len(options) < 2 or not 2 <= options[1] <= len(options):
+            return None
+        if kind == 2 and options[1] == 4:
+            mss = struct.unpack(">H", options[2:4])[0]
+        options = options[options[1] :]
+    return mss

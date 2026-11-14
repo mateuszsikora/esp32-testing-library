@@ -166,8 +166,9 @@ threads; a connect in progress ends within `CONNECT_SECONDS`. The backend calls 
   minus the 20-byte IPv4 and 20-byte TCP headers, as well as MSS and available window space.
   UDP replies are checked against MRU (including 28 header bytes) before packing; an oversized
   reply is dropped and logged without fragmentation. TCP also handles
-  receive sequence wrap, duplicate-data acknowledgments, FIN and reset. It never initiates a
-  connection or retransmits. Unbound TCP ports return RST; unbound UDP is logged and dropped.
+  receive sequence wrap, duplicate-data acknowledgments, FIN and reset. It opens connections
+  only for the test ([below](#connections-the-test-opens)), and never retransmits. Unbound TCP
+  ports return RST; unbound UDP is logged and dropped.
   Connections receive `on_close` once, also on RST, PPP loss and `Internet.stop`. There is no
   ICMP or IPv6. The UDP limit's log line names it `peer MRU` behind the access point too.
 - `dns.py`: one bounded question, including compressed names with loop detection; preserves the
@@ -408,6 +409,98 @@ expiry and HTTP keep-alive or chunked bodies. Protocol references:
 [MQTT 3.1.1](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html),
 [DHCP](https://www.rfc-editor.org/rfc/rfc2131), [HTTP/1.1](https://www.rfc-editor.org/rfc/rfc9112).
 
+## Connections the test opens
+
+`esp32tl/net/client.py` holds `TcpConnection`, `ConnectionEnded` (an `AssertionError`) and
+`NotReachable` (a `RuntimeError`); `Network.connect` in `ip.py` is the active open, and
+`Internet.connect` in `__init__.py` joins them.
+
+`Internet.connect(port, *, address=None)` names its call `network.connect(<port!r>)`, with
+`, address=<address!r>` when given, in every error. It checks `port` (an `int`, not a `bool`, from 1
+to 65535, else `ValueError`) and `address` (`ipaddress.IPv4Address`, else `ValueError`), then raises
+`NotReachable` while `active` is false (`the access point is off the air` or `the modem has not
+dialled`), behind PPP while `device_address` is `None` (with ` since the device reset` when IPCP is
+open from before the reset), and behind Ethernet when no address is given and
+`Ethernet.device_address` is `None` (with ` since the device last reset or gave its address up`
+once `Ethernet.leased`, set at the link's first ACK, is true; a fresh link starts without it), or else when `Ethernet.device_mac` is `None`. The address is
+`address`, else `device_address`: behind PPP `Ppp.peer` while IPCP is open and
+`Ppp.ipcp_opened`, which counts IPCP's openings on the link, is not `_stale`, the count at the
+device's last reset; behind Ethernet `Ethernet.device_address`. `Ethernet._dhcp` sets that around
+each DHCP message of the device's: to the `Dhcp.device` address when `Dhcp.on_message` appended a
+lease, which it does for an ACK only, and otherwise to `None` for any message
+`dhcp.message_type` reads but an INFORM, which a client with an address of its own sends (so a
+DISCOVER, a REQUEST not acknowledged, a NAK's or one to another server, a DECLINE, a RELEASE). Each
+`Ethernet` starts with `None`, and `Internet.stop` sets `_stale` to `None` with the fresh link, so
+a new link has no address from before it, while `dhcp.leases` keeps every lease. `connect`
+numbers the connection per device port, names it `device:<port>/<n>`, makes the `TcpConnection`
+with `LOCAL` (`10.64.0.1`), `now` and a `record` that appends `{t_ns, stream, direction, data}` to
+`events` as `_Traced` does for the device's connections, and calls `Network.connect`; only once
+that has returned does it count the connection in `_opened` and append it to `connections`, so a
+`RuntimeError` for want of a port leaves neither.
+
+`Network.connect(device, port, ours, client)` takes `_port`, which starts at `EPHEMERAL` (49152)
+and only goes up: `Network.reset` leaves it, and past 65535 it raises `RuntimeError`. It makes a
+`_Flow` keyed `(device, port, ours, local)` like the device's flows, with `snd_nxt = snd_una = ISN`,
+`rcv_nxt = 0`, `peer_window = 0`, `mss = 536`, and `client` and `connection` both the
+`TcpConnection`, logs `net: TCP <ours>:<local> → <device>:<port> connecting`, sends a SYN with the
+MSS option (`MSS`, 1400), and returns the local port with the flow's `write` and `close`, which
+`TcpConnection._opened` keeps. Both go through `_write` and `_close`, which, as for the device's
+connections, buffer in `pending` and `fin_pending` and leave `_flush` to send: it sends nothing
+until `established`, then pieces no larger than the device's MSS, its window less what is in
+flight, and the MTU less 40 bytes, and for a client flow hands each piece to `on_sent` as it
+goes. A zero window leaves `pending` as it is until an ACK from the
+device raises `peer_window`; nothing probes it.
+
+In `_tcp`, a segment for a client flow that is not established is the device's answer to the SYN
+only when it carries ACK with `ISN + 1` (RFC 9293, 3.10.7.3); anything else is ignored. With RST
+it is `_drop(flow, "refused")`. With SYN, its options go through `_mss` (malformed ones drop the
+segment), `rcv_nxt` becomes its sequence plus one, the window and the MSS, capped at 1400, are
+taken, the flow is `established`, an ACK goes, `net: TCP <ours>:<local> → <device>:<port>
+established` is logged and `on_established` is called; what else the segment carries is handled
+by the established path below with its sequence one past the SYN. From there a client flow takes
+the same path as the device's: ACKs move `snd_una` and `peer_window` and call `_flush`, data at
+`rcv_nxt` is acknowledged and handed to `on_data`, data behind it is acknowledged again, a FIN calls
+`_notify` (`on_close` once) and `_close`, so the test's end follows the device's, and the flow is
+dropped as `closed` once both FINs are acknowledged. A client flow's data or FIN ahead of `rcv_nxt`
+(less than 2³¹ ahead, modulo 2³²) logs `net: TCP <ours>:<local> → <device>:<port>: the device sent
+sequence <seq>, <n> bytes ahead of <rcv_nxt>, which a link that loses nothing cannot produce` and
+raises `OutOfOrder` with that line; the link's `calling` turns it into the link's error, and the run
+ends. The device's own flows keep acknowledging such a segment again, as before.
+
+`_drop(flow, kind, why=None)` takes `"closed"`, `"refused"`, `"reset"` or `"lost"` (`Network.reset`,
+and `Network.lose_clients(why)`), and logs it through `_ENDS`: `closed`, `refused by the device`,
+`reset by the device`, `link lost`, or `lost: <why>` when `why` is given. A client flow's line
+names the test's end first, `net: TCP <ours>:<local> → <device>:<port> <end>`, and
+`on_end(kind, why)` comes before `_notify`, so that `TcpConnection.on_close` sets `closed_at` for a
+FIN only, never for a RST or a loss. The device's flows log after `_notify`, as before.
+
+`Internet.device_reset(t, why)`, with `_at` set to `t`, calls `Network.lose_clients(why)`, which
+drops every client flow as `lost` and leaves the device's own, then, behind PPP, sets `_stale` to
+`Ppp.ipcp_opened`, and behind Ethernet sets `Ethernet.device_address` to `None`. The `esp32sim`
+backend calls it on every network the test gave, by `_networks()`: from `_reset`, on each `reset`
+message the link takes, with `the device reset`, and from `_switch(False)`, at `board.power_off()`,
+with `the device lost its power`, before the models lose their power and the modem's network with
+it ([backend](esp32sim-backend-technical.md)). A power-on brings a `reset` message too, which finds
+nothing left to lose. The device's own flows stay, because a network does not know of a reboot:
+they end at a RST from the device's new stack, which comes in answer to what their service writes,
+at the service's end, or with the link. A SYN of the new stack from the same port to the same
+service falls on the old flow, which takes only ACK, data and FIN, and is dropped without an answer:
+`_tcp` makes a flow for a SYN only when none has its key, and sends no challenge ACK (RFC 9293,
+3.10.7.4), so the device retries until the service writes or its own timeout.
+
+`TcpConnection` keeps `received` in a `bytearray`, `established_at`, `closed_at` and `ended_at` as
+`Duration`s from `now()` at the callback, which is the segment's own time, `_end`, the kind, and
+`_why`, a loss's reason, which `_how` turns into `lost when <why>`, else takes `_HOW`'s sentence
+for the kind. `write` hands the bytes on; `on_sent` records `in`, at the time the piece goes, and
+`on_data` records `out`. Its conditions are
+`Condition(find, description, "TCP")`; each `find` returns the time or bytes it is after, `None`
+while it may still come, and raises `ConnectionEnded` once `_end` (or, for `closed` and
+`next_data`, `closed_at`) rules it out, its message built from `_how`. `next_data` validates its
+arguments at the call and captures `start`, `len(received)` unless given; each poll searches the
+`bytearray` from `start` in place (`find(until, start)`, or its length) and copies only what it
+returns, so it consumes nothing, a repeated poll returns the same bytes, and a long stream is not
+copied at every turn.
+
 ## Lifecycle and observability
 
 Modem dial resets and starts PPP. Supply, registration, functionality or power loss clears its
@@ -440,7 +533,7 @@ appends it when an access point was given, and `Wifi.properties()` puts the tran
 
 `Internet.transcript()` is `{"esp32tl_network": 1, "events": [...]}`. Events have `t_ns` and either
 `event` text or `stream`, `direction` (`in` to the device, `out` from it), and hex `data`. A stream
-identifier is `<port>/<connection-number>`. A service wrapper records plaintext after TLS is
+identifier is `<port>/<connection-number>`, `<port>` the network's, for a connection the device opened, and `device:<port>/<connection-number>`, `<port>` the device's, for one the test opened. A service wrapper records plaintext after TLS is
 removed, and a bridge's wrapper what it relays, ciphertext when the device speaks TLS to the real
 service; TLS logs `tls: handshake started` and `tls: handshake done, TLSv1.2`. This is a
 diagnostic transcript, distinct from the version-1 UART recording format.
@@ -557,6 +650,22 @@ the fetch, a rejoin after `access_point_off()` and `access_point_on()` (with
 `the next HTTP request for '/'` and `the next DHCP lease`, no access point, a wrong password that
 gets no lease, the report and properties, and `wifi` refused after power-on. Not covered: MQTT,
 NTP and TLS behind the access point; the layer tests cover them without a link or over PPP.
+`tests/test_net_client.py` drives the connections the test opens through `Internet`, behind PPP
+and behind Ethernet each, against a device made of handmade segments with checksums computed
+independently: the SYN and its MSS, data written before the handshake going in MSS pieces, data
+both ways, a retransmission received once, both orders of closing, refused (with nothing of what
+was written in the transcript), reset, a zero window and its updates, a segment ahead of the
+stream, ports counting up across a lost link, the conditions' names and refusals, text written as
+UTF-8 and decoded with replacement, `device_reset` for a reset and a power loss (the test's
+connections lost, the device's own kept, the address gone until IPCP or DHCP gives it again), a
+RELEASE giving the address up, and `NotReachable` before IPCP, before a DHCP ACK, after an OFFER
+alone, without a frame from the station and off the air. `tests/test_http_server.py` runs the
+`http_server` image behind the access point: a `GET` with `Connection: close`, two `POST`s on one
+connection read by their `Content-Length`, a body over the firmware's limit, a refused port,
+connecting before the lease, and a connection lost at `board.reset()` and at `board.power_off()`,
+then a new one once the server listens again. Not
+covered: a connection to real firmware behind the modem; `test_net_client.py` covers PPP with
+segments.
 
 ## See also
 
@@ -574,4 +683,6 @@ NTP and TLS behind the access point; the layer tests cover them without a link o
   network](../decisions/harness.md#a-path-with-rtt-and-rate-sits-between-the-link-and-the-network),
   [packet loss on the path is postponed](../decisions/harness.md#packet-loss-on-the-network-path-is-postponed),
   [a bridge relays a TCP port to a real service, on the wall
-  clock](../decisions/harness.md#a-bridge-relays-a-tcp-port-to-a-real-service-and-puts-the-run-on-the-wall-clock).
+  clock](../decisions/harness.md#a-bridge-relays-a-tcp-port-to-a-real-service-and-puts-the-run-on-the-wall-clock),
+  [the test opens TCP connections to the device, with no
+  timers](../decisions/harness.md#the-test-opens-tcp-connections-to-the-device-on-the-same-tcp-with-no-timers).

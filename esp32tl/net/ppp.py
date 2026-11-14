@@ -65,6 +65,8 @@ class Ppp:
         self._ipcp_acked_us = self._ipcp_acked_them = False
         self.started = False
         self.peer_mru = DEFAULT_MRU
+        # How many times IPCP has opened on this link: each gives the device its address afresh.
+        self.ipcp_opened = 0
 
     # The line.
 
@@ -271,6 +273,7 @@ class Ppp:
             return
         if not self.ipcp_open and self._ipcp_acked_us and self._ipcp_acked_them:
             self.ipcp_open = True
+            self.ipcp_opened += 1
             self._log(f"ppp: IPCP open, the device is {self.peer}, DNS {self.dns}")
 
     def _reset_lcp(self) -> None:

@@ -12,7 +12,7 @@ import struct
 from collections.abc import Callable
 from ipaddress import IPv4Address
 
-from esp32tl.net.dhcp import Dhcp
+from esp32tl.net.dhcp import INFORM, Dhcp, message_type
 from esp32tl.net.ip import UDP, Fragmented, checksum, ipv4, udp
 
 # The network's MAC: esp32sim's own network's gateway (`esp-soc/src/net/packet.rs`), a locally
@@ -58,6 +58,11 @@ class Ethernet:
         self.dhcp = dhcp
         # The station's MAC, from the frames it sends; frames for it go there.
         self.device_mac: bytes | None = None
+        # The address this link's DHCP acknowledged, until the device sends DHCP again, or
+        # `forget_address` says it rebooted.
+        self.device_address: str | None = None
+        # Whether DHCP has acknowledged an address on this link at all, now or before.
+        self.leased = False
         self.mtu = 1500
         # Frames dropped by ethertype, and those not even Ethernet.
         self.ignored: dict[int, int] = {}
@@ -124,7 +129,17 @@ class Ethernet:
         ports = udp(*parsed[1:])
         if ports is None or ports[:2] != (68, 67):
             return False
+        leases = len(self.dhcp.leases)
         reply = self.dhcp.on_message(ports[2])
+        if len(self.dhcp.leases) > leases:
+            self.device_address = self.dhcp.device
+            self.leased = True
+        elif message_type(ports[2]) not in (None, INFORM):
+            # Any other message of the device's, a DISCOVER, a REQUEST not acknowledged (a NAK,
+            # or one to another server), a RELEASE or a DECLINE, says it has no address of ours,
+            # or is giving it up. An INFORM comes from a client with an address of its own, and
+            # changes nothing.
+            self.device_address = None
         if reply is None:
             return True
         message, broadcast = reply

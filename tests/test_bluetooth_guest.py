@@ -29,6 +29,7 @@ from esp32tl.bluetooth.peer import SERVICE_NAME, BluetoothDevice, SppPeer
 from esp32tl.boards.capabilities import Request
 from esp32tl.interfaces import NeverHappened, SourceError
 from esp32tl.interfaces.bluetooth import LATENCY_NS, Bluetooth, BluetoothError
+from esp32tl.interfaces.wifi import Wifi
 from esp32tl.link.boardlink import BoardLink
 from esp32tl.link.protocol import (
     HCI_MAX,
@@ -921,6 +922,8 @@ def backend_with(bt: Bluetooth) -> Esp32Sim:
     backend.process = cast(Any, object())
     backend._supply = True
     backend._uarts = {}
+    # No access point: the supply and the reset tell no network.
+    backend._wifi = Wifi(now=lambda: 0)
     backend.log = RunLog()
     backend.link = BoardLink("esp32-devkitc", [bt])
     backend.link.receive(HELLO)
