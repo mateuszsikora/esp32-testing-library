@@ -1200,7 +1200,7 @@ cursor, because a test that mixes the two would have one consume what the other 
 
 ## The console's expect returns a match on bytes, and line returns text
 
-Status: decided
+Status: decided (#198)
 
 `console.expect` and `console.expect_exact` return an `re.Match` on bytes, for a pattern given as
 text too, and `console.line` and `console.lines` a `Line`, whose text and groups are `str`. A
@@ -2731,7 +2731,7 @@ image: declare initial files through the builder and let the firmware write duri
 
 ## Tests reach the interfaces through board, and the fixtures stay as shortcuts
 
-Status: decided
+Status: decided (#198)
 
 Every snippet in the documentation and the guide, and every example, writes `board.console`,
 `board.gnss`, `board.modem`, `board.lines`, `board.sd_card`, `board.wifi`, `board.bluetooth` and
@@ -2882,7 +2882,7 @@ receiver to 115200 baud does, until an example needs it.
 
 ## A model answers at the profile's baud, not at the rate the firmware set
 
-Status: postponed
+Status: postponed (#198)
 
 A model on a route, esp32tl's or the test's, hears whatever the firmware transmits, at any rate, and
 answers at the board profile's `baud` (`Wire.baud`); a firmware that receives at another rate, more
