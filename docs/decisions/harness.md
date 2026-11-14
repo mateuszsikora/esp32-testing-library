@@ -2675,13 +2675,15 @@ Will installation and takeover happen only on acceptance, so refusal cannot affe
 client or publish an unaccepted Will. Both TCP and TLS use the same broker policy.
 
 `connection_attempts` records selected outcomes, including built-in identifier rejection, with
-CONNECT metadata, board timestamps and return codes. It is separate from accepted `clients`
-to preserve existing assertions and `connected()` waits. `connection_attempt()` waits for a
-future outcome. Malformed input and TLS failures have no CONNACK outcome and are not recorded
-there. Policy exceptions are test errors, rather than hiding test bugs as authentication
-failures or malformed firmware traffic. A directly used broker raises them from `on_data`; in a
-board run the policy runs in the link's turn, so the link fails naming the exception and the run
-ends, and the test's wait raises `RunEnded`. Both histories survive network reset.
+CONNECT metadata, board timestamps and return codes. It is separate from accepted `clients` to
+preserve existing assertions and `connected()` waits. `connection_attempt()` waits for a future
+outcome. The two are `next_connection()` and `next_connection_attempt()` now ([Only a condition for
+the next event has the next prefix](#only-a-condition-for-the-next-event-has-the-next-prefix)).
+Malformed input and TLS failures have no CONNACK outcome and are not recorded there. Policy
+exceptions are test errors, rather than hiding test bugs as authentication failures or malformed
+firmware traffic. A directly used broker raises them from `on_data`; in a board run the policy runs
+in the link's turn, so the link fails naming the exception and the run ends, and the test's wait
+raises `RunEnded`. Both histories survive network reset.
 
 Incoming QoS 1 PUBACK timing belongs to the broker: `puback` selects immediate (the default),
 held or emulated-clock-delayed emission for each new exchange. Each receipt carries a
@@ -3043,9 +3045,11 @@ Status: decided (#31)
 
 `network.http` is an HTTP/1.1 server on TCP 80, behind the modem and behind the access point alike,
 as the broker is on 1883: `serve(path, body)` says what a path answers, `requested(...)` is a
-condition for a request, and every request is kept. It answers one request per connection and
-closes it, and refuses chunked bodies and heads or bodies over its limits; firmware that fetches
-over HTTP (plan M7's validation, ESP-IDF's `http_request`) needs nothing more yet.
+condition for a request (`next_request(...)` now, [Only a condition for the next event has the next
+prefix](#only-a-condition-for-the-next-event-has-the-next-prefix)), and every request is kept. It
+answers one request per connection and closes it, and refuses chunked bodies and heads or bodies
+over its limits; firmware that fetches over HTTP (plan M7's validation, ESP-IDF's `http_request`)
+needs nothing more yet.
 
 **Rejected:** a server the test has to install with `network.listen(80, ...)` first, because a
 test of a firmware that fetches would always do so; and keep-alive, chunked transfer and TLS by
@@ -3099,11 +3103,13 @@ sources, because a test or CI job must run exactly the artifact it selected. Pyt
 Status: decided (#108, #116, #182)
 
 MQTT exposes immediate `find_message` / `find_connection` history queries and callable
-`next_message` / `next_connection` conditions. The existing `message` / `connected` names keep
-their future-only semantics. `subscribed` continues to describe current subscription state.
-TLS retains cumulative `handshake_started` / `handshake_completed` properties and adds
-`next_handshake_started()` / `next_handshake_completed()` factories. MQTT conditions now name
-their expected event through `repr` and reject boolean coercion like TLS and report conditions.
+`next_message` / `next_connection` conditions. The existing `message` / `connected` names kept their
+future-only semantics, until they were removed ([Only a condition for the next event has the next
+prefix](#only-a-condition-for-the-next-event-has-the-next-prefix)). `subscribed` continues to
+describe current subscription state. TLS retains cumulative `handshake_started` /
+`handshake_completed` properties and adds `next_handshake_started()` / `next_handshake_completed()`
+factories. MQTT conditions now name their expected event through `repr` and reject boolean coercion
+like TLS and report conditions.
 
 Next-event construction captures the relevant list length or counter, not a timestamp or the
 first polling time. Appends and counter increments order equal-time events. Polling consumes
@@ -3112,15 +3118,19 @@ TLS completion means a completion event after construction, including an already
 handshake. Tests must arm conditions before the action that can produce their event. Immediate
 history queries find a fast publication even after waiting for its connection has returned.
 Application payload schemas stay in the consumer's adapters. `connection_attempt()`, from #117,
-takes the same condition object and boundary but keeps its name; it gets no `next_*` alias and
-no `find_*` query beside the public `connection_attempts` history.
+took the same condition object and boundary but kept its name; it got no `next_*` alias and
+no `find_*` query beside the public `connection_attempts` history. It is
+`next_connection_attempt()` now ([Only a condition for the next event has the next
+prefix](#only-a-condition-for-the-next-event-has-the-next-prefix)).
 
 HTTP and DHCP (#116) take the same boundary, names and condition object: `next_request` /
 `find_request` and `next_lease` / `find_lease`, with `requested` / `leased` kept as aliases of the
-`next_*` names. `find_request` filters by path and method as `next_request` does; `find_lease` reads
-the first lease, as `find_connection` reads the first CONNECT. The condition object, shared by MQTT,
-HTTP and DHCP, names the service in its `TypeError`; since #181 it is the public one of [A consumer
-names a condition with esp32tl.condition, not with a description on the
+`next_*` names, until they were removed with MQTT's `message` / `connected` ([Only a condition for
+the next event has the next prefix](#only-a-condition-for-the-next-event-has-the-next-prefix)).
+`find_request` filters by path and method as `next_request` does; `find_lease` reads the first
+lease, as `find_connection` reads the first CONNECT. The condition object, shared by MQTT, HTTP and
+DHCP, names the service in its `TypeError`; since #181 it is the public one of [A consumer names a
+condition with esp32tl.condition, not with a description on the
 wait](#a-consumer-names-a-condition-with-esp32tlcondition-not-with-a-description-on-the-wait), which
 TLS uses too. `next_request` and `find_request` refuse a path filter holding `?` with `ValueError`,
 because `Request.path` has no query and `assert find_request("/a?b") is None` would otherwise pass
@@ -3152,6 +3162,31 @@ as the mark, because equal-time records would fall on either side of it; a publi
 is the arithmetic consumers copied; and a `since=` on `next_message`, because a condition already
 takes its boundary at construction. The mark is not shared with `clients`, `deliveries` or the
 other services, so the shared cursor rejected above stays rejected.
+
+## Only a condition for the next event has the next prefix
+
+Status: decided (#200)
+
+A condition that sees only what happens after the call that makes it is named `next_*`, and nothing
+else is: the aliases MQTT's `message` and `connected`, HTTP's `requested` and DHCP's `leased` are
+gone, and MQTT's `connection_attempt()` is `next_connection_attempt()`. A first consumer used
+`network.dhcp.leased()` as if it returned the lease, beside `network.dhcp.leases`, the list, and
+printed `the next DHCP lease` where it wanted an address: a name in the past tense or a noun reads
+as a state or a value that is there already, which `leased()` was not, since it saw only what came
+after it. With no users yet, the aliases go without a deprecation period. The names that stay:
+`find_*`, which returns a record now; the plural histories (`messages`, `clients`, `leases`,
+`connection_attempts`); and the conditions named for a state, which are true while it holds or once
+it has: MQTT's `subscribed(topic)`, TLS's `handshake_started` and `handshake_completed`, a TCP
+connection's `established`, `closed`, `refused` and `reset` (#199), which return their event's time
+however long ago it happened, and the output lines' `is_on` and `is_off`. A TCP connection's
+`next_data` is a condition for the next bytes and has the prefix. `console.line(pattern)` keeps its
+name: it is a condition for the next line, but it reads as one, and a `next_line` beside
+`lines()` would split the console's vocabulary from pytest-embedded's `expect`.
+
+**Rejected:** keeping the aliases for one release with a `DeprecationWarning`, because nobody
+depends on them and every alias is one more name to explain beside the one the documentation
+recommends. Renaming `subscribed` to `next_subscription`, because it reads current state, not the
+next event, and the rename would make it say the wrong thing.
 
 ## A reset and a power cycle go on in the run they happen in, on its clock
 

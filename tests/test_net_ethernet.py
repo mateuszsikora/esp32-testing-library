@@ -144,15 +144,13 @@ def test_dhcp_naks_another_address_and_ignores_another_server(link: Link) -> Non
     assert options(answer(sent)[2])[53] == b"\x05"
 
 
-@pytest.mark.parametrize("legacy", [False, True])
-def test_dhcp_next_lease_uses_append_order_without_consuming(link: Link, legacy: bool) -> None:
+def test_dhcp_next_lease_uses_append_order_without_consuming(link: Link) -> None:
     ethernet, _, _, _ = link
-    condition = ethernet.dhcp.leased if legacy else ethernet.dhcp.next_lease
     assert ethernet.dhcp.find_lease() is None
-    first_condition = condition()
+    first_condition = ethernet.dhcp.next_lease()
     ethernet.receive(dhcp(3))
     first = ethernet.dhcp.leases[0]
-    leased = condition()
+    leased = ethernet.dhcp.next_lease()
     assert leased() is None
     # the same board time as the first lease: append order, not the timestamp, is the boundary
     ethernet.receive(dhcp(3))
@@ -164,10 +162,9 @@ def test_dhcp_next_lease_uses_append_order_without_consuming(link: Link, legacy:
         assert ethernet.dhcp.find_lease() is first
 
 
-@pytest.mark.parametrize("method", ["leased", "next_lease"])
-def test_dhcp_conditions_are_named_and_reject_truth_testing(link: Link, method: str) -> None:
+def test_dhcp_next_lease_is_named_and_rejects_truth_testing(link: Link) -> None:
     ethernet, _, _, _ = link
-    condition = getattr(ethernet.dhcp, method)()
+    condition = ethernet.dhcp.next_lease()
     assert repr(condition) == "the next DHCP lease"
     assert condition() is None
     with pytest.raises(TypeError, match=r"call the DHCP condition with \(\), or pass it to"):

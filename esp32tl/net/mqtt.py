@@ -345,12 +345,6 @@ class Broker:
         self._log(f"mqtt: {client_id} session forgotten by the test")
         return True
 
-    def message(
-        self, topic: str = "#", payload: bytes | str | None = None
-    ) -> Callable[[], Message | None]:
-        """Alias of `next_message`."""
-        return self.next_message(topic, payload)
-
     def next_message(
         self, topic: str = "#", payload: bytes | str | None = None
     ) -> Callable[[], Message | None]:
@@ -425,10 +419,6 @@ class Broker:
 
         return Condition(find, f"an active MQTT subscription to {topic!r}", "MQTT")
 
-    def connected(self) -> Callable[[], Client | None]:
-        """Alias of `next_connection`."""
-        return self.next_connection()
-
     def next_connection(self) -> Callable[[], Client | None]:
         """A non-consuming condition for the first CONNECT recorded after this call."""
         start = len(self.clients)
@@ -442,7 +432,7 @@ class Broker:
         """Return the first recorded CONNECT, even if it has closed, or None."""
         return self.clients[0] if self.clients else None
 
-    def connection_attempt(self) -> Callable[[], ConnectionAttempt | None]:
+    def next_connection_attempt(self) -> Callable[[], ConnectionAttempt | None]:
         """A non-consuming condition for the first CONNECT outcome recorded after this call,
         accepted or rejected."""
         start = len(self.connection_attempts)

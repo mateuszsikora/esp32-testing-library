@@ -49,10 +49,6 @@ class Dhcp:
         self.local, self.device, self.dns, self.mask = local, device, dns, mask
         self.leases: list[Lease] = []
 
-    def leased(self) -> Callable[[], Lease | None]:
-        """Alias of `next_lease`."""
-        return self.next_lease()
-
     def next_lease(self) -> Callable[[], Lease | None]:
         """A non-consuming condition for the first lease appended after this call."""
         start = len(self.leases)

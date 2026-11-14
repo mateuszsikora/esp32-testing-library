@@ -36,7 +36,7 @@ def server() -> HttpServer:
 
 def test_serves_a_path_and_keeps_the_request(server: HttpServer) -> None:
     server.serve("/", "hello from the test\n")
-    requested = server.requested("/")
+    requested = server.next_request("/")
     client = Client(server)
     # http_request's request, cut anywhere
     client.send(
@@ -92,16 +92,12 @@ def test_an_unserved_path_is_404_and_next_request_filters(server: HttpServer) ->
     assert server.find_request("/a", method="GET") is request
 
 
-@pytest.mark.parametrize("legacy", [False, True])
-def test_history_and_next_requests_use_append_order_without_consuming(
-    server: HttpServer, legacy: bool
-) -> None:
-    condition = server.requested if legacy else server.next_request
+def test_history_and_next_requests_use_append_order_without_consuming(server: HttpServer) -> None:
     assert server.find_request() is None
-    waiting = condition("/a", method="GET")
+    waiting = server.next_request("/a", method="GET")
     Client(server).send(b"GET /a HTTP/1.1\r\n\r\n")
     first = server.requests[0]
-    later = condition("/a", method="GET")
+    later = server.next_request("/a", method="GET")
     assert later() is None
     Client(server).send(b"POST /a HTTP/1.1\r\n\r\n")
     Client(server).send(b"GET /b HTTP/1.1\r\n\r\n")
@@ -117,22 +113,18 @@ def test_history_and_next_requests_use_append_order_without_consuming(
 
 
 @pytest.mark.parametrize(
-    ("method", "args", "kwargs", "description"),
+    ("args", "kwargs", "description"),
     [
-        ("next_request", (), {}, "the next HTTP request"),
-        ("next_request", ("/",), {}, "the next HTTP request for '/'"),
-        ("requested", ("/",), {"method": "GET"}, "the next HTTP request for '/' with method 'GET'"),
-        ("requested", (), {"method": "GET"}, "the next HTTP request with method 'GET'"),
+        ((), {}, "the next HTTP request"),
+        (("/",), {}, "the next HTTP request for '/'"),
+        (("/",), {"method": "GET"}, "the next HTTP request for '/' with method 'GET'"),
+        ((), {"method": "GET"}, "the next HTTP request with method 'GET'"),
     ],
 )
 def test_http_conditions_are_named_and_reject_truth_testing(
-    server: HttpServer,
-    method: str,
-    args: tuple[str, ...],
-    kwargs: dict[str, str],
-    description: str,
+    server: HttpServer, args: tuple[str, ...], kwargs: dict[str, str], description: str
 ) -> None:
-    condition = getattr(server, method)(*args, **kwargs)
+    condition = server.next_request(*args, **kwargs)
     assert repr(condition) == description
     assert condition() is None
     with pytest.raises(TypeError, match=r"call the HTTP condition with \(\), or pass it to"):
@@ -143,11 +135,10 @@ def test_http_conditions_are_named_and_reject_truth_testing(
         bool(condition)
 
 
-@pytest.mark.parametrize("method", ["next_request", "requested", "find_request"])
+@pytest.mark.parametrize("method", ["next_request", "find_request"])
 def test_a_path_filter_holding_a_query_is_refused(server: HttpServer, method: str) -> None:
     Client(server).send(b"GET /update?v=2 HTTP/1.1\r\n\r\n")
-    named = "find_request" if method == "find_request" else "next_request"
-    with pytest.raises(ValueError, match=rf"http\.{named}: '/update\?v=2' holds a query"):
+    with pytest.raises(ValueError, match=rf"http\.{method}: '/update\?v=2' holds a query"):
         getattr(server, method)("/update?v=2")
     request = server.find_request("/update")
     assert request is not None and request.target == "/update?v=2"

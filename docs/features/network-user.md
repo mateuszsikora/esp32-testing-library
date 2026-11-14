@@ -50,12 +50,10 @@ silent; an AT-only model still works without PPP. The network's broker is `modem
 | `find_message(topic="#", payload=None)` | Immediate history query returning the first recorded match, or `None`; the same filters as `next_message` |
 | `mark()` | A `Mark`: an opaque position at the end of `messages` now, for `find_messages(since=...)` ([every message since a point](#every-message-since-a-point)) |
 | `find_messages(topic="#", payload=None, *, since=None, client=None)` | Immediate history query returning a new list of every recorded match after `since` (from the start when `None`), in append order; `client` keeps one client ID's messages |
-| `message(topic="#", payload=None)` | Alias of `next_message` |
 | `subscribed(topic)` | Condition true while an active client has this exact subscription filter, including an existing subscription |
 | `next_connection()` | Condition returning the first accepted MQTT CONNECT recorded **after this method call** |
 | `find_connection()` | Immediate history query returning the first accepted CONNECT, or `None`, even if that connection has closed |
-| `connected()` | Alias of `next_connection` |
-| `connection_attempt()` | Condition returning the first accepted or rejected CONNECT outcome recorded **after this method call** |
+| `next_connection_attempt()` | Condition returning the first accepted or rejected CONNECT outcome recorded **after this method call** |
 | `connection_policy` | Callable receiving `Connect` and returning `ConnackCode`; `None` (default) accepts supported requests |
 | `publish(topic, payload, retain=False, qos=0)` | Publish from the test at the board's current time; bytes or UTF-8 text, QoS 0 or 1. The message's `client` is `TEST_CLIENT` |
 | `messages`, `clients`, `retained` | Message history, accepted-client history and currently retained messages |
@@ -153,14 +151,23 @@ calls and waits return the same first match; construct a new `next_*` condition 
 `subscribed` instead reads current state each time: unsubscribe or connection closure can make
 a previously true condition false.
 
+The names say which is which, on every service of the network: a condition that sees only what
+happens after the call that makes it is `next_*` (`next_message`, `next_connection`,
+`next_connection_attempt`, `next_delivery`, HTTP's `next_request`, DHCP's `next_lease`, TLS's
+`next_handshake_started` and `next_handshake_completed`, a TCP connection's `next_data`); `find_*`
+reads the history now and returns a record or `None`; a plural attribute (`messages`, `clients`,
+`leases`) is the history itself; and a condition named for a state (`subscribed`, TLS's
+`handshake_started` and `handshake_completed`, a TCP connection's `established`, `closed`, `refused`
+and `reset`) is true while that state holds, or once it has.
+
 All MQTT conditions have timeout representations such as `the next MQTT message on 'a/+' saying
 b'new'`, `the next MQTT client connection`, `the next MQTT connection attempt`,
 `the next MQTT delivery on 'a/+' saying b'new'` and
 `an active MQTT subscription to 'a/#'`. Call a condition with `()` or pass it to
-`board.wait_until`. Boolean coercion of any MQTT condition, including those from `message`,
-`connected`, `connection_attempt`, `next_delivery` and `subscribed`, raises
+`board.wait_until`. Boolean coercion of any MQTT condition, including those from `next_message`,
+`next_connection`, `next_connection_attempt`, `next_delivery` and `subscribed`, raises
 `TypeError("call the MQTT condition with (), or pass it to board.wait_until")`, before and after
-a match, so an unevaluated `assert broker.connected()` fails. Use
+a match, so an unevaluated `assert broker.next_connection()` fails. Use
 `assert broker.find_connection() is not None` to inspect past connections.
 
 Subscriptions support `+` and final `#`, including empty levels. Wildcards beginning with `+`
@@ -195,7 +202,7 @@ from esp32tl.net.mqtt import ConnackCode, Connect
 from esp32tl.units import seconds
 
 broker.connection_policy = lambda connect: ConnackCode.SERVER_UNAVAILABLE
-attempt = broker.connection_attempt()
+attempt = broker.next_connection_attempt()
 board.power_on()
 refused = board.wait_until(attempt, within=seconds(60))
 assert refused.return_code is ConnackCode.SERVER_UNAVAILABLE
@@ -251,7 +258,7 @@ in `clients`.
 Each immutable `ConnectionAttempt` in `connection_attempts` has `connect` (the metadata),
 `return_code`, `session_present` (what its CONNACK said), `at` (the CONNECT timestamp) and
 `accepted` (boolean). This includes the built-in empty-ID rejection. Histories survive connection loss and network reset. `clients` and
-`next_connection()` include accepted connections only. `connection_attempt()` observes future
+`next_connection()` include accepted connections only. `next_connection_attempt()` observes future
 outcomes without consuming them; a timeout names `the next MQTT connection attempt`. Malformed or
 incomplete CONNECTs, TCP accepts and TLS handshake failures do not create outcomes.
 
@@ -511,7 +518,6 @@ address, as `network.http`. Until the test serves a path, every request gets `40
 | `serve(path, body=b"", *, status=200, content_type=None, headers=None)` | Answer every request for `path` from now on, replacing what was served there before. A `str` body goes as UTF-8 with `text/plain; charset=utf-8`, `bytes` with `application/octet-stream`, unless `content_type` names another; `headers` (a dict) are added as given |
 | `next_request(path=None, *, method=None)` | Condition returning the first request, for `path` and with `method` when given, recorded **after this method call** |
 | `find_request(path=None, *, method=None)` | Immediate history query returning the first recorded request with the same filters, or `None` |
-| `requested(path=None, *, method=None)` | Alias of `next_request` |
 | `requests` | Every request recorded, in order; refused requests are not |
 
 A request (`Request`) has `at` (`Duration`), `method`, `target` (as sent), `path` (an
@@ -530,13 +536,13 @@ first match. A timeout names it: its message begins
 `the next HTTP request for '/' with method 'GET' did not happen within 30 s`, and the run report
 logs `waits up to 30 s for the next HTTP request for '/' with method 'GET'`. `find_request`
 returns a record now, not a condition, and never waits. Boolean coercion of a condition from
-`next_request` or `requested` raises
+`next_request` raises
 `TypeError("call the HTTP condition with (), or pass it to board.wait_until")`, before and after a
-match, so an unevaluated `assert network.http.requested("/")` fails. Use
+match, so an unevaluated `assert network.http.next_request("/")` fails. Use
 `assert network.http.find_request("/") is not None` to inspect past requests.
 
-A `path` filter does not see the query, which is in the request's `target`. `next_request`,
-`requested` and `find_request` raise `ValueError` for a filter that holds `?`
+A `path` filter does not see the query, which is in the request's `target`. `next_request` and
+`find_request` raise `ValueError` for a filter that holds `?`
 (`http.find_request: '/update?v=2' holds a query, which a path does not: filter by the path and read the request's target`):
 filter by `/update` and compare `request.target` with `/update?v=2`. The refused requests listed
 below are not recorded, so no condition or query sees them: a timeout says the request
@@ -582,14 +588,14 @@ are logged and not answered. The transcript shows
 `network.dhcp.leases` lists every acknowledged lease, each a `Lease` with `at` (`Duration`), `mac`,
 `address` and `hostname` (the name the device sent, `espressif` for ESP-IDF's default, or `None`).
 `network.dhcp.next_lease()` is a condition returning the first lease recorded **after this method
-call**: it is how a test waits for the station to join again. `network.dhcp.leased()` is its
-alias. `network.dhcp.find_lease()` is an immediate history query returning the first recorded
-lease, or `None`. A `next_lease` condition has the boundary and polling of the
-[MQTT next-event conditions](#history-next-events-and-current-state); its timeout names
-`the next DHCP lease`, and boolean coercion raises
-`TypeError("call the DHCP condition with (), or pass it to board.wait_until")`, before and after
-a lease. The leases outlive the access point switching off and on. `network.dhcp` exists behind
-the modem too, where nothing asks it.
+call**: it is how a test waits for the station to join again. `network.dhcp.find_lease()` is an
+immediate history query returning the first recorded lease, or `None`. A `next_lease` condition has
+the boundary and polling of the [MQTT next-event
+conditions](#history-next-events-and-current-state); its timeout names `the next DHCP lease`, and
+boolean coercion raises
+`TypeError("call the DHCP condition with (), or pass it to board.wait_until")`, before and after a
+lease. The leases outlive the access point switching off and on. `network.dhcp` exists behind the
+modem too, where nothing asks it.
 
 ARP for any address but the device's own is answered with the network's MAC,
 `02:53:49:4d:00:02`, so every address on the subnet and off it reaches the network. ARP for
