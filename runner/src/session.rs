@@ -60,7 +60,7 @@ use std::time::{Duration, Instant};
 pub const PORTS: usize = 3;
 /// The classic chip's GPIOs, as a mask: 0 to 39 but 24 and 28 to 31, as the board profiles have
 /// them (`esp32tl/boards`, `GPIOS`). esp32sim's `gpio_state` also leaves out GPIO 20, which only
-/// some packages bond (`esp32/src/soc.rs:195`), but its `set_input` takes a level there; it
+/// some packages bond (`esp32/src/soc.rs:206`), but its `set_input` takes a level there; it
 /// ignores one on 40 and above (`esp32/src/periph.rs:386-389`).
 const GPIOS: u64 = ((1 << 40) - 1) & !(1 << 24 | 0xf << 28);
 /// The classic RX FIFO (`esp-periph/src/uart.rs:9`): what does not fit is dropped.
@@ -251,9 +251,9 @@ impl Guest for esp32::Machine {
     }
     fn uart_receive(&mut self, port: usize, byte: u8) {
         // the shared `Uart` that `ClassicUart` wraps, which drops what does not fit and raises
-        // RXFIFO_OVF (`esp-periph/src/uart.rs:43-50`), as the previous pin's `uart_pin_input` did;
-        // `ClassicUart::host_input` would queue it and release it at the baud rate, and count it
-        // as an autobaud edge (`esp32/src/periph.rs:593-599`)
+        // RXFIFO_OVF (`esp-periph/src/uart.rs:50-58`), and queues nothing; `ClassicUart::host_input`
+        // would queue it and release it at the baud rate, and count it as an autobaud edge
+        // (`esp32/src/periph.rs:596-601`)
         self.bus.periph.uart[port].0.host_input(&[byte]);
         self.bus.irq_dirty = true;
     }
@@ -331,7 +331,7 @@ impl Guest for esp32::Machine {
     }
     /// With `--bt`, from the guest's `esp_bt_controller_init` until the next `reboot()`,
     /// esp32sim's trampoline sits in the flash over the function's code (`install`,
-    /// `esp-soc/src/ble/vhci.rs:174-197`), which the guest never wrote: the copy has the code.
+    /// `esp-soc/src/ble/vhci.rs:177-200`), which the guest never wrote: the copy has the code.
     fn flash(&self) -> Cow<'_, [u8]> {
         let Some((offset, code)) = &self.bus.ble.original_flash else {
             return Cow::Borrowed(&self.bus.flash);

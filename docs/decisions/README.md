@@ -283,7 +283,8 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 
 | Decision | File | Status |
 |---|---|---|
-| [esp32sim is pinned at the merge commit of the Bluetooth Classic enable](runner.md#esp32sim-is-pinned-at-the-merge-commit-of-the-bluetooth-classic-enable) | `runner.md` | decided (#34) |
+| [esp32sim is pinned at the merge commit of the classic VHCI PSRAM fix](runner.md#esp32sim-is-pinned-at-the-merge-commit-of-the-classic-vhci-psram-fix) | `runner.md` | decided (#180) |
+| [esp32sim is pinned at the merge commit of the Bluetooth Classic enable](runner.md#esp32sim-is-pinned-at-the-merge-commit-of-the-bluetooth-classic-enable) | `runner.md` | superseded (#180) |
 | [esp32sim is pinned at the merge commit of the deep-sleep timer wake](runner.md#esp32sim-is-pinned-at-the-merge-commit-of-the-deep-sleep-timer-wake) | `runner.md` | superseded (#34) |
 | [esp32sim is pinned at the merge commit of the chip-revision fix](runner.md#esp32sim-is-pinned-at-the-merge-commit-of-the-chip-revision-fix) | `runner.md` | superseded (#35) |
 | [The esp32sim command-line crate is not a dependency](runner.md#the-esp32sim-command-line-crate-is-not-a-dependency) | `runner.md` | decided (#45) |
@@ -330,4 +331,4 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The station's frames keep the 4 bytes esp32sim leaves, and nothing goes upstream yet](runner.md#the-stations-frames-keep-the-4-bytes-esp32sim-leaves-and-nothing-goes-upstream-yet) | `runner.md` | postponed (#143) |
 | [The guest's HCI goes over the board socket, on the board's clock](runner.md#the-guests-hci-goes-over-the-board-socket-on-the-boards-clock) | `runner.md` | decided (#34) |
 | [The Bluetooth messages keep the link protocol at version 1](runner.md#the-bluetooth-messages-keep-the-link-protocol-at-version-1) | `runner.md` | decided (#34) |
-| [VHCI packets in PSRAM are esp32sim's to take, and the pin waits for it](runner.md#vhci-packets-in-psram-are-esp32sims-to-take-and-the-pin-waits-for-it) | `runner.md` | decided (#188) |
+| [VHCI packets in PSRAM are esp32sim's to take](runner.md#vhci-packets-in-psram-are-esp32sims-to-take) | `runner.md` | decided (#188) |

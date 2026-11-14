@@ -19,7 +19,7 @@ from esp32tl.link.protocol import (
     Wait,
 )
 
-HELLO = RunnerHello(1, "esp32", "emulated-fifo-write", "c99fb286c4378fcfa6d304b754d31e542ba3035a")
+HELLO = RunnerHello(1, "esp32", "emulated-fifo-write", "3bdb9582a910974e4e025d274d6ec61e5c481be6")
 ROUTE = SdCardRoute(sclk=14, mosi=15, miso=2, cs=13)
 MS = 1_000_000
 

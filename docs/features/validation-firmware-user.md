@@ -44,7 +44,7 @@ whatever `FIRMWARE_OUT` the shell exports, because the tests read the images the
 | `timer_wake` | `firmware/timer_wake`: sleeps in deep sleep twice with a 2 s timer wake, counting its boots in RTC memory ([below](#timer_wake)) |
 | `deep_sleep` | ESP-IDF's `examples/system/deep_sleep`, unmodified, with its own `sdkconfig.defaults`, for target `esp32`: sleeps 20 s at a time with a timer wake, and reports after each wake how long it slept ([below](#deep_sleep)) |
 | `bt_spp_initiator` | ESP-IDF's `examples/bluetooth/bluedroid/classic_bt/bt_spp_initiator`, unmodified, with its own `sdkconfig.defaults`, for target `esp32`: finds a device named `ESP_SPP_ACCEPTOR` over Bluetooth Classic, pairs with it, opens SPP and writes to it without end ([below](#bt_spp_initiator)) |
-| `bt_spp_initiator_psram` | The same example, unmodified, with `firmware/bt_spp_initiator_psram/sdkconfig.defaults` after its own: PSRAM on, and Bluedroid's buffers taken from it first; on a profile with `psram_mb = 4` it does not get through yet ([below](#bt_spp_initiator_psram)) |
+| `bt_spp_initiator_psram` | The same example, unmodified, with `firmware/bt_spp_initiator_psram/sdkconfig.defaults` after its own: PSRAM on, and Bluedroid's buffers taken from it first; on a profile with `psram_mb = 4` it does what the plain image does ([below](#bt_spp_initiator_psram)) |
 
 ## `modem_at`
 
@@ -265,12 +265,12 @@ are called `bt_spp_initiator_demo`, as the plain image's are. It needs a board p
 `psram_mb = 4`, as `lilygo-t-a7670g-r2`; the firmware then logs `esp_psram: Found 4MB PSRAM
 device`.
 
-It does not get through yet. Every HCI packet its Bluedroid sends lies in PSRAM, and esp32sim at
-the pin refuses each one, so the first `HCI_Reset` is never answered and the firmware logs
-`E (8176) BT_HCI: command_timed_out hci layer timeout waiting for response to a command. opcode:
-0xc03` ([Bluetooth peer](bluetooth-peer-user.md#in-front-of-the-firmware-the-bt-fixture)). Its
-test in `tests/test_bt_spp_initiator.py` asks for what the plain image does and is a strict
-`xfail` until then.
+Every HCI packet its Bluedroid sends lies in PSRAM, which esp32sim at the pin takes
+([Bluetooth peer](bluetooth-peer-user.md#in-front-of-the-firmware-the-bt-fixture)). Against the
+same `SppPeer` as the plain image it pairs, opens the channel and streams at the same speed:
+`authentication success: ESP_SPP_ACCEPTOR` 1.418 s after power-on, the channel at 1.437 s, and
+`speed(1.272723s ~ 4.292856s): 298.953674 kbit/s`. Its test in `tests/test_bt_spp_initiator.py`
+asks for what the plain image's does.
 
 ## `sdspi`
 

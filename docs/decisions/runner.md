@@ -3,11 +3,65 @@
 Why the `esp32tl-runner` crate in `runner/`, its esp32sim pin and the link protocol it speaks
 with the harness ([`docs/protocol.md`](../protocol.md)) are the way they are.
 
-## esp32sim is pinned at the merge commit of the Bluetooth Classic enable
+## esp32sim is pinned at the merge commit of the classic VHCI PSRAM fix
 
-Status: decided (#34)
+Status: decided (#180)
 
 `runner/Cargo.toml` takes `esp32`, `esp-soc`, `esp-periph` and, as a dev-dependency, `emu-core`
+from git at `3bdb9582a910974e4e025d274d6ec61e5c481be6`, the merge of mikroverk/esp32sim#353
+(2026-11-13), with which the classic ESP32's `valid_packet_range` takes a packet in PSRAM that is
+mapped and readable as well as one in internal DRAM (`esp32/src/ble.rs:45-48`, with
+`psram_readable` at `esp32/src/psram.rs:75-89`). On it `bt_spp_initiator_psram`, ESP-IDF's
+`bt_spp_initiator` with Bluedroid's buffers in PSRAM, pairs with an `SppPeer`, opens SPP and
+streams at about 299 kbit/s, 423 packets from the host and 432 to it;
+`tests/test_bt_spp_initiator.py` keeps it so. On the previous pin the same test failed with
+`NeverHappened`, every packet refused, and was a strict `xfail`
+([VHCI packets in PSRAM](#vhci-packets-in-psram-are-esp32sims-to-take)).
+
+Between `c99fb28` and `3bdb958` come 117 commits. Most are on chips or parts the runner does not
+build: the ESP32-S31 (mikroverk/esp32sim#354, #358) and RISC-V JIT (#356, whose
+`Bus::fetch_ahead` in `emu-core` has a default that reads nothing ahead, which the classic chip
+keeps), the ROM's UART download mode on the S3, C3, C6 and P4 (#345, #348), the C3's MAC reset and
+the C6's 802.15.4 (#340, #342), the Cheap Yellow Display board (#339), the browser's Bluetooth
+pages (#343, #351), and Clippy's lints (#357). These are on classic paths that every firmware, or
+a part of esp32tl, goes through:
+
+- mikroverk/esp32sim#345 moves `ClassicUart`'s queue of host bytes into the shared `Uart`
+  (`Uart::host_input_queued` and `Uart::advance`, `esp-periph/src/uart.rs:59-104`), and
+  `uart_pin_input` hands a byte to `ClassicUart::wire_input` (`esp32/src/periph.rs:942-952`),
+  which drops what does not fit, as the chip does, unless host bytes are queued. The runner
+  hands each byte to `Uart::host_input` (`esp-periph/src/uart.rs:50-58`), as before: it drops
+  what does not fit and raises `UART_RXFIFO_OVF_INT_RAW`; its new autobaud line does nothing on
+  the classic chip, whose `UartLayout` sets `autobaud_en: 0`. `RXFIFO_FULL` now falls when
+  `Uart::read` drains the FIFO below its threshold, where `ClassicUart`'s FIFO read did it before.
+  `SocBus::next_deadline` also counts the next queued host byte, and the runner queues none.
+- mikroverk/esp32sim#343: the virtual controller's lines go through `BleLog::note`
+  (`esp-soc/src/ble/log.rs`), which prints them on stderr with `[ble]` as before unless
+  `keep()` was called, which only the browser build does. The messages the documentation quotes,
+  `[ble] rejected invalid VHCI packet pointer, length or controller state` among them, are the
+  same.
+- mikroverk/esp32sim#355: `StationLink` holds up to eight access points and a capture tap
+  (`esp-soc/src/wifi.rs:530-559`). The runner attaches one and no tap; with one access point
+  `station_tx`, `next_rx`, `set_beacons`, `attach` and `surviving_reboot` do what they did, and
+  the relay is the same.
+
+The evidence that none of them changes what esp32tl relies on is the whole test suite, which
+passes on the pin, and every esp32sim line the documentation cites, which is still there, moved at
+most; the ones whose code changed, the classic UART's delivery and `StationLink`, are described
+anew ([runner](../features/runner-technical.md#received-bytes)). That revision in
+`runner/Cargo.toml` is the project's esp32sim pin.
+
+**Rejected:** a commit before #353, as there is none with the fix, and a later one, since #353's
+merge was upstream's head when the pin moved. Also rejected: delivering a peer's bytes through
+`ClassicUart::wire_input` now that it drops what does not fit, because the shared `Uart`'s
+`host_input` already does what the runner needs and puts no byte behind esp32sim's queue; the
+runner's code stays as it was.
+
+## esp32sim is pinned at the merge commit of the Bluetooth Classic enable
+
+Status: superseded (#180)
+
+`runner/Cargo.toml` took `esp32`, `esp-soc`, `esp-periph` and, as a dev-dependency, `emu-core`
 from git at `c99fb286c4378fcfa6d304b754d31e542ba3035a`, the merge of mikroverk/esp32sim#347
 (2026-11-08, upstream issue mikroverk/esp32sim#346), with which `esp_bt_controller_enable` takes
 the mode of the config given to `esp_bt_controller_init`, as ESP-IDF does, and no other
@@ -84,6 +138,9 @@ rejected: `ClassicUart::host_input` for a port with room, and `UART_RXFIFO_OVF_I
 runner for a full one, because it leans on the runner never handing over a byte that does not fit,
 copies esp32sim's bit, and counts the peer's bytes as autobaud edges, which the previous pin did
 not.
+
+The line numbers above are those of `c99fb28`. The pin moved for Bluedroid's buffers in PSRAM: see
+[esp32sim is pinned at the merge commit of the classic VHCI PSRAM fix](#esp32sim-is-pinned-at-the-merge-commit-of-the-classic-vhci-psram-fix).
 
 ## esp32sim is pinned at the merge commit of the deep-sleep timer wake
 
@@ -834,7 +891,7 @@ changes its meaning, and there is no peer of another checkout to keep apart.
 
 **Rejected:** version 2, for the same reason as with the Wi-Fi messages.
 
-## VHCI packets in PSRAM are esp32sim's to take, and the pin waits for it
+## VHCI packets in PSRAM are esp32sim's to take
 
 Status: decided (#188)
 
@@ -843,9 +900,11 @@ and at the pin `c99fb28` esp32sim's `Send` hook refuses any packet outside inter
 classic ESP32, before the runner's `Forwarder` sees it; the S3's `VhciBus` already takes mapped
 PSRAM. The fix goes upstream: the classic ESP32's `valid_packet_range` taking a range whose pages
 map to installed PSRAM and that the cache can read, as a load of it would. Built locally, it lets
-`bt_spp_initiator_psram` pair, open SPP and stream. Until esp32sim merges it the pin stays, and the
-image's test is a strict `xfail`
+`bt_spp_initiator_psram` pair, open SPP and stream. Until esp32sim merged it the pin stayed, and the
+image's test was a strict `xfail`
 ([validation firmware](../features/validation-firmware-technical.md#bt_spp_initiator_psram)).
+esp32sim merged it as mikroverk/esp32sim#353, and the pin moved there: see
+[esp32sim is pinned at the merge commit of the classic VHCI PSRAM fix](#esp32sim-is-pinned-at-the-merge-commit-of-the-classic-vhci-psram-fix).
 
 **Rejected:** handling it in the runner, which would mean replacing esp32sim's `Send` hook with a
 copy of its own; pinning a fork of esp32sim, which would hold the runner off upstream's fixes; and

@@ -17,7 +17,7 @@ A recording is a `.jsonl` file: UTF-8 text, one JSON object per line, each line 
 clock switch, in the order they happened.
 
 ```json
-{"esp32tl_recording": 1, "board": "esp32-devkitc", "interface": "uart.gnss", "source": "model:nmea", "clock": "emulated-fifo-write", "end": "hold", "app_sha256": null, "tools": {"esp32tl": "0.1.0", "esp32sim": "c99fb286c4378fcfa6d304b754d31e542ba3035a"}, "created": "2026-10-29T18:00:00Z"}
+{"esp32tl_recording": 1, "board": "esp32-devkitc", "interface": "uart.gnss", "source": "model:nmea", "clock": "emulated-fifo-write", "end": "hold", "app_sha256": null, "tools": {"esp32tl": "0.1.0", "esp32sim": "3bdb9582a910974e4e025d274d6ec61e5c481be6"}, "created": "2026-10-29T18:00:00Z"}
 {"t": 1000000000, "dir": "in", "data": "JEdQR0dBLDEyMDAwMC4wMCw1MjEzLjc4MDYsTiwwMjEwMC43MzQwLEUsMSwwOCwwLjksMTEwLjAsTSwzNC4wLE0sLCo2Ng0K"}
 {"t": 2000000000, "dir": "in", "data": "JEdQUk1DLDEyMDAwMS4wMCxBLDUyMTMuNzc5NCxOLDAyMTAwLjczNTYsRSwwLjAsLDI5MTAyNiwsLEEqNzANCg=="}
 ```
@@ -168,7 +168,7 @@ field of its own, `devices`, a list of `{"name": ..., "address": ...}`, the devi
 the air.
 
 ```json
-{"esp32tl_recording": 1, "board": "esp32-devkitc", "interface": "bluetooth", "source": "model:bluetooth", "clock": "emulated-fifo-write", "end": "hold", "app_sha256": "9a1c…", "tools": {"esp32tl": "0.1.0", "esp32sim": "c99fb286c4378fcfa6d304b754d31e542ba3035a"}, "created": "2026-11-10T08:00:00Z", "devices": [{"name": "ESP_SPP_ACCEPTOR", "address": "00:00:00:00:5B:01"}]}
+{"esp32tl_recording": 1, "board": "esp32-devkitc", "interface": "bluetooth", "source": "model:bluetooth", "clock": "emulated-fifo-write", "end": "hold", "app_sha256": "9a1c…", "tools": {"esp32tl": "0.1.0", "esp32sim": "3bdb9582a910974e4e025d274d6ec61e5c481be6"}, "created": "2026-11-10T08:00:00Z", "devices": [{"name": "ESP_SPP_ACCEPTOR", "address": "00:00:00:00:5B:01"}]}
 ```
 
 The btsnoop file is version 1 with datalink 1002, HCI UART (H4), as Bumble's `BtSnooper` and

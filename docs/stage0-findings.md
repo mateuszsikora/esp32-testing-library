@@ -263,9 +263,11 @@ production images.
    only on the classic ESP32, so it refuses it (`[ble] rejected invalid VHCI packet pointer, length
    or controller state`) and nothing crosses the VHCI; the S3 takes mapped PSRAM already. The fix
    belongs in esp32sim: the classic ESP32's `valid_packet_range` taking PSRAM that is mapped and
-   readable, as the S3's does. Built locally, it lets the same image pair, open SPP and stream at
-   about 299 kbit/s ([validation firmware](features/validation-firmware-technical.md#bt_spp_initiator_psram)).
-   Proposed in [mikroverk/esp32sim#353](https://github.com/mikroverk/esp32sim/pull/353), opened on 2026-11-10.
+   readable, as the S3's does. *Since #180* the image gets through: the fix is
+   [mikroverk/esp32sim#353](https://github.com/mikroverk/esp32sim/pull/353), merged on 2026-11-13 as
+   [`3bdb958`](https://github.com/mikroverk/esp32sim/commit/3bdb9582a910974e4e025d274d6ec61e5c481be6),
+   the pin since #180, on which the same image pairs, opens SPP and streams at about 299 kbit/s
+   ([validation firmware](features/validation-firmware-technical.md#bt_spp_initiator_psram)).
 
 ## Reproducing
 

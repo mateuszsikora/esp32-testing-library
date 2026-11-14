@@ -85,7 +85,7 @@ replays from or another tap writes. On serial the `bt` fixture skips the test fi
 A recording, [version 1](../recording-format.md):
 
 ```json
-{"esp32tl_recording": 1, "board": "esp32-devkitc", "interface": "uart.gnss", "source": "replay", "clock": "emulated-fifo-write", "end": "hold", "app_sha256": "4f0c…", "tools": {"esp32tl": "0.1.0", "esp32sim": "c99fb286c4378fcfa6d304b754d31e542ba3035a"}, "created": "2026-11-01T08:00:54Z"}
+{"esp32tl_recording": 1, "board": "esp32-devkitc", "interface": "uart.gnss", "source": "replay", "clock": "emulated-fifo-write", "end": "hold", "app_sha256": "4f0c…", "tools": {"esp32tl": "0.1.0", "esp32sim": "3bdb9582a910974e4e025d274d6ec61e5c481be6"}, "created": "2026-11-01T08:00:54Z"}
 {"t": 1000000000, "dir": "in", "data": "JEdQR0dB..."}
 ```
 

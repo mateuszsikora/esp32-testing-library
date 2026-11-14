@@ -343,9 +343,11 @@ the default, it prints `speed(...)` when 3 s or more have passed since the last.
 
 What it proves on esp32sim at the pin `c99fb28`, through the `bt` fixture's controller in the
 harness ([Bluetooth peer](bluetooth-peer-technical.md)), measured on the runs of
-`tests/test_bt_spp_initiator.py`: `esp_bt_controller_enable` takes mode 2, which esp32sim's hook
-refused before mikroverk/esp32sim#347; the inquiry finds an `SppPeer` 20 ms after it starts, and the
-firmware connects, finds the service by SDP, falls back from ERTM to L2CAP's basic mode (`BT_L2CAP:
+`tests/test_bt_spp_initiator.py`, and at `3bdb958` with the same authentication, channel and
+`speed(...)` lines and the same 423 packets from the host and 432 to it:
+`esp_bt_controller_enable` takes mode 2, which esp32sim's hook refused before
+mikroverk/esp32sim#347; the inquiry finds an `SppPeer` 20 ms after it starts, and the firmware
+connects, finds the service by SDP, falls back from ERTM to L2CAP's basic mode (`BT_L2CAP:
 l2c_fcr_adj_our_req_options (mode 3): ERROR: No FCR options set using BASIC mode`), asks for the
 channel, pairs with the PIN after RFCOMM's PN and opens the channel at SABM, 1.374 s after power-on,
 with the peer's `secure=True`. It then writes about 299 kbit/s, which is what the peer's source
@@ -392,14 +394,16 @@ other commands, takes its buffer from `HCI_GET_CMD_BUF`, `hci_get_cmd_buf`, an `
 sees PSRAM at `SOC_EXTRAM_DATA_LOW` to `SOC_EXTRAM_DATA_HIGH`, `0x3F80_0000` to `0x3FC0_0000`
 (`components/soc/esp32/include/soc/soc.h:193`).
 
-Measured on 2026-11-10 at the pin `c99fb28` on `lilygo-t-a7670g-r2`, with a temporary print in
-esp32sim's `Send` hook: the firmware's one packet is `HCI_Reset`, 4 bytes at `0x3f8010cf`, which
-the hook refuses; the plain image's `HCI_Reset` is at `0x3ffce0eb`, in DRAM, and all 423 of its
-packets pass. The firmware finds the PSRAM, runs its cache in low/high (2-core) mode and adds
-4096K of PSRAM to the heap, then times out waiting for the answer at 8.176 s. With esp32sim built
-locally from its `main` with the classic ESP32's `valid_packet_range` also taking PSRAM that is
-mapped and readable, the same test passes: the authentication at 1.418 s, the channel at 1.437 s,
-`speed(1.272723s ~ 4.292856s): 298.953674 kbit/s`, and 423 packets from the host, 432 to it.
+Measured on 2026-11-10 at the previous pin, `c99fb28`, on `lilygo-t-a7670g-r2`, with a temporary
+print in esp32sim's `Send` hook: the firmware's one packet is `HCI_Reset`, 4 bytes at `0x3f8010cf`,
+which the hook refuses; the plain image's `HCI_Reset` is at `0x3ffce0eb`, in DRAM, and all 423 of
+its packets pass. The firmware finds the PSRAM, runs its cache in low/high (2-core) mode and adds
+4096K of PSRAM to the heap, then times out waiting for the answer at 8.176 s. The classic ESP32's
+`valid_packet_range` also taking PSRAM that is mapped and readable is
+[mikroverk/esp32sim#353](https://github.com/mikroverk/esp32sim/pull/353), merged as `3bdb958`, the
+pin since #180. Measured there on 2026-11-13, the same test passes: the authentication at 1.418 s,
+the channel at 1.437 s, `speed(1.272723s ~ 4.292856s): 298.953674 kbit/s`, and 423 packets from the
+host, 432 to it, the figures of the local build of that change the week before.
 
 ## `sd_remount`
 
