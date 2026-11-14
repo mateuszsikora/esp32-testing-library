@@ -10,7 +10,7 @@ namespaces and keys. esp32tl knows their NVS types, not what those keys mean to 
 from esp32tl.flash import u16
 
 
-def test_connects(board, console):
+def test_connects(board):
     board.nvs(
         {
             "config": {
@@ -21,7 +21,7 @@ def test_connects(board, console):
         }
     )
     board.power_on()
-    console.expect_exact("connected")  # the firmware's own message
+    board.console.expect_exact("connected")  # the firmware's own message
 ```
 
 The app still comes from the [`app_path` marker](pytest-plugin-user.md). Its build must flash
@@ -93,9 +93,9 @@ from which the test reads a partition by name, NVS by namespace and key, and the
 from esp32tl.flash import u32
 
 
-def test_counts_its_boots(board, console):
+def test_counts_its_boots(board):
     board.power_on()
-    console.expect_exact("ready")  # the firmware's own message
+    board.console.expect_exact("ready")  # the firmware's own message
     snapshot = board.flash()
     assert snapshot.nvs()["persistence"]["boots"] == u32(2)
     settings = snapshot.partition("storage")  # the bytes of a partition in the build's table

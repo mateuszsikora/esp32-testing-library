@@ -398,11 +398,11 @@ cycle, and a day of wakes whose sleeps take less wall time than its boots: about
 `firmware/build.sh --examples periodic_wake`, then run
 `.venv/bin/pytest examples/periodic_wake/tests`.
 
-`examples/obd_reader/tests/test_obd_reader.py` runs a Bluetooth Classic client through the `bt`
-fixture: it searches for an ELM327 adapter, pairs with its PIN, opens SPP and asks for the readings
-the vehicle answers for, against the example's adapter model, with the adapter absent, with
-another PIN, with the ignition off, with an adapter that stops answering or ends its link, with a
-device that is no ELM327 and with a vehicle that has none of the readings.
+`examples/obd_reader/tests/test_obd_reader.py` runs a Bluetooth Classic client through
+`board.bluetooth`: it searches for an ELM327 adapter, pairs with its PIN, opens SPP and asks for
+the readings the vehicle answers for, against the example's adapter model, with the adapter absent,
+with another PIN, with the ignition off, with an adapter that stops answering or ends its link,
+with a device that is no ELM327 and with a vehicle that has none of the readings.
 `tests/test_elm327.py` beside it checks the model without a board. Build with
 `firmware/build.sh --examples obd_reader`, then run `.venv/bin/pytest examples/obd_reader/tests`.
 

@@ -19,9 +19,9 @@ import pytest
 pytestmark = pytest.mark.app_path("../firmware/hello_world")
 
 
-def test_hello_world(board, console):
+def test_hello_world(board):
     board.power_on()
-    console.expect("Hello world!")
+    board.console.expect("Hello world!")
 ```
 
 This is `tests/test_hello_world.py`. `pytestmark` puts the marker on every test of the file; it
@@ -30,10 +30,10 @@ can also decorate one test or a class, and the closest one wins.
 A test with a GNSS recording, from `tests/test_nmea_reader.py`:
 
 ```python
-def test_reports_a_fix(board, gnss, console):
-    gnss.replay("../recordings/gnss-generated-1.jsonl")
+def test_reports_a_fix(board):
+    board.gnss.replay("../recordings/gnss-generated-1.jsonl")
     board.power_on()
-    console.expect_exact("fix acquired lat=52.229677 lon=21.012233", timeout=30)
+    board.console.expect_exact("fix acquired lat=52.229677 lon=21.012233", timeout=30)
 ```
 
 The body first sets up what is at the far end of the board's wires, here a replay, then calls
@@ -50,15 +50,15 @@ WARSAW = Position(52.229677, 21.012233)
 FIX = r"^fix lat=(?P<lat>\S+) lon=(?P<lon>\S+)$"
 
 
-def test_follows_the_receiver_as_it_moves(board, gnss, console):
-    gnss.fix(at=WARSAW)
+def test_follows_the_receiver_as_it_moves(board):
+    board.gnss.fix(at=WARSAW)
     board.power_on()
     board.wait(seconds(10))
 
-    gnss.move(heading=NORTH, speed=km_h(36))  # 10 m/s
+    board.gnss.move(heading=NORTH, speed=km_h(36))  # 10 m/s
     board.wait(minutes(1) + seconds(40))  # 1 km
 
-    latest = board.wait_until(console.line(FIX), within=seconds(2))
+    latest = board.wait_until(board.console.line(FIX), within=seconds(2))
     reported = Position(float(latest["lat"]), float(latest["lon"]))
     assert reported.distance_to(WARSAW) == about(km(1), within=m(15))
 ```
@@ -83,9 +83,9 @@ To select an existing build outside the application, use:
 
 ```python
 @pytest.mark.app_path("../firmware", build_dir="../CI builds/debug")
-def test_debug(board, console):
+def test_debug(board):
     board.power_on()
-    console.expect("Hello world!")
+    board.console.expect("Hello world!")
 ```
 
 `build_dir` is relative to the resolved **application directory**, or absolute. In this example,
@@ -139,11 +139,29 @@ def test_hello_world(board: Board):
 `board.bluetooth` expose the profile's interfaces. Access does not power on the board or select a
 UART source, with one exception: the first access to `board.bluetooth` puts the firmware's
 controller on the air, so it must come before `board.power_on()`. Missing profile interfaces fail
-when accessed; serial capabilities still skip unsupported calls. The existing `console`, `gnss`,
-`modem`, `lines`, `sd_card`, `wifi` and `bt` fixtures remain shortcuts to these same objects. Mixing
-the two styles shares state, including the console's match cursor. For MQTT, use
+when accessed; serial capabilities still skip unsupported calls.
+
+Write `board.<interface>`: it is the one way the documentation and the examples use, and a test
+that asks for `board` alone needs nothing else. The `console`, `gnss`, `modem`, `lines`,
+`sd_card`, `wifi` and `bt` fixtures are shortcuts to these same objects, kept for tests that
+already use them and not deprecated ([decision](../decisions/harness.md#tests-reach-the-interfaces-through-board-and-the-fixtures-stay-as-shortcuts)).
+Mixing the two styles shares state, including the console's match cursor.
+
+The two styles differ in where a missing interface fails. `board.gnss` on a board profile without
+`uart.gnss`, and so `board.modem`, `board.lines` and `board.sd_card` on one without theirs, and
+`board.bluetooth` with a build that holds no ELF, raises `BackendError` where the test body reaches
+it: the test fails there, after what the body did before, with a traceback through the backend and
+the message without a prefix, as
+`esp32tl.backends.esp32sim.BackendError: the board profile esp32-devkitc has no lines; its interfaces are console, uart.gnss, sd_card, wifi, bluetooth`.
+The `gnss`, `modem`, `lines`, `sd_card` and `bt` fixtures turn the same `BackendError` into an
+error at setup, before the body runs, with no traceback and the backend's name before the message:
+`esp32sim: the board profile esp32-devkitc has no lines; its interfaces are console, uart.gnss, sd_card, wifi, bluetooth`.
+A skip on the serial backend is a skip in either style, at the fixture or where the body reaches
+the interface.
+
+For MQTT, use
 `board.modem.network().broker`: `network()` explicitly selects the modem's simulated network before
-power-on. The existing `broker` fixture remains a shortcut to that service. There is no
+power-on. The `broker` fixture is a shortcut to that service. There is no
 `board.broker` property that implicitly configures a network. `board.uart(role)` remains available
 for arbitrary UART roles.
 
@@ -353,7 +371,10 @@ the adapter, and `board.power_off()`, `board.boots` and `board.wait_for_wake()` 
 
 - `console.expect(pattern, timeout=30, *, return_what_before_match=False)` lets the board run until
   `pattern` appears on the console after the last match, for at most `timeout` of the board's time,
-  a `Duration` or a number of seconds, and returns the `re.Match`, on bytes. `pattern` is a regular
+  a `Duration` or a number of seconds, and returns the `re.Match`, on bytes, for a pattern given as
+  text too, as pytest-embedded's does: `match.group(1)` is `bytes`, and `.decode()` makes it text.
+  For a value printed on a line, `console.line(pattern)`, below, matches the line's text and gives
+  `str` groups. `pattern` is a regular
   expression, as a string, bytes or a compiled pattern, or a list of them, which matches whichever
   appears first. A string or bytes compiles with `re.DOTALL`, as pexpect compiles it, so `.` matches
   across lines, and `^` matches where the last match ended. A compiled pattern keeps its own flags,
@@ -406,9 +427,11 @@ the adapter, and `board.power_off()`, `board.boots` and `board.wait_for_wake()` 
   [taps and the run report](run-report-user.md).
 - Until the test gives it a source, the route is on the link, listening and silent. So is every
   other UART route of the profile.
-- On a board profile without `uart.gnss`, `gnss` is an error at setup:
-  `esp32sim: the board profile {name} has no uart.gnss; its interfaces are {interfaces}`. Both
-  profiles esp32tl ships have the route.
+- On a board profile without `uart.gnss`, `board.gnss` raises
+  `BackendError: the board profile {name} has no uart.gnss; its interfaces are {interfaces}` where
+  the test body reaches it, and the `gnss` fixture is an error at setup with the same message after
+  `esp32sim: ` ([where it fails](#one-board-and-its-interfaces)). Both profiles esp32tl ships have
+  the route.
 
 `board.sd_card` (also the `sd_card` fixture) is the profile's slot, empty until insertion.
 For a test running `firmware/sdspi`, prepare and inspect its FAT contents through the library:
@@ -499,7 +522,9 @@ def test_the_example_writes_its_files_into_the_image(board: Board):
   `esp32sim_link` property has `sd_card`, `{"image": PATH, "changes": [{"t_ns": T, "image": PATH
   or None}, ...], "refused": [...], "not_reached": [...], "faults": [...]}`
   ([the run report](run-report-user.md)).
-- On a board profile without a slot, `sd_card` is an error at setup:
+- On a board profile without a slot, `board.sd_card` raises `BackendError` where the test body
+  reaches it, and the `sd_card` fixture is an error at setup
+  ([where it fails](#one-board-and-its-interfaces)), with the message after `esp32sim: `:
   `esp32sim: the board profile gps-alarm-clock has no sd_card; its interfaces are console, uart.gnss, lines.alarm, wifi, bluetooth`.
 
 #### Keeping a prepared card
@@ -510,17 +535,17 @@ fresh card: 56 s of the board's time and 20 s of wall time on one firmware and a
 this one:
 
 ```python
-def test_logs_to_a_prepared_card(board, sd_card, card_cache, console):
+def test_logs_to_a_prepared_card(board, card_cache):
     card = card_cache.get("first-mount")
     if card is None:
-        card = sd_card.image(size_mb=32768, cluster_kb=32).build()
-        sd_card.insert(card)
+        card = board.sd_card.image(size_mb=32768, cluster_kb=32).build()
+        board.sd_card.insert(card)
         board.power_on()
-        console.expect_exact("logger: card ready")
+        board.console.expect_exact("logger: card ready")
         board.power_off()
         card_cache.put("first-mount", card)
     else:
-        sd_card.insert(card)
+        board.sd_card.insert(card)
     board.power_on()
     ...
 ```
@@ -713,13 +738,13 @@ from esp32tl.units import seconds
 
 @pytest.mark.board_profile("lilygo-t-a7670g-r2")
 @pytest.mark.app_path("../firmware/gpio_echo")
-def test_the_firmware_follows_ri_and_drives_pwrkey(board, lines, console):
+def test_the_firmware_follows_ri_and_drives_pwrkey(board):
     board.power_on()
-    console.expect_exact("in=0")
+    board.console.expect_exact("in=0")
     board.wait(seconds(1))
-    lines.drive("modem.ri", 1)
-    console.expect_exact("in=1", timeout=1)
-    assert board.wait_until(lambda: lines.level("modem.pwrkey") == 1, within=seconds(1))
+    board.lines.drive("modem.ri", 1)
+    board.console.expect_exact("in=1", timeout=1)
+    assert board.wait_until(lambda: board.lines.level("modem.pwrkey") == 1, within=seconds(1))
 ```
 
 - A line is named as `<role>.<line>`, `"modem.ri"`, or by its GPIO number, `33`.
@@ -753,7 +778,9 @@ def test_the_firmware_follows_ri_and_drives_pwrkey(board, lines, console):
   `GPIO 5 is no line of the board profile lilygo-t-a7670g-r2; its lines are modem.pwrkey (GPIO 4), modem.ri (GPIO 33)`.
   A level other than 0 or 1 raises `ValueError: lines.drive: level 2 is not 0 or 1`, or
   `TypeError` with the same message for one that is not an integer.
-- On a board profile without lines, `lines` is an error at setup:
+- On a board profile without lines, `board.lines` raises `BackendError` where the test body
+  reaches it, and the `lines` fixture is an error at setup
+  ([where it fails](#one-board-and-its-interfaces)), with the message after `esp32sim: `:
   `esp32sim: the board profile esp32-devkitc has no lines; its interfaces are console, uart.gnss, sd_card, wifi, bluetooth`.
 
 `NeverHappened`, `RunEnded`, `BoardOff` and `SourceError` are in `esp32tl.interfaces`, `LineEvent`
@@ -990,8 +1017,10 @@ to read only the firmware side. The model adds a 1 ms response latency to the li
 
 See [the modem guide](modem-user.md) for signal, registration, power, clock and operator, a hung
 modem and RESET, command history and limits.
-There is no default modem route on `esp32-devkitc`: requesting the fixture there fails with
-`the board profile esp32-devkitc has no uart.modem; its interfaces are console, uart.gnss, sd_card, wifi, bluetooth`.
+There is no default modem route on `esp32-devkitc`: `board.modem` there raises
+`BackendError: the board profile esp32-devkitc has no uart.modem; its interfaces are console, uart.gnss, sd_card, wifi, bluetooth`
+where the test body reaches it, and the `modem` fixture is an error at setup with the same message
+after `esp32sim: ` ([where it fails](#one-board-and-its-interfaces)).
 
 ### The wifi fixture
 
@@ -1007,8 +1036,8 @@ from esp32tl.units import seconds
 pytestmark = pytest.mark.app_path("../firmware/http_request")
 
 
-def test_joins_and_fetches_from_the_tests_server(board, wifi, console):
-    network = wifi.access_point("myssid", password="mypassword")
+def test_joins_and_fetches_from_the_tests_server(board):
+    network = board.wifi.access_point("myssid", password="mypassword")
     network.http.serve("/", "hello from the test\n")
     board.power_on()
     request = board.wait_until(network.http.next_request("/"), within=seconds(30))
@@ -1054,9 +1083,9 @@ def test_joins_and_fetches_from_the_tests_server(board, wifi, console):
 
 ### The bt fixture
 
-`bt` is the chip's Bluetooth (`board.bluetooth`), which every board profile has, as every classic
-ESP32 does. On esp32sim it puts the firmware's controller on an air around the board, on the
-board's clock, where the test puts the devices the firmware talks to or finds, `SppPeer` and
+`board.bluetooth`, also the `bt` fixture, is the chip's Bluetooth, which every board profile has, as
+every classic ESP32 does. On esp32sim it puts the firmware's controller on an air around the board,
+on the board's clock, where the test puts the devices the firmware talks to or finds, `SppPeer` and
 `BluetoothDevice`, and the run forwards the firmware's HCI to that controller:
 
 ```python
@@ -1064,25 +1093,30 @@ from esp32tl.bluetooth.peer import SppPeer
 from esp32tl.units import seconds
 
 
-def test_the_firmware_opens_spp(board, bt):
-    peer = SppPeer(bt.air, name="ESP_SPP_ACCEPTOR", pin="1234", source=model)
+def test_the_firmware_opens_spp(board):
+    peer = SppPeer(board.bluetooth.air, name="ESP_SPP_ACCEPTOR", pin="1234", source=model)
     board.power_on()
     board.wait_until(lambda: peer.channel_open, within=seconds(20))
 ```
 
-- The fixture comes before `board.power_on()`, as fixtures do: the runner then gets `--bt` and the
-  application's ELF. `board.bluetooth` asked for the first time after it raises `SourceError:
-  bluetooth: the board is on already: give an interface its source before board.power_on()`.
-- Time on `bt.air` is the board's: the test waits through the board, and what it does on the air,
-  making a device, switching one off, setting its `rssi`, happens at the board's current instant.
-  `bt.air.wait`, `bt.air.advance` and `bt.air.run` raise `AirError`.
-- On [serial](serial-backend-user.md) the test skips at the fixture: `serial: bluetooth takes no
-  model source on this backend`.
-- `bt.tap(path)` before `board.power_on()` records the HCI between the firmware's host and its
-  controller, every packet both ways, and writes it at teardown as a btsnoop file, with its
+- `board.bluetooth` is asked for the first time before `board.power_on()`, as the `bt` fixture is:
+  the runner then gets `--bt` and the application's ELF. Asked for the first time after it, it
+  raises `SourceError: bluetooth: the board is on already: give an interface its source before
+  board.power_on()`.
+- A build with no ELF of the application: `board.bluetooth` raises `BackendError: bluetooth: BUILD
+  holds no ELF of the application, whose symbols the runner's --bt needs` where the test body
+  reaches it, and the `bt` fixture is an error at setup with the same message after `esp32sim: `
+  ([where it fails](#one-board-and-its-interfaces)).
+- Time on `board.bluetooth.air` is the board's: the test waits through the board, and what it does
+  on the air, making a device, switching one off, setting its `rssi`, happens at the board's
+  current instant. Its `wait`, `advance` and `run` raise `AirError`.
+- On [serial](serial-backend-user.md) the test skips where it first reaches `board.bluetooth`, at
+  setup for the `bt` fixture: `serial: bluetooth takes no model source on this backend`.
+- `board.bluetooth.tap(path)` before `board.power_on()` records the HCI between the firmware's host
+  and its controller, every packet both ways, and writes it at teardown as a btsnoop file, with its
   header in `path` with `.json` added ([tapping the HCI](run-report-user.md#tapping-the-hci)).
 - What the devices are, what the firmware's controller does and what the report says are in
-  [Bluetooth peer](bluetooth-peer-user.md#in-front-of-the-firmware-the-bt-fixture).
+  [Bluetooth peer](bluetooth-peer-user.md#in-front-of-the-firmware-boardbluetooth).
 
 ## The test's timeout
 

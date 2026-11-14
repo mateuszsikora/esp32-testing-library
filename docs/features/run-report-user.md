@@ -14,11 +14,11 @@ import pytest
 pytestmark = pytest.mark.app_path("../firmware/nmea_reader")
 
 
-def test_reports_a_fix(board, gnss, console, tmp_path):
-    gnss.replay("../recordings/gnss-generated-1.jsonl")
-    gnss.tap(tmp_path / "gnss.jsonl")
+def test_reports_a_fix(board, tmp_path):
+    board.gnss.replay("../recordings/gnss-generated-1.jsonl")
+    board.gnss.tap(tmp_path / "gnss.jsonl")
     board.power_on()
-    console.expect_exact("fix acquired lat=52.229677 lon=21.012233")
+    board.console.expect_exact("fix acquired lat=52.229677 lon=21.012233")
 ```
 
 - `gnss.tap(path)` taps `uart.gnss`; `board.uart(role).tap(path)` taps any other UART route of the
@@ -52,21 +52,21 @@ writes the selected artifact's app hash, which does not prove the device's flash
 ## Tapping the HCI
 
 ```python
-def test_the_firmware_opens_spp(board, bt, console, tmp_path):
-    SppPeer(bt.air, name="ESP_SPP_ACCEPTOR", pin="1234", source=model)
-    bt.tap(tmp_path / "hci.btsnoop")
+def test_the_firmware_opens_spp(board, tmp_path):
+    SppPeer(board.bluetooth.air, name="ESP_SPP_ACCEPTOR", pin="1234", source=model)
+    board.bluetooth.tap(tmp_path / "hci.btsnoop")
     board.power_on()
-    board.wait_until(console.line("ESP_SPP_OPEN_EVT"), within=seconds(5))
+    board.wait_until(board.console.line("ESP_SPP_OPEN_EVT"), within=seconds(5))
 ```
 
-`bt.tap(path)` records the HCI between the firmware's Bluetooth host and its controller on
-esp32sim ([the bt fixture](pytest-plugin-user.md#the-bt-fixture)): every H4 packet the host sent,
-commands and ACL data, and every one it received, events and ACL data, from power-on. It writes two
-files at teardown, as a UART tap does: `path`, a btsnoop file, which Wireshark and Bumble's
-`bumble-show --format snoop` open, and `path` with `.json` added (`hci.btsnoop.json`), the recording's header.
-The same rules hold as for `gnss.tap`: before `board.power_on()`, relative to the test file's
-directory or absolute, its directory must exist, one per test, and neither file may be one the run
-replays from or another tap writes. On serial the `bt` fixture skips the test first.
+`board.bluetooth.tap(path)` records the HCI between the firmware's Bluetooth host and its controller
+on esp32sim ([`board.bluetooth`](pytest-plugin-user.md#the-bt-fixture)): every H4 packet the host
+sent, commands and ACL data, and every one it received, events and ACL data, from power-on. It
+writes two files at teardown, as a UART tap does: `path`, a btsnoop file, which Wireshark and
+Bumble's `bumble-show --format snoop` open, and `path` with `.json` added (`hci.btsnoop.json`), the
+recording's header. The same rules hold as for `gnss.tap`: before `board.power_on()`, relative to
+the test file's directory or absolute, its directory must exist, one per test, and neither file may
+be one the run replays from or another tap writes. On serial `board.bluetooth` skips the test first.
 
 - In the btsnoop file each packet is `sent` (host to controller) or `received` (controller to
   host), and its time is the board's since power-on, to the microsecond: Wireshark shows it as a
@@ -75,8 +75,8 @@ replays from or another tap writes. On serial the `bt` fixture skips the test fi
 - The header has `interface: bluetooth`, `source: model:bluetooth`, the board's `clock`, and a
   field of its own, `devices`: the devices the test made on the air, as `{"name": ..., "address":
   ...}`, so that a reader can tell whom a packet names by its address.
-- `bt.tap` returns the `Tap`, whose `events` hold the packets as `(t, dir, data)`, `out` from the
-  host, `in` to it, each with its packet-type byte; times there are in nanoseconds.
+- `board.bluetooth.tap` returns the `Tap`, whose `events` hold the packets as `(t, dir, data)`,
+  `out` from the host, `in` to it, each with its packet-type byte; times there are in nanoseconds.
 - The report's `bluetooth:` line ends with `; tapped into {path}`, and the `bluetooth` property has
   `tap`.
 

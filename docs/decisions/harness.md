@@ -529,6 +529,20 @@ Status: postponed (#40)
 The backend finds the runner in the checkout, so from a wheel only `ESP32TL_RUNNER` and
 `ESP32TL_ROM` find the runner and the ROM.
 
+What a consumer pays for it today, measured on 2026-11-14 on an Apple M2 Pro (10 cores) on a fast
+connection, at the esp32sim pin 3bdb958: rustup installs the pinned toolchain, Rust 1.99.1 with
+clippy and rustfmt, in 12.5 s, 463 MB on disk; a cold `cargo build --locked --profile release` in
+`runner/`, with an empty `CARGO_HOME` and target directory, so with every crate and esp32sim
+fetched from git, takes 28.4 s of wall time (26.3 s user), 141 MB of `CARGO_HOME` and 56 MB of
+target. `make rom-elf` adds a download of the ROM ELF from GitHub. CI's runner job builds it
+cold too, in under a minute ([CI/CD](../cicd.md)). The cost is under a minute of a consumer's CI
+and a Rust toolchain on its machines, not a build that dominates a run, so the postponement holds.
+
+It should move earlier when the first of these comes: the repository goes public and a consumer
+installs esp32tl from a wheel, which has no `runner/` to build; a consumer's CI cannot have Rust,
+or reach GitHub, on its machines; or a cold build of the runner, measured as above, takes more
+than about five minutes on a CI machine.
+
 ## Replaying requests, looping and wall-clock recordings is postponed
 
 Status: superseded (#20)
@@ -1183,6 +1197,26 @@ before it. Neither moves `expect`'s cursor.
 **Rejected:** a line's start as its time, because a line cannot be matched before it ends; lines
 from a time rather than from a count, for the instant above; and lines that share `expect`'s
 cursor, because a test that mixes the two would have one consume what the other waits for.
+
+## The console's expect returns a match on bytes, and line returns text
+
+Status: decided
+
+`console.expect` and `console.expect_exact` return an `re.Match` on bytes, for a pattern given as
+text too, and `console.line` and `console.lines` a `Line`, whose text and groups are `str`. A
+first consumer wrote `match.group(1).decode()` after `expect` and did not expect to. The two stay
+as they are, and the documentation says so where each is described: `expect` keeps
+pytest-embedded's names, search and return values, whose `Dut.expect` hands the pattern to pexpect
+on a bytes buffer and so returns a match on bytes for a `str` pattern as well; a test written for
+pytest-embedded, and ESP-IDF's own tests, decode its groups. `line` is esp32tl's, reads the console
+as text with ESP-IDF's colour codes removed, and is the way to get a value as text. Both backends
+share the one `Console`, so the serial backend returns the same.
+
+**Rejected:** matching a `str` pattern on text and returning a `str` match, as `re` does, because a
+test moved from pytest-embedded would then get `str` where it decodes bytes and fail with an
+`AttributeError`, and because a console is bytes that need not be UTF-8 up to the next match,
+which a text match would have to decode or refuse. A second `expect_text`, because `line` already
+gives the text, with the line's time.
 
 ## The GNSS receiver sends RMC and GGA only, at sea level
 
@@ -2695,6 +2729,37 @@ formats and avoids a second filesystem implementation. There is no host mutation
 image: declare initial files through the builder and let the firmware write during the run.
 
 
+## Tests reach the interfaces through board, and the fixtures stay as shortcuts
+
+Status: decided
+
+Every snippet in the documentation and the guide, and every example, writes `board.console`,
+`board.gnss`, `board.modem`, `board.lines`, `board.sd_card`, `board.wifi`, `board.bluetooth` and
+`board.modem.network().broker`, and a test asks for `board` alone; the GPS alarm clock's tests and
+the README's snippets were the last that took the `gnss`, `console` and `lines` fixtures. The user
+documentation and the guide name the Bluetooth `board.bluetooth` in their prose as well, and write
+`bt` for it only after saying so; the technical documents, which describe this repository's tests,
+keep the fixtures' names. A first consumer could not tell which of the two to write. The fixtures
+`console`, `gnss`, `modem`, `lines`, `sd_card`, `wifi`, `bt` and `broker` stay, as shortcuts to the
+same objects, and are not deprecated: this repository's own tests use them throughout; the `gnss`,
+`modem`, `lines`, `sd_card` and `bt` fixtures turn a `BackendError` of a missing interface into a
+failure at setup that names the backend; and removing them would buy only fewer names. The plugin's
+documentation says once which style is the recommended one, and where the two differ: through
+`board.<interface>` the same `BackendError` fails the test in its body, with a traceback and no
+prefix. `card_cache` is a fixture of its own, session-scoped, with no `board` equivalent, and is not
+a shortcut.
+
+**Rejected:** deprecating the fixtures with a warning, because nothing would get simpler for a
+test that already uses `board`, and every test in `tests/` would need rewriting or a filter for no
+change in behaviour. Recommending the fixtures instead, because `board.uart(role)` for a route of a
+project's own profile has no fixture, so a test would mix the two styles anyway, and because the
+broker fixture hides the `network()` call that selects the modem's network.
+
+**Postponed:** the plugin turning a `BackendError` of a missing interface that the test body
+raises into the failure the fixtures give, `pytest.fail` with the backend's name and no traceback,
+so that both styles end with the same message; it changes what the plugin does, and is for a
+change of its own.
+
 ## Network selection stays explicit and FAT paths name one entry
 
 Status: decided (#73)
@@ -2814,6 +2879,27 @@ that names both rates.
 
 **Postponed:** firmware that negotiates its device's rate, as a GNSS driver that switches a
 receiver to 115200 baud does, until an example needs it.
+
+## A model answers at the profile's baud, not at the rate the firmware set
+
+Status: postponed
+
+A model on a route, esp32tl's or the test's, hears whatever the firmware transmits, at any rate, and
+answers at the board profile's `baud` (`Wire.baud`); a firmware that receives at another rate, more
+than 3 % off, loses the answers as frame errors, and the run fails on them
+([what a profile's baud does](../features/board-profiles-user.md#what-a-routes-baud-does)). A
+firmware that takes its rate from NVS is tested at a rate the test has a profile for: one local
+profile per rate. That is the way round until a consumer needs a model to follow the firmware's
+rate. The link already learns the firmware's receiving rate from `uart_cfg`
+([protocol 5.3](../protocol.md#53-uart_cfg-ext)), so a model's route could put its bytes in at
+that rate instead of the wire's; left to decide then is whether the model or the profile asks for
+it, and what a model that times its frames by a silence worked out for one rate does at another. A
+replay and a real device keep the profile's rate: a recording carries none, and the port runs at
+it.
+
+**Rejected:** making it the default for every model, because a model that answers at whatever rate
+the firmware set would hide a firmware that sets the wrong one, which the device it stands for
+would not understand and the frame errors now catch.
 
 ## A real source keeps at most 50 ms of bytes waiting on its line, and drops the oldest
 

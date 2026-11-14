@@ -23,17 +23,17 @@ from esp32tl.units import seconds
 
 @pytest.mark.app_path("../firmware/modem_at")
 @pytest.mark.board_profile("lilygo-t-a7670g-r2")
-def test_signal(board, modem, console):
-    modem.signal(dbm=-73)
-    modem.tap("modem.jsonl")
+def test_signal(board):
+    board.modem.signal(dbm=-73)
+    board.modem.tap("modem.jsonl")
     board.power_on()
-    console.expect_exact("modem_at: dialogue complete")
-    modem.signal(dbm=-101)
-    console.expect_exact("+CSQ: 6,99", timeout=seconds(2))
-    modem.lose_registration()
-    console.expect_exact("+CEREG: 0,0", timeout=seconds(2))
-    modem.register()
-    console.expect_exact("+CEREG: 0,1", timeout=seconds(2))
+    board.console.expect_exact("modem_at: dialogue complete")
+    board.modem.signal(dbm=-101)
+    board.console.expect_exact("+CSQ: 6,99", timeout=seconds(2))
+    board.modem.lose_registration()
+    board.console.expect_exact("+CEREG: 0,0", timeout=seconds(2))
+    board.modem.register()
+    board.console.expect_exact("+CEREG: 0,1", timeout=seconds(2))
 ```
 
 The initial state is powered, registered, -73 dBm (CSQ 20), echo off. `modem.power_off()` before

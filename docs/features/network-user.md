@@ -474,10 +474,10 @@ from esp32tl.units import seconds
 pytestmark = pytest.mark.app_path("../firmware/http_request")
 
 
-def test_joins_and_fetches_from_the_tests_server(board, wifi, console):
-    network = wifi.access_point("myssid", password="mypassword")
+def test_joins_and_fetches_from_the_tests_server(board):
+    network = board.wifi.access_point("myssid", password="mypassword")
     network.http.serve("/", "hello from the test\n")
-    printed = console.line(r"^hello from the test$")
+    printed = board.console.line(r"^hello from the test$")
     board.power_on()
     request = board.wait_until(network.http.next_request("/"), within=seconds(30))
     assert (request.method, request.version) == ("GET", "HTTP/1.0")
@@ -823,8 +823,8 @@ that backend at the far end of one TCP port: a server in a container or on the h
 both ways as they are:
 
 ```python
-def test_publishes_to_our_broker(board, modem):
-    network = modem.network()
+def test_publishes_to_our_broker(board):
+    network = board.modem.network()
     network.bridge(1883, ("127.0.0.1", 1883))  # a broker started by the test or by CI
     board.power_on()
     ...

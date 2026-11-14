@@ -16,7 +16,7 @@ from esp32tl.interfaces import SourceError
 from esp32tl.interfaces.gnss import Gnss
 from esp32tl.interfaces.uart import Uart
 from esp32tl.link.boardlink import BoardLink, Output, Wire
-from esp32tl.link.protocol import RunnerHello, Sync, UartRx, UartTx, Wait
+from esp32tl.link.protocol import RunnerHello, Sync, UartRx, UartTx, Wait, Warn
 from esp32tl.report import RunLog
 from esp32tl.sources.model import Model, Timed
 from esp32tl.units import Duration, ms, seconds
@@ -141,6 +141,28 @@ def test_a_model_is_the_route_s_source_and_answers_through_the_link(tmp_path: Pa
     ]
     assert link.error is None
     assert model.lines == [b"AT"]
+
+
+def test_a_model_hears_any_rate_and_answers_at_the_profile_s(tmp_path: Path) -> None:
+    # The firmware set 9600 baud where the profile says 115200: the model hears the bytes as they
+    # are, and its answer goes in at the profile's rate, which the firmware's UART then drops.
+    uart, _ = aux(tmp_path)
+    model = uart.model(AtResponder())
+    link = BoardLink("aux-uart", [uart])
+    link.receive(HELLO)
+    link.receive(Sync(0))
+    assert link.receive(UartTx(1, 500, 1, (26,), 9600, b"AT\r\n")) == []
+    assert link.receive(Sync(500 + ANSWER.ns)) == [
+        UartRx(500 + ANSWER.ns, 27, AUX.baud, b"\r\nOK\r\n"),
+        Wait(1, None, ANSWER.ns),
+    ]
+    assert link.error is None
+    assert model.lines == [b"AT"]
+    link.receive(Warn(500 + ANSWER.ns, "frm_err", "baud", port=1, pin=27, baud=9600, nbytes=6))
+    assert link.error == (
+        "uart.aux sends at 115200 baud on GPIO 27, and the firmware's UART1 receives there at"
+        " 9600 baud: 6 bytes dropped as frame errors (frm_err)"
+    )
 
 
 def test_a_supplied_model_loses_its_power_with_the_board(tmp_path: Path) -> None:

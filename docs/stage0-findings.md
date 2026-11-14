@@ -214,7 +214,7 @@ production images.
    unmodified, with `--ble`'s hooks and the controller outside esp32sim: the runner's `--bt`
    forwards the guest's HCI to the harness, whose `bt` fixture is the controller, on the same air as
    the test's Bluetooth devices ([runner](features/runner-user.md#give-the-guest-a-bluetooth-controller),
-   [Bluetooth peer](features/bluetooth-peer-user.md#in-front-of-the-firmware-the-bt-fixture)), and
+   [Bluetooth peer](features/bluetooth-peer-user.md#in-front-of-the-firmware-boardbluetooth)), and
    `esp_bt_controller_enable` takes mode 2 from
    [mikroverk/esp32sim#347](https://github.com/mikroverk/esp32sim/pull/347) on (issue
    [mikroverk/esp32sim#346](https://github.com/mikroverk/esp32sim/issues/346)), merged on

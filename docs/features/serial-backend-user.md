@@ -57,9 +57,9 @@ A test associated with a recording can require the local artifact to match it:
 ```python
 @pytest.mark.app_path("../firmware/hello_world")
 @pytest.mark.app_recording("hello-console.jsonl")
-def test_hello(board, console):
+def test_hello(board):
     board.power_on()
-    console.expect_exact("Hello world!")
+    board.console.expect_exact("Hello world!")
 ```
 
 `app_recording(path)` takes one path, relative to the test file or absolute. On serial, before
@@ -161,7 +161,7 @@ smoke tests run. Host-side hardware to drive off-board peripherals remains postp
 requires a modem model, which this backend cannot provide. So do `wifi.access_point(...)` and
 `wifi.nearby(...)`, with `serial: wifi takes no model source on this backend, only real`: the real
 board's station hears whatever access points are around it, and the host puts none on its air.
-Requesting the `wifi` fixture alone does not skip. The `bt` fixture does, at once, with
+Reaching `board.wifi` alone does not skip. Reaching `board.bluetooth` does, at once, with
 `serial: bluetooth takes no model source on this backend`: the real board's controller is on a real
 air, where the harness has no device, and the capability declaration gives serial no `bluetooth`.
 

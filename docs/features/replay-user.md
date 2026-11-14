@@ -19,10 +19,10 @@ import pytest
 pytestmark = pytest.mark.app_path("../firmware/nmea_reader")
 
 
-def test_reports_a_fix(board, gnss, console):
-    gnss.replay("../recordings/gnss-generated-1.jsonl")
+def test_reports_a_fix(board):
+    board.gnss.replay("../recordings/gnss-generated-1.jsonl")
     board.power_on()
-    console.expect_exact("fix acquired lat=52.229677 lon=21.012233")
+    board.console.expect_exact("fix acquired lat=52.229677 lon=21.012233")
 ```
 
 - Calling `gnss.replay` is what puts a replay at the far end of `uart.gnss`; no marker says it
@@ -101,9 +101,13 @@ These raise `SourceError` (`esp32tl.interfaces.SourceError`) in the test body:
 A wait or an expect before `board.power_on()` raises
 `BoardOff: the board is off; call board.power_on() first`.
 
-On a profile without the route, `gnss` is an error at setup, and the test body does not run:
-`esp32sim: the board profile {name} has no uart.gnss; its interfaces are {interfaces}`. Both
-profiles esp32tl ships have the route.
+On a profile without the route, `board.gnss` raises
+`BackendError: the board profile {name} has no uart.gnss; its interfaces are {interfaces}` where
+the test body reaches it, and the test fails there. The `gnss` fixture makes it an error at setup,
+and the test body does not run:
+`esp32sim: the board profile {name} has no uart.gnss; its interfaces are {interfaces}`
+([where it fails](pytest-plugin-user.md#one-board-and-its-interfaces)). Both profiles esp32tl
+ships have the route.
 
 A test that calls `gnss.replay` and never `board.power_on()` ran no firmware, and would pass
 whatever the firmware does: no runner starts, the link's report says `the runner never
