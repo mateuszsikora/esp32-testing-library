@@ -3,6 +3,27 @@
 Why `.github/workflows/ci.yml` runs its jobs where it does, how builds reach the test jobs, and
 what each job runs.
 
+## Public fork runs require approval from all external contributors
+
+Status: decided (15 November 2026)
+
+After publication, the repository uses `all_external_contributors` for fork workflow
+approval. GitHub-hosted VMs isolate contributor code from the maintainer's machines;
+approval additionally limits unsolicited compute use by returning contributors. This
+revisits the earlier rejection of universal fork approval recorded under the superseded
+self-hosted migration decision. A previous merged contribution does not permanently grant
+unattended CI execution. The read-only token and `pull_request` trigger remain unchanged.
+
+Public `main` protection requires PRs and all 25 existing CI checks, bound to the GitHub
+Actions app, with strict up-to-date checks and administrator enforcement. No approving
+review is required, so a solo maintainer can merge their own PR after CI. Force pushes and
+deletion are disabled, and review conversations must be resolved. Repository settings and
+their verification date are recorded in [CI](../cicd.md#public-repository-settings).
+
+**Rejected:** approval only for first-time contributors, because one accepted contribution
+would remove the approval gate for subsequent fork runs. Requiring one approving review
+would prevent the solo maintainer from merging their own work without another reviewer.
+
 ## Every Linux job runs on the self-hosted runner hp600g1
 
 Status: superseded (#48)

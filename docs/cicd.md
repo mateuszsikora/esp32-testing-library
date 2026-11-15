@@ -16,6 +16,42 @@ A new push to a pull request cancels the run for the push before. On `main` ever
 own concurrency group and its own run, and nothing is cancelled: a shared group would keep at most
 one run waiting and cancel the others.
 
+## Public repository settings
+
+Verified and configured through the GitHub API on 15 November 2026. These are repository
+settings, not settings applied by the workflow files:
+
+- Fork workflow approval is `all_external_contributors`: a maintainer must approve runs
+  requiring approval from external contributors, including returning contributors. Before
+  approving, inspect the proposed workflow and the code it executes. See
+  [GitHub's fork approval policy](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/enabling-features-for-your-repository/managing-github-actions-settings-for-a-repository).
+- CI uses `pull_request`, not `pull_request_target`. Fork PRs receive a read-only token and
+  no repository secrets. All jobs use GitHub-hosted VMs; the repository has no registered
+  self-hosted runners. Do not register a machine with private network access for public CI.
+- The default workflow permission is `read`; Actions cannot approve pull requests.
+  Each CI workflow also declares `contents: read`. The repository allows all actions;
+  action tags are not required to be pinned to full commit SHAs.
+- Secret scanning, secret scanning push protection and Dependabot vulnerability alerts
+  are enabled. Dependabot automatic security-update PRs remain disabled.
+- `main` requires a pull request, zero approving reviews, resolved review conversations,
+  and all 25 CI checks from the GitHub Actions app (app ID `15368`). These are the eight
+  `firmware / firmware (...)` checks, two `runner / runner (...)` checks, twelve
+  `test (...)` checks, `determinism`, `lint` and `docs`, matching the job matrix below.
+  Strict status checks require the branch to be up to date with `main`. Protection applies
+  to administrators too; force pushes and branch deletion are disabled. When renaming jobs
+  or changing matrix entries, update the required check names in branch protection as well.
+  GitHub accepts `success`, `skipped` and `neutral` check conclusions, so maintainers must
+  still review workflow changes that could skip checks.
+
+Fork PRs can restore base-branch build caches. Their new cache entries are scoped to
+`refs/pull/<number>/merge`; `main` and other PRs cannot restore them. Never put secrets in
+caches. See [GitHub's cache scope rules](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching).
+
+The audit found no repository Actions secrets and no secrets in the `pypi` environment.
+That environment currently has no deployment protection rules or branch restrictions; CI
+does not use it. Publishing authorization must be reviewed when adding a release workflow.
+This audit checked configuration; it did not execute a test PR from an external fork.
+
 ## Jobs
 
 GitHub-hosted macOS runners have no Docker, so the validation firmware is built once, in the
@@ -69,9 +105,9 @@ PlatformIO packages and all project build trees must fit on a standard hosted di
 images are pulled afresh. TODO(owner): measure peak disk use and cold-build duration on the
 hosted VM; the existing 60-minute firmware and 15-minute test limits remain unchanged.
 
-Private runs consume the account's hosted allowance and may incur charges. Publishing the
-repository needs no workflow switch: both platforms already run. Required checks / branch
-protection can be configured separately after publication.
+Private runs consume the account's hosted allowance and may incur charges. The repository is
+now public; publication needed no workflow switch because both platforms already ran.
+Branch protection is configured as described above.
 
 ## How the builds reach the test jobs
 
@@ -252,9 +288,8 @@ make docs-check BASE="$BASE"    # env: BASE: origin/${{ github.base_ref }}
 ```
 
 It builds nothing and needs nothing from the other jobs. What the check enforces, and why it is not
-a pre-commit hook, is in [guides/documentation.md](guides/documentation.md#the-check). While the
-repository is private, no job is a required check: GitHub's free plan offers no branch protection
-for private repositories, so a red `docs` job does not stop a merge by itself.
+a pre-commit hook, is in [guides/documentation.md](guides/documentation.md#the-check).
+The public repository requires this check on pull requests through `main` branch protection.
 
 ## See also
 
