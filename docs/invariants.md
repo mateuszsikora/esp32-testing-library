@@ -1780,3 +1780,27 @@ For a fixed ordered image list and shard count N, `firmware/build.sh --shard K/N
 positions congruent to K-1 modulo N. Across K=1..N every image occurs exactly once; sharding
 never silently drops an image. Invalid or empty shards fail before starting Docker or writing
 build output. `tests/test_firmware_build.py` checks both validation and example families.
+
+**Runtime integrity.** Installed runtimes match the Python version, full esp32sim revision and
+platform; ROM bytes match the pinned SHA-256. Archive links and path traversal are never
+extracted, failed preparations expose no installation, and explicit paths take precedence.
+`tests/test_runtime.py` enforces these rules; the wheel smoke test verifies offline firmware boot.
+
+**Release completeness.** A release contains exactly one version-matched wheel and sdist, and
+an executable/manifest pair for each native target. Missing assets, extra files, wrong manifest
+versions and corrupted executables fail assembly before SHA256SUMS is written.
+`tests/test_release.py` enforces this boundary.
+
+**Published release integrity.** PyPI publication verifies the tag against the package version
+and checks the existing SHA256SUMS without regenerating it. Changed wheel or sdist bytes, missing
+or altered sums, and a mismatched tag prevent publication. `tests/test_release.py` checks these
+cases and verifies that failed checks do not rewrite the published checksums.
+
+
+**Runtime selection independence.** An explicit runner combined with a cached ROM must work when
+the replaced cached runner is missing, corrupt or non-executable. An explicit ROM combined with
+a cached runner must work when the replaced cached ROM is missing or corrupt. Selected files
+and cache manifests remain checked; `runtime.prepare()` still rejects an incomplete or damaged
+installation. `tests/test_runtime.py::test_override_does_not_validate_replaced_cache_file`,
+`test_selected_cache_file_still_requires_checksum` and
+`test_selected_cache_file_still_requires_manifest` enforce these rules.

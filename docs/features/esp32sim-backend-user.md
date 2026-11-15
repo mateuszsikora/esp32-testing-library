@@ -9,11 +9,11 @@ ESP-IDF or PlatformIO build for the classic ESP32.
 
 ## What it needs
 
-- **The runner.** By default `runner/target/release/esp32tl-runner`, which `make setup` (or
+- **The runner.** In an editable checkout, `runner/target/release/esp32tl-runner`, which `make setup` (or
   `make build-runner`) builds. `ESP32TL_RUNNER=PATH` names another, for example the
   `RUNNER_PROFILE=dev` build in `runner/target/debug/esp32tl-runner`. It must be an executable
   file.
-- **The ROM ELF.** By default `.cache/esp-rom-elfs/20241011/esp32_rev300_rom.elf`, which
+- **The ROM ELF.** In an editable checkout, `.cache/esp-rom-elfs/20241011/esp32_rev300_rom.elf`, which
   `make setup` (or `make rom-elf`) puts there. `ESP32TL_ROM=PATH` names another. The backend
   always hands this file to the runner, so the runner's own ROM lookup is not used
   ([where the runner looks for it](runner-user.md#where-the-rom-comes-from)).
@@ -23,9 +23,9 @@ ESP-IDF or PlatformIO build for the classic ESP32.
   Built for the classic ESP32 and finished; an ESP-IDF build without flash encryption.
   [Builds](builds-user.md) says what each kind needs and how its files reach the flash.
 
-The two defaults are paths in the checkout esp32tl is installed from, which holds only with an
-editable install; `make setup` makes one. Installed any other way, from a wheel for instance,
-esp32tl finds the runner and the ROM ELF only through `ESP32TL_RUNNER` and `ESP32TL_ROM`.
+A wheel installation uses the verified user cache prepared by `esp32tl runtime prepare`.
+Explicit `ESP32TL_RUNNER` and `ESP32TL_ROM` take priority. Both files are checked; the runner
+must report the matching version and esp32sim revision. See [runtime installation](runtime-user.md).
 A relative path in either resolves against pytest's working directory, not the test file's.
 
 ## How a run goes
@@ -299,8 +299,8 @@ its body instead, as `BackendError: cannot ...`, without the prefix:
 | `{build} asks for flash encryption, which the runner does not do` | Build without flash encryption |
 | `{build} is not a finished build, missing {files}` | Finish the build; `{files}` is a comma-separated list |
 | The other messages of [a build that cannot be loaded](builds-user.md#when-the-build-cannot-be-loaded) | As that table says |
-| `no runner at {path}: run make setup, or set ESP32TL_RUNNER` | Build the runner, or point `ESP32TL_RUNNER` at an executable one |
-| `no ROM ELF at {path}: run make setup, or set ESP32TL_ROM` | Fetch the ROM ELF, or point `ESP32TL_ROM` at it |
+| `no runner at {path}: run make setup in a checkout, or esp32tl runtime prepare` | Build the runner, or point `ESP32TL_RUNNER` at an executable one |
+| `no rom at {path}: run make setup in a checkout, or esp32tl runtime prepare` | Fetch the ROM ELF, or point `ESP32TL_ROM` at it |
 | `bluetooth: {build} holds no ELF of the application, whose symbols the runner's --bt needs` | At the `bt` fixture, or in the test body at the first `board.bluetooth`, without the prefix: the build directory has no `.elf` file, or a PlatformIO one no `firmware.elf`; build the app again, or keep its ELF beside the image |
 | `cannot listen on {path}: {reason}` | At `board.power_on()`, which raises `BackendError` in the test body: the backend cannot bind the link's socket in a new directory under the system's temporary directory or `/tmp`; check that it is writable |
 | `cannot start {runner}: {reason}` | At `board.power_on()`, which raises `BackendError` in the test body: the runner exists but the system cannot run it, for example `Exec format error` |
@@ -341,3 +341,16 @@ The occurrence history is independent of the rolling log and is retained for the
 long runs with many unknown requests therefore use more memory and produce larger reports.
 Unknown commands alone do not fail the test; their protocol supplies a fallback response
 ([matching](matching-user.md)), and a silent fallback still creates a history entry.
+
+## Installed runtime
+
+The backend resolves explicit environment paths first, checkout files second when running from
+source, and the verified user cache otherwise. It never downloads. Runner version and esp32sim
+revision must match; ROM checksums are checked too. Run `make setup` for a checkout or
+`esp32tl runtime prepare` for a wheel. See [runtime installation](runtime-user.md).
+
+
+Cache checks follow the selection per file: an explicit runner does not depend on the unused
+cached runner when the ROM comes from cache, and an explicit ROM does not depend on the unused
+cached ROM. The selected cached file and its manifest are verified. Runtime preparation still
+requires a complete, valid installation.

@@ -54,7 +54,7 @@ command drives no line otherwise.
 | `--recording RECORDING` | `replay`, required | none | a recording file, relative to the working directory or absolute |
 
 `esp32tl replay` takes one recording. The runner and the ROM ELF are the backend's, from the
-checkout or from `ESP32TL_RUNNER` and `ESP32TL_ROM`
+verified user cache, checkout, or explicit `ESP32TL_RUNNER` and `ESP32TL_ROM`
 ([what the backend needs](esp32sim-backend-user.md#what-it-needs)).
 
 For a build produced by an external CI job, both commands accept `--build-dir`:
@@ -142,8 +142,8 @@ exit code 1; they are not converted to these messages.
 | `{path}: [Errno 2] No such file or directory: '{path}'`, and every other `RecordingError` | the recording cannot be read, or breaks the [format](../recording-format.md#errors) |
 | `{path} is a recording of {recorded}, not of {interface}`, and every other `ReplayError` | the recording cannot be replayed into that interface ([replay](replay-user.md#what-a-replay-refuses)); `{path}` is the path as given |
 | `{build} holds no ESP-IDF or PlatformIO build: no flasher_args.json and no firmware.bin`, and the other build errors | the selected build is missing or invalid ([when the build cannot be loaded](builds-user.md#when-the-build-cannot-be-loaded)) |
-| `no runner at {path}: run make setup, or set ESP32TL_RUNNER` | no runner |
-| `no ROM ELF at {path}: run make setup, or set ESP32TL_ROM` | no ROM ELF |
+| `no runner at {path}: run make setup in a checkout, or esp32tl runtime prepare` | no runner |
+| `no rom at {path}: run make setup in a checkout, or esp32tl runtime prepare` | no ROM ELF |
 | `cannot listen on {path}: {reason}` | the link's Unix socket could not be bound, in a new directory under the system's temporary directory, or under `/tmp` when that path would be too long |
 | `cannot start {runner}: {reason}` | the runner could not be executed |
 
@@ -187,3 +187,9 @@ esp32tl: error: argument COMMAND: invalid choice: 'foo' (choose from 'run', 'rep
 - [pytest plugin](pytest-plugin-user.md)
 - [Replay](replay-user.md)
 - [esp32sim backend](esp32sim-backend-user.md)
+
+## Runtime preparation
+
+`esp32tl runtime prepare` explicitly installs the version-matched runner and pinned ROM into
+the user cache; valid installations are reused offline. Failures exit 2. See
+[runtime installation](runtime-user.md) for downloads, platforms and recovery.

@@ -153,6 +153,10 @@ def test_cli_passes_only_the_selected_build_to_the_runner(
 import json
 import sys
 from pathlib import Path
+from esp32tl import __version__, runtime
+if sys.argv[1:] == ["--runtime-version"]:
+    print(__version__, runtime.SIM_REV)
+    sys.exit(0)
 args = sys.argv[1:]
 files = [args[i + 1] for i, arg in enumerate(args) if arg == "--flash-at"]
 Path({str(tmp_path / "loaded.json")!r}).write_text(json.dumps([
@@ -161,7 +165,7 @@ Path({str(tmp_path / "loaded.json")!r}).write_text(json.dumps([
 """)
     runner.chmod(0o755)
     rom = tmp_path / "rom.elf"
-    rom.touch()
+    rom.write_bytes((ROOT / ".cache/esp-rom-elfs/20241011/esp32_rev300_rom.elf").read_bytes())
     args = [
         command,
         "--app",
@@ -311,6 +315,10 @@ def test_ctrl_c_ends_the_run_and_exits_130() -> None:
 # A runner that never connects: it writes its pid beside itself, says it is loading, and sleeps
 # for longer than `finished` waits for the command.
 LOADING_RUNNER = """#!/bin/sh
+if [ "$1" = "--runtime-version" ]; then
+    echo "0.1.0 3bdb9582a910974e4e025d274d6ec61e5c481be6"
+    exit 0
+fi
 echo $$ > "$0.pid"
 echo "fake runner: loading" >&2
 exec sleep 300
@@ -337,6 +345,10 @@ def test_ctrl_c_before_the_runner_connects_exits_130(tmp_path: Path) -> None:
 
 # A runner that says what it was given and exits without connecting.
 ARGS_RUNNER = """#!/bin/sh
+if [ "$1" = "--runtime-version" ]; then
+    echo "0.1.0 3bdb9582a910974e4e025d274d6ec61e5c481be6"
+    exit 0
+fi
 echo "fake runner: $*" >&2
 """
 

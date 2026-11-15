@@ -406,30 +406,20 @@ your backend's API does; one that speaks only a protocol or a part's datasheet b
 
 ## In CI
 
-A job that runs the tests needs Python 3.11 or newer, Rust through [rustup](https://rustup.rs), a
-checkout of esp32tl at a commit you pin, and your firmware's build. From a fresh machine:
+A job that runs tests needs Python 3.11 or newer, the release wheel, and your already built
+firmware. Neither Rust nor a checkout is required:
 
 ```sh
-git clone https://github.com/mateuszsikora/esp32-testing-library esp32tl
-git -C esp32tl checkout <commit>
 python3 -m venv .venv
-.venv/bin/pip install ./esp32tl
-make -C esp32tl build-runner rom-elf
-export ESP32TL_RUNNER=$PWD/esp32tl/runner/target/release/esp32tl-runner
-export ESP32TL_ROM=$PWD/esp32tl/.cache/esp-rom-elfs/20241011/esp32_rev300_rom.elf
-idf.py -C my_project build                # or your own build, in your own container
+.venv/bin/pip install /artifacts/esp32tl-0.1.0-py3-none-any.whl
+.venv/bin/esp32tl runtime prepare
 .venv/bin/pytest my_project/tests
 ```
 
-- `pip install ./esp32tl` installs the package and its pytest plugin; it does not build the
-  runner. `make build-runner` does, with `cargo build --locked` in `esp32tl/runner/`; rustup
-  installs the toolchain `runner/rust-toolchain.toml` pins on the first build, and cargo fetches
-  esp32sim from GitHub ([development](development.md#make-targets)).
-- `make rom-elf` puts the ESP32 mask ROM ELF in `esp32tl/.cache/`, from `~/.espressif` when ESP-IDF
-  has it, else from GitHub, checked by SHA-256 ([the ROM ELF](development.md#the-rom-elf)).
-- An installed esp32tl finds the runner and the ROM ELF only through `ESP32TL_RUNNER` and
-  `ESP32TL_ROM`. With `pip install -e ./esp32tl` instead, it finds them in the checkout and needs
-  neither ([what it needs](../features/esp32sim-backend-user.md#what-it-needs)).
+The wheel and runtime must come from the same accessible release. See [runtime installation](../features/runtime-user.md)
+for supported systems, offline reuse and the first-release prerequisites. Developers can still
+use `make setup` in an editable checkout.
+
 - The SD card's image builder needs mtools: `sudo apt-get install mtools`.
 - Your build needs `flasher_args.json` and every file it lists; a CI job that builds the firmware in
   one job and tests it in another hands over the files at the top of `build/`,
@@ -445,8 +435,7 @@ What to cache, and on what key:
 
 | What | Key | Without it |
 |---|---|---|
-| `esp32tl/runner/target/release/esp32tl-runner` | The esp32tl commit | `make build-runner` builds it again; a cold build takes under a minute on esp32tl's CI machine ([`runner`](../cicd.md#runner)) |
-| `esp32tl/.cache/esp-rom-elfs/` | The esp32tl commit, or `scripts/fetch-rom-elf`'s hash | `make rom-elf` downloads it again |
+| `~/.cache/esp32tl` | Package version, OS and architecture | `esp32tl runtime prepare` downloads and verifies the runtime |
 | Your firmware's build | Its sources and `sdkconfig.defaults` | It is built again |
 | `.pytest_cache/d/esp32tl-card-cache/`, if you use `card_cache` | Any: each card is kept under its name and the SHA-256 of the app image, so a new build misses by itself | Each card is prepared again ([keeping a prepared card](../features/pytest-plugin-user.md#keeping-a-prepared-card)) |
 
@@ -463,3 +452,10 @@ to repeat there.
 - [pytest plugin](../features/pytest-plugin-user.md): every fixture, marker and message.
 - [Serial backend](../features/serial-backend-user.md): the same tests on a real board.
 - [Decisions](../decisions/README.md): why esp32tl works the way it does.
+
+## Installation in your project and CI
+
+A release wheel needs no checkout or Rust: install it with pip, run `esp32tl runtime prepare`,
+then run your tests against an already built firmware. See [exact installation commands and CI
+cache configuration](../features/runtime-user.md). Preparation is an explicit network step;
+pytest reuses the verified runtime offline.

@@ -433,3 +433,23 @@ implemented by `tests/conftest.py`; standalone example tests require their docum
 examples occur exactly once across their CI shards, order is retained within a shard, and invalid
 or empty shards fail before starting Docker. These use a fake Docker CLI; they do not measure
 hosted build times.
+
+## Wheel acceptance test
+
+After `make setup`, run `.venv/bin/pip wheel --no-deps . -w dist`,
+`.venv/bin/python scripts/package-runtime.py`, then
+`.venv/bin/python scripts/test-wheel-runtime.py firmware/hello_world/build`.
+The last command needs a previously built hello_world. It installs the wheel and dependencies
+in a fresh venv outside the checkout, serves real release files and the actual upstream ROM
+archive over local HTTP, prepares the runtime, stops the server, then prepares and boots the
+firmware twice with Python network connections blocked and Rust absent from PATH.
+The local HTTP endpoint replaces only release locations, not the downloader or binary.
+
+`tests/test_release.py` exercises the release assembly gate with complete, missing, corrupted,
+version-mismatched and extra assets. `scripts/test-wheel-runtime.py` requires exactly one wheel
+in `dist/`; clear old distribution files before testing another version. The release workflow
+builds that wheel once from its sdist, then supplies it to both native smoke jobs.
+
+The release tests also exercise `scripts/check-release.py --verify --tag`: published checksums
+are compared without modification, and changed distributions, missing or altered SHA256SUMS,
+and wrong tags are rejected. These tests do not contact PyPI or exercise its OIDC exchange.

@@ -261,3 +261,94 @@ unconditional SDK deletion took 1m00s, 48s and 2m20s. All 24 pytest jobs and det
 The longest pytest job took 5m34s, including 4m37s in pytest. These are measurements of the
 three-group baseline, not of the eight-group optimization. Cold and warm end-to-end timings
 must be measured separately; hosted queue time counts toward the 10-minute target too.
+
+## Runtime releases
+
+`.github/workflows/runtime-release.yml` builds distribution assets independently of the main CI.
+It runs on relevant pull requests, manual dispatch and `v*` tags, using only standard hosted
+runners. A tag must equal `v` plus the Python package version, and Cargo's package version must
+match, before packaging. PR and manual runs never create releases; tag runs create only a draft.
+This workflow does not upload to PyPI; the separate publishing workflow below does.
+
+Jobs and their outputs:
+
+- `package` (Ubuntu 24.04, Python 3.11): `python -m build` builds an sdist and then a wheel from
+  that sdist; `twine check --strict` validates metadata. The one wheel is used on both platforms.
+- `firmware` (Ubuntu 24.04): checks Docker and builds only `hello_world`, using the pinned builder.
+- `runtime` (Ubuntu 22.04 x86_64 and macOS 15 arm64): checks native architecture, builds the
+  pinned Rust runner, runs its tests, packages the executable and compatibility manifest, then
+  installs the shared wheel into a clean venv outside the checkout. The smoke test prepares the
+  runtime over real HTTP and boots the supplied firmware twice with network connections blocked
+  and Rust tools absent from PATH. Ubuntu 22.04 deliberately preserves the glibc 2.35 baseline,
+  while the main CI uses Ubuntu 24.04.
+- `assemble` (Ubuntu 24.04): downloads the wheel/sdist and both runners. `scripts/check-release.py`
+  rejects missing or extra assets and wrong version, esp32sim revision, target or executable
+  checksum, then writes SHA256SUMS for exactly those six files. It uploads `verified-release`.
+- `draft` (Ubuntu 24.04, tags only): verifies SHA256SUMS and creates the draft GitHub release with
+  generated release notes. Only this job has `contents: write`; it does not replace an existing
+  release or publish the draft.
+
+Actions artifacts have a seven-day retention period; missing files fail their upload. Concurrency
+is serialized by ref without cancelling a running release build. Limits are 10 minutes for
+package/assemble/draft, 30 for firmware and 25 per runtime job. ROM and firmware never enter the
+release asset set. This workflow intentionally uses artifacts, separate from the main CI's cache
+transport; artifact storage quota must permit its uploads.
+
+Before the first release:
+
+1. Merge the workflow and runtime implementation, then run **Runtime release** with
+   `workflow_dispatch` on main. Inspect both native smoke tests and download `verified-release`.
+2. Keep `pyproject.toml`, `runner/Cargo.toml` and runner's entry in `runner/Cargo.lock` at the same
+   version. Use a new version for every released build; never replace published runtime assets.
+3. Tag the tested commit (for example `git tag v0.1.0` and `git push origin v0.1.0`). This runs
+   validation again and creates a draft containing the wheel, sdist, two executables, two JSON
+   manifests and SHA256SUMS. Review the notes, hashes and target identities, then publish manually.
+4. Install that release's wheel in a clean environment, run `esp32tl runtime prepare` against
+   the real GitHub release URLs, and boot the firmware again offline. Anonymous downloading
+   requires a published release; a draft is insufficient even though this repository is public.
+
+Publishing the GitHub release triggers the PyPI workflow below, so configure its Trusted
+Publisher before clicking Publish. Both workflow files must be included in the tagged commit.
+The workflows are validated locally with actionlint; hosted runs and PyPI's OIDC exchange still
+require the workflows on GitHub and are not implied by a successful local smoke test.
+
+## PyPI Trusted Publishing
+
+`.github/workflows/publish-pypi.yml` listens only to `release: published` for tags starting with
+`v`. Creating a draft, pushing a tag, opening a PR or editing release notes does not upload to
+PyPI. A maintainer's Publish release action starts this workflow after runtime assets are public.
+
+The `verify` job checks out the release tag with read-only permissions and no persisted Git
+credentials, downloads all assets from that GitHub release, and runs
+`python scripts/check-release.py release --verify --tag "$TAG"`. This validates the exact file
+set, version, runner identities and checksums, then compares all six computed checksums with the
+published SHA256SUMS without rewriting it. A missing checksum file or changed wheel/sdist fails
+before upload. Only the verified wheel and sdist go into the `pypi-distributions` Actions artifact
+(retained for seven days); neither runners nor manifests go to PyPI. Nothing is rebuilt.
+
+The separate `publish` job downloads those two files and uses
+`pypa/gh-action-pypi-publish@release/v1`. It has `id-token: write`, uses environment `pypi`, and
+runs no checkout or build. No API token, username or password is configured. Both jobs use
+Ubuntu 24.04 with ten-minute timeouts; runs are serialized per release tag without cancelling
+an active upload. OIDC authentication and the first upload cannot be validated by local tests.
+
+Configure the GitHub repository environment `pypi`, then add a GitHub Trusted Publisher under
+[PyPI account Publishing](https://pypi.org/manage/account/publishing/) for a new project:
+
+| Field | Value |
+|---|---|
+| Project name | `esp32tl` |
+| Owner | `mateuszsikora` |
+| Repository | `esp32-testing-library` |
+| Workflow filename | `publish-pypi.yml` |
+| Environment | `pypi` |
+
+For an existing project, use its Publishing settings instead. A pending publisher creates the
+project on first upload; it does not reserve the name. See [PyPI's setup guide](https://docs.pypi.org/trusted-publishers/creating-a-project-through-oidc/)
+and [OIDC publishing guide](https://docs.pypi.org/trusted-publishers/using-a-publisher/).
+After the first successful upload, verify `python -m pip install esp32tl==0.1.0` in a clean
+venv and `esp32tl runtime prepare` against the published GitHub runtime assets.
+
+A failed upload leaves the GitHub release published. Fix the cause before retrying the failed
+job. The workflow deliberately does not enable `skip-existing`: a partial upload or an already
+published version requires inspection, and PyPI files cannot be silently replaced.

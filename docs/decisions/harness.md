@@ -525,7 +525,7 @@ pytest-embedded's `esp,idf` services. The default still runs esp32sim only.
 
 ## Prebuilt runner binaries are postponed to M10
 
-Status: postponed (#40)
+Status: superseded (explicit runtime distribution)
 
 The backend finds the runner in the checkout, so from a wheel only `ESP32TL_RUNNER` and
 `ESP32TL_ROM` find the runner and the ROM.
@@ -3769,3 +3769,31 @@ A guest using a different rate gets the existing `frm_err` failure. Serial uses 
 port's baud, as it already does for output. A profile rate override is postponed until a
 consumer needs a non-default simulated console. Automatically following `uart_cfg` is rejected:
 it would hide the framing errors of a physical host port at the wrong rate.
+
+## Runtime preparation is explicit and version-matched
+
+Status: decided
+
+The wheel use case now requires no repository or Rust. `esp32tl runtime prepare` installs a
+runner and ROM into a version/platform user cache. Exact package and esp32sim identity prevents
+silent use of stale executables. Explicit paths retain priority, followed by checkout builds,
+then cache. No import or pytest path downloads anything. Raw runner binaries avoid an archive
+parser; the ROM stays upstream with the existing pins, not redistributed under an assumed licence.
+
+Rejected: bundled platform wheels (duplicate Python packages and ROM distribution), automatic
+first-test downloads (hidden network requirement), PATH lookup (ambiguous version), an updater
+(unneeded scope), and support for untested architectures. Linux glibc x86_64 and macOS arm64 are
+the release candidates; every published release is gated by native wheel/firmware tests on both.
+Checksums come from the same HTTPS release authority, not an independent signing system.
+
+
+## Backend runtime validation follows selection per file
+
+Status: decided
+
+The backend validates only the selected cache resource and its manifest. `ESP32TL_RUNNER`
+replaces all use of the cached runner, including its identity check; `ESP32TL_ROM` replaces all
+use of the cached ROM. Full-installation validation belongs to `runtime.prepare()`, which still
+checks both files before reuse and before exposing an installation. Calling that full validation
+from either backend lookup was rejected: an unused, replaced file could incorrectly block a
+valid explicit path combined with the other file from cache.

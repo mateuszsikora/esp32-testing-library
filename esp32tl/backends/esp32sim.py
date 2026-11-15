@@ -64,7 +64,7 @@ from pytest_embedded.dut import Dut
 from pytest_embedded.log import DuplicateStdoutPopen, MessageQueue
 from pytest_embedded.utils import Meta, remove_asci_color_code
 
-from esp32tl import build, flash, recording
+from esp32tl import build, flash, recording, runtime
 from esp32tl.backends.clock import HeldClock, nanoseconds, seconds
 from esp32tl.boards import BoardProfile, capabilities
 from esp32tl.boards.capabilities import CapabilityError, Request
@@ -133,22 +133,39 @@ class BackendError(Exception):
     """What keeps the backend from starting, said so that the reader knows what to do."""
 
 
+def runtime_path(kind: str) -> Path:
+    explicit = os.environ.get("ESP32TL_RUNNER" if kind == "runner" else "ESP32TL_ROM")
+    local = ROOT / (
+        "runner/target/release/esp32tl-runner"
+        if kind == "runner"
+        else f".cache/esp-rom-elfs/{ROM_RELEASE}/{ROM_ELF}"
+    )
+    try:
+        if explicit:
+            path = Path(explicit).resolve()
+        elif (ROOT / "runner/Cargo.toml").is_file():
+            path = local
+        else:
+            return runtime.cached_file(kind)
+        if not path.is_file():
+            raise runtime.RuntimeError(
+                f"no {kind} at {path}: run make setup in a checkout, or esp32tl runtime prepare"
+            )
+        if kind == "runner":
+            runtime.identity(path)
+        else:
+            runtime.verify(path, runtime.ROM_SHA)
+        return path
+    except runtime.RuntimeError as error:
+        raise BackendError(str(error)) from error
+
+
 def runner_path() -> Path:
-    """$ESP32TL_RUNNER, or the release build `make setup` leaves in runner/target/."""
-    path = Path(os.environ.get("ESP32TL_RUNNER") or ROOT / "runner/target/release/esp32tl-runner")
-    if not (path.is_file() and os.access(path, os.X_OK)):
-        raise BackendError(f"no runner at {path}: run make setup, or set ESP32TL_RUNNER")
-    return path
+    return runtime_path("runner")
 
 
 def rom_path() -> Path:
-    """$ESP32TL_ROM, or the pinned release `make setup` fetches into .cache/."""
-    path = Path(
-        os.environ.get("ESP32TL_ROM") or ROOT / ".cache/esp-rom-elfs" / ROM_RELEASE / ROM_ELF
-    )
-    if not path.is_file():
-        raise BackendError(f"no ROM ELF at {path}: run make setup, or set ESP32TL_ROM")
-    return path
+    return runtime_path("rom")
 
 
 def load_app(
