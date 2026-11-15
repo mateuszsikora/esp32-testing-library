@@ -1780,3 +1780,13 @@ For a fixed ordered image list and shard count N, `firmware/build.sh --shard K/N
 positions congruent to K-1 modulo N. Across K=1..N every image occurs exactly once; sharding
 never silently drops an image. Invalid or empty shards fail before starting Docker or writing
 build output. `tests/test_firmware_build.py` checks both validation and example families.
+
+## HTTP client framing
+
+A device HTTP response is independent of TCP packet boundaries: Content-Length and chunked
+responses complete only after their framed body, and unframed responses complete only at a
+peer FIN. A malformed or truncated response fails its condition instead of returning a partial
+body; transport loss does not count as EOF. Metadata limits exclude their separators even
+when a separator arrives in several packets. Chunked decoding consumes each chunk once, so
+many small chunks do not stall network callbacks through repeated decoding.
+`tests/test_net_http_client.py` enforces this.

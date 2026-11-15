@@ -266,6 +266,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The Wi-Fi station is an interface of every profile, and the access point a model source](harness.md#the-wi-fi-station-is-an-interface-of-every-profile-and-the-access-point-a-model-source) | `harness.md` | decided (#31) |
 | [Behind the access point the network speaks Ethernet, ARP and DHCP](harness.md#behind-the-access-point-the-network-speaks-ethernet-arp-and-dhcp) | `harness.md` | decided (#31) |
 | [An HTTP server answers on port 80 of every simulated network](harness.md#an-http-server-answers-on-port-80-of-every-simulated-network) | `harness.md` | decided (#31) |
+| [The HTTP client opens one plain connection per request](harness.md#the-http-client-opens-one-plain-connection-per-request) | `harness.md` | decided (#197) |
 | [A Wi-Fi tap, signal changes and the esp32tl command's Wi-Fi are postponed](harness.md#a-wi-fi-tap-signal-changes-and-the-esp32tl-commands-wi-fi-are-postponed) | `harness.md` | postponed (#31) |
 | [Explicit build paths are relative to the application and never fall back](harness.md#explicit-build-paths-are-relative-to-the-application-and-never-fall-back) | `harness.md` | decided (#102) |
 | [MQTT, TLS, HTTP and DHCP event APIs name history queries and next-event conditions explicitly](harness.md#mqtt-tls-http-and-dhcp-event-apis-name-history-queries-and-next-event-conditions-explicitly) | `harness.md` | decided (#108, #116, #182) |

@@ -1105,3 +1105,48 @@ unchanged. See [the modem](modem-user.md) and [determinism](../guides/testing.md
 - [network-technical.md](network-technical.md): the layers and their lifecycle.
 - [Validation firmware](validation-firmware-user.md): `pppos_client`, `mqtt_session`,
   `http_request` and `http_server`.
+
+## Call the device's HTTP API
+
+After the device has an address and its server is listening, `network.http_client` sends HTTP/1.1
+requests through the same simulated TCP path as `network.connect`. For example, behind
+`network = wifi.access_point("myssid", password="mypassword")`, once the firmware is ready:
+
+```python
+exchange = network.http_client.get("/status", headers={"Accept": "application/json"})
+response = board.wait_until(exchange.response, within=seconds(5))
+assert response.status == 200
+assert response.headers["content-type"] == "application/json"
+assert response.json()["status"] == "ok"
+echo = network.http_client.post("/echo", json={"id": 7})
+response = board.wait_until(echo.response, within=seconds(5))
+assert response.json()["echo"] == {"id": 7}
+```
+
+`get(path, *, port=80, headers=None)` and
+`post(path, body=None, *, json=None, port=80, headers=None)` return an exchange. `body` is bytes or
+UTF-8 text; `json` serializes a Python value and defaults Content-Type to `application/json`.
+Passing both a body and a non-None JSON value raises `ValueError`. `json=None` means no JSON body;
+use `body="null"` with a JSON Content-Type to send JSON null. Paths start with `/`, may include a
+query, and must be ASCII with no whitespace or fragment (percent-encode such characters).
+Headers are a dictionary. Host defaults to the device address and port. The client controls
+Content-Length, Transfer-Encoding and Connection; supplying those request headers is refused.
+
+`exchange.response` is a reusable condition, without parentheses when passed to `wait_until`.
+The response has integer `status`, `headers` with lowercase keys (repeated values joined with
+`, `), bytes `body`, UTF-8 `text` with replacement, and `json()`. `exchange.connection` exposes
+the underlying TCP connection. `network.http_client.exchanges` retains requests in call order.
+
+Each request opens its own connection and sends `Connection: close`. Content-Length,
+read-to-close and chunked response bodies are supported; chunk extensions and trailers are
+accepted, but trailers are not added to response headers. Up to 16 informational responses are skipped;
+204 and 304 have no body. Explicit keep-alive responses and protocol switching are refused.
+There is no TLS, connection reuse or redirect following. Malformed or truncated responses raise
+`ValueError` from the condition with the reason; refused, reset or lost connections raise
+`ConnectionEnded`. Heads, chunk size lines and trailers are limited to 64 KiB excluding their terminating
+separators, decoded bodies to 1 MiB. Limits are independent of TCP packet boundaries.
+
+The transcript and report's network section include request and result events such as
+`http client: device:80/1 GET /status requested` and
+`http client: device:80/1 GET /status → 200`, plus the TCP stream bytes and failures. Results are
+recorded on receipt even when the test never polls the condition.

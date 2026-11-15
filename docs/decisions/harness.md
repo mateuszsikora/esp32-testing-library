@@ -3058,6 +3058,21 @@ test of a firmware that fetches would always do so; and keep-alive, chunked tran
 default, until a firmware's test needs them (TLS is `network.listen(443, network.http, tls=ca)`
 already).
 
+## The HTTP client opens one plain connection per request
+
+Status: decided (#197)
+
+`network.http_client` sits beside `network.http` and uses the TCP client to call a device's
+server. GET and POST return an exchange with a response condition; receipt records the result
+in the existing network transcript and report even when that condition is never polled.
+Responses support Content-Length, EOF framing and chunked transfer because ESP-IDF and Arduino
+servers use them. The request always sends `Connection: close`.
+
+**Rejected:** keep-alive and TLS client support until a firmware test needs them. Explicit
+keep-alive requests/responses and HTTPS targets are refused. Raw `network.connect` remains
+available for tests of persistent TCP connections. Redirects are left to the test so each
+exchange describes exactly the requested path.
+
 ## A Wi-Fi tap, signal changes and the esp32tl command's Wi-Fi are postponed
 
 Status: postponed (#31)
