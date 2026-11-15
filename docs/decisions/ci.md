@@ -521,9 +521,10 @@ remain mandatory, with the same labels, architectures, assertions and failure pr
 
 The entire native build workflow remains in its cache hash, so this edit causes one native
 rebuild per architecture. Firmware keys and exact tarball restores do not change. Test workflow
-edits remain outside both build keys. Every pytest invocation reports `--durations=30` for later
-balancing decisions; this change does not rebalance or remove tests. Existing decisions to pair
-shards, isolate wall-clock tests, and run every commit on main remain in effect.
+edits remain outside both build keys. Every pytest invocation in `test-platform.yml` reports
+`--durations=30` for later balancing decisions; determinism keeps its existing pytest arguments
+without duration reporting. This change does not rebalance or remove tests. Existing decisions
+to pair shards, isolate wall-clock tests, and run every commit on main remain in effect.
 
 **Rejected:** duplicating all test steps for each platform, which would let dependency setup or
 assertions drift. Removing the build dependency and hoping its cache exists would introduce a

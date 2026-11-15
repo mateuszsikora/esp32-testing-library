@@ -471,7 +471,9 @@ CI calls the shared `test-platform.yml` separately for Linux and macOS, retainin
 and complete shard coverage in the shared workflow. Linux tests and determinism wait only for
 the Linux native build and firmware; macOS tests wait for their own native build and firmware.
 
-Every CI pytest invocation, including the serial real-source selections, gets `--durations=30`.
+Every pytest invocation in `test-platform.yml`, including the serial real-source selections,
+gets `--durations=30`. This covers `test-linux` and `test-macos`; determinism keeps its existing
+pytest arguments without duration reporting.
 The job logs show the 30 slowest setup, call and teardown phases per invocation. The parallel
 wrapper prints each shard's report with its log. To reproduce on a local subset:
 `.venv/bin/python .github/scripts/test-pair.py 1/4 4/4 tests/test_shard.py --durations=30`.
