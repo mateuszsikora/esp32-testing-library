@@ -1,8 +1,11 @@
 # Validation firmware: how it works
 
-`firmware/build.sh` builds the validation images; the `Makefile` targets `firmware` and
-`firmware/%/build/esp32tl-built` call it. `tests/test_firmware_build.py` tests the script against
-fakes, `tests/test_firmware_images.py` checks the images it built. `firmware/nmea_reader/` and
+`firmware/build.sh` builds the ESP-IDF validation images; the `Makefile` targets `firmware` and
+`firmware/%/build/esp32tl-built` call it. `firmware/build-platformio.sh` builds the PlatformIO
+image, `arduino_shell` ([The PlatformIO build](#the-platformio-build)); `firmware` and
+`firmware/%/.pio/build/esp32dev/esp32tl-built` call it. `tests/test_firmware_build.py` and
+`tests/test_platformio_firmware_build.py` test the scripts against fakes,
+`tests/test_firmware_images.py` checks the images they built. `firmware/nmea_reader/` and
 `firmware/gpio_echo/` are the images whose source lives here ([nmea_reader](#nmea_reader),
 [gpio_echo](#gpio_echo)), and
 `scripts/generate-gnss-recordings.py` writes the recordings it is tested with
@@ -126,6 +129,81 @@ an image only when its marker is missing: an edit to `firmware/nmea_reader/` nee
 `nmea_reader`, `gpio_echo`, `sd_remount`, `modem_at`, `mqtt_session` and `nvs_reader` are built from the read-only `/project`
 mount like any other project. They take no components from the component manager, and with `sdkconfig` and the
 build in the build directory ESP-IDF v5.3.6 writes nothing into their directories.
+
+The `firmware` target then runs `FIRMWARE_OUT= firmware/build-platformio.sh`; the pattern rule
+`firmware/%/.pio/build/esp32dev/esp32tl-built` runs `FIRMWARE_OUT= firmware/build-platformio.sh $*`,
+and `test` also depends on `$(PLATFORMIO_IMAGES:%=firmware/%/.pio/build/esp32dev/esp32tl-built)`
+with `PLATFORMIO_IMAGES := arduino_shell`. The two rules cannot match one target: the ESP-IDF one
+needs `/build/esp32tl-built` at the end.
+
+## The PlatformIO build
+
+`firmware/build-platformio.sh [IMAGE...]` follows `build.sh`'s steps, with PlatformIO in place of
+ESP-IDF ([decisions/firmware.md](../decisions/firmware.md#the-arduino-image-is-built-with-pioarduino-in-a-pinned-python-container)):
+
+1. **Image names**, in `IMAGES` (`arduino_shell`), checked before anything is written.
+2. **Mode**: `ESP32TL_CONTAINER` set, with `/.dockerenv`, is the container side, and `pio` is
+   `$PLATFORMIO_CORE_DIR/penv/bin/pio`; else `PIO_LOCAL=1`, a local build with the `pio` on `PATH`,
+   `container` `null`; else the host side, which needs `docker` and `docker info`, as in `build.sh`.
+3. **Output directory**: `FIRMWARE_OUT`, or the script's directory, `firmware/`, made absolute; the
+   script then changes to the repository's root.
+4. **In place or a copy**: on the host and in a local build, `in_place` is `1` when the output
+   directory is, by name, the repository's `firmware/` (`$(pwd -P)/firmware`), else `0`. The
+   container side takes it from `ESP32TL_IN_PLACE` and dies when that is neither `0` nor `1`: in
+   there `/out` and `/project` are two mounts of one directory, and the host, which sees both as
+   its own paths, is the side that can tell
+   ([decisions/firmware.md](../decisions/firmware.md#pio-runs-in-the-arduino-images-own-directory-through-the-writable-out)).
+5. **Host side**: creates `.cache/platformio/` and runs
+
+   ```sh
+   docker run --rm --init \
+     --user "$(id -u):$(id -g)" \
+     --env HOME=/tmp \
+     --env PLATFORMIO_CORE_DIR=/platformio \
+     --env ESP32TL_CONTAINER="$CONTAINER" \
+     --env FIRMWARE_OUT=/out \
+     --env ESP32TL_HOST_OUT="$out" \
+     --env ESP32TL_IN_PLACE="$in_place" \
+     --volume "$PWD:/project:ro" \
+     --volume "$out:/out" \
+     --volume "$PWD/.cache/platformio:/platformio" \
+     --workdir /project \
+     "$CONTAINER" firmware/build-platformio.sh "$@"
+   ```
+
+   The mounts and the user are `build.sh`'s, with PlatformIO's core directory as a third, writable
+   mount ([decisions/firmware.md](../decisions/firmware.md#platformios-core-directory-is-cacheplatformio)).
+   There is no ccache: PlatformIO's SCons keeps its objects in the build directory, and the
+   framework's ESP-IDF libraries come precompiled.
+6. **PlatformIO Core** (container side): when `pio --version` is not
+   `PlatformIO Core, version $PIOARDUINO_VERSION`, the script prints `installing pioarduino`,
+   removes `penv/`, makes it again with `python3 -m venv` and runs
+   `pip install --quiet --disable-pip-version-check "pioarduino==$PIOARDUINO_VERSION"` in it. At its
+   first build the platform installs its own Python packages into the same `penv/`, and downloads
+   the framework (`framework-arduinoespressif32` and `framework-arduinoespressif32-libs`), the
+   Xtensa toolchain and its other tools into `packages/`, through `dist/` and `tools/`.
+7. **Build side**: `pio --version` gives the version, the text after `PlatformIO Core, version `; a
+   local build says on stderr that it is not for goldens. For each image the project is
+   `$PWD/firmware/IMAGE`, the platform the value of its `platformio.ini`'s `platform =` line, and
+   `pio` runs in `$out/IMAGE`: the project itself when `in_place` is `1`, else a directory into
+   which the project's `platformio.ini` and `src/` are copied, `src/` removed first.
+   If `$out/IMAGE/.pio` exists and `.pio/build/esp32dev/esp32tl-build.json` is missing or, compared
+   as text, not the record this build would write, the script prints `was built another way` and
+   removes `.pio/`. Then `esp32tl-built` is removed, the record written,
+
+   ```sh
+   pio run --project-dir "$out/IMAGE" --environment esp32dev
+   ```
+
+   runs, and after it the script checks that `firmware.bin` exists, writes the record again (pio
+   removes `.pio/build/` when `platformio.ini` changed, the record with it), creates `esp32tl-built`
+   and prints the `built in` line.
+
+pioarduino's build of `esp32dev` writes `bootloader.bin`, `partitions.bin` (the core's default
+table), `firmware.bin` and `firmware.elf`, and merges the bootloader at `0x1000`, the table at
+`0x8000`, the platform's `boot_app0.bin` at `0xe000` and the application at `0x10000` into
+`firmware.factory.bin`, which `esp32tl.build` flashes from `0x0`
+([builds](builds-technical.md)).
 
 ## `nmea_reader`
 
@@ -534,6 +612,33 @@ default `HTTPD_MAX_REQ_HDR_LEN` of 512. `tests/test_http_server.py` runs it agai
 point of the `wifi` fixture ([network](network-technical.md#connections-the-test-opens)).
 `tests/test_firmware_build.py` checks that the local build builds it from `firmware/http_server`.
 
+## `arduino_shell`
+
+`firmware/arduino_shell/platformio.ini` has one environment, `[env:esp32dev]`: the pinned platform
+URL, `board = esp32dev`, `framework = arduino`, `monitor_speed = 115200`, and no build flags, so the
+core's log level is its default, errors only. `src/main.cpp`, one file, includes `Arduino.h`,
+`Preferences.h`, `WebServer.h` and `WiFi.h`.
+
+`setup()` starts `Serial` at 115200 baud, prints the banner with `ESP_ARDUINO_VERSION_STR`, and
+opens the namespace `shell` read-only with `preferences.begin("shell", true)`, so that the sketch
+writes nothing to NVS. On a flash without the namespace `nvs_open` fails, the core logs
+`begin(): nvs_open failed: NOT_FOUND`, and `getString` returns its default, `""`, for `greeting`,
+`ssid` and `password`. With an `ssid`, `WiFi.mode(WIFI_STA)` and
+`WiFi.begin(ssid, password)`; `WiFi`'s auto-reconnect, on by default, is left as it is, and no
+test takes the access point away. Every line goes through `Serial.print` and
+`Serial.println`.
+
+`loop()` feeds every byte `Serial` has to `take`, which ends a line at `\n`, drops a `\r` before it,
+and keeps at most `MAX_LINE` (64) bytes of a line, then hands it to `run`; an empty line prints
+nothing. Once `WiFi.status()` is `WL_CONNECTED` it registers `status` for `GET /status` on a
+`WebServer` on port 80, calls `server.begin()` and prints the `listening on` line, once; from then on
+every `loop()` calls `server.handleClient()`, then `delay(1)`. `status` counts the request in
+`requests` and sends `200` with `application/json`; `uptime_ms` is `millis()`, which is emulated
+time in the emulator.
+
+`tests/test_arduino_shell.py` runs it through `pytest.mark.app_path("../firmware/arduino_shell",
+build_dir=".pio/build/esp32dev")`, so the backend loads the PlatformIO build directory as it is.
+
 ## The GNSS recording generator
 
 `scripts/generate-gnss-recordings.py` holds the recordings in `RECORDINGS`, each a name, a seed
@@ -611,6 +716,21 @@ marker, because CMake writes it while configuring, before anything is compiled: 
 interrupted build would count as built. Read by the Makefile pattern rule,
 `tests/test_firmware_images.py` and `tests/test_pytest_plugin.py`.
 
+**The PlatformIO record**, in `.pio/build/esp32dev/esp32tl-build.json`, the same way:
+
+```json
+{"platformio": "6.2.0", "platform": "https://github.com/pioarduino/platform-espressif32/releases/download/55.03.312-1/platform-espressif32.zip", "container": "python:3.13-bookworm@sha256:cc55e4ded9c95f6ce2133b3d096db43f214d280c2a8af65d83e246c8fa7d168c", "project": "/project/firmware/arduino_shell"}
+```
+
+| Field | Type | Value |
+|---|---|---|
+| `platformio` | string | what `pio --version` printed after `PlatformIO Core, version ` |
+| `platform` | string | the value of the project's `platform =` line |
+| `container` | string or `null` | as in the ESP-IDF record; `null` for a `PIO_LOCAL=1` build |
+| `project` | string | the absolute path of the project under `firmware/`, as seen where the build ran |
+
+Its `esp32tl-built` is written after `pio run` succeeded and left `firmware.bin`.
+
 Everything else in the build directory is ESP-IDF's (`flasher_args.json`, the ELF, the binaries,
 `config/sdkconfig.json`, `project_description.json`). The CI `firmware` job packs the files at the
 top of each build directory, `config/sdkconfig.json`, and the `.bin` and `.elf` files of
@@ -618,6 +738,8 @@ top of each build directory, `config/sdkconfig.json`, and the `.bin` and `.elf` 
 
 ## Interfaces
 
+- `firmware/build-platformio.sh [IMAGE...]`: the same, with `pio` in place of `idf.py`; its
+  messages are in the [user document](validation-firmware-user.md#build-the-arduino-image).
 - `firmware/build.sh [IMAGE...]`: exits 0 when every image built, 1 with a message (below), or
   with the exit code of `docker run` or `idf.py` when those fail. Messages go to stderr, except
   the `was built another way` and `built in` lines, which go to stdout.
@@ -642,9 +764,18 @@ top of each build directory, `config/sdkconfig.json`, and the `.bin` and `.elf` 
 | `ESP32TL_CONTAINER` | environment, set by the host side | unset | marks the container side and names the image it records |
 | `ESP32TL_HOST_OUT` | environment, set by the host side | unset | the host's path of `/out`, shown in messages |
 | `IDF_PATH` | environment | from `export.sh`, or the image | the ESP-IDF tree the projects come from |
+| `PIOARDUINO_VERSION` | constant of `build-platformio.sh` | `6.2.0` | the pioarduino PlatformIO Core the container installs |
+| `CONTAINER` | constant of `build-platformio.sh` | `python:3.13-bookworm@sha256:cc55e4ded9c95f6ce2133b3d096db43f214d280c2a8af65d83e246c8fa7d168c` | the image the PlatformIO build runs in, pinned by digest (a multi-arch index) |
+| `IMAGES`, `ENV` | constants of `build-platformio.sh` | `arduino_shell`, `esp32dev` | the PlatformIO images, and the environment of each `platformio.ini` |
+| `platform` | `firmware/<image>/platformio.ini` | `https://github.com/pioarduino/platform-espressif32/releases/download/55.03.312-1/platform-espressif32.zip` | pioarduino's espressif32 platform, which pins the framework and the toolchains |
+| `PIO_LOCAL` | environment | unset | `1` builds with the `pio` of the calling shell |
+| `ESP32TL_IN_PLACE` | environment, set by the host side | unset | `1` when `/out` is the repository's `firmware/`, so that pio runs in the project itself; `0` for a copy |
+| `PLATFORMIO_CORE_DIR` | environment, set by the host side | `/platformio`, the repository's `.cache/platformio/` | PlatformIO's core directory in the container |
 
-`tests/test_firmware_images.py` reads `IDF_VERSION=` and `CONTAINER=` from `build.sh` with
-regular expressions, so each has to stay on a line of its own. Changing either, or anything under
+`tests/test_firmware_images.py` reads `IDF_VERSION=` and `CONTAINER=` from `build.sh`, and
+`PIOARDUINO_VERSION=` and `CONTAINER=` from `build-platformio.sh` and `platform =` from
+`platformio.ini`, with regular expressions, so each has to stay on a line of its own; the CI key
+of PlatformIO's core directory hashes the same lines. Changing any of them, or anything under
 `firmware/`, changes the CI cache key of the firmware job.
 
 ## Failure modes
@@ -661,6 +792,23 @@ regular expressions, so each has to stay on a line of its own. Changing either, 
 | `'idf.py --version' printed no ESP-IDF version` | no line starting `ESP-IDF ` in its output |
 | `IMAGE: the build wrote no flasher_args.json` | `idf.py` succeeded but left no `flasher_args.json`; no marker |
 
+`build-platformio.sh` dies with `firmware/build-platformio.sh: MESSAGE` on stderr and exit 1:
+
+| Message | Cause |
+|---|---|
+| `unknown image 'NAME'; the images are: arduino_shell` | an argument not in `IMAGES`; nothing written |
+| `ESP32TL_CONTAINER is set outside a container; unset it` | `ESP32TL_CONTAINER` set and no `/.dockerenv`; nothing written |
+| `ESP32TL_IN_PLACE is 'VALUE', not 0 or 1; run the script on the host` | the container side started without the host's `ESP32TL_IN_PLACE`; nothing written |
+| `PIO_LOCAL=1 needs PlatformIO's pio on PATH` | `PIO_LOCAL=1` without `pio` on `PATH`; nothing written |
+| `needs Docker, or PIO_LOCAL=1 to build with a local PlatformIO` | no `docker` on `PATH`; nothing written |
+| `the Docker daemon is not reachable ('docker info' failed); is Docker running?` | `docker info` failed; nothing written |
+| `'pio --version' printed no PlatformIO Core version` | no line starting `PlatformIO Core, version ` in its output |
+| `IMAGE: PROJECT/platformio.ini sets no platform` | no `platform =` line at the start of a line |
+| `IMAGE: the build wrote no firmware.bin` | `pio run` succeeded but left no `firmware.bin`; no marker |
+
+A failing `pip install` or `pio run` ends it with its exit code, no marker and the record kept, if
+pio did not remove it.
+
 A failing `idf.py` ends the script with its exit code (`set -e`), its own output, no marker and the
 record kept. A failing `docker run` (a pull that fails, a mount refused) ends it with Docker's exit
 code.
@@ -674,7 +822,12 @@ code.
   cannot read the pin.
 
 A local build passes with the `UserWarning` `IMAGE was built with a local ESP-IDF VERSION, not in
-CONTAINER`.
+CONTAINER`. For a PlatformIO image, `platformio_build` fails with `DIR holds no finished build: run
+make firmware`, `IMAGE was built with PLATFORM, not PINNED_PLATFORM: run make firmware` (a local
+build too), `IMAGE was built in CONTAINER (PlatformIO Core VERSION), not in PINNED (PINNED_VERSION):
+run make firmware` or `firmware/build-platformio.sh no longer sets PIOARDUINO_VERSION= and
+CONTAINER= on lines of their own`, and passes a local build with the warning `IMAGE was built with a
+local PlatformIO Core VERSION, not in CONTAINER`.
 
 ## Tests
 
@@ -728,6 +881,32 @@ is flashed there. `test_ota_state_has_a_factory_app_two_slots_and_the_initial_ot
 `test_bt_spp_initiator_psram_is_the_example_with_bluedroid_allocating_from_psram` checks that
 `bt_spp_initiator_psram` has the same options of Classic and SPP, `SPIRAM`, `SPIRAM_USE_MALLOC`
 and `BT_ALLOCATION_FROM_SPIRAM_FIRST` on, and the same ELF name.
+
+`tests/test_platformio_firmware_build.py` runs `build-platformio.sh` the same way, against a fake
+`docker` and a fake `pio` whose `run --project-dir DIR --environment ENV` writes
+`DIR/.pio/build/ENV/firmware.bin`: the early refusals (unknown image, no Docker, `PIO_LOCAL=1`
+without `pio`, `ESP32TL_CONTAINER` on the host), the `docker run` arguments exactly, with
+`ESP32TL_IN_PLACE=0` for another output directory and `ESP32TL_IN_PLACE=1` for the repository's
+`firmware/` (the fake builds nothing, so `firmware/` is left as it is), a local build
+into another `FIRMWARE_OUT` (the `pio` arguments, the copied `platformio.ini` and `src/main.cpp`, the
+record, the marker, the warning and the `built in` line), reuse of a build with the same record,
+removal of a `.pio/` with another, the record written again after the fake removed the build
+directory as pio does, no marker without `firmware.bin`, and a failed build removing an earlier
+marker. The host-side tests leave the repository's `.cache/platformio/` behind, empty if it was not
+there: the script creates it before `docker run`.
+
+`tests/test_firmware_images.py::test_arduino_shell_is_a_platformio_build_of_the_whole_flash` loads
+the real `arduino_shell` build with `esp32tl.build.load`, after the provenance check: kind
+`platformio`, chip `esp32`, `firmware.factory.bin` alone at `0x0`, the table at `0x8000`, the app
+image `firmware.bin` and the ELF `firmware.elf`.
+`test_arduino_shell_has_the_arduino_default_table_with_its_nvs` reads the table: `nvs` at `0x9000`,
+`0x5000` bytes, and `app0` an `ota_0` at `0x10000`. `tests/test_arduino_shell.py` runs it in the
+real runner: the banner, the core's `nvs_open failed: NOT_FOUND`, an empty greeting and `ready` on a
+flash with no settings, with no warning or error on the link; `greeting=hello from the test` after
+`board.nvs({"shell": {"greeting": ...}})`; and with `ssid` and `password` for the `wifi` fixture's
+access point, `listening on 10.64.0.2 port 80` within 30 s of the board's time, then a `GET /status`
+with `Connection: close` answered `200 OK` with `application/json` and `"requests": 1`, the
+connection closed by the device within 5 s, and `GET /status -> 200` on the console.
 
 `tests/test_timer_wake.py` runs the real `timer_wake` in the real runner: the three boots it
 prints, with their ROM reset reason and wake cause, `board.boots` with causes 1, 5 and 5, and
@@ -814,7 +993,11 @@ Not covered: the build inside the real container (only `make firmware` and the C
 run it), the `nmea_reader` and `gpio_echo` Kconfig options other than their defaults,
 a `GGA` or `RMC` whose time field is shorter than six digits, the container side of the script
 (`ESP32TL_CONTAINER` set inside a container), the `'idf.py --version'` failure, and the
-foreign-container branch of the provenance check, which only a stale real build reaches. The
+foreign-container branch of the provenance check, which only a stale real build reaches. Of the
+PlatformIO build: its container side (the `penv/` install, `ESP32TL_IN_PLACE` and `pio` there),
+the `'pio --version'` and `sets no platform` failures, a build in place with a local `pio`, and
+the `help`, `greeting`, `uptime` and `wifi` commands of `arduino_shell`, which no test can send
+while the console has no `write`. The
 timeout reason of `requires_docker` is untested.
 
 ## See also

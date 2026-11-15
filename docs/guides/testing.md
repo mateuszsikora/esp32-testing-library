@@ -155,7 +155,9 @@ A lower bound, at least `AT_LEAST_S` of wall time, only grows on a slow host, an
 | `tests/test_cli.py` | `esp32tl run` and `esp32tl replay`: the arguments they refuse and the runs that cannot start (exit 2), in this process; runs of `hello_world`, `nmea_reader` and `gpio_echo` (the LilyGO profile's pull-down on RI) in a subprocess, a baud mismatch (exit 1) and Ctrl-C (exit 130), also before the runner connects, against a fake runner that never does; the profile's `--psram-mb`, against a fake runner that prints its arguments | The refusals nothing beyond the package; the runs the built images, the runner and the ROM ELF |
 | `tests/test_boards.py` | The board profiles esp32tl ships, the profile schema's refusals, the capability declaration and the requests it refuses | The package installed |
 | `tests/test_firmware_build.py` | `firmware/build.sh` run against a fake `docker` and a fake `idf.py` that record how they were called; the `requires_docker` marker | Neither Docker nor ESP-IDF; milliseconds |
-| `tests/test_firmware_images.py` | The `hello_world`, `nmea_reader`, `gpio_echo`, `sdspi`, `sd_remount`, `nvs_reader`, `persistence`, `ota_state`, `modem_recovery`, `pppos_client`, `mqtt_session`, `http_request`, `http_server` and `bt_spp_initiator` images as `make firmware` built them: target `esp32`, bootloader at `0x1000`, partition table at `0x8000`, app at `0x10000`, the ELF; `nmea_reader`'s UART settings, `gpio_echo`'s pins, `sdspi`'s SD card pins and `http_request`'s default Wi-Fi SSID and passphrase in their `sdkconfig` | The built images |
+| `tests/test_platformio_firmware_build.py` | `firmware/build-platformio.sh` run against a fake `docker` and a fake `pio` that record how they were called | Neither Docker nor PlatformIO; milliseconds |
+| `tests/test_arduino_shell.py` | The `arduino_shell` image, Arduino-ESP32 built by PlatformIO, loaded from `.pio/build/esp32dev/`: its banner, a `Preferences` value the test wrote with `board.nvs`, and `GET /status` from its `WebServer` once it joined the `wifi` fixture's access point | The built `arduino_shell` image, the runner and the ROM ELF; about 1.5 s of wall time for the file on an arm64 Mac |
+| `tests/test_firmware_images.py` | The `hello_world`, `nmea_reader`, `gpio_echo`, `sdspi`, `sd_remount`, `nvs_reader`, `persistence`, `ota_state`, `modem_recovery`, `pppos_client`, `mqtt_session`, `http_request`, `http_server` and `bt_spp_initiator` images as `make firmware` built them: target `esp32`, bootloader at `0x1000`, partition table at `0x8000`, app at `0x10000`, the ELF; `nmea_reader`'s UART settings, `gpio_echo`'s pins, `sdspi`'s SD card pins and `http_request`'s default Wi-Fi SSID and passphrase in their `sdkconfig`; the `arduino_shell` PlatformIO build, loaded by `esp32tl.build`: `firmware.factory.bin` at `0x0`, the table's `nvs` at `0x9000` and `app0` at `0x10000` | The built images |
 | `tests/test_platformio_build.py` | PlatformIO build directories ([builds](../features/builds-technical.md#tests)): made of synthetic images, the files at the platform's offsets or `firmware.factory.bin` at `0x0`, the partition table, the hash, the ELF, the chip check, every refusal, serial's refusal, `board.nvs` and `board.flash`'s table; made of built images, `nvs_reader` run with and without `firmware.factory.bin` through `@pytest.mark.app_path(".", build_dir=".pio/build/esp32")`, and `esp32tl run --build-dir` on `hello_world` | Nothing beyond the package for the synthetic ones; the built `nvs_reader` and `hello_world` images, the runner and the ROM ELF for the runs |
 | `tests/test_flash.py` | Partition tables, NVS value validation, blobs above 64 KiB, UTF-8 page boundaries and CRCs, real generator, pre-boot overrides and errors; reading NVS and OTA data from a snapshot: a round trip through the generator, and pages written by hand for page order, the state bitmap, repeated entries and what a power cut leaves | Python dependencies only |
 | `tests/test_flash_snapshot.py` | `board.flash()` on `persistence`: `boots` after a reset, after a power-off and after `RunEnded`, the board's time and turns unmoved, a partition's bytes, what it refuses, a run that left no file | The built `persistence` image, runner and ROM ELF |
@@ -206,26 +208,29 @@ A lower bound, at least `AT_LEAST_S` of wall time, only grows on a slow host, an
 patches the app image to print `Hello WORLD!`, fixes its checksum and SHA-256, and runs
 `tests/test_hello_world.py` on it: that test must fail there, after the image has run.
 
-A missing image fails the tests that need it rather than skipping them:
-`<build> holds no finished build: run make firmware` from `tests/test_firmware_images.py`,
-the runs of `tests/test_cli.py`, the `pytester` tests of `tests/test_gnss_fixture.py` and
+A missing image fails the tests that need it rather than skipping them: `<build> holds no finished
+build: run make firmware` from `tests/test_firmware_images.py`, the runs of `tests/test_cli.py`, the
+`pytester` tests of `tests/test_gnss_fixture.py` and
 `test_hello_world_fails_on_an_image_that_prints_something_else`,
 `test_nvs_reader_built_by_platformio_runs_as_it_is` and `test_esp32tl_run_runs_a_platformio_build`
-in `tests/test_platformio_build.py`,
-and the backend's `esp32sim: <build> holds no ESP-IDF or PlatformIO build: no flasher_args.json and no firmware.bin` from
-`tests/test_hello_world.py`, `tests/test_nmea_reader.py`, `tests/test_nmea_reader_model.py`,
-`tests/test_gpio_echo.py`, `tests/test_modem_recovery.py`, `tests/test_sdspi.py`, `tests/test_sd_remount.py`, `tests/test_nvs_reader.py`, `tests/test_power.py`,
-`tests/test_http_request.py`, `tests/test_mqtt_session.py`, `tests/test_bt_spp_initiator.py`,
-`tests/test_determinism.py` and `test_a_replay_reaches_nmea_reader_on_the_gnss_route`.
-`tests/test_firmware_images.py` also fails
-on an image built in a container other than the one `firmware/build.sh` pins
-(`<image> was built in <container> (ESP-IDF <version>), not in <pinned> (<version>): run make firmware`),
-and passes an `IDF_LOCAL=1` build with a warning. A missing runner or ROM ELF fails with
-`esp32sim: no runner at <path>: run make setup, or set ESP32TL_RUNNER` or
-`esp32sim: no ROM ELF at <path>: run make setup, or set ESP32TL_ROM`.
+in `tests/test_platformio_build.py`, and the backend's `esp32sim: <build> holds no ESP-IDF or
+PlatformIO build: no flasher_args.json and no firmware.bin` from `tests/test_arduino_shell.py`
+(build `firmware/arduino_shell/.pio/build/esp32dev`), `tests/test_hello_world.py`,
+`tests/test_nmea_reader.py`, `tests/test_nmea_reader_model.py`, `tests/test_gpio_echo.py`,
+`tests/test_modem_recovery.py`, `tests/test_sdspi.py`, `tests/test_sd_remount.py`,
+`tests/test_nvs_reader.py`, `tests/test_power.py`, `tests/test_http_request.py`,
+`tests/test_mqtt_session.py`, `tests/test_bt_spp_initiator.py`, `tests/test_determinism.py` and
+`test_a_replay_reaches_nmea_reader_on_the_gnss_route`. `tests/test_firmware_images.py` also fails on
+an image built in a container other than the one `firmware/build.sh` pins (`<image> was built in
+<container> (ESP-IDF <version>), not in <pinned> (<version>): run make firmware`), or, for
+`arduino_shell`, than the one `firmware/build-platformio.sh` pins, or with another platform than its
+`platformio.ini` names, and passes an `IDF_LOCAL=1` or `PIO_LOCAL=1` build with a warning. A missing
+runner or ROM ELF fails with `esp32sim: no runner at <path>: run make setup, or set ESP32TL_RUNNER`
+or `esp32sim: no ROM ELF at <path>: run make setup, or set ESP32TL_ROM`.
 
 In `tests/test_firmware_build.py`, `test_build_refuses_esp32tl_container_set_on_the_host` skips
-with `this suite runs in a Docker container` when `/.dockerenv` exists.
+with `this suite runs in a Docker container` when `/.dockerenv` exists, and so does
+`test_refuses_esp32tl_container_set_on_the_host` in `tests/test_platformio_firmware_build.py`.
 
 ### Modem validation
 

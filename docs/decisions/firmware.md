@@ -389,3 +389,89 @@ debug information.
 **Rejected:** a cache kept between runs, on a volume or in the Actions cache, for now, because it
 needs a directory on hp600g1 or a cache entry to manage, and hits within a container may be enough;
 it measured 872 of 874 for a rebuild of one image in a new container, and can be added to this.
+
+## The Arduino image is built with pioarduino in a pinned Python container
+
+Status: decided (#193)
+
+Every other image is an ESP-IDF build. A firmware a consumer builds with PlatformIO on the
+Arduino-ESP32 core takes other driver paths (`HardwareSerial` on UART0, `Preferences`, `WiFi`,
+`WebServer`), so `arduino_shell` is a PlatformIO project that takes them, and
+`firmware/build-platformio.sh` builds it the way `build.sh` builds the others: in a container
+pinned by digest, with a record of how in `esp32tl-build.json` and `esp32tl-built` once it
+finished. Three pins make the build, two of them by name only:
+
+- the container, `python:3.13-bookworm`, pinned by the digest of its multi-arch index, so an
+  arm64 Mac runs it natively;
+- PlatformIO Core, `pioarduino==6.2.0` from PyPI, `PIOARDUINO_VERSION` in the script, installed
+  into `penv/` of PlatformIO's core directory, where PlatformIO's own installer puts it;
+- pioarduino's espressif32 platform, by its release URL in the project's `platformio.ini`:
+  `55.03.312-1`, Arduino-ESP32 3.3.12 on ESP-IDF 5.5.5. Its `platform.json` pins the framework and
+  the toolchains by URL. A URL pins a name, not content: a release asset can be replaced under the
+  same URL, and PlatformIO checks no checksum of what it downloads. Only the container is pinned by
+  content.
+
+A record that differs from the build about to start removes the project's `.pio/`, as `build.sh`
+removes a build directory, and the build writes the record again when it finishes, because
+PlatformIO itself removes `.pio/build/` when `platformio.ini` changes.
+
+**Rejected:** PlatformIO's own `platformio` package, because the platform installs
+`pioarduino>=6.2.0` into the same `penv/` at its first build (`python_deps` in
+`builder/penv_setup.py`), and both packages are the `platformio` module. `pioarduino==6.2.0.post1`,
+the newest, because the platform's engine check reads it as the pre-release `6.2.0-post.1` and
+refuses it: `IncompatiblePlatform: Development platform 'espressif32' is not compatible with
+PlatformIO Core v6.2.0-post.1 and depends on PlatformIO Core >=6.2.0.` `python:3.13-slim-bookworm`,
+because it has no git, without which the platform stops: `Git is needed for Platform espressif32 to
+work.` An image of this repository's own, with PlatformIO and the toolchains installed, because its
+digest pins nothing until it is pushed to a registry, and building it on each machine would not
+give the same image; the core directory kept between builds saves the same downloads.
+
+**Not pinned:** the dependencies `pip` installs with `pioarduino`, which it names by ranges
+(`click<8.4,>=8.0.4`, `requests==2.*`, `starlette<2,>=1.3.1` and others); the other Python packages
+the platform installs into `penv/` at its first build, which `penv_setup.py` names with lower
+bounds only (`esptool`, `cryptography`, `littlefs-python` and others); and the content behind the
+platform's URLs. The packages stay in the core directory, so a machine keeps what its first build
+installed, and a new core directory may get newer ones. Checking the platform's archive by SHA-256
+would need the script to download it in PlatformIO's place.
+
+**Postponed:** pinning those by content, a hashed requirements file for `penv/` and checksums for the
+platform's archives, until a change behind one of them breaks a build.
+
+## pio runs in the Arduino image's own directory, through the writable /out
+
+Status: decided (#193)
+
+`pio run` refuses a project directory it cannot write:
+`Error: Invalid value for '-d' / '--project-dir': Path '/project/firmware/arduino_shell' is not
+writable.` So it runs in `/out/arduino_shell`, which is the project itself when `FIRMWARE_OUT` is
+`firmware/`, as `make` always has it, and a copy of the project's `platformio.ini` and `src/`
+otherwise. The host decides which, comparing the output directory with the repository's
+`firmware/` by name, and passes `ESP32TL_IN_PLACE` to the container, which refuses to start
+without it. The build directory is then the project's `.pio/build/esp32dev/`, where a PlatformIO
+user has it and from which the tests load it as it is (#192). Of the project's directory, the build
+writes only `.pio/`, which git ignores.
+
+**Rejected:** a copy under `/out` in every case, as for `http_request`, because the build would not
+be in the project's `.pio/`; and `PLATFORMIO_WORKSPACE_DIR` pointing into `/out`, because pio checks
+that the project directory is writable all the same. The container telling the two apart itself,
+with `test -ef` on `/project/firmware/arduino_shell/platformio.ini` and
+`/out/arduino_shell/platformio.ini`: it works on Linux and on Docker Desktop's file sharing, but a
+file system that gave the two mounts different device numbers would make the copy remove the
+project's `src/`, uncommitted changes with it.
+
+## PlatformIO's core directory is .cache/platformio/
+
+Status: decided (#193)
+
+The host side mounts the repository's `.cache/platformio/` as `/platformio`, with
+`PLATFORMIO_CORE_DIR=/platformio`: PlatformIO Core, the platform, the framework and the toolchains
+stay there between builds, and `make clean` keeps them, as it keeps the ROM ELF. Measured on an
+arm64 Mac (Docker Desktop, 3 CPUs) on 15 November 2026: the first build took 8m52s and left 5.7 GB;
+a build from scratch with the core directory there took 1m16s to 1m21s, also with `--network none`;
+an incremental one 13 s. Of the core directory, `dist/` (the downloaded archives) and `tools/` (a
+copy of the toolchains the platform also installs into `packages/`) were removed and a build from
+scratch downloaded nothing again, offline or online; without them the directory is 4.3 GB, about
+1.4 GB compressed with zstd.
+
+**Rejected:** the user's `~/.platformio`, because on a Mac it holds macOS packages that the
+container's Linux ones would mix with, and the build would change the developer's own install.

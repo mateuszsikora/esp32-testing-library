@@ -104,14 +104,15 @@ The firmware key hashes `firmware/**`, the `Makefile` and `ci.yml`; the runner k
 digest and each image's project, and `runner/` holds the esp32sim pin, the toolchain and the
 profiles, so a change to any of them is a new key. Since a tarball saved under a key stays there,
 the `firmware` job checks it before saving: every image must have `esp32tl-built`,
-`esp32tl-build.json`, `flasher_args.json`, `config/sdkconfig.json`, `project_description.json`,
-each flash image `flasher_args.json` names and the ELF `project_description.json` names
-(`app_elf`). The tarball holds only what `IdfApp` reads: 15 MB for `hello_world` against 116 MB
-for the whole build directory, about 1 MB once the cache compresses it. The cost of hashing the
-whole workflow is that any change to `ci.yml` or the `Makefile`, a comment included, rebuilds the
-firmware (about 3 min on hp600g1 when this was decided, about 13 min with 15 projects now) and the
-runner. If that starts to hurt, the packing can move into a script whose hash replaces the
-workflow's.
+`esp32tl-build.json`, `flasher_args.json`, `config/sdkconfig.json`, `project_description.json`, each
+flash image `flasher_args.json` names and the ELF `project_description.json` names (`app_elf`); a
+PlatformIO image, the files of its own list
+([below](#the-arduino-image-is-built-in-the-firmware-job)). The tarball holds only what the backend
+reads: 15 MB for `hello_world` against 116 MB for the whole build directory, about 1 MB once the
+cache compresses it. The cost of hashing the whole workflow is that any change to `ci.yml` or the
+`Makefile`, a comment included, rebuilds the firmware (about 3 min on hp600g1 when this was decided,
+about 13 min with 15 projects now) and the runner. If that starts to hurt, the packing can move into
+a script whose hash replaces the workflow's.
 
 **Rejected:** keys over a hand-picked list of files, because a key that misses an input serves a
 stale build, and for the runner skips its tests, without any sign of it.
@@ -271,3 +272,51 @@ checks is that one machine runs one test the same way twice. It restores the sam
 **Rejected:** the `test` matrix's platforms and Pythons, because every extra entry queues on the
 one self-hosted machine and checks nothing more; comparing runs across machines, because nothing
 claims that two machines give the same run.
+
+## The Arduino image is built in the firmware job
+
+Status: decided (#193)
+
+`make firmware` builds `arduino_shell` after the ESP-IDF images, so the `firmware` job builds it,
+packs it into the same tarball under the same key and checks it before saving: `esp32tl-built`,
+`esp32tl-build.json`, `firmware.bin`, `firmware.factory.bin`, `firmware.elf`, `bootloader.bin` and
+`partitions.bin` in `.pio/build/esp32dev/`. The first run on hp600g1, for #203 on 15 November 2026,
+had nothing cached, and the job took 33m35s. Its build step took 28m20s: 15m31s for the ESP-IDF
+images, 6m57s for `arduino_shell` and 5m51s for the examples and the packing. Of the 6m57s, pio
+reported 377 s for its run, the downloads of the platform, the framework and the toolchains
+included; the rest went on pulling `python:3.13-bookworm` and installing PlatformIO Core. Saving the
+core directory at the end of the job took 4m29s more. That leaves 26 minutes to the limit, so the
+job's 60 minutes cover a cold run up to about 1.8 times slower. The next run, for 58637a3, restored
+the `platformio-` entry: restoring its 1912 MB took 3m54s, `arduino_shell` built from scratch in 48
+s (pio reported 44.9 s) without a download or an install, nothing was saved at the end, and the job
+took 26m56s.
+
+**Rejected:** a job of its own, because it would need its own key, tarball and restore and unpack
+steps in `test` and `determinism`, and hp600g1 runs its jobs one after another, so the images would
+not be ready sooner. Its own key would spare the ESP-IDF images a rebuild when only the sketch
+changes; the firmware key hashes `firmware/**` as a whole, and so it does for every other image.
+
+## PlatformIO's core directory is cached under the key of its pins
+
+Status: decided (#193)
+
+On a miss of the firmware key, the `firmware` job restores `.cache/platformio/`, without `dist/`
+and `tools/`, which a build does not need
+([firmware.md](firmware.md#platformios-core-directory-is-cacheplatformio)), under
+`platformio-` and the SHA-256 of the lines that set the pins: `CONTAINER=` and
+`PIOARDUINO_VERSION=` in `firmware/build-platformio.sh` and `platform =` in each
+`firmware/*/platformio.ini`, then the runner's OS and architecture. `actions/cache` saves it at the
+end of the job and nothing checks it, as for the ROM ELF: a miss only downloads the packages again.
+The first entry, for Linux X64, was 2,005,264,223 bytes, about 2.0 GB of the 10 GB the
+repository's cache has (1.4 GB for the same directory on an arm64 Mac); on 15 November 2026,
+before it, the cache held 2.1 GB in 54 entries, the largest firmware tarballs
+61 MB. A change of a pin leaves the old entry for 7 days beside the new one. Should the cache
+pass 10 GB, GitHub evicts the entries used least recently, which can be firmware or runner
+tarballs a test job then misses.
+
+**Rejected:** `hashFiles` over `firmware/build-platformio.sh` and the `platformio.ini` files,
+because a change to a comment or a build flag there would download every package again. A directory
+outside the workspace on hp600g1, which would survive between runs with no cache, because CI moves
+to GitHub-hosted runners before the repository is public
+([above](#ci-moves-to-github-hosted-runners-before-the-repository-goes-public)), and nothing would
+key it by the pins.
