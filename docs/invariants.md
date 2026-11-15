@@ -1587,9 +1587,9 @@ that references to its number keep their meaning.
      `tests/test_platformio_build.py::test_a_build_that_enables_flash_encryption_or_secure_boot_is_refused`
 - **235.** On serial, a PlatformIO build is flashed as esp32sim runs it: the build's files at the
      offsets of 230, with the flash mode, frequency and size of their headers kept, and the table's
-     otadata partition erased when no file of the build covers it, and then the first sector of a
-     `factory` partition no file of the build covers; an ESP-IDF build keeps pytest-embedded's
-     `IdfApp`.
+     otadata partition erased when no file of the build covers it, and, unless the build's own
+     otadata selects a slot, the first sector of a `factory` partition no file of the build
+     covers; an ESP-IDF build keeps pytest-embedded's `IdfApp`.
      `tests/test_platformio_build.py::test_serial_flashes_the_files_esp32sim_runs_with_the_otadata_erased`,
      `tests/test_platformio_build.py::test_serial_flashes_a_factory_image_whole_from_0x0`,
      `tests/test_platformio_build.py::test_a_table_without_otadata_gets_none`,

@@ -10,6 +10,7 @@ import io
 import json
 import subprocess
 import sys
+import tempfile
 import warnings
 from pathlib import Path
 from unittest.mock import Mock
@@ -468,7 +469,13 @@ def test_serial_flashes_a_factory_image_whole_from_0x0(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     directory = pio_build(tmp_path, factory=True)
-    app = PlatformioApp(str(tmp_path), str(directory))
+
+    def no_directory(**kwargs: object) -> str:
+        raise AssertionError("nothing is erased: no directory for it")
+
+    with monkeypatch.context() as patched:
+        patched.setattr(tempfile, "mkdtemp", no_directory)
+        app = PlatformioApp(str(tmp_path), str(directory))
     # the otadata is the factory image's, boot_app0.bin's: nothing else is written there
     [(command, _)] = written(app, monkeypatch)
     assert command == [
@@ -510,10 +517,19 @@ def test_a_factory_partition_the_build_does_not_fill_is_not_booted(
     if factory:
         # boot_app0.bin's otadata selects ota_0: the factory partition is not tried
         assert offsets(command) == ["0x0"]
+        # a framework = espidf build's factory image holds an erased ota_data_initial.bin, which
+        # selects nothing: the bootloader tries factory first
+        image = directory / "firmware.factory.bin"
+        contents = bytearray(image.read_bytes())
+        contents[0xE000:0x10000] = b"\xff" * 0x2000
+        image.write_bytes(bytes(contents))
+        [(command, files)] = written(PlatformioApp(str(tmp_path), str(directory)), monkeypatch)
+        assert offsets(command) == ["0x0", "0xf70000"]
+        assert files[command[command.index("0xf70000") + 1]] == b"\xff" * 0x1000
     else:
         assert offsets(command) == ["0x1000", "0x8000", "0xe000", "0x10000", "0xf70000"]
         erased = command[command.index("0xf70000") + 1]
-        assert Path(erased).name == "factory.bin"
+        assert Path(erased).name == "factory-erased.bin"
         # its first sector, where an image's header is
         assert files[erased] == b"\xff" * 0x1000
 
@@ -558,7 +574,7 @@ def test_serial_runs_a_platformio_build(pytester: pytest.Pytester, factory: bool
         assert flashed == [
             ["0x1000", "bootloader.bin"],
             ["0x8000", "partitions.bin"],
-            ["0xe000", "otadata.bin"],
+            ["0xe000", "otadata-erased.bin"],
             ["0x20000", "firmware.bin"],
         ]
     assert recording.read(pytester.path / "run.jsonl").header.app_sha256 == digest

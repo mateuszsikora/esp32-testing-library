@@ -3723,8 +3723,13 @@ application left there would run instead of the one the test selected, while the
 passes on the local file. The first sector holds the image header, which is all the bootloader
 needs to find the partition not bootable, as on esp32sim; a launcher on the board is lost. An
 ESP-IDF build erases the otadata the same way, with `ota_data_initial.bin`, and so does a
-`framework = espidf` build's `pio run -t upload`. A factory image holds its own otadata,
-`boot_app0.bin`'s, which selects `ota_0`, so `factory` is left alone with it.
+`framework = espidf` build's `pio run -t upload`. Whether `factory` is left alone is decided by
+the build's otadata bytes, not by a file covering them: an Arduino build's `firmware.factory.bin`
+holds `boot_app0.bin`'s, which selects `ota_0`, so the bootloader does not try `factory`; a
+`framework = espidf` build's holds an erased `ota_data_initial.bin`, which selects nothing, so
+`factory` gets its erased first sector. A selecting otadata is told from an erased one by its
+bytes not being all `0xFF`, since those are the two otadata pioarduino writes; checking the CRC of
+an `ota_select` entry would tell more than is needed.
 
 A PlatformIO build whose `config/sdkconfig.json` sets `SECURE_FLASH_ENC_ENABLED` or `SECURE_BOOT`
 is refused on both backends, as an ESP-IDF build that asks for encryption is: its bootloader would

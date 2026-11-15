@@ -44,8 +44,9 @@ the directory.
 `firmware.bin`, and then one of these:
 
 - `firmware.factory.bin`, which pioarduino's builds have: the whole flash from `0x0`, with the
-  bootloader at `0x1000`, the partition table at `0x8000`, the otadata of `boot_app0.bin` at
-  `0xe000`, which selects `ota_0`, and the application. The runner gets this one file at `0x0`.
+  bootloader at `0x1000`, the partition table at `0x8000`, the otadata at `0xe000` (in an Arduino
+  build `boot_app0.bin`'s, which selects `ota_0`; in a `framework = espidf` build an erased
+  `ota_data_initial.bin`), and the application. The runner gets this one file at `0x0`.
   It must hold `firmware.bin` where pioarduino puts it (below): that is the application a
   recording's `app_sha256` names.
 - Otherwise `bootloader.bin` and `partitions.bin`. The runner gets `bootloader.bin` at `0x1000`,

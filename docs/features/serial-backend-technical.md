@@ -39,14 +39,17 @@ the same indirect parametrisation. See [the user contract](serial-backend-user.m
    `Build` again through `load_app`, then sets what `IdfSerial` and `IdfDut` read of an `IdfApp`:
    - `flash_files`, the build's files at their offsets (`pytest_embedded_idf.app.FlashFile`, none
      encrypted), sorted by offset, plus erased files, `0xFF` bytes, where no file of the build
-     covers a partition's offset: `otadata.bin` at the table's otadata partition (type 1,
-     subtype 0), as long as the partition; and, unless a file of the build covers the otadata,
-     `factory.bin` at a `factory` partition (type 0, subtype 0), its first `SECTOR`, `0x1000`
-     bytes, where the bootloader reads the image header. A `firmware.factory.bin` covers the
-     otadata, so neither is written with it; `firmware.bin` covers `factory` when it is flashed
-     there. The files are in a `tempfile.mkdtemp` directory (`esp32tl-erased-*`) that a
-     `weakref.finalize` removes with the app, without the `ResourceWarning` of a
-     `TemporaryDirectory` cleaned up by the garbage collector;
+     covers a partition's offset: `otadata-erased.bin` at the table's otadata partition (type 1,
+     subtype 0), as long as the partition; and `factory-erased.bin` at a `factory` partition
+     (type 0, subtype 0), its first `SECTOR`, `0x1000` bytes, where the bootloader reads the image
+     header, unless the build's own otadata selects a slot: a file of the build covers the
+     otadata and its bytes there (`build.flash_bytes`, as far as that file goes) are not all
+     `0xFF`. A `firmware.factory.bin` covers the otadata: an Arduino build's holds
+     `boot_app0.bin`'s, and gets no erased file; a `framework = espidf` build's holds an erased
+     `ota_data_initial.bin`, and gets `factory-erased.bin`. `firmware.bin` covers `factory` when
+     it is flashed there. The files are in a `tempfile.mkdtemp` directory (`esp32tl-erased-*`),
+     made with the first of them, that a `weakref.finalize` removes with the app, without the
+     `ResourceWarning` of a `TemporaryDirectory` cleaned up by the garbage collector;
    - `flash_args`: `extra_esptool_args` `PLATFORMIO_ESPTOOL_ARGS`, `before` `default-reset`,
      `after` `hard-reset` and `stub` true, with `chip` the `Build`'s; `write_flash_args` `PLATFORMIO_WRITE_FLASH_ARGS`,
      `--flash-mode keep --flash-freq keep --flash-size keep`; `flash_files` by hexadecimal offset;
@@ -243,7 +246,10 @@ skips, failed reset with retry, disconnected open ports and a blocked reader rel
 `test_a_factory_partition_the_build_does_not_fill_is_not_booted` and
 `test_serial_erases_nvs_from_the_build_s_table` run pytest-embedded's own `IdfSerial.flash()` on a
 `PlatformioApp`, with `esptool.main` replaced, and check its command, the erased files' bytes, their
-removal with the app without a warning, and `--erase-nvs`'s `erase-region`;
+removal with the app without a warning, no directory for them when nothing is erased, and
+`--erase-nvs`'s `erase-region`; on a launcher's table, the factory partition's first sector is
+erased with separate files and with a factory image whose otadata is erased, as a
+`framework = espidf` build's, but not with one that holds `boot_app0.bin`'s;
 `test_serial_runs_a_platformio_build` runs the fixture chain with the fake port, with and without a
 factory image, and an `app_recording` of `firmware.bin`'s hash; `test_an_esp_idf_build_keeps_pytest_embedded_s_app`
 that an ESP-IDF build keeps `IdfApp`. `test_an_image_for_another_chip_is_refused_by_its_name` and

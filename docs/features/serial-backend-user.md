@@ -44,21 +44,26 @@ ROM ELF is needed for serial.
 A PlatformIO build is flashed as esp32sim runs it: `firmware.factory.bin` at `0x0`, or else
 `bootloader.bin` at `0x1000`, `partitions.bin` at `0x8000` and `firmware.bin` at the table's
 `ota_0` (at `0x10000` without one). esptool keeps the flash mode, frequency and size the images
-were built with. `firmware.factory.bin` holds its own otadata, `boot_app0.bin`'s, which selects
-`ota_0`. Without it, two parts of the flash are written erased, as they are on esp32sim, so that
-what an earlier firmware left on the board does not choose which application boots:
+were built with. Parts of the flash that no file of the build covers are written erased where
+esp32sim's flash is erased and what an earlier firmware left on the board could choose which
+application boots:
 
-- the table's otadata partition, all of it, which could name another slot;
+- the table's otadata partition, all of it, which could name another slot. An Arduino build's
+  `firmware.factory.bin` holds `boot_app0.bin`'s otadata, which selects `ota_0`, and a
+  `framework = espidf` build's an erased `ota_data_initial.bin`: either covers it;
 - the first sector (4 KiB) of a `factory` partition that `firmware.bin` is not in, as on
-  Arduino's `app3M_fat9M_fact512k_16MB.csv`: with the otadata erased the bootloader tries
-  `factory` before `ota_0`, and would boot a launcher or an older application left there. The
-  console then shows `boot: Factory app partition is not bootable` before the application starts,
-  as on esp32sim, and a launcher on the board no longer boots.
+  Arduino's `app3M_fat9M_fact512k_16MB.csv`, unless the build's own otadata selects a slot: with
+  the otadata erased the bootloader tries `factory` before `ota_0`, and would boot a launcher or
+  an older application left there. The console then shows
+  `boot: Factory app partition is not bootable` before the application starts, as on esp32sim,
+  and a launcher on the board no longer boots.
 
-An Arduino build's `pio run -t upload` writes `boot_app0.bin`'s otadata and leaves `factory` alone;
-a `framework = espidf` build's writes an erased `ota_data_initial.bin`, as here. So with separate
-files, on a table with `factory`, `esp_ota_get_boot_partition()` can name another partition than
-after an Arduino build's upload (see [builds](builds-user.md#what-each-kind-of-build-needs)).
+An Arduino build's `pio run -t upload` writes `boot_app0.bin`'s otadata, and a
+`framework = espidf` build's an erased `ota_data_initial.bin`; neither touches `factory`. So on a
+table with `factory`, `esp_ota_get_boot_partition()` can name another partition than after an
+Arduino build's upload of separate files, and a `framework = espidf` build boots `ota_0` here
+where its upload would leave a board's launcher in `factory` to boot
+(see [builds](builds-user.md#what-each-kind-of-build-needs)).
 Nothing else on the flash is erased: the NVS and the data partitions keep what the board had, for
 both kinds of build, unless pytest-embedded's `--erase-all` or `--erase-nvs` says otherwise.
 

@@ -26,7 +26,7 @@ from pytest_embedded.log import MessageQueue
 from pytest_embedded_idf.app import FlashFile, IdfApp
 from pytest_embedded_idf.dut import IdfDut
 
-from esp32tl import flash, recording
+from esp32tl import build, flash, recording
 from esp32tl.backends.clock import nanoseconds, seconds
 from esp32tl.backends.esp32sim import BackendError, load_app, refuse, route_wire
 from esp32tl.boards import BoardProfile, capabilities
@@ -114,8 +114,8 @@ ERASED = b"\xff"
 class PlatformioApp(IdfApp):
     """A PlatformIO build as pytest-embedded's `IdfSerial` flashes it: the build's files at their
     offsets (`esp32tl.build.platformio`), and, where no file of the build covers them, an erased
-    otadata partition and, when the otadata is not the build's own, an erased first sector of a
-    `factory` partition, as the flash of esp32sim has them. Otherwise what a board had there
+    otadata partition and, unless the build's own otadata selects a slot, an erased first sector
+    of a `factory` partition, as the flash of esp32sim has them. Otherwise what a board had there
     would choose the application it boots: an otadata naming another slot, or an image left in
     `factory`, which the bootloader tries before `ota_0` with the otadata erased. The erased files
     are in a temporary directory, not in the build directory, removed with the app.
@@ -154,20 +154,24 @@ class PlatformioApp(IdfApp):
         self.is_loadable_elf = False
         self.is_linux_elf = False
         files = [FlashFile(f.offset, str(f.path)) for f in self.build.flash_files]
-        erased = Path(tempfile.mkdtemp(prefix="esp32tl-erased-"))
-        weakref.finalize(self, shutil.rmtree, erased, True)
         otadata = [p for p in table.values() if (p.type, p.subtype) == (DATA, OTA_DATA)]
         factory = [p for p in table.values() if (p.type, p.subtype) == (APP, FACTORY)]
-        # With an otadata of the build's own, boot_app0.bin's in firmware.factory.bin, the
-        # bootloader boots the slot it names and a factory partition is not tried.
-        if any(self._covered(p.offset) for p in otadata):
+        # An otadata of the build's own that is not erased, boot_app0.bin's in an Arduino build's
+        # firmware.factory.bin, selects a slot, and the bootloader does not try factory. The
+        # erased ota_data_initial.bin of a framework = espidf build selects none.
+        if any(self._covered(p.offset) and not self._erased(p) for p in otadata):
             factory = []
+        directory: Path | None = None
         for p in otadata + factory:
-            if not self._covered(p.offset):
-                name = "otadata.bin" if p in otadata else "factory.bin"
-                size = p.size if p in otadata else min(SECTOR, p.size)
-                (erased / name).write_bytes(ERASED * size)
-                files.append(FlashFile(p.offset, str(erased / name)))
+            if self._covered(p.offset):
+                continue
+            if directory is None:
+                directory = Path(tempfile.mkdtemp(prefix="esp32tl-erased-"))
+                weakref.finalize(self, shutil.rmtree, directory, True)
+            name = "otadata-erased.bin" if p in otadata else "factory-erased.bin"
+            size = p.size if p in otadata else min(SECTOR, p.size)
+            (directory / name).write_bytes(ERASED * size)
+            files.append(FlashFile(p.offset, str(directory / name)))
         self.flash_files = sorted(files)
         self.flash_args = {
             "extra_esptool_args": {**PLATFORMIO_ESPTOOL_ARGS, "chip": self.build.chip},
@@ -175,6 +179,11 @@ class PlatformioApp(IdfApp):
             "flash_files": {hex(f.offset): f.file_path for f in self.flash_files},
         }
         self.flash_settings: dict[str, Any] = {**KEEP, "encrypt": False}
+
+    def _erased(self, partition: flash.Partition) -> bool:
+        """Whether the build's bytes of `partition`, as far as its file goes, are all erased."""
+        data = build.flash_bytes(self.build, partition.offset, partition.size)
+        return data.count(ERASED) == len(data)
 
     def _covered(self, offset: int) -> bool:
         return any(
