@@ -47,9 +47,10 @@
    `app_image` `firmware.bin`, `elf` `firmware.elf` when it is a file, `chip` `esp32`.
 
    What the chip then boots, with the ESP-IDF bootloader (`bootloader_utility_load_boot_image`):
-   with `boot_app0.bin`'s otadata, which `firmware.factory.bin` holds at `0xe000` (an entry of
-   `ota_seq` 1 and its CRC in the first sector), `ota_0`. With the otadata erased, as without
-   `firmware.factory.bin`, it starts from `factory` when the table has one, and, finding no image
+   with `boot_app0.bin`'s otadata, which an Arduino build's `firmware.factory.bin` holds at
+   `0xe000` (an entry of `ota_seq` 1 and its CRC in the first sector), `ota_0`. With the otadata
+   erased, as without `firmware.factory.bin` or in a `framework = espidf` build's, which holds an
+   erased `ota_data_initial.bin` there, it starts from `factory` when the table has one, and, finding no image
    there, goes on to the OTA slots, `ota_0` first; in a table without `factory` it boots `ota_0`.
    Either way the application runs from the partition it runs from on a board flashed by
    pioarduino. The otadata differs in one case: without `firmware.factory.bin`, on a table with
@@ -85,10 +86,12 @@ The PlatformIO file names are constants of `esp32tl/build.py`: `FIRMWARE` (`firm
 (`partitions.bin`), `ELF` (`firmware.elf`); the offsets `BOOTLOADER_OFFSET` (`0x1000`) and
 `TABLE_OFFSET` (`0x8000`).
 
-`firmware.factory.bin`, as pioarduino 55.03.39 writes it for the classic ESP32, is the whole flash
-from `0x0`: `bootloader.bin` at `0x1000`, `partitions.bin` at `0x8000`, the otadata of
-`boot_app0.bin` at `0xe000` and `firmware.bin` at `0x10000`, checked byte for byte on one
-consumer's build (#192). `boot_app0.bin` is in the framework's package, not in the build directory,
+`firmware.factory.bin`, as pioarduino 55.03.39 writes it for an Arduino build for the classic
+ESP32, is the whole flash from `0x0`: `bootloader.bin` at `0x1000`, `partitions.bin` at `0x8000`,
+the otadata of `boot_app0.bin` at `0xe000` and `firmware.bin` at `0x10000`, checked byte for byte
+on one consumer's build (#192). For a `framework = espidf` build pioarduino's ESP-IDF builder puts
+an erased `ota_data_initial.bin` of its own at the otadata instead (`frameworks/espidf.py`,
+read in pioarduino 55.03.312, not on a build). `boot_app0.bin` is in the framework's package, not in the build directory,
 which is why a build without `firmware.factory.bin` gets no otadata.
 
 ## Interfaces
