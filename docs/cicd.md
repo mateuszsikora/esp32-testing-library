@@ -35,8 +35,10 @@ settings, not settings applied by the workflow files:
   are enabled. Dependabot automatic security-update PRs remain disabled.
 - `main` requires a pull request, zero approving reviews, resolved review conversations,
   and all 25 CI checks from the GitHub Actions app (app ID `15368`). These are the eight
-  `firmware / firmware (...)` checks, two `runner / runner (...)` checks, twelve
-  `test (...)` checks, `determinism`, `lint` and `docs`, matching the job matrix below.
+  `firmware / firmware (...)` checks, `runner-linux / runner`, `runner-macos / runner`,
+  six `test-linux / test (...)` and six `test-macos / test (...)` checks, `determinism`,
+  `lint` and `docs`, matching the job matrix below. The 14 native-build and test context
+  names were updated for the separate platform calls; all 25 checks remain required.
   Strict status checks require the branch to be up to date with `main`. Protection applies
   to administrators too; force pushes and branch deletion are disabled. When renaming jobs
   or changing matrix entries, update the required check names in branch protection as well.
