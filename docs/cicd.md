@@ -18,18 +18,18 @@ one run waiting and cancel the others.
 ## Jobs
 
 GitHub-hosted macOS runners have no Docker, so the validation firmware is built once, in the
-pinned ESP-IDF and PlatformIO containers on the self-hosted Linux runner, and the runner crate once
+pinned ESP-IDF and PlatformIO containers on the GitHub-hosted Linux runner, and the runner crate once
 per platform.
 The test jobs then run only the runner and Python: they build nothing.
 
 | Job | Runs on | What it does |
 |---|---|---|
-| `firmware` | self-hosted Linux | `make firmware examples` once per content of `firmware/`, `examples/`, the workflow and the `Makefile`, the Arduino image with PlatformIO's core directory restored from the cache; fetches the ROM ELF once per revision of `scripts/fetch-rom-elf` |
-| `runner` | self-hosted Linux; `macos-latest` only when the repository is public | `make build-runner test-runner`, once per content of `runner/` (its sources, its esp32sim pin, its toolchain), the workflow and the `Makefile` |
-| `test` | self-hosted Linux; `macos-latest` only when the repository is public; Python 3.11, 3.13, 3.14; shards 1/4 to 4/4 | Unpacks the images and the runner, restores the ROM ELF, and runs one shard of pytest's suite; builds nothing |
-| `determinism` | self-hosted Linux; Python 3.11 | Unpacks the images and the runner as `test` does, and runs `make determinism`: the determinism tests twice, the two runs compared |
-| `lint` | self-hosted Linux; Python 3.11 | `make lint`, clippy included |
-| `docs` | self-hosted Linux; pull requests only | `make docs-check` against the pull request's base branch |
+| `firmware` | `ubuntu-24.04` (x64) | `make firmware examples` once per content of `firmware/`, `examples/`, the workflow and the `Makefile`, the Arduino image with PlatformIO's core directory restored from the cache; fetches the ROM ELF once per revision of `scripts/fetch-rom-elf` |
+| `runner` | `ubuntu-24.04` (x64); `macos-15` (ARM64) | `make build-runner test-runner`, once per content of `runner/` (its sources, its esp32sim pin, its toolchain), the workflow and the `Makefile` |
+| `test` | `ubuntu-24.04` (x64); `macos-15` (ARM64); Python 3.11, 3.13, 3.14; shards 1/4 to 4/4 | Unpacks the images and the runner, restores the ROM ELF, and runs one shard of pytest's suite; builds nothing |
+| `determinism` | `ubuntu-24.04` (x64); Python 3.11 | Unpacks the images and the runner as `test` does, and runs `make determinism`: the determinism tests twice, the two runs compared |
+| `lint` | `ubuntu-24.04` (x64); Python 3.11 | `make lint`, clippy included |
+| `docs` | `ubuntu-24.04` (x64); pull requests only | `make docs-check` against the pull request's base branch |
 
 `test` and `determinism` wait for `firmware` and `runner`. `lint` and `docs` need nothing from the
 other jobs. The `runner` and `test` matrices do not fail fast: one platform or Python version
@@ -37,22 +37,38 @@ failing does not cancel the others.
 
 ## Where the jobs run
 
-Every Linux job runs on the self-hosted runner, hp600g1 (labels `self-hosted`, `Linux`, `X64`),
-which keeps the 7 GB ESP-IDF image and the 1 GB `python:3.13-bookworm` image of the PlatformIO
-build between runs. It is a single machine, so its jobs queue one
-after another there.
+All Linux jobs use the standard `ubuntu-24.04` image (x64). The `runner` and `test`
+matrices always include `macos-15` (Apple Silicon, ARM64), including in private repositories.
+These labels and architectures are listed for both repository visibilities in
+[GitHub's standard runner reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
+(checked 15 November 2026). No larger runners are used. Each job checks `RUNNER_OS`,
+`RUNNER_ARCH` and `uname -m` before using caches. There are two native runner builds and
+24 pytest jobs: two platforms × three Python versions × four shards.
 
-While the repository is private, minutes on GitHub-hosted runners are limited, and macOS minutes
-count ten times. So every job that can runs on hp600g1, even one that needs nothing from it, such
-as `lint`, and the macOS jobs do not run. The `runner` and `test` matrices read
-`github.event.repository.private`, which drops `macos` from the platforms; making the repository
-public turns the macOS jobs back on with no change to the workflow.
+Hosted jobs use fresh VMs. The
+[Ubuntu image inventory](https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2404-Readme.md)
+supplies Docker Engine, make and the native compiler; the
+[macOS image inventory](https://github.com/actions/runner-images/blob/main/images/macos/macos-15-arm64-Readme.md)
+supplies Xcode command-line tools, make and Homebrew. Python is selected with
+`actions/setup-python`; rustup installs the pinned toolchain when needed.
+The Linux `firmware` job on a cache miss and every Linux `test` job run
+`sudo systemctl start docker` and `docker info` as the job user. An unavailable daemon fails
+the job before pytest. Currently only generated marker tests use `requires_docker`; this also
+keeps the daemon available for future container tests. macOS has no Docker; the existing
+`requires_docker` marker still skips tests requiring it there.
+Every `test` job installs mtools (apt on Linux, Homebrew on macOS) and checks all five
+commands: `mformat`, `mcopy`, `mdir`, `mtype`, `mmd`.
 
-Tests marked `requires_docker` can run only on the self-hosted Linux runner, which has Docker; on
-macOS they skip ([guides/testing.md](guides/testing.md#requires_docker-and-requires_mtools)).
-Tests marked `requires_mtools` skip without mtools too, so the `test` job makes sure it is there
-([`test`](#test)): on hp600g1 mtools is installed by hand, once, like Docker
-(`sudo apt-get install mtools`).
+The firmware job frees space on a cache miss by removing unused preinstalled .NET, Android
+and Haskell SDK directories (`/usr/share/dotnet`, `/usr/local/lib/android`, `/opt/ghc`,
+`/usr/local/.ghcup`), then reports free space with `df -h .`. The pinned containers,
+PlatformIO packages and all project build trees must fit on a standard hosted disk; Docker
+images are pulled afresh. TODO(owner): measure peak disk use and cold-build duration on the
+hosted VM; the existing 60-minute firmware and 15-minute test limits remain unchanged.
+
+Private runs consume the account's hosted allowance and may incur charges. Publishing the
+repository needs no workflow switch: both platforms already run. Required checks / branch
+protection can be configured separately after publication.
 
 ## How the builds reach the test jobs
 
@@ -83,6 +99,14 @@ a miss only downloads them again.
 | `build/ci/runner.tar` | `runner-` and the hash of `runner/**`, `Makefile`, `.github/workflows/ci.yml`, then the runner's OS and architecture | `runner`, once per platform | Fails the job |
 | `.cache/esp-rom-elfs` | `rom-elf-` and the hash of `scripts/fetch-rom-elf` | `firmware` | No failure: `make rom-elf` downloads the ELF |
 | `.cache/platformio`, without `dist/` and `tools/` | `platformio-` and the SHA-256 of the lines `CONTAINER=` and `PIOARDUINO_VERSION=` of `firmware/build-platformio.sh` and `platform =` of each `firmware/*/platformio.ini`, then the runner's OS and architecture | `firmware`: restored when the firmware key misses, saved when the `platformio-` key missed too | Not restored there; a miss in `firmware` downloads PlatformIO Core, the platform, the framework and the toolchains again |
+
+Firmware and ROM contain ESP32 data, not host executables, so Linux and macOS use the same
+entries. Both hosted systems use zstd for Actions cache compression. Native runner entries end in
+`Linux-X64` or `macOS-ARM64`, matching their consumers, including Linux determinism.
+PlatformIO's tools stay in their `Linux-X64` cache and are never restored on macOS.
+The workflow hash invalidates firmware and runner tarballs for this migration. Cache paths,
+key structure, exact restores and post-save verification stay unchanged; changing to artifacts
+is not necessary for hosted execution.
 
 A cache entry unused for 7 days is evicted. A test job re-run on its own after that fails on the
 cache miss: re-run all jobs instead, which builds again. A bad tarball saved under a key stays there
@@ -142,7 +166,7 @@ On a cache miss, it installs rustup if it is missing (with no default toolchain:
 one `runner/rust-toolchain.toml` pins on the first build), runs `make build-runner test-runner`, and
 packs `runner/target/release/esp32tl-runner` into `build/ci/runner.tar`, which keeps its executable
 bit, then saves it and checks that the cache kept it, as `firmware` does. The hosted images have
-rustup; on the self-hosted runner it is installed once and stays.
+rustup and native linkers; the fallback also supports an image without rustup.
 
 The key covers all of `runner/`: the sources, the esp32sim pin in `Cargo.toml` and `Cargo.lock`,
 the toolchain, the profiles, and whatever else cargo reads. A cold build takes under a minute, so
@@ -157,10 +181,9 @@ where the tests read them), and runs `esp32tl-runner --help` to check that the b
 then runs `make PYTHON=<that Python> .venv/.installed rom-elf`, which is `make setup` without
 `build-runner`. Before `.venv/bin/pytest --shard=K/4` the `mtools` step makes sure `mformat`,
 `mcopy`, `mdir` and `mtype` are on `PATH`, for the SD card tests, which skip without them: on macOS
-it installs mtools with Homebrew; on the self-hosted runner, which has no root for apt, it fails the
-job with `no TOOL on PATH: install mtools on this runner (apt-get install mtools)` until someone
-installs it there. A shard that fails can be re-run alone with "Re-run failed jobs". Timeout: 15
-minutes.
+it installs mtools with Homebrew; on Linux it runs `sudo apt-get update` and
+`sudo apt-get install -y mtools`. The check includes `mmd`; a missing command fails the job.
+A shard that fails can be re-run alone with "Re-run failed jobs". Timeout: 15 minutes.
 
 ## `determinism`
 
@@ -182,7 +205,7 @@ way twice, not that two machines agree. Timeout: 10 minutes.
 `make lint` in full on Python 3.11, the oldest Python esp32tl supports and the one mypy and ruff
 target. It installs rustup if missing, as `runner` does, because `runner` may have hit its cache
 and skipped that step. The checkout removes `runner/target/`, so clippy checks esp32sim from
-scratch: 8 s on the self-hosted runner, fetching esp32sim included, not worth a cache. Timeout: 15
+scratch, without a target-directory cache (the earlier self-hosted measurement was 8 s). Timeout: 15
 minutes.
 
 ## `docs`

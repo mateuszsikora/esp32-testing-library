@@ -1,6 +1,6 @@
 # CI (plan M0, §6). GitHub-hosted macOS runners have no Docker, so the
 # validation firmware is built once, in the pinned ESP-IDF and PlatformIO
-# containers on the self-hosted Linux runner, and the runner crate once per
+# containers on the GitHub-hosted Linux runner, and the runner crate once per
 # platform. The test jobs then run only the runner and Python: they build
 # nothing.
 #
@@ -21,14 +21,8 @@
 # again. A bad tarball saved under a key stays there until it is deleted:
 # `gh cache delete <key>`.
 #
-# The Linux jobs run on the self-hosted runner (hp600g1), which keeps the 7 GB
-# ESP-IDF image between runs. It is a single machine, so its jobs queue one
-# after another there. While the repository is private, minutes on
-# GitHub-hosted runners are limited, and macOS ones count ten times: every job
-# that can runs on hp600g1, even one that needs nothing from it, such as lint,
-# and the macOS jobs do not run. github.event.repository.private drops macos
-# from the platforms, so making the repository public turns them back on with
-# no change here.
+# Standard hosted images, pinned to OS versions rather than moving -latest
+# aliases. Both platforms run while private too; hosted usage may be billed.
 name: CI
 
 on:
@@ -49,14 +43,24 @@ concurrency:
 
 jobs:
   firmware:
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-24.04
     # Why 60: "The firmware job's timeout is 60 minutes" in docs/decisions/ci.md.
     timeout-minutes: 60
     outputs:
       key: ${{ steps.key.outputs.key }}
       rom-elf-key: ${{ steps.key.outputs.rom-elf-key }}
     steps:
+      - name: Check host architecture
+        run: |
+          test "$RUNNER_OS" = Linux
+          test "$RUNNER_ARCH" = X64
+          test "$(uname -m)" = x86_64
+
       - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
 
       # firmware/build.sh holds the IDF tag, the container digest and the
       # project each image is built from, and firmware/build-platformio.sh and
@@ -78,10 +82,27 @@ jobs:
           path: build/ci/firmware.tar
           key: ${{ steps.key.outputs.key }}
 
+      # Cold container pulls, PlatformIO packages and all project build trees
+      # exceed the standard image's nominal free space. These SDKs are unused.
+      - name: Free space for firmware builds
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup
+          df -h .
+
+      # Docker Engine is supplied by ubuntu-24.04; start it explicitly and
+      # check access as the job user (the build scripts do not use sudo).
+      - name: Prepare Docker
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          command -v docker
+          sudo systemctl start docker
+          docker info
+
       # PlatformIO's core directory, which build-platformio.sh mounts into its
       # container: PlatformIO Core, the platform, the framework and the
-      # toolchains, about 4 GB unpacked, 2 GB in the cache, which takes about
-      # 4.5 minutes to save on hp600g1. Saved at the end of the job and not
+      # toolchains, about 4 GB unpacked, 2 GB in the cache.
+      # Saved at the end of the job and not
       # checked, as the ROM ELF is: a miss only downloads them again. dist/
       # holds the downloaded archives and tools/ a second copy of the
       # toolchains the platform installs into packages/; a build needs
@@ -180,13 +201,24 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: ${{ fromJSON(github.event.repository.private && '["linux"]' || '["linux", "macos"]') }}
-    runs-on: ${{ matrix.platform == 'macos' && 'macos-latest' || fromJSON('["self-hosted", "Linux", "X64"]') }}
+        platform: [linux, macos]
+    runs-on: ${{ matrix.platform == 'macos' && 'macos-15' || 'ubuntu-24.04' }}
     timeout-minutes: 30
     # The same on both platforms; each adds its OS and architecture.
     outputs:
       key: ${{ steps.key.outputs.key }}
     steps:
+      - name: Check host architecture
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then
+            test "$RUNNER_ARCH" = ARM64
+            test "$(uname -m)" = arm64
+          else
+            test "$RUNNER_OS" = Linux
+            test "$RUNNER_ARCH" = X64
+            test "$(uname -m)" = x86_64
+          fi
+
       - uses: actions/checkout@v7
 
       # All of runner/ (target/ is not there after a checkout): the sources,
@@ -203,8 +235,7 @@ jobs:
           key: ${{ steps.key.outputs.key }}-${{ runner.os }}-${{ runner.arch }}
 
       # rustup then installs the toolchain runner/rust-toolchain.toml pins on
-      # the first build. The hosted images have rustup; on the self-hosted
-      # runner it is installed once and stays.
+      # the first build. The hosted images also supply the native linker.
       - name: Install rustup if missing
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
@@ -245,14 +276,25 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: ${{ fromJSON(github.event.repository.private && '["linux"]' || '["linux", "macos"]') }}
+        platform: [linux, macos]
         python: ["3.11", "3.13", "3.14"]
         # Why four, and why 15 minutes: "The test jobs run four shards of the
         # suite" in docs/decisions/ci.md.
         shard: ["1/4", "2/4", "3/4", "4/4"]
-    runs-on: ${{ matrix.platform == 'macos' && 'macos-latest' || fromJSON('["self-hosted", "Linux", "X64"]') }}
+    runs-on: ${{ matrix.platform == 'macos' && 'macos-15' || 'ubuntu-24.04' }}
     timeout-minutes: 15
     steps:
+      - name: Check host architecture
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then
+            test "$RUNNER_ARCH" = ARM64
+            test "$(uname -m)" = arm64
+          else
+            test "$RUNNER_OS" = Linux
+            test "$RUNNER_ARCH" = X64
+            test "$(uname -m)" = x86_64
+          fi
+
       - uses: actions/checkout@v7
 
       - id: python
@@ -292,16 +334,27 @@ jobs:
       # `make setup` less build-runner: the runner came from the runner job.
       - run: make PYTHON='${{ steps.python.outputs.python-path }}' .venv/.installed rom-elf
 
+      # Docker Engine is supplied by ubuntu-24.04; start it explicitly and
+      # check access as the job user (the build scripts do not use sudo).
+      - name: Prepare Docker
+        if: runner.os == 'Linux'
+        run: |
+          command -v docker
+          sudo systemctl start docker
+          docker info
+
       # mtools makes and reads the FAT images of the SD card tests, which skip
       # without it: here it must be there, so that they run. Homebrew installs
-      # it on macOS; the self-hosted runner has no root for apt, so it must be
-      # installed there once, as Docker is.
+      # it on macOS; apt installs it on each fresh Linux VM.
       - name: mtools
         run: |
           if [ "$RUNNER_OS" = macOS ]; then
             brew install mtools
+          else
+            sudo apt-get update
+            sudo apt-get install -y mtools
           fi
-          for tool in mformat mcopy mdir mtype; do
+          for tool in mformat mcopy mdir mtype mmd; do
             command -v "$tool" >/dev/null || {
               echo "::error::no $tool on PATH: install mtools on this runner (apt-get install mtools)"
               exit 1
@@ -316,9 +369,15 @@ jobs:
   # the claim is about two runs on one machine, not across machines.
   determinism:
     needs: [firmware, runner]
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
+      - name: Check host architecture
+        run: |
+          test "$RUNNER_OS" = Linux
+          test "$RUNNER_ARCH" = X64
+          test "$(uname -m)" = x86_64
+
       - uses: actions/checkout@v7
 
       - id: python
@@ -357,12 +416,17 @@ jobs:
       - run: make determinism
 
   # `make lint` in full, clippy included. The checkout removes runner/target/,
-  # so clippy checks esp32sim from scratch: 8 s on the self-hosted runner,
-  # fetching esp32sim included. Not worth a cache.
+  # so clippy checks esp32sim from scratch, without a target-directory cache.
   lint:
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
+      - name: Check host architecture
+        run: |
+          test "$RUNNER_OS" = Linux
+          test "$RUNNER_ARCH" = X64
+          test "$(uname -m)" = x86_64
+
       - uses: actions/checkout@v7
 
       # The oldest Python esp32tl supports, which mypy and ruff target too.
@@ -391,9 +455,15 @@ jobs:
   # on main, the merge base is the commit itself and there is nothing to compare.
   docs:
     if: github.event_name == 'pull_request'
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
+      - name: Check host architecture
+        run: |
+          test "$RUNNER_OS" = Linux
+          test "$RUNNER_ARCH" = X64
+          test "$(uname -m)" = x86_64
+
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0

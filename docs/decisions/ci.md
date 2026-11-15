@@ -5,7 +5,10 @@ what each job runs.
 
 ## Every Linux job runs on the self-hosted runner hp600g1
 
-Status: decided (#48)
+Status: superseded (#48)
+
+Replaced by [standard hosted images](#ci-uses-standard-hosted-images-on-both-platforms-before-publication).
+The following records the earlier configuration.
 
 The `firmware`, `runner`, `test`, `lint` and `docs` jobs run on `[self-hosted, Linux, X64]`, the
 machine hp600g1, even jobs such as `lint` and `docs` that need nothing from it. The repository is
@@ -22,7 +25,10 @@ of.
 
 ## The macOS jobs run only once the repository is public
 
-Status: decided (#52)
+Status: superseded (#52)
+
+Replaced by [standard hosted images](#ci-uses-standard-hosted-images-on-both-platforms-before-publication).
+The following records the earlier configuration.
 
 The `runner` and `test` matrices take their platforms from
 `fromJSON(github.event.repository.private && '["linux"]' || '["linux", "macos"]')`. While the
@@ -35,7 +41,10 @@ when the repository goes public; the condition does it by itself.
 
 ## The runs-on label is computed from the platform
 
-Status: decided (#52)
+Status: superseded (#52)
+
+Replaced by [standard hosted images](#ci-uses-standard-hosted-images-on-both-platforms-before-publication).
+The following records the earlier configuration.
 
 `runs-on` is `matrix.platform == 'macos' && 'macos-latest' || fromJSON('["self-hosted", "Linux",
 "X64"]')`, with no `include` entries.
@@ -46,7 +55,10 @@ Python version.
 
 ## CI moves to GitHub-hosted runners before the repository goes public
 
-Status: decided (#52)
+Status: superseded (#52)
+
+Replaced by [standard hosted images](#ci-uses-standard-hosted-images-on-both-platforms-before-publication).
+The following records the earlier configuration.
 
 The self-hosted runner is used only while the repository is private (#17 makes it public). So a
 pull request from a fork never runs its code on hp600g1 or reaches its Docker daemon, and that
@@ -230,8 +242,8 @@ version would give the same result.
 
 Status: decided (#50)
 
-The `runner` job installs rustup only on a cache miss, so on hp600g1 `~/.cargo/bin` may not be on
-`PATH` when `lint` runs. `lint` runs the same six-line step itself.
+The `runner` job installs rustup only on a cache miss, and each hosted job has a fresh VM,
+so `lint` must prepare its own toolchain. `lint` runs the same six-line step itself.
 
 **Rejected:** a composite action shared by both jobs, because it is more than two copies of six
 lines are worth.
@@ -265,12 +277,11 @@ own on the pull request, as plan section 6 has it.
 
 Status: decided (#22)
 
-The `determinism` job has no matrix: it runs on hp600g1 with Python 3.11, as `lint` does. What it
+The `determinism` job has no matrix: it runs on `ubuntu-24.04` with Python 3.11, as `lint` does. What it
 checks is that one machine runs one test the same way twice. It restores the same tarballs as the
 `test` jobs, with its own copy of their restore and unpack steps.
 
-**Rejected:** the `test` matrix's platforms and Pythons, because every extra entry queues on the
-one self-hosted machine and checks nothing more; comparing runs across machines, because nothing
+**Rejected:** the `test` matrix's platforms and Pythons, because every extra entry adds hosted usage and checks nothing more; comparing runs across machines, because nothing
 claims that two machines give the same run.
 
 ## The Arduino image is built in the firmware job
@@ -320,3 +331,40 @@ outside the workspace on hp600g1, which would survive between runs with no cache
 to GitHub-hosted runners before the repository is public
 ([above](#ci-moves-to-github-hosted-runners-before-the-repository-goes-public)), and nothing would
 key it by the pins.
+
+
+## CI uses standard hosted images on both platforms before publication
+
+Status: decided (15 November 2026)
+
+All Linux jobs move from hp600g1 to `ubuntu-24.04` (x64); native Rust builds and the full pytest
+matrix also run on `macos-15` (ARM64), even while private. GitHub lists these labels for both
+private and public repositories in its
+[standard runner reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners),
+checked on 15 November 2026. Versioned labels avoid silently changing OS generations with
+`-latest`; each job also checks the actual architecture before restoring native binaries.
+No larger runners are needed. Private hosted usage can cost money; publication changes no matrix.
+
+Docker Engine comes with the Ubuntu image; the firmware cache-miss path and Linux test jobs
+start its service and require `docker info` to succeed as the job user. Test jobs install mtools
+through apt or Homebrew and require all five commands, including `mmd`. Firmware setup selects
+Python explicitly. Existing rustup bootstrap and pinned toolchain remain, with the images' native
+compilers. Cold firmware builds remove unused hosted .NET, Android and Haskell SDK directories
+to make room for containers, PlatformIO packages and build trees. Disk use and timings still
+need a real hosted run; no test, shard or timeout is weakened.
+
+The cache transport stays: firmware and ROM are ESP32 data shared across hosts, while the runner
+key already includes OS and architecture (`Linux-X64`, `macOS-ARM64`), as does PlatformIO's
+tools cache. Producer and consumer paths match. The workflow hash changes both build keys,
+so old tarballs cannot mask the migration. Exact restores and verification after save remain.
+
+**Rejected:** switching to artifacts during this migration, because hosted runners can use the
+existing cache transport and the earlier artifact quota failure gives no reason to add that
+dependency now. Larger runners, because standard VMs provide the needed capabilities; cold-run
+resource measurements remain to be collected. Keeping macOS disabled until publication, because
+that would leave the full configuration untested before publication. Adding Intel macOS or ARM
+Linux to the matrix is outside this migration's two-platform coverage.
+
+TODO(owner): run the workflow with cold and warm caches on GitHub Actions, verify all 24 shards,
+determinism, native binaries, cross-platform firmware/ROM restores and disk/time margins.
+Local actionlint and documentation checks cannot establish those runtime results.
