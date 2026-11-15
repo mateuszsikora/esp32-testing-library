@@ -464,3 +464,16 @@ then passes `--ignore=tests/test_real_source.py` to the concurrent pair. Wall-cl
 without another shard competing for the VM's CPU. Their original assertions and conditional
 host-lag skips stay unchanged; tests are neither duplicated nor removed. This split preserves
 the same node-ID hash assignment, including in the serial phase.
+
+
+CI calls the shared `test-platform.yml` separately for Linux and macOS, retaining Python 3.11,
+3.13 and 3.14 and all four shards on each platform. `tests/test_shard.py` checks the two callers
+and complete shard coverage in the shared workflow. Linux tests and determinism wait only for
+the Linux native build and firmware; macOS tests wait for their own native build and firmware.
+
+Every CI pytest invocation, including the serial real-source selections, gets `--durations=30`.
+The job logs show the 30 slowest setup, call and teardown phases per invocation. The parallel
+wrapper prints each shard's report with its log. To reproduce on a local subset:
+`.venv/bin/python .github/scripts/test-pair.py 1/4 4/4 tests/test_shard.py --durations=30`.
+Reporting durations does not change shard assignment or test assertions. Compare repeated runs
+on the same OS/Python before using these wall-clock measurements to rebalance shards.

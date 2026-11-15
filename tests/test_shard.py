@@ -37,7 +37,16 @@ def test_the_shards_divide_the_tests_among_them() -> None:
 
 
 def test_the_workflow_runs_every_shard() -> None:
-    workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+    workflow = (ROOT / ".github/workflows/test-platform.yml").read_text()
+    orchestration = (ROOT / ".github/workflows/ci.yml").read_text()
+    for platform in ("linux", "macos"):
+        assert (
+            f"  test-{platform}:\n"
+            f"    needs: [firmware, runner-{platform}]\n"
+            "    uses: ./.github/workflows/test-platform.yml\n"
+            "    with:\n"
+            f"      platform: {platform}\n"
+        ) in orchestration
     matrix = re.search(r"^ +pair: (\[.*\])$", workflow, re.MULTILINE)
     assert matrix is not None
     pairs = json.loads(matrix[1])

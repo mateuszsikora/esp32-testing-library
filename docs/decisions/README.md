@@ -34,6 +34,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Firmware builds run in three parallel groups](ci.md#firmware-builds-run-in-three-parallel-groups) | `ci.md` | superseded (15 November 2026) |
 | [Firmware families are sharded to shorten the critical path](ci.md#firmware-families-are-sharded-to-shorten-the-critical-path) | `ci.md` | decided (15 November 2026) |
 | [Test shards share VMs and build workflows own their cache inputs](ci.md#test-shards-share-vms-and-build-workflows-own-their-cache-inputs) | `ci.md` | decided (15 November 2026) |
+| [Each platform waits only for its own native runner](ci.md#each-platform-waits-only-for-its-own-native-runner) | `ci.md` | decided (15 November 2026) |
 
 ## Documentation and the documentation check
 

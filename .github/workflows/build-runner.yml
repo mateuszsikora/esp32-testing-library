@@ -1,9 +1,14 @@
 name: Build runner
 on:
   workflow_call:
+    inputs:
+      platform:
+        description: Native platform (linux or macos).
+        required: true
+        type: string
     outputs:
       key:
-        description: Cache key published by the build matrix.
+        description: Base cache key published by this platform build.
         value: ${{ jobs.runner.outputs.key }}
 
 permissions:
@@ -11,11 +16,7 @@ permissions:
 
 jobs:
   runner:
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: [linux, macos]
-    runs-on: ${{ matrix.platform == 'macos' && 'macos-15' || 'ubuntu-24.04' }}
+    runs-on: ${{ inputs.platform == 'macos' && 'macos-15' || 'ubuntu-24.04' }}
     timeout-minutes: 30
     # The same on both platforms; each adds its OS and architecture.
     outputs:
