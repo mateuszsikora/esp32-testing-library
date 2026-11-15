@@ -37,7 +37,7 @@ settings, not settings applied by the workflow files:
   and all 25 CI checks from the GitHub Actions app (app ID `15368`). These are the eight
   `firmware / firmware (...)` checks, `runner-linux / runner`, `runner-macos / runner`,
   six `test-linux / test (...)` and six `test-macos / test (...)` checks, `determinism`,
-  `lint` and `docs`, matching the job matrix below. The 14 native-build and test context
+  `lint` and `docs`, matching the six-job macOS baseline on `main`. The 14 native-build and test context
   names were updated for the separate platform calls; all 25 checks remain required.
   Strict status checks require the branch to be up to date with `main`. Protection applies
   to administrators too; force pushes and branch deletion are disabled. When renaming jobs
@@ -89,8 +89,9 @@ These labels and architectures are listed for both repository visibilities in
 [GitHub's standard runner reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
 (checked 15 November 2026). No larger runners are used. Each job checks `RUNNER_OS`,
 `RUNNER_ARCH` and `uname -m` before using caches. There are two native runner builds and
-12 pytest jobs: two platforms × three Python versions × two shard pairs. All four shards
-still run once on each OS/Python combination. A pair uses two processes on one VM.
+11 pytest jobs in the five-macOS experiment: six Linux jobs and five macOS jobs. All four shards
+still run once on each OS/Python combination. macOS Python 3.11 runs its two pairs sequentially
+on one VM; each pair still uses only two concurrent pytest processes.
 
 Hosted jobs use fresh VMs. The
 [Ubuntu image inventory](https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2404-Readme.md)
@@ -238,8 +239,10 @@ cargo's `runner/target/` is not cached. Timeout: 30 minutes.
 
 ## `test`
 
-The shared job in `test-platform.yml` runs six matrix entries per platform: three Python
-versions and two shard pairs. There are still twelve test VMs in the complete workflow.
+The shared job in `test-platform.yml` runs six Linux entries and five macOS entries. For macOS
+Python 3.11, `test (3.11, all shards)` runs pair `1/4 4/4`, then pair `2/4 3/4` on the same VM.
+All other OS/Python combinations retain separate jobs for the two pairs. The excluded macOS
+matrix entry is exactly Python 3.11 with pair `2/4 3/4`; its tests run in the combined job.
 
 For each platform, Python version and shard pair: sets up Python with pip's cache keyed on
 `pyproject.toml`, restores eight firmware tarballs, the native runner tarball and the ROM ELF, unpacks the tarballs (the images land
@@ -250,7 +253,8 @@ then runs `make PYTHON=<that Python> .venv/.installed rom-elf`, which is `make s
 `mcopy`, `mdir` and `mtype` are on `PATH`, for the SD card tests, which skip without them: on macOS
 it installs mtools with Homebrew; on Linux it runs `sudo apt-get update` and
 `sudo apt-get install -y mtools`. The check includes `mmd`; a missing command fails the job.
-Before the parallel phase, each job runs `tests/test_real_source.py` once for each of its two
+The shared `.github/actions/test-pair/action.yml` implements both phases. Before each parallel
+phase, it runs `tests/test_real_source.py` once for each of its two
 shard selections, sequentially. This keeps wall-clock measurements free of contention from the
 other pytest process. The parallel phase passes `--ignore=tests/test_real_source.py`, so every
 test still runs exactly once across the four shards. The serial phase uses normal pytest exit
@@ -266,7 +270,11 @@ Both serial pytest invocations and both parallel shards receive `--durations=30`
 its 30 slowest setup, call or teardown phases in the job log. These are wall-clock measurements
 under that VM's load, not CPU profiles; use repeated runs before changing shard assignments.
 No test selection, timeout or pass/fail rule changes with this reporting flag.
-"Re-run failed jobs" re-runs the pair. Timeout stays 15 minutes; no pytest timeout is relaxed.
+The second pair in the combined macOS job runs after the first succeeds or fails, preserving
+both results. It does not run if setup prevented the first pair from starting, or after job
+cancellation. No `continue-on-error` is used: either failed pair leaves the job failed.
+"Re-run failed jobs" re-runs the whole job, including both pairs in the combined macOS entry.
+Timeout stays 15 minutes; no pytest timeout is relaxed.
 
 Paired pytest temporary roots are created under `/tmp` with a short `e32-pair-` prefix,
 independently of the host's `TMPDIR`. This keeps multiprocessing's Unix socket names below
@@ -358,3 +366,19 @@ passed in 16m36s despite hitting all build caches. Firmware was ready at 1m07s, 
 native build started at 4m19s and ran for seven seconds; all Linux tests consequently started
 around 4m28s. Separate dependencies remove that cross-platform barrier. They do not remove
 macOS scheduling delays or establish a new whole-workflow time before a hosted measurement.
+
+
+## Five-macOS-job experiment
+
+The six-job baseline run [43766617604](https://github.com/mateuszsikora/esp32-testing-library/actions/runs/43766617604)
+passed in 8m45s with cached builds. Five macOS test jobs started immediately after the builds;
+the sixth started at 4m21s and then ran for 4m24s. Combining the Python 3.11 pairs trades a
+longer job for one less VM allocation and one less environment setup. Keep the experiment only
+if successful whole-workflow timings improve without reducing test coverage; queue time counts.
+Build cache keys, images and source inputs are unchanged, so comparisons should use warm caches.
+
+During measurement, branch protection still requires the 25 baseline contexts described above.
+If this layout is retained, replace the two macOS Python 3.11 pair contexts with
+`test-macos / test (3.11, all shards)` and require all 24 resulting contexts, preserving the
+GitHub Actions app binding, strict status checks and every other protection setting. Do not
+change protection while the experimental outcome is undecided.

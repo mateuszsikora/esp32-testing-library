@@ -25,12 +25,15 @@ permissions:
 
 jobs:
   test:
+    name: ${{ inputs.platform == 'macos' && matrix.python == '3.11' && 'test (3.11, all shards)' || format('test ({0}, {1})', matrix.python, matrix.pair) }}
     strategy:
       fail-fast: false
       matrix:
         python: ["3.11", "3.13", "3.14"]
         # Four unchanged shards, paired to reduce VM setup and scheduling.
         pair: ["1/4 4/4", "2/4 3/4"]
+        # macOS 3.11 runs its second pair on the same VM, after the first.
+        exclude: ${{ fromJSON(inputs.platform == 'macos' && '[{"python":"3.11","pair":"2/4 3/4"}]' || '[]') }}
     runs-on: ${{ inputs.platform == 'macos' && 'macos-15' || 'ubuntu-24.04' }}
     timeout-minutes: 15
     steps:
@@ -108,14 +111,18 @@ jobs:
             }
           done
 
-      - name: Run both test shards
-        env:
-          SHARDS: ${{ matrix.pair }}
-        run: |
-          read -r first second <<< "$SHARDS"
-          # Wall-clock bounds need the VM without a competing pytest shard.
-          for shard in "$first" "$second"; do
-            .venv/bin/pytest --shard="$shard" tests/test_real_source.py --durations=30
-          done
-          .venv/bin/python .github/scripts/test-pair.py "$first" "$second" \
-            --ignore=tests/test_real_source.py --durations=30
+      - name: Run first shard pair
+        id: first-pair
+        uses: ./.github/actions/test-pair
+        with:
+          shards: ${{ matrix.pair }}
+
+      # Preserve the other pair's result even when the first pair fails. A setup
+      # failure skips first-pair; cancellation must not start more test processes.
+      - name: Run second shard pair on macOS Python 3.11
+        if: >-
+          ${{ !cancelled() && inputs.platform == 'macos' && matrix.python == '3.11' &&
+              (steps.first-pair.outcome == 'success' || steps.first-pair.outcome == 'failure') }}
+        uses: ./.github/actions/test-pair
+        with:
+          shards: "2/4 3/4"

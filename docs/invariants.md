@@ -1824,3 +1824,10 @@ many small chunks do not stall network callbacks through repeated decoding.
 Both platform test callers must use the shared test workflow with their matching native build
 and firmware dependencies. `tests/test_shard.py::test_the_workflow_runs_every_shard` checks both
 callers as well as complete shard coverage after expanding the shared matrix.
+
+
+In the five-macOS experiment, matrix exclusions plus the combined Python 3.11 job must still
+select each of the four shards exactly once per OS/Python. Linux has six test VMs and macOS
+five. A second pair runs after success or failure of the first; no pair failure is suppressed.
+`tests/test_shard.py::test_the_workflow_runs_every_shard` checks coverage and the continuation
+condition; the pair wrapper's existing tests enforce its failure propagation.

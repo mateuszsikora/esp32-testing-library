@@ -53,7 +53,31 @@ def test_the_workflow_runs_every_shard() -> None:
     assert all(len(pair.split()) == 2 for pair in pairs)
     shards = [shard for pair in pairs for shard in pair.split()]
     assert sorted(shards) == [f"{k}/4" for k in range(1, 5)]
-    assert "SHARDS: ${{ matrix.pair }}" in workflow
+    # Apply the matrix exclusion, then the additional pair in the surviving job.
+    exclusion = re.search(r"&& '(\[.*\])' \|\| '\[\]'", workflow)
+    assert exclusion is not None
+    excluded = json.loads(exclusion[1])
+    for platform in ("linux", "macos"):
+        jobs = 0
+        for python in ("3.11", "3.13", "3.14"):
+            selected = []
+            for pair in pairs:
+                if platform == "macos" and {"python": python, "pair": pair} in excluded:
+                    continue
+                jobs += 1
+                selected.extend(pair.split())
+                if platform == "macos" and python == "3.11":
+                    selected.extend(["2/4", "3/4"])
+            assert sorted(selected) == [f"{k}/4" for k in range(1, 5)]
+        assert jobs == (5 if platform == "macos" else 6)
+    assert "!cancelled()" in workflow
+    assert (
+        "steps.first-pair.outcome == 'success' || steps.first-pair.outcome == 'failure'" in workflow
+    )
+    assert 'shards: "2/4 3/4"' in workflow
+    assert workflow.count("uses: ./.github/actions/test-pair") == 2
+    workflow = (ROOT / ".github/actions/test-pair/action.yml").read_text()
+    assert "SHARDS: ${{ inputs.shards }}" in workflow
     assert '.venv/bin/python .github/scripts/test-pair.py "$first" "$second"' in workflow
     serial = '.venv/bin/pytest --shard="$shard" tests/test_real_source.py'
     parallel = ".venv/bin/python .github/scripts/test-pair.py"

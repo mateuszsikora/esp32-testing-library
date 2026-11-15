@@ -531,3 +531,31 @@ assertions drift. Removing the build dependency and hoping its cache exists woul
 race. A platform matrix on the reusable build call still gates dependants on the entire matrix;
 separate calls give each consumer the dependency it actually needs. No new cache transport,
 compiler cache, or main-branch cancellation policy is introduced in this change.
+
+
+## Measure five macOS test VMs without reducing coverage
+
+Status: decided (15 November 2026)
+
+The decision is to measure this layout; retaining it depends on the experiment outcome.
+
+The final warm-cache run of #210, 43766617604, passed in 8m45s. Its sixth macOS test VM waited
+until 4m21s, then ran for another 4m24s. This experiment combines the two Python 3.11 pairs
+on one macOS VM: `1/4 4/4`, then `2/4 3/4`. Python 3.11 had the shortest sum of pair pytest
+times in that run (199 + 226 seconds, versus 218 + 272 for 3.13 and 201 + 242 for 3.14).
+Linux retains six test jobs, macOS uses five, and all six OS/Python combinations still run
+every test once. Firmware, native builds, cache keys and architecture checks remain unchanged.
+
+The original pair implementation becomes a shared composite action. The combined job starts
+the second pair after either success or failure of the first, but not after cancellation or
+an environment-setup failure. Either pair failing fails the job. Wall-clock tests run without
+a competing shard in each pair, and no more than two pytest processes run concurrently.
+
+Compare successful whole-workflow durations, including queues, with warm-cache baselines;
+record overlapping runs and pass/skip counts. Retain the layout only if it improves the result.
+Do not migrate required check contexts before deciding to keep the experiment. The combined
+job would replace two required pair contexts with one, without removing any test coverage.
+
+**Rejected:** dropping Python versions, running four pytest processes at once on a standard VM,
+shortening the SD-driver timeout test, or changing main-branch cancellation to manufacture a
+shorter result. A job which fails its first pair must not silently skip the other pair's result.

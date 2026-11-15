@@ -479,3 +479,12 @@ wrapper prints each shard's report with its log. To reproduce on a local subset:
 `.venv/bin/python .github/scripts/test-pair.py 1/4 4/4 tests/test_shard.py --durations=30`.
 Reporting durations does not change shard assignment or test assertions. Compare repeated runs
 on the same OS/Python before using these wall-clock measurements to rebalance shards.
+
+
+The five-macOS-job experiment keeps all four shards on all three Python versions. Only macOS
+Python 3.11 groups its two pairs into one VM, running `1/4 4/4` before `2/4 3/4`. Both use
+`.github/actions/test-pair/action.yml` for the same serial real-source selections and parallel
+remaining tests. A failed first pair still allows the second to report; either failure fails
+the job. Cancellation or a setup failure prevents starting another pair. The 15-minute timeout
+is unchanged. `tests/test_shard.py` verifies that the exclusion plus the second pair retain
+exactly one execution of each shard per platform/Python and produce six Linux and five macOS jobs.

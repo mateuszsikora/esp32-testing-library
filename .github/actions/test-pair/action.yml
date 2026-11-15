@@ -1,0 +1,20 @@
+name: Test shard pair
+description: Run wall-clock selections serially, then the remaining two shards concurrently.
+inputs:
+  shards:
+    description: Two distinct K/4 shard selections separated by a space.
+    required: true
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        SHARDS: ${{ inputs.shards }}
+      run: |
+        read -r first second <<< "$SHARDS"
+        # Wall-clock bounds need the VM without a competing pytest shard.
+        for shard in "$first" "$second"; do
+          .venv/bin/pytest --shard="$shard" tests/test_real_source.py --durations=30
+        done
+        .venv/bin/python .github/scripts/test-pair.py "$first" "$second" \
+          --ignore=tests/test_real_source.py --durations=30
