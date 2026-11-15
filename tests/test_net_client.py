@@ -456,3 +456,34 @@ def test_a_dhcp_release_gives_the_address_up() -> None:
     device.net.receive(MS, dhcp(7, ciaddr=DEVICE, options=bytes([54, 4]) + NETWORK))
     assert device.net.device_address is None
     assert "dhcp: RELEASE from 24:6f:28:00:11:22" in device.events()
+
+
+@pytest.mark.parametrize("framing", ["length", "chunked", "close"])
+def test_http_client_over_the_network_path(device: Device, framing: str) -> None:
+    exchange = device.net.http_client.post("/echo", json={"ok": True}, port=8080)
+    [syn] = device.poll()
+    assert syn.dport == 8080
+    device.now += MS
+    sent = device.send(8080, syn.sport, 1000, ISN + 1, SYN | ACK)
+    request = b"".join(segment.data for segment in sent)
+    assert request.startswith(b"POST /echo HTTP/1.1\r\nHost: 10.64.0.2:8080\r\n")
+    assert request.endswith(b'{"ok": true}')
+    ack = ISN + 1 + len(request)
+    response = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+    if framing == "length":
+        response += b'Content-Length: 11\r\n\r\n{"ok":true}'
+    elif framing == "chunked":
+        response += b'Transfer-Encoding: chunked\r\n\r\nb\r\n{"ok":true}\r\n0\r\n\r\n'
+    else:
+        response += b'\r\n{"ok":true}'
+    device.now += MS
+    device.send(8080, syn.sport, 1001, ack, ACK | PSH | FIN, response)
+    result = exchange.response()
+    assert result is not None and result.json() == {"ok": True}
+    device.now += MS
+    device.send(8080, syn.sport, 1002 + len(response), ack + 1, ACK)
+    assert exchange.connection.state == "closed"
+    assert "http client: device:8080/1 POST /echo → 200" in device.events()
+    streams = [event for event in device.net.events if event.get("stream") == "device:8080/1"]
+    assert streams[0]["direction"] == "in" and streams[0]["data"] == request.hex()
+    assert streams[1]["direction"] == "out" and streams[1]["data"] == response.hex()

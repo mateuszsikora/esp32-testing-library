@@ -1763,3 +1763,13 @@ that references to its number keep their meaning.
      `runner/src/session/tests.rs::a_resync_moves_the_wall_clock_to_the_boundary_it_is_seen_at`,
      `runner/src/session/tests.rs::a_signal_or_the_peer_gone_ends_the_wait_for_wall_time`,
      `tests/test_real_source.py::test_a_turn_held_before_the_first_2_16_cycles_does_not_cost_the_waits`
+
+## HTTP client framing
+
+A device HTTP response is independent of TCP packet boundaries: Content-Length and chunked
+responses complete only after their framed body, and unframed responses complete only at a
+peer FIN. A malformed or truncated response fails its condition instead of returning a partial
+body; transport loss does not count as EOF. Metadata limits exclude their separators even
+when a separator arrives in several packets. Chunked decoding consumes each chunk once, so
+many small chunks do not stall network callbacks through repeated decoding.
+`tests/test_net_http_client.py` enforces this.
