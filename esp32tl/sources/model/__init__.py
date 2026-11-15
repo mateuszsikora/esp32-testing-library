@@ -3,10 +3,13 @@ speak the device's protocol and vocabulary, and know nothing of what the firmwar
 
 `Model` is the base of a model the test writes itself, whose times are `Duration`s: the far end of
 a UART (`board.uart(role).model(...)`) and the source of an `SppPeer` take one as they take a
-source whose times are nanoseconds, and `in_nanoseconds` is what they call in its place."""
+source whose times are nanoseconds, and `in_nanoseconds` is what they call in its place.
+`ReactiveModel` is a `Model` that only answers, and `IdleFramedModel` one that also cuts what it
+hears into frames at each silence, as Modbus RTU does."""
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable
+from typing import Any
 
 from esp32tl.units import Duration
 
@@ -17,13 +20,18 @@ Timed = tuple[Duration, bytes]
 class Model(ABC):
     """A model the test writes, whose times are `Duration`s on the board's clock: the far end of a
     UART, or what answers an `SppPeer`'s channel. A subclass defines all four methods, as a source
-    in nanoseconds does: one that lacks one, or misspells it, cannot be made. One with a
-    `supply(on)` method is a part on the board's supply, as a source in nanoseconds with one is."""
+    in nanoseconds does: one that lacks one, or misspells it, cannot be made. `ReactiveModel` and
+    `IdleFramedModel` define all but one. One with a `supply(on)` method is a part on the board's
+    supply, as a source in nanoseconds with one is."""
 
     @abstractmethod
     def receive(self, at: Duration, data: bytes) -> Iterable[Timed]:
-        """`data` crossed to the model at `at`. Returns the answers, each `latency()` or more
-        after `at`."""
+        """The firmware sent `data`, a piece of what it sends cut anywhere. On a UART, `at` is
+        the instant it wrote the first byte of `data` into the TX FIFO, and each byte after came
+        within one character time of the one before; esp32sim does not pace the transmission at
+        the baud, so what the firmware writes in one go comes at about one instant. Behind an
+        SPP channel, `at` is the instant `data` arrived. Returns the answers, each `latency()`
+        or more after `at`."""
 
     @abstractmethod
     def poll(self, now: Duration) -> Iterable[Timed]:
@@ -101,3 +109,91 @@ def in_nanoseconds(model: Model, name: str, fail: Callable[[str], Exception]) ->
     """`model` as a source in nanoseconds, `Supplied` when it has a `supply` method."""
     kind = _Supplied if callable(getattr(model, "supply", None)) else InNanoseconds
     return kind(model, name, fail)
+
+
+class ReactiveModel(Model):
+    """A `Model` that only answers what it hears: a subclass defines `receive`, and sets
+    `answer_after`, the shortest time it takes to answer, a `Duration`, as a class attribute or
+    in `__init__`. `latency()` returns it, and the model sends nothing unprompted: `poll`
+    returns nothing and `quiet_until` `None`. `answer_after = None` is a model that answers
+    nothing."""
+
+    answer_after: Duration | None
+
+    def poll(self, now: Duration) -> Iterable[Timed]:
+        return ()
+
+    def quiet_until(self) -> Duration | None:
+        return None
+
+    def latency(self) -> Duration | None:
+        answer_after: Duration | None = _attribute(
+            self, "answer_after", "the shortest time it takes to answer, as ms(1)"
+        )
+        return answer_after
+
+
+class IdleFramedModel(Model):
+    """A `Model` of a part that frames what it hears by silence, as a Modbus RTU slave does:
+    the bytes up to a silence of `gap` are one frame. A subclass sets `gap`, a `Duration`, as a
+    class attribute or in `__init__` (3.5 character times for RTU: `ms(3.65)` at 9600 baud with
+    10 bits a character, as 8N1; `ms(4.02)` with the 11 the Modbus specification asks for), and
+    defines `on_frame(at, frame)`, called at the turn that comes once `gap` has passed since the
+    frame's last piece came: `at` is that piece's `at` plus `gap`, or less than a CPU cycle
+    later. It returns the answers, each at `at` or later, and the model sends nothing else
+    unprompted. The gap counts from the instant the firmware wrote the first byte of that piece,
+    as `receive` says: what the firmware writes in one go comes at about one instant. `drop()`
+    forgets the frame heard so far, as a part that loses its power does."""
+
+    gap: Duration
+    # The frame heard so far, and the `at` of its last piece; class defaults, so that a subclass's
+    # `__init__` need not call this one's.
+    _frame: bytes = b""
+    _last: Duration | None = None
+
+    @abstractmethod
+    def on_frame(self, at: Duration, frame: bytes) -> Iterable[Timed]:
+        """`frame` ended: `gap` has passed since its last piece came, at `at`. Returns the
+        answers, each at `at` or later."""
+
+    def receive(self, at: Duration, data: bytes) -> Iterable[Timed]:
+        self._frame += data
+        self._last = at
+        return ()
+
+    def poll(self, now: Duration) -> Iterable[Timed]:
+        end = self._end()
+        if end is None or now < end:
+            return ()
+        frame, self._frame, self._last = self._frame, b"", None
+        return self.on_frame(now, frame)
+
+    def quiet_until(self) -> Duration | None:
+        return self._end()
+
+    def drop(self) -> None:
+        """Forget the frame heard so far: `on_frame` never gets it, and the next piece starts
+        a new one."""
+        self._frame, self._last = b"", None
+
+    def latency(self) -> Duration | None:
+        # The turn that comes `gap` after the first piece is the one that ends the frame, if
+        # nothing came after it; the answers are on_frame's, from poll.
+        return self._gap()
+
+    def _gap(self) -> Duration:
+        gap: Duration = _attribute(self, "gap", "the silence that ends a frame, as ms(3.65)")
+        return gap
+
+    def _end(self) -> Duration | None:
+        if not self._frame or self._last is None:
+            return None
+        return self._last + self._gap()
+
+
+def _attribute(model: Model, name: str, what: str) -> Any:
+    """`model.name`, or a `TypeError` that says what to set it to."""
+    try:
+        return getattr(model, name)
+    except AttributeError:
+        raise TypeError(f"{type(model).__name__} has no {name}: set it to {what}") from None

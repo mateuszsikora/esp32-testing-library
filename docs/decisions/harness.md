@@ -3490,6 +3490,43 @@ whose `__class__` is the model's is a `Model`. Copying the link's checks of orde
 checks change, and reports another fault first when two interfaces fail in one turn: the link
 polls every interface before it checks a stamp.
 
+## A model that only answers, or frames by silence, starts from a base that fills in the rest
+
+Status: decided (#202)
+
+`ReactiveModel` and `IdleFramedModel`, in `esp32tl.sources.model`, are `Model`s with all but one
+method defined. `ReactiveModel` sends nothing unprompted and takes `latency()` from its
+`answer_after`; a subclass defines `receive`. `IdleFramedModel` keeps what it hears until `gap` has
+passed since the last piece came, through `quiet_until` and `poll`, and hands each frame to
+`on_frame(at, frame)`, the method a subclass defines; `latency()` is `gap`, so that the board stops
+when a frame may have ended; `drop()` forgets the frame heard so far, for a subclass whose part
+loses it with its power. `Model` stays as it was, with its four abstract methods, for a model that
+sends unprompted. The gap counts from the `at` of the last piece, the instant the firmware wrote its
+first byte into the TX FIFO: esp32sim does not pace a UART's transmission, so what the firmware
+writes in one go comes at about one instant, and the gaps between pieces are the firmware's own
+pauses (`tests/test_model_bases.py` shows it with `modem_at`). The one case it gets wrong: a frame
+the firmware writes byte by byte, each less than a character time after the one before but over more
+than `gap` in all, is one piece to the link, at its first byte, and ends `gap` after that byte, cut
+in two, where a real line would carry it without a silence. In the emulator a loop's writes are
+microseconds apart, so the case is rare, and the model cannot see it without the instant of the
+piece's last byte, which the link does not give.
+
+This narrows the rejection, in the decision above, of defaults for the four methods on `Model`: a
+misspelt `receive` or `on_frame` still cannot be made, and only a subclass that chose a base which
+sends nothing unprompted gets the empty `poll`. A model of a part that speaks unprompted
+subclasses `Model`, as before.
+
+**Rejected:** `answer_after` as an argument of the base's `__init__`, because a subclass with an
+`__init__` of its own would have to call it, and a dataclass subclass, as `Elm327`, would lose it;
+a class attribute or a field is read where `latency()` needs it, and its absence is a `TypeError`
+that says what to set. Telling the model the route's baud and computing the gap from it, because
+`Model` gets no baud today and RTU's gap is not always 3.5 characters (1.75 ms above 19200 baud):
+the test states the `Duration`. Counting the gap from the estimated end of a piece, `at` plus its
+length in character times, because the emulator does not put the bytes on the wire at the baud:
+a firmware that waits 3.5 characters after its transmitter is done would see its next frame merged
+into the last. Delivering a frame from `receive`, when the next piece shows the silence was long
+enough, because the last frame before a long pause would wait for the firmware's next request.
+
 ## The wait for a wake from deep sleep is a board call that asks for a turn after each event
 
 Status: decided (#36)

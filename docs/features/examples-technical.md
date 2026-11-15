@@ -239,11 +239,12 @@ The nineteen tests, twelve on the board and seven of the model alone, take about
 time.
 
 `tests/elm327.py` is a dataclass with no board and no waits, a subclass of
-`esp32tl.sources.model.Model`: `receive(at, data)` gets the instant as a `Duration`, and every time
-it returns or keeps is one. `receive` buffers what the reader writes up to each `\r`, records the
-command and `at` as a `Request`, and returns the answer at `at + answer_time` (`reset_time` for
-`ATZ`); `latency()` is `answer_time`, `poll` returns nothing and `quiet_until` returns `None`,
-since the adapter never speaks unprompted. `Vehicle.supported()` encodes the readings it has, by
+`esp32tl.sources.model.ReactiveModel`: `receive(at, data)` gets the instant as a `Duration`, and
+every time it returns or keeps is one. `receive` buffers what the reader writes up to each `\r`,
+records the command and `at` as a `Request`, and returns the answer at `at + answer_after`
+(`reset_time` for `ATZ`). The base takes `latency()` from the `answer_after` field and sends
+nothing unprompted, as the adapter never speaks unprompted, so `receive` is the only method of the
+four the model defines. `Vehicle.supported()` encodes the readings it has, by
 PID. The echo uses the setting from before the command, so `ATE0` is still echoed, as an ELM327
 does. `protocol_found` is false after `ATZ` and `ATSP`; the first mode 01 request with the
 ignition on prefixes `SEARCHING...` and sets it, and with the ignition off it stays false.

@@ -421,7 +421,7 @@ def test_a_vehicle_with_speed_only(board: Board) -> None:
 `Vehicle(ignition=True, rpm=850.0, speed=0, coolant=90)` is what the diagnostic port answers. A
 reading of `None` is a PID the vehicle does not support. With `ignition` off, every mode 01
 request gets `SEARCHING...` and `UNABLE TO CONNECT`. The test can change it at any time, and the
-next answer has the change. `Elm327(vehicle, answer_time=ms(50), reset_time=ms(500),
+next answer has the change. `Elm327(vehicle, answer_after=ms(50), reset_time=ms(500),
 version="ELM327 v1.5", silent=False, echo=True)` answers:
 
 | Command | Answer |
@@ -435,7 +435,7 @@ version="ELM327 v1.5", silent=False, echo=True)` answers:
 | Any mode 01 request, the first after power-on, `ATZ` or `ATSP` | `SEARCHING...` on a line of its own, then the answer above; with the ignition off, `SEARCHING...` and `UNABLE TO CONNECT` every time, until a request finds the vehicle on |
 | Anything else | `?` |
 
-Every answer except `ATZ`'s comes `answer_time` after its command. While echo is on it starts with
+Every answer except `ATZ`'s comes `answer_after` after its command. While echo is on it starts with
 the command, then the answer's lines, each ending in `\r`, an empty line and `>`. With `silent`,
 the adapter hears every command and answers none. `adapter.requests` lists every command as a
 `Request` with `at`, its time on the board's clock, and `command`; `adapter.commands()` lists the

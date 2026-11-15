@@ -324,15 +324,16 @@ Where a test can put a model of its own today:
   the model on its own, without a board.
 - **The far end of a UART.** `board.uart(role).model(source)`, before power-on, puts a model of
   your own on any `uart.<role>` route of the profile, for a sensor, a display controller or a
-  second modem esp32tl has no model for. The model is a `Model` with the same four methods as an
-  SPP peer's; what it returns from `receive` and `poll` goes into the chip at its own time:
+  second modem esp32tl has no model for. The model has the same four methods as an SPP peer's;
+  what it returns from `receive` and `poll` goes into the chip at its own time. A part that only
+  answers what it hears starts from `ReactiveModel`, which needs `receive` and `answer_after`, the
+  shortest time it takes to answer, and sends nothing unprompted:
 
   ```python
-  ANSWER = ms(1)
+  class AtResponder(ReactiveModel):
+      """Answers every command line with OK, answer_after its CR LF."""
 
-
-  class AtResponder(Model):
-      """Answers every command line with OK, ANSWER after its CR LF."""
+      answer_after = ms(1)
 
       def __init__(self) -> None:
           self.lines: list[bytes] = []
@@ -344,17 +345,8 @@ Where a test can put a model of its own today:
           while b"\r\n" in self._heard:
               line, _, self._heard = self._heard.partition(b"\r\n")
               self.lines.append(line)
-              answers.append((at + ANSWER, b"\r\nOK\r\n"))
+              answers.append((at + self.answer_after, b"\r\nOK\r\n"))
           return answers
-
-      def poll(self, now: Duration) -> Iterable[Timed]:
-          return []
-
-      def quiet_until(self) -> Duration | None:
-          return None
-
-      def latency(self) -> Duration | None:
-          return ANSWER
 
 
   def test_the_firmware_talks_to_the_test_s_model_on_its_own_uart(board: Board) -> None:
@@ -376,15 +368,25 @@ Where a test can put a model of its own today:
   ```
 
   This is esp32tl's own `tests/test_uart_model.py`, shortened, where `Iterable` comes from
-  `collections.abc`, `Model` and `Timed` from `esp32tl.sources.model`, and `Duration`, `ms` and
-  `seconds` from `esp32tl.units`: its firmware, `modem_at`, writes AT commands to `uart.aux` of
-  `tests/boards/aux-uart.toml` and reads the answers. No example has a part on a UART that esp32tl
-  has no model for; the OBD-II reader's `Elm327`, above, is a `Model` with the same four methods,
-  and a longer model of a part that answers command lines. A `Model` that lacks one of them, or
-  misspells it, raises `TypeError` when it is made. `latency()` is the shortest time the model
-  takes to answer, and the board runs that far ahead of it; an answer stamped sooner fails the run.
-  `poll(now)` and `quiet_until()` are for what the part sends unprompted, as a sensor reporting
-  every second: `quiet_until()` says when the next report is due, and `poll` returns it then. Add
+  `collections.abc`, `ReactiveModel` and `Timed` from `esp32tl.sources.model`, and `Duration`,
+  `ms` and `seconds` from `esp32tl.units`: its firmware, `modem_at`, writes AT commands to
+  `uart.aux` of `tests/boards/aux-uart.toml` and reads the answers. No example has a part on a
+  UART that esp32tl has no model for; the OBD-II reader's `Elm327`, above, is a `ReactiveModel`
+  too, and a longer model of a part that answers command lines.
+
+  `at` is the instant the firmware wrote the first byte of `data`; what it writes in one go comes
+  at about one instant, not one character time per byte, and `data` comes cut anywhere, so the
+  model finds a request by its terminator. A part that frames by silence, as a Modbus RTU slave
+  does, starts from `IdleFramedModel` instead: it sets `gap`, the silence that ends a frame
+  (`ms(3.65)` for RTU at 9600 baud, 8N1), and gets each frame in `on_frame(at, frame)`
+  ([the bases](../features/models-user.md#a-model-that-only-answers)).
+
+  A part that also sends unprompted, as a sensor reporting every second, subclasses `Model` and
+  defines all four methods; one that lacks one of them, or misspells it, raises `TypeError` when
+  it is made. `latency()` is the shortest time the model takes to answer, and the board runs that
+  far ahead of it; an answer stamped sooner fails the run. `poll(now)` and `quiet_until()` are for
+  what the part sends unprompted: `quiet_until()` says when the next report is due, and `poll`
+  returns it then. Add
   `supply(on)` for a part on the board's supply: `board.power_off()` and the `power_on()` after it
   call it, as they switch the GNSS receiver and the modem. `model` returns the source, so the test
   reads what it heard; the details and what the call refuses are in
