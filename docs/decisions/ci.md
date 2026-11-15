@@ -501,3 +501,33 @@ alive when the leader exited first. Cleanup now monitors the process groups them
 then send `SIGKILL` to any remaining groups. Missing groups are harmless. Waiting only for the
 leader or omitting groups of reaped leaders is insufficient because tests deliberately create
 runners that ignore or block `SIGTERM`. Regressions cover both leader states at cancellation.
+
+
+## Each platform waits only for its own native runner
+
+Status: decided (15 November 2026)
+
+Run 43760305678 passed in 16m36s with every build cache hit. Firmware completed 67 seconds after
+creation, and the Linux native build completed at 35 seconds. The macOS native build queued
+until second 259, then took seven seconds. The shared runner matrix held back Linux tests and
+determinism until both native builds finished, even though their inputs were already ready.
+
+`ci.yml` now calls `build-runner.yml` separately as `runner-linux` and `runner-macos`, passing
+`platform`. Each build starts immediately and exposes its own key. `test-linux` and determinism
+need firmware and `runner-linux`; `test-macos` needs firmware and `runner-macos`. Both test calls
+share `test-platform.yml`, which owns the unchanged Python and shard-pair matrix and test setup.
+Queued or failed builds on the other platform do not block a platform's tests. Both platforms
+remain mandatory, with the same labels, architectures, assertions and failure propagation.
+
+The entire native build workflow remains in its cache hash, so this edit causes one native
+rebuild per architecture. Firmware keys and exact tarball restores do not change. Test workflow
+edits remain outside both build keys. Every pytest invocation in `test-platform.yml` reports
+`--durations=30` for later balancing decisions; determinism keeps its existing pytest arguments
+without duration reporting. This change does not rebalance or remove tests. Existing decisions
+to pair shards, isolate wall-clock tests, and run every commit on main remain in effect.
+
+**Rejected:** duplicating all test steps for each platform, which would let dependency setup or
+assertions drift. Removing the build dependency and hoping its cache exists would introduce a
+race. A platform matrix on the reusable build call still gates dependants on the entire matrix;
+separate calls give each consumer the dependency it actually needs. No new cache transport,
+compiler cache, or main-branch cancellation policy is introduced in this change.
