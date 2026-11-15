@@ -1473,9 +1473,10 @@ def test_release(board, console):
 # to `linger.pid` beside the runner; `slow` loads for half a second before it connects, and dies of
 # SIGTERM until then, as the real runner does; `gone` exits 4 in turn 0 without reading it, as the
 # real runner does when the harness is gone. $FAKE_WATCH is the pins the harness's hello must
-# watch, comma-separated: the default profile's GNSS route's. $FAKE_PSRAM is the --psram-mb the
-# runner must be given: the default profile's 0. $FAKE_SD is the --sd-spi and --sd-rw it must be
-# given, one per line: by default the default profile's empty slot, its --sd-spi alone.
+# watch, comma-separated: the default profile's console RX and GNSS route's.
+# $FAKE_PSRAM is the --psram-mb the runner must be given: the default profile's 0.
+# $FAKE_SD is the --sd-spi and --sd-rw it must be given, one per line:
+# by default the default profile's empty slot, its --sd-spi alone.
 LINK_RUNNER = """#!{python}
 import os
 import signal
@@ -1533,7 +1534,7 @@ def turn():
 send(p.RunnerHello(2 if mode == "version" else 1, "esp32", "emulated-fifo-write", "0" * 40))
 hello = p.decode_harness(lines.readline())
 board_profile = os.environ.get("FAKE_BOARD", "esp32-devkitc")
-watch = tuple(int(pin) for pin in os.environ.get("FAKE_WATCH", "4,5").split(",") if pin)
+watch = tuple(int(pin) for pin in os.environ.get("FAKE_WATCH", "3,4,5").split(",") if pin)
 assert (hello.board, hello.chip, hello.watch) == (board_profile, "esp32", watch), hello
 if mode == "version":
     end("protocol_error", 3, detail="version 1 from the peer, the runner speaks 2")
@@ -1587,7 +1588,7 @@ def test_the_backend_serves_the_link_and_ends_the_run_with_stop(
     result.stdout.fnmatch_lines(
         [
             "*Captured esp32sim link teardown*",
-            "board esp32-devkitc, watching GPIO 4, GPIO 5",
+            "board esp32-devkitc, watching GPIO 3, GPIO 4, GPIO 5",
             "runner: protocol version 1, esp32sim 0000*, clock emulated-fifo-write; 2 turns taken*",
             "warnings (1):",
             "  0.000001000 s  unrouted_rx: uart_rx on GPIO 5: 72 bytes dropped",
@@ -1602,7 +1603,7 @@ def test_every_route_and_line_of_the_profile_is_on_the_link(
     link_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch, with_card: bool
 ) -> None:
     monkeypatch.setenv("FAKE_BOARD", "lilygo-t-a7670g-r2")
-    monkeypatch.setenv("FAKE_WATCH", "4,5,12,19,21,22,23,25,26,27,33")
+    monkeypatch.setenv("FAKE_WATCH", "3,4,5,12,19,21,22,23,25,26,27,33")
     monkeypatch.setenv("FAKE_PSRAM", "4")
     image = link_runner.path / "card.img"
     image.write_bytes(bytes(512 << 10))
@@ -1629,7 +1630,7 @@ def test_every_route_and_line_of_the_profile_is_on_the_link(
     result.assert_outcomes(passed=1)
     result.stdout.fnmatch_lines(
         [
-            "board lilygo-t-a7670g-r2, watching GPIO 4, GPIO 5, GPIO 12, GPIO 19, "
+            "board lilygo-t-a7670g-r2, watching GPIO 3, GPIO 4, GPIO 5, GPIO 12, GPIO 19, "
             "GPIO 21, GPIO 22, GPIO 23, GPIO 25, GPIO 26, GPIO 27, GPIO 33"
         ]
     )
@@ -1803,7 +1804,7 @@ def test_the_report_of_a_failing_test_shows_the_run_on_the_board_s_clock(
     result.stdout.fnmatch_lines(
         [
             "*Captured esp32sim link teardown*",
-            "board esp32-devkitc, watching GPIO 4, GPIO 5",
+            "board esp32-devkitc, watching GPIO 3, GPIO 4, GPIO 5",
             "stats: the run ended at 3.000000000 s (stop); *",
             "routes:",
             "  uart.gnss: the replay of gnss.jsonl; * bytes in, 15 out; tapped into */tap.jsonl",

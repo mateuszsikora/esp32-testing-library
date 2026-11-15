@@ -252,3 +252,6 @@ See [validation firmware](../features/validation-firmware-technical.md#pinned-es
 `http_request`'s first build copies ESP-IDF's example to `firmware/.http_request-<ESP-IDF version>/`
 and builds the copy, because its component manager writes `dependencies.lock` into the project
 ([validation firmware](../features/validation-firmware-technical.md#http_request)).
+
+`make firmware` and `make test` also build `console_repl`, the ESP-IDF UART0 command-line
+validation image in `firmware/console_repl`.

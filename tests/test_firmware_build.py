@@ -139,7 +139,8 @@ def test_build_refuses_an_unknown_image(tmp_path: Path) -> None:
     assert result.returncode == 1
     assert result.stderr == (
         "firmware/build.sh: unknown image 'nope'; the images are:"
-        " hello_world nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader"
+        " hello_world console_repl nmea_reader gpio_echo sdspi sd_remount modem_at"
+        " modem_recovery nvs_reader"
         " pppos_client mqtt_session http_request http_server persistence ota_state timer_wake"
         " deep_sleep"
         " bt_spp_initiator bt_spp_initiator_psram\n"
@@ -247,6 +248,7 @@ def test_local_build_runs_idf_py_and_records_how(tmp_path: Path, local_idf: dict
     # every image, in the order of IMAGES: ESP-IDF's examples and the projects under firmware/
     projects = {
         "hello_world": f"{tmp_path}/idf/examples/get-started/hello_world",
+        "console_repl": str(ROOT / "firmware" / "console_repl"),
         "nmea_reader": str(ROOT / "firmware" / "nmea_reader"),
         "gpio_echo": str(ROOT / "firmware" / "gpio_echo"),
         "sdspi": f"{tmp_path}/idf/examples/storage/sd_card/sdspi",
@@ -402,3 +404,46 @@ def test_failed_example_build_removes_its_completion_marker(
     result = run_build({**local_idf, "FAKE_FAIL": "1"}, "--examples", "gps_alarm_clock")
     assert result.returncode == 2
     assert not built.exists()
+
+
+@pytest.mark.parametrize("family, count", [((), 4), (("--examples",), 3)])
+def test_build_shards_partition_the_complete_family(
+    tmp_path: Path, family: tuple[str, ...], count: int
+) -> None:
+    script(tmp_path / "bin", "docker", FAKE_DOCKER)
+    log = tmp_path / "docker.log"
+    env = {
+        "PATH": minimal_path(tmp_path / "bin"),
+        "FIRMWARE_OUT": str(tmp_path / "out"),
+        "FAKE_LOG": str(log),
+    }
+
+    def images(*args: str) -> list[str]:
+        result = run_build(env, *family, *args)
+        assert result.returncode == 0, result.stderr
+        arguments = logged(log)
+        selected = arguments[arguments.index("firmware/build.sh") + 1 :]
+        if family:
+            assert selected.pop(0) == "--examples"
+        return selected
+
+    whole = images()
+    shards = [images("--shard", f"{k}/{count}") for k in range(1, count + 1)]
+    assert all(shards)
+    assert sorted(image for shard in shards for image in shard) == sorted(whole)
+    assert len(set(whole)) == len(whole)
+    for k, shard in enumerate(shards):
+        assert shard == whole[k::count]
+
+
+@pytest.mark.parametrize("value", ["0/4", "5/4", "1/0", "1", "x/4", "1/2/3", "01/4", "1/04"])
+def test_build_refuses_invalid_shard_before_starting_docker(tmp_path: Path, value: str) -> None:
+    result = run_build({"PATH": minimal_path(tmp_path / "bin")}, "--shard", value)
+    assert result.returncode != 0
+    assert "--shard needs" in result.stderr
+
+
+def test_build_refuses_an_empty_shard(tmp_path: Path) -> None:
+    result = run_build({"PATH": minimal_path(tmp_path / "bin")}, "--shard", "2/2", "hello_world")
+    assert result.returncode != 0
+    assert "shard 2/2 selects no images" in result.stderr

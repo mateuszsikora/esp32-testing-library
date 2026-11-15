@@ -1,6 +1,6 @@
 # CI (plan M0, §6). GitHub-hosted macOS runners have no Docker, so the
 # validation firmware is built once, in the pinned ESP-IDF and PlatformIO
-# containers on the self-hosted Linux runner, and the runner crate once per
+# containers in eight parallel Linux jobs, and the runner crate once per
 # platform. The test jobs then run only the runner and Python: they build
 # nothing.
 #
@@ -21,14 +21,8 @@
 # again. A bad tarball saved under a key stays there until it is deleted:
 # `gh cache delete <key>`.
 #
-# The Linux jobs run on the self-hosted runner (hp600g1), which keeps the 7 GB
-# ESP-IDF image between runs. It is a single machine, so its jobs queue one
-# after another there. While the repository is private, minutes on
-# GitHub-hosted runners are limited, and macOS ones count ten times: every job
-# that can runs on hp600g1, even one that needs nothing from it, such as lint,
-# and the macOS jobs do not run. github.event.repository.private drops macos
-# from the platforms, so making the repository public turns them back on with
-# no change here.
+# Standard hosted images, pinned to OS versions rather than moving -latest
+# aliases. Both platforms run while private too; hosted usage may be billed.
 name: CI
 
 on:
@@ -49,14 +43,37 @@ concurrency:
 
 jobs:
   firmware:
-    runs-on: [self-hosted, Linux, X64]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {group: idf-1, family: idf, shard: "1/4"}
+          - {group: idf-2, family: idf, shard: "2/4"}
+          - {group: idf-3, family: idf, shard: "3/4"}
+          - {group: idf-4, family: idf, shard: "4/4"}
+          - {group: examples-1, family: examples, shard: "1/3"}
+          - {group: examples-2, family: examples, shard: "2/3"}
+          - {group: examples-3, family: examples, shard: "3/3"}
+          - {group: platformio, family: platformio, shard: "1/1"}
+    runs-on: ubuntu-24.04
     # Why 60: "The firmware job's timeout is 60 minutes" in docs/decisions/ci.md.
     timeout-minutes: 60
+    # Every matrix member publishes the same base keys; consumers add the group.
     outputs:
       key: ${{ steps.key.outputs.key }}
       rom-elf-key: ${{ steps.key.outputs.rom-elf-key }}
     steps:
+      - name: Check host architecture
+        run: |
+          test "$RUNNER_OS" = Linux
+          test "$RUNNER_ARCH" = X64
+          test "$(uname -m)" = x86_64
+
       - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
 
       # firmware/build.sh holds the IDF tag, the container digest and the
       # project each image is built from, and firmware/build-platformio.sh and
@@ -75,19 +92,41 @@ jobs:
       - id: cache
         uses: actions/cache/restore@v6
         with:
-          path: build/ci/firmware.tar
-          key: ${{ steps.key.outputs.key }}
+          path: build/ci/firmware-${{ matrix.group }}.tar
+          key: ${{ steps.key.outputs.key }}-${{ matrix.group }}
+
+      # Leave room for cold container pulls, packages and project build trees.
+      # These preinstalled SDKs are unused by all three groups.
+      - name: Free space for firmware builds
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          df -h .
+          for sdk in /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup; do
+            available=$(df -Pk . | awk 'NR==2 {print $4}')
+            [ "$available" -lt 20971520 ] || break
+            sudo rm -rf "$sdk"
+          done
+          df -h .
+
+      # Docker Engine is supplied by ubuntu-24.04; start it explicitly and
+      # check access as the job user (the build scripts do not use sudo).
+      - name: Prepare Docker
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          command -v docker
+          sudo systemctl start docker
+          docker info
 
       # PlatformIO's core directory, which build-platformio.sh mounts into its
       # container: PlatformIO Core, the platform, the framework and the
-      # toolchains, about 4 GB unpacked, 2 GB in the cache, which takes about
-      # 4.5 minutes to save on hp600g1. Saved at the end of the job and not
+      # toolchains, about 4 GB unpacked, 2 GB in the cache.
+      # Saved at the end of the job and not
       # checked, as the ROM ELF is: a miss only downloads them again. dist/
       # holds the downloaded archives and tools/ a second copy of the
       # toolchains the platform installs into packages/; a build needs
       # neither once packages/ is there.
       - name: PlatformIO's core directory
-        if: steps.cache.outputs.cache-hit != 'true'
+        if: matrix.group == 'platformio' && steps.cache.outputs.cache-hit != 'true'
         uses: actions/cache@v6
         with:
           path: |
@@ -107,22 +146,42 @@ jobs:
       # checked for the files the tests need: the flash images
       # flasher_args.json names and the ELF project_description.json names
       # among them, or the files esp32tl.build reads of a PlatformIO build.
-      - name: Build the validation images and examples
+      - name: Build and pack the firmware group
         if: steps.cache.outputs.cache-hit != 'true'
+        env:
+          FIRMWARE_OUT: ""
+          GROUP: ${{ matrix.family }}
+          SHARD: ${{ matrix.shard }}
         run: |
-          make firmware examples
+          case "$GROUP" in
+            idf)
+              firmware/build.sh --shard "$SHARD"
+              builds=(firmware/*/build)
+              ;;
+            platformio)
+              firmware/build-platformio.sh
+              builds=(firmware/*/.pio/build/esp32dev)
+              ;;
+            examples)
+              firmware/build.sh --examples --shard "$SHARD"
+              builds=(examples/*/build)
+              ;;
+          esac
           mkdir -p build/ci
           {
-            find firmware/*/build examples/*/build -maxdepth 1 -type f
-            find firmware/*/build/config examples/*/build/config -maxdepth 1 -name sdkconfig.json
-            find firmware/*/build/bootloader firmware/*/build/partition_table \
-              examples/*/build/bootloader examples/*/build/partition_table -maxdepth 1 \
-              -type f \( -name '*.bin' -o -name '*.elf' \)
-            find firmware/*/.pio/build/esp32dev -maxdepth 1 -type f \
-              \( -name '*.bin' -o -name firmware.elf -o -name 'esp32tl-*' \)
+            for build in "${builds[@]}"; do
+              if [ "$GROUP" = platformio ]; then
+                find "$build" -maxdepth 1 -type f \
+                  \( -name '*.bin' -o -name firmware.elf -o -name 'esp32tl-*' \)
+              else
+                find "$build" -maxdepth 1 -type f
+                find "$build/config" -maxdepth 1 -name sdkconfig.json
+                find "$build/bootloader" "$build/partition_table" -maxdepth 1 \
+                  -type f \( -name '*.bin' -o -name '*.elf' \)
+              fi
+            done
           } >build/ci/firmware.list
-          python3 - build/ci/firmware.list firmware/*/build examples/*/build \
-            firmware/*/.pio/build/esp32dev <<'EOF'
+          python3 - build/ci/firmware.list "${builds[@]}" <<'EOF'
           import json, sys
           from pathlib import Path
 
@@ -144,9 +203,9 @@ jobs:
               print(f"::error::{path} is missing from the tarball")
           sys.exit(1 if missing else 0)
           EOF
-          tar -cf build/ci/firmware.tar -T build/ci/firmware.list
+          tar -cf build/ci/firmware-${{ matrix.group }}.tar -T build/ci/firmware.list
 
-      - run: tar -tvf build/ci/firmware.tar
+      - run: tar -tvf build/ci/firmware-${{ matrix.group }}.tar
 
       # A failed save does not fail this step, so the next one fails the job
       # when the cache did not keep the tarball, rather than the test jobs.
@@ -154,15 +213,15 @@ jobs:
         if: steps.cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
         with:
-          path: build/ci/firmware.tar
-          key: ${{ steps.key.outputs.key }}
+          path: build/ci/firmware-${{ matrix.group }}.tar
+          key: ${{ steps.key.outputs.key }}-${{ matrix.group }}
 
       - name: Check that the cache kept the tarball
         if: steps.cache.outputs.cache-hit != 'true'
         uses: actions/cache/restore@v6
         with:
-          path: build/ci/firmware.tar
-          key: ${{ steps.key.outputs.key }}
+          path: build/ci/firmware-${{ matrix.group }}.tar
+          key: ${{ steps.key.outputs.key }}-${{ matrix.group }}
           lookup-only: true
           fail-on-cache-miss: true
 
@@ -170,23 +229,36 @@ jobs:
       # Saved at the end of the job and not checked: a miss in the test jobs
       # only downloads the ELF.
       - uses: actions/cache@v6
+        if: matrix.group == 'idf-1'
         with:
           path: .cache/esp-rom-elfs
           key: ${{ steps.key.outputs.rom-elf-key }}
 
       - run: make rom-elf
+        if: matrix.group == 'idf-1'
 
   runner:
     strategy:
       fail-fast: false
       matrix:
-        platform: ${{ fromJSON(github.event.repository.private && '["linux"]' || '["linux", "macos"]') }}
-    runs-on: ${{ matrix.platform == 'macos' && 'macos-latest' || fromJSON('["self-hosted", "Linux", "X64"]') }}
+        platform: [linux, macos]
+    runs-on: ${{ matrix.platform == 'macos' && 'macos-15' || 'ubuntu-24.04' }}
     timeout-minutes: 30
     # The same on both platforms; each adds its OS and architecture.
     outputs:
       key: ${{ steps.key.outputs.key }}
     steps:
+      - name: Check host architecture
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then
+            test "$RUNNER_ARCH" = ARM64
+            test "$(uname -m)" = arm64
+          else
+            test "$RUNNER_OS" = Linux
+            test "$RUNNER_ARCH" = X64
+            test "$(uname -m)" = x86_64
+          fi
+
       - uses: actions/checkout@v7
 
       # All of runner/ (target/ is not there after a checkout): the sources,
@@ -203,8 +275,7 @@ jobs:
           key: ${{ steps.key.outputs.key }}-${{ runner.os }}-${{ runner.arch }}
 
       # rustup then installs the toolchain runner/rust-toolchain.toml pins on
-      # the first build. The hosted images have rustup; on the self-hosted
-      # runner it is installed once and stays.
+      # the first build. The hosted images also supply the native linker.
       - name: Install rustup if missing
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
@@ -245,14 +316,25 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: ${{ fromJSON(github.event.repository.private && '["linux"]' || '["linux", "macos"]') }}
+        platform: [linux, macos]
         python: ["3.11", "3.13", "3.14"]
         # Why four, and why 15 minutes: "The test jobs run four shards of the
         # suite" in docs/decisions/ci.md.
         shard: ["1/4", "2/4", "3/4", "4/4"]
-    runs-on: ${{ matrix.platform == 'macos' && 'macos-latest' || fromJSON('["self-hosted", "Linux", "X64"]') }}
+    runs-on: ${{ matrix.platform == 'macos' && 'macos-15' || 'ubuntu-24.04' }}
     timeout-minutes: 15
     steps:
+      - name: Check host architecture
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then
+            test "$RUNNER_ARCH" = ARM64
+            test "$(uname -m)" = arm64
+          else
+            test "$RUNNER_OS" = Linux
+            test "$RUNNER_ARCH" = X64
+            test "$(uname -m)" = x86_64
+          fi
+
       - uses: actions/checkout@v7
 
       - id: python
@@ -262,11 +344,9 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
 
-      - uses: actions/cache/restore@v6
+      - uses: ./.github/actions/restore-firmware
         with:
-          path: build/ci/firmware.tar
           key: ${{ needs.firmware.outputs.key }}
-          fail-on-cache-miss: true
 
       - uses: actions/cache/restore@v6
         with:
@@ -283,25 +363,35 @@ jobs:
       # The images land in firmware/<image>/build/, firmware/<image>/.pio/build/esp32dev/
       # and examples/<name>/build/, where test_firmware_images.py reads them;
       # esp32tl-built marks them finished.
-      - name: Unpack the firmware and the runner
+      - name: Unpack and check the runner
         run: |
-          tar -xf build/ci/firmware.tar
           tar -xf build/ci/runner.tar
           runner/target/release/esp32tl-runner --help
 
       # `make setup` less build-runner: the runner came from the runner job.
       - run: make PYTHON='${{ steps.python.outputs.python-path }}' .venv/.installed rom-elf
 
+      # Docker Engine is supplied by ubuntu-24.04; start it explicitly and
+      # check access as the job user (the build scripts do not use sudo).
+      - name: Prepare Docker
+        if: runner.os == 'Linux'
+        run: |
+          command -v docker
+          sudo systemctl start docker
+          docker info
+
       # mtools makes and reads the FAT images of the SD card tests, which skip
       # without it: here it must be there, so that they run. Homebrew installs
-      # it on macOS; the self-hosted runner has no root for apt, so it must be
-      # installed there once, as Docker is.
+      # it on macOS; apt installs it on each fresh Linux VM.
       - name: mtools
         run: |
           if [ "$RUNNER_OS" = macOS ]; then
             brew install mtools
+          else
+            sudo apt-get update
+            sudo apt-get install -y mtools
           fi
-          for tool in mformat mcopy mdir mtype; do
+          for tool in mformat mcopy mdir mtype mmd; do
             command -v "$tool" >/dev/null || {
               echo "::error::no $tool on PATH: install mtools on this runner (apt-get install mtools)"
               exit 1
@@ -316,9 +406,15 @@ jobs:
   # the claim is about two runs on one machine, not across machines.
   determinism:
     needs: [firmware, runner]
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
+      - name: Check host architecture
+        run: |
+          test "$RUNNER_OS" = Linux
+          test "$RUNNER_ARCH" = X64
+          test "$(uname -m)" = x86_64
+
       - uses: actions/checkout@v7
 
       - id: python
@@ -329,11 +425,9 @@ jobs:
           cache-dependency-path: pyproject.toml
 
       # As in the test job.
-      - uses: actions/cache/restore@v6
+      - uses: ./.github/actions/restore-firmware
         with:
-          path: build/ci/firmware.tar
           key: ${{ needs.firmware.outputs.key }}
-          fail-on-cache-miss: true
 
       - uses: actions/cache/restore@v6
         with:
@@ -346,9 +440,8 @@ jobs:
           path: .cache/esp-rom-elfs
           key: ${{ needs.firmware.outputs.rom-elf-key }}
 
-      - name: Unpack the firmware and the runner
+      - name: Unpack and check the runner
         run: |
-          tar -xf build/ci/firmware.tar
           tar -xf build/ci/runner.tar
           runner/target/release/esp32tl-runner --help
 
@@ -357,12 +450,17 @@ jobs:
       - run: make determinism
 
   # `make lint` in full, clippy included. The checkout removes runner/target/,
-  # so clippy checks esp32sim from scratch: 8 s on the self-hosted runner,
-  # fetching esp32sim included. Not worth a cache.
+  # so clippy checks esp32sim from scratch, without a target-directory cache.
   lint:
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
+      - name: Check host architecture
+        run: |
+          test "$RUNNER_OS" = Linux
+          test "$RUNNER_ARCH" = X64
+          test "$(uname -m)" = x86_64
+
       - uses: actions/checkout@v7
 
       # The oldest Python esp32tl supports, which mypy and ruff target too.
@@ -391,9 +489,15 @@ jobs:
   # on main, the merge base is the commit itself and there is nothing to compare.
   docs:
     if: github.event_name == 'pull_request'
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
+      - name: Check host architecture
+        run: |
+          test "$RUNNER_OS" = Linux
+          test "$RUNNER_ARCH" = X64
+          test "$(uname -m)" = x86_64
+
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0

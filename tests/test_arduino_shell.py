@@ -47,3 +47,10 @@ def test_serves_status_once_it_joins_the_network(
     status = response.json()
     assert status["status"] == "ok" and status["requests"] == 1
     console.expect_exact("arduino_shell: GET /status -> 200")
+
+
+def test_console_help(board: Esp32Sim) -> None:
+    board.power_on()
+    board.console.expect_exact("arduino_shell: ready; type help")
+    board.console.sendline("help")
+    board.console.expect_exact("arduino_shell: commands: help, greeting, uptime, wifi")

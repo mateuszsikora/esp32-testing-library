@@ -293,3 +293,7 @@ the board booted `arduino_shell` from `ota_0`, so the erased otadata reached it.
 - [pytest plugin](pytest-plugin-user.md)
 - [Taps and run reports](run-report-user.md)
 - [Running repository tests](../guides/testing.md)
+
+`board.console.write(bytes_or_text)` writes to the open serial port after power-on. Text is
+UTF-8; `sendline(line)` adds LF. Partial port writes are completed, and a zero-progress write
+raises `BackendError`. Console taps record input at write time as well as received output.

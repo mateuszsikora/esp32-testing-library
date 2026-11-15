@@ -784,3 +784,12 @@ The same builder also supports `firmware/build.sh --examples [NAME...]`, invoked
 and writes to `examples/<name>/build/` by default, retaining the pinned container and provenance
 checks. `make firmware` continues to build validation images only.
 See [runnable examples](examples-user.md) for commands and configuration.
+
+### Console REPL
+
+`firmware/console_repl` is an ESP-IDF UART0 `esp_console` REPL at 115200 baud, with prompt
+`console_repl>` and the built-in `help` command. Build it with
+`firmware/build.sh console_repl`. `tests/test_console_input.py` sends `help` through
+`board.console.sendline` and checks its command list. `tests/test_arduino_shell.py` also types
+`help` through Arduino `Serial`, exercising its driver path. Both help tests can run on serial
+with an explicitly selected port; the UART0 FIFO overflow test requires esp32sim.

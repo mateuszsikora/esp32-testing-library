@@ -9,10 +9,10 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 
 | Decision | File | Status |
 |---|---|---|
-| [Every Linux job runs on the self-hosted runner hp600g1](ci.md#every-linux-job-runs-on-the-self-hosted-runner-hp600g1) | `ci.md` | decided (#48) |
-| [The macOS jobs run only once the repository is public](ci.md#the-macos-jobs-run-only-once-the-repository-is-public) | `ci.md` | decided (#52) |
-| [The runs-on label is computed from the platform](ci.md#the-runs-on-label-is-computed-from-the-platform) | `ci.md` | decided (#52) |
-| [CI moves to GitHub-hosted runners before the repository goes public](ci.md#ci-moves-to-github-hosted-runners-before-the-repository-goes-public) | `ci.md` | decided (#52) |
+| [Every Linux job runs on the self-hosted runner hp600g1](ci.md#every-linux-job-runs-on-the-self-hosted-runner-hp600g1) | `ci.md` | superseded (#48) |
+| [The macOS jobs run only once the repository is public](ci.md#the-macos-jobs-run-only-once-the-repository-is-public) | `ci.md` | superseded (#52) |
+| [The runs-on label is computed from the platform](ci.md#the-runs-on-label-is-computed-from-the-platform) | `ci.md` | superseded (#52) |
+| [CI moves to GitHub-hosted runners before the repository goes public](ci.md#ci-moves-to-github-hosted-runners-before-the-repository-goes-public) | `ci.md` | superseded (#52) |
 | [Builds reach the test jobs through the Actions cache, not artifacts](ci.md#builds-reach-the-test-jobs-through-the-actions-cache-not-artifacts) | `ci.md` | decided (#48) |
 | [A build job fails when the cache did not keep its tarball](ci.md#a-build-job-fails-when-the-cache-did-not-keep-its-tarball) | `ci.md` | decided (#190) |
 | [Each cache key hashes the whole workflow and the Makefile](ci.md#each-cache-key-hashes-the-whole-workflow-and-the-makefile) | `ci.md` | decided (#48) |
@@ -27,8 +27,11 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The lint job carries its own copy of the rustup step](ci.md#the-lint-job-carries-its-own-copy-of-the-rustup-step) | `ci.md` | decided (#50) |
 | [The determinism job runs tests of its own twice and compares what they leave](ci.md#the-determinism-job-runs-tests-of-its-own-twice-and-compares-what-they-leave) | `ci.md` | decided (#22) |
 | [The determinism job runs on Linux and Python 3.11 only](ci.md#the-determinism-job-runs-on-linux-and-python-311-only) | `ci.md` | decided (#22) |
-| [The Arduino image is built in the firmware job](ci.md#the-arduino-image-is-built-in-the-firmware-job) | `ci.md` | decided (#193) |
+| [The Arduino image is built in the firmware job](ci.md#the-arduino-image-is-built-in-the-firmware-job) | `ci.md` | superseded (#193) |
 | [PlatformIO's core directory is cached under the key of its pins](ci.md#platformios-core-directory-is-cached-under-the-key-of-its-pins) | `ci.md` | decided (#193) |
+| [CI uses standard hosted images on both platforms before publication](ci.md#ci-uses-standard-hosted-images-on-both-platforms-before-publication) | `ci.md` | decided (15 November 2026) |
+| [Firmware builds run in three parallel groups](ci.md#firmware-builds-run-in-three-parallel-groups) | `ci.md` | superseded (15 November 2026) |
+| [Firmware families are sharded to shorten the critical path](ci.md#firmware-families-are-sharded-to-shorten-the-critical-path) | `ci.md` | decided (15 November 2026) |
 
 ## Documentation and the documentation check
 
@@ -132,7 +135,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [A stream replay sends each event in the turn at its time](harness.md#a-stream-replay-sends-each-event-in-the-turn-at-its-time) | `harness.md` | decided (#14) |
 | [The recording reader takes the generated recordings' header as it is](harness.md#the-recording-reader-takes-the-generated-recordings-header-as-it-is) | `harness.md` | decided (#14) |
 | [The esp32sim backend does not compare a recording's app_sha256 with its app](harness.md#the-esp32sim-backend-does-not-compare-a-recordings-app_sha256-with-its-app) | `harness.md` | decided (#14) |
-| [Console.write is postponed until the runner reads input](harness.md#consolewrite-is-postponed-until-the-runner-reads-input) | `harness.md` | postponed (#51) |
+| [Console.write is postponed until the runner reads input](harness.md#consolewrite-is-postponed-until-the-runner-reads-input) | `harness.md` | superseded (#195) |
 | [The serial backend is postponed to M4](harness.md#the-serial-backend-is-postponed-to-m4) | `harness.md` | superseded (#25) |
 | [Prebuilt runner binaries are postponed to M10](harness.md#prebuilt-runner-binaries-are-postponed-to-m10) | `harness.md` | postponed (#40) |
 | [Replaying requests, looping and wall-clock recordings is postponed](harness.md#replaying-requests-looping-and-wall-clock-recordings-is-postponed) | `harness.md` | superseded (#20) |
@@ -292,6 +295,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [A consumer names a condition with esp32tl.condition, not with a description on the wait](harness.md#a-consumer-names-a-condition-with-esp32tlcondition-not-with-a-description-on-the-wait) | `harness.md` | decided (#181) |
 | [A PlatformIO build is read by its file names and image headers](harness.md#a-platformio-build-is-read-by-its-file-names-and-image-headers) | `harness.md` | decided (#192) |
 | [The serial backend flashes a PlatformIO build through an IdfApp of esp32tl's](harness.md#the-serial-backend-flashes-a-platformio-build-through-an-idfapp-of-esp32tls) | `harness.md` | decided (#194) |
+| [Console input uses GPIO 3 at a fixed 115200 baud](harness.md#console-input-uses-gpio-3-at-a-fixed-115200-baud) | `harness.md` | decided (#195) |
 
 ## The runner crate and esp32sim
 
@@ -346,3 +350,4 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The guest's HCI goes over the board socket, on the board's clock](runner.md#the-guests-hci-goes-over-the-board-socket-on-the-boards-clock) | `runner.md` | decided (#34) |
 | [The Bluetooth messages keep the link protocol at version 1](runner.md#the-bluetooth-messages-keep-the-link-protocol-at-version-1) | `runner.md` | decided (#34) |
 | [VHCI packets in PSRAM are esp32sim's to take](runner.md#vhci-packets-in-psram-are-esp32sims-to-take) | `runner.md` | decided (#188) |
+| [The runner restores U0RXD's input-enabled reset state](runner.md#the-runner-restores-u0rxds-input-enabled-reset-state) | `runner.md` | decided (#195) |

@@ -5,8 +5,8 @@
 # offsets, beside the ELF, the binaries and config/sdkconfig.json.
 # FIRMWARE_OUT is firmware/ by default, or examples/ with --examples.
 #
-#   firmware/build.sh [IMAGE...]     all validation images when none is named
-#   firmware/build.sh --examples [NAME...]     all examples when none is named
+#   firmware/build.sh [--shard K/N] [IMAGE...]     all validation images when none is named
+#   firmware/build.sh --examples [--shard K/N] [NAME...]     all examples when none is named
 #
 # The build runs in ESP-IDF's container, pinned by digest. IDF_LOCAL=1 builds
 # with the ESP-IDF of the calling shell instead (export.sh sourced), for
@@ -28,7 +28,7 @@ set -eu
 
 IDF_VERSION=v5.3.6
 CONTAINER=espressif/idf:$IDF_VERSION@sha256:cee52f0c4fdaf088992a7a739f5993154e95cf1d3ab61c24f5b40e6d56a3a070
-IMAGES="hello_world nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request http_server persistence ota_state timer_wake deep_sleep bt_spp_initiator bt_spp_initiator_psram"
+IMAGES="hello_world console_repl nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request http_server persistence ota_state timer_wake deep_sleep bt_spp_initiator bt_spp_initiator_psram"
 family=firmware
 if [ "${1:-}" = --examples ]; then
 	shift
@@ -74,6 +74,7 @@ project_of() {
 		fi
 		echo "$source"
 		;;
+	console_repl) echo "$PWD/firmware/console_repl" ;;
 	nmea_reader) echo "$PWD/firmware/nmea_reader" ;;
 	gpio_echo) echo "$PWD/firmware/gpio_echo" ;;
 	modem_at) echo "$PWD/firmware/modem_at" ;;
@@ -89,13 +90,43 @@ project_of() {
 	esac
 }
 
+# CI can split a family without maintaining another copy of its image list.
+shard=1
+shards=1
+if [ "${1:-}" = --shard ]; then
+	[ $# -ge 2 ] || die "--shard needs K/N"
+	case $2 in
+	*[!0-9/]* | */*/* | /* | */ | '') die "--shard needs K/N" ;;
+	esac
+	shard=${2%/*}
+	shards=${2#*/}
+	case $shard:$shards in 0* | *:0*) die "--shard needs positive integers without leading zeros" ;; esac
+	[ "$shard/$shards" = "$2" ] && [ "$shard" -ge 1 ] &&
+		[ "$shards" -ge "$shard" ] || die "--shard needs 1 <= K <= N"
+	shift 2
+fi
+
 for image in "$@"; do
 	case " $IMAGES " in
 	*" $image "*) ;;
 	*) die "unknown image '$image'; the images are: $IMAGES" ;;
 	esac
 done
+# Intentional splitting: image names contain neither whitespace nor glob characters.
+# shellcheck disable=SC2086
 [ $# -gt 0 ] || set -- $IMAGES
+
+selected=
+index=0
+for image in "$@"; do
+	if [ "$((index % shards + 1))" -eq "$shard" ]; then
+		selected="$selected $image"
+	fi
+	index=$((index + 1))
+done
+[ -n "$selected" ] || die "shard $shard/$shards selects no images"
+# shellcheck disable=SC2086
+set -- $selected
 
 # What the build needs is checked before anything is written. Docker creates
 # /.dockerenv in every container; without it, ESP32TL_CONTAINER was left set on

@@ -137,8 +137,8 @@ What a tap writes is a recording of [version 1 of the format](../recording-forma
 
 Serial requires an app hash at setup; a missing entry or unreadable file fails before the port
 opens. It writes the selected artifact's digest, including with skip-autoflash, which does not
-prove the device's flash contents. Console taps contain only `out` events. The schema is unchanged
-(version 1): `console` was already a valid interface name.
+prove the device's flash contents. Console taps contain `out` events for firmware output
+and `in` events for test writes. The schema is unchanged (version 1): `console` was already a valid interface name.
 
 The esp32sim report section, after `BoardLink.report()`:
 

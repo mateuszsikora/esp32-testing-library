@@ -1764,6 +1764,23 @@ that references to its number keep their meaning.
      `runner/src/session/tests.rs::a_signal_or_the_peer_gone_ends_the_wait_for_wall_time`,
      `tests/test_real_source.py::test_a_turn_held_before_the_first_2_16_cycles_does_not_cost_the_waits`
 
+## Console input
+
+- **236.** Console input uses UART0 RX on GPIO 3 at a host rate independent of the guest rate.
+     A full UART0 RX FIFO loses arriving bytes and reports `rxfifo_ovf`, like other UARTs.
+     `tests/test_console_writes.py::test_console_writes_keep_the_instant_and_host_baud`,
+     `tests/test_console_input.py::test_console_fifo_overflow`
+- **237.** U0RXD starts with its input and pull-up enabled after reset; subsequent firmware
+     writes may disable or reroute it.
+     `runner/src/session/tests.rs::console_rx_reset_restores_native_input_but_firmware_can_disable_or_reroute_it`
+
+## Firmware build shards
+
+For a fixed ordered image list and shard count N, `firmware/build.sh --shard K/N` selects
+positions congruent to K-1 modulo N. Across K=1..N every image occurs exactly once; sharding
+never silently drops an image. Invalid or empty shards fail before starting Docker or writing
+build output. `tests/test_firmware_build.py` checks both validation and example families.
+
 ## HTTP client framing
 
 A device HTTP response is independent of TCP packet boundaries: Content-Length and chunked
