@@ -61,6 +61,7 @@ class TcpConnection:
         self._write: Callable[[bytes], None] = lambda data: None
         self._close: Callable[[], None] = lambda: None
         self._received = bytearray()
+        self._observers: list[Callable[[], None]] = []
         self._closing = False
         self._end: str | None = None
         self._why: str | None = None  # why a lost connection was lost, unless with the link
@@ -264,11 +265,18 @@ class TcpConnection:
     def on_data(self, data: bytes) -> None:
         self._record("out", data)
         self._received += data
+        self._notify()
 
     def on_close(self) -> None:
         if self._end is None and self.closed_at is None:
             self.closed_at = Duration(self._now())
+            self._notify()
 
     def on_end(self, kind: str, why: str | None = None) -> None:
         self._end, self._why = kind, why
         self.ended_at = Duration(self._now())
+        self._notify()
+
+    def _notify(self) -> None:
+        for observer in self._observers:
+            observer()

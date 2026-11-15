@@ -713,3 +713,7 @@ goes out in the turn of the reset; `close()` closes the `Bluetooth`'s air in its
 stops and joins the runner before closing the SD slot in a `finally` block, so owned images are
 removed on both successful and failed teardown. An uninserted built image is also cleaned; merely
 building does not count as firmware setup for the no-power-on guard.
+
+Console input is a `ConsoleInput` link interface with `Wire(None, 3, 115200)`. Its pending
+writes retain the test clock timestamp until the next poll. GPIO 3 is watched, GPIO 1 is not;
+output still arrives only through `console`. The normal UART warning and report paths apply.

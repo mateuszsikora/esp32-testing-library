@@ -1109,3 +1109,17 @@ covered.
   the runner meets the block point.
 - [Implementation plan, 4.2 Runner crate](../implementation-plan.md#42-runner-crate).
 - [CI](../cicd.md): the `runner` job.
+
+### UART0 RX reset state
+
+At esp32sim revision `3bdb958`, the classic GPIO adapter initializes U0RXD's IO_MUX register to
+zero. Consequently GPIO 3 has no enabled input, and `uart_rx` reports `unrouted_rx` after a
+normal boot, including ESP-IDF's default REPL (which leaves pins unchanged).
+`session::reset_console_rx` restores U0RXD at `0x3ff49084` to function 0, input enabled,
+pull-up enabled and drive strength 2, on initial boot and after software, EN and supply resets.
+This implements GPIO 3's reset configuration 3 in the
+[ESP32 TRM, table 6.10-1](https://documentation.espressif.com/esp32_technical_reference_manual_en.pdf).
+It is a scoped workaround for the pinned emulator, not an unconditional UART0 route:
+firmware can still disable input or change its native/matrix route. No wire message changes.
+`runner/src/session/tests.rs` checks native routing, input disable, reset and matrix rerouting;
+`tests/test_console_input.py` exercises post-boot FIFO overflow and the ESP-IDF UART driver.

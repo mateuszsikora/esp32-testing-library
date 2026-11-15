@@ -202,6 +202,17 @@ const WAKE_MARGIN_TICKS: u64 = 2;
 /// cycles, and the CPU's clock is at most the bus's.
 const SLEEP_STEP: u64 = 1 << 31;
 
+/// Work around esp32sim 3bdb958's zeroed IO_MUX reset state on U0RXD.
+/// ESP32 TRM table 6.10-1 specifies reset configuration 3: input and pull-up enabled.
+/// Set it only at reset; subsequent firmware routing and input-disable writes remain effective.
+pub(crate) fn reset_console_rx(machine: &mut esp32::Machine) {
+    use emu_core::Bus;
+    machine
+        .bus
+        .write32(0x3ff4_9084, (2 << 10) | (1 << 9) | (1 << 8))
+        .expect("U0RXD IO_MUX is mapped");
+}
+
 impl Guest for esp32::Machine {
     fn cycles(&self) -> u64 {
         self.bus.cycles
@@ -211,11 +222,14 @@ impl Guest for esp32::Machine {
         self.run(u64::MAX)
     }
     fn chip_reset(&mut self) -> u32 {
-        self.reboot()
+        let cause = self.reboot();
+        reset_console_rx(self);
+        cause
     }
     fn power_on_reset(&mut self, rom: &[u8]) -> u32 {
         // the cores, the digital peripherals and PSRAM, as at any reset
         self.reboot();
+        reset_console_rx(self);
         // what keeps its contents through `reboot` and not without power: through the bus, so
         // that the code decoded from it is decoded again
         let bus = &mut self.bus;
