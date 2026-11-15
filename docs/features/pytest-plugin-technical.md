@@ -93,7 +93,9 @@ are in [models-technical.md](models-technical.md).
    `esp32tl.net.tls.number_authorities_from_zero()` for every test, `board` or not: validates
    serial's artifact (and optional `app_recording` reference), then obtains `dut` with `request.getfixturevalue`. A `pytest_fixture_setup` hook
    validates before pytest-embedded's `app` too, covering tests that request `dut` directly.
-   The digest is cached in the item's `SERIAL_ARTIFACT` stash. It refuses a non-single `Dut`,
+   The `Artifact`, the digest and the build's kind, is cached in the item's `SERIAL_ARTIFACT`
+   stash; for a PlatformIO build the hook also puts `PlatformioApp` in the place of `IdfApp` in
+   `_fixture_classes_and_options.classes["app"]`. It refuses a non-single `Dut`,
    then constructs `Esp32Sim` or `Serial`, with the profile, the test file's directory and
    `skip_at_the_test`. Serial requires an `IdfDut`; its fixture setup has already handled
    flashing. `board_profile(request.node)` retrieves `BoardMarkers.loaded_profile` using the

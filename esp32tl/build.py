@@ -6,9 +6,11 @@ leaves, read through pytest-embedded-idf's `IdfApp`: its `flasher_args.json` giv
 their offsets, the `partition-table` and `app` entries, and `config/sdkconfig.json` the target. A
 PlatformIO build is `.pio/build/<env>/`, which has no `flasher_args.json`: its files are read by
 name, at the offsets pioarduino's espressif32 platform flashes them at, and the chip comes from
-the images' own headers. Nothing in either directory is written, renamed or converted.
+the images' own headers; whether it asks for flash encryption from its `config/sdkconfig.json`
+when it has one. Nothing in either directory is written, renamed or converted.
 """
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -27,6 +29,8 @@ FACTORY = "firmware.factory.bin"
 BOOTLOADER = "bootloader.bin"
 PARTITIONS = "partitions.bin"
 ELF = "firmware.elf"
+# ESP-IDF's configuration as JSON, which ESP-IDF's build system writes into the build directory.
+SDKCONFIG = "config/sdkconfig.json"
 
 # Where the classic ESP32's bootloader and the partition table are in the flash: ESP-IDF's
 # defaults, and the offsets the espressif32 platform flashes bootloader.bin and partitions.bin at.
@@ -134,10 +138,7 @@ def esp_idf(app_path: str, directory: Path, backend: str) -> Build:
     if app.target != CLASSIC:
         raise BuildError(f"{directory} is built for {app.target}; {backend} runs the classic esp32")
     if app.flash_settings.get("encrypt"):
-        reason = (
-            "the runner does not do" if backend == "esp32sim" else f"{backend} does not support"
-        )
-        raise BuildError(f"{directory} asks for flash encryption, which {reason}")
+        raise encryption(directory, backend)
     missing = [f.file_path for f in app.flash_files if not Path(f.file_path).is_file()]
     if missing:
         raise BuildError(f"{directory} is not a finished build, missing {', '.join(missing)}")
@@ -166,6 +167,7 @@ def platformio(directory: Path, backend: str) -> Build:
     missing = [str(path) for path in needed if not path.is_file()]
     if missing:
         raise BuildError(f"{directory} is not a finished build, missing {', '.join(missing)}")
+    check_encryption(directory, backend)
     # The application's header first: it is at the start of firmware.bin for every chip, while an
     # S3's or a C3's bootloader is at 0x0, so this names the chip rather than a bootloader missing
     # at 0x1000.
@@ -214,6 +216,32 @@ def platformio(directory: Path, backend: str) -> Build:
                 f" {app.name!r}: build again"
             )
     return build
+
+
+def encryption(directory: Path, backend: str, what: str = "flash encryption") -> BuildError:
+    """The refusal of a build in `directory` that asks for `what`."""
+    reason = "the runner does not do" if backend == "esp32sim" else f"{backend} does not support"
+    return BuildError(f"{directory} asks for {what}, which {reason}")
+
+
+def check_encryption(directory: Path, backend: str) -> None:
+    """Refuses a PlatformIO build whose `config/sdkconfig.json` enables flash encryption or
+    secure boot: its bootloader would burn a board's eFuses on the first boot, and with secure
+    boot IdfSerial would flash it with esptool's `--force`. A build without that file is not
+    checked."""
+    config = directory / SDKCONFIG
+    if not config.is_file():
+        return
+    try:
+        settings = json.loads(config.read_text())
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise BuildError(f"{config} is not JSON: {error}") from error
+    if not isinstance(settings, dict):
+        raise BuildError(f"{config} is not a JSON object")
+    if settings.get("SECURE_FLASH_ENC_ENABLED"):
+        raise encryption(directory, backend)
+    if settings.get("SECURE_BOOT"):
+        raise encryption(directory, backend, "secure boot")
 
 
 def app_partition(path: Path, table: bytes, firmware: Path) -> flash.Partition:

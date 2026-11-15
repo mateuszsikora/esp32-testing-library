@@ -2,8 +2,8 @@
 
 A test runs the build in the directory it selects, as `idf.py build` or `pio run` left it: esp32tl
 reads an ESP-IDF build directory or a PlatformIO one, `.pio/build/<env>/`, and writes, renames or
-converts nothing in it. The [esp32sim backend](esp32sim-backend-user.md) runs both kinds; the
-[serial backend](serial-backend-user.md) flashes ESP-IDF builds only.
+converts nothing in it. The [esp32sim backend](esp32sim-backend-user.md) runs both kinds, and the
+[serial backend](serial-backend-user.md) flashes both, the same files at the same offsets.
 
 ## Select the build
 
@@ -44,8 +44,9 @@ the directory.
 `firmware.bin`, and then one of these:
 
 - `firmware.factory.bin`, which pioarduino's builds have: the whole flash from `0x0`, with the
-  bootloader at `0x1000`, the partition table at `0x8000`, the otadata of `boot_app0.bin` at
-  `0xe000`, which selects `ota_0`, and the application. The runner gets this one file at `0x0`.
+  bootloader at `0x1000`, the partition table at `0x8000`, the otadata at `0xe000` (in an Arduino
+  build `boot_app0.bin`'s, which selects `ota_0`; in a `framework = espidf` build an erased
+  `ota_data_initial.bin`), and the application. The runner gets this one file at `0x0`.
   It must hold `firmware.bin` where pioarduino puts it (below): that is the application a
   recording's `app_sha256` names.
 - Otherwise `bootloader.bin` and `partitions.bin`. The runner gets `bootloader.bin` at `0x1000`,
@@ -86,8 +87,16 @@ The runner's flash is 4 MB whatever the build and the board profile say
 The partition table is the one at `0x8000`, the application image `firmware.bin`, and the
 application's ELF `firmware.elf` when it is there. The chip is read from the headers of
 `firmware.bin` and of the bootloader: a build for another chip is refused with the name of the
-chip it was built for. A PlatformIO build directory holds no configuration esp32tl reads, so flash
-encryption is not checked.
+chip it was built for. A build directory with `config/sdkconfig.json`, which ESP-IDF's build system
+writes, is refused when it sets `SECURE_FLASH_ENC_ENABLED` or `SECURE_BOOT`; without that file,
+neither is checked. pioarduino's ESP-IDF builder reads that file from the build directory, so a
+`framework = espidf` build has it. An Arduino build has none, also with `custom_sdkconfig`: built
+with `CONFIG_SECURE_FLASH_ENC_ENABLED=y` there (pioarduino 55.03.312, Arduino-ESP32 3.3.12), the
+ESP-IDF builder compiled the framework's libraries and wrote the configuration to
+`sdkconfig.esp32dev` in the project directory, not to the build directory, and esp32tl did not
+refuse the build. Its `bootloader.bin`, which on the classic ESP32 is what turns flash encryption
+on, was byte for byte the one of the same build without `custom_sdkconfig`: the framework's
+precompiled bootloader.
 
 What else comes from the build:
 
@@ -107,7 +116,9 @@ name, `esp32sim: ` or `serial: `. `esp32tl run` prints it after `esp32tl: ` and 
 |---|---|
 | `{build} holds no ESP-IDF or PlatformIO build: no flasher_args.json and no firmware.bin` | Build the app (`make firmware` for this repository's firmware, `pio run` for a PlatformIO project), or fix the `app_path` marker and its `build_dir` keyword |
 | `{build} is built for {chip}; {backend} runs the classic esp32` | Build for the classic ESP32. `{chip}` is the IDF target name, as `esp32s3`, or `an unknown chip (chip id {id})` for a PlatformIO image whose chip id esp32tl does not know |
-| `{build} asks for flash encryption, which the runner does not do` | An ESP-IDF build; build it without flash encryption. On serial: `which serial does not support` |
+| `{build} asks for flash encryption, which the runner does not do` | Build it without flash encryption. On serial: `which serial does not support` |
+| `{build} asks for secure boot, which the runner does not do` | A PlatformIO build; build it without secure boot. On serial: `which serial does not support` |
+| `{build}/config/sdkconfig.json is not JSON: {error}`, `{build}/config/sdkconfig.json is not a JSON object` | A PlatformIO build whose ESP-IDF configuration esp32tl cannot read; build again |
 | `{build} is not a finished build, missing {files}` | Finish the build; `{files}` is a comma-separated list of paths |
 | `{build}/firmware.bin holds no application image: no 0xE9 there` | `firmware.bin` does not start with an image header; build again |
 | `{file} holds no bootloader at 0x1000: no 0xE9 there` | `{file}` is `firmware.factory.bin`, or `bootloader.bin` without it; build again, for the classic ESP32 |
@@ -116,7 +127,6 @@ name, `esp32sim: ` or `serial: `. `esp32tl run` prints it after `esp32tl: ` and 
 | `{file}: firmware.bin goes at {offset}, where the table has no application partition` | `{file}` is `partitions.bin`, or `firmware.factory.bin`; the table has no `ota_0` and no application partition at `0x10000`. Such a build does not boot on a board either |
 | `{build}/firmware.bin is {size} bytes, more than the {partition size} of the partition '{name}' at {offset}` | The application does not fit its partition; choose a larger partition table |
 | `{build}/firmware.factory.bin does not hold firmware.bin at {offset}, in the partition '{name}': build again` | The factory image is of another build than `firmware.bin`; build again, or copy both from one build |
-| `{build} is a PlatformIO build, which the serial backend does not flash yet: run it on esp32sim` | On serial only; run the test on esp32sim |
 
 ## See also
 

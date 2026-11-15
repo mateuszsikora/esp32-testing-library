@@ -3,20 +3,30 @@
 IdfSerial owns connecting and flashing. Between power_on and close we own its reader, stamping
 batches after each read poll and forwarding them to pytest-embedded's log. Only the test's
 thread drains those bytes into the console, so matching never races a resize of its bytearray.
+
+IdfSerial flashes the files of an `IdfApp`, which reads them from `flasher_args.json`. A PlatformIO
+build has none: `PlatformioApp` is the `IdfApp` the plugin gives pytest-embedded for one, holding
+the files of `esp32tl.build`, so that IdfSerial writes the flash esp32sim runs.
 """
 
 import queue
+import shutil
+import tempfile
 import threading
 import time
+import weakref
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import NoReturn, TypeVar
+from typing import Any, NoReturn, TypeVar
 
+from pytest_embedded.app import App
 from pytest_embedded.log import MessageQueue
+from pytest_embedded_idf.app import FlashFile, IdfApp
 from pytest_embedded_idf.dut import IdfDut
 
-from esp32tl import build, recording
+from esp32tl import build, flash, recording
 from esp32tl.backends.clock import nanoseconds, seconds
 from esp32tl.backends.esp32sim import BackendError, load_app, refuse, route_wire
 from esp32tl.boards import BoardProfile, capabilities
@@ -43,20 +53,25 @@ POLL_SECONDS = 0.01
 READER_STOP_SECONDS = 1.0
 
 
+@dataclass(frozen=True)
+class Artifact:
+    """The build `check_artifact` validated: the hash of its application image, and its kind,
+    `build.ESP_IDF` or `build.PLATFORMIO`."""
+
+    app_sha256: str
+    kind: str
+
+
 def check_artifact(
     app_path: str, reference: Path | None = None, *, build_dir: str | Path | None = None
-) -> str:
+) -> Artifact:
     """Validate the local build, optionally against a recording, before opening a port.
 
-    This compares app.bin, not the ELF hash stored in the ESP-IDF app descriptor. It does not
-    establish what is on a board when autoflash is skipped.
+    This compares app.bin of an ESP-IDF build, firmware.bin of a PlatformIO one, not the ELF hash
+    stored in the ESP-IDF app descriptor. It does not establish what is on a board when autoflash
+    is skipped.
     """
     app = load_app(app_path, build_dir=build_dir, backend=Serial.name)
-    if app.kind != build.ESP_IDF:
-        raise BackendError(
-            f"{app.directory} is a PlatformIO build, which the serial backend does not flash yet:"
-            " run it on esp32sim"
-        )
     try:
         digest = app_image_sha256(app)
         if digest is None:
@@ -71,7 +86,119 @@ def check_artifact(
                 )
     except (OSError, recording.RecordingError) as error:
         raise BackendError(str(error)) from error
-    return digest
+    return Artifact(digest, app.kind)
+
+
+# What a PlatformIO build gives esptool's write-flash: the resets and the stub ESP-IDF's
+# flasher_args.json names, and the images' flash mode, frequency and size kept as the build wrote
+# them, so that the board gets the bytes esp32sim runs. IdfSerial.flash() passes `after` as
+# hard_reset whatever its value.
+PLATFORMIO_ESPTOOL_ARGS = {"before": "default-reset", "after": "hard-reset", "stub": True}
+KEEP = {"flash_mode": "keep", "flash_freq": "keep", "flash_size": "keep"}
+PLATFORMIO_WRITE_FLASH_ARGS = [
+    "--flash-mode",
+    "keep",
+    "--flash-freq",
+    "keep",
+    "--flash-size",
+    "keep",
+]
+# The partitions esp32sim has erased and a board may not: the otadata (data, ota), all of it, and
+# the factory application (app, factory), its first sector, where its image header is.
+DATA, OTA_DATA = 1, 0
+APP, FACTORY = 0, 0
+SECTOR = 0x1000
+ERASED = b"\xff"
+
+
+class PlatformioApp(IdfApp):
+    """A PlatformIO build as pytest-embedded's `IdfSerial` flashes it: the build's files at their
+    offsets (`esp32tl.build.platformio`), and, where no file of the build covers them, an erased
+    otadata partition and, unless the build's own otadata selects a slot, an erased first sector
+    of a `factory` partition, as the flash of esp32sim has them. Otherwise what a board had there
+    would choose the application it boots: an otadata naming another slot, or an image left in
+    `factory`, which the bootloader tries before `ota_0` with the otadata erased. The erased files
+    are in a temporary directory, not in the build directory, removed with the app.
+
+    pytest-embedded makes it from the `app` fixture's `app_path` and `build_dir`, as an `IdfApp`.
+    """
+
+    def __init__(
+        self,
+        app_path: str | None = None,
+        build_dir: str | None = None,
+        part_tool: str | None = None,
+        **kwargs: Any,
+    ) -> None:
+        # Not IdfApp.__init__, which reads flasher_args.json; the attributes it sets, from the
+        # build instead.
+        App.__init__(self, app_path, build_dir, **kwargs)
+        self._sdkconfig = None
+        self._target = None
+        self._parttool = part_tool
+        self._partition_table = None
+        self.build = load_app(self.app_path, build_dir=self.binary_path, backend=Serial.name)
+        table = flash.partitions(self.build.table())
+        self._table: dict[str, dict[str, int]] = {
+            p.name: {
+                "type": p.type,
+                "subtype": p.subtype,
+                "offset": p.offset,
+                "size": p.size,
+                "flags": p.flags,
+            }
+            for p in table.values()
+        }
+        self.elf_file = str(self.build.elf) if self.build.elf is not None else None
+        self.bin_file = str(self.build.app_image)
+        self.is_loadable_elf = False
+        self.is_linux_elf = False
+        files = [FlashFile(f.offset, str(f.path)) for f in self.build.flash_files]
+        otadata = [p for p in table.values() if (p.type, p.subtype) == (DATA, OTA_DATA)]
+        factory = [p for p in table.values() if (p.type, p.subtype) == (APP, FACTORY)]
+        # An otadata of the build's own that is not erased, boot_app0.bin's in an Arduino build's
+        # firmware.factory.bin, selects a slot, and the bootloader does not try factory. The
+        # erased ota_data_initial.bin of a framework = espidf build selects none.
+        if any(self._covered(p.offset) and not self._erased(p) for p in otadata):
+            factory = []
+        directory: Path | None = None
+        for p in otadata + factory:
+            if self._covered(p.offset):
+                continue
+            if directory is None:
+                directory = Path(tempfile.mkdtemp(prefix="esp32tl-erased-"))
+                weakref.finalize(self, shutil.rmtree, directory, True)
+            name = "otadata-erased.bin" if p in otadata else "factory-erased.bin"
+            size = p.size if p in otadata else min(SECTOR, p.size)
+            (directory / name).write_bytes(ERASED * size)
+            files.append(FlashFile(p.offset, str(directory / name)))
+        self.flash_files = sorted(files)
+        self.flash_args = {
+            "extra_esptool_args": {**PLATFORMIO_ESPTOOL_ARGS, "chip": self.build.chip},
+            "write_flash_args": list(PLATFORMIO_WRITE_FLASH_ARGS),
+            "flash_files": {hex(f.offset): f.file_path for f in self.flash_files},
+        }
+        self.flash_settings: dict[str, Any] = {**KEEP, "encrypt": False}
+
+    def _erased(self, partition: flash.Partition) -> bool:
+        """Whether the build's bytes of `partition`, as far as its file goes, are all erased."""
+        data = build.flash_bytes(self.build, partition.offset, partition.size)
+        return data.count(ERASED) == len(data)
+
+    def _covered(self, offset: int) -> bool:
+        return any(
+            f.offset <= offset < f.offset + f.path.stat().st_size for f in self.build.flash_files
+        )
+
+    @property
+    def target(self) -> str:
+        return self.build.chip
+
+    @property
+    def partition_table(self) -> dict[str, Any]:
+        """The build's table as IdfApp gives it, by name, from esp32tl's reader rather than
+        ESP-IDF's gen_esp32part.py: `--erase-nvs` erases the `nvs` partition."""
+        return self._table
 
 
 class Serial(Board):

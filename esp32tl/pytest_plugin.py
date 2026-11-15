@@ -48,10 +48,10 @@ from pytest_embedded.log import MessageQueue
 from pytest_embedded.utils import Meta
 from pytest_embedded_idf.dut import IdfDut
 
-from esp32tl import boards
+from esp32tl import boards, build
 from esp32tl.backends import SERVICES
 from esp32tl.backends.esp32sim import BackendError, Esp32Sim, ended_while_waiting
-from esp32tl.backends.serial import Serial, check_artifact
+from esp32tl.backends.serial import Artifact, PlatformioApp, Serial, check_artifact
 from esp32tl.boards import DEFAULT_PROFILE, BoardProfile, ProfileError
 from esp32tl.interfaces.bluetooth import Bluetooth
 from esp32tl.interfaces.board import Board as Board
@@ -395,10 +395,10 @@ def pytest_runtest_makereport(
 
 # Cached before pytest-embedded's app fixture, which serial/dut depend on: a test may also
 # request dut directly, in which case checking only inside board would be too late.
-SERIAL_ARTIFACT = pytest.StashKey[str]()
+SERIAL_ARTIFACT = pytest.StashKey[Artifact]()
 
 
-def serial_artifact(request: pytest.FixtureRequest) -> str:
+def serial_artifact(request: pytest.FixtureRequest) -> Artifact:
     node: pytest.Item = request.node
     callspec = getattr(node, "callspec", None)
     if callspec is not None and int(callspec.params.get("count", 1)) != 1:
@@ -450,8 +450,12 @@ def pytest_fixture_setup(
         fixturedef.argname == "app"
         and callspec is not None
         and callspec.params.get("board") == Serial.name
+        # pytest-embedded's IdfApp reads the files to flash from flasher_args.json, which a
+        # PlatformIO build has none of: its own app class gives IdfSerial the build's files.
+        and serial_artifact(request).kind == build.PLATFORMIO
     ):
-        serial_artifact(request)
+        classes = request.getfixturevalue("_fixture_classes_and_options").classes
+        classes["app"] = PlatformioApp
 
 
 @pytest.fixture
@@ -466,7 +470,7 @@ def board(
     profile the test chose; off until the test calls `board.power_on()`."""
     name = request.param
     assert name in SERVICES, name
-    digest = serial_artifact(request) if name == Serial.name else ""
+    digest = serial_artifact(request).app_sha256 if name == Serial.name else ""
     # Resolve only after serial's artifact/recording check: dut opens and may flash the port.
     dut = request.getfixturevalue("dut")
     if not isinstance(dut, Dut):

@@ -4,24 +4,32 @@ where the build flashes it, the chip from the images' headers. The first tests m
 from synthetic images and need nothing beyond the package; the runs make it from the built
 `nvs_reader` and `hello_world` images and need `make firmware` (nvs_reader, hello_world)."""
 
+import gc
 import hashlib
+import io
+import json
 import subprocess
 import sys
+import tempfile
+import warnings
 from pathlib import Path
 from unittest.mock import Mock
 
+import esptool
 import pytest
 from pytest_embedded.dut import Dut
 from pytest_embedded.log import MessageQueue
 from pytest_embedded.utils import Meta
+from pytest_embedded_idf.serial import IdfSerial
 from test_pytest_plugin import fake_build
+from test_serial_backend import FAKE_SERIAL, run_serial
 
-from esp32tl import boards, build, flash
+from esp32tl import boards, build, flash, recording
 from esp32tl.backends import esp32sim
 from esp32tl.backends.esp32sim import BackendError, Esp32Sim
-from esp32tl.backends.serial import check_artifact
+from esp32tl.backends.serial import PlatformioApp, check_artifact
 from esp32tl.build import FlashFile
-from esp32tl.tap import app_image_sha256
+from esp32tl.tap import Tap, app_image_sha256
 
 ROOT = Path(__file__).resolve().parent.parent
 NVS_READER = ROOT / "firmware" / "nvs_reader"
@@ -344,14 +352,244 @@ def test_an_esp_idf_build_beside_platformio_s_files_is_read_as_esp_idf(tmp_path:
     assert app.partition_table == 0x8000
 
 
-def test_serial_refuses_a_platformio_build(tmp_path: Path) -> None:
-    directory = pio_build(tmp_path)
+def test_a_build_that_enables_flash_encryption_or_secure_boot_is_refused(tmp_path: Path) -> None:
+    directory = pio_build(tmp_path / "encrypted", factory=True)
+    (directory / "config").mkdir()
+    (directory / "config/sdkconfig.json").write_text('{"SECURE_FLASH_ENC_ENABLED": true}')
     with pytest.raises(BackendError) as refused:
-        check_artifact(str(tmp_path), build_dir=directory)
+        esp32sim.load_app(str(directory), build_dir=directory)
     assert str(refused.value) == (
-        f"{directory} is a PlatformIO build, which the serial backend does not flash yet:"
-        " run it on esp32sim"
+        f"{directory} asks for flash encryption, which the runner does not do"
     )
+    with pytest.raises(BackendError) as refused:
+        check_artifact(str(directory), build_dir=directory)
+    assert str(refused.value) == (
+        f"{directory} asks for flash encryption, which serial does not support"
+    )
+    # ESP-IDF's configuration without it, or none at all, is not a refusal
+    (directory / "config/sdkconfig.json").write_text('{"SECURE_FLASH_ENC_ENABLED": false}')
+    assert check_artifact(str(directory), build_dir=directory).kind == build.PLATFORMIO
+    (directory / "config/sdkconfig.json").write_text('{"SECURE_BOOT": true}')
+    with pytest.raises(BackendError) as refused:
+        check_artifact(str(directory), build_dir=directory)
+    assert str(refused.value) == f"{directory} asks for secure boot, which serial does not support"
+    with pytest.raises(BackendError, match=r"asks for secure boot, which the runner does not do$"):
+        esp32sim.load_app(str(directory), build_dir=directory)
+    (directory / "config/sdkconfig.json").write_text("not json")
+    with pytest.raises(BackendError, match=r"config/sdkconfig\.json is not JSON: "):
+        check_artifact(str(directory), build_dir=directory)
+    (directory / "config/sdkconfig.json").write_text("[]")
+    with pytest.raises(BackendError, match=r"config/sdkconfig\.json is not a JSON object$"):
+        check_artifact(str(directory), build_dir=directory)
+
+
+def written(
+    app: PlatformioApp, monkeypatch: pytest.MonkeyPatch, *, erase_nvs: bool = False
+) -> list[tuple[list[str], dict[str, bytes]]]:
+    """The esptool commands pytest-embedded's IdfSerial.flash runs for `app`, with the bytes of
+    each file it writes as they were when it ran, on a port that is not there."""
+    commands: list[tuple[list[str], dict[str, bytes]]] = []
+
+    def main(args: list[str], esp: object) -> None:
+        files = {arg: Path(arg).read_bytes() for arg in args if Path(arg).is_file()}
+        commands.append((list(args), files))
+
+    monkeypatch.setattr(esptool, "main", main)
+    monkeypatch.delenv("ESPBAUD", raising=False)
+    port = IdfSerial.__new__(IdfSerial)
+    port.app, port.esp, port.proc = app, Mock(), Mock()
+    port._q, port._redirect_thread, port._meta = io.StringIO(), None, None
+    port.erase_nvs, port.esp_flash_force = erase_nvs, False
+    port.flash()
+    return commands
+
+
+KEEP = ["--flash-mode", "keep", "--flash-freq", "keep", "--flash-size", "keep"]
+# IdfSerial.flash() passes `after` as hard_reset whatever flash_args say.
+RESETS = ["--before", "default-reset", "--after", "hard_reset", "--chip", "esp32"]
+
+
+def test_serial_flashes_the_files_esp32sim_runs_with_the_otadata_erased(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory = pio_build(tmp_path / ".pio/build/esp32")
+    app = PlatformioApp(str(tmp_path), str(directory))
+    assert app.binary_path == str(directory)
+    assert app.target == "esp32"
+    assert app.bin_file == str(directory / "firmware.bin")
+    assert app.elf_file == str(directory / "firmware.elf")
+    assert app.partition_table["nvs"] == {
+        "type": 1,
+        "subtype": 2,
+        "offset": 0x9000,
+        "size": 0x5000,
+        "flags": 0,
+    }
+    [(command, files)] = written(app, monkeypatch)
+    otadata = command[command.index("0xe000") + 1]
+    assert command == [
+        *RESETS,
+        "--baud",
+        "921600",
+        "write-flash",
+        "0x1000",
+        f"{directory}/bootloader.bin",
+        "0x8000",
+        f"{directory}/partitions.bin",
+        "0xe000",
+        otadata,
+        "0x20000",
+        f"{directory}/firmware.bin",
+        *KEEP,
+    ]
+    # the otadata partition, all of it erased, from a file outside the build
+    assert files[otadata] == b"\xff" * 0x2000
+    assert not Path(otadata).is_relative_to(directory)
+    # removed with the app, without a ResourceWarning
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        del app, files
+        gc.collect()
+    assert not Path(otadata).parent.exists()
+
+
+def test_serial_erases_nvs_from_the_build_s_table(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory = pio_build(tmp_path)
+    app = PlatformioApp(str(tmp_path), str(directory))
+    [(command, _)] = written(app, monkeypatch)
+    # --erase-nvs erases the table's nvs before writing
+    [(erase, _), (again, _)] = written(app, monkeypatch, erase_nvs=True)
+    assert erase == ["erase-region", str(0x9000), str(0x5000)]
+    assert again == command
+
+
+def test_serial_flashes_a_factory_image_whole_from_0x0(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory = pio_build(tmp_path, factory=True)
+
+    def no_directory(**kwargs: object) -> str:
+        raise AssertionError("nothing is erased: no directory for it")
+
+    with monkeypatch.context() as patched:
+        patched.setattr(tempfile, "mkdtemp", no_directory)
+        app = PlatformioApp(str(tmp_path), str(directory))
+    # the otadata is the factory image's, boot_app0.bin's: nothing else is written there
+    [(command, _)] = written(app, monkeypatch)
+    assert command == [
+        *RESETS,
+        "--baud",
+        "921600",
+        "write-flash",
+        "0x0",
+        f"{directory}/firmware.factory.bin",
+        *KEEP,
+    ]
+    assert app.bin_file == str(directory / "firmware.bin")
+
+
+def test_a_table_without_otadata_gets_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    table = (entry("nvs", 1, 2, 0x9000, 0x6000) + entry("factory", 0, 0, 0x10000, 0x100000)).ljust(
+        build.TABLE_SIZE, b"\xff"
+    )
+    directory = pio_build(tmp_path, table=table, app_at=0x10000)
+    [(command, _)] = written(PlatformioApp(str(tmp_path), str(directory)), monkeypatch)
+    # firmware.bin is the factory partition's image: nothing is erased there
+    assert offsets(command) == ["0x1000", "0x8000", "0x10000"]
+
+
+def offsets(command: list[str]) -> list[str]:
+    """The offsets of a write-flash command's files."""
+    files = command[command.index("write-flash") + 1 : command.index("--flash-mode")]
+    return files[::2]
+
+
+@pytest.mark.parametrize("factory", [False, True])
+def test_a_factory_partition_the_build_does_not_fill_is_not_booted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, factory: bool
+) -> None:
+    # A launcher's table: firmware.bin in ota_0 and a factory partition after it, where a board
+    # may hold a launcher, or an older application, that an erased otadata would boot first.
+    directory = pio_build(tmp_path, table=FACT512K, factory=factory, app_at=0x10000)
+    [(command, files)] = written(PlatformioApp(str(tmp_path), str(directory)), monkeypatch)
+    if factory:
+        # boot_app0.bin's otadata selects ota_0: the factory partition is not tried
+        assert offsets(command) == ["0x0"]
+        # a framework = espidf build's factory image holds an erased ota_data_initial.bin, which
+        # selects nothing: the bootloader tries factory first
+        image = directory / "firmware.factory.bin"
+        contents = bytearray(image.read_bytes())
+        contents[0xE000:0x10000] = b"\xff" * 0x2000
+        image.write_bytes(bytes(contents))
+        [(command, files)] = written(PlatformioApp(str(tmp_path), str(directory)), monkeypatch)
+        assert offsets(command) == ["0x0", "0xf70000"]
+        assert files[command[command.index("0xf70000") + 1]] == b"\xff" * 0x1000
+    else:
+        assert offsets(command) == ["0x1000", "0x8000", "0xe000", "0x10000", "0xf70000"]
+        erased = command[command.index("0xf70000") + 1]
+        assert Path(erased).name == "factory-erased.bin"
+        # its first sector, where an image's header is
+        assert files[erased] == b"\xff" * 0x1000
+
+
+SERIAL_PLATFORMIO = "import json\n" + FAKE_SERIAL.replace(
+    "    def flash(self):\n",
+    "    def flash(self):\n"
+    "        Path('flashed').write_text(json.dumps([(hex(f.offset), Path(f.file_path).name)"
+    " for f in self.app.flash_files]))\n",
+)
+
+
+@pytest.mark.parametrize("factory", [False, True])
+def test_serial_runs_a_platformio_build(pytester: pytest.Pytester, factory: bool) -> None:
+    directory = pio_build(pytester.path / ".pio/build/esp32", factory=factory)
+    digest = hashlib.sha256((directory / "firmware.bin").read_bytes()).hexdigest()
+    reference = Tap("console", pytester.path / "reference.jsonl")
+    recording.write(
+        reference.path,
+        reference.recording(board="esp32-devkitc", source="real", clock="wall", app_sha256=digest),
+    )
+    pytester.makeconftest(SERIAL_PLATFORMIO)
+    pytester.makepyfile(f"""
+        import pytest
+        from esp32tl.backends.serial import PlatformioApp
+
+        @pytest.mark.app_path(".", build_dir=".pio/build/esp32")
+        @pytest.mark.app_recording("reference.jsonl")
+        def test_runs(dut, board, console):
+            assert type(dut.app) is PlatformioApp
+            assert dut.serial.flashes == 1
+            assert board.app_sha256 == {digest!r}
+            console.tap("run.jsonl")
+            board.power_on()
+            console.expect("Hello world!")
+    """)
+    run_serial(pytester).assert_outcomes(passed=1)
+    flashed = json.loads((pytester.path / "flashed").read_text())
+    if factory:
+        assert flashed == [["0x0", "firmware.factory.bin"]]
+    else:
+        assert flashed == [
+            ["0x1000", "bootloader.bin"],
+            ["0x8000", "partitions.bin"],
+            ["0xe000", "otadata-erased.bin"],
+            ["0x20000", "firmware.bin"],
+        ]
+    assert recording.read(pytester.path / "run.jsonl").header.app_sha256 == digest
+
+
+def test_an_esp_idf_build_keeps_pytest_embedded_s_app(pytester: pytest.Pytester) -> None:
+    fake_build(pytester.path)
+    pytester.makeconftest(FAKE_SERIAL)
+    pytester.makepyfile("""
+        from pytest_embedded_idf.app import IdfApp
+
+        def test_runs(dut, board):
+            assert type(dut.app) is IdfApp
+    """)
+    run_serial(pytester).assert_outcomes(passed=1)
 
 
 @pytest.mark.parametrize("factory", [False, True])
