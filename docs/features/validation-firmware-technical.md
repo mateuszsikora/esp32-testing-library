@@ -16,7 +16,16 @@ image, `arduino_shell` ([The PlatformIO build](#the-platformio-build)); `firmwar
 `firmware/build.sh [IMAGE...]` runs twice for a container build: once on the host, which starts
 the container, and once inside it, which builds. With `IDF_LOCAL=1` it runs once, on the host.
 
-1. **Image names.** Each argument must be in `IMAGES`, or the script dies before anything is
+1. **Image names and sharding.** `--shard K/N` after the optional `--examples` selects
+   every Nth image of the validated argument list (or the whole default family), starting at K.
+   K and N are positive decimal integers without leading zeros, with `1 <= K <= N`.
+   An invalid or empty selection fails before Docker or output writes; an empty shard reports
+   `firmware/build.sh: shard K/N selects no images`. The host passes only selected names to
+   the container, so they are not sharded again. Without the option, every image is selected.
+   CI uses four validation shards and three example shards; adding a project automatically
+   assigns it to one shard. Each shard still shares compiler-cache hits within its container.
+
+   **Image names.** Each argument must be in `IMAGES`, or the script dies before anything is
    written. With no arguments, the list is all of `IMAGES`.
 2. **Mode**, decided before anything is written:
    - `ESP32TL_CONTAINER` set: the container side. `/.dockerenv`, which Docker creates in every

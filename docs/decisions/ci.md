@@ -375,7 +375,9 @@ Local actionlint and documentation checks cannot establish those runtime results
 
 ## Firmware builds run in three parallel groups
 
-Status: decided (15 November 2026)
+Status: superseded (15 November 2026)
+
+Replaced by [sharded firmware families](#firmware-families-are-sharded-to-shorten-the-critical-path).
 
 The first hosted run of #205 was cancelled after its firmware job had spent 14m39s without
 reaching the tests. Rust builds, lint and documentation had finished in about a minute.
@@ -396,3 +398,30 @@ an ESP-IDF family and multiplies container pulls and setup. Running simultaneous
 VM competes for its limited CPU and disk. Narrowing cache invalidation or adding persistent
 ccache needs separate validation and is deferred with further work toward a 5–10 minute total CI.
 This small change removes sequential phases; its actual speedup must be measured by Actions.
+
+
+## Firmware families are sharded to shorten the critical path
+
+Status: decided (15 November 2026)
+
+Run 43724340877 passed but took 22m19s. ESP-IDF occupied 15m59s before tests could start;
+examples took 9m29s and PlatformIO 6m50s. Their build steps took 14m48s, 8m32s and 3m42s.
+The workflow now uses four ESP-IDF validation shards, three example shards, and one PlatformIO
+job. `firmware/build.sh [--examples] --shard K/N` partitions the script's own image list by
+position modulo N. The union is complete and disjoint, tested against both families, and no
+copy of the image list is maintained in CI. Selected images share ccache within each shard.
+
+Tarball keys and paths include the shard group. Both consumers use a local composite action
+that restores all eight exact keys and unpacks them; a missing shard fails the job. Only
+`idf-1` fetches/saves the ROM, and only `platformio` caches its tools. The full OS/Python/pytest
+shard matrix and failure checks remain unchanged.
+
+SDK cleanup in the baseline cost 48s to 2m20s. It now removes SDK directories one at a time,
+only while less than 20 GiB is free, instead of deleting all four unconditionally. That budget
+leaves headroom for a pinned container plus a shard's build trees; logs report disk space before
+and after cleanup. Hosted timings still need measurement; 10 minutes is a target, not a claim.
+
+**Rejected:** one job per image, because it repeats all compiler work and container downloads
+for every image and queues more machines. Persistent ccache and narrower build keys can be
+considered after measuring this change; both add cache validity/storage concerns. Shortening
+timeouts or dropping Python/OS combinations cannot establish a faster successful full CI.

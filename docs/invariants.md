@@ -1763,3 +1763,11 @@ that references to its number keep their meaning.
      `runner/src/session/tests.rs::a_resync_moves_the_wall_clock_to_the_boundary_it_is_seen_at`,
      `runner/src/session/tests.rs::a_signal_or_the_peer_gone_ends_the_wait_for_wall_time`,
      `tests/test_real_source.py::test_a_turn_held_before_the_first_2_16_cycles_does_not_cost_the_waits`
+
+
+## Firmware build shards
+
+For a fixed ordered image list and shard count N, `firmware/build.sh --shard K/N` selects
+positions congruent to K-1 modulo N. Across K=1..N every image occurs exactly once; sharding
+never silently drops an image. Invalid or empty shards fail before starting Docker or writing
+build output. `tests/test_firmware_build.py` checks both validation and example families.

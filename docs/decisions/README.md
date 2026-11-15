@@ -30,7 +30,8 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The Arduino image is built in the firmware job](ci.md#the-arduino-image-is-built-in-the-firmware-job) | `ci.md` | superseded (#193) |
 | [PlatformIO's core directory is cached under the key of its pins](ci.md#platformios-core-directory-is-cached-under-the-key-of-its-pins) | `ci.md` | decided (#193) |
 | [CI uses standard hosted images on both platforms before publication](ci.md#ci-uses-standard-hosted-images-on-both-platforms-before-publication) | `ci.md` | decided (15 November 2026) |
-| [Firmware builds run in three parallel groups](ci.md#firmware-builds-run-in-three-parallel-groups) | `ci.md` | decided (15 November 2026) |
+| [Firmware builds run in three parallel groups](ci.md#firmware-builds-run-in-three-parallel-groups) | `ci.md` | superseded (15 November 2026) |
+| [Firmware families are sharded to shorten the critical path](ci.md#firmware-families-are-sharded-to-shorten-the-critical-path) | `ci.md` | decided (15 November 2026) |
 
 ## Documentation and the documentation check
 
