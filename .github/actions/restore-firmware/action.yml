@@ -1,0 +1,55 @@
+name: Restore firmware
+description: Restore every checked firmware shard under its exact producer key.
+inputs:
+  key:
+    description: Common firmware cache key published by the build matrix.
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: actions/cache/restore@v6
+      with:
+        path: build/ci/firmware-idf-1.tar
+        key: ${{ inputs.key }}-idf-1
+        fail-on-cache-miss: true
+    - uses: actions/cache/restore@v6
+      with:
+        path: build/ci/firmware-idf-2.tar
+        key: ${{ inputs.key }}-idf-2
+        fail-on-cache-miss: true
+    - uses: actions/cache/restore@v6
+      with:
+        path: build/ci/firmware-idf-3.tar
+        key: ${{ inputs.key }}-idf-3
+        fail-on-cache-miss: true
+    - uses: actions/cache/restore@v6
+      with:
+        path: build/ci/firmware-idf-4.tar
+        key: ${{ inputs.key }}-idf-4
+        fail-on-cache-miss: true
+    - uses: actions/cache/restore@v6
+      with:
+        path: build/ci/firmware-examples-1.tar
+        key: ${{ inputs.key }}-examples-1
+        fail-on-cache-miss: true
+    - uses: actions/cache/restore@v6
+      with:
+        path: build/ci/firmware-examples-2.tar
+        key: ${{ inputs.key }}-examples-2
+        fail-on-cache-miss: true
+    - uses: actions/cache/restore@v6
+      with:
+        path: build/ci/firmware-examples-3.tar
+        key: ${{ inputs.key }}-examples-3
+        fail-on-cache-miss: true
+    - uses: actions/cache/restore@v6
+      with:
+        path: build/ci/firmware-platformio.tar
+        key: ${{ inputs.key }}-platformio
+        fail-on-cache-miss: true
+    - name: Unpack all firmware shards
+      shell: bash
+      run: |
+        for group in idf-1 idf-2 idf-3 idf-4 examples-1 examples-2 examples-3 platformio; do
+          tar -xf "build/ci/firmware-$group.tar"
+        done

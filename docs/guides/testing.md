@@ -427,3 +427,9 @@ with a device that is no ELM327 and with a vehicle that has none of the readings
 cases needing mtools with `requires_mtools`. `tests/test_board_api.py` checks the shared `Board`
 interface and fixture identities; its lifecycle test also uses that marker. The marker is
 implemented by `tests/conftest.py`; standalone example tests require their documented tools.
+
+
+`tests/test_firmware_build.py` also checks build sharding: all validation images and discovered
+examples occur exactly once across their CI shards, order is retained within a shard, and invalid
+or empty shards fail before starting Docker. These use a fake Docker CLI; they do not measure
+hosted build times.
