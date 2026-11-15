@@ -3786,3 +3786,24 @@ fn on_the_emulator_the_flash_read_has_the_code_esp32sims_trampoline_covers() {
     // the guest still runs the trampoline
     assert_eq!(m.bus.flash[0x10020..0x10024], [0x36, 0x41, 0x00, 0x90]);
 }
+
+#[test]
+fn console_rx_reset_restores_native_input_but_firmware_can_disable_or_reroute_it() {
+    use emu_core::Bus;
+    let mut m = esp32::machine([0x24, 0x6f, 0x28, 0, 0x11, 0x22], 4 << 20);
+    reset_console_rx(&mut m);
+    assert_eq!(Guest::uart_route(&m, 0).rx_pin, Some(3));
+    // A firmware disabling the input must not receive bytes through a fabricated route.
+    m.bus.write32(0x3ff4_9084, 0).unwrap();
+    assert_eq!(Guest::uart_route(&m, 0).rx_pin, None);
+    Guest::chip_reset(&mut m);
+    assert_eq!(Guest::uart_route(&m, 0).rx_pin, Some(3));
+    // uart_set_pin may use the GPIO matrix instead of the native IO_MUX function.
+    m.bus.write32(0x3ff4_9084, (2 << 12) | (1 << 9)).unwrap();
+    m.bus.write32(0x3ff4_4130 + 4 * 14, 0x80 | 3).unwrap();
+    assert_eq!(Guest::uart_route(&m, 0).rx_pin, Some(3));
+    // An explicitly selected other RX pin is respected too.
+    m.bus.write32(0x3ff4_9048, (2 << 12) | (1 << 9)).unwrap();
+    m.bus.write32(0x3ff4_4130 + 4 * 14, 0x80 | 4).unwrap();
+    assert_eq!(Guest::uart_route(&m, 0).rx_pin, Some(4));
+}

@@ -135,7 +135,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [A stream replay sends each event in the turn at its time](harness.md#a-stream-replay-sends-each-event-in-the-turn-at-its-time) | `harness.md` | decided (#14) |
 | [The recording reader takes the generated recordings' header as it is](harness.md#the-recording-reader-takes-the-generated-recordings-header-as-it-is) | `harness.md` | decided (#14) |
 | [The esp32sim backend does not compare a recording's app_sha256 with its app](harness.md#the-esp32sim-backend-does-not-compare-a-recordings-app_sha256-with-its-app) | `harness.md` | decided (#14) |
-| [Console.write is postponed until the runner reads input](harness.md#consolewrite-is-postponed-until-the-runner-reads-input) | `harness.md` | postponed (#51) |
+| [Console.write is postponed until the runner reads input](harness.md#consolewrite-is-postponed-until-the-runner-reads-input) | `harness.md` | superseded (#195) |
 | [The serial backend is postponed to M4](harness.md#the-serial-backend-is-postponed-to-m4) | `harness.md` | superseded (#25) |
 | [Prebuilt runner binaries are postponed to M10](harness.md#prebuilt-runner-binaries-are-postponed-to-m10) | `harness.md` | postponed (#40) |
 | [Replaying requests, looping and wall-clock recordings is postponed](harness.md#replaying-requests-looping-and-wall-clock-recordings-is-postponed) | `harness.md` | superseded (#20) |
@@ -294,6 +294,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [A consumer names a condition with esp32tl.condition, not with a description on the wait](harness.md#a-consumer-names-a-condition-with-esp32tlcondition-not-with-a-description-on-the-wait) | `harness.md` | decided (#181) |
 | [A PlatformIO build is read by its file names and image headers](harness.md#a-platformio-build-is-read-by-its-file-names-and-image-headers) | `harness.md` | decided (#192) |
 | [The serial backend flashes a PlatformIO build through an IdfApp of esp32tl's](harness.md#the-serial-backend-flashes-a-platformio-build-through-an-idfapp-of-esp32tls) | `harness.md` | decided (#194) |
+| [Console input uses GPIO 3 at a fixed 115200 baud](harness.md#console-input-uses-gpio-3-at-a-fixed-115200-baud) | `harness.md` | decided (#195) |
 
 ## The runner crate and esp32sim
 
@@ -348,3 +349,4 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The guest's HCI goes over the board socket, on the board's clock](runner.md#the-guests-hci-goes-over-the-board-socket-on-the-boards-clock) | `runner.md` | decided (#34) |
 | [The Bluetooth messages keep the link protocol at version 1](runner.md#the-bluetooth-messages-keep-the-link-protocol-at-version-1) | `runner.md` | decided (#34) |
 | [VHCI packets in PSRAM are esp32sim's to take](runner.md#vhci-packets-in-psram-are-esp32sims-to-take) | `runner.md` | decided (#188) |
+| [The runner restores U0RXD's input-enabled reset state](runner.md#the-runner-restores-u0rxds-input-enabled-reset-state) | `runner.md` | decided (#195) |

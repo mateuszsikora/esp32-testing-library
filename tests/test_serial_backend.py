@@ -142,7 +142,7 @@ def test_console_reset_clock_tap_and_autoflash(
             assert board.now >= before + seconds(.02)
             assert console.lines("Hello")[0].at <= board.now
             condition = console.line("next")
-            board.dut.serial.proc.write(b"next line\\n")
+            console.sendline("next line")
             assert board.wait_until(condition, within=seconds(1)).text == "next line"
             described = esp32tl.condition(lambda: None, "a trip/end from the device")
             with pytest.raises(TypeError, match="call the condition 'a trip/end"):
@@ -170,7 +170,7 @@ def test_console_reset_clock_tap_and_autoflash(
     assert made.header.source == "real"
     assert made.header.app_sha256 == sha256(pytester.path / "build/app.bin")
     assert b"Hello world!" in b"".join(event.data for event in made.events)
-    assert all(event.dir == "out" for event in made.events)
+    assert [e.data for e in made.events if e.dir == "in"] == [b"next line\n"]
 
 
 @pytest.mark.parametrize("local", [False, True])

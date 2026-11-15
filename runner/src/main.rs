@@ -333,6 +333,7 @@ fn setup(
         bluetooth(&mut m, path, hci)?;
     }
 
+    session::reset_console_rx(&mut m);
     m.boot_rom();
     m.console.mask = if opts.console == cli::Console::Socket {
         0
@@ -413,6 +414,7 @@ fn run(m: &mut esp32::Machine) -> Stop {
             Stop::SwReset => {
                 // M1 forwards the cause to the peer as `reset` (plan §1, finding 4).
                 let cause = m.reboot();
+                session::reset_console_rx(m);
                 eprintln!(
                     "esp32tl-runner: chip reset at {:.6} s, cause {cause:#x}",
                     m.seconds()

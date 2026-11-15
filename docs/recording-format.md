@@ -40,8 +40,10 @@ The header may carry fields of its own beyond these, as the generated recordings
 `generator` (script, seed, baud). They are read, kept as they are, and written back after the
 format's own fields; a replay ignores them. A field of this table is never an extra.
 
-Console taps use `interface: console`, `source: none` on esp32sim or `real` on serial, and only
-`out` events. This is still version 1: the interface field already accepts that name. On serial,
+Console taps use `interface: console`, `source: none` on esp32sim or `real` on serial, and
+`out` events for guest output and `in` events for test writes. Input timestamps are the board
+time of `write`/`sendline`, before the runner paces individual bytes. This is still version 1:
+the interface and directions already accept these values. On serial,
 `app_sha256` describes the selected local artifact; under skip-autoflash it cannot prove which
 app is actually in flash. `app_recording(path)` compares the reference hash against that artifact
 before opening the port ([serial backend](features/serial-backend-user.md#builds-and-flashing)).
