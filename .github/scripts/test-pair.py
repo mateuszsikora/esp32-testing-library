@@ -15,7 +15,10 @@ from pathlib import Path
 
 def run_pair(shards: list[str], arguments: list[str]) -> int:
     processes: list[subprocess.Popen[bytes]] = []
-    with tempfile.TemporaryDirectory(prefix="esp32tl-pair-") as temporary, ExitStack() as stack:
+    with (
+        tempfile.TemporaryDirectory(prefix="e32-pair-", dir="/tmp") as temporary,
+        ExitStack() as stack,
+    ):
         root = Path(temporary)
         logs = []
         try:

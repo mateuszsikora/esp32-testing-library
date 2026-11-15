@@ -205,6 +205,11 @@ logs and exit codes are printed, including when either shard fails; any nonzero 
 (including no tests collected) fails the job. Cancellation terminates their process groups.
 "Re-run failed jobs" re-runs the pair. Timeout stays 15 minutes; no pytest timeout is relaxed.
 
+Paired pytest temporary roots are created under `/tmp` with a short `e32-pair-` prefix,
+independently of the host's `TMPDIR`. This keeps multiprocessing's Unix socket names below
+macOS path limits. A regression test starts real multiprocessing managers with a long inherited
+host temporary path; shortening paths does not skip or alter the tests.
+
 ## `determinism`
 
 Two runs of one recording must be identical (plan, section 6). The job restores the firmware and

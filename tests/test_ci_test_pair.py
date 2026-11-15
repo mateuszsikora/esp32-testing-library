@@ -100,3 +100,26 @@ while True:
         if process.poll() is None:
             process.terminate()
             process.wait(timeout=10)
+
+
+def test_pair_keeps_multiprocessing_sockets_short_with_a_long_host_tmpdir(tmp_path: Path) -> None:
+    host_tmp = tmp_path / ("long-host-temporary-directory-" * 3)
+    host_tmp.mkdir()
+    (tmp_path / "pytest.py").write_text("""
+import multiprocessing
+
+if __name__ == "__main__":
+    with multiprocessing.get_context("spawn").Manager() as manager:
+        values = manager.list(["socket works"])
+        assert values[0] == "socket works"
+        print(values[0])
+""")
+    result = subprocess.run(
+        [sys.executable, str(SCRIPT), "1/4", "4/4"],
+        env={**os.environ, "PYTHONPATH": str(tmp_path), "TMPDIR": str(host_tmp)},
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.count("socket works") == 2

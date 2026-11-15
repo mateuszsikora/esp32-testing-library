@@ -1779,3 +1779,7 @@ A paired test job succeeds only if both distinct pytest shards exit zero. Both s
 concurrently with independent temporary, basetemp and pytest-cache directories, and both logs
 are retained in the job output even if one fails. An empty pytest collection is a failure, not
 a successful optimization. `tests/test_ci_test_pair.py` enforces these orchestration rules.
+
+A long host TMPDIR must not make paired tests exceed Unix socket path limits: the wrapper uses
+short independent roots under `/tmp`. `test_pair_keeps_multiprocessing_sockets_short_with_a_long_host_tmpdir`
+checks this with real spawned managers.

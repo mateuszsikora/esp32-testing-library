@@ -446,3 +446,9 @@ arguments exit 2. SIGTERM/interrupt exits 130 after terminating child process gr
 The four shards and their hash assignment are unchanged; pairing only changes where they run.
 `tests/test_ci_test_pair.py` checks concurrent starts, isolation and both failure directions using
 a stand-in pytest module. The full hosted suite checks compatibility with real parallel tests.
+
+
+Paired pytest temporary roots are created under `/tmp` with a short `e32-pair-` prefix,
+independently of the host's `TMPDIR`. This keeps multiprocessing's Unix socket names below
+macOS path limits. A regression test starts real multiprocessing managers with a long inherited
+host temporary path; shortening paths does not skip or alter the tests.

@@ -458,3 +458,9 @@ processes per VM would put more contention on standard runners; two is a bounded
 Manually versioned cache keys or hashing selected source files could silently miss build inputs.
 Keeping the whole orchestration workflow in the build key rebuilds firmware when only test
 scheduling changes, making optimization iterations unnecessarily slow.
+
+
+The first paired run exposed `AF_UNIX path too long` in Python 3.11's multiprocessing manager
+on macOS. Inheriting the hosted VM's long TMPDIR and appending wrapper/manager directories caused
+fixture setup to fail. Pair roots now use a short prefix directly under `/tmp`; a real-manager
+regression checks a deliberately long inherited TMPDIR. Test assertions and timeouts are unchanged.
