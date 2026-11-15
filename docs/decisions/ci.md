@@ -200,7 +200,7 @@ cancelled job cost more.
 
 Status: decided (#48)
 
-The `firmware` job runs `make rom-elf` under a cache entry keyed by the hash of
+The `idf` member of the `firmware` matrix runs `make rom-elf` under a cache entry keyed by the hash of
 `scripts/fetch-rom-elf`, and the test jobs restore that entry. A miss there is no failure:
 `make rom-elf` downloads the ELF then.
 
@@ -286,7 +286,10 @@ claims that two machines give the same run.
 
 ## The Arduino image is built in the firmware job
 
-Status: decided (#193)
+Status: superseded (#193)
+
+Replaced by [three parallel groups](#firmware-builds-run-in-three-parallel-groups).
+The following records the earlier single-job configuration.
 
 `make firmware` builds `arduino_shell` after the ESP-IDF images, so the `firmware` job builds it,
 packs it into the same tarball under the same key and checks it before saving: `esp32tl-built`,
@@ -368,3 +371,28 @@ Linux to the matrix is outside this migration's two-platform coverage.
 TODO(owner): run the workflow with cold and warm caches on GitHub Actions, verify all 24 shards,
 determinism, native binaries, cross-platform firmware/ROM restores and disk/time margins.
 Local actionlint and documentation checks cannot establish those runtime results.
+
+
+## Firmware builds run in three parallel groups
+
+Status: decided (15 November 2026)
+
+The first hosted run of #205 was cancelled after its firmware job had spent 14m39s without
+reaching the tests. Rust builds, lint and documentation had finished in about a minute.
+The former `make firmware examples` executes three independent builds in sequence. The
+`firmware` matrix now runs `idf` (`firmware/build.sh`), `platformio`
+(`firmware/build-platformio.sh`) and `examples` (`make examples`) on separate Ubuntu x64 VMs,
+with `fail-fast: false`. Each ESP-IDF family retains its in-container ccache hits. The scripts
+still own the full project lists; the workflow does not duplicate them.
+
+Each member checks and saves its own `build/ci/firmware-<group>.tar` under the existing base key
+plus `-<group>`, and verifies the save. The identical base key is the matrix job output; test
+and determinism jobs restore all three exact keys, fail if any is missing, and unpack all three.
+Only `platformio` restores/saves its core directory; only `idf` fetches/saves the ROM. Build
+outputs do not overlap between the groups. No extra aggregation job or artifact storage is needed.
+
+**Rejected:** one job per image in this PR, because it loses the compiler-cache reuse within
+an ESP-IDF family and multiplies container pulls and setup. Running simultaneous builds on one
+VM competes for its limited CPU and disk. Narrowing cache invalidation or adding persistent
+ccache needs separate validation and is deferred with further work toward a 5–10 minute total CI.
+This small change removes sequential phases; its actual speedup must be measured by Actions.

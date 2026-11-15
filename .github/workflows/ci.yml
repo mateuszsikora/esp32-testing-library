@@ -1,6 +1,6 @@
 # CI (plan M0, §6). GitHub-hosted macOS runners have no Docker, so the
 # validation firmware is built once, in the pinned ESP-IDF and PlatformIO
-# containers on the GitHub-hosted Linux runner, and the runner crate once per
+# containers in three parallel Linux jobs, and the runner crate once per
 # platform. The test jobs then run only the runner and Python: they build
 # nothing.
 #
@@ -43,9 +43,14 @@ concurrency:
 
 jobs:
   firmware:
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [idf, platformio, examples]
     runs-on: ubuntu-24.04
     # Why 60: "The firmware job's timeout is 60 minutes" in docs/decisions/ci.md.
     timeout-minutes: 60
+    # Every matrix member publishes the same base keys; consumers add the group.
     outputs:
       key: ${{ steps.key.outputs.key }}
       rom-elf-key: ${{ steps.key.outputs.rom-elf-key }}
@@ -79,11 +84,11 @@ jobs:
       - id: cache
         uses: actions/cache/restore@v6
         with:
-          path: build/ci/firmware.tar
-          key: ${{ steps.key.outputs.key }}
+          path: build/ci/firmware-${{ matrix.group }}.tar
+          key: ${{ steps.key.outputs.key }}-${{ matrix.group }}
 
-      # Cold container pulls, PlatformIO packages and all project build trees
-      # exceed the standard image's nominal free space. These SDKs are unused.
+      # Leave room for cold container pulls, packages and project build trees.
+      # These preinstalled SDKs are unused by all three groups.
       - name: Free space for firmware builds
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
@@ -108,7 +113,7 @@ jobs:
       # toolchains the platform installs into packages/; a build needs
       # neither once packages/ is there.
       - name: PlatformIO's core directory
-        if: steps.cache.outputs.cache-hit != 'true'
+        if: matrix.group == 'platformio' && steps.cache.outputs.cache-hit != 'true'
         uses: actions/cache@v6
         with:
           path: |
@@ -128,22 +133,41 @@ jobs:
       # checked for the files the tests need: the flash images
       # flasher_args.json names and the ELF project_description.json names
       # among them, or the files esp32tl.build reads of a PlatformIO build.
-      - name: Build the validation images and examples
+      - name: Build and pack the firmware group
         if: steps.cache.outputs.cache-hit != 'true'
+        env:
+          FIRMWARE_OUT: ""
+          GROUP: ${{ matrix.group }}
         run: |
-          make firmware examples
+          case "$GROUP" in
+            idf)
+              firmware/build.sh
+              builds=(firmware/*/build)
+              ;;
+            platformio)
+              firmware/build-platformio.sh
+              builds=(firmware/*/.pio/build/esp32dev)
+              ;;
+            examples)
+              make examples
+              builds=(examples/*/build)
+              ;;
+          esac
           mkdir -p build/ci
           {
-            find firmware/*/build examples/*/build -maxdepth 1 -type f
-            find firmware/*/build/config examples/*/build/config -maxdepth 1 -name sdkconfig.json
-            find firmware/*/build/bootloader firmware/*/build/partition_table \
-              examples/*/build/bootloader examples/*/build/partition_table -maxdepth 1 \
-              -type f \( -name '*.bin' -o -name '*.elf' \)
-            find firmware/*/.pio/build/esp32dev -maxdepth 1 -type f \
-              \( -name '*.bin' -o -name firmware.elf -o -name 'esp32tl-*' \)
+            for build in "${builds[@]}"; do
+              if [ "$GROUP" = platformio ]; then
+                find "$build" -maxdepth 1 -type f \
+                  \( -name '*.bin' -o -name firmware.elf -o -name 'esp32tl-*' \)
+              else
+                find "$build" -maxdepth 1 -type f
+                find "$build/config" -maxdepth 1 -name sdkconfig.json
+                find "$build/bootloader" "$build/partition_table" -maxdepth 1 \
+                  -type f \( -name '*.bin' -o -name '*.elf' \)
+              fi
+            done
           } >build/ci/firmware.list
-          python3 - build/ci/firmware.list firmware/*/build examples/*/build \
-            firmware/*/.pio/build/esp32dev <<'EOF'
+          python3 - build/ci/firmware.list "${builds[@]}" <<'EOF'
           import json, sys
           from pathlib import Path
 
@@ -165,9 +189,9 @@ jobs:
               print(f"::error::{path} is missing from the tarball")
           sys.exit(1 if missing else 0)
           EOF
-          tar -cf build/ci/firmware.tar -T build/ci/firmware.list
+          tar -cf build/ci/firmware-${{ matrix.group }}.tar -T build/ci/firmware.list
 
-      - run: tar -tvf build/ci/firmware.tar
+      - run: tar -tvf build/ci/firmware-${{ matrix.group }}.tar
 
       # A failed save does not fail this step, so the next one fails the job
       # when the cache did not keep the tarball, rather than the test jobs.
@@ -175,15 +199,15 @@ jobs:
         if: steps.cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
         with:
-          path: build/ci/firmware.tar
-          key: ${{ steps.key.outputs.key }}
+          path: build/ci/firmware-${{ matrix.group }}.tar
+          key: ${{ steps.key.outputs.key }}-${{ matrix.group }}
 
       - name: Check that the cache kept the tarball
         if: steps.cache.outputs.cache-hit != 'true'
         uses: actions/cache/restore@v6
         with:
-          path: build/ci/firmware.tar
-          key: ${{ steps.key.outputs.key }}
+          path: build/ci/firmware-${{ matrix.group }}.tar
+          key: ${{ steps.key.outputs.key }}-${{ matrix.group }}
           lookup-only: true
           fail-on-cache-miss: true
 
@@ -191,11 +215,13 @@ jobs:
       # Saved at the end of the job and not checked: a miss in the test jobs
       # only downloads the ELF.
       - uses: actions/cache@v6
+        if: matrix.group == 'idf'
         with:
           path: .cache/esp-rom-elfs
           key: ${{ steps.key.outputs.rom-elf-key }}
 
       - run: make rom-elf
+        if: matrix.group == 'idf'
 
   runner:
     strategy:
@@ -306,8 +332,20 @@ jobs:
 
       - uses: actions/cache/restore@v6
         with:
-          path: build/ci/firmware.tar
-          key: ${{ needs.firmware.outputs.key }}
+          path: build/ci/firmware-idf.tar
+          key: ${{ needs.firmware.outputs.key }}-idf
+          fail-on-cache-miss: true
+
+      - uses: actions/cache/restore@v6
+        with:
+          path: build/ci/firmware-platformio.tar
+          key: ${{ needs.firmware.outputs.key }}-platformio
+          fail-on-cache-miss: true
+
+      - uses: actions/cache/restore@v6
+        with:
+          path: build/ci/firmware-examples.tar
+          key: ${{ needs.firmware.outputs.key }}-examples
           fail-on-cache-miss: true
 
       - uses: actions/cache/restore@v6
@@ -327,7 +365,9 @@ jobs:
       # esp32tl-built marks them finished.
       - name: Unpack the firmware and the runner
         run: |
-          tar -xf build/ci/firmware.tar
+          for group in idf platformio examples; do
+            tar -xf "build/ci/firmware-$group.tar"
+          done
           tar -xf build/ci/runner.tar
           runner/target/release/esp32tl-runner --help
 
@@ -390,8 +430,20 @@ jobs:
       # As in the test job.
       - uses: actions/cache/restore@v6
         with:
-          path: build/ci/firmware.tar
-          key: ${{ needs.firmware.outputs.key }}
+          path: build/ci/firmware-idf.tar
+          key: ${{ needs.firmware.outputs.key }}-idf
+          fail-on-cache-miss: true
+
+      - uses: actions/cache/restore@v6
+        with:
+          path: build/ci/firmware-platformio.tar
+          key: ${{ needs.firmware.outputs.key }}-platformio
+          fail-on-cache-miss: true
+
+      - uses: actions/cache/restore@v6
+        with:
+          path: build/ci/firmware-examples.tar
+          key: ${{ needs.firmware.outputs.key }}-examples
           fail-on-cache-miss: true
 
       - uses: actions/cache/restore@v6
@@ -407,7 +459,9 @@ jobs:
 
       - name: Unpack the firmware and the runner
         run: |
-          tar -xf build/ci/firmware.tar
+          for group in idf platformio examples; do
+            tar -xf "build/ci/firmware-$group.tar"
+          done
           tar -xf build/ci/runner.tar
           runner/target/release/esp32tl-runner --help
 
