@@ -286,9 +286,10 @@ images, 6m57s for `arduino_shell` and 5m51s for the examples and the packing. Of
 reported 377 s for its run, the downloads of the platform, the framework and the toolchains
 included; the rest went on pulling `python:3.13-bookworm` and installing PlatformIO Core. Saving the
 core directory at the end of the job took 4m29s more. That leaves 26 minutes to the limit, so the
-job's 60 minutes cover a cold run up to about 1.8 times slower. With the core directory restored,
-the Arduino build from scratch took about 80 s on an arm64 Mac. TODO(owner): the Arduino build and
-the restore of the core directory on hp600g1, from a run that hits the `platformio-` entry.
+job's 60 minutes cover a cold run up to about 1.8 times slower. The next run, for 58637a3, restored
+the `platformio-` entry: restoring its 1912 MB took 3m54s, `arduino_shell` built from scratch in 48
+s (pio reported 44.9 s) without a download or an install, nothing was saved at the end, and the job
+took 26m56s.
 
 **Rejected:** a job of its own, because it would need its own key, tarball and restore and unpack
 steps in `test` and `determinism`, and hp600g1 runs its jobs one after another, so the images would
