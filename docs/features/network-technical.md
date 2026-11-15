@@ -682,3 +682,35 @@ segments.
   clock](../decisions/harness.md#a-bridge-relays-a-tcp-port-to-a-real-service-and-puts-the-run-on-the-wall-clock),
   [the test opens TCP connections to the device, with no
   timers](../decisions/harness.md#the-test-opens-tcp-connections-to-the-device-on-the-same-tcp-with-no-timers).
+
+## HTTP client
+
+`esp32tl/net/http_client.py` implements `HttpClient`, `HttpExchange` and `ClientResponse`.
+`Internet.http_client` uses `Internet.connect`, so address discovery, latency, rate limiting,
+TCP stream identities and lifecycle errors are shared with raw connections. `TcpConnection`
+notifies internal observers after received bytes, peer FIN and terminal state updates. The
+exchange incrementally parses the TCP receive buffer on those notifications, caches a response
+or error, logs once, and closes its end on completion or parsing failure. Its `response` condition only reads the
+cached outcome; polling has no network effects.
+
+The parser accepts HTTP/1.0 and HTTP/1.1 responses to HTTP/1.1 requests, skips informational
+heads except 101, validates status/header syntax and framing, decodes chunked bodies (including
+extensions and validated, discarded trailers), and uses peer FIN for unframed bodies. A reset
+is not an EOF. Content-Length together with Transfer-Encoding is rejected. A completed framed
+response remains readable after later connection loss. Request validation and header encoding
+happen before connecting. No host sockets or wall clock are used.
+
+`tests/test_net_http_client.py` covers framing at every byte boundary, malformed and truncated
+responses, request validation, JSON, transport failure and report events. `tests/test_http_server.py`
+validates GET `/status` and POST `/echo` through the access point on the ESP-IDF image;
+`tests/test_arduino_shell.py` uses the client for Arduino WebServer's `/status`.
+
+The response parser retains its framing state, receive-buffer offset, delimiter search offset
+and decoded chunks between notifications. It reads the shared TCP bytearray without taking a
+full `received` snapshot and copies each completed chunk once into the decoded body. Searches
+resume at the new bytes with only delimiter overlap; neither old chunks nor the remaining
+buffer suffix are repeatedly decoded or copied. The 64 KiB metadata limits exclude their
+terminating separator, including a possible incomplete separator while waiting for more bytes.
+Boundary tests split separators at the limit and one byte over it for heads, chunk size lines
+and trailers. A 32,000 one-byte-chunk regression test bounds callback time with a generous
+5-second timeout.

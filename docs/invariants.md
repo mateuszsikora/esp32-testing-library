@@ -1781,6 +1781,50 @@ positions congruent to K-1 modulo N. Across K=1..N every image occurs exactly on
 never silently drops an image. Invalid or empty shards fail before starting Docker or writing
 build output. `tests/test_firmware_build.py` checks both validation and example families.
 
+
+## CI test pair outcomes
+
+A paired test job succeeds only if both distinct pytest shards exit zero. Both shards start
+concurrently with independent temporary, basetemp and pytest-cache directories, and both logs
+are retained in the job output even if one fails. An empty pytest collection is a failure, not
+a successful optimization. `tests/test_ci_test_pair.py` enforces these orchestration rules.
+
+A long host TMPDIR must not make paired tests exceed Unix socket path limits: the wrapper uses
+short independent roots under `/tmp`. `test_pair_keeps_multiprocessing_sockets_short_with_a_long_host_tmpdir`
+checks this with real spawned managers.
+
+
+CI runs each shard's `tests/test_real_source.py` selection before starting the concurrent pair,
+and excludes it from the parallel phase. Wall-clock checks keep their assertions and execute
+once without a competing shard. `tests/test_shard.py::test_the_workflow_runs_every_shard`
+checks the serial selection and parallel exclusion alongside the complete shard matrix.
+
+
+Group cleanup must not depend on whether the pytest leader is still alive. After `SIGTERM`,
+remaining groups receive `SIGKILL` following a shared five-second grace period, including
+orphaned descendants that ignore `SIGTERM`.
+`tests/test_ci_test_pair.py::test_pair_cancellation_kills_descendants_ignoring_sigterm` checks
+both a live leader at cancellation and one that has already exited.
+
+`test_group_cleanup_reaps_a_leader_that_has_already_exited` also checks cleanup of an unreaped
+leader; its zombie state must not turn successful cleanup into a macOS permission error.
+
+
+## HTTP client framing
+
+A device HTTP response is independent of TCP packet boundaries: Content-Length and chunked
+responses complete only after their framed body, and unframed responses complete only at a
+peer FIN. A malformed or truncated response fails its condition instead of returning a partial
+body; transport loss does not count as EOF. Metadata limits exclude their separators even
+when a separator arrives in several packets. Chunked decoding consumes each chunk once, so
+many small chunks do not stall network callbacks through repeated decoding.
+`tests/test_net_http_client.py` enforces this.
+
+
+Both platform test callers must use the shared test workflow with their matching native build
+and firmware dependencies. `tests/test_shard.py::test_the_workflow_runs_every_shard` checks both
+callers as well as complete shard coverage after expanding the shared matrix.
+
 **Runtime integrity.** Installed runtimes match the Python version, full esp32sim revision and
 platform; ROM bytes match the pinned SHA-256. Archive links and path traversal are never
 extracted, failed preparations expose no installation, and explicit paths take precedence.

@@ -14,7 +14,8 @@ make test                                   # everything, from a clean checkout
 make test-runner                            # the runner's Rust unit tests only
 make test-runner RUNNER_PROFILE=dev         # the same, without the fat-LTO link
 make determinism                            # tests/test_determinism.py twice, the runs compared
-.venv/bin/pytest --shard=2/4                # the second of four shards, as one CI job runs it
+.venv/bin/pytest --shard=2/4                # one of four shards
+.venv/bin/python .github/scripts/test-pair.py 1/4 4/4  # two shards concurrently, as in CI
 ```
 
 `make test` runs `make setup`, then `make test-runner`, builds the validation images that are
@@ -342,8 +343,8 @@ a behaviour change ([documentation.md](documentation.md#the-check)).
 
 ## In CI
 
-The `runner` job runs `make build-runner test-runner`; the `test` jobs run `.venv/bin/pytest
---shard=K/4` for each K on Python 3.11, 3.13 and 3.14 with the images, the runner and the ROM ELF the build jobs left in the
+The `runner` job runs `make build-runner test-runner`; the `test` jobs run `.github/scripts/test-pair.py` with pairs `1/4 4/4` and `2/4 3/4`,
+each starting two `python -m pytest --shard=K/4` processes, for each K on Python 3.11, 3.13 and 3.14 with the images, the runner and the ROM ELF the build jobs left in the
 Actions cache; the `determinism` job runs `make determinism` with the same builds; the `lint` job
 runs `make lint`. Both private and public repositories run the matrix on
 `ubuntu-24.04` (x64) and `macos-15` (ARM64). Linux test jobs start and check Docker;
@@ -433,6 +434,51 @@ implemented by `tests/conftest.py`; standalone example tests require their docum
 examples occur exactly once across their CI shards, order is retained within a shard, and invalid
 or empty shards fail before starting Docker. These use a fake Docker CLI; they do not measure
 hosted build times.
+
+
+## Concurrent CI test pairs
+
+`.github/scripts/test-pair.py K/4 J/4 [pytest arguments...]` runs two distinct shards using the
+calling Python interpreter. It isolates their temporary directories, basetemps and pytest caches,
+waits for both, and prints their separate logs and exit codes. Exit 0 requires both to return 0;
+any test failure, collection error or empty collection fails the pair. Invalid or duplicate shard
+arguments exit 2. SIGTERM/interrupt exits 130 after cleaning up child process groups. Cleanup
+sends `SIGTERM` even when a group leader has exited, allows five seconds for the groups to
+disappear, and sends `SIGKILL` to remaining groups. The regression tests include descendants
+ignoring `SIGTERM`, both with a live leader and after the first leader has already exited,
+and an exited leader awaiting reaping. A transient permission error while probing a dying
+group does not count as disappearance; cleanup keeps tracking it.
+The four shards and their hash assignment are unchanged; pairing only changes where they run.
+`tests/test_ci_test_pair.py` checks concurrent starts, isolation and both failure directions using
+a stand-in pytest module. The full hosted suite checks compatibility with real parallel tests.
+
+
+Paired pytest temporary roots are created under `/tmp` with a short `e32-pair-` prefix,
+independently of the host's `TMPDIR`. This keeps multiprocessing's Unix socket names below
+macOS path limits. A regression test starts real multiprocessing managers with a long inherited
+host temporary path; shortening paths does not skip or alter the tests.
+
+
+CI first runs `tests/test_real_source.py` sequentially for each of the job's two shard selections,
+then passes `--ignore=tests/test_real_source.py` to the concurrent pair. Wall-clock tests thus run
+without another shard competing for the VM's CPU. Their original assertions and conditional
+host-lag skips stay unchanged; tests are neither duplicated nor removed. This split preserves
+the same node-ID hash assignment, including in the serial phase.
+
+
+CI calls the shared `test-platform.yml` separately for Linux and macOS, retaining Python 3.11,
+3.13 and 3.14 and all four shards on each platform. `tests/test_shard.py` checks the two callers
+and complete shard coverage in the shared workflow. Linux tests and determinism wait only for
+the Linux native build and firmware; macOS tests wait for their own native build and firmware.
+
+Every pytest invocation in `test-platform.yml`, including the serial real-source selections,
+gets `--durations=30`. This covers `test-linux` and `test-macos`; determinism keeps its existing
+pytest arguments without duration reporting.
+The job logs show the 30 slowest setup, call and teardown phases per invocation. The parallel
+wrapper prints each shard's report with its log. To reproduce on a local subset:
+`.venv/bin/python .github/scripts/test-pair.py 1/4 4/4 tests/test_shard.py --durations=30`.
+Reporting durations does not change shard assignment or test assertions. Compare repeated runs
+on the same OS/Python before using these wall-clock measurements to rebalance shards.
 
 ## Wheel acceptance test
 

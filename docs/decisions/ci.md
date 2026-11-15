@@ -3,6 +3,27 @@
 Why `.github/workflows/ci.yml` runs its jobs where it does, how builds reach the test jobs, and
 what each job runs.
 
+## Public fork runs require approval from all external contributors
+
+Status: decided (15 November 2026)
+
+After publication, the repository uses `all_external_contributors` for fork workflow
+approval. GitHub-hosted VMs isolate contributor code from the maintainer's machines;
+approval additionally limits unsolicited compute use by returning contributors. This
+revisits the earlier rejection of universal fork approval recorded under the superseded
+self-hosted migration decision. A previous merged contribution does not permanently grant
+unattended CI execution. The read-only token and `pull_request` trigger remain unchanged.
+
+Public `main` protection requires PRs and all 25 existing CI checks, bound to the GitHub
+Actions app, with strict up-to-date checks and administrator enforcement. No approving
+review is required, so a solo maintainer can merge their own PR after CI. Force pushes and
+deletion are disabled, and review conversations must be resolved. Repository settings and
+their verification date are recorded in [CI](../cicd.md#public-repository-settings).
+
+**Rejected:** approval only for first-time contributors, because one accepted contribution
+would remove the approval gate for subsequent fork runs. Requiring one approving review
+would prevent the solo maintainer from merging their own work without another reviewer.
+
 ## Every Linux job runs on the self-hosted runner hp600g1
 
 Status: superseded (#48)
@@ -109,7 +130,10 @@ the same question with an action the job already uses, while `gh cache list` wou
 
 ## Each cache key hashes the whole workflow and the Makefile
 
-Status: decided (#48)
+Status: superseded (#48)
+
+Replaced by [paired tests and isolated build workflows](#test-shards-share-vms-and-build-workflows-own-their-cache-inputs).
+The following records the earlier configuration.
 
 The firmware key hashes `firmware/**`, the `Makefile` and `ci.yml`; the runner key hashes
 `runner/**`, the `Makefile` and `ci.yml`. `firmware/build.sh` holds the IDF tag, the container
@@ -175,7 +199,10 @@ the cached binary and links it again.
 
 ## The test jobs run four shards of the suite
 
-Status: decided (#146)
+Status: superseded (#146)
+
+Replaced by [paired tests and isolated build workflows](#test-shards-share-vms-and-build-workflows-own-their-cache-inputs).
+The following records the earlier configuration.
 
 A `test` job ran the whole suite: about 11 minutes, 17 to 20 when hp600g1 was slow, and three times
 over its limit of 20. A job cancelled there cost its 20 minutes and all of its work. Each Python now
@@ -425,6 +452,85 @@ and after cleanup. Hosted timings still need measurement; 10 minutes is a target
 for every image and queues more machines. Persistent ccache and narrower build keys can be
 considered after measuring this change; both add cache validity/storage concerns. Shortening
 timeouts or dropping Python/OS combinations cannot establish a faster successful full CI.
+
+
+## Test shards share VMs and build workflows own their cache inputs
+
+Status: decided (15 November 2026)
+
+Run 43749863055 (#206) passed all 37 jobs in 20m52s. Its firmware critical path was six minutes,
+but a test job started as late as 10m52s after firmware completed. Twelve Linux test jobs used
+2257 job-seconds and twelve macOS jobs 2361 job-seconds, including their repeated setup. The
+four unchanged pytest shards now run in pairs (1 with 4, 2 with 3): twelve test jobs instead of
+24, still every test on Linux x64 and macOS ARM64 with Python 3.11, 3.13 and 3.14. Two pytest
+processes share a VM, with distinct TMPDIR, basetemp, cache and logs. Either failing fails the
+pair, and both finish and report; no retry or error suppression is added. Cancellation terminates
+both process groups. Pairing the previously shortest shard 1 with shard 4 avoids pairing two
+of the longest shards. Real hosted timing and pass/skip counts decide whether this trade pays off.
+
+`build-firmware.yml` and `build-runner.yml` now own their complete build job definitions and
+expose cache keys through reusable-workflow outputs. The key hashes that build workflow,
+Makefile and source trees; edits to test scheduling in `ci.yml` no longer force an unrelated
+six-minute firmware build. Build inputs, pins and packaging still invalidate their outputs,
+and exact restore/save verification remains. Migration changes the hash once.
+
+**Rejected:** dropping OS/Python combinations or tests; that would change coverage. Four pytest
+processes per VM would put more contention on standard runners; two is a bounded first step.
+Manually versioned cache keys or hashing selected source files could silently miss build inputs.
+Keeping the whole orchestration workflow in the build key rebuilds firmware when only test
+scheduling changes, making optimization iterations unnecessarily slow.
+
+
+The first paired run exposed `AF_UNIX path too long` in Python 3.11's multiprocessing manager
+on macOS. Inheriting the hosted VM's long TMPDIR and appending wrapper/manager directories caused
+fixture setup to fail. Pair roots now use a short prefix directly under `/tmp`; a real-manager
+regression checks a deliberately long inherited TMPDIR. Test assertions and timeouts are unchanged.
+
+
+Run 43755552026 exposed one additional host-lag skip in the paced byte-stamp test on macOS
+Python 3.13. CI now runs `tests/test_real_source.py` sequentially for both shard selections before
+starting the pair, and excludes that file only from the parallel phase. It still runs every test
+exactly once on every OS/Python combination. Relaxing timing bounds, retrying until green, or
+accepting reduced coverage would hide the cost of contention; isolating the wall-clock checks
+costs a few serial seconds without giving up parallelism for the rest of the suite.
+
+
+Review of #208 found that waiting only for each pytest leader after `SIGTERM` left descendants
+alive when the leader exited first. Cleanup now monitors the process groups themselves: send
+`SIGTERM` even after a leader exits, wait a shared five seconds for the groups to disappear,
+then send `SIGKILL` to any remaining groups. Missing groups are harmless. Waiting only for the
+leader or omitting groups of reaped leaders is insufficient because tests deliberately create
+runners that ignore or block `SIGTERM`. Regressions cover both leader states at cancellation.
+
+
+## Each platform waits only for its own native runner
+
+Status: decided (15 November 2026)
+
+Run 43760305678 passed in 16m36s with every build cache hit. Firmware completed 67 seconds after
+creation, and the Linux native build completed at 35 seconds. The macOS native build queued
+until second 259, then took seven seconds. The shared runner matrix held back Linux tests and
+determinism until both native builds finished, even though their inputs were already ready.
+
+`ci.yml` now calls `build-runner.yml` separately as `runner-linux` and `runner-macos`, passing
+`platform`. Each build starts immediately and exposes its own key. `test-linux` and determinism
+need firmware and `runner-linux`; `test-macos` needs firmware and `runner-macos`. Both test calls
+share `test-platform.yml`, which owns the unchanged Python and shard-pair matrix and test setup.
+Queued or failed builds on the other platform do not block a platform's tests. Both platforms
+remain mandatory, with the same labels, architectures, assertions and failure propagation.
+
+The entire native build workflow remains in its cache hash, so this edit causes one native
+rebuild per architecture. Firmware keys and exact tarball restores do not change. Test workflow
+edits remain outside both build keys. Every pytest invocation in `test-platform.yml` reports
+`--durations=30` for later balancing decisions; determinism keeps its existing pytest arguments
+without duration reporting. This change does not rebalance or remove tests. Existing decisions
+to pair shards, isolate wall-clock tests, and run every commit on main remain in effect.
+
+**Rejected:** duplicating all test steps for each platform, which would let dependency setup or
+assertions drift. Removing the build dependency and hoping its cache exists would introduce a
+race. A platform matrix on the reusable build call still gates dependants on the entire matrix;
+separate calls give each consumer the dependency it actually needs. No new cache transport,
+compiler cache, or main-branch cancellation policy is introduced in this change.
 
 ## Release runtime builds use GitHub-hosted runners
 

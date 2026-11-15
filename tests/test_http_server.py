@@ -165,3 +165,22 @@ def test_a_reset_loses_the_tests_connections_until_the_device_listens_again(
         and json.loads(after.text.partition("\r\n\r\n")[2])["requests"] == 1
     )
     assert board.link.error is None
+
+
+def test_http_client_gets_status_and_posts_json(
+    board: Esp32Sim, wifi: Wifi, console: Console
+) -> None:
+    network = listening(board, wifi, console)
+    get = network.http_client.get("/status", headers={"Accept": "application/json"})
+    status = board.wait_until(get.response, within=seconds(5))
+    assert status.status == 200
+    assert status.headers["content-type"] == "application/json"
+    assert status.json()["status"] == "ok" and status.json()["requests"] == 1
+    payload = {"id": 7, "text": "x" * 1800}
+    post = network.http_client.post("/echo", json=payload)
+    echo = board.wait_until(post.response, within=seconds(5))
+    assert echo.status == 200 and echo.headers["content-type"] == "application/json"
+    assert echo.json()["echo"] == payload
+    assert "GET /status → 200" in board.report()
+    assert "POST /echo → 200" in board.report()
+    assert board.link.warnings == [] and board.link.error is None

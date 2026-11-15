@@ -3,8 +3,6 @@
 `Preferences` reads what the test wrote with `board.nvs(...)`, and `WiFi` and `WebServer` answer
 `GET /status` once the settings name a network."""
 
-import json
-
 import pytest
 
 from esp32tl.backends.esp32sim import Esp32Sim
@@ -42,13 +40,11 @@ def test_serves_status_once_it_joins_the_network(
     listening = console.line(r"^arduino_shell: listening on 10\.64\.0\.2 port 80$")
     board.power_on()
     board.wait_until(listening, within=seconds(30))
-    connection = network.connect(80)
-    connection.write(b"GET /status HTTP/1.1\r\nHost: device\r\nConnection: close\r\n\r\n")
-    board.wait_until(connection.closed(), within=seconds(5))
-    head, _, body = connection.received.partition(b"\r\n\r\n")
-    assert head.startswith(b"HTTP/1.1 200 OK\r\n")
-    assert b"Content-Type: application/json" in head
-    status = json.loads(body)
+    exchange = network.http_client.get("/status")
+    response = board.wait_until(exchange.response, within=seconds(5))
+    assert response.status == 200
+    assert response.headers["content-type"] == "application/json"
+    status = response.json()
     assert status["status"] == "ok" and status["requests"] == 1
     console.expect_exact("arduino_shell: GET /status -> 200")
 

@@ -15,6 +15,7 @@ from esp32tl.net.dhcp import Dhcp
 from esp32tl.net.dns import Dns
 from esp32tl.net.ethernet import Ethernet
 from esp32tl.net.http import HttpServer
+from esp32tl.net.http_client import HttpClient
 from esp32tl.net.ip import Connection, Network, StreamService
 from esp32tl.net.mqtt import Broker
 from esp32tl.net.ntp import DEFAULT_UTC, Ntp
@@ -92,6 +93,7 @@ class Internet:
         self.ip.udp.update({53: self.dns, 123: self.ntp})
         self.broker = Broker(self.now, self.log)
         self.listen(1883, self.broker)
+        self.http_client = HttpClient(self.connect, self.log)
         self.http = HttpServer(self.now, self.log)
         self.listen(80, self.http)
         # The services a bridge may take the place of, by port.

@@ -9,17 +9,18 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 
 | Decision | File | Status |
 |---|---|---|
+| [Public fork runs require approval from all external contributors](ci.md#public-fork-runs-require-approval-from-all-external-contributors) | `ci.md` | decided (15 November 2026) |
 | [Every Linux job runs on the self-hosted runner hp600g1](ci.md#every-linux-job-runs-on-the-self-hosted-runner-hp600g1) | `ci.md` | superseded (#48) |
 | [The macOS jobs run only once the repository is public](ci.md#the-macos-jobs-run-only-once-the-repository-is-public) | `ci.md` | superseded (#52) |
 | [The runs-on label is computed from the platform](ci.md#the-runs-on-label-is-computed-from-the-platform) | `ci.md` | superseded (#52) |
 | [CI moves to GitHub-hosted runners before the repository goes public](ci.md#ci-moves-to-github-hosted-runners-before-the-repository-goes-public) | `ci.md` | superseded (#52) |
 | [Builds reach the test jobs through the Actions cache, not artifacts](ci.md#builds-reach-the-test-jobs-through-the-actions-cache-not-artifacts) | `ci.md` | decided (#48) |
 | [A build job fails when the cache did not keep its tarball](ci.md#a-build-job-fails-when-the-cache-did-not-keep-its-tarball) | `ci.md` | decided (#190) |
-| [Each cache key hashes the whole workflow and the Makefile](ci.md#each-cache-key-hashes-the-whole-workflow-and-the-makefile) | `ci.md` | decided (#48) |
+| [Each cache key hashes the whole workflow and the Makefile](ci.md#each-cache-key-hashes-the-whole-workflow-and-the-makefile) | `ci.md` | superseded (#48) |
 | [The firmware job's timeout is 60 minutes](ci.md#the-firmware-jobs-timeout-is-60-minutes) | `ci.md` | decided (#145) |
 | [The runner job caches the binary, not runner/target](ci.md#the-runner-job-caches-the-binary-not-runnertarget) | `ci.md` | decided (#48) |
 | [The test jobs run pytest, not make test](ci.md#the-test-jobs-run-pytest-not-make-test) | `ci.md` | decided (#48) |
-| [The test jobs run four shards of the suite](ci.md#the-test-jobs-run-four-shards-of-the-suite) | `ci.md` | decided (#146) |
+| [The test jobs run four shards of the suite](ci.md#the-test-jobs-run-four-shards-of-the-suite) | `ci.md` | superseded (#146) |
 | [The ROM ELF is fetched once, by the firmware job](ci.md#the-rom-elf-is-fetched-once-by-the-firmware-job) | `ci.md` | decided (#48) |
 | [Every commit on main gets its own concurrency group](ci.md#every-commit-on-main-gets-its-own-concurrency-group) | `ci.md` | decided (#48) |
 | [Clippy runs in the lint job, with no cache](ci.md#clippy-runs-in-the-lint-job-with-no-cache) | `ci.md` | decided (#50) |
@@ -32,6 +33,8 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [CI uses standard hosted images on both platforms before publication](ci.md#ci-uses-standard-hosted-images-on-both-platforms-before-publication) | `ci.md` | decided (15 November 2026) |
 | [Firmware builds run in three parallel groups](ci.md#firmware-builds-run-in-three-parallel-groups) | `ci.md` | superseded (15 November 2026) |
 | [Firmware families are sharded to shorten the critical path](ci.md#firmware-families-are-sharded-to-shorten-the-critical-path) | `ci.md` | decided (15 November 2026) |
+| [Test shards share VMs and build workflows own their cache inputs](ci.md#test-shards-share-vms-and-build-workflows-own-their-cache-inputs) | `ci.md` | decided (15 November 2026) |
+| [Each platform waits only for its own native runner](ci.md#each-platform-waits-only-for-its-own-native-runner) | `ci.md` | decided (15 November 2026) |
 | [Release runtime builds use GitHub-hosted runners](ci.md#release-runtime-builds-use-github-hosted-runners) | `ci.md` | decided |
 | [One Python distribution is tested with both release runners](ci.md#one-python-distribution-is-tested-with-both-release-runners) | `ci.md` | decided |
 | [PyPI publishes the distributions of the published GitHub release](ci.md#pypi-publishes-the-distributions-of-the-published-github-release) | `ci.md` | decided |
@@ -269,6 +272,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The Wi-Fi station is an interface of every profile, and the access point a model source](harness.md#the-wi-fi-station-is-an-interface-of-every-profile-and-the-access-point-a-model-source) | `harness.md` | decided (#31) |
 | [Behind the access point the network speaks Ethernet, ARP and DHCP](harness.md#behind-the-access-point-the-network-speaks-ethernet-arp-and-dhcp) | `harness.md` | decided (#31) |
 | [An HTTP server answers on port 80 of every simulated network](harness.md#an-http-server-answers-on-port-80-of-every-simulated-network) | `harness.md` | decided (#31) |
+| [The HTTP client opens one plain connection per request](harness.md#the-http-client-opens-one-plain-connection-per-request) | `harness.md` | decided (#197) |
 | [A Wi-Fi tap, signal changes and the esp32tl command's Wi-Fi are postponed](harness.md#a-wi-fi-tap-signal-changes-and-the-esp32tl-commands-wi-fi-are-postponed) | `harness.md` | postponed (#31) |
 | [Explicit build paths are relative to the application and never fall back](harness.md#explicit-build-paths-are-relative-to-the-application-and-never-fall-back) | `harness.md` | decided (#102) |
 | [MQTT, TLS, HTTP and DHCP event APIs name history queries and next-event conditions explicitly](harness.md#mqtt-tls-http-and-dhcp-event-apis-name-history-queries-and-next-event-conditions-explicitly) | `harness.md` | decided (#108, #116, #182) |
