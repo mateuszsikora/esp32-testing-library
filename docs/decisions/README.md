@@ -9,6 +9,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 
 | Decision | File | Status |
 |---|---|---|
+| [Public fork runs require approval from all external contributors](ci.md#public-fork-runs-require-approval-from-all-external-contributors) | `ci.md` | decided (15 November 2026) |
 | [Every Linux job runs on the self-hosted runner hp600g1](ci.md#every-linux-job-runs-on-the-self-hosted-runner-hp600g1) | `ci.md` | superseded (#48) |
 | [The macOS jobs run only once the repository is public](ci.md#the-macos-jobs-run-only-once-the-repository-is-public) | `ci.md` | superseded (#52) |
 | [The runs-on label is computed from the platform](ci.md#the-runs-on-label-is-computed-from-the-platform) | `ci.md` | superseded (#52) |
