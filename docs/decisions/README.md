@@ -285,6 +285,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [A test's wall-time bound proves what was not waited for, and a paced one holds only while the host kept up](harness.md#a-tests-wall-time-bound-proves-what-was-not-waited-for-and-a-paced-one-holds-only-while-the-host-kept-up) | `harness.md` | decided (#176) |
 | [A consumer names a condition with esp32tl.condition, not with a description on the wait](harness.md#a-consumer-names-a-condition-with-esp32tlcondition-not-with-a-description-on-the-wait) | `harness.md` | decided (#181) |
 | [A PlatformIO build is read by its file names and image headers](harness.md#a-platformio-build-is-read-by-its-file-names-and-image-headers) | `harness.md` | decided (#192) |
+| [The serial backend flashes a PlatformIO build through an IdfApp of esp32tl's](harness.md#the-serial-backend-flashes-a-platformio-build-through-an-idfapp-of-esp32tls) | `harness.md` | decided (#194) |
 
 ## The runner crate and esp32sim
 

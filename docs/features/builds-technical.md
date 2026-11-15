@@ -22,7 +22,10 @@
    entry, relative to the directory; `elf` `IdfApp.elf_file`, the first `.elf` file that
    `os.listdir` gives; `chip` `IdfApp.target`.
 4. **`platformio(directory, backend)`** needs `firmware.bin`, and, without `firmware.factory.bin`,
-   `bootloader.bin` and `partitions.bin`. It checks the header of `firmware.bin` first: it is at
+   `bootloader.bin` and `partitions.bin`. `check_encryption` then reads `config/sdkconfig.json`
+   (`SDKCONFIG`) when it is a file, and refuses a build that sets `SECURE_FLASH_ENC_ENABLED`, with
+   the message `esp_idf` gives an encrypted build (`encryption`); a build without the file is not
+   checked. It checks the header of `firmware.bin` next: it is at
    the start of the file on every chip, while an S3's or a C3's bootloader is at `0x0`, so such a
    build is refused by the name of its chip and not for a bootloader missing at `0x1000`. Then:
    - with `firmware.factory.bin`: one flash file, `firmware.factory.bin` at `0x0`;
@@ -60,8 +63,10 @@
 5. The backend reads the `Build`: `runner_command` passes one `--flash-at {offset:#x}={path}` per
    flash file, in order; `Esp32Sim._partition_table` parses `Build.table()` with
    `flash.partitions`, for `board.nvs` and `board.flash`; `tap.app_image_sha256` hashes
-   `app_image`; `Esp32Sim.bluetooth` passes `elf` to `--bt`. `serial.check_artifact` refuses a
-   build whose `kind` is not `ESP_IDF`.
+   `app_image`; `Esp32Sim.bluetooth` passes `elf` to `--bt`. `serial.check_artifact` returns the
+   `kind` with the hash, and for a `PLATFORMIO` build the plugin gives pytest-embedded
+   `serial.PlatformioApp`, an `IdfApp` of the `Build`'s files, which `IdfSerial` flashes
+   ([serial backend](serial-backend-technical.md#data-flow)).
 
 No file of the build directory is written, renamed or created.
 
@@ -97,6 +102,7 @@ which is why a build without `firmware.factory.bin` gets no otadata.
 | `FlashFile(offset, path)` | A frozen dataclass: a file written into the flash at `offset` |
 | `BuildError` | What keeps a build from loading or its table from being read |
 | `esp_idf(app_path, directory, backend)`, `platformio(directory, backend)` | The two readers `load` chooses between |
+| `check_encryption(directory, backend)`, `encryption(directory, backend)` | The refusal of a PlatformIO build whose `config/sdkconfig.json` enables flash encryption; the `BuildError` both readers raise for an encrypted build |
 | `app_partition(path, table, firmware)` | The application partition of `table` at `ota_0`'s offset, else at `0x10000`; `BuildError` without one there, for a `firmware` larger than it, or for a table `flash.partitions` refuses |
 | `header(path, offset)`, `check_image(path, data, what, directory, backend)`, `flash_bytes(build, offset, size)` | The 24 bytes of an image header in a file; the check of its magic and chip id; `Build.read` with no bytes where no file holds the offset |
 
@@ -112,7 +118,9 @@ its base `App` on esp32sim, which reads no file of the build.
 |---|---|---|
 | `{directory} holds no ESP-IDF or PlatformIO build: no flasher_args.json and no firmware.bin` | `load` | None of `flasher_args.json`, `firmware.bin` and `firmware.factory.bin` is a file |
 | `{directory} is built for {target}; {backend} runs the classic esp32` | `esp_idf` | `IdfApp.target` is not `esp32` |
-| `{directory} asks for flash encryption, which the runner does not do` | `esp_idf` | A flash file marked encrypted; `which {backend} does not support` for another backend than `esp32sim` |
+| `{directory} asks for flash encryption, which the runner does not do` | `esp_idf`, `check_encryption` | A flash file marked encrypted, or `SECURE_FLASH_ENC_ENABLED` in a PlatformIO build's `config/sdkconfig.json`; `which {backend} does not support` for another backend than `esp32sim` |
+| `{directory}/config/sdkconfig.json is not JSON: {error}` | `check_encryption` | The file is not UTF-8 JSON; `{error}` is the decoder's |
+| `{directory}/config/sdkconfig.json is not a JSON object` | `check_encryption` | The JSON is an array, a string or a number |
 | `{directory} is not a finished build, missing {paths}` | `esp_idf`, `platformio` | A file `flasher_args.json` lists, or a PlatformIO file the build needs, is not a file; `{paths}` comma-separated |
 | `{directory} is built for {chip}; {backend} runs the classic esp32` | `check_image` | A chip id other than `0` in the header of `firmware.bin` or of the bootloader; `{chip}` from `CHIPS`, or `an unknown chip (chip id {id})` |
 | `{directory}/firmware.bin holds no application image: no 0xE9 there` | `check_image` | `firmware.bin` shorter than 24 bytes, or without the magic |
@@ -126,8 +134,8 @@ its base `App` on esp32sim, which reads no file of the build.
 | `no file of {directory} is flashed at {offset}` | `Build.read` | No flash file holds the offset; `board.nvs` and `board.flash` prefix their name |
 
 Anything else `IdfApp` raises, a `flasher_args.json` that is not JSON or has no `flash_files` for
-instance, is not a `BuildError` and fails with its own traceback. A PlatformIO build directory holds
-no configuration esp32tl reads, so a PlatformIO build is not checked for flash encryption.
+instance, is not a `BuildError` and fails with its own traceback. A PlatformIO build without
+`config/sdkconfig.json` is not checked for flash encryption: nothing else in its directory says.
 
 ## Tests
 
@@ -155,8 +163,11 @@ built `nvs_reader` and `hello_world` images:
   `test_a_bootloader_for_another_chip_is_refused`.
 - `test_what_is_not_an_image_or_a_table_where_the_flash_needs_one_is_refused`,
   `test_a_build_missing_what_it_flashes_is_unfinished`: the other messages.
-- `test_an_esp_idf_build_beside_platformio_s_files_is_read_as_esp_idf`,
-  `test_serial_refuses_a_platformio_build`.
+- `test_an_esp_idf_build_beside_platformio_s_files_is_read_as_esp_idf`.
+- `test_a_build_that_enables_flash_encryption_is_refused`: `SECURE_FLASH_ENC_ENABLED` in
+  `config/sdkconfig.json`, on both backends, and the two messages of a file esp32tl cannot read.
+- The serial backend's flashing of a PlatformIO build, listed in
+  [its tests](serial-backend-technical.md#tests).
 - `test_board_nvs_and_board_flash_find_the_table_of_either_build`: `board.nvs` and the table of
   `board.flash` on both kinds, and the test's NVS after the build's files on the command line.
 - `test_nvs_reader_built_by_platformio_runs_as_it_is`: `nvs_reader` as a PlatformIO build, with and

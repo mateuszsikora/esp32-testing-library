@@ -3647,6 +3647,10 @@ consumer's workaround, which is an attribute of the function, not a description 
 
 Status: decided (#192)
 
+*For the serial backend, extended in #194 by [The serial backend flashes a PlatformIO build
+through an IdfApp of esp32tl's](#the-serial-backend-flashes-a-platformio-build-through-an-idfapp-of-esp32tls):
+serial no longer refuses a PlatformIO build.*
+
 `load_app` reads a build into `esp32tl.build.Build`, esp32tl's own description of it: the flash
 files at their offsets, the partition table's offset, the application image, the ELF and the chip.
 An ESP-IDF build is read from `flasher_args.json` through `IdfApp`, as before. A directory without
@@ -3671,8 +3675,8 @@ itself.
 
 The description is a module of its own, `esp32tl/build.py`, with its own feature documents, rather
 than more of `esp32tl/backends/esp32sim.py`: both backends, the taps and the `esp32tl` command read
-it, and none of them needs to know which kind of build it came from. The serial backend refuses a
-PlatformIO build until it can flash one: pytest-embedded's `IdfSerial` flashes the files of
+it, and none of them needs to know which kind of build it came from. The serial backend refused a
+PlatformIO build until #194, since pytest-embedded's `IdfSerial` flashes the files of
 `flasher_args.json`.
 
 **Rejected:** `pio run -t envdump` or `pio run -t idedata` for the offsets and the chip, because
@@ -3691,3 +3695,43 @@ board does, with another running partition and OTA target, and refuse the factor
 pioarduino built; and at the first application partition of the table, which no platform does.
 platformio's own espressif32 flashes `firmware.bin` at the board's `upload.offset_address`,
 `0x10000` by default; that setting is not in the build directory, so esp32tl follows pioarduino.
+
+## The serial backend flashes a PlatformIO build through an IdfApp of esp32tl's
+
+Status: decided (#194)
+
+pytest-embedded's `IdfSerial.flash()` writes the `flash_files` of the `IdfApp` it is given, with
+the `extra_esptool_args` and `write_flash_args` of its `flash_args`; only `IdfApp.__init__` reads
+`flasher_args.json`. So a PlatformIO build reaches the board through `PlatformioApp`
+(`esp32tl/backends/serial.py`), an `IdfApp` whose files are those of the `esp32tl.build.Build`
+esp32sim runs: `firmware.factory.bin` at `0x0`, or `bootloader.bin`, `partitions.bin` and
+`firmware.bin` at their offsets. The plugin puts it in the place of `IdfApp` in pytest-embedded's
+`_fixture_classes_and_options` for a serial test whose build is a PlatformIO one, after
+`check_artifact` has validated it and before the `app` fixture is made; an ESP-IDF build keeps
+`IdfApp`. Flashing, `--skip-autoflash`, the session cache, `--erase-all`, `--erase-nvs` and
+`ESPBAUD` stay pytest-embedded's, the same for both kinds of build. The checks before the port
+opens stay those of `check_artifact`: the chip, the files, and the hash of `firmware.bin` against
+an `app_recording`.
+
+esptool keeps the flash mode, frequency and size of the images (`keep`), so the board gets the
+bytes the emulator runs and a recording's hash names. Without `firmware.factory.bin`, the otadata
+partition is written erased, from a file in a temporary directory, where esp32sim's flash is
+erased: left alone, the otadata an earlier firmware wrote could boot another application on the
+board than the one the test selected. An ESP-IDF build does the same with
+`ota_data_initial.bin`. A factory image holds its own otadata, `boot_app0.bin`'s.
+
+A PlatformIO build whose `config/sdkconfig.json` sets `SECURE_FLASH_ENC_ENABLED` is refused on
+both backends, as an ESP-IDF build that asks for encryption is: its bootloader would encrypt a
+board's flash at the first boot, which cannot be undone. A build without that file is not checked:
+the build directory has nothing else that says so.
+
+**Rejected:** flashing with esptool from esp32tl and running pytest-embedded with skip-autoflash,
+because esp32tl would then own a second flashing path, with its own port handling, baud rate and
+cache, next to the one ESP-IDF builds take. Also rejected: a subclass of `IdfSerial` that erases the
+otadata with `erase-region`, because a test's `IdfSerial` is pytest-embedded's choice, and the
+suite's stand-in replaces it; an erased file among the flash files goes through
+`IdfSerial.flash()` unchanged. Also rejected: writing `boot_app0.bin`'s otadata, as pioarduino's
+upload does, for the reason the decision above gives: it is in the framework's package, not in the
+build. Also rejected: refusing the build as postponed, because the build is flashable with what
+pytest-embedded has.
+

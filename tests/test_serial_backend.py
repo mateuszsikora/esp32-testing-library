@@ -346,9 +346,9 @@ def test_artifact_hash_is_app_binary_and_refuses_missing_or_different_hash(tmp_p
             ),
         )
         if expected == digest:
-            assert check_artifact(str(tmp_path), tap.path) == digest
+            assert check_artifact(str(tmp_path), tap.path).app_sha256 == digest
             (build / "bootloader/bootloader.bin").write_bytes(b"another bootloader")
-            assert check_artifact(str(tmp_path), tap.path) == digest
+            assert check_artifact(str(tmp_path), tap.path).app_sha256 == digest
         else:
             with pytest.raises(BackendError, match="app_sha256"):
                 check_artifact(str(tmp_path), tap.path)

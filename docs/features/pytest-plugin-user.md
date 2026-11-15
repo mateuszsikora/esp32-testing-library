@@ -92,8 +92,8 @@ def test_debug(board):
 `build_dir` is relative to the resolved **application directory**, or absolute. In this example,
 with a test in `project/tests/`, it selects `project/CI builds/debug/`, independently of pytest's
 working directory. The directory itself must hold an ESP-IDF build, with `flasher_args.json`,
-or a PlatformIO build, as `build_dir=".pio/build/esp32"` selects ([builds](builds-user.md)); the
-serial backend flashes ESP-IDF builds only. Paths with spaces
+or a PlatformIO build, as `build_dir=".pio/build/esp32"` selects ([builds](builds-user.md)), on
+either backend. Paths with spaces
 work without special handling in Python. The closest `app_path` marker wins as a whole (test,
 then class, then module); omitting `build_dir` on that marker selects its application's `build/`,
 without inheriting a more distant marker's keyword.

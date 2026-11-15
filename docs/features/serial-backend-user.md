@@ -31,17 +31,29 @@ checks `nmea_reader: UART1 RX GPIO5 TX GPIO4 9600 baud` without needing a GNSS r
 
 ## Builds and flashing
 
-The `app_path` marker selects an ESP-IDF app, with its finished build in `build/` by default, just
-as on esp32sim. Use the CI-built files or `make firmware`; pytest builds nothing. The build must
+The `app_path` marker selects the app, with its finished build in `build/` by default, just as on
+esp32sim: an ESP-IDF build or a PlatformIO one, `.pio/build/<env>/` ([builds](builds-user.md)).
+Use the CI-built files, `make firmware` or `pio run`; pytest builds nothing. An ESP-IDF build must
 target `esp32`, list its app image under `app` in `flasher_args.json`, contain every flash file, and
-request no flash encryption. Encrypted firmware needs provisioning and key/efuse management that
+request no flash encryption. A PlatformIO build needs the files [builds](builds-user.md#what-each-kind-of-build-needs)
+lists, images for the classic ESP32, and no flash encryption in its `config/sdkconfig.json` when it
+has one. Encrypted firmware needs provisioning and key/efuse management that
 this backend does not implement or validate; it is deliberately outside this milestone. No runner or
 ROM ELF is needed for serial.
 
-A PlatformIO build, which esp32sim runs ([builds](builds-user.md)), is refused before the port
-opens: `serial: {build} is a PlatformIO build, which the serial backend does not flash yet: run it
-on esp32sim`. pytest-embedded's `IdfSerial` flashes the files of `flasher_args.json`, which a
-PlatformIO build does not have.
+A PlatformIO build is flashed as esp32sim runs it: `firmware.factory.bin` at `0x0`, or else
+`bootloader.bin` at `0x1000`, `partitions.bin` at `0x8000` and `firmware.bin` at the table's
+`ota_0` (at `0x10000` without one). esptool keeps the flash mode, frequency and size the images
+were built with. Without `firmware.factory.bin`, the table's otadata partition is written erased,
+as on esp32sim, so that the otadata an earlier firmware left on the board does not choose which
+application boots; `firmware.factory.bin` holds its own, `boot_app0.bin`'s, which selects
+`ota_0`. pioarduino's own upload writes `boot_app0.bin`'s otadata in both cases, so with separate
+files `esp_ota_get_boot_partition()` can name another partition than after `pio run -t upload`
+(see [builds](builds-user.md#what-each-kind-of-build-needs)). Nothing else on the flash is erased:
+the NVS and the data partitions keep what the board had, for both kinds of build, unless
+pytest-embedded's `--erase-all` or `--erase-nvs` says otherwise. pytest-embedded's
+`--confirm-target-elf-sha256` does not work with `firmware.factory.bin`: when its session cache
+would skip flashing, it fails with `ValueError: .bin file not found in flash files`.
 
 pytest-embedded's `IdfSerial` flashes during fixture setup, before the test body, unless its
 session cache reuses the app or `--skip-autoflash y` is set. esp32tl never flashes a second time.
@@ -69,7 +81,7 @@ def test_hello(board):
 
 `app_recording(path)` takes one path, relative to the test file or absolute. On serial, before
 pytest-embedded opens the port, esp32tl compares the recording's `app_sha256` with SHA-256 of the
-app binary named by `flasher_args.json`. A missing hash fails with
+app binary named by `flasher_args.json`, or of `firmware.bin` for a PlatformIO build. A missing hash fails with
 `serial: <path>: recording has no app_sha256`; a mismatch fails with
 `serial: <path>: recording app_sha256 <expected> does not match artifact <actual>`.
 This check applies with and without autoflash. The marker is ignored on esp32sim, where replaying
@@ -82,7 +94,7 @@ selected artifact's hash; under skip-autoflash that is also a statement about th
 
 An external build is selected with
 `@pytest.mark.app_path("../firmware", build_dir="../builds/debug")`. The build path is relative to
-the application or absolute, and must contain `flasher_args.json`. Preflight, flashing, the
+the application or absolute, and must hold an ESP-IDF or a PlatformIO build. Preflight, flashing, the
 `app_recording` hash comparison and tap artifact hashes all use that same resolved directory. An
 invalid selection fails before opening the port, including when `dut` is requested before `board`.
 No default build is substituted. pytest-embedded's raw `--build-dir` is still refused; use the
@@ -247,6 +259,11 @@ The USB adapter required `ESPBAUD=230400`. This verifies console capture, reset 
 it does not verify a GNSS receiver, modem or other physical peripherals. The reproducible
 command, tool versions and app hashes are in
 [physical validation](serial-backend-technical.md#physical-validation).
+
+A PlatformIO build has not been flashed on a board yet: the suite checks the esptool command
+`IdfSerial.flash()` runs for one, not a board. TODO(owner): flash the Arduino image of #193, built
+by PlatformIO, on a classic ESP32 through `--esp32tl-backend serial`, with and without
+`firmware.factory.bin`, and record the result here.
 
 ## See also
 

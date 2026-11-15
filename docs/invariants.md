@@ -1571,15 +1571,28 @@ that references to its number keep their meaning.
      names, from the flash file that holds it: inside `firmware.factory.bin` too.
      `tests/test_platformio_build.py::test_board_nvs_and_board_flash_find_the_table_of_either_build`,
      `tests/test_flash.py::test_nvs_reports_missing_or_invalid_partition_table`
-- **232.** A PlatformIO build whose application or bootloader header names another chip than the
+- **232.** ~~A PlatformIO build whose application or bootloader header names another chip than the
      classic ESP32 is refused with that chip's name, on both backends; the serial backend refuses
-     any PlatformIO build before a port opens.
-     `tests/test_platformio_build.py::test_an_image_for_another_chip_is_refused_by_its_name`,
-     `tests/test_platformio_build.py::test_a_bootloader_for_another_chip_is_refused`,
-     `tests/test_platformio_build.py::test_serial_refuses_a_platformio_build`
+     any PlatformIO build before a port opens.~~ No longer holds since #194, where the serial
+     backend flashes a PlatformIO build: see 234 for the chip and 235 for what serial flashes.
 - **233.** A recording's `app_sha256` from a PlatformIO build is the hash of `firmware.bin`, with or
      without `firmware.factory.bin`.
      `tests/test_platformio_build.py::test_the_application_image_s_hash_is_firmware_bin_s`
+- **234.** A PlatformIO build whose application or bootloader header names another chip than the
+     classic ESP32 is refused with that chip's name, on both backends, and so is one whose
+     `config/sdkconfig.json` enables flash encryption; on serial, before a port opens.
+     `tests/test_platformio_build.py::test_an_image_for_another_chip_is_refused_by_its_name`,
+     `tests/test_platformio_build.py::test_a_bootloader_for_another_chip_is_refused`,
+     `tests/test_platformio_build.py::test_a_build_that_enables_flash_encryption_is_refused`
+- **235.** On serial, a PlatformIO build is flashed as esp32sim runs it: the build's files at the
+     offsets of 230, with the flash mode, frequency and size of their headers kept, and the table's
+     otadata partition erased when no file of the build covers it; an ESP-IDF build keeps
+     pytest-embedded's `IdfApp`.
+     `tests/test_platformio_build.py::test_serial_flashes_the_files_esp32sim_runs_with_the_otadata_erased`,
+     `tests/test_platformio_build.py::test_serial_flashes_a_factory_image_whole_from_0x0`,
+     `tests/test_platformio_build.py::test_a_table_without_otadata_gets_none`,
+     `tests/test_platformio_build.py::test_serial_runs_a_platformio_build`,
+     `tests/test_platformio_build.py::test_an_esp_idf_build_keeps_pytest_embedded_s_app`
 
 ## Resets and power cycles
 

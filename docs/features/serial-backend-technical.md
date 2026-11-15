@@ -21,31 +21,62 @@ the same indirect parametrisation. See [the user contract](serial-backend-user.m
    Missing serial options fail with the services requirement message. A cached port different
    from the explicit selection (including `None`) fails with `CACHED_PORT_CONFLICT`, without
    attributing the change to `ESPPORT`. It validates the build and optional `app_recording`
-   once per item, caching the digest under `SERIAL_ARTIFACT`.
+   once per item.
    `pytest_fixture_setup` runs it before pytest-embedded's `app` fixture, so an explicitly requested
    `dut` cannot flash before validation. `board` checks it too, then obtains `dut` dynamically.
    `serial_artifact` passes the resolved `build_dir` fixture to `check_artifact`; pytest-embedded
    receives the same fixture for its app and flashing. `check_artifact` calls
-   `load_app(app_path, build_dir=build_dir, backend="serial")` for finished-build checks, refuses
-   a `Build` whose `kind` is not `esp32tl.build.ESP_IDF`, since `IdfSerial` flashes the files of
-   `flasher_args.json`, then `app_image_sha256(app)` from `esp32tl/tap.py`. This hashes the app
-   entry in `flasher_args.json` (`Build.app_image`), not `IdfApp.bin_file` (which may name another
-   `.bin`), the ELF or its embedded digest.
-3. pytest-embedded creates `IdfApp`, `IdfSerial` and `IdfDut`. `IdfSerial._start` owns autoflash,
+   `load_app(app_path, build_dir=build_dir, backend="serial")` for finished-build checks, then
+   `app_image_sha256(app)` from `esp32tl/tap.py`, and returns an `Artifact` of that digest and the
+   `Build`'s `kind`. This hashes the app entry in `flasher_args.json` (`Build.app_image`) of an
+   ESP-IDF build, `firmware.bin` of a PlatformIO one, not `IdfApp.bin_file` (which may name another
+   `.bin`), the ELF or its embedded digest. The item's `SERIAL_ARTIFACT` stash holds the `Artifact`.
+3. For a PlatformIO build (`Artifact.kind` is `esp32tl.build.PLATFORMIO`), the same
+   `pytest_fixture_setup` hook then sets `classes["app"]` of `_fixture_classes_and_options` to
+   `PlatformioApp`, before pytest-embedded's `app` fixture makes its app from `classes["app"]`
+   with the `app_path`, `build_dir` and `part_tool` it would give `IdfApp`. `IdfApp.__init__`
+   reads `flasher_args.json`; `PlatformioApp.__init__` runs `App.__init__` instead and loads the
+   `Build` again through `load_app`, then sets what `IdfSerial` and `IdfDut` read of an `IdfApp`:
+   - `flash_files`, the build's files at their offsets (`pytest_embedded_idf.app.FlashFile`, none
+     encrypted), sorted by offset, plus `otadata.bin` at the offset of the table's otadata
+     partition (type 1, subtype 0) when no file of the build covers that offset: `0xFF` bytes, as
+     many as the partition's size, in a `tempfile.TemporaryDirectory` (`esp32tl-otadata-*`) that
+     the app object holds. A `firmware.factory.bin` covers it; separate files do not;
+   - `flash_args`: `extra_esptool_args` `PLATFORMIO_ESPTOOL_ARGS`, `before` `default_reset`,
+     `after` `hard_reset`, `chip` `esp32` and `stub` true, as ESP-IDF's `flasher_args.json` has
+     them for the classic ESP32; `write_flash_args` `PLATFORMIO_WRITE_FLASH_ARGS`,
+     `--flash-mode keep --flash-freq keep --flash-size keep`; `flash_files` by hexadecimal offset;
+   - `flash_settings`, `keep` for the three and `encrypt` false; `target` the `Build`'s `chip`;
+     `bin_file` `firmware.bin`; `elf_file` `firmware.elf` or `None`; `is_loadable_elf` and
+     `is_linux_elf` false;
+   - `partition_table`, the table by name as `flash.partitions` reads it, each a dict of `type`,
+     `subtype`, `offset`, `size` and `flags` as integers (`IdfApp` runs ESP-IDF's
+     `gen_esp32part.py` and gives `type` and `subtype` as names); `IdfSerial.flash` reads the
+     `nvs` entry's `offset` and `size` for `--erase-nvs`.
+
+   `IdfSerial.flash()` then runs `esptool.main` with
+   `--before default_reset --after hard_reset --chip esp32 --baud {ESPBAUD or 921600} write-flash`,
+   each file's offset and path, and the three `keep` options. `binary_path` is the build directory,
+   so the session cache (`Meta.hit_port_app_cache`) works as for an ESP-IDF build. With
+   `--confirm-target-elf-sha256`, on a cache hit, `IdfSerial.read_flash_elf_sha256` looks for
+   `bin_file` among `flash_files` for the application's offset: with `firmware.factory.bin`,
+   `firmware.bin` is not one of them, and it raises `ValueError: .bin file not found in flash
+   files`.
+4. pytest-embedded creates the app, `IdfSerial` and `IdfDut`. `IdfSerial._start` owns autoflash,
    skip-autoflash and its session cache. `Serial` neither opens another port nor calls `flash`.
    The plugin requires an `IdfDut` and passes it the profile, message queue and artifact digest.
-4. `power_on` stops and joins pytest-embedded's redirect thread, discards the input buffer,
+5. `power_on` stops and joins pytest-embedded's redirect thread, discards the input buffer,
    records monotonic and UTC origins, calls `hard_reset`, then starts its reader. An exception
    rolls back `_start` and `_reader` and restores redirection; `powered` remains false, so close
    writes no tap. A subsequent power-on may retry. Successful power-on logs
    `board.power_on(): hard reset` at 0; elapsed time includes reset latency.
-5. The reader calls `proc.read_all()` every `POLL_SECONDS` (10 ms), stamps each nonempty batch
+6. The reader calls `proc.read_all()` every `POLL_SECONDS` (10 ms), stamps each nonempty batch
    after that poll, forwards it to pytest-embedded's message queue and queues `(elapsed_ns, bytes)`.
    Stamps include USB, driver, polling and host scheduling delay; they are not exact wire-arrival
    times. The test thread drains the queue into its bytearray, `ConsoleLines`, `RunLog` and tap
    when reading console properties, waiting or closing. Only that thread mutates the buffer,
    avoiding a resize while `Console` holds a matching memoryview. Read errors are queued too.
-6. UARTs use the existing `Uart`, `Gnss` and `Modem` capability callback, refusing replay/model requests
+7. UARTs use the existing `Uart`, `Gnss` and `Modem` capability callback, refusing replay/model requests
    before reading a recording or constructing a model. Their clock/world callbacks are lazy;
    serial never creates a `GnssReceiver` or modem model. The modem adapter has a local `Lines`
    object for its interface contract, but no model attaches or drives it. `SdCard.insert` skips
@@ -53,20 +84,20 @@ the same indirect parametrisation. See [the user contract](serial-backend-user.m
    GPIO fixture access skips after checking the profile has lines. Physical peripherals operate
    independently: the harness has no transport to their wires. Console tapping reuses `Uart.tap`
    through `_console`, sharing `log` and the file map, which reserves reference and flash files.
-7. Waits drain console input and check conditions in the test thread every 10 ms plus scheduling
+8. Waits drain console input and check conditions in the test thread every 10 ms plus scheduling
    delay. `wait` logs only `board.wait({duration})` on success and adds
    `the run ended while the test waited` on `RunEnded`, matching esp32sim. `wait_until` uses
    `board.wait_until: within` in duration validation errors. `wait_on_clock` logs
    `waits up to {within} for {description}` and the result, `{description}: happened`,
    `{description}: did not happen within {within}`, or `{description}: the run ended first`.
    The timeout reports the actual monotonic start/end interval.
-8. Close sets the stop event, waits at most `READER_STOP_SECONDS` (1 s) for its reader, drains the
+9. Close sets the stop event, waits at most `READER_STOP_SECONDS` (1 s) for its reader, drains the
    queue, fixes the final elapsed time and writes the tap. A stuck reader is a `BackendError`;
    its daemon thread discards any bytes returned after the stop event. Redirection restarts only
    after a healthy reader stopped, avoiding another reader and reconnect attempts on a dead port.
    pytest-embedded remains the port owner and subsequently closes it. Close is idempotent, even
    after its error. This bounds esp32tl's join, not arbitrary USB-driver or fixture-owner calls.
-9. The plugin suppresses duplicate teardown errors when the call already reported `RunEnded`,
+10. The plugin suppresses duplicate teardown errors when the call already reported `RunEnded`,
    then uses `report_section` / `report_property` to attach the report and JSON property. A
    passing test that tapped without successful power-on gets the no-firmware teardown error.
 
@@ -115,7 +146,9 @@ run log: the tap, power-on and wait steps, and received console lines.
 | `set_up()` | `the tap of console` when tapped, otherwise empty |
 | `close()` | Stop capture, restore healthy redirection, write tap, report errors; idempotent |
 | `report(run=False)`, `properties()` | Human report (with run log when requested) and schema above |
-| `check_artifact(app_path, reference=None, *, build_dir=None)` | Validate build/reference before port setup, return the app-image hash |
+| `check_artifact(app_path, reference=None, *, build_dir=None)` | Validate build/reference before port setup, return an `Artifact` |
+| `Artifact(app_sha256, kind)` | A frozen dataclass: the app-image hash and the `Build`'s `kind`, `esp32tl.build.ESP_IDF` or `PLATFORMIO` |
+| `PlatformioApp(app_path=None, build_dir=None, part_tool=None, **kwargs)` | The `IdfApp` of a PlatformIO build (data flow, step 3); `build` is its `esp32tl.build.Build` |
 
 ## Configuration
 
@@ -153,7 +186,7 @@ from pytest-embedded propagate with their original messages.
 | `{nodeid}: serial does not support --flash-port: use one port for flashing and console` | A separate flashing port was supplied; same collection/setup error handling as the port check |
 | `{nodeid}: the app_recording marker takes one path, as in @pytest.mark.app_recording("hello-console.jsonl")` | Wrong arguments; collection error 2 |
 | `serial: {build} holds no ESP-IDF or PlatformIO build: no flasher_args.json and no firmware.bin` | Missing build metadata |
-| `serial: {build} is a PlatformIO build, which the serial backend does not flash yet: run it on esp32sim` | A PlatformIO build, which `esp32tl.build.load` reads but `IdfSerial` cannot flash; the PlatformIO checks of [builds](builds-technical.md#failure-modes) come first |
+| `serial: {build} …` from a PlatformIO build | The PlatformIO checks of [builds](builds-technical.md#failure-modes): files, images, table, chip and flash encryption |
 | `serial: {build} is built for {target}; serial runs the classic esp32` | Non-classic target |
 | `serial: {build} asks for flash encryption, which serial does not support` | Encryption outside the supported workflow |
 | `serial: {build} is not a finished build, missing {files}` | Missing files listed for flashing |
@@ -194,9 +227,16 @@ autoflash, marker errors,
 reference hashes before port creation, console reset/capture, waits and their reports, capability
 skips, failed reset with retry, disconnected open ports and a blocked reader released after close.
 `tests/test_pytest_plugin.py` covers console tap reports on esp32sim and ignoring references there.
-`tests/test_platformio_build.py::test_serial_refuses_a_platformio_build` covers the refusal of a
-PlatformIO build, and `test_an_image_for_another_chip_is_refused_by_its_name` its chip check on
-serial.
+`tests/test_platformio_build.py` covers a PlatformIO build on serial:
+`test_serial_flashes_the_files_esp32sim_runs_with_the_otadata_erased`,
+`test_serial_flashes_a_factory_image_whole_from_0x0` and `test_a_table_without_otadata_gets_none`
+run pytest-embedded's own `IdfSerial.flash()` on a `PlatformioApp`, with `esptool.main` replaced,
+and check its command, the erased otadata's bytes and `--erase-nvs`'s `erase-region`;
+`test_serial_runs_a_platformio_build` runs the fixture chain with the fake port, with and without a
+factory image, and an `app_recording` of `firmware.bin`'s hash; `test_an_esp_idf_build_keeps_pytest_embedded_s_app`
+that an ESP-IDF build keeps `IdfApp`. `test_an_image_for_another_chip_is_refused_by_its_name` and
+`test_a_build_that_enables_flash_encryption_is_refused` cover the checks on serial. No PlatformIO
+build has been flashed on a board ([validation status](serial-backend-user.md#validation-status)).
 
 ### The backend comparison
 
