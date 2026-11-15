@@ -3714,16 +3714,23 @@ opens stay those of `check_artifact`: the chip, the files, and the hash of `firm
 an `app_recording`.
 
 esptool keeps the flash mode, frequency and size of the images (`keep`), so the board gets the
-bytes the emulator runs and a recording's hash names. Without `firmware.factory.bin`, the otadata
-partition is written erased, from a file in a temporary directory, where esp32sim's flash is
-erased: left alone, the otadata an earlier firmware wrote could boot another application on the
-board than the one the test selected. An ESP-IDF build does the same with
-`ota_data_initial.bin`. A factory image holds its own otadata, `boot_app0.bin`'s.
+bytes the emulator runs and a recording's hash names. Without `firmware.factory.bin`, two parts of
+the flash that esp32sim has erased are written erased, from files in a temporary directory, where
+no file of the build covers them: the otadata partition, and the first sector of a `factory`
+partition. Left alone, the otadata an earlier firmware wrote could boot another slot, and with the
+otadata erased the bootloader tries `factory` before `ota_0`, so a launcher or an older
+application left there would run instead of the one the test selected, while the hash check
+passes on the local file. The first sector holds the image header, which is all the bootloader
+needs to find the partition not bootable, as on esp32sim; a launcher on the board is lost. An
+ESP-IDF build erases the otadata the same way, with `ota_data_initial.bin`, and so does a
+`framework = espidf` build's `pio run -t upload`. A factory image holds its own otadata,
+`boot_app0.bin`'s, which selects `ota_0`, so `factory` is left alone with it.
 
-A PlatformIO build whose `config/sdkconfig.json` sets `SECURE_FLASH_ENC_ENABLED` is refused on
-both backends, as an ESP-IDF build that asks for encryption is: its bootloader would encrypt a
-board's flash at the first boot, which cannot be undone. A build without that file is not checked:
-the build directory has nothing else that says so.
+A PlatformIO build whose `config/sdkconfig.json` sets `SECURE_FLASH_ENC_ENABLED` or `SECURE_BOOT`
+is refused on both backends, as an ESP-IDF build that asks for encryption is: its bootloader would
+burn the board's eFuses at the first boot, which cannot be undone, and with `SECURE_BOOT`
+`IdfSerial` passes esptool `--force`. A build without that file is not checked: the build
+directory has nothing else that says so.
 
 **Rejected:** flashing with esptool from esp32tl and running pytest-embedded with skip-autoflash,
 because esp32tl would then own a second flashing path, with its own port handling, baud rate and
@@ -3732,6 +3739,9 @@ otadata with `erase-region`, because a test's `IdfSerial` is pytest-embedded's c
 suite's stand-in replaces it; an erased file among the flash files goes through
 `IdfSerial.flash()` unchanged. Also rejected: writing `boot_app0.bin`'s otadata, as pioarduino's
 upload does, for the reason the decision above gives: it is in the framework's package, not in the
-build. Also rejected: refusing the build as postponed, because the build is flashable with what
-pytest-embedded has.
+build; and an otadata of esp32tl's selecting `ota_0`, which keeps a launcher in `factory` but
+gives the board another otadata, and another boot partition, than esp32sim's flash has. Also
+rejected: erasing the whole `factory` partition, slower for no other effect on the bootloader;
+and refusing such a build on serial, since it can be flashed. Also rejected: refusing the build
+as postponed, because the build is flashable with what pytest-embedded has.
 

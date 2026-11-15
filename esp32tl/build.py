@@ -218,16 +218,17 @@ def platformio(directory: Path, backend: str) -> Build:
     return build
 
 
-def encryption(directory: Path, backend: str) -> BuildError:
-    """The refusal of a build in `directory` that asks for flash encryption."""
+def encryption(directory: Path, backend: str, what: str = "flash encryption") -> BuildError:
+    """The refusal of a build in `directory` that asks for `what`."""
     reason = "the runner does not do" if backend == "esp32sim" else f"{backend} does not support"
-    return BuildError(f"{directory} asks for flash encryption, which {reason}")
+    return BuildError(f"{directory} asks for {what}, which {reason}")
 
 
 def check_encryption(directory: Path, backend: str) -> None:
-    """Refuses a PlatformIO build whose `config/sdkconfig.json` enables flash encryption: its
-    bootloader would encrypt a board's flash on the first boot and burn its eFuses. A build
-    without that file is not checked."""
+    """Refuses a PlatformIO build whose `config/sdkconfig.json` enables flash encryption or
+    secure boot: its bootloader would burn a board's eFuses on the first boot, and with secure
+    boot IdfSerial would flash it with esptool's `--force`. A build without that file is not
+    checked."""
     config = directory / SDKCONFIG
     if not config.is_file():
         return
@@ -239,6 +240,8 @@ def check_encryption(directory: Path, backend: str) -> None:
         raise BuildError(f"{config} is not a JSON object")
     if settings.get("SECURE_FLASH_ENC_ENABLED"):
         raise encryption(directory, backend)
+    if settings.get("SECURE_BOOT"):
+        raise encryption(directory, backend, "secure boot")
 
 
 def app_partition(path: Path, table: bytes, firmware: Path) -> flash.Partition:

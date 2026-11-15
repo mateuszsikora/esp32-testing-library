@@ -44,16 +44,29 @@ ROM ELF is needed for serial.
 A PlatformIO build is flashed as esp32sim runs it: `firmware.factory.bin` at `0x0`, or else
 `bootloader.bin` at `0x1000`, `partitions.bin` at `0x8000` and `firmware.bin` at the table's
 `ota_0` (at `0x10000` without one). esptool keeps the flash mode, frequency and size the images
-were built with. Without `firmware.factory.bin`, the table's otadata partition is written erased,
-as on esp32sim, so that the otadata an earlier firmware left on the board does not choose which
-application boots; `firmware.factory.bin` holds its own, `boot_app0.bin`'s, which selects
-`ota_0`. pioarduino's own upload writes `boot_app0.bin`'s otadata in both cases, so with separate
-files `esp_ota_get_boot_partition()` can name another partition than after `pio run -t upload`
-(see [builds](builds-user.md#what-each-kind-of-build-needs)). Nothing else on the flash is erased:
-the NVS and the data partitions keep what the board had, for both kinds of build, unless
-pytest-embedded's `--erase-all` or `--erase-nvs` says otherwise. pytest-embedded's
-`--confirm-target-elf-sha256` does not work with `firmware.factory.bin`: when its session cache
-would skip flashing, it fails with `ValueError: .bin file not found in flash files`.
+were built with. `firmware.factory.bin` holds its own otadata, `boot_app0.bin`'s, which selects
+`ota_0`. Without it, two parts of the flash are written erased, as they are on esp32sim, so that
+what an earlier firmware left on the board does not choose which application boots:
+
+- the table's otadata partition, all of it, which could name another slot;
+- the first sector (4 KiB) of a `factory` partition that `firmware.bin` is not in, as on
+  Arduino's `app3M_fat9M_fact512k_16MB.csv`: with the otadata erased the bootloader tries
+  `factory` before `ota_0`, and would boot a launcher or an older application left there. The
+  console then shows `boot: Factory app partition is not bootable` before the application starts,
+  as on esp32sim, and a launcher on the board no longer boots.
+
+An Arduino build's `pio run -t upload` writes `boot_app0.bin`'s otadata and leaves `factory` alone;
+a `framework = espidf` build's writes an erased `ota_data_initial.bin`, as here. So with separate
+files, on a table with `factory`, `esp_ota_get_boot_partition()` can name another partition than
+after an Arduino build's upload (see [builds](builds-user.md#what-each-kind-of-build-needs)).
+Nothing else on the flash is erased: the NVS and the data partitions keep what the board had, for
+both kinds of build, unless pytest-embedded's `--erase-all` or `--erase-nvs` says otherwise.
+
+pytest-embedded's `--confirm-target-elf-sha256` does not work with `firmware.factory.bin`: when its
+session cache would skip flashing, it fails with `ValueError: .bin file not found in flash files`.
+With separate files it compares the SHA-256 of `firmware.elf` with the 32 bytes at `0xb0` of the
+application on the board, the app descriptor's `app_elf_sha256`, which pioarduino's builds fill in
+(`elf2image --elf-sha256-offset 0xb0`), Arduino's as well as `framework = espidf`'s.
 
 pytest-embedded's `IdfSerial` flashes during fixture setup, before the test body, unless its
 session cache reuses the app or `--skip-autoflash y` is set. esp32tl never flashes a second time.

@@ -10,9 +10,11 @@ the files of `esp32tl.build`, so that IdfSerial writes the flash esp32sim runs.
 """
 
 import queue
+import shutil
 import tempfile
 import threading
 import time
+import weakref
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -24,7 +26,7 @@ from pytest_embedded.log import MessageQueue
 from pytest_embedded_idf.app import FlashFile, IdfApp
 from pytest_embedded_idf.dut import IdfDut
 
-from esp32tl import build, flash, recording
+from esp32tl import flash, recording
 from esp32tl.backends.clock import nanoseconds, seconds
 from esp32tl.backends.esp32sim import BackendError, load_app, refuse, route_wire
 from esp32tl.boards import BoardProfile, capabilities
@@ -87,30 +89,36 @@ def check_artifact(
     return Artifact(digest, app.kind)
 
 
-# What a PlatformIO build gives esptool's write-flash: the chip, the resets and the stub
-# ESP-IDF's flasher_args.json names for the classic ESP32, and the images' flash mode, frequency
-# and size kept as the build wrote them, so that the board gets the bytes esp32sim runs.
-PLATFORMIO_ESPTOOL_ARGS = {
-    "before": "default_reset",
-    "after": "hard_reset",
-    "chip": build.CLASSIC,
-    "stub": True,
-}
+# What a PlatformIO build gives esptool's write-flash: the resets and the stub ESP-IDF's
+# flasher_args.json names, and the images' flash mode, frequency and size kept as the build wrote
+# them, so that the board gets the bytes esp32sim runs. IdfSerial.flash() passes `after` as
+# hard_reset whatever its value.
+PLATFORMIO_ESPTOOL_ARGS = {"before": "default-reset", "after": "hard-reset", "stub": True}
 KEEP = {"flash_mode": "keep", "flash_freq": "keep", "flash_size": "keep"}
 PLATFORMIO_WRITE_FLASH_ARGS = [
-    arg for key, value in KEEP.items() for arg in (f"--{key.replace('_', '-')}", value)
+    "--flash-mode",
+    "keep",
+    "--flash-freq",
+    "keep",
+    "--flash-size",
+    "keep",
 ]
-# The otadata partition: type data (1), subtype ota (0).
+# The partitions esp32sim has erased and a board may not: the otadata (data, ota), all of it, and
+# the factory application (app, factory), its first sector, where its image header is.
 DATA, OTA_DATA = 1, 0
+APP, FACTORY = 0, 0
+SECTOR = 0x1000
 ERASED = b"\xff"
 
 
 class PlatformioApp(IdfApp):
     """A PlatformIO build as pytest-embedded's `IdfSerial` flashes it: the build's files at their
-    offsets (`esp32tl.build.platformio`), with an erased otadata where no file of the build covers
-    the table's otadata partition, as the flash of esp32sim has it and as `ota_data_initial.bin`
-    leaves it for an ESP-IDF build; else what a board had there would choose the application it
-    boots. The erased otadata is a file in a temporary directory, not in the build directory.
+    offsets (`esp32tl.build.platformio`), and, where no file of the build covers them, an erased
+    otadata partition and, when the otadata is not the build's own, an erased first sector of a
+    `factory` partition, as the flash of esp32sim has them. Otherwise what a board had there
+    would choose the application it boots: an otadata naming another slot, or an image left in
+    `factory`, which the bootloader tries before `ota_0` with the otadata erased. The erased files
+    are in a temporary directory, not in the build directory, removed with the app.
 
     pytest-embedded makes it from the `app` fixture's `app_path` and `build_dir`, as an `IdfApp`.
     """
@@ -146,17 +154,23 @@ class PlatformioApp(IdfApp):
         self.is_loadable_elf = False
         self.is_linux_elf = False
         files = [FlashFile(f.offset, str(f.path)) for f in self.build.flash_files]
-        self._erased: tempfile.TemporaryDirectory[str] | None = None
-        for p in table.values():
-            if p.type == DATA and p.subtype == OTA_DATA and not self._covered(p.offset):
-                self._erased = tempfile.TemporaryDirectory(prefix="esp32tl-otadata-")
-                otadata = Path(self._erased.name) / "otadata.bin"
-                otadata.write_bytes(ERASED * p.size)
-                files.append(FlashFile(p.offset, str(otadata)))
-                break
+        erased = Path(tempfile.mkdtemp(prefix="esp32tl-erased-"))
+        weakref.finalize(self, shutil.rmtree, erased, True)
+        otadata = [p for p in table.values() if (p.type, p.subtype) == (DATA, OTA_DATA)]
+        factory = [p for p in table.values() if (p.type, p.subtype) == (APP, FACTORY)]
+        # With an otadata of the build's own, boot_app0.bin's in firmware.factory.bin, the
+        # bootloader boots the slot it names and a factory partition is not tried.
+        if any(self._covered(p.offset) for p in otadata):
+            factory = []
+        for p in otadata + factory:
+            if not self._covered(p.offset):
+                name = "otadata.bin" if p in otadata else "factory.bin"
+                size = p.size if p in otadata else min(SECTOR, p.size)
+                (erased / name).write_bytes(ERASED * size)
+                files.append(FlashFile(p.offset, str(erased / name)))
         self.flash_files = sorted(files)
         self.flash_args = {
-            "extra_esptool_args": dict(PLATFORMIO_ESPTOOL_ARGS),
+            "extra_esptool_args": {**PLATFORMIO_ESPTOOL_ARGS, "chip": self.build.chip},
             "write_flash_args": list(PLATFORMIO_WRITE_FLASH_ARGS),
             "flash_files": {hex(f.offset): f.file_path for f in self.flash_files},
         }

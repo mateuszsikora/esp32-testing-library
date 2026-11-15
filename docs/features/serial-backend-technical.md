@@ -38,13 +38,17 @@ the same indirect parametrisation. See [the user contract](serial-backend-user.m
    reads `flasher_args.json`; `PlatformioApp.__init__` runs `App.__init__` instead and loads the
    `Build` again through `load_app`, then sets what `IdfSerial` and `IdfDut` read of an `IdfApp`:
    - `flash_files`, the build's files at their offsets (`pytest_embedded_idf.app.FlashFile`, none
-     encrypted), sorted by offset, plus `otadata.bin` at the offset of the table's otadata
-     partition (type 1, subtype 0) when no file of the build covers that offset: `0xFF` bytes, as
-     many as the partition's size, in a `tempfile.TemporaryDirectory` (`esp32tl-otadata-*`) that
-     the app object holds. A `firmware.factory.bin` covers it; separate files do not;
-   - `flash_args`: `extra_esptool_args` `PLATFORMIO_ESPTOOL_ARGS`, `before` `default_reset`,
-     `after` `hard_reset`, `chip` `esp32` and `stub` true, as ESP-IDF's `flasher_args.json` has
-     them for the classic ESP32; `write_flash_args` `PLATFORMIO_WRITE_FLASH_ARGS`,
+     encrypted), sorted by offset, plus erased files, `0xFF` bytes, where no file of the build
+     covers a partition's offset: `otadata.bin` at the table's otadata partition (type 1,
+     subtype 0), as long as the partition; and, unless a file of the build covers the otadata,
+     `factory.bin` at a `factory` partition (type 0, subtype 0), its first `SECTOR`, `0x1000`
+     bytes, where the bootloader reads the image header. A `firmware.factory.bin` covers the
+     otadata, so neither is written with it; `firmware.bin` covers `factory` when it is flashed
+     there. The files are in a `tempfile.mkdtemp` directory (`esp32tl-erased-*`) that a
+     `weakref.finalize` removes with the app, without the `ResourceWarning` of a
+     `TemporaryDirectory` cleaned up by the garbage collector;
+   - `flash_args`: `extra_esptool_args` `PLATFORMIO_ESPTOOL_ARGS`, `before` `default-reset`,
+     `after` `hard-reset` and `stub` true, with `chip` the `Build`'s; `write_flash_args` `PLATFORMIO_WRITE_FLASH_ARGS`,
      `--flash-mode keep --flash-freq keep --flash-size keep`; `flash_files` by hexadecimal offset;
    - `flash_settings`, `keep` for the three and `encrypt` false; `target` the `Build`'s `chip`;
      `bin_file` `firmware.bin`; `elf_file` `firmware.elf` or `None`; `is_loadable_elf` and
@@ -55,13 +59,19 @@ the same indirect parametrisation. See [the user contract](serial-backend-user.m
      `nvs` entry's `offset` and `size` for `--erase-nvs`.
 
    `IdfSerial.flash()` then runs `esptool.main` with
-   `--before default_reset --after hard_reset --chip esp32 --baud {ESPBAUD or 921600} write-flash`,
-   each file's offset and path, and the three `keep` options. `binary_path` is the build directory,
+   `--before default-reset --after hard_reset --chip esp32 --baud {ESPBAUD or 921600} write-flash`,
+   each file's offset and path, and the three `keep` options: it passes `after` as `hard_reset`
+   whatever `extra_esptool_args` say. `binary_path` is the build directory,
    so the session cache (`Meta.hit_port_app_cache`) works as for an ESP-IDF build. With
    `--confirm-target-elf-sha256`, on a cache hit, `IdfSerial.read_flash_elf_sha256` looks for
    `bin_file` among `flash_files` for the application's offset: with `firmware.factory.bin`,
    `firmware.bin` is not one of them, and it raises `ValueError: .bin file not found in flash
-   files`.
+   files`. With separate files it reads 32 bytes at `firmware.bin`'s offset plus `0xB0`, the app
+   descriptor's `app_elf_sha256`, and compares them with the SHA-256 of `firmware.elf`. pioarduino
+   fills that field in: its `frameworks/espidf.py` passes `--elf-sha256-offset 0xb0` to
+   `elf2image`, and the Arduino framework's `tools/pioarduino-build.py` adds it to `ElfToBin`; in
+   the `firmware.bin` of an Arduino 3.3.12 build with pioarduino 55.03.312 the 32 bytes at `0xb0`
+   are the SHA-256 of its `firmware.elf`.
 4. pytest-embedded creates the app, `IdfSerial` and `IdfDut`. `IdfSerial._start` owns autoflash,
    skip-autoflash and its session cache. `Serial` neither opens another port nor calls `flash`.
    The plugin requires an `IdfDut` and passes it the profile, message queue and artifact digest.
@@ -229,13 +239,15 @@ skips, failed reset with retry, disconnected open ports and a blocked reader rel
 `tests/test_pytest_plugin.py` covers console tap reports on esp32sim and ignoring references there.
 `tests/test_platformio_build.py` covers a PlatformIO build on serial:
 `test_serial_flashes_the_files_esp32sim_runs_with_the_otadata_erased`,
-`test_serial_flashes_a_factory_image_whole_from_0x0` and `test_a_table_without_otadata_gets_none`
-run pytest-embedded's own `IdfSerial.flash()` on a `PlatformioApp`, with `esptool.main` replaced,
-and check its command, the erased otadata's bytes and `--erase-nvs`'s `erase-region`;
+`test_serial_flashes_a_factory_image_whole_from_0x0`, `test_a_table_without_otadata_gets_none`,
+`test_a_factory_partition_the_build_does_not_fill_is_not_booted` and
+`test_serial_erases_nvs_from_the_build_s_table` run pytest-embedded's own `IdfSerial.flash()` on a
+`PlatformioApp`, with `esptool.main` replaced, and check its command, the erased files' bytes, their
+removal with the app without a warning, and `--erase-nvs`'s `erase-region`;
 `test_serial_runs_a_platformio_build` runs the fixture chain with the fake port, with and without a
 factory image, and an `app_recording` of `firmware.bin`'s hash; `test_an_esp_idf_build_keeps_pytest_embedded_s_app`
 that an ESP-IDF build keeps `IdfApp`. `test_an_image_for_another_chip_is_refused_by_its_name` and
-`test_a_build_that_enables_flash_encryption_is_refused` cover the checks on serial. No PlatformIO
+`test_a_build_that_enables_flash_encryption_or_secure_boot_is_refused` cover the checks on serial. No PlatformIO
 build has been flashed on a board ([validation status](serial-backend-user.md#validation-status)).
 
 ### The backend comparison
