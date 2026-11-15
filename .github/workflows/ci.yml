@@ -80,7 +80,8 @@ jobs:
 
       # PlatformIO's core directory, which build-platformio.sh mounts into its
       # container: PlatformIO Core, the platform, the framework and the
-      # toolchains, about 4 GB unpacked. Saved at the end of the job and not
+      # toolchains, about 4 GB unpacked, 2 GB in the cache, which takes about
+      # 4.5 minutes to save on hp600g1. Saved at the end of the job and not
       # checked, as the ROM ELF is: a miss only downloads them again. dist/
       # holds the downloaded archives and tools/ a second copy of the
       # toolchains the platform installs into packages/; a build needs

@@ -104,7 +104,7 @@ itself, and after how long.
 On a cache miss, it first restores PlatformIO's core directory, `.cache/platformio`, under its own
 key (the step "PlatformIO's core directory"), which `firmware/build-platformio.sh` mounts into its
 container: PlatformIO Core, pioarduino's platform, the Arduino-ESP32 framework and the toolchains,
-about 1.4 GB compressed. `dist/`, the downloaded archives, and `tools/`, a second copy of the
+about 2.0 GB compressed on hp600g1. `dist/`, the downloaded archives, and `tools/`, a second copy of the
 toolchains, are left out: a build needs neither
 ([decisions/firmware.md](decisions/firmware.md#platformios-core-directory-is-cacheplatformio)).
 The key changes only with those pins, so a change to the sketch reuses the entry
