@@ -1,0 +1,85 @@
+name: Build runner
+on:
+  workflow_call:
+    outputs:
+      key:
+        description: Cache key published by the build matrix.
+        value: ${{ jobs.runner.outputs.key }}
+
+permissions:
+  contents: read
+
+jobs:
+  runner:
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [linux, macos]
+    runs-on: ${{ matrix.platform == 'macos' && 'macos-15' || 'ubuntu-24.04' }}
+    timeout-minutes: 30
+    # The same on both platforms; each adds its OS and architecture.
+    outputs:
+      key: ${{ steps.key.outputs.key }}
+    steps:
+      - name: Check host architecture
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then
+            test "$RUNNER_ARCH" = ARM64
+            test "$(uname -m)" = arm64
+          else
+            test "$RUNNER_OS" = Linux
+            test "$RUNNER_ARCH" = X64
+            test "$(uname -m)" = x86_64
+          fi
+
+      - uses: actions/checkout@v7
+
+      # All of runner/ (target/ is not there after a checkout): the sources,
+      # the esp32sim pin in Cargo.toml and Cargo.lock, the toolchain, the
+      # profiles, and whatever else cargo reads. A cold build takes under a
+      # minute, so cargo's target/ is not cached.
+      - id: key
+        run: echo "key=runner-${{ hashFiles('runner/**', 'Makefile', '.github/workflows/build-runner.yml') }}" >>"$GITHUB_OUTPUT"
+
+      - id: cache
+        uses: actions/cache/restore@v6
+        with:
+          path: build/ci/runner.tar
+          key: ${{ steps.key.outputs.key }}-${{ runner.os }}-${{ runner.arch }}
+
+      # rustup then installs the toolchain runner/rust-toolchain.toml pins on
+      # the first build. The hosted images also supply the native linker.
+      - name: Install rustup if missing
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          if ! command -v rustup >/dev/null 2>&1; then
+            [ -x "$HOME/.cargo/bin/rustup" ] ||
+              curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
+              sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
+            echo "$HOME/.cargo/bin" >>"$GITHUB_PATH"
+          fi
+
+      # The tarball keeps the executable bit.
+      - name: Build and test the runner
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          make build-runner test-runner
+          mkdir -p build/ci
+          tar -cf build/ci/runner.tar runner/target/release/esp32tl-runner
+
+      # As in the firmware job.
+      - name: Save the tarball
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: build/ci/runner.tar
+          key: ${{ steps.key.outputs.key }}-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Check that the cache kept the tarball
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@v6
+        with:
+          path: build/ci/runner.tar
+          key: ${{ steps.key.outputs.key }}-${{ runner.os }}-${{ runner.arch }}
+          lookup-only: true
+          fail-on-cache-miss: true

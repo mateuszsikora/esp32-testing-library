@@ -15,11 +15,11 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [CI moves to GitHub-hosted runners before the repository goes public](ci.md#ci-moves-to-github-hosted-runners-before-the-repository-goes-public) | `ci.md` | superseded (#52) |
 | [Builds reach the test jobs through the Actions cache, not artifacts](ci.md#builds-reach-the-test-jobs-through-the-actions-cache-not-artifacts) | `ci.md` | decided (#48) |
 | [A build job fails when the cache did not keep its tarball](ci.md#a-build-job-fails-when-the-cache-did-not-keep-its-tarball) | `ci.md` | decided (#190) |
-| [Each cache key hashes the whole workflow and the Makefile](ci.md#each-cache-key-hashes-the-whole-workflow-and-the-makefile) | `ci.md` | decided (#48) |
+| [Each cache key hashes the whole workflow and the Makefile](ci.md#each-cache-key-hashes-the-whole-workflow-and-the-makefile) | `ci.md` | superseded (#48) |
 | [The firmware job's timeout is 60 minutes](ci.md#the-firmware-jobs-timeout-is-60-minutes) | `ci.md` | decided (#145) |
 | [The runner job caches the binary, not runner/target](ci.md#the-runner-job-caches-the-binary-not-runnertarget) | `ci.md` | decided (#48) |
 | [The test jobs run pytest, not make test](ci.md#the-test-jobs-run-pytest-not-make-test) | `ci.md` | decided (#48) |
-| [The test jobs run four shards of the suite](ci.md#the-test-jobs-run-four-shards-of-the-suite) | `ci.md` | decided (#146) |
+| [The test jobs run four shards of the suite](ci.md#the-test-jobs-run-four-shards-of-the-suite) | `ci.md` | superseded (#146) |
 | [The ROM ELF is fetched once, by the firmware job](ci.md#the-rom-elf-is-fetched-once-by-the-firmware-job) | `ci.md` | decided (#48) |
 | [Every commit on main gets its own concurrency group](ci.md#every-commit-on-main-gets-its-own-concurrency-group) | `ci.md` | decided (#48) |
 | [Clippy runs in the lint job, with no cache](ci.md#clippy-runs-in-the-lint-job-with-no-cache) | `ci.md` | decided (#50) |
@@ -32,6 +32,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [CI uses standard hosted images on both platforms before publication](ci.md#ci-uses-standard-hosted-images-on-both-platforms-before-publication) | `ci.md` | decided (15 November 2026) |
 | [Firmware builds run in three parallel groups](ci.md#firmware-builds-run-in-three-parallel-groups) | `ci.md` | superseded (15 November 2026) |
 | [Firmware families are sharded to shorten the critical path](ci.md#firmware-families-are-sharded-to-shorten-the-critical-path) | `ci.md` | decided (15 November 2026) |
+| [Test shards share VMs and build workflows own their cache inputs](ci.md#test-shards-share-vms-and-build-workflows-own-their-cache-inputs) | `ci.md` | decided (15 November 2026) |
 
 ## Documentation and the documentation check
 

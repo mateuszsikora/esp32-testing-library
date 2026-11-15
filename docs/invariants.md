@@ -1771,3 +1771,11 @@ For a fixed ordered image list and shard count N, `firmware/build.sh --shard K/N
 positions congruent to K-1 modulo N. Across K=1..N every image occurs exactly once; sharding
 never silently drops an image. Invalid or empty shards fail before starting Docker or writing
 build output. `tests/test_firmware_build.py` checks both validation and example families.
+
+
+## CI test pair outcomes
+
+A paired test job succeeds only if both distinct pytest shards exit zero. Both shards start
+concurrently with independent temporary, basetemp and pytest-cache directories, and both logs
+are retained in the job output even if one fails. An empty pytest collection is a failure, not
+a successful optimization. `tests/test_ci_test_pair.py` enforces these orchestration rules.

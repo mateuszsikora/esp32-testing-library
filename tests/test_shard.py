@@ -38,11 +38,14 @@ def test_the_shards_divide_the_tests_among_them() -> None:
 
 def test_the_workflow_runs_every_shard() -> None:
     workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-    matrix = re.search(r"^ +shard: (\[.*\])$", workflow, re.MULTILINE)
+    matrix = re.search(r"^ +pair: (\[.*\])$", workflow, re.MULTILINE)
     assert matrix is not None
-    shards = json.loads(matrix[1])
-    assert shards == [f"{k}/{len(shards)}" for k in range(1, len(shards) + 1)]
-    assert ".venv/bin/pytest --shard=${{ matrix.shard }}" in workflow
+    pairs = json.loads(matrix[1])
+    assert all(len(pair.split()) == 2 for pair in pairs)
+    shards = [shard for pair in pairs for shard in pair.split()]
+    assert sorted(shards) == [f"{k}/4" for k in range(1, 5)]
+    assert "SHARDS: ${{ matrix.pair }}" in workflow
+    assert '.venv/bin/python .github/scripts/test-pair.py "$first" "$second"' in workflow
 
 
 def test_one_shard_of_one_is_every_test() -> None:

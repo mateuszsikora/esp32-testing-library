@@ -109,7 +109,10 @@ the same question with an action the job already uses, while `gh cache list` wou
 
 ## Each cache key hashes the whole workflow and the Makefile
 
-Status: decided (#48)
+Status: superseded (#48)
+
+Replaced by [paired tests and isolated build workflows](#test-shards-share-vms-and-build-workflows-own-their-cache-inputs).
+The following records the earlier configuration.
 
 The firmware key hashes `firmware/**`, the `Makefile` and `ci.yml`; the runner key hashes
 `runner/**`, the `Makefile` and `ci.yml`. `firmware/build.sh` holds the IDF tag, the container
@@ -175,7 +178,10 @@ the cached binary and links it again.
 
 ## The test jobs run four shards of the suite
 
-Status: decided (#146)
+Status: superseded (#146)
+
+Replaced by [paired tests and isolated build workflows](#test-shards-share-vms-and-build-workflows-own-their-cache-inputs).
+The following records the earlier configuration.
 
 A `test` job ran the whole suite: about 11 minutes, 17 to 20 when hp600g1 was slow, and three times
 over its limit of 20. A job cancelled there cost its 20 minutes and all of its work. Each Python now
@@ -425,3 +431,30 @@ and after cleanup. Hosted timings still need measurement; 10 minutes is a target
 for every image and queues more machines. Persistent ccache and narrower build keys can be
 considered after measuring this change; both add cache validity/storage concerns. Shortening
 timeouts or dropping Python/OS combinations cannot establish a faster successful full CI.
+
+
+## Test shards share VMs and build workflows own their cache inputs
+
+Status: decided (15 November 2026)
+
+Run 43749863055 (#206) passed all 37 jobs in 20m52s. Its firmware critical path was six minutes,
+but a test job started as late as 10m52s after firmware completed. Twelve Linux test jobs used
+2257 job-seconds and twelve macOS jobs 2361 job-seconds, including their repeated setup. The
+four unchanged pytest shards now run in pairs (1 with 4, 2 with 3): twelve test jobs instead of
+24, still every test on Linux x64 and macOS ARM64 with Python 3.11, 3.13 and 3.14. Two pytest
+processes share a VM, with distinct TMPDIR, basetemp, cache and logs. Either failing fails the
+pair, and both finish and report; no retry or error suppression is added. Cancellation terminates
+both process groups. Pairing the previously shortest shard 1 with shard 4 avoids pairing two
+of the longest shards. Real hosted timing and pass/skip counts decide whether this trade pays off.
+
+`build-firmware.yml` and `build-runner.yml` now own their complete build job definitions and
+expose cache keys through reusable-workflow outputs. The key hashes that build workflow,
+Makefile and source trees; edits to test scheduling in `ci.yml` no longer force an unrelated
+six-minute firmware build. Build inputs, pins and packaging still invalidate their outputs,
+and exact restore/save verification remains. Migration changes the hash once.
+
+**Rejected:** dropping OS/Python combinations or tests; that would change coverage. Four pytest
+processes per VM would put more contention on standard runners; two is a bounded first step.
+Manually versioned cache keys or hashing selected source files could silently miss build inputs.
+Keeping the whole orchestration workflow in the build key rebuilds firmware when only test
+scheduling changes, making optimization iterations unnecessarily slow.

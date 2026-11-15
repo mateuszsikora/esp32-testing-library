@@ -14,7 +14,8 @@ make test                                   # everything, from a clean checkout
 make test-runner                            # the runner's Rust unit tests only
 make test-runner RUNNER_PROFILE=dev         # the same, without the fat-LTO link
 make determinism                            # tests/test_determinism.py twice, the runs compared
-.venv/bin/pytest --shard=2/4                # the second of four shards, as one CI job runs it
+.venv/bin/pytest --shard=2/4                # one of four shards
+.venv/bin/python .github/scripts/test-pair.py 1/4 4/4  # two shards concurrently, as in CI
 ```
 
 `make test` runs `make setup`, then `make test-runner`, builds the validation images that are
@@ -342,8 +343,8 @@ a behaviour change ([documentation.md](documentation.md#the-check)).
 
 ## In CI
 
-The `runner` job runs `make build-runner test-runner`; the `test` jobs run `.venv/bin/pytest
---shard=K/4` for each K on Python 3.11, 3.13 and 3.14 with the images, the runner and the ROM ELF the build jobs left in the
+The `runner` job runs `make build-runner test-runner`; the `test` jobs run `.github/scripts/test-pair.py` with pairs `1/4 4/4` and `2/4 3/4`,
+each starting two `python -m pytest --shard=K/4` processes, for each K on Python 3.11, 3.13 and 3.14 with the images, the runner and the ROM ELF the build jobs left in the
 Actions cache; the `determinism` job runs `make determinism` with the same builds; the `lint` job
 runs `make lint`. Both private and public repositories run the matrix on
 `ubuntu-24.04` (x64) and `macos-15` (ARM64). Linux test jobs start and check Docker;
@@ -433,3 +434,15 @@ implemented by `tests/conftest.py`; standalone example tests require their docum
 examples occur exactly once across their CI shards, order is retained within a shard, and invalid
 or empty shards fail before starting Docker. These use a fake Docker CLI; they do not measure
 hosted build times.
+
+
+## Concurrent CI test pairs
+
+`.github/scripts/test-pair.py K/4 J/4 [pytest arguments...]` runs two distinct shards using the
+calling Python interpreter. It isolates their temporary directories, basetemps and pytest caches,
+waits for both, and prints their separate logs and exit codes. Exit 0 requires both to return 0;
+any test failure, collection error or empty collection fails the pair. Invalid or duplicate shard
+arguments exit 2. SIGTERM/interrupt exits 130 after terminating child process groups.
+The four shards and their hash assignment are unchanged; pairing only changes where they run.
+`tests/test_ci_test_pair.py` checks concurrent starts, isolation and both failure directions using
+a stand-in pytest module. The full hosted suite checks compatibility with real parallel tests.
