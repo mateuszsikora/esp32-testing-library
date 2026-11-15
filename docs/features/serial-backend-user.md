@@ -278,10 +278,14 @@ it does not verify a GNSS receiver, modem or other physical peripherals. The rep
 command, tool versions and app hashes are in
 [physical validation](serial-backend-technical.md#physical-validation).
 
-A PlatformIO build has not been flashed on a board yet: the suite checks the esptool command
-`IdfSerial.flash()` runs for one, not a board. TODO(owner): flash the Arduino image of #193, built
-by PlatformIO, on a classic ESP32 through `--esp32tl-backend serial`, with and without
-`firmware.factory.bin`, and record the result here.
+A PlatformIO build passed on 2026-11-15 on a LOLIN32 board with a classic ESP32-D0WDQ6
+(revision 1.0) and 4 MB flash: the Arduino image of #193, `arduino_shell`, from its
+`firmware.factory.bin` and from its separate files, each printing its banner and
+`arduino_shell: ready; type help`, **2 passed**, with `ESPBAUD=230400`. Before the run with
+separate files, the board's `ota_1` held another application and its otadata selected `ota_1`:
+the board booted `arduino_shell` from `ota_0`, so the erased otadata reached it.
+`scripts/compare-backends.py` reported both tests `passed on both`. The details are in
+[physical validation](serial-backend-technical.md#a-platformio-build).
 
 ## See also
 

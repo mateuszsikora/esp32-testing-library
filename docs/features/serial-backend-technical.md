@@ -256,8 +256,7 @@ factory image, and an `app_recording` of `firmware.bin`'s hash;
 `test_an_esp_idf_build_keeps_pytest_embedded_s_app` that an ESP-IDF build keeps `IdfApp`.
 `test_an_image_for_another_chip_is_refused_by_its_name` and
 `test_a_build_that_enables_flash_encryption_or_secure_boot_is_refused` cover the checks on serial.
-No PlatformIO build has been flashed on a board
-([validation status](serial-backend-user.md#validation-status)).
+A PlatformIO build on a board is in [physical validation](#a-platformio-build).
 
 ### The backend comparison
 
@@ -319,6 +318,55 @@ Before testing, two independent reads of the entire 4,194,304-byte flash matched
 After testing, that original image was written back with flash mode, frequency and size kept
 unchanged. A full readback matched the backup before the board was reset to run its original
 firmware. Backup binaries and device logs remain private and are not repository artifacts.
+
+#### A PlatformIO build
+
+On 2026-11-15, a PlatformIO build ran on a user-identified LOLIN32 board. esptool identified an
+ESP32-D0WDQ6 (revision 1.0) and 4 MB flash; `espefuse summary` showed `FLASH_CRYPT_CNT` 0 and
+`ABS_DONE_0` and `ABS_DONE_1` false. The build was the `arduino_shell` image of #193
+(pioarduino 55.03.312, Arduino-ESP32 3.3.12, `framework = arduino`, the default table: `app0` at
+`0x10000`, `app1` at `0x150000`, otadata at `0xe000`), copied into two build directories: one
+with `firmware.factory.bin`, one with `bootloader.bin`, `partitions.bin`, `firmware.bin` and
+`firmware.elf` only. One test per directory, selected by
+`@pytest.mark.app_path(".", build_dir="factory")` and `build_dir="split"`, called
+`board.power_on()`, then `console.expect(r"arduino_shell: Arduino-ESP32 3\.\d+\.\d+\r\n")` and
+`console.expect_exact("arduino_shell: ready; type help\r\n")`.
+
+```sh
+ESPBAUD=230400 .venv/bin/pytest -v --esp32tl-backend serial --port /dev/cu.usbserial-110 test_hw.py
+```
+
+Result: each test **passed**, in 36.18 s with the factory image and 36.52 s with the separate
+files, autoflash enabled. Host: macOS 27.0.1 arm64, Python 3.14.6, pytest-embedded and
+pytest-embedded-idf 2.9.3, esptool 5.6.0. esptool wrote `firmware.factory.bin` at `0x0`
+(1,015,904 bytes); and `bootloader.bin` at `0x1000`, `partitions.bin` at `0x8000`,
+`otadata-erased.bin` at `0xe000` (8,192 bytes) and `firmware.bin` at `0x10000`, each with
+`Hash of data verified`.
+
+Before the run with separate files, the board was given another application in `ota_1`: the ESP-IDF
+image that was on the board before, written at `0x150000`, and an otadata whose first entry has
+`ota_seq` 2 and its CRC, which selects `ota_1`. Reset, the board ran that application. The test
+then wrote the erased otadata, and the board booted `arduino_shell` from `ota_0`: without that
+file it would have booted the other application while the test's hash check passed.
+
+`scripts/compare-backends.py --port /dev/cu.usbserial-110` on the same two tests, with
+`ESPBAUD=230400`, printed `passed on both` for each and
+`backends: 2 tests ran on both backends, 2 agreed and 0 did not; …`.
+`esp32tl run --app … --build-dir` printed the banner and `arduino_shell: ready; type help` from
+both directories, exit 0.
+
+| File | SHA-256 |
+|---|---|
+| `firmware.bin` | `3973502447a86044bab4be42488a7f328cb28bc3070056e54afe9bc072cb15ca` |
+| `firmware.factory.bin` | `8a008a4f4fff886ea4de43e559f1abebd7e0ba491940f9ef38c8050dae08f6cf` |
+| `bootloader.bin` | `f7ec7b7d9026e12dd3616bf79cee0e78974a2605afbc2863fcfb0ac9aeb159d4` |
+| `partitions.bin` | `148b959cbff1c38aa8e1d5c0ba9d612c54997b945e56a63f41223eef650653a1` |
+
+This adapter dropped bytes when reading the flash at 460800 and 230400 in one long read, so the
+backup was read in 256 KiB pieces, each retried; two reads of the whole 4,194,304 bytes matched
+byte for byte. Writing at 230400 passed esptool's verification each time. After testing, the
+backup was written back with flash mode, frequency and size kept, a full readback matched it, and
+the board booted its original application from `0x10000`.
 
 ## See also
 
