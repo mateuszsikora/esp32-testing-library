@@ -27,7 +27,7 @@ That one command needs:
   and `tar` to download it.
 - Docker, for the first `make test`. The tests read the validation firmware, which `make test`
   builds when it is missing: it pulls the ESP-IDF image and builds `hello_world`, `nmea_reader`,
-  `gpio_echo`, `sdspi`, `sd_remount`, `modem_at`, `modem_recovery`, `nvs_reader`, `pppos_client`, `mqtt_session`, `http_request`, `http_server`, `persistence`, `ota_state`, `timer_wake`, `deep_sleep`, `bt_spp_initiator`, `bt_spp_initiator_psram` and the projects in `examples/`, about 25 minutes on the CI machine, hp600g1, because it starts a container for each image. `make firmware examples` first takes about 13: one container for each family, whose images share their compiler cache. TODO(owner): both measured before `bt_spp_initiator` and `bt_spp_initiator_psram`, each of which compiles Bluedroid, the largest component of the images; measure again on hp600g1. What the firmware build expects of Docker,
+  `gpio_echo`, `sdspi`, `sd_remount`, `modem_at`, `modem_recovery`, `nvs_reader`, `pppos_client`, `mqtt_session`, `http_request`, `http_server`, `persistence`, `ota_state`, `timer_wake`, `deep_sleep`, `bt_spp_initiator`, `bt_spp_initiator_psram` and the projects in `examples/`, about 25 minutes on the CI machine, hp600g1, because it starts a container for each image. `make firmware examples` first takes about 13: one container for each family, whose images share their compiler cache. TODO(owner): both measured before `bt_spp_initiator` and `bt_spp_initiator_psram`, each of which compiles Bluedroid, the largest component of the images; measure again on hp600g1. It also builds `arduino_shell`, the Arduino-ESP32 image, in a pinned Python container with PlatformIO: its first build pulls that image, about 1 GB, and downloads PlatformIO Core, the platform, the framework and the toolchains into `.cache/platformio/`, 5.7 GB, which took 8m52s on an arm64 Mac; with those there, a build from scratch takes about 80 s. What the firmware build expects of Docker,
   and how to build without it, is in
   [validation-firmware-user.md](../features/validation-firmware-user.md).
 
@@ -46,9 +46,9 @@ After `make setup` and `make firmware examples`, `.venv/bin/pytest` runs the tes
 | `make build-runner` | Builds the runner crate only, `cargo build --locked` in `runner/`, into `runner/target/release/`; `RUNNER_PROFILE=dev` builds it without fat LTO, into `runner/target/debug/` |
 | `make rom-elf` | Runs `scripts/fetch-rom-elf`: puts `esp32_rev300_rom.elf` of esp-rom-elfs `20241011` at `.cache/esp-rom-elfs/20241011/`, checked by SHA-256 |
 | `make test-runner` | The runner's Rust unit tests, `cargo test --locked`, in `RUNNER_PROFILE` like `build-runner`; `RUNNER_PROFILE=dev` skips the fat-LTO link while iterating |
-| `make firmware` | Builds every validation image in the pinned ESP-IDF container, into `firmware/<image>/build/` |
+| `make firmware` | Builds every ESP-IDF validation image in the pinned ESP-IDF container, into `firmware/<image>/build/` (`firmware/build.sh`), then every PlatformIO image (`PLATFORMIO_IMAGES`: `arduino_shell`) in the pinned PlatformIO container, into `firmware/<image>/.pio/build/esp32dev/` (`firmware/build-platformio.sh`) |
 | `make examples` | Builds every project discovered at `examples/*/CMakeLists.txt` in the pinned ESP-IDF container, into `examples/<name>/build/` |
-| `make test` | Runs `make setup` and `make test-runner`, builds the validation images that are missing (`FIRMWARE_IMAGES`: `hello_world`, `nmea_reader`, `gpio_echo`, `sdspi`, `sd_remount`, `modem_at`, `modem_recovery`, `nvs_reader`, `pppos_client`, `mqtt_session`, `http_request`, `http_server`, `persistence`, `ota_state`, `timer_wake`, `deep_sleep`, `bt_spp_initiator` and `bt_spp_initiator_psram`), builds missing examples, then runs `.venv/bin/pytest` on both suites |
+| `make test` | Runs `make setup` and `make test-runner`, builds the validation images that are missing (`FIRMWARE_IMAGES`: `hello_world`, `nmea_reader`, `gpio_echo`, `sdspi`, `sd_remount`, `modem_at`, `modem_recovery`, `nvs_reader`, `pppos_client`, `mqtt_session`, `http_request`, `http_server`, `persistence`, `ota_state`, `timer_wake`, `deep_sleep`, `bt_spp_initiator` and `bt_spp_initiator_psram`) and the PlatformIO images that are missing (`PLATFORMIO_IMAGES`: `arduino_shell`), builds missing examples, then runs `.venv/bin/pytest` on both suites |
 | `make determinism` | Runs `tests/test_determinism.py` twice through `scripts/check-determinism.py` and compares the two runs ([testing.md](testing.md#determinism)); builds the `nmea_reader`, `pppos_client`, `mqtt_session`, `http_request` and `bt_spp_initiator` images and the `position_tracker` example when missing and `.venv` when it is missing or stale, but not the runner or the ROM ELF: run `make setup` first |
 | `make lint` | `ruff check`, `ruff format --check` and `mypy`; `cargo fmt --check` and `cargo clippy --locked --all-targets -- -D warnings` on the runner |
 | `make hooks` | Installs the pre-commit hooks ([Pre-commit hooks](#pre-commit-hooks)) |
@@ -56,7 +56,9 @@ After `make setup` and `make firmware examples`, `.venv/bin/pytest` runs the tes
 | `make clean` | Removes `.venv`, `build/`, `dist/` and the mypy, ruff and pytest caches; keeps the runner build in `runner/target/` and `.cache/` |
 
 `make test` counts an image as missing when its build directory has no `esp32tl-built`, the
-file `firmware/build.sh` writes when a build finishes. `make firmware` builds them all again.
+file `firmware/build.sh` and `firmware/build-platformio.sh` write when a build finishes: in
+`firmware/<image>/build/`, or `firmware/<image>/.pio/build/esp32dev/` for a PlatformIO image.
+`make firmware` builds them all again.
 Both always write into `firmware/`, whatever `FIRMWARE_OUT` the shell exports, because the tests
 read the images there.
 
@@ -66,7 +68,8 @@ mypy checks `esp32tl/`, `tests/` and the example tests under `examples/`.
 `runner/target/`.
 
 `make clean` keeps `runner/target/` because the runner's build fetches esp32sim from the network,
-and `.cache/` because the ROM ELF comes from it too.
+and `.cache/` because the ROM ELF and PlatformIO's core directory, `.cache/platformio/`, come from it
+too.
 
 ## Dependencies
 
@@ -207,7 +210,7 @@ its preflight, push and PR operations; the session's permissions must allow thos
 |---|---|
 | `esp32tl/` | The Python package and its pytest plugin |
 | `runner/` | `esp32tl-runner`, the Rust crate that runs esp32sim with the harness attached |
-| `firmware/` | `build.sh`, which builds the validation firmware, and `nmea_reader/`, `gpio_echo/`, `sd_remount/`, `modem_at/`, `modem_recovery/`, `nvs_reader/`, `http_server/`, `persistence/`, `ota_state/` and `timer_wake/`, the images kept here; each image's build lands in `firmware/<image>/build/` |
+| `firmware/` | `build.sh`, which builds the ESP-IDF validation firmware, `build-platformio.sh`, which builds the PlatformIO images, `arduino_shell/`, the Arduino-ESP32 image whose build lands in `firmware/arduino_shell/.pio/build/esp32dev/`, and `nmea_reader/`, `gpio_echo/`, `sd_remount/`, `modem_at/`, `modem_recovery/`, `nvs_reader/`, `http_server/`, `persistence/`, `ota_state/` and `timer_wake/`, the images kept here; each image's build lands in `firmware/<image>/build/` |
 | `examples/` | Runnable ESP-IDF projects and their tests; see [examples](../features/examples-user.md) |
 | `recordings/` | Committed recordings for the tests: `gnss-generated-1.jsonl` and `gnss-generated-2.jsonl`, which `scripts/generate-gnss-recordings.py` writes ([validation-firmware-user.md](../features/validation-firmware-user.md#the-gnss-recordings)) |
 | `tests/` | The pytest suite ([testing.md](testing.md)) |
@@ -222,9 +225,10 @@ its preflight, push and PR operations; the session's permissions must allow thos
 | `.agents/skills/` | Codex's repository skills; `create-pr` links to the shared skill under `.claude/skills/` |
 | `AGENTS.md` | The contract for every agent working here; `CLAUDE.md` is a symlink to it |
 
-Git ignores what the builds leave behind: `.venv/`, `.cache/` (the ROM ELF), `runner/target/`,
-`firmware/**/build/`, the sources `firmware/build.sh` fetches or copies
-(`firmware/.esp-protocols-*/`, `firmware/.http_request-*/`), `tools/*/build*/` and `build/`.
+Git ignores what the builds leave behind: `.venv/`, `.cache/` (the ROM ELF and PlatformIO's core
+directory), `runner/target/`, `firmware/**/build/`, `firmware/**/.pio/`, the sources
+`firmware/build.sh` fetches or copies (`firmware/.esp-protocols-*/`, `firmware/.http_request-*/`),
+`tools/*/build*/` and `build/`.
 
 ## See also
 

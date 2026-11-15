@@ -10,6 +10,7 @@ import pytest
 from pytest_embedded_idf.app import IdfApp
 
 from esp32tl import boards
+from esp32tl.build import PLATFORMIO, Build, load
 
 FIRMWARE = Path(__file__).resolve().parent.parent / "firmware"
 
@@ -307,3 +308,68 @@ def test_bt_spp_initiator_psram_is_the_example_with_bluedroid_allocating_from_ps
     assert idf_app("bt_spp_initiator_psram").elf_file == str(
         (build / "bt_spp_initiator_demo.elf").resolve()
     )
+
+
+def pinned_platformio() -> tuple[str, str]:
+    """The pioarduino version and container that firmware/build-platformio.sh pins."""
+    script = (FIRMWARE / "build-platformio.sh").read_text()
+    version = re.search(r"^PIOARDUINO_VERSION=(\S+)$", script, re.MULTILINE)
+    container = re.search(r"^CONTAINER=(\S+)$", script, re.MULTILINE)
+    assert version is not None and container is not None, (
+        "firmware/build-platformio.sh no longer sets PIOARDUINO_VERSION= and CONTAINER= on lines"
+        " of their own"
+    )
+    return version[1], container[1]
+
+
+def platformio_build(image: str) -> Build:
+    """The PlatformIO image's build, as `idf_app` takes an ESP-IDF one: finished and, unless it
+    was built with PIO_LOCAL=1, built in the container build-platformio.sh pins now, with the
+    platform its platformio.ini pins now."""
+    directory = FIRMWARE / image / ".pio" / "build" / "esp32dev"
+    if not (directory / "esp32tl-built").is_file():
+        pytest.fail(f"{directory} holds no finished build: run make firmware", pytrace=False)
+    how = json.loads((directory / "esp32tl-build.json").read_text())
+    version, container = pinned_platformio()
+    ini = (FIRMWARE / image / "platformio.ini").read_text()
+    platform = re.search(r"^platform *= *(\S+)$", ini, re.MULTILINE)
+    assert platform is not None
+    if how["platform"] != platform[1]:
+        pytest.fail(
+            f"{image} was built with {how['platform']}, not {platform[1]}: run make firmware",
+            pytrace=False,
+        )
+    if how["container"] is None:
+        warnings.warn(
+            f"{image} was built with a local PlatformIO Core {how['platformio']},"
+            f" not in {container}",
+            stacklevel=2,
+        )
+    elif (how["container"], how["platformio"]) != (container, version):
+        pytest.fail(
+            f"{image} was built in {how['container']} (PlatformIO Core {how['platformio']}),"
+            f" not in {container} ({version}): run make firmware",
+            pytrace=False,
+        )
+    return load(str(FIRMWARE / image), directory.resolve())
+
+
+def test_arduino_shell_is_a_platformio_build_of_the_whole_flash() -> None:
+    loaded = platformio_build("arduino_shell")
+    directory = FIRMWARE / "arduino_shell" / ".pio" / "build" / "esp32dev"
+    assert (loaded.kind, loaded.chip) == (PLATFORMIO, "esp32")
+    # pioarduino merges the bootloader, the table, boot_app0.bin and the application from 0x0
+    assert [(f.offset, f.path.name) for f in loaded.flash_files] == [(0, "firmware.factory.bin")]
+    assert loaded.partition_table == 0x8000
+    assert loaded.app_image == (directory / "firmware.bin").resolve()
+    assert loaded.elf == (directory / "firmware.elf").resolve()
+
+
+def test_arduino_shell_has_the_arduino_default_table_with_its_nvs() -> None:
+    from esp32tl.flash import partitions
+
+    table = partitions(platformio_build("arduino_shell").table())
+    nvs = table["nvs"]
+    assert (nvs.type, nvs.subtype, nvs.offset, nvs.size) == (1, 2, 0x9000, 0x5000)
+    # the application at ota_0, where pioarduino flashes it and esp32tl expects it
+    assert (table["app0"].subtype, table["app0"].offset) == (0x10, 0x10000)

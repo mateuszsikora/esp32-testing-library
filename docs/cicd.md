@@ -18,12 +18,13 @@ one run waiting and cancel the others.
 ## Jobs
 
 GitHub-hosted macOS runners have no Docker, so the validation firmware is built once, in the
-pinned ESP-IDF container on the self-hosted Linux runner, and the runner crate once per platform.
+pinned ESP-IDF and PlatformIO containers on the self-hosted Linux runner, and the runner crate once
+per platform.
 The test jobs then run only the runner and Python: they build nothing.
 
 | Job | Runs on | What it does |
 |---|---|---|
-| `firmware` | self-hosted Linux | `make firmware examples` once per content of `firmware/`, `examples/`, the workflow and the `Makefile`; fetches the ROM ELF once per revision of `scripts/fetch-rom-elf` |
+| `firmware` | self-hosted Linux | `make firmware examples` once per content of `firmware/`, `examples/`, the workflow and the `Makefile`, the Arduino image with PlatformIO's core directory restored from the cache; fetches the ROM ELF once per revision of `scripts/fetch-rom-elf` |
 | `runner` | self-hosted Linux; `macos-latest` only when the repository is public | `make build-runner test-runner`, once per content of `runner/` (its sources, its esp32sim pin, its toolchain), the workflow and the `Makefile` |
 | `test` | self-hosted Linux; `macos-latest` only when the repository is public; Python 3.11, 3.13, 3.14; shards 1/4 to 4/4 | Unpacks the images and the runner, restores the ROM ELF, and runs one shard of pytest's suite; builds nothing |
 | `determinism` | self-hosted Linux; Python 3.11 | Unpacks the images and the runner as `test` does, and runs `make determinism`: the determinism tests twice, the two runs compared |
@@ -37,7 +38,8 @@ failing does not cancel the others.
 ## Where the jobs run
 
 Every Linux job runs on the self-hosted runner, hp600g1 (labels `self-hosted`, `Linux`, `X64`),
-which keeps the 7 GB ESP-IDF image between runs. It is a single machine, so its jobs queue one
+which keeps the 7 GB ESP-IDF image and the 1 GB `python:3.13-bookworm` image of the PlatformIO
+build between runs. It is a single machine, so its jobs queue one
 after another there.
 
 While the repository is private, minutes on GitHub-hosted runners are limited, and macOS minutes
@@ -71,15 +73,16 @@ restore cache entry. Exiting as fail-on-cache-miss is set. Input key: <key>`. A 
 fail its step: `Failed to save: Unable to reserve cache with key <key>, another job may be creating
 this cache.` is a plain log line, not even a warning, and other failures are a warning or an error
 annotation. Without the check the build job would stay green and every test job would fail on the
-miss instead. On a hit, a build job saves and checks nothing. The ROM ELF entry is saved by
-`actions/cache` at the end of the `firmware` job and not checked, since a miss in `test` only
-downloads the ELF.
+miss instead. On a hit, a build job saves and checks nothing. The ROM ELF entry and PlatformIO's
+core directory are saved by `actions/cache` at the end of the `firmware` job and not checked, since
+a miss only downloads them again.
 
 | Cache entry | Key | Saved by | A miss in `test` |
 |---|---|---|---|
 | `build/ci/firmware.tar` | `firmware-` and the hash of `firmware/**`, `examples/**`, `Makefile`, `.github/workflows/ci.yml` | `firmware` | Fails the job |
 | `build/ci/runner.tar` | `runner-` and the hash of `runner/**`, `Makefile`, `.github/workflows/ci.yml`, then the runner's OS and architecture | `runner`, once per platform | Fails the job |
 | `.cache/esp-rom-elfs` | `rom-elf-` and the hash of `scripts/fetch-rom-elf` | `firmware` | No failure: `make rom-elf` downloads the ELF |
+| `.cache/platformio`, without `dist/` and `tools/` | `platformio-` and the SHA-256 of the lines `CONTAINER=` and `PIOARDUINO_VERSION=` of `firmware/build-platformio.sh` and `platform =` of each `firmware/*/platformio.ini`, then the runner's OS and architecture | `firmware`: restored when the firmware key misses, saved when the `platformio-` key missed too | Not restored there; a miss in `firmware` downloads PlatformIO Core, the platform, the framework and the toolchains again |
 
 A cache entry unused for 7 days is evicted. A test job re-run on its own after that fails on the
 cache miss: re-run all jobs instead, which builds again. A bad tarball saved under a key stays there
@@ -98,21 +101,37 @@ itself, and after how long.
 
 ## `firmware`
 
-On a cache miss, it runs `make firmware examples` and packs into `build/ci/firmware.tar` only what
-pytest-embedded's `IdfApp` reads: the files at the top of each `firmware/<image>/build/` and `examples/<name>/build/`
-(`flasher_args.json`, the ELF, the binaries, `esp32tl-build.json`, `esp32tl-built`),
-`config/sdkconfig.json`, and the `.bin` and `.elf` files of `bootloader/` and `partition_table/`.
-The object files stay behind.
+On a cache miss, it first restores PlatformIO's core directory, `.cache/platformio`, under its own
+key (the step "PlatformIO's core directory"), which `firmware/build-platformio.sh` mounts into its
+container: PlatformIO Core, pioarduino's platform, the Arduino-ESP32 framework and the toolchains,
+about 1.4 GB compressed. `dist/`, the downloaded archives, and `tools/`, a second copy of the
+toolchains, are left out: a build needs neither
+([decisions/firmware.md](decisions/firmware.md#platformios-core-directory-is-cacheplatformio)).
+The key changes only with those pins, so a change to the sketch reuses the entry
+([decisions/ci.md](decisions/ci.md#platformios-core-directory-is-cached-under-the-key-of-its-pins)).
+
+Then it runs `make firmware examples` and packs into `build/ci/firmware.tar` only what the backend
+reads. Of an ESP-IDF build, what pytest-embedded's `IdfApp` reads: the files at the top of each
+`firmware/<image>/build/` and `examples/<name>/build/` (`flasher_args.json`, the ELF, the binaries,
+`esp32tl-build.json`, `esp32tl-built`), `config/sdkconfig.json`, and the `.bin` and `.elf` files of
+`bootloader/` and `partition_table/`. Of a PlatformIO build, `firmware/<image>/.pio/build/esp32dev/`,
+the `.bin` files, `firmware.elf`, `esp32tl-build.json` and `esp32tl-built` at its top. The object
+files and PlatformIO's `firmware.map` stay behind.
 
 Before the tarball is written, and so before it is cached for good, a Python step checks every
 image for the files the tests need: `esp32tl-built`, `esp32tl-build.json`, `flasher_args.json`,
 `config/sdkconfig.json`, every flash image `flasher_args.json` names, `project_description.json`
-and the ELF it names. Each missing file is reported as `::error::<path> is missing from the tarball`
-and fails the job. The job then lists the tarball (`tar -tvf`), hit or miss, and on a miss saves
-it and checks that the cache kept it ([above](#how-the-builds-reach-the-test-jobs)).
+and the ELF it names; of a PlatformIO build, `esp32tl-built`, `esp32tl-build.json`, `firmware.bin`,
+`firmware.factory.bin`, `firmware.elf`, `bootloader.bin` and `partitions.bin`. Each missing
+file is reported as `::error::<path> is missing from the tarball` and fails the job. The job then
+lists the tarball (`tar -tvf`), hit or miss, and on a miss saves it and checks that the cache kept
+it ([above](#how-the-builds-reach-the-test-jobs)).
 
 `firmware/build.sh` holds the ESP-IDF tag, the container digest and the project each image is built
-from, so a change to any of them, or to a project kept under `firmware/` or `examples/`, is a new key.
+from, and `firmware/build-platformio.sh` and each `platformio.ini` the PlatformIO pins, so a change to
+any of them, or to a project kept under `firmware/` or `examples/`, is a new key. The Arduino image
+is built in this job, not one of its own
+([decisions/ci.md](decisions/ci.md#the-arduino-image-is-built-in-the-firmware-job)).
 
 Last, it restores `.cache/esp-rom-elfs` and runs `make rom-elf`, so the ROM ELF is fetched once
 here rather than by all the test jobs at the same time. Timeout: 60 minutes.
@@ -131,16 +150,17 @@ cargo's `runner/target/` is not cached. Timeout: 30 minutes.
 
 ## `test`
 
-For each platform, Python version and shard: sets up Python with pip's cache keyed on `pyproject.toml`,
-restores the two tarballs and the ROM ELF, unpacks the tarballs (the images land in
-`firmware/<image>/build/`, where the tests read them), and runs `esp32tl-runner --help` to check
-that the binary starts. It then runs `make PYTHON=<that Python> .venv/.installed rom-elf`, which is
-`make setup` without `build-runner`. Before `.venv/bin/pytest --shard=K/4` the `mtools` step makes sure
-`mformat`, `mcopy`, `mdir` and `mtype` are on `PATH`, for the SD card tests, which skip without
-them: on macOS it installs mtools with Homebrew; on the self-hosted runner, which has no root for
-apt, it fails the job with `no TOOL on PATH: install mtools on this runner (apt-get install
-mtools)` until someone installs it there. A shard that fails can be re-run alone with "Re-run failed
-jobs". Timeout: 15 minutes.
+For each platform, Python version and shard: sets up Python with pip's cache keyed on
+`pyproject.toml`, restores the two tarballs and the ROM ELF, unpacks the tarballs (the images land
+in `firmware/<image>/build/`, `firmware/<image>/.pio/build/esp32dev/` and `examples/<name>/build/`,
+where the tests read them), and runs `esp32tl-runner --help` to check that the binary starts. It
+then runs `make PYTHON=<that Python> .venv/.installed rom-elf`, which is `make setup` without
+`build-runner`. Before `.venv/bin/pytest --shard=K/4` the `mtools` step makes sure `mformat`,
+`mcopy`, `mdir` and `mtype` are on `PATH`, for the SD card tests, which skip without them: on macOS
+it installs mtools with Homebrew; on the self-hosted runner, which has no root for apt, it fails the
+job with `no TOOL on PATH: install mtools on this runner (apt-get install mtools)` until someone
+installs it there. A shard that fails can be re-run alone with "Re-run failed jobs". Timeout: 15
+minutes.
 
 ## `determinism`
 

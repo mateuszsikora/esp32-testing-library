@@ -20,6 +20,7 @@ firmware/**/build/
 firmware/**/sdkconfig
 firmware/**/sdkconfig.old
 firmware/**/managed_components/
+firmware/**/.pio/
 
 # ESP-IDF build output of the firmware under tools/
 tools/*/build*/

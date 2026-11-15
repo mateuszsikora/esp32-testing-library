@@ -1,7 +1,8 @@
 # CI (plan M0, §6). GitHub-hosted macOS runners have no Docker, so the
-# validation firmware is built once, in the pinned ESP-IDF container on the
-# self-hosted Linux runner, and the runner crate once per platform. The test
-# jobs then run only the runner and Python: they build nothing.
+# validation firmware is built once, in the pinned ESP-IDF and PlatformIO
+# containers on the self-hosted Linux runner, and the runner crate once per
+# platform. The test jobs then run only the runner and Python: they build
+# nothing.
 #
 # The builds reach the test jobs through the Actions cache, not as artifacts:
 # artifacts count against the account's storage quota, which is full, while
@@ -58,12 +59,18 @@ jobs:
       - uses: actions/checkout@v7
 
       # firmware/build.sh holds the IDF tag, the container digest and the
-      # project each image is built from, so a change to any of them, or to a
-      # project kept under firmware/ or examples/, is a new key.
+      # project each image is built from, and firmware/build-platformio.sh and
+      # each platformio.ini the PlatformIO pins, so a change to any of them, or
+      # to a project kept under firmware/ or examples/, is a new key. The key of
+      # PlatformIO's core directory hashes only the lines that set those pins,
+      # so that a change to a sketch reuses the toolchains it downloaded.
       - id: key
         run: |
           echo "key=firmware-${{ hashFiles('firmware/**', 'examples/**', 'Makefile', '.github/workflows/ci.yml') }}" >>"$GITHUB_OUTPUT"
           echo "rom-elf-key=rom-elf-${{ hashFiles('scripts/fetch-rom-elf') }}" >>"$GITHUB_OUTPUT"
+          pins=$(grep -hE '^(CONTAINER|PIOARDUINO_VERSION)=' firmware/build-platformio.sh &&
+            grep -h '^platform *=' firmware/*/platformio.ini)
+          echo "platformio-key=platformio-$(printf '%s\n' "$pins" | sha256sum | cut -d' ' -f1)" >>"$GITHUB_OUTPUT"
 
       - id: cache
         uses: actions/cache/restore@v6
@@ -71,13 +78,34 @@ jobs:
           path: build/ci/firmware.tar
           key: ${{ steps.key.outputs.key }}
 
-      # Only what pytest-embedded's IdfApp reads goes into the tarball: the
-      # files at the top of each build directory (flasher_args.json, the ELF,
-      # the binaries, esp32tl-build.json, esp32tl-built), config/sdkconfig.json,
-      # and the bootloader and partition table images. The object files stay
-      # behind. Before the tarball is cached for good, every image is checked
-      # for the files the tests need: the flash images flasher_args.json names
-      # and the ELF project_description.json names among them.
+      # PlatformIO's core directory, which build-platformio.sh mounts into its
+      # container: PlatformIO Core, the platform, the framework and the
+      # toolchains, about 4 GB unpacked. Saved at the end of the job and not
+      # checked, as the ROM ELF is: a miss only downloads them again. dist/
+      # holds the downloaded archives and tools/ a second copy of the
+      # toolchains the platform installs into packages/; a build needs
+      # neither once packages/ is there.
+      - name: PlatformIO's core directory
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache@v6
+        with:
+          path: |
+            .cache/platformio
+            !.cache/platformio/dist
+            !.cache/platformio/tools
+          key: ${{ steps.key.outputs.platformio-key }}-${{ runner.os }}-${{ runner.arch }}
+
+      # Only what the backend reads goes into the tarball. Of an ESP-IDF
+      # build, what pytest-embedded's IdfApp reads: the files at the top of
+      # each build directory (flasher_args.json, the ELF, the binaries,
+      # esp32tl-build.json, esp32tl-built), config/sdkconfig.json, and the
+      # bootloader and partition table images. Of a PlatformIO build, the
+      # binaries, firmware.elf and the two esp32tl- files at the top of
+      # .pio/build/esp32dev/. The object files and PlatformIO's firmware.map
+      # stay behind. Before the tarball is cached for good, every image is
+      # checked for the files the tests need: the flash images
+      # flasher_args.json names and the ELF project_description.json names
+      # among them, or the files esp32tl.build reads of a PlatformIO build.
       - name: Build the validation images and examples
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
@@ -89,19 +117,27 @@ jobs:
             find firmware/*/build/bootloader firmware/*/build/partition_table \
               examples/*/build/bootloader examples/*/build/partition_table -maxdepth 1 \
               -type f \( -name '*.bin' -o -name '*.elf' \)
+            find firmware/*/.pio/build/esp32dev -maxdepth 1 -type f \
+              \( -name '*.bin' -o -name firmware.elf -o -name 'esp32tl-*' \)
           } >build/ci/firmware.list
-          python3 - build/ci/firmware.list firmware/*/build examples/*/build <<'EOF'
+          python3 - build/ci/firmware.list firmware/*/build examples/*/build \
+            firmware/*/.pio/build/esp32dev <<'EOF'
           import json, sys
           from pathlib import Path
 
           listed = set(Path(sys.argv[1]).read_text().splitlines())
           missing = []
           for build in sys.argv[2:]:
-              flasher_args = json.loads(Path(build, "flasher_args.json").read_text())
-              description = json.loads(Path(build, "project_description.json").read_text())
-              needed = ["esp32tl-built", "esp32tl-build.json", "flasher_args.json"]
-              needed += ["config/sdkconfig.json", *flasher_args["flash_files"].values()]
-              needed += ["project_description.json", description["app_elf"]]
+              needed = ["esp32tl-built", "esp32tl-build.json"]
+              if "/.pio/build/" in build:
+                  needed += ["firmware.bin", "firmware.factory.bin", "firmware.elf"]
+                  needed += ["bootloader.bin", "partitions.bin"]
+              else:
+                  flasher_args = json.loads(Path(build, "flasher_args.json").read_text())
+                  description = json.loads(Path(build, "project_description.json").read_text())
+                  needed += ["flasher_args.json", "config/sdkconfig.json"]
+                  needed += [*flasher_args["flash_files"].values()]
+                  needed += ["project_description.json", description["app_elf"]]
               missing += [f"{build}/{f}" for f in needed if f"{build}/{f}" not in listed]
           for path in missing:
               print(f"::error::{path} is missing from the tarball")
@@ -243,8 +279,9 @@ jobs:
           path: .cache/esp-rom-elfs
           key: ${{ needs.firmware.outputs.rom-elf-key }}
 
-      # The images land in firmware/<image>/build/ and examples/<name>/build/, where
-      # test_firmware_images.py reads them; esp32tl-built marks them finished.
+      # The images land in firmware/<image>/build/, firmware/<image>/.pio/build/esp32dev/
+      # and examples/<name>/build/, where test_firmware_images.py reads them;
+      # esp32tl-built marks them finished.
       - name: Unpack the firmware and the runner
         run: |
           tar -xf build/ci/firmware.tar

@@ -42,12 +42,15 @@ test-runner:
 	cd runner && cargo test --locked --profile $(RUNNER_PROFILE)
 
 # Validation firmware, built in the pinned ESP-IDF container (plan M0) into
-# firmware/<image>/build/. IDF_LOCAL=1 builds with the ESP-IDF of the calling
-# shell instead, for iteration; goldens come from the container build only.
+# firmware/<image>/build/, and the Arduino-ESP32 images in the pinned PlatformIO
+# container into firmware/<image>/.pio/build/esp32dev/. IDF_LOCAL=1 and
+# PIO_LOCAL=1 build with the ESP-IDF or the PlatformIO of the calling shell
+# instead, for iteration; goldens come from the container builds only.
 # An empty FIRMWARE_OUT is firmware/, whatever the calling shell exports:
 # the tests read the images there.
 firmware:
 	FIRMWARE_OUT= firmware/build.sh
+	FIRMWARE_OUT= firmware/build-platformio.sh
 
 # The images the tests read, built only when missing; build.sh writes
 # esp32tl-built when a build finishes. The CI test jobs receive the images
@@ -57,6 +60,12 @@ FIRMWARE_IMAGES := hello_world nmea_reader gpio_echo sdspi sd_remount modem_at m
 firmware/%/build/esp32tl-built:
 	FIRMWARE_OUT= firmware/build.sh $*
 
+# The same for the PlatformIO images; build-platformio.sh writes esp32tl-built
+# into the build directory of the esp32dev environment.
+PLATFORMIO_IMAGES := arduino_shell
+firmware/%/.pio/build/esp32dev/esp32tl-built:
+	FIRMWARE_OUT= firmware/build-platformio.sh $*
+
 # Every examples/<name>/CMakeLists.txt is a project, built by the same pinned builder.
 EXAMPLE_PROJECTS := $(patsubst examples/%/CMakeLists.txt,%,$(wildcard examples/*/CMakeLists.txt))
 examples:
@@ -65,7 +74,7 @@ examples:
 examples/%/build/esp32tl-built:
 	FIRMWARE_OUT= firmware/build.sh --examples $*
 
-test: setup test-runner $(FIRMWARE_IMAGES:%=firmware/%/build/esp32tl-built) $(EXAMPLE_PROJECTS:%=examples/%/build/esp32tl-built)
+test: setup test-runner $(FIRMWARE_IMAGES:%=firmware/%/build/esp32tl-built) $(PLATFORMIO_IMAGES:%=firmware/%/.pio/build/esp32dev/esp32tl-built) $(EXAMPLE_PROJECTS:%=examples/%/build/esp32tl-built)
 	$(BIN)/pytest
 
 # The determinism job (plan §6): tests/test_determinism.py run twice, and the

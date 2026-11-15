@@ -27,6 +27,8 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The lint job carries its own copy of the rustup step](ci.md#the-lint-job-carries-its-own-copy-of-the-rustup-step) | `ci.md` | decided (#50) |
 | [The determinism job runs tests of its own twice and compares what they leave](ci.md#the-determinism-job-runs-tests-of-its-own-twice-and-compares-what-they-leave) | `ci.md` | decided (#22) |
 | [The determinism job runs on Linux and Python 3.11 only](ci.md#the-determinism-job-runs-on-linux-and-python-311-only) | `ci.md` | decided (#22) |
+| [The Arduino image is built in the firmware job](ci.md#the-arduino-image-is-built-in-the-firmware-job) | `ci.md` | decided (#193) |
+| [PlatformIO's core directory is cached under the key of its pins](ci.md#platformios-core-directory-is-cached-under-the-key-of-its-pins) | `ci.md` | decided (#193) |
 
 ## Documentation and the documentation check
 
@@ -85,6 +87,9 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The periodic wake sleeps a fixed 15 minutes and brings its own profile](firmware.md#the-periodic-wake-sleeps-a-fixed-15-minutes-and-brings-its-own-profile) | `firmware.md` | decided (#74) |
 | [The OBD-II reader pairs with a PIN alone and pauses after a failed attempt](firmware.md#the-obd-ii-reader-pairs-with-a-pin-alone-and-pauses-after-a-failed-attempt) | `firmware.md` | decided (#75) |
 | [Images of one container share their ccache hits](firmware.md#images-of-one-container-share-their-ccache-hits) | `firmware.md` | decided (#146) |
+| [The Arduino image is built with pioarduino in a pinned Python container](firmware.md#the-arduino-image-is-built-with-pioarduino-in-a-pinned-python-container) | `firmware.md` | decided (#193) |
+| [pio runs in the Arduino image's own directory, through the writable /out](firmware.md#pio-runs-in-the-arduino-images-own-directory-through-the-writable-out) | `firmware.md` | decided (#193) |
+| [PlatformIO's core directory is .cache/platformio/](firmware.md#platformios-core-directory-is-cacheplatformio) | `firmware.md` | decided (#193) |
 
 ## The esp32tl package and its pytest plugin
 
