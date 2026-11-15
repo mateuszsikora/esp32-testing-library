@@ -302,7 +302,8 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 
 | Decision | File | Status |
 |---|---|---|
-| [esp32sim is pinned at the merge commit of the classic VHCI PSRAM fix](runner.md#esp32sim-is-pinned-at-the-merge-commit-of-the-classic-vhci-psram-fix) | `runner.md` | decided (#180) |
+| [esp32sim is pinned at the merge commit of the virtual SoftAP station](runner.md#esp32sim-is-pinned-at-the-merge-commit-of-the-virtual-softap-station) | `runner.md` | decided (15 November 2026) |
+| [esp32sim is pinned at the merge commit of the classic VHCI PSRAM fix](runner.md#esp32sim-is-pinned-at-the-merge-commit-of-the-classic-vhci-psram-fix) | `runner.md` | superseded (15 November 2026) |
 | [esp32sim is pinned at the merge commit of the Bluetooth Classic enable](runner.md#esp32sim-is-pinned-at-the-merge-commit-of-the-bluetooth-classic-enable) | `runner.md` | superseded (#180) |
 | [esp32sim is pinned at the merge commit of the deep-sleep timer wake](runner.md#esp32sim-is-pinned-at-the-merge-commit-of-the-deep-sleep-timer-wake) | `runner.md` | superseded (#34) |
 | [esp32sim is pinned at the merge commit of the chip-revision fix](runner.md#esp32sim-is-pinned-at-the-merge-commit-of-the-chip-revision-fix) | `runner.md` | superseded (#35) |

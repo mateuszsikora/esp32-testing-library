@@ -4,7 +4,7 @@ The contract between `esp32tl-runner` (the Rust crate in `runner/`, which runs t
 esp32sim) and the harness (`esp32tl/link/`, `BoardLink`), or any other peer that takes the
 runner's board slot. Protocol version 1. It writes down section 4.1 of the
 [implementation plan](implementation-plan.md) and the parts of 4.2 a peer needs, checked against
-esp32sim at the project's pin, `3bdb958`. Where this document and the plan differ, this document
+esp32sim at the project's pin, `357b0e5`. Where this document and the plan differ, this document
 holds; section 11 lists the differences and why.
 
 The protocol follows the `SocketBoard` proposed in mikroverk/esp32sim#325, so the runner can be
@@ -208,7 +208,7 @@ is one counter over all six, starting at 1 and growing by 1. `sync`, `console`, 
 
 ```json
 {"type": "hello", "version": 1, "chip": "esp32", "clock": "emulated-fifo-write",
- "esp32sim": "3bdb9582a910974e4e025d274d6ec61e5c481be6"}
+ "esp32sim": "357b0e542dfe97d4c62ec4a15c01c4969164448c"}
 {"type": "hello", "version": 1, "chip": "esp32", "board": "esp32-devkitc", "watch": [4, 5]}
 ```
 
@@ -235,7 +235,7 @@ The first line is the runner's, the second the harness's.
   output costs no turns; it has its own `console` message. An empty or absent `watch` makes the socket a
   board with nothing on it. Every pin in `watch` must be one the classic chip has, GPIO 0 to 39
   but 24 and 28 to 31, as the board profiles count them (`esp32tl/boards`). esp32sim's
-  `gpio_state` also leaves out GPIO 20, which only some packages bond (`esp32/src/soc.rs:206`),
+  `gpio_state` also leaves out GPIO 20, which only some packages bond (`esp32/src/soc.rs:212`),
   but takes a level on it, so it counts. Any other pin is a protocol error at the handshake: on
   40 and above esp32sim would drop a level without a word (`esp32/src/periph.rs:386-389`).
 
@@ -335,7 +335,7 @@ cause 1 (`POWERON_RESET`), at the input's `t`. The power-on at the start of the 
 
 The board persists across a reset, as on a real board where a firmware restart does not reset the
 modem (the supply going off is another matter, 5.17): levels the peer drives stay driven, queued inputs stay queued, and paced bytes keep coming.
-The chip does not: `reboot()` replaces the peripherals (`esp32/src/soc.rs:149`), so the RX FIFOs
+The chip does not: `reboot()` replaces the peripherals (`esp32/src/soc.rs:155`), so the RX FIFOs
 are empty, and bytes that arrive before the firmware routes its UART again are dropped as
 `unrouted_rx`. Right after `reset` the runner sends `uart_cfg` for every watched route that
 changed and, from M3, a `gpio_out` with the watched pins' state as read from the bus after
@@ -464,7 +464,7 @@ the whole run:
 - `eth_tx`: the `eth_tx` messages sent, one per Ethernet frame the station sent (5.15);
 - `eth_tx_dropped`: frames the station sent that esp32sim's relay dropped, longer than 1518 bytes or
   more than 64 between two slice boundaries (`StationLink::tx_dropped`,
-  `esp-soc/src/wifi.rs:664-671`);
+  `esp-soc/src/wifi.rs:705-724`);
 - `eth_rx`: `eth_rx` frames the station's link took;
 - `eth_rx_dropped`: `eth_rx` frames that came due while the access point was off the air, or that
   the runner still held when it went off (5.16), and those that came due while the board's supply
@@ -526,7 +526,7 @@ output still wins over it, as the pad's level is the guest's wherever it drives 
 (`pad_level`, `:328`).
 
 What the peer drives survives a guest reset (5.5): `reboot()` keeps the chip's external levels
-(`esp32/src/soc.rs:152`), and the board reports them again through `BoardModel::input_levels`
+(`esp32/src/soc.rs:158`), and the board reports them again through `BoardModel::input_levels`
 when it is attached anew.
 
 ### 5.12 `adc` *ext* (M3)
@@ -537,7 +537,7 @@ when it is attached anew.
 
 From `t` the pad sees `volts`, held until the next `adc` on that pin. Applied through the
 machine's analog source (`SocBus::analog_set(pin, AnalogSource::Const(volts))`,
-`esp32/src/soc.rs:232`), not through the board, because the trait has no analog method (plan,
+`esp32/src/soc.rs:238`), not through the board, because the trait has no analog method (plan,
 finding 10). The voltage is at the pad, before the ADC's attenuator.
 
 ### 5.13 `wait`
@@ -573,7 +573,7 @@ same turn are discarded.
 
 With `--wifi`, the chip's Wi-Fi station joins esp32sim's virtual access point, and the network
 behind the access point is the peer's: the runner puts esp32sim's station link in Ethernet relay
-mode (`SocBus::set_ethernet_relay`, `esp32/src/soc.rs:101-104`), so esp32sim's own network (DHCP,
+mode (`SocBus::set_ethernet_relay`, `esp32/src/soc.rs:107-110`), so esp32sim's own network (DHCP,
 DNS, NTP, NAT to the host) answers nothing. The example is an ARP request from the station,
 `24:6f:28:00:11:22`, for `10.64.0.1`, and the harness's answer from the gateway's MAC,
 `02:53:49:4d:00:02`, a millisecond later.
@@ -595,9 +595,9 @@ bytes. The 4 bytes are libpp's guard word, which is not part of the frame:
   TODO(owner): where libpp adds the 4. On a real board the MAC presumably writes the MIC and the
   FCS there, so that the guard word never goes on the air. TODO(owner): no capture of a real
   board's frames was compared.
-- esp32sim reads the descriptor's length in bytes (`esp32/src/wifi.rs:186`), and
+- esp32sim reads the descriptor's length in bytes (`esp32/src/wifi.rs:193`), and
   `VirtualAp::on_station_tx` takes the last 8 off a protected frame, as its MIC, and nothing off an
-  open one (`esp-soc/src/wifi.rs:369-377`). Either way 4 bytes past the frame remain: on an open
+  open one (`esp-soc/src/wifi.rs:370-378`). Either way 4 bytes past the frame remain: on an open
   network where its FCS would be, on WPA2 where the first 4 bytes of the MIC would be. Both hold
   the guard word.
 
@@ -615,7 +615,7 @@ total length. An `eth_rx` outside the range is a protocol error, as is `eth_rx` 
 
 `eth_tx`: a frame the station sent. It is an event: it carries `seq`, sets the block point, and an
 answer stamped `t + latency` is on time (rule 2). esp32sim's relay hands over frames without their
-time (`StationLink::take_relay_frames`, `esp-soc/src/wifi.rs:784-786`), so `t` is the slice
+time (`StationLink::take_relay_frames`, `esp-soc/src/wifi.rs:861-863`), so `t` is the slice
 boundary at which the runner took them (6.1): at most one emulated millisecond after the station
 sent them, or at most `latency` while no event is unacknowledged. The runner also takes them right
 before a chip reset, so they go out before its `reset`, and at the end of the run. Frames taken at
@@ -625,13 +625,13 @@ which `stats.wifi.eth_tx_dropped` counts (5.9).
 
 `eth_rx`: from `t` the frame is for the station. It goes into the input queue (section 8) and,
 when it comes due, the runner hands it to the station's link, whose queue holds 64 frames
-(`StationLink::receive_relay_frame`, `esp-soc/src/wifi.rs:789-795`). Frames the link does not take
+(`StationLink::receive_relay_frame`, `esp-soc/src/wifi.rs:866-873`). Frames the link does not take
 wait in the runner, in order, and are offered again at every slice boundary, at most one emulated
 millisecond apart. esp32sim then puts one frame on the air for the station at most every 400 µs,
 and only when the access point has nothing of its own due: its answers and beacons go first
-(`StationLink::next_rx`, `esp-soc/src/wifi.rs:729-752`). The access point wraps a frame for the
+(`StationLink::next_rx`, `esp-soc/src/wifi.rs:783-828`). The access point wraps a frame for the
 air only while the station is associated with it (`VirtualAp::data_from_ds`,
-`esp-soc/src/wifi.rs:476-477`); one the link takes before then is lost there, and still counts in
+`esp-soc/src/wifi.rs:477-478`); one the link takes before then is lost there, and still counts in
 `stats.wifi.eth_rx`. A frame that comes due while the access point is off the air (5.16) is
 dropped and counted in `stats.wifi.eth_rx_dropped`.
 
@@ -655,7 +655,7 @@ with it, it drops the answers it had queued, queues a deauthentication with reas
 station is leaving" (IEEE 802.11-2020, 9.3.3.12 and Table 9-49), and stops beaconing. At every
 slice boundary the runner then checks whether anything but beacons is still in the access point's
 queue; once nothing is, the access point is detached (`StationLink::attach(None, None)`,
-`esp-soc/src/wifi.rs:579-581`): at the first boundary after esp32sim has put the deauthentication
+`esp-soc/src/wifi.rs:586-588`): at the first boundary after esp32sim has put the deauthentication
 on the air. With no station joined, it waits only for answers already queued, such as probe
 responses. Until it is detached it still answers what the station sends; a station that
 authenticates again in that window is deauthenticated again. The networks around
@@ -1087,7 +1087,7 @@ runs at about 30 wall seconds per emulated second on an M2 Pro, against 0.3 with
 last round is cut to the cycles left (`esp-soc/src/machine.rs:699`; "the cycle ceiling cuts the
 final round short", `:511-512`), and the idle skip is bounded by `max_cycles` too (`:608`). The
 round is counted in CPU cycles and rounded up into bus cycles (`cpu_cycles_for_bus`,
-`esp32/src/soc.rs:112-114`), so the runner gets control at some `T ≥ B` less than one CPU cycle
+`esp32/src/soc.rs:118-120`), so the runner gets control at some `T ≥ B` less than one CPU cycle
 later. A CPU cycle is 1 bus cycle at 240 MHz, 1.5 at 160 MHz (ESP-IDF's default for the ESP32),
 3 at 80 MHz and 6 at the 40 MHz XTAL the chip boots from (`cpu_scale_half`,
 `esp32/src/periph.rs:1121-1124`), so `T` is in the bus cycle of `B` itself at 240 MHz and up to 1, 2
@@ -1262,7 +1262,7 @@ Section 4.1 of the plan is superseded by this document. What changed, and why:
     `SocketBoard::next_deadline` so that an idle guest does not "jump to the next timer" past it.
     At the pin that cannot happen: the idle skip is capped at `IDLE_CHUNK`, 512 CPU cycles
     (`esp32/src/soc.rs:24`, `esp-soc/src/machine.rs:608`), and the classic bus never defers device
-    ticks (`can_defer` keeps its default `false`, `esp-soc/src/soc.rs:159`). What does stand in the
+    ticks (`can_defer` keeps its default `false`, `esp-soc/src/soc.rs:170`). What does stand in the
     way is that board callbacks cannot reach the bus, which `uart_cfg`, the drop warnings and `adc`
     need; the run loop's slices give it to them and stop for `B` as well. For #11 this means:
     `SocketBoard` implements `uses_uart_pins`, `uart_tx` and `gpio_output_at` (recording only),

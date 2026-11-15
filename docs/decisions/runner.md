@@ -3,11 +3,95 @@
 Why the `esp32tl-runner` crate in `runner/`, its esp32sim pin and the link protocol it speaks
 with the harness ([`docs/protocol.md`](../protocol.md)) are the way they are.
 
+## esp32sim is pinned at the merge commit of the virtual SoftAP station
+
+Status: decided (15 November 2026)
+
+`runner/Cargo.toml` takes all four esp32sim dependencies from
+`357b0e542dfe97d4c62ec4a15c01c4969164448c`, the merge of mikroverk/esp32sim#362 on
+2026-11-15. `v0.4.0` now exists: its annotated tag resolves to this same commit, not a later one.
+The pin remains the merge SHA. It brings `VirtualSta`, `StationLink::attach_station`
+(`esp-soc/src/wifi.rs:649-654`) and `SocBus::attach_wifi_station`
+(`esp32/src/soc.rs:97-100`), for a virtual station joining the guest's own access point. Exposing
+runner `--wifi-sta` and harness `wifi.station(...)` belongs to the next change.
+
+The range `3bdb958..357b0e54` contains 31 non-merge commits, grouped here in full (merge commits
+only join these branches):
+
+- **NAT relay, mikroverk/esp32sim#350:** `c3ddf1f` adds the page's queue transport and
+  `StationLink::set_nat` / `SocBus::attach_nat`; `41532e8` aborts replaced flows and hands their
+  closes to the page; `cb3e52f` bounds old relay records at 256 KiB while retaining closes.
+  `d57fccc` and `9fc28a7` update the evidence and experiment number. The runner attaches no NAT
+  and calls neither new method. `attach_new(cfg, None, debug)` and relay-mode `net_step` keep
+  their existing paths; the new queue transport is compiled but never instantiated here.
+- **Nearby networks, mikroverk/esp32sim#352:** `917769d` exposes the page's nearby networks through
+  `SocBus::wifi_nearby`; `b3593ff`, `0471468` and `4a4ed14` rerun/update its evidence.
+  The classic wrapper calls `StationLink::set_beacons`, which the runner calls directly.
+  Its filtering, replacement and return values are unchanged (`esp-soc/src/wifi.rs:691-701`).
+- **Virtual station, mikroverk/esp32sim#362:** `2242462` adds the station, classic MAC receive
+  flags, CLI option, tests and silicon receipt; `959eb93` counts relay frames lost after the
+  station leaves and rejects multiple stations and `--net` with `--wifi-sta` in the upstream CLI.
+  At this revision `StationLink::station_tx`, `next_rx`, `nothing_due` and `rx_meta` branch on
+  the optional station and use their previous access-point paths when none is attached
+  (`esp-soc/src/wifi.rs:705-724`, `esp-soc/src/wifi.rs:783-828`,
+  `esp-soc/src/wifi.rs:767-770`, `esp-soc/src/wifi.rs:667-673`). The runner attaches none.
+  `receive_relay_frame` also accepts a joined virtual station now; the existing AP path keeps
+  its size and queue checks (`esp-soc/src/wifi.rs:866-873`). Its no-link error now says
+  `Ethernet relay requires relay mode and a virtual AP or station`; the runner's configured AP
+  does not take that error path. Capture was split into two helpers, preserving the old AP FCS
+  removal; the runner attaches no capture tap. Reboot restarts an optional station and otherwise
+  preserves the same AP, network and relay state.
+  The classic MAC's `rx_ctrl` word 0 changes only when A1 matches the nonzero address slot 1,
+  distinct from slot 0: then bit 29 alone marks the guest's SoftAP
+  (`esp32/src/wifi.rs:230-245`). The runner's `--wifi` path sends frames to the guest station or
+  broadcasts, not that SoftAP. Upstream's `docs/evidence/wifi-softap-rx-match` records silicon
+  on an ESP32 revision 1.0 with ESP-IDF v5.5.4: all 3638 frames addressed to the SoftAP had bit
+  29 alone. Station unicast's existing bits 28 and 29 remain, although silicon uses 28 alone;
+  the receipt says libpp accepts both. These are upstream measurements, not new esp32tl runs.
+- **S31 SHA and flash, mikroverk/esp32sim#359 and #360:** `a7869bf`, `f795351`, `8326939` add
+  SHA DMA, its regression and shared AES/SHA tests; `67245f4` and `eb87662` implement/test USER+PE
+  erase and no-WEL no-ops. The runner does not build the S31.
+- **Mosaico and browser, mikroverk/esp32sim#363:** `9e43f53` adds S31 Wi-Fi validation;
+  `155144a` adds board pull-downs and LEDC pads; `6cb4f5b` adds the motor, power switch and keys;
+  `dba772b` makes BMM150 follow IMU motion; `b26ea2b` adds board firmware; `4c8d105` corrects
+  output inversion and latched duty. `7ed8164` adds the compass demo; `7f691d8` adds browser S31
+  support and IMU motion; `01f0d43` adds its web demo; `b4dad76` selects the flash size;
+  `a157ff3`, `91d9158`, `4564e9a` and `4f94661` update chip/site documentation, attribution and
+  browser flash sizing. Shared `BoardModel::pull_downs` defaults to zero and is consumed by the
+  S31, not the classic adapter; the runner uses neither BMM150 nor IMU motion. None changes the
+  runner's classic board callbacks.
+- **Release prep, mikroverk/esp32sim#364:** `ff4450b` changes the workspace version to 0.4.0.
+  It changes neither the edition (2021) nor a `rust-version` requirement. Rust 1.99.1 remains
+  the runner's toolchain: the release build and all 165 Rust tests pass on it. Upstream evidence
+  using 1.100.0 does not itself raise the minimum.
+
+The classic `esp32/src/periph.rs` did not change between the pins: `ClassicGpio::new` still
+uses `RegRam::new()` for IO_MUX (`esp32/src/periph.rs:235`), whose missing registers read zero.
+There is no U0RXD reset fix in the range. Keep `reset_console_rx` and its tests; its comment and
+runner documentation now name this pin. No runner implementation change is needed.
+
+Current citations were checked against the pinned source, including the unchanged UART, GPIO,
+Bluetooth, PSRAM and scheduler paths. Shifted citations cover `esp32/src/soc.rs`, classic Wi-Fi,
+`StationLink` and the `SocBus::can_defer` default. The implementation plan also had stale references
+to reset, UART routing, the board deadline, `Machine::seconds`, `Stop::Halted`, `StationLink`, the CLI's
+Wi-Fi attachment and the SPI callback (in `bus.rs`, not `spi.rs`); these are corrected. Historical
+pin decisions and stage-0 hyperlinks retain the line numbers of their explicitly named revisions.
+
+The whole Python suite passes on the pin: `make test` reports 2320 passed and one skipped
+(the physical GNSS check, with `ESP32TL_REAL_GNSS_PORT` unset). Both Rust test profiles pass
+all 165 tests; `make lint`, including Clippy with warnings denied, and `make docs-check` pass.
+The Wi-Fi, Bluetooth (including PSRAM), UART, recording and replay assertions are unchanged.
+
+**Rejected:** a release tag as the dependency revision, so the pin keeps the convention of the
+previous merges; a later commit, which is outside this audit; adding the SoftAP harness API here,
+which would mix a dependency update with a new feature; removing the IO_MUX workaround, since
+upstream has not fixed its cause.
+
 ## esp32sim is pinned at the merge commit of the classic VHCI PSRAM fix
 
-Status: decided (#180)
+Status: superseded (15 November 2026)
 
-`runner/Cargo.toml` takes `esp32`, `esp-soc`, `esp-periph` and, as a dev-dependency, `emu-core`
+`runner/Cargo.toml` took `esp32`, `esp-soc`, `esp-periph` and, as a dev-dependency, `emu-core`
 from git at `3bdb9582a910974e4e025d274d6ec61e5c481be6`, the merge of mikroverk/esp32sim#353
 (2026-11-13), with which the classic ESP32's `valid_packet_range` takes a packet in PSRAM that is
 mapped and readable as well as one in internal DRAM (`esp32/src/ble.rs:45-48`, with
@@ -56,6 +140,9 @@ merge was upstream's head when the pin moved. Also rejected: delivering a peer's
 `ClassicUart::wire_input` now that it drops what does not fit, because the shared `Uart`'s
 `host_input` already does what the runner needs and puts no byte behind esp32sim's queue; the
 runner's code stays as it was.
+
+The line numbers in this decision are those of `3bdb958`. The pin moved again for the
+[virtual SoftAP station](#esp32sim-is-pinned-at-the-merge-commit-of-the-virtual-softap-station).
 
 ## esp32sim is pinned at the merge commit of the Bluetooth Classic enable
 

@@ -60,7 +60,7 @@ use std::time::{Duration, Instant};
 pub const PORTS: usize = 3;
 /// The classic chip's GPIOs, as a mask: 0 to 39 but 24 and 28 to 31, as the board profiles have
 /// them (`esp32tl/boards`, `GPIOS`). esp32sim's `gpio_state` also leaves out GPIO 20, which only
-/// some packages bond (`esp32/src/soc.rs:206`), but its `set_input` takes a level there; it
+/// some packages bond (`esp32/src/soc.rs:212`), but its `set_input` takes a level there; it
 /// ignores one on 40 and above (`esp32/src/periph.rs:386-389`).
 const GPIOS: u64 = ((1 << 40) - 1) & !(1 << 24 | 0xf << 28);
 /// The classic RX FIFO (`esp-periph/src/uart.rs:9`): what does not fit is dropped.
@@ -202,7 +202,7 @@ const WAKE_MARGIN_TICKS: u64 = 2;
 /// cycles, and the CPU's clock is at most the bus's.
 const SLEEP_STEP: u64 = 1 << 31;
 
-/// Work around esp32sim 3bdb958's zeroed IO_MUX reset state on U0RXD.
+/// Work around esp32sim 357b0e5's zeroed IO_MUX reset state on U0RXD.
 /// ESP32 TRM table 6.10-1 specifies reset configuration 3: input and pull-up enabled.
 /// Set it only at reset; subsequent firmware routing and input-disable writes remain effective.
 pub(crate) fn reset_console_rx(machine: &mut esp32::Machine) {
