@@ -90,9 +90,13 @@ application's ELF `firmware.elf` when it is there. The chip is read from the hea
 chip it was built for. A build directory with `config/sdkconfig.json`, which ESP-IDF's build system
 writes, is refused when it sets `SECURE_FLASH_ENC_ENABLED` or `SECURE_BOOT`; without that file,
 neither is checked. pioarduino's ESP-IDF builder reads that file from the build directory, so a
-`framework = espidf` build has it; an Arduino build from the framework's precompiled libraries has
-none. TODO(owner): whether an Arduino build with `custom_sdkconfig`, which runs the ESP-IDF builder
-to compile the framework's libraries, has it.
+`framework = espidf` build has it. An Arduino build has none, also with `custom_sdkconfig`: built
+with `CONFIG_SECURE_FLASH_ENC_ENABLED=y` there (pioarduino 55.03.312, Arduino-ESP32 3.3.12), the
+ESP-IDF builder compiled the framework's libraries and wrote the configuration to
+`sdkconfig.esp32dev` in the project directory, not to the build directory, and esp32tl did not
+refuse the build. Its `bootloader.bin`, which on the classic ESP32 is what turns flash encryption
+on, was byte for byte the one of the same build without `custom_sdkconfig`: the framework's
+precompiled bootloader.
 
 What else comes from the build:
 

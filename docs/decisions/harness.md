@@ -3735,7 +3735,9 @@ A PlatformIO build whose `config/sdkconfig.json` sets `SECURE_FLASH_ENC_ENABLED`
 is refused on both backends, as an ESP-IDF build that asks for encryption is: its bootloader would
 burn the board's eFuses at the first boot, which cannot be undone, and with `SECURE_BOOT`
 `IdfSerial` passes esptool `--force`. A build without that file is not checked: the build
-directory has nothing else that says so.
+directory has nothing else that says so. An Arduino build has none, also with `custom_sdkconfig`,
+whose configuration pioarduino writes to the project directory; such a build's `bootloader.bin`
+was the framework's precompiled one, so its encryption setting does not reach the bootloader.
 
 **Rejected:** flashing with esptool from esp32tl and running pytest-embedded with skip-autoflash,
 because esp32tl would then own a second flashing path, with its own port handling, baud rate and
