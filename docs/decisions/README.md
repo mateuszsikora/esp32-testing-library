@@ -9,10 +9,10 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 
 | Decision | File | Status |
 |---|---|---|
-| [Every Linux job runs on the self-hosted runner hp600g1](ci.md#every-linux-job-runs-on-the-self-hosted-runner-hp600g1) | `ci.md` | decided (#48) |
-| [The macOS jobs run only once the repository is public](ci.md#the-macos-jobs-run-only-once-the-repository-is-public) | `ci.md` | decided (#52) |
-| [The runs-on label is computed from the platform](ci.md#the-runs-on-label-is-computed-from-the-platform) | `ci.md` | decided (#52) |
-| [CI moves to GitHub-hosted runners before the repository goes public](ci.md#ci-moves-to-github-hosted-runners-before-the-repository-goes-public) | `ci.md` | decided (#52) |
+| [Every Linux job runs on the self-hosted runner hp600g1](ci.md#every-linux-job-runs-on-the-self-hosted-runner-hp600g1) | `ci.md` | superseded (#48) |
+| [The macOS jobs run only once the repository is public](ci.md#the-macos-jobs-run-only-once-the-repository-is-public) | `ci.md` | superseded (#52) |
+| [The runs-on label is computed from the platform](ci.md#the-runs-on-label-is-computed-from-the-platform) | `ci.md` | superseded (#52) |
+| [CI moves to GitHub-hosted runners before the repository goes public](ci.md#ci-moves-to-github-hosted-runners-before-the-repository-goes-public) | `ci.md` | superseded (#52) |
 | [Builds reach the test jobs through the Actions cache, not artifacts](ci.md#builds-reach-the-test-jobs-through-the-actions-cache-not-artifacts) | `ci.md` | decided (#48) |
 | [A build job fails when the cache did not keep its tarball](ci.md#a-build-job-fails-when-the-cache-did-not-keep-its-tarball) | `ci.md` | decided (#190) |
 | [Each cache key hashes the whole workflow and the Makefile](ci.md#each-cache-key-hashes-the-whole-workflow-and-the-makefile) | `ci.md` | decided (#48) |
@@ -27,8 +27,11 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The lint job carries its own copy of the rustup step](ci.md#the-lint-job-carries-its-own-copy-of-the-rustup-step) | `ci.md` | decided (#50) |
 | [The determinism job runs tests of its own twice and compares what they leave](ci.md#the-determinism-job-runs-tests-of-its-own-twice-and-compares-what-they-leave) | `ci.md` | decided (#22) |
 | [The determinism job runs on Linux and Python 3.11 only](ci.md#the-determinism-job-runs-on-linux-and-python-311-only) | `ci.md` | decided (#22) |
-| [The Arduino image is built in the firmware job](ci.md#the-arduino-image-is-built-in-the-firmware-job) | `ci.md` | decided (#193) |
+| [The Arduino image is built in the firmware job](ci.md#the-arduino-image-is-built-in-the-firmware-job) | `ci.md` | superseded (#193) |
 | [PlatformIO's core directory is cached under the key of its pins](ci.md#platformios-core-directory-is-cached-under-the-key-of-its-pins) | `ci.md` | decided (#193) |
+| [CI uses standard hosted images on both platforms before publication](ci.md#ci-uses-standard-hosted-images-on-both-platforms-before-publication) | `ci.md` | decided (15 November 2026) |
+| [Firmware builds run in three parallel groups](ci.md#firmware-builds-run-in-three-parallel-groups) | `ci.md` | superseded (15 November 2026) |
+| [Firmware families are sharded to shorten the critical path](ci.md#firmware-families-are-sharded-to-shorten-the-critical-path) | `ci.md` | decided (15 November 2026) |
 
 ## Documentation and the documentation check
 

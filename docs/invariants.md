@@ -1773,3 +1773,10 @@ that references to its number keep their meaning.
 - **237.** U0RXD starts with its input and pull-up enabled after reset; subsequent firmware
      writes may disable or reroute it.
      `runner/src/session/tests.rs::console_rx_reset_restores_native_input_but_firmware_can_disable_or_reroute_it`
+
+## Firmware build shards
+
+For a fixed ordered image list and shard count N, `firmware/build.sh --shard K/N` selects
+positions congruent to K-1 modulo N. Across K=1..N every image occurs exactly once; sharding
+never silently drops an image. Invalid or empty shards fail before starting Docker or writing
+build output. `tests/test_firmware_build.py` checks both validation and example families.
