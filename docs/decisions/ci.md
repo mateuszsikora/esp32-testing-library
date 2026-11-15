@@ -472,3 +472,11 @@ starting the pair, and excludes that file only from the parallel phase. It still
 exactly once on every OS/Python combination. Relaxing timing bounds, retrying until green, or
 accepting reduced coverage would hide the cost of contention; isolating the wall-clock checks
 costs a few serial seconds without giving up parallelism for the rest of the suite.
+
+
+Review of #208 found that waiting only for each pytest leader after `SIGTERM` left descendants
+alive when the leader exited first. Cleanup now monitors the process groups themselves: send
+`SIGTERM` even after a leader exits, wait a shared five seconds for the groups to disappear,
+then send `SIGKILL` to any remaining groups. Missing groups are harmless. Waiting only for the
+leader or omitting groups of reaped leaders is insufficient because tests deliberately create
+runners that ignore or block `SIGTERM`. Regressions cover both leader states at cancellation.

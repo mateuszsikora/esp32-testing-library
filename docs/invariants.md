@@ -1789,3 +1789,13 @@ CI runs each shard's `tests/test_real_source.py` selection before starting the c
 and excludes it from the parallel phase. Wall-clock checks keep their assertions and execute
 once without a competing shard. `tests/test_shard.py::test_the_workflow_runs_every_shard`
 checks the serial selection and parallel exclusion alongside the complete shard matrix.
+
+
+Group cleanup must not depend on whether the pytest leader is still alive. After `SIGTERM`,
+remaining groups receive `SIGKILL` following a shared five-second grace period, including
+orphaned descendants that ignore `SIGTERM`.
+`tests/test_ci_test_pair.py::test_pair_cancellation_kills_descendants_ignoring_sigterm` checks
+both a live leader at cancellation and one that has already exited.
+
+`test_group_cleanup_reaps_a_leader_that_has_already_exited` also checks cleanup of an unreaped
+leader; its zombie state must not turn successful cleanup into a macOS permission error.

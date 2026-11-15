@@ -442,7 +442,12 @@ hosted build times.
 calling Python interpreter. It isolates their temporary directories, basetemps and pytest caches,
 waits for both, and prints their separate logs and exit codes. Exit 0 requires both to return 0;
 any test failure, collection error or empty collection fails the pair. Invalid or duplicate shard
-arguments exit 2. SIGTERM/interrupt exits 130 after terminating child process groups.
+arguments exit 2. SIGTERM/interrupt exits 130 after cleaning up child process groups. Cleanup
+sends `SIGTERM` even when a group leader has exited, allows five seconds for the groups to
+disappear, and sends `SIGKILL` to remaining groups. The regression tests include descendants
+ignoring `SIGTERM`, both with a live leader and after the first leader has already exited,
+and an exited leader awaiting reaping. A transient permission error while probing a dying
+group does not count as disappearance; cleanup keeps tracking it.
 The four shards and their hash assignment are unchanged; pairing only changes where they run.
 `tests/test_ci_test_pair.py` checks concurrent starts, isolation and both failure directions using
 a stand-in pytest module. The full hosted suite checks compatibility with real parallel tests.

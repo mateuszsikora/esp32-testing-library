@@ -208,7 +208,9 @@ codes and adds no retries or relaxed assertions.
 The wrapper starts two `python -m pytest --shard=K/4` processes concurrently, pairing 1 with 4
 and 2 with 3. Each has a separate `TMPDIR`, `--basetemp`, pytest cache and captured log. Both
 logs and exit codes are printed, including when either shard fails; any nonzero exit code
-(including no tests collected) fails the job. Cancellation terminates their process groups.
+(including no tests collected) fails the job. Cleanup sends `SIGTERM` to both process groups, including groups whose pytest leader has
+already exited. It waits up to five seconds for the groups to disappear, then sends `SIGKILL`
+to any that remain, so descendants ignoring `SIGTERM` do not survive cancellation.
 "Re-run failed jobs" re-runs the pair. Timeout stays 15 minutes; no pytest timeout is relaxed.
 
 Paired pytest temporary roots are created under `/tmp` with a short `e32-pair-` prefix,

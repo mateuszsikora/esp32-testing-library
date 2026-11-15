@@ -9,8 +9,46 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 from contextlib import ExitStack, suppress
 from pathlib import Path
+
+
+def stop_groups(processes: list[subprocess.Popen[bytes]]) -> None:
+    groups = set()
+    for process in processes:
+        # A reaped leader can still have descendants in its process group.
+        process.poll()
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            continue
+        except PermissionError:
+            # A leader can become a non-signalable zombie between poll and killpg
+            # on macOS. Track the group until it disappears or needs escalation.
+            pass
+        groups.add(process.pid)
+
+    deadline = time.monotonic() + 5
+    while groups and time.monotonic() < deadline:
+        for process in processes:
+            process.poll()  # Reap leaders so their zombies do not keep groups alive.
+        for group in groups.copy():
+            try:
+                os.killpg(group, 0)
+            except ProcessLookupError:
+                groups.remove(group)
+            except PermissionError:
+                # Still present, but not signalable (e.g. a dying group on macOS).
+                # Keep tracking it; only ESRCH proves the group disappeared.
+                pass
+        if groups:
+            time.sleep(0.05)
+    for group in groups:
+        with suppress(ProcessLookupError):
+            os.killpg(group, signal.SIGKILL)
+    for process in processes:
+        process.wait()
 
 
 def run_pair(shards: list[str], arguments: list[str]) -> int:
@@ -52,16 +90,7 @@ def run_pair(shards: list[str], arguments: list[str]) -> int:
         finally:
             # Each pytest owns a process group, including its pytester/runner children.
             # On cancellation do not leave them running after the temporary files disappear.
-            for process in processes:
-                if process.poll() is None:
-                    with suppress(ProcessLookupError):
-                        os.killpg(process.pid, signal.SIGTERM)
-            for process in processes:
-                try:
-                    process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    os.killpg(process.pid, signal.SIGKILL)
-                    process.wait()
+            stop_groups(processes)
             for shard, log in zip(shards, logs, strict=False):
                 print(f"\n--- shard {shard} ---", flush=True)
                 print(log.read_text(errors="replace"), end="", flush=True)
