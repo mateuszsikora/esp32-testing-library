@@ -452,3 +452,10 @@ Paired pytest temporary roots are created under `/tmp` with a short `e32-pair-` 
 independently of the host's `TMPDIR`. This keeps multiprocessing's Unix socket names below
 macOS path limits. A regression test starts real multiprocessing managers with a long inherited
 host temporary path; shortening paths does not skip or alter the tests.
+
+
+CI first runs `tests/test_real_source.py` sequentially for each of the job's two shard selections,
+then passes `--ignore=tests/test_real_source.py` to the concurrent pair. Wall-clock tests thus run
+without another shard competing for the VM's CPU. Their original assertions and conditional
+host-lag skips stay unchanged; tests are neither duplicated nor removed. This split preserves
+the same node-ID hash assignment, including in the serial phase.

@@ -464,3 +464,11 @@ The first paired run exposed `AF_UNIX path too long` in Python 3.11's multiproce
 on macOS. Inheriting the hosted VM's long TMPDIR and appending wrapper/manager directories caused
 fixture setup to fail. Pair roots now use a short prefix directly under `/tmp`; a real-manager
 regression checks a deliberately long inherited TMPDIR. Test assertions and timeouts are unchanged.
+
+
+Run 43755552026 exposed one additional host-lag skip in the paced byte-stamp test on macOS
+Python 3.13. CI now runs `tests/test_real_source.py` sequentially for both shard selections before
+starting the pair, and excludes that file only from the parallel phase. It still runs every test
+exactly once on every OS/Python combination. Relaxing timing bounds, retrying until green, or
+accepting reduced coverage would hide the cost of contention; isolating the wall-clock checks
+costs a few serial seconds without giving up parallelism for the rest of the suite.

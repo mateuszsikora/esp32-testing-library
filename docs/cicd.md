@@ -27,7 +27,7 @@ The test jobs then run only the runner and Python: they build nothing.
 |---|---|---|
 | `firmware` | `ubuntu-24.04` (x64) | Eight parallel groups (`idf-1` to `idf-4`, `examples-1` to `examples-3`, `platformio`) once per content of `firmware/`, `examples/`, the build workflow and the `Makefile`, the Arduino image with PlatformIO's core directory restored from the cache; `idf-1` fetches the ROM ELF once per revision of `scripts/fetch-rom-elf` |
 | `runner` | `ubuntu-24.04` (x64); `macos-15` (ARM64) | `make build-runner test-runner`, once per content of `runner/` (its sources, its esp32sim pin, its toolchain), the build workflow and the `Makefile` |
-| `test` | `ubuntu-24.04` (x64); `macos-15` (ARM64); Python 3.11, 3.13, 3.14; pairs `1/4 4/4` and `2/4 3/4` | Unpacks the images and the runner, restores the ROM ELF, and runs two existing pytest shards concurrently; builds nothing |
+| `test` | `ubuntu-24.04` (x64); `macos-15` (ARM64); Python 3.11, 3.13, 3.14; pairs `1/4 4/4` and `2/4 3/4` | Unpacks the images and the runner, restores the ROM ELF, runs wall-clock tests sequentially, then two existing pytest shards concurrently; builds nothing |
 | `determinism` | `ubuntu-24.04` (x64); Python 3.11 | Unpacks the images and the runner as `test` does, and runs `make determinism`: the determinism tests twice, the two runs compared |
 | `lint` | `ubuntu-24.04` (x64); Python 3.11 | `make lint`, clippy included |
 | `docs` | `ubuntu-24.04` (x64); pull requests only | `make docs-check` against the pull request's base branch |
@@ -199,6 +199,12 @@ then runs `make PYTHON=<that Python> .venv/.installed rom-elf`, which is `make s
 `mcopy`, `mdir` and `mtype` are on `PATH`, for the SD card tests, which skip without them: on macOS
 it installs mtools with Homebrew; on Linux it runs `sudo apt-get update` and
 `sudo apt-get install -y mtools`. The check includes `mmd`; a missing command fails the job.
+Before the parallel phase, each job runs `tests/test_real_source.py` once for each of its two
+shard selections, sequentially. This keeps wall-clock measurements free of contention from the
+other pytest process. The parallel phase passes `--ignore=tests/test_real_source.py`, so every
+test still runs exactly once across the four shards. The serial phase uses normal pytest exit
+codes and adds no retries or relaxed assertions.
+
 The wrapper starts two `python -m pytest --shard=K/4` processes concurrently, pairing 1 with 4
 and 2 with 3. Each has a separate `TMPDIR`, `--basetemp`, pytest cache and captured log. Both
 logs and exit codes are printed, including when either shard fails; any nonzero exit code

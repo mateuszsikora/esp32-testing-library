@@ -1783,3 +1783,9 @@ a successful optimization. `tests/test_ci_test_pair.py` enforces these orchestra
 A long host TMPDIR must not make paired tests exceed Unix socket path limits: the wrapper uses
 short independent roots under `/tmp`. `test_pair_keeps_multiprocessing_sockets_short_with_a_long_host_tmpdir`
 checks this with real spawned managers.
+
+
+CI runs each shard's `tests/test_real_source.py` selection before starting the concurrent pair,
+and excludes it from the parallel phase. Wall-clock checks keep their assertions and execute
+once without a competing shard. `tests/test_shard.py::test_the_workflow_runs_every_shard`
+checks the serial selection and parallel exclusion alongside the complete shard matrix.

@@ -139,7 +139,12 @@ jobs:
           SHARDS: ${{ matrix.pair }}
         run: |
           read -r first second <<< "$SHARDS"
-          .venv/bin/python .github/scripts/test-pair.py "$first" "$second"
+          # Wall-clock bounds need the VM without a competing pytest shard.
+          for shard in "$first" "$second"; do
+            .venv/bin/pytest --shard="$shard" tests/test_real_source.py
+          done
+          .venv/bin/python .github/scripts/test-pair.py "$first" "$second" \
+            --ignore=tests/test_real_source.py
 
   # Plan §6: two runs of one recording are identical. `make determinism` runs
   # tests/test_determinism.py twice and compares the consoles, the taps and the
