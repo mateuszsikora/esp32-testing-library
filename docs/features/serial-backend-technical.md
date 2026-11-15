@@ -51,8 +51,9 @@ the same indirect parametrisation. See [the user contract](serial-backend-user.m
      made with the first of them, that a `weakref.finalize` removes with the app, without the
      `ResourceWarning` of a `TemporaryDirectory` cleaned up by the garbage collector;
    - `flash_args`: `extra_esptool_args` `PLATFORMIO_ESPTOOL_ARGS`, `before` `default-reset`,
-     `after` `hard-reset` and `stub` true, with `chip` the `Build`'s; `write_flash_args` `PLATFORMIO_WRITE_FLASH_ARGS`,
-     `--flash-mode keep --flash-freq keep --flash-size keep`; `flash_files` by hexadecimal offset;
+     `after` `hard-reset` and `stub` true, with `chip` the `Build`'s; `write_flash_args`
+     `PLATFORMIO_WRITE_FLASH_ARGS`, `--flash-mode keep --flash-freq keep --flash-size keep`;
+     `flash_files` by hexadecimal offset;
    - `flash_settings`, `keep` for the three and `encrypt` false; `target` the `Build`'s `chip`;
      `bin_file` `firmware.bin`; `elf_file` `firmware.elf` or `None`; `is_loadable_elf` and
      `is_linux_elf` false;
@@ -68,13 +69,13 @@ the same indirect parametrisation. See [the user contract](serial-backend-user.m
    so the session cache (`Meta.hit_port_app_cache`) works as for an ESP-IDF build. With
    `--confirm-target-elf-sha256`, on a cache hit, `IdfSerial.read_flash_elf_sha256` looks for
    `bin_file` among `flash_files` for the application's offset: with `firmware.factory.bin`,
-   `firmware.bin` is not one of them, and it raises `ValueError: .bin file not found in flash
-   files`. With separate files it reads 32 bytes at `firmware.bin`'s offset plus `0xB0`, the app
-   descriptor's `app_elf_sha256`, and compares them with the SHA-256 of `firmware.elf`. pioarduino
-   fills that field in: its `frameworks/espidf.py` passes `--elf-sha256-offset 0xb0` to
-   `elf2image`, and the Arduino framework's `tools/pioarduino-build.py` adds it to `ElfToBin`; in
-   the `firmware.bin` of an Arduino 3.3.12 build with pioarduino 55.03.312 the 32 bytes at `0xb0`
-   are the SHA-256 of its `firmware.elf`.
+   `firmware.bin` is not one of them, and it raises
+   `ValueError: .bin file not found in flash files`. With separate files it reads 32 bytes at
+   `firmware.bin`'s offset plus `0xB0`, the app descriptor's `app_elf_sha256`, and compares them
+   with the SHA-256 of `firmware.elf`. pioarduino fills that field in: its `frameworks/espidf.py`
+   passes `--elf-sha256-offset 0xb0` to `elf2image`, and the Arduino framework's
+   `tools/pioarduino-build.py` adds it to `ElfToBin`; in the `firmware.bin` of an Arduino 3.3.12
+   build with pioarduino 55.03.312 the 32 bytes at `0xb0` are the SHA-256 of its `firmware.elf`.
 4. pytest-embedded creates the app, `IdfSerial` and `IdfDut`. `IdfSerial._start` owns autoflash,
    skip-autoflash and its session cache. `Serial` neither opens another port nor calls `flash`.
    The plugin requires an `IdfDut` and passes it the profile, message queue and artifact digest.
@@ -251,10 +252,12 @@ removal with the app without a warning, no directory for them when nothing is er
 erased with separate files and with a factory image whose otadata is erased, as a
 `framework = espidf` build's, but not with one that holds `boot_app0.bin`'s;
 `test_serial_runs_a_platformio_build` runs the fixture chain with the fake port, with and without a
-factory image, and an `app_recording` of `firmware.bin`'s hash; `test_an_esp_idf_build_keeps_pytest_embedded_s_app`
-that an ESP-IDF build keeps `IdfApp`. `test_an_image_for_another_chip_is_refused_by_its_name` and
-`test_a_build_that_enables_flash_encryption_or_secure_boot_is_refused` cover the checks on serial. No PlatformIO
-build has been flashed on a board ([validation status](serial-backend-user.md#validation-status)).
+factory image, and an `app_recording` of `firmware.bin`'s hash;
+`test_an_esp_idf_build_keeps_pytest_embedded_s_app` that an ESP-IDF build keeps `IdfApp`.
+`test_an_image_for_another_chip_is_refused_by_its_name` and
+`test_a_build_that_enables_flash_encryption_or_secure_boot_is_refused` cover the checks on serial.
+No PlatformIO build has been flashed on a board
+([validation status](serial-backend-user.md#validation-status)).
 
 ### The backend comparison
 

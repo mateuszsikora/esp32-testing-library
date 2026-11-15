@@ -35,11 +35,11 @@ The `app_path` marker selects the app, with its finished build in `build/` by de
 esp32sim: an ESP-IDF build or a PlatformIO one, `.pio/build/<env>/` ([builds](builds-user.md)).
 Use the CI-built files, `make firmware` or `pio run`; pytest builds nothing. An ESP-IDF build must
 target `esp32`, list its app image under `app` in `flasher_args.json`, contain every flash file, and
-request no flash encryption. A PlatformIO build needs the files [builds](builds-user.md#what-each-kind-of-build-needs)
-lists, images for the classic ESP32, and no flash encryption in its `config/sdkconfig.json` when it
-has one. Encrypted firmware needs provisioning and key/efuse management that
-this backend does not implement or validate; it is deliberately outside this milestone. No runner or
-ROM ELF is needed for serial.
+request no flash encryption. A PlatformIO build needs the files
+[builds](builds-user.md#what-each-kind-of-build-needs) lists, images for the classic ESP32, and no
+flash encryption in its `config/sdkconfig.json` when it has one. Encrypted firmware needs
+provisioning and key/efuse management that this backend does not implement or validate; it is
+deliberately outside this milestone. No runner or ROM ELF is needed for serial.
 
 A PlatformIO build is flashed as esp32sim runs it: `firmware.factory.bin` at `0x0`, or else
 `bootloader.bin` at `0x1000`, `partitions.bin` at `0x8000` and `firmware.bin` at the table's
@@ -99,8 +99,8 @@ def test_hello(board):
 
 `app_recording(path)` takes one path, relative to the test file or absolute. On serial, before
 pytest-embedded opens the port, esp32tl compares the recording's `app_sha256` with SHA-256 of the
-app binary named by `flasher_args.json`, or of `firmware.bin` for a PlatformIO build. A missing hash fails with
-`serial: <path>: recording has no app_sha256`; a mismatch fails with
+app binary named by `flasher_args.json`, or of `firmware.bin` for a PlatformIO build. A missing
+hash fails with `serial: <path>: recording has no app_sha256`; a mismatch fails with
 `serial: <path>: recording app_sha256 <expected> does not match artifact <actual>`.
 This check applies with and without autoflash. The marker is ignored on esp32sim, where replaying
 recordings against a different application is allowed. It does not inject the recording.
@@ -112,8 +112,8 @@ selected artifact's hash; under skip-autoflash that is also a statement about th
 
 An external build is selected with
 `@pytest.mark.app_path("../firmware", build_dir="../builds/debug")`. The build path is relative to
-the application or absolute, and must hold an ESP-IDF or a PlatformIO build. Preflight, flashing, the
-`app_recording` hash comparison and tap artifact hashes all use that same resolved directory. An
+the application or absolute, and must hold an ESP-IDF or a PlatformIO build. Preflight, flashing,
+the `app_recording` hash comparison and tap artifact hashes all use that same resolved directory. An
 invalid selection fails before opening the port, including when `dut` is requested before `board`.
 No default build is substituted. pytest-embedded's raw `--build-dir` is still refused; use the
 marker's keyword ([build selection](pytest-plugin-user.md)).

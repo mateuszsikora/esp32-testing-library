@@ -3749,4 +3749,3 @@ gives the board another otadata, and another boot partition, than esp32sim's fla
 rejected: erasing the whole `factory` partition, slower for no other effect on the bootloader;
 and refusing such a build on serial, since it can be flashed. Also rejected: refusing the build
 as postponed, because the build is flashable with what pytest-embedded has.
-

@@ -24,10 +24,11 @@
 4. **`platformio(directory, backend)`** needs `firmware.bin`, and, without `firmware.factory.bin`,
    `bootloader.bin` and `partitions.bin`. `check_encryption` then reads `config/sdkconfig.json`
    (`SDKCONFIG`) when it is a file, and refuses a build that sets `SECURE_FLASH_ENC_ENABLED`, with
-   the message `esp_idf` gives an encrypted build (`encryption`), or `SECURE_BOOT`, with `asks for
-   secure boot`; a build without the file is not checked. It checks the header of `firmware.bin` next: it is at
-   the start of the file on every chip, while an S3's or a C3's bootloader is at `0x0`, so such a
-   build is refused by the name of its chip and not for a bootloader missing at `0x1000`. Then:
+   the message `esp_idf` gives an encrypted build (`encryption`), or `SECURE_BOOT`, with
+   `asks for secure boot`; a build without the file is not checked. It checks the header of
+   `firmware.bin` next: it is at the start of the file on every chip, while an S3's or a C3's
+   bootloader is at `0x0`, so such a build is refused by the name of its chip and not for a
+   bootloader missing at `0x1000`. Then:
    - with `firmware.factory.bin`: one flash file, `firmware.factory.bin` at `0x0`;
    - without it: `app_partition` reads `partitions.bin` (its first `0xC00` bytes), and the flash
      files are `bootloader.bin` at `0x1000`, `partitions.bin` at `0x8000` and `firmware.bin` at the
@@ -47,20 +48,22 @@
    `app_image` `firmware.bin`, `elf` `firmware.elf` when it is a file, `chip` `esp32`.
 
    What the chip then boots, with the ESP-IDF bootloader (`bootloader_utility_load_boot_image`):
-   with `boot_app0.bin`'s otadata, which an Arduino build's `firmware.factory.bin` holds at
-   `0xe000` (an entry of `ota_seq` 1 and its CRC in the first sector), `ota_0`. With the otadata
-   erased, as without `firmware.factory.bin` or in a `framework = espidf` build's, which holds an
-   erased `ota_data_initial.bin` there, it starts from `factory` when the table has one, and, finding no image
-   there, goes on to the OTA slots, `ota_0` first; in a table without `factory` it boots `ota_0`.
-   Either way the application runs from the partition it runs from on a board flashed by
-   pioarduino. The otadata differs in one case: without `firmware.factory.bin`, on a table with
-   `factory`, the bootloader sets `ota_has_initial_contents` only on its way without `factory`, so
-   it writes no otadata, and `esp_ota_get_boot_partition()` falls back to `factory`, where a board
-   has `boot_app0.bin`'s `ota_0`. platformio's own espressif32 flashes `firmware.bin` at the board's
-   `upload.offset_address`, `0x10000` by default, which is not in the build directory. pioarduino
-   finds `ota_0` by the text of the CSV's subtype column, `ota_0`, and esp32tl by the subtype
-   `0x10` in `partitions.bin`: a CSV that writes the subtype as `0x10` gets `firmware.bin` at
-   `0x10000` from pioarduino and at `ota_0` from esp32tl.
+   with `boot_app0.bin`'s otadata, which an Arduino build's `firmware.factory.bin` holds at `0xe000`
+   (an entry of `ota_seq` 1 and its CRC in the first sector), `ota_0`. With the otadata erased, as
+   without `firmware.factory.bin` or in a `framework = espidf` build's, which holds an erased
+   `ota_data_initial.bin` there, it starts from `factory` when the table has one, and, finding no
+   image there, goes on to the OTA slots, `ota_0` first; in a table without `factory` it boots
+   `ota_0`. Either way the application runs from the partition it runs from on a board flashed by
+   pioarduino: for an Arduino build on any board, for a `framework = espidf` build on one whose
+   `factory` partition holds no image, since its upload leaves `factory` as it was ([serial
+   backend](serial-backend-user.md#builds-and-flashing)). The otadata differs in one case: without
+   `firmware.factory.bin`, on a table with `factory`, the bootloader sets `ota_has_initial_contents`
+   only on its way without `factory`, so it writes no otadata, and `esp_ota_get_boot_partition()`
+   falls back to `factory`, where a board has `boot_app0.bin`'s `ota_0`. platformio's own
+   espressif32 flashes `firmware.bin` at the board's `upload.offset_address`, `0x10000` by default,
+   which is not in the build directory. pioarduino finds `ota_0` by the text of the CSV's subtype
+   column, `ota_0`, and esp32tl by the subtype `0x10` in `partitions.bin`: a CSV that writes the
+   subtype as `0x10` gets `firmware.bin` at `0x10000` from pioarduino and at `ota_0` from esp32tl.
 5. The backend reads the `Build`: `runner_command` passes one `--flash-at {offset:#x}={path}` per
    flash file, in order; `Esp32Sim._partition_table` parses `Build.table()` with
    `flash.partitions`, for `board.nvs` and `board.flash`; `tap.app_image_sha256` hashes
@@ -91,8 +94,8 @@ ESP32, is the whole flash from `0x0`: `bootloader.bin` at `0x1000`, `partitions.
 the otadata of `boot_app0.bin` at `0xe000` and `firmware.bin` at `0x10000`, checked byte for byte
 on one consumer's build (#192). For a `framework = espidf` build pioarduino's ESP-IDF builder puts
 an erased `ota_data_initial.bin` of its own at the otadata instead (`frameworks/espidf.py`,
-read in pioarduino 55.03.312, not on a build). `boot_app0.bin` is in the framework's package, not in the build directory,
-which is why a build without `firmware.factory.bin` gets no otadata.
+read in pioarduino 55.03.312, not on a build). `boot_app0.bin` is in the framework's package, not
+in the build directory, which is why a build without `firmware.factory.bin` gets no otadata.
 
 ## Interfaces
 
