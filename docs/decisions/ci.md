@@ -531,3 +531,30 @@ assertions drift. Removing the build dependency and hoping its cache exists woul
 race. A platform matrix on the reusable build call still gates dependants on the entire matrix;
 separate calls give each consumer the dependency it actually needs. No new cache transport,
 compiler cache, or main-branch cancellation policy is introduced in this change.
+
+
+## Retain six macOS test jobs after measuring five
+
+Status: decided (16 November 2026)
+
+Keep two independent shard-pair jobs per Python version on macOS, as on Linux. The experiment
+at `da54942` combined macOS Python 3.11's two pairs on one VM, sequentially, to avoid the sixth
+VM's queue. It preserved every test, both platforms, all three Python versions, two concurrent
+pytest processes per pair, serial wall-clock tests and failure propagation. Builds and their
+cache keys were unchanged. The experiment did not land on main.
+
+The [hosted measurements](../cicd.md#five-macos-job-measurement) used warm caches throughout:
+six-job control 43769968112 finished in 8m36s, five-job experiment 43771329988 in 8m14s,
+and repeated six-job control 43772184650 in 7m24s. The first control overlapped other repository
+CI; the experiment and repeated control did not. All runs retained 2320 passes and the same
+one hardware-only skip per OS/Python combination. Determinism and lint passed; manual dispatch
+skipped the PR-only documentation job, which was checked locally.
+
+**Rejected:** retaining the five-VM layout. Avoiding the queue made the combined job the critical
+path at 7m50s. A 22-second improvement over the first control did not survive the second control:
+the experiment was then 50 seconds slower and used 1507 macOS test job-seconds versus 1472.
+There is no demonstrated speed or machine-time gain to justify the extra matrix exception,
+sequential pair and required-check migration. These few runs do not establish a statistical
+performance claim; retain the simpler existing layout unless new measurements justify a change.
+Branch protection keeps all 25 checks. No test timeout, assertion, skip policy, cache transport
+or main-branch cancellation policy changes as a result of this experiment.
