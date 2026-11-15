@@ -345,7 +345,10 @@ a behaviour change ([documentation.md](documentation.md#the-check)).
 The `runner` job runs `make build-runner test-runner`; the `test` jobs run `.venv/bin/pytest
 --shard=K/4` for each K on Python 3.11, 3.13 and 3.14 with the images, the runner and the ROM ELF the build jobs left in the
 Actions cache; the `determinism` job runs `make determinism` with the same builds; the `lint` job
-runs `make lint`. [docs/cicd.md](../cicd.md) describes each job.
+runs `make lint`. Both private and public repositories run the matrix on
+`ubuntu-24.04` (x64) and `macos-15` (ARM64). Linux test jobs start and check Docker;
+all test jobs install mtools and require `mformat`, `mcopy`, `mdir`, `mtype` and `mmd`.
+The existing capability markers are unchanged. [docs/cicd.md](../cicd.md) describes each job.
 
 ## See also
 
