@@ -231,8 +231,8 @@ The first line is the runner's, the second the harness's.
   for routes with a watched TX pin, `uart_cfg` for routes with a watched TX or RX pin (a
   receive-only peer learns its baud from it), `gpio_out` for watched pins. Inputs (`uart_rx`,
   `gpio_in`, `release`, `adc`) on a pin outside `watch` are a protocol error: the socket's board is
-  wired to those pins only. The console's UART0 pins are normally not watched, so console output
-  costs no turns; it has its own `console` message. An empty or absent `watch` makes the socket a
+  wired to those pins only. The console watches UART0 RX (GPIO 3), but not TX (GPIO 1), so console
+  output costs no turns; it has its own `console` message. An empty or absent `watch` makes the socket a
   board with nothing on it. Every pin in `watch` must be one the classic chip has, GPIO 0 to 39
   but 24 and 28 to 31, as the board profiles count them (`esp32tl/boards`). esp32sim's
   `gpio_state` also leaves out GPIO 20, which only some packages bond (`esp32/src/soc.rs:206`),
@@ -369,6 +369,8 @@ and the guest has run in between.
 
 ### 5.7 `console`
 
+Console input uses `uart_rx` on watched GPIO 3 (§5.10), not this output message.
+
 ```json
 {"type": "console", "t": 812345678, "data": "SGVsbG8gd29ybGQhCg=="}
 ```
@@ -475,6 +477,12 @@ the runner adds them up before each, so `wifi` holds the run's totals. The harne
 an object of these five integers, all required.
 
 ### 5.10 `uart_rx`
+
+The harness console sends on GPIO 3 at 115200 baud, timestamped when the test writes.
+UART0 receives through its configured native or GPIO matrix RX route. The ordinary framing,
+overflow and route warnings apply. The runner restores GPIO 3's input-enabled reset state
+missing from the pinned emulator (see [runner technical documentation](features/runner-technical.md#uart0-rx-reset-state)).
+No new message or protocol version is needed.
 
 ```json
 {"type": "uart_rx", "t": 2000000000, "pin": 5, "baud": 9600,

@@ -509,10 +509,11 @@ the generated recordings belong to no app at all.
 
 ## Console.write is postponed until the runner reads input
 
-Status: postponed (#51)
+Status: superseded (#195)
 
-`Console` has `expect` and `expect_exact`, which call the dut's own, and no `write`: the runner does
-not read its stdin.
+The original premise was that console input required the runner to read stdin. It does not:
+`uart_rx` on watched GPIO 3 feeds UART0 through its native or matrix RX route. `Console.write`
+and `sendline` now use that route; no runner message or stdin reader is needed.
 
 ## The serial backend is postponed to M4
 
@@ -902,7 +903,8 @@ At #21, no feature consumed a console recording, so the console remained only in
 the run report.
 [Console taps now use both backend clocks](#console-taps-use-the-same-api-on-both-backends):
 `app_recording` can check their app hash on serial and recording tools can read the output. These
-recordings still cannot be replayed into the console: the runner has no console-input route.
+recordings still cannot be replayed through the console API. Console input is now available
+through `write` and `sendline` (#195).
 
 ## Models describe the world in its own terms, in units
 
@@ -2210,8 +2212,8 @@ Status: decided (#25)
 `console.tap(path)` remains in #25 on both serial and esp32sim. The console already declares
 `tap = true` on both, and a console test can record either run without backend-specific code.
 The emulator stamps output with the link time; serial stamps it after a reader poll, on wall
-time, with polling, USB, driver and host scheduling delays. Both record only `out` events and
-share the app-image hash helper. A console tap is a test step in `RunLog`; its path is visible in
+time, with polling, USB, driver and host scheduling delays. At #25 both recorded only `out` events;
+#195 adds test writes as `in` events. They share the app-image hash helper. A console tap is a test step in `RunLog`; its path is visible in
 the report and JSON property. This resolves the console-tap part postponed in #21, not replay
 of console input. The recording schema already accepts `console`, so its version remains 1.
 
@@ -3751,3 +3753,19 @@ gives the board another otadata, and another boot partition, than esp32sim's fla
 rejected: erasing the whole `factory` partition, slower for no other effect on the bootloader;
 and refusing such a build on serial, since it can be flashed. Also rejected: refusing the build
 as postponed, because the build is flashable with what pytest-embedded has.
+
+## Console input uses GPIO 3 at a fixed 115200 baud
+
+Status: decided (#195)
+
+The console is a receive-only link route (GPIO 3), with guest output arriving through `console`
+messages. Test writes are queued at the board's current instant and drained in the next poll;
+UART0 receives bytes paced by the runner. Watching GPIO 1 would duplicate console output in
+`uart_tx`, so only GPIO 3 is watched. Console taps record input at write time and output at
+receipt time, with the existing version 1 directions.
+
+The simulated console's line rate is fixed at 115200; no `[console] baud` profile key is added.
+A guest using a different rate gets the existing `frm_err` failure. Serial uses the selected
+port's baud, as it already does for output. A profile rate override is postponed until a
+consumer needs a non-default simulated console. Automatically following `uart_cfg` is rejected:
+it would hide the framing errors of a physical host port at the wrong rate.

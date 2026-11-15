@@ -1763,3 +1763,13 @@ that references to its number keep their meaning.
      `runner/src/session/tests.rs::a_resync_moves_the_wall_clock_to_the_boundary_it_is_seen_at`,
      `runner/src/session/tests.rs::a_signal_or_the_peer_gone_ends_the_wait_for_wall_time`,
      `tests/test_real_source.py::test_a_turn_held_before_the_first_2_16_cycles_does_not_cost_the_waits`
+
+## Console input
+
+- **236.** Console input uses UART0 RX on GPIO 3 at a host rate independent of the guest rate.
+     A full UART0 RX FIFO loses arriving bytes and reports `rxfifo_ovf`, like other UARTs.
+     `tests/test_console_writes.py::test_console_writes_keep_the_instant_and_host_baud`,
+     `tests/test_console_input.py::test_console_fifo_overflow`
+- **237.** U0RXD starts with its input and pull-up enabled after reset; subsequent firmware
+     writes may disable or reroute it.
+     `runner/src/session/tests.rs::console_rx_reset_restores_native_input_but_firmware_can_disable_or_reroute_it`

@@ -371,7 +371,7 @@ profile is on the board's supply ([board profiles](board-profiles-user.md#the-pr
 On [serial](serial-backend-user.md#power-on-time-and-console), `board.reset()` pulses EN through
 the adapter, and `board.power_off()`, `board.boots` and `board.wait_for_wake()` skip the test.
 
-`console` is the firmware's console, its UART0, read on the board's clock:
+`console` is the firmware's console, its UART0, read and written on the board's clock:
 
 - `console.expect(pattern, timeout=30, *, return_what_before_match=False)` lets the board run until
   `pattern` appears on the console after the last match, for at most `timeout` of the board's time,
@@ -408,8 +408,26 @@ the adapter, and `board.power_off()`, `board.boots` and `board.wait_for_wake()` 
   ended at `since` or later when it is given, and those that match `pattern` when it is given:
   `console.lines(since=lost_at) == []` says nothing was printed since. A line not ended yet is not
   in it. `line` and `lines` do not move `expect`'s search, nor it theirs.
-- pytest-embedded's `expect_all` and `not_matching` are not there; nor is `console.write`, as the
-  runner does not read input for UART0.
+- pytest-embedded's `expect_all` and `not_matching` are not there.
+
+### Typing on the console
+
+After `board.power_on()`, `board.console.write(data)` accepts bytes or UTF-8 text.
+`board.console.sendline(line)` accepts the same types and appends LF (`\n`). Neither waits for
+an answer; use `expect_exact` or `expect` afterwards:
+
+```python
+board.power_on()
+board.console.expect_exact("console_repl>")
+board.console.sendline("help")
+board.console.expect_exact("Print the summary of all registered commands")
+```
+
+On esp32sim writes enter GPIO 3 at the current board instant in the next link poll, paced at
+115200 baud. The board advances when the test waits. The rate does not follow the guest's UART
+configuration: mismatches raise `frm_err`; FIFO overflow and missing routes retain the existing
+UART warnings in the report. On serial, writes go directly to the open port at its configured
+baud. Console taps include both test input (`in`) and firmware output (`out`).
 
 `gnss` is the far end of the board profile's `uart.gnss` route:
 

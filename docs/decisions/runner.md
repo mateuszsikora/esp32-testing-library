@@ -910,3 +910,18 @@ esp32sim merged it as mikroverk/esp32sim#353, and the pin moved there: see
 copy of its own; pinning a fork of esp32sim, which would hold the runner off upstream's fixes; and
 building the firmware without the option, which would test another image than the one a user
 ships.
+
+## The runner restores U0RXD's input-enabled reset state
+
+Status: decided (#195)
+
+The pinned emulator initializes the classic IO_MUX to zero. A booted `hello_world` and ESP-IDF
+REPL therefore have no RX route on GPIO 3: default REPL configuration leaves the pins unchanged.
+The ESP32 TRM table 6.10-1 gives GPIO 3 reset configuration 3 (input and pull-up enabled).
+The runner restores this pad at initial boot and after each reset. This allows the existing
+`uart_rx` protocol to reach UART0 without changing firmware. Extending this workaround to every
+pad is outside this console change; it should ultimately live in esp32sim's reset model.
+
+**Rejected:** forcing UART0's route to GPIO 3 whenever none is configured, because that ignores
+firmware intentionally disabling input, or rerouting it; making only the validation firmware
+configure pins would conceal the missing post-boot route.

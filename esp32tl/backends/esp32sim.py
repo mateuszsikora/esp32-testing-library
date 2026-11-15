@@ -73,7 +73,7 @@ from esp32tl.flash import FlashSnapshot, Namespaces, Partition
 from esp32tl.interfaces import BoardOff, NeverHappened, RunEnded, SourceError
 from esp32tl.interfaces.bluetooth import TAP_SOURCE, Bluetooth
 from esp32tl.interfaces.board import DEEPSLEEP_RESET, POWERON_RESET, Board, Boot
-from esp32tl.interfaces.console import ConsoleLines
+from esp32tl.interfaces.console import ConsoleInput, ConsoleLines
 from esp32tl.interfaces.gnss import Gnss
 from esp32tl.interfaces.lines import Lines
 from esp32tl.interfaces.modem import Modem
@@ -338,9 +338,9 @@ class Esp32Sim(Board):
         # One mapping of the files they and the SD card read and write: no tap writes over another
         # route's file or the card's image.
         self._files: dict[Path, tuple[str, str]] = {}
-        self._console = Uart(
+        self._console = ConsoleInput(
             "console",
-            Wire(1, 3, 115200),
+            Wire(None, 3, 115200),
             log=self.log,
             clock=self._run_clock,
             directory=self.directory,
@@ -378,7 +378,7 @@ class Esp32Sim(Board):
         slot = [] if self._sd_card is None else [self._sd_card]
         self.link = BoardLink(
             profile.name,
-            [*self._uarts.values(), self._lines, self._wifi, self._bluetooth, *slot],
+            [self._console, *self._uarts.values(), self._lines, self._wifi, self._bluetooth, *slot],
             chip=profile.chip,
             on_error=self._end_run,
             hold=self._hold,
@@ -480,6 +480,12 @@ class Esp32Sim(Board):
                 )
             self._bluetooth.use()
         return self._bluetooth
+
+    def write_console(self, data: bytes) -> None:
+        clock = self._on()
+        if clock.ended:
+            raise RunEnded("the run has ended")
+        self._console.write(clock.now, data)
 
     def tap_console(self, path: str | Path) -> Tap:
         return self._console.tap(path)

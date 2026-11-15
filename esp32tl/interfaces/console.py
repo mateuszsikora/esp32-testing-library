@@ -19,6 +19,8 @@ from typing import Any, Protocol, TypeVar, cast, runtime_checkable
 import pexpect
 
 from esp32tl.interfaces import RunEnded, SourceError
+from esp32tl.interfaces.uart import Uart
+from esp32tl.link.boardlink import Output
 from esp32tl.tap import Tap
 from esp32tl.units import Duration, number, seconds
 
@@ -115,16 +117,56 @@ class Tappable(Protocol):
     def tap_console(self, path: str | Path) -> Tap: ...
 
 
+class ConsoleInput(Uart):
+    """UART0 RX on the link; output arrives separately in console messages."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._pending: list[Output] = []
+
+    def write(self, t: int, data: bytes) -> None:
+        if data:
+            self._pending.append((t, data))
+            self._crossed(t, "in", data)
+
+    def poll(self, now: int) -> list[Output]:
+        pending, self._pending = self._pending, []
+        return pending
+
+
+@runtime_checkable
+class Writable(Protocol):
+    def write_console(self, data: bytes) -> None: ...
+
+
 class Console:
-    """The console of `board`. There is no `write`: the runner does not read input for UART0."""
+    """The firmware's UART0, read and written on the board's clock."""
 
     def __init__(self, board: Clocked) -> None:
         self._board = board
         # Where the last match ended: the next expect searches from there, as pexpect does.
         self._cursor = 0
 
+    def write(self, data: bytes | str) -> None:
+        """Writes bytes (text encoded as UTF-8) at the board's current instant."""
+        if isinstance(data, str):
+            data = data.encode()
+        if not isinstance(data, bytes):
+            raise TypeError("console.write takes bytes or str")
+        if not isinstance(self._board, Writable):
+            raise SourceError("this board cannot write its console")
+        self._board.write_console(data)
+
+    def sendline(self, line: bytes | str) -> None:
+        """Writes a line followed by LF; text is encoded as UTF-8."""
+        if isinstance(line, str):
+            line = line.encode()
+        if not isinstance(line, bytes):
+            raise TypeError("console.sendline takes bytes or str")
+        self.write(line + b"\n")
+
     def tap(self, path: str | Path) -> Tap:
-        """Records console bytes from power-on, with the backend's receipt times."""
+        """Records guest output and test input from power-on, on the board's clock."""
         if not isinstance(self._board, Tappable):
             raise SourceError("this board cannot tap its console")
         return self._board.tap_console(path)

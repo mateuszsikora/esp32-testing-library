@@ -507,6 +507,22 @@ class Serial(Board):
         self._asked(Request("bluetooth", source="model"))
         raise BackendError("serial: the chip's Bluetooth has no interface on this backend")
 
+    def write_console(self, data: bytes) -> None:
+        self._on()
+        if self._closed:
+            raise BackendError("serial: the run has ended")
+        at = self.now.ns
+        try:
+            remaining = data
+            while remaining:
+                written = self.dut.serial.proc.write(remaining)
+                if not written:
+                    raise BackendError("serial: console write made no progress")
+                self._console._crossed(at, "in", remaining[:written])
+                remaining = remaining[written:]
+        except Exception as error:
+            raise BackendError(f"serial: console write failed: {error}") from error
+
     def tap_console(self, path: str | Path) -> Tap:
         return self._console.tap(path)
 

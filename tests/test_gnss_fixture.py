@@ -137,7 +137,7 @@ def test_a_source_given_out_of_order_fails_the_test(pytester: pytest.Pytester) -
     result.stdout.fnmatch_lines(
         [
             "*Captured esp32sim link teardown*",
-            "board esp32-devkitc, watching GPIO 4, GPIO 5",
+            "board esp32-devkitc, watching GPIO 3, GPIO 4, GPIO 5",
             "the runner never connected",
         ]
     )
