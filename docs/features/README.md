@@ -24,6 +24,7 @@ templates.
 | Bluetooth peer: a Classic device with SPP on Bumble's virtual link, answered by a model on the board's clock | [user](bluetooth-peer-user.md) | [technical](bluetooth-peer-technical.md) | `esp32tl/bluetooth/` |
 | Cellular modem: AT dialogue, signal, registration, clock and operator, PWRKEY, RESET and RI, a hung modem, a dropped call | [user](modem-user.md) | [technical](modem-technical.md) | `esp32tl/sources/model/modem.py`, `esp32tl/interfaces/modem.py` |
 | Flash contents: `board.nvs()` and typed integers, by partition name | [user](flash-contents-user.md) | [technical](flash-contents-technical.md) | `esp32tl/flash.py` |
+| Builds: the ESP-IDF or PlatformIO build directory a test runs, its files at their offsets, its partition table and its chip | [user](builds-user.md) | [technical](builds-technical.md) | `esp32tl/build.py` |
 | Simulated network: PPP or Ethernet with ARP and DHCP, IPv4, TCP/UDP, DNS, NTP, TLS, MQTT and HTTP | [user](network-user.md) | [technical](network-technical.md) | `esp32tl/net/` |
 
 ## Ownership map
@@ -53,7 +54,7 @@ GitHub Action, a pre-commit hook or a Python dependency.
 | F9 | `^runner/src/protocol\.rs$` | `^docs/protocol\.md$` | Link protocol changed in runner/src/protocol.rs: update docs/protocol.md, and its version if the wire changes |
 | F10 | `^runner/src/socket_board\.rs$` | `^docs/protocol\.md$` | Link protocol changed in runner/src/socket_board.rs: update docs/protocol.md, and its version if the wire changes |
 | F11 | `^firmware/` | `^docs/features/validation-firmware-` | Validation firmware or its build changed: update docs/features/validation-firmware-*.md |
-| F12 | `^esp32tl/`, without the paths of F1 to F11, F13 to F23, F25 and `esp32tl/py.typed` | `^docs/features/[a-z0-9-]+\.md$`, a new file only | This path has no owning doc yet: add its feature docs, a new docs/features/<feature>-user.md or -technical.md, and add it to the ownership map (scripts/check-docs.py, docs/features/README.md, AGENTS.md) |
+| F12 | `^esp32tl/`, without the paths of F1 to F11, F13 to F23, F25, F26 and `esp32tl/py.typed` | `^docs/features/[a-z0-9-]+\.md$`, a new file only | This path has no owning doc yet: add its feature docs, a new docs/features/<feature>-user.md or -technical.md, and add it to the ownership map (scripts/check-docs.py, docs/features/README.md, AGENTS.md) |
 | F13 | `^esp32tl/boards/` | `^docs/features/board-profiles-` | Board profiles or the capability declaration changed (schema, pins, sources, taps): update docs/features/board-profiles-*.md |
 | F14 | `^esp32tl/recording\.py$` | `^docs/recording-format\.md$` | Recording format changed: docs/recording-format.md is its specification; update it, and its version if the format changes |
 | F15 | `^esp32tl/sources/replay\.py$` | `^docs/features/replay-` | Replay changed (what it replays, when, what it refuses): update docs/features/replay-*.md |
@@ -66,6 +67,7 @@ GitHub Action, a pre-commit hook or a Python dependency.
 | F22 | `^esp32tl/net/` | `^docs/features/network-` | Simulated network changed: update docs/features/network-*.md |
 | F24 | `^examples/` | `^docs/features/examples-` | Examples changed: update docs/features/examples-*.md |
 | F25 | `^esp32tl/sources/real\.py$` | `^docs/features/real-source-` | Real source changed (the port, its stamps, the bound, what it refuses): update docs/features/real-source-*.md |
+| F26 | `^esp32tl/build\.py$` | `^docs/features/builds-` | Build loading changed (the kinds of build, their files and offsets, the chip check): update docs/features/builds-*.md |
 | C1 | `^\.github/workflows/` | `^docs/cicd\.md$` | CI workflow changed: update docs/cicd.md |
 | C2 | `^Makefile$` | `^docs/guides/development\.md$` | Makefile changed: update the make targets in docs/guides/development.md |
 | C3 | `^\.pre-commit-config\.yaml$` | `^docs/guides/development\.md$` | Pre-commit hooks changed: update docs/guides/development.md |

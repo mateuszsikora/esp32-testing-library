@@ -3069,6 +3069,9 @@ Ethernet frames themselves, as a pcap could; the signal of the access point is e
 
 Status: decided (#102)
 
+*Extended in #192 by [A PlatformIO build is read by its file names and image
+headers](#a-platformio-build-is-read-by-its-file-names-and-image-headers).*
+
 `@pytest.mark.app_path(path, build_dir="../builds/debug")` selects an existing directory containing
 `flasher_args.json`. The build defaults to `build`; explicit paths may be absolute or relative to
 the application. `esp32tl run` and `esp32tl replay` offer `--build-dir` with the same semantics.
@@ -3602,3 +3605,52 @@ into one, cannot carry it to the wait, and a condition made that way still passe
 unasked. Also rejected: keeping the class in `esp32tl.net` and re-exporting it, which leaves a
 general object in a module about networks; and naming the condition through `__qualname__`, the
 consumer's workaround, which is an attribute of the function, not a description of the event.
+
+## A PlatformIO build is read by its file names and image headers
+
+Status: decided (#192)
+
+`load_app` reads a build into `esp32tl.build.Build`, esp32tl's own description of it: the flash
+files at their offsets, the partition table's offset, the application image, the ELF and the chip.
+An ESP-IDF build is read from `flasher_args.json` through `IdfApp`, as before. A directory without
+`flasher_args.json` that holds `firmware.bin` or `firmware.factory.bin` is a PlatformIO build,
+`.pio/build/<env>/`: `firmware.factory.bin` at `0x0` when it is there, else `bootloader.bin` at
+`0x1000`, `partitions.bin` at `0x8000` and `firmware.bin` where pioarduino's espressif32 platform
+flashes it: at the table's `ota_0`, else at `0x10000`, which must be the start of an application
+partition large enough for it. With the otadata left erased, the ESP-IDF bootloader tries a
+`factory` partition first, finds no image there, and goes on to `ota_0`, so the application runs
+from the partition it runs from on a board pioarduino flashed, where `boot_app0.bin`'s otadata
+selects `ota_0`; only the otadata differs there, erased where the board has `boot_app0.bin`'s, so
+that `esp_ota_get_boot_partition()` names `factory`. A test that relies on it runs
+`firmware.factory.bin`, which holds that otadata. A factory image must hold `firmware.bin` at that same offset, where pioarduino's
+`merge-bin` puts it, since a recording's `app_sha256` is the hash of `firmware.bin`, and a factory
+image of another build would run an application the recording does not name. The chip comes from
+the chip id at bytes 12 and 13 of
+the images' extended headers, since a PlatformIO build directory has no `config/sdkconfig.json`;
+a build for another chip is refused with its name. `board.nvs` and `board.flash` read the partition
+table at the offset the build names, from whichever flash file holds it, no longer by the file name
+`partition-table.bin`, which a PlatformIO build does not have and a factory image hides inside
+itself.
+
+The description is a module of its own, `esp32tl/build.py`, with its own feature documents, rather
+than more of `esp32tl/backends/esp32sim.py`: both backends, the taps and the `esp32tl` command read
+it, and none of them needs to know which kind of build it came from. The serial backend refuses a
+PlatformIO build until it can flash one: pytest-embedded's `IdfSerial` flashes the files of
+`flasher_args.json`.
+
+**Rejected:** `pio run -t envdump` or `pio run -t idedata` for the offsets and the chip, because
+they need PlatformIO in the test environment, are slow, and may reach the network to install a
+platform. Also rejected: looking up `boot_app0.bin` in `~/.platformio/packages` to write the
+otadata, because what is found there depends on the machine and the platform's version, so two
+hosts would run different flashes from one build; and writing a `flasher_args.json` into the
+PlatformIO build, a converter, which
+[explicit build paths](#explicit-build-paths-are-relative-to-the-application-and-never-fall-back)
+rule out: the test runs the artifact it selected, unmodified. Also rejected: `firmware.bin` in
+`factory`, else in `ota_0`, the partition the bootloader starts from with the otadata erased,
+because a real build runs from `ota_0`: Arduino-ESP32's `app3M_fat9M_fact512k_16MB.csv` and the
+m5stack factory tables keep a launcher in a `factory` partition, 512 KiB in the first, and the
+application in `ota_0`, so that rule would run the application from another partition than a
+board does, with another running partition and OTA target, and refuse the factory image
+pioarduino built; and at the first application partition of the table, which no platform does.
+platformio's own espressif32 flashes `firmware.bin` at the board's `upload.offset_address`,
+`0x10000` by default; that setting is not in the build directory, so esp32tl follows pioarduino.

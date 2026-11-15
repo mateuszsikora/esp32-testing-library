@@ -963,7 +963,7 @@ def test_bluetooth_asked_for_after_power_on_says_so_before_anything_else() -> No
     backend._bluetooth = Bluetooth()
     backend.process = cast(Any, object())
     backend._supply = True
-    backend.app = cast(Any, SimpleNamespace(elf_file=None, binary_path="/b/build"))
+    backend.app = cast(Any, SimpleNamespace(elf=None, directory=Path("/b/build")))
     with pytest.raises(SourceError) as late:
         backend._get_bluetooth()
     assert str(late.value) == (

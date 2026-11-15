@@ -38,6 +38,11 @@ request no flash encryption. Encrypted firmware needs provisioning and key/efuse
 this backend does not implement or validate; it is deliberately outside this milestone. No runner or
 ROM ELF is needed for serial.
 
+A PlatformIO build, which esp32sim runs ([builds](builds-user.md)), is refused before the port
+opens: `serial: {build} is a PlatformIO build, which the serial backend does not flash yet: run it
+on esp32sim`. pytest-embedded's `IdfSerial` flashes the files of `flasher_args.json`, which a
+PlatformIO build does not have.
+
 pytest-embedded's `IdfSerial` flashes during fixture setup, before the test body, unless its
 session cache reuses the app or `--skip-autoflash y` is set. esp32tl never flashes a second time.
 Flashing replaces the device's current firmware. For iteration on a board already carrying it:

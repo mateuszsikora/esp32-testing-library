@@ -1,0 +1,269 @@
+"""The build a backend runs, in esp32tl's own terms: the files of the flash at their offsets, where
+the partition table is, the application image, its ELF and the chip it is for.
+
+`load` reads it from one of two kinds of build directory. An ESP-IDF build is what `idf.py build`
+leaves, read through pytest-embedded-idf's `IdfApp`: its `flasher_args.json` gives the files and
+their offsets, the `partition-table` and `app` entries, and `config/sdkconfig.json` the target. A
+PlatformIO build is `.pio/build/<env>/`, which has no `flasher_args.json`: its files are read by
+name, at the offsets pioarduino's espressif32 platform flashes them at, and the chip comes from
+the images' own headers. Nothing in either directory is written, renamed or converted.
+"""
+
+from dataclasses import dataclass
+from pathlib import Path
+
+from pytest_embedded_idf.app import IdfApp
+
+from esp32tl import flash
+
+ESP_IDF = "esp-idf"
+PLATFORMIO = "platformio"
+
+# The files of a PlatformIO build the backend reads, by name. firmware.factory.bin is the whole
+# flash from 0x0, which pioarduino's builds have; boot_app0.bin, the otadata the platform flashes
+# beside the others, is in the framework's package, not in the build.
+FIRMWARE = "firmware.bin"
+FACTORY = "firmware.factory.bin"
+BOOTLOADER = "bootloader.bin"
+PARTITIONS = "partitions.bin"
+ELF = "firmware.elf"
+
+# Where the classic ESP32's bootloader and the partition table are in the flash: ESP-IDF's
+# defaults, and the offsets the espressif32 platform flashes bootloader.bin and partitions.bin at.
+BOOTLOADER_OFFSET = 0x1000
+TABLE_OFFSET = 0x8000
+# The longest partition table ESP-IDF writes, its MD5 record included.
+TABLE_SIZE = 0xC00
+TABLE_MAGIC = b"\xaa\x50"
+# Where pioarduino flashes firmware.bin, and puts it in firmware.factory.bin: at the start of the
+# table's ota_0 (type 0, app; subtype 0x10), or at 0x10000 in a table without one
+# (_parse_partitions in its builder/main.py).
+APP = 0
+OTA_0_SUBTYPE = 0x10
+APP_OFFSET = 0x10000
+
+# An image header (esp_image_header_t): the magic byte, and the chip id at bytes 12 and 13 of its
+# extended part, little-endian.
+IMAGE_MAGIC = 0xE9
+HEADER_SIZE = 24
+CHIP_ID_AT = 12
+# ESP-IDF's esp_chip_id_t, by IDF target name.
+CHIPS = {
+    0: "esp32",
+    2: "esp32s2",
+    5: "esp32c3",
+    9: "esp32s3",
+    12: "esp32c2",
+    13: "esp32c6",
+    16: "esp32h2",
+    18: "esp32p4",
+    20: "esp32c61",
+    23: "esp32c5",
+}
+CLASSIC = "esp32"
+
+
+class BuildError(Exception):
+    """What keeps a build from being run, said so that the reader knows what to do."""
+
+
+@dataclass(frozen=True)
+class FlashFile:
+    """A file of the build, written into the flash at `offset`."""
+
+    offset: int
+    path: Path
+
+
+@dataclass(frozen=True)
+class Build:
+    """A finished, unencrypted build for the classic ESP32.
+
+    `directory` is the build directory, absolute; `kind` is `ESP_IDF` or `PLATFORMIO`.
+    `flash_files` go into the flash in order, a later one over an earlier one where they overlap.
+    `partition_table` is the table's offset in the flash, `None` for an ESP-IDF build whose
+    `flasher_args.json` names none. `app_image` is the application image whose SHA-256 a
+    recording's `app_sha256` holds, `None` when the build names none; `elf` is the application's
+    ELF, `None` when the build has none. `chip` is the IDF target name of the chip it is for.
+    """
+
+    directory: Path
+    kind: str
+    flash_files: tuple[FlashFile, ...]
+    partition_table: int | None
+    app_image: Path | None
+    elf: Path | None
+    chip: str
+
+    def read(self, offset: int, size: int) -> bytes:
+        """Up to `size` bytes of the flash at `offset`, from the last file that holds `offset`; to
+        the end of that file at most. Raises `BuildError` when no file holds it, and `OSError` when
+        the file cannot be read."""
+        for file in reversed(self.flash_files):
+            length = file.path.stat().st_size
+            if file.offset <= offset < file.offset + length:
+                with file.path.open("rb") as image:
+                    image.seek(offset - file.offset)
+                    return image.read(size)
+        raise BuildError(f"no file of {self.directory} is flashed at {offset:#x}")
+
+    def table(self) -> bytes:
+        """The partition table's bytes, as the build flashes them."""
+        if self.partition_table is None:
+            raise BuildError(f"{self.directory}/flasher_args.json names no partition table")
+        return self.read(self.partition_table, TABLE_SIZE)
+
+
+def load(app_path: str, directory: Path, *, backend: str = "esp32sim") -> Build:
+    """The build in `directory`, absolute, of the application in `app_path`: ESP-IDF's when it
+    holds `flasher_args.json`, else PlatformIO's when it holds `firmware.bin` or
+    `firmware.factory.bin`. `backend` names the backend in the errors."""
+    if (directory / "flasher_args.json").is_file():
+        return esp_idf(app_path, directory, backend)
+    if (directory / FIRMWARE).is_file() or (directory / FACTORY).is_file():
+        return platformio(directory, backend)
+    raise BuildError(
+        f"{directory} holds no ESP-IDF or PlatformIO build: no flasher_args.json and no {FIRMWARE}"
+    )
+
+
+def esp_idf(app_path: str, directory: Path, backend: str) -> Build:
+    """An ESP-IDF build, through `IdfApp`. The directory is given as an absolute path: given
+    `build`, `IdfApp` would fall back to a `build` directory in the working directory."""
+    app = IdfApp(app_path, build_dir=str(directory))
+    if app.target != CLASSIC:
+        raise BuildError(f"{directory} is built for {app.target}; {backend} runs the classic esp32")
+    if app.flash_settings.get("encrypt"):
+        reason = (
+            "the runner does not do" if backend == "esp32sim" else f"{backend} does not support"
+        )
+        raise BuildError(f"{directory} asks for flash encryption, which {reason}")
+    missing = [f.file_path for f in app.flash_files if not Path(f.file_path).is_file()]
+    if missing:
+        raise BuildError(f"{directory} is not a finished build, missing {', '.join(missing)}")
+    image = app.flash_args.get("app", {}).get("file")
+    table = app.flash_args.get("partition-table", {}).get("offset")
+    return Build(
+        directory=directory,
+        kind=ESP_IDF,
+        flash_files=tuple(FlashFile(f.offset, Path(f.file_path)) for f in app.flash_files),
+        partition_table=int(table, 0) if table is not None else None,
+        app_image=directory / image if image else None,
+        elf=Path(app.elf_file) if app.elf_file else None,
+        chip=app.target,
+    )
+
+
+def platformio(directory: Path, backend: str) -> Build:
+    """A PlatformIO build: `firmware.factory.bin` at 0x0 when it is there; else `bootloader.bin` at
+    0x1000, `partitions.bin` at 0x8000 and `firmware.bin` where pioarduino flashes it
+    (`app_partition`), with the otadata left erased."""
+    firmware, factory = directory / FIRMWARE, directory / FACTORY
+    if factory.is_file():
+        needed = [firmware]
+    else:
+        needed = [directory / BOOTLOADER, directory / PARTITIONS, firmware]
+    missing = [str(path) for path in needed if not path.is_file()]
+    if missing:
+        raise BuildError(f"{directory} is not a finished build, missing {', '.join(missing)}")
+    # The application's header first: it is at the start of firmware.bin for every chip, while an
+    # S3's or a C3's bootloader is at 0x0, so this names the chip rather than a bootloader missing
+    # at 0x1000.
+    check_image(firmware, header(firmware, 0), "application image", directory, backend)
+    if factory.is_file():
+        files: tuple[FlashFile, ...] = (FlashFile(0, factory),)
+        table_file = factory
+    else:
+        table_file = directory / PARTITIONS
+        app = app_partition(table_file, table_file.read_bytes()[:TABLE_SIZE], firmware)
+        files = (
+            FlashFile(BOOTLOADER_OFFSET, directory / BOOTLOADER),
+            FlashFile(TABLE_OFFSET, table_file),
+            FlashFile(app.offset, firmware),
+        )
+    elf = directory / ELF
+    build = Build(
+        directory=directory,
+        kind=PLATFORMIO,
+        flash_files=files,
+        partition_table=TABLE_OFFSET,
+        app_image=firmware,
+        elf=elf if elf.is_file() else None,
+        chip=CLASSIC,
+    )
+    bootloader = files[0].path if factory.is_file() else directory / BOOTLOADER
+    check_image(
+        bootloader,
+        flash_bytes(build, BOOTLOADER_OFFSET, HEADER_SIZE),
+        f"bootloader at {BOOTLOADER_OFFSET:#x}",
+        directory,
+        backend,
+    )
+    if flash_bytes(build, TABLE_OFFSET, len(TABLE_MAGIC)) != TABLE_MAGIC:
+        raise BuildError(
+            f"{table_file} holds no partition table at {TABLE_OFFSET:#x}: no 0xAA50 there"
+        )
+    if factory.is_file():
+        # firmware.bin is what a recording's app_sha256 names: the factory image must hold it
+        # where pioarduino's merge put it, or the run would be of another application than that.
+        app = app_partition(factory, build.table(), firmware)
+        image = firmware.read_bytes()
+        if flash_bytes(build, app.offset, len(image)) != image:
+            raise BuildError(
+                f"{factory} does not hold {FIRMWARE} at {app.offset:#x}, in the partition"
+                f" {app.name!r}: build again"
+            )
+    return build
+
+
+def app_partition(path: Path, table: bytes, firmware: Path) -> flash.Partition:
+    """The application partition of `table`, read from the file at `path`, that `firmware` goes
+    in: the one at the start of the table's first `ota_0`, or at 0x10000 without one, where
+    pioarduino flashes it. With the otadata `boot_app0.bin` writes, the bootloader boots `ota_0`;
+    with it erased, it tries `factory` first and goes on to the OTA slots when that holds no
+    image. The partition must hold the whole of `firmware`."""
+    try:
+        found = flash.partitions(table)
+    except ValueError as error:
+        raise BuildError(f"{path}: {error}") from error
+    apps = [p for p in found.values() if p.type == APP]
+    ota_0 = next((p for p in apps if p.subtype == OTA_0_SUBTYPE), None)
+    offset = ota_0.offset if ota_0 is not None else APP_OFFSET
+    app = next((p for p in apps if p.offset == offset), None)
+    if app is None:
+        raise BuildError(
+            f"{path}: {FIRMWARE} goes at {offset:#x}, where the table has no application partition"
+        )
+    size = firmware.stat().st_size
+    if size > app.size:
+        raise BuildError(
+            f"{firmware} is {size} bytes, more than the {app.size} of the partition {app.name!r}"
+            f" at {app.offset:#x}"
+        )
+    return app
+
+
+def flash_bytes(build: Build, offset: int, size: int) -> bytes:
+    """`build.read(offset, size)`, or no bytes when no file of the build holds `offset`."""
+    try:
+        return build.read(offset, size)
+    except BuildError:
+        return b""
+
+
+def header(path: Path, offset: int) -> bytes:
+    """The bytes of an image header at `offset` of the file at `path`."""
+    with path.open("rb") as image:
+        image.seek(offset)
+        return image.read(HEADER_SIZE)
+
+
+def check_image(path: Path, data: bytes, what: str, directory: Path, backend: str) -> None:
+    """Refuses `data`, which should be the header of `what` in the file at `path`, when it is
+    none, or one for another chip than the classic ESP32."""
+    if len(data) < HEADER_SIZE or data[0] != IMAGE_MAGIC:
+        raise BuildError(f"{path} holds no {what}: no 0xE9 there")
+    chip_id = int.from_bytes(data[CHIP_ID_AT : CHIP_ID_AT + 2], "little")
+    if chip_id != 0:
+        chip = CHIPS.get(chip_id, f"an unknown chip (chip id {chip_id})")
+        raise BuildError(f"{directory} is built for {chip}; {backend} runs the classic esp32")

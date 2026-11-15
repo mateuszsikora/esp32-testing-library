@@ -156,6 +156,7 @@ A lower bound, at least `AT_LEAST_S` of wall time, only grows on a slow host, an
 | `tests/test_boards.py` | The board profiles esp32tl ships, the profile schema's refusals, the capability declaration and the requests it refuses | The package installed |
 | `tests/test_firmware_build.py` | `firmware/build.sh` run against a fake `docker` and a fake `idf.py` that record how they were called; the `requires_docker` marker | Neither Docker nor ESP-IDF; milliseconds |
 | `tests/test_firmware_images.py` | The `hello_world`, `nmea_reader`, `gpio_echo`, `sdspi`, `sd_remount`, `nvs_reader`, `persistence`, `ota_state`, `modem_recovery`, `pppos_client`, `mqtt_session`, `http_request`, `http_server` and `bt_spp_initiator` images as `make firmware` built them: target `esp32`, bootloader at `0x1000`, partition table at `0x8000`, app at `0x10000`, the ELF; `nmea_reader`'s UART settings, `gpio_echo`'s pins, `sdspi`'s SD card pins and `http_request`'s default Wi-Fi SSID and passphrase in their `sdkconfig` | The built images |
+| `tests/test_platformio_build.py` | PlatformIO build directories ([builds](../features/builds-technical.md#tests)): made of synthetic images, the files at the platform's offsets or `firmware.factory.bin` at `0x0`, the partition table, the hash, the ELF, the chip check, every refusal, serial's refusal, `board.nvs` and `board.flash`'s table; made of built images, `nvs_reader` run with and without `firmware.factory.bin` through `@pytest.mark.app_path(".", build_dir=".pio/build/esp32")`, and `esp32tl run --build-dir` on `hello_world` | Nothing beyond the package for the synthetic ones; the built `nvs_reader` and `hello_world` images, the runner and the ROM ELF for the runs |
 | `tests/test_flash.py` | Partition tables, NVS value validation, blobs above 64 KiB, UTF-8 page boundaries and CRCs, real generator, pre-boot overrides and errors; reading NVS and OTA data from a snapshot: a round trip through the generator, and pages written by hand for page order, the state bitmap, repeated entries and what a power cut leaves | Python dependencies only |
 | `tests/test_flash_snapshot.py` | `board.flash()` on `persistence`: `boots` after a reset, after a power-off and after `RunEnded`, the board's time and turns unmoved, a partition's bytes, what it refuses, a run that left no file | The built `persistence` image, runner and ROM ELF |
 | `tests/test_ota_state.py` | `snapshot.ota()` against what `ota_state` prints, through an update and a rollback | The built `ota_state` image, runner and ROM ELF |
@@ -209,7 +210,9 @@ A missing image fails the tests that need it rather than skipping them:
 `<build> holds no finished build: run make firmware` from `tests/test_firmware_images.py`,
 the runs of `tests/test_cli.py`, the `pytester` tests of `tests/test_gnss_fixture.py` and
 `test_hello_world_fails_on_an_image_that_prints_something_else`,
-and the backend's `esp32sim: <build> holds no ESP-IDF build: no flasher_args.json` from
+`test_nvs_reader_built_by_platformio_runs_as_it_is` and `test_esp32tl_run_runs_a_platformio_build`
+in `tests/test_platformio_build.py`,
+and the backend's `esp32sim: <build> holds no ESP-IDF or PlatformIO build: no flasher_args.json and no firmware.bin` from
 `tests/test_hello_world.py`, `tests/test_nmea_reader.py`, `tests/test_nmea_reader_model.py`,
 `tests/test_gpio_echo.py`, `tests/test_modem_recovery.py`, `tests/test_sdspi.py`, `tests/test_sd_remount.py`, `tests/test_nvs_reader.py`, `tests/test_power.py`,
 `tests/test_http_request.py`, `tests/test_mqtt_session.py`, `tests/test_bt_spp_initiator.py`,

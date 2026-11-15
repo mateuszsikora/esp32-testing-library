@@ -3,7 +3,6 @@ the board stands still, after a reset, after a power-off and after the end of th
 `make firmware` (persistence)."""
 
 import hashlib
-from pathlib import Path
 
 import pytest
 
@@ -87,8 +86,7 @@ def test_a_partition_reads_as_the_whole_of_it_and_the_build_stays_as_it_was(
     board: Esp32Sim, console: Console
 ) -> None:
     built = {
-        f.offset: hashlib.sha256(Path(f.file_path).read_bytes()).hexdigest()
-        for f in board.app.flash_files
+        f.offset: hashlib.sha256(f.path.read_bytes()).hexdigest() for f in board.app.flash_files
     }
     board.power_on()
     console.expect_exact("persistence: done")
@@ -100,10 +98,9 @@ def test_a_partition_reads_as_the_whole_of_it_and_the_build_stays_as_it_was(
     # the app the runner flashed, at its offset
     factory = snapshot.partition("factory")
     app = next(f for f in board.app.flash_files if f.offset == 0x10000)
-    assert factory.startswith(Path(app.file_path).read_bytes())
+    assert factory.startswith(app.path.read_bytes())
     assert built == {
-        f.offset: hashlib.sha256(Path(f.file_path).read_bytes()).hexdigest()
-        for f in board.app.flash_files
+        f.offset: hashlib.sha256(f.path.read_bytes()).hexdigest() for f in board.app.flash_files
     }
 
 

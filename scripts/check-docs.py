@@ -227,6 +227,13 @@ FEATURES = [
         "Real source changed (the port, its stamps, the bound, what it refuses):"
         " update docs/features/real-source-*.md",
     ),
+    Rule(
+        "F26",
+        r"^esp32tl/build\.py$",
+        r"^docs/features/builds-",
+        "Build loading changed (the kinds of build, their files and offsets, the chip check):"
+        " update docs/features/builds-*.md",
+    ),
 ]
 
 # The catch-all for the package: the rest of sources/ and any new module are owned from their

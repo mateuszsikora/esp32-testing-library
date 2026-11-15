@@ -108,7 +108,8 @@ that references to its number keep their meaning.
 
 ## The esp32sim backend
 
-- **7.** The runner is given every file of the build's `flasher_args.json`, each at its offset.
+- **7.** The runner is given every file of an ESP-IDF build's `flasher_args.json`, each at its
+   offset; a PlatformIO build's files as 230 says.
    `tests/test_pytest_plugin.py::test_runner_command_flashes_every_file_at_its_offset`
 - **8.** The backend refuses a build that is missing, built for another chip than the classic ESP32,
    asks for flash encryption, or is unfinished.
@@ -1554,6 +1555,31 @@ that references to its number keep their meaning.
 - **118.** A change to `app_path`'s `build_dir` keyword after collection read it is refused, including
      an in-place mutation of the original marker.
      `tests/test_pytest_plugin.py::test_a_late_build_keyword_is_refused`
+- **230.** A PlatformIO build directory runs as it is: `firmware.factory.bin` alone at `0x0` when it
+     is there, which must hold `firmware.bin` where pioarduino put it, else `bootloader.bin` at
+     `0x1000`, `partitions.bin` at `0x8000` and `firmware.bin` where pioarduino flashes it: at the
+     table's `ota_0`, else at `0x10000`, the start of an application partition that holds it, also
+     when the table has a `factory` partition; nothing is written at the otadata; no file of the
+     directory is written, renamed or added.
+     `tests/test_platformio_build.py::test_a_build_without_a_factory_image_is_flashed_as_pioarduino_flashes_it`,
+     `tests/test_platformio_build.py::test_firmware_bin_goes_at_ota_0_as_pioarduino_flashes_it_even_with_a_factory_partition`,
+     `tests/test_platformio_build.py::test_where_firmware_bin_goes_must_be_an_application_partition_that_holds_it`,
+     `tests/test_platformio_build.py::test_a_factory_image_is_flashed_whole_from_0x0`,
+     `tests/test_platformio_build.py::test_a_factory_image_must_hold_firmware_bin_where_pioarduino_put_it`,
+     `tests/test_platformio_build.py::test_nvs_reader_built_by_platformio_runs_as_it_is`
+- **231.** The partition table `board.nvs` and `board.flash` read is the one at the offset the build
+     names, from the flash file that holds it: inside `firmware.factory.bin` too.
+     `tests/test_platformio_build.py::test_board_nvs_and_board_flash_find_the_table_of_either_build`,
+     `tests/test_flash.py::test_nvs_reports_missing_or_invalid_partition_table`
+- **232.** A PlatformIO build whose application or bootloader header names another chip than the
+     classic ESP32 is refused with that chip's name, on both backends; the serial backend refuses
+     any PlatformIO build before a port opens.
+     `tests/test_platformio_build.py::test_an_image_for_another_chip_is_refused_by_its_name`,
+     `tests/test_platformio_build.py::test_a_bootloader_for_another_chip_is_refused`,
+     `tests/test_platformio_build.py::test_serial_refuses_a_platformio_build`
+- **233.** A recording's `app_sha256` from a PlatformIO build is the hash of `firmware.bin`, with or
+     without `firmware.factory.bin`.
+     `tests/test_platformio_build.py::test_the_application_image_s_hash_is_firmware_bin_s`
 
 ## Resets and power cycles
 

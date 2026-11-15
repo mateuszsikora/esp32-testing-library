@@ -3,8 +3,12 @@
 ## Data flow
 
 1. `Esp32Sim.nvs(namespaces, partition="nvs")` in `esp32tl/backends/esp32sim.py` refuses a
-   powered board, then finds the one `partition-table.bin` in `IdfApp.flash_files`, which comes
-   from the build's `flasher_args.json`. It reads the table only when NVS is requested.
+   powered board, then reads the partition table where the build flashes it, `Build.table()`
+   ([builds](builds-technical.md#data-flow)): up to `0xC00` bytes at `Build.partition_table`, from
+   the last of the build's flash files that holds that offset. For an ESP-IDF build the offset is
+   that of the `partition-table` entry of `flasher_args.json`, and the file `partition-table.bin`;
+   for a PlatformIO build it is `0x8000`, in `partitions.bin` or in `firmware.factory.bin`. It
+   reads the table only when NVS is requested.
 2. `esp32tl.flash.partitions(table)` returns `Partition` records keyed by name. The backend
    resolves the requested name and requires type 1, subtype 2, flags 0.
 3. `flash.nvs_image(namespaces, size)` opens an NVS writer on `io.BytesIO` through
@@ -143,8 +147,9 @@ The backend raises `BackendError`:
 | Message | Cause |
 |---|---|
 | `board.nvs: write the flash before board.power_on()` | Runner already started |
-| `board.nvs: the build must flash one partition-table.bin` | None or more than one matching build file |
-| `board.nvs: cannot read PATH: ERROR` | File access or partition parsing failed |
+| `board.nvs: BUILD/flasher_args.json names no partition table` | An ESP-IDF build without a `partition-table` entry |
+| `board.nvs: no file of BUILD is flashed at OFFSET` | None of the build's flash files holds the table's offset |
+| `board.nvs: cannot read the partition table of BUILD at OFFSET: ERROR` | File access or partition parsing failed; `OFFSET` as `0x8000` |
 | `the build has no partition 'NAME': it has NAMES` | Unknown name, with every available name in table order |
 | `board.nvs: partition 'NAME' must be unencrypted, writable NVS` | Type/subtype is not data/NVS, or any flag is set |
 
@@ -165,7 +170,7 @@ Reading adds:
 | Raised | Message | Cause |
 |---|---|---|
 | `BoardOff` | `board.flash: read the flash after board.power_on(): until then it holds the build and the test's NVS` | Runner not started |
-| `BackendError` | `board.flash: the build must flash one partition-table.bin`, `board.flash: cannot read PATH: ERROR` | As for `board.nvs` |
+| `BackendError` | `board.flash: BUILD/flasher_args.json names no partition table`, `board.flash: no file of BUILD is flashed at OFFSET`, `board.flash: cannot read the partition table of BUILD at OFFSET: ERROR` | As for `board.nvs` |
 | `BackendError` | `board.flash: the runner cannot write the flash: ERROR` | `flash_dump_ack` with an `error` |
 | `BackendError` | `board.flash: the run left no flash to read: ERROR; its output is in LOG` | No file: a runner that crashed (exit 101), that never connected, or a read after `close` |
 | `ValueError` | `the build has no partition 'NAME': it has NAMES` | `partition` or `nvs` with an unknown name |
@@ -198,6 +203,10 @@ the final slot, and Unicode string/blob keys on the following page. The independ
 `tests/test_pytest_plugin.py::test_nvs_without_power_on_fails_teardown` covers the fixture guard.
 `tests/test_nvs_reader.py` boots the actual `nvs_reader` firmware and verifies all ten supported
 types, Unicode and quotes, two configurations and the rejection after power-on.
+`tests/test_platformio_build.py::test_board_nvs_and_board_flash_find_the_table_of_either_build`
+reads the table of a PlatformIO build from `partitions.bin` and from `firmware.factory.bin`, and
+`test_nvs_reader_built_by_platformio_runs_as_it_is` boots `nvs_reader` from both kinds of
+PlatformIO build with the test's NVS and reads it back with `board.flash()`.
 
 `tests/test_flash.py` also reads NVS: `test_a_round_trip_through_the_generator_reads_what_went_in`
 for all eight integer types, `test_a_blob_of_many_chunks_on_many_pages_round_trips`, and, on pages

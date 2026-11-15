@@ -14,9 +14,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from pytest_embedded_idf.app import IdfApp
-
 from esp32tl import __version__
+from esp32tl.build import Build
 from esp32tl.recording import Direction, Event, Header, Recording
 
 # The header's `source` for a route the test gave nothing at its far end: it heard what the
@@ -84,7 +83,7 @@ def sha256(path: str | os.PathLike[str]) -> str:
     return digest.hexdigest()
 
 
-def app_image_sha256(app: IdfApp) -> str | None:
-    """The app entry's binary hash on both backends, never an ELF or bootloader hash."""
-    app_bin = app.flash_args.get("app", {}).get("file")
-    return sha256(Path(app.binary_path or "") / app_bin) if app_bin else None
+def app_image_sha256(build: Build) -> str | None:
+    """The hash of the build's application image on both backends, never of an ELF or the
+    bootloader: ESP-IDF's `app` entry of `flasher_args.json`, PlatformIO's `firmware.bin`."""
+    return sha256(build.app_image) if build.app_image is not None else None

@@ -93,7 +93,8 @@ def test_the_help_names_run_and_replay(
         ),
         (
             ["run", "--app", "nowhere"],
-            f"esp32tl: {ROOT / 'nowhere' / 'build'} holds no ESP-IDF build: no flasher_args.json\n",
+            f"esp32tl: {ROOT / 'nowhere' / 'build'} holds no ESP-IDF or PlatformIO build:"
+            " no flasher_args.json and no firmware.bin\n",
         ),
         (
             [*REPLAY, "--interface", "modem", "--recording", str(RECORDING)],
@@ -197,7 +198,10 @@ Path({str(tmp_path / "loaded.json")!r}).write_text(json.dumps([
         timeout=30,
     )
     assert result.returncode == 2
-    assert f"{selected} holds no ESP-IDF build: no flasher_args.json" in result.stderr
+    assert (
+        f"{selected} holds no ESP-IDF or PlatformIO build: no flasher_args.json and no firmware.bin"
+        in result.stderr
+    )
     assert not (tmp_path / "loaded.json").exists()
     assert (default / "app.bin").read_bytes() == b"default"
 

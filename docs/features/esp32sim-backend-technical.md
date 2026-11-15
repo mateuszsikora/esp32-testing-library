@@ -20,14 +20,11 @@ which raises `SourceError`, when `None`; the `board` fixture passes pytest's ski
 without starting anything:
 
 1. **`load_app(app_path, build_dir=build_dir)`** resolves the selected directory against the app
-   (`build` when omitted), checks its `flasher_args.json` is a file, then builds
-   `IdfApp(app_path, build_dir=str(build))`. The build directory is absolute on purpose: given
-   `build`, `IdfApp` falls back to a `build` directory in the working directory when the app has
-   none. It then refuses a target other than `esp32` (`IdfApp.target`: `IDF_TARGET` in
-   `config/sdkconfig.json`; without that file, `extra_esptool_args.chip` in `flasher_args.json`;
-   `esp32` when neither names one, so a build with neither passes the check),
-   `flash_settings["encrypt"]` (any file marked `"encrypted": "true"`), and any of `app.flash_files`
-   that is not a file. The result is `Esp32Sim.app`.
+   (`build` when omitted) to an absolute path and reads it with `esp32tl.build.load`: an ESP-IDF
+   build through `IdfApp`, with its target, encryption and missing-file checks, or a PlatformIO
+   build by its file names and image headers ([builds](builds-technical.md#data-flow)). A
+   `BuildError` becomes a `BackendError` with the same message. The result, a `Build`, is
+   `Esp32Sim.app`.
 2. **`runner_path()`** and **`rom_path()`** resolve the runner and the ROM ELF
    ([Configuration](#configuration)).
 3. **The clock, the console and the log.** A `HeldClock` (`esp32tl/backends/clock.py`, below);
@@ -78,8 +75,9 @@ without starting anything:
    thread: the connections the test opened to the device are lost, and the device has no address
    until it takes one again ([network](network-technical.md#connections-the-test-opens)).
 
-**`Esp32Sim.nvs(namespaces, partition="nvs")`** reads the build's `partition-table.bin`
-from `app.flash_files`, resolves the name and generates a whole NVS image through
+**`Esp32Sim.nvs(namespaces, partition="nvs")`** reads the build's partition table with
+`Build.table()`, up to `0xC00` bytes from the last flash file that holds `app.partition_table`
+(`0x8000` in a PlatformIO build: `partitions.bin`, or inside `firmware.factory.bin`), resolves the name and generates a whole NVS image through
 `esp32tl.flash`. It writes `nvs-<offset in hex>.bin` beside `dut.logfile`, retaining it after
 teardown. `_nvs` keeps one `(offset, path)` per partition; a later successful call replaces it.
 `runner_command(..., extra_flash=())` appends those `--flash-at` arguments after every build file,
@@ -110,8 +108,9 @@ or `POWER_ON_UTC`, for `Esp32Sim.utc` and the GNSS receiver's dates, and logs
    runner starts, because the runner connects once (protocol §1).
 2. **`runner_command(runner, rom, app, HELD_MAX_SECONDS, link, held=True, psram_mb=profile.psram_mb)`** builds
    `[runner, "--chip", "esp32", "--rom", rom, "--max-seconds", "86400", "--console", "both", "--peer-timeout", "0", "--board", "socket:<link>", "--flash-at", "0x1000=<path>", ..., "--psram-mb", "<psram_mb>", "--flash-out", "<beside the link>/flash.bin"]`,
-   one `--flash-at {offset:#x}={file_path}` per entry of `app.flash_files`, which `IdfApp` sorts by
-   offset; the paths are absolute. `--psram-mb` is the board profile's `psram_mb`, `0` on
+   one `--flash-at {offset:#x}={path}` per entry of `app.flash_files`, in their order: an ESP-IDF
+   build's sorted by offset, as `IdfApp` sorts them, a PlatformIO build's `firmware.factory.bin` at
+   `0x0`, or `bootloader.bin`, `partitions.bin` and `firmware.bin`; the paths are absolute. `--psram-mb` is the board profile's `psram_mb`, `0` on
    `esp32-devkitc` and `4` on `lilygo-t-a7670g-r2`; a profile without `psram_mb` leaves the pair
    out, and the runner gives the chip no PSRAM, its default. The profile's `flash_mb` is not
    passed: the runner's flash is its default, 4 MiB. With a slot, `sd_card=` adds
@@ -121,7 +120,7 @@ or `POWER_ON_UTC`, for `Esp32Sim.utc` and the GNSS receiver's dates, and logs
    `--wifi ssid=<ssid>,chan=<channel>[,psk=<password>][,bssid=<bssid>]` and one
    `--wifi-nearby ssid=<ssid>,chan=<channel>,rssi=<dBm>,secure=<0|1>[,bssid=<bssid>]` per network
    around. With a `bluetooth` the test used (`Bluetooth.used`), `bluetooth=` adds
-   `--bt <app.elf_file>` after that. Without `held`, as the [`esp32tl` command](cli-user.md) calls
+   `--bt <app.elf>` after that. Without `held`, as the [`esp32tl` command](cli-user.md) calls
    it, the `--console` and `--peer-timeout` pairs are left out, and so is the card; the command
    passes its profile's `psram_mb` too. The runner's options are in
    [runner-user.md](runner-user.md).
@@ -340,8 +339,9 @@ cut at its start, rather than dropped. A log it cannot read gives
    does not read.
 6. `_write_taps()`: for every `Uart` whose `tapped` is set, `Tap.recording(board=profile.name,
    source=uart.source_kind or "none", clock=self.clock, app_sha256=..., tools=...)` written with
-   `recording.write` to the tap's path. `app_sha256` is the SHA-256 of the file `flasher_args.json`
-   names under `app`, `None` when it names none or the file cannot be read; `tools` holds
+   `recording.write` to the tap's path. `app_sha256` is the SHA-256 of `app.app_image`, the file
+   `flasher_args.json` names under `app` or a PlatformIO build's `firmware.bin`, `None` when the
+   build names none or the file cannot be read; `tools` holds
    `esp32sim`, the runner's `hello`'s revision, when the runner said one, and `Tap.recording` adds
    `esp32tl`. An `OSError` from the write, or a `RecordingError` from a recording the format
    refuses, is a problem of its own, `the tap of {interface} cannot be written: {error}`, and the
@@ -440,9 +440,9 @@ The code is `Popen.returncode`: the exit status, or minus the signal number.
 The link's messages are those of [the link protocol](../protocol.md), version 1, encoded and
 decoded by `esp32tl/link/protocol.py`.
 
-From the build, through `IdfApp`: `flasher_args.json` (`flash_files`, offset to path relative to
-`build/`; the `encrypted` field of the entries that name a file; `extra_esptool_args.chip` when
-there is no `sdkconfig.json`), `config/sdkconfig.json` (`IDF_TARGET`).
+From the build, the `Build` that `esp32tl.build.load` reads from an ESP-IDF or a PlatformIO build
+directory ([builds](builds-technical.md#schema)): its flash files with their offsets, the partition
+table's offset, the application image, the ELF and the chip.
 [validation-firmware-technical.md](validation-firmware-technical.md) describes the builds this
 repository makes.
 
@@ -450,7 +450,7 @@ repository makes.
 
 | Name | What |
 |---|---|
-| `Esp32Sim(dut, app_path, msg_queue, meta, profile, directory=None, skip=None, *, build_dir=None)` | The board, off. Attributes: `name = "esp32sim"`, `clock` (`"emulated-fifo-write"`, or `"wall"` with a real source on a route or a bridge on a network: the clock the runner's `hello` must name, a replayed recording must be on, and a tap's recording is on), `dut`, `profile` (the `BoardProfile`), `directory`, `app` (the `IdfApp`), `console_output` (a `bytearray`), `console_lines` (a `ConsoleLines`), `log` (the `RunLog`), `process` (the `RunnerPopen`, `None` until power-on), `link` (the `BoardLink`, complete once `close` returns) |
+| `Esp32Sim(dut, app_path, msg_queue, meta, profile, directory=None, skip=None, *, build_dir=None)` | The board, off. Attributes: `name = "esp32sim"`, `clock` (`"emulated-fifo-write"`, or `"wall"` with a real source on a route or a bridge on a network: the clock the runner's `hello` must name, a replayed recording must be on, and a tap's recording is on), `dut`, `profile` (the `BoardProfile`), `directory`, `app` (the `Build`), `console_output` (a `bytearray`), `console_lines` (a `ConsoleLines`), `log` (the `RunLog`), `process` (the `RunnerPopen`, `None` until power-on), `link` (the `BoardLink`, complete once `close` returns) |
 | `Esp32Sim.power_on(utc=None)` | The first time, starts the runner; after `power_off`, switches the supply back on (no `utc`); `BoardOff` with the supply on |
 | `Esp32Sim.power_off()`, `Esp32Sim.reset()` | The supply off; a pulse of EN. Both at the held clock's `now`, sent with the turn the link is held at; `BoardOff` when the board is not in the state they need, `RunEnded` once the run has ended |
 | `Esp32Sim.flash()` | A `FlashSnapshot` of the runner's flash at the board's time now, or as the run left it; `BoardOff` before the first `power_on` |
@@ -471,12 +471,12 @@ repository makes.
 | `nanoseconds(value, what)`, `seconds(ns)` | `esp32tl/backends/clock.py`: a `Duration` of the board's time to nanoseconds, checked; nanoseconds shown as `12.5 s`, as `str(Duration(ns))` |
 | `listen()` | The listening socket and its path, or `BackendError` |
 | `runner_path()`, `rom_path()` | The runner and the ROM ELF, or `BackendError` |
-| `load_app(app_path, *, build_dir=None, backend="esp32sim")` | The checked `IdfApp` of the selected directory (default `<app_path>/build`); `backend` chooses target/encryption error wording |
+| `load_app(app_path, *, build_dir=None, backend="esp32sim")` | The checked `Build` of the selected directory (default `<app_path>/build`), from `esp32tl.build.load`, its `BuildError` raised as `BackendError`; `backend` chooses target/encryption error wording |
 | `profile_uart(profile, interface, *, clock, directory, asked=..., log=None, files=None)` | The `Uart` on the route the profile gives `interface` (`uart.gnss`), at its pins and baud; `BackendError` when the profile has no such route. The [`esp32tl` command](cli-user.md) makes its UARTs with it |
 | `route_wire(profile, interface)` | The `Wire` of that route, or the same `BackendError`; `Esp32Sim` makes its `Uart`s and its `Gnss` on it |
 | `runner_command(runner, rom, app, max_seconds, link, *, held=False, psram_mb=None, sd_card=None, extra_flash=(), wifi=None, bluetooth=None, realtime=False, flash_out=None)` | The runner's argument list; with `psram_mb`, `--psram-mb` of that size; with an `SdCard` holding a card, the runner's card on its pins; with a `Wifi` holding an access point, `--wifi` and `--wifi-nearby`; with a `Bluetooth` the test used, `--bt` and the application's ELF; with `realtime`, `--realtime`; with `flash_out`, `--flash-out` |
 | `Esp32Sim.wifi` | The chip's `Wifi`, on the link from construction |
-| `Esp32Sim.bluetooth` | The chip's `Bluetooth`, on the link from construction; the first look asks `_asked` for `Request("bluetooth", source="model")`, which refuses after power-on, then checks `app.elf_file`, then calls `Bluetooth.use()`, which asks again |
+| `Esp32Sim.bluetooth` | The chip's `Bluetooth`, on the link from construction; the first look asks `_asked` for `Request("bluetooth", source="model")`, which refuses after power-on, then checks `app.elf`, then calls `Bluetooth.use()`, which asks again |
 | `RunnerPopen(msg_queue, cmd, meta)` | `DuplicateStdoutPopen` that closes its log when the start fails |
 | `refuse(reason)` | Raises `SourceError(reason)`: `Esp32Sim`'s `skip` outside pytest |
 | `ended_while_waiting(error)` | Whether `error`'s chain holds a `RunEnded` |
@@ -518,11 +518,8 @@ the first problem shows; the socket and the start come at `power_on()`, in the t
 |---|---|---|
 | `the board profile {name} has no {interface}; its interfaces are {interfaces}` | `Esp32Sim.uart` | The `gnss` fixture on a route the profile does not have; `{interfaces}` is `BoardProfile.interfaces`, comma-separated |
 | `the board profile {name} has no lines; its interfaces are {interfaces}` | `Esp32Sim.lines` | The `lines` fixture on a profile without `[lines.<role>]` sets |
-| `bluetooth: {build} holds no ELF of the application, whose symbols the runner's --bt needs` | `Esp32Sim.bluetooth` | `IdfApp.elf_file` is `None` or not a file: no `.elf` in the build directory |
-| `{build} holds no ESP-IDF build: no flasher_args.json` | `load_app` | No `build/flasher_args.json` in the app |
-| `{build} is built for {app.target}; esp32sim runs the classic esp32` | `load_app` | Target other than `esp32` |
-| `{build} asks for flash encryption, which the runner does not do` | `load_app` | A flash file marked encrypted |
-| `{build} is not a finished build, missing {', '.join(missing)}` | `load_app` | A file `flasher_args.json` lists does not exist |
+| `bluetooth: {build} holds no ELF of the application, whose symbols the runner's --bt needs` | `Esp32Sim.bluetooth` | `Build.elf` is `None` or not a file: no `.elf` in an ESP-IDF build directory, no `firmware.elf` in a PlatformIO one |
+| The messages of `esp32tl.build.load`, as `{build} holds no ESP-IDF or PlatformIO build: no flasher_args.json and no firmware.bin` and `{build} is built for {chip}; esp32sim runs the classic esp32` | `load_app` | The selected directory holds no build esp32sim runs ([builds](builds-technical.md#failure-modes)) |
 | `no runner at {path}: run make setup, or set ESP32TL_RUNNER` | `runner_path` | Not a file, or not executable |
 | `no ROM ELF at {path}: run make setup, or set ESP32TL_ROM` | `rom_path` | Not a file |
 | `cannot listen on {path}: {error.strerror}` | `listen`, from `Esp32Sim.power_on` | The socket cannot be bound |
@@ -553,15 +550,15 @@ In the test body:
 | `the run ended {when} while the test waited {what}: {reason}` | `RunEnded` | The run ended during, or before, a wait. `{when}` is `at {time}` from the runner's `stats`, `after the turn at {time}` without them, the last held turn being only a bound, or `before its first turn`. `{what}` is `until {time}` for `wait`, `for {description}` for `wait_until`, `for a wake from deep sleep` for `wait_for_wake`; `{reason}` is `[the link failed: {error}; ]the runner exited with code {code}; its last output:` and the tail |
 
 Times in these messages are `seconds(ns)`: seconds without trailing zeros, `1.5 s`, `0 s`.
-Anything else `IdfApp` raises, a `flasher_args.json` that is not JSON or has no `flash_files` for
-instance, is not a `BackendError` and fails the setup with its own traceback.
+Anything else `IdfApp` raises for an ESP-IDF build, a `flasher_args.json` that is not JSON or has
+no `flash_files` for instance, is not a `BackendError` and fails the setup with its own traceback.
 
 `load_app(app_path, build_dir=build_dir, backend="esp32sim")` is also used by serial with
 `backend="serial"`: its target and encryption errors name that backend. The default retains the
 runner-specific messages above. `Esp32Sim.app_sha256` is that hash, `None` when the build has none, for a tap's header and
-[the card cache](pytest-plugin-technical.md#the-card-cache). `app_image_sha256(app)` in `esp32tl/tap.py` hashes the app entry for
-both backends; no app entry returns `None`, and read failures raise `OSError` (tap writing catches
-those).
+[the card cache](pytest-plugin-technical.md#the-card-cache). `app_image_sha256(app)` in `esp32tl/tap.py` hashes `Build.app_image` for
+both backends; a build without one returns `None`, and read failures raise `OSError` (tap writing
+catches those).
 
 ## Tests
 
@@ -588,7 +585,8 @@ proving serial-only validation does not reach the simulator.
   `--wifi` without an access point, then `--wifi` and `--wifi-nearby` as `Wifi.runner_args()`
   gives them. `test_runner_command_forwards_the_guests_hci_once_the_test_uses_bluetooth`: no `--bt`
   for a `Bluetooth` the test has not used, then `--bt` and the fake build's `app.elf`.
-- `test_load_app_refuses_what_the_runner_cannot_run`: the four `load_app` messages.
+- `test_load_app_refuses_what_the_runner_cannot_run`: the four `load_app` messages of an ESP-IDF
+  build; `tests/test_platformio_build.py` those of a PlatformIO one ([builds](builds-technical.md#tests)).
 - `test_runner_and_rom_paths_name_what_is_missing`: both messages, a runner that is not
   executable, and the environment variables taking effect.
 - `test_rom_is_the_one_make_setup_fetches`: `ROM_RELEASE` and `ROM_ELF` equal `RELEASE=` and
