@@ -99,6 +99,22 @@ The `dev` extra, which `make setup` installs, adds the tools:
 Packaging: `hatchling` builds the wheel, which holds `esp32tl/` only, with the `esp32tl` console
 script (`esp32tl.cli:main`) and the `pytest11` entry point (`esp32tl.pytest_plugin`).
 
+The PyPI metadata in `pyproject.toml` links to the repository, documentation index and issue
+tracker. It identifies esp32tl as an alpha pytest plugin for embedded firmware testing on Linux
+and macOS; the exact native runtime targets are in [runtime installation](../features/runtime-user.md).
+`Requires-Python` remains `>=3.11`. Version classifiers list only the CI matrix's Python 3.11,
+3.13 and 3.14, alongside Python 3 and Python 3 only. Keywords cover ESP32, esp32sim, pytest,
+embedded firmware, simulation and testing. The author name comes from `LICENSE`, without an
+email address. The SPDX license expression remains `MIT`, with `LICENSE` included and no
+redundant license classifier. `README.md` is the distribution's Markdown description, so its
+repository links must be absolute URLs that also work on PyPI.
+
+For presentation changes, build into an empty output directory with `python -m build --outdir DIR`
+and run `python -m twine check --strict DIR/*`. Inspect the wheel's `.dist-info/METADATA` as well:
+Twine checks description rendering, not link targets or installation instructions. The
+[release workflow](../cicd.md#runtime-releases) publishes those verified distributions without
+rebuilding them; package installation still needs explicit `esp32tl runtime prepare`.
+
 ## Python and `.venv`
 
 `make` creates `.venv` with `python3`, after checking that it is 3.11 or newer:

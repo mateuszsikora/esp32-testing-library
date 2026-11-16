@@ -1,21 +1,32 @@
 # Installing the simulator runtime
 
+esp32tl is preparing its first PyPI release. The following PyPI installation commands apply
+**after publication**. Before then, use the [developer setup](../guides/development.md) to build
+from a checkout.
+
 Install Python 3.11 or newer, then, from your own project directory:
 
 ```sh
 python3 -m venv .venv
 . .venv/bin/activate
-python -m pip install /path/to/esp32tl-0.1.0-py3-none-any.whl
+python -m pip install esp32tl
 esp32tl runtime prepare
 pytest tests/
 ```
 
-Use a wheel from the same GitHub release as the runtime. No published release is required to
-build or validate the artifacts; downloading through the normal command requires the release to
-be published and accessible. The repository is public; draft assets still require publication before anonymous access.
-A separate `publish-pypi.yml` uploads the verified wheel and sdist after the GitHub release
-is published. Build your firmware beforehand and use `app_path` as
-shown in [Writing tests](../guides/writing-tests.md). Neither this command nor pytest builds it.
+Alternatively, download the `.whl` asset from a published
+[GitHub release](https://github.com/mateuszsikora/esp32-testing-library/releases) and install it
+with `python -m pip install` followed by the downloaded wheel's filename, then run
+`esp32tl runtime prepare`. The runtime comes from the matching `v<installed package version>`
+release. No published release is required to build or validate artifacts locally, but normal
+runtime preparation requires that release to be published and accessible; draft assets are not
+available anonymously. `publish-pypi.yml` uploads the same verified wheel and sdist after the
+GitHub release is published.
+
+Build your firmware beforehand and use `app_path` as shown in
+[Writing tests](../guides/writing-tests.md). Neither installation nor pytest builds it.
+SD card image operations also require mtools (`brew install mtools` on macOS,
+`sudo apt-get install mtools` on Debian/Ubuntu).
 
 The release matrix is Linux x86_64 with glibc (Ubuntu 22.04 or newer) and macOS arm64
 (macOS 15 or newer). Each release must pass the wheel/firmware smoke test on both GitHub-hosted
@@ -52,7 +63,7 @@ Errors distinguish `unsupported runtime platform`, `runtime missing`, `incompati
 `invalid runtime manifest`, `download failed`, and `invalid checksum or missing file`.
 Preparation exits 2 on failure. No automatic update or downgrade occurs.
 
-In consumer CI install the wheel and run `esp32tl runtime prepare` before pytest. Cache
+In consumer CI install esp32tl from PyPI (or a published release wheel) and run `esp32tl runtime prepare` before pytest. Cache
 `~/.cache/esp32tl` keyed by package version and OS/architecture (or set XDG_CACHE_HOME explicitly).
 The first run needs HTTPS access to GitHub and Espressif's GitHub release; later runs need neither
 Rust nor network access. Cache contents must be trusted just like installed executables.
@@ -75,10 +86,6 @@ Release maintainers: [the release workflow](../cicd.md#runtime-releases) builds 
 sdist/wheel once and tests that wheel on both native targets before creating a draft. Its
 `verified-release` artifact contains all six assets plus SHA256SUMS; neither ROM nor firmware
 is redistributed. `scripts/check-release.py` checks the exact asset set and manifest identities.
-
-After the first PyPI publication, `python -m pip install esp32tl==0.1.0` can replace the local
-wheel installation command above. Runtime preparation is still explicit and still downloads
-native binaries from the matching GitHub release, not from PyPI.
 
 The current esp32sim revision is `357b0e542dfe97d4c62ec4a15c01c4969164448c`. When changing it,
 update `esp32tl/runtime.py`, `runner/Cargo.toml` and `runner/Cargo.lock` together.

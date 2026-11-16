@@ -27,25 +27,42 @@ def test_moving_into_the_radius_turns_it_on(board, buzzer):
 
 ## Use in your own project
 
-With Python 3.11 or newer and a previously built firmware, install the wheel from the matching
-release and prepare its runtime explicitly:
+esp32tl is preparing its first PyPI release; the PyPI commands below are for use **after
+publication**, not a claim that a release is already available. The project is alpha software.
+
+With Python 3.11 or newer, install esp32tl from PyPI in your project directory, then explicitly
+prepare its simulator runtime:
 
 ```sh
 python3 -m venv .venv
 . .venv/bin/activate
-python -m pip install /path/to/esp32tl-0.1.0-py3-none-any.whl
+python -m pip install esp32tl
 esp32tl runtime prepare
 pytest tests/
 ```
 
-No checkout or Rust is needed. [Runtime installation](docs/features/runtime-user.md) covers
-release availability, the Linux x86_64 / macOS arm64 validation matrix, offline reuse and CI.
-[Writing tests](docs/guides/writing-tests.md) shows how to point tests at your firmware.
-The example below is the developer path, which also builds an example firmware.
+Build your firmware beforehand with ESP-IDF or PlatformIO: neither installation nor pytest builds
+it. [Writing tests](https://github.com/mateuszsikora/esp32-testing-library/blob/main/docs/guides/writing-tests.md)
+shows how to point tests at that build. No esp32tl checkout or Rust is needed for this path.
+
+Prebuilt runtimes support Linux x86_64 with glibc (Ubuntu 22.04 or newer) and macOS arm64
+(macOS 15 or newer). Windows, musl Linux and other architectures have no prebuilt runtime.
+SD card image operations additionally need mtools: `brew install mtools` on macOS or
+`sudo apt-get install mtools` on Debian/Ubuntu.
+
+As an alternative to PyPI, download the `.whl` asset from a published
+[GitHub release](https://github.com/mateuszsikora/esp32-testing-library/releases), install it with
+`python -m pip install` followed by the downloaded wheel's filename, then run
+`esp32tl runtime prepare`. Preparation downloads the runtime from `v<installed package version>`;
+that GitHub release must be published even when installing a wheel locally. Draft assets are not
+available anonymously. Before publication, use the developer path below.
+
+[Runtime installation](https://github.com/mateuszsikora/esp32-testing-library/blob/main/docs/features/runtime-user.md)
+covers version matching, offline reuse and CI.
 
 ## Your first green test
 
-This runs the tests of the [GPS alarm clock](https://github.com/mateuszsikora/esp32-testing-library/tree/main/examples/gps_alarm_clock/),
+This developer path builds the firmware and runs the tests of the [GPS alarm clock](https://github.com/mateuszsikora/esp32-testing-library/tree/main/examples/gps_alarm_clock/),
 a small ESP-IDF application that sounds a buzzer inside a radius of a destination.
 
 You need Python 3.11 or newer, Rust through [rustup](https://rustup.rs), Docker running, and network
