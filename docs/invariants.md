@@ -1819,3 +1819,8 @@ body; transport loss does not count as EOF. Metadata limits exclude their separa
 when a separator arrives in several packets. Chunked decoding consumes each chunk once, so
 many small chunks do not stall network callbacks through repeated decoding.
 `tests/test_net_http_client.py` enforces this.
+
+
+Both platform test callers must use the shared test workflow with their matching native build
+and firmware dependencies. `tests/test_shard.py::test_the_workflow_runs_every_shard` checks both
+callers as well as complete shard coverage after expanding the shared matrix.

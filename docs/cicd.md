@@ -1,7 +1,7 @@
 # CI
 
-For whoever changes [`.github/workflows/ci.yml`](../.github/workflows/ci.yml), its called build
-workflows (`build-firmware.yml`, `build-runner.yml`), or reads one of its
+For whoever changes [`.github/workflows/ci.yml`](../.github/workflows/ci.yml), its called
+workflows (`build-firmware.yml`, `build-runner.yml`, `test-platform.yml`), or reads one of its
 runs: what each job does, where it runs, and how the builds reach the test jobs. Why it is built
 this way, and what was rejected, is in [decisions/ci.md](decisions/ci.md). Running the same things
 locally is [guides/development.md](guides/development.md) and
@@ -16,6 +16,44 @@ A new push to a pull request cancels the run for the push before. On `main` ever
 own concurrency group and its own run, and nothing is cancelled: a shared group would keep at most
 one run waiting and cancel the others.
 
+## Public repository settings
+
+Verified and configured through the GitHub API on 15 November 2026. These are repository
+settings, not settings applied by the workflow files:
+
+- Fork workflow approval is `all_external_contributors`: a maintainer must approve runs
+  requiring approval from external contributors, including returning contributors. Before
+  approving, inspect the proposed workflow and the code it executes. See
+  [GitHub's fork approval policy](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/enabling-features-for-your-repository/managing-github-actions-settings-for-a-repository).
+- CI uses `pull_request`, not `pull_request_target`. Fork PRs receive a read-only token and
+  no repository secrets. All jobs use GitHub-hosted VMs; the repository has no registered
+  self-hosted runners. Do not register a machine with private network access for public CI.
+- The default workflow permission is `read`; Actions cannot approve pull requests.
+  Each CI workflow also declares `contents: read`. The repository allows all actions;
+  action tags are not required to be pinned to full commit SHAs.
+- Secret scanning, secret scanning push protection and Dependabot vulnerability alerts
+  are enabled. Dependabot automatic security-update PRs remain disabled.
+- `main` requires a pull request, zero approving reviews, resolved review conversations,
+  and all 25 CI checks from the GitHub Actions app (app ID `15368`). These are the eight
+  `firmware / firmware (...)` checks, `runner-linux / runner`, `runner-macos / runner`,
+  six `test-linux / test (...)` and six `test-macos / test (...)` checks, `determinism`,
+  `lint` and `docs`, matching the job matrix below. The 14 native-build and test context
+  names were updated for the separate platform calls; all 25 checks remain required.
+  Strict status checks require the branch to be up to date with `main`. Protection applies
+  to administrators too; force pushes and branch deletion are disabled. When renaming jobs
+  or changing matrix entries, update the required check names in branch protection as well.
+  GitHub accepts `success`, `skipped` and `neutral` check conclusions, so maintainers must
+  still review workflow changes that could skip checks.
+
+Fork PRs can restore base-branch build caches. Their new cache entries are scoped to
+`refs/pull/<number>/merge`; `main` and other PRs cannot restore them. Never put secrets in
+caches. See [GitHub's cache scope rules](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching).
+
+The audit found no repository Actions secrets and no secrets in the `pypi` environment.
+That environment currently has no deployment protection rules or branch restrictions; CI
+does not use it. Publishing authorization must be reviewed when adding a release workflow.
+This audit checked configuration; it did not execute a test PR from an external fork.
+
 ## Jobs
 
 GitHub-hosted macOS runners have no Docker, so the validation firmware is built once, in the
@@ -26,20 +64,27 @@ The test jobs then run only the runner and Python: they build nothing.
 | Job | Runs on | What it does |
 |---|---|---|
 | `firmware` | `ubuntu-24.04` (x64) | Eight parallel groups (`idf-1` to `idf-4`, `examples-1` to `examples-3`, `platformio`) once per content of `firmware/`, `examples/`, the build workflow and the `Makefile`, the Arduino image with PlatformIO's core directory restored from the cache; `idf-1` fetches the ROM ELF once per revision of `scripts/fetch-rom-elf` |
-| `runner` | `ubuntu-24.04` (x64); `macos-15` (ARM64) | `make build-runner test-runner`, once per content of `runner/` (its sources, its esp32sim pin, its toolchain), the build workflow and the `Makefile` |
-| `test` | `ubuntu-24.04` (x64); `macos-15` (ARM64); Python 3.11, 3.13, 3.14; pairs `1/4 4/4` and `2/4 3/4` | Unpacks the images and the runner, restores the ROM ELF, runs wall-clock tests sequentially, then two existing pytest shards concurrently; builds nothing |
+| `runner-linux`, `runner-macos` | `ubuntu-24.04` (x64); `macos-15` (ARM64) | `make build-runner test-runner`, once per content of `runner/` (its sources, its esp32sim pin, its toolchain), the build workflow and the `Makefile` |
+| `test-linux`, `test-macos` | `ubuntu-24.04` (x64); `macos-15` (ARM64); Python 3.11, 3.13, 3.14; pairs `1/4 4/4` and `2/4 3/4` | Unpacks the images and the runner, restores the ROM ELF, runs wall-clock tests sequentially, then two existing pytest shards concurrently; builds nothing |
 | `determinism` | `ubuntu-24.04` (x64); Python 3.11 | Unpacks the images and the runner as `test` does, and runs `make determinism`: the determinism tests twice, the two runs compared |
 | `lint` | `ubuntu-24.04` (x64); Python 3.11 | `make lint`, clippy included |
 | `docs` | `ubuntu-24.04` (x64); pull requests only | `make docs-check` against the pull request's base branch |
 
-`test` and `determinism` wait for every `firmware` group and both `runner` jobs. `lint` and `docs` need nothing from the
-other jobs. The `firmware`, `runner` and `test` matrices do not fail fast: one platform or Python version
-failing does not cancel the others.
+`test-linux` and `determinism` need only `firmware` and `runner-linux`; `test-macos` needs only
+`firmware` and `runner-macos`. The two native builds start independently of firmware and each
+other. A queued or failed macOS build does not block Linux tests or determinism, and the reverse
+holds for macOS tests. `lint` and `docs` have no build dependencies. The firmware and test matrices
+use `fail-fast: false`; one platform or Python version failing does not cancel another.
+
+Both native build calls use `build-runner.yml` with a required `platform` input. Both test calls
+use `test-platform.yml` with that platform and the exact firmware, ROM ELF and native-runner keys
+from their dependencies. The reusable workflow's `test` job expands only Python versions and
+shard pairs. The sections below use `runner` and `test` for these shared job definitions.
 
 ## Where the jobs run
 
-All Linux jobs use the standard `ubuntu-24.04` image (x64). The `runner` and `test`
-matrices always include `macos-15` (Apple Silicon, ARM64), including in private repositories.
+All Linux jobs use the standard `ubuntu-24.04` image (x64). The native build and test
+calls always include `macos-15` (Apple Silicon, ARM64), including in private repositories.
 These labels and architectures are listed for both repository visibilities in
 [GitHub's standard runner reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
 (checked 15 November 2026). No larger runners are used. Each job checks `RUNNER_OS`,
@@ -69,9 +114,9 @@ PlatformIO packages and all project build trees must fit on a standard hosted di
 images are pulled afresh. TODO(owner): measure peak disk use and cold-build duration on the
 hosted VM; the existing 60-minute firmware and 15-minute test limits remain unchanged.
 
-Private runs consume the account's hosted allowance and may incur charges. Publishing the
-repository needs no workflow switch: both platforms already run. Required checks / branch
-protection can be configured separately after publication.
+Private runs consume the account's hosted allowance and may incur charges. The repository is
+now public; publication needed no workflow switch because both platforms already ran.
+Branch protection is configured as described above.
 
 ## How the builds reach the test jobs
 
@@ -99,7 +144,7 @@ a miss only downloads them again.
 | Cache entry | Key | Saved by | A miss in `test` |
 |---|---|---|---|
 | `build/ci/firmware-<group>.tar` | `firmware-` and the hash of `firmware/**`, `examples/**`, `Makefile`, `.github/workflows/build-firmware.yml`, then the group suffix (`-idf-1` to `-idf-4`, `-examples-1` to `-examples-3`, `-platformio`) | Matching `firmware` matrix member | Fails the job if any group is missing |
-| `build/ci/runner.tar` | `runner-` and the hash of `runner/**`, `Makefile`, `.github/workflows/build-runner.yml`, then the runner's OS and architecture | `runner`, once per platform | Fails the job |
+| `build/ci/runner.tar` | `runner-` and the hash of `runner/**`, `Makefile`, `.github/workflows/build-runner.yml`, then the runner's OS and architecture | `runner-linux` or `runner-macos` | Fails the job |
 | `.cache/esp-rom-elfs` | `rom-elf-` and the hash of `scripts/fetch-rom-elf` | `firmware (idf-1)` | No failure: `make rom-elf` downloads the ELF |
 | `.cache/platformio`, without `dist/` and `tools/` | `platformio-` and the SHA-256 of the lines `CONTAINER=` and `PIOARDUINO_VERSION=` of `firmware/build-platformio.sh` and `platform =` of each `firmware/*/platformio.ini`, then the runner's OS and architecture | `firmware (platformio)`: restored when the firmware key misses, saved when the `platformio-` key missed too | Not restored there; a miss in `firmware` downloads PlatformIO Core, the platform, the framework and the toolchains again |
 
@@ -178,6 +223,9 @@ there rather than by all the test jobs at the same time. Timeout: 60 minutes per
 
 ## `runner`
 
+The shared job in `build-runner.yml` builds only the platform supplied by its caller; it has no
+platform matrix. Its output is consumed only by that platform's tests (and Linux determinism).
+
 On a cache miss, it installs rustup if it is missing (with no default toolchain: rustup installs the
 one `runner/rust-toolchain.toml` pins on the first build), runs `make build-runner test-runner`, and
 packs `runner/target/release/esp32tl-runner` into `build/ci/runner.tar`, which keeps its executable
@@ -189,6 +237,9 @@ the toolchain, the profiles, and whatever else cargo reads. A cold build takes u
 cargo's `runner/target/` is not cached. Timeout: 30 minutes.
 
 ## `test`
+
+The shared job in `test-platform.yml` runs six matrix entries per platform: three Python
+versions and two shard pairs. There are still twelve test VMs in the complete workflow.
 
 For each platform, Python version and shard pair: sets up Python with pip's cache keyed on
 `pyproject.toml`, restores eight firmware tarballs, the native runner tarball and the ROM ELF, unpacks the tarballs (the images land
@@ -211,6 +262,10 @@ logs and exit codes are printed, including when either shard fails; any nonzero 
 (including no tests collected) fails the job. Cleanup sends `SIGTERM` to both process groups, including groups whose pytest leader has
 already exited. It waits up to five seconds for the groups to disappear, then sends `SIGKILL`
 to any that remain, so descendants ignoring `SIGTERM` do not survive cancellation.
+Both serial pytest invocations and both parallel shards receive `--durations=30`. Each prints
+its 30 slowest setup, call or teardown phases in the job log. These are wall-clock measurements
+under that VM's load, not CPU profiles; use repeated runs before changing shard assignments.
+No test selection, timeout or pass/fail rule changes with this reporting flag.
 "Re-run failed jobs" re-runs the pair. Timeout stays 15 minutes; no pytest timeout is relaxed.
 
 Paired pytest temporary roots are created under `/tmp` with a short `e32-pair-` prefix,
@@ -252,9 +307,8 @@ make docs-check BASE="$BASE"    # env: BASE: origin/${{ github.base_ref }}
 ```
 
 It builds nothing and needs nothing from the other jobs. What the check enforces, and why it is not
-a pre-commit hook, is in [guides/documentation.md](guides/documentation.md#the-check). While the
-repository is private, no job is a required check: GitHub's free plan offers no branch protection
-for private repositories, so a red `docs` job does not stop a merge by itself.
+a pre-commit hook, is in [guides/documentation.md](guides/documentation.md#the-check).
+The public repository requires this check on pull requests through `main` branch protection.
 
 ## See also
 
@@ -284,10 +338,56 @@ must be measured separately; hosted queue time counts toward the 10-minute targe
 
 ## Cache invalidation boundaries
 
-`ci.yml` calls `build-firmware.yml` and `build-runner.yml` through `workflow_call`. The called
-workflows own all build preparation, commands, packing and cache saving, and expose the same
-base keys as before. Each key hashes its entire build workflow, the Makefile and source trees;
+`ci.yml` calls `build-firmware.yml`, `build-runner.yml` and `test-platform.yml` through
+`workflow_call`. The two build workflows own all build preparation, commands, packing and cache
+saving, and expose the same base keys as before. Each key hashes its entire build workflow, the Makefile and source trees;
 firmware still includes all `firmware/**` and `examples/**`, and the native runner all `runner/**`.
-A change to test pairing, Python setup or the test wrapper does not invalidate build outputs.
-A change to build commands, pins, packaging or the build matrix does invalidate them. No manual
+A change to `test-platform.yml`, test pairing, Python setup or the test wrapper does not
+invalidate build outputs.
+A change to build commands, pins, packaging or the build workflow does invalidate them. No manual
 cache version or stale-build fallback is used. The split incurs a one-time cache miss.
+
+
+Splitting the native build matrix into two calls changes `build-runner.yml`, causing one native
+cache miss per platform. The firmware build workflow, cache keys, tarball transport and
+architecture suffixes are unchanged. The test workflow receives the matching platform's base
+key and appends `runner.os` and `runner.arch`, preserving exact architecture-specific restores.
+
+The final pre-split PR run [43760305678](https://github.com/mateuszsikora/esp32-testing-library/actions/runs/43760305678)
+passed in 16m36s despite hitting all build caches. Firmware was ready at 1m07s, but the macOS
+native build started at 4m19s and ran for seven seconds; all Linux tests consequently started
+around 4m28s. Separate dependencies remove that cross-platform barrier. They do not remove
+macOS scheduling delays or establish a new whole-workflow time before a hosted measurement.
+
+
+## Five-macOS-job measurement
+
+CI retains six test jobs per platform. An experiment at `da54942` combined both macOS
+Python 3.11 pairs on one VM, running `1/4 4/4` before `2/4 3/4`, to avoid allocating a sixth
+macOS test VM. The other OS/Python combinations and all build inputs were unchanged.
+The experiment was rejected because it did not demonstrate a whole-workflow speedup.
+
+These manual GitHub Actions runs used the same firmware and native-runner cache keys, with
+all build caches hit. Elapsed time is from workflow creation to the last job's completion,
+including queues. Job-seconds sum the macOS test jobs' execution times, including setup;
+they are not billed minutes or a price estimate.
+
+| Layout and run | Commit | Whole CI | Last macOS test job started | macOS test job-seconds |
+|---|---|---|---|---|
+| Six jobs, [first control](https://github.com/mateuszsikora/esp32-testing-library/actions/runs/43769968112) | `b79fe18` | 8m36s | 4m37s | 1657 |
+| Five jobs, [experiment](https://github.com/mateuszsikora/esp32-testing-library/actions/runs/43771329988) | `da54942` | 8m14s | 25s | 1507 |
+| Six jobs, [second control](https://github.com/mateuszsikora/esp32-testing-library/actions/runs/43772184650) | `b79fe18` | 7m24s | 3m23s | 1472 |
+
+The first control overlapped other repository CI runs. The experiment and second control
+ran sequentially, without other repository CI runs active. Five jobs avoided the queue, but
+the combined job took 7m50s and determined completion. It was 22 seconds faster than the first
+control and 50 seconds slower than the second. The second control also used fewer macOS
+job-seconds. This small sample does not establish typical performance; it gives no evidence
+that serializing another pair reliably improves the elapsed-time target.
+
+All three runs passed the same 2320 tests and skipped the same one hardware-only GNSS test
+on each of Linux x64 and macOS ARM64 with Python 3.11, 3.13 and 3.14. Determinism and lint
+passed. The `docs` job is skipped on `workflow_dispatch`; `make docs-check` was run locally.
+These are warm-cache measurements, not fresh firmware-build timings or a five-minute guarantee.
+The six-job matrix, test commands, cache strategy and 25 required check contexts remain unchanged.
+See [the decision](decisions/ci.md#retain-six-macos-test-jobs-after-measuring-five).

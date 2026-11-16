@@ -1,0 +1,121 @@
+# Shared test steps; ci.yml gives each platform its own build dependencies.
+name: Test platform
+on:
+  workflow_call:
+    inputs:
+      platform:
+        description: Native platform (linux or macos).
+        required: true
+        type: string
+      firmware-key:
+        description: Exact base key for the eight firmware caches.
+        required: true
+        type: string
+      rom-elf-key:
+        description: ROM ELF cache key.
+        required: true
+        type: string
+      runner-key:
+        description: Native runner base key; each VM adds its OS and architecture.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.13", "3.14"]
+        # Four unchanged shards, paired to reduce VM setup and scheduling.
+        pair: ["1/4 4/4", "2/4 3/4"]
+    runs-on: ${{ inputs.platform == 'macos' && 'macos-15' || 'ubuntu-24.04' }}
+    timeout-minutes: 15
+    steps:
+      - name: Check host architecture
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then
+            test "$RUNNER_ARCH" = ARM64
+            test "$(uname -m)" = arm64
+          else
+            test "$RUNNER_OS" = Linux
+            test "$RUNNER_ARCH" = X64
+            test "$(uname -m)" = x86_64
+          fi
+
+      - uses: actions/checkout@v7
+
+      - id: python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - uses: ./.github/actions/restore-firmware
+        with:
+          key: ${{ inputs.firmware-key }}
+
+      - uses: actions/cache/restore@v6
+        with:
+          path: build/ci/runner.tar
+          key: ${{ inputs.runner-key }}-${{ runner.os }}-${{ runner.arch }}
+          fail-on-cache-miss: true
+
+      # A miss is no failure: `make rom-elf` downloads the ELF then.
+      - uses: actions/cache/restore@v6
+        with:
+          path: .cache/esp-rom-elfs
+          key: ${{ inputs.rom-elf-key }}
+
+      # The images land in firmware/<image>/build/, firmware/<image>/.pio/build/esp32dev/
+      # and examples/<name>/build/, where test_firmware_images.py reads them;
+      # esp32tl-built marks them finished.
+      - name: Unpack and check the runner
+        run: |
+          tar -xf build/ci/runner.tar
+          runner/target/release/esp32tl-runner --help
+
+      # `make setup` less build-runner: the runner came from the runner job.
+      - run: make PYTHON='${{ steps.python.outputs.python-path }}' .venv/.installed rom-elf
+
+      # Docker Engine is supplied by ubuntu-24.04; start it explicitly and
+      # check access as the job user (the build scripts do not use sudo).
+      - name: Prepare Docker
+        if: runner.os == 'Linux'
+        run: |
+          command -v docker
+          sudo systemctl start docker
+          docker info
+
+      # mtools makes and reads the FAT images of the SD card tests, which skip
+      # without it: here it must be there, so that they run. Homebrew installs
+      # it on macOS; apt installs it on each fresh Linux VM.
+      - name: mtools
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then
+            brew install mtools
+          else
+            sudo apt-get update
+            sudo apt-get install -y mtools
+          fi
+          for tool in mformat mcopy mdir mtype mmd; do
+            command -v "$tool" >/dev/null || {
+              echo "::error::no $tool on PATH: install mtools on this runner (apt-get install mtools)"
+              exit 1
+            }
+          done
+
+      - name: Run both test shards
+        env:
+          SHARDS: ${{ matrix.pair }}
+        run: |
+          read -r first second <<< "$SHARDS"
+          # Wall-clock bounds need the VM without a competing pytest shard.
+          for shard in "$first" "$second"; do
+            .venv/bin/pytest --shard="$shard" tests/test_real_source.py --durations=30
+          done
+          .venv/bin/python .github/scripts/test-pair.py "$first" "$second" \
+            --ignore=tests/test_real_source.py --durations=30

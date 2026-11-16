@@ -3,6 +3,27 @@
 Why `.github/workflows/ci.yml` runs its jobs where it does, how builds reach the test jobs, and
 what each job runs.
 
+## Public fork runs require approval from all external contributors
+
+Status: decided (15 November 2026)
+
+After publication, the repository uses `all_external_contributors` for fork workflow
+approval. GitHub-hosted VMs isolate contributor code from the maintainer's machines;
+approval additionally limits unsolicited compute use by returning contributors. This
+revisits the earlier rejection of universal fork approval recorded under the superseded
+self-hosted migration decision. A previous merged contribution does not permanently grant
+unattended CI execution. The read-only token and `pull_request` trigger remain unchanged.
+
+Public `main` protection requires PRs and all 25 existing CI checks, bound to the GitHub
+Actions app, with strict up-to-date checks and administrator enforcement. No approving
+review is required, so a solo maintainer can merge their own PR after CI. Force pushes and
+deletion are disabled, and review conversations must be resolved. Repository settings and
+their verification date are recorded in [CI](../cicd.md#public-repository-settings).
+
+**Rejected:** approval only for first-time contributors, because one accepted contribution
+would remove the approval gate for subsequent fork runs. Requiring one approving review
+would prevent the solo maintainer from merging their own work without another reviewer.
+
 ## Every Linux job runs on the self-hosted runner hp600g1
 
 Status: superseded (#48)
@@ -480,3 +501,60 @@ alive when the leader exited first. Cleanup now monitors the process groups them
 then send `SIGKILL` to any remaining groups. Missing groups are harmless. Waiting only for the
 leader or omitting groups of reaped leaders is insufficient because tests deliberately create
 runners that ignore or block `SIGTERM`. Regressions cover both leader states at cancellation.
+
+
+## Each platform waits only for its own native runner
+
+Status: decided (15 November 2026)
+
+Run 43760305678 passed in 16m36s with every build cache hit. Firmware completed 67 seconds after
+creation, and the Linux native build completed at 35 seconds. The macOS native build queued
+until second 259, then took seven seconds. The shared runner matrix held back Linux tests and
+determinism until both native builds finished, even though their inputs were already ready.
+
+`ci.yml` now calls `build-runner.yml` separately as `runner-linux` and `runner-macos`, passing
+`platform`. Each build starts immediately and exposes its own key. `test-linux` and determinism
+need firmware and `runner-linux`; `test-macos` needs firmware and `runner-macos`. Both test calls
+share `test-platform.yml`, which owns the unchanged Python and shard-pair matrix and test setup.
+Queued or failed builds on the other platform do not block a platform's tests. Both platforms
+remain mandatory, with the same labels, architectures, assertions and failure propagation.
+
+The entire native build workflow remains in its cache hash, so this edit causes one native
+rebuild per architecture. Firmware keys and exact tarball restores do not change. Test workflow
+edits remain outside both build keys. Every pytest invocation in `test-platform.yml` reports
+`--durations=30` for later balancing decisions; determinism keeps its existing pytest arguments
+without duration reporting. This change does not rebalance or remove tests. Existing decisions
+to pair shards, isolate wall-clock tests, and run every commit on main remain in effect.
+
+**Rejected:** duplicating all test steps for each platform, which would let dependency setup or
+assertions drift. Removing the build dependency and hoping its cache exists would introduce a
+race. A platform matrix on the reusable build call still gates dependants on the entire matrix;
+separate calls give each consumer the dependency it actually needs. No new cache transport,
+compiler cache, or main-branch cancellation policy is introduced in this change.
+
+
+## Retain six macOS test jobs after measuring five
+
+Status: decided (16 November 2026)
+
+Keep two independent shard-pair jobs per Python version on macOS, as on Linux. The experiment
+at `da54942` combined macOS Python 3.11's two pairs on one VM, sequentially, to avoid the sixth
+VM's queue. It preserved every test, both platforms, all three Python versions, two concurrent
+pytest processes per pair, serial wall-clock tests and failure propagation. Builds and their
+cache keys were unchanged. The experiment did not land on main.
+
+The [hosted measurements](../cicd.md#five-macos-job-measurement) used warm caches throughout:
+six-job control 43769968112 finished in 8m36s, five-job experiment 43771329988 in 8m14s,
+and repeated six-job control 43772184650 in 7m24s. The first control overlapped other repository
+CI; the experiment and repeated control did not. All runs retained 2320 passes and the same
+one hardware-only skip per OS/Python combination. Determinism and lint passed; manual dispatch
+skipped the PR-only documentation job, which was checked locally.
+
+**Rejected:** retaining the five-VM layout. Avoiding the queue made the combined job the critical
+path at 7m50s. A 22-second improvement over the first control did not survive the second control:
+the experiment was then 50 seconds slower and used 1507 macOS test job-seconds versus 1472.
+There is no demonstrated speed or machine-time gain to justify the extra matrix exception,
+sequential pair and required-check migration. These few runs do not establish a statistical
+performance claim; retain the simpler existing layout unless new measurements justify a change.
+Branch protection keeps all 25 checks. No test timeout, assertion, skip policy, cache transport
+or main-branch cancellation policy changes as a result of this experiment.

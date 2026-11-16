@@ -9,6 +9,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 
 | Decision | File | Status |
 |---|---|---|
+| [Public fork runs require approval from all external contributors](ci.md#public-fork-runs-require-approval-from-all-external-contributors) | `ci.md` | decided (15 November 2026) |
 | [Every Linux job runs on the self-hosted runner hp600g1](ci.md#every-linux-job-runs-on-the-self-hosted-runner-hp600g1) | `ci.md` | superseded (#48) |
 | [The macOS jobs run only once the repository is public](ci.md#the-macos-jobs-run-only-once-the-repository-is-public) | `ci.md` | superseded (#52) |
 | [The runs-on label is computed from the platform](ci.md#the-runs-on-label-is-computed-from-the-platform) | `ci.md` | superseded (#52) |
@@ -33,6 +34,8 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Firmware builds run in three parallel groups](ci.md#firmware-builds-run-in-three-parallel-groups) | `ci.md` | superseded (15 November 2026) |
 | [Firmware families are sharded to shorten the critical path](ci.md#firmware-families-are-sharded-to-shorten-the-critical-path) | `ci.md` | decided (15 November 2026) |
 | [Test shards share VMs and build workflows own their cache inputs](ci.md#test-shards-share-vms-and-build-workflows-own-their-cache-inputs) | `ci.md` | decided (15 November 2026) |
+| [Each platform waits only for its own native runner](ci.md#each-platform-waits-only-for-its-own-native-runner) | `ci.md` | decided (15 November 2026) |
+| [Retain six macOS test jobs after measuring five](ci.md#retain-six-macos-test-jobs-after-measuring-five) | `ci.md` | decided (16 November 2026) |
 
 ## Documentation and the documentation check
 
