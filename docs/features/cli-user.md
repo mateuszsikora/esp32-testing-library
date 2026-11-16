@@ -91,7 +91,7 @@ lines (`esp32tl-runner: ...`, [the runner](runner-user.md)) and, once the run ha
 
 ```
 esp32tl: board esp32-devkitc, watching GPIO 4, GPIO 5
-esp32tl: runner: protocol version 1, esp32sim 3bdb9582a910974e4e025d274d6ec61e5c481be6, clock emulated-fifo-write; 4 turns taken by the harness
+esp32tl: runner: protocol version 1, esp32sim 357b0e542dfe97d4c62ec4a15c01c4969164448c, clock emulated-fifo-write; 4 turns taken by the harness
 esp32tl: stats: the run ended at 3.500000000 s (max_seconds); 4 turns, 0 resets
 esp32tl:   UART1: 0 bytes sent, 208 received, 0 rxfifo_ovf, 0 frm_err
 esp32tl:   unrouted_rx_bytes 0, inputs_on_output 0, inputs_not_applied 0, rx_bytes_not_paced 0

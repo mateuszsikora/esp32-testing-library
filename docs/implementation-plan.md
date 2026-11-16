@@ -40,7 +40,7 @@ Each item names the fact, where it was checked, and what changes.
 4. **Guest reset needs no inference.** The spec's fallback for the missing reset callback is to
    infer a reset from the board being re-attached. In the runner, the run loop is ours: `run`
    returns `Stop::SwReset`, we call `reboot()`, which returns the reset cause as a `u32`
-   (`esp-soc/src/machine.rs:306`), and we send `reset` with that cause to the peer ourselves.
+   (`esp-soc/src/machine.rs:309`), and we send `reset` with that cause to the peer ourselves.
    *Amendment:* the "infer from re-attach" fallback is dropped. If #325 lands with
    `guest_reset`, the message is produced by the trait instead; the peer sees the same message.
 
@@ -217,7 +217,7 @@ whatever happens upstream (finding 10).
 |---|---|---|
 | both | `hello` | `version`, `chip`, `clock` (`emulated-fifo-write` or `wall`); the harness adds `board` (the runner does not know the profile, its board is the socket) |
 | runner → harness | `uart_tx` | `seq`, `t`, `port`, `tx_pins`, `baud`, `data` (base64). The trait fires per byte; the runner coalesces consecutive bytes on one route into one message, `t` being the first byte's, and flushes at the latest at the block point of rule 1 and on any route change |
-| runner → harness | `uart_cfg` *ext* | `seq`, `t`, `port`, `tx_pins`, `rx_pin`, `baud`: sent when a route's configuration changes, so a peer on a receive-only route (the GNSS case: the firmware never transmits) learns the baud instead of trusting the profile; a mismatch is otherwise a silent `FRM_ERR`. The runner reads `bus.periph.uart_route(port)` (public, `esp32/src/periph.rs:921`) in `advance_to` and sends the message when the result changes. `baud` and `rx_pin` are `null` until the firmware configures them; that is the valid initial state, not an error |
+| runner → harness | `uart_cfg` *ext* | `seq`, `t`, `port`, `tx_pins`, `rx_pin`, `baud`: sent when a route's configuration changes, so a peer on a receive-only route (the GNSS case: the firmware never transmits) learns the baud instead of trusting the profile; a mismatch is otherwise a silent `FRM_ERR`. The runner reads `bus.periph.uart_route(port)` (public, `esp32/src/periph.rs:939`) in `advance_to` and sends the message when the result changes. `baud` and `rx_pin` are `null` until the firmware configures them; that is the valid initial state, not an error |
 | runner → harness | `gpio_out` | `seq`, `t`, `changes: [[pin, level]]`, `enabled`, `output` |
 | runner → harness | `reset` | `seq`, `t`, `cause` |
 | runner → harness | `sync` | `t` (how far emulated time has advanced) |
@@ -278,7 +278,7 @@ ending a run with `stats`. Its sections 6.1 and 11 say why.*
   `next_deadline` is the minimum of three: the next paced byte, the peer's `quiet_until`, and
   `t_first_unacked + latency`. The third one matters when the core sleeps in WFI waiting for an
   answer (the common case with a modem): the classic bus folds the board deadline into its own
-  (`esp32/src/soc.rs:106-112`) and `idle_budget` skips the idle core only that far, so without it
+  (`esp32/src/soc.rs:121-130`) and `idle_budget` skips the idle core only that far, so without it
   the emulator would jump to the next timer, past `t_req + latency`, and an answer stamped there
   (rule 2) would arrive late. The board deadline counts only while `pins_active`, which the
   capabilities cached at `attach_board_devices` set and `SocketBoard` enables through
@@ -286,12 +286,12 @@ ending a run with `stats`. Its sections 6.1 and 11 say why.*
 - Time units: the protocol speaks nanoseconds, the trait `VirtualCycle`. `bus.cycles()` runs at a
   fixed reference independent of the momentary CPU clock (`tick` scales through
   `cpu_scale_half`, `esp32/src/bus.rs:642`; `Machine::seconds` divides by `S::CPU_HZ`,
-  `esp-soc/src/machine.rs:166`), so `ns = cycles × 10⁹ / CPU_HZ` holds for the whole run,
+  `esp-soc/src/machine.rs:169`), so `ns = cycles × 10⁹ / CPU_HZ` holds for the whole run,
   including across the XTAL to PLL switch at boot. `docs/protocol.md` states the formula and
   where `CPU_HZ` comes from (`esp32::periph::CPU_HZ`), so a peer in another language need not
   discover it.
 - Owns the run loop: `run` → on `Stop::SwReset` send `reset` with the cause `reboot()` returns,
-  continue; `Stop::Halted` (reached `max_cycles`, `esp-soc/src/machine.rs:589`) is the normal end
+  continue; `Stop::Halted` (reached `max_cycles`, `esp-soc/src/machine.rs:592`) is the normal end
   after `--max-seconds`, as is `stop` from the peer. Every other `Stop` variant
   (`esp-soc/src/soc.rs:9`: `MaxInsns`, `Breakpoint`, `Unimplemented`, `Simcall`, `Ebreak`,
   `Watch`, `Exceptions`, `CostModel`, `CostModelLifecycle`) ends the run with `stats`, the variant
@@ -608,7 +608,7 @@ PWRKEY and RI lines and the tap stay as described here.*
 
 - Wi-Fi: the runner exposes esp32sim's `--wifi`/`--wifi-nearby`/`--net` through
   `m.bus.attach_wifi(cfg, nat)` and `StationLink`, both public (the CLI calls them on the classic
-  machine from another crate, `cli/src/lib.rs:554`, `esp-soc/src/wifi.rs:490`); the `wifi`
+  machine from another crate, `cli/src/lib.rs:587`, `esp-soc/src/wifi.rs:531`); the `wifi`
   fixture configures them and puts link events on the scenario timeline. Validation: an IDF
   example that joins and fetches from a local server. *Update, 2026-11-02:* done in #31, with
   section 11's network instead of esp32sim's: the runner's `--wifi` and `--wifi-nearby`, the
@@ -619,7 +619,7 @@ PWRKEY and RI lines and the tap stay as described here.*
   `protocols/http_request`, unmodified, is the validation
   ([decisions](decisions/runner.md#the-network-behind-the-access-point-is-the-peers-over-the-link)).
 - SD card, main path: a card model implementing `spi_transfer_pins` in the runner's board. The
-  classic SPI bus calls it when `uses_spi_pins()` is true (`esp32/src/spi.rs:541-549`) and
+  classic SPI bus calls it when `uses_spi_pins()` is true (`esp32/src/bus.rs:552-560`) and
   `SpiPins.cs` carries the select mask, so a transfer-level card model is feasible without a core
   change. The FAT image is prepared with `mtools` (`brew install mtools` on macOS; not installed
   here today). The remaining risk is `sdspi`'s DMA path (`SDSPI_DEFAULT_DMA`), which esp32sim

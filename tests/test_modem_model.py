@@ -304,7 +304,7 @@ def test_the_real_link_routes_uart_and_gpio_without_duplicate_owners(tmp_path: P
     modem.power_on()
     link = BoardLink(LILYGO.name, [modem, lines])
     link.receive(
-        RunnerHello(1, "esp32", "emulated-fifo-write", "3bdb9582a910974e4e025d274d6ec61e5c481be6")
+        RunnerHello(1, "esp32", "emulated-fifo-write", "357b0e542dfe97d4c62ec4a15c01c4969164448c")
     )
     assert link.receive(Sync(0))[-1] == Wait(0, None, LATENCY_NS)
     link.receive(UartCfg(1, 0, 1, (26,), 27, 115200))
