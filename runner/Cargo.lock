@@ -4,8 +4,8 @@ version = 4
 
 [[package]]
 name = "emu-core"
-version = "0.3.0"
-source = "git+https://github.com/mikroverk/esp32sim?rev=3bdb9582a910974e4e025d274d6ec61e5c481be6#3bdb9582a910974e4e025d274d6ec61e5c481be6"
+version = "0.4.0"
+source = "git+https://github.com/mikroverk/esp32sim?rev=357b0e542dfe97d4c62ec4a15c01c4969164448c#357b0e542dfe97d4c62ec4a15c01c4969164448c"
 
 [[package]]
 name = "errno"
@@ -19,16 +19,16 @@ dependencies = [
 
 [[package]]
 name = "esp-periph"
-version = "0.3.0"
-source = "git+https://github.com/mikroverk/esp32sim?rev=3bdb9582a910974e4e025d274d6ec61e5c481be6#3bdb9582a910974e4e025d274d6ec61e5c481be6"
+version = "0.4.0"
+source = "git+https://github.com/mikroverk/esp32sim?rev=357b0e542dfe97d4c62ec4a15c01c4969164448c#357b0e542dfe97d4c62ec4a15c01c4969164448c"
 dependencies = [
  "emu-core",
 ]
 
 [[package]]
 name = "esp-soc"
-version = "0.3.0"
-source = "git+https://github.com/mikroverk/esp32sim?rev=3bdb9582a910974e4e025d274d6ec61e5c481be6#3bdb9582a910974e4e025d274d6ec61e5c481be6"
+version = "0.4.0"
+source = "git+https://github.com/mikroverk/esp32sim?rev=357b0e542dfe97d4c62ec4a15c01c4969164448c#357b0e542dfe97d4c62ec4a15c01c4969164448c"
 dependencies = [
  "emu-core",
  "esp-periph",
@@ -36,8 +36,8 @@ dependencies = [
 
 [[package]]
 name = "esp32"
-version = "0.3.0"
-source = "git+https://github.com/mikroverk/esp32sim?rev=3bdb9582a910974e4e025d274d6ec61e5c481be6#3bdb9582a910974e4e025d274d6ec61e5c481be6"
+version = "0.4.0"
+source = "git+https://github.com/mikroverk/esp32sim?rev=357b0e542dfe97d4c62ec4a15c01c4969164448c#357b0e542dfe97d4c62ec4a15c01c4969164448c"
 dependencies = [
  "emu-core",
  "esp-periph",
@@ -99,8 +99,8 @@ dependencies = [
 
 [[package]]
 name = "xtensa-lx7"
-version = "0.3.0"
-source = "git+https://github.com/mikroverk/esp32sim?rev=3bdb9582a910974e4e025d274d6ec61e5c481be6#3bdb9582a910974e4e025d274d6ec61e5c481be6"
+version = "0.4.0"
+source = "git+https://github.com/mikroverk/esp32sim?rev=357b0e542dfe97d4c62ec4a15c01c4969164448c#357b0e542dfe97d4c62ec4a15c01c4969164448c"
 dependencies = [
  "emu-core",
 ]

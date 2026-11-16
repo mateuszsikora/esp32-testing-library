@@ -14,7 +14,7 @@ from pathlib import Path
 
 from esp32tl import __version__
 
-SIM_REV = "3bdb9582a910974e4e025d274d6ec61e5c481be6"
+SIM_REV = "357b0e542dfe97d4c62ec4a15c01c4969164448c"
 ROM = "esp32_rev300_rom.elf"
 ROM_SHA = "920b70635440517866aab2230964a570d2cf2b676658d93c52fbac108c1cca31"
 ROM_ARCHIVE_SHA = "921f000164a421c7628fbfee55b173384aafaa51883adc65cd27bf9b0af9e9a9"

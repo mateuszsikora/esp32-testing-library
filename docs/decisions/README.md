@@ -35,6 +35,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Firmware families are sharded to shorten the critical path](ci.md#firmware-families-are-sharded-to-shorten-the-critical-path) | `ci.md` | decided (15 November 2026) |
 | [Test shards share VMs and build workflows own their cache inputs](ci.md#test-shards-share-vms-and-build-workflows-own-their-cache-inputs) | `ci.md` | decided (15 November 2026) |
 | [Each platform waits only for its own native runner](ci.md#each-platform-waits-only-for-its-own-native-runner) | `ci.md` | decided (15 November 2026) |
+| [Retain six macOS test jobs after measuring five](ci.md#retain-six-macos-test-jobs-after-measuring-five) | `ci.md` | decided (16 November 2026) |
 | [Release runtime builds use GitHub-hosted runners](ci.md#release-runtime-builds-use-github-hosted-runners) | `ci.md` | decided |
 | [One Python distribution is tested with both release runners](ci.md#one-python-distribution-is-tested-with-both-release-runners) | `ci.md` | decided |
 | [PyPI publishes the distributions of the published GitHub release](ci.md#pypi-publishes-the-distributions-of-the-published-github-release) | `ci.md` | decided |
@@ -309,7 +310,8 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 
 | Decision | File | Status |
 |---|---|---|
-| [esp32sim is pinned at the merge commit of the classic VHCI PSRAM fix](runner.md#esp32sim-is-pinned-at-the-merge-commit-of-the-classic-vhci-psram-fix) | `runner.md` | decided (#180) |
+| [esp32sim is pinned at the merge commit of the virtual SoftAP station](runner.md#esp32sim-is-pinned-at-the-merge-commit-of-the-virtual-softap-station) | `runner.md` | decided (15 November 2026) |
+| [esp32sim is pinned at the merge commit of the classic VHCI PSRAM fix](runner.md#esp32sim-is-pinned-at-the-merge-commit-of-the-classic-vhci-psram-fix) | `runner.md` | superseded (15 November 2026) |
 | [esp32sim is pinned at the merge commit of the Bluetooth Classic enable](runner.md#esp32sim-is-pinned-at-the-merge-commit-of-the-bluetooth-classic-enable) | `runner.md` | superseded (#180) |
 | [esp32sim is pinned at the merge commit of the deep-sleep timer wake](runner.md#esp32sim-is-pinned-at-the-merge-commit-of-the-deep-sleep-timer-wake) | `runner.md` | superseded (#34) |
 | [esp32sim is pinned at the merge commit of the chip-revision fix](runner.md#esp32sim-is-pinned-at-the-merge-commit-of-the-chip-revision-fix) | `runner.md` | superseded (#35) |

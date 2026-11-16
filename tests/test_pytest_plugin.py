@@ -795,9 +795,9 @@ def test_runner_and_rom_paths_name_what_is_missing(
 
 # $FAKE_EXIT KILL: killed by SIGKILL, as by the OOM killer. $FAKE_RAN, when set, is a file the
 # runner appends to when it starts.
-FAKE_RUNNER = """#!/bin/sh
+FAKE_RUNNER = f"""#!/bin/sh
 if [ "$1" = "--runtime-version" ]; then
-    echo "0.1.0 3bdb9582a910974e4e025d274d6ec61e5c481be6"
+    echo "{esp32tl.__version__} {runtime.SIM_REV}"
     exit 0
 fi
 [ -z "$FAKE_RAN" ] || echo started >> "$FAKE_RAN"

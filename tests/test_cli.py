@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 from test_pytest_plugin import fake_build
 
-from esp32tl import cli
+from esp32tl import __version__, cli, runtime
 
 ROOT = Path(__file__).resolve().parent.parent
 HELLO_WORLD = ROOT / "firmware" / "hello_world"
@@ -314,9 +314,9 @@ def test_ctrl_c_ends_the_run_and_exits_130() -> None:
 
 # A runner that never connects: it writes its pid beside itself, says it is loading, and sleeps
 # for longer than `finished` waits for the command.
-LOADING_RUNNER = """#!/bin/sh
+LOADING_RUNNER = f"""#!/bin/sh
 if [ "$1" = "--runtime-version" ]; then
-    echo "0.1.0 3bdb9582a910974e4e025d274d6ec61e5c481be6"
+    echo "{__version__} {runtime.SIM_REV}"
     exit 0
 fi
 echo $$ > "$0.pid"
@@ -344,9 +344,9 @@ def test_ctrl_c_before_the_runner_connects_exits_130(tmp_path: Path) -> None:
 
 
 # A runner that says what it was given and exits without connecting.
-ARGS_RUNNER = """#!/bin/sh
+ARGS_RUNNER = f"""#!/bin/sh
 if [ "$1" = "--runtime-version" ]; then
-    echo "0.1.0 3bdb9582a910974e4e025d274d6ec61e5c481be6"
+    echo "{__version__} {runtime.SIM_REV}"
     exit 0
 fi
 echo "fake runner: $*" >&2

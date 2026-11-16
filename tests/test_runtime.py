@@ -4,6 +4,7 @@ import io
 import json
 import platform
 import tarfile
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -225,3 +226,24 @@ def test_selected_cache_file_still_requires_manifest(cached_runtime: Path, kind:
     path.write_text(json.dumps(info))
     with pytest.raises(esp32sim.BackendError, match="incompatible version"):
         esp32sim.runtime_path(kind)
+
+
+def test_runtime_revision_matches_runner_pins() -> None:
+    runner = Path(__file__).resolve().parents[1] / "runner"
+    cargo = tomllib.loads((runner / "Cargo.toml").read_text())
+    dependencies = [
+        dep
+        for dep in cargo["dependencies"].values()
+        if isinstance(dep, dict) and dep.get("git") == "https://github.com/mikroverk/esp32sim"
+    ]
+    assert dependencies
+    assert {dep["rev"] for dep in dependencies} == {runtime.SIM_REV}
+    lock = tomllib.loads((runner / "Cargo.lock").read_text())
+    sources = {
+        package["source"]
+        for package in lock["package"]
+        if package.get("source", "").startswith("git+https://github.com/mikroverk/esp32sim?")
+    }
+    assert sources == {
+        f"git+https://github.com/mikroverk/esp32sim?rev={runtime.SIM_REV}#{runtime.SIM_REV}"
+    }

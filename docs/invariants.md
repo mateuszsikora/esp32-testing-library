@@ -1848,3 +1848,10 @@ and cache manifests remain checked; `runtime.prepare()` still rejects an incompl
 installation. `tests/test_runtime.py::test_override_does_not_validate_replaced_cache_file`,
 `test_selected_cache_file_still_requires_checksum` and
 `test_selected_cache_file_still_requires_manifest` enforce these rules.
+
+## Runtime revision pins
+
+The runtime installer and every esp32sim dependency in `runner/Cargo.toml` and
+`runner/Cargo.lock` must name the same revision. Otherwise the installer would
+reject the runner built from this checkout.
+`tests/test_runtime.py::test_runtime_revision_matches_runner_pins` enforces this.

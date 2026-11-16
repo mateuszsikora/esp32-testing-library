@@ -79,3 +79,7 @@ is redistributed. `scripts/check-release.py` checks the exact asset set and mani
 After the first PyPI publication, `python -m pip install esp32tl==0.1.0` can replace the local
 wheel installation command above. Runtime preparation is still explicit and still downloads
 native binaries from the matching GitHub release, not from PyPI.
+
+The current esp32sim revision is `357b0e542dfe97d4c62ec4a15c01c4969164448c`. When changing it,
+update `esp32tl/runtime.py`, `runner/Cargo.toml` and `runner/Cargo.lock` together.
+`test_runtime_revision_matches_runner_pins` checks their agreement.

@@ -360,6 +360,38 @@ native build started at 4m19s and ran for seven seconds; all Linux tests consequ
 around 4m28s. Separate dependencies remove that cross-platform barrier. They do not remove
 macOS scheduling delays or establish a new whole-workflow time before a hosted measurement.
 
+## Five-macOS-job measurement
+
+CI retains six test jobs per platform. An experiment at `da54942` combined both macOS
+Python 3.11 pairs on one VM, running `1/4 4/4` before `2/4 3/4`, to avoid allocating a sixth
+macOS test VM. The other OS/Python combinations and all build inputs were unchanged.
+The experiment was rejected because it did not demonstrate a whole-workflow speedup.
+
+These manual GitHub Actions runs used the same firmware and native-runner cache keys, with
+all build caches hit. Elapsed time is from workflow creation to the last job's completion,
+including queues. Job-seconds sum the macOS test jobs' execution times, including setup;
+they are not billed minutes or a price estimate.
+
+| Layout and run | Commit | Whole CI | Last macOS test job started | macOS test job-seconds |
+|---|---|---|---|---|
+| Six jobs, [first control](https://github.com/mateuszsikora/esp32-testing-library/actions/runs/43769968112) | `b79fe18` | 8m36s | 4m37s | 1657 |
+| Five jobs, [experiment](https://github.com/mateuszsikora/esp32-testing-library/actions/runs/43771329988) | `da54942` | 8m14s | 25s | 1507 |
+| Six jobs, [second control](https://github.com/mateuszsikora/esp32-testing-library/actions/runs/43772184650) | `b79fe18` | 7m24s | 3m23s | 1472 |
+
+The first control overlapped other repository CI runs. The experiment and second control
+ran sequentially, without other repository CI runs active. Five jobs avoided the queue, but
+the combined job took 7m50s and determined completion. It was 22 seconds faster than the first
+control and 50 seconds slower than the second. The second control also used fewer macOS
+job-seconds. This small sample does not establish typical performance; it gives no evidence
+that serializing another pair reliably improves the elapsed-time target.
+
+All three runs passed the same 2320 tests and skipped the same one hardware-only GNSS test
+on each of Linux x64 and macOS ARM64 with Python 3.11, 3.13 and 3.14. Determinism and lint
+passed. The `docs` job is skipped on `workflow_dispatch`; `make docs-check` was run locally.
+These are warm-cache measurements, not fresh firmware-build timings or a five-minute guarantee.
+The six-job matrix, test commands, cache strategy and 25 required check contexts remain unchanged.
+See [the decision](decisions/ci.md#retain-six-macos-test-jobs-after-measuring-five).
+
 ## Runtime releases
 
 `.github/workflows/runtime-release.yml` builds distribution assets independently of the main CI.
