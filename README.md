@@ -25,6 +25,24 @@ def test_moving_into_the_radius_turns_it_on(board, buzzer):
     board.wait_until(buzzer.is_on, within=seconds(2))
 ```
 
+## Use in your own project
+
+With Python 3.11 or newer and a previously built firmware, install the wheel from the matching
+release and prepare its runtime explicitly:
+
+```sh
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install /path/to/esp32tl-0.1.0-py3-none-any.whl
+esp32tl runtime prepare
+pytest tests/
+```
+
+No checkout or Rust is needed. [Runtime installation](docs/features/runtime-user.md) covers
+release availability, the Linux x86_64 / macOS arm64 validation matrix, offline reuse and CI.
+[Writing tests](docs/guides/writing-tests.md) shows how to point tests at your firmware.
+The example below is the developer path, which also builds an example firmware.
+
 ## Your first green test
 
 This runs the tests of the [GPS alarm clock](https://github.com/mateuszsikora/esp32-testing-library/tree/main/examples/gps_alarm_clock/),

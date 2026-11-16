@@ -486,8 +486,8 @@ repository makes.
 
 | Name | Value | Used by |
 |---|---|---|
-| `ESP32TL_RUNNER` | Path of the runner; unset or empty: `ROOT / "runner/target/release/esp32tl-runner"` | `runner_path()`; must be a file with execute permission |
-| `ESP32TL_ROM` | Path of the ROM ELF; unset or empty: `ROOT / ".cache/esp-rom-elfs" / ROM_RELEASE / ROM_ELF` | `rom_path()`; must be a file |
+| `ESP32TL_RUNNER` | Path of the runner; unset or empty: checkout release build, otherwise verified user cache | `runner_path()`; executable with matching version and esp32sim revision |
+| `ESP32TL_ROM` | Path of the ROM ELF; unset or empty: checkout ROM, otherwise verified user cache | `rom_path()`; pinned checksum required |
 | `ROOT` | `Path(__file__).resolve().parents[2]`: the checkout with an editable install, `site-packages` when installed from a wheel | the two defaults |
 | `ROM_RELEASE` | `"20241011"`, the esp-rom-elfs release `scripts/fetch-rom-elf` pins | `rom_path()` |
 | `ROM_ELF` | `"esp32_rev300_rom.elf"` | `rom_path()` |
@@ -520,8 +520,8 @@ the first problem shows; the socket and the start come at `power_on()`, in the t
 | `the board profile {name} has no lines; its interfaces are {interfaces}` | `Esp32Sim.lines` | The `lines` fixture on a profile without `[lines.<role>]` sets |
 | `bluetooth: {build} holds no ELF of the application, whose symbols the runner's --bt needs` | `Esp32Sim.bluetooth` | `Build.elf` is `None` or not a file: no `.elf` in an ESP-IDF build directory, no `firmware.elf` in a PlatformIO one |
 | The messages of `esp32tl.build.load`, as `{build} holds no ESP-IDF or PlatformIO build: no flasher_args.json and no firmware.bin` and `{build} is built for {chip}; esp32sim runs the classic esp32` | `load_app` | The selected directory holds no build esp32sim runs ([builds](builds-technical.md#failure-modes)) |
-| `no runner at {path}: run make setup, or set ESP32TL_RUNNER` | `runner_path` | Not a file, or not executable |
-| `no ROM ELF at {path}: run make setup, or set ESP32TL_ROM` | `rom_path` | Not a file |
+| `no runner at {path}: run make setup in a checkout, or esp32tl runtime prepare` | `runner_path` | Not a file, or not executable |
+| `no rom at {path}: run make setup in a checkout, or esp32tl runtime prepare` | `rom_path` | Not a file |
 | `cannot listen on {path}: {error.strerror}` | `listen`, from `Esp32Sim.power_on` | The socket cannot be bound |
 | `cannot start {command[0]}: {error.strerror}` | `Esp32Sim.power_on` | `OSError` from the start, for example `Exec format error` |
 | `the runner exited with code {code}; its output is in {self.dut.logfile}` | `Esp32Sim.close` | Exit code not 0; error at teardown, unless the call already failed on `RunEnded` |

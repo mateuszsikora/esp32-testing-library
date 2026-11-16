@@ -1835,3 +1835,34 @@ many small chunks do not stall network callbacks through repeated decoding.
 Both platform test callers must use the shared test workflow with their matching native build
 and firmware dependencies. `tests/test_shard.py::test_the_workflow_runs_every_shard` checks both
 callers as well as complete shard coverage after expanding the shared matrix.
+
+**Runtime integrity.** Installed runtimes match the Python version, full esp32sim revision and
+platform; ROM bytes match the pinned SHA-256. Archive links and path traversal are never
+extracted, failed preparations expose no installation, and explicit paths take precedence.
+`tests/test_runtime.py` enforces these rules; the wheel smoke test verifies offline firmware boot.
+
+**Release completeness.** A release contains exactly one version-matched wheel and sdist, and
+an executable/manifest pair for each native target. Missing assets, extra files, wrong manifest
+versions and corrupted executables fail assembly before SHA256SUMS is written.
+`tests/test_release.py` enforces this boundary.
+
+**Published release integrity.** PyPI publication verifies the tag against the package version
+and checks the existing SHA256SUMS without regenerating it. Changed wheel or sdist bytes, missing
+or altered sums, and a mismatched tag prevent publication. `tests/test_release.py` checks these
+cases and verifies that failed checks do not rewrite the published checksums.
+
+
+**Runtime selection independence.** An explicit runner combined with a cached ROM must work when
+the replaced cached runner is missing, corrupt or non-executable. An explicit ROM combined with
+a cached runner must work when the replaced cached ROM is missing or corrupt. Selected files
+and cache manifests remain checked; `runtime.prepare()` still rejects an incomplete or damaged
+installation. `tests/test_runtime.py::test_override_does_not_validate_replaced_cache_file`,
+`test_selected_cache_file_still_requires_checksum` and
+`test_selected_cache_file_still_requires_manifest` enforce these rules.
+
+## Runtime revision pins
+
+The runtime installer and every esp32sim dependency in `runner/Cargo.toml` and
+`runner/Cargo.lock` must name the same revision. Otherwise the installer would
+reject the runner built from this checkout.
+`tests/test_runtime.py::test_runtime_revision_matches_runner_pins` enforces this.

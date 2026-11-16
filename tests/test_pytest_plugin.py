@@ -26,7 +26,7 @@ from pytest_embedded.log import MessageQueue
 from pytest_embedded.utils import Meta
 
 import esp32tl
-from esp32tl import recording
+from esp32tl import recording, runtime
 from esp32tl.backends import esp32sim
 from esp32tl.backends.esp32sim import BackendError
 from esp32tl.boards import SdCardRoute
@@ -778,24 +778,28 @@ def test_runner_and_rom_paths_name_what_is_missing(
 ) -> None:
     monkeypatch.setenv("ESP32TL_RUNNER", str(tmp_path / "runner"))
     monkeypatch.setenv("ESP32TL_ROM", str(tmp_path / "rom.elf"))
-    with pytest.raises(
-        BackendError, match=r"no runner at .*: run make setup, or set ESP32TL_RUNNER"
-    ):
+    with pytest.raises(BackendError, match=r"no runner at .*: run make setup"):
         esp32sim.runner_path()
-    with pytest.raises(BackendError, match=r"no ROM ELF at .*: run make setup, or set ESP32TL_ROM"):
+    with pytest.raises(BackendError, match=r"no rom at .*: run make setup"):
         esp32sim.rom_path()
     (tmp_path / "runner").touch()
     (tmp_path / "rom.elf").touch()
-    with pytest.raises(BackendError, match="no runner at"):
+    with pytest.raises(BackendError, match="cannot verify runner"):
         esp32sim.runner_path()
     (tmp_path / "runner").chmod(0o755)
+    monkeypatch.setattr(runtime, "identity", lambda path: None)
+    monkeypatch.setattr(runtime, "verify", lambda path, digest: None)
     assert esp32sim.runner_path() == tmp_path / "runner"
     assert esp32sim.rom_path() == tmp_path / "rom.elf"
 
 
 # $FAKE_EXIT KILL: killed by SIGKILL, as by the OOM killer. $FAKE_RAN, when set, is a file the
 # runner appends to when it starts.
-FAKE_RUNNER = """#!/bin/sh
+FAKE_RUNNER = f"""#!/bin/sh
+if [ "$1" = "--runtime-version" ]; then
+    echo "{esp32tl.__version__} {runtime.SIM_REV}"
+    exit 0
+fi
 [ -z "$FAKE_RAN" ] || echo started >> "$FAKE_RAN"
 printf '%s' "$FAKE_OUTPUT"
 [ "$FAKE_EXIT" != KILL ] || kill -KILL $$
@@ -811,7 +815,9 @@ def fake_runner(pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch) -> p
     runner = pytester.path / "runner"
     runner.write_text(FAKE_RUNNER)
     runner.chmod(0o755)
-    (pytester.path / "rom.elf").touch()
+    (pytester.path / "rom.elf").write_bytes(
+        (ROOT / ".cache/esp-rom-elfs/20241011/esp32_rev300_rom.elf").read_bytes()
+    )
     monkeypatch.setenv("ESP32TL_RUNNER", str(runner))
     monkeypatch.setenv("ESP32TL_ROM", str(pytester.path / "rom.elf"))
     fake_build(pytester.path)
@@ -1487,6 +1493,10 @@ import time
 from pathlib import Path
 
 from esp32tl.link import protocol as p
+from esp32tl import __version__, runtime
+if sys.argv[1:] == ["--runtime-version"]:
+    print(__version__, runtime.SIM_REV)
+    sys.exit(0)
 
 if os.environ.get("FAKE_LINK") == "slow":
     time.sleep(0.5)

@@ -236,6 +236,15 @@ FEATURES = [
     ),
 ]
 
+FEATURES.append(
+    Rule(
+        "F27",
+        r"^esp32tl/runtime\.py$",
+        r"^docs/features/runtime-",
+        "Runtime installation changed: update docs/features/runtime-*.md",
+    )
+)
+
 # The catch-all for the package: the rest of sources/ and any new module are owned from their
 # first line of code instead of matching no rule. py.typed is a marker file with no behaviour.
 # Only a new feature document satisfies it: an edit to an existing one, a blank line in
