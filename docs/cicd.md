@@ -239,6 +239,12 @@ cargo's `runner/target/` is not cached. Timeout: 30 minutes.
 
 ## `test`
 
+The four-shard selection uses SHA-256 node-ID hashing with one measured exception in
+`tests/conftest.py`: the HTTP bridge test runs in shard 1 instead of 4. Its approximately
+40 seconds of work moves within the same `1/4 4/4` VM pair on both platforms and all Python
+versions. Job names, required checks, cache keys and the serial real-source phase are unchanged.
+See [the balancing decision](decisions/ci.md#balance-the-existing-pair-with-one-measured-assignment).
+
 The shared job in `test-platform.yml` runs six matrix entries per platform: three Python
 versions and two shard pairs. There are still twelve test VMs in the complete workflow.
 

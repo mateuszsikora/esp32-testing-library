@@ -17,6 +17,13 @@ import pytest
 
 pytest_plugins = ["pytester"]
 
+# In three hosted runs this test cost ~40 s, while shard 4 outlasted shard 1
+# by ~70-100 s. Keep the exception exact, shared by all jobs and only for N=4.
+# Measurements and maintenance: docs/decisions/ci.md, "Balance the existing pair".
+FOUR_SHARD_ASSIGNMENTS = {
+    "tests/test_http_request.py::test_fetches_from_a_real_service_through_a_bridge[esp32sim]": 1,
+}
+
 
 @functools.cache
 def docker_missing() -> str | None:
@@ -61,6 +68,8 @@ def parse_shard(value: str) -> tuple[int, int]:
 
 
 def in_shard(item: pytest.Item, shard: int, count: int) -> bool:
+    if count == 4 and item.nodeid in FOUR_SHARD_ASSIGNMENTS:
+        return shard == FOUR_SHARD_ASSIGNMENTS[item.nodeid]
     # SHA-256, not hash(): every job must put a test in the same shard.
     digest = hashlib.sha256(item.nodeid.encode()).digest()
     return int.from_bytes(digest, "big") % count == shard - 1

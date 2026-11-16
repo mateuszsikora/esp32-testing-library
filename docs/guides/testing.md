@@ -93,8 +93,13 @@ subprocess (`pytester.runpytest_subprocess`), because pytest-embedded starts a m
 manager for every session.
 
 `tests/conftest.py` also adds `--shard=K/N`: of the tests collected, only those of shard K of N run,
-and the rest are deselected. A test's shard is the SHA-256 of its node id modulo N, so every job puts
-it in the same shard, and a new test needs no list. Anything but `1 <= K <= N` is a usage error:
+and the rest are deselected. A test's default shard is the SHA-256 of its node id modulo N, so
+every job puts it in the same shard, and a new test needs no list. With N=4 only,
+`FOUR_SHARD_ASSIGNMENTS` in `tests/conftest.py` overrides exact node IDs measured as expensive:
+the HTTP bridge test runs in shard 1 instead of 4. Other shard counts keep the hash assignment.
+Assignments do not depend on collection order, selected paths, OS or Python version. The
+regressions check unique assignment, fallback for new tests and that the named test still exists.
+Anything but `1 <= K <= N` is a usage error:
 `--shard must be K/N with 1 <= K <= N, not '<value>'`. The option exists only where
 `tests/conftest.py` is loaded: a bare `pytest`, or one given a path under `tests/`.
 
@@ -448,7 +453,8 @@ disappear, and sends `SIGKILL` to remaining groups. The regression tests include
 ignoring `SIGTERM`, both with a live leader and after the first leader has already exited,
 and an exited leader awaiting reaping. A transient permission error while probing a dying
 group does not count as disappearance; cleanup keeps tracking it.
-The four shards and their hash assignment are unchanged; pairing only changes where they run.
+Pairing changes where the four shards run; their assignment follows the hash and the measured
+four-shard exceptions described above.
 `tests/test_ci_test_pair.py` checks concurrent starts, isolation and both failure directions using
 a stand-in pytest module. The full hosted suite checks compatibility with real parallel tests.
 

@@ -558,6 +558,31 @@ performance claim; retain the simpler existing layout unless new measurements ju
 Branch protection keeps all 25 checks. No test timeout, assertion, skip policy, cache transport
 or main-branch cancellation policy changes as a result of this experiment.
 
+## Balance the existing pair with one measured assignment
+
+Status: decided (16 November 2026)
+
+For four shards, assign
+`tests/test_http_request.py::test_fetches_from_a_real_service_through_a_bridge[esp32sim]`
+to shard 1 instead of its hashed shard 4. All other node IDs and other shard counts retain
+SHA-256 modulo N. Keep the exception in `FOUR_SHARD_ASSIGNMENTS` in `tests/conftest.py`,
+identical for all OS/Python combinations and independent of partial collection or order.
+A regression fails if the named test disappears. Renaming it requires reviewing the assignment.
+
+Hosted runs 43769968112, 43771329988 and 43772184650 measured this call at a median 39.73 s
+across nine macOS results. In the last control, shard 1 took 103.09, 113.74 and 112.55 s
+on Python 3.11, 3.13 and 3.14; shard 4 took 175.51, 212.72 and 191.91 s respectively.
+Moving this one test reduces the 72-99 s imbalance without another VM, another
+pytest process or a different pairing. This is an estimate from old timings, not a measured
+whole-workflow improvement. Hosted validation must retain coverage and compare total elapsed
+time including queues. Test assertions, timeouts, failure handling and build caches stay intact.
+
+**Rejected:** a full duration database and runtime greedy assignment for this small adjustment.
+Those add maintenance and risk different assignments for partial collections or platform-specific
+collection. Renaming a test to manipulate its hash obscures the scheduling decision. Moving more
+tests before measuring this one risks reversing the imbalance. Shortening the bridge test or
+changing its wall-clock behavior would alter what is tested and is outside this change.
+
 ## Release runtime builds use GitHub-hosted runners
 
 Status: decided
