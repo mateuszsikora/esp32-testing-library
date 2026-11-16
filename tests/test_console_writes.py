@@ -16,7 +16,7 @@ def test_console_writes_keep_the_instant_and_host_baud(tmp_path: Path) -> None:
     )
     tap = route.tap("console.jsonl")
     link = BoardLink("esp32-devkitc", [route])
-    link.receive(RunnerHello(1, "esp32", "emulated-fifo-write", "0" * 40))
+    link.receive(RunnerHello(2, "esp32", "emulated-fifo-write", "0" * 40))
     assert link.watch == (3,)
 
     class Board:

@@ -159,7 +159,7 @@ def test_on_the_link_a_byte_gets_the_time_of_the_next_turn_within_a_millisecond(
     source = uart.real(device.port)
     try:
         link = BoardLink("esp32-devkitc", [uart])
-        link.receive(RunnerHello(1, "esp32", recording.WALL, "abc"))
+        link.receive(RunnerHello(2, "esp32", recording.WALL, "abc"))
         assert link.receive(Sync(0)) == [Wait(0, MS, None)]
         assert link.receive(Sync(MS)) == [Wait(0, 2 * MS, None)]
         os.write(device.fd, b"$")
@@ -530,7 +530,7 @@ def test_the_link_fails_the_run_on_a_transmission_at_another_baud(
     try:
         tap = uart.tap("tap.jsonl")
         link = BoardLink("esp32-devkitc", [uart])
-        link.receive(RunnerHello(1, "esp32", recording.WALL, "abc"))
+        link.receive(RunnerHello(2, "esp32", recording.WALL, "abc"))
         link.receive(UartTx(1, 0, 1, (4,), 115200, b"AT"))
         assert link.error == (
             f"uart.gnss.transmitted raised SourceError: uart.gnss: the firmware transmits at 115200"

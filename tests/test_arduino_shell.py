@@ -53,4 +53,6 @@ def test_console_help(board: Esp32Sim) -> None:
     board.power_on()
     board.console.expect_exact("arduino_shell: ready; type help")
     board.console.sendline("help")
-    board.console.expect_exact("arduino_shell: commands: help, greeting, uptime, wifi")
+    board.console.expect_exact(
+        "arduino_shell: commands: help, greeting, uptime, wifi, ap-off, ap-on"
+    )

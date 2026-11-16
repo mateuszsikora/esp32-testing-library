@@ -25,7 +25,7 @@ ROOT = Path(__file__).resolve().parent.parent
 MODEM_AT = ROOT / "firmware" / "modem_at"
 PROFILE = ROOT / "tests" / "boards" / "aux-uart.toml"
 AUX = Wire(tx=26, rx=27, baud=115200)
-HELLO = RunnerHello(1, "esp32", recording.EMULATED, "357b0e542dfe97d4c62ec4a15c01c4969164448c")
+HELLO = RunnerHello(2, "esp32", recording.EMULATED, "357b0e542dfe97d4c62ec4a15c01c4969164448c")
 # How long the part takes to answer a command, from the end of its line.
 ANSWER = ms(1)
 

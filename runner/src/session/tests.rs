@@ -372,7 +372,7 @@ impl FakePeer {
         let watch: Vec<String> = watch.iter().map(u8::to_string).collect();
         Self::with_hello(
             &format!(
-                r#"{{"type":"hello","version":1,"chip":"esp32","board":"esp32-devkitc","watch":[{}]}}"#,
+                r#"{{"type":"hello","version":2,"chip":"esp32","board":"esp32-devkitc","watch":[{}]}}"#,
                 watch.join(",")
             ),
             respond,
@@ -608,29 +608,29 @@ fn the_first_sync_comes_before_the_guest_runs_and_its_inputs_are_in_place() {
 fn a_handshake_mismatch_is_a_protocol_error_with_stats() {
     for (hello, found) in [
         (
-            r#"{"type":"hello","version":2,"chip":"esp32"}"#,
-            "version 2",
+            r#"{"type":"hello","version":99,"chip":"esp32"}"#,
+            "version 99",
         ),
         (
-            r#"{"type":"hello","version":1,"chip":"esp32s3"}"#,
+            r#"{"type":"hello","version":2,"chip":"esp32s3"}"#,
             "chip \"esp32s3\"",
         ),
         (r#"{"type":"wait","ack":0}"#, "expected hello"),
         // pins the classic chip does not have, though the parser takes any below 64
         (
-            r#"{"type":"hello","version":1,"chip":"esp32","watch":[4,24]}"#,
+            r#"{"type":"hello","version":2,"chip":"esp32","watch":[4,24]}"#,
             "watch holds GPIO 24, which the esp32 does not have",
         ),
         (
-            r#"{"type":"hello","version":1,"chip":"esp32","watch":[28]}"#,
+            r#"{"type":"hello","version":2,"chip":"esp32","watch":[28]}"#,
             "GPIO 28",
         ),
         (
-            r#"{"type":"hello","version":1,"chip":"esp32","watch":[40]}"#,
+            r#"{"type":"hello","version":2,"chip":"esp32","watch":[40]}"#,
             "GPIO 40",
         ),
         (
-            r#"{"type":"hello","version":1,"chip":"esp32","watch":[63]}"#,
+            r#"{"type":"hello","version":2,"chip":"esp32","watch":[63]}"#,
             "GPIO 63",
         ),
     ] {
@@ -1204,7 +1204,7 @@ fn the_runner_refuses_what_the_protocol_forbids() {
         ),
         (vec![r#"{"type":"bogus"}"#.to_string()], "unknown type"),
         (
-            vec![r#"{"type":"hello","version":1,"chip":"esp32"}"#.to_string()],
+            vec![r#"{"type":"hello","version":2,"chip":"esp32"}"#.to_string()],
             "hello after",
         ),
     ] {
@@ -2195,6 +2195,7 @@ fn on_the_emulator_only_a_deep_sleep_is_skipped() {
 /// relay, and its link takes at most `room` frames between two slices, as esp32sim's queue of 64
 /// does, handing one to the station per slice.
 struct WifiGuest {
+    station_states: Vec<(u64, bool, u64)>,
     inner: FakeGuest,
     sends: VecDeque<(u64, Vec<u8>)>,
     relay: Vec<Vec<u8>>,
@@ -2214,6 +2215,7 @@ impl WifiGuest {
     fn new(sends: Vec<(u64, Vec<u8>)>, room: usize) -> Self {
         Self {
             inner: FakeGuest::new(Vec::new()),
+            station_states: Vec::new(),
             sends: sends.into(),
             relay: Vec::new(),
             room,
@@ -2232,6 +2234,9 @@ impl Guest for WifiGuest {
     }
     fn run_until(&mut self, cycle: u64) -> Stop {
         let stop = self.inner.run_until(cycle);
+        if self.station_state() == Some((true, 2)) {
+            self.room = 64;
+        }
         while self
             .sends
             .front()
@@ -2269,6 +2274,17 @@ impl Guest for WifiGuest {
     }
     fn take_gpio_inputs(&mut self) {
         self.inner.take_gpio_inputs()
+    }
+    fn station_state(&self) -> Option<(bool, u64)> {
+        self.station_states
+            .iter()
+            .rev()
+            .find(|s| s.0 <= self.inner.now)
+            .map(|s| (s.1, s.2))
+    }
+    fn clear_station_relay(&mut self) {
+        self.relay.clear();
+        self.queued = 0;
     }
     fn take_eth_frames(&mut self) -> Vec<Vec<u8>> {
         std::mem::take(&mut self.relay)
@@ -3890,4 +3906,67 @@ fn station_dhcp_retries_do_not_accumulate_behind_association_backpressure() {
     assert_eq!(guest.taken.len(), 1);
     assert_eq!(guest.taken[0].1, expected);
     assert_eq!(stats.wifi.unwrap().eth_rx, 1);
+}
+
+#[test]
+fn station_lifecycle_reads_handshake_state_and_flushes_relay() {
+    let mut m = esp32::machine([0x24, 0x6f, 0x28, 0, 0x11, 0x22], 4 << 20);
+    let wifi = cli::Wifi::Station {
+        spec: "ssid=setup".into(),
+    };
+    m.wifi_access_point(&wifi);
+    m.bus.set_ethernet_relay(true).unwrap();
+    assert_eq!(m.station_state(), Some((false, 0)));
+    // The public state differentiates association/handshake from data readiness.
+    // Exercise the real relay queue via a joined station made outside the bus.
+    let mut sta = wifi::sta::VirtualSta::new(wifi.station().unwrap(), false);
+    sta.state = wifi::sta::StaLink::Handshake;
+    m.bus.periph.wifi.link.attach_station(sta).unwrap();
+    assert_eq!(m.station_state(), Some((false, 0)));
+    assert!(!m.eth_input(&frame(1)));
+    let mut sta = wifi::sta::VirtualSta::new(wifi.station().unwrap(), false);
+    sta.state = wifi::sta::StaLink::Joined;
+    sta.stats.0 = 1;
+    m.bus.periph.wifi.link.attach_station(sta).unwrap();
+    assert_eq!(m.station_state(), Some((true, 1)));
+    assert!(m.eth_input(&frame(2)));
+    m.clear_station_relay();
+    assert!(!m.bus.periph.wifi.link.station().unwrap().host);
+    // A full ring of new frames fits: no previous frame remains after the flush.
+    for _ in 0..64 {
+        assert!(m.eth_input(&frame(3)));
+    }
+    assert!(!m.eth_input(&frame(4)));
+}
+
+#[test]
+fn station_disconnect_drops_backpressure_and_future_ethernet() {
+    let wifi = cli::Wifi::Station {
+        spec: "ssid=setup".into(),
+    };
+    let mut guest = WifiGuest::new(Vec::new(), 0);
+    guest.station_states = vec![
+        (0, true, 1),
+        (cycles(2 * MS), false, 1),
+        (cycles(4 * MS), true, 2),
+    ];
+    let mut first = true;
+    let mut peer = FakePeer::new(&[], move |turn| {
+        let mut out = Vec::new();
+        if std::mem::take(&mut first) {
+            out.push(eth_rx(0, &frame(1))); // blocked in runner's queue
+            out.push(eth_rx(5 * MS, &frame(2))); // scheduled beyond reconnect
+        }
+        out.push(wait(turn.seq, None, Some(MS)));
+        out
+    });
+    let (end, stats) = run_wifi_mode(cycles(6 * MS), &mut guest, &mut peer, &wifi);
+    assert_eq!(stats.wifi.unwrap().eth_rx_dropped, 2);
+    assert!(matches!(end, End::MaxSeconds));
+    assert!(guest.taken.is_empty());
+    let events = peer.of("wifi_link");
+    assert_eq!(events.len(), 3);
+    assert_eq!(num(events[0], "t"), 0);
+    assert_eq!(num(events[1], "t"), 2 * MS);
+    assert_eq!(num(events[2], "t"), 4 * MS);
 }

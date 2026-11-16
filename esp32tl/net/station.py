@@ -45,6 +45,7 @@ class Station:
         self.lease: HostLease | None = None
         self.leases: list[HostLease] = []
         self._xid = 0x53544100
+        self.ready = False
         self._offered: bytes | None = None
         self._server: bytes | None = None
         self._deadline: int | None = None
@@ -57,7 +58,18 @@ class Station:
     def device_address(self) -> str | None:
         return None if self.lease is None else self.lease.device_address
 
+    def stop(self) -> None:
+        self.ready = False
+        self.lease = None
+        self._offered = self._server = None
+        self._deadline = self._arp_deadline = None
+        self._retry = 4 * SECOND
+        self._arp_cache.clear()
+        self._pending.clear()
+        self._changed()
+
     def start(self) -> None:
+        self.ready = True
         self.lease = None
         self._offered = self._server = None
         self._arp_cache.clear()
@@ -116,7 +128,7 @@ class Station:
         self._send(to + self.mac + struct.pack(">H", kind) + payload)
 
     def receive(self, frame: bytes) -> None:
-        if len(frame) < 14 or frame[6] & 1:
+        if not self.ready or len(frame) < 14 or frame[6] & 1:
             return
         kind = int.from_bytes(frame[12:14], "big")
         if kind in (ARP, IPV4) and frame[:6] not in (self.mac, BROADCAST_MAC):

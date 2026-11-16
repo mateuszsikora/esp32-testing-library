@@ -6,8 +6,10 @@ from pathlib import Path
 import pytest
 
 from esp32tl.backends.esp32sim import Esp32Sim
+from esp32tl.flash import u32
 from esp32tl.interfaces import NeverHappened
 from esp32tl.interfaces.wifi import Wifi
+from esp32tl.net.station import Station
 from esp32tl.units import seconds
 
 pytestmark = pytest.mark.app_path("../firmware/arduino_shell", build_dir=".pio/build/esp32dev")
@@ -43,6 +45,7 @@ def test_wrong_password_times_out_without_breaking_the_runner(board: Esp32Sim, w
     with pytest.raises(NeverHappened, match="the station has a DHCP lease"):
         board.wait_until(network.when_leased(), within=seconds(3))
     assert network.lease is None and board.link.error is None
+    assert not [e for e in network.events if str(e["event"]).startswith("dhcp station:")]
 
 
 def test_raw_tcp_to_the_softap(board: Esp32Sim, wifi: Wifi) -> None:
@@ -98,3 +101,46 @@ def test_station_diagnostics_are_in_captured_output(pytester: pytest.Pytester) -
     result.assert_outcomes(failed=1)
     # Upstream reports the last failure while listening, between handshake attempts.
     result.stdout.fnmatch_lines(["*[[]emu] wifi-sta:*wrong passphrase?*"])
+
+
+@pytest.mark.parametrize("password", [None, PASSWORD], ids=["open", "wpa2"])
+def test_delayed_softap_starts_dhcp_at_link_ready(
+    board: Esp32Sim, wifi: Wifi, password: str | None, tmp_path: Path
+) -> None:
+    board.nvs(
+        {"shell": {"ap_ssid": SSID, "ap_password": password or "", "ap_delay_ms": u32(15300)}}
+    )
+    network = wifi.station(SSID, password=password)
+    board.power_on()
+    board.wait(seconds(15))
+    assert not [e for e in network.events if str(e["event"]).startswith("dhcp station:")]
+    assert isinstance(network.link, Station)
+    assert network.link.quiet_until() is None
+    board.wait_until(network.when_leased(), within=seconds(10))
+    ready = [e for e in network.events if e["event"] == "wifi station: ready"]
+    discover = [e for e in network.events if e["event"] == "dhcp station: DISCOVER"]
+    assert len(ready) == len(discover) == 1
+    assert discover[0]["t_ns"] == ready[0]["t_ns"]
+    (tmp_path / "lifecycle.json").write_text(json.dumps(network.events, sort_keys=True))
+
+
+@pytest.mark.parametrize("password", [None, PASSWORD], ids=["open", "wpa2"])
+def test_softap_leaves_and_rejoins(board: Esp32Sim, wifi: Wifi, password: str | None) -> None:
+    board.nvs({"shell": {"ap_ssid": SSID, "ap_password": password or ""}})
+    network = wifi.station(SSID, password=password)
+    board.power_on()
+    first = board.wait_until(network.when_leased(), within=seconds(3))
+    connection = network.connect(80)
+    board.wait_until(connection.established(), within=seconds(2))
+    board.console.sendline("ap-off")
+    board.wait_until(lambda: network.lease is None or None, within=seconds(5))
+    assert connection.state == "lost"
+    board.wait(seconds(5))
+    assert isinstance(network.link, Station)
+    assert network.link.quiet_until() is None
+    board.console.sendline("ap-on")
+    second = board.wait_until(network.when_leased(), within=seconds(5))
+    assert second.at > first.at
+    ready = [e["t_ns"] for e in network.events if e["event"] == "wifi station: ready"]
+    discover = [e["t_ns"] for e in network.events if e["event"] == "dhcp station: DISCOVER"]
+    assert ready == discover

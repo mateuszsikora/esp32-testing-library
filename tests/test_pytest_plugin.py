@@ -1472,7 +1472,7 @@ def test_release(board, console):
 # harness's stop or SIGTERM, on which it ends the run with its stats and exits 0, as protocol §9 has
 # it. It drops the inputs the harness sends in its turns. $FAKE_LINK changes that: `tx` also has
 # the firmware transmit a PMTK command on the GNSS route's TX pin after the console line; the
-# others make it misbehave: `version` sends a hello of version 2, and exits 3 once it has
+# others make it misbehave: `version` sends a hello of version 99, and exits 3 once it has
 # the harness's answer; `late` sends an event out of sequence after the console line; `deaf`
 # ignores the harness and SIGTERM after that line; `stall` takes no turn after it until SIGTERM;
 # `linger` leaves a child holding the link open for 300 s after it exits, and writes the child's pid
@@ -1541,13 +1541,13 @@ def turn():
     return message.quiet_until
 
 
-send(p.RunnerHello(2 if mode == "version" else 1, "esp32", "emulated-fifo-write", "0" * 40))
+send(p.RunnerHello(99 if mode == "version" else 2, "esp32", "emulated-fifo-write", "0" * 40))
 hello = p.decode_harness(lines.readline())
 board_profile = os.environ.get("FAKE_BOARD", "esp32-devkitc")
 watch = tuple(int(pin) for pin in os.environ.get("FAKE_WATCH", "3,4,5").split(",") if pin)
 assert (hello.board, hello.chip, hello.watch) == (board_profile, "esp32", watch), hello
 if mode == "version":
-    end("protocol_error", 3, detail="version 1 from the peer, the runner speaks 2")
+    end("protocol_error", 3, detail="version 2 from the peer, the runner speaks 99")
 send(p.Sync(0))
 if mode == "gone":
     print("esp32tl-runner: the peer is gone", file=sys.stderr)
@@ -1599,7 +1599,7 @@ def test_the_backend_serves_the_link_and_ends_the_run_with_stop(
         [
             "*Captured esp32sim link teardown*",
             "board esp32-devkitc, watching GPIO 3, GPIO 4, GPIO 5",
-            "runner: protocol version 1, esp32sim 0000*, clock emulated-fifo-write; 2 turns taken*",
+            "runner: protocol version 2, esp32sim 0000*, clock emulated-fifo-write; 2 turns taken*",
             "warnings (1):",
             "  0.000001000 s  unrouted_rx: uart_rx on GPIO 5: 72 bytes dropped",
             "stats: the run ended at 0.100000000 s (stop); 1 turn, 0 resets",
@@ -1883,10 +1883,10 @@ def test_a_mismatched_handshake_fails_the_test_with_both_sides_reasons(
     result.stdout.fnmatch_lines(
         [
             "E *RunEnded: the run ended at 0 s while the test waited for 'Hello world!' on the"
-            " console: the link failed: the runner speaks link protocol version 2, the harness 1;"
+            " console: the link failed: the runner speaks link protocol version 99, the harness 2;"
             " the runner exited with code 3; its last output:",
             "E *esp32tl-runner: the run ended: protocol_error",
-            "*stats: the run ended at 0.000000000 s (protocol_error, version 1 from the peer*",
+            "*stats: the run ended at 0.000000000 s (protocol_error, version 2 from the peer*",
         ]
     )
 

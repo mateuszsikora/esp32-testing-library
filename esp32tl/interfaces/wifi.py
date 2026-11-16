@@ -298,6 +298,10 @@ class Wifi(Interface):
 
     # The link's side.
 
+    def _station_link(self, t: int, ready: bool) -> None:
+        if self._station is not None and self._network is not None:
+            self._network._station_link(t, ready)
+
     def receive(self, t: int, direction: Direction, data: bytes) -> Iterable[Output]:
         network = self._network
         if network is None or not network.active:

@@ -5,7 +5,7 @@
  * The settings are in the Preferences namespace "shell", read once at boot: `greeting`, printed
  * after the banner, and `ssid` and `password`, the network to join. Without an `ssid` the sketch
  * starts a SoftAP when `ap_ssid` is set (`ap_password` optional), otherwise stays off the air.
- * A line on `Serial` is a command: `help`, `greeting`, `uptime` or `wifi`.
+ * A line on `Serial` is a command: `help`, `greeting`, `uptime`, `wifi`, `ap-off` or `ap-on`.
  * Every line the sketch prints starts with "arduino_shell: " and ends with println's "\r\n". */
 #include <Arduino.h>
 #include <Preferences.h>
@@ -36,7 +36,7 @@ static void status() {
 
 static void run(const char *command) {
     if (strcmp(command, "help") == 0) {
-        Serial.println(PREFIX "commands: help, greeting, uptime, wifi");
+        Serial.println(PREFIX "commands: help, greeting, uptime, wifi, ap-off, ap-on");
     } else if (strcmp(command, "greeting") == 0) {
         Serial.print(PREFIX "greeting=");
         Serial.println(greeting);
@@ -55,6 +55,16 @@ static void run(const char *command) {
         } else {
             Serial.println(PREFIX "wifi=joining");
         }
+    } else if (strcmp(command, "ap-off") == 0) {
+        WiFi.softAPdisconnect(true);
+        access_point = false;
+    } else if (strcmp(command, "ap-on") == 0) {
+        preferences.begin("shell", true);
+        String ssid = preferences.getString("ap_ssid", "");
+        String password = preferences.getString("ap_password", "");
+        preferences.end();
+        WiFi.mode(WIFI_AP);
+        access_point = WiFi.softAP(ssid.c_str(), password.length() ? password.c_str() : nullptr);
     } else if (command[0] != '\0') {
         Serial.print(PREFIX "unknown command '");
         Serial.print(command);
@@ -86,6 +96,7 @@ void setup() {
     String password = preferences.getString("password", "");
     String ap_ssid = preferences.getString("ap_ssid", "");
     String ap_password = preferences.getString("ap_password", "");
+    unsigned long ap_delay = preferences.getUInt("ap_delay_ms", 0);
     preferences.end();
     Serial.print(PREFIX "greeting=");
     Serial.println(greeting);
@@ -97,6 +108,7 @@ void setup() {
         Serial.println(ssid);
     }
     if (!joining && ap_ssid.length() > 0) {
+        delay(ap_delay);
         WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
             const uint8_t *mac;
             const char *action;

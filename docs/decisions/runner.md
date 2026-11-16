@@ -1033,3 +1033,9 @@ join diagnostics. It is not added to `stats.wifi`: those five fields measure the
 and receive ring, while this counter is a station-specific loss after the relay accepted a
 frame. It must not be folded into `eth_rx_dropped` or `eth_tx_dropped`. The runner emits both upstream Wi-Fi diagnostic lines at teardown through the existing
 captured-output path. Previously it did not call `StationLink::report()` at all. No protocol version change or compatibility shim is needed.
+
+## Station transitions invalidate relay queues
+
+Status: decided
+
+Protocol v2 carries `wifi_link` before Ethernet at the same collection boundary. The runner observes public station state and join count and flushes both relay directions using `set_relay`, without advancing guest time. Future scheduled Ethernet input is discarded as well. This avoids reusing a queued request after reconnect; reducing DHCP backoff would not do so. Existing pin APIs suffice; no upstream patch is required.

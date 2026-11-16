@@ -1894,3 +1894,9 @@ A new ARP destination cannot postpone an existing resolution retry. Due batches 
 pending destinations one second apart, and resolving every destination clears the retry timer.
 `tests/test_net_station.py::test_new_arp_destination_does_not_postpone_pending_retries` enforces
 this with staggered destinations, two retry batches and replies releasing the queued datagrams.
+
+## Virtual station DHCP lifecycle
+
+`test_no_discover_or_deadline_until_ready` enforces silence and no retry deadline before data-link readiness. `test_disconnect_discards_exchange_and_stale_reply` checks pending and bound exchanges: disconnect clears the lease, loses connections, and old replies cannot bind a new exchange. `test_delayed_softap_starts_dhcp_at_link_ready` uses real Arduino firmware with a 15300 ms startup delay, for open and WPA2 networks; the first DISCOVER has the readiness timestamp, without a lease-duration bound. `test_softap_leaves_and_rejoins` checks real link loss and fresh DHCP. Existing reset/power-cycle regressions check lease invalidation and reacquisition.
+
+`station_disconnect_drops_backpressure_and_future_ethernet` verifies that queued and future Ethernet input cannot cross a reconnect. `station_lifecycle_reads_handshake_state_and_flushes_relay` checks the pinned emulator API and relay queue clearing. The stale-reply matrix also covers reset and power cycle during both pending and bound exchanges.

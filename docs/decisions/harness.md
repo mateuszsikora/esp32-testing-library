@@ -3808,8 +3808,8 @@ address. ARP answers only for that address. IPv4 destined elsewhere is dropped b
 DHCP uses the broadcast flag, which ESP-IDF v5.5.4's
 `components/lwip/apps/dhcpserver/dhcpserver.c:dhcps_response_ip_set` explicitly handles, even with
 static ARP entries enabled. Retries use board time, starting at 4 s and doubling up to 64 s,
-with deterministic transaction IDs and no random jitter. Identical requests waiting in the
-runner are coalesced in station mode: an unjoined station's first DISCOVER stays queued, without
+with deterministic transaction IDs and no random jitter. Before protocol v2 (superseded by the data-link readiness decision below), identical requests waiting in the
+runner were coalesced in station mode: an unjoined station's first DISCOVER stays queued, without
 an ever-growing backlog. Once a frame has entered esp32sim, later retries are independent frames.
 There is no gratuitous ARP or RFC 5227 conflict probe: this isolated subnet has one harness host,
 and its address comes from the device. Ordinary ARP resolves destinations before queued IP leaves.
@@ -3823,7 +3823,7 @@ answer for other machines on the device's subnet.
 
 **Not yet:** T1 renewal, pending a DHCP renewal/rebinding state machine and tests for long runs.
 At lease expiry the host drops its connections and ARP cache and starts DHCP again; it never
-continues sending from an expired address. Device reset does the same immediately. No explicit
+continues sending from an expired address. Device reset invalidates the lease immediately and waits for Wi-Fi readiness before restarting DHCP. No explicit
 station leave/rejoin command, pending a radio control protocol and upstream support. No keep-alive
 frames, pending esp32sim support: an ESP-IDF AP may disassociate an idle host after about 300 s
 and the virtual station rejoins. No virtual AP and virtual station together, pending esp32sim's
@@ -3857,3 +3857,11 @@ use of the cached ROM. Full-installation validation belongs to `runtime.prepare(
 checks both files before reuse and before exposing an installation. Calling that full validation
 from either backend lookup was rejected: an unused, replaced file could incorrectly block a
 valid explicit path combined with the other file from cache.
+
+## DHCP starts at virtual station data-link readiness
+
+Status: decided
+
+The runner reports the pinned emulator's Joined state and completed-join counter, with sequenced protocol v2 events. DHCP remains in Python. WPA2 Joined follows validated message 3 and key installation; esp32sim sends its queued message 4 before relay data. Polling at slice boundaries is sufficient with this pin: leaving imposes a one-second rejoin delay. The counter additionally distinguishes another join. Link loss clears queues and transport state and each acquisition uses a fresh transaction ID, including across device reset.
+
+Rejected: console parsing, boot delays, first-DHCP-response inference and shorter retries. The old client started at power-on; however its first DISCOVER remained queued in the runner until Joined. Thus its retry schedule alone does not establish a 28 s lease delay. No new station control API or simultaneous AP+STA support is introduced.
