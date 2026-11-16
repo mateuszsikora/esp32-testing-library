@@ -1894,3 +1894,11 @@ A new ARP destination cannot postpone an existing resolution retry. Due batches 
 pending destinations one second apart, and resolving every destination clears the retry timer.
 `tests/test_net_station.py::test_new_arp_destination_does_not_postpone_pending_retries` enforces
 this with staggered destinations, two retry batches and replies releasing the queued datagrams.
+
+
+## Radio diagnostics at teardown
+
+Radio diagnostics written by the runner must appear in the backend's teardown report even
+when live log forwarding has not delivered them. Reading them waits for both the runner and
+its waiter to finish. `tests/test_pytest_plugin.py::test_radio_diagnostics_survive_a_stopped_log_forwarder`
+disables forwarding and places the diagnostics before more than a log tail's worth of output.

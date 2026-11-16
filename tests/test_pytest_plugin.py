@@ -1358,6 +1358,42 @@ def test_ended_while_waiting_stops_at_a_cycle() -> None:
     assert esp32sim.ended_while_waiting(first)
 
 
+def test_radio_diagnostics_survive_a_stopped_log_forwarder(
+    fake_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_EXIT", "0")
+    monkeypatch.setenv(
+        "FAKE_OUTPUT",
+        "[emu] wifi: ready\n[emu] wifi-sta: 'sieć' wrong passphrase?\n" + "x" * 5000 + "\n",
+    )
+    fake_runner.makeconftest("""
+        import pytest
+        from esp32tl.backends.esp32sim import RunnerPopen
+
+        @pytest.fixture(autouse=True)
+        def no_forwarding(monkeypatch):
+            monkeypatch.setattr(RunnerPopen, "REDIRECT_CLS", None)
+    """)
+    fake_runner.makepyfile(
+        test_fake="""
+        import pexpect
+
+        def test_end(board, console):
+            board.power_on()
+            console.expect(pexpect.EOF)
+    """
+    )
+    result = fake_runner.runpytest_subprocess("-p", "no:cacheprovider", "-rA")
+    result.assert_outcomes(passed=1)
+    result.stdout.fnmatch_lines(
+        [
+            "*Captured esp32sim link teardown*",
+            "[[]emu] wifi: ready",
+            "[[]emu] wifi-sta: 'sieć' wrong passphrase?",
+        ]
+    )
+
+
 def test_a_runner_that_cannot_start_leaves_no_log_open(tmp_path: Path) -> None:
     # Executable, but not a program: exec fails with ENOEXEC.
     runner = tmp_path / "runner"
