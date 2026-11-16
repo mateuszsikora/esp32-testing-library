@@ -1913,10 +1913,15 @@ this with staggered destinations, two retry batches and replies releasing the qu
 
 ## Plugin warning defaults
 
-The XML attribute warning default suppresses only the exact experimental API message, including
-when the consumer directly requests the shared fixture. Other messages and categories remain
-visible, and consumer ini, command-line and marker filters can override the default.
-`test_xml_attribute_warning_is_silent_without_consumer_filters`,
-`test_xml_attribute_filter_keeps_other_warnings` and
-`test_consumer_can_override_xml_attribute_filter` in `tests/test_pytest_plugin.py` enforce this
-through consumer pytest subprocesses without firmware or a runner.
+- **239.** The XML attribute warning default suppresses the exact experimental API message,
+  including when the consumer directly requests the shared fixture.
+  `tests/test_pytest_plugin.py::test_xml_attribute_warning_is_silent_without_consumer_filters`
+  enforces this through a consumer pytest subprocess without firmware or a runner.
+
+- **240.** Other warning messages and categories remain visible.
+  `tests/test_pytest_plugin.py::test_xml_attribute_filter_keeps_other_warnings` enforces this
+  through a consumer pytest subprocess without firmware or a runner.
+
+- **241.** Consumer ini, command-line and marker filters can override the XML attribute warning
+  default. `tests/test_pytest_plugin.py::test_consumer_can_override_xml_attribute_filter`
+  enforces this through consumer pytest subprocesses without firmware or a runner.
