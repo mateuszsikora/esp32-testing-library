@@ -403,7 +403,8 @@ See [the decision](decisions/ci.md#retain-six-macos-test-jobs-after-measuring-fi
 `.github/workflows/runtime-release.yml` builds distribution assets independently of the main CI.
 It runs on relevant pull requests, manual dispatch and `v*` tags, using only standard hosted
 runners. A tag must equal `v` plus the Python package version, and Cargo's package version must
-match, before packaging. PR and manual runs never create releases; tag runs create only a draft.
+match, before packaging. Only a `push` of a `v*` tag creates a draft release. PR and manual
+runs never create releases, including manual dispatch against an existing version tag.
 This workflow does not upload to PyPI; the separate publishing workflow below does.
 
 Jobs and their outputs:
@@ -420,8 +421,8 @@ Jobs and their outputs:
 - `assemble` (Ubuntu 24.04): downloads the wheel/sdist and both runners. `scripts/check-release.py`
   rejects missing or extra assets and wrong version, esp32sim revision, target or executable
   checksum, then writes SHA256SUMS for exactly those six files. It uploads `verified-release`.
-- `draft` (Ubuntu 24.04, tags only): verifies SHA256SUMS and creates the draft GitHub release with
-  generated release notes. Only this job has `contents: write`; it does not replace an existing
+- `draft` (Ubuntu 24.04, version-tag pushes only): verifies SHA256SUMS and creates the draft
+  GitHub release with generated release notes. Only this job has `contents: write`; it does not replace an existing
   release or publish the draft.
 
 Actions artifacts have a seven-day retention period; missing files fail their upload. Concurrency
