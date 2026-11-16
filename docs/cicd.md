@@ -575,8 +575,8 @@ Configure the GitHub repository environment `pypi`, then add a GitHub Trusted Pu
 For an existing project, use its Publishing settings instead. A pending publisher creates the
 project on first upload; it does not reserve the name. See [PyPI's setup guide](https://docs.pypi.org/trusted-publishers/creating-a-project-through-oidc/)
 and [OIDC publishing guide](https://docs.pypi.org/trusted-publishers/using-a-publisher/).
-After the first successful upload, verify `python -m pip install esp32tl==0.1.0` in a clean
-venv and `esp32tl runtime prepare` against the published GitHub runtime assets.
+After the first successful upload, verify `python -m pip install esp32tl==VERSION` (replace `VERSION` with the published version)
+in a clean venv and `esp32tl runtime prepare` against the published GitHub runtime assets.
 
 A failed upload leaves the GitHub release published. Fix the cause before retrying the failed
 job. The workflow deliberately does not enable `skip-existing`: a partial upload or an already

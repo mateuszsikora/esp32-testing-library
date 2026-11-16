@@ -406,17 +406,18 @@ your backend's API does; one that speaks only a protocol or a part's datasheet b
 
 ## In CI
 
-A job that runs tests needs Python 3.11 or newer, the release wheel, and your already built
-firmware. Neither Rust nor a checkout is required:
+After the first PyPI publication, a job that runs tests needs Python 3.11 or newer, esp32tl,
+and your already built firmware. Neither Rust nor a checkout is required:
 
 ```sh
 python3 -m venv .venv
-.venv/bin/pip install /artifacts/esp32tl-0.1.0-py3-none-any.whl
+.venv/bin/python -m pip install esp32tl
 .venv/bin/esp32tl runtime prepare
 .venv/bin/pytest my_project/tests
 ```
 
-The wheel and runtime must come from the same accessible release. See [runtime installation](../features/runtime-user.md)
+For reproducible CI, pin `esp32tl` to your chosen published version. A wheel downloaded from
+GitHub Releases is an alternative to PyPI; the matching runtime release must be published. See [runtime installation](../features/runtime-user.md)
 for supported systems, offline reuse and the first-release prerequisites. Developers can still
 use `make setup` in an editable checkout.
 
