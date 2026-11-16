@@ -178,8 +178,8 @@ def test_spp_with_simple_pairing(
     write_console(tmp_path, console)
     assert peer.channel_open and [p.method for p in peer.pairings] == ["just_works"]
     # Each pairing on both sides: its time, how it went, the number both showed.
-    pairings = [(p.t, p.initiator, p.method, p.number, int(p.status)) for p in peer.pairings]
-    pairings += [(p.t, p.initiator, p.method, p.number, int(p.status)) for p in bt.pairings()]
+    pairings = [(p.t.ns, p.initiator, p.method, p.number, int(p.status)) for p in peer.pairings]
+    pairings += [(p.t.ns, p.initiator, p.method, p.number, int(p.status)) for p in bt.pairings()]
     (tmp_path / "pairings.json").write_text(json.dumps(pairings))
 
 

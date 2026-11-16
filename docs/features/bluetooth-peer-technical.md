@@ -99,13 +99,13 @@ interface that puts the firmware's controller on the board's link is
    specification sends `Authentication_Complete` to the initiator only), `_opens` takes the DLC
    out of `dlcs`, sends DM for its DLCI with `c_r` the opposite of the DLC's, as Bumble's UA has
    it, lets go of `_holder`, and the frame goes no further; the device may authenticate and send PN
-   again. Every other frame goes to `on_pdu`. Each refusal goes into `refused` with the air's time,
+   again. Every other frame goes to `on_pdu`. Each refusal goes into `refused` as `Refusal(Duration(now), why)` with the air's time,
    through `_refuse`. When the DLC opens, `SppPeer._opened` keeps it
    and sets its sink to `_received`; the DLC's close event forgets it and its holder, as when the
    link drops. Bumble 0.0.236's DLC answers the device's DISC with UA and stays open, so `_opened`
    wraps the DLC's `on_disc_frame` to also drop it from the multiplexer's `dlcs` and abort it, which
    closes it; a new Bumble may close it itself, and the wrapper is then to go. `_received(data)`
-   appends `(now, "out", data)` to `events`, gives `_driving.receive(now, data)` to `_queue`, and
+   appends `ChannelEvent(Duration(now), "out", data)` to `events`, gives `_driving.receive(now, data)` to `_queue`, and
    flushes. `poll(now)`, the party's, does the same with `_driving.poll(now)`. Both run inside the
    loop and hand a `PeerError` to `Air.fail`. `_driving`, a property, is `source`, or for a
    `Model` (`esp32tl/sources/model/__init__.py`)
@@ -118,7 +118,7 @@ interface that puts the firmware's controller on the board's link is
    a `(t, bytes)` pair with `t` an `int` not before `now`, drops one with empty bytes, and inserts
    the rest into `_pending` by time with `bisect.insort_right`, after those of the same time.
    `_flush(now)` takes every pending output due by `now` in order: with a DLC, appends
-   `(t, "in", data)` to `events` and writes it; without, adds its length to `lost`.
+   `ChannelEvent(Duration(t), "in", data)` to `events` and writes it; without, adds its length to `lost`.
    `quiet_until()` checks `_driving.quiet_until()`, an `int` after the air's instant or `None`,
    and returns the earliest of it and the next pending output. These are the checks `BoardLink`
    makes of a UART's source, with the peer's own messages. For a `Model` the checks of order are
@@ -200,7 +200,7 @@ interface that puts the firmware's controller on the board's link is
      failure on both sides, with the link left up. The DHKey is 32 zero bytes, Bumble's: there is
      no Diffie-Hellman exchange, so the key holds on this link only, as legacy pairing's does.
    - **The history of pairings.** `pairings` holds each pairing that ended, a `Pairing(t, peer,
-     initiator, method, number, status, authenticated)`, `t` the loop's time in nanoseconds, and
+     initiator, method, number, status, authenticated)`, `t` a `Duration` of the loop's time, and
      `under_way` the ones that have not, an `UnderWay(initiator, method, number, authenticated)`
      by peer. A legacy pairing starts when this side's host is sent `PIN_Code_Request`, on either
      side, and ends at `Link_Key_Notification` with `SUCCESS`, at the failed check with
@@ -454,7 +454,7 @@ interface that puts the firmware's controller on the board's link is
      timeout.
    - **What it does not know.** `on_hci_command`, which Bumble's dispatch calls for a command with
      no `on_<name>` handler, appends an `UnknownCommand(t, op_code, name)` to `unknown_commands`,
-     `t` the loop's time in nanoseconds, and answers `UNKNOWN_HCI_COMMAND_ERROR`: as the return
+     `t` a `Duration` of the loop's time, and answers `UNKNOWN_HCI_COMMAND_ERROR`: as the return
      parameters of a `HCI_SyncCommand`'s `Command_Complete`, in a `Command_Status` for an
      `HCI_AsyncCommand`, and in a `Command_Complete` of its own for a generic one, whose op code
      Bumble has no class for. Vol 4, Part E, 4.5 leaves the event to the vendor; Bumble 0.0.236's
@@ -566,12 +566,12 @@ interface that puts the firmware's controller on the board's link is
 | `AirError` | A `RuntimeError`: what failed on the air, as its `__cause__` |
 | `Link()` | `esp32tl/bluetooth/air.py`: Bumble's `LocalLink`; `present(address)`, `reaches(sender, receiver)`, `leave(address, peers)`, `back(address)`, `let_go(one, other)` |
 | `Controller(name, link, address)` | `esp32tl/bluetooth/controller.py`: Bumble's `Controller` with the additions above; `link`, a `Link`; `acl_to_host`, a class attribute, `None`; `class_of_device`, `extended_inquiry_response` (240 bytes), `inquiry_mode`, `rssi`, `page_timeout`, `connection_accept_timeout`, in slots; `iac_laps`; `default_link_policy`, `link_policies`; `inquiry_scan_activity`, `page_scan_activity`, `(interval, window)`; `inquiry_scan_type`, `page_scan_type`; `host_acl_length`; `unknown_commands`; `authenticated(peer)`; `random_bytes(n)`; `left()`, `returned()`, `power_lost()` |
-| `Pairing(t, peer, initiator, method, number, status, authenticated=False)` | `esp32tl/bluetooth/controller.py`: frozen dataclass, a pairing that ended; `succeeded` |
+| `Pairing(t, peer, initiator, method, number, status, authenticated=False)` | `esp32tl/bluetooth/controller.py`: frozen dataclass, a pairing that ended, `t: Duration` on the air's clock; `succeeded` |
 | `UnderWay(initiator, method, number=None, authenticated=False)` | A pairing under way; `Controller.under_way`, by peer, and `Controller.pairings` |
 | `LEGACY`, `JUST_WORKS`, `NUMERIC_COMPARISON`, `PASSKEY_ENTRY`, `SIMPLE_PAIRING` | The methods' names: `"legacy"`, `"just_works"`, `"numeric_comparison"`, `"passkey_entry"`, `"simple_pairing"` |
 | `association(local, peer)`, `authenticated_by(model, local, peer)` | The association model of two IO capabilities, and whether its key is authenticated |
 | `SIX_DIGITS` | `1_000_000`: the range of a number to compare and of a passkey |
-| `UnknownCommand(t, op_code, name)` | Frozen dataclass: a command the controller answered with `UNKNOWN_HCI_COMMAND_ERROR`, `t` in nanoseconds of the air's time |
+| `UnknownCommand(t, op_code, name)` | Named tuple: a command the controller answered with `UNKNOWN_HCI_COMMAND_ERROR`, `t: Duration` on the air's clock |
 | `GIAC`, `IAC_LAPS`, `BR_EDR_FEATURES` | `0x9E8B33`; `range(0x9E8B00, 0x9E8B40)`; page 0's features, above |
 | `GuestController(name, link, address=ADDRESS)` | `esp32tl/bluetooth/guest.py`: a `Controller`, BR/EDR only, pages 0 to 2, `acl_to_host` `ACL_LENGTH`; `chip_reset()`, `chip_off()`, `chip_on()` |
 | `ADDRESS`, `ACL_LENGTH`, `MAX_PAGE` | `esp32tl/bluetooth/guest.py`: `"24:6F:28:00:11:24"`; `491`, `HCI_MAX - 5`; `2` |
@@ -587,7 +587,7 @@ interface that puts the firmware's controller on the board's link is
 | `HeardPage(connection, switching=False)`, `Answer(late=False, timer=None)` | `esp32tl/bluetooth/controller.py`: dataclasses, a page this side heard, in `_heard`, and an answer its host owes, in `_owed` |
 | `BluetoothDevice(air, *, name, pin=None, class_of_device=CLASS_OF_DEVICE, rssi=RSSI, address=ADDRESS, io_capability=None, confirms=True, passkey=None)` | `esp32tl/bluetooth/peer.py`: `device`, the Bumble `Device`; `address`; `name`, `pin`, `class_of_device`, `io_capability`, `confirms`, `passkey`; `rssi`, read and written; `present`; `pairing`, the controller's latest `UnderWay` or `None`; `pairings`, a copy of the controller's; `switch_off()`, `switch_on()`, `out_of_range()`, `in_range()`, `forget_keys()` |
 | `IO_CAPABILITIES` | `esp32tl/bluetooth/peer.py`: the four names a test gives, to Bumble's `PairingDelegate.IoCapability`: `DISPLAY_OUTPUT_ONLY`, `DISPLAY_OUTPUT_AND_YES_NO_INPUT`, `KEYBOARD_INPUT_ONLY`, `NO_OUTPUT_NO_INPUT` |
-| `SppPeer(air, *, name, pin, source, address=ADDRESS, channel=CHANNEL, secure=True, class_of_device=CLASS_OF_DEVICE, rssi=RSSI, service_name=SERVICE_NAME, io_capability=None, confirms=True, passkey=None)` | A `BluetoothDevice`, also: `source`, `channel`, `secure`, `service_name`; `events`; `refused`, `(t, why)` pairs; `lost`; `channel_open`; the party's `poll(now)` and `quiet_until()` |
+| `SppPeer(air, *, name, pin, source, address=ADDRESS, channel=CHANNEL, secure=True, class_of_device=CLASS_OF_DEVICE, rssi=RSSI, service_name=SERVICE_NAME, io_capability=None, confirms=True, passkey=None)` | A `BluetoothDevice`, also: `source`, `channel`, `secure`, `service_name`; `events`, `ChannelEvent(at, direction, data)` named tuples; `refused`, `Refusal(at, why)` named tuples; `lost`; `channel_open`; the party's `poll(now)` and `quiet_until()` |
 | `SERVICE_NAME`, `LANGUAGE`, `L2CAP_FEATURES` | `esp32tl/bluetooth/peer.py`: `"Serial Port"`; `(0x656E, 106, 0x0100)`; `(FIXED_CHANNELS, FCS_OPTION)` |
 | `ADDRESS`, `CLASS_OF_DEVICE`, `CHANNEL`, `NAME_MAX`, `RECORD_HANDLE` | `"00:00:00:00:5B:01"`, an address no real device in a test is likely to have; `0x001F00`; `1`; `238`, the extended inquiry response's 240 bytes less the name field's length and type; `0x00010001`, the first SDP record handle a server may give a record of its own |
 | `PeerError` | A `ValueError`: what a peer cannot be, or what its source sent that it cannot send |
@@ -944,3 +944,14 @@ Host.on_packet(): invalid state`: Bumble 0.0.236's `sdp.Server` keeps one channe
   2026-11-08: 4.5, 5.4.2, 7.1.14, 7.1.23, 7.1.24, 7.2.10, 7.2.12, 7.3.2, 7.3.3, 7.3.20, 7.3.22,
   7.3.38, 7.3.39, 7.3.40, 7.3.43, 7.3.44, 7.3.45, 7.3.48, 7.3.52, 7.7.12, 7.7.28, 7.7.29; [Vol 1, Part F](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/architecture,-mixing,-and-conventions/controller-error-codes.html):
   2.4, 2.8, 2.11
+
+### Public history timestamps
+
+`ChannelEvent.at`, `Refusal.at`, `Pairing.t` and `UnknownCommand.t` are `Duration`s.
+The peer wraps integer nanoseconds when appending channel events and refusals; the controller
+wraps its loop time when creating pairing and unknown-command records. Internal scheduling
+and source calls remain in nanoseconds. On `board.bluetooth.air` these are board instants;
+on standalone `Air()` they are instants since that air was created. `unknown_commands()`
+returns a copy of the controller's list of named tuples, preserving unpacking.
+`Bluetooth.report()` passes `.ns` to `board_time`; `properties()` writes `.ns` as `t_ns`,
+so neither the report nor the `esp32sim_link` JSON schema changes.

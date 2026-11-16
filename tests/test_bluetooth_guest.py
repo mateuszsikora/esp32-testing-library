@@ -8,6 +8,7 @@ plus the latency, and what the harness sends in a turn reaches the host at its t
 an air of its own, on the same clock, so that its time and the board's are one."""
 
 import asyncio
+import json
 import threading
 from collections.abc import Callable, Coroutine, Iterable, Iterator
 from pathlib import Path
@@ -549,14 +550,14 @@ def test_an_unknown_command_is_answered_in_the_event_the_host_waits_for_and_kept
         (hci.HCI_TRUNCATED_PAGE_COMMAND, "HCI_TRUNCATED_PAGE_COMMAND"),
         (0xFC3F, "[OGF=0x3f, OCF=0x003f]"),
     ]
-    assert all(t > 0 for t, _, _ in unknown)
+    assert all(isinstance(t, Duration) and t > seconds(0) for t, _, _ in unknown)
     report = "\n".join(bt.report())
     assert "unknown commands (3):" in report
     assert "HCI_TRUNCATED_PAGE_COMMAND (0x043f)" in report
-    properties = bt.properties()
-    assert properties is not None
-    assert properties["unknown_commands"][2] == {  # type: ignore[index]
-        "t_ns": unknown[2][0],
+    properties = json.loads(json.dumps(bt.properties()))
+    assert type(properties["unknown_commands"][2]["t_ns"]) is int
+    assert properties["unknown_commands"][2] == {
+        "t_ns": unknown[2].t.ns,
         "op_code": 0xFC3F,
         "name": "[OGF=0x3f, OCF=0x003f]",
     }
@@ -733,6 +734,28 @@ def test_bt_spp_initiator_s_session_finds_pairs_and_opens_the_channel(
     # Bluedroid authenticated with the PIN after PN, and did not encrypt.
     assert peer._controller is not None and peer._controller.authenticated(GUEST)
     assert guest.events(hci.HCI_Encryption_Change_Event) == []
+    [pairing] = bt.pairings()
+    assert isinstance(pairing.t, Duration)
+    assert all(isinstance(p.t, Duration) for p in peer.pairings)
+    assert all(isinstance(e.at, Duration) for e in peer.events)
+    assert pairing.t <= peer.events[0].at <= Duration(runner.now)
+    properties = json.loads(json.dumps(bt.properties()))
+    assert properties["pairings"] == [
+        {
+            "t_ns": pairing.t.ns,
+            "peer": PEER,
+            "initiator": True,
+            "method": "legacy",
+            "number": None,
+            "status": 0,
+            "authenticated": False,
+        }
+    ]
+    assert type(properties["pairings"][0]["t_ns"]) is int
+    assert bt.report()[1:3] == [
+        "  pairings (1):",
+        f"    {pairing.t.ns / 1e9:.9f} s  with {PEER}, by legacy: succeeded",
+    ]
     assert b"".join(data for _, data in source.heard) == b"x" * 2000
     assert b"".join(received) == b"ok\r\n" * len(source.heard)
     # Every packet the host got fits esp32sim's VHCI, its ACL data cut to the buffer.
@@ -756,7 +779,9 @@ def test_the_channel_is_refused_at_sabm_on_a_link_that_never_authenticated(
         runner.run(session())
     assert refused.value.error_code == core.ConnectionError.CONNECTION_REFUSED
     ((at, why),) = peer.refused
-    assert why == f"{ADDRESS}: the link is not authenticated" and 0 < at < runner.now
+    assert why == f"{ADDRESS}: the link is not authenticated" and seconds(0) < at < Duration(
+        runner.now
+    )
     assert not peer.channel_open
 
 

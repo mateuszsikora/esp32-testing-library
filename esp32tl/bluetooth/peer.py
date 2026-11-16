@@ -16,7 +16,7 @@ source sends goes out on the channel at the board's time it gives.
 import bisect
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
-from typing import TypeVar
+from typing import NamedTuple, TypeVar
 
 from bumble import core, hci, rfcomm, sdp, utils
 from bumble.device import Connection, Device, DeviceConfiguration, with_connection_from_address
@@ -33,6 +33,23 @@ from esp32tl.bluetooth.controller import RSSI, SIX_DIGITS, Controller, Pairing, 
 from esp32tl.interfaces.uart import Source, Supplied
 from esp32tl.link.boardlink import Direction, Output
 from esp32tl.sources.model import InNanoseconds, Model, in_nanoseconds
+from esp32tl.units import Duration
+
+
+class ChannelEvent(NamedTuple):
+    """Bytes crossing SPP at a Duration on the air's clock."""
+
+    at: Duration
+    direction: Direction
+    data: bytes
+
+
+class Refusal(NamedTuple):
+    """A channel opening refused at a Duration on the air's clock."""
+
+    at: Duration
+    why: str
+
 
 # Unless the test gives another: an address no real device in a test is likely to have, and the
 # class of device of a device that says nothing about itself (major class Uncategorized).
@@ -401,8 +418,8 @@ class SppPeer(BluetoothDevice):
         self.channel = channel
         self.secure = secure
         self.service_name = service_name
-        self.events: list[tuple[int, Direction, bytes]] = []
-        self.refused: list[tuple[int, str]] = []
+        self.events: list[ChannelEvent] = []
+        self.refused: list[Refusal] = []
         self.lost = 0
         self._pending: list[Output] = []
         self._dlc: rfcomm.DLC | None = None
@@ -543,7 +560,7 @@ class SppPeer(BluetoothDevice):
         return False
 
     def _refuse(self, connection: Connection, why: str) -> None:
-        self.refused.append((self.air.loop.now, f"{_named(connection)}: {why}"))
+        self.refused.append(Refusal(Duration(self.air.loop.now), f"{_named(connection)}: {why}"))
 
     def _opened(self, dlc: rfcomm.DLC) -> None:
         self._dlc = dlc
@@ -567,7 +584,7 @@ class SppPeer(BluetoothDevice):
 
     def _received(self, data: bytes) -> None:
         now = self.air.loop.now
-        self.events.append((now, "out", data))
+        self.events.append(ChannelEvent(Duration(now), "out", data))
         with self._failing():
             self._queue(now, "receive", lambda: self._driving.receive(now, data))
             self._flush(now)
@@ -652,7 +669,7 @@ class SppPeer(BluetoothDevice):
             if self._dlc is None or not self._reaches_holder():
                 self.lost += len(data)
                 continue
-            self.events.append((t, "in", data))
+            self.events.append(ChannelEvent(Duration(t), "in", data))
             self._dlc.write(data)
 
     def _reaches_holder(self) -> bool:
