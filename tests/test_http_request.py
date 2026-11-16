@@ -148,7 +148,8 @@ def test_the_report_and_properties_carry_the_access_point_and_its_network(
     assert properties["network"]["esp32tl_network"] == 1
 
 
-def test_wifi_after_power_on_is_refused(pytester: pytest.Pytester) -> None:
+@pytest.mark.parametrize("method", ["access_point", "station"])
+def test_wifi_after_power_on_is_refused(pytester: pytest.Pytester, method: str) -> None:
     app = Path(__file__).resolve().parents[1] / "firmware/http_request"
     pytester.makepyfile(f"""
         import pytest
@@ -156,7 +157,7 @@ def test_wifi_after_power_on_is_refused(pytester: pytest.Pytester) -> None:
 
         def test_late(board, wifi):
             board.power_on()
-            wifi.access_point("myssid", password="mypassword")
+            wifi.{method}("myssid", password="mypassword")
     """)
     result = pytester.runpytest_subprocess("-p", "no:cacheprovider", "-rA")
     result.assert_outcomes(failed=1)

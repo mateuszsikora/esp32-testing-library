@@ -1032,3 +1032,14 @@ to the pinned esp_modem in that tree. No C/C++ source or manifest is patched. `b
 upstream `sdkconfig.defaults` followed by `firmware/pppos_client/sdkconfig.defaults` through
 `SDKCONFIG_DEFAULTS`; the project path containing the revision is recorded in provenance.
 Only the built image is packed into CI's existing firmware cache, as for the other examples.
+
+### Arduino access-point path
+
+`firmware/arduino_shell/src/main.cpp` reads `ap_ssid` and `ap_password` before closing Preferences.
+When `ssid` is empty and `ap_ssid` is not, it registers `WiFi.onEvent` for
+`ARDUINO_EVENT_WIFI_AP_STACONNECTED` and `ARDUINO_EVENT_WIFI_AP_STADISCONNECTED`, selects `WIFI_AP`
+and calls `WiFi.softAP`. On success it registers the existing `/status` handler and starts the
+same `WebServer`; the loop's `serving` path handles both modes. Join/leave logs use the event's
+MAC rather than an assumed client address. `access_point` distinguishes the console's AP status
+from its original off/joining/connected states. The PlatformIO image layout and partition table
+stay the same, so `tests/test_firmware_images.py` needs no new image constants.

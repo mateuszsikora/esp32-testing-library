@@ -1126,6 +1126,21 @@ firmware can still disable input or change its native/matrix route. No wire mess
 `runner/src/session/tests.rs` checks native routing, input disable, reset and matrix rerouting;
 `tests/test_console_input.py` exercises post-boot FIFO overflow and the ESP-IDF UART driver.
 
+## Virtual station relay
+
+`cli::Wifi` distinguishes `AccessPoint { spec, nearby }` from `Station { spec }`.
+The latter uses `StaConfig::parse` and `SocBus::attach_wifi_station`; both modes enable
+`set_ethernet_relay(true)`. The session reuses Ethernet collection, queue backpressure and the
+five Wi-Fi counters. `wifi_ap` is allowed only for the access-point variant. Power-on reset
+reattaches the selected radio role, and power-off clears it.
+
+`receive_relay_frame` refuses frames until association: the session retains the head of its
+queue. For station mode only, identical pending IPv4 UDP 68-to-67 frames are coalesced before
+insertion. This bounds pending DHCP retransmissions without an association event or a second
+DHCP implementation in Rust. Ordinary Ethernet traffic is not coalesced. `relay_lost` is kept in
+upstream's stderr diagnostic rather than conflated with socket/ring counters; see the
+[decision](../decisions/runner.md#virtual-station-mode-shares-the-ethernet-relay-but-has-no-access-point-switch).
+
 ## Distribution identity
 
 `--runtime-version` prints the Cargo package version and full esp32sim revision separated by a

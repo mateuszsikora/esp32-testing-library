@@ -1,10 +1,11 @@
 /* An Arduino-ESP32 sketch that takes the core's own driver paths: `Serial` (HardwareSerial on
  * UART0) for a banner and a line-based command interpreter, `Preferences` for its settings in NVS,
- * and, when the settings name a network, `WiFi` as a station and `WebServer` on port 80.
+ * and `WiFi` as a station or SoftAP with `WebServer` on port 80.
  *
  * The settings are in the Preferences namespace "shell", read once at boot: `greeting`, printed
  * after the banner, and `ssid` and `password`, the network to join. Without an `ssid` the sketch
- * stays off the air. A line on `Serial` is a command: `help`, `greeting`, `uptime` or `wifi`.
+ * starts a SoftAP when `ap_ssid` is set (`ap_password` optional), otherwise stays off the air.
+ * A line on `Serial` is a command: `help`, `greeting`, `uptime` or `wifi`.
  * Every line the sketch prints starts with "arduino_shell: " and ends with println's "\r\n". */
 #include <Arduino.h>
 #include <Preferences.h>
@@ -20,6 +21,7 @@ static WebServer server(80);
 static String greeting;
 static bool joining;
 static bool serving;
+static bool access_point;
 static unsigned long requests;
 static char line[MAX_LINE + 1];
 static size_t length;
@@ -42,7 +44,10 @@ static void run(const char *command) {
         Serial.print(PREFIX "uptime_ms=");
         Serial.println(millis());
     } else if (strcmp(command, "wifi") == 0) {
-        if (!joining) {
+        if (access_point) {
+            Serial.print(PREFIX "wifi=access-point ip=");
+            Serial.println(WiFi.softAPIP());
+        } else if (!joining) {
             Serial.println(PREFIX "wifi=off");
         } else if (WiFi.status() == WL_CONNECTED) {
             Serial.print(PREFIX "wifi=connected ip=");
@@ -79,6 +84,8 @@ void setup() {
     greeting = preferences.getString("greeting", "");
     String ssid = preferences.getString("ssid", "");
     String password = preferences.getString("password", "");
+    String ap_ssid = preferences.getString("ap_ssid", "");
+    String ap_password = preferences.getString("ap_password", "");
     preferences.end();
     Serial.print(PREFIX "greeting=");
     Serial.println(greeting);
@@ -88,6 +95,32 @@ void setup() {
         WiFi.begin(ssid.c_str(), password.c_str());
         Serial.print(PREFIX "joining ");
         Serial.println(ssid);
+    }
+    if (!joining && ap_ssid.length() > 0) {
+        WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
+            const uint8_t *mac;
+            const char *action;
+            if (event == ARDUINO_EVENT_WIFI_AP_STACONNECTED) {
+                mac = info.wifi_ap_staconnected.mac;
+                action = "joined";
+            } else if (event == ARDUINO_EVENT_WIFI_AP_STADISCONNECTED) {
+                mac = info.wifi_ap_stadisconnected.mac;
+                action = "left";
+            } else return;
+            Serial.printf(PREFIX "station %02x:%02x:%02x:%02x:%02x:%02x %s\r\n",
+                          mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], action);
+        });
+        WiFi.mode(WIFI_AP);
+        access_point = WiFi.softAP(ap_ssid.c_str(), ap_password.length() ? ap_password.c_str() : nullptr);
+        if (access_point) {
+            server.on("/status", HTTP_GET, status);
+            server.begin();
+            serving = true;
+            Serial.print(PREFIX "access point ");
+            Serial.print(ap_ssid);
+            Serial.print(" at ");
+            Serial.println(WiFi.softAPIP());
+        } else Serial.println(PREFIX "access point failed");
     }
     Serial.println(PREFIX "ready; type help");
 }

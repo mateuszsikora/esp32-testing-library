@@ -242,3 +242,17 @@ firmware.
 - [Plan section 4.3](implementation-plan.md#43-recording-format), where the format was sketched
 - [Link protocol](protocol.md): the clocks' vocabulary, from the runner's `hello`
 - [Decisions on the harness](decisions/harness.md)
+
+## Virtual Wi-Fi station properties
+
+When the test configures `wifi.station(...)`, the Wi-Fi properties contain `station` and
+`network` instead of the access-point mode's `access_point`, `nearby` and `switches`:
+
+```json
+{"station": {"ssid": "device-setup", "mac": "02:53:54:41:00:01", "secure": true},
+ "network": {"esp32tl_network": 1, "events": []}}
+```
+
+`secure` means a WPA2 passphrase was supplied; the passphrase is not recorded. Network events
+carry board times and include DHCP acquisition and TCP/HTTP traffic. This is diagnostic metadata,
+not a new replay source: the capability table still refuses a replay source on Wi-Fi. The format version stays 1.

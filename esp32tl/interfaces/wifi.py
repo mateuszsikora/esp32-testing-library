@@ -1,11 +1,5 @@
-"""The chip's Wi-Fi station, `wifi`: the access point it can join, the networks around it, and the
-simulated network behind the access point. The `wifi` fixture is it.
-
-On the `esp32sim` backend the access point is esp32sim's, in the runner (`--wifi`), and the
-networks around are its beacon-only ones (`--wifi-nearby`). What the station sends through the
-access point reaches the harness as Ethernet frames on the link, where `esp32tl.net.Internet`
-answers them on the board's clock; the test switches the access point off the air and back at the
-board's current instant.
+"""The chip's Wi-Fi air: a virtual access point for device station mode, or a virtual station
+joining the device's own SoftAP. Both carry Ethernet to the harness network on the board's clock.
 """
 
 import threading
@@ -19,6 +13,7 @@ from esp32tl.link.boardlink import Direction, Interface, Output
 from esp32tl.link.protocol import Input, WifiAp
 from esp32tl.net import LATENCY_NS, Internet
 from esp32tl.net.ntp import DEFAULT_UTC
+from esp32tl.net.station import DEFAULT_MAC
 from esp32tl.report import RunLog
 
 NAME = "wifi"
@@ -41,6 +36,19 @@ class AccessPoint:
         if self.bssid is not None:
             spec += f",bssid={self.bssid}"
         return spec
+
+
+@dataclass(frozen=True)
+class StationConfig:
+    """The virtual station joining the device's access point."""
+
+    ssid: str
+    password: str | None
+    mac: str
+
+    def spec(self) -> str:
+        spec = f"ssid={self.ssid},mac={self.mac}"
+        return spec + (f",psk={self.password}" if self.password is not None else "")
 
 
 @dataclass(frozen=True)
@@ -68,11 +76,12 @@ class AirEvent:
 
 
 class Wifi(Interface):
-    """The station's air, as the link drives it. `access_point(...)` before power-on puts an
-    access point on the air from power-on and returns the network behind it; `nearby(...)` adds a
-    network around. Until the test gives an access point there is none, and the station finds
-    nothing to join. `now` is the board's clock, `world` the world's time at power-on, which the
-    network's NTP tells. `asked` is called with the request before the access point is made, and
+    """The chip's Wi-Fi air. `station(...)` joins the device's SoftAP.
+    `access_point(...)` puts an access point on the air for the device to join; `nearby(...)`
+    adds networks around that AP. Either role is configured before power-on and returns the
+    network behind it. Without a configured role there is no virtual peer on the air.
+    `now` is the board's clock, `world` the world's time at power-on, which the network's NTP
+    tells. `asked` is called with the request before a virtual peer is made, and
     refuses it by raising, as for a UART's source. `bridging` goes to the network, which calls it
     before a bridge to a real service is made (`Internet.bridge`)."""
 
@@ -93,6 +102,7 @@ class Wifi(Interface):
         self.log = log
         self._lock = threading.Lock()
         self._access_point: AccessPoint | None = None
+        self._station: StationConfig | None = None
         self._network: Internet | None = None
         self._nearby: list[Nearby] = []
         self._on = False
@@ -118,6 +128,10 @@ class Wifi(Interface):
         to 63 bytes), on `channel` (1 to 14), at `bssid` (`02:53:49:4d:00:01` unless
         given). Returns the simulated network behind it, which gives the station its address by
         DHCP. Once per test, before `board.power_on()`."""
+        if self._station is not None:
+            raise SourceError(
+                "wifi.access_point and wifi.station are exclusive: one virtual Wi-Fi role per test"
+            )
         _ssid(ssid, "wifi.access_point")
         if password is not None:
             _text(password, "wifi.access_point: password")
@@ -144,6 +158,45 @@ class Wifi(Interface):
             self.log.test(0, f"wifi.access_point({ssid!r}, channel={channel})")
         return network
 
+    def station(
+        self, ssid: str, *, password: str | None = None, mac: str | None = None
+    ) -> Internet:
+        """Join the device's SoftAP, open or WPA2-PSK, before power-on, once per test."""
+        _ssid(ssid, "wifi.station")
+        if password is not None:
+            _text(password, "wifi.station: password")
+            if not 8 <= len(password.encode()) <= 63 or not password.isascii():
+                raise ValueError("wifi.station: a WPA2 password has 8 to 63 ASCII bytes")
+        mac = DEFAULT_MAC if mac is None else mac
+        _bssid(mac, "wifi.station", field="mac")
+        mac = mac.lower()
+        if int(mac[:2], 16) & 1:
+            raise ValueError("wifi.station: mac must be unicast")
+        if mac in ("24:6f:28:00:11:22", "24:6f:28:00:11:23"):
+            raise ValueError(
+                "wifi.station: mac must differ from the device's station and access point MACs"
+            )
+        self.asked(Request(NAME, source="model"))
+        with self._lock:
+            if self._station is not None:
+                raise SourceError("wifi has its station already: one per test")
+            if self._access_point is not None or self._nearby:
+                raise SourceError(
+                    "wifi.station and wifi.access_point or wifi.nearby are exclusive: "
+                    "one virtual Wi-Fi role per test"
+                )
+            network = Internet(
+                self._now, self._world, link="station", mac=mac, bridging=self._bridging
+            )
+            self._station = StationConfig(ssid, password, mac)
+            self._network = network
+            self._on = True
+        network.start(0)
+        network.log(f"wifi: station {mac} joining {ssid!r}")
+        if self.log is not None:
+            self.log.test(0, f"wifi.station({ssid!r}, mac={mac!r})")
+        return network
+
     def nearby(
         self,
         ssid: str,
@@ -156,6 +209,8 @@ class Wifi(Interface):
         """A network around the station, which a scan lists on `channel` at `rssi` dBm, WPA2-PSK
         when `secure`, and which nothing can join. Before `board.power_on()`, and after
         `access_point`: the networks around are on its air."""
+        if self._station is not None:
+            raise SourceError("wifi.nearby requires a virtual access point, not wifi.station")
         _ssid(ssid, "wifi.nearby")
         _channel(channel, "wifi.nearby")
         _bssid(bssid, "wifi.nearby")
@@ -189,20 +244,20 @@ class Wifi(Interface):
 
     @property
     def network(self) -> Internet:
-        """The simulated network behind the access point."""
+        """The network behind the configured virtual access point or station."""
         if self._network is None:
             raise SourceError("wifi has no access point: give it with wifi.access_point()")
         return self._network
 
     @property
     def on_air(self) -> bool:
-        """Whether the access point is on the air."""
+        """Whether the configured virtual radio role is enabled (not an association indicator)."""
         return self._on
 
     @property
-    def configuration(self) -> AccessPoint | None:
-        """The access point the test gave, if any."""
-        return self._access_point
+    def configuration(self) -> AccessPoint | StationConfig | None:
+        """The virtual access point or station the test gave, if any."""
+        return self._access_point or self._station
 
     @property
     def around(self) -> tuple[Nearby, ...]:
@@ -210,7 +265,9 @@ class Wifi(Interface):
         return tuple(self._nearby)
 
     def runner_args(self) -> list[str]:
-        """The runner's `--wifi` and `--wifi-nearby`, none without an access point."""
+        """The runner's radio flags, or none before a role is configured."""
+        if self._station is not None:
+            return ["--wifi-sta", self._station.spec()]
         if self._access_point is None:
             return []
         args = ["--wifi", self._access_point.spec()]
@@ -219,6 +276,8 @@ class Wifi(Interface):
         return args
 
     def _switch(self, on: bool, step: str) -> None:
+        if self._station is not None:
+            raise SourceError(f"{step}: wifi.station has no virtual access point to switch")
         network = self.network
         now = self._now()
         if self.log is not None:
@@ -270,6 +329,13 @@ class Wifi(Interface):
 
     def report(self) -> list[str]:
         """The access point, the networks around, the switches and the network's events."""
+        if self._station is not None:
+            sta = self._station
+            security = "WPA2-PSK" if sta.password is not None else "open"
+            return [
+                f"wifi: station {sta.mac} joining {sta.ssid!r}, {security}",
+                *self.network.report(),
+            ]
         ap = self._access_point
         if ap is None:
             return ["wifi: no access point"]
@@ -283,6 +349,12 @@ class Wifi(Interface):
         return lines + self.network.report()
 
     def properties(self) -> dict[str, object] | None:
+        if self._station is not None:
+            sta = self._station
+            return {
+                "station": {"ssid": sta.ssid, "mac": sta.mac, "secure": sta.password is not None},
+                "network": self.network.transcript(),
+            }
         ap = self._access_point
         if ap is None:
             return None
@@ -320,11 +392,11 @@ def _channel(channel: int, what: str) -> None:
         raise ValueError(f"{what}: channel {channel!r} is not 1 to 14")
 
 
-def _bssid(bssid: str | None, what: str) -> None:
+def _bssid(bssid: str | None, what: str, *, field: str = "bssid") -> None:
     if bssid is None:
         return
     parts = bssid.split(":") if isinstance(bssid, str) else []
     if len(parts) != 6 or not all(
         len(p) == 2 and all(c in "0123456789abcdefABCDEF" for c in p) for p in parts
     ):
-        raise ValueError(f"{what}: bssid {bssid!r} is not six hexadecimal octets")
+        raise ValueError(f"{what}: {field} {bssid!r} is not six hexadecimal octets")

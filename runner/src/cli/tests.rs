@@ -208,7 +208,7 @@ fn wifi_takes_esp32sims_access_point_and_the_networks_around() {
         ("home", Some("password1"), 11)
     );
     let nearby: Vec<(&str, u8, i8, bool)> = wifi
-        .nearby
+        .nearby()
         .iter()
         .map(|b| (b.ssid.as_str(), b.channel, b.rssi, b.secure))
         .collect();
@@ -298,4 +298,42 @@ fn bt_names_the_application_elf_and_needs_a_board() {
     );
     let opts = parse_str(&format!("{MINIMAL} --board socket:s --bt build/app.elf")).unwrap();
     assert_eq!(opts.bt, Some("build/app.elf".into()));
+}
+
+#[test]
+fn wifi_station_parses_and_refuses_conflicting_modes() {
+    let opts = parse_str(&format!(
+        "{MINIMAL} --board socket:s --wifi-sta ssid=setup,psk=password1,mac=02:00:00:00:00:09"
+    ))
+    .unwrap();
+    let sta = opts.wifi.unwrap().station().unwrap();
+    assert_eq!(sta.ssid, "setup");
+    assert_eq!(sta.psk.as_deref(), Some("password1"));
+    assert_eq!(sta.mac, [2, 0, 0, 0, 0, 9]);
+    for (args, why) in [
+        ("--wifi-sta ssid=x", "needs --board"),
+        (
+            "--board socket:s --wifi-sta ssid=x --wifi ssid=y",
+            "at once are not modelled",
+        ),
+        (
+            "--board socket:s --wifi ssid=y --wifi-sta ssid=x",
+            "at once are not modelled",
+        ),
+        (
+            "--board socket:s --wifi-sta ssid=x --wifi-nearby ssid=y",
+            "nearby networks need",
+        ),
+        (
+            "--board socket:s --wifi-sta ssid=x --wifi-sta ssid=y",
+            "given twice",
+        ),
+        (
+            "--board socket:s --wifi-sta ssid=x,psk=short",
+            "--wifi-sta: invalid station passphrase",
+        ),
+    ] {
+        let err = parse_str(&format!("{MINIMAL} {args}")).unwrap_err();
+        assert!(format!("{err:?}").contains(why), "{err:?}");
+    }
 }

@@ -1,7 +1,7 @@
 //! The command line. Flag names and value formats copy esp32sim's, so that switching to
 //! `esp32sim --board socket:PATH` once mikroverk/esp32sim#325 lands is a rename (plan §4.2).
 use crate::sd_card::Wiring;
-use esp_soc::wifi::{ApConfig, BeaconAp};
+use esp_soc::wifi::{ApConfig, BeaconAp, sta::StaConfig};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -30,6 +30,8 @@ usage: esp32tl-runner --chip esp32 --flash-at OFFSET=FILE... --max-seconds S [op
   --wifi ssid=…,psk=…,chan=…,bssid=…   esp32sim's virtual access point, every key
                         optional; the network behind it is the peer's, over the
                         socket (eth_tx, eth_rx): needs --board
+  --wifi-sta ssid=…[,psk=…][,mac=…]   a virtual station joining the guest's
+                        access point; needs --board; exclusive with --wifi and --wifi-nearby
   --wifi-nearby ssid=…,chan=…,rssi=…,secure=0|1,bssid=…   a network around the
                         station that a scan lists and nothing can join; repeatable,
                         needs --wifi
@@ -83,7 +85,7 @@ pub struct Opts {
     pub peer_timeout: Option<Duration>,
     /// `--sd-spi`, and the image of `--sd-rw`.
     pub sd_card: Option<(Option<PathBuf>, Wiring)>,
-    /// `--wifi` and `--wifi-nearby`.
+    /// `--wifi` with `--wifi-nearby`, or `--wifi-sta`.
     pub wifi: Option<Wifi>,
     /// `--realtime`.
     pub realtime: bool,
@@ -93,19 +95,34 @@ pub struct Opts {
     pub bt: Option<PathBuf>,
 }
 
-/// esp32sim's virtual access point (`--wifi`), as esp32sim parses it, and the networks around
-/// the station (`--wifi-nearby`). The spec is kept as given: `ApConfig` has no `PartialEq`, and
-/// the run loop makes a fresh access point from it each time the peer puts it back on the air.
+/// One virtual radio role: an access point with nearby beacons, or a station joining the guest.
+/// Specs are checked by esp32sim at parse time and retained for reset-time reattachment.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Wifi {
-    pub spec: String,
-    pub nearby: Vec<BeaconAp>,
+pub enum Wifi {
+    AccessPoint { spec: String, nearby: Vec<BeaconAp> },
+    Station { spec: String },
 }
 
 impl Wifi {
+    pub fn station(&self) -> Option<StaConfig> {
+        match self {
+            Self::Station { spec } => Some(StaConfig::parse(spec).expect("checked by cli::parse")),
+            Self::AccessPoint { .. } => None,
+        }
+    }
+
+    pub fn nearby(&self) -> &[BeaconAp] {
+        match self {
+            Self::AccessPoint { nearby, .. } => nearby,
+            Self::Station { .. } => &[],
+        }
+    }
     /// The access point's configuration; the spec was checked when it was parsed.
     pub fn access_point(&self) -> ApConfig {
-        ApConfig::parse(&self.spec).expect("checked by cli::parse")
+        let Self::AccessPoint { spec, .. } = self else {
+            panic!("station is not an access point")
+        };
+        ApConfig::parse(spec).expect("checked by cli::parse")
     }
 }
 
@@ -143,6 +160,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Opts, Error> {
     let mut sd_image = None;
     let mut sd_wiring = None;
     let mut wifi = None;
+    let mut station = None;
     let mut nearby = Vec::new();
     while let Some(flag) = args.next() {
         let mut value = || {
@@ -225,6 +243,16 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Opts, Error> {
                 access_point(&spec)?;
                 wifi = Some(spec);
             }
+            "--wifi-sta" => {
+                if station.is_some() {
+                    return Err(usage(
+                        "--wifi-sta is given twice: one virtual station per run",
+                    ));
+                }
+                let spec = value()?;
+                StaConfig::parse(&spec).map_err(|e| usage(format!("--wifi-sta: {e}")))?;
+                station = Some(spec);
+            }
             "--wifi-nearby" => nearby.push(value()?),
             "--realtime" => opts.realtime = true,
             "--flash-out" => opts.flash_out = Some(PathBuf::from(value()?)),
@@ -251,6 +279,23 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Opts, Error> {
         (None, None) => None,
         (Some(_), None) => return Err(usage("--sd-rw needs --sd-spi: the card's pins")),
     };
+    if station.is_some() {
+        if wifi.is_some() {
+            return Err(usage(
+                "--wifi-sta with --wifi: a virtual access point and station at once are not modelled",
+            ));
+        }
+        if !nearby.is_empty() {
+            return Err(usage(
+                "--wifi-sta with --wifi-nearby: nearby networks need a virtual access point",
+            ));
+        }
+        if opts.board.is_none() {
+            return Err(usage(
+                "--wifi-sta puts the peer behind the virtual station: it needs --board",
+            ));
+        }
+    }
     opts.wifi = match wifi {
         Some(spec) => {
             if opts.board.is_none() {
@@ -274,12 +319,12 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Opts, Error> {
                     if b.ssid == ap.ssid { "SSID" } else { "BSSID" }
                 )));
             }
-            Some(Wifi { spec, nearby })
+            Some(Wifi::AccessPoint { spec, nearby })
         }
         None if !nearby.is_empty() => {
             return Err(usage("--wifi-nearby needs the access point of --wifi"));
         }
-        None => None,
+        None => station.map(|spec| Wifi::Station { spec }),
     };
     if opts.bt.is_some() && opts.board.is_none() {
         return Err(usage(

@@ -640,7 +640,11 @@ class Esp32Sim(Board):
         if self._sd_card is not None and self._sd_card.image_path is not None:
             set_up.append(f"a card in {self._sd_card.name}")
         if self._wifi.configuration is not None:
-            set_up.append("the access point of wifi")
+            set_up.append(
+                "the station of wifi"
+                if "--wifi-sta" in self._wifi.runner_args()
+                else "the access point of wifi"
+            )
         if self._bluetooth.devices():
             set_up.append("the devices on the Bluetooth air")
         if self._console.tapped is not None:

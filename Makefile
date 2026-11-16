@@ -81,7 +81,7 @@ test: setup test-runner $(FIRMWARE_IMAGES:%=firmware/%/build/esp32tl-built) $(PL
 # two runs compared; the position tracker example brings TLS on the device.
 # Not after `setup`: the runner and the ROM ELF are taken
 # as they are, as in the CI job, which receives the runner from the runner job.
-determinism: $(VENV)/.installed firmware/nmea_reader/build/esp32tl-built firmware/pppos_client/build/esp32tl-built firmware/mqtt_session/build/esp32tl-built firmware/http_request/build/esp32tl-built firmware/bt_spp_initiator/build/esp32tl-built examples/position_tracker/build/esp32tl-built
+determinism: $(VENV)/.installed firmware/arduino_shell/.pio/build/esp32dev/esp32tl-built firmware/nmea_reader/build/esp32tl-built firmware/pppos_client/build/esp32tl-built firmware/mqtt_session/build/esp32tl-built firmware/http_request/build/esp32tl-built firmware/bt_spp_initiator/build/esp32tl-built examples/position_tracker/build/esp32tl-built
 	$(BIN)/python scripts/check-determinism.py
 
 lint: $(VENV)/.installed

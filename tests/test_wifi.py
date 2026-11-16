@@ -139,3 +139,48 @@ def test_ntp_behind_an_access_point_tells_the_default_world() -> None:
     assert answer is not None
     told = struct.unpack(">I", answer[40:44])[0]
     assert NTP_EPOCH + timedelta(seconds=told) == DEFAULT_UTC
+
+
+def test_station_flags_properties_and_exclusions(wifi: Wifi, asked: list[Request]) -> None:
+    network = wifi.station("setup", password="password1")
+    assert wifi.runner_args() == ["--wifi-sta", "ssid=setup,mac=02:53:54:41:00:01,psk=password1"]
+    assert asked == [Request("wifi", source="model")]
+    assert wifi.configuration is not None and wifi.network is network
+    properties = wifi.properties()
+    assert properties is not None
+    assert properties["station"] == {"ssid": "setup", "mac": "02:53:54:41:00:01", "secure": True}
+    calls: list[tuple[Callable[[], object], str]] = [
+        (lambda: wifi.station("again"), "station already"),
+        (lambda: wifi.access_point("ap"), "exclusive"),
+        (lambda: wifi.nearby("near"), "requires a virtual access point"),
+        (wifi.access_point_off, "no virtual access point"),
+        (wifi.access_point_on, "no virtual access point"),
+    ]
+    for call, why in calls:
+        with pytest.raises(SourceError, match=why):
+            call()
+    other = Wifi(now=lambda: 0)
+    other.access_point("ap")
+    with pytest.raises(SourceError, match="exclusive"):
+        other.station("setup")
+    other.nearby("near")
+    with pytest.raises(SourceError, match="exclusive"):
+        other.station("setup")
+
+
+@pytest.mark.parametrize(
+    "kwargs,why",
+    [
+        ({"ssid": ""}, "1 to 32 bytes"),
+        ({"ssid": "a,b"}, "comma"),
+        ({"ssid": "x" * 33}, "1 to 32 bytes"),
+        ({"ssid": "x", "password": "short"}, "8 to 63 ASCII"),
+        ({"ssid": "x", "mac": "ff:00:00:00:00:01"}, "unicast"),
+        ({"ssid": "x", "mac": "24:6f:28:00:11:23"}, "differ from the device"),
+        ({"ssid": "x", "mac": "24:6f:28:00:11:22"}, "differ from the device"),
+        ({"ssid": "x", "mac": "bad"}, "six hexadecimal"),
+    ],
+)
+def test_station_validation(kwargs: dict[str, str], why: str) -> None:
+    with pytest.raises(ValueError, match=why):
+        Wifi(now=lambda: 0).station(**kwargs)

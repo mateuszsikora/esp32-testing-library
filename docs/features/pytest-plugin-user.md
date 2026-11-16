@@ -1041,9 +1041,10 @@ after `esp32sim: ` ([where it fails](#one-board-and-its-interfaces)).
 
 ### The wifi fixture
 
-`wifi` is the chip's Wi-Fi station, which every board profile has: every classic ESP32 has the
-radio. Until the test gives it an access point there is none on the air, and the firmware finds
-nothing to join. From `tests/test_http_request.py`, where ESP-IDF's unmodified `http_request`
+`wifi` is the chip's Wi-Fi air, which every board profile has: every classic ESP32 has the
+radio. `access_point(...)` gives the device a network to join; `station(...)` joins the device's
+own SoftAP ([below](#a-virtual-station-joins-the-devices-softap)). Until the test configures one,
+there is no virtual peer on the air. From `tests/test_http_request.py`, where ESP-IDF's unmodified `http_request`
 example joins with ESP-IDF's default SSID and passphrase and fetches a page
 ([validation firmware](validation-firmware-user.md)):
 
@@ -1311,3 +1312,24 @@ condition before the action that may produce its event. The
 `modem.network()` gives the underlying network for DNS, NTP and TLS service configuration.
 On serial, both `broker` and `modem.network()` skip because a modem model is unsupported.
 See [the network guide](network-user.md) for complete examples and condition semantics.
+
+### A virtual station joins the device's SoftAP
+
+`wifi.station(ssid, *, password=None, mac=None)` returns the network behind a virtual station,
+before `board.power_on()`, once per test. The SSID has 1 to 32 UTF-8 bytes and no comma; passwords
+have 8 to 63 ASCII bytes and no comma, matching esp32sim's parser. Without a password the AP must
+be open. The MAC defaults to `02:53:54:41:00:01`, must be six hexadecimal octets, unicast, and must
+differ from the device's station and SoftAP MACs (`24:6f:28:00:11:22` and `24:6f:28:00:11:23`).
+
+This is exclusive with `wifi.access_point(...)` and `wifi.nearby(...)`. A second call raises
+`wifi has its station already: one per test`. `access_point_off()` and `access_point_on()` raise
+`wifi.access_point_off(): wifi.station has no virtual access point to switch` and the corresponding
+`wifi.access_point_on()` message. Explicit station departure and rejoining are not implemented.
+
+Wait for `network.when_leased()` after power-on, then use `network.connect(80)` or
+`network.http_client.get("/status")`. The lease and host-side services are described in
+[the network guide](network-user.md#joining-the-devices-own-access-point). Serial does not supply virtual air; Wi-Fi replay is not a supported source. Only classic ESP32, open and WPA2-PSK are supported; there is no virtual
+AP+STA combination, WPA3-SAE, required PMF, hidden SSID probing or keep-alive. An idle device may
+disassociate the host after about 300 s; the emulator rejoins. Lease renewal is not implemented:
+expiry clears the address and connections and starts DHCP again. Radio extensions await upstream
+support, and renewal awaits a DHCP client extension.

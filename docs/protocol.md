@@ -150,7 +150,7 @@ seen exactly the events up to the block point, however the emulator schedules it
 | runner → harness | `sd_card_ack` *ext* | `t`, `image`, `error` | #106 |
 | runner → harness | `sd_op` *ext* | `t`, `fault`, `op`, `blocks`, `action`, `delay`, `written` | #107 |
 | runner → harness | `flash_dump_ack` *ext* | `t`, `error` | #131 |
-| runner → harness | `stats` *ext* | `t`, `end`, `resets`, `turns`, `uart`, `unrouted_rx_bytes`, `inputs_on_output`, `inputs_not_applied`, `rx_bytes_not_paced`; `wifi` with `--wifi` (M7); under `--realtime` also `rt_resyncs` (M5) | M1 |
+| runner → harness | `stats` *ext* | `t`, `end`, `resets`, `turns`, `uart`, `unrouted_rx_bytes`, `inputs_on_output`, `inputs_not_applied`, `rx_bytes_not_paced`; `wifi` with `--wifi` or `--wifi-sta`; under `--realtime` also `rt_resyncs` (M5) | M1 |
 | harness → runner | `uart_rx` | `t`, `pin`, `baud`, `data` | M1 |
 | harness → runner | `gpio_in` | `t`, `levels` | M3 |
 | harness → runner | `release` | `t`, `pins` | M3 |
@@ -170,11 +170,10 @@ seen exactly the events up to the block point, however the emulator schedules it
 The runner answers `adc` with a protocol error naming the message, `adc is not implemented yet`,
 until it has an issue of its own (5.12).
 
-The Wi-Fi messages (`eth_tx`, `eth_rx`, `wifi_ap`) pass only on a run started with `--wifi`, and
-the version stays 1. The runner sends `eth_tx` only with `--wifi`, and only a harness that speaks
-the three messages starts it with that flag, so a peer written before M7 sees none of them; without
-`--wifi`, `eth_rx` and `wifi_ap` are protocol errors (section 9). `stats.wifi` is a field an older
-peer does not know, which section 2 lets it ignore.
+The Wi-Fi Ethernet messages (`eth_tx`, `eth_rx`) and `stats.wifi` pass on runs started with
+`--wifi` or `--wifi-sta`. `wifi_ap` passes only with `--wifi`: a virtual station has no access
+point to switch. Without either radio option, `eth_rx` is a protocol error; `wifi_ap` is a protocol
+error without `--wifi`, including in station mode (section 9). The protocol version stays 1.
 
 `power` and `chip_reset` (5.17, 5.18) leave the version at 1 too. A peer that never sends them
 sees no difference: the runner sends no new message, and `reset` (5.5) keeps its fields. A runner
@@ -458,7 +457,7 @@ port that carried a watched route during the run, with the bytes each way and th
 `rt_resyncs`, only under `--realtime`, counts the times the run skipped a lag behind wall time
 (12.2). `BoardLink` puts the counts in the test report next to the matching engine's unseen requests.
 
-`wifi` is there with `--wifi` only, as in the second example, and counts the station's link over
+`wifi` is there with `--wifi` or `--wifi-sta`, as in the second example, and counts the station's link over
 the whole run:
 
 - `eth_tx`: the `eth_tx` messages sent, one per Ethernet frame the station sent (5.15);
@@ -578,6 +577,16 @@ DNS, NTP, NAT to the host) answers nothing. The example is an ARP request from t
 `24:6f:28:00:11:22`, for `10.64.0.1`, and the harness's answer from the gateway's MAC,
 `02:53:49:4d:00:02`, a millisecond later.
 
+With `--wifi-sta`, the virtual station joins the guest's SoftAP. The harness sends and receives
+at the virtual station's MAC and acquires its address from the guest's DHCP server. The same
+`eth_tx` and `eth_rx` directions are relative to the guest: guest frames go out, harness frames
+go in. Frames sent before association wait at the runner queue's head until esp32sim accepts
+them. Identical pending DHCP client frames (IPv4 UDP 68 to 67) occupy one queue entry in this
+mode; `eth_rx` counts accepted frames, not coalesced copies. The harness retries on board time.
+`VirtualSta::on_ap_tx` already trims the guest's FCS slot in this mode; the harness still bounds
+ARP and IPv4 by their payload lengths. `relay_lost`, frames accepted by esp32sim but lost on a
+later disassociation, appears in `[emu] wifi-sta:` stderr, not in the five `stats.wifi` fields.
+
 `data` is one Ethernet II frame without its FCS: destination, source, EtherType and payload, 14 to
 1518 bytes. An `eth_rx` is that. An `eth_tx` from ESP-IDF's station is that and 4 bytes more,
 `ef be ad de`, within the same limit: the frame of a 1500-byte datagram is an `eth_tx` of 1518
@@ -609,9 +618,9 @@ ESP-IDF version: with `ESP_EMU_DEBUG=wifi-frames` the runner logs each frame the
 `[wifi] TX queue {queue} desc {address} {length} bytes {kind} …`, the descriptor's length, so a
 null data frame shows `28 bytes null (2/4)`; the 4 bytes themselves are the end of each `eth_tx`.
 
-`Ethernet.receive` leaves the 4 bytes out: ARP reads 28 bytes, and an IPv4 datagram ends at its
+`Ethernet.receive` and `Station.receive` leave the 4 bytes out: ARP reads 28 bytes, and an IPv4 datagram ends at its
 total length. An `eth_rx` outside the range is a protocol error, as is `eth_rx` on a run without
-`--wifi`; the harness's codec refuses an `eth_tx` outside the range too.
+`--wifi` or `--wifi-sta`; the harness's codec refuses an `eth_tx` outside the range too.
 
 `eth_tx`: a frame the station sent. It is an event: it carries `seq`, sets the block point, and an
 answer stamped `t + latency` is on time (rule 2). esp32sim's relay hands over frames without their
@@ -646,7 +655,7 @@ each output of it as one `eth_rx`.
 ```
 
 From `t` the access point of `--wifi` is off the air (`on: false`) or on it (`on: true`). `on` is
-JSON `true` or `false`; anything else is a protocol error, as is `wifi_ap` without `--wifi`. It
+JSON `true` or `false`; anything else is a protocol error, as is `wifi_ap` without `--wifi`, including with `--wifi-sta`. It
 goes into the input queue (section 8) like any input. The access point is on the air from
 power-on; a switch to the state it is in already does nothing.
 
@@ -1156,7 +1165,7 @@ the runner at or before its `t` (rule 1).
 | `SIGTERM` or `SIGINT` | ends the slice in progress (at most one emulated millisecond, or the rest of a deep sleep, a few wall microseconds), or at once if it is waiting for the peer's turn or, under `--realtime`, for wall time on its own clock (12.2). A sleep inside esp32sim's pacing comes to its end first, which is about 2 ms at most but for the board kept off from power-on (12.2); sends the events and `warn`s not yet sent, `stats` with `end: signal`, closes | 0 |
 | any other `Stop` (`esp-soc/src/soc.rs:9`: `MaxInsns`, `Breakpoint`, `Unimplemented`, `Simcall`, `Ebreak`, `Watch`, `Exceptions`, `CostModel`, `CostModelLifecycle`) | events not yet sent, `stats` with `end: emulator` and the variant, closes | 1 |
 | usage error, or an image or ROM that cannot be loaded | nothing on the socket (it may not be connected yet) | 2 |
-| protocol error by the peer: malformed or oversized line, unknown `type`, version or chip mismatch, late `t`, wrong `ack`, `quiet_until` not after the `sync`, a `baud` of `0`, a `watch` with a pin the chip does not have, a message the runner does not implement yet, `eth_rx` or `wifi_ap` without `--wifi` (`eth_rx without --wifi`, `wifi_ap without --wifi`), an `eth_rx` frame outside 14 to 1518 bytes (`eth_rx: an Ethernet frame of N bytes; one without FCS has 14 to 1518`), `hci_rx` without `--bt` (`hci_rx without --bt`), an `hci_rx` packet outside 1 to 496 bytes (`hci_rx: an H4 packet of N bytes; esp32sim's VHCI carries 1 to 496`), an `on` that is not `true` or `false`, `sd_card` without `--sd-spi` (`sd_card without --sd-spi`), an `image` that is not a string, `sd_fault` or `sd_clear` without `--sd-spi` (`sd_fault without --sd-spi`, `sd_clear without --sd-spi`), an `sd_fault` that 5.20 does not allow (an `op` or `action` it does not list, an erase that fails, a `delay` missing, out of range or with `error`, a `count` out of range, `blocks` that are not `[first, last]`, an `id` in use already), `flash_dump` without `--flash-out` (`flash_dump without --flash-out`) | `stats` with `end: protocol_error`, closes | 3 |
+| protocol error by the peer: malformed or oversized line, unknown `type`, version or chip mismatch, late `t`, wrong `ack`, `quiet_until` not after the `sync`, a `baud` of `0`, a `watch` with a pin the chip does not have, a message the runner does not implement yet, `eth_rx` without either Wi-Fi mode (`eth_rx without --wifi or --wifi-sta`), `wifi_ap` without `--wifi` (`wifi_ap without --wifi`), or `wifi_ap` in station mode (`wifi_ap with --wifi-sta: there is no virtual access point to switch`), an `eth_rx` frame outside 14 to 1518 bytes (`eth_rx: an Ethernet frame of N bytes; one without FCS has 14 to 1518`), `hci_rx` without `--bt` (`hci_rx without --bt`), an `hci_rx` packet outside 1 to 496 bytes (`hci_rx: an H4 packet of N bytes; esp32sim's VHCI carries 1 to 496`), an `on` that is not `true` or `false`, `sd_card` without `--sd-spi` (`sd_card without --sd-spi`), an `image` that is not a string, `sd_fault` or `sd_clear` without `--sd-spi` (`sd_fault without --sd-spi`, `sd_clear without --sd-spi`), an `sd_fault` that 5.20 does not allow (an `op` or `action` it does not list, an erase that fails, a `delay` missing, out of range or with `error`, a `count` out of range, `blocks` that are not `[first, last]`, an `id` in use already), `flash_dump` without `--flash-out` (`flash_dump without --flash-out`) | `stats` with `end: protocol_error`, closes | 3 |
 | the peer is gone: the connection failed, the socket closed, a read or write failed, the peer's turn took longer than `--peer-timeout`, or a write made no progress for that long (in or outside a turn) | nothing more | 4 |
 | a second `SIGTERM` or `SIGINT` | ends the process at once | 128 + the signal's number |
 

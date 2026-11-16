@@ -3785,6 +3785,51 @@ port's baud, as it already does for output. A profile rate override is postponed
 consumer needs a non-default simulated console. Automatically following `uart_cfg` is rejected:
 it would hide the framing errors of a physical host port at the wrong rate.
 
+## A test joins the device's access point through esp32sim's virtual station, with the harness as the host behind it
+
+Status: decided (#215)
+
+`wifi.station(ssid, password=..., mac=...)` configures a virtual station before power-on and
+returns `Internet` with a third link, `Station`, beside PPP and access-point Ethernet. The radio
+interface describes both directions now: its original station-only wording in #31 is extended,
+not a restriction on the chip's mode. The pin audit of #212 deliberately left this API for a
+separate change; this is that change. The runner attaches `StaConfig` through
+`SocBus::attach_wifi_station`, with Ethernet relay on. The harness uses the virtual station's
+MAC: there are no four-address frames, and the emulator takes no lease of its own in relay mode.
+
+The host gets its address by DHCP and uses option 54, the selected server's identifier, as the
+default device address. A router in option 3 can be another host; it is used for off-subnet
+routing only. `address=` still overrides the TCP destination. `network.lease` exposes the current
+lease and `network.when_leased()` is a current-state condition, following #108/#116/#182 rather
+than giving a history query an event name. DNS, NTP, the broker, HTTP server and registered or
+bridged services remain usable, but only on the host's leased address; DNS answers with that
+address. ARP answers only for that address. IPv4 destined elsewhere is dropped before services.
+
+DHCP uses the broadcast flag, which ESP-IDF v5.5.4's
+`components/lwip/apps/dhcpserver/dhcpserver.c:dhcps_response_ip_set` explicitly handles, even with
+static ARP entries enabled. Retries use board time, starting at 4 s and doubling up to 64 s,
+with deterministic transaction IDs and no random jitter. Identical requests waiting in the
+runner are coalesced in station mode: an unjoined station's first DISCOVER stays queued, without
+an ever-growing backlog. Once a frame has entered esp32sim, later retries are independent frames.
+There is no gratuitous ARP or RFC 5227 conflict probe: this isolated subnet has one harness host,
+and its address comes from the device. Ordinary ARP resolves destinations before queued IP leaves.
+
+**Rejected:** the station taking a lease inside esp32sim and host forwarding into the guest's AP:
+#362 has no such forwarding; it belongs to mikroverk/esp32sim#361. A host IP stack in the runner
+would duplicate the harness's deterministic TCP and HTTP. A separate client-only network class
+would duplicate connections, path configuration, transcripts and reporting; the third `Internet`
+link keeps those. Promiscuous service addresses, as behind a virtual AP, would make this host
+answer for other machines on the device's subnet.
+
+**Not yet:** T1 renewal, pending a DHCP renewal/rebinding state machine and tests for long runs.
+At lease expiry the host drops its connections and ARP cache and starts DHCP again; it never
+continues sending from an expired address. Device reset does the same immediately. No explicit
+station leave/rejoin command, pending a radio control protocol and upstream support. No keep-alive
+frames, pending esp32sim support: an ESP-IDF AP may disassociate an idle host after about 300 s
+and the virtual station rejoins. No virtual AP and virtual station together, pending esp32sim's
+AP+STA model; no other chips, pending their station attachment. WPA3-SAE, required PMF and hidden
+SSIDs wait for upstream authentication and probe support.
+
 ## Runtime preparation is explicit and version-matched
 
 Status: decided

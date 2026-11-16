@@ -419,7 +419,7 @@ to `--board`, and nothing after it.
 | 1 | the emulator stopped for any other reason | the stop line, then `esp32tl-runner: the emulator stopped before --max-seconds: STOP`, the stop with its fields; with `--board`, `end: the emulator stopped before --max-seconds: STOP at ...` |
 | 2 | a usage error | `esp32tl-runner: MESSAGE`, then `run esp32tl-runner --help for the usage` |
 | 2 | an input that cannot be loaded: no ROM found, a file that cannot be read, a ROM that is not an ELF, an image that does not fit in flash, a `--bt` ELF that is not an ELF or lacks the controller's symbols, an SD card image that cannot be opened for writing or is not a whole number of 512 KiB units | `esp32tl-runner: MESSAGE`, no stop line |
-| 3 | with `--board`: a protocol error by the peer, such as a malformed line, a version or chip mismatch, an input stamped before its turn's `sync`, an `eth_rx` or `wifi_ap` on a run without `--wifi`, an `hci_rx` on a run without `--bt` or outside 1 to 496 bytes, an `sd_card` on a run without `--sd-spi` | `end: protocol error by the peer at BOARD: WHAT: LINE at ...`, `LINE` cut after 200 characters |
+| 3 | with `--board`: a protocol error by the peer, such as a malformed line, a version or chip mismatch, an input stamped before its turn's `sync`, an `eth_rx` without `--wifi` or `--wifi-sta`, or `wifi_ap` without `--wifi` (including station mode), an `hci_rx` on a run without `--bt` or outside 1 to 496 bytes, an `sd_card` on a run without `--sd-spi` | `end: protocol error by the peer at BOARD: WHAT: LINE at ...`, `LINE` cut after 200 characters |
 | 4 | with `--board`: the connection failed, or the peer is gone: it closed the socket, a read or write failed, or `--peer-timeout` ran out | `end: cannot connect to the peer at ...`, or `end: the peer at BOARD is gone: WHY at ...` |
 | 101 | a panic, in the runner or in esp32sim during the run | Rust's panic message, no stop line |
 | 128 + N | with `--board`: a second `SIGTERM` or `SIGINT` (signal number N) | whatever came before it |
@@ -458,3 +458,31 @@ held turn then, or still running 5 s later, gets one `SIGTERM` once it has said 
 - [esp32sim-backend-user.md](esp32sim-backend-user.md): how tests start the runner, and
   `ESP32TL_RUNNER` / `ESP32TL_ROM` to use another build.
 - [Stage 0 findings, Speed](../stage0-findings.md#speed): how emulated time relates to wall time.
+
+## Join a guest access point
+
+`--wifi-sta ssid=NAME[,psk=PASSPHRASE][,mac=xx:xx:xx:xx:xx:xx]` attaches esp32sim's virtual
+station, with the harness as its Ethernet host. `--board` is required. `mac` defaults to
+`02:53:54:41:00:01`; omit `psk` for an open AP. The start-up line is:
+
+```text
+esp32tl-runner: virtual station for 'SSID' (MAC), its network on the socket
+```
+
+The runner parses the spec with `StaConfig::parse` and prefixes its errors with `--wifi-sta: `.
+It refuses `--wifi-sta` twice, alongside `--wifi` (a virtual AP and station together are not
+modelled), or alongside `--wifi-nearby` (those networks need a virtual AP). `eth_tx`, `eth_rx`
+and `stats.wifi` use the existing relay; `wifi_ap` is a protocol error because there is no virtual
+AP to switch. Identical DHCP requests held before association occupy one pending queue entry;
+once handed to esp32sim, subsequent retries are separate requests.
+
+Only classic ESP32, open and WPA2-PSK are supported. There are no keep-alive frames, explicit
+leave/rejoin controls, hidden SSID probes, WPA3-SAE or required PMF; these wait on upstream support.
+The device may drop an idle station after about 300 s and esp32sim rejoins. DHCP and lease expiry
+belong to the harness, not the runner. esp32sim's `[emu] wifi-sta:` diagnostic remains in stderr,
+including frames accepted by the relay but lost because the station subsequently left.
+
+In relay mode the upstream diagnostic's `lease none` refers to esp32sim's disabled DHCP host,
+not to the harness: read `network.lease` for the address the test acquired. A last join failure
+is shown while the station is listening between attempts; during a new handshake the line
+shows `Handshake` and its attempt count instead.

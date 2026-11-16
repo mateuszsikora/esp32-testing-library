@@ -488,6 +488,21 @@ wrapper prints each shard's report with its log. To reproduce on a local subset:
 Reporting durations does not change shard assignment or test assertions. Compare repeated runs
 on the same OS/Python before using these wall-clock measurements to rebalance shards.
 
+
+### SoftAP station validation
+
+`tests/test_arduino_softap.py` runs open and WPA2 SoftAPs, HTTP and raw TCP, wrong-password
+failure and reset/power-cycle reacquisition. Build `arduino_shell` with
+`firmware/build-platformio.sh arduino_shell`. `tests/test_net_station.py` covers DHCP retries,
+NAK, expiry, ARP, host-only services and TCP/HTTP with synthetic packets, without firmware.
+`tests/test_determinism.py::test_device_softap` saves console lines, the network transcript and
+lease times for open and WPA2 runs. `make determinism` now builds `arduino_shell` when missing.
+To compare just these cases:
+
+```sh
+.venv/bin/python scripts/check-determinism.py --out build/softap-determinism tests/test_determinism.py -k device_softap
+```
+
 ## Wheel acceptance test
 
 After `make setup`, run `.venv/bin/pip wheel --no-deps . -w dist`,

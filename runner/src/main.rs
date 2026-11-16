@@ -184,6 +184,21 @@ fn run_with_board(
     // whatever the guest printed before the end comes out before what the runner says
     m.drain_console();
     report_card(card.as_ref());
+    // Retain upstream's radio diagnostics, including why a virtual station never joined.
+    // Its private network is inactive in relay mode, so do not print that network's counters.
+    if opts.wifi.is_some() {
+        for line in m
+            .bus
+            .periph
+            .wifi
+            .link
+            .report()
+            .lines()
+            .filter(|line| line.starts_with("[emu] wifi"))
+        {
+            eprintln!("{line}");
+        }
+    }
     let cause = match &end {
         session::End::MaxSeconds => "max_seconds".to_string(),
         session::End::Stop => "stop from the peer".to_string(),
@@ -293,23 +308,31 @@ fn setup(
         // run loop the station's Ethernet frames instead of esp32sim's own network
         session::Guest::wifi_access_point(&mut m, wifi);
         m.bus.set_ethernet_relay(true)?;
-        let ap = wifi.access_point();
-        eprintln!(
-            "esp32tl-runner: Wi-Fi access point '{}' bssid {} channel {} ({}), its network on the socket",
-            ap.ssid,
-            esp_soc::wifi::mac_str(&ap.bssid),
-            ap.channel,
-            if ap.psk.is_some() { "WPA2-PSK" } else { "open" }
-        );
-        for b in &wifi.nearby {
+        if let Some(sta) = wifi.station() {
             eprintln!(
-                "esp32tl-runner: Wi-Fi network around: '{}' bssid {} channel {} {} dBm ({})",
-                b.ssid,
-                esp_soc::wifi::mac_str(&b.bssid),
-                b.channel,
-                b.rssi,
-                if b.secure { "WPA2-PSK" } else { "open" }
+                "esp32tl-runner: virtual station for '{}' ({}), its network on the socket",
+                sta.ssid,
+                esp_soc::wifi::mac_str(&sta.mac)
             );
+        } else {
+            let ap = wifi.access_point();
+            eprintln!(
+                "esp32tl-runner: Wi-Fi access point '{}' bssid {} channel {} ({}), its network on the socket",
+                ap.ssid,
+                esp_soc::wifi::mac_str(&ap.bssid),
+                ap.channel,
+                if ap.psk.is_some() { "WPA2-PSK" } else { "open" }
+            );
+            for b in wifi.nearby() {
+                eprintln!(
+                    "esp32tl-runner: Wi-Fi network around: '{}' bssid {} channel {} {} dBm ({})",
+                    b.ssid,
+                    esp_soc::wifi::mac_str(&b.bssid),
+                    b.channel,
+                    b.rssi,
+                    if b.secure { "WPA2-PSK" } else { "open" }
+                );
+            }
         }
     }
 

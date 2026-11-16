@@ -181,3 +181,21 @@ def test_spp_with_simple_pairing(
     pairings = [(p.t, p.initiator, p.method, p.number, int(p.status)) for p in peer.pairings]
     pairings += [(p.t, p.initiator, p.method, p.number, int(p.status)) for p in bt.pairings()]
     (tmp_path / "pairings.json").write_text(json.dumps(pairings))
+
+
+@pytest.mark.app_path("../firmware/arduino_shell", build_dir=".pio/build/esp32dev")
+@pytest.mark.parametrize("password", [None, "provisioning"], ids=["open", "wpa2"])
+def test_device_softap(
+    board: Esp32Sim, wifi: Wifi, console: Console, tmp_path: Path, password: str | None
+) -> None:
+    board.nvs({"shell": {"ap_ssid": "device-setup", "ap_password": password or ""}})
+    network = wifi.station("device-setup", password=password)
+    board.power_on()
+    lease = board.wait_until(network.when_leased(), within=seconds(3))
+    exchange = network.http_client.get("/status")
+    response = board.wait_until(exchange.response, within=seconds(2))
+    assert response.status == 200 and response.json()["status"] == "ok"
+    console.expect_exact("arduino_shell: GET /status -> 200")
+    write_console(tmp_path, console)
+    (tmp_path / "network.json").write_text(json.dumps(network.transcript(), sort_keys=True))
+    (tmp_path / "lease.txt").write_text(str(lease))
