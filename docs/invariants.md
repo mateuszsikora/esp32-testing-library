@@ -1774,6 +1774,15 @@ that references to its number keep their meaning.
      writes may disable or reroute it.
      `runner/src/session/tests.rs::console_rx_reset_restores_native_input_but_firmware_can_disable_or_reroute_it`
 
+## Measured pytest shard assignments
+
+Repository pytest sharding assigns each node ID to exactly one shard. The four-shard measured
+assignments in `tests/conftest.py` replace, rather than supplement, the hash assignment; other
+counts and unknown node IDs use SHA-256 modulo N. Assignment is independent of the selected
+test files. `tests/test_shard.py::test_measured_assignments_preserve_coverage` checks these
+properties, and `test_measured_assignments_exist_and_work_in_partial_collection` detects stale
+assignments against real collection.
+
 ## Firmware build shards
 
 For a fixed ordered image list and shard count N, `firmware/build.sh --shard K/N` selects
