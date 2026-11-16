@@ -109,7 +109,15 @@ email address. The SPDX license expression remains `MIT`, with `LICENSE` include
 redundant license classifier. `README.md` is the distribution's Markdown description, so its
 repository links must be absolute URLs that also work on PyPI.
 
-For presentation changes, build into an empty output directory with `python -m build --outdir DIR`
+For presentation changes, activate the virtual environment and install the packaging tools first;
+`make setup` and the `dev` extra do not install them:
+
+```sh
+. .venv/bin/activate
+python -m pip install build twine
+```
+
+Then build into an empty output directory with `python -m build --outdir DIR`
 and run `python -m twine check --strict DIR/*`. Inspect the wheel's `.dist-info/METADATA` as well:
 Twine checks description rendering, not link targets or installation instructions. The
 [release workflow](../cicd.md#runtime-releases) publishes those verified distributions without
