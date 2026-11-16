@@ -1898,10 +1898,12 @@ this with staggered destinations, two retry batches and replies releasing the qu
 
 ## Radio diagnostics at teardown
 
-Radio diagnostics written by the runner must appear in the backend's teardown report even
-when live log forwarding has not delivered them. Reading them waits for both the runner and
-its waiter to finish. `tests/test_pytest_plugin.py::test_radio_diagnostics_survive_a_stopped_log_forwarder`
-disables forwarding and places the diagnostics before more than a log tail's worth of output.
+- **238.** Radio diagnostics in a readable runner log must appear in the backend's teardown
+  report even when live log forwarding has not delivered them, including a diagnostic joined
+  to the guest's final console fragment without a newline.
+  `tests/test_pytest_plugin.py::test_radio_diagnostics_survive_a_stopped_log_forwarder`
+  disables forwarding and places the diagnostics before more than a log tail's worth of output,
+  with and without a preceding console fragment.
 
 ## Virtual station DHCP lifecycle
 

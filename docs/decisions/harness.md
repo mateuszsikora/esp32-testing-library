@@ -3861,7 +3861,7 @@ valid explicit path combined with the other file from cache.
 
 ## Final radio diagnostics come from the completed runner log
 
-Status: decided (16 November 2026)
+Status: decided (#223)
 
 The backend reads `[emu] wifi` lines from the raw runner log after the runner exits and the
 waiter joins, and includes them verbatim in its teardown report. The runner emits these lines

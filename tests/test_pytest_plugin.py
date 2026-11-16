@@ -1358,13 +1358,17 @@ def test_ended_while_waiting_stops_at_a_cycle() -> None:
     assert esp32sim.ended_while_waiting(first)
 
 
+@pytest.mark.parametrize("prefix", ["", "console without newline: "])
 def test_radio_diagnostics_survive_a_stopped_log_forwarder(
-    fake_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+    fake_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch, prefix: str
 ) -> None:
     monkeypatch.setenv("FAKE_EXIT", "0")
     monkeypatch.setenv(
         "FAKE_OUTPUT",
-        "[emu] wifi: ready\n[emu] wifi-sta: 'sieć' wrong passphrase?\n" + "x" * 5000 + "\n",
+        prefix
+        + "[emu] wifi: ready\n[emu] wifi-sta: 'sieć' wrong passphrase?\n"
+        + "x" * 5000
+        + "\n",
     )
     fake_runner.makeconftest("""
         import pytest
@@ -1614,6 +1618,57 @@ def link_runner(fake_runner: pytest.Pytester) -> pytest.Pytester:
     runner = fake_runner.path / "runner"
     runner.write_text(LINK_RUNNER.format(python=sys.executable))
     return fake_runner
+
+
+@pytest.mark.parametrize("failure", ["open", "read"])
+def test_unreadable_radio_log_still_closes_process_and_writes_taps(
+    link_runner: pytest.Pytester, failure: str
+) -> None:
+    link_runner.makepyfile(
+        test_fake=f"""
+        import builtins
+        from contextlib import contextmanager
+        from pathlib import Path
+        import pytest
+        from esp32tl.backends import esp32sim
+        from esp32tl.units import seconds
+
+        @pytest.fixture
+        def cleanup_check():
+            boards = []
+            yield boards
+            for board in boards:
+                assert board.process._fw.closed
+                assert board.process.stdin.closed
+                assert board._radio_diagnostics == []
+            assert Path("tap.jsonl").is_file()
+
+        def test_end(cleanup_check, monkeypatch, board, gnss):
+            cleanup_check.append(board)
+            gnss.tap("tap.jsonl")
+            board.power_on()
+            board.wait(seconds(1))
+
+            def broken_lines():
+                yield "[emu] wifi: partial diagnostic\\n"
+                raise OSError("injected read failure")
+
+            @contextmanager
+            def open_log(path, mode="r", **kwargs):
+                if str(path) == board.process._logfile and mode == "r":
+                    if {failure!r} == "open":
+                        raise OSError("injected open failure")
+                    yield broken_lines()
+                else:
+                    with builtins.open(path, mode, **kwargs) as stream:
+                        yield stream
+
+            monkeypatch.setattr(esp32sim, "open", open_log, raising=False)
+    """
+    )
+    result = link_runner.runpytest_subprocess("-p", "no:cacheprovider")
+    result.assert_outcomes(passed=1)
+    assert recording.read(link_runner.path / "tap.jsonl").header.interface == "uart.gnss"
 
 
 def test_the_backend_serves_the_link_and_ends_the_run_with_stop(

@@ -1046,10 +1046,19 @@ class Esp32Sim(Board):
         self._waiter.join()
         # The runner and waiter have finished writing. The asynchronous log forwarder can
         # still lag behind, so keep radio diagnostics directly from the complete source file.
-        with open(self.process._logfile, encoding="utf-8", errors="replace") as log:
-            self._radio_diagnostics = [
-                line.rstrip("\r\n") for line in log if line.startswith("[emu] wifi")
-            ]
+        try:
+            with open(self.process._logfile, encoding="utf-8", errors="replace") as log:
+                # stdout and stderr share this file: the guest's last console fragment
+                # need not end with a newline before the runner's first diagnostic.
+                self._radio_diagnostics = [
+                    "[emu] wifi" + suffix.rstrip("\r\n")
+                    for line in log
+                    for _, marker, suffix in [line.partition("[emu] wifi")]
+                    if marker
+                ]
+        except OSError:
+            # Optional diagnostics must not prevent closing the process or writing taps.
+            self._radio_diagnostics = []
         # pytest-embedded leaves it unannotated.
         self.process.close()  # type: ignore[no-untyped-call]
         # Nor does it close the stdin pipe it opens, which the runner does not read.
