@@ -103,7 +103,12 @@ pub trait Guest {
     fn take_gpio_inputs(&mut self);
     // Wi-Fi, asked with `--wifi` or `--wifi-sta`: the defaults are a chip without it.
 
-    /// The Ethernet frames the station sent since the last call, in order: esp32sim's relay.
+    /// Data readiness and completed joins; absent outside virtual station mode.
+    fn station_state(&self) -> Option<(bool, u64)> {
+        None
+    }
+    fn clear_station_relay(&mut self) {}
+    /// The Ethernet frames since the last call, in relay order.
     fn take_eth_frames(&mut self) -> Vec<Vec<u8>> {
         Vec::new()
     }
@@ -288,6 +293,19 @@ impl Guest for esp32::Machine {
             SocBus::gpio_release_input(&mut self.bus, pin);
         }
     }
+    fn station_state(&self) -> Option<(bool, u64)> {
+        self.bus
+            .periph
+            .wifi
+            .link
+            .station()
+            .map(|s| (s.state == wifi::sta::StaLink::Joined, s.stats.0))
+    }
+    fn clear_station_relay(&mut self) {
+        let link = &mut self.bus.periph.wifi.link;
+        link.set_relay(false);
+        link.set_relay(true);
+    }
     fn take_eth_frames(&mut self) -> Vec<Vec<u8>> {
         SocBus::take_ethernet_frames(&mut self.bus)
     }
@@ -462,8 +480,12 @@ enum Item {
         cycle: u64,
         routes: [UartRoute; PORTS],
     },
-    /// An Ethernet frame the station sent, as taken from the relay at a slice boundary or right
-    /// before a reset.
+    /// The virtual station data link, sampled at a slice boundary.
+    WifiLink {
+        cycle: u64,
+        ready: bool,
+    },
+    /// An Ethernet frame taken from the relay at a slice boundary.
     Eth {
         cycle: u64,
         data: Vec<u8>,
@@ -489,6 +511,7 @@ impl Item {
             | Item::Board(Recorded::UartTx { cycle, .. } | Recorded::Gpio { cycle, .. })
             | Item::Reset { cycle, .. }
             | Item::Routes { cycle, .. }
+            | Item::WifiLink { cycle, .. }
             | Item::Eth { cycle, .. }
             | Item::Hci { cycle, .. }
             | Item::SdCard { cycle, .. } => *cycle,
@@ -594,6 +617,7 @@ pub struct Session<'a, G: Guest, L: Link> {
     /// Frames for the station that came due and that its link has not taken yet: its queue
     /// holds 64.
     eth: VecDeque<Vec<u8>>,
+    station_state: Option<(bool, u64)>,
     /// The board's supply is off, as the peer last switched it (`power`).
     off: bool,
     /// Every `sd_fault` id the peer has given, queued rules' included: an id is used once.
@@ -630,6 +654,7 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
             ap_on: opts.wifi.is_some(),
             leaving: false,
             eth: VecDeque::new(),
+            station_state: None,
             off: false,
             sd_ids: BTreeSet::new(),
             anchor: None,
@@ -1016,6 +1041,26 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
         self.pending.extend(items);
         if self.opts.wifi.is_some() {
             let cycle = self.guest.cycles();
+            let state = self.guest.station_state();
+            if state != self.station_state {
+                if let Some((ready, _)) = state {
+                    let queued = self.eth.len();
+                    let scheduled = self
+                        .inputs
+                        .values()
+                        .filter(|i| matches!(i, Input::Eth(_)))
+                        .count();
+                    if let Some(wifi) = &mut self.stats.wifi {
+                        wifi.eth_rx_dropped += (queued + scheduled) as u64;
+                    }
+                    self.eth.clear();
+                    self.inputs
+                        .retain(|_, input| !matches!(input, Input::Eth(_)));
+                    self.guest.clear_station_relay();
+                    self.pending.push_back(Item::WifiLink { cycle, ready });
+                }
+                self.station_state = state;
+            }
             let frames = self.guest.take_eth_frames();
             self.pending
                 .extend(frames.into_iter().map(|data| Item::Eth { cycle, data }));
@@ -1071,6 +1116,9 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                     for route in routes {
                         self.route_seen(route, t)?;
                     }
+                }
+                Item::WifiLink { ready, .. } => {
+                    self.event(t, |seq| protocol::wifi_link(seq, t, ready))?;
                 }
                 Item::Eth { data, .. } => {
                     if let Some(wifi) = &mut self.stats.wifi {
@@ -1534,7 +1582,11 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
             return;
         };
         while let Some(frame) = self.eth.front() {
-            if !self.ap_on || self.leaving || self.off {
+            if !self.ap_on
+                || self.leaving
+                || self.off
+                || self.guest.station_state().is_some_and(|s| !s.0)
+            {
                 wifi.eth_rx_dropped += 1;
             } else if self.guest.eth_input(frame) {
                 wifi.eth_rx += 1;

@@ -146,6 +146,7 @@ class Internet:
 
     def _station_changed(self) -> None:
         if self.lease is None:
+            self.dns.address = bytes(4)
             self._out.clear()
             self._link_ended()
         else:
@@ -256,7 +257,7 @@ class Internet:
                 self._stale = self.link.ipcp_opened
             elif isinstance(self.link, Station):
                 self._out.clear()
-                self.link.start()
+                self.link.stop()
             else:
                 self.link.device_address = None
         finally:
@@ -443,7 +444,20 @@ class Internet:
         self.active = True
         self._at = t
         try:
-            if isinstance(self.link, Ppp | Station):
+            if isinstance(self.link, Ppp):
+                self.link.start()
+        finally:
+            self._at = None
+
+    def _station_link(self, t: int, ready: bool) -> None:
+        """Apply the runner's data-link transition on the emulated clock."""
+        if not isinstance(self.link, Station):
+            return
+        self._at = t
+        try:
+            self.log(f"wifi station: {'ready' if ready else 'disconnected'}")
+            self.link.stop()
+            if ready and self.active:
                 self.link.start()
         finally:
             self._at = None
@@ -455,7 +469,10 @@ class Internet:
             self.active = False
             self._link_ended()
             self._out.clear()
-            self.link = self._peer()
+            if isinstance(self.link, Station):
+                self.link.stop()
+            else:
+                self.link = self._peer()
             self._stale = None
         finally:
             self._at = previous

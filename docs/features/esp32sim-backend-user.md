@@ -246,7 +246,7 @@ failure, or for every test with `-rA`:
 ```
 ----------------------- Captured esp32sim link teardown ------------------------
 board esp32-devkitc, watching GPIO 4, GPIO 5
-runner: protocol version 1, esp32sim 357b0e542dfe97d4c62ec4a15c01c4969164448c, clock emulated-fifo-write; 2 turns taken by the harness
+runner: protocol version 2, esp32sim 357b0e542dfe97d4c62ec4a15c01c4969164448c, clock emulated-fifo-write; 2 turns taken by the harness
 stats: the run ended at 0.100000000 s (stop); 2 turns, 0 resets
   unrouted_rx_bytes 0, inputs_on_output 0, inputs_not_applied 0, rx_bytes_not_paced 0
 routes:

@@ -29,7 +29,7 @@ from esp32tl.net.mqtt import Broker, Publication
 from esp32tl.units import Duration, minutes, ms
 from esp32tl.units import seconds as secs
 
-HELLO = RunnerHello(1, "esp32", "emulated-fifo-write", "0" * 40)
+HELLO = RunnerHello(2, "esp32", "emulated-fifo-write", "0" * 40)
 MS = 1_000_000
 S = 1_000_000_000
 LILYGO = boards.profile("lilygo-t-a7670g-r2")

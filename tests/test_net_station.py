@@ -26,6 +26,7 @@ class SoftAP:
         self.net = Internet(lambda: self.now, link="station")
         self.server = Dhcp(lambda: self.now, local="192.168.4.1", device="192.168.4.2")
         self.net.start(0)
+        self.net._station_link(0, True)
 
     def reply(self, request: bytes, *, nak: bool = False) -> list[tuple[int, bytes]]:
         message = request[42:]
@@ -115,6 +116,8 @@ def test_arp_answers_only_our_address_and_resolves_before_tcp() -> None:
     assert ap.net.lease is None and connection.state == "lost"
     with pytest.raises(NotReachable, match="leased no address"):
         ap.net.connect(80)
+    assert ap.net.poll(ap.now) == []
+    ap.net._station_link(ap.now, True)
     [(_, discover)] = ap.net.poll(ap.now)
     assert options(discover[42:])[53] == b"\x01"
 
@@ -245,3 +248,54 @@ def test_server_identifier_is_the_default_destination_and_address_overrides_it()
     assert ap.net.connect(80, address="10.1.2.3").address == "10.1.2.3"
     targets = [packet[38:42] for _, packet in ap.net.poll(ap.now)]
     assert targets == [AP_IP, bytes([192, 168, 4, 9]), router]
+
+
+@pytest.mark.parametrize("bound", [False, True])
+@pytest.mark.parametrize("transition", ["disconnect", "reset", "power-cycle"])
+def test_disconnect_discards_exchange_and_stale_reply(bound: bool, transition: str) -> None:
+    ap = SoftAP()
+    [(_, discover)] = ap.net.poll(0)
+    [(_, request)] = ap.reply(discover)
+    if bound:
+        ap.reply(request)
+    connection = ap.net.connect(80) if bound else None
+    if transition == "disconnect":
+        ap.net._station_link(ap.now, False)
+    elif transition == "reset":
+        ap.net.device_reset(ap.now, "the device reset")
+    else:
+        ap.net.stop(ap.now)
+        ap.net.start(ap.now)
+    assert ap.net.lease is None
+    assert ap.net.dns.address == bytes(4)
+    if connection:
+        assert connection.state == "lost"
+    assert ap.reply(request) == []
+    ap.now = 15_300 * MS
+    assert ap.net.poll(ap.now) == []
+    assert isinstance(ap.net.link, Station)
+    assert ap.net.link.quiet_until() is None
+    ap.net._station_link(ap.now, True)
+    [(_, fresh)] = ap.net.poll(ap.now)
+    assert fresh[46:50] != discover[46:50]
+    assert ap.reply(request) == []
+    assert ap.net.lease is None
+    assert isinstance(ap.net.link, Station)
+    assert ap.net.link.quiet_until() == 19_300 * MS
+    [(_, request)] = ap.reply(fresh)
+    ap.reply(request)
+    assert ap.net.lease is not None
+
+
+def test_no_discover_or_deadline_until_ready() -> None:
+    net = Internet(lambda: 0, link="station")
+    net.start(0)
+    for t in (0, 4_000 * MS, 12_000 * MS, 15_300 * MS):
+        assert net.poll(t) == []
+        assert isinstance(net.link, Station)
+        assert net.link.quiet_until() is None
+    net._station_link(15_300 * MS, True)
+    [(at, _)] = net.poll(15_300 * MS)
+    assert at == 15_301 * MS  # normal Ethernet delivery latency, not DHCP backoff
+    assert isinstance(net.link, Station)
+    assert net.link.quiet_until() == 19_300 * MS

@@ -304,7 +304,7 @@ def test_the_real_link_routes_uart_and_gpio_without_duplicate_owners(tmp_path: P
     modem.power_on()
     link = BoardLink(LILYGO.name, [modem, lines])
     link.receive(
-        RunnerHello(1, "esp32", "emulated-fifo-write", "357b0e542dfe97d4c62ec4a15c01c4969164448c")
+        RunnerHello(2, "esp32", "emulated-fifo-write", "357b0e542dfe97d4c62ec4a15c01c4969164448c")
     )
     assert link.receive(Sync(0))[-1] == Wait(0, None, LATENCY_NS)
     link.receive(UartCfg(1, 0, 1, (26,), 27, 115200))
@@ -519,7 +519,7 @@ def test_only_a_network_route_fails_on_receive_overflow(tmp_path: Path) -> None:
         if selected:
             modem.network()
         link = BoardLink("lilygo-t-a7670g-r2", interfaces=[modem])
-        link.receive(RunnerHello(1, "esp32", "emulated-fifo-write", "revision"))
+        link.receive(RunnerHello(2, "esp32", "emulated-fifo-write", "revision"))
         warning = Warn(1, "rxfifo_ovf", "dropped", pin=pin, port=1, nbytes=1)
         link.receive(warning)
         assert (link.error is not None) is fails
@@ -1075,7 +1075,7 @@ def test_a_dropped_call_goes_out_through_the_link_in_the_test_s_turn(tmp_path: P
     now = [seconds(1).ns]
     modem, _, _ = dialled(tmp_path, now)
     link = BoardLink(LILYGO.name, [modem])
-    link.receive(RunnerHello(1, "esp32", "emulated-fifo-write", "revision"))
+    link.receive(RunnerHello(2, "esp32", "emulated-fifo-write", "revision"))
     link.receive(Sync(now[0]))
     modem.drop_call()
     outputs = link.receive(Sync(now[0] + 1))

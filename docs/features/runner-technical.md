@@ -1147,3 +1147,5 @@ upstream's stderr diagnostic rather than conflated with socket/ring counters; se
 space, then exits successfully without loading firmware. `runner/build.rs` derives the revision
 from Cargo.lock. The Python runtime installer checks this before executing firmware. Release
 packaging also checks Cargo.toml against the Python package version and pinned revision.
+
+Protocol v2 reports virtual station readiness from the pinned esp32sim public `StationLink::station()` API (`StaLink::Joined`, `stats.0`). The relay sends pending authentication frames before Ethernet. State transitions flush the runner Ethernet queue, future Ethernet inputs and emulator relay queues. No upstream dependency change is required.

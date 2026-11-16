@@ -86,6 +86,7 @@ from esp32tl.link.protocol import (
     Wait,
     Warn,
     WifiAp,
+    WifiLink,
     as_json,
     decode_harness,
     decode_runner,
@@ -141,6 +142,9 @@ class Interface:
         """`t`, nanoseconds, as the link's errors about this interface's times write it: as
         nanoseconds, `1500 ns`, unless the interface states its times otherwise."""
         return in_ns(t)
+
+    def _station_link(self, t: int, ready: bool) -> None:
+        """A virtual station's data-link transition; other interfaces ignore it."""
 
     @property
     def ethernet(self) -> bool:
@@ -469,6 +473,11 @@ class BoardLink:
             self._seq = message.seq
         if isinstance(message, UartTx):
             self._uart_tx(message)
+        elif isinstance(message, WifiLink):
+            for interface in self.interfaces:
+                if interface.ethernet:
+                    self._answers = [a for a in self._answers if a[0] is not interface]
+                    interface._station_link(message.t, message.ready)
         elif isinstance(message, EthTx | HciTx):
             self._packet(message)
         elif isinstance(message, UartCfg):
@@ -720,7 +729,7 @@ class BoardLink:
 
     def _check_input(self, interface: Interface, message: Input, now: int) -> None:
         """Refuses, naming the interface that sent it, an input the runner would refuse: one that
-        is not a message of version 1, one stamped before the turn, one on a pin the link does not
+        is not a message of version 2, one stamped before the turn, one on a pin the link does not
         watch; and one on a pin another interface is wired to, which the runner would take."""
         source = interface.name
         if not isinstance(

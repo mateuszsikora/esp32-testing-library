@@ -690,7 +690,7 @@ command, its `\r` before the `\n` dropped and anything past 64 bytes left out:
 
 | Command | Answer |
 |---|---|
-| `help` | `arduino_shell: commands: help, greeting, uptime, wifi` |
+| `help` | `arduino_shell: commands: help, greeting, uptime, wifi, ap-off, ap-on` |
 | `greeting` | `arduino_shell: greeting=<value>` |
 | `uptime` | `arduino_shell: uptime_ms=<millis()>` |
 | `wifi` | `arduino_shell: wifi=off` without an `ssid`, `arduino_shell: wifi=joining` before it has an address, `arduino_shell: wifi=connected ip=<address>` after |
@@ -810,3 +810,5 @@ and uptime. Existing console commands and station-mode lines keep their meanings
 `tests/test_arduino_softap.py` exercises open and WPA2 APs, the join MAC, wrong-password timeout
 and raw TCP. Build with `firmware/build-platformio.sh arduino_shell`, as for the existing image;
 no prebuilt binary is committed.
+
+The Arduino shell accepts unsigned NVS `shell/ap_delay_ms` (`esp32tl.flash.u32`, default 0), delaying SoftAP startup by that many milliseconds. Commands `ap-off` and `ap-on` stop and restart its SoftAP using the configured NVS credentials, for station lifecycle tests.

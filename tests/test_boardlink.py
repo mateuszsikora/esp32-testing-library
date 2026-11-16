@@ -47,7 +47,7 @@ from esp32tl.link.protocol import (
     encode,
 )
 
-HELLO = RunnerHello(1, "esp32", "emulated-fifo-write", "357b0e542dfe97d4c62ec4a15c01c4969164448c")
+HELLO = RunnerHello(2, "esp32", "emulated-fifo-write", "357b0e542dfe97d4c62ec4a15c01c4969164448c")
 GNSS = Wire(tx=4, rx=5, baud=9600)
 MODEM = Wire(tx=26, rx=27, baud=115200)
 MS = 1_000_000
@@ -144,14 +144,14 @@ def tx(seq: int, t: int, data: bytes, tx_pins: tuple[int, ...] = (4,)) -> UartTx
 
 def test_the_handshake_names_the_board_and_watches_the_interfaces_pins() -> None:
     link = BoardLink("esp32-devkitc", [Peer("modem", MODEM), Peer("gnss", GNSS)])
-    assert link.receive(HELLO) == [HarnessHello(1, "esp32", "esp32-devkitc", (4, 5, 26, 27))]
+    assert link.receive(HELLO) == [HarnessHello(2, "esp32", "esp32-devkitc", (4, 5, 26, 27))]
     assert link.runner == HELLO
     assert link.error is None
 
 
 def test_the_pins_of_an_interface_without_a_uart_are_watched_too() -> None:
     link = BoardLink("esp32-devkitc", [Peer(), Driver(pins=[33, 12])])
-    assert link.receive(HELLO) == [HarnessHello(1, "esp32", "esp32-devkitc", (4, 5, 12, 33))]
+    assert link.receive(HELLO) == [HarnessHello(2, "esp32", "esp32-devkitc", (4, 5, 12, 33))]
 
 
 def test_a_uart_and_a_line_on_one_pin_are_refused() -> None:
@@ -167,16 +167,16 @@ def test_two_interfaces_on_one_pin_are_refused() -> None:
 def test_a_mismatched_handshake_is_answered_then_only_the_end_of_the_run_is_kept() -> None:
     errors: list[str] = []
     link = BoardLink("esp32-devkitc", [Peer()], on_error=errors.append)
-    assert link.receive(RunnerHello(2)) == [HarnessHello(1, "esp32", "esp32-devkitc", (4, 5))]
-    assert link.error == "the runner speaks link protocol version 2, the harness 1"
+    assert link.receive(RunnerHello(99)) == [HarnessHello(2, "esp32", "esp32-devkitc", (4, 5))]
+    assert link.error == "the runner speaks link protocol version 99, the harness 2"
     # The runner finds the mismatch itself: the backend need not end the run.
     assert errors == []
     link.connected = True  # as run() does
-    assert "runner: protocol version 2\n" in link.report()
+    assert "runner: protocol version 99\n" in link.report()
     stats = Stats(0, "protocol_error", 0, 0, (), 0, 0, 0, 0, detail="version")
     assert link.receive(stats) == []
     assert link.stats == stats
-    assert link.error == "the runner speaks link protocol version 2, the harness 1"
+    assert link.error == "the runner speaks link protocol version 99, the harness 2"
 
 
 def test_turn_0_gives_no_bound_when_nothing_is_scheduled() -> None:
@@ -554,7 +554,7 @@ def test_run_writes_only_in_the_harness_s_turns_and_reads_to_end_of_file() -> No
     gnss = Peer(latency=MS, answer=b"OK\r\n")
     runner = FakeRunner(BoardLink("esp32-devkitc", [gnss]))
     runner.send(HELLO)
-    assert runner.read() == HarnessHello(1, "esp32", "esp32-devkitc", (4, 5))
+    assert runner.read() == HarnessHello(2, "esp32", "esp32-devkitc", (4, 5))
     assert runner.silent()
     runner.send(Sync(0))
     assert runner.read() == Wait(0, None, MS)
@@ -917,8 +917,8 @@ def test_console_messages_reach_the_console_s_reader() -> None:
 def test_a_runner_on_another_clock_than_the_backend_s_fails_the_link() -> None:
     errors: list[str] = []
     link = BoardLink("esp32-devkitc", clock="emulated-fifo-write", on_error=errors.append)
-    assert link.receive(RunnerHello(1, "esp32", "wall", "0" * 40)) == [
-        HarnessHello(1, "esp32", "esp32-devkitc", ())
+    assert link.receive(RunnerHello(2, "esp32", "wall", "0" * 40)) == [
+        HarnessHello(2, "esp32", "esp32-devkitc", ())
     ]
     assert errors == ["the runner's clock is wall, the backend's emulated-fifo-write"]
     assert link.receive(Sync(0)) == [Stop()]

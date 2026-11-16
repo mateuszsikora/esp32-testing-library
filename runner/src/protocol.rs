@@ -1,4 +1,4 @@
-//! The link protocol's wire format (`docs/protocol.md`, version 1): time in nanoseconds, base64,
+//! The link protocol's wire format (`docs/protocol.md`, version 2): time in nanoseconds, base64,
 //! the messages the peer sends and the lines the runner writes. JSON is parsed with esp32sim's own
 //! parser (`esp_soc::json`, which its Cooja NDJSON link uses), so the runner adds no JSON crate.
 use crate::sd_card::{Action, Fault, Faulted, Op};
@@ -6,7 +6,7 @@ use esp_soc::json::{Json, parse_json};
 use esp_soc::uart::UartRoute;
 use std::fmt::Write;
 
-pub const VERSION: i64 = 1;
+pub const VERSION: i64 = 2;
 pub const CHIP: &str = "esp32";
 /// What the times of `uart_tx` mean (protocol 5.1): emulated time, at the FIFO write.
 pub const CLOCK: &str = "emulated-fifo-write";
@@ -714,3 +714,8 @@ pub fn stats(t: u64, end: &str, extra: &[(&str, &str)], s: &Stats) -> String {
 // In a file of its own, so that `make docs-check` tells a test-only change by its path.
 #[cfg(test)]
 mod tests;
+
+/// A virtual station transition, sequenced before Ethernet at the same boundary.
+pub fn wifi_link(seq: u64, t: u64, ready: bool) -> String {
+    format!(r#"{{"type":"wifi_link","seq":{seq},"t":{t},"ready":{ready}}}"#)
+}
