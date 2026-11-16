@@ -10,6 +10,22 @@ readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.11"
+authors = [{ name = "Mateusz Sikora" }]
+keywords = ["esp32", "esp32sim", "pytest", "embedded", "firmware", "simulation", "testing"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Framework :: Pytest",
+    "Intended Audience :: Developers",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS :: MacOS X",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Testing",
+    "Topic :: Software Development :: Embedded Systems",
+]
 # pytest-embedded declares no extras, so its services are separate packages
 # (plan §3, "Distribution"). The `serial` extra of pytest-embedded-idf pulls
 # pytest-embedded-serial-esp and, through it, pytest-embedded-serial.
@@ -28,6 +44,11 @@ dependencies = [
     "pytest-embedded-idf[serial]~=2.9.3",
     "pytest-timeout>=2.3",
 ]
+
+[project.urls]
+Repository = "https://github.com/mateuszsikora/esp32-testing-library"
+Documentation = "https://github.com/mateuszsikora/esp32-testing-library/blob/main/docs/README.md"
+Issues = "https://github.com/mateuszsikora/esp32-testing-library/issues"
 
 [project.optional-dependencies]
 # esptool is imported by the tests; it comes through pytest-embedded-idf[serial] too, which also
