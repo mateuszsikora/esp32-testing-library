@@ -3903,3 +3903,19 @@ visible. Revisit when pytest-embedded no longer requests the fixture or pytest s
 filtering the whole experimental-warning category, which would hide unrelated API warnings;
 wrapping or replacing pytest's fixture to infer callers, which adds fragile coupling for a
 warning with a consumer-controlled override.
+
+## Bluetooth histories expose Duration timestamps
+
+Status: decided (#224)
+
+Channel events and refusals use `ChannelEvent(at, direction, data)` and `Refusal(at, why)`
+named tuples. `UnknownCommand(t, op_code, name)` is also a named tuple; `Pairing` stays a
+frozen dataclass. Every timestamp is a `Duration` on the owning air's clock, the board's for
+`board.bluetooth.air`. This deliberately breaks the former public integer API so histories
+can be compared directly with GPIO and MQTT histories. Named tuples retain positional access
+and unpacking while naming the fields. Internal scheduling remains in nanoseconds; report
+formatting and JSON `t_ns` explicitly extract `.ns` and keep their existing formats.
+
+**Rejected:** keeping integer times and adding `*_at` accessors beside them would preserve two
+representations of the same instant and leave the unit-mixing hazard in the primary API.
+Plain tuples would preserve unpacking but lose discoverable field names unnecessarily.

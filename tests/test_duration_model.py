@@ -352,7 +352,7 @@ def test_a_model_in_durations_says_on_an_spp_peer_what_one_in_nanoseconds_says()
     by_ns = Echo(delay=7 * MS, greeting=b"ready\r", at=1500 * MS)
     by_durations = EchoInDurations(delay=ms(7), greeting=b"ready\r", at=ms(1500))
     expected = chat(by_ns)
-    assert (1500 * MS, "in", b"ready\r") in expected[0]
+    assert (ms(1500), "in", b"ready\r") in expected[0]
     assert chat(by_durations) == expected
     assert by_durations.heard == [(Duration(t), data) for t, data in by_ns.heard]
 

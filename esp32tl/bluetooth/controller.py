@@ -66,12 +66,14 @@ import asyncio
 import hashlib
 import random
 from dataclasses import dataclass, field
+from typing import NamedTuple
 
 from bumble import core, crypto, hci, lmp
 from bumble.controller import Connection, SspState
 from bumble.controller import Controller as BumbleController
 
 from esp32tl.bluetooth.air import Link
+from esp32tl.units import Duration
 
 # Bluetooth's inquiry length unit: 1.28 s.
 INQUIRY_UNIT_S = 1.28
@@ -251,14 +253,14 @@ def authenticated_by(model: str, local: int | None, peer: int | None) -> bool:
 
 @dataclass(frozen=True)
 class Pairing:
-    """A pairing of this side's with `peer` that ended at `t`, nanoseconds of the air's time, with
+    """A pairing of this side's with `peer` that ended at `t`, a Duration on the air's clock, with
     `status`, an HCI error code, `0` when it succeeded. `initiator` says whether this side's host
     asked for it; `method` is how it went, `legacy` or an association model of Secure Simple
     Pairing, `simple_pairing` for one that ended before its model was known; `number` is the
     six-digit number of a comparison, or the passkey this side showed or its host typed, `None`
     for none; `authenticated` whether the key it made is, by the specification's rules."""
 
-    t: int
+    t: Duration
     peer: str
     initiator: bool
     method: str
@@ -281,12 +283,11 @@ class UnderWay:
     authenticated: bool = False
 
 
-@dataclass(frozen=True)
-class UnknownCommand:
-    """A command the controller does not know, at `t`, nanoseconds of the air's time: answered
+class UnknownCommand(NamedTuple):
+    """A command the controller does not know, at `t`, a Duration on the air's clock: answered
     with `UNKNOWN_HCI_COMMAND_ERROR`."""
 
-    t: int
+    t: Duration
     op_code: int
     name: str
 
@@ -657,7 +658,7 @@ class Controller(BumbleController):
         host waits for ever. Kept in `unknown_commands`."""
         loop = asyncio.get_running_loop()
         self.unknown_commands.append(
-            UnknownCommand(round(loop.time() * 1e9), command.op_code, command.name)
+            UnknownCommand(Duration(round(loop.time() * 1e9)), command.op_code, command.name)
         )
         status = hci.HCI_ErrorCode.UNKNOWN_HCI_COMMAND_ERROR
         if isinstance(command, hci.HCI_SyncCommand):
@@ -1780,7 +1781,7 @@ class Controller(BumbleController):
             return
         self.pairings.append(
             Pairing(
-                round(asyncio.get_running_loop().time() * 1e9),
+                Duration(round(asyncio.get_running_loop().time() * 1e9)),
                 str(peer).removesuffix("/P"),
                 under_way.initiator,
                 under_way.method,

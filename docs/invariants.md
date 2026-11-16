@@ -1925,3 +1925,12 @@ this with staggered destinations, two retry batches and replies releasing the qu
 - **241.** Consumer ini, command-line and marker filters can override the XML attribute warning
   default. `tests/test_pytest_plugin.py::test_consumer_can_override_xml_attribute_filter`
   enforces this through consumer pytest subprocesses without firmware or a runner.
+
+## Bluetooth history times
+
+Public Bluetooth histories carry `Duration`s on their owning air's clock, including channel
+traffic, refused openings, pairings and unknown commands. Named records retain tuple unpacking.
+`test_a_device_refused_at_sabm_may_authenticate_and_open_the_channel` checks every populated
+history and compares channel time directly with a GPIO `LineEvent.t`. The guest-controller
+session and unknown-command tests in `tests/test_bluetooth_guest.py` check board-clock times,
+unchanged report text and JSON integer `t_ns` fields.

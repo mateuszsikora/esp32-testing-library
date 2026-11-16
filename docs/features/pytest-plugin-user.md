@@ -1128,6 +1128,13 @@ def test_the_firmware_opens_spp(board):
 - Time on `board.bluetooth.air` is the board's: the test waits through the board, and what it does
   on the air, making a device, switching one off, setting its `rssi`, happens at the board's
   current instant. Its `wait`, `advance` and `run` raise `AirError`.
+- Bluetooth histories use `Duration` on the board's clock: `peer.events` contains
+  `ChannelEvent(at, direction, data)` named tuples, `peer.refused` contains `Refusal(at, why)`,
+  `peer.pairings` and `bt.pairings()` contain frozen `Pairing` records with `t: Duration`, and
+  `bt.unknown_commands()` contains `UnknownCommand(t, op_code, name)` named tuples with
+  `t: Duration`. These times compare directly with GPIO `LineEvent.t` and MQTT `Message.at`.
+  A peer on standalone `Air()` instead uses that air's clock starting at creation.
+  The report and integer `t_ns` fields in `esp32sim_link` JSON are unchanged.
 - On [serial](serial-backend-user.md) the test skips where it first reaches `board.bluetooth`, at
   setup for the `bt` fixture: `serial: bluetooth takes no model source on this backend`.
 - `board.bluetooth.tap(path)` before `board.power_on()` records the HCI between the firmware's host

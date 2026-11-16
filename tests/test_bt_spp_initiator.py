@@ -159,14 +159,14 @@ def test_a_peer_with_simple_pairing_and_no_display_pairs_by_just_works_and_strea
     report = bt.report()
     assert report[1:3] == [
         "  pairings (1):",
-        f"    {board_time(mine.t)}  with 00:00:00:00:5B:01, by just_works,"
+        f"    {board_time(mine.t.ns)}  with 00:00:00:00:5B:01, by just_works,"
         f" {mine.number:06d}: succeeded",
     ]
     properties = bt.properties()
     assert properties is not None
     assert properties["pairings"] == [
         {
-            "t_ns": mine.t,
+            "t_ns": mine.t.ns,
             "peer": "00:00:00:00:5B:01",
             "initiator": True,
             "method": "just_works",

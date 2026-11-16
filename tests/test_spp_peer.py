@@ -26,10 +26,13 @@ from esp32tl.bluetooth.peer import (
     CLASS_OF_DEVICE,
     SERVICE_NAME,
     BluetoothDevice,
+    ChannelEvent,
     PeerError,
+    Refusal,
     SppPeer,
 )
 from esp32tl.interfaces import NeverHappened
+from esp32tl.interfaces.lines import LineEvent
 from esp32tl.units import Duration, ms, seconds
 
 MS = 1_000_000
@@ -242,7 +245,10 @@ def test_the_device_finds_the_peer_by_its_name_and_its_answer_comes_on_the_board
     # came back at the time the model gave it.
     assert echo.heard == [(1000 * MS, b"hello\r")]
     assert esp32.received == [(1050 * MS, b"hello\r\n> ")]
-    assert peer.events == [(1000 * MS, "out", b"hello\r"), (1050 * MS, "in", b"hello\r\n> ")]
+    assert peer.events == [
+        (Duration(1000 * MS), "out", b"hello\r"),
+        (Duration(1050 * MS), "in", b"hello\r\n> "),
+    ]
     # Both sides keep the same key, under each other's address.
     assert keys_of(esp32.device) == {"00:00:00:00:5B:01/P": keys_of(peer.device)[DEVICE + "/P"]}
 
@@ -327,7 +333,7 @@ def test_what_the_source_sends_unprompted_goes_out_at_its_time_or_is_lost(air: A
     assert lost.lost == len(b"ready\r")
     assert lost.events == []
     assert kept.lost == 0
-    assert kept.events == [(3000 * MS, "in", b"ready\r")]
+    assert kept.events == [(seconds(3), "in", b"ready\r")]
     assert esp32.received == [(3000 * MS, b"ready\r")]
 
 
@@ -417,12 +423,12 @@ def test_empty_answers_cross_nothing(air: Air) -> None:
     peer = SppPeer(air, name="peer", pin="1234", source=Faulty("empty"))
     esp32 = Initiator(air)
     write_hello(air, esp32)
-    assert peer.events == [(0, "out", b"hello\r"), (0, "in", b"done\r")]
+    assert peer.events == [(Duration(0), "out", b"hello\r"), (Duration(0), "in", b"done\r")]
     assert esp32.received == [(0, b"done\r")]
 
 
 def test_two_runs_cross_the_channel_at_the_same_instants() -> None:
-    def run() -> list[tuple[int, str, bytes]]:
+    def run() -> list[tuple[Duration, str, bytes]]:
         air = Air()
         try:
             peer = SppPeer(air, name="peer", pin="1234", source=Echo(delay=7 * MS))
@@ -571,7 +577,9 @@ def test_the_channel_opens_to_one_device_at_a_time(air: Air) -> None:
         await asyncio.sleep(1)
 
     air.run(both(), within=seconds(10))
-    assert peer.refused == [(0, "24:0A:C4:00:00:02: the channel is held by 24:0A:C4:00:00:01")]
+    assert peer.refused == [
+        (Duration(0), "24:0A:C4:00:00:02: the channel is held by 24:0A:C4:00:00:01")
+    ]
     assert echo.heard == [(0, b"ONE\r")]
     assert first.received == [(50 * MS, b"ONE\r\n> ")]
     assert second.received == []
@@ -595,7 +603,9 @@ def test_two_devices_that_ask_for_the_channel_at_one_instant_get_it_one(air: Air
         await asyncio.sleep(1)
 
     air.run(at_once(), within=seconds(10))
-    assert peer.refused == [(0, "24:0A:C4:00:00:02: the channel is held by 24:0A:C4:00:00:01")]
+    assert peer.refused == [
+        (Duration(0), "24:0A:C4:00:00:02: the channel is held by 24:0A:C4:00:00:01")
+    ]
     assert first.received == [(50 * MS, b"ONE\r\n> ")]
     assert second.received == []
 
@@ -613,7 +623,7 @@ def test_the_channel_opens_only_on_a_link_the_device_authenticated(air: Air) -> 
 
     with pytest.raises(core.ConnectionError):
         air.run(without_pairing(), within=seconds(10))
-    assert peer.refused == [(0, "24:0A:C4:00:00:01: the link is not authenticated")]
+    assert peer.refused == [(Duration(0), "24:0A:C4:00:00:01: the link is not authenticated")]
     assert not peer.channel_open
     assert esp32.delegate.asked == 0
 
@@ -662,6 +672,9 @@ def test_a_device_refused_at_sabm_may_authenticate_and_open_the_channel(air: Air
     second = Initiator(air, address="24:0A:C4:00:00:02")
 
     async def scenario() -> None:
+        await esp32.device.host.send_command(
+            hci.HCI_Read_Stored_Link_Key_Command(bd_addr=hci.Address.ANY, read_all_flag=1)
+        )
         connection = await esp32.device.connect(
             peer.device.public_address, transport=core.PhysicalTransport.BR_EDR
         )
@@ -683,10 +696,23 @@ def test_a_device_refused_at_sabm_may_authenticate_and_open_the_channel(air: Air
 
     air.run(scenario(), within=seconds(10))
     assert peer.refused == [
-        (0, "24:0A:C4:00:00:01: the link is not authenticated"),
-        (1_000 * MS, "24:0A:C4:00:00:02: the channel is held by 24:0A:C4:00:00:01"),
+        (Duration(0), "24:0A:C4:00:00:01: the link is not authenticated"),
+        (Duration(1_000 * MS), "24:0A:C4:00:00:02: the channel is held by 24:0A:C4:00:00:01"),
     ]
     assert echo.heard == [(0, b"hello\r")]
+
+    assert esp32.controller.unknown_commands
+    for history in (peer.events, peer.refused, peer.pairings, esp32.controller.unknown_commands):
+        assert history
+        for record in history:
+            timestamp = record.at if isinstance(record, ChannelEvent | Refusal) else record.t
+            assert isinstance(timestamp, Duration)
+            assert seconds(0) <= timestamp <= air.now
+    edge = LineEvent(seconds(0), "ready", 1, "test", 1)
+    assert peer.events[0].at - edge.t == seconds(0)
+    assert peer.events[0].direction == "out" and peer.events[0].data == b"hello\r"
+    assert peer.refused[0].at == seconds(0)
+    assert peer.refused[0].why.endswith("the link is not authenticated")
 
 
 def sdp_record(air: Air, esp32: Initiator, peer: BluetoothDevice) -> dict[int, Any]:
@@ -792,7 +818,7 @@ def test_what_the_source_sends_after_the_channel_closes_is_lost(air: Air, closes
     air.run(write_and_leave(), within=seconds(10))
     assert not peer.channel_open
     assert peer.lost == len(b"hello\r\n> ")
-    assert peer.events == [(0, "out", b"hello\r")]
+    assert peer.events == [(Duration(0), "out", b"hello\r")]
 
 
 def test_a_device_that_gives_no_pin_fails_the_authentication(air: Air) -> None:
@@ -1064,7 +1090,9 @@ def test_another_device_can_connect_to_a_peer_back_before_the_old_link_falls(air
     # The peer's end of the old link has not fallen, so its channel is still that link's.
     with pytest.raises(core.ConnectionError):
         air.run(second.open(connection, CHANNEL), within=seconds(1))
-    assert peer.refused == [(5_000 * MS, "24:0A:C4:00:00:02: the channel is held by " + DEVICE)]
+    assert peer.refused == [
+        (Duration(5_000 * MS), "24:0A:C4:00:00:02: the channel is held by " + DEVICE)
+    ]
 
     air.advance(seconds(20))
     assert not peer.channel_open
@@ -1249,7 +1277,7 @@ def test_a_power_loss_tells_a_supplied_source_and_drops_what_it_had_queued(air: 
     assert not peer.device.connections
     air.wait(seconds(1))
     assert peer.lost == 0
-    assert peer.events == [(0, "out", b"PING\r")]
+    assert peer.events == [(Duration(0), "out", b"PING\r")]
     assert esp32.received == []
 
     peer.switch_on()
@@ -1270,7 +1298,7 @@ def test_out_of_range_does_not_tell_a_supplied_source_and_what_it_sends_is_lost(
     # The peer does not know yet: its channel stays open until its end of the link falls.
     assert peer.channel_open
     assert peer.lost == len(b"PING\r\n> ")
-    assert peer.events == [(0, "out", b"PING\r")]
+    assert peer.events == [(Duration(0), "out", b"PING\r")]
     assert esp32.received == []
 
     air.advance(ms(20_100))
@@ -3855,7 +3883,7 @@ def test_a_legacy_pairing_that_fails_is_in_the_history_on_both_sides(air: Air) -
 
 
 def test_each_pairing_starts_anew_and_two_runs_show_the_same_numbers() -> None:
-    def run() -> list[tuple[int, str, int | None]]:
+    def run() -> list[tuple[Duration, str, int | None]]:
         air = Air()
         try:
             peer = SppPeer(

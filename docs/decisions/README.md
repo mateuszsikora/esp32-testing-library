@@ -313,6 +313,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Final radio diagnostics come from the completed runner log](harness.md#final-radio-diagnostics-come-from-the-completed-runner-log) | `harness.md` | decided (#223) |
 | [DHCP starts at virtual station data-link readiness](harness.md#dhcp-starts-at-virtual-station-data-link-readiness) | `harness.md` | decided |
 | [Filter the XML attribute warning as an overridable default](harness.md#filter-the-xml-attribute-warning-as-an-overridable-default) | `harness.md` | decided (#226) |
+| [Bluetooth histories expose Duration timestamps](harness.md#bluetooth-histories-expose-duration-timestamps) | `harness.md` | decided (#224) |
 
 ## The runner crate and esp32sim
 

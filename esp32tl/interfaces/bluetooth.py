@@ -23,7 +23,7 @@ from bumble import hci
 from esp32tl import recording
 from esp32tl.backends.clock import seconds
 from esp32tl.bluetooth.air import Air
-from esp32tl.bluetooth.controller import Controller, Pairing
+from esp32tl.bluetooth.controller import Controller, Pairing, UnknownCommand
 from esp32tl.bluetooth.guest import ADDRESS, GuestController
 from esp32tl.boards.capabilities import Request
 from esp32tl.interfaces import SourceError
@@ -263,11 +263,11 @@ class Bluetooth(Interface):
 
     # The report.
 
-    def unknown_commands(self) -> list[tuple[int, int, str]]:
-        """The commands of the guest's host the controller did not know: `(t, op_code, name)`."""
+    def unknown_commands(self) -> list[UnknownCommand]:
+        """UnknownCommand records from the guest's host, with `t: Duration` on the board clock."""
         if self._controller is None:
             return []
-        return [(c.t, c.op_code, c.name) for c in self._controller.unknown_commands]
+        return list(self._controller.unknown_commands)
 
     def pairings(self) -> list[Pairing]:
         """The pairings of the guest's controller that ended, in order: with whom, how, and
@@ -307,11 +307,11 @@ class Bluetooth(Interface):
         unknown = self.unknown_commands()
         if unknown:
             lines.append(f"  unknown commands ({len(unknown)}):")
-            lines += [f"    {board_time(t)}  {name} ({op:#06x})" for t, op, name in unknown]
+            lines += [f"    {board_time(t.ns)}  {name} ({op:#06x})" for t, op, name in unknown]
         pairings = self.pairings()
         if pairings:
             lines.append(f"  pairings ({len(pairings)}):")
-            lines += [f"    {board_time(p.t)}  {_pairing(p)}" for p in pairings]
+            lines += [f"    {board_time(p.t.ns)}  {_pairing(p)}" for p in pairings]
         devices = [f"{n} ({a}{'' if on else ', off the air'})" for n, a, on in self.devices()]
         lines.append("  devices: " + (", ".join(devices) or "none but the guest's"))
         return lines
@@ -327,11 +327,12 @@ class Bluetooth(Interface):
             "bytes_to_host": self.bytes_to_host,
             "tap": None if self.tapped is None else str(self.tapped.path),
             "unknown_commands": [
-                {"t_ns": t, "op_code": op, "name": name} for t, op, name in self.unknown_commands()
+                {"t_ns": t.ns, "op_code": op, "name": name}
+                for t, op, name in self.unknown_commands()
             ],
             "pairings": [
                 {
-                    "t_ns": p.t,
+                    "t_ns": p.t.ns,
                     "peer": p.peer,
                     "initiator": p.initiator,
                     "method": p.method,

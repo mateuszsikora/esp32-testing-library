@@ -93,7 +93,7 @@ fixture is an error at setup with the same message after `esp32sim: `
 |---|---|
 | `board.bluetooth.air` | The `Air` of the board's devices, on its clock |
 | `board.bluetooth.controller` | The firmware's controller, a `GuestController` at `24:6F:28:00:11:24` |
-| `board.bluetooth.unknown_commands()` | The commands of the firmware's host the controller did not know, `(t, op_code, name)` each |
+| `board.bluetooth.unknown_commands()` | The commands of the firmware's host the controller did not know, `UnknownCommand(t, op_code, name)` named tuples, with `t: Duration` |
 | `board.bluetooth.pairings()` | The firmware's pairings that ended, each a `Pairing` ([Secure Simple Pairing](#secure-simple-pairing)) |
 | `board.bluetooth.devices()` | The other devices made on the air, `(name, address, present)` each, in the order of their addresses; `present` is false for one switched off or out of range now |
 | `board.bluetooth.packets_from_host`, `.bytes_from_host`, `.packets_to_host`, `.bytes_to_host` | What crossed the VHCI, each way |
@@ -162,7 +162,7 @@ air = Air()
 peer = SppPeer(air, name="peer", pin="1234", source=Echo())
 ...
 air.run(the_device_side(), within=seconds(10))
-assert peer.events == [(1_000_000_000, "out", b"hello\r"), (1_050_000_000, "in", b"hello\r\n> ")]
+assert peer.events == [(seconds(1), "out", b"hello\r"), (ms(1050), "in", b"hello\r\n> ")]
 air.close()
 ```
 
@@ -208,8 +208,8 @@ From the moment it is made, at the air's current instant, and until the test tak
   ESP-IDF v5.3.6). The peer does not start the pairing itself, so a device that opens the channel
   without pairing is refused, as is a second device that asks while the first holds it; one refused
   at the opening may authenticate and open it again. The device sees its channel refused (Bumble
-  raises `ConnectionError` with `CONNECTION_REFUSED`), and `peer.refused` lists each refusal as `(t,
-  why)`, as `(0, "24:0A:C4:00:00:01: the link is not authenticated")` or `(0, "24:0A:C4:00:00:02:
+  raises `ConnectionError` with `CONNECTION_REFUSED`), and `peer.refused` lists each refusal as a `Refusal(at,
+  why)` named tuple, as `(seconds(0), "24:0A:C4:00:00:01: the link is not authenticated")` or `(seconds(0), "24:0A:C4:00:00:02:
   the channel is held by 24:0A:C4:00:00:01")`. With `secure=False`, any device opens it.
   `peer.channel_open` says whether a device holds it now; the channel closes when the device closes
   it or the link. The channel is RFCOMM in L2CAP's basic mode: the peer does not offer Enhanced
@@ -247,7 +247,7 @@ with the device's address, so two runs show the same numbers; each pairing draws
   shows is its `number`, as `peer.pairing.number`, once the pairing is that far. A test that plays
   the other side's user reads the passkey off it.
 - `peer.pairings` is the history of the peer's pairings that ended, in order, each a `Pairing`:
-  `t`, the air's time it ended at, in nanoseconds, the board's on `bt.air`; `peer`, the other side's address; `initiator`,
+  `t: Duration`, the air's time it ended at, the board's on `bt.air`; `peer`, the other side's address; `initiator`,
   whether the peer asked for it (the peer never does: always `False`); `method`, `legacy`,
   `just_works`, `numeric_comparison`, `passkey_entry`, or `simple_pairing` for one that ended
   before its method was known; `number`, the number shown or the passkey typed, `None` for none;
@@ -416,8 +416,16 @@ of the same time go out in the order they were given; empty bytes are dropped. W
 sends while no device holds the channel is lost, as it would be on the air: `peer.lost` counts its
 bytes. A source that raises, or returns what the peer cannot send, fails the air (below).
 
-`peer.events` holds what crossed the channel, in order, as `(t, direction, bytes)`: `out` of the
+`peer.events` holds what crossed the channel, in order, as `ChannelEvent(at, direction, data)` named tuples: `out` of the
 device, `in` to it, as a tap's recording names them.
+
+`ChannelEvent` and `Refusal` are imported from `esp32tl.bluetooth.peer`, and `Pairing` and
+`UnknownCommand` from `esp32tl.bluetooth.controller`. All their timestamps are `Duration`s:
+`event.at`, `refusal.at`, `pairing.t`, and `command.t`. Tuple unpacking still works for the
+named tuples; `Pairing` remains a frozen dataclass. Compare these times directly with
+`Message.at`, console `Line.at` or GPIO `LineEvent.t`, without wrapping them in `Duration`.
+This breaks the former integer API: use `.ns` only when integer nanoseconds are needed.
+The run report is unchanged; `esp32sim_link` JSON still writes integer `t_ns` fields.
 
 ## Time on the air
 
@@ -425,6 +433,8 @@ An `Air()` has a clock of its own, which starts at 0 when it is made and moves o
 moves it; `bt.air` is the board's, [above](#in-front-of-the-firmware-boardbluetooth), and only the
 board moves it. Nothing on the air reads the host's clock, so two runs do the same at the same
 instants.
+History timestamps use that same clock: board time on `bt.air`, or the standalone air's
+time since creation on `Air()`.
 
 | Call | What it does |
 |---|---|
