@@ -82,10 +82,6 @@ markers = [
     "requires_docker: needs a Docker daemon",
     "requires_mtools: needs mtools (mformat, mcopy, mdir, mtype, mmd)",
 ]
-filterwarnings = [
-    # pytest-embedded's `app_path` fixture records an XML attribute for every test.
-    "ignore:record_xml_attribute is an experimental feature:pytest.PytestExperimentalApiWarning",
-]
 
 [tool.ruff]
 line-length = 100

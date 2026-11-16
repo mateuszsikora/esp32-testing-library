@@ -55,14 +55,11 @@ pytestmark = [
   `tests/boards/periodic-wake.toml`, selected with `path=`.
 
 pytest loads the plugin by itself once esp32tl is installed ([In CI](#in-ci) says how). In your
-`pyproject.toml`, `-ra` shows why a test was skipped, and one filter silences a warning
-pytest-embedded causes for every test
-([what a failure looks like](../features/pytest-plugin-user.md#what-a-failure-looks-like)):
+`pyproject.toml`, `-ra` shows why a test was skipped:
 
 ```toml
 [tool.pytest.ini_options]
 addopts = ["-ra"]
-filterwarnings = ["ignore:record_xml_attribute is an experimental feature:pytest.PytestExperimentalApiWarning"]
 ```
 
 ## Power-on

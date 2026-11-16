@@ -99,6 +99,12 @@ def card_cache_limit(config: pytest.Config) -> int:
 
 def pytest_configure(config: pytest.Config) -> None:
     card_cache_limit(config)
+    # pytest applies later filters first: keep the consumer's ini and -W choices authoritative.
+    config.getini("filterwarnings").insert(
+        0,
+        "ignore:^record_xml_attribute is an experimental feature$:"
+        "pytest.PytestExperimentalApiWarning",
+    )
     config.addinivalue_line(
         "markers",
         "app_path(path, build_dir='build'): the app, relative to the test file's directory (the"

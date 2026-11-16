@@ -312,6 +312,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Backend runtime validation follows selection per file](harness.md#backend-runtime-validation-follows-selection-per-file) | `harness.md` | decided |
 | [Final radio diagnostics come from the completed runner log](harness.md#final-radio-diagnostics-come-from-the-completed-runner-log) | `harness.md` | decided (#223) |
 | [DHCP starts at virtual station data-link readiness](harness.md#dhcp-starts-at-virtual-station-data-link-readiness) | `harness.md` | decided |
+| [Filter the XML attribute warning as an overridable default](harness.md#filter-the-xml-attribute-warning-as-an-overridable-default) | `harness.md` | decided (#226) |
 
 ## The runner crate and esp32sim
 
