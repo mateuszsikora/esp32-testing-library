@@ -730,8 +730,8 @@ replies do not replace a bound lease. A lost OFFER or ACK causes the same reques
 `poll` and `quiet_until` schedule DHCP retries, lease expiry and one-second ARP retries on board
 time. DHCP intervals double from 4 s to 64 s, without host-clock jitter. The broadcast flag is set;
 ESP-IDF v5.5.4's `dhcps_response_ip_set` honors it. The runner coalesces identical pending UDP
-68-to-67 frames in station mode, so association backpressure does not accumulate retransmissions.
-The first copy still leaves as soon as esp32sim accepts it. There is no joined event.
+68-to-67 frames in station mode while the relay applies backpressure.
+In protocol v2, `wifi_link` gates DHCP; no requests are submitted before Joined.
 
 IPv4 total length and ARP's fixed 28-byte payload trim any trailing guard bytes, as in `Ethernet`.
 Only IPv4 to the leased host reaches `Network`, apart from DHCP replies. Services therefore retain
@@ -745,7 +745,28 @@ ARP replies and requests addressed to the host populate
 the cache, and the host answers requests only for itself.
 
 `Internet.device_reset` and lease expiry clear the address, ARP cache and pending datagrams, reset
-IP connections and path queues, and start acquisition. `when_leased()` reads `Internet.lease`
+IP connections and path queues. Reset waits for data-link readiness before acquisition; lease expiry restarts acquisition on the current link. `when_leased()` reads `Internet.lease`
 dynamically, including after a link replacement. There is no renewal/rebinding, conflict detection,
 or idle keep-alive. `tests/test_net_station.py` exercises the host against handmade packets;
 `tests/test_arduino_softap.py` runs the actual Arduino DHCP server and HTTP endpoint.
+
+Station lifecycle is driven by protocol v2 `wifi_link` events, using the emulated slice-boundary time. The DHCP transaction ID advances on every acquisition and survives network stop/reset. Disconnected stations have no DHCP or ARP deadline and ignore incoming Ethernet. Link loss resets the IP transports and path queues. Lease history remains available, but only `lease` denotes the current lease.
+
+### Delayed SoftAP reproduction
+
+With Arduino shell `shell/ap_delay_ms=u32(15300)`, the unmodified `origin/main`
+(34f2c49) host logged DISCOVER at 0, 4 and 12 s. The runner retained one identical
+request while esp32sim rejected relay input before Joined. The first OFFER arrived
+at 15.576 s and ACK at 15.578 s, without waiting for the 28 s retry. Thus this generic
+firmware reproduces premature DHCP/backoff, but not the reported 28 s lease delay.
+An OFFER at 15.576 s, before the next client retry, confirms delivery of the queued
+request. Inside esp32sim, `receive_relay_frame` rejects an unjoined station; once joined,
+`next_rx` drains pending management/EAPOL frames before taking Ethernet from `eth_rx`.
+
+With protocol v2, the open-network readiness event and first DISCOVER were both
+at 15.575 s; OFFER/REQUEST at 15.577 s and ACK at 15.579 s. WPA2 readiness and DISCOVER
+were both at 15.716 s; REQUEST at 15.718 s and ACK at 15.720 s. Two runs produced
+identical event lists and nanosecond timestamps for each security mode. The regression
+asserts the DISCOVER/readiness timestamp equality, not these firmware-dependent values
+or a subsecond lease bound. These measurements use the pinned container firmware and
+the development-profile runner on macOS; they do not establish cross-platform timing.

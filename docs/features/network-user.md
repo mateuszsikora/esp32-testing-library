@@ -1190,8 +1190,8 @@ PPP link; `network.dhcp` is the existing access-point DHCP server and does not i
 lease: use `network.lease` and `when_leased()` here.
 
 DHCP retries after 4, 8, 16, 32 and then 64 seconds between attempts, on the board's clock.
-Identical requests still held by the runner before association occupy one queue entry.
-Device reset loses connections, clears the lease and ARP cache, and starts DHCP again.
+The first attempt starts at data-link readiness; no retry deadline runs before association.
+Device reset loses connections, clears the lease and ARP cache, and waits for data-link readiness before starting DHCP again.
 `board.reset()` queues the reset; the current lease remains until the runner reports it. To wait
 for a fresh lease after a reset, first observe the new boot:
 
@@ -1209,3 +1209,5 @@ and esp32sim rejoins. Explicit station leave/rejoin, simultaneous virtual AP and
 chips, WPA3-SAE, required PMF and hidden SSIDs are not supported. Renewal needs a client state
 machine; the radio features need esp32sim support. See the
 [decision](../decisions/harness.md#a-test-joins-the-devices-access-point-through-esp32sims-virtual-station-with-the-harness-as-the-host-behind-it).
+
+A virtual station waits for the Wi-Fi data link before starting DHCP. No DHCP retries run while disconnected. Rejoining starts a fresh exchange with the initial 4 s retry interval; it does not inherit the power-on backoff. Disconnection invalidates `network.lease`, ARP and queued traffic and marks existing TCP connections lost. Reset and power cycling follow the same rule.

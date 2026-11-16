@@ -45,6 +45,7 @@ from esp32tl.link.protocol import (
     Wait,
     Warn,
     WifiAp,
+    WifiLink,
     WifiStats,
     as_json,
     decode,
@@ -55,13 +56,15 @@ from esp32tl.link.protocol import (
 ROOT = Path(__file__).resolve().parent.parent
 
 EVERY_MESSAGE: list[tuple[Sender, Message]] = [
-    ("runner", RunnerHello(1, "esp32", "emulated-fifo-write", "8c65215" + "0" * 33)),
+    ("runner", RunnerHello(2, "esp32", "emulated-fifo-write", "8c65215" + "0" * 33)),
     ("runner", UartTx(7, 1_500_000_000, 1, (26,), 115200, b"AT\r")),
     ("runner", UartTx(8, 1_500_000_000, 1, (), None, b"\x00\xff")),
     ("runner", UartCfg(3, 312_456_789, 1, (4,), 5, 9600)),
     ("runner", UartCfg(4, 312_456_789, 2, (), None, None)),
     ("runner", GpioOut(9, 2_000_000_000, ((4, 1), (5, 0)), (4,), (4,))),
     ("runner", Reset(12, 4_100_000_000, 12)),
+    ("runner", WifiLink(13, 4_200_000_000, True)),
+    ("runner", WifiLink(14, 4_300_000_000, False)),
     ("runner", EthTx(13, 4_200_000_000, b"\xff" * 6 + b"\x24\x6f\x28\x00\x11\x22\x08\x06")),
     ("runner", HciTx(14, 4_300_000_000, b"\x01\x03\x0c\x00")),
     ("runner", HciTx(15, 4_300_000_000, b"\x02" * protocol.HCI_MAX)),
@@ -95,8 +98,8 @@ EVERY_MESSAGE: list[tuple[Sender, Message]] = [
             detail="Unimplemented(0x40080000)",
         ),
     ),
-    ("harness", HarnessHello(1, "esp32", "esp32-devkitc", (4, 5))),
-    ("harness", HarnessHello(1, "esp32", "esp32-devkitc")),
+    ("harness", HarnessHello(2, "esp32", "esp32-devkitc", (4, 5))),
+    ("harness", HarnessHello(2, "esp32", "esp32-devkitc")),
     ("harness", UartRx(2_000_000_000, 5, 9600, b"$GPGGA*6E\r\n")),
     ("harness", GpioIn(3_000_000_000, ((33, 1),))),
     ("harness", Release(3_500_000_000, (33,))),
@@ -170,7 +173,7 @@ def test_null_and_an_absent_field_are_the_same_and_unknown_fields_are_ignored() 
 
 
 def test_a_runner_hello_of_another_version_decodes_on_its_version_alone() -> None:
-    assert decode(b'{"type":"hello","version":2,"chip":["esp32"]}', "runner") == RunnerHello(2)
+    assert decode(b'{"type":"hello","version":99,"chip":["esp32"]}', "runner") == RunnerHello(99)
 
 
 @pytest.mark.parametrize(
@@ -240,24 +243,24 @@ def test_a_line_is_at_most_one_mebibyte() -> None:
         decode(b" " * (MAX_LINE + 1), "runner")
 
 
-RUNNER = RunnerHello(1, "esp32", "emulated-fifo-write", "357b0e542dfe97d4c62ec4a15c01c4969164448c")
+RUNNER = RunnerHello(2, "esp32", "emulated-fifo-write", "357b0e542dfe97d4c62ec4a15c01c4969164448c")
 
 
 def test_the_handshake_answers_with_the_board_and_the_watched_pins() -> None:
     answer, mismatch = handshake(RUNNER, chip="esp32", board="esp32-devkitc", watch=[5, 4, 5])
-    assert answer == HarnessHello(1, "esp32", "esp32-devkitc", (4, 5))
+    assert answer == HarnessHello(2, "esp32", "esp32-devkitc", (4, 5))
     assert mismatch is None
 
 
 @pytest.mark.parametrize(
     ("runner", "mismatch"),
     [
-        (RunnerHello(2), "the runner speaks link protocol version 2, the harness 1"),
+        (RunnerHello(99), "the runner speaks link protocol version 99, the harness 2"),
         (
-            RunnerHello(1, "esp32s3", "emulated-fifo-write", "0"),
+            RunnerHello(2, "esp32s3", "emulated-fifo-write", "0"),
             "the runner emulates chip 'esp32s3', the board profile is 'esp32'",
         ),
-        (RunnerHello(1, "esp32", None, "0"), "the runner's hello has no clock"),
+        (RunnerHello(2, "esp32", None, "0"), "the runner's hello has no clock"),
     ],
 )
 def test_a_mismatched_handshake_is_answered_all_the_same(
@@ -265,7 +268,7 @@ def test_a_mismatched_handshake_is_answered_all_the_same(
 ) -> None:
     answer, found = handshake(runner, chip="esp32", board="esp32-devkitc", watch=[])
     # The answer carries the harness's version and chip, so the runner finds the mismatch too.
-    assert answer == HarnessHello(1, "esp32", "esp32-devkitc", ())
+    assert answer == HarnessHello(2, "esp32", "esp32-devkitc", ())
     assert found == mismatch
 
 

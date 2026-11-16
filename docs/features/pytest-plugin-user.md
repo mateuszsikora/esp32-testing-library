@@ -1333,3 +1333,5 @@ AP+STA combination, WPA3-SAE, required PMF, hidden SSID probing or keep-alive. A
 disassociate the host after about 300 s; the emulator rejoins. Lease renewal is not implemented:
 expiry clears the address and connections and starts DHCP again. Radio extensions await upstream
 support, and renewal awaits a DHCP client extension.
+
+`board.wifi.station(...)` may be configured before power-on, including for a device that starts its SoftAP much later. DHCP begins when the emulator reports the data link ready, after the WPA2 key exchange where applicable. `network.when_leased()` remains a current-state condition and becomes false after link loss.

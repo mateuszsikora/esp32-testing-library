@@ -69,7 +69,7 @@ class Peer:
         self.file.write(json.dumps(message).encode() + b"\n")
         self.file.flush()
 
-    def hello(self, version: int = 1) -> dict[str, Any]:
+    def hello(self, version: int = 2) -> dict[str, Any]:
         runner = self.read()
         self.write(type="hello", version=version, chip="esp32", board="esp32-devkitc", watch=[5])
         return runner
@@ -90,7 +90,7 @@ class Peer:
 def test_a_run_to_max_seconds_with_the_console_on_the_socket(socket_path: Path) -> None:
     peer = Peer(socket_path, "--console", "socket")
     hello = peer.hello()
-    assert hello["type"] == "hello" and hello["version"] == 1 and hello["chip"] == "esp32"
+    assert hello["type"] == "hello" and hello["version"] == 2 and hello["chip"] == "esp32"
     # turn 0 comes before the guest's first instruction
     assert peer.read() == {"type": "sync", "t": 0}
     peer.write(type="wait", ack=0, quiet_until=None, latency=None)
@@ -146,12 +146,12 @@ def test_a_late_input_is_a_protocol_error_with_exit_code_3(socket_path: Path) ->
 
 def test_a_version_mismatch_ends_the_run_with_stats_and_exit_code_3(socket_path: Path) -> None:
     peer = Peer(socket_path)
-    peer.hello(version=2)
+    peer.hello(version=99)
     rest = peer.rest()
     code, _, err = peer.wait()
     assert code == 3, err
     assert [m["type"] for m in rest] == ["stats"]
-    assert "version 2" in rest[0]["detail"]
+    assert "version 99" in rest[0]["detail"]
 
 
 def test_a_peer_that_does_not_answer_in_time_is_gone_with_exit_code_4(socket_path: Path) -> None:

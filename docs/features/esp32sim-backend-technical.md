@@ -438,7 +438,7 @@ then
 
 The code is `Popen.returncode`: the exit status, or minus the signal number.
 
-The link's messages are those of [the link protocol](../protocol.md), version 1, encoded and
+The link's messages are those of [the link protocol](../protocol.md), version 2, encoded and
 decoded by `esp32tl/link/protocol.py`.
 
 From the build, the `Build` that `esp32tl.build.load` reads from an ESP-IDF or a PlatformIO build

@@ -2,7 +2,7 @@
 
 The contract between `esp32tl-runner` (the Rust crate in `runner/`, which runs the guest in
 esp32sim) and the harness (`esp32tl/link/`, `BoardLink`), or any other peer that takes the
-runner's board slot. Protocol version 1. It writes down section 4.1 of the
+runner's board slot. Protocol version 2. It writes down section 4.1 of the
 [implementation plan](implementation-plan.md) and the parts of 4.2 a peer needs, checked against
 esp32sim at the project's pin, `357b0e5`. Where this document and the plan differ, this document
 holds; section 11 lists the differences and why.
@@ -124,7 +124,7 @@ A hold may also return a `RunTo`, the latest time of the next turn and a `latenc
 folds into the `wait`'s `latency` with the interfaces' (5.13): the test's clock does so while the
 test waits for a wake from deep sleep, with 1 ms, so that the turn comes right after the `reset`
 (5.5) without a `quiet_until` step in the sleep. The hold answers no event, so its `latency` is a
-promise nothing can break; the messages on the wire are those of version 1.
+promise nothing can break; the messages on the wire are those of version 2.
 The wait is wall time, bounded by `--peer-timeout` (section 9), which the backend sets to 0 so
 that a test body can take as long as it does.
 
@@ -157,6 +157,7 @@ seen exactly the events up to the block point, however the emulator schedules it
 | harness → runner | `adc` *ext* | `t`, `pin`, `volts` | M3 |
 | harness → runner | `eth_rx` *ext* | `t`, `data` | M7 |
 | harness → runner | `hci_rx` *ext* | `t`, `data` | #34 |
+| runner → harness | `wifi_link` | `seq`, `t`, `ready` | v2 |
 | harness → runner | `wifi_ap` *ext* | `t`, `on` | M7 |
 | harness → runner | `power` *ext* | `t`, `on` | #105 |
 | harness → runner | `chip_reset` *ext* | `t` | #105 |
@@ -173,47 +174,47 @@ until it has an issue of its own (5.12).
 The Wi-Fi Ethernet messages (`eth_tx`, `eth_rx`) and `stats.wifi` pass on runs started with
 `--wifi` or `--wifi-sta`. `wifi_ap` passes only with `--wifi`: a virtual station has no access
 point to switch. Without either radio option, `eth_rx` is a protocol error; `wifi_ap` is a protocol
-error without `--wifi`, including in station mode (section 9). The protocol version stays 1.
+error without `--wifi`, including in station mode (section 9). These messages originally kept protocol version 1.
 
-`power` and `chip_reset` (5.17, 5.18) leave the version at 1 too. A peer that never sends them
+`power` and `chip_reset` (5.17, 5.18) originally left the version at 1. A peer that never sends them
 sees no difference: the runner sends no new message, and `reset` (5.5) keeps its fields. A runner
 built before them answers either with a protocol error, `unknown type "power"`, so a harness that
 needs them finds out at the first one; the harness and the runner come from one checkout.
 
 The SD card messages (`sd_card`, `sd_card_ack`, 5.19) pass only on a run started with `--sd-spi`, and
-the version stays 1 for the same reason: the runner sends `sd_card_ack` only in answer to the
+the version originally stayed 1 for the same reason: the runner sends `sd_card_ack` only in answer to the
 peer's `sd_card`, so a peer that never sends it never sees one; without `--sd-spi`, `sd_card` is a
 protocol error.
 
 The SD card's messages (`sd_fault`, `sd_clear`, `sd_op`) pass only on a run started with `--sd-spi`;
 without it `sd_fault` and `sd_clear` are protocol errors. The runner sends `sd_op` only for a rule
-the peer gave. The version stays 1
+the peer gave. The version originally stayed 1
 ([decision](decisions/runner.md#the-sd-cards-fault-messages-keep-protocol-version-1)).
 
-`flash_dump` and `flash_dump_ack` (5.21) leave the version at 1 too: the runner sends the answer only
+`flash_dump` and `flash_dump_ack` (5.21) originally left the version at 1: the runner sends the answer only
 to a peer that asked, and without `--flash-out` the message is a protocol error.
 
 The Bluetooth messages (`hci_tx`, `hci_rx`, 5.22) pass only on a run started with `--bt`, and the
-version stays 1, as with the Wi-Fi ones: the runner sends `hci_tx` only with `--bt`, which only a
+version originally stayed 1, as with the Wi-Fi ones: the runner sends `hci_tx` only with `--bt`, which only a
 harness that speaks both gives it, and without `--bt` `hci_rx` is a protocol error
 ([decision](decisions/runner.md#the-bluetooth-messages-keep-the-link-protocol-at-version-1)).
 
 **Events** are the runner messages that carry `seq`: `uart_tx`, `uart_cfg`, `gpio_out`, `reset`,
-`eth_tx` and `hci_tx`. They are what a peer may answer, so they set the block point (rule 1). `seq`
-is one counter over all six, starting at 1 and growing by 1. `sync`, `console`, `warn`,
+`eth_tx`, `hci_tx` and `wifi_link`. They are what a peer may answer, so they set the block point (rule 1). `seq`
+is one counter over all seven, starting at 1 and growing by 1. `sync`, `console`, `warn`,
 `sd_card_ack`, `sd_op`, `flash_dump_ack` and `stats` carry no `seq` and ask for nothing.
 
 ### 5.1 `hello`
 
 ```json
-{"type": "hello", "version": 1, "chip": "esp32", "clock": "emulated-fifo-write",
+{"type": "hello", "version": 2, "chip": "esp32", "clock": "emulated-fifo-write",
  "esp32sim": "357b0e542dfe97d4c62ec4a15c01c4969164448c"}
-{"type": "hello", "version": 1, "chip": "esp32", "board": "esp32-devkitc", "watch": [4, 5]}
+{"type": "hello", "version": 2, "chip": "esp32", "board": "esp32-devkitc", "watch": [4, 5]}
 ```
 
 The first line is the runner's, the second the harness's.
 
-- `version`: 1. Both sides require equality; there is no negotiation.
+- `version`: 2. Both sides require equality; there is no negotiation.
 - `chip`: `esp32`, the classic chip, the only one for now. The harness sends the chip of its board
   profile and the runner refuses another.
 - `clock`: what the times of `uart_tx` mean, in the vocabulary of the recording header (plan 4.3).
@@ -391,7 +392,7 @@ expects match on those bytes, which reach the harness before the `sync` that fol
 ```
 
 What the emulator dropped or refused and the peer could not see otherwise. `detail` is for
-people; the fields are for code. Kinds in version 1:
+people; the fields are for code. Kinds in version 2:
 
 | `kind` | When | Fields |
 |---|---|---|
@@ -467,7 +468,8 @@ the whole run:
 - `eth_rx`: `eth_rx` frames the station's link took;
 - `eth_rx_dropped`: `eth_rx` frames that came due while the access point was off the air, or that
   the runner still held when it went off (5.16), and those that came due while the board's supply
-  was off (5.17);
+  was off (5.17), plus queued and future inputs discarded at a virtual station transition.
+  Frames already accepted by esp32sim and then flushed from its relay are not included;
 - `rx_dropped`: frames from the air, beacons included, that found no free descriptor in the
   station's receive ring (`StationLink::rx_dropped`).
 
@@ -1335,13 +1337,13 @@ On an interface whose `lossless` property is true (currently a modem with the si
 `BoardLink` treats `warn.kind == "rxfifo_ovf"` on that interface's RX pin as fatal. For LilyGO:
 `uart.modem: UART receive overflow (rxfifo_ovf) on GPIO 27: the simulated network requires a lossless route`.
 The warning is retained in the report and the run stops as for `frm_err`. Ordinary UART routes
-keep overflow as a warning. This changes harness policy only, not message fields or version 1.
+keep overflow as a warning. This changes harness policy only, not message fields or version 2.
 
 ## 12. Wall time: `--realtime` and the `real` source (M5)
 
 Designed in #27, before code; the runner's half and the harness's `real` source came with #28.
 Nothing here changes the wire: `wall` is a value `clock` already reserved, and `rt_resyncs` a
-field `stats` may add (section 2), so the protocol stays at version 1.
+field `stats` may add (section 2), so the protocol stays at version 2.
 
 A real device on a host serial port, a GNSS receiver on a USB adapter for one, sends when it
 sends, in wall time; it cannot be held in a turn or say when it will next send. Putting it at the
@@ -1526,3 +1528,25 @@ On the `serial` backend `real(port)` is not attempted (finding 11). The `real` i
 declaration gives is the device wired to the board, which no host port reaches, so the test skips at
 the call and the port stays closed: `serial: uart.gnss has the device wired to the board at its far
 end: a host serial port goes there on the emulator only`.
+
+## Virtual station lifecycle (version 2)
+
+With `--wifi-sta`, the runner emits a sequenced event at the slice boundary when
+`VirtualSta.state == StaLink::Joined` changes, or its completed-join counter changes:
+
+```json
+{"type":"wifi_link","seq":14,"t":15300000000,"ready":true}
+```
+
+`ready: false` invalidates the host's lease, DHCP exchange, ARP state, queued packets and
+connections. `ready: true` starts a fresh DHCP exchange at `t`, with a new transaction ID
+and initial retry interval. The initial disconnected state is also reported. The event
+precedes Ethernet events collected at the same boundary. All times are emulated nanoseconds.
+WPA2 Joined means message 3 passed MIC validation and keys are installed; the queued message 4
+is sent before relay data by esp32sim's `StationLink::next_rx`.
+
+On transitions the runner clears pending Ethernet inputs, its backpressure queue and both
+emulator relay queues (`set_relay(false)` then `set_relay(true)`, without stepping the guest).
+The harness clears unsent Ethernet answers. Ethernet input while disconnected is dropped.
+Reset additionally invalidates the host immediately; the preserved host object keeps transaction
+IDs advancing across resets. Version 1 peers are rejected by the existing handshake.

@@ -1902,3 +1902,9 @@ Radio diagnostics written by the runner must appear in the backend's teardown re
 when live log forwarding has not delivered them. Reading them waits for both the runner and
 its waiter to finish. `tests/test_pytest_plugin.py::test_radio_diagnostics_survive_a_stopped_log_forwarder`
 disables forwarding and places the diagnostics before more than a log tail's worth of output.
+
+## Virtual station DHCP lifecycle
+
+`test_no_discover_or_deadline_until_ready` enforces silence and no retry deadline before data-link readiness. `test_disconnect_discards_exchange_and_stale_reply` checks pending and bound exchanges: disconnect clears the lease, loses connections, and old replies cannot bind a new exchange. `test_delayed_softap_starts_dhcp_at_link_ready` uses real Arduino firmware with a 15300 ms startup delay, for open and WPA2 networks; the first DISCOVER has the readiness timestamp, without a lease-duration bound. `test_softap_leaves_and_rejoins` checks real link loss and fresh DHCP. Existing reset/power-cycle regressions check lease invalidation and reacquisition.
+
+`station_disconnect_drops_backpressure_and_future_ethernet` verifies that queued and future Ethernet input cannot cross a reconnect. `station_lifecycle_reads_handshake_state_and_flushes_relay` checks the pinned emulator API and relay queue clearing. The stale-reply matrix also covers reset and power cycle during both pending and bound exchanges.

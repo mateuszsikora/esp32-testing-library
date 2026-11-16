@@ -311,6 +311,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Runtime preparation is explicit and version-matched](harness.md#runtime-preparation-is-explicit-and-version-matched) | `harness.md` | decided |
 | [Backend runtime validation follows selection per file](harness.md#backend-runtime-validation-follows-selection-per-file) | `harness.md` | decided |
 | [Final radio diagnostics come from the completed runner log](harness.md#final-radio-diagnostics-come-from-the-completed-runner-log) | `harness.md` | decided (16 November 2026) |
+| [DHCP starts at virtual station data-link readiness](harness.md#dhcp-starts-at-virtual-station-data-link-readiness) | `harness.md` | decided |
 
 ## The runner crate and esp32sim
 
@@ -368,3 +369,4 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [VHCI packets in PSRAM are esp32sim's to take](runner.md#vhci-packets-in-psram-are-esp32sims-to-take) | `runner.md` | decided (#188) |
 | [The runner restores U0RXD's input-enabled reset state](runner.md#the-runner-restores-u0rxds-input-enabled-reset-state) | `runner.md` | decided (#195) |
 | [Virtual station mode shares the Ethernet relay but has no access-point switch](runner.md#virtual-station-mode-shares-the-ethernet-relay-but-has-no-access-point-switch) | `runner.md` | decided (#215) |
+| [Station transitions invalidate relay queues](runner.md#station-transitions-invalidate-relay-queues) | `runner.md` | decided |

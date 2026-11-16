@@ -1,6 +1,6 @@
-"""The link protocol, version 1: its messages, their NDJSON codec and the handshake.
+"""The link protocol, version 2: its messages, their NDJSON codec and the handshake.
 
-`docs/protocol.md` is the contract; the section numbers below are its. Every message of version 1
+`docs/protocol.md` is the contract; the section numbers below are its. Every message of version 2
 is here, both directions, so that a fake runner in the tests speaks the same codec as `BoardLink`.
 Decoding checks what a message must carry and ignores fields it does not know (§2); a `null` and
 an absent field are the same. Times are integers in emulated nanoseconds (§3).
@@ -14,7 +14,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, fields
 from typing import Any, ClassVar, Literal, cast
 
-VERSION = 1
+VERSION = 2
 
 # The longest line either side accepts, its newline not counted (§2).
 MAX_LINE = 1 << 20
@@ -42,7 +42,7 @@ Sender = Literal["runner", "harness"]
 
 
 class ProtocolError(Exception):
-    """A line that is not a message of version 1."""
+    """A line that is not a message of version 2."""
 
 
 @dataclass(frozen=True)
@@ -114,6 +114,16 @@ class Reset:
     seq: int
     t: int
     cause: int
+
+
+@dataclass(frozen=True)
+class WifiLink:
+    """The virtual station's data link changed at a runner slice boundary."""
+
+    TYPE: ClassVar[str] = "wifi_link"
+    seq: int
+    t: int
+    ready: bool
 
 
 @dataclass(frozen=True)
@@ -391,7 +401,7 @@ class Stop:
     TYPE: ClassVar[str] = "stop"
 
 
-Event = UartTx | UartCfg | GpioOut | Reset | EthTx | HciTx
+Event = WifiLink | UartTx | UartCfg | GpioOut | Reset | EthTx | HciTx
 RunnerMessage = (
     RunnerHello | Event | Sync | Console | Warn | SdCardAck | SdOp | FlashDumpAck | Stats
 )
@@ -744,6 +754,7 @@ DECODERS: dict[Sender, dict[str, Callable[[Fields], Message]]] = {
             f.pins("output"),
         ),
         "reset": lambda f: Reset(f.integer("seq", 1), f.integer("t"), f.integer("cause")),
+        "wifi_link": lambda f: WifiLink(f.integer("seq", 1), f.integer("t"), f.boolean("ready")),
         "eth_tx": lambda f: EthTx(f.integer("seq", 1), f.integer("t"), f.frame("data")),
         "hci_tx": lambda f: HciTx(f.integer("seq", 1), f.integer("t"), f.packet("data")),
         "sync": lambda f: Sync(f.integer("t")),
