@@ -25,7 +25,7 @@ def test_the_firmware_sends_to_the_peer(board):
     source = Echo()  # a model, as in "The model that answers" below
     peer = SppPeer(board.bluetooth.air, name="ESP_SPP_ACCEPTOR", pin="1234", source=source)
     board.power_on()
-    board.wait_until(lambda: peer.channel_open, within=seconds(20))
+    board.wait_until(peer.is_open, within=seconds(20))
     board.wait(seconds(1))
     assert source.heard
 ```
@@ -222,7 +222,7 @@ peer = SppPeer(
     bt.air, name="ESP_SPP_ACCEPTOR", pin="1234", source=model, io_capability="no_input_no_output"
 )
 board.power_on()
-board.wait_until(lambda: peer.channel_open, within=seconds(5))
+board.wait_until(peer.is_open, within=seconds(5))
 assert [p.method for p in peer.pairings] == ["just_works"]
 ```
 
@@ -515,3 +515,41 @@ own coroutine's callbacks, is prefixed with asyncio's description of where it wa
 - [Decisions: how a peer leaves](../decisions/harness.md#a-peer-leaves-without-a-word-keeps-its-keys-and-its-old-link-stays-dead-until-it-falls)
 - [Decisions: the air of the `bt` fixture is on the board's clock](../decisions/harness.md#the-air-of-the-bt-fixture-is-moved-by-the-boards-link-alone)
 - [esp32sim backend: Bluetooth](esp32sim-backend-user.md#bluetooth)
+
+## Waiting for the SPP channel and device writes
+
+`peer.is_open` and `peer.is_closed` are `Condition[bool]` properties for the channel's
+current state. Pass them to `board.wait_until`, or call them with `()` to read the state.
+`channel_open` remains a plain boolean property. Conditions refuse `bool()` (including
+`assert peer.is_open`) with `TypeError`:
+`call the SPP condition with (), or pass it to board.wait_until`.
+Timeouts name the peer, state and address, for example
+`ESP_SPP_ACCEPTOR's SPP channel is open (00:00:00:00:5B:01)`.
+
+```python
+board.wait_until(peer.is_open, within=seconds(20))
+request = peer.next_write(b"AT")  # Capture the boundary before triggering the action.
+board.reset()
+event = board.wait_until(request, within=seconds(30))
+assert b"AT" in event.data
+assert event.direction == "out"
+```
+
+`next_write(data: bytes | None = None)` returns a `Condition[ChannelEvent | None]` for the
+first device write recorded after the call. The result has `at` (a `Duration`), `direction`
+(`"out"`) and `data` (bytes). With `data`, one chunk must contain those literal bytes;
+chunks are not joined, and regular expressions and strings are not accepted. `None` and
+`b""` match any write. A non-bytes filter raises `TypeError`, for example
+`SppPeer.next_write: data is 'AT', not bytes or None`.
+The description is `the next write to ESP_SPP_ACCEPTOR's SPP channel (00:00:00:00:5B:01)`
+with ` containing b'AT'` when filtered.
+
+The boundary is append order, even for writes at the same timestamp or in one run slice.
+It survives channel closure and reopening. Peer answers (`"in"`) never match. Polling
+consumes nothing: repeated calls return the same first matching event and independent
+conditions can see the same event. Treat `peer.events` as history; do not clear or reorder it
+while conditions are outstanding.
+
+These conditions belong to `SppPeer`; `BluetoothDevice` has no SPP channel. There are no
+`next_open()` or `next_close()` events: a state condition does not detect a close and reopen
+between polls. Wait for `is_closed` before triggering a reconnect when both states matter.

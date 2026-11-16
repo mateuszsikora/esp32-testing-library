@@ -3931,3 +3931,28 @@ Reject serial distributed execution during configuration rather than trying to s
 physical board across workers. Cross-session hardware locking is outside this guard.
 Do not promise a fixed memory budget or linear speedup without workload measurements.
 Runtime preparation stays explicit: workers never perform automatic first-use downloads.
+
+## SPP conditions describe channel state and the next device write
+
+Status: decided (#225)
+
+`SppPeer.is_open` and `is_closed` describe the current channel state; `channel_open` stays a
+boolean. `next_write(data=None)` follows the `next_*` convention and MQTT's append-order,
+non-consuming boundary. It returns the existing `ChannelEvent`, whose time is a `Duration`
+since #224. These APIs belong only to `SppPeer`: `BluetoothDevice` has no channel to observe.
+
+The bytes filter means literal containment within one received chunk. Unlike MQTT's exact
+payload match, SPP is a byte stream, often with command terminators in the same chunk.
+Unlike the console's regex line matcher, this API does not frame lines, join chunks or accept
+regexes. The name `next_write` describes the device's direction, and the description says
+`containing` explicitly. Consumers needing framing still use a source model.
+
+**Rejected:** leaving consumers to compose `condition()` over `events`, which repeats boundary
+bookkeeping and loses consistent peer-specific descriptions. Also rejected: timestamp
+boundaries, which miss distinct writes in one run slice at the same time.
+
+**Postponed:** `next_open()` and `next_close()`. State conditions cannot observe a close and
+reopen between polls. Reliable transition conditions need a separate retained lifecycle history;
+this change observes the existing byte history only. Tests can wait for closure before initiating
+reconnection, or wait for a new device write after reset. Add transition history when a consumer
+needs to prove both transitions occurred without an intermediate wait.

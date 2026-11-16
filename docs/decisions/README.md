@@ -315,6 +315,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Filter the XML attribute warning as an overridable default](harness.md#filter-the-xml-attribute-warning-as-an-overridable-default) | `harness.md` | decided (#226) |
 | [Bluetooth histories expose Duration timestamps](harness.md#bluetooth-histories-expose-duration-timestamps) | `harness.md` | decided (#224) |
 | [Parallel simulation uses pytest-xdist installed separately](harness.md#parallel-simulation-uses-pytest-xdist-installed-separately) | `harness.md` | decided (#227) |
+| [SPP conditions describe channel state and the next device write](harness.md#spp-conditions-describe-channel-state-and-the-next-device-write) | `harness.md` | decided (#225) |
 
 ## The runner crate and esp32sim
 

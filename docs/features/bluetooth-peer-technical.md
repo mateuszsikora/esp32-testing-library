@@ -955,3 +955,20 @@ on standalone `Air()` they are instants since that air was created. `unknown_com
 returns a copy of the controller's list of named tuples, preserving unpacking.
 `Bluetooth.report()` passes `.ns` to `board_time`; `properties()` writes `.ns` as `t_ns`,
 so neither the report nor the `esp32sim_link` JSON schema changes.
+
+## Described channel conditions
+
+`SppPeer.is_open` and `is_closed` create `Condition[bool]` objects from
+`esp32tl/interfaces/condition.py`. Their callbacks read `channel_open` on each poll; descriptions
+include `name` and `device.public_address`. `next_write(data)` captures `len(events)` and scans
+that suffix for the first `ChannelEvent` with direction `"out"` and, when supplied,
+`data in event.data`. It returns the original record, with its `Duration` timestamp.
+No condition changes the list, moves a cursor, or clears its boundary at channel closure.
+All three use service `"SPP"` for the shared boolean refusal. The write filter is checked when
+the condition is created and must be bytes or `None`.
+
+`tests/test_spp_peer.py` covers state changes and described clock timeouts, boolean refusal,
+non-consuming repeated reads, equal-time append boundaries, filtering and chunk boundaries,
+and a pending write condition spanning an RFCOMM close and reopen. No emulator is needed.
+The API choice and deferred transition events are recorded in
+[the decision](../decisions/harness.md#spp-conditions-describe-channel-state-and-the-next-device-write).
