@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
+from conftest import FOUR_SHARD_ASSIGNMENTS
 
 ROOT = Path(__file__).resolve().parent.parent
 # A file of many fast tests that need no image.
@@ -70,7 +71,7 @@ def test_one_shard_of_one_is_every_test() -> None:
 
 @pytest.mark.parametrize("count", [1, 3, 4, 5])
 def test_measured_assignments_preserve_coverage(count: int) -> None:
-    from conftest import FOUR_SHARD_ASSIGNMENTS, in_shard
+    from conftest import in_shard
 
     nodes = [*FOUR_SHARD_ASSIGNMENTS, *(f"tests/test_new.py::test_{i}" for i in range(100))]
     for node in nodes:
@@ -81,9 +82,8 @@ def test_measured_assignments_preserve_coverage(count: int) -> None:
         assert selected == [expected]
 
 
-def test_measured_assignments_exist_and_work_in_partial_collection() -> None:
-    from conftest import FOUR_SHARD_ASSIGNMENTS
-
+@pytest.mark.parametrize("node, shard", FOUR_SHARD_ASSIGNMENTS.items())
+def test_measured_assignments_exist_and_work_in_partial_collection(node: str, shard: int) -> None:
     result = subprocess.run(
         [
             sys.executable,
@@ -91,8 +91,8 @@ def test_measured_assignments_exist_and_work_in_partial_collection() -> None:
             "pytest",
             "--collect-only",
             "-q",
-            "tests/test_http_request.py",
-            "--shard=1/4",
+            node,
+            f"--shard={shard}/4",
         ],
         cwd=ROOT,
         capture_output=True,
@@ -101,7 +101,7 @@ def test_measured_assignments_exist_and_work_in_partial_collection() -> None:
     assert result.returncode == 0, result.stdout + result.stderr
     collected = {line for line in result.stdout.splitlines() if "::" in line}
     # A renamed/deleted exception must be reviewed rather than silently going stale.
-    assert FOUR_SHARD_ASSIGNMENTS.keys() <= collected
+    assert collected == {node}
 
 
 @pytest.mark.parametrize("value", ["0/3", "4/3", "1/0", "3", "a/b", "-1/3", "1/3/5", ""])
