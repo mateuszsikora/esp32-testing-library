@@ -40,6 +40,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Release runtime builds use GitHub-hosted runners](ci.md#release-runtime-builds-use-github-hosted-runners) | `ci.md` | decided |
 | [One Python distribution is tested with both release runners](ci.md#one-python-distribution-is-tested-with-both-release-runners) | `ci.md` | decided |
 | [PyPI publishes the distributions of the published GitHub release](ci.md#pypi-publishes-the-distributions-of-the-published-github-release) | `ci.md` | decided |
+| [Balance the second pair with the no-peer inquiry test](ci.md#balance-the-second-pair-with-the-no-peer-inquiry-test) | `ci.md` | decided (16 November 2026) |
 
 ## Documentation and the documentation check
 

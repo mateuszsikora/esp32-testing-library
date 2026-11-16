@@ -96,9 +96,11 @@ manager for every session.
 and the rest are deselected. A test's default shard is the SHA-256 of its node id modulo N, so
 every job puts it in the same shard, and a new test needs no list. With N=4 only,
 `FOUR_SHARD_ASSIGNMENTS` in `tests/conftest.py` overrides exact node IDs measured as expensive:
-the HTTP bridge test runs in shard 1 instead of 4. Other shard counts keep the hash assignment.
+the HTTP bridge test runs in shard 1 instead of 4, and the Bluetooth inquiry test with no peer
+(`esp32sim-nobody`) runs in shard 3 instead of 2. Other shard counts keep the hash assignment.
 Assignments do not depend on collection order, selected paths, OS or Python version. The
-regressions check unique assignment, fallback for new tests and that the named test still exists.
+regressions check unique assignment, fallback for new tests and, separately for each assignment,
+that the exact node ID still exists and is selected in its target shard during partial collection.
 Anything but `1 <= K <= N` is a usage error:
 `--shard must be K/N with 1 <= K <= N, not '<value>'`. The option exists only where
 `tests/conftest.py` is loaded: a bare `pytest`, or one given a path under `tests/`.

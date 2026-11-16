@@ -1782,6 +1782,8 @@ counts and unknown node IDs use SHA-256 modulo N. Assignment is independent of t
 test files. `tests/test_shard.py::test_measured_assignments_preserve_coverage` checks these
 properties, and `test_measured_assignments_exist_and_work_in_partial_collection` detects stale
 assignments against real collection.
+That regression is parameterized over the assignment table and collects each exact node ID
+with its assigned shard, covering exceptions outside the HTTP test file as well.
 
 ## Firmware build shards
 
