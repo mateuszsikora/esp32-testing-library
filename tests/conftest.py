@@ -17,11 +17,14 @@ import pytest
 
 pytest_plugins = ["pytester"]
 
-# In three hosted runs this test cost ~40 s, while shard 4 outlasted shard 1
-# by ~70-100 s. Keep the exception exact, shared by all jobs and only for N=4.
-# Measurements and maintenance: docs/decisions/ci.md, "Balance the existing pair".
+# Measured exceptions shared by all jobs, only for N=4. See the balancing
+# decisions in docs/decisions/ci.md for timings and maintenance rules.
 FOUR_SHARD_ASSIGNMENTS = {
     "tests/test_http_request.py::test_fetches_from_a_real_service_through_a_bridge[esp32sim]": 1,
+    (
+        "tests/test_bt_spp_initiator.py::"
+        "test_with_no_peer_the_inquiry_runs_its_length_and_opens_nothing[esp32sim-nobody]"
+    ): 3,
 }
 
 

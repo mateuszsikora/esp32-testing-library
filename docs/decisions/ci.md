@@ -584,3 +584,31 @@ Those add maintenance and risk different assignments for partial collections or 
 collection. Renaming a test to manipulate its hash obscures the scheduling decision. Moving more
 tests before measuring this one risks reversing the imbalance. Shortening the bridge test or
 changing its wall-clock behavior would alter what is tested and is outside this change.
+
+
+## Balance the second pair with the no-peer inquiry test
+
+Status: decided (16 November 2026)
+
+For four shards, move
+`tests/test_bt_spp_initiator.py::test_with_no_peer_the_inquiry_runs_its_length_and_opens_nothing[esp32sim-nobody]`
+from its hashed shard 2 to shard 3. Keep the HTTP bridge assignment and the same mechanism:
+exact node IDs shared across both platforms and all Python versions, with hash fallback for
+all other tests and counts. The partial-collection regression now checks each assignment
+separately, so adding an exception also checks that its node exists in its target shard.
+
+Run [43813352186](https://github.com/mateuszsikora/esp32-testing-library/actions/runs/43813352186)
+passed all 25 jobs after #216. On macOS, shard 2 took 227.80, 178.72 and 185.88 seconds versus
+202.12, 156.05 and 153.07 seconds for shard 3, in Python version order 3.11, 3.13, 3.14.
+Linux's gaps were smaller: 154.04 vs 147.37, 159.86 vs 150.28 and 170.08 vs 154.55 seconds.
+The no-peer inquiry call had a median of 7.64 seconds on macOS and 4.55 seconds on Linux.
+Moving it reduces the estimated pair duration on both platforms; it does not establish a
+whole-workflow gain. The baseline took 10m22s including queues, with the last test VM starting
+at 5m55s. Hosted validation must separate job execution from queue time.
+
+**Rejected:** moving approximately 13 seconds of macOS work by also moving the SD reset test.
+Those two tests cost about 9-10 seconds on Linux, exceeding its smallest measured gap of
+6.67 seconds and potentially making that pair slower. Start with the Bluetooth case alone.
+Do not shorten the inquiry, change firmware, drop test variants, alter the serial real-source
+phase or add platform-dependent assignment tables. Workflow definitions, required checks,
+cache keys and test failure handling remain unchanged.

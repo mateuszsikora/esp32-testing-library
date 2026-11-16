@@ -37,6 +37,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Each platform waits only for its own native runner](ci.md#each-platform-waits-only-for-its-own-native-runner) | `ci.md` | decided (15 November 2026) |
 | [Retain six macOS test jobs after measuring five](ci.md#retain-six-macos-test-jobs-after-measuring-five) | `ci.md` | decided (16 November 2026) |
 | [Balance the existing pair with one measured assignment](ci.md#balance-the-existing-pair-with-one-measured-assignment) | `ci.md` | decided (16 November 2026) |
+| [Balance the second pair with the no-peer inquiry test](ci.md#balance-the-second-pair-with-the-no-peer-inquiry-test) | `ci.md` | decided (16 November 2026) |
 
 ## Documentation and the documentation check
 
