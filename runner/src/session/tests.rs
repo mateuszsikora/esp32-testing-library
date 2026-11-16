@@ -2322,17 +2322,26 @@ fn frame(n: u8) -> Vec<u8> {
 }
 
 fn run_wifi(end: u64, guest: &mut WifiGuest, peer: &mut FakePeer) -> (End, Stats) {
-    let signal = AtomicBool::new(false);
-    let wifi = cli::Wifi {
+    let wifi = cli::Wifi::AccessPoint {
         spec: "ssid=test".into(),
         nearby: Vec::new(),
     };
+    run_wifi_mode(end, guest, peer, &wifi)
+}
+
+fn run_wifi_mode(
+    end: u64,
+    guest: &mut WifiGuest,
+    peer: &mut FakePeer,
+    wifi: &cli::Wifi,
+) -> (End, Stats) {
+    let signal = AtomicBool::new(false);
     let opts = Options {
         end_cycle: end,
         console: false,
         peer_timeout: None,
         signal: &signal,
-        wifi: Some(&wifi),
+        wifi: Some(wifi),
         rom: &[],
         card: None,
         realtime: false,
@@ -2453,7 +2462,7 @@ fn eth_rx_and_wifi_ap_without_wifi_are_protocol_errors() {
 #[test]
 fn on_the_emulator_the_access_point_deauthenticates_the_station_before_it_leaves() {
     let mut m = esp32::machine([0x24, 0x6f, 0x28, 0x00, 0x11, 0x22], 4 << 20);
-    let wifi = cli::Wifi {
+    let wifi = cli::Wifi::AccessPoint {
         spec: "ssid=home,bssid=02:00:00:00:00:01".into(),
         nearby: Vec::new(),
     };
@@ -3806,4 +3815,79 @@ fn console_rx_reset_restores_native_input_but_firmware_can_disable_or_reroute_it
     m.bus.write32(0x3ff4_9048, (2 << 12) | (1 << 9)).unwrap();
     m.bus.write32(0x3ff4_4130 + 4 * 14, 0x80 | 4).unwrap();
     assert_eq!(Guest::uart_route(&m, 0).rx_pin, Some(4));
+}
+
+#[test]
+fn virtual_station_relays_frames_and_refuses_access_point_switches() {
+    let wifi = cli::Wifi::Station {
+        spec: "ssid=setup".into(),
+    };
+    let mut first = true;
+    let mut peer = FakePeer::new(&[], move |turn| {
+        let mut out = Vec::new();
+        if std::mem::take(&mut first) {
+            out.push(eth_rx(MS, &frame(7)));
+        }
+        out.push(wait(turn.seq, None, Some(MS)));
+        out
+    });
+    let mut guest = WifiGuest::new(vec![(cycles(MS), frame(8))], 64);
+    let (end, stats) = run_wifi_mode(cycles(3 * MS), &mut guest, &mut peer, &wifi);
+    assert!(matches!(end, End::MaxSeconds), "{end:?}");
+    assert_eq!(guest.taken, [(cycles(MS), frame(7))]);
+    assert_eq!(data(peer.of("eth_tx")[0]), frame(8));
+    let stats = stats.wifi.unwrap();
+    assert_eq!((stats.eth_rx, stats.eth_tx), (1, 1));
+    let mut peer = FakePeer::new(&[], |turn| {
+        vec![wifi_ap(turn.t, false), wait(turn.seq, None, None)]
+    });
+    let (end, _) = run_wifi_mode(cycles(MS), &mut guest, &mut peer, &wifi);
+    assert!(
+        matches!(end, End::Protocol(ref m) if m.contains("wifi_ap with --wifi-sta")),
+        "{end:?}"
+    );
+}
+
+#[test]
+fn emulator_station_uses_relay_and_waits_until_joined() {
+    let mut m = esp32::machine([0x24, 0x6f, 0x28, 0, 0x11, 0x22], 4 << 20);
+    let wifi = cli::Wifi::Station {
+        spec: "ssid=setup".into(),
+    };
+    m.wifi_access_point(&wifi);
+    m.bus.set_ethernet_relay(true).unwrap();
+    assert!(!m.bus.periph.wifi.link.station().unwrap().host);
+    assert!(!m.eth_input(&frame(1)));
+    assert!(m.bus.periph.wifi.link.ap().is_none());
+}
+
+#[test]
+fn station_dhcp_retries_do_not_accumulate_behind_association_backpressure() {
+    let wifi = cli::Wifi::Station {
+        spec: "ssid=setup".into(),
+    };
+    let mut dhcp = vec![0; 342];
+    dhcp[12..14].copy_from_slice(&[8, 0]);
+    dhcp[14] = 0x45;
+    dhcp[23] = 17;
+    dhcp[34..38].copy_from_slice(&[0, 68, 0, 67]);
+    let expected = dhcp.clone();
+    let mut first = true;
+    let mut peer = FakePeer::new(&[], move |turn| {
+        let mut out = Vec::new();
+        if std::mem::take(&mut first) {
+            for _ in 0..10 {
+                out.push(eth_rx(0, &dhcp));
+            }
+        }
+        out.push(wait(turn.seq, None, Some(MS)));
+        out
+    });
+    let mut guest = WifiGuest::new(Vec::new(), 1);
+    guest.queued = 1; // the first copy cannot enter the link yet
+    let (end, stats) = run_wifi_mode(cycles(3 * MS), &mut guest, &mut peer, &wifi);
+    assert!(matches!(end, End::MaxSeconds), "{end:?}");
+    assert_eq!(guest.taken.len(), 1);
+    assert_eq!(guest.taken[0].1, expected);
+    assert_eq!(stats.wifi.unwrap().eth_rx, 1);
 }

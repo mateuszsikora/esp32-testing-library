@@ -342,6 +342,15 @@ long runs with many unknown requests therefore use more memory and produce large
 Unknown commands alone do not fail the test; their protocol supplies a fallback response
 ([matching](matching-user.md)), and a silent fallback still creates a history entry.
 
+## Joining a device SoftAP
+
+`wifi.station(...)` configures `--wifi-sta` before power-on. The backend includes its network in
+reset notifications, recording properties and the run report, like `wifi.access_point(...)`.
+The prepared-world description calls it `the station of wifi`. The runner's captured stderr
+includes esp32sim's `[emu] wifi-sta:` line with join diagnostics, including a wrong passphrase.
+See [joining the device's own access point](network-user.md#joining-the-devices-own-access-point)
+for DHCP, supported security modes and the limitations on long idle runs and lease renewal.
+
 ## Installed runtime
 
 The backend resolves explicit environment paths first, checkout files second when running from

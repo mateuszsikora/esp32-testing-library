@@ -1,5 +1,4 @@
-"""The simulated network behind a modem or a Wi-Fi access point, driven only by the board's
-turns."""
+"""The simulated network behind a modem or either virtual Wi-Fi role, on the board's clock."""
 
 import math
 from collections import deque
@@ -8,6 +7,7 @@ from datetime import datetime
 from ipaddress import IPv4Address
 from typing import Literal, cast, overload
 
+from esp32tl.interfaces.condition import Condition
 from esp32tl.link.boardlink import Output
 from esp32tl.net.bridge import Bridge, address
 from esp32tl.net.client import NotReachable, TcpConnection
@@ -20,6 +20,7 @@ from esp32tl.net.ip import Connection, Network, StreamService
 from esp32tl.net.mqtt import Broker
 from esp32tl.net.ntp import DEFAULT_UTC, Ntp
 from esp32tl.net.ppp import Ppp
+from esp32tl.net.station import DEFAULT_MAC, HostLease, Station
 from esp32tl.net.tls import CertificateAuthority, Tls
 from esp32tl.report import board_time
 from esp32tl.units import NS_PER_S, Duration, Rate, shown
@@ -28,7 +29,7 @@ LATENCY_NS = 1_000_000
 LOCAL = "10.64.0.1"  # the network's own address: its DNS, its router, the test's side of TCP
 DEFAULT_RTT = Duration(LATENCY_NS)
 
-Link = Literal["ppp", "ethernet"]
+Link = Literal["ppp", "ethernet", "station"]
 
 
 class _Direction:
@@ -59,7 +60,7 @@ class _Direction:
 
 
 class Internet:
-    """One per modem, over PPP, or per Wi-Fi access point, over Ethernet with ARP and DHCP. DNS
+    """One per modem over PPP, or per virtual Wi-Fi role over Ethernet with ARP and DHCP. DNS
     and NTP always listen, the broker on TCP 1883 and the HTTP server on 80; the test registers
     other TCP services by port, bridges a port to a real service with `bridge`, and opens a
     connection to the device with `connect`.
@@ -76,6 +77,7 @@ class Internet:
         world: Callable[[], datetime] = lambda: DEFAULT_UTC,
         *,
         link: Link = "ppp",
+        mac: str = DEFAULT_MAC,
         bridging: Callable[[str], None] = lambda call: None,
     ) -> None:
         self._now = now
@@ -83,6 +85,7 @@ class Internet:
         self._at: int | None = None
         self._out: list[Output] = []
         self._kind = link
+        self._mac = mac
         self._up = _Direction(0)
         self._down = _Direction(LATENCY_NS)
         self._datagram: int | None = None  # the size of the IPv4 datagram the link is sending
@@ -107,13 +110,15 @@ class Internet:
         self._stale: int | None = None
         # Serves behind an access point only; its leases outlive the link's restarts.
         self.dhcp = Dhcp(self.now, self.log)
-        self.link: Ppp | Ethernet = self._peer()
+        self.link: Ppp | Ethernet | Station = self._peer()
         self.active = False
 
     @property
     def ppp(self) -> Ppp:
         """The PPP link of a network behind a modem."""
         if not isinstance(self.link, Ppp):
+            if isinstance(self.link, Station):
+                raise AttributeError("this network is behind a Wi-Fi station: it has no PPP")
             raise AttributeError("this network is behind a Wi-Fi access point: it has no PPP")
         return self.link
 
@@ -121,8 +126,30 @@ class Internet:
     def ethernet(self) -> Ethernet:
         """The Ethernet of a network behind a Wi-Fi access point."""
         if not isinstance(self.link, Ethernet):
+            if isinstance(self.link, Station):
+                raise AttributeError(
+                    "this network has a station link, not an access-point Ethernet link"
+                )
             raise AttributeError("this network is behind a modem: it has no Ethernet")
         return self.link
+
+    @property
+    def lease(self) -> HostLease | None:
+        """The station's current lease, or None before DHCP acknowledges it."""
+        return self.link.lease if isinstance(self.link, Station) else None
+
+    def when_leased(self) -> Callable[[], HostLease | None]:
+        """Current-state condition: the virtual station holds a DHCP lease."""
+        if not isinstance(self.link, Station):
+            raise ValueError("network.when_leased requires wifi.station()")
+        return Condition(lambda: self.lease, "the station has a DHCP lease", "DHCP station")
+
+    def _station_changed(self) -> None:
+        if self.lease is None:
+            self._out.clear()
+            self._link_ended()
+        else:
+            self.dns.address = IPv4Address(self.lease.address).packed
 
     def _mtu(self) -> int:
         return self.link.peer_mru if isinstance(self.link, Ppp) else self.link.mtu
@@ -227,15 +254,18 @@ class Internet:
             self.ip.lose_clients(why)
             if isinstance(self.link, Ppp):
                 self._stale = self.link.ipcp_opened
+            elif isinstance(self.link, Station):
+                self._out.clear()
+                self.link.start()
             else:
                 self.link.device_address = None
         finally:
             self._at = previous
 
     def connect(self, port: int, *, address: str | None = None) -> TcpConnection:
-        """Open a TCP connection to the device's `port`, from `10.64.0.1`: the SYN enters the
-        network's path at the board's current instant, and reaches the device after the path's
-        way down. `address` is the device's, `device_address` unless given, as
+        """Open TCP to the device, from the station's leased address or otherwise `10.64.0.1`.
+        The SYN enters the network's path at the board's current instant, and reaches the device
+        after the path's way down. `address` is the device's, `device_address` unless given, as
         for a device with a static address behind the access point. Returns the `TcpConnection`.
         Raises `NotReachable` while the link is down, before the device has an address, and
         behind the access point before the station has sent a frame."""
@@ -253,6 +283,8 @@ class Internet:
             down = (
                 "the access point is off the air"
                 if self._kind == "ethernet"
+                else "the station network is down"
+                if self._kind == "station"
                 else "the modem has not dialled"
             )
             raise NotReachable(f"{call}: {down}: the network reaches no device")
@@ -261,6 +293,12 @@ class Internet:
                 raise NotReachable(
                     f"{call}: the device has no address yet: PPP has not opened IPCP"
                     + (" since the device reset" if self.link.ipcp_open else "")
+                )
+        elif isinstance(self.link, Station):
+            if self.lease is None:
+                raise NotReachable(
+                    f"{call}: the device has leased no address to the station yet; "
+                    "wait for network.when_leased()"
                 )
         elif address is None and self.link.device_address is None:
             # Only once this link has leased an address: a fresh link has had none to lose.
@@ -286,9 +324,10 @@ class Internet:
                 {"t_ns": self.now(), "stream": identity, "direction": direction, "data": data.hex()}
             )
 
-        connection = TcpConnection(device, port, LOCAL, identity, self.now, record)
+        local = self.lease.address if self.lease is not None else LOCAL
+        connection = TcpConnection(device, port, local, identity, self.now, record)
         # Kept only once the network has taken it: it raises when it has no port left.
-        connection._opened(*self.ip.connect(device, port, LOCAL, connection))
+        connection._opened(*self.ip.connect(device, port, local, connection))
         self._opened[port] = number
         self.connections.append(connection)
         return connection
@@ -331,15 +370,33 @@ class Internet:
         self._up.rate, self._down.rate = uplink, downlink
         self.log(f"net: path: rtt {rtt}, downlink {downlink or 'any'}, uplink {uplink or 'any'}")
 
-    def _peer(self) -> Ppp | Ethernet:
+    def _peer(self) -> Ppp | Ethernet | Station:
         def send(data: bytes) -> None:
-            if self._datagram is None:  # the link's own: LCP, IPCP, ARP and DHCP
+            size = self._datagram
+            if self._kind == "station":
+                # ARP resolution can defer IP beyond _downlink's call. Classify the emitted
+                # frame here: controls have fixed latency, IP still takes the configured path.
+                size = (
+                    len(data) - 14
+                    if data[12:14] == b"\x08\x00" and data[26:30] != bytes(4)
+                    else None
+                )
+            if size is None:  # the link's own: LCP, IPCP, ARP and DHCP
                 self._out.append((self.now() + LATENCY_NS, data))
             else:
-                leaves = self._down.leaves(self.now(), self._datagram)
+                leaves = self._down.leaves(self.now(), size)
                 self._down.queue.append((leaves, data))
                 self._release()
 
+        if self._kind == "station":
+            return Station(
+                send,
+                self._uplink,
+                self.now,
+                mac=self._mac,
+                log=self.log,
+                changed=self._station_changed,
+            )
         if self._kind == "ethernet":
             return Ethernet(send, self._uplink, self.dhcp, log=self.log)
         return Ppp(send, self._uplink, log=self.log, ended=self._link_ended)
@@ -386,7 +443,7 @@ class Internet:
         self.active = True
         self._at = t
         try:
-            if isinstance(self.link, Ppp):
+            if isinstance(self.link, Ppp | Station):
                 self.link.start()
         finally:
             self._at = None
@@ -416,6 +473,8 @@ class Internet:
         """What the device sent at `t`: bytes of the modem's line, or one Ethernet frame."""
         self._at = t
         try:
+            if isinstance(self.link, Station):
+                self.link.poll()
             self._arrive(t)
             self.link.receive(data)
             return self._take()
@@ -429,6 +488,8 @@ class Internet:
         it. What this answers goes out in `poll`."""
         self._at = now
         try:
+            if isinstance(self.link, Station):
+                self.link.poll()
             self._arrive(now)
             self.broker.poll()
             self._pump()
@@ -440,6 +501,8 @@ class Internet:
         # the same answers, at the same stamps.
         self._at = now
         try:
+            if isinstance(self.link, Station):
+                self.link.poll()
             self._arrive(now)
             self.broker.poll()
             self._pump()
@@ -458,6 +521,7 @@ class Internet:
         if not self.active:
             return None
         bounds = (
+            self.link.quiet_until() if isinstance(self.link, Station) else None,
             self.broker.quiet_until(),
             self._up.head(),
             self._down.head(),

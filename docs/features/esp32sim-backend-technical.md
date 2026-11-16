@@ -717,3 +717,12 @@ building does not count as firmware setup for the no-power-on guard.
 Console input is a `ConsoleInput` link interface with `Wire(None, 3, 115200)`. Its pending
 writes retain the test clock timestamp until the next poll. GPIO 3 is watched, GPIO 1 is not;
 output still arrives only through `console`. The normal UART warning and report paths apply.
+
+## Virtual station networks
+
+`Wifi.configuration` is present for either virtual radio role. `_networks()` therefore discovers
+station networks for clock selection and device-reset invalidation, and the report includes
+`Wifi.report()` for them. The runner now emits the Wi-Fi lines from `StationLink::report()` at teardown: `[emu] wifi:`
+and, in station mode, `[emu] wifi-sta:`. Previously it did not call that upstream report. Both
+use the existing stdout/stderr capture into the test output and `dut.log`; no parser is needed. `_world_given()` describes `the station of wifi` when
+`runner_args()` includes `--wifi-sta`.

@@ -1874,3 +1874,23 @@ may use lightweight CI or trigger a release tag after merge. All other bytes and
 modes must remain unchanged. Mixed changes, missing or inconsistent fields, unchanged/reversed
 diffs and unknown refs cannot take the shortcut. The bump validates all files before writing.
 `tests/test_release_version.py` checks this against real local git repositories and CLI output.
+
+## A host behind a virtual Wi-Fi station
+
+The virtual station and virtual access point are exclusive, and station mode cannot switch an
+access point. `tests/test_wifi.py::test_station_flags_properties_and_exclusions`,
+`runner/src/cli/tests.rs::wifi_station_parses_and_refuses_conflicting_modes` and
+`runner/src/session/tests.rs::virtual_station_relays_frames_and_refuses_access_point_switches`
+enforce this.
+
+The harness answers ARP only for its current leased address, sends TCP from that address, and
+forgets it on reset or expiry. Before a lease even an explicit TCP destination is not reachable.
+`tests/test_net_station.py::test_arp_answers_only_our_address_and_resolves_before_tcp` and
+`test_lease_lost_offer_retries_nak_and_expiry` enforce this. Identical DHCP retries held before
+association occupy one runner queue entry:
+`runner/src/session/tests.rs::station_dhcp_retries_do_not_accumulate_behind_association_backpressure`.
+
+A new ARP destination cannot postpone an existing resolution retry. Due batches retry all
+pending destinations one second apart, and resolving every destination clears the retry timer.
+`tests/test_net_station.py::test_new_arp_destination_does_not_postpone_pending_retries` enforces
+this with staggered destinations, two retry batches and replies releasing the queued datagrams.

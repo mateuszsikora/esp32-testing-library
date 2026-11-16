@@ -1012,3 +1012,24 @@ pad is outside this console change; it should ultimately live in esp32sim's rese
 **Rejected:** forcing UART0's route to GPIO 3 whenever none is configured, because that ignores
 firmware intentionally disabling input, or rerouting it; making only the validation firmware
 configure pins would conceal the missing post-boot route.
+
+## Virtual station mode shares the Ethernet relay but has no access-point switch
+
+Status: decided (#215)
+
+`cli::Wifi` is an enum, with `AccessPoint` and `Station` variants. `--wifi-sta` is parsed by
+esp32sim's `StaConfig::parse`, is exclusive with `--wifi` and `--wifi-nearby`, and requires
+`--board`. The same session path carries Ethernet and counts `stats.wifi`; `wifi_ap` in station
+mode is a protocol error. Power-on reset attaches a fresh virtual station; guest resets use
+esp32sim's station restart. Pending identical DHCP client frames are coalesced only in station
+mode, while backpressure holds them, so retries before association do not accumulate. Other
+Ethernet frames and already-delivered requests keep their ordering and counts.
+
+**Rejected:** a boolean on an access-point configuration whose `spec` would then mean two things;
+and a host network stack in the runner. The harness owns DHCP, ARP, TCP and HTTP.
+
+`StationLink::relay_lost` stays in esp32sim's `[emu] wifi-sta:` end-of-run line, alongside its
+join diagnostics. It is not added to `stats.wifi`: those five fields measure the socket relay
+and receive ring, while this counter is a station-specific loss after the relay accepted a
+frame. It must not be folded into `eth_rx_dropped` or `eth_tx_dropped`. The runner emits both upstream Wi-Fi diagnostic lines at teardown through the existing
+captured-output path. Previously it did not call `StationLink::report()` at all. No protocol version change or compatibility shim is needed.

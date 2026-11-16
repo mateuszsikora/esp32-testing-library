@@ -793,3 +793,20 @@ See [runnable examples](examples-user.md) for commands and configuration.
 `board.console.sendline` and checks its command list. `tests/test_arduino_shell.py` also types
 `help` through Arduino `Serial`, exercising its driver path. Both help tests can run on serial
 with an explicitly selected port; the UART0 FIFO overflow test requires esp32sim.
+
+### Arduino SoftAP
+
+`arduino_shell` also reads Preferences keys `ap_ssid` and `ap_password` in namespace `shell`.
+With a nonempty `ap_ssid` and no `ssid`, it starts `WiFi.softAP`, open when `ap_password` is empty,
+otherwise WPA2-PSK, and serves the same `GET /status` on port 80. A configured `ssid` still takes
+precedence and follows the existing station path; there is no timed fallback after a failed join.
+Successful AP startup prints `arduino_shell: access point SSID at 192.168.4.1`; failure prints
+`arduino_shell: access point failed`. Join and leave events print
+`arduino_shell: station MAC joined` and `arduino_shell: station MAC left`, with lowercase MAC
+hexadecimal octets. The `wifi` command prints `arduino_shell: wifi=access-point ip=192.168.4.1`.
+The HTTP handler still prints `arduino_shell: GET /status -> 200` and returns status, request count
+and uptime. Existing console commands and station-mode lines keep their meanings.
+
+`tests/test_arduino_softap.py` exercises open and WPA2 APs, the join MAC, wrong-password timeout
+and raw TCP. Build with `firmware/build-platformio.sh arduino_shell`, as for the existing image;
+no prebuilt binary is committed.

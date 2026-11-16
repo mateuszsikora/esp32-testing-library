@@ -293,6 +293,7 @@ LILYGO = boards.profile("lilygo-t-a7670g-r2")
         ),
         ("serial", Request("uart.gnss", tap=True), "uart.gnss cannot be tapped on this backend"),
         ("esp32sim", Request("sd_card", source="model"), None),
+        ("esp32sim", Request("wifi", source="model"), None),
         (
             "serial",
             Request("sd_card", source="model"),
@@ -342,6 +343,11 @@ def test_the_first_request_a_backend_cannot_give_is_the_reason() -> None:
             " its interfaces are console, uart.gnss, lines.alarm, wifi, bluetooth",
         ),
         (DEVKITC, Request("sd_card", tap=True), "no backend can tap sd_card"),
+        (
+            DEVKITC,
+            Request("wifi", source="replay"),
+            "no backend takes a 'replay' source on wifi; the sources there are model, real",
+        ),
         (
             DEVKITC,
             Request("uart.gnss", source="recorded"),

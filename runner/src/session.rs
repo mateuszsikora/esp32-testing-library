@@ -101,7 +101,7 @@ pub trait Guest {
     /// Has the chip take the levels and releases the run loop handed the board, now rather than
     /// at the bus's next tick.
     fn take_gpio_inputs(&mut self);
-    // Wi-Fi, asked only with `--wifi`: the defaults are a chip without it.
+    // Wi-Fi, asked with `--wifi` or `--wifi-sta`: the defaults are a chip without it.
 
     /// The Ethernet frames the station sent since the last call, in order: esp32sim's relay.
     fn take_eth_frames(&mut self) -> Vec<Vec<u8>> {
@@ -112,7 +112,7 @@ pub trait Guest {
     fn eth_input(&mut self, _frame: &[u8]) -> bool {
         false
     }
-    /// Puts the access point of `--wifi`, and the networks around, on the air afresh. The relay
+    /// Puts the selected virtual Wi-Fi role on the air afresh. The relay
     /// to the peer stays.
     fn wifi_access_point(&mut self, _wifi: &cli::Wifi) {}
     /// Takes the access point, and the networks around, off the air, as one that shuts down: it
@@ -296,10 +296,15 @@ impl Guest for esp32::Machine {
         SocBus::receive_ethernet_frame(&mut self.bus, frame).is_ok()
     }
     fn wifi_access_point(&mut self, wifi: &cli::Wifi) {
+        if let Some(cfg) = wifi.station() {
+            SocBus::attach_wifi_station(&mut self.bus, cfg)
+                .expect("exclusive Wi-Fi mode checked by CLI");
+            return;
+        }
         // a fresh access point, as at power-on: the station must join it again
         let link = &mut self.bus.periph.wifi.link;
         link.attach_new(wifi.access_point(), None, &self.bus.debug);
-        link.set_beacons(wifi.nearby.clone());
+        link.set_beacons(wifi.nearby().to_vec());
     }
     fn wifi_leave(&mut self) -> bool {
         let now_us = self.bus.cycles / (esp32::periph::CPU_HZ / 1_000_000);
@@ -1258,7 +1263,7 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                 Incoming::EthRx { t, data } => {
                     check(t, Vec::new())?;
                     if self.opts.wifi.is_none() {
-                        return Err(protocol_error("eth_rx without --wifi", &line));
+                        return Err(protocol_error("eth_rx without --wifi or --wifi-sta", &line));
                     }
                     inputs.push((t, Input::Eth(data)));
                 }
@@ -1273,6 +1278,16 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                     check(t, Vec::new())?;
                     if self.opts.wifi.is_none() {
                         return Err(protocol_error("wifi_ap without --wifi", &line));
+                    }
+                    if self
+                        .opts
+                        .wifi
+                        .is_some_and(|w| matches!(w, cli::Wifi::Station { .. }))
+                    {
+                        return Err(protocol_error(
+                            "wifi_ap with --wifi-sta: there is no virtual access point to switch",
+                            &line,
+                        ));
                     }
                     inputs.push((t, Input::WifiAp(on)));
                 }
@@ -1412,7 +1427,17 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                     gpio = true;
                 }
                 Input::Eth(data) => {
-                    self.eth.push_back(data);
+                    // A DHCP retry can arrive while the first copy is held until association.
+                    // Keep one identical pending request, never a queue of stale retries.
+                    let duplicate = self
+                        .opts
+                        .wifi
+                        .is_some_and(|w| matches!(w, cli::Wifi::Station { .. }))
+                        && dhcp_client_frame(&data)
+                        && self.eth.contains(&data);
+                    if !duplicate {
+                        self.eth.push_back(data);
+                    }
                     self.deliver_eth();
                 }
                 // for the guest's host, at its next VHCI poll; a reset before it loses the packet
@@ -1761,3 +1786,12 @@ fn protocol_error(what: &str, line: &str) -> End {
 // In a file of its own, so that `make docs-check` tells a test-only change by its path.
 #[cfg(test)]
 mod tests;
+
+/// Ethernet/IPv4 UDP 68 -> 67; only exact pending DHCP copies are coalesced.
+fn dhcp_client_frame(frame: &[u8]) -> bool {
+    if frame.len() < 42 || frame[12..14] != [8, 0] || frame[14] >> 4 != 4 || frame[23] != 17 {
+        return false;
+    }
+    let ihl = usize::from(frame[14] & 15) * 4;
+    ihl >= 20 && frame.get(14 + ihl..18 + ihl) == Some(&[0, 68, 0, 67])
+}

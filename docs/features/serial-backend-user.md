@@ -297,3 +297,7 @@ the board booted `arduino_shell` from `ota_0`, so the erased otadata reached it.
 `board.console.write(bytes_or_text)` writes to the open serial port after power-on. Text is
 UTF-8; `sendline(line)` adds LF. Partial port writes are completed, and a zero-progress write
 raises `BackendError`. Console taps record input at write time as well as received output.
+
+`wifi.station(...)`, like `wifi.access_point(...)`, asks for a model on the Wi-Fi interface.
+The serial backend has no virtual air and refuses that request through its existing capability
+check; it cannot join a real device's SoftAP through esp32sim's virtual station. Wi-Fi replay is not a supported source in the capability table. The new station API is for the esp32sim backend only.

@@ -254,6 +254,8 @@ def test_serial_capabilities_skip_at_the_call(pytester: pytest.Pytester, local: 
             lines.drive("modem.ri", True)
         def test_wifi(wifi):
             wifi.access_point("myssid", password="mypassword")
+        def test_wifi_station(wifi):
+            wifi.station("setup", password="password1")
         def test_bt(bt):
             pass
         def test_power_off(board):
@@ -279,7 +281,7 @@ def test_serial_capabilities_skip_at_the_call(pytester: pytest.Pytester, local: 
     """)
     )
     result = run_serial(pytester, "-rs")
-    result.assert_outcomes(skipped=28)
+    result.assert_outcomes(skipped=29)
     result.stdout.fnmatch_lines(
         [
             "*serial: uart.gnss takes no model source on this backend, only real*",

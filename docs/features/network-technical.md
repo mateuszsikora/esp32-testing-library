@@ -1,8 +1,8 @@
 # Simulated network: implementation
 
 `esp32tl/net/` owns the network. `Internet` is either a UART `Source` attached to the modem model
-by `interfaces.modem.Modem.network()`, or the network behind the Wi-Fi access point that
-`interfaces.wifi.Wifi.access_point()` creates. The `broker` fixture calls `modem.network()` and
+by `interfaces.modem.Modem.network()`, or the network behind either virtual Wi-Fi role created by
+`interfaces.wifi.Wifi.access_point()` or `Wifi.station()`. The `broker` fixture calls `modem.network()` and
 returns its `Broker`. All callbacks execute during link turns or while the test holds the board.
 There are no sockets, worker threads or host-clock timers, but for a bridge's
 ([below](#the-bridge)). `Internet` uses the current UART chunk's
@@ -15,21 +15,23 @@ deadlines and the path's next datagram.
 
 ## The link
 
-`Internet(now, world, *, link="ppp", bridging=...)`, whose `world` defaults to `esp32tl.net.ntp.DEFAULT_UTC`, as the modem's and `Wifi`'s do, takes `link`, `"ppp"` or `"ethernet"` (the `Link` type),
+`Internet(now, world, *, link="ppp", mac="02:53:54:41:00:01", bridging=...)`, whose `world` defaults to `esp32tl.net.ntp.DEFAULT_UTC`, as the modem's and `Wifi`'s do, takes `link`, `"ppp"`, `"ethernet"` or `"station"` (the `Link` type),
 and keeps it for its life. `bridging(call)` is called by `bridge` before it makes a bridge, and
 refuses it by raising; it does nothing by default, and the `esp32sim` backend's refuses after
 power-on and in front of a replay ([backend](esp32sim-backend-technical.md#a-run-with-a-real-source)). `_peer()` builds the link object from it: a `Ppp` whose `ended`
-callback is `_link_ended`, which resets TCP and clears the path, or an `Ethernet` given the
-network's `Dhcp`. Both send through the same closure, which queues each frame or chunk of the link's
-own at `now + LATENCY_NS` and takes an IPv4 datagram down the path, and both hand IPv4 datagrams to
+callback is `_link_ended`, which resets TCP and clears the path, an `Ethernet` given the
+network's `Dhcp`, or a host-side `Station` with its own DHCP client. All send through the same
+closure, which queues link control traffic at `now + LATENCY_NS` and takes IPv4 datagrams down
+the path, and all hand IPv4 datagrams to
 `_uplink`, up the path to `Network.receive`. `Internet.link` is that object; `Internet.ppp` and `Internet.ethernet` return it
 when it is of their kind and raise `AttributeError` otherwise. The IP layer's MTU callback reads
-`Ppp.peer_mru` or `Ethernet.mtu` (1500).
+`Ppp.peer_mru`, `Ethernet.mtu` or `Station.mtu` (1500 for either Ethernet role).
 
 Every `Internet` builds the same services whatever its link: `Dns("10.64.0.1")` on UDP 53, `Ntp` on
 UDP 123, the `Broker` on TCP 1883, the `HttpServer` on TCP 80, each TCP one wrapped in `_Traced`
 for the transcript, and one `Dhcp`. Only `Ethernet` calls the `Dhcp`; a network behind a modem has
-one that nothing asks.
+one that nothing asks, as does a network behind a virtual station. That station uses its own
+DHCP client and updates the DNS answer to its leased address.
 
 `start(t)` stops the network first, then marks it active and, for PPP only, starts LCP. `stop(at)`
 marks it inactive, resets TCP (`Network.reset`, which notifies every connection once), clears the
@@ -172,7 +174,8 @@ threads; a connect in progress ends within `CONNECT_SECONDS`. The backend calls 
   Connections receive `on_close` once, also on RST, PPP loss and `Internet.stop`. There is no
   ICMP or IPv6. The UDP limit's log line names it `peer MRU` behind the access point too.
 - `dns.py`: one bounded question, including compressed names with loop detection; preserves the
-  query ID and recursion-desired bit. IN A answers have TTL 60 and address `10.64.0.1`.
+  query ID and recursion-desired bit. IN A answers have TTL 60 and address `10.64.0.1`,
+  except behind the virtual station, where they use the host's leased address.
 - `ethernet.py`: Ethernet II without FCS, ARP and the hand-off to DHCP. `Ethernet.receive` drops
   frames under 14 bytes and frames from a multicast source, and learns `device_mac` from every other
   frame. In esp32sim every frame from the station ends in 4 bytes more, libpp's guard word
@@ -430,7 +433,7 @@ DISCOVER, a REQUEST not acknowledged, a NAK's or one to another server, a DECLIN
 `Ethernet` starts with `None`, and `Internet.stop` sets `_stale` to `None` with the fresh link, so
 a new link has no address from before it, while `dhcp.leases` keeps every lease. `connect`
 numbers the connection per device port, names it `device:<port>/<n>`, makes the `TcpConnection`
-with `LOCAL` (`10.64.0.1`), `now` and a `record` that appends `{t_ns, stream, direction, data}` to
+with the station's leased address, or otherwise `LOCAL` (`10.64.0.1`), `now` and a `record` that appends `{t_ns, stream, direction, data}` to
 `events` as `_Traced` does for the device's connections, and calls `Network.connect`; only once
 that has returned does it count the connection in `_opened` and append it to `connections`, so a
 `RuntimeError` for want of a port leaves neither.
@@ -714,3 +717,35 @@ terminating separator, including a possible incomplete separator while waiting f
 Boundary tests split separators at the limit and one byte over it for heads, chunk size lines
 and trailers. A 32,000 one-byte-chunk regression test bounds callback time with a generous
 5-second timeout.
+
+## Host link behind a virtual station
+
+`Internet(link="station", mac=...)` constructs `net.station.Station`. It implements Ethernet
+framing, a DHCP client, a host-only ARP cache and pending datagrams awaiting resolution. DHCP
+validates BOOTP hardware fields, transaction ID, client MAC, cookie and server identifier; OFFER
+selects a server and sends REQUEST, ACK installs a lease, and NAK restarts with a new deterministic
+transaction ID. It requires a nonzero lease lifetime and a valid subnet mask. Duplicate or foreign
+replies do not replace a bound lease. A lost OFFER or ACK causes the same request to be retried.
+
+`poll` and `quiet_until` schedule DHCP retries, lease expiry and one-second ARP retries on board
+time. DHCP intervals double from 4 s to 64 s, without host-clock jitter. The broadcast flag is set;
+ESP-IDF v5.5.4's `dhcps_response_ip_set` honors it. The runner coalesces identical pending UDP
+68-to-67 frames in station mode, so association backpressure does not accumulate retransmissions.
+The first copy still leaves as soon as esp32sim accepts it. There is no joined event.
+
+IPv4 total length and ARP's fixed 28-byte payload trim any trailing guard bytes, as in `Ethernet`.
+Only IPv4 to the leased host reaches `Network`, apart from DHCP replies. Services therefore retain
+their existing implementation and listen at that address alone; DNS's answer is updated on ACK.
+`Internet.connect` passes the leased host address to both `TcpConnection` and `Network.connect`.
+Option 54 supplies its default destination; option 3 routes off-subnet traffic. ARP resolves the
+next hop before queued datagrams leave. A newly unresolved destination keeps the earliest pending
+ARP retry deadline. Each due batch retries all unresolved destinations and schedules the next
+batch one second later; resolving every pending destination clears the deadline.
+ARP replies and requests addressed to the host populate
+the cache, and the host answers requests only for itself.
+
+`Internet.device_reset` and lease expiry clear the address, ARP cache and pending datagrams, reset
+IP connections and path queues, and start acquisition. `when_leased()` reads `Internet.lease`
+dynamically, including after a link replacement. There is no renewal/rebinding, conflict detection,
+or idle keep-alive. `tests/test_net_station.py` exercises the host against handmade packets;
+`tests/test_arduino_softap.py` runs the actual Arduino DHCP server and HTTP endpoint.

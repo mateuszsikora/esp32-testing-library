@@ -1,9 +1,10 @@
 # Simulated network
 
 The network the device reaches lives in the test process and on the board's emulated clock. It is
-the same network in two places: behind the modem, over PPP on the modem's UART, and behind a Wi-Fi
-access point, over Ethernet frames with ARP and DHCP. Both answer DNS, NTP, an MQTT broker on TCP
-1883, an HTTP server on TCP 80 and the TCP services the test adds, and in both the test can
+the same network behind a modem over PPP, a virtual Wi-Fi access point over Ethernet, or a
+[virtual station joining the device's SoftAP](#joining-the-devices-own-access-point).
+All provide DNS, NTP, an MQTT broker on TCP 1883, an HTTP server on TCP 80 and custom TCP services;
+behind the virtual station these listen only on its leased host address. On every link the test can
 [open a TCP connection to the device](#open-a-tcp-connection-to-the-device). The firmware keeps its Wi-Fi,
 PPP, IP, DNS, MQTT and HTTP stacks and its configured destination names. There is no host network
 connection, external broker or web server, `pppd`, real-time mode or clock switch, unless the test
@@ -1150,3 +1151,61 @@ The transcript and report's network section include request and result events su
 `http client: device:80/1 GET /status requested` and
 `http client: device:80/1 GET /status → 200`, plus the TCP stream bytes and failures. Results are
 recorded on receipt even when the test never polls the condition.
+
+## Joining the device's own access point
+
+`network = wifi.station("device-setup", password="provisioning")`, before power-on, joins a
+SoftAP started by the device. Omit `password` for an open AP. This is one host on the device's
+subnet, with MAC `02:53:54:41:00:01` unless `mac=` names another unicast address. The device's
+DHCP server assigns its address:
+
+```python
+network = wifi.station("device-setup", password="provisioning")
+board.power_on()
+lease = board.wait_until(network.when_leased(), within=seconds(3))
+assert lease.device_address == "192.168.4.1"
+exchange = network.http_client.get("/status")
+response = board.wait_until(exchange.response, within=seconds(2))
+assert response.status == 200
+```
+
+`seconds` comes from `esp32tl.units`. `network.when_leased()` describes current state and returns
+`HostLease` while the host holds a lease. `network.lease` reads that same lease without waiting,
+or `None`. Its fields are `address`, `device_address`, `at` and `expires` (board-clock
+`Duration`s), `mask` and optional `router`. The default device address is the DHCP server
+identifier, option 54, not necessarily the router. `connect(port, address=...)` overrides the
+destination and uses the leased host address as its source. Raw TCP, HTTP, path configuration,
+transcripts and reports work as on the other links. ARP resolves a destination before sending IP.
+
+Before a lease, even with `address=`, `connect` raises `NotReachable`:
+`network.connect(80): the device has leased no address to the station yet; wait for network.when_leased()`.
+A wrong Wi-Fi password leaves this condition unsatisfied; its timeout says
+`the station has a DHCP lease did not happen within 3 s`. The runner remains usable.
+
+The host's DNS, NTP, broker, HTTP server, custom listeners and bridges listen **only on the leased
+host address**. Firmware in AP mode must explicitly contact that address to use them. DNS answers
+with the host's address. The host answers ARP only for its own address and drops IPv4 addressed
+elsewhere. Unsupported EtherTypes, including IPv6, are counted and dropped. This network has no
+PPP link; `network.dhcp` is the existing access-point DHCP server and does not issue this host's
+lease: use `network.lease` and `when_leased()` here.
+
+DHCP retries after 4, 8, 16, 32 and then 64 seconds between attempts, on the board's clock.
+Identical requests still held by the runner before association occupy one queue entry.
+Device reset loses connections, clears the lease and ARP cache, and starts DHCP again.
+`board.reset()` queues the reset; the current lease remains until the runner reports it. To wait
+for a fresh lease after a reset, first observe the new boot:
+
+```python
+boot = board.boot.number
+board.reset()
+board.wait_until(lambda: board.boot.number > boot, within=seconds(1))
+lease = board.wait_until(network.when_leased(), within=seconds(3))
+```
+
+Not yet: renewal at T1. At expiry the host loses its connections and acquires a fresh lease;
+it never uses the expired address. There are no conflict probes or gratuitous ARP announcements.
+There are no keep-alive frames: an idle ESP-IDF AP may disassociate the host after about 300 s,
+and esp32sim rejoins. Explicit station leave/rejoin, simultaneous virtual AP and station, other
+chips, WPA3-SAE, required PMF and hidden SSIDs are not supported. Renewal needs a client state
+machine; the radio features need esp32sim support. See the
+[decision](../decisions/harness.md#a-test-joins-the-devices-access-point-through-esp32sims-virtual-station-with-the-harness-as-the-host-behind-it).
