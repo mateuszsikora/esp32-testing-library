@@ -1253,11 +1253,17 @@ the section ends with the run on the board's clock: what the test did, what the 
 and the bytes on every route, in the order they happened
 ([the run on the board's clock](run-report-user.md#the-run-on-the-boards-clock)).
 
-pytest-embedded's `app_path` fixture records an XML attribute for every test, which pytest reports
-as `PytestExperimentalApiWarning: record_xml_attribute is an experimental feature`. This
-repository filters it in `pyproject.toml`; a project of your own can do the same with
-`filterwarnings = ["ignore:record_xml_attribute is an experimental feature:pytest.PytestExperimentalApiWarning"]`
-under `[tool.pytest.ini_options]`.
+esp32tl automatically filters the exact warning
+`PytestExperimentalApiWarning: record_xml_attribute is an experimental feature`, caused by
+pytest-embedded's `app_path` fixture for every test. No consumer configuration is needed.
+Other experimental API warnings remain visible. This also silences the same warning from your
+own use of `record_xml_attribute`: pytest emits it when setting up the shared fixture and does
+not distinguish its callers. Your `filterwarnings` ini settings, `-W` options and
+`@pytest.mark.filterwarnings` take precedence; for example, `filterwarnings = ["error"]` or
+`pytest -W error` turns it into an error again.
+
+Revisit this filter if pytest-embedded stops requesting the fixture or pytest makes the API
+stable ([decision](../decisions/harness.md#filter-the-xml-attribute-warning-as-an-overridable-default)).
 
 ## Names the plugin takes
 

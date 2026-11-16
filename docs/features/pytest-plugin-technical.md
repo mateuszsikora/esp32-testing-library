@@ -25,7 +25,10 @@ are in [models-technical.md](models-technical.md).
    finding 1).
 2. **`pytest_addoption`** adds the `esp32tl` group with `--esp32tl-backend`, whose choices are
    `list(SERVICES)`. **`pytest_configure`** registers the `app_path`, `app_recording` and
-   `board_profile` markers, which `--strict-markers` would otherwise refuse.
+   `board_profile` markers, which `--strict-markers` would otherwise refuse. It prepends the
+   exact XML attribute warning filter to `config.getini("filterwarnings")`, so consumer ini,
+   command-line and marker filters retain priority
+   ([rationale and limitations](../decisions/harness.md#filter-the-xml-attribute-warning-as-an-overridable-default)).
 3. **`pytest_generate_tests`** returns at once unless `board` is in `metafunc.fixturenames`, which
    holds the whole fixture closure, so a test that asks only for `console` counts. It starts from
    `metafunc.definition.path.parent`, joins the single argument of the closest `app_path` marker to

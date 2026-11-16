@@ -3882,3 +3882,24 @@ Status: decided
 The runner reports the pinned emulator's Joined state and completed-join counter, with sequenced protocol v2 events. DHCP remains in Python. WPA2 Joined follows validated message 3 and key installation; esp32sim sends its queued message 4 before relay data. Polling at slice boundaries is sufficient with this pin: leaving imposes a one-second rejoin delay. The counter additionally distinguishes another join. Link loss clears queues and transport state and each acquisition uses a fresh transaction ID, including across device reset.
 
 Rejected: console parsing, boot delays, first-DHCP-response inference and shorter retries. The old client started at power-on; however its first DISCOVER remained queued in the runner until Joined. Thus its retry schedule alone does not establish a 28 s lease delay. No new station control API or simultaneous AP+STA support is introduced.
+
+## Filter the XML attribute warning as an overridable default
+
+Status: decided (#226)
+
+`pytest_configure` prepends an ignore filter to `config.getini("filterwarnings")` for only
+`^record_xml_attribute is an experimental feature$` and `pytest.PytestExperimentalApiWarning`.
+pytest applies ini filters in order, giving later matches priority, then applies command-line
+`-W` filters; per-test warning markers take priority over both. Prepending keeps consumer ini
+settings (including `error`), command-line options and markers authoritative.
+
+pytest emits this warning while setting up its `record_xml_attribute` fixture, before returning
+the callable. Both pytest-embedded's `app_path` and a consumer's direct fixture request use that
+same setup; message, category and source cannot distinguish them, and setup happens once per
+test. The default therefore suppresses both. Other messages and warning categories remain
+visible. Revisit when pytest-embedded no longer requests the fixture or pytest stabilises it.
+
+**Rejected:** appending with `addinivalue_line`, which would override consumer ini filters;
+filtering the whole experimental-warning category, which would hide unrelated API warnings;
+wrapping or replacing pytest's fixture to infer callers, which adds fragile coupling for a
+warning with a consumer-controlled override.

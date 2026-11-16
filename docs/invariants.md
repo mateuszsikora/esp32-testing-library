@@ -1910,3 +1910,18 @@ this with staggered destinations, two retry batches and replies releasing the qu
 `test_no_discover_or_deadline_until_ready` enforces silence and no retry deadline before data-link readiness. `test_disconnect_discards_exchange_and_stale_reply` checks pending and bound exchanges: disconnect clears the lease, loses connections, and old replies cannot bind a new exchange. `test_delayed_softap_starts_dhcp_at_link_ready` uses real Arduino firmware with a 15300 ms startup delay, for open and WPA2 networks; the first DISCOVER has the readiness timestamp, without a lease-duration bound. `test_softap_leaves_and_rejoins` checks real link loss and fresh DHCP. Existing reset/power-cycle regressions check lease invalidation and reacquisition.
 
 `station_disconnect_drops_backpressure_and_future_ethernet` verifies that queued and future Ethernet input cannot cross a reconnect. `station_lifecycle_reads_handshake_state_and_flushes_relay` checks the pinned emulator API and relay queue clearing. The stale-reply matrix also covers reset and power cycle during both pending and bound exchanges.
+
+## Plugin warning defaults
+
+- **239.** The XML attribute warning default suppresses the exact experimental API message,
+  including when the consumer directly requests the shared fixture.
+  `tests/test_pytest_plugin.py::test_xml_attribute_warning_is_silent_without_consumer_filters`
+  enforces this through a consumer pytest subprocess without firmware or a runner.
+
+- **240.** Other warning messages and categories remain visible.
+  `tests/test_pytest_plugin.py::test_xml_attribute_filter_keeps_other_warnings` enforces this
+  through a consumer pytest subprocess without firmware or a runner.
+
+- **241.** Consumer ini, command-line and marker filters can override the XML attribute warning
+  default. `tests/test_pytest_plugin.py::test_consumer_can_override_xml_attribute_filter`
+  enforces this through consumer pytest subprocesses without firmware or a runner.

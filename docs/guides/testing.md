@@ -77,12 +77,11 @@ reference. See [the real source](../features/real-source-user.md).
   `requires_mtools` are registered here.
 - `markers`: `requires_docker: needs a Docker daemon`, `requires_mtools: needs mtools (mformat,
   mcopy, mdir, mtype, mmd)`.
-- `filterwarnings` ignores `record_xml_attribute is an experimental feature`
-  (`pytest.PytestExperimentalApiWarning`), which pytest-embedded's `app_path` fixture causes on every
-  test.
 
 The esp32tl plugin is loaded through its `pytest11` entry point, so the suite needs the package
-installed in `.venv`, as `make setup` does. The suite sets no `timeout`, so every test that uses
+installed in `.venv`, as `make setup` does. The suite needs no warning filter: the plugin
+applies the [XML attribute warning default](../features/pytest-plugin-user.md#what-a-failure-looks-like).
+The suite sets no `timeout`, so every test that uses
 `board`, here and in the suites the `pytester` tests run, gets the plugin's wall-time default of
 600 s ([the test's timeout](../features/pytest-plugin-user.md#the-tests-timeout)); `--timeout`
 or `PYTEST_TIMEOUT` overrides it for a run.

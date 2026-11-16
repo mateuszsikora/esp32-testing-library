@@ -76,6 +76,68 @@ def test_board_is_parametrised_with_the_backend_its_services_and_the_app(
     result.assert_outcomes(passed=3)
 
 
+def test_xml_attribute_warning_is_silent_without_consumer_filters(
+    pytester: pytest.Pytester,
+) -> None:
+    pytester.makeconftest(SHOW_PARAMS)
+    pytester.makepyfile("""
+        def test_board(board):
+            assert board[0] == "esp32sim"
+
+        def test_own_attribute(record_xml_attribute):
+            record_xml_attribute("consumer", "value")
+    """)
+    result = pytester.runpytest_subprocess("-q")
+    result.assert_outcomes(passed=2)
+    result.stdout.no_fnmatch_line("*PytestExperimentalApiWarning*")
+
+
+def test_xml_attribute_filter_keeps_other_warnings(pytester: pytest.Pytester) -> None:
+    pytester.makepyfile("""
+        import warnings
+        import pytest
+
+        def test_warnings():
+            warnings.warn("another experimental API", pytest.PytestExperimentalApiWarning)
+            warnings.warn("record_xml_attribute is an experimental feature extended",
+                          pytest.PytestExperimentalApiWarning)
+            warnings.warn("record_xml_attribute is an experimental feature", UserWarning)
+    """)
+    result = pytester.runpytest_subprocess("-q")
+    result.assert_outcomes(passed=1, warnings=3)
+    result.stdout.fnmatch_lines(
+        [
+            "*PytestExperimentalApiWarning: another experimental API*",
+            "*PytestExperimentalApiWarning: "
+            "record_xml_attribute is an experimental feature extended*",
+            "*UserWarning: record_xml_attribute is an experimental feature*",
+        ]
+    )
+
+
+@pytest.mark.parametrize("override", ["ini", "cli", "marker"])
+def test_consumer_can_override_xml_attribute_filter(
+    pytester: pytest.Pytester, override: str
+) -> None:
+    pytester.makeconftest(SHOW_PARAMS)
+    marker = '@pytest.mark.filterwarnings("error")' if override == "marker" else ""
+    pytester.makepyfile(f"""
+        import pytest
+
+        {marker}
+        def test_board(board):
+            pass
+    """)
+    if override == "ini":
+        pytester.makeini("[pytest]\nfilterwarnings = error\n")
+    args = ["-W", "error"] if override == "cli" else []
+    result = pytester.runpytest_subprocess("-q", *args)
+    result.assert_outcomes(errors=1)
+    result.stdout.fnmatch_lines(
+        ["*PytestExperimentalApiWarning: record_xml_attribute is an experimental feature*"]
+    )
+
+
 def test_backend_option_takes_a_backend_name_only(pytester: pytest.Pytester) -> None:
     pytester.makeconftest(SHOW_PARAMS)
     pytester.makepyfile("def test_one(board): pass")
