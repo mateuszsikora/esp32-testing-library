@@ -1,6 +1,11 @@
 name: Build firmware
 on:
   workflow_call:
+    inputs:
+      version_only:
+        description: Exact version-only diff already validated by the caller.
+        type: boolean
+        default: false
     outputs:
       key:
         description: Cache key published by the build matrix.
@@ -34,15 +39,21 @@ jobs:
       key: ${{ steps.key.outputs.key }}
       rom-elf-key: ${{ steps.key.outputs.rom-elf-key }}
     steps:
+      - name: Version-only change validated; native work deferred to the release
+        if: inputs.version_only
+        run: echo 'Only release version metadata changed; full release builds run after merge.'
       - name: Check host architecture
+        if: ${{ !inputs.version_only }}
         run: |
           test "$RUNNER_OS" = Linux
           test "$RUNNER_ARCH" = X64
           test "$(uname -m)" = x86_64
 
       - uses: actions/checkout@v7
+        if: ${{ !inputs.version_only }}
 
       - uses: actions/setup-python@v7
+        if: ${{ !inputs.version_only }}
         with:
           python-version: "3.11"
 
@@ -53,6 +64,7 @@ jobs:
       # PlatformIO's core directory hashes only the lines that set those pins,
       # so that a change to a sketch reuses the toolchains it downloaded.
       - id: key
+        if: ${{ !inputs.version_only }}
         run: |
           echo "key=firmware-${{ hashFiles('firmware/**', 'examples/**', 'Makefile', '.github/workflows/build-firmware.yml') }}" >>"$GITHUB_OUTPUT"
           echo "rom-elf-key=rom-elf-${{ hashFiles('scripts/fetch-rom-elf') }}" >>"$GITHUB_OUTPUT"
@@ -61,6 +73,7 @@ jobs:
           echo "platformio-key=platformio-$(printf '%s\n' "$pins" | sha256sum | cut -d' ' -f1)" >>"$GITHUB_OUTPUT"
 
       - id: cache
+        if: ${{ !inputs.version_only }}
         uses: actions/cache/restore@v6
         with:
           path: build/ci/firmware-${{ matrix.group }}.tar
@@ -69,7 +82,7 @@ jobs:
       # Leave room for cold container pulls, packages and project build trees.
       # These preinstalled SDKs are unused by all build groups.
       - name: Free space for firmware builds
-        if: steps.cache.outputs.cache-hit != 'true'
+        if: ${{ !inputs.version_only && (steps.cache.outputs.cache-hit != 'true') }}
         run: |
           df -h .
           for sdk in /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup; do
@@ -82,7 +95,7 @@ jobs:
       # Docker Engine is supplied by ubuntu-24.04; start it explicitly and
       # check access as the job user (the build scripts do not use sudo).
       - name: Prepare Docker
-        if: steps.cache.outputs.cache-hit != 'true'
+        if: ${{ !inputs.version_only && steps.cache.outputs.cache-hit != 'true' }}
         run: |
           command -v docker
           sudo systemctl start docker
@@ -97,7 +110,7 @@ jobs:
       # toolchains the platform installs into packages/; a build needs
       # neither once packages/ is there.
       - name: PlatformIO's core directory
-        if: matrix.group == 'platformio' && steps.cache.outputs.cache-hit != 'true'
+        if: ${{ !inputs.version_only && (matrix.group == 'platformio' && steps.cache.outputs.cache-hit != 'true') }}
         uses: actions/cache@v6
         with:
           path: |
@@ -118,7 +131,7 @@ jobs:
       # flasher_args.json names and the ELF project_description.json names
       # among them, or the files esp32tl.build reads of a PlatformIO build.
       - name: Build and pack the firmware group
-        if: steps.cache.outputs.cache-hit != 'true'
+        if: ${{ !inputs.version_only && (steps.cache.outputs.cache-hit != 'true') }}
         env:
           FIRMWARE_OUT: ""
           GROUP: ${{ matrix.family }}
@@ -177,18 +190,19 @@ jobs:
           tar -cf build/ci/firmware-${{ matrix.group }}.tar -T build/ci/firmware.list
 
       - run: tar -tvf build/ci/firmware-${{ matrix.group }}.tar
+        if: ${{ !inputs.version_only }}
 
       # A failed save does not fail this step, so the next one fails the job
       # when the cache did not keep the tarball, rather than the test jobs.
       - name: Save the tarball
-        if: steps.cache.outputs.cache-hit != 'true'
+        if: ${{ !inputs.version_only && (steps.cache.outputs.cache-hit != 'true') }}
         uses: actions/cache/save@v6
         with:
           path: build/ci/firmware-${{ matrix.group }}.tar
           key: ${{ steps.key.outputs.key }}-${{ matrix.group }}
 
       - name: Check that the cache kept the tarball
-        if: steps.cache.outputs.cache-hit != 'true'
+        if: ${{ !inputs.version_only && (steps.cache.outputs.cache-hit != 'true') }}
         uses: actions/cache/restore@v6
         with:
           path: build/ci/firmware-${{ matrix.group }}.tar
@@ -200,10 +214,10 @@ jobs:
       # Saved at the end of the job and not checked: a miss in the test jobs
       # only downloads the ELF.
       - uses: actions/cache@v6
-        if: matrix.group == 'idf-1'
+        if: ${{ !inputs.version_only && (matrix.group == 'idf-1') }}
         with:
           path: .cache/esp-rom-elfs
           key: ${{ steps.key.outputs.rom-elf-key }}
 
       - run: make rom-elf
-        if: matrix.group == 'idf-1'
+        if: ${{ !inputs.version_only && (matrix.group == 'idf-1') }}

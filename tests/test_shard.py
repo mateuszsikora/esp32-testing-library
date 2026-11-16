@@ -44,7 +44,7 @@ def test_the_workflow_runs_every_shard() -> None:
     for platform in ("linux", "macos"):
         assert (
             f"  test-{platform}:\n"
-            f"    needs: [firmware, runner-{platform}]\n"
+            f"    needs: [change, firmware, runner-{platform}]\n"
             "    uses: ./.github/workflows/test-platform.yml\n"
             "    with:\n"
             f"      platform: {platform}\n"

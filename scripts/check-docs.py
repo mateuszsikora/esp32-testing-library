@@ -449,9 +449,27 @@ def changed_paths(root: Path, mb: str) -> set[str]:
     )
 
 
+def package_version_bump_only(root: Path, mb: str, path: str) -> bool:
+    """Only the release version in the owning TOML table may change."""
+    section = {"pyproject.toml": "project", "runner/Cargo.toml": "package"}.get(path)
+    if section is None or not (root / path).is_file() or (root / path).is_symlink():
+        return False
+    try:
+        before = git(root, "show", f"{mb}:{path}")
+    except subprocess.CalledProcessError:
+        return False
+    after = (root / path).read_text()
+    pattern = re.compile(rf'(^\[{section}\]\n(?:(?!^\[).)*?^version = ")[^"\n]+(")', re.M | re.S)
+    old, old_count = pattern.subn(r"\1VERSION\2", before)
+    new, new_count = pattern.subn(r"\1VERSION\2", after)
+    return old_count == new_count == 1 and before != after and old == new
+
+
 def version_bump_only(root: Path, mb: str, path: str) -> bool:
     """Whether every line `path` changed since `mb` differs from a removed line only in a
     version that VERSION_LINES allows."""
+    if package_version_bump_only(root, mb, path):
+        return True
     pattern = next((p for f, p in VERSION_LINES.items() if re.search(f, path)), None)
     if pattern is None:
         return False

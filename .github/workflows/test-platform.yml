@@ -3,6 +3,10 @@ name: Test platform
 on:
   workflow_call:
     inputs:
+      version_only:
+        description: Exact version-only diff already validated by the caller.
+        type: boolean
+        default: false
       platform:
         description: Native platform (linux or macos).
         required: true
@@ -31,10 +35,14 @@ jobs:
         python: ["3.11", "3.13", "3.14"]
         # Four unchanged shards, paired to reduce VM setup and scheduling.
         pair: ["1/4 4/4", "2/4 3/4"]
-    runs-on: ${{ inputs.platform == 'macos' && 'macos-15' || 'ubuntu-24.04' }}
+    runs-on: ${{ !inputs.version_only && inputs.platform == 'macos' && 'macos-15' || 'ubuntu-24.04' }}
     timeout-minutes: 15
     steps:
+      - name: Version-only change validated; native work deferred to the release
+        if: inputs.version_only
+        run: echo 'Only release version metadata changed; full release builds run after merge.'
       - name: Check host architecture
+        if: ${{ !inputs.version_only }}
         run: |
           if [ "$RUNNER_OS" = macOS ]; then
             test "$RUNNER_ARCH" = ARM64
@@ -46,8 +54,10 @@ jobs:
           fi
 
       - uses: actions/checkout@v7
+        if: ${{ !inputs.version_only }}
 
       - id: python
+        if: ${{ !inputs.version_only }}
         uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
@@ -55,10 +65,12 @@ jobs:
           cache-dependency-path: pyproject.toml
 
       - uses: ./.github/actions/restore-firmware
+        if: ${{ !inputs.version_only }}
         with:
           key: ${{ inputs.firmware-key }}
 
       - uses: actions/cache/restore@v6
+        if: ${{ !inputs.version_only }}
         with:
           path: build/ci/runner.tar
           key: ${{ inputs.runner-key }}-${{ runner.os }}-${{ runner.arch }}
@@ -66,6 +78,7 @@ jobs:
 
       # A miss is no failure: `make rom-elf` downloads the ELF then.
       - uses: actions/cache/restore@v6
+        if: ${{ !inputs.version_only }}
         with:
           path: .cache/esp-rom-elfs
           key: ${{ inputs.rom-elf-key }}
@@ -74,17 +87,19 @@ jobs:
       # and examples/<name>/build/, where test_firmware_images.py reads them;
       # esp32tl-built marks them finished.
       - name: Unpack and check the runner
+        if: ${{ !inputs.version_only }}
         run: |
           tar -xf build/ci/runner.tar
           runner/target/release/esp32tl-runner --help
 
       # `make setup` less build-runner: the runner came from the runner job.
       - run: make PYTHON='${{ steps.python.outputs.python-path }}' .venv/.installed rom-elf
+        if: ${{ !inputs.version_only }}
 
       # Docker Engine is supplied by ubuntu-24.04; start it explicitly and
       # check access as the job user (the build scripts do not use sudo).
       - name: Prepare Docker
-        if: runner.os == 'Linux'
+        if: ${{ !inputs.version_only && runner.os == 'Linux' }}
         run: |
           command -v docker
           sudo systemctl start docker
@@ -94,6 +109,7 @@ jobs:
       # without it: here it must be there, so that they run. Homebrew installs
       # it on macOS; apt installs it on each fresh Linux VM.
       - name: mtools
+        if: ${{ !inputs.version_only }}
         run: |
           if [ "$RUNNER_OS" = macOS ]; then
             brew install mtools
@@ -109,6 +125,7 @@ jobs:
           done
 
       - name: Run both test shards
+        if: ${{ !inputs.version_only }}
         env:
           SHARDS: ${{ matrix.pair }}
         run: |

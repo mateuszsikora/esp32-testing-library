@@ -57,8 +57,8 @@ paths, names, defaults and messages quoted verbatim, and `TODO(owner): …` wher
 | A decision: an alternative rejected, scope postponed | `docs/decisions/<domain>.md`, then `python3 scripts/decisions-index.py` |
 | A domain rule that a test enforces | `docs/invariants.md` |
 
-Test files, and version bumps of an Action, a pre-commit hook or a Python dependency, need no
-documentation. The rule ids are those of the ownership map in
+Test files, version bumps of an Action, a pre-commit hook or a Python dependency, and changes
+only to the Python/Cargo package version metadata need no documentation. The rule ids are those of the ownership map in
 [`docs/features/README.md`](docs/features/README.md#ownership-map), which `scripts/check-docs.py`
 enforces; a change to the map changes the script, that table and this one together.
 

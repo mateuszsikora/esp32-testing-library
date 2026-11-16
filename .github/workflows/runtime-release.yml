@@ -1,9 +1,18 @@
 name: Runtime release
 on:
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      release_tag:
+        description: Tag created for the merged version-only commit.
+        required: true
+        type: string
   pull_request:
     paths:
       - '.github/workflows/runtime-release.yml'
+      - '.github/workflows/prepare-release.yml'
+      - '.github/workflows/release-on-merge.yml'
+      - '.github/scripts/release-version.py'
       - '.github/workflows/publish-pypi.yml'
       - 'esp32tl/**'
       - 'runner/**'
@@ -20,21 +29,42 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: runtime-release-${{ github.ref }}
+  group: runtime-release-${{ inputs.release_tag != '' && format('refs/tags/{0}', inputs.release_tag) || github.ref }}
   cancel-in-progress: false
 jobs:
+  change:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      version_only: ${{ steps.change.outputs.version_only }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - id: change
+        if: github.event_name == 'pull_request'
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: python .github/scripts/release-version.py classify "$BASE"
   package:
+    needs: change
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.release_tag != '' && format('refs/tags/{0}', inputs.release_tag) || github.sha }}
       - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
       - name: Validate versions before building
         env:
-          REF_TYPE: ${{ github.ref_type }}
-          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ inputs.release_tag != '' && 'tag' || github.ref_type }}
+          REF_NAME: ${{ inputs.release_tag || github.ref_name }}
         run: |
           python - <<'PY'
           import os, tomllib
@@ -57,10 +87,14 @@ jobs:
           if-no-files-found: error
           retention-days: 7
   firmware:
+    needs: change
+    if: needs.change.outputs.version_only != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.release_tag != '' && format('refs/tags/{0}', inputs.release_tag) || github.sha }}
       - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
@@ -91,6 +125,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.release_tag != '' && format('refs/tags/{0}', inputs.release_tag) || github.sha }}
       - name: Check native architecture
         env:
           EXPECTED_ARCH: ${{ matrix.arch }}
@@ -132,6 +168,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.release_tag != '' && format('refs/tags/{0}', inputs.release_tag) || github.sha }}
       - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
@@ -149,7 +187,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
   draft:
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    if: inputs.release_tag != '' || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
     needs: assemble
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -157,6 +195,8 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.release_tag != '' && format('refs/tags/{0}', inputs.release_tag) || github.sha }}
       - uses: actions/download-artifact@v4
         with:
           name: verified-release
@@ -164,7 +204,7 @@ jobs:
       - name: Create draft without replacing an existing release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ inputs.release_tag || github.ref_name }}
         run: |
           cd dist
           sha256sum --check SHA256SUMS

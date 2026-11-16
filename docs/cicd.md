@@ -28,7 +28,9 @@ settings, not settings applied by the workflow files:
 - CI uses `pull_request`, not `pull_request_target`. Fork PRs receive a read-only token and
   no repository secrets. All jobs use GitHub-hosted VMs; the repository has no registered
   self-hosted runners. Do not register a machine with private network access for public CI.
-- The default workflow permission is `read`; Actions cannot approve pull requests.
+- The default workflow permission is `read`. On 16 November 2026, the owner enabled
+  **Allow GitHub Actions to create and approve pull requests** for the release-preparation
+  workflow; that workflow only creates PRs, never approves or merges them.
   Each CI workflow also declares `contents: read`. The repository allows all actions;
   action tags are not required to be pinned to full commit SHAs.
 - Secret scanning, secret scanning push protection and Dependabot vulnerability alerts
@@ -60,21 +62,23 @@ This audit checked configuration; it did not execute a test PR from an external 
 GitHub-hosted macOS runners have no Docker, so the validation firmware is built once, in the
 pinned ESP-IDF and PlatformIO containers in eight parallel Linux jobs, and the runner crate once
 per platform.
-The test jobs then run only the runner and Python: they build nothing.
+The test jobs then run only the runner and Python: they build nothing. The table describes full
+CI; [version-only changes](#version-only-ci) use short Ubuntu jobs with the same context names.
 
 | Job | Runs on | What it does |
 |---|---|---|
+| `change` | `ubuntu-24.04` (x64); Python 3.11 | Checks exact version-only diffs before selecting full or lightweight CI |
 | `firmware` | `ubuntu-24.04` (x64) | Eight parallel groups (`idf-1` to `idf-4`, `examples-1` to `examples-3`, `platformio`) once per content of `firmware/`, `examples/`, the build workflow and the `Makefile`, the Arduino image with PlatformIO's core directory restored from the cache; `idf-1` fetches the ROM ELF once per revision of `scripts/fetch-rom-elf` |
 | `runner-linux`, `runner-macos` | `ubuntu-24.04` (x64); `macos-15` (ARM64) | `make build-runner test-runner`, once per content of `runner/` (its sources, its esp32sim pin, its toolchain), the build workflow and the `Makefile` |
 | `test-linux`, `test-macos` | `ubuntu-24.04` (x64); `macos-15` (ARM64); Python 3.11, 3.13, 3.14; pairs `1/4 4/4` and `2/4 3/4` | Unpacks the images and the runner, restores the ROM ELF, runs wall-clock tests sequentially, then two existing pytest shards concurrently; builds nothing |
 | `determinism` | `ubuntu-24.04` (x64); Python 3.11 | Unpacks the images and the runner as `test` does, and runs `make determinism`: the determinism tests twice, the two runs compared |
 | `lint` | `ubuntu-24.04` (x64); Python 3.11 | `make lint`, clippy included |
-| `docs` | `ubuntu-24.04` (x64); pull requests only | `make docs-check` against the pull request's base branch |
+| `docs` | `ubuntu-24.04` (x64); pull requests and manual runs | `make docs-check` against the pull request's base branch |
 
 `test-linux` and `determinism` need only `firmware` and `runner-linux`; `test-macos` needs only
 `firmware` and `runner-macos`. The two native builds start independently of firmware and each
 other. A queued or failed macOS build does not block Linux tests or determinism, and the reverse
-holds for macOS tests. `lint` and `docs` have no build dependencies. The firmware and test matrices
+holds for macOS tests. `lint` and `docs` have no build dependencies; `lint` waits for change classification. The firmware and test matrices
 use `fail-fast: false`; one platform or Python version failing does not cancel another.
 
 Both native build calls use `build-runner.yml` with a required `platform` input. Both test calls
@@ -85,7 +89,7 @@ shard pairs. The sections below use `runner` and `test` for these shared job def
 ## Where the jobs run
 
 All Linux jobs use the standard `ubuntu-24.04` image (x64). The native build and test
-calls always include `macos-15` (Apple Silicon, ARM64), including in private repositories.
+calls in full CI include `macos-15` (Apple Silicon, ARM64), including in private repositories.
 These labels and architectures are listed for both repository visibilities in
 [GitHub's standard runner reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
 (checked 15 November 2026). No larger runners are used. Each job checks `RUNNER_OS`,
@@ -297,7 +301,7 @@ way twice, not that two machines agree. Timeout: 10 minutes.
 
 ## `lint`
 
-`make lint` in full on Python 3.11, the oldest Python esp32tl supports and the one mypy and ruff
+Except for [version-only changes](#version-only-ci), `make lint` runs in full on Python 3.11, the oldest Python esp32tl supports and the one mypy and ruff
 target. It installs rustup if missing, as `runner` does, because `runner` may have hit its cache
 and skipped that step. The checkout removes `runner/target/`, so clippy checks esp32sim from
 scratch, without a target-directory cache (the earlier self-hosted measurement was 8 s). Timeout: 15
@@ -305,12 +309,12 @@ minutes.
 
 ## `docs`
 
-On pull requests only. It checks out the full history (`fetch-depth: 0`), because the check needs
-the merge base with the pull request's base branch, sets up Python 3.11, and runs the
+On pull requests and manual runs. It checks out the full history (`fetch-depth: 0`), because the check needs
+the merge base with the pull request's base branch (`origin/main` for manual runs), sets up Python 3.11, and runs the
 "Documentation contract" step:
 
 ```sh
-make docs-check BASE="$BASE"    # env: BASE: origin/${{ github.base_ref }}
+make docs-check BASE="$BASE"    # env: BASE: origin/${{ github.base_ref || 'main' }}
 ```
 
 It builds nothing and needs nothing from the other jobs. What the check enforces, and why it is not
@@ -398,17 +402,98 @@ These are warm-cache measurements, not fresh firmware-build timings or a five-mi
 The six-job matrix, test commands, cache strategy and 25 required check contexts remain unchanged.
 See [the decision](decisions/ci.md#retain-six-macos-test-jobs-after-measuring-five).
 
+## Prepare a version pull request
+
+Run **Prepare release** (`prepare-release.yml`) from Actions on `main`, with `version` such as
+`0.1.1` (no `v` prefix). The workflow accepts only an increasing `MAJOR.MINOR.PATCH` version,
+with no leading zeros or prerelease suffix. It uses the selected main commit and changes exactly
+three values: `[project].version` in `pyproject.toml`, `[package].version` in `runner/Cargo.toml`,
+and the `esp32tl-runner` package version in `runner/Cargo.lock`. All existing versions must agree.
+It does not choose a version from commit messages or change dependency versions.
+
+The workflow creates `build/release-VERSION` and opens a PR with a `build: prepare release VERSION`
+title. Merge that PR after its checks pass. Normal branch protection and the requirement to be
+up to date still apply. If other changes are added to the PR, full CI runs and the automatic
+release trigger will not accept the mixed change.
+
+Repository setup: **Settings → Actions → General → Workflow permissions → Allow GitHub Actions
+to create and approve pull requests** must be enabled for `GITHUB_TOKEN` to open the PR. This
+option was enabled with the owner's approval on 16 November 2026; the default token permission
+remains `read`. The workflow creates PRs; it does not approve or merge them. Its write permissions are limited to
+contents, pull requests and Actions. It explicitly dispatches `ci.yml` on the PR branch because
+pushes with `GITHUB_TOKEN` do not start push CI. This also provides CI without relying on approval
+of an automatically created PR's event-triggered workflow runs.
+
+CLI equivalent:
+
+```sh
+gh workflow run prepare-release.yml --ref main -f version=0.1.1
+```
+
+The preparation job has a five-minute timeout and is serialized. Existing release branches are
+never force-pushed. If creating the PR or dispatching CI fails after the branch push, use the
+existing branch to open the PR or run `gh workflow run ci.yml --ref build/release-0.1.1`; do not
+rerun preparation expecting it to overwrite that branch.
+
+## Version-only CI
+
+`.github/scripts/release-version.py classify BASE HEAD` checks the actual git trees. The fast
+path requires exactly the three version files, unchanged regular-file modes, matching versions
+in both trees, an increasing stable version, and byte-for-byte equality with the expected three
+version replacements. Labels, branch names and PR titles do not grant a shortcut. Changes to
+code, dependencies, comments, file modes, or any fourth file use full CI. Git errors fail the
+classification job; the required `lint` job runs with `always()` and fails if classification failed.
+
+CI compares PRs with their base SHA, pushes with the previous main SHA, and manual runs with
+`origin/main`. For an exact version bump, `lint` builds wheel/sdist and checks metadata with
+`twine check --strict`; `docs` still runs the documentation contract on PRs and manual runs.
+The eight firmware jobs, two runner jobs and twelve test jobs retain their required context names,
+but run a short explanatory step on Ubuntu without downloads, cache restores, native builds or
+pytest. Determinism is skipped. No macOS VM is allocated for this path and all 25 existing required
+checks remain configured. This avoids a branch-protection migration and does not fabricate statuses
+with the Checks API. A scheduling overhead remains; no fixed elapsed-time improvement is claimed
+until measured on GitHub.
+
+The Runtime release workflow also recognizes version-only PRs: it builds and checks Python
+metadata but skips native builds and firmware. Direct manual verification and releases after merge
+still run the full native release matrix. The helper's regression tests use real local git commits
+and ensure mixed changes, unknown refs, inconsistent versions and version decreases cannot use the
+shortcut (`tests/test_release_version.py`).
+
+## Release a merged version
+
+`release-on-merge.yml` runs when a push to `main` touches version files. It checks the complete
+before/after diff with the same classifier. Only a pure increasing version bump creates `vVERSION`
+on the exact merged commit. This applies to manually authored version-only PRs too. A mixed change
+creates no tag; separate the version bump from implementation changes. No write is made to `main`.
+
+The tag push is not forced; an existing tag at another commit is rejected. A retry with the same
+commit is safe. The workflow then calls `runtime-release.yml` directly with `release_tag`, using
+the tagged sources for every build and validation step. This is necessary because a tag pushed
+with `GITHUB_TOKEN` does not trigger another push workflow. A reusable call needs no extra PAT or
+GitHub App secret. See [GitHub's token behavior](https://docs.github.com/en/actions/concepts/security/github_token)
+and [reusable workflow permissions](https://docs.github.com/en/actions/reference/workflows-and-actions/reusing-workflow-configurations).
+
+The classification and tag jobs each have a five-minute timeout (classification is read-only;
+only the tag job can write contents); the reusable release call permits its draft job to write contents too. Runs are
+serialized per merged SHA. If native tests fail after tagging, rerun failed jobs in **Release merged
+version**. Do not move the tag to fix source code: merge a new fix and prepare a higher version.
+An existing draft is not overwritten; inspect it before retrying a failed draft creation.
+
 ## Runtime releases
 
 `.github/workflows/runtime-release.yml` builds distribution assets independently of the main CI.
 It runs on relevant pull requests, manual dispatch and `v*` tags, using only standard hosted
 runners. A tag must equal `v` plus the Python package version, and Cargo's package version must
-match, before packaging. Only a `push` of a `v*` tag creates a draft release. PR and manual
-runs never create releases, including manual dispatch against an existing version tag.
+match, before packaging. Draft creation requires either a `push` of a `v*` tag or an explicit reusable call
+from **Release merged version**. Direct PR and manual runs of **Runtime release** never create
+releases, including manual dispatch against an existing version tag.
 This workflow does not upload to PyPI; the separate publishing workflow below does.
 
 Jobs and their outputs:
 
+- `change` (Ubuntu 24.04, Python 3.11): recognizes exact version-only PRs; all other events
+  use the full release pipeline.
 - `package` (Ubuntu 24.04, Python 3.11): `python -m build` builds an sdist and then a wheel from
   that sdist; `twine check --strict` validates metadata. The one wheel is used on both platforms.
 - `firmware` (Ubuntu 24.04): checks Docker and builds only `hello_world`, using the pinned builder.
@@ -421,7 +506,7 @@ Jobs and their outputs:
 - `assemble` (Ubuntu 24.04): downloads the wheel/sdist and both runners. `scripts/check-release.py`
   rejects missing or extra assets and wrong version, esp32sim revision, target or executable
   checksum, then writes SHA256SUMS for exactly those six files. It uploads `verified-release`.
-- `draft` (Ubuntu 24.04, version-tag pushes only): verifies SHA256SUMS and creates the draft
+- `draft` (Ubuntu 24.04, version-tag pushes or merged-version calls): verifies SHA256SUMS and creates the draft
   GitHub release with generated release notes. Only this job has `contents: write`; it does not replace an existing
   release or publish the draft.
 
@@ -435,17 +520,20 @@ Before the first release:
 
 1. Merge the workflow and runtime implementation, then run **Runtime release** with
    `workflow_dispatch` on main. Inspect both native smoke tests and download `verified-release`.
-2. Keep `pyproject.toml`, `runner/Cargo.toml` and runner's entry in `runner/Cargo.lock` at the same
-   version. Use a new version for every released build; never replace published runtime assets.
-3. Tag the tested commit (for example `git tag v0.1.0` and `git push origin v0.1.0`). This runs
-   validation again and creates a draft containing the wheel, sdist, two executables, two JSON
-   manifests and SHA256SUMS. Review the notes, hashes and target identities, then publish manually.
+2. Run **Prepare release** on main with the desired new version and merge its version-only PR
+   after the fast checks pass. This tags the merged commit, runs full native release validation,
+   and creates a draft containing the wheel, sdist, two executables, two JSON manifests and
+   SHA256SUMS. Use a new version for every release; never replace published runtime assets.
+3. Review the draft's notes, hashes and target identities, then click **Publish release**.
+   A direct version-tag push remains supported (for example `git tag v0.1.0` and
+   `git push origin v0.1.0` for the version already in the repository). This also runs full
+   validation and creates only a draft.
 4. Install that release's wheel in a clean environment, run `esp32tl runtime prepare` against
    the real GitHub release URLs, and boot the firmware again offline. Anonymous downloading
    requires a published release; a draft is insufficient even though this repository is public.
 
 Publishing the GitHub release triggers the PyPI workflow below, so configure its Trusted
-Publisher before clicking Publish. Both workflow files must be included in the tagged commit.
+Publisher before clicking Publish. The release workflow files must be included in the tagged commit.
 The workflows are validated locally with actionlint; hosted runs and PyPI's OIDC exchange still
 require the workflows on GitHub and are not implied by a successful local smoke test.
 

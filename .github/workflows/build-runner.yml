@@ -2,6 +2,10 @@ name: Build runner
 on:
   workflow_call:
     inputs:
+      version_only:
+        description: Exact version-only diff already validated by the caller.
+        type: boolean
+        default: false
       platform:
         description: Native platform (linux or macos).
         required: true
@@ -16,13 +20,17 @@ permissions:
 
 jobs:
   runner:
-    runs-on: ${{ inputs.platform == 'macos' && 'macos-15' || 'ubuntu-24.04' }}
+    runs-on: ${{ !inputs.version_only && inputs.platform == 'macos' && 'macos-15' || 'ubuntu-24.04' }}
     timeout-minutes: 30
     # The same on both platforms; each adds its OS and architecture.
     outputs:
       key: ${{ steps.key.outputs.key }}
     steps:
+      - name: Version-only change validated; native work deferred to the release
+        if: inputs.version_only
+        run: echo 'Only release version metadata changed; full release builds run after merge.'
       - name: Check host architecture
+        if: ${{ !inputs.version_only }}
         run: |
           if [ "$RUNNER_OS" = macOS ]; then
             test "$RUNNER_ARCH" = ARM64
@@ -34,15 +42,18 @@ jobs:
           fi
 
       - uses: actions/checkout@v7
+        if: ${{ !inputs.version_only }}
 
       # All of runner/ (target/ is not there after a checkout): the sources,
       # the esp32sim pin in Cargo.toml and Cargo.lock, the toolchain, the
       # profiles, and whatever else cargo reads. A cold build takes under a
       # minute, so cargo's target/ is not cached.
       - id: key
+        if: ${{ !inputs.version_only }}
         run: echo "key=runner-${{ hashFiles('runner/**', 'Makefile', '.github/workflows/build-runner.yml') }}" >>"$GITHUB_OUTPUT"
 
       - id: cache
+        if: ${{ !inputs.version_only }}
         uses: actions/cache/restore@v6
         with:
           path: build/ci/runner.tar
@@ -51,7 +62,7 @@ jobs:
       # rustup then installs the toolchain runner/rust-toolchain.toml pins on
       # the first build. The hosted images also supply the native linker.
       - name: Install rustup if missing
-        if: steps.cache.outputs.cache-hit != 'true'
+        if: ${{ !inputs.version_only && (steps.cache.outputs.cache-hit != 'true') }}
         run: |
           if ! command -v rustup >/dev/null 2>&1; then
             [ -x "$HOME/.cargo/bin/rustup" ] ||
@@ -62,7 +73,7 @@ jobs:
 
       # The tarball keeps the executable bit.
       - name: Build and test the runner
-        if: steps.cache.outputs.cache-hit != 'true'
+        if: ${{ !inputs.version_only && (steps.cache.outputs.cache-hit != 'true') }}
         run: |
           make build-runner test-runner
           mkdir -p build/ci
@@ -70,14 +81,14 @@ jobs:
 
       # As in the firmware job.
       - name: Save the tarball
-        if: steps.cache.outputs.cache-hit != 'true'
+        if: ${{ !inputs.version_only && (steps.cache.outputs.cache-hit != 'true') }}
         uses: actions/cache/save@v6
         with:
           path: build/ci/runner.tar
           key: ${{ steps.key.outputs.key }}-${{ runner.os }}-${{ runner.arch }}
 
       - name: Check that the cache kept the tarball
-        if: steps.cache.outputs.cache-hit != 'true'
+        if: ${{ !inputs.version_only && (steps.cache.outputs.cache-hit != 'true') }}
         uses: actions/cache/restore@v6
         with:
           path: build/ci/runner.tar

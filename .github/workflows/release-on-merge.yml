@@ -1,0 +1,54 @@
+name: Release merged version
+on:
+  push:
+    branches: [main]
+    paths: ['pyproject.toml', 'runner/Cargo.toml', 'runner/Cargo.lock']
+permissions:
+  contents: read
+concurrency:
+  group: release-merged-${{ github.sha }}
+  cancel-in-progress: false
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.change.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - id: change
+        env:
+          BASE: ${{ github.event.before }}
+        run: python .github/scripts/release-version.py classify "$BASE"
+  tag:
+    needs: version
+    if: needs.version.outputs.version != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: tag
+        name: Tag the merged commit without replacing an existing tag
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          tag="v$VERSION"
+          git push origin "HEAD:refs/tags/$tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+  release:
+    needs: tag
+    permissions:
+      contents: write
+    uses: ./.github/workflows/runtime-release.yml
+    with:
+      release_tag: ${{ needs.tag.outputs.tag }}

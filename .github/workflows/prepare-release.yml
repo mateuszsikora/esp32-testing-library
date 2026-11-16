@@ -1,0 +1,64 @@
+name: Prepare release
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: New MAJOR.MINOR.PATCH version, without v (for example 0.1.1).
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: prepare-release
+  cancel-in-progress: false
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    steps:
+      - name: Require main
+        env:
+          REF: ${{ github.ref }}
+        run: test "$REF" = refs/heads/main
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - name: Update the three version fields
+        env:
+          VERSION: ${{ inputs.version }}
+        run: python .github/scripts/release-version.py bump "$VERSION"
+      - name: Check the documentation contract before pushing
+        run: make docs-check BASE=HEAD
+      - name: Create the version pull request and start its CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          branch="build/release-$VERSION"
+          git switch -c "$branch"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add pyproject.toml runner/Cargo.toml runner/Cargo.lock
+          git commit -m "build: prepare release $VERSION"
+          git push origin "$branch"
+          cat > "$RUNNER_TEMP/release-pr.md" <<'EOF'
+          Bump Python, runner and lockfile versions together.
+
+          ## Documentation
+
+          - [x] `make docs-check BASE=HEAD` passed before pushing.
+          - [x] Only package version metadata changed; no behavior documentation is needed.
+
+          ## Verification
+
+          The Prepare release workflow validated all three versions. CI will validate the diff and package metadata before merge. Merging this exact version-only change starts the native release builds; publishing the resulting draft remains manual.
+          EOF
+          gh pr create --base main --head "$branch" --title "build: prepare release $VERSION" \
+            --body-file "$RUNNER_TEMP/release-pr.md" --label area:ci
+          # GITHUB_TOKEN does not trigger push CI; explicitly dispatch on the PR head.
+          gh workflow run ci.yml --ref "$branch"

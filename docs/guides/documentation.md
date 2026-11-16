@@ -34,7 +34,10 @@ runner's unit tests live in `tests.rs` files of their own for this reason, not i
 `mod tests { ... }` blocks.
 
 Files whose only change is a version bump are left out next: `uses: …@ref` in a workflow, `rev:`
-in `.pre-commit-config.yaml`, and the version of a dependency in `pyproject.toml`. Pins the
+in `.pre-commit-config.yaml`, the version of a dependency in `pyproject.toml`, and changes only
+to `[project].version` in `pyproject.toml` or `[package].version` in `runner/Cargo.toml`. The
+package-version filter preserves every other character and is scoped to the owning table; a
+dependency pin, comment or another table's version is not covered by that exception. Pins the
 documentation states are not filtered: the esp32sim revision, the Rust toolchain, the ESP-IDF image
 and the ROM release. If this filter fails, the check fails with it; it never passes instead.
 
