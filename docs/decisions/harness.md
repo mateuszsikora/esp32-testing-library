@@ -3858,6 +3858,23 @@ checks both files before reuse and before exposing an installation. Calling that
 from either backend lookup was rejected: an unused, replaced file could incorrectly block a
 valid explicit path combined with the other file from cache.
 
+
+## Final radio diagnostics come from the completed runner log
+
+Status: decided (#223)
+
+The backend reads `[emu] wifi` lines from the raw runner log after the runner exits and the
+waiter joins, and includes them verbatim in its teardown report. The runner emits these lines
+at shutdown; pytest-embedded's asynchronous forwarder can be stopped before it reads them.
+This caused `test_station_diagnostics_are_in_captured_output` to fail on macOS in CI run
+43858823712 despite the expected wrong-password timeout. The full source log is streamed,
+rather than a bounded tail, so subsequent output cannot displace the diagnostic.
+
+**Rejected:** sleeps or longer DHCP timeouts, which do not synchronize log delivery. Replacing
+pytest-embedded's forwarder and queue listener is unnecessary for this report: the raw log is
+already complete when the backend closes. Live capture and `dut.log` retain their existing
+asynchronous behavior; the teardown report no longer depends on it for radio diagnostics.
+
 ## DHCP starts at virtual station data-link readiness
 
 Status: decided

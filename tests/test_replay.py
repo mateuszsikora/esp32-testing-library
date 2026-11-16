@@ -244,6 +244,7 @@ def test_unseen_requests_are_in_the_backend_report_and_json_properties(tmp_path:
     backend._sd_card = None
     backend._wifi = Wifi(now=lambda: 0)
     backend._bluetooth = Bluetooth()
+    backend._radio_diagnostics = []
     backend.log = RunLog(entries=1)
     gnss.log = backend.log
     backend.link = BoardLink("esp32-devkitc", [gnss])

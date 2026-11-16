@@ -1895,6 +1895,16 @@ pending destinations one second apart, and resolving every destination clears th
 `tests/test_net_station.py::test_new_arp_destination_does_not_postpone_pending_retries` enforces
 this with staggered destinations, two retry batches and replies releasing the queued datagrams.
 
+
+## Radio diagnostics at teardown
+
+- **238.** Radio diagnostics in a readable runner log must appear in the backend's teardown
+  report even when live log forwarding has not delivered them, including a diagnostic joined
+  to the guest's final console fragment without a newline.
+  `tests/test_pytest_plugin.py::test_radio_diagnostics_survive_a_stopped_log_forwarder`
+  disables forwarding and places the diagnostics before more than a log tail's worth of output,
+  with and without a preceding console fragment.
+
 ## Virtual station DHCP lifecycle
 
 `test_no_discover_or_deadline_until_ready` enforces silence and no retry deadline before data-link readiness. `test_disconnect_discards_exchange_and_stale_reply` checks pending and bound exchanges: disconnect clears the lease, loses connections, and old replies cannot bind a new exchange. `test_delayed_softap_starts_dhcp_at_link_ready` uses real Arduino firmware with a 15300 ms startup delay, for open and WPA2 networks; the first DISCOVER has the readiness timestamp, without a lease-duration bound. `test_softap_leaves_and_rejoins` checks real link loss and fresh DHCP. Existing reset/power-cycle regressions check lease invalidation and reacquisition.

@@ -347,6 +347,7 @@ class Esp32Sim(Board):
         self.console_output = bytearray()
         self.console_lines = ConsoleLines()
         self.log = RunLog()
+        self._radio_diagnostics: list[str] = []
         self._hold = HeldClock()
         self._utc = POWER_ON_UTC
         # The board's supply, from power_on to power_off; the runner runs from the first.
@@ -1010,7 +1011,8 @@ class Esp32Sim(Board):
         read to end of file; the runner waited for, and killed only when it has not exited within
         EXIT_SECONDS of the signal. Then stops the forwarding of its log. The forwarder reads the
         log in a busy loop and has nearly always sent the runner's last lines on by then, but it
-        is not waited for: they may miss `dut.log`, never the test's result. A runner that exited
+        is not waited for: they may miss `dut.log`. Radio diagnostics are read from the finished
+        runner log into the teardown report, independently of that forwarder. A runner that exited
         with an error, one that had to be killed, and a link the harness found wrong fail the
         test, even one whose expects all passed before it. Once the runner is gone and the link
         read, writes the recording of every route the test tapped, also of a run that failed; one
@@ -1042,6 +1044,21 @@ class Esp32Sim(Board):
             self._exited.wait()
         self._close_link()
         self._waiter.join()
+        # The runner and waiter have finished writing. The asynchronous log forwarder can
+        # still lag behind, so keep radio diagnostics directly from the complete source file.
+        try:
+            with open(self.process._logfile, encoding="utf-8", errors="replace") as log:
+                # stdout and stderr share this file: the guest's last console fragment
+                # need not end with a newline before the runner's first diagnostic.
+                self._radio_diagnostics = [
+                    "[emu] wifi" + suffix.rstrip("\r\n")
+                    for line in log
+                    for _, marker, suffix in [line.partition("[emu] wifi")]
+                    if marker
+                ]
+        except OSError:
+            # Optional diagnostics must not prevent closing the process or writing taps.
+            self._radio_diagnostics = []
         # pytest-embedded leaves it unannotated.
         self.process.close()  # type: ignore[no-untyped-call]
         # Nor does it close the stdin pipe it opens, which the runner does not read.
@@ -1169,6 +1186,7 @@ class Esp32Sim(Board):
             lines += self._wifi.report()
         if self._bluetooth.used:
             lines += self._bluetooth.report()
+        lines += self._radio_diagnostics
         if run:
             lines += self.log.lines()
         return "\n".join(lines)

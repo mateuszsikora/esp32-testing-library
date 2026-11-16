@@ -333,10 +333,13 @@ cut at its start, rather than dropped. A log it cannot read gives
    other than the runner holds the socket), `shutdown(SHUT_RDWR)` ends the read and the thread is
    joined. Then closes the connection and the listener and removes the socket's directory. Then
    joins the waiter thread.
-5. `self.process.close()`: stops the forwarder and closes the log. The forwarder is not waited
-   for, so the runner's last lines may be missing from `dut.log`; the result does not depend on
-   them. Then closes the stdin pipe `DuplicateStdoutPopen` opens and never closes, which the runner
-   does not read.
+5. Reads all `[emu] wifi` diagnostics from the completed runner log into the backend report, after
+   joining the waiter. Then `self.process.close()` stops the forwarder and closes the log. The
+   forwarder is not waited for, so the runner's last lines may be missing from `dut.log`, but
+   radio diagnostics remain available in the `Captured esp32sim link teardown` report. An `OSError`
+   while opening or reading the log leaves diagnostics empty; closing the process and writing
+   taps still run. Then closes
+   the stdin pipe `DuplicateStdoutPopen` opens and never closes, which the runner does not read.
 6. `_write_taps()`: for every `Uart` whose `tapped` is set, `Tap.recording(board=profile.name,
    source=uart.source_kind or "none", clock=self.clock, app_sha256=..., tools=...)` written with
    `recording.write` to the tap's path. `app_sha256` is the SHA-256 of `app.app_image`, the file
@@ -724,5 +727,11 @@ output still arrives only through `console`. The normal UART warning and report 
 station networks for clock selection and device-reset invalidation, and the report includes
 `Wifi.report()` for them. The runner now emits the Wi-Fi lines from `StationLink::report()` at teardown: `[emu] wifi:`
 and, in station mode, `[emu] wifi-sta:`. Previously it did not call that upstream report. Both
-use the existing stdout/stderr capture into the test output and `dut.log`; no parser is needed. `_world_given()` describes `the station of wifi` when
+still use stdout/stderr capture for live output and `dut.log`. After the runner and its waiter
+have exited, the backend also reads diagnostics from the raw runner log and includes them
+verbatim in the teardown report. Each diagnostic starts at the first `[emu] wifi` marker on its
+line, even if the guest's final console fragment has no trailing newline. An unreadable log
+leaves this optional diagnostic list empty without interrupting cleanup or tap recording. This keeps final radio diagnostics even
+when asynchronous capture has not caught up; it does not depend on a fixed-size log tail.
+`_world_given()` describes `the station of wifi` when
 `runner_args()` includes `--wifi-sta`.
