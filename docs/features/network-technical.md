@@ -738,7 +738,10 @@ Only IPv4 to the leased host reaches `Network`, apart from DHCP replies. Service
 their existing implementation and listen at that address alone; DNS's answer is updated on ACK.
 `Internet.connect` passes the leased host address to both `TcpConnection` and `Network.connect`.
 Option 54 supplies its default destination; option 3 routes off-subnet traffic. ARP resolves the
-next hop before queued datagrams leave. ARP replies and requests addressed to the host populate
+next hop before queued datagrams leave. A newly unresolved destination keeps the earliest pending
+ARP retry deadline. Each due batch retries all unresolved destinations and schedules the next
+batch one second later; resolving every pending destination clears the deadline.
+ARP replies and requests addressed to the host populate
 the cache, and the host answers requests only for itself.
 
 `Internet.device_reset` and lease expiry clear the address, ARP cache and pending datagrams, reset

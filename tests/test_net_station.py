@@ -70,8 +70,10 @@ def test_lease_lost_offer_retries_nak_and_expiry() -> None:
         ap.net.connect(80, address="192.168.4.1")
     [(_, first)] = ap.net.poll(0)
     assert ap.net.quiet_until() == 4_000 * MS
-    assert ap.net.poll(3_999 * MS) == []
-    [(_, retry)] = ap.net.poll(4_000 * MS)
+    ap.now = 3_999 * MS
+    assert ap.net.poll(ap.now) == []
+    ap.now = 4_000 * MS
+    [(_, retry)] = ap.net.poll(ap.now)
     assert retry == first
     [(_, request)] = ap.reply(retry)
     [(_, restarted)] = ap.reply(request, nak=True)
@@ -83,7 +85,7 @@ def test_lease_lost_offer_retries_nak_and_expiry() -> None:
     assert (lease.address, lease.device_address, lease.at) == (
         "192.168.4.2",
         "192.168.4.1",
-        Duration(ap.now),
+        Duration(4_004 * MS),
     )
     ap.now = lease.expires.ns
     [(_, expired)] = ap.net.poll(ap.now)
@@ -115,6 +117,33 @@ def test_arp_answers_only_our_address_and_resolves_before_tcp() -> None:
         ap.net.connect(80)
     [(_, discover)] = ap.net.poll(ap.now)
     assert options(discover[42:])[53] == b"\x01"
+
+
+def test_new_arp_destination_does_not_postpone_pending_retries() -> None:
+    ap = SoftAP().up()
+    started = ap.now
+    other = bytes([192, 168, 4, 9])
+    assert isinstance(ap.net.link, Station)
+    ap.net.link.send_ip(ipv4(6, HOST_IP, AP_IP, b""))
+    [(_, first)] = ap.net.poll(ap.now)
+    assert first[12:14] == b"\x08\x06" and first[38:42] == AP_IP
+    ap.now = started + 500 * MS
+    ap.net.link.send_ip(ipv4(6, HOST_IP, other, b""))
+    [(_, second)] = ap.net.poll(ap.now)
+    assert second[12:14] == b"\x08\x06" and second[38:42] == other
+    assert ap.net.quiet_until() == started + 1_000 * MS
+    for elapsed in (1_000, 2_000):
+        ap.now = started + (elapsed - 1) * MS
+        assert ap.net.poll(ap.now) == []
+        ap.now += MS
+        assert [packet for _, packet in ap.net.poll(ap.now)] == [first, second]
+        assert ap.net.quiet_until() == ap.now + 1_000 * MS
+    for address in (AP_IP, other):
+        body = struct.pack(">HHBBH", 1, 0x0800, 6, 4, 2) + AP + address + HOST + HOST_IP
+        [(_, datagram)] = ap.net.receive(ap.now, frame(HOST, 0x0806, body, AP))
+        assert datagram[12:14] == b"\x08\x00" and datagram[30:34] == address
+    assert ap.net.lease is not None
+    assert ap.net.quiet_until() == ap.net.lease.expires.ns
 
 
 def test_http_get_and_only_the_leased_host_receives_service_traffic() -> None:

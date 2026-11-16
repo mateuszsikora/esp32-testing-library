@@ -102,6 +102,7 @@ class Station:
         elif self._deadline is not None and now >= self._deadline:
             self._request()
         if self._arp_deadline is not None and now >= self._arp_deadline:
+            self._arp_deadline = None
             for address in self._pending:
                 self._resolve(address)
 
@@ -218,7 +219,8 @@ class Station:
             + IPv4Address(target).packed
         )
         self._frame(BROADCAST_MAC, ARP, packet)
-        self._arp_deadline = self._now() + SECOND
+        if self._arp_deadline is None:
+            self._arp_deadline = self._now() + SECOND
 
     def _arp(self, data: bytes) -> None:
         if self.lease is None or len(data) < 28 or data[:6] != struct.pack(">HHBB", 1, IPV4, 6, 4):

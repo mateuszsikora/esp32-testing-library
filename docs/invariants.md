@@ -1889,3 +1889,8 @@ forgets it on reset or expiry. Before a lease even an explicit TCP destination i
 `test_lease_lost_offer_retries_nak_and_expiry` enforce this. Identical DHCP retries held before
 association occupy one runner queue entry:
 `runner/src/session/tests.rs::station_dhcp_retries_do_not_accumulate_behind_association_backpressure`.
+
+A new ARP destination cannot postpone an existing resolution retry. Due batches retry all
+pending destinations one second apart, and resolving every destination clears the retry timer.
+`tests/test_net_station.py::test_new_arp_destination_does_not_postpone_pending_retries` enforces
+this with staggered destinations, two retry batches and replies releasing the queued datagrams.
