@@ -46,10 +46,12 @@ pull request, and the repository squashes pull requests anyway.
 
 ## The documentation job runs on pull requests only
 
-Status: decided (#54)
+Status: decided (amended 16 November 2026; originally #54)
 
 The `docs` job runs on `pull_request` events, against `origin/<base branch>` of the pull request,
-with the full history the merge base needs (`fetch-depth: 0`).
+with the full history the merge base needs (`fetch-depth: 0`). It now also runs on manual CI
+dispatch, against `origin/main`, so bot-created version branches receive this required check
+without relying on approval of PR-triggered runs.
 
 **Rejected:** running it on pushes to `main` too, because there the merge base with `main` is the
 commit itself: the contract part would compare nothing with nothing and always pass. The integrity
@@ -57,7 +59,7 @@ part (links, anchors, the decisions index, the rules table) does not depend on t
 pull requests that pass on their own can break it together, one renaming a heading the other
 links to. On `main` that is caught by `make test`'s
 `tests/test_check_docs.py::test_this_repository_passes_its_integrity_checks`, which the `test`
-jobs run on every push, not by this job.
+jobs run for full CI changes, not by this job. Exact version-only pushes use lightweight CI.
 
 ## SKIP_DOCS_CHECK is ignored in CI
 
@@ -103,6 +105,11 @@ A file whose every changed line differs only in a version is left out before the
 
 **Rejected:** filtering every pin, because the documentation states the esp32sim revision, the Rust
 toolchain, the ESP-IDF image and the ROM release: a bump of one of those changes what is true.
+
+Release metadata now has the same exemption for changes only to `[project].version` in
+`pyproject.toml` and `[package].version` in `runner/Cargo.toml`. Matching is scoped to those
+tables and preserves every other character, so dependency pins and unrelated edits cannot
+use it. Version-only release PRs otherwise would fail the documentation gate.
 
 ## Test files are left out, and the runner's unit tests live in tests.rs files
 

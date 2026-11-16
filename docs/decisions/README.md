@@ -41,6 +41,8 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [One Python distribution is tested with both release runners](ci.md#one-python-distribution-is-tested-with-both-release-runners) | `ci.md` | decided |
 | [PyPI publishes the distributions of the published GitHub release](ci.md#pypi-publishes-the-distributions-of-the-published-github-release) | `ci.md` | decided |
 | [Balance the second pair with the no-peer inquiry test](ci.md#balance-the-second-pair-with-the-no-peer-inquiry-test) | `ci.md` | decided (16 November 2026) |
+| [Prepare versions in a PR and build releases after merge](ci.md#prepare-versions-in-a-pr-and-build-releases-after-merge) | `ci.md` | decided (16 November 2026) |
+| [Verify exact version diffs before using lightweight CI](ci.md#verify-exact-version-diffs-before-using-lightweight-ci) | `ci.md` | decided (16 November 2026) |
 
 ## Documentation and the documentation check
 
@@ -49,7 +51,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Every behaviour change lands its documentation, and CI enforces it](docs.md#every-behaviour-change-lands-its-documentation-and-ci-enforces-it) | `docs.md` | decided (#54) |
 | [The documentation check is a Python script with no dependencies](docs.md#the-documentation-check-is-a-python-script-with-no-dependencies) | `docs.md` | decided (#54) |
 | [CI is the gate, not a pre-commit hook](docs.md#ci-is-the-gate-not-a-pre-commit-hook) | `docs.md` | decided (#54) |
-| [The documentation job runs on pull requests only](docs.md#the-documentation-job-runs-on-pull-requests-only) | `docs.md` | decided (#54) |
+| [The documentation job runs on pull requests only](docs.md#the-documentation-job-runs-on-pull-requests-only) | `docs.md` | decided (amended 16 November 2026; originally #54) |
 | [SKIP_DOCS_CHECK is ignored in CI](docs.md#skip_docs_check-is-ignored-in-ci) | `docs.md` | decided (#54) |
 | [The map lists files by name only where a directory has two owners](docs.md#the-map-lists-files-by-name-only-where-a-directory-has-two-owners) | `docs.md` | decided (#54) |
 | [pyproject.toml accepts the documentation of any of its owners](docs.md#pyprojecttoml-accepts-the-documentation-of-any-of-its-owners) | `docs.md` | decided (#54) |

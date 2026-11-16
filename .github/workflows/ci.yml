@@ -42,33 +42,60 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
+  change:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      version_only: ${{ steps.change.outputs.version_only }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - id: change
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before || 'origin/main' }}
+        run: python .github/scripts/release-version.py classify "$BASE"
+
   firmware:
+    needs: change
+    with:
+      version_only: ${{ needs.change.outputs.version_only == 'true' }}
     uses: ./.github/workflows/build-firmware.yml
 
   runner-linux:
+    needs: change
     uses: ./.github/workflows/build-runner.yml
     with:
       platform: linux
+      version_only: ${{ needs.change.outputs.version_only == 'true' }}
 
   runner-macos:
+    needs: change
     uses: ./.github/workflows/build-runner.yml
     with:
       platform: macos
+      version_only: ${{ needs.change.outputs.version_only == 'true' }}
 
   test-linux:
-    needs: [firmware, runner-linux]
+    needs: [change, firmware, runner-linux]
     uses: ./.github/workflows/test-platform.yml
     with:
       platform: linux
+      version_only: ${{ needs.change.outputs.version_only == 'true' }}
       firmware-key: ${{ needs.firmware.outputs.key }}
       rom-elf-key: ${{ needs.firmware.outputs.rom-elf-key }}
       runner-key: ${{ needs.runner-linux.outputs.key }}
 
   test-macos:
-    needs: [firmware, runner-macos]
+    needs: [change, firmware, runner-macos]
     uses: ./.github/workflows/test-platform.yml
     with:
       platform: macos
+      version_only: ${{ needs.change.outputs.version_only == 'true' }}
       firmware-key: ${{ needs.firmware.outputs.key }}
       rom-elf-key: ${{ needs.firmware.outputs.rom-elf-key }}
       runner-key: ${{ needs.runner-macos.outputs.key }}
@@ -78,7 +105,8 @@ jobs:
   # runner's stats; a difference is printed as a diff. On Linux and one Python:
   # the claim is about two runs on one machine, not across machines.
   determinism:
-    needs: [firmware, runner-linux]
+    if: needs.change.outputs.version_only != 'true'
+    needs: [change, firmware, runner-linux]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -122,22 +150,44 @@ jobs:
 
       - run: make determinism
 
-  # `make lint` in full, clippy included. The checkout removes runner/target/,
+  # Full changes run `make lint`, clippy included; version-only changes check packaging.
+  # The checkout removes runner/target/,
   # so clippy checks esp32sim from scratch, without a target-directory cache.
   lint:
+    needs: change
+    if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
+      - name: Require successful change classification
+        env:
+          RESULT: ${{ needs.change.result }}
+        run: test "$RESULT" = success
+      - uses: actions/checkout@v7
+        if: needs.change.outputs.version_only == 'true'
+      - uses: actions/setup-python@v7
+        if: needs.change.outputs.version_only == 'true'
+        with:
+          python-version: '3.11'
+      - name: Check version-only package metadata
+        if: needs.change.outputs.version_only == 'true'
+        run: |
+          python -m pip install build twine
+          python -m build
+          python -m twine check --strict dist/*
       - name: Check host architecture
+        if: needs.change.outputs.version_only != 'true'
         run: |
           test "$RUNNER_OS" = Linux
           test "$RUNNER_ARCH" = X64
           test "$(uname -m)" = x86_64
 
       - uses: actions/checkout@v7
+        if: needs.change.outputs.version_only != 'true'
 
       # The oldest Python esp32tl supports, which mypy and ruff target too.
       - id: python
+        if: needs.change.outputs.version_only != 'true'
         uses: actions/setup-python@v7
         with:
           python-version: "3.11"
@@ -146,6 +196,7 @@ jobs:
 
       # As in the runner job, which may have hit its cache and skipped this.
       - name: Install rustup if missing
+        if: needs.change.outputs.version_only != 'true'
         run: |
           if ! command -v rustup >/dev/null 2>&1; then
             [ -x "$HOME/.cargo/bin/rustup" ] ||
@@ -155,13 +206,14 @@ jobs:
           fi
 
       - run: make PYTHON='${{ steps.python.outputs.python-path }}' lint
+        if: needs.change.outputs.version_only != 'true'
 
   # The documentation contract (docs/guides/documentation.md): the pull request's changes must
   # update the documentation that owns them. Against the pull request's real base branch, with the
-  # full history the merge base needs; a shallow checkout has no merge base. On pull requests only:
-  # on main, the merge base is the commit itself and there is nothing to compare.
+  # full history the merge base needs; a shallow checkout has no merge base. Manual dispatch
+  # on bot-created version branches also runs this required check, against origin/main.
   docs:
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -183,5 +235,5 @@ jobs:
       # Through the environment, not substituted into the script.
       - name: Documentation contract
         env:
-          BASE: origin/${{ github.base_ref }}
+          BASE: origin/${{ github.base_ref || 'main' }}
         run: make docs-check BASE="$BASE"

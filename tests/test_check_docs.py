@@ -518,3 +518,29 @@ def test_the_build_loader_owns_its_feature_documents(repo: Path) -> None:
     assert "[F12]" not in result.stdout
     write(repo, "docs/features/builds-technical.md", "# Builds\n")
     assert run(repo).returncode == 0
+
+
+@pytest.mark.parametrize(
+    "path,section", [("pyproject.toml", "project"), ("runner/Cargo.toml", "package")]
+)
+@pytest.mark.parametrize("extra", ["none", "other_version", "comment", "pin"])
+def test_package_version_filter_stays_in_its_table(
+    repo: Path, path: str, section: str, extra: str
+) -> None:
+    original = (
+        f'[{section}]\nname = "esp32tl"\nversion = "0.1.0"\n'
+        '[other]\nversion = "4.0.0"\nrev = "abc"\n'
+    )
+    write(repo, path, original)
+    commit(repo, "metadata baseline")
+    base = git(repo, "rev-parse", "HEAD").strip()
+    updated = original.replace('version = "0.1.0"', 'version = "0.1.1"')
+    if extra == "other_version":
+        updated = updated.replace('version = "4.0.0"', 'version = "5.0.0"')
+    elif extra == "comment":
+        updated += "# another change\n"
+    elif extra == "pin":
+        updated = updated.replace('rev = "abc"', 'rev = "def"')
+    write(repo, path, updated)
+    commit(repo)
+    assert passes(run(repo, "--base", base)) == (extra == "none")

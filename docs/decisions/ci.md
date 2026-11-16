@@ -602,7 +602,7 @@ Status: decided
 Build the sdist and its wheel once, then install that exact wheel in both native smoke tests.
 Per-platform wheel builds were rejected because they can produce two different files with the
 same filename and make artifact merging select one arbitrarily. Verify the exact asset set and
-runner manifest checksums before creating a tag-triggered draft. PRs and manual dispatch validate
+runner manifest checksums before creating a tag-triggered draft. Direct PRs and manual dispatch of Runtime release validate
 without creating releases; automatic GitHub release publication remains out of scope. A draft
 lets the maintainer review the release before its URLs become available to runtime preparation.
 
@@ -624,7 +624,6 @@ Rejected: publishing to PyPI on tag push (the runtime release would still be a d
 the wheel at upload time (different bytes from the tested artifact), and skipping existing PyPI
 files on retries (can conceal an incomplete or conflicting publication). No actual publication
 is needed to test the checksum/tag rejection logic locally; OIDC is checked on the first upload.
-
 
 ## Balance the second pair with the no-peer inquiry test
 
@@ -652,3 +651,40 @@ Those two tests cost about 9-10 seconds on Linux, exceeding its smallest measure
 Do not shorten the inquiry, change firmware, drop test variants, alter the serial real-source
 phase or add platform-dependent assignment tables. Workflow definitions, required checks,
 cache keys and test failure handling remain unchanged.
+
+## Prepare versions in a PR and build releases after merge
+
+Status: decided (16 November 2026)
+
+A manual workflow takes an explicit increasing stable version, updates only the Python package,
+runner and runner lockfile metadata, and creates a normal PR. After a pure version bump reaches
+main, a separate workflow tags that exact commit and calls the native release workflow. Publication
+of its draft remains the final manual action before PyPI Trusted Publishing. This preserves a
+single version history on main and works with existing branch protection.
+
+Rejected: version commits existing only under tags (main would retain old metadata), direct bot
+pushes to main (bypass the ordinary review/check path), and deriving versions from commit messages
+(adds release-policy machinery). The tag uses GITHUB_TOKEN, whose pushes do not start new push
+workflows, so the caller explicitly reuses Runtime release. A stored PAT or GitHub App credential
+solely to trigger a tag-push event adds setup and privilege without benefit. Direct manual runs of
+Runtime release remain verification-only; the explicit reusable input is a distinct release path.
+
+## Verify exact version diffs before using lightweight CI
+
+Status: decided (16 November 2026)
+
+Recognize only the exact three metadata replacements, with matching increasing stable versions and
+unchanged file modes. Any other change runs full CI, regardless of branch name or labels. Check
+package metadata and documentation on the short path, and run both native release smoke tests
+after merge before creating a draft. A classification failure fails the required lint check.
+
+Keep the 25 required contexts and matrix names; native build/test jobs run a minimal Ubuntu step
+on version-only changes. This spends short Linux jobs to preserve existing protection without
+allocating macOS VMs or doing compilation. Rejected: skipping whole reusable matrix jobs (their
+expanded required contexts may be missing), replacing required checks as part of this release
+feature, and writing synthetic successful statuses. No whole-workflow speed claim is made without
+hosted measurements. The main CI's normal test matrix and firmware assertions remain intact.
+
+The documentation checker exempts only changes to the owning package-version field in Python
+and Cargo metadata. The previous dependency-only exemption did not cover release versions.
+Other fields, comments and dependency pins still require their usual documentation.

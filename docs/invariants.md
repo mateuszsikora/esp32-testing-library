@@ -1866,3 +1866,11 @@ The runtime installer and every esp32sim dependency in `runner/Cargo.toml` and
 `runner/Cargo.lock` must name the same revision. Otherwise the installer would
 reject the runner built from this checkout.
 `tests/test_runtime.py::test_runtime_revision_matches_runner_pins` enforces this.
+
+## Version-only release changes
+
+Only an increasing stable version applied identically to Python, Cargo and the runner lockfile
+may use lightweight CI or trigger a release tag after merge. All other bytes and regular-file
+modes must remain unchanged. Mixed changes, missing or inconsistent fields, unchanged/reversed
+diffs and unknown refs cannot take the shortcut. The bump validates all files before writing.
+`tests/test_release_version.py` checks this against real local git repositories and CLI output.
