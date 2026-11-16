@@ -27,6 +27,8 @@ def test_moving_into_the_radius_turns_it_on(board, buzzer):
 
 ## Use in your own project
 
+Independent simulator tests also support [parallel runs with pytest-xdist](https://github.com/mateuszsikora/esp32-testing-library/blob/main/docs/guides/writing-tests.md#running-tests-in-parallel).
+
 esp32tl is preparing its first PyPI release; the PyPI commands below are for use **after
 publication**, not a claim that a release is already available. The project is alpha software.
 

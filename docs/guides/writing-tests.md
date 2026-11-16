@@ -457,3 +457,46 @@ A release wheel needs no checkout or Rust: install it with pip, run `esp32tl run
 then run your tests against an already built firmware. See [exact installation commands and CI
 cache configuration](../features/runtime-user.md). Preparation is an explicit network step;
 pytest reuses the verified runtime offline.
+
+## Running tests in parallel
+
+Independent tests on the esp32sim backend support pytest-xdist:
+
+```sh
+python -m pip install pytest-xdist
+esp32tl runtime prepare
+pytest tests/ -n auto
+```
+
+Build firmware before starting pytest. Each test owns its runner, simulated clock and network;
+workers do not share board state. Use test-local paths (for example `tmp_path`) for taps,
+recordings and other output. Session fixtures run once per worker, not once for the whole suite.
+Tests that depend on execution order or share external services need their own coordination.
+
+Start with `-n 2` on a memory-constrained machine. Each active test adds a native runner and a
+Python worker, including its protocol models, captured output and pytest-embedded processes.
+Memory per runner depends on the firmware, flash/PSRAM sizes and collected data; there is no
+measured universal RSS budget. Measure peak memory for your workload before using all CPUs.
+With N workers and similarly sized independent tests, the ideal test-body time approaches
+serial time / N, plus worker startup and reporting; CPU contention, memory pressure and one long
+test limit the gain. Issue #227 reported 125 s serial versus 46 s with five workers for five
+consumer tests on macOS arm64; this is an observation, not a performance guarantee.
+
+Runner sockets use unique temporary directories, falling back to `/tmp` when the system
+temporary path is too long for a Unix socket. The shared `card_cache` locks complete operations
+across workers; each retrieval is a private clone. A cache miss followed by preparation and
+`put` is not one locked operation: workers may repeat preparation. Give different content
+different cache names. The runtime cache is read-only during tests. Prepare it before launching
+workers: pytest never downloads a missing runtime. Concurrent explicit preparations stage in
+separate directories and accept another install only after verification.
+
+`--junitxml=results.xml` produces one merged report, including each test's JSON
+`esp32sim_link` property. Compare results by test name, not XML order. The default board
+wall-time timeout and explicit pytest-timeout settings apply in each worker; heavy host load
+can require a larger timeout without changing simulated time.
+
+The serial backend cannot use xdist workers, even with `-n 1`: one physical board must have one
+owner. Selecting `--esp32tl-backend serial` with distributed execution fails before opening or
+flashing a port, with `serial backend cannot run in pytest-xdist workers; use -n 0`.
+Run those tests separately with `-n 0`. Independent pytest invocations and external programs
+are not covered by this guard; do not point them at the same board concurrently.

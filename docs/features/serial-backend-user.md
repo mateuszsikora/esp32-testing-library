@@ -301,3 +301,10 @@ raises `BackendError`. Console taps record input at write time as well as receiv
 `wifi.station(...)`, like `wifi.access_point(...)`, asks for a model on the Wi-Fi interface.
 The serial backend has no virtual air and refuses that request through its existing capability
 check; it cannot join a real device's SoftAP through esp32sim's virtual station. Wi-Fi replay is not a supported source in the capability table. The new station API is for the esp32sim backend only.
+
+## pytest-xdist
+
+Run serial tests with `-n 0` (or without xdist). Selecting `--esp32tl-backend serial`
+with distributed execution, including one worker, fails during configuration with
+`serial backend cannot run in pytest-xdist workers; use -n 0`, before any port is opened.
+This does not lock hardware against other pytest invocations or external programs.

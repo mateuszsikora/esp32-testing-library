@@ -521,3 +521,17 @@ builds that wheel once from its sdist, then supplies it to both native smoke job
 The release tests also exercise `scripts/check-release.py --verify --tag`: published checksums
 are compared without modification, and changed distributions, missing or altered SHA256SUMS,
 and wrong tags are rejected. These tests do not contact PyPI or exercise its OIDC exchange.
+
+## pytest-xdist regression
+
+The development dependencies include `pytest-xdist>=3.6`. Run
+`.venv/bin/pytest tests/test_xdist.py` after building the runner, ROM and `nmea_reader`.
+The test runs real firmware alone, serially and in two workers, comparing console text and
+simulated timestamps by test name. It checks merged JUnit `esp32sim_link` properties and
+concurrent shared card-cache writes and clone isolation without mtools. It also verifies that
+serial selection fails before opening a port. The stalled-run test in `test_pytest_plugin.py`
+runs with zero and two workers to check pytest-timeout and runner teardown.
+
+These tests are included in the ordinary hash shards on both release platforms (Linux x86_64
+and macOS arm64), with no additional CI job. Running the entire repository suite under xdist
+is not a promise: some tests deliberately check wall-clock bounds or launch subprocess suites.

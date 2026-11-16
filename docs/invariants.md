@@ -1934,3 +1934,10 @@ traffic, refused openings, pairings and unknown commands. Named records retain t
 history and compares channel time directly with a GPIO `LineEvent.t`. The guest-controller
 session and unknown-command tests in `tests/test_bluetooth_guest.py` check board-clock times,
 unchanged report text and JSON integer `t_ns` fields.
+
+## Independent xdist board runs
+
+`tests/test_xdist.py` requires the same real-firmware console bytes and simulated timestamps
+alone, serially and under two workers, preserved per-test JUnit link properties, isolated card
+clones, and rejection of serial distributed execution before accessing hardware.
+`test_a_hung_run_is_ended_by_the_test_s_timeout` checks timeout teardown in workers too.

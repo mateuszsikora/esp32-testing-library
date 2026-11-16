@@ -3919,3 +3919,15 @@ formatting and JSON `t_ns` explicitly extract `.ns` and keep their existing form
 **Rejected:** keeping integer times and adding `*_at` accessors beside them would preserve two
 representations of the same instant and leave the unit-mixing hazard in the primary API.
 Plain tuples would preserve unpacking but lose discoverable field names unnecessarily.
+
+## Parallel simulation uses pytest-xdist installed separately
+
+Status: decided (#227)
+
+Support independent esp32sim board tests with pytest-xdist and cover them in the normal native
+CI shards. Keep xdist in development dependencies; consumers install it explicitly. An extra
+would only alias one optional test runner dependency, so it adds no useful configuration.
+Reject serial distributed execution during configuration rather than trying to serialize a
+physical board across workers. Cross-session hardware locking is outside this guard.
+Do not promise a fixed memory budget or linear speedup without workload measurements.
+Runtime preparation stays explicit: workers never perform automatic first-use downloads.

@@ -314,6 +314,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [DHCP starts at virtual station data-link readiness](harness.md#dhcp-starts-at-virtual-station-data-link-readiness) | `harness.md` | decided |
 | [Filter the XML attribute warning as an overridable default](harness.md#filter-the-xml-attribute-warning-as-an-overridable-default) | `harness.md` | decided (#226) |
 | [Bluetooth histories expose Duration timestamps](harness.md#bluetooth-histories-expose-duration-timestamps) | `harness.md` | decided (#224) |
+| [Parallel simulation uses pytest-xdist installed separately](harness.md#parallel-simulation-uses-pytest-xdist-installed-separately) | `harness.md` | decided (#227) |
 
 ## The runner crate and esp32sim
 

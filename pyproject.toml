@@ -57,6 +57,7 @@ dev = [
     "esptool",
     "mypy==2.4.1",
     "pre-commit>=4",
+    "pytest-xdist>=3.6",
     "ruff==0.17.3",
     "types-pexpect==4.9.0.20260518",
     "types-pyserial==3.5.0.20261030",

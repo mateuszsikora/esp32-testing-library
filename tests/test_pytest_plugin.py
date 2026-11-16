@@ -2103,8 +2103,9 @@ def test_a_runner_that_ignores_stop_and_sigterm_is_killed_and_fails_the_test(
     )
 
 
+@pytest.mark.parametrize("workers", [0, 2])
 def test_a_hung_run_is_ended_by_the_test_s_timeout(
-    link_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+    link_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch, workers: int
 ) -> None:
     monkeypatch.setenv("FAKE_LINK", "stall")
     link_runner.makepyfile(
@@ -2132,6 +2133,8 @@ def test_a_hung_run_is_ended_by_the_test_s_timeout(
         "-p",
         "no:cacheprovider",
         "-rA",
+        "-n",
+        str(workers),
         "--timeout",
         "2",
         "-o",
