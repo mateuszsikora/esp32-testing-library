@@ -24,7 +24,7 @@ import threading
 from collections.abc import Sequence
 from pathlib import Path
 
-from esp32tl import __version__, boards
+from esp32tl import __version__, boards, runtime
 from esp32tl.backends import esp32sim
 from esp32tl.backends.esp32sim import BackendError
 from esp32tl.boards import DEFAULT_PROFILE, ProfileError
@@ -46,6 +46,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     commands = parser.add_subparsers(dest="command", metavar="COMMAND")
+    runtime_parser = commands.add_parser("runtime", help="prepare the downloaded runtime")
+    runtime_parser.add_subparsers(dest="runtime_command", required=True).add_parser("prepare")
     run_parser = commands.add_parser(
         "run",
         help="run an app on the emulator, its console on stdout",
@@ -72,6 +74,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command is None:
         parser.print_help()
         return 0
+    if args.command == "runtime":
+        try:
+            print(runtime.prepare())
+            return 0
+        except (runtime.RuntimeError, OSError) as error:
+            print(f"esp32tl: {error}", file=sys.stderr)
+            return CANNOT_START
     replays: dict[str, Path] = {}
     if args.command == "replay":
         interface = args.interface if "." in args.interface else f"uart.{args.interface}"

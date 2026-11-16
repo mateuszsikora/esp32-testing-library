@@ -62,6 +62,10 @@ const MAC: [u8; 6] = [0x24, 0x6f, 0x28, 0x00, 0x11, 0x22];
 const CONSOLE_UART0: u32 = 2;
 
 fn main() -> ExitCode {
+    if std::env::args().nth(1).as_deref() == Some("--runtime-version") {
+        println!("{} {}", env!("CARGO_PKG_VERSION"), env!("ESP32SIM_REV"));
+        return ExitCode::SUCCESS;
+    }
     let opts = match cli::parse(std::env::args().skip(1)) {
         Ok(opts) => opts,
         Err(cli::Error::Help) => {

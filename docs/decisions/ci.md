@@ -532,7 +532,6 @@ race. A platform matrix on the reusable build call still gates dependants on the
 separate calls give each consumer the dependency it actually needs. No new cache transport,
 compiler cache, or main-branch cancellation policy is introduced in this change.
 
-
 ## Retain six macOS test jobs after measuring five
 
 Status: decided (16 November 2026)
@@ -559,7 +558,6 @@ performance claim; retain the simpler existing layout unless new measurements ju
 Branch protection keeps all 25 checks. No test timeout, assertion, skip policy, cache transport
 or main-branch cancellation policy changes as a result of this experiment.
 
-
 ## Balance the existing pair with one measured assignment
 
 Status: decided (16 November 2026)
@@ -584,3 +582,45 @@ Those add maintenance and risk different assignments for partial collections or 
 collection. Renaming a test to manipulate its hash obscures the scheduling decision. Moving more
 tests before measuring this one risks reversing the imbalance. Shortening the bridge test or
 changing its wall-clock behavior would alter what is tested and is outside this change.
+
+## Release runtime builds use GitHub-hosted runners
+
+Status: decided
+
+The separate runtime release workflow builds firmware on Ubuntu and executes native wheel
+acceptance tests on Ubuntu 22.04 x86_64 and macOS 15 arm64, including for private repositories.
+It uses artifacts and creates only draft releases on version tags. The main CI uses its own hosted
+build matrix and is unchanged by the release workflow. Manual dispatch is the unpublished
+verification path; real release URL access remains a first-publication check.
+
+The matrix uses macOS 15 because [GitHub retired macOS 14 images on November 2, 2026](https://github.com/actions/runner-images/blob/main/README.md).
+
+## One Python distribution is tested with both release runners
+
+Status: decided
+
+Build the sdist and its wheel once, then install that exact wheel in both native smoke tests.
+Per-platform wheel builds were rejected because they can produce two different files with the
+same filename and make artifact merging select one arbitrarily. Verify the exact asset set and
+runner manifest checksums before creating a tag-triggered draft. PRs and manual dispatch validate
+without creating releases; automatic GitHub release publication remains out of scope. A draft
+lets the maintainer review the release before its URLs become available to runtime preparation.
+
+Use Ubuntu 22.04 for the release executable to preserve glibc 2.35 compatibility, even though
+main CI runs on Ubuntu 24.04. Both release targets must pass native firmware smoke tests.
+
+## PyPI publishes the distributions of the published GitHub release
+
+Status: decided
+
+A separate `publish-pypi.yml` runs on `release: published`. Publishing the reviewed draft is the
+maintainer's release action: runtime downloads become available before the package reaches PyPI.
+Download and verify the full release asset set, tag and existing SHA256SUMS in a read-only job;
+pass only wheel and sdist to a separate job with OIDC permission and environment `pypi`.
+Use PyPI Trusted Publishing instead of a stored API token. Do not rebuild distributions at this
+stage: the exact wheel tested on both native targets must be the one users install from PyPI.
+
+Rejected: publishing to PyPI on tag push (the runtime release would still be a draft), rebuilding
+the wheel at upload time (different bytes from the tested artifact), and skipping existing PyPI
+files on retries (can conceal an incomplete or conflicting publication). No actual publication
+is needed to test the checksum/tag rejection logic locally; OIDC is checked on the first upload.

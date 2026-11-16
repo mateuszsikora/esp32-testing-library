@@ -1125,3 +1125,10 @@ It is a scoped workaround for the pinned emulator, not an unconditional UART0 ro
 firmware can still disable input or change its native/matrix route. No wire message changes.
 `runner/src/session/tests.rs` checks native routing, input disable, reset and matrix rerouting;
 `tests/test_console_input.py` exercises post-boot FIFO overflow and the ESP-IDF UART driver.
+
+## Distribution identity
+
+`--runtime-version` prints the Cargo package version and full esp32sim revision separated by a
+space, then exits successfully without loading firmware. `runner/build.rs` derives the revision
+from Cargo.lock. The Python runtime installer checks this before executing firmware. Release
+packaging also checks Cargo.toml against the Python package version and pinned revision.

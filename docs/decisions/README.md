@@ -37,6 +37,9 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Each platform waits only for its own native runner](ci.md#each-platform-waits-only-for-its-own-native-runner) | `ci.md` | decided (15 November 2026) |
 | [Retain six macOS test jobs after measuring five](ci.md#retain-six-macos-test-jobs-after-measuring-five) | `ci.md` | decided (16 November 2026) |
 | [Balance the existing pair with one measured assignment](ci.md#balance-the-existing-pair-with-one-measured-assignment) | `ci.md` | decided (16 November 2026) |
+| [Release runtime builds use GitHub-hosted runners](ci.md#release-runtime-builds-use-github-hosted-runners) | `ci.md` | decided |
+| [One Python distribution is tested with both release runners](ci.md#one-python-distribution-is-tested-with-both-release-runners) | `ci.md` | decided |
+| [PyPI publishes the distributions of the published GitHub release](ci.md#pypi-publishes-the-distributions-of-the-published-github-release) | `ci.md` | decided |
 
 ## Documentation and the documentation check
 
@@ -142,7 +145,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The esp32sim backend does not compare a recording's app_sha256 with its app](harness.md#the-esp32sim-backend-does-not-compare-a-recordings-app_sha256-with-its-app) | `harness.md` | decided (#14) |
 | [Console.write is postponed until the runner reads input](harness.md#consolewrite-is-postponed-until-the-runner-reads-input) | `harness.md` | superseded (#195) |
 | [The serial backend is postponed to M4](harness.md#the-serial-backend-is-postponed-to-m4) | `harness.md` | superseded (#25) |
-| [Prebuilt runner binaries are postponed to M10](harness.md#prebuilt-runner-binaries-are-postponed-to-m10) | `harness.md` | postponed (#40) |
+| [Prebuilt runner binaries are postponed to M10](harness.md#prebuilt-runner-binaries-are-postponed-to-m10) | `harness.md` | superseded (explicit runtime distribution) |
 | [Replaying requests, looping and wall-clock recordings is postponed](harness.md#replaying-requests-looping-and-wall-clock-recordings-is-postponed) | `harness.md` | superseded (#20) |
 | [A frame error fails the run at once](harness.md#a-frame-error-fails-the-run-at-once) | `harness.md` | decided (#16) |
 | [The esp32tl command serves the link itself, without pytest-embedded](harness.md#the-esp32tl-command-serves-the-link-itself-without-pytest-embedded) | `harness.md` | decided (#16) |
@@ -301,6 +304,8 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [A PlatformIO build is read by its file names and image headers](harness.md#a-platformio-build-is-read-by-its-file-names-and-image-headers) | `harness.md` | decided (#192) |
 | [The serial backend flashes a PlatformIO build through an IdfApp of esp32tl's](harness.md#the-serial-backend-flashes-a-platformio-build-through-an-idfapp-of-esp32tls) | `harness.md` | decided (#194) |
 | [Console input uses GPIO 3 at a fixed 115200 baud](harness.md#console-input-uses-gpio-3-at-a-fixed-115200-baud) | `harness.md` | decided (#195) |
+| [Runtime preparation is explicit and version-matched](harness.md#runtime-preparation-is-explicit-and-version-matched) | `harness.md` | decided |
+| [Backend runtime validation follows selection per file](harness.md#backend-runtime-validation-follows-selection-per-file) | `harness.md` | decided |
 
 ## The runner crate and esp32sim
 
