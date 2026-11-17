@@ -22,6 +22,13 @@ SUBSCRIBE, SUBACK, UNSUBSCRIBE, UNSUBACK, PINGREQ, PINGRESP, DISCONNECT = 8, 9, 
 
 @dataclass(frozen=True)
 class Message:
+    """One publication in the broker's history.
+
+    `client` is the client ID it came from, `TEST_CLIENT` for the test's own. `will` is `True` for
+    a Will the broker published when that client's connection was lost, `False` for a PUBLISH the
+    client sent and for the test's publications.
+    """
+
     at: Duration
     client: str
     topic: str
@@ -32,6 +39,7 @@ class Message:
     packet_id: int | None = None
     dup: bool = False
     publication: "Publication | None" = field(default=None, compare=False, repr=False)
+    will: bool = False
 
     @property
     def text(self) -> str:
@@ -236,6 +244,18 @@ def _first(history: list[Record], topic: str, wanted: bytes | None, start: int) 
     return next(_matching(history, topic, wanted, start), None)
 
 
+def _messages(
+    history: list[Message], topic: str, wanted: bytes | None, start: int, will: bool | None
+) -> Iterator[Message]:
+    """`_matching` over the messages: only Wills when `will` is True, only the rest when False."""
+    return (m for m in _matching(history, topic, wanted, start) if will is None or m.will is will)
+
+
+def _will_check(will: bool | None) -> None:
+    if will is not None and not isinstance(will, bool):
+        raise TypeError("mqtt: will takes True, False or None")
+
+
 class Mark:
     """A position in one broker's message history, at its end when `Broker.mark` was called.
 
@@ -373,24 +393,39 @@ class Broker:
         return True
 
     def next_message(
-        self, topic: str = "#", payload: bytes | str | None = None
+        self, topic: str = "#", payload: bytes | str | None = None, *, will: bool | None = None
     ) -> Callable[[], Message | None]:
         """A non-consuming condition for the first match appended after this call.
 
-        `topic` accepts MQTT wildcards; `payload` is bytes or UTF-8 text. The boundary is
-        append order, even at equal timestamps. Polling never advances that boundary.
+        `topic` accepts MQTT wildcards; `payload` is bytes or UTF-8 text. `will=True` keeps only
+        the Wills the broker published, `will=False` only the rest; `None` keeps both. The
+        boundary is append order, even at equal timestamps. Polling never advances that boundary.
         """
+        _will_check(will)
         start = len(self.messages)
         wanted = payload.encode() if isinstance(payload, str) else payload
-        description = f"the next MQTT message on {topic!r}" + (
-            f" saying {wanted!r}" if wanted is not None else ""
+        description = (
+            "the next MQTT "
+            + {None: "message", True: "Will", False: "message other than a Will"}[will]
+            + f" on {topic!r}"
+            + (f" saying {wanted!r}" if wanted is not None else "")
         )
-        return Condition(lambda: _first(self.messages, topic, wanted, start), description, "MQTT")
+        return Condition(
+            lambda: next(_messages(self.messages, topic, wanted, start, will), None),
+            description,
+            "MQTT",
+        )
 
-    def find_message(self, topic: str = "#", payload: bytes | str | None = None) -> Message | None:
-        """Return the first match in recorded history now, or None; consume nothing."""
+    def find_message(
+        self, topic: str = "#", payload: bytes | str | None = None, *, will: bool | None = None
+    ) -> Message | None:
+        """Return the first match in recorded history now, or None; consume nothing.
+
+        `topic`, `payload` and `will` filter as in `next_message`.
+        """
+        _will_check(will)
         wanted = payload.encode() if isinstance(payload, str) else payload
-        return _first(self.messages, topic, wanted, 0)
+        return next(_messages(self.messages, topic, wanted, 0, will), None)
 
     def mark(self) -> Mark:
         """A position at the end of `messages` now, for `find_messages(since=...)`."""
@@ -403,20 +438,22 @@ class Broker:
         *,
         since: Mark | None = None,
         client: str | None = None,
+        will: bool | None = None,
     ) -> list[Message]:
         """Every match in recorded history now, in append order; consume nothing.
 
         `since` keeps the messages appended after that mark was made, even at its board time;
         `None` reads from the start. `client` keeps one client ID's messages: `TEST_CLIENT` for
-        the test's own publications.
+        the test's own publications. `will` filters as in `next_message`.
         """
+        _will_check(will)
         if since is not None and not isinstance(since, Mark):
             raise TypeError("mqtt: since takes a mark from broker.mark()")
         if since is not None and since._broker is not self:
             raise ValueError("mqtt: this mark belongs to another broker")
         wanted = payload.encode() if isinstance(payload, str) else payload
         start = 0 if since is None else since._index
-        found = _matching(self.messages, topic, wanted, start)
+        found = _messages(self.messages, topic, wanted, start, will)
         return [m for m in found if client is None or m.client == client]
 
     def next_delivery(
@@ -826,6 +863,7 @@ class _Session:
                 connect.will_qos,
                 connect.will_retain,
                 connection_id=self.connection_id,
+                will=True,
             )
         for session in list(broker._sessions):
             if session is not self and session.connected and session.client_id == self.client_id:

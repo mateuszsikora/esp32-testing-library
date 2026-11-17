@@ -368,6 +368,50 @@ def test_rejected_connect_uses_a_connection_id_and_accepted_records_carry_theirs
     assert broker.messages[-1].connection_id == session.connection_id
 
 
+def test_a_will_is_told_apart_from_the_same_bytes_the_client_published_itself() -> None:
+    now = [5]
+    broker = Broker(lambda: now[0])
+    session = broker.accept(("10.0.0.2", 100), lambda b: None, lambda: None)
+    # A retained Will on a/w saying "by", then the same message as the client's own PUBLISH.
+    session.on_data(b"\x10\x16\0\x04MQTT\x04\x26\0\x0a\0\x01c\0\x03a/w\0\x02by")
+    any_will = broker.next_message("a/w", "by", will=True)
+    not_will = broker.next_message("a/w", will=False)
+    session.on_data(b"\x31\x07\0\x03a/wby")
+    broker.publish("a/w", "by")
+    assert any_will() is None
+    now[0] = 9
+    broker.disconnect("c")
+    own, test, will = broker.messages
+    # Same client, topic, payload, QoS and retain: only `will` and the time tell them apart.
+    assert (own.client, own.topic, own.payload, own.qos, own.retain) == (
+        will.client,
+        will.topic,
+        will.payload,
+        will.qos,
+        will.retain,
+    )
+    assert own.client == will.client == "c" and test.client == TEST_CLIENT
+    assert will.will and not own.will and not test.will and will.at.ns == 9
+    assert own != will and broker.retained["a/w"] is will
+    assert any_will() is will and not_will() is own
+    assert broker.find_message(will=True) is will and broker.find_message("a/w", will=False) is own
+    assert broker.find_messages(will=True) == [will]
+    assert broker.find_messages(will=False) == [own, test]
+    assert broker.find_messages(client="c", will=False) == [own]
+    assert broker.find_messages(client="c") == [own, will]
+    assert broker.find_messages(client=TEST_CLIENT, will=True) == []
+    assert repr(any_will) == "the next MQTT Will on 'a/w' saying b'by'"
+    assert repr(not_will) == "the next MQTT message other than a Will on 'a/w'"
+    assert repr(broker.next_message("a/w")) == "the next MQTT message on 'a/w'"
+    for refused in (
+        lambda: broker.find_messages(will=1),  # type: ignore[arg-type]
+        lambda: broker.find_message(will="yes"),  # type: ignore[arg-type]
+        lambda: broker.next_message(will=0),  # type: ignore[arg-type]
+    ):
+        with pytest.raises(TypeError, match="mqtt: will takes True, False or None"):
+            refused()
+
+
 def test_qos_zero_publish_with_dup_closes_as_malformed() -> None:
     log: list[str] = []
     broker = Broker(lambda: 0, log.append)

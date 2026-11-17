@@ -4433,3 +4433,30 @@ console stream of `console_take`, and the runner has no way to read or write it.
 
 **Not yet:** until esp32tl needs such a firmware, and esp32sim gives a host's end of its USB OTG
 device; then the profile's `console` would take a third value.
+
+## A message the broker published as a Will says so in Message.will
+
+Status: decided (#243)
+
+A Will the broker publishes on a connection loss is recorded in `messages` with `client` set to
+the client that set it, as that client's own publications are, so a test that checks everything a
+device published found the Will among them, and one asking whether the device sent its offline
+message itself or the broker sent its Will had to compare bytes with `connection_attempts`.
+`Message.will` is `True` for that Will and `False` for every other message; `client` keeps its
+meaning. `next_message`, `find_message` and `find_messages` take a keyword `will=None`: `True`
+keeps only Wills, `False` only the rest, `None` both. `find_message` takes it too, though the
+issue named only the other two, because the docs say it filters as `next_message` does; only
+`find_messages` also takes `since` and `client`, as before. A `will`
+that is not a bool or `None` raises `TypeError`, because an `int` or a string compared by identity
+would match nothing without saying so.
+
+**Rejected:** `origin: Literal["client", "will", "test"]`. The test's publications are already
+told apart by `client == TEST_CLIENT`, so `origin` would say that twice, and a client that
+connects with client ID `(test)` would then be told apart by `origin` but not by `client`, two
+fields that could disagree about the same message; a bool says the one thing `client` cannot.
+
+**Postponed:** the flag on `Delivery`. A delivery is a PUBLISH the broker wrote, of a Will or
+not, and a subscriber cannot tell one from the other on the wire. A test that needs it matches
+the delivery to `messages` by topic, payload and time, which cannot tell a Will from a PUBLISH of
+the same topic and payload the client sent at the same board time; the flag waits for a test that
+needs that case.

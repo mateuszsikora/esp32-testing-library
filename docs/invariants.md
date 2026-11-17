@@ -1450,6 +1450,13 @@ that references to its number keep their meaning.
     `tests/test_net_mqtt.py::test_find_messages_reads_every_match_after_a_mark_by_topic_payload_and_client`,
     `tests/test_net_mqtt.py::test_find_messages_refuses_a_mark_from_another_broker_and_an_index`,
     `examples/position_tracker/tests/test_tracker_support.py::test_waits_start_now_filter_the_topic_and_preserve_the_first_match`
+- **256.** A Will the broker publishes on a connection loss is in `messages` with `will` set and
+    `client` the ID of the client that set it; the client's own publications, the same topic and
+    payload included, and the test's have `will` unset. `will=True` and `will=False` on
+    `next_message`, `find_message` and `find_messages` keep only Wills or only the rest, and
+    `next_message` names its condition by them; `find_messages` combines `will` with `client=`,
+    which the other two do not take. Any other `will` than `True`, `False` or `None` is refused.
+    `tests/test_net_mqtt.py::test_a_will_is_told_apart_from_the_same_bytes_the_client_published_itself`
 
 - **126.** TLS next-event conditions require a started/completed counter increment after construction.
     Prior successes cannot satisfy them after closure or reset, and a failed new attempt does
