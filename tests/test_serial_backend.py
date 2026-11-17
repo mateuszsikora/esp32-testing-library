@@ -267,6 +267,9 @@ def test_serial_capabilities_skip_at_the_call(pytester: pytest.Pytester, local: 
         def test_wait_for_wake(board):
             board.power_on()
             board.wait_for_wake(within=seconds(1))
+        def test_next_boot(board):
+            board.power_on()
+            board.next_boot()
         class Silent:
             def receive(self, t, data):
                 return ()
@@ -281,7 +284,7 @@ def test_serial_capabilities_skip_at_the_call(pytester: pytest.Pytester, local: 
     """)
     )
     result = run_serial(pytester, "-rs")
-    result.assert_outcomes(skipped=29)
+    result.assert_outcomes(skipped=30)
     result.stdout.fnmatch_lines(
         [
             "*serial: uart.gnss takes no model source on this backend, only real*",
@@ -308,6 +311,7 @@ def test_serial_capabilities_skip_at_the_call(pytester: pytest.Pytester, local: 
             "*serial: wifi takes no model source on this backend, only real*",
             "*serial: bluetooth takes no model source on this backend*",
             "*serial: the backend cannot switch the board's power*",
+            "*serial: the backend does not see the chip's resets*",
             "*serial: the backend does not see the chip's resets*",
             "*serial: the backend does not see the chip's resets*",
             "*serial: uart.gnss takes no model source on this backend, only real*",

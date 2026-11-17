@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from esp32tl.backends.esp32sim import Esp32Sim
-from esp32tl.interfaces import BoardOff, SourceError
+from esp32tl.interfaces import BoardOff, NeverHappened, SourceError
 from esp32tl.interfaces.board import Boot
 from esp32tl.interfaces.console import Console
 from esp32tl.interfaces.sd_card import SdCard
@@ -159,6 +159,58 @@ def test_the_board_cannot_be_reset_or_read_for_boots_before_power_on(board: Esp3
         board.reset()
     with pytest.raises(BoardOff, match=r"call board.power_on\(\) first"):
         assert board.boots
+    with pytest.raises(BoardOff, match=r"call board.power_on\(\) first"):
+        board.next_boot()
+
+
+def test_next_boot_is_the_boot_after_it_of_its_cause_through_a_reset_and_a_power_cycle(
+    board: Esp32Sim, console: Console
+) -> None:
+    board.power_on()
+    any_boot, power_on_reset = board.next_boot(), board.next_boot(POWERON_RESET)
+    assert (repr(any_boot), repr(power_on_reset)) == (
+        "the next boot",
+        "the next boot (POWERON_RESET)",
+    )
+    # the first boot was there before the condition: it satisfies neither
+    assert any_boot() is None and power_on_reset() is None
+    restarted = board.wait_until(any_boot, within=seconds(10))
+    assert (restarted.number, restarted.reason) == (2, "SW_CPU_RESET")
+    console.expect_exact("persistence: done")
+    # esp_restart's boot is not a power-on reset
+    assert power_on_reset() is None
+    with pytest.raises(NeverHappened) as raised:
+        board.wait_until(power_on_reset, within=seconds(1))
+    assert str(raised.value).startswith("the next boot (POWERON_RESET) did not happen within 1 s:")
+
+    pressed = board.now
+    board.reset()
+    assert board.wait_until(power_on_reset, within=seconds(1)) == Boot(3, pressed, POWERON_RESET)
+    # it consumes nothing: each condition keeps the first boot it found
+    assert any_boot() == restarted and power_on_reset() == Boot(3, pressed, POWERON_RESET)
+    console.expect_exact("persistence: done")
+
+    board.power_off()
+    # armed while the board is off, before power_on
+    back = board.next_boot(POWERON_RESET)
+    board.wait(seconds(1))
+    on = board.now
+    board.power_on()
+    assert board.wait_until(back, within=seconds(1)) == Boot(4, on, POWERON_RESET)
+    run = board.report(run=True)
+    assert "waits up to 1 s for the next boot (POWERON_RESET)" in run
+    assert "the next boot (POWERON_RESET): happened" in run
+
+
+def test_next_boot_names_an_unnamed_cause_and_refuses_one_that_is_not_a_number(
+    board: Esp32Sim,
+) -> None:
+    with pytest.raises(TypeError, match="cause is 'POWERON_RESET', not a reset cause as a number"):
+        board.next_boot("POWERON_RESET")  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="cause is True, not a reset cause"):
+        board.next_boot(True)
+    board.power_on()
+    assert repr(board.next_boot(42)) == "the next boot (reset cause 42)"
 
 
 @pytest.mark.requires_mtools

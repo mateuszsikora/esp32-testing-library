@@ -278,6 +278,9 @@ For esp32sim:
 - `board.wait_for_wake(within=duration)` lets the board run to the chip's next boot, which must be
   a wake from deep sleep, and returns its `Boot`
   ([waking from deep sleep](#waking-from-deep-sleep)).
+- `board.next_boot(cause=None)` is a [described condition](#described-conditions) for the chip's
+  next boot, of any cause or of `cause` only, for `board.wait_until`
+  ([resets and power cycles](#resets-and-power-cycles)).
 - `board.now` is the board's time since the first power-on, a `Duration`; `board.utc` the
   world's time, the UTC instant at the first power-on plus `board.now`. Neither restarts at a
   reset or a power cycle.
@@ -343,8 +346,8 @@ end = board.wait_until(trip_end(broker, "car-1"), within=minutes(3))
   of the description: `condition(find, "the next MQTT message", service="MQTT")` raises
   `TypeError: call the MQTT condition with (), or pass it to board.wait_until`.
 - It is a frozen `esp32tl.Condition`, generic in what `find` returns, for annotating helpers.
-  The conditions of the network's services, of TLS and of `lines.output(...).is_on` and
-  `.is_off` are the same type.
+  The conditions of the network's services, of TLS, of `lines.output(...).is_on` and
+  `.is_off`, and `board.next_boot()` are the same type.
 - What it checks is up to `find`: it consumes nothing, and remembers nothing between calls.
   Capture a boundary, as `start` above, when the condition makes it, so that a message already
   received does not satisfy it.
@@ -397,6 +400,36 @@ def test_the_count_survives_a_power_cut(board: Board):
   A boot is there once the board has run into it: right after `board.reset()`, or the
   `power_on()` that follows a `power_off()`, `board.boot` is still the one before, until the test
   lets the board run, for as little as `board.wait(ms(1))`.
+- `board.next_boot(cause=None)` is a [described condition](#described-conditions), a
+  `Condition[Boot | None]`, for the first boot after the call: of any cause, or of `cause` only,
+  a reset cause as a number such as `POWERON_RESET` (`esp32tl.interfaces.board`). A boot of
+  another cause does not satisfy it, and a later one of `cause` still can; to check that the very
+  next boot had a cause, wait on `board.next_boot()` and assert on its `reason`. It consumes
+  nothing, and returns the same `Boot` each time it is asked. Make it before the call that causes
+  the boot, as any `next_*` condition: before `board.reset()`, before `board.power_on()` (while the
+  board is off is fine), or before what makes the firmware restart.
+
+  ```python
+  from esp32tl.interfaces.board import POWERON_RESET
+
+  booted = board.next_boot(POWERON_RESET)
+  pressed = board.now
+  board.reset()
+  boot = board.wait_until(booted, within=seconds(1))
+  assert boot.at == pressed
+  ```
+
+  A timeout names it, `NeverHappened: the next boot (POWERON_RESET) did not happen within 1 s:
+  waited from …`, and so does the run report: `waits up to 1 s for the next boot (POWERON_RESET)`.
+  Without `cause` it is `the next boot`; a cause `RESET_REASONS` does not name reads
+  `the next boot (reset cause 42)`. A `cause` that is not a number raises `TypeError:
+  board.next_boot: cause is 'POWERON_RESET', not a reset cause as a number, such as
+  POWERON_RESET`, and before the first `power_on()` it raises `BoardOff` as `board.boots` does.
+  `board.reset()` and `board.power_on()` return `None`, not this condition
+  ([the decision](../decisions/harness.md#the-next-boot-is-a-condition-the-test-makes-reset-and-power_on-return-nothing)).
+  For a wake from deep sleep use `board.wait_for_wake`, which takes no turn of the link through
+  the sleep and fails on a boot that is no wake; `board.next_boot(DEEPSLEEP_RESET)` would be asked
+  every 100 ms of the sleep and pass over other boots.
 - Once the backend has the run's end, `board.reset()`, `board.power_off()` and
   `board.power_on()` raise `RunEnded` without waiting, as a wait does, and change nothing. In the
   moment between the runner's exit and the backend learning of it, a call still goes into the
@@ -439,7 +472,8 @@ a sentence that was on the line when the chip reset or the power went. Every int
 profile is on the board's supply ([board profiles](board-profiles-user.md#the-profiles-esp32tl-ships)).
 
 On [serial](serial-backend-user.md#power-on-time-and-console), `board.reset()` pulses EN through
-the adapter, and `board.power_off()`, `board.boots` and `board.wait_for_wake()` skip the test.
+the adapter, and `board.power_off()`, `board.boots`, `board.next_boot()` and
+`board.wait_for_wake()` skip the test.
 
 `console` is the firmware's console, its UART0, read and written on the board's clock:
 

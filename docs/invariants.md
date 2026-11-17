@@ -1655,8 +1655,8 @@ that references to its number keep their meaning.
      `tests/test_boardlink.py::test_the_board_s_power_and_en_go_out_first_in_the_answer_to_a_turn`,
      `tests/test_boardlink.py::test_a_board_input_stamped_before_its_turn_fails_the_link`,
      `tests/test_boardlink.py::test_an_interface_cannot_switch_the_board_s_power`
-- **135.** On serial, `board.reset()` pulses EN again, and `board.power_off()`, `board.boot` and
-     `board.wait_for_wake()` skip the test with their reasons.
+- **135.** On serial, `board.reset()` pulses EN again, and `board.power_off()`, `board.boot`,
+     `board.next_boot()` and `board.wait_for_wake()` skip the test with their reasons.
      `tests/test_serial_backend.py::test_console_reset_clock_tap_and_autoflash`,
      `tests/test_serial_backend.py::test_serial_capabilities_skip_at_the_call`
 - **136.** Once the backend has ended the test's clock, `board.reset()`, `board.power_off()` and
@@ -1680,6 +1680,12 @@ that references to its number keep their meaning.
      `tests/test_timer_wake.py::test_wait_for_wake_raises_never_happened_for_a_board_that_does_not_sleep`,
      `tests/test_timer_wake.py::test_wait_for_wake_fails_on_a_boot_that_is_no_wake`,
      `tests/test_deep_sleep.py::test_the_deep_sleep_example_wakes_on_its_timer_and_says_how_long_it_slept`
+- **250.** `board.next_boot()` is satisfied by the first boot after the call, through any reset, and
+     `board.next_boot(cause)` by the first one of that cause only, so an `esp_restart()` does not
+     satisfy `POWERON_RESET`; it consumes nothing, and a timeout names it as
+     `the next boot (POWERON_RESET)`.
+     `tests/test_power.py::test_next_boot_is_the_boot_after_it_of_its_cause_through_a_reset_and_a_power_cycle`,
+     `tests/test_power.py::test_next_boot_names_an_unnamed_cause_and_refuses_one_that_is_not_a_number`
 
 ## Reading the flash
 

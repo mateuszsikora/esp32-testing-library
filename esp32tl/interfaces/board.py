@@ -11,6 +11,7 @@ from typing import TypeVar, cast
 from esp32tl.boards import BoardProfile
 from esp32tl.flash import FlashSnapshot, Namespaces
 from esp32tl.interfaces.bluetooth import Bluetooth
+from esp32tl.interfaces.condition import Condition
 from esp32tl.interfaces.console import Clocked, Console
 from esp32tl.interfaces.gnss import Gnss
 from esp32tl.interfaces.lines import Lines
@@ -60,7 +61,13 @@ class Boot:
 
     @property
     def reason(self) -> str:
-        return RESET_REASONS.get(self.cause, f"reset cause {self.cause}")
+        return reset_reason(self.cause)
+
+
+def reset_reason(cause: int) -> str:
+    """The ROM's name for reset `cause`, as `POWERON_RESET`; `reset cause {cause}` for one
+    `RESET_REASONS` does not name."""
+    return RESET_REASONS.get(cause, f"reset cause {cause}")
 
 
 class Board(ABC):
@@ -155,6 +162,28 @@ class Board(ABC):
     def boot(self) -> Boot:
         """The chip's current boot: the last of `boots`."""
         return self.boots[-1]
+
+    def next_boot(self, cause: int | None = None) -> Condition[Boot | None]:
+        """A described condition for the first boot after this call, through any reset, or
+        through a reset of `cause` only, as `POWERON_RESET`: a boot of another cause does not
+        satisfy it, and a later one of `cause` still can. The boundary is the boots there are now,
+        `boots` at this call; the condition consumes nothing, and returns the same boot each time
+        it is asked. Arm it before `reset()`, `power_on()` or what makes the firmware restart."""
+        if cause is not None and (isinstance(cause, bool) or not isinstance(cause, int)):
+            raise TypeError(
+                f"board.next_boot: cause is {cause!r}, not a reset cause as a number, such as"
+                " POWERON_RESET"
+            )
+        start = len(self.boots)
+
+        def find() -> Boot | None:
+            return next(
+                (boot for boot in self.boots[start:] if cause is None or boot.cause == cause),
+                None,
+            )
+
+        description = "the next boot" if cause is None else f"the next boot ({reset_reason(cause)})"
+        return Condition(find, description)
 
     @property
     @abstractmethod

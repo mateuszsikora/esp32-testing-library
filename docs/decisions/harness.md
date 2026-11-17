@@ -4248,3 +4248,28 @@ only mixed files of two builds make, is then refused although it would boot.
 `rst:0xc (RTC_SW_CPU_RST)` before the application starts, instead of waiting for the test's
 timeout. The refusal at setup catches the cause known today, and a console pattern would have to
 tell a loop from firmware that restarts on purpose, as ESP-IDF's `hello_world` does.
+
+## The next boot is a condition the test makes; reset and power_on return nothing
+
+Status: decided (#241)
+
+`Board.next_boot(cause=None)` returns a `Condition[Boot | None]` for the first boot after the
+call, of any cause or of `cause` only, with the boundary and non-consumption of the other
+`next_*` conditions: the boots there are at the call. It is defined once on `Board`, over
+`boots`, so the serial backend skips it as it skips `boots`. A boot of another cause is passed
+over rather than failing the condition, as `next_message(topic)` passes over other topics; a test
+that must know the very next boot's cause waits on `next_boot()` and asserts on its `reason`.
+`wait_for_wake` stays as it is: it runs to the next boot without polling and fails on any boot
+but `DEEPSLEEP_RESET`.
+
+`board.reset()` and `board.power_on()` keep returning `None`. The test arms `next_boot` before the
+call, as it arms `next_handshake_completed()` before a reconnect.
+
+**Rejected:** `reset()` and `power_on()` returning the condition, made before they act. It would
+give two ways to wait for the same boot, of which only one covers a restart the firmware or a
+watchdog makes; the first `power_on()` has no boot after it to return, the first boot being there
+already; and on serial `reset()` works while the boots cannot be seen, so its condition would
+have to skip the test only when asked, unlike every other result of a call that succeeded.
+
+**Rejected:** leaving tests to compose `condition()` over `boots`, because that is the boundary
+bookkeeping the issue's tests repeated, and got wrong when they took the boundary after the call.
