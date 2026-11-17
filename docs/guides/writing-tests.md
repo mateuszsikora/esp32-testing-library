@@ -403,8 +403,8 @@ your backend's API does; one that speaks only a protocol or a part's datasheet b
 
 ## In CI
 
-After the first PyPI publication, a job that runs tests needs Python 3.11 or newer, esp32tl,
-and your already built firmware. Neither Rust nor a checkout is required:
+A job that runs tests needs Python 3.11 or newer, esp32tl, and your already built firmware.
+Neither Rust nor a checkout is required:
 
 ```sh
 python3 -m venv .venv
@@ -415,7 +415,7 @@ python3 -m venv .venv
 
 For reproducible CI, pin `esp32tl` to your chosen published version. A wheel downloaded from
 GitHub Releases is an alternative to PyPI; the matching runtime release must be published. See [runtime installation](../features/runtime-user.md)
-for supported systems, offline reuse and the first-release prerequisites. Developers can still
+for supported systems, version matching and offline reuse. Developers can still
 use `make setup` in an editable checkout.
 
 - The SD card's image builder needs mtools: `sudo apt-get install mtools`.

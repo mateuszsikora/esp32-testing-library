@@ -27,10 +27,7 @@ def test_moving_into_the_radius_turns_it_on(board, buzzer):
 
 ## Use in your own project
 
-Independent simulator tests also support [parallel runs with pytest-xdist](https://github.com/mateuszsikora/esp32-testing-library/blob/main/docs/guides/writing-tests.md#running-tests-in-parallel).
-
-esp32tl is preparing its first PyPI release; the PyPI commands below are for use **after
-publication**, not a claim that a release is already available. The project is alpha software.
+esp32tl is available on [PyPI](https://pypi.org/project/esp32tl/). The project is alpha software.
 
 With Python 3.11 or newer, install esp32tl from PyPI in your project directory, then explicitly
 prepare its simulator runtime:
@@ -57,10 +54,12 @@ As an alternative to PyPI, download the `.whl` asset from a published
 `python -m pip install` followed by the downloaded wheel's filename, then run
 `esp32tl runtime prepare`. Preparation downloads the runtime from `v<installed package version>`;
 that GitHub release must be published even when installing a wheel locally. Draft assets are not
-available anonymously. Before publication, use the developer path below.
+available anonymously. To build from source, use the developer path below.
 
 [Runtime installation](https://github.com/mateuszsikora/esp32-testing-library/blob/main/docs/features/runtime-user.md)
 covers version matching, offline reuse and CI.
+
+Independent simulator tests also support [parallel runs with pytest-xdist](https://github.com/mateuszsikora/esp32-testing-library/blob/main/docs/guides/writing-tests.md#running-tests-in-parallel).
 
 ## Your first green test
 

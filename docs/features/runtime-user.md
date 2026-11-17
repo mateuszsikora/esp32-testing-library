@@ -1,8 +1,8 @@
 # Installing the simulator runtime
 
-esp32tl is preparing its first PyPI release. The following PyPI installation commands apply
-**after publication**. Before then, use the [developer setup](../guides/development.md) to build
-from a checkout.
+esp32tl is available on [PyPI](https://pypi.org/project/esp32tl/), with prebuilt simulator
+runtimes in [GitHub Releases](https://github.com/mateuszsikora/esp32-testing-library/releases).
+To build from a checkout, use the [developer setup](../guides/development.md).
 
 Install Python 3.11 or newer, then, from your own project directory:
 
@@ -30,9 +30,8 @@ SD card image operations also require mtools (`brew install mtools` on macOS,
 
 The release matrix is Linux x86_64 with glibc (Ubuntu 22.04 or newer) and macOS arm64
 (macOS 15 or newer). Each release must pass the wheel/firmware smoke test on both GitHub-hosted
-runners before publication. Other architectures, Windows and musl Linux have no prebuilt runtime.
-Local macOS verification alone does not establish Linux support: the first hosted workflow run
-is a release prerequisite.
+runners in the [runtime release workflow](../cicd.md#runtime-releases) before publication.
+Other architectures, Windows and musl Linux have no prebuilt runtime.
 
 `esp32tl runtime prepare` explicitly downloads the version-matched runner and JSON manifest from
 `mateuszsikora/esp32-testing-library` release `v<package version>`, and the ROM archive directly
