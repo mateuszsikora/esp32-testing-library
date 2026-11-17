@@ -46,10 +46,13 @@ OTA_0_SUBTYPE = 0x10
 APP_OFFSET = 0x10000
 
 # An image header (esp_image_header_t): the magic byte, and the chip id at bytes 12 and 13 of its
-# extended part, little-endian.
+# extended part, little-endian. The flash size is the high four bits of byte 3 (spi_size,
+# esp_image_flash_size_t): 0 for 1 MB, 1 for 2 MB, and so on to 7 for 128 MB.
 IMAGE_MAGIC = 0xE9
 HEADER_SIZE = 24
 CHIP_ID_AT = 12
+FLASH_SIZE_AT = 3
+LARGEST_FLASH_SIZE = 7
 # ESP-IDF's esp_chip_id_t, by IDF target name.
 CHIPS = {
     0: "esp32",
@@ -105,13 +108,20 @@ class Build:
         """Up to `size` bytes of the flash at `offset`, from the last file that holds `offset`; to
         the end of that file at most. Raises `BuildError` when no file holds it, and `OSError` when
         the file cannot be read."""
+        file = self.file_at(offset)
+        if file is None:
+            raise BuildError(f"no file of {self.directory} is flashed at {offset:#x}")
+        with file.path.open("rb") as image:
+            image.seek(offset - file.offset)
+            return image.read(size)
+
+    def file_at(self, offset: int) -> FlashFile | None:
+        """The last file of the flash that holds `offset`, or `None`. Raises `OSError` when a file
+        cannot be read."""
         for file in reversed(self.flash_files):
-            length = file.path.stat().st_size
-            if file.offset <= offset < file.offset + length:
-                with file.path.open("rb") as image:
-                    image.seek(offset - file.offset)
-                    return image.read(size)
-        raise BuildError(f"no file of {self.directory} is flashed at {offset:#x}")
+            if file.offset <= offset < file.offset + file.path.stat().st_size:
+                return file
+        return None
 
     def table(self) -> bytes:
         """The partition table's bytes, as the build flashes them."""
@@ -221,6 +231,52 @@ def platformio(directory: Path, backend: str, chip: str) -> Build:
                 f" {app.name!r}: build again"
             )
     return build
+
+
+@dataclass(frozen=True)
+class HeaderFlash:
+    """The flash size, in MB, that the image header of `what` in the file at `path` gives."""
+
+    mb: int
+    path: Path
+    what: str
+
+
+def header_flash(build: Build) -> HeaderFlash | None:
+    """The largest flash size that the build's image headers give, with the header it is in; `None`
+    when the build has neither header. Two headers are read. The second-stage bootloader's, at the
+    chip's offset in the flash as the build writes it: the bootloader sets the flash size from it,
+    and the application's spi_flash refuses to start on a chip whose flash is smaller. The
+    application image's: with `CONFIG_SPI_FLASH_SIZE_OVERRIDE` the application sets the size
+    from its own header instead. A header whose size field is not one of ESP-IDF's sizes is left
+    out."""
+    found: list[HeaderFlash] = []
+    offset = BOOTLOADER_OFFSETS.get(build.chip, 0)
+    try:
+        file = build.file_at(offset)
+        if file is not None:
+            mb = flash_size(flash_bytes(build, offset, HEADER_SIZE))
+            if mb is not None:
+                found.append(HeaderFlash(mb, file.path, f"bootloader at {offset:#x}"))
+        if build.app_image is not None and build.app_image.is_file():
+            mb = flash_size(header(build.app_image, 0))
+            if mb is not None:
+                found.append(HeaderFlash(mb, build.app_image, "application image"))
+    except OSError as error:
+        raise BuildError(
+            f"cannot read the image headers of {build.directory}: {error.strerror}"
+        ) from error
+    # The bootloader's first when both give the same size: it is the one that sets it by default.
+    return max(found, key=lambda h: h.mb, default=None)
+
+
+def flash_size(data: bytes) -> int | None:
+    """The flash size, in MB, that the image header `data` gives; `None` when `data` is no image
+    header or its size field is none of ESP-IDF's."""
+    if len(data) < HEADER_SIZE or data[0] != IMAGE_MAGIC:
+        return None
+    code = data[FLASH_SIZE_AT] >> 4
+    return 1 << code if code <= LARGEST_FLASH_SIZE else None
 
 
 def encryption(directory: Path, backend: str, what: str = "flash encryption") -> BuildError:

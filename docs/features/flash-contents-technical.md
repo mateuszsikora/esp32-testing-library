@@ -57,8 +57,10 @@ Reading goes the other way:
    and it is the flash the run left: no `wait` went out, so the guest has not run since. `link.stats`
    cannot tell the two apart, because the end of a run with the peer gone writes the file and sends
    no `stats`.
-6. `FlashSnapshot(contents, table)` keeps the bytes; its `repr` leaves them out, or a failed
-   assertion would print 4 MiB. `nvs_values` and `OtaEntry` are computed on each call.
+6. `FlashSnapshot(contents, table)` keeps the bytes, as many as the runner's flash has: the
+   `--flash-mb` the backend passed ([esp32sim-backend-technical.md](esp32sim-backend-technical.md#data-flow)),
+   4 MiB without it, 16 MiB at most. Its `repr` leaves them out, or a failed assertion would print
+   them all. `nvs_values` and `OtaEntry` are computed on each call.
 
 ## Schema
 
@@ -176,7 +178,7 @@ Reading adds:
 | `ValueError` | `the build has no partition 'NAME': it has NAMES` | `partition` or `nvs` with an unknown name |
 | `ValueError` | `the build has no OTA data partition: it has NAMES` | `ota()` without one |
 | `ValueError` | `board.flash: partition 'NAME' is not unencrypted NVS` | `nvs` on another type or subtype, or with the encrypted flag; a read-only one reads |
-| `ValueError` | `board.flash: partition 'NAME' ends past the flash, of N bytes` | A table larger than `--flash-mb` |
+| `ValueError` | `board.flash: partition 'NAME' ends past the flash, of N bytes` | A table that reaches past the runner's flash, whose size is the board profile's `flash_mb` or the build's image headers' |
 | `ValueError` | `NVS page at OFFSET: format VERSION is newer than version 2` | A page version byte below `0xfe` |
 | `ValueError` | `board.flash: the build has no app partition: it has NAMES` | `ota()` on a table with no app, with no valid entry |
 

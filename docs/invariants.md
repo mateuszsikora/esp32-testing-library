@@ -254,6 +254,21 @@ that references to its number keep their meaning.
     `tests/test_pytest_plugin.py::test_every_route_and_line_of_the_profile_is_on_the_link`,
     `tests/test_pytest_plugin.py::test_runner_command_gives_the_chip_the_profile_s_psram`,
     `tests/test_cli.py::test_run_gives_the_chip_the_profile_s_psram`
+- **249.** On the esp32sim backend the chip's flash is the board profile's `flash_mb`, passed to
+  the runner as `--flash-mb`, and without it the largest size that the build's bootloader and
+  application image headers give; a build with neither header gets the runner's default. A
+  `flash_mb` the runner does not have (1, 2, 4, 8 or 16 MB), a header that gives more flash than
+  `flash_mb`, and without `flash_mb` a header above 16 MB, are refused when the board is set up,
+  by the backend and by `esp32tl run`, before a runner starts, with a message that names the
+  sizes and what to set; a header that gives less flash than `flash_mb` runs. `board.flash()`
+  holds the whole of that flash.
+  `tests/test_flash_size.py::test_the_runner_gets_the_profile_s_flash_else_the_header_s`,
+  `tests/test_flash_size.py::test_a_profile_size_the_runner_does_not_have_is_refused`,
+  `tests/test_flash_size.py::test_a_header_that_gives_more_than_the_profile_is_refused`,
+  `tests/test_flash_size.py::test_a_header_that_gives_more_than_the_runner_has_is_refused`,
+  `tests/test_flash_size.py::test_the_backend_refuses_at_setup_and_passes_the_size_at_power_on`,
+  `tests/test_flash_size.py::test_esp32tl_run_refuses_a_build_for_more_flash_than_the_profile`,
+  `tests/test_flash_size.py::test_an_8_mb_build_boots_on_8_and_16_mb_and_is_refused_on_4`
 
 ## The runner
 

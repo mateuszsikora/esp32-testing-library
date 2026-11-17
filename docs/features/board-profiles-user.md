@@ -20,9 +20,8 @@ with the reason.
 | `lilygo-t-a7670g-r2` | `esp32` (ESP32-WROVER-E) | 4 MB, 4 MB | `console`; `uart.modem`: UART1, TX GPIO 26, RX GPIO 27, 115200 baud; `uart.gnss`: UART2, TX GPIO 21, RX GPIO 22, 9600 baud; `sd_card`: SCLK GPIO 14, MOSI GPIO 15, MISO GPIO 2, CS GPIO 13; `lines.modem`, `lines.gnss`, `lines.board` ([control lines](#lilygo-control-lines-and-simulation-limits)) |
 
 The three devkits of the ESP32-S3, ESP32-C3 and ESP32-C6 carry the validation images built for
-their chip. Their `flash_mb` is the module's, 8 MB on the S3's and the C6's, but the esp32sim
-backend's flash is 4 MB whatever a profile says, so an image whose partition table reaches past
-`0x400000` does not boot on them there ([validation firmware](validation-firmware-user.md)). On these chips esp32sim does not
+their chip. Their `flash_mb` is the module's, 8 MB on the S3's and the C6's, and the esp32sim
+backend gives the chip that flash ([the flash a run gets](#the-flash-a-run-gets)). On these chips esp32sim does not
 model everything it does on the classic ESP32: a test that asks for an SD card or a virtual
 station there is skipped with the reason
 ([esp32sim backend](esp32sim-backend-user.md#chips-other-than-the-classic-esp32)).
@@ -199,6 +198,29 @@ def test_wiring(board):
     assert board.profile.name == "test-board"
     assert board.profile.uart["gnss"].tx == 4
 ```
+
+### The flash a run gets
+
+On the esp32sim backend the chip's flash is the profile's `flash_mb`, which the runner takes as
+1, 2, 4, 8 or 16 MB. A profile without `flash_mb` gets the size the build's image headers give,
+the one ESP-IDF's `CONFIG_ESPTOOLPY_FLASHSIZE` or PlatformIO's `board_upload.flash_size` sets, and
+a build whose headers give none gets the runner's default, 4 MB. The flash of `board.flash()` is
+that size too ([flash contents](flash-contents-user.md#read-the-flash-of-a-run)).
+
+A build for more flash than that does not start: its application stops at start-up, as a real
+board with a smaller flash chip does, and reboots again and again. The backend refuses such a
+run when the test sets up its board, before anything runs:
+
+```text
+.../bootloader.bin: the image header of the bootloader at 0x0 gives 8 MB of flash, more than the
+4 MB of board profile 'my-board' (flash_mb = 4): the application would stop at start-up; set
+flash_mb = 8 in the profile, or build for 4 MB of flash
+```
+
+Set `flash_mb` to the flash your board has. A build for less flash than the profile gives runs,
+as it does on the board. A `flash_mb` the runner does not have, such as 0 or 32, is refused at
+setup too, with the sizes it has. The serial backend flashes the build's headers as they are and
+reads nothing from `flash_mb`.
 
 ### What a route's baud does
 

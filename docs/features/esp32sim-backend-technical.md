@@ -25,6 +25,19 @@ without starting anything:
    build by its file names and image headers ([builds](builds-technical.md#data-flow)). A
    `BuildError` becomes a `BackendError` with the same message. The result, a `Build`, is
    `Esp32Sim.app`.
+   **`runner_flash_mb(profile, app)`** is then `Esp32Sim.flash_mb`, the flash the runner gives
+   the chip, in MB, or refuses the run with a `BackendError` before anything starts. It reads
+   `build.header_flash(app)`, the largest size of the bootloader's and the application's image
+   headers ([builds](builds-technical.md#data-flow)). With `profile.flash_mb` it refuses a size
+   outside `RUNNER_FLASH_MB`, `(1, 2, 4, 8, 16)`, the sizes the runner's `--flash-mb` takes, and a
+   header that gives more than `flash_mb`, and returns `flash_mb`; a header that gives less is
+   left, since a real board boots it too. Without `flash_mb` it returns the header's size,
+   refusing one above 16, or `None`, the runner's default of 4 MB, when the build has neither
+   header. ESP-IDF's second-stage bootloader sets the flash size from its own header
+   (`update_flash_config` in `bootloader_flash_config_<chip>.c`), the application from its own
+   with `CONFIG_SPI_FLASH_SIZE_OVERRIDE` (`cpu_start.c`), and `esp_flash_init_default_chip` in
+   `esp_flash_spi_init.c` stops the application when the flash it detects is smaller, so the larger
+   of the two is the one that must fit.
 2. **`runner_path()`** and **`rom_path(profile.chip)`** resolve the runner and the board chip's
    ROM ELF ([Configuration](#configuration)). `load_app` before them takes `chip=profile.chip`, so
    a build for another chip than the profile's is refused.
@@ -92,7 +105,8 @@ so the test overrides any NVS image the build supplies. The call adds
 `--flash-out`, `flash.bin` beside the link's socket: in a held turn the runner writes it on the link's
 `flash_dump`, and once the run has ended the file is what the runner wrote at its end. A read of a
 turn's file removes it, so a runner that dies later leaves no stale one. The backend passes the flag
-to every run: 4 MiB written at the end of each, gone with the socket's directory in `_close_link`.
+to every run: the whole flash, `Esp32Sim.flash_mb` MB or the runner's 4 MB, written at the end of
+each, gone with the socket's directory in `_close_link`.
 [Flash contents](flash-contents-technical.md#data-flow) has the exchange.
 
 **`Esp32Sim.power_on(utc=None)`** raises `BoardOff` when the supply is on
@@ -107,14 +121,15 @@ or `POWER_ON_UTC`, for `Esp32Sim.utc` and the GNSS receiver's dates, and logs
    `tempfile.mkdtemp(prefix="esp32tl-")`, or from `mkdtemp(..., dir="/tmp")` when the first path
    is `SUN_PATH_MAX` (104) bytes or longer, and listens with a backlog of 1. It binds before the
    runner starts, because the runner connects once (protocol §1).
-2. **`runner_command(runner, rom, app, HELD_MAX_SECONDS, link, held=True, psram_mb=profile.psram_mb)`** builds
-   `[runner, "--chip", app.chip, "--rom", rom, "--max-seconds", "86400", "--console", "both", "--peer-timeout", "0", "--board", "socket:<link>", "--flash-at", "0x1000=<path>", ..., "--psram-mb", "<psram_mb>", "--flash-out", "<beside the link>/flash.bin"]`,
+2. **`runner_command(runner, rom, app, HELD_MAX_SECONDS, link, held=True, flash_mb=self.flash_mb, psram_mb=profile.psram_mb)`** builds
+   `[runner, "--chip", app.chip, "--rom", rom, "--max-seconds", "86400", "--console", "both", "--peer-timeout", "0", "--board", "socket:<link>", "--flash-at", "0x1000=<path>", ..., "--flash-mb", "<flash_mb>", "--psram-mb", "<psram_mb>", "--flash-out", "<beside the link>/flash.bin"]`,
    one `--flash-at {offset:#x}={path}` per entry of `app.flash_files`, in their order: an ESP-IDF
    build's sorted by offset, as `IdfApp` sorts them, a PlatformIO build's `firmware.factory.bin` at
    `0x0`, or `bootloader.bin`, `partitions.bin` and `firmware.bin`; the paths are absolute. `--psram-mb` is the board profile's `psram_mb`, `0` on
    `esp32-devkitc` and `4` on `lilygo-t-a7670g-r2`; a profile without `psram_mb` leaves the pair
-   out, and the runner gives the chip no PSRAM, its default. The profile's `flash_mb` is not
-   passed: the runner's flash is its default, 4 MiB. With a slot, `sd_card=` adds
+   out, and the runner gives the chip no PSRAM, its default. `--flash-mb` is `Esp32Sim.flash_mb`,
+   before `--psram-mb`, `8` on `esp32-s3-devkitc` and `4` on `esp32-devkitc`; when it is `None`
+   the pair is left out and the runner's flash is its default, 4 MiB. With a slot, `sd_card=` adds
    `--sd-spi sclk=N,mosi=N,miso=N,cs=N` from the slot's route at the end, and with a card in it
    `--sd-rw <image>`, the image's absolute path, after that: the slot is there empty, so that a
    card can go in while the firmware runs. With an access point, `wifi=` adds `wifi.runner_args()` after that:
@@ -485,7 +500,9 @@ repository makes.
 | `load_app(app_path, *, build_dir=None, backend="esp32sim", chip="esp32")` | The checked `Build` of the selected directory (default `<app_path>/build`) for `chip`, the board profile's, from `esp32tl.build.load`, its `BuildError` raised as `BackendError`; `backend` chooses target/encryption error wording |
 | `profile_uart(profile, interface, *, clock, directory, asked=..., log=None, files=None)` | The `Uart` on the route the profile gives `interface` (`uart.gnss`), at its pins and baud; `BackendError` when the profile has no such route. The [`esp32tl` command](cli-user.md) makes its UARTs with it |
 | `route_wire(profile, interface)` | The `Wire` of that route, or the same `BackendError`; `Esp32Sim` makes its `Uart`s and its `Gnss` on it |
-| `runner_command(runner, rom, app, max_seconds, link, *, held=False, psram_mb=None, sd_card=None, extra_flash=(), wifi=None, bluetooth=None, realtime=False, flash_out=None)` | The runner's argument list; with `psram_mb`, `--psram-mb` of that size; with an `SdCard` holding a card, the runner's card on its pins; with a `Wifi` holding an access point, `--wifi` and `--wifi-nearby`; with a `Bluetooth` the test used, `--bt` and the application's ELF; with `realtime`, `--realtime`; with `flash_out`, `--flash-out` |
+| `RUNNER_FLASH_MB` | `(1, 2, 4, 8, 16)`: the flash sizes, in MB, the runner's `--flash-mb` takes |
+| `runner_flash_mb(profile, app)` | The flash the runner gives the chip, in MB: `profile.flash_mb`, else the largest size the build's image headers give, else `None`; `BackendError` for a `flash_mb` outside `RUNNER_FLASH_MB`, a header that gives more than `flash_mb`, or, without `flash_mb`, a header that gives more than 16. The constructor and the [`esp32tl` command](cli-user.md) call it before anything starts |
+| `runner_command(runner, rom, app, max_seconds, link, *, held=False, flash_mb=None, psram_mb=None, sd_card=None, extra_flash=(), wifi=None, bluetooth=None, realtime=False, flash_out=None)` | The runner's argument list; with `flash_mb`, `--flash-mb` of that size; with `psram_mb`, `--psram-mb` of that size; with an `SdCard` holding a card, the runner's card on its pins; with a `Wifi` holding an access point, `--wifi` and `--wifi-nearby`; with a `Bluetooth` the test used, `--bt` and the application's ELF; with `realtime`, `--realtime`; with `flash_out`, `--flash-out` |
 | `Esp32Sim.wifi` | The chip's `Wifi`, on the link from construction |
 | `Esp32Sim.bluetooth` | The chip's `Bluetooth`, on the link from construction; the first look asks `_asked` for `Request("bluetooth", source="model")`, which refuses after power-on, then checks `app.elf`, then calls `Bluetooth.use()`, which asks again |
 | `RunnerPopen(msg_queue, cmd, meta)` | `DuplicateStdoutPopen` that closes its log when the start fails |
@@ -521,7 +538,7 @@ of wall time on an M2 Pro, and that an image that never idles runs slower.
 ## Failure modes
 
 `BackendError` messages, prefixed `esp32sim: ` by the `board` fixture when they come at setup or
-teardown. The build, the runner and the ROM ELF are checked at setup, in the order below, so only
+teardown. The build, its flash size, the runner and the ROM ELF are checked at setup, in the order below, so only
 the first problem shows; the socket and the start come at `power_on()`, in the test body, where the
 `BackendError` fails the test with its own traceback:
 
@@ -531,6 +548,10 @@ the first problem shows; the socket and the start come at `power_on()`, in the t
 | `the board profile {name} has no lines; its interfaces are {interfaces}` | `Esp32Sim.lines` | The `lines` fixture on a profile without `[lines.<role>]` sets |
 | `bluetooth: {build} holds no ELF of the application, whose symbols the runner's --bt needs` | `Esp32Sim.bluetooth` | `Build.elf` is `None` or not a file: no `.elf` in an ESP-IDF build directory, no `firmware.elf` in a PlatformIO one |
 | The messages of `esp32tl.build.load`, as `{build} holds no ESP-IDF or PlatformIO build: no flasher_args.json and no firmware.bin` and `{build} is built for {chip}; esp32sim runs the classic esp32` | `load_app` | The selected directory holds no build esp32sim runs ([builds](builds-technical.md#failure-modes)) |
+| `{file}: the image header of the {what} gives {N} MB of flash, more than the {M} MB of board profile '{name}' (flash_mb = {M}): the application would stop at start-up; set flash_mb = {N} in the profile, or build for {M} MB of flash` | `runner_flash_mb` | The bootloader's or the application's header gives more flash than the profile's `flash_mb`; `{what}` is `bootloader at 0x1000` on the classic ESP32, `bootloader at 0x0` on the others, or `application image`, and `{file}` the file that holds it. Run anyway, the application stops at start-up with `E (…) spi_flash: Detected size(4096k) smaller than the size in the binary image header(8192k). Probe failed.` and `assert failed: __esp_system_init_fn_init_flash startup_funcs.c:118 (flash_ret == ESP_OK)`, and the chip reboots until the test's timeout |
+| `{file}: the image header of the {what} gives {N} MB of flash, more than the runner's largest, 16 MB: build for 16 MB of flash or less` | `runner_flash_mb` | No `flash_mb` in the profile, and a header gives 32, 64 or 128 MB |
+| `board profile '{name}' has flash_mb = {N}; the runner's flash is 1, 2, 4, 8 or 16 MB: set one of these in the profile` | `runner_flash_mb` | The profile's `flash_mb` is not in `RUNNER_FLASH_MB` |
+| `cannot read the image headers of {build}: {error.strerror}` | `runner_flash_mb`, from `build.header_flash` | A flash file or the application image cannot be read |
 | `no runner at {path}: run make setup in a checkout, or esp32tl runtime prepare` | `runner_path` | `ESP32TL_RUNNER` names no file; one it cannot run fails `runtime.identity` instead |
 | `no runner at {path}: run make build-runner in {ROOT}` | `runner_path` | No `ESP32TL_RUNNER`, and the checkout beside the package has not built `runner/target/release/esp32tl-runner`; `prepare` would refuse its install as unreleased |
 | `no rom at {path}: run make setup in a checkout, or esp32tl runtime prepare` | `rom_path` | The chip's ROM variable names no file |
@@ -600,6 +621,18 @@ proving serial-only validation does not reach the simulator.
   `--wifi` without an access point, then `--wifi` and `--wifi-nearby` as `Wifi.runner_args()`
   gives them. `test_runner_command_forwards_the_guests_hci_once_the_test_uses_bluetooth`: no `--bt`
   for a `Bluetooth` the test has not used, then `--bt` and the fake build's `app.elf`.
+`tests/test_flash_size.py` covers the flash size:
+`test_the_runner_gets_the_profile_s_flash_else_the_header_s` the size `runner_flash_mb` returns and
+the `--flash-mb` before `--psram-mb`, `test_without_a_size_the_command_has_no_flash_mb` the pair
+left out, `test_a_profile_size_the_runner_does_not_have_is_refused`,
+`test_a_header_that_gives_more_than_the_profile_is_refused` and
+`test_a_header_that_gives_more_than_the_runner_has_is_refused` the three refusals word for word;
+`test_the_backend_refuses_at_setup_and_passes_the_size_at_power_on` the refusal in the constructor
+and `--flash-mb 8` at power-on. `test_an_8_mb_build_boots_on_8_and_16_mb_and_is_refused_on_4` runs
+`hello_world_8mb` on each of the four chips through the plugin: it boots on profiles with
+`flash_mb` 8 and 16, `board.flash()` holds 8 MiB and 16 MiB, and the board fixture refuses it on
+4 with the message.
+
 - `test_load_app_refuses_what_the_runner_cannot_run`: the four `load_app` messages of an ESP-IDF
   build; `tests/test_platformio_build.py` those of a PlatformIO one ([builds](builds-technical.md#tests)).
 - `test_load_app_takes_a_build_for_the_board_s_chip`: an `esp32s3` build on `chip="esp32s3"`, its

@@ -52,6 +52,7 @@ whatever `FIRMWARE_OUT` the shell exports, because the tests read the images the
 | `deep_sleep` | ESP-IDF's `examples/system/deep_sleep`, unmodified, with its own `sdkconfig.defaults`, for target `esp32`: sleeps 20 s at a time with a timer wake, and reports after each wake how long it slept ([below](#deep_sleep)) |
 | `bt_spp_initiator` | ESP-IDF's `examples/bluetooth/bluedroid/classic_bt/bt_spp_initiator`, unmodified, with its own `sdkconfig.defaults`, for target `esp32`: finds a device named `ESP_SPP_ACCEPTOR` over Bluetooth Classic, pairs with it, opens SPP and writes to it without end ([below](#bt_spp_initiator)) |
 | `bt_spp_initiator_psram` | The same example, unmodified, with `firmware/bt_spp_initiator_psram/sdkconfig.defaults` after its own: PSRAM on, and Bluedroid's buffers taken from it first; on a profile with `psram_mb = 4` it does what the plain image does ([below](#bt_spp_initiator_psram)) |
+| `hello_world_8mb` | ESP-IDF's `hello_world`, unmodified, with `firmware/hello_world_8mb/sdkconfig.defaults`: `CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y`, so that its bootloader's and its application's image headers give 8 MB of flash. On a board profile with `flash_mb` 8 or 16 it boots; on one with 4 the esp32sim backend refuses it at setup ([the flash a run gets](board-profiles-user.md#the-flash-a-run-gets)) |
 | `arduino_shell` | `firmware/arduino_shell`, a PlatformIO project on the Arduino-ESP32 core, `board = esp32dev`, built by `firmware/build-platformio.sh`: prints a banner on `Serial`, reads its settings with `Preferences`, runs a line-based command interpreter on `Serial`, and, when its settings name a network, joins it with `WiFi` and serves `GET /status` with `WebServer` ([below](#arduino_shell)) |
 
 ## The images of the other chips
@@ -75,6 +76,7 @@ names one with its build directory and the chip's devkit profile:
 | `nvs_reader` | the three | Nothing |
 | `http_request` | the three | Nothing |
 | `hello_world_psram` | `esp32s3` | ESP-IDF's `hello_world` with `firmware/hello_world_psram/sdkconfig.defaults`: `CONFIG_SPIRAM=y`, `CONFIG_SPIRAM_MODE_OCT=y`, the octal PSRAM of the S3 devkit's N8R8 module |
+| `hello_world_8mb` | the three | Nothing: as on the classic ESP32, `hello_world` built for an 8 MB flash |
 | `gatt_server` | `esp32s3`, `esp32c3` | ESP-IDF's `examples/bluetooth/bluedroid/ble/gatt_server`, unmodified, with its own `sdkconfig.defaults`: a BLE GATT server that advertises as `ESP_GATTS_DEMO`. Not for the C6, whose BLE esp32sim runs only for ESP-IDF v5.5.x images |
 
 The images that need what esp32sim does not model on these chips, deep sleep (`timer_wake`,

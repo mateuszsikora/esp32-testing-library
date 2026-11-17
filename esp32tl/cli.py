@@ -170,6 +170,7 @@ def interruptible(
             uart.replay(path)
             uarts.append(uart)
         image = esp32sim.load_app(str(app.resolve()), build_dir=build_dir, chip=profile.chip)
+        flash_mb = esp32sim.runner_flash_mb(profile, image)
         runner, rom = esp32sim.runner_path(), esp32sim.rom_path(profile.chip)
     except (ProfileError, BackendError, RecordingError, ReplayError) as error:
         print(f"esp32tl: {error}", file=sys.stderr)
@@ -183,7 +184,13 @@ def interruptible(
         return CANNOT_START
     try:
         command = esp32sim.runner_command(
-            runner, rom, image, max_seconds, link_path, psram_mb=profile.psram_mb
+            runner,
+            rom,
+            image,
+            max_seconds,
+            link_path,
+            flash_mb=flash_mb,
+            psram_mb=profile.psram_mb,
         )
         try:
             process = subprocess.Popen(command, start_new_session=True)

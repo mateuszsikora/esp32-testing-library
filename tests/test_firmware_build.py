@@ -143,7 +143,7 @@ def test_build_refuses_an_unknown_image(tmp_path: Path) -> None:
         " modem_recovery nvs_reader"
         " pppos_client mqtt_session http_request http_server persistence ota_state timer_wake"
         " deep_sleep"
-        " bt_spp_initiator bt_spp_initiator_psram\n"
+        " bt_spp_initiator bt_spp_initiator_psram hello_world_8mb\n"
     )
     assert not (tmp_path / "out").exists()
 
@@ -272,6 +272,8 @@ def test_local_build_runs_idf_py_and_records_how(tmp_path: Path, local_idf: dict
         "bt_spp_initiator_psram": (
             f"{tmp_path}/idf/examples/bluetooth/bluedroid/classic_bt/bt_spp_initiator"
         ),
+        # ESP-IDF's hello_world, which has no sdkconfig.defaults: only the image's own
+        "hello_world_8mb": f"{tmp_path}/idf/examples/get-started/hello_world",
     }
     builds = {image: (tmp_path / "out" / image / "build").resolve() for image in projects}
     assert logged(tmp_path / "idf.log") == [
@@ -290,6 +292,11 @@ def test_local_build_runs_idf_py_and_records_how(tmp_path: Path, local_idf: dict
                     f"{ROOT}/firmware/{image}/sdkconfig.defaults"
                 ]
                 if image in ("pppos_client", "bt_spp_initiator_psram")
+                else []
+            ),
+            *(
+                [f"-DSDKCONFIG_DEFAULTS={ROOT}/firmware/{image}/sdkconfig.defaults"]
+                if image == "hello_world_8mb"
                 else []
             ),
             "build",
@@ -430,16 +437,15 @@ def test_chip_images_build_their_projects_for_the_chip(
     entries.append(("hello_world_psram", "esp32s3", hello))
     gatt = f"{tmp_path}/idf/examples/bluetooth/bluedroid/ble/gatt_server"
     entries += [("gatt_server", "esp32s3", gatt), ("gatt_server", "esp32c3", gatt)]
+    entries += [("hello_world_8mb", chip, hello) for chip in ("esp32s3", "esp32c3", "esp32c6")]
     expected = []
     for image, chip, project in entries:
         build = out / image / f"build-{chip}"
         expected += ["-C", project, "-B", str(build), f"-DSDKCONFIG={build}/sdkconfig"]
         expected.append(f"-DIDF_TARGET={chip}")
-        if image == "hello_world_psram":
+        if image in ("hello_world_psram", "hello_world_8mb"):
             # ESP-IDF's hello_world has no sdkconfig.defaults: only the image's own
-            expected.append(
-                f"-DSDKCONFIG_DEFAULTS={ROOT}/firmware/hello_world_psram/sdkconfig.defaults"
-            )
+            expected.append(f"-DSDKCONFIG_DEFAULTS={ROOT}/firmware/{image}/sdkconfig.defaults")
         expected.append("build")
         assert json.loads((build / "esp32tl-build.json").read_text()) == {
             "idf_version": "v9.9.9",

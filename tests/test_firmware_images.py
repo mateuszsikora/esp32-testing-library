@@ -10,7 +10,7 @@ import pytest
 from pytest_embedded_idf.app import IdfApp
 
 from esp32tl import boards
-from esp32tl.build import PLATFORMIO, Build, load
+from esp32tl.build import HEADER_SIZE, PLATFORMIO, Build, flash_size, load
 
 FIRMWARE = Path(__file__).resolve().parent.parent / "firmware"
 
@@ -74,6 +74,7 @@ CHIP_IMAGES = [
         "http_request",
     )
 ] + [("hello_world_psram", "esp32s3"), ("gatt_server", "esp32s3"), ("gatt_server", "esp32c3")]
+CHIP_IMAGES += [("hello_world_8mb", chip) for chip in ("esp32s3", "esp32c3", "esp32c6")]
 
 
 @pytest.mark.parametrize(("image", "chip"), CHIP_IMAGES, ids=lambda v: str(v))
@@ -88,6 +89,16 @@ def test_a_chip_s_image_is_built_for_it_with_the_bootloader_at_0(image: str, chi
         (0x8000, Path("partition_table/partition-table.bin")),
     ]
     assert all(Path(f.file_path).is_file() for f in app.flash_files)
+
+
+@pytest.mark.parametrize("build_dir", ["build", "build-esp32s3", "build-esp32c3", "build-esp32c6"])
+def test_the_8_mb_image_s_headers_give_8_mb_on_every_chip(build_dir: str) -> None:
+    idf_app("hello_world_8mb", build_dir)
+    build = FIRMWARE / "hello_world_8mb" / build_dir
+    sdkconfig = json.loads((build / "config" / "sdkconfig.json").read_text())
+    assert sdkconfig["ESPTOOLPY_FLASHSIZE"] == "8MB"
+    for image in (build / "bootloader" / "bootloader.bin", build / "hello_world.bin"):
+        assert flash_size(image.read_bytes()[:HEADER_SIZE]) == 8
 
 
 def test_the_s3_s_psram_image_asks_for_octal_psram() -> None:

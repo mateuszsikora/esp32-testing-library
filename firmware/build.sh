@@ -32,7 +32,7 @@ set -eu
 
 IDF_VERSION=v5.3.6
 CONTAINER=espressif/idf:$IDF_VERSION@sha256:cee52f0c4fdaf088992a7a739f5993154e95cf1d3ab61c24f5b40e6d56a3a070
-IMAGES="hello_world console_repl nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request http_server persistence ota_state timer_wake deep_sleep bt_spp_initiator bt_spp_initiator_psram"
+IMAGES="hello_world console_repl nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request http_server persistence ota_state timer_wake deep_sleep bt_spp_initiator bt_spp_initiator_psram hello_world_8mb"
 # The images of the other chips: what their tests in tests/test_chips.py run.
 CHIP_IMAGES=
 for chip in esp32s3 esp32c3 esp32c6; do
@@ -41,6 +41,7 @@ for chip in esp32s3 esp32c3 esp32c6; do
 	done
 done
 CHIP_IMAGES="$CHIP_IMAGES hello_world_psram@esp32s3 gatt_server@esp32s3 gatt_server@esp32c3"
+CHIP_IMAGES="$CHIP_IMAGES hello_world_8mb@esp32s3 hello_world_8mb@esp32c3 hello_world_8mb@esp32c6"
 family=firmware
 if [ "${1:-}" = --chips ]; then
 	shift
@@ -72,7 +73,7 @@ project_of() {
 		return
 	fi
 	case $1 in
-	hello_world | hello_world_psram) echo "$IDF_PATH/examples/get-started/hello_world" ;;
+	hello_world | hello_world_psram | hello_world_8mb) echo "$IDF_PATH/examples/get-started/hello_world" ;;
 	sdspi) echo "$IDF_PATH/examples/storage/sd_card/sdspi" ;;
 	deep_sleep) echo "$IDF_PATH/examples/system/deep_sleep" ;;
 	gatt_server) echo "$IDF_PATH/examples/bluetooth/bluedroid/ble/gatt_server" ;;
@@ -247,7 +248,7 @@ for entry in "$@"; do
 	firmware:pppos_client | firmware:bt_spp_initiator_psram)
 		defaults="$project/sdkconfig.defaults;$PWD/firmware/$image/sdkconfig.defaults"
 		;;
-	chips:hello_world_psram) defaults=$PWD/firmware/$image/sdkconfig.defaults ;;
+	chips:hello_world_psram | *:hello_world_8mb) defaults=$PWD/firmware/$image/sdkconfig.defaults ;;
 	*) defaults= ;;
 	esac
 	if [ -n "$defaults" ]; then

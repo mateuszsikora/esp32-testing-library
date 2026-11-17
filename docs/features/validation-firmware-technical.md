@@ -36,7 +36,8 @@ the container, and once inside it, which builds. With `IDF_LOCAL=1` it runs once
    `CHIP_IMAGES`: `IMAGE@CHIP` for each of `hello_world`, `console_repl`, `gpio_echo`,
    `nmea_reader`, `nvs_reader` and `http_request` on each of `esp32s3`, `esp32c3` and `esp32c6`,
    then `hello_world_psram@esp32s3`, `gatt_server@esp32s3` and `gatt_server@esp32c3`
-   (`project_of`: `$IDF_PATH/examples/bluetooth/bluedroid/ble/gatt_server`); `gpio_echo@esp32` is
+   (`project_of`: `$IDF_PATH/examples/bluetooth/bluedroid/ble/gatt_server`), then
+   `hello_world_8mb` on each of `esp32s3`, `esp32c3` and `esp32c6`; `gpio_echo@esp32` is
    unknown there. The family's output tree
    is `firmware/` for `--chips` as without a family, `examples/` for `--examples`.
 2. **Mode**, decided before anything is written:
@@ -134,8 +135,9 @@ the container, and once inside it, which builds. With `IDF_LOCAL=1` it runs once
 
      runs, with `-DSDKCONFIG_DEFAULTS=...` before `build` for the images that add options of their
      own: `pppos_client` and `bt_spp_initiator_psram` (the project's `sdkconfig.defaults`, then
-     `firmware/IMAGE/sdkconfig.defaults`) and `hello_world_psram` (`firmware/hello_world_psram/sdkconfig.defaults`
-     alone: ESP-IDF's `hello_world` has none). `sdkconfig` goes in the build directory because the project directory may be
+     `firmware/IMAGE/sdkconfig.defaults`), `hello_world_psram` (`firmware/hello_world_psram/sdkconfig.defaults`
+     alone: ESP-IDF's `hello_world` has none) and `hello_world_8mb`, on every chip
+     (`firmware/hello_world_8mb/sdkconfig.defaults` alone). `sdkconfig` goes in the build directory because the project directory may be
      ESP-IDF's own examples, or read-only. After a successful `idf.py`, the script checks that
      `flasher_args.json` exists, creates `esp32tl-built`, and prints the `built in` line.
 
@@ -877,9 +879,12 @@ write their arguments to `$FAKE_LOG`, with a `PATH` holding only them and `cat`,
   `modem_at`, `modem_recovery` and `nvs_reader` from `firmware/`, `pppos_client` from what a fake `python3` prints,
   `mqtt_session`, `persistence`, `ota_state` and `timer_wake` from `firmware/`, `http_request`
   from its copy, `.http_request-v9.9.9` in the output directory, which holds the fake example's
-  `CMakeLists.txt`, and `deep_sleep`, `bt_spp_initiator` and `bt_spp_initiator_psram` from the fake `IDF_PATH`; the `idf.py` arguments of each,
+  `CMakeLists.txt`, and `deep_sleep`, `bt_spp_initiator`, `bt_spp_initiator_psram` and
+  `hello_world_8mb` from the fake `IDF_PATH`; the `idf.py` arguments of each,
   with `SDKCONFIG_DEFAULTS` naming the project's `sdkconfig.defaults` and then the image's own for
-  `pppos_client` and `bt_spp_initiator_psram`,
+  `pppos_client` and `bt_spp_initiator_psram`, and the image's own alone for `hello_world_8mb`;
+  `test_chip_images_build_their_projects_for_the_chip` the same of `--chips`, `hello_world_8mb`
+  on the three chips included,
   the records with `"container": null`, the markers, the "not for goldens" warning and the
   `built in` lines;
 - reuse of a build directory with the same record, and removal of one with another record;
@@ -914,6 +919,11 @@ is flashed there. `test_ota_state_has_a_factory_app_two_slots_and_the_initial_ot
 `test_bt_spp_initiator_psram_is_the_example_with_bluedroid_allocating_from_psram` checks that
 `bt_spp_initiator_psram` has the same options of Classic and SPP, `SPIRAM`, `SPIRAM_USE_MALLOC`
 and `BT_ALLOCATION_FROM_SPIRAM_FIRST` on, and the same ELF name.
+`test_the_8_mb_image_s_headers_give_8_mb_on_every_chip` checks that `hello_world_8mb`, in `build`
+and in `build-esp32s3`, `build-esp32c3` and `build-esp32c6`, has `ESPTOOLPY_FLASHSIZE` `8MB` and
+that the headers of its `bootloader/bootloader.bin` and `hello_world.bin` give 8 MB
+(`build.flash_size`). `tests/test_flash_size.py` boots it
+([esp32sim backend](esp32sim-backend-technical.md#tests)).
 
 `tests/test_platformio_firmware_build.py` runs `build-platformio.sh` the same way, against a fake
 `docker` and a fake `pio` whose `run --project-dir DIR --environment ENV` writes

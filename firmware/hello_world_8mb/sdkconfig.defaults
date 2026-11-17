@@ -1,0 +1,6 @@
+# hello_world, ESP-IDF's example unchanged, built for an 8 MB flash: its bootloader's and its
+# application's image headers give 8 MB (firmware/build.sh names it). Built for every chip the
+# runner emulates. On a flash smaller than 8 MB its application stops at start-up, in spi_flash
+# ("Detected size(4096k) smaller than the size in the binary image header(8192k)"), and the chip
+# reboots; the esp32sim backend refuses such a run at setup (tests/test_flash_size.py).
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y

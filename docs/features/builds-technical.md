@@ -75,6 +75,16 @@
    `kind` with the hash, and for a `PLATFORMIO` build the plugin gives pytest-embedded
    `serial.PlatformioApp`, an `IdfApp` of the `Build`'s files, which `IdfSerial` flashes
    ([serial backend](serial-backend-technical.md#data-flow)).
+6. **`header_flash(build)`** gives the esp32sim backend the flash size the build is for
+   (`esp32sim.runner_flash_mb`, [esp32sim backend](esp32sim-backend-technical.md#data-flow)). It
+   reads two image headers: the bootloader's, at the chip's bootloader offset (`BOOTLOADER_OFFSETS`)
+   of the flash the files make, through `Build.file_at` and `flash_bytes`; and the application
+   image's, the first 24 bytes of `app_image`. `flash_size` decodes each, and the larger is a
+   `HeaderFlash(mb, path, what)`, the bootloader's when they are equal; a header that is not there,
+   lacks the magic or gives no size of ESP-IDF's is left out, and with neither the result is `None`.
+   ESP-IDF's bootloader sets the flash size from its own header and the application from its own
+   with `CONFIG_SPI_FLASH_SIZE_OVERRIDE`, so either may be the one the application checks the chip's
+   flash against. An `OSError` from reading becomes `BuildError`.
 
 No file of the build directory is written, renamed or created.
 
@@ -84,7 +94,8 @@ What `esp32tl.build` reads of the files:
 
 | What | Where | Read as |
 |---|---|---|
-| Image header | The first 24 bytes of `firmware.bin`, and at `0x1000` of the flash for the bootloader | `esp_image_header_t`: byte 0 the magic, `0xE9`; bytes 12 and 13 the chip id, little-endian |
+| Image header | The first 24 bytes of `firmware.bin` (PlatformIO) or of `app_image` (both kinds, for the flash size), and at the chip's bootloader offset of the flash (`BOOTLOADER_OFFSETS`: `0x1000` on `esp32` and `esp32s2`, `0x0` on the others) for the bootloader | `esp_image_header_t`: byte 0 the magic, `0xE9`; bytes 12 and 13 the chip id, little-endian; the high four bits of byte 3 (`FLASH_SIZE_AT`) the flash size, `spi_size` |
+| Flash size | High four bits of byte 3 of a header | ESP-IDF's `esp_image_flash_size_t`: `n` from 0 to 7 (`LARGEST_FLASH_SIZE`) is `1 << n` MB, 1 to 128; 8 and above give no size |
 | Partition table | At `0x8000` of the flash, up to `0xC00` bytes (`TABLE_SIZE`) | Bytes 0 and 1 `0xAA 0x50`; then `flash.partitions` ([flash contents](flash-contents-technical.md#schema)) |
 | Chip id | Bytes 12 and 13 of a header | ESP-IDF's `esp_chip_id_t`: `0` `esp32`, `2` `esp32s2`, `5` `esp32c3`, `9` `esp32s3`, `12` `esp32c2`, `13` `esp32c6`, `16` `esp32h2`, `18` `esp32p4`, `20` `esp32c61`, `23` `esp32c5` (`CHIPS`); anything but the board's chip is refused |
 
@@ -109,6 +120,10 @@ in the build directory, which is why a build without `firmware.factory.bin` gets
 | `Build` | A frozen dataclass: `directory` (`Path`), `kind` (`ESP_IDF`, `"esp-idf"`, or `PLATFORMIO`, `"platformio"`), `flash_files` (a tuple of `FlashFile`, a later one over an earlier one where they overlap), `partition_table` (`int`, or `None` for an ESP-IDF build whose `flasher_args.json` names none), `app_image` (`Path` or `None`), `elf` (`Path` or `None`), `chip` (`str`) |
 | `Build.read(offset, size)` | Up to `size` bytes of the flash at `offset`, from the last flash file that holds `offset`, to that file's end at most; `BuildError` when no file holds it, `OSError` when the file cannot be read |
 | `Build.table()` | `read(partition_table, TABLE_SIZE)`; `BuildError` when `partition_table` is `None` |
+| `Build.file_at(offset)` | The last flash file that holds `offset`, or `None`; `OSError` when a file's size cannot be read. `read` uses it |
+| `header_flash(build)` | The largest flash size the bootloader's and the application's image headers give, as a `HeaderFlash`, or `None`; `BuildError` when a file cannot be read |
+| `HeaderFlash(mb, path, what)` | A frozen dataclass: the size in MB, the file of the header, and `bootloader at {offset:#x}` or `application image` |
+| `flash_size(data)` | The flash size in MB of the image header `data`, or `None` when `data` is shorter than 24 bytes, lacks the magic, or has a size code above 7 |
 | `FlashFile(offset, path)` | A frozen dataclass: a file written into the flash at `offset` |
 | `BuildError` | What keeps a build from loading or its table from being read |
 | `esp_idf(app_path, directory, backend, chip)`, `platformio(directory, backend, chip)` | The two readers `load` chooses between, each checking the build against `chip` |
@@ -143,6 +158,7 @@ its base `App` on esp32sim, which reads no file of the build.
 | `{directory}/firmware.factory.bin does not hold firmware.bin at {offset}, in the partition '{name}': build again` | `platformio` | The bytes of the factory image at that partition's offset are not those of `firmware.bin` |
 | `{directory}/flasher_args.json names no partition table` | `Build.table` | An ESP-IDF build without a `partition-table` entry; `board.nvs` and `board.flash` prefix their name |
 | `no file of {directory} is flashed at {offset}` | `Build.read` | No flash file holds the offset; `board.nvs` and `board.flash` prefix their name |
+| `cannot read the image headers of {directory}: {error.strerror}` | `header_flash` | A flash file or `app_image` cannot be read; the esp32sim backend's refusals of the size the headers give are [its own](esp32sim-backend-technical.md#failure-modes) |
 
 Anything else `IdfApp` raises, a `flasher_args.json` that is not JSON or has no `flash_files` for
 instance, is not a `BuildError` and fails with its own traceback. A PlatformIO build without
@@ -197,6 +213,13 @@ built `nvs_reader` and `hello_world` images:
   is `app0` but in the launcher's table without a factory image, where it is `factory`.
 - `test_esp32tl_run_runs_a_platformio_build`: `esp32tl run --build-dir .pio/build/esp32` prints
   `Hello world!`, and the directory's files are unchanged.
+
+`tests/test_flash_size.py` covers the headers' flash size:
+`test_an_image_header_gives_its_flash_size_in_the_high_bits_of_byte_3` every size code,
+`test_a_header_that_gives_no_size_of_esp_idf_s_gives_none` a code of 8, no magic and a short header,
+`test_the_larger_header_wins_and_the_bootloader_s_on_a_tie`,
+`test_a_factory_image_gives_the_bootloader_s_header_in_it` and
+`test_a_build_whose_images_have_no_header_gives_no_size`.
 
 `tests/test_pytest_plugin.py` covers the ESP-IDF reader: `test_load_app_refuses_what_the_runner_cannot_run`,
 `test_load_app_selects_only_the_explicit_build` and `test_selected_build_keeps_validation`;

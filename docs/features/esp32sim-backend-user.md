@@ -41,8 +41,10 @@ the build's files at their offsets, every file of `flasher_args.json` for an ESP
 ([builds](builds-user.md#what-each-kind-of-build-needs)); teardown stops it. A test that never calls
 `power_on()` starts no runner. The chip gets the board profile's PSRAM, passed to the runner as
 `--psram-mb`: 4 MB on `lilygo-t-a7670g-r2`, whose module carries 8, and none on `esp32-devkitc`
-([board profiles](board-profiles-user.md#the-profiles-esp32tl-ships)). Its flash is the runner's
-4 MB, whatever the profile says.
+([board profiles](board-profiles-user.md#the-profiles-esp32tl-ships)). Its flash, `--flash-mb`, is
+the profile's `flash_mb`, 8 MB on `esp32-s3-devkitc` and 4 MB on `esp32-devkitc`; a profile
+without `flash_mb` gets the size the build's image headers give, and a build without them the
+runner's 4 MB ([the flash a run gets](board-profiles-user.md#the-flash-a-run-gets)).
 
 From power-on the run is on the test's clock: the firmware runs only while the test waits, in
 `board.wait`, `board.wait_until`, `board.wait_for_wake` or a console expect, and stands still in
@@ -334,6 +336,9 @@ its body instead, as `BackendError: cannot ...`, without the prefix:
 | `{build} is built for {target}; the board's chip is {chip}: build for {chip} or choose a board profile with that chip` | Build for the profile's chip, or choose a profile whose `chip` is the build's target, as `esp32-s3-devkitc` for an `esp32s3` build |
 | `{build} asks for flash encryption, which the runner does not do` | Build without flash encryption |
 | `{build} is not a finished build, missing {files}` | Finish the build; `{files}` is a comma-separated list |
+| `{file}: the image header of the {bootloader at 0x0, application image} gives {N} MB of flash, more than the {M} MB of board profile '{profile}' (flash_mb = {M}): the application would stop at start-up; set flash_mb = {N} in the profile, or build for {M} MB of flash` | The build is for a larger flash than the profile's: set `flash_mb` to the board's flash, or build for the profile's. Run anyway, its application would stop in `spi_flash` at start-up and the chip reboot until the test's timeout |
+| `{file}: the image header of the {bootloader at 0x0, application image} gives {N} MB of flash, more than the runner's largest, 16 MB: build for 16 MB of flash or less` | The profile has no `flash_mb`, and the build is for 32 MB or more; the runner has at most 16 |
+| `board profile '{profile}' has flash_mb = {N}; the runner's flash is 1, 2, 4, 8 or 16 MB: set one of these in the profile` | The profile's `flash_mb` is a size the runner does not have, as 0 or 32 |
 | The other messages of [a build that cannot be loaded](builds-user.md#when-the-build-cannot-be-loaded) | As that table says |
 | `no runner at {path}: run make setup in a checkout, or esp32tl runtime prepare` | `ESP32TL_RUNNER` names a missing file: point it at an executable runner |
 | `no runner at {path}: run make build-runner in {checkout}` | esp32tl runs from a checkout that has not built its runner: run `make build-runner` there |
@@ -345,7 +350,9 @@ its body instead, as `BackendError: cannot ...`, without the prefix:
 | `cannot listen on {path}: {reason}` | At `board.power_on()`, which raises `BackendError` in the test body: the backend cannot bind the link's socket in a new directory under the system's temporary directory or `/tmp`; check that it is writable |
 | `cannot start {runner}: {reason}` | At `board.power_on()`, which raises `BackendError` in the test body: the runner exists but the system cannot run it, for example `Exec format error` |
 
-`{build}` is the selected build directory, the app's `build/` by default. The build is checked first, then the runner and the ROM
+`{build}` is the selected build directory, the app's `build/` by default; `{file}` the file of
+that header, `bootloader/bootloader.bin` of an ESP-IDF build, `bootloader.bin` or
+`firmware.factory.bin` of a PlatformIO one, with the bootloader at `0x1000` on the classic ESP32. The build is checked first, then its flash size, then the runner and the ROM
 ELF, so only the first problem is reported; the socket and the runner's start come at power-on.
 The profile's routes are checked when the test asks for `gnss`, and its slot when it asks for
 `sd_card`. `sd_card.insert` checks the image; one that changes after it so that the runner's
