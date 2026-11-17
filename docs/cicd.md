@@ -520,26 +520,40 @@ package/assemble/draft, 30 for firmware and 25 per runtime job. ROM and firmware
 release asset set. This workflow intentionally uses artifacts, separate from the main CI's cache
 transport; artifact storage quota must permit its uploads.
 
-Before the first release:
+To publish a release:
 
-1. Merge the workflow and runtime implementation, then run **Runtime release** with
-   `workflow_dispatch` on main. Inspect both native smoke tests and download `verified-release`.
+1. Merge the intended changes to main. To validate them before choosing a new version, run
+   **Runtime release** with `workflow_dispatch` on main and inspect both native smoke tests.
 2. Run **Prepare release** on main with the desired new version and merge its version-only PR
    after the fast checks pass. This tags the merged commit, runs full native release validation,
    and creates a draft containing the wheel, sdist, two executables, two JSON manifests and
    SHA256SUMS. Use a new version for every release; never replace published runtime assets.
 3. Review the draft's notes, hashes and target identities, then click **Publish release**.
-   A direct version-tag push remains supported (for example `git tag v0.1.0` and
-   `git push origin v0.1.0` for the version already in the repository). This also runs full
-   validation and creates only a draft.
-4. Install that release's wheel in a clean environment, run `esp32tl runtime prepare` against
-   the real GitHub release URLs, and boot the firmware again offline. Anonymous downloading
-   requires a published release; a draft is insufficient even though this repository is public.
+   A direct push of a new `vVERSION` tag matching the package metadata also runs full
+   validation and creates only a draft. The first release, `v0.1.0`, used this path because
+   the repository already had version `0.1.0`; **Prepare release** requires a higher version.
+4. After the PyPI publishing workflow succeeds, install `esp32tl==VERSION` from PyPI in a clean
+   environment, run `esp32tl runtime prepare` against the real GitHub release URLs, and boot
+   the firmware again offline. Anonymous downloading requires a published release; a draft
+   is insufficient even though this repository is public.
 
-Publishing the GitHub release triggers the PyPI workflow below, so configure its Trusted
-Publisher before clicking Publish. The release workflow files must be included in the tagged commit.
-The workflows are validated locally with actionlint; hosted runs and PyPI's OIDC exchange still
-require the workflows on GitHub and are not implied by a successful local smoke test.
+Publishing the GitHub release triggers the PyPI workflow below, using the Trusted Publisher
+configured for `esp32tl`. The release workflow files must be included in the tagged commit.
+Local actionlint and smoke tests complement the hosted runs; they do not exercise PyPI's OIDC
+exchange, which succeeded during the first publication linked below.
+
+The first release, [v0.1.0](https://github.com/mateuszsikora/esp32-testing-library/releases/tag/v0.1.0),
+passed [both native release jobs](https://github.com/mateuszsikora/esp32-testing-library/actions/runs/43891958578)
+and [PyPI Trusted Publishing](https://github.com/mateuszsikora/esp32-testing-library/actions/runs/43926774551).
+On 16 November 2026, post-publication verification on macOS arm64 with Python 3.14 installed
+`esp32tl==0.1.0` from PyPI in a clean venv, passed `pip check`, downloaded the runtime into an
+empty cache, and passed a `hello_world` boot test with Python network connections blocked.
+As of that verification, the public-download path had not been checked after publication on
+Linux; its native smoke test ran before publication.
+
+The PyPI description comes from `README.md` in the uploaded distribution. The `0.1.0`
+description retains the pre-publication wording; correcting README on main does not update
+that published metadata. The corrected description will accompany the next package release.
 
 ## PyPI Trusted Publishing
 
@@ -559,10 +573,11 @@ The separate `publish` job downloads those two files and uses
 `pypa/gh-action-pypi-publish@release/v1`. It has `id-token: write`, uses environment `pypi`, and
 runs no checkout or build. No API token, username or password is configured. Both jobs use
 Ubuntu 24.04 with ten-minute timeouts; runs are serialized per release tag without cancelling
-an active upload. OIDC authentication and the first upload cannot be validated by local tests.
+an active upload. Local tests check asset validation; OIDC authentication is exercised by
+the hosted publishing job.
 
-Configure the GitHub repository environment `pypi`, then add a GitHub Trusted Publisher under
-[PyPI account Publishing](https://pypi.org/manage/account/publishing/) for a new project:
+The GitHub repository environment `pypi` and PyPI Trusted Publisher were configured for
+`v0.1.0` with these values:
 
 | Field | Value |
 |---|---|
@@ -572,11 +587,10 @@ Configure the GitHub repository environment `pypi`, then add a GitHub Trusted Pu
 | Workflow filename | `publish-pypi.yml` |
 | Environment | `pypi` |
 
-For an existing project, use its Publishing settings instead. A pending publisher creates the
-project on first upload; it does not reserve the name. See [PyPI's setup guide](https://docs.pypi.org/trusted-publishers/creating-a-project-through-oidc/)
-and [OIDC publishing guide](https://docs.pypi.org/trusted-publishers/using-a-publisher/).
-After the first successful upload, verify `python -m pip install esp32tl==VERSION` (replace `VERSION` with the published version)
-in a clean venv and `esp32tl runtime prepare` against the published GitHub runtime assets.
+To maintain this configuration, use the `esp32tl` project's Publishing settings on PyPI and
+the repository's `pypi` environment on GitHub. See the
+[OIDC publishing guide](https://docs.pypi.org/trusted-publishers/using-a-publisher/).
+Verify each published version using step 4 under [Runtime releases](#runtime-releases).
 
 A failed upload leaves the GitHub release published. Fix the cause before retrying the failed
 job. The workflow deliberately does not enable `skip-existing`: a partial upload or an already
