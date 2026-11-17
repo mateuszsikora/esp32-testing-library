@@ -4,15 +4,17 @@
 
 1. `esp32tl.backends.esp32sim.load_app(app_path, *, build_dir=None, backend="esp32sim")` resolves
    the build directory, `Path(app_path) / build_dir` (`build` when `None`), to an absolute path and
-   calls `esp32tl.build.load(app_path, directory, backend=backend)`. A `BuildError` becomes a
+   calls `esp32tl.build.load(app_path, directory, backend=backend, chip=chip)`, with the board
+   profile's chip on the esp32sim backend and `esp32` on the serial one. A `BuildError` becomes a
    `BackendError` with the same message. `Esp32Sim.__init__`, `serial.check_artifact` and
    `esp32tl.cli` all load through it ([esp32sim backend](esp32sim-backend-technical.md#data-flow)).
 2. `load` chooses the kind of build by its files, in this order: `flasher_args.json` is a file,
    `esp_idf`; `firmware.bin` or `firmware.factory.bin` is a file, `platformio`; otherwise
    `BuildError`.
-3. **`esp_idf(app_path, directory, backend)`** builds `IdfApp(app_path, build_dir=str(directory))`.
+3. **`esp_idf(app_path, directory, backend, chip)`** builds `IdfApp(app_path, build_dir=str(directory))`.
    The directory is absolute on purpose: given `build`, `IdfApp` falls back to a `build` directory
-   in the working directory when the app has none. It refuses a target other than `esp32`
+   in the working directory when the app has none. It refuses a target other than `chip`, the board
+   profile's (`load`'s `chip`, `CLASSIC`, `esp32`, by default)
    (`IdfApp.target`: `IDF_TARGET` in `config/sdkconfig.json`; without that file,
    `extra_esptool_args.chip` in `flasher_args.json`; `esp32` when neither names one, so a build with
    neither passes the check), `flash_settings["encrypt"]` (any file marked `"encrypted": "true"`),
@@ -21,7 +23,7 @@
    entry of `flasher_args.json`, read with `int(offset, 0)`; `app_image` the `file` of its `app`
    entry, relative to the directory; `elf` `IdfApp.elf_file`, the first `.elf` file that
    `os.listdir` gives; `chip` `IdfApp.target`.
-4. **`platformio(directory, backend)`** needs `firmware.bin`, and, without `firmware.factory.bin`,
+4. **`platformio(directory, backend, chip)`** needs `firmware.bin`, and, without `firmware.factory.bin`,
    `bootloader.bin` and `partitions.bin`. `check_encryption` then reads `config/sdkconfig.json`
    (`SDKCONFIG`) when it is a file, and refuses a build that sets `SECURE_FLASH_ENC_ENABLED`, with
    the message `esp_idf` gives an encrypted build (`encryption`), or `SECURE_BOOT`, with
@@ -31,7 +33,9 @@
    bootloader missing at `0x1000`. Then:
    - with `firmware.factory.bin`: one flash file, `firmware.factory.bin` at `0x0`;
    - without it: `app_partition` reads `partitions.bin` (its first `0xC00` bytes), and the flash
-     files are `bootloader.bin` at `0x1000`, `partitions.bin` at `0x8000` and `firmware.bin` at the
+     files are `bootloader.bin` at the chip's bootloader offset (`BOOTLOADER_OFFSETS`: `0x1000` for
+     `esp32` and `esp32s2`, `0x0` for every other chip), `partitions.bin` at `0x8000` and
+     `firmware.bin` at the
      offset of that partition. Nothing is written at the otadata's offset, which stays as the
      runner's flash starts, every byte `0xFF`: erased.
 
@@ -42,10 +46,10 @@
    It refuses a table with no application partition at that offset, and a `firmware.bin` larger
    than the partition. On the flash the files make, read through `flash_bytes` (`Build.read`, or
    no bytes where no file holds the offset), `platformio` checks the bootloader's header at
-   `0x1000`, then the table's magic `0xAA50` at `0x8000`, each with its own message. With
+   the chip's bootloader offset, then the table's magic `0xAA50` at `0x8000`, each with its own message. With
    `firmware.factory.bin` it then finds `app_partition` in the factory image's own table and
    compares the bytes there with the whole of `firmware.bin`. `partition_table` is `0x8000`,
-   `app_image` `firmware.bin`, `elf` `firmware.elf` when it is a file, `chip` `esp32`.
+   `app_image` `firmware.bin`, `elf` `firmware.elf` when it is a file, `chip` the board's.
 
    What the chip then boots, with the ESP-IDF bootloader (`bootloader_utility_load_boot_image`):
    with `boot_app0.bin`'s otadata, which an Arduino build's `firmware.factory.bin` holds at `0xe000`
@@ -82,11 +86,11 @@ What `esp32tl.build` reads of the files:
 |---|---|---|
 | Image header | The first 24 bytes of `firmware.bin`, and at `0x1000` of the flash for the bootloader | `esp_image_header_t`: byte 0 the magic, `0xE9`; bytes 12 and 13 the chip id, little-endian |
 | Partition table | At `0x8000` of the flash, up to `0xC00` bytes (`TABLE_SIZE`) | Bytes 0 and 1 `0xAA 0x50`; then `flash.partitions` ([flash contents](flash-contents-technical.md#schema)) |
-| Chip id | Bytes 12 and 13 of a header | ESP-IDF's `esp_chip_id_t`: `0` `esp32`, `2` `esp32s2`, `5` `esp32c3`, `9` `esp32s3`, `12` `esp32c2`, `13` `esp32c6`, `16` `esp32h2`, `18` `esp32p4`, `20` `esp32c61`, `23` `esp32c5` (`CHIPS`); anything but `0` is refused |
+| Chip id | Bytes 12 and 13 of a header | ESP-IDF's `esp_chip_id_t`: `0` `esp32`, `2` `esp32s2`, `5` `esp32c3`, `9` `esp32s3`, `12` `esp32c2`, `13` `esp32c6`, `16` `esp32h2`, `18` `esp32p4`, `20` `esp32c61`, `23` `esp32c5` (`CHIPS`); anything but the board's chip is refused |
 
 The PlatformIO file names are constants of `esp32tl/build.py`: `FIRMWARE` (`firmware.bin`),
 `FACTORY` (`firmware.factory.bin`), `BOOTLOADER` (`bootloader.bin`), `PARTITIONS`
-(`partitions.bin`), `ELF` (`firmware.elf`); the offsets `BOOTLOADER_OFFSET` (`0x1000`) and
+(`partitions.bin`), `ELF` (`firmware.elf`); the offsets `BOOTLOADER_OFFSETS` (by chip) and
 `TABLE_OFFSET` (`0x8000`).
 
 `firmware.factory.bin`, as pioarduino 55.03.39 writes it for an Arduino build for the classic
@@ -101,7 +105,7 @@ in the build directory, which is why a build without `firmware.factory.bin` gets
 
 | Name | What it is |
 |---|---|
-| `load(app_path, directory, *, backend="esp32sim")` | The `Build` in `directory`, which must be absolute; `backend` names the backend in the errors, and an encrypted ESP-IDF build gets `which the runner does not do` for `esp32sim`, `which {backend} does not support` otherwise |
+| `load(app_path, directory, *, backend="esp32sim", chip="esp32")` | The `Build` in `directory`, which must be absolute, for `chip`, the board profile's; `backend` names the backend in the errors, and an encrypted ESP-IDF build gets `which the runner does not do` for `esp32sim`, `which {backend} does not support` otherwise |
 | `Build` | A frozen dataclass: `directory` (`Path`), `kind` (`ESP_IDF`, `"esp-idf"`, or `PLATFORMIO`, `"platformio"`), `flash_files` (a tuple of `FlashFile`, a later one over an earlier one where they overlap), `partition_table` (`int`, or `None` for an ESP-IDF build whose `flasher_args.json` names none), `app_image` (`Path` or `None`), `elf` (`Path` or `None`), `chip` (`str`) |
 | `Build.read(offset, size)` | Up to `size` bytes of the flash at `offset`, from the last flash file that holds `offset`, to that file's end at most; `BuildError` when no file holds it, `OSError` when the file cannot be read |
 | `Build.table()` | `read(partition_table, TABLE_SIZE)`; `BuildError` when `partition_table` is `None` |
@@ -110,7 +114,7 @@ in the build directory, which is why a build without `firmware.factory.bin` gets
 | `esp_idf(app_path, directory, backend)`, `platformio(directory, backend)` | The two readers `load` chooses between |
 | `check_encryption(directory, backend)`, `encryption(directory, backend, what="flash encryption")` | The refusal of a PlatformIO build whose `config/sdkconfig.json` enables flash encryption or secure boot; the `BuildError` for a build that asks for `what` |
 | `app_partition(path, table, firmware)` | The application partition of `table` at `ota_0`'s offset, else at `0x10000`; `BuildError` without one there, for a `firmware` larger than it, or for a table `flash.partitions` refuses |
-| `header(path, offset)`, `check_image(path, data, what, directory, backend)`, `flash_bytes(build, offset, size)` | The 24 bytes of an image header in a file; the check of its magic and chip id; `Build.read` with no bytes where no file holds the offset |
+| `header(path, offset)`, `check_image(path, data, what, directory, chip)`, `wrong_chip(directory, built, chip)`, `flash_bytes(build, offset, size)` | The 24 bytes of an image header in a file; the check of its magic and chip id against `chip`; the error for a build for another chip; `Build.read` with no bytes where no file holds the offset |
 
 `Esp32Sim.app` and the result of `load_app` are a `Build`. pytest-embedded's own `dut.app` stays
 its base `App` on esp32sim, which reads no file of the build.
@@ -123,15 +127,15 @@ its base `App` on esp32sim, which reads no file of the build.
 | Message | Raised by | Cause |
 |---|---|---|
 | `{directory} holds no ESP-IDF or PlatformIO build: no flasher_args.json and no firmware.bin` | `load` | None of `flasher_args.json`, `firmware.bin` and `firmware.factory.bin` is a file |
-| `{directory} is built for {target}; {backend} runs the classic esp32` | `esp_idf` | `IdfApp.target` is not `esp32` |
+| `{directory} is built for {target}; the board's chip is {chip}: build for {chip} or choose a board profile with that chip` | `esp_idf`, through `wrong_chip` | `IdfApp.target` is not the board's chip |
 | `{directory} asks for flash encryption, which the runner does not do` | `esp_idf`, `check_encryption` | A flash file marked encrypted, or `SECURE_FLASH_ENC_ENABLED` in a PlatformIO build's `config/sdkconfig.json`; `which {backend} does not support` for another backend than `esp32sim` |
 | `{directory} asks for secure boot, which the runner does not do` | `check_encryption` | `SECURE_BOOT` in a PlatformIO build's `config/sdkconfig.json`; `which {backend} does not support` for another backend than `esp32sim` |
 | `{directory}/config/sdkconfig.json is not JSON: {error}` | `check_encryption` | The file is not UTF-8 JSON; `{error}` is the decoder's |
 | `{directory}/config/sdkconfig.json is not a JSON object` | `check_encryption` | The JSON is an array, a string or a number |
 | `{directory} is not a finished build, missing {paths}` | `esp_idf`, `platformio` | A file `flasher_args.json` lists, or a PlatformIO file the build needs, is not a file; `{paths}` comma-separated |
-| `{directory} is built for {chip}; {backend} runs the classic esp32` | `check_image` | A chip id other than `0` in the header of `firmware.bin` or of the bootloader; `{chip}` from `CHIPS`, or `an unknown chip (chip id {id})` |
+| `{directory} is built for {built}; the board's chip is {chip}: build for {chip} or choose a board profile with that chip` | `check_image`, through `wrong_chip` | A chip id other than the board chip's in the header of `firmware.bin` or of the bootloader; `{built}` from `CHIPS`, or `an unknown chip (chip id {id})` |
 | `{directory}/firmware.bin holds no application image: no 0xE9 there` | `check_image` | `firmware.bin` shorter than 24 bytes, or without the magic |
-| `{file} holds no bootloader at 0x1000: no 0xE9 there` | `check_image` | No header at `0x1000` of the flash: `{file}` is `firmware.factory.bin`, or `bootloader.bin` |
+| `{file} holds no bootloader at {offset}: no 0xE9 there` | `check_image` | No header at the chip's bootloader offset of the flash, `0x1000` on the classic ESP32: `{file}` is `firmware.factory.bin`, or `bootloader.bin` |
 | `{directory}/firmware.factory.bin holds no partition table at 0x8000: no 0xAA50 there` | `platformio` | The factory image has no table at `0x8000`; a separate `partitions.bin` is checked by `flash.partitions` first |
 | `{file}: {reason}` | `app_partition` | `flash.partitions` refuses the table of `partitions.bin` or of `firmware.factory.bin`, as `partition table: invalid magic 0x0 at 0x0` |
 | `{file}: firmware.bin goes at {offset}, where the table has no application partition` | `app_partition` | No application partition starts at `ota_0`'s offset, or at `0x10000` without `ota_0`; `{file}` is `partitions.bin` or `firmware.factory.bin` |
@@ -168,7 +172,9 @@ built `nvs_reader` and `hello_world` images:
 - `test_the_application_image_s_hash_is_firmware_bin_s`, `test_without_firmware_elf_the_build_has_no_elf`.
 - `test_an_image_for_another_chip_is_refused_by_its_name`: the S2, the C3, the S3 and an unknown
   chip id, with and without a factory image, the bootloader at `0x0`, on esp32sim and on serial;
-  `test_a_bootloader_for_another_chip_is_refused`.
+  `test_a_bootloader_for_another_chip_is_refused`;
+  `test_a_build_for_the_board_s_chip_loads_with_its_bootloader_at_0`: an S3, C3 or C6 build on
+  that chip, its `bootloader.bin` at `0x0`.
 - `test_what_is_not_an_image_or_a_table_where_the_flash_needs_one_is_refused`,
   `test_a_build_missing_what_it_flashes_is_unfinished`: the other messages.
 - `test_an_esp_idf_build_beside_platformio_s_files_is_read_as_esp_idf`.

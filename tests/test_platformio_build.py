@@ -258,16 +258,30 @@ def test_an_image_for_another_chip_is_refused_by_its_name(
     with pytest.raises(BackendError) as refused:
         esp32sim.load_app(str(tmp_path), build_dir=directory)
     assert str(refused.value).startswith(f"{directory} is built for {chip}")
-    assert str(refused.value).endswith("; esp32sim runs the classic esp32")
-    with pytest.raises(BackendError, match=f"is built for {chip}.*; serial runs the classic"):
+    assert str(refused.value).endswith(
+        "; the board's chip is esp32: build for esp32 or choose a board profile with that chip"
+    )
+    with pytest.raises(BackendError, match=f"is built for {chip}.*; the board's chip is esp32"):
         check_artifact(str(tmp_path), build_dir=directory)
 
 
 def test_a_bootloader_for_another_chip_is_refused(tmp_path: Path) -> None:
     directory = pio_build(tmp_path)
     (directory / "bootloader.bin").write_bytes(image(9))
-    with pytest.raises(BackendError, match="is built for esp32s3; esp32sim runs the classic esp32"):
+    with pytest.raises(BackendError, match="is built for esp32s3; the board's chip is esp32"):
         esp32sim.load_app(str(tmp_path), build_dir=directory)
+
+
+@pytest.mark.parametrize("factory", [False, True])
+@pytest.mark.parametrize("chip_id,chip", [(9, "esp32s3"), (5, "esp32c3"), (13, "esp32c6")])
+def test_a_build_for_the_board_s_chip_loads_with_its_bootloader_at_0(
+    tmp_path: Path, factory: bool, chip_id: int, chip: str
+) -> None:
+    directory = pio_build(tmp_path, factory=factory, chip_id=chip_id, bootloader_at=0)
+    app = esp32sim.load_app(str(tmp_path), build_dir=directory, chip=chip)
+    assert app.chip == chip
+    if not factory:
+        assert next((f.offset, f.path.name) for f in app.flash_files) == (0, "bootloader.bin")
 
 
 def test_what_is_not_an_image_or_a_table_where_the_flash_needs_one_is_refused(
@@ -598,7 +612,7 @@ def test_board_nvs_and_board_flash_find_the_table_of_either_build(
 ) -> None:
     pio_build(tmp_path / ".pio/build/esp32", factory=factory)
     monkeypatch.setattr(esp32sim, "runner_path", lambda: Path("runner"))
-    monkeypatch.setattr(esp32sim, "rom_path", lambda: Path("rom"))
+    monkeypatch.setattr(esp32sim, "rom_path", lambda chip="esp32": Path("rom"))
     run = tmp_path / "run"
     run.mkdir()
     board = Esp32Sim(

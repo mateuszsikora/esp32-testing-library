@@ -64,7 +64,7 @@ from pytest_embedded.dut import Dut
 from pytest_embedded.log import DuplicateStdoutPopen, MessageQueue
 from pytest_embedded.utils import Meta, remove_asci_color_code
 
-from esp32tl import build, flash, recording, runtime
+from esp32tl import boards, build, flash, recording, runtime
 from esp32tl.backends.clock import HeldClock, nanoseconds, seconds
 from esp32tl.boards import BoardProfile, capabilities
 from esp32tl.boards.capabilities import CapabilityError, Request
@@ -101,7 +101,7 @@ ROOT = Path(__file__).resolve().parents[2]
 # The ROM ELF scripts/fetch-rom-elf puts in .cache/ (plan M0). The runner's own lookup prefers the
 # newest release under ~/.espressif instead, so the backend always passes --rom.
 ROM_RELEASE = "20241011"
-ROM_ELF = "esp32_rev300_rom.elf"
+ROM_ELF = runtime.ROM
 
 # How long a run of the esp32tl command lasts by default, in emulated seconds: its clock runs
 # free. hello_world runs 12 emulated seconds in 0.3 s of wall time on an M2 Pro, so 300 is a few
@@ -129,16 +129,40 @@ EXIT_SECONDS = 5
 SUN_PATH_MAX = 104
 
 
+# What esp32sim does not model on a chip, by what a test asks for: an interface's kind, or
+# `<kind>.<role>` for a role of it. The test is skipped with the reason; each gap is an entry of
+# https://github.com/mateuszsikora/esp32-testing-library/issues/229.
+CHIP_GAPS: dict[str, dict[str, str]] = {
+    chip: {
+        "sd_card": f"esp32sim does not model GP-SPI RX DMA on the {title}, which ESP-IDF's SD SPI"
+        " driver needs (#229, G2)",
+        "wifi.station": f"esp32sim has no virtual station for a SoftAP on the {title} (#229, G4)",
+    }
+    for chip, title in (("esp32s3", "ESP32-S3"), ("esp32c3", "ESP32-C3"), ("esp32c6", "ESP32-C6"))
+}
+
+
 class BackendError(Exception):
     """What keeps the backend from starting, said so that the reader knows what to do."""
 
 
-def runtime_path(kind: str) -> Path:
-    explicit = os.environ.get("ESP32TL_RUNNER" if kind == "runner" else "ESP32TL_ROM")
+def runtime_path(kind: str, chip: str = "esp32") -> Path:
+    """The runner, or `chip`'s ROM ELF: ESP32TL_RUNNER, or ESP32TL_ROM for the classic ESP32 and
+    ESP32TL_ROM_<CHIP> (ESP32TL_ROM_ESP32S3) for another chip, else the checkout's, else the
+    prepared runtime's."""
+    if kind == "runner":
+        variable = "ESP32TL_RUNNER"
+    else:
+        variable = "ESP32TL_ROM" if chip == "esp32" else f"ESP32TL_ROM_{chip.upper()}"
+    explicit = os.environ.get(variable)
+    if kind != "runner" and chip not in runtime.ROMS:
+        raise BackendError(
+            f"esp32tl has no ROM for {chip}; the chips are {', '.join(runtime.ROMS)}"
+        )
     local = ROOT / (
         "runner/target/release/esp32tl-runner"
         if kind == "runner"
-        else f".cache/esp-rom-elfs/{ROM_RELEASE}/{ROM_ELF}"
+        else f".cache/esp-rom-elfs/{ROM_RELEASE}/{runtime.ROMS[chip][0]}"
     )
     try:
         if explicit:
@@ -146,7 +170,7 @@ def runtime_path(kind: str) -> Path:
         elif (ROOT / "runner/Cargo.toml").is_file():
             path = local
         else:
-            return runtime.cached_file(kind)
+            return runtime.cached_file(kind, chip=chip)
         if not path.is_file():
             raise runtime.RuntimeError(
                 f"no {kind} at {path}: run make setup in a checkout, or esp32tl runtime prepare"
@@ -154,7 +178,7 @@ def runtime_path(kind: str) -> Path:
         if kind == "runner":
             runtime.identity(path)
         else:
-            runtime.verify(path, runtime.ROM_SHA)
+            runtime.verify(path, runtime.ROMS[chip][1])
         return path
     except runtime.RuntimeError as error:
         raise BackendError(str(error)) from error
@@ -164,19 +188,23 @@ def runner_path() -> Path:
     return runtime_path("runner")
 
 
-def rom_path() -> Path:
-    return runtime_path("rom")
+def rom_path(chip: str = "esp32") -> Path:
+    return runtime_path("rom", chip)
 
 
 def load_app(
-    app_path: str, *, build_dir: str | Path | None = None, backend: str = "esp32sim"
+    app_path: str,
+    *,
+    build_dir: str | Path | None = None,
+    backend: str = "esp32sim",
+    chip: str = "esp32",
 ) -> Build:
-    """The finished, unencrypted classic ESP32 build selected relative to `app_path`, an ESP-IDF
-    or a PlatformIO build directory (`esp32tl.build`); `backend` names the backend in the errors.
-    """
+    """The finished, unencrypted build for `chip`, the board's, selected relative to `app_path`,
+    an ESP-IDF or a PlatformIO build directory (`esp32tl.build`); `backend` names the backend in
+    the errors."""
     directory = (Path(app_path) / (build_dir if build_dir is not None else "build")).resolve()
     try:
-        return build.load(app_path, directory, backend=backend)
+        return build.load(app_path, directory, backend=backend, chip=chip)
     except BuildError as error:
         raise BackendError(str(error)) from error
 
@@ -209,7 +237,10 @@ def runner_command(
     the application's ELF, `app.elf`. A `realtime`
     run is paced to wall time, for a real device at the far end of a route. `flash_out` is the file
     the runner writes the whole flash to when the link asks, and at the end of the run."""
-    command = [str(runner), "--chip", "esp32", "--rom", str(rom), "--max-seconds", str(max_seconds)]
+    command = [
+        *(str(runner), "--chip", app.chip, "--rom", str(rom)),
+        *("--max-seconds", str(max_seconds)),
+    ]
     if held:
         command += ["--console", "both", "--peer-timeout", "0"]
     command += ["--board", f"socket:{link}"]
@@ -340,9 +371,9 @@ class Esp32Sim(Board):
         self._msg_queue = msg_queue
         self._meta = meta
         self._skip = skip or refuse
-        self.app = load_app(app_path, build_dir=build_dir)
+        self.app = load_app(app_path, build_dir=build_dir, chip=profile.chip)
         self._nvs: dict[str, tuple[int, Path]] = {}
-        self._runner, self._rom = runner_path(), rom_path()
+        self._runner, self._rom = runner_path(), rom_path(profile.chip)
         # What the guest printed on its console, as the link brings it, and cut into lines.
         self.console_output = bytearray()
         self.console_lines = ConsoleLines()
@@ -358,7 +389,7 @@ class Esp32Sim(Board):
         self._files: dict[Path, tuple[str, str]] = {}
         self._console = ConsoleInput(
             "console",
-            Wire(None, 3, 115200),
+            Wire(None, boards.CHIPS[profile.chip].console_pin("rx"), 115200),
             log=self.log,
             clock=self._run_clock,
             directory=self.directory,
@@ -538,6 +569,12 @@ class Esp32Sim(Board):
         reason = capabilities.refusal(self.name, [request], declared)
         if reason is not None:
             self._skip(f"{self.name}: {reason}")
+        what = capabilities.kind(request.interface)
+        gaps = CHIP_GAPS.get(self.profile.chip, {})
+        gap = gaps.get(f"{what}.{request.role}") if request.role else None
+        gap = gap or gaps.get(what)
+        if gap is not None:
+            self._skip(f"{self.name}: {request.interface} on {self.profile.chip}: {gap}")
         if request.source == "real":
             self._refuse_replays(f"{request.interface}: a real source")
 

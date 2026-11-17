@@ -5,7 +5,8 @@ that runs the [esp32sim](https://github.com/mikroverk/esp32sim) emulator, on the
 is the default backend behind the `board`, `console`, `gnss`, `lines` and `sd_card` fixtures,
 with `[esp32sim]` in each test id ([pytest plugin](pytest-plugin-user.md)). A real board is selected
 explicitly through the [serial backend](serial-backend-user.md). The emulator runs an unmodified
-ESP-IDF or PlatformIO build for the classic ESP32.
+ESP-IDF or PlatformIO build for the board profile's chip: the classic ESP32, the ESP32-S3, the
+ESP32-C3 or the ESP32-C6 ([chips other than the classic ESP32](#chips-other-than-the-classic-esp32)).
 
 ## What it needs
 
@@ -13,14 +14,18 @@ ESP-IDF or PlatformIO build for the classic ESP32.
   `make build-runner`) builds. `ESP32TL_RUNNER=PATH` names another, for example the
   `RUNNER_PROFILE=dev` build in `runner/target/debug/esp32tl-runner`. It must be an executable
   file.
-- **The ROM ELF.** In an editable checkout, `.cache/esp-rom-elfs/20241011/esp32_rev300_rom.elf`, which
-  `make setup` (or `make rom-elf`) puts there. `ESP32TL_ROM=PATH` names another. The backend
+- **The ROM ELF** of the board's chip. In an editable checkout,
+  `.cache/esp-rom-elfs/20241011/esp32_rev300_rom.elf` for the classic ESP32,
+  `esp32s3_rev0_rom.elf`, `esp32c3_rev3_rom.elf` or `esp32c6_rev0_rom.elf` beside it for the
+  others, which `make setup` (or `make rom-elf`) puts there. `ESP32TL_ROM=PATH` names another for
+  the classic ESP32, `ESP32TL_ROM_ESP32S3`, `ESP32TL_ROM_ESP32C3` and `ESP32TL_ROM_ESP32C6` for the
+  others. The backend
   always hands this file to the runner, so the runner's own ROM lookup is not used
   ([where the runner looks for it](runner-user.md#where-the-rom-comes-from)).
 - **An ESP-IDF or a PlatformIO build** in the directory selected by
   `app_path(..., build_dir=...)`, defaulting to the app's `build/`, as `build_dir=".pio/build/esp32"`
   selects a PlatformIO one. Relative build paths are relative to the app; absolute paths work too.
-  Built for the classic ESP32 and finished; an ESP-IDF build without flash encryption.
+  Built for the board profile's chip and finished; an ESP-IDF build without flash encryption.
   [Builds](builds-user.md) says what each kind needs and how its files reach the flash.
 
 A wheel installation uses the verified user cache prepared by `esp32tl runtime prepare`.
@@ -64,7 +69,9 @@ run's log as `boot N: REASON (reset cause C)`, and into the link's statistics as
 opened to the device, as `lost`, and leave the device without an address on the simulated network
 until it takes one again ([network](network-user.md#open-a-tcp-connection-to-the-device)).
 
-A chip in deep sleep with a timer wake wakes on its RTC timer, through a `DEEPSLEEP_RESET` (5).
+A classic ESP32 in deep sleep with a timer wake wakes on its RTC timer, through a
+`DEEPSLEEP_RESET` (5); the other chips do not wake
+([below](#chips-other-than-the-classic-esp32)).
 `board.wait_for_wake(within=...)` runs the board to that wake in one stretch: the runner moves
 the chip's RTC through the sleep in long steps, up to just before the timer's alarm
 ([runner](runner-user.md#connect-a-peer)), and the harness takes no turn until the wake, where
@@ -285,6 +292,31 @@ rule the test gave with what it did.
 With a [real source](real-source-user.md#what-the-report-says), the statistics have a line for the
 lags the run skipped, and the route's line and entry its port and the bytes it dropped.
 
+
+## Chips other than the classic ESP32
+
+A board profile whose `chip` is `esp32s3`, `esp32c3` or `esp32c6` runs on esp32sim's machine for
+that chip, with the chip's ROM; esp32tl ships one profile of each, `esp32-s3-devkitc`,
+`esp32-c3-devkitm` and `esp32-c6-devkitc` ([board profiles](board-profiles-user.md)). On them
+the console, the UART routes, the lines, `board.nvs(...)` and `board.flash()`, `board.reset()` and
+the power cycle, the Wi-Fi access point with its network, PSRAM on the S3, and the forwarding of
+the firmware's HCI to `bt.air` work as on the classic ESP32 ([tests](../../tests/test_chips.py)).
+What esp32sim does not model on these chips, issue
+[#229](https://github.com/mateuszsikora/esp32-testing-library/issues/229) tracks:
+
+| What | On the S3, C3 and C6 |
+|---|---|
+| An SD card (`sd_card`) | Skipped, at the call that asks for it: `esp32sim: sd_card on esp32s3: esp32sim does not model GP-SPI RX DMA on the ESP32-S3, which ESP-IDF's SD SPI driver needs (#229, G2)` |
+| A virtual station (`wifi.station(...)`) | Skipped: `esp32sim: wifi on esp32s3: esp32sim has no virtual station for a SoftAP on the ESP32-S3 (#229, G4)` |
+| Deep sleep | The firmware goes to sleep and never wakes: `board.wait_for_wake` raises when its time is up, and the console says nothing more |
+| Bluetooth on the C6 | `bt` on an image built with ESP-IDF v5.3.6 fails at `board.power_on()`: esp32sim's C6 hooks want v5.5.x (`--bt …: C6 BLE requires esp_app_desc.idf_ver v5.5.x, got "v5.3.6"`) |
+
+esp32tl's own Bluetooth peers are Bluetooth Classic devices, which a BLE-only chip cannot reach:
+[issue #234](https://github.com/mateuszsikora/esp32-testing-library/issues/234). A boot's reason
+names the chip's reset cause with the classic ESP32's names (`boot N: SW_CPU_RESET (reset cause
+12)`): the numbers 1, 3, 5 and 12 mean the same on all four chips, a power-on, a software system
+reset, a wake from deep sleep and `esp_restart()`.
+
 ## When the backend cannot start
 
 Unless the table says otherwise, the test gets an error at setup and its body does not run, and
@@ -295,12 +327,12 @@ its body instead, as `BackendError: cannot ...`, without the prefix:
 |---|---|
 | `the board profile {profile} has no {interface}; its interfaces are {interfaces}` | The test uses `gnss` on a profile without `uart.gnss`, or `sd_card` on one without a slot; choose a profile that has it. Through `board.gnss` or `board.sd_card` it fails the test in its body instead, as `BackendError: the board profile ...`, without the prefix ([where it fails](pytest-plugin-user.md#one-board-and-its-interfaces)) |
 | `{build} holds no ESP-IDF or PlatformIO build: no flasher_args.json and no firmware.bin` | Build the app (`make firmware` for this repository's firmware), or fix the `app_path` marker and its `build_dir` keyword; no other build is tried |
-| `{build} is built for {target}; esp32sim runs the classic esp32` | Build for `esp32` |
+| `{build} is built for {target}; the board's chip is {chip}: build for {chip} or choose a board profile with that chip` | Build for the profile's chip, or choose a profile whose `chip` is the build's target, as `esp32-s3-devkitc` for an `esp32s3` build |
 | `{build} asks for flash encryption, which the runner does not do` | Build without flash encryption |
 | `{build} is not a finished build, missing {files}` | Finish the build; `{files}` is a comma-separated list |
 | The other messages of [a build that cannot be loaded](builds-user.md#when-the-build-cannot-be-loaded) | As that table says |
 | `no runner at {path}: run make setup in a checkout, or esp32tl runtime prepare` | Build the runner, or point `ESP32TL_RUNNER` at an executable one |
-| `no rom at {path}: run make setup in a checkout, or esp32tl runtime prepare` | Fetch the ROM ELF, or point `ESP32TL_ROM` at it |
+| `no rom at {path}: run make setup in a checkout, or esp32tl runtime prepare` | Fetch the ROM ELFs, or point `ESP32TL_ROM` (or the chip's `ESP32TL_ROM_<CHIP>`) at the chip's |
 | `bluetooth: {build} holds no ELF of the application, whose symbols the runner's --bt needs` | At the `bt` fixture, or in the test body at the first `board.bluetooth`, without the prefix: the build directory has no `.elf` file, or a PlatformIO one no `firmware.elf`; build the app again, or keep its ELF beside the image |
 | `cannot listen on {path}: {reason}` | At `board.power_on()`, which raises `BackendError` in the test body: the backend cannot bind the link's socket in a new directory under the system's temporary directory or `/tmp`; check that it is writable |
 | `cannot start {runner}: {reason}` | At `board.power_on()`, which raises `BackendError` in the test body: the runner exists but the system cannot run it, for example `Exec format error` |

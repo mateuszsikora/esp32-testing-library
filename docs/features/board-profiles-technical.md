@@ -64,8 +64,8 @@ order of [Schema](#schema). File access, UTF-8 decoding and TOML parsing errors 
 | Key | Type | Required | Rule |
 |---|---|---|---|
 | `name` | string | yes | The file's name without `.toml` |
-| `chip` | string | yes | One of `CHIPS`: `esp32`, the classic chip, the only one the runner emulates |
-| `flash_mb`, `psram_mb` | integer | no | At least 0; absent is "not known", `None` in `BoardProfile`. The esp32sim backend gives the runner `psram_mb` as `--psram-mb` when it is set ([esp32sim-backend-technical.md](esp32sim-backend-technical.md#data-flow)), and the runner refuses any size but 0 and 4. `flash_mb` is not passed on: the runner's flash is its default, 4 MiB |
+| `chip` | string | yes | One of `CHIPS`, the chips the runner emulates: `esp32` (the classic chip), `esp32s3`, `esp32c3`, `esp32c6`. The chip decides the GPIOs, the UARTs and the console's pins below ([Chips](#chips)) |
+| `flash_mb`, `psram_mb` | integer | no | At least 0; absent is "not known", `None` in `BoardProfile`. The esp32sim backend gives the runner `psram_mb` as `--psram-mb` when it is set ([esp32sim-backend-technical.md](esp32sim-backend-technical.md#data-flow)), and the runner refuses a size the chip does not take (0 or 4 on the classic ESP32; 0, 2, 4 or 8 on the ESP32-S3; 0 on the ESP32-C3 and ESP32-C6). `flash_mb` is not passed on: the runner's flash is its default, 4 MiB |
 | `[uart.<role>]` | table | no | One per UART route; keys below |
 | `[lines.<role>]` | table | no | One per set of GPIO lines; keys below |
 | `[sd_card]` | table | no | The board's SD card slot, wired for SPI mode; keys below |
@@ -76,14 +76,14 @@ No other key is allowed, at any level. A role, and a line's name, matches `[a-z]
 
 | Key | Rule |
 |---|---|
-| `port` | 1 or 2: in `UART_PORTS` (0 to 2), and not `CONSOLE_PORT`, 0 |
-| `tx` | A GPIO of the classic ESP32 that can drive an output: 0 to 33, without 24 and 28 to 31 |
-| `rx` | A GPIO of the classic ESP32: 0 to 39, without 24 and 28 to 31 (`GPIOS`) |
+| `port` | A UART of the chip (0 to `Chip.uarts - 1`: 0 to 2, or 0 to 1 on the C3 and the C6), and not `CONSOLE_PORT`, 0 |
+| `tx` | A GPIO of the chip that can drive an output: in `Chip.gpios` and not in `Chip.input_only` |
+| `rx` | A GPIO of the chip: in `Chip.gpios` |
 | `baud` | At least 1 |
 
 `[sd_card]` takes exactly `sclk`, `mosi`, `miso` and `cs`, the GPIOs of the slot as the chip sees
-them: `sclk`, `mosi` and `cs` can drive an output (0 to 33, without 24 and 28 to 31), `miso` is
-any GPIO of `GPIOS`. A board has one slot at most, and the interface is `sd_card`, with no role.
+them: `sclk`, `mosi` and `cs` can drive an output (not in `Chip.input_only`), `miso` is any GPIO
+of `Chip.gpios`. A board has one slot at most, and the interface is `sd_card`, with no role.
 
 `[lines.<role>]` maps a line's name to its GPIO, either as an integer (`pwrkey = 4`) or as a table
 `{ pin = 33, pull = "down" }`, where `pull` is `up` or `down` and may be left out. A bare integer
@@ -92,8 +92,8 @@ while the test does not, which the firmware's own output wins over.
 
 Across the profile, no two routes share a `port`, and no GPIO serves two uses (a route's `tx` and
 `rx`, a line, a pin of the slot). The `console` interface is not in the file, because every board has it, but it
-takes its share: UART0 and its IO MUX pins, GPIO 1 (`console.tx`) and GPIO 3 (`console.rx`), in
-`CONSOLE_PORT` and `CONSOLE_PINS`. GPIO 6 to 11, which most modules give to the SPI flash, are not
+takes its share: UART0 and its IO MUX pins, `CONSOLE_PORT` and the chip's `Chip.console_pins`,
+on the classic ESP32 GPIO 1 (`console.tx`) and GPIO 3 (`console.rx`). GPIO 6 to 11, which most modules give to the SPI flash, are not
 refused
 ([why](../decisions/harness.md#a-profile-reserves-the-consoles-uart-and-pins-not-the-flash-pins)).
 Integers are TOML integers: `true` is not a port.
@@ -198,6 +198,22 @@ and that controller, which `bt.tap(path)` asks for and writes as btsnoop
 `serial` is in `SERVICES` with services `esp,idf`; tests select it explicitly with
 `--esp32tl-backend serial`. Both backends are counted by `check`.
 
+### Chips
+
+`CHIPS` maps each chip a profile may name to a `Chip`: `name`, `title` (in messages), `gpios`,
+`input_only`, `uarts` and `console_pins`; `Chip.console_pin("tx")` and `("rx")` give UART0's pins.
+Every pad the chip has counts, the flash's and the PSRAM's included, as on the classic ESP32.
+
+| `chip` | `gpios` | `input_only` | `uarts` | `console_pins` (TX, RX) | Source |
+|---|---|---|---|---|---|
+| `esp32` | 0 to 39 without 24 and 28 to 31 | 34 to 39 | 3 | 1, 3 | ESP32 datasheet |
+| `esp32s3` | 0 to 48 without 22 to 25 | none | 3 | 43, 44 | ESP32-S3 datasheet, section 2.3 |
+| `esp32c3` | 0 to 21 | none | 2 | 21, 20 | ESP32-C3 datasheet, section 2.2 |
+| `esp32c6` | 0 to 30 | none | 2 | 16, 17 | ESP32-C6 datasheet, section 2.3 |
+
+The same pads are esp32sim's own pin tables at the pin (`esp-soc/src/pins.rs`, `ChipPins`), which
+the runner checks the link's `watch` against ([protocol 5.1](../protocol.md#51-hello)).
+
 ## Interfaces
 
 | Name | Kind | What |
@@ -206,14 +222,14 @@ and that controller, which `bt.tap(path)` asks for and writes as btsnoop
 | `boards.load(path)` | function | The profile in any file, checked against [Schema](#schema) |
 | `boards.names()` | function | The shipped profiles' names, sorted |
 | `boards.DEFAULT_PROFILE` | `str` | `"esp32-devkitc"` |
-| `BoardProfile` | frozen dataclass | `name`, `chip`, `flash_mb: int \| None`, `psram_mb: int \| None`, `uart: Mapping[str, UartRoute]`, `lines: Mapping[str, Mapping[str, Line]]`, `sd_card: SdCardRoute \| None = None`; property `interfaces`: `["console", "uart.<role>", ..., "lines.<role>", ..., "sd_card", "wifi", "bluetooth"]`, in file order, `sd_card` only with a slot, `wifi` and `bluetooth` always: every classic ESP32 has them. Not hashable: its mappings are not |
+| `BoardProfile` | frozen dataclass | `name`, `chip`, `flash_mb: int \| None`, `psram_mb: int \| None`, `uart: Mapping[str, UartRoute]`, `lines: Mapping[str, Mapping[str, Line]]`, `sd_card: SdCardRoute \| None = None`; property `interfaces`: `["console", "uart.<role>", ..., "lines.<role>", ..., "sd_card", "wifi", "bluetooth"]`, in file order, `sd_card` only with a slot, `wifi` and `bluetooth` always: every chip of `CHIPS` has them. Not hashable: its mappings are not |
 | `UartRoute` | frozen dataclass | `port`, `tx`, `rx`, `baud` |
 | `SdCardRoute` | frozen dataclass | `sclk`, `mosi`, `miso`, `cs` |
 | `Line` | frozen dataclass | `pin`, `pull: "up" \| "down" \| None = None`, `active`, `on_ms`, `off_ms`, `pulse_ms` (each `int \| None = None`); [pulse schema](#pulse-timing-on-a-line) |
 | `capabilities.declared()` | function, cached | The shipped declaration: backend name, then kind, then `Capability` |
 | `capabilities.load(path)` | function | A declaration in any file |
 | `Capability` | frozen dataclass | `sources: tuple[str, ...] = ()`, `tap: bool = False` |
-| `Request` | frozen dataclass | `interface`, `source: str \| None = None`, `tap: bool = False` |
+| `Request` | frozen dataclass | `interface`, `source: str \| None = None`, `tap: bool = False`, `role: str \| None = None`: what the source is for when an interface has more than one, `station` for `wifi.station`; `check` and `refusal` do not read it |
 | `capabilities.check(requests, profile, capabilities)` | function | Raises `CapabilityError` for a request the profile or every backend refuses |
 | `capabilities.refusal(backend, requests, capabilities)` | function | The reason, without the backend's name, or `None`; `KeyError` for an undeclared backend |
 | `board_profile(node)` | function, `esp32tl/pytest_plugin.py` | The `loaded_profile` collection saved for the test's definition; never reads the marker or the file |
@@ -242,15 +258,15 @@ The ones `tests/test_boards.py` checks, verbatim:
 | `x.toml: missing chip`, `x.toml: unknown key pins` | A top-level key missing or unknown |
 | `x.toml: uart.gnss: missing baud`, `x.toml: lines.modem.ri: missing pin` | The same in a table |
 | `x.toml: name: 'y' is not the file's name, 'x'` | `name` differs from the file's name |
-| `x.toml: chip: 'esp32s3' is not one of esp32` | Another chip |
+| `x.toml: chip: 'esp32p4' is not one of esp32, esp32s3, esp32c3, esp32c6` | Another chip |
 | `x.toml: uart: is not a table`, `x.toml: sd_card: is not a table` | `uart`, `lines` or `sd_card`, or a role in them, is not a table |
 | `x.toml: sd_card: missing cs`, `x.toml: sd_card: unknown key cd` | A pin of the slot missing, or another key |
-| `x.toml: sd_card.cs: GPIO 36 is input only` | `sclk`, `mosi` or `cs` on 34 to 39 |
+| `x.toml: sd_card.cs: GPIO 36 is input only` | `sclk`, `mosi` or `cs` on an input-only pin, 34 to 39 on the classic ESP32 |
 | `x.toml: sd_card.mosi: GPIO 4 is uart.gnss.tx already`, `x.toml: sd_card.cs: GPIO 13 is sd_card.miso already` | A pin of the slot with another use |
 | `x.toml: psram_mb: '4' is not an integer`, `x.toml: uart.gnss.port: True is not an integer` | Not a TOML integer |
-| `x.toml: flash_mb: -4 is out of range, at least 0`, `x.toml: uart.gnss.port: 3 is out of range, from 0 to 2` | Out of range; a GPIO above 39 too |
-| `x.toml: uart.gnss.rx: the ESP32 has no GPIO 24` | 24 or 28 to 31 |
-| `x.toml: uart.gnss.tx: GPIO 34 is input only` | A `tx` on 34 to 39 |
+| `x.toml: flash_mb: -4 is out of range, at least 0`, `x.toml: uart.gnss.port: 3 is out of range, from 0 to 2` | Out of range; a GPIO above the chip's highest too (`from 0 to 39` on the classic ESP32, `from 0 to 21` on the C3); a UART2 on the C3 or the C6 (`from 0 to 1`) |
+| `x.toml: uart.gnss.rx: the ESP32 has no GPIO 24`, `x.toml: uart.gnss.rx: the ESP32-S3 has no GPIO 22` | A GPIO the chip does not have within its range: 24 or 28 to 31 on the classic ESP32, 22 to 25 on the S3 |
+| `x.toml: uart.gnss.tx: GPIO 34 is input only` | A `tx` on an input-only pin, 34 to 39 on the classic ESP32 |
 | `x.toml: uart.GNSS: a role is lowercase letters, digits and _` | A role or a line's name outside `[a-z][a-z0-9_]*` |
 | `x.toml: lines.modem.ri.pull: 'high' is not one of up, down` | Another pull |
 | `x.toml: uart.modem.port: UART1 is uart.gnss's`, `x.toml: uart.gnss.port: UART0 is console's` | Two routes on one UART, or a route on the console's |
@@ -276,6 +292,9 @@ are listed in [board-profiles-user.md](board-profiles-user.md#when-no-backend-ca
   `test_a_profile_without_sizes_or_interfaces_has_only_the_console`.
 - `test_a_profile_that_breaks_the_schema_is_refused_with_the_key`: each message of
   [Failure modes](#failure-modes).
+- `test_a_profile_takes_the_pads_and_uarts_of_its_chip`: the S3's, the C3's and the C6's pads,
+  UARTs and console pins; `test_gpio_34_drives_on_the_s3_where_the_classic_esp32_has_it_input_only`;
+  `test_each_chip_s_devkit_routes_the_gnss_and_the_echo_lines`: the three devkit profiles.
 - `test_every_backend_has_a_declaration`: every key of `SERVICES` is declared.
   `test_the_declaration_is_the_specification_s_table`: the declaration as a whole.
 - `test_a_backend_refuses_what_it_does_not_declare`, `test_the_first_request_a_backend_cannot_give_is_the_reason`,

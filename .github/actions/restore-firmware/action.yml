@@ -44,12 +44,27 @@ runs:
         fail-on-cache-miss: true
     - uses: actions/cache/restore@v6
       with:
+        path: build/ci/firmware-chips-1.tar
+        key: ${{ inputs.key }}-chips-1
+        fail-on-cache-miss: true
+    - uses: actions/cache/restore@v6
+      with:
+        path: build/ci/firmware-chips-2.tar
+        key: ${{ inputs.key }}-chips-2
+        fail-on-cache-miss: true
+    - uses: actions/cache/restore@v6
+      with:
+        path: build/ci/firmware-chips-3.tar
+        key: ${{ inputs.key }}-chips-3
+        fail-on-cache-miss: true
+    - uses: actions/cache/restore@v6
+      with:
         path: build/ci/firmware-platformio.tar
         key: ${{ inputs.key }}-platformio
         fail-on-cache-miss: true
     - name: Unpack all firmware shards
       shell: bash
       run: |
-        for group in idf-1 idf-2 idf-3 idf-4 examples-1 examples-2 examples-3 platformio; do
+        for group in idf-1 idf-2 idf-3 idf-4 examples-1 examples-2 examples-3 chips-1 chips-2 chips-3 platformio; do
           tar -xf "build/ci/firmware-$group.tar"
         done

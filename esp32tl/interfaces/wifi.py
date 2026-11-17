@@ -176,7 +176,7 @@ class Wifi(Interface):
             raise ValueError(
                 "wifi.station: mac must differ from the device's station and access point MACs"
             )
-        self.asked(Request(NAME, source="model"))
+        self.asked(Request(NAME, source="model", role="station"))
         with self._lock:
             if self._station is not None:
                 raise SourceError("wifi has its station already: one per test")

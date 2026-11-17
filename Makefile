@@ -50,6 +50,7 @@ test-runner:
 # the tests read the images there.
 firmware:
 	FIRMWARE_OUT= firmware/build.sh
+	FIRMWARE_OUT= firmware/build.sh --chips
 	FIRMWARE_OUT= firmware/build-platformio.sh
 
 # The images the tests read, built only when missing; build.sh writes
@@ -59,6 +60,16 @@ firmware:
 FIRMWARE_IMAGES := hello_world console_repl nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request http_server persistence ota_state timer_wake deep_sleep bt_spp_initiator bt_spp_initiator_psram
 firmware/%/build/esp32tl-built:
 	FIRMWARE_OUT= firmware/build.sh $*
+
+# The images of the other chips the runner emulates, each in
+# firmware/<image>/build-<chip>/, built only when missing too.
+CHIP_IMAGES := $(foreach chip,esp32s3 esp32c3 esp32c6,$(foreach image,hello_world console_repl gpio_echo nmea_reader nvs_reader http_request,firmware/$(image)/build-$(chip))) firmware/hello_world_psram/build-esp32s3
+firmware/%/build-esp32s3/esp32tl-built:
+	FIRMWARE_OUT= firmware/build.sh --chips $*@esp32s3
+firmware/%/build-esp32c3/esp32tl-built:
+	FIRMWARE_OUT= firmware/build.sh --chips $*@esp32c3
+firmware/%/build-esp32c6/esp32tl-built:
+	FIRMWARE_OUT= firmware/build.sh --chips $*@esp32c6
 
 # The same for the PlatformIO images; build-platformio.sh writes esp32tl-built
 # into the build directory of the esp32dev environment.
@@ -74,7 +85,7 @@ examples:
 examples/%/build/esp32tl-built:
 	FIRMWARE_OUT= firmware/build.sh --examples $*
 
-test: setup test-runner $(FIRMWARE_IMAGES:%=firmware/%/build/esp32tl-built) $(PLATFORMIO_IMAGES:%=firmware/%/.pio/build/esp32dev/esp32tl-built) $(EXAMPLE_PROJECTS:%=examples/%/build/esp32tl-built)
+test: setup test-runner $(FIRMWARE_IMAGES:%=firmware/%/build/esp32tl-built) $(CHIP_IMAGES:%=%/esp32tl-built) $(PLATFORMIO_IMAGES:%=firmware/%/.pio/build/esp32dev/esp32tl-built) $(EXAMPLE_PROJECTS:%=examples/%/build/esp32tl-built)
 	$(BIN)/pytest
 
 # The determinism job (plan §6): tests/test_determinism.py run twice, and the

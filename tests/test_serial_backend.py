@@ -409,7 +409,7 @@ def test_serial_preflight_and_flashing_use_the_selected_build(
         message = {
             "hash": "recording app_sha256 * does not match artifact",
             "missing": "is not a finished build, missing",
-            "target": "is built for esp32s3; serial runs the classic esp32",
+            "target": "is built for esp32s3; the board's chip is esp32",
             "encryption": "asks for flash encryption, which serial does not support",
         }[invalid]
         result.stdout.fnmatch_lines([f"*serial: *{message}*"])
@@ -955,7 +955,7 @@ def test_wait_validation_and_closed_run_match_emulator(pytester: pytest.Pytester
 
 def test_serial_build_errors_name_serial(tmp_path: Path) -> None:
     fake_build(tmp_path / "s3", target="esp32s3")
-    with pytest.raises(BackendError, match="is built for esp32s3; serial runs the classic esp32"):
+    with pytest.raises(BackendError, match="is built for esp32s3; the board's chip is esp32"):
         check_artifact(str(tmp_path / "s3"))
     fake_build(tmp_path / "encrypted", encrypted=True)
     with pytest.raises(

@@ -32,9 +32,8 @@ ELF = "firmware.elf"
 # ESP-IDF's configuration as JSON, which ESP-IDF's build system writes into the build directory.
 SDKCONFIG = "config/sdkconfig.json"
 
-# Where the classic ESP32's bootloader and the partition table are in the flash: ESP-IDF's
-# defaults, and the offsets the espressif32 platform flashes bootloader.bin and partitions.bin at.
-BOOTLOADER_OFFSET = 0x1000
+# Where the partition table is in the flash: ESP-IDF's default, and the offset the espressif32
+# platform flashes partitions.bin at. The bootloader's offset is the chip's (BOOTLOADER_OFFSETS).
 TABLE_OFFSET = 0x8000
 # The longest partition table ESP-IDF writes, its MD5 record included.
 TABLE_SIZE = 0xC00
@@ -65,6 +64,9 @@ CHIPS = {
     23: "esp32c5",
 }
 CLASSIC = "esp32"
+# Where the second-stage bootloader sits in the flash: 0x1000 on the classic ESP32 and the S2,
+# 0x0 on the others (ESP-IDF's CONFIG_BOOTLOADER_OFFSET_IN_FLASH).
+BOOTLOADER_OFFSETS = {"esp32": 0x1000, "esp32s2": 0x1000}
 
 
 class BuildError(Exception):
@@ -81,7 +83,7 @@ class FlashFile:
 
 @dataclass(frozen=True)
 class Build:
-    """A finished, unencrypted build for the classic ESP32.
+    """A finished, unencrypted build for one of the chips esp32tl runs.
 
     `directory` is the build directory, absolute; `kind` is `ESP_IDF` or `PLATFORMIO`.
     `flash_files` go into the flash in order, a later one over an earlier one where they overlap.
@@ -118,25 +120,27 @@ class Build:
         return self.read(self.partition_table, TABLE_SIZE)
 
 
-def load(app_path: str, directory: Path, *, backend: str = "esp32sim") -> Build:
+def load(
+    app_path: str, directory: Path, *, backend: str = "esp32sim", chip: str = CLASSIC
+) -> Build:
     """The build in `directory`, absolute, of the application in `app_path`: ESP-IDF's when it
     holds `flasher_args.json`, else PlatformIO's when it holds `firmware.bin` or
     `firmware.factory.bin`. `backend` names the backend in the errors."""
     if (directory / "flasher_args.json").is_file():
-        return esp_idf(app_path, directory, backend)
+        return esp_idf(app_path, directory, backend, chip)
     if (directory / FIRMWARE).is_file() or (directory / FACTORY).is_file():
-        return platformio(directory, backend)
+        return platformio(directory, backend, chip)
     raise BuildError(
         f"{directory} holds no ESP-IDF or PlatformIO build: no flasher_args.json and no {FIRMWARE}"
     )
 
 
-def esp_idf(app_path: str, directory: Path, backend: str) -> Build:
+def esp_idf(app_path: str, directory: Path, backend: str, chip: str) -> Build:
     """An ESP-IDF build, through `IdfApp`. The directory is given as an absolute path: given
     `build`, `IdfApp` would fall back to a `build` directory in the working directory."""
     app = IdfApp(app_path, build_dir=str(directory))
-    if app.target != CLASSIC:
-        raise BuildError(f"{directory} is built for {app.target}; {backend} runs the classic esp32")
+    if app.target != chip:
+        raise wrong_chip(directory, app.target, chip)
     if app.flash_settings.get("encrypt"):
         raise encryption(directory, backend)
     missing = [f.file_path for f in app.flash_files if not Path(f.file_path).is_file()]
@@ -155,7 +159,7 @@ def esp_idf(app_path: str, directory: Path, backend: str) -> Build:
     )
 
 
-def platformio(directory: Path, backend: str) -> Build:
+def platformio(directory: Path, backend: str, chip: str) -> Build:
     """A PlatformIO build: `firmware.factory.bin` at 0x0 when it is there; else `bootloader.bin` at
     0x1000, `partitions.bin` at 0x8000 and `firmware.bin` where pioarduino flashes it
     (`app_partition`), with the otadata left erased."""
@@ -171,7 +175,8 @@ def platformio(directory: Path, backend: str) -> Build:
     # The application's header first: it is at the start of firmware.bin for every chip, while an
     # S3's or a C3's bootloader is at 0x0, so this names the chip rather than a bootloader missing
     # at 0x1000.
-    check_image(firmware, header(firmware, 0), "application image", directory, backend)
+    check_image(firmware, header(firmware, 0), "application image", directory, chip)
+    bootloader_offset = BOOTLOADER_OFFSETS.get(chip, 0)
     if factory.is_file():
         files: tuple[FlashFile, ...] = (FlashFile(0, factory),)
         table_file = factory
@@ -179,7 +184,7 @@ def platformio(directory: Path, backend: str) -> Build:
         table_file = directory / PARTITIONS
         app = app_partition(table_file, table_file.read_bytes()[:TABLE_SIZE], firmware)
         files = (
-            FlashFile(BOOTLOADER_OFFSET, directory / BOOTLOADER),
+            FlashFile(bootloader_offset, directory / BOOTLOADER),
             FlashFile(TABLE_OFFSET, table_file),
             FlashFile(app.offset, firmware),
         )
@@ -191,15 +196,15 @@ def platformio(directory: Path, backend: str) -> Build:
         partition_table=TABLE_OFFSET,
         app_image=firmware,
         elf=elf if elf.is_file() else None,
-        chip=CLASSIC,
+        chip=chip,
     )
     bootloader = files[0].path if factory.is_file() else directory / BOOTLOADER
     check_image(
         bootloader,
-        flash_bytes(build, BOOTLOADER_OFFSET, HEADER_SIZE),
-        f"bootloader at {BOOTLOADER_OFFSET:#x}",
+        flash_bytes(build, bootloader_offset, HEADER_SIZE),
+        f"bootloader at {bootloader_offset:#x}",
         directory,
-        backend,
+        chip,
     )
     if flash_bytes(build, TABLE_OFFSET, len(TABLE_MAGIC)) != TABLE_MAGIC:
         raise BuildError(
@@ -286,12 +291,21 @@ def header(path: Path, offset: int) -> bytes:
         return image.read(HEADER_SIZE)
 
 
-def check_image(path: Path, data: bytes, what: str, directory: Path, backend: str) -> None:
+def check_image(path: Path, data: bytes, what: str, directory: Path, chip: str) -> None:
     """Refuses `data`, which should be the header of `what` in the file at `path`, when it is
-    none, or one for another chip than the classic ESP32."""
+    none, or one for another chip than `chip`."""
     if len(data) < HEADER_SIZE or data[0] != IMAGE_MAGIC:
         raise BuildError(f"{path} holds no {what}: no 0xE9 there")
     chip_id = int.from_bytes(data[CHIP_ID_AT : CHIP_ID_AT + 2], "little")
-    if chip_id != 0:
-        chip = CHIPS.get(chip_id, f"an unknown chip (chip id {chip_id})")
-        raise BuildError(f"{directory} is built for {chip}; {backend} runs the classic esp32")
+    built = CHIPS.get(chip_id, f"an unknown chip (chip id {chip_id})")
+    if built != chip:
+        raise wrong_chip(directory, built, chip)
+
+
+def wrong_chip(directory: Path, built: str, chip: str) -> BuildError:
+    """A build for `built`, an IDF target name or what stands for an unknown one, run on a board
+    whose chip is `chip`."""
+    return BuildError(
+        f"{directory} is built for {built}; the board's chip is {chip}: build for {chip}"
+        " or choose a board profile with that chip"
+    )

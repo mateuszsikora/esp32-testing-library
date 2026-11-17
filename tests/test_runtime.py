@@ -72,7 +72,7 @@ def test_selection_explicit_checkout_cache(tmp_path: Path, monkeypatch: pytest.M
     cached = tmp_path / "cached"
     cached.mkdir()
     (cached / "esp32tl-runner").touch()
-    monkeypatch.setattr(runtime, "cached_file", lambda kind: cached / "esp32tl-runner")
+    monkeypatch.setattr(runtime, "cached_file", lambda kind, chip: cached / "esp32tl-runner")
     assert esp32sim.runner_path() == cached / "esp32tl-runner"
     local = tmp_path / "runner/target/release/esp32tl-runner"
     local.parent.mkdir(parents=True)
@@ -99,10 +99,17 @@ def test_identity_rejects_old_runner(tmp_path: Path) -> None:
 def test_prepare_atomic_and_offline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     dest = tmp_path / "cache/runtime"
     monkeypatch.setattr(runtime, "cache", lambda: dest)
-    rom = b"fixture ROM"
     import hashlib
 
-    monkeypatch.setattr(runtime, "ROM_SHA", hashlib.sha256(rom).hexdigest())
+    roms = {chip: f"{chip} fixture ROM".encode() for chip in runtime.ROMS}
+    monkeypatch.setattr(
+        runtime,
+        "ROMS",
+        {
+            chip: (name, hashlib.sha256(roms[chip]).hexdigest())
+            for chip, (name, _) in runtime.ROMS.items()
+        },
+    )
     binary = f"#!/bin/sh\necho '{__version__} {runtime.SIM_REV}'\n".encode()
     downloads: list[str] = []
 
@@ -124,17 +131,20 @@ def test_prepare_atomic_and_offline(tmp_path: Path, monkeypatch: pytest.MonkeyPa
             path.write_bytes(binary)
         else:
             with tarfile.open(path, "w") as archive:
-                info = tarfile.TarInfo(runtime.ROM)
-                info.size = len(rom)
-                archive.addfile(info, io.BytesIO(rom))
+                for chip, (name, _) in runtime.ROMS.items():
+                    info = tarfile.TarInfo(name)
+                    info.size = len(roms[chip])
+                    archive.addfile(info, io.BytesIO(roms[chip]))
             monkeypatch.setattr(runtime, "ROM_ARCHIVE_SHA", runtime.sha(path))
 
     monkeypatch.setattr(runtime, "download", download)
     assert runtime.prepare() == dest
     assert len(downloads) == 3
+    for chip, (name, _) in runtime.ROMS.items():
+        assert (dest / name).read_bytes() == roms[chip]
     assert runtime.prepare() == dest
     assert len(downloads) == 3
-    (dest / runtime.ROM).write_bytes(b"corrupted")
+    (dest / runtime.ROMS["esp32s3"][0]).write_bytes(b"corrupted")
     with pytest.raises(runtime.RuntimeError, match="checksum"):
         runtime.prepare()
     assert len(downloads) == 3
@@ -142,7 +152,9 @@ def test_prepare_atomic_and_offline(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
 def test_rom_pins_match_developer_setup() -> None:
     script = (Path(__file__).resolve().parents[1] / "scripts/fetch-rom-elf").read_text()
-    assert f"ROM_SHA256={runtime.ROM_SHA}" in script
+    pinned = script.split('ROMS="', 1)[1].split('"', 1)[0].splitlines()
+    assert pinned == [f"{name} {digest}" for name, digest in runtime.ROMS.values()]
+    assert runtime.ROMS["esp32"] == (runtime.ROM, runtime.ROM_SHA)
     assert f"TARBALL_SHA256={runtime.ROM_ARCHIVE_SHA}" in script
 
 
@@ -153,9 +165,12 @@ def cached_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     runner = directory / "esp32tl-runner"
     runner.write_text(f"#!/bin/sh\necho '{__version__} {runtime.SIM_REV}'\n")
     runner.chmod(0o755)
-    rom = directory / runtime.ROM
-    rom.write_bytes(b"test ROM")
-    monkeypatch.setattr(runtime, "ROM_SHA", runtime.sha(rom))
+    roms = {}
+    for chip, (name, _) in runtime.ROMS.items():
+        rom = directory / name
+        rom.write_bytes(f"{chip} test ROM".encode())
+        roms[chip] = (name, runtime.sha(rom))
+    monkeypatch.setattr(runtime, "ROMS", roms)
     (directory / "manifest.json").write_text(
         json.dumps(
             {
@@ -247,3 +262,17 @@ def test_runtime_revision_matches_runner_pins() -> None:
     assert sources == {
         f"git+https://github.com/mikroverk/esp32sim?rev={runtime.SIM_REV}#{runtime.SIM_REV}"
     }
+
+
+def test_each_chip_has_its_rom_in_the_cache_and_its_own_override(
+    cached_runtime: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for chip, (name, _) in runtime.ROMS.items():
+        assert esp32sim.rom_path(chip) == cached_runtime / name
+    override = cached_runtime.parent / "s3.elf"
+    override.write_bytes((cached_runtime / runtime.ROMS["esp32s3"][0]).read_bytes())
+    monkeypatch.setenv("ESP32TL_ROM_ESP32S3", str(override))
+    assert esp32sim.rom_path("esp32s3") == override
+    assert esp32sim.rom_path() == cached_runtime / runtime.ROM
+    with pytest.raises(esp32sim.BackendError, match="esp32tl has no ROM for esp32p4"):
+        esp32sim.rom_path("esp32p4")

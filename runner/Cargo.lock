@@ -46,6 +46,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "esp32c3"
+version = "0.4.0"
+source = "git+https://github.com/mikroverk/esp32sim?rev=357b0e542dfe97d4c62ec4a15c01c4969164448c#357b0e542dfe97d4c62ec4a15c01c4969164448c"
+dependencies = [
+ "emu-core",
+ "esp-periph",
+ "esp-soc",
+ "riscv-rv32",
+]
+
+[[package]]
+name = "esp32c6"
+version = "0.4.0"
+source = "git+https://github.com/mikroverk/esp32sim?rev=357b0e542dfe97d4c62ec4a15c01c4969164448c#357b0e542dfe97d4c62ec4a15c01c4969164448c"
+dependencies = [
+ "emu-core",
+ "esp-periph",
+ "esp-soc",
+ "riscv-rv32",
+]
+
+[[package]]
+name = "esp32s3"
+version = "0.4.0"
+source = "git+https://github.com/mikroverk/esp32sim?rev=357b0e542dfe97d4c62ec4a15c01c4969164448c#357b0e542dfe97d4c62ec4a15c01c4969164448c"
+dependencies = [
+ "emu-core",
+ "esp-periph",
+ "esp-soc",
+ "xtensa-lx7",
+]
+
+[[package]]
 name = "esp32tl-runner"
 version = "0.1.0"
 dependencies = [
@@ -53,6 +86,9 @@ dependencies = [
  "esp-periph",
  "esp-soc",
  "esp32",
+ "esp32c3",
+ "esp32c6",
+ "esp32s3",
  "signal-hook",
 ]
 
@@ -61,6 +97,14 @@ name = "libc"
 version = "0.2.191"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
+
+[[package]]
+name = "riscv-rv32"
+version = "0.4.0"
+source = "git+https://github.com/mikroverk/esp32sim?rev=357b0e542dfe97d4c62ec4a15c01c4969164448c#357b0e542dfe97d4c62ec4a15c01c4969164448c"
+dependencies = [
+ "emu-core",
+]
 
 [[package]]
 name = "signal-hook"

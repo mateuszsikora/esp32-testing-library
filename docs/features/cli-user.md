@@ -46,9 +46,9 @@ command drives no line otherwise.
 
 | Option | Commands | Default | Accepts |
 |---|---|---|---|
-| `--app APP` | both | none, required | the app directory, its build in `APP/build` by default, relative to the working directory or absolute. The build must be one the backend runs: for the classic ESP32 and finished, and, if an ESP-IDF build, without flash encryption ([builds](builds-user.md)) |
+| `--app APP` | both | none, required | the app directory, its build in `APP/build` by default, relative to the working directory or absolute. The build must be one the backend runs: for the board profile's chip and finished, and, if an ESP-IDF build, without flash encryption ([builds](builds-user.md)) |
 | `--build-dir DIR` | both | `build` | an existing ESP-IDF build directory, containing `flasher_args.json`, or a PlatformIO one, as `.pio/build/esp32`, relative to `APP` or absolute; an empty value is a usage error, `argument --build-dir: the build directory is an empty path` |
-| `--board BOARD` | both | `esp32-devkitc` | the name of a [board profile](board-profiles-user.md#the-profiles-esp32tl-ships); the chip gets the profile's PSRAM, 4 MB on `lilygo-t-a7670g-r2` and none on `esp32-devkitc` |
+| `--board BOARD` | both | `esp32-devkitc` | the name of a [board profile](board-profiles-user.md#the-profiles-esp32tl-ships); the chip is the profile's, and gets the profile's PSRAM, 4 MB on `lilygo-t-a7670g-r2` and none on `esp32-devkitc`; `esp32-s3-devkitc`, `esp32-c3-devkitm` and `esp32-c6-devkitc` run their chip's builds with its ROM |
 | `--max-seconds S` | both | `300` | a finite number of emulated seconds above 0; fractions are fine |
 | `--interface INTERFACE` | `replay`, required | none | a UART route of the profile: `uart.gnss`, or its role alone, `gnss` |
 | `--recording RECORDING` | `replay`, required | none | a recording file, relative to the working directory or absolute |

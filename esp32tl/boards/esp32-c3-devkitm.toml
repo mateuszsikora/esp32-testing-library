@@ -1,0 +1,21 @@
+# An ESP32-C3 module (ESP32-C3-MINI-1) on a devkit, as ESP32-C3-DevKitM-1 carries it: 4 MiB of
+# flash, no PSRAM. It carries every validation image built for the ESP32-C3 (firmware/build.sh
+# --chips). The console is UART0 on GPIO 21 (TX) and 20 (RX), the devkit's USB-to-UART bridge;
+# GPIO 12 to 17 belong to the flash. The routes avoid the strapping pins 2, 8 and 9.
+name = "esp32-c3-devkitm"
+chip = "esp32c3"
+flash_mb = 4
+psram_mb = 0
+
+# firmware/nmea_reader's defaults, as on the classic ESP32's devkit.
+[uart.gnss]
+port = 1
+tx = 4
+rx = 5
+baud = 9600
+
+# firmware/gpio_echo's defaults on this chip: the line it reads, which the board pulls down, and
+# the line it drives.
+[lines.echo]
+in = { pin = 6, pull = "down" }
+out = 7

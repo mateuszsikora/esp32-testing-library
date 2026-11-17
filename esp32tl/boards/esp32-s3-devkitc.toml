@@ -1,0 +1,22 @@
+# An ESP32-S3 module on a devkit, as ESP32-S3-DevKitC-1-N8R8 carries it: 8 MiB of flash and 8 MiB
+# of octal PSRAM. It carries every validation image built for the ESP32-S3 (firmware/build.sh
+# --chips). The console is UART0 on GPIO 43 (TX) and 44 (RX), the devkit's USB-to-UART bridge;
+# GPIO 26 to 32 belong to the flash and 33 to 37 to the octal PSRAM. The routes avoid the
+# strapping pins 0, 3, 45 and 46.
+name = "esp32-s3-devkitc"
+chip = "esp32s3"
+flash_mb = 8
+psram_mb = 8
+
+# firmware/nmea_reader's defaults, as on the classic ESP32's devkit.
+[uart.gnss]
+port = 1
+tx = 4
+rx = 5
+baud = 9600
+
+# firmware/gpio_echo's defaults on this chip: the line it reads, which the board pulls down, and
+# the line it drives.
+[lines.echo]
+in = { pin = 6, pull = "down" }
+out = 7

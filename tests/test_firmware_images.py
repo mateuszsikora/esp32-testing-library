@@ -26,10 +26,10 @@ def pinned() -> tuple[str, str]:
     return version[1], container[1].replace("$IDF_VERSION", version[1])
 
 
-def idf_app(image: str) -> IdfApp:
+def idf_app(image: str, build_dir: str = "build") -> IdfApp:
     """The image's build, which has to be finished and, unless it was built with IDF_LOCAL=1,
     built in the container build.sh pins now. A local build passes, with a warning."""
-    build = FIRMWARE / image / "build"
+    build = FIRMWARE / image / build_dir
     if not (build / "esp32tl-built").is_file():
         pytest.fail(f"{build} holds no finished build: run make firmware", pytrace=False)
     how = json.loads((build / "esp32tl-build.json").read_text())
@@ -45,7 +45,7 @@ def idf_app(image: str) -> IdfApp:
             f" not in {container} ({idf_version}): run make firmware",
             pytrace=False,
         )
-    return IdfApp(str(FIRMWARE / image))
+    return IdfApp(str(FIRMWARE / image), build_dir=str(build))
 
 
 def test_hello_world_has_the_classic_esp32_flash_layout() -> None:
@@ -59,6 +59,58 @@ def test_hello_world_has_the_classic_esp32_flash_layout() -> None:
     ]
     assert all(Path(f.file_path).is_file() for f in app.flash_files)
     assert app.elf_file == str((build / "hello_world.elf").resolve())
+
+
+# The images firmware/build.sh --chips builds, as build directories.
+CHIP_IMAGES = [
+    (image, chip)
+    for chip in ("esp32s3", "esp32c3", "esp32c6")
+    for image in (
+        "hello_world",
+        "console_repl",
+        "gpio_echo",
+        "nmea_reader",
+        "nvs_reader",
+        "http_request",
+    )
+] + [("hello_world_psram", "esp32s3")]
+
+
+@pytest.mark.parametrize(("image", "chip"), CHIP_IMAGES, ids=lambda v: str(v))
+def test_a_chip_s_image_is_built_for_it_with_the_bootloader_at_0(image: str, chip: str) -> None:
+    app = idf_app(image, f"build-{chip}")
+    build = FIRMWARE / image / f"build-{chip}"
+    assert app.target == chip
+    assert json.loads((build / "esp32tl-build.json").read_text())["target"] == chip
+    offsets = [(f.offset, Path(f.file_path).relative_to(build)) for f in app.flash_files]
+    assert offsets[:2] == [
+        (0x0, Path("bootloader/bootloader.bin")),
+        (0x8000, Path("partition_table/partition-table.bin")),
+    ]
+    assert all(Path(f.file_path).is_file() for f in app.flash_files)
+
+
+def test_the_s3_s_psram_image_asks_for_octal_psram() -> None:
+    sdkconfig = json.loads(
+        (FIRMWARE / "hello_world_psram" / "build-esp32s3" / "config" / "sdkconfig.json").read_text()
+    )
+    assert (sdkconfig["SPIRAM"], sdkconfig["SPIRAM_MODE_OCT"]) == (True, True)
+
+
+@pytest.mark.parametrize("chip", ["esp32s3", "esp32c3", "esp32c6"])
+def test_gpio_echo_takes_the_devkit_echo_lines_from_sdkconfig(chip: str) -> None:
+    sdkconfig = json.loads(
+        (FIRMWARE / "gpio_echo" / f"build-{chip}" / "config" / "sdkconfig.json").read_text()
+    )
+    assert (sdkconfig["GPIO_ECHO_IN_PIN"], sdkconfig["GPIO_ECHO_OUT_PIN"]) == (6, 7)
+    echo = boards.profile(
+        {
+            "esp32s3": "esp32-s3-devkitc",
+            "esp32c3": "esp32-c3-devkitm",
+            "esp32c6": "esp32-c6-devkitc",
+        }[chip]
+    ).lines["echo"]
+    assert (echo["in"].pin, echo["out"].pin) == (6, 7)
 
 
 def test_nmea_reader_has_the_classic_esp32_flash_layout() -> None:

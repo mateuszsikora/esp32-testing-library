@@ -25,8 +25,9 @@ without starting anything:
    build by its file names and image headers ([builds](builds-technical.md#data-flow)). A
    `BuildError` becomes a `BackendError` with the same message. The result, a `Build`, is
    `Esp32Sim.app`.
-2. **`runner_path()`** and **`rom_path()`** resolve the runner and the ROM ELF
-   ([Configuration](#configuration)).
+2. **`runner_path()`** and **`rom_path(profile.chip)`** resolve the runner and the board chip's
+   ROM ELF ([Configuration](#configuration)). `load_app` before them takes `chip=profile.chip`, so
+   a build for another chip than the profile's is refused.
 3. **The clock, the console and the log.** A `HeldClock` (`esp32tl/backends/clock.py`, below);
    `console_output`, a `bytearray` that gets the bytes of every `console` message of the link
    until the link fails: after an error `BoardLink` reads on, but hands nothing more on;
@@ -107,7 +108,7 @@ or `POWER_ON_UTC`, for `Esp32Sim.utc` and the GNSS receiver's dates, and logs
    is `SUN_PATH_MAX` (104) bytes or longer, and listens with a backlog of 1. It binds before the
    runner starts, because the runner connects once (protocol §1).
 2. **`runner_command(runner, rom, app, HELD_MAX_SECONDS, link, held=True, psram_mb=profile.psram_mb)`** builds
-   `[runner, "--chip", "esp32", "--rom", rom, "--max-seconds", "86400", "--console", "both", "--peer-timeout", "0", "--board", "socket:<link>", "--flash-at", "0x1000=<path>", ..., "--psram-mb", "<psram_mb>", "--flash-out", "<beside the link>/flash.bin"]`,
+   `[runner, "--chip", app.chip, "--rom", rom, "--max-seconds", "86400", "--console", "both", "--peer-timeout", "0", "--board", "socket:<link>", "--flash-at", "0x1000=<path>", ..., "--psram-mb", "<psram_mb>", "--flash-out", "<beside the link>/flash.bin"]`,
    one `--flash-at {offset:#x}={path}` per entry of `app.flash_files`, in their order: an ESP-IDF
    build's sorted by offset, as `IdfApp` sorts them, a PlatformIO build's `firmware.factory.bin` at
    `0x0`, or `bootloader.bin`, `partitions.bin` and `firmware.bin`; the paths are absolute. `--psram-mb` is the board profile's `psram_mb`, `0` on
@@ -278,7 +279,13 @@ it makes the receiver, `Uart.tap` calls `asked(Request(interface, tap=True))` be
 and `... tap a route before board.power_on()` for a tap), then does what `_declared` does, which
 is all the slot asks, since a card goes in and out with the board on: it refuses one that
 `capabilities.check` finds no backend gives, with that error's message, and otherwise, when
-`capabilities.refusal(self.name, ...)` gives a reason, calls `skip(f"esp32sim: {reason}")`. It reads the declaration through
+`capabilities.refusal(self.name, ...)` gives a reason, calls `skip(f"esp32sim: {reason}")`. Then
+it looks the request up in `CHIP_GAPS`, by the profile's chip: `<kind>.<role>` first when the
+request has a `role` (`wifi.station`, which `Wifi.station` asks with `role="station"`), then the
+interface's kind (`sd_card`); a gap skips the test with
+`esp32sim: {interface} on {chip}: {reason}`. `CHIP_GAPS` holds, for `esp32s3`, `esp32c3` and
+`esp32c6`, `sd_card` (esp32sim models no GP-SPI RX DMA there, #229 G2) and `wifi.station` (no
+virtual station, #229 G4). It reads the declaration through
 `capabilities.declared()` at each call, so a test can swap it. `set_up()` lists
 `the {source_kind} of {interface}` for every `Uart` with a source (`the replay of uart.gnss`, `the
 model of uart.gnss`) and `the tap of {interface}` for every tapped one, then `the level of {line}`
@@ -473,7 +480,8 @@ repository makes.
 | `HeldClock(step=STEP_NS)` | `esp32tl/backends/clock.py`: the link's `Hold`, `turn(now)`, `dumped(ack)`; `stop()`, `end(reason, at=None)`; the test's `now`, `wait(ns)`, `wait_until(condition, within_ns, description)`, `wait_for_event(condition, within_ns, description, latency_ns)`, `dump_flash()`, which returns the runner's `FlashDumpAck`, or `None` once the run has ended, and `check(step)`, which raises `RunEnded` (`the run ended {when} before {step}: {reason}`) once the run has ended |
 | `nanoseconds(value, what)`, `seconds(ns)` | `esp32tl/backends/clock.py`: a `Duration` of the board's time to nanoseconds, checked; nanoseconds shown as `12.5 s`, as `str(Duration(ns))` |
 | `listen()` | The listening socket and its path, or `BackendError` |
-| `runner_path()`, `rom_path()` | The runner and the ROM ELF, or `BackendError` |
+| `runner_path()`, `rom_path(chip="esp32")` | The runner and `chip`'s ROM ELF, or `BackendError`; `esp32tl has no ROM for {chip}; the chips are esp32, esp32s3, esp32c3, esp32c6` for a chip `runtime.ROMS` does not have |
+| `CHIP_GAPS` | What esp32sim does not model on a chip, by request: chip, then `<kind>` or `<kind>.<role>`, then the reason the test is skipped with |
 | `load_app(app_path, *, build_dir=None, backend="esp32sim")` | The checked `Build` of the selected directory (default `<app_path>/build`), from `esp32tl.build.load`, its `BuildError` raised as `BackendError`; `backend` chooses target/encryption error wording |
 | `profile_uart(profile, interface, *, clock, directory, asked=..., log=None, files=None)` | The `Uart` on the route the profile gives `interface` (`uart.gnss`), at its pins and baud; `BackendError` when the profile has no such route. The [`esp32tl` command](cli-user.md) makes its UARTs with it |
 | `route_wire(profile, interface)` | The `Wire` of that route, or the same `BackendError`; `Esp32Sim` makes its `Uart`s and its `Gnss` on it |
@@ -490,10 +498,11 @@ repository makes.
 | Name | Value | Used by |
 |---|---|---|
 | `ESP32TL_RUNNER` | Path of the runner; unset or empty: checkout release build, otherwise verified user cache | `runner_path()`; executable with matching version and esp32sim revision |
-| `ESP32TL_ROM` | Path of the ROM ELF; unset or empty: checkout ROM, otherwise verified user cache | `rom_path()`; pinned checksum required |
+| `ESP32TL_ROM` | Path of the classic ESP32's ROM ELF; unset or empty: checkout ROM, otherwise verified user cache | `rom_path()`; pinned checksum required |
+| `ESP32TL_ROM_ESP32S3`, `ESP32TL_ROM_ESP32C3`, `ESP32TL_ROM_ESP32C6` | The same for the chip in its name | `rom_path(chip)`; the chip's pinned checksum required |
 | `ROOT` | `Path(__file__).resolve().parents[2]`: the checkout with an editable install, `site-packages` when installed from a wheel | the two defaults |
 | `ROM_RELEASE` | `"20241011"`, the esp-rom-elfs release `scripts/fetch-rom-elf` pins | `rom_path()` |
-| `ROM_ELF` | `"esp32_rev300_rom.elf"` | `rom_path()` |
+| `ROM_ELF` | `"esp32_rev300_rom.elf"`, the classic ESP32's; every chip's is in `runtime.ROMS` | `rom_path()` |
 | `HELD_MAX_SECONDS` | `86400`, emulated seconds, passed as `--max-seconds` | `Esp32Sim.power_on` |
 | `MAX_SECONDS` | `300`, emulated seconds: the default `--max-seconds` of the `esp32tl` command, whose clock runs free | `esp32tl/cli.py` |
 | `POWER_ON_UTC` | `esp32tl.net.ntp.DEFAULT_UTC`, `datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)`: the world's time at power-on unless the test gives one | `Esp32Sim.power_on` |
@@ -590,10 +599,20 @@ proving serial-only validation does not reach the simulator.
   for a `Bluetooth` the test has not used, then `--bt` and the fake build's `app.elf`.
 - `test_load_app_refuses_what_the_runner_cannot_run`: the four `load_app` messages of an ESP-IDF
   build; `tests/test_platformio_build.py` those of a PlatformIO one ([builds](builds-technical.md#tests)).
+- `test_load_app_takes_a_build_for_the_board_s_chip`: an `esp32s3` build on `chip="esp32s3"`, its
+  `--chip esp32s3` in `runner_command`, and a classic build refused there.
+  `test_what_esp32sim_lacks_on_the_board_s_chip_skips_the_test_with_the_reason` (each of the three
+  chips' devkit profiles, `wifi.station`) and
+  `test_an_sd_card_on_a_chip_without_gp_spi_rx_dma_skips_the_test`: the skips of `CHIP_GAPS`, with
+  their messages. `test_the_serial_backend_refuses_a_board_with_another_chip`.
+- `tests/test_runtime.py`, `test_each_chip_has_its_rom_in_the_cache_and_its_own_override`: every
+  chip's ROM in a cache, `ESP32TL_ROM_ESP32S3`, and a chip without a ROM.
+- `tests/test_chips.py`: the chips' validation images through the whole backend
+  ([testing guide](../guides/testing.md#what-each-test-file-needs)).
 - `test_runner_and_rom_paths_name_what_is_missing`: both messages, a runner that is not
   executable, and the environment variables taking effect.
-- `test_rom_is_the_one_make_setup_fetches`: `ROM_RELEASE` and `ROM_ELF` equal `RELEASE=` and
-  `ROM=` in `scripts/fetch-rom-elf`.
+- `test_rom_is_the_one_make_setup_fetches`: `ROM_RELEASE` equals `RELEASE=` in
+  `scripts/fetch-rom-elf`, and every ELF and SHA-256 of `runtime.ROMS` is a line of its `ROMS`.
 - With a shell script as the runner (`FAKE_RUNNER`, through `ESP32TL_RUNNER`), which exits without
   connecting: `test_a_wait_fails_at_once_when_the_runner_has_exited` (the `RunEnded` before the
   first turn, with the tail, within 120 s of an inner run that would otherwise wait for the

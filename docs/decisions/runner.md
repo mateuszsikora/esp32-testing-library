@@ -295,8 +295,10 @@ The runner depends on `esp32` and `esp-soc` only, although #5 listed the `esp32s
 `esp32sim --board socket:` once mikroverk/esp32sim#325 lands is a rename.
 
 **Rejected:** depending on the `esp32sim` crate, because the runner uses nothing from it, it would
-compile the S3, C3, C6 and P4 models too, and its argument parser exits on flags it does not know,
-so the runner could not reuse it for `--board socket:` either.
+compile the P4 and S31 models too, which the runner does not run, and its argument parser exits on
+flags it does not know, so the runner could not reuse it for `--board socket:` either. The runner
+depends on the S3, C3 and C6 crates itself since
+[one esp32sim chip per process](#the-runner-runs-one-esp32sim-chip-per-process-chosen-by---chip).
 
 ## Cargo runs in runner/, against a pinned toolchain
 
@@ -1039,3 +1041,60 @@ captured-output path. Previously it did not call `StationLink::report()` at all.
 Status: decided
 
 Protocol v2 carries `wifi_link` before Ethernet at the same collection boundary. The runner observes public station state and join count and flushes both relay directions using `set_relay`, without advancing guest time. Future scheduled Ethernet input is discarded as well. This avoids reusing a queued request after reconnect; reducing DHCP backoff would not do so. Existing pin APIs suffice; no upstream patch is required.
+
+## The runner runs one esp32sim chip per process, chosen by --chip
+
+Status: decided (17 November 2026)
+
+`--chip` takes `esp32`, `esp32s3`, `esp32c3` and `esp32c6`, the chips esp32sim models well enough
+for the run loop: a board on the chip's pins with UART and GPIO hooks, an Ethernet relay behind
+its access point, and, on all but the C6 at the pinned ESP-IDF, VHCI. `main` monomorphises the
+setup and the run over the chip's machine type (`go::<esp32s3::Machine>`), each implementing
+`chip::Target` for the setup and `session::Guest` for the run loop, in a module of its own under
+`runner/src/chip/`. What the protocol needs of the chip, its name, bus clock and GPIOs, is a
+`chip::Profile` selected once per process (`chip::select`, a `OnceLock`): `protocol::ns` and
+`protocol::cycles` read the selected clock, and the classic chip's is the default, which the unit
+tests run on.
+
+**Rejected:** a trait object for the machine, because `esp_soc::Machine<S>` is generic over the
+chip and the run loop is already generic over `Guest`, so a vtable would buy nothing; a binary per
+chip, because each would link esp32sim again with fat LTO and the runtime release would carry four
+executables; passing the clock to every time conversion, because the protocol module converts in
+about thirty places and one process never runs two chips; depending on esp32sim's CLI crate for
+its chip dispatch, for the reasons of
+[the esp32sim command-line crate is not a dependency](#the-esp32sim-command-line-crate-is-not-a-dependency).
+
+**Not yet:** the ESP32-P4 and the ESP32-S31 ([#233](https://github.com/mateuszsikora/esp32-testing-library/issues/233)),
+whose boards have no UART pin hooks and whose images need another ESP-IDF version.
+
+## What esp32sim lacks on a chip is refused at the command line
+
+Status: decided (17 November 2026)
+
+`chip::Profile` says what esp32sim models on the chip, and `cli::parse` refuses a flag that asks
+for something it does not: `--wifi-sta` on the S3, C3 and C6
+(`--wifi-sta: esp32s3 has no virtual station for a SoftAP in esp32sim`), a `--psram-mb` size the
+chip does not take (`--psram-mb: the ESP32-C3 supports only 0 MiB, got "2"`), and the pins of
+`--sd-spi` against the chip's GPIOs. Deep sleep and GP-SPI RX DMA cannot be refused: nothing on
+the command line asks for them, and the guest decides at run time. [#229](https://github.com/mateuszsikora/esp32-testing-library/issues/229)
+lists each gap; when esp32sim fills one and the pin moves past it, the `Profile` flag changes.
+
+**Rejected:** letting esp32sim's own `Err` reach the run, because `attach_wifi_station`'s
+default error would come at setup with exit 2 all the same but without naming the flag, and a
+PSRAM size esp32sim takes but the chip's modules do not would boot a board that cannot exist.
+
+## The runner restores U0RXD's reset state on every chip
+
+Status: decided (17 November 2026)
+
+esp32sim creates the IO_MUX of the S3, the C3 and the C6 as zeroed register RAM, as it does the
+classic chip's, so U0RXD has no input function after reset and the console's RX route is missing
+(`unrouted_rx: uart_rx on GPIO 44, which no UART receives on` on the S3). Each chip module's
+`reset_console_rx` writes the pad's reset value, function 0, `FUN_IE`, `FUN_WPU`, drive 2, to
+its IO_MUX register at power-on and after every reset, as
+[the runner restores U0RXD's input-enabled reset state](#the-runner-restores-u0rxds-input-enabled-reset-state)
+does for GPIO 3: GPIO 44 on the S3 (`0x6000_90B4`), 20 on the C3 (`0x6000_9054`), 17 on the C6
+(`0x6009_0048`). The fix belongs in esp32sim's reset model for every pad
+([#229](https://github.com/mateuszsikora/esp32-testing-library/issues/229), G3).
+
+**Rejected:** as for the classic chip, forcing UART0's route when none is configured.

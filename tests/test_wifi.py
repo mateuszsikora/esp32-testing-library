@@ -144,7 +144,7 @@ def test_ntp_behind_an_access_point_tells_the_default_world() -> None:
 def test_station_flags_properties_and_exclusions(wifi: Wifi, asked: list[Request]) -> None:
     network = wifi.station("setup", password="password1")
     assert wifi.runner_args() == ["--wifi-sta", "ssid=setup,mac=02:53:54:41:00:01,psk=password1"]
-    assert asked == [Request("wifi", source="model")]
+    assert asked == [Request("wifi", source="model", role="station")]
     assert wifi.configuration is not None and wifi.network is network
     properties = wifi.properties()
     assert properties is not None

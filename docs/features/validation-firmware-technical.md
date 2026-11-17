@@ -4,8 +4,13 @@
 `firmware/%/build/esp32tl-built` call it. `firmware/build-platformio.sh` builds the PlatformIO
 image, `arduino_shell` ([The PlatformIO build](#the-platformio-build)); `firmware` and
 `firmware/%/.pio/build/esp32dev/esp32tl-built` call it. `tests/test_firmware_build.py` and
-`tests/test_platformio_firmware_build.py` test the scripts against fakes,
-`tests/test_firmware_images.py` checks the images they built. `firmware/nmea_reader/` and
+`tests/test_platformio_firmware_build.py` test the scripts against fakes (`--chips` in
+`test_chip_images_build_their_projects_for_the_chip` and
+`test_chip_build_forwards_the_mode_into_the_pinned_container`),
+`tests/test_firmware_images.py` checks the images they built, the chips' among them
+(`test_a_chip_s_image_is_built_for_it_with_the_bootloader_at_0`: the target, `target` in
+`esp32tl-build.json` and the bootloader at `0x0`; `test_the_s3_s_psram_image_asks_for_octal_psram`;
+`test_gpio_echo_takes_the_devkit_echo_lines_from_sdkconfig`). `firmware/nmea_reader/` and
 `firmware/gpio_echo/` are the images whose source lives here ([nmea_reader](#nmea_reader),
 [gpio_echo](#gpio_echo)), and
 `scripts/generate-gnss-recordings.py` writes the recordings it is tested with
@@ -13,20 +18,25 @@ image, `arduino_shell` ([The PlatformIO build](#the-platformio-build)); `firmwar
 
 ## Data flow
 
-`firmware/build.sh [IMAGE...]` runs twice for a container build: once on the host, which starts
+`firmware/build.sh [IMAGE...]`, `firmware/build.sh --examples [NAME...]` and
+`firmware/build.sh --chips [IMAGE@CHIP...]` run twice for a container build: once on the host, which starts
 the container, and once inside it, which builds. With `IDF_LOCAL=1` it runs once, on the host.
 
-1. **Image names and sharding.** `--shard K/N` after the optional `--examples` selects
+1. **Image names and sharding.** `--shard K/N` after the optional `--examples` or `--chips` selects
    every Nth image of the validated argument list (or the whole default family), starting at K.
    K and N are positive decimal integers without leading zeros, with `1 <= K <= N`.
    An invalid or empty selection fails before Docker or output writes; an empty shard reports
    `firmware/build.sh: shard K/N selects no images`. The host passes only selected names to
    the container, so they are not sharded again. Without the option, every image is selected.
-   CI uses four validation shards and three example shards; adding a project automatically
-   assigns it to one shard. Each shard still shares compiler-cache hits within its container.
+   CI uses four validation shards, three example shards and three chip shards; adding a project
+   automatically assigns it to one shard. Each shard still shares compiler-cache hits within its container.
 
    **Image names.** Each argument must be in `IMAGES`, or the script dies before anything is
-   written. With no arguments, the list is all of `IMAGES`.
+   written. With no arguments, the list is all of `IMAGES`. With `--chips`, `IMAGES` is
+   `CHIP_IMAGES`: `IMAGE@CHIP` for each of `hello_world`, `console_repl`, `gpio_echo`,
+   `nmea_reader`, `nvs_reader` and `http_request` on each of `esp32s3`, `esp32c3` and `esp32c6`,
+   then `hello_world_psram@esp32s3`; `gpio_echo@esp32` is unknown there. The family's output tree
+   is `firmware/` for `--chips` as without a family, `examples/` for `--examples`.
 2. **Mode**, decided before anything is written:
    - `ESP32TL_CONTAINER` set: the container side. `/.dockerenv`, which Docker creates in every
      container, must exist; without it the variable was left set on the host, and a build that
@@ -41,7 +51,7 @@ the container, and once inside it, which builds. With `IDF_LOCAL=1` it runs once
    the caller's), created, and made absolute with `pwd -P`. The script then changes to the
    repository root.
 4. **Host side** (container build only): `exec docker run` with the image names, after the
-   default above, as arguments:
+   default above, as arguments, `--examples` or `--chips` first when given:
 
    ```sh
    docker run --rm --init \
@@ -100,9 +110,10 @@ the container, and once inside it, which builds. With `IDF_LOCAL=1` it runs once
      `$PWD/firmware/modem_at`, `modem_recovery` `$PWD/firmware/modem_recovery`, and `nvs_reader` `$PWD/firmware/nvs_reader`, the working directory being the repository's
      root: in
      the container `/project/firmware/nmea_reader`, in a local build the checkout's own path), the
-     build directory `$out/IMAGE/build`. If
+     build directory `$out/IMAGE/build`, or `$out/IMAGE/build-CHIP` for `IMAGE@CHIP`, whose
+     target is `CHIP` (`esp32` otherwise). If
      that directory exists and its `esp32tl-build.json` is missing or, compared as text, is not
-     the record this build would write (another `idf_version`, `container` or `project`), the
+     the record this build would write (another `idf_version`, `container`, `project` or `target`), the
      script prints `was built another way` and removes the directory with `rm -rf`. ESP-IDF
      refuses only some of those directories itself. In v5.3.6, `idf.py` refuses one whose CMake
      cache names another project directory or another Python (`_ensure_build_directory` in
@@ -116,10 +127,13 @@ the container, and once inside it, which builds. With `IDF_LOCAL=1` it runs once
      `esp32tl-build.json` written, and
 
      ```sh
-     idf.py -C "$project" -B "$build" -DSDKCONFIG="$build/sdkconfig" -DIDF_TARGET=esp32 build
+     idf.py -C "$project" -B "$build" -DSDKCONFIG="$build/sdkconfig" -DIDF_TARGET="$target" build
      ```
 
-     runs. `sdkconfig` goes in the build directory because the project directory may be
+     runs, with `-DSDKCONFIG_DEFAULTS=...` before `build` for the images that add options of their
+     own: `pppos_client` and `bt_spp_initiator_psram` (the project's `sdkconfig.defaults`, then
+     `firmware/IMAGE/sdkconfig.defaults`) and `hello_world_psram` (`firmware/hello_world_psram/sdkconfig.defaults`
+     alone: ESP-IDF's `hello_world` has none). `sdkconfig` goes in the build directory because the project directory may be
      ESP-IDF's own examples, or read-only. After a successful `idf.py`, the script checks that
      `flasher_args.json` exists, creates `esp32tl-built`, and prints the `built in` line.
 
@@ -134,6 +148,14 @@ the markers of `nmea_reader`, `pppos_client`, `mqtt_session`, `http_request` and
 and of the `position_tracker` example. The rule has no prerequisites, so make rebuilds
 an image only when its marker is missing: an edit to `firmware/nmea_reader/` needs `make firmware`, or
 `firmware/build.sh nmea_reader`, before `make test` sees it.
+
+The chips' images have one pattern rule per chip, `firmware/%/build-esp32s3/esp32tl-built` running
+`FIRMWARE_OUT= firmware/build.sh --chips $*@esp32s3`, and likewise for `esp32c3` and `esp32c6`;
+`test` also depends on `$(CHIP_IMAGES:%=%/esp32tl-built)`, `CHIP_IMAGES` being the build
+directories `firmware/IMAGE/build-CHIP` of `firmware/build.sh --chips`. GNU make 3.81, macOS's,
+takes the rule whose pattern matches: `firmware/%/build/esp32tl-built` never matches a
+`build-CHIP` directory, nor the reverse. `make firmware` runs `firmware/build.sh --chips` between
+the classic chip's images and the PlatformIO ones.
 
 `nmea_reader`, `gpio_echo`, `sd_remount`, `modem_at`, `mqtt_session` and `nvs_reader` are built from the read-only `/project`
 mount like any other project. They take no components from the component manager, and with `sdkconfig` and the

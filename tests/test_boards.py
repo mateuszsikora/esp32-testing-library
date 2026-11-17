@@ -21,7 +21,10 @@ from esp32tl.boards.capabilities import (
 
 def test_the_shipped_profiles_include_the_example_assembly() -> None:
     assert boards.names() == [
+        "esp32-c3-devkitm",
+        "esp32-c6-devkitc",
         "esp32-devkitc",
+        "esp32-s3-devkitc",
         "gps-alarm-clock",
         "lilygo-t-a7670g-r2",
         "sd-data-logger",
@@ -111,7 +114,8 @@ def test_an_unknown_profile_name_lists_the_profiles() -> None:
         boards.profile("esp32-wrover-kit")
     assert str(error.value) == (
         "no board profile named 'esp32-wrover-kit';"
-        " the profiles are esp32-devkitc, gps-alarm-clock, lilygo-t-a7670g-r2, sd-data-logger"
+        " the profiles are esp32-c3-devkitm, esp32-c6-devkitc, esp32-devkitc, esp32-s3-devkitc,"
+        " gps-alarm-clock, lilygo-t-a7670g-r2, sd-data-logger"
     )
 
 
@@ -145,7 +149,10 @@ SD_CARD = "\n[sd_card]\nsclk = 14\nmosi = 15\nmiso = 2\ncs = 13\n"
             "x.toml: lines.modem.pwrkey: GPIO 3 is console.rx already",
         ),
         ("name = 'y'\nchip = 'esp32'", "x.toml: name: 'y' is not the file's name, 'x'"),
-        ("name = 'x'\nchip = 'esp32s3'", "x.toml: chip: 'esp32s3' is not one of esp32"),
+        (
+            "name = 'x'\nchip = 'esp32p4'",
+            "x.toml: chip: 'esp32p4' is not one of esp32, esp32s3, esp32c3, esp32c6",
+        ),
         (
             "name = 'x'\nchip = 'esp32'\nflash_mb = -4",
             "x.toml: flash_mb: -4 is out of range, at least 0",
@@ -438,3 +445,67 @@ def test_a_timed_line_must_be_output_capable(tmp_path: Path) -> None:
     )
     with pytest.raises(ProfileError, match="GPIO 34 is input only"):
         boards.load(path)
+
+
+# A profile for each chip besides the classic ESP32: the chip's pads, its UARTs and its console.
+S3 = GOOD.replace('chip = "esp32"', 'chip = "esp32s3"').replace(
+    "ri = { pin = 33,", "ri = { pin = 6,"
+)
+C3 = S3.replace('chip = "esp32s3"', 'chip = "esp32c3"').replace("pwrkey = 12", "pwrkey = 7")
+
+
+@pytest.mark.parametrize(
+    ("text", "message"),
+    [
+        (S3.replace("rx = 5", "rx = 22"), "x.toml: uart.gnss.rx: the ESP32-S3 has no GPIO 22"),
+        (S3.replace("rx = 5", "rx = 49"), "x.toml: uart.gnss.rx: 49 is out of range, from 0 to 48"),
+        (S3.replace("tx = 4", "tx = 43"), "x.toml: uart.gnss.tx: GPIO 43 is console.tx already"),
+        (
+            C3.replace("port = 1", "port = 2"),
+            "x.toml: uart.gnss.port: 2 is out of range, from 0 to 1",
+        ),
+        (C3.replace("rx = 5", "rx = 22"), "x.toml: uart.gnss.rx: 22 is out of range, from 0 to 21"),
+        (C3.replace("tx = 4", "tx = 20"), "x.toml: uart.gnss.tx: GPIO 20 is console.rx already"),
+        (
+            C3.replace('chip = "esp32c3"', 'chip = "esp32c6"').replace("tx = 4", "tx = 16"),
+            "x.toml: uart.gnss.tx: GPIO 16 is console.tx already",
+        ),
+    ],
+)
+def test_a_profile_takes_the_pads_and_uarts_of_its_chip(
+    tmp_path: Path, text: str, message: str
+) -> None:
+    path = tmp_path / "x.toml"
+    path.write_text(text)
+    with pytest.raises(ProfileError) as error:
+        boards.load(path)
+    assert str(error.value) == message
+
+
+def test_gpio_34_drives_on_the_s3_where_the_classic_esp32_has_it_input_only(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "x.toml"
+    path.write_text(S3.replace("tx = 4", "tx = 34"))
+    assert boards.load(path).uart["gnss"].tx == 34
+
+
+@pytest.mark.parametrize(
+    ("name", "chip", "console", "psram"),
+    [
+        ("esp32-s3-devkitc", "esp32s3", (43, 44), 8),
+        ("esp32-c3-devkitm", "esp32c3", (21, 20), 0),
+        ("esp32-c6-devkitc", "esp32c6", (16, 17), 0),
+    ],
+)
+def test_each_chip_s_devkit_routes_the_gnss_and_the_echo_lines(
+    name: str, chip: str, console: tuple[int, int], psram: int
+) -> None:
+    profile = boards.profile(name)
+    assert (profile.chip, profile.psram_mb) == (chip, psram)
+    assert profile.uart["gnss"] == UartRoute(port=1, tx=4, rx=5, baud=9600)
+    assert profile.lines["echo"]["in"].pin == 6 and profile.lines["echo"]["in"].pull == "down"
+    assert profile.lines["echo"]["out"].pin == 7
+    the_chip = boards.CHIPS[chip]
+    assert (the_chip.console_pin("tx"), the_chip.console_pin("rx")) == console
+    assert profile.interfaces == ["console", "uart.gnss", "lines.echo", "wifi", "bluetooth"]

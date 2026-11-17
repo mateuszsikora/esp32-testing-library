@@ -300,6 +300,7 @@ def test_local_build_runs_idf_py_and_records_how(tmp_path: Path, local_idf: dict
             "idf_version": "v9.9.9",
             "container": None,
             "project": project,
+            "target": "esp32",
         }
         assert (builds[image] / "esp32tl-built").exists()
     copied = Path(projects["http_request"]) / "CMakeLists.txt"
@@ -406,7 +407,70 @@ def test_failed_example_build_removes_its_completion_marker(
     assert not built.exists()
 
 
-@pytest.mark.parametrize("family, count", [((), 4), (("--examples",), 3)])
+def test_chip_images_build_their_projects_for_the_chip(
+    tmp_path: Path, local_idf: dict[str, str]
+) -> None:
+    result = run_build(local_idf, "--chips")
+    assert result.returncode == 0, result.stderr
+    out = (tmp_path / "out").resolve()
+    hello = f"{tmp_path}/idf/examples/get-started/hello_world"
+    projects = {
+        "hello_world": hello,
+        "console_repl": str(ROOT / "firmware" / "console_repl"),
+        "gpio_echo": str(ROOT / "firmware" / "gpio_echo"),
+        "nmea_reader": str(ROOT / "firmware" / "nmea_reader"),
+        "nvs_reader": str(ROOT / "firmware" / "nvs_reader"),
+        "http_request": f"{out}/.http_request-v9.9.9",
+    }
+    entries = [
+        (image, chip, project)
+        for chip in ("esp32s3", "esp32c3", "esp32c6")
+        for image, project in projects.items()
+    ]
+    entries.append(("hello_world_psram", "esp32s3", hello))
+    expected = []
+    for image, chip, project in entries:
+        build = out / image / f"build-{chip}"
+        expected += ["-C", project, "-B", str(build), f"-DSDKCONFIG={build}/sdkconfig"]
+        expected.append(f"-DIDF_TARGET={chip}")
+        if image == "hello_world_psram":
+            # ESP-IDF's hello_world has no sdkconfig.defaults: only the image's own
+            expected.append(
+                f"-DSDKCONFIG_DEFAULTS={ROOT}/firmware/hello_world_psram/sdkconfig.defaults"
+            )
+        expected.append("build")
+        assert json.loads((build / "esp32tl-build.json").read_text()) == {
+            "idf_version": "v9.9.9",
+            "container": None,
+            "project": project,
+            "target": chip,
+        }
+        assert (build / "esp32tl-built").exists()
+    assert logged(tmp_path / "idf.log") == expected
+    assert "firmware/build.sh: gpio_echo@esp32c3 built in " in result.stdout
+    # the classic chip's build directories are not touched
+    assert not (out / "hello_world" / "build").exists()
+
+
+def test_chip_build_forwards_the_mode_into_the_pinned_container(tmp_path: Path) -> None:
+    script(tmp_path / "bin", "docker", FAKE_DOCKER)
+    env = {
+        "PATH": minimal_path(tmp_path / "bin"),
+        "FIRMWARE_OUT": str(tmp_path / "out"),
+        "FAKE_LOG": str(tmp_path / "docker.log"),
+    }
+    result = run_build(env, "--chips", "gpio_echo@esp32s3")
+    assert result.returncode == 0, result.stderr
+    assert logged(tmp_path / "docker.log")[-4:] == [
+        CONTAINER,
+        "firmware/build.sh",
+        "--chips",
+        "gpio_echo@esp32s3",
+    ]
+    assert "unknown image 'gpio_echo@esp32'" in run_build(env, "--chips", "gpio_echo@esp32").stderr
+
+
+@pytest.mark.parametrize("family, count", [((), 4), (("--examples",), 3), (("--chips",), 3)])
 def test_build_shards_partition_the_complete_family(
     tmp_path: Path, family: tuple[str, ...], count: int
 ) -> None:
@@ -424,7 +488,7 @@ def test_build_shards_partition_the_complete_family(
         arguments = logged(log)
         selected = arguments[arguments.index("firmware/build.sh") + 1 :]
         if family:
-            assert selected.pop(0) == "--examples"
+            assert selected.pop(0) == family[0]
         return selected
 
     whole = images()
