@@ -10,7 +10,9 @@ import tarfile
 import tempfile
 import urllib.error
 import urllib.request
+from importlib import metadata
 from pathlib import Path
+from typing import NamedTuple
 
 from esp32tl import __version__
 
@@ -38,6 +40,10 @@ ROM_URL = "https://github.com/espressif/esp-rom-elfs/releases/download/20241011/
 RELEASE_URL = (
     f"https://github.com/mateuszsikora/esp32-testing-library/releases/download/v{__version__}"
 )
+
+
+# What a missing or damaged file of the cache asks for, unless esp32tl is unreleased.
+PREPARE = "run esp32tl runtime prepare"
 
 
 class RuntimeError(ValueError):
@@ -72,9 +78,9 @@ def sha(path: Path) -> str:
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
-def verify(path: Path, expected: str) -> None:
+def verify(path: Path, expected: str, remedy: str = PREPARE) -> None:
     if path.is_symlink() or not path.is_file() or sha(path) != expected:
-        raise RuntimeError(f"invalid checksum or missing file: {path}; run esp32tl runtime prepare")
+        raise RuntimeError(f"invalid checksum or missing file: {path}; {remedy}")
 
 
 def identity(path: Path) -> None:
@@ -114,13 +120,82 @@ def manifest(path: Path) -> dict[str, str]:
         raise RuntimeError(f"invalid runtime manifest {path}: {error}") from error
 
 
+def rom_variable(chip: str) -> str:
+    """The variable that names `chip`'s ROM ELF: ESP32TL_ROM for the classic ESP32,
+    ESP32TL_ROM_<CHIP> (ESP32TL_ROM_ESP32S3) for another chip."""
+    return "ESP32TL_ROM" if chip == "esp32" else f"ESP32TL_ROM_{chip.upper()}"
+
+
+class Unreleased(NamedTuple):
+    """Where an unreleased esp32tl was installed from, and where its runner is built."""
+
+    source: str
+    checkout: str
+
+
+def unreleased() -> Unreleased | None:
+    """Where this esp32tl was installed from when that is not a release: a commit of a git
+    repository other than the release's tag, or a source directory, from the `direct_url.json` pip
+    writes into the installed distribution (PEP 610). None for an install from an index or from
+    an archive, as of a release's wheel, from the release's tag `v<version>`, and when pip
+    recorded nothing."""
+    try:
+        text = metadata.distribution("esp32tl").read_text("direct_url.json")
+        info = json.loads(text) if text else None
+    except (metadata.PackageNotFoundError, OSError, ValueError):
+        return None
+    if not isinstance(info, dict):
+        return None
+    vcs = info.get("vcs_info")
+    if isinstance(vcs, dict):
+        if vcs.get("requested_revision") == f"v{__version__}":
+            return None
+        return Unreleased(
+            f"commit {vcs.get('commit_id')} of {info.get('url')}", "a checkout of that commit"
+        )
+    if "dir_info" in info:
+        return Unreleased(f"the directory {info.get('url')}", "that directory")
+    return None
+
+
+def require_release() -> None:
+    """Refuse the release's runner when this esp32tl is not that release: their link and command
+    line may differ though both carry the same version."""
+    installed_from = unreleased()
+    if installed_from is not None:
+        raise RuntimeError(
+            f"unreleased esp32tl: installed from {installed_from.source}, not from release "
+            f"v{__version__}, whose runner need not match it; run make build-runner rom-elf in "
+            f"{installed_from.checkout}, then set ESP32TL_RUNNER to its "
+            f"runner/target/release/esp32tl-runner, and "
+            f"{', '.join(rom_variable(chip) for chip in ROMS)} to the ROM ELFs in its "
+            ".cache/esp-rom-elfs/20241011/"
+        )
+
+
 def cached_file(kind: str, directory: Path | None = None, chip: str = "esp32") -> Path:
     """Verify just the selected file and its cache manifest, without touching its peer: the
-    runner, or `chip`'s ROM."""
+    runner, or `chip`'s ROM. An unreleased esp32tl gets no cached runner, and `prepare` installs
+    nothing for it, so a cached ROM it cannot use names its variable instead."""
+    if kind == "runner":
+        require_release()
+    released = kind == "runner" or unreleased() is None
+    remedy = (
+        PREPARE
+        if released
+        else f"set {rom_variable(chip)} to the {ROMS[chip][0]} make rom-elf puts in a "
+        "checkout's .cache/esp-rom-elfs/20241011/: esp32tl runtime prepare installs nothing "
+        "for an unreleased esp32tl"
+    )
     directory = cache() if directory is None else directory
     if not directory.is_dir():
-        raise RuntimeError("runtime missing: run esp32tl runtime prepare")
-    info = manifest(directory / "manifest.json")
+        raise RuntimeError(f"runtime missing: {remedy}")
+    try:
+        info = manifest(directory / "manifest.json")
+    except RuntimeError as error:
+        if released:
+            raise
+        raise RuntimeError(f"{error}; {remedy}") from error
     if kind == "runner":
         path = directory / "esp32tl-runner"
         verify(path, info["sha256"])
@@ -128,7 +203,7 @@ def cached_file(kind: str, directory: Path | None = None, chip: str = "esp32") -
     else:
         name, digest = ROMS[chip]
         path = directory / name
-        verify(path, digest)
+        verify(path, digest, remedy)
     return path
 
 
@@ -175,6 +250,7 @@ def extract_rom(archive: Path, destination: Path, name: str = ROM) -> None:
 
 
 def prepare() -> Path:
+    require_release()
     dest = cache()
     # Never silently replace a corrupt installation; no network is needed for a valid one.
     if dest.exists():

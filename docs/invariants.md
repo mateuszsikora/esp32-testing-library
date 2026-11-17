@@ -1861,6 +1861,20 @@ installation. `tests/test_runtime.py::test_override_does_not_validate_replaced_c
 `test_selected_cache_file_still_requires_checksum` and
 `test_selected_cache_file_still_requires_manifest` enforce these rules.
 
+**Unreleased installs.** An esp32tl that pip installed from a git commit or a source directory,
+editable or not, gets no release runner: `runtime.prepare()` downloads nothing, with or without a
+cache, and the backend does not take the cached runner, both with `unreleased esp32tl`, while
+`ESP32TL_RUNNER` still serves. A cached ROM serves when the cache's manifest matches; when the
+cache cannot give it, the message names the ROM's variable, not `esp32tl runtime prepare`. A git
+install of the release's tag `v<version>`, an install from an index or an archive, and one with no
+`direct_url.json` count as the release. A checkout's missing runner or ROM names the checkout's
+make target, `build-runner` or `rom-elf`, since `prepare` refuses a checkout's install.
+`tests/test_runtime.py::test_unreleased_reads_where_pip_installed_from`,
+`test_unreleased_install_gets_no_release_runner`,
+`test_unreleased_install_downloads_nothing_without_a_cache`,
+`test_unreleased_install_names_the_rom_variable_not_prepare` and
+`test_a_checkout_s_missing_file_names_its_make_target` enforce these rules.
+
 ## Runtime revision pins
 
 The runtime installer and every esp32sim dependency in `runner/Cargo.toml` and

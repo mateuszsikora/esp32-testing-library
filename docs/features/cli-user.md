@@ -142,8 +142,11 @@ exit code 1; they are not converted to these messages.
 | `{path}: [Errno 2] No such file or directory: '{path}'`, and every other `RecordingError` | the recording cannot be read, or breaks the [format](../recording-format.md#errors) |
 | `{path} is a recording of {recorded}, not of {interface}`, and every other `ReplayError` | the recording cannot be replayed into that interface ([replay](replay-user.md#what-a-replay-refuses)); `{path}` is the path as given |
 | `{build} holds no ESP-IDF or PlatformIO build: no flasher_args.json and no firmware.bin`, and the other build errors | the selected build is missing or invalid ([when the build cannot be loaded](builds-user.md#when-the-build-cannot-be-loaded)) |
-| `no runner at {path}: run make setup in a checkout, or esp32tl runtime prepare` | no runner |
-| `no rom at {path}: run make setup in a checkout, or esp32tl runtime prepare` | no ROM ELF |
+| `no runner at {path}: run make setup in a checkout, or esp32tl runtime prepare` | the runner `ESP32TL_RUNNER` names is missing |
+| `no runner at {path}: run make build-runner in {checkout}` | the checkout esp32tl runs from has not built its runner |
+| `no rom at {path}: run make setup in a checkout, or esp32tl runtime prepare` | the ROM ELF `ESP32TL_ROM` or `ESP32TL_ROM_<CHIP>` names is missing |
+| `no rom at {path}: run make rom-elf in {checkout}` | the checkout esp32tl runs from has not fetched the ROM ELFs |
+| `unreleased esp32tl: installed from {source}, not from release v{version}, ...` | esp32tl is installed from a git commit or a source directory, which the release's runner need not match ([an unreleased commit](runtime-user.md#test-an-unreleased-commit)) |
 | `cannot listen on {path}: {reason}` | the link's Unix socket could not be bound, in a new directory under the system's temporary directory, or under `/tmp` when that path would be too long |
 | `cannot start {runner}: {reason}` | the runner could not be executed |
 
@@ -191,5 +194,8 @@ esp32tl: error: argument COMMAND: invalid choice: 'foo' (choose from 'run', 'rep
 ## Runtime preparation
 
 `esp32tl runtime prepare` explicitly installs the version-matched runner and pinned ROM into
-the user cache; valid installations are reused offline. Failures exit 2. See
+the user cache; valid installations are reused offline. Failures exit 2. An esp32tl installed from
+a git commit other than the release's tag, or from a source directory, gets nothing: `prepare`
+refuses with `unreleased esp32tl: …`
+([an unreleased commit](runtime-user.md#test-an-unreleased-commit)). See
 [runtime installation](runtime-user.md) for downloads, platforms and recovery.
