@@ -17,6 +17,144 @@ import pytest
 from esp32tl import __version__, runtime
 from esp32tl.backends import esp32sim
 
+# The real lookup, before the fixture below replaces it.
+UNRELEASED = runtime.unreleased
+
+
+@pytest.fixture(autouse=True)
+def installed_as_a_release(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These tests run from an editable install, which is not a release: they install as one."""
+    monkeypatch.setattr(runtime, "unreleased", lambda: None)
+
+
+class Installed:
+    """The installed distribution, holding `direct_url` as its `direct_url.json` when set."""
+
+    def __init__(self, direct_url: object = None) -> None:
+        self.direct_url = direct_url
+
+    def read_text(self, name: str) -> str | None:
+        assert name == "direct_url.json"
+        return None if self.direct_url is None else json.dumps(self.direct_url)
+
+
+REPOSITORY = "https://github.com/mateuszsikora/esp32-testing-library"
+COMMIT = "769f30a1d490cbf37cbb08800e8cb22df5e1c851"
+
+
+GIT = runtime.Unreleased(f"commit {COMMIT} of {REPOSITORY}", "a checkout of that commit")
+DIRECTORY = runtime.Unreleased("the directory file:///src/esp32tl", "that directory")
+
+
+@pytest.mark.parametrize(
+    "direct_url,source",
+    [
+        ({"url": REPOSITORY, "vcs_info": {"vcs": "git", "commit_id": COMMIT}}, GIT),
+        (
+            {
+                "url": REPOSITORY,
+                "vcs_info": {"vcs": "git", "commit_id": COMMIT, "requested_revision": "main"},
+            },
+            GIT,
+        ),
+        # The release's own tag is the release.
+        (
+            {
+                "url": REPOSITORY,
+                "vcs_info": {
+                    "vcs": "git",
+                    "commit_id": COMMIT,
+                    "requested_revision": f"v{__version__}",
+                },
+            },
+            None,
+        ),
+        ({"url": "file:///src/esp32tl", "dir_info": {}}, DIRECTORY),
+        ({"url": "file:///src/esp32tl", "dir_info": {"editable": True}}, DIRECTORY),
+        ({"url": "file:///dl/esp32tl-0.1.0-py3-none-any.whl", "archive_info": {}}, None),
+        (None, None),
+    ],
+)
+def test_unreleased_reads_where_pip_installed_from(
+    monkeypatch: pytest.MonkeyPatch, direct_url: object, source: runtime.Unreleased | None
+) -> None:
+    monkeypatch.setattr("importlib.metadata.distribution", lambda name: Installed(direct_url))
+    assert UNRELEASED() == source
+
+
+def test_unreleased_install_gets_no_release_runner(
+    cached_runtime: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(runtime, "unreleased", lambda: GIT)
+    monkeypatch.setattr(runtime, "download", lambda url, path: pytest.fail(f"downloaded {url}"))
+    message = (
+        f"unreleased esp32tl: installed from commit {COMMIT} of {REPOSITORY}, not from release "
+        f"v{__version__}, whose runner need not match it; run make build-runner rom-elf in a "
+        "checkout of that commit, then set ESP32TL_RUNNER to its "
+        "runner/target/release/esp32tl-runner, and ESP32TL_ROM, ESP32TL_ROM_ESP32S3, "
+        "ESP32TL_ROM_ESP32C3, ESP32TL_ROM_ESP32C6 to the ROM ELFs in its "
+        ".cache/esp-rom-elfs/20241011/"
+    )
+    with pytest.raises(runtime.RuntimeError) as refused:
+        runtime.prepare()
+    assert str(refused.value) == message
+    with pytest.raises(esp32sim.BackendError) as refused_backend:
+        esp32sim.runner_path()
+    assert str(refused_backend.value) == message
+    # The prepared cache's ROM still serves while its manifest matches this esp32tl.
+    assert esp32sim.rom_path() == cached_runtime / runtime.ROM
+    override = cached_runtime.parent / "built-runner"
+    override.write_bytes((cached_runtime / "esp32tl-runner").read_bytes())
+    override.chmod(0o755)
+    monkeypatch.setenv("ESP32TL_RUNNER", str(override))
+    assert esp32sim.runner_path() == override
+
+
+def test_unreleased_install_downloads_nothing_without_a_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dest = tmp_path / "absent"
+    monkeypatch.setattr(runtime, "cache", lambda: dest)
+    monkeypatch.setattr(runtime, "unreleased", lambda: DIRECTORY)
+    monkeypatch.setattr(runtime, "download", lambda url, path: pytest.fail(f"downloaded {url}"))
+    with pytest.raises(runtime.RuntimeError, match=r"^unreleased esp32tl: .* in that directory, "):
+        runtime.prepare()
+    assert not dest.exists()
+    assert not dest.parent.exists() or list(dest.parent.iterdir()) == []
+
+
+def test_unreleased_install_names_the_rom_variable_not_prepare(
+    cached_runtime: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(runtime, "unreleased", lambda: GIT)
+    remedy = (
+        "set ESP32TL_ROM_ESP32S3 to the esp32s3_rev0_rom.elf make rom-elf puts in a checkout's "
+        ".cache/esp-rom-elfs/20241011/: esp32tl runtime prepare installs nothing for an "
+        "unreleased esp32tl"
+    )
+    # A release before the ESP32-S3 left no ROM of it in the cache.
+    (cached_runtime / runtime.ROMS["esp32s3"][0]).unlink()
+    with pytest.raises(esp32sim.BackendError) as missing:
+        esp32sim.rom_path("esp32s3")
+    assert str(missing.value).endswith(f"esp32s3_rev0_rom.elf; {remedy}")
+    # A commit with another esp32sim pin rejects the cache's manifest.
+    path = cached_runtime / "manifest.json"
+    info = json.loads(path.read_text())
+    info["esp32sim"] = "0" * 40
+    path.write_text(json.dumps(info))
+    with pytest.raises(esp32sim.BackendError) as manifest:
+        esp32sim.rom_path("esp32s3")
+    assert "incompatible version, esp32sim revision or target" in str(manifest.value)
+    assert str(manifest.value).endswith(f"; {remedy}")
+    path.unlink()
+    path.parent.joinpath("esp32tl-runner").unlink()
+    for name, _ in runtime.ROMS.values():
+        path.parent.joinpath(name).unlink(missing_ok=True)
+    path.parent.rmdir()
+    with pytest.raises(esp32sim.BackendError) as absent:
+        esp32sim.rom_path("esp32s3")
+    assert str(absent.value) == f"runtime missing: {remedy}"
+
 
 def test_unsupported(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(platform, "system", lambda: "Windows")
@@ -91,6 +229,25 @@ def test_selection_explicit_checkout_cache(tmp_path: Path, monkeypatch: pytest.M
     override.unlink()
     with pytest.raises(esp32sim.BackendError, match="no runner"):
         esp32sim.runner_path()
+
+
+def test_a_checkout_s_missing_file_names_its_make_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(esp32sim, "ROOT", tmp_path)
+    (tmp_path / "runner").mkdir()
+    (tmp_path / "runner/Cargo.toml").touch()
+    for chip in runtime.ROMS:
+        monkeypatch.delenv(runtime.rom_variable(chip), raising=False)
+    monkeypatch.delenv("ESP32TL_RUNNER", raising=False)
+    runner = tmp_path / "runner/target/release/esp32tl-runner"
+    with pytest.raises(esp32sim.BackendError) as missing:
+        esp32sim.runner_path()
+    assert str(missing.value) == f"no runner at {runner}: run make build-runner in {tmp_path}"
+    rom = tmp_path / ".cache/esp-rom-elfs/20241011/esp32s3_rev0_rom.elf"
+    with pytest.raises(esp32sim.BackendError) as missing:
+        esp32sim.rom_path("esp32s3")
+    assert str(missing.value) == f"no rom at {rom}: run make rom-elf in {tmp_path}"
 
 
 def test_identity_rejects_old_runner(tmp_path: Path) -> None:
@@ -189,7 +346,8 @@ def cached_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(runtime, "cache", lambda: directory)
     monkeypatch.setattr(esp32sim, "ROOT", tmp_path / "site-packages")
     monkeypatch.delenv("ESP32TL_RUNNER", raising=False)
-    monkeypatch.delenv("ESP32TL_ROM", raising=False)
+    for chip in runtime.ROMS:
+        monkeypatch.delenv(runtime.rom_variable(chip), raising=False)
     return directory
 
 

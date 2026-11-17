@@ -3867,6 +3867,37 @@ from either backend lookup was rejected: an unused, replaced file could incorrec
 valid explicit path combined with the other file from cache.
 
 
+## An install from a commit or a directory gets no release runner
+
+Status: decided (17 November 2026)
+
+`esp32tl runtime prepare` and the backend's cached runner refuse an esp32tl that pip installed
+from a git commit or a source directory, as its `direct_url.json` (PEP 610) records, with
+`unreleased esp32tl: …` and how to build the commit's runner
+([runtime installation](../features/runtime-user.md#test-an-unreleased-commit)). Such an install
+carries the last release's version and esp32sim revision, so the identity check passed with the
+release's runner, which then refused `--chip esp32s3` at the first turn after the ESP32-S3,
+ESP32-C3 and ESP32-C6 landed on `main`. A git install of the release's tag `v<version>`, and an
+install from PyPI or from a wheel or sdist file, count as the release. A cached ROM still serves
+while the cache's manifest matches the install, as for a release; when the cache cannot give it,
+the message names the ROM's variable instead of `prepare`, which installs nothing here.
+
+**Rejected:** a development version on `main` (`0.2.0.dev0`) raised right after each release, with
+`prepare` refusing it, because every release would take two version changes, and the release
+workflow recognises a release by a version-only change to `MAJOR.MINOR.PATCH`
+([prepare versions in a PR](ci.md#prepare-versions-in-a-pr-and-build-releases-after-merge)).
+Documentation alone, because the failure came at the first turn with nothing pointing to the
+install. Checking a cached ROM by its checksum alone, without the manifest, for an unreleased
+install, because it would loosen the version match of
+[runtime preparation](#runtime-preparation-is-explicit-and-version-matched) for one case.
+
+**Postponed:** comparing what the runner can do, its `--chip` values or its link protocol, in
+`--runtime-version` or the release manifest. It would also catch a runner from another commit set
+through `ESP32TL_RUNNER`, a wheel built from an unreleased commit, and an archive of a commit
+such as GitHub's `/archive/<commit>.tar.gz`, which this check counts as releases; the reported
+case is caught without it.
+
+
 ## Final radio diagnostics come from the completed runner log
 
 Status: decided (#223)

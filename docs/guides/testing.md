@@ -233,8 +233,10 @@ an image built in a container other than the one `firmware/build.sh` pins (`<ima
 <container> (ESP-IDF <version>), not in <pinned> (<version>): run make firmware`), or, for
 `arduino_shell`, than the one `firmware/build-platformio.sh` pins, or with another platform than its
 `platformio.ini` names, and passes an `IDF_LOCAL=1` or `PIO_LOCAL=1` build with a warning. A missing
-runner or ROM ELF fails with `esp32sim: no runner at <path>: run make setup, or set ESP32TL_RUNNER`
-or `esp32sim: no ROM ELF at <path>: run make setup, or set ESP32TL_ROM`.
+runner or ROM ELF fails with `esp32sim: no runner at <path>: run make build-runner in <checkout>`
+or `esp32sim: no rom at <path>: run make rom-elf in <checkout>`; one that `ESP32TL_RUNNER`, or the
+chip's `ESP32TL_ROM` or `ESP32TL_ROM_<CHIP>`, names ends with `run make setup in a checkout, or
+esp32tl runtime prepare` instead.
 
 In `tests/test_firmware_build.py`, `test_build_refuses_esp32tl_container_set_on_the_host` skips
 with `this suite runs in a Docker container` when `/.dockerenv` exists, and so does

@@ -152,10 +152,7 @@ def runtime_path(kind: str, chip: str = "esp32") -> Path:
     """The runner, or `chip`'s ROM ELF: ESP32TL_RUNNER, or ESP32TL_ROM for the classic ESP32 and
     ESP32TL_ROM_<CHIP> (ESP32TL_ROM_ESP32S3) for another chip, else the checkout's, else the
     prepared runtime's."""
-    if kind == "runner":
-        variable = "ESP32TL_RUNNER"
-    else:
-        variable = "ESP32TL_ROM" if chip == "esp32" else f"ESP32TL_ROM_{chip.upper()}"
+    variable = "ESP32TL_RUNNER" if kind == "runner" else runtime.rom_variable(chip)
     explicit = os.environ.get(variable)
     if kind != "runner" and chip not in runtime.ROMS:
         raise BackendError(
@@ -174,9 +171,13 @@ def runtime_path(kind: str, chip: str = "esp32") -> Path:
         else:
             return runtime.cached_file(kind, chip=chip)
         if not path.is_file():
-            raise runtime.RuntimeError(
-                f"no {kind} at {path}: run make setup in a checkout, or esp32tl runtime prepare"
+            # The checkout's own file is built there; prepare installs nothing for a checkout.
+            remedy = (
+                f"run make {'build-runner' if kind == 'runner' else 'rom-elf'} in {ROOT}"
+                if path == local
+                else "run make setup in a checkout, or esp32tl runtime prepare"
             )
+            raise runtime.RuntimeError(f"no {kind} at {path}: {remedy}")
         if kind == "runner":
             runtime.identity(path)
         else:

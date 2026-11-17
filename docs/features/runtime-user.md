@@ -66,7 +66,8 @@ file, the runner and each ROM, regardless of environment overrides, before reusi
 installation.
 
 Errors distinguish `unsupported runtime platform`, `runtime missing`, `incompatible runner`,
-`invalid runtime manifest`, `download failed`, and `invalid checksum or missing file`.
+`invalid runtime manifest`, `download failed`, `invalid checksum or missing file`, and
+`unreleased esp32tl` ([an unreleased commit](#test-an-unreleased-commit)).
 Preparation exits 2 on failure. No automatic update or downgrade occurs.
 
 A `download failed` error names the URL and the error the download got. When that error is an
@@ -86,6 +87,60 @@ In consumer CI install esp32tl from PyPI (or a published release wheel) and run 
 `~/.cache/esp32tl` keyed by package version and OS/architecture (or set XDG_CACHE_HOME explicitly).
 The first run needs HTTPS access to GitHub and Espressif's GitHub release; later runs need neither
 Rust nor network access. Cache contents must be trusted just like installed executables.
+
+## Test an unreleased commit
+
+An esp32tl installed from a commit that is not a release still carries the last release's version,
+but the release's runner need not run it: its link and its command line may have changed since,
+as the ESP32-S3, ESP32-C3 and ESP32-C6 came after v0.1.0. Both checks would pass, version and
+esp32sim revision, and the run would fail at its first turn. So esp32tl reads where pip installed
+it from, the `direct_url.json` pip writes into the installed distribution (PEP 610). For a commit
+of a git repository or a source directory, editable or not, `esp32tl runtime prepare` downloads
+nothing and exits 2, and the backend does not take the cached runner. Both say:
+
+```text
+unreleased esp32tl: installed from {source}, not from release v{version}, whose runner need not match it; run make build-runner rom-elf in {checkout}, then set ESP32TL_RUNNER to its runner/target/release/esp32tl-runner, and ESP32TL_ROM, ESP32TL_ROM_ESP32S3, ESP32TL_ROM_ESP32C3, ESP32TL_ROM_ESP32C6 to the ROM ELFs in its .cache/esp-rom-elfs/20241011/
+```
+
+`{source}` and `{checkout}` are `commit {commit} of {url}` and `a checkout of that commit`, or
+`the directory {url}` and `that directory`. A git install of the release's own tag,
+`@v<version>`, as pip records the revision asked for, counts as the release. So do an install from
+PyPI or from a wheel or sdist file, and one for which pip recorded nothing. That leaves two
+unreleased installs unrecognised, whose runner is yours to match: a wheel built from an
+unreleased commit, and an archive of a commit, such as GitHub's
+`https://github.com/mateuszsikora/esp32-testing-library/archive/<commit>.tar.gz`.
+
+A cached ROM ELF still serves an unreleased install when the cache of its version holds it and
+the cache's manifest names the install's esp32sim revision. Neither is sure: a cache prepared by
+v0.1.0 holds only the classic ESP32's `esp32_rev300_rom.elf`, and a commit that moves the esp32sim
+pin rejects that manifest. A ROM the cache cannot give then names its variable, not
+`esp32tl runtime prepare`: the message is the cache's own (`runtime missing`,
+`invalid runtime manifest …` or `invalid checksum or missing file: {path}`), followed by
+
+```text
+set {variable} to the {rom} make rom-elf puts in a checkout's .cache/esp-rom-elfs/20241011/: esp32tl runtime prepare installs nothing for an unreleased esp32tl
+```
+
+To test an unreleased commit from your project, build its runner and ROMs in a checkout of it
+([developer setup](../guides/development.md); building the runner needs Rust) and install that
+checkout editable into your project's environment:
+
+```sh
+git clone https://github.com/mateuszsikora/esp32-testing-library ../esp32tl
+git -C ../esp32tl checkout <commit>
+make -C ../esp32tl build-runner rom-elf
+python -m pip install -e ../esp32tl
+pytest tests/
+```
+
+An editable install finds the checkout's `runner/target/release/esp32tl-runner` and
+`.cache/esp-rom-elfs/20241011/` itself, with no variable. Installed any other way from the commit,
+as `python -m pip install "esp32tl @ git+https://github.com/mateuszsikora/esp32-testing-library@<commit>"`,
+it needs `ESP32TL_RUNNER` set to the checkout's runner, and the ROM of each chip the tests run:
+`ESP32TL_ROM` (`esp32_rev300_rom.elf`), `ESP32TL_ROM_ESP32S3` (`esp32s3_rev0_rom.elf`),
+`ESP32TL_ROM_ESP32C3` (`esp32c3_rev3_rom.elf`) and `ESP32TL_ROM_ESP32C6`
+(`esp32c6_rev0_rom.elf`), each in the checkout's `.cache/esp-rom-elfs/20241011/`, unless a
+prepared cache of the release holds them as above.
 
 ## Integrity and release maintenance
 

@@ -335,8 +335,12 @@ its body instead, as `BackendError: cannot ...`, without the prefix:
 | `{build} asks for flash encryption, which the runner does not do` | Build without flash encryption |
 | `{build} is not a finished build, missing {files}` | Finish the build; `{files}` is a comma-separated list |
 | The other messages of [a build that cannot be loaded](builds-user.md#when-the-build-cannot-be-loaded) | As that table says |
-| `no runner at {path}: run make setup in a checkout, or esp32tl runtime prepare` | Build the runner, or point `ESP32TL_RUNNER` at an executable one |
-| `no rom at {path}: run make setup in a checkout, or esp32tl runtime prepare` | Fetch the ROM ELFs, or point `ESP32TL_ROM` (or the chip's `ESP32TL_ROM_<CHIP>`) at the chip's |
+| `no runner at {path}: run make setup in a checkout, or esp32tl runtime prepare` | `ESP32TL_RUNNER` names a missing file: point it at an executable runner |
+| `no runner at {path}: run make build-runner in {checkout}` | esp32tl runs from a checkout that has not built its runner: run `make build-runner` there |
+| `no rom at {path}: run make setup in a checkout, or esp32tl runtime prepare` | `ESP32TL_ROM` (or the chip's `ESP32TL_ROM_<CHIP>`) names a missing file: point it at the chip's ROM ELF |
+| `no rom at {path}: run make rom-elf in {checkout}` | esp32tl runs from a checkout that has not fetched the ROM ELFs: run `make rom-elf` there |
+| `unreleased esp32tl: installed from {source}, not from release v{version}, ...` | esp32tl comes from a git commit other than the release's tag, or from a source directory, and the backend would take the prepared release's runner: build the commit's runner and point `ESP32TL_RUNNER` at it, or install its checkout editable ([an unreleased commit](runtime-user.md#test-an-unreleased-commit)) |
+| `…; set {variable} to the {rom} make rom-elf puts in a checkout's .cache/esp-rom-elfs/20241011/: esp32tl runtime prepare installs nothing for an unreleased esp32tl` | The ROM of the board's chip is not in the prepared cache of an unreleased esp32tl, or the cache does not match it: set the variable named, as `ESP32TL_ROM_ESP32S3` ([an unreleased commit](runtime-user.md#test-an-unreleased-commit)) |
 | `bluetooth: {build} holds no ELF of the application, whose symbols the runner's --bt needs` | At the `bt` fixture, or in the test body at the first `board.bluetooth`, without the prefix: the build directory has no `.elf` file, or a PlatformIO one no `firmware.elf`; build the app again, or keep its ELF beside the image |
 | `cannot listen on {path}: {reason}` | At `board.power_on()`, which raises `BackendError` in the test body: the backend cannot bind the link's socket in a new directory under the system's temporary directory or `/tmp`; check that it is writable |
 | `cannot start {runner}: {reason}` | At `board.power_on()`, which raises `BackendError` in the test body: the runner exists but the system cannot run it, for example `Exec format error` |
