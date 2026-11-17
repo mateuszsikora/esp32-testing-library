@@ -31,13 +31,9 @@ fn the_profiles_say_what_esp32sim_models() {
     assert_eq!(esp32c3::PROFILE.cpu_hz, 160_000_000);
     assert_eq!(esp32c6::PROFILE.cpu_hz, 160_000_000);
     for p in [&esp32s3::PROFILE, &esp32c3::PROFILE, &esp32c6::PROFILE] {
-        assert!(
-            !p.deep_sleep && !p.wifi_station && p.wifi && p.bt,
-            "{}",
-            p.name
-        );
+        assert!(!p.wifi_station && p.wifi && p.bt, "{}", p.name);
     }
-    const { assert!(esp32::PROFILE.deep_sleep && esp32::PROFILE.wifi_station) };
+    const { assert!(esp32::PROFILE.wifi_station) };
     assert_eq!(esp32s3::PROFILE.psram_mb, [2, 4, 8]);
     assert!(esp32c3::PROFILE.psram_mb.is_empty() && esp32c6::PROFILE.psram_mb.is_empty());
     // the GPIO pads, as esp32sim's own pin tables have them (`esp-soc/src/pins.rs`)

@@ -35,7 +35,9 @@ the container, and once inside it, which builds. With `IDF_LOCAL=1` it runs once
    written. With no arguments, the list is all of `IMAGES`. With `--chips`, `IMAGES` is
    `CHIP_IMAGES`: `IMAGE@CHIP` for each of `hello_world`, `console_repl`, `gpio_echo`,
    `nmea_reader`, `nvs_reader` and `http_request` on each of `esp32s3`, `esp32c3` and `esp32c6`,
-   then `hello_world_psram@esp32s3`; `gpio_echo@esp32` is unknown there. The family's output tree
+   then `hello_world_psram@esp32s3`, `gatt_server@esp32s3` and `gatt_server@esp32c3`
+   (`project_of`: `$IDF_PATH/examples/bluetooth/bluedroid/ble/gatt_server`); `gpio_echo@esp32` is
+   unknown there. The family's output tree
    is `firmware/` for `--chips` as without a family, `examples/` for `--examples`.
 2. **Mode**, decided before anything is written:
    - `ESP32TL_CONTAINER` set: the container side. `/.dockerenv`, which Docker creates in every

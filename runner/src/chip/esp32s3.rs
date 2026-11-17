@@ -21,7 +21,6 @@ pub const PROFILE: Profile = Profile {
     gpios: ((1 << 49) - 1) & !(0xf << 22),
     input_only: 0,
     uarts: 3,
-    deep_sleep: false,
     wifi_station: false,
     wifi: true,
     bt: true,

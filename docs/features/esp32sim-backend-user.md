@@ -299,8 +299,9 @@ A board profile whose `chip` is `esp32s3`, `esp32c3` or `esp32c6` runs on esp32s
 that chip, with the chip's ROM; esp32tl ships one profile of each, `esp32-s3-devkitc`,
 `esp32-c3-devkitm` and `esp32-c6-devkitc` ([board profiles](board-profiles-user.md)). On them
 the console, the UART routes, the lines, `board.nvs(...)` and `board.flash()`, `board.reset()` and
-the power cycle, the Wi-Fi access point with its network, PSRAM on the S3, and the forwarding of
-the firmware's HCI to `bt.air` work as on the classic ESP32 ([tests](../../tests/test_chips.py)).
+the power cycle, the Wi-Fi access point with its network, PSRAM on the S3, and on the S3 and the C3
+the forwarding of the firmware's HCI to `bt.air` work as on the classic ESP32
+([tests](../../tests/test_chips.py)).
 What esp32sim does not model on these chips, issue
 [#229](https://github.com/mateuszsikora/esp32-testing-library/issues/229) tracks:
 
@@ -311,7 +312,10 @@ What esp32sim does not model on these chips, issue
 | Deep sleep | The firmware goes to sleep and never wakes: `board.wait_for_wake` raises when its time is up, and the console says nothing more |
 | Bluetooth on the C6 | `bt` on an image built with ESP-IDF v5.3.6 fails at `board.power_on()`: esp32sim's C6 hooks want v5.5.x (`--bt …: C6 BLE requires esp_app_desc.idf_ver v5.5.x, got "v5.3.6"`) |
 
-esp32tl's own Bluetooth peers are Bluetooth Classic devices, which a BLE-only chip cannot reach:
+On the S3 and the C3, `bt` is the firmware's controller: a BLE host gets through its start-up and
+advertises (`bt.unknown_commands()` stays empty), and `bt.tap(path)` records its HCI. esp32tl's
+own Bluetooth peers are Bluetooth Classic devices, which a BLE-only chip cannot reach, so a test
+cannot yet scan for the firmware or connect to it:
 [issue #234](https://github.com/mateuszsikora/esp32-testing-library/issues/234). A boot's reason
 names the chip's reset cause with the classic ESP32's names (`boot N: SW_CPU_RESET (reset cause
 12)`): the numbers 1, 3, 5 and 12 mean the same on all four chips, a power-on, a software system

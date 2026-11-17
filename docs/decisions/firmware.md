@@ -483,8 +483,9 @@ Status: decided (17 November 2026)
 `firmware/build.sh --chips` builds `IMAGE@CHIP` entries, each from the classic image's project
 into `firmware/<image>/build-<chip>/`, with `-DIDF_TARGET=<chip>`, in the same pinned v5.3.6
 container: `hello_world`, `console_repl`, `gpio_echo`, `nmea_reader`, `nvs_reader` and
-`http_request` for each of `esp32s3`, `esp32c3` and `esp32c6`, and `hello_world_psram` (ESP-IDF's
-`hello_world` with octal PSRAM on) for `esp32s3`. These are the images whose tests need only what
+`http_request` for each of `esp32s3`, `esp32c3` and `esp32c6`, `hello_world_psram` (ESP-IDF's
+`hello_world` with octal PSRAM on) for `esp32s3`, and ESP-IDF's BLE `gatt_server` for `esp32s3` and
+`esp32c3`. These are the images whose tests need only what
 esp32sim models on those chips; deep sleep, an SD card over SPI and Bluetooth Classic are left
 out ([#229](https://github.com/mateuszsikora/esp32-testing-library/issues/229)). `gpio_echo`'s
 Kconfig gives the classic ESP32 its old defaults and the other chips GPIO 6 and 7

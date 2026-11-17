@@ -1103,7 +1103,8 @@ def test_joins_and_fetches_from_the_tests_server(board):
 
 `board.bluetooth`, also the `bt` fixture, is the chip's Bluetooth, which every board profile has, as
 every chip a profile may name does; the peers here are Bluetooth Classic devices, which a BLE-only
-chip (the ESP32-S3, C3 and C6) cannot reach ([issue #234](https://github.com/mateuszsikora/esp32-testing-library/issues/234)). On esp32sim it puts the firmware's controller on an air around the board,
+chip (the ESP32-S3, C3 and C6) cannot reach: there `bt` forwards the firmware's HCI and taps it,
+and its host starts, but no device on the air talks to it yet ([issue #234](https://github.com/mateuszsikora/esp32-testing-library/issues/234)). On esp32sim it puts the firmware's controller on an air around the board,
 on the board's clock, where the test puts the devices the firmware talks to or finds, `SppPeer` and
 `BluetoothDevice`, and the run forwards the firmware's HCI to that controller:
 

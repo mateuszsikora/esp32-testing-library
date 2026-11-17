@@ -101,7 +101,6 @@ ROOT = Path(__file__).resolve().parents[2]
 # The ROM ELF scripts/fetch-rom-elf puts in .cache/ (plan M0). The runner's own lookup prefers the
 # newest release under ~/.espressif instead, so the backend always passes --rom.
 ROM_RELEASE = "20241011"
-ROM_ELF = runtime.ROM
 
 # How long a run of the esp32tl command lasts by default, in emulated seconds: its clock runs
 # free. hello_world runs 12 emulated seconds in 0.3 s of wall time on an M2 Pro, so 300 is a few
@@ -131,14 +130,17 @@ SUN_PATH_MAX = 104
 
 # What esp32sim does not model on a chip, by what a test asks for: an interface's kind, or
 # `<kind>.<role>` for a role of it. The test is skipped with the reason; each gap is an entry of
-# https://github.com/mateuszsikora/esp32-testing-library/issues/229.
+# https://github.com/mateuszsikora/esp32-testing-library/issues/229. Every chip of `boards.CHIPS`
+# but the classic ESP32 is named here, with its gaps or with none: a chip added there needs its
+# own decision here (tests/test_pytest_plugin.py checks it).
 CHIP_GAPS: dict[str, dict[str, str]] = {
     chip: {
-        "sd_card": f"esp32sim does not model GP-SPI RX DMA on the {title}, which ESP-IDF's SD SPI"
-        " driver needs (#229, G2)",
-        "wifi.station": f"esp32sim has no virtual station for a SoftAP on the {title} (#229, G4)",
+        "sd_card": f"esp32sim does not model GP-SPI RX DMA on the {boards.CHIPS[chip].title},"
+        " which ESP-IDF's SD SPI driver needs (#229, G2)",
+        "wifi.station": "esp32sim has no virtual station for a SoftAP on the"
+        f" {boards.CHIPS[chip].title} (#229, G4)",
     }
-    for chip, title in (("esp32s3", "ESP32-S3"), ("esp32c3", "ESP32-C3"), ("esp32c6", "ESP32-C6"))
+    for chip in ("esp32s3", "esp32c3", "esp32c6")
 }
 
 

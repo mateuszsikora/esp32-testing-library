@@ -40,7 +40,7 @@ for chip in esp32s3 esp32c3 esp32c6; do
 		CHIP_IMAGES="${CHIP_IMAGES:+$CHIP_IMAGES }$image@$chip"
 	done
 done
-CHIP_IMAGES="$CHIP_IMAGES hello_world_psram@esp32s3"
+CHIP_IMAGES="$CHIP_IMAGES hello_world_psram@esp32s3 gatt_server@esp32s3 gatt_server@esp32c3"
 family=firmware
 if [ "${1:-}" = --chips ]; then
 	shift
@@ -75,6 +75,7 @@ project_of() {
 	hello_world | hello_world_psram) echo "$IDF_PATH/examples/get-started/hello_world" ;;
 	sdspi) echo "$IDF_PATH/examples/storage/sd_card/sdspi" ;;
 	deep_sleep) echo "$IDF_PATH/examples/system/deep_sleep" ;;
+	gatt_server) echo "$IDF_PATH/examples/bluetooth/bluedroid/ble/gatt_server" ;;
 	bt_spp_initiator | bt_spp_initiator_psram)
 		echo "$IDF_PATH/examples/bluetooth/bluedroid/classic_bt/bt_spp_initiator"
 		;;

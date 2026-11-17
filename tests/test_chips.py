@@ -10,6 +10,7 @@ import pytest
 
 from esp32tl.backends.esp32sim import Esp32Sim
 from esp32tl.flash import i8, i16, i32, i64, u8, u16, u32, u64
+from esp32tl.interfaces.bluetooth import Bluetooth
 from esp32tl.interfaces.board import POWERON_RESET
 from esp32tl.interfaces.console import Console
 from esp32tl.interfaces.gnss import Gnss
@@ -112,6 +113,9 @@ def on_chip(chip: str, profile: str, banner: str) -> type:
             board.power_on()
             console.expect_exact(printed, timeout=5)
             assert [boot.cause for boot in board.boots] == [POWERON_RESET] * 3
+            # the runner's copy of the flash, through the chip's Guest::flash
+            config = board.flash().nvs()["config"]
+            assert (config["broker_port"], config["delta"]) == (u16(8883), i32(-3))
 
         @image("http_request")
         def test_http_request_joins_and_fetches_from_the_tests_server(
@@ -126,6 +130,24 @@ def on_chip(chip: str, profile: str, banner: str) -> type:
             board.wait_until(printed, within=seconds(5))
             assert network.dns.asked == ["example.com"]
             assert board.link.warnings == [] and board.link.error is None
+
+        if chip != "esp32c6":  # esp32sim's C6 hooks want an image of ESP-IDF v5.5.x (#229, G5)
+
+            @image("gatt_server")
+            def test_a_ble_host_gets_through_its_controller_on_the_air(
+                self, board: Esp32Sim, bt: Bluetooth, console: Console
+            ) -> None:
+                # Bluedroid's own HCI goes through esp32sim's VHCI to the harness's controller,
+                # which answers every command it sends; there is no LE peer yet (#234)
+                board.power_on()
+                console.expect_exact("GATTS_DEMO: Advertising start successfully", timeout=5)
+                assert bt.packets_from_host > 0 and bt.packets_to_host > 0
+                assert bt.unknown_commands() == []
+                # the flash holds the application as built, not esp32sim's trampoline over
+                # esp_bt_controller_init (chip::flash_without_trampoline)
+                assert board.app.app_image is not None
+                built = board.app.app_image.read_bytes()
+                assert board.flash().partition("factory")[: len(built)] == built
 
     Tests.__name__ = Tests.__qualname__ = f"TestOn{chip.upper()}"
     return Tests

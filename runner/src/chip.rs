@@ -30,8 +30,6 @@ pub struct Profile {
     pub input_only: u64,
     /// How many UARTs it has: routes of the others are never enabled.
     pub uarts: usize,
-    /// Whether esp32sim models its deep sleep, and with it the RTC timer's wake.
-    pub deep_sleep: bool,
     /// Whether `--wifi-sta`, a virtual station joining the guest's access point, is there.
     pub wifi_station: bool,
     /// Whether `--wifi`, a virtual access point, is there.
@@ -129,9 +127,12 @@ pub(crate) fn ap_on_air(
     link.set_beacons(wifi.nearby().to_vec());
 }
 
-/// `Guest::wifi_leave` on such a chip, at `now_us` of the bus's time: as on the classic chip, a
-/// deauthentication ahead of anything queued but beacons, then no more beacons, then off the air
-/// once the station has had it.
+/// `Guest::wifi_leave` on such a chip, at `now_us` of the bus's time. esp32sim's station does not
+/// notice beacons that stop coming, so the access point tells it it is leaving, as one that shuts
+/// down does: a deauthentication ahead of anything it had queued but beacons, then no more
+/// beacons. Until it has left it still answers a station that tries again, which the next slice
+/// boundary deauthenticates again; it goes off the air once the deauthentication, or what it
+/// answered before it, is on its way.
 pub(crate) fn ap_leave(link: &mut esp_soc::wifi::StationLink, now_us: u64) -> bool {
     use esp_soc::wifi::{self, StaState};
     let Some(ap) = link.ap_mut() else {
@@ -156,9 +157,10 @@ pub(crate) fn ap_leave(link: &mut esp_soc::wifi::StationLink, now_us: u64) -> bo
     true
 }
 
-/// `Guest::flash` on a chip whose Bluetooth is esp32sim's VHCI: with `--bt`, esp32sim's
-/// trampoline sits in the flash over `esp_bt_controller_init` until the next `reboot()`
-/// (`esp-soc/src/ble/vhci.rs`), and the copy has the code the guest wrote.
+/// `Guest::flash` on a chip whose Bluetooth is esp32sim's VHCI: with `--bt`, from the guest's
+/// `esp_bt_controller_init` until the next `reboot()`, esp32sim's trampoline sits in the flash
+/// over the function's code (`install`, `esp-soc/src/ble/vhci.rs:177-200`), which the guest never
+/// wrote: the copy has the code.
 pub(crate) fn flash_without_trampoline<'a>(
     flash: &'a [u8],
     original: &Option<(usize, Vec<u8>)>,

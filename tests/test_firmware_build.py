@@ -428,6 +428,8 @@ def test_chip_images_build_their_projects_for_the_chip(
         for image, project in projects.items()
     ]
     entries.append(("hello_world_psram", "esp32s3", hello))
+    gatt = f"{tmp_path}/idf/examples/bluetooth/bluedroid/ble/gatt_server"
+    entries += [("gatt_server", "esp32s3", gatt), ("gatt_server", "esp32c3", gatt)]
     expected = []
     for image, chip, project in entries:
         build = out / image / f"build-{chip}"

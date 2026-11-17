@@ -481,7 +481,7 @@ repository makes.
 | `nanoseconds(value, what)`, `seconds(ns)` | `esp32tl/backends/clock.py`: a `Duration` of the board's time to nanoseconds, checked; nanoseconds shown as `12.5 s`, as `str(Duration(ns))` |
 | `listen()` | The listening socket and its path, or `BackendError` |
 | `runner_path()`, `rom_path(chip="esp32")` | The runner and `chip`'s ROM ELF, or `BackendError`; `esp32tl has no ROM for {chip}; the chips are esp32, esp32s3, esp32c3, esp32c6` for a chip `runtime.ROMS` does not have |
-| `CHIP_GAPS` | What esp32sim does not model on a chip, by request: chip, then `<kind>` or `<kind>.<role>`, then the reason the test is skipped with |
+| `CHIP_GAPS` | What esp32sim does not model on a chip, by request: chip, then `<kind>` or `<kind>.<role>`, then the reason the test is skipped with; the chips' titles come from `boards.CHIPS`, and every chip there but `esp32` has an entry (`test_every_chip_but_the_classic_one_has_its_esp32sim_gaps_decided`) |
 | `load_app(app_path, *, build_dir=None, backend="esp32sim")` | The checked `Build` of the selected directory (default `<app_path>/build`), from `esp32tl.build.load`, its `BuildError` raised as `BackendError`; `backend` chooses target/encryption error wording |
 | `profile_uart(profile, interface, *, clock, directory, asked=..., log=None, files=None)` | The `Uart` on the route the profile gives `interface` (`uart.gnss`), at its pins and baud; `BackendError` when the profile has no such route. The [`esp32tl` command](cli-user.md) makes its UARTs with it |
 | `route_wire(profile, interface)` | The `Wire` of that route, or the same `BackendError`; `Esp32Sim` makes its `Uart`s and its `Gnss` on it |
@@ -502,7 +502,6 @@ repository makes.
 | `ESP32TL_ROM_ESP32S3`, `ESP32TL_ROM_ESP32C3`, `ESP32TL_ROM_ESP32C6` | The same for the chip in its name | `rom_path(chip)`; the chip's pinned checksum required |
 | `ROOT` | `Path(__file__).resolve().parents[2]`: the checkout with an editable install, `site-packages` when installed from a wheel | the two defaults |
 | `ROM_RELEASE` | `"20241011"`, the esp-rom-elfs release `scripts/fetch-rom-elf` pins | `rom_path()` |
-| `ROM_ELF` | `"esp32_rev300_rom.elf"`, the classic ESP32's; every chip's is in `runtime.ROMS` | `rom_path()` |
 | `HELD_MAX_SECONDS` | `86400`, emulated seconds, passed as `--max-seconds` | `Esp32Sim.power_on` |
 | `MAX_SECONDS` | `300`, emulated seconds: the default `--max-seconds` of the `esp32tl` command, whose clock runs free | `esp32tl/cli.py` |
 | `POWER_ON_UTC` | `esp32tl.net.ntp.DEFAULT_UTC`, `datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)`: the world's time at power-on unless the test gives one | `Esp32Sim.power_on` |

@@ -73,7 +73,7 @@ CHIP_IMAGES = [
         "nvs_reader",
         "http_request",
     )
-] + [("hello_world_psram", "esp32s3")]
+] + [("hello_world_psram", "esp32s3"), ("gatt_server", "esp32s3"), ("gatt_server", "esp32c3")]
 
 
 @pytest.mark.parametrize(("image", "chip"), CHIP_IMAGES, ids=lambda v: str(v))

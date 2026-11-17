@@ -377,7 +377,9 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Opts, Error> {
     Ok(opts)
 }
 
-/// What the command line asks of the chip that esp32sim does not model on it.
+/// What the command line asks of the chip that esp32sim does not model on it. Every chip of
+/// `chip::ALL` has `--wifi` and `--bt` today; the checks are there for the chips of #233, whose
+/// esp32sim models have neither.
 fn unsupported(opts: &Opts) -> Result<(), Error> {
     let chip = opts.chip;
     let asked = [

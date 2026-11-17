@@ -59,8 +59,14 @@ tools=${IDF_TOOLS_PATH:-${HOME:-}/.espressif}/tools/esp-rom-elfs
 still=
 while read -r rom digest; do
 	found=
-	for f in "$tools/$RELEASE/$rom" "$tools"/*/"$rom"; do
-		[ -f "$f" ] || continue
+	pinned=$tools/$RELEASE/$rom
+	seen_pinned=
+	for f in "$pinned" "$tools"/*/"$rom"; do
+		# The glob finds the pinned release again: it is checked once.
+		if [ ! -f "$f" ] || { [ "$f" = "$pinned" ] && [ -n "$seen_pinned" ]; }; then
+			continue
+		fi
+		[ "$f" != "$pinned" ] || seen_pinned=1
 		if [ "$(sha256 "$f")" != "$digest" ]; then
 			echo "fetch-rom-elf: $f differs from release $RELEASE's (SHA-256 $digest), skipped" >&2
 			continue

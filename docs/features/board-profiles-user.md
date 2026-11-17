@@ -20,7 +20,9 @@ with the reason.
 | `lilygo-t-a7670g-r2` | `esp32` (ESP32-WROVER-E) | 4 MB, 4 MB | `console`; `uart.modem`: UART1, TX GPIO 26, RX GPIO 27, 115200 baud; `uart.gnss`: UART2, TX GPIO 21, RX GPIO 22, 9600 baud; `sd_card`: SCLK GPIO 14, MOSI GPIO 15, MISO GPIO 2, CS GPIO 13; `lines.modem`, `lines.gnss`, `lines.board` ([control lines](#lilygo-control-lines-and-simulation-limits)) |
 
 The three devkits of the ESP32-S3, ESP32-C3 and ESP32-C6 carry the validation images built for
-their chip ([validation firmware](validation-firmware-user.md)). On these chips esp32sim does not
+their chip. Their `flash_mb` is the module's, 8 MB on the S3's and the C6's, but the esp32sim
+backend's flash is 4 MB whatever a profile says, so an image whose partition table reaches past
+`0x400000` does not boot on them there ([validation firmware](validation-firmware-user.md)). On these chips esp32sim does not
 model everything it does on the classic ESP32: a test that asks for an SD card or a virtual
 station there is skipped with the reason
 ([esp32sim backend](esp32sim-backend-user.md#chips-other-than-the-classic-esp32)).

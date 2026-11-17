@@ -75,6 +75,7 @@ names one with its build directory and the chip's devkit profile:
 | `nvs_reader` | the three | Nothing |
 | `http_request` | the three | Nothing |
 | `hello_world_psram` | `esp32s3` | ESP-IDF's `hello_world` with `firmware/hello_world_psram/sdkconfig.defaults`: `CONFIG_SPIRAM=y`, `CONFIG_SPIRAM_MODE_OCT=y`, the octal PSRAM of the S3 devkit's N8R8 module |
+| `gatt_server` | `esp32s3`, `esp32c3` | ESP-IDF's `examples/bluetooth/bluedroid/ble/gatt_server`, unmodified, with its own `sdkconfig.defaults`: a BLE GATT server that advertises as `ESP_GATTS_DEMO`. Not for the C6, whose BLE esp32sim runs only for ESP-IDF v5.5.x images |
 
 The images that need what esp32sim does not model on these chips, deep sleep (`timer_wake`,
 `deep_sleep`, `persistence`), an SD card over SPI (`sdspi`, `sd_remount`) or Bluetooth Classic

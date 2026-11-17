@@ -116,8 +116,10 @@ exists, and `HOME` is read with `var_os`, so it need not be valid UTF-8. The loo
 
 `chip::Profile` is what the protocol and the run loop need to know of a chip: `name` (`--chip`
 and `chip` in `hello`), `title` (in messages), `cpu_hz`, `gpios` and `input_only` (masks),
-`uarts`, and what esp32sim models on it (`deep_sleep`, `wifi_station`, `wifi`, `bt`,
-`psram_mb`). `chip::ALL` lists the four. One process runs one chip, so `main` selects its profile
+`uarts`, and what esp32sim models on it that a flag asks for (`wifi_station`, `wifi`, `bt`,
+`psram_mb`). Deep sleep is no flag: a chip whose `Guest` does not step through it
+(`sleeps_through`, `false` by default) has it as esp32sim does, which on the S3, C3 and C6 never
+wakes. `chip::ALL` lists the four. One process runs one chip, so `main` selects its profile
 once (`chip::select`, a `OnceLock`) before anything reads it, and `chip::selected()` is the
 classic chip's until then, as in the unit tests: `protocol::ns`, `protocol::cycles` and
 `protocol::hello` read the selected chip's clock and name, and the session checks the peer's
@@ -128,9 +130,10 @@ classic chip's until then, as in the unit tests: `protocol::ns`, `protocol::cycl
 `attach_wifi`, `forward_bt`, `wifi_report` and `after_reset`; `machine()` reaches the
 `esp_soc::Machine` the chips share (`load_rom`, `write_flash`, `boot_rom`, `run`, `reboot`,
 `console`, `max_cycles`). `Guest`, for the run loop, is implemented for each machine type too.
-`chip::ap_on_air`, `chip::ap_leave` and `chip::flash_without_trampoline` hold what the S3, C3 and
-C6 share with the classic chip: all four use esp_soc's `StationLink` and, but for the C6,
-esp_soc's VHCI `Ble`.
+`chip::ap_on_air`, `chip::ap_leave` and `chip::flash_without_trampoline` hold what the four chips
+share, and each chip's `Guest` calls them: all four use esp_soc's `StationLink` and, but for the
+C6, esp_soc's VHCI `Ble`, so the classic chip's tests of the access point leaving and of the flash
+dump in `runner/src/session/tests.rs` cover the code the others run.
 
 | | `esp32` | `esp32s3` | `esp32c3` | `esp32c6` |
 |---|---|---|---|---|

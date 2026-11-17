@@ -63,7 +63,7 @@ firmware/%/build/esp32tl-built:
 
 # The images of the other chips the runner emulates, each in
 # firmware/<image>/build-<chip>/, built only when missing too.
-CHIP_IMAGES := $(foreach chip,esp32s3 esp32c3 esp32c6,$(foreach image,hello_world console_repl gpio_echo nmea_reader nvs_reader http_request,firmware/$(image)/build-$(chip))) firmware/hello_world_psram/build-esp32s3
+CHIP_IMAGES := $(foreach chip,esp32s3 esp32c3 esp32c6,$(foreach image,hello_world console_repl gpio_echo nmea_reader nvs_reader http_request,firmware/$(image)/build-$(chip))) firmware/hello_world_psram/build-esp32s3 firmware/gatt_server/build-esp32s3 firmware/gatt_server/build-esp32c3
 firmware/%/build-esp32s3/esp32tl-built:
 	FIRMWARE_OUT= firmware/build.sh --chips $*@esp32s3
 firmware/%/build-esp32c3/esp32tl-built:

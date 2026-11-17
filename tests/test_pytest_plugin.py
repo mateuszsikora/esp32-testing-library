@@ -26,7 +26,7 @@ from pytest_embedded.log import MessageQueue
 from pytest_embedded.utils import Meta
 
 import esp32tl
-from esp32tl import recording, runtime
+from esp32tl import boards, recording, runtime
 from esp32tl.backends import esp32sim
 from esp32tl.backends.esp32sim import BackendError
 from esp32tl.boards import SdCardRoute
@@ -2350,3 +2350,7 @@ def test_the_serial_backend_refuses_a_board_with_another_chip(
             " runs the classic ESP32 only*"
         ]
     )
+
+
+def test_every_chip_but_the_classic_one_has_its_esp32sim_gaps_decided() -> None:
+    assert set(esp32sim.CHIP_GAPS) == set(boards.CHIPS) - {"esp32"}

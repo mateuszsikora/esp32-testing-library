@@ -2,10 +2,10 @@
 use super::{Profile, Target};
 use crate::cli;
 use crate::hci;
-use crate::session::{Guest, deauthentication};
+use crate::session::Guest;
 use esp_soc::board::BoardModel;
 use esp_soc::uart::UartRoute;
-use esp_soc::wifi::{self, StaState};
+use esp_soc::wifi;
 use esp_soc::{Machine, SocBus, Stop};
 use std::borrow::Cow;
 
@@ -21,7 +21,6 @@ pub const PROFILE: Profile = Profile {
     // GPIO 34 to 39
     input_only: 0xfc << 32,
     uarts: 3,
-    deep_sleep: true,
     wifi_station: true,
     wifi: true,
     bt: true,
@@ -237,38 +236,11 @@ impl Guest for esp32::Machine {
             return;
         }
         // a fresh access point, as at power-on: the station must join it again
-        let link = &mut self.bus.periph.wifi.link;
-        link.attach_new(wifi.access_point(), None, &self.bus.debug);
-        link.set_beacons(wifi.nearby().to_vec());
+        super::ap_on_air(&mut self.bus.periph.wifi.link, wifi, &self.bus.debug);
     }
     fn wifi_leave(&mut self) -> bool {
         let now_us = self.bus.cycles / (esp32::periph::CPU_HZ / 1_000_000);
-        let link = &mut self.bus.periph.wifi.link;
-        let Some(ap) = link.ap_mut() else {
-            return true;
-        };
-        if ap.state != StaState::Idle {
-            // esp32sim's station does not notice beacons that stop coming, so the access point
-            // tells it it is leaving, as one that shuts down does, ahead of anything it had
-            // queued but beacons; then it beacons no more. Until it has left it still answers a
-            // station that tries again, which the next boundary deauthenticates again
-            let deauth = deauthentication(ap.sta, ap.cfg.bssid, ap.seq);
-            ap.seq = ap.seq.wrapping_add(1);
-            ap.queue.retain(|f| wifi::is_beacon(&f.frame));
-            ap.queue.push(wifi::AirFrame {
-                at_us: now_us,
-                frame: deauth,
-            });
-            ap.state = StaState::Idle;
-            ap.next_beacon_us = u64::MAX;
-            return false;
-        }
-        // the deauthentication, or what the access point answered before it, is on its way
-        if ap.queue.iter().any(|f| !wifi::is_beacon(&f.frame)) {
-            return false;
-        }
-        link.attach(None, None);
-        true
+        super::ap_leave(&mut self.bus.periph.wifi.link, now_us)
     }
     fn wifi_drops(&self) -> (u64, u64) {
         let link = &self.bus.periph.wifi.link;
@@ -283,16 +255,8 @@ impl Guest for esp32::Machine {
     fn resyncs(&self) -> u64 {
         self.rt.resyncs
     }
-    /// With `--bt`, from the guest's `esp_bt_controller_init` until the next `reboot()`,
-    /// esp32sim's trampoline sits in the flash over the function's code (`install`,
-    /// `esp-soc/src/ble/vhci.rs:177-200`), which the guest never wrote: the copy has the code.
     fn flash(&self) -> Cow<'_, [u8]> {
-        let Some((offset, code)) = &self.bus.ble.original_flash else {
-            return Cow::Borrowed(&self.bus.flash);
-        };
-        let mut flash = self.bus.flash.to_vec();
-        flash[*offset..*offset + code.len()].copy_from_slice(code);
-        Cow::Owned(flash)
+        super::flash_without_trampoline(&self.bus.flash, &self.bus.ble.original_flash)
     }
     fn sleeps_through(&self) -> bool {
         // what esp32sim's `enter_deep_sleep` asks of the RTC registers, and what its
