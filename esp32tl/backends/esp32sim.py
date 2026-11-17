@@ -212,6 +212,48 @@ def load_app(
         raise BackendError(str(error)) from error
 
 
+# The flash sizes the runner takes, in MB (`--flash-mb`).
+RUNNER_FLASH_MB = (1, 2, 4, 8, 16)
+
+
+def runner_flash_mb(profile: BoardProfile, app: Build) -> int | None:
+    """The flash the runner gives the chip, in MB: `profile.flash_mb`, else the size the build's
+    image headers give (`build.header_flash`), else `None`, the runner's default. Raises
+    `BackendError` for a profile size the runner does not take, for a header that gives more than
+    the runner's largest flash, whatever the profile, and for a header that gives more flash than
+    the profile: its application would stop at start-up in spi_flash, and the chip reboot until
+    the test's timeout. A header that gives less flash than the chip has is what a real board
+    boots too."""
+    try:
+        header = build.header_flash(app)
+    except BuildError as error:
+        raise BackendError(str(error)) from error
+    if profile.flash_mb is not None and profile.flash_mb not in RUNNER_FLASH_MB:
+        sizes = ", ".join(map(str, RUNNER_FLASH_MB[:-1])) + f" or {RUNNER_FLASH_MB[-1]}"
+        raise BackendError(
+            f"board profile {profile.name!r} has flash_mb = {profile.flash_mb}; the runner's"
+            f" flash is {sizes} MB: set one of these in the profile"
+        )
+    if header is None:
+        return profile.flash_mb
+    gives = f"{header.path}: the image header of the {header.what} gives {header.mb} MB of flash"
+    # Before the profile's size: no flash_mb would let this build run.
+    if header.mb > RUNNER_FLASH_MB[-1]:
+        raise BackendError(
+            f"{gives}, more than the runner's largest, {RUNNER_FLASH_MB[-1]} MB: build for"
+            f" {RUNNER_FLASH_MB[-1]} MB of flash or less"
+        )
+    if profile.flash_mb is None:
+        return header.mb
+    if header.mb > profile.flash_mb:
+        raise BackendError(
+            f"{gives}, more than the {profile.flash_mb} MB of board profile {profile.name!r}"
+            f" (flash_mb = {profile.flash_mb}): the application would stop at start-up; set"
+            f" flash_mb = {header.mb} in the profile, or build for {profile.flash_mb} MB of flash"
+        )
+    return profile.flash_mb
+
+
 def runner_command(
     runner: Path,
     rom: Path,
@@ -220,6 +262,7 @@ def runner_command(
     link: Path,
     *,
     held: bool = False,
+    flash_mb: int | None = None,
     psram_mb: int | None = None,
     sd_card: SdCard | None = None,
     extra_flash: tuple[tuple[int, Path], ...] = (),
@@ -228,18 +271,19 @@ def runner_command(
     realtime: bool = False,
     flash_out: Path | None = None,
 ) -> list[str]:
-    """The runner's command line: every flash file of the build at its offset, its board the
-    socket at `link`. A `held` run is on the test's clock: its console also goes on the link, and
-    the runner waits for the harness's turn for as long as it takes. `psram_mb`, the board
-    profile's, is the PSRAM the runner gives the chip; `None`, a profile that does not say, leaves
-    the runner's default. An `sd_card` puts the runner's card slot on its pins, and a card
-    holding its image in it when the test has inserted one. `extra_flash` overrides the build's
-    flash contents at the supplied offsets, in order. A `wifi` with an access point puts it, and
-    the networks around, on the runner's air, with the network behind it on the link. A `bluetooth`
-    the test uses makes the runner forward the guest's HCI on the link (`--bt`), with the symbols of
-    the application's ELF, `app.elf`. A `realtime`
-    run is paced to wall time, for a real device at the far end of a route. `flash_out` is the file
-    the runner writes the whole flash to when the link asks, and at the end of the run."""
+    """The runner's command line: every flash file of the build at its offset, its board the socket
+    at `link`. A `held` run is on the test's clock: its console also goes on the link, and the
+    runner waits for the harness's turn for as long as it takes. `flash_mb`, from `runner_flash_mb`,
+    is the flash the runner gives the chip; `None` leaves the runner's default. `psram_mb`, the
+    board profile's, is the PSRAM it gives the chip; `None`, a profile that does not say, leaves the
+    runner's default. An `sd_card` puts the runner's card slot on its pins, and a card holding its
+    image in it when the test has inserted one. `extra_flash` overrides the build's flash contents
+    at the supplied offsets, in order. A `wifi` with an access point puts it, and the networks
+    around, on the runner's air, with the network behind it on the link. A `bluetooth` the test uses
+    makes the runner forward the guest's HCI on the link (`--bt`), with the symbols of the
+    application's ELF, `app.elf`. A `realtime` run is paced to wall time, for a real device at the
+    far end of a route. `flash_out` is the file the runner writes the whole flash to when the link
+    asks, and at the end of the run."""
     command = [
         *(str(runner), "--chip", app.chip, "--rom", str(rom)),
         *("--max-seconds", str(max_seconds)),
@@ -251,6 +295,8 @@ def runner_command(
         command += ["--flash-at", f"{file.offset:#x}={file.path}"]
     for offset, image in extra_flash:
         command += ["--flash-at", f"{offset:#x}={image}"]
+    if flash_mb is not None:
+        command += ["--flash-mb", str(flash_mb)]
     if psram_mb is not None:
         command += ["--psram-mb", str(psram_mb)]
     if sd_card is not None:
@@ -375,6 +421,9 @@ class Esp32Sim(Board):
         self._meta = meta
         self._skip = skip or refuse
         self.app = load_app(app_path, build_dir=build_dir, chip=profile.chip)
+        # Refused here, at setup: a flash smaller than the build's header would only show as a
+        # chip that reboots until the test's timeout.
+        self.flash_mb = runner_flash_mb(profile, self.app)
         self._nvs: dict[str, tuple[int, Path]] = {}
         self._runner, self._rom = runner_path(), rom_path(profile.chip)
         # What the guest printed on its console, as the link brings it, and cut into lines.
@@ -789,6 +838,7 @@ class Esp32Sim(Board):
             HELD_MAX_SECONDS,
             self._socket,
             held=True,
+            flash_mb=self.flash_mb,
             psram_mb=self.profile.psram_mb,
             sd_card=self._sd_card,
             extra_flash=tuple(self._nvs.values()),

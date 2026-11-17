@@ -3,8 +3,8 @@
 # --chips). The console is UART0 on GPIO 16 (TX) and 17 (RX), the devkit's USB-to-UART bridge;
 # GPIO 24 to 30 belong to the flash. GPIO 4 and 5 are strapping pins (MTMS, MTDI), harmless for a
 # UART that starts after the boot.
-# flash_mb is the module's. The runner's flash is 4 MB whatever a profile says (docs/features/
-# builds-user.md), so an image whose partition table reaches past 0x400000 does not boot here.
+# flash_mb is the module's, and the esp32sim backend gives the runner that flash (docs/features/
+# board-profiles-user.md): a build for 8 MB or less runs here.
 name = "esp32-c6-devkitc"
 chip = "esp32c6"
 flash_mb = 8

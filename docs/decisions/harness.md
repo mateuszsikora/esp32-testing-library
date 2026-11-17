@@ -1173,6 +1173,11 @@ and an offset in the test, because it repeats the partition table and breaks whe
 
 Status: decided (#64)
 
+*Superseded in one part, what reaches the runner: the backend now passes `flash_mb` too, see [the
+runner's flash is the profile's
+flash_mb](#the-runners-flash-is-the-profiles-flash_mb-else-the-builds-headers-refused-at-setup-when-too-small).
+The profile's values stand.*
+
 The profile gets `[uart.gnss]`, UART2 with TX on GPIO 21 and RX on GPIO 22 at 9600 baud,
 `flash_mb = 4` and `psram_mb = 4`; the backend passes `psram_mb` to the runner as `--psram-mb`.
 LilyGO's [pin table for the T-A7670X ESP32](https://github.com/Xinyuan-LilyGO/LilyGO-T-A76XX/blob/63af963038e93c91baf39d89a3a736d6bc26ff13/docs/en/esp32/a7670-esp32/README.MD)
@@ -4196,3 +4201,50 @@ on the link, and the harness two networks in one `Wifi`.
 Come back when an esp32sim revision accepts both attachments on the classic ESP32 and relays the
 two interfaces' frames apart; then bump the pin, lift the exclusivity check, and test the case
 above. No upstream issue has been opened for it.
+
+## The runner's flash is the profile's flash_mb, else the build's headers, refused at setup when too small
+
+Status: decided (#240)
+
+The esp32sim backend and `esp32tl run` give the runner `--flash-mb` from the board profile's
+`flash_mb`, and, for a profile without it, the largest size that the build's bootloader and
+application image headers give; a build with neither runs on the runner's default, 4 MB. Until
+now the runner always had 4 MB, so an Arduino-ESP32 3.x firmware built with PlatformIO for an
+8 MB ESP32-S3 module, unchanged, rebooted until the test's timeout: its application stopped in
+`spi_flash` (`Detected size(4096k) smaller than the size in the binary image header(8192k)`,
+then `assert failed: __esp_system_init_fn_init_flash`). At setup, before a runner starts, the
+backend refuses a `flash_mb` outside 1, 2, 4, 8 and 16, the sizes `--flash-mb` takes, and a
+header that gives more flash than the runner would get, naming both sizes and the `flash_mb` to
+set. A header that gives less runs, as on a board, where ESP-IDF warns and uses the header's
+size. Both headers count because ESP-IDF's bootloader sets the size from its own header, and the
+application from its own with `CONFIG_SPI_FLASH_SIZE_OVERRIDE`. The profile schema still takes
+any size from 0, which the serial backend never reads; the refusal is the esp32sim backend's.
+The serial backend flashes with `flash_size: keep` and is unchanged.
+
+The end-to-end test boots `hello_world_8mb`, ESP-IDF's `hello_world` built by `firmware/build.sh`
+with `CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y`, on the four chips: on `flash_mb` 8 and 16 it boots and
+`board.flash()` is that size, on 4 the board fixture refuses it. Measured locally on the runner
+at esp32sim 357b0e5 with an ESP-IDF v5.5.5 build of it (`IDF_LOCAL=1`, no Docker), 1 emulated
+second each: with `--flash-mb 4` the classic ESP32 reset 33 times, the S3 97, the C3 60 and the
+C6 57, each time on that assert; with 8 and 16 each printed `Hello world!` once with no reset,
+and at 16 `Detected size(16384k) larger than the size in the binary image header(8192k)`. The
+image the repository pins, built in the ESP-IDF v5.3.6 container, is first checked by CI's
+firmware job and the tests after it.
+
+**Rejected:** patching byte 3 of a built image's header in the test, because the bootloader
+carries an appended SHA-256 that would have to be computed again as esptool does, and the test
+would then check esp32tl's patch rather than what ESP-IDF builds. Refusing the sizes in the
+profile schema, because a profile also describes a real board for the serial backend, where a
+32 MB module is real. Reading `flash_size` from `flasher_args.json`, because a PlatformIO build
+has none and the headers are what the chip reads. Always passing the headers' size and ignoring
+`flash_mb`, because a board's flash is a fact about the board, and a build for less flash runs
+on it. Defaulting a profile without `flash_mb` to 4 MB, because the runner's default is already
+that and the build's own size boots where 4 does not. Reading `CONFIG_SPI_FLASH_SIZE_OVERRIDE`
+from `config/sdkconfig.json` to know which header the application uses, because a PlatformIO
+Arduino build has no such file; a bootloader that gives less flash than its application, which
+only mixed files of two builds make, is then refused although it would boot.
+
+**Postponed:** ending a run early when the console shows a boot loop, that assert or a series of
+`rst:0xc (RTC_SW_CPU_RST)` before the application starts, instead of waiting for the test's
+timeout. The refusal at setup catches the cause known today, and a console pattern would have to
+tell a loop from firmware that restarts on purpose, as ESP-IDF's `hello_world` does.

@@ -89,6 +89,7 @@ The run report records the call and partition name, without the configuration va
 ## Read the flash of a run
 
 `board.flash()` returns a `FlashSnapshot`, an immutable copy of the whole flash at this instant,
+as large as the board's flash ([the flash a run gets](board-profiles-user.md#the-flash-a-run-gets)),
 from which the test reads a partition by name, NVS by namespace and key, and the OTA state:
 
 ```python

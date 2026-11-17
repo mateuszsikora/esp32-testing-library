@@ -83,9 +83,14 @@ name `ota_0`, from `boot_app0.bin`'s otadata. A test that relies on the boot par
 `firmware.factory.bin`, which holds that otadata. On a table without `factory` the bootloader
 writes the otadata itself, selecting `ota_0`.
 
-The runner's flash is 4 MB whatever the build and the board profile say
-([esp32sim backend](esp32sim-backend-user.md#how-a-run-goes)): a table with partitions past
-`0x400000`, as the 16 MB tables have, does not fit it.
+The runner's flash is the board profile's `flash_mb`, or, in a profile without it, the size the
+build's image headers give, `board_upload.flash_size` in `platformio.ini`
+([the flash a run gets](board-profiles-user.md#the-flash-a-run-gets)). A build for an 8 MB
+ESP32-S3 module, as PlatformIO's `esp32-s3-devkitc-1` board gives, runs on `esp32-s3-devkitc`,
+whose `flash_mb` is 8; on a profile with less flash it is refused at setup
+with the sizes and what to change, since its application would stop at start-up and the chip
+reboot until the test's timeout. A 16 MB build runs on a profile with `flash_mb = 16`, or on one
+without `flash_mb`, which gives the runner the headers' 16 MB.
 
 The partition table is the one at `0x8000`, the application image `firmware.bin`, and the
 application's ELF `firmware.elf` when it is there. The chip is read from the headers of

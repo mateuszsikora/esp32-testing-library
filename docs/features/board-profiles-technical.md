@@ -65,7 +65,7 @@ order of [Schema](#schema). File access, UTF-8 decoding and TOML parsing errors 
 |---|---|---|---|
 | `name` | string | yes | The file's name without `.toml` |
 | `chip` | string | yes | One of `CHIPS`, the chips the runner emulates: `esp32` (the classic chip), `esp32s3`, `esp32c3`, `esp32c6`. The chip decides the GPIOs, the UARTs and the console's pins below ([Chips](#chips)) |
-| `flash_mb`, `psram_mb` | integer | no | At least 0; absent is "not known", `None` in `BoardProfile`. The esp32sim backend gives the runner `psram_mb` as `--psram-mb` when it is set ([esp32sim-backend-technical.md](esp32sim-backend-technical.md#data-flow)), and the runner refuses a size the chip does not take (0 or 4 on the classic ESP32; 0, 2, 4 or 8 on the ESP32-S3; 0 on the ESP32-C3 and ESP32-C6). `flash_mb` is not passed on: the runner's flash is its default, 4 MiB |
+| `flash_mb`, `psram_mb` | integer | no | At least 0; absent is "not known", `None` in `BoardProfile`. The esp32sim backend gives the runner `psram_mb` as `--psram-mb` when it is set ([esp32sim-backend-technical.md](esp32sim-backend-technical.md#data-flow)), and the runner refuses a size the chip does not take (0 or 4 on the classic ESP32; 0, 2, 4 or 8 on the ESP32-S3; 0 on the ESP32-C3 and ESP32-C6). The esp32sim backend gives the runner `flash_mb` as `--flash-mb` and refuses at setup a `flash_mb` other than 1, 2, 4, 8 or 16, and a build whose image headers give more flash; without `flash_mb` it passes the headers' size ([esp32sim-backend-technical.md](esp32sim-backend-technical.md#data-flow)). The schema keeps any size from 0, for the serial backend, which reads neither key |
 | `[uart.<role>]` | table | no | One per UART route; keys below |
 | `[lines.<role>]` | table | no | One per set of GPIO lines; keys below |
 | `[sd_card]` | table | no | The board's SD card slot, wired for SPI mode; keys below |
@@ -271,6 +271,14 @@ The ones `tests/test_boards.py` checks, verbatim:
 | `x.toml: lines.modem.ri.pull: 'high' is not one of up, down` | Another pull |
 | `x.toml: uart.modem.port: UART1 is uart.gnss's`, `x.toml: uart.gnss.port: UART0 is console's` | Two routes on one UART, or a route on the console's |
 | `x.toml: lines.modem.pwrkey: GPIO 5 is uart.gnss.rx already`, `x.toml: uart.gnss.tx: GPIO 1 is console.tx already` | One GPIO with two uses, the console's pins counted |
+
+The esp32sim backend refuses a loaded profile whose `flash_mb` the runner does not have, with a
+`BackendError` at setup, not a `ProfileError` at loading:
+
+| Message | Cause |
+|---|---|
+| `board profile 'x' has flash_mb = 32; the runner's flash is 1, 2, 4, 8 or 16 MB: set one of these in the profile` | `flash_mb` is 0, 3, 32 or any size but these, on the esp32sim backend (`esp32sim.runner_flash_mb`) |
+| `{file}: the image header of the bootloader at 0x0 gives 8 MB of flash, more than the 4 MB of board profile 'x' (flash_mb = 4): the application would stop at start-up; set flash_mb = 8 in the profile, or build for 4 MB of flash` | The build's bootloader or application header gives more flash than `flash_mb` ([esp32sim-backend-technical.md](esp32sim-backend-technical.md#failure-modes)) |
 
 Declaration errors, `CapabilityError` from `capabilities.load`, are `<file>: <backend>[.<kind>]:
 is not a table`, `...: unknown key <key>`, `...: no such kind of interface; the kinds are console,

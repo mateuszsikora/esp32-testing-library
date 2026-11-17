@@ -328,6 +328,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The emulated device's Wi-Fi MACs are constants of the wifi interface](harness.md#the-emulated-devices-wi-fi-macs-are-constants-of-the-wifi-interface) | `harness.md` | decided (#237) |
 | [A missing release manifest names possible causes, not a diagnosis or a fallback](harness.md#a-missing-release-manifest-names-possible-causes-not-a-diagnosis-or-a-fallback) | `harness.md` | decided (#237) |
 | [A virtual access point and a virtual station together wait for esp32sim's AP+STA](harness.md#a-virtual-access-point-and-a-virtual-station-together-wait-for-esp32sims-apsta) | `harness.md` | postponed (#237) |
+| [The runner's flash is the profile's flash_mb, else the build's headers, refused at setup when too small](harness.md#the-runners-flash-is-the-profiles-flash_mb-else-the-builds-headers-refused-at-setup-when-too-small) | `harness.md` | decided (#240) |
 
 ## The runner crate and esp32sim
 
