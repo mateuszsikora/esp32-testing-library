@@ -247,7 +247,10 @@ are the USB console's then ([esp32sim backend](esp32sim-backend-user.md#a-consol
 
 With the console on USB-Serial/JTAG, UART0 and its pins are free: a route may take port 0, and a
 route or a line UART0's pins (GPIO 43 and 44 on the S3, 21 and 20 on the C3, 16 and 17 on the C6).
-The ROM prints its banner on UART0 too, so a route there shows that copy:
+The controller's own USB D- and D+ pads are taken instead (GPIO 19 and 20 on the S3, 18 and 19
+on the C3, 12 and 13 on the C6): firmware that drives one of them as a UART or a GPIO takes it
+from the controller, and the console goes with it. The ROM prints its banner on UART0 too, so a
+route there shows that copy:
 
 ```toml
 [uart.uart0]

@@ -503,7 +503,7 @@ classic image would need a target too.
 
 ## The USB-Serial/JTAG console images are a project and an environment of their own
 
-Status: decided (17 November 2026)
+Status: decided (#248)
 
 `firmware/console_repl_usb` is ESP-IDF's console REPL with `CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y`
 in its `sdkconfig.defaults`, built with `--chips` as `console_repl_usb@esp32s3`, `@esp32c3` and
@@ -517,9 +517,12 @@ Arduino's HWCDC, a different driver path from ESP-IDF's, comes from `arduino_she
 environment, `esp32s3_usb` (`board = esp32-s3-devkitc-1`, `-DARDUINO_USB_MODE=1`,
 `-DARDUINO_USB_CDC_ON_BOOT=1`), the same sketch: `firmware/build-platformio.sh` takes
 `IMAGE@ENV` entries, `arduino_shell@esp32s3_usb`, into `.pio/build/<env>/`. When the
-environment's record differs from the build about to start, it removes the project's whole `.pio/`,
-every environment's build with it; before an environment's first build it compares the records
-of the project's other environments instead. The platform is pinned once, in the project's
+environment's record differs from the build about to start, it removes that environment's build,
+the builds of the other environments whose records differ too, and what they share outside
+`build/`, but keeps another environment's build made the same way and pio's
+`build/project.checksum`, without which pio would remove every build; before an environment's
+first build it compares the records of the project's other environments instead. Removing the
+whole `.pio/` was rejected: rebuilding one environment would delete another's finished build. The platform is pinned once, in the project's
 `[env]` section, which every environment inherits, so that their records cannot name two
 platforms.
 

@@ -236,7 +236,10 @@ ESP-IDF ([decisions/firmware.md](../decisions/firmware.md#the-arduino-image-is-b
    If `.pio/build/ENV/` exists and its `esp32tl-build.json` is missing or, compared as text, not
    the record this build would write, or if it does not exist but `$out/IMAGE/.pio` does and any
    other environment's record there differs or is missing, the script prints `was built another
-   way` and removes `.pio/`, every environment's build with it. Then `esp32tl-built` is removed,
+   way` and removes `.pio/build/ENV/`, every other environment's build whose record differs or is
+   missing, and everything in `.pio/` outside `build/` (`libdeps/` among them); another
+   environment's build with this record stays, and so does `build/project.checksum`, whose loss
+   would make pio remove every build. Then `esp32tl-built` is removed,
    the record written,
 
    ```sh

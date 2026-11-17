@@ -246,6 +246,36 @@ def test_replaces_a_build_made_another_way(tmp_path: Path, local_pio: dict[str, 
     assert json.loads((build / "esp32tl-build.json").read_text())["container"] is None
 
 
+def test_rebuilding_one_environment_keeps_the_others_built_the_same_way(
+    tmp_path: Path, local_pio: dict[str, str]
+) -> None:
+    assert run_build(local_pio).returncode == 0
+    dev = build_dir(tmp_path)
+    usb = dev.parent / "esp32s3_usb"
+    kept = dev / "kept"
+    kept.touch()
+    checksum = dev.parent / "project.checksum"
+    checksum.write_text("x")
+    left_over = dev.parent.parent / "libdeps"
+    left_over.mkdir()
+    (usb / "esp32tl-build.json").write_text(f'{{"container": "{CONTAINER}"}}\n')
+    result = run_build(local_pio, "arduino_shell@esp32s3_usb")
+    assert result.returncode == 0, result.stderr
+    assert (
+        "arduino_shell@esp32s3_usb: " in result.stdout and "was built another way" in result.stdout
+    )
+    # esp32dev's build, made the same way, and pio's checksum stay; what is shared outside build/
+    # and the stale environment go
+    assert kept.exists() and (dev / "esp32tl-built").exists() and checksum.exists()
+    assert not left_over.exists()
+    assert json.loads((usb / "esp32tl-build.json").read_text())["container"] is None
+    # an environment's build made another way goes too
+    (dev / "esp32tl-build.json").write_text(f'{{"container": "{CONTAINER}"}}\n')
+    (usb / "esp32tl-build.json").write_text(f'{{"container": "{CONTAINER}"}}\n')
+    assert run_build(local_pio, "arduino_shell@esp32s3_usb").returncode == 0
+    assert not dev.exists()
+
+
 def test_records_the_build_again_after_pio_cleaned_it(
     tmp_path: Path, local_pio: dict[str, str]
 ) -> None:

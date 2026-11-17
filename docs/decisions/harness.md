@@ -4318,7 +4318,7 @@ list until one needs a condition for UNSUBSCRIBE.
 
 ## A board profile's console is UART0 or the chip's USB-Serial/JTAG controller
 
-Status: decided (17 November 2026)
+Status: decided (#248)
 
 A profile says where the firmware's console is with one top-level key, `console = "uart0"`, the
 default, or `"usb-serial-jtag"`: an Arduino-ESP32 3.x firmware for the ESP32-S3 with
@@ -4334,7 +4334,10 @@ with the USB console.
 
 With the console on USB-Serial/JTAG, UART0 and its IO MUX pins are free: a `[uart.<role>]` route
 may take port 0, and a route or a line its pins. The ROM prints its banner on UART0 as well
-(measured below), so a route on UART0's pins is how a test sees that copy.
+(measured below), so a route on UART0's pins is how a test sees that copy. The controller's USB
+D- and D+ pads are taken instead, as UART0's pins are with a UART0 console: a route or a line there
+would take them from the controller, and with them the console of a real board, which ESP-IDF's
+USB-Serial/JTAG console guide warns of.
 
 **Rejected:** a `[console]` table (`port = "usb-serial-jtag"`, pins, baud), which would add keys
 that mean nothing for the controller and repeat UART0's IO MUX pins, which the chip fixes; and
@@ -4342,7 +4345,7 @@ keeping UART0 reserved with a USB console, which would leave a test no way to wa
 
 ## On the S3, C3 and C6 the ROM prints on UART0 and on USB-Serial/JTAG
 
-Status: decided (17 November 2026)
+Status: decided (#248)
 
 Measured in esp32sim at `357b0e5`, running the runner without a peer once with `--console-port usb`
 and once with `--console-port uart0`, both to stdout, for 2 emulated seconds:
@@ -4370,7 +4373,7 @@ measured.
 
 ## The serial backend runs an ESP32-S3 through its USB-Serial/JTAG port
 
-Status: decided (17 November 2026)
+Status: decided (#248)
 
 `--esp32tl-backend serial` takes a board profile whose chip is `esp32s3` and whose console is
 `usb-serial-jtag`; the port is the chip's own USB device. Measured on 2026-11-17 on an ESP32-S3
@@ -4421,7 +4424,7 @@ reopening the port after each reset to follow a re-enumeration, which the S3 doe
 
 ## A USB console through TinyUSB is not a console the profile can name
 
-Status: postponed (17 November 2026)
+Status: postponed (#248)
 
 `ARDUINO_USB_MODE=0`, Arduino-ESP32's USB OTG CDC through TinyUSB, and ESP-IDF's
 `CONFIG_ESP_CONSOLE_USB_CDC=y` put the console on the S3's USB OTG peripheral, not on the

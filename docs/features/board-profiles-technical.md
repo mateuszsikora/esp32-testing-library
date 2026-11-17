@@ -95,8 +95,11 @@ Across the profile, no two routes share a `port`, and no GPIO serves two uses (a
 `rx`, a line, a pin of the slot). The `console` interface is not in the file, because every board has it, but it
 takes its share: UART0 and its IO MUX pins, `CONSOLE_PORT` and the chip's `Chip.console_pins`,
 on the classic ESP32 GPIO 1 (`console.tx`) and GPIO 3 (`console.rx`). With `console =
-"usb-serial-jtag"` it takes neither: the controller has no pins, and `Reader.distinct` starts with
-no port and no pin taken, so a route may be UART0 on its own pins
+"usb-serial-jtag"` it takes neither, and takes the controller's USB pads instead,
+`Chip.usb_pins`: GPIO 19 (`console.usb_dm`) and 20 (`console.usb_dp`) on the S3, 18 and 19 on the
+C3, 12 and 13 on the C6. A route or a line there would take D- or D+ from the controller, and on a
+real board the console with them. `Reader.distinct` then starts with no port taken, so a route may
+be UART0 on its own pins
 ([decision](../decisions/harness.md#a-board-profiles-console-is-uart0-or-the-chips-usb-serialjtag-controller)). GPIO 6 to 11, which most modules give to the SPI flash, are not
 refused
 ([why](../decisions/harness.md#a-profile-reserves-the-consoles-uart-and-pins-not-the-flash-pins)).
@@ -275,6 +278,7 @@ The ones `tests/test_boards.py` checks, verbatim:
 | `x.toml: uart.GNSS: a role is lowercase letters, digits and _` | A role or a line's name outside `[a-z][a-z0-9_]*` |
 | `x.toml: lines.modem.ri.pull: 'high' is not one of up, down` | Another pull |
 | `x.toml: uart.modem.port: UART1 is uart.gnss's`, `x.toml: uart.gnss.port: UART0 is console's` | Two routes on one UART, or a route on the console's while it is on UART0 |
+| `x.toml: uart.aux.tx: GPIO 19 is console.usb_dm already`, `x.toml: lines.l.a: GPIO 20 is console.usb_dp already` | A route or a line on the USB-Serial/JTAG controller's D- or D+ pad while the console is on it (S3 here) |
 | `x.toml: console: the ESP32 has no USB-Serial/JTAG controller; use uart0` | `console = "usb-serial-jtag"` on `chip = "esp32"` |
 | `x.toml: console: 'usb' is not one of uart0, usb-serial-jtag`, `x.toml: console: 1 is not one of uart0, usb-serial-jtag` | Another value, or one that is not a string |
 | `x.toml: lines.modem.pwrkey: GPIO 5 is uart.gnss.rx already`, `x.toml: uart.gnss.tx: GPIO 1 is console.tx already` | One GPIO with two uses, the console's pins counted |
@@ -311,7 +315,9 @@ are listed in [board-profiles-user.md](board-profiles-user.md#when-no-backend-ca
   the S3, C3 and C6, and `uart0` in every shipped profile;
   `test_a_console_the_chip_does_not_have_is_refused`: the classic ESP32's refusal and the other
   values; `test_a_console_on_usb_serial_jtag_leaves_uart0_and_its_pins_to_the_routes`: a route on
-  UART0 and a line on its TX pin taken with a USB console, refused with a UART0 one.
+  UART0 and a line on its TX pin taken with a USB console, refused with a UART0 one;
+  `test_a_console_on_usb_serial_jtag_takes_the_usb_pads`: a route and a line on the D- and D+
+  pads refused with a USB console, on the S3, C3 and C6, and taken with a UART0 one.
 - `test_a_profile_takes_the_pads_and_uarts_of_its_chip`: the S3's, the C3's and the C6's pads,
   UARTs and console pins; `test_gpio_34_drives_on_the_s3_where_the_classic_esp32_has_it_input_only`;
   `test_each_chip_s_devkit_routes_the_gnss_and_the_echo_lines`: the three devkit profiles.

@@ -579,3 +579,26 @@ def test_a_console_on_usb_serial_jtag_leaves_uart0_and_its_pins_to_the_routes(
     path.write_text("name = 'x'\nchip = 'esp32s3'\n[lines.l]\na = 43\n")
     with pytest.raises(ProfileError, match=re.escape("lines.l.a: GPIO 43 is console.tx already")):
         boards.load(path)
+
+
+@pytest.mark.parametrize(
+    ("chip", "dm", "dp"), [("esp32s3", 19, 20), ("esp32c3", 18, 19), ("esp32c6", 12, 13)]
+)
+def test_a_console_on_usb_serial_jtag_takes_the_usb_pads(
+    tmp_path: Path, chip: str, dm: int, dp: int
+) -> None:
+    path = tmp_path / "x.toml"
+    route = f"[uart.aux]\nport = 1\ntx = {dm}\nrx = 4\nbaud = 9600\n"
+    path.write_text(f"name = 'x'\nchip = '{chip}'\nconsole = 'usb-serial-jtag'\n{route}")
+    with pytest.raises(ProfileError) as error:
+        boards.load(path)
+    assert str(error.value) == f"x.toml: uart.aux.tx: GPIO {dm} is console.usb_dm already"
+    path.write_text(
+        f"name = 'x'\nchip = '{chip}'\nconsole = 'usb-serial-jtag'\n[lines.l]\na = {dp}\n"
+    )
+    with pytest.raises(ProfileError) as error:
+        boards.load(path)
+    assert str(error.value) == f"x.toml: lines.l.a: GPIO {dp} is console.usb_dp already"
+    # with the console on UART0 the pads are GPIOs like any other
+    path.write_text(f"name = 'x'\nchip = '{chip}'\n{route}")
+    assert boards.load(path).uart["aux"].tx == dm

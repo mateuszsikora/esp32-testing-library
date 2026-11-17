@@ -1103,7 +1103,7 @@ does for GPIO 3: GPIO 44 on the S3 (`0x6000_90B4`), 20 on the C3 (`0x6000_9054`)
 
 ## The console port is a flag of its own, `--console-port uart0|usb`
 
-Status: decided (17 November 2026)
+Status: decided (#248)
 
 `--console stdout|socket|both` says where the console goes; `--console-port uart0|usb` says which
 of the guest's outputs it is: UART0, the default, or the chip's USB-Serial/JTAG controller. It sets
@@ -1120,7 +1120,7 @@ streams that the guest writes independently into one `console` message, cut anyw
 
 ## The USB-Serial/JTAG console adds `console_rx` at protocol version 2
 
-Status: decided (17 November 2026)
+Status: decided (#248)
 
 The controller has no pins, so the console's input cannot be `uart_rx` on a watched pin:
 `console_rx` (`t`, `data`, [protocol 5.23](../protocol.md#523-console_rx-ext-usb-console)) goes into
@@ -1138,7 +1138,7 @@ carry a `baud` that means nothing; and pacing `console_rx` at a made-up line rat
 
 ## The USB-Serial/JTAG console's bytes are stamped with the end of their slice
 
-Status: decided (17 November 2026)
+Status: decided (#248)
 
 esp32sim moves what the controller flushed into `Console::usb` inside `run`
 (`Machine::drain_console`, `esp-soc/src/machine.rs:339-371`), with no cycle, and it has no pins for

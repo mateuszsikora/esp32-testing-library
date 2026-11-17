@@ -2054,14 +2054,16 @@ clones, and rejection of serial distributed execution before accessing hardware.
 
 ## A console on USB-Serial/JTAG
 
-- **251.** A board profile's `console` is `uart0` unless it says `usb-serial-jtag`, which only the
+- **252.** A board profile's `console` is `uart0` unless it says `usb-serial-jtag`, which only the
   ESP32-S3, ESP32-C3 and ESP32-C6 take; on the classic ESP32 the profile does not load. With it,
-  UART0 and its pins are free for the profile's routes and lines.
+  UART0 and its pins are free for the profile's routes and lines, and the controller's
+  USB D- and D+ pads are not.
   `tests/test_boards.py::test_the_console_is_uart0_unless_the_profile_says_usb_serial_jtag`,
   `tests/test_boards.py::test_a_console_the_chip_does_not_have_is_refused`,
   `tests/test_boards.py::test_a_console_on_usb_serial_jtag_leaves_uart0_and_its_pins_to_the_routes`,
+  `tests/test_boards.py::test_a_console_on_usb_serial_jtag_takes_the_usb_pads`,
   `tests/test_pytest_plugin.py::test_invalid_local_profiles_fail_at_collection`
-- **252.** The runner refuses `--console-port usb` on the classic ESP32 before the run, and
+- **253.** The runner refuses `--console-port usb` on the classic ESP32 before the run, and
   `console_rx` on a run without it as a protocol error. With it, the USB-Serial/JTAG controller's
   output is the `console`, one message per line at the end of its slice, UART0's bytes are not,
   and `console_rx` reaches the controller when it comes due, or is counted in
@@ -2071,10 +2073,10 @@ clones, and rejection of serial distributed execution before accessing hardware.
   `runner/src/session/tests.rs::console_rx_needs_the_console_on_usb`,
   `runner/src/session/tests.rs::with_the_console_on_usb_its_output_goes_out_as_console_and_uart0_stays_off_it`,
   `runner/src/session/tests.rs::console_rx_reaches_the_usb_console_when_it_comes_due_and_is_lost_with_the_supply_off`
-- **253.** The esp32sim backend gives the runner `--console-port usb` for a profile whose console
+- **254.** The esp32sim backend gives the runner `--console-port usb` for a profile whose console
   is on USB-Serial/JTAG, and nothing for one on UART0.
   `tests/test_pytest_plugin.py::test_runner_command_selects_the_usb_console_of_a_profile_that_has_it`
-- **254.** The serial backend runs a profile for the ESP32-S3 whose console is on USB-Serial/JTAG,
+- **255.** The serial backend runs a profile for the ESP32-S3 whose console is on USB-Serial/JTAG,
   skips one for the ESP32-C3 or ESP32-C6 with that console before the port is opened, and refuses
   one for the S3, C3 or C6 whose console is on UART0.
   `tests/test_serial_backend.py::test_an_s3_with_its_console_on_usb_serial_jtag_runs_on_the_serial_backend`,

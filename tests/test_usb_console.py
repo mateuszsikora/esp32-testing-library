@@ -77,7 +77,9 @@ def on_chip(chip: str, profile: str, rom: str) -> type:
             console.expect_exact("Print the summary of all registered commands")
             # at the board's time the test wrote: emulated, or wall time on a real board
             assert any(t >= at and d == "in" and data == b"help\n" for t, d, data in tap.events)
-            assert any(d == "out" and b"console_repl>" in data for _, d, data in tap.events)
+            # the prompt that follows the answer, which one batch may hold part of
+            out = b"".join(data for t, d, data in tap.events if t >= at and d == "out")
+            assert b"console_repl>" in out
             board.close()
             made = recording.read(tmp_path / "console.jsonl")
             assert made.header.interface == "console"

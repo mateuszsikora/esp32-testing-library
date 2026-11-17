@@ -27,7 +27,8 @@ DEFAULT_PROFILE = "esp32-devkitc"
 class Chip:
     """What a profile's `chip` brings: its GPIO pads, those of them that are inputs only, its
     UARTs, the IO MUX pins of UART0, which a `console` on UART0 takes, and whether it has a
-    USB-Serial/JTAG controller, which a profile's `console` may be instead."""
+    USB-Serial/JTAG controller, which a profile's `console` may be instead, with the pads of its
+    USB D- and D+, which such a `console` takes."""
 
     name: str
     title: str
@@ -36,6 +37,7 @@ class Chip:
     uarts: int
     console_pins: Mapping[int, str]
     usb_serial_jtag: bool
+    usb_pins: Mapping[int, str]
 
     def console_pin(self, end: Literal["tx", "rx"]) -> int:
         """UART0's `tx` or `rx` pin, the console's."""
@@ -54,6 +56,7 @@ CHIPS = {
         uarts=3,
         console_pins=MappingProxyType({1: "console.tx", 3: "console.rx"}),
         usb_serial_jtag=False,
+        usb_pins=MappingProxyType({}),
     ),
     # The ESP32-S3's: 0 to 21 and 26 to 48, every one an output too (ESP32-S3 datasheet, section
     # 2.3). UART0 is on GPIO 43 (TX) and 44 (RX).
@@ -65,6 +68,7 @@ CHIPS = {
         uarts=3,
         console_pins=MappingProxyType({43: "console.tx", 44: "console.rx"}),
         usb_serial_jtag=True,
+        usb_pins=MappingProxyType({19: "console.usb_dm", 20: "console.usb_dp"}),
     ),
     # The ESP32-C3's: 0 to 21 (ESP32-C3 datasheet, section 2.2). UART0 is on GPIO 21 (TX) and
     # 20 (RX); it has two UARTs.
@@ -76,6 +80,7 @@ CHIPS = {
         uarts=2,
         console_pins=MappingProxyType({21: "console.tx", 20: "console.rx"}),
         usb_serial_jtag=True,
+        usb_pins=MappingProxyType({18: "console.usb_dm", 19: "console.usb_dp"}),
     ),
     # The ESP32-C6's: 0 to 30 (ESP32-C6 datasheet, section 2.3). UART0 is on GPIO 16 (TX) and
     # 17 (RX); it has two UARTs besides the LP UART.
@@ -87,6 +92,7 @@ CHIPS = {
         uarts=2,
         console_pins=MappingProxyType({16: "console.tx", 17: "console.rx"}),
         usb_serial_jtag=True,
+        usb_pins=MappingProxyType({12: "console.usb_dm", 13: "console.usb_dp"}),
     ),
 }
 PULLS = ("up", "down")
@@ -96,7 +102,7 @@ PULLS = ("up", "down")
 CONSOLE_PORT = 0
 
 # Where a profile's `console` is: UART0, the default, or the chip's USB-Serial/JTAG controller,
-# which has no pins and leaves UART0 and its pins to the profile's routes.
+# which takes the chip's USB D- and D+ pads and leaves UART0 and its pins to the profile's routes.
 ConsoleKind = Literal["uart0", "usb-serial-jtag"]
 UART0: Literal["uart0"] = "uart0"
 USB_SERIAL_JTAG: Literal["usb-serial-jtag"] = "usb-serial-jtag"
@@ -358,14 +364,15 @@ class Reader:
         console: str,
     ) -> None:
         """One UART per route, and one use per pin; a console on UART0 takes UART0 and its pins,
-        one on USB-Serial/JTAG neither."""
+        one on USB-Serial/JTAG the controller's USB D- and D+ pads instead: firmware that
+        routes a peripheral there takes the pads from the controller, and the console with them."""
         on_uart0 = console == UART0
         ports = {CONSOLE_PORT: "console"} if on_uart0 else {}
         for role, route in uart.items():
             if route.port in ports:
                 raise self.fail(f"uart.{role}.port", f"UART{route.port} is {ports[route.port]}'s")
             ports[route.port] = f"uart.{role}"
-        pins = dict(self.chip.console_pins) if on_uart0 else {}
+        pins = dict(self.chip.console_pins if on_uart0 else self.chip.usb_pins)
         uses = [
             (f"uart.{r}.{end}", getattr(u, end)) for r, u in uart.items() for end in ("tx", "rx")
         ]

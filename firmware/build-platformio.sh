@@ -16,11 +16,12 @@
 # container build only. Every build directory records how it was built in esp32tl-build.json,
 # with "container": null for a local build.
 #
-# Builds are incremental. A project's .pio/, with the builds of all its environments, is removed
-# first when the record of the image's last build, in .pio/build/<env>/, is missing or, compared as
-# text, differs from the record of the build about to start: another PlatformIO Core, platform,
-# container or project directory. Before an environment's first build, the records of the
-# project's other environments are compared instead. PlatformIO itself cleans the build when
+# Builds are incremental. An image's build, .pio/build/<env>/, is removed first when its record is
+# missing or, compared as text, differs from the record of the build about to start: another
+# PlatformIO Core, platform, container or project directory. Before an environment's first build,
+# the records of the project's other environments are compared instead. With it go the other
+# environments' builds whose records differ too and what they share outside build/; another
+# environment's build with the same record stays. PlatformIO itself cleans the build when
 # platformio.ini changes, removing the record with it, so the record is written again once the
 # build finishes. esp32tl-built marks a build that finished.
 set -eu
@@ -164,9 +165,28 @@ for entry in "$@"; do
 			[ -f "$record" ] && [ "$(cat "$record")" = "$provenance" ] || stale=1
 		done
 	fi
+	# What another way left goes: this environment's build, every other environment's build whose
+	# record is not this one, and what the environments share outside build/. Another
+	# environment's build made this way stays, and so does build/project.checksum, without which
+	# pio would remove every build.
 	if [ -n "$stale" ]; then
 		echo "firmware/build-platformio.sh: $entry: $shown was built another way, removing it"
-		rm -rf "$workspace"
+		for path in "$workspace"/* "$workspace"/.[!.]*; do
+			[ -e "$path" ] || continue
+			if [ "$path" != "$workspace/build" ]; then
+				rm -rf "$path"
+				continue
+			fi
+			for sibling in "$workspace"/build/*/; do
+				sibling=${sibling%/}
+				[ -d "$sibling" ] || continue
+				if [ "$sibling" != "$build" ] &&
+					[ "$(cat "$sibling/esp32tl-build.json" 2>/dev/null)" = "$provenance" ]; then
+					continue
+				fi
+				rm -rf "$sibling"
+			done
+		done
 	fi
 	mkdir -p "$build"
 	rm -f "$build/esp32tl-built"
