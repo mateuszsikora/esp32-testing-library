@@ -36,14 +36,14 @@ settings, not settings applied by the workflow files:
 - Secret scanning, secret scanning push protection and Dependabot vulnerability alerts
   are enabled. Dependabot automatic security-update PRs remain disabled.
 - `main` requires a pull request, zero approving reviews, resolved review conversations,
-  and all 25 CI checks from the GitHub Actions app (app ID `15368`). These are the eight
+  and all 28 CI checks from the GitHub Actions app (app ID `15368`). These are the eleven
   `firmware / firmware (...)` checks, `runner-linux / runner`, `runner-macos / runner`,
   six `test-linux / test (...)` and six `test-macos / test (...)` checks, `determinism`,
-  `lint` and `docs`, matching the job matrix below. The three `firmware / firmware (chips-K)`
-  checks are not among them: TODO(owner): add them to the required checks. Until they are, a
-  failed chips group does not block merging: the `firmware` job fails, the test jobs that need it
-  are skipped, and GitHub counts a skipped required check as passed. The 14 native-build and test context
-  names were updated for the separate platform calls; all 25 checks remain required.
+  `lint` and `docs`, matching the job matrix below. Every firmware group is required on its own:
+  a failed group fails the `firmware` job, the test jobs that need it are skipped, and GitHub
+  counts a skipped required check as passed, so the test checks alone would not block a merge.
+  The three `firmware / firmware (chips-K, chips, K/3)` checks were added with #236's groups. The
+  14 native-build and test context names were updated for the separate platform calls.
   Strict status checks require the branch to be up to date with `main`. Protection applies
   to administrators too; force pushes and branch deletion are disabled. When renaming jobs
   or changing matrix entries, update the required check names in branch protection as well.
@@ -261,8 +261,8 @@ The shared job in `test-platform.yml` runs six matrix entries per platform: thre
 versions and two shard pairs. There are still twelve test VMs in the complete workflow.
 
 For each platform, Python version and shard pair: sets up Python with pip's cache keyed on
-`pyproject.toml`, restores eight firmware tarballs, the native runner tarball and the ROM ELF, unpacks the tarballs (the images land
-in `firmware/<image>/build/`, `firmware/<image>/.pio/build/esp32dev/` and `examples/<name>/build/`,
+`pyproject.toml`, restores eleven firmware tarballs, the native runner tarball and the ROM ELF, unpacks the tarballs (the images land
+in `firmware/<image>/build/`, `firmware/<image>/build-<chip>/`, `firmware/<image>/.pio/build/esp32dev/` and `examples/<name>/build/`,
 where the tests read them), and runs `esp32tl-runner --help` to check that the binary starts. It
 then runs `make PYTHON=<that Python> .venv/.installed rom-elf`, which is `make setup` without
 `build-runner`. Before `.venv/bin/python .github/scripts/test-pair.py K/4 J/4` the `mtools` step makes sure `mformat`,
@@ -455,9 +455,9 @@ classification job; the required `lint` job runs with `always()` and fails if cl
 CI compares PRs with their base SHA, pushes with the previous main SHA, and manual runs with
 `origin/main`. For an exact version bump, `lint` builds wheel/sdist and checks metadata with
 `twine check --strict`; `docs` still runs the documentation contract on PRs and manual runs.
-The eight firmware jobs, two runner jobs and twelve test jobs retain their required context names,
+The eleven firmware jobs, two runner jobs and twelve test jobs retain their required context names,
 but run a short explanatory step on Ubuntu without downloads, cache restores, native builds or
-pytest. Determinism is skipped. No macOS VM is allocated for this path and all 25 existing required
+pytest. Determinism is skipped. No macOS VM is allocated for this path and all 28 existing required
 checks remain configured. This avoids a branch-protection migration and does not fabricate statuses
 with the Checks API. A scheduling overhead remains; no fixed elapsed-time improvement is claimed
 until measured on GitHub.
