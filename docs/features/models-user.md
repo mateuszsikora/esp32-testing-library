@@ -167,9 +167,10 @@ class Slave(IdleFramedModel):
   frame's values until the next frame ends; before the first frame the model has neither, and
   reading one is an `AttributeError`. A subclass that defines only `on_frame(at, frame)` works as
   before and need not read them.
-- The gap counts from the `at` of the last piece, the instant the firmware wrote its first byte:
-  what it writes in one go comes at about one instant (above), so the gap is the firmware's own
-  pause between writes. A frame the firmware writes in pieces less than a character time apart,
+- The gap counts from the `at` of the last piece. On a UART that is the instant the firmware wrote
+  its first byte: what it writes in one go comes at about one instant (above), so the gap is the
+  firmware's own pause between writes. Behind an `SppPeer` channel it is the instant the piece
+  arrived, so the gap is a pause in what arrived, not in what the firmware wrote. A frame the firmware writes in pieces less than a character time apart,
   but over more than `gap` in all, ends `gap` after its first byte: the link reports such bytes as
   one piece, at the first one's instant, so the model sees the pieces, not the line. `gap` is a
   `Duration` the test computes from the route's baud: the model is not told the baud. 3.5

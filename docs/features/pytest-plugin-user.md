@@ -152,7 +152,9 @@ Each test's selection, closest first:
    test file. Then `esp32tl_board_profile` or `esp32tl_board_profile_path`. Then
    `esp32-devkitc`.
 
-So a test that keeps its markers runs what it ran before, with or without the options. The
+Each marker keeps only the selection it controls. A test with both markers runs what it ran
+before, with or without the options; a test with an `app_path` marker alone takes the project's
+profile default, and one with a `board_profile` marker alone the project's app and build. The
 options are read once per session, when pytest configures; a profile file is loaded and checked
 at collection, as `board_profile(path=...)`'s is, and is a snapshot for the session.
 

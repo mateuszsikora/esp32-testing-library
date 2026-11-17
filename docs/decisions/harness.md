@@ -4075,8 +4075,9 @@ Status: decided (#237)
 the `at` of the frame's first piece and that of its last piece, as `receive` got them: on a UART
 the instant the firmware wrote the piece's first byte, behind an SPP channel the instant it
 arrived. `at` stays what it was, the instant the silence of `gap` ended the frame.
-A test of the firmware's timing, as when its first request starts, wants the first instant;
-`at` adds `gap` and the time the frame took to write. Intervals between frames were already
+A test of the firmware's timing on a UART, as when its first request starts, wants the first
+instant; `at` adds `gap` and the time the frame took to write. Behind an SPP channel the first
+instant is when the frame's first piece arrived, which does not say when the firmware wrote it. Intervals between frames were already
 exact. The attributes keep the frame's values until the next frame ends and are absent before
 the first one. This extends
 [the bases a model starts from](#a-model-that-only-answers-or-frames-by-silence-starts-from-a-base-that-fills-in-the-rest):

@@ -142,8 +142,9 @@ class IdleFramedModel(Model):
     frame's last piece came: `at` is that piece's `at` plus `gap`, or less than a CPU cycle
     later, the instant the silence showed the frame had ended, not the instant its data came.
     It returns the answers, each at `at` or later, and the model sends nothing else unprompted.
-    The gap counts from the instant the firmware wrote the first byte of that piece, as `receive`
-    says: what the firmware writes in one go comes at about one instant. A piece that comes
+    The gap counts from that piece's `at`, as `receive` says: on a UART the instant the firmware
+    wrote its first byte, and what the firmware writes in one go comes at about one instant;
+    behind an SPP channel the instant the piece arrived. A piece that comes
     exactly `gap` after the one before continues the frame. `drop()` forgets the frame heard so
     far, as a part that loses its power does.
 
