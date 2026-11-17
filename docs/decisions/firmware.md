@@ -475,3 +475,28 @@ scratch downloaded nothing again, offline or online; without them the directory 
 
 **Rejected:** the user's `~/.platformio`, because on a Mac it holds macOS packages that the
 container's Linux ones would mix with, and the build would change the developer's own install.
+
+## The other chips' images are a family of their own, from the same projects
+
+Status: decided (#236)
+
+`firmware/build.sh --chips` builds `IMAGE@CHIP` entries, each from the classic image's project
+into `firmware/<image>/build-<chip>/`, with `-DIDF_TARGET=<chip>`, in the same pinned v5.3.6
+container: `hello_world`, `console_repl`, `gpio_echo`, `nmea_reader`, `nvs_reader` and
+`http_request` for each of `esp32s3`, `esp32c3` and `esp32c6`, `hello_world_psram` (ESP-IDF's
+`hello_world` with octal PSRAM on) for `esp32s3`, and ESP-IDF's BLE `gatt_server` for `esp32s3` and
+`esp32c3`. These are the images whose tests need only what
+esp32sim models on those chips; deep sleep, an SD card over SPI and Bluetooth Classic are left
+out ([#229](https://github.com/mateuszsikora/esp32-testing-library/issues/229)). `gpio_echo`'s
+Kconfig gives the classic ESP32 its old defaults and the other chips GPIO 6 and 7
+(`default 33 if IDF_TARGET_ESP32`, then `default 6`), the `[lines.echo]` of their devkits.
+`esp32tl-build.json` records the target, so a directory built for another one is built again.
+
+**Rejected:** a copy of each project per chip, which would drift from the classic image the
+same tests run on the classic chip; `sdkconfig.defaults.<target>` files beside the projects, which
+ESP-IDF reads only when `SDKCONFIG_DEFAULTS` is not given and which ESP-IDF's own examples cannot
+have; adding the entries to `IMAGES`, because the classic shards would get longer and every
+classic image would need a target too.
+
+**Not yet:** other ESP-IDF versions per chip, which the P4, the S31 and the C6's BLE need
+([#233](https://github.com/mateuszsikora/esp32-testing-library/issues/233)).

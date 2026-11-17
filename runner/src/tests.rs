@@ -61,9 +61,9 @@ fn controller_elf() -> esp_soc::elf::Elf {
 /// be the one left.
 #[test]
 fn forward_leaves_the_forwarder_as_the_guests_controller() {
-    let mut m = esp32::machine(MAC, 4 << 20);
+    let mut m = esp32::machine(chip::esp32::MAC, 4 << 20);
     let hci = hci::Shared::default();
-    forward(&mut m, &controller_elf(), hci.clone()).unwrap();
+    m.forward_bt(&controller_elf(), hci.clone()).unwrap();
     assert!(!m.bus.ble.hooks.is_empty());
     m.bus.ble.session.advance_to(5);
     m.bus.ble.session.send(&[0x01, 0x03, 0x0c, 0x00]);
@@ -74,13 +74,9 @@ fn forward_leaves_the_forwarder_as_the_guests_controller() {
 
 #[test]
 fn forward_refuses_an_elf_without_the_controller() {
-    let mut m = esp32::machine(MAC, 4 << 20);
+    let mut m = esp32::machine(chip::esp32::MAC, 4 << 20);
     assert_eq!(
-        forward(
-            &mut m,
-            &esp_soc::elf::Elf::default(),
-            hci::Shared::default()
-        ),
+        m.forward_bt(&esp_soc::elf::Elf::default(), hci::Shared::default()),
         Err("BLE requires ELF symbol esp_bt_controller_init".into())
     );
 }

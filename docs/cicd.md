@@ -39,7 +39,10 @@ settings, not settings applied by the workflow files:
   and all 25 CI checks from the GitHub Actions app (app ID `15368`). These are the eight
   `firmware / firmware (...)` checks, `runner-linux / runner`, `runner-macos / runner`,
   six `test-linux / test (...)` and six `test-macos / test (...)` checks, `determinism`,
-  `lint` and `docs`, matching the job matrix below. The 14 native-build and test context
+  `lint` and `docs`, matching the job matrix below. The three `firmware / firmware (chips-K)`
+  checks are not among them: TODO(owner): add them to the required checks. Until they are, a
+  failed chips group does not block merging: the `firmware` job fails, the test jobs that need it
+  are skipped, and GitHub counts a skipped required check as passed. The 14 native-build and test context
   names were updated for the separate platform calls; all 25 checks remain required.
   Strict status checks require the branch to be up to date with `main`. Protection applies
   to administrators too; force pushes and branch deletion are disabled. When renaming jobs
@@ -60,7 +63,7 @@ This audit checked configuration; it did not execute a test PR from an external 
 ## Jobs
 
 GitHub-hosted macOS runners have no Docker, so the validation firmware is built once, in the
-pinned ESP-IDF and PlatformIO containers in eight parallel Linux jobs, and the runner crate once
+pinned ESP-IDF and PlatformIO containers in eleven parallel Linux jobs, and the runner crate once
 per platform.
 The test jobs then run only the runner and Python: they build nothing. The table describes full
 CI; [version-only changes](#version-only-ci) use short Ubuntu jobs with the same context names.
@@ -68,7 +71,7 @@ CI; [version-only changes](#version-only-ci) use short Ubuntu jobs with the same
 | Job | Runs on | What it does |
 |---|---|---|
 | `change` | `ubuntu-24.04` (x64); Python 3.11 | Checks exact version-only diffs before selecting full or lightweight CI |
-| `firmware` | `ubuntu-24.04` (x64) | Eight parallel groups (`idf-1` to `idf-4`, `examples-1` to `examples-3`, `platformio`) once per content of `firmware/`, `examples/`, the build workflow and the `Makefile`, the Arduino image with PlatformIO's core directory restored from the cache; `idf-1` fetches the ROM ELF once per revision of `scripts/fetch-rom-elf` |
+| `firmware` | `ubuntu-24.04` (x64) | Eleven parallel groups (`idf-1` to `idf-4`, `examples-1` to `examples-3`, `chips-1` to `chips-3`, `platformio`) once per content of `firmware/`, `examples/`, the build workflow and the `Makefile`, the Arduino image with PlatformIO's core directory restored from the cache; `idf-1` fetches the ROM ELFs once per revision of `scripts/fetch-rom-elf` |
 | `runner-linux`, `runner-macos` | `ubuntu-24.04` (x64); `macos-15` (ARM64) | `make build-runner test-runner`, once per content of `runner/` (its sources, its esp32sim pin, its toolchain), the build workflow and the `Makefile` |
 | `test-linux`, `test-macos` | `ubuntu-24.04` (x64); `macos-15` (ARM64); Python 3.11, 3.13, 3.14; pairs `1/4 4/4` and `2/4 3/4` | Unpacks the images and the runner, restores the ROM ELF, runs wall-clock tests sequentially, then two existing pytest shards concurrently; builds nothing |
 | `determinism` | `ubuntu-24.04` (x64); Python 3.11 | Unpacks the images and the runner as `test` does, and runs `make determinism`: the determinism tests twice, the two runs compared |
@@ -148,7 +151,7 @@ a miss only downloads them again.
 
 | Cache entry | Key | Saved by | A miss in `test` |
 |---|---|---|---|
-| `build/ci/firmware-<group>.tar` | `firmware-` and the hash of `firmware/**`, `examples/**`, `Makefile`, `.github/workflows/build-firmware.yml`, then the group suffix (`-idf-1` to `-idf-4`, `-examples-1` to `-examples-3`, `-platformio`) | Matching `firmware` matrix member | Fails the job if any group is missing |
+| `build/ci/firmware-<group>.tar` | `firmware-` and the hash of `firmware/**`, `examples/**`, `Makefile`, `.github/workflows/build-firmware.yml`, then the group suffix (`-idf-1` to `-idf-4`, `-examples-1` to `-examples-3`, `-chips-1` to `-chips-3`, `-platformio`) | Matching `firmware` matrix member | Fails the job if any group is missing |
 | `build/ci/runner.tar` | `runner-` and the hash of `runner/**`, `Makefile`, `.github/workflows/build-runner.yml`, then the runner's OS and architecture | `runner-linux` or `runner-macos` | Fails the job |
 | `.cache/esp-rom-elfs` | `rom-elf-` and the hash of `scripts/fetch-rom-elf` | `firmware (idf-1)` | No failure: `make rom-elf` downloads the ELF |
 | `.cache/platformio`, without `dist/` and `tools/` | `platformio-` and the SHA-256 of the lines `CONTAINER=` and `PIOARDUINO_VERSION=` of `firmware/build-platformio.sh` and `platform =` of each `firmware/*/platformio.ini`, then the runner's OS and architecture | `firmware (platformio)`: restored when the firmware key misses, saved when the `platformio-` key missed too | Not restored there; a miss in `firmware` downloads PlatformIO Core, the platform, the framework and the toolchains again |
@@ -159,7 +162,7 @@ entries. Both hosted systems use zstd for Actions cache compression. Native runn
 PlatformIO's tools stay in their `Linux-X64` cache and are never restored on macOS.
 The build workflow hash invalidates firmware and runner tarballs for this migration. Each firmware
 group has a separate path and key suffix; the matrix publishes the same base key regardless of
-which group finishes last. Both consumers restore and unpack all eight explicit group paths using `.github/actions/restore-firmware/action.yml`.
+which group finishes last. Both consumers restore and unpack all eleven explicit group paths using `.github/actions/restore-firmware/action.yml`.
 Exact restores and post-save verification stay unchanged; changing to artifacts is unnecessary.
 
 A cache entry unused for 7 days is evicted. A test job re-run on its own after that fails on the
@@ -195,6 +198,7 @@ The matrix runs these independent commands on separate standard VMs:
 | `idf-K`, K=1..4 | `firmware/build.sh --shard K/4` | `build/ci/firmware-idf-K.tar` |
 | `platformio` | `firmware/build-platformio.sh` | `build/ci/firmware-platformio.tar` |
 | `examples-K`, K=1..3 | `firmware/build.sh --examples --shard K/3` | `build/ci/firmware-examples-K.tar` |
+| `chips-K`, K=1..3 | `firmware/build.sh --chips --shard K/3`: the images of the ESP32-S3, ESP32-C3 and ESP32-C6, into `firmware/<image>/build-<chip>/` | `build/ci/firmware-chips-K.tar` |
 
 `FIRMWARE_OUT` is empty, preserving the default repository paths. Each shard keeps
 its shared in-container ccache across its selected images. All projects still build; no image list is copied
@@ -202,7 +206,7 @@ into the workflow. The groups can overlap instead of adding their durations, sub
 capacity. This does not yet establish a 5- or 10-minute total CI duration.
 
 Each group packs only what the backend reads. Of an ESP-IDF build, what pytest-embedded's `IdfApp` reads: the files at the top of each
-`firmware/<image>/build/` and `examples/<name>/build/` (`flasher_args.json`, the ELF, the binaries,
+`firmware/<image>/build/`, `firmware/<image>/build-<chip>/` and `examples/<name>/build/` (`flasher_args.json`, the ELF, the binaries,
 `esp32tl-build.json`, `esp32tl-built`), `config/sdkconfig.json`, and the `.bin` and `.elf` files of
 `bootloader/` and `partition_table/`. Of a PlatformIO build, `firmware/<image>/.pio/build/esp32dev/`,
 the `.bin` files, `firmware.elf`, `esp32tl-build.json` and `esp32tl-built` at its top. The object

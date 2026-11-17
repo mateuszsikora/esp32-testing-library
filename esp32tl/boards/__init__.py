@@ -21,20 +21,72 @@ PROFILES = Path(__file__).parent
 # The profile a test gets without the board_profile marker: it carries every validation firmware.
 DEFAULT_PROFILE = "esp32-devkitc"
 
-# The chips a profile may name: the classic ESP32, the only one the runner emulates.
-CHIPS = ("esp32",)
 
-# The classic ESP32's GPIO pads: 0 to 39 without 24 and 28 to 31. 34 to 39 are inputs only, so a
-# UART's TX cannot be one of them.
-GPIOS = frozenset(range(40)) - {24, 28, 29, 30, 31}
-INPUT_ONLY = frozenset(range(34, 40))
-UART_PORTS = range(3)
+@dataclass(frozen=True)
+class Chip:
+    """What a profile's `chip` brings: its GPIO pads, those of them that are inputs only, its
+    UARTs, and the IO MUX pins of UART0, which the `console` takes on every board."""
+
+    name: str
+    title: str
+    gpios: frozenset[int]
+    input_only: frozenset[int]
+    uarts: int
+    console_pins: Mapping[int, str]
+
+    def console_pin(self, end: Literal["tx", "rx"]) -> int:
+        """UART0's `tx` or `rx` pin, the console's."""
+        return next(pin for pin, use in self.console_pins.items() if use == f"console.{end}")
+
+
+# The chips a profile may name, those the runner emulates, by ESP-IDF target name.
+CHIPS = {
+    # The classic ESP32's GPIO pads: 0 to 39 without 24 and 28 to 31. 34 to 39 are inputs only,
+    # so a UART's TX cannot be one of them. UART0 is on GPIO 1 (TX) and 3 (RX).
+    "esp32": Chip(
+        name="esp32",
+        title="ESP32",
+        gpios=frozenset(range(40)) - {24, 28, 29, 30, 31},
+        input_only=frozenset(range(34, 40)),
+        uarts=3,
+        console_pins=MappingProxyType({1: "console.tx", 3: "console.rx"}),
+    ),
+    # The ESP32-S3's: 0 to 21 and 26 to 48, every one an output too (ESP32-S3 datasheet, section
+    # 2.3). UART0 is on GPIO 43 (TX) and 44 (RX).
+    "esp32s3": Chip(
+        name="esp32s3",
+        title="ESP32-S3",
+        gpios=frozenset(range(49)) - {22, 23, 24, 25},
+        input_only=frozenset(),
+        uarts=3,
+        console_pins=MappingProxyType({43: "console.tx", 44: "console.rx"}),
+    ),
+    # The ESP32-C3's: 0 to 21 (ESP32-C3 datasheet, section 2.2). UART0 is on GPIO 21 (TX) and
+    # 20 (RX); it has two UARTs.
+    "esp32c3": Chip(
+        name="esp32c3",
+        title="ESP32-C3",
+        gpios=frozenset(range(22)),
+        input_only=frozenset(),
+        uarts=2,
+        console_pins=MappingProxyType({21: "console.tx", 20: "console.rx"}),
+    ),
+    # The ESP32-C6's: 0 to 30 (ESP32-C6 datasheet, section 2.3). UART0 is on GPIO 16 (TX) and
+    # 17 (RX); it has two UARTs besides the LP UART.
+    "esp32c6": Chip(
+        name="esp32c6",
+        title="ESP32-C6",
+        gpios=frozenset(range(31)),
+        input_only=frozenset(),
+        uarts=2,
+        console_pins=MappingProxyType({16: "console.tx", 17: "console.rx"}),
+    ),
+}
 PULLS = ("up", "down")
 
 # What the `console` interface takes, on every board: UART0 on its IO MUX pins. A route or a line
 # that takes one of them is refused as a second use.
 CONSOLE_PORT = 0
-CONSOLE_PINS = {1: "console.tx", 3: "console.rx"}
 
 # Role names: `[uart.gnss]`, `[lines.modem]`, the `pwrkey` of a line set.
 ROLE = re.compile(r"[a-z][a-z0-9_]*")
@@ -97,7 +149,7 @@ class BoardProfile:
     def interfaces(self) -> list[str]:
         """`console`, which every board has, then `uart.<role>` and `lines.<role>`, as the
         profile lists them, then `sd_card` when the board has a slot, then `wifi` and
-        `bluetooth`, which every classic ESP32 has."""
+        `bluetooth`, which every chip esp32tl runs has."""
         return [
             "console",
             *(f"uart.{role}" for role in self.uart),
@@ -138,6 +190,7 @@ class Reader:
 
     def __init__(self, file: str) -> None:
         self.file = file
+        self.chip = CHIPS["esp32"]
 
     def fail(self, key: str, what: str) -> ProfileError:
         """An error at `key`; at the top level, where `key` is empty, at the file."""
@@ -166,10 +219,10 @@ class Reader:
         return value
 
     def gpio(self, key: str, value: object, *, output: bool = False) -> int:
-        pin = self.integer(key, value, 0, max(GPIOS))
-        if pin not in GPIOS:
-            raise self.fail(key, f"the ESP32 has no GPIO {pin}")
-        if output and pin in INPUT_ONLY:
+        pin = self.integer(key, value, 0, max(self.chip.gpios))
+        if pin not in self.chip.gpios:
+            raise self.fail(key, f"the {self.chip.title} has no GPIO {pin}")
+        if output and pin in self.chip.input_only:
             raise self.fail(key, f"GPIO {pin} is input only")
         return pin
 
@@ -186,8 +239,10 @@ class Reader:
         stem = self.file.removesuffix(".toml")
         if name != stem:
             raise self.fail("name", f"{name!r} is not the file's name, {stem!r}")
-        if data["chip"] not in CHIPS:
+        # A string first: an array or a table is no key of CHIPS, and not hashable either.
+        if not isinstance(data["chip"], str) or data["chip"] not in CHIPS:
             raise self.fail("chip", f"{data['chip']!r} is not one of {', '.join(CHIPS)}")
+        self.chip = CHIPS[data["chip"]]
         sizes = {
             key: self.integer(key, data[key], 0) if key in data else None
             for key in ("flash_mb", "psram_mb")
@@ -216,7 +271,7 @@ class Reader:
         table = self.table(key, value)
         self.keys(key, table, {"port", "tx", "rx", "baud"}, set())
         return UartRoute(
-            port=self.integer(f"{key}.port", table["port"], UART_PORTS[0], UART_PORTS[-1]),
+            port=self.integer(f"{key}.port", table["port"], 0, self.chip.uarts - 1),
             tx=self.gpio(f"{key}.tx", table["tx"], output=True),
             rx=self.gpio(f"{key}.rx", table["rx"]),
             baud=self.integer(f"{key}.baud", table["baud"], 1),
@@ -274,7 +329,7 @@ class Reader:
             if route.port in ports:
                 raise self.fail(f"uart.{role}.port", f"UART{route.port} is {ports[route.port]}'s")
             ports[route.port] = f"uart.{role}"
-        pins = dict(CONSOLE_PINS)
+        pins = dict(self.chip.console_pins)
         uses = [
             (f"uart.{r}.{end}", getattr(u, end)) for r, u in uart.items() for end in ("tx", "rx")
         ]

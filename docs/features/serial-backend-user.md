@@ -39,7 +39,9 @@ request no flash encryption. A PlatformIO build needs the files
 [builds](builds-user.md#what-each-kind-of-build-needs) lists, images for the classic ESP32, and no
 flash encryption in its `config/sdkconfig.json` when it has one. Encrypted firmware needs
 provisioning and key/efuse management that this backend does not implement or validate; it is
-deliberately outside this milestone. No runner or ROM ELF is needed for serial.
+deliberately outside this milestone. No runner or ROM ELF is needed for serial. A board profile
+for another chip than the classic ESP32 is refused before the port is opened:
+`serial: the board profile esp32-s3-devkitc carries an ESP32-S3; the serial backend runs the classic ESP32 only`.
 
 A PlatformIO build is flashed as esp32sim runs it: `firmware.factory.bin` at `0x0`, or else
 `bootloader.bin` at `0x1000`, `partitions.bin` at `0x8000` and `firmware.bin` at the table's

@@ -26,7 +26,7 @@ from pytest_embedded.log import MessageQueue
 from pytest_embedded.utils import Meta
 
 import esp32tl
-from esp32tl import recording, runtime
+from esp32tl import boards, recording, runtime
 from esp32tl.backends import esp32sim
 from esp32tl.backends.esp32sim import BackendError
 from esp32tl.boards import SdCardRoute
@@ -323,7 +323,10 @@ def test_a_bundled_name_that_looks_like_a_path_suggests_path(
         (b'name = "local"\nchip = "esp32"\n# \xff\n', "*'utf-8' codec can't decode byte*"),
         ('name = "wrong"\nchip = "esp32"', "*name: 'wrong' is not the file's name, 'local'*"),
         ('name = "local"', "*missing chip*"),
-        ('name = "local"\nchip = "esp32s3"', "*chip: 'esp32s3' is not one of esp32*"),
+        (
+            'name = "local"\nchip = "esp32p4"',
+            "*chip: 'esp32p4' is not one of esp32, esp32s3, esp32c3, esp32c6*",
+        ),
         (
             'name = "local"\nchip = "esp32"\n[uart.gnss]\nport = 1\ntx = 4\nrx = 4\nbaud = 9600',
             "*GPIO 4 is uart.gnss.tx already*",
@@ -695,7 +698,7 @@ def test_load_app_refuses_what_the_runner_cannot_run(tmp_path: Path) -> None:
         esp32sim.load_app(str(tmp_path / "none"))
 
     fake_build(tmp_path / "s3", target="esp32s3")
-    with pytest.raises(BackendError, match="is built for esp32s3; esp32sim runs the classic esp32"):
+    with pytest.raises(BackendError, match="is built for esp32s3; the board's chip is esp32"):
         esp32sim.load_app(str(tmp_path / "s3"))
 
     fake_build(tmp_path / "encrypted", encrypted=True)
@@ -706,6 +709,17 @@ def test_load_app_refuses_what_the_runner_cannot_run(tmp_path: Path) -> None:
     (build / "app.bin").unlink()
     with pytest.raises(BackendError, match=r"is not a finished build, missing .*/app\.bin$"):
         esp32sim.load_app(str(tmp_path / "unfinished"))
+
+
+def test_load_app_takes_a_build_for_the_board_s_chip(tmp_path: Path) -> None:
+    fake_build(tmp_path / "s3", target="esp32s3")
+    app = esp32sim.load_app(str(tmp_path / "s3"), chip="esp32s3")
+    assert app.chip == "esp32s3"
+    command = esp32sim.runner_command(Path("runner"), Path("rom"), app, 1, Path("link"))
+    assert command[:5] == ["runner", "--chip", "esp32s3", "--rom", "rom"]
+    fake_build(tmp_path / "classic")
+    with pytest.raises(BackendError, match="is built for esp32; the board's chip is esp32s3"):
+        esp32sim.load_app(str(tmp_path / "classic"), chip="esp32s3")
 
 
 @pytest.mark.parametrize("absolute", [False, True])
@@ -832,7 +846,8 @@ class TestRelease:
 def test_rom_is_the_one_make_setup_fetches() -> None:
     script = (ROOT / "scripts" / "fetch-rom-elf").read_text()
     assert f"\nRELEASE={esp32sim.ROM_RELEASE}\n" in script
-    assert f"\nROM={esp32sim.ROM_ELF}\n" in script
+    for name, digest in runtime.ROMS.values():
+        assert f"\n{name} {digest}" in script or f'"{name} {digest}' in script
 
 
 def test_runner_and_rom_paths_name_what_is_missing(
@@ -2243,3 +2258,99 @@ def test_nvs_without_power_on_fails_teardown(fake_runner: pytest.Pytester) -> No
             " board.power_on(): it ran no firmware*"
         ]
     )
+
+
+@pytest.mark.parametrize(
+    ("chip", "profile", "title"),
+    [
+        ("esp32s3", "esp32-s3-devkitc", "ESP32-S3"),
+        ("esp32c3", "esp32-c3-devkitm", "ESP32-C3"),
+        ("esp32c6", "esp32-c6-devkitc", "ESP32-C6"),
+    ],
+)
+def test_what_esp32sim_lacks_on_the_board_s_chip_skips_the_test_with_the_reason(
+    fake_runner: pytest.Pytester, chip: str, profile: str, title: str
+) -> None:
+    fake_build(fake_runner.path / "chip", target=chip)
+    fake_runner.makepyfile(
+        test_fake=f"""
+        import pytest
+
+        pytestmark = [pytest.mark.app_path("chip"), pytest.mark.board_profile("{profile}")]
+
+        def test_station(board, wifi):
+            wifi.station("device-ap")
+
+        def test_access_point(board, wifi):
+            wifi.access_point("home")
+        """
+    )
+    result = fake_runner.runpytest_subprocess("-p", "no:cacheprovider", "-rA", "-k", "station")
+    result.assert_outcomes(skipped=1)
+    result.stdout.fnmatch_lines(
+        [
+            f"SKIPPED [[]1[]] test_fake.py:5: esp32sim: wifi on {chip}: esp32sim has no virtual"
+            f" station for a SoftAP on the {title} (#229, G4)"
+        ]
+    )
+
+
+def test_an_sd_card_on_a_chip_without_gp_spi_rx_dma_skips_the_test(
+    fake_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profile = fake_runner.path / "boards" / "s3-sd.toml"
+    profile.parent.mkdir()
+    profile.write_text(
+        'name = "s3-sd"\nchip = "esp32s3"\n[sd_card]\nsclk = 2\nmosi = 4\nmiso = 5\ncs = 8\n'
+    )
+    fake_build(fake_runner.path / "chip", target="esp32s3")
+    fake_runner.makepyfile(
+        test_fake="""
+        import pytest
+
+        pytestmark = [
+            pytest.mark.app_path("chip"),
+            pytest.mark.board_profile(path="boards/s3-sd.toml"),
+        ]
+
+        def test_card(board, sd_card):
+            sd_card.insert(sd_card.image(size_mb=64).build())
+        """
+    )
+    result = fake_runner.runpytest_subprocess("-p", "no:cacheprovider", "-rA")
+    result.assert_outcomes(skipped=1)
+    result.stdout.fnmatch_lines(
+        [
+            "SKIPPED [[]1[]] test_fake.py:8: esp32sim: sd_card on esp32s3: esp32sim does not model"
+            " GP-SPI RX DMA on the ESP32-S3, which ESP-IDF's SD SPI driver needs (#229, G2)"
+        ]
+    )
+
+
+def test_the_serial_backend_refuses_a_board_with_another_chip(
+    fake_runner: pytest.Pytester,
+) -> None:
+    fake_build(fake_runner.path / "chip", target="esp32s3")
+    fake_runner.makepyfile(
+        test_fake="""
+        import pytest
+
+        pytestmark = [pytest.mark.app_path("chip"), pytest.mark.board_profile("esp32-s3-devkitc")]
+
+        def test_serial(board):
+            pass
+        """
+    )
+    result = fake_runner.runpytest_subprocess(
+        "-p", "no:cacheprovider", "--esp32tl-backend", "serial", "--port", "/dev/null"
+    )
+    result.stdout.fnmatch_lines(
+        [
+            "*serial: the board profile esp32-s3-devkitc carries an ESP32-S3; the serial backend"
+            " runs the classic ESP32 only*"
+        ]
+    )
+
+
+def test_every_chip_but_the_classic_one_has_its_esp32sim_gaps_decided() -> None:
+    assert set(esp32sim.CHIP_GAPS) == set(boards.CHIPS) - {"esp32"}

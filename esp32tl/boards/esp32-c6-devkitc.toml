@@ -1,0 +1,24 @@
+# An ESP32-C6 module (ESP32-C6-WROOM-1) on a devkit, as ESP32-C6-DevKitC-1 carries it: 8 MiB of
+# flash, no PSRAM. It carries every validation image built for the ESP32-C6 (firmware/build.sh
+# --chips). The console is UART0 on GPIO 16 (TX) and 17 (RX), the devkit's USB-to-UART bridge;
+# GPIO 24 to 30 belong to the flash. GPIO 4 and 5 are strapping pins (MTMS, MTDI), harmless for a
+# UART that starts after the boot.
+# flash_mb is the module's. The runner's flash is 4 MB whatever a profile says (docs/features/
+# builds-user.md), so an image whose partition table reaches past 0x400000 does not boot here.
+name = "esp32-c6-devkitc"
+chip = "esp32c6"
+flash_mb = 8
+psram_mb = 0
+
+# firmware/nmea_reader's defaults, as on the classic ESP32's devkit.
+[uart.gnss]
+port = 1
+tx = 4
+rx = 5
+baud = 9600
+
+# firmware/gpio_echo's defaults on this chip: the line it reads, which the board pulls down, and
+# the line it drives.
+[lines.echo]
+in = { pin = 6, pull = "down" }
+out = 7

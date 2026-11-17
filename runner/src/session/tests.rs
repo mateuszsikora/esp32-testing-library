@@ -1,10 +1,14 @@
 //! The run loop against a scripted guest and a fake peer: the arithmetic of slices, block points
 //! and pacing, the flush points, and the rules of `docs/protocol.md` the runner enforces.
 use super::*;
+use crate::chip::esp32::reset_console_rx;
+use crate::chip::esp32::{SLEEP_STEP, WAKE_MARGIN_TICKS, rtc};
 use crate::socket_board::{Recorder, SocketBoard};
 use esp_soc::BoardModel;
+use esp_soc::SocBus;
 use esp_soc::ble::HciController;
 use esp_soc::json::{Json, parse_json};
+use esp_soc::wifi::{self, StaState};
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;

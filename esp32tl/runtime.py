@@ -17,6 +17,22 @@ from esp32tl import __version__
 SIM_REV = "357b0e542dfe97d4c62ec4a15c01c4969164448c"
 ROM = "esp32_rev300_rom.elf"
 ROM_SHA = "920b70635440517866aab2230964a570d2cf2b676658d93c52fbac108c1cca31"
+# Every chip's mask ROM ELF in release 20241011, the one the runner boots, and its SHA-256.
+ROMS = {
+    "esp32": (ROM, ROM_SHA),
+    "esp32s3": (
+        "esp32s3_rev0_rom.elf",
+        "c0ce0f338d1de1bdc6efbef1591779a2a42c1ab7d759d3c6ae8ae63a7dd34cfd",
+    ),
+    "esp32c3": (
+        "esp32c3_rev3_rom.elf",
+        "19ac22e08707df926fb0cf4c54795d4067b983fae8635f396ded173a6d78fc3c",
+    ),
+    "esp32c6": (
+        "esp32c6_rev0_rom.elf",
+        "788e1d38724aeb8fd974fa10c4a7b089c02627d35342ce84b9e0b12b239f3551",
+    ),
+}
 ROM_ARCHIVE_SHA = "921f000164a421c7628fbfee55b173384aafaa51883adc65cd27bf9b0af9e9a9"
 ROM_URL = "https://github.com/espressif/esp-rom-elfs/releases/download/20241011/esp-rom-elfs-20241011.tar.gz"
 RELEASE_URL = (
@@ -98,8 +114,9 @@ def manifest(path: Path) -> dict[str, str]:
         raise RuntimeError(f"invalid runtime manifest {path}: {error}") from error
 
 
-def cached_file(kind: str, directory: Path | None = None) -> Path:
-    """Verify just the selected file and its cache manifest, without touching its peer."""
+def cached_file(kind: str, directory: Path | None = None, chip: str = "esp32") -> Path:
+    """Verify just the selected file and its cache manifest, without touching its peer: the
+    runner, or `chip`'s ROM."""
     directory = cache() if directory is None else directory
     if not directory.is_dir():
         raise RuntimeError("runtime missing: run esp32tl runtime prepare")
@@ -109,8 +126,9 @@ def cached_file(kind: str, directory: Path | None = None) -> Path:
         verify(path, info["sha256"])
         identity(path)
     else:
-        path = directory / ROM
-        verify(path, ROM_SHA)
+        name, digest = ROMS[chip]
+        path = directory / name
+        verify(path, digest)
     return path
 
 
@@ -118,7 +136,8 @@ def installed(directory: Path | None = None) -> Path:
     """Verify the complete installation, even if the backend has explicit path overrides."""
     directory = cache() if directory is None else directory
     cached_file("runner", directory)
-    cached_file("rom", directory)
+    for chip in ROMS:
+        cached_file("rom", directory, chip)
     return directory
 
 
@@ -130,11 +149,11 @@ def download(url: str, path: Path) -> None:
         raise RuntimeError(f"download failed: {url}: {error}") from error
 
 
-def extract_rom(archive: Path, destination: Path) -> None:
+def extract_rom(archive: Path, destination: Path, name: str = ROM) -> None:
     # Never extract paths, links, devices or arbitrary archive members onto the filesystem.
     try:
         with tarfile.open(archive) as tar:
-            members = [m for m in tar.getmembers() if m.name == ROM]
+            members = [m for m in tar.getmembers() if m.name == name]
             if len(members) != 1 or not members[0].isfile() or members[0].size > 2_000_000:
                 raise RuntimeError("invalid ROM archive member")
             source = tar.extractfile(members[0])
@@ -164,7 +183,8 @@ def prepare() -> Path:
         archive = Path(temporary) / "rom.tar.gz"
         download(ROM_URL, archive)
         verify(archive, ROM_ARCHIVE_SHA)
-        extract_rom(archive, stage / ROM)
+        for name, _ in ROMS.values():
+            extract_rom(archive, stage / name, name)
         installed(stage)
         try:
             stage.rename(dest)

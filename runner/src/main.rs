@@ -41,6 +41,7 @@
 //! `SIGTERM` at teardown, then `SIGKILL` after 5 s. With `--board`, once the connection is made,
 //! `SIGTERM` and `SIGINT` end the run with `stats` and exit 0 (protocol §9), and a second one ends
 //! the process at once, with 128 + the signal's number.
+mod chip;
 mod cli;
 mod hci;
 mod protocol;
@@ -49,14 +50,12 @@ mod session;
 mod socket_board;
 mod transport;
 
-use esp_soc::{Soc, SocBus, Stop};
+use chip::Target;
+use esp_soc::Stop;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-
-/// The MAC esp32sim gives the classic chip, so a run here and the same run in esp32sim agree.
-const MAC: [u8; 6] = [0x24, 0x6f, 0x28, 0x00, 0x11, 0x22];
 
 /// `Console::mask` bit for UART0.
 const CONSOLE_UART0: u32 = 2;
@@ -74,6 +73,18 @@ fn main() -> ExitCode {
         }
         Err(cli::Error::Usage(message)) => return usage_error(&message),
     };
+    chip::select(opts.chip);
+    match opts.chip.name {
+        "esp32" => go::<esp32::Machine>(&opts),
+        "esp32s3" => go::<esp32s3::Machine>(&opts),
+        "esp32c3" => go::<esp32c3::Machine>(&opts),
+        "esp32c6" => go::<esp32c6::Machine>(&opts),
+        name => unreachable!("--chip {name} has no machine"),
+    }
+}
+
+/// The run on the chip `T`, from the setup to the line that ends it.
+fn go<T: Target>(opts: &cli::Opts) -> ExitCode {
     let shared = opts.board.as_ref().map(|_| socket_board::Shared::default());
     let card = match opts
         .sd_card
@@ -85,15 +96,15 @@ fn main() -> ExitCode {
         None => None,
     };
     let hci = opts.bt.as_ref().map(|_| hci::Shared::default());
-    let (mut m, rom) = match setup(&opts, shared.clone(), card.clone(), hci.clone()) {
+    let (mut m, rom) = match setup::<T>(opts, shared.clone(), card.clone(), hci.clone()) {
         Ok(loaded) => loaded,
         Err(message) => return fail(&message),
     };
     if let (Some(board), Some(shared)) = (&opts.board, shared) {
-        return run_with_board(&opts, board, shared, card, hci, &mut m, &rom);
+        return run_with_board(opts, board, shared, card, hci, &mut m, &rom);
     }
     let wall = std::time::Instant::now();
-    let stop = run(&mut m);
+    let stop = chip::run_free(&mut m);
     report_card(card.as_ref());
     if let Some(path) = &opts.flash_out {
         session::write_flash_at_end(path, &session::Guest::flash(&m));
@@ -101,9 +112,9 @@ fn main() -> ExitCode {
     eprintln!(
         "esp32tl-runner: stop: {} at {:.6} s ({:.1} s wall, {} resets)",
         stop_name(&stop),
-        m.seconds(),
+        m.machine_ref().seconds(),
         wall.elapsed().as_secs_f64(),
-        m.reboots
+        m.machine_ref().reboots
     );
     match stop {
         Stop::Halted => ExitCode::SUCCESS,
@@ -126,13 +137,13 @@ fn fail(message: &str) -> ExitCode {
 }
 
 /// The run with a peer on the socket: connect, then the session of `docs/protocol.md`.
-fn run_with_board(
+fn run_with_board<T: Target>(
     opts: &cli::Opts,
     board: &cli::Board,
     shared: socket_board::Shared,
     card: Option<sd_card::Shared>,
     hci: Option<hci::Shared>,
-    m: &mut esp32::Machine,
+    m: &mut T,
     rom: &[u8],
 ) -> ExitCode {
     let signal = Arc::new(AtomicBool::new(false));
@@ -182,17 +193,13 @@ fn run_with_board(
     );
     let (end, stats) = session.run();
     // whatever the guest printed before the end comes out before what the runner says
-    m.drain_console();
+    m.machine().drain_console();
     report_card(card.as_ref());
     // Retain upstream's radio diagnostics, including why a virtual station never joined.
     // Its private network is inactive in relay mode, so do not print that network's counters.
     if opts.wifi.is_some() {
         for line in m
-            .bus
-            .periph
-            .wifi
-            .link
-            .report()
+            .wifi_report()
             .lines()
             .filter(|line| line.starts_with("[emu] wifi"))
         {
@@ -213,7 +220,7 @@ fn run_with_board(
     };
     eprintln!(
         "esp32tl-runner: end: {cause} at {:.6} s ({:.1} s wall, {} resets, {} turns)",
-        m.seconds(),
+        m.machine_ref().seconds(),
         wall.elapsed().as_secs_f64(),
         stats.resets,
         stats.turns
@@ -223,7 +230,7 @@ fn run_with_board(
 
 /// `--max-seconds` in bus cycles.
 fn end_cycle(opts: &cli::Opts) -> u64 {
-    (opts.max_seconds * <esp32::Esp32 as Soc>::CPU_HZ as f64) as u64
+    (opts.max_seconds * opts.chip.cpu_hz as f64) as u64
 }
 
 /// The SD card slot of `--sd-spi`, with a card writing through to `image` in it when `--sd-rw`
@@ -281,33 +288,25 @@ fn report_card(card: Option<&sd_card::Shared>) {
 /// power-on reset loads again. With `shared`, the socket board is on its pins; with `card`, the
 /// SD card slot, on the socket board or on a board of its own; with `hci`, the forwarder of
 /// `--bt` is the guest's Bluetooth controller.
-fn setup(
+fn setup<T: Target>(
     opts: &cli::Opts,
     shared: Option<socket_board::Shared>,
     card: Option<sd_card::Shared>,
     hci: Option<hci::Shared>,
-) -> Result<(esp32::Machine, Vec<u8>), String> {
-    let flash_size = opts.flash_mb << 20;
-    let mut m = esp32::machine(MAC, flash_size);
-    // the JEDEC capacity the guest reads follows the size, as in esp32sim
-    m.bus.set_flash_size(flash_size);
+) -> Result<(T, Vec<u8>), String> {
+    let mut m = T::new(opts.flash_mb << 20);
     if opts.psram_mb != 0 {
-        m.bus.set_psram_size(opts.psram_mb << 20)?;
+        m.set_psram_size(opts.psram_mb << 20)?;
     }
     // without a board or a card, esp32sim's `--board none`
-    match (shared, card) {
-        (Some(shared), card) => {
-            m.bus.board = Box::new(socket_board::SocketBoard::new(shared, card));
-        }
-        (None, Some(card)) => m.bus.board = Box::new(sd_card::CardBoard(card)),
-        (None, None) => {}
-    }
-    m.bus.attach_board_devices();
+    let board: Option<Box<dyn esp_soc::board::BoardModel>> = match (shared, card) {
+        (Some(shared), card) => Some(Box::new(socket_board::SocketBoard::new(shared, card))),
+        (None, Some(card)) => Some(Box::new(sd_card::CardBoard(card))),
+        (None, None) => None,
+    };
+    m.install_board(board);
     if let Some(wifi) = &opts.wifi {
-        // esp32sim's access point, with the network behind it on the socket: the relay hands the
-        // run loop the station's Ethernet frames instead of esp32sim's own network
-        session::Guest::wifi_access_point(&mut m, wifi);
-        m.bus.set_ethernet_relay(true)?;
+        m.attach_wifi(wifi)?;
         if let Some(sta) = wifi.station() {
             eprintln!(
                 "esp32tl-runner: virtual station for '{}' ({}), its network on the socket",
@@ -336,19 +335,21 @@ fn setup(
         }
     }
 
-    let rom_name = <esp32::Esp32 as Soc>::ROM_ELF;
+    let rom_name = <T::Soc as esp_soc::Soc>::ROM_ELF;
     let rom = opts
         .rom
         .clone()
         .or_else(|| find_rom(rom_name))
         .ok_or_else(|| format!("no {rom_name} found: pass --rom, or set ESP32SIM_ROM_DIR"))?;
     let elf = read(&rom)?;
-    m.load_rom(&elf)
+    m.machine()
+        .load_rom(&elf)
         .map_err(|e| format!("{}: {e}", rom.display()))?;
     eprintln!("esp32tl-runner: ROM {}", rom.display());
     for (offset, path) in &opts.flash_at {
         let data = read(path)?;
-        m.write_flash(*offset, &data)
+        m.machine()
+            .write_flash(*offset, &data)
             .map_err(|e| format!("--flash-at {offset:#x}={}: {e}", path.display()))?;
         eprintln!(
             "esp32tl-runner: flash {offset:#x}: {} ({} bytes)",
@@ -360,42 +361,27 @@ fn setup(
         bluetooth(&mut m, path, hci)?;
     }
 
-    session::reset_console_rx(&mut m);
-    m.boot_rom();
-    m.console.mask = if opts.console == cli::Console::Socket {
+    m.after_reset();
+    let machine = m.machine();
+    machine.boot_rom();
+    machine.console.mask = if opts.console == cli::Console::Socket {
         0
     } else {
         CONSOLE_UART0
     };
-    m.max_cycles = end_cycle(opts);
+    machine.max_cycles = end_cycle(opts);
     Ok((m, elf))
 }
 
-/// `--bt`: the application's ELF, then [`forward`].
-fn bluetooth(m: &mut esp32::Machine, path: &Path, hci: hci::Shared) -> Result<(), String> {
+/// `--bt`: the application's ELF, then esp32sim's VHCI hooks over its symbols, as its `--ble`
+/// installs them, with the forwarder in place of esp32sim's virtual controller.
+fn bluetooth<T: Target>(m: &mut T, path: &Path, hci: hci::Shared) -> Result<(), String> {
     let at = |e: String| format!("--bt {}: {e}", path.display());
     let elf = esp_soc::elf::parse(&read(path)?).map_err(at)?;
-    forward(m, &elf, hci).map_err(at)?;
+    m.forward_bt(&elf, hci).map_err(at)?;
     eprintln!(
         "esp32tl-runner: Bluetooth controller on the socket, VHCI hooks from {}",
         path.display()
-    );
-    Ok(())
-}
-
-/// esp32sim's VHCI hooks over the symbols of `elf`, as its `--ble` installs them, with the
-/// forwarder in place of esp32sim's virtual controller. `enable_ble` replaces the whole `Ble`, its
-/// session included, so the forwarder goes in after it; `reboot()` keeps the session from then
-/// on, and resets it (`Ble::reset`).
-fn forward(
-    m: &mut esp32::Machine,
-    elf: &esp_soc::elf::Elf,
-    hci: hci::Shared,
-) -> Result<(), String> {
-    m.bus.enable_ble(elf)?;
-    m.bus.ble.session = esp_soc::ble::peer::Session::new(
-        Box::new(hci::Forwarder(hci)),
-        esp_soc::ble::Link::default(),
     );
     Ok(())
 }
@@ -428,28 +414,6 @@ fn find_rom(name: &str) -> Option<PathBuf> {
         .rev()
         .map(|d| d.join(name))
         .find(|p| p.is_file())
-}
-
-/// Runs to the end: through every chip reset the firmware asks for, as the ROM would after one,
-/// until `--max-seconds` or a stop of any other kind.
-fn run(m: &mut esp32::Machine) -> Stop {
-    loop {
-        let stop = m.run(u64::MAX);
-        // whatever the guest printed before the stop comes out before what the runner says
-        m.drain_console();
-        match stop {
-            Stop::SwReset => {
-                // M1 forwards the cause to the peer as `reset` (plan §1, finding 4).
-                let cause = m.reboot();
-                session::reset_console_rx(m);
-                eprintln!(
-                    "esp32tl-runner: chip reset at {:.6} s, cause {cause:#x}",
-                    m.seconds()
-                );
-            }
-            stop => return stop,
-        }
-    }
 }
 
 /// The variant's name alone, without its fields. Exhaustive, so that a variant added upstream

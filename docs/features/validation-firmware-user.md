@@ -16,6 +16,8 @@ directory, `pytest.mark.app_path("../firmware/arduino_shell", build_dir=".pio/bu
 make firmware                    # every image: the ESP-IDF ones, then the PlatformIO one
 firmware/build.sh                # every ESP-IDF image, into firmware/<image>/build/
 firmware/build.sh nmea_reader    # only the images named
+firmware/build.sh --chips        # the images of the other chips, into firmware/<image>/build-<chip>/
+firmware/build.sh --chips gpio_echo@esp32c3   # only the ones named
 firmware/build-platformio.sh     # arduino_shell, into firmware/arduino_shell/.pio/build/esp32dev/
 ```
 
@@ -51,6 +53,35 @@ whatever `FIRMWARE_OUT` the shell exports, because the tests read the images the
 | `bt_spp_initiator` | ESP-IDF's `examples/bluetooth/bluedroid/classic_bt/bt_spp_initiator`, unmodified, with its own `sdkconfig.defaults`, for target `esp32`: finds a device named `ESP_SPP_ACCEPTOR` over Bluetooth Classic, pairs with it, opens SPP and writes to it without end ([below](#bt_spp_initiator)) |
 | `bt_spp_initiator_psram` | The same example, unmodified, with `firmware/bt_spp_initiator_psram/sdkconfig.defaults` after its own: PSRAM on, and Bluedroid's buffers taken from it first; on a profile with `psram_mb = 4` it does what the plain image does ([below](#bt_spp_initiator_psram)) |
 | `arduino_shell` | `firmware/arduino_shell`, a PlatformIO project on the Arduino-ESP32 core, `board = esp32dev`, built by `firmware/build-platformio.sh`: prints a banner on `Serial`, reads its settings with `Preferences`, runs a line-based command interpreter on `Serial`, and, when its settings name a network, joins it with `WiFi` and serves `GET /status` with `WebServer` ([below](#arduino_shell)) |
+
+## The images of the other chips
+
+`firmware/build.sh --chips` builds some of the same projects for the ESP32-S3, ESP32-C3 and
+ESP32-C6, which the runner also emulates ([runner](runner-user.md#chips)), each into
+`firmware/<image>/build-<chip>/`, in the same container and at the same ESP-IDF version. A test
+names one with its build directory and the chip's devkit profile:
+
+```python
+@pytest.mark.app_path("../firmware/gpio_echo", build_dir="build-esp32c3")
+@pytest.mark.board_profile("esp32-c3-devkitm")
+```
+
+| Image | For | What differs from the classic ESP32's |
+|---|---|---|
+| `hello_world` | `esp32s3`, `esp32c3`, `esp32c6` | Nothing: the example names the chip it runs on |
+| `console_repl` | the three | Nothing |
+| `gpio_echo` | the three | Its default lines, GPIO 6 in and 7 out, the `[lines.echo]` set of the chip's devkit profile ([below](#gpio_echo)) |
+| `nmea_reader` | the three | Nothing: UART1 on GPIO 5 (RX) and 4 (TX), the devkits' `[uart.gnss]` |
+| `nvs_reader` | the three | Nothing |
+| `http_request` | the three | Nothing |
+| `hello_world_psram` | `esp32s3` | ESP-IDF's `hello_world` with `firmware/hello_world_psram/sdkconfig.defaults`: `CONFIG_SPIRAM=y`, `CONFIG_SPIRAM_MODE_OCT=y`, the octal PSRAM of the S3 devkit's N8R8 module |
+| `gatt_server` | `esp32s3`, `esp32c3` | ESP-IDF's `examples/bluetooth/bluedroid/ble/gatt_server`, unmodified, with its own `sdkconfig.defaults`: a BLE GATT server that advertises as `ESP_GATTS_DEMO`. Not for the C6, whose BLE esp32sim runs only for ESP-IDF v5.5.x images |
+
+The images that need what esp32sim does not model on these chips, deep sleep (`timer_wake`,
+`deep_sleep`, `persistence`), an SD card over SPI (`sdspi`, `sd_remount`) or Bluetooth Classic
+(`bt_spp_initiator`), are not built for them
+([issue #229](https://github.com/mateuszsikora/esp32-testing-library/issues/229)).
+`tests/test_chips.py` runs every one of these images.
 
 ## `modem_at`
 
@@ -391,7 +422,8 @@ in=0
 ```
 
 the first line once its lines are set up, then `in=` and the input's level, at boot and at every
-change after it. It drives the output to that level before it prints the line. A change raises an
+change after it. It drives the output to that level before it prints the line. Built for the ESP32-S3, ESP32-C3 or
+ESP32-C6, it prints `gpio_echo: in GPIO6 out GPIO7`. A change raises an
 interrupt on either edge, and the level is read again when the task gets to it, so a change that
 comes back before then prints nothing. In the emulator the output is driven low about 44 emulated
 milliseconds after power-on, and follows a change of the input within 9 emulated microseconds.
@@ -404,8 +436,8 @@ RI, which the board pulls down, and drives PWRKEY. It is tested on that profile
 
 | Option | Default | Range |
 |---|---|---|
-| `CONFIG_GPIO_ECHO_IN_PIN` | `33` (the modem's RI) | 0 to 39 |
-| `CONFIG_GPIO_ECHO_OUT_PIN` | `4` (the modem's PWRKEY) | 0 to 33 |
+| `CONFIG_GPIO_ECHO_IN_PIN` | `33` (the modem's RI) on the classic ESP32, `6` on the other chips | 0 to 39 |
+| `CONFIG_GPIO_ECHO_OUT_PIN` | `4` (the modem's PWRKEY) on the classic ESP32, `7` on the other chips | 0 to 33 |
 
 As for `nmea_reader`, the ranges let through pins that cannot work: GPIO 1 and 3, the console's,
 6 to 11, the SPI flash's, and 20, 24 and 28 to 31, which the classic ESP32 does not have, for which

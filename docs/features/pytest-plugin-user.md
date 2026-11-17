@@ -1041,8 +1041,8 @@ after `esp32sim: ` ([where it fails](#one-board-and-its-interfaces)).
 
 ### The wifi fixture
 
-`wifi` is the chip's Wi-Fi air, which every board profile has: every classic ESP32 has the
-radio. `access_point(...)` gives the device a network to join; `station(...)` joins the device's
+`wifi` is the chip's Wi-Fi air, which every board profile has: every chip a profile may name has
+the radio. `access_point(...)` gives the device a network to join; `station(...)` joins the device's
 own SoftAP ([below](#a-virtual-station-joins-the-devices-softap)). Until the test configures one,
 there is no virtual peer on the air. From `tests/test_http_request.py`, where ESP-IDF's unmodified `http_request`
 example joins with ESP-IDF's default SSID and passphrase and fetches a page
@@ -1102,7 +1102,9 @@ def test_joins_and_fetches_from_the_tests_server(board):
 ### The bt fixture
 
 `board.bluetooth`, also the `bt` fixture, is the chip's Bluetooth, which every board profile has, as
-every classic ESP32 does. On esp32sim it puts the firmware's controller on an air around the board,
+every chip a profile may name does; the peers here are Bluetooth Classic devices, which a BLE-only
+chip (the ESP32-S3, C3 and C6) cannot reach: there `bt` forwards the firmware's HCI and taps it,
+and its host starts, but no device on the air talks to it yet ([issue #234](https://github.com/mateuszsikora/esp32-testing-library/issues/234)). On esp32sim it puts the firmware's controller on an air around the board,
 on the board's clock, where the test puts the devices the firmware talks to or finds, `SppPeer` and
 `BluetoothDevice`, and the run forwards the firmware's HCI to that controller:
 
@@ -1341,7 +1343,9 @@ This is exclusive with `wifi.access_point(...)` and `wifi.nearby(...)`. A second
 
 Wait for `network.when_leased()` after power-on, then use `network.connect(80)` or
 `network.http_client.get("/status")`. The lease and host-side services are described in
-[the network guide](network-user.md#joining-the-devices-own-access-point). Serial does not supply virtual air; Wi-Fi replay is not a supported source. Only classic ESP32, open and WPA2-PSK are supported; there is no virtual
+[the network guide](network-user.md#joining-the-devices-own-access-point). Serial does not supply virtual air; Wi-Fi replay is not a supported source. Only the classic ESP32 has the virtual station: on the other chips `wifi.station(...)` skips the
+test, `esp32sim: wifi on esp32s3: esp32sim has no virtual station for a SoftAP on the ESP32-S3 (#229, G4)`.
+Open and WPA2-PSK are supported; there is no virtual
 AP+STA combination, WPA3-SAE, required PMF, hidden SSID probing or keep-alive. An idle device may
 disassociate the host after about 300 s; the emulator rejoins. Lease renewal is not implemented:
 expiry clears the address and connections and starts DHCP again. Radio extensions await upstream

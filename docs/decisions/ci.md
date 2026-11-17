@@ -688,3 +688,16 @@ hosted measurements. The main CI's normal test matrix and firmware assertions re
 The documentation checker exempts only changes to the owning package-version field in Python
 and Cargo metadata. The previous dependency-only exemption did not cover release versions.
 Other fields, comments and dependency pins still require their usual documentation.
+
+## The chips' images build in three groups of their own
+
+Status: decided (#236)
+
+The firmware matrix has `chips-1` to `chips-3`, each running `firmware/build.sh --chips --shard
+K/3` and packing `firmware/*/build-*`; the test jobs restore and unpack them with the other
+groups. The shards follow `--shard`'s round robin like the other families, so adding an image
+needs no change to the workflow.
+
+**Rejected:** putting the entries into the `idf` shards, which would lengthen every classic group;
+a group per chip, which would hard-code the chip list in the workflow, though its container's
+ccache would hit more, every image of a group being for one target.

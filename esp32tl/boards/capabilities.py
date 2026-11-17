@@ -42,11 +42,14 @@ Capabilities = Mapping[str, Mapping[str, Capability]]
 
 @dataclass(frozen=True)
 class Request:
-    """A test's use of one interface of its board: a source at its far end, or a tap on it."""
+    """A test's use of one interface of its board: a source at its far end, or a tap on it.
+    `role` names what the source is for when an interface has more than one, as `station` for
+    `wifi.station`, a virtual station joining the device's access point."""
 
     interface: str
     source: str | None = None
     tap: bool = False
+    role: str | None = None
 
 
 def kind(interface: str) -> str:

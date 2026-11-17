@@ -7,7 +7,6 @@ use esp_soc::uart::UartRoute;
 use std::fmt::Write;
 
 pub const VERSION: i64 = 2;
-pub const CHIP: &str = "esp32";
 /// What the times of `uart_tx` mean (protocol 5.1): emulated time, at the FIFO write.
 pub const CLOCK: &str = "emulated-fifo-write";
 /// The same times under `--realtime`, paced to wall time (protocol 12.1).
@@ -30,19 +29,22 @@ pub const HCI_MAX: usize = 496;
 /// SD timeout, its 5 s for a write.
 pub const SD_DELAY_MAX: u64 = 10_000_000_000;
 
-const CPU_HZ: u128 = esp32::periph::CPU_HZ as u128;
+/// The bus clock of the chip this run emulates (`chip::Profile::cpu_hz`).
+fn cpu_hz() -> u128 {
+    u128::from(crate::chip::selected().cpu_hz)
+}
 const NS_PER_S: u128 = 1_000_000_000;
 
 /// Bus cycles to nanoseconds, rounded down (protocol §3): an event is reported at or before its
 /// exact time.
 pub fn ns(cycles: u64) -> u64 {
-    (cycles as u128 * NS_PER_S / CPU_HZ) as u64
+    (cycles as u128 * NS_PER_S / cpu_hz()) as u64
 }
 
 /// Nanoseconds to bus cycles, rounded up (protocol §3): an input takes effect at the first cycle
 /// at or after its time.
 pub fn cycles(ns: u64) -> u64 {
-    (ns as u128 * CPU_HZ)
+    (ns as u128 * cpu_hz())
         .div_ceil(NS_PER_S)
         .min(u64::MAX as u128) as u64
 }
@@ -453,8 +455,9 @@ fn escape(s: &str) -> String {
 }
 
 pub fn hello(clock: &str) -> String {
+    let chip = crate::chip::selected().name;
     format!(
-        r#"{{"type":"hello","version":{VERSION},"chip":"{CHIP}","clock":"{clock}","esp32sim":"{ESP32SIM}"}}"#
+        r#"{{"type":"hello","version":{VERSION},"chip":"{chip}","clock":"{clock}","esp32sim":"{ESP32SIM}"}}"#
     )
 }
 

@@ -1,7 +1,8 @@
 # esp32tl-runner
 
-`esp32tl-runner` runs an unmodified image for the classic ESP32 in the esp32sim emulator, on the
-emulated clock, and prints the guest's UART0 console on stdout. With `--board`, it connects to a
+`esp32tl-runner` runs an unmodified image for the classic ESP32, the ESP32-S3, the ESP32-C3 or the
+ESP32-C6 in the esp32sim emulator, on the emulated clock, and prints the guest's UART0 console on
+stdout. [Chips](#chips) says what esp32sim models on each of them. With `--board`, it connects to a
 peer, the harness or any program that speaks [the link protocol](../protocol.md), and wires the
 chip's pins to it: the peer sees what the guest sends on its UARTs and the levels it drives on
 the pins the peer watches, and sends bytes and levels back. With `--sd-spi`, an SD card slot sits
@@ -37,19 +38,34 @@ runner/target/release/esp32tl-runner --chip esp32 \
   --max-seconds 5
 ```
 
+The same image built for the ESP32-S3 (`firmware/build.sh --chips hello_world@esp32s3`) has its
+bootloader at 0x0, as on every chip but the classic ESP32 and the S2:
+
+```sh
+B=firmware/hello_world/build-esp32s3
+runner/target/release/esp32tl-runner --chip esp32s3 \
+  --rom .cache/esp-rom-elfs/20241011/esp32s3_rev0_rom.elf \
+  --flash-at 0x0=$B/bootloader/bootloader.bin \
+  --flash-at 0x8000=$B/partition_table/partition-table.bin \
+  --flash-at 0x10000=$B/hello_world.bin \
+  --max-seconds 5
+```
+
 `esp32tl-runner --help` (or `-h`) prints the usage on stderr and exits 0:
 
 ```text
-usage: esp32tl-runner --chip esp32 --flash-at OFFSET=FILE... --max-seconds S [options]
+usage: esp32tl-runner --chip CHIP --flash-at OFFSET=FILE... --max-seconds S [options]
 
-  --chip esp32          the chip; only the classic ESP32 for now
+  --chip CHIP           the chip: esp32 (the classic ESP32), esp32s3, esp32c3 or
+                        esp32c6
   --flash-at OFFSET=FILE   write FILE into flash at OFFSET (hex, 0x optional); repeatable
   --max-seconds S       stop after S emulated seconds: the normal end of a run
   --rom F               the mask ROM ELF; default, as esp32sim's: $ESP32SIM_ROM_DIR,
                         then ~/.espressif/tools/esp-rom-elfs/*/ (newest release first,
                         not the pinned 20241011: whoever runs the tests passes --rom)
   --flash-mb N          flash size in MiB: 1, 2, 4, 8 or 16 (default 4)
-  --psram-mb N          PSRAM size in MiB, 0 or 4 (default 0)
+  --psram-mb N          PSRAM size in MiB (default 0): 0 or 4 on the classic ESP32,
+                        0, 2, 4 or 8 on the ESP32-S3, 0 on the ESP32-C3 and ESP32-C6
   --board socket:PATH   connect to the peer on the Unix socket PATH (docs/protocol.md);
   --board tcp:HOST:PORT   or over TCP. Without --board the chip has nothing on its pins
   --peer-timeout S      how long, in wall seconds, a turn of the peer may take before the
@@ -64,6 +80,8 @@ usage: esp32tl-runner --chip esp32 --flash-at OFFSET=FILE... --max-seconds S [op
   --wifi ssid=…,psk=…,chan=…,bssid=…   esp32sim's virtual access point, every key
                         optional; the network behind it is the peer's, over the
                         socket (eth_tx, eth_rx): needs --board
+  --wifi-sta ssid=…[,psk=…][,mac=…]   a virtual station joining the guest's
+                        access point; needs --board; exclusive with --wifi and --wifi-nearby
   --wifi-nearby ssid=…,chan=…,rssi=…,secure=0|1,bssid=…   a network around the
                         station that a scan lists and nothing can join; repeatable,
                         needs --wifi
@@ -78,17 +96,17 @@ usage: esp32tl-runner --chip esp32 --flash-at OFFSET=FILE... --max-seconds S [op
 
 | Flag | Default | Accepts |
 |---|---|---|
-| `--chip` | none, required | `esp32`, in any case |
+| `--chip` | none, required | `esp32`, `esp32s3`, `esp32c3` or `esp32c6`, in any case: `--chip esp32p4: not one of esp32, esp32s3, esp32c3, esp32c6` otherwise |
 | `--flash-at OFFSET=FILE` | none, at least one required | `OFFSET` in hex, with or without a lowercase `0x`; `FILE` is everything after the first `=`. Repeatable; files are written in the order given |
 | `--max-seconds S` | none, required | a finite number above 0; fractions are fine |
 | `--rom F` | the lookup below | a path to the mask ROM ELF |
 | `--flash-mb N` | `4` | `1`, `2`, `4`, `8` or `16` |
-| `--psram-mb N` | `0` | `0` or `4` |
+| `--psram-mb N` | `0` | `0`, or a size the chip takes: `4` on the classic ESP32; `2`, `4` or `8` on the ESP32-S3; none on the ESP32-C3 and ESP32-C6. Otherwise `--psram-mb: the ESP32-S3 supports only 0, 2, 4 or 8 MiB, got "3"`, naming the chip |
 | `--board` | none: nothing on the chip's pins | `socket:PATH`, a Unix socket path that is not empty, or `tcp:HOST:PORT`, with a host that is not empty and a port from 0 to 65535 (`tcp:[::1]:7000` for IPv6) |
 | `--peer-timeout S` | `60` | `0`, to wait for ever, or a positive number of seconds; fractions are fine. A value that rounds to 0 ns, or is too large for a Rust `Duration` (`1e20`), is a usage error |
 | `--console` | `stdout` | `stdout`; `socket` and `both` only with `--board` |
 | `--sd-rw IMAGE` | none: an empty slot | a path, valid UTF-8, to an image file of a whole number of 512 KiB units, from 512 KiB to 2 TiB; only with `--sd-spi` |
-| `--sd-spi sclk=N,mosi=N,miso=N,cs=N` | none: no slot | the four pins in any order, each once, four different GPIOs of the ESP32 (0 to 39 but 24 and 28 to 31); `sclk`, `mosi` and `cs` not input-only (34 to 39) |
+| `--sd-spi sclk=N,mosi=N,miso=N,cs=N` | none: no slot | the four pins in any order, each once, four different GPIOs of the chip ([Chips](#chips)); `sclk`, `mosi` and `cs` not input-only (34 to 39 on the classic ESP32) |
 | `--wifi SPEC` | none: no access point | esp32sim's `key=value,...`, every key optional, an empty `SPEC` included: `ssid` (default `esp32sim`), `psk` (also `password` or `pass`; WPA2-PSK with it, open without), `chan` (also `channel` or `ch`; 1 to 14, default 6), `bssid` (default `02:53:49:4d:00:01`). `epoch` is refused. Only with `--board` |
 | `--wifi-nearby SPEC` | none | esp32sim's `key=value,...`: `ssid` (1 to 32 bytes, required), `chan` (1 to 14, default 1), `rssi` in dBm (-128 to 127, default -60), `secure` (`0` or `1`, also `false`/`true` or `no`/`yes`; default `1`), `bssid` (default: one derived from the SSID, the same every run). Repeatable, at most 32, each on a BSSID of its own and not the access point's SSID or BSSID. Only with `--wifi` |
 | `--realtime` | off: the guest runs as fast as it can | Paces the run to wall time. Only with `--board`: `--realtime paces a run for the peer's real device: it needs --board` |
@@ -101,7 +119,7 @@ take their value as the next argument: `--flash-mb=8` is an unknown argument.
 
 ### Where the ROM comes from
 
-Without `--rom`, the runner looks for `esp32_rev300_rom.elf` in `$ESP32SIM_ROM_DIR`, then in
+Without `--rom`, the runner looks for the chip's ROM ELF ([Chips](#chips)) in `$ESP32SIM_ROM_DIR`, then in
 `~/.espressif/tools/esp-rom-elfs/*/`, the last directory in name order first, which for the dated
 release directories is the newest. That is esp32sim's own lookup. It does not prefer release
 `20241011`, the one the project pins and `make setup` puts in `.cache/esp-rom-elfs/20241011/`, and
@@ -451,6 +469,42 @@ whenever the test is not waiting, and at teardown answers that turn with `stop`.
 held turn then, or still running 5 s later, gets one `SIGTERM` once it has said hello, then
 `SIGKILL` 5 s after that ([esp32sim backend](esp32sim-backend-user.md#how-the-run-ends)).
 
+## Chips
+
+`--chip` selects one of esp32sim's machines. Everything above works on each of them, except what
+the last column lists: esp32sim does not model it on that chip. Where a flag asks for it
+(`--wifi-sta`, a PSRAM size), the runner refuses the flag with a usage error (exit 2); deep sleep
+and DMA are the guest's to use, and no flag asks for them. [Issue #229](https://github.com/mateuszsikora/esp32-testing-library/issues/229)
+tracks each gap.
+
+| `--chip` | esp32sim's machine | Bus clock | GPIOs | UARTs | ROM ELF | Not modelled |
+|---|---|---|---|---|---|---|
+| `esp32` | `esp32` (two LX6 cores) | 240 MHz | 0 to 39 but 24 and 28 to 31; 34 to 39 input only | 3 | `esp32_rev300_rom.elf` | |
+| `esp32s3` | `esp32s3` (two LX7 cores) | 240 MHz | 0 to 21 and 26 to 48 | 3 | `esp32s3_rev0_rom.elf` | deep sleep and its timer wake; GP-SPI RX DMA, so an SD card over ESP-IDF's SPI driver; `--wifi-sta` |
+| `esp32c3` | `esp32c3` (one RISC-V core) | 160 MHz | 0 to 21 | 2 | `esp32c3_rev3_rom.elf` | as the S3, and PSRAM |
+| `esp32c6` | `esp32c6` (one RISC-V core) | 160 MHz | 0 to 30 | 2 | `esp32c6_rev0_rom.elf` | as the C3; `--bt` needs an image built with ESP-IDF v5.5.x, which esp32sim checks |
+
+- **The SD card.** `--sd-spi` and `--sd-rw` are taken on every chip: the card answers the SPI
+  transactions the CPU drives through the data buffer, as the first commands of ESP-IDF's `sdspi`
+  example reached it on the S3 (`SD card: 2 commands`). What a transaction receives through RX
+  DMA never reaches memory, and ESP-IDF's SD SPI driver reads through DMA, so its card
+  initialisation times out (`sdmmc_card_init failed (0x107)`). A driver that moves every byte
+  through the CPU would reach the card; none is tested here. The esp32sim backend skips a test's
+  `sd_card` on these chips ([esp32sim backend](esp32sim-backend-user.md#chips-other-than-the-classic-esp32)).
+- **Deep sleep.** On the S3, C3 and C6, `esp_deep_sleep_start()` puts the guest to sleep and
+  nothing wakes it: the run goes on to its end without another boot.
+- **The console's input.** esp32sim starts every chip with its IO_MUX zeroed, which leaves U0RXD
+  without its input; the runner sets the pad's reset state at power-on and after every reset
+  (GPIO 3 on the classic ESP32, 44 on the S3, 20 on the C3, 17 on the C6), and what the firmware
+  writes there afterwards stays.
+- **Reset causes** are the chip's numbers, as its ROM prints them: 1 is a power-on reset, 5 a
+  wake from deep sleep, 12 a software CPU reset (`esp_restart()`), on all four chips.
+- **The flash dump with `--bt` on the C6** holds esp32sim's trampoline over
+  `esp_bt_controller_init`, which the other chips' dumps do not: esp32sim keeps the C6's copy of
+  the code under it to itself.
+- The ESP32-P4 and the ESP32-S31, which esp32sim also emulates, are not here yet:
+  [issue #233](https://github.com/mateuszsikora/esp32-testing-library/issues/233).
+
 ## See also
 
 - [runner-technical.md](runner-technical.md): how it works, every message, the pins and profiles.
@@ -476,7 +530,9 @@ and `stats.wifi` use the existing relay; `wifi_ap` is a protocol error because t
 AP to switch. Identical DHCP requests held before association occupy one pending queue entry;
 once handed to esp32sim, subsequent retries are separate requests.
 
-Only classic ESP32, open and WPA2-PSK are supported. There are no keep-alive frames, explicit
+Only the classic ESP32 has the virtual station: on the other chips `--wifi-sta` is a usage error,
+`--wifi-sta: esp32s3 has no virtual station for a SoftAP in esp32sim`. Open and WPA2-PSK are
+supported. There are no keep-alive frames, explicit
 leave/rejoin controls, hidden SSID probes, WPA3-SAE or required PMF; these wait on upstream support.
 The device may drop an idle station after about 300 s and esp32sim rejoins. DHCP and lease expiry
 belong to the harness, not the runner. esp32sim's `[emu] wifi-sta:` diagnostic remains in stderr,

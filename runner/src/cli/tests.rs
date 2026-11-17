@@ -12,6 +12,7 @@ fn minimal_command_line() {
     assert_eq!(
         opts,
         Opts {
+            chip: &crate::chip::esp32::PROFILE,
             rom: None,
             flash_at: vec![(0x1000, "b.bin".into())],
             flash_mb: 4,
@@ -134,7 +135,7 @@ fn sd_card_usage_errors() {
         ),
         (
             "--sd-rw c --sd-spi sclk=24,mosi=15,miso=2,cs=13",
-            "--sd-spi sclk=24,mosi=15,miso=2,cs=13: \"24\" is not a GPIO of the ESP32",
+            "--sd-spi sclk=24,mosi=15,miso=2,cs=13: \"24\" is not a GPIO of the classic ESP32",
         ),
         (
             "--sd-rw c --sd-spi sclk=14,mosi=15,miso=2,cs=36",
@@ -336,4 +337,94 @@ fn wifi_station_parses_and_refuses_conflicting_modes() {
         let err = parse_str(&format!("{MINIMAL} {args}")).unwrap_err();
         assert!(format!("{err:?}").contains(why), "{err:?}");
     }
+}
+
+#[test]
+fn every_chip_esp32sim_models_is_taken_in_any_case() {
+    for (name, chip) in [
+        ("esp32", &crate::chip::esp32::PROFILE),
+        ("ESP32S3", &crate::chip::esp32s3::PROFILE),
+        ("esp32c3", &crate::chip::esp32c3::PROFILE),
+        ("Esp32C6", &crate::chip::esp32c6::PROFILE),
+    ] {
+        let opts = parse_str(&format!(
+            "--chip {name} --flash-at 0x0=b.bin --max-seconds 3"
+        ))
+        .unwrap();
+        assert_eq!(opts.chip, chip);
+    }
+}
+
+#[test]
+fn a_chip_the_runner_does_not_emulate_is_named_with_those_it_does() {
+    assert_eq!(
+        parse_str("--chip ESP32P4 --flash-at 0x0=b.bin --max-seconds 3"),
+        Err(Error::Usage(
+            "--chip esp32p4: not one of esp32, esp32s3, esp32c3, esp32c6".into()
+        ))
+    );
+    assert_eq!(
+        parse_str("--flash-at 0x0=b.bin --max-seconds 3"),
+        Err(Error::Usage(
+            "--chip is required (esp32, esp32s3, esp32c3, esp32c6)".into()
+        ))
+    );
+}
+
+#[test]
+fn what_esp32sim_lacks_on_a_chip_is_a_usage_error() {
+    let base = "--flash-at 0x0=b.bin --max-seconds 3 --board socket:/tmp/l";
+    for (args, message) in [
+        (
+            "--chip esp32s3 --psram-mb 3",
+            "--psram-mb: the ESP32-S3 supports only 0, 2, 4 or 8 MiB, got \"3\"",
+        ),
+        (
+            "--chip esp32c3 --psram-mb 2",
+            "--psram-mb: the ESP32-C3 supports only 0 MiB, got \"2\"",
+        ),
+        (
+            "--chip esp32 --psram-mb 2",
+            "--psram-mb: the classic ESP32 supports only 0 or 4 MiB, got \"2\"",
+        ),
+        (
+            "--chip esp32c6 --wifi-sta ssid=ap",
+            "--wifi-sta: esp32c6 has no virtual station for a SoftAP in esp32sim",
+        ),
+    ] {
+        assert_eq!(
+            parse_str(&format!("{args} {base}")),
+            Err(Error::Usage(message.into())),
+            "{args}"
+        );
+    }
+    let opts = parse_str(&format!(
+        "--chip esp32s3 --psram-mb 8 --wifi ssid=ap --bt a.elf {base}"
+    ))
+    .unwrap();
+    assert_eq!((opts.chip.name, opts.psram_mb), ("esp32s3", 8));
+}
+
+#[test]
+fn the_sd_card_s_pins_are_the_chip_s() {
+    let line = |chip: &str, pins: &str| {
+        parse_str(&format!(
+            "--chip {chip} --flash-at 0x0=b.bin --max-seconds 3 --sd-spi {pins}"
+        ))
+    };
+    // GPIO 34 drives on the S3; the classic ESP32 has it input only
+    let opts = line("esp32s3", "sclk=34,mosi=4,miso=5,cs=8").unwrap();
+    assert_eq!(opts.sd_card.unwrap().1.sclk, 34);
+    assert_eq!(
+        line("esp32", "sclk=34,mosi=4,miso=5,cs=8"),
+        Err(Error::Usage(
+            "--sd-spi sclk=34,mosi=4,miso=5,cs=8: GPIO 34 is input only".into()
+        ))
+    );
+    assert_eq!(
+        line("esp32c3", "sclk=22,mosi=4,miso=5,cs=8"),
+        Err(Error::Usage(
+            "--sd-spi sclk=22,mosi=4,miso=5,cs=8: \"22\" is not a GPIO of the ESP32-C3".into()
+        ))
+    );
 }

@@ -66,9 +66,12 @@ ns     = floor(cycles × 10⁹ / CPU_HZ)      runner → harness
 cycles = ceil(ns × CPU_HZ / 10⁹)           harness → runner
 ```
 
-`CPU_HZ` is `esp32::periph::CPU_HZ` (`esp32/src/periph.rs:18`), 240 000 000 on the classic chip,
-the same constant `Machine::seconds` divides by (`esp-soc/src/machine.rs:169`). There the
-fraction reduces to `ns = floor(cycles × 25 / 6)` and `cycles = ceil(ns × 6 / 25)`.
+`CPU_HZ` is the chip's `Soc::CPU_HZ`, the same constant `Machine::seconds` divides by
+(`esp-soc/src/machine.rs:169`): 240 000 000 on the classic chip (`esp32::periph::CPU_HZ`,
+`esp32/src/periph.rs:18`) and on the ESP32-S3 (`esp32s3/src/periph.rs:50`), 160 000 000 on the
+ESP32-C3 and the ESP32-C6 (`esp32c3/src/periph.rs:13`, `esp32c6/src/periph.rs:16`). At 240 MHz
+the fraction reduces to `ns = floor(cycles × 25 / 6)` and `cycles = ceil(ns × 6 / 25)`; at
+160 MHz to `ns = floor(cycles × 25 / 4)` and `cycles = ceil(ns × 4 / 25)`.
 Implementations compute in 128-bit integers or with the reduced fraction: `cycles × 10⁹`
 overflows 64 bits after 76 emulated seconds.
 
@@ -215,8 +218,9 @@ is one counter over all seven, starting at 1 and growing by 1. `sync`, `console`
 The first line is the runner's, the second the harness's.
 
 - `version`: 2. Both sides require equality; there is no negotiation.
-- `chip`: `esp32`, the classic chip, the only one for now. The harness sends the chip of its board
-  profile and the runner refuses another.
+- `chip`: the chip the runner runs, its `--chip`: `esp32` (the classic chip), `esp32s3`,
+  `esp32c3` or `esp32c6`. The harness sends the chip of its board profile and the runner refuses
+  another.
 - `clock`: what the times of `uart_tx` mean, in the vocabulary of the recording header (plan 4.3).
   `emulated-fifo-write`: emulated time, and a transmitted byte is stamped when the guest writes
   the UART FIFO, not when it would leave the wire (`esp32/src/bus.rs:319-322`). `wall`: the same
@@ -231,10 +235,13 @@ The first line is the runner's, the second the harness's.
   for routes with a watched TX pin, `uart_cfg` for routes with a watched TX or RX pin (a
   receive-only peer learns its baud from it), `gpio_out` for watched pins. Inputs (`uart_rx`,
   `gpio_in`, `release`, `adc`) on a pin outside `watch` are a protocol error: the socket's board is
-  wired to those pins only. The console watches UART0 RX (GPIO 3), but not TX (GPIO 1), so console
-  output costs no turns; it has its own `console` message. An empty or absent `watch` makes the socket a
-  board with nothing on it. Every pin in `watch` must be one the classic chip has, GPIO 0 to 39
-  but 24 and 28 to 31, as the board profiles count them (`esp32tl/boards`). esp32sim's
+  wired to those pins only. The console watches UART0 RX (GPIO 3 on the classic chip, 44 on the
+  S3, 20 on the C3, 17 on the C6), but not TX, so console output costs no turns; it has its own
+  `console` message. An empty or absent `watch` makes the socket a
+  board with nothing on it. Every pin in `watch` must be one the chip has, as the board profiles
+  count them (`esp32tl/boards`): on the S3 GPIO 0 to 21 and 26 to 48, on the C3 0 to 21, on the
+  C6 0 to 30, which are esp32sim's own pin tables (`esp-soc/src/pins.rs`); on the classic chip
+  GPIO 0 to 39 but 24 and 28 to 31. esp32sim's
   `gpio_state` also leaves out GPIO 20, which only some packages bond (`esp32/src/soc.rs:212`),
   but takes a level on it, so it counts. Any other pin is a protocol error at the handshake: on
   40 and above esp32sim would drop a level without a word (`esp32/src/periph.rs:386-389`).

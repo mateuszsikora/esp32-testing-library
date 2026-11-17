@@ -201,7 +201,8 @@ from pytest-embedded propagate with their original messages.
 | `{nodeid}: the app_recording marker takes one path, as in @pytest.mark.app_recording("hello-console.jsonl")` | Wrong arguments; collection error 2 |
 | `serial: {build} holds no ESP-IDF or PlatformIO build: no flasher_args.json and no firmware.bin` | Missing build metadata |
 | `serial: {build} …` from a PlatformIO build | The PlatformIO checks of [builds](builds-technical.md#failure-modes): files, images, table, chip and flash encryption |
-| `serial: {build} is built for {target}; serial runs the classic esp32` | Non-classic target |
+| `serial: {build} is built for {target}; the board's chip is esp32: build for esp32 or choose a board profile with that chip` | Non-classic target |
+| `serial: the board profile {name} carries an {title}; the serial backend runs the classic ESP32 only` | A profile whose `chip` is not `esp32`; `serial_artifact` in `esp32tl/pytest_plugin.py` fails the test before the port is checked or the build loaded |
 | `serial: {build} asks for flash encryption, which serial does not support` | Encryption outside the supported workflow |
 | `serial: {build} is not a finished build, missing {files}` | Missing files listed for flashing |
 | `serial: {build}/flasher_args.json names no app image` | No `app.file` entry |

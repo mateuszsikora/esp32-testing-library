@@ -1,21 +1,24 @@
 //! The command line. Flag names and value formats copy esp32sim's, so that switching to
 //! `esp32sim --board socket:PATH` once mikroverk/esp32sim#325 lands is a rename (plan §4.2).
+use crate::chip::Profile;
 use crate::sd_card::Wiring;
 use esp_soc::wifi::{ApConfig, BeaconAp, sta::StaConfig};
 use std::path::PathBuf;
 use std::time::Duration;
 
 pub const USAGE: &str = "\
-usage: esp32tl-runner --chip esp32 --flash-at OFFSET=FILE... --max-seconds S [options]
+usage: esp32tl-runner --chip CHIP --flash-at OFFSET=FILE... --max-seconds S [options]
 
-  --chip esp32          the chip; only the classic ESP32 for now
+  --chip CHIP           the chip: esp32 (the classic ESP32), esp32s3, esp32c3 or
+                        esp32c6
   --flash-at OFFSET=FILE   write FILE into flash at OFFSET (hex, 0x optional); repeatable
   --max-seconds S       stop after S emulated seconds: the normal end of a run
   --rom F               the mask ROM ELF; default, as esp32sim's: $ESP32SIM_ROM_DIR,
                         then ~/.espressif/tools/esp-rom-elfs/*/ (newest release first,
                         not the pinned 20241011: whoever runs the tests passes --rom)
   --flash-mb N          flash size in MiB: 1, 2, 4, 8 or 16 (default 4)
-  --psram-mb N          PSRAM size in MiB, 0 or 4 (default 0)
+  --psram-mb N          PSRAM size in MiB (default 0): 0 or 4 on the classic ESP32,
+                        0, 2, 4 or 8 on the ESP32-S3, 0 on the ESP32-C3 and ESP32-C6
   --board socket:PATH   connect to the peer on the Unix socket PATH (docs/protocol.md);
   --board tcp:HOST:PORT   or over TCP. Without --board the chip has nothing on its pins
   --peer-timeout S      how long, in wall seconds, a turn of the peer may take before the
@@ -74,6 +77,8 @@ pub enum Console {
 
 #[derive(Debug, PartialEq)]
 pub struct Opts {
+    /// `--chip`.
+    pub chip: &'static Profile,
     pub rom: Option<PathBuf>,
     pub flash_at: Vec<(usize, PathBuf)>,
     pub flash_mb: usize,
@@ -141,8 +146,11 @@ fn usage(message: impl Into<String>) -> Error {
 pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Opts, Error> {
     let mut args = args.into_iter();
     let mut chip = None;
+    let mut psram = None;
+    let mut sd_spec: Option<String> = None;
     let mut max_seconds = None;
     let mut opts = Opts {
+        chip: &crate::chip::esp32::PROFILE,
         rom: None,
         flash_at: Vec::new(),
         flash_mb: 4,
@@ -158,7 +166,6 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Opts, Error> {
         bt: None,
     };
     let mut sd_image = None;
-    let mut sd_wiring = None;
     let mut wifi = None;
     let mut station = None;
     let mut nearby = Vec::new();
@@ -190,23 +197,12 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Opts, Error> {
                     Ok(mb @ (1 | 2 | 4 | 8 | 16)) => mb,
                     _ => {
                         return Err(usage(format!(
-                            "--flash-mb: the classic ESP32 takes 1, 2, 4, 8 or 16 MiB, got {v:?}"
+                            "--flash-mb: the flash takes 1, 2, 4, 8 or 16 MiB, got {v:?}"
                         )));
                     }
                 };
             }
-            "--psram-mb" => {
-                let v = value()?;
-                opts.psram_mb = match v.as_str() {
-                    "0" => 0,
-                    "4" => 4,
-                    _ => {
-                        return Err(usage(format!(
-                            "--psram-mb: the classic ESP32 supports only 0 or 4 MiB, got {v:?}"
-                        )));
-                    }
-                };
-            }
+            "--psram-mb" => psram = Some(value()?),
             "--console" => {
                 let v = value()?;
                 opts.console = match v.as_str() {
@@ -237,7 +233,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Opts, Error> {
                 };
             }
             "--sd-rw" => sd_image = Some(PathBuf::from(value()?)),
-            "--sd-spi" => sd_wiring = Some(wiring(&value()?)?),
+            "--sd-spi" => sd_spec = Some(value()?),
             "--wifi" => {
                 let spec = value()?;
                 access_point(&spec)?;
@@ -261,11 +257,23 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Opts, Error> {
             _ => return Err(usage(format!("unknown argument {flag:?}"))),
         }
     }
-    match chip.as_deref() {
-        Some("esp32") => {}
-        Some(c) => return Err(usage(format!("--chip {c}: only esp32 is supported"))),
-        None => return Err(usage("--chip is required (esp32)")),
-    }
+    let names = || {
+        crate::chip::ALL
+            .iter()
+            .map(|p| p.name)
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    opts.chip = match chip.as_deref() {
+        Some(c) => crate::chip::by_name(c).ok_or_else(|| {
+            usage(format!(
+                "--chip {}: not one of {}",
+                c.to_ascii_lowercase(),
+                names()
+            ))
+        })?,
+        None => return Err(usage(format!("--chip is required ({})", names()))),
+    };
     // esp32sim also requires it in practice ("always give one: the run returns"); here the end
     // of the run is what a test waits for.
     opts.max_seconds = max_seconds.ok_or_else(|| usage("--max-seconds is required"))?;
@@ -274,6 +282,10 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Opts, Error> {
             "nothing to run: give the images with --flash-at OFFSET=FILE",
         ));
     }
+    let sd_wiring = sd_spec
+        .as_deref()
+        .map(|spec| wiring(spec, opts.chip))
+        .transpose()?;
     opts.sd_card = match (sd_image, sd_wiring) {
         (image, Some(wiring)) => Some((image, wiring)),
         (None, None) => None,
@@ -341,7 +353,56 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Opts, Error> {
             "--console socket and both send the console to the peer: they need --board",
         ));
     }
+    if let Some(v) = psram {
+        let sizes = opts.chip.psram_mb;
+        opts.psram_mb = match v.parse::<usize>() {
+            Ok(mb) if mb == 0 || sizes.contains(&mb) => mb,
+            _ => {
+                let mut all: Vec<String> = sizes.iter().map(|mb| mb.to_string()).collect();
+                all.insert(0, "0".into());
+                let last = all.pop().expect("0 is there");
+                let list = if all.is_empty() {
+                    last
+                } else {
+                    format!("{} or {last}", all.join(", "))
+                };
+                return Err(usage(format!(
+                    "--psram-mb: {} supports only {list} MiB, got {v:?}",
+                    opts.chip.title
+                )));
+            }
+        };
+    }
+    unsupported(&opts)?;
     Ok(opts)
+}
+
+/// What the command line asks of the chip that esp32sim does not model on it. Every chip of
+/// `chip::ALL` has `--wifi` and `--bt` today; the checks are there for the chips of #233, whose
+/// esp32sim models have neither.
+fn unsupported(opts: &Opts) -> Result<(), Error> {
+    let chip = opts.chip;
+    let asked = [
+        (
+            "--wifi",
+            matches!(opts.wifi, Some(Wifi::AccessPoint { .. })) && !chip.wifi,
+            "has no Wi-Fi in esp32sim",
+        ),
+        (
+            "--wifi-sta",
+            matches!(opts.wifi, Some(Wifi::Station { .. })) && !chip.wifi_station,
+            "has no virtual station for a SoftAP in esp32sim",
+        ),
+        (
+            "--bt",
+            opts.bt.is_some() && !chip.bt,
+            "has no VHCI hooks in esp32sim",
+        ),
+    ];
+    match asked.into_iter().find(|(_, refused, _)| *refused) {
+        Some((flag, _, why)) => Err(usage(format!("{flag}: {} {why}", chip.name))),
+        None => Ok(()),
+    }
 }
 
 /// `--wifi`'s spec, as esp32sim reads it, without `epoch`: the network behind the access point is
@@ -379,9 +440,9 @@ fn board(spec: &str) -> Result<Board, Error> {
     }
 }
 
-/// `sclk=N,mosi=N,miso=N,cs=N`, in any order: four distinct GPIOs of the classic chip, those the
-/// chip drives (all but MISO) not input-only.
-fn wiring(spec: &str) -> Result<Wiring, Error> {
+/// `sclk=N,mosi=N,miso=N,cs=N`, in any order: four distinct GPIOs of `chip`, those the chip
+/// drives (all but MISO) not input-only.
+fn wiring(spec: &str, chip: &Profile) -> Result<Wiring, Error> {
     let bad = |why: String| usage(format!("--sd-spi {spec}: {why}"));
     let mut pins: [Option<u8>; 4] = [None; 4];
     for part in spec.split(',') {
@@ -395,9 +456,9 @@ fn wiring(spec: &str) -> Result<Wiring, Error> {
         let pin = pin
             .parse::<u8>()
             .ok()
-            .filter(|&p| p < 40 && !matches!(p, 24 | 28..=31))
-            .ok_or_else(|| bad(format!("{pin:?} is not a GPIO of the ESP32")))?;
-        if name != "miso" && pin >= 34 {
+            .filter(|&p| p < 64 && chip.gpios & 1 << p != 0)
+            .ok_or_else(|| bad(format!("{pin:?} is not a GPIO of {}", chip.title)))?;
+        if name != "miso" && chip.input_only & 1 << pin != 0 {
             return Err(bad(format!("GPIO {pin} is input only")));
         }
         if pins[at].replace(pin).is_some() {

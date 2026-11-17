@@ -14,10 +14,21 @@ with the reason.
 | `esp32-devkitc` | `esp32` | 4 MB, none | `console`; `uart.gnss`: UART1, TX GPIO 4, RX GPIO 5, 9600 baud; `sd_card`: SCLK GPIO 14, MOSI GPIO 15, MISO GPIO 2, CS GPIO 13 |
 | `gps-alarm-clock` | `esp32` | 4 MB, none | `console`; `uart.gnss`: UART1, TX GPIO4, RX GPIO5, 9600 baud; `lines.alarm`: buzzer GPIO18 |
 | `sd-data-logger` | `esp32` | 4 MB, none | `console`; `uart.gnss`: UART1, TX GPIO4, RX GPIO5, 9600 baud; `sd_card`: SCLK GPIO14, MOSI GPIO15, MISO GPIO2, CS GPIO13; `lines.logger`: error GPIO18 |
+| `esp32-s3-devkitc` | `esp32s3` (ESP32-S3-DevKitC-1-N8R8) | 8 MB, 8 MB | `console` (UART0, GPIO 43 and 44); `uart.gnss`: UART1, TX GPIO 4, RX GPIO 5, 9600 baud; `lines.echo`: in GPIO 6 (pulled down), out GPIO 7 |
+| `esp32-c3-devkitm` | `esp32c3` (ESP32-C3-DevKitM-1) | 4 MB, none | `console` (UART0, GPIO 21 and 20); `uart.gnss`: UART1, TX GPIO 4, RX GPIO 5, 9600 baud; `lines.echo`: in GPIO 6 (pulled down), out GPIO 7 |
+| `esp32-c6-devkitc` | `esp32c6` (ESP32-C6-DevKitC-1) | 8 MB, none | `console` (UART0, GPIO 16 and 17); `uart.gnss`: UART1, TX GPIO 4, RX GPIO 5, 9600 baud; `lines.echo`: in GPIO 6 (pulled down), out GPIO 7 |
 | `lilygo-t-a7670g-r2` | `esp32` (ESP32-WROVER-E) | 4 MB, 4 MB | `console`; `uart.modem`: UART1, TX GPIO 26, RX GPIO 27, 115200 baud; `uart.gnss`: UART2, TX GPIO 21, RX GPIO 22, 9600 baud; `sd_card`: SCLK GPIO 14, MOSI GPIO 15, MISO GPIO 2, CS GPIO 13; `lines.modem`, `lines.gnss`, `lines.board` ([control lines](#lilygo-control-lines-and-simulation-limits)) |
 
+The three devkits of the ESP32-S3, ESP32-C3 and ESP32-C6 carry the validation images built for
+their chip. Their `flash_mb` is the module's, 8 MB on the S3's and the C6's, but the esp32sim
+backend's flash is 4 MB whatever a profile says, so an image whose partition table reaches past
+`0x400000` does not boot on them there ([validation firmware](validation-firmware-user.md)). On these chips esp32sim does not
+model everything it does on the classic ESP32: a test that asks for an SD card or a virtual
+station there is skipped with the reason
+([esp32sim backend](esp32sim-backend-user.md#chips-other-than-the-classic-esp32)).
+
 Every profile also has `wifi`, the chip's Wi-Fi station, and `bluetooth`, its Bluetooth
-controller: every classic ESP32 has both radios, so a profile does not list them, and they come
+controller: every chip a profile may name has both radios, so a profile does not list them, and they come
 last in a profile's interfaces, in that order
 ([the wifi fixture](pytest-plugin-user.md#the-wifi-fixture),
 [`board.bluetooth`](pytest-plugin-user.md#the-bt-fixture)).

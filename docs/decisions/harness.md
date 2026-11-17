@@ -243,8 +243,8 @@ The backend runs `runner/target/release/esp32tl-runner` and passes
 `RUNNER_PROFILE=dev` build. The backend always passes `--rom`, because the runner's own lookup
 prefers the newest release under `~/.espressif`
 ([runner.md](runner.md#the-runner-looks-for-the-rom-the-way-esp32sim-does)).
-`test_rom_is_the_one_make_setup_fetches` checks that `ROM_RELEASE` and `ROM_ELF` match
-`scripts/fetch-rom-elf`.
+`test_rom_is_the_one_make_setup_fetches` checks that `ROM_RELEASE`, and since the other chips'
+ROMs every ELF and SHA-256 of `runtime.ROMS`, match `scripts/fetch-rom-elf`.
 
 **Rejected:** new command-line options for the two paths, so that `--esp32tl-backend` stays the
 plugin's only flag.
@@ -3956,3 +3956,64 @@ reopen between polls. Reliable transition conditions need a separate retained li
 this change observes the existing byte history only. Tests can wait for closure before initiating
 reconnection, or wait for a new device write after reset. Add transition history when a consumer
 needs to prove both transitions occurred without an intermediate wait.
+
+## A board profile's chip decides its pads, UARTs and console pins
+
+Status: decided (#236)
+
+`esp32tl/boards` keeps one `Chip` per chip a profile may name, `esp32`, `esp32s3`, `esp32c3` and
+`esp32c6`: the GPIO pads, the input-only ones, the number of UARTs and UART0's pins, which the
+`console` takes on every board. A profile's routes, lines and slot are checked against its chip's
+`Chip`, and the esp32sim backend's console wire is on the chip's U0RXD. esp32tl ships one devkit
+profile per chip, `esp32-s3-devkitc` (N8R8: 8 MB flash, 8 MB PSRAM), `esp32-c3-devkitm` and
+`esp32-c6-devkitc`, with the same `[uart.gnss]` as `esp32-devkitc` and a `[lines.echo]` set for
+`gpio_echo`.
+
+**Rejected:** listing the pads in each profile, because every profile of a chip would repeat
+them and a typo would make a board with pads the chip does not have; leaving the console's pins
+at GPIO 1 and 3, which on the S3 are ordinary pads a route may take while the console is on 43
+and 44.
+
+## esp32sim's gaps on a chip skip the test that asks for them
+
+Status: decided (#236)
+
+The esp32sim backend's `CHIP_GAPS` names, per chip, what esp32sim does not model there, by the
+`Request` a test makes: `sd_card` (no GP-SPI RX DMA on the S3, C3 and C6, which ESP-IDF's SD SPI
+driver needs) and `wifi.station` (no virtual station). `Wifi.station` asks with
+`Request("wifi", source="model", role="station")` so that it is told apart from the access
+point. A match skips the test with the reason and the entry of
+[#229](https://github.com/mateuszsikora/esp32-testing-library/issues/229) that tracks it,
+as a backend skips what it does not declare.
+
+**Rejected:** a chip dimension in `capabilities.toml`, because the declaration says what a
+backend can put at the far end of an interface, the same for every chip, and the gaps are
+esp32sim's, with an end date when the pin moves; letting the run fail, because the runner would
+refuse `--wifi-sta` with exit 2 and an SD card test would time out in the firmware's driver, both
+reading as a broken test rather than as a model esp32sim lacks.
+
+**Not yet:** deep sleep on the S3, C3 and C6 cannot be skipped: nothing asks for it before the
+firmware sleeps. `board.wait_for_wake` raises when its time is up.
+
+## Boot reasons keep the classic ESP32's names on every chip
+
+Status: decided (#236)
+
+`Boot.reason` names a reset cause from `RESET_REASONS`, the classic ESP32's table, whatever the
+board's chip. The causes the emulated chips report, 1, 3, 5 and 12, mean the same on the S3, the C3
+and the C6 (power-on, software system reset, wake from deep sleep, software CPU reset); only the
+ROM's names for them differ (`RTC_SW_CPU_RESET` for 12 on the S3).
+
+**Rejected:** a table per chip, because `Boot` would need the profile and the four chips' common
+causes would read differently in reports for the same event.
+
+## The serial backend runs the classic ESP32 only
+
+Status: postponed (#236)
+
+A board profile for another chip is refused on `--esp32tl-backend serial` before the port is
+opened. A real S3, C3 or C6 board would need the chip's bootloader offset and `esptool --chip` in
+the flashing path, and on many devkits a console on USB-Serial/JTAG, which the serial backend's
+`Wire` on UART0 does not read.
+
+**Not yet:** pending a real board of each chip to validate on.

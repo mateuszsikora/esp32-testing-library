@@ -4,7 +4,8 @@ The crate is `runner/`, package `esp32tl-runner`:
 
 | Module | What it does |
 |---|---|
-| `runner/src/main.rs` | setup, the run without a peer, and the start and report of the run with one |
+| `runner/src/main.rs` | setup, the run without a peer, and the start and report of the run with one, generic over the chip |
+| `runner/src/chip.rs`, `runner/src/chip/{esp32,esp32s3,esp32c3,esp32c6}.rs` | the chips of `--chip` ([below](#chips)): each one's `Profile`, its `Target` for the setup and its `Guest` for the run loop |
 | `runner/src/cli.rs` | the command line |
 | `runner/src/socket_board.rs` | `SocketBoard`, the `BoardModel` on the chip's pins with `--board`: it records what the guest does, with its bus cycle, for the run loop, holds the GPIO levels the peer drives for the chip to take, hands SPI transactions to the SD card slot, tells it the bus cycle at every tick, and records what the peer's fault rules did |
 | `runner/src/sd_card.rs` | `SdCard`, an SD card in SPI mode, with the peer's fault rules; `Slot`, the slot of `--sd-spi` and the card in it, which the peer's `sd_card` empties and fills; and `CardBoard`, the board that holds the slot alone without `--board` |
@@ -14,8 +15,8 @@ The crate is `runner/`, package `esp32tl-runner`:
 | `runner/src/transport.rs` | `SocketLink`, the Unix or TCP socket: buffered NDJSON writes, line reads, the signal flag and the time limits |
 
 Each module's unit tests are in a `tests.rs` of its own: `runner/src/tests.rs` for `main.rs`,
-`runner/src/<module>/tests.rs` for the others. It drives esp32sim through two of its crates,
-`esp32` (the classic chip) and `esp-soc` (the machine, `Soc`, `Stop`, `BoardModel`, `SpiPins`,
+`runner/src/<module>/tests.rs` for the others. It drives esp32sim through its chip crates,
+`esp32` (the classic chip), `esp32s3`, `esp32c3` and `esp32c6`, and `esp-soc` (the machine, `Soc`, `Stop`, `BoardModel`, `SpiPins`,
 `UartRoute`, the Wi-Fi access point and station link of `esp_soc::wifi`, the VHCI session and
 `HciController` of `esp_soc::ble`, and the JSON parser
 `esp_soc::json` the protocol module reads with), and takes the
@@ -29,11 +30,15 @@ its pin, `357b0e5`.
 1. **Parse.** `cli::parse` reads the arguments after the program name into `cli::Opts`, or
    returns `cli::Error::Help` (usage on stderr, exit 0) or `cli::Error::Usage` (exit 2 through
    `usage_error`). Flags are read in order; the first bad one is reported. After the loop it
-   checks, in this order, that `--chip` was given and is `esp32`, that `--max-seconds` was given,
+   checks, in this order, that `--chip` was given and names a chip of `chip::ALL`, that
+   `--max-seconds` was given,
    that there is at least one `--flash-at`, that `--sd-rw` comes with `--sd-spi`, that
    `--wifi` comes with `--board` and its `--wifi-nearby` specs parse and differ from the access
    point (`--wifi-nearby` without `--wifi` is refused there too), that `--bt` comes with
-   `--board`, that `--realtime` does, and that `--console socket` or `both` comes with `--board`.
+   `--board`, that `--realtime` does, that `--console socket` or `both` comes with `--board`, that
+   `--psram-mb` is a size of the chip's `Profile::psram_mb` or 0, and last (`unsupported`) that
+   the chip has `--wifi`, `--wifi-sta` and `--bt` when they are given. The pins of `--sd-spi` are
+   checked against the chip's `Profile::gpios` and `Profile::input_only` once the chip is known.
    A `--wifi` spec is checked as the flag is read (`access_point`: esp32sim's `ApConfig::parse`,
    then no `epoch`); `cli::Wifi` keeps the spec as given, since
    `ApConfig` has no `PartialEq`, and `Wifi::access_point` parses it again each time a fresh access
@@ -43,10 +48,14 @@ its pin, `357b0e5`.
    `SdCard::new` checks its size, and the `SD card on` line goes to stderr, else the
    `SD card slot on ...: empty` line. The slot is a `sd_card::Shared` (`Rc<RefCell<Slot>>`),
    which the board, the session (`Options::card`) and `main` hold.
-3. **Set up** (`setup`, which returns the `esp32::Machine` at the reset vector):
-   - `esp32::machine(MAC, flash_size)` with `MAC` = `24:6f:28:00:11:22`, the MAC esp32sim's CLI
-     gives the classic chip (`cli/src/lib.rs`), so a run here and the same run in esp32sim agree.
-     `esp32::machine` also reads esp32sim's debug switches from the environment.
+3. **Set up.** `main` selects the chip's `Profile` (`chip::select`) and calls `go::<T>` with the
+   chip's machine type, `esp32::Machine`, `esp32s3::Machine`, `esp32c3::Machine` or
+   `esp32c6::Machine`; `setup::<T>` returns the machine at the reset vector. The steps below are
+   the classic chip's; [Chips](#chips) says where the others differ.
+   - `Target::new(flash_size)`: `esp32::machine(MAC, flash_size)` with `MAC` =
+     `24:6f:28:00:11:22`, the MAC esp32sim's CLI gives the classic chip (`cli/src/lib.rs`), so a
+     run here and the same run in esp32sim agree. `esp32::machine` also reads esp32sim's debug
+     switches from the environment.
    - `m.bus.set_flash_size(flash_mb << 20)`: the JEDEC capacity the guest reads follows the size,
      as in esp32sim. The CLI allows only powers of two, because the guest reads the capacity as
      one (`esp32/src/soc.rs`, `set_flash_size` stores `trailing_zeros`); any other size would boot
@@ -70,10 +79,11 @@ its pin, `357b0e5`.
    - `m.boot_rom()` (core 0 to the reset vector); `m.console.mask = CONSOLE_UART0` (`2`, bit 1 of
      `Console::mask`: UART0 only to stdout, not USB-CDC or UART1/2), or `0` with
      `--console socket`; and
-     `m.max_cycles = (max_seconds * <esp32::Esp32 as Soc>::CPU_HZ as f64) as u64`. `CPU_HZ` is
-     240 000 000 (`esp32/src/periph.rs`), the fixed reference `bus.cycles()` counts at, so
-     `max_cycles` is emulated time whatever clock the guest switches to.
-4. **Run.** Without `--board`, `run`: the wall clock starts here, after setup. `m.run(u64::MAX)`
+     `m.max_cycles = (max_seconds * opts.chip.cpu_hz as f64) as u64`. `cpu_hz` is the chip's
+     `Soc::CPU_HZ`, 240 000 000 on the classic chip (`esp32/src/periph.rs`), the fixed reference
+     `bus.cycles()` counts at, so `max_cycles` is emulated time whatever clock the guest switches
+     to.
+4. **Run.** Without `--board`, `chip::run_free`: the wall clock starts here, after setup. `m.run(u64::MAX)`
    runs until a `Stop`; `m.drain_console()` then flushes what the guest printed, so it comes out
    before the runner's own line. On `Stop::SwReset` the runner calls `m.reboot()`, prints the
    `chip reset` line with the cause `reboot()` returns, and runs again, from the reset vector as
@@ -98,8 +108,52 @@ entry of `esp-rom-elfs/` must hold `name` as a file, where esp32sim takes any pa
 exists, and `HOME` is read with `var_os`, so it need not be valid UTF-8. The lookup:
 `$ESP32SIM_ROM_DIR/name` if that is a file, as in esp32sim; otherwise every entry of
 `$HOME/.espressif/tools/esp-rom-elfs/`, sorted by path and tried last first, the first one with
-`name` in it as a file. No `HOME`, or no such directory, is no ROM. `name` is
-`<esp32::Esp32 as Soc>::ROM_ELF`, `esp32_rev300_rom.elf`.
+`name` in it as a file. No `HOME`, or no such directory, is no ROM. `name` is the chip's
+`Soc::ROM_ELF`: `esp32_rev300_rom.elf`, `esp32s3_rev0_rom.elf`, `esp32c3_rev3_rom.elf` or
+`esp32c6_rev0_rom.elf`.
+
+## Chips
+
+`chip::Profile` is what the protocol and the run loop need to know of a chip: `name` (`--chip`
+and `chip` in `hello`), `title` (in messages), `cpu_hz`, `gpios` and `input_only` (masks),
+`uarts`, and what esp32sim models on it that a flag asks for (`wifi_station`, `wifi`, `bt`,
+`psram_mb`). Deep sleep is no flag: a chip whose `Guest` does not step through it
+(`sleeps_through`, `false` by default) has it as esp32sim does, which on the S3, C3 and C6 never
+wakes. `chip::ALL` lists the four. One process runs one chip, so `main` selects its profile
+once (`chip::select`, a `OnceLock`) before anything reads it, and `chip::selected()` is the
+classic chip's until then, as in the unit tests: `protocol::ns`, `protocol::cycles` and
+`protocol::hello` read the selected chip's clock and name, and the session checks the peer's
+`hello` and `watch` against it.
+
+`chip::Target` is the setup of a chip's machine, implemented for each esp32sim `Machine` type:
+`new` (the MAC esp32sim's CLI gives the chip, the flash size), `set_psram_size`, `install_board`,
+`attach_wifi`, `forward_bt`, `wifi_report` and `after_reset`; `machine()` reaches the
+`esp_soc::Machine` the chips share (`load_rom`, `write_flash`, `boot_rom`, `run`, `reboot`,
+`console`, `max_cycles`). `Guest`, for the run loop, is implemented for each machine type too.
+`chip::ap_on_air`, `chip::ap_leave` and `chip::flash_without_trampoline` hold what the four chips
+share, and each chip's `Guest` calls them: all four use esp_soc's `StationLink` and, but for the
+C6, esp_soc's VHCI `Ble`, so the classic chip's tests of the access point leaving and of the flash
+dump in `runner/src/session/tests.rs` cover the code the others run.
+
+| | `esp32` | `esp32s3` | `esp32c3` | `esp32c6` |
+|---|---|---|---|---|
+| MAC (`Target::new`) | `24:6f:28:00:11:22` | `44:1b:f6:75:dc:e0` | `60:55:f9:00:11:22` | `dc:1e:d5:6e:8c:dc` |
+| UART type | `ClassicUart` around esp_periph's `Uart` | esp_periph's `Uart` × 3 | `Uart` × 2 | `Uart` × 2 |
+| Wi-Fi link | `periph.wifi.link` | `periph.wifi.link` | `periph.wifi.link` | `periph.wifi_mac.link` |
+| U0RXD's IO_MUX register (`reset_console_rx`) | `0x3ff4_9084` (GPIO 3) | `0x6000_9004 + 4 × 44` | `0x6000_9004 + 4 × 20` | `0x6009_0004 + 4 × 17` |
+| What `power_on_reset` zeroes | DRAM, IRAM, cache RAM, RTC fast and slow | `DRAM_LOW..DRAM_HIGH`, `IRAM_LOW..IRAM_HIGH`, RTC fast and slow (`esp32s3::bus`) | DRAM, IRAM, RTC memory (`esp32c3::bus`) | `SRAM_LOW..SRAM_HIGH`, `LP_SRAM_LOW..LP_SRAM_HIGH` (`esp32c6::bus`) |
+| Its RTC registers after `power_on_reset` | a new `ClassicRtc` | a new `RtcCntl`, keeping the board's analog inputs | the same | a new `LpSys` |
+| Deep sleep stepped through | yes | no: not modelled | no | no |
+| `flash()` without the trampoline | yes | yes | yes | no: `ble.original_flash` is private to esp32sim's C6 crate |
+
+The S3's bus defers device time (`tick_pending`, `flush_ticks`): its `Guest::run_until` calls
+`flush_ticks` after `run`, so that what the run loop reads at a slice boundary (routes, GPIO,
+Ethernet frames) is current, and whatever the run loop hands the peripherals (a byte, a frame, the
+access point) is followed by `refresh_tick_budget`, as esp32sim's own host inputs are
+(`esp32s3/src/soc.rs`, `uart_input`, `gpio_set_input`). The C3's and the C6's buses do not defer.
+On the C3 and the C6, which have two UARTs, `uart_route(2)` is a route without pins or baud
+(`chip::no_uart`), and a byte or a frame error for UART2 is dropped; the run loop's arrays stay
+three wide (`session::PORTS`).
 
 `stop_name` matches every `Stop` variant explicitly, with no catch-all arm, so a variant added
 upstream fails the build instead of being reported under another name.
@@ -289,6 +343,9 @@ for `gpio_drive`, and for `take_gpio_inputs` does what the bus's `deliver_board_
 its tick: `SocBus::gpio_set_input` for each of the board's `take_edges`, then
 `SocBus::gpio_release_input` for each of its `released_inputs`. `idle_until` sets `bus.cycles`
 and runs nothing; `wifi_forget` detaches the access point (`StationLink::attach(None, None)`).
+The S3's, the C3's and the C6's `Guest` do the same on their own peripherals ([Chips](#chips)),
+on esp_periph's `Uart` directly, whose `host_input` and `int_raw` are the ones `ClassicUart`
+wraps.
 
 #### Received bytes
 
@@ -719,7 +776,7 @@ The socket's limits are constants, not options:
 | `transport::TEARDOWN` | 2 s (wall) | how long the last messages of a run may take to write |
 | `protocol::MAX_LINE` | 1 MiB | the longest line from the peer; a longer one is a protocol error |
 | `session::MAX_DATA` | 48 KiB | the most bytes one `uart_tx` or `console` message carries |
-| `session::RX_FIFO` | 128 | the classic RX FIFO's size: a byte that finds it full is lost, and counted as `rxfifo_ovf` |
+| `session::RX_FIFO` | 128 | the RX FIFO's size on all four chips: a byte that finds it full is lost, and counted as `rxfifo_ovf` |
 
 **Wi-Fi** is configured on the command line only: `--wifi` and `--wifi-nearby`
 ([runner-user.md](runner-user.md#put-a-wi-fi-access-point-on-the-air)). The frame limits are
@@ -742,8 +799,8 @@ pinned like the others: its `SdStore` trait and `FileStore`, the store of esp32s
 handlers: std cannot install one. JSON goes through esp-soc's own parser (`esp_soc::json`, which
 its Cooja link uses) and `esp_soc::web::json_escape`, so the crate adds no JSON crate.
 
-**The esp32sim pin.** esp32sim is not on crates.io, so `runner/Cargo.toml` takes `esp32` and
-`esp-soc` (and `emu-core`, for the `Bus` trait whose `tick` runs a deep sleep in long steps and for
+**The esp32sim pin.** esp32sim is not on crates.io, so `runner/Cargo.toml` takes the chip crates
+`esp32`, `esp32s3`, `esp32c3` and `esp32c6`, `esp-soc` (and `emu-core`, for the `Bus` trait whose `tick` runs a deep sleep in long steps and for
 `Stop::CostModelLifecycle` in a test) from
 `https://github.com/mikroverk/esp32sim`, with `esp-periph` for the SD card's image store, each at
 `rev = "357b0e542dfe97d4c62ec4a15c01c4969164448c"`: the merge of mikroverk/esp32sim#362, adding
@@ -792,15 +849,16 @@ Every message starts with `esp32tl-runner: `. Usage errors exit 2 and add a seco
 |---|---|
 | `{flag} needs a value` | a flag that takes a value is the last argument |
 | `unknown argument {flag:?}` | anything not in the usage, `--flash-mb=8` included |
-| `--chip is required (esp32)` | no `--chip` |
-| `--chip {c}: only esp32 is supported` | another chip; `c` is lowercased |
+| `--chip is required (esp32, esp32s3, esp32c3, esp32c6)` | no `--chip` |
+| `--chip {c}: not one of esp32, esp32s3, esp32c3, esp32c6` | another chip; `c` is lowercased |
 | `--max-seconds is required` | no `--max-seconds` |
 | `--max-seconds: expected a positive number of seconds, got {v:?}` | not a number, 0 or less, `inf` or `NaN` |
 | `nothing to run: give the images with --flash-at OFFSET=FILE` | no `--flash-at` |
 | `--flash-at {spec}: expected OFFSET=FILE` | no `=`, or a valid offset with nothing after it (`zz=` gets the next message) |
 | `--flash-at {spec}: bad hex offset {offset:?}` | the offset is not hex after every leading `0x` is trimmed (`0x0x1000` is `0x1000`; `0X` is not trimmed) |
-| `--flash-mb: the classic ESP32 takes 1, 2, 4, 8 or 16 MiB, got {v:?}` | any other value |
-| `--psram-mb: the classic ESP32 supports only 0 or 4 MiB, got {v:?}` | any other value |
+| `--flash-mb: the flash takes 1, 2, 4, 8 or 16 MiB, got {v:?}` | any other value |
+| `--psram-mb: {title} supports only {sizes} MiB, got {v:?}` | a size the chip's `Profile::psram_mb` does not list, nor 0: `the classic ESP32 supports only 0 or 4`, `the ESP32-S3 supports only 0, 2, 4 or 8`, `the ESP32-C3 supports only 0` |
+| `--wifi: {chip} has no Wi-Fi in esp32sim`, `--wifi-sta: {chip} has no virtual station for a SoftAP in esp32sim`, `--bt: {chip} has no VHCI hooks in esp32sim` | the flag on a chip whose `Profile` says esp32sim lacks it; only `--wifi-sta` is refused on the four chips there are |
 | `--console: expected stdout, socket or both, got {v:?}` | any other value |
 | `--console socket and both send the console to the peer: they need --board` | `--console socket` or `both` without `--board` |
 | `--board {spec}: expected socket:PATH or tcp:HOST:PORT` | neither prefix (`--board none`), an empty path, an empty host, or a port that is not a number from 0 to 65535 |
@@ -808,8 +866,8 @@ Every message starts with `esp32tl-runner: `. Usage errors exit 2 and add a seco
 | `--sd-rw needs --sd-spi: the card's pins` | `--sd-rw` without `--sd-spi`; `--sd-spi` alone is an empty slot |
 | `--sd-spi {spec}: expected sclk=N,mosi=N,miso=N,cs=N` | a part without `=`, or one of the four missing |
 | `--sd-spi {spec}: {name:?} is not sclk, mosi, miso or cs` | another name |
-| `--sd-spi {spec}: {pin:?} is not a GPIO of the ESP32` | not a number from 0 to 39, or 24, or 28 to 31 |
-| `--sd-spi {spec}: GPIO {pin} is input only` | `sclk`, `mosi` or `cs` on 34 to 39 |
+| `--sd-spi {spec}: {pin:?} is not a GPIO of {title}` | not a GPIO of the chip's `Profile::gpios` (on the classic ESP32: not 0 to 39, or 24, or 28 to 31) |
+| `--sd-spi {spec}: GPIO {pin} is input only` | `sclk`, `mosi` or `cs` on an input-only pin, 34 to 39 on the classic ESP32 |
 | `--sd-spi {spec}: {name} is given twice` | a name repeated |
 | `--sd-spi {spec}: the four pins must differ` | two names on one GPIO |
 | `--wifi: {error}` | esp32sim's `ApConfig::parse` refuses the spec: `invalid WiFi option '{entry}': expected key=value`, `invalid WiFi channel '{value}': expected 1 through 14`, `unknown WiFi option '{key}'`, or a bad `bssid` |
@@ -850,7 +908,7 @@ peer come from `session.rs` and `transport.rs`:
 | 0 | `stop from the peer` | the peer's turn ended with `stop` |
 | 0 | `signal` | the first `SIGTERM` or `SIGINT` |
 | 1 | `the emulator stopped before --max-seconds: {stop:?}` | any `Stop` but `Halted` and `SwReset` |
-| 3 | `protocol error by the peer at {board}: {what}: {line}` | `{what}` is one of: `version {v}, the runner speaks version 1`, `chip {chip:?}, the runner runs "esp32"`, `watch holds GPIO {pin}, which the esp32 does not have` (any pin but 0 to 39 without 24 and 28 to 31, `session::GPIOS`), `expected hello`, `hello after the handshake`, a parse error of `protocol::parse` (`not JSON: …`, `not a JSON object`, `no "type"`, `unknown type …`, `{type}: "{field}" is missing`, `… is not an integer`, `… is negative`, `… is not a GPIO number`, `uart_rx: bad base64 character …`, and the like), `t {t} is before this turn's sync at {b} (rule 2)`, `GPIO {pin} is not in the peer's watch`, `a baud of 0`, `ack {ack}, but the last event before this sync was seq {seq}`, `quiet_until {q} is not after this turn's sync at {b}`, `adc is not implemented yet`, `eth_rx without --wifi`, `wifi_ap without --wifi` (after the check of `t`), `eth_rx: an Ethernet frame of {n} bytes; one without FCS has 14 to 1518`, `eth_rx: bad base64 character …`, `hci_rx without --bt` (after the check of `t`), `hci_rx: an H4 packet of {n} bytes; esp32sim's VHCI carries 1 to 496`, `wifi_ap: "on" is not true or false`, `sd_card without --sd-spi` (after the check of `t`), `sd_card: "image" is not a string`. `{line}` is the peer's line, cut after 200 characters with `...` |
+| 3 | `protocol error by the peer at {board}: {what}: {line}` | `{what}` is one of: `version {v}, the runner speaks version 1`, `chip {chip:?}, the runner runs {name:?}` (the selected chip's), `watch holds GPIO {pin}, which the {name} does not have` (a pin outside the chip's `Profile::gpios`; on the classic ESP32 any pin but 0 to 39 without 24 and 28 to 31), `expected hello`, `hello after the handshake`, a parse error of `protocol::parse` (`not JSON: …`, `not a JSON object`, `no "type"`, `unknown type …`, `{type}: "{field}" is missing`, `… is not an integer`, `… is negative`, `… is not a GPIO number`, `uart_rx: bad base64 character …`, and the like), `t {t} is before this turn's sync at {b} (rule 2)`, `GPIO {pin} is not in the peer's watch`, `a baud of 0`, `ack {ack}, but the last event before this sync was seq {seq}`, `quiet_until {q} is not after this turn's sync at {b}`, `adc is not implemented yet`, `eth_rx without --wifi`, `wifi_ap without --wifi` (after the check of `t`), `eth_rx: an Ethernet frame of {n} bytes; one without FCS has 14 to 1518`, `eth_rx: bad base64 character …`, `hci_rx without --bt` (after the check of `t`), `hci_rx: an H4 packet of {n} bytes; esp32sim's VHCI carries 1 to 496`, `wifi_ap: "on" is not true or false`, `sd_card without --sd-spi` (after the check of `t`), `sd_card: "image" is not a string`. `{line}` is the peer's line, cut after 200 characters with `...` |
 | 3 | `protocol error by the peer at {board}: a line longer than 1 MiB` or `…: a line that is not UTF-8` | from the socket, without the line |
 | 4 | `the peer at {board} is gone: {why}` | `{why}` is `the peer closed the socket`, `read failed: {error}`, `write failed: {error}`, `the socket accepts no more data`, `the peer's turn took longer than --peer-timeout`, `the peer read nothing for longer than --peer-timeout` or, while the last messages are written, `the peer did not read the last messages in time` |
 
@@ -879,7 +937,20 @@ a guest that programs a byte between two dumps;
 `tests/test_runner_link.py`, against the real binary, which also checks that the file is there once
 `stats` has come, and that a run without `--board` writes it. The rest:
 
-- `runner/src/cli/tests.rs`: `cli::parse` only. `minimal_command_line` checks the defaults
+- `runner/src/chip/tests.rs`: each chip's machine on the emulator itself.
+  `every_chip_is_found_by_its_name_in_any_case` and `the_profiles_say_what_esp32sim_models` check
+  `chip::ALL` and the profiles against esp32sim's own pin tables; for the S3, the C3 and the C6,
+  `the_*_console_receives_on_gpio_*` checks that esp32sim leaves U0RXD without its input and that
+  `after_reset`, `chip_reset` and `power_on_reset` give it back; `on_the_*_a_power_on_reset_clears_*`
+  that a power-on reset zeroes SRAM and the RTC or LP memories, keeps the flash and the clock, and
+  leaves POWERON as the cause; `the_c3_has_no_uart2` and `the_c6_has_no_uart2` that UART2 is a route
+  without pins and takes nothing; `the_s3_has_the_psram_the_board_has` and
+  `the_c3_and_the_c6_have_no_psram` the PSRAM sizes; `*_takes_a_byte_into_its_fifo` that a byte goes
+  into the RX FIFO at once.
+- `runner/src/cli/tests.rs`: `cli::parse` only. `every_chip_esp32sim_models_is_taken_in_any_case`,
+  `a_chip_the_runner_does_not_emulate_is_named_with_those_it_does`,
+  `what_esp32sim_lacks_on_a_chip_is_a_usage_error` and `the_sd_card_s_pins_are_the_chip_s` check
+  `--chip` and what it allows. `minimal_command_line` checks the defaults
   (`rom: None`, flash 4 MiB, PSRAM 0, console `Stdout`, no board, `--peer-timeout` 60 s);
   `flash_at_offsets_are_hex_with_or_without_prefix` checks hex offsets with and without `0x`,
   repeated `--flash-at` in order, a path that contains `=`, `--chip ESP32` in upper case and a

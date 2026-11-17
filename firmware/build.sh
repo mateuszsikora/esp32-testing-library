@@ -3,10 +3,14 @@
 # into $FIRMWARE_OUT/<image>/build/, the layout pytest-embedded's IdfApp reads:
 # flasher_args.json, which the backend turns into the runner's --flash-at
 # offsets, beside the ELF, the binaries and config/sdkconfig.json.
-# FIRMWARE_OUT is firmware/ by default, or examples/ with --examples.
+# FIRMWARE_OUT is firmware/ by default (with --chips too), or examples/ with --examples.
+# With --chips it builds the images of the other chips the runner emulates,
+# each IMAGE@CHIP into $FIRMWARE_OUT/<image>/build-<chip>/, from the same
+# projects, for ESP-IDF target CHIP.
 #
 #   firmware/build.sh [--shard K/N] [IMAGE...]     all validation images when none is named
 #   firmware/build.sh --examples [--shard K/N] [NAME...]     all examples when none is named
+#   firmware/build.sh --chips [--shard K/N] [IMAGE@CHIP...]     all of them when none is named
 #
 # The build runs in ESP-IDF's container, pinned by digest. IDF_LOCAL=1 builds
 # with the ESP-IDF of the calling shell instead (export.sh sourced), for
@@ -29,8 +33,20 @@ set -eu
 IDF_VERSION=v5.3.6
 CONTAINER=espressif/idf:$IDF_VERSION@sha256:cee52f0c4fdaf088992a7a739f5993154e95cf1d3ab61c24f5b40e6d56a3a070
 IMAGES="hello_world console_repl nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request http_server persistence ota_state timer_wake deep_sleep bt_spp_initiator bt_spp_initiator_psram"
+# The images of the other chips: what their tests in tests/test_chips.py run.
+CHIP_IMAGES=
+for chip in esp32s3 esp32c3 esp32c6; do
+	for image in hello_world console_repl gpio_echo nmea_reader nvs_reader http_request; do
+		CHIP_IMAGES="${CHIP_IMAGES:+$CHIP_IMAGES }$image@$chip"
+	done
+done
+CHIP_IMAGES="$CHIP_IMAGES hello_world_psram@esp32s3 gatt_server@esp32s3 gatt_server@esp32c3"
 family=firmware
-if [ "${1:-}" = --examples ]; then
+if [ "${1:-}" = --chips ]; then
+	shift
+	family=chips
+	IMAGES=$CHIP_IMAGES
+elif [ "${1:-}" = --examples ]; then
 	shift
 	family=examples
 	IMAGES=
@@ -56,9 +72,10 @@ project_of() {
 		return
 	fi
 	case $1 in
-	hello_world) echo "$IDF_PATH/examples/get-started/hello_world" ;;
+	hello_world | hello_world_psram) echo "$IDF_PATH/examples/get-started/hello_world" ;;
 	sdspi) echo "$IDF_PATH/examples/storage/sd_card/sdspi" ;;
 	deep_sleep) echo "$IDF_PATH/examples/system/deep_sleep" ;;
+	gatt_server) echo "$IDF_PATH/examples/bluetooth/bluedroid/ble/gatt_server" ;;
 	bt_spp_initiator | bt_spp_initiator_psram)
 		echo "$IDF_PATH/examples/bluetooth/bluedroid/classic_bt/bt_spp_initiator"
 		;;
@@ -148,7 +165,10 @@ else
 fi
 
 # Before changing directory, so that a relative FIRMWARE_OUT is the caller's.
-out=${FIRMWARE_OUT:-$(dirname "$0")/../$family}
+# The images of the other chips go beside the classic chip's, in firmware/.
+tree=firmware
+[ "$family" != examples ] || tree=examples
+out=${FIRMWARE_OUT:-$(dirname "$0")/../$tree}
 mkdir -p "$out"
 out=$(cd "$out" && pwd -P)
 cd "$(dirname "$0")/.."
@@ -157,7 +177,10 @@ cd "$(dirname "$0")/.."
 # ESP32TL_CONTAINER naming its image and ESP32TL_HOST_OUT the host's path of
 # /out, for the messages.
 if [ -z "$container" ]; then
-	[ "$family" != examples ] || set -- --examples "$@"
+	case $family in
+	examples) set -- --examples "$@" ;;
+	chips) set -- --chips "$@" ;;
+	esac
 	# The repository read-only, so a build cannot write into it except
 	# through /out. hello_world writes nothing into its project directory; a
 	# project under firmware/ that takes components from the component manager
@@ -192,12 +215,22 @@ json_string() {
 	printf '"%s"' "$(printf '%s' "$1" | sed 's/[\\"]/\\&/g')"
 }
 
-for image in "$@"; do
+for entry in "$@"; do
+	# IMAGE@CHIP for --chips, IMAGE otherwise; the build directory names a chip other than the
+	# classic ESP32.
+	image=${entry%@*}
+	target=esp32
+	dir=build
+	if [ "$entry" != "$image" ]; then
+		target=${entry#*@}
+		dir=build-$target
+	fi
 	project=$(project_of "$image")
-	build=$out/$image/build
-	shown=${ESP32TL_HOST_OUT:-$out}/$image/build
-	provenance=$(printf '{"idf_version": %s, "container": %s, "project": %s}' \
-		"$(json_string "$idf_version")" "$container" "$(json_string "$project")")
+	build=$out/$image/$dir
+	shown=${ESP32TL_HOST_OUT:-$out}/$image/$dir
+	provenance=$(printf '{"idf_version": %s, "container": %s, "project": %s, "target": %s}' \
+		"$(json_string "$idf_version")" "$container" "$(json_string "$project")" \
+		"$(json_string "$target")")
 	if [ -d "$build" ] && [ "$(cat "$build/esp32tl-build.json" 2>/dev/null)" != "$provenance" ]; then
 		echo "firmware/build.sh: $image: $shown was built another way, removing it"
 		rm -rf "$build"
@@ -208,14 +241,22 @@ for image in "$@"; do
 	# sdkconfig in the build directory: the project directory may be ESP-IDF's
 	# own examples, or read-only.
 	# An image that adds options of its own to its project's keeps them in
-	# firmware/<image>/sdkconfig.defaults, read after the project's.
-	if [ "$family" = firmware ] && { [ "$image" = pppos_client ] || [ "$image" = bt_spp_initiator_psram ]; }; then
-		idf.py -C "$project" -B "$build" -DSDKCONFIG="$build/sdkconfig" -DIDF_TARGET=esp32 \
-			"-DSDKCONFIG_DEFAULTS=$project/sdkconfig.defaults;$PWD/firmware/$image/sdkconfig.defaults" build
+	# firmware/<image>/sdkconfig.defaults, read after the project's; ESP-IDF's
+	# hello_world has none of its own.
+	case $family:$image in
+	firmware:pppos_client | firmware:bt_spp_initiator_psram)
+		defaults="$project/sdkconfig.defaults;$PWD/firmware/$image/sdkconfig.defaults"
+		;;
+	chips:hello_world_psram) defaults=$PWD/firmware/$image/sdkconfig.defaults ;;
+	*) defaults= ;;
+	esac
+	if [ -n "$defaults" ]; then
+		idf.py -C "$project" -B "$build" -DSDKCONFIG="$build/sdkconfig" -DIDF_TARGET="$target" \
+			"-DSDKCONFIG_DEFAULTS=$defaults" build
 	else
-		idf.py -C "$project" -B "$build" -DSDKCONFIG="$build/sdkconfig" -DIDF_TARGET=esp32 build
+		idf.py -C "$project" -B "$build" -DSDKCONFIG="$build/sdkconfig" -DIDF_TARGET="$target" build
 	fi
 	[ -f "$build/flasher_args.json" ] || die "$image: the build wrote no flasher_args.json"
 	: >"$build/esp32tl-built"
-	echo "firmware/build.sh: $image built in $shown (ESP-IDF $idf_version)"
+	echo "firmware/build.sh: $entry built in $shown (ESP-IDF $idf_version)"
 done

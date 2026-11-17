@@ -52,7 +52,7 @@ from esp32tl import boards, build
 from esp32tl.backends import SERVICES
 from esp32tl.backends.esp32sim import BackendError, Esp32Sim, ended_while_waiting
 from esp32tl.backends.serial import Artifact, PlatformioApp, Serial, check_artifact
-from esp32tl.boards import DEFAULT_PROFILE, BoardProfile, ProfileError
+from esp32tl.boards import CHIPS, DEFAULT_PROFILE, BoardProfile, ProfileError
 from esp32tl.interfaces.bluetooth import Bluetooth
 from esp32tl.interfaces.board import Board as Board
 from esp32tl.interfaces.card_cache import CARD_CACHE_MIB, CardCache
@@ -415,6 +415,15 @@ def serial_artifact(request: pytest.FixtureRequest) -> Artifact:
     callspec = getattr(node, "callspec", None)
     if callspec is not None and int(callspec.params.get("count", 1)) != 1:
         pytest.fail("count is above 1: esp32tl runs one board in a test", pytrace=False)
+    profile = board_profile(node)
+    if profile.chip != "esp32":
+        backend_failed(
+            BackendError(
+                f"the board profile {profile.name} carries an {CHIPS[profile.chip].title};"
+                " the serial backend runs the classic ESP32 only"
+            ),
+            Serial.name,
+        )
     port = request.getfixturevalue("port")
     port_error = serial_port_error(
         port, request.getfixturevalue("flash_port"), os.environ.get("ESPPORT")

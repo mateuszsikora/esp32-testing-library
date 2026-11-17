@@ -42,13 +42,13 @@ After `make setup` and `make firmware examples`, `.venv/bin/pytest` runs the tes
 
 | Target | What it does |
 |---|---|
-| `make setup` | Creates `.venv`, installs `esp32tl` editable with its `dev` extra, builds the runner and puts the ROM ELF in `.cache/` |
+| `make setup` | Creates `.venv`, installs `esp32tl` editable with its `dev` extra, builds the runner and puts the ROM ELFs in `.cache/` |
 | `make build-runner` | Builds the runner crate only, `cargo build --locked` in `runner/`, into `runner/target/release/`; `RUNNER_PROFILE=dev` builds it without fat LTO, into `runner/target/debug/` |
-| `make rom-elf` | Runs `scripts/fetch-rom-elf`: puts `esp32_rev300_rom.elf` of esp-rom-elfs `20241011` at `.cache/esp-rom-elfs/20241011/`, checked by SHA-256 |
+| `make rom-elf` | Runs `scripts/fetch-rom-elf`: puts the ROM ELF of every chip the runner emulates, `esp32_rev300_rom.elf`, `esp32s3_rev0_rom.elf`, `esp32c3_rev3_rom.elf` and `esp32c6_rev0_rom.elf` of esp-rom-elfs `20241011`, at `.cache/esp-rom-elfs/20241011/`, each checked by SHA-256 |
 | `make test-runner` | The runner's Rust unit tests, `cargo test --locked`, in `RUNNER_PROFILE` like `build-runner`; `RUNNER_PROFILE=dev` skips the fat-LTO link while iterating |
-| `make firmware` | Builds every ESP-IDF validation image in the pinned ESP-IDF container, into `firmware/<image>/build/` (`firmware/build.sh`), then every PlatformIO image (`PLATFORMIO_IMAGES`: `arduino_shell`) in the pinned PlatformIO container, into `firmware/<image>/.pio/build/esp32dev/` (`firmware/build-platformio.sh`) |
+| `make firmware` | Builds every ESP-IDF validation image in the pinned ESP-IDF container, into `firmware/<image>/build/` (`firmware/build.sh`), then the images of the ESP32-S3, ESP32-C3 and ESP32-C6, into `firmware/<image>/build-<chip>/` (`firmware/build.sh --chips`), then every PlatformIO image (`PLATFORMIO_IMAGES`: `arduino_shell`) in the pinned PlatformIO container, into `firmware/<image>/.pio/build/esp32dev/` (`firmware/build-platformio.sh`) |
 | `make examples` | Builds every project discovered at `examples/*/CMakeLists.txt` in the pinned ESP-IDF container, into `examples/<name>/build/` |
-| `make test` | Runs `make setup` and `make test-runner`, builds the validation images that are missing (`FIRMWARE_IMAGES`: `hello_world`, `nmea_reader`, `gpio_echo`, `sdspi`, `sd_remount`, `modem_at`, `modem_recovery`, `nvs_reader`, `pppos_client`, `mqtt_session`, `http_request`, `http_server`, `persistence`, `ota_state`, `timer_wake`, `deep_sleep`, `bt_spp_initiator` and `bt_spp_initiator_psram`) and the PlatformIO images that are missing (`PLATFORMIO_IMAGES`: `arduino_shell`), builds missing examples, then runs `.venv/bin/pytest` on both suites |
+| `make test` | Runs `make setup` and `make test-runner`, builds the validation images that are missing (`FIRMWARE_IMAGES`: `hello_world`, `nmea_reader`, `gpio_echo`, `sdspi`, `sd_remount`, `modem_at`, `modem_recovery`, `nvs_reader`, `pppos_client`, `mqtt_session`, `http_request`, `http_server`, `persistence`, `ota_state`, `timer_wake`, `deep_sleep`, `bt_spp_initiator` and `bt_spp_initiator_psram`), the chips' images that are missing (`CHIP_IMAGES`: `hello_world`, `console_repl`, `gpio_echo`, `nmea_reader`, `nvs_reader` and `http_request` for each of `esp32s3`, `esp32c3` and `esp32c6`, `hello_world_psram` for `esp32s3`, and `gatt_server` for `esp32s3` and `esp32c3`) and the PlatformIO images that are missing (`PLATFORMIO_IMAGES`: `arduino_shell`), builds missing examples, then runs `.venv/bin/pytest` on both suites |
 | `make determinism` | Runs `tests/test_determinism.py` twice through `scripts/check-determinism.py` and compares the two runs ([testing.md](testing.md#determinism)); builds the `nmea_reader`, `pppos_client`, `mqtt_session`, `http_request` and `bt_spp_initiator` images, the PlatformIO `arduino_shell` image and the `position_tracker` example when missing and `.venv` when it is missing or stale, but not the runner or the ROM ELF: run `make setup` first |
 | `make lint` | `ruff check`, `ruff format --check` and `mypy`; `cargo fmt --check` and `cargo clippy --locked --all-targets -- -D warnings` on the runner |
 | `make hooks` | Installs the pre-commit hooks ([Pre-commit hooks](#pre-commit-hooks)) |
@@ -57,7 +57,8 @@ After `make setup` and `make firmware examples`, `.venv/bin/pytest` runs the tes
 
 `make test` counts an image as missing when its build directory has no `esp32tl-built`, the
 file `firmware/build.sh` and `firmware/build-platformio.sh` write when a build finishes: in
-`firmware/<image>/build/`, or `firmware/<image>/.pio/build/esp32dev/` for a PlatformIO image.
+`firmware/<image>/build/`, `firmware/<image>/build-<chip>/` for a chip's image, or
+`firmware/<image>/.pio/build/esp32dev/` for a PlatformIO image.
 `make firmware` builds them all again.
 Both always write into `firmware/`, whatever `FIRMWARE_OUT` the shell exports, because the tests
 read the images there.
@@ -158,33 +159,37 @@ revision in `runner/Cargo.toml` changes. `--locked` makes cargo refuse to change
 
 ## The ROM ELF
 
-`make rom-elf`, part of `make setup`, runs `scripts/fetch-rom-elf`. It puts
-`esp32_rev300_rom.elf` of [esp-rom-elfs](https://github.com/espressif/esp-rom-elfs) release
-`20241011` at `.cache/esp-rom-elfs/20241011/esp32_rev300_rom.elf`, the path the backend reads by
-default:
+`make rom-elf`, part of `make setup`, runs `scripts/fetch-rom-elf`. It puts the mask ROM ELF of
+every chip the runner emulates, from [esp-rom-elfs](https://github.com/espressif/esp-rom-elfs)
+release `20241011`, at `.cache/esp-rom-elfs/20241011/`, the directory the backend reads by default:
+`esp32_rev300_rom.elf` (the classic ESP32), `esp32s3_rev0_rom.elf`, `esp32c3_rev3_rom.elf` and
+`esp32c6_rev0_rom.elf`. `ROMS` in the script pins each by its SHA-256, one line per ELF:
 
-1. A file already there whose SHA-256 matches `ROM_SHA256` in the script is kept; the script then
+1. A file already there whose SHA-256 matches its line is kept; when every ELF is, the script
    prints nothing.
-2. Otherwise it looks in an ESP-IDF install, under `$IDF_TOOLS_PATH/tools/esp-rom-elfs/`, or
-   `~/.espressif/tools/esp-rom-elfs/` when `IDF_TOOLS_PATH` is unset: release `20241011` first,
-   then any other release. Newer releases ship the same ELF, so the checksum of the ELF itself is
-   the pin. A matching file is copied, not linked, because an ESP-IDF upgrade may remove the release
-   it came from. One that differs is passed over with
+2. Each one still missing is looked for in an ESP-IDF install, under
+   `$IDF_TOOLS_PATH/tools/esp-rom-elfs/`, or `~/.espressif/tools/esp-rom-elfs/` when
+   `IDF_TOOLS_PATH` is unset: release `20241011` first, then any other release. Newer releases ship
+   the same ELFs, so the checksum of each ELF is the pin. A matching file is copied, not linked,
+   because an ESP-IDF upgrade may remove the release it came from:
+   `fetch-rom-elf: <dest> copied from <file>`. One that differs is passed over with
    `fetch-rom-elf: <file> differs from release 20241011's (SHA-256 <sha>), skipped`.
-3. Without one, it prints
-   `fetch-rom-elf: no esp32_rev300_rom.elf matching release 20241011 under <dir>; downloading <url>`,
-   downloads `esp-rom-elfs-20241011.tar.gz` from the GitHub release with `curl`, and checks the
-   tarball against `TARBALL_SHA256` and the extracted ELF against `ROM_SHA256`. The download gets 20 s
-   to connect and 120 s for each of 4 tries, about 8 minutes at worst, so that a stalled one fails
-   instead of holding a CI job until its limit.
+3. When some are still missing, it prints
+   `fetch-rom-elf: <elf> ... not under <dir>; downloading <url>`, downloads
+   `esp-rom-elfs-20241011.tar.gz` from the GitHub release once with `curl`, checks the tarball
+   against `TARBALL_SHA256` and each ELF it extracts against its line
+   (`fetch-rom-elf: <dest> downloaded`). The download gets 20 s to connect and 120 s for each of 4
+   tries, about 8 minutes at worst, so that a stalled one fails instead of holding a CI job until
+   its limit.
 
 The target is phony: the script checks the checksum on every run. It runs from any directory and
 always writes the repository's `.cache/`. Without `sha256sum` or `shasum` it stops with
 `fetch-rom-elf: needs sha256sum or shasum`.
 
-`esp32tl/backends/esp32sim.py` names the same release and file in `ROM_RELEASE` and `ROM_ELF`;
-`test_rom_is_the_one_make_setup_fetches` in `tests/test_pytest_plugin.py` fails when the two
-disagree.
+`esp32tl/backends/esp32sim.py` names the same release in `ROM_RELEASE`, and `esp32tl/runtime.py`
+the same ELFs and checksums in `ROMS`; `test_rom_is_the_one_make_setup_fetches` in
+`tests/test_pytest_plugin.py` and `test_rom_pins_match_developer_setup` in `tests/test_runtime.py`
+fail when they disagree.
 
 ## Pre-commit hooks
 

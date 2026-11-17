@@ -111,11 +111,12 @@ that references to its number keep their meaning.
 - **7.** The runner is given every file of an ESP-IDF build's `flasher_args.json`, each at its
    offset; a PlatformIO build's files as 230 says.
    `tests/test_pytest_plugin.py::test_runner_command_flashes_every_file_at_its_offset`
-- **8.** The backend refuses a build that is missing, built for another chip than the classic ESP32,
-   asks for flash encryption, or is unfinished.
-   `tests/test_pytest_plugin.py::test_load_app_refuses_what_the_runner_cannot_run`
-- **9.** The release and file name the backend's ROM path is built from (`ROM_RELEASE`, `ROM_ELF`) are
-   the ones `scripts/fetch-rom-elf` fetches.
+- **8.** The backend refuses a build that is missing, built for another chip than the board
+   profile's, asks for flash encryption, or is unfinished.
+   `tests/test_pytest_plugin.py::test_load_app_refuses_what_the_runner_cannot_run`,
+   `tests/test_pytest_plugin.py::test_load_app_takes_a_build_for_the_board_s_chip`
+- **9.** The release and file names the backend's ROM paths are built from (`ROM_RELEASE`, and each
+   chip's ELF and SHA-256 in `runtime.ROMS`) are the ones `scripts/fetch-rom-elf` fetches.
    `tests/test_pytest_plugin.py::test_rom_is_the_one_make_setup_fetches`
 - **10.** ~~Once the runner has exited, an expect that has not matched fails at once, with an `EOF` that
     names the exit code and the runner's last output: whole lines, less than `EOF_TAIL_BYTES`,

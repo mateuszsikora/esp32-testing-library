@@ -43,6 +43,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Balance the second pair with the no-peer inquiry test](ci.md#balance-the-second-pair-with-the-no-peer-inquiry-test) | `ci.md` | decided (16 November 2026) |
 | [Prepare versions in a PR and build releases after merge](ci.md#prepare-versions-in-a-pr-and-build-releases-after-merge) | `ci.md` | decided (16 November 2026) |
 | [Verify exact version diffs before using lightweight CI](ci.md#verify-exact-version-diffs-before-using-lightweight-ci) | `ci.md` | decided (16 November 2026) |
+| [The chips' images build in three groups of their own](ci.md#the-chips-images-build-in-three-groups-of-their-own) | `ci.md` | decided (#236) |
 
 ## Documentation and the documentation check
 
@@ -104,6 +105,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The Arduino image is built with pioarduino in a pinned Python container](firmware.md#the-arduino-image-is-built-with-pioarduino-in-a-pinned-python-container) | `firmware.md` | decided (#193) |
 | [pio runs in the Arduino image's own directory, through the writable /out](firmware.md#pio-runs-in-the-arduino-images-own-directory-through-the-writable-out) | `firmware.md` | decided (#193) |
 | [PlatformIO's core directory is .cache/platformio/](firmware.md#platformios-core-directory-is-cacheplatformio) | `firmware.md` | decided (#193) |
+| [The other chips' images are a family of their own, from the same projects](firmware.md#the-other-chips-images-are-a-family-of-their-own-from-the-same-projects) | `firmware.md` | decided (#236) |
 
 ## The esp32tl package and its pytest plugin
 
@@ -316,6 +318,10 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Bluetooth histories expose Duration timestamps](harness.md#bluetooth-histories-expose-duration-timestamps) | `harness.md` | decided (#224) |
 | [Parallel simulation uses pytest-xdist installed separately](harness.md#parallel-simulation-uses-pytest-xdist-installed-separately) | `harness.md` | decided (#227) |
 | [SPP conditions describe channel state and the next device write](harness.md#spp-conditions-describe-channel-state-and-the-next-device-write) | `harness.md` | decided (#225) |
+| [A board profile's chip decides its pads, UARTs and console pins](harness.md#a-board-profiles-chip-decides-its-pads-uarts-and-console-pins) | `harness.md` | decided (#236) |
+| [esp32sim's gaps on a chip skip the test that asks for them](harness.md#esp32sims-gaps-on-a-chip-skip-the-test-that-asks-for-them) | `harness.md` | decided (#236) |
+| [Boot reasons keep the classic ESP32's names on every chip](harness.md#boot-reasons-keep-the-classic-esp32s-names-on-every-chip) | `harness.md` | decided (#236) |
+| [The serial backend runs the classic ESP32 only](harness.md#the-serial-backend-runs-the-classic-esp32-only) | `harness.md` | postponed (#236) |
 
 ## The runner crate and esp32sim
 
@@ -374,3 +380,6 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The runner restores U0RXD's input-enabled reset state](runner.md#the-runner-restores-u0rxds-input-enabled-reset-state) | `runner.md` | decided (#195) |
 | [Virtual station mode shares the Ethernet relay but has no access-point switch](runner.md#virtual-station-mode-shares-the-ethernet-relay-but-has-no-access-point-switch) | `runner.md` | decided (#215) |
 | [Station transitions invalidate relay queues](runner.md#station-transitions-invalidate-relay-queues) | `runner.md` | decided |
+| [The runner runs one esp32sim chip per process, chosen by --chip](runner.md#the-runner-runs-one-esp32sim-chip-per-process-chosen-by---chip) | `runner.md` | decided (#236) |
+| [What esp32sim lacks on a chip is refused at the command line](runner.md#what-esp32sim-lacks-on-a-chip-is-refused-at-the-command-line) | `runner.md` | decided (#236) |
+| [The runner restores U0RXD's reset state on every chip](runner.md#the-runner-restores-u0rxds-reset-state-on-every-chip) | `runner.md` | decided (#236) |

@@ -45,18 +45,25 @@ A valid installation is verified and reused without network access. Corruption i
 remove the named version/platform directory and rerun preparation to repair it. A failed download
 never exposes a partial installation. Concurrent preparations accept only a verified winner.
 
-Lookup is per file: explicit `ESP32TL_RUNNER` / `ESP32TL_ROM`, then the source checkout's
-`runner/target/release/esp32tl-runner` and `.cache/esp-rom-elfs/20241011/esp32_rev300_rom.elf`
-when `runner/Cargo.toml` exists next to the source package, otherwise the user cache.
+An installation holds the runner and the ROM ELF of every chip it runs: `esp32_rev300_rom.elf`
+(the classic ESP32), `esp32s3_rev0_rom.elf`, `esp32c3_rev3_rom.elf` and `esp32c6_rev0_rom.elf`,
+each pinned by its SHA-256 in `esp32tl.runtime.ROMS`.
+
+Lookup is per file: explicit `ESP32TL_RUNNER`, and for the ROM of the board's chip `ESP32TL_ROM`
+(the classic ESP32) or `ESP32TL_ROM_ESP32S3`, `ESP32TL_ROM_ESP32C3`, `ESP32TL_ROM_ESP32C6`; then the
+source checkout's `runner/target/release/esp32tl-runner` and
+`.cache/esp-rom-elfs/20241011/<rom>` when `runner/Cargo.toml` exists next to the source package,
+otherwise the user cache.
 A missing checkout build is an error, not a fallback to a stale cached release; use `make setup`.
 Explicit paths must exist and are verified too. Runner version and esp32sim revision must match
 exactly, including for developer builds; an older runner without `--runtime-version` must be rebuilt.
-The ROM must match the existing pinned ELF checksum.
+Each ROM must match its pinned ELF checksum.
 When the backend selects a file from the cache, it checks the manifest and that file only.
 For example, `ESP32TL_RUNNER` plus a cached ROM does not require the cached runner to exist or
 execute; `ESP32TL_ROM` plus a cached runner does not require the cached ROM. A bad selected file
-or incompatible cache manifest still fails. `esp32tl runtime prepare` always checks both cached
-files, regardless of environment overrides, before reusing an installation.
+or incompatible cache manifest still fails. `esp32tl runtime prepare` always checks every cached
+file, the runner and each ROM, regardless of environment overrides, before reusing an
+installation.
 
 Errors distinguish `unsupported runtime platform`, `runtime missing`, `incompatible runner`,
 `invalid runtime manifest`, `download failed`, and `invalid checksum or missing file`.
@@ -73,7 +80,7 @@ Rust nor network access. Cache contents must be trusted just like installed exec
 queries the executable identity, and emits a raw executable plus JSON manifest with version,
 platform, full esp32sim revision and SHA-256. Raw executables need no unpacking. The installer
 checks both ROM archive and ELF hashes from `scripts/fetch-rom-elf`; keep those constants in sync.
-For the ROM it copies only the single regular `esp32_rev300_rom.elf` member, with a bounded size;
+For the ROMs it copies only the regular member of each ELF name in `ROMS`, with a bounded size;
 archive paths and links are never extracted. Temporary files live beside the destination, then
 one directory rename exposes the verified runtime atomically.
 
