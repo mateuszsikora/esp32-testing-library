@@ -322,8 +322,8 @@ runs (exit code 2):
 | Message, after `<test id>: ` | When |
 |---|---|
 | `the board_profile marker takes one bundled name or path= (str or pathlib.Path), as in @pytest.mark.board_profile("esp32-devkitc") or @pytest.mark.board_profile(path="boards/test-board.toml"); do not combine them` | No argument, mixed name/path arguments, extra arguments, a non-string name, or a `path` that is not a string or `Path`, is blank, or is `Path("")` or `"."` (the test file's directory) |
-| `no board profile named 'NAME'; the profiles are esp32-devkitc, gps-alarm-clock, lilygo-t-a7670g-r2, sd-data-logger` | The marker names a profile esp32tl does not ship |
-| `no board profile named 'NAME'; the profiles are esp32-devkitc, gps-alarm-clock, lilygo-t-a7670g-r2, sd-data-logger; for a local file, use board_profile(path="NAME")` | The positional name contains `/` or ends in `.toml`, so it looks like a local file |
+| `no board profile named 'NAME'; the profiles are esp32-c3-devkitm, esp32-c6-devkitc, esp32-devkitc, esp32-s3-devkitc, gps-alarm-clock, lilygo-t-a7670g-r2, sd-data-logger` | The marker names a profile esp32tl does not ship |
+| `no board profile named 'NAME'; the profiles are esp32-c3-devkitm, esp32-c6-devkitc, esp32-devkitc, esp32-s3-devkitc, gps-alarm-clock, lilygo-t-a7670g-r2, sd-data-logger; for a local file, use board_profile(path="NAME")` | The positional name contains `/` or ends in `.toml`, so it looks like a local file |
 | `<resolved path>: <file>: <loader error>` | A local file is missing, unreadable, invalid TOML or violates the profile schema |
 | `cannot resolve board_profile path <path repr>: <error>` | The local path cannot be resolved |
 

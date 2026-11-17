@@ -355,6 +355,246 @@ def test_invalid_local_profiles_fail_at_collection(
     result.stdout.no_fnmatch_line("*UnicodeDecodeError*")
 
 
+# A `board` that shows the app, the build and the profile the plugin selected for the test.
+SHOW_SELECTION = """
+import pytest
+from esp32tl.pytest_plugin import board_profile
+
+@pytest.fixture
+def board(request, app_path, build_dir):
+    return app_path, build_dir, board_profile(request.node).name
+"""
+
+LOCAL_PROFILE = 'name = "local"\nchip = "esp32"\npsram_mb = 4\n'
+
+
+def project(root: Path, options: str) -> Path:
+    """A project at `root` whose pyproject.toml sets `options` in [tool.pytest.ini_options],
+    with a local profile in tests/boards/ and SHOW_SELECTION in tests/conftest.py."""
+    (root / "tests" / "boards").mkdir(parents=True)
+    (root / "tests" / "boards" / "local.toml").write_text(LOCAL_PROFILE)
+    (root / "tests" / "conftest.py").write_text(SHOW_SELECTION)
+    (root / "pyproject.toml").write_text(f"[tool.pytest.ini_options]\n{options}")
+    return root / "tests"
+
+
+def test_project_defaults_resolve_against_the_configuration_file_from_any_directory(
+    pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = pytester.path / "project"
+    tests = project(
+        root,
+        'esp32tl_app_path = "firmware"\n'
+        'esp32tl_build_dir = ".pio/build/esp32"\n'
+        'esp32tl_board_profile_path = "tests/boards/local.toml"\n',
+    )
+    (tests / "deep").mkdir()
+    (tests / "deep" / "test_defaults.py").write_text(f"""
+from pathlib import Path
+import pytest
+
+ROOT = Path({str(root.resolve())!r})
+
+def test_unmarked(board):
+    assert board == (
+        str(ROOT / "firmware"), str(ROOT / "firmware" / ".pio/build/esp32"), "local"
+    )
+
+@pytest.mark.app_path("../../other")
+def test_marker_replaces_the_app_and_its_build(board):
+    # The project's build directory belongs to the project's app: a marker without
+    # build_dir keeps its own default, build/.
+    assert board == (str(ROOT / "other"), str(ROOT / "other" / "build"), "local")
+
+@pytest.mark.app_path("../../other", build_dir="out")
+def test_marker_build_dir(board):
+    assert board[:2] == (str(ROOT / "other"), str(ROOT / "other" / "out"))
+
+@pytest.mark.board_profile("lilygo-t-a7670g-r2")
+class TestProfile:
+    def test_class_marker_replaces_the_profile(self, board):
+        assert board == (
+            str(ROOT / "firmware"),
+            str(ROOT / "firmware" / ".pio/build/esp32"),
+            "lilygo-t-a7670g-r2",
+        )
+
+    @pytest.mark.board_profile(path="../boards/local.toml")
+    def test_test_marker_is_closer(self, board):
+        assert board[2] == "local"
+""")
+    elsewhere = pytester.path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    result = pytester.runpytest_subprocess("-p", "no:cacheprovider", "-q", str(tests))
+    result.assert_outcomes(passed=5)
+
+
+def test_project_defaults_take_a_bundled_profile_and_absolute_paths(
+    pytester: pytest.Pytester,
+) -> None:
+    app = pytester.path / "builds" / "app"
+    tests = project(
+        pytester.path / "project",
+        f"esp32tl_app_path = {str(app)!r}\n"
+        f"esp32tl_build_dir = {str(pytester.path / 'out')!r}\n"
+        'esp32tl_board_profile = "gps-alarm-clock"\n',
+    )
+    (tests / "test_defaults.py").write_text(f"""
+def test_unmarked(board):
+    assert board == ({str(app)!r}, {str(pytester.path / "out")!r}, "gps-alarm-clock")
+""")
+    pytester.runpytest_subprocess("-p", "no:cacheprovider", "-q", str(tests)).assert_outcomes(
+        passed=1
+    )
+
+
+def test_a_build_directory_alone_applies_to_the_test_file_s_directory(
+    pytester: pytest.Pytester,
+) -> None:
+    tests = project(pytester.path, 'esp32tl_build_dir = ".pio/build/esp32"\n')
+    (tests / "test_defaults.py").write_text(f"""
+def test_unmarked(board):
+    assert board == (
+        {str(tests)!r}, {str(tests / ".pio/build/esp32")!r}, "esp32-devkitc"
+    )
+""")
+    pytester.runpytest_subprocess("-p", "no:cacheprovider", "-q", str(tests)).assert_outcomes(
+        passed=1
+    )
+
+
+def test_an_override_on_the_command_line_resolves_against_the_configuration_file(
+    pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = pytester.path / "project"
+    tests = project(root, 'esp32tl_app_path = "firmware"\n')
+    (tests / "test_defaults.py").write_text(f"""
+def test_unmarked(board):
+    assert board[0] == {str(root.resolve() / "elsewhere")!r}
+""")
+    monkeypatch.chdir(tests)
+    result = pytester.runpytest_subprocess(
+        "-p", "no:cacheprovider", "-q", "-o", "esp32tl_app_path=elsewhere", "."
+    )
+    result.assert_outcomes(passed=1)
+
+
+def test_both_profile_defaults_are_a_usage_error(pytester: pytest.Pytester) -> None:
+    tests = project(
+        pytester.path,
+        'esp32tl_board_profile = "esp32-devkitc"\n'
+        'esp32tl_board_profile_path = "tests/boards/local.toml"\n',
+    )
+    (tests / "test_defaults.py").write_text("def test_unmarked(board): pass\n")
+    result = pytester.runpytest_subprocess("-p", "no:cacheprovider", str(tests))
+    assert result.ret == pytest.ExitCode.USAGE_ERROR
+    result.stderr.fnmatch_lines(
+        [
+            "ERROR: esp32tl_board_profile and esp32tl_board_profile_path are both set:"
+            " set the bundled name or the file"
+        ]
+    )
+
+
+@pytest.mark.parametrize("value", ['"firmware"', "'firmware'"])
+def test_a_quoted_value_in_an_ini_file_is_a_usage_error(
+    pytester: pytest.Pytester, value: str
+) -> None:
+    pytester.makeini(f"[pytest]\nesp32tl_app_path = {value}\n")
+    pytester.makepyfile("def test_unmarked(board): pass\n")
+    result = pytester.runpytest_subprocess("-p", "no:cacheprovider")
+    assert result.ret == pytest.ExitCode.USAGE_ERROR
+    result.stderr.fnmatch_lines(
+        [
+            f"ERROR: esp32tl_app_path is {value}, in quotes: write it without them"
+            " (esp32tl_app_path = firmware); an ini file keeps the quotes"
+        ]
+    )
+
+
+def test_a_quoted_value_in_toml_is_a_usage_error_without_the_ini_note(
+    pytester: pytest.Pytester,
+) -> None:
+    # TOML took its own quotes off: what is left was written inside them.
+    tests = project(pytester.path, "esp32tl_app_path = \"'firmware'\"\n")
+    (tests / "test_defaults.py").write_text("def test_unmarked(board): pass\n")
+    result = pytester.runpytest_subprocess("-p", "no:cacheprovider", str(tests))
+    assert result.ret == pytest.ExitCode.USAGE_ERROR
+    result.stderr.fnmatch_lines(
+        [
+            "ERROR: esp32tl_app_path is 'firmware', in quotes: write it without them"
+            " (esp32tl_app_path = firmware)"
+        ]
+    )
+    result.stderr.no_fnmatch_line("*an ini file keeps the quotes*")
+
+
+@pytest.mark.parametrize("ini", [True, False], ids=["ini-file", "no-config"])
+def test_a_quoted_value_from_the_command_line_gets_no_ini_note(
+    pytester: pytest.Pytester, ini: bool
+) -> None:
+    if ini:
+        pytester.makeini("[pytest]\n")
+    pytester.makepyfile("def test_unmarked(board): pass\n")
+    result = pytester.runpytest_subprocess(
+        "-p", "no:cacheprovider", "-o", 'esp32tl_app_path="firmware"'
+    )
+    assert result.ret == pytest.ExitCode.USAGE_ERROR
+    result.stderr.fnmatch_lines(
+        [
+            'ERROR: esp32tl_app_path is "firmware", in quotes: write it without them'
+            " (esp32tl_app_path = firmware)"
+        ]
+    )
+    result.stderr.no_fnmatch_line("*an ini file keeps the quotes*")
+
+
+def test_an_ini_file_takes_the_values_without_quotes(pytester: pytest.Pytester) -> None:
+    pytester.makeini(
+        "[pytest]\nesp32tl_app_path = firmware\nesp32tl_board_profile = gps-alarm-clock\n"
+    )
+    pytester.makeconftest(SHOW_SELECTION)
+    app = pytester.path.resolve() / "firmware"
+    pytester.makepyfile(f"""
+def test_unmarked(board):
+    assert board == ({str(app)!r}, {str(app / "build")!r}, "gps-alarm-clock")
+""")
+    pytester.runpytest_subprocess("-p", "no:cacheprovider", "-q").assert_outcomes(passed=1)
+
+
+@pytest.mark.parametrize(
+    ("option", "message"),
+    [
+        (
+            'esp32tl_board_profile = "boards/local.toml"',
+            "no board profile named 'boards/local.toml'; the profiles are *;"
+            " for a local file, set esp32tl_board_profile_path to boards/local.toml"
+            " (from esp32tl_board_profile)",
+        ),
+        (
+            'esp32tl_board_profile_path = "tests/boards/missing.toml"',
+            "*missing.toml: *No such file or directory* (from esp32tl_board_profile_path)",
+        ),
+    ],
+)
+def test_a_wrong_profile_default_names_its_option(
+    pytester: pytest.Pytester, option: str, message: str
+) -> None:
+    tests = project(pytester.path, option + "\n")
+    (tests / "test_defaults.py").write_text(
+        "import pytest\n\n"
+        "def test_unmarked(board): pass\n\n"
+        '@pytest.mark.board_profile("esp32-devkitc")\n'
+        "def test_marked(board): pass\n"
+    )
+    result = pytester.runpytest_subprocess("-p", "no:cacheprovider", "-q", str(tests))
+    assert result.ret == pytest.ExitCode.INTERRUPTED
+    result.stdout.fnmatch_lines([f"*::test_unmarked: {message}"])
+    # The marked test does not read the default, so it is not the one that fails.
+    result.stdout.no_fnmatch_line("*::test_marked: *")
+
+
 def test_local_profiles_are_test_relative_and_inherited(fake_runner: pytest.Pytester) -> None:
     suite = fake_runner.path / "suite"
     suite.mkdir()

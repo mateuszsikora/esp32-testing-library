@@ -149,6 +149,16 @@ def download(url: str, path: Path) -> None:
         raise RuntimeError(f"download failed: {url}: {error}") from error
 
 
+def missing_manifest_hint() -> str:
+    """What a 404 for the release's runtime manifest may mean, and the ways round it. Only
+    possibilities: the server says no more than that the file is not there."""
+    return (
+        f"possible causes: release v{__version__} is not published (yet), or it has no runtime"
+        f" for {target()}; alternatives: set ESP32TL_RUNNER and ESP32TL_ROM, or install esp32tl"
+        " from a source checkout and run make setup there"
+    )
+
+
 def extract_rom(archive: Path, destination: Path, name: str = ROM) -> None:
     # Never extract paths, links, devices or arbitrary archive members onto the filesystem.
     try:
@@ -174,7 +184,13 @@ def prepare() -> Path:
         stage = Path(temporary) / "runtime"
         stage.mkdir()
         name = f"esp32tl-runner-{target()}"
-        download(f"{RELEASE_URL}/{name}.json", stage / "manifest.json")
+        try:
+            download(f"{RELEASE_URL}/{name}.json", stage / "manifest.json")
+        except RuntimeError as error:
+            cause = error.__cause__
+            if isinstance(cause, urllib.error.HTTPError) and cause.code == 404:
+                raise RuntimeError(f"{error}; {missing_manifest_hint()}") from cause
+            raise
         info = manifest(stage / "manifest.json")
         download(f"{RELEASE_URL}/{name}", stage / "esp32tl-runner")
         verify(stage / "esp32tl-runner", info["sha256"])

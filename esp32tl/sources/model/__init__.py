@@ -140,23 +140,41 @@ class IdleFramedModel(Model):
     10 bits a character, as 8N1; `ms(4.02)` with the 11 the Modbus specification asks for), and
     defines `on_frame(at, frame)`, called at the turn that comes once `gap` has passed since the
     frame's last piece came: `at` is that piece's `at` plus `gap`, or less than a CPU cycle
-    later. It returns the answers, each at `at` or later, and the model sends nothing else
-    unprompted. The gap counts from the instant the firmware wrote the first byte of that piece,
-    as `receive` says: what the firmware writes in one go comes at about one instant. `drop()`
-    forgets the frame heard so far, as a part that loses its power does."""
+    later, the instant the silence showed the frame had ended, not the instant its data came.
+    It returns the answers, each at `at` or later, and the model sends nothing else unprompted.
+    The gap counts from that piece's `at`, as `receive` says: on a UART the instant the firmware
+    wrote its first byte, and what the firmware writes in one go comes at about one instant;
+    behind an SPP channel the instant the piece arrived. A piece that comes
+    exactly `gap` after the one before continues the frame. `drop()` forgets the frame heard so
+    far, as a part that loses its power does.
+
+    While `on_frame` runs, and until the next frame ends, `frame_first_at` is the `at` of the
+    frame's first piece and `frame_last_at` that of its last piece, as `receive` got them: on a
+    UART, the instant the firmware wrote the piece's first byte into the TX FIFO; behind an SPP
+    channel, the instant the piece arrived. Before the first frame the model has neither. The
+    link gives a piece one instant, so neither says when a byte after a piece's first was
+    written: `frame_last_at` is not the instant of the frame's last byte."""
 
     gap: Duration
-    # The frame heard so far, and the `at` of its last piece; class defaults, so that a subclass's
-    # `__init__` need not call this one's.
+    # Set before each `on_frame`; no class default, so that reading one before the first frame
+    # is an AttributeError rather than an instant.
+    frame_first_at: Duration
+    frame_last_at: Duration
+    # The frame heard so far, and the `at` of its first and last pieces; class defaults, so that
+    # a subclass's `__init__` need not call this one's.
     _frame: bytes = b""
+    _first: Duration | None = None
     _last: Duration | None = None
 
     @abstractmethod
     def on_frame(self, at: Duration, frame: bytes) -> Iterable[Timed]:
-        """`frame` ended: `gap` has passed since its last piece came, at `at`. Returns the
-        answers, each at `at` or later."""
+        """`frame` ended: `gap` has passed since its last piece came, and `at` is the instant the
+        model saw it. `frame_first_at` and `frame_last_at` say when its first and last pieces
+        came. Returns the answers, each at `at` or later."""
 
     def receive(self, at: Duration, data: bytes) -> Iterable[Timed]:
+        if not self._frame:
+            self._first = at
         self._frame += data
         self._last = at
         return ()
@@ -165,7 +183,12 @@ class IdleFramedModel(Model):
         end = self._end()
         if end is None or now < end:
             return ()
-        frame, self._frame, self._last = self._frame, b"", None
+        # `_end` found a last piece; a first one is there unless a subclass set the frame itself.
+        last = self._last
+        assert last is not None
+        self.frame_first_at = last if self._first is None else self._first
+        self.frame_last_at = last
+        frame, self._frame, self._first, self._last = self._frame, b"", None, None
         return self.on_frame(now, frame)
 
     def quiet_until(self) -> Duration | None:
@@ -174,7 +197,7 @@ class IdleFramedModel(Model):
     def drop(self) -> None:
         """Forget the frame heard so far: `on_frame` never gets it, and the next piece starts
         a new one."""
-        self._frame, self._last = b"", None
+        self._frame, self._first, self._last = b"", None, None
 
     def latency(self) -> Duration | None:
         # The turn that comes `gap` after the first piece is the one that ends the frame, if

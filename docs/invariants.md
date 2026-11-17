@@ -1955,3 +1955,52 @@ clones, and rejection of serial distributed execution before accessing hardware.
 
 - **244.** Its boundary survives channel closure and reopening, enforced by
   `test_next_write_survives_channel_close_and_reopen`.
+
+## Project defaults
+
+- **245.** A test that uses `board` takes its app, its build and its board profile from the
+  closest marker, then from `esp32tl_app_path`, `esp32tl_build_dir` and `esp32tl_board_profile`
+  or `esp32tl_board_profile_path`, then from the test file's directory, `build` and
+  `esp32-devkitc`. An `app_path` marker replaces both the project's app and its build;
+  `esp32tl_app_path` and `esp32tl_board_profile_path` resolve against the configuration file's
+  directory, whatever directory pytest starts in, and `esp32tl_build_dir` against the selected
+  app; a quoted value and both profile options set are usage errors, and a default profile
+  that does not load names its option.
+  `tests/test_pytest_plugin.py::test_project_defaults_resolve_against_the_configuration_file_from_any_directory`,
+  `tests/test_pytest_plugin.py::test_project_defaults_take_a_bundled_profile_and_absolute_paths`,
+  `tests/test_pytest_plugin.py::test_a_build_directory_alone_applies_to_the_test_file_s_directory`,
+  `tests/test_pytest_plugin.py::test_an_override_on_the_command_line_resolves_against_the_configuration_file`,
+  `tests/test_pytest_plugin.py::test_both_profile_defaults_are_a_usage_error`,
+  `tests/test_pytest_plugin.py::test_a_wrong_profile_default_names_its_option`,
+  `tests/test_pytest_plugin.py::test_a_quoted_value_in_an_ini_file_is_a_usage_error`,
+  `tests/test_pytest_plugin.py::test_a_quoted_value_in_toml_is_a_usage_error_without_the_ini_note`,
+  `tests/test_pytest_plugin.py::test_a_quoted_value_from_the_command_line_gets_no_ini_note`,
+  `tests/test_pytest_plugin.py::test_an_ini_file_takes_the_values_without_quotes`
+
+## Frame times of a model that frames by silence
+
+- **246.** `IdleFramedModel.on_frame(at, frame)` keeps its two arguments, `at` the instant the
+  silence ended the frame; while it runs, `frame_first_at` and `frame_last_at` are the `at` of
+  the frame's first and last pieces. A piece exactly `gap` after the last continues the frame,
+  one later starts the next.
+  `tests/test_model_bases.py::test_on_frame_knows_when_the_frame_s_first_and_last_pieces_came`,
+  `tests/test_model_bases.py::test_a_piece_at_the_gap_s_end_continues_the_frame_and_a_later_one_starts_the_next`,
+  `tests/test_model_bases.py::test_a_subclass_that_reads_no_frame_times_works_as_before`,
+  `tests/test_model_bases.py::test_a_dropped_frame_leaves_no_first_piece_behind`
+
+## The emulated device's Wi-Fi MACs
+
+- **247.** `ESP32SIM_STATION_MAC` is the base MAC the runner gives the classic ESP32's machine, and
+  `ESP32SIM_SOFTAP_MAC` that plus one; the virtual station's default MAC is neither, and
+  `wifi.station` refuses both as its own.
+  `tests/test_wifi.py::test_the_device_s_macs_are_the_runner_s_base_mac_and_the_one_after_it`,
+  `tests/test_wifi.py::test_the_virtual_station_refuses_the_device_s_macs`
+
+## Runtime download errors
+
+- **248.** Only an HTTP 404 for the release's runtime manifest adds the possible causes and the
+  alternatives to `download failed`; another status for the manifest, and a 404 for the runner
+  after the manifest was found, keep their message.
+  `tests/test_runtime.py::test_a_missing_manifest_names_possible_causes_and_alternatives`,
+  `tests/test_runtime.py::test_another_http_error_for_the_manifest_keeps_its_message`,
+  `tests/test_runtime.py::test_a_missing_runner_beside_its_manifest_keeps_its_message`

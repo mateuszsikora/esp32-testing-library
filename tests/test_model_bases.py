@@ -201,6 +201,115 @@ def test_a_dropped_frame_never_reaches_on_frame() -> None:
     assert model.frames == [(ms(10) + GAP, READ_2)]
 
 
+class TimedSlave(Slave):
+    """`Slave` that also keeps, for each frame, when its first and last pieces came, as
+    `on_frame` sees them."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.times: list[tuple[Duration, Duration, Duration]] = []
+
+    def on_frame(self, at: Duration, frame: bytes) -> Iterable[Timed]:
+        self.times.append((self.frame_first_at, self.frame_last_at, at))
+        return super().on_frame(at, frame)
+
+
+def test_on_frame_knows_when_the_frame_s_first_and_last_pieces_came(tmp_path: Path) -> None:
+    uart = rs485(tmp_path)
+    slave = uart.model(TimedSlave())
+    assert not hasattr(slave, "frame_first_at") and not hasattr(slave, "frame_last_at")
+    link = BoardLink("rs485", [uart])
+    link.receive(HELLO)
+    link.receive(Sync(0))
+    # One request in three pieces less than the gap apart, then a second request of one piece.
+    pieces = [(ms(10), READ_1[:3]), (ms(12), READ_1[3:6]), (ms(14), READ_1[6:])]
+    for seq, (at, data) in enumerate(pieces, 1):
+        link.receive(tx(seq, at, data))
+    link.receive(Sync((ms(14) + GAP).ns))
+    link.receive(tx(4, ms(30), READ_2))
+    link.receive(Sync((ms(30) + GAP).ns))
+    assert link.error is None
+    assert slave.frames == [(ms(14) + GAP, READ_1), (ms(30) + GAP, READ_2)]
+    # The data's instants, apart from the one the silence ended each frame at; a frame of one
+    # piece starts and ends at that piece.
+    assert slave.times == [
+        (ms(10), ms(14), ms(14) + GAP),
+        (ms(30), ms(30), ms(30) + GAP),
+    ]
+    # They stay those of the frame handed last until the next one ends.
+    link.receive(tx(5, ms(50), READ_1))
+    assert (slave.frame_first_at, slave.frame_last_at) == (ms(30), ms(30))
+
+
+@pytest.mark.parametrize(
+    ("after", "frames"),
+    [
+        # A piece exactly `gap` after the last goes in before the turn at that instant (protocol
+        # rule 1): the silence was not longer than the gap, and the frame goes on.
+        (GAP, [(ms(10), ms(10) + GAP, READ_1 + READ_2)]),
+        # One a nanosecond later comes after the turn that ended the frame: it starts the next.
+        (
+            GAP + Duration(1),
+            [
+                (ms(10), ms(10), READ_1),
+                (ms(10) + GAP + Duration(1), ms(10) + GAP + Duration(1), READ_2),
+            ],
+        ),
+    ],
+)
+def test_a_piece_at_the_gap_s_end_continues_the_frame_and_a_later_one_starts_the_next(
+    tmp_path: Path, after: Duration, frames: list[tuple[Duration, Duration, bytes]]
+) -> None:
+    uart = rs485(tmp_path)
+    slave = uart.model(TimedSlave())
+    link = BoardLink("rs485", [uart])
+    link.receive(HELLO)
+    link.receive(Sync(0))
+    first, second = ms(10), ms(10) + after
+    link.receive(tx(1, first, READ_1))
+    # The runner's turn at `first + GAP`: the events up to that instant come before its sync.
+    if second == first + GAP:
+        link.receive(tx(2, second, READ_2))
+        link.receive(Sync((first + GAP).ns))
+    else:
+        link.receive(Sync((first + GAP).ns))
+        link.receive(tx(2, second, READ_2))
+    link.receive(Sync((second + GAP).ns))
+    assert link.error is None
+    heard = zip(slave.times, slave.frames, strict=True)
+    assert [(first_at, last_at, frame) for (first_at, last_at, _), (_, frame) in heard] == frames
+
+
+def test_a_subclass_that_reads_no_frame_times_works_as_before() -> None:
+    # A subclass written before the frame's times existed: `on_frame(at, frame)` alone, its own
+    # `__init__` that calls no other, and a different name for each argument.
+    class Echo(IdleFramedModel):
+        gap = GAP
+
+        def __init__(self) -> None:
+            self.heard: list[tuple[Duration, bytes]] = []
+
+        def on_frame(self, end: Duration, data: bytes) -> Iterable[Timed]:
+            self.heard.append((end, data))
+            return [(end, data)]
+
+    model = Echo()
+    model.receive(ms(1), READ_1[:4])
+    model.receive(ms(2), READ_1[4:])
+    assert list(model.poll(ms(2) + GAP)) == [(ms(2) + GAP, READ_1)]
+    assert model.heard == [(ms(2) + GAP, READ_1)]
+    assert (model.frame_first_at, model.frame_last_at) == (ms(1), ms(2))
+
+
+def test_a_dropped_frame_leaves_no_first_piece_behind() -> None:
+    model = TimedSlave()
+    model.receive(ms(0), READ_1[:3])
+    model.drop()
+    model.receive(ms(10), READ_2)
+    model.poll(ms(10) + GAP)
+    assert model.times == [(ms(10), ms(10), ms(10) + GAP)]
+
+
 def test_an_idle_framed_model_without_gap_says_what_to_set() -> None:
     model = NoGap()
     assert model.quiet_until() is None

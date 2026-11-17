@@ -18,6 +18,17 @@ from esp32tl.report import RunLog
 
 NAME = "wifi"
 
+# The emulated device's own MACs on esp32sim, a classic ESP32 (a profile whose chip is `esp32`):
+# its Wi-Fi station's is the base MAC the runner gives the machine (`MAC` in
+# `runner/src/chip/esp32.rs`, the one esp32sim's CLI gives the classic chip), and its SoftAP's the
+# base plus one, as ESP-IDF derives it. The other chips have MACs of their own, and no virtual
+# station. A firmware that names its SoftAP after its MAC names it after these in a run on
+# esp32sim. They are not a physical board's, whose MACs come from its eFuses, nor the virtual
+# peers' on the air: the virtual station's (`esp32tl.net.station.DEFAULT_MAC` unless
+# `wifi.station` gets `mac=`) or the virtual access point's BSSID.
+ESP32SIM_STATION_MAC = "24:6f:28:00:11:22"
+ESP32SIM_SOFTAP_MAC = "24:6f:28:00:11:23"
+
 
 @dataclass(frozen=True)
 class AccessPoint:
@@ -172,7 +183,7 @@ class Wifi(Interface):
         mac = mac.lower()
         if int(mac[:2], 16) & 1:
             raise ValueError("wifi.station: mac must be unicast")
-        if mac in ("24:6f:28:00:11:22", "24:6f:28:00:11:23"):
+        if mac in (ESP32SIM_STATION_MAC, ESP32SIM_SOFTAP_MAC):
             raise ValueError(
                 "wifi.station: mac must differ from the device's station and access point MACs"
             )

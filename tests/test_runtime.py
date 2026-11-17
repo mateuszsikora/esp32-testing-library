@@ -1,11 +1,16 @@
 """Runtime integrity and selection, without release publication."""
 
+import http.server
 import io
 import json
 import platform
 import tarfile
+import threading
 import tomllib
+import urllib.error
+from collections.abc import Iterator
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
@@ -276,3 +281,89 @@ def test_each_chip_has_its_rom_in_the_cache_and_its_own_override(
     assert esp32sim.rom_path() == cached_runtime / runtime.ROM
     with pytest.raises(esp32sim.BackendError, match="esp32tl has no ROM for esp32p4"):
         esp32sim.rom_path("esp32p4")
+
+
+class Release(http.server.BaseHTTPRequestHandler):
+    """A release server: the status of each path from `statuses`, 404 for others."""
+
+    statuses: ClassVar[dict[str, int]] = {}
+
+    def do_GET(self) -> None:
+        status = self.statuses.get(self.path.rsplit("/", 1)[-1], 404)
+        self.send_response(status)
+        body = b"{}" if status == 200 else b""
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format: str, *args: object) -> None:
+        pass
+
+
+@pytest.fixture
+def release(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[type[Release]]:
+    """`Release` serving on 127.0.0.1 as RELEASE_URL, the cache in `tmp_path`."""
+    handler = type("Handler", (Release,), {"statuses": {}})
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    monkeypatch.setattr(runtime, "cache", lambda: tmp_path / "cache/runtime")
+    monkeypatch.setattr(runtime, "RELEASE_URL", f"http://127.0.0.1:{server.server_port}/v1")
+    # urlopen honours a proxy from the environment: the local server must be reached directly.
+    for name in ("no_proxy", "NO_PROXY"):
+        monkeypatch.setenv(name, "127.0.0.1")
+    yield handler
+    server.shutdown()
+    server.server_close()
+
+
+def test_a_missing_manifest_names_possible_causes_and_alternatives(
+    release: type[Release],
+) -> None:
+    name = f"esp32tl-runner-{runtime.target()}"
+    with pytest.raises(runtime.RuntimeError) as error:
+        runtime.prepare()
+    assert str(error.value) == (
+        f"download failed: {runtime.RELEASE_URL}/{name}.json: HTTP Error 404: Not Found;"
+        f" possible causes: release v{__version__} is not published (yet), or it has no"
+        f" runtime for {runtime.target()}; alternatives: set ESP32TL_RUNNER and ESP32TL_ROM,"
+        " or install esp32tl from a source checkout and run make setup there"
+    )
+    assert isinstance(error.value.__cause__, urllib.error.HTTPError)
+
+
+@pytest.mark.parametrize(
+    ("status", "message"),
+    [(500, "HTTP Error 500: Internal Server Error"), (403, "HTTP Error 403: Forbidden")],
+)
+def test_another_http_error_for_the_manifest_keeps_its_message(
+    release: type[Release], status: int, message: str
+) -> None:
+    name = f"esp32tl-runner-{runtime.target()}"
+    release.statuses = {f"{name}.json": status}
+    with pytest.raises(runtime.RuntimeError) as error:
+        runtime.prepare()
+    assert str(error.value) == f"download failed: {runtime.RELEASE_URL}/{name}.json: {message}"
+
+
+def test_a_missing_runner_beside_its_manifest_keeps_its_message(
+    release: type[Release], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The manifest is there, so the release is: the hint is for the manifest alone.
+    name = f"esp32tl-runner-{runtime.target()}"
+    manifest = {"version": __version__, "esp32sim": runtime.SIM_REV}
+    manifest |= {"target": runtime.target(), "sha256": "0" * 64}
+    original = runtime.download
+
+    def download(url: str, path: Path) -> None:
+        if url.endswith(".json"):
+            path.write_text(json.dumps(manifest))
+        else:
+            original(url, path)
+
+    monkeypatch.setattr(runtime, "download", download)
+    with pytest.raises(runtime.RuntimeError) as error:
+        runtime.prepare()
+    assert str(error.value) == (
+        f"download failed: {runtime.RELEASE_URL}/{name}: HTTP Error 404: Not Found"
+    )
