@@ -55,10 +55,12 @@ silent; an AT-only model still works without PPP. The network's broker is `modem
 | `next_connection()` | Condition returning the first accepted MQTT CONNECT recorded **after this method call** |
 | `find_connection()` | Immediate history query returning the first accepted CONNECT, or `None`, even if that connection has closed |
 | `next_connection_attempt()` | Condition returning the first accepted or rejected CONNECT outcome recorded **after this method call** |
+| `next_subscribe(filter=None)` | Condition returning the first SUBSCRIBE recorded **after this method call**; with `filter`, the first naming exactly that topic filter ([every SUBSCRIBE and UNSUBSCRIBE](#every-subscribe-and-unsubscribe)) |
 | `connection_policy` | Callable receiving `Connect` and returning `ConnackCode`; `None` (default) accepts supported requests |
 | `publish(topic, payload, retain=False, qos=0)` | Publish from the test at the board's current time; bytes or UTF-8 text, QoS 0 or 1. The message's `client` is `TEST_CLIENT` |
 | `messages`, `clients`, `retained` | Message history, accepted-client history and currently retained messages |
 | `connection_attempts` | CONNECT outcome history, including accepted and rejected attempts |
+| `subscribe_requests` | Every SUBSCRIBE and UNSUBSCRIBE received, each a `SubscribeRequest` |
 | `puback` | Policy for new incoming QoS 1 exchanges: `"immediate"` (default), `"hold"`, or a nonnegative `Duration` |
 | `pending` | Tuple of pending `Publication` handles, grouped by connection, then first receipt |
 | `disconnect(client_id)` | Close that client's stream as a connection loss; return `True` if connected, otherwise `False` |
@@ -154,21 +156,22 @@ a previously true condition false.
 
 The names say which is which, on every service of the network: a condition that sees only what
 happens after the call that makes it is `next_*` (`next_message`, `next_connection`,
-`next_connection_attempt`, `next_delivery`, HTTP's `next_request`, DHCP's `next_lease`, TLS's
-`next_handshake_started` and `next_handshake_completed`, a TCP connection's `next_data`); `find_*`
-reads the history now and returns a record or `None`; a plural attribute (`messages`, `clients`,
-`leases`) is the history itself; and a condition named for a state (`subscribed`, TLS's
-`handshake_started` and `handshake_completed`, a TCP connection's `established`, `closed`, `refused`
-and `reset`) is true while that state holds, or once it has.
+`next_connection_attempt`, `next_delivery`, `next_subscribe`, HTTP's `next_request`, DHCP's
+`next_lease`, TLS's `next_handshake_started` and `next_handshake_completed`, a TCP connection's
+`next_data`); `find_*` reads the history now and returns a record or `None`; a plural attribute
+(`messages`, `clients`, `subscribe_requests`, `leases`) is the history itself; and a condition
+named for a state (`subscribed`, TLS's `handshake_started` and `handshake_completed`, a TCP
+connection's `established`, `closed`, `refused` and `reset`) is true while that state holds, or
+once it has.
 
 All MQTT conditions have timeout representations such as `the next MQTT message on 'a/+' saying
 b'new'`, `the next MQTT client connection`, `the next MQTT connection attempt`,
-`the next MQTT delivery on 'a/+' saying b'new'` and
+`the next MQTT delivery on 'a/+' saying b'new'`, `the next MQTT SUBSCRIBE to 'a/#'` and
 `an active MQTT subscription to 'a/#'`. Call a condition with `()` or pass it to
 `board.wait_until`. Boolean coercion of any MQTT condition, including those from `next_message`,
-`next_connection`, `next_connection_attempt`, `next_delivery` and `subscribed`, raises
-`TypeError("call the MQTT condition with (), or pass it to board.wait_until")`, before and after
-a match, so an unevaluated `assert broker.next_connection()` fails. Use
+`next_connection`, `next_connection_attempt`, `next_delivery`, `next_subscribe` and `subscribed`,
+raises `TypeError("call the MQTT condition with (), or pass it to board.wait_until")`, before and
+after a match, so an unevaluated `assert broker.next_connection()` fails. Use
 `assert broker.find_connection() is not None` to inspect past connections.
 
 Subscriptions support `+` and final `#`, including empty levels. Wildcards beginning with `+`
@@ -184,6 +187,61 @@ A CONNECT with an empty client ID and `CleanSession=1` receives a generated ID s
 per-broker counter and skip IDs already in its accepted-client history, so anonymous clients
 remain independent and repeated test runs assign the same IDs. An empty ID with
 `CleanSession=0` receives CONNACK return code 2 (`Identifier rejected`) and is disconnected.
+
+### Every SUBSCRIBE and UNSUBSCRIBE
+
+The broker grants every filter it is asked for, so whether the device asks for no more than a
+production broker's ACL would grant is for the test to check. `subscribed(topic)` and
+`session(client_id).subscriptions` say what holds now; `subscribe_requests` keeps every SUBSCRIBE
+and UNSUBSCRIBE packet the broker accepted, in the order they arrived, also after the filter is
+unsubscribed, the connection closes, a CleanSession=1 CONNECT discards the stored session, the
+test forgets it, or the network resets:
+
+```python
+from esp32tl.units import seconds
+
+DEVICE = "logger-1"  # The client ID the firmware connects with.
+ALLOWED = {"device/logger-1/config", "device/logger-1/cmd/#"}
+
+first = broker.next_subscribe("device/logger-1/cmd/#")
+board.power_on()
+before = board.wait_until(first, within=seconds(60))
+board.wait(seconds(120))  # Let it reconnect, unsubscribe, resubscribe.
+asked = {
+    topic_filter
+    for request in broker.subscribe_requests
+    if request.kind == "SUBSCRIBE" and request.client == DEVICE
+    for topic_filter in request.topic_filters
+}
+assert asked <= ALLOWED
+```
+
+A `SubscribeRequest` is immutable and has `at` (`Duration`, when the packet arrived), `client`
+(the client ID, a generated anonymous one included), `connection_id`, `packet_id`, `kind`
+(`"SUBSCRIBE"` or `"UNSUBSCRIBE"`), `filters` (a tuple of `RequestedFilter`, in the packet's
+order) and `topic_filters` (those filters' strings). A `RequestedFilter` has `filter`,
+`requested_qos`, the QoS the device asked for (0, 1 or 2), and `granted_qos`, the one SUBACK gave
+(the lower of that and 1); both QoS fields are `None` in an UNSUBSCRIBE. A SUBSCRIBE again to a
+filter already held is a record of its own. An UNSUBSCRIBE of a filter that was never subscribed is
+recorded as sent. A malformed SUBSCRIBE or UNSUBSCRIBE, for example one with no filter, a zero
+packet ID, a string that is not UTF-8 or holds a NUL, or, in a SUBSCRIBE, an invalid filter or a
+QoS above 2, is refused whole: it records nothing, changes no subscription, even of the filters
+before the bad one, and closes the connection, logging
+`mqtt: malformed or unsupported packet, closing`. `RequestedFilter` and `SubscribeRequest` are
+imported from `esp32tl.net.mqtt`.
+
+`next_subscribe()` returns the first SUBSCRIBE appended after the call, with the boundary of the
+other `next_*` conditions; `next_subscribe(filter)` the first that names exactly that filter, as
+`subscribed(topic)` compares it, not by wildcard matching, so `next_subscribe("a/#")` does not
+match a SUBSCRIBE to `a/b`. An UNSUBSCRIBE never matches it. To wait for the device to subscribe
+again after a reconnect, make the condition before the action that disconnects it:
+
+```python
+resubscribed = broker.next_subscribe("device/logger-1/cmd/#")
+broker.disconnect(DEVICE)
+request = board.wait_until(resubscribed, within=seconds(60))
+assert request.connection_id != before.connection_id
+```
 
 ## Reject MQTT connections and check credentials
 

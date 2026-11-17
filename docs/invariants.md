@@ -1430,6 +1430,18 @@ that references to its number keep their meaning.
     `tests/test_net_mqtt.py::test_mqtt_conditions_are_named_and_reject_truth_testing`,
     `tests/test_clock.py::test_mqtt_immediate_response_is_visible_after_waiting_for_connection`,
     `examples/position_tracker/tests/test_tracker_support.py::test_mqtt_timeout_names_the_expected_connection`
+- **251.** `broker.subscribe_requests` keeps one `SubscribeRequest` per SUBSCRIBE and
+    UNSUBSCRIBE a connected client sent, in arrival order, with its time, client, connection,
+    packet ID and each filter's requested and granted QoS (`None` for UNSUBSCRIBE); an
+    UNSUBSCRIBE and a CleanSession=1 CONNECT remove nothing from it. A malformed SUBSCRIBE or
+    UNSUBSCRIBE is refused whole: no entry, and no subscription added or removed.
+    `next_subscribe(filter=None)` returns the first SUBSCRIBE appended after the call, naming that
+    filter exactly when one is given, never an UNSUBSCRIBE, without consuming it, and names its
+    condition.
+    `tests/test_net_mqtt.py::test_subscribe_requests_keep_every_filter_after_unsubscribe_and_clean_session`,
+    `tests/test_net_mqtt.py::test_next_subscribe_sees_a_later_subscribe_to_the_filter_without_consuming`,
+    `tests/test_net_mqtt.py::test_a_malformed_subscribe_or_unsubscribe_is_refused_whole`,
+    `tests/test_net_mqtt.py::test_mqtt_conditions_are_named_and_reject_truth_testing`
 - **223.** `broker.find_messages(since=broker.mark())` returns every matching message appended
     after the mark, in append order, those at the mark's board time included and those appended
     before it excluded; `client=` keeps one client ID's messages, and the test's publications carry
