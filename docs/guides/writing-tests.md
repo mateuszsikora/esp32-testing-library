@@ -54,13 +54,49 @@ pytestmark = [
   [periodic wake](../features/examples-user.md#periodic-wake) keeps its own in
   `tests/boards/periodic-wake.toml`, selected with `path=`.
 
-pytest loads the plugin by itself once esp32tl is installed ([In CI](#in-ci) says how). In your
-`pyproject.toml`, `-ra` shows why a test was skipped:
+When every test file runs the same app on the same board, say so once in the project's
+`pyproject.toml` instead of a `pytestmark` in each file:
+
+```text
+my_project/
+  pyproject.toml
+  platformio.ini
+  src/
+  .pio/build/esp32/   # what pio run -e esp32 leaves
+  tests/
+    boards/my-board.toml
+    test_console.py
+    test_wifi.py
+```
 
 ```toml
 [tool.pytest.ini_options]
 addopts = ["-ra"]
+testpaths = ["tests"]
+esp32tl_app_path = "."
+esp32tl_build_dir = ".pio/build/esp32"
+esp32tl_board_profile_path = "tests/boards/my-board.toml"
 ```
+
+```python
+# tests/test_console.py: no pytestmark
+def test_prints_its_version(board):
+    board.power_on()
+    board.console.expect_exact("version 1.4")
+```
+
+`esp32tl_app_path` and `esp32tl_board_profile_path` are relative to the directory of the file
+that holds them, and `esp32tl_build_dir` to the app, so `pytest`, `pytest tests/test_console.py`
+and `pytest /path/to/my_project/tests` from any directory run the same build on the same board.
+An ESP-IDF project leaves out `esp32tl_build_dir` and gets the app's `build/`;
+`esp32tl_board_profile = "esp32-devkitc"` names a bundled profile instead of a file. A marker still
+wins for its test, class or module: `pytest.mark.board_profile("lilygo-t-a7670g-r2")` on one test
+changes only its profile, and `pytest.mark.app_path("../bootloader_test")` its app, with that
+app's own `build/` unless the marker's `build_dir=` names another
+([project defaults](../features/pytest-plugin-user.md#project-defaults)).
+
+pytest loads the plugin by itself once esp32tl is installed ([In CI](#in-ci) says how). In your
+`pyproject.toml`, `-ra` shows why a test was skipped, as above.
 
 ## Power-on
 
@@ -376,7 +412,31 @@ Where a test can put a model of its own today:
   model finds a request by its terminator. A part that frames by silence, as a Modbus RTU slave
   does, starts from `IdleFramedModel` instead: it sets `gap`, the silence that ends a frame
   (`ms(3.65)` for RTU at 9600 baud, 8N1), and gets each frame in `on_frame(at, frame)`
-  ([the bases](../features/models-user.md#a-model-that-only-answers)).
+  ([the bases](../features/models-user.md#a-model-that-only-answers)). `at` is when the silence
+  showed the frame had ended; `self.frame_first_at` is when the firmware wrote the frame's first
+  byte, for a test of when the firmware starts to send:
+
+  ```python
+  class Meter(IdleFramedModel):
+      gap = ms(3.65)  # Modbus RTU at 9600 baud, 8N1
+
+      def __init__(self) -> None:
+          self.requests: list[tuple[Duration, bytes]] = []
+
+      def on_frame(self, at: Duration, frame: bytes) -> Iterable[Timed]:
+          self.requests.append((self.frame_first_at, frame))
+          return [(at + ms(5), answer_to(frame))]
+
+
+  def test_the_first_poll_starts_two_seconds_after_power_on(board: Board) -> None:
+      meter = board.uart("rs485").model(Meter())
+      board.power_on()
+      board.wait_until(lambda: meter.requests, within=seconds(5))
+      first_at, _ = meter.requests[0]
+      assert first_at == about(seconds(2), within=ms(50))
+  ```
+
+  `answer_to` is the test's own, and `about` comes from `esp32tl.units`.
 
   A part that also sends unprompted, as a sensor reporting every second, subclasses `Model` and
   defines all four methods; one that lacks one of them, or misspells it, raises `TypeError` when

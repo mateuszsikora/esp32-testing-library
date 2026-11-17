@@ -24,26 +24,45 @@ are in [models-technical.md](models-technical.md).
    service ([plan section 1](../implementation-plan.md#1-findings-that-amend-the-specification),
    finding 1).
 2. **`pytest_addoption`** adds the `esp32tl` group with `--esp32tl-backend`, whose choices are
-   `list(SERVICES)`. **`pytest_configure`** registers the `app_path`, `app_recording` and
+   `list(SERVICES)`, and the ini options `esp32tl_card_cache_mib`, `esp32tl_app_path`,
+   `esp32tl_build_dir`, `esp32tl_board_profile` and `esp32tl_board_profile_path` (the last four
+   strings, `""` by default). **`pytest_configure`** reads the four into
+   `config.stash[DEFAULTS]`, a `ProjectDefaults(app_path, build_dir, profile)`, with
+   `project_defaults(config)`: the base is `config.inipath.parent`, or
+   `config.invocation_params.dir` without a configuration file, as pytest's own `paths` type has
+   it; `esp32tl_app_path` and `esp32tl_board_profile_path` are joined to it and resolved, empty or
+   blank values are `None`, `esp32tl_build_dir` stays as given, and a value wrapped in matching
+   `"` or `'` (which an ini file keeps, unlike TOML) and both profile options set are each a
+   `pytest.UsageError`. It registers the `app_path`, `app_recording` and
    `board_profile` markers, which `--strict-markers` would otherwise refuse. It prepends the
    exact XML attribute warning filter to `config.getini("filterwarnings")`, so consumer ini,
    command-line and marker filters retain priority
    ([rationale and limitations](../decisions/harness.md#filter-the-xml-attribute-warning-as-an-overridable-default)).
 3. **`pytest_generate_tests`** returns at once unless `board` is in `metafunc.fixturenames`, which
-   holds the whole fixture closure, so a test that asks only for `console` counts. It starts from
-   `metafunc.definition.path.parent`, joins the single argument of the closest `app_path` marker to
-   it (an absolute argument replaces it, as `pathlib` joins) and resolves the result. A marker with
+   holds the whole fixture closure, so a test that asks only for `console` counts. Without an
+   `app_path` marker, the app is `ProjectDefaults.app_path`, else
+   `metafunc.definition.path.parent`, and the build `ProjectDefaults.build_dir`, else `"build"`.
+   With one, it starts from `metafunc.definition.path.parent`, joins the marker's single argument
+   to it (an absolute argument replaces it, as `pathlib` joins), and takes the build from the
+   marker alone, so the project's `build_dir` never pairs with a marker's app; the result is
+   resolved. A marker with
    other than one positional path (`str` or `Path`), an unknown keyword, or a `build_dir`
    that is not a non-empty string or a `Path` (`Path("")` is `Path(".")`, the app itself, and
    passes), is `pytest.fail(..., pytrace=False)`. It then loads the board profile the
-   `board_profile` marker selects by bundled name or local `path=`. Local paths resolve against
-   `metafunc.definition.path.parent` and are cached by absolute path in
+   `board_profile` marker selects by bundled name or local `path=`, or without the marker
+   `ProjectDefaults.profile`, else `DEFAULT_PROFILE` (`profile_reference`). A marker's local paths
+   resolve against `metafunc.definition.path.parent`, the default's were resolved at configure;
+   both are cached by absolute path in
    `config.stash[LOCAL_PROFILES]` for the session; `BoardMarkers` saves both the reference and
    the loaded object for each definition
    ([board-profiles-technical.md](board-profiles-technical.md#data-flow)); a `MarkerError` or
    `ProfileError` is raised as
    `pytest.fail.Exception(f"{nodeid}: {error}", pytrace=False) from None`, a collection error
-   without the chained exception. The backends are `[chosen]` when `--esp32tl-backend` is set, else
+   without the chained exception; without a marker the message ends in
+   `(from esp32tl_board_profile)` or `(from esp32tl_board_profile_path)` when the option is set,
+   and `load_profile`'s hint for a name that looks like a path is
+   `set esp32tl_board_profile_path to {name}`, without any file's syntax, instead of `path=`
+   (`from_marker=False`). The backends are `[chosen]` when `--esp32tl-backend` is set, else
    `["esp32sim"]`, each with a `pytest.param`; serial is opt-in. Then one call:
 
    ```python
@@ -340,8 +359,9 @@ second entry in `SERVICES` without a change to `board` fails that assertion.
 | Setting | Default | Read by |
 |---|---|---|
 | `--esp32tl-backend` | unset: `esp32sim` | `pytest_generate_tests` |
-| `app_path` marker | the test file's directory | `pytest_generate_tests` |
-| `board_profile` marker | `esp32-devkitc` (`DEFAULT_PROFILE`) | `pytest_generate_tests`, `board` |
+| `app_path` marker | `esp32tl_app_path` with `esp32tl_build_dir`, else the test file's directory | `pytest_generate_tests` |
+| `board_profile` marker | `esp32tl_board_profile` or `esp32tl_board_profile_path`, else `esp32-devkitc` (`DEFAULT_PROFILE`) | `pytest_generate_tests`, `board` |
+| `esp32tl_app_path`, `esp32tl_build_dir`, `esp32tl_board_profile`, `esp32tl_board_profile_path` ini options | `""`: unset | `pytest_configure` (`project_defaults`), then `pytest_generate_tests` |
 | `esp32tl_card_cache_mib` ini option | 4096 (`CARD_CACHE_MIB`), the tool's choice | `pytest_configure`, which checks it, and `card_cache` |
 | pytest-timeout's `--timeout`, `PYTEST_TIMEOUT`, `timeout` ini option, `timeout` marker | unset: `DEFAULT_TIMEOUT`, 600 s, for a test that uses `board` | `pytest_collection_modifyitems`, then pytest-timeout |
 | pytest-embedded's `embedded_services`, `app_path`, `build_dir` | set per test by the parametrisation | pytest-embedded's fixtures |
@@ -360,9 +380,12 @@ The backend's own environment variables are in
 |---|---|---|
 | `{metafunc.definition.nodeid}: the app_path marker takes one path, and optionally build_dir as a non-empty path, as in @pytest.mark.app_path("../firmware/hello_world", build_dir="build")` | The marker has the wrong number/type of positional paths, an unknown keyword, or a build_dir that is not a non-empty string or Path | Collection error, exit code 2 |
 | `{metafunc.definition.nodeid}: {error}` | A `board_profile` marker used otherwise than registered, an unknown bundled name, or a missing/invalid local file; the messages are in [board-profiles-user.md](board-profiles-user.md#when-no-backend-can-give-it) | Collection error, exit code 2 |
+| `{metafunc.definition.nodeid}: {error} (from esp32tl_board_profile)`, or `(from esp32tl_board_profile_path)` | The same for the project's default profile, in a test without a `board_profile` marker | Collection error, exit code 2 |
+| `ERROR: esp32tl_board_profile and esp32tl_board_profile_path are both set: set the bundled name or the file` | Both profile options are set | Usage error at configure, exit code 4 |
+| `ERROR: {option} is {value}, in quotes: write it without them ({option} = {unquoted})`, followed by `; an ini file keeps the quotes` when the value comes from an ini file: a configuration file that is not TOML, and not `-o` (`config.getoption("override_ini")`) | An `esp32tl_*` path or profile option whose value is wrapped in matching quotes | Usage error at configure, exit code 4 |
 | `esp32sim: {reason}`, as `esp32sim: uart.gnss takes no replay source on this backend, only model` or `esp32sim: uart.gnss cannot be tapped on this backend` | The test asks a route for a source or a tap the backend's declaration does not give | The test is skipped at the call, reported at the test |
 | `--esp32tl-backend: invalid choice: 'NAME'` (argparse's wording around it varies with the Python version) | A name not in `SERVICES` | Usage error, exit code 4 |
-| ``ERROR: --{option} is set: esp32tl chooses it for every test that uses `board` (the backend through --esp32tl-backend, the app through the app_path marker, the build through that marker's build_dir keyword or its build/ directory)`` | `--embedded-services`, `--app-path` or `--build-dir` set, and a selected test uses `board` | Usage error, exit code 4, no traceback |
+| ``ERROR: --{option} is set: esp32tl chooses it for every test that uses `board` (the backend through --esp32tl-backend, the app through the app_path marker or esp32tl_app_path, the build through that marker's build_dir keyword, esp32tl_build_dir or the app's build/ directory)`` | `--embedded-services`, `--app-path` or `--build-dir` set, and a selected test uses `board` | Usage error, exit code 4, no traceback |
 | `ERROR: --count is set: esp32tl runs one board in a test` | `--count` other than 1, and a selected test uses `board` | Usage error, exit code 4 |
 | `ERROR: {item.nodeid}: the {marker} marker reached the test after esp32tl read it, from a pytest.param or a hook: put it on the test, its class or its module` | A selected test that uses `board` carries a board marker from a `pytest.param` or a hook | Usage error, exit code 4 |
 | `count is above 1: esp32tl runs one board in a test` | The test parametrises `count` above 1 itself, so `dut` is a tuple | Error at setup |
@@ -432,6 +455,20 @@ pytest-embedded starts a multiprocessing manager for every session:
 - `test_options_are_allowed_when_no_selected_test_uses_board`: `-k` deselection before the
   refusal.
 - `test_a_parametrised_count_above_one_is_refused`, `test_app_path_marker_needs_one_path`.
+- Project defaults, with a `board` that returns the app, the build and the profile's name
+  (`SHOW_SELECTION`) in a `pyproject.toml` project:
+  `test_project_defaults_resolve_against_the_configuration_file_from_any_directory` (pytest
+  started from an unrelated directory; a module, class and test marker each override, and an
+  `app_path` marker without `build_dir` gets its own `build`),
+  `test_project_defaults_take_a_bundled_profile_and_absolute_paths`,
+  `test_a_build_directory_alone_applies_to_the_test_file_s_directory`,
+  `test_an_override_on_the_command_line_resolves_against_the_configuration_file`,
+  `test_both_profile_defaults_are_a_usage_error`,
+  `test_a_wrong_profile_default_names_its_option`,
+  `test_a_quoted_value_in_an_ini_file_is_a_usage_error`,
+  `test_a_quoted_value_in_toml_is_a_usage_error_without_the_ini_note`,
+  `test_a_quoted_value_from_the_command_line_gets_no_ini_note` and
+  `test_an_ini_file_takes_the_values_without_quotes`.
 - `test_a_test_that_uses_board_gets_a_wall_time_timeout_unless_one_is_set`: the 600 s marker,
   and none with `--timeout 5`, `-o timeout=0`, `PYTEST_TIMEOUT=0`, `-p no:timeout`, or a marker
   of the test's own.

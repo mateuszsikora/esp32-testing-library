@@ -75,6 +75,8 @@ Status: decided (#51)
 
 *Extended in #102 by [Explicit build paths are relative to the application and never fall
 back](#explicit-build-paths-are-relative-to-the-application-and-never-fall-back).*
+*Extended on 17 November 2026 by [Project defaults are esp32tl ini options that the markers
+override](#project-defaults-are-esp32tl-ini-options-that-the-markers-override).*
 
 `@pytest.mark.app_path(path)` names the app, relative to the test file's directory; without the
 marker the app is that directory, pytest-embedded's default. A marker without exactly one path
@@ -290,6 +292,9 @@ until a consumer needed them; #101 adds them in
 ## Local board profiles use an explicit path relative to the test file
 
 Status: decided (#101)
+
+*Extended on 17 November 2026 by [Project defaults are esp32tl ini options that the markers
+override](#project-defaults-are-esp32tl-ini-options-that-the-markers-override).*
 
 `board_profile("name")` keeps selecting a bundled profile. `board_profile(path=...)` selects a
 project-local file, with a string or `pathlib.Path` relative to the test file's directory, also
@@ -3511,6 +3516,9 @@ polls every interface before it checks a stamp.
 
 Status: decided (#202)
 
+*Extended on 17 November 2026 by [A model that frames by silence tells on_frame when the frame's
+data came](#a-model-that-frames-by-silence-tells-on_frame-when-the-frames-data-came).*
+
 `ReactiveModel` and `IdleFramedModel`, in `esp32tl.sources.model`, are `Model`s with all but one
 method defined. `ReactiveModel` sends nothing unprompted and takes `latency()` from its
 `answer_after`; a subclass defines `receive`. `IdleFramedModel` keeps what it hears until `gap` has
@@ -3827,7 +3835,7 @@ continues sending from an expired address. Device reset invalidates the lease im
 station leave/rejoin command, pending a radio control protocol and upstream support. No keep-alive
 frames, pending esp32sim support: an ESP-IDF AP may disassociate an idle host after about 300 s
 and the virtual station rejoins. No virtual AP and virtual station together, pending esp32sim's
-AP+STA model; no other chips, pending their station attachment. WPA3-SAE, required PMF and hidden
+AP+STA model ([the case and when to come back](#a-virtual-access-point-and-a-virtual-station-together-wait-for-esp32sims-apsta)); no other chips, pending their station attachment. WPA3-SAE, required PMF and hidden
 SSIDs wait for upstream authentication and probe support.
 
 ## Runtime preparation is explicit and version-matched
@@ -4017,3 +4025,141 @@ the flashing path, and on many devkits a console on USB-Serial/JTAG, which the s
 `Wire` on UART0 does not read.
 
 **Not yet:** pending a real board of each chip to validate on.
+
+## Project defaults are esp32tl ini options that the markers override
+
+Status: decided (17 November 2026)
+
+A project sets the app, the build and the board profile of its `board` tests once, with four
+string ini options: `esp32tl_app_path`, `esp32tl_build_dir`, and `esp32tl_board_profile` or
+`esp32tl_board_profile_path`. They go where pytest reads its configuration, `pyproject.toml`'s
+`[tool.pytest.ini_options]` among them, and `-o` overrides them as any ini option. pytest ignores
+a `pytestmark` in `conftest.py`, silently, so before this a project repeated the markers in every
+file, or re-exported a `pytestmark` from a helper module, which works but is not something a
+newcomer finds. A value in quotes is a usage error: an ini file keeps the quotes TOML takes off,
+and a quoted path would only fail later, at setup, as a missing app.
+
+Paths resolve against the configuration file's directory (`config.inipath.parent`), the base
+pytest uses for its own `paths` options, or the invocation directory when there is no
+configuration file; so the options select the same files from any working directory.
+`esp32tl_build_dir` is relative to the app, as the marker's `build_dir` is
+([explicit build paths](#explicit-build-paths-are-relative-to-the-application-and-never-fall-back)).
+The options sit below every marker: the closest `app_path` marker supplies the app and its build
+together, as it already did against a more distant marker, and the closest `board_profile` marker
+the profile. A test that keeps its markers runs what it ran before. The name and the file are two
+options, as the marker's positional name and `path=` are, and setting both is a usage error.
+
+This extends [the app from the app_path marker](#the-app-comes-from-the-app_path-marker) and
+[local board profiles](#local-board-profiles-use-an-explicit-path-relative-to-the-test-file):
+the markers' paths stay relative to the test file, and their checks, snapshots and late-marker
+refusal are unchanged.
+
+**Rejected:** pytest-embedded's `--app-path` and `--build-dir` through `addopts`. They are
+command-line options whose app path is used relative to the working directory, they carry
+pytest-embedded's multi-DUT `|` syntax, nothing of theirs selects a board profile, and
+[allowing them beside the marker](#pytest-embeddeds-app-and-service-options-are-refused-for-board-tests)
+would make two competing selectors; they stay refused. Also rejected: pairing `esp32tl_build_dir`
+with an app a marker names, because the project's build directory describes the project's app,
+and the closest marker already supplies both values; one profile option that guesses whether its
+value is a name or a path, rejected for the marker for the same reason; resolving against pytest's
+`rootdir`, which `--rootdir` can move away from the file the values are written in, or against the
+working directory, which changes with where pytest is started; pytest's `paths` type for a single
+value, a list in native TOML and split at spaces in an ini file; a plugin hook or fixture of the
+project's that sets markers, which is what the options spare it.
+
+## A model that frames by silence tells on_frame when the frame's data came
+
+Status: decided (17 November 2026)
+
+`IdleFramedModel` sets `frame_first_at` and `frame_last_at` before each `on_frame(at, frame)`:
+the `at` of the frame's first piece, the instant the firmware wrote the frame's first byte, and
+that of its last piece. `at` stays what it was, the instant the silence of `gap` ended the frame.
+A test of the firmware's timing, as when its first request starts, wants the first instant;
+`at` adds `gap` and the time the frame took to write. Intervals between frames were already
+exact. The attributes keep the frame's values until the next frame ends and are absent before
+the first one. This extends
+[the bases a model starts from](#a-model-that-only-answers-or-frames-by-silence-starts-from-a-base-that-fills-in-the-rest):
+nothing else of `IdleFramedModel` changes, and a subclass written for `on_frame(at, frame)` needs
+no change.
+
+The link gives each piece one instant, that of its first byte, and no instant of a later byte; so
+`frame_last_at` is the last piece's instant, not the frame's last byte's, and nothing claims more.
+A piece exactly `gap` after the last, which the link delivers before the turn at that instant,
+continues the frame, as before.
+
+**Rejected:** a third argument of `on_frame`, required or keyword, because every subclass
+overrides `on_frame` with two arguments, and calling it with a third breaks them; inspecting the
+subclass's signature to pass a keyword only to one that takes it, because a decorated or `*args`
+method hides it and the call would depend on how the method is written; a `Frame` object passed to
+a second hook, because `on_frame` is the abstract method that makes a misspelt one impossible to
+create, and two hooks would make one of them optional; times per byte, which the transport does
+not give.
+
+## The emulated device's Wi-Fi MACs are constants of the wifi interface
+
+Status: decided (17 November 2026)
+
+`esp32tl.interfaces.wifi` exports `ESP32SIM_STATION_MAC`, `24:6f:28:00:11:22`, and
+`ESP32SIM_SOFTAP_MAC`, `24:6f:28:00:11:23`, which `wifi.station`'s check of its own `mac` uses. A
+firmware that names its SoftAP after its MAC needs the value before power-on, to give
+`wifi.station` the SSID, and copying the literal into a test hides where it came from. The names
+say whose they are: the emulated classic ESP32's on esp32sim, the runner's base MAC and the
+SoftAP's derived from it as ESP-IDF does, not a physical board's and not the harness's virtual
+station's (`esp32tl.net.station.DEFAULT_MAC`) or virtual access point's BSSID. The runner's `MAC`
+is in Rust, in `runner/src/chip/esp32.rs`; a test compares the two, as the runtime revision pins
+are compared.
+
+**Rejected:** `esp32tl.backends.esp32sim`, which imports the `wifi` interface, whose check needs
+the constants: the interface would have to import the backend back. A property of the `wifi`
+fixture, because the serial backend's fixture is a `Wifi` too, on a board whose MACs come from its
+eFuses and which esp32tl does not read. Reading the MACs from the runner at run time, because a
+test needs them before power-on, before the runner starts. Constants for the ESP32-S3, C3 and
+C6, which have MACs of their own but no virtual station attachment yet (#229), so no test of theirs
+can join a SoftAP named after one.
+
+## A missing release manifest names possible causes, not a diagnosis or a fallback
+
+Status: decided (17 November 2026)
+
+When `esp32tl runtime prepare` gets HTTP 404 for the release's runtime manifest, the first file it
+downloads, `download failed` keeps the URL and the HTTP error and adds the possible causes, the
+release not published yet or published without a runtime for this platform, and the alternatives,
+`ESP32TL_RUNNER` with `ESP32TL_ROM`, or a source checkout's `make setup`. The status says only
+that the file is not there, so the message says "possible causes". Other statuses, network errors
+and a 404 for a later file keep their message: the manifest found means the release exists, and a
+hint there would mislead.
+
+**Rejected:** querying the GitHub API to tell an unpublished release from a missing asset, a
+second request to another service for a message; trying the previous version or another release,
+which would install a runtime that the version match exists to refuse
+([runtime preparation](#runtime-preparation-is-explicit-and-version-matched)).
+
+## A virtual access point and a virtual station together wait for esp32sim's AP+STA
+
+Status: postponed (17 November 2026)
+
+`wifi.access_point` and `wifi.station` stay exclusive in one test, with
+`wifi.access_point and wifi.station are exclusive: one virtual Wi-Fi role per test`. The pinned
+esp32sim, `357b0e5`, refuses the combination itself: `StationLink::attach_station` in
+`esp-soc/src/wifi.rs` returns `a virtual station needs no access point attached: AP+STA is not
+modelled yet`, `add_ap` refuses an access point beside a station, and the link has one Ethernet
+relay, whose frames carry no sign of which of the device's interfaces they belong to.
+[The decision on joining the device's access point](#a-test-joins-the-devices-access-point-through-esp32sims-virtual-station-with-the-harness-as-the-host-behind-it)
+already postponed it; this records a case that needs it and when to come back.
+
+The case: a firmware in `WIFI_AP_STA` that, without its configured network, starts a fallback
+SoftAP, and retries the configured network only while no client is on that SoftAP. A test of that
+rule needs, in one run: the device's fallback SoftAP up, a virtual client joined to it, the
+configured network appearing later as a virtual access point (off the air with
+`access_point_off()`, then on with `access_point_on()`), and the device's station not trying it, or trying it, by whether the
+client is still there. Neither role alone can show the rule.
+
+What is missing upstream: one esp32sim radio that carries a virtual access point for the guest's
+station interface and a virtual station on the guest's SoftAP at once, on one channel as the chip
+has, with each relayed Ethernet frame marked by the interface it belongs to, and the attachment
+calls that allow both. The runner then needs `--wifi` with `--wifi-sta` and per-interface frames
+on the link, and the harness two networks in one `Wifi`.
+
+Come back when an esp32sim revision accepts both attachments on the classic ESP32 and relays the
+two interfaces' frames apart; then bump the pin, lift the exclusivity check, and test the case
+above. No upstream issue has been opened for it.

@@ -110,6 +110,73 @@ the same directory. Use the marker in pytest and `esp32tl run --build-dir` or
 it together with `app_path`; a second parametrisation is a collection error. A change to the
 marker's keyword after collection has read it is refused like a late `app_path` argument.
 
+### Project defaults
+
+A project whose tests all run one app on one board sets them once, in its pytest configuration,
+instead of a `pytestmark` in every file:
+
+```toml
+# pyproject.toml, beside firmware/ and tests/
+[tool.pytest.ini_options]
+esp32tl_app_path = "firmware"
+esp32tl_build_dir = ".pio/build/esp32"
+esp32tl_board_profile_path = "tests/boards/my-board.toml"
+```
+
+| Option | What it sets | Relative to | Without it |
+|---|---|---|---|
+| `esp32tl_app_path` | The app of a test without an `app_path` marker | The configuration file's directory | The test file's directory |
+| `esp32tl_build_dir` | That app's build directory | The app, as `build_dir=` is; or absolute | `build` |
+| `esp32tl_board_profile` | The bundled profile of a test without a `board_profile` marker | (a name) | `esp32-devkitc` |
+| `esp32tl_board_profile_path` | A local profile file for a test without a `board_profile` marker | The configuration file's directory | `esp32-devkitc` |
+
+The options go wherever pytest reads its configuration: `[tool.pytest.ini_options]` in
+`pyproject.toml`, `pytest.ini`, `tox.ini` or `setup.cfg`, or `-o NAME=VALUE` on the command line.
+TOML takes the quotes off its strings; an ini file keeps them, so there the values go without
+quotes: `esp32tl_app_path = firmware`. The configuration file's directory is pytest's `inipath`'s,
+the base pytest uses for its own `paths` options: the paths name the same directories whichever
+directory pytest is started from, `pytest`, `pytest tests/` or `pytest /path/to/project/tests`
+alike. A value given with `-o` is resolved against the same directory; pytest started with no
+configuration file at all resolves it against the invocation directory. Absolute paths are taken as
+they are. An empty value is the same as no value.
+
+Each test's selection, closest first:
+
+1. **The app and its build:** the closest `app_path` marker (test, class, module), whose path is
+   relative to the test file and whose `build_dir`, without the keyword, is that app's `build/`.
+   A marker replaces both project defaults: `esp32tl_build_dir` belongs to `esp32tl_app_path`'s
+   app, not to another app a marker names. Then `esp32tl_app_path` with `esp32tl_build_dir`.
+   Then the test file's directory with `esp32tl_build_dir`, or with `build`.
+2. **The board profile:** the closest `board_profile` marker, a name or `path=` relative to the
+   test file. Then `esp32tl_board_profile` or `esp32tl_board_profile_path`. Then
+   `esp32-devkitc`.
+
+So a test that keeps its markers runs what it ran before, with or without the options. The
+options are read once per session, when pytest configures; a profile file is loaded and checked
+at collection, as `board_profile(path=...)`'s is, and is a snapshot for the session.
+
+Errors:
+
+- A value in quotes, as `esp32tl_app_path = "firmware"` in `pytest.ini`:
+  `ERROR: esp32tl_app_path is "firmware", in quotes: write it without them (esp32tl_app_path = firmware); an ini file keeps the quotes`,
+  exit code 4, before collection. The last clause comes only with a value read from an ini file:
+  a value still in quotes after TOML took its own off, as `esp32tl_app_path = "'firmware'"`, and
+  one given in quotes with `-o`, with or without a configuration file, get the same error
+  without it.
+- Both profile options set:
+  `ERROR: esp32tl_board_profile and esp32tl_board_profile_path are both set: set the bundled name or the file`,
+  exit code 4, before collection.
+- A default profile that does not load fails collection of each test that reads it, with the
+  option named at the end, as
+  `tests/test_app.py::test_boots: no board profile named 'boards/my-board.toml'; the profiles are esp32-devkitc, gps-alarm-clock, lilygo-t-a7670g-r2, sd-data-logger; for a local file, set esp32tl_board_profile_path to boards/my-board.toml (from esp32tl_board_profile)`
+  or `tests/test_app.py::test_boots: /path/to/project/tests/boards/missing.toml: missing.toml: [Errno 2] No such file or directory: '/path/to/project/tests/boards/missing.toml' (from esp32tl_board_profile_path)`.
+  A test with its own `board_profile` marker does not read the default and is not affected.
+- A default app or build that does not exist fails at the test's setup, as the marker's does.
+
+pytest-embedded's `--app-path` and `--build-dir` stay refused, also in `addopts`
+([options esp32tl refuses](#options-esp32tl-refuses)): they are command-line options relative to
+the working directory, with no board profile beside them.
+
 On esp32sim, before `board.power_on()`, `board.nvs({"config": {"broker_host": "broker.test"}})`
 can replace a named NVS partition from the build's table. Integer values require a width,
 for example `u16(8883)` from `esp32tl.flash`. On serial, `board.nvs(...)` skips without writing
@@ -1205,7 +1272,7 @@ one line:
 
 | Option | Message |
 |---|---|
-| `--embedded-services`, `--app-path`, `--build-dir` | ``ERROR: --{option} is set: esp32tl chooses it for every test that uses `board` (the backend through --esp32tl-backend, the app through the app_path marker, the build through that marker's build_dir keyword or its build/ directory)`` |
+| `--embedded-services`, `--app-path`, `--build-dir` | ``ERROR: --{option} is set: esp32tl chooses it for every test that uses `board` (the backend through --esp32tl-backend, the app through the app_path marker or esp32tl_app_path, the build through that marker's build_dir keyword, esp32tl_build_dir or the app's build/ directory)`` |
 | `--count` with any value but 1 | `ERROR: --count is set: esp32tl runs one board in a test` |
 | An `app_path` or `board_profile` marker in a `pytest.param(..., marks=...)`, or added by a hook | `ERROR: {test id}: the {marker} marker reached the test after esp32tl read it, from a pytest.param or a hook: put it on the test, its class or its module` |
 
@@ -1284,6 +1351,8 @@ stable ([decision](../decisions/harness.md#filter-the-xml-attribute-warning-as-a
 - **The `app_path` and `board_profile` markers**: esp32tl registers them and reads them on every
   test that uses `board`. A project's own marker of one of these names means esp32tl's there.
 - **The `esp32tl_card_cache_mib` ini option**: esp32tl's, for [`card_cache`](#keeping-a-prepared-card).
+- **The `esp32tl_app_path`, `esp32tl_build_dir`, `esp32tl_board_profile` and
+  `esp32tl_board_profile_path` ini options**: esp32tl's, for [project defaults](#project-defaults).
 - **`pytest_runtest_setup`**: esp32tl's runs first and numbers the TLS certificate authorities
   from 0 again, skipping the numbers of CAs still held, so that a test's own CAs have the same
   keys alone as in the suite ([TLS](network-user.md#dns-time-and-services)).
@@ -1336,6 +1405,40 @@ have 8 to 63 ASCII bytes and no comma, matching esp32sim's parser. Without a pas
 be open. The MAC defaults to `02:53:54:41:00:01`, must be six hexadecimal octets, unicast, and must
 differ from the device's station and SoftAP MACs (`24:6f:28:00:11:22` and `24:6f:28:00:11:23`).
 
+#### The device's MACs
+
+A firmware that names its SoftAP after its MAC needs the device's MAC before power-on, to give
+`wifi.station` the SSID. `esp32tl.interfaces.wifi` names the emulated device's two Wi-Fi MACs:
+
+```python
+from esp32tl.interfaces.wifi import ESP32SIM_STATION_MAC
+from esp32tl.units import seconds
+
+
+def test_a_phone_joins_the_setup_network(board, wifi):
+    # The firmware names its SoftAP "setup-" and the last two octets of its station MAC.
+    suffix = ESP32SIM_STATION_MAC.replace(":", "")[-4:].upper()
+    network = wifi.station(f"setup-{suffix}")
+    board.power_on()
+    board.wait_until(network.when_leased(), within=seconds(20))
+```
+
+| Address | Value | Whose |
+|---|---|---|
+| `ESP32SIM_STATION_MAC` | `24:6f:28:00:11:22` | The emulated device's Wi-Fi station interface: the base MAC the runner gives the machine, the one esp32sim's CLI gives the classic chip |
+| `ESP32SIM_SOFTAP_MAC` | `24:6f:28:00:11:23` | The emulated device's SoftAP interface: the base MAC plus one, as ESP-IDF derives it on the classic ESP32 (four universal MACs: station, SoftAP, Bluetooth, Ethernet) |
+| `esp32tl.net.station.DEFAULT_MAC` | `02:53:54:41:00:01` | The harness's virtual station, the client that joins the device's SoftAP, unless `wifi.station(mac=...)` names another |
+| `wifi.access_point(bssid=...)` | `02:53:49:4d:00:01` unless given | The harness's virtual access point, which the device's station joins |
+
+The two `ESP32SIM_*` constants are the emulated classic ESP32's on esp32sim, the same in every run
+and on every board profile whose chip is `esp32`. The ESP32-S3, C3 and C6 get other MACs from
+esp32sim, and have no virtual station to join their SoftAP. They are not a physical board's: on the serial backend the MACs come
+from the board's eFuses, and nothing in esp32tl reads them. A firmware that reads the station MAC
+while its station interface does not exist (Arduino's `WiFi.macAddress()` in `WIFI_AP` mode) can
+get something else, on esp32sim as on hardware. `tests/test_wifi.py` checks the station MAC
+against `MAC` in `runner/src/chip/esp32.rs`, and the SoftAP MAC as that plus one; no test reads the
+SoftAP MAC from a running firmware. `wifi.station` refuses both as its own `mac`.
+
 This is exclusive with `wifi.access_point(...)` and `wifi.nearby(...)`. A second call raises
 `wifi has its station already: one per test`. `access_point_off()` and `access_point_on()` raise
 `wifi.access_point_off(): wifi.station has no virtual access point to switch` and the corresponding
@@ -1346,7 +1449,9 @@ Wait for `network.when_leased()` after power-on, then use `network.connect(80)` 
 [the network guide](network-user.md#joining-the-devices-own-access-point). Serial does not supply virtual air; Wi-Fi replay is not a supported source. Only the classic ESP32 has the virtual station: on the other chips `wifi.station(...)` skips the
 test, `esp32sim: wifi on esp32s3: esp32sim has no virtual station for a SoftAP on the ESP32-S3 (#229, G4)`.
 Open and WPA2-PSK are supported; there is no virtual
-AP+STA combination, WPA3-SAE, required PMF, hidden SSID probing or keep-alive. An idle device may
+AP+STA combination
+([postponed until esp32sim models it](../decisions/harness.md#a-virtual-access-point-and-a-virtual-station-together-wait-for-esp32sims-apsta)),
+WPA3-SAE, required PMF, hidden SSID probing or keep-alive. An idle device may
 disassociate the host after about 300 s; the emulator rejoins. Lease renewal is not implemented:
 expiry clears the address and connections and starts DHCP again. Radio extensions await upstream
 support, and renewal awaits a DHCP client extension.

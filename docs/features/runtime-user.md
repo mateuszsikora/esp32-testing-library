@@ -69,6 +69,19 @@ Errors distinguish `unsupported runtime platform`, `runtime missing`, `incompati
 `invalid runtime manifest`, `download failed`, and `invalid checksum or missing file`.
 Preparation exits 2 on failure. No automatic update or downgrade occurs.
 
+A `download failed` error names the URL and the error the download got. When that error is an
+HTTP 404 for the release's runtime manifest, the first file preparation downloads, the message
+adds what it may mean and the ways round it, as:
+
+```text
+esp32tl: download failed: https://github.com/mateuszsikora/esp32-testing-library/releases/download/v0.1.0/esp32tl-runner-macos-arm64.json: HTTP Error 404: Not Found; possible causes: release v0.1.0 is not published (yet), or it has no runtime for macos-arm64; alternatives: set ESP32TL_RUNNER and ESP32TL_ROM, or install esp32tl from a source checkout and run make setup there
+```
+
+The 404 says only that the file is not there, so the causes are possibilities, not a diagnosis.
+Any other HTTP status, a network error, and a 404 for the runner or the ROM archive after the
+manifest was found keep the message without the hint. Preparation never tries another version
+or another release instead.
+
 In consumer CI install esp32tl from PyPI (or a published release wheel) and run `esp32tl runtime prepare` before pytest. Cache
 `~/.cache/esp32tl` keyed by package version and OS/architecture (or set XDG_CACHE_HOME explicitly).
 The first run needs HTTPS access to GitHub and Espressif's GitHub release; later runs need neither
@@ -91,7 +104,10 @@ release publisher or local cache writer. No general package manager is introduce
 Release maintainers: [the release workflow](../cicd.md#runtime-releases) builds the Python
 sdist/wheel once and tests that wheel on both native targets before creating a draft. Its
 `verified-release` artifact contains all six assets plus SHA256SUMS; neither ROM nor firmware
-is redistributed. `scripts/check-release.py` checks the exact asset set and manifest identities.
+is redistributed. A runner taken from that artifact by hand has lost its executable bit and needs
+`chmod +x` before `ESP32TL_RUNNER` can name it
+([checking an artifact by hand](../cicd.md#checking-a-release-artifact-by-hand));
+`esp32tl runtime prepare` sets the mode itself. `scripts/check-release.py` checks the exact asset set and manifest identities.
 
 The current esp32sim revision is `357b0e542dfe97d4c62ec4a15c01c4969164448c`. When changing it,
 update `esp32tl/runtime.py`, `runner/Cargo.toml` and `runner/Cargo.lock` together.

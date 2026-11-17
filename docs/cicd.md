@@ -541,6 +541,29 @@ To publish a release:
    the firmware again offline. Anonymous downloading requires a published release; a draft
    is insufficient even though this repository is public.
 
+### Checking a release artifact by hand
+
+To try a build's runtime before any release exists, as a consumer would, download its
+`verified-release` artifact and point esp32tl at the files. Actions artifacts are zip files and do
+not keep file modes, so the runner arrives without its executable bit:
+
+```sh
+gh run download RUN_ID --name verified-release --dir release-artifact
+(cd release-artifact && shasum -a 256 -c SHA256SUMS)
+chmod +x release-artifact/esp32tl-runner-macos-arm64   # or -linux-x86_64
+python3 -m venv /tmp/esp32tl-check && . /tmp/esp32tl-check/bin/activate
+python -m pip install release-artifact/esp32tl-*-py3-none-any.whl
+export ESP32TL_RUNNER=$PWD/release-artifact/esp32tl-runner-macos-arm64
+export ESP32TL_ROM=$HOME/.espressif/tools/esp-rom-elfs/20241011/esp32_rev300_rom.elf
+pytest path/to/tests
+```
+
+Without `chmod +x` the backend fails with
+`cannot verify runner {path}: [Errno 13] Permission denied: '{path}'; rebuild or run esp32tl runtime prepare`.
+`ESP32TL_ROM` names the pinned ROM ELF wherever it is; a checkout's `scripts/fetch-rom-elf` puts it
+in `.cache/esp-rom-elfs/20241011/`. A runtime prepared from a published release needs none of this:
+`esp32tl runtime prepare` sets the runner's mode to `0o755`.
+
 Publishing the GitHub release triggers the PyPI workflow below, using the Trusted Publisher
 configured for `esp32tl`. The release workflow files must be included in the tagged commit.
 Local actionlint and smoke tests complement the hosted runs; they do not exercise PyPI's OIDC

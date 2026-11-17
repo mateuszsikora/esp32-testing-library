@@ -1,17 +1,22 @@
 """The `wifi` interface without the emulator: what it asks of the backend, what it gives the
 runner, and what it sends on the link."""
 
+import re
 import struct
 from collections.abc import Callable
 from datetime import timedelta
+from pathlib import Path
 
 import pytest
 
 from esp32tl.boards.capabilities import Request
 from esp32tl.interfaces import SourceError
-from esp32tl.interfaces.wifi import Wifi
+from esp32tl.interfaces.wifi import ESP32SIM_SOFTAP_MAC, ESP32SIM_STATION_MAC, Wifi
 from esp32tl.link.protocol import WifiAp
 from esp32tl.net.ntp import DEFAULT_UTC, NTP_EPOCH
+from esp32tl.net.station import DEFAULT_MAC
+
+ROOT = Path(__file__).resolve().parent.parent
 
 MS = 1_000_000
 
@@ -184,3 +189,23 @@ def test_station_flags_properties_and_exclusions(wifi: Wifi, asked: list[Request
 def test_station_validation(kwargs: dict[str, str], why: str) -> None:
     with pytest.raises(ValueError, match=why):
         Wifi(now=lambda: 0).station(**kwargs)
+
+
+def test_the_device_s_macs_are_the_runner_s_base_mac_and_the_one_after_it() -> None:
+    # The runner gives the classic ESP32's machine its base MAC; ESP-IDF's SoftAP MAC is that
+    # plus one.
+    source = (ROOT / "runner" / "src" / "chip" / "esp32.rs").read_text()
+    match = re.search(r"const MAC: \[u8; 6\] = \[([^\]]*)\];", source)
+    assert match is not None
+    base = bytes(int(octet, 16) for octet in match[1].split(","))
+    assert base.hex(":") == ESP32SIM_STATION_MAC
+    softap = (int.from_bytes(base, "big") + 1).to_bytes(6, "big")
+    assert softap.hex(":") == ESP32SIM_SOFTAP_MAC
+    # The virtual station's default is neither of them.
+    assert DEFAULT_MAC not in (ESP32SIM_STATION_MAC, ESP32SIM_SOFTAP_MAC)
+
+
+@pytest.mark.parametrize("mac", [ESP32SIM_STATION_MAC, ESP32SIM_SOFTAP_MAC.upper()])
+def test_the_virtual_station_refuses_the_device_s_macs(mac: str) -> None:
+    with pytest.raises(ValueError, match="differ from the device's station and access point"):
+        Wifi(now=lambda: 0).station("x", mac=mac)
