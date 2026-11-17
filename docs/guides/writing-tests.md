@@ -86,8 +86,9 @@ def test_prints_its_version(board):
 ```
 
 `esp32tl_app_path` and `esp32tl_board_profile_path` are relative to the directory of the file
-that holds them, and `esp32tl_build_dir` to the app, so `pytest`, `pytest tests/test_console.py`
-and `pytest /path/to/my_project/tests` from any directory run the same build on the same board.
+that holds them, and `esp32tl_build_dir` to the app, so the selection does not depend on where
+pytest starts: `pytest` or `pytest tests/test_console.py` from `my_project/`, and
+`pytest /path/to/my_project/tests` from any other directory, run the same build on the same board.
 An ESP-IDF project leaves out `esp32tl_build_dir` and gets the app's `build/`;
 `esp32tl_board_profile = "esp32-devkitc"` names a bundled profile instead of a file. A marker still
 wins for its test, class or module: `pytest.mark.board_profile("lilygo-t-a7670g-r2")` on one test

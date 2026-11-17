@@ -1961,9 +1961,10 @@ clones, and rejection of serial distributed execution before accessing hardware.
 - **245.** A test that uses `board` takes its app, its build and its board profile from the
   closest marker, then from `esp32tl_app_path`, `esp32tl_build_dir` and `esp32tl_board_profile`
   or `esp32tl_board_profile_path`, then from the test file's directory, `build` and
-  `esp32-devkitc`. An `app_path` marker replaces both the project's app and its build; the
-  options' paths resolve against the configuration file's directory, whatever directory pytest
-  starts in; a quoted value and both profile options set are usage errors, and a default profile
+  `esp32-devkitc`. An `app_path` marker replaces both the project's app and its build;
+  `esp32tl_app_path` and `esp32tl_board_profile_path` resolve against the configuration file's
+  directory, whatever directory pytest starts in, and `esp32tl_build_dir` against the selected
+  app; a quoted value and both profile options set are usage errors, and a default profile
   that does not load names its option.
   `tests/test_pytest_plugin.py::test_project_defaults_resolve_against_the_configuration_file_from_any_directory`,
   `tests/test_pytest_plugin.py::test_project_defaults_take_a_bundled_profile_and_absolute_paths`,

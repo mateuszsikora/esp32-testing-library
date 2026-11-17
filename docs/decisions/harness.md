@@ -4072,8 +4072,9 @@ project's that sets markers, which is what the options spare it.
 Status: decided (#237)
 
 `IdleFramedModel` sets `frame_first_at` and `frame_last_at` before each `on_frame(at, frame)`:
-the `at` of the frame's first piece, the instant the firmware wrote the frame's first byte, and
-that of its last piece. `at` stays what it was, the instant the silence of `gap` ended the frame.
+the `at` of the frame's first piece and that of its last piece, as `receive` got them: on a UART
+the instant the firmware wrote the piece's first byte, behind an SPP channel the instant it
+arrived. `at` stays what it was, the instant the silence of `gap` ended the frame.
 A test of the firmware's timing, as when its first request starts, wants the first instant;
 `at` adds `gap` and the time the frame took to write. Intervals between frames were already
 exact. The attributes keep the frame's values until the next frame ends and are absent before

@@ -65,7 +65,8 @@ def test_follows_the_receiver_as_it_moves(board):
 
 What the receiver can be told, and the units, are in [models and units](models-user.md).
 
-- The path is relative to the directory of the test file. Without the marker, the app is that
+- The path is relative to the directory of the test file. Without the marker, the app is the
+  project's `esp32tl_app_path` when it is set ([project defaults](#project-defaults)), else that
   directory itself.
 - By default, the backend runs the build in the app's `build/` directory: an ESP-IDF build,
   every file `flasher_args.json` lists flashed at its offset, or a PlatformIO build

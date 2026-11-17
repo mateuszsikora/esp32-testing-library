@@ -148,11 +148,11 @@ class IdleFramedModel(Model):
     far, as a part that loses its power does.
 
     While `on_frame` runs, and until the next frame ends, `frame_first_at` is the `at` of the
-    frame's first piece, the instant the firmware wrote the frame's first byte, and
-    `frame_last_at` that of its last piece, the instant the firmware wrote the first byte of
-    that piece; before the first frame the model has neither. The link gives a piece one
-    instant, so neither says when a byte after a piece's first was written: `frame_last_at` is
-    not the instant of the frame's last byte."""
+    frame's first piece and `frame_last_at` that of its last piece, as `receive` got them: on a
+    UART, the instant the firmware wrote the piece's first byte into the TX FIFO; behind an SPP
+    channel, the instant the piece arrived. Before the first frame the model has neither. The
+    link gives a piece one instant, so neither says when a byte after a piece's first was
+    written: `frame_last_at` is not the instant of the frame's last byte."""
 
     gap: Duration
     # Set before each `on_frame`; no class default, so that reading one before the first frame

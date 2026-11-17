@@ -155,12 +155,15 @@ class Slave(IdleFramedModel):
   at that instant. One that comes later starts the next frame.
 - `at` is when the silence showed the frame had ended, not when its data came. While `on_frame`
   runs, the model also has the frame's data instants: `self.frame_first_at`, the `at` of the
-  frame's first piece, the instant the firmware wrote the frame's first byte, and
-  `self.frame_last_at`, the `at` of its last piece. For a frame of one piece they are equal. A
-  test of when the firmware starts a request, as "the first poll starts 2 s after power-on",
-  reads `frame_first_at`; `at` would add `gap` and the time the firmware took to write the frame.
-  Neither is the instant of any byte after a piece's first: the link stamps a piece once, at its
-  first byte, and `frame_last_at` is not when the frame's last byte was written. Both keep the
+  frame's first piece, and `self.frame_last_at`, the `at` of its last piece. For a frame of one
+  piece they are equal. They are what `receive` got as `at`, so they mean what it does there: on
+  a UART, the instant the firmware wrote the piece's first byte into the TX FIFO; behind an
+  `SppPeer` channel, the instant the piece arrived, which says nothing of when the firmware wrote
+  it. On a UART, a test of when the firmware starts a request, as "the first poll starts 2 s
+  after power-on", reads `frame_first_at`; `at` would add `gap` and the time the firmware took to
+  write the frame. Neither is the instant of any byte after a piece's first: the link stamps a
+  piece once, at its first byte, and `frame_last_at` is not when the frame's last byte was
+  written. Both keep the
   frame's values until the next frame ends; before the first frame the model has neither, and
   reading one is an `AttributeError`. A subclass that defines only `on_frame(at, frame)` works as
   before and need not read them.
