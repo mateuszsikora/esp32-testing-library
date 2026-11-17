@@ -4071,18 +4071,18 @@ project's that sets markers, which is what the options spare it.
 
 Status: decided (#237)
 
-`IdleFramedModel` sets `frame_first_at` and `frame_last_at` before each `on_frame(at, frame)`:
-the `at` of the frame's first piece and that of its last piece, as `receive` got them: on a UART
-the instant the firmware wrote the piece's first byte, behind an SPP channel the instant it
-arrived. `at` stays what it was, the instant the silence of `gap` ended the frame.
-A test of the firmware's timing on a UART, as when its first request starts, wants the first
-instant; `at` adds `gap` and the time the frame took to write. Behind an SPP channel the first
-instant is when the frame's first piece arrived, which does not say when the firmware wrote it. Intervals between frames were already
-exact. The attributes keep the frame's values until the next frame ends and are absent before
-the first one. This extends
-[the bases a model starts from](#a-model-that-only-answers-or-frames-by-silence-starts-from-a-base-that-fills-in-the-rest):
-nothing else of `IdleFramedModel` changes, and a subclass written for `on_frame(at, frame)` needs
-no change.
+`IdleFramedModel` sets `frame_first_at` and `frame_last_at` before each `on_frame(at, frame)`: the
+`at` of the frame's first piece and that of its last piece, as `receive` got them: on a UART the
+instant the firmware wrote the piece's first byte, behind an SPP channel the instant it arrived.
+`at` stays what it was, the instant the silence of `gap` ended the frame. A test of the firmware's
+timing on a UART, as when its first request starts, wants the first instant; `at` adds `gap` and the
+time the frame took to write. Behind an SPP channel the first instant is when the frame's first
+piece arrived, which does not say when the firmware wrote it. Intervals between frames were already
+exact. The attributes keep the frame's values until the next frame ends and are absent before the
+first one. This extends [the bases a model starts
+from](#a-model-that-only-answers-or-frames-by-silence-starts-from-a-base-that-fills-in-the-rest):
+nothing else of `IdleFramedModel` changes, and a subclass written for `on_frame(at, frame)` needs no
+change.
 
 The link gives each piece one instant, that of its first byte, and no instant of a later byte; so
 `frame_last_at` is the last piece's instant, not the frame's last byte's, and nothing claims more.
@@ -4152,9 +4152,9 @@ already postponed it; this records a case that needs it and when to come back.
 The case: a firmware in `WIFI_AP_STA` that, without its configured network, starts a fallback
 SoftAP, and retries the configured network only while no client is on that SoftAP. A test of that
 rule needs, in one run: the device's fallback SoftAP up, a virtual client joined to it, the
-configured network appearing later as a virtual access point (off the air with
-`access_point_off()`, then on with `access_point_on()`), and the device's station not trying it, or trying it, by whether the
-client is still there. Neither role alone can show the rule.
+configured network appearing later as a virtual access point (off the air with `access_point_off()`,
+then on with `access_point_on()`), and the device's station not trying it, or trying it, by whether
+the client is still there. Neither role alone can show the rule.
 
 What is missing upstream: one esp32sim radio that carries a virtual access point for the guest's
 station interface and a virtual station on the guest's SoftAP at once, on one channel as the chip

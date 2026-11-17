@@ -171,7 +171,7 @@ Errors:
   exit code 4, before collection.
 - A default profile that does not load fails collection of each test that reads it, with the
   option named at the end, as
-  `tests/test_app.py::test_boots: no board profile named 'boards/my-board.toml'; the profiles are esp32-devkitc, gps-alarm-clock, lilygo-t-a7670g-r2, sd-data-logger; for a local file, set esp32tl_board_profile_path to boards/my-board.toml (from esp32tl_board_profile)`
+  `tests/test_app.py::test_boots: no board profile named 'boards/my-board.toml'; the profiles are esp32-c3-devkitm, esp32-c6-devkitc, esp32-devkitc, esp32-s3-devkitc, gps-alarm-clock, lilygo-t-a7670g-r2, sd-data-logger; for a local file, set esp32tl_board_profile_path to boards/my-board.toml (from esp32tl_board_profile)`
   or `tests/test_app.py::test_boots: /path/to/project/tests/boards/missing.toml: missing.toml: [Errno 2] No such file or directory: '/path/to/project/tests/boards/missing.toml' (from esp32tl_board_profile_path)`.
   A test with its own `board_profile` marker does not read the default and is not affected.
 - A default app or build that does not exist fails at the test's setup, as the marker's does.

@@ -154,28 +154,28 @@ class Slave(IdleFramedModel):
   wrote; so does one that comes exactly `gap` after it, which the link delivers before the turn
   at that instant. One that comes later starts the next frame.
 - `at` is when the silence showed the frame had ended, not when its data came. While `on_frame`
-  runs, the model also has the frame's data instants: `self.frame_first_at`, the `at` of the
-  frame's first piece, and `self.frame_last_at`, the `at` of its last piece. For a frame of one
-  piece they are equal. They are what `receive` got as `at`, so they mean what it does there: on
-  a UART, the instant the firmware wrote the piece's first byte into the TX FIFO; behind an
-  `SppPeer` channel, the instant the piece arrived, which says nothing of when the firmware wrote
-  it. On a UART, a test of when the firmware starts a request, as "the first poll starts 2 s
-  after power-on", reads `frame_first_at`; `at` would add `gap` and the time the firmware took to
-  write the frame. Neither is the instant of any byte after a piece's first: the link stamps a
-  piece once, at its first byte, and `frame_last_at` is not when the frame's last byte was
-  written. Both keep the
-  frame's values until the next frame ends; before the first frame the model has neither, and
-  reading one is an `AttributeError`. A subclass that defines only `on_frame(at, frame)` works as
-  before and need not read them.
+  runs, the model also has the frame's data instants: `self.frame_first_at`, the `at` of the frame's
+  first piece, and `self.frame_last_at`, the `at` of its last piece. For a frame of one piece they
+  are equal. They are what `receive` got as `at`, so they mean what it does there: on a UART, the
+  instant the firmware wrote the piece's first byte into the TX FIFO; behind an `SppPeer` channel,
+  the instant the piece arrived, which says nothing of when the firmware wrote it. On a UART, a test
+  of when the firmware starts a request, as "the first poll starts 2 s after power-on", reads
+  `frame_first_at`; `at` would add `gap` and the time the firmware took to write the frame. Neither
+  is the instant of any byte after a piece's first: the link stamps a piece once, at its first byte,
+  and `frame_last_at` is not when the frame's last byte was written. Both keep the frame's values
+  until the next frame ends; before the first frame the model has neither, and reading one is an
+  `AttributeError`. A subclass that defines only `on_frame(at, frame)` works as before and need not
+  read them.
 - The gap counts from the `at` of the last piece. On a UART that is the instant the firmware wrote
   its first byte: what it writes in one go comes at about one instant (above), so the gap is the
   firmware's own pause between writes. Behind an `SppPeer` channel it is the instant the piece
-  arrived, so the gap is a pause in what arrived, not in what the firmware wrote. A frame the firmware writes in pieces less than a character time apart,
-  but over more than `gap` in all, ends `gap` after its first byte: the link reports such bytes as
-  one piece, at the first one's instant, so the model sees the pieces, not the line. `gap` is a
-  `Duration` the test computes from the route's baud: the model is not told the baud. 3.5
-  characters are `ms(3.65)` at 9600 baud with 10 bits a character, as 8N1, and `ms(4.02)` with
-  the 11 bits (parity, or two stop bits) the Modbus specification asks for.
+  arrived, so the gap is a pause in what arrived, not in what the firmware wrote. A frame the
+  firmware writes in pieces less than a character time apart, but over more than `gap` in all, ends
+  `gap` after its first byte: the link reports such bytes as one piece, at the first one's instant,
+  so the model sees the pieces, not the line. `gap` is a `Duration` the test computes from the
+  route's baud: the model is not told the baud. 3.5 characters are `ms(3.65)` at 9600 baud with 10
+  bits a character, as 8N1, and `ms(4.02)` with the 11 bits (parity, or two stop bits) the Modbus
+  specification asks for.
 - `latency()` is `gap`, so that the board stops when a frame may have ended, and `quiet_until()`
   the end of the frame heard so far; the model sends nothing else unprompted. On a UART, a model
   without `gap` fails the run at its first turn, with `uart.aux.latency raised TypeError: Slave has
