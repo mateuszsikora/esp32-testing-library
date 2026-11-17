@@ -475,7 +475,10 @@ On [serial](serial-backend-user.md#power-on-time-and-console), `board.reset()` p
 the adapter, and `board.power_off()`, `board.boots`, `board.next_boot()` and
 `board.wait_for_wake()` skip the test.
 
-`console` is the firmware's console, its UART0, read and written on the board's clock:
+`console` is the firmware's console, read and written on the board's clock: its UART0, or the
+chip's USB-Serial/JTAG controller on a board profile with `console = "usb-serial-jtag"`
+([board profiles](board-profiles-user.md#a-console-on-usb-serialjtag)), with the same methods either
+way:
 
 - `console.expect(pattern, timeout=30, *, return_what_before_match=False)` lets the board run until
   `pattern` appears on the console after the last match, for at most `timeout` of the board's time,

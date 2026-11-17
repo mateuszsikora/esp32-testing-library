@@ -1100,3 +1100,55 @@ does for GPIO 3: GPIO 44 on the S3 (`0x6000_90B4`), 20 on the C3 (`0x6000_9054`)
 ([#229](https://github.com/mateuszsikora/esp32-testing-library/issues/229), G3).
 
 **Rejected:** as for the classic chip, forcing UART0's route when none is configured.
+
+## The console port is a flag of its own, `--console-port uart0|usb`
+
+Status: decided (17 November 2026)
+
+`--console stdout|socket|both` says where the console goes; `--console-port uart0|usb` says which
+of the guest's outputs it is: UART0, the default, or the chip's USB-Serial/JTAG controller. It sets
+esp32sim's `Console::mask` to bit 1 (UART0) or bit 0 (USB-Serial/JTAG) for stdout
+(`esp-soc/src/machine.rs:33`), and, with `--console socket` or `both`, the source of the `console`
+messages. `chip::Profile::usb_serial_jtag` is false on the classic ESP32 alone, and `cli::parse`
+refuses the flag there, `--console-port usb: esp32 has no USB-Serial/JTAG controller`, exit 2, as
+[what esp32sim lacks on a chip](#what-esp32sim-lacks-on-a-chip-is-refused-at-the-command-line) is.
+The value names are esp32sim's own (`Console::parse_mask`, `esp-soc/src/console.rs:6-14`).
+
+**Rejected:** new values of `--console` (`usb-socket`, `usb-both`), which would fold two choices
+into one flag and double its values; and both outputs at once on the socket, which would mix two
+streams that the guest writes independently into one `console` message, cut anywhere.
+
+## The USB-Serial/JTAG console adds `console_rx` at protocol version 2
+
+Status: decided (17 November 2026)
+
+The controller has no pins, so the console's input cannot be `uart_rx` on a watched pin:
+`console_rx` (`t`, `data`, [protocol 5.23](../protocol.md#523-console_rx-ext-usb-console)) goes into
+the input queue and, when it comes due, into esp32sim's `serial_input` whole. USB has no character
+time the guest can see, and esp32sim already hands the guest one 64-byte packet at a time, so the
+runner paces nothing. Bytes that come due while the board's supply is off are dropped and counted
+in `stats.console_rx_lost`, a field that is there only with `--console-port usb`. The output stays
+`console`. The version stays 2: the runner reads the message only with `--console-port usb`, which
+only a harness that sends it gives it, and an added field is ignored by a peer that does not know
+it (protocol section 2). The project has no users yet, so no shim is kept either way.
+
+**Rejected:** `uart_rx` on a pseudo pin (a GPIO number the chip does not have, or 255), which the
+runner would have to special-case in `watch`, in its pin checks and in pacing, and which would
+carry a `baud` that means nothing; and pacing `console_rx` at a made-up line rate.
+
+## The USB-Serial/JTAG console's bytes are stamped with the end of their slice
+
+Status: decided (17 November 2026)
+
+esp32sim moves what the controller flushed into `Console::usb` inside `run`
+(`Machine::drain_console`, `esp-soc/src/machine.rs:339-371`), with no cycle, and it has no pins for
+the socket board to record. The runner takes the backlog at every slice boundary
+(`Guest::take_usb_console`) and stamps it with the boundary's cycle: a byte's `t` is at most one
+slice, 1 ms while the board is on, after the guest wrote it. Measured on `console_repl_usb`: the
+help text the guest printed in one slice reaches the harness as one `console` message per line at
+one `t`. esp32sim trims the backlog to its last 48 KiB once it passes 64 KiB, so more than 64 KiB
+written in one slice would lose its start; no validation firmware comes near it.
+
+**Rejected:** a hook in esp32sim for each flushed packet, with its cycle, which would need an
+upstream change that no test needs yet; and draining `UsbSerialJtag::tx_out` from the runner,
+which `run` empties first.

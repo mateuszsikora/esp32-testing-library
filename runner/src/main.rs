@@ -1,10 +1,13 @@
 //! esp32tl-runner: runs an unmodified ESP32 image in esp32sim with the esp32tl harness attached
-//! (plan §4.2). The guest's UART0 goes to stdout, and only it, so that whoever reads stdout gets
-//! the guest's output as the guest wrote it; everything the runner says goes to stderr. Under the
+//! (plan §4.2). The guest's console, UART0 unless `--console-port usb`, goes to stdout, and only
+//! it, so that whoever reads stdout gets the guest's output as the guest wrote it; everything the
+//! runner says goes to stderr. Under the
 //! backend the two meet again: pytest-embedded's `DuplicateStdoutPopen` writes both into one log.
 //! With `--board socket:PATH` or `tcp:HOST:PORT` the chip's pins are wired to a peer on that
 //! socket, which speaks the link protocol of `docs/protocol.md`; `--console socket` or `both`
-//! sends the console to the peer as well, and `socket` keeps it off stdout.
+//! sends the console to the peer as well, and `socket` keeps it off stdout. `--console-port usb`
+//! makes the chip's USB-Serial/JTAG controller the console in place of UART0, on stdout and on
+//! the socket alike; UART0 then goes nowhere but to a peer that watches its TX pin.
 //!
 //! Without `--board`, a run the emulator ends prints one line on stderr,
 //! `esp32tl-runner: stop: VARIANT at T s (W s wall, N resets)`, naming the `Stop` that ended it
@@ -57,6 +60,8 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
+/// `Console::mask` bit for the USB-Serial/JTAG controller.
+const CONSOLE_USB: u32 = 1;
 /// `Console::mask` bit for UART0.
 const CONSOLE_UART0: u32 = 2;
 
@@ -181,6 +186,7 @@ fn run_with_board<T: Target>(
         session::Options {
             end_cycle: end_cycle(opts),
             console: opts.console != cli::Console::Stdout,
+            usb_console: opts.console_port == cli::ConsolePort::Usb,
             peer_timeout: opts.peer_timeout,
             signal: &signal,
             wifi: opts.wifi.as_ref(),
@@ -364,10 +370,10 @@ fn setup<T: Target>(
     m.after_reset();
     let machine = m.machine();
     machine.boot_rom();
-    machine.console.mask = if opts.console == cli::Console::Socket {
-        0
-    } else {
-        CONSOLE_UART0
+    machine.console.mask = match (opts.console, opts.console_port) {
+        (cli::Console::Socket, _) => 0,
+        (_, cli::ConsolePort::Uart0) => CONSOLE_UART0,
+        (_, cli::ConsolePort::Usb) => CONSOLE_USB,
     };
     machine.max_cycles = end_cycle(opts);
     Ok((m, elf))

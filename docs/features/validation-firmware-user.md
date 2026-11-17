@@ -18,7 +18,8 @@ firmware/build.sh                # every ESP-IDF image, into firmware/<image>/bu
 firmware/build.sh nmea_reader    # only the images named
 firmware/build.sh --chips        # the images of the other chips, into firmware/<image>/build-<chip>/
 firmware/build.sh --chips gpio_echo@esp32c3   # only the ones named
-firmware/build-platformio.sh     # arduino_shell, into firmware/arduino_shell/.pio/build/esp32dev/
+firmware/build-platformio.sh     # arduino_shell's environments, into firmware/arduino_shell/.pio/build/<env>/
+firmware/build-platformio.sh arduino_shell@esp32s3_usb   # only that environment
 ```
 
 `make test` builds the images that are missing or whose last build did not finish, so the first
@@ -78,12 +79,33 @@ names one with its build directory and the chip's devkit profile:
 | `hello_world_psram` | `esp32s3` | ESP-IDF's `hello_world` with `firmware/hello_world_psram/sdkconfig.defaults`: `CONFIG_SPIRAM=y`, `CONFIG_SPIRAM_MODE_OCT=y`, the octal PSRAM of the S3 devkit's N8R8 module |
 | `hello_world_8mb` | the three | Nothing: as on the classic ESP32, `hello_world` built for an 8 MB flash |
 | `gatt_server` | `esp32s3`, `esp32c3` | ESP-IDF's `examples/bluetooth/bluedroid/ble/gatt_server`, unmodified, with its own `sdkconfig.defaults`: a BLE GATT server that advertises as `ESP_GATTS_DEMO`. Not for the C6, whose BLE esp32sim runs only for ESP-IDF v5.5.x images |
+| `console_repl_usb` | the three | Not built for the classic ESP32, which has no USB-Serial/JTAG controller: `firmware/console_repl_usb`, `console_repl` with its console on the chip's USB-Serial/JTAG controller ([below](#console_repl_usb)) |
 
 The images that need what esp32sim does not model on these chips, deep sleep (`timer_wake`,
 `deep_sleep`, `persistence`), an SD card over SPI (`sdspi`, `sd_remount`) or Bluetooth Classic
 (`bt_spp_initiator`), are not built for them
 ([issue #229](https://github.com/mateuszsikora/esp32-testing-library/issues/229)).
 `tests/test_chips.py` runs every one of these images.
+
+## `console_repl_usb`
+
+`firmware/console_repl_usb` is ESP-IDF's console REPL, as `console_repl`, with
+`CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y` in its `sdkconfig.defaults` and
+`esp_console_new_repl_usb_serial_jtag` in place of `esp_console_new_repl_uart`: the console of a
+board without a USB-to-UART bridge. Its prompt is the same, `console_repl>`, and `help` answers
+`Print the summary of all registered commands`. `firmware/build.sh --chips` builds it for the
+ESP32-S3, ESP32-C3 and ESP32-C6, into `firmware/console_repl_usb/build-<chip>/`. A test runs it on a
+profile with `console = "usb-serial-jtag"`
+([board profiles](board-profiles-user.md#a-console-on-usb-serialjtag)):
+
+```python
+@pytest.mark.app_path("../firmware/console_repl_usb", build_dir="build-esp32s3")
+@pytest.mark.board_profile(path="boards/esp32-s3-usb.toml")
+```
+
+From power-on its console holds the ROM's banner, the second-stage bootloader and the
+application; UART0 gets the ROM's banner alone. `tests/test_usb_console.py` runs it on the three
+chips, and on a real ESP32-S3 through the serial backend.
 
 ## `modem_at`
 
@@ -698,6 +720,20 @@ pioarduino's espressif32 platform at release `55.03.312-1`, which brings Arduino
 ESP-IDF 5.5.5. Every other image is an ESP-IDF build; this one takes the core's own driver paths,
 `HardwareSerial` on UART0, `Preferences` on NVS, `WiFi` and `WebServer`, which a firmware built the
 same way takes. `make firmware` and `make test` include it ([below](#build-the-arduino-image)).
+
+A second environment, `esp32s3_usb`, builds the same sketch for the ESP32-S3 with
+`board = esp32-s3-devkitc-1`, `-DARDUINO_USB_MODE=1` and `-DARDUINO_USB_CDC_ON_BOOT=1`: `Serial`
+is then the core's HWCDC on the chip's USB-Serial/JTAG controller, a driver path of its own, as on
+an S3 board without a USB-to-UART bridge. Its flash is the devkit's, 8 MB in its image headers,
+which the esp32sim backend gives the runner for a profile without `flash_mb`
+([board profiles](board-profiles-user.md#the-flash-a-run-gets)). The platform, `framework` and `monitor_speed` are in the project's `[env]` section,
+shared by both environments, so the platform is pinned once.
+`firmware/build-platformio.sh arduino_shell@esp32s3_usb` builds it into
+`firmware/arduino_shell/.pio/build/esp32s3_usb/`; a test names it with
+`build_dir=".pio/build/esp32s3_usb"` on a profile with `console = "usb-serial-jtag"`
+(`test_arduino_hwcdc_serial_is_the_usb_console` in `tests/test_usb_console.py`). A line longer than
+64 bytes, one USB packet, reaches it whole. USB OTG through TinyUSB (`ARDUINO_USB_MODE=0`) is not
+built ([decision](../decisions/harness.md#a-usb-console-through-tinyusb-is-not-a-console-the-profile-can-name)).
 
 It reads its settings once at boot, read-only, from the Preferences namespace `shell`, which a test
 writes with `board.nvs(...)` ([flash contents](flash-contents-user.md#supply-nvs-before-power-on)):

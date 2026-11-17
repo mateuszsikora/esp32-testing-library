@@ -87,7 +87,7 @@ class Uart(Interface):
     def __init__(
         self,
         name: str,
-        wire: Wire,
+        wire: Wire | None,
         *,
         clock: str | Callable[[], str],
         directory: Path,

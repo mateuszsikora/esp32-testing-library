@@ -1,8 +1,9 @@
 """Board profiles: pin tables as TOML data, no product knowledge (plan §4.5).
 
-A profile is `<name>.toml` in this directory. It says which chip the board carries and which UART
-and pins each of its interfaces uses: `[uart.<role>]` routes, `[lines.<role>]` sets of GPIO
-lines and an `[sd_card]` slot on SPI. Nothing in it says what the firmware does with them.
+A profile is `<name>.toml` in this directory. It says which chip the board carries, where its
+console is (`console`: UART0, or the chip's USB-Serial/JTAG controller) and which UART and pins
+each of its interfaces uses: `[uart.<role>]` routes, `[lines.<role>]` sets of GPIO lines and an
+`[sd_card]` slot on SPI. Nothing in it says what the firmware does with them.
 `capabilities.toml`, beside the profiles, is no profile: it says what each backend can put at
 the far end of an interface (`esp32tl.boards.capabilities`).
 """
@@ -25,7 +26,8 @@ DEFAULT_PROFILE = "esp32-devkitc"
 @dataclass(frozen=True)
 class Chip:
     """What a profile's `chip` brings: its GPIO pads, those of them that are inputs only, its
-    UARTs, and the IO MUX pins of UART0, which the `console` takes on every board."""
+    UARTs, the IO MUX pins of UART0, which a `console` on UART0 takes, and whether it has a
+    USB-Serial/JTAG controller, which a profile's `console` may be instead."""
 
     name: str
     title: str
@@ -33,6 +35,7 @@ class Chip:
     input_only: frozenset[int]
     uarts: int
     console_pins: Mapping[int, str]
+    usb_serial_jtag: bool
 
     def console_pin(self, end: Literal["tx", "rx"]) -> int:
         """UART0's `tx` or `rx` pin, the console's."""
@@ -50,6 +53,7 @@ CHIPS = {
         input_only=frozenset(range(34, 40)),
         uarts=3,
         console_pins=MappingProxyType({1: "console.tx", 3: "console.rx"}),
+        usb_serial_jtag=False,
     ),
     # The ESP32-S3's: 0 to 21 and 26 to 48, every one an output too (ESP32-S3 datasheet, section
     # 2.3). UART0 is on GPIO 43 (TX) and 44 (RX).
@@ -60,6 +64,7 @@ CHIPS = {
         input_only=frozenset(),
         uarts=3,
         console_pins=MappingProxyType({43: "console.tx", 44: "console.rx"}),
+        usb_serial_jtag=True,
     ),
     # The ESP32-C3's: 0 to 21 (ESP32-C3 datasheet, section 2.2). UART0 is on GPIO 21 (TX) and
     # 20 (RX); it has two UARTs.
@@ -70,6 +75,7 @@ CHIPS = {
         input_only=frozenset(),
         uarts=2,
         console_pins=MappingProxyType({21: "console.tx", 20: "console.rx"}),
+        usb_serial_jtag=True,
     ),
     # The ESP32-C6's: 0 to 30 (ESP32-C6 datasheet, section 2.3). UART0 is on GPIO 16 (TX) and
     # 17 (RX); it has two UARTs besides the LP UART.
@@ -80,13 +86,21 @@ CHIPS = {
         input_only=frozenset(),
         uarts=2,
         console_pins=MappingProxyType({16: "console.tx", 17: "console.rx"}),
+        usb_serial_jtag=True,
     ),
 }
 PULLS = ("up", "down")
 
-# What the `console` interface takes, on every board: UART0 on its IO MUX pins. A route or a line
-# that takes one of them is refused as a second use.
+# What the `console` interface takes on a board whose console is UART0: UART0 on its IO MUX pins.
+# A route or a line that takes one of them is refused as a second use.
 CONSOLE_PORT = 0
+
+# Where a profile's `console` is: UART0, the default, or the chip's USB-Serial/JTAG controller,
+# which has no pins and leaves UART0 and its pins to the profile's routes.
+ConsoleKind = Literal["uart0", "usb-serial-jtag"]
+UART0: Literal["uart0"] = "uart0"
+USB_SERIAL_JTAG: Literal["usb-serial-jtag"] = "usb-serial-jtag"
+CONSOLES: tuple[ConsoleKind, ...] = (UART0, USB_SERIAL_JTAG)
 
 # Role names: `[uart.gnss]`, `[lines.modem]`, the `pwrkey` of a line set.
 ROLE = re.compile(r"[a-z][a-z0-9_]*")
@@ -144,6 +158,8 @@ class BoardProfile:
     uart: Mapping[str, UartRoute]
     lines: Mapping[str, Mapping[str, Line]]
     sd_card: SdCardRoute | None = None
+    # `uart0` or `usb-serial-jtag`: where the firmware's console is.
+    console: ConsoleKind = "uart0"
 
     @property
     def interfaces(self) -> list[str]:
@@ -234,7 +250,12 @@ class Reader:
         return table
 
     def profile(self, data: dict[str, Any]) -> BoardProfile:
-        self.keys("", data, {"name", "chip"}, {"flash_mb", "psram_mb", "uart", "lines", "sd_card"})
+        self.keys(
+            "",
+            data,
+            {"name", "chip"},
+            {"console", "flash_mb", "psram_mb", "uart", "lines", "sd_card"},
+        )
         name = data["name"]
         stem = self.file.removesuffix(".toml")
         if name != stem:
@@ -243,6 +264,7 @@ class Reader:
         if not isinstance(data["chip"], str) or data["chip"] not in CHIPS:
             raise self.fail("chip", f"{data['chip']!r} is not one of {', '.join(CHIPS)}")
         self.chip = CHIPS[data["chip"]]
+        console = self.console(data.get("console", UART0))
         sizes = {
             key: self.integer(key, data[key], 0) if key in data else None
             for key in ("flash_mb", "psram_mb")
@@ -256,7 +278,7 @@ class Reader:
             for role, value in self.roles("lines", data.get("lines", {})).items()
         }
         sd_card = self.sd_card(data["sd_card"]) if "sd_card" in data else None
-        self.distinct(uart, lines, sd_card)
+        self.distinct(uart, lines, sd_card, console)
         return BoardProfile(
             name=name,
             chip=data["chip"],
@@ -265,7 +287,18 @@ class Reader:
             uart=MappingProxyType(uart),
             lines=MappingProxyType({role: MappingProxyType(ls) for role, ls in lines.items()}),
             sd_card=sd_card,
+            console=console,
         )
+
+    def console(self, value: object) -> ConsoleKind:
+        """`console`: one of `CONSOLES`, and USB-Serial/JTAG only on a chip that has it."""
+        if not isinstance(value, str) or value not in CONSOLES:
+            raise self.fail("console", f"{value!r} is not one of {', '.join(CONSOLES)}")
+        if value == USB_SERIAL_JTAG and not self.chip.usb_serial_jtag:
+            raise self.fail(
+                "console", f"the {self.chip.title} has no USB-Serial/JTAG controller; use {UART0}"
+            )
+        return USB_SERIAL_JTAG if value == USB_SERIAL_JTAG else UART0
 
     def uart(self, key: str, value: object) -> UartRoute:
         table = self.table(key, value)
@@ -322,14 +355,17 @@ class Reader:
         uart: dict[str, UartRoute],
         lines: dict[str, dict[str, Line]],
         sd_card: SdCardRoute | None,
+        console: str,
     ) -> None:
-        """One UART per route, and one use per pin; the console's UART and pins are taken."""
-        ports = {CONSOLE_PORT: "console"}
+        """One UART per route, and one use per pin; a console on UART0 takes UART0 and its pins,
+        one on USB-Serial/JTAG neither."""
+        on_uart0 = console == UART0
+        ports = {CONSOLE_PORT: "console"} if on_uart0 else {}
         for role, route in uart.items():
             if route.port in ports:
                 raise self.fail(f"uart.{role}.port", f"UART{route.port} is {ports[route.port]}'s")
             ports[route.port] = f"uart.{role}"
-        pins = dict(self.chip.console_pins)
+        pins = dict(self.chip.console_pins) if on_uart0 else {}
         uses = [
             (f"uart.{r}.{end}", getattr(u, end)) for r, u in uart.items() for end in ("tx", "rx")
         ]

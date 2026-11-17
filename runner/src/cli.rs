@@ -23,8 +23,11 @@ usage: esp32tl-runner --chip CHIP --flash-at OFFSET=FILE... --max-seconds S [opt
   --board tcp:HOST:PORT   or over TCP. Without --board the chip has nothing on its pins
   --peer-timeout S      how long, in wall seconds, a turn of the peer may take before the
                         run fails with exit code 4 (default 60; 0 waits for ever)
-  --console stdout|socket|both   where UART0 goes (default stdout); socket and both need
-                        --board
+  --console stdout|socket|both   where the console goes (default stdout); socket and both
+                        need --board
+  --console-port uart0|usb   which of the guest's outputs is the console (default uart0):
+                        UART0, or the USB-Serial/JTAG controller of the ESP32-S3,
+                        ESP32-C3 and ESP32-C6, whose input is the peer's console_rx
   --sd-spi sclk=N,mosi=N,miso=N,cs=N   an SD card slot on these GPIOs, in SPI mode; empty
                         unless --sd-rw puts a card in it, and the peer's sd_card can
                         put one in or take it out while the guest runs
@@ -64,7 +67,16 @@ impl std::fmt::Display for Board {
     }
 }
 
-/// Where the guest's UART0 console goes.
+/// Which of the guest's outputs is the console (`--console-port`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConsolePort {
+    /// UART0, on its pins: what the socket board records of its TX pin.
+    Uart0,
+    /// The USB-Serial/JTAG controller: esp32sim's `UsbSerialJtag`, which has no pins.
+    Usb,
+}
+
+/// Where the guest's console goes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Console {
     /// To stdout only, where pytest-embedded's `DuplicateStdoutPopen` reads it.
@@ -85,6 +97,8 @@ pub struct Opts {
     pub psram_mb: usize,
     pub max_seconds: f64,
     pub console: Console,
+    /// `--console-port`.
+    pub console_port: ConsolePort,
     pub board: Option<Board>,
     /// `None`: wait for ever.
     pub peer_timeout: Option<Duration>,
@@ -157,6 +171,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Opts, Error> {
         psram_mb: 0,
         max_seconds: 0.0,
         console: Console::Stdout,
+        console_port: ConsolePort::Uart0,
         board: None,
         peer_timeout: Some(Duration::from_secs(60)),
         sd_card: None,
@@ -212,6 +227,18 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Opts, Error> {
                     _ => {
                         return Err(usage(format!(
                             "--console: expected stdout, socket or both, got {v:?}"
+                        )));
+                    }
+                };
+            }
+            "--console-port" => {
+                let v = value()?;
+                opts.console_port = match v.as_str() {
+                    "uart0" => ConsolePort::Uart0,
+                    "usb" => ConsolePort::Usb,
+                    _ => {
+                        return Err(usage(format!(
+                            "--console-port: expected uart0 or usb, got {v:?}"
                         )));
                     }
                 };
@@ -377,9 +404,10 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Opts, Error> {
     Ok(opts)
 }
 
-/// What the command line asks of the chip that esp32sim does not model on it. Every chip of
-/// `chip::ALL` has `--wifi` and `--bt` today; the checks are there for the chips of #233, whose
-/// esp32sim models have neither.
+/// What the command line asks of the chip that esp32sim does not model on it, or that the chip
+/// does not have. Every chip of `chip::ALL` has `--wifi` and `--bt` today; the checks are there
+/// for the chips of #233, whose esp32sim models have neither. The classic ESP32 has no
+/// USB-Serial/JTAG controller, so `--console-port usb` is refused on it.
 fn unsupported(opts: &Opts) -> Result<(), Error> {
     let chip = opts.chip;
     let asked = [
@@ -397,6 +425,11 @@ fn unsupported(opts: &Opts) -> Result<(), Error> {
             "--bt",
             opts.bt.is_some() && !chip.bt,
             "has no VHCI hooks in esp32sim",
+        ),
+        (
+            "--console-port usb",
+            opts.console_port == ConsolePort::Usb && !chip.usb_serial_jtag,
+            "has no USB-Serial/JTAG controller",
         ),
     ];
     match asked.into_iter().find(|(_, refused, _)| *refused) {

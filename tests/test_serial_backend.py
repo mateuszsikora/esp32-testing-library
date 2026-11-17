@@ -966,3 +966,54 @@ def test_serial_build_errors_name_serial(tmp_path: Path) -> None:
         BackendError, match="asks for flash encryption, which serial does not support"
     ):
         check_artifact(str(tmp_path / "encrypted"))
+
+
+def test_an_s3_with_its_console_on_usb_serial_jtag_runs_on_the_serial_backend(
+    pytester: pytest.Pytester,
+) -> None:
+    fake_build(pytester.path, target="esp32s3")
+    pytester.makeconftest(FAKE_SERIAL)
+    (pytester.path / "s3-usb.toml").write_text(
+        'name = "s3-usb"\nchip = "esp32s3"\nconsole = "usb-serial-jtag"\n'
+    )
+    pytester.makepyfile("""
+        import pytest
+
+        @pytest.mark.board_profile(path="s3-usb.toml")
+        def test_console(board, console):
+            assert board.profile.console == "usb-serial-jtag"
+            assert board.dut.serial.flashes == 1
+            board.power_on()
+            console.expect_exact("Hello world!")
+            console.sendline("help")
+    """)
+    run_serial(pytester, "-q").assert_outcomes(passed=1)
+
+
+@pytest.mark.parametrize(("chip", "title"), [("esp32c3", "ESP32-C3"), ("esp32c6", "ESP32-C6")])
+def test_a_usb_serial_jtag_console_on_a_chip_not_validated_on_hardware_skips(
+    pytester: pytest.Pytester, chip: str, title: str
+) -> None:
+    fake_build(pytester.path, target=chip)
+    pytester.makeconftest(FAKE_SERIAL)
+    (pytester.path / "usb.toml").write_text(
+        f'name = "usb"\nchip = "{chip}"\nconsole = "usb-serial-jtag"\n'
+    )
+    pytester.makepyfile("""
+        import pytest
+
+        @pytest.mark.board_profile(path="usb.toml")
+        def test_console(board):
+            pass
+    """)
+    result = run_serial(pytester, "-rs")
+    result.assert_outcomes(skipped=1)
+    result.stdout.fnmatch_lines(
+        [
+            "SKIPPED [[]1[]] *.py:3: serial: the board profile usb has its console on the"
+            f" {title}'s USB-Serial/JTAG controller, which the serial backend has been validated"
+            " on with the ESP32-S3 only"
+        ]
+    )
+    # nothing reached the port
+    assert not (pytester.path / "port-opened").exists()

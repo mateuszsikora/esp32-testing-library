@@ -128,6 +128,12 @@ pub enum Incoming {
         t: u64,
         data: Vec<u8>,
     },
+    /// Bytes from the host into the guest's USB-Serial/JTAG console, with `--console-port usb`
+    /// (5.23).
+    ConsoleRx {
+        t: u64,
+        data: Vec<u8>,
+    },
     /// An H4 packet for the guest's Bluetooth host, from the controller of `--bt` (5.22).
     HciRx {
         t: u64,
@@ -231,6 +237,10 @@ pub fn parse(line: &str) -> Result<Incoming, String> {
                 data,
             }
         }
+        "console_rx" => Incoming::ConsoleRx {
+            t: field("t").time()?,
+            data: unbase64(&field("data").string()?).map_err(|e| format!("console_rx: {e}"))?,
+        },
         "hci_rx" => {
             let data = unbase64(&field("data").string()?).map_err(|e| format!("hci_rx: {e}"))?;
             if !(1..=HCI_MAX).contains(&data.len()) {
@@ -671,6 +681,9 @@ pub struct Stats {
     pub wifi: Option<WifiStats>,
     /// With `--realtime` only: how many times esp32sim skipped a lag behind wall time.
     pub rt_resyncs: Option<u64>,
+    /// With `--console-port usb` only: the bytes of `console_rx` that came due while the board's
+    /// supply was off, which no USB device took.
+    pub console_rx_lost: Option<u64>,
 }
 
 /// `end` and its extra fields: `stop` and `detail` for `emulator`, `detail` for `protocol_error`.
@@ -709,6 +722,9 @@ pub fn stats(t: u64, end: &str, extra: &[(&str, &str)], s: &Stats) -> String {
     }
     if let Some(resyncs) = s.rt_resyncs {
         let _ = write!(out, r#","rt_resyncs":{resyncs}"#);
+    }
+    if let Some(lost) = s.console_rx_lost {
+        let _ = write!(out, r#","console_rx_lost":{lost}"#);
     }
     out.push('}');
     out

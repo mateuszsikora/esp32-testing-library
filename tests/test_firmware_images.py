@@ -75,6 +75,17 @@ CHIP_IMAGES = [
     )
 ] + [("hello_world_psram", "esp32s3"), ("gatt_server", "esp32s3"), ("gatt_server", "esp32c3")]
 CHIP_IMAGES += [("hello_world_8mb", chip) for chip in ("esp32s3", "esp32c3", "esp32c6")]
+CHIP_IMAGES += [("console_repl_usb", chip) for chip in ("esp32s3", "esp32c3", "esp32c6")]
+
+
+@pytest.mark.parametrize("chip", ["esp32s3", "esp32c3", "esp32c6"])
+def test_console_repl_usb_has_its_console_on_usb_serial_jtag_alone(chip: str) -> None:
+    sdkconfig = json.loads(
+        (FIRMWARE / "console_repl_usb" / f"build-{chip}" / "config" / "sdkconfig.json").read_text()
+    )
+    assert sdkconfig["ESP_CONSOLE_USB_SERIAL_JTAG"] is True
+    assert sdkconfig["ESP_CONSOLE_UART_DEFAULT"] is False
+    assert sdkconfig["ESP_CONSOLE_SECONDARY_NONE"] is True
 
 
 @pytest.mark.parametrize(("image", "chip"), CHIP_IMAGES, ids=lambda v: str(v))
@@ -385,11 +396,11 @@ def pinned_platformio() -> tuple[str, str]:
     return version[1], container[1]
 
 
-def platformio_build(image: str) -> Build:
-    """The PlatformIO image's build, as `idf_app` takes an ESP-IDF one: finished and, unless it
-    was built with PIO_LOCAL=1, built in the container build-platformio.sh pins now, with the
-    platform its platformio.ini pins now."""
-    directory = FIRMWARE / image / ".pio" / "build" / "esp32dev"
+def platformio_build(image: str, env: str = "esp32dev", chip: str = "esp32") -> Build:
+    """The PlatformIO image's build in its environment `env`, for `chip`, as `idf_app` takes an
+    ESP-IDF one: finished and, unless it was built with PIO_LOCAL=1, built in the container
+    build-platformio.sh pins now, with the platform its platformio.ini pins now."""
+    directory = FIRMWARE / image / ".pio" / "build" / env
     if not (directory / "esp32tl-built").is_file():
         pytest.fail(f"{directory} holds no finished build: run make firmware", pytrace=False)
     how = json.loads((directory / "esp32tl-build.json").read_text())
@@ -414,7 +425,17 @@ def platformio_build(image: str) -> Build:
             f" not in {container} ({version}): run make firmware",
             pytrace=False,
         )
-    return load(str(FIRMWARE / image), directory.resolve())
+    return load(str(FIRMWARE / image), directory.resolve(), chip=chip)
+
+
+def test_arduino_shell_s_s3_usb_environment_is_an_s3_image_of_8_mb_from_0x0() -> None:
+    loaded = platformio_build("arduino_shell", "esp32s3_usb", "esp32s3")
+    assert (loaded.kind, loaded.chip) == (PLATFORMIO, "esp32s3")
+    assert [(f.offset, f.path.name) for f in loaded.flash_files] == [(0, "firmware.factory.bin")]
+    # the image header's flash size, the high nibble of byte 3: 3 is 8 MB, the devkit's, which the
+    # backend gives the runner for a profile without flash_mb
+    assert loaded.app_image is not None
+    assert loaded.app_image.read_bytes()[3] >> 4 == 3
 
 
 def test_arduino_shell_is_a_platformio_build_of_the_whole_flash() -> None:

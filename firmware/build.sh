@@ -42,6 +42,8 @@ for chip in esp32s3 esp32c3 esp32c6; do
 done
 CHIP_IMAGES="$CHIP_IMAGES hello_world_psram@esp32s3 gatt_server@esp32s3 gatt_server@esp32c3"
 CHIP_IMAGES="$CHIP_IMAGES hello_world_8mb@esp32s3 hello_world_8mb@esp32c3 hello_world_8mb@esp32c6"
+# The console on USB-Serial/JTAG, which the classic ESP32 does not have.
+CHIP_IMAGES="$CHIP_IMAGES console_repl_usb@esp32s3 console_repl_usb@esp32c3 console_repl_usb@esp32c6"
 family=firmware
 if [ "${1:-}" = --chips ]; then
 	shift
@@ -93,6 +95,7 @@ project_of() {
 		echo "$source"
 		;;
 	console_repl) echo "$PWD/firmware/console_repl" ;;
+	console_repl_usb) echo "$PWD/firmware/console_repl_usb" ;;
 	nmea_reader) echo "$PWD/firmware/nmea_reader" ;;
 	gpio_echo) echo "$PWD/firmware/gpio_echo" ;;
 	modem_at) echo "$PWD/firmware/modem_at" ;;

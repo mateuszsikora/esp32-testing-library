@@ -1,7 +1,8 @@
 """The runner binary with `--board socket:PATH`, against a minimal peer written here: what
 `main.rs` adds to the session the Rust tests cover, the connection, `--console socket`, the
 signals and the exit codes of docs/protocol.md, section 9. hello_world runs on the board; its pins
-are not watched, so its console is the only traffic."""
+are not watched, so its console is the only traffic. Without a peer, which console `--console-port`
+puts on stdout, on `firmware/console_repl_usb`'s images for the S3, C3 and C6."""
 
 import base64
 import json
@@ -229,3 +230,23 @@ def test_flash_out_without_a_board_writes_the_flash_at_the_end_of_the_run(
         command += ["--flash-at", f"{file.offset:#x}={file.path}"]
     subprocess.run(command, check=True, capture_output=True, timeout=60)
     assert len(out.read_bytes()) == 4 << 20
+
+
+@pytest.mark.parametrize("chip", ["esp32s3", "esp32c3", "esp32c6"])
+def test_the_runner_prints_the_console_port_it_is_given_on_stdout(chip: str) -> None:
+    # without a peer, stdout is the console's alone: the USB-Serial/JTAG controller's with
+    # --console-port usb (esp32sim's mask bit 0), UART0's, the ROM's banner alone, without it
+    app = esp32sim.load_app(
+        str(FIRMWARE / "console_repl_usb"), build_dir=f"build-{chip}", chip=chip
+    )
+    command = [
+        str(esp32sim.runner_path()),
+        *("--chip", chip, "--rom", str(esp32sim.rom_path(chip)), "--max-seconds", "2"),
+        *(f for file in app.flash_files for f in ("--flash-at", f"{file.offset:#x}={file.path}")),
+    ]
+    usb = subprocess.run([*command, "--console-port", "usb"], capture_output=True, timeout=120)
+    uart0 = subprocess.run([*command, "--console-port", "uart0"], capture_output=True, timeout=120)
+    assert usb.returncode == uart0.returncode == 0, usb.stderr + uart0.stderr
+    assert b"2nd stage bootloader" in usb.stdout and b"console_repl>" in usb.stdout
+    assert uart0.stdout.startswith(b"ESP-ROM:") and b"entry 0x" in uart0.stdout
+    assert b"2nd stage bootloader" not in uart0.stdout

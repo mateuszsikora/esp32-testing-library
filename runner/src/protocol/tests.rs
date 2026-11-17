@@ -125,6 +125,13 @@ fn parses_the_peer_messages() {
         })
     );
     assert_eq!(
+        parse(r#"{"type": "console_rx", "t": 7, "data": "aGVscAo="}"#),
+        Ok(Incoming::ConsoleRx {
+            t: 7,
+            data: b"help\n".to_vec()
+        })
+    );
+    assert_eq!(
         parse(r#"{"type": "wifi_ap", "t": 8, "on": false}"#),
         Ok(Incoming::WifiAp { t: 8, on: false })
     );
@@ -230,6 +237,8 @@ fn refuses_malformed_messages() {
         r#"{"type":"hci_rx","t":0,"data":""}"#,
         r#"{"type":"hci_rx","t":0,"data":"Zg"}"#,
         r#"{"type":"hci_rx","data":"BA=="}"#,
+        r#"{"type":"console_rx","t":0,"data":"Zg"}"#,
+        r#"{"type":"console_rx","data":"aGVscAo="}"#,
         r#"{"type":"wifi_ap","t":0,"on":1}"#,
         r#"{"type":"wifi_ap","t":0}"#,
         r#"{"type":"power","t":0}"#,
@@ -416,6 +425,10 @@ fn writes_the_runner_messages() {
     assert!(stats(12, "stop", &[], &s).ends_with(
         r#""rx_bytes_not_paced":0,"wifi":{"eth_tx":1,"eth_tx_dropped":2,"eth_rx":3,"eth_rx_dropped":4,"rx_dropped":5}}"#
     ));
+    // with --console-port usb only, after the others
+    s.wifi = None;
+    s.console_rx_lost = Some(6);
+    assert!(stats(12, "stop", &[], &s).ends_with(r#""rx_bytes_not_paced":0,"console_rx_lost":6}"#));
     // a 1519-byte frame is over the limit; 1518 is not
     let long = format!(
         r#"{{"type":"eth_rx","t":0,"data":"{}"}}"#,

@@ -43,7 +43,7 @@ test-runner:
 
 # Validation firmware, built in the pinned ESP-IDF container (plan M0) into
 # firmware/<image>/build/, and the Arduino-ESP32 images in the pinned PlatformIO
-# container into firmware/<image>/.pio/build/esp32dev/. IDF_LOCAL=1 and
+# container into firmware/<image>/.pio/build/<env>/. IDF_LOCAL=1 and
 # PIO_LOCAL=1 build with the ESP-IDF or the PlatformIO of the calling shell
 # instead, for iteration; goldens come from the container builds only.
 # An empty FIRMWARE_OUT is firmware/, whatever the calling shell exports:
@@ -63,7 +63,7 @@ firmware/%/build/esp32tl-built:
 
 # The images of the other chips the runner emulates, each in
 # firmware/<image>/build-<chip>/, built only when missing too.
-CHIP_IMAGES := $(foreach chip,esp32s3 esp32c3 esp32c6,$(foreach image,hello_world console_repl gpio_echo nmea_reader nvs_reader http_request,firmware/$(image)/build-$(chip))) firmware/hello_world_psram/build-esp32s3 firmware/gatt_server/build-esp32s3 firmware/gatt_server/build-esp32c3 $(foreach chip,esp32s3 esp32c3 esp32c6,firmware/hello_world_8mb/build-$(chip))
+CHIP_IMAGES := $(foreach chip,esp32s3 esp32c3 esp32c6,$(foreach image,hello_world console_repl gpio_echo nmea_reader nvs_reader http_request,firmware/$(image)/build-$(chip))) firmware/hello_world_psram/build-esp32s3 firmware/gatt_server/build-esp32s3 firmware/gatt_server/build-esp32c3 $(foreach chip,esp32s3 esp32c3 esp32c6,firmware/hello_world_8mb/build-$(chip)) $(foreach chip,esp32s3 esp32c3 esp32c6,firmware/console_repl_usb/build-$(chip))
 firmware/%/build-esp32s3/esp32tl-built:
 	FIRMWARE_OUT= firmware/build.sh --chips $*@esp32s3
 firmware/%/build-esp32c3/esp32tl-built:
@@ -72,10 +72,14 @@ firmware/%/build-esp32c6/esp32tl-built:
 	FIRMWARE_OUT= firmware/build.sh --chips $*@esp32c6
 
 # The same for the PlatformIO images; build-platformio.sh writes esp32tl-built
-# into the build directory of the esp32dev environment.
-PLATFORMIO_IMAGES := arduino_shell
+# into the build directory of the image's environment, esp32dev unless named.
+PLATFORMIO_IMAGES := firmware/arduino_shell/.pio/build/esp32dev firmware/arduino_shell/.pio/build/esp32s3_usb
 firmware/%/.pio/build/esp32dev/esp32tl-built:
 	FIRMWARE_OUT= firmware/build-platformio.sh $*
+# After the project's esp32dev build, never beside it: the two share the project's .pio/ and its
+# copy of the sources, so make -j must not run them at once.
+firmware/%/.pio/build/esp32s3_usb/esp32tl-built: | firmware/%/.pio/build/esp32dev/esp32tl-built
+	FIRMWARE_OUT= firmware/build-platformio.sh $*@esp32s3_usb
 
 # Every examples/<name>/CMakeLists.txt is a project, built by the same pinned builder.
 EXAMPLE_PROJECTS := $(patsubst examples/%/CMakeLists.txt,%,$(wildcard examples/*/CMakeLists.txt))
@@ -85,7 +89,7 @@ examples:
 examples/%/build/esp32tl-built:
 	FIRMWARE_OUT= firmware/build.sh --examples $*
 
-test: setup test-runner $(FIRMWARE_IMAGES:%=firmware/%/build/esp32tl-built) $(CHIP_IMAGES:%=%/esp32tl-built) $(PLATFORMIO_IMAGES:%=firmware/%/.pio/build/esp32dev/esp32tl-built) $(EXAMPLE_PROJECTS:%=examples/%/build/esp32tl-built)
+test: setup test-runner $(FIRMWARE_IMAGES:%=firmware/%/build/esp32tl-built) $(CHIP_IMAGES:%=%/esp32tl-built) $(PLATFORMIO_IMAGES:%=%/esp32tl-built) $(EXAMPLE_PROJECTS:%=examples/%/build/esp32tl-built)
 	$(BIN)/pytest
 
 # The determinism job (plan §6): tests/test_determinism.py run twice, and the

@@ -270,6 +270,7 @@ def runner_command(
     bluetooth: Bluetooth | None = None,
     realtime: bool = False,
     flash_out: Path | None = None,
+    console: str = boards.UART0,
 ) -> list[str]:
     """The runner's command line: every flash file of the build at its offset, its board the socket
     at `link`. A `held` run is on the test's clock: its console also goes on the link, and the
@@ -283,13 +284,17 @@ def runner_command(
     makes the runner forward the guest's HCI on the link (`--bt`), with the symbols of the
     application's ELF, `app.elf`. A `realtime` run is paced to wall time, for a real device at the
     far end of a route. `flash_out` is the file the runner writes the whole flash to when the link
-    asks, and at the end of the run."""
+    asks, and at the end of the run. `console` is the board profile's: `usb-serial-jtag` makes the
+    chip's USB-Serial/JTAG controller the console, on stdout and on the link, in place of UART0
+    (`--console-port usb`)."""
     command = [
         *(str(runner), "--chip", app.chip, "--rom", str(rom)),
         *("--max-seconds", str(max_seconds)),
     ]
     if held:
         command += ["--console", "both", "--peer-timeout", "0"]
+    if console == boards.USB_SERIAL_JTAG:
+        command += ["--console-port", "usb"]
     command += ["--board", f"socket:{link}"]
     for file in app.flash_files:
         command += ["--flash-at", f"{file.offset:#x}={file.path}"]
@@ -439,9 +444,13 @@ class Esp32Sim(Board):
         # One mapping of the files they and the SD card read and write: no tap writes over another
         # route's file or the card's image.
         self._files: dict[Path, tuple[str, str]] = {}
+        # The console's input: UART0's RX pin at 115200 baud, or, on a board whose console is the
+        # chip's USB-Serial/JTAG controller, that controller, which has no pins and no baud.
+        usb = profile.console == boards.USB_SERIAL_JTAG
         self._console = ConsoleInput(
             "console",
-            Wire(None, boards.CHIPS[profile.chip].console_pin("rx"), 115200),
+            None if usb else Wire(None, boards.CHIPS[profile.chip].console_pin("rx"), 115200),
+            usb=usb,
             log=self.log,
             clock=self._run_clock,
             directory=self.directory,
@@ -846,6 +855,7 @@ class Esp32Sim(Board):
             bluetooth=self._bluetooth,
             realtime=self.clock == recording.WALL,
             flash_out=self._flash_out,
+            console=self.profile.console,
         )
         try:
             process = RunnerPopen(self._msg_queue, command, self._meta)

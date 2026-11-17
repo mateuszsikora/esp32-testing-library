@@ -20,20 +20,25 @@ the same indirect parametrisation. See [the user contract](serial-backend-user.m
    environment override even if another fixture restored it after the options were built.
    Missing serial options fail with the services requirement message. A cached port different
    from the explicit selection (including `None`) fails with `CACHED_PORT_CONFLICT`, without
-   attributing the change to `ESPPORT`. It validates the build and optional `app_recording`
+   attributing the change to `ESPPORT`. First `serial_chip` checks the profile: the classic ESP32,
+   or a chip `SERIAL_CHIPS` maps to the profile's `console`, `esp32s3` to `usb-serial-jtag`, goes
+   on; a C3 or C6 with that console skips, and any other chip fails
+   ([Failure modes](#failure-modes)). It validates the build and optional `app_recording`
    once per item.
    `pytest_fixture_setup` runs it before pytest-embedded's `app` fixture, so an explicitly requested
    `dut` cannot flash before validation. `board` checks it too, then obtains `dut` dynamically.
    `serial_artifact` passes the resolved `build_dir` fixture to `check_artifact`; pytest-embedded
    receives the same fixture for its app and flashing. `check_artifact` calls
-   `load_app(app_path, build_dir=build_dir, backend="serial")` for finished-build checks, then
+   `load_app(app_path, build_dir=build_dir, backend="serial", chip=profile.chip)` for finished-build
+   checks, then
    `app_image_sha256(app)` from `esp32tl/tap.py`, and returns an `Artifact` of that digest and the
    `Build`'s `kind`. This hashes the app entry in `flasher_args.json` (`Build.app_image`) of an
    ESP-IDF build, `firmware.bin` of a PlatformIO one, not `IdfApp.bin_file` (which may name another
    `.bin`), the ELF or its embedded digest. The item's `SERIAL_ARTIFACT` stash holds the `Artifact`.
 3. For a PlatformIO build (`Artifact.kind` is `esp32tl.build.PLATFORMIO`), the same
    `pytest_fixture_setup` hook then sets `classes["app"]` of `_fixture_classes_and_options` to
-   `PlatformioApp`, before pytest-embedded's `app` fixture makes its app from `classes["app"]`
+   `PlatformioApp.for_chip(profile.chip)`, a subclass whose `chip` is the profile's (the class
+   itself for `esp32`), before pytest-embedded's `app` fixture makes its app from `classes["app"]`
    with the `app_path`, `build_dir` and `part_tool` it would give `IdfApp`. `IdfApp.__init__`
    reads `flasher_args.json`; `PlatformioApp.__init__` runs `App.__init__` instead and loads the
    `Build` again through `load_app`, then sets what `IdfSerial` and `IdfDut` read of an `IdfApp`:
@@ -201,8 +206,9 @@ from pytest-embedded propagate with their original messages.
 | `{nodeid}: the app_recording marker takes one path, as in @pytest.mark.app_recording("hello-console.jsonl")` | Wrong arguments; collection error 2 |
 | `serial: {build} holds no ESP-IDF or PlatformIO build: no flasher_args.json and no firmware.bin` | Missing build metadata |
 | `serial: {build} …` from a PlatformIO build | The PlatformIO checks of [builds](builds-technical.md#failure-modes): files, images, table, chip and flash encryption |
-| `serial: {build} is built for {target}; the board's chip is esp32: build for esp32 or choose a board profile with that chip` | Non-classic target |
-| `serial: the board profile {name} carries an {title}; the serial backend runs the classic ESP32 only` | A profile whose `chip` is not `esp32`; `serial_artifact` in `esp32tl/pytest_plugin.py` fails the test before the port is checked or the build loaded |
+| `serial: {build} is built for {target}; the board's chip is {chip}: build for {chip} or choose a board profile with that chip` | A build for another chip than the profile's; `check_artifact` and `PlatformioApp` load the build for the profile's chip |
+| `serial: the board profile {name} carries an {title} with its console on UART0; the serial backend runs the classic ESP32, and the ESP32-S3 with its console on USB-Serial/JTAG` | A profile whose `chip` is not `esp32` and whose console is not one `SERIAL_CHIPS` gives the chip; `serial_chip` in `esp32tl/pytest_plugin.py`, from `serial_artifact`, fails the test before the port is checked or the build loaded |
+| `serial: the board profile {name} has its console on the {title}'s USB-Serial/JTAG controller, which the serial backend has been validated on with the ESP32-S3 only` | A profile for the ESP32-C3 or ESP32-C6 with `console = "usb-serial-jtag"`; `serial_chip` skips the test, before the port is opened |
 | `serial: {build} asks for flash encryption, which serial does not support` | Encryption outside the supported workflow |
 | `serial: {build} is not a finished build, missing {files}` | Missing files listed for flashing |
 | `serial: {build}/flasher_args.json names no app image` | No `app.file` entry |
@@ -258,6 +264,13 @@ factory image, and an `app_recording` of `firmware.bin`'s hash;
 `test_an_image_for_another_chip_is_refused_by_its_name` and
 `test_a_build_that_enables_flash_encryption_or_secure_boot_is_refused` cover the checks on serial.
 A PlatformIO build on a board is in [physical validation](#a-platformio-build).
+`test_an_s3_with_its_console_on_usb_serial_jtag_runs_on_the_serial_backend` runs the fixture chain
+with an S3 build and a profile with `console = "usb-serial-jtag"`;
+`test_a_usb_serial_jtag_console_on_a_chip_not_validated_on_hardware_skips` checks the C3's and
+the C6's skip, verbatim, and that the port is never opened; and
+`test_the_serial_backend_refuses_a_board_with_another_chip` in `tests/test_pytest_plugin.py` the
+S3 with its console on UART0. `tests/test_usb_console.py` holds the tests that ran on a real
+ESP32-S3 ([physical validation](#an-esp32-s3-on-its-usb-serialjtag-port)).
 
 ### The backend comparison
 
@@ -319,6 +332,48 @@ Before testing, two independent reads of the entire 4,194,304-byte flash matched
 After testing, that original image was written back with flash mode, frequency and size kept
 unchanged. A full readback matched the backup before the board was reset to run its original
 firmware. Backup binaries and device logs remain private and are not repository artifacts.
+
+#### An ESP32-S3 on its USB-Serial/JTAG port
+
+On 2026-11-17, a user-identified ESP32-S3 board with no USB-to-UART bridge connected, through its
+native port, `/dev/cu.usbmodem1101` (USB 303a:1001, `USB JTAG/serial debug unit`). esptool
+identified an ESP32-S3 (QFN56) revision v0.2, `USB mode: USB-Serial/JTAG`, MAC
+`44:1b:f6:ec:e7:a8`, 16 MB of flash; the user allowed its flash to be overwritten, and it was not
+backed up or restored. The images were `firmware/console_repl_usb` built for the S3 and
+`arduino_shell`'s `esp32s3_usb` environment, with the repository's pinned containers; the profile
+was `tests/boards/esp32-s3-usb.toml`.
+
+```sh
+env -u ESPPORT .venv/bin/pytest -p no:cacheprovider tests/test_usb_console.py \
+  -k 'esp32s3 or arduino' --esp32tl-backend serial --port /dev/cu.usbmodem1101 -rA
+```
+
+Result: **3 passed, 2 skipped in 26.18 s**, autoflash enabled, at esptool's default 921600 baud,
+and again, after `platformio.ini` moved the platform pin to `[env]` and the images were rebuilt,
+the same 3 tests passed and 2 skipped again in a run of 22.42 s, which also held a test of the
+runner's stdout that uses no board, since moved to `tests/test_runner_link.py`; and once more,
+**3 passed, 2 skipped in 21.89 s**, with `arduino_shell`'s `esp32s3_usb` image built for the
+devkit's 8 MB of flash;
+the skips were `serial: uart.uart0 cannot be tapped on this backend` and `serial: the backend
+cannot switch the board's power`. Two earlier runs of the two `console_repl_usb` tests passed too,
+2 of 2 the second time; the first time the tap test failed on a time it compared exactly, which
+the test no longer does on the wall clock, and the Arduino test passed alone once. Host: macOS
+27.0.1 arm64, Python 3.14.6, pytest-embedded and pytest-embedded-idf 2.9.3, esptool 5.6.0.
+
+| App binary | SHA-256 |
+|---|---|
+| `firmware/console_repl_usb/build-esp32s3/console_repl_usb.bin` | `8a4a18133eb0e85e60bbc90aece61430e23a5f0b8da9155f95f1c8197d7ca553` |
+| `firmware/arduino_shell/.pio/build/esp32s3_usb/firmware.bin`, first run | `d4cca0bafb6ee3b32422e642a0b7379d475ecb3783ff1b94c89d16bdabd9070f` |
+| `firmware/arduino_shell/.pio/build/esp32s3_usb/firmware.bin`, after the rebuild | `f4dbba1b984c68e4cc14868e0379b007743d1e0666c3310ee9e23bdbdd97fdd0` |
+| `firmware/arduino_shell/.pio/build/esp32s3_usb/firmware.bin`, 8 MB | `bde813da2bf00c3a17a3c4cb8469c78a254330a17f5ceca94dadcde09b82df9b` |
+
+What was measured before the backend took the chip, with pytest-embedded's `esp,idf` services
+alone and with esptool and pyserial, is in
+[the decision](../decisions/harness.md#the-serial-backend-runs-an-esp32-s3-through-its-usb-serialjtag-port):
+esptool's own USB-Serial/JTAG reset to connect, the RTS pulse that resets the chip without a
+re-enumeration, the whole boot on the console, the 3 s stop in the ROM's banner after a reset in
+the test, and the two times the chip stopped answering after the port was closed and opened
+again, until it was unplugged.
 
 #### A PlatformIO build
 

@@ -85,7 +85,9 @@ pytest-embedded's raw `pytest --build-dir`, which remains refused for board test
 
 ## What it prints
 
-stdout is the firmware's console, UART0, as the runner prints it. stderr has the runner's own
+stdout is the firmware's console, UART0, as the runner prints it; on a profile whose `console`
+is `usb-serial-jtag` it would be the chip's USB-Serial/JTAG controller (`--console-port usb`), but
+no profile `--board` names has one. stderr has the runner's own
 lines (`esp32tl-runner: ...`, [the runner](runner-user.md)) and, once the run has ended, the
 [link's report](esp32sim-backend-user.md#the-links-report), each line starting with `esp32tl: `:
 

@@ -1,4 +1,5 @@
-"""The console: the firmware's UART0, read on the board's clock.
+"""The console: the firmware's UART0, or its USB-Serial/JTAG controller when the board profile's
+`console` says so, read on the board's clock.
 
 The backend gathers what the guest prints from the link's `console` messages, which arrive in
 emulated-time order with the turns; serial stamps its read batches on wall time. `expect` and
@@ -118,11 +119,18 @@ class Tappable(Protocol):
 
 
 class ConsoleInput(Uart):
-    """UART0 RX on the link; output arrives separately in console messages."""
+    """The console's input on the link: UART0 RX on the wire's RX pin, as `uart_rx`, or, with
+    `usb` and no wire, the USB-Serial/JTAG controller's, as `console_rx`. Output arrives
+    separately in console messages."""
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
+    def __init__(self, *args: Any, usb: bool = False, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
+        self._usb = usb
         self._pending: list[Output] = []
+
+    @property
+    def usb_console(self) -> bool:
+        return self._usb
 
     def write(self, t: int, data: bytes) -> None:
         if data:
@@ -140,7 +148,7 @@ class Writable(Protocol):
 
 
 class Console:
-    """The firmware's UART0, read and written on the board's clock."""
+    """The firmware's console, UART0 or USB-Serial/JTAG, read and written on the board's clock."""
 
     def __init__(self, board: Clocked) -> None:
         self._board = board

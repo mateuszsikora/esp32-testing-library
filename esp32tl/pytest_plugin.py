@@ -534,14 +534,7 @@ def serial_artifact(request: pytest.FixtureRequest) -> Artifact:
     if callspec is not None and int(callspec.params.get("count", 1)) != 1:
         pytest.fail("count is above 1: esp32tl runs one board in a test", pytrace=False)
     profile = board_profile(node)
-    if profile.chip != "esp32":
-        backend_failed(
-            BackendError(
-                f"the board profile {profile.name} carries an {CHIPS[profile.chip].title};"
-                " the serial backend runs the classic ESP32 only"
-            ),
-            Serial.name,
-        )
+    serial_chip(profile)
     port = request.getfixturevalue("port")
     port_error = serial_port_error(
         port, request.getfixturevalue("flash_port"), os.environ.get("ESPPORT")
@@ -569,10 +562,40 @@ def serial_artifact(request: pytest.FixtureRequest) -> Artifact:
                 request.getfixturevalue("app_path"),
                 path,
                 build_dir=request.getfixturevalue("build_dir"),
+                chip=profile.chip,
             )
         except BackendError as error:
             backend_failed(error, Serial.name)
     return node.stash[SERIAL_ARTIFACT]
+
+
+# The chips the serial backend runs besides the classic ESP32, each with the console it has been
+# measured with on a real board: the ESP32-S3 on its USB-Serial/JTAG port (docs/decisions/
+# harness.md, "The serial backend runs an ESP32-S3 through its USB-Serial/JTAG port").
+SERIAL_CHIPS = {"esp32s3": boards.USB_SERIAL_JTAG}
+
+
+def serial_chip(profile: BoardProfile) -> None:
+    """Fails the test, before the port is checked or the build loaded, on a board profile whose
+    chip the serial backend does not run with that console; skips it on one whose console is
+    USB-Serial/JTAG on a chip no real board has validated it on."""
+    if profile.chip == "esp32" or SERIAL_CHIPS.get(profile.chip) == profile.console:
+        return
+    title = CHIPS[profile.chip].title
+    if profile.console == boards.USB_SERIAL_JTAG:
+        skip_at_the_test(
+            f"serial: the board profile {profile.name} has its console on the {title}'s"
+            " USB-Serial/JTAG controller, which the serial backend has been validated on with the"
+            " ESP32-S3 only"
+        )
+    backend_failed(
+        BackendError(
+            f"the board profile {profile.name} carries an {title} with its console on UART0;"
+            " the serial backend runs the classic ESP32, and the ESP32-S3 with its console on"
+            " USB-Serial/JTAG"
+        ),
+        Serial.name,
+    )
 
 
 @pytest.hookimpl(tryfirst=True)
@@ -594,7 +617,7 @@ def pytest_fixture_setup(
         and serial_artifact(request).kind == build.PLATFORMIO
     ):
         classes = request.getfixturevalue("_fixture_classes_and_options").classes
-        classes["app"] = PlatformioApp
+        classes["app"] = PlatformioApp.for_chip(board_profile(request.node).chip)
 
 
 @pytest.fixture

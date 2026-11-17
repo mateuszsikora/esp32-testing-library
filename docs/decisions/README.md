@@ -106,6 +106,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [pio runs in the Arduino image's own directory, through the writable /out](firmware.md#pio-runs-in-the-arduino-images-own-directory-through-the-writable-out) | `firmware.md` | decided (#193) |
 | [PlatformIO's core directory is .cache/platformio/](firmware.md#platformios-core-directory-is-cacheplatformio) | `firmware.md` | decided (#193) |
 | [The other chips' images are a family of their own, from the same projects](firmware.md#the-other-chips-images-are-a-family-of-their-own-from-the-same-projects) | `firmware.md` | decided (#236) |
+| [The USB-Serial/JTAG console images are a project and an environment of their own](firmware.md#the-usb-serialjtag-console-images-are-a-project-and-an-environment-of-their-own) | `firmware.md` | decided (17 November 2026) |
 
 ## The esp32tl package and its pytest plugin
 
@@ -331,6 +332,10 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The runner's flash is the profile's flash_mb, else the build's headers, refused at setup when too small](harness.md#the-runners-flash-is-the-profiles-flash_mb-else-the-builds-headers-refused-at-setup-when-too-small) | `harness.md` | decided (#240) |
 | [The next boot is a condition the test makes; reset and power_on return nothing](harness.md#the-next-boot-is-a-condition-the-test-makes-reset-and-power_on-return-nothing) | `harness.md` | decided (#241) |
 | [The broker keeps every SUBSCRIBE and UNSUBSCRIBE in subscribe_requests, beside connection_attempts](harness.md#the-broker-keeps-every-subscribe-and-unsubscribe-in-subscribe_requests-beside-connection_attempts) | `harness.md` | decided (#242) |
+| [A board profile's console is UART0 or the chip's USB-Serial/JTAG controller](harness.md#a-board-profiles-console-is-uart0-or-the-chips-usb-serialjtag-controller) | `harness.md` | decided (17 November 2026) |
+| [On the S3, C3 and C6 the ROM prints on UART0 and on USB-Serial/JTAG](harness.md#on-the-s3-c3-and-c6-the-rom-prints-on-uart0-and-on-usb-serialjtag) | `harness.md` | decided (17 November 2026) |
+| [The serial backend runs an ESP32-S3 through its USB-Serial/JTAG port](harness.md#the-serial-backend-runs-an-esp32-s3-through-its-usb-serialjtag-port) | `harness.md` | decided (17 November 2026) |
+| [A USB console through TinyUSB is not a console the profile can name](harness.md#a-usb-console-through-tinyusb-is-not-a-console-the-profile-can-name) | `harness.md` | postponed (17 November 2026) |
 
 ## The runner crate and esp32sim
 
@@ -392,3 +397,6 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The runner runs one esp32sim chip per process, chosen by --chip](runner.md#the-runner-runs-one-esp32sim-chip-per-process-chosen-by---chip) | `runner.md` | decided (#236) |
 | [What esp32sim lacks on a chip is refused at the command line](runner.md#what-esp32sim-lacks-on-a-chip-is-refused-at-the-command-line) | `runner.md` | decided (#236) |
 | [The runner restores U0RXD's reset state on every chip](runner.md#the-runner-restores-u0rxds-reset-state-on-every-chip) | `runner.md` | decided (#236) |
+| [The console port is a flag of its own, `--console-port uart0\|usb`](runner.md#the-console-port-is-a-flag-of-its-own---console-port-uart0usb) | `runner.md` | decided (17 November 2026) |
+| [The USB-Serial/JTAG console adds `console_rx` at protocol version 2](runner.md#the-usb-serialjtag-console-adds-console_rx-at-protocol-version-2) | `runner.md` | decided (17 November 2026) |
+| [The USB-Serial/JTAG console's bytes are stamped with the end of their slice](runner.md#the-usb-serialjtag-consoles-bytes-are-stamped-with-the-end-of-their-slice) | `runner.md` | decided (17 November 2026) |

@@ -500,3 +500,28 @@ classic image would need a target too.
 
 **Not yet:** other ESP-IDF versions per chip, which the P4, the S31 and the C6's BLE need
 ([#233](https://github.com/mateuszsikora/esp32-testing-library/issues/233)).
+
+## The USB-Serial/JTAG console images are a project and an environment of their own
+
+Status: decided (17 November 2026)
+
+`firmware/console_repl_usb` is ESP-IDF's console REPL with `CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y`
+in its `sdkconfig.defaults`, built with `--chips` as `console_repl_usb@esp32s3`, `@esp32c3` and
+`@esp32c6`. It is a project of its own, not `console_repl` with another `sdkconfig`: the REPL then
+needs `esp_console_new_repl_usb_serial_jtag` in place of `esp_console_new_repl_uart`, and a
+preprocessor switch in `console_repl/main/main.c` would move the line numbers `ESP_ERROR_CHECK`
+compiles into the classic image, changing an image for an option it does not use. The prompt is the same,
+`console_repl>`, so that a test body runs on either console.
+
+Arduino's HWCDC, a different driver path from ESP-IDF's, comes from `arduino_shell`'s second
+environment, `esp32s3_usb` (`board = esp32-s3-devkitc-1`, `-DARDUINO_USB_MODE=1`,
+`-DARDUINO_USB_CDC_ON_BOOT=1`), the same sketch: `firmware/build-platformio.sh` takes
+`IMAGE@ENV` entries, `arduino_shell@esp32s3_usb`, into `.pio/build/<env>/`. When the
+environment's record differs from the build about to start, it removes the project's whole `.pio/`,
+every environment's build with it; before an environment's first build it compares the records
+of the project's other environments instead. The platform is pinned once, in the project's
+`[env]` section, which every environment inherits, so that their records cannot name two
+platforms.
+
+**Rejected:** a copy of the sketch in a project of its own, which would drift from the classic
+image; and the S3's HWCDC through `framework = espidf`, which is ESP-IDF's driver again.

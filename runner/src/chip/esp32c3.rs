@@ -19,6 +19,7 @@ pub const PROFILE: Profile = Profile {
     wifi_station: false,
     wifi: true,
     bt: true,
+    usb_serial_jtag: true,
     psram_mb: &[],
 };
 
@@ -141,6 +142,13 @@ impl Guest for esp32c3::Machine {
             uart.int_raw |= esp_periph::uart::INT_FRM_ERR;
             self.bus.irq_dirty = true;
         }
+    }
+    fn take_usb_console(&mut self) -> Vec<u8> {
+        // esp32sim's `drain_console`, inside `run`, has moved what the controller flushed there
+        std::mem::take(&mut self.console.usb)
+    }
+    fn usb_console_input(&mut self, data: &[u8]) {
+        SocBus::serial_input(&mut self.bus, data);
     }
     fn gpio_drive(&self) -> (u64, u64) {
         let gpio = &self.bus.periph.gpio;

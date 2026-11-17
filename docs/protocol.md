@@ -20,6 +20,8 @@ real device at the far end of a route (section 12), came with #28. #105 adds `po
 `chip_reset`, the board's supply and the chip's EN pin, on both sides, #107 the SD card's fault
 rules, `sd_fault`, `sd_clear` and `sd_op`, #131 `flash_dump` and `flash_dump_ack`, a read of the
 flash in a turn, and #34 `hci_tx` and `hci_rx`, the guest's Bluetooth HCI with `--bt`.
+`console_rx` and `stats.console_rx_lost` are the console on the chip's USB-Serial/JTAG controller,
+with `--console-port usb` (5.23).
 
 ## 1. Transport
 
@@ -153,13 +155,14 @@ seen exactly the events up to the block point, however the emulator schedules it
 | runner → harness | `sd_card_ack` *ext* | `t`, `image`, `error` | #106 |
 | runner → harness | `sd_op` *ext* | `t`, `fault`, `op`, `blocks`, `action`, `delay`, `written` | #107 |
 | runner → harness | `flash_dump_ack` *ext* | `t`, `error` | #131 |
-| runner → harness | `stats` *ext* | `t`, `end`, `resets`, `turns`, `uart`, `unrouted_rx_bytes`, `inputs_on_output`, `inputs_not_applied`, `rx_bytes_not_paced`; `wifi` with `--wifi` or `--wifi-sta`; under `--realtime` also `rt_resyncs` (M5) | M1 |
+| runner → harness | `stats` *ext* | `t`, `end`, `resets`, `turns`, `uart`, `unrouted_rx_bytes`, `inputs_on_output`, `inputs_not_applied`, `rx_bytes_not_paced`; `wifi` with `--wifi` or `--wifi-sta`; under `--realtime` also `rt_resyncs` (M5); with `--console-port usb` also `console_rx_lost` | M1 |
 | harness → runner | `uart_rx` | `t`, `pin`, `baud`, `data` | M1 |
 | harness → runner | `gpio_in` | `t`, `levels` | M3 |
 | harness → runner | `release` | `t`, `pins` | M3 |
 | harness → runner | `adc` *ext* | `t`, `pin`, `volts` | M3 |
 | harness → runner | `eth_rx` *ext* | `t`, `data` | M7 |
 | harness → runner | `hci_rx` *ext* | `t`, `data` | #34 |
+| harness → runner | `console_rx` *ext* | `t`, `data` | USB console |
 | runner → harness | `wifi_link` | `seq`, `t`, `ready` | v2 |
 | harness → runner | `wifi_ap` *ext* | `t`, `on` | M7 |
 | harness → runner | `power` *ext* | `t`, `on` | #105 |
@@ -202,6 +205,13 @@ version originally stayed 1, as with the Wi-Fi ones: the runner sends `hci_tx` o
 harness that speaks both gives it, and without `--bt` `hci_rx` is a protocol error
 ([decision](decisions/runner.md#the-bluetooth-messages-keep-the-link-protocol-at-version-1)).
 
+`console_rx` and `stats.console_rx_lost` (5.23) leave the version at 2 for the same reason: the
+runner reads `console_rx` only on a run started with `--console-port usb`, which only a harness
+that sends it gives it, and without the flag it is a protocol error, `console_rx without
+--console-port usb`; `console_rx_lost` is a field added to `stats`, which a peer that does not know
+it ignores (section 2). The console's output keeps its message, `console` (5.7)
+([decision](decisions/runner.md#the-usb-serialjtag-console-adds-console_rx-at-protocol-version-2)).
+
 **Events** are the runner messages that carry `seq`: `uart_tx`, `uart_cfg`, `gpio_out`, `reset`,
 `eth_tx`, `hci_tx` and `wifi_link`. They are what a peer may answer, so they set the block point (rule 1). `seq`
 is one counter over all seven, starting at 1 and growing by 1. `sync`, `console`, `warn`,
@@ -237,7 +247,8 @@ The first line is the runner's, the second the harness's.
   `gpio_in`, `release`, `adc`) on a pin outside `watch` are a protocol error: the socket's board is
   wired to those pins only. The console watches UART0 RX (GPIO 3 on the classic chip, 44 on the
   S3, 20 on the C3, 17 on the C6), but not TX, so console output costs no turns; it has its own
-  `console` message. An empty or absent `watch` makes the socket a
+  `console` message. A console on the USB-Serial/JTAG controller (5.23) has no pins and watches
+  none. An empty or absent `watch` makes the socket a
   board with nothing on it. Every pin in `watch` must be one the chip has, as the board profiles
   count them (`esp32tl/boards`): on the S3 GPIO 0 to 21 and 26 to 48, on the C3 0 to 21, on the
   C6 0 to 30, which are esp32sim's own pin tables (`esp-soc/src/pins.rs`); on the classic chip
@@ -376,7 +387,8 @@ and the guest has run in between.
 
 ### 5.7 `console`
 
-Console input uses `uart_rx` on watched GPIO 3 (§5.10), not this output message.
+Console input uses `uart_rx` on watched GPIO 3 (§5.10), not this output message; with
+`--console-port usb`, `console_rx` (5.23).
 
 ```json
 {"type": "console", "t": 812345678, "data": "SGVsbG8gd29ybGQhCg=="}
@@ -390,6 +402,14 @@ messages end together. The `esp32sim` backend runs the runner with `--console bo
 hands each message to its `console` callback until the link fails, and the test's console
 expects match on those bytes, which reach the harness before the `sync` that follows them;
 `dut.log` still gets stdout.
+
+With `--console-port usb` the bytes are those the guest wrote to its USB-Serial/JTAG controller
+instead of UART0, and UART0's go out as `console` no more; its TX pin in `watch` still gets them as
+`uart_tx`. They are not coalesced by time: esp32sim keeps no time of the controller's bytes and
+hands them over inside `run` (`Machine::drain_console`, `esp-soc/src/machine.rs:339-371`), so the
+runner takes what the guest flushed in a slice at the slice's end, and stamps it with that end, at
+most 1 ms after the guest wrote it (6.1). A message ends after a `\n`, and at the end of what the
+slice brought; the bytes of one slice that make several messages share their `t`.
 
 ### 5.8 `warn` *ext*
 
@@ -463,7 +483,8 @@ in the queue counts in `inputs_not_applied` only), so `BoardLink` can tell input
 past the end of the run. `uart` has one entry per
 port that carried a watched route during the run, with the bytes each way and the drops by kind.
 `rt_resyncs`, only under `--realtime`, counts the times the run skipped a lag behind wall time
-(12.2). `BoardLink` puts the counts in the test report next to the matching engine's unseen requests.
+(12.2). `console_rx_lost`, only with `--console-port usb`, counts the bytes of `console_rx` that
+came due while the board's supply was off (5.23). `BoardLink` puts the counts in the test report next to the matching engine's unseen requests.
 
 `wifi` is there with `--wifi` or `--wifi-sta`, as in the second example, and counts the station's link over
 the whole run:
@@ -998,6 +1019,33 @@ as `hci_tx` like any other. esp32sim then prints `[ble] the virtual controller i
 in mode 2 (BR/EDR), its commands get Unknown HCI Command` on the runner's stderr, which with `--bt`
 does not hold: the controller is the peer's.
 
+### 5.23 `console_rx` *ext* (USB console)
+
+```json
+{"type": "console_rx", "t": 1100000000, "data": "aGVscAo="}
+```
+
+With `--console-port usb` the console is the chip's USB-Serial/JTAG controller, esp32sim's
+`UsbSerialJtag` (`esp-periph/src/usb_serial_jtag.rs`), on the ESP32-S3, ESP32-C3 and ESP32-C6; the
+classic ESP32 has none, and the runner refuses the flag there before the run (exit code 2). The
+controller has no pins and no line rate, so its input is not `uart_rx`: `console_rx` carries the
+bytes a USB host sends the guest, the example's `help\n`. Its output is `console` (5.7).
+
+From `t` the bytes are the host's. The message goes into the input queue (section 8), and when it
+comes due the runner hands the whole of `data` to esp32sim's `serial_input` (`esp-soc/src/soc.rs:201`),
+at once: no pacing, since USB has no character time the guest could see. esp32sim cuts it into USB
+packets of 64 bytes and puts the next one in the controller's RX FIFO, with its interrupt, once the
+guest has read the one before (`UsbSerialJtag::host_input`), as Arduino's HWCDC driver needs; nothing
+is dropped. A chip reset, a power-on reset or a wake from deep sleep loses what the guest has not
+read: esp32sim makes its peripherals again (`Machine::reboot`), and the lost bytes are not counted
+in `console_rx_lost`. While the board's supply is off no USB device is there to
+take the bytes: the runner drops them and counts them in `stats.console_rx_lost` (5.9). Empty
+`data` changes nothing. `console_rx` on a run without `--console-port usb` is a protocol error,
+`console_rx without --console-port usb`.
+
+`BoardLink` sends each output of the one interface that is the USB-Serial/JTAG console
+(`Interface.usb_console`) as `console_rx`, cut into messages of at most 512 KiB, as `uart_rx`.
+
 ## 6. Rules
 
 1. **Block point.** After each `wait` the runner runs the guest until the block point
@@ -1154,7 +1202,7 @@ or, for a UART whose source is a `Model` (`esp32tl/sources/model/__init__.py`), 
 
 ## 8. Future-dated inputs
 
-Any input (`uart_rx`, `gpio_in`, `release`, `adc`, `eth_rx`, `hci_rx`, `wifi_ap`, `sd_card`, `sd_fault`, `sd_clear`) may carry a `t`
+Any input (`uart_rx`, `gpio_in`, `release`, `adc`, `eth_rx`, `hci_rx`, `console_rx`, `wifi_ap`, `sd_card`, `sd_fault`, `sd_clear`) may carry a `t`
 later than the turn's `sync`: the runner keeps it in a queue of its own, ordered by `t` and, at equal `t`, by arrival, and
 applies it at its time (section 6.1). This is how an interface's output that lies in the future, a
 replay's next sentence for one, reaches the guest.

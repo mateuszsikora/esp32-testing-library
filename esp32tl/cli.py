@@ -191,6 +191,7 @@ def interruptible(
             link_path,
             flash_mb=flash_mb,
             psram_mb=profile.psram_mb,
+            console=profile.console,
         )
         try:
             process = subprocess.Popen(command, start_new_session=True)

@@ -68,6 +68,8 @@ enum Act {
     HciTx(Vec<u8>),
     /// The guest's controller task polls the VHCI, as esp32sim's `Poll` hook does.
     HciPoll,
+    /// The guest writes these bytes to its USB-Serial/JTAG controller, which flushes them.
+    UsbTx(Vec<u8>),
 }
 
 /// A guest that does what its script says at the cycles it says, and records UART bytes the way
@@ -112,6 +114,10 @@ struct FakeGuest {
     steppable: bool,
     /// Where each `sleep_until` started and where it left the clock.
     skips: Vec<(u64, u64)>,
+    /// With `--console-port usb`: what the guest wrote to its USB-Serial/JTAG controller and the
+    /// runner has not taken yet, and what the host gave it, with the cycle.
+    usb: Option<Vec<u8>>,
+    usb_in: Vec<(u64, Vec<u8>)>,
 }
 
 /// Why `FakeGuest` lost a received byte.
@@ -149,7 +155,15 @@ impl FakeGuest {
             sleep: None,
             steppable: true,
             skips: Vec::new(),
+            usb: None,
+            usb_in: Vec::new(),
         }
+    }
+
+    /// With its console on the USB-Serial/JTAG controller (`--console-port usb`).
+    fn with_usb_console(mut self) -> Self {
+        self.usb = Some(Vec::new());
+        self
     }
 
     fn with_bt(mut self) -> Self {
@@ -248,6 +262,11 @@ impl Guest for FakeGuest {
                     let packet = self.forwarder().poll_h4();
                     self.hci_read.push((self.now, packet));
                 }
+                Act::UsbTx(data) => self
+                    .usb
+                    .as_mut()
+                    .expect("a guest with --console-port usb")
+                    .extend(data),
             }
         }
         self.now = end;
@@ -302,6 +321,12 @@ impl Guest for FakeGuest {
     }
     fn gpio_drive(&self) -> (u64, u64) {
         self.drive
+    }
+    fn take_usb_console(&mut self) -> Vec<u8> {
+        self.usb.as_mut().map(std::mem::take).unwrap_or_default()
+    }
+    fn usb_console_input(&mut self, data: &[u8]) {
+        self.usb_in.push((self.now, data.to_vec()));
     }
     fn take_gpio_inputs(&mut self) {
         for edge in self.board.take_edges() {
@@ -547,6 +572,7 @@ fn run_with(
     let opts = Options {
         end_cycle: (seconds * SECOND as f64) as u64,
         console,
+        usb_console: guest.usb.is_some(),
         peer_timeout: None,
         signal: &signal,
         wifi: None,
@@ -1362,6 +1388,7 @@ fn a_signal_ends_the_slice_in_progress_with_stats() {
     let opts = Options {
         end_cycle: 10 * SECOND,
         console: false,
+        usb_console: false,
         peer_timeout: None,
         signal: &signal,
         wifi: None,
@@ -1540,6 +1567,7 @@ fn on_the_emulator_the_slices_stop_a_guest_asleep_in_waiti_at_the_block_point() 
     let opts = Options {
         end_cycle: cycles(5 * MS),
         console: false,
+        usb_console: false,
         peer_timeout: None,
         signal: &signal,
         wifi: None,
@@ -1615,6 +1643,7 @@ fn on_the_emulator_a_byte_into_a_full_rx_fifo_is_lost_and_raises_the_overflow_in
     let opts = Options {
         end_cycle: cycles(20 * MS),
         console: false,
+        usb_console: false,
         peer_timeout: None,
         signal: &signal,
         wifi: None,
@@ -2012,6 +2041,7 @@ fn on_the_emulator_gpio_in_reaches_the_guest_and_its_output_comes_back_as_gpio_o
     let opts = Options {
         end_cycle: cycles(3 * MS),
         console: false,
+        usb_console: false,
         peer_timeout: None,
         signal: &signal,
         wifi: None,
@@ -2359,6 +2389,7 @@ fn run_wifi_mode(
     let opts = Options {
         end_cycle: end,
         console: false,
+        usb_console: false,
         peer_timeout: None,
         signal: &signal,
         wifi: Some(wifi),
@@ -2872,6 +2903,7 @@ fn run_with_slot(seconds: f64, peer: FakePeer, slot: &sd_card::Shared) -> Run {
     let opts = Options {
         end_cycle: (seconds * SECOND as f64) as u64,
         console: false,
+        usb_console: false,
         peer_timeout: None,
         signal: &signal,
         wifi: None,
@@ -3169,6 +3201,7 @@ fn run_realtime(seconds: f64, mut guest: FakeGuest, mut peer: FakePeer) -> Run {
     let opts = Options {
         end_cycle: (seconds * SECOND as f64) as u64,
         console: false,
+        usb_console: false,
         peer_timeout: None,
         signal: &signal,
         wifi: None,
@@ -3508,6 +3541,7 @@ fn each_flash_dump_ack_starts_the_peer_timeout_again() {
     let opts = Options {
         end_cycle: MS_CYCLES,
         console: false,
+        usb_console: false,
         peer_timeout: Some(Duration::from_secs(3600)),
         signal: &signal,
         wifi: None,
@@ -3973,4 +4007,80 @@ fn station_disconnect_drops_backpressure_and_future_ethernet() {
     assert_eq!(num(events[0], "t"), 0);
     assert_eq!(num(events[1], "t"), 2 * MS);
     assert_eq!(num(events[2], "t"), 4 * MS);
+}
+
+fn console_rx(t: u64, bytes: &[u8]) -> String {
+    format!(
+        r#"{{"type":"console_rx","t":{t},"data":"{}"}}"#,
+        protocol::base64(bytes)
+    )
+}
+
+#[test]
+fn with_the_console_on_usb_its_output_goes_out_as_console_and_uart0_stays_off_it() {
+    // protocol 5.7 and 5.23: what the guest flushed in a slice, stamped with the slice's end, a
+    // message per line; UART0's bytes are no console with --console-port usb
+    let mut script = tx(cycles(MS / 2), 0, b"rom\n", 100);
+    script.push((cycles(MS / 2), Act::UsbTx(b"boot\nhel".to_vec())));
+    script.push((cycles(3 * MS / 2), Act::UsbTx(b"lo\n".to_vec())));
+    let guest = FakeGuest::new(script)
+        .with_routes(&[route(0, Some(1), Some(3), Some(115_200))])
+        .with_usb_console();
+    let r = run_for(0.01, guest, FakePeer::new(&[], idle(None, None)), true);
+    assert!(matches!(r.end, End::MaxSeconds), "{:?}", r.end);
+    let console: Vec<(u64, Vec<u8>)> = r
+        .peer
+        .of("console")
+        .iter()
+        .map(|m| (num(m, "t"), data(m)))
+        .collect();
+    assert_eq!(
+        console,
+        [
+            (MS, b"boot\n".to_vec()),
+            (MS, b"hel".to_vec()),
+            (2 * MS, b"lo\n".to_vec())
+        ]
+    );
+    assert!(r.peer.of("uart_tx").is_empty());
+    assert_eq!(num(r.peer.stats(), "console_rx_lost"), 0);
+    // without --console socket, nothing, and the guest's output stays where it was
+    let guest =
+        FakeGuest::new(vec![(cycles(MS / 2), Act::UsbTx(b"x\n".to_vec()))]).with_usb_console();
+    let r = run(0.01, guest, FakePeer::new(&[], idle(None, None)));
+    assert_eq!(r.peer.types(), ["hello", "sync", "stats"]);
+}
+
+#[test]
+fn console_rx_reaches_the_usb_console_when_it_comes_due_and_is_lost_with_the_supply_off() {
+    let guest = FakeGuest::new(Vec::new()).with_usb_console();
+    let peer = FakePeer::new(
+        &[],
+        scripted(vec![
+            (0, console_rx(MS + 1, b"help\n")),
+            (2 * MS, power(2 * MS, false)),
+            (2 * MS, console_rx(3 * MS, b"lost\n")),
+            (4 * MS, power(4 * MS, true)),
+        ]),
+    );
+    let r = run_for(0.01, guest, peer, true);
+    assert!(matches!(r.end, End::MaxSeconds), "{:?}", r.end);
+    assert_eq!(r.guest.usb_in, [(cycles(MS + 1), b"help\n".to_vec())]);
+    assert_eq!(r.stats.console_rx_lost, Some(5));
+    assert_eq!(num(r.peer.stats(), "console_rx_lost"), 5);
+}
+
+#[test]
+fn console_rx_needs_the_console_on_usb() {
+    let peer = FakePeer::new(&[], move |turn| {
+        vec![console_rx(0, b"help\n"), wait(turn.seq, None, None)]
+    });
+    let r = run_for(1.0, FakeGuest::new(Vec::new()), peer, true);
+    assert!(
+        matches!(&r.end, End::Protocol(m) if m.starts_with("console_rx without --console-port usb: ")),
+        "{:?}",
+        r.end
+    );
+    // and no console_rx_lost in stats without it
+    assert!(r.peer.stats().get("console_rx_lost").is_none());
 }

@@ -70,8 +70,11 @@ usage: esp32tl-runner --chip CHIP --flash-at OFFSET=FILE... --max-seconds S [opt
   --board tcp:HOST:PORT   or over TCP. Without --board the chip has nothing on its pins
   --peer-timeout S      how long, in wall seconds, a turn of the peer may take before the
                         run fails with exit code 4 (default 60; 0 waits for ever)
-  --console stdout|socket|both   where UART0 goes (default stdout); socket and both need
-                        --board
+  --console stdout|socket|both   where the console goes (default stdout); socket and both
+                        need --board
+  --console-port uart0|usb   which of the guest's outputs is the console (default uart0):
+                        UART0, or the USB-Serial/JTAG controller of the ESP32-S3,
+                        ESP32-C3 and ESP32-C6, whose input is the peer's console_rx
   --sd-spi sclk=N,mosi=N,miso=N,cs=N   an SD card slot on these GPIOs, in SPI mode; empty
                         unless --sd-rw puts a card in it, and the peer's sd_card can
                         put one in or take it out while the guest runs
@@ -105,6 +108,7 @@ usage: esp32tl-runner --chip CHIP --flash-at OFFSET=FILE... --max-seconds S [opt
 | `--board` | none: nothing on the chip's pins | `socket:PATH`, a Unix socket path that is not empty, or `tcp:HOST:PORT`, with a host that is not empty and a port from 0 to 65535 (`tcp:[::1]:7000` for IPv6) |
 | `--peer-timeout S` | `60` | `0`, to wait for ever, or a positive number of seconds; fractions are fine. A value that rounds to 0 ns, or is too large for a Rust `Duration` (`1e20`), is a usage error |
 | `--console` | `stdout` | `stdout`; `socket` and `both` only with `--board` |
+| `--console-port` | `uart0` | `uart0`, or `usb` on the ESP32-S3, ESP32-C3 and ESP32-C6: the console is the chip's USB-Serial/JTAG controller ([below](#a-console-on-usb-serialjtag)). On the classic ESP32, `--console-port usb: esp32 has no USB-Serial/JTAG controller` (exit 2); another value, `--console-port: expected uart0 or usb, got "uart1"` |
 | `--sd-rw IMAGE` | none: an empty slot | a path, valid UTF-8, to an image file of a whole number of 512 KiB units, from 512 KiB to 2 TiB; only with `--sd-spi` |
 | `--sd-spi sclk=N,mosi=N,miso=N,cs=N` | none: no slot | the four pins in any order, each once, four different GPIOs of the chip ([Chips](#chips)); `sclk`, `mosi` and `cs` not input-only (34 to 39 on the classic ESP32) |
 | `--wifi SPEC` | none: no access point | esp32sim's `key=value,...`, every key optional, an empty `SPEC` included: `ssid` (default `esp32sim`), `psk` (also `password` or `pass`; WPA2-PSK with it, open without), `chan` (also `channel` or `ch`; 1 to 14, default 6), `bssid` (default `02:53:49:4d:00:01`). `epoch` is refused. Only with `--board` |
@@ -147,9 +151,37 @@ later. The runner tells the peer with an `rxfifo_ovf` warning and counts it in `
 ([protocol, 5.8](../protocol.md#58-warn-ext)), as it does a byte lost to a baud that is not the
 UART's (`frm_err`).
 
-With `--console socket` the guest's UART0 goes to the peer as `console` messages and not to
-stdout; with `--console both` it goes to both. Messages written outside the peer's turn reach the
-socket within about 20 wall milliseconds, so a peer can read the console as it comes.
+With `--console socket` the guest's console, UART0 unless `--console-port usb`, goes to the peer
+as `console` messages and not to stdout; with `--console both` it goes to both. Messages written
+outside the peer's turn reach the socket within about 20 wall milliseconds, so a peer can read the
+console as it comes.
+
+### A console on USB-Serial/JTAG
+
+With `--console-port usb` the console is the chip's USB-Serial/JTAG controller, where an ESP-IDF
+firmware with `CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y`, or an Arduino-ESP32 3.x one for the ESP32-S3
+with `ARDUINO_USB_CDC_ON_BOOT=1` and `ARDUINO_USB_MODE=1`, has `printf` and `Serial`:
+
+- stdout gets what the guest writes to the controller, not UART0; with `--console socket` or
+  `both`, so does the peer, as `console` messages, one per line, each stamped with the end of the
+  slice the guest wrote it in, at most 1 ms late ([protocol 5.7](../protocol.md#57-console));
+- the peer's `console_rx` messages are what a USB host types, given to the controller whole when
+  they come due, with no line rate ([protocol 5.23](../protocol.md#523-console_rx-ext-usb-console));
+  those that come due with the board's supply off are lost and counted in `stats` as
+  `console_rx_lost`;
+- UART0 is no console any more: its bytes go only to a peer that watches its TX pin, as
+  `uart_tx`. The ROM prints its banner on both, so that peer sees the banner, and stdout too.
+
+```sh
+esp32tl-runner --chip esp32s3 --rom .cache/esp-rom-elfs/20241011/esp32s3_rev0_rom.elf \
+  --flash-at 0x0=firmware/console_repl_usb/build-esp32s3/bootloader/bootloader.bin \
+  --flash-at 0x8000=firmware/console_repl_usb/build-esp32s3/partition_table/partition-table.bin \
+  --flash-at 0x10000=firmware/console_repl_usb/build-esp32s3/console_repl_usb.bin \
+  --max-seconds 2 --console-port usb
+```
+
+prints the ROM's banner, the bootloader, the application and the REPL's `console_repl>` prompt;
+the same command with `--console-port uart0` prints the ROM's 11 lines alone.
 
 The peer can also switch the board's supply off and on (`power`) and pulse the chip's EN pin
 (`chip_reset`), as a test does with `board.power_off()`, `board.power_on()` and `board.reset()`
@@ -360,8 +392,9 @@ the function's own code back in the copy it writes.
 
 ## What it prints
 
-stdout carries the guest's UART0 output and nothing else, unless `--console socket` sends it to
-the peer instead. Everything the runner says goes to stderr, on lines that start with
+stdout carries the guest's console output, UART0's or with `--console-port usb` the
+USB-Serial/JTAG controller's, and nothing else, unless `--console socket` sends it to the peer
+instead. Everything the runner says goes to stderr, on lines that start with
 `esp32tl-runner: `:
 
 - `esp32tl-runner: SD card on SCLK GPIO N, MOSI GPIO N, MISO GPIO N, CS GPIO N: IMAGE (K KiB,
@@ -497,6 +530,9 @@ tracks each gap.
   without its input; the runner sets the pad's reset state at power-on and after every reset
   (GPIO 3 on the classic ESP32, 44 on the S3, 20 on the C3, 17 on the C6), and what the firmware
   writes there afterwards stays.
+- **USB-Serial/JTAG.** The S3, C3 and C6 have the controller, and `--console-port usb` reads and
+  writes it; the classic ESP32 has none. On each of the three the ROM prints its banner on UART0
+  and on the controller alike.
 - **Reset causes** are the chip's numbers, as its ROM prints them: 1 is a power-on reset, 5 a
   wake from deep sleep, 12 a software CPU reset (`esp_restart()`), on all four chips.
 - **The flash dump with `--bt` on the C6** holds esp32sim's trampoline over

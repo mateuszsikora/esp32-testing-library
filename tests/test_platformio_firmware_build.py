@@ -83,7 +83,8 @@ def test_refuses_an_unknown_image(tmp_path: Path) -> None:
     result = run_build(env, "arduino_shell", "nope")
     assert result.returncode == 1
     assert result.stderr == (
-        "firmware/build-platformio.sh: unknown image 'nope'; the images are: arduino_shell\n"
+        "firmware/build-platformio.sh: unknown image 'nope'; the images are: arduino_shell"
+        " arduino_shell@esp32s3_usb\n"
     )
     assert not (tmp_path / "out").exists()
 
@@ -193,12 +194,10 @@ def test_local_build_runs_pio_in_a_copy_and_records_how(
     result = run_build(local_pio)
     assert result.returncode == 0, result.stderr
     directory = (tmp_path / "out").resolve() / "arduino_shell"
+    # every image: the project's esp32dev environment, then its esp32s3_usb one
     assert (tmp_path / "pio.log").read_text().splitlines() == [
-        "run",
-        "--project-dir",
-        str(directory),
-        "--environment",
-        "esp32dev",
+        *("run", "--project-dir", str(directory), "--environment", "esp32dev"),
+        *("run", "--project-dir", str(directory), "--environment", "esp32s3_usb"),
     ]
     # FIRMWARE_OUT is not firmware/: pio ran in a copy of the project's platformio.ini and src/
     project = ROOT / "firmware" / "arduino_shell"
@@ -215,8 +214,14 @@ def test_local_build_runs_pio_in_a_copy_and_records_how(
     }
     assert (build / "esp32tl-built").is_file()
     assert "not for goldens" in result.stderr
+    usb = build.parent / "esp32s3_usb"
+    assert json.loads((usb / "esp32tl-build.json").read_text()) == json.loads(
+        (build / "esp32tl-build.json").read_text()
+    )
     assert result.stdout == (
         f"firmware/build-platformio.sh: arduino_shell built in {build} (PlatformIO Core 9.9.9)\n"
+        f"firmware/build-platformio.sh: arduino_shell@esp32s3_usb built in {usb}"
+        " (PlatformIO Core 9.9.9)\n"
     )
 
 

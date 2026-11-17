@@ -99,7 +99,13 @@ are in [models-technical.md](models-technical.md).
    For a selected serial item it also requires an exact `--port` or indirect `port` parameter,
    refusing blank or wildcard values with `PORT_REQUIRED`, conflicting `ESPPORT` with
    `PORT_CONFLICT`, and separate flashing ports with `FLASH_PORT_UNSUPPORTED`. These checks run
-   after deselection. `serial_artifact` checks resolved fixtures, the environment and cached
+   after deselection. `serial_artifact` first calls `serial_chip(profile)`, which lets the
+   classic ESP32 and the chips `SERIAL_CHIPS` maps to the profile's console (`esp32s3` to
+   `usb-serial-jtag`) go on, skips a C3 or C6 with `console = "usb-serial-jtag"` with
+   `skip_at_the_test`, and fails any other chip
+   ([serial backend](serial-backend-technical.md#failure-modes)); it then loads the build for the
+   profile's chip (`check_artifact(..., chip=profile.chip)`), and gives a PlatformIO build
+   `PlatformioApp.for_chip(profile.chip)`. It checks resolved fixtures, the environment and cached
    pytest-embedded port options again before `app` setup, so a fixture override cannot restore
    discovery or redirect flashing. A cached port mismatch uses `CACHED_PORT_CONFLICT`; missing
    serial options use the services requirement error instead of a `KeyError`.
@@ -331,6 +337,7 @@ the existing no-latency behavior and board pulls are unchanged.
 | `Console(board)` | class, `esp32tl/interfaces/console.py` | `expect(pattern, timeout=30, *, return_what_before_match=False)`, `expect_exact(...)` with the same arguments, `timeout` a `Duration` or a number of seconds; `line(pattern)`, `lines(pattern=None, *, since=None)`, `tap(path)`, `write(data: bytes \| str)` and `sendline(line: bytes \| str)`; input requires the backend's `write_console(data: bytes)` method. `board` is a `Clocked`: `console_output`, `console_lines` and `wait_on_clock(condition, within, description)`, `within` a `Duration` |
 | `Line(at, text, match=None)` | frozen dataclass, `esp32tl/interfaces/console.py` | A console line: `at` a `Duration`, `text` a `str`, `match` an `re.Match[str]`, left out of comparisons; `line[group]` is `match[group]`, a `TypeError` without a match |
 | `ConsoleLines()` | class, `esp32tl/interfaces/console.py` | `feed(t, data)`, `lines`: the console cut into `Line`s |
+| `ConsoleInput(name, wire, *, usb=False, ...)` | class, `esp32tl/interfaces/console.py` | The esp32sim backend's console input on the link, a `Uart`: on `wire`'s RX pin as `uart_rx`, or with `usb=True` and `wire` `None` the USB-Serial/JTAG controller's, `Interface.usb_console` true, as `console_rx`. `Uart` takes `wire` `None` for it |
 | `Condition(find, description, service=None)`, `condition(find, description, *, service=None)` | frozen generic dataclass and its constructor, `esp32tl/interfaces/condition.py`, exported as `esp32tl.Condition` and `esp32tl.condition` | A described condition: called, it calls `find`; `repr` is `description`, which `board.wait_until` names it by because an instance has no `__qualname__`; `__bool__` raises `TypeError("call the condition {description!r} with (), or pass it to board.wait_until")`, or `call the {service} condition` with a `service`. `__post_init__` refuses with `TypeError` a `find` that is not callable (`condition: find is {find!r}, not a function of no arguments`), a `description` that is not non-empty `str` (`condition: description is {description!r}, not text naming the event`) and an empty or non-`str` `service` (`condition: service is {service!r}, not text naming it`). The MQTT, HTTP, DHCP and TLS conditions and `OutputLine.is_on` / `is_off` are instances |
 | `LineCondition(lines, pattern)` | class, `esp32tl/interfaces/console.py` | What `console.line` returns: called, the first matching `Line` since it was made, or since the last it found, or `None` |
 | `DEFAULT_TIMEOUT` | `int`, `esp32tl/interfaces/console.py` | 30: an expect's `timeout`, in seconds of the board's time |

@@ -95,6 +95,17 @@ pub trait Guest {
     /// Has the chip take the levels and releases the run loop handed the board, now rather than
     /// at the bus's next tick.
     fn take_gpio_inputs(&mut self);
+    // The USB-Serial/JTAG console, asked only with `--console-port usb`: the defaults are a chip
+    // without the controller.
+
+    /// What the guest wrote to its USB-Serial/JTAG controller since the last call, as the host
+    /// read it: the bytes of every packet the controller flushed.
+    fn take_usb_console(&mut self) -> Vec<u8> {
+        Vec::new()
+    }
+    /// Bytes from the host into the USB-Serial/JTAG controller, as USB packets of at most 64
+    /// bytes, each taken into the RX FIFO once the guest has read the one before.
+    fn usb_console_input(&mut self, _data: &[u8]) {}
     // Wi-Fi, asked with `--wifi` or `--wifi-sta`: the defaults are a chip without it.
 
     /// Data readiness and completed joins; absent outside virtual station mode.
@@ -159,8 +170,11 @@ pub trait Guest {
 pub struct Options<'a> {
     /// `--max-seconds`, in bus cycles.
     pub end_cycle: u64,
-    /// Whether UART0 also goes out as `console` (`--console socket` or `both`).
+    /// Whether the console also goes out as `console` (`--console socket` or `both`).
     pub console: bool,
+    /// `--console-port usb`: the console is the USB-Serial/JTAG controller, not UART0, and the
+    /// peer's `console_rx` is its input.
+    pub usb_console: bool,
     /// `--peer-timeout`; `None` waits for ever.
     pub peer_timeout: Option<Duration>,
     /// Set by `SIGTERM` and `SIGINT`.
@@ -235,6 +249,11 @@ enum Item {
         cycle: u64,
         data: Vec<u8>,
     },
+    /// What the guest wrote to its USB-Serial/JTAG console in a slice, taken at its end.
+    UsbConsole {
+        cycle: u64,
+        data: Vec<u8>,
+    },
     /// What the slot holds after the peer's `sd_card`, applied at `cycle`, and why it was
     /// refused, if it was.
     SdCard {
@@ -254,6 +273,7 @@ impl Item {
             | Item::WifiLink { cycle, .. }
             | Item::Eth { cycle, .. }
             | Item::Hci { cycle, .. }
+            | Item::UsbConsole { cycle, .. }
             | Item::SdCard { cycle, .. } => *cycle,
         }
     }
@@ -301,6 +321,7 @@ enum Input {
     Release(Vec<u8>),
     Eth(Vec<u8>),
     Hci(Vec<u8>),
+    UsbConsole(Vec<u8>),
     WifiAp(bool),
     Power(bool),
     ChipReset,
@@ -401,6 +422,7 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
             resyncs: 0,
             stats: Stats {
                 wifi: opts.wifi.map(|_| WifiStats::default()),
+                console_rx_lost: opts.usb_console.then_some(0),
                 ..Stats::default()
             },
             opts,
@@ -783,6 +805,15 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
             }
         }
         self.pending.extend(items);
+        // esp32sim's USB-Serial/JTAG has no pins and keeps no time of its own: what the guest
+        // wrote in the slice is stamped with its end
+        if self.opts.usb_console && self.opts.console {
+            let data = self.guest.take_usb_console();
+            if !data.is_empty() {
+                let cycle = self.guest.cycles();
+                self.pending.push_back(Item::UsbConsole { cycle, data });
+            }
+        }
         if self.opts.wifi.is_some() {
             let cycle = self.guest.cycles();
             let state = self.guest.station_state();
@@ -831,7 +862,7 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
             match item {
                 Item::Board(Recorded::UartTx { route, byte, .. }) => {
                     self.route_seen(route, t)?;
-                    let console = route.port == 0 && self.opts.console;
+                    let console = route.port == 0 && self.opts.console && !self.opts.usb_console;
                     if console {
                         self.console_byte(t, route, byte)?;
                     }
@@ -872,6 +903,15 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                 }
                 Item::Hci { data, .. } => {
                     self.event(t, |seq| protocol::hci_tx(seq, t, &data))?;
+                }
+                // not an event: one `console` message per line, as UART0's end after a newline
+                Item::UsbConsole { data, .. } => {
+                    self.close_open()?;
+                    for piece in data.split_inclusive(|&b| b == b'\n') {
+                        for chunk in piece.chunks(MAX_DATA) {
+                            self.send(&protocol::console(t, chunk))?;
+                        }
+                    }
                 }
                 // not an event: the peer answers nothing
                 Item::Board(Recorded::Sd(faulted)) => {
@@ -1059,6 +1099,16 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                     }
                     inputs.push((t, Input::Eth(data)));
                 }
+                Incoming::ConsoleRx { t, data } => {
+                    check(t, Vec::new())?;
+                    if !self.opts.usb_console {
+                        return Err(protocol_error(
+                            "console_rx without --console-port usb",
+                            &line,
+                        ));
+                    }
+                    inputs.push((t, Input::UsbConsole(data)));
+                }
                 Incoming::HciRx { t, data } => {
                     check(t, Vec::new())?;
                     if self.opts.hci.is_none() {
@@ -1231,6 +1281,15 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                         self.eth.push_back(data);
                     }
                     self.deliver_eth();
+                }
+                // into the controller's packet queue at once: USB carries it at no line rate the
+                // runner paces; with the supply off there is no device on the bus to take it
+                Input::UsbConsole(data) => {
+                    if self.off {
+                        *self.stats.console_rx_lost.get_or_insert(0) += data.len() as u64;
+                    } else {
+                        self.guest.usb_console_input(&data);
+                    }
                 }
                 // for the guest's host, at its next VHCI poll; a reset before it loses the packet
                 Input::Hci(data) => {

@@ -256,6 +256,7 @@ class Stats:
     detail: str | None = None
     wifi: WifiStats | None = None
     rt_resyncs: int | None = None
+    console_rx_lost: int | None = None
 
 
 @dataclass(frozen=True)
@@ -302,6 +303,16 @@ class EthRx:
     """From `t` the access point puts this Ethernet frame on the air for the station (5.15)."""
 
     TYPE: ClassVar[str] = "eth_rx"
+    t: int
+    data: bytes
+
+
+@dataclass(frozen=True)
+class ConsoleRx:
+    """From `t` these bytes are the host's, for the guest's USB-Serial/JTAG console, with
+    `--console-port usb` (5.23)."""
+
+    TYPE: ClassVar[str] = "console_rx"
     t: int
     data: bytes
 
@@ -412,6 +423,7 @@ Input = (
     | Adc
     | EthRx
     | HciRx
+    | ConsoleRx
     | WifiAp
     | Power
     | ChipReset
@@ -433,8 +445,9 @@ def as_json(message: Message | UartStats | WifiStats) -> dict[str, Any]:
         obj["type"] = message.TYPE
     for field in fields(message):
         value = getattr(message, field.name)
-        # `stats.wifi` is there with `--wifi` only, `stats.rt_resyncs` with `--realtime` only
-        optional = field.name in ("wifi", "rt_resyncs")
+        # `stats.wifi` is there with `--wifi` only, `stats.rt_resyncs` with `--realtime` only,
+        # `stats.console_rx_lost` with `--console-port usb` only
+        optional = field.name in ("wifi", "rt_resyncs", "console_rx_lost")
         if not (isinstance(message, Stats) and optional and value is None):
             obj[JSON_NAMES.get(field.name, field.name)] = _to_json(value)
     return obj
@@ -724,6 +737,7 @@ def _stats(f: Fields) -> Stats:
         detail=f.opt_string("detail"),
         wifi=_wifi_stats(f.obj.get("wifi")),
         rt_resyncs=f.opt_integer("rt_resyncs"),
+        console_rx_lost=f.opt_integer("console_rx_lost"),
     )
 
 
@@ -785,6 +799,7 @@ DECODERS: dict[Sender, dict[str, Callable[[Fields], Message]]] = {
         "adc": lambda f: Adc(f.integer("t"), f.integer("pin"), f.number("volts")),
         "eth_rx": lambda f: EthRx(f.integer("t"), f.frame("data")),
         "hci_rx": lambda f: HciRx(f.integer("t"), f.packet("data")),
+        "console_rx": lambda f: ConsoleRx(f.integer("t"), f.data("data")),
         "wifi_ap": lambda f: WifiAp(f.integer("t"), f.boolean("on")),
         "power": lambda f: Power(f.integer("t"), f.boolean("on")),
         "chip_reset": lambda f: ChipReset(f.integer("t")),

@@ -19,6 +19,7 @@ fn minimal_command_line() {
             psram_mb: 0,
             max_seconds: 3.0,
             console: Console::Stdout,
+            console_port: ConsolePort::Uart0,
             board: None,
             peer_timeout: Some(Duration::from_secs(60)),
             sd_card: None,
@@ -425,6 +426,36 @@ fn the_sd_card_s_pins_are_the_chip_s() {
         line("esp32c3", "sclk=22,mosi=4,miso=5,cs=8"),
         Err(Error::Usage(
             "--sd-spi sclk=22,mosi=4,miso=5,cs=8: \"22\" is not a GPIO of the ESP32-C3".into()
+        ))
+    );
+}
+
+#[test]
+fn console_port_selects_uart0_or_the_usb_serial_jtag_controller() {
+    assert_eq!(parse_str(MINIMAL).unwrap().console_port, ConsolePort::Uart0);
+    for chip in ["esp32s3", "esp32c3", "esp32c6"] {
+        let opts = parse_str(&format!(
+            "--chip {chip} --flash-at 0x0=b.bin --max-seconds 3 --console-port usb"
+        ))
+        .unwrap();
+        assert_eq!(opts.console_port, ConsolePort::Usb, "{chip}");
+    }
+    assert_eq!(
+        parse_str(&format!("{MINIMAL} --console-port uart0"))
+            .unwrap()
+            .console_port,
+        ConsolePort::Uart0
+    );
+    assert_eq!(
+        parse_str(&format!("{MINIMAL} --console-port usb")),
+        Err(Error::Usage(
+            "--console-port usb: esp32 has no USB-Serial/JTAG controller".into()
+        ))
+    );
+    assert_eq!(
+        parse_str(&format!("{MINIMAL} --console-port uart1")),
+        Err(Error::Usage(
+            "--console-port: expected uart0 or usb, got \"uart1\"".into()
         ))
     );
 }

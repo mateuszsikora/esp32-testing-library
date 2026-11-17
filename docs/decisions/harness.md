@@ -4060,7 +4060,13 @@ opened. A real S3, C3 or C6 board would need the chip's bootloader offset and `e
 the flashing path, and on many devkits a console on USB-Serial/JTAG, which the serial backend's
 `Wire` on UART0 does not read.
 
-**Not yet:** pending a real board of each chip to validate on.
+The ESP32-S3 with its console on USB-Serial/JTAG has since been measured and runs
+([the serial backend runs an ESP32-S3 through its USB-Serial/JTAG port](#the-serial-backend-runs-an-esp32-s3-through-its-usb-serialjtag-port));
+a C3 or C6 with that console skips. The refusal stays for a console on UART0 on the S3, C3 and C6:
+`serial: the board profile {name} carries an {title} with its console on UART0; the serial backend
+runs the classic ESP32, and the ESP32-S3 with its console on USB-Serial/JTAG`.
+
+**Not yet:** pending a real board of each chip, and of each console, to validate on.
 
 ## Project defaults are esp32tl ini options that the markers override
 
@@ -4309,3 +4315,118 @@ SUBSCRIBE on the same one.
 
 **Postponed:** `next_unsubscribe` and a `find_*` query over `subscribe_requests`; a test reads the
 list until one needs a condition for UNSUBSCRIBE.
+
+## A board profile's console is UART0 or the chip's USB-Serial/JTAG controller
+
+Status: decided (17 November 2026)
+
+A profile says where the firmware's console is with one top-level key, `console = "uart0"`, the
+default, or `"usb-serial-jtag"`: an Arduino-ESP32 3.x firmware for the ESP32-S3 with
+`ARDUINO_USB_CDC_ON_BOOT=1` and `ARDUINO_USB_MODE=1` (HWCDC), or an ESP-IDF one with
+`CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y`, as on many S3 and C3 boards without a USB-to-UART bridge.
+`usb-serial-jtag` is refused on the classic ESP32, which has no such controller (`console: the
+ESP32 has no USB-Serial/JTAG controller; use uart0`), and allowed on the S3, C3 and C6, whose
+controller esp32sim models (`UsbSerialJtag` in each chip's `periph.rs`, the first stream of
+`console_take`). The test's `console` stays the same interface: `board.console` reads and writes
+the controller, the backend passes `--console-port usb` to the runner, and the input goes as
+`console_rx`. Moving a test from UART0 to USB-Serial/JTAG is that line in the profile and a build
+with the USB console.
+
+With the console on USB-Serial/JTAG, UART0 and its IO MUX pins are free: a `[uart.<role>]` route
+may take port 0, and a route or a line its pins. The ROM prints its banner on UART0 as well
+(measured below), so a route on UART0's pins is how a test sees that copy.
+
+**Rejected:** a `[console]` table (`port = "usb-serial-jtag"`, pins, baud), which would add keys
+that mean nothing for the controller and repeat UART0's IO MUX pins, which the chip fixes; and
+keeping UART0 reserved with a USB console, which would leave a test no way to watch it.
+
+## On the S3, C3 and C6 the ROM prints on UART0 and on USB-Serial/JTAG
+
+Status: decided (17 November 2026)
+
+Measured in esp32sim at `357b0e5`, running the runner without a peer once with `--console-port usb`
+and once with `--console-port uart0`, both to stdout, for 2 emulated seconds:
+
+| Image | Chip | Lines on USB-Serial/JTAG | Lines on UART0 |
+|---|---|---|---|
+| `console_repl_usb` (`CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y`) | S3 | 68 | 11, the ROM's banner |
+| `console_repl_usb` | C3 | 65 | 9, the ROM's banner |
+| `console_repl_usb` | C6 | 64 | 9, the ROM's banner |
+| `console_repl` (UART0, ESP-IDF's default) | S3 | 68 | 68 |
+| `console_repl` | C3 | 65 | 65 |
+| `console_repl` | C6 | 64 | 66 |
+
+The ROM's banner, from `ESP-ROM:` to `entry 0x…`, comes out on both on every chip. With the
+console on USB-Serial/JTAG, everything after it, the second-stage bootloader and the application,
+comes out on the controller only. With the console on UART0, ESP-IDF v5.3's default secondary
+console (`CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=y` in both builds' `sdkconfig`) copies the
+bootloader's and the application's output to the controller too, though the REPL reads UART0. So
+`console_output` with a USB console starts with the ROM's banner and holds the whole boot, and the
+banner's copy on UART0 is there for a profile route on UART0's pins
+(`test_the_usb_console_holds_the_rom_bootloader_and_app_and_uart0_the_rom_alone`). On the real
+ESP32-S3 below, the console read through its USB-Serial/JTAG port starts with the ROM's banner too
+(`ESP-ROM:esp32s3-20210327`, `rst:0x15 (USB_UART_CHIP_RESET)`); its UART0 was not wired and was not
+measured.
+
+## The serial backend runs an ESP32-S3 through its USB-Serial/JTAG port
+
+Status: decided (17 November 2026)
+
+`--esp32tl-backend serial` takes a board profile whose chip is `esp32s3` and whose console is
+`usb-serial-jtag`; the port is the chip's own USB device. Measured on 2026-11-17 on an ESP32-S3
+(QFN56) rev v0.2 with 16 MB of flash on macOS, port `/dev/cu.usbmodem1101` (USB 303a:1001), esptool
+5.6.0 and pytest-embedded 2.9.3, with `console_repl_usb` built for the S3:
+
+- Flashing: pytest-embedded's `IdfSerial.flash` runs `esptool.main` on its connected `ESPLoader`.
+  esptool picks its USB-Serial/JTAG reset itself when it connects, from the port's PID
+  (`USBJTAGSerialReset`, `esptool/loader.py:850`), and prints `USB mode: USB-Serial/JTAG`; the
+  backend passes nothing of its own. After writing, esptool's `--after hard-reset` and
+  pytest-embedded's `EspSerial.hard_reset` both pulse RTS with `HardReset(uses_usb=False)`
+  (`esptool/reset.py:122-148`): 0.1 s held, no wait after; esptool 5.6.0 passes `uses_usb` from
+  nowhere. Two runs of the pytest-embedded test flashed 21 392, 3 072 and 235 728 bytes and passed.
+- Reset to the application: the RTS pulse resets the chip (`rst:0x15 (USB_UART_CHIP_RESET)`), and
+  the port stays: no re-enumeration, the same path, and the descriptor opened before the reset
+  reads on. One pulse on a port opened by the measuring script gave two resets, the first banner
+  cut off at `rst:0x15 (USB_UART_CHIP`.
+- What is lost at boot: nothing on this path. The port is open across the reset, and the console
+  of both pytest-embedded runs held the whole boot, from the ROM's banner on. After a reset in the
+  test, the ROM's banner stopped for 3 s after its first line in both runs, and the prompt came
+  4.1 s after the reset instead of 1.0 s.
+- `expect` and `sendline`: `help` through the port got the REPL's answer, before and after a
+  reset, in the esp32tl tests `test_the_usb_console_takes_a_command_and_comes_back_after_a_reset`
+  and `test_a_tap_of_the_usb_console_records_both_ways` of `tests/test_usb_console.py` on
+  `--esp32tl-backend serial --port /dev/cu.usbmodem1101`.
+- EN and power: `board.reset()` is the same RTS pulse; the backend switches no power, as on the
+  classic chip.
+
+What cannot be guaranteed: twice, after the measuring script closed the port and opened it
+again, with DTR and RTS asserted by pyserial's default the first time and released before opening
+the second, the chip stopped answering: the USB device stayed (`USB JTAG/serial debug unit`), but
+esptool's connection failed with `No serial data received`, also with `--before usb-reset` and
+`--before no-reset`, and the port read nothing after an RTS pulse, until the board was unplugged
+and plugged in again. pytest-embedded opens the port once per test, through esptool, and the
+pytest-embedded and esp32tl runs did not meet it, but a test session that opens the port many times
+may. Opening the port also reset the chip once. A board whose console is USB-Serial/JTAG and whose
+UART0 has a bridge was not measured on UART0.
+
+**Not yet:** the C3 and the C6 with a USB-Serial/JTAG console skip on the serial backend
+(`serial: the board profile {name} has its console on the {title}'s USB-Serial/JTAG controller,
+which the serial backend has been validated on with the ESP32-S3 only`), until a board of each is
+measured as above; the S3, C3 and C6 with a console on UART0 are still refused, as
+[the serial backend runs the classic ESP32 only](#the-serial-backend-runs-the-classic-esp32-only)
+says.
+
+**Rejected:** skipping the S3 with a USB console too, which the measurement does not call for; and
+reopening the port after each reset to follow a re-enumeration, which the S3 does not do.
+
+## A USB console through TinyUSB is not a console the profile can name
+
+Status: postponed (17 November 2026)
+
+`ARDUINO_USB_MODE=0`, Arduino-ESP32's USB OTG CDC through TinyUSB, and ESP-IDF's
+`CONFIG_ESP_CONSOLE_USB_CDC=y` put the console on the S3's USB OTG peripheral, not on the
+USB-Serial/JTAG controller. esp32sim's USB OTG model (`esp-periph/src/usb_otg.rs`) is not a
+console stream of `console_take`, and the runner has no way to read or write it.
+
+**Not yet:** until esp32tl needs such a firmware, and esp32sim gives a host's end of its USB OTG
+device; then the profile's `console` would take a third value.

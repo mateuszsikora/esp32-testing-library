@@ -14,6 +14,7 @@ from esp32tl.link.protocol import (
     Adc,
     ChipReset,
     Console,
+    ConsoleRx,
     EthRx,
     EthTx,
     FlashDump,
@@ -107,6 +108,8 @@ EVERY_MESSAGE: list[tuple[Sender, Message]] = [
     ("harness", EthRx(4_201_000_000, bytes(14))),
     ("harness", HciRx(4_301_000_000, b"\x04\x0e\x04\x01\x03\x0c\x00")),
     ("harness", HciRx(4_301_000_000, b"\x04")),
+    ("harness", ConsoleRx(2_000_000_000, b"help\n")),
+    ("harness", ConsoleRx(2_000_000_000, b"")),
     ("harness", WifiAp(5_000_000_000, False)),
     ("harness", WifiAp(6_000_000_000, True)),
     ("harness", Power(7_000_000_000, False)),
@@ -324,6 +327,23 @@ def test_stats_without_wifi_has_no_wifi_field() -> None:
     stats = Stats(5, "stop", 0, 2, (), 0, 0, 0, 0)
     assert "wifi" not in as_json(stats)
     assert decode(encode(stats), "runner") == stats
+
+
+def test_stats_has_console_rx_lost_with_the_console_on_usb_only() -> None:
+    stats = Stats(5, "stop", 0, 2, (), 0, 0, 0, 0)
+    assert "console_rx_lost" not in as_json(stats)
+    lost = Stats(5, "stop", 0, 2, (), 0, 0, 0, 0, console_rx_lost=5)
+    assert as_json(lost)["console_rx_lost"] == 5
+    assert decode(encode(lost), "runner") == lost
+
+
+def test_console_rx_comes_from_the_harness_only_and_carries_base64() -> None:
+    with pytest.raises(ProtocolError, match="no message type 'console_rx' from the runner"):
+        decode(b'{"type":"console_rx","t":0,"data":"aGVscAo="}', "runner")
+    with pytest.raises(ProtocolError, match="console_rx: data is not base64"):
+        decode(b'{"type":"console_rx","t":0,"data":"Zg"}', "harness")
+    with pytest.raises(ProtocolError, match="console_rx: no t"):
+        decode(b'{"type":"console_rx","data":"aGVscAo="}', "harness")
 
 
 @pytest.mark.parametrize("sender", ["runner", "harness"])
