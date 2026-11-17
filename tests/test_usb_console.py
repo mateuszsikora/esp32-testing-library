@@ -72,13 +72,17 @@ def on_chip(chip: str, profile: str, rom: str) -> type:
             tap = console.tap(tmp_path / "console.jsonl")
             board.power_on()
             console.expect_exact("console_repl>", timeout=10)
+            # what the tap holds by now is the boot, whose prompt may share the board's time
+            start = len(tap.events)
             at = board.now.ns
             console.sendline("help")
             console.expect_exact("Print the summary of all registered commands")
+            # the prompt after the answer, which may come in a later batch than the answer
+            console.expect_exact("console_repl>", timeout=10)
             # at the board's time the test wrote: emulated, or wall time on a real board
             assert any(t >= at and d == "in" and data == b"help\n" for t, d, data in tap.events)
-            # the prompt that follows the answer, which one batch may hold part of
-            out = b"".join(data for t, d, data in tap.events if t >= at and d == "out")
+            # one batch may hold part of the prompt
+            out = b"".join(data for t, d, data in tap.events[start:] if t >= at and d == "out")
             assert b"console_repl>" in out
             board.close()
             made = recording.read(tmp_path / "console.jsonl")
