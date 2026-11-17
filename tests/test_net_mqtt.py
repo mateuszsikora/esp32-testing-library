@@ -2,7 +2,8 @@
 
 import pytest
 
-from esp32tl.net.mqtt import TEST_CLIENT, Broker, matches
+from esp32tl.net.mqtt import TEST_CLIENT, Broker, RequestedFilter, SubscribeRequest, matches
+from esp32tl.units import Duration
 
 CONNECT = b"\x10\x0d\x00\x04MQTT\x04\x02\x00\x0a\x00\x01c"
 SUBSCRIBE = b"\x82\x08\x00\x01\x00\x03a/#\x01"
@@ -303,6 +304,8 @@ def test_subscription_condition_tracks_current_state_without_latching() -> None:
         ("next_connection", (), "the next MQTT client connection"),
         ("next_connection_attempt", (), "the next MQTT connection attempt"),
         ("subscribed", ("a/#",), "an active MQTT subscription to 'a/#'"),
+        ("next_subscribe", (), "the next MQTT SUBSCRIBE"),
+        ("next_subscribe", ("a/#",), "the next MQTT SUBSCRIBE to 'a/#'"),
     ],
 )
 def test_mqtt_conditions_are_named_and_reject_truth_testing(
@@ -599,3 +602,90 @@ def test_late_poll_stamps_actual_emission_time_and_does_not_backdate() -> None:
     now[0] = 200
     broker.poll()
     assert handle.puback_at == Duration(200)
+
+
+KEEP = b"\x10\x0d\0\x04MQTT\x04\x00\0\x0a\0\x01c"  # CleanSession=0, client ID c
+SUBSCRIBE_TWO = b"\x82\x0c\0\x05\0\x03a/#\x02\0\x01b\x00"  # a/# at QoS 2, b at QoS 0
+UNSUBSCRIBE = b"\xa2\x07\0\x06\0\x03a/#"
+
+
+def test_subscribe_requests_keep_every_filter_after_unsubscribe_and_clean_session() -> None:
+    now = [10]
+    broker = Broker(lambda: now[0])
+    sent: list[bytes] = []
+    first = broker.accept(("10.64.0.2", 4000), sent.append, lambda: None)
+    first.on_data(KEEP + SUBSCRIBE_TWO)
+    assert sent[-1] == b"\x90\x04\0\x05\x01\x00"
+    now[0] = 20
+    first.on_data(UNSUBSCRIBE)
+    assert broker.disconnect("c")
+    now[0] = 30
+    second = broker.accept(("10.64.0.2", 4001), sent.append, lambda: None)
+    second.on_data(CONNECT)  # CleanSession=1 discards the stored subscription to b.
+    state = broker.session("c")
+    assert state is not None and state.subscriptions == {}
+    assert broker.subscribe_requests == [
+        SubscribeRequest(
+            Duration(10),
+            "c",
+            1,
+            5,
+            "SUBSCRIBE",
+            (RequestedFilter("a/#", 2, 1), RequestedFilter("b", 0, 0)),
+        ),
+        SubscribeRequest(Duration(20), "c", 1, 6, "UNSUBSCRIBE", (RequestedFilter("a/#"),)),
+    ]
+    ever = {
+        topic_filter
+        for request in broker.subscribe_requests
+        if request.kind == "SUBSCRIBE" and request.client == "c"
+        for topic_filter in request.topic_filters
+    }
+    assert ever == {"a/#", "b"}
+
+
+def test_next_subscribe_sees_a_later_subscribe_to_the_filter_without_consuming() -> None:
+    broker = Broker(lambda: 0)
+    session = broker.accept(("10.64.0.2", 4000), lambda data: None, lambda: None)
+    session.on_data(CONNECT + SUBSCRIBE)
+    later, to_b, to_c, to_all = (
+        broker.next_subscribe(),
+        broker.next_subscribe("b"),
+        broker.next_subscribe("c"),
+        broker.next_subscribe("#"),
+    )
+    assert later() is None and to_b() is None
+    session.on_data(UNSUBSCRIBE)
+    assert later() is None and to_b() is None
+    session.on_data(SUBSCRIBE + SUBSCRIBE_TWO)
+    assert later() is broker.subscribe_requests[2] and later() is broker.subscribe_requests[2]
+    assert to_b() is broker.subscribe_requests[3]
+    assert to_c() is None
+    assert to_all() is None  # The filter is compared exactly: "#" would match "a/#" and "b".
+    assert broker.next_subscribe()() is None
+    to_a = broker.next_subscribe("a/#")
+    session.on_data(b"\x82\x08\0\x07\0\x03a/b\x01")
+    assert to_a() is None and broker.subscribe_requests[-1].topic_filters == ("a/b",)
+
+
+@pytest.mark.parametrize(
+    ("packet", "subscriptions"),
+    [
+        # a/b is valid, a# is not.
+        (b"\x82\x0d\0\x07\0\x03a/b\x01\0\x02a#\x00", {"a/#": 1}),
+        # a/# is valid, the byte 0xff is not UTF-8.
+        (b"\xa2\x0a\0\x07\0\x03a/#\0\x01\xff", {"a/#": 1}),
+    ],
+    ids=["subscribe", "unsubscribe"],
+)
+def test_a_malformed_subscribe_or_unsubscribe_is_refused_whole(
+    packet: bytes, subscriptions: dict[str, int]
+) -> None:
+    broker = Broker(lambda: 0)
+    closed: list[bool] = []
+    session = broker.accept(("10.64.0.2", 4000), lambda data: None, lambda: closed.append(True))
+    session.on_data(KEEP + SUBSCRIBE + packet)
+    assert closed == [True]
+    assert [request.kind for request in broker.subscribe_requests] == ["SUBSCRIBE"]
+    state = broker.session("c")
+    assert state is not None and state.subscriptions == subscriptions

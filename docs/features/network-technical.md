@@ -309,9 +309,19 @@ threads; a connect in progress ends within `CONNECT_SECONDS`. The backend calls 
   of disconnect, not the time of CONNECT. A replacement client ID closes the old connection.
   QoS 2 publication is unsupported. Credentials are observed by default;
   authentication is performed only by an installed test policy, with no external auth service.
+  SUBSCRIBE and UNSUBSCRIBE parse every filter of the packet into a `RequestedFilter` before they
+  touch the session, so a packet that `_handle` refuses part-way subscribes and unsubscribes
+  nothing; `_Session._record` then appends a frozen `SubscribeRequest` (board time, client ID,
+  connection ID, packet ID, `kind` and the filters in packet order) to
+  `Broker.subscribe_requests`, before the subscriptions change and SUBACK or UNSUBACK is written.
+  `granted_qos` is `min(requested_qos, 1)`, the byte SUBACK carries. The list is the broker's,
+  like `connection_attempts`, not the `_State`'s, so neither UNSUBSCRIBE, `_end` of a clean
+  session, a CleanSession=1 CONNECT nor `forget_session` removes an entry.
   `next_message`, `next_connection` and `next_connection_attempt` capture the length of
-  `messages`, `clients` and `connection_attempts` at construction, and `next_delivery` captures
-  `deliveries`, filtering as `next_message` does. Matching uses append order,
+  `messages`, `clients` and `connection_attempts` at construction, `next_subscribe` that of
+  `subscribe_requests`, and `next_delivery` captures `deliveries`, filtering as `next_message`
+  does. `next_subscribe(filter)` skips UNSUBSCRIBE entries and, with a filter, keeps the first
+  entry whose `topic_filters` hold that string exactly. Matching uses append order,
   not timestamps, and polling does not change the captured offset. `find_message` scans
   from index zero with the same topic/payload filters; `find_connection` reads the first CONNECT.
   `mark()` returns a `Mark` holding the broker and `len(messages)` at the call;

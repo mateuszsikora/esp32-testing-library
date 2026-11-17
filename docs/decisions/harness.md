@@ -4273,3 +4273,39 @@ have to skip the test only when asked, unlike every other result of a call that 
 
 **Rejected:** leaving tests to compose `condition()` over `boots`, because that is the boundary
 bookkeeping the issue's tests repeated, and got wrong when they took the boundary after the call.
+
+## The broker keeps every SUBSCRIBE and UNSUBSCRIBE in subscribe_requests, beside connection_attempts
+
+Status: decided (#242)
+
+The MQTT broker grants every filter, so a test is the only place that can check a device asks for
+no more than a production broker's ACL would grant. Until now it could read only the subscriptions
+that hold now, through `subscribed(topic)` and `session(client_id).subscriptions`: a filter
+unsubscribed later, or lost when a CleanSession=1 CONNECT discarded the stored session, left no
+trace, and neither the QoS asked for and granted nor the time was kept, so "subscribed before it
+published" or "subscribed again after the reconnect" could not be asserted.
+
+`broker.subscribe_requests` is a list of frozen `SubscribeRequest` records, one per SUBSCRIBE and
+UNSUBSCRIBE packet, in arrival order: `at`, `client`, `connection_id`, `packet_id`, `kind`
+(`"SUBSCRIBE"` or `"UNSUBSCRIBE"`) and `filters`, a tuple of `RequestedFilter` with `filter`,
+`requested_qos` and `granted_qos`, both `None` in an UNSUBSCRIBE. Its name and shape follow
+`connection_attempts`: a plural history on the broker, not on the session, appended before the
+acknowledgement is written, with no `find_*` query beside it. The record fields follow `Message`
+and `Delivery` (`at`, `client`, `connection_id`, `packet_id`). One list holds both packet kinds
+because the order between them is what a test of "unsubscribed, then subscribed again" reads.
+`next_subscribe(filter=None)` waits for the next SUBSCRIBE, optionally naming one filter, compared
+exactly as `subscribed(topic)` compares it; its name is the packet it waits for, which is why it
+is not `next_subscribe_request`: that would read as if an UNSUBSCRIBE matched too. A SUBSCRIBE or
+UNSUBSCRIBE is now parsed whole before it changes the session, so one refused part-way, which
+used to leave its earlier filters subscribed, or unsubscribed, on a stored session, changes
+nothing and is not recorded.
+
+**Rejected:** a history on `_State` or in `SessionState`, because a clean session discards it with
+the evidence; one list per packet kind, which loses the order between them; matching
+`next_subscribe`'s filter by MQTT wildcards, because the device's filter is the value under test,
+and `a/#` would then match a SUBSCRIBE to `a/b`; recording only the filters and not the packet,
+because the packet ID and connection tell a resubscription on a new connection from a repeated
+SUBSCRIBE on the same one.
+
+**Postponed:** `next_unsubscribe` and a `find_*` query over `subscribe_requests`; a test reads the
+list until one needs a condition for UNSUBSCRIBE.

@@ -185,6 +185,32 @@ class ConnectionAttempt:
         return self.return_code == ConnackCode.ACCEPTED
 
 
+@dataclass(frozen=True)
+class RequestedFilter:
+    """One topic filter of a SUBSCRIBE or UNSUBSCRIBE. `requested_qos` is the QoS the client
+    asked for and `granted_qos` the one SUBACK gave; both are `None` in an UNSUBSCRIBE."""
+
+    filter: str
+    requested_qos: int | None = None
+    granted_qos: int | None = None
+
+
+@dataclass(frozen=True)
+class SubscribeRequest:
+    """One SUBSCRIBE or UNSUBSCRIBE packet, with its filters in the order the packet gave them."""
+
+    at: Duration
+    client: str
+    connection_id: int
+    packet_id: int
+    kind: Literal["SUBSCRIBE", "UNSUBSCRIBE"]
+    filters: tuple[RequestedFilter, ...]
+
+    @property
+    def topic_filters(self) -> tuple[str, ...]:
+        return tuple(f.filter for f in self.filters)
+
+
 def matches(pattern: str, topic: str) -> bool:
     if topic.startswith("$") and pattern[:1] in ("#", "+"):
         return False
@@ -266,6 +292,7 @@ class Broker:
         self.messages: list[Message] = []
         self.clients: list[Client] = []
         self.connection_attempts: list[ConnectionAttempt] = []
+        self.subscribe_requests: list[SubscribeRequest] = []
         self.deliveries: list[Delivery] = []
         self.connection_policy = connection_policy
         self.retained: dict[str, Message] = {}
@@ -443,6 +470,25 @@ class Broker:
             )
 
         return Condition(find, "the next MQTT connection attempt", "MQTT")
+
+    def next_subscribe(self, filter: str | None = None) -> Callable[[], SubscribeRequest | None]:
+        """A non-consuming condition for the first SUBSCRIBE recorded after this call; with
+        `filter`, the first that names exactly that topic filter. UNSUBSCRIBE never matches."""
+        start = len(self.subscribe_requests)
+
+        def find() -> SubscribeRequest | None:
+            return next(
+                (
+                    request
+                    for request in self.subscribe_requests[start:]
+                    if request.kind == "SUBSCRIBE"
+                    and (filter is None or filter in request.topic_filters)
+                ),
+                None,
+            )
+
+        description = "the next MQTT SUBSCRIBE" + (f" to {filter!r}" if filter is not None else "")
+        return Condition(find, description, "MQTT")
 
     def publish(
         self, topic: str, payload: bytes | str, *, retain: bool = False, qos: int = 0
@@ -878,8 +924,7 @@ class _Session:
             packet_id, at = body[:2], 2
             if len(body) < 5 or packet_id == b"\0\0":
                 raise ValueError("empty SUBSCRIBE or zero packet id")
-            granted = bytearray()
-            filters = []
+            requested, filters, granted = [], [], bytearray()
             while at < len(body):
                 topic, at = _string(body, at)
                 parts = topic.split("/")
@@ -892,11 +937,13 @@ class _Session:
                 qos = body[at]
                 if qos > 2:
                     raise ValueError("invalid subscription QoS")
-                qos = min(qos, 1)
                 at += 1
-                self.subscriptions[topic] = qos
-                granted.append(qos)
+                requested.append(RequestedFilter(topic, qos, min(qos, 1)))
                 filters.append(topic)
+                granted.append(min(qos, 1))
+            # The whole packet is parsed first: a malformed one subscribes to nothing.
+            self._record("SUBSCRIBE", now, packet_id, requested)
+            self.subscriptions.update(zip(filters, granted, strict=True))
             broker._log(f"mqtt: {self.client_id} subscribed to {', '.join(filters)}")
             self.write(_packet(SUBACK, 0, packet_id + bytes(granted)))
             # A copy: a TLS write that fails closes, and the Will can change what is retained.
@@ -907,9 +954,13 @@ class _Session:
             if len(body) < 5 or body[:2] == b"\0\0":
                 raise ValueError("empty UNSUBSCRIBE or zero packet id")
             at = 2
+            requested = []
             while at < len(body):
                 topic, at = _string(body, at)
-                self.subscriptions.pop(topic, None)
+                requested.append(RequestedFilter(topic))
+            self._record("UNSUBSCRIBE", now, body[:2], requested)
+            for request in requested:
+                self.subscriptions.pop(request.filter, None)
             self.write(_packet(UNSUBACK, 0, body[:2]))
         elif kind == PINGREQ:
             if body:
@@ -932,6 +983,24 @@ class _Session:
             self._drain()
         else:
             raise ValueError("unsupported MQTT packet")
+
+    def _record(
+        self,
+        kind: Literal["SUBSCRIBE", "UNSUBSCRIBE"],
+        now: Duration,
+        packet_id: bytes,
+        filters: list[RequestedFilter],
+    ) -> None:
+        self.broker.subscribe_requests.append(
+            SubscribeRequest(
+                now,
+                self.client_id,
+                self.connection_id,
+                int.from_bytes(packet_id, "big"),
+                kind,
+                tuple(filters),
+            )
+        )
 
     def on_close(self) -> None:
         will, self.will = self.will, None

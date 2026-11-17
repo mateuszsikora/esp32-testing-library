@@ -330,6 +330,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [A virtual access point and a virtual station together wait for esp32sim's AP+STA](harness.md#a-virtual-access-point-and-a-virtual-station-together-wait-for-esp32sims-apsta) | `harness.md` | postponed (#237) |
 | [The runner's flash is the profile's flash_mb, else the build's headers, refused at setup when too small](harness.md#the-runners-flash-is-the-profiles-flash_mb-else-the-builds-headers-refused-at-setup-when-too-small) | `harness.md` | decided (#240) |
 | [The next boot is a condition the test makes; reset and power_on return nothing](harness.md#the-next-boot-is-a-condition-the-test-makes-reset-and-power_on-return-nothing) | `harness.md` | decided (#241) |
+| [The broker keeps every SUBSCRIBE and UNSUBSCRIBE in subscribe_requests, beside connection_attempts](harness.md#the-broker-keeps-every-subscribe-and-unsubscribe-in-subscribe_requests-beside-connection_attempts) | `harness.md` | decided (#242) |
 
 ## The runner crate and esp32sim
 
