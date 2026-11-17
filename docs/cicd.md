@@ -42,7 +42,8 @@ settings, not settings applied by the workflow files:
   `lint` and `docs`, matching the job matrix below. Every firmware group is required on its own:
   a failed group fails the `firmware` job, the test jobs that need it are skipped, and GitHub
   counts a skipped required check as passed, so the test checks alone would not block a merge.
-  The three `firmware / firmware (chips-K, chips, K/3)` checks were added with #236's groups. The
+  The three `firmware / firmware (chips-K, chips, K/3)` checks were added on 17 November 2026,
+  after #236 introduced the chips groups. The
   14 native-build and test context names were updated for the separate platform calls.
   Strict status checks require the branch to be up to date with `main`. Protection applies
   to administrators too; force pushes and branch deletion are disabled. When renaming jobs

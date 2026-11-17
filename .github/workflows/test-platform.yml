@@ -12,7 +12,7 @@ on:
         required: true
         type: string
       firmware-key:
-        description: Exact base key for the eight firmware caches.
+        description: Exact base key for the eleven firmware caches.
         required: true
         type: string
       rom-elf-key:
@@ -83,8 +83,9 @@ jobs:
           path: .cache/esp-rom-elfs
           key: ${{ inputs.rom-elf-key }}
 
-      # The images land in firmware/<image>/build/, firmware/<image>/.pio/build/esp32dev/
-      # and examples/<name>/build/, where test_firmware_images.py reads them;
+      # The images land in firmware/<image>/build/, firmware/<image>/build-<chip>/,
+      # firmware/<image>/.pio/build/esp32dev/ and examples/<name>/build/, where
+      # test_firmware_images.py reads them;
       # esp32tl-built marks them finished.
       - name: Unpack and check the runner
         if: ${{ !inputs.version_only }}
