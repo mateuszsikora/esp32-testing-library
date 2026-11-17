@@ -30,6 +30,7 @@ from bumble.transport.common import AsyncPipeSink
 from esp32tl.backends.clock import seconds
 from esp32tl.bluetooth.air import Air
 from esp32tl.bluetooth.controller import RSSI, SIX_DIGITS, Controller, Pairing, UnderWay
+from esp32tl.interfaces.condition import Condition
 from esp32tl.interfaces.uart import Source, Supplied
 from esp32tl.link.boardlink import Direction, Output
 from esp32tl.sources.model import InNanoseconds, Model, in_nanoseconds
@@ -443,6 +444,49 @@ class SppPeer(BluetoothDevice):
     def channel_open(self) -> bool:
         """Whether a device holds the SPP channel now."""
         return self._dlc is not None
+
+    @property
+    def is_open(self) -> Condition[bool]:
+        """A described condition for a device holding the SPP channel now."""
+        return Condition(
+            lambda: self.channel_open,
+            f"{self.name}'s SPP channel is open ({self.device.public_address})",
+            "SPP",
+        )
+
+    @property
+    def is_closed(self) -> Condition[bool]:
+        """A described condition for no device holding the SPP channel now."""
+        return Condition(
+            lambda: not self.channel_open,
+            f"{self.name}'s SPP channel is closed ({self.device.public_address})",
+            "SPP",
+        )
+
+    def next_write(self, data: bytes | None = None) -> Condition[ChannelEvent | None]:
+        """The first device write appended after this call, optionally containing `data`.
+
+        Match within one chunk, without consuming history or joining chunks. The boundary
+        is append order, even at equal timestamps and across channel reopenings.
+        """
+        if data is not None and not isinstance(data, bytes):
+            raise TypeError(f"SppPeer.next_write: data is {data!r}, not bytes or None")
+        start = len(self.events)
+
+        def find() -> ChannelEvent | None:
+            return next(
+                (
+                    event
+                    for event in self.events[start:]
+                    if event.direction == "out" and (data is None or data in event.data)
+                ),
+                None,
+            )
+
+        description = f"the next write to {self.name}'s SPP channel ({self.device.public_address})"
+        if data is not None:
+            description += f" containing {data!r}"
+        return Condition(find, description, "SPP")
 
     @property
     def _driving(self) -> Source:

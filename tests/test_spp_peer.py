@@ -9,6 +9,7 @@ answers what it writes, on the board's clock."""
 import asyncio
 import re
 from collections.abc import Awaitable, Callable, Coroutine, Iterable, Iterator
+from functools import partial
 from typing import Any
 
 import pytest
@@ -3902,3 +3903,92 @@ def test_each_pairing_starts_anew_and_two_runs_show_the_same_numbers() -> None:
     first = run()
     assert len(first) == 2 and first[0][2] != first[1][2]
     assert first == run()
+
+
+def test_channel_conditions_follow_state_and_name_timeouts(air: Air) -> None:
+    from test_clock import Run
+
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo())
+    esp32 = Initiator(air)
+    opened, closed = peer.is_open, peer.is_closed
+    run = Run()
+    try:
+        for step, is_open in enumerate((False, True, False)):
+            assert opened() is is_open
+            assert closed() is not is_open
+            ready, pending = (opened, closed) if is_open else (closed, opened)
+            assert run.clock.wait_until(ready, MS, repr(ready)) is True
+            with pytest.raises(NeverHappened, match=re.escape(repr(pending))):
+                run.clock.wait_until(pending, MS, repr(pending))
+            for condition in (opened, closed):
+                assert "peer's SPP channel is" in repr(condition)
+                assert "00:00:00:00:5B:01" in repr(condition)
+                with pytest.raises(TypeError, match="call the SPP condition"):
+                    bool(condition)
+            if step == 0:
+                dlc = air.run(esp32.session(), within=seconds(10))
+            elif step == 1:
+                air.run(dlc.multiplexer.l2cap_channel.connection.disconnect(), within=seconds(1))
+    finally:
+        run.clock.stop()
+        run.runner.join(1)
+
+
+def test_next_write_keeps_append_boundary_and_does_not_consume(air: Air) -> None:
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo(delay=0))
+    esp32 = Initiator(air)
+    dlc = air.run(esp32.session(), within=seconds(10))
+    air.call(lambda: dlc.write(b"old"))
+    first = peer.next_write()
+    same = peer.next_write()
+    filtered = peer.next_write(b"target")
+    empty = peer.next_write(b"")
+    split = peer.next_write(b"onetwo")
+    answer_only = peer.next_write(b"\r\n> ")
+    assert first() is None
+    with pytest.raises(TypeError, match="call the SPP condition"):
+        bool(first)
+    # All writes and answers share one air instant, before any polling.
+    for data in (b"one", b"two", b"a target here", b"later target"):
+        air.call(partial(dlc.write, data))
+    history = list(peer.events)
+    assert {event.at for event in history} == {seconds(0)}
+    for _ in range(2):
+        assert first() is same() is empty() is history[2]
+        assert first() == ChannelEvent(seconds(0), "out", b"one")
+        assert filtered() == ChannelEvent(seconds(0), "out", b"a target here")
+        assert split() is None  # Chunks are never joined.
+        assert answer_only() is None  # Peer answers never match.
+        assert peer.events == history
+    assert "containing b'target'" in repr(filtered)
+    with pytest.raises(TypeError, match="call the SPP condition"):
+        bool(first)
+    assert peer.next_write()() is None
+
+
+def test_next_write_survives_channel_close_and_reopen(air: Air) -> None:
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo())
+    esp32 = Initiator(air)
+    dlc = air.run(esp32.session(), within=seconds(10))
+    air.call(lambda: dlc.write(b"before"))
+    pending = peer.next_write()
+    air.run(dlc.disconnect(), within=seconds(1))
+    assert peer.is_closed()
+    assert pending() is None
+    connection = dlc.multiplexer.l2cap_channel.connection
+    air.run(connection.disconnect(), within=seconds(1))
+    dlc = air.run(
+        esp32.open(air.run(esp32.connect(peer.device.public_address), within=seconds(1))),
+        within=seconds(1),
+    )
+    air.call(lambda: dlc.write(b"after"))
+    assert peer.is_open()
+    assert pending() == ChannelEvent(seconds(0), "out", b"after")
+    assert pending() is peer.events[-1]
+
+
+@pytest.mark.parametrize("data", ["text", 1, bytearray(b"x")])
+def test_next_write_refuses_non_bytes(air: Air, data: Any) -> None:
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo())
+    with pytest.raises(TypeError, match="not bytes or None"):
+        peer.next_write(data)

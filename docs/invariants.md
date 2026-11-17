@@ -1941,3 +1941,16 @@ unchanged report text and JSON integer `t_ns` fields.
 alone, serially and under two workers, preserved per-test JUnit link properties, isolated card
 clones, and rejection of serial distributed execution before accessing hardware.
 `test_a_hung_run_is_ended_by_the_test_s_timeout` checks timeout teardown in workers too.
+
+## SPP conditions
+
+- **242.** SPP state conditions describe the peer's current channel state and refuse boolean coercion.
+  `test_channel_conditions_follow_state_and_name_timeouts` in `tests/test_spp_peer.py` checks
+  state changes and timeout descriptions.
+
+- **243.** `next_write` sees only device writes appended after
+  its creation, including equal-time writes, without consuming events or joining chunks;
+  `test_next_write_keeps_append_boundary_and_does_not_consume` checks these rules.
+
+- **244.** Its boundary survives channel closure and reopening, enforced by
+  `test_next_write_survives_channel_close_and_reopen`.
