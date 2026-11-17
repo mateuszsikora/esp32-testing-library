@@ -243,8 +243,8 @@ The backend runs `runner/target/release/esp32tl-runner` and passes
 `RUNNER_PROFILE=dev` build. The backend always passes `--rom`, because the runner's own lookup
 prefers the newest release under `~/.espressif`
 ([runner.md](runner.md#the-runner-looks-for-the-rom-the-way-esp32sim-does)).
-`test_rom_is_the_one_make_setup_fetches` checks that `ROM_RELEASE` and `ROM_ELF` match
-`scripts/fetch-rom-elf`.
+`test_rom_is_the_one_make_setup_fetches` checks that `ROM_RELEASE`, and since the other chips'
+ROMs every ELF and SHA-256 of `runtime.ROMS`, match `scripts/fetch-rom-elf`.
 
 **Rejected:** new command-line options for the two paths, so that `--esp32tl-backend` stays the
 plugin's only flag.

@@ -5,6 +5,7 @@ works through the runner and the harness as it does on the classic ESP32. What i
 Needs `make firmware` (the `--chips` images)."""
 
 import re
+from pathlib import Path
 
 import pytest
 
@@ -135,14 +136,19 @@ def on_chip(chip: str, profile: str, banner: str) -> type:
 
             @image("gatt_server")
             def test_a_ble_host_gets_through_its_controller_on_the_air(
-                self, board: Esp32Sim, bt: Bluetooth, console: Console
+                self, board: Esp32Sim, bt: Bluetooth, console: Console, tmp_path: Path
             ) -> None:
                 # Bluedroid's own HCI goes through esp32sim's VHCI to the harness's controller,
                 # which answers every command it sends; there is no LE peer yet (#234)
+                tap = bt.tap(tmp_path / "hci.btsnoop")
                 board.power_on()
                 console.expect_exact("GATTS_DEMO: Advertising start successfully", timeout=5)
                 assert bt.packets_from_host > 0 and bt.packets_to_host > 0
                 assert bt.unknown_commands() == []
+                # the tap has every packet, Bluedroid's HCI_Reset first
+                assert len(tap.events) == bt.packets_from_host + bt.packets_to_host
+                _, direction, first = tap.events[0]
+                assert (direction, first) == ("out", bytes.fromhex("01030c00"))
                 # the flash holds the application as built, not esp32sim's trampoline over
                 # esp_bt_controller_init (chip::flash_without_trampoline)
                 assert board.app.app_image is not None
