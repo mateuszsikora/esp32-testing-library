@@ -40,8 +40,9 @@ settings, not settings applied by the workflow files:
   `firmware / firmware (...)` checks, `runner-linux / runner`, `runner-macos / runner`,
   six `test-linux / test (...)` and six `test-macos / test (...)` checks, `determinism`,
   `lint` and `docs`, matching the job matrix below. The three `firmware / firmware (chips-K)`
-  checks are not among them: TODO(owner): add them to the required checks. The test jobs need
-  their tarballs, so a failed chips group fails every test check all the same. The 14 native-build and test context
+  checks are not among them: TODO(owner): add them to the required checks. Until they are, a
+  failed chips group does not block merging: the `firmware` job fails, the test jobs that need it
+  are skipped, and GitHub counts a skipped required check as passed. The 14 native-build and test context
   names were updated for the separate platform calls; all 25 checks remain required.
   Strict status checks require the branch to be up to date with `main`. Protection applies
   to administrators too; force pushes and branch deletion are disabled. When renaming jobs

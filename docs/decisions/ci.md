@@ -691,7 +691,7 @@ Other fields, comments and dependency pins still require their usual documentati
 
 ## The chips' images build in three groups of their own
 
-Status: decided (17 November 2026)
+Status: decided (#236)
 
 The firmware matrix has `chips-1` to `chips-3`, each running `firmware/build.sh --chips --shard
 K/3` and packing `firmware/*/build-*`; the test jobs restore and unpack them with the other

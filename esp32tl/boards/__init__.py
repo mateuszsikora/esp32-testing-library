@@ -239,7 +239,8 @@ class Reader:
         stem = self.file.removesuffix(".toml")
         if name != stem:
             raise self.fail("name", f"{name!r} is not the file's name, {stem!r}")
-        if data["chip"] not in CHIPS:
+        # A string first: an array or a table is no key of CHIPS, and not hashable either.
+        if not isinstance(data["chip"], str) or data["chip"] not in CHIPS:
             raise self.fail("chip", f"{data['chip']!r} is not one of {', '.join(CHIPS)}")
         self.chip = CHIPS[data["chip"]]
         sizes = {

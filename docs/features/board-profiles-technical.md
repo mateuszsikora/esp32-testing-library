@@ -258,7 +258,7 @@ The ones `tests/test_boards.py` checks, verbatim:
 | `x.toml: missing chip`, `x.toml: unknown key pins` | A top-level key missing or unknown |
 | `x.toml: uart.gnss: missing baud`, `x.toml: lines.modem.ri: missing pin` | The same in a table |
 | `x.toml: name: 'y' is not the file's name, 'x'` | `name` differs from the file's name |
-| `x.toml: chip: 'esp32p4' is not one of esp32, esp32s3, esp32c3, esp32c6` | Another chip |
+| `x.toml: chip: 'esp32p4' is not one of esp32, esp32s3, esp32c3, esp32c6` | Another chip, or a value that is not a string (`['esp32c3']`, an inline table) |
 | `x.toml: uart: is not a table`, `x.toml: sd_card: is not a table` | `uart`, `lines` or `sd_card`, or a role in them, is not a table |
 | `x.toml: sd_card: missing cs`, `x.toml: sd_card: unknown key cd` | A pin of the slot missing, or another key |
 | `x.toml: sd_card.cs: GPIO 36 is input only` | `sclk`, `mosi` or `cs` on an input-only pin, 34 to 39 on the classic ESP32 |

@@ -111,7 +111,7 @@ in the build directory, which is why a build without `firmware.factory.bin` gets
 | `Build.table()` | `read(partition_table, TABLE_SIZE)`; `BuildError` when `partition_table` is `None` |
 | `FlashFile(offset, path)` | A frozen dataclass: a file written into the flash at `offset` |
 | `BuildError` | What keeps a build from loading or its table from being read |
-| `esp_idf(app_path, directory, backend)`, `platformio(directory, backend)` | The two readers `load` chooses between |
+| `esp_idf(app_path, directory, backend, chip)`, `platformio(directory, backend, chip)` | The two readers `load` chooses between, each checking the build against `chip` |
 | `check_encryption(directory, backend)`, `encryption(directory, backend, what="flash encryption")` | The refusal of a PlatformIO build whose `config/sdkconfig.json` enables flash encryption or secure boot; the `BuildError` for a build that asks for `what` |
 | `app_partition(path, table, firmware)` | The application partition of `table` at `ota_0`'s offset, else at `0x10000`; `BuildError` without one there, for a `firmware` larger than it, or for a table `flash.partitions` refuses |
 | `header(path, offset)`, `check_image(path, data, what, directory, chip)`, `wrong_chip(directory, built, chip)`, `flash_bytes(build, offset, size)` | The 24 bytes of an image header in a file; the check of its magic and chip id against `chip`; the error for a build for another chip; `Build.read` with no bytes where no file holds the offset |

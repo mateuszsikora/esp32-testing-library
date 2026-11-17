@@ -472,8 +472,9 @@ held turn then, or still running 5 s later, gets one `SIGTERM` once it has said 
 ## Chips
 
 `--chip` selects one of esp32sim's machines. Everything above works on each of them, except what
-the last column lists: esp32sim does not model it on that chip, and the runner refuses the flag
-with a usage error (exit 2) where a flag asks for it. [Issue #229](https://github.com/mateuszsikora/esp32-testing-library/issues/229)
+the last column lists: esp32sim does not model it on that chip. Where a flag asks for it
+(`--wifi-sta`, a PSRAM size), the runner refuses the flag with a usage error (exit 2); deep sleep
+and DMA are the guest's to use, and no flag asks for them. [Issue #229](https://github.com/mateuszsikora/esp32-testing-library/issues/229)
 tracks each gap.
 
 | `--chip` | esp32sim's machine | Bus clock | GPIOs | UARTs | ROM ELF | Not modelled |
@@ -483,6 +484,13 @@ tracks each gap.
 | `esp32c3` | `esp32c3` (one RISC-V core) | 160 MHz | 0 to 21 | 2 | `esp32c3_rev3_rom.elf` | as the S3, and PSRAM |
 | `esp32c6` | `esp32c6` (one RISC-V core) | 160 MHz | 0 to 30 | 2 | `esp32c6_rev0_rom.elf` | as the C3; `--bt` needs an image built with ESP-IDF v5.5.x, which esp32sim checks |
 
+- **The SD card.** `--sd-spi` and `--sd-rw` are taken on every chip: the card answers the SPI
+  transactions the CPU drives through the data buffer, as the first commands of ESP-IDF's `sdspi`
+  example reached it on the S3 (`SD card: 2 commands`). What a transaction receives through RX
+  DMA never reaches memory, and ESP-IDF's SD SPI driver reads through DMA, so its card
+  initialisation times out (`sdmmc_card_init failed (0x107)`). A driver that moves every byte
+  through the CPU would reach the card; none is tested here. The esp32sim backend skips a test's
+  `sd_card` on these chips ([esp32sim backend](esp32sim-backend-user.md#chips-other-than-the-classic-esp32)).
 - **Deep sleep.** On the S3, C3 and C6, `esp_deep_sleep_start()` puts the guest to sleep and
   nothing wakes it: the run goes on to its end without another boot.
 - **The console's input.** esp32sim starts every chip with its IO_MUX zeroed, which leaves U0RXD

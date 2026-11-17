@@ -1044,7 +1044,7 @@ Protocol v2 carries `wifi_link` before Ethernet at the same collection boundary.
 
 ## The runner runs one esp32sim chip per process, chosen by --chip
 
-Status: decided (17 November 2026)
+Status: decided (#236)
 
 `--chip` takes `esp32`, `esp32s3`, `esp32c3` and `esp32c6`, the chips esp32sim models well enough
 for the run loop: a board on the chip's pins with UART and GPIO hooks, an Ethernet relay behind
@@ -1069,14 +1069,16 @@ whose boards have no UART pin hooks and whose images need another ESP-IDF versio
 
 ## What esp32sim lacks on a chip is refused at the command line
 
-Status: decided (17 November 2026)
+Status: decided (#236)
 
 `chip::Profile` says what esp32sim models on the chip, and `cli::parse` refuses a flag that asks
 for something it does not: `--wifi-sta` on the S3, C3 and C6
 (`--wifi-sta: esp32s3 has no virtual station for a SoftAP in esp32sim`), a `--psram-mb` size the
 chip does not take (`--psram-mb: the ESP32-C3 supports only 0 MiB, got "2"`), and the pins of
 `--sd-spi` against the chip's GPIOs. Deep sleep and GP-SPI RX DMA cannot be refused: nothing on
-the command line asks for them, and the guest decides at run time. [#229](https://github.com/mateuszsikora/esp32-testing-library/issues/229)
+the command line asks for them, and the guest decides at run time. `--sd-spi` is taken on the S3,
+C3 and C6: the card answers the transactions the CPU drives, and only those through RX DMA miss
+it, which ESP-IDF's SD SPI driver needs; the esp32sim backend skips `sd_card` there instead. [#229](https://github.com/mateuszsikora/esp32-testing-library/issues/229)
 lists each gap; when esp32sim fills one and the pin moves past it, the `Profile` flag changes.
 
 **Rejected:** letting esp32sim's own `Err` reach the run, because `attach_wifi_station`'s
@@ -1085,7 +1087,7 @@ PSRAM size esp32sim takes but the chip's modules do not would boot a board that 
 
 ## The runner restores U0RXD's reset state on every chip
 
-Status: decided (17 November 2026)
+Status: decided (#236)
 
 esp32sim creates the IO_MUX of the S3, the C3 and the C6 as zeroed register RAM, as it does the
 classic chip's, so U0RXD has no input function after reset and the console's RX route is missing

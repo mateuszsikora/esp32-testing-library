@@ -478,7 +478,7 @@ container's Linux ones would mix with, and the build would change the developer'
 
 ## The other chips' images are a family of their own, from the same projects
 
-Status: decided (17 November 2026)
+Status: decided (#236)
 
 `firmware/build.sh --chips` builds `IMAGE@CHIP` entries, each from the classic image's project
 into `firmware/<image>/build-<chip>/`, with `-DIDF_TARGET=<chip>`, in the same pinned v5.3.6

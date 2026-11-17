@@ -3959,7 +3959,7 @@ needs to prove both transitions occurred without an intermediate wait.
 
 ## A board profile's chip decides its pads, UARTs and console pins
 
-Status: decided (17 November 2026)
+Status: decided (#236)
 
 `esp32tl/boards` keeps one `Chip` per chip a profile may name, `esp32`, `esp32s3`, `esp32c3` and
 `esp32c6`: the GPIO pads, the input-only ones, the number of UARTs and UART0's pins, which the
@@ -3976,7 +3976,7 @@ and 44.
 
 ## esp32sim's gaps on a chip skip the test that asks for them
 
-Status: decided (17 November 2026)
+Status: decided (#236)
 
 The esp32sim backend's `CHIP_GAPS` names, per chip, what esp32sim does not model there, by the
 `Request` a test makes: `sd_card` (no GP-SPI RX DMA on the S3, C3 and C6, which ESP-IDF's SD SPI
@@ -3997,7 +3997,7 @@ firmware sleeps. `board.wait_for_wake` raises when its time is up.
 
 ## Boot reasons keep the classic ESP32's names on every chip
 
-Status: decided (17 November 2026)
+Status: decided (#236)
 
 `Boot.reason` names a reset cause from `RESET_REASONS`, the classic ESP32's table, whatever the
 board's chip. The causes the emulated chips report, 1, 3, 5 and 12, mean the same on the S3, the C3
@@ -4009,7 +4009,7 @@ causes would read differently in reports for the same event.
 
 ## The serial backend runs the classic ESP32 only
 
-Status: postponed (17 November 2026)
+Status: postponed (#236)
 
 A board profile for another chip is refused on `--esp32tl-backend serial` before the port is
 opened. A real S3, C3 or C6 board would need the chip's bootloader offset and `esptool --chip` in

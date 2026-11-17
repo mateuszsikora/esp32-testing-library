@@ -154,6 +154,14 @@ SD_CARD = "\n[sd_card]\nsclk = 14\nmosi = 15\nmiso = 2\ncs = 13\n"
             "x.toml: chip: 'esp32p4' is not one of esp32, esp32s3, esp32c3, esp32c6",
         ),
         (
+            "name = 'x'\nchip = ['esp32c3']",
+            "x.toml: chip: ['esp32c3'] is not one of esp32, esp32s3, esp32c3, esp32c6",
+        ),
+        (
+            "name = 'x'\nchip = { name = 'esp32c3' }",
+            "x.toml: chip: {'name': 'esp32c3'} is not one of esp32, esp32s3, esp32c3, esp32c6",
+        ),
+        (
             "name = 'x'\nchip = 'esp32'\nflash_mb = -4",
             "x.toml: flash_mb: -4 is out of range, at least 0",
         ),
