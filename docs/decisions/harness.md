@@ -75,7 +75,7 @@ Status: decided (#51)
 
 *Extended in #102 by [Explicit build paths are relative to the application and never fall
 back](#explicit-build-paths-are-relative-to-the-application-and-never-fall-back).*
-*Extended on 17 November 2026 by [Project defaults are esp32tl ini options that the markers
+*Extended in #237 by [Project defaults are esp32tl ini options that the markers
 override](#project-defaults-are-esp32tl-ini-options-that-the-markers-override).*
 
 `@pytest.mark.app_path(path)` names the app, relative to the test file's directory; without the
@@ -293,7 +293,7 @@ until a consumer needed them; #101 adds them in
 
 Status: decided (#101)
 
-*Extended on 17 November 2026 by [Project defaults are esp32tl ini options that the markers
+*Extended in #237 by [Project defaults are esp32tl ini options that the markers
 override](#project-defaults-are-esp32tl-ini-options-that-the-markers-override).*
 
 `board_profile("name")` keeps selecting a bundled profile. `board_profile(path=...)` selects a
@@ -3516,7 +3516,7 @@ polls every interface before it checks a stamp.
 
 Status: decided (#202)
 
-*Extended on 17 November 2026 by [A model that frames by silence tells on_frame when the frame's
+*Extended in #237 by [A model that frames by silence tells on_frame when the frame's
 data came](#a-model-that-frames-by-silence-tells-on_frame-when-the-frames-data-came).*
 
 `ReactiveModel` and `IdleFramedModel`, in `esp32tl.sources.model`, are `Model`s with all but one
@@ -4028,7 +4028,7 @@ the flashing path, and on many devkits a console on USB-Serial/JTAG, which the s
 
 ## Project defaults are esp32tl ini options that the markers override
 
-Status: decided (17 November 2026)
+Status: decided (#237)
 
 A project sets the app, the build and the board profile of its `board` tests once, with four
 string ini options: `esp32tl_app_path`, `esp32tl_build_dir`, and `esp32tl_board_profile` or
@@ -4069,7 +4069,7 @@ project's that sets markers, which is what the options spare it.
 
 ## A model that frames by silence tells on_frame when the frame's data came
 
-Status: decided (17 November 2026)
+Status: decided (#237)
 
 `IdleFramedModel` sets `frame_first_at` and `frame_last_at` before each `on_frame(at, frame)`:
 the `at` of the frame's first piece, the instant the firmware wrote the frame's first byte, and
@@ -4097,7 +4097,7 @@ not give.
 
 ## The emulated device's Wi-Fi MACs are constants of the wifi interface
 
-Status: decided (17 November 2026)
+Status: decided (#237)
 
 `esp32tl.interfaces.wifi` exports `ESP32SIM_STATION_MAC`, `24:6f:28:00:11:22`, and
 `ESP32SIM_SOFTAP_MAC`, `24:6f:28:00:11:23`, which `wifi.station`'s check of its own `mac` uses. A
@@ -4119,7 +4119,7 @@ can join a SoftAP named after one.
 
 ## A missing release manifest names possible causes, not a diagnosis or a fallback
 
-Status: decided (17 November 2026)
+Status: decided (#237)
 
 When `esp32tl runtime prepare` gets HTTP 404 for the release's runtime manifest, the first file it
 downloads, `download failed` keeps the URL and the HTTP error and adds the possible causes, the
@@ -4136,7 +4136,7 @@ which would install a runtime that the version match exists to refuse
 
 ## A virtual access point and a virtual station together wait for esp32sim's AP+STA
 
-Status: postponed (17 November 2026)
+Status: postponed (#237)
 
 `wifi.access_point` and `wifi.station` stay exclusive in one test, with
 `wifi.access_point and wifi.station are exclusive: one virtual Wi-Fi role per test`. The pinned
