@@ -4204,7 +4204,7 @@ above. No upstream issue has been opened for it.
 
 ## The runner's flash is the profile's flash_mb, else the build's headers, refused at setup when too small
 
-Status: decided (17 November 2026)
+Status: decided (#240)
 
 The esp32sim backend and `esp32tl run` give the runner `--flash-mb` from the board profile's
 `flash_mb`, and, for a profile without it, the largest size that the build's bootloader and

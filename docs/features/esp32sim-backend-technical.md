@@ -28,12 +28,12 @@ without starting anything:
    **`runner_flash_mb(profile, app)`** is then `Esp32Sim.flash_mb`, the flash the runner gives
    the chip, in MB, or refuses the run with a `BackendError` before anything starts. It reads
    `build.header_flash(app)`, the largest size of the bootloader's and the application's image
-   headers ([builds](builds-technical.md#data-flow)). With `profile.flash_mb` it refuses a size
-   outside `RUNNER_FLASH_MB`, `(1, 2, 4, 8, 16)`, the sizes the runner's `--flash-mb` takes, and a
-   header that gives more than `flash_mb`, and returns `flash_mb`; a header that gives less is
-   left, since a real board boots it too. Without `flash_mb` it returns the header's size,
-   refusing one above 16, or `None`, the runner's default of 4 MB, when the build has neither
-   header. ESP-IDF's second-stage bootloader sets the flash size from its own header
+   headers ([builds](builds-technical.md#data-flow)). In this order it refuses a `profile.flash_mb`
+   outside `RUNNER_FLASH_MB`, `(1, 2, 4, 8, 16)`, the sizes the runner's `--flash-mb` takes; a
+   header above 16 MB, with or without `flash_mb`, since no profile size would let it run; and a
+   header that gives more than `flash_mb`. It returns `flash_mb`, where a header that gives less
+   is left, since a real board boots it too; without `flash_mb` the header's size, or `None`, the
+   runner's default of 4 MB, when the build has neither header. ESP-IDF's second-stage bootloader sets the flash size from its own header
    (`update_flash_config` in `bootloader_flash_config_<chip>.c`), the application from its own
    with `CONFIG_SPI_FLASH_SIZE_OVERRIDE` (`cpu_start.c`), and `esp_flash_init_default_chip` in
    `esp_flash_spi_init.c` stops the application when the flash it detects is smaller, so the larger
@@ -501,7 +501,7 @@ repository makes.
 | `profile_uart(profile, interface, *, clock, directory, asked=..., log=None, files=None)` | The `Uart` on the route the profile gives `interface` (`uart.gnss`), at its pins and baud; `BackendError` when the profile has no such route. The [`esp32tl` command](cli-user.md) makes its UARTs with it |
 | `route_wire(profile, interface)` | The `Wire` of that route, or the same `BackendError`; `Esp32Sim` makes its `Uart`s and its `Gnss` on it |
 | `RUNNER_FLASH_MB` | `(1, 2, 4, 8, 16)`: the flash sizes, in MB, the runner's `--flash-mb` takes |
-| `runner_flash_mb(profile, app)` | The flash the runner gives the chip, in MB: `profile.flash_mb`, else the largest size the build's image headers give, else `None`; `BackendError` for a `flash_mb` outside `RUNNER_FLASH_MB`, a header that gives more than `flash_mb`, or, without `flash_mb`, a header that gives more than 16. The constructor and the [`esp32tl` command](cli-user.md) call it before anything starts |
+| `runner_flash_mb(profile, app)` | The flash the runner gives the chip, in MB: `profile.flash_mb`, else the largest size the build's image headers give, else `None`; `BackendError` for a `flash_mb` outside `RUNNER_FLASH_MB`, a header that gives more than 16, whatever the profile, or a header that gives more than `flash_mb`. The constructor and the [`esp32tl` command](cli-user.md) call it before anything starts |
 | `runner_command(runner, rom, app, max_seconds, link, *, held=False, flash_mb=None, psram_mb=None, sd_card=None, extra_flash=(), wifi=None, bluetooth=None, realtime=False, flash_out=None)` | The runner's argument list; with `flash_mb`, `--flash-mb` of that size; with `psram_mb`, `--psram-mb` of that size; with an `SdCard` holding a card, the runner's card on its pins; with a `Wifi` holding an access point, `--wifi` and `--wifi-nearby`; with a `Bluetooth` the test used, `--bt` and the application's ELF; with `realtime`, `--realtime`; with `flash_out`, `--flash-out` |
 | `Esp32Sim.wifi` | The chip's `Wifi`, on the link from construction |
 | `Esp32Sim.bluetooth` | The chip's `Bluetooth`, on the link from construction; the first look asks `_asked` for `Request("bluetooth", source="model")`, which refuses after power-on, then checks `app.elf`, then calls `Bluetooth.use()`, which asks again |
@@ -549,7 +549,7 @@ the first problem shows; the socket and the start come at `power_on()`, in the t
 | `bluetooth: {build} holds no ELF of the application, whose symbols the runner's --bt needs` | `Esp32Sim.bluetooth` | `Build.elf` is `None` or not a file: no `.elf` in an ESP-IDF build directory, no `firmware.elf` in a PlatformIO one |
 | The messages of `esp32tl.build.load`, as `{build} holds no ESP-IDF or PlatformIO build: no flasher_args.json and no firmware.bin` and `{build} is built for {chip}; esp32sim runs the classic esp32` | `load_app` | The selected directory holds no build esp32sim runs ([builds](builds-technical.md#failure-modes)) |
 | `{file}: the image header of the {what} gives {N} MB of flash, more than the {M} MB of board profile '{name}' (flash_mb = {M}): the application would stop at start-up; set flash_mb = {N} in the profile, or build for {M} MB of flash` | `runner_flash_mb` | The bootloader's or the application's header gives more flash than the profile's `flash_mb`; `{what}` is `bootloader at 0x1000` on the classic ESP32, `bootloader at 0x0` on the others, or `application image`, and `{file}` the file that holds it. Run anyway, the application stops at start-up with `E (…) spi_flash: Detected size(4096k) smaller than the size in the binary image header(8192k). Probe failed.` and `assert failed: __esp_system_init_fn_init_flash startup_funcs.c:118 (flash_ret == ESP_OK)`, and the chip reboots until the test's timeout |
-| `{file}: the image header of the {what} gives {N} MB of flash, more than the runner's largest, 16 MB: build for 16 MB of flash or less` | `runner_flash_mb` | No `flash_mb` in the profile, and a header gives 32, 64 or 128 MB |
+| `{file}: the image header of the {what} gives {N} MB of flash, more than the runner's largest, 16 MB: build for 16 MB of flash or less` | `runner_flash_mb` | A header gives 32, 64 or 128 MB, with or without `flash_mb` in the profile: checked before the profile's size, so the message never asks for a `flash_mb` the runner does not have |
 | `board profile '{name}' has flash_mb = {N}; the runner's flash is 1, 2, 4, 8 or 16 MB: set one of these in the profile` | `runner_flash_mb` | The profile's `flash_mb` is not in `RUNNER_FLASH_MB` |
 | `cannot read the image headers of {build}: {error.strerror}` | `runner_flash_mb`, from `build.header_flash` | A flash file or the application image cannot be read |
 | `no runner at {path}: run make setup in a checkout, or esp32tl runtime prepare` | `runner_path` | `ESP32TL_RUNNER` names no file; one it cannot run fails `runtime.identity` instead |

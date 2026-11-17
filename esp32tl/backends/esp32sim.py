@@ -219,36 +219,37 @@ RUNNER_FLASH_MB = (1, 2, 4, 8, 16)
 def runner_flash_mb(profile: BoardProfile, app: Build) -> int | None:
     """The flash the runner gives the chip, in MB: `profile.flash_mb`, else the size the build's
     image headers give (`build.header_flash`), else `None`, the runner's default. Raises
-    `BackendError` for a profile size the runner does not take, and for a build whose header gives
-    more flash than that: its application would stop at start-up in spi_flash, and the chip
-    reboot until the test's timeout. A header that gives less flash than the chip has is what a
-    real board boots too."""
+    `BackendError` for a profile size the runner does not take, for a header that gives more than
+    the runner's largest flash, whatever the profile, and for a header that gives more flash than
+    the profile: its application would stop at start-up in spi_flash, and the chip reboot until
+    the test's timeout. A header that gives less flash than the chip has is what a real board
+    boots too."""
     try:
         header = build.header_flash(app)
     except BuildError as error:
         raise BackendError(str(error)) from error
-    gives = "" if header is None else f"{header.path}: the image header of the {header.what} gives"
-    if profile.flash_mb is None:
-        if header is None:
-            return None
-        if header.mb > RUNNER_FLASH_MB[-1]:
-            raise BackendError(
-                f"{gives} {header.mb} MB of flash, more than the runner's largest,"
-                f" {RUNNER_FLASH_MB[-1]} MB: build for {RUNNER_FLASH_MB[-1]} MB of flash or less"
-            )
-        return header.mb
-    if profile.flash_mb not in RUNNER_FLASH_MB:
+    if profile.flash_mb is not None and profile.flash_mb not in RUNNER_FLASH_MB:
         sizes = ", ".join(map(str, RUNNER_FLASH_MB[:-1])) + f" or {RUNNER_FLASH_MB[-1]}"
         raise BackendError(
             f"board profile {profile.name!r} has flash_mb = {profile.flash_mb}; the runner's"
             f" flash is {sizes} MB: set one of these in the profile"
         )
-    if header is not None and header.mb > profile.flash_mb:
+    if header is None:
+        return profile.flash_mb
+    gives = f"{header.path}: the image header of the {header.what} gives {header.mb} MB of flash"
+    # Before the profile's size: no flash_mb would let this build run.
+    if header.mb > RUNNER_FLASH_MB[-1]:
         raise BackendError(
-            f"{gives} {header.mb} MB of flash, more than the {profile.flash_mb} MB of board"
-            f" profile {profile.name!r} (flash_mb = {profile.flash_mb}): the application would"
-            f" stop at start-up; set flash_mb = {header.mb} in the profile, or build for"
-            f" {profile.flash_mb} MB of flash"
+            f"{gives}, more than the runner's largest, {RUNNER_FLASH_MB[-1]} MB: build for"
+            f" {RUNNER_FLASH_MB[-1]} MB of flash or less"
+        )
+    if profile.flash_mb is None:
+        return header.mb
+    if header.mb > profile.flash_mb:
+        raise BackendError(
+            f"{gives}, more than the {profile.flash_mb} MB of board profile {profile.name!r}"
+            f" (flash_mb = {profile.flash_mb}): the application would stop at start-up; set"
+            f" flash_mb = {header.mb} in the profile, or build for {profile.flash_mb} MB of flash"
         )
     return profile.flash_mb
 

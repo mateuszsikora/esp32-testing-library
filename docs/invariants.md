@@ -258,7 +258,7 @@ that references to its number keep their meaning.
   the runner as `--flash-mb`, and without it the largest size that the build's bootloader and
   application image headers give; a build with neither header gets the runner's default. A
   `flash_mb` the runner does not have (1, 2, 4, 8 or 16 MB), a header that gives more flash than
-  `flash_mb`, and without `flash_mb` a header above 16 MB, are refused when the board is set up,
+  `flash_mb`, and a header above 16 MB with or without `flash_mb`, are refused when the board is set up,
   by the backend and by `esp32tl run`, before a runner starts, with a message that names the
   sizes and what to set; a header that gives less flash than `flash_mb` runs. `board.flash()`
   holds the whole of that flash.

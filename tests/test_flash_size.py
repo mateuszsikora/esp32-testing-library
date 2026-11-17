@@ -171,11 +171,15 @@ def test_a_header_that_gives_more_than_the_profile_is_refused(tmp_path: Path) ->
     )
 
 
-def test_a_header_that_gives_more_than_the_runner_has_is_refused(tmp_path: Path) -> None:
+# Whatever the profile says: no flash_mb would let the build run, so none is asked for.
+@pytest.mark.parametrize("flash_mb", [None, 4, 16])
+def test_a_header_that_gives_more_than_the_runner_has_is_refused(
+    tmp_path: Path, flash_mb: int | None
+) -> None:
     built = sized_build(tmp_path, bootloader=4, app=32)
     app = esp32sim.load_app(str(tmp_path), build_dir=PIO)
     with pytest.raises(BackendError) as refused:
-        esp32sim.runner_flash_mb(profile(None), app)
+        esp32sim.runner_flash_mb(profile(flash_mb), app)
     assert str(refused.value) == (
         f"{built}/firmware.bin: the image header of the application image gives 32 MB of flash,"
         " more than the runner's largest, 16 MB: build for 16 MB of flash or less"
