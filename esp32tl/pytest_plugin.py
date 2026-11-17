@@ -105,6 +105,12 @@ def pytest_configure(config: pytest.Config) -> None:
         "ignore:^record_xml_attribute is an experimental feature$:"
         "pytest.PytestExperimentalApiWarning",
     )
+    if config.getoption("esp32tl_backend") == Serial.name and (
+        config.getoption("numprocesses", 0)
+        or config.getoption("dist", "no") != "no"
+        or hasattr(config, "workerinput")
+    ):
+        raise pytest.UsageError("serial backend cannot run in pytest-xdist workers; use -n 0")
     config.addinivalue_line(
         "markers",
         "app_path(path, build_dir='build'): the app, relative to the test file's directory (the"

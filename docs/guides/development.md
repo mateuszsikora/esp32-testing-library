@@ -279,3 +279,6 @@ and builds the copy, because its component manager writes `dependencies.lock` in
 
 `make firmware` and `make test` also build `console_repl`, the ESP-IDF UART0 command-line
 validation image in `firmware/console_repl`.
+
+The `dev` extra includes `pytest-xdist>=3.6` for the parallel-board subprocess regressions.
+Consumers install `pytest-xdist` separately; esp32tl has no `xdist` extra.

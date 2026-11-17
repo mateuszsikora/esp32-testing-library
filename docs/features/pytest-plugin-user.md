@@ -1348,3 +1348,11 @@ expiry clears the address and connections and starts DHCP again. Radio extension
 support, and renewal awaits a DHCP client extension.
 
 `board.wifi.station(...)` may be configured before power-on, including for a device that starts its SoftAP much later. DHCP begins when the emulator reports the data link ready, after the WPA2 key exchange where applicable. `network.when_leased()` remains a current-state condition and becomes false after link loss.
+
+## Parallel execution
+
+The esp32sim backend supports independent board tests under pytest-xdist; see
+[Running tests in parallel](../guides/writing-tests.md#running-tests-in-parallel) for installation,
+resource costs, shared caches, reports and timeout handling. Selecting the serial backend with
+xdist workers is rejected during configuration, before collection or fixture setup:
+`serial backend cannot run in pytest-xdist workers; use -n 0`.
