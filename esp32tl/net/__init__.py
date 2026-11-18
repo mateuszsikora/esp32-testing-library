@@ -16,7 +16,7 @@ from esp32tl.net.dns import Dns
 from esp32tl.net.ethernet import Ethernet
 from esp32tl.net.http import HttpServer
 from esp32tl.net.http_client import HttpClient
-from esp32tl.net.ip import Connection, Network, StreamService
+from esp32tl.net.ip import ACK, SYN, Connection, Network, StreamService
 from esp32tl.net.mqtt import Broker
 from esp32tl.net.ntp import DEFAULT_UTC, Ntp
 from esp32tl.net.ppp import Ppp
@@ -95,7 +95,7 @@ class Internet:
         self._down = _Direction(LATENCY_NS)
         self._datagram: int | None = None  # the size of the IPv4 datagram the link is sending
         self.events: list[dict[str, object]] = []
-        self.ip = Network(self._downlink, self.log, mtu=self._mtu)
+        self.ip = Network(self._downlink, self.log, mtu=self._mtu, carries=self._carries)
         self.dns = Dns("10.64.0.1", self.log)
         self.ntp = Ntp(self.now, world, self.log)
         self.ip.udp.update({53: self.dns, 123: self.ntp})
@@ -156,6 +156,27 @@ class Internet:
             self._link_ended()
         else:
             self.dns.address = IPv4Address(self.lease.address).packed
+            self.ip.resume()
+
+    def _carries(self) -> bool:
+        """Whether the link carries IP now: on, and behind a station, with a lease."""
+        return self.active and (not isinstance(self.link, Station) or self.lease is not None)
+
+    def _forget_syns(self, address: str | None = None) -> None:
+        """Drop the SYNs on the way up from a device stack that is gone, from `address` or from
+        any: arriving after `forget_device`, each would open a flow left in its handshake, which
+        nothing ends. The rest of what that stack sent before still arrives, as it would at a
+        service on the internet."""
+
+        def stale(datagram: bytes) -> bool:
+            if len(datagram) < 34 or datagram[9] != 6:
+                return False
+            if address is not None and str(IPv4Address(datagram[12:16])) != address:
+                return False
+            flags = datagram[(datagram[0] & 0x0F) * 4 + 13]
+            return bool(flags & SYN) and not flags & ACK
+
+        self._up.queue = deque(entry for entry in self._up.queue if not stale(entry[1]))
 
     def _mtu(self) -> int:
         return self.link.peer_mru if isinstance(self.link, Ppp) else self.link.mtu
@@ -251,14 +272,17 @@ class Internet:
         """The device's chip reset, or its power went, at `t`, `why` saying which, as `the device
         reset`: its TCP and its address are gone. Every connection the test opened is lost, and
         the device has no address until IPCP opens again or DHCP acknowledges one. The
-        connections the device opened stay, as no network knows of a reboot, and outlive the
-        link's end too: a RST of the new stack, in answer to what their service writes, ends
-        them, or the service's end, as the broker's keepalive; a SYN of the new stack on one of
+        connections the device opened stay, orphaned, as no network knows of a reboot, but for
+        one still in its handshake or one its service had closed, which go now, and the old
+        stack's SYNs still on the way up, which never arrive. The rest outlive the link's end
+        too: a RST of the new stack, in answer to what their service writes, ends them, or the
+        service's end, as the broker's keepalive, with no FIN; a SYN of the new stack on one of
         them gets no answer."""
         previous = self._at
         self._at = t
         try:
             self.ip.forget_device(why)
+            self._forget_syns()
             if isinstance(self.link, Ppp):
                 self._stale = self.link.ipcp_opened
             elif isinstance(self.link, Station):
@@ -410,6 +434,7 @@ class Internet:
 
     def _gave_up(self, address: str) -> None:
         self.ip.forget_device("the device gave its address up", address=address)
+        self._forget_syns(address)
 
     def _link_ended(self) -> None:
         # Behind a station the device is the access point, and keeps its stack when the station

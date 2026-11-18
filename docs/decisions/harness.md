@@ -4489,8 +4489,11 @@ take the SYN of a new stack from the same port for the rest of the run. A DHCP l
 gives up on a link that stays orphans the connections on that address too, since lwIP drops them
 with it. The link's end and a chip reset also drop the device's connections still in their
 handshake, which no service deadline would end. A virtual station that leaves the device's own
-access point orphans nothing: the device keeps its stack, and a close after the station rejoins
-sends its FIN.
+access point orphans nothing: the device keeps its stack, and what a service writes or closes
+while the station is away waits for the station's next lease and then goes in order, since this
+TCP sends nothing again. What a service writes on an orphaned connection beyond the window is
+discarded and counted, so it cannot pile up. A chip reset or a lease given up takes the gone
+stack's SYNs off the network's path, as each would open a connection left in its handshake.
 
 A device back with the same client ID before that takes its connection over (MQTT-3.1.4-2). With
 CleanSession=0 on both connections the session goes on and the old Will is discarded unsent; with
@@ -4506,7 +4509,11 @@ without DISCONNECT (MQTT-3.1.2-8), which before this change the broker did at ev
 address IPCP or DHCP gave on the current link or the one the device last sent from, because a
 lease the device gives up leaves that last address behind, a FIN may wait for a window that what
 went nowhere has filled, and no stack holds the old connection whatever link the device is on.
-Also rejected: an option on the network, `link_loss="reset" | "silent"`, to keep the immediate Will,
+Also rejected: taking all of the gone stack's datagrams off the path at a chip reset or a lease
+given up, because what it sent before is already on the internet, and a broker would still get
+its last PUBLISH; and retransmission, to deliver what a service wrote while a station was away,
+because holding it until the station is back delivers the same bytes with no timers. Also
+rejected: an option on the network, `link_loss="reset" | "silent"`, to keep the immediate Will,
 because no broker a device meets behaves that way, and a test that wants the broker to give up at
 once has `broker.disconnect(client_id)`, which publishes the Will; a second way to say it would be
 a default someone has to pick per test. Also rejected: publishing the old Will at every takeover,

@@ -675,16 +675,16 @@ a header whose name is empty or holds `:`, or whose name or value holds a line b
 ## Addresses behind the access point
 
 The DHCP server, at `10.64.0.1`, gives the device `10.64.0.2/24` (mask `255.255.255.0`), router
-`10.64.0.1` and DNS `10.64.0.1`, with a lease of 86400 s. It offers that address to every
-DISCOVER, acknowledges a REQUEST for it (or for no address), and answers a REQUEST for another
-address with a NAK. A REQUEST that names another server is left unanswered; DECLINE and RELEASE
-are logged and not answered. A DISCOVER, a REQUEST not acknowledged, a RELEASE or a DECLINE takes
-away the address the device had: the connections the test opened to it are lost, `lost when the
-device gave its address up`, and the device's own, which lwIP drops with the address, end without a
-FIN when their service closes them, as [after a lost link](#a-lost-link-and-the-will). The
-transcript shows
-`dhcp: DISCOVER from 24:6f:28:00:11:22 → OFFER 10.64.0.2` and
-`dhcp: REQUEST from 24:6f:28:00:11:22 → ACK 10.64.0.2`.
+`10.64.0.1` and DNS `10.64.0.1`, with a lease of 86400 s. It offers that address to every DISCOVER,
+acknowledges a REQUEST for it (or for no address), and answers a REQUEST for another address with a
+NAK. A REQUEST that names another server is left unanswered; DECLINE and RELEASE are logged and not
+answered. A DISCOVER, a REQUEST not acknowledged, a RELEASE or a DECLINE takes away the address the
+device had (an INFORM, or a type the server does not take, changes nothing): the connections the
+test opened to it are lost, `lost when the device gave its address up`, and the device's own, which
+lwIP drops with the address, end without a FIN when their service closes them, as [after a lost
+link](#a-lost-link-and-the-will). A SYN the device sent before it gave the address up, still on the
+network's path, never arrives. The transcript shows `dhcp: DISCOVER from 24:6f:28:00:11:22 → OFFER
+10.64.0.2` and `dhcp: REQUEST from 24:6f:28:00:11:22 → ACK 10.64.0.2`.
 
 `network.dhcp.leases` lists every acknowledged lease, each a `Lease` with `at` (`Duration`), `mac`,
 `address` and `hostname` (the name the device sent, `espressif` for ESP-IDF's default, or `None`).
@@ -750,7 +750,7 @@ waits for the handshake.
 | Network API | Meaning |
 |---|---|
 | `connect(port, *, address=None)` | Open a TCP connection to the device's `port` (1 to 65535) and return its `TcpConnection`. `address` is the device's, `device_address` unless given, as for firmware with a static address behind the access point |
-| `device_address` | The device's address on the link now: the one IPCP gave it behind the modem, the one this link's DHCP acknowledged behind the access point, `10.64.0.2` either way; `None` before it has one, from the device's chip reset or power loss until IPCP opens again or DHCP acknowledges it again, and from any other DHCP message of the device's (a DISCOVER, a RELEASE) until the next ACK |
+| `device_address` | The device's address on the link now: the one IPCP gave it behind the modem, the one this link's DHCP acknowledged behind the access point, `10.64.0.2` either way; `None` before it has one, from the device's chip reset or power loss until IPCP opens again or DHCP acknowledges it again, and from a DISCOVER, a REQUEST not acknowledged, a RELEASE or a DECLINE of the device's until the next ACK |
 | `connections` | Every `TcpConnection` the test opened, in order |
 
 | `TcpConnection` API | Meaning |
@@ -903,14 +903,17 @@ pending handle. When the topic or payload differs from the first receipt, it als
 This model permits duplicate application messages; it promises no exactly-once delivery or
 content deduplication.
 
-`broker.disconnect(message.client)` closes only that client's active stream, including when it
-uses TLS. It publishes the Will once, cancels pending ACKs, makes the client's subscriptions
-inactive (with CleanSession=1, removes them) and leaves PPP, other streams and DNS/NTP usable. Graceful MQTT DISCONNECT cancels ACKs but suppresses the Will.
-Transport loss, keepalive expiry, client-ID takeover and network reset also cancel pending ACKs.
-A keepalive expires at 1.5 times the keepalive after the client's last packet; when `board.now`
-reaches that instant the connection is closed, its Will is in `messages`, and `broker.disconnect`
-at that instant returns `False`. Expiry wins if keepalive and PUBACK have the same deadline. An
-already emitted ACK stays emitted; closing does not retract bytes already queued in the transport.
+`broker.disconnect(message.client)` closes only that client's active stream, including when it uses
+TLS. It publishes the Will once, cancels pending ACKs, makes the client's subscriptions inactive
+(with CleanSession=1, removes them) and leaves PPP, other streams and DNS/NTP usable. Graceful MQTT
+DISCONNECT cancels ACKs but suppresses the Will. The connection's end, by transport loss, keepalive
+expiry or client-ID takeover, also cancels pending ACKs. A lost link does not by itself: the
+connection stands until its keepalive, and a delayed PUBACK due before then is emitted, to a link
+that is down ([the Will](#a-lost-link-and-the-will)). A keepalive expires at 1.5 times the keepalive
+after the client's last packet; when `board.now` reaches that instant the connection is closed, its
+Will is in `messages`, and `broker.disconnect` at that instant returns `False`. Expiry wins if
+keepalive and PUBACK have the same deadline. An already emitted ACK stays emitted; closing does not
+retract bytes already queued in the transport.
 
 A reconnect gets a new `connection_id`. Reusing a client ID and packet ID cannot make an old
 handle valid again. Retained messages and receipt history survive; a pending exchange does not,
@@ -1363,4 +1366,4 @@ chips, WPA3-SAE, required PMF and hidden SSIDs are not supported. Renewal needs 
 machine; the radio features need esp32sim support. See the
 [decision](../decisions/harness.md#a-test-joins-the-devices-access-point-through-esp32sims-virtual-station-with-the-harness-as-the-host-behind-it).
 
-A virtual station waits for the Wi-Fi data link before starting DHCP. No DHCP retries run while disconnected. Rejoining starts a fresh exchange with the initial 4 s retry interval; it does not inherit the power-on backoff. Disconnection invalidates `network.lease`, ARP and queued traffic and marks the TCP connections the test opened lost. The device, the access point here, keeps its own stack when the station leaves: its connections stay as they were, and a service's close after the station has joined again sends its FIN; one still in its handshake, or one its service had closed, is dropped, as what went to it while the station was away is not sent again. Reset and power cycling follow the same rule for the test's connections, and leave the device's open until their service gives up, as [behind the modem](#a-lost-link-and-the-will).
+A virtual station waits for the Wi-Fi data link before starting DHCP. No DHCP retries run while disconnected. Rejoining starts a fresh exchange with the initial 4 s retry interval; it does not inherit the power-on backoff. Disconnection invalidates `network.lease`, ARP and queued traffic and marks the TCP connections the test opened lost. The device, the access point here, keeps its own stack when the station leaves: its connections stay as they were, and what a service writes or closes while the station is away waits for it, and reaches the device in order, its FIN last, once the station holds a lease again; one still in its handshake is dropped, as its SYN-ACK is not sent again. Reset and power cycling follow the same rule for the test's connections, and leave the device's open until their service gives up, as [behind the modem](#a-lost-link-and-the-will).

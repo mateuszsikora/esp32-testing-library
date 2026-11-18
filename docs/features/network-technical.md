@@ -571,13 +571,26 @@ answer drops it as `reset by the device`.
 
 Behind a virtual station the device is the access point, and keeps its stack when the station
 leaves: `_link_ended` calls `lose_link(orphan=False)` there, which loses the test's flows and drops
-the device's that cannot finish (`_unfinished`), since nothing sends again what went to them while
-the station was away, and leaves the rest as they were: a later close sends its FIN. Behind the
-access point, `Ethernet` calls `gave_up(address)`, `Internet._gave_up`, when a DHCP message of the
-device's (a DISCOVER, a REQUEST not acknowledged, a RELEASE or a DECLINE) takes away an address it
-had acknowledged: `forget_device("the device gave its address up", address=address)` loses the
-test's flows to that address and orphans the device's, as lwIP drops a netif's connections when its
-address goes.
+the device's still in their handshake, as `unanswered`, since their SYN-ACK is not sent again, and
+leaves the rest as they were. `Network` takes `carries`, `Internet._carries`: the network active
+and, behind a station, a lease. While it is false, `_flush` sends nothing on a flow that is not
+orphaned: what its service writes, and its FIN behind it, wait in `pending`, since this TCP sends
+nothing again, and `_station_changed` calls `Network.resume()` when the station has a lease again,
+which flushes every flow, so the bytes and the FIN reach the device in order. Behind the access
+point, `Ethernet` calls `gave_up(address)`, `Internet._gave_up`, when a DHCP message of the
+device's (a DISCOVER, a REQUEST not acknowledged, a RELEASE or a DECLINE; not an INFORM, nor a type
+the server does not take) takes away an address it had acknowledged: `forget_device("the device
+gave its address up", address=address)` loses the test's flows to that address and orphans the
+device's, as lwIP drops a netif's connections when its address goes.
+
+On an orphaned flow `_write` sends what the device's window has room for and discards the rest,
+counting it in `discarded`, since nothing will acknowledge what went: kept, it would pile up until
+the service closes. `_drop` logs the count, `net: TCP <device>:<port> → <address>:<port> discarded
+<n> bytes its service wrote with no device to answer`. `device_reset` and `_gave_up` also take out
+of `_up` the gone stack's SYNs still on the way up, from any address or from the one given up
+(`Internet._forget_syns`): each would open a flow left in its handshake, which nothing ends. The
+rest of what that stack sent before still arrives, as at a service on the internet: data on a
+connection it held, its last PUBLISH among them.
 
 `Internet.terminate(t)` calls `Ppp.terminate`, which sends an LCP Terminate-Request on an open link
 and changes nothing else, and returns the output for

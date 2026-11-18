@@ -12,7 +12,7 @@ import struct
 from collections.abc import Callable
 from ipaddress import IPv4Address
 
-from esp32tl.net.dhcp import INFORM, Dhcp, message_type
+from esp32tl.net.dhcp import DECLINE, DISCOVER, RELEASE, REQUEST, Dhcp, message_type
 from esp32tl.net.ip import UDP, Fragmented, checksum, ipv4, udp
 
 # The network's MAC: esp32sim's own network's gateway (`esp-soc/src/net/packet.rs`), a locally
@@ -137,12 +137,13 @@ class Ethernet:
         if len(self.dhcp.leases) > leases:
             self.device_address = self.dhcp.device
             self.leased = True
-        elif message_type(ports[2]) not in (None, INFORM):
-            # Any other message of the device's, a DISCOVER, a REQUEST not acknowledged (a NAK,
-            # or one to another server), a RELEASE or a DECLINE, says it has no address of ours,
-            # or is giving it up. An INFORM comes from a client with an address of its own, and
-            # changes nothing. The device's stack drops its connections on the address it no
-            # longer holds, as lwIP does when a netif's address changes: `gave_up` hears of it.
+        elif message_type(ports[2]) in (DISCOVER, REQUEST, DECLINE, RELEASE):
+            # A DISCOVER, a REQUEST not acknowledged (a NAK, or one to another server), a RELEASE
+            # or a DECLINE says the device has no address of ours, or is giving it up. An INFORM
+            # comes from a client with an address of its own, and a type the server does not
+            # take is ignored: neither changes anything. The device's stack drops its connections
+            # on the address it no longer holds, as lwIP does when a netif's address changes:
+            # `gave_up` hears of it.
             given_up, self.device_address = self.device_address, None
             if given_up is not None:
                 self._gave_up(given_up)

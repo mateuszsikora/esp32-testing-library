@@ -9,7 +9,7 @@ from test_net_ethernet import check, frame, ipv4, options, udp
 from esp32tl.net import Internet
 from esp32tl.net.client import NotReachable
 from esp32tl.net.dhcp import Dhcp
-from esp32tl.net.ip import ACK, ISN, PSH, SYN
+from esp32tl.net.ip import ACK, FIN, ISN, PSH, SYN
 from esp32tl.net.station import Station
 from esp32tl.units import Duration
 
@@ -302,6 +302,15 @@ def test_no_discover_or_deadline_until_ready() -> None:
     assert net.link.quiet_until() == 19_300 * MS
 
 
+def device_tcp(ap: SoftAP, seq: int, ack: int, flags: int) -> None:
+    """A segment the device, the access point, sends from 40000 to the station's port 7000."""
+    tcp = struct.pack(">HHIIBBHHH", 40000, 7000, seq, ack, 0x50, flags, 8192, 0, 0)
+    pseudo = AP_IP + HOST_IP + struct.pack(">BBH", 0, 6, len(tcp))
+    tcp = tcp[:16] + struct.pack(">H", check(pseudo + tcp)) + tcp[18:]
+    ap.now += MS
+    ap.net.receive(ap.now, frame(HOST, 0x0800, ipv4(6, AP_IP, HOST_IP, tcp), AP))
+
+
 def test_a_station_that_leaves_and_rejoins_leaves_the_devices_connection_to_its_end() -> None:
     ap = SoftAP().up()
     closes: list[Callable[[], None]] = []
@@ -321,15 +330,8 @@ def test_a_station_that_leaves_and_rejoins_leaves_the_devices_connection_to_its_
 
     ap.net.listen(7000, Service())
 
-    def segment(seq: int, ack: int, flags: int) -> None:
-        tcp = struct.pack(">HHIIBBHHH", 40000, 7000, seq, ack, 0x50, flags, 8192, 0, 0)
-        pseudo = AP_IP + HOST_IP + struct.pack(">BBH", 0, 6, len(tcp))
-        tcp = tcp[:16] + struct.pack(">H", check(pseudo + tcp)) + tcp[18:]
-        ap.now += MS
-        ap.net.receive(ap.now, frame(HOST, 0x0800, ipv4(6, AP_IP, HOST_IP, tcp), AP))
-
-    segment(100, 0, SYN)
-    segment(101, ISN + 1, ACK)
+    device_tcp(ap, 100, 0, SYN)
+    device_tcp(ap, 101, ISN + 1, ACK)
     key = ("192.168.4.1", 40000, "192.168.4.2", 7000)
     # The device is the access point: a station that leaves takes nothing of the device's stack.
     ap.net._station_link(ap.now, False)
@@ -342,4 +344,48 @@ def test_a_station_that_leaves_and_rejoins_leaves_the_devices_connection_to_its_
     [close] = closes
     close()
     # Its service's close goes as a FIN, as on a connection that never lost its link.
-    assert ap.net.ip._flows[key].fin_sent
+    ap.net.poll(ap.now)
+    [(_, fin)] = ap.arp(HOST_IP, op=2)
+    assert fin[:6] == AP and fin[14 + 22 : 14 + 24] == (40000).to_bytes(2, "big")
+    assert fin[14 + 33] & FIN
+
+
+def test_what_a_service_writes_while_the_station_is_away_waits_for_it() -> None:
+    ap = SoftAP().up()
+    writes: list[Callable[[bytes], None]] = []
+    closes: list[Callable[[], None]] = []
+
+    class Service:
+        def accept(
+            self, peer: tuple[str, int], write: Callable[[bytes], None], close: Callable[[], None]
+        ) -> "Service":
+            writes.append(write)
+            closes.append(close)
+            return self
+
+        def on_data(self, data: bytes) -> None:
+            pass
+
+        def on_close(self) -> None:
+            pass
+
+    ap.net.listen(7000, Service())
+    device_tcp(ap, 100, 0, SYN)
+    device_tcp(ap, 101, ISN + 1, ACK)
+    ap.net.poll(ap.now)
+    ap.arp(HOST_IP, op=2)
+    ap.net._station_link(ap.now, False)
+    [write], [close] = writes, closes
+    write(b"while away")
+    close()
+    assert ap.net.poll(ap.now) == []
+    ap.net._station_link(ap.now, True)
+    [(_, discover)] = ap.net.poll(ap.now)
+    [(_, request)] = ap.reply(discover)
+    ap.reply(request)
+    ap.net.poll(ap.now)
+    sent = ap.arp(HOST_IP, op=2)
+    # The bytes and the FIN behind them reach the device in order once the station is back.
+    segments = [frame[14 + 20 :] for _, frame in sent]
+    assert b"".join(segment[20:] for segment in segments) == b"while away"
+    assert segments[-1][13] & FIN

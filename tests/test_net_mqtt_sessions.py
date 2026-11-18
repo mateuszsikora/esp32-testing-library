@@ -718,13 +718,19 @@ def test_a_new_stack_connects_from_the_old_port_once_the_keepalive_closed_it() -
     assert old.read() == NO_SESSION
     wire.now = 1 * S
     wire.net.stop(wire.now)
-    wire.net.arrive(15 * S)
-    assert broker.find_message("c/status", "offline") is not None
-    # The broker's FIN went nowhere; nothing of the connection stays to take the next SYN.
-    assert not wire.net.ip._flows
-    wire.now = 20 * S
+    wire.now = 5 * S
     wire.net.start(wire.now)
     wire.open()
+    # Back before the keepalive, from the same port: its SYN falls on the old connection.
+    early = failures.Peer.__new__(failures.Peer)
+    early.wire, early.port, early.destination, early.seq, early.ack = wire, 4000, 1883, 1, 0
+    assert early.segment(0x02) == []
+    assert broker.find_message("c/status") is None
+    wire.net.arrive(15 * S)
+    assert broker.find_message("c/status", "offline") is not None
+    # The broker's close sent no FIN; nothing of the connection stays to take the next SYN.
+    assert not wire.net.ip._flows
+    wire.now = 20 * S
     new = failures.Peer(wire, 4000)
     new.send(will_connect(clean=False))
     assert new.read() == SESSION_PRESENT
