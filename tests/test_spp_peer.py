@@ -141,7 +141,7 @@ class Initiator:
 
     def _make(self, ssp: bool, address: str, name: str) -> Device:
         ssp = ssp or isinstance(self.delegate, User)
-        controller = Controller(name, self.air.link, address)
+        controller = Controller(name, self.air._link, address)
         self.controller = controller
         config = DeviceConfiguration(
             name=name,
@@ -156,13 +156,13 @@ class Initiator:
             sc=False, mitm=False, bonding=True, delegate=self.delegate
         )
         device.on("inquiry_result", self._on_result)
-        device.on("inquiry_complete", lambda: self.inquiry_complete.append(self.air.loop.now))
+        device.on("inquiry_complete", lambda: self.inquiry_complete.append(self.air._loop.now))
         device.on(device.EVENT_CONNECTION, self._on_connection)
         return device
 
     def _on_connection(self, connection: Connection) -> None:
         def fell(reason: int) -> None:
-            self.fell.append((self.air.loop.now, reason))
+            self.fell.append((self.air._loop.now, reason))
 
         connection.on(connection.EVENT_DISCONNECTION, fell)
 
@@ -171,7 +171,7 @@ class Initiator:
     ) -> None:
         name = eir.get(core.AdvertisingData.COMPLETE_LOCAL_NAME)
         assert name is None or isinstance(name, str)
-        self.found.append((self.air.loop.now, str(address), class_of_device, name))
+        self.found.append((self.air._loop.now, str(address), class_of_device, name))
         self.heard_at.append((str(address), rssi))
 
     async def discover(self, name: str) -> hci.Address:
@@ -199,7 +199,7 @@ class Initiator:
         assert channel is not None
         multiplexer = await rfcomm.Client(connection).start()
         dlc = await multiplexer.open_dlc(channel)
-        dlc.sink = lambda data: self.received.append((self.air.loop.now, data))
+        dlc.sink = lambda data: self.received.append((self.air._loop.now, data))
         return dlc
 
     async def session(self, name: str = "peer") -> rfcomm.DLC:
@@ -932,7 +932,7 @@ def test_a_page_to_a_peer_that_left_ends_at_the_page_timeout(air: Air, how: str)
         try:
             await link_to(esp32)
         finally:
-            ended.append(air.loop.now)
+            ended.append(air._loop.now)
 
     with pytest.raises(core.ConnectionError) as raised:
         air.run(page(), within=seconds(10))
@@ -963,7 +963,7 @@ def test_a_page_ends_exactly_at_the_page_timeout_whatever_instant_it_starts_at(
         try:
             await link_to(esp32)
         finally:
-            ended.append(air.loop.now)
+            ended.append(air._loop.now)
 
     task = air.start(page())
     air.advance(ms(start + 5_120) - Duration(1))
@@ -1183,7 +1183,7 @@ def test_the_supervision_timeout_a_central_writes_takes_effect_on_both_ends(air:
 
     fell_at_peer: list[int] = []
     for link in peer.device.connections.values():
-        link.on(link.EVENT_DISCONNECTION, lambda reason: fell_at_peer.append(air.loop.now))
+        link.on(link.EVENT_DISCONNECTION, lambda reason: fell_at_peer.append(air._loop.now))
     air.advance(seconds(1))
     peer.out_of_range()
     air.advance(seconds(10))
@@ -1418,7 +1418,7 @@ def test_two_runs_lose_the_peer_at_the_same_instants() -> None:
                         hci.Address("00:00:00:00:5B:7F/P"),
                         transport=core.PhysicalTransport.BR_EDR,
                     )
-                pages.append(air.loop.now)
+                pages.append(air._loop.now)
 
             air.advance(seconds(5))
             air.run(page(), within=seconds(10))
@@ -1683,7 +1683,7 @@ def test_a_page_that_outlasts_the_link_falling_at_the_other_end_lets_the_pair_go
     """The target leaves at the instant it hears the page, before its host answers. Its end falls
     at 20 s, while the page goes on until 40.96 s; only then does neither hold anything."""
     phone, speaker = phone_and_speaker(air)
-    target = air.link.find_classic_controller(hci.Address(SPEAKER + "/P"))
+    target = air._link.find_classic_controller(hci.Address(SPEAKER + "/P"))
     assert target is not None
     heard = target.on_classic_connection_request
 
@@ -1719,7 +1719,7 @@ def test_a_power_loss_ends_a_page_and_its_timer_does_not_end_the_next(air: Air) 
     async def second() -> None:
         with pytest.raises(core.ConnectionError):
             await page(phone, SPEAKER)
-        ended.append(air.loop.now)
+        ended.append(air._loop.now)
 
     air.run(second(), within=seconds(10))
     assert ended == [9_120 * MS]
@@ -1728,7 +1728,7 @@ def test_a_power_loss_ends_a_page_and_its_timer_does_not_end_the_next(air: Air) 
 def test_a_power_loss_ends_an_inquiry(air: Air) -> None:
     phone, _ = phone_and_speaker(air)
     completed: list[int] = []
-    phone.device.on("inquiry_complete", lambda: completed.append(air.loop.now))
+    phone.device.on("inquiry_complete", lambda: completed.append(air._loop.now))
     air.run(phone.device.start_discovery(auto_restart=False), within=seconds(0))
     air.wait(seconds(1))
     phone.switch_off()
@@ -1746,7 +1746,7 @@ def test_a_device_that_left_finds_nothing_in_its_own_inquiry(air: Air, how: str)
     found: list[str] = []
     phone.device.on("inquiry_result", lambda address, *_: found.append(str(address)))
     completed: list[int] = []
-    phone.device.on("inquiry_complete", lambda: completed.append(air.loop.now))
+    phone.device.on("inquiry_complete", lambda: completed.append(air._loop.now))
     leave(phone, how)
     air.run(phone.device.start_discovery(auto_restart=False), within=seconds(0))
     air.wait(seconds(11))
@@ -1783,7 +1783,7 @@ def test_a_remote_name_request_ends_exactly_at_the_page_timeout_whatever_instant
         try:
             return await esp32.device.request_remote_name(PEER)
         finally:
-            ended.append(air.loop.now)
+            ended.append(air._loop.now)
 
     task = air.start(request())
     air.advance(ms(start + 5_120) - Duration(1))
@@ -2078,7 +2078,7 @@ def falls_of(air: Air, device: BluetoothDevice) -> list[tuple[int, int]]:
 
     def connected(connection: Connection) -> None:
         def down(reason: int) -> None:
-            fell.append((air.loop.now, reason))
+            fell.append((air._loop.now, reason))
 
         connection.on(connection.EVENT_DISCONNECTION, down)
 
@@ -2173,7 +2173,7 @@ def failures_of(air: Air, device: BluetoothDevice) -> list[tuple[int, int]]:
 
     def failure(error: core.ConnectionError) -> None:
         assert error.error_code is not None
-        failed.append((air.loop.now, error.error_code))
+        failed.append((air._loop.now, error.error_code))
 
     device.device.on(device.device.EVENT_CONNECTION_FAILURE, failure)
     return failed
@@ -2265,7 +2265,7 @@ def test_a_late_answer_leaves_a_working_link_alone(
     # The event names only the address: a failure would read as the end of the working link.
     assert failed == []
     assert (list(phone.device.connections), list(speaker.device.connections)) == handles
-    controller = air.link.find_classic_controller(speaker.device.public_address)
+    controller = air._link.find_classic_controller(speaker.device.public_address)
     assert controller is not None
     assert [c.handle for c in controller.classic_connections.values()] == [1]
 
@@ -2290,7 +2290,7 @@ def test_a_late_answer_does_not_complete_a_page_to_a_device_that_left(
         with pytest.raises(core.ConnectionError) as raised:
             await page(speaker, PHONE)
         assert raised.value.error_code == hci.HCI_ErrorCode.PAGE_TIMEOUT_ERROR
-        ended.append(air.loop.now)
+        ended.append(air._loop.now)
 
     air.run(page_back(), within=seconds(10))
     assert ended == [10_620 * MS]
@@ -2504,7 +2504,7 @@ def write_page_timeout(air: Air, device: BluetoothDevice, slots: int) -> None:
 def held_by(air: Air, device: BluetoothDevice) -> list[hci.Address]:
     """The peers the controller of `device` holds an entry for: a page of its own, a link or a
     page it heard."""
-    controller = air.link.find_classic_controller(device.device.public_address)
+    controller = air._link.find_classic_controller(device.device.public_address)
     assert isinstance(controller, Controller)
     return controller.held()
 
@@ -2691,7 +2691,7 @@ def test_a_page_the_controller_refused_leaves_no_timer_and_can_be_tried_again(
 ) -> None:
     phone, _ = phone_and_speaker(air)
     failed = failures_of(air, phone)
-    controller = air.link.find_classic_controller(phone.device.public_address)
+    controller = air._link.find_classic_controller(phone.device.public_address)
     assert controller is not None
     monkeypatch.setattr(controller, "pending_le_connection", object())
     with pytest.raises(hci.HCI_Error) as raised:
@@ -2950,7 +2950,7 @@ def test_an_accept_timeout_out_of_its_range_is_refused_and_changes_nothing(
     _, speaker = phone_and_speaker(air)
     status = write_accept_timeout(air, speaker, slots)
     assert status == hci.HCI_ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR
-    controller = air.link.find_classic_controller(speaker.device.public_address)
+    controller = air._link.find_classic_controller(speaker.device.public_address)
     assert isinstance(controller, Controller)
     assert controller.connection_accept_timeout == 0x1F40
 
@@ -2976,7 +2976,7 @@ def accepting_as_central_after(
 
 
 def refusing_role_switch(air: Air, pager: BluetoothDevice, target: BluetoothDevice) -> None:
-    controller = air.link.find_classic_controller(pager.device.public_address)
+    controller = air._link.find_classic_controller(pager.device.public_address)
     assert controller is not None
     entry = controller.classic_connections[target.device.public_address]
     entry.classic_allow_role_switch = False
@@ -3132,7 +3132,7 @@ def test_a_page_heard_during_this_sides_own_goes_when_that_page_makes_the_link(
 
 def roles_of(air: Air, device: BluetoothDevice) -> list[hci.Role]:
     """The role the controller of `device` has on each of its entries."""
-    controller = air.link.find_classic_controller(device.device.public_address)
+    controller = air._link.find_classic_controller(device.device.public_address)
     assert controller is not None
     return [entry.role for entry in controller.classic_connections.values()]
 
@@ -3261,8 +3261,8 @@ def test_an_answer_to_a_crossing_page_after_this_sides_own_ended_makes_the_link(
     def both_answer() -> None:
         speaker_answer = accept(bd_addr=hci.Address(PHONE + "/P"), role=hci.Role.CENTRAL)
         phone_answer = accept(bd_addr=hci.Address(SPEAKER + "/P"), role=hci.Role.PERIPHERAL)
-        air.loop.create_task(speaker.device.host.send_async_command(speaker_answer))
-        air.loop.create_task(phone.device.host.send_async_command(phone_answer))
+        air._loop.create_task(speaker.device.host.send_async_command(speaker_answer))
+        air._loop.create_task(phone.device.host.send_async_command(phone_answer))
 
     air.call(both_answer)
     air.advance(seconds(3))
@@ -3624,7 +3624,7 @@ def test_a_power_loss_at_the_instant_a_page_is_heard_does_not_fail_the_air(
     air: Air, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     phone, speaker = phone_and_speaker(air)
-    target = air.link.find_classic_controller(speaker.device.public_address)
+    target = air._link.find_classic_controller(speaker.device.public_address)
     assert target is not None
     heard = target.on_classic_connection_request
 

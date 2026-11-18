@@ -4503,6 +4503,52 @@ of it, and the skip names the gap at the test that needs the route; a profile wi
 `console` pins for these chips, since UART0 is on GPIO 37/38 and 58/59 on the boards all the same,
 and a route must not take them.
 
+## The package root exports every name a test uses
+
+Status: decided (#247)
+
+A test named its helpers' types from wherever the package kept them: `Boot` from
+`esp32tl.interfaces.board`, `Message` and `TEST_CLIENT` from `esp32tl.net.mqtt`, `ChannelEvent`
+from `esp32tl.bluetooth.peer`, `u16` from `esp32tl.flash`. That tied a test suite to the
+package's layout, and left the consumer to guess which names were public. `esp32tl` now exports
+every class, exception and constant a test names, and `__all__` lists them; `esp32tl.units` and
+`esp32tl.recording` stay public modules of their own, and every other module is internal.
+`tests/test_public_api.py` walks the public methods, properties, attributes and fields of every
+exported class and fails on a type that none of the three exports, so a new public method cannot
+return a type a test has to fetch from inside the package.
+
+One flat namespace needs names that say what they belong to, which the module said before. A
+class whose bare name could mean two things in esp32tl was renamed: the board profile's `Line` to
+`LineRoute`, as its `UartRoute` and `SdCardRoute`; the console's `Line` to `ConsoleLine`, beside
+the GPIO `Lines`, `OutputLine` and `LineEvent`; the HTTP server's `Request` to `HttpRequest`,
+beside the capability declaration's `Request`, and its `Response`, which never leaves the server
+and is not exported, to `HttpResponse` with it; the broker's
+`Client` to `MqttClient` and the IP stack's `Client` protocol to `TcpClient`; the modem model's
+`Command` and `Restart` to `ModemCommand` and `ModemRestart`. The model itself, a class named
+`Modem` beside the modem interface, is exported as `ModemModel`, the name the package already
+imported it under. `Mark`, `Delivery`, `Publication`, `Connection` and `Source` keep their names:
+each means one thing in esp32tl.
+
+What only the backend reaches stays out. The walk leaves out the members the link's `Interface`
+declares, on an interface, the package's services' `accept`, which the network calls, and the
+constructors of what the backend makes; the protocols a test implements, `Model`, `Source`,
+`StreamService` and the rest, keep all their methods, since the test writes their types. `Air`
+kept its loop, its Bumble link and `join(party)` public, for the package's peers and controllers,
+which made `BoardLoop`, `Link` and `Party` types a test meets; they are `_loop`, `_link` and
+`_join` now, and none of the three is exported.
+
+**Rejected:** a separate `esp32tl.types` module, which the issue offered: a second public module
+for the same names, where `from esp32tl import Board` already worked and `Board` is a type too.
+Re-exporting the units from `esp32tl` as well: `esp32tl.units` was already the one place every
+document and example imported them from, and `m`, `km` or `ms` at the package root would read as
+anything but a unit. Exporting the recording format's `Recording`, `Header`, `Event` and
+`ClockSwitch` at the root: `esp32tl.recording` is public, and a test uses it through the module,
+`recording.read(path)`, where its names keep their context. Excluding members from the walk by
+name alone, in every class: `close`, `start` or `transcript` is the test's on `Air` or `Internet`,
+and `receive` and `poll` are what the test writes on a `Model`. Constants for the harness's own
+virtual station's MAC and access point's BSSID: a test that checks either names it, through
+`wifi.station(mac=...)` or `wifi.access_point(bssid=...)`.
+
 ## A lost link leaves the device's connections half-open until their keepalive
 
 Status: decided (#244)

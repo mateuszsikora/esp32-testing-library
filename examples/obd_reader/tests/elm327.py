@@ -6,7 +6,7 @@ sent, which is what the tests read at the peer. No waits, no board. A `ReactiveM
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 
-from esp32tl.sources.model import ReactiveModel, Timed
+from esp32tl import ReactiveModel, Timed
 from esp32tl.units import Duration, ms
 
 VERSION = "ELM327 v1.5"

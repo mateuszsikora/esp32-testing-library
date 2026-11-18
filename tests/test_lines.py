@@ -8,7 +8,7 @@ import re
 import pytest
 
 from esp32tl import boards
-from esp32tl.boards import Line
+from esp32tl.boards import LineRoute
 from esp32tl.interfaces.lines import LineEvent, Lines
 from esp32tl.link.boardlink import BoardLink
 from esp32tl.link.protocol import GpioIn, GpioOut, Release, RunnerHello, Sync, Wait
@@ -158,7 +158,7 @@ def test_the_level_is_what_the_firmware_drives() -> None:
 
 
 def test_a_pull_up_drives_its_line_high() -> None:
-    lines = Lines("board", {"x": {"irq": Line(12, "up"), "led": Line(13)}}, Clock())
+    lines = Lines("board", {"x": {"irq": LineRoute(12, "up"), "led": LineRoute(13)}}, Clock())
     lines.drive("x.irq", 0)
     lines.release("x.irq")
     lines.drive("x.led", 1)

@@ -47,7 +47,7 @@ class Message:
 
 
 @dataclass(frozen=True)
-class Client:
+class MqttClient:
     at: Duration
     client_id: str
     username: str | None
@@ -310,7 +310,7 @@ class Broker:
         self._now = now
         self._log = log
         self.messages: list[Message] = []
-        self.clients: list[Client] = []
+        self.clients: list[MqttClient] = []
         self.connection_attempts: list[ConnectionAttempt] = []
         self.subscribe_requests: list[SubscribeRequest] = []
         self.deliveries: list[Delivery] = []
@@ -483,16 +483,16 @@ class Broker:
 
         return Condition(find, f"an active MQTT subscription to {topic!r}", "MQTT")
 
-    def next_connection(self) -> Callable[[], Client | None]:
+    def next_connection(self) -> Callable[[], MqttClient | None]:
         """A non-consuming condition for the first CONNECT recorded after this call."""
         start = len(self.clients)
 
-        def find() -> Client | None:
+        def find() -> MqttClient | None:
             return self.clients[start] if len(self.clients) > start else None
 
         return Condition(find, "the next MQTT client connection", "MQTT")
 
-    def find_connection(self) -> Client | None:
+    def find_connection(self) -> MqttClient | None:
         """Return the first recorded CONNECT, even if it has closed, or None."""
         return self.clients[0] if self.clients else None
 
@@ -893,7 +893,7 @@ class _Session:
         self.connected = True
         self.keepalive = connect.keepalive
         broker.clients.append(
-            Client(
+            MqttClient(
                 connect.at,
                 self.client_id,
                 connect.username,

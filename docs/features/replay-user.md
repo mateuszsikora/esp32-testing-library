@@ -90,7 +90,7 @@ Malformed request framing also raises `ReplayError`, prefixed with `{path}:`, in
 
 ## When the test gets it wrong
 
-These raise `SourceError` (`esp32tl.interfaces.SourceError`) in the test body:
+These raise `SourceError` (`esp32tl.SourceError`) in the test body:
 
 | Message | Cause |
 |---|---|

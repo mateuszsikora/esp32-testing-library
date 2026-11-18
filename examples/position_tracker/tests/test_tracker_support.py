@@ -6,9 +6,7 @@ from datetime import UTC, datetime
 import pytest
 from tracker_support import CLIENT_ID, TOPIC, Reports, serve_broker
 
-from esp32tl import Board
-from esp32tl.interfaces import NeverHappened
-from esp32tl.net.mqtt import TEST_CLIENT, Broker, Message
+from esp32tl import TEST_CLIENT, Board, Broker, Message, NeverHappened
 from esp32tl.units import Position, seconds
 
 POSITION = {"fix": True, "lat": 52.229677, "lon": 21.012233, "time": 1935837296}

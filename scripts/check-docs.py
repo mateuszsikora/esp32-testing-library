@@ -91,13 +91,14 @@ FEATURES = [
         r"^docs/features/cli-user\.md$",
         "esp32tl command changed: update docs/features/cli-user.md",
     ),
-    # The package root holds only the version, which is what `esp32tl --version` shows.
+    # The package root holds the version, which is what `esp32tl --version` shows, and the
+    # public API a test imports, which the plugin's user document lists.
     Rule(
         "F5",
         r"^esp32tl/__init__\.py$",
-        r"^docs/features/cli-user\.md$",
-        "Package root changed (version shown by esp32tl --version):"
-        " update docs/features/cli-user.md",
+        r"^docs/features/(cli-user|pytest-plugin-user)\.md$",
+        "Package root changed (the public API, the version esp32tl --version shows):"
+        " update docs/features/pytest-plugin-user.md or cli-user.md",
     ),
     # A carve-out rather than a list of file names, so that a new file in runner/src/ is owned
     # from its first line.

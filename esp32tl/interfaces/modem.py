@@ -4,7 +4,7 @@ from collections.abc import Callable, Mapping
 from datetime import datetime
 from pathlib import Path
 
-from esp32tl.boards import Line
+from esp32tl.boards import LineRoute
 from esp32tl.boards.capabilities import Request
 from esp32tl.interfaces import SourceError
 from esp32tl.interfaces.lines import Lines
@@ -13,7 +13,7 @@ from esp32tl.link.boardlink import Wire
 from esp32tl.net import Internet
 from esp32tl.net.ntp import DEFAULT_UTC
 from esp32tl.report import RunLog, board_time
-from esp32tl.sources.model.modem import LATENCY_NS, NO_OFFSET, Command, Restart
+from esp32tl.sources.model.modem import LATENCY_NS, NO_OFFSET, ModemCommand, ModemRestart
 from esp32tl.sources.model.modem import Modem as ModemModel
 from esp32tl.units import Duration
 
@@ -33,7 +33,7 @@ class Modem(Uart):
         now: Callable[[], int],
         lines: Lines,
         world: Callable[[], datetime] = lambda: DEFAULT_UTC,
-        pins: Mapping[str, Line],
+        pins: Mapping[str, LineRoute],
         asked: Callable[[Request], None] = lambda request: None,
         log: RunLog | None = None,
         files: dict[Path, tuple[str, str]] | None = None,
@@ -160,12 +160,12 @@ class Modem(Uart):
         return self.modem_model().hung
 
     @property
-    def restarts(self) -> tuple[Restart, ...]:
+    def restarts(self) -> tuple[ModemRestart, ...]:
         """Each time a run of the selected model ended, with what ended it."""
         return self.modem_model().restarts
 
     @property
-    def commands(self) -> list[Command]:
+    def commands(self) -> list[ModemCommand]:
         """Every completed AT command and reply, as a snapshot."""
         return self.modem_model().commands
 

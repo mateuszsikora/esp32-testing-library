@@ -7,8 +7,7 @@ from typing import Any
 import pytest
 from elm327 import Elm327, Vehicle
 
-from esp32tl import Board
-from esp32tl.bluetooth.peer import BluetoothDevice, SppPeer
+from esp32tl import BluetoothDevice, Board, SppPeer
 from esp32tl.units import ms, seconds
 
 pytestmark = pytest.mark.app_path("..")

@@ -14,8 +14,7 @@ from tracker_support import (
     serve_broker,
 )
 
-from esp32tl import Board
-from esp32tl.net.tls import CertificateAuthority
+from esp32tl import Board, CertificateAuthority
 from esp32tl.units import NORTH, Position, about, km_h, m, seconds
 
 pytestmark = [pytest.mark.app_path(".."), pytest.mark.board_profile("lilygo-t-a7670g-r2")]

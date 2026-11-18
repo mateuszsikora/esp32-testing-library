@@ -20,7 +20,8 @@ the two differ. How to write each document: `docs/guides/documentation.md`.
 
 - `esp32tl/pytest_plugin.py`, `esp32tl/interfaces/` → `docs/features/pytest-plugin-*.md`
 - `esp32tl/backends/` → `docs/features/esp32sim-backend-*.md`
-- `esp32tl/cli.py`, `esp32tl/__init__.py` → `docs/features/cli-user.md`
+- `esp32tl/cli.py` → `docs/features/cli-user.md`
+- `esp32tl/__init__.py` → `docs/features/pytest-plugin-user.md` (public API) or `cli-user.md` (version)
 - `runner/src/` (not the protocol files) → `docs/features/runner-*.md`
 - `runner/Cargo.toml` → `docs/features/runner-technical.md`
 - `esp32tl/link/`, `runner/src/protocol.rs`, `runner/src/socket_board.rs` → `docs/protocol.md`

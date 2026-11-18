@@ -2162,3 +2162,18 @@ clones, and rejection of serial distributed execution before accessing hardware.
   `tests/test_serial_backend.py::test_an_s3_with_its_console_on_usb_serial_jtag_runs_on_the_serial_backend`,
   `tests/test_serial_backend.py::test_a_usb_serial_jtag_console_on_a_chip_not_validated_on_hardware_skips`,
   `tests/test_pytest_plugin.py::test_the_serial_backend_refuses_a_board_with_another_chip`
+
+## The public API
+
+- **259.** Every type that a public method or property of a class `esp32tl` exports takes or
+  returns, and every type of such a class's public attributes and fields, is importable from
+  `esp32tl`, `esp32tl.units` or `esp32tl.recording`, under the class's own name but for
+  `ModemModel`; `esp32tl.__all__` names every public name of the package root but its submodules.
+  Left out are what only the backend calls: the members the link's `Interface` declares, on an
+  interface; the pairs `BACKEND_SIDE` names, as the package's services' `accept`; and the
+  constructors of the classes the backend makes. The protocols a test implements, `Model`,
+  `Source`, `StreamService` and the rest, keep all of their methods. A public attribute that
+  holds an instance of one of the package's generic classes, as a `Condition`, is annotated with
+  its parameters, so that what waiting on it returns is checked too.
+  `tests/test_public_api.py::test_every_type_a_test_meets_is_public`,
+  `tests/test_public_api.py::test_all_names_what_the_package_exports`

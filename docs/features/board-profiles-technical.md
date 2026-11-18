@@ -110,7 +110,7 @@ Integers are TOML integers: `true` is not a port.
 A line table may also contain `active`, `on_ms` and `off_ms`, all together, for a line whose pulse
 toggles, or `active` and `pulse_ms`, for a line with one threshold. `active` is integer
 0 or 1; durations are positive integer milliseconds. A timed line must be on an output-capable
-ESP32 pin. `Reader.lines` stores them on `Line`, defaulting all four to `None` for untimed lines.
+ESP32 pin. `Reader.lines` stores them on `LineRoute`, defaulting all four to `None` for untimed lines.
 Any other set fails with `lines.modem.pwrkey: pulse timing needs active with on_ms and off_ms, or active with pulse_ms`
 (prefixed by the profile filename); invalid types and ranges use the usual key-specific errors.
 
@@ -237,10 +237,10 @@ here.
 | `boards.load(path)` | function | The profile in any file, checked against [Schema](#schema) |
 | `boards.names()` | function | The shipped profiles' names, sorted |
 | `boards.DEFAULT_PROFILE` | `str` | `"esp32-devkitc"` |
-| `BoardProfile` | frozen dataclass | `name`, `chip`, `flash_mb: int \| None`, `psram_mb: int \| None`, `uart: Mapping[str, UartRoute]`, `lines: Mapping[str, Mapping[str, Line]]`, `sd_card: SdCardRoute \| None = None`; property `interfaces`: `["console", "uart.<role>", ..., "lines.<role>", ..., "sd_card", "wifi", "bluetooth"]`, in file order, `sd_card` only with a slot, `wifi` and `bluetooth` always: every chip of `CHIPS` has them. Not hashable: its mappings are not |
+| `BoardProfile` | frozen dataclass | `name`, `chip`, `flash_mb: int \| None`, `psram_mb: int \| None`, `uart: Mapping[str, UartRoute]`, `lines: Mapping[str, Mapping[str, LineRoute]]`, `sd_card: SdCardRoute \| None = None`; property `interfaces`: `["console", "uart.<role>", ..., "lines.<role>", ..., "sd_card", "wifi", "bluetooth"]`, in file order, `sd_card` only with a slot, `wifi` and `bluetooth` always: every chip of `CHIPS` has them. Not hashable: its mappings are not |
 | `UartRoute` | frozen dataclass | `port`, `tx`, `rx`, `baud` |
 | `SdCardRoute` | frozen dataclass | `sclk`, `mosi`, `miso`, `cs` |
-| `Line` | frozen dataclass | `pin`, `pull: "up" \| "down" \| None = None`, `active`, `on_ms`, `off_ms`, `pulse_ms` (each `int \| None = None`); [pulse schema](#pulse-timing-on-a-line) |
+| `LineRoute` | frozen dataclass | `pin`, `pull: "up" \| "down" \| None = None`, `active`, `on_ms`, `off_ms`, `pulse_ms` (each `int \| None = None`); [pulse schema](#pulse-timing-on-a-line) |
 | `capabilities.declared()` | function, cached | The shipped declaration: backend name, then kind, then `Capability` |
 | `capabilities.load(path)` | function | A declaration in any file |
 | `Capability` | frozen dataclass | `sources: tuple[str, ...] = ()`, `tap: bool = False` |

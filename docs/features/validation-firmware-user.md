@@ -896,4 +896,4 @@ and uptime. Existing console commands and station-mode lines keep their meanings
 and raw TCP. Build with `firmware/build-platformio.sh arduino_shell`, as for the existing image;
 no prebuilt binary is committed.
 
-The Arduino shell accepts unsigned NVS `shell/ap_delay_ms` (`esp32tl.flash.u32`, default 0), delaying SoftAP startup by that many milliseconds. Commands `ap-off` and `ap-on` stop and restart its SoftAP using the configured NVS credentials, for station lifecycle tests.
+The Arduino shell accepts unsigned NVS `shell/ap_delay_ms` (`esp32tl.u32`, default 0), delaying SoftAP startup by that many milliseconds. Commands `ap-off` and `ap-on` stop and restart its SoftAP using the configured NVS credentials, for station lifecycle tests.

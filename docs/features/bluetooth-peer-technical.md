@@ -521,7 +521,7 @@ interface that puts the firmware's controller on the board's link is
     (`esp32tl/interfaces/bluetooth.py`) is an `Interface` named `bluetooth`, with no wire, whose
     `bluetooth` is true. `use()`, from `Board.bluetooth` the first time, calls
     `asked(Request("bluetooth", source="model"))`, then makes an `Air(board_clock=True)` and a
-    `GuestController("esp32", air.link, address)` on it, through `air.call`, and makes itself the
+    `GuestController("esp32", air._link, address)` on it, through `air.call`, and makes itself the
     controller's `host`: Bumble's controller sends its host packets with `call_soon(host.on_packet,
     ...)`, and `on_packet` keeps each in `_out` with the air's time. `air` and `controller` call
     `use()`; `used` says whether it ran. Until then `latency()` and `quiet_until()` are `None`,
@@ -560,7 +560,7 @@ interface that puts the firmware's controller on the board's link is
 
 | Name | What |
 |---|---|
-| `Air(*, board_clock=False)` | `esp32tl/bluetooth/air.py`: `loop`, a `BoardLoop`; `link`, a `Link`; `board_clock`; `now`, a `Duration`; `join(party)`, which settles the current instant with the party in it; `call(function)`; `start(coroutine)`, a task; `fail(error)`; `quiet_until()`, nanoseconds or `None`; `advance(until)`, a `Duration`; `wait(duration)`; `run(awaitable, *, within, description="")`; `at_once(awaitable, description="")`; `follow(until)`, nanoseconds, the link's; `close()` |
+| `Air(*, board_clock=False)` | `esp32tl/bluetooth/air.py`: `board_clock`; `now`, a `Duration`; `call(function)`; `start(coroutine)`, a task; `fail(error)`; `quiet_until()`, nanoseconds or `None`; `advance(until)`, a `Duration`; `wait(duration)`; `run(awaitable, *, within, description="")`; `at_once(awaitable, description="")`; `follow(until)`, nanoseconds, the link's; `close()`; private, for the package's own peers, controllers and interface: `_loop`, a `BoardLoop`; `_link`, a `Link`; `_join(party)`, which settles the current instant with the party in it |
 | `Party` | A protocol: `poll(now)`, inside the loop at every instant the air stops at, returning nothing; `quiet_until()`, later than `now`, or `None` |
 | `BoardLoop()` | `now`, an `int` of nanoseconds; `time()`; `run_idle()`, the next timer's time or `None` |
 | `AirError` | A `RuntimeError`: what failed on the air, as its `__cause__` |

@@ -8,7 +8,14 @@ import pytest
 
 from esp32tl import boards
 from esp32tl.backends import SERVICES
-from esp32tl.boards import BoardProfile, Line, ProfileError, SdCardRoute, UartRoute, capabilities
+from esp32tl.boards import (
+    BoardProfile,
+    LineRoute,
+    ProfileError,
+    SdCardRoute,
+    UartRoute,
+    capabilities,
+)
 from esp32tl.boards.capabilities import (
     Capability,
     CapabilityError,
@@ -82,13 +89,13 @@ def test_the_lilygo_profile_holds_the_specification_and_lilygo_s_documentation()
     }
     assert profile.lines == {
         "modem": {
-            "pwrkey": Line(4, active=1, on_ms=50, off_ms=2500),
-            "ri": Line(33, "down"),
-            "dtr": Line(25),
-            "reset": Line(5, active=1, pulse_ms=2000),
+            "pwrkey": LineRoute(4, active=1, on_ms=50, off_ms=2500),
+            "ri": LineRoute(33, "down"),
+            "dtr": LineRoute(25),
+            "reset": LineRoute(5, active=1, pulse_ms=2000),
         },
-        "gnss": {"wake": Line(19), "pps": Line(23)},
-        "board": {"power_enable": Line(12)},
+        "gnss": {"wake": LineRoute(19), "pps": LineRoute(23)},
+        "board": {"power_enable": LineRoute(12)},
     }
     assert profile.sd_card == SdCardRoute(sclk=14, mosi=15, miso=2, cs=13)
     assert profile.interfaces == [
