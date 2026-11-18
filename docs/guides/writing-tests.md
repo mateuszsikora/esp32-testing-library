@@ -153,7 +153,7 @@ A test that sets something up and never powers on fails at teardown, since it ra
 
 | Your board has | The test gives it | Shown in |
 |---|---|---|
-| Configuration in NVS | `board.nvs({"namespace": {"key": value}})`, integers with their width, `u16(8883)` from `esp32tl.flash` ([flash contents](../features/flash-contents-user.md)) | `configure_alarm` in the [GPS alarm clock](../../examples/gps_alarm_clock/tests/test_alarm.py), `configure_tracker` in the [position tracker](../../examples/position_tracker/tests/tracker_support.py) |
+| Configuration in NVS | `board.nvs({"namespace": {"key": value}})`, integers with their width, `u16(8883)` from `esp32tl` ([flash contents](../features/flash-contents-user.md)) | `configure_alarm` in the [GPS alarm clock](../../examples/gps_alarm_clock/tests/test_alarm.py), `configure_tracker` in the [position tracker](../../examples/position_tracker/tests/tracker_support.py) |
 | A GNSS receiver | `board.gnss.fix(at=...)`, `move(...)`, `lose_fix()`: a receiver the test describes ([models](../features/models-user.md#the-gnss-receiver)); `replay(path)`: a recording ([replay](../features/replay-user.md)); `real(port)`: a device on a host serial port ([real source](../features/real-source-user.md)) | The model in the [GPS alarm clock](../../examples/gps_alarm_clock/tests/test_alarm.py); a replay in the [SD data logger](../../examples/sd_data_logger/tests/test_logger.py) |
 | An SD card | `board.sd_card.image(size_mb=32).with_text(name, text).build()`, then `board.sd_card.insert(card)`; nothing, for an empty slot ([SD card](../features/pytest-plugin-user.md#the-fixtures)) | [SD data logger](../../examples/sd_data_logger/tests/test_logger.py) |
 | A cellular modem | `board.modem.signal(dbm=...)`, `register()`, `power_off()` and the model's other calls ([modem](../features/modem-user.md)); `board.modem.network()` for the network behind it | The network in the [position tracker](../../examples/position_tracker/tests/tracker_support.py); the model's calls in `tests/test_modem_fixture.py` |
@@ -176,7 +176,7 @@ Every wait is on the board's clock, and every limit a test states is part of wha
 |---|---|---|
 | Time to pass | `board.wait(seconds(5))` | At exactly that instant: `board.now` moved by 5 s |
 | Text on the console | `board.console.expect_exact("ready", timeout=seconds(10))` | The `re.Match`, on bytes, as in pytest-embedded: `.group().decode()` for the text; after `expect(pattern)`, `.group(1).decode()` for a group |
-| A console line, with its time | `board.wait_until(board.console.line(r"^fix lat=(?P<lat>\S+)"), within=seconds(2))` | A `Line`, with `at`, `text` and the groups |
+| A console line, with its time | `board.wait_until(board.console.line(r"^fix lat=(?P<lat>\S+)"), within=seconds(2))` | A `ConsoleLine`, with `at`, `text` and the groups |
 | A pin | `buzzer = board.lines.output("alarm.buzzer")`, then `board.wait_until(buzzer.is_on, within=seconds(2))` | `True` |
 | A message at the broker | `board.wait_until(broker.next_message("tracker/position"), within=seconds(60))` | The message, with `at` |
 | The wake from a deep sleep | `board.wait_for_wake(within=minutes(35))` | The wake's `Boot` |
@@ -241,6 +241,30 @@ assert report.received_at == about(deadline, within=seconds(0.25))
 ```
 
 [Models and units](../features/models-user.md#units) lists every unit and what mixes with what.
+
+## What to import
+
+Three modules are public, and a test imports from them only:
+
+- `esp32tl`: every class, exception and constant a test names, from `Board`, `Boot` and
+  `condition` to `Message`, `TEST_CLIENT`, `SppPeer`, `ChannelEvent`, `Refusal`, `u16` and
+  `NeverHappened`. `esp32tl.__all__` lists them.
+- `esp32tl.units`: the units and their constructors, `Duration`, `seconds`, `km_h`, `Position`,
+  `NORTH`, `about`.
+- `esp32tl.recording`: the recording format, for a test that reads or writes a recording itself.
+
+```python
+from esp32tl import TEST_CLIENT, Broker, Message
+from esp32tl.units import Duration
+
+
+def from_the_device(broker: Broker, since: Duration) -> list[Message]:
+    return [m for m in broker.messages if m.client != TEST_CLIENT and m.at >= since]
+```
+
+The other modules are the package's own, and a name in them may move. A type that a test meets,
+as the argument or result of a method, an attribute or a field, is always importable from one of
+the three ([the public API](../features/pytest-plugin-user.md#the-public-api)).
 
 ## What a failure tells you
 
@@ -362,7 +386,7 @@ Where a test can put a model of its own today:
 - **The far end of a Bluetooth SPP channel.** `SppPeer(board.bluetooth.air, name=..., pin=...,
   source=...)` takes a model with `receive(at, data)`, `poll(now)`, `quiet_until()` and
   `latency()` ([the model that answers](../features/bluetooth-peer-user.md#the-model-that-answers)).
-  Subclass `esp32tl.sources.model.Model` and every time it takes and returns is a `Duration` on
+  Subclass `esp32tl.Model` and every time it takes and returns is a `Duration` on
   the board's clock, as in the rest of the test; a source in nanoseconds, `int`s, is taken too
   ([a model of the test's, in Durations](../features/models-user.md#a-model-of-the-tests-in-durations)).
   The [OBD-II reader](../../examples/obd_reader/tests/test_obd_reader.py) puts its adapter on the
@@ -416,7 +440,7 @@ Where a test can put a model of its own today:
   ```
 
   This is esp32tl's own `tests/test_uart_model.py`, shortened, where `Iterable` comes from
-  `collections.abc`, `ReactiveModel` and `Timed` from `esp32tl.sources.model`, and `Duration`,
+  `collections.abc`, `ReactiveModel` and `Timed` from `esp32tl`, and `Duration`,
   `ms` and `seconds` from `esp32tl.units`: its firmware, `modem_at`, writes AT commands to
   `uart.aux` of `tests/boards/aux-uart.toml` and reads the answers. No example has a part on a
   UART that esp32tl has no model for; the OBD-II reader's `Elm327`, above, is a `ReactiveModel`

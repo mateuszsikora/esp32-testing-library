@@ -182,7 +182,7 @@ the working directory, with no board profile beside them.
 
 On esp32sim, before `board.power_on()`, `board.nvs({"config": {"broker_host": "broker.test"}})`
 can replace a named NVS partition from the build's table. Integer values require a width,
-for example `u16(8883)` from `esp32tl.flash`. On serial, `board.nvs(...)` skips without writing
+for example `u16(8883)` from `esp32tl`. On serial, `board.nvs(...)` skips without writing
 a replacement partition. See [flash contents](flash-contents-user.md).
 A test that supplies NVS and passes without calling `board.power_on()` fails teardown:
 it ran no firmware.
@@ -243,6 +243,41 @@ For code using backend accessors directly, replace `board.lines()` with `board.l
 `board.sd_card.image_path`; `image(...)` starts the builder. Existing fixture-based tests using
 `sd_card.insert(path)` need no change.
 
+### The public API
+
+A test imports from three modules, and from no other:
+
+| Module | What it holds |
+|---|---|
+| `esp32tl` | Every class, exception and constant a test names: the board (`Board`, `Boot`, `UptimeZero`, `POWERON_RESET`, `DEEPSLEEP_RESET`, `RESET_REASONS`, `Condition`, `condition`), its profile (`BoardProfile`, `UartRoute`, `LineRoute`, `SdCardRoute`), the interfaces and what they return (`Console`, `ConsoleLine`, `Uart`, `Gnss`, `Modem`, `Lines`, `OutputLine`, `LineEvent`, `SdCard`, `CardImage`, `Wifi`, `Bluetooth`, `Tap`, ...), the sources and models (`Replay`, `Real`, `Model`, `ReactiveModel`, `IdleFramedModel`, `Timed`, `GnssReceiver`, `ModemModel`, `ModemCommand`, `ModemRestart`, `Protocol`, `AT`, `PMTK`, `UBX`, `GNSS`), the build and the flash (`Build`, `FlashSnapshot`, `Namespaces`, `Typed`, `u8` to `i64`), the network and its services (`Internet`, `Broker`, `Message`, `MqttClient`, `TEST_CLIENT`, `Publication`, `HttpServer`, `HttpRequest`, `TcpConnection`, `CertificateAuthority`, ...), Bluetooth (`Air`, `SppPeer`, `BluetoothDevice`, `ChannelEvent`, `Refusal`, `Pairing`, ...) and the exceptions (`NeverHappened`, `RunEnded`, `BoardOff`, `SourceError`, `BackendError`, `PeerError`, `AirError`, `ConnectionEnded`, `NotReachable`, ...). `esp32tl.__all__` lists them all |
+| `esp32tl.units` | The units: `Duration`, `Speed`, `Distance`, `Rate`, `Heading`, `Position`, their constructors (`ms`, `seconds`, `km_h`, `m`, ...), the compass points and `about` ([units](models-user.md#units)) |
+| `esp32tl.recording` | The recording format: reading and writing a recording, and its `Recording`, `Header`, `Event` and `ClockSwitch` ([the recording format](../recording-format.md)) |
+
+```python
+from esp32tl import ChannelEvent, SppPeer
+from esp32tl.units import Duration
+
+
+def answered_within(peer: SppPeer, limit: Duration) -> list[ChannelEvent]:
+    return [event for event in peer.events if event.at <= limit]
+```
+
+A type a test meets is importable from one of the three: the argument or the result of a public
+method or property, or the type of a public attribute or field, of anything `esp32tl` exports,
+the methods a test writes for a `Model`, a `Source` or a `StreamService` among them. What the
+backend alone calls, an interface's side of the link (`receive`, `poll`, `quiet_until`, ...) and
+the constructors of what the backend makes, is the package's own. The other modules,
+`esp32tl.interfaces.board`, `esp32tl.net.mqtt`, `esp32tl.bluetooth.peer`, `esp32tl.flash` and the
+rest, are where the package keeps the names, which may move between them:
+`from esp32tl.net.mqtt import Message` works today, but only `from esp32tl import Message` is
+promised.
+
+Each name is the class's own, and says what it belongs to where a bare one would not: `ConsoleLine`
+beside `LineRoute`, the board profile's GPIO line; `HttpRequest`, what the HTTP
+server was asked; `MqttClient` of the broker, beside `TcpClient`, the test's side of a TCP connection it
+opens; `ModemCommand` and `ModemRestart` of the modem's model. The model itself is a class named
+`Modem`, exported as `ModemModel`, since `Modem` is the board's modem interface.
+
 ## The fixtures
 
 `board` is the board, off until the test powers it on. The details below describe esp32sim.
@@ -290,7 +325,7 @@ For esp32sim:
 - When the run ends while the test waits, because the runner exited or the harness found the link
   wrong, the wait raises `RunEnded`, which says when, as far as the harness knows, and why
   ([when the run ends](#what-a-failure-looks-like)).
-- `board.app` is the `Build` (`esp32tl.build.Build`) the runner flashes, with its `directory`,
+- `board.app` is the `Build` (from `esp32tl`) the runner flashes, with its `directory`,
   `kind`, `flash_files`, `partition_table`, `app_image`, `elf` and `chip`
   ([builds](builds-technical.md#interfaces)).
 - `board.profile` is the board profile the test runs on: `esp32-devkitc`, unless the
@@ -391,7 +426,7 @@ def test_the_count_survives_a_power_cut(board: Board):
   `SourceError: uart.gnss: the board has been on: give an interface its source before
   board.power_on()`. So is `board.nvs()`. What the firmware wrote to flash, a test reads with
   [`board.flash()`](flash-contents-user.md#read-the-flash-of-a-run), through both.
-- `board.boots` is the chip's boots, in order, as `Boot`s (`esp32tl.interfaces.board`): `number`,
+- `board.boots` is the chip's boots, in order, as `Boot`s (from `esp32tl`): `number`,
   1 for the first; `at`, the board's time the boot started, a `Duration`; `cause`, the reset cause
   the ROM reports for it (`RESET_REASON` in ESP-IDF's `esp32/rom/rtc.h`); and `reason`, its name,
   as the ROM prints it, such as `POWERON_RESET` (1) or `SW_CPU_RESET` (12, `esp_restart()`). The
@@ -401,7 +436,7 @@ def test_the_count_survives_a_power_cut(board: Board):
   `power_on()` that follows a `power_off()`, `board.boot` is still the one before, until the test
   lets the board run, for as little as `board.wait(ms(1))`.
 - `boot.uptime_zero` is where the boot's uptime counter, the one `esp_timer_get_time()` reads,
-  counted zero on the board's clock, an `UptimeZero` (`esp32tl.interfaces.board`) of two
+  counted zero on the board's clock, an `UptimeZero` (from `esp32tl`) of two
   `Duration`s, `earliest` and `latest`; `None` until the backend has seen the counter count, for a
   firmware that never starts it, and again while the zero is not known: after the counter stopped,
   or once it counts from a zero that may lie before power-on, as a load of more than the run has
@@ -441,7 +476,7 @@ def test_the_count_survives_a_power_cut(board: Board):
   Serial skips it with `board.boots` (the backend does not see the chip's resets).
 - `board.next_boot(cause=None)` is a [described condition](#described-conditions), a
   `Condition[Boot | None]`, for the first boot after the call: of any cause, or of `cause` only,
-  a reset cause as a number such as `POWERON_RESET` (`esp32tl.interfaces.board`). A boot of
+  a reset cause as a number such as `POWERON_RESET` (from `esp32tl`). A boot of
   another cause does not satisfy it, and a later one of `cause` still can; to check that the very
   next boot had a cause, wait on `board.next_boot()` and assert on its `reason`. It consumes
   nothing, and returns the same `Boot` each time it is asked. Make it before the call that causes
@@ -449,7 +484,7 @@ def test_the_count_survives_a_power_cut(board: Board):
   board is off is fine), or before what makes the firmware restart.
 
   ```python
-  from esp32tl.interfaces.board import POWERON_RESET
+  from esp32tl import POWERON_RESET
 
   booted = board.next_boot(POWERON_RESET)
   pressed = board.now
@@ -546,7 +581,7 @@ way:
 - `console.line(pattern)` is a condition for `board.wait_until`: the first console line that
   ends from now on and matches `pattern`, a regular expression on the line's text, as a string or
   compiled. `board.wait_until(console.line(r"^fix lat=(?P<lat>\S+)"), within=seconds(2))` returns
-  a `Line`, whose `at` is the board's time its line ending came at, `text` the line without its
+  a `ConsoleLine`, whose `at` is the board's time its line ending came at, `text` the line without its
   line ending and without ESP-IDF's colour codes, and `line["lat"]` or `line[1]` a group of the
   match. One that does not come raises
   `NeverHappened: a console line matching '^fix lat=(?P<lat>\\S+)' did not happen within 2 s: …`,
@@ -954,14 +989,13 @@ def test_the_firmware_follows_ri_and_drives_pwrkey(board):
   ([where it fails](#one-board-and-its-interfaces)), with the message after `esp32sim: `:
   `esp32sim: the board profile esp32-devkitc has no lines; its interfaces are console, uart.gnss, sd_card, wifi, bluetooth`.
 
-`NeverHappened`, `RunEnded`, `BoardOff` and `SourceError` are in `esp32tl.interfaces`, `LineEvent`
-in `esp32tl.interfaces.lines`.
+`NeverHappened`, `RunEnded`, `BoardOff`, `SourceError` and `LineEvent` are imported from `esp32tl`.
 
 ### Waking from deep sleep
 
 A firmware that goes to deep sleep with a timer wake (`esp_sleep_enable_timer_wakeup()`, then
 `esp_deep_sleep_start()`) wakes on the board's clock, through a boot of its own with cause 5,
-`DEEPSLEEP_RESET` (`esp32tl.interfaces.board.DEEPSLEEP_RESET`). `board.wait_for_wake` runs the
+`DEEPSLEEP_RESET` (`esp32tl.DEEPSLEEP_RESET`). `board.wait_for_wake` runs the
 board through the sleep to that boot:
 
 ```python
@@ -1071,7 +1105,7 @@ commands to `uart.aux` of a local profile and reads the answers
 ```python
 from collections.abc import Iterable
 
-from esp32tl.sources.model import ReactiveModel, Timed
+from esp32tl import ReactiveModel, Timed
 from esp32tl.units import Duration, ms, seconds
 
 
@@ -1105,8 +1139,8 @@ def test_the_firmware_talks_to_the_test_s_model_on_its_own_uart(board):
 
 - `model(source)` returns `source`, so the test keeps it to read what it heard. It must come
   before `board.power_on()`, and is the route's one source, as a replay or a real device is.
-- `source` is a subclass of `esp32tl.sources.model.Model`, whose times are `Duration`s on the
-  board's clock, or any object with the four methods of `esp32tl.interfaces.uart.Source`, whose
+- `source` is a subclass of `esp32tl.Model`, whose times are `Duration`s on the
+  board's clock, or any object with the four methods of `esp32tl.Source`, whose
   times are nanoseconds as `int`s. The methods are the same four, with the same names:
 
   | Method | Called | Returns |
@@ -1258,7 +1292,7 @@ on the board's clock, where the test puts the devices the firmware talks to or f
 `BluetoothDevice`, and the run forwards the firmware's HCI to that controller:
 
 ```python
-from esp32tl.bluetooth.peer import SppPeer
+from esp32tl import SppPeer
 from esp32tl.units import seconds
 
 
@@ -1459,7 +1493,7 @@ stable ([decision](../decisions/harness.md#filter-the-xml-attribute-warning-as-a
 ### Selecting a replay protocol
 
 `gnss.replay(path, protocol=...)` and `board.uart(role).replay(path, protocol=...)` accept a
-`Protocol` from `esp32tl.matching`: `AT`, `PMTK`, `UBX`, or `GNSS` (mixed PMTK/UBX).
+`Protocol` from `esp32tl`: `AT`, `PMTK`, `UBX`, or `GNSS` (mixed PMTK/UBX).
 Omitting it detects the protocol from recorded requests; a recording with no requests stays
 passive. The returned replay exposes `sent`, `unseen_count` and `unseen`, a mapping of normalised
 request bytes to occurrence counts. See [matching](matching-user.md) for timing and defaults.
@@ -1490,10 +1524,10 @@ differ from the device's station and SoftAP MACs (`24:6f:28:00:11:22` and `24:6f
 #### The device's MACs
 
 A firmware that names its SoftAP after its MAC needs the device's MAC before power-on, to give
-`wifi.station` the SSID. `esp32tl.interfaces.wifi` names the emulated device's two Wi-Fi MACs:
+`wifi.station` the SSID. `esp32tl` names the emulated device's two Wi-Fi MACs:
 
 ```python
-from esp32tl.interfaces.wifi import ESP32SIM_STATION_MAC
+from esp32tl import ESP32SIM_STATION_MAC
 from esp32tl.units import seconds
 
 
@@ -1509,8 +1543,11 @@ def test_a_phone_joins_the_setup_network(board, wifi):
 |---|---|---|
 | `ESP32SIM_STATION_MAC` | `24:6f:28:00:11:22` | The emulated device's Wi-Fi station interface: the base MAC the runner gives the machine, the one esp32sim's CLI gives the classic chip |
 | `ESP32SIM_SOFTAP_MAC` | `24:6f:28:00:11:23` | The emulated device's SoftAP interface: the base MAC plus one, as ESP-IDF derives it on the classic ESP32 (four universal MACs: station, SoftAP, Bluetooth, Ethernet) |
-| `esp32tl.net.station.DEFAULT_MAC` | `02:53:54:41:00:01` | The harness's virtual station, the client that joins the device's SoftAP, unless `wifi.station(mac=...)` names another |
+| `wifi.station(mac=...)` | `02:53:54:41:00:01` unless given | The harness's virtual station, the client that joins the device's SoftAP |
 | `wifi.access_point(bssid=...)` | `02:53:49:4d:00:01` unless given | The harness's virtual access point, which the device's station joins |
+
+The harness's own two addresses have no constant: a test that checks either names it, as
+`wifi.station(mac=...)` or `wifi.access_point(bssid=...)`, so that what it checks is in the test.
 
 The two `ESP32SIM_*` constants are the emulated classic ESP32's on esp32sim, the same in every run
 and on every board profile whose chip is `esp32`. The ESP32-S3, C3 and C6 get other MACs from

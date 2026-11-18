@@ -95,7 +95,7 @@ class DatagramService(Protocol):
     def on_datagram(self, data: bytes) -> bytes | None: ...
 
 
-class Client(Protocol):
+class TcpClient(Protocol):
     """The test's side of a connection it opened: told when the device accepts it, each piece of
     what the test wrote as it goes onto the link (`on_sent`), each in-order byte the device sends,
     the device's FIN (`on_close`), and the connection's end, once, with its kind, `"closed"`,
@@ -140,7 +140,7 @@ class _Flow:
     peer_closed: bool = False
     established: bool = False
     notified: bool = False
-    client: Client | None = None  # set on a connection the test opened
+    client: TcpClient | None = None  # set on a connection the test opened
 
 
 class Network:
@@ -248,7 +248,7 @@ class Network:
         flow.snd_nxt += len(data) + (1 if flags & (SYN | FIN) else 0)
 
     def connect(
-        self, device: str, port: int, ours: str, client: Client
+        self, device: str, port: int, ours: str, client: TcpClient
     ) -> tuple[int, Callable[[bytes], None], Callable[[], None]]:
         """Open a connection from `ours` to `device`:`port`: the SYN enters the path now. Returns
         the port it comes from, the next ephemeral one, and the `write` and `close` of the test's

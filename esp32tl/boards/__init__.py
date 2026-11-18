@@ -127,7 +127,7 @@ class UartRoute:
 
 
 @dataclass(frozen=True)
-class Line:
+class LineRoute:
     """One GPIO line of a `[lines.<role>]` set, and the board's pull on it, if it has one."""
 
     pin: int
@@ -162,7 +162,7 @@ class BoardProfile:
     flash_mb: int | None
     psram_mb: int | None
     uart: Mapping[str, UartRoute]
-    lines: Mapping[str, Mapping[str, Line]]
+    lines: Mapping[str, Mapping[str, LineRoute]]
     sd_card: SdCardRoute | None = None
     # `uart0` or `usb-serial-jtag`: where the firmware's console is.
     console: ConsoleKind = "uart0"
@@ -327,12 +327,12 @@ class Reader:
             cs=self.gpio("sd_card.cs", table["cs"], output=True),
         )
 
-    def lines(self, key: str, value: object) -> dict[str, Line]:
+    def lines(self, key: str, value: object) -> dict[str, LineRoute]:
         lines = {}
         for role, line in self.roles(key, value).items():
             where = f"{key}.{role}"
             if not isinstance(line, dict):
-                lines[role] = Line(self.gpio(where, line))
+                lines[role] = LineRoute(self.gpio(where, line))
                 continue
             self.keys(where, line, {"pin"}, {"pull", "active", "on_ms", "off_ms", "pulse_ms"})
             pull = line.get("pull")
@@ -344,7 +344,7 @@ class Reader:
                     where,
                     "pulse timing needs active with on_ms and off_ms, or active with pulse_ms",
                 )
-            lines[role] = Line(
+            lines[role] = LineRoute(
                 self.gpio(f"{where}.pin", line["pin"], output=bool(timing)),
                 pull,
                 self.integer(f"{where}.active", line["active"], 0, 1) if timing else None,
@@ -359,7 +359,7 @@ class Reader:
     def distinct(
         self,
         uart: dict[str, UartRoute],
-        lines: dict[str, dict[str, Line]],
+        lines: dict[str, dict[str, LineRoute]],
         sd_card: SdCardRoute | None,
         console: str,
     ) -> None:

@@ -39,7 +39,7 @@ Pattern = str | bytes | re.Pattern[str] | re.Pattern[bytes] | type[pexpect.EOF]
 
 
 @dataclass(frozen=True)
-class Line:
+class ConsoleLine:
     """A line the firmware printed on its console: the board's time its line ending came at, its
     text without the line ending and without colour codes, and the match of the pattern that
     found it, if one did. `line["lat"]` and `line[1]` are the match's groups."""
@@ -56,11 +56,11 @@ class Line:
 
 
 class ConsoleLines:
-    """What the guest printed, cut into `Line`s as the link brings it: `feed` is called with the
-    board's time and the bytes of each `console` message."""
+    """What the guest printed, cut into `ConsoleLine`s as the link brings it: `feed` is called
+    with the board's time and the bytes of each `console` message."""
 
     def __init__(self) -> None:
-        self.lines: list[Line] = []
+        self.lines: list[ConsoleLine] = []
         self._partial = bytearray()
 
     def feed(self, t: int, data: bytes) -> None:
@@ -68,7 +68,7 @@ class ConsoleLines:
             self._partial += piece
             if piece.endswith(b"\n"):
                 text = self._partial.decode(errors="replace").rstrip("\r\n")
-                self.lines.append(Line(Duration(t), COLOUR.sub("", text)))
+                self.lines.append(ConsoleLine(Duration(t), COLOUR.sub("", text)))
                 self._partial.clear()
 
 
@@ -82,14 +82,14 @@ class LineCondition:
         self._pattern = line_pattern(pattern)
         self._start = len(lines.lines)
 
-    def __call__(self) -> Line | None:
+    def __call__(self) -> ConsoleLine | None:
         lines = self._lines.lines
         for index in range(self._start, len(lines)):
             line = lines[index]
             match = self._pattern.search(line.text)
             if match is not None:
                 self._start = index + 1
-                return Line(line.at, line.text, match)
+                return ConsoleLine(line.at, line.text, match)
         # The next look starts after the lines this one saw.
         self._start = len(self._lines.lines)
         return None
@@ -272,13 +272,13 @@ class Console:
     def line(self, pattern: str | re.Pattern[str]) -> LineCondition:
         """A condition for `board.wait_until`: the first line that ends from now on and matches
         `pattern`, a regular expression on the line's text, as a string or compiled. It returns
-        the `Line`, with the match, or `None` while there is none. Independent of `expect`'s
+        the `ConsoleLine`, with the match, or `None` while there is none. Independent of `expect`'s
         search."""
         return LineCondition(self._board.console_lines, pattern)
 
     def lines(
         self, pattern: str | re.Pattern[str] | None = None, *, since: Duration | None = None
-    ) -> list[Line]:
+    ) -> list[ConsoleLine]:
         """The lines printed so far, those that ended at `since` or later when it is given, and
         those that match `pattern` when it is given, with their match. A line not ended yet is
         not one."""
@@ -292,7 +292,7 @@ class Console:
             if regex is None:
                 found.append(line)
             elif (match := regex.search(line.text)) is not None:
-                found.append(Line(line.at, line.text, match))
+                found.append(ConsoleLine(line.at, line.text, match))
         return found
 
 

@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Literal
 
-from esp32tl.boards import Line
+from esp32tl.boards import LineRoute
 from esp32tl.interfaces import SourceError
 from esp32tl.interfaces.uart import Source
 from esp32tl.link.boardlink import Output
@@ -35,7 +35,7 @@ ANSWERS = {
 
 
 @dataclass(frozen=True)
-class Command:
+class ModemCommand:
     """A complete AT command, stamped at the UART chunk containing its terminator, and its reply."""
 
     at: Duration
@@ -48,7 +48,7 @@ RestartCause = Literal["reset", "pwrkey", "supply", "test"]
 
 
 @dataclass(frozen=True)
-class Restart:
+class ModemRestart:
     """A run of the modem that ended at `at`, by `cause`: a RESET pulse, which starts the next at
     once; a PWRKEY pulse that switched it off; its supply going; or a power call of the test's."""
 
@@ -69,8 +69,8 @@ class Modem:
         self,
         now: Callable[[], int],
         *,
-        pwrkey: Line | None = None,
-        reset: Line | None = None,
+        pwrkey: LineRoute | None = None,
+        reset: LineRoute | None = None,
         power: Callable[[int, bool], None] = lambda t, powered: None,
         data: Source | None = None,
         world: Callable[[], datetime] = lambda: DEFAULT_UTC,
@@ -89,7 +89,7 @@ class Modem:
         self.powered = True
         self.hung = False
         self._pwrkey_works = True
-        self._restarts: list[Restart] = []
+        self._restarts: list[ModemRestart] = []
         self.registered = True
         self._coverage = True
         self._function = 1
@@ -113,7 +113,7 @@ class Modem:
         self._escape_at: int | None = None
         # What the test's own call sends, for the next poll.
         self._queued: list[Output] = []
-        self._commands: list[Command] = []
+        self._commands: list[ModemCommand] = []
         self._data_received: list[tuple[Duration, bytes]] = []
 
     def connect_power(self, power: Callable[[int, bool], None]) -> None:
@@ -123,7 +123,7 @@ class Modem:
             power(self._now(), self.powered)
 
     @property
-    def commands(self) -> list[Command]:
+    def commands(self) -> list[ModemCommand]:
         """Every completed AT command and reply, as a snapshot."""
         with self._lock:
             return list(self._commands)
@@ -135,7 +135,7 @@ class Modem:
             return list(self._data_received)
 
     @property
-    def restarts(self) -> tuple[Restart, ...]:
+    def restarts(self) -> tuple[ModemRestart, ...]:
         """Each time a run of the modem ended, with what ended it."""
         with self._lock:
             return tuple(self._restarts)
@@ -275,7 +275,7 @@ class Modem:
     def _set_power(self, t: int, powered: bool, cause: RestartCause) -> None:
         # What the test says before the board's first instant is how the modem starts.
         if self.powered and t > 0:
-            self._restarts.append(Restart(Duration(t), cause))
+            self._restarts.append(ModemRestart(Duration(t), cause))
         self.powered = powered
         self.hung = False
         self._pwrkey_works = True
@@ -402,7 +402,7 @@ class Modem:
         if not upper.startswith("AT"):
             return b""
         if self.hung:
-            self._commands.append(Command(Duration(t), command, b""))
+            self._commands.append(ModemCommand(Duration(t), command, b""))
             return b""
         echo = raw + b"\r\n" if self._echo else b""
         answer = ANSWERS.get(upper, "")
@@ -460,7 +460,7 @@ class Modem:
             fallback = True
         response = echo + (f"\r\n{answer}\r\n" if answer else "").encode()
         response += f"\r\n{terminal}\r\n".encode()
-        self._commands.append(Command(Duration(t), command, response, fallback))
+        self._commands.append(ModemCommand(Duration(t), command, response, fallback))
         return response
 
     def _cclk(self, t: int) -> str:

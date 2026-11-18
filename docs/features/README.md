@@ -6,10 +6,10 @@ templates.
 
 | Feature | User | Technical | Code |
 |---|---|---|---|
-| pytest plugin: the `board`, `console`, `gnss`, `modem`, `broker`, `lines`, `sd_card` and `wifi` fixtures, the `app_path` and `app_recording` markers, `--esp32tl-backend` | [user](pytest-plugin-user.md) | [technical](pytest-plugin-technical.md) | `esp32tl/pytest_plugin.py`, `esp32tl/interfaces/` |
+| pytest plugin: the `board`, `console`, `gnss`, `modem`, `broker`, `lines`, `sd_card` and `wifi` fixtures, the `app_path` and `app_recording` markers, `--esp32tl-backend`, the public API | [user](pytest-plugin-user.md) | [technical](pytest-plugin-technical.md) | `esp32tl/pytest_plugin.py`, `esp32tl/interfaces/`, `esp32tl/__init__.py` (the public API) |
 | `esp32sim` backend: the runner under pytest-embedded, on the emulated clock | [user](esp32sim-backend-user.md) | [technical](esp32sim-backend-technical.md) | `esp32tl/backends/esp32sim.py`, `esp32tl/backends/clock.py` |
 | `serial` backend: a real ESP32 through pytest-embedded, on the wall clock | [user](serial-backend-user.md) | [technical](serial-backend-technical.md) | `esp32tl/backends/serial.py`, `esp32tl/backends/__init__.py` |
-| `esp32tl` command | [user](cli-user.md) | | `esp32tl/cli.py`, `esp32tl/__init__.py` |
+| `esp32tl` command | [user](cli-user.md) | | `esp32tl/cli.py`, `esp32tl/__init__.py` (the version) |
 | Runner: `esp32tl-runner`, esp32sim with the harness attached | [user](runner-user.md) | [technical](runner-technical.md) | `runner/src/`, `runner/Cargo.toml` |
 | Runnable examples | [user](examples-user.md) | [technical](examples-technical.md) | `examples/` |
 | Validation firmware and its container build | [user](validation-firmware-user.md) | [technical](validation-firmware-technical.md) | `firmware/` |
@@ -47,7 +47,7 @@ GitHub Action, a pre-commit hook or a Python dependency.
 | F3 | `^esp32tl/backends/(esp32sim\|clock)\.py$` | `^docs/features/esp32sim-backend-` | esp32sim backend changed (spawn, ROM and runner lookup, end of run, teardown): update docs/features/esp32sim-backend-*.md |
 | F23 | `^esp32tl/backends/(serial\|__init__)\.py$` | `^docs/features/serial-backend-` | Serial backend or backend registry changed: update docs/features/serial-backend-*.md |
 | F4 | `^esp32tl/cli\.py$` | `^docs/features/cli-user\.md$` | esp32tl command changed: update docs/features/cli-user.md |
-| F5 | `^esp32tl/__init__\.py$` | `^docs/features/cli-user\.md$` | Package root changed (version shown by esp32tl --version): update docs/features/cli-user.md |
+| F5 | `^esp32tl/__init__\.py$` | `^docs/features/(cli-user\|pytest-plugin-user)\.md$` | Package root changed (the public API, the version esp32tl --version shows): update docs/features/pytest-plugin-user.md or cli-user.md |
 | F6 | `^runner/src/`, without the paths of F9 and F10 | `^docs/features/runner-` | Runner changed (flags, stop line, exit codes, run loop): update docs/features/runner-*.md |
 | F7 | `^runner/Cargo\.toml$` | `^docs/features/runner-technical\.md$` | runner/Cargo.toml changed (esp32sim pin, profiles): update docs/features/runner-technical.md; a pin bump also re-checks the esp32sim lines docs/protocol.md cites |
 | F8 | `^esp32tl/link/` | `^docs/protocol\.md$` | Link protocol changed: docs/protocol.md is the contract both peers build against; update it, and its version if the wire changes |

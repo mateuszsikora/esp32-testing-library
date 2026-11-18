@@ -11,7 +11,7 @@ parameters leave the route without a source. Replay, taps and byte logging use `
 
 The model accumulates command bytes through CR or LF, consuming the LF of CRLF once. It ignores
 noncommands and consumes standalone `+++` in command mode, so firmware's initial escape cannot
-leave a stale `OK` or prefix its next AT command. Completing a command stamps `Command` with the
+leave a stale `OK` or prefix its next AT command. Completing a command stamps `ModemCommand` with the
 incoming `uart_tx` chunk containing its terminator (the chunk's first-byte timestamp); replies
 are stamped 1,000,000 ns later. A dial changes the parser in the same chunk, and a three-plus
 escape changes it back, even across chunks. Command lines over `MAX_COMMAND = 4096` bytes are
@@ -34,7 +34,7 @@ takes with `lose_power()` and gives back with `restore_power()` or `power_on()`.
 running modem down as `lose_power()` does; back, it starts nothing. A PWRKEY pulse starts the
 modem only with both, and `power_on()` with `_board` off restores `_supply` and starts nothing.
 
-The model keeps every `Command` under an RLock. `commands` returns a snapshot. With the modem
+The model keeps every `ModemCommand` under an RLock. `commands` returns a snapshot. With the modem
 model, `Esp32Sim.report` appends the command section; `properties` adds all commands to the modem
 route. Both check the route's source by type, so a model of the test's on `uart.modem`
 (`Uart.model`) adds neither. The rolling wire log still keeps only its normal last entries. Raw
@@ -43,16 +43,16 @@ data-mode payloads are available as a snapshot through `modem_model().data_recei
 
 ## Schema
 
-The model reads PWRKEY's `active`, `on_ms` and `off_ms` fields and RESET's `active` and `pulse_ms`
-from the [profile schema](board-profiles-technical.md#pulse-timing-on-a-line). The
+The model reads PWRKEY's `active`, `on_ms` and `off_ms` fields and RESET's `active` and `pulse_ms`,
+the profile's `LineRoute`s it takes as `pwrkey` and `reset`, from the [profile schema](board-profiles-technical.md#pulse-timing-on-a-line). The
 modem guide documents [PWRKEY's](modem-user.md#pwrkey-and-reporting) and
 [RESET's](modem-user.md#a-hung-modem-and-reset) LilyGO thresholds and their hardware sources.
 No protocol or recording-format version changes: UART bytes and GPIO input use version 1.
 
-`Restart` is frozen: `at: Duration`, `cause`: `"reset"`, `"pwrkey"`, `"supply"` or `"test"`.
-`Command` is frozen: `at: Duration`, `text: str`, `response: bytes`, `fallback: bool`. The JSON
+`ModemRestart` is frozen: `at: Duration`, `cause`: `"reset"`, `"pwrkey"`, `"supply"` or `"test"`.
+`ModemCommand` is frozen: `at: Duration`, `text: str`, `response: bytes`, `fallback: bool`. The JSON
 report converts time to `t_ns` and the reply to `response` text, replacing non-ASCII bytes in
-JSON. The `Command.response` and tap retain the original bytes. The modem identity replies
+JSON. The `ModemCommand.response` and tap retain the original bytes. The modem identity replies
 are `ESP32TL-MODEM`, `ESP32TL 1.0`, IMEI `350000000000000`, IMSI `260000000000000`. The default
 operator is `ESP32TL`, numeric `26000`, access technology 7.
 
@@ -75,12 +75,12 @@ PWRKEY starts timing on its active edge and compares the elapsed time on the ina
 output disable. It takes the on/off threshold from the current power state and changes RI one
 latency later. A lost supply prevents PWRKEY from restarting the modem. `Modem.reset_driven` times
 RESET the same way against `pulse_ms`, and on a powered modem calls `_set_power(t + LATENCY_NS,
-True, "reset")`. `_set_power` appends a `Restart` when the modem was powered and `t` is after 0,
+True, "reset")`. `_set_power` appends a `ModemRestart` when the modem was powered and `t` is after 0,
 clears `hung` and sets `_pwrkey_works` again.
 
 `hang` sets `hung` and `_pwrkey_works`, empties `_queued` and calls `_end_data`, so the parser is in command mode whatever the firmware sends next, and
 `Internet.stop` ends PPP and its TCP sessions with no output. In `_command`, a hung modem appends
-the `Command` with an empty response and returns nothing. PPP bytes the firmware goes on sending
+the `ModemCommand` with an empty response and returns nothing. PPP bytes the firmware goes on sending
 are noise in the command line, as for any loss of data mode. `_command` sees that noise and an `AT`
 stuck to it as one line that does not start with `AT`, and neither answers nor records it; clearing
 `_line` in `_end_data` would not help, because the noise comes after it. Power transitions clear

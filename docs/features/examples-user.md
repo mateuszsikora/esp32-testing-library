@@ -405,8 +405,7 @@ answers for a `Vehicle` and keeps every command it hears. It is a `Model`, so ev
 ```python
 from elm327 import Elm327, Vehicle
 
-from esp32tl import Board
-from esp32tl.bluetooth.peer import SppPeer
+from esp32tl import Board, SppPeer
 from esp32tl.units import seconds
 
 

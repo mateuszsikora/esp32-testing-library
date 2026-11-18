@@ -195,9 +195,9 @@ class Air:
     def __init__(self, *, board_clock: bool = False) -> None:
         self.board_clock = board_clock
         self._lock = threading.RLock()
-        self.loop = BoardLoop()
-        self.loop.set_exception_handler(self._failed)
-        self.link = Link()
+        self._loop = BoardLoop()
+        self._loop.set_exception_handler(self._failed)
+        self._link = Link()
         self._parties: list[Party] = []
         self._next_timer: int | None = None
         self._error: BaseException | None = None
@@ -207,9 +207,9 @@ class Air:
     @property
     def now(self) -> Duration:
         """The board's time on the air."""
-        return Duration(self.loop.now)
+        return Duration(self._loop.now)
 
-    def join(self, party: Party) -> None:
+    def _join(self, party: Party) -> None:
         """`party` is polled at every instant the air stops at from now on, the current one
         first, so that what it has due now is sent before anyone asks the air's next instant."""
         with self._lock:
@@ -221,17 +221,17 @@ class Air:
         off there; returns what it returned. From inside the loop, as from a coroutine on the
         air, `function` runs at once, and what it sets off follows when the caller yields."""
         with self._lock:
-            if self.loop.is_running():
+            if self._loop.is_running():
                 return function()
             result: list[T] = []
-            self.loop.call_soon(lambda: result.append(function()))
+            self._loop.call_soon(lambda: result.append(function()))
             # A function that raised fails the settle.
             self._settle()
             return result[0]
 
     def start(self, coroutine: Coroutine[Any, Any, T]) -> "asyncio.Task[T]":
         """A task for `coroutine` on the loop, run as far as it goes at the current instant."""
-        return self.call(lambda: self.loop.create_task(coroutine))
+        return self.call(lambda: self._loop.create_task(coroutine))
 
     def fail(self, error: Exception) -> None:
         """Fails the air with `error`, whose message says all: the call that moved the time
@@ -267,20 +267,21 @@ class Air:
 
     def _advance(self, until: int) -> None:
         with self._lock:
-            if until < self.loop.now:
+            if until < self._loop.now:
                 raise ValueError(
-                    f"the air is at {seconds(self.loop.now)}: it cannot go back to {seconds(until)}"
+                    f"the air is at {seconds(self._loop.now)}:"
+                    f" it cannot go back to {seconds(until)}"
                 )
             self._settle()
             while (next_time := self.quiet_until()) is not None and next_time <= until:
-                if next_time <= self.loop.now:
+                if next_time <= self._loop.now:
                     raise AirError(
                         f"something on the air is due at {seconds(next_time)}, and the air is at"
-                        f" {seconds(self.loop.now)} already"
+                        f" {seconds(self._loop.now)} already"
                     )
-                self.loop.now = next_time
+                self._loop.now = next_time
                 self._settle()
-            self.loop.now = until
+            self._loop.now = until
             self._settle()
 
     def _test_moves(self, call: str) -> None:
@@ -294,7 +295,7 @@ class Air:
     def wait(self, duration: Duration) -> None:
         """Lets the air run for `duration` from now."""
         self._test_moves("air.wait")
-        self._advance(self.loop.now + nanoseconds(duration, "air.wait"))
+        self._advance(self._loop.now + nanoseconds(duration, "air.wait"))
 
     def run(self, awaitable: Awaitable[T], *, within: Duration, description: str = "") -> T:
         """Runs `awaitable` on the loop until it completes, for at most `within` of the board's
@@ -319,7 +320,7 @@ class Air:
             return await awaitable
 
         with self._lock:
-            start = self.loop.now
+            start = self._loop.now
             deadline = start + limit
             task = self.start(awaited())
             while not task.done():
@@ -333,7 +334,7 @@ class Air:
                     what = description or "the awaitable"
                     raise NeverHappened(
                         f"{what} did not complete within {seconds(limit)}: waited from"
-                        f" {seconds(start)} to {seconds(self.loop.now)} of the board's time"
+                        f" {seconds(start)} to {seconds(self._loop.now)} of the board's time"
                     )
                 self._advance(next_time)
             return task.result()
@@ -341,17 +342,17 @@ class Air:
     def close(self) -> None:
         """Closes the loop: the air is over."""
         with self._lock:
-            if not self.loop.is_closed():
-                self.loop.close()
+            if not self._loop.is_closed():
+                self._loop.close()
 
     def _settle(self) -> None:
         """Runs the loop at the current instant until nothing is left to do there, the parties
         polled first; raises what failed meanwhile."""
         if self._error is None:
-            now = self.loop.now
+            now = self._loop.now
             for party in self._parties:
-                self.loop.call_soon(party.poll, now)
-            self._next_timer = self.loop.run_idle()
+                self._loop.call_soon(party.poll, now)
+            self._next_timer = self._loop.run_idle()
         if self._error is not None:
             error = self._error
             message = f"{self._error_context}: {error}" if self._error_context else str(error)

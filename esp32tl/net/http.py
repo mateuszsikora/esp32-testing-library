@@ -35,7 +35,7 @@ REASONS = {
 
 
 @dataclass(frozen=True)
-class Request:
+class HttpRequest:
     """One request: its method, target as sent, path (the target without the query, of an
     absolute-form target too), version, header fields in order and body."""
 
@@ -57,7 +57,7 @@ class Request:
 
 
 @dataclass(frozen=True)
-class Response:
+class HttpResponse:
     status: int = 200
     body: bytes = b""
     content_type: str = "text/plain; charset=utf-8"
@@ -73,8 +73,8 @@ class HttpServer:
     ) -> None:
         self._now = now
         self._log = log
-        self.requests: list[Request] = []
-        self._served: dict[str, Response] = {}
+        self.requests: list[HttpRequest] = []
+        self._served: dict[str, HttpResponse] = {}
 
     def serve(
         self,
@@ -107,11 +107,11 @@ class HttpServer:
         kind = content_type or (
             "text/plain; charset=utf-8" if isinstance(body, str) else "application/octet-stream"
         )
-        self._served[path] = Response(status, data, kind, tuple((headers or {}).items()))
+        self._served[path] = HttpResponse(status, data, kind, tuple((headers or {}).items()))
 
     def next_request(
         self, path: str | None = None, *, method: str | None = None
-    ) -> Callable[[], Request | None]:
+    ) -> Callable[[], HttpRequest | None]:
         """A non-consuming condition for the first request, for `path` and with `method` when
         given, appended after this call. The boundary is append order, even at equal
         timestamps. Polling never advances that boundary. A refused request is not recorded,
@@ -125,12 +125,14 @@ class HttpServer:
         )
         return Condition(lambda: self._find_request(path, method, start), description, "HTTP")
 
-    def find_request(self, path: str | None = None, *, method: str | None = None) -> Request | None:
+    def find_request(
+        self, path: str | None = None, *, method: str | None = None
+    ) -> HttpRequest | None:
         """Return the first match among the requests recorded so far, or None; consume nothing."""
         _refuse_query(path, "find_request")
         return self._find_request(path, method, 0)
 
-    def _find_request(self, path: str | None, method: str | None, start: int) -> Request | None:
+    def _find_request(self, path: str | None, method: str | None, start: int) -> HttpRequest | None:
         for request in self.requests[start:]:
             if (path is None or request.path == path) and (
                 method is None or request.method == method
@@ -143,9 +145,9 @@ class HttpServer:
     ) -> "_Exchange":
         return _Exchange(self, write, close)
 
-    def _answer(self, request: Request) -> Response:
+    def _answer(self, request: HttpRequest) -> HttpResponse:
         self.requests.append(request)
-        response = self._served.get(request.path, Response(404, b"not found\n"))
+        response = self._served.get(request.path, HttpResponse(404, b"not found\n"))
         self._log(f"http: {request.method} {request.target} → {response.status}")
         return response
 
@@ -199,7 +201,7 @@ class _Exchange:
             return
         method, target, version, headers = self._head
         path = _path(target)
-        request = Request(
+        request = HttpRequest(
             Duration(self._server._now()),
             method,
             target,
@@ -212,9 +214,11 @@ class _Exchange:
 
     def _fail(self, status: int) -> None:
         self._server._log(f"http: refused a request: {status} {REASONS[status]}")
-        self._respond(Response(status, f"{REASONS[status].lower()}\n".encode()), head_only=False)
+        self._respond(
+            HttpResponse(status, f"{REASONS[status].lower()}\n".encode()), head_only=False
+        )
 
-    def _respond(self, response: Response, *, head_only: bool) -> None:
+    def _respond(self, response: HttpResponse, *, head_only: bool) -> None:
         self._done = True
         lines = [f"HTTP/1.1 {response.status} {REASONS[response.status]}"]
         if response.status not in NO_CONTENT:

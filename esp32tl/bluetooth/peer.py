@@ -233,7 +233,7 @@ class BluetoothDevice:
                     f"{kind}: passkey is typed on a keyboard: give io_capability='keyboard_only'"
                 )
         public = _address(kind, address)
-        if air.link.find_classic_controller(public) is not None:
+        if air._link.find_classic_controller(public) is not None:
             raise PeerError(
                 f"{kind}: address {address} is another device's on the air: give each its own"
             )
@@ -334,7 +334,7 @@ class BluetoothDevice:
         """The device's power went off, or came back: nothing else here depends on it."""
 
     def _make(self, address: Address) -> Device:
-        controller = Controller(self.name, self.air.link, str(address))
+        controller = Controller(self.name, self.air._link, str(address))
         self._controller = controller
         config = DeviceConfiguration(
             name=self.name,
@@ -438,7 +438,7 @@ class SppPeer(BluetoothDevice):
             confirms=confirms,
             passkey=passkey,
         )
-        air.join(self)
+        air._join(self)
 
     @property
     def channel_open(self) -> bool:
@@ -604,7 +604,7 @@ class SppPeer(BluetoothDevice):
         return False
 
     def _refuse(self, connection: Connection, why: str) -> None:
-        self.refused.append(Refusal(Duration(self.air.loop.now), f"{_named(connection)}: {why}"))
+        self.refused.append(Refusal(Duration(self.air._loop.now), f"{_named(connection)}: {why}"))
 
     def _opened(self, dlc: rfcomm.DLC) -> None:
         self._dlc = dlc
@@ -627,7 +627,7 @@ class SppPeer(BluetoothDevice):
         dlc.on_disc_frame = disconnected  # type: ignore[method-assign,assignment]
 
     def _received(self, data: bytes) -> None:
-        now = self.air.loop.now
+        now = self.air._loop.now
         self.events.append(ChannelEvent(Duration(now), "out", data))
         with self._failing():
             self._queue(now, "receive", lambda: self._driving.receive(now, data))
@@ -644,7 +644,7 @@ class SppPeer(BluetoothDevice):
     def quiet_until(self) -> int | None:
         """The next time the source has something to send: its next answer, or its own
         `quiet_until`, which must be nanoseconds after the air's instant."""
-        now = self.air.loop.now
+        now = self.air._loop.now
         bound = self._call("quiet_until", self._driving.quiet_until)
         if bound is not None:
             if isinstance(bound, bool) or not isinstance(bound, int):
@@ -719,7 +719,7 @@ class SppPeer(BluetoothDevice):
     def _reaches_holder(self) -> bool:
         """Whether what the peer sends reaches the device that holds its channel."""
         assert self._holder is not None
-        return self.air.link.reaches(self.device.public_address, self._holder.peer_address)
+        return self.air._link.reaches(self.device.public_address, self._holder.peer_address)
 
 
 def _named(connection: Connection) -> str:

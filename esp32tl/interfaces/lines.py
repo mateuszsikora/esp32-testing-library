@@ -6,7 +6,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Literal
 
-from esp32tl.boards import Line
+from esp32tl.boards import LineRoute
 from esp32tl.interfaces import SourceError
 from esp32tl.interfaces.condition import Condition
 from esp32tl.link.boardlink import Interface
@@ -128,7 +128,7 @@ class Lines(Interface):
     def __init__(
         self,
         board: str,
-        lines: Mapping[str, Mapping[str, Line]],
+        lines: Mapping[str, Mapping[str, LineRoute]],
         now: Callable[[], int],
         log: RunLog | None = None,
     ) -> None:

@@ -61,10 +61,10 @@ A test that needs a part esp32tl has no model of writes one: at the far end of a
 `board.uart(role).model(...)` ([a UART's own model](pytest-plugin-user.md#a-uarts-own-model)), or
 behind an SPP channel, as an `SppPeer`'s `source`
 ([the model that answers](bluetooth-peer-user.md#the-model-that-answers)). Subclassing
-`esp32tl.sources.model.Model` lets it state every time as a `Duration`, as the rest of a test does:
+`esp32tl.Model` lets it state every time as a `Duration`, as the rest of a test does:
 
 ```python
-from esp32tl.sources.model import Model
+from esp32tl import Model
 from esp32tl.units import ms
 
 
@@ -84,7 +84,7 @@ class Echo(Model):
 
 - `receive(at, data)`, `poll(now)`, `quiet_until()` and `latency()` take and return `Duration`s:
   `at` and `now` are instants on the board's clock, each answer is an `(instant, bytes)` pair,
-  `Timed` in `esp32tl.sources.model`, and `quiet_until` and `latency` return a `Duration` or `None`.
+  `Timed` in `esp32tl`, and `quiet_until` and `latency` return a `Duration` or `None`.
   All four are abstract: a subclass that lacks one, or misspells it, raises `TypeError` when it is
   made.
 - On a UART, `receive`'s `at` is the instant the firmware wrote the first byte of `data` into the
@@ -103,12 +103,12 @@ class Echo(Model):
 ### A model that only answers
 
 Most parts answer what they hear and send nothing unprompted, and their `poll`, `quiet_until` and
-`latency` say only that. `esp32tl.sources.model.ReactiveModel` says it for them: a subclass
+`latency` say only that. `esp32tl.ReactiveModel` says it for them: a subclass
 defines `receive` and sets `answer_after`, the shortest time it takes to answer, as a class
 attribute or in `__init__`:
 
 ```python
-from esp32tl.sources.model import ReactiveModel
+from esp32tl import ReactiveModel
 from esp32tl.units import ms
 
 
@@ -128,12 +128,12 @@ it to the shortest time it takes to answer, as ms(1)`. The OBD-II reader's `Elm3
 ### A model of a part that frames by silence
 
 A Modbus RTU slave, and many binary sensors, take the bytes up to a silence on the line as one
-frame: 3.5 character times for RTU. `esp32tl.sources.model.IdleFramedModel` cuts what the model
+frame: 3.5 character times for RTU. `esp32tl.IdleFramedModel` cuts what the model
 hears into such frames: a subclass sets `gap`, the silence, and defines `on_frame(at, frame)`,
 which returns the answers, each at `at` or later:
 
 ```python
-from esp32tl.sources.model import IdleFramedModel
+from esp32tl import IdleFramedModel
 from esp32tl.units import ms
 
 
@@ -285,8 +285,7 @@ $GPGGA,120001.00,,,,,0,00,99.99,,,,,,*64
 | `gnss.degrade: give it hdop=, satellites=, or both` | `TypeError` | `degrade()` with neither |
 | `esp32sim: the test set up the model of uart.gnss and never called board.power_on(): it ran no firmware` | error at teardown | A test that described a receiver and never powered on |
 
-`ModelError` is a `ValueError`, in `esp32tl.sources.model.gnss`; `SourceError` is in
-`esp32tl.interfaces`. A call that is refused changes nothing. A backend that cannot give a model
+`ModelError` is a `ValueError` and `SourceError` an `Exception`, both from `esp32tl`. A call that is refused changes nothing. A backend that cannot give a model
 skips the test at the first model call, as for a replay
 ([board profiles](board-profiles-user.md#when-a-backend-cannot-give-it)); `esp32sim` gives it.
 

@@ -13,6 +13,10 @@ mypy checks its Python tests. CI hashes `examples/**` as well as `firmware/**`, 
 its firmware job and packs their runtime files into one tarball. Every test matrix member runs
 the examples from that restored build, without Docker. See [CI](../cicd.md).
 
+The examples' tests and helpers import from the public modules only, `esp32tl`, `esp32tl.units`
+and `esp32tl.recording` ([the public API](pytest-plugin-user.md#the-public-api)), and annotate
+the board as `Board`, never as a backend's class, as a project of its own would.
+
 ## GPS alarm implementation
 
 `examples/gps_alarm_clock/main/main.c` sets GPIO18 low before enabling its output and reads
@@ -113,7 +117,7 @@ sentence's scheduled time plus the same write margin.
 
 The storage-failure scenarios give the card a rule after the first rows are on the image, then
 wait for the firmware's console line with `board.wait_until(board.console.line(...))`, whose
-`Line.at` they compare with the rule's `hits`. The failed-write scenario uses
+`ConsoleLine.at` they compare with the rule's `hits`. The failed-write scenario uses
 `fail("write", count=1)` and checks the hit (`write`, `error`, not written), the `(not saved)`
 fix, GPIO18 high, the image unchanged, then `SD card writes again` at the next fix, GPIO18 low,
 the rule spent and the next row appended. The failed-read scenario uses `fail("read", count=1)`:

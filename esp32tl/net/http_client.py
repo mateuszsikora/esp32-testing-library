@@ -185,7 +185,9 @@ class HttpExchange:
         self._parser = _ResponseParser()
         self._result: ClientResponse | None = None
         self._error: ValueError | ConnectionEnded | None = None
-        self.response = Condition(self._find, f"HTTP {method} {path} response", "HTTP")
+        self.response: Condition[ClientResponse | None] = Condition(
+            self._find, f"HTTP {method} {path} response", "HTTP"
+        )
         connection._observers.append(self._update)
 
     def _update(self) -> None:
