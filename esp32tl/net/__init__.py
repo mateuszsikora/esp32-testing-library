@@ -16,7 +16,7 @@ from esp32tl.net.dns import Dns
 from esp32tl.net.ethernet import Ethernet
 from esp32tl.net.http import HttpServer
 from esp32tl.net.http_client import HttpClient
-from esp32tl.net.ip import ACK, SYN, Connection, Network, StreamService
+from esp32tl.net.ip import ACK, SYN, TCP, Connection, Fragmented, Network, StreamService, ipv4
 from esp32tl.net.mqtt import Broker
 from esp32tl.net.ntp import DEFAULT_UTC, Ntp
 from esp32tl.net.ppp import Ppp
@@ -156,7 +156,7 @@ class Internet:
             self._link_ended()
         else:
             self.dns.address = IPv4Address(self.lease.address).packed
-            self.ip.resume()
+            self.ip.resume(self.lease.address)
 
     def _carries(self) -> bool:
         """Whether the link carries IP now: on, and behind a station, with a lease."""
@@ -169,11 +169,15 @@ class Internet:
         service on the internet."""
 
         def stale(datagram: bytes) -> bool:
-            if len(datagram) < 34 or datagram[9] != 6:
+            try:
+                parsed = ipv4(datagram)
+            except Fragmented:
                 return False
-            if address is not None and str(IPv4Address(datagram[12:16])) != address:
+            if parsed is None or parsed[0] != TCP or len(parsed[3]) < 20:
                 return False
-            flags = datagram[(datagram[0] & 0x0F) * 4 + 13]
+            if address is not None and parsed[1] != address:
+                return False
+            flags = parsed[3][13]
             return bool(flags & SYN) and not flags & ACK
 
         self._up.queue = deque(entry for entry in self._up.queue if not stale(entry[1]))

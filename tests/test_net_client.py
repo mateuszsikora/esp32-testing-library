@@ -563,16 +563,19 @@ def test_what_an_orphaned_connection_cannot_take_is_discarded_and_counted() -> N
     device.net.listen(7000, service)
     device.send(40000, 7000, 100, 0, SYN)
     device.send(40000, 7000, 101, ISN + 1, ACK, window=1000)
-    device.net.device_reset(device.now, "the device reset")
     [write] = service.writes
+    write(b"x" * 5000)  # 1000 go, 4000 wait for the window
+    [flow] = device.net.ip._flows.values()
+    assert len(flow.pending) == 4000
+    device.net.device_reset(device.now, "the device reset")
+    # What waited is dropped with the device's stack, and nothing piles up behind it.
+    assert flow.orphaned and not flow.pending and flow.discarded == 4000
     for _ in range(100):
         write(b"x" * 1000)
-    [flow] = device.net.ip._flows.values()
-    # The first 1000 bytes fill the device's window; nothing piles up behind them.
-    assert flow.orphaned and not flow.pending and flow.discarded == 99_000
+    assert not flow.pending and flow.discarded == 104_000
     [close] = service.closes
     close()
-    line = "net: TCP 10.64.0.2:40000 → 10.64.0.1:7000 discarded 99000 bytes its service wrote"
+    line = "net: TCP 10.64.0.2:40000 → 10.64.0.1:7000 discarded 104000 bytes its service wrote"
     assert line + " with no device to answer" in device.events()
 
 
@@ -600,3 +603,16 @@ def test_the_gone_stacks_syn_on_the_path_never_arrives_but_its_data_does(
     # SYN would only open a flow nothing ends, so a new stack's SYN from 40001 finds none.
     assert bytes(service.received) == b"last words"
     assert [key[1] for key in device.net.ip._flows] == [40000]
+
+
+def test_a_malformed_datagram_on_the_path_survives_a_reset() -> None:
+    from esp32tl.units import ms
+
+    device = Device("ethernet").up()
+    device.net.set_path(rtt=ms(201))
+    bad = bytearray(34)
+    bad[0], bad[9] = 0x4F, 6  # a 60-byte header in 34 bytes, TCP
+    device.net.receive(device.now, device._wrap(bytes(bad)))
+    device.net.device_reset(device.now, "the device reset")
+    device.net.arrive(device.now + 200 * MS)  # the IP layer drops it, as before
+    assert not device.net.ip._flows

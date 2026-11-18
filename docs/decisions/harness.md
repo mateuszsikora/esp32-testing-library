@@ -4483,17 +4483,17 @@ at the real service too, for the same reason.
 
 A connection the link's end or a chip reset left open is marked orphaned: the stack on the device
 that held it is gone, and lwIP drops a netif's connections when it loses its address. When its
-service closes it, as the broker does at its keepalive or a takeover, it is dropped at once, with
-no FIN: none would be answered, whatever link the device is on by then, and kept, the flow would
-take the SYN of a new stack from the same port for the rest of the run. A DHCP lease the device
-gives up on a link that stays orphans the connections on that address too, since lwIP drops them
-with it. The link's end and a chip reset also drop the device's connections still in their
-handshake, which no service deadline would end. A virtual station that leaves the device's own
-access point orphans nothing: the device keeps its stack, and what a service writes or closes
-while the station is away waits for the station's next lease and then goes in order, since this
-TCP sends nothing again. What a service writes on an orphaned connection beyond the window is
-discarded and counted, so it cannot pile up. A chip reset or a lease given up takes the gone
-stack's SYNs off the network's path, as each would open a connection left in its handshake.
+service closes it, as the broker does at its keepalive or a takeover, it is dropped at once, with no
+FIN: none would be answered, whatever link the device is on by then, and kept, the flow would wait
+for that answer. A DHCP lease the device gives up on a link that stays orphans the connections on
+that address too, since lwIP drops them with it. The link's end and a chip reset also drop the
+device's connections still in their handshake, which no service deadline would end. A virtual
+station that leaves the device's own access point orphans nothing: the device keeps its stack, and
+what a service writes or closes while the station is away waits for the station's next lease and
+then goes in order, since this TCP sends nothing again. What a service writes on an orphaned
+connection beyond the window is discarded and counted, so it cannot pile up. A chip reset or a lease
+given up takes the gone stack's SYNs off the network's path, as each would open a connection left in
+its handshake.
 
 A device back with the same client ID before that takes its connection over (MQTT-3.1.4-2). With
 CleanSession=0 on both connections the session goes on and the old Will is discarded unsent; with
@@ -4527,8 +4527,15 @@ outliving a takeover, because with it at QoS 0 after each SUBSCRIBE one exchange
 and the PUBACK `test_a_message_whose_puback_is_lost_comes_again_with_dup` looks for went in one TCP
 segment with it; the takeover test reads that no Will is retained instead.
 
-**Postponed:** a challenge ACK (RFC 9293, 3.10.7.4) to a SYN that falls on a half-open connection,
-which would let a new stack that connects from the same port as before reset the old connection at
-once. Until then such a SYN is dropped while the old connection stands, as after a chip reset:
-until its service ends it. esp-mqtt over lwIP connected from another port after a power cycle in
-`tests/test_mqtt_session.py` (60660, then 55574), so no firmware has needed it yet.
+A new stack's SYN from the same port as a connection the old stack held resets that connection
+and opens a new one: what a challenge ACK (RFC 9293, 3.10.7.4) comes to, with the new stack's RST
+and its SYN again taken in one step. The broker publishes the old Will then, as at any reset. Kept
+until a keepalive, such a connection would take the port for good when no keepalive comes, on a
+connection whose CONNECT never came. esp-mqtt over lwIP connected from another port after a power
+cycle in `tests/test_mqtt_session.py` (60660, then 55574). A station that leaves the device's
+access point with bytes the device has not acknowledged ends that connection, as what was on the
+path is gone; one that comes back with another address loses the connections on the old one.
+
+**Rejected:** a bounded lifetime for an orphaned connection that never saw a CONNECT, because the
+network does not know what its service waits for, and the new stack's SYN on the same port is
+the event that shows the old connection gone.

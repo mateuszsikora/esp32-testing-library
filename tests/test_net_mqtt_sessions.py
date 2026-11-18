@@ -721,14 +721,11 @@ def test_a_new_stack_connects_from_the_old_port_once_the_keepalive_closed_it() -
     wire.now = 5 * S
     wire.net.start(wire.now)
     wire.open()
-    # Back before the keepalive, from the same port: its SYN falls on the old connection.
-    early = failures.Peer.__new__(failures.Peer)
-    early.wire, early.port, early.destination, early.seq, early.ack = wire, 4000, 1883, 1, 0
-    assert early.segment(0x02) == []
-    assert broker.find_message("c/status") is None
     wire.net.arrive(15 * S)
     assert broker.find_message("c/status", "offline") is not None
-    # The broker's close sent no FIN; nothing of the connection stays to take the next SYN.
+    # The broker's close sends no FIN, though the link is up again; nothing of the connection
+    # stays to take the next SYN.
+    assert wire.net.poll(15 * S) == []
     assert not wire.net.ip._flows
     wire.now = 20 * S
     new = failures.Peer(wire, 4000)
@@ -826,3 +823,26 @@ def test_a_stale_close_leaves_the_new_connection_on_its_port_alone() -> None:
     assert len(wire.net.ip._flows) == 1
     state = broker.session("c")
     assert state is not None and state.connected
+
+
+def test_a_new_stacks_syn_from_the_old_port_resets_the_orphaned_connection() -> None:
+    wire = failures.Wire()
+    broker = wire.net.broker
+    old = failures.Peer(wire, 4000)
+    old.send(will_connect(clean=False))
+    assert old.read() == NO_SESSION
+    wire.now = 1 * S
+    wire.net.stop(wire.now)
+    wire.now = 5 * S
+    wire.net.start(wire.now)
+    wire.open()
+    # Back before the keepalive, from the same port: the challenge ACK's RST, collapsed, resets
+    # the old connection, whose Will goes as at any reset, and the SYN opens a new one.
+    new = failures.Peer(wire, 4000)
+    events = [e["event"] for e in wire.net.events if "event" in e]
+    line = "net: TCP 10.64.0.2:4000 → 203.0.113.153:1883 reset: the device opened a new"
+    assert line + " connection from its port" in events
+    will = broker.find_message("c/status", "offline")
+    assert will is not None and will.at == Duration(5 * S) and will.connection_id == 1
+    new.send(will_connect(clean=False))
+    assert new.read() == SESSION_PRESENT

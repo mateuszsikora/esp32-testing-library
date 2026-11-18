@@ -126,6 +126,8 @@ _ENDS = {
     "lost": "link lost",
     "abandoned": "closed by its service with no device to answer",
     "unanswered": "lost before the device answered its SYN-ACK",
+    "renewed": "reset: the device opened a new connection from its port",
+    "gapped": "lost with what it had on its way when the link went",
 }
 
 
@@ -311,6 +313,11 @@ class Network:
             if flow is not None:
                 self._drop(flow, "reset")
             return
+        if flags & SYN and not flags & ACK and flow is not None and flow.orphaned:
+            # A new stack's SYN on a tuple only a gone stack held: a challenge ACK (RFC 9293,
+            # 3.10.7.4) would draw its RST, which resets the old connection, and its SYN again.
+            self._drop(flow, "renewed")
+            flow = None
         if flags & SYN and flow is None:
             mss = _mss(segment[20:header_length])
             if mss is None:
@@ -389,8 +396,8 @@ class Network:
         if not self._current(flow):
             return
         if flow.orphaned:
-            # Its FIN would reach no stack that holds the connection: kept, the flow would take
-            # the SYN of a new stack from the same port for the rest of the run.
+            # Its FIN would reach no stack that holds the connection, and nothing would answer
+            # it: kept, the flow would wait for that answer.
             self._drop(flow, "abandoned")
             return
         flow.fin_pending = True
@@ -461,6 +468,9 @@ class Network:
                 self._drop(flow, "lost", why)
             elif not self._unfinished(flow):
                 flow.orphaned = True
+                # What waited for the window: nothing will acknowledge what went before it.
+                flow.discarded += len(flow.pending)
+                flow.pending.clear()
 
     def _unfinished(self, flow: _Flow) -> bool:
         """Drop a device flow that cannot finish now that nothing will answer what the network
@@ -475,10 +485,14 @@ class Network:
             return False
         return True
 
-    def resume(self) -> None:
-        """The link carries IP again: send what waited for it, on every flow."""
+    def resume(self, local: str | None = None) -> None:
+        """The link carries IP again: send what waited for it, on every flow from our `local`
+        address, when given; one from another, which that end no longer holds, is lost."""
         for flow in list(self._flows.values()):
-            self._flush(flow)
+            if local is not None and flow.key[2] != local:
+                self._drop(flow, "lost")
+            else:
+                self._flush(flow)
 
     def lose_link(self, *, orphan: bool = True) -> None:
         """The link ended. With `orphan`, the device's stack went with it: `forget_device`.
@@ -494,6 +508,10 @@ class Network:
                 self._drop(flow, "lost")
             elif not flow.established:
                 self._drop(flow, "unanswered")
+            elif flow.snd_una < flow.snd_nxt:
+                # What it sent and the device has not acknowledged may be on the cleared path or
+                # in the air: nothing sends it again, and the stream would have a gap.
+                self._drop(flow, "gapped")
 
     def reset(self) -> None:
         """Lose every TCP connection, the device's included; notify services once, MQTT Wills

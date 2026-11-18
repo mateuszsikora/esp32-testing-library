@@ -1445,22 +1445,23 @@ that references to its number keep their meaning.
 - **258.** The end of the device's link (power off, coverage lost, a dropped or hung call, the
     access point off the air) loses the connections the test opened and leaves the broker's end of
     each the device opened open and silent: the broker's deadlines run with the link down, and the
-    keepalive expiry publishes the Will 1.5 times the keepalive after the device's last packet, not
-    at the loss. A client back with the same ID before then, connecting from another source port,
-    takes the connection over (MQTT-3.1.4-2); with CleanSession=0 on both connections the old Will
-    is discarded unsent, and with CleanSession=1 on either it is published at the takeover, as it is
-    when the CONNECT comes at the instant the old keepalive runs out; a CONNECT after the expiry
-    finds the old connection closed and its Will published by the expiry. A SYN from the old source
-    port gets no answer while the old connection stands, and the Will goes at the keepalive expiry.
-    A device connection the link's end, a chip reset or a DHCP lease given up left open is dropped,
-    with no FIN, when its service closes it, and so are, at once, one its service had closed and one
-    still in its handshake, so a new stack's SYN from the same port then opens a new connection; the
-    gone stack's SYNs still on the path never arrive, its data does; what its service writes beyond
-    the window is discarded and counted. A virtual station leaving the device's access point leaves
-    its established connections as they were: what their service writes or closes meanwhile reaches
-    the device in order once the station is back. A stale close of an ended connection leaves the
-    new one on its port alone. While the link is down, a bridged connection keeps its millisecond
-    turns. A keepalive of 0 sets no deadline.
+    keepalive expiry publishes the Will, when the client set one, 1.5 times the keepalive after the
+    device's last packet, not at the loss. A client back with the same ID before then, connecting
+    from another source port, takes the connection over (MQTT-3.1.4-2); with CleanSession=0 on both
+    connections the old Will is discarded unsent, and with CleanSession=1 on either it is published
+    at the takeover, as it is when the CONNECT comes at the instant the old keepalive runs out; a
+    CONNECT after the expiry finds the old connection closed and its Will published by the expiry. A
+    SYN from the old source port resets the old connection, its Will going then, and opens a new
+    one. A device connection the link's end, a chip reset or a DHCP lease given up left open is
+    dropped, with no FIN, when its service closes it, and so are, at once, one its service had
+    closed and one still in its handshake, and what waited for its window is discarded; the gone
+    stack's SYNs still on the path never arrive, its data does; what its service writes beyond the
+    window is discarded and counted. A virtual station leaving the device's access point ends the
+    device's connections with bytes not acknowledged and leaves the rest as they were: what their
+    service writes or closes meanwhile reaches the device in order once the station is back with the
+    same address, and a station back with another loses them. A stale close of an ended connection
+    leaves the new one on its port alone. While the link is down, a bridged connection keeps its
+    millisecond turns. A keepalive of 0 sets no deadline.
     `tests/test_net_ip.py::test_modem_link_loss_leaves_tcp_open_and_the_will_to_the_keepalive`,
     `tests/test_net_mqtt_sessions.py::test_a_lost_link_publishes_the_will_when_the_keepalive_runs_out`,
     `tests/test_net_mqtt_sessions.py::test_a_device_back_before_its_keepalive_takes_over_its_connection`,
@@ -1479,6 +1480,10 @@ that references to its number keep their meaning.
     `tests/test_net_client.py::test_an_unsupported_dhcp_message_leaves_the_address_and_the_connections`,
     `tests/test_net_client.py::test_what_an_orphaned_connection_cannot_take_is_discarded_and_counted`,
     `tests/test_net_client.py::test_the_gone_stacks_syn_on_the_path_never_arrives_but_its_data_does`,
+    `tests/test_net_mqtt_sessions.py::test_a_new_stacks_syn_from_the_old_port_resets_the_orphaned_connection`,
+    `tests/test_net_station.py::test_a_station_back_with_another_address_loses_the_connections_on_the_old_one`,
+    `tests/test_net_station.py::test_a_station_that_leaves_with_bytes_unacknowledged_ends_the_connection`,
+    `tests/test_net_client.py::test_a_malformed_datagram_on_the_path_survives_a_reset`,
     `tests/test_net_bridge.py::test_a_lost_link_leaves_the_stream_at_the_service_open_until_the_run_ends`,
     `tests/test_modem_model.py::test_the_keepalive_runs_out_with_the_call_ended`,
     `tests/test_mqtt_session.py::test_a_lost_link_publishes_the_will_at_the_keepalive_not_at_the_loss`,

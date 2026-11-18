@@ -389,3 +389,55 @@ def test_what_a_service_writes_while_the_station_is_away_waits_for_it() -> None:
     segments = [frame[14 + 20 :] for _, frame in sent]
     assert b"".join(segment[20:] for segment in segments) == b"while away"
     assert segments[-1][13] & FIN
+
+
+def station_service(ap: SoftAP) -> tuple[list[Callable[[bytes], None]], list[Callable[[], None]]]:
+    writes: list[Callable[[bytes], None]] = []
+    closes: list[Callable[[], None]] = []
+
+    class Service:
+        def accept(
+            self, peer: tuple[str, int], write: Callable[[bytes], None], close: Callable[[], None]
+        ) -> "Service":
+            writes.append(write)
+            closes.append(close)
+            return self
+
+        def on_data(self, data: bytes) -> None:
+            pass
+
+        def on_close(self) -> None:
+            pass
+
+    ap.net.listen(7000, Service())
+    device_tcp(ap, 100, 0, SYN)
+    device_tcp(ap, 101, ISN + 1, ACK)
+    return writes, closes
+
+
+def test_a_station_back_with_another_address_loses_the_connections_on_the_old_one() -> None:
+    ap = SoftAP().up()
+    writes, _ = station_service(ap)
+    ap.net._station_link(ap.now, False)
+    writes[0](b"while away")
+    ap.server = Dhcp(lambda: ap.now, local="192.168.4.1", device="192.168.4.3")
+    ap.net._station_link(ap.now, True)
+    [(_, discover)] = ap.net.poll(ap.now)
+    [(_, request)] = ap.reply(discover)
+    ap.reply(request)
+    assert ap.net.lease is not None and ap.net.lease.address == "192.168.4.3"
+    # Nothing goes from the old address, which this end no longer holds.
+    assert not ap.net.ip._flows
+    events = [e.get("event") for e in ap.net.events]
+    assert "net: TCP 192.168.4.1:40000 → 192.168.4.2:7000 link lost" in events
+
+
+def test_a_station_that_leaves_with_bytes_unacknowledged_ends_the_connection() -> None:
+    ap = SoftAP().up()
+    writes, _ = station_service(ap)
+    writes[0](b"on its way")  # sent, never acknowledged: the device's ACK is not sent here
+    ap.net._station_link(ap.now, False)
+    assert not ap.net.ip._flows
+    events = [e.get("event") for e in ap.net.events]
+    line = "net: TCP 192.168.4.1:40000 → 192.168.4.2:7000 lost with what it had on its way"
+    assert line + " when the link went" in events
