@@ -325,9 +325,15 @@ threads; a connect in progress ends within `CONNECT_SECONDS`. The backend calls 
   not timestamps, and polling does not change the captured offset. `find_message` scans
   from index zero with the same topic/payload filters; `find_connection` reads the first CONNECT.
   `mark()` returns a `Mark` holding the broker and `len(messages)` at the call;
-  `find_messages(topic, payload, since=, client=)` walks `messages` from that index (zero for
-  `None`) through `_matching`, the generator `_first` takes its first record from, keeps
-  `message.client == client` when a client is given, and returns a new list. A `since` that is not
+  `find_messages(topic, payload, since=, client=, will=)` walks `messages` from that index (zero for
+  `None`) through `_messages`, keeps `message.client == client` when a client is given, and
+  returns a new list. `_messages` is `_matching`, the generator `_first` takes its first record
+  from, keeping `message.will is will` when `will` is not `None`. `next_message` and
+  `find_message` take their first record from `_messages` too, so the three filter Wills alike,
+  and `_will_check` refuses any other `will` than `True`, `False` or `None` with `TypeError`
+  before anything is read. `_Session._connect` builds the session's Will as a `Message` with
+  `will=True`; `on_close` routes a copy restamped with the time of the loss, so the flag reaches
+  `messages` and `retained`, and nothing else sets it. A `since` that is not
   a `Mark` raises `TypeError` before anything is read, and a `Mark` made by another broker raises
   `ValueError` rather than reading an index into a history it was not taken from. The index is a
   valid boundary because `messages` is append-only and never cleared, network reset included.
@@ -555,7 +561,8 @@ The determinism checker compares it exactly, times after a TLS handshake include
 `tests/test_net_ppp.py`, `test_net_mru.py`, `test_net_ip.py`, `test_net_services.py`, `test_net_mqtt.py` and
 `test_net_tls.py` use handmade packets, independent checksum/framing calculations and a real TLS
 client in memory. They check malformed inputs, partial frames, flow control, sequence wrap,
-connection loss, keepalive, retained delivery, topic filters, Wills, UTC and certificate trust.
+connection loss, keepalive, retained delivery, topic filters, Wills, UTC and certificate trust;
+`test_net_mqtt.py` also tells a Will from the same bytes the client published itself by `will`.
 `test_net_tls.py` also completes the handshake with OpenSSL's client over every suite and group,
 with and without the extended master secret, and carries data both ways; it checks that the
 server writes the same bytes for the same ClientHello after the CAs are numbered from 0 again,

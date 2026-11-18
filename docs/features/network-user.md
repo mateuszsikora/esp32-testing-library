@@ -47,10 +47,10 @@ silent; an AT-only model still works without PPP. The network's broker is `modem
 
 | Broker API | Meaning |
 |---|---|
-| `next_message(topic="#", payload=None)` | Condition returning the first matching message recorded **after this method call**; MQTT topic filters are accepted, payload is bytes or text |
-| `find_message(topic="#", payload=None)` | Immediate history query returning the first recorded match, or `None`; the same filters as `next_message` |
+| `next_message(topic="#", payload=None, *, will=None)` | Condition returning the first matching message recorded **after this method call**; MQTT topic filters are accepted, payload is bytes or text; `will=True` keeps only Wills, `will=False` only the rest ([Wills](#a-will-in-the-history)) |
+| `find_message(topic="#", payload=None, *, will=None)` | Immediate history query returning the first recorded match, or `None`; the same filters as `next_message` |
 | `mark()` | A `Mark`: an opaque position at the end of `messages` now, for `find_messages(since=...)` ([every message since a point](#every-message-since-a-point)) |
-| `find_messages(topic="#", payload=None, *, since=None, client=None)` | Immediate history query returning a new list of every recorded match after `since` (from the start when `None`), in append order; `client` keeps one client ID's messages |
+| `find_messages(topic="#", payload=None, *, since=None, client=None, will=None)` | Immediate history query returning a new list of every recorded match after `since` (from the start when `None`), in append order; `client` keeps one client ID's messages, `will` filters as in `next_message` |
 | `subscribed(topic)` | Condition true while an active client has this exact subscription filter, including an existing subscription |
 | `next_connection()` | Condition returning the first accepted MQTT CONNECT recorded **after this method call** |
 | `find_connection()` | Immediate history query returning the first accepted CONNECT, or `None`, even if that connection has closed |
@@ -70,9 +70,10 @@ silent; an AT-only model still works without PPP. The network's broker is `modem
 | `next_delivery(topic="#", payload=None)` | Condition returning the first matching delivery recorded **after this method call**; the same filters as `next_message` |
 | `find_delivery(topic="#", payload=None)` | Immediate history query returning the first recorded match, or `None` |
 
-A message has `at` (`Duration`), `client`, `topic`, `payload` (bytes), `qos`, `retain`, and
-`text` (UTF-8 with replacement). Incoming publications also expose `connection_id`, `packet_id`
-(`None` for QoS 0), `dup` and `publication` (a `Publication` handle for QoS 1, otherwise `None`).
+A message has `at` (`Duration`), `client`, `topic`, `payload` (bytes), `qos`, `retain`, `will`
+and `text` (UTF-8 with replacement). `will` is `True` only for a Will the broker published.
+Incoming publications also expose `connection_id`, `packet_id` (`None` for QoS 0), `dup` and
+`publication` (a `Publication` handle for QoS 1, otherwise `None`).
 Test publications use client `TEST_CLIENT` (`"(test)"`, exported by `esp32tl.net.mqtt`) and
 have no connection, packet ID or handle. Wills carry their original connection ID but have no
 packet ID or handle. A client record has `at`,
@@ -141,13 +142,45 @@ appended after it is included even when its board time equals the mark's, or tha
 before it, and a message appended before it is excluded. The list is in append order, a new list
 each call, and reading it consumes nothing; take a new mark for a new point. `client` is a client
 ID, compared exactly: a Will carries its client's ID, so `client=DEVICE` keeps the device's Will
-too, and `client=TEST_CLIENT` keeps the test's own publications. Without `client`, every client's
-messages are included, test publications too, as in `find_message`. A QoS 1 retransmission is a
-record of its own, with `dup` set. A mark belongs to the broker that made it: another broker's
-`find_messages` raises `ValueError` (`mqtt: this mark belongs to another broker`), and a `since`
-that is not a mark, an index into `messages` for one, raises `TypeError`
-(`mqtt: since takes a mark from broker.mark()`). `next_message` takes no mark, and the mark is
-the message history's own: it orders nothing against `clients`, `deliveries` or another service.
+too, unless `will=False` leaves it out, and `client=TEST_CLIENT` keeps the test's own publications.
+Without `client`, every client's messages are included, test publications too, as in `find_message`.
+A QoS 1 retransmission is a record of its own, with `dup` set. A mark belongs to the broker that
+made it: another broker's `find_messages` raises `ValueError`
+(`mqtt: this mark belongs to another broker`), and a `since` that is not a mark, an index into
+`messages` for one, raises `TypeError` (`mqtt: since takes a mark from broker.mark()`).
+`next_message` takes no mark, and the mark is the message history's own: it orders nothing against
+`clients`, `deliveries` or another service.
+
+### A Will in the history
+
+When a connection with a Will closes without a DISCONNECT (keepalive expiry, a transport loss, a new
+connection taking over its client ID, a malformed packet, a network reset, `wifi.access_point_off()`
+or `broker.disconnect`), the broker publishes the Will and records it in `messages` at the time of
+the loss. Its `client` is the ID of the client that set it, as for that client's own publications,
+and its `will` is `True`; a PUBLISH the client sent and a test publication have `will` `False`, even
+when the topic, payload, QoS and retain flag are the Will's own. A retained Will in `retained` has
+`will` set too. A check over what the device published itself leaves the Will out, and a test can
+ask whether the device sent its offline message before it slept or the broker sent it after:
+
+```python
+from esp32tl.units import seconds
+
+DEVICE = "logger-1"  # The client ID the firmware connects with.
+
+mark = broker.mark()
+board.wait(seconds(120))
+own = broker.find_messages("device/#", since=mark, client=DEVICE, will=False)
+assert all(len(m.payload) <= 256 for m in own)
+# It went to sleep with a DISCONNECT after its own "offline": the broker published no Will.
+assert broker.find_messages("device/status", "offline", since=mark, client=DEVICE, will=False)
+assert broker.find_messages("device/status", since=mark, will=True) == []
+```
+
+`will=None`, the default, keeps both. A `will` other than `True`, `False` or `None` raises
+`TypeError` (`mqtt: will takes True, False or None`). The condition names say which it waits for:
+`the next MQTT Will on 'device/status'` and `the next MQTT message other than a Will on
+'device/status'`. A `Delivery` of a Will to a subscriber carries no such flag: it is a PUBLISH
+the broker wrote, as every delivery is.
 
 Polling any MQTT event condition does **not** consume a match or move its boundary. Repeated
 calls and waits return the same first match; construct a new `next_*` condition for a new wait.
