@@ -611,6 +611,7 @@ fn run_with(
         uart0_stream: guest.uart0.is_some(),
         peer_timeout: None,
         signal: &signal,
+        parent_gone: None,
         wifi: None,
         rom: &[],
         card: card.cloned(),
@@ -1547,6 +1548,7 @@ fn a_signal_ends_the_slice_in_progress_with_stats() {
         uart0_stream: false,
         peer_timeout: None,
         signal: &signal,
+        parent_gone: None,
         wifi: None,
         rom: &[],
         card: None,
@@ -1727,6 +1729,7 @@ fn on_the_emulator_the_slices_stop_a_guest_asleep_in_waiti_at_the_block_point() 
         uart0_stream: false,
         peer_timeout: None,
         signal: &signal,
+        parent_gone: None,
         wifi: None,
         rom: &[],
         card: None,
@@ -1804,6 +1807,7 @@ fn on_the_emulator_a_byte_into_a_full_rx_fifo_is_lost_and_raises_the_overflow_in
         uart0_stream: false,
         peer_timeout: None,
         signal: &signal,
+        parent_gone: None,
         wifi: None,
         rom: &[],
         card: None,
@@ -1860,6 +1864,54 @@ fn a_signal_in_the_peers_turn_sends_what_came_after_the_block_point_then_stats()
     let stats = r.peer.stats();
     assert_eq!(stats.str_or("end", ""), "signal");
     assert_eq!(num(stats, "t"), ns(cycles(b) + 1));
+}
+
+/// A run with `--parent-fd` whose signal flag is set from the start, as `parent::watch` or a
+/// `SIGTERM` leaves it, with `parent_gone` as given: it ends at the first check of the flag, after
+/// turn 0.
+fn signalled(parent_gone: bool) -> (End, FakePeer) {
+    let mut guest = FakeGuest::new(vec![]).with_routes(&[modem(9600)]);
+    let mut peer = FakePeer::new(&[MODEM_TX], idle(None, None));
+    let (gone, signal) = (AtomicBool::new(parent_gone), AtomicBool::new(true));
+    let shared = guest.shared.clone();
+    let opts = Options {
+        end_cycle: cycles(10 * MS),
+        console: false,
+        usb_console: false,
+        uart0_stream: false,
+        peer_timeout: None,
+        signal: &signal,
+        parent_gone: Some(&gone),
+        wifi: None,
+        rom: &[],
+        card: None,
+        realtime: false,
+        flash_out: None,
+        hci: None,
+    };
+    let (end, _) = Session::new(&mut guest, &mut peer, shared, opts).run();
+    (end, peer)
+}
+
+#[test]
+fn the_parent_s_end_ends_the_run_as_the_peer_gone_without_stats() {
+    let (end, peer) = signalled(true);
+    match &end {
+        End::PeerGone(detail) => assert_eq!(detail, crate::parent::GONE),
+        end => panic!("{end:?}"),
+    }
+    assert_eq!(end.exit_code(), 4);
+    assert!(peer.of("stats").is_empty(), "nobody is left to read stats");
+}
+
+#[test]
+fn a_signal_while_the_parent_lives_ends_the_run_with_stats() {
+    // the backend always passes --parent-fd, and sends SIGTERM to a runner in no held turn
+    let (end, peer) = signalled(false);
+    assert!(matches!(end, End::Signal), "{end:?}");
+    assert_eq!(end.exit_code(), 0);
+    assert_eq!(peer.of("stats").len(), 1);
+    assert_eq!(peer.stats().str_or("end", ""), "signal");
 }
 
 #[test]
@@ -2203,6 +2255,7 @@ fn on_the_emulator_gpio_in_reaches_the_guest_and_its_output_comes_back_as_gpio_o
         uart0_stream: false,
         peer_timeout: None,
         signal: &signal,
+        parent_gone: None,
         wifi: None,
         rom: &[],
         card: None,
@@ -2552,6 +2605,7 @@ fn run_wifi_mode(
         uart0_stream: false,
         peer_timeout: None,
         signal: &signal,
+        parent_gone: None,
         wifi: Some(wifi),
         rom: &[],
         card: None,
@@ -3067,6 +3121,7 @@ fn run_with_slot(seconds: f64, peer: FakePeer, slot: &sd_card::Shared) -> Run {
         uart0_stream: false,
         peer_timeout: None,
         signal: &signal,
+        parent_gone: None,
         wifi: None,
         rom: &[],
         card: Some(slot.clone()),
@@ -3366,6 +3421,7 @@ fn run_realtime(seconds: f64, mut guest: FakeGuest, mut peer: FakePeer) -> Run {
         uart0_stream: false,
         peer_timeout: None,
         signal: &signal,
+        parent_gone: None,
         wifi: None,
         rom: &[],
         card: None,
@@ -3707,6 +3763,7 @@ fn each_flash_dump_ack_starts_the_peer_timeout_again() {
         uart0_stream: false,
         peer_timeout: Some(Duration::from_secs(3600)),
         signal: &signal,
+        parent_gone: None,
         wifi: None,
         rom: &[],
         card: None,

@@ -22,6 +22,7 @@ fn minimal_command_line() {
             console_port: ConsolePort::Uart0,
             board: None,
             peer_timeout: Some(Duration::from_secs(60)),
+            parent_fd: None,
             sd_card: None,
             wifi: None,
             realtime: false,
@@ -284,6 +285,29 @@ fn realtime_needs_a_board() {
     );
     let opts = parse(args(&["--realtime", "--board", "socket:/tmp/b"])).unwrap();
     assert!(opts.realtime);
+}
+
+#[test]
+fn parent_fd_names_a_descriptor_and_needs_a_board() {
+    assert_eq!(
+        parse_str(&format!("{MINIMAL} --parent-fd 3")),
+        Err(Error::Usage(
+            "--parent-fd ends a run with a peer when the process that started it is gone: it \
+             needs --board"
+                .into()
+        ))
+    );
+    for bad in ["-1", "x", "3.0"] {
+        assert_eq!(
+            parse_str(&format!("{MINIMAL} --board socket:s --parent-fd {bad}")),
+            Err(Error::Usage(format!(
+                "--parent-fd: expected a file descriptor, a number from 0, got {bad:?}"
+            )))
+        );
+    }
+    let opts = parse_str(&format!("{MINIMAL} --board socket:s --parent-fd 0")).unwrap();
+    assert_eq!(opts.parent_fd, Some(0));
+    assert_eq!(parse_str(MINIMAL).unwrap().parent_fd, None);
 }
 
 #[test]

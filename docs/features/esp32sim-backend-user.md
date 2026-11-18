@@ -229,6 +229,17 @@ the test's wait. A test that is waiting then gets the `RunEnded` above, the reas
 handshake the two sides disagree on is the exception: the runner finds the mismatch itself and
 exits with code 3.
 
+A pytest killed without its teardown (`kill -9`, an out-of-memory kill, a CI job cancelled after
+its grace period, a crashed xdist worker) leaves no process running beside it. The runner ends
+within a few wall milliseconds, even in the middle of a long `board.wait`: it holds the read end of
+a pipe whose other end only pytest holds, and the end of pytest closes it
+([runner](runner-user.md#ended-with-the-process-that-started-it)). The process that copies the
+runner's output to `dut.log` notices that its parent is gone within 20 ms, and ends with it
+pytest-embedded's message queue process, and so its dut listener and Python's resource tracker.
+Left behind are files: the link's directory (`esp32tl-*` under the system's temporary directory),
+the logs, and pytest's temporary directories. The details are in
+[What a killed session leaves](esp32sim-backend-technical.md#what-a-killed-session-leaves).
+
 ## When the run fails
 
 The run passes when the runner exited with code 0, the harness found nothing wrong with the

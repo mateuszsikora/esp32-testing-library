@@ -13,6 +13,7 @@ The crate is `runner/`, package `esp32tl-runner`:
 | `runner/src/hci.rs` | `Forwarder`, the `HciController` of `--bt` in esp32sim's VHCI session: it keeps the guest's H4 packets with their bus cycle for the run loop and hands the guest the peer's |
 | `runner/src/protocol.rs` | the wire format: time conversion, base64, parsing the peer's messages and writing the runner's |
 | `runner/src/transport.rs` | `SocketLink`, the Unix or TCP socket: buffered NDJSON writes, line reads, the signal flag and the time limits |
+| `runner/src/parent.rs` | `watch`, the thread of `--parent-fd`: at end of file on the parent's pipe it sets the signal flag, so that the run ends as with the peer gone ([below](#interfaces)) |
 
 Each module's unit tests are in a `tests.rs` of its own: `runner/src/tests.rs` for `main.rs`,
 `runner/src/<module>/tests.rs` for the others. It drives esp32sim through its chip crates,
@@ -94,12 +95,13 @@ its pin, `357b0e5`.
    the chip would. Any other `Stop` returns. `Stop::Halted` is what `Machine::run` returns once
    `bus.cycles() >= max_cycles` (`esp-soc/src/machine.rs`).
 
-   With `--board`, `run_with_board`: it connects with `SocketLink::unix(path)` or
-   `SocketLink::tcp(address, --peer-timeout)`, which tries every address the name resolves to
-   with `connect_timeout` and sets `TCP_NODELAY`; a failure prints the `end: cannot connect` line
-   and exits 4. Only then does it install the signal handlers (see Interfaces) and make
-   `--peer-timeout` the write limit, and the wall clock starts. Then `session::Session::run`
-   ([below](#the-session)), and `m.drain_console()`.
+   With `--board`, `run_with_board`: with `--parent-fd N` it first starts `parent::watch(N)`,
+   which fails with exit 2 when `N` is not an open descriptor or not a pipe; then it connects with
+   `SocketLink::unix(path)` or `SocketLink::tcp(address, --peer-timeout)`, which tries every address
+   the name resolves to with `connect_timeout` and sets `TCP_NODELAY`; a failure prints the
+   `end: cannot connect` line and exits 4. Only then does it install the signal handlers (see Interfaces)
+   and make `--peer-timeout` the write limit, and the wall clock starts. Then
+   `session::Session::run` ([below](#the-session)), and `m.drain_console()`.
 5. **Report.** With a slot, its `SD card:` line first, from `Slot::stats` and the counts of
    cards put in and taken out. Without `--board`, the stop line, with `stop_name(&stop)`, `m.seconds()` (bus
    cycles / `CPU_HZ`), the wall time and `m.reboots`; `Halted` exits 0, anything else prints the
@@ -776,6 +778,18 @@ esp32sim's pacing itself is `Machine::rt_pace`
 The command line and the usage text: [runner-user.md](runner-user.md#run-an-image).
 
 - stdin: not read.
+- `--parent-fd N`: a descriptor the runner inherits, read on a thread of its own named
+  `parent-fd` (`parent::watch`) and never written. `watch` first calls `libc::fstat` on it and
+  refuses, without taking it, a descriptor that is not open or not a FIFO (`S_IFIFO`): a file or
+  `/dev/null` would end the run at once, a terminal would lose its input. Then it takes it with
+  `File::from_raw_fd`. What the read returns is dropped; at end of file, or a
+  read that fails but for `EINTR`, the thread sets the run's `parent_gone` flag, then the signal
+  flag below, both `SeqCst`, and ends. The run loop and `SocketLink` see the signal flag where
+  they see a signal's, relaxed, and `Session::run` turns the `End::Signal` that follows into
+  `End::PeerGone(parent::GONE)` when an acquire load of the signal flag, then `parent_gone`, find
+  both set, before `--flash-out` and `finish`: no `stats`, exit 4. The acquire load is what makes
+  the store of `parent_gone` visible there. Because the signal
+  flag is set, a `SIGTERM` or `SIGINT` after that ends the process at once with `128 + N`.
 - stdout: the guest's console, UART0 or with `--console-port usb` the USB-Serial/JTAG
   controller, and nothing else, written by esp-soc's `Machine::drain_console`, so
   that whoever reads stdout alone gets the guest's output as the guest wrote it; nothing with
@@ -814,7 +828,8 @@ The command line and the usage text: [runner-user.md](runner-user.md#run-an-imag
   `protocol.rs` writes and parses every message, `session.rs` decides when each goes.
 - Exit codes: 0 for `Stop::Halted`, and with `--board` for `stop` from the peer and for
   `SIGTERM` or `SIGINT`; 1 for any other stop; 2 for usage errors and inputs that cannot be
-  loaded; 3 for a protocol error by the peer; 4 when the connection fails or the peer is gone;
+  loaded; 3 for a protocol error by the peer; 4 when the connection fails, the peer is gone, or
+  `--parent-fd` reaches end of file;
   `128 + N` for a second signal with `--board`. esp32sim also exits 2 on a usage error, but panics (exit 101) on a ROM ELF it
   cannot load. 0 and 1 follow the stop line; 2 comes before the run starts, without it. A panic,
   in the runner or in esp32sim during the run, exits 101 with Rust's panic message and no stop
@@ -877,8 +892,11 @@ pinned like the others: its `SdStore` trait and `FileStore`, the store of esp32s
 `--sd-rw`; the unit tests use its `MemStore`.
 
 **Dependencies besides esp32sim.** `signal-hook` 0.4 (`default-features = false`) for the signal
-handlers: std cannot install one. JSON goes through esp-soc's own parser (`esp_soc::json`, which
-its Cooja link uses) and `esp_soc::web::json_escape`, so the crate adds no JSON crate.
+handlers: std cannot install one. `libc` 0.2, already in the lock file through `signal-hook`, for
+the `fstat` of `--parent-fd`'s descriptor before the runner takes it: std's `metadata` needs a
+`File`, which would own a descriptor that may not be open. JSON goes through esp-soc's own parser
+(`esp_soc::json`, which its Cooja link uses) and `esp_soc::web::json_escape`, so the crate adds no
+JSON crate.
 
 **The esp32sim pin.** esp32sim is not on crates.io, so `runner/Cargo.toml` takes the chip crates
 `esp32`, `esp32s3`, `esp32c3`, `esp32c6`, `esp32p4` and `esp32s31`, `esp-soc` (and `emu-core`, for the `Bus` trait whose `tick` runs a deep sleep in long steps and for
@@ -959,6 +977,8 @@ Every message starts with `esp32tl-runner: `. Usage errors exit 2 and add a seco
 | `--wifi-nearby needs the access point of --wifi` | `--wifi-nearby` without `--wifi` |
 | `--wifi-nearby: {error}` | esp32sim's `BeaconAp::parse_all` refuses the specs: `invalid nearby-network option '{entry}': expected key=value`, `a nearby network needs an ssid of 1 to 32 bytes`, `more than 32 nearby networks`, `nearby networks '{a}' and '{b}' share the BSSID {bssid}`, and the like for a bad `chan`, `rssi`, `secure` or `bssid` |
 | `--bt makes the peer the guest's Bluetooth controller: it needs --board` | `--bt` without `--board` |
+| `--parent-fd ends a run with a peer when the process that started it is gone: it needs --board` | `--parent-fd` without `--board` |
+| `--parent-fd: expected a file descriptor, a number from 0, got {v:?}` | not a whole number, or below 0 |
 | `--wifi-nearby ssid={ssid}: a network around with the access point's SSID would be the access point` (or `BSSID`) | a nearby network with the access point's SSID, or its BSSID; esp32sim's own CLI leaves it out with `[emu] --wifi-nearby '{ssid}' left out: it has {why}` on stderr instead (`cli/src/lib.rs:521-527`) |
 
 Inputs that cannot be loaded exit 2 through `fail`, with no second line and no stop line:
@@ -977,7 +997,11 @@ Inputs that cannot be loaded exit 2 through `fail`, with no second line and no s
 | `classic PSRAM supports 0 or 4194304 bytes` | esp32sim's own check (`esp32/src/psram.rs`); the CLI refuses those sizes first, so it is not reached |
 
 `cannot handle signal {sig}: {error}` also exits 2 through `fail`, if signal-hook cannot install
-a handler after the connection.
+a handler after the connection, and so do, before the connection,
+`--parent-fd {fd}: not an open file descriptor: Bad file descriptor (os error 9)`, when `fstat`
+fails, `--parent-fd {fd}: not a pipe; the process that starts the runner keeps the write end of
+one`, for a file, `/dev/null` or a terminal, and
+`--parent-fd {fd}: cannot start the thread that reads it: {error}`.
 
 Exit 1: the stop line, then `the emulator stopped before --max-seconds: {stop:?}`, for every
 `Stop` but `Halted` and `SwReset`.
@@ -993,7 +1017,7 @@ peer come from `session.rs` and `transport.rs`:
 | 1 | `the emulator stopped before --max-seconds: {stop:?}` | any `Stop` but `Halted` and `SwReset` |
 | 3 | `protocol error by the peer at {board}: {what}: {line}` | `{what}` is one of: `version {v}, the runner speaks version 1`, `chip {chip:?}, the runner runs {name:?}` (the selected chip's), `watch holds GPIO {pin}, which the {name} does not have` (a pin outside the chip's `Profile::gpios`; on the classic ESP32 any pin but 0 to 39 without 24 and 28 to 31), `expected hello`, `hello after the handshake`, a parse error of `protocol::parse` (`not JSON: …`, `not a JSON object`, `no "type"`, `unknown type …`, `{type}: "{field}" is missing`, `… is not an integer`, `… is negative`, `… is not a GPIO number`, `uart_rx: bad base64 character …`, and the like), `t {t} is before this turn's sync at {b} (rule 2)`, `GPIO {pin} is not in the peer's watch`, `a baud of 0`, `ack {ack}, but the last event before this sync was seq {seq}`, `quiet_until {q} is not after this turn's sync at {b}`, `adc is not implemented yet`, `eth_rx without --wifi`, `wifi_ap without --wifi` (after the check of `t`), `eth_rx: an Ethernet frame of {n} bytes; one without FCS has 14 to 1518`, `eth_rx: bad base64 character …`, `hci_rx without --bt` (after the check of `t`), `hci_rx: an H4 packet of {n} bytes; esp32sim's VHCI carries 1 to 496`, `console_rx without --console-port usb, on a UART0 with pins` (after the check of `t`), `console_rx: bad base64 character …`, `wifi_ap: "on" is not true or false`, `sd_card without --sd-spi` (after the check of `t`), `sd_card: "image" is not a string`. `{line}` is the peer's line, cut after 200 characters with `...` |
 | 3 | `protocol error by the peer at {board}: a line longer than 1 MiB` or `…: a line that is not UTF-8` | from the socket, without the line |
-| 4 | `the peer at {board} is gone: {why}` | `{why}` is `the peer closed the socket`, `read failed: {error}`, `write failed: {error}`, `the socket accepts no more data`, `the peer's turn took longer than --peer-timeout`, `the peer read nothing for longer than --peer-timeout` or, while the last messages are written, `the peer did not read the last messages in time` |
+| 4 | `the peer at {board} is gone: {why}` | `{why}` is `the peer closed the socket`, `read failed: {error}`, `write failed: {error}`, `the socket accepts no more data`, `the peer's turn took longer than --peer-timeout`, `the peer read nothing for longer than --peer-timeout` or, while the last messages are written, `the peer did not read the last messages in time`; with `--parent-fd`, `end of file on --parent-fd: the process that started the runner has ended` (`parent::GONE`), for which no `stats` is sent |
 
 A failure to write the last messages does not change the exit code: the first cause decides it.
 
@@ -1054,6 +1078,8 @@ a guest that programs a byte between two dumps;
   and 17592186044416 (which would overflow `<< 20`), `--board none`, `socket:`, `tcp:host`,
   `tcp::7000` and `tcp:h:99999`, `--peer-timeout -1`, `nan`, `1e20`, `inf` and `1e-10`, and
   `--console socket` and `both` without `--board`.
+  `parent_fd_names_a_descriptor_and_needs_a_board` checks `--parent-fd 0`, its refusal without
+  `--board`, `-1`, `x` and `3.0`, and that it is `None` by default.
   `console_port_selects_uart0_or_the_usb_serial_jtag_controller` checks `--console-port`'s
   default, `usb` on the S3, C3 and C6, its refusal on the classic ESP32 and another value.
   In `runner/src/session/tests.rs`,
@@ -1139,6 +1165,17 @@ a guest that programs a byte between two dumps;
   read, a write cut short by a signal that goes on once `closing` is called, the teardown limit,
   `stats` still read to end of file after a close that leaves part of a turn unread,
   a line written out by `idle` after `LIVE`, and TCP.
+- `runner/src/parent/tests.rs`: `watch` on a real pipe leaves both flags clear while the write
+  end is open, a byte written on it included, and sets them within a wall second of its close; a
+  descriptor that is not open (`1 << 20`, far above any a test opens) is refused with
+  `--parent-fd {fd}: not an open file descriptor: …`, and `/dev/null` with `not a pipe`, left
+  open. In `runner/src/session/tests.rs`,
+  `the_parent_s_end_ends_the_run_as_the_peer_gone_without_stats` checks that a signal flag set with
+  `parent_gone` ends the run as `End::PeerGone(parent::GONE)`, exit code 4, and sends no `stats`;
+  `a_signal_while_the_parent_lives_ends_the_run_with_stats` that the same flag with `parent_gone`
+  clear, a backend's `SIGTERM`, ends it with `stats`, `end: signal` and exit 0.
+  `tests/test_killed_session.py` kills a pytest in a long wait and checks that the runner is gone
+  within 5 wall seconds ([esp32sim backend](esp32sim-backend-technical.md#tests)).
 - `runner/src/session/tests.rs`: the run loop against `FakeGuest`, a scripted guest that can
   return a few cycles past a slice's end as `run` does below 240 MHz, and `FakePeer`, which checks
   that `seq` grows by one and `t` never decreases. It covers turn 0 before the first instruction,

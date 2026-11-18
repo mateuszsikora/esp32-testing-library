@@ -1332,6 +1332,7 @@ the runner at or before its `t` (rule 1).
 | usage error, or an image or ROM that cannot be loaded | nothing on the socket (it may not be connected yet) | 2 |
 | protocol error by the peer: malformed or oversized line, unknown `type`, version or chip mismatch, late `t`, wrong `ack`, `quiet_until` not after the `sync`, a `baud` of `0`, a `watch` with a pin the chip does not have, a message the runner does not implement yet, `eth_rx` without either Wi-Fi mode (`eth_rx without --wifi or --wifi-sta`), `wifi_ap` without `--wifi` (`wifi_ap without --wifi`), or `wifi_ap` in station mode (`wifi_ap with --wifi-sta: there is no virtual access point to switch`), an `eth_rx` frame outside 14 to 1518 bytes (`eth_rx: an Ethernet frame of N bytes; one without FCS has 14 to 1518`), `hci_rx` without `--bt` (`hci_rx without --bt`), an `hci_rx` packet outside 1 to 496 bytes (`hci_rx: an H4 packet of N bytes; esp32sim's VHCI carries 1 to 496`), an `on` that is not `true` or `false`, `sd_card` without `--sd-spi` (`sd_card without --sd-spi`), an `image` that is not a string, `sd_fault` or `sd_clear` without `--sd-spi` (`sd_fault without --sd-spi`, `sd_clear without --sd-spi`), an `sd_fault` that 5.20 does not allow (an `op` or `action` it does not list, an erase that fails, a `delay` missing, out of range or with `error`, a `count` out of range, `blocks` that are not `[first, last]`, an `id` in use already), `flash_dump` without `--flash-out` (`flash_dump without --flash-out`) | `stats` with `end: protocol_error`, closes | 3 |
 | the peer is gone: the connection failed, the socket closed, a read or write failed, the peer's turn took longer than `--peer-timeout`, or a write made no progress for that long (in or outside a turn) | nothing more | 4 |
+| the process that started the runner is gone: end of file on `--parent-fd` | ends the slice in progress, or a wait for the peer, as for `SIGTERM`; nothing more on the socket | 4 |
 | a second `SIGTERM` or `SIGINT` | ends the process at once | 128 + the signal's number |
 
 Every run ends with one line on stderr naming the cause; a protocol error names the peer's
@@ -1362,6 +1363,19 @@ wrong (a message out of protocol, an interface that broke its promises, a `frm_e
 runner's next turn to send `stop`, which may come only at the end of the test's wait, or at
 `--max-seconds`. A handshake mismatch is
 the exception: the runner finds it in the harness's `hello` and ends the run itself, with code 3.
+
+The runner finds a peer gone from the socket only when it reads or writes it, and between the
+`sync` of one turn and the next it may not: a window up to `B` with no event in it, the test's
+`board.wait` of an hour on a guest that does little, runs at full speed for as long as it lasts,
+also after the peer's process died. `--parent-fd N` names a descriptor the runner inherits, the
+read end of a pipe whose write end the process that started it holds and passes to no other. A
+thread of the runner blocks reading it; at end of file, which comes once that process has ended,
+however it ended, it sets the flag `SIGTERM` sets, and the run ends within the time a signal takes,
+above, but as the peer gone: no `stats`, the line `esp32tl-runner: end: the peer at BOARD is gone:
+end of file on --parent-fd: the process that started the runner has ended at …` and exit code 4.
+What the parent writes on the pipe means nothing. The `esp32sim` backend passes it, and closes the
+write end only after the runner has exited; a `SIGTERM` that arrives after the end of file ends the
+process at once, as a second signal does.
 
 `--peer-timeout SECONDS` bounds, in wall time, how long the runner waits for the peer's turn to
 end, counted again after each `flash_dump_ack` (5.21), and how long a write may make no progress

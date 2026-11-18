@@ -25,6 +25,9 @@ usage: esp32tl-runner --chip CHIP --flash-at OFFSET=FILE... --max-seconds S [opt
   --board tcp:HOST:PORT   or over TCP. Without --board the chip has nothing on its pins
   --peer-timeout S      how long, in wall seconds, a turn of the peer may take before the
                         run fails with exit code 4 (default 60; 0 waits for ever)
+  --parent-fd N         the read end of a pipe, inherited as file descriptor N, whose write
+                        end the process that started the runner holds: at its end of file
+                        the run ends as with the peer gone (exit code 4); needs --board
   --console stdout|socket|both   where the console goes (default stdout); socket and both
                         need --board
   --console-port uart0|usb   which of the guest's outputs is the console (default uart0):
@@ -106,6 +109,9 @@ pub struct Opts {
     pub board: Option<Board>,
     /// `None`: wait for ever.
     pub peer_timeout: Option<Duration>,
+    /// `--parent-fd`: the descriptor whose end of file says the process that started the
+    /// runner is gone.
+    pub parent_fd: Option<i32>,
     /// `--sd-spi`, and the image of `--sd-rw`.
     pub sd_card: Option<(Option<PathBuf>, Wiring)>,
     /// `--wifi` with `--wifi-nearby`, or `--wifi-sta`.
@@ -178,6 +184,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Opts, Error> {
         console_port: ConsolePort::Uart0,
         board: None,
         peer_timeout: Some(Duration::from_secs(60)),
+        parent_fd: None,
         sd_card: None,
         wifi: None,
         realtime: false,
@@ -259,6 +266,17 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Opts, Error> {
                     _ => {
                         return Err(usage(format!(
                             "--peer-timeout: expected a number of seconds, 0 for none, got {v:?}"
+                        )));
+                    }
+                };
+            }
+            "--parent-fd" => {
+                let v = value()?;
+                opts.parent_fd = match v.parse::<i32>() {
+                    Ok(fd) if fd >= 0 => Some(fd),
+                    _ => {
+                        return Err(usage(format!(
+                            "--parent-fd: expected a file descriptor, a number from 0, got {v:?}"
                         )));
                     }
                 };
@@ -377,6 +395,12 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Opts, Error> {
     if opts.realtime && opts.board.is_none() {
         return Err(usage(
             "--realtime paces a run for the peer's real device: it needs --board",
+        ));
+    }
+    if opts.parent_fd.is_some() && opts.board.is_none() {
+        return Err(usage(
+            "--parent-fd ends a run with a peer when the process that started it is gone: it \
+             needs --board",
         ));
     }
     if opts.console != Console::Stdout && opts.board.is_none() {

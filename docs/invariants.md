@@ -2191,3 +2191,18 @@ clones, and rejection of serial distributed execution before accessing hardware.
   its parameters, so that what waiting on it returns is checked too.
   `tests/test_public_api.py::test_every_type_a_test_meets_is_public`,
   `tests/test_public_api.py::test_all_names_what_the_package_exports`
+
+## A killed pytest session
+
+- **262.** A pytest killed with `SIGKILL` in the middle of a long `board.wait` leaves, within 5 wall
+  seconds, no runner, no log forwarder, no pytest-embedded `MessageQueueManager` server, no dut
+  listener and no resource tracker running. The runner ends a run at end of file on
+  `--parent-fd` as with the peer gone, exit code 4, without `stats`; the backend passes the pipe's
+  read end, and a power-on that fails, at the start or before it, leaves neither end open. A signal
+  while the parent lives still ends the run with `stats` and exit 0.
+  `tests/test_killed_session.py::test_a_killed_pytest_leaves_no_runner_forwarder_or_manager`,
+  `tests/test_killed_session.py::test_the_runner_gets_the_read_end_of_a_pipe_whose_write_end_the_backend_holds`,
+  `runner/src/parent/tests.rs::the_flags_stay_clear_while_the_write_end_is_open_and_are_set_once_it_closes`,
+  `tests/test_killed_session.py::test_a_power_on_that_fails_before_the_start_closes_the_pipe`,
+  `runner/src/session/tests.rs::the_parent_s_end_ends_the_run_as_the_peer_gone_without_stats`,
+  `runner/src/session/tests.rs::a_signal_while_the_parent_lives_ends_the_run_with_stats`

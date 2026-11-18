@@ -85,6 +85,9 @@ usage: esp32tl-runner --chip CHIP --flash-at OFFSET=FILE... --max-seconds S [opt
   --board tcp:HOST:PORT   or over TCP. Without --board the chip has nothing on its pins
   --peer-timeout S      how long, in wall seconds, a turn of the peer may take before the
                         run fails with exit code 4 (default 60; 0 waits for ever)
+  --parent-fd N         the read end of a pipe, inherited as file descriptor N, whose write
+                        end the process that started the runner holds: at its end of file
+                        the run ends as with the peer gone (exit code 4); needs --board
   --console stdout|socket|both   where the console goes (default stdout); socket and both
                         need --board
   --console-port uart0|usb   which of the guest's outputs is the console (default uart0):
@@ -124,6 +127,7 @@ usage: esp32tl-runner --chip CHIP --flash-at OFFSET=FILE... --max-seconds S [opt
 | `--psram-mb N` | `0` | `0`, or a size the chip takes: `4` on the classic ESP32; `2`, `4` or `8` on the ESP32-S3; `16` or `32` on the ESP32-P4; `16` on the ESP32-S31; none on the ESP32-C3 and ESP32-C6. Otherwise `--psram-mb: the ESP32-S3 supports only 0, 2, 4 or 8 MiB, got "3"`, naming the chip |
 | `--board` | none: nothing on the chip's pins | `socket:PATH`, a Unix socket path that is not empty, or `tcp:HOST:PORT`, with a host that is not empty and a port from 0 to 65535 (`tcp:[::1]:7000` for IPv6) |
 | `--peer-timeout S` | `60` | `0`, to wait for ever, or a positive number of seconds; fractions are fine. A value that rounds to 0 ns, or is too large for a Rust `Duration` (`1e20`), is a usage error |
+| `--parent-fd N` | none: only the socket tells the runner its peer is gone | A file descriptor the runner inherits open, from 0: the read end of a pipe whose write end the process that started the runner holds ([below](#ended-with-the-process-that-started-it)). Only with `--board`: `--parent-fd ends a run with a peer when the process that started it is gone: it needs --board`; another value, `--parent-fd: expected a file descriptor, a number from 0, got "x"`; a descriptor that is not open, `--parent-fd 9: not an open file descriptor: Bad file descriptor (os error 9)`; one that is not a pipe, a file or `/dev/null`, `--parent-fd 5: not a pipe; the process that starts the runner keeps the write end of one` (exit 2, before the connection) |
 | `--console` | `stdout` | `stdout`; `socket` and `both` only with `--board` |
 | `--console-port` | `uart0` | `uart0`, or `usb` on the ESP32-S3, ESP32-C3, ESP32-C6, ESP32-P4 and ESP32-S31: the console is the chip's USB-Serial/JTAG controller ([below](#a-console-on-usb-serialjtag)). On the classic ESP32, `--console-port usb: esp32 has no USB-Serial/JTAG controller` (exit 2); another value, `--console-port: expected uart0 or usb, got "uart1"` |
 | `--sd-rw IMAGE` | none: an empty slot | a path, valid UTF-8, to an image file of a whole number of 512 KiB units, from 512 KiB to 2 TiB; only with `--sd-spi` |
@@ -503,7 +507,7 @@ to `--board`, and nothing after it.
 | 2 | a usage error | `esp32tl-runner: MESSAGE`, then `run esp32tl-runner --help for the usage` |
 | 2 | an input that cannot be loaded: no ROM found, a file that cannot be read, a ROM that is not an ELF, an image that does not fit in flash, a `--bt` ELF that is not an ELF or lacks the controller's symbols, an SD card image that cannot be opened for writing or is not a whole number of 512 KiB units | `esp32tl-runner: MESSAGE`, no stop line |
 | 3 | with `--board`: a protocol error by the peer, such as a malformed line, a version or chip mismatch, an input stamped before its turn's `sync`, an `eth_rx` without `--wifi` or `--wifi-sta`, or `wifi_ap` without `--wifi` (including station mode), an `hci_rx` on a run without `--bt` or outside 1 to 496 bytes, an `sd_card` on a run without `--sd-spi` | `end: protocol error by the peer at BOARD: WHAT: LINE at ...`, `LINE` cut after 200 characters |
-| 4 | with `--board`: the connection failed, or the peer is gone: it closed the socket, a read or write failed, or `--peer-timeout` ran out | `end: cannot connect to the peer at ...`, or `end: the peer at BOARD is gone: WHY at ...` |
+| 4 | with `--board`: the connection failed, or the peer is gone: it closed the socket, a read or write failed, `--peer-timeout` ran out, or `--parent-fd` reached end of file | `end: cannot connect to the peer at ...`, or `end: the peer at BOARD is gone: WHY at ...` |
 | 101 | a panic, in the runner or in esp32sim during the run | Rust's panic message, no stop line |
 | 128 + N | with `--board`: a second `SIGTERM` or `SIGINT` (signal number N) | whatever came before it |
 
@@ -533,6 +537,32 @@ without `--board`. A test run usually ends otherwise: the backend starts the run
 whenever the test is not waiting, and at teardown answers that turn with `stop`. A runner in no
 held turn then, or still running 5 s later, gets one `SIGTERM` once it has said hello, then
 `SIGKILL` 5 s after that ([esp32sim backend](esp32sim-backend-user.md#how-the-run-ends)).
+
+### Ended with the process that started it
+
+The runner finds a peer gone at its next read or write on the socket, and a peer that gives it a
+long window to run in (a test's `board.wait(seconds(3600))`, on a guest that does little) may leave
+it running at full speed, alone, for that long after the peer's process died. `--parent-fd N`
+ends such a run at once: the process that starts the runner makes a pipe, keeps its write end and
+lets the runner inherit its read end as descriptor `N`. The runner reads it on a thread of its own
+and ignores what comes; at end of file, which comes once every write end is closed, as the kernel
+does for a process that ends however it ends (`SIGKILL` included), the run ends as with a
+signal, at the end of the slice in progress, but as the peer gone: no `stats`, the line
+
+```text
+esp32tl-runner: end: the peer at BOARD is gone: end of file on --parent-fd: the process that started the runner has ended at T s (W s wall, N resets, K turns)
+```
+
+and exit code 4. With `--flash-out` the flash is written first, as for any end. The runner ends
+within what a signal takes, a slice of at most one emulated millisecond, a few wall milliseconds,
+or one 20 ms poll of the socket when it is waiting for the peer, plus the write of the flash:
+`tests/test_killed_session.py` holds it, on macOS and on Linux, to 5 wall seconds after
+`SIGKILL`. On an M2 Pro (macOS 26), in a long wait on `console_repl` at its prompt, it was gone
+0.16 wall seconds after its parent's `SIGKILL`; without `--parent-fd` it ran on at 99 % of a core.
+Whoever starts the runner must keep the write end out of every other process: one that holds a
+copy, a child it forks, keeps the runner running. Python's `os.pipe` makes both ends
+non-inheritable, so `subprocess` passes only the read end, with `pass_fds`; the
+[esp32sim backend](esp32sim-backend-user.md#how-the-run-ends) does so.
 
 ## Chips
 
