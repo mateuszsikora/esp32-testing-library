@@ -1744,6 +1744,100 @@ def test_a_runner_that_cannot_start_leaves_no_log_open(tmp_path: Path) -> None:
     assert [w for w in caught if issubclass(w.category, ResourceWarning)] == []
 
 
+def test_the_log_forwarder_puts_what_the_runner_adds_and_the_rest_on_sigterm(
+    tmp_path: Path,
+) -> None:
+    """`LogForwarder` sleeps when the runner's log has nothing new, so a line written later still
+    arrives, and one written just before `SIGTERM` is put before it ends."""
+    from multiprocessing import get_context
+
+    log = tmp_path / "popen.log"
+    log.write_bytes(b"esp32tl-runner: first\n")
+    queue = get_context("spawn").Queue()
+    forwarder = esp32sim.LogForwarder(cast(MessageQueue, queue), str(log))
+    assert esp32sim.RunnerPopen.REDIRECT_CLS is esp32sim.LogForwarder
+    forwarder.start()
+    try:
+        assert queue.get(timeout=30) == b"esp32tl-runner: first\n"
+        time.sleep(5 * esp32sim.LOG_POLL_SECONDS)
+        with log.open("ab") as out:
+            out.write(b"second\n")
+        assert queue.get(timeout=5) == b"second\n"
+        with log.open("ab") as out:
+            out.write(b"last\n")
+        forwarder.terminate()
+        forwarder.join(timeout=5)
+        assert forwarder.exitcode == 0
+        assert queue.get(timeout=5) == b"last\n"
+    finally:
+        if forwarder.is_alive():
+            forwarder.kill()
+        queue.close()
+
+
+def test_the_log_forwarder_waits_on_an_empty_read_and_reads_once_more_on_sigterm(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`_forward_log` in this process: it puts every non-empty read in order, never an empty one,
+    sleeps only after a read that found nothing, and after `SIGTERM` reads the rest once and
+    returns. The sleep is where the test writes to the log, and where it sends the signal."""
+    from types import SimpleNamespace
+
+    log = tmp_path / "popen.log"
+    log.write_bytes(b"first\n")
+    put: list[bytes] = []
+    waits: list[float] = []
+
+    class Queue:
+        def put(self, data: bytes) -> None:
+            put.append(data)
+
+    def sleep(seconds: float) -> None:
+        waits.append(seconds)
+        with log.open("ab") as out:
+            out.write(b"second\n" if len(waits) == 1 else b"last\n")
+        if len(waits) == 2:
+            os.kill(os.getpid(), signal.SIGTERM)
+
+    previous = signal.getsignal(signal.SIGTERM)
+    monkeypatch.setattr(esp32sim, "time", SimpleNamespace(sleep=sleep))
+    try:
+        esp32sim._forward_log(cast(MessageQueue, Queue()), str(log))
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+    assert put == [b"first\n", b"second\n", b"last\n"]
+    assert waits == [esp32sim.LOG_POLL_SECONDS, esp32sim.LOG_POLL_SECONDS]
+
+
+def test_closing_the_runner_popen_waits_until_its_last_lines_are_on_the_queue(
+    tmp_path: Path,
+) -> None:
+    """`RunnerPopen.close` sends the forwarder `SIGTERM` and waits for it: a line added to the log
+    after the runner exited, as the backend's own `esp32tl: the runner exited with code N` is, is
+    on the queue when `close` returns."""
+    from multiprocessing import get_context
+
+    queue = get_context("spawn").Queue()
+    popen = esp32sim.RunnerPopen(
+        cast(MessageQueue, queue), [sys.executable, "-c", "print('ready')"], cast(Meta, None)
+    )
+    try:
+        assert popen.wait(timeout=30) == 0
+        # the forwarder is in its loop, past installing its handler, once it has put this
+        assert queue.get(timeout=30) == b"ready\n"
+        with open(popen._logfile, "ab") as log:
+            log.write(b"esp32tl: the runner exited with code 0\n")
+        popen.close()
+        assert queue.get(timeout=0.1) == b"esp32tl: the runner exited with code 0\n"
+        assert popen._p is not None and popen._p.exitcode == 0
+    finally:
+        if popen.stdin is not None:
+            popen.stdin.close()
+        if popen._p is not None and popen._p.is_alive():
+            popen._p.kill()
+        queue.close()
+
+
 def copy_build(build: Path, to: Path) -> None:
     """What the runner and `IdfApp` read from `build`: what CI's firmware tarball carries."""
     flasher_args = json.loads((build / "flasher_args.json").read_text())

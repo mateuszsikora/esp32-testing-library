@@ -126,6 +126,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The end of the run is a line appended to the runner's log](harness.md#the-end-of-the-run-is-a-line-appended-to-the-runners-log) | `harness.md` | superseded (#65) |
 | [Teardown recognises the end of the run by RunnerExited in the exception chain](harness.md#teardown-recognises-the-end-of-the-run-by-runnerexited-in-the-exception-chain) | `harness.md` | superseded (#65) |
 | [Teardown passes only the signals it sent itself](harness.md#teardown-passes-only-the-signals-it-sent-itself) | `harness.md` | superseded (#12) |
+| [The runner's log reaches dut.log through a forwarder of esp32tl's that waits when it is idle](harness.md#the-runners-log-reaches-dutlog-through-a-forwarder-of-esp32tls-that-waits-when-it-is-idle) | `harness.md` | decided |
 | [Teardown waits for the runner's hello, sends one SIGTERM and passes exit code 0 only](harness.md#teardown-waits-for-the-runners-hello-sends-one-sigterm-and-passes-exit-code-0-only) | `harness.md` | decided (#12) |
 | [A link error ends the run with SIGTERM at once](harness.md#a-link-error-ends-the-run-with-sigterm-at-once) | `harness.md` | decided (#12) |
 | [The EOF takes the link's error from BoardLink, not from the log](harness.md#the-eof-takes-the-links-error-from-boardlink-not-from-the-log) | `harness.md` | superseded (#65) |
@@ -233,7 +234,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The HCI tap is a btsnoop file on the board's time, with its header beside it](harness.md#the-hci-tap-is-a-btsnoop-file-on-the-boards-time-with-its-header-beside-it) | `harness.md` | decided (#34) |
 | [The firmware's controller is a controller of the air, with the guest's features and buffer](harness.md#the-firmwares-controller-is-a-controller-of-the-air-with-the-guests-features-and-buffer) | `harness.md` | decided (#34) |
 | [The air of the bt fixture is moved by the board's link alone](harness.md#the-air-of-the-bt-fixture-is-moved-by-the-boards-link-alone) | `harness.md` | decided (#34) |
-| [An answer of the firmware's controller goes out 10 µs after it is made, and never before its turn](harness.md#an-answer-of-the-firmwares-controller-goes-out-10-µs-after-it-is-made-and-never-before-its-turn) | `harness.md` | decided (#34) |
+| [An answer of the firmware's controller goes out 100 µs after it is made, and never before its turn](harness.md#an-answer-of-the-firmwares-controller-goes-out-100-µs-after-it-is-made-and-never-before-its-turn) | `harness.md` | decided (#34) |
 | [HCI_Reset takes the controller off the air for an instant](harness.md#hci_reset-takes-the-controller-off-the-air-for-an-instant) | `harness.md` | decided (#34) |
 | [A command the controller does not know is answered in the event its host waits for](harness.md#a-command-the-controller-does-not-know-is-answered-in-the-event-its-host-waits-for) | `harness.md` | decided (#34) |
 | [A setting that would change what is not modelled is refused, one that changes nothing is taken](harness.md#a-setting-that-would-change-what-is-not-modelled-is-refused-one-that-changes-nothing-is-taken) | `harness.md` | decided (#34) |

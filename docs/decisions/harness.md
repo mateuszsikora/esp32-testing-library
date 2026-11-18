@@ -132,6 +132,37 @@ signals it had sent, because the runner, started without `--board`, handled no s
 backend starts it with `--board`, see
 [Teardown waits for the runner's hello, sends one SIGTERM and passes exit code 0 only](#teardown-waits-for-the-runners-hello-sends-one-sigterm-and-passes-exit-code-0-only).
 
+## The runner's log reaches dut.log through a forwarder of esp32tl's that waits when it is idle
+
+Status: decided
+
+`RunnerPopen` replaces pytest-embedded's `_PopenRedirectProcess` (pytest-embedded 2.9.3,
+`pytest_embedded/log.py`) with `LogForwarder`, which sleeps `LOG_POLL_SECONDS`, 20 ms, when the
+runner's log has nothing new. The original reads the file again at once, and every empty read is a
+call to the manager process that holds `msg_queue`, so a test ran two busy processes beside the
+runner. Measured on an M2 Pro over 300 emulated seconds of an awake image: 56 s of CPU in the two
+against 88 s in the runner; with `LogForwarder`, 0.06 s. Wherever there are fewer free CPUs than
+busy processes, as under `pytest -n`, the two take CPU from the runner; on CI this was not
+measured.
+
+The runner's lines reach the queue up to 20 ms after they are written. The test does not wait for
+them: the console reaches it through the link, not through the log. Teardown does: after `SIGTERM`
+the forwarder finishes its sleep, reads the file once more and ends, and `RunnerPopen.close` waits
+for it, so the
+runner's last lines are on the queue before the backend's teardown goes on, as they nearly always
+were with the busy loop. pytest-embedded's listener, stopped right after the dut, can still miss
+them, as it could before. The forwarder costs about 0.3 s of CPU at each `power_on`, to import the
+`esp32tl` package it lives in.
+
+**Rejected:** a `SIGTERM` handler that wakes the sleep through a `threading.Event`, because
+`Event.set` takes the event's lock, which the interrupted `Event.wait` may hold: the forwarder would
+then wait for ever, and the interpreter's exit, which joins daemon processes without a timeout, with
+it. A wakeup pipe (`signal.set_wakeup_fd`) would end the sleep at once without a lock, but would save
+at most 20 ms of teardown for the code it takes. Also rejected: waiting for a fix in pytest-embedded,
+which esp32tl pins at `~=2.9.3` and which every test pays for until then; and a
+`DuplicateStdoutPopen` without a forwarder (`REDIRECT_CLS = None`), because `dut.log` would then
+lose the runner's own lines.
+
 ## Teardown waits for the runner's hello, sends one SIGTERM and passes exit code 0 only
 
 Status: decided (#12)
@@ -2036,19 +2067,30 @@ lock, so that the link's thread, at the first turn, and the test's do not meet o
 move the same clock, and a test written for an `Air` of its own would run differently on a board;
 and a `bt.wait`, for the same reason: the board's waits are the test's clock.
 
-## An answer of the firmware's controller goes out 10 µs after it is made, and never before its turn
+## An answer of the firmware's controller goes out 100 µs after it is made, and never before its turn
 
 Status: decided (#34)
 
-What the firmware's controller sends its host goes out `LATENCY_NS`, 10 µs, after the instant it
-made it, which is also the interface's `latency`: within the microseconds a controller takes to
-answer a command, and far below the 10 ms the host sleeps between two polls of the VHCI when it has
-nothing to read, so the host reads the answer at its next poll. By rule 1 of the protocol the turn's
+What the firmware's controller sends its host goes out `LATENCY_NS`, 100 µs, after the instant it
+made it, which is also the interface's `latency`: of the order a controller takes to answer a
+command, and far below the 10 ms the host sleeps between two polls of the VHCI when it has nothing
+to read, so the host reads the answer at its next poll.
+
+The latency also bounds every slice the runner runs while no event is unacknowledged (protocol 6.1),
+because the board's callbacks cannot stop esp32sim's `run`. With the controller on the link it is
+the smallest latency of the interfaces, so it sets how often an awake run stops. Measured on the
+classic ESP32 with an awake image publishing over the modem and driving an SPP peer, 330 emulated
+seconds, the three runs side by side on an M2 Pro: 10 µs cut the run into 33.1 million slices and
+took 84.6 s of the runner's CPU for 300 emulated seconds; 100 µs took 3.4 million slices and 70.7 s
+(−16 %); 1 ms took 0.5 million and 69.2 s (−18 %). The firmware published the same 641 records in
+each. By rule 1 of the protocol the turn's
 block point is at most the first unacknowledged event plus the latency, and every event of the turn
 is at or after that event, so an answer is never due before the turn it goes out in; one that would
 be is a `BluetoothError`, which fails the link.
 
-**Rejected:** a latency of 0, because every packet would then take a turn of its own; and stamping
+**Rejected:** 10 µs, the first value, because of the slices above; 1 ms, because it gains another
+2 % for an answer ten times slower than a controller's; a latency of 0, because every packet would
+then take a turn of its own; and stamping
 an answer due before the turn at the turn's time, as the spike did, because it would hide a runner
 or a harness that broke the rule.
 

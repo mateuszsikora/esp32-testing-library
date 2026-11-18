@@ -1316,6 +1316,8 @@ def test_the_firmware_opens_spp(board):
 - Time on `board.bluetooth.air` is the board's: the test waits through the board, and what it does
   on the air, making a device, switching one off, setting its `rssi`, happens at the board's
   current instant. Its `wait`, `advance` and `run` raise `AirError`.
+- The firmware's controller answers its host 100 µs of board time after the instant the packet it
+  answers was sent, and the host reads the answer at its next poll of the VHCI.
 - Bluetooth histories use `Duration` on the board's clock: `peer.events` contains
   `ChannelEvent(at, direction, data)` named tuples, `peer.refused` contains `Refusal(at, why)`,
   `peer.pairings` and `bt.pairings()` contain frozen `Pairing` records with `t: Duration`, and

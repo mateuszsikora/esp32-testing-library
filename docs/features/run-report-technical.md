@@ -278,7 +278,7 @@ Serial errors and its report properties are specified in
   leaving none.
 - `tests/test_bt_spp_initiator.py::test_the_tap_writes_the_hci_both_ways_as_btsnoop`, on the real
   runner and `bt_spp_initiator`, through `pytester`: the btsnoop file written at teardown holds
-  what the `Tap` held, to the microsecond, from `HCI_Reset` and its `Command_Complete` 10 µs later
+  what the `Tap` held, to the microsecond, from `HCI_Reset` and its `Command_Complete` 100 µs later
   on, the firmware's `PIN_Code_Request_Reply` and the peer's name among them; the sidecar's
   `interface`, `source`, `clock`, `devices` and esp32sim revision.
 - `tests/test_sdspi.py`: the card's line and `sd_card.insert` step in the report of a run with a

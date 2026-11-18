@@ -128,7 +128,7 @@ It does what the devices' controllers do ([time on the air](#time-on-the-air),
 - An answer to every command: one it does not know gets `UNKNOWN_HCI_COMMAND_ERROR` in the event the
   host waits for, `Command_Status` for a command answered so before it completes, `Command_Complete`
   for any other, and is listed in `bt.unknown_commands()`.
-- Each answer `10 µs` after the instant the packet it answers was sent, which the firmware reads at
+- Each answer `100 µs` after the instant the packet it answers was sent, which the firmware reads at
   its next poll of the VHCI.
 
 ## Putting a peer on the air

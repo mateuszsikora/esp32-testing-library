@@ -56,6 +56,7 @@ import threading
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from multiprocessing.context import SpawnProcess
 from pathlib import Path
 from types import MappingProxyType
 from typing import NoReturn, TypeVar
@@ -119,6 +120,11 @@ POWER_ON_UTC = DEFAULT_UTC
 # slice the runner runs while the board is on anyway, so asking for it adds no slice (protocol
 # 6.1), and a sleep without events takes no turn at all.
 WAKE_LATENCY_NS = 1_000_000
+
+# How long the forwarder of the runner's log sleeps, in wall seconds, when it finds nothing new in
+# the file. pytest-embedded's own forwarder reads it again at once, and every empty read is a round
+# trip to the process that holds `msg_queue`: the two of them took more CPU than the runner.
+LOG_POLL_SECONDS = 0.02
 
 # How long, in wall seconds, the runner has after SIGTERM to send its stats, close the link and
 # exit, before SIGKILL (protocol §9). It needs at most one emulated millisecond.
@@ -386,9 +392,58 @@ def route_wire(profile: BoardProfile, interface: str) -> Wire:
     return Wire(tx=route.tx, rx=route.rx, baud=route.baud)
 
 
+def _forward_log(msg_queue: MessageQueue, logfile: str) -> None:
+    """The body of `LogForwarder`: puts what the runner adds to `logfile` on `msg_queue`, and
+    sleeps `LOG_POLL_SECONDS` whenever there is nothing new, never putting an empty read. After
+    `SIGTERM`, within `LOG_POLL_SECONDS`, it reads the file once more, puts what it finds, and
+    returns, even if something still writes to the file. The handler only sets a flag: one that
+    took a lock could find it held by the interrupted code and wait for ever. The file is read in
+    binary, as pytest-embedded's forwarder reads it: a UTF-8 sequence may straddle the end of what
+    has been written so far."""
+    stopping = False
+
+    def stop(_signum: int, _frame: object) -> None:
+        nonlocal stopping
+        stopping = True
+
+    signal.signal(signal.SIGTERM, stop)
+
+    def put(data: bytes) -> bool:
+        try:
+            msg_queue.put(data)  # type: ignore[no-untyped-call]
+        except Exception:  # the queue is closed
+            return False
+        return True
+
+    with open(logfile, "rb") as log:
+        while not stopping:
+            data = log.read()
+            if data:
+                if not put(data):
+                    return
+            else:
+                time.sleep(LOG_POLL_SECONDS)
+        data = log.read()
+        if data:
+            put(data)
+
+
+class LogForwarder(SpawnProcess):
+    """The process that copies the runner's log file to `msg_queue`, in place of pytest-embedded's
+    `_PopenRedirectProcess`, which reads the file in a loop without a pause."""
+
+    def __init__(self, msg_queue: MessageQueue, logfile: str) -> None:
+        super().__init__(target=_forward_log, args=(msg_queue, logfile), daemon=True)
+
+
 class RunnerPopen(DuplicateStdoutPopen):
-    """A `DuplicateStdoutPopen` that closes its log when the runner cannot start: the parent
-    opens the log before it starts the process, and nothing else can close it then."""
+    """A `DuplicateStdoutPopen` whose forwarder is `LogForwarder` and whose `close` waits for it,
+    and that closes its log when the runner cannot start: the parent opens the log before it
+    starts the process, and nothing else can close it then."""
+
+    # pytest-embedded types it as its own forwarder's class; it takes any process class with that
+    # constructor (`DuplicateStdoutPopen.__init__` starts it, `close` terminates it)
+    REDIRECT_CLS = LogForwarder  # type: ignore[assignment]
 
     def __init__(self, msg_queue: MessageQueue, cmd: list[str], meta: Meta) -> None:
         try:
@@ -398,6 +453,15 @@ class RunnerPopen(DuplicateStdoutPopen):
             if log is not None:
                 log.close()
             raise
+
+    def close(self) -> None:
+        """Sends the forwarder `SIGTERM` and closes the log, as `DuplicateStdoutPopen.close` does,
+        then waits up to `EXIT_SECONDS` for the forwarder to end, so that the runner's last lines
+        are on `msg_queue` before the backend's teardown goes on."""
+        forwarder = self._p
+        super().close()  # type: ignore[no-untyped-call]
+        if forwarder is not None:
+            forwarder.join(EXIT_SECONDS)
 
 
 def listen() -> tuple[socket.socket, Path]:
@@ -1154,9 +1218,10 @@ class Esp32Sim(Board):
         runner sends its last warnings and its stats, closes the link and exits 0; SIGTERM, once
         the runner has said hello, when it has not exited within EXIT_SECONDS of that; the link
         read to end of file; the runner waited for, and killed only when it has not exited within
-        EXIT_SECONDS of the signal. Then stops the forwarding of its log. The forwarder reads the
-        log in a busy loop and has nearly always sent the runner's last lines on by then, but it
-        is not waited for: they may miss `dut.log`. Radio diagnostics are read from the finished
+        EXIT_SECONDS of the signal. Then stops the forwarding of its log and waits for it, so the
+        runner's last lines are on the dut's queue when this returns; pytest-embedded's listener,
+        which takes them off the queue into `dut.log`, is stopped right after the dut and may
+        still miss them. Radio diagnostics are read from the finished
         runner log into the teardown report, independently of that forwarder. A runner that exited
         with an error, one that had to be killed, and a link the harness found wrong fail the
         test, even one whose expects all passed before it. Once the runner is gone and the link
@@ -1204,9 +1269,10 @@ class Esp32Sim(Board):
         except OSError:
             # Optional diagnostics must not prevent closing the process or writing taps.
             self._radio_diagnostics = []
-        # pytest-embedded leaves it unannotated.
-        self.process.close()  # type: ignore[no-untyped-call]
-        # Nor does it close the stdin pipe it opens, which the runner does not read.
+        # RunnerPopen.close waits for the forwarder.
+        self.process.close()
+        # DuplicateStdoutPopen does not close the stdin pipe it opens, which the runner does not
+        # read.
         if self.process.stdin is not None:
             self.process.stdin.close()
         # Judged by the code after the runner has stopped, not by whether it had stopped before:
