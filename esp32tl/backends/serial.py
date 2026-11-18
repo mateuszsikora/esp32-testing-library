@@ -9,6 +9,7 @@ build has none: `PlatformioApp` is the `IdfApp` the plugin gives pytest-embedded
 the files of `esp32tl.build`, so that IdfSerial writes the flash esp32sim runs.
 """
 
+import functools
 import queue
 import shutil
 import tempfile
@@ -26,7 +27,7 @@ from pytest_embedded.log import MessageQueue
 from pytest_embedded_idf.app import FlashFile, IdfApp
 from pytest_embedded_idf.dut import IdfDut
 
-from esp32tl import build, flash, recording
+from esp32tl import boards, build, flash, recording
 from esp32tl.backends.clock import nanoseconds, seconds
 from esp32tl.backends.esp32sim import BackendError, load_app, refuse, route_wire
 from esp32tl.boards import BoardProfile, capabilities
@@ -63,15 +64,20 @@ class Artifact:
 
 
 def check_artifact(
-    app_path: str, reference: Path | None = None, *, build_dir: str | Path | None = None
+    app_path: str,
+    reference: Path | None = None,
+    *,
+    build_dir: str | Path | None = None,
+    chip: str = "esp32",
 ) -> Artifact:
-    """Validate the local build, optionally against a recording, before opening a port.
+    """Validate the local build for `chip`, the board profile's, optionally against a recording,
+    before opening a port.
 
     This compares app.bin of an ESP-IDF build, firmware.bin of a PlatformIO one, not the ELF hash
     stored in the ESP-IDF app descriptor. It does not establish what is on a board when autoflash
     is skipped.
     """
-    app = load_app(app_path, build_dir=build_dir, backend=Serial.name)
+    app = load_app(app_path, build_dir=build_dir, backend=Serial.name, chip=chip)
     try:
         digest = app_image_sha256(app)
         if digest is None:
@@ -121,7 +127,17 @@ class PlatformioApp(IdfApp):
     are in a temporary directory, not in the build directory, removed with the app.
 
     pytest-embedded makes it from the `app` fixture's `app_path` and `build_dir`, as an `IdfApp`.
+    `chip` is the board profile's, which `for_chip` gives a subclass of its own.
     """
+
+    chip = "esp32"
+
+    @classmethod
+    @functools.cache
+    def for_chip(cls, chip: str) -> type["PlatformioApp"]:
+        """The class pytest-embedded makes the app from for a board of `chip`, one per chip: it
+        calls the class with the fixture's arguments alone."""
+        return cls if chip == cls.chip else type(cls.__name__, (cls,), {"chip": chip})
 
     def __init__(
         self,
@@ -137,7 +153,9 @@ class PlatformioApp(IdfApp):
         self._target = None
         self._parttool = part_tool
         self._partition_table = None
-        self.build = load_app(self.app_path, build_dir=self.binary_path, backend=Serial.name)
+        self.build = load_app(
+            self.app_path, build_dir=self.binary_path, backend=Serial.name, chip=self.chip
+        )
         table = flash.partitions(self.build.table())
         self._table: dict[str, dict[str, int]] = {
             p.name: {
@@ -245,9 +263,12 @@ class Serial(Board):
             self._files[reference.resolve()] = ("recording", "app_recording")
         self._uarts: dict[str, Uart] = {}
         self._wifi: Wifi | None = None
+        # UART0 on the classic ESP32's pins, or the chip's USB-Serial/JTAG, which has no pins: the
+        # port is then the chip's own USB device, and its baud means nothing to it.
+        usb = profile.console == boards.USB_SERIAL_JTAG
         self._console = Uart(
             "console",
-            Wire(1, 3, dut.serial.baud),
+            None if usb else Wire(1, 3, dut.serial.baud),
             log=self.log,
             clock=self.clock,
             directory=directory,

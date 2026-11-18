@@ -1,6 +1,7 @@
 # Serial backend
 
-`serial` runs the same `board` and `console` tests on a real classic ESP32 through
+`serial` runs the same `board` and `console` tests on a real classic ESP32, or an ESP32-S3 on its
+USB-Serial/JTAG port ([below](#a-board-whose-console-is-usb-serialjtag)), through
 pytest-embedded's `esp,idf` services. It is **off by default**. Select it explicitly:
 
 ```sh
@@ -34,17 +35,23 @@ checks `nmea_reader: UART1 RX GPIO5 TX GPIO4 9600 baud` without needing a GNSS r
 The `app_path` marker selects the app, with its finished build in `build/` by default, just as on
 esp32sim: an ESP-IDF build or a PlatformIO one, `.pio/build/<env>/` ([builds](builds-user.md)).
 Use the CI-built files, `make firmware` or `pio run`; pytest builds nothing. An ESP-IDF build must
-target `esp32`, list its app image under `app` in `flasher_args.json`, contain every flash file, and
-request no flash encryption. A PlatformIO build needs the files
-[builds](builds-user.md#what-each-kind-of-build-needs) lists, images for the classic ESP32, and no
+target the board profile's chip, list its app image under `app` in `flasher_args.json`, contain
+every flash file, and request no flash encryption. A PlatformIO build needs the files
+[builds](builds-user.md#what-each-kind-of-build-needs) lists, images for the profile's chip, and no
 flash encryption in its `config/sdkconfig.json` when it has one. Encrypted firmware needs
 provisioning and key/efuse management that this backend does not implement or validate; it is
-deliberately outside this milestone. No runner or ROM ELF is needed for serial. A board profile
-for another chip than the classic ESP32 is refused before the port is opened:
-`serial: the board profile esp32-s3-devkitc carries an ESP32-S3; the serial backend runs the classic ESP32 only`.
+deliberately outside this milestone. No runner or ROM ELF is needed for serial. The chips it runs
+are the classic ESP32, and the ESP32-S3 with its console on USB-Serial/JTAG
+([below](#a-board-whose-console-is-usb-serialjtag)). A board profile for another chip with its
+console on UART0 is refused before the port is opened:
+`serial: the board profile esp32-s3-devkitc carries an ESP32-S3 with its console on UART0; the serial backend runs the classic ESP32, and the ESP32-S3 with its console on USB-Serial/JTAG`.
+One for the ESP32-C3 or ESP32-C6 with its console on USB-Serial/JTAG skips, before the port is
+opened:
+`serial: the board profile my-c3-board has its console on the ESP32-C3's USB-Serial/JTAG controller, which the serial backend has been validated on with the ESP32-S3 only`.
 
 A PlatformIO build is flashed as esp32sim runs it: `firmware.factory.bin` at `0x0`, or else
-`bootloader.bin` at `0x1000`, `partitions.bin` at `0x8000` and `firmware.bin` at the table's
+`bootloader.bin` at the chip's bootloader offset (`0x1000` on the classic ESP32, `0x0` on the S3,
+[builds](builds-user.md#what-each-kind-of-build-needs)), `partitions.bin` at `0x8000` and `firmware.bin` at the table's
 `ota_0` (at `0x10000` without one). esptool keeps the flash mode, frequency and size the images
 were built with. Parts of the flash that no file of the build covers are written erased where
 esp32sim's flash is erased and what an earlier firmware left on the board could choose which
@@ -169,6 +176,30 @@ Teardown waits at most one second for esp32tl's reader. If it remains blocked, t
 redirection is not restarted on a stuck or disconnected port. pytest-embedded still owns port
 cleanup; the bound does not cover its calls or a blocked USB driver.
 
+## A board whose console is USB-Serial/JTAG
+
+An ESP32-S3 board without a USB-to-UART bridge has one port, the chip's own USB-Serial/JTAG
+device (USB 303a:1001, `/dev/cu.usbmodem…` on macOS, `/dev/ttyACM…` on Linux), and its profile
+says `console = "usb-serial-jtag"` ([board profiles](board-profiles-user.md#a-console-on-usb-serialjtag)).
+Pass that port as `--port`; the test is the one that runs on esp32sim:
+
+```sh
+.venv/bin/pytest tests/test_usb_console.py -k esp32s3 --esp32tl-backend serial --port /dev/cu.usbmodem1101
+```
+
+esptool flashes through the port and picks its USB-Serial/JTAG reset itself; `board.power_on()`
+and `board.reset()` pulse RTS, which resets the chip without the port going away, so the console
+holds the whole boot, from the ROM's banner on. What was measured on a real ESP32-S3, and what is
+not guaranteed, is in [the decision](../decisions/harness.md#the-serial-backend-runs-an-esp32-s3-through-its-usb-serialjtag-port):
+
+- after `board.reset()` the ROM's output stopped for about 3 s after its first line, and the
+  application's prompt came about 4.1 s after the reset, against 1.0 s after the flashing's reset:
+  give a console expect after a reset a `timeout` of 10 s;
+- twice, a measuring script that closed the port and opened it again left the chip answering
+  nothing, esptool included, until the board was unplugged and plugged in again; the test runs did
+  not meet it;
+- UART0 on such a board was not measured, and the ESP32-C3 and ESP32-C6 not at all.
+
 ## Peripheral limits
 
 The [capability table](board-profiles-user.md#saying-what-a-test-needs) decides source and tap skips
@@ -288,6 +319,13 @@ separate files, the board's `ota_1` held another application and its otadata sel
 the board booted `arduino_shell` from `ota_0`, so the erased otadata reached it.
 `scripts/compare-backends.py` reported both tests `passed on both`. The details are in
 [physical validation](serial-backend-technical.md#a-platformio-build).
+
+An ESP32-S3 (QFN56) revision v0.2 with 16 MB of flash on its USB-Serial/JTAG port passed on
+2026-11-17 on macOS: `firmware/console_repl_usb` built for the S3, flashed and reset by the
+backend, `test_the_usb_console_takes_a_command_and_comes_back_after_a_reset` and
+`test_a_tap_of_the_usb_console_records_both_ways` of `tests/test_usb_console.py`, **2 passed**, 2
+skipped (a tap of `uart.uart0` and the power switch, which the backend does not give). The details
+are in [physical validation](serial-backend-technical.md#an-esp32-s3-on-its-usb-serialjtag-port).
 
 ## See also
 

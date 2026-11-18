@@ -438,6 +438,8 @@ def test_chip_images_build_their_projects_for_the_chip(
     gatt = f"{tmp_path}/idf/examples/bluetooth/bluedroid/ble/gatt_server"
     entries += [("gatt_server", "esp32s3", gatt), ("gatt_server", "esp32c3", gatt)]
     entries += [("hello_world_8mb", chip, hello) for chip in ("esp32s3", "esp32c3", "esp32c6")]
+    usb = str(ROOT / "firmware" / "console_repl_usb")
+    entries += [("console_repl_usb", chip, usb) for chip in ("esp32s3", "esp32c3", "esp32c6")]
     expected = []
     for image, chip, project in entries:
         build = out / image / f"build-{chip}"

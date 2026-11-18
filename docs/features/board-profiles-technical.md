@@ -65,6 +65,7 @@ order of [Schema](#schema). File access, UTF-8 decoding and TOML parsing errors 
 |---|---|---|---|
 | `name` | string | yes | The file's name without `.toml` |
 | `chip` | string | yes | One of `CHIPS`, the chips the runner emulates: `esp32` (the classic chip), `esp32s3`, `esp32c3`, `esp32c6`. The chip decides the GPIOs, the UARTs and the console's pins below ([Chips](#chips)) |
+| `console` | string | no | `"uart0"`, the default, or `"usb-serial-jtag"` (`boards.CONSOLES`): where the firmware's console is. `usb-serial-jtag` only on a chip whose `Chip.usb_serial_jtag` is true, the S3, C3 and C6; `BoardProfile.console` holds it |
 | `flash_mb`, `psram_mb` | integer | no | At least 0; absent is "not known", `None` in `BoardProfile`. The esp32sim backend gives the runner `psram_mb` as `--psram-mb` when it is set ([esp32sim-backend-technical.md](esp32sim-backend-technical.md#data-flow)), and the runner refuses a size the chip does not take (0 or 4 on the classic ESP32; 0, 2, 4 or 8 on the ESP32-S3; 0 on the ESP32-C3 and ESP32-C6). The esp32sim backend gives the runner `flash_mb` as `--flash-mb` and refuses at setup a `flash_mb` other than 1, 2, 4, 8 or 16, and a build whose image headers give more flash; without `flash_mb` it passes the headers' size ([esp32sim-backend-technical.md](esp32sim-backend-technical.md#data-flow)). The schema keeps any size from 0, for the serial backend, which reads neither key |
 | `[uart.<role>]` | table | no | One per UART route; keys below |
 | `[lines.<role>]` | table | no | One per set of GPIO lines; keys below |
@@ -76,7 +77,7 @@ No other key is allowed, at any level. A role, and a line's name, matches `[a-z]
 
 | Key | Rule |
 |---|---|
-| `port` | A UART of the chip (0 to `Chip.uarts - 1`: 0 to 2, or 0 to 1 on the C3 and the C6), and not `CONSOLE_PORT`, 0 |
+| `port` | A UART of the chip (0 to `Chip.uarts - 1`: 0 to 2, or 0 to 1 on the C3 and the C6), and not `CONSOLE_PORT`, 0, while the console is on UART0 |
 | `tx` | A GPIO of the chip that can drive an output: in `Chip.gpios` and not in `Chip.input_only` |
 | `rx` | A GPIO of the chip: in `Chip.gpios` |
 | `baud` | At least 1 |
@@ -93,7 +94,13 @@ while the test does not, which the firmware's own output wins over.
 Across the profile, no two routes share a `port`, and no GPIO serves two uses (a route's `tx` and
 `rx`, a line, a pin of the slot). The `console` interface is not in the file, because every board has it, but it
 takes its share: UART0 and its IO MUX pins, `CONSOLE_PORT` and the chip's `Chip.console_pins`,
-on the classic ESP32 GPIO 1 (`console.tx`) and GPIO 3 (`console.rx`). GPIO 6 to 11, which most modules give to the SPI flash, are not
+on the classic ESP32 GPIO 1 (`console.tx`) and GPIO 3 (`console.rx`). With `console =
+"usb-serial-jtag"` it takes neither, and takes the controller's USB pads instead,
+`Chip.usb_pins`: GPIO 19 (`console.usb_dm`) and 20 (`console.usb_dp`) on the S3, 18 and 19 on the
+C3, 12 and 13 on the C6. A route or a line there would take D- or D+ from the controller, and on a
+real board the console with them. `Reader.distinct` then starts with no port taken, so a route may
+be UART0 on its own pins
+([decision](../decisions/harness.md#a-board-profiles-console-is-uart0-or-the-chips-usb-serialjtag-controller)). GPIO 6 to 11, which most modules give to the SPI flash, are not
 refused
 ([why](../decisions/harness.md#a-profile-reserves-the-consoles-uart-and-pins-not-the-flash-pins)).
 Integers are TOML integers: `true` is not a port.
@@ -201,15 +208,16 @@ and that controller, which `bt.tap(path)` asks for and writes as btsnoop
 ### Chips
 
 `CHIPS` maps each chip a profile may name to a `Chip`: `name`, `title` (in messages), `gpios`,
-`input_only`, `uarts` and `console_pins`; `Chip.console_pin("tx")` and `("rx")` give UART0's pins.
+`input_only`, `uarts`, `console_pins` and `usb_serial_jtag`, whether a profile's `console` may be
+`usb-serial-jtag`; `Chip.console_pin("tx")` and `("rx")` give UART0's pins.
 Every pad the chip has counts, the flash's and the PSRAM's included, as on the classic ESP32.
 
-| `chip` | `gpios` | `input_only` | `uarts` | `console_pins` (TX, RX) | Source |
-|---|---|---|---|---|---|
-| `esp32` | 0 to 39 without 24 and 28 to 31 | 34 to 39 | 3 | 1, 3 | ESP32 datasheet |
-| `esp32s3` | 0 to 48 without 22 to 25 | none | 3 | 43, 44 | ESP32-S3 datasheet, section 2.3 |
-| `esp32c3` | 0 to 21 | none | 2 | 21, 20 | ESP32-C3 datasheet, section 2.2 |
-| `esp32c6` | 0 to 30 | none | 2 | 16, 17 | ESP32-C6 datasheet, section 2.3 |
+| `chip` | `gpios` | `input_only` | `uarts` | `console_pins` (TX, RX) | `usb_serial_jtag` | Source |
+|---|---|---|---|---|---|---|
+| `esp32` | 0 to 39 without 24 and 28 to 31 | 34 to 39 | 3 | 1, 3 | no | ESP32 datasheet |
+| `esp32s3` | 0 to 48 without 22 to 25 | none | 3 | 43, 44 | yes | ESP32-S3 datasheet, section 2.3 |
+| `esp32c3` | 0 to 21 | none | 2 | 21, 20 | yes | ESP32-C3 datasheet, section 2.2 |
+| `esp32c6` | 0 to 30 | none | 2 | 16, 17 | yes | ESP32-C6 datasheet, section 2.3 |
 
 The same pads are esp32sim's own pin tables at the pin (`esp-soc/src/pins.rs`, `ChipPins`), which
 the runner checks the link's `watch` against ([protocol 5.1](../protocol.md#51-hello)).
@@ -269,7 +277,10 @@ The ones `tests/test_boards.py` checks, verbatim:
 | `x.toml: uart.gnss.tx: GPIO 34 is input only` | A `tx` on an input-only pin, 34 to 39 on the classic ESP32 |
 | `x.toml: uart.GNSS: a role is lowercase letters, digits and _` | A role or a line's name outside `[a-z][a-z0-9_]*` |
 | `x.toml: lines.modem.ri.pull: 'high' is not one of up, down` | Another pull |
-| `x.toml: uart.modem.port: UART1 is uart.gnss's`, `x.toml: uart.gnss.port: UART0 is console's` | Two routes on one UART, or a route on the console's |
+| `x.toml: uart.modem.port: UART1 is uart.gnss's`, `x.toml: uart.gnss.port: UART0 is console's` | Two routes on one UART, or a route on the console's while it is on UART0 |
+| `x.toml: uart.aux.tx: GPIO 19 is console.usb_dm already`, `x.toml: lines.l.a: GPIO 20 is console.usb_dp already` | A route or a line on the USB-Serial/JTAG controller's D- or D+ pad while the console is on it (S3 here) |
+| `x.toml: console: the ESP32 has no USB-Serial/JTAG controller; use uart0` | `console = "usb-serial-jtag"` on `chip = "esp32"` |
+| `x.toml: console: 'usb' is not one of uart0, usb-serial-jtag`, `x.toml: console: 1 is not one of uart0, usb-serial-jtag` | Another value, or one that is not a string |
 | `x.toml: lines.modem.pwrkey: GPIO 5 is uart.gnss.rx already`, `x.toml: uart.gnss.tx: GPIO 1 is console.tx already` | One GPIO with two uses, the console's pins counted |
 
 The esp32sim backend refuses a loaded profile whose `flash_mb` the runner does not have, with a
@@ -300,6 +311,13 @@ are listed in [board-profiles-user.md](board-profiles-user.md#when-no-backend-ca
   `test_a_profile_without_sizes_or_interfaces_has_only_the_console`.
 - `test_a_profile_that_breaks_the_schema_is_refused_with_the_key`: each message of
   [Failure modes](#failure-modes).
+- `test_the_console_is_uart0_unless_the_profile_says_usb_serial_jtag`: the default, the value on
+  the S3, C3 and C6, and `uart0` in every shipped profile;
+  `test_a_console_the_chip_does_not_have_is_refused`: the classic ESP32's refusal and the other
+  values; `test_a_console_on_usb_serial_jtag_leaves_uart0_and_its_pins_to_the_routes`: a route on
+  UART0 and a line on its TX pin taken with a USB console, refused with a UART0 one;
+  `test_a_console_on_usb_serial_jtag_takes_the_usb_pads`: a route and a line on the D- and D+
+  pads refused with a USB console, on the S3, C3 and C6, and taken with a UART0 one.
 - `test_a_profile_takes_the_pads_and_uarts_of_its_chip`: the S3's, the C3's and the C6's pads,
   UARTs and console pins; `test_gpio_34_drives_on_the_s3_where_the_classic_esp32_has_it_input_only`;
   `test_each_chip_s_devkit_routes_the_gnss_and_the_echo_lines`: the three devkit profiles.

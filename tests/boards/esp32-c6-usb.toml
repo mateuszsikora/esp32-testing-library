@@ -1,0 +1,12 @@
+# An ESP32-C6 board without a USB-to-UART bridge: its console is the chip's USB-Serial/JTAG
+# controller, as firmware/console_repl_usb has it. With it UART0 is free, and `uart.uart0` on its
+# IO MUX pins, GPIO 16 (TX) and 17 (RX), shows what the ROM prints there.
+name = "esp32-c6-usb"
+chip = "esp32c6"
+console = "usb-serial-jtag"
+
+[uart.uart0]
+port = 0
+tx = 16
+rx = 17
+baud = 115200

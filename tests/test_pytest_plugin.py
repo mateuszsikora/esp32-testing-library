@@ -335,6 +335,10 @@ def test_a_bundled_name_that_looks_like_a_path_suggests_path(
             'name = "local"\nchip = "esp32"\n[uart.gnss]\nport = 0\ntx = 4\nrx = 5\nbaud = 9600',
             "*UART0 is console's*",
         ),
+        (
+            'name = "local"\nchip = "esp32"\nconsole = "usb-serial-jtag"',
+            "*console: the ESP32 has no USB-Serial/JTAG controller; use uart0*",
+        ),
     ],
 )
 def test_invalid_local_profiles_fail_at_collection(
@@ -852,6 +856,18 @@ def test_runner_command_flashes_every_file_at_its_offset(tmp_path: Path) -> None
         "--flash-at",
         f"0x10000={build.resolve()}/app.bin",
     ]
+
+
+def test_runner_command_selects_the_usb_console_of_a_profile_that_has_it(tmp_path: Path) -> None:
+    fake_build(tmp_path)
+    app = esp32sim.load_app(str(tmp_path))
+    args = (Path("/r/runner"), Path("/r/rom.elf"), app, 300, Path("/l.sock"))
+    assert "--console-port" not in esp32sim.runner_command(*args, held=True)
+    assert "--console-port" not in esp32sim.runner_command(*args, console="uart0")
+    command = esp32sim.runner_command(*args, held=True, console="usb-serial-jtag")
+    at = command.index("--console-port")
+    assert command[at : at + 2] == ["--console-port", "usb"]
+    assert command[at - 4 : at] == ["--console", "both", "--peer-timeout", "0"]
 
 
 def test_runner_command_puts_a_card_in_the_slot_once_the_test_inserts_one(tmp_path: Path) -> None:
@@ -2586,8 +2602,9 @@ def test_the_serial_backend_refuses_a_board_with_another_chip(
     )
     result.stdout.fnmatch_lines(
         [
-            "*serial: the board profile esp32-s3-devkitc carries an ESP32-S3; the serial backend"
-            " runs the classic ESP32 only*"
+            "*serial: the board profile esp32-s3-devkitc carries an ESP32-S3 with its console on"
+            " UART0; the serial backend runs the classic ESP32, and the ESP32-S3 with its console"
+            " on USB-Serial/JTAG*"
         ]
     )
 

@@ -1,9 +1,11 @@
 #!/bin/sh
-# Builds the PlatformIO validation images, Arduino-ESP32 sketches for the classic ESP32, each into
-# $FIRMWARE_OUT/<image>/.pio/build/esp32dev/, the build directory `pio run` leaves and esp32tl
-# loads as it is. FIRMWARE_OUT is firmware/ by default.
+# Builds the PlatformIO validation images, Arduino-ESP32 sketches, each into
+# $FIRMWARE_OUT/<image>/.pio/build/<env>/, the build directory `pio run` leaves and esp32tl
+# loads as it is. FIRMWARE_OUT is firmware/ by default. An image is a project and one of the
+# environments of its platformio.ini: IMAGE alone is its esp32dev environment, for the classic
+# ESP32, and IMAGE@ENV its environment ENV.
 #
-#   firmware/build-platformio.sh [IMAGE...]     all of them when none is named
+#   firmware/build-platformio.sh [IMAGE[@ENV]...]     all of them when none is named
 #
 # The build runs in a Python container pinned by digest, with pioarduino's PlatformIO Core pinned
 # by version below and pioarduino's espressif32 platform pinned by its release URL in each
@@ -14,17 +16,20 @@
 # container build only. Every build directory records how it was built in esp32tl-build.json,
 # with "container": null for a local build.
 #
-# Builds are incremental. A project's .pio/ is removed first when the record of its last build
-# is missing or, compared as text, differs from the record of the build about to start: another
-# PlatformIO Core, platform, container or project directory. PlatformIO itself cleans the build
-# when platformio.ini changes, removing the record with it, so the record is written again once
-# the build finishes. esp32tl-built marks a build that finished.
+# Builds are incremental. An image's build, .pio/build/<env>/, is removed first when its record is
+# missing or, compared as text, differs from the record of the build about to start: another
+# PlatformIO Core, platform, container or project directory. Before an environment's first build,
+# the records of the project's other environments are compared instead. With it go the other
+# environments' builds whose records differ too and what they share outside build/; another
+# environment's build with the same record stays. PlatformIO itself cleans the build when
+# platformio.ini changes, removing the record with it, so the record is written again once the
+# build finishes. esp32tl-built marks a build that finished.
 set -eu
 
 PIOARDUINO_VERSION=6.2.0
 CONTAINER=python:3.13-bookworm@sha256:cc55e4ded9c95f6ce2133b3d096db43f214d280c2a8af65d83e246c8fa7d168c
-IMAGES="arduino_shell"
-# The environment of every project's platformio.ini.
+IMAGES="arduino_shell arduino_shell@esp32s3_usb"
+# The environment of an image named without @ENV.
 ENV=esp32dev
 
 die() {
@@ -38,6 +43,8 @@ for image in "$@"; do
 	*) die "unknown image '$image'; the images are: $IMAGES" ;;
 	esac
 done
+# Intentional splitting: image names contain neither whitespace nor glob characters.
+# shellcheck disable=SC2086
 [ $# -gt 0 ] || set -- $IMAGES
 
 # What the build needs is checked before anything is written. Docker creates /.dockerenv in every
@@ -123,9 +130,14 @@ json_string() {
 	printf '"%s"' "$(printf '%s' "$1" | sed 's/[\\"]/\\&/g')"
 }
 
-for image in "$@"; do
+for entry in "$@"; do
+	image=${entry%@*}
+	env=$ENV
+	[ "$entry" = "$image" ] || env=${entry#*@}
 	project=$PWD/firmware/$image
-	platform=$(sed -n 's/^platform *= *//p' "$project/platformio.ini")
+	# The first `platform =` line: in arduino_shell the one of its [env] section, which every
+	# environment inherits.
+	platform=$(sed -n '/^platform *= */{s///p;q;}' "$project/platformio.ini")
 	[ -n "$platform" ] || die "$image: $project/platformio.ini sets no platform"
 	# pio runs only in a writable project directory, and the repository is read-only in the
 	# container: it runs in $out/<image>/, which is the project itself through the writable /out
@@ -138,21 +150,50 @@ for image in "$@"; do
 		cp -Rp "$project/src" "$directory/"
 	fi
 	workspace=$directory/.pio
-	build=$workspace/build/$ENV
-	shown=${ESP32TL_HOST_OUT:-$out}/$image/.pio/build/$ENV
+	build=$workspace/build/$env
+	shown=${ESP32TL_HOST_OUT:-$out}/$image/.pio/build/$env
 	provenance=$(printf '{"platformio": %s, "platform": %s, "container": %s, "project": %s}' \
 		"$(json_string "$pio_version")" "$(json_string "$platform")" "$container" \
 		"$(json_string "$project")")
-	if [ -d "$workspace" ] && [ "$(cat "$build/esp32tl-build.json" 2>/dev/null)" != "$provenance" ]; then
-		echo "firmware/build-platformio.sh: $image: $shown was built another way, removing it"
-		rm -rf "$workspace"
+	# This environment's record, or, before its first build, those of the project's other
+	# environments: a .pio/ without any was made by something else.
+	stale=
+	if [ -d "$build" ]; then
+		[ "$(cat "$build/esp32tl-build.json" 2>/dev/null)" = "$provenance" ] || stale=1
+	elif [ -d "$workspace" ]; then
+		for record in "$workspace"/build/*/esp32tl-build.json; do
+			[ -f "$record" ] && [ "$(cat "$record")" = "$provenance" ] || stale=1
+		done
+	fi
+	# What another way left goes: this environment's build, every other environment's build whose
+	# record is not this one, and what the environments share outside build/. Another
+	# environment's build made this way stays, and so does build/project.checksum, without which
+	# pio would remove every build.
+	if [ -n "$stale" ]; then
+		echo "firmware/build-platformio.sh: $entry: $shown was built another way, removing it"
+		for path in "$workspace"/* "$workspace"/.[!.]*; do
+			[ -e "$path" ] || continue
+			if [ "$path" != "$workspace/build" ]; then
+				rm -rf "$path"
+				continue
+			fi
+			for sibling in "$workspace"/build/*/; do
+				sibling=${sibling%/}
+				[ -d "$sibling" ] || continue
+				if [ "$sibling" != "$build" ] &&
+					[ "$(cat "$sibling/esp32tl-build.json" 2>/dev/null)" = "$provenance" ]; then
+					continue
+				fi
+				rm -rf "$sibling"
+			done
+		done
 	fi
 	mkdir -p "$build"
 	rm -f "$build/esp32tl-built"
 	printf '%s\n' "$provenance" >"$build/esp32tl-build.json"
-	"$pio" run --project-dir "$directory" --environment "$ENV"
-	[ -f "$build/firmware.bin" ] || die "$image: the build wrote no firmware.bin"
+	"$pio" run --project-dir "$directory" --environment "$env"
+	[ -f "$build/firmware.bin" ] || die "$entry: the build wrote no firmware.bin"
 	printf '%s\n' "$provenance" >"$build/esp32tl-build.json"
 	: >"$build/esp32tl-built"
-	echo "firmware/build-platformio.sh: $image built in $shown (PlatformIO Core $pio_version)"
+	echo "firmware/build-platformio.sh: $entry built in $shown (PlatformIO Core $pio_version)"
 done

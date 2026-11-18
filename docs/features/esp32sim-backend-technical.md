@@ -136,9 +136,11 @@ or `POWER_ON_UTC`, for `Esp32Sim.utc` and the GNSS receiver's dates, and logs
    `--wifi ssid=<ssid>,chan=<channel>[,psk=<password>][,bssid=<bssid>]` and one
    `--wifi-nearby ssid=<ssid>,chan=<channel>,rssi=<dBm>,secure=<0|1>[,bssid=<bssid>]` per network
    around. With a `bluetooth` the test used (`Bluetooth.used`), `bluetooth=` adds
-   `--bt <app.elf>` after that. Without `held`, as the [`esp32tl` command](cli-user.md) calls
+   `--bt <app.elf>` after that. With `console="usb-serial-jtag"`, the profile's `console`,
+   `--console-port usb` comes right after `--console both --peer-timeout 0`, before `--board`; a
+   profile whose console is UART0 adds nothing. Without `held`, as the [`esp32tl` command](cli-user.md) calls
    it, the `--console` and `--peer-timeout` pairs are left out, and so is the card; the command
-   passes its profile's `psram_mb` too. The runner's options are in
+   passes its profile's `psram_mb` and `console` too. The runner's options are in
    [runner-user.md](runner-user.md).
 3. **`RunnerPopen(msg_queue, command, meta)`** is `DuplicateStdoutPopen` with one change: if the
    process cannot start (`OSError`), it closes the log file the parent opened before the fork,
@@ -410,8 +412,8 @@ network's `network events:`. With a slot, the `sd_card: a card holding <path>` o
 
 ### Console taps
 
-`Esp32Sim._console` is a `Uart("console", Wire(1, 3, 115200), ...)` used only for tap/path handling;
-it is not registered in `BoardLink`. It shares `_files`, `_asked` and `log` with UART routes.
+`Esp32Sim._console` is the `ConsoleInput` below, a `Uart` registered in `BoardLink` for the
+console's input, and for tap/path handling. It shares `_files`, `_asked` and `log` with UART routes.
 `tap_console(path)` delegates to its `tap`, which logs `console.tap(...)` at 0. `_printed` records
 `(t, "out", data)` on its tap before feeding the console buffers and run log.
 `set_up` includes `the tap of console`; `_write_taps` includes `_console` alongside `_uarts`,
@@ -772,9 +774,16 @@ stops and joins the runner before closing the SD slot in a `finally` block, so o
 removed on both successful and failed teardown. An uninserted built image is also cleaned; merely
 building does not count as firmware setup for the no-power-on guard.
 
-Console input is a `ConsoleInput` link interface with `Wire(None, 3, 115200)`. Its pending
-writes retain the test clock timestamp until the next poll. GPIO 3 is watched, GPIO 1 is not;
-output still arrives only through `console`. The normal UART warning and report paths apply.
+Console input is a `ConsoleInput` link interface with `Wire(None, rx, 115200)`, `rx` the chip's
+`console_pin("rx")`, GPIO 3 on the classic ESP32. Its pending writes retain the test clock
+timestamp until the next poll. UART0's RX pin is watched, its TX pin is not; output still arrives
+only through `console`. The normal UART warning and report paths apply. With a profile whose
+`console` is `usb-serial-jtag`, `ConsoleInput` has no wire and `usb=True`: `Interface.usb_console`
+is true, it watches no pin, and `BoardLink` sends its writes as `console_rx`, in chunks of at most
+512 KiB, which the runner refuses unless it has `--console-port usb`
+([protocol 5.23](../protocol.md#523-console_rx-ext-usb-console)). The link's report then has the
+line `USB-Serial/JTAG console: {n} bytes of console_rx lost with the board's supply off` from
+`stats.console_rx_lost`.
 
 ## Virtual station networks
 

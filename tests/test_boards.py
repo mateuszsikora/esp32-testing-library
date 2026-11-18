@@ -517,3 +517,88 @@ def test_each_chip_s_devkit_routes_the_gnss_and_the_echo_lines(
     the_chip = boards.CHIPS[chip]
     assert (the_chip.console_pin("tx"), the_chip.console_pin("rx")) == console
     assert profile.interfaces == ["console", "uart.gnss", "lines.echo", "wifi", "bluetooth"]
+
+
+def test_the_console_is_uart0_unless_the_profile_says_usb_serial_jtag(tmp_path: Path) -> None:
+    path = tmp_path / "x.toml"
+    path.write_text("name = 'x'\nchip = 'esp32s3'\n")
+    assert boards.load(path).console == "uart0"
+    path.write_text("name = 'x'\nchip = 'esp32s3'\nconsole = 'uart0'\n")
+    assert boards.load(path).console == "uart0"
+    for chip in ("esp32s3", "esp32c3", "esp32c6"):
+        path.write_text(f"name = 'x'\nchip = '{chip}'\nconsole = 'usb-serial-jtag'\n")
+        profile = boards.load(path)
+        assert (profile.console, profile.interfaces[0]) == ("usb-serial-jtag", "console")
+    # every shipped profile's console is UART0: their devkits have a USB-to-UART bridge
+    assert {boards.profile(name).console for name in boards.names()} == {"uart0"}
+
+
+@pytest.mark.parametrize(
+    ("text", "message"),
+    [
+        (
+            "name = 'x'\nchip = 'esp32'\nconsole = 'usb-serial-jtag'\n",
+            "x.toml: console: the ESP32 has no USB-Serial/JTAG controller; use uart0",
+        ),
+        (
+            "name = 'x'\nchip = 'esp32s3'\nconsole = 'usb'\n",
+            "x.toml: console: 'usb' is not one of uart0, usb-serial-jtag",
+        ),
+        (
+            "name = 'x'\nchip = 'esp32s3'\nconsole = 1\n",
+            "x.toml: console: 1 is not one of uart0, usb-serial-jtag",
+        ),
+    ],
+)
+def test_a_console_the_chip_does_not_have_is_refused(
+    tmp_path: Path, text: str, message: str
+) -> None:
+    (tmp_path / "x.toml").write_text(text)
+    with pytest.raises(ProfileError) as error:
+        boards.load(tmp_path / "x.toml")
+    assert str(error.value) == message
+
+
+def test_a_console_on_usb_serial_jtag_leaves_uart0_and_its_pins_to_the_routes(
+    tmp_path: Path,
+) -> None:
+    route = "[uart.uart0]\nport = 0\ntx = 43\nrx = 44\nbaud = 115200\n"
+    path = tmp_path / "x.toml"
+    path.write_text(f"name = 'x'\nchip = 'esp32s3'\nconsole = 'usb-serial-jtag'\n{route}")
+    assert boards.load(path).uart["uart0"] == UartRoute(port=0, tx=43, rx=44, baud=115200)
+    path.write_text(
+        "name = 'x'\nchip = 'esp32s3'\nconsole = 'usb-serial-jtag'\n[lines.l]\na = 43\n"
+    )
+    assert boards.load(path).lines["l"]["a"].pin == 43
+    # with the console on UART0, both are its
+    path.write_text(f"name = 'x'\nchip = 'esp32s3'\n{route}")
+    with pytest.raises(
+        ProfileError, match=re.escape("x.toml: uart.uart0.port: UART0 is console's")
+    ):
+        boards.load(path)
+    path.write_text("name = 'x'\nchip = 'esp32s3'\n[lines.l]\na = 43\n")
+    with pytest.raises(ProfileError, match=re.escape("lines.l.a: GPIO 43 is console.tx already")):
+        boards.load(path)
+
+
+@pytest.mark.parametrize(
+    ("chip", "dm", "dp"), [("esp32s3", 19, 20), ("esp32c3", 18, 19), ("esp32c6", 12, 13)]
+)
+def test_a_console_on_usb_serial_jtag_takes_the_usb_pads(
+    tmp_path: Path, chip: str, dm: int, dp: int
+) -> None:
+    path = tmp_path / "x.toml"
+    route = f"[uart.aux]\nport = 1\ntx = {dm}\nrx = 4\nbaud = 9600\n"
+    path.write_text(f"name = 'x'\nchip = '{chip}'\nconsole = 'usb-serial-jtag'\n{route}")
+    with pytest.raises(ProfileError) as error:
+        boards.load(path)
+    assert str(error.value) == f"x.toml: uart.aux.tx: GPIO {dm} is console.usb_dm already"
+    path.write_text(
+        f"name = 'x'\nchip = '{chip}'\nconsole = 'usb-serial-jtag'\n[lines.l]\na = {dp}\n"
+    )
+    with pytest.raises(ProfileError) as error:
+        boards.load(path)
+    assert str(error.value) == f"x.toml: lines.l.a: GPIO {dp} is console.usb_dp already"
+    # with the console on UART0 the pads are GPIOs like any other
+    path.write_text(f"name = 'x'\nchip = '{chip}'\n{route}")
+    assert boards.load(path).uart["aux"].tx == dm

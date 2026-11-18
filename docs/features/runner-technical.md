@@ -77,7 +77,8 @@ its pin, `357b0e5`.
      installs esp32sim's VHCI hooks over its symbols, puts the `Forwarder` in esp32sim's session,
      and prints the `Bluetooth controller on the socket` line.
    - `m.boot_rom()` (core 0 to the reset vector); `m.console.mask = CONSOLE_UART0` (`2`, bit 1 of
-     `Console::mask`: UART0 only to stdout, not USB-CDC or UART1/2), or `0` with
+     `Console::mask`: UART0 only to stdout, not USB-CDC or UART1/2), `CONSOLE_USB` (`1`, bit 0:
+     the USB-Serial/JTAG controller only) with `--console-port usb`, or `0` with
      `--console socket`; and
      `m.max_cycles = (max_seconds * opts.chip.cpu_hz as f64) as u64`. `cpu_hz` is the chip's
      `Soc::CPU_HZ`, 240 000 000 on the classic chip (`esp32/src/periph.rs`), the fixed reference
@@ -326,9 +327,25 @@ error. `Session::run` calls `write_flash_at_end` after `drive` has returned and 
 `--board`. It logs a failure to stderr and returns nothing, so the exit code stays the first cause's
 ([protocol 5.21](../protocol.md#521-flash_dump-and-flash_dump_ack-ext-131)).
 
+With `--console-port usb`, `Options.usb_console` is set. `collect`, at every slice boundary and
+before every reset, takes `Guest::take_usb_console` (on the S3, C3 and C6 `std::mem::take` of
+esp-soc's `Console::usb`, the backlog `Machine::drain_console` fills inside `run`, trimmed by
+esp-soc to its last 48 KiB once it passes 64 KiB) and, with `--console socket` or `both`, pushes it
+as `Item::UsbConsole { cycle, data }` at the bus's cycle, after the board's log of the slice.
+`process_pending` closes the open message and sends `data` as `console` messages, cut after every
+`\n` and at `MAX_DATA`, all at that `t`; UART0's bytes then go out as `console` no more, only as
+`uart_tx` to a peer that watches the TX pin. `take_turn` queues `console_rx` as
+`Input::UsbConsole(data)` (a protocol error without the flag), and `apply_inputs` gives it to
+`Guest::usb_console_input` when it comes due, which calls esp-soc's `SocBus::serial_input` (with
+`flush_ticks` and `refresh_tick_budget` around it on the S3); with the supply off it adds the length
+to `Stats::console_rx_lost` instead, which is `Some(0)` from the start with the flag and `None`
+without, so `stats` has the field only with it
+([protocol 5.23](../protocol.md#523-console_rx-ext-usb-console)).
+
 `Session` runs the protocol over two traits, `Guest` (the machine: cycles, `run_until`,
 `chip_reset`, `power_on_reset`, `idle_until`, `uart_route`, `rx_pending`, `uart_receive`, `uart_frame_error`,
-`gpio_drive`, `take_gpio_inputs`, and for Wi-Fi `take_eth_frames`, `eth_input`,
+`gpio_drive`, `take_gpio_inputs`, for `--console-port usb` `take_usb_console` and
+`usb_console_input`, whose defaults are a chip without the controller, and for Wi-Fi `take_eth_frames`, `eth_input`,
 `wifi_access_point`, `wifi_leave`, `wifi_drops` and `wifi_forget`, whose defaults are a chip
 without Wi-Fi: no frames, nothing taken, nothing attached, left at once, no drops, nothing to
 forget, and `flash`, for `--flash-out`, whose default is an empty slice and which reads `bus.flash`
@@ -696,7 +713,8 @@ esp32sim's pacing itself is `Machine::rt_pace`
 The command line and the usage text: [runner-user.md](runner-user.md#run-an-image).
 
 - stdin: not read.
-- stdout: the guest's UART0 and nothing else, written by esp-soc's `Machine::drain_console`, so
+- stdout: the guest's console, UART0 or with `--console-port usb` the USB-Serial/JTAG
+  controller, and nothing else, written by esp-soc's `Machine::drain_console`, so
   that whoever reads stdout alone gets the guest's output as the guest wrote it; nothing with
   `--console socket`. The runner's own lines go to stderr. Under the backend the two meet again: pytest-embedded's
   `DuplicateStdoutPopen` writes stdout and stderr into one log, `dut.log`; the test's console
@@ -860,6 +878,8 @@ Every message starts with `esp32tl-runner: `. Usage errors exit 2 and add a seco
 | `--psram-mb: {title} supports only {sizes} MiB, got {v:?}` | a size the chip's `Profile::psram_mb` does not list, nor 0: `the classic ESP32 supports only 0 or 4`, `the ESP32-S3 supports only 0, 2, 4 or 8`, `the ESP32-C3 supports only 0` |
 | `--wifi: {chip} has no Wi-Fi in esp32sim`, `--wifi-sta: {chip} has no virtual station for a SoftAP in esp32sim`, `--bt: {chip} has no VHCI hooks in esp32sim` | the flag on a chip whose `Profile` says esp32sim lacks it; only `--wifi-sta` is refused on the four chips there are |
 | `--console: expected stdout, socket or both, got {v:?}` | any other value |
+| `--console-port: expected uart0 or usb, got {v:?}` | any other value |
+| `--console-port usb: {chip} has no USB-Serial/JTAG controller` | `--console-port usb` on a chip whose `Profile::usb_serial_jtag` is false: `esp32` |
 | `--console socket and both send the console to the peer: they need --board` | `--console socket` or `both` without `--board` |
 | `--board {spec}: expected socket:PATH or tcp:HOST:PORT` | neither prefix (`--board none`), an empty path, an empty host, or a port that is not a number from 0 to 65535 |
 | `--peer-timeout: expected a number of seconds, 0 for none, got {v:?}` | not a number, negative, `inf` or `NaN`, too large for a `Duration` (`1e20`), or above 0 but rounding to 0 ns (`1e-10`) |
@@ -908,7 +928,7 @@ peer come from `session.rs` and `transport.rs`:
 | 0 | `stop from the peer` | the peer's turn ended with `stop` |
 | 0 | `signal` | the first `SIGTERM` or `SIGINT` |
 | 1 | `the emulator stopped before --max-seconds: {stop:?}` | any `Stop` but `Halted` and `SwReset` |
-| 3 | `protocol error by the peer at {board}: {what}: {line}` | `{what}` is one of: `version {v}, the runner speaks version 1`, `chip {chip:?}, the runner runs {name:?}` (the selected chip's), `watch holds GPIO {pin}, which the {name} does not have` (a pin outside the chip's `Profile::gpios`; on the classic ESP32 any pin but 0 to 39 without 24 and 28 to 31), `expected hello`, `hello after the handshake`, a parse error of `protocol::parse` (`not JSON: …`, `not a JSON object`, `no "type"`, `unknown type …`, `{type}: "{field}" is missing`, `… is not an integer`, `… is negative`, `… is not a GPIO number`, `uart_rx: bad base64 character …`, and the like), `t {t} is before this turn's sync at {b} (rule 2)`, `GPIO {pin} is not in the peer's watch`, `a baud of 0`, `ack {ack}, but the last event before this sync was seq {seq}`, `quiet_until {q} is not after this turn's sync at {b}`, `adc is not implemented yet`, `eth_rx without --wifi`, `wifi_ap without --wifi` (after the check of `t`), `eth_rx: an Ethernet frame of {n} bytes; one without FCS has 14 to 1518`, `eth_rx: bad base64 character …`, `hci_rx without --bt` (after the check of `t`), `hci_rx: an H4 packet of {n} bytes; esp32sim's VHCI carries 1 to 496`, `wifi_ap: "on" is not true or false`, `sd_card without --sd-spi` (after the check of `t`), `sd_card: "image" is not a string`. `{line}` is the peer's line, cut after 200 characters with `...` |
+| 3 | `protocol error by the peer at {board}: {what}: {line}` | `{what}` is one of: `version {v}, the runner speaks version 1`, `chip {chip:?}, the runner runs {name:?}` (the selected chip's), `watch holds GPIO {pin}, which the {name} does not have` (a pin outside the chip's `Profile::gpios`; on the classic ESP32 any pin but 0 to 39 without 24 and 28 to 31), `expected hello`, `hello after the handshake`, a parse error of `protocol::parse` (`not JSON: …`, `not a JSON object`, `no "type"`, `unknown type …`, `{type}: "{field}" is missing`, `… is not an integer`, `… is negative`, `… is not a GPIO number`, `uart_rx: bad base64 character …`, and the like), `t {t} is before this turn's sync at {b} (rule 2)`, `GPIO {pin} is not in the peer's watch`, `a baud of 0`, `ack {ack}, but the last event before this sync was seq {seq}`, `quiet_until {q} is not after this turn's sync at {b}`, `adc is not implemented yet`, `eth_rx without --wifi`, `wifi_ap without --wifi` (after the check of `t`), `eth_rx: an Ethernet frame of {n} bytes; one without FCS has 14 to 1518`, `eth_rx: bad base64 character …`, `hci_rx without --bt` (after the check of `t`), `hci_rx: an H4 packet of {n} bytes; esp32sim's VHCI carries 1 to 496`, `console_rx without --console-port usb` (after the check of `t`), `console_rx: bad base64 character …`, `wifi_ap: "on" is not true or false`, `sd_card without --sd-spi` (after the check of `t`), `sd_card: "image" is not a string`. `{line}` is the peer's line, cut after 200 characters with `...` |
 | 3 | `protocol error by the peer at {board}: a line longer than 1 MiB` or `…: a line that is not UTF-8` | from the socket, without the line |
 | 4 | `the peer at {board} is gone: {why}` | `{why}` is `the peer closed the socket`, `read failed: {error}`, `write failed: {error}`, `the socket accepts no more data`, `the peer's turn took longer than --peer-timeout`, `the peer read nothing for longer than --peer-timeout` or, while the last messages are written, `the peer did not read the last messages in time` |
 
@@ -962,6 +982,19 @@ a guest that programs a byte between two dumps;
   and 17592186044416 (which would overflow `<< 20`), `--board none`, `socket:`, `tcp:host`,
   `tcp::7000` and `tcp:h:99999`, `--peer-timeout -1`, `nan`, `1e20`, `inf` and `1e-10`, and
   `--console socket` and `both` without `--board`.
+  `console_port_selects_uart0_or_the_usb_serial_jtag_controller` checks `--console-port`'s
+  default, `usb` on the S3, C3 and C6, its refusal on the classic ESP32 and another value.
+  In `runner/src/session/tests.rs`,
+  `with_the_console_on_usb_its_output_goes_out_as_console_and_uart0_stays_off_it` checks the
+  `console` messages of a USB console, one per line at the slice's end, and that UART0's bytes are
+  none of them; `console_rx_reaches_the_usb_console_when_it_comes_due_and_is_lost_with_the_supply_off`
+  checks `console_rx`'s time and `console_rx_lost`; `console_rx_needs_the_console_on_usb` the
+  protocol error without the flag. `runner/src/protocol/tests.rs` parses `console_rx` and writes
+  `console_rx_lost`. `console.mask` itself, set in `main.rs`'s `setup`, is checked on the real
+  binary by `test_the_runner_prints_the_console_port_it_is_given_on_stdout` in
+  `tests/test_runner_link.py`: without a peer, stdout holds the bootloader and the REPL's prompt
+  with `--console-port usb`, and the ROM's banner alone with `uart0`, on the S3, C3 and C6.
+  `--console socket` with `--console-port usb`, mask 0, has no test of its own.
   `an_sd_card_slot_takes_its_pins_in_any_order_and_a_card_from_power_on` checks `--sd-rw` with
   `--sd-spi` in either order, `--sd-spi` alone, and an input-only MISO; `sd_card_usage_errors`
   checks the text of each `--sd-rw` and `--sd-spi` usage error. `wifi_takes_esp32sims_access_point_and_the_networks_around` checks
@@ -1138,7 +1171,9 @@ minimal peer in Python: a run to `--max-seconds` with `--console socket` (the co
 and not on stdout, `stats`, the `end` line), `SIGTERM` while the runner waits for the peer under
 `--peer-timeout 0`, which nothing else would end (exit 0 with `stats`, `end: signal`, at the turn's
 200 ms), a late input and a version mismatch (exit 3 with `stats`), a peer that does not answer
-within `--peer-timeout 0.2` (exit 4, nothing more), and no peer listening (exit 4).
+within `--peer-timeout 0.2` (exit 4, nothing more), and no peer listening (exit 4). Without a
+peer, `test_the_runner_prints_the_console_port_it_is_given_on_stdout` runs `console_repl_usb` on
+the S3, C3 and C6 with `--console-port usb` and `uart0` and reads stdout.
 
 Not covered: the text of the usage messages but those of the SD card and of Wi-Fi
 (`usage_errors` checks only the error kind),

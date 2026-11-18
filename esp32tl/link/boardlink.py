@@ -23,7 +23,8 @@ in as `eth_rx`, a frame per output. With `--sd-spi`, the one interface that is t
 runner says the slot holds after each change (`sd_card_ack`). With `--bt`, the H4 packets the
 guest's Bluetooth host sends (`hci_tx`) go to the one interface that is its controller
 (`Interface.bluetooth`), a packet per call, and what it answers goes in as `hci_rx`, a packet per
-output.
+output. With `--console-port usb`, what the one interface that is the USB-Serial/JTAG console
+(`Interface.usb_console`) sends goes in as `console_rx`; it has no pins.
 
 The backend can also switch the board's supply and pulse the chip's EN pin (`board_input`): the
 message goes out in the harness's answer to the turn the link is held at, or to the first turn
@@ -55,6 +56,7 @@ from esp32tl.link.protocol import (
     Adc,
     ChipReset,
     Console,
+    ConsoleRx,
     EthRx,
     EthTx,
     Event,
@@ -160,6 +162,13 @@ class Interface:
         `receive` gets each H4 packet the guest's host sends (`hci_tx`), with its packet-type
         byte, and each output it returns is one H4 packet for the host (`hci_rx`), at most
         `HCI_MAX` bytes."""
+        return False
+
+    @property
+    def usb_console(self) -> bool:
+        """Whether the interface is the guest's console on its USB-Serial/JTAG controller, with
+        `--console-port usb`: it has no wire, the guest's output reaches the link's `console`, and
+        each output it returns goes in as `console_rx`, with no line rate."""
         return False
 
     @property
@@ -686,6 +695,9 @@ class BoardLink:
             if interface.bluetooth:
                 inputs.append((interface, HciRx(t, data)))
                 continue
+            if interface.usb_console:
+                inputs += [(interface, ConsoleRx(t, chunk)) for chunk in _chunks(data)]
+                continue
             wire = interface.wire
             if wire is None or wire.rx is None:
                 raise LinkError(f"{interface.name} sent bytes, and has no RX pin to send them on")
@@ -740,6 +752,7 @@ class BoardLink:
             | Adc
             | EthRx
             | HciRx
+            | ConsoleRx
             | WifiAp
             | SdCardChange
             | SdFault
@@ -768,6 +781,12 @@ class BoardLink:
             if not interface.bluetooth:
                 raise LinkError(
                     f"{source} sent {message.TYPE}, and is not the guest's Bluetooth controller"
+                )
+            return
+        if isinstance(message, ConsoleRx):
+            if not interface.usb_console:
+                raise LinkError(
+                    f"{source} sent {message.TYPE}, and is not the USB-Serial/JTAG console"
                 )
             return
         if isinstance(message, SdCardChange | SdFault | SdClear):
@@ -839,6 +858,11 @@ class BoardLink:
                 f" inputs_not_applied {stats.inputs_not_applied},"
                 f" rx_bytes_not_paced {stats.rx_bytes_not_paced}"
             )
+            if stats.console_rx_lost is not None:
+                lines.append(
+                    f"  USB-Serial/JTAG console: {counted(stats.console_rx_lost, 'byte')} of"
+                    " console_rx lost with the board's supply off"
+                )
             if stats.wifi is not None:
                 w = stats.wifi
                 lines.append(

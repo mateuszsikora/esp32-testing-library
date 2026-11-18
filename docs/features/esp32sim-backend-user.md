@@ -323,6 +323,33 @@ names the chip's reset cause with the classic ESP32's names (`boot N: SW_CPU_RES
 12)`): the numbers 1, 3, 5 and 12 mean the same on all four chips, a power-on, a software system
 reset, a wake from deep sleep and `esp_restart()`.
 
+### A console on USB-Serial/JTAG
+
+With `console = "usb-serial-jtag"` in the board profile
+([board profiles](board-profiles-user.md#a-console-on-usb-serialjtag)), on the S3, C3 or C6, the
+console is the chip's USB-Serial/JTAG controller: the backend starts the runner with
+`--console-port usb`, `board.console` reads what the firmware writes there and `write`, `sendline`
+and the expects work as on UART0, and `board.console_output` and `console.lines()` are its bytes.
+What the test writes reaches the firmware whole, at the board's time it was written: USB has no
+baud, and a line longer than one 64-byte USB packet arrives whole (`tests/test_usb_console.py`,
+Arduino's HWCDC). What the test writes while the board's supply is off is lost, as on a real
+board with no USB device there, and the link's report says how much:
+`USB-Serial/JTAG console: 5 bytes of console_rx lost with the board's supply off`. The output's
+times are those of the runner's slices, at most 1 ms after the firmware wrote it
+([protocol 5.7](../protocol.md#57-console)).
+
+What `console_output` holds from power-on, measured with `firmware/console_repl_usb` on each chip:
+the ROM's banner, from `ESP-ROM:` to `entry 0x…`, then the second-stage bootloader and the
+application. The ROM prints its banner on UART0 too, and nothing else goes there; that copy is
+seen through a route on UART0's pins, which a USB console leaves free, as `uart.uart0` of
+`tests/boards/esp32-s3-usb.toml` taps it. A firmware whose console is UART0 also copies its
+output to the controller by default (ESP-IDF's `CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=y`),
+so a profile with the USB console on such a firmware shows its log but cannot type into its REPL
+([decision](../decisions/harness.md#on-the-s3-c3-and-c6-the-rom-prints-on-uart0-and-on-usb-serialjtag)).
+
+A tap of the console records what crossed the controller both ways, in the same format as a UART0
+console's ([console recordings](#console-recordings)): a recording says nothing of a baud.
+
 ## When the backend cannot start
 
 Unless the table says otherwise, the test gets an error at setup and its body does not run, and

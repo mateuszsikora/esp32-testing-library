@@ -83,7 +83,8 @@ def test_refuses_an_unknown_image(tmp_path: Path) -> None:
     result = run_build(env, "arduino_shell", "nope")
     assert result.returncode == 1
     assert result.stderr == (
-        "firmware/build-platformio.sh: unknown image 'nope'; the images are: arduino_shell\n"
+        "firmware/build-platformio.sh: unknown image 'nope'; the images are: arduino_shell"
+        " arduino_shell@esp32s3_usb\n"
     )
     assert not (tmp_path / "out").exists()
 
@@ -193,12 +194,10 @@ def test_local_build_runs_pio_in_a_copy_and_records_how(
     result = run_build(local_pio)
     assert result.returncode == 0, result.stderr
     directory = (tmp_path / "out").resolve() / "arduino_shell"
+    # every image: the project's esp32dev environment, then its esp32s3_usb one
     assert (tmp_path / "pio.log").read_text().splitlines() == [
-        "run",
-        "--project-dir",
-        str(directory),
-        "--environment",
-        "esp32dev",
+        *("run", "--project-dir", str(directory), "--environment", "esp32dev"),
+        *("run", "--project-dir", str(directory), "--environment", "esp32s3_usb"),
     ]
     # FIRMWARE_OUT is not firmware/: pio ran in a copy of the project's platformio.ini and src/
     project = ROOT / "firmware" / "arduino_shell"
@@ -215,8 +214,14 @@ def test_local_build_runs_pio_in_a_copy_and_records_how(
     }
     assert (build / "esp32tl-built").is_file()
     assert "not for goldens" in result.stderr
+    usb = build.parent / "esp32s3_usb"
+    assert json.loads((usb / "esp32tl-build.json").read_text()) == json.loads(
+        (build / "esp32tl-build.json").read_text()
+    )
     assert result.stdout == (
         f"firmware/build-platformio.sh: arduino_shell built in {build} (PlatformIO Core 9.9.9)\n"
+        f"firmware/build-platformio.sh: arduino_shell@esp32s3_usb built in {usb}"
+        " (PlatformIO Core 9.9.9)\n"
     )
 
 
@@ -239,6 +244,36 @@ def test_replaces_a_build_made_another_way(tmp_path: Path, local_pio: dict[str, 
     assert "was built another way, removing it" in result.stdout
     assert not left_over.exists()
     assert json.loads((build / "esp32tl-build.json").read_text())["container"] is None
+
+
+def test_rebuilding_one_environment_keeps_the_others_built_the_same_way(
+    tmp_path: Path, local_pio: dict[str, str]
+) -> None:
+    assert run_build(local_pio).returncode == 0
+    dev = build_dir(tmp_path)
+    usb = dev.parent / "esp32s3_usb"
+    kept = dev / "kept"
+    kept.touch()
+    checksum = dev.parent / "project.checksum"
+    checksum.write_text("x")
+    left_over = dev.parent.parent / "libdeps"
+    left_over.mkdir()
+    (usb / "esp32tl-build.json").write_text(f'{{"container": "{CONTAINER}"}}\n')
+    result = run_build(local_pio, "arduino_shell@esp32s3_usb")
+    assert result.returncode == 0, result.stderr
+    assert (
+        "arduino_shell@esp32s3_usb: " in result.stdout and "was built another way" in result.stdout
+    )
+    # esp32dev's build, made the same way, and pio's checksum stay; what is shared outside build/
+    # and the stale environment go
+    assert kept.exists() and (dev / "esp32tl-built").exists() and checksum.exists()
+    assert not left_over.exists()
+    assert json.loads((usb / "esp32tl-build.json").read_text())["container"] is None
+    # an environment's build made another way goes too
+    (dev / "esp32tl-build.json").write_text(f'{{"container": "{CONTAINER}"}}\n')
+    (usb / "esp32tl-build.json").write_text(f'{{"container": "{CONTAINER}"}}\n')
+    assert run_build(local_pio, "arduino_shell@esp32s3_usb").returncode == 0
+    assert not dev.exists()
 
 
 def test_records_the_build_again_after_pio_cleaned_it(

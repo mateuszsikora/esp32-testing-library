@@ -36,6 +36,9 @@ pub struct Profile {
     pub wifi: bool,
     /// Whether `--bt`, esp32sim's VHCI hooks, is there.
     pub bt: bool,
+    /// Whether the chip has a USB-Serial/JTAG controller, which `--console-port usb` reads and
+    /// writes: esp32sim's `UsbSerialJtag`, the first of the streams `console_take` returns.
+    pub usb_serial_jtag: bool,
     /// The sizes, in MiB, `--psram-mb` can give the chip besides 0; none if esp32sim gives it
     /// no PSRAM.
     pub psram_mb: &'static [usize],

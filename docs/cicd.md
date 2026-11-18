@@ -197,7 +197,7 @@ The matrix runs these independent commands on separate standard VMs:
 | Group | Build command | Tarball |
 |---|---|---|
 | `idf-K`, K=1..4 | `firmware/build.sh --shard K/4` | `build/ci/firmware-idf-K.tar` |
-| `platformio` | `firmware/build-platformio.sh` | `build/ci/firmware-platformio.tar` |
+| `platformio` | `firmware/build-platformio.sh`: each image's environment, `arduino_shell`'s `esp32dev` and `esp32s3_usb`, into `firmware/<image>/.pio/build/<env>/` | `build/ci/firmware-platformio.tar` |
 | `examples-K`, K=1..3 | `firmware/build.sh --examples --shard K/3` | `build/ci/firmware-examples-K.tar` |
 | `chips-K`, K=1..3 | `firmware/build.sh --chips --shard K/3`: the images of the ESP32-S3, ESP32-C3 and ESP32-C6, into `firmware/<image>/build-<chip>/` | `build/ci/firmware-chips-K.tar` |
 
@@ -209,9 +209,10 @@ capacity. This does not yet establish a 5- or 10-minute total CI duration.
 Each group packs only what the backend reads. Of an ESP-IDF build, what pytest-embedded's `IdfApp` reads: the files at the top of each
 `firmware/<image>/build/`, `firmware/<image>/build-<chip>/` and `examples/<name>/build/` (`flasher_args.json`, the ELF, the binaries,
 `esp32tl-build.json`, `esp32tl-built`), `config/sdkconfig.json`, and the `.bin` and `.elf` files of
-`bootloader/` and `partition_table/`. Of a PlatformIO build, `firmware/<image>/.pio/build/esp32dev/`,
-the `.bin` files, `firmware.elf`, `esp32tl-build.json` and `esp32tl-built` at its top. The object
-files and PlatformIO's `firmware.map` stay behind.
+`bootloader/` and `partition_table/`. Of a PlatformIO build, `firmware/<image>/.pio/build/esp32dev/`
+and `firmware/<image>/.pio/build/esp32s3_usb/`, the two environments the workflow names, the
+`.bin` files, `firmware.elf`, `esp32tl-build.json` and `esp32tl-built` at the top of each. The
+object files and PlatformIO's `firmware.map` stay behind.
 
 Before the tarball is written, and so before it is cached for good, a Python step checks every
 image for the files the tests need: `esp32tl-built`, `esp32tl-build.json`, `flasher_args.json`,
@@ -263,8 +264,8 @@ versions and two shard pairs. There are still twelve test VMs in the complete wo
 
 For each platform, Python version and shard pair: sets up Python with pip's cache keyed on
 `pyproject.toml`, restores eleven firmware tarballs, the native runner tarball and the ROM ELF, unpacks the tarballs (the images land
-in `firmware/<image>/build/`, `firmware/<image>/build-<chip>/`, `firmware/<image>/.pio/build/esp32dev/` and `examples/<name>/build/`,
-where the tests read them), and runs `esp32tl-runner --help` to check that the binary starts. It
+in `firmware/<image>/build/`, `firmware/<image>/build-<chip>/`, `firmware/<image>/.pio/build/<env>/`
+and `examples/<name>/build/`, where the tests read them), and runs `esp32tl-runner --help` to check that the binary starts. It
 then runs `make PYTHON=<that Python> .venv/.installed rom-elf`, which is `make setup` without
 `build-runner`. Before `.venv/bin/python .github/scripts/test-pair.py K/4 J/4` the `mtools` step makes sure `mformat`,
 `mcopy`, `mdir` and `mtype` are on `PATH`, for the SD card tests, which skip without them: on macOS

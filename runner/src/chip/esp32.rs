@@ -24,6 +24,8 @@ pub const PROFILE: Profile = Profile {
     wifi_station: true,
     wifi: true,
     bt: true,
+    // no USB-Serial/JTAG on the classic chip
+    usb_serial_jtag: false,
     psram_mb: &[4],
 };
 

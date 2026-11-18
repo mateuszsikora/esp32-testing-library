@@ -128,7 +128,7 @@ jobs:
       # esp32tl-build.json, esp32tl-built), config/sdkconfig.json, and the
       # bootloader and partition table images. Of a PlatformIO build, the
       # binaries, firmware.elf and the two esp32tl- files at the top of
-      # .pio/build/esp32dev/. The object files and PlatformIO's firmware.map
+      # .pio/build/<env>/, for its esp32dev and esp32s3_usb environments. The object files and PlatformIO's firmware.map
       # stay behind. Before the tarball is cached for good, every image is
       # checked for the files the tests need: the flash images
       # flasher_args.json names and the ELF project_description.json names
@@ -147,7 +147,7 @@ jobs:
               ;;
             platformio)
               firmware/build-platformio.sh
-              builds=(firmware/*/.pio/build/esp32dev)
+              builds=(firmware/*/.pio/build/esp32dev firmware/*/.pio/build/esp32s3_usb)
               ;;
             examples)
               firmware/build.sh --examples --shard "$SHARD"

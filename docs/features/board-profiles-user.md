@@ -222,6 +222,47 @@ as it does on the board. A `flash_mb` the runner does not have, such as 0 or 32,
 setup too, with the sizes it has. The serial backend flashes the build's headers as they are and
 reads nothing from `flash_mb`.
 
+### A console on USB-Serial/JTAG
+
+Many ESP32-S3 and ESP32-C3 boards have no USB-to-UART bridge: the firmware's console is the chip's
+own USB-Serial/JTAG controller, an ESP-IDF firmware's with `CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y`,
+an Arduino-ESP32 3.x firmware's `Serial` with `ARDUINO_USB_CDC_ON_BOOT=1` and
+`ARDUINO_USB_MODE=1`. On UART0 the console would hold only the ROM's banner, and what the test
+writes would go where the firmware does not read. One key says so:
+
+```toml
+name = "my-s3-board"
+chip = "esp32s3"
+console = "usb-serial-jtag"
+```
+
+`console` is `"uart0"` by default, and `"usb-serial-jtag"` on the `esp32s3`, `esp32c3` and
+`esp32c6`. On the classic ESP32, which has no such controller, the profile does not load:
+`my-board.toml: console: the ESP32 has no USB-Serial/JTAG controller; use uart0`. Every profile
+esp32tl ships keeps `uart0`: their devkits have a bridge. To move a test from UART0 to
+USB-Serial/JTAG, add the line to the board's profile, a project-local one or a copy of a shipped
+one, and build the firmware with its console on USB; the test's body does not change:
+`board.console`, `console.expect`, `console.sendline`, `console.tap` and `board.console_output`
+are the USB console's then ([esp32sim backend](esp32sim-backend-user.md#a-console-on-usb-serialjtag)).
+
+With the console on USB-Serial/JTAG, UART0 and its pins are free: a route may take port 0, and a
+route or a line UART0's pins (GPIO 43 and 44 on the S3, 21 and 20 on the C3, 16 and 17 on the C6).
+The controller's own USB D- and D+ pads are taken instead (GPIO 19 and 20 on the S3, 18 and 19
+on the C3, 12 and 13 on the C6): firmware that drives one of them as a UART or a GPIO takes it
+from the controller, and the console goes with it. The ROM prints its banner on UART0 too, so a
+route there shows that copy:
+
+```toml
+[uart.uart0]
+port = 0
+tx = 43
+rx = 44
+baud = 115200
+```
+
+On the serial backend a profile with this console runs on an ESP32-S3 only
+([serial backend](serial-backend-user.md#a-board-whose-console-is-usb-serialjtag)).
+
 ### What a route's baud does
 
 `baud` is the line rate of the far end of the route: what the far end sends goes into the ESP32's

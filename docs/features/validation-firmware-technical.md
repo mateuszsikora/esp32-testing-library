@@ -2,8 +2,10 @@
 
 `firmware/build.sh` builds the ESP-IDF validation images; the `Makefile` targets `firmware` and
 `firmware/%/build/esp32tl-built` call it. `firmware/build-platformio.sh` builds the PlatformIO
-image, `arduino_shell` ([The PlatformIO build](#the-platformio-build)); `firmware` and
-`firmware/%/.pio/build/esp32dev/esp32tl-built` call it. `tests/test_firmware_build.py` and
+images, `arduino_shell`'s `esp32dev` and `esp32s3_usb` environments
+([The PlatformIO build](#the-platformio-build)); `firmware`,
+`firmware/%/.pio/build/esp32dev/esp32tl-built` and `firmware/%/.pio/build/esp32s3_usb/esp32tl-built`
+call it. `tests/test_firmware_build.py` and
 `tests/test_platformio_firmware_build.py` test the scripts against fakes (`--chips` in
 `test_chip_images_build_their_projects_for_the_chip` and
 `test_chip_build_forwards_the_mode_into_the_pinned_container`),
@@ -37,8 +39,10 @@ the container, and once inside it, which builds. With `IDF_LOCAL=1` it runs once
    `nmea_reader`, `nvs_reader` and `http_request` on each of `esp32s3`, `esp32c3` and `esp32c6`,
    then `hello_world_psram@esp32s3`, `gatt_server@esp32s3` and `gatt_server@esp32c3`
    (`project_of`: `$IDF_PATH/examples/bluetooth/bluedroid/ble/gatt_server`), then
-   `hello_world_8mb` on each of `esp32s3`, `esp32c3` and `esp32c6`; `gpio_echo@esp32` is
-   unknown there. The family's output tree
+   `hello_world_8mb` on each of `esp32s3`, `esp32c3` and `esp32c6`, then
+   `console_repl_usb@esp32s3`, `@esp32c3` and `@esp32c6` (`project_of`:
+   `$PWD/firmware/console_repl_usb`, whose own `sdkconfig.defaults` ESP-IDF reads as the project's);
+   `gpio_echo@esp32` is unknown there. The family's output tree
    is `firmware/` for `--chips` as without a family, `examples/` for `--examples`.
 2. **Mode**, decided before anything is written:
    - `ESP32TL_CONTAINER` set: the container side. `/.dockerenv`, which Docker creates in every
@@ -156,7 +160,8 @@ an image only when its marker is missing: an edit to `firmware/nmea_reader/` nee
 The chips' images have one pattern rule per chip, `firmware/%/build-esp32s3/esp32tl-built` running
 `FIRMWARE_OUT= firmware/build.sh --chips $*@esp32s3`, and likewise for `esp32c3` and `esp32c6`;
 `test` also depends on `$(CHIP_IMAGES:%=%/esp32tl-built)`, `CHIP_IMAGES` being the build
-directories `firmware/IMAGE/build-CHIP` of `firmware/build.sh --chips`. GNU make 3.81, macOS's,
+directories `firmware/IMAGE/build-CHIP` of `firmware/build.sh --chips`, `console_repl_usb`'s
+three among them. GNU make 3.81, macOS's,
 takes the rule whose pattern matches: `firmware/%/build/esp32tl-built` never matches a
 `build-CHIP` directory, nor the reverse. `make firmware` runs `firmware/build.sh --chips` between
 the classic chip's images and the PlatformIO ones.
@@ -167,16 +172,21 @@ build in the build directory ESP-IDF v5.3.6 writes nothing into their directorie
 
 The `firmware` target then runs `FIRMWARE_OUT= firmware/build-platformio.sh`; the pattern rule
 `firmware/%/.pio/build/esp32dev/esp32tl-built` runs `FIRMWARE_OUT= firmware/build-platformio.sh $*`,
-and `test` also depends on `$(PLATFORMIO_IMAGES:%=firmware/%/.pio/build/esp32dev/esp32tl-built)`
-with `PLATFORMIO_IMAGES := arduino_shell`. The two rules cannot match one target: the ESP-IDF one
-needs `/build/esp32tl-built` at the end.
+`firmware/%/.pio/build/esp32s3_usb/esp32tl-built` runs it with `$*@esp32s3_usb`, with the
+project's `esp32dev` build as an order-only prerequisite, so that `make -j` never runs the two
+builds of one project, which share its `.pio/` and its copy of `src/`, at once, and `test` also
+depends on `$(PLATFORMIO_IMAGES:%=%/esp32tl-built)` with `PLATFORMIO_IMAGES :=
+firmware/arduino_shell/.pio/build/esp32dev firmware/arduino_shell/.pio/build/esp32s3_usb`. The
+rules cannot match one target: the ESP-IDF one needs `/build/esp32tl-built` at the end.
 
 ## The PlatformIO build
 
-`firmware/build-platformio.sh [IMAGE...]` follows `build.sh`'s steps, with PlatformIO in place of
+`firmware/build-platformio.sh [IMAGE[@ENV]...]` follows `build.sh`'s steps, with PlatformIO in place of
 ESP-IDF ([decisions/firmware.md](../decisions/firmware.md#the-arduino-image-is-built-with-pioarduino-in-a-pinned-python-container)):
 
-1. **Image names**, in `IMAGES` (`arduino_shell`), checked before anything is written.
+1. **Image names**, in `IMAGES` (`arduino_shell arduino_shell@esp32s3_usb`), checked before
+   anything is written. An image is a project and an environment of its `platformio.ini`:
+   `IMAGE` alone is `ENV`'s, `esp32dev`, and `IMAGE@ENV` names another.
 2. **Mode**: `ESP32TL_CONTAINER` set, with `/.dockerenv`, is the container side, and `pio` is
    `$PLATFORMIO_CORE_DIR/penv/bin/pio`; else `PIO_LOCAL=1`, a local build with the `pio` on `PATH`,
    `container` `null`; else the host side, which needs `docker` and `docker info`, as in `build.sh`.
@@ -219,20 +229,31 @@ ESP-IDF ([decisions/firmware.md](../decisions/firmware.md#the-arduino-image-is-b
    Xtensa toolchain and its other tools into `packages/`, through `dist/` and `tools/`.
 7. **Build side**: `pio --version` gives the version, the text after `PlatformIO Core, version `; a
    local build says on stderr that it is not for goldens. For each image the project is
-   `$PWD/firmware/IMAGE`, the platform the value of its `platformio.ini`'s `platform =` line, and
+   `$PWD/firmware/IMAGE`, the platform the value of its `platformio.ini`'s first `platform =` line,
+   in `arduino_shell` the one of its `[env]` section, which every environment inherits, and
    `pio` runs in `$out/IMAGE`: the project itself when `in_place` is `1`, else a directory into
    which the project's `platformio.ini` and `src/` are copied, `src/` removed first.
-   If `$out/IMAGE/.pio` exists and `.pio/build/esp32dev/esp32tl-build.json` is missing or, compared
-   as text, not the record this build would write, the script prints `was built another way` and
-   removes `.pio/`. Then `esp32tl-built` is removed, the record written,
+   If `.pio/build/ENV/` exists and its `esp32tl-build.json` is missing or, compared as text, not
+   the record this build would write, or if it does not exist but `$out/IMAGE/.pio` does and any
+   other environment's record there differs or is missing, the script prints `was built another
+   way` and removes `.pio/build/ENV/`, every other environment's build whose record differs or is
+   missing, and everything in `.pio/` outside `build/` (`libdeps/` among them); another
+   environment's build with this record stays, and so does `build/project.checksum`, whose loss
+   would make pio remove every build. Then `esp32tl-built` is removed,
+   the record written,
 
    ```sh
-   pio run --project-dir "$out/IMAGE" --environment esp32dev
+   pio run --project-dir "$out/IMAGE" --environment ENV
    ```
 
    runs, and after it the script checks that `firmware.bin` exists, writes the record again (pio
    removes `.pio/build/` when `platformio.ini` changed, the record with it), creates `esp32tl-built`
    and prints the `built in` line.
+
+`esp32s3_usb` is `board = esp32-s3-devkitc-1`, the devkit's 8 MB of flash, with
+`ARDUINO_USB_MODE=1` and `ARDUINO_USB_CDC_ON_BOOT=1`: its images are the S3's, the bootloader at `0x0`, and its `firmware.factory.bin`
+starts at `0x0` as `esp32dev`'s does
+([decision](../decisions/firmware.md#the-usb-serialjtag-console-images-are-a-project-and-an-environment-of-their-own)).
 
 pioarduino's build of `esp32dev` writes `bootloader.bin`, `partitions.bin` (the core's default
 table), `firmware.bin` and `firmware.elf`, and merges the bootloader at `0x1000`, the table at
@@ -649,9 +670,12 @@ point of the `wifi` fixture ([network](network-technical.md#connections-the-test
 
 ## `arduino_shell`
 
-`firmware/arduino_shell/platformio.ini` has one environment, `[env:esp32dev]`: the pinned platform
-URL, `board = esp32dev`, `framework = arduino`, `monitor_speed = 115200`, and no build flags, so the
-core's log level is its default, errors only. `src/main.cpp`, one file, includes `Arduino.h`,
+`firmware/arduino_shell/platformio.ini` has a shared `[env]` section, the pinned platform URL,
+`framework = arduino` and `monitor_speed = 115200`, which both of its environments inherit:
+`[env:esp32dev]`, `board = esp32dev` and no build flags, so the core's log level is its default,
+errors only; and `[env:esp32s3_usb]`, `board = esp32-s3-devkitc-1`, with its 8 MB of flash, and
+the build flags
+`-DARDUINO_USB_MODE=1` and `-DARDUINO_USB_CDC_ON_BOOT=1`, `Serial` on HWCDC. `src/main.cpp`, one file, includes `Arduino.h`,
 `Preferences.h`, `WebServer.h` and `WiFi.h`.
 
 `setup()` starts `Serial` at 115200 baud, prints the banner with `ESP_ARDUINO_VERSION_STR`, and
@@ -801,7 +825,7 @@ top of each build directory, `config/sdkconfig.json`, and the `.bin` and `.elf` 
 | `IDF_PATH` | environment | from `export.sh`, or the image | the ESP-IDF tree the projects come from |
 | `PIOARDUINO_VERSION` | constant of `build-platformio.sh` | `6.2.0` | the pioarduino PlatformIO Core the container installs |
 | `CONTAINER` | constant of `build-platformio.sh` | `python:3.13-bookworm@sha256:cc55e4ded9c95f6ce2133b3d096db43f214d280c2a8af65d83e246c8fa7d168c` | the image the PlatformIO build runs in, pinned by digest (a multi-arch index) |
-| `IMAGES`, `ENV` | constants of `build-platformio.sh` | `arduino_shell`, `esp32dev` | the PlatformIO images, and the environment of each `platformio.ini` |
+| `IMAGES`, `ENV` | constants of `build-platformio.sh` | `arduino_shell arduino_shell@esp32s3_usb`, `esp32dev` | the PlatformIO images, as `IMAGE[@ENV]`, and the environment of an image named without `@ENV` |
 | `platform` | `firmware/<image>/platformio.ini` | `https://github.com/pioarduino/platform-espressif32/releases/download/55.03.312-1/platform-espressif32.zip` | pioarduino's espressif32 platform, which pins the framework and the toolchains |
 | `PIO_LOCAL` | environment | unset | `1` builds with the `pio` of the calling shell |
 | `ESP32TL_IN_PLACE` | environment, set by the host side | unset | `1` when `/out` is the repository's `firmware/`, so that pio runs in the project itself; `0` for a copy |

@@ -24,6 +24,7 @@ pub const PROFILE: Profile = Profile {
     wifi_station: false,
     wifi: true,
     bt: true,
+    usb_serial_jtag: true,
     // quad or octal PSRAM; esp32sim's MR2 reports the density (`--psram-mb`)
     psram_mb: &[2, 4, 8],
 };
@@ -156,6 +157,15 @@ impl Guest for esp32s3::Machine {
     fn uart_frame_error(&mut self, port: usize) {
         self.bus.periph.uart[port].int_raw |= esp_periph::uart::INT_FRM_ERR;
         self.bus.irq_dirty = true;
+    }
+    fn take_usb_console(&mut self) -> Vec<u8> {
+        // esp32sim's `drain_console`, inside `run`, has moved what the controller flushed there
+        std::mem::take(&mut self.console.usb)
+    }
+    fn usb_console_input(&mut self, data: &[u8]) {
+        self.bus.flush_ticks();
+        SocBus::serial_input(&mut self.bus, data);
+        self.bus.refresh_tick_budget();
     }
     fn gpio_drive(&self) -> (u64, u64) {
         let gpio = &self.bus.periph.gpio;
