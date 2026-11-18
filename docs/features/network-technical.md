@@ -503,8 +503,9 @@ ends. The device's own flows keep acknowledging such a segment again, as before.
 
 `_drop(flow, kind, why=None)` takes `"closed"`, `"refused"`, `"reset"`, `"lost"` (`Network.reset`,
 which no link calls and the unit tests use as a transport loss, and
-`Network.forget_device(why=None)`), or, for a device flow only, `"abandoned"` (`Network._close` on
-an orphaned flow, and `Network.lose_link`) and `"unanswered"` (`Network.lose_link`), and logs it
+`Network.forget_device(why=None, *, address=None)`), or, for a device flow only, `"abandoned"`
+(`Network._close` on an orphaned flow, and `Network._unfinished`) and `"unanswered"`
+(`Network._unfinished`), and logs it
 through `_ENDS`: `closed`, `refused by the device`, `reset by the device`, `link lost`, `closed by
 its service with no device to answer`, `lost before the device answered its SYN-ACK`, or
 `lost: <why>` when `why` is given. `_drop` removes the flow from `_flows` only while it is the one
@@ -516,7 +517,8 @@ names the test's end first, `net: TCP <ours>:<local> → <device>:<port> <end>`,
 FIN only, never for a RST or a loss. The device's flows log after `_notify`, as before.
 
 `Internet.device_reset(t, why)`, with `_at` set to `t`, calls `Network.forget_device(why)`, which
-drops every client flow as `lost` and leaves the device's own, marked `orphaned`, then, behind PPP,
+drops every client flow as `lost`, drops the device's flows that cannot finish (`_unfinished`,
+below), and leaves the rest of the device's own, marked `orphaned`, then, behind PPP,
 sets `_stale` to `Ppp.ipcp_opened`, and behind Ethernet sets `Ethernet.device_address` to `None`.
 The `esp32sim` backend calls it on every network the test gave, by `_networks()`: from `_reset`, on
 each `reset` message the link takes, with `the device reset`, and from `_switch(False)`, at
@@ -554,18 +556,28 @@ reaches a broker on the internet from a device that lost its power or its covera
 ends them at keepalive expiry, `mqtt: <id> keepalive expired`, and publishes the Will then, 1.5
 times the keepalive after the client's last packet.
 
-`Network.lose_link` calls `forget_device`, which marks every device flow `orphaned`: the stack on
-the device that held it is gone, by the power, by the coverage or because lwIP drops a netif's
-connections when it loses its address. When the service closes an orphaned flow, as the broker
-does at a keepalive expiry or a takeover, `_close` drops it at once, logged `net: TCP
+`Network.lose_link(orphan=True)` calls `forget_device`, which marks every device flow `orphaned`:
+the stack on the device that held it is gone, by the power, by the coverage or because lwIP drops a
+netif's connections when it loses its address. When the service closes an orphaned flow, as the
+broker does at a keepalive expiry or a takeover, `_close` drops it at once, logged `net: TCP
 <device>:<port> → <address>:<port> closed by its service with no device to answer`, and sends no
 FIN: none would be answered, whatever link the device is on by then, and the window a FIN waits
 for may be full of what went nowhere. Kept, the flow would take the SYN of a new stack from the same
-port for the rest of the run. `lose_link` also drops the device flows whose service had closed them
-already (`fin_pending`), as `abandoned`, and those still waiting for the ACK of their SYN-ACK, as
-`unanswered`: no MQTT CONNECT has come on them, so no service deadline would end them. What a
-service writes on an orphaned flow still goes, and a RST of the new stack in answer drops it as
-`reset by the device`.
+port for the rest of the run. `forget_device` drops at once, through `_unfinished`, the device flows
+whose service had closed them already (`fin_pending`), as `abandoned`, and those still waiting for
+the ACK of their SYN-ACK, as `unanswered`: no MQTT CONNECT has come on them, so no service deadline
+would end them. What a service writes on an orphaned flow still goes, and a RST of the new stack in
+answer drops it as `reset by the device`.
+
+Behind a virtual station the device is the access point, and keeps its stack when the station
+leaves: `_link_ended` calls `lose_link(orphan=False)` there, which loses the test's flows and drops
+the device's that cannot finish (`_unfinished`), since nothing sends again what went to them while
+the station was away, and leaves the rest as they were: a later close sends its FIN. Behind the
+access point, `Ethernet` calls `gave_up(address)`, `Internet._gave_up`, when a DHCP message of the
+device's (a DISCOVER, a REQUEST not acknowledged, a RELEASE or a DECLINE) takes away an address it
+had acknowledged: `forget_device("the device gave its address up", address=address)` loses the
+test's flows to that address and orphans the device's, as lwIP drops a netif's connections when its
+address goes.
 
 `Internet.terminate(t)` calls `Ppp.terminate`, which sends an LCP Terminate-Request on an open link
 and changes nothing else, and returns the output for

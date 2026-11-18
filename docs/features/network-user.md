@@ -678,7 +678,11 @@ The DHCP server, at `10.64.0.1`, gives the device `10.64.0.2/24` (mask `255.255.
 `10.64.0.1` and DNS `10.64.0.1`, with a lease of 86400 s. It offers that address to every
 DISCOVER, acknowledges a REQUEST for it (or for no address), and answers a REQUEST for another
 address with a NAK. A REQUEST that names another server is left unanswered; DECLINE and RELEASE
-are logged and not answered. The transcript shows
+are logged and not answered. A DISCOVER, a REQUEST not acknowledged, a RELEASE or a DECLINE takes
+away the address the device had: the connections the test opened to it are lost, `lost when the
+device gave its address up`, and the device's own, which lwIP drops with the address, end without a
+FIN when their service closes them, as [after a lost link](#a-lost-link-and-the-will). The
+transcript shows
 `dhcp: DISCOVER from 24:6f:28:00:11:22 → OFFER 10.64.0.2` and
 `dhcp: REQUEST from 24:6f:28:00:11:22 → ACK 10.64.0.2`.
 
@@ -954,18 +958,18 @@ def test_the_will_goes_at_the_keepalive(board, broker):  # keepalive 60 s
     # will.at is 90 s after the device's last packet, not the instant of the cut.
 ```
 
-A device back before then, with the same client ID and CleanSession=0, takes its session over
-(MQTT-3.1.4-2): the old connection closes, its Will discarded, and none is published, so a
-retained status the firmware published on connecting stays the last word. With CleanSession=1 on
-either connection the Will goes at the takeover, and so it does when the CONNECT comes at the
-instant the old keepalive runs out, though the session is resumed. The old connection goes with no
-FIN, `closed by its service with no device to answer`. A firmware whose new stack connects from the
-same port as before has its SYN dropped while the old connection stands, until the keepalive ends
-it ([TCP](#open-a-tcp-connection-to-the-device));
-esp-mqtt in `mqtt_session` connects from another. `broker.disconnect(client_id)` ends a connection
-at once, its Will published, for a test that wants the broker to give up sooner. The connections
-the test opened with `network.connect` are lost at the link's end, as before: the device's end of
-them is gone. Why there is no option for the old behaviour: [the
+A device back before then, with the same client ID and CleanSession=0 on both the old connection and
+the new, takes its session over (MQTT-3.1.4-2): the old connection closes, its Will discarded, and
+none is published, so a retained status the firmware published on connecting stays the last word.
+With CleanSession=1 on either connection the Will goes at the takeover, and so it does when the
+CONNECT comes at the instant the old keepalive runs out, though the session is resumed. The old
+connection goes with no FIN, `closed by its service with no device to answer`. A firmware whose new
+stack connects from the same port as before has its SYN dropped while the old connection stands,
+until the keepalive ends it ([TCP](#open-a-tcp-connection-to-the-device)); esp-mqtt in
+`mqtt_session` connects from another. `broker.disconnect(client_id)` ends a connection at once, its
+Will published, for a test that wants the broker to give up sooner. The connections the test opened
+with `network.connect` are lost at the link's end, as before: the device's end of them is gone. Why
+there is no option for the old behaviour: [the
 decision](../decisions/harness.md#a-lost-link-leaves-the-devices-connections-half-open-until-their-keepalive).
 
 ## DNS, time and services
@@ -1359,4 +1363,4 @@ chips, WPA3-SAE, required PMF and hidden SSIDs are not supported. Renewal needs 
 machine; the radio features need esp32sim support. See the
 [decision](../decisions/harness.md#a-test-joins-the-devices-access-point-through-esp32sims-virtual-station-with-the-harness-as-the-host-behind-it).
 
-A virtual station waits for the Wi-Fi data link before starting DHCP. No DHCP retries run while disconnected. Rejoining starts a fresh exchange with the initial 4 s retry interval; it does not inherit the power-on backoff. Disconnection invalidates `network.lease`, ARP and queued traffic and marks the TCP connections the test opened lost; the device's stay open until their service gives up, as [behind the modem](#a-lost-link-and-the-will). Reset and power cycling follow the same rule.
+A virtual station waits for the Wi-Fi data link before starting DHCP. No DHCP retries run while disconnected. Rejoining starts a fresh exchange with the initial 4 s retry interval; it does not inherit the power-on backoff. Disconnection invalidates `network.lease`, ARP and queued traffic and marks the TCP connections the test opened lost. The device, the access point here, keeps its own stack when the station leaves: its connections stay as they were, and a service's close after the station has joined again sends its FIN; one still in its handshake, or one its service had closed, is dropped, as what went to it while the station was away is not sent again. Reset and power cycling follow the same rule for the test's connections, and leave the device's open until their service gives up, as [behind the modem](#a-lost-link-and-the-will).

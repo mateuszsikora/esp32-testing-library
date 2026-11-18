@@ -41,7 +41,8 @@ def _whole(payload: bytes) -> bytes:
 class Ethernet:
     """The access point's side of the station's link. `send` takes each Ethernet frame for the
     station; `on_ip` gets each IPv4 datagram the station sends, but its DHCP; `log` gets a line per
-    event worth seeing. `dhcp` hands out the device's address, which `local` routes and `dns`
+    event worth seeing; `gave_up` gets the address a DHCP message of the device's takes
+    away. `dhcp` hands out the device's address, which `local` routes and `dns`
     resolves for it."""
 
     def __init__(
@@ -51,10 +52,12 @@ class Ethernet:
         dhcp: Dhcp,
         *,
         log: Callable[[str], None] = lambda line: None,
+        gave_up: Callable[[str], None] = lambda address: None,
     ) -> None:
         self._send = send
         self._on_ip = on_ip
         self._log = log
+        self._gave_up = gave_up
         self.dhcp = dhcp
         # The station's MAC, from the frames it sends; frames for it go there.
         self.device_mac: bytes | None = None
@@ -138,8 +141,11 @@ class Ethernet:
             # Any other message of the device's, a DISCOVER, a REQUEST not acknowledged (a NAK,
             # or one to another server), a RELEASE or a DECLINE, says it has no address of ours,
             # or is giving it up. An INFORM comes from a client with an address of its own, and
-            # changes nothing.
-            self.device_address = None
+            # changes nothing. The device's stack drops its connections on the address it no
+            # longer holds, as lwIP does when a netif's address changes: `gave_up` hears of it.
+            given_up, self.device_address = self.device_address, None
+            if given_up is not None:
+                self._gave_up(given_up)
         if reply is None:
             return True
         message, broadcast = reply

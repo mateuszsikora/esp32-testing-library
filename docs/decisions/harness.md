@@ -4485,8 +4485,12 @@ A connection the link's end or a chip reset left open is marked orphaned: the st
 that held it is gone, and lwIP drops a netif's connections when it loses its address. When its
 service closes it, as the broker does at its keepalive or a takeover, it is dropped at once, with
 no FIN: none would be answered, whatever link the device is on by then, and kept, the flow would
-take the SYN of a new stack from the same port for the rest of the run. The link's end also drops
-the device's connections still in their handshake, which no service deadline would end.
+take the SYN of a new stack from the same port for the rest of the run. A DHCP lease the device
+gives up on a link that stays orphans the connections on that address too, since lwIP drops them
+with it. The link's end and a chip reset also drop the device's connections still in their
+handshake, which no service deadline would end. A virtual station that leaves the device's own
+access point orphans nothing: the device keeps its stack, and a close after the station rejoins
+sends its FIN.
 
 A device back with the same client ID before that takes its connection over (MQTT-3.1.4-2). With
 CleanSession=0 on both connections the session goes on and the old Will is discarded unsent; with

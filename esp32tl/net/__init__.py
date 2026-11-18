@@ -405,11 +405,16 @@ class Internet:
                 changed=self._station_changed,
             )
         if self._kind == "ethernet":
-            return Ethernet(send, self._uplink, self.dhcp, log=self.log)
+            return Ethernet(send, self._uplink, self.dhcp, log=self.log, gave_up=self._gave_up)
         return Ppp(send, self._uplink, log=self.log, ended=self._link_ended)
 
+    def _gave_up(self, address: str) -> None:
+        self.ip.forget_device("the device gave its address up", address=address)
+
     def _link_ended(self) -> None:
-        self.ip.lose_link()
+        # Behind a station the device is the access point, and keeps its stack when the station
+        # leaves; behind its own link, the device's stack goes with the link.
+        self.ip.lose_link(orphan=not isinstance(self.link, Station))
         self._up.clear()
         self._down.clear()
 

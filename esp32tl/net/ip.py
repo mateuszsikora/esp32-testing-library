@@ -428,28 +428,46 @@ class Network:
             flow.notified = True
             flow.connection.on_close()
 
-    def forget_device(self, why: str | None = None) -> None:
+    def forget_device(self, why: str | None = None, *, address: str | None = None) -> None:
         """The device's stack is gone, `why` saying how, as `the device reset`, the link going
-        down unless given: lose every connection the test opened, whose device end went with it.
+        down unless given; only the connections on the device's `address`, when given, as for a
+        lease it gave up. Lose every connection the test opened, whose device end went with it.
         The device's own stay open and silent, as no network on the internet hears of it, and
         orphaned: their service's close ends them at once, since no FIN would be answered."""
         for flow in list(self._flows.values()):
+            if address is not None and flow.key[0] != address:
+                continue
             if flow.client is not None:
                 self._drop(flow, "lost", why)
-            else:
+            elif not self._unfinished(flow):
                 flow.orphaned = True
 
-    def lose_link(self) -> None:
-        """The link ended: `forget_device`, then drop the device's flows that no service will
-        end: those their service had closed already, whose FIN no device will answer now, and
-        those still waiting for the ACK of their SYN-ACK, which have no service deadline to
-        end them, and would take a new stack's SYN from the same port."""
-        self.forget_device()
+    def _unfinished(self, flow: _Flow) -> bool:
+        """Drop a device flow that cannot finish now that nothing will answer what the network
+        sent it: one its service had closed, whose FIN went unanswered, and one still waiting
+        for the ACK of its SYN-ACK, which has no service deadline to end it. Kept, either would
+        take a new stack's SYN from the same port. Whether it was dropped."""
+        if flow.fin_pending:
+            self._drop(flow, "abandoned")
+        elif not flow.established:
+            self._drop(flow, "unanswered")
+        else:
+            return False
+        return True
+
+    def lose_link(self, *, orphan: bool = True) -> None:
+        """The link ended. With `orphan`, the device's stack went with it: `forget_device`.
+        Without, as when a virtual station leaves the device's access point, the device keeps
+        its connections: lose the test's, and drop only those of the device's that cannot
+        finish, since what went to them in the meantime is not sent again."""
+        if orphan:
+            self.forget_device()
+            return
         for flow in list(self._flows.values()):
-            if flow.fin_pending:
-                self._drop(flow, "abandoned")
-            elif not flow.established:
-                self._drop(flow, "unanswered")
+            if flow.client is not None:
+                self._drop(flow, "lost")
+            else:
+                self._unfinished(flow)
 
     def reset(self) -> None:
         """Lose every TCP connection, the device's included; notify services once, MQTT Wills

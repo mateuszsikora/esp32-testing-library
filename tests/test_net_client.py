@@ -3,7 +3,7 @@ of handmade segments: the handshake, data both ways, both closes, refused, reset
 zero window, a segment out of order, and connecting before the device has an address."""
 
 import struct
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 
 import pytest
 from test_net_ethernet import dhcp
@@ -487,3 +487,57 @@ def test_http_client_over_the_network_path(device: Device, framing: str) -> None
     streams = [event for event in device.net.events if event.get("stream") == "device:8080/1"]
     assert streams[0]["direction"] == "in" and streams[0]["data"] == request.hex()
     assert streams[1]["direction"] == "out" and streams[1]["data"] == response.hex()
+
+
+class Closing:
+    """A TCP service that keeps each connection's `close`, for the test to call."""
+
+    def __init__(self) -> None:
+        self.closes: list[Callable[[], None]] = []
+
+    def accept(
+        self, peer: tuple[str, int], write: Callable[[bytes], None], close: Callable[[], None]
+    ) -> "Closing":
+        self.closes.append(close)
+        return self
+
+    def on_data(self, data: bytes) -> None:
+        pass
+
+    def on_close(self) -> None:
+        pass
+
+
+def test_a_chip_reset_drops_a_device_connection_still_in_its_handshake(device: Device) -> None:
+    [syn_ack] = device.send(40000, 1883, 100, 0, SYN)
+    assert syn_ack.flags == SYN | ACK and len(device.net.ip._flows) == 1
+    device.net.device_reset(device.now, "the device reset")
+    assert not device.net.ip._flows
+    line = "net: TCP 10.64.0.2:40000 → 10.64.0.1:1883 lost before the device answered its SYN-ACK"
+    assert line in device.events()
+    # The new stack's SYN from the same port is answered.
+    device.now += MS
+    [again] = device.send(40000, 1883, 500, 0, SYN)
+    assert again.flags == SYN | ACK
+
+
+def test_a_released_lease_orphans_the_devices_connections_on_its_address() -> None:
+    device = Device("ethernet").up()
+    service = Closing()
+    device.net.listen(7000, service)
+    device.send(40000, 7000, 100, 0, SYN)
+    device.send(40000, 7000, 101, ISN + 1, ACK)
+    test_side = device.net.connect(80)
+    device.net.receive(MS, dhcp(7, ciaddr=DEVICE, options=bytes([54, 4]) + NETWORK))
+    assert device.net.device_address is None
+    # lwIP drops a netif's connections when it loses the address: the test's are lost, the
+    # device's orphaned, so its service's close sends no FIN and ends the flow at once.
+    assert test_side.state == "lost"
+    assert "net: TCP 10.64.0.1:49152 → 10.64.0.2:80 lost: the device gave its address up" in (
+        device.events()
+    )
+    [close] = service.closes
+    close()
+    assert device.poll() == [] and not device.net.ip._flows
+    line = "net: TCP 10.64.0.2:40000 → 10.64.0.1:7000 closed by its service with no device"
+    assert line + " to answer" in device.events()

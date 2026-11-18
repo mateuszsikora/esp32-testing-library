@@ -1,6 +1,7 @@
 """A synthetic SoftAP: DHCP server, ARP and TCP segments, without an emulator."""
 
 import struct
+from collections.abc import Callable
 
 import pytest
 from test_net_ethernet import check, frame, ipv4, options, udp
@@ -299,3 +300,46 @@ def test_no_discover_or_deadline_until_ready() -> None:
     assert at == 15_301 * MS  # normal Ethernet delivery latency, not DHCP backoff
     assert isinstance(net.link, Station)
     assert net.link.quiet_until() == 19_300 * MS
+
+
+def test_a_station_that_leaves_and_rejoins_leaves_the_devices_connection_to_its_end() -> None:
+    ap = SoftAP().up()
+    closes: list[Callable[[], None]] = []
+
+    class Service:
+        def accept(
+            self, peer: tuple[str, int], write: Callable[[bytes], None], close: Callable[[], None]
+        ) -> "Service":
+            closes.append(close)
+            return self
+
+        def on_data(self, data: bytes) -> None:
+            pass
+
+        def on_close(self) -> None:
+            pass
+
+    ap.net.listen(7000, Service())
+
+    def segment(seq: int, ack: int, flags: int) -> None:
+        tcp = struct.pack(">HHIIBBHHH", 40000, 7000, seq, ack, 0x50, flags, 8192, 0, 0)
+        pseudo = AP_IP + HOST_IP + struct.pack(">BBH", 0, 6, len(tcp))
+        tcp = tcp[:16] + struct.pack(">H", check(pseudo + tcp)) + tcp[18:]
+        ap.now += MS
+        ap.net.receive(ap.now, frame(HOST, 0x0800, ipv4(6, AP_IP, HOST_IP, tcp), AP))
+
+    segment(100, 0, SYN)
+    segment(101, ISN + 1, ACK)
+    key = ("192.168.4.1", 40000, "192.168.4.2", 7000)
+    # The device is the access point: a station that leaves takes nothing of the device's stack.
+    ap.net._station_link(ap.now, False)
+    assert not ap.net.ip._flows[key].orphaned
+    ap.net._station_link(ap.now, True)
+    [(_, discover)] = ap.net.poll(ap.now)
+    [(_, request)] = ap.reply(discover)
+    ap.reply(request)
+    assert ap.net.lease is not None
+    [close] = closes
+    close()
+    # Its service's close goes as a FIN, as on a connection that never lost its link.
+    assert ap.net.ip._flows[key].fin_sent
