@@ -310,11 +310,12 @@ def test_a_keepalive_that_runs_out_before_the_device_is_back_drops_the_connectio
     assert len(network.broker.clients) == 1
     network.stop(100)
     network.start(200)  # the access point back on the air
-    # The station has sent a frame on the fresh link, but no IPv4 from its address yet.
+    # The station has sent a frame on the fresh link: the old connection's stack is gone all the
+    # same.
     network.receive(300, arp(GATEWAY))
     network.arrive(1_500_000_000)
     assert [m.payload for m in network.broker.messages] == [b"gone"]
-    # A FIN to the device would reach no stack that holds the connection: the flow goes.
+    # A FIN would reach no stack that holds the connection: the flow goes, and sends none.
     assert not network.ip._flows
     lines = [e["event"] for e in network.events if "event" in e]
     assert (

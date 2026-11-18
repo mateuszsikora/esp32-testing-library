@@ -1448,10 +1448,12 @@ that references to its number keep their meaning.
     keepalive expiry publishes the Will 1.5 times the keepalive after the device's last packet,
     not at the loss. A client back with the same ID before then takes the connection over
     (MQTT-3.1.4-2); with CleanSession=0 on both connections the old Will is discarded unsent, and
-    with CleanSession=1 on either it is published at the takeover. A device connection its service
-    closes with the link down, or had closed when the link ended, is dropped at once, so a new
-    stack's SYN from the same port opens a new one; the link is down for this until the device is
-    back with its address, behind the access point too. A keepalive of 0 sets no deadline.
+    with CleanSession=1 on either, or once the old keepalive's deadline has come, it is published
+    at the takeover. A device connection the link's end or a chip reset left open is dropped, with
+    no FIN, when its service closes it, and so are, at the link's end, one its service had closed
+    and one still in its handshake: a new stack's SYN from the same port opens a new connection. A
+    stale close of an ended connection leaves the new one on its port alone. While the link is
+    down, a bridged connection keeps its millisecond turns. A keepalive of 0 sets no deadline.
     `tests/test_net_ip.py::test_modem_link_loss_leaves_tcp_open_and_the_will_to_the_keepalive`,
     `tests/test_net_mqtt_sessions.py::test_a_lost_link_publishes_the_will_when_the_keepalive_runs_out`,
     `tests/test_net_mqtt_sessions.py::test_a_device_back_before_its_keepalive_takes_over_its_connection`,
@@ -1460,6 +1462,10 @@ that references to its number keep their meaning.
     `tests/test_net_mqtt_sessions.py::test_the_links_end_drops_a_connection_its_service_has_closed`,
     `tests/test_net_mqtt_sessions.py::test_a_keepalive_of_zero_keeps_a_lost_links_connection_and_its_will`,
     `tests/test_net_ethernet.py::test_a_keepalive_that_runs_out_before_the_device_is_back_drops_the_connection`,
+    `tests/test_net_mqtt_sessions.py::test_a_takeover_at_the_old_keepalives_deadline_publishes_its_will`,
+    `tests/test_net_mqtt_sessions.py::test_the_links_end_drops_a_connection_still_in_its_handshake`,
+    `tests/test_net_mqtt_sessions.py::test_a_stale_close_leaves_the_new_connection_on_its_port_alone`,
+    `tests/test_net_bridge.py::test_a_lost_link_leaves_the_stream_at_the_service_open_until_the_run_ends`,
     `tests/test_modem_model.py::test_the_keepalive_runs_out_with_the_call_ended`,
     `tests/test_mqtt_session.py::test_a_lost_link_publishes_the_will_at_the_keepalive_not_at_the_loss`,
     `tests/test_mqtt_session.py::test_a_device_back_before_its_keepalive_takes_over_its_session_and_no_will_goes`

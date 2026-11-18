@@ -125,6 +125,7 @@ _ENDS = {
     "reset": "reset by the device",
     "lost": "link lost",
     "abandoned": "closed by its service with no device to answer",
+    "unanswered": "lost before the device answered its SYN-ACK",
 }
 
 
@@ -144,6 +145,9 @@ class _Flow:
     established: bool = False
     notified: bool = False
     client: Client | None = None  # set on a connection the test opened
+    # The device's stack that held it is gone, by a chip reset or the link's end: no FIN to it
+    # would ever be answered.
+    orphaned: bool = False
 
 
 class Network:
@@ -155,11 +159,9 @@ class Network:
         log: Callable[[str], None] = lambda line: None,
         *,
         mtu: Callable[[], int] = lambda: 1500,
-        up: Callable[[str], bool] = lambda address: True,
     ) -> None:
         self._send_ip = send_ip
         self._mtu = mtu
-        self._up = up
         self._log = log
         self.tcp: dict[int, StreamService] = {}
         self.udp: dict[int, DatagramService] = {}
@@ -360,23 +362,31 @@ class Network:
         if flow.fin_sent and flow.peer_closed and flow.snd_una >= flow.snd_nxt:
             self._drop(flow, "closed")
 
+    def _current(self, flow: _Flow) -> bool:
+        """Whether `flow` is still the one the table holds for its key: a service may call the
+        `write` or `close` of a flow that has ended, after the device opened another on the same
+        addresses and ports."""
+        return self._flows.get(flow.key) is flow
+
     def _write(self, flow: _Flow, data: bytes) -> None:
-        if flow.fin_pending or flow.key not in self._flows:
+        if flow.fin_pending or not self._current(flow):
             return
         flow.pending += data
         self._flush(flow)
 
     def _close(self, flow: _Flow) -> None:
-        if flow.client is None and not self._up(flow.key[0]):
-            # Its FIN would go nowhere, and no device would ever answer it: kept, the flow would
-            # take the SYN of a new stack from the same port for the rest of the run.
+        if not self._current(flow):
+            return
+        if flow.orphaned:
+            # Its FIN would reach no stack that holds the connection: kept, the flow would take
+            # the SYN of a new stack from the same port for the rest of the run.
             self._drop(flow, "abandoned")
             return
         flow.fin_pending = True
         self._flush(flow)
 
     def _flush(self, flow: _Flow) -> None:
-        if flow.key not in self._flows or not flow.established:
+        if not self._current(flow) or not flow.established:
             return
         while flow.pending:
             room = flow.peer_window - (flow.snd_nxt - flow.snd_una)
@@ -398,8 +408,10 @@ class Network:
 
     def _drop(self, flow: _Flow, kind: str, why: str | None = None) -> None:
         """End `flow`: `kind` is `"closed"`, `"refused"`, `"reset"` or `"lost"`, and for a client's
-        lost flow `why` says why, the link going down unless given."""
-        self._flows.pop(flow.key, None)
+        lost flow `why` says why, the link going down unless given; `"abandoned"` and
+        `"unanswered"` are for the device's flows only."""
+        if self._current(flow):
+            del self._flows[flow.key]
         device, dport, ours, oport = flow.key
         if flow.client is not None:
             # Before `_notify`, so that the client's `on_close` stands for a FIN only.
@@ -416,22 +428,28 @@ class Network:
             flow.notified = True
             flow.connection.on_close()
 
-    def lose_clients(self, why: str | None = None) -> None:
-        """Lose every connection the test opened, and none the device opened: the device's end of
-        them is gone, `why` saying how, as `the device reset`, the link going down unless given.
-        The device's own stay open, and silent: their service hears nothing of the loss."""
+    def forget_device(self, why: str | None = None) -> None:
+        """The device's stack is gone, `why` saying how, as `the device reset`, the link going
+        down unless given: lose every connection the test opened, whose device end went with it.
+        The device's own stay open and silent, as no network on the internet hears of it, and
+        orphaned: their service's close ends them at once, since no FIN would be answered."""
         for flow in list(self._flows.values()):
             if flow.client is not None:
                 self._drop(flow, "lost", why)
+            else:
+                flow.orphaned = True
 
     def lose_link(self) -> None:
-        """The link ended: lose every connection the test opened, and leave the device's open
-        and silent, but for those their service has closed already, whose FIN no device will
-        answer now."""
-        self.lose_clients()
+        """The link ended: `forget_device`, then drop the device's flows that no service will
+        end: those their service had closed already, whose FIN no device will answer now, and
+        those still waiting for the ACK of their SYN-ACK, which have no service deadline to
+        end them, and would take a new stack's SYN from the same port."""
+        self.forget_device()
         for flow in list(self._flows.values()):
             if flow.fin_pending:
                 self._drop(flow, "abandoned")
+            elif not flow.established:
+                self._drop(flow, "unanswered")
 
     def reset(self) -> None:
         """Lose every TCP connection, the device's included; notify services once, MQTT Wills

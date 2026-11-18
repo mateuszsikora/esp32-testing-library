@@ -96,12 +96,13 @@ goes nowhere, and logs nothing. At the default every datagram is released in the
 made it, so `receive` returns it stamped `t + LATENCY_NS`, in the order it was made.
 
 `quiet_until` is the minimum of the broker's and the two heads: one turn per datagram. While the
-network is not `active` it is the broker's alone, so the keepalive of a connection the link's end
-left open still gets its turn, and `ModemModel` and `Wifi` ask for it then too. Each head is
-past `now` after `poll`, since `_arrive` and `_release` took all up to `now` and `now + LATENCY_NS`,
-as `BoardLink._turn` requires. `latency()` stays `LATENCY_NS`: PPP control answers in 1 ms, and a
-larger promise would break rule 2. The runner does not change. On the modem's route it paces bytes
-as it does (protocol, rule 5), and the rate is on top of that.
+network is not `active` it is the broker's and the bridges', so the keepalive of a connection the
+link's end left open still gets its turn, and a bridged service that sends or closes then is taken
+in the next millisecond, as with the link up; `ModemModel` and `Wifi` ask for it then too. Each head
+is past `now` after `poll`, since `_arrive` and `_release` took all up to `now` and `now +
+LATENCY_NS`, as `BoardLink._turn` requires. `latency()` stays `LATENCY_NS`: PPP control answers in 1
+ms, and a larger promise would break rule 2. The runner does not change. On the modem's route it
+paces bytes as it does (protocol, rule 5), and the rate is on top of that.
 
 Nothing here reads the host's clock, and the arithmetic is on integers but for the rate's division,
 so two runs give the same stamps (`tests/test_determinism.py::test_mqtt_session_on_a_path`).
@@ -321,7 +322,9 @@ threads; a connect in progress ends within `CONNECT_SECONDS`. The backend calls 
   discarded`: mosquitto's rule in `connect__on_authorised`, which sends the old Will only when
   either side starts clean. MQTT 3.1.1 (MQTT-3.1.2-8) would publish it at every close but a
   DISCONNECT; a device back inside its keepalive has not gone, and its backend should not hear it
-  had.
+  had. A keepalive deadline that has come by then, though `poll` has not yet expired it (a CONNECT
+  in the turn of the deadline comes first), keeps the Will: it goes at the takeover, and the
+  session is resumed all the same.
   QoS 2 publication is unsupported. Credentials are observed by default;
   authentication is performed only by an installed test policy, with no external auth service.
   SUBSCRIBE and UNSUBSCRIBE parse every filter of the packet into a `RequestedFilter` before they
@@ -500,28 +503,32 @@ ends. The device's own flows keep acknowledging such a segment again, as before.
 
 `_drop(flow, kind, why=None)` takes `"closed"`, `"refused"`, `"reset"`, `"lost"` (`Network.reset`,
 which no link calls and the unit tests use as a transport loss, and
-`Network.lose_clients(why=None)`) or `"abandoned"`, for a device flow only (`Network._close` while
-`up` is false, and `Network.lose_link`), and logs it through `_ENDS`: `closed`, `refused by the
-device`, `reset by the device`, `link lost`, `closed by its service with no device to answer`, or
-`lost: <why>` when `why` is given. A client flow's line
+`Network.forget_device(why=None)`), or, for a device flow only, `"abandoned"` (`Network._close` on
+an orphaned flow, and `Network.lose_link`) and `"unanswered"` (`Network.lose_link`), and logs it
+through `_ENDS`: `closed`, `refused by the device`, `reset by the device`, `link lost`, `closed by
+its service with no device to answer`, `lost before the device answered its SYN-ACK`, or
+`lost: <why>` when `why` is given. `_drop` removes the flow from `_flows` only while it is the one
+there for its key, and `_write`, `_close` and `_flush` do nothing for a flow that is not
+(`_current`): a service may call the `close` of a flow that has ended after the device opened
+another on the same addresses and ports, and that must not end the new one. A client flow's line
 names the test's end first, `net: TCP <ours>:<local> → <device>:<port> <end>`, and
 `on_end(kind, why)` comes before `_notify`, so that `TcpConnection.on_close` sets `closed_at` for a
 FIN only, never for a RST or a loss. The device's flows log after `_notify`, as before.
 
-`Internet.device_reset(t, why)`, with `_at` set to `t`, calls `Network.lose_clients(why)`, which
-drops every client flow as `lost` and leaves the device's own, then, behind PPP, sets `_stale` to
-`Ppp.ipcp_opened`, and behind Ethernet sets `Ethernet.device_address` to `None`. The `esp32sim`
-backend calls it on every network the test gave, by `_networks()`: from `_reset`, on each `reset`
-message the link takes, with `the device reset`, and from `_switch(False)`, at `board.power_off()`,
-with `the device lost its power`, before the models lose their power and the modem's network with
-it ([backend](esp32sim-backend-technical.md)). A power-on brings a `reset` message too, which finds
-nothing left to lose. The device's own flows stay, because a network does not know of a reboot:
-they end at a RST from the device's new stack, which comes in answer to what their service writes,
-or at the service's end, as the broker's keepalive expiry; the link's end leaves them too. A SYN of
-the new stack from the same port to the same service falls on the old flow, which takes only ACK,
-data and FIN, and is dropped without an answer: `_tcp` makes a flow for a SYN only when none has its
-key, and sends no challenge ACK (RFC 9293, 3.10.7.4), so the device retries until the service writes
-or its own timeout.
+`Internet.device_reset(t, why)`, with `_at` set to `t`, calls `Network.forget_device(why)`, which
+drops every client flow as `lost` and leaves the device's own, marked `orphaned`, then, behind PPP,
+sets `_stale` to `Ppp.ipcp_opened`, and behind Ethernet sets `Ethernet.device_address` to `None`.
+The `esp32sim` backend calls it on every network the test gave, by `_networks()`: from `_reset`, on
+each `reset` message the link takes, with `the device reset`, and from `_switch(False)`, at
+`board.power_off()`, with `the device lost its power`, before the models lose their power and the
+modem's network with it ([backend](esp32sim-backend-technical.md)). A power-on brings a `reset`
+message too, which finds nothing left to lose. The device's own flows stay, because a network does
+not know of a reboot: they end at a RST from the device's new stack, which comes in answer to what
+their service writes, or at the service's end, as the broker's keepalive expiry, which drops an
+orphaned flow at once; the link's end leaves them too. A SYN of the new stack from the same port to
+the same service falls on the old flow, which takes only ACK, data and FIN, and is dropped without
+an answer: `_tcp` makes a flow for a SYN only when none has its key, and sends no challenge ACK (RFC
+9293, 3.10.7.4), so the device retries until the service writes or its own timeout.
 
 `TcpConnection` keeps `received` in a `bytearray`, `established_at`, `closed_at` and `ended_at` as
 `Duration`s from `now()` at the callback, which is the segment's own time, `_end`, the kind, and
@@ -547,18 +554,18 @@ reaches a broker on the internet from a device that lost its power or its covera
 ends them at keepalive expiry, `mqtt: <id> keepalive expired`, and publishes the Will then, 1.5
 times the keepalive after the client's last packet.
 
-`Network` takes `up(address)`, `Internet._reaches`: whether a segment to the device's `address`
-reaches a stack that holds it now. That is the network active and `address` either `device_address`,
-the one IPCP gave behind the modem or DHCP acknowledged behind the access point, or `_heard`, the
-source of the last IPv4 datagram the device sent on this link, which a device with a static address
-has; behind a station, a lease. `_link_ended` and `device_reset` clear `_heard`. A device flow whose
-service closes it while `up` is false, as the broker does at a keepalive expiry before the device is
-back, with an address, on a new link, is dropped at once, logged `net: TCP <device>:<port> →
-<address>:<port> closed by its service with no device to answer`, and so is one whose service had
-closed it when the link ended (`fin_pending`): no device would ever answer its FIN, and kept, it
-would take the SYN of a new stack from the same port for the rest of the run. Otherwise a flow so
-left open takes the next link's datagrams like any other: the device's new stack answers the
-broker's FIN, at a takeover or an expiry, with a RST, which drops it as `reset by the device`.
+`Network.lose_link` calls `forget_device`, which marks every device flow `orphaned`: the stack on
+the device that held it is gone, by the power, by the coverage or because lwIP drops a netif's
+connections when it loses its address. When the service closes an orphaned flow, as the broker
+does at a keepalive expiry or a takeover, `_close` drops it at once, logged `net: TCP
+<device>:<port> → <address>:<port> closed by its service with no device to answer`, and sends no
+FIN: none would be answered, whatever link the device is on by then, and the window a FIN waits
+for may be full of what went nowhere. Kept, the flow would take the SYN of a new stack from the same
+port for the rest of the run. `lose_link` also drops the device flows whose service had closed them
+already (`fin_pending`), as `abandoned`, and those still waiting for the ACK of their SYN-ACK, as
+`unanswered`: no MQTT CONNECT has come on them, so no service deadline would end them. What a
+service writes on an orphaned flow still goes, and a RST of the new stack in answer drops it as
+`reset by the device`.
 
 `Internet.terminate(t)` calls `Ppp.terminate`, which sends an LCP Terminate-Request on an open link
 and changes nothing else, and returns the output for

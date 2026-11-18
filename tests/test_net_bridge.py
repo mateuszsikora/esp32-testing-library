@@ -363,7 +363,9 @@ def test_a_lost_link_leaves_the_stream_at_the_service_open_until_the_run_ends() 
         ours = int.from_bytes(syn_ack[14 + 24 : 14 + 28], "big")
         network.receive(10, segment(101, ours + 1, 0x10))
         network.stop(20)
-        # The service hears nothing of the loss, as a real one on the internet does not.
+        # The service hears nothing of the loss, as a real one on the internet does not, and its
+        # relay keeps its turns: what it sends or a close is taken in the next millisecond.
+        assert network.quiet_until() == MS
         assert not ended.wait(0.2)
         assert not any("link lost" in str(event) for event in events(network))
         network.close()  # the run's end, here rather than in `finally`, to see the stream end

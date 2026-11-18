@@ -4477,25 +4477,32 @@ and the Will goes then. `device_reset` already kept the device's connections thr
 for that reason. Now the link's end calls `Network.lose_link()`: the connections the test opened are
 lost, because the device's end of them is gone, and the device's stay, silent. The broker's
 deadlines run while the link is down, the board off included, so `ModemModel` and `Wifi` reach their
-`Internet` in command mode and off the air, and its `quiet_until` is the broker's then. What a
-service writes in the meantime goes nowhere. A bridged connection stays open at the real service
-too, for the same reason. A device connection its service closes while no stack holds the device's
-address, as the broker does at a keepalive that runs out before the device is back, is dropped at
-once: no device would answer its FIN, and kept, it would take the SYN of a new stack from the same
-port for the rest of the run. Whether a stack holds it is the address IPCP or DHCP gave on the
-current link, or the one the device sent from on it, which covers a static address; the link being
-up is not enough, since a station rejoins the access point and asks DHCP again some seconds after it
-is back on the air.
+`Internet` in command mode and off the air, and its `quiet_until` is the broker's and the
+bridges' then. What a service writes in the meantime goes nowhere. A bridged connection stays open
+at the real service too, for the same reason.
+
+A connection the link's end or a chip reset left open is marked orphaned: the stack on the device
+that held it is gone, and lwIP drops a netif's connections when it loses its address. When its
+service closes it, as the broker does at its keepalive or a takeover, it is dropped at once, with
+no FIN: none would be answered, whatever link the device is on by then, and kept, the flow would
+take the SYN of a new stack from the same port for the rest of the run. The link's end also drops
+the device's connections still in their handshake, which no service deadline would end.
 
 A device back with the same client ID before that takes its connection over (MQTT-3.1.4-2). With
 CleanSession=0 on both connections the session goes on and the old Will is discarded unsent; with
-CleanSession=1 on either it is published at the takeover. That is mosquitto's rule
+CleanSession=1 on either it is published at the takeover, and so it is when the old keepalive's
+deadline has come by the CONNECT, though the broker has not expired it yet. That is mosquitto's
+rule
 (`connect__on_authorised` in `src/handle_connect.c` sends the old Will only when either side starts
 clean), and the one a device's backend sees in production: a device that came back inside its
 keepalive has not gone. MQTT 3.1.1 itself says the Will is published whenever the connection closes
 without DISCONNECT (MQTT-3.1.2-8), which before this change the broker did at every takeover.
 
-**Rejected:** an option on the network, `link_loss="reset" | "silent"`, to keep the immediate Will,
+**Rejected:** deciding at the service's close whether a FIN would reach the device, from the
+address IPCP or DHCP gave on the current link or the one the device last sent from, because a
+lease the device gives up leaves that last address behind, a FIN may wait for a window that what
+went nowhere has filled, and no stack holds the old connection whatever link the device is on.
+Also rejected: an option on the network, `link_loss="reset" | "silent"`, to keep the immediate Will,
 because no broker a device meets behaves that way, and a test that wants the broker to give up at
 once has `broker.disconnect(client_id)`, which publishes the Will; a second way to say it would be
 a default someone has to pick per test. Also rejected: publishing the old Will at every takeover,

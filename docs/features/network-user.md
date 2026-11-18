@@ -838,8 +838,8 @@ runner reports, not when the chip goes to sleep: a `closed()` or `next_data()` w
 reset, as no network would know of it, nor by the link's loss: they go on until a RST from the
 device's new stack, which answers what their service writes, or the service's end, as the broker's
 keepalive. A SYN the new stack sends from the same port to the same service is dropped without an
-answer while the old connection stands; one the service closed while the link was down is gone at
-once. Why it is this TCP:
+answer while the old connection stands; once the service has closed it, it is gone. Why it is this
+TCP:
 [the test opens TCP connections to the
 device](../decisions/harness.md#the-test-opens-tcp-connections-to-the-device-on-the-same-tcp-with-no-timers).
 
@@ -930,9 +930,11 @@ the keepalive after the device's last packet (MQTT 3.1.1, 3.1.2.10). The network
 `modem.drop_call()`, PPP ended by the device and `wifi.access_point_off()` end the link; the
 broker's end of each connection the device opened stays open and silent,
 `broker.session(...).connected` stays true, and the keepalive expiry closes it and publishes the
-Will, with the log lines `mqtt: session-client keepalive expired` and, while the device is not back
-with its address, `net: TCP 10.64.0.2:<port> → 10.64.0.1:1883 closed by its service with no device
-to answer`; once it is back, the new stack's RST ends it, `reset by the device`. The broker's
+Will, with the log lines `mqtt: session-client keepalive expired` and `net: TCP
+10.64.0.2:<port> → 10.64.0.1:1883 closed by its service with no device to answer`: no stack on the
+device holds the connection any more, so the broker's end goes with no FIN. A connection whose
+handshake the link's end cut short, before the device's ACK, goes at the link's end, `lost before
+the device answered its SYN-ACK`, since no CONNECT, and so no keepalive, came on it. The broker's
 deadlines run while the link is down, the board off included. What it writes in the meantime, a
 PUBACK or a message to a subscription, goes nowhere, as on a connection whose far end is gone; a QoS
 1 delivery so lost goes again with DUP=1 when the session resumes. A client with a keepalive of 0
@@ -955,10 +957,11 @@ def test_the_will_goes_at_the_keepalive(board, broker):  # keepalive 60 s
 A device back before then, with the same client ID and CleanSession=0, takes its session over
 (MQTT-3.1.4-2): the old connection closes, its Will discarded, and none is published, so a
 retained status the firmware published on connecting stays the last word. With CleanSession=1 on
-either connection the Will goes at the takeover. The new stack answers the broker's FIN on the old
-connection with a RST, logged as `net: TCP 10.64.0.2:<port> → 10.64.0.1:1883 reset by the device`.
-A firmware whose new stack connects from the same port as before has its SYN dropped while the old
-connection stands, until the keepalive ends it ([TCP](#open-a-tcp-connection-to-the-device));
+either connection the Will goes at the takeover, and so it does when the CONNECT comes at the
+instant the old keepalive runs out, though the session is resumed. The old connection goes with no
+FIN, `closed by its service with no device to answer`. A firmware whose new stack connects from the
+same port as before has its SYN dropped while the old connection stands, until the keepalive ends
+it ([TCP](#open-a-tcp-connection-to-the-device));
 esp-mqtt in `mqtt_session` connects from another. `broker.disconnect(client_id)` ends a connection
 at once, its Will published, for a test that wants the broker to give up sooner. The connections
 the test opened with `network.connect` are lost at the link's end, as before: the device's end of

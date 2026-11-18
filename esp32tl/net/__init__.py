@@ -94,10 +94,8 @@ class Internet:
         self._up = _Direction(0)
         self._down = _Direction(LATENCY_NS)
         self._datagram: int | None = None  # the size of the IPv4 datagram the link is sending
-        # The address the device last sent IPv4 from on this link, since it last reset.
-        self._heard: str | None = None
         self.events: list[dict[str, object]] = []
-        self.ip = Network(self._downlink, self.log, mtu=self._mtu, up=self._reaches)
+        self.ip = Network(self._downlink, self.log, mtu=self._mtu)
         self.dns = Dns("10.64.0.1", self.log)
         self.ntp = Ntp(self.now, world, self.log)
         self.ip.udp.update({53: self.dns, 123: self.ntp})
@@ -158,16 +156,6 @@ class Internet:
             self._link_ended()
         else:
             self.dns.address = IPv4Address(self.lease.address).packed
-
-    def _reaches(self, address: str) -> bool:
-        """Whether what the network sends to the device's `address` reaches a stack that holds
-        it now: the link up, and `address` the one IPCP or DHCP gave the device on it, or the one
-        it sent from since, a static one; behind a station, while it has a lease."""
-        if not self.active:
-            return False
-        if isinstance(self.link, Station):
-            return self.lease is not None
-        return address in (self.device_address, self._heard)
 
     def _mtu(self) -> int:
         return self.link.peer_mru if isinstance(self.link, Ppp) else self.link.mtu
@@ -270,8 +258,7 @@ class Internet:
         previous = self._at
         self._at = t
         try:
-            self._heard = None
-            self.ip.lose_clients(why)
+            self.ip.forget_device(why)
             if isinstance(self.link, Ppp):
                 self._stale = self.link.ipcp_opened
             elif isinstance(self.link, Station):
@@ -422,14 +409,11 @@ class Internet:
         return Ppp(send, self._uplink, log=self.log, ended=self._link_ended)
 
     def _link_ended(self) -> None:
-        self._heard = None
         self.ip.lose_link()
         self._up.clear()
         self._down.clear()
 
     def _uplink(self, datagram: bytes) -> None:
-        if len(datagram) >= 20 and datagram[0] >> 4 == 4 and datagram[12:16] != bytes(4):
-            self._heard = str(IPv4Address(datagram[12:16]))
         at = self.now()
         self._up.queue.append((self._up.leaves(at, len(datagram)), datagram))
         self._arrive(at)
@@ -559,16 +543,19 @@ class Internet:
 
     def quiet_until(self) -> int | None:
         """The earliest of the broker's deadlines, the path's next datagram, either way, and the
-        next whole millisecond while a bridged connection is open; the broker's alone while the
-        link is down, as its keepalive still ends the connections the link's end left open."""
+        next whole millisecond while a bridged connection is open; with the link down, the
+        broker's and the bridges', as its keepalive still ends the connections the link's end
+        left open, and a bridged service may still send or close."""
+        bridged = (bridge.quiet_until(self._now()) for bridge in self.bridges.values())
         if not self.active:
-            return self.broker.quiet_until()
+            deadlines = (self.broker.quiet_until(), *bridged)
+            return min((bound for bound in deadlines if bound is not None), default=None)
         bounds = (
             self.link.quiet_until() if isinstance(self.link, Station) else None,
             self.broker.quiet_until(),
             self._up.head(),
             self._down.head(),
-            *(bridge.quiet_until(self._now()) for bridge in self.bridges.values()),
+            *bridged,
         )
         return min((bound for bound in bounds if bound is not None), default=None)
 

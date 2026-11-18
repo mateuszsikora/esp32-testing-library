@@ -869,9 +869,13 @@ class _Session:
             if session is not self and session.connected and session.client_id == self.client_id:
                 # MQTT-3.1.4-2. A session that both connections keep takes its old connection's
                 # Will away unsent, as mosquitto does: a device back before its keepalive ran out
-                # has not gone. Either side with CleanSession=1, the Will goes.
+                # has not gone. Either side with CleanSession=1, the Will goes, and so it does
+                # when the old keepalive has run out by now, though `poll` has not yet expired it.
                 kept = session.state is not None and not session.state.clean
-                discarded = kept and not connect.clean_session and session.will is not None
+                alive = session.deadline is None or broker._now() < session.deadline
+                discarded = (
+                    kept and alive and not connect.clean_session and session.will is not None
+                )
                 if discarded:
                     session.will = None
                 broker._log(
