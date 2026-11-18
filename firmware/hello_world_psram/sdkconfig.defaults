@@ -1,6 +1,6 @@
 # hello_world, ESP-IDF's example unchanged, with its PSRAM on: on top of the example's own
-# configuration (firmware/build.sh names it). Built for the ESP32-S3 only, whose devkit profile,
-# esp32-s3-devkitc, is an N8R8 module: 8 MiB of octal PSRAM. ESP-IDF's PSRAM driver then finds it
-# at start-up, tests it and adds it to the heap.
+# configuration (firmware/build.sh names it). ESP-IDF's PSRAM driver then finds the PSRAM at
+# start-up, tests it and adds it to the heap. Built for the chips with PSRAM in esp32sim whose
+# validation images include it: the ESP32-S3 (sdkconfig.defaults.esp32s3), the ESP32-P4 and the
+# ESP32-S31, each on its devkit profile's PSRAM.
 CONFIG_SPIRAM=y
-CONFIG_SPIRAM_MODE_OCT=y

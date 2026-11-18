@@ -65,11 +65,16 @@ CHIPS = {
     18: "esp32p4",
     20: "esp32c61",
     23: "esp32c5",
+    32: "esp32s31",
 }
 CLASSIC = "esp32"
 # Where the second-stage bootloader sits in the flash: 0x1000 on the classic ESP32 and the S2,
-# 0x0 on the others (ESP-IDF's CONFIG_BOOTLOADER_OFFSET_IN_FLASH).
-BOOTLOADER_OFFSETS = {"esp32": 0x1000, "esp32s2": 0x1000}
+# 0x2000 on the P4 and the S31, 0x0 on the others (ESP-IDF's CONFIG_BOOTLOADER_OFFSET_IN_FLASH).
+BOOTLOADER_OFFSETS = {"esp32": 0x1000, "esp32s2": 0x1000, "esp32p4": 0x2000, "esp32s31": 0x2000}
+# The lowest chip revision an image runs on, major * 100 + minor, little-endian at bytes 15 and 16
+# of its header (min_chip_rev_full). An ESP32-P4 image for 3.0 or later runs on rev >= 3 only.
+MIN_REV_AT = 15
+P4_REV3 = 300
 
 
 class BuildError(Exception):
@@ -268,6 +273,31 @@ def header_flash(build: Build) -> HeaderFlash | None:
         ) from error
     # The bootloader's first when both give the same size: it is the one that sets it by default.
     return max(found, key=lambda h: h.mb, default=None)
+
+
+def p4_rev3(build: Build) -> bool:
+    """Whether an ESP32-P4 build is for rev >= 3, by the runner's rule (`chip::esp32p4::rev3`),
+    which takes the silicon revision from it: the header at the bootloader's offset in the flash,
+    0x2000, as the last file that holds it writes it there (a bootloader of its own, or the one
+    inside PlatformIO's `firmware.factory.bin` from 0x0), when it is a P4 image; else the first
+    other file whose own header is one. A build without a P4 image counts as rev < 3, as there.
+    Raises `BuildError` when a file cannot be read."""
+    offset = BOOTLOADER_OFFSETS["esp32p4"]
+    try:
+        headers = [flash_bytes(build, offset, HEADER_SIZE)]
+        headers += [header(f.path, 0) for f in build.flash_files if f.offset != offset]
+    except OSError as error:
+        raise BuildError(
+            f"cannot read the image headers of {build.directory}: {error.strerror}"
+        ) from error
+    for data in headers:
+        if (
+            len(data) == HEADER_SIZE
+            and data[0] == IMAGE_MAGIC
+            and CHIPS.get(int.from_bytes(data[CHIP_ID_AT : CHIP_ID_AT + 2], "little")) == "esp32p4"
+        ):
+            return int.from_bytes(data[MIN_REV_AT : MIN_REV_AT + 2], "little") >= P4_REV3
+    return False
 
 
 def flash_size(data: bytes) -> int | None:

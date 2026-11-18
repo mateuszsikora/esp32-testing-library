@@ -26,6 +26,8 @@ esp32 = { git = "https://github.com/mikroverk/esp32sim", rev = "357b0e542dfe97d4
 esp32s3 = { git = "https://github.com/mikroverk/esp32sim", rev = "357b0e542dfe97d4c62ec4a15c01c4969164448c" }
 esp32c3 = { git = "https://github.com/mikroverk/esp32sim", rev = "357b0e542dfe97d4c62ec4a15c01c4969164448c" }
 esp32c6 = { git = "https://github.com/mikroverk/esp32sim", rev = "357b0e542dfe97d4c62ec4a15c01c4969164448c" }
+esp32p4 = { git = "https://github.com/mikroverk/esp32sim", rev = "357b0e542dfe97d4c62ec4a15c01c4969164448c" }
+esp32s31 = { git = "https://github.com/mikroverk/esp32sim", rev = "357b0e542dfe97d4c62ec4a15c01c4969164448c" }
 esp-soc = { git = "https://github.com/mikroverk/esp32sim", rev = "357b0e542dfe97d4c62ec4a15c01c4969164448c" }
 # For the SD card's image: esp32sim's `SdStore` and its write-through `FileStore`.
 esp-periph = { git = "https://github.com/mikroverk/esp32sim", rev = "357b0e542dfe97d4c62ec4a15c01c4969164448c" }

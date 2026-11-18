@@ -34,7 +34,7 @@
    - with `firmware.factory.bin`: one flash file, `firmware.factory.bin` at `0x0`;
    - without it: `app_partition` reads `partitions.bin` (its first `0xC00` bytes), and the flash
      files are `bootloader.bin` at the chip's bootloader offset (`BOOTLOADER_OFFSETS`: `0x1000` for
-     `esp32` and `esp32s2`, `0x0` for every other chip), `partitions.bin` at `0x8000` and
+     `esp32` and `esp32s2`, `0x2000` for `esp32p4` and `esp32s31`, `0x0` for every other chip), `partitions.bin` at `0x8000` and
      `firmware.bin` at the
      offset of that partition. Nothing is written at the otadata's offset, which stays as the
      runner's flash starts, every byte `0xFF`: erased.
@@ -94,10 +94,10 @@ What `esp32tl.build` reads of the files:
 
 | What | Where | Read as |
 |---|---|---|
-| Image header | The first 24 bytes of `firmware.bin` (PlatformIO) or of `app_image` (both kinds, for the flash size), and at the chip's bootloader offset of the flash (`BOOTLOADER_OFFSETS`: `0x1000` on `esp32` and `esp32s2`, `0x0` on the others) for the bootloader | `esp_image_header_t`: byte 0 the magic, `0xE9`; bytes 12 and 13 the chip id, little-endian; the high four bits of byte 3 (`FLASH_SIZE_AT`) the flash size, `spi_size` |
+| Image header | The first 24 bytes of `firmware.bin` (PlatformIO) or of `app_image` (both kinds, for the flash size), and at the chip's bootloader offset of the flash (`BOOTLOADER_OFFSETS`: `0x1000` on `esp32` and `esp32s2`, `0x2000` on `esp32p4` and `esp32s31`, `0x0` on the others) for the bootloader; on the P4 also bytes 15 and 16, `min_chip_rev_full` (`p4_rev3`) | `esp_image_header_t`: byte 0 the magic, `0xE9`; bytes 12 and 13 the chip id, little-endian; the high four bits of byte 3 (`FLASH_SIZE_AT`) the flash size, `spi_size` |
 | Flash size | High four bits of byte 3 of a header | ESP-IDF's `esp_image_flash_size_t`: `n` from 0 to 7 (`LARGEST_FLASH_SIZE`) is `1 << n` MB, 1 to 128; 8 and above give no size |
 | Partition table | At `0x8000` of the flash, up to `0xC00` bytes (`TABLE_SIZE`) | Bytes 0 and 1 `0xAA 0x50`; then `flash.partitions` ([flash contents](flash-contents-technical.md#schema)) |
-| Chip id | Bytes 12 and 13 of a header | ESP-IDF's `esp_chip_id_t`: `0` `esp32`, `2` `esp32s2`, `5` `esp32c3`, `9` `esp32s3`, `12` `esp32c2`, `13` `esp32c6`, `16` `esp32h2`, `18` `esp32p4`, `20` `esp32c61`, `23` `esp32c5` (`CHIPS`); anything but the board's chip is refused |
+| Chip id | Bytes 12 and 13 of a header | ESP-IDF's `esp_chip_id_t`: `0` `esp32`, `2` `esp32s2`, `5` `esp32c3`, `9` `esp32s3`, `12` `esp32c2`, `13` `esp32c6`, `16` `esp32h2`, `18` `esp32p4`, `20` `esp32c61`, `23` `esp32c5`, `32` `esp32s31` (`CHIPS`); anything but the board's chip is refused |
 
 The PlatformIO file names are constants of `esp32tl/build.py`: `FIRMWARE` (`firmware.bin`),
 `FACTORY` (`firmware.factory.bin`), `BOOTLOADER` (`bootloader.bin`), `PARTITIONS`
@@ -124,6 +124,7 @@ in the build directory, which is why a build without `firmware.factory.bin` gets
 | `header_flash(build)` | The largest flash size the bootloader's and the application's image headers give, as a `HeaderFlash`, or `None`; `BuildError` when a file cannot be read |
 | `HeaderFlash(mb, path, what)` | A frozen dataclass: the size in MB, the file of the header, and `bootloader at {offset:#x}` or `application image` |
 | `flash_size(data)` | The flash size in MB of the image header `data`, or `None` when `data` is shorter than 24 bytes, lacks the magic, or has a size code above 7 |
+| `p4_rev3(build)` | Whether an ESP32-P4 build is for rev ≥ 3: the `min_chip_rev_full` (bytes 15 and 16, `MIN_REV_AT`) of the header at flash address `0x2000` (`flash_bytes`, so also inside `firmware.factory.bin` from `0x0`), or else of the first other flash file whose own header is a P4 image's, is 300 (`P4_REV3`) or more; `False` without a P4 image, as the runner reads it (`chip::esp32p4::rev3`). `BuildError` when a file cannot be read. The esp32sim backend gives the runner the ROM of that revision |
 | `FlashFile(offset, path)` | A frozen dataclass: a file written into the flash at `offset` |
 | `BuildError` | What keeps a build from loading or its table from being read |
 | `esp_idf(app_path, directory, backend, chip)`, `platformio(directory, backend, chip)` | The two readers `load` chooses between, each checking the build against `chip` |

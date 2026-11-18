@@ -171,7 +171,7 @@ def interruptible(
             uarts.append(uart)
         image = esp32sim.load_app(str(app.resolve()), build_dir=build_dir, chip=profile.chip)
         flash_mb = esp32sim.runner_flash_mb(profile, image)
-        runner, rom = esp32sim.runner_path(), esp32sim.rom_path(profile.chip)
+        runner, rom = esp32sim.runner_path(), esp32sim.rom_path(profile.chip, image)
     except (ProfileError, BackendError, RecordingError, ReplayError) as error:
         print(f"esp32tl: {error}", file=sys.stderr)
         return CANNOT_START

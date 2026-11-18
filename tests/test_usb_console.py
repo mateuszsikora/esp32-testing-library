@@ -90,7 +90,7 @@ def on_chip(chip: str, profile: str, rom: str) -> type:
             assert b"help\n" in b"".join(e.data for e in made.events if e.dir == "in")
             if isinstance(board, Esp32Sim):
                 report = board.link.report()
-                assert "USB-Serial/JTAG console: 0 bytes of console_rx lost" in report
+                assert "console without pins: 0 bytes of console_rx lost" in report
                 properties = board.properties()["console"]
                 assert isinstance(properties, dict)
                 assert properties["bytes_out"] == len(board.console_output)

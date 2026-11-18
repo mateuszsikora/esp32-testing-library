@@ -1064,8 +1064,9 @@ about thirty places and one process never runs two chips; depending on esp32sim'
 its chip dispatch, for the reasons of
 [the esp32sim command-line crate is not a dependency](#the-esp32sim-command-line-crate-is-not-a-dependency).
 
-**Not yet:** the ESP32-P4 and the ESP32-S31 ([#233](https://github.com/mateuszsikora/esp32-testing-library/issues/233)),
-whose boards have no UART pin hooks and whose images need another ESP-IDF version.
+Since #233 it takes `esp32p4` and `esp32s31` too, whose boards have GPIO hooks only
+([the P4 runs on the model of its images' revision](#the-p4-runs-on-the-esp32sim-model-of-the-revision-its-images-are-built-for),
+[UART0's console has no pins on the P4 and the S31](#on-the-p4-and-the-s31-uart0s-console-has-no-pins)).
 
 ## What esp32sim lacks on a chip is refused at the command line
 
@@ -1075,7 +1076,10 @@ Status: decided (#236)
 for something it does not: `--wifi-sta` on the S3, C3 and C6
 (`--wifi-sta: esp32s3 has no virtual station for a SoftAP in esp32sim`), a `--psram-mb` size the
 chip does not take (`--psram-mb: the ESP32-C3 supports only 0 MiB, got "2"`), and the pins of
-`--sd-spi` against the chip's GPIOs. Deep sleep and GP-SPI RX DMA cannot be refused: nothing on
+`--sd-spi` against the chip's GPIOs; since #233, on the P4 and the S31, `--wifi`, `--wifi-sta`,
+`--bt` and `--sd-spi` (`--sd-spi: esp32p4 tells the board no SPI pins in esp32sim`), whose buses
+have no Ethernet relay, no VHCI hooks and no SPI pin hook (`Profile::wifi`, `bt`, `sd_spi`).
+Deep sleep and GP-SPI RX DMA cannot be refused: nothing on
 the command line asks for them, and the guest decides at run time. `--sd-spi` is taken on the S3,
 C3 and C6: the card answers the transactions the CPU drives, and only those through RX DMA miss
 it, which ESP-IDF's SD SPI driver needs; the esp32sim backend skips `sd_card` there instead. [#229](https://github.com/mateuszsikora/esp32-testing-library/issues/229)
@@ -1182,3 +1186,106 @@ by the stamp's delay, which is what this was to remove.
 **Postponed:** the classic chip's zero to within a tick, which needs esp32sim to expose the LACT's
 count, a read-only accessor on `ClassicTimer`. Asked of upstream only once a test needs better than
 a millisecond.
+## The P4 runs on the esp32sim model of the revision its images are built for
+
+Status: decided (#233)
+
+esp32sim models ESP32-P4 rev < 3 and rev ≥ 3 as two machines, `Machine<Esp32p4<RevLt3>>` and
+`Machine<Esp32p4<RevGe3>>`, which differ in ISA, interrupt controller, memory layout and ROM; an
+image runs only on the revision it was built for. `--chip esp32p4` takes the revision from the
+images' headers, as esp32sim's command line does (`p4_rev3`, `cli/src/lib.rs:661-669`), by a rule
+of its own: before the setup `main` reads the header at the flash's bootloader address, 0x2000,
+from the last `--flash-at` file that covers it, a bootloader file of its own or an image of the
+whole flash from 0x0 (PlatformIO's `firmware.factory.bin`), and the first 24 bytes of every other
+file, and `chip::esp32p4::rev3` answers rev ≥ 3 when the first of them that is a P4 image's
+(magic 0xE9, chip ID 0x0012), the bootloader's first, asks for revision 3.00 or later
+(`min_chip_rev_full`). esp32sim takes the first file's answer even when it holds no P4 image; the
+runner passes over such a file. `main` then monomorphises over the machine of that revision and says which
+on stderr (`esp32tl-runner: ESP32-P4 rev ≥ 3 (v3.1), as the images are built`). Each `--flash-at`
+image goes through esp32sim's `Soc::check_image`, which refuses an image for the other revision
+with esp32sim's message, exit 2. The ROM is the harness's choice, made the same way
+([harness: the P4's ROM is the one of its build's revision](harness.md#the-p4s-rom-is-the-one-of-its-builds-revision)).
+
+**Rejected:** two chip names (`esp32p4` and an `esp32p4rev3`), because ESP-IDF's target and the
+chip name `hello` carries are `esp32p4` for both, and a board profile would have to say what the
+build already says; a flag for the revision, which could disagree with the images; reading the
+header in `Target::new`, which the images have not reached yet.
+
+## On the P4 and the S31, UART0's console has no pins
+
+Status: decided (#233)
+
+esp32sim's P4 and S31 buses never call the board's UART hooks (`uart_tx`, `uart_rx`,
+`uses_uart_pins`), and neither has a `uart_route`
+([#229](https://github.com/mateuszsikora/esp32-testing-library/issues/229), G6 and G7).
+`chip::Profile::uart_pins` is false for them, and the run loop takes the console as it takes the
+USB-Serial/JTAG one ([its bytes are stamped with the end of their slice](#the-usb-serialjtag-consoles-bytes-are-stamped-with-the-end-of-their-slice)):
+`Guest::take_uart0_console` takes what esp32sim drained from UART0's TX FIFO into
+`Console::uart0`, at every slice boundary, and the peer's `console_rx`
+([protocol 5.23](../protocol.md#523-console_rx-ext-usb-console)) goes into UART0 through
+`Guest::uart0_console_input`. On the P4 that is esp32sim's `SocBus::uart_input`, which puts into
+the 128-byte RX FIFO what fits and releases the rest at UART0's baud rate. The S31's takes host
+bytes into the FIFO at once and drops what does not fit, so its machine is wrapped
+(`chip::esp32s31::S31`), which keeps the bytes and runs the guest in pieces that end where the next
+one is due: one byte per character time at UART0's baud (115200 until the guest sets one), when the
+FIFO has room and UART0 takes it (`S31Bus::uart_input` refuses a byte while UART0's clock or
+receiver is off); a refused byte stays queued for the next character time. Every UART route reads as having no pins (`chip::no_uart`), so a route to a model
+cannot run; the esp32sim backend skips the test instead.
+
+**Rejected:** decoding UART0's route from the P4's IO_MUX and GPIO matrix registers, the first
+option of #233: it would give the console's pins, but the bytes the UART sends still never reach
+the board, so the output would need the console stream all the same, and the input would gain only
+a pacing that the queue already gives; every other route would still have no bytes.
+
+## The P4's and the S31's GPIO output is reported where esp32sim does not report it
+
+Status: decided (#233)
+
+The P4's bus tells the board a change of a pin's driven level, `out & enable`, at its cycle
+(`gpio_output_at`), but not an output enabled at the level the pad already had, so the peer would
+never learn that the firmware drives a line low. After every `run`, the P4's `Guest::run_until`
+hands the board the pads' enable and output words with no change: the socket board reports them only
+if they differ from what it last reported, at the slice's end. esp32sim's P4 also leaves
+`SocBus::gpio_release_input` to the trait's default, which does nothing, so the runner calls its
+GPIO's own `release_input`.
+
+The S31's bus calls the board's `gpio_changes` with the pads' levels and no cycle. Its wrapper turns
+on esp32sim's record of pad changes (`observe_gpio`), which has the cycle of each, and after every
+run hands the board each change of a pin the chip drove before the run or drives after it, at its
+cycle, with the pads' output enable as it is at the end of the run (`Pads::drive`); a pin that
+changes direction inside one slice is reported with the later direction. A change the peer's own
+input caused is dropped (`take_gpio_inputs`).
+
+**Rejected:** polling the pads at every slice end alone, which would lose a pulse shorter than a
+slice and put every edge at the slice's end; leaving the enable-only change unreported, which
+makes `lines.level` of a line the firmware drives low unknown until it first goes high.
+
+## A power-on reset of the P4 clears what esp32sim's chip reset keeps
+
+Status: decided (#233)
+
+esp32sim's P4 chip reset keeps L2MEM, the TCM, the LP RAM and the LP registers (`LpAon`, the
+reset cause among them). The runner's power-on reset reboots the chip, then zeroes L2MEM, the TCM
+and the LP RAM through the bus, loads the ROM again and puts a new `LpAon` in place, whose cause is
+POWERON. The S31's chip reset already makes its whole digital side again, SRAM and the LP memory
+with it, and keeps the ROM, the efuses, the board inputs and the flash; its power-on reset is that
+reset with the cause set to POWERON (`SocBus::set_reset_cause`).
+
+
+## The P4 reports its uptime as the other SYSTIMER chips do, the S31 none yet
+
+Status: decided (#233)
+
+The P4's `esp_timer` counts on SYSTIMER unit 0, as on the S3, C3 and C6, and esp32sim's
+`SystimerP4` wraps the shared `Systimer`, ticking it 2 for every 5 XTAL ticks: 22.5 bus cycles a
+tick at 360 MHz. `chip::systimer_uptime` takes a whole number of bus cycles a tick, so the P4 has
+its own, in half cycles, and its zero is known to within 23 bus cycles. The S31's SYSTIMER counts
+at a rate set by its clock source and a divider that `SystimerS31` keeps private, so its `Guest`
+keeps the trait's `uptime`, `Stopped`, and the run sends no `uptime`
+([protocol 5.24](../protocol.md#524-uptime-ext-245)).
+
+**Rejected:** a 23-cycle tick for the P4 in the shared function, which would put the zero about
+2% of the count away from where it is; assuming the S31's default 16 MHz, which a firmware that
+moves the source or the divider would make wrong without a word.
+
+**Not yet:** the S31's uptime, which needs the divider from esp32sim.

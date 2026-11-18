@@ -72,6 +72,8 @@ enum Act {
     UsbTx(Vec<u8>),
     /// The uptime counter is now as given; a reset stops it.
     Uptime(Uptime),
+    /// Bytes UART0 sent, on a chip whose UARTs have no pins: no board callback sees them.
+    Uart0Stream(Vec<u8>),
 }
 
 /// A guest that does what its script says at the cycles it says, and records UART bytes the way
@@ -122,6 +124,9 @@ struct FakeGuest {
     usb_in: Vec<(u64, Vec<u8>)>,
     /// The uptime counter, as `Act::Uptime` last set it.
     uptime: Uptime,
+    /// With its console on a UART0 without pins: what UART0 sent, not taken yet.
+    uart0: Option<Vec<u8>>,
+    uart0_in: Vec<(u64, Vec<u8>)>,
 }
 
 /// Why `FakeGuest` lost a received byte.
@@ -162,7 +167,15 @@ impl FakeGuest {
             usb: None,
             usb_in: Vec::new(),
             uptime: Uptime::Stopped,
+            uart0: None,
+            uart0_in: Vec::new(),
         }
+    }
+
+    /// With its console on a UART0 without pins (`Profile::uart_pins`).
+    fn with_uart0_stream(mut self) -> Self {
+        self.uart0 = Some(Vec::new());
+        self
     }
 
     /// With its console on the USB-Serial/JTAG controller (`--console-port usb`).
@@ -273,6 +286,11 @@ impl Guest for FakeGuest {
                     .expect("a guest with --console-port usb")
                     .extend(data),
                 Act::Uptime(uptime) => self.uptime = uptime,
+                Act::Uart0Stream(data) => self
+                    .uart0
+                    .as_mut()
+                    .expect("a guest whose UART0 has no pins")
+                    .extend(data),
             }
         }
         self.now = end;
@@ -335,6 +353,12 @@ impl Guest for FakeGuest {
     }
     fn usb_console_input(&mut self, data: &[u8]) {
         self.usb_in.push((self.now, data.to_vec()));
+    }
+    fn take_uart0_console(&mut self) -> Vec<u8> {
+        self.uart0.as_mut().map(std::mem::take).unwrap_or_default()
+    }
+    fn uart0_console_input(&mut self, data: &[u8]) {
+        self.uart0_in.push((self.now, data.to_vec()));
     }
     fn take_gpio_inputs(&mut self) {
         for edge in self.board.take_edges() {
@@ -584,6 +608,7 @@ fn run_with(
         end_cycle: (seconds * SECOND as f64) as u64,
         console,
         usb_console: guest.usb.is_some(),
+        uart0_stream: guest.uart0.is_some(),
         peer_timeout: None,
         signal: &signal,
         wifi: None,
@@ -1519,6 +1544,7 @@ fn a_signal_ends_the_slice_in_progress_with_stats() {
         end_cycle: 10 * SECOND,
         console: false,
         usb_console: false,
+        uart0_stream: false,
         peer_timeout: None,
         signal: &signal,
         wifi: None,
@@ -1698,6 +1724,7 @@ fn on_the_emulator_the_slices_stop_a_guest_asleep_in_waiti_at_the_block_point() 
         end_cycle: cycles(5 * MS),
         console: false,
         usb_console: false,
+        uart0_stream: false,
         peer_timeout: None,
         signal: &signal,
         wifi: None,
@@ -1774,6 +1801,7 @@ fn on_the_emulator_a_byte_into_a_full_rx_fifo_is_lost_and_raises_the_overflow_in
         end_cycle: cycles(20 * MS),
         console: false,
         usb_console: false,
+        uart0_stream: false,
         peer_timeout: None,
         signal: &signal,
         wifi: None,
@@ -2172,6 +2200,7 @@ fn on_the_emulator_gpio_in_reaches_the_guest_and_its_output_comes_back_as_gpio_o
         end_cycle: cycles(3 * MS),
         console: false,
         usb_console: false,
+        uart0_stream: false,
         peer_timeout: None,
         signal: &signal,
         wifi: None,
@@ -2520,6 +2549,7 @@ fn run_wifi_mode(
         end_cycle: end,
         console: false,
         usb_console: false,
+        uart0_stream: false,
         peer_timeout: None,
         signal: &signal,
         wifi: Some(wifi),
@@ -3034,6 +3064,7 @@ fn run_with_slot(seconds: f64, peer: FakePeer, slot: &sd_card::Shared) -> Run {
         end_cycle: (seconds * SECOND as f64) as u64,
         console: false,
         usb_console: false,
+        uart0_stream: false,
         peer_timeout: None,
         signal: &signal,
         wifi: None,
@@ -3332,6 +3363,7 @@ fn run_realtime(seconds: f64, mut guest: FakeGuest, mut peer: FakePeer) -> Run {
         end_cycle: (seconds * SECOND as f64) as u64,
         console: false,
         usb_console: false,
+        uart0_stream: false,
         peer_timeout: None,
         signal: &signal,
         wifi: None,
@@ -3672,6 +3704,7 @@ fn each_flash_dump_ack_starts_the_peer_timeout_again() {
         end_cycle: MS_CYCLES,
         console: false,
         usb_console: false,
+        uart0_stream: false,
         peer_timeout: Some(Duration::from_secs(3600)),
         signal: &signal,
         wifi: None,
@@ -4201,13 +4234,52 @@ fn console_rx_reaches_the_usb_console_when_it_comes_due_and_is_lost_with_the_sup
 }
 
 #[test]
+fn on_a_uart0_without_pins_the_console_goes_out_per_slice_and_console_rx_goes_into_uart0() {
+    // the P4's and the S31's: what UART0 sent in a slice, stamped with its end, as on USB; the
+    // peer's console_rx into UART0 when it comes due, and lost with the supply off
+    let script = vec![
+        (cycles(MS / 2), Act::Uart0Stream(b"rom\nhel".to_vec())),
+        (cycles(3 * MS / 2), Act::Uart0Stream(b"lo\n".to_vec())),
+    ];
+    let guest = FakeGuest::new(script).with_uart0_stream();
+    let peer = FakePeer::new(
+        &[],
+        scripted(vec![
+            (0, console_rx(MS + 1, b"help\n")),
+            (2 * MS, power(2 * MS, false)),
+            (2 * MS, console_rx(3 * MS, b"lost\n")),
+            (4 * MS, power(4 * MS, true)),
+        ]),
+    );
+    let r = run_for(0.01, guest, peer, true);
+    assert!(matches!(r.end, End::MaxSeconds), "{:?}", r.end);
+    let console: Vec<(u64, Vec<u8>)> = r
+        .peer
+        .of("console")
+        .iter()
+        .map(|m| (num(m, "t"), data(m)))
+        .collect();
+    assert_eq!(
+        console,
+        [
+            (MS, b"rom\n".to_vec()),
+            (MS, b"hel".to_vec()),
+            (2 * MS, b"lo\n".to_vec())
+        ]
+    );
+    assert_eq!(r.guest.uart0_in, [(cycles(MS + 1), b"help\n".to_vec())]);
+    assert!(r.guest.usb_in.is_empty());
+    assert_eq!(num(r.peer.stats(), "console_rx_lost"), 5);
+}
+
+#[test]
 fn console_rx_needs_the_console_on_usb() {
     let peer = FakePeer::new(&[], move |turn| {
         vec![console_rx(0, b"help\n"), wait(turn.seq, None, None)]
     });
     let r = run_for(1.0, FakeGuest::new(Vec::new()), peer, true);
     assert!(
-        matches!(&r.end, End::Protocol(m) if m.starts_with("console_rx without --console-port usb: ")),
+        matches!(&r.end, End::Protocol(m) if m.starts_with("console_rx without --console-port usb, on a UART0 with pins: ")),
         "{:?}",
         r.end
     );
