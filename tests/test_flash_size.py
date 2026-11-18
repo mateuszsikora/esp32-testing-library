@@ -190,7 +190,7 @@ def board_on(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, board_profile: BoardProfile
 ) -> Esp32Sim:
     monkeypatch.setattr(esp32sim, "runner_path", lambda: Path("runner"))
-    monkeypatch.setattr(esp32sim, "rom_path", lambda chip="esp32": Path("rom"))
+    monkeypatch.setattr(esp32sim, "rom_path", lambda chip="esp32", app=None: Path("rom"))
     run = tmp_path / "run"
     run.mkdir(exist_ok=True)
     return Esp32Sim(
@@ -228,7 +228,7 @@ def test_esp32tl_run_passes_the_profile_s_flash(
 ) -> None:
     sized_build(tmp_path, bootloader=header, app=header)
     monkeypatch.setattr(esp32sim, "runner_path", lambda: Path("runner"))
-    monkeypatch.setattr(esp32sim, "rom_path", lambda chip="esp32": Path("rom"))
+    monkeypatch.setattr(esp32sim, "rom_path", lambda chip="esp32", app=None: Path("rom"))
     popen = Mock(side_effect=OSError(2, "No such file or directory"))
     monkeypatch.setattr(subprocess, "Popen", popen)
     args = ["run", "--app", str(tmp_path), "--build-dir", PIO, "--board", "esp32-devkitc"]
@@ -241,7 +241,7 @@ def test_esp32tl_run_refuses_a_build_for_more_flash_than_the_profile(
 ) -> None:
     built = sized_build(tmp_path, bootloader=8, app=8)
     monkeypatch.setattr(esp32sim, "runner_path", lambda: Path("runner"))
-    monkeypatch.setattr(esp32sim, "rom_path", lambda chip="esp32": Path("rom"))
+    monkeypatch.setattr(esp32sim, "rom_path", lambda chip="esp32", app=None: Path("rom"))
     popen = Mock()
     monkeypatch.setattr(subprocess, "Popen", popen)
     args = ["run", "--app", str(tmp_path), "--build-dir", PIO, "--board", "esp32-devkitc"]

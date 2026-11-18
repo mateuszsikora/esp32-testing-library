@@ -197,7 +197,7 @@ def device(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Esp32Sim:
     )
     monkeypatch.setattr(esp32sim, "load_app", lambda _, *, build_dir=None, chip="esp32": app)
     monkeypatch.setattr(esp32sim, "runner_path", lambda: Path("runner"))
-    monkeypatch.setattr(esp32sim, "rom_path", lambda chip="esp32": Path("rom"))
+    monkeypatch.setattr(esp32sim, "rom_path", lambda chip="esp32", app=None: Path("rom"))
     run = tmp_path / "run"
     run.mkdir()
     return Esp32Sim(
