@@ -2029,6 +2029,20 @@ clones, and rejection of serial distributed execution before accessing hardware.
 - **244.** Its boundary survives channel closure and reopening, enforced by
   `test_next_write_survives_channel_close_and_reopen`.
 
+- **260.** `SppPeer.written_lines(separator)` joins the device's writes of one opening of the
+  channel and cuts them at `separator`: a line written in two chunks is one line, at the time of
+  the chunk that brought its separator, and a partial line at a channel's close is a line of its
+  own, not complete, never joined with the next opening's first. What the open channel has after
+  its last separator is not a line.
+  `tests/test_spp_peer.py::test_a_command_written_in_two_chunks_is_one_line_at_the_time_of_the_second`,
+  `tests/test_spp_peer.py::test_a_partial_line_at_a_channel_close_is_kept_apart_from_the_next_channel`,
+  `tests/test_spp_peer.py::test_lines_are_cut_at_the_separator_the_test_gives_even_across_chunks`
+- **261.** `next_written_line` finds the first complete line that ends after its creation, even
+  one begun before it, at equal timestamps and across a channel close and reopen, without
+  consuming anything; a line cut off by a close never matches.
+  `tests/test_spp_peer.py::test_next_written_line_keeps_the_line_boundary_and_does_not_consume`,
+  `tests/test_spp_peer.py::test_next_written_line_survives_channel_close_and_reopen`
+
 ## Project defaults
 
 - **245.** A test that uses `board` takes its app, its build and its board profile from the

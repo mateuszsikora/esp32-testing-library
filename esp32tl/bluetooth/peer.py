@@ -10,7 +10,8 @@ off and go out of range, and come back, with the link keys it had.
 `SppPeer` adds SPP on one RFCOMM channel, to one device at a time and, unless told otherwise, only
 on a link the device has authenticated by the time it opens the channel. What the device writes on
 the channel goes to the source, a `Source` or a `Model` as at the far end of a UART, and what the
-source sends goes out on the channel at the board's time it gives.
+source sends goes out on the channel at the board's time it gives. `written_lines` and
+`next_written_line` read the device's writes as lines, cut at a separator across its chunks.
 """
 
 import bisect
@@ -45,6 +46,18 @@ class ChannelEvent(NamedTuple):
     data: bytes
 
 
+class WrittenLine(NamedTuple):
+    """A line the device wrote on the SPP channel: the Duration on the air's clock of its last
+    byte, the separator's when it has one; its bytes without the separator; the channel's opening
+    it was written in, 0 for the first; and whether it ended in the separator, or was cut off by
+    the channel's close."""
+
+    at: Duration
+    data: bytes
+    opening: int
+    complete: bool
+
+
 class Refusal(NamedTuple):
     """A channel opening refused at a Duration on the air's clock."""
 
@@ -57,6 +70,10 @@ class Refusal(NamedTuple):
 ADDRESS = "00:00:00:00:5B:01"
 CLASS_OF_DEVICE = 0x001F00
 CHANNEL = 1
+
+# What ends a line the device writes, unless the test gives another: the carriage return that ends
+# an AT command (ITU-T V.250, S3's default).
+SEPARATOR = b"\r"
 
 # The longest name the extended inquiry response holds whole: its 240 bytes, less the field's
 # length and type.
@@ -368,6 +385,58 @@ class BluetoothDevice:
         await self.device.set_connectable(True)
 
 
+class _Lines:
+    """The device's writes in `events` cut into `WrittenLine`s at `separator`, each opening of the
+    channel apart: brought up to date by `update`, which reads only the events it has not read.
+
+    A line ends at the separator, or at its opening's close with what it has, if anything; the
+    line of the opening still open is not one until it ends. `lines` only grows."""
+
+    def __init__(self, separator: bytes) -> None:
+        self.separator = separator
+        self.lines: list[WrittenLine] = []
+        self._read = 0
+        self._opening = 0
+        self._partial = bytearray()
+        self._partial_at = Duration(0)
+
+    def update(
+        self, events: list[ChannelEvent], openings: list[int], closed: int
+    ) -> list[WrittenLine]:
+        """`lines`, with what `events` added since the last update. `openings` holds the index in
+        `events` at which each opening of the channel began, and `closed` how many have closed."""
+        for index in range(self._read, len(events)):
+            event = events[index]
+            if event.direction != "out":
+                continue
+            opening = bisect.bisect_right(openings, index) - 1
+            if opening != self._opening:
+                self._cut()
+                self._opening = opening
+            # The partial line holds no separator: one may start only in its last bytes.
+            search = max(0, len(self._partial) - len(self.separator) + 1)
+            self._partial += event.data
+            self._partial_at = event.at
+            begin = 0
+            while (end := self._partial.find(self.separator, search)) != -1:
+                line = bytes(self._partial[begin:end])
+                self.lines.append(WrittenLine(event.at, line, opening, True))
+                begin = search = end + len(self.separator)
+            del self._partial[:begin]
+        self._read = len(events)
+        if self._opening < closed:
+            self._cut()
+        return self.lines
+
+    def _cut(self) -> None:
+        """The opening's line not ended when the channel closed, if it has a byte."""
+        if self._partial:
+            self.lines.append(
+                WrittenLine(self._partial_at, bytes(self._partial), self._opening, False)
+            )
+            self._partial.clear()
+
+
 class SppPeer(BluetoothDevice):
     """A `BluetoothDevice` paired with `pin`, or with Secure Simple Pairing given `io_capability`,
     with SPP on RFCOMM `channel`, whose bytes `source` answers, and whose SDP record names the
@@ -380,7 +449,8 @@ class SppPeer(BluetoothDevice):
     and what `source` returns, or sends from `poll`, goes out on the channel at its own time,
     never earlier. What the source sends while no channel is open is lost, as it would be on the
     air; `lost` counts its bytes. `events` holds what crossed the channel, in order: `out` of the
-    device, `in` to it, as a tap's recording names them.
+    device, `in` to it, as a tap's recording names them. `written_lines` cuts what the device
+    wrote into lines at a separator, a carriage return unless the test gives another.
 
     The source gets `supply` on a power loss, when it is `Supplied`; out of range it runs on, and
     what it sends is lost. A `Model` states its times in `Duration`s; any other source in
@@ -424,6 +494,11 @@ class SppPeer(BluetoothDevice):
         self.lost = 0
         self._pending: list[Output] = []
         self._dlc: rfcomm.DLC | None = None
+        # The index in `events` at which each opening of the channel began, how many of them have
+        # closed, and the lines cut from the device's writes at each separator a test asked for.
+        self._openings: list[int] = []
+        self._closed = 0
+        self._lines: dict[bytes, _Lines] = {}
         # The link the channel is given to, from the moment the peer accepts it until it closes:
         # two devices that ask at one instant are both accepted before either channel opens.
         self._holder: Connection | None = None
@@ -450,7 +525,7 @@ class SppPeer(BluetoothDevice):
         """A described condition for a device holding the SPP channel now."""
         return Condition(
             lambda: self.channel_open,
-            f"{self.name}'s SPP channel is open ({self.device.public_address})",
+            f"{self.name}'s SPP channel is open ({self.address})",
             "SPP",
         )
 
@@ -459,7 +534,7 @@ class SppPeer(BluetoothDevice):
         """A described condition for no device holding the SPP channel now."""
         return Condition(
             lambda: not self.channel_open,
-            f"{self.name}'s SPP channel is closed ({self.device.public_address})",
+            f"{self.name}'s SPP channel is closed ({self.address})",
             "SPP",
         )
 
@@ -483,10 +558,62 @@ class SppPeer(BluetoothDevice):
                 None,
             )
 
-        description = f"the next write to {self.name}'s SPP channel ({self.device.public_address})"
+        description = f"the next write to {self.name}'s SPP channel ({self.address})"
         if data is not None:
             description += f" containing {data!r}"
         return Condition(find, description, "SPP")
+
+    def written_lines(self, separator: bytes = SEPARATOR) -> list[WrittenLine]:
+        """What the device wrote, its chunks of each opening of the channel joined and cut at
+        `separator`, as `WrittenLine`s in order: each at the time of its separator, without it,
+        on the opening it was written in. What an opening's close cut off is a line too, at the
+        time of its last byte and not `complete`, never joined with the next opening's first;
+        what the open channel has after its last separator is not a line yet."""
+        return list(self._written(separator, "written_lines"))
+
+    def next_written_line(
+        self, data: bytes | None = None, separator: bytes = SEPARATOR
+    ) -> Condition[WrittenLine | None]:
+        """The first complete line, cut at `separator` as `written_lines` cuts them, that ends
+        after this call, optionally containing `data`.
+
+        The boundary is the lines' order, as `next_write`'s is the writes': a line that ends
+        after the call is found even when its first bytes came before it, at the same timestamp,
+        or after the channel was closed and opened again. A line cut off by a close never
+        matches. Nothing is consumed: asked again, the condition finds the same line."""
+        if data is not None and not isinstance(data, bytes):
+            raise TypeError(f"SppPeer.next_written_line: data is {data!r}, not bytes or None")
+        start = len(self._written(separator, "next_written_line"))
+
+        def find() -> WrittenLine | None:
+            lines = self._written(separator, "next_written_line")
+            return next(
+                (
+                    line
+                    for line in lines[start:]
+                    if line.complete and (data is None or data in line.data)
+                ),
+                None,
+            )
+
+        description = (
+            f"the next line ending in {separator!r} written to {self.name}'s SPP channel"
+            f" ({self.address})"
+        )
+        if data is not None:
+            description += f" containing {data!r}"
+        return Condition(find, description, "SPP")
+
+    def _written(self, separator: bytes, method: str) -> list[WrittenLine]:
+        """The lines cut at `separator`, up to date; `method` names the call that asked."""
+        if not isinstance(separator, bytes):
+            raise TypeError(f"SppPeer.{method}: separator is {separator!r}, not bytes")
+        if not separator:
+            raise ValueError(f"SppPeer.{method}: separator is empty: give the bytes a line ends in")
+        lines = self._lines.get(separator)
+        if lines is None:
+            lines = self._lines[separator] = _Lines(separator)
+        return lines.update(self.events, self._openings, self._closed)
 
     @property
     def _driving(self) -> Source:
@@ -608,12 +735,14 @@ class SppPeer(BluetoothDevice):
 
     def _opened(self, dlc: rfcomm.DLC) -> None:
         self._dlc = dlc
+        self._openings.append(len(self.events))
         dlc.sink = self._received
 
         def closed() -> None:
             if self._dlc is dlc:
                 self._dlc = None
                 self._holder = None
+                self._closed += 1
 
         dlc.on(dlc.EVENT_CLOSE, closed)
         # Bumble 0.0.236's DLC answers the device's DISC and stays open; the channel closes there.

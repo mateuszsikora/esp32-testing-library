@@ -587,8 +587,10 @@ interface that puts the firmware's controller on the board's link is
 | `HeardPage(connection, switching=False)`, `Answer(late=False, timer=None)` | `esp32tl/bluetooth/controller.py`: dataclasses, a page this side heard, in `_heard`, and an answer its host owes, in `_owed` |
 | `BluetoothDevice(air, *, name, pin=None, class_of_device=CLASS_OF_DEVICE, rssi=RSSI, address=ADDRESS, io_capability=None, confirms=True, passkey=None)` | `esp32tl/bluetooth/peer.py`: `device`, the Bumble `Device`; `address`; `name`, `pin`, `class_of_device`, `io_capability`, `confirms`, `passkey`; `rssi`, read and written; `present`; `pairing`, the controller's latest `UnderWay` or `None`; `pairings`, a copy of the controller's; `switch_off()`, `switch_on()`, `out_of_range()`, `in_range()`, `forget_keys()` |
 | `IO_CAPABILITIES` | `esp32tl/bluetooth/peer.py`: the four names a test gives, to Bumble's `PairingDelegate.IoCapability`: `DISPLAY_OUTPUT_ONLY`, `DISPLAY_OUTPUT_AND_YES_NO_INPUT`, `KEYBOARD_INPUT_ONLY`, `NO_OUTPUT_NO_INPUT` |
-| `SppPeer(air, *, name, pin, source, address=ADDRESS, channel=CHANNEL, secure=True, class_of_device=CLASS_OF_DEVICE, rssi=RSSI, service_name=SERVICE_NAME, io_capability=None, confirms=True, passkey=None)` | A `BluetoothDevice`, also: `source`, `channel`, `secure`, `service_name`; `events`, `ChannelEvent(at, direction, data)` named tuples; `refused`, `Refusal(at, why)` named tuples; `lost`; `channel_open`; the party's `poll(now)` and `quiet_until()` |
+| `SppPeer(air, *, name, pin, source, address=ADDRESS, channel=CHANNEL, secure=True, class_of_device=CLASS_OF_DEVICE, rssi=RSSI, service_name=SERVICE_NAME, io_capability=None, confirms=True, passkey=None)` | A `BluetoothDevice`, also: `source`, `channel`, `secure`, `service_name`; `events`, `ChannelEvent(at, direction, data)` named tuples; `refused`, `Refusal(at, why)` named tuples; `lost`; `channel_open`; `is_open`, `is_closed`, `next_write(data=None)`; `written_lines(separator=SEPARATOR)`, `WrittenLine(at, data, opening, complete)` named tuples; `next_written_line(data=None, separator=SEPARATOR)`; the party's `poll(now)` and `quiet_until()` |
 | `SERVICE_NAME`, `LANGUAGE`, `L2CAP_FEATURES` | `esp32tl/bluetooth/peer.py`: `"Serial Port"`; `(0x656E, 106, 0x0100)`; `(FIXED_CHANNELS, FCS_OPTION)` |
+| `SEPARATOR` | `esp32tl/bluetooth/peer.py`: `b"\r"`, what ends a written line unless the test gives another: an AT command's carriage return (ITU-T V.250, S3's default) |
+| `_Lines(separator)` | `esp32tl/bluetooth/peer.py`: one separator's `WrittenLine`s, `update(events, openings, closed)` |
 | `ADDRESS`, `CLASS_OF_DEVICE`, `CHANNEL`, `NAME_MAX`, `RECORD_HANDLE` | `"00:00:00:00:5B:01"`, an address no real device in a test is likely to have; `0x001F00`; `1`; `238`, the extended inquiry response's 240 bytes less the name field's length and type; `0x00010001`, the first SDP record handle a server may give a record of its own |
 | `PeerError` | A `ValueError`: what a peer cannot be, or what its source sent that it cannot send |
 | `Source` | `esp32tl/interfaces/uart.py`: `receive(t, data)`, `poll(now)`, `quiet_until()`, `latency()`; the peer never calls `latency` |
@@ -960,15 +962,56 @@ so neither the report nor the `esp32sim_link` JSON schema changes.
 
 `SppPeer.is_open` and `is_closed` create `Condition[bool]` objects from
 `esp32tl/interfaces/condition.py`. Their callbacks read `channel_open` on each poll; descriptions
-include `name` and `device.public_address`. `next_write(data)` captures `len(events)` and scans
-that suffix for the first `ChannelEvent` with direction `"out"` and, when supplied,
-`data in event.data`. It returns the original record, with its `Duration` timestamp.
-No condition changes the list, moves a cursor, or clears its boundary at channel closure.
-All three use service `"SPP"` for the shared boolean refusal. The write filter is checked when
-the condition is created and must be bytes or `None`.
+include `name` and `address`, the public address without Bumble's `/P` suffix, as
+`00:00:00:00:5B:01`. `next_write(data)` captures `len(events)` and scans that suffix for the first
+`ChannelEvent` with direction `"out"` and, when supplied, `data in event.data`. It returns the
+original record, with its `Duration` timestamp. No condition changes the list, moves a cursor, or
+clears its boundary at channel closure. All three use service `"SPP"` for the shared boolean
+refusal. The write filter is checked when the condition is created and must be bytes or `None`.
 
 `tests/test_spp_peer.py` covers state changes and described clock timeouts, boolean refusal,
 non-consuming repeated reads, equal-time append boundaries, filtering and chunk boundaries,
 and a pending write condition spanning an RFCOMM close and reopen. No emulator is needed.
 The API choice and deferred transition events are recorded in
 [the decision](../decisions/harness.md#spp-conditions-describe-channel-state-and-the-next-device-write).
+
+## Written lines
+
+`SppPeer` keeps two records of the channel's openings next to `events`: `_openings`, the length of
+`events` when each opening began (appended in `_opened`), and `_closed`, how many openings have
+closed (incremented in the DLC's `EVENT_CLOSE` handler, once per opening, where `_dlc` is cleared).
+`ChannelEvent` is unchanged; an event's opening is `bisect_right(_openings, index) - 1`. Only one
+device holds the channel at a time, so openings close in order and opening `k` is closed when
+`k < _closed`.
+
+`_lines`, a dict by separator, holds one `_Lines` for each separator a test asked for.
+`written_lines(separator)` and `next_written_line` call `_written`, which checks the separator
+(`TypeError` for anything but bytes, `ValueError` for empty bytes, naming the method) and calls
+`_Lines.update(events, _openings, _closed)`. `update` reads only the events after the last one it
+read, skips `"in"` events, and appends each `"out"` chunk to the partial line of its opening; when
+the opening changes it first cuts the old opening's partial line, if it has a byte, as a
+`WrittenLine` with `complete=False` at the time of its last chunk. After each append it takes every
+complete line out of the partial one with `bytearray.find(separator, search)`, at the time of the
+chunk just appended, which holds the separator's last byte, and deletes the lines taken once, after
+the search. The partial line holds no separator before the append, so `search` starts
+`len(separator) - 1` bytes before its old end, and after each line found at that line's end: a
+separator split over chunks is found once its last part arrives, and a long line without one is not
+searched again from its start. At the end of an update the partial line of a closed opening is cut
+too. `_Lines.lines` only grows: a line once appended is never changed or removed.
+
+`written_lines` returns a copy of the list. `next_written_line(data, separator)` checks `data`
+(bytes or `None`, else `TypeError`), captures `len(lines)` after an update, and on each poll updates
+and scans the suffix for the first line with `complete` and, when `data` is given,
+`data in line.data`. It returns the stored `WrittenLine`. Its description, as those of
+`is_open`, `is_closed` and `next_write`, names the peer by `address`, without Bumble's `/P`
+suffix; the service is `"SPP"`, as for the other channel conditions. Lines are cut
+when they are read, in the test's thread, as `next_write` reads `events`; the peer's receive path
+does no framing.
+
+`tests/test_spp_peer.py` covers a command in two chunks at the time of the second, a partial line at
+a close kept apart from the next opening (and cut again at a second close), separators of one, two
+and three bytes across chunks, after a line of 1000 bytes without one, the line boundary at one
+timestamp with a filter and a non-default separator, a pending condition across a close and reopen,
+and the refusals of a non-bytes `data`, a non-bytes separator and an empty one. The choice of
+separator and names is recorded in
+[the decision](../decisions/harness.md#the-devices-spp-writes-are-read-as-lines-at-a-separator-the-test-chooses).

@@ -22,6 +22,7 @@ from esp32tl.bluetooth.peer import ChannelEvent as ChannelEvent
 from esp32tl.bluetooth.peer import PeerError as PeerError
 from esp32tl.bluetooth.peer import Refusal as Refusal
 from esp32tl.bluetooth.peer import SppPeer as SppPeer
+from esp32tl.bluetooth.peer import WrittenLine as WrittenLine
 from esp32tl.boards import BoardProfile as BoardProfile
 from esp32tl.boards import LineRoute as LineRoute
 from esp32tl.boards import ProfileError as ProfileError
@@ -257,6 +258,7 @@ __all__ = [
     "UnknownCommand",
     "UptimeZero",
     "Wifi",
+    "WrittenLine",
     "condition",
     "i8",
     "i16",

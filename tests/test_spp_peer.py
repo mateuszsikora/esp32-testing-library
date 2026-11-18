@@ -31,6 +31,7 @@ from esp32tl.bluetooth.peer import (
     PeerError,
     Refusal,
     SppPeer,
+    WrittenLine,
 )
 from esp32tl.interfaces import NeverHappened
 from esp32tl.interfaces.lines import LineEvent
@@ -3960,7 +3961,11 @@ def test_next_write_keeps_append_boundary_and_does_not_consume(air: Air) -> None
         assert split() is None  # Chunks are never joined.
         assert answer_only() is None  # Peer answers never match.
         assert peer.events == history
-    assert "containing b'target'" in repr(filtered)
+    assert repr(filtered) == (
+        "the next write to peer's SPP channel (00:00:00:00:5B:01) containing b'target'"
+    )
+    assert repr(peer.is_open) == "peer's SPP channel is open (00:00:00:00:5B:01)"
+    assert repr(peer.is_closed) == "peer's SPP channel is closed (00:00:00:00:5B:01)"
     with pytest.raises(TypeError, match="call the SPP condition"):
         bool(first)
     assert peer.next_write()() is None
@@ -3992,3 +3997,125 @@ def test_next_write_refuses_non_bytes(air: Air, data: Any) -> None:
     peer = SppPeer(air, name="peer", pin="1234", source=Echo())
     with pytest.raises(TypeError, match="not bytes or None"):
         peer.next_write(data)
+
+
+def reopen(air: Air, esp32: Initiator, peer: SppPeer, dlc: rfcomm.DLC) -> rfcomm.DLC:
+    """The device closes the channel and its link, and opens both again."""
+    air.run(dlc.disconnect(), within=seconds(1))
+    air.run(dlc.multiplexer.l2cap_channel.connection.disconnect(), within=seconds(1))
+    return air.run(
+        esp32.open(air.run(esp32.connect(peer.device.public_address), within=seconds(1))),
+        within=seconds(1),
+    )
+
+
+def test_a_command_written_in_two_chunks_is_one_line_at_the_time_of_the_second(air: Air) -> None:
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo())
+    esp32 = Initiator(air)
+    dlc = air.run(esp32.session(), within=seconds(10))
+    air.call(lambda: dlc.write(b"AT+CON"))
+    assert peer.written_lines() == []  # Not ended yet: not a line.
+    air.run(asyncio.sleep(0.25), within=seconds(1))
+    air.call(lambda: dlc.write(b"NECT\rAT\rAT+X"))
+    # The peer's answer to the first chunk is in the history, between the two, and is no line.
+    assert ChannelEvent(ms(50), "in", b"AT+CON\r\n> ") in peer.events
+    assert peer.written_lines() == [
+        WrittenLine(ms(250), b"AT+CONNECT", 0, True),
+        WrittenLine(ms(250), b"AT", 0, True),
+    ]
+
+
+def test_a_partial_line_at_a_channel_close_is_kept_apart_from_the_next_channel(air: Air) -> None:
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo())
+    esp32 = Initiator(air)
+    dlc = air.run(esp32.session(), within=seconds(10))
+    air.call(lambda: dlc.write(b"AT\rAT+PART"))
+    pending = peer.next_written_line(b"PART")
+    dlc = reopen(air, esp32, peer, dlc)
+    closed_at = peer.written_lines()[-1]
+    assert closed_at == WrittenLine(seconds(0), b"AT+PART", 0, False)
+    air.call(lambda: dlc.write(b"IAL\rAT+X"))
+    assert peer.written_lines() == [
+        WrittenLine(seconds(0), b"AT", 0, True),
+        closed_at,
+        WrittenLine(seconds(0), b"IAL", 1, True),
+    ]
+    assert pending() is None  # The line cut off is not complete, and no line joins it.
+    dlc = reopen(air, esp32, peer, dlc)
+    assert peer.written_lines()[-1] == WrittenLine(seconds(0), b"AT+X", 1, False)
+
+
+def test_lines_are_cut_at_the_separator_the_test_gives_even_across_chunks(air: Air) -> None:
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo())
+    esp32 = Initiator(air)
+    dlc = air.run(esp32.session(), within=seconds(10))
+    air.call(lambda: dlc.write(b"one\r"))
+    air.call(lambda: dlc.write(b"\n\r\ntwo\r"))
+    air.call(lambda: dlc.write(b"\nthree"))
+    assert [line.data for line in peer.written_lines(b"\r\n")] == [b"one", b"", b"two"]
+    assert [line.data for line in peer.written_lines()] == [b"one", b"\n", b"\ntwo"]
+    assert [line.data for line in peer.written_lines(b"\n")] == [b"one\r", b"\r", b"two\r"]
+    # A separator of three bytes in three chunks, after a long line with none.
+    for data in [b"x" * 50] * 20 + [b"<", b"=", b">", b"y<=>"]:
+        air.call(partial(dlc.write, data))
+    assert [line.data for line in peer.written_lines(b"<=>")] == [
+        b"one\r\n\r\ntwo\r\nthree" + b"x" * 1000,
+        b"y",
+    ]
+
+
+def test_next_written_line_keeps_the_line_boundary_and_does_not_consume(air: Air) -> None:
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo(delay=0))
+    esp32 = Initiator(air)
+    dlc = air.run(esp32.session(), within=seconds(10))
+    air.call(lambda: dlc.write(b"old\rbegun"))
+    first = peer.next_written_line()
+    same = peer.next_written_line()
+    filtered = peer.next_written_line(b"target")
+    old = peer.next_written_line(b"old")
+    crlf = peer.next_written_line(b"two", separator=b"\r\n")
+    assert first() is None
+    with pytest.raises(TypeError, match="call the SPP condition"):
+        bool(first)
+    for data in (b" here\r", b"a tar", b"get\rtwo\r\n"):
+        air.call(partial(dlc.write, data))
+    lines = peer.written_lines()
+    for _ in range(2):
+        assert first() is same() is lines[1]
+        assert first() == WrittenLine(seconds(0), b"begun here", 0, True)
+        assert filtered() == WrittenLine(seconds(0), b"a target", 0, True)
+        assert old() is None
+        assert crlf() == WrittenLine(seconds(0), b"old\rbegun here\ra target\rtwo", 0, True)
+    assert repr(filtered) == (
+        "the next line ending in b'\\r' written to peer's SPP channel (00:00:00:00:5B:01)"
+        " containing b'target'"
+    )
+    assert peer.next_written_line()() is None
+
+
+def test_next_written_line_survives_channel_close_and_reopen(air: Air) -> None:
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo())
+    esp32 = Initiator(air)
+    dlc = air.run(esp32.session(), within=seconds(10))
+    pending = peer.next_written_line()
+    air.call(lambda: dlc.write(b"cut"))
+    dlc = reopen(air, esp32, peer, dlc)
+    assert pending() is None
+    air.call(lambda: dlc.write(b"after\r"))
+    assert pending() == WrittenLine(seconds(0), b"after", 1, True)
+
+
+@pytest.mark.parametrize(
+    ("call", "error", "message"),
+    [
+        (lambda peer: peer.next_written_line("AT"), TypeError, "data is 'AT', not bytes or None"),
+        (lambda peer: peer.written_lines("\r"), TypeError, "separator is '\\r', not bytes"),
+        (lambda peer: peer.next_written_line(separator=b""), ValueError, "separator is empty"),
+    ],
+)
+def test_written_lines_refuse_what_is_not_bytes(
+    air: Air, call: Callable[[SppPeer], Any], error: type[Exception], message: str
+) -> None:
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo())
+    with pytest.raises(error, match=re.escape(message)):
+        call(peer)
