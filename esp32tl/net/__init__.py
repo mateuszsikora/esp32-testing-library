@@ -69,6 +69,11 @@ class Internet:
     after it (`set_path`). Public calls run while the board is held, and callbacks while it
     advances: neither uses host time or sockets, but for a bridge's. `bridging` is called with the
     call before a bridge is made, and refuses it by raising: the backend's say on the wall clock.
+
+    The end of the link, a modem's call or an access point off the air, loses the connections the
+    test opened and leaves the device's open and silent, as the far end of a device that lost its
+    power or its coverage is: no FIN or RST reaches their service, which ends them by its own
+    timeout, as the broker does at its keepalive. The broker's deadlines run with the link down.
     """
 
     def __init__(
@@ -89,8 +94,10 @@ class Internet:
         self._up = _Direction(0)
         self._down = _Direction(LATENCY_NS)
         self._datagram: int | None = None  # the size of the IPv4 datagram the link is sending
+        # The address the device last sent IPv4 from on this link, since it last reset.
+        self._heard: str | None = None
         self.events: list[dict[str, object]] = []
-        self.ip = Network(self._downlink, self.log, mtu=self._mtu)
+        self.ip = Network(self._downlink, self.log, mtu=self._mtu, up=self._reaches)
         self.dns = Dns("10.64.0.1", self.log)
         self.ntp = Ntp(self.now, world, self.log)
         self.ip.udp.update({53: self.dns, 123: self.ntp})
@@ -151,6 +158,16 @@ class Internet:
             self._link_ended()
         else:
             self.dns.address = IPv4Address(self.lease.address).packed
+
+    def _reaches(self, address: str) -> bool:
+        """Whether what the network sends to the device's `address` reaches a stack that holds
+        it now: the link up, and `address` the one IPCP or DHCP gave the device on it, or the one
+        it sent from since, a static one; behind a station, while it has a lease."""
+        if not self.active:
+            return False
+        if isinstance(self.link, Station):
+            return self.lease is not None
+        return address in (self.device_address, self._heard)
 
     def _mtu(self) -> int:
         return self.link.peer_mru if isinstance(self.link, Ppp) else self.link.mtu
@@ -246,12 +263,14 @@ class Internet:
         """The device's chip reset, or its power went, at `t`, `why` saying which, as `the device
         reset`: its TCP and its address are gone. Every connection the test opened is lost, and
         the device has no address until IPCP opens again or DHCP acknowledges one. The
-        connections the device opened stay, as no network knows of a reboot: a RST of the new
-        stack, in answer to what their service writes, ends them, or the service's end, or the
-        link's; a SYN of the new stack on one of them gets no answer."""
+        connections the device opened stay, as no network knows of a reboot, and outlive the
+        link's end too: a RST of the new stack, in answer to what their service writes, ends
+        them, or the service's end, as the broker's keepalive; a SYN of the new stack on one of
+        them gets no answer."""
         previous = self._at
         self._at = t
         try:
+            self._heard = None
             self.ip.lose_clients(why)
             if isinstance(self.link, Ppp):
                 self._stale = self.link.ipcp_opened
@@ -403,11 +422,14 @@ class Internet:
         return Ppp(send, self._uplink, log=self.log, ended=self._link_ended)
 
     def _link_ended(self) -> None:
-        self.ip.reset()
+        self._heard = None
+        self.ip.lose_link()
         self._up.clear()
         self._down.clear()
 
     def _uplink(self, datagram: bytes) -> None:
+        if len(datagram) >= 20 and datagram[0] >> 4 == 4 and datagram[12:16] != bytes(4):
+            self._heard = str(IPv4Address(datagram[12:16]))
         at = self.now()
         self._up.queue.append((self._up.leaves(at, len(datagram)), datagram))
         self._arrive(at)
@@ -423,6 +445,8 @@ class Internet:
             self._at = previous
 
     def _downlink(self, datagram: bytes) -> None:
+        if not self.active:
+            return  # what a service writes on a connection whose link has ended goes nowhere
         self._datagram = len(datagram)
         try:
             self.link.send_ip(datagram)
@@ -502,10 +526,11 @@ class Internet:
         """Take in what has come up the path by `now`, then run the broker's deadlines due by it
         and hand over what bridged services sent, before the test looks at the turn at `now`: a
         record stamped `now`, a PUBACK or an expiry due at `now`, is there when `board.now` says
-        it. What this answers goes out in `poll`."""
+        it. What this answers goes out in `poll`. With the link down the broker's deadlines run
+        all the same, and `poll` has nothing to send."""
         self._at = now
         try:
-            if isinstance(self.link, Station):
+            if self.active and isinstance(self.link, Station):
                 self.link.poll()
             self._arrive(now)
             self.broker.poll()
@@ -518,7 +543,7 @@ class Internet:
         # the same answers, at the same stamps.
         self._at = now
         try:
-            if isinstance(self.link, Station):
+            if self.active and isinstance(self.link, Station):
                 self.link.poll()
             self._arrive(now)
             self.broker.poll()
@@ -534,9 +559,10 @@ class Internet:
 
     def quiet_until(self) -> int | None:
         """The earliest of the broker's deadlines, the path's next datagram, either way, and the
-        next whole millisecond while a bridged connection is open."""
+        next whole millisecond while a bridged connection is open; the broker's alone while the
+        link is down, as its keepalive still ends the connections the link's end left open."""
         if not self.active:
-            return None
+            return self.broker.quiet_until()
         bounds = (
             self.link.quiet_until() if isinstance(self.link, Station) else None,
             self.broker.quiet_until(),

@@ -126,10 +126,11 @@ def test_udp_length_checks_checksum_and_every_destination() -> None:
     assert len(sent) == 1
 
 
-def test_modem_link_loss_closes_tcp_and_stamps_the_will_at_the_loss() -> None:
+def test_modem_link_loss_leaves_tcp_open_and_the_will_to_the_keepalive() -> None:
     from esp32tl.net import Internet
 
-    net = Internet(lambda: 10)
+    now = [10]
+    net = Internet(lambda: now[0])
     net.ip.receive(tcp(1, 0, 2))
     net.ip.receive(tcp(2, 65537, 0x10))
     connect = b"\x10\x18\0\x04MQTT\x04\x2e\0\x01\0\x01c\0\x03a/b\0\x04gone"
@@ -137,8 +138,20 @@ def test_modem_link_loss_closes_tcp_and_stamps_the_will_at_the_loss() -> None:
     assert len(net.broker.clients) == 1
     net.stop(500)
     net.stop(600)
-    assert len(net.broker.messages) == 1
-    assert net.broker.messages[0].payload == b"gone"
-    assert net.broker.messages[0].at.ns == 500
-    assert not net.ip._flows
+    # No FIN or RST reaches the broker: its end stays open, and silent, until the keepalive of
+    # 1 s runs out 1.5 s after the device's last packet.
+    assert net.broker.messages == [] and len(net.ip._flows) == 1
     assert not net.ppp.started and net.poll(600) == []
+    expiry = 10 + 1_500_000_000
+    assert net.quiet_until() == expiry
+    net.arrive(expiry - 1)
+    assert net.broker.messages == []
+    assert net.poll(expiry) == []
+    assert [m.payload for m in net.broker.messages] == [b"gone"]
+    assert net.broker.messages[0].at.ns == expiry
+    # Its FIN would go nowhere, and nothing would answer it: the flow goes with the session.
+    assert not net.ip._flows and net.quiet_until() is None
+    lines = [str(e["event"]) for e in net.events if "event" in e]
+    assert any(
+        line.endswith("1883 closed by its service with no device to answer") for line in lines
+    )

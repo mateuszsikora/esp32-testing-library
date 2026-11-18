@@ -867,6 +867,18 @@ class _Session:
             )
         for session in list(broker._sessions):
             if session is not self and session.connected and session.client_id == self.client_id:
+                # MQTT-3.1.4-2. A session that both connections keep takes its old connection's
+                # Will away unsent, as mosquitto does: a device back before its keepalive ran out
+                # has not gone. Either side with CleanSession=1, the Will goes.
+                kept = session.state is not None and not session.state.clean
+                discarded = kept and not connect.clean_session and session.will is not None
+                if discarded:
+                    session.will = None
+                broker._log(
+                    f"mqtt: {self.client_id} (connection {self.connection_id}) took over"
+                    f" connection {session.connection_id}"
+                    + (", its Will discarded" if discarded else "")
+                )
                 session.on_close()
         if connect.clean_session or self.client_id not in broker._states:
             if self.client_id in broker._states:

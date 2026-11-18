@@ -337,6 +337,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The serial backend runs an ESP32-S3 through its USB-Serial/JTAG port](harness.md#the-serial-backend-runs-an-esp32-s3-through-its-usb-serialjtag-port) | `harness.md` | decided (#248) |
 | [A USB console through TinyUSB is not a console the profile can name](harness.md#a-usb-console-through-tinyusb-is-not-a-console-the-profile-can-name) | `harness.md` | postponed (#248) |
 | [A message the broker published as a Will says so in Message.will](harness.md#a-message-the-broker-published-as-a-will-says-so-in-messagewill) | `harness.md` | decided (#243) |
+| [A lost link leaves the device's connections half-open until their keepalive](harness.md#a-lost-link-leaves-the-devices-connections-half-open-until-their-keepalive) | `harness.md` | decided (#244) |
 
 ## The runner crate and esp32sim
 

@@ -18,12 +18,66 @@ pytestmark = [
 CLIENT = "session-client"
 COMMANDS = "session/commands"
 REPORTS = "session/reports"
+STATUS = "session/status"  # the firmware's Will: a retained "offline"
 COUNT = 10
 
 
 def connected(board: Esp32Sim, broker: Broker) -> None:
     board.power_on()
     board.wait_until(broker.subscribed(COMMANDS), within=seconds(60))
+
+
+def last_packet(modem: Modem, connection: int) -> Duration:
+    """When the device's last bytes on the broker's connection `connection` reached it."""
+    events = modem.network().transcript()["events"]
+    assert isinstance(events, list)
+    stream = f"1883/{connection}"
+    return Duration(
+        max(e["t_ns"] for e in events if e.get("stream") == stream and e["direction"] == "out")
+    )
+
+
+@pytest.mark.parametrize("loss", ["power_off", "lose_registration"])
+def test_a_lost_link_publishes_the_will_at_the_keepalive_not_at_the_loss(
+    board: Esp32Sim, modem: Modem, broker: Broker, loss: str
+) -> None:
+    connected(board, broker)
+    board.wait(seconds(1))
+    if loss == "power_off":
+        board.power_off()
+    else:
+        modem.lose_registration()
+    lost = board.now
+    board.wait(seconds(1))
+    assert broker.find_message(STATUS) is None
+    will = board.wait_until(broker.next_message(STATUS, "offline"), within=seconds(100))
+    # The keepalive is 60 s: the broker gives up 90 s after the device's last packet.
+    assert will.at == last_packet(modem, 1) + seconds(90)
+    assert will.at - lost > seconds(80)
+    assert broker.retained[STATUS].text == "offline"
+    assert board.link.warnings == []
+
+
+def test_a_device_back_before_its_keepalive_takes_over_its_session_and_no_will_goes(
+    board: Esp32Sim, modem: Modem, broker: Broker, console: Console
+) -> None:
+    connected(board, broker)
+    board.wait(seconds(1))  # past the answers on their way: the chip off, they would be dropped
+    board.power_off()
+    board.wait(seconds(5))
+    reconnected = broker.next_connection()
+    again = console.line(r"mqtt_session: connected session_present=1")
+    board.power_on()
+    modem.power_on()  # the firmware pulses no PWRKEY
+    client = board.wait_until(reconnected, within=seconds(60))
+    assert client.session_present and client.connection_id == 2
+    board.wait_until(again, within=seconds(5))
+    # Past the old connection's keepalive: it went with the takeover, and its Will with it.
+    board.wait(seconds(100))
+    assert broker.find_message(STATUS) is None and STATUS not in broker.retained
+    state = broker.session(CLIENT)
+    assert state is not None and state.connected
+    assert board.link.warnings == []
 
 
 def test_first_connection_finds_no_session_and_the_next_one_does(

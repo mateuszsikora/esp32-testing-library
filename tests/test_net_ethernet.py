@@ -287,3 +287,40 @@ def test_a_full_size_datagram_and_the_guard_word_are_an_eth_tx_of_1518_bytes() -
     longer = b'{"type":"eth_tx","seq":1,"t":0,"data":"' + base64.b64encode(sent + b"\0") + b'"}'
     with pytest.raises(ProtocolError, match="1519 bytes"):
         decode(longer, "runner")
+
+
+def tcp_frame(seq: int, ack: int, flags: int, data: bytes = b"") -> bytes:
+    """A TCP segment from the device's static 10.64.0.2:40000 to the broker, in its frame."""
+    segment = struct.pack(">HHIIBBHHH", 40000, 1883, seq, ack, 5 << 4, flags, 8192, 0, 0) + data
+    pseudo = DEVICE + GATEWAY + struct.pack(">BBH", 0, 6, len(segment))
+    segment = segment[:16] + struct.pack(">H", check(pseudo + segment)) + segment[18:]
+    return frame(GATEWAY_MAC, 0x0800, ipv4(6, DEVICE, GATEWAY, segment))
+
+
+def test_a_keepalive_that_runs_out_before_the_device_is_back_drops_the_connection() -> None:
+    now = [0]
+    network = Internet(lambda: now[0], link="ethernet")
+    network.start(0)
+    [(_, syn_ack)] = network.receive(0, tcp_frame(100, 0, 0x02))
+    ours = int.from_bytes(syn_ack[14 + 24 : 14 + 28], "big") + 1
+    # CleanSession=0, keepalive 1 s, a Will of `gone` on a/b.
+    connect = b"\x10\x18\0\x04MQTT\x04\x2c\0\x01\0\x01c\0\x03a/b\0\x04gone"
+    network.receive(0, tcp_frame(101, ours, 0x10))
+    network.receive(0, tcp_frame(101, ours, 0x18, connect))
+    assert len(network.broker.clients) == 1
+    network.stop(100)
+    network.start(200)  # the access point back on the air
+    # The station has sent a frame on the fresh link, but no IPv4 from its address yet.
+    network.receive(300, arp(GATEWAY))
+    network.arrive(1_500_000_000)
+    assert [m.payload for m in network.broker.messages] == [b"gone"]
+    # A FIN to the device would reach no stack that holds the connection: the flow goes.
+    assert not network.ip._flows
+    lines = [e["event"] for e in network.events if "event" in e]
+    assert (
+        "net: TCP 10.64.0.2:40000 → 10.64.0.1:1883 closed by its service with no device to answer"
+        in lines
+    )
+    # So a new stack's SYN from the same port opens a new connection.
+    [(_, again)] = network.receive(2_000_000_000, tcp_frame(500, 0, 0x02))
+    assert again[14 + 33] == 0x12  # SYN and ACK

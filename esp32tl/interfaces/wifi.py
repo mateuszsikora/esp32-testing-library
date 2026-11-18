@@ -320,15 +320,14 @@ class Wifi(Interface):
         return network.receive(t, data)
 
     def arrive(self, now: int) -> None:
+        # Off the air too: the broker's keepalive ends what the link's end left open.
         network = self._network
-        if network is not None and network.active:
+        if network is not None:
             network.arrive(now)
 
     def poll(self, now: int) -> Iterable[Output]:
         network = self._network
-        if network is None or not network.active:
-            return ()
-        return network.poll(now)
+        return () if network is None else network.poll(now)
 
     def inputs(self, now: int) -> Iterable[Input]:
         with self._lock:

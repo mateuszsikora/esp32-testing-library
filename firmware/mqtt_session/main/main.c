@@ -1,7 +1,8 @@
 /* esp-mqtt with CleanSession=0 over the modem's PPP: it subscribes on every connection and prints
  * what the broker tells it, Session Present and each message's DUP, for a test to read. Told
  * "backlog N" on its commands topic, it publishes N QoS 1 reports, each waiting for the last one's
- * PUBACK, so that the time they take follows the network's round trip. */
+ * PUBACK, so that the time they take follows the network's round trip. Its keepalive is 60 s and
+ * its Will a retained "offline" on its status topic, for a test of when a broker publishes it. */
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,6 +18,7 @@
 #define PPP_READY BIT0
 #define COMMANDS "session/commands"
 #define REPORTS "session/reports"
+#define STATUS "session/status"
 
 static EventGroupHandle_t events;
 static QueueHandle_t backlogs;
@@ -104,6 +106,8 @@ void app_main(void) {
         .broker.address.uri = "mqtt://broker.test:1883",
         .credentials.client_id = "session-client",
         .session.disable_clean_session = true,
+        .session.keepalive = 60,
+        .session.last_will = {.topic = STATUS, .msg = "offline", .qos = 1, .retain = 1},
         .network.reconnect_timeout_ms = 1000,
     };
     esp_mqtt_client_handle_t client = esp_mqtt_client_init(&mqtt);

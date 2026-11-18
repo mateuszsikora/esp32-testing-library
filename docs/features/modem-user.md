@@ -61,9 +61,13 @@ board power-on instead starts it off, for firmware that boots it with PWRKEY.
 Registration changes affect the next query; there are no unsolicited registration notifications.
 Losing registration or power in data mode ends that mode silently: this model sends no unsolicited
 `NO CARRIER` for those losses, only for [`drop_call`](#a-dropped-data-call). Firmware waiting for a
-disconnect indication may time out. With `modem.network()`, loss resets PPP and closes TCP connections, publishing
-MQTT Wills once; no old connection or queued reply survives a new dial. A dial attempted
-while unregistered does return `NO CARRIER`.
+disconnect indication may time out. With `modem.network()`, loss resets PPP and loses the TCP
+connections the test opened; no queued reply survives a new dial. The connections the device opened
+stay open at the network's end, and silent, as a broker on the internet sees a device that lost its
+coverage or its power: the broker publishes a Will when the keepalive runs out, 1.5 times the
+keepalive after the device's last packet, not at the loss, and a device back before then takes its
+session over ([network](network-user.md#a-lost-link-and-the-will)). A dial attempted while
+unregistered does return `NO CARRIER`.
 Power loss silences the UART, clears any partial command and ends data mode. RI is 1 while
 powered and 0 while off. `lines.events()` includes RI changes with `by="model"`; `lines.level`
 still reads only the firmware's output. Driving or releasing RI directly after selecting a model
@@ -166,7 +170,8 @@ assert modem.hung
 
 A hung modem answers nothing and passes no data, sends no `NO CARRIER`, and keeps RI high. Data
 mode ends for the model, as with any loss: `data_mode` reads false, and with `modem.network()` PPP
-and its TCP sessions end at the hang, publishing MQTT Wills once. The AT commands the firmware
+ends at the hang, and the device's TCP connections wait for their keepalive, as with any loss. The
+AT commands the firmware
 sends stay in `commands`, with an empty `response`, and the report shows them as `(no answer)`, but
 for one stuck to PPP bytes, which [is lost whole](#a-dropped-data-call). An answer the model gave
 before the hang is already on its way, and still arrives within its 1 ms.
@@ -214,8 +219,9 @@ modem.drop_call(terminate=True)  # first an LCP Terminate-Request
 ```
 
 `drop_call` ends a data call while the modem stays registered. It sends `NO CARRIER`, 1 ms after the
-test's instant, and returns to command mode. With `modem.network()`, PPP and its TCP sessions end at
-that instant, as with any loss, and a new dial negotiates again. `lose_registration()` stays silent.
+test's instant, and returns to command mode. With `modem.network()`, PPP ends at that instant, as
+with any loss, the device's TCP connections waiting for their keepalive, and a new dial negotiates
+again. `lose_registration()` stays silent.
 
 `terminate=True` offers an LCP Terminate-Request ([RFC 1661](https://www.rfc-editor.org/rfc/rfc1661),
 section 5.5) just before `NO CARRIER`. No vendor document says whether a carrier or SIMCom sends one,

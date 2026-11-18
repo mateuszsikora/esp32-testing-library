@@ -786,6 +786,38 @@ def test_a_hung_modem_answers_nothing_and_keeps_its_commands() -> None:
     assert list(model.poll(7)) == [] and model.quiet_until() is None
 
 
+@pytest.mark.parametrize("loss", ["lose_registration", "power_off", "escape"])
+def test_the_keepalive_runs_out_with_the_call_ended(tmp_path: Path, loss: str) -> None:
+    now = [0]
+    modem, _, _ = route(tmp_path, now)
+    network = modem.network()
+    model = modem.modem_model()
+    assert b"CONNECT" in reply(model, "ATD*99#")
+    wire = PppWire(network)
+    peer = Peer(wire, 4000)
+    peer.send(CONNECT)  # keepalive 10 s, at 0: it expires at 15 s
+    assert peer.read().startswith(b"\x20\x02")
+    if loss == "lose_registration":
+        model.lose_registration()
+    elif loss == "power_off":
+        model.power_off()
+    else:
+        model.receive(NS_PER_S, b"+++")
+        assert list(model.poll(2 * NS_PER_S)) == [(2 * NS_PER_S, b"\r\nOK\r\n")]
+    assert not model.data_mode and not network.active
+    # Out of data mode, the network's deadline is still the modem's: nothing else would run it.
+    assert network.broker.session("c") is not None
+    assert model.quiet_until() == 15 * NS_PER_S
+    model.arrive(15 * NS_PER_S)
+    assert [e["event"] for e in network.events[-2:]] == [
+        "mqtt: c keepalive expired",
+        "net: TCP 10.64.0.2:4000 → 203.0.113.153:1883"
+        " closed by its service with no device to answer",
+    ]
+    assert not network.ip._flows
+    assert list(model.poll(15 * NS_PER_S)) == [] and model.quiet_until() is None
+
+
 @pytest.mark.parametrize("deadline", ["puback", "keepalive"])
 def test_a_broker_deadline_at_the_escapes_instant_runs_before_it(
     tmp_path: Path, deadline: str

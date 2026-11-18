@@ -346,7 +346,7 @@ def test_the_services_answer_reaches_the_station_in_a_tcp_segment_stamped_at_the
         service.close()
 
 
-def test_a_lost_link_ends_the_stream_at_the_service() -> None:
+def test_a_lost_link_leaves_the_stream_at_the_service_open_until_the_run_ends() -> None:
     ended = threading.Event()
 
     def reads(connection: socket.socket) -> None:
@@ -363,8 +363,11 @@ def test_a_lost_link_ends_the_stream_at_the_service() -> None:
         ours = int.from_bytes(syn_ack[14 + 24 : 14 + 28], "big")
         network.receive(10, segment(101, ours + 1, 0x10))
         network.stop(20)
+        # The service hears nothing of the loss, as a real one on the internet does not.
+        assert not ended.wait(0.2)
+        assert not any("link lost" in str(event) for event in events(network))
+        network.close()  # the run's end, here rather than in `finally`, to see the stream end
         assert ended.wait(WAIT_SECONDS)
-        assert "net: TCP 10.64.0.2:40000 → 10.64.0.1:7000 link lost" in events(network)
     finally:
         network.close()
         service.close()

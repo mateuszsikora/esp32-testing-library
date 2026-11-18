@@ -5,7 +5,9 @@ destination port, a UDP datagram to the one on its port, whatever the address: t
 the names and addresses it was built with, and the test decides what answers there. The test
 opens connections to the device too (`Network.connect`). The link to the device never loses or
 reorders bytes, so TCP needs no retransmission, no congestion control and no timers: a segment is
-acknowledged in the turn it arrives in, and a zero window waits for the device's update.
+acknowledged in the turn it arrives in, and a zero window waits for the device's update. While
+the link is down, the segments of a connection its end left open go nowhere, and the device's
+stack, which lost the connection too, never asks for them again.
 """
 
 import struct
@@ -122,6 +124,7 @@ _ENDS = {
     "refused": "refused by the device",
     "reset": "reset by the device",
     "lost": "link lost",
+    "abandoned": "closed by its service with no device to answer",
 }
 
 
@@ -152,9 +155,11 @@ class Network:
         log: Callable[[str], None] = lambda line: None,
         *,
         mtu: Callable[[], int] = lambda: 1500,
+        up: Callable[[str], bool] = lambda address: True,
     ) -> None:
         self._send_ip = send_ip
         self._mtu = mtu
+        self._up = up
         self._log = log
         self.tcp: dict[int, StreamService] = {}
         self.udp: dict[int, DatagramService] = {}
@@ -362,6 +367,11 @@ class Network:
         self._flush(flow)
 
     def _close(self, flow: _Flow) -> None:
+        if flow.client is None and not self._up(flow.key[0]):
+            # Its FIN would go nowhere, and no device would ever answer it: kept, the flow would
+            # take the SYN of a new stack from the same port for the rest of the run.
+            self._drop(flow, "abandoned")
+            return
         flow.fin_pending = True
         self._flush(flow)
 
@@ -406,15 +416,26 @@ class Network:
             flow.notified = True
             flow.connection.on_close()
 
-    def lose_clients(self, why: str) -> None:
+    def lose_clients(self, why: str | None = None) -> None:
         """Lose every connection the test opened, and none the device opened: the device's end of
-        them is gone, `why` saying how, as `the device reset`."""
+        them is gone, `why` saying how, as `the device reset`, the link going down unless given.
+        The device's own stay open, and silent: their service hears nothing of the loss."""
         for flow in list(self._flows.values()):
             if flow.client is not None:
                 self._drop(flow, "lost", why)
 
+    def lose_link(self) -> None:
+        """The link ended: lose every connection the test opened, and leave the device's open
+        and silent, but for those their service has closed already, whose FIN no device will
+        answer now."""
+        self.lose_clients()
+        for flow in list(self._flows.values()):
+            if flow.fin_pending:
+                self._drop(flow, "abandoned")
+
     def reset(self) -> None:
-        """Lose every TCP connection; notify services once, including MQTT Wills."""
+        """Lose every TCP connection, the device's included; notify services once, MQTT Wills
+        included. No end of a link does this: see `Internet`."""
         for flow in list(self._flows.values()):
             self._drop(flow, "lost")
         self._ident = 0

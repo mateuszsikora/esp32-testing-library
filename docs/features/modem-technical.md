@@ -79,7 +79,8 @@ True, "reset")`. `_set_power` appends a `Restart` when the modem was powered and
 clears `hung` and sets `_pwrkey_works` again.
 
 `hang` sets `hung` and `_pwrkey_works`, empties `_queued` and calls `_end_data`, so the parser is in command mode whatever the firmware sends next, and
-`Internet.stop` ends PPP and its TCP sessions with no output. In `_command`, a hung modem appends
+`Internet.stop` ends PPP with no output, leaving the device's TCP connections half-open. In
+`_command`, a hung modem appends
 the `Command` with an empty response and returns nothing. PPP bytes the firmware goes on sending
 are noise in the command line, as for any loss of data mode. `_command` sees that noise and an `AT`
 stuck to it as one line that does not start with `AT`, and neither answers nor records it; clearing
@@ -92,8 +93,12 @@ installs `esp32tl.net.Internet` before power-on. The `broker` fixture selects it
 In data mode `arrive` reaches an `Internet` before the test holds the turn
 ([the path](network-technical.md#the-path)), its payload reaches `data.receive`, and `poll`, `quiet_until` and `latency` delegate
 to that source (latency remains at most 1 ms). With no peer, payload is retained and unanswered.
+An `Internet` is reached by `arrive`, `poll` and `quiet_until` in command mode and with the modem
+off too (`_polled`): its broker's keepalive ends the connections a lost call left half-open, and
+nothing else would run that deadline; out of data mode its `poll` has nothing to send.
 A network dial starts PPP after CONNECT; power, registration and functionality loss reset it,
-clear queued replies and close TCP sessions. Only `drop_call` emits an unsolicited `NO CARRIER`:
+clear queued replies and lose the test's TCP connections, leaving the device's half-open. Only
+`drop_call` emits an unsolicited `NO CARRIER`:
 registration, functionality and power loss stay silent. Network data mode guards `+++` with one second of silence before and after it;
 `poll` completes the escape and `quiet_until` exposes its deadline. A broker deadline at the
 escape's instant runs first, in `arrive`: a PUBACK due then is `"emitted"`, though ending data mode
@@ -144,6 +149,8 @@ pulse timing, RI ownership, taps and unbounded command history, and a real `Boar
 `test_a_broker_deadline_at_the_escapes_instant_runs_before_it` opens PPP and an MQTT connection
 through the model's network, then puts a delayed PUBACK and a keepalive expiry each at the escape's
 instant: `arrive` runs the deadline, and `poll` returns the escape's `OK` alone.
+`test_the_keepalive_runs_out_with_the_call_ended` ends the call by lost registration, power off and
+the escape, and finds the keepalive expiry in the modem's `quiet_until` and run by its `arrive`.
 `tests/test_modem_fixture.py` runs `modem_at` on the LilyGO profile, checks physical PWRKEY and
 RI, starts powered, off and after restored supply, changes signal/registration/power on the
 test's clock, keeps the modem on through `board.reset()` and off after a power cycle until the

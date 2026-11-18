@@ -591,7 +591,11 @@ runs, through `pytester`, a test that inserts a card, deletes its image and wait
 
 `main.c` uses fixed LilyGO pins (TX 26, RX 27, no flow control), `ESP_MODEM_DCE_SIM7600` and the APN
 `internet`. `esp_modem_set_mode(ESP_MODEM_MODE_DATA)` goes to data mode and `app_main` waits for
-`IP_EVENT_PPP_GOT_IP`. `mqtt_event` subscribes in `MQTT_EVENT_CONNECTED` and prints from the event
+`IP_EVENT_PPP_GOT_IP`. The client's configuration sets `.session.keepalive = 60` and
+`.session.last_will` (`STATUS`, `session/status`, `offline`, QoS 1, RETAIN), so its CONNECT carries
+both. It publishes nothing on `STATUS` itself
+([why](../decisions/harness.md#a-lost-link-leaves-the-devices-connections-half-open-until-their-keepalive)).
+`mqtt_event` subscribes in `MQTT_EVENT_CONNECTED` and prints from the event
 structure. esp-mqtt writes its PUBACK after it has handed the message to `MQTT_EVENT_DATA`, in
 `mqtt_process_receive`, so a printed line and the PUBACK come in that order.
 

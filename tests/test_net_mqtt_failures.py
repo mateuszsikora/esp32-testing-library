@@ -25,11 +25,15 @@ class Wire:
         self.peers: dict[int, Peer] = {}
         if net is None:
             self.net.start(0)
-        self.net.poll(0)
-        self.net.receive(0, control(0xC021, 1, 7))
-        self.net.receive(0, control(0xC021, 2, 1))
-        self.net.receive(0, control(0x8021, 2, 2, b"\x03\x06\x0a\x40\0\x01"))
-        self.net.receive(0, control(0x8021, 1, 8, b"\x03\x06\x0a\x40\0\x02"))
+        self.open()
+
+    def open(self) -> None:
+        """LCP and IPCP, at `now`, on a link that has started."""
+        self.net.poll(self.now)
+        self.net.receive(self.now, control(0xC021, 1, 7))
+        self.net.receive(self.now, control(0xC021, 2, 1))
+        self.net.receive(self.now, control(0x8021, 2, 2, b"\x03\x06\x0a\x40\0\x01"))
+        self.net.receive(self.now, control(0x8021, 1, 8, b"\x03\x06\x0a\x40\0\x02"))
         assert self.net.ppp.ipcp_open
 
     def pump(self, replies: list[Output]) -> None:
@@ -199,7 +203,7 @@ def test_puback_faults_reconnect_and_other_network_activity(secure: bool) -> Non
     assert net.ppp is ppp and ppp.ipcp_open
 
 
-def test_network_reset_cancels_delayed_puback_without_losing_retained_receipt() -> None:
+def test_a_lost_link_leaves_a_delayed_puback_to_its_deadline_and_keeps_retained_receipt() -> None:
     wire = Wire()
     broker = wire.net.broker
     broker.puback = Duration(100)
@@ -209,8 +213,10 @@ def test_network_reset_cancels_delayed_puback_without_losing_retained_receipt() 
     assert broker.retained["a/b"].publication is handle
     assert wire.net.quiet_until() == 100
     wire.net.stop()
-    assert handle.status == "cancelled" and handle.puback_at is None
-    assert not handle.release() and wire.net.quiet_until() is None
-    assert broker.retained["a/b"].payload == b"new"
+    # The broker knows nothing of the loss: the PUBACK goes at its time, to a link that is down.
+    assert wire.net.quiet_until() == 100
+    assert (handle.status, handle.puback_at) == ("pending", None)
     assert wire.net.poll(100) == []
+    assert (handle.status, handle.puback_at) == ("emitted", Duration(100))
+    assert broker.retained["a/b"].payload == b"new"
     assert not broker.pending
