@@ -1739,7 +1739,9 @@ def test_a_runner_that_cannot_start_leaves_no_log_open(tmp_path: Path) -> None:
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         with pytest.raises(OSError, match="Exec format error"):
-            esp32sim.RunnerPopen(cast(MessageQueue, None), [str(runner)], cast(Meta, None))
+            esp32sim.RunnerPopen(
+                cast(MessageQueue, None), [str(runner)], Meta(str(tmp_path), {}, {})
+            )
         gc.collect()
     assert [w for w in caught if issubclass(w.category, ResourceWarning)] == []
 
@@ -1821,7 +1823,9 @@ def test_closing_the_runner_popen_waits_until_its_last_lines_are_on_the_queue(
 
     queue = get_context("spawn").Queue()
     popen = esp32sim.RunnerPopen(
-        cast(MessageQueue, queue), [sys.executable, "-c", "print('ready')"], cast(Meta, None)
+        cast(MessageQueue, queue),
+        [sys.executable, "-c", "print('ready')"],
+        Meta(str(tmp_path), {}, {}),
     )
     try:
         assert popen.wait(timeout=30) == 0

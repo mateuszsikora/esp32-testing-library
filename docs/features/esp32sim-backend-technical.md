@@ -164,8 +164,9 @@ or `POWER_ON_UTC`, for `Esp32Sim.utc` and the GNSS receiver's dates, and logs
    the `esp32tl` package, about 0.3 s of CPU more than pytest-embedded's forwarder at each
    `power_on`. A `SIGTERM` before its handler is in place would end it without the last read, so
    it sets its `ready` event once the handler is in place, and `RunnerPopen.close` waits for that
-   before the signal, unless the forwarder is no longer alive: a runner that ends while the
-   forwarder is still starting keeps its last lines.
+   before the signal, in waits of 0.05 s that end as soon as the forwarder is no longer alive, so
+   one that died while starting costs no `EXIT_SECONDS`: a runner that ends while the forwarder is
+   still starting keeps its last lines.
    pytest-embedded's listener
    process takes it off the queue, prints it to stdout and appends it to `dut.log`
    (`dut.logfile`). If the start fails, the socket and its directory are removed before the

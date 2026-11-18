@@ -2076,7 +2076,8 @@ Status: decided (#34)
 What the firmware's controller sends its host goes out `LATENCY_NS`, 100 µs, after the instant it
 made it, which is also the interface's `latency`: of the order a controller takes to answer a
 command, and far below the 10 ms the host sleeps between two polls of the VHCI when it has nothing
-to read, so the host reads the answer at its next poll.
+to read, so the answer is due long before the host would poll again; it reads it at a later poll,
+behind the packets before it, one a poll (protocol 5.22).
 
 The latency also bounds every slice the runner runs while no event is unacknowledged (protocol 6.1),
 because the board's callbacks cannot stop esp32sim's `run`. With the controller on the link it is

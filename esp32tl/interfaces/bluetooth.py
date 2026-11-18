@@ -37,8 +37,9 @@ NAME = "bluetooth"
 
 # How long the guest's controller takes to send what it makes, 100 µs of the board's time: of the
 # order a controller takes to answer a command, and far below the 10 ms the host sleeps between two
-# polls of the VHCI when it has nothing to read (protocol 5.22), so that it reads every answer at
-# its next poll. It is also the longest slice the runner may run while nothing is unacknowledged
+# polls of the VHCI when it has nothing to read, so that every answer is due long before the host
+# would poll again; it reads it at a later poll, behind the packets before it, one a poll
+# (protocol 5.22). It is also the longest slice the runner may run while nothing is unacknowledged
 # (protocol 6.1): at 10 µs a run with the controller in it was cut into 100 000 slices per emulated
 # second, 18 % of the runner's time on an awake image. At 0 every packet would take a turn of its
 # own.

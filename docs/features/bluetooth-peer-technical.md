@@ -548,7 +548,8 @@ interface that puts the firmware's controller on the board's link is
     `Controller` on the link as `(name, address, present)`, `present` from `Link.present`, sorted by
     address as an inquiry sorts them. `close()` closes the air. `LATENCY_NS` is 100 µs: of the order a
     controller takes to answer a command, and the host sleeps 10 ms between two VHCI polls when it
-    has nothing to read (protocol 5.22), so the answer is there for its next poll. The latency is
+    has nothing to read, so the answer is due long before the host would poll again; it reads it at
+    a later poll, behind the packets before it, one a poll (protocol 5.22). The latency is
     also the longest slice the runner runs while nothing is unacknowledged (protocol 6.1), so it
     sets how often a run with the controller stops: at 10 µs, 100 000 times per emulated second; at
     0 every packet would take a turn of its own. The spike measured 259 kbit/s of SPP at 10 µs; `bt_spp_initiator`

@@ -466,10 +466,17 @@ class RunnerPopen(DuplicateStdoutPopen):
         while it was still starting does not lose its last lines; sends it `SIGTERM` and closes the
         log, as `DuplicateStdoutPopen.close` does; then waits up to `EXIT_SECONDS` for it to end,
         so that the runner's last lines are on `msg_queue` before the backend's teardown goes on.
-        A forwarder that is no longer alive is not waited for."""
+        The wait for readiness ends as soon as the forwarder is no longer alive."""
         forwarder = self._p
-        if isinstance(forwarder, LogForwarder) and forwarder.is_alive():
-            forwarder.ready.wait(EXIT_SECONDS)
+        if isinstance(forwarder, LogForwarder):
+            # in short waits, so that a forwarder that died while starting costs no EXIT_SECONDS
+            deadline = time.monotonic() + EXIT_SECONDS
+            while (
+                forwarder.is_alive()
+                and not forwarder.ready.wait(0.05)
+                and time.monotonic() < deadline
+            ):
+                pass
         super().close()  # type: ignore[no-untyped-call]
         if forwarder is not None:
             forwarder.join(EXIT_SECONDS)
