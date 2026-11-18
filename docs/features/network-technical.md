@@ -222,7 +222,7 @@ threads; a connect in progress ends within `CONNECT_SECONDS`. The backend calls 
   captures the length of `leases` at construction and returns a `Condition` reading the entry at
   that index, named `the next DHCP lease`. `find_lease()` reads the first lease.
 - `http.py`: `HttpServer(now, log)`, a `StreamService` on TCP 80 of every network (RFC 9110,
-  9112). `serve(path, body, *, status, content_type, headers)` stores a `Response` per path, after
+  9112). `serve(path, body, *, status, content_type, headers)` stores an `HttpResponse` per path, after
   checking that the path starts with `/` and holds no `?`, since a request is looked up by its
   path without the query, that the status is in `REASONS` and that no header holds CR, LF
   or, in its name, `:`. Each connection is an `_Exchange` that reads one request: the head up to
@@ -232,8 +232,8 @@ threads; a connect in progress ends within `CONNECT_SECONDS`. The backend calls 
   for `int`), then the body. `_path` gives the path by the target's form (RFC 9112 3.2): an
   origin-form target, which starts with `/`, up to `?`; an absolute-form one, a scheme of letters,
   digits, `+`, `-` and `.` then `://`, what follows its authority up to `?`, or `/`; any other
-  target as it is. `_answer` appends the `Request` to `requests`, logs
-  `http: <method> <target> → <status>`, and returns the served `Response` or `404` with
+  target as it is. `_answer` appends the `HttpRequest` to `requests`, logs
+  `http: <method> <target> → <status>`, and returns the served `HttpResponse` or `404` with
   `not found\n`. A refusal logs `http: refused a request: <status> <reason>` and is not appended.
   `_respond` writes the status line, `Content-Type` and `Content-Length` (not for a status in
   `NO_CONTENT`, 204 and 304, whose response ends with its head, RFC 9112 6.3), `Connection: close`,
@@ -458,7 +458,8 @@ that has returned does it count the connection in `_opened` and append it to `co
 and only goes up: `Network.reset` leaves it, and past 65535 it raises `RuntimeError`. It makes a
 `_Flow` keyed `(device, port, ours, local)` like the device's flows, with `snd_nxt = snd_una = ISN`,
 `rcv_nxt = 0`, `peer_window = 0`, `mss = 536`, and `client` and `connection` both the
-`TcpConnection`, logs `net: TCP <ours>:<local> → <device>:<port> connecting`, sends a SYN with the
+`TcpConnection`, which is the `TcpClient` protocol of `esp32tl/net/ip.py` (`on_established`,
+`on_sent`, `on_data`, `on_close`, `on_end`), logs `net: TCP <ours>:<local> → <device>:<port> connecting`, sends a SYN with the
 MSS option (`MSS`, 1400), and returns the local port with the flow's `write` and `close`, which
 `TcpConnection._opened` keeps. Both go through `_write` and `_close`, which, as for the device's
 connections, buffer in `pending` and `fin_pending` and leave `_flush` to send: it sends nothing
@@ -710,7 +711,7 @@ segments.
 TCP stream identities and lifecycle errors are shared with raw connections. `TcpConnection`
 notifies internal observers after received bytes, peer FIN and terminal state updates. The
 exchange incrementally parses the TCP receive buffer on those notifications, caches a response
-or error, logs once, and closes its end on completion or parsing failure. Its `response` condition only reads the
+or error, logs once, and closes its end on completion or parsing failure. Its `response`, a `Condition[ClientResponse | None]`, only reads the
 cached outcome; polling has no network effects.
 
 The parser accepts HTTP/1.0 and HTTP/1.1 responses to HTTP/1.1 requests, skips informational

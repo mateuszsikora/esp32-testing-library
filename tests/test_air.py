@@ -29,7 +29,7 @@ def test_a_timer_set_at_any_instant_falls_on_its_exact_nanosecond(air: Air) -> N
     5.169000000000001 s. The air stops on the nanosecond itself, not on the next one."""
     air.advance(ms(49))
     fired: list[int] = []
-    air.call(lambda: air.loop.call_later(5.12, lambda: fired.append(air.loop.now)))
+    air.call(lambda: air._loop.call_later(5.12, lambda: fired.append(air._loop.now)))
     assert air.quiet_until() == 5_169 * MS
     air.advance(seconds(6))
     assert fired == [5_169 * MS]
@@ -43,10 +43,10 @@ def test_what_a_timer_sets_off_runs_at_the_timer_s_instant(air: Air, start: int)
     log: list[int] = []
 
     def timer() -> None:
-        log.append(air.loop.now)
-        air.loop.call_soon(lambda: log.append(air.loop.now))
+        log.append(air._loop.now)
+        air._loop.call_soon(lambda: log.append(air._loop.now))
 
-    air.call(lambda: air.loop.call_later(5.12, timer))
+    air.call(lambda: air._loop.call_later(5.12, timer))
     air.advance(ms(start + 6_000))
     assert log == [(start + 5_120) * MS] * 2
 
@@ -56,7 +56,7 @@ def test_a_timer_a_nanosecond_away_fires_at_the_next_nanosecond(air: Air) -> Non
     fired what is due within 1 ns would fire it at once."""
     air.advance(Duration(269_272_418))
     fired: list[int] = []
-    air.call(lambda: air.loop.call_later(1e-9, lambda: fired.append(air.loop.now)))
+    air.call(lambda: air._loop.call_later(1e-9, lambda: fired.append(air._loop.now)))
     assert fired == []
     air.advance(ms(300))
     assert fired == [269_272_419]
@@ -74,7 +74,7 @@ def test_a_timer_with_no_nanosecond_never_fires(air: Air, limit: float) -> None:
     assert air.run(bounded(), within=seconds(2)) == "slept"
     assert air.now == seconds(1)
     fired: list[int] = []
-    air.call(lambda: air.loop.call_at(limit, lambda: fired.append(air.loop.now)))
+    air.call(lambda: air._loop.call_at(limit, lambda: fired.append(air._loop.now)))
     air.advance(seconds(3))
     assert air.quiet_until() == (seconds(3) + hours(24)).ns
     air.advance(hours(49))
@@ -87,7 +87,7 @@ def test_timers_fire_at_their_board_time_and_only_while_the_test_moves_it(air: A
     async def ticks() -> str:
         for _ in range(3):
             await asyncio.sleep(0.25)
-            fired.append(air.loop.now)
+            fired.append(air._loop.now)
         return "done"
 
     task = air.start(ticks())
@@ -147,7 +147,7 @@ class Ticker:
 
 def test_a_party_is_polled_at_every_instant_the_air_stops_at(air: Air) -> None:
     ticker = Ticker(300 * MS)
-    air.join(ticker)
+    air._join(ticker)
     air.start(asyncio.sleep(0.5))
     air.advance(seconds(1))
     # Its own instants, the loop's timer at 0.5 s, and the end of the advance; an instant may be
@@ -161,7 +161,7 @@ def test_a_party_due_in_the_past_fails_the_air(air: Air) -> None:
             return 0
 
     air.wait(seconds(1))
-    air.join(Stuck(1))
+    air._join(Stuck(1))
     with pytest.raises(AirError, match="due at 0 s, and the air is at 1 s already"):
         air.wait(seconds(1))
 
@@ -170,7 +170,7 @@ def test_a_callback_that_raises_fails_the_call_that_moved_the_time(air: Air) -> 
     def broken() -> None:
         raise KeyError("lost")
 
-    air.loop.call_later(0.1, broken)
+    air._loop.call_later(0.1, broken)
     with pytest.raises(AirError) as raised:
         air.wait(seconds(1))
     assert isinstance(raised.value.__cause__, KeyError)

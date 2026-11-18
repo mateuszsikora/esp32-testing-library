@@ -2,7 +2,7 @@
 
 from elm327 import VERSION, Elm327, Vehicle
 
-from esp32tl.sources.model import Timed
+from esp32tl import Timed
 from esp32tl.units import Duration, ms, seconds
 
 START = ms(0)

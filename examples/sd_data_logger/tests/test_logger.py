@@ -5,8 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from esp32tl import Board, recording
-from esp32tl.interfaces.console import Console
+from esp32tl import Board, Console, recording
 from esp32tl.units import Duration, Position, ms, seconds
 
 pytestmark = [pytest.mark.app_path(".."), pytest.mark.board_profile("sd-data-logger")]

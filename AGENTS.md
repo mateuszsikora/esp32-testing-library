@@ -25,7 +25,8 @@ paths, names, defaults and messages quoted verbatim, and `TODO(owner): …` wher
 | `esp32tl/pytest_plugin.py`, `esp32tl/interfaces/` | `docs/features/pytest-plugin-user.md` and/or `-technical.md` (F1, F2) |
 | `esp32tl/backends/esp32sim.py`, `esp32tl/backends/clock.py` | `docs/features/esp32sim-backend-user.md` and/or `-technical.md` (F3) |
 | `esp32tl/backends/serial.py`, `esp32tl/backends/__init__.py` | `docs/features/serial-backend-user.md` and/or `-technical.md` (F23) |
-| `esp32tl/cli.py`, `esp32tl/__init__.py` | `docs/features/cli-user.md` (F4, F5) |
+| `esp32tl/cli.py` | `docs/features/cli-user.md` (F4) |
+| `esp32tl/__init__.py` | `docs/features/pytest-plugin-user.md` for the public API, `docs/features/cli-user.md` for the version (F5) |
 | `runner/src/`, except the protocol files | `docs/features/runner-user.md` and/or `-technical.md` (F6) |
 | `runner/Cargo.toml` (esp32sim pin, profiles) | `docs/features/runner-technical.md`; a pin bump also re-checks what `docs/protocol.md` cites (F7) |
 | `esp32tl/link/`, `runner/src/protocol.rs`, `runner/src/socket_board.rs` | `docs/protocol.md`, and its version if the wire changes (F8, F9, F10) |

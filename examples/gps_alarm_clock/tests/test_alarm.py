@@ -2,9 +2,7 @@
 
 import pytest
 
-from esp32tl.backends.esp32sim import Esp32Sim
-from esp32tl.flash import i32, u32
-from esp32tl.interfaces.lines import OutputLine
+from esp32tl import Board, OutputLine, i32, u32
 from esp32tl.units import EAST, WEST, Distance, Position, km_h, m, seconds
 
 pytestmark = [pytest.mark.app_path(".."), pytest.mark.board_profile("gps-alarm-clock")]
@@ -18,7 +16,7 @@ FIX_MAX_AGE = seconds(2.5)
 EXPIRY_TOLERANCE = seconds(0.2)
 
 
-def test_far_away_the_buzzer_stays_off(board: Esp32Sim, buzzer: OutputLine) -> None:
+def test_far_away_the_buzzer_stays_off(board: Board, buzzer: OutputLine) -> None:
     configure_alarm(board)
     board.gnss.fix(at=TARGET.moved(EAST, m(1000)))
     board.power_on()
@@ -26,7 +24,7 @@ def test_far_away_the_buzzer_stays_off(board: Esp32Sim, buzzer: OutputLine) -> N
     assert_never_buzzed(buzzer)
 
 
-def test_moving_into_the_radius_turns_it_on(board: Esp32Sim, buzzer: OutputLine) -> None:
+def test_moving_into_the_radius_turns_it_on(board: Board, buzzer: OutputLine) -> None:
     configure_alarm(board)
     start_distance = m(150)
     board.gnss.fix(at=TARGET.moved(EAST, start_distance))
@@ -42,7 +40,7 @@ def test_moving_into_the_radius_turns_it_on(board: Esp32Sim, buzzer: OutputLine)
     board.wait_until(buzzer.is_on, within=REACTION_TIME)
 
 
-def test_moving_out_turns_it_off(board: Esp32Sim, buzzer: OutputLine) -> None:
+def test_moving_out_turns_it_off(board: Board, buzzer: OutputLine) -> None:
     configure_alarm(board)
     board.gnss.fix(at=TARGET)
     board.power_on()
@@ -57,7 +55,7 @@ def test_moving_out_turns_it_off(board: Esp32Sim, buzzer: OutputLine) -> None:
     board.wait_until(buzzer.is_off, within=REACTION_TIME)
 
 
-def test_without_a_fix_it_stays_off(board: Esp32Sim, buzzer: OutputLine) -> None:
+def test_without_a_fix_it_stays_off(board: Board, buzzer: OutputLine) -> None:
     configure_alarm(board)
     board.gnss.lose_fix()
     board.power_on()
@@ -65,7 +63,7 @@ def test_without_a_fix_it_stays_off(board: Esp32Sim, buzzer: OutputLine) -> None
     assert_never_buzzed(buzzer)
 
 
-def test_losing_the_fix_turns_it_off(board: Esp32Sim, buzzer: OutputLine) -> None:
+def test_losing_the_fix_turns_it_off(board: Board, buzzer: OutputLine) -> None:
     configure_alarm(board)
     board.gnss.fix(at=TARGET)
     board.power_on()
@@ -77,7 +75,7 @@ def test_losing_the_fix_turns_it_off(board: Esp32Sim, buzzer: OutputLine) -> Non
     buzzer.assert_stayed_off(since=off_since)
 
 
-def test_silence_expires_the_last_fix(board: Esp32Sim, buzzer: OutputLine) -> None:
+def test_silence_expires_the_last_fix(board: Board, buzzer: OutputLine) -> None:
     configure_alarm(board)
     board.gnss.fix(at=TARGET)
     board.power_on()
@@ -90,7 +88,7 @@ def test_silence_expires_the_last_fix(board: Esp32Sim, buzzer: OutputLine) -> No
     board.wait_until(buzzer.is_off, within=2 * EXPIRY_TOLERANCE)
 
 
-def test_a_smaller_configured_radius_keeps_it_off(board: Esp32Sim, buzzer: OutputLine) -> None:
+def test_a_smaller_configured_radius_keeps_it_off(board: Board, buzzer: OutputLine) -> None:
     # Southern/western coordinates also catch a hardcoded destination.
     target = Position(-34.6037, -58.3816)
     configure_alarm(board, target=target, radius=m(50))
@@ -100,7 +98,7 @@ def test_a_smaller_configured_radius_keeps_it_off(board: Esp32Sim, buzzer: Outpu
     assert_never_buzzed(buzzer)
 
 
-def test_a_larger_configured_radius_turns_it_on(board: Esp32Sim, buzzer: OutputLine) -> None:
+def test_a_larger_configured_radius_turns_it_on(board: Board, buzzer: OutputLine) -> None:
     target = Position(-34.6037, -58.3816)
     configure_alarm(board, target=target, radius=m(200))
     board.gnss.fix(at=target.moved(EAST, m(100)))
@@ -111,7 +109,7 @@ def test_a_larger_configured_radius_turns_it_on(board: Esp32Sim, buzzer: OutputL
     buzzer.assert_stayed_on(since=on_since)
 
 
-def test_missing_configuration_keeps_it_off(board: Esp32Sim, buzzer: OutputLine) -> None:
+def test_missing_configuration_keeps_it_off(board: Board, buzzer: OutputLine) -> None:
     board.gnss.fix(at=TARGET)
     board.power_on()
     board.console.expect_exact("gps_alarm_clock: invalid or missing NVS alarm configuration")
@@ -119,9 +117,7 @@ def test_missing_configuration_keeps_it_off(board: Esp32Sim, buzzer: OutputLine)
     assert_never_buzzed(buzzer)
 
 
-def configure_alarm(
-    board: Esp32Sim, *, target: Position = TARGET, radius: Distance = RADIUS
-) -> None:
+def configure_alarm(board: Board, *, target: Position = TARGET, radius: Distance = RADIUS) -> None:
     """Translate this application's configuration to its NVS schema, before power-on."""
     if radius.m <= 0 or radius.m != int(radius.m):
         raise ValueError("the alarm radius must be a positive whole number of metres")
@@ -137,7 +133,7 @@ def configure_alarm(
 
 
 @pytest.fixture
-def buzzer(board: Esp32Sim) -> OutputLine:
+def buzzer(board: Board) -> OutputLine:
     return board.lines.output("alarm.buzzer")
 
 

@@ -128,11 +128,11 @@ class Bluedroid:
         pass
 
     def on_packet(self, packet: bytes) -> None:
-        self.sent.append((self.air.loop.now, bytes(packet)))
+        self.sent.append((self.air._loop.now, bytes(packet)))
 
     def deliver(self, data: bytes) -> None:
         packet = hci.HCI_Packet.from_bytes(data)
-        self.received.append((self.air.loop.now, packet))
+        self.received.append((self.air._loop.now, packet))
         if not self.drop(packet):
             self.air.call(lambda: self.host.on_packet(data))
 
@@ -498,7 +498,7 @@ def test_the_commands_about_a_link_are_answered_with_the_peer_s_version(
     (offset,) = runner.guest.events(hci.HCI_Read_Clock_Offset_Complete_Event)
     assert (offset.status, offset.clock_offset) == (0, 0)
     (version,) = runner.guest.events(hci.HCI_Read_Remote_Version_Information_Complete_Event)
-    peer_controller = bt.air.link.find_classic_controller(public(PEER))
+    peer_controller = bt.air._link.find_classic_controller(public(PEER))
     assert peer_controller is not None
     assert (version.version, version.manufacturer_name, version.subversion) == (
         peer_controller.lmp_version,
@@ -878,11 +878,11 @@ def test_the_supply_and_a_chip_reset_take_the_controller_off_the_air_and_back(
     runner.run(link_to(runner.guest))
     received = len(runner.guest.received)
     bt.supply(False)
-    assert not bt.air.link.present(GUEST) and bt.controller.classic_connections == {}
+    assert not bt.air._link.present(GUEST) and bt.controller.classic_connections == {}
     bt.supply(True)
-    assert bt.air.link.present(GUEST)
+    assert bt.air._link.present(GUEST)
     bt.chip_reset(runner.now)
-    assert bt.air.link.present(GUEST)
+    assert bt.air._link.present(GUEST)
     runner.advance(runner.now + 21 * S)
     # The host was told nothing; the peer's end fell at its timeout.
     assert len(runner.guest.received) == received
@@ -930,7 +930,7 @@ def test_two_runs_cross_the_same_packets_at_the_same_instants() -> None:
 
 def test_the_guest_controller_is_a_controller_of_the_air() -> None:
     air = Air()
-    controller = air.call(lambda: GuestController("esp32", air.link))
+    controller = air.call(lambda: GuestController("esp32", air._link))
     assert isinstance(controller, Controller)
     assert controller.public_address == GUEST and controller.lmp_features_max_page_number == 2
     air.close()
@@ -974,9 +974,9 @@ def test_the_backend_s_supply_and_the_runner_s_resets_reach_the_controller(
     backend = backend_with(bt)
     peer = spp_peer(bt)
     backend._switch(False)
-    assert not bt.air.link.present(GUEST)
+    assert not bt.air._link.present(GUEST)
     backend._switch(True)
-    assert bt.air.link.present(GUEST)
+    assert bt.air._link.present(GUEST)
     bt.air.call(lambda: bt.on_packet(bytes.fromhex("040e0401030c00")))
     backend._reset(Reset(1, 5 * MS, 1))
     assert bt.air.now == Duration(5 * MS) and list(bt.poll(5 * MS)) == []

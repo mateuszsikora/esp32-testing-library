@@ -107,7 +107,7 @@ class Bluetooth(Interface):
         with self._lock:
             if self._air is None:
                 air = Air(board_clock=True)
-                controller = air.call(lambda: GuestController("esp32", air.link, self.address))
+                controller = air.call(lambda: GuestController("esp32", air._link, self.address))
                 controller.host = self
                 self._air, self._controller = air, controller
                 if self.log is not None:
@@ -195,7 +195,7 @@ class Bluetooth(Interface):
 
     def on_packet(self, packet: bytes) -> None:
         assert self._air is not None
-        self._out.append((self._air.loop.now, bytes(packet)))
+        self._out.append((self._air._loop.now, bytes(packet)))
 
     # The link's side.
 
@@ -283,11 +283,11 @@ class Bluetooth(Interface):
             return []
         others = [
             c
-            for c in self._air.link.controllers
+            for c in self._air._link.controllers
             if isinstance(c, Controller) and c is not self._controller
         ]
         others.sort(key=lambda c: bytes(reversed(bytes(c.public_address))))
-        link = self._air.link
+        link = self._air._link
         return [
             (c.name, str(c.public_address).removesuffix("/P"), link.present(c.public_address))
             for c in others

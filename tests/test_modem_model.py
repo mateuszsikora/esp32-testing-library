@@ -11,7 +11,7 @@ from test_net_mqtt_failures import Peer
 from test_net_mqtt_failures import Wire as PppWire
 
 from esp32tl import boards, recording
-from esp32tl.boards import Line
+from esp32tl.boards import LineRoute
 from esp32tl.interfaces import SourceError
 from esp32tl.interfaces.lines import Lines
 from esp32tl.interfaces.modem import Modem as ModemRoute
@@ -20,7 +20,7 @@ from esp32tl.link.protocol import GpioIn, GpioOut, RunnerHello, Sync, UartCfg, U
 from esp32tl.net import Internet
 from esp32tl.net.ntp import NTP_EPOCH
 from esp32tl.report import RunLog
-from esp32tl.sources.model.modem import LATENCY_NS, MAX_COMMAND, Modem, Restart
+from esp32tl.sources.model.modem import LATENCY_NS, MAX_COMMAND, Modem, ModemRestart
 from esp32tl.units import NS_PER_S, Duration, hours, minutes, ms, seconds
 
 LILYGO = boards.profile("lilygo-t-a7670g-r2")
@@ -874,7 +874,7 @@ def test_pwrkey_recovers_a_hung_modem_that_honours_it() -> None:
     pulse(model.driven, seconds(10), ms(100))
     assert model.powered and not model.hung
     assert reply(model, "AT") == b"\r\nOK\r\n"
-    assert model.restarts == (Restart(seconds(5) + ms(1), "pwrkey"),)
+    assert model.restarts == (ModemRestart(seconds(5) + ms(1), "pwrkey"),)
 
 
 def test_pwrkey_does_nothing_to_a_hung_modem_that_ignores_it() -> None:
@@ -907,7 +907,7 @@ def test_reset_restarts_a_hung_modem_in_command_mode(pwrkey: bool) -> None:
     model.hang(pwrkey=pwrkey)
     pulse(model.reset_driven, seconds(1), ms(2600))
     assert not model.hung and model.powered and model.registered and not model.data_mode
-    assert model.restarts == (Restart(seconds(1) + ms(2601), "reset"),)
+    assert model.restarts == (ModemRestart(seconds(1) + ms(2601), "reset"),)
     # echo and format are back at their power-on values
     assert reply(model, "AT") == b"\r\nOK\r\n"
     assert b'+COPS: 0,0,"ESP32TL",7' in reply(model, "AT+COPS?")
@@ -929,7 +929,7 @@ def test_reset_is_judged_at_release_and_at_the_profile_s_threshold() -> None:
     model.reset_driven(seconds(9).ns, 1)
     assert reply(model, "AT") == b"AT\r\n\r\nOK\r\n" and not model.restarts
     model.reset_driven(seconds(9).ns, None)  # an output that stops driving ends the pulse too
-    assert model.restarts == (Restart(seconds(9) + ms(1), "reset"),)
+    assert model.restarts == (ModemRestart(seconds(9) + ms(1), "reset"),)
     pulse(model.reset_driven, seconds(20), ms(2000))
     assert len(model.restarts) == 2
 
@@ -1012,7 +1012,7 @@ def test_a_route_watches_pwrkey_and_reset_through_lines(tmp_path: Path) -> None:
     lines.driven(seconds(5).ns, [(5, 1)], frozenset({5}))
     lines.driven(seconds(7).ns + ms(600).ns, [(5, 0)], frozenset({5}))
     assert not modem.hung and modem.powered
-    assert modem.restarts == (Restart(seconds(7) + ms(601), "reset"),)
+    assert modem.restarts == (ModemRestart(seconds(7) + ms(601), "reset"),)
 
 
 def test_power_enable_has_no_effect_on_the_modem(tmp_path: Path) -> None:
@@ -1152,7 +1152,7 @@ def test_the_model_refuses_a_reset_line_with_two_thresholds(tmp_path: Path) -> N
         directory=tmp_path,
         now=lambda: 0,
         lines=lines,
-        pins={**LILYGO.lines["modem"], "reset": Line(5, active=1, on_ms=50, off_ms=2500)},
+        pins={**LILYGO.lines["modem"], "reset": LineRoute(5, active=1, on_ms=50, off_ms=2500)},
     )
     with pytest.raises(SourceError, match="needs reset with pulse_ms in the profile"):
         modem.power_on()
@@ -1169,7 +1169,7 @@ def test_a_reset_line_with_no_timing_is_only_observed(tmp_path: Path) -> None:
         directory=tmp_path,
         now=lambda: now[0],
         lines=lines,
-        pins={**LILYGO.lines["modem"], "reset": Line(5)},
+        pins={**LILYGO.lines["modem"], "reset": LineRoute(5)},
     )
     modem.hang()
     lines.driven(seconds(1).ns, [(5, 1)], frozenset({5}))
@@ -1210,7 +1210,7 @@ def test_a_wrong_and_an_unset_clock_survive_a_power_cycle() -> None:
 
 
 def test_reset_takes_its_polarity_and_threshold_from_the_profile() -> None:
-    model = Modem(lambda: 0, reset=Line(5, active=0, pulse_ms=500))
+    model = Modem(lambda: 0, reset=LineRoute(5, active=0, pulse_ms=500))
     # high is the idle level here, however long
     model.reset_driven(seconds(1).ns, 1)
     model.reset_driven(seconds(5).ns, 0)
@@ -1218,7 +1218,7 @@ def test_reset_takes_its_polarity_and_threshold_from_the_profile() -> None:
     assert not model.restarts
     model.reset_driven(seconds(6).ns, 0)
     model.reset_driven(seconds(6).ns + ms(500).ns, 1)
-    assert model.restarts == (Restart(seconds(6) + ms(501), "reset"),)
+    assert model.restarts == (ModemRestart(seconds(6) + ms(501), "reset"),)
 
 
 def test_reset_of_a_modem_in_data_mode_ends_the_call_and_returns_to_command_mode(

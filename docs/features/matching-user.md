@@ -8,7 +8,7 @@ firmware retry and timeout behaviour can be tested.
 ## Protocols
 
 ```python
-from esp32tl.matching import AT, PMTK, UBX, GNSS, Protocol
+from esp32tl import AT, PMTK, UBX, GNSS, Protocol
 
 
 def test_configuration(board):

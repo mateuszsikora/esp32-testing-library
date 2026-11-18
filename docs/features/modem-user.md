@@ -55,8 +55,8 @@ board power-on instead starts it off, for firmware that boots it with PWRKEY.
 | `operator(name="ESP32TL", numeric="26000", short=None, act=7)` | What `AT+COPS?` names; `short=None` is `name` |
 | `hang(pwrkey=True)` | The modem stops answering ([below](#a-hung-modem-and-reset)); `pwrkey=False`: PWRKEY does nothing either |
 | `powered`, `registered`, `data_mode`, `hung` | Current model state; reading does not select a model |
-| `restarts` | Each time a run of the modem ended, as `Restart(at, cause)`, oldest first ([below](#a-hung-modem-and-reset)) |
-| `commands` | Every complete AT command while powered, as `Command(at, text, response, fallback)`; `at` is a `Duration` |
+| `restarts` | Each time a run of the modem ended, as `ModemRestart(at, cause)`, oldest first ([below](#a-hung-modem-and-reset)) |
+| `commands` | Every complete AT command while powered, as `ModemCommand(at, text, response, fallback)`; `at` is a `Duration` |
 
 Registration changes affect the next query; there are no unsolicited registration notifications.
 Losing registration or power in data mode ends that mode silently: this model sends no unsolicited
@@ -200,7 +200,7 @@ No source says what PWRKEY does to a hung modem, or what state a modem is in dur
 These are the model's assumptions: PWRKEY works unless the test says otherwise, and a modem goes on
 as it was until the pulse's release.
 
-`restarts` holds one `Restart(at, cause)` for each time a run of the modem ended, at the instant it
+`restarts` holds one `ModemRestart(at, cause)` for each time a run of the modem ended, at the instant it
 did. `cause` is `"reset"` (a RESET pulse), `"pwrkey"` (an off pulse), `"supply"` (`lose_power()` or
 the board's supply going) or `"test"` (`modem.power_off()`, or `modem.power_on()` on a running
 modem). Starting a modem that is off is no restart, and nor is a call before the board's first

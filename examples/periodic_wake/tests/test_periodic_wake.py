@@ -5,9 +5,7 @@ from itertools import pairwise
 
 import pytest
 
-from esp32tl import Board
-from esp32tl.interfaces.board import DEEPSLEEP_RESET, POWERON_RESET
-from esp32tl.interfaces.lines import OutputLine
+from esp32tl import DEEPSLEEP_RESET, POWERON_RESET, Board, OutputLine
 from esp32tl.units import Duration, hours, minutes, ms, seconds
 
 pytestmark = [

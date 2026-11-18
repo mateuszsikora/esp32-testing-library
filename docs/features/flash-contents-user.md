@@ -7,7 +7,7 @@ namespaces and keys. esp32tl knows their NVS types, not what those keys mean to 
 ## Supply NVS before power-on
 
 ```python
-from esp32tl.flash import u16
+from esp32tl import u16
 
 
 def test_connects(board):
@@ -44,7 +44,7 @@ replacement partition.
 
 ## Choose the type the firmware reads
 
-Import the integer constructors from `esp32tl.flash`:
+Import the integer constructors from `esp32tl`:
 
 | Python value | NVS type | Accepted values |
 |---|---|---|
@@ -93,7 +93,7 @@ as large as the board's flash ([the flash a run gets](board-profiles-user.md#the
 from which the test reads a partition by name, NVS by namespace and key, and the OTA state:
 
 ```python
-from esp32tl.flash import u32
+from esp32tl import u32
 
 
 def test_counts_its_boots(board):

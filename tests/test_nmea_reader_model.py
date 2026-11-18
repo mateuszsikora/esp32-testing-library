@@ -5,7 +5,7 @@ is read as console lines and compared, in units, with where the receiver is."""
 import pytest
 
 from esp32tl.backends.esp32sim import Esp32Sim
-from esp32tl.interfaces.console import Console, Line
+from esp32tl.interfaces.console import Console, ConsoleLine
 from esp32tl.interfaces.gnss import Gnss
 from esp32tl.units import (
     EAST,
@@ -31,7 +31,7 @@ FIRST_FIX = r"^fix acquired lat=(?P<lat>\S+) lon=(?P<lon>\S+)$"
 FIX = r"^fix lat=(?P<lat>\S+) lon=(?P<lon>\S+)$"
 
 
-def reported(line: Line) -> Position:
+def reported(line: ConsoleLine) -> Position:
     """The position a fix line reports."""
     return Position(float(line["lat"]), float(line["lon"]))
 

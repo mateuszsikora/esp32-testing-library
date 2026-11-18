@@ -16,7 +16,7 @@ an `Air` of its own, with another Bumble device in the ESP32's place, as esp32tl
 ```python
 import pytest
 
-from esp32tl.bluetooth.peer import SppPeer
+from esp32tl import SppPeer
 from esp32tl.units import seconds
 
 
@@ -136,9 +136,7 @@ It does what the devices' controllers do ([time on the air](#time-on-the-air),
 ```python
 import asyncio
 
-from esp32tl.bluetooth.air import Air
-from esp32tl.bluetooth.peer import SppPeer
-from esp32tl.sources.model import Model
+from esp32tl import Air, Model, SppPeer
 from esp32tl.units import ms, seconds
 
 
@@ -272,7 +270,7 @@ the error's name and code, as `AUTHENTICATION_FAILURE_ERROR (0x05)`, for one tha
 A device that offers no SPP, there to be found among others, or to be the wrong one:
 
 ```python
-from esp32tl.bluetooth.peer import BluetoothDevice
+from esp32tl import BluetoothDevice
 
 phone = BluetoothDevice(
     air, name="phone", class_of_device=0x5A020C, rssi=-70, address="00:00:00:00:5C:01"
@@ -396,7 +394,7 @@ yet. What ESP-IDF does with these events is not known.
 
 `source` is what drives the SPP channel from the peer's end, written as for the far end of a UART
 ([a UART's own model](pytest-plugin-user.md#a-uarts-own-model)): a subclass of
-`esp32tl.sources.model.Model`, whose times are `Duration`s of the air's clock, or an object with the
+`esp32tl.Model`, whose times are `Duration`s of the air's clock, or an object with the
 four methods, whose times are nanoseconds as `int`s. Both kinds put the same bytes on the channel at
 the same instants; when to prefer nanoseconds is said there.
 
@@ -419,11 +417,10 @@ bytes. A source that raises, or returns what the peer cannot send, fails the air
 `peer.events` holds what crossed the channel, in order, as `ChannelEvent(at, direction, data)` named tuples: `out` of the
 device, `in` to it, as a tap's recording names them.
 
-`ChannelEvent` and `Refusal` are imported from `esp32tl.bluetooth.peer`, and `Pairing` and
-`UnknownCommand` from `esp32tl.bluetooth.controller`. All their timestamps are `Duration`s:
+`ChannelEvent`, `Refusal`, `Pairing` and `UnknownCommand` are imported from `esp32tl`. All their timestamps are `Duration`s:
 `event.at`, `refusal.at`, `pairing.t`, and `command.t`. Tuple unpacking still works for the
 named tuples; `Pairing` remains a frozen dataclass. Compare these times directly with
-`Message.at`, console `Line.at` or GPIO `LineEvent.t`, without wrapping them in `Duration`.
+`Message.at`, console `ConsoleLine.at` or GPIO `LineEvent.t`, without wrapping them in `Duration`.
 This breaks the former integer API: use `.ns` only when integer nanoseconds are needed.
 The run report is unchanged; `esp32sim_link` JSON still writes integer `t_ns` fields.
 
@@ -499,13 +496,13 @@ On the air:
 | `[ble] rejected invalid VHCI packet pointer, length or controller state`, on the runner's stderr; for a refused command, the firmware's `BT_HCI: command_timed_out … opcode: …` after it, `opcode: 0xc03` when it is the first, `HCI_Reset` | none; when the first command is refused, the four counts stay 0 | esp32sim refused a packet the firmware sent: it lies neither in internal DRAM nor in PSRAM that the chip's cache maps and can read ([technical](bluetooth-peer-technical.md#failure-modes)) |
 
 A `BluetoothDevice` says the same of its arguments, starting `BluetoothDevice:` rather than
-`SppPeer:`. `PeerError` is a `ValueError`, in `esp32tl.bluetooth.peer`; `AirError` a `RuntimeError`, in
-`esp32tl.bluetooth.air`, whose `__cause__` is what failed: whatever raises on the air, in a model
-or in Bumble, is raised from the call that moved the time. What the peer finds wrong with its
+`SppPeer:`. `PeerError` is a `ValueError` and `AirError` a `RuntimeError`, both from `esp32tl`;
+an `AirError`'s `__cause__` is what failed: whatever raises on the air, in a model or in Bumble,
+is raised from the call that moved the time. What the peer finds wrong with its
 source keeps the peer's message; anything else that raises on the air, in Bumble or in the test's
 own coroutine's callbacks, is prefixed with asyncio's description of where it was raised, such as
 `Exception in callback Host.on_packet(): …`.
-`NeverHappened` is the board's, from `esp32tl.interfaces`.
+`NeverHappened` is the board's, also from `esp32tl`.
 
 ## See also
 

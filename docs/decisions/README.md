@@ -343,6 +343,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [A message the broker published as a Will says so in Message.will](harness.md#a-message-the-broker-published-as-a-will-says-so-in-messagewill) | `harness.md` | decided (#243) |
 | [The P4's ROM is the one of its build's revision](harness.md#the-p4s-rom-is-the-one-of-its-builds-revision) | `harness.md` | decided (#233) |
 | [On the P4 and the S31 the console has no pins, and a UART route skips the test](harness.md#on-the-p4-and-the-s31-the-console-has-no-pins-and-a-uart-route-skips-the-test) | `harness.md` | decided (#233) |
+| [The package root exports every name a test uses](harness.md#the-package-root-exports-every-name-a-test-uses) | `harness.md` | decided (#247) |
 
 ## The runner crate and esp32sim
 

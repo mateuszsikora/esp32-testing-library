@@ -17,7 +17,7 @@ from test_net_ip import packet
 from esp32tl import boards, recording
 from esp32tl.backends.clock import HeldClock, nanoseconds, seconds
 from esp32tl.interfaces import NeverHappened, RunEnded
-from esp32tl.interfaces.console import Console, ConsoleLines, Line
+from esp32tl.interfaces.console import Console, ConsoleLine, ConsoleLines
 from esp32tl.interfaces.lines import Lines
 from esp32tl.interfaces.modem import Modem as ModemRoute
 from esp32tl.interfaces.wifi import Wifi
@@ -626,8 +626,11 @@ def test_console_lines_are_stamped_with_the_time_their_ending_came_at() -> None:
     )
     run.clock.wait(4 * S)
     # Without colour codes and line endings; "three" has not ended, and is no line yet.
-    assert console.lines() == [Line(secs(1), "I (10) boot: one"), Line(secs(3), "two halves")]
-    assert console.lines(since=secs(1.5)) == [Line(secs(3), "two halves")]
+    assert console.lines() == [
+        ConsoleLine(secs(1), "I (10) boot: one"),
+        ConsoleLine(secs(3), "two halves"),
+    ]
+    assert console.lines(since=secs(1.5)) == [ConsoleLine(secs(3), "two halves")]
     assert console.lines(since=secs(3.5)) == []
     (found,) = console.lines(r"(?P<word>\w+) halves")
     assert found.at == secs(3) and found["word"] == "two" and found[1] == "two"
@@ -649,7 +652,7 @@ def test_a_line_condition_finds_the_first_matching_line_from_when_it_was_made() 
     again = run.clock.wait_until(condition, 10 * S, repr(condition))
     assert (again.at, again["n"]) == (secs(4), "4")
     # Lines compare by their time and text, not by their match.
-    assert console.lines("fix 4") == console.lines("fix 4") == [Line(secs(4), "fix 4")]
+    assert console.lines("fix 4") == console.lines("fix 4") == [ConsoleLine(secs(4), "fix 4")]
     never = console.line(re.compile("never"))
     with pytest.raises(NeverHappened) as raised:
         run.clock.wait_until(never, S, repr(never))

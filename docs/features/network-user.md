@@ -74,7 +74,7 @@ A message has `at` (`Duration`), `client`, `topic`, `payload` (bytes), `qos`, `r
 and `text` (UTF-8 with replacement). `will` is `True` only for a Will the broker published.
 Incoming publications also expose `connection_id`, `packet_id` (`None` for QoS 0), `dup` and
 `publication` (a `Publication` handle for QoS 1, otherwise `None`).
-Test publications use client `TEST_CLIENT` (`"(test)"`, exported by `esp32tl.net.mqtt`) and
+Test publications use client `TEST_CLIENT` (`"(test)"`, exported by `esp32tl`) and
 have no connection, packet ID or handle. Wills carry their original connection ID but have no
 packet ID or handle. A client record has `at`,
 `client_id`, `username`, `password`, `keepalive`, `will_topic`, `connection_id` and
@@ -124,7 +124,7 @@ match after it:
 ```python
 import json
 
-from esp32tl.net.mqtt import TEST_CLIENT
+from esp32tl import TEST_CLIENT
 from esp32tl.units import seconds
 
 DEVICE = "logger-1"  # The client ID the firmware connects with.
@@ -261,7 +261,7 @@ packet ID, a string that is not UTF-8 or holds a NUL, or, in a SUBSCRIBE, an inv
 QoS above 2, is refused whole: it records nothing, changes no subscription, even of the filters
 before the bad one, and closes the connection, logging
 `mqtt: malformed or unsupported packet, closing`. `RequestedFilter` and `SubscribeRequest` are
-imported from `esp32tl.net.mqtt`.
+imported from `esp32tl`.
 
 `next_subscribe()` returns the first SUBSCRIBE appended after the call, with the boundary of the
 other `next_*` conditions; `next_subscribe(filter)` the first that names exactly that filter, as
@@ -280,7 +280,7 @@ assert request.connection_id != before.connection_id
 
 Set `broker.connection_policy` before power-on or between board advances. It receives an
 immutable `Connect` record and must return a member of `ConnackCode`, both imported from
-`esp32tl.net.mqtt`. The same policy applies to plain TCP and TLS listeners using this broker.
+`esp32tl`. The same policy applies to plain TCP and TLS listeners using this broker.
 It runs once per supported, fully parsed CONNECT; it must not block or wait on the board.
 Changing it affects future attempts only, leaving existing clients connected. Assign `None`
 to restore the accepting default. Behind a Wi-Fi access point the same policy is set on
@@ -290,7 +290,7 @@ to restore the accepting default. Behind a Wi-Fi access point the same policy is
 For firmware configured to retry, first refuse connections, then enable credential checking:
 
 ```python
-from esp32tl.net.mqtt import ConnackCode, Connect
+from esp32tl import ConnackCode, Connect
 from esp32tl.units import seconds
 
 broker.connection_policy = lambda connect: ConnackCode.SERVER_UNAVAILABLE
@@ -612,7 +612,7 @@ address, as `network.http`. Until the test serves a path, every request gets `40
 | `find_request(path=None, *, method=None)` | Immediate history query returning the first recorded request with the same filters, or `None` |
 | `requests` | Every request recorded, in order; refused requests are not |
 
-A request (`Request`) has `at` (`Duration`), `method`, `target` (as sent), `path` (an
+A request (`HttpRequest`) has `at` (`Duration`), `method`, `target` (as sent), `path` (an
 origin-form target such as `/a?b` without its query, `://` in it or not; an absolute-form one such
 as `http://host/x?b` without its scheme, host and query, `/x`; `*` and `host:port` as they are), `version` (`HTTP/1.0` or
 `HTTP/1.1`, as sent), `headers` (name and value pairs, in order), `body` (bytes) and `text` (the
@@ -763,7 +763,7 @@ A connection is established, closed, refused or reset once at most, so those fou
 its state: one returns its event's time however long ago it happened. `next_data` is a next-event
 condition, with the boundary and polling of the [MQTT next-event
 conditions](#history-next-events-and-current-state) at `start`. Every condition fails loudly: once it
-can no longer hold, it raises `ConnectionEnded` (an `AssertionError`, from `esp32tl.net.client`)
+can no longer hold, it raises `ConnectionEnded` (an `AssertionError`, from `esp32tl`)
 instead of waiting out its time. Waiting for `established()` on a connection the device refused
 raises `TCP 10.64.0.1:49152 → 10.64.0.2:8080 was refused by the device before it was established`;
 `closed()` on a reset one, `... was reset by the device, not closed by the device`; `refused()` on
@@ -798,7 +798,7 @@ there is no half-close. It raises `ValueError` after `close()` (`...: written af
 `size` under 1, both at once (`...: next_data takes until or size, not both`), and a `start` beyond
 `received`.
 
-`connect` raises `NotReachable` (a `RuntimeError`, from `esp32tl.net.client`) when the network
+`connect` raises `NotReachable` (a `RuntimeError`, from `esp32tl`) when the network
 cannot reach the device yet, and `ValueError` for a port out of range
 (`network.connect(0): the TCP port must be between 1 and 65535`) or an address that is not IPv4
 (`network.connect(80, address='device'): 'device' is not an IPv4 address`):
@@ -873,7 +873,7 @@ other values raise `PUBACK policy must be 'immediate', 'hold', or a Duration`.
 Each `Publication` exposes `connection_id`, `packet_id`, `messages` (a tuple of its receipts),
 `status` (`"pending"`, `"emitted"` or `"cancelled"`), `puback_at` (`Duration` or `None`) and
 `release()`. Obtain it from `message.publication` or select one from `broker.pending`; for
-type annotations, import `Publication`, like `Message` and `Client`, from `esp32tl.net.mqtt`.
+type annotations, import `Publication`, like `Message` and `MqttClient`, from `esp32tl`.
 Successful release of a pending handle returns `True` once. If the stream closes during the
 write (for example on a TLS write error), the handle is cancelled and release returns `False`.
 Releasing an emitted or cancelled handle also returns `False` and sends nothing. These
@@ -947,7 +947,7 @@ back and `close()` closes. `network.ip.udp[port]` accepts a datagram service imp
 Wrap any stream service in TLS by supplying a per-test CA:
 
 ```python
-from esp32tl.net.tls import CertificateAuthority
+from esp32tl import CertificateAuthority
 
 network = modem.network()
 ca = CertificateAuthority(["broker.example"])
