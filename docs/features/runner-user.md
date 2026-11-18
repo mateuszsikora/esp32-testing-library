@@ -1,7 +1,7 @@
 # esp32tl-runner
 
-`esp32tl-runner` runs an unmodified image for the classic ESP32, the ESP32-S3, the ESP32-C3 or the
-ESP32-C6 in the esp32sim emulator, on the emulated clock, and prints the guest's UART0 console on
+`esp32tl-runner` runs an unmodified image for the classic ESP32, the ESP32-S3, the ESP32-C3, the
+ESP32-C6, the ESP32-P4 or the ESP32-S31 in the esp32sim emulator, on the emulated clock, and prints the guest's UART0 console on
 stdout. [Chips](#chips) says what esp32sim models on each of them. With `--board`, it connects to a
 peer, the harness or any program that speaks [the link protocol](../protocol.md), and wires the
 chip's pins to it: the peer sees what the guest sends on its UARTs and the levels it drives on
@@ -31,7 +31,7 @@ ELF that `make setup` fetches:
 ```sh
 B=firmware/hello_world/build
 runner/target/release/esp32tl-runner --chip esp32 \
-  --rom .cache/esp-rom-elfs/20241011/esp32_rev300_rom.elf \
+  --rom .cache/esp-rom-elfs/20260528/esp32_rev300_rom.elf \
   --flash-at 0x1000=$B/bootloader/bootloader.bin \
   --flash-at 0x8000=$B/partition_table/partition-table.bin \
   --flash-at 0x10000=$B/hello_world.bin \
@@ -39,13 +39,26 @@ runner/target/release/esp32tl-runner --chip esp32 \
 ```
 
 The same image built for the ESP32-S3 (`firmware/build.sh --chips hello_world@esp32s3`) has its
-bootloader at 0x0, as on every chip but the classic ESP32 and the S2:
+bootloader at 0x0, as on the ESP32-C3 and the ESP32-C6; the ESP32-P4's and the ESP32-S31's is at
+0x2000, the classic ESP32's and the S2's at 0x1000:
 
 ```sh
 B=firmware/hello_world/build-esp32s3
 runner/target/release/esp32tl-runner --chip esp32s3 \
-  --rom .cache/esp-rom-elfs/20241011/esp32s3_rev0_rom.elf \
+  --rom .cache/esp-rom-elfs/20260528/esp32s3_rev0_rom.elf \
   --flash-at 0x0=$B/bootloader/bootloader.bin \
+  --flash-at 0x8000=$B/partition_table/partition-table.bin \
+  --flash-at 0x10000=$B/hello_world.bin \
+  --max-seconds 5
+```
+
+For the ESP32-P4, built for rev ≥ 3 as ESP-IDF builds by default, with the ROM of that revision:
+
+```sh
+B=firmware/hello_world/build-esp32p4
+runner/target/release/esp32tl-runner --chip esp32p4 \
+  --rom .cache/esp-rom-elfs/20260528/esp32p4_rev300_rom.elf \
+  --flash-at 0x2000=$B/bootloader/bootloader.bin \
   --flash-at 0x8000=$B/partition_table/partition-table.bin \
   --flash-at 0x10000=$B/hello_world.bin \
   --max-seconds 5
@@ -56,16 +69,18 @@ runner/target/release/esp32tl-runner --chip esp32s3 \
 ```text
 usage: esp32tl-runner --chip CHIP --flash-at OFFSET=FILE... --max-seconds S [options]
 
-  --chip CHIP           the chip: esp32 (the classic ESP32), esp32s3, esp32c3 or
-                        esp32c6
+  --chip CHIP           the chip: esp32 (the classic ESP32), esp32s3, esp32c3, esp32c6,
+                        esp32p4 (rev < 3 or rev >= 3, as the images are built) or
+                        esp32s31
   --flash-at OFFSET=FILE   write FILE into flash at OFFSET (hex, 0x optional); repeatable
   --max-seconds S       stop after S emulated seconds: the normal end of a run
   --rom F               the mask ROM ELF; default, as esp32sim's: $ESP32SIM_ROM_DIR,
                         then ~/.espressif/tools/esp-rom-elfs/*/ (newest release first,
-                        not the pinned 20241011: whoever runs the tests passes --rom)
+                        not the pinned 20260528: whoever runs the tests passes --rom)
   --flash-mb N          flash size in MiB: 1, 2, 4, 8 or 16 (default 4)
   --psram-mb N          PSRAM size in MiB (default 0): 0 or 4 on the classic ESP32,
-                        0, 2, 4 or 8 on the ESP32-S3, 0 on the ESP32-C3 and ESP32-C6
+                        0, 2, 4 or 8 on the ESP32-S3, 0, 16 or 32 on the ESP32-P4,
+                        0 or 16 on the ESP32-S31, 0 on the ESP32-C3 and ESP32-C6
   --board socket:PATH   connect to the peer on the Unix socket PATH (docs/protocol.md);
   --board tcp:HOST:PORT   or over TCP. Without --board the chip has nothing on its pins
   --peer-timeout S      how long, in wall seconds, a turn of the peer may take before the
@@ -74,7 +89,9 @@ usage: esp32tl-runner --chip CHIP --flash-at OFFSET=FILE... --max-seconds S [opt
                         need --board
   --console-port uart0|usb   which of the guest's outputs is the console (default uart0):
                         UART0, or the USB-Serial/JTAG controller of the ESP32-S3,
-                        ESP32-C3 and ESP32-C6, whose input is the peer's console_rx
+                        ESP32-C3, ESP32-C6, ESP32-P4 and ESP32-S31, whose input is the
+                        peer's console_rx; so is UART0's on the ESP32-P4 and ESP32-S31,
+                        whose UARTs have no pins in esp32sim
   --sd-spi sclk=N,mosi=N,miso=N,cs=N   an SD card slot on these GPIOs, in SPI mode; empty
                         unless --sd-rw puts a card in it, and the peer's sd_card can
                         put one in or take it out while the guest runs
@@ -99,16 +116,16 @@ usage: esp32tl-runner --chip CHIP --flash-at OFFSET=FILE... --max-seconds S [opt
 
 | Flag | Default | Accepts |
 |---|---|---|
-| `--chip` | none, required | `esp32`, `esp32s3`, `esp32c3` or `esp32c6`, in any case: `--chip esp32p4: not one of esp32, esp32s3, esp32c3, esp32c6` otherwise |
+| `--chip` | none, required | `esp32`, `esp32s3`, `esp32c3`, `esp32c6`, `esp32p4` or `esp32s31`, in any case: `--chip esp32h2: not one of esp32, esp32s3, esp32c3, esp32c6, esp32p4, esp32s31` otherwise |
 | `--flash-at OFFSET=FILE` | none, at least one required | `OFFSET` in hex, with or without a lowercase `0x`; `FILE` is everything after the first `=`. Repeatable; files are written in the order given |
 | `--max-seconds S` | none, required | a finite number above 0; fractions are fine |
 | `--rom F` | the lookup below | a path to the mask ROM ELF |
 | `--flash-mb N` | `4` | `1`, `2`, `4`, `8` or `16` |
-| `--psram-mb N` | `0` | `0`, or a size the chip takes: `4` on the classic ESP32; `2`, `4` or `8` on the ESP32-S3; none on the ESP32-C3 and ESP32-C6. Otherwise `--psram-mb: the ESP32-S3 supports only 0, 2, 4 or 8 MiB, got "3"`, naming the chip |
+| `--psram-mb N` | `0` | `0`, or a size the chip takes: `4` on the classic ESP32; `2`, `4` or `8` on the ESP32-S3; `16` or `32` on the ESP32-P4; `16` on the ESP32-S31; none on the ESP32-C3 and ESP32-C6. Otherwise `--psram-mb: the ESP32-S3 supports only 0, 2, 4 or 8 MiB, got "3"`, naming the chip |
 | `--board` | none: nothing on the chip's pins | `socket:PATH`, a Unix socket path that is not empty, or `tcp:HOST:PORT`, with a host that is not empty and a port from 0 to 65535 (`tcp:[::1]:7000` for IPv6) |
 | `--peer-timeout S` | `60` | `0`, to wait for ever, or a positive number of seconds; fractions are fine. A value that rounds to 0 ns, or is too large for a Rust `Duration` (`1e20`), is a usage error |
 | `--console` | `stdout` | `stdout`; `socket` and `both` only with `--board` |
-| `--console-port` | `uart0` | `uart0`, or `usb` on the ESP32-S3, ESP32-C3 and ESP32-C6: the console is the chip's USB-Serial/JTAG controller ([below](#a-console-on-usb-serialjtag)). On the classic ESP32, `--console-port usb: esp32 has no USB-Serial/JTAG controller` (exit 2); another value, `--console-port: expected uart0 or usb, got "uart1"` |
+| `--console-port` | `uart0` | `uart0`, or `usb` on the ESP32-S3, ESP32-C3, ESP32-C6, ESP32-P4 and ESP32-S31: the console is the chip's USB-Serial/JTAG controller ([below](#a-console-on-usb-serialjtag)). On the classic ESP32, `--console-port usb: esp32 has no USB-Serial/JTAG controller` (exit 2); another value, `--console-port: expected uart0 or usb, got "uart1"` |
 | `--sd-rw IMAGE` | none: an empty slot | a path, valid UTF-8, to an image file of a whole number of 512 KiB units, from 512 KiB to 2 TiB; only with `--sd-spi` |
 | `--sd-spi sclk=N,mosi=N,miso=N,cs=N` | none: no slot | the four pins in any order, each once, four different GPIOs of the chip ([Chips](#chips)); `sclk`, `mosi` and `cs` not input-only (34 to 39 on the classic ESP32) |
 | `--wifi SPEC` | none: no access point | esp32sim's `key=value,...`, every key optional, an empty `SPEC` included: `ssid` (default `esp32sim`), `psk` (also `password` or `pass`; WPA2-PSK with it, open without), `chan` (also `channel` or `ch`; 1 to 14, default 6), `bssid` (default `02:53:49:4d:00:01`). `epoch` is refused. Only with `--board` |
@@ -126,7 +143,7 @@ take their value as the next argument: `--flash-mb=8` is an unknown argument.
 Without `--rom`, the runner looks for the chip's ROM ELF ([Chips](#chips)) in `$ESP32SIM_ROM_DIR`, then in
 `~/.espressif/tools/esp-rom-elfs/*/`, the last directory in name order first, which for the dated
 release directories is the newest. That is esp32sim's own lookup. It does not prefer release
-`20241011`, the one the project pins and `make setup` puts in `.cache/esp-rom-elfs/20241011/`, and
+`20260528`, the one the project pins and `make setup` puts in `.cache/esp-rom-elfs/20260528/`, and
 it does not read `$IDF_TOOLS_PATH`. Pass `--rom` when the result has to match a test run: the
 backend always does.
 
@@ -152,7 +169,9 @@ later. The runner tells the peer with an `rxfifo_ovf` warning and counts it in `
 UART's (`frm_err`).
 
 With `--console socket` the guest's console, UART0 unless `--console-port usb`, goes to the peer
-as `console` messages and not to stdout; with `--console both` it goes to both. Messages written
+as `console` messages and not to stdout; with `--console both` it goes to both. On the ESP32-P4
+and the ESP32-S31 UART0 has no pins ([Chips](#chips)): the console comes and goes as on
+USB-Serial/JTAG, below. Messages written
 outside the peer's turn reach the socket within about 20 wall milliseconds, so a peer can read the
 console as it comes.
 
@@ -173,7 +192,7 @@ with `ARDUINO_USB_CDC_ON_BOOT=1` and `ARDUINO_USB_MODE=1`, has `printf` and `Ser
   `uart_tx`. The ROM prints its banner on both, so that peer sees the banner, and stdout too.
 
 ```sh
-esp32tl-runner --chip esp32s3 --rom .cache/esp-rom-elfs/20241011/esp32s3_rev0_rom.elf \
+esp32tl-runner --chip esp32s3 --rom .cache/esp-rom-elfs/20260528/esp32s3_rev0_rom.elf \
   --flash-at 0x0=firmware/console_repl_usb/build-esp32s3/bootloader/bootloader.bin \
   --flash-at 0x8000=firmware/console_repl_usb/build-esp32s3/partition_table/partition-table.bin \
   --flash-at 0x10000=firmware/console_repl_usb/build-esp32s3/console_repl_usb.bin \
@@ -209,7 +228,9 @@ the runner reads the counter `esp_timer_get_time()` reads at every slice boundar
 `uptime`, with the earliest and the latest time the zero can have been. On the classic ESP32 the two
 are up to a millisecond apart, the slice in which ESP-IDF started the counter, some tens of
 milliseconds after the boot's `reset`, and up to two after a load while the counter counts; on the
-ESP32-S3, -C3 and -C6 they are 60 ns apart at most, around the boot's `reset` itself. A stamp the
+ESP32-S3, -C3 and -C6 they are 60 ns apart at most, and on the ESP32-P4 65 ns, around the boot's
+`reset` itself. On the ESP32-S31 the runner sends no `uptime`: esp32sim keeps the rate of its
+counter to itself. A stamp the
 firmware took from its uptime then has a time on the run's clock. When the zero it sent no longer
 holds, because the counter stopped or counts from a zero that may lie before power-on, it sends
 `uptime` with neither. [The protocol](../protocol.md#524-uptime-ext-245) says what the runner reads
@@ -247,7 +268,7 @@ truncate -s 32m card.img
 MTOOLS_SKIP_CHECK=1 mformat -i card.img -T 65536 -h 64 -s 32 ::
 B=firmware/sdspi/build
 runner/target/release/esp32tl-runner --chip esp32 \
-  --rom .cache/esp-rom-elfs/20241011/esp32_rev300_rom.elf \
+  --rom .cache/esp-rom-elfs/20260528/esp32_rev300_rom.elf \
   --flash-at 0x1000=$B/bootloader/bootloader.bin \
   --flash-at 0x8000=$B/partition_table/partition-table.bin \
   --flash-at 0x10000=$B/sd_card.bin \
@@ -298,7 +319,7 @@ with the passphrase `mypassword`, ESP-IDF's defaults for its examples:
 ```sh
 B=firmware/http_request/build
 runner/target/release/esp32tl-runner --chip esp32 \
-  --rom .cache/esp-rom-elfs/20241011/esp32_rev300_rom.elf \
+  --rom .cache/esp-rom-elfs/20260528/esp32_rev300_rom.elf \
   --flash-at 0x1000=$B/bootloader/bootloader.bin \
   --flash-at 0x8000=$B/partition_table/partition-table.bin \
   --flash-at 0x10000=$B/http_request.bin \
@@ -357,7 +378,7 @@ For an ESP-IDF project `app` built in `build/`, the ELF from the same build as t
 
 ```sh
 runner/target/release/esp32tl-runner --chip esp32 \
-  --rom .cache/esp-rom-elfs/20241011/esp32_rev300_rom.elf \
+  --rom .cache/esp-rom-elfs/20260528/esp32_rev300_rom.elf \
   --flash-at 0x1000=build/bootloader/bootloader.bin \
   --flash-at 0x8000=build/partition_table/partition-table.bin \
   --flash-at 0x10000=build/app.bin \
@@ -517,7 +538,9 @@ held turn then, or still running 5 s later, gets one `SIGTERM` once it has said 
 
 `--chip` selects one of esp32sim's machines. Everything above works on each of them, except what
 the last column lists: esp32sim does not model it on that chip. Where a flag asks for it
-(`--wifi-sta`, a PSRAM size), the runner refuses the flag with a usage error (exit 2); deep sleep
+(`--wifi-sta`, a PSRAM size, and on the P4 and the S31 `--wifi`, `--bt` and `--sd-spi`), the
+runner refuses the flag with a usage error (exit 2), for example
+`--sd-spi: esp32p4 tells the board no SPI pins in esp32sim`; deep sleep
 and DMA are the guest's to use, and no flag asks for them. [Issue #229](https://github.com/mateuszsikora/esp32-testing-library/issues/229)
 tracks each gap.
 
@@ -527,6 +550,8 @@ tracks each gap.
 | `esp32s3` | `esp32s3` (two LX7 cores) | 240 MHz | 0 to 21 and 26 to 48 | 3 | `esp32s3_rev0_rom.elf` | deep sleep and its timer wake; GP-SPI RX DMA, so an SD card over ESP-IDF's SPI driver; `--wifi-sta` |
 | `esp32c3` | `esp32c3` (one RISC-V core) | 160 MHz | 0 to 21 | 2 | `esp32c3_rev3_rom.elf` | as the S3, and PSRAM |
 | `esp32c6` | `esp32c6` (one RISC-V core) | 160 MHz | 0 to 30 | 2 | `esp32c6_rev0_rom.elf` | as the C3; `--bt` needs an image built with ESP-IDF v5.5.x, which esp32sim checks |
+| `esp32p4` | `esp32p4`, rev < 3 or rev ≥ 3 as the images are built (two RISC-V cores) | 360 MHz | 0 to 54 | 2 | `esp32p4_rev300_rom.elf` for rev ≥ 3, `esp32p4_rev0_rom.elf` for rev < 3 | deep sleep; the pins of every UART, so no UART route, and UART0's console without its pins; `--sd-spi`; `--wifi`, `--wifi-sta` and `--bt`: the chip has no radio |
+| `esp32s31` | `esp32s31` (two RISC-V cores) | 320 MHz | 0 to 61 but 29 and 41 | 1 (UART0) | `esp32s31_rev0_rom.elf` | as the P4, with no Wi-Fi relay and no Bluetooth in esp32sim |
 
 - **The SD card.** `--sd-spi` and `--sd-rw` are taken on every chip: the card answers the SPI
   transactions the CPU drives through the data buffer, as the first commands of ESP-IDF's `sdspi`
@@ -541,16 +566,41 @@ tracks each gap.
   without its input; the runner sets the pad's reset state at power-on and after every reset
   (GPIO 3 on the classic ESP32, 44 on the S3, 20 on the C3, 17 on the C6), and what the firmware
   writes there afterwards stays.
-- **USB-Serial/JTAG.** The S3, C3 and C6 have the controller, and `--console-port usb` reads and
-  writes it; the classic ESP32 has none. On each of the three the ROM prints its banner on UART0
-  and on the controller alike.
+- **UART0 without pins on the P4 and the S31.** esp32sim tells the board nothing these chips'
+  UARTs send or receive, so no UART has a route the peer can watch: `uart_cfg` never comes, and a
+  `uart_rx` finds no UART. With `--console-port uart0`, the default, the console is what the guest
+  wrote to UART0, on stdout as on the other chips and, with `--console socket` or `both`, as
+  `console` messages stamped with the end of the slice it was written in, at most 1 ms late. The
+  peer's `console_rx` is UART0's input: on the P4 what fits into its 128-byte RX FIFO goes in
+  when the message comes due and the rest at UART0's baud rate, on the S31 one byte per character
+  time at its baud (115200 until the guest sets one) as long as the FIFO has room and UART0 takes
+  it: while its clock or its receiver is off the byte waits. None of it is dropped. Bytes that come due with the board's supply off, or that wait in the S31's queue at
+  a reset, are lost; the first are counted in `stats` as `console_rx_lost`.
+- **The P4's revision.** ESP-IDF v5.5 builds for ESP32-P4 rev ≥ 3 unless
+  `CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y`, and esp32sim models both revisions, which do not run
+  each other's images. The runner reads the image header at the bootloader's flash address,
+  0x2000, from the last `--flash-at` file that covers it (a bootloader of its own, or an image of
+  the whole flash from 0x0), or else the first other file that starts with a P4 image header, and
+  runs the revision it asks for; it says which on stderr:
+  `esp32tl-runner: ESP32-P4 rev ≥ 3 (v3.1), as the images are built` or
+  `esp32tl-runner: ESP32-P4 rev < 3 (v1.0), as the images are built`. An image for the other
+  revision is refused with esp32sim's message, exit 2, for example
+  `--flash-at 0x10000=hello_world.bin: was built for ESP32-P4 rev < v3.0 (max_chip_rev_full=199); this model is rev ≥ 3 (v3.1). Rebuild without CONFIG_ESP32P4_SELECTS_REV_LESS_V3, or run a bootloader and app both built for rev < 3.`
+  Pass the ROM of that revision with `--rom`: with the other one the guest does not boot.
+- **GPIO on the P4 and the S31.** The peer sees every change of a pin the guest drives at its
+  cycle, as on the other chips. A pin made an output at the level it already had, and on the S31
+  a pin's output enable, are reported at the end of the slice they changed in.
+- **USB-Serial/JTAG.** The S3, C3, C6, P4 and S31 have the controller, and `--console-port usb`
+  reads and writes it; the classic ESP32 has none. On each of the S3, C3 and C6 the ROM prints
+  its banner on UART0 and on the controller alike.
 - **Reset causes** are the chip's numbers, as its ROM prints them: 1 is a power-on reset, 5 a
-  wake from deep sleep, 12 a software CPU reset (`esp_restart()`), on all four chips.
+  wake from deep sleep, 12 a software CPU reset (`esp_restart()`), on every chip.
 - **The flash dump with `--bt` on the C6** holds esp32sim's trampoline over
   `esp_bt_controller_init`, which the other chips' dumps do not: esp32sim keeps the C6's copy of
   the code under it to itself.
-- The ESP32-P4 and the ESP32-S31, which esp32sim also emulates, are not here yet:
-  [issue #233](https://github.com/mateuszsikora/esp32-testing-library/issues/233).
+- **Images for the P4 and the S31** need ESP-IDF v5.5 or later for the P4 and v6.1 for the S31
+  (`idf.py --preview set-target esp32s31`): the validation images are built with v5.5.4 and v6.1
+  ([validation firmware](validation-firmware-user.md)).
 
 ## See also
 

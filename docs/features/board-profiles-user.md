@@ -17,18 +17,25 @@ with the reason.
 | `esp32-s3-devkitc` | `esp32s3` (ESP32-S3-DevKitC-1-N8R8) | 8 MB, 8 MB | `console` (UART0, GPIO 43 and 44); `uart.gnss`: UART1, TX GPIO 4, RX GPIO 5, 9600 baud; `lines.echo`: in GPIO 6 (pulled down), out GPIO 7 |
 | `esp32-c3-devkitm` | `esp32c3` (ESP32-C3-DevKitM-1) | 4 MB, none | `console` (UART0, GPIO 21 and 20); `uart.gnss`: UART1, TX GPIO 4, RX GPIO 5, 9600 baud; `lines.echo`: in GPIO 6 (pulled down), out GPIO 7 |
 | `esp32-c6-devkitc` | `esp32c6` (ESP32-C6-DevKitC-1) | 8 MB, none | `console` (UART0, GPIO 16 and 17); `uart.gnss`: UART1, TX GPIO 4, RX GPIO 5, 9600 baud; `lines.echo`: in GPIO 6 (pulled down), out GPIO 7 |
+| `esp32-p4-function-ev-board` | `esp32p4` (ESP32-P4-Function-EV-Board, ESP32-P4NRW32) | 16 MB, 32 MB | `console` (UART0, GPIO 37 and 38, without its pins in the runner); `lines.echo`: in GPIO 6 (pulled down), out GPIO 7 |
+| `esp32-s31-module` | `esp32s31` (a module with an ESP32-S31NRV16) | 16 MB, 16 MB | `console` (UART0, GPIO 58 and 59, without its pins in the runner); `lines.echo`: in GPIO 6 (pulled down), out GPIO 7 |
 | `lilygo-t-a7670g-r2` | `esp32` (ESP32-WROVER-E) | 4 MB, 4 MB | `console`; `uart.modem`: UART1, TX GPIO 26, RX GPIO 27, 115200 baud; `uart.gnss`: UART2, TX GPIO 21, RX GPIO 22, 9600 baud; `sd_card`: SCLK GPIO 14, MOSI GPIO 15, MISO GPIO 2, CS GPIO 13; `lines.modem`, `lines.gnss`, `lines.board` ([control lines](#lilygo-control-lines-and-simulation-limits)) |
 
-The three devkits of the ESP32-S3, ESP32-C3 and ESP32-C6 carry the validation images built for
-their chip. Their `flash_mb` is the module's, 8 MB on the S3's and the C6's, and the esp32sim
+The devkits of the ESP32-S3, ESP32-C3, ESP32-C6, ESP32-P4 and ESP32-S31 carry the validation
+images built for their chip. The ESP32-P4's and the ESP32-S31's have no `[uart.gnss]`: esp32sim
+reports no UART pins on these chips, so a route would only skip its tests
+([esp32sim backend](esp32sim-backend-user.md#the-esp32-p4-and-the-esp32-s31)); Espressif names no
+ESP32-S31 devkit yet, so its profile is a module's. Their `flash_mb` is the module's, 8 MB on the S3's and the C6's, and the esp32sim
 backend gives the chip that flash ([the flash a run gets](#the-flash-a-run-gets)). On these chips esp32sim does not
 model everything it does on the classic ESP32: a test that asks for an SD card or a virtual
 station there is skipped with the reason
 ([esp32sim backend](esp32sim-backend-user.md#chips-other-than-the-classic-esp32)).
 
 Every profile also has `wifi`, the chip's Wi-Fi station, and `bluetooth`, its Bluetooth
-controller: every chip a profile may name has both radios, so a profile does not list them, and they come
-last in a profile's interfaces, in that order
+controller: every chip a profile may name but the ESP32-P4 has both radios, so a profile does not
+list them, and they come last in a profile's interfaces, in that order; on the ESP32-P4, which
+has neither, and on the ESP32-S31, whose radios the runner cannot reach, a test that uses them is
+skipped ([esp32sim backend](esp32sim-backend-user.md#the-esp32-p4-and-the-esp32-s31))
 ([the wifi fixture](pytest-plugin-user.md#the-wifi-fixture),
 [`board.bluetooth`](pytest-plugin-user.md#the-bt-fixture)).
 
@@ -236,8 +243,8 @@ chip = "esp32s3"
 console = "usb-serial-jtag"
 ```
 
-`console` is `"uart0"` by default, and `"usb-serial-jtag"` on the `esp32s3`, `esp32c3` and
-`esp32c6`. On the classic ESP32, which has no such controller, the profile does not load:
+`console` is `"uart0"` by default, and `"usb-serial-jtag"` on the `esp32s3`, `esp32c3`,
+`esp32c6`, `esp32p4` and `esp32s31`. On the classic ESP32, which has no such controller, the profile does not load:
 `my-board.toml: console: the ESP32 has no USB-Serial/JTAG controller; use uart0`. Every profile
 esp32tl ships keeps `uart0`: their devkits have a bridge. To move a test from UART0 to
 USB-Serial/JTAG, add the line to the board's profile, a project-local one or a copy of a shipped
@@ -385,8 +392,8 @@ runs (exit code 2):
 | Message, after `<test id>: ` | When |
 |---|---|
 | `the board_profile marker takes one bundled name or path= (str or pathlib.Path), as in @pytest.mark.board_profile("esp32-devkitc") or @pytest.mark.board_profile(path="boards/test-board.toml"); do not combine them` | No argument, mixed name/path arguments, extra arguments, a non-string name, or a `path` that is not a string or `Path`, is blank, or is `Path("")` or `"."` (the test file's directory) |
-| `no board profile named 'NAME'; the profiles are esp32-c3-devkitm, esp32-c6-devkitc, esp32-devkitc, esp32-s3-devkitc, gps-alarm-clock, lilygo-t-a7670g-r2, sd-data-logger` | The marker names a profile esp32tl does not ship |
-| `no board profile named 'NAME'; the profiles are esp32-c3-devkitm, esp32-c6-devkitc, esp32-devkitc, esp32-s3-devkitc, gps-alarm-clock, lilygo-t-a7670g-r2, sd-data-logger; for a local file, use board_profile(path="NAME")` | The positional name contains `/` or ends in `.toml`, so it looks like a local file |
+| `no board profile named 'NAME'; the profiles are esp32-c3-devkitm, esp32-c6-devkitc, esp32-devkitc, esp32-p4-function-ev-board, esp32-s3-devkitc, esp32-s31-module, gps-alarm-clock, lilygo-t-a7670g-r2, sd-data-logger` | The marker names a profile esp32tl does not ship |
+| `no board profile named 'NAME'; the profiles are esp32-c3-devkitm, esp32-c6-devkitc, esp32-devkitc, esp32-p4-function-ev-board, esp32-s3-devkitc, esp32-s31-module, gps-alarm-clock, lilygo-t-a7670g-r2, sd-data-logger; for a local file, use board_profile(path="NAME")` | The positional name contains `/` or ends in `.toml`, so it looks like a local file |
 | `<resolved path>: <file>: <loader error>` | A local file is missing, unreadable, invalid TOML or violates the profile schema |
 | `cannot resolve board_profile path <path repr>: <error>` | The local path cannot be resolved |
 

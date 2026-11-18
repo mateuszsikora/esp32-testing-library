@@ -120,17 +120,17 @@ class Tappable(Protocol):
 
 class ConsoleInput(Uart):
     """The console's input on the link: UART0 RX on the wire's RX pin, as `uart_rx`, or, with
-    `usb` and no wire, the USB-Serial/JTAG controller's, as `console_rx`. Output arrives
-    separately in console messages."""
+    `pinless` and no wire, as `console_rx`: the USB-Serial/JTAG controller's, or UART0's on a chip
+    whose UARTs have no pins in esp32sim. Output arrives separately in console messages."""
 
-    def __init__(self, *args: Any, usb: bool = False, **kwargs: Any) -> None:
+    def __init__(self, *args: Any, pinless: bool = False, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self._usb = usb
+        self._pinless = pinless
         self._pending: list[Output] = []
 
     @property
-    def usb_console(self) -> bool:
-        return self._usb
+    def pinless_console(self) -> bool:
+        return self._pinless
 
     def write(self, t: int, data: bytes) -> None:
         if data:

@@ -5,7 +5,9 @@
 pub mod esp32;
 pub mod esp32c3;
 pub mod esp32c6;
+pub mod esp32p4;
 pub mod esp32s3;
+pub mod esp32s31;
 
 use crate::cli;
 use crate::hci;
@@ -30,6 +32,17 @@ pub struct Profile {
     pub input_only: u64,
     /// How many UARTs it has: routes of the others are never enabled.
     pub uarts: usize,
+    /// Whether esp32sim tells the board every byte a UART sends, with its route, and the run
+    /// loop reads every route (`uart_tx`, `uart_route`). Without them no UART has pins: the
+    /// console on UART0 is the bytes esp32sim drains from its TX FIFO, stamped with the end of
+    /// the slice they were sent in, and the peer's `console_rx` goes into its RX FIFO without
+    /// being dropped: as far as the FIFO has room at once and the rest at UART0's baud rate on the
+    /// P4, a byte per character time on the S31 (`Guest::take_uart0_console`,
+    /// `Guest::uart0_console_input`).
+    pub uart_pins: bool,
+    /// Whether `--sd-spi`, an SD card slot on the board's SPI pins, is there: esp32sim tells
+    /// the board the pins of each SPI transaction (`spi_transfer_pins`).
+    pub sd_spi: bool,
     /// Whether `--wifi-sta`, a virtual station joining the guest's access point, is there.
     pub wifi_station: bool,
     /// Whether `--wifi`, a virtual access point, is there.
@@ -45,11 +58,13 @@ pub struct Profile {
 }
 
 /// Every chip `--chip` takes, in the order the usage lists them.
-pub const ALL: [&Profile; 4] = [
+pub const ALL: [&Profile; 6] = [
     &esp32::PROFILE,
     &esp32s3::PROFILE,
     &esp32c3::PROFILE,
     &esp32c6::PROFILE,
+    &esp32p4::PROFILE,
+    &esp32s31::PROFILE,
 ];
 
 /// The chip named `name`, in any case.

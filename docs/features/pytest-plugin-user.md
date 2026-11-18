@@ -449,9 +449,10 @@ def test_the_count_survives_a_power_cut(board: Board):
   counter, after the ROM, the bootloader and the application's start-up, some tens of milliseconds
   after `boot.at`: for `firmware/persistence`'s first boot, between 48 and 49 ms after power-on. A
   load while it counts is known to within two milliseconds. On the ESP32-S3, -C3 and -C6 the zero is
-  known to within 60 ns, and `earliest ≤ boot.at ≤ latest`: esp32sim does not model the
+  known to within 60 ns, on the ESP32-P4 within 65 ns, and `earliest ≤ boot.at ≤ latest`: esp32sim does not model the
   application's reset of the counter, which counts from the reset; on the chip the zero comes at the
-  application's start, as on the classic ESP32. After a load while the counter counts, `uptime_zero`
+  application's start, as on the classic ESP32. On the ESP32-S31 `uptime_zero` stays `None`: the
+  runner cannot tell the rate its counter counts at. After a load while the counter counts, `uptime_zero`
   is still the zero from before the load for up to two slices of the run, a millisecond each: a
   stamp the firmware sent in them, put on the board's clock with it, is off by what the load
   changed, for ESP-IDF's load after a light sleep, which makes up for the time asleep, by what the
@@ -555,7 +556,9 @@ the adapter, and `board.power_off()`, `board.boots`, `board.next_boot()` and
 `console` is the firmware's console, read and written on the board's clock: its UART0, or the
 chip's USB-Serial/JTAG controller on a board profile with `console = "usb-serial-jtag"`
 ([board profiles](board-profiles-user.md#a-console-on-usb-serialjtag)), with the same methods either
-way:
+way. On the ESP32-P4 and the ESP32-S31, UART0 is the console without its pins: what the test writes
+goes into the firmware's UART0 from the board's time it wrote it on, as fast as UART0 takes it,
+and the output's times are those of the runner's slices, at most 1 ms late ([esp32sim backend](esp32sim-backend-user.md#the-esp32-p4-and-the-esp32-s31)):
 
 - `console.expect(pattern, timeout=30, *, return_what_before_match=False)` lets the board run until
   `pattern` appears on the console after the last match, for at most `timeout` of the board's time,

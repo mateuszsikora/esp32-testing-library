@@ -16,6 +16,8 @@ pub const PROFILE: Profile = Profile {
     gpios: (1 << 31) - 1,
     input_only: 0,
     uarts: 2,
+    uart_pins: true,
+    sd_spi: true,
     wifi_station: false,
     wifi: true,
     bt: true,

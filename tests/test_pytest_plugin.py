@@ -324,8 +324,8 @@ def test_a_bundled_name_that_looks_like_a_path_suggests_path(
         ('name = "wrong"\nchip = "esp32"', "*name: 'wrong' is not the file's name, 'local'*"),
         ('name = "local"', "*missing chip*"),
         (
-            'name = "local"\nchip = "esp32p4"',
-            "*chip: 'esp32p4' is not one of esp32, esp32s3, esp32c3, esp32c6*",
+            'name = "local"\nchip = "esp32h2"',
+            "*chip: 'esp32h2' is not one of esp32, esp32s3, esp32c3, esp32c6, esp32p4, esp32s31*",
         ),
         (
             'name = "local"\nchip = "esp32"\n[uart.gnss]\nport = 1\ntx = 4\nrx = 4\nbaud = 9600',
@@ -1149,7 +1149,7 @@ def fake_runner(pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch) -> p
     runner.write_text(FAKE_RUNNER)
     runner.chmod(0o755)
     (pytester.path / "rom.elf").write_bytes(
-        (ROOT / ".cache/esp-rom-elfs/20241011/esp32_rev300_rom.elf").read_bytes()
+        (ROOT / ".cache/esp-rom-elfs/20260528/esp32_rev300_rom.elf").read_bytes()
     )
     monkeypatch.setenv("ESP32TL_RUNNER", str(runner))
     monkeypatch.setenv("ESP32TL_ROM", str(pytester.path / "rom.elf"))

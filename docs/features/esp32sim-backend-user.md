@@ -6,7 +6,8 @@ is the default backend behind the `board`, `console`, `gnss`, `lines` and `sd_ca
 with `[esp32sim]` in each test id ([pytest plugin](pytest-plugin-user.md)). A real board is selected
 explicitly through the [serial backend](serial-backend-user.md). The emulator runs an unmodified
 ESP-IDF or PlatformIO build for the board profile's chip: the classic ESP32, the ESP32-S3, the
-ESP32-C3 or the ESP32-C6 ([chips other than the classic ESP32](#chips-other-than-the-classic-esp32)).
+ESP32-C3, the ESP32-C6, the ESP32-P4 or the ESP32-S31
+([chips other than the classic ESP32](#chips-other-than-the-classic-esp32)).
 
 ## What it needs
 
@@ -15,11 +16,14 @@ ESP32-C3 or the ESP32-C6 ([chips other than the classic ESP32](#chips-other-than
   `RUNNER_PROFILE=dev` build in `runner/target/debug/esp32tl-runner`. It must be an executable
   file.
 - **The ROM ELF** of the board's chip. In an editable checkout,
-  `.cache/esp-rom-elfs/20241011/esp32_rev300_rom.elf` for the classic ESP32,
-  `esp32s3_rev0_rom.elf`, `esp32c3_rev3_rom.elf` or `esp32c6_rev0_rom.elf` beside it for the
-  others, which `make setup` (or `make rom-elf`) puts there. `ESP32TL_ROM=PATH` names another for
-  the classic ESP32, `ESP32TL_ROM_ESP32S3`, `ESP32TL_ROM_ESP32C3` and `ESP32TL_ROM_ESP32C6` for the
-  others. The backend
+  `.cache/esp-rom-elfs/20260528/esp32_rev300_rom.elf` for the classic ESP32,
+  `esp32s3_rev0_rom.elf`, `esp32c3_rev3_rom.elf`, `esp32c6_rev0_rom.elf` or
+  `esp32s31_rev0_rom.elf` beside it for the others, and for the ESP32-P4 the ROM of the revision
+  the build is for: `esp32p4_rev300_rom.elf` for rev ≥ 3, ESP-IDF's default, `esp32p4_rev0_rom.elf`
+  for a build with `CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y`. `make setup` (or `make rom-elf`) puts
+  them there. `ESP32TL_ROM=PATH` names another for the classic ESP32, `ESP32TL_ROM_ESP32S3`,
+  `ESP32TL_ROM_ESP32C3`, `ESP32TL_ROM_ESP32C6`, `ESP32TL_ROM_ESP32P4`,
+  `ESP32TL_ROM_ESP32P4_REV0` and `ESP32TL_ROM_ESP32S31` for the others. The backend
   always hands this file to the runner, so the runner's own ROM lookup is not used
   ([where the runner looks for it](runner-user.md#where-the-rom-comes-from)).
 - **An ESP-IDF or a PlatformIO build** in the directory selected by
@@ -314,19 +318,46 @@ What esp32sim does not model on these chips, issue
 | Deep sleep | The firmware goes to sleep and never wakes: `board.wait_for_wake` raises when its time is up, and the console says nothing more |
 | Bluetooth on the C6 | `bt` on an image built with ESP-IDF v5.3.6 fails at `board.power_on()`: esp32sim's C6 hooks want v5.5.x (`--bt …: C6 BLE requires esp_app_desc.idf_ver v5.5.x, got "v5.3.6"`) |
 
+### The ESP32-P4 and the ESP32-S31
+
+A board profile whose `chip` is `esp32p4` or `esp32s31` runs on esp32sim's machine for it;
+esp32tl ships `esp32-p4-function-ev-board` and `esp32-s31-module`. The P4's build may be for
+either silicon revision: the runner runs the one its bootloader's header asks for, and the
+backend gives it that revision's ROM. On both chips the console, on UART0 or on USB-Serial/JTAG,
+the lines, `board.nvs(...)` and `board.flash()`, `board.reset()` and the power cycle, and PSRAM work
+as on the classic ESP32 ([tests](../../tests/test_chips.py)). The firmware needs ESP-IDF v5.5 or
+later for the P4 and v6.1 for the S31.
+
+esp32sim tells esp32tl nothing these chips' UARTs send or receive on their pins. The console on
+UART0 works all the same, without its pins: what the test writes goes into the firmware's UART0
+from the board's time it was written on, as fast as UART0's receive FIFO and baud rate take it,
+and none of it is dropped, except what the firmware has not read yet when the chip resets, as on
+a real board; the output's times are those of the runner's slices, at most 1 ms after the
+firmware wrote it. What the test writes while the board's supply is off is lost, and the link's report says how much
+(`console without pins: 5 bytes of console_rx lost with the board's supply off`). What does not
+work is skipped at the call that asks for it:
+
+| What | On the P4 | On the S31 |
+|---|---|---|
+| A UART route (`gnss`, `modem`, `board.uart(...)`) | `esp32sim: uart.gnss on esp32p4: esp32sim's ESP32-P4 tells the board nothing its UARTs send or receive on their pins (#229, G6)` | the same, `(#229, G7)` |
+| An SD card (`sd_card`) | `esp32sim's ESP32-P4 tells the board no SPI pins (#229, G6)` | `esp32sim's ESP32-S31 tells the board no SPI pins (#229, G7)` |
+| Wi-Fi (`wifi`) | `the ESP32-P4 has no Wi-Fi of its own, and esp32sim's co-processor for it is not in the runner` | `esp32sim's ESP32-S31 has no Ethernet relay for the test's network (#229, G7)` |
+| Bluetooth (`bt`) | `the ESP32-P4 has no Bluetooth` | `esp32sim models no Bluetooth on the ESP32-S31` |
+| Deep sleep | Not modelled by esp32sim; no validation image sleeps there. TODO(owner): what a firmware that sleeps sees, not measured | the same |
+
 On the S3 and the C3, `bt` is the firmware's controller: a BLE host gets through its start-up and
 advertises (`bt.unknown_commands()` stays empty), and `bt.tap(path)` records its HCI. esp32tl's
 own Bluetooth peers are Bluetooth Classic devices, which a BLE-only chip cannot reach, so a test
 cannot yet scan for the firmware or connect to it:
 [issue #234](https://github.com/mateuszsikora/esp32-testing-library/issues/234). A boot's reason
 names the chip's reset cause with the classic ESP32's names (`boot N: SW_CPU_RESET (reset cause
-12)`): the numbers 1, 3, 5 and 12 mean the same on all four chips, a power-on, a software system
+12)`): the numbers 1, 3, 5 and 12 mean the same on every chip, a power-on, a software system
 reset, a wake from deep sleep and `esp_restart()`.
 
 ### A console on USB-Serial/JTAG
 
 With `console = "usb-serial-jtag"` in the board profile
-([board profiles](board-profiles-user.md#a-console-on-usb-serialjtag)), on the S3, C3 or C6, the
+([board profiles](board-profiles-user.md#a-console-on-usb-serialjtag)), on the S3, C3, C6, P4 or S31, the
 console is the chip's USB-Serial/JTAG controller: the backend starts the runner with
 `--console-port usb`, `board.console` reads what the firmware writes there and `write`, `sendline`
 and the expects work as on UART0, and `board.console_output` and `console.lines()` are its bytes.
@@ -334,7 +365,7 @@ What the test writes reaches the firmware whole, at the board's time it was writ
 baud, and a line longer than one 64-byte USB packet arrives whole (`tests/test_usb_console.py`,
 Arduino's HWCDC). What the test writes while the board's supply is off is lost, as on a real
 board with no USB device there, and the link's report says how much:
-`USB-Serial/JTAG console: 5 bytes of console_rx lost with the board's supply off`. The output's
+`console without pins: 5 bytes of console_rx lost with the board's supply off`. The output's
 times are those of the runner's slices, at most 1 ms after the firmware wrote it
 ([protocol 5.7](../protocol.md#57-console)).
 
@@ -372,7 +403,7 @@ its body instead, as `BackendError: cannot ...`, without the prefix:
 | `no rom at {path}: run make setup in a checkout, or esp32tl runtime prepare` | `ESP32TL_ROM` (or the chip's `ESP32TL_ROM_<CHIP>`) names a missing file: point it at the chip's ROM ELF |
 | `no rom at {path}: run make rom-elf in {checkout}` | esp32tl runs from a checkout that has not fetched the ROM ELFs: run `make rom-elf` there |
 | `unreleased esp32tl: installed from {source}, not from release v{version}, ...` | esp32tl comes from a git commit other than the release's tag, or from a source directory, and the backend would take the prepared release's runner: build the commit's runner and point `ESP32TL_RUNNER` at it, or install its checkout editable ([an unreleased commit](runtime-user.md#test-an-unreleased-commit)) |
-| `…; set {variable} to the {rom} make rom-elf puts in a checkout's .cache/esp-rom-elfs/20241011/: esp32tl runtime prepare installs nothing for an unreleased esp32tl` | The ROM of the board's chip is not in the prepared cache of an unreleased esp32tl, or the cache does not match it: set the variable named, as `ESP32TL_ROM_ESP32S3` ([an unreleased commit](runtime-user.md#test-an-unreleased-commit)) |
+| `…; set {variable} to the {rom} make rom-elf puts in a checkout's .cache/esp-rom-elfs/20260528/: esp32tl runtime prepare installs nothing for an unreleased esp32tl` | The ROM of the board's chip is not in the prepared cache of an unreleased esp32tl, or the cache does not match it: set the variable named, as `ESP32TL_ROM_ESP32S3` ([an unreleased commit](runtime-user.md#test-an-unreleased-commit)) |
 | `bluetooth: {build} holds no ELF of the application, whose symbols the runner's --bt needs` | At the `bt` fixture, or in the test body at the first `board.bluetooth`, without the prefix: the build directory has no `.elf` file, or a PlatformIO one no `firmware.elf`; build the app again, or keep its ELF beside the image |
 | `cannot listen on {path}: {reason}` | At `board.power_on()`, which raises `BackendError` in the test body: the backend cannot bind the link's socket in a new directory under the system's temporary directory or `/tmp`; check that it is writable |
 | `cannot start {runner}: {reason}` | At `board.power_on()`, which raises `BackendError` in the test body: the runner exists but the system cannot run it, for example `Exec format error` |

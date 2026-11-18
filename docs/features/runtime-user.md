@@ -35,7 +35,7 @@ Other architectures, Windows and musl Linux have no prebuilt runtime.
 
 `esp32tl runtime prepare` explicitly downloads the version-matched runner and JSON manifest from
 `mateuszsikora/esp32-testing-library` release `v<package version>`, and the ROM archive directly
-from Espressif's pinned `20241011` release. Nothing downloads during import or pytest. The ROM
+from Espressif's pinned `20260528` release. Nothing downloads during import or pytest. The ROM
 is not redistributed in our artifacts; this change makes no assertion of permission to
 redistribute Espressif's ROM. Existing upstream download terms apply.
 
@@ -46,13 +46,17 @@ remove the named version/platform directory and rerun preparation to repair it. 
 never exposes a partial installation. Concurrent preparations accept only a verified winner.
 
 An installation holds the runner and the ROM ELF of every chip it runs: `esp32_rev300_rom.elf`
-(the classic ESP32), `esp32s3_rev0_rom.elf`, `esp32c3_rev3_rom.elf` and `esp32c6_rev0_rom.elf`,
-each pinned by its SHA-256 in `esp32tl.runtime.ROMS`.
+(the classic ESP32), `esp32s3_rev0_rom.elf`, `esp32c3_rev3_rom.elf`, `esp32c6_rev0_rom.elf`,
+`esp32p4_rev300_rom.elf` and `esp32p4_rev0_rom.elf` (the ESP32-P4 rev ≥ 3 and rev < 3, for builds
+of either revision) and `esp32s31_rev0_rom.elf`, each pinned by its SHA-256 in
+`esp32tl.runtime.ROMS`.
 
 Lookup is per file: explicit `ESP32TL_RUNNER`, and for the ROM of the board's chip `ESP32TL_ROM`
-(the classic ESP32) or `ESP32TL_ROM_ESP32S3`, `ESP32TL_ROM_ESP32C3`, `ESP32TL_ROM_ESP32C6`; then the
+(the classic ESP32) or `ESP32TL_ROM_ESP32S3`, `ESP32TL_ROM_ESP32C3`, `ESP32TL_ROM_ESP32C6`,
+`ESP32TL_ROM_ESP32P4` (the P4's rev ≥ 3 ROM), `ESP32TL_ROM_ESP32P4_REV0` (its rev < 3 ROM, for a
+build with `CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y`), `ESP32TL_ROM_ESP32S31`; then the
 source checkout's `runner/target/release/esp32tl-runner` and
-`.cache/esp-rom-elfs/20241011/<rom>` when `runner/Cargo.toml` exists next to the source package,
+`.cache/esp-rom-elfs/20260528/<rom>` when `runner/Cargo.toml` exists next to the source package,
 otherwise the user cache.
 A missing checkout build is an error, not a fallback to a stale cached release; use `make setup`.
 Explicit paths must exist and are verified too. Runner version and esp32sim revision must match
@@ -92,14 +96,14 @@ Rust nor network access. Cache contents must be trusted just like installed exec
 
 An esp32tl installed from a commit that is not a release still carries the last release's version,
 but the release's runner need not run it: its link and its command line may have changed since,
-as the ESP32-S3, ESP32-C3 and ESP32-C6 came after v0.1.0. Both checks would pass, version and
+as the ESP32-S3, ESP32-C3, ESP32-C6, ESP32-P4 and ESP32-S31 came after v0.1.0. Both checks would pass, version and
 esp32sim revision, and the run would fail at its first turn. So esp32tl reads where pip installed
 it from, the `direct_url.json` pip writes into the installed distribution (PEP 610). For a commit
 of a git repository or a source directory, editable or not, `esp32tl runtime prepare` downloads
 nothing and exits 2, and the backend does not take the cached runner. Both say:
 
 ```text
-unreleased esp32tl: installed from {source}, not from release v{version}, whose runner need not match it; run make build-runner rom-elf in {checkout}, then set ESP32TL_RUNNER to its runner/target/release/esp32tl-runner, and ESP32TL_ROM, ESP32TL_ROM_ESP32S3, ESP32TL_ROM_ESP32C3, ESP32TL_ROM_ESP32C6 to the ROM ELFs in its .cache/esp-rom-elfs/20241011/
+unreleased esp32tl: installed from {source}, not from release v{version}, whose runner need not match it; run make build-runner rom-elf in {checkout}, then set ESP32TL_RUNNER to its runner/target/release/esp32tl-runner, and ESP32TL_ROM, ESP32TL_ROM_ESP32S3, ESP32TL_ROM_ESP32C3, ESP32TL_ROM_ESP32C6, ESP32TL_ROM_ESP32P4, ESP32TL_ROM_ESP32P4_REV0, ESP32TL_ROM_ESP32S31 to the ROM ELFs in its .cache/esp-rom-elfs/20260528/
 ```
 
 `{source}` and `{checkout}` are `commit {commit} of {url}` and `a checkout of that commit`, or
@@ -118,7 +122,7 @@ pin rejects that manifest. A ROM the cache cannot give then names its variable, 
 `invalid runtime manifest …` or `invalid checksum or missing file: {path}`), followed by
 
 ```text
-set {variable} to the {rom} make rom-elf puts in a checkout's .cache/esp-rom-elfs/20241011/: esp32tl runtime prepare installs nothing for an unreleased esp32tl
+set {variable} to the {rom} make rom-elf puts in a checkout's .cache/esp-rom-elfs/20260528/: esp32tl runtime prepare installs nothing for an unreleased esp32tl
 ```
 
 To test an unreleased commit from your project, build its runner and ROMs in a checkout of it
@@ -134,12 +138,14 @@ pytest tests/
 ```
 
 An editable install finds the checkout's `runner/target/release/esp32tl-runner` and
-`.cache/esp-rom-elfs/20241011/` itself, with no variable. Installed any other way from the commit,
+`.cache/esp-rom-elfs/20260528/` itself, with no variable. Installed any other way from the commit,
 as `python -m pip install "esp32tl @ git+https://github.com/mateuszsikora/esp32-testing-library@<commit>"`,
 it needs `ESP32TL_RUNNER` set to the checkout's runner, and the ROM of each chip the tests run:
 `ESP32TL_ROM` (`esp32_rev300_rom.elf`), `ESP32TL_ROM_ESP32S3` (`esp32s3_rev0_rom.elf`),
-`ESP32TL_ROM_ESP32C3` (`esp32c3_rev3_rom.elf`) and `ESP32TL_ROM_ESP32C6`
-(`esp32c6_rev0_rom.elf`), each in the checkout's `.cache/esp-rom-elfs/20241011/`, unless a
+`ESP32TL_ROM_ESP32C3` (`esp32c3_rev3_rom.elf`), `ESP32TL_ROM_ESP32C6`
+(`esp32c6_rev0_rom.elf`), `ESP32TL_ROM_ESP32P4` (`esp32p4_rev300_rom.elf`),
+`ESP32TL_ROM_ESP32P4_REV0` (`esp32p4_rev0_rom.elf`, for a P4 build for rev < 3) and
+`ESP32TL_ROM_ESP32S31` (`esp32s31_rev0_rom.elf`), each in the checkout's `.cache/esp-rom-elfs/20260528/`, unless a
 prepared cache of the release holds them as above.
 
 ## Integrity and release maintenance

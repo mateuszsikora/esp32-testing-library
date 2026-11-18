@@ -10,9 +10,13 @@
 #
 #   firmware/build.sh [--shard K/N] [IMAGE...]     all validation images when none is named
 #   firmware/build.sh --examples [--shard K/N] [NAME...]     all examples when none is named
-#   firmware/build.sh --chips [--shard K/N] [IMAGE@CHIP...]     all of them when none is named
+#   firmware/build.sh --chips [--chip CHIP,...] [--shard K/N] [IMAGE@CHIP...]     all of them
+#       when none is named; --chip keeps those of the chips it names, so that CI can build each
+#       ESP-IDF version's images on a runner of their own
 #
-# The build runs in ESP-IDF's container, pinned by digest. IDF_LOCAL=1 builds
+# The build runs in ESP-IDF's container, pinned by digest: one ESP-IDF version
+# per chip (container_of), v5.3.6 for all but the ESP32-P4 (v5.5.4) and the
+# ESP32-S31 (v6.1), whose images run in a container of their own. IDF_LOCAL=1 builds
 # with the ESP-IDF of the calling shell instead (export.sh sourced), for
 # iteration; goldens come from the container build only, because a local IDF
 # need not be the pinned one (plan §7). Every build directory records how it
@@ -32,6 +36,13 @@ set -eu
 
 IDF_VERSION=v5.3.6
 CONTAINER=espressif/idf:$IDF_VERSION@sha256:cee52f0c4fdaf088992a7a739f5993154e95cf1d3ab61c24f5b40e6d56a3a070
+# The ESP32-P4 needs ESP-IDF v5.5.x: v5.3.6's images do not get past the ROM
+# in esp32sim, and v5.5.4 is the release esp32sim checks its P4 against.
+P4_IDF_VERSION=v5.5.4
+P4_CONTAINER=espressif/idf:$P4_IDF_VERSION@sha256:b9f2d6ea1c19e0c9f7959bdb74a9e3c775642f9d0f3b841937c5fa3363db892b
+# The ESP32-S31 is a target of ESP-IDF v6.1 on, as a preview.
+S31_IDF_VERSION=v6.1
+S31_CONTAINER=espressif/idf:$S31_IDF_VERSION@sha256:81893c71bb5e570088901f21def8684c25cd2a9020281bd01b843a7655edb18c
 IMAGES="hello_world console_repl nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request http_server persistence ota_state timer_wake deep_sleep bt_spp_initiator bt_spp_initiator_psram hello_world_8mb"
 # The images of the other chips: what their tests in tests/test_chips.py run.
 CHIP_IMAGES=
@@ -44,11 +55,30 @@ CHIP_IMAGES="$CHIP_IMAGES hello_world_psram@esp32s3 gatt_server@esp32s3 gatt_ser
 CHIP_IMAGES="$CHIP_IMAGES hello_world_8mb@esp32s3 hello_world_8mb@esp32c3 hello_world_8mb@esp32c6"
 # The console on USB-Serial/JTAG, which the classic ESP32 does not have.
 CHIP_IMAGES="$CHIP_IMAGES console_repl_usb@esp32s3 console_repl_usb@esp32c3 console_repl_usb@esp32c6"
+# The ESP32-P4 and the ESP32-S31: what esp32sim models of them. hello_world_rev1
+# is the P4's hello_world for chip revisions below v3.0.
+for chip in esp32p4 esp32s31; do
+	for image in hello_world console_repl console_repl_usb gpio_echo nvs_reader hello_world_psram; do
+		CHIP_IMAGES="$CHIP_IMAGES $image@$chip"
+	done
+done
+CHIP_IMAGES="$CHIP_IMAGES hello_world_rev1@esp32p4"
 family=firmware
 if [ "${1:-}" = --chips ]; then
 	shift
 	family=chips
 	IMAGES=$CHIP_IMAGES
+	if [ "${1:-}" = --chip ]; then
+		[ $# -ge 2 ] || { echo "firmware/build.sh: --chip needs CHIP,..." >&2; exit 1; }
+		IMAGES=
+		for entry in $CHIP_IMAGES; do
+			case ",$2," in
+			*",${entry#*@},"*) IMAGES="${IMAGES:+$IMAGES }$entry" ;;
+			esac
+		done
+		[ -n "$IMAGES" ] || { echo "firmware/build.sh: --chip $2: no images for these chips" >&2; exit 1; }
+		shift 2
+	fi
 elif [ "${1:-}" = --examples ]; then
 	shift
 	family=examples
@@ -66,6 +96,23 @@ die() {
 	exit 1
 }
 
+# The container, and so the ESP-IDF version, that builds for the target $1.
+container_of() {
+	case $1 in
+	esp32p4) echo "$P4_CONTAINER" ;;
+	esp32s31) echo "$S31_CONTAINER" ;;
+	*) echo "$CONTAINER" ;;
+	esac
+}
+
+# The ESP-IDF target of an entry: CHIP of IMAGE@CHIP, the classic ESP32 otherwise.
+target_of() {
+	case $1 in
+	*@*) echo "${1#*@}" ;;
+	*) echo esp32 ;;
+	esac
+}
+
 # The ESP-IDF project an image is built from: one of ESP-IDF's examples, or
 # one kept under firmware/ or examples/ (the working directory is the repository's root
 # when this runs).
@@ -75,7 +122,9 @@ project_of() {
 		return
 	fi
 	case $1 in
-	hello_world | hello_world_psram | hello_world_8mb) echo "$IDF_PATH/examples/get-started/hello_world" ;;
+	hello_world | hello_world_psram | hello_world_8mb | hello_world_rev1)
+		echo "$IDF_PATH/examples/get-started/hello_world"
+		;;
 	sdspi) echo "$IDF_PATH/examples/storage/sd_card/sdspi" ;;
 	deep_sleep) echo "$IDF_PATH/examples/system/deep_sleep" ;;
 	gatt_server) echo "$IDF_PATH/examples/bluetooth/bluedroid/ble/gatt_server" ;;
@@ -177,14 +226,30 @@ mkdir -p "$out"
 out=$(cd "$out" && pwd -P)
 cd "$(dirname "$0")/.."
 
-# The host side: start the container, which runs this script again with
-# ESP32TL_CONTAINER naming its image and ESP32TL_HOST_OUT the host's path of
-# /out, for the messages.
+# The host side: start the containers, one for each ESP-IDF version the images
+# need, in the order the images first need them, each of which runs this
+# script again with ESP32TL_CONTAINER naming its image and ESP32TL_HOST_OUT the
+# host's path of /out, for the messages.
 if [ -z "$container" ]; then
-	case $family in
-	examples) set -- --examples "$@" ;;
-	chips) set -- --chips "$@" ;;
-	esac
+	images=$*
+	containers=
+	for entry in $images; do
+		image_container=$(container_of "$(target_of "$entry")")
+		case " $containers " in
+		*" $image_container "*) ;;
+		*) containers="$containers $image_container" ;;
+		esac
+	done
+	for image_container in $containers; do
+		set --
+		for entry in $images; do
+			[ "$(container_of "$(target_of "$entry")")" != "$image_container" ] ||
+				set -- "$@" "$entry"
+		done
+		case $family in
+		examples) set -- --examples "$@" ;;
+		chips) set -- --chips "$@" ;;
+		esac
 	# The repository read-only, so a build cannot write into it except
 	# through /out. hello_world writes nothing into its project directory; a
 	# project under firmware/ that takes components from the component manager
@@ -195,24 +260,26 @@ if [ -z "$container" ]; then
 	# images, but every compile line and working directory names the image's
 	# build directory: CCACHE_BASEDIR and CCACHE_NOHASHDIR leave those out of
 	# the hash, or no image would hit what another compiled.
-	exec docker run --rm --init \
-		--user "$(id -u):$(id -g)" \
-		--env HOME=/tmp \
-		--env CCACHE_BASEDIR=/out \
-		--env CCACHE_NOHASHDIR=1 \
-		--env ESP32TL_CONTAINER="$CONTAINER" \
-		--env FIRMWARE_OUT=/out \
-		--env ESP32TL_HOST_OUT="$out" \
-		--volume "$PWD:/project:ro" \
-		--volume "$out:/out" \
-		--workdir /project \
-		"$CONTAINER" firmware/build.sh "$@"
+		docker run --rm --init \
+			--user "$(id -u):$(id -g)" \
+			--env HOME=/tmp \
+			--env CCACHE_BASEDIR=/out \
+			--env CCACHE_NOHASHDIR=1 \
+			--env ESP32TL_CONTAINER="$image_container" \
+			--env FIRMWARE_OUT=/out \
+			--env ESP32TL_HOST_OUT="$out" \
+			--volume "$PWD:/project:ro" \
+			--volume "$out:/out" \
+			--workdir /project \
+			"$image_container" firmware/build.sh "$@" || exit
+	done
+	exit 0
 fi
 
 idf_version=$(idf.py --version | sed -n 's/^ESP-IDF //p')
 [ -n "$idf_version" ] || die "'idf.py --version' printed no ESP-IDF version"
 if [ "$container" = null ]; then
-	echo "firmware/build.sh: IDF_LOCAL=1, ESP-IDF $idf_version at $IDF_PATH; not for goldens, which come from the container ($IDF_VERSION)" >&2
+	echo "firmware/build.sh: IDF_LOCAL=1, ESP-IDF $idf_version at $IDF_PATH; not for goldens, which come from the containers ($IDF_VERSION; $P4_IDF_VERSION for the ESP32-P4, $S31_IDF_VERSION for the ESP32-S31)" >&2
 fi
 
 json_string() {
@@ -228,6 +295,10 @@ for entry in "$@"; do
 	if [ "$entry" != "$image" ]; then
 		target=${entry#*@}
 		dir=build-$target
+	fi
+	# An image runs in its chip's container only: what it records is how it was built.
+	if [ "$container" != null ] && [ "$container" != "\"$(container_of "$target")\"" ]; then
+		die "$entry is built in $(container_of "$target"), not in $ESP32TL_CONTAINER"
 	fi
 	project=$(project_of "$image")
 	build=$out/$image/$dir
@@ -251,15 +322,24 @@ for entry in "$@"; do
 	firmware:pppos_client | firmware:bt_spp_initiator_psram)
 		defaults="$project/sdkconfig.defaults;$PWD/firmware/$image/sdkconfig.defaults"
 		;;
-	chips:hello_world_psram | *:hello_world_8mb) defaults=$PWD/firmware/$image/sdkconfig.defaults ;;
+	chips:hello_world_psram | *:hello_world_8mb | chips:hello_world_rev1)
+		defaults=$PWD/firmware/$image/sdkconfig.defaults
+		;;
 	*) defaults= ;;
 	esac
-	if [ -n "$defaults" ]; then
-		idf.py -C "$project" -B "$build" -DSDKCONFIG="$build/sdkconfig" -DIDF_TARGET="$target" \
-			"-DSDKCONFIG_DEFAULTS=$defaults" build
-	else
-		idf.py -C "$project" -B "$build" -DSDKCONFIG="$build/sdkconfig" -DIDF_TARGET="$target" build
-	fi
+	# ESP-IDF v6.1 builds for the ESP32-S31 as a preview target only.
+	set --
+	[ "$target" != esp32s31 ] || set -- --preview
+	set -- "$@" -C "$project" -B "$build" -DSDKCONFIG="$build/sdkconfig" -DIDF_TARGET="$target"
+	# ESP-IDF reads <file>.<target> after each file of SDKCONFIG_DEFAULTS, when there is one.
+	[ -z "$defaults" ] || set -- "$@" "-DSDKCONFIG_DEFAULTS=$defaults"
+	# From ESP-IDF v5.5 on, hello_world builds only main and what it requires
+	# (MINIMAL_BUILD), which leaves the PSRAM driver, and CONFIG_SPIRAM with it,
+	# out: the PSRAM image names it.
+	case $image:$target in
+	hello_world_psram:esp32p4 | hello_world_psram:esp32s31) set -- "$@" "-DCOMPONENTS=main;esp_psram" ;;
+	esac
+	idf.py "$@" build
 	[ -f "$build/flasher_args.json" ] || die "$image: the build wrote no flasher_args.json"
 	: >"$build/esp32tl-built"
 	echo "firmware/build.sh: $entry built in $shown (ESP-IDF $idf_version)"

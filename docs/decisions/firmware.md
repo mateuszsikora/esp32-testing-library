@@ -102,6 +102,10 @@ match it downloads `esp-rom-elfs-20241011.tar.gz`.
 **Rejected:** accepting only the `20241011` directory, because it would download a byte-identical
 file next to an install that already has it.
 
+Since #233 the pinned release is `20260528`
+([the ROM release moved to 20260528](#the-rom-release-moved-to-20260528)); the checksums did not
+change.
+
 ## The ROM ELF is copied into .cache/esp-rom-elfs/20241011/
 
 Status: decided (#46)
@@ -110,7 +114,7 @@ The script copies the file (857,500 bytes) to `.cache/esp-rom-elfs/20241011/esp3
 from any working directory. The backend gets one path whether or not ESP-IDF is installed, and an
 ESP-IDF upgrade that removes the old release cannot break it. The release directory stays in the
 path, so `ESP32SIM_ROM_DIR=.cache/esp-rom-elfs/20241011` also works for runs by hand. `make clean`
-keeps `.cache/`.
+keeps `.cache/`. Since #233 the directory is `.cache/esp-rom-elfs/20260528/`.
 
 **Rejected:** a symlink, or using the file in place under the ESP-IDF tools path, because an
 ESP-IDF upgrade can remove the release it points to, and a checkout without ESP-IDF would have no
@@ -499,7 +503,9 @@ have; adding the entries to `IMAGES`, because the classic shards would get longe
 classic image would need a target too.
 
 **Not yet:** other ESP-IDF versions per chip, which the P4, the S31 and the C6's BLE need
-([#233](https://github.com/mateuszsikora/esp32-testing-library/issues/233)).
+([#233](https://github.com/mateuszsikora/esp32-testing-library/issues/233)); since #233 the P4
+and the S31 have theirs ([each chip's images are built with the ESP-IDF its model
+needs](#each-chips-images-are-built-with-the-esp-idf-its-model-needs)), the C6's BLE not yet.
 
 ## The USB-Serial/JTAG console images are a project and an environment of their own
 
@@ -528,3 +534,83 @@ platforms.
 
 **Rejected:** a copy of the sketch in a project of its own, which would drift from the classic
 image; and the S3's HWCDC through `framework = espidf`, which is ESP-IDF's driver again.
+
+## Each chip's images are built with the ESP-IDF its model needs
+
+Status: decided (#233)
+
+The ESP-IDF version is a property of the chip, not of the image: `firmware/build.sh`'s
+`container_of` gives the ESP32-P4 `espressif/idf:v5.5.4` (`P4_CONTAINER`, pinned by digest,
+`sha256:b9f2d6e…`), the ESP32-S31 `espressif/idf:v6.1` (`S31_CONTAINER`, `sha256:81893c7…`), and
+every other chip v5.3.6 (`CONTAINER`). The host side starts one container per version the selected
+entries need, in the order they first need it, each with its own entries; inside, an entry whose
+chip has another container is refused (`<entry> is built in <container>, not in <container>`), so
+that `esp32tl-build.json` never records a container an image was not built for. v6.1 builds the
+S31 only as a preview target, so its entries get `idf.py --preview`. CI builds each new version's
+images in a group of its own, `chips-p4` and `chips-s31`, selected by
+`firmware/build.sh --chips --chip <chips>`, so that a runner pulls one ESP-IDF image, not three; the
+S3, C3 and C6 groups keep their names, which are required checks.
+
+Why these versions: v5.3.6's P4 images never get past the ROM in esp32sim (`rst:0x1
+(POWERON),boot:0x30f (SPI_FAST_FLASH_BOOT)` and nothing more, 2026-11-16), while v5.5.4's
+`hello_world` boots to `app_main` on both of esp32sim's P4 revisions, on both cores, and esp32sim
+checks its P4 against v5.5.3 and v5.5.4 (its `docs/esp32p4.md`, goldens `hello-p4` and
+`hello-p4-rev3`). ESP-IDF v5.x has no S31 target; esp32sim builds its S31 images with v6.1
+(`tools/fetch-s31-firmware.sh`), and v6.1's `hello_world` boots there (2026-11-18).
+
+**Rejected:** a version per image, because every image of a chip runs on the same esp32sim model
+and an image for one chip at two versions would be two images; moving every chip to v5.5.x, which
+would rebuild every classic, S3, C3 and C6 image and its goldens for a change none of their tests
+needs (the C6's BLE, #229 G5, is a decision of its own); one container with several ESP-IDF
+installations, which Espressif does not publish and the project would have to maintain.
+
+**Not yet:** the C6's BLE images at v5.5.x
+([#229](https://github.com/mateuszsikora/esp32-testing-library/issues/229), G5).
+
+## The P4's images are built for rev ≥ 3, and one for rev < 3
+
+Status: decided (#233)
+
+ESP-IDF v5.5.x builds for ESP32-P4 rev ≥ 3 (v3.x) unless `CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y`,
+and the two families do not run each other's images; esp32sim models both. The P4's validation
+images are ESP-IDF's default, rev ≥ 3, what `idf.py set-target esp32p4` builds and what boards sold
+now carry. `hello_world_rev1@esp32p4` is ESP-IDF's `hello_world` with
+`CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y` and `CONFIG_ESP32P4_REV_MIN_100=y`
+(`firmware/hello_world_rev1/sdkconfig.defaults`), so that the runner's choice of the rev < 3 model
+and the backend's choice of its ROM run in CI too.
+
+**Rejected:** every P4 image twice, which would double the P4's build for a difference the runner
+reads from one header field; rev < 3 only, which is no longer what ESP-IDF builds by default.
+
+## hello_world_psram names the PSRAM driver on ESP-IDF v5.5 and later
+
+Status: decided (#233)
+
+From v5.5 on, ESP-IDF's `hello_world` sets `MINIMAL_BUILD`: only `main` and what it requires are
+built, which leaves `esp_psram` out, and `CONFIG_SPIRAM=y` with it (the P4's first
+`hello_world_psram` printed no `esp_psram:` line at all). Its P4 and S31 builds pass
+`-DCOMPONENTS=main;esp_psram`, which ESP-IDF takes in place of the minimal build. The options the
+S3 alone needs, `CONFIG_SPIRAM_MODE_OCT=y` for its devkit's octal PSRAM, moved to
+`firmware/hello_world_psram/sdkconfig.defaults.esp32s3`, which ESP-IDF reads after the file
+`SDKCONFIG_DEFAULTS` names when the target is the S3 (`tools/cmake/kconfig.cmake`); the
+`sdkconfig.defaults` itself has `CONFIG_SPIRAM=y` alone.
+
+**Rejected:** a copy of `hello_world` with `esp_psram` in its `main/CMakeLists.txt`, which would
+drift from ESP-IDF's example; `-DCOMPONENTS` on the S3 too, whose v5.3.6 build has no minimal
+build and whose image would change for nothing.
+
+## The ROM release moved to 20260528
+
+Status: decided (#233)
+
+The ESP32-P4 rev ≥ 3 ROM (`esp32p4_rev300_rom.elf`, ECO5) and the ESP32-S31's
+(`esp32s31_rev0_rom.elf`) are only in esp-rom-elfs `20260528`. Every ELF esp32tl already used is
+byte-identical there to `20241011`'s (the SHA-256 in `esp32tl/runtime.py`'s `ROMS`, checked
+2026-11-18), and so is the P4's rev < 3 ROM (`esp32p4_rev0_rom.elf`, ECO0), so the whole pin moved:
+`scripts/fetch-rom-elf` (`RELEASE=20260528`, the tarball's SHA-256 `caa463d3…fe46`),
+`runtime.ROM_RELEASE`, `ROM_URL` and `ROM_ARCHIVE_SHA`, and the backend's `.cache/` path, which
+now reads `runtime.ROM_RELEASE`. A copy of an ELF from `20241011` under `~/.espressif` still counts:
+it is pinned by its checksum.
+
+**Rejected:** fetching the two new ELFs from `20260528` and keeping `20241011` for the others,
+which would pin two tarballs and two directories for files that are the same bytes.

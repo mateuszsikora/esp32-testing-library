@@ -5,7 +5,7 @@ The crate is `runner/`, package `esp32tl-runner`:
 | Module | What it does |
 |---|---|
 | `runner/src/main.rs` | setup, the run without a peer, and the start and report of the run with one, generic over the chip |
-| `runner/src/chip.rs`, `runner/src/chip/{esp32,esp32s3,esp32c3,esp32c6}.rs` | the chips of `--chip` ([below](#chips)): each one's `Profile`, its `Target` for the setup and its `Guest` for the run loop |
+| `runner/src/chip.rs`, `runner/src/chip/{esp32,esp32s3,esp32c3,esp32c6,esp32p4,esp32s31}.rs` | the chips of `--chip` ([below](#chips)): each one's `Profile`, its `Target` for the setup and its `Guest` for the run loop |
 | `runner/src/cli.rs` | the command line |
 | `runner/src/socket_board.rs` | `SocketBoard`, the `BoardModel` on the chip's pins with `--board`: it records what the guest does, with its bus cycle, for the run loop, holds the GPIO levels the peer drives for the chip to take, hands SPI transactions to the SD card slot, tells it the bus cycle at every tick, and records what the peer's fault rules did |
 | `runner/src/sd_card.rs` | `SdCard`, an SD card in SPI mode, with the peer's fault rules; `Slot`, the slot of `--sd-spi` and the card in it, which the peer's `sd_card` empties and fills; and `CardBoard`, the board that holds the slot alone without `--board` |
@@ -16,7 +16,7 @@ The crate is `runner/`, package `esp32tl-runner`:
 
 Each module's unit tests are in a `tests.rs` of its own: `runner/src/tests.rs` for `main.rs`,
 `runner/src/<module>/tests.rs` for the others. It drives esp32sim through its chip crates,
-`esp32` (the classic chip), `esp32s3`, `esp32c3` and `esp32c6`, and `esp-soc` (the machine, `Soc`, `Stop`, `BoardModel`, `SpiPins`,
+`esp32` (the classic chip), `esp32s3`, `esp32c3`, `esp32c6`, `esp32p4` and `esp32s31`, and `esp-soc` (the machine, `Soc`, `Stop`, `BoardModel`, `SpiPins`,
 `UartRoute`, the Wi-Fi access point and station link of `esp_soc::wifi`, the VHCI session and
 `HciController` of `esp_soc::ble`, and the JSON parser
 `esp_soc::json` the protocol module reads with), and takes the
@@ -49,8 +49,11 @@ its pin, `357b0e5`.
    `SD card slot on ...: empty` line. The slot is a `sd_card::Shared` (`Rc<RefCell<Slot>>`),
    which the board, the session (`Options::card`) and `main` hold.
 3. **Set up.** `main` selects the chip's `Profile` (`chip::select`) and calls `go::<T>` with the
-   chip's machine type, `esp32::Machine`, `esp32s3::Machine`, `esp32c3::Machine` or
-   `esp32c6::Machine`; `setup::<T>` returns the machine at the reset vector. The steps below are
+   chip's machine type, `esp32::Machine`, `esp32s3::Machine`, `esp32c3::Machine`,
+   `esp32c6::Machine`, `chip::esp32p4::P4<RevGe3>` or `P4<RevLt3>` (`main::p4_rev3` reads the
+   header at flash address 0x2000 from the last `--flash-at` file that covers it and the first
+   24 bytes of every other file, and asks `chip::esp32p4::rev3`), or
+   `chip::esp32s31::S31`; `setup::<T>` returns the machine at the reset vector. The steps below are
    the classic chip's; [Chips](#chips) says where the others differ.
    - `Target::new(flash_size)`: `esp32::machine(MAC, flash_size)` with `MAC` =
      `24:6f:28:00:11:22`, the MAC esp32sim's CLI gives the classic chip (`cli/src/lib.rs`), so a
@@ -110,17 +113,19 @@ exists, and `HOME` is read with `var_os`, so it need not be valid UTF-8. The loo
 `$ESP32SIM_ROM_DIR/name` if that is a file, as in esp32sim; otherwise every entry of
 `$HOME/.espressif/tools/esp-rom-elfs/`, sorted by path and tried last first, the first one with
 `name` in it as a file. No `HOME`, or no such directory, is no ROM. `name` is the chip's
-`Soc::ROM_ELF`: `esp32_rev300_rom.elf`, `esp32s3_rev0_rom.elf`, `esp32c3_rev3_rom.elf` or
-`esp32c6_rev0_rom.elf`.
+`Soc::ROM_ELF`: `esp32_rev300_rom.elf`, `esp32s3_rev0_rom.elf`, `esp32c3_rev3_rom.elf`,
+`esp32c6_rev0_rom.elf`, `esp32p4_rev300_rom.elf` (P4 rev ≥ 3), `esp32p4_rev0_rom.elf` (P4 rev < 3)
+or `esp32s31_rev0_rom.elf`.
 
 ## Chips
 
 `chip::Profile` is what the protocol and the run loop need to know of a chip: `name` (`--chip`
 and `chip` in `hello`), `title` (in messages), `cpu_hz`, `gpios` and `input_only` (masks),
-`uarts`, and what esp32sim models on it that a flag asks for (`wifi_station`, `wifi`, `bt`,
+`uarts`, `uart_pins` (whether esp32sim tells the board UART bytes and routes), and what esp32sim
+models on it that a flag asks for (`sd_spi`, `wifi_station`, `wifi`, `bt`, `usb_serial_jtag`,
 `psram_mb`). Deep sleep is no flag: a chip whose `Guest` does not step through it
 (`sleeps_through`, `false` by default) has it as esp32sim does, which on the S3, C3 and C6 never
-wakes. `chip::ALL` lists the four. One process runs one chip, so `main` selects its profile
+wakes. `chip::ALL` lists the six. One process runs one chip, so `main` selects its profile
 once (`chip::select`, a `OnceLock`) before anything reads it, and `chip::selected()` is the
 classic chip's until then, as in the unit tests: `protocol::ns`, `protocol::cycles` and
 `protocol::hello` read the selected chip's clock and name, and the session checks the peer's
@@ -132,8 +137,8 @@ classic chip's until then, as in the unit tests: `protocol::ns`, `protocol::cycl
 `esp_soc::Machine` the chips share (`load_rom`, `write_flash`, `boot_rom`, `run`, `reboot`,
 `console`, `max_cycles`). `Guest`, for the run loop, is implemented for each machine type too.
 `chip::ap_on_air`, `chip::ap_leave` and `chip::flash_without_trampoline` hold what the four chips
-share, and each chip's `Guest` calls them: all four use esp_soc's `StationLink` and, but for the
-C6, esp_soc's VHCI `Ble`, so the classic chip's tests of the access point leaving and of the flash
+with a radio share, and each of their `Guest`s calls them: all four use esp_soc's `StationLink`
+and, but for the C6, esp_soc's VHCI `Ble`, so the classic chip's tests of the access point leaving and of the flash
 dump in `runner/src/session/tests.rs` cover the code the others run.
 
 | | `esp32` | `esp32s3` | `esp32c3` | `esp32c6` |
@@ -147,6 +152,35 @@ dump in `runner/src/session/tests.rs` cover the code the others run.
 | Deep sleep stepped through | yes | no: not modelled | no | no |
 | `flash()` without the trampoline | yes | yes | yes | no: `ble.original_flash` is private to esp32sim's C6 crate |
 | `uptime()` | TIMG0's LACTCONFIG and LACTLOAD through `Device::read` on `periph.timg[0]` (`chip::esp32::lact`): `Counting`, LACTLOAD's 64 bits and a tick of LACT_DIVIDER times `lact::apb_tick`, 3 or 6 bus cycles | `chip::systimer_uptime` on `periph.systimer`, 15 bus cycles a tick | the same, 10 a tick | the same, 10 a tick |
+
+The ESP32-P4 and the ESP32-S31 (`chip::esp32p4`, `chip::esp32s31`) have no radio in esp32sim's
+models that the runner can use, and their buses call none of the board's UART or SPI pin hooks:
+
+| | `esp32p4` | `esp32s31` |
+|---|---|---|
+| Machine | `chip::esp32p4::P4<R>`, `esp_soc::Machine<esp32p4::Esp32p4<R>>`, `R` = `RevLt3` or `RevGe3` by the images' headers (`chip::esp32p4::rev3`) | `chip::esp32s31::S31`, a struct around `esp32s31::Machine` with the console's input queue and the pads last reported |
+| MAC (`Target::new`) | `30:ed:a0:00:11:22` | `10:20:30:40:50:60` |
+| Setup in `Target::new` | `machine_rev::<R>`, `set_flash_size` | `set_flash_size`, `BoardInputs::devkit_sized(flash)` (a W25Q part of the flash's size; without it ESP-IDF aborts at start-up), strap `0x10` (SPI_FAST_FLASH_BOOT), `observe_gpio(true)` |
+| `set_psram_size` | `SocBus::set_psram_size` | `S31Bus::set_psram_size`, and the board inputs' `psram_bytes`, which esp32sim applies again after every reset |
+| UARTs | `periph.uart` × 2; every `uart_route` is `chip::no_uart` | `periph.uart0` alone; every `uart_route` is `chip::no_uart` |
+| The console's output (`take_uart0_console`) | `Console::uart0`, which `drain_console` fills inside `run` | the same |
+| The console's input (`uart0_console_input`) | `SocBus::uart_input(0, …)`: into the RX FIFO as far as it has room, the rest in esp32sim's queue, released at the baud rate | kept in `S31::rx`; `run_until` runs to where the next byte is due and `feed_console` puts it into the FIFO through `S31Bus::uart_input` if the FIFO has room (`RX_FIFO`, 128) and UART0 takes it (it refuses with its clock or receiver off, and the byte stays), then waits a character time, ten bits at `uart_baud()` (`DEFAULT_BAUD` 115200 without one); a reset empties it |
+| GPIO output to the board | the bus's `gpio_output_at` at each level change; after every `run`, `run_until` also hands it the pads' `enable` and `out` with no change, which the socket board reports only if they differ | after every `run`, `report_gpio` hands it each change of `take_gpio_events` (cycle, pin, level) of a pin the chip drove before or drives after, with `Pads::drive` at the run's end, then the enable and output if they changed |
+| `take_gpio_inputs` | `gpio_set_input`, and the GPIO's own `release_input` (the P4's `SocBus::gpio_release_input` is the trait's no-op) | `gpio_set_input`, `gpio_release_input`, then drops the pad events they caused |
+| What `power_on_reset` zeroes | `L2MEM_LOW..L2MEM_HIGH`, `TCM_LOW..TCM_HIGH`, `LP_RAM_LOW..LP_RAM_HIGH` (`esp32p4::bus`), after `reboot`, which keeps them; the ROM is loaded again | nothing more: esp32sim's `reboot` makes `S31Bus` again, SRAM and LP memory with it, and reloads the ROM it kept |
+| Its LP registers after `power_on_reset` | a new `LpAon`, reset cause POWERON | `SocBus::set_reset_cause(1)` |
+| `uptime()` | `esp32p4::systimer_uptime` on `periph.systimer.st`: as `chip::systimer_uptime`, at 22.5 bus cycles a tick (`SYSTIMER_HALF_TICK`, the XTAL divider of the clock tree times 5, in half cycles), the zero to within 23 | `Stopped`, the trait's default: `SystimerS31` keeps its divider private, so the runner sends no `uptime` |
+| Refused at the command line | `--wifi`, `--wifi-sta`, `--bt`, `--sd-spi` | the same |
+| `--psram-mb` | 16 or 32 | 16 |
+
+Every `--flash-at` image goes through `Soc::check_image` before it is written: the P4's refuses an
+image for the other revision (`esp32p4::soc::check_image`), the other chips' take every image.
+
+With `Profile::uart_pins` false, `main` sets `session::Options::uart0_stream` unless
+`--console-port usb`: the run loop then takes the console from `Guest::take_uart0_console` at
+every slice boundary into an `Item::StreamConsole` stamped with the boundary's cycle, as it does
+the USB-Serial/JTAG console's, and accepts `console_rx`, which goes to
+`Guest::uart0_console_input` when it comes due, or to `stats.console_rx_lost` with the supply off.
 
 The S3's bus defers device time (`tick_pending`, `flush_ticks`): its `Guest::run_until` calls
 `flush_ticks` after `run`, so that what the run loop reads at a slice boundary (routes, GPIO,
@@ -332,21 +366,26 @@ With `--console-port usb`, `Options.usb_console` is set. `collect`, at every sli
 before every reset, takes `Guest::take_usb_console` (on the S3, C3 and C6 `std::mem::take` of
 esp-soc's `Console::usb`, the backlog `Machine::drain_console` fills inside `run`, trimmed by
 esp-soc to its last 48 KiB once it passes 64 KiB) and, with `--console socket` or `both`, pushes it
-as `Item::UsbConsole { cycle, data }` at the bus's cycle, after the board's log of the slice.
+as `Item::StreamConsole { cycle, data }` at the bus's cycle, after the board's log of the slice.
 `process_pending` closes the open message and sends `data` as `console` messages, cut after every
 `\n` and at `MAX_DATA`, all at that `t`; UART0's bytes then go out as `console` no more, only as
 `uart_tx` to a peer that watches the TX pin. `take_turn` queues `console_rx` as
-`Input::UsbConsole(data)` (a protocol error without the flag), and `apply_inputs` gives it to
+`Input::Console(data)` (a protocol error without the flag, unless `Options.uart0_stream`), and
+`apply_inputs` gives it to
 `Guest::usb_console_input` when it comes due, which calls esp-soc's `SocBus::serial_input` (with
 `flush_ticks` and `refresh_tick_budget` around it on the S3); with the supply off it adds the length
 to `Stats::console_rx_lost` instead, which is `Some(0)` from the start with the flag and `None`
 without, so `stats` has the field only with it
-([protocol 5.23](../protocol.md#523-console_rx-ext-usb-console)).
+([protocol 5.23](../protocol.md#523-console_rx-ext-usb-console)). With `Options.uart0_stream`, on
+a chip whose UARTs have no pins ([Chips](#chips)), the same goes for UART0: `collect` takes
+`Guest::take_uart0_console` (`Console::uart0`), and `Input::Console` goes to
+`Guest::uart0_console_input`; `stats` has `console_rx_lost` then too.
 
 `Session` runs the protocol over two traits, `Guest` (the machine: cycles, `run_until`,
 `chip_reset`, `power_on_reset`, `idle_until`, `uart_route`, `rx_pending`, `uart_receive`, `uart_frame_error`,
 `gpio_drive`, `take_gpio_inputs`, for `--console-port usb` `take_usb_console` and
-`usb_console_input`, whose defaults are a chip without the controller, and for Wi-Fi `take_eth_frames`, `eth_input`,
+`usb_console_input`, whose defaults are a chip without the controller, for a UART0 without pins
+`take_uart0_console` and `uart0_console_input`, whose defaults are a chip whose UART0 has them, and for Wi-Fi `take_eth_frames`, `eth_input`,
 `wifi_access_point`, `wifi_leave`, `wifi_drops` and `wifi_forget`, whose defaults are a chip
 without Wi-Fi: no frames, nothing taken, nothing attached, left at once, no drops, nothing to
 forget, and `flash`, for `--flash-out`, whose default is an empty slice and which reads `bus.flash`
@@ -842,7 +881,7 @@ handlers: std cannot install one. JSON goes through esp-soc's own parser (`esp_s
 its Cooja link uses) and `esp_soc::web::json_escape`, so the crate adds no JSON crate.
 
 **The esp32sim pin.** esp32sim is not on crates.io, so `runner/Cargo.toml` takes the chip crates
-`esp32`, `esp32s3`, `esp32c3` and `esp32c6`, `esp-soc` (and `emu-core`, for the `Bus` trait whose `tick` runs a deep sleep in long steps and for
+`esp32`, `esp32s3`, `esp32c3`, `esp32c6`, `esp32p4` and `esp32s31`, `esp-soc` (and `emu-core`, for the `Bus` trait whose `tick` runs a deep sleep in long steps and for
 `Stop::CostModelLifecycle` in a test) from
 `https://github.com/mikroverk/esp32sim`, with `esp-periph` for the SD card's image store, each at
 `rev = "357b0e542dfe97d4c62ec4a15c01c4969164448c"`: the merge of mikroverk/esp32sim#362, adding
@@ -891,16 +930,16 @@ Every message starts with `esp32tl-runner: `. Usage errors exit 2 and add a seco
 |---|---|
 | `{flag} needs a value` | a flag that takes a value is the last argument |
 | `unknown argument {flag:?}` | anything not in the usage, `--flash-mb=8` included |
-| `--chip is required (esp32, esp32s3, esp32c3, esp32c6)` | no `--chip` |
-| `--chip {c}: not one of esp32, esp32s3, esp32c3, esp32c6` | another chip; `c` is lowercased |
+| `--chip is required (esp32, esp32s3, esp32c3, esp32c6, esp32p4, esp32s31)` | no `--chip` |
+| `--chip {c}: not one of esp32, esp32s3, esp32c3, esp32c6, esp32p4, esp32s31` | another chip; `c` is lowercased |
 | `--max-seconds is required` | no `--max-seconds` |
 | `--max-seconds: expected a positive number of seconds, got {v:?}` | not a number, 0 or less, `inf` or `NaN` |
 | `nothing to run: give the images with --flash-at OFFSET=FILE` | no `--flash-at` |
 | `--flash-at {spec}: expected OFFSET=FILE` | no `=`, or a valid offset with nothing after it (`zz=` gets the next message) |
 | `--flash-at {spec}: bad hex offset {offset:?}` | the offset is not hex after every leading `0x` is trimmed (`0x0x1000` is `0x1000`; `0X` is not trimmed) |
 | `--flash-mb: the flash takes 1, 2, 4, 8 or 16 MiB, got {v:?}` | any other value |
-| `--psram-mb: {title} supports only {sizes} MiB, got {v:?}` | a size the chip's `Profile::psram_mb` does not list, nor 0: `the classic ESP32 supports only 0 or 4`, `the ESP32-S3 supports only 0, 2, 4 or 8`, `the ESP32-C3 supports only 0` |
-| `--wifi: {chip} has no Wi-Fi in esp32sim`, `--wifi-sta: {chip} has no virtual station for a SoftAP in esp32sim`, `--bt: {chip} has no VHCI hooks in esp32sim` | the flag on a chip whose `Profile` says esp32sim lacks it; only `--wifi-sta` is refused on the four chips there are |
+| `--psram-mb: {title} supports only {sizes} MiB, got {v:?}` | a size the chip's `Profile::psram_mb` does not list, nor 0: `the classic ESP32 supports only 0 or 4`, `the ESP32-S3 supports only 0, 2, 4 or 8`, `the ESP32-C3 supports only 0`, `the ESP32-P4 supports only 0, 16 or 32`, `the ESP32-S31 supports only 0 or 16` |
+| `--wifi: {chip} has no Wi-Fi in esp32sim`, `--wifi-sta: {chip} has no virtual station for a SoftAP in esp32sim`, `--bt: {chip} has no VHCI hooks in esp32sim`, `--sd-spi: {chip} tells the board no SPI pins in esp32sim` | the flag on a chip whose `Profile` says esp32sim lacks it: `--wifi-sta` on all but the classic ESP32, the four of them on `esp32p4` and `esp32s31` |
 | `--console: expected stdout, socket or both, got {v:?}` | any other value |
 | `--console-port: expected uart0 or usb, got {v:?}` | any other value |
 | `--console-port usb: {chip} has no USB-Serial/JTAG controller` | `--console-port usb` on a chip whose `Profile::usb_serial_jtag` is false: `esp32` |
@@ -952,7 +991,7 @@ peer come from `session.rs` and `transport.rs`:
 | 0 | `stop from the peer` | the peer's turn ended with `stop` |
 | 0 | `signal` | the first `SIGTERM` or `SIGINT` |
 | 1 | `the emulator stopped before --max-seconds: {stop:?}` | any `Stop` but `Halted` and `SwReset` |
-| 3 | `protocol error by the peer at {board}: {what}: {line}` | `{what}` is one of: `version {v}, the runner speaks version 1`, `chip {chip:?}, the runner runs {name:?}` (the selected chip's), `watch holds GPIO {pin}, which the {name} does not have` (a pin outside the chip's `Profile::gpios`; on the classic ESP32 any pin but 0 to 39 without 24 and 28 to 31), `expected hello`, `hello after the handshake`, a parse error of `protocol::parse` (`not JSON: …`, `not a JSON object`, `no "type"`, `unknown type …`, `{type}: "{field}" is missing`, `… is not an integer`, `… is negative`, `… is not a GPIO number`, `uart_rx: bad base64 character …`, and the like), `t {t} is before this turn's sync at {b} (rule 2)`, `GPIO {pin} is not in the peer's watch`, `a baud of 0`, `ack {ack}, but the last event before this sync was seq {seq}`, `quiet_until {q} is not after this turn's sync at {b}`, `adc is not implemented yet`, `eth_rx without --wifi`, `wifi_ap without --wifi` (after the check of `t`), `eth_rx: an Ethernet frame of {n} bytes; one without FCS has 14 to 1518`, `eth_rx: bad base64 character …`, `hci_rx without --bt` (after the check of `t`), `hci_rx: an H4 packet of {n} bytes; esp32sim's VHCI carries 1 to 496`, `console_rx without --console-port usb` (after the check of `t`), `console_rx: bad base64 character …`, `wifi_ap: "on" is not true or false`, `sd_card without --sd-spi` (after the check of `t`), `sd_card: "image" is not a string`. `{line}` is the peer's line, cut after 200 characters with `...` |
+| 3 | `protocol error by the peer at {board}: {what}: {line}` | `{what}` is one of: `version {v}, the runner speaks version 1`, `chip {chip:?}, the runner runs {name:?}` (the selected chip's), `watch holds GPIO {pin}, which the {name} does not have` (a pin outside the chip's `Profile::gpios`; on the classic ESP32 any pin but 0 to 39 without 24 and 28 to 31), `expected hello`, `hello after the handshake`, a parse error of `protocol::parse` (`not JSON: …`, `not a JSON object`, `no "type"`, `unknown type …`, `{type}: "{field}" is missing`, `… is not an integer`, `… is negative`, `… is not a GPIO number`, `uart_rx: bad base64 character …`, and the like), `t {t} is before this turn's sync at {b} (rule 2)`, `GPIO {pin} is not in the peer's watch`, `a baud of 0`, `ack {ack}, but the last event before this sync was seq {seq}`, `quiet_until {q} is not after this turn's sync at {b}`, `adc is not implemented yet`, `eth_rx without --wifi`, `wifi_ap without --wifi` (after the check of `t`), `eth_rx: an Ethernet frame of {n} bytes; one without FCS has 14 to 1518`, `eth_rx: bad base64 character …`, `hci_rx without --bt` (after the check of `t`), `hci_rx: an H4 packet of {n} bytes; esp32sim's VHCI carries 1 to 496`, `console_rx without --console-port usb, on a UART0 with pins` (after the check of `t`), `console_rx: bad base64 character …`, `wifi_ap: "on" is not true or false`, `sd_card without --sd-spi` (after the check of `t`), `sd_card: "image" is not a string`. `{line}` is the peer's line, cut after 200 characters with `...` |
 | 3 | `protocol error by the peer at {board}: a line longer than 1 MiB` or `…: a line that is not UTF-8` | from the socket, without the line |
 | 4 | `the peer at {board} is gone: {why}` | `{why}` is `the peer closed the socket`, `read failed: {error}`, `write failed: {error}`, `the socket accepts no more data`, `the peer's turn took longer than --peer-timeout`, `the peer read nothing for longer than --peer-timeout` or, while the last messages are written, `the peer did not read the last messages in time` |
 

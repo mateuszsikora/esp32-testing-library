@@ -9,16 +9,18 @@ use std::time::Duration;
 pub const USAGE: &str = "\
 usage: esp32tl-runner --chip CHIP --flash-at OFFSET=FILE... --max-seconds S [options]
 
-  --chip CHIP           the chip: esp32 (the classic ESP32), esp32s3, esp32c3 or
-                        esp32c6
+  --chip CHIP           the chip: esp32 (the classic ESP32), esp32s3, esp32c3, esp32c6,
+                        esp32p4 (rev < 3 or rev >= 3, as the images are built) or
+                        esp32s31
   --flash-at OFFSET=FILE   write FILE into flash at OFFSET (hex, 0x optional); repeatable
   --max-seconds S       stop after S emulated seconds: the normal end of a run
   --rom F               the mask ROM ELF; default, as esp32sim's: $ESP32SIM_ROM_DIR,
                         then ~/.espressif/tools/esp-rom-elfs/*/ (newest release first,
-                        not the pinned 20241011: whoever runs the tests passes --rom)
+                        not the pinned 20260528: whoever runs the tests passes --rom)
   --flash-mb N          flash size in MiB: 1, 2, 4, 8 or 16 (default 4)
   --psram-mb N          PSRAM size in MiB (default 0): 0 or 4 on the classic ESP32,
-                        0, 2, 4 or 8 on the ESP32-S3, 0 on the ESP32-C3 and ESP32-C6
+                        0, 2, 4 or 8 on the ESP32-S3, 0, 16 or 32 on the ESP32-P4,
+                        0 or 16 on the ESP32-S31, 0 on the ESP32-C3 and ESP32-C6
   --board socket:PATH   connect to the peer on the Unix socket PATH (docs/protocol.md);
   --board tcp:HOST:PORT   or over TCP. Without --board the chip has nothing on its pins
   --peer-timeout S      how long, in wall seconds, a turn of the peer may take before the
@@ -27,7 +29,9 @@ usage: esp32tl-runner --chip CHIP --flash-at OFFSET=FILE... --max-seconds S [opt
                         need --board
   --console-port uart0|usb   which of the guest's outputs is the console (default uart0):
                         UART0, or the USB-Serial/JTAG controller of the ESP32-S3,
-                        ESP32-C3 and ESP32-C6, whose input is the peer's console_rx
+                        ESP32-C3, ESP32-C6, ESP32-P4 and ESP32-S31, whose input is the
+                        peer's console_rx; so is UART0's on the ESP32-P4 and ESP32-S31,
+                        whose UARTs have no pins in esp32sim
   --sd-spi sclk=N,mosi=N,miso=N,cs=N   an SD card slot on these GPIOs, in SPI mode; empty
                         unless --sd-rw puts a card in it, and the peer's sd_card can
                         put one in or take it out while the guest runs
@@ -405,8 +409,8 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Opts, Error> {
 }
 
 /// What the command line asks of the chip that esp32sim does not model on it, or that the chip
-/// does not have. Every chip of `chip::ALL` has `--wifi` and `--bt` today; the checks are there
-/// for the chips of #233, whose esp32sim models have neither. The classic ESP32 has no
+/// does not have. The ESP32-P4 and the ESP32-S31 have neither `--wifi` nor `--bt` in esp32sim,
+/// nor an SD card slot on the board's SPI pins (`--sd-spi`). The classic ESP32 has no
 /// USB-Serial/JTAG controller, so `--console-port usb` is refused on it.
 fn unsupported(opts: &Opts) -> Result<(), Error> {
     let chip = opts.chip;
@@ -425,6 +429,11 @@ fn unsupported(opts: &Opts) -> Result<(), Error> {
             "--bt",
             opts.bt.is_some() && !chip.bt,
             "has no VHCI hooks in esp32sim",
+        ),
+        (
+            "--sd-spi",
+            opts.sd_card.is_some() && !chip.sd_spi,
+            "tells the board no SPI pins in esp32sim",
         ),
         (
             "--console-port usb",

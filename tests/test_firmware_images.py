@@ -10,30 +10,41 @@ import pytest
 from pytest_embedded_idf.app import IdfApp
 
 from esp32tl import boards
-from esp32tl.build import HEADER_SIZE, PLATFORMIO, Build, flash_size, load
+from esp32tl.build import (
+    BOOTLOADER_OFFSETS,
+    HEADER_SIZE,
+    PLATFORMIO,
+    Build,
+    flash_size,
+    load,
+)
 
 FIRMWARE = Path(__file__).resolve().parent.parent / "firmware"
 
 
-def pinned() -> tuple[str, str]:
-    """The ESP-IDF version and container that firmware/build.sh pins."""
+def pinned(chip: str = "esp32") -> tuple[str, str]:
+    """The ESP-IDF version and container that firmware/build.sh pins for `chip`: its own for the
+    ESP32-P4 (P4_) and the ESP32-S31 (S31_), the one of every other chip otherwise."""
+    prefix = {"esp32p4": "P4_", "esp32s31": "S31_"}.get(chip, "")
     script = (FIRMWARE / "build.sh").read_text()
-    version = re.search(r"^IDF_VERSION=(\S+)$", script, re.MULTILINE)
-    container = re.search(r"^CONTAINER=(\S+)$", script, re.MULTILINE)
+    version = re.search(rf"^{prefix}IDF_VERSION=(\S+)$", script, re.MULTILINE)
+    container = re.search(rf"^{prefix}CONTAINER=(\S+)$", script, re.MULTILINE)
     assert version is not None and container is not None, (
-        "firmware/build.sh no longer sets IDF_VERSION= and CONTAINER= on lines of their own"
+        f"firmware/build.sh no longer sets {prefix}IDF_VERSION= and {prefix}CONTAINER= on lines"
+        " of their own"
     )
-    return version[1], container[1].replace("$IDF_VERSION", version[1])
+    return version[1], container[1].replace(f"${prefix}IDF_VERSION", version[1])
 
 
 def idf_app(image: str, build_dir: str = "build") -> IdfApp:
     """The image's build, which has to be finished and, unless it was built with IDF_LOCAL=1,
-    built in the container build.sh pins now. A local build passes, with a warning."""
+    built in the container build.sh pins now for its chip. A local build passes, with a
+    warning."""
     build = FIRMWARE / image / build_dir
     if not (build / "esp32tl-built").is_file():
         pytest.fail(f"{build} holds no finished build: run make firmware", pytrace=False)
     how = json.loads((build / "esp32tl-build.json").read_text())
-    idf_version, container = pinned()
+    idf_version, container = pinned(build_dir.removeprefix("build-") or "esp32")
     if how["container"] is None:
         warnings.warn(
             f"{image} was built with a local ESP-IDF {how['idf_version']}, not in {container}",
@@ -76,9 +87,21 @@ CHIP_IMAGES = [
 ] + [("hello_world_psram", "esp32s3"), ("gatt_server", "esp32s3"), ("gatt_server", "esp32c3")]
 CHIP_IMAGES += [("hello_world_8mb", chip) for chip in ("esp32s3", "esp32c3", "esp32c6")]
 CHIP_IMAGES += [("console_repl_usb", chip) for chip in ("esp32s3", "esp32c3", "esp32c6")]
+CHIP_IMAGES += [
+    (image, chip)
+    for chip in ("esp32p4", "esp32s31")
+    for image in (
+        "hello_world",
+        "console_repl",
+        "console_repl_usb",
+        "gpio_echo",
+        "nvs_reader",
+        "hello_world_psram",
+    )
+] + [("hello_world_rev1", "esp32p4")]
 
 
-@pytest.mark.parametrize("chip", ["esp32s3", "esp32c3", "esp32c6"])
+@pytest.mark.parametrize("chip", ["esp32s3", "esp32c3", "esp32c6", "esp32p4", "esp32s31"])
 def test_console_repl_usb_has_its_console_on_usb_serial_jtag_alone(chip: str) -> None:
     sdkconfig = json.loads(
         (FIRMWARE / "console_repl_usb" / f"build-{chip}" / "config" / "sdkconfig.json").read_text()
@@ -89,14 +112,17 @@ def test_console_repl_usb_has_its_console_on_usb_serial_jtag_alone(chip: str) ->
 
 
 @pytest.mark.parametrize(("image", "chip"), CHIP_IMAGES, ids=lambda v: str(v))
-def test_a_chip_s_image_is_built_for_it_with_the_bootloader_at_0(image: str, chip: str) -> None:
+def test_a_chip_s_image_is_built_for_it_with_the_chip_s_bootloader_offset(
+    image: str, chip: str
+) -> None:
     app = idf_app(image, f"build-{chip}")
     build = FIRMWARE / image / f"build-{chip}"
     assert app.target == chip
     assert json.loads((build / "esp32tl-build.json").read_text())["target"] == chip
     offsets = [(f.offset, Path(f.file_path).relative_to(build)) for f in app.flash_files]
+    # 0x2000 on the P4 and the S31, 0x0 on the S3, C3 and C6 (build.BOOTLOADER_OFFSETS)
     assert offsets[:2] == [
-        (0x0, Path("bootloader/bootloader.bin")),
+        (BOOTLOADER_OFFSETS.get(chip, 0x0), Path("bootloader/bootloader.bin")),
         (0x8000, Path("partition_table/partition-table.bin")),
     ]
     assert all(Path(f.file_path).is_file() for f in app.flash_files)
@@ -119,7 +145,23 @@ def test_the_s3_s_psram_image_asks_for_octal_psram() -> None:
     assert (sdkconfig["SPIRAM"], sdkconfig["SPIRAM_MODE_OCT"]) == (True, True)
 
 
-@pytest.mark.parametrize("chip", ["esp32s3", "esp32c3", "esp32c6"])
+@pytest.mark.parametrize("chip", ["esp32p4", "esp32s31"])
+def test_the_p4_and_s31_psram_images_have_the_psram_driver(chip: str) -> None:
+    sdkconfig = json.loads(
+        (FIRMWARE / "hello_world_psram" / f"build-{chip}" / "config" / "sdkconfig.json").read_text()
+    )
+    assert sdkconfig["SPIRAM"] is True
+
+
+@pytest.mark.parametrize(("image", "min_rev"), [("hello_world", 301), ("hello_world_rev1", 100)])
+def test_the_p4_images_are_for_rev_3_but_the_rev1_one(image: str, min_rev: int) -> None:
+    build = FIRMWARE / image / "build-esp32p4"
+    for path in (build / "bootloader" / "bootloader.bin", build / "hello_world.bin"):
+        header = path.read_bytes()[:HEADER_SIZE]
+        assert int.from_bytes(header[15:17], "little") == min_rev, path
+
+
+@pytest.mark.parametrize("chip", ["esp32s3", "esp32c3", "esp32c6", "esp32p4", "esp32s31"])
 def test_gpio_echo_takes_the_devkit_echo_lines_from_sdkconfig(chip: str) -> None:
     sdkconfig = json.loads(
         (FIRMWARE / "gpio_echo" / f"build-{chip}" / "config" / "sdkconfig.json").read_text()
@@ -130,6 +172,8 @@ def test_gpio_echo_takes_the_devkit_echo_lines_from_sdkconfig(chip: str) -> None
             "esp32s3": "esp32-s3-devkitc",
             "esp32c3": "esp32-c3-devkitm",
             "esp32c6": "esp32-c6-devkitc",
+            "esp32p4": "esp32-p4-function-ev-board",
+            "esp32s31": "esp32-s31-module",
         }[chip]
     ).lines["echo"]
     assert (echo["in"].pin, echo["out"].pin) == (6, 7)

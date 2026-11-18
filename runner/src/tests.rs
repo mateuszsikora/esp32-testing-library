@@ -80,3 +80,44 @@ fn forward_refuses_an_elf_without_the_controller() {
         Err("BLE requires ELF symbol esp_bt_controller_init".into())
     );
 }
+
+/// The P4's revision from the files `--flash-at` places: the header at 0x2000 inside an image of
+/// the whole flash from 0x0, as PlatformIO's `firmware.factory.bin` is, decides as a bootloader
+/// file of its own does; a later file over 0x2000 replaces it.
+#[test]
+fn the_p4_revision_is_read_at_the_bootloader_s_flash_address() {
+    let dir = std::env::temp_dir().join(format!("esp32tl-p4rev-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let header = |min: u16| {
+        let mut h = vec![0; 24];
+        h[0] = 0xE9;
+        h[12] = 0x12;
+        h[15..17].copy_from_slice(&min.to_le_bytes());
+        h
+    };
+    let mut factory = vec![0xff; 0x2000];
+    factory.extend(header(301));
+    factory.extend(vec![0xff; 0x100]);
+    let (whole, boot) = (dir.join("factory.bin"), dir.join("bootloader.bin"));
+    std::fs::write(&whole, &factory).unwrap();
+    std::fs::write(&boot, header(100)).unwrap();
+    let opts = |placed: &str| {
+        cli::parse(
+            format!("--chip esp32p4 {placed} --max-seconds 1")
+                .split_whitespace()
+                .map(String::from),
+        )
+        .unwrap()
+    };
+    let (w, b) = (whole.display(), boot.display());
+    assert_eq!(p4_rev3(&opts(&format!("--flash-at 0x0={w}"))), Ok(true));
+    assert_eq!(
+        p4_rev3(&opts(&format!("--flash-at 0x0={w} --flash-at 0x2000={b}"))),
+        Ok(false)
+    );
+    assert_eq!(
+        p4_rev3(&opts(&format!("--flash-at 0x2000={b} --flash-at 0x0={w}"))),
+        Ok(true)
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}

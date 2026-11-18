@@ -31,7 +31,9 @@ def test_the_shipped_profiles_include_the_example_assembly() -> None:
         "esp32-c3-devkitm",
         "esp32-c6-devkitc",
         "esp32-devkitc",
+        "esp32-p4-function-ev-board",
         "esp32-s3-devkitc",
+        "esp32-s31-module",
         "gps-alarm-clock",
         "lilygo-t-a7670g-r2",
         "sd-data-logger",
@@ -121,8 +123,9 @@ def test_an_unknown_profile_name_lists_the_profiles() -> None:
         boards.profile("esp32-wrover-kit")
     assert str(error.value) == (
         "no board profile named 'esp32-wrover-kit';"
-        " the profiles are esp32-c3-devkitm, esp32-c6-devkitc, esp32-devkitc, esp32-s3-devkitc,"
-        " gps-alarm-clock, lilygo-t-a7670g-r2, sd-data-logger"
+        " the profiles are esp32-c3-devkitm, esp32-c6-devkitc, esp32-devkitc,"
+        " esp32-p4-function-ev-board, esp32-s3-devkitc, esp32-s31-module, gps-alarm-clock,"
+        " lilygo-t-a7670g-r2, sd-data-logger"
     )
 
 
@@ -157,16 +160,19 @@ SD_CARD = "\n[sd_card]\nsclk = 14\nmosi = 15\nmiso = 2\ncs = 13\n"
         ),
         ("name = 'y'\nchip = 'esp32'", "x.toml: name: 'y' is not the file's name, 'x'"),
         (
-            "name = 'x'\nchip = 'esp32p4'",
-            "x.toml: chip: 'esp32p4' is not one of esp32, esp32s3, esp32c3, esp32c6",
+            "name = 'x'\nchip = 'esp32h2'",
+            "x.toml: chip: 'esp32h2' is not one of esp32, esp32s3, esp32c3, esp32c6, esp32p4,"
+            " esp32s31",
         ),
         (
             "name = 'x'\nchip = ['esp32c3']",
-            "x.toml: chip: ['esp32c3'] is not one of esp32, esp32s3, esp32c3, esp32c6",
+            "x.toml: chip: ['esp32c3'] is not one of esp32, esp32s3, esp32c3, esp32c6, esp32p4,"
+            " esp32s31",
         ),
         (
             "name = 'x'\nchip = { name = 'esp32c3' }",
-            "x.toml: chip: {'name': 'esp32c3'} is not one of esp32, esp32s3, esp32c3, esp32c6",
+            "x.toml: chip: {'name': 'esp32c3'} is not one of esp32, esp32s3, esp32c3, esp32c6,"
+            " esp32p4, esp32s31",
         ),
         (
             "name = 'x'\nchip = 'esp32'\nflash_mb = -4",
@@ -524,6 +530,27 @@ def test_each_chip_s_devkit_routes_the_gnss_and_the_echo_lines(
     the_chip = boards.CHIPS[chip]
     assert (the_chip.console_pin("tx"), the_chip.console_pin("rx")) == console
     assert profile.interfaces == ["console", "uart.gnss", "lines.echo", "wifi", "bluetooth"]
+
+
+@pytest.mark.parametrize(
+    ("name", "chip", "console", "usb", "psram"),
+    [
+        ("esp32-p4-function-ev-board", "esp32p4", (37, 38), (24, 25), 32),
+        ("esp32-s31-module", "esp32s31", (58, 59), (33, 34), 16),
+    ],
+)
+def test_the_p4_and_s31_profiles_have_the_echo_lines_and_their_uarts_no_pins(
+    name: str, chip: str, console: tuple[int, int], usb: tuple[int, int], psram: int
+) -> None:
+    profile = boards.profile(name)
+    assert (profile.chip, profile.flash_mb, profile.psram_mb) == (chip, 16, psram)
+    assert profile.uart == {}
+    assert profile.lines["echo"]["in"].pin == 6 and profile.lines["echo"]["out"].pin == 7
+    the_chip = boards.CHIPS[chip]
+    assert (the_chip.console_pin("tx"), the_chip.console_pin("rx")) == console
+    assert tuple(the_chip.usb_pins) == usb
+    assert not the_chip.uart_pins
+    assert all(boards.CHIPS[c].uart_pins for c in ("esp32", "esp32s3", "esp32c3", "esp32c6"))
 
 
 def test_the_console_is_uart0_unless_the_profile_says_usb_serial_jtag(tmp_path: Path) -> None:

@@ -16,6 +16,7 @@ import pytest
 
 from esp32tl import __version__, runtime
 from esp32tl.backends import esp32sim
+from esp32tl.build import Build, FlashFile
 
 # The real lookup, before the fixture below replaces it.
 UNRELEASED = runtime.unreleased
@@ -92,8 +93,8 @@ def test_unreleased_install_gets_no_release_runner(
         f"v{__version__}, whose runner need not match it; run make build-runner rom-elf in a "
         "checkout of that commit, then set ESP32TL_RUNNER to its "
         "runner/target/release/esp32tl-runner, and ESP32TL_ROM, ESP32TL_ROM_ESP32S3, "
-        "ESP32TL_ROM_ESP32C3, ESP32TL_ROM_ESP32C6 to the ROM ELFs in its "
-        ".cache/esp-rom-elfs/20241011/"
+        "ESP32TL_ROM_ESP32C3, ESP32TL_ROM_ESP32C6, ESP32TL_ROM_ESP32P4, ESP32TL_ROM_ESP32P4_REV0,"
+        " ESP32TL_ROM_ESP32S31 to the ROM ELFs in its .cache/esp-rom-elfs/20260528/"
     )
     with pytest.raises(runtime.RuntimeError) as refused:
         runtime.prepare()
@@ -129,7 +130,7 @@ def test_unreleased_install_names_the_rom_variable_not_prepare(
     monkeypatch.setattr(runtime, "unreleased", lambda: GIT)
     remedy = (
         "set ESP32TL_ROM_ESP32S3 to the esp32s3_rev0_rom.elf make rom-elf puts in a checkout's "
-        ".cache/esp-rom-elfs/20241011/: esp32tl runtime prepare installs nothing for an "
+        ".cache/esp-rom-elfs/20260528/: esp32tl runtime prepare installs nothing for an "
         "unreleased esp32tl"
     )
     # A release before the ESP32-S3 left no ROM of it in the cache.
@@ -244,7 +245,7 @@ def test_a_checkout_s_missing_file_names_its_make_target(
     with pytest.raises(esp32sim.BackendError) as missing:
         esp32sim.runner_path()
     assert str(missing.value) == f"no runner at {runner}: run make build-runner in {tmp_path}"
-    rom = tmp_path / ".cache/esp-rom-elfs/20241011/esp32s3_rev0_rom.elf"
+    rom = tmp_path / ".cache/esp-rom-elfs/20260528/esp32s3_rev0_rom.elf"
     with pytest.raises(esp32sim.BackendError) as missing:
         esp32sim.rom_path("esp32s3")
     assert str(missing.value) == f"no rom at {rom}: run make rom-elf in {tmp_path}"
@@ -437,8 +438,50 @@ def test_each_chip_has_its_rom_in_the_cache_and_its_own_override(
     monkeypatch.setenv("ESP32TL_ROM_ESP32S3", str(override))
     assert esp32sim.rom_path("esp32s3") == override
     assert esp32sim.rom_path() == cached_runtime / runtime.ROM
-    with pytest.raises(esp32sim.BackendError, match="esp32tl has no ROM for esp32p4"):
-        esp32sim.rom_path("esp32p4")
+    with pytest.raises(esp32sim.BackendError, match="esp32tl has no ROM for esp32h2"):
+        esp32sim.rom_path("esp32h2")
+    rev0 = cached_runtime.parent / "p4-rev0.elf"
+    rev0.write_bytes((cached_runtime / runtime.ROMS[runtime.P4_REV0][0]).read_bytes())
+    monkeypatch.setenv("ESP32TL_ROM_ESP32P4_REV0", str(rev0))
+    assert esp32sim.rom_path(runtime.P4_REV0) == rev0
+
+
+def p4_build(tmp_path: Path, min_rev: int, bootloader: bool = True) -> Build:
+    """An ESP32-P4 build of two files: an image header asking for `min_rev` at 0x2000, or at
+    0x10000 with a partition table at 0x2000 in place of a bootloader."""
+    header = bytearray(24)
+    header[0], header[12] = 0xE9, 0x12
+    header[15:17] = min_rev.to_bytes(2, "little")
+    image, other = tmp_path / "image.bin", tmp_path / "other.bin"
+    image.write_bytes(bytes(header))
+    other.write_bytes(b"\xaa\x50" + bytes(30))
+    files = (
+        (FlashFile(0x10000, other), FlashFile(0x2000, image))
+        if bootloader
+        else (FlashFile(0x2000, other), FlashFile(0x10000, image))
+    )
+    return Build(tmp_path, "esp-idf", files, None, None, None, "esp32p4")
+
+
+def test_the_p4_rom_is_the_one_of_the_revision_the_build_is_for(
+    cached_runtime: Path, tmp_path: Path
+) -> None:
+    # ESP-IDF's default build is for rev >= 3, with the ECO5 ROM; one with
+    # CONFIG_ESP32P4_SELECTS_REV_LESS_V3 for rev < 3, with the ECO0 ROM; the bootloader decides
+    rev3 = cached_runtime / "esp32p4_rev300_rom.elf"
+    rev0 = cached_runtime / "esp32p4_rev0_rom.elf"
+    assert esp32sim.rom_path("esp32p4", p4_build(tmp_path, 301)) == rev3
+    assert esp32sim.rom_path("esp32p4", p4_build(tmp_path, 100)) == rev0
+    assert esp32sim.rom_path("esp32p4", p4_build(tmp_path, 100, bootloader=False)) == rev0
+    # PlatformIO's firmware.factory.bin: the whole flash from 0x0, its bootloader at 0x2000
+    factory = tmp_path / "firmware.factory.bin"
+    for min_rev, rom in ((301, rev3), (100, rev0)):
+        p4_build(tmp_path, min_rev)
+        factory.write_bytes(b"\xff" * 0x2000 + (tmp_path / "image.bin").read_bytes())
+        whole = Build(tmp_path, "platformio", (FlashFile(0, factory),), None, None, None, "esp32p4")
+        assert esp32sim.rom_path("esp32p4", whole) == rom
+    assert esp32sim.rom_path("esp32p4") == rev3
+    assert esp32sim.rom_key("esp32s3", p4_build(tmp_path, 100)) == "esp32s3"
 
 
 class Release(http.server.BaseHTTPRequestHandler):
