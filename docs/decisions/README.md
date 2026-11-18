@@ -324,6 +324,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Bluetooth histories expose Duration timestamps](harness.md#bluetooth-histories-expose-duration-timestamps) | `harness.md` | decided (#224) |
 | [Parallel simulation uses pytest-xdist installed separately](harness.md#parallel-simulation-uses-pytest-xdist-installed-separately) | `harness.md` | decided (#227) |
 | [SPP conditions describe channel state and the next device write](harness.md#spp-conditions-describe-channel-state-and-the-next-device-write) | `harness.md` | decided (#225) |
+| [The device's SPP writes are read as lines at a separator the test chooses](harness.md#the-devices-spp-writes-are-read-as-lines-at-a-separator-the-test-chooses) | `harness.md` | decided (#246) |
 | [A board profile's chip decides its pads, UARTs and console pins](harness.md#a-board-profiles-chip-decides-its-pads-uarts-and-console-pins) | `harness.md` | decided (#236) |
 | [esp32sim's gaps on a chip skip the test that asks for them](harness.md#esp32sims-gaps-on-a-chip-skip-the-test-that-asks-for-them) | `harness.md` | decided (#236) |
 | [Boot reasons keep the classic ESP32's names on every chip](harness.md#boot-reasons-keep-the-classic-esp32s-names-on-every-chip) | `harness.md` | decided (#236) |

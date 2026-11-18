@@ -417,12 +417,13 @@ bytes. A source that raises, or returns what the peer cannot send, fails the air
 `peer.events` holds what crossed the channel, in order, as `ChannelEvent(at, direction, data)` named tuples: `out` of the
 device, `in` to it, as a tap's recording names them.
 
-`ChannelEvent`, `Refusal`, `Pairing` and `UnknownCommand` are imported from `esp32tl`. All their timestamps are `Duration`s:
-`event.at`, `refusal.at`, `pairing.t`, and `command.t`. Tuple unpacking still works for the
-named tuples; `Pairing` remains a frozen dataclass. Compare these times directly with
-`Message.at`, console `ConsoleLine.at` or GPIO `LineEvent.t`, without wrapping them in `Duration`.
-This breaks the former integer API: use `.ns` only when integer nanoseconds are needed.
-The run report is unchanged; `esp32sim_link` JSON still writes integer `t_ns` fields.
+`ChannelEvent`, `WrittenLine`, `Refusal`, `Pairing` and `UnknownCommand` are imported from
+`esp32tl`. All their timestamps are `Duration`s: `event.at`, `line.at`, `refusal.at`, `pairing.t`,
+and `command.t`. Tuple unpacking still works for the named tuples; `Pairing` remains a frozen
+dataclass. Compare these times directly with `Message.at`, console `ConsoleLine.at` or GPIO
+`LineEvent.t`, without wrapping them in `Duration`. This breaks the former integer API: use `.ns`
+only when integer nanoseconds are needed. The run report is unchanged; `esp32sim_link` JSON still
+writes integer `t_ns` fields.
 
 ## Time on the air
 
@@ -550,3 +551,61 @@ while conditions are outstanding.
 These conditions belong to `SppPeer`; `BluetoothDevice` has no SPP channel. There are no
 `next_open()` or `next_close()` events: a state condition does not detect a close and reopen
 between polls. Wait for `is_closed` before triggering a reconnect when both states matter.
+
+## Reading the device's writes as lines
+
+For a device that talks to the peer in a line-based protocol, such as AT commands that each end in
+a carriage return, `peer.written_lines()` joins the chunks the device wrote and cuts them into
+lines, and `peer.next_written_line()` waits for the next one. No model is needed for a test that
+only checks what was sent.
+
+```python
+from esp32tl import WrittenLine
+
+command = peer.next_written_line(b"AT+CONNECT")  # Capture the boundary first.
+board.reset()
+line = board.wait_until(command, within=seconds(30))
+assert line == WrittenLine(at=line.at, data=b"AT+CONNECT=1", opening=0, complete=True)
+assert [line.data for line in peer.written_lines()] == [b"AT", b"AT+CONNECT=1"]
+```
+
+`written_lines(separator: bytes = b"\r")` returns a list of `WrittenLine(at, data, opening,
+complete)` named tuples, in order:
+
+| Field | What |
+|---|---|
+| `at` | The `Duration` of the chunk that brought the line's separator: a command written in two chunks is one line, at the time of the second. For a line cut off by a close, the time of its last byte |
+| `data` | The line's bytes, without the separator; empty for two separators in a row. Not decoded |
+| `opening` | Which opening of the channel the line was written on: `0` for the first, `1` after the device closed the channel and opened it again, and so on |
+| `complete` | `True` for a line that ended in the separator, `False` for what was left after the last separator when the channel closed |
+
+`separator` is any non-empty bytes, the default `b"\r"`: the carriage return that ends an AT
+command. A separator of two bytes, such as `b"\r\n"`, is found even when the device writes them in
+two chunks. With `b"\r"`, a device that ends its lines in `\r\n` starts every line after the first
+with `b"\n"`: give the separator it uses.
+
+Each opening of the channel is cut apart: a partial line at a channel's close is a line of its own,
+with `complete=False`, and is never joined with the first line of the next opening. What the open
+channel has after its last separator is not a line yet, as a console line that has not ended is
+not one. The peer's answers (`"in"` events) are never lines.
+
+`next_written_line(data: bytes | None = None, separator: bytes = b"\r")` returns a
+`Condition[WrittenLine | None]` for the first complete line, cut at `separator`, that ends after the
+call. With `data`, the line must contain those literal bytes; `None` and `b""` match any line. The
+boundary rules are those of `next_write`: a line that ends after the call is found even when its
+first bytes came before the call, at the same timestamp, or after the channel was closed and opened
+again; a line cut off by a close never matches; polling consumes nothing, so repeated calls return
+the same line. The description is
+`the next line ending in b'\r' written to ESP_SPP_ACCEPTOR's SPP channel (00:00:00:00:5B:01)`,
+with ` containing b'AT'` when filtered.
+
+A `data` that is not bytes or `None` raises `TypeError`:
+`SppPeer.next_written_line: data is 'AT', not bytes or None`. A separator that is not bytes raises
+`TypeError`, `SppPeer.written_lines: separator is '\r', not bytes`, and an empty one `ValueError`,
+`SppPeer.written_lines: separator is empty: give the bytes a line ends in` (each naming the method
+called).
+
+The console reads its lines differently: `console.line()` and `console.lines()` end a line at
+`\n`, drop a `\r` before it, decode the text and match regular expressions. SPP carries bytes of
+any protocol, so the peer's lines stay bytes, at a separator the test chooses
+([decision](../decisions/harness.md#the-devices-spp-writes-are-read-as-lines-at-a-separator-the-test-chooses)).

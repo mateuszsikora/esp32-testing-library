@@ -4001,6 +4001,41 @@ this change observes the existing byte history only. Tests can wait for closure 
 reconnection, or wait for a new device write after reset. Add transition history when a consumer
 needs to prove both transitions occurred without an intermediate wait.
 
+## The device's SPP writes are read as lines at a separator the test chooses
+
+Status: decided (#246)
+
+`SppPeer.written_lines(separator=b"\r")` and `next_written_line(data=None, separator=b"\r")` join
+the device's writes and cut them into `WrittenLine(at, data, opening, complete)`s, so that a test
+that only checks what a device sent in a line-based protocol needs no model and no framing of its
+own. They follow the console's `line()` and `lines()` where the two agree: a line's time is the
+time its ending came at, a line not ended on an open channel is not one, and the condition finds
+the first line that ends after it was made. They differ where SPP differs from a console:
+
+- **Separator.** The console ends a line at `\n` and drops a `\r` before it, because ESP-IDF's
+  log does. SPP carries any protocol; the default is `b"\r"`, which ends an AT command
+  (ITU-T V.250, S3's default), the case that asked for this, and the test gives any other non-empty
+  bytes, such as `b"\r\n"`. No `\r` is dropped: the line is the bytes before the separator.
+- **Bytes, not text.** The console decodes and matches regular expressions; the peer's lines stay
+  bytes, and `data` is literal containment, as in `next_write`.
+- **Names.** `written_lines` and `next_written_line`, not `lines` and `line`: the channel carries
+  both directions, `written` names the device's, as `next_write` does, and `next_*` is the
+  convention of the boundary conditions.
+- **Openings.** A partial line at a channel's close is a line of its own, `complete=False`, and
+  `opening` says which opening of the channel each line was written on, so a partial line before a
+  reconnect is never joined with the first line after it, and is not lost either.
+- **No filter in `written_lines`.** `console.lines(pattern, *, since=)` filters; `written_lines`
+  takes neither a pattern nor `since`, as a list comprehension over `line.at` or `line.data` says
+  the same. To be added when tests repeat such a filter.
+
+Lines are cut when read, from `events` and the openings' boundaries, one cache per separator;
+`ChannelEvent` keeps its three fields, so `events` compares with plain tuples as before.
+
+**Rejected:** cutting lines in the peer's receive path at one separator given to `SppPeer`, which
+fixes the protocol at construction and would need a second list for a second separator; dropping
+an incomplete line at a close, which hides what the device wrote; and adding the opening to
+`ChannelEvent`, which breaks `events` compared with three-field tuples.
+
 ## A board profile's chip decides its pads, UARTs and console pins
 
 Status: decided (#236)
