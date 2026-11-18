@@ -33,6 +33,11 @@ jobs:
           - {group: chips-1, family: chips, shard: "1/3"}
           - {group: chips-2, family: chips, shard: "2/3"}
           - {group: chips-3, family: chips, shard: "3/3"}
+          # The ESP32-P4's and the ESP32-S31's images, each built in an ESP-IDF container of
+          # its own (firmware/build.sh, container_of): in a group of their own, a job pulls
+          # one container image, not three.
+          - {group: chips-p4, family: chips, shard: "1/1"}
+          - {group: chips-s31, family: chips, shard: "1/1"}
           - {group: platformio, family: platformio, shard: "1/1"}
     runs-on: ubuntu-24.04
     # Why 60: "The firmware job's timeout is 60 minutes" in docs/decisions/ci.md.
@@ -139,6 +144,9 @@ jobs:
           FIRMWARE_OUT: ""
           GROUP: ${{ matrix.family }}
           SHARD: ${{ matrix.shard }}
+          # The chips a chips group builds for: from the group's name, so that the
+          # matrix, and with it the names of the required checks, stays as it was.
+          CHIPS: ${{ matrix.group == 'chips-p4' && 'esp32p4' || matrix.group == 'chips-s31' && 'esp32s31' || 'esp32s3,esp32c3,esp32c6' }}
         run: |
           case "$GROUP" in
             idf)
@@ -154,7 +162,7 @@ jobs:
               builds=(examples/*/build)
               ;;
             chips)
-              firmware/build.sh --chips --shard "$SHARD"
+              firmware/build.sh --chips --chip "$CHIPS" --shard "$SHARD"
               builds=(firmware/*/build-*)
               ;;
           esac

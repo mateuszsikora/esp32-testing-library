@@ -612,7 +612,7 @@ def test_board_nvs_and_board_flash_find_the_table_of_either_build(
 ) -> None:
     pio_build(tmp_path / ".pio/build/esp32", factory=factory)
     monkeypatch.setattr(esp32sim, "runner_path", lambda: Path("runner"))
-    monkeypatch.setattr(esp32sim, "rom_path", lambda chip="esp32": Path("rom"))
+    monkeypatch.setattr(esp32sim, "rom_path", lambda chip="esp32", app=None: Path("rom"))
     run = tmp_path / "run"
     run.mkdir()
     board = Esp32Sim(

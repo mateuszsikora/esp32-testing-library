@@ -68,6 +68,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "esp32p4"
+version = "0.4.0"
+source = "git+https://github.com/mikroverk/esp32sim?rev=357b0e542dfe97d4c62ec4a15c01c4969164448c#357b0e542dfe97d4c62ec4a15c01c4969164448c"
+dependencies = [
+ "emu-core",
+ "esp-periph",
+ "esp-soc",
+ "esp32c6",
+ "riscv-rv32",
+]
+
+[[package]]
 name = "esp32s3"
 version = "0.4.0"
 source = "git+https://github.com/mikroverk/esp32sim?rev=357b0e542dfe97d4c62ec4a15c01c4969164448c#357b0e542dfe97d4c62ec4a15c01c4969164448c"
@@ -76,6 +88,17 @@ dependencies = [
  "esp-periph",
  "esp-soc",
  "xtensa-lx7",
+]
+
+[[package]]
+name = "esp32s31"
+version = "0.4.0"
+source = "git+https://github.com/mikroverk/esp32sim?rev=357b0e542dfe97d4c62ec4a15c01c4969164448c#357b0e542dfe97d4c62ec4a15c01c4969164448c"
+dependencies = [
+ "emu-core",
+ "esp-periph",
+ "esp-soc",
+ "riscv-rv32",
 ]
 
 [[package]]
@@ -88,7 +111,9 @@ dependencies = [
  "esp32",
  "esp32c3",
  "esp32c6",
+ "esp32p4",
  "esp32s3",
+ "esp32s31",
  "signal-hook",
 ]
 

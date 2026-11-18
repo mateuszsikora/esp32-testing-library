@@ -18,6 +18,12 @@ BUILD_SH = ROOT / "firmware" / "build.sh"
 CONTAINER = (
     "espressif/idf:v5.3.6@sha256:cee52f0c4fdaf088992a7a739f5993154e95cf1d3ab61c24f5b40e6d56a3a070"
 )
+P4_CONTAINER = (
+    "espressif/idf:v5.5.4@sha256:b9f2d6ea1c19e0c9f7959bdb74a9e3c775642f9d0f3b841937c5fa3363db892b"
+)
+S31_CONTAINER = (
+    "espressif/idf:v6.1@sha256:81893c71bb5e570088901f21def8684c25cd2a9020281bd01b843a7655edb18c"
+)
 
 
 # Each fake writes its arguments to $FAKE_LOG, one per line; idf.py, which runs once per image,
@@ -25,6 +31,11 @@ CONTAINER = (
 FAKE_DOCKER = """#!/bin/sh
 [ "$1" = info ] && exit 0
 printf '%s\\n' "$@" >"$FAKE_LOG"
+"""
+# A docker that keeps every run: its arguments, then a line "=".
+FAKE_DOCKER_RUNS = """#!/bin/sh
+[ "$1" = info ] && exit 0
+printf '%s\\n' "$@" = >>"$FAKE_LOG"
 """
 FAKE_IDF_PY = """#!/bin/sh
 [ "$1" = --version ] && { echo "ESP-IDF v9.9.9"; exit 0; }
@@ -440,14 +451,31 @@ def test_chip_images_build_their_projects_for_the_chip(
     entries += [("hello_world_8mb", chip, hello) for chip in ("esp32s3", "esp32c3", "esp32c6")]
     usb = str(ROOT / "firmware" / "console_repl_usb")
     entries += [("console_repl_usb", chip, usb) for chip in ("esp32s3", "esp32c3", "esp32c6")]
+    new = {
+        "hello_world": hello,
+        "console_repl": projects["console_repl"],
+        "console_repl_usb": usb,
+        "gpio_echo": projects["gpio_echo"],
+        "nvs_reader": projects["nvs_reader"],
+        "hello_world_psram": hello,
+    }
+    entries += [
+        (image, chip, project) for chip in ("esp32p4", "esp32s31") for image, project in new.items()
+    ]
+    entries.append(("hello_world_rev1", "esp32p4", hello))
     expected = []
     for image, chip, project in entries:
         build = out / image / f"build-{chip}"
+        # ESP-IDF v6.1 builds for the S31 as a preview target only
+        expected += ["--preview"] if chip == "esp32s31" else []
         expected += ["-C", project, "-B", str(build), f"-DSDKCONFIG={build}/sdkconfig"]
         expected.append(f"-DIDF_TARGET={chip}")
-        if image in ("hello_world_psram", "hello_world_8mb"):
+        if image in ("hello_world_psram", "hello_world_8mb", "hello_world_rev1"):
             # ESP-IDF's hello_world has no sdkconfig.defaults: only the image's own
             expected.append(f"-DSDKCONFIG_DEFAULTS={ROOT}/firmware/{image}/sdkconfig.defaults")
+        if image == "hello_world_psram" and chip in ("esp32p4", "esp32s31"):
+            # hello_world's MINIMAL_BUILD would leave the PSRAM driver out from ESP-IDF v5.5 on
+            expected.append("-DCOMPONENTS=main;esp_psram")
         expected.append("build")
         assert json.loads((build / "esp32tl-build.json").read_text()) == {
             "idf_version": "v9.9.9",
@@ -480,7 +508,70 @@ def test_chip_build_forwards_the_mode_into_the_pinned_container(tmp_path: Path) 
     assert "unknown image 'gpio_echo@esp32'" in run_build(env, "--chips", "gpio_echo@esp32").stderr
 
 
-@pytest.mark.parametrize("family, count", [((), 4), (("--examples",), 3), (("--chips",), 3)])
+def test_each_chip_s_images_are_built_in_its_own_container(tmp_path: Path) -> None:
+    # v5.3.6 for the S3, C3 and C6, v5.5.4 for the P4, v6.1 for the S31: one run of the
+    # container for each, in the order the images first need them
+    script(tmp_path / "bin", "docker", FAKE_DOCKER_RUNS)
+    log = tmp_path / "docker.log"
+    env = {
+        "PATH": minimal_path(tmp_path / "bin"),
+        "FIRMWARE_OUT": str(tmp_path / "out"),
+        "FAKE_LOG": str(log),
+    }
+    entries = ["hello_world@esp32p4", "gpio_echo@esp32s3", "nvs_reader@esp32s31"]
+    entries += ["hello_world_rev1@esp32p4"]
+    result = run_build(env, "--chips", *entries)
+    assert result.returncode == 0, result.stderr
+    runs: list[list[str]] = [[]]
+    for argument in logged(log):
+        if argument == "=":
+            runs.append([])
+        else:
+            runs[-1].append(argument)
+    runs.pop()
+    p4 = ["hello_world@esp32p4", "hello_world_rev1@esp32p4"]
+    assert [run[run.index("firmware/build.sh") - 1 :] for run in runs] == [
+        [P4_CONTAINER, "firmware/build.sh", "--chips", *p4],
+        [CONTAINER, "firmware/build.sh", "--chips", "gpio_echo@esp32s3"],
+        [S31_CONTAINER, "firmware/build.sh", "--chips", "nvs_reader@esp32s31"],
+    ]
+    assert [f"ESP32TL_CONTAINER={P4_CONTAINER}" in run for run in runs] == [True, False, False]
+
+
+def test_chip_filter_keeps_the_images_of_the_chips_it_names(tmp_path: Path) -> None:
+    script(tmp_path / "bin", "docker", FAKE_DOCKER_RUNS)
+    log = tmp_path / "docker.log"
+    env = {
+        "PATH": minimal_path(tmp_path / "bin"),
+        "FIRMWARE_OUT": str(tmp_path / "out"),
+        "FAKE_LOG": str(log),
+    }
+    result = run_build(env, "--chips", "--chip", "esp32p4")
+    assert result.returncode == 0, result.stderr
+    arguments = logged(log)
+    assert arguments[-1] == "="
+    assert arguments[arguments.index("--chips") + 1 : -1] == [
+        f"{image}@esp32p4"
+        for image in (
+            "hello_world",
+            "console_repl",
+            "console_repl_usb",
+            "gpio_echo",
+            "nvs_reader",
+            "hello_world_psram",
+            "hello_world_rev1",
+        )
+    ]
+    assert arguments.count("firmware/build.sh") == 1
+    refused = run_build(env, "--chips", "--chip", "esp32h2")
+    assert refused.returncode == 1
+    assert refused.stderr == "firmware/build.sh: --chip esp32h2: no images for these chips\n"
+
+
+@pytest.mark.parametrize(
+    "family, count",
+    [((), 4), (("--examples",), 3), (("--chips", "--chip", "esp32s3,esp32c3,esp32c6"), 3)],
+)
 def test_build_shards_partition_the_complete_family(
     tmp_path: Path, family: tuple[str, ...], count: int
 ) -> None:

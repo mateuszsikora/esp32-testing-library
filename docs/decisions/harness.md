@@ -4460,3 +4460,43 @@ not, and a subscriber cannot tell one from the other on the wire. A test that ne
 the delivery to `messages` by topic, payload and time, which cannot tell a Will from a PUBLISH of
 the same topic and payload the client sent at the same board time; the flag waits for a test that
 needs that case.
+
+## The P4's ROM is the one of its build's revision
+
+Status: decided (#233)
+
+The runner runs a P4 build on esp32sim's model of the revision the build is for
+([runner: the P4 runs on the model of its images' revision](runner.md#the-p4-runs-on-the-esp32sim-model-of-the-revision-its-images-are-built-for)),
+and each model boots its own ROM. `runtime.ROMS` keys the P4's two: `esp32p4`, the rev ≥ 3 ROM,
+for ESP-IDF's default build, and `esp32p4-rev0` (`runtime.P4_REV0`), the rev < 3 one, with its
+variable `ESP32TL_ROM_ESP32P4_REV0`. `esp32sim.rom_path(chip, app)` asks `build.p4_rev3`, which
+reads the build's image headers by the runner's rule (the header at flash address 0x2000 first,
+whichever file holds it, `firmware.factory.bin` from 0x0 included, else the first other file's
+own header that is a P4 image's; its `min_chip_rev_full`), and the backend and the `esp32tl` command pass that
+ROM with `--rom`.
+
+**Rejected:** a ROM per board profile, because the profile names the chip and the build names
+the revision, and a v1.x board runs a rev < 3 build the profile cannot know of; the runner
+choosing the ROM itself from `ESP32SIM_ROM_DIR`, which would give up `--rom`, the one path the
+backend checks and the runtime cache pins.
+
+## On the P4 and the S31 the console has no pins, and a UART route skips the test
+
+Status: decided (#233)
+
+`boards.Chip.uart_pins` is false for the ESP32-P4 and the ESP32-S31, whose UARTs have no pins in
+esp32sim ([runner: UART0's console has no pins](runner.md#on-the-p4-and-the-s31-uart0s-console-has-no-pins)).
+On such a chip the backend's console has no wire: its input goes on the link as `console_rx`, as
+on a USB-Serial/JTAG console (`Interface.pinless_console`, formerly `usb_console`), and the
+console's output comes as `console` messages. `CHIP_GAPS` skips a test that gives a `[uart.<role>]`
+route a source or a tap (#229 G6 on the P4, G7 on the S31), an `sd_card` (no SPI pin hook), `wifi`
+(the P4 has no radio, and esp32sim's ESP32-C6 co-processor is not in the runner; the S31 has no
+Ethernet relay, G7) and `bluetooth` (none modelled on either). Their devkit profiles,
+`esp32-p4-function-ev-board` (16 MB flash, 32 MB PSRAM, the P4NRW32) and `esp32-s31-module`
+(16 MB flash, 16 MB PSRAM, the S31NRV16; Espressif names no S31 devkit yet), carry the
+`[lines.echo]` set of the other devkits and no `[uart.gnss]`, which could not run there.
+
+**Rejected:** refusing such a profile at load time, because the pin table is the board's and true
+of it, and the skip names the gap at the test that needs the route; a profile without
+`console` pins for these chips, since UART0 is on GPIO 37/38 and 58/59 on the boards all the same,
+and a route must not take them.

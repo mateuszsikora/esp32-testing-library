@@ -84,8 +84,55 @@ fn main() -> ExitCode {
         "esp32s3" => go::<esp32s3::Machine>(&opts),
         "esp32c3" => go::<esp32c3::Machine>(&opts),
         "esp32c6" => go::<esp32c6::Machine>(&opts),
+        "esp32p4" => match p4_rev3(&opts) {
+            Ok(true) => go::<chip::esp32p4::P4<esp32p4::RevGe3>>(&opts),
+            Ok(false) => go::<chip::esp32p4::P4<esp32p4::RevLt3>>(&opts),
+            Err(message) => fail(&message),
+        },
+        "esp32s31" => go::<chip::esp32s31::S31>(&opts),
         name => unreachable!("--chip {name} has no machine"),
     }
+}
+
+/// Whether the P4 of this run is the rev ≥ 3 model, as the images' headers ask
+/// (`chip::esp32p4::rev3`): the header at the flash's bootloader offset, from the last
+/// `--flash-at` file that covers it, and each file's own first bytes. Says which on stderr.
+fn p4_rev3(opts: &cli::Opts) -> Result<bool, String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let header = |path: &Path, at: u64| -> Result<Vec<u8>, String> {
+        let mut head = Vec::with_capacity(24);
+        std::fs::File::open(path)
+            .and_then(|mut f| {
+                f.seek(SeekFrom::Start(at))?;
+                f.take(24).read_to_end(&mut head)
+            })
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        Ok(head)
+    };
+    let boot = chip::esp32p4::BOOTLOADER_OFFSET;
+    let mut bootloader = None;
+    let mut others = Vec::new();
+    for (offset, path) in &opts.flash_at {
+        if *offset != boot {
+            others.push(header(path, 0)?);
+        }
+        let len = std::fs::metadata(path)
+            .map_err(|e| format!("{}: {e}", path.display()))?
+            .len() as usize;
+        if *offset <= boot && boot < offset + len {
+            bootloader = Some(header(path, (boot - offset) as u64)?);
+        }
+    }
+    let rev3 = chip::esp32p4::rev3(bootloader.as_deref(), &others);
+    eprintln!(
+        "esp32tl-runner: ESP32-P4 {}, as the images are built",
+        if rev3 {
+            "rev ≥ 3 (v3.1)"
+        } else {
+            "rev < 3 (v1.0)"
+        }
+    );
+    Ok(rev3)
 }
 
 /// The run on the chip `T`, from the setup to the line that ends it.
@@ -187,6 +234,7 @@ fn run_with_board<T: Target>(
             end_cycle: end_cycle(opts),
             console: opts.console != cli::Console::Stdout,
             usb_console: opts.console_port == cli::ConsolePort::Usb,
+            uart0_stream: opts.console_port == cli::ConsolePort::Uart0 && !opts.chip.uart_pins,
             peer_timeout: opts.peer_timeout,
             signal: &signal,
             wifi: opts.wifi.as_ref(),
@@ -354,6 +402,9 @@ fn setup<T: Target>(
     eprintln!("esp32tl-runner: ROM {}", rom.display());
     for (offset, path) in &opts.flash_at {
         let data = read(path)?;
+        // esp32sim's refusal of an image built for another revision of the chip (the P4's)
+        <T::Soc as esp_soc::Soc>::check_image(&data)
+            .map_err(|e| format!("--flash-at {offset:#x}={}: {e}", path.display()))?;
         m.machine()
             .write_flash(*offset, &data)
             .map_err(|e| format!("--flash-at {offset:#x}={}: {e}", path.display()))?;
@@ -399,7 +450,7 @@ fn read(path: &Path) -> Result<Vec<u8>, String> {
 /// esp32sim's ROM lookup: `$ESP32SIM_ROM_DIR`, then `~/.espressif/tools/esp-rom-elfs/*/`, newest
 /// release first, for runs by hand. As esp32sim has it, except that an entry of `esp-rom-elfs/`
 /// must hold the ROM as a file (esp32sim takes any path there that exists) and `HOME` need not be
-/// valid UTF-8. The plan pins release `20241011` (M0), which this lookup does not prefer, so the
+/// valid UTF-8. The plan pins release `20260528` (M0), which this lookup does not prefer, so the
 /// esp32sim backend (#9) must pass `--rom`.
 fn find_rom(name: &str) -> Option<PathBuf> {
     if let Some(p) = std::env::var_os("ESP32SIM_ROM_DIR")

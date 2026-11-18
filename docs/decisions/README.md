@@ -107,6 +107,10 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [PlatformIO's core directory is .cache/platformio/](firmware.md#platformios-core-directory-is-cacheplatformio) | `firmware.md` | decided (#193) |
 | [The other chips' images are a family of their own, from the same projects](firmware.md#the-other-chips-images-are-a-family-of-their-own-from-the-same-projects) | `firmware.md` | decided (#236) |
 | [The USB-Serial/JTAG console images are a project and an environment of their own](firmware.md#the-usb-serialjtag-console-images-are-a-project-and-an-environment-of-their-own) | `firmware.md` | decided (#248) |
+| [Each chip's images are built with the ESP-IDF its model needs](firmware.md#each-chips-images-are-built-with-the-esp-idf-its-model-needs) | `firmware.md` | decided (#233) |
+| [The P4's images are built for rev ≥ 3, and one for rev < 3](firmware.md#the-p4s-images-are-built-for-rev--3-and-one-for-rev--3) | `firmware.md` | decided (#233) |
+| [hello_world_psram names the PSRAM driver on ESP-IDF v5.5 and later](firmware.md#hello_world_psram-names-the-psram-driver-on-esp-idf-v55-and-later) | `firmware.md` | decided (#233) |
+| [The ROM release moved to 20260528](firmware.md#the-rom-release-moved-to-20260528) | `firmware.md` | decided (#233) |
 
 ## The esp32tl package and its pytest plugin
 
@@ -337,6 +341,8 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The serial backend runs an ESP32-S3 through its USB-Serial/JTAG port](harness.md#the-serial-backend-runs-an-esp32-s3-through-its-usb-serialjtag-port) | `harness.md` | decided (#248) |
 | [A USB console through TinyUSB is not a console the profile can name](harness.md#a-usb-console-through-tinyusb-is-not-a-console-the-profile-can-name) | `harness.md` | postponed (#248) |
 | [A message the broker published as a Will says so in Message.will](harness.md#a-message-the-broker-published-as-a-will-says-so-in-messagewill) | `harness.md` | decided (#243) |
+| [The P4's ROM is the one of its build's revision](harness.md#the-p4s-rom-is-the-one-of-its-builds-revision) | `harness.md` | decided (#233) |
+| [On the P4 and the S31 the console has no pins, and a UART route skips the test](harness.md#on-the-p4-and-the-s31-the-console-has-no-pins-and-a-uart-route-skips-the-test) | `harness.md` | decided (#233) |
 
 ## The runner crate and esp32sim
 
@@ -402,3 +408,8 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The USB-Serial/JTAG console adds `console_rx` at protocol version 2](runner.md#the-usb-serialjtag-console-adds-console_rx-at-protocol-version-2) | `runner.md` | decided (#248) |
 | [The USB-Serial/JTAG console's bytes are stamped with the end of their slice](runner.md#the-usb-serialjtag-consoles-bytes-are-stamped-with-the-end-of-their-slice) | `runner.md` | decided (#248) |
 | [The runner reads the esp_timer counter's registers at slice boundaries](runner.md#the-runner-reads-the-esp_timer-counters-registers-at-slice-boundaries) | `runner.md` | decided (#245) |
+| [The P4 runs on the esp32sim model of the revision its images are built for](runner.md#the-p4-runs-on-the-esp32sim-model-of-the-revision-its-images-are-built-for) | `runner.md` | decided (#233) |
+| [On the P4 and the S31, UART0's console has no pins](runner.md#on-the-p4-and-the-s31-uart0s-console-has-no-pins) | `runner.md` | decided (#233) |
+| [The P4's and the S31's GPIO output is reported where esp32sim does not report it](runner.md#the-p4s-and-the-s31s-gpio-output-is-reported-where-esp32sim-does-not-report-it) | `runner.md` | decided (#233) |
+| [A power-on reset of the P4 clears what esp32sim's chip reset keeps](runner.md#a-power-on-reset-of-the-p4-clears-what-esp32sims-chip-reset-keeps) | `runner.md` | decided (#233) |
+| [The P4 reports its uptime as the other SYSTIMER chips do, the S31 none yet](runner.md#the-p4-reports-its-uptime-as-the-other-systimer-chips-do-the-s31-none-yet) | `runner.md` | decided (#233) |

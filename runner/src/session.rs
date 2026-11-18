@@ -108,6 +108,16 @@ pub trait Guest {
     /// Bytes from the host into the USB-Serial/JTAG controller, as USB packets of at most 64
     /// bytes, each taken into the RX FIFO once the guest has read the one before.
     fn usb_console_input(&mut self, _data: &[u8]) {}
+    // The console on a UART0 without pins (`Profile::uart_pins`), asked only on such a chip.
+
+    /// What the guest wrote to UART0 since the last call: the bytes esp32sim drained from its TX
+    /// FIFO.
+    fn take_uart0_console(&mut self) -> Vec<u8> {
+        Vec::new()
+    }
+    /// Bytes for UART0's RX, none of them dropped: each chip's module says when they reach the
+    /// RX FIFO (`chip::Profile::uart_pins`).
+    fn uart0_console_input(&mut self, _data: &[u8]) {}
     // Wi-Fi, asked with `--wifi` or `--wifi-sta`: the defaults are a chip without it.
 
     /// Data readiness and completed joins; absent outside virtual station mode.
@@ -238,6 +248,9 @@ pub struct Options<'a> {
     /// `--console-port usb`: the console is the USB-Serial/JTAG controller, not UART0, and the
     /// peer's `console_rx` is its input.
     pub usb_console: bool,
+    /// The console is UART0 on a chip whose UARTs have no pins (`Profile::uart_pins`): what
+    /// esp32sim drains from its TX FIFO, and the peer's `console_rx` is its input.
+    pub uart0_stream: bool,
     /// `--peer-timeout`; `None` waits for ever.
     pub peer_timeout: Option<Duration>,
     /// Set by `SIGTERM` and `SIGINT`.
@@ -312,8 +325,9 @@ enum Item {
         cycle: u64,
         data: Vec<u8>,
     },
-    /// What the guest wrote to its USB-Serial/JTAG console in a slice, taken at its end.
-    UsbConsole {
+    /// What the guest wrote to its console in a slice, taken at its end: the USB-Serial/JTAG
+    /// controller's, or UART0's on a chip whose UARTs have no pins.
+    StreamConsole {
         cycle: u64,
         data: Vec<u8>,
     },
@@ -342,7 +356,7 @@ impl Item {
             | Item::WifiLink { cycle, .. }
             | Item::Eth { cycle, .. }
             | Item::Hci { cycle, .. }
-            | Item::UsbConsole { cycle, .. }
+            | Item::StreamConsole { cycle, .. }
             | Item::SdCard { cycle, .. }
             | Item::Uptime { cycle, .. } => *cycle,
         }
@@ -391,7 +405,7 @@ enum Input {
     Release(Vec<u8>),
     Eth(Vec<u8>),
     Hci(Vec<u8>),
-    UsbConsole(Vec<u8>),
+    Console(Vec<u8>),
     WifiAp(bool),
     Power(bool),
     ChipReset,
@@ -495,7 +509,7 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
             resyncs: 0,
             stats: Stats {
                 wifi: opts.wifi.map(|_| WifiStats::default()),
-                console_rx_lost: opts.usb_console.then_some(0),
+                console_rx_lost: (opts.usb_console || opts.uart0_stream).then_some(0),
                 ..Stats::default()
             },
             opts,
@@ -944,13 +958,18 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
             }
         }
         self.pending.extend(items);
-        // esp32sim's USB-Serial/JTAG has no pins and keeps no time of its own: what the guest
-        // wrote in the slice is stamped with its end
-        if self.opts.usb_console && self.opts.console {
-            let data = self.guest.take_usb_console();
+        // esp32sim's USB-Serial/JTAG has no pins and keeps no time of its own, nor does a UART
+        // whose bytes esp32sim does not tell the board: what the guest wrote in the slice is
+        // stamped with its end
+        if self.opts.console && (self.opts.usb_console || self.opts.uart0_stream) {
+            let data = if self.opts.usb_console {
+                self.guest.take_usb_console()
+            } else {
+                self.guest.take_uart0_console()
+            };
             if !data.is_empty() {
                 let cycle = self.guest.cycles();
-                self.pending.push_back(Item::UsbConsole { cycle, data });
+                self.pending.push_back(Item::StreamConsole { cycle, data });
             }
         }
         if self.opts.wifi.is_some() {
@@ -1001,7 +1020,10 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
             match item {
                 Item::Board(Recorded::UartTx { route, byte, .. }) => {
                     self.route_seen(route, t)?;
-                    let console = route.port == 0 && self.opts.console && !self.opts.usb_console;
+                    let console = route.port == 0
+                        && self.opts.console
+                        && !self.opts.usb_console
+                        && !self.opts.uart0_stream;
                     if console {
                         self.console_byte(t, route, byte)?;
                     }
@@ -1044,7 +1066,7 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                     self.event(t, |seq| protocol::hci_tx(seq, t, &data))?;
                 }
                 // not an event: one `console` message per line, as UART0's end after a newline
-                Item::UsbConsole { data, .. } => {
+                Item::StreamConsole { data, .. } => {
                     self.close_open()?;
                     for piece in data.split_inclusive(|&b| b == b'\n') {
                         for chunk in piece.chunks(MAX_DATA) {
@@ -1247,13 +1269,13 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                 }
                 Incoming::ConsoleRx { t, data } => {
                     check(t, Vec::new())?;
-                    if !self.opts.usb_console {
+                    if !self.opts.usb_console && !self.opts.uart0_stream {
                         return Err(protocol_error(
-                            "console_rx without --console-port usb",
+                            "console_rx without --console-port usb, on a UART0 with pins",
                             &line,
                         ));
                     }
-                    inputs.push((t, Input::UsbConsole(data)));
+                    inputs.push((t, Input::Console(data)));
                 }
                 Incoming::HciRx { t, data } => {
                     check(t, Vec::new())?;
@@ -1429,12 +1451,15 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                     self.deliver_eth();
                 }
                 // into the controller's packet queue at once: USB carries it at no line rate the
-                // runner paces; with the supply off there is no device on the bus to take it
-                Input::UsbConsole(data) => {
+                // runner paces; into UART0's queue, which esp32sim releases at its baud rate; with
+                // the supply off there is no chip to take it
+                Input::Console(data) => {
                     if self.off {
                         *self.stats.console_rx_lost.get_or_insert(0) += data.len() as u64;
-                    } else {
+                    } else if self.opts.usb_console {
                         self.guest.usb_console_input(&data);
+                    } else {
+                        self.guest.uart0_console_input(&data);
                     }
                 }
                 // for the guest's host, at its next VHCI poll; a reset before it loses the packet

@@ -19,7 +19,13 @@ from esp32tl import __version__
 SIM_REV = "357b0e542dfe97d4c62ec4a15c01c4969164448c"
 ROM = "esp32_rev300_rom.elf"
 ROM_SHA = "920b70635440517866aab2230964a570d2cf2b676658d93c52fbac108c1cca31"
-# Every chip's mask ROM ELF in release 20241011, the one the runner boots, and its SHA-256.
+# The release of espressif/esp-rom-elfs the ROM ELFs come from.
+ROM_RELEASE = "20260528"
+# Every chip's mask ROM ELF in release ROM_RELEASE, the one the runner boots, and its SHA-256, by
+# the chip's ESP-IDF target name. The ESP32-P4 has two: rev >= 3 (v3.x, ECO5), what ESP-IDF builds
+# for by default, and P4_REV0, rev < 3 (v0.x and v1.x, ECO0), for an image built with
+# CONFIG_ESP32P4_SELECTS_REV_LESS_V3; the runner takes the revision from the images, and the
+# backend gives it the ROM that goes with them.
 ROMS = {
     "esp32": (ROM, ROM_SHA),
     "esp32s3": (
@@ -34,9 +40,25 @@ ROMS = {
         "esp32c6_rev0_rom.elf",
         "788e1d38724aeb8fd974fa10c4a7b089c02627d35342ce84b9e0b12b239f3551",
     ),
+    "esp32p4": (
+        "esp32p4_rev300_rom.elf",
+        "90e723f71fe4701adee7e40bfab6971d8ecf5e356f4d5a81e77743248abc3a97",
+    ),
+    "esp32p4-rev0": (
+        "esp32p4_rev0_rom.elf",
+        "948f2c7d108d04a9c3a982f9c1c498fb17f2c4a68abc51f87782592034d7ce44",
+    ),
+    "esp32s31": (
+        "esp32s31_rev0_rom.elf",
+        "a52ad7513deb656a910a5740125f1cce2c7941f11ce57213b7b43aea93d5ab87",
+    ),
 }
-ROM_ARCHIVE_SHA = "921f000164a421c7628fbfee55b173384aafaa51883adc65cd27bf9b0af9e9a9"
-ROM_URL = "https://github.com/espressif/esp-rom-elfs/releases/download/20241011/esp-rom-elfs-20241011.tar.gz"
+P4_REV0 = "esp32p4-rev0"
+ROM_ARCHIVE_SHA = "caa463d3cbef2430a5a35847c1d9f2f152403b17a802050927ff60c8da54fe46"
+ROM_URL = (
+    "https://github.com/espressif/esp-rom-elfs/releases/download/"
+    f"{ROM_RELEASE}/esp-rom-elfs-{ROM_RELEASE}.tar.gz"
+)
 RELEASE_URL = (
     f"https://github.com/mateuszsikora/esp32-testing-library/releases/download/v{__version__}"
 )
@@ -121,9 +143,9 @@ def manifest(path: Path) -> dict[str, str]:
 
 
 def rom_variable(chip: str) -> str:
-    """The variable that names `chip`'s ROM ELF: ESP32TL_ROM for the classic ESP32,
-    ESP32TL_ROM_<CHIP> (ESP32TL_ROM_ESP32S3) for another chip."""
-    return "ESP32TL_ROM" if chip == "esp32" else f"ESP32TL_ROM_{chip.upper()}"
+    """The variable that names the ROM ELF of `chip`, a key of ROMS: ESP32TL_ROM for the classic
+    ESP32, ESP32TL_ROM_<CHIP> (ESP32TL_ROM_ESP32S3, ESP32TL_ROM_ESP32P4_REV0) for another."""
+    return "ESP32TL_ROM" if chip == "esp32" else f"ESP32TL_ROM_{chip.upper().replace('-', '_')}"
 
 
 class Unreleased(NamedTuple):
@@ -169,7 +191,7 @@ def require_release() -> None:
             f"{installed_from.checkout}, then set ESP32TL_RUNNER to its "
             f"runner/target/release/esp32tl-runner, and "
             f"{', '.join(rom_variable(chip) for chip in ROMS)} to the ROM ELFs in its "
-            ".cache/esp-rom-elfs/20241011/"
+            f".cache/esp-rom-elfs/{ROM_RELEASE}/"
         )
 
 
@@ -184,8 +206,8 @@ def cached_file(kind: str, directory: Path | None = None, chip: str = "esp32") -
         PREPARE
         if released
         else f"set {rom_variable(chip)} to the {ROMS[chip][0]} make rom-elf puts in a "
-        "checkout's .cache/esp-rom-elfs/20241011/: esp32tl runtime prepare installs nothing "
-        "for an unreleased esp32tl"
+        f"checkout's .cache/esp-rom-elfs/{ROM_RELEASE}/: esp32tl runtime prepare installs "
+        "nothing for an unreleased esp32tl"
     )
     directory = cache() if directory is None else directory
     if not directory.is_dir():

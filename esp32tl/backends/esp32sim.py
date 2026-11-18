@@ -100,7 +100,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 # The ROM ELF scripts/fetch-rom-elf puts in .cache/ (plan M0). The runner's own lookup prefers the
 # newest release under ~/.espressif instead, so the backend always passes --rom.
-ROM_RELEASE = "20241011"
+ROM_RELEASE = runtime.ROM_RELEASE
 
 # How long a run of the esp32tl command lasts by default, in emulated seconds: its clock runs
 # free. hello_world runs 12 emulated seconds in 0.3 s of wall time on an M2 Pro, so 300 is a few
@@ -129,8 +129,9 @@ SUN_PATH_MAX = 104
 
 
 # What esp32sim does not model on a chip, by what a test asks for: an interface's kind, or
-# `<kind>.<role>` for a role of it. The test is skipped with the reason; each gap is an entry of
-# https://github.com/mateuszsikora/esp32-testing-library/issues/229. Every chip of `boards.CHIPS`
+# `<kind>.<role>` for a role of it. The test is skipped with the reason; each gap esp32sim could
+# close is an entry of https://github.com/mateuszsikora/esp32-testing-library/issues/229, and the
+# reason names it. Every chip of `boards.CHIPS`
 # but the classic ESP32 is named here, with its gaps or with none: a chip added there needs its
 # own decision here (tests/test_pytest_plugin.py checks it).
 CHIP_GAPS: dict[str, dict[str, str]] = {
@@ -141,6 +142,22 @@ CHIP_GAPS: dict[str, dict[str, str]] = {
         f" {boards.CHIPS[chip].title} (#229, G4)",
     }
     for chip in ("esp32s3", "esp32c3", "esp32c6")
+} | {
+    "esp32p4": {
+        "uart": "esp32sim's ESP32-P4 tells the board nothing its UARTs send or receive on their"
+        " pins (#229, G6)",
+        "sd_card": "esp32sim's ESP32-P4 tells the board no SPI pins (#229, G6)",
+        "wifi": "the ESP32-P4 has no Wi-Fi of its own, and esp32sim's co-processor for it is"
+        " not in the runner",
+        "bluetooth": "the ESP32-P4 has no Bluetooth",
+    },
+    "esp32s31": {
+        "uart": "esp32sim's ESP32-S31 tells the board nothing its UARTs send or receive on their"
+        " pins (#229, G7)",
+        "sd_card": "esp32sim's ESP32-S31 tells the board no SPI pins (#229, G7)",
+        "wifi": "esp32sim's ESP32-S31 has no Ethernet relay for the test's network (#229, G7)",
+        "bluetooth": "esp32sim models no Bluetooth on the ESP32-S31",
+    },
 }
 
 
@@ -191,8 +208,22 @@ def runner_path() -> Path:
     return runtime_path("runner")
 
 
-def rom_path(chip: str = "esp32") -> Path:
-    return runtime_path("rom", chip)
+def rom_path(chip: str = "esp32", app: Build | None = None) -> Path:
+    """The ROM ELF the runner boots `app` with on `chip`: the chip's own, or on the ESP32-P4 the
+    one of the revision the build is for (`build.p4_rev3`), as the runner picks the revision."""
+    return runtime_path("rom", rom_key(chip, app))
+
+
+def rom_key(chip: str, app: Build | None = None) -> str:
+    """The key of runtime.ROMS for `app` on `chip`: `runtime.P4_REV0` for an ESP32-P4 build for
+    rev < 3, the chip's name otherwise."""
+    if chip == "esp32p4" and app is not None:
+        try:
+            if not build.p4_rev3(app):
+                return runtime.P4_REV0
+        except BuildError as error:
+            raise BackendError(str(error)) from error
+    return chip
 
 
 def load_app(
@@ -430,7 +461,7 @@ class Esp32Sim(Board):
         # chip that reboots until the test's timeout.
         self.flash_mb = runner_flash_mb(profile, self.app)
         self._nvs: dict[str, tuple[int, Path]] = {}
-        self._runner, self._rom = runner_path(), rom_path(profile.chip)
+        self._runner, self._rom = runner_path(), rom_path(profile.chip, self.app)
         # What the guest printed on its console, as the link brings it, and cut into lines.
         self.console_output = bytearray()
         self.console_lines = ConsoleLines()
@@ -445,12 +476,14 @@ class Esp32Sim(Board):
         # route's file or the card's image.
         self._files: dict[Path, tuple[str, str]] = {}
         # The console's input: UART0's RX pin at 115200 baud, or, on a board whose console is the
-        # chip's USB-Serial/JTAG controller, that controller, which has no pins and no baud.
-        usb = profile.console == boards.USB_SERIAL_JTAG
+        # chip's USB-Serial/JTAG controller, that controller, which has no pins and no baud; on a
+        # chip whose UARTs have no pins in esp32sim, UART0 without its pins.
+        chip = boards.CHIPS[profile.chip]
+        pinless = profile.console == boards.USB_SERIAL_JTAG or not chip.uart_pins
         self._console = ConsoleInput(
             "console",
-            None if usb else Wire(None, boards.CHIPS[profile.chip].console_pin("rx"), 115200),
-            usb=usb,
+            None if pinless else Wire(None, chip.console_pin("rx"), 115200),
+            pinless=pinless,
             log=self.log,
             clock=self._run_clock,
             directory=self.directory,

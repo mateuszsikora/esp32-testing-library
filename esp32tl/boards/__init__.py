@@ -28,7 +28,9 @@ class Chip:
     """What a profile's `chip` brings: its GPIO pads, those of them that are inputs only, its
     UARTs, the IO MUX pins of UART0, which a `console` on UART0 takes, and whether it has a
     USB-Serial/JTAG controller, which a profile's `console` may be instead, with the pads of its
-    USB D- and D+, which such a `console` takes."""
+    USB D- and D+, which such a `console` takes. `uart_pins` is whether esp32sim tells the board
+    what its UARTs send and on which pins: without it, the console on UART0 has no pins in the
+    runner, and a `[uart.<role>]` route cannot be run there (`esp32sim.CHIP_GAPS`)."""
 
     name: str
     title: str
@@ -38,6 +40,7 @@ class Chip:
     console_pins: Mapping[int, str]
     usb_serial_jtag: bool
     usb_pins: Mapping[int, str]
+    uart_pins: bool = True
 
     def console_pin(self, end: Literal["tx", "rx"]) -> int:
         """UART0's `tx` or `rx` pin, the console's."""
@@ -93,6 +96,34 @@ CHIPS = {
         console_pins=MappingProxyType({16: "console.tx", 17: "console.rx"}),
         usb_serial_jtag=True,
         usb_pins=MappingProxyType({12: "console.usb_dm", 13: "console.usb_dp"}),
+    ),
+    # The ESP32-P4's: 0 to 54 (ESP32-P4 datasheet, section 2.3; ESP-IDF's
+    # SOC_GPIO_VALID_GPIO_MASK). UART0 is on GPIO 37 (TX) and 38 (RX); it has five UARTs besides
+    # the LP UART. Its USB-Serial/JTAG controller is on GPIO 24 (D-) and 25 (D+).
+    "esp32p4": Chip(
+        name="esp32p4",
+        title="ESP32-P4",
+        gpios=frozenset(range(55)),
+        input_only=frozenset(),
+        uarts=5,
+        console_pins=MappingProxyType({37: "console.tx", 38: "console.rx"}),
+        usb_serial_jtag=True,
+        usb_pins=MappingProxyType({24: "console.usb_dm", 25: "console.usb_dp"}),
+        uart_pins=False,
+    ),
+    # The ESP32-S31's: 0 to 61 without 29 and 41 (ESP-IDF v6.1's SOC_GPIO_VALID_GPIO_MASK).
+    # UART0 is on GPIO 58 (TX) and 59 (RX); it has four UARTs besides the LP UART. Its
+    # USB-Serial/JTAG controller is on GPIO 33 (D-) and 34 (D+).
+    "esp32s31": Chip(
+        name="esp32s31",
+        title="ESP32-S31",
+        gpios=frozenset(range(62)) - {29, 41},
+        input_only=frozenset(),
+        uarts=4,
+        console_pins=MappingProxyType({58: "console.tx", 59: "console.rx"}),
+        usb_serial_jtag=True,
+        usb_pins=MappingProxyType({33: "console.usb_dm", 34: "console.usb_dp"}),
+        uart_pins=False,
     ),
 }
 PULLS = ("up", "down")

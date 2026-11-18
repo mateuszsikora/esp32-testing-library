@@ -20,13 +20,30 @@ fn every_chip_is_found_by_its_name_in_any_case() {
         assert_eq!(by_name(&profile.name.to_ascii_uppercase()), Some(profile));
     }
     assert_eq!(by_name("s3"), None);
-    assert_eq!(by_name("esp32p4"), None);
+    assert_eq!(by_name("esp32h2"), None);
 }
 
 #[test]
 fn the_profiles_say_what_esp32sim_models() {
     let names: Vec<_> = ALL.iter().map(|p| p.name).collect();
-    assert_eq!(names, ["esp32", "esp32s3", "esp32c3", "esp32c6"]);
+    assert_eq!(
+        names,
+        [
+            "esp32", "esp32s3", "esp32c3", "esp32c6", "esp32p4", "esp32s31"
+        ]
+    );
+    assert_eq!(esp32p4::PROFILE.cpu_hz, 360_000_000);
+    assert_eq!(esp32s31::PROFILE.cpu_hz, 320_000_000);
+    for p in [&esp32p4::PROFILE, &esp32s31::PROFILE] {
+        assert!(!p.wifi_station && !p.wifi && !p.bt, "{}", p.name);
+        assert!(!p.uart_pins && !p.sd_spi && p.usb_serial_jtag, "{}", p.name);
+    }
+    for p in &ALL[..4] {
+        assert!(p.uart_pins && p.sd_spi, "{}", p.name);
+    }
+    assert_eq!(esp32p4::PROFILE.gpios.count_ones(), 55);
+    assert_eq!(esp32s31::PROFILE.gpios.count_ones(), 60);
+    assert_eq!(esp32s31::PROFILE.gpios & (1 << 29 | 1 << 41), 0);
     assert_eq!(esp32s3::PROFILE.cpu_hz, 240_000_000);
     assert_eq!(esp32c3::PROFILE.cpu_hz, 160_000_000);
     assert_eq!(esp32c6::PROFILE.cpu_hz, 160_000_000);
@@ -266,3 +283,209 @@ systimer_uptime_test!(
     0x6000_a000,
     10
 );
+/// The P4's SYSTIMER unit 0 counts from every reset at 22.5 bus cycles a tick, and reads zero
+/// where it was loaded, to within one tick.
+#[test]
+fn the_p4_systimer_reads_zero_at_its_reset_and_where_it_is_loaded() {
+    use crate::session::Uptime;
+    const BASE: u32 = 0x500e_2000;
+    let mut m = <esp32p4::P4<::esp32p4::RevGe3> as Target>::new(4 << 20);
+    let at = |latest: u64| Uptime::Zero {
+        earliest: latest.saturating_sub(23),
+        latest,
+    };
+    assert_eq!(Guest::uptime(&mut m), at(0), "counting from power-on");
+    // 1000 ticks of 22.5 bus cycles
+    Bus::tick(&mut m.bus, 22_500);
+    let now = Guest::cycles(&m);
+    assert_eq!(now, 22_500);
+    assert_eq!(Guest::uptime(&mut m), at(0), "after 1000 ticks");
+    m.bus.write32(BASE + 0x0c, 0).unwrap();
+    m.bus.write32(BASE + 0x10, 400).unwrap();
+    m.bus.write32(BASE + 0x5c, 1).unwrap();
+    assert_eq!(Guest::uptime(&mut m), at(now - 9_000));
+    m.bus.write32(BASE + 0x10, 2000).unwrap();
+    m.bus.write32(BASE + 0x5c, 1).unwrap();
+    assert_eq!(Guest::uptime(&mut m), Uptime::BeforePowerOn);
+    Guest::chip_reset(&mut m);
+    let reset = Guest::cycles(&m);
+    let Uptime::Zero { earliest, latest } = Guest::uptime(&mut m) else {
+        panic!("counting from the reset");
+    };
+    assert!(earliest <= reset && reset <= latest && latest - earliest <= 23);
+}
+
+/// The S31's SYSTIMER counts at a rate esp32sim keeps to itself: no uptime.
+#[test]
+fn the_s31_reports_no_uptime() {
+    let mut s = <esp32s31::S31 as Target>::new(4 << 20);
+    assert_eq!(Guest::uptime(&mut s), crate::session::Uptime::Stopped);
+}
+
+/// A power-on reset of the P4 clears L2MEM, the TCM and the LP RAM, which esp32sim's chip reset
+/// keeps, and the LP registers with the reset cause.
+macro_rules! p4_power_on_test {
+    ($name:ident, $rev:ty) => {
+        power_on_test!(
+            $name,
+            esp32p4::P4<$rev>,
+            [
+                ::esp32p4::bus::L2MEM_LOW,
+                ::esp32p4::bus::L2MEM_HIGH - 4,
+                ::esp32p4::bus::TCM_LOW,
+                ::esp32p4::bus::LP_RAM_LOW
+            ]
+        );
+    };
+}
+p4_power_on_test!(
+    on_the_p4_a_power_on_reset_clears_l2mem_the_tcm_and_the_lp_ram,
+    ::esp32p4::RevLt3
+);
+p4_power_on_test!(
+    on_the_p4_rev3_a_power_on_reset_clears_l2mem_the_tcm_and_the_lp_ram,
+    ::esp32p4::RevGe3
+);
+
+#[test]
+fn a_p4_chip_reset_keeps_l2mem_and_the_cause_it_was_asked_for() {
+    let mut m = <esp32p4::P4<::esp32p4::RevGe3> as Target>::new(4 << 20);
+    m.bus
+        .load_bytes(::esp32p4::bus::L2MEM_LOW, &[0xa5; 4])
+        .unwrap();
+    m.bus.request_reset(12);
+    assert_eq!(Guest::chip_reset(&mut m), 12);
+    assert_eq!(
+        m.bus.read32(::esp32p4::bus::L2MEM_LOW).unwrap(),
+        0xa5a5_a5a5
+    );
+}
+
+/// The P4 has two UARTs, and esp32sim tells the board no route of either.
+#[test]
+fn the_p4_reports_no_uart_route_and_has_no_uart2() {
+    let mut m = <esp32p4::P4<::esp32p4::RevLt3> as Target>::new(4 << 20);
+    for port in 0..3 {
+        let route = Guest::uart_route(&m, port);
+        assert_eq!(
+            (route.port, route.tx_pins, route.rx_pin, route.baud),
+            (port, 0, None, None)
+        );
+    }
+    Guest::uart_receive(&mut m, 2, b'x');
+    Guest::uart_frame_error(&mut m, 2);
+    assert_eq!(Guest::rx_pending(&m, 2), 0);
+    Guest::uart_receive(&mut m, 1, b'a');
+    assert_eq!(Guest::rx_pending(&m, 1), 1);
+}
+
+/// The console's input on the P4 goes into UART0's RX FIFO as far as it has room, and the rest
+/// waits in esp32sim's queue for the baud rate: none of it is dropped.
+#[test]
+fn the_p4_console_input_fills_the_fifo_and_queues_the_rest() {
+    let mut m = <esp32p4::P4<::esp32p4::RevLt3> as Target>::new(4 << 20);
+    Guest::uart0_console_input(&mut m, b"help\n");
+    assert_eq!(Guest::rx_pending(&m, 0), 5);
+    assert!(!m.bus.periph.uart[0].has_queued());
+    Guest::uart0_console_input(&mut m, &[b'x'; 200]);
+    assert_eq!(Guest::rx_pending(&m, 0), 128);
+    assert!(m.bus.periph.uart[0].has_queued());
+}
+
+/// What UART0 sent comes out of the machine's console stream, once, on the P4 and the S31.
+#[test]
+fn the_uart0_console_is_taken_from_the_console_stream() {
+    let mut p4 = <esp32p4::P4<::esp32p4::RevGe3> as Target>::new(4 << 20);
+    p4.console.uart0.extend_from_slice(b"Hello world!\n");
+    assert_eq!(Guest::take_uart0_console(&mut p4), b"Hello world!\n");
+    assert!(Guest::take_uart0_console(&mut p4).is_empty());
+    let mut s31 = <esp32s31::S31 as Target>::new(4 << 20);
+    s31.m.console.uart0.extend_from_slice(b"ok\n");
+    assert_eq!(Guest::take_uart0_console(&mut s31), b"ok\n");
+}
+
+/// The P4's revision is the one the header at the bootloader's offset asks for, whether a
+/// bootloader image or an image of the whole flash put it there, else the first other P4 image's;
+/// anything that is no P4 image counts as rev < 3.
+#[test]
+fn the_p4_revision_comes_from_the_image_headers() {
+    let header = |min: u16| {
+        let mut h = vec![0; 24];
+        h[0] = 0xE9;
+        h[12] = 0x12;
+        h[15..17].copy_from_slice(&min.to_le_bytes());
+        h
+    };
+    let table = vec![0xaa, 0x50, 0, 0];
+    let erased = vec![0xff; 24];
+    assert!(esp32p4::rev3(Some(&header(301)), &[header(100)]));
+    assert!(!esp32p4::rev3(Some(&header(100)), &[header(301)]));
+    // an image of the whole flash from 0x0: erased at its start, its bootloader at 0x2000
+    assert!(esp32p4::rev3(
+        Some(&header(301)),
+        std::slice::from_ref(&erased)
+    ));
+    assert!(esp32p4::rev3(Some(&erased), &[table.clone(), header(301)]));
+    assert!(!esp32p4::rev3(None, &[table]));
+    let mut c6 = header(301);
+    c6[12] = 0x0d;
+    assert!(!esp32p4::rev3(None, &[c6]));
+}
+
+/// On the S31 a power-on reset leaves POWERON as the cause the ROM reports, with esp32sim's chip
+/// reset making SRAM and the LP memory again, and keeps the flash and the clock.
+#[test]
+fn on_the_s31_a_power_on_reset_clears_sram_and_the_lp_memory() {
+    use ::esp32s31::bus::{LP_BASE, SRAM_BASE};
+    let mut s = <esp32s31::S31 as Target>::new(4 << 20);
+    for address in [SRAM_BASE, LP_BASE] {
+        s.m.bus.load_bytes(address, &[0xa5; 4]).unwrap();
+    }
+    s.m.write_flash(0x9000, b"NVS!").unwrap();
+    Guest::idle_until(&mut s, 8 * esp32s31::PROFILE.cpu_hz);
+    s.m.bus.request_reset(12);
+    assert_eq!(Guest::power_on_reset(&mut s, &empty_rom()), 1);
+    for address in [SRAM_BASE, LP_BASE] {
+        assert_eq!(s.m.bus.read32(address).unwrap(), 0, "{address:#x}");
+    }
+    assert_eq!(&s.m.bus.flash[0x9000..0x9004], b"NVS!");
+    assert_eq!(Guest::cycles(&s), 8 * esp32s31::PROFILE.cpu_hz);
+    assert_eq!(SocBus::reset_cause(&s.m.bus), 1);
+    assert!(!SocBus::sw_reset(&s.m.bus));
+}
+
+/// The S31 has UART0 alone in esp32sim, without a route; the board's PSRAM is a board input,
+/// which esp32sim applies again to the bus it makes at a chip reset (`BoardInputs::apply`).
+#[test]
+fn the_s31_has_uart0_alone_and_its_psram_stays_a_board_input_through_a_reset() {
+    let mut s = <esp32s31::S31 as Target>::new(16 << 20);
+    for port in 0..3 {
+        assert_eq!(Guest::uart_route(&s, port).rx_pin, None);
+    }
+    Guest::uart_receive(&mut s, 1, b'x');
+    assert_eq!(Guest::rx_pending(&s, 1), 0);
+    s.set_psram_size(16 << 20).unwrap();
+    Guest::chip_reset(&mut s);
+    let inputs = s.m.bus.board_inputs.as_ref().unwrap();
+    assert_eq!(inputs.psram_bytes, 16 << 20);
+}
+
+/// The console's input on the S31 waits in the runner until UART0 takes it: a byte UART0 refuses,
+/// its receiver off (`S31Bus::uart_input` reads UART_CONF0 at 0x88), stays queued and is not
+/// lost, and goes in once UART0 takes it; a reset empties the queue, as it does UART0.
+#[test]
+fn the_s31_console_input_waits_until_uart0_takes_it() {
+    let mut s = <esp32s31::S31 as Target>::new(4 << 20);
+    let conf = s.m.bus.inner.periph.uart0.read(0x88);
+    Guest::uart0_console_input(&mut s, b"help\n");
+    s.m.bus.inner.periph.uart0.write(0x88, conf & !(1 << 25));
+    s.feed_console();
+    assert_eq!(Guest::rx_pending(&s, 0), 0);
+    assert_eq!(s.console_queued(), 5, "the byte waits");
+    s.m.bus.inner.periph.uart0.write(0x88, conf);
+    s.feed_console();
+    assert_eq!(Guest::rx_pending(&s, 0), 1);
+    assert_eq!(s.console_queued(), 4);
+    Guest::chip_reset(&mut s);
+    assert_eq!(s.console_queued(), 0);
+}

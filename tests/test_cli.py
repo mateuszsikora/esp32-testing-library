@@ -89,8 +89,8 @@ def test_the_help_names_run_and_replay(
         (
             ["run", "--app", "firmware/hello_world", "--board", "nope"],
             "esp32tl: no board profile named 'nope'; the profiles are esp32-c3-devkitm,"
-            " esp32-c6-devkitc, esp32-devkitc, esp32-s3-devkitc, gps-alarm-clock,"
-            " lilygo-t-a7670g-r2, sd-data-logger\n",
+            " esp32-c6-devkitc, esp32-devkitc, esp32-p4-function-ev-board, esp32-s3-devkitc,"
+            " esp32-s31-module, gps-alarm-clock, lilygo-t-a7670g-r2, sd-data-logger\n",
         ),
         (
             ["run", "--app", "nowhere"],
@@ -166,7 +166,7 @@ Path({str(tmp_path / "loaded.json")!r}).write_text(json.dumps([
 """)
     runner.chmod(0o755)
     rom = tmp_path / "rom.elf"
-    rom.write_bytes((ROOT / ".cache/esp-rom-elfs/20241011/esp32_rev300_rom.elf").read_bytes())
+    rom.write_bytes((ROOT / ".cache/esp-rom-elfs/20260528/esp32_rev300_rom.elf").read_bytes())
     args = [
         command,
         "--app",
