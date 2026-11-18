@@ -1442,6 +1442,57 @@ that references to its number keep their meaning.
     `tests/test_net_mqtt.py::test_next_subscribe_sees_a_later_subscribe_to_the_filter_without_consuming`,
     `tests/test_net_mqtt.py::test_a_malformed_subscribe_or_unsubscribe_is_refused_whole`,
     `tests/test_net_mqtt.py::test_mqtt_conditions_are_named_and_reject_truth_testing`
+- **258.** The end of the device's link (power off, coverage lost, a dropped or hung call, the
+    access point off the air) loses the connections the test opened and leaves the broker's end of
+    each the device opened open and silent: the broker's deadlines run with the link down, and the
+    keepalive expiry publishes the Will, when the client set one, 1.5 times the keepalive after the
+    device's last packet, not at the loss. A client back with the same ID before then, connecting
+    from another source port, takes the connection over (MQTT-3.1.4-2); with CleanSession=0 on both
+    connections the old Will is discarded unsent, and with CleanSession=1 on either it is published
+    at the takeover, as it is when the CONNECT comes at the instant the old keepalive runs out; a
+    CONNECT after the expiry finds the old connection closed and its Will published by the expiry. A
+    SYN from the old source port, its options parsed, resets the old connection, its Will going
+    then, and opens a new one. A device connection the link's end, a chip reset or a DHCP lease
+    given up left open is dropped, with no FIN, when its service closes it, and so are, at once, one
+    its service had closed and one still in its handshake, and what waited for its window is
+    discarded; after a chip reset behind the modem or the access point, or a lease given up, the
+    gone stack's SYNs still on the path never arrive, and its data does, where the link's end, and a
+    reset behind a virtual station, clear the path; what its service writes beyond the window is
+    discarded and counted. A virtual station leaving the device's access point drops the device's
+    connections still in their handshake, ends those with bytes or a FIN not acknowledged and those
+    whose FIN was acknowledged with no FIN back, and leaves the rest as they were: what their
+    service writes or closes meanwhile reaches the device in order once the station is back with the
+    same address, and a station back with another loses them. A stale close of an ended connection
+    leaves the new one on its port alone. While the link is down, a bridged connection keeps its
+    millisecond turns. A keepalive of 0 sets no deadline.
+    `tests/test_net_ip.py::test_modem_link_loss_leaves_tcp_open_and_the_will_to_the_keepalive`,
+    `tests/test_net_mqtt_sessions.py::test_a_lost_link_publishes_the_will_when_the_keepalive_runs_out`,
+    `tests/test_net_mqtt_sessions.py::test_a_device_back_before_its_keepalive_takes_over_its_connection`,
+    `tests/test_net_mqtt_sessions.py::test_a_stored_session_outlives_a_lost_link_and_its_keepalive`,
+    `tests/test_net_mqtt_sessions.py::test_a_new_stack_connects_from_the_old_port_once_the_keepalive_closed_it`,
+    `tests/test_net_mqtt_sessions.py::test_the_links_end_drops_a_connection_its_service_has_closed`,
+    `tests/test_net_mqtt_sessions.py::test_a_keepalive_of_zero_keeps_a_lost_links_connection_and_its_will`,
+    `tests/test_net_ethernet.py::test_a_keepalive_that_runs_out_before_the_device_is_back_drops_the_connection`,
+    `tests/test_net_mqtt_sessions.py::test_a_takeover_at_the_old_keepalives_deadline_publishes_its_will`,
+    `tests/test_net_mqtt_sessions.py::test_the_links_end_drops_a_connection_still_in_its_handshake`,
+    `tests/test_net_mqtt_sessions.py::test_a_stale_close_leaves_the_new_connection_on_its_port_alone`,
+    `tests/test_net_client.py::test_a_chip_reset_drops_a_device_connection_still_in_its_handshake`,
+    `tests/test_net_client.py::test_a_released_lease_orphans_the_devices_connections_on_its_address`,
+    `tests/test_net_station.py::test_a_station_that_leaves_and_rejoins_leaves_the_devices_connection_to_its_end`,
+    `tests/test_net_station.py::test_what_a_service_writes_while_the_station_is_away_waits_for_it`,
+    `tests/test_net_client.py::test_an_unsupported_dhcp_message_leaves_the_address_and_the_connections`,
+    `tests/test_net_client.py::test_what_an_orphaned_connection_cannot_take_is_discarded_and_counted`,
+    `tests/test_net_client.py::test_the_gone_stacks_syn_on_the_path_never_arrives_but_its_data_does`,
+    `tests/test_net_mqtt_sessions.py::test_a_new_stacks_syn_from_the_old_port_resets_the_orphaned_connection`,
+    `tests/test_net_station.py::test_a_station_back_with_another_address_loses_the_connections_on_the_old_one`,
+    `tests/test_net_station.py::test_a_station_that_leaves_with_bytes_unacknowledged_ends_the_connection`,
+    `tests/test_net_client.py::test_a_malformed_datagram_on_the_path_survives_a_reset`,
+    `tests/test_net_client.py::test_a_malformed_syn_leaves_the_orphaned_connection_and_its_will`,
+    `tests/test_net_station.py::test_a_station_that_leaves_after_the_services_fin_was_acknowledged_retires_it`,
+    `tests/test_net_bridge.py::test_a_lost_link_leaves_the_stream_at_the_service_open_until_the_run_ends`,
+    `tests/test_modem_model.py::test_the_keepalive_runs_out_with_the_call_ended`,
+    `tests/test_mqtt_session.py::test_a_lost_link_publishes_the_will_at_the_keepalive_not_at_the_loss`,
+    `tests/test_mqtt_session.py::test_a_device_back_before_its_keepalive_takes_over_its_session_and_no_will_goes`
 - **223.** `broker.find_messages(since=broker.mark())` returns every matching message appended
     after the mark, in append order, those at the mark's board time included and those appended
     before it excluded; `client=` keeps one client ID's messages, and the test's publications carry
@@ -1482,16 +1533,18 @@ that references to its number keep their meaning.
 
 - **128.** Closing an MQTT connection cancels pending PUBACK handles permanently, including on
     disconnect, transport loss, takeover and keepalive expiry. Graceful DISCONNECT suppresses
-    the Will; other losses emit it once. Keepalive expiry wins a tie with an ACK deadline.
+    the Will, and so does a takeover of a session both connections keep (258); other losses emit
+    it once. Keepalive expiry wins a tie with an ACK deadline.
     A reconnect has a fresh connection identity; a stale handle cannot acknowledge its packets.
     A stream whose CONNECT is rejected also takes an ID; client records and Wills carry theirs.
-    Synchronous stream-write failure cancels instead of claiming emission. Network reset
-    cancels delayed handles and keeps retained receipts; emitted history survives closure.
+    Synchronous stream-write failure cancels instead of claiming emission. A lost link cancels
+    nothing: a delayed handle is emitted at its deadline, to a link that is down, and retained
+    receipts stay; emitted history survives closure.
     `tests/test_net_mqtt.py::test_connection_end_cancels_pending_ack_and_stale_release_cannot_ack_reconnect`,
     `tests/test_net_mqtt.py::test_failed_stream_write_cancels_instead_of_claiming_puback_emission`,
     `tests/test_net_mqtt.py::test_rejected_connect_uses_a_connection_id_and_accepted_records_carry_theirs`,
     `tests/test_net_mqtt.py::test_disconnect_leaves_other_clients_pending_and_emitted_history_intact`,
-    `tests/test_net_mqtt_failures.py::test_network_reset_cancels_delayed_puback_without_losing_retained_receipt`
+    `tests/test_net_mqtt_failures.py::test_a_lost_link_leaves_a_delayed_puback_to_its_deadline_and_keeps_retained_receipt`
 
 - **129.** Broker disconnect affects only the selected stream over both TCP and TLS. Another stream
     and a new NTP exchange remain usable over the same open PPP link. Reconnect restores no
@@ -1525,13 +1578,14 @@ that references to its number keep their meaning.
     `tests/test_net_bridge.py::test_the_backend_may_refuse_a_bridge`
 - **204.** A bridged connection carries the bytes both ways in order, each handed to the device in
     a turn and stamped from it; the service's end of the stream closes the device's after its last
-    bytes, and the device's close, a lost link and the end of the run end the stream at the service.
+    bytes, and the device's close and the end of the run end the stream at the service; a lost link
+    does not, until the run ends.
     What the service sends after the device's close reaches nothing and is counted in the transcript.
     `tests/test_net_bridge.py::test_a_connection_goes_to_the_service_and_its_answer_comes_back`,
     `tests/test_net_bridge.py::test_the_service_closing_closes_the_devices_end_after_its_last_bytes`,
     `tests/test_net_bridge.py::test_the_device_closing_ends_the_stream_at_the_service`,
     `tests/test_net_bridge.py::test_what_the_service_sends_after_the_device_closed_is_dropped_and_logged`,
-    `tests/test_net_bridge.py::test_a_lost_link_ends_the_stream_at_the_service`,
+    `tests/test_net_bridge.py::test_a_lost_link_leaves_the_stream_at_the_service_open_until_the_run_ends`,
     `tests/test_net_bridge.py::test_close_ends_a_connection_the_service_keeps_open`,
     `tests/test_net_bridge.py::test_the_services_answer_reaches_the_station_in_a_tcp_segment_stamped_at_the_turn`
 - **225.** A connection the test opens to the device comes from `10.64.0.1` and from the next

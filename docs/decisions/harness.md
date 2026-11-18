@@ -2479,9 +2479,11 @@ Status: decided (#30)
 `modem.network()` selects the AT model and its PPP peer before power-on; `broker` calls it as a
 fixture. Existing AT-only tests retain their immediate `+++` escape and unanswered data phase.
 Network data mode instead requires a second of idle time before and after `+++`, preserving
-binary PPP bytes. Power, registration and functionality loss reset PPP, queued replies and TCP
-sessions; a fresh dial negotiates again. The broker retains its test-side history and retained
-messages, while connection loss emits Wills once. Registration, functionality and power loss emit
+binary PPP bytes. Power, registration and functionality loss reset PPP and queued replies; a fresh
+dial negotiates again. They reset the TCP sessions too, until #244 left the device's half-open
+([a lost link](#a-lost-link-leaves-the-devices-connections-half-open-until-their-keepalive)). The
+broker retains its test-side history and retained messages, while a connection's end emits its
+Will once. Registration, functionality and power loss emit
 no unsolicited `NO CARRIER`; [`drop_call`](#a-dropped-call-says-no-carrier-and-offers-a-terminate-request-only-if-asked)
 does.
 
@@ -4581,3 +4583,80 @@ name alone, in every class: `close`, `start` or `transcript` is the test's on `A
 and `receive` and `poll` are what the test writes on a `Model`. Constants for the harness's own
 virtual station's MAC and access point's BSSID: a test that checks either names it, through
 `wifi.station(mac=...)` or `wifi.access_point(bssid=...)`.
+
+## A lost link leaves the device's connections half-open until their keepalive
+
+Status: decided (#244)
+
+The end of the device's link, `board.power_off()`, `modem.lose_registration()`,
+`modem.lose_power()`, `modem.hang()`, `modem.drop_call()`, PPP ended by the device or
+`wifi.access_point_off()`, used to drop every TCP connection at once through `Network.reset`, so a
+broker published the device's Will at the cut. A broker on the internet hears nothing from a device
+that loses its power or its coverage: no FIN, no RST. Its end of the connection stays open until the
+keepalive runs out, 1.5 times the keepalive after the device's last packet (MQTT 3.1.1, 3.1.2.10),
+and the Will goes then. `device_reset` already kept the device's connections through a chip reset
+for that reason. Now the link's end calls `Network.lose_link()`: the connections the test opened are
+lost, because the device's end of them is gone, and the device's stay, silent. The broker's
+deadlines run while the link is down, the board off included, so `ModemModel` and `Wifi` reach their
+`Internet` in command mode and off the air, and its `quiet_until` is the broker's and the
+bridges' then. What a service writes in the meantime goes nowhere. A bridged connection stays open
+at the real service too, for the same reason.
+
+A connection the link's end or a chip reset left open is marked orphaned: the stack on the device
+that held it is gone, and lwIP drops a netif's connections when it loses its address. When its
+service closes it, as the broker does at its keepalive or a takeover, it is dropped at once, with no
+FIN: none would be answered, whatever link the device is on by then, and kept, the flow would wait
+for that answer. A DHCP lease the device gives up on a link that stays orphans the connections on
+that address too, since lwIP drops them with it. The link's end and a chip reset also drop the
+device's connections still in their handshake, which no service deadline would end. A virtual
+station that leaves the device's own access point orphans nothing: the device keeps its stack, and
+what a service writes or closes while the station is away waits for the station's next lease and
+then goes in order, since this TCP sends nothing again. What a service writes on an orphaned
+connection beyond the window is discarded and counted, so it cannot pile up. A chip reset or a lease
+given up takes the gone stack's SYNs off the network's path, as each would open a connection left in
+its handshake.
+
+A device back with the same client ID before that takes its connection over (MQTT-3.1.4-2). With
+CleanSession=0 on both connections the session goes on and the old Will is discarded unsent; with
+CleanSession=1 on either it is published at the takeover, and so it is when the old keepalive's
+deadline has come by the CONNECT, though the broker has not expired it yet. That is mosquitto's
+rule
+(`connect__on_authorised` in `src/handle_connect.c` sends the old Will only when either side starts
+clean), and the one a device's backend sees in production: a device that came back inside its
+keepalive has not gone. MQTT 3.1.1 itself says the Will is published whenever the connection closes
+without DISCONNECT (MQTT-3.1.2-8), which before this change the broker did at every takeover.
+
+**Rejected:** deciding at the service's close whether a FIN would reach the device, from the
+address IPCP or DHCP gave on the current link or the one the device last sent from, because a
+lease the device gives up leaves that last address behind, a FIN may wait for a window that what
+went nowhere has filled, and no stack holds the old connection whatever link the device is on.
+Also rejected: taking all of the gone stack's datagrams off the path at a chip reset or a lease
+given up, because what it sent before is already on the internet, and a broker would still get
+its last PUBLISH; and retransmission, to deliver what a service wrote while a station was away,
+because holding it until the station is back delivers the same bytes with no timers. Also
+rejected: an option on the network, `link_loss="reset" | "silent"`, to keep the immediate Will,
+because no broker a device meets behaves that way, and a test that wants the broker to give up at
+once has `broker.disconnect(client_id)`, which publishes the Will; a second way to say it would be
+a default someone has to pick per test. Also rejected: publishing the old Will at every takeover,
+as MQTT-3.1.2-8 read alone would, because the device's backend would then hear a device go offline
+that never went, which is what the test of a short outage wants to rule out; and losing the test's
+own connections only at their keepalive too, because the test's `TcpConnection` has no keepalive,
+and the device's end of them is gone with its stack. Also rejected: a retained `online` that
+`mqtt_session` publishes on `session/status` at each connection, to show the device's own message
+outliving a takeover, because with it at QoS 0 after each SUBSCRIBE one exchange of
+`test_a_qos1_backlog_takes_the_rate_in_both_directions` came 39 ms late (401 ms against 362 ms),
+and the PUBACK `test_a_message_whose_puback_is_lost_comes_again_with_dup` looks for went in one TCP
+segment with it; the takeover test reads that no Will is retained instead.
+
+A new stack's SYN from the same port as a connection the old stack held resets that connection
+and opens a new one: what a challenge ACK (RFC 9293, 3.10.7.4) comes to, with the new stack's RST
+and its SYN again taken in one step. The broker publishes the old Will then, as at any reset. Kept
+until a keepalive, such a connection would take the port for good when no keepalive comes, on a
+connection whose CONNECT never came. esp-mqtt over lwIP connected from another port after a power
+cycle in `tests/test_mqtt_session.py` (60660, then 55574). A station that leaves the device's
+access point with bytes the device has not acknowledged ends that connection, as what was on the
+path is gone; one that comes back with another address loses the connections on the old one.
+
+**Rejected:** a bounded lifetime for an orphaned connection that never saw a CONNECT, because the
+network does not know what its service waits for, and the new stack's SYN on the same port is
+the event that shows the old connection gone.

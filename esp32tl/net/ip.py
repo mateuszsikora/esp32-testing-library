@@ -5,7 +5,9 @@ destination port, a UDP datagram to the one on its port, whatever the address: t
 the names and addresses it was built with, and the test decides what answers there. The test
 opens connections to the device too (`Network.connect`). The link to the device never loses or
 reorders bytes, so TCP needs no retransmission, no congestion control and no timers: a segment is
-acknowledged in the turn it arrives in, and a zero window waits for the device's update.
+acknowledged in the turn it arrives in, and a zero window waits for the device's update. While
+the link is down, the segments of a connection its end left open go nowhere, and the device's
+stack, which lost the connection too, never asks for them again.
 """
 
 import struct
@@ -122,6 +124,10 @@ _ENDS = {
     "refused": "refused by the device",
     "reset": "reset by the device",
     "lost": "link lost",
+    "abandoned": "closed by its service with no device to answer",
+    "unanswered": "lost before the device answered its SYN-ACK",
+    "renewed": "reset: the device opened a new connection from its port",
+    "gapped": "lost with what it had on its way when the link went",
 }
 
 
@@ -141,6 +147,11 @@ class _Flow:
     established: bool = False
     notified: bool = False
     client: TcpClient | None = None  # set on a connection the test opened
+    # The device's stack that held it is gone, by a chip reset or the link's end: no FIN to it
+    # would ever be answered.
+    orphaned: bool = False
+    # What its service wrote, orphaned, that the device's window had no room for: not kept.
+    discarded: int = 0
 
 
 class Network:
@@ -152,9 +163,13 @@ class Network:
         log: Callable[[str], None] = lambda line: None,
         *,
         mtu: Callable[[], int] = lambda: 1500,
+        carries: Callable[[], bool] = lambda: True,
     ) -> None:
         self._send_ip = send_ip
         self._mtu = mtu
+        # Whether the link carries IP to the device now: while it does not, what a flow that is
+        # not orphaned has to send waits for it, since nothing would send it again.
+        self._carries = carries
         self._log = log
         self.tcp: dict[int, StreamService] = {}
         self.udp: dict[int, DatagramService] = {}
@@ -298,6 +313,17 @@ class Network:
             if flow is not None:
                 self._drop(flow, "reset")
             return
+        if (
+            flags & SYN
+            and not flags & ACK
+            and flow is not None
+            and flow.orphaned
+            and _mss(segment[20:header_length]) is not None
+        ):
+            # A new stack's SYN on a tuple only a gone stack held: a challenge ACK (RFC 9293,
+            # 3.10.7.4) would draw its RST, which resets the old connection, and its SYN again.
+            self._drop(flow, "renewed")
+            flow = None
         if flags & SYN and flow is None:
             mss = _mss(segment[20:header_length])
             if mss is None:
@@ -355,19 +381,39 @@ class Network:
         if flow.fin_sent and flow.peer_closed and flow.snd_una >= flow.snd_nxt:
             self._drop(flow, "closed")
 
+    def _current(self, flow: _Flow) -> bool:
+        """Whether `flow` is still the one the table holds for its key: a service may call the
+        `write` or `close` of a flow that has ended, after the device opened another on the same
+        addresses and ports."""
+        return self._flows.get(flow.key) is flow
+
     def _write(self, flow: _Flow, data: bytes) -> None:
-        if flow.fin_pending or flow.key not in self._flows:
+        if flow.fin_pending or not self._current(flow):
             return
         flow.pending += data
         self._flush(flow)
+        if flow.orphaned and flow.pending:
+            # Nothing will acknowledge what went: what the window has no room for would only
+            # pile up until the service closes.
+            flow.discarded += len(flow.pending)
+            flow.pending.clear()
 
     def _close(self, flow: _Flow) -> None:
+        if not self._current(flow):
+            return
+        if flow.orphaned:
+            # Its FIN would reach no stack that holds the connection, and nothing would answer
+            # it: kept, the flow would wait for that answer.
+            self._drop(flow, "abandoned")
+            return
         flow.fin_pending = True
         self._flush(flow)
 
     def _flush(self, flow: _Flow) -> None:
-        if flow.key not in self._flows or not flow.established:
+        if not self._current(flow) or not flow.established:
             return
+        if not flow.orphaned and not self._carries():
+            return  # it waits for the link, in order, its FIN behind it
         while flow.pending:
             room = flow.peer_window - (flow.snd_nxt - flow.snd_una)
             size = min(len(flow.pending), flow.mss, room, self._mtu() - 40)
@@ -388,9 +434,16 @@ class Network:
 
     def _drop(self, flow: _Flow, kind: str, why: str | None = None) -> None:
         """End `flow`: `kind` is `"closed"`, `"refused"`, `"reset"` or `"lost"`, and for a client's
-        lost flow `why` says why, the link going down unless given."""
-        self._flows.pop(flow.key, None)
+        lost flow `why` says why, the link going down unless given; `"abandoned"` and
+        `"unanswered"` are for the device's flows only."""
+        if self._current(flow):
+            del self._flows[flow.key]
         device, dport, ours, oport = flow.key
+        if flow.discarded:
+            self._log(
+                f"net: TCP {device}:{dport} → {ours}:{oport} discarded {flow.discarded} bytes its"
+                " service wrote with no device to answer"
+            )
         if flow.client is not None:
             # Before `_notify`, so that the client's `on_close` stands for a FIN only.
             flow.client.on_end(kind, why)
@@ -406,15 +459,74 @@ class Network:
             flow.notified = True
             flow.connection.on_close()
 
-    def lose_clients(self, why: str) -> None:
-        """Lose every connection the test opened, and none the device opened: the device's end of
-        them is gone, `why` saying how, as `the device reset`."""
+    def forget_device(self, why: str | None = None, *, address: str | None = None) -> None:
+        """The device's stack is gone, `why` saying how, as `the device reset`, the link going
+        down unless given; only the connections on the device's `address`, when given, as for a
+        lease it gave up. Lose every connection the test opened, whose device end went with it.
+        Drop the device's own that cannot finish (`_unfinished`): one still in its handshake,
+        one its service had closed. The rest stay open and silent, as no network on the
+        internet hears of it, and orphaned: their service's close ends them at once, since no
+        FIN would be answered."""
         for flow in list(self._flows.values()):
+            if address is not None and flow.key[0] != address:
+                continue
             if flow.client is not None:
                 self._drop(flow, "lost", why)
+            elif not self._unfinished(flow):
+                flow.orphaned = True
+                # What waited for the window: nothing will acknowledge what went before it.
+                flow.discarded += len(flow.pending)
+                flow.pending.clear()
+
+    def _unfinished(self, flow: _Flow) -> bool:
+        """Drop a device flow that cannot finish now that nothing will answer what the network
+        sent it: one its service had closed, whose FIN went unanswered, and one still waiting
+        for the ACK of its SYN-ACK, which has no service deadline to end it. Kept, either would
+        take a new stack's SYN from the same port. Whether it was dropped."""
+        if flow.fin_pending:
+            self._drop(flow, "abandoned")
+        elif not flow.established:
+            self._drop(flow, "unanswered")
+        else:
+            return False
+        return True
+
+    def resume(self, local: str | None = None) -> None:
+        """The link carries IP again: send what waited for it, on every flow from our `local`
+        address, when given; one from another, which that end no longer holds, is lost."""
+        for flow in list(self._flows.values()):
+            if local is not None and flow.key[2] != local:
+                self._drop(flow, "lost")
+            else:
+                self._flush(flow)
+
+    def lose_link(self, *, orphan: bool = True) -> None:
+        """The link ended. With `orphan`, the device's stack went with it: `forget_device`.
+        Without, as when a virtual station leaves the device's access point, the device keeps
+        its connections: lose the test's, and drop those of the device's that this TCP cannot
+        finish, since it sends nothing again: one still in its handshake, whose SYN-ACK is not
+        sent again; one with bytes or a FIN the device has not acknowledged; and one whose FIN
+        was sent already, which waits for the device's FIN with no timer to give up. What the
+        rest have to send waits for the link (`carries`), their FIN behind it, and goes in
+        `resume`."""
+        if orphan:
+            self.forget_device()
+            return
+        for flow in list(self._flows.values()):
+            if flow.client is not None:
+                self._drop(flow, "lost")
+            elif not flow.established:
+                self._drop(flow, "unanswered")
+            elif flow.snd_una < flow.snd_nxt:
+                # What it sent and the device has not acknowledged may be on the cleared path or
+                # in the air: nothing sends it again, and the stream would have a gap.
+                self._drop(flow, "gapped")
+            elif flow.fin_sent:
+                self._drop(flow, "abandoned")
 
     def reset(self) -> None:
-        """Lose every TCP connection; notify services once, including MQTT Wills."""
+        """Lose every TCP connection, the device's included; notify services once, MQTT Wills
+        included. No end of a link does this: see `Internet`."""
         for flow in list(self._flows.values()):
             self._drop(flow, "lost")
         self._ident = 0

@@ -16,7 +16,7 @@ from esp32tl.net.dns import Dns
 from esp32tl.net.ethernet import Ethernet
 from esp32tl.net.http import HttpServer
 from esp32tl.net.http_client import HttpClient
-from esp32tl.net.ip import Connection, Network, StreamService
+from esp32tl.net.ip import ACK, SYN, TCP, Connection, Fragmented, Network, StreamService, ipv4
 from esp32tl.net.mqtt import Broker
 from esp32tl.net.ntp import DEFAULT_UTC, Ntp
 from esp32tl.net.ppp import Ppp
@@ -69,6 +69,11 @@ class Internet:
     after it (`set_path`). Public calls run while the board is held, and callbacks while it
     advances: neither uses host time or sockets, but for a bridge's. `bridging` is called with the
     call before a bridge is made, and refuses it by raising: the backend's say on the wall clock.
+
+    The end of the link, a modem's call or an access point off the air, loses the connections the
+    test opened and leaves the device's open and silent, as the far end of a device that lost its
+    power or its coverage is: no FIN or RST reaches their service, which ends them by its own
+    timeout, as the broker does at its keepalive. The broker's deadlines run with the link down.
     """
 
     def __init__(
@@ -90,7 +95,7 @@ class Internet:
         self._down = _Direction(LATENCY_NS)
         self._datagram: int | None = None  # the size of the IPv4 datagram the link is sending
         self.events: list[dict[str, object]] = []
-        self.ip = Network(self._downlink, self.log, mtu=self._mtu)
+        self.ip = Network(self._downlink, self.log, mtu=self._mtu, carries=self._carries)
         self.dns = Dns("10.64.0.1", self.log)
         self.ntp = Ntp(self.now, world, self.log)
         self.ip.udp.update({53: self.dns, 123: self.ntp})
@@ -151,6 +156,31 @@ class Internet:
             self._link_ended()
         else:
             self.dns.address = IPv4Address(self.lease.address).packed
+            self.ip.resume(self.lease.address)
+
+    def _carries(self) -> bool:
+        """Whether the link carries IP now: on, and behind a station, with a lease."""
+        return self.active and (not isinstance(self.link, Station) or self.lease is not None)
+
+    def _forget_syns(self, address: str | None = None) -> None:
+        """Drop the SYNs on the way up from a device stack that is gone, from `address` or from
+        any: arriving after `forget_device`, each would open a flow left in its handshake, which
+        nothing ends. The rest of what that stack sent before still arrives, as it would at a
+        service on the internet."""
+
+        def stale(datagram: bytes) -> bool:
+            try:
+                parsed = ipv4(datagram)
+            except Fragmented:
+                return False
+            if parsed is None or parsed[0] != TCP or len(parsed[3]) < 20:
+                return False
+            if address is not None and parsed[1] != address:
+                return False
+            flags = parsed[3][13]
+            return bool(flags & SYN) and not flags & ACK
+
+        self._up.queue = deque(entry for entry in self._up.queue if not stale(entry[1]))
 
     def _mtu(self) -> int:
         return self.link.peer_mru if isinstance(self.link, Ppp) else self.link.mtu
@@ -246,13 +276,17 @@ class Internet:
         """The device's chip reset, or its power went, at `t`, `why` saying which, as `the device
         reset`: its TCP and its address are gone. Every connection the test opened is lost, and
         the device has no address until IPCP opens again or DHCP acknowledges one. The
-        connections the device opened stay, as no network knows of a reboot: a RST of the new
-        stack, in answer to what their service writes, ends them, or the service's end, or the
-        link's; a SYN of the new stack on one of them gets no answer."""
+        connections the device opened stay, orphaned, as no network knows of a reboot, but for
+        one still in its handshake or one its service had closed, which go now, and the old
+        stack's SYNs still on the way up, which never arrive. The rest outlive the link's end
+        too: a RST of the new stack, in answer to what their service writes, ends them, or the
+        service's end, as the broker's keepalive, with no FIN; a SYN of the new stack on one of
+        them gets no answer."""
         previous = self._at
         self._at = t
         try:
-            self.ip.lose_clients(why)
+            self.ip.forget_device(why)
+            self._forget_syns()
             if isinstance(self.link, Ppp):
                 self._stale = self.link.ipcp_opened
             elif isinstance(self.link, Station):
@@ -399,11 +433,17 @@ class Internet:
                 changed=self._station_changed,
             )
         if self._kind == "ethernet":
-            return Ethernet(send, self._uplink, self.dhcp, log=self.log)
+            return Ethernet(send, self._uplink, self.dhcp, log=self.log, gave_up=self._gave_up)
         return Ppp(send, self._uplink, log=self.log, ended=self._link_ended)
 
+    def _gave_up(self, address: str) -> None:
+        self.ip.forget_device("the device gave its address up", address=address)
+        self._forget_syns(address)
+
     def _link_ended(self) -> None:
-        self.ip.reset()
+        # Behind a station the device is the access point, and keeps its stack when the station
+        # leaves; behind its own link, the device's stack goes with the link.
+        self.ip.lose_link(orphan=not isinstance(self.link, Station))
         self._up.clear()
         self._down.clear()
 
@@ -423,6 +463,8 @@ class Internet:
             self._at = previous
 
     def _downlink(self, datagram: bytes) -> None:
+        if not self.active:
+            return  # what a service writes on a connection whose link has ended goes nowhere
         self._datagram = len(datagram)
         try:
             self.link.send_ip(datagram)
@@ -502,10 +544,11 @@ class Internet:
         """Take in what has come up the path by `now`, then run the broker's deadlines due by it
         and hand over what bridged services sent, before the test looks at the turn at `now`: a
         record stamped `now`, a PUBACK or an expiry due at `now`, is there when `board.now` says
-        it. What this answers goes out in `poll`."""
+        it. What this answers goes out in `poll`. With the link down the broker's deadlines run
+        all the same, and `poll` has nothing to send."""
         self._at = now
         try:
-            if isinstance(self.link, Station):
+            if self.active and isinstance(self.link, Station):
                 self.link.poll()
             self._arrive(now)
             self.broker.poll()
@@ -518,7 +561,7 @@ class Internet:
         # the same answers, at the same stamps.
         self._at = now
         try:
-            if isinstance(self.link, Station):
+            if self.active and isinstance(self.link, Station):
                 self.link.poll()
             self._arrive(now)
             self.broker.poll()
@@ -534,15 +577,19 @@ class Internet:
 
     def quiet_until(self) -> int | None:
         """The earliest of the broker's deadlines, the path's next datagram, either way, and the
-        next whole millisecond while a bridged connection is open."""
+        next whole millisecond while a bridged connection is open; with the link down, the
+        broker's and the bridges', as its keepalive still ends the connections the link's end
+        left open, and a bridged service may still send or close."""
+        bridged = (bridge.quiet_until(self._now()) for bridge in self.bridges.values())
         if not self.active:
-            return None
+            deadlines = (self.broker.quiet_until(), *bridged)
+            return min((bound for bound in deadlines if bound is not None), default=None)
         bounds = (
             self.link.quiet_until() if isinstance(self.link, Station) else None,
             self.broker.quiet_until(),
             self._up.head(),
             self._down.head(),
-            *(bridge.quiet_until(self._now()) for bridge in self.bridges.values()),
+            *bridged,
         )
         return min((bound for bound in bounds if bound is not None), default=None)
 

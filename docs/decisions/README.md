@@ -345,6 +345,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The P4's ROM is the one of its build's revision](harness.md#the-p4s-rom-is-the-one-of-its-builds-revision) | `harness.md` | decided (#233) |
 | [On the P4 and the S31 the console has no pins, and a UART route skips the test](harness.md#on-the-p4-and-the-s31-the-console-has-no-pins-and-a-uart-route-skips-the-test) | `harness.md` | decided (#233) |
 | [The package root exports every name a test uses](harness.md#the-package-root-exports-every-name-a-test-uses) | `harness.md` | decided (#247) |
+| [A lost link leaves the device's connections half-open until their keepalive](harness.md#a-lost-link-leaves-the-devices-connections-half-open-until-their-keepalive) | `harness.md` | decided (#244) |
 
 ## The runner crate and esp32sim
 

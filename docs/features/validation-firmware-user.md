@@ -45,7 +45,7 @@ whatever `FIRMWARE_OUT` the shell exports, because the tests read the images the
 | `modem_at` | `firmware/modem_at`: AT dialogue, PWRKEY and RI on the LilyGO profile, without a network ([below](#modem_at)) |
 | `modem_recovery` | `firmware/modem_recovery`: PPP through `esp_modem`; recovers a modem that answers nothing and redials ([below](#modem_recovery)) |
 | `pppos_client` | esp-protocols `modem-v1.4.1`, unchanged except sdkconfig: PPP and plain MQTT on the LilyGO modem route ([below](#pppos_client)) |
-| `mqtt_session` | `firmware/mqtt_session`: esp-mqtt with CleanSession=0 over the LilyGO modem route, which prints Session Present and each message's DUP, and publishes a QoS 1 backlog on command ([below](#mqtt_session)) |
+| `mqtt_session` | `firmware/mqtt_session`: esp-mqtt with CleanSession=0, a 60 s keepalive and a retained Will over the LilyGO modem route, which prints Session Present and each message's DUP, and publishes a QoS 1 backlog on command ([below](#mqtt_session)) |
 | `http_request` | ESP-IDF's `examples/protocols/http_request`, unmodified, with its default `sdkconfig`, for target `esp32`: joins a Wi-Fi access point and fetches `http://example.com/` over and over ([below](#http_request)) |
 | `http_server` | `firmware/http_server`, this repository's own project, for target `esp32`: a Wi-Fi station that serves `GET /status` and `POST /echo` as JSON on port 80 with ESP-IDF's `esp_http_server`, for a test that opens the connection ([below](#http_server)) |
 | `persistence` | `firmware/persistence`: counts its boots in NVS, RTC memory, RAM and on an SD card, prints them with its reset reason, and restarts itself once ([below](#persistence)) |
@@ -641,8 +641,10 @@ plain MQTT; tracker firmware TLS/NTP validation is #72.
 `firmware/build.sh mqtt_session` builds `firmware/mqtt_session`, on the LilyGO modem route at 115200
 baud, with the pinned esp_modem that `pppos_client` downloads. It is included in `make firmware` and
 `make test`. It dials, resolves `broker.test` and connects esp-mqtt with
-`.session.disable_clean_session = true`, the client ID `session-client` and a reconnection after
-1 s (`.network.reconnect_timeout_ms`), then subscribes to `session/commands` at QoS 1 on every
+`.session.disable_clean_session = true`, the client ID `session-client`, a keepalive of 60 s
+(`.session.keepalive`), a Will of `offline` on `session/status` at QoS 1 with RETAIN
+(`.session.last_will`) and a reconnection after 1 s (`.network.reconnect_timeout_ms`), then
+subscribes to `session/commands` at QoS 1 on every
 connection, as a client that does not trust the session would. It prints:
 
 ```text
@@ -660,7 +662,8 @@ DUP starts nothing.
 
 `tests/test_mqtt_session.py` runs it against the test's broker
 ([keep a session across connections](network-user.md#keep-a-session-across-connections),
-[give the network a round trip and a rate](network-user.md#give-the-network-a-round-trip-and-a-rate)).
+[give the network a round trip and a rate](network-user.md#give-the-network-a-round-trip-and-a-rate),
+[a lost link and the Will](network-user.md#a-lost-link-and-the-will)).
 
 ## `http_request`
 

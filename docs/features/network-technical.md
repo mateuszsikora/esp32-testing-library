@@ -19,8 +19,8 @@ deadlines and the path's next datagram.
 and keeps it for its life. `bridging(call)` is called by `bridge` before it makes a bridge, and
 refuses it by raising; it does nothing by default, and the `esp32sim` backend's refuses after
 power-on and in front of a replay ([backend](esp32sim-backend-technical.md#a-run-with-a-real-source)). `_peer()` builds the link object from it: a `Ppp` whose `ended`
-callback is `_link_ended`, which resets TCP and clears the path, an `Ethernet` given the
-network's `Dhcp`, or a host-side `Station` with its own DHCP client. All send through the same
+callback is `_link_ended`, which calls `Network.lose_link` and clears the path, an `Ethernet` given
+the network's `Dhcp`, or a host-side `Station` with its own DHCP client. All send through the same
 closure, which queues link control traffic at `now + LATENCY_NS` and takes IPv4 datagrams down
 the path, and all hand IPv4 datagrams to
 `_uplink`, up the path to `Network.receive`. `Internet.link` is that object; `Internet.ppp` and `Internet.ethernet` return it
@@ -34,14 +34,17 @@ one that nothing asks, as does a network behind a virtual station. That station 
 DHCP client and updates the DNS answer to its leased address.
 
 `start(t)` stops the network first, then marks it active and, for PPP only, starts LCP. `stop(at)`
-marks it inactive, resets TCP (`Network.reset`, which notifies every connection once), clears the
-path, drops the queued replies and replaces the link with a fresh one from `_peer()`. The `Dhcp`, the services and
+marks it inactive, calls `_link_ended`, which loses the connections the test opened and leaves the
+device's half-open (`Network.lose_link`), clears the path, drops the queued replies and replaces
+the link with a fresh one from `_peer()`. The `Dhcp`, the services and
 the transcript are not replaced, and neither are the bridges.
 
 Behind the access point, `Wifi` is the link's `Interface` whose `ethernet` property is true: the
 `BoardLink` hands it each `eth_tx` frame as `receive(t, "out", frame)`, and sends each output it
-returns as one `eth_rx` ([protocol](../protocol.md)). `Wifi.receive` and `Wifi.poll` return
-nothing while the network is missing or inactive. `Wifi.inputs` returns a `WifiAp` for each switch
+returns as one `eth_rx` ([protocol](../protocol.md)). `Wifi.receive` returns nothing while the
+network is missing or inactive. `Wifi.arrive` and `Wifi.poll` reach an inactive network too, so its
+broker's deadlines run off the air; its `poll` then returns nothing. `Wifi.inputs` returns a
+`WifiAp` for each switch
 the test made, stamped at its instant or at the turn's `now`, whichever is later.
 
 ## The path
@@ -67,8 +70,9 @@ were no path.
 The test must see what has come up by the turn it holds. `BoardLink._turn` holds the turn before it
 polls, so a datagram taken in `poll` would be there only at the next step of the test's clock, with a
 stamp already behind `board.now`. So `_turn` first calls `Interface.arrive(now)` on each interface:
-`Uart.arrive` passes it to a source that is `Arriving`, `ModemModel.arrive` to its `Internet` in data
-mode, `Wifi.arrive` to its active network, and `Internet.arrive` runs `_arrive(now)`, then
+`Uart.arrive` passes it to a source that is `Arriving`, `ModemModel.arrive` to its `Internet`,
+`Wifi.arrive` to its network, in command mode and off the air too, and `Internet.arrive` runs
+`_arrive(now)`, then
 `Broker.poll()`, with `_at` set to `now`. Answers made there stay in `_out` until `poll`, after the
 hold, so what the test does in the turn comes after what the network took in it. The broker's own
 deadlines, keepalive and a delayed PUBACK, run there too, for the same reason: the runner stops at
@@ -86,14 +90,19 @@ with `_down.leaves`, and calls `_release`, which moves to `_out`, with their own
 leave within `LATENCY_NS` of `now()`. The framing and the link's checks (the MRU, the MTU, no station
 yet) happen when the datagram enters, and a dropped one uses none of the rate. What stays in `_down`
 can still be dropped by a reset, which matters at a large RTT: after the modem loses registration,
-nothing on the path reaches the firmware. At the default every datagram is released in the call that
+nothing on the path reaches the firmware. While the network is not `active`, `_downlink` drops every
+datagram before the link sees it: what a service writes on a connection the link's end left open
+goes nowhere, and logs nothing. At the default every datagram is released in the call that
 made it, so `receive` returns it stamped `t + LATENCY_NS`, in the order it was made.
 
-`quiet_until` is the minimum of the broker's and the two heads: one turn per datagram. Each head is
-past `now` after `poll`, since `_arrive` and `_release` took all up to `now` and `now + LATENCY_NS`,
-as `BoardLink._turn` requires. `latency()` stays `LATENCY_NS`: PPP control answers in 1 ms, and a
-larger promise would break rule 2. The runner does not change. On the modem's route it paces bytes
-as it does (protocol, rule 5), and the rate is on top of that.
+`quiet_until` is the minimum of the broker's and the two heads: one turn per datagram. While the
+network is not `active` it is the broker's and the bridges', so the keepalive of a connection the
+link's end left open still gets its turn, and a bridged service that sends or closes then is taken
+in the next millisecond, as with the link up; `ModemModel` and `Wifi` ask for it then too. Each head
+is past `now` after `poll`, since `_arrive` and `_release` took all up to `now` and `now +
+LATENCY_NS`, as `BoardLink._turn` requires. `latency()` stays `LATENCY_NS`: PPP control answers in 1
+ms, and a larger promise would break rule 2. The runner does not change. On the modem's route it
+paces bytes as it does (protocol, rule 5), and the rate is on top of that.
 
 Nothing here reads the host's clock, and the arithmetic is on integers but for the rate's division,
 so two runs give the same stamps (`tests/test_determinism.py::test_mqtt_session_on_a_path`).
@@ -306,7 +315,16 @@ threads; a connect in progress ends within `CONNECT_SECONDS`. The backend calls 
   `SessionState`, whose `Delivery` records stay the broker's;
   `forget_session` refuses a connected one. Network reset retains both histories and the policy.
   Will is published once with the time
-  of disconnect, not the time of CONNECT. A replacement client ID closes the old connection.
+  of disconnect, not the time of CONNECT. A replacement client ID closes the old connection
+  (MQTT-3.1.4-2) and logs `mqtt: <id> (connection <new>) took over connection <old>`. When the
+  old connection's `_State` is not `clean` and the new CONNECT has CleanSession=0, `_connect`
+  sets the old session's `will` to `None` before `on_close`, and the line ends `, its Will
+  discarded`: mosquitto's rule in `connect__on_authorised`, which sends the old Will only when
+  either side starts clean. MQTT 3.1.1 (MQTT-3.1.2-8) would publish it at every close but a
+  DISCONNECT; a device back inside its keepalive has not gone, and its backend should not hear it
+  had. A keepalive deadline that has come by then, though `poll` has not yet expired it (a CONNECT
+  in the turn of the deadline comes first), keeps the Will: it goes at the takeover, and the
+  session is resumed all the same.
   QoS 2 publication is unsupported. Credentials are observed by default;
   authentication is performed only by an installed test policy, with no external auth service.
   SUBSCRIBE and UNSUBSCRIBE parse every filter of the packet into a `RequestedFilter` before they
@@ -484,26 +502,39 @@ sequence <seq>, <n> bytes ahead of <rcv_nxt>, which a link that loses nothing ca
 raises `OutOfOrder` with that line; the link's `calling` turns it into the link's error, and the run
 ends. The device's own flows keep acknowledging such a segment again, as before.
 
-`_drop(flow, kind, why=None)` takes `"closed"`, `"refused"`, `"reset"` or `"lost"` (`Network.reset`,
-and `Network.lose_clients(why)`), and logs it through `_ENDS`: `closed`, `refused by the device`,
-`reset by the device`, `link lost`, or `lost: <why>` when `why` is given. A client flow's line
+`_drop(flow, kind, why=None)` takes `"closed"`, `"refused"`, `"reset"`, `"lost"` (`Network.reset`,
+which no link calls and the unit tests use as a transport loss, and
+`Network.forget_device(why=None, *, address=None)`), or, for a device flow only, `"abandoned"`
+(`Network._close` on an orphaned flow, and `Network._unfinished`) and `"unanswered"`
+(`Network._unfinished`), and logs it
+through `_ENDS`: `closed`, `refused by the device`, `reset by the device`, `link lost`, `closed by
+its service with no device to answer`, `lost before the device answered its SYN-ACK`, or
+`lost: <why>` when `why` is given. `_drop` removes the flow from `_flows` only while it is the one
+there for its key, and `_write`, `_close` and `_flush` do nothing for a flow that is not
+(`_current`): a service may call the `close` of a flow that has ended after the device opened
+another on the same addresses and ports, and that must not end the new one. A client flow's line
 names the test's end first, `net: TCP <ours>:<local> → <device>:<port> <end>`, and
 `on_end(kind, why)` comes before `_notify`, so that `TcpConnection.on_close` sets `closed_at` for a
 FIN only, never for a RST or a loss. The device's flows log after `_notify`, as before.
 
-`Internet.device_reset(t, why)`, with `_at` set to `t`, calls `Network.lose_clients(why)`, which
-drops every client flow as `lost` and leaves the device's own, then, behind PPP, sets `_stale` to
-`Ppp.ipcp_opened`, and behind Ethernet sets `Ethernet.device_address` to `None`. The `esp32sim`
+`Internet.device_reset(t, why)`, with `_at` set to `t`, calls `Network.forget_device(why)`, which
+drops every client flow as `lost`, drops the device's flows that cannot finish (`_unfinished`,
+below), and leaves the rest of the device's own, marked `orphaned`, then, behind PPP, sets `_stale`
+to `Ppp.ipcp_opened`, and behind Ethernet sets `Ethernet.device_address` to `None`. The `esp32sim`
 backend calls it on every network the test gave, by `_networks()`: from `_reset`, on each `reset`
 message the link takes, with `the device reset`, and from `_switch(False)`, at `board.power_off()`,
-with `the device lost its power`, before the models lose their power and the modem's network with
-it ([backend](esp32sim-backend-technical.md)). A power-on brings a `reset` message too, which finds
-nothing left to lose. The device's own flows stay, because a network does not know of a reboot:
-they end at a RST from the device's new stack, which comes in answer to what their service writes,
-at the service's end, or with the link. A SYN of the new stack from the same port to the same
-service falls on the old flow, which takes only ACK, data and FIN, and is dropped without an answer:
-`_tcp` makes a flow for a SYN only when none has its key, and sends no challenge ACK (RFC 9293,
-3.10.7.4), so the device retries until the service writes or its own timeout.
+with `the device lost its power`, before the models lose their power and the modem's network with it
+([backend](esp32sim-backend-technical.md)). A power-on brings a `reset` message too, which finds
+nothing left to lose. The device's own flows stay, because a network does not know of a reboot: they
+end at a RST from the device's new stack, which comes in answer to what their service writes, or at
+the service's end, as the broker's keepalive expiry, which drops an orphaned flow at once; the
+link's end leaves them too. A SYN of the new stack, without ACK, from the same port to the same
+service falls on the old flow: when that flow is orphaned and the SYN's options parse (`_mss`),
+`_tcp` drops it as `"renewed"`, logged `reset: the device opened a new connection from its port`,
+its service hearing `on_close` as at a RST, and takes the SYN as a new connection. That is what a
+challenge ACK (RFC 9293, 3.10.7.4) would come to: the new stack answers it with a RST, which resets
+the old connection, and sends its SYN again. A flow that is not orphaned takes only ACK, data and
+FIN, and drops such a SYN without an answer, as before.
 
 `TcpConnection` keeps `received` in a `bytearray`, `established_at`, `closed_at` and `ended_at` as
 `Duration`s from `now()` at the callback, which is the segment's own time, `_end`, the kind, and
@@ -521,20 +552,72 @@ copied at every turn.
 ## Lifecycle and observability
 
 Modem dial resets and starts PPP. Supply, registration, functionality or power loss clears its
-queued data, resets TCP and delivers connection-loss notifications to services. Link termination
-also resets TCP. `Internet.terminate(t)` calls `Ppp.terminate`, which sends an LCP Terminate-Request
-on an open link and changes nothing else, and returns the output for
+queued data and ends the link: `Internet.stop` and the PPP peer's `ended` callback, at a
+Terminate-Request or a `Station` losing its lease, call `_link_ended`, which calls
+`Network.lose_link()` and clears both directions of the path. The test's flows are lost, as
+`link lost`; the device's stay, half-open, and their services hear nothing, since no FIN or RST
+reaches a broker on the internet from a device that lost its power or its coverage. The broker
+ends them at keepalive expiry, `mqtt: <id> keepalive expired`, and publishes the Will then, 1.5
+times the keepalive after the client's last packet.
+
+`Network.lose_link(orphan=True)` calls `forget_device`, which marks every device flow `orphaned`:
+the stack on the device that held it is gone, by the power, by the coverage or because lwIP drops a
+netif's connections when it loses its address. When the service closes an orphaned flow, as the
+broker does at a keepalive expiry or a takeover, `_close` drops it at once, logged `net: TCP
+<device>:<port> → <address>:<port> closed by its service with no device to answer`, and sends no
+FIN: none would be answered, whatever link the device is on by then, and the window a FIN waits for
+may be full of what went nowhere. Kept, the flow would wait for an answer that never comes.
+`forget_device` drops at once, through `_unfinished`, the device flows whose service had closed them
+already (`fin_pending`), as `abandoned`, and those still waiting for the ACK of their SYN-ACK, as
+`unanswered`: no MQTT CONNECT has come on them, so no service deadline would end them. What a
+service writes on an orphaned flow still goes, and a RST of the new stack in answer drops it as
+`reset by the device`.
+
+Behind a virtual station the device is the access point, and keeps its stack when the station
+leaves: `_link_ended` calls `lose_link(orphan=False)` there, which loses the test's flows and drops
+the device's still in their handshake, as `unanswered`, since their SYN-ACK is not sent again, and
+drops those with bytes or a FIN the device has not acknowledged, as `"gapped"`, logged `lost with
+what it had on its way when the link went`, since what was on the path or in the air is gone and
+nothing sends it again, drops those whose FIN the device acknowledged with no FIN back, as
+`abandoned`, since they wait for that FIN with no timer to give up, and leaves the rest as they
+were. `Network` takes `carries`, `Internet._carries`: the network active and, behind a station, a
+lease. While it is false, `_flush` sends nothing on a flow that is not orphaned: what its service
+writes, and its FIN behind it, wait in `pending`, since this TCP sends nothing again, and
+`_station_changed` calls `Network.resume(lease.address)` when the station has a lease again, which
+flushes every flow from that address, so the bytes and the FIN reach the device in order, and drops
+as `lost` a flow from another, which the station no longer holds. Behind the access point,
+`Ethernet` calls `gave_up(address)`, `Internet._gave_up`, when a DHCP message of the device's (a
+DISCOVER, a REQUEST not acknowledged, a RELEASE or a DECLINE; not an INFORM, nor a type the server
+does not take) takes away an address it had acknowledged: `forget_device("the device gave its
+address up", address=address)` loses the test's flows to that address and orphans the device's, as
+lwIP drops a netif's connections when its address goes.
+
+On an orphaned flow `_write` sends what the device's window has room for and discards the rest,
+counting it in `discarded`, since nothing will acknowledge what went: kept, it would pile up until
+the service closes. `_drop` logs the count, `net: TCP <device>:<port> → <address>:<port> discarded
+<n> bytes its service wrote with no device to answer`. `forget_device` discards and counts what was
+already waiting for the window when it orphans a flow. `device_reset` and `_gave_up` also take out
+of `_up` the gone stack's SYNs still on the way up, from any address or from the one given up
+(`Internet._forget_syns`, which parses each with `ipv4` and keeps what does not parse, or is a
+fragment): each would open a flow left in its handshake, which nothing ends. The rest of what that
+stack sent before still arrives, as at a service on the internet: data on a connection it held, its
+last PUBLISH among them. The link's end clears the path whole, and so does a reset behind a virtual
+station, whose `Station.stop` ends the link.
+
+`Internet.terminate(t)` calls `Ppp.terminate`, which sends an LCP Terminate-Request on an open link
+and changes nothing else, and returns the output for
 [`modem.drop_call(terminate=True)`](modem-technical.md#interfaces), which stops the network next.
-`Internet.ppp` raises behind an access point. Network data mode guards `+++` with a second of idle time on each side, using
-`quiet_until`/`poll`; a fourth plus or another byte cancels a pending escape. AT-only operation
-retains its earlier immediate escape behavior.
+`Internet.ppp` raises behind an access point. Network data mode guards `+++` with a second of idle
+time on each side, using `quiet_until`/`poll`; a fourth plus or another byte cancels a pending
+escape. AT-only operation retains its earlier immediate escape behavior.
 
 Behind the access point, `Wifi.access_point()` creates the `Internet` with `link="ethernet"`,
 calls `start(0)` and logs `wifi: access point '<ssid>' on the air, channel <n>`: the network is
 active from power-on. `Wifi.access_point_off()` calls `stop(now)` at the board's current instant
-and logs `wifi: access point off the air`; TCP connections end with
-`net: TCP <device>:<port> → <address>:<port> link lost`, their services' `on_close` runs once
-(MQTT Wills), and queued replies are dropped. `Wifi.access_point_on()` calls `start(now)` and logs
+and logs `wifi: access point off the air`; the connections the test opened end with
+`net: TCP <address>:<port> → <device>:<port> link lost`, the device's stay open until their
+service ends them, and queued replies are dropped. `Wifi.access_point_on()` calls `start(now)` and
+logs
 `wifi: access point back on the air`. Each switch also queues a `WifiAp` input for the runner. The
 fresh `Ethernet` has no `device_mac` until the station sends again. The `Dhcp` and its `leases`
 persist across the switches, so a test sees every lease of the run.
@@ -596,8 +679,9 @@ checksums, both with plaintext and a verifying MemoryBIO TLS client. It receives
 releases and delays PUBACK, disconnects before ACK, then reconnects with CleanSession=0 and
 retransmits with DUP. During the outage another stream still answers PING and a new NTP request
 traverses the same open PPP session. It also checks that CONNACK has Session Present, that the
-routed copies come again in order and that the subscription is restored. These are
-protocol-client tests.
+routed copies come again in order and that the subscription is restored, and that a delayed
+PUBACK on a connection a lost link left open is emitted at its deadline, to a link that is down,
+with the retained receipt kept. These are protocol-client tests.
 `tests/test_net_path.py` asserts the path's stamps exactly, on PPP frames and Ethernet frames made by
 hand: the RTT from a request to its answer at odd nanoseconds, each direction's share, the rates
 each way, one datagram after another, a change that overtakes nothing, the floor's message, control
@@ -618,15 +702,22 @@ messages and RETAIN, a connected client and a resumed session with no free packe
 PUBACKs with RETAIN kept, a SUBSCRIBE on every connection while waiting queueing its retained
 message once and again once it is sent, QoS 1 to a QoS 0 subscription going at once with no ID free, and
 behind a queue that waits, then with the entry in front of it, a retained Will from a write that fails during SUBSCRIBE, `session`, `forget_session`, `deliveries` and
-`next_delivery`. `tests/test_mqtt_session.py` runs esp-mqtt: Session Present, a QoS 1 message
-published while offline, and one redelivered with DUP after a `broker.disconnect` in the same
-instant as the publication, with both PUBACKs in the transcript.
+`next_delivery`; over PPP, a lost link that leaves a stored session connected until its keepalive,
+the Will at 1.5 times the keepalive after the last packet and not at the loss, and a client back on
+a new link before then taking its connection over, its Will discarded with CleanSession=0 on both
+and published at the takeover with CleanSession=1. `tests/test_mqtt_session.py` runs esp-mqtt:
+Session Present, a QoS 1 message published while offline, and one redelivered with DUP after a
+`broker.disconnect` in the same instant as the publication, with both PUBACKs in the transcript;
+with its 60 s keepalive, the Will 90 s after the device's last packet after `board.power_off()` and
+after `modem.lose_registration()`, and none after a power cycle of 5 s that takes the session over
+with Session Present.
 NTP tests cover silence from startup, idempotent transitions and resumed replies using elapsed
 world time. A MemoryBIO handshake with verification disabled solely for certificate inspection
 checks independent leaf validity dates, UTC normalization and a signature from the unchanged CA;
 firmware tests enforce those dates against its NTP clock.
-`tests/test_modem_model.py` checks network selection, binary pluses, guarded escape, reset and the
-route-specific overflow policy. `tests/test_pppos_client.py` exercises unmodified firmware in
+`tests/test_modem_model.py` checks network selection, binary pluses, guarded escape, reset, the
+keepalive expiry run by the modem out of data mode, and the route-specific overflow policy.
+`tests/test_pppos_client.py` exercises unmodified firmware in
 both directions. `tests/test_determinism.py` includes plain PPP/MQTT with a raw tap, a TLS
 handshake with a plaintext transcript, the position tracker's TLS session over PPP
 (`test_tls_on_the_device`), and `test_wifi_http`, `http_request` fetching from the HTTP
@@ -636,8 +727,9 @@ services.
 
 `tests/test_net_bridge.py` runs the bridge against services on loopback sockets, in wall time: an
 answer coming back and both directions in the transcript, the service closing after its last bytes,
-a refused connection, the device's close and a lost link reaching the service as the end of the
-stream, what the service sends after the device closed dropped and counted in the transcript, the
+a refused connection, the device's close reaching the service as the end of the stream, a lost
+link not reaching it until `close`, what the service sends after the device closed dropped and
+counted in the transcript, the
 millisecond renewal while a connection is open and none once it is closed, `close`
 ending a connection the service holds open, the broker's and the HTTP server's ports taken, what
 `bridge` refuses, a refusal by `bridging`, and an answer reaching the station as a TCP segment
@@ -650,8 +742,10 @@ DISCOVER/OFFER and REQUEST/ACK with router and DNS, a NAK for another address an
 another server, `next_lease()` with append order at equal timestamps, non-consuming polls,
 `find_lease()`, the condition's name and its refusal of `bool()`, ARP answered for every address
 but the device's, IPv4 reaching the services and other ethertypes logged once, nothing sent to a
-station that has sent nothing, and a SYN to port 80 through `Internet(link="ethernet")` answered
-with a SYN-ACK to the station's MAC one `LATENCY_NS` later.
+station that has sent nothing, a SYN to port 80 through `Internet(link="ethernet")` answered
+with a SYN-ACK to the station's MAC one `LATENCY_NS` later, and a keepalive that runs out after the
+access point is back on the air, but before the device has sent from its address, dropping the
+connection so that a SYN from the same port opens a new one.
 `tests/test_net_http.py` drives `HttpServer` connections without TCP: serving and keeping a
 request, a body by `Content-Length`, bytes, `HEAD` and absolute form, 404 and `next_request`'s
 filters, `find_request`, `next_request` with append order at equal timestamps and non-consuming

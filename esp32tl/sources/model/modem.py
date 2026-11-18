@@ -473,25 +473,32 @@ class Modem:
         return f'+CCLK: "{stamp:%y/%m/%d,%H:%M:%S}{self._zone:+03d}"'
 
     def arrive(self, now: int) -> None:
-        """What has come up the network's path by `now`, while in data mode."""
+        """What has come up the network's path by `now`, and the broker's deadlines due by it, in
+        command mode and with the modem off too: the connections the call's end left open end at
+        the broker's keepalive."""
         with self._lock:
-            if self.data_mode and isinstance(self.data, Internet):
+            if isinstance(self.data, Internet):
                 self.data.arrive(now)
 
+    def _polled(self) -> bool:
+        """Whether the data peer is polled: in data mode, and a network always."""
+        return self.data is not None and (self.data_mode or isinstance(self.data, Internet))
+
     def poll(self, now: int) -> Iterable[Output]:
-        """Poll the optional data peer while in data mode."""
+        """Poll the optional data peer while in data mode, and the network always: out of data
+        mode it has nothing to send."""
         with self._lock:
             queued, self._queued = self._queued, []
             if self._escape_at is not None and now >= self._escape_at:
                 self._end_data(now)
                 return [*queued, (now, b"\r\nOK\r\n")]
-            polled = self.data.poll(now) if self.data_mode and self.data is not None else ()
+            polled = self.data.poll(now) if self.data is not None and self._polled() else ()
             return [*queued, *polled]
 
     def quiet_until(self) -> int | None:
-        """The optional data peer's next deadline, or no deadline in command mode."""
+        """The optional data peer's next deadline, or none in command mode but the network's."""
         with self._lock:
-            deadline = self.data.quiet_until() if self.data_mode and self.data is not None else None
+            deadline = self.data.quiet_until() if self.data is not None and self._polled() else None
             return min((t for t in (deadline, self._escape_at) if t is not None), default=None)
 
     def latency(self) -> int | None:

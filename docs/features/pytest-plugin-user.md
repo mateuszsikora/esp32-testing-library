@@ -1260,7 +1260,9 @@ def test_joins_and_fetches_from_the_tests_server(board):
 - `wifi.access_point_off()` takes the access point, and the networks around, off the air from the
   board's current instant, as one that shuts down: a station that has joined gets a
   deauthentication with reason 3, "leaving" (ESP-IDF's examples print `Wi-Fi disconnected 3`).
-  The network behind it loses its TCP connections and the replies it had queued.
+  The network behind it loses the TCP connections the test opened and the replies it had
+  queued; the device's connections stay open at the network's end until their service gives up,
+  the broker at its keepalive ([the Will](network-user.md#a-lost-link-and-the-will)).
   `wifi.access_point_on()` puts a fresh access point back on the air from the board's current
   instant, and the station must join it again, DHCP included. A switch to the state the access
   point is in already does nothing. Both after `board.power_on()`, or before it to start off the

@@ -3,7 +3,7 @@ of handmade segments: the handshake, data both ways, both closes, refused, reset
 zero window, a segment out of order, and connecting before the device has an address."""
 
 import struct
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 
 import pytest
 from test_net_ethernet import dhcp
@@ -487,3 +487,150 @@ def test_http_client_over_the_network_path(device: Device, framing: str) -> None
     streams = [event for event in device.net.events if event.get("stream") == "device:8080/1"]
     assert streams[0]["direction"] == "in" and streams[0]["data"] == request.hex()
     assert streams[1]["direction"] == "out" and streams[1]["data"] == response.hex()
+
+
+class Closing:
+    """A TCP service that keeps each connection's `write` and `close`, for the test to call, and
+    what the device sent."""
+
+    def __init__(self) -> None:
+        self.writes: list[Callable[[bytes], None]] = []
+        self.closes: list[Callable[[], None]] = []
+        self.received = bytearray()
+
+    def accept(
+        self, peer: tuple[str, int], write: Callable[[bytes], None], close: Callable[[], None]
+    ) -> "Closing":
+        self.writes.append(write)
+        self.closes.append(close)
+        return self
+
+    def on_data(self, data: bytes) -> None:
+        self.received += data
+
+    def on_close(self) -> None:
+        pass
+
+
+def test_a_chip_reset_drops_a_device_connection_still_in_its_handshake(device: Device) -> None:
+    [syn_ack] = device.send(40000, 1883, 100, 0, SYN)
+    assert syn_ack.flags == SYN | ACK and len(device.net.ip._flows) == 1
+    device.net.device_reset(device.now, "the device reset")
+    assert not device.net.ip._flows
+    line = "net: TCP 10.64.0.2:40000 → 10.64.0.1:1883 lost before the device answered its SYN-ACK"
+    assert line in device.events()
+    # The new stack's SYN from the same port is answered.
+    device.now += MS
+    [again] = device.send(40000, 1883, 500, 0, SYN)
+    assert again.flags == SYN | ACK
+
+
+def test_a_released_lease_orphans_the_devices_connections_on_its_address() -> None:
+    device = Device("ethernet").up()
+    service = Closing()
+    device.net.listen(7000, service)
+    device.send(40000, 7000, 100, 0, SYN)
+    device.send(40000, 7000, 101, ISN + 1, ACK)
+    test_side = device.net.connect(80)
+    device.net.receive(MS, dhcp(7, ciaddr=DEVICE, options=bytes([54, 4]) + NETWORK))
+    assert device.net.device_address is None
+    # lwIP drops a netif's connections when it loses the address: the test's are lost, the
+    # device's orphaned, so its service's close sends no FIN and ends the flow at once.
+    assert test_side.state == "lost"
+    assert "net: TCP 10.64.0.1:49152 → 10.64.0.2:80 lost: the device gave its address up" in (
+        device.events()
+    )
+    [flow] = device.net.ip._flows.values()
+    assert flow.established and flow.orphaned
+    [close] = service.closes
+    close()
+    assert device.poll() == [] and not device.net.ip._flows
+    line = "net: TCP 10.64.0.2:40000 → 10.64.0.1:7000 closed by its service with no device"
+    assert line + " to answer" in device.events()
+
+
+def test_an_unsupported_dhcp_message_leaves_the_address_and_the_connections() -> None:
+    device = Device("ethernet").up()
+    test_side = device.net.connect(80)
+    device.net.receive(MS, dhcp(10, ciaddr=DEVICE))  # a type the server does not take
+    assert device.net.device_address == "10.64.0.2"
+    assert test_side.state == "connecting"
+
+
+def test_what_an_orphaned_connection_cannot_take_is_discarded_and_counted() -> None:
+    device = Device("ethernet").up()
+    service = Closing()
+    device.net.listen(7000, service)
+    device.send(40000, 7000, 100, 0, SYN)
+    device.send(40000, 7000, 101, ISN + 1, ACK, window=1000)
+    [write] = service.writes
+    write(b"x" * 5000)  # 1000 go, 4000 wait for the window
+    [flow] = device.net.ip._flows.values()
+    assert len(flow.pending) == 4000
+    device.net.device_reset(device.now, "the device reset")
+    # What waited is dropped with the device's stack, and nothing piles up behind it.
+    assert flow.orphaned and not flow.pending and flow.discarded == 4000
+    for _ in range(100):
+        write(b"x" * 1000)
+    assert not flow.pending and flow.discarded == 104_000
+    [close] = service.closes
+    close()
+    line = "net: TCP 10.64.0.2:40000 → 10.64.0.1:7000 discarded 104000 bytes its service wrote"
+    assert line + " with no device to answer" in device.events()
+
+
+@pytest.mark.parametrize("loss", ["reset", "release"])
+def test_the_gone_stacks_syn_on_the_path_never_arrives_but_its_data_does(
+    device: Device, loss: str
+) -> None:
+    if loss == "release" and device.link == "ppp":
+        pytest.skip("a lease is given up behind the access point only")
+    from esp32tl.units import ms
+
+    service = Closing()
+    device.net.listen(7000, service)
+    device.send(40000, 7000, 100, 0, SYN)
+    device.send(40000, 7000, 101, ISN + 1, ACK)
+    device.net.set_path(rtt=ms(201))  # 100 ms up
+    device.send(40000, 7000, 101, ISN + 1, ACK | PSH, b"last words")
+    device.send(40001, 1883, 900, 0, SYN)
+    if loss == "reset":
+        device.net.device_reset(device.now, "the device reset")
+    else:
+        device.net.receive(device.now, dhcp(7, ciaddr=DEVICE, options=bytes([54, 4]) + NETWORK))
+    device.net.arrive(device.now + 200 * MS)
+    # What the old stack sent arrives, as at a service on the internet; its new connection's
+    # SYN would only open a flow nothing ends, so a new stack's SYN from 40001 finds none.
+    assert bytes(service.received) == b"last words"
+    assert [key[1] for key in device.net.ip._flows] == [40000]
+
+
+def test_a_malformed_datagram_on_the_path_survives_a_reset() -> None:
+    from esp32tl.units import ms
+
+    device = Device("ethernet").up()
+    device.net.set_path(rtt=ms(201))
+    bad = bytearray(34)
+    bad[0], bad[9] = 0x4F, 6  # a 60-byte header in 34 bytes, TCP
+    device.net.receive(device.now, device._wrap(bytes(bad)))
+    # With its length impossible, it keeps the guard word esp32sim's frames carry.
+    [(_, queued)] = device.net._up.queue
+    assert queued.startswith(bytes(bad))
+    device.net.device_reset(device.now, "the device reset")
+    # Not a SYN that parses: it stays on the path, for the IP layer to drop, as before.
+    assert [datagram for _, datagram in device.net._up.queue] == [queued]
+    device.net.arrive(device.now + 200 * MS)
+    assert not device.net._up.queue and not device.net.ip._flows
+
+
+def test_a_malformed_syn_leaves_the_orphaned_connection_and_its_will() -> None:
+    device = Device("ppp").up()
+    service = Closing()
+    device.net.listen(7000, service)
+    device.send(40000, 7000, 100, 0, SYN)
+    device.send(40000, 7000, 101, ISN + 1, ACK)
+    device.net.device_reset(device.now, "the device reset")
+    [flow] = device.net.ip._flows.values()
+    # An option that does not parse: the SYN is refused before it could reset anything.
+    assert device.send(40000, 7000, 500, 0, SYN, options=bytes([2, 9, 0, 0])) == []
+    assert list(device.net.ip._flows.values()) == [flow] and flow.orphaned

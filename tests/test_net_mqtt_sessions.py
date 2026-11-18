@@ -13,6 +13,16 @@ SUBSCRIBE_QOS0 = b"\x82\x08\0\x01\0\x03a/#\x00"
 SUBACK_QOS1 = b"\x90\x03\0\x01\x01"
 NO_SESSION = b"\x20\x02\0\0"
 SESSION_PRESENT = b"\x20\x02\x01\0"
+S = 1_000_000_000
+
+
+def will_connect(clean: bool, keepalive: int = 10) -> bytes:
+    """CONNECT for client ID c with `keepalive` and a Will, QoS 1 and retained, of `offline` on
+    `c/status`."""
+    flags = 0x2C | (0x02 if clean else 0)
+    body = b"\0\x04MQTT\x04" + bytes([flags]) + keepalive.to_bytes(2, "big")
+    body += b"\0\x01c\0\x08c/status\0\x07offline"
+    return bytes([0x10, len(body)]) + body
 
 
 class Wire:
@@ -624,16 +634,215 @@ def test_an_anonymous_client_has_a_session_while_it_is_connected(broker: Broker)
     assert broker.session("esp32tl-anonymous-1") is None
 
 
-def test_a_stored_session_outlives_a_network_reset() -> None:
+def test_a_stored_session_outlives_a_lost_link_and_its_keepalive() -> None:
     wire = failures.Wire()
     broker = wire.net.broker
     peer = failures.Peer(wire, 4000)
     peer.send(KEEP + SUBSCRIBE_QOS1)
     assert peer.read() == NO_SESSION + SUBACK_QOS1
     wire.net.stop()
+    # Half-open: the connection is the broker's until its keepalive of 10 s runs out.
+    assert broker.subscribed("a/#")()
+    wire.net.arrive(15 * S)
     assert not broker.subscribed("a/#")()
     broker.publish("a/b", "x", qos=1)
     state = broker.session("c")
     assert state is not None and not state.connected
     assert state.subscriptions == {"a/#": 1}
     assert [m.payload for m in state.queued] == [b"x"]
+
+
+def test_a_lost_link_publishes_the_will_when_the_keepalive_runs_out() -> None:
+    wire = failures.Wire()
+    broker = wire.net.broker
+    peer = failures.Peer(wire, 4000)
+    wire.now = 2 * S
+    peer.send(will_connect(clean=False))
+    assert peer.read() == NO_SESSION
+    wire.now = 3 * S
+    wire.net.stop(wire.now)
+    assert broker.find_message("c/status") is None
+    # 1.5 times the keepalive after the device's last packet, the CONNECT at 2 s.
+    assert wire.net.quiet_until() == 17 * S
+    wire.net.arrive(17 * S - 1)
+    assert broker.find_message("c/status") is None
+    assert wire.net.poll(17 * S) == []
+    will = broker.find_message("c/status", "offline")
+    assert will is not None and will.at == Duration(17 * S) and will.retain
+    events = [e["event"] for e in wire.net.events if "event" in e]
+    assert "mqtt: c keepalive expired" in events
+
+
+@pytest.mark.parametrize("clean", [False, True], ids=["session-kept", "clean-session"])
+def test_a_device_back_before_its_keepalive_takes_over_its_connection(clean: bool) -> None:
+    wire = failures.Wire()
+    broker = wire.net.broker
+    old = failures.Peer(wire, 4000)
+    old.send(will_connect(clean=False))
+    assert old.read() == NO_SESSION
+    wire.now = 1 * S
+    wire.net.stop(wire.now)
+    wire.now = 5 * S
+    wire.net.start(wire.now)
+    wire.open()
+    new = failures.Peer(wire, 4001)
+    new.send(will_connect(clean=clean))
+    assert new.read() == (NO_SESSION if clean else SESSION_PRESENT)
+    assert [c.connection_id for c in broker.clients] == [1, 2]
+    events = [e["event"] for e in wire.net.events if "event" in e]
+    if clean:
+        # A clean session takes nothing of the old one, and its Will goes at the takeover.
+        will = broker.find_message("c/status", "offline")
+        assert will is not None and will.at == Duration(5 * S) and will.connection_id == 1
+        assert "mqtt: c (connection 2) took over connection 1" in events
+    else:
+        assert broker.find_message("c/status") is None
+        assert "mqtt: c (connection 2) took over connection 1, its Will discarded" in events
+    # No stack holds the old connection: the broker's close drops it, and sends no FIN.
+    assert not old.closed and len(wire.net.ip._flows) == 1
+    line = "net: TCP 10.64.0.2:4000 → 203.0.113.153:1883 closed by its service"
+    assert line + " with no device to answer" in events
+    # The old connection's deadline went with it: only the new one's runs out, at 20 s, with its
+    # own Will.
+    wire.net.arrive(30 * S)
+    assert [m.connection_id for m in broker.messages if m.topic == "c/status"] == (
+        [1, 2] if clean else [2]
+    )
+
+
+def test_a_new_stack_connects_from_the_old_port_once_the_keepalive_closed_it() -> None:
+    wire = failures.Wire()
+    broker = wire.net.broker
+    old = failures.Peer(wire, 4000)
+    old.send(will_connect(clean=False))
+    assert old.read() == NO_SESSION
+    wire.now = 1 * S
+    wire.net.stop(wire.now)
+    wire.now = 5 * S
+    wire.net.start(wire.now)
+    wire.open()
+    wire.net.arrive(15 * S)
+    assert broker.find_message("c/status", "offline") is not None
+    # The broker's close sends no FIN, though the link is up again; nothing of the connection
+    # stays to take the next SYN.
+    assert wire.net.poll(15 * S) == []
+    assert not wire.net.ip._flows
+    wire.now = 20 * S
+    new = failures.Peer(wire, 4000)
+    new.send(will_connect(clean=False))
+    assert new.read() == SESSION_PRESENT
+    assert [c.connection_id for c in broker.clients] == [1, 2]
+
+
+def test_the_links_end_drops_a_connection_its_service_has_closed() -> None:
+    wire = failures.Wire()
+    broker = wire.net.broker
+    peer = failures.Peer(wire, 4000)
+    peer.send(KEEP)
+    assert peer.read() == NO_SESSION
+    assert broker.disconnect("c")
+    wire.poll()
+    # The device acknowledged the broker's FIN but never sent its own.
+    assert peer.closed and len(wire.net.ip._flows) == 1
+    wire.net.stop()
+    assert not wire.net.ip._flows
+    events = [e["event"] for e in wire.net.events if "event" in e]
+    line = "net: TCP 10.64.0.2:4000 → 203.0.113.153:1883 closed by its service"
+    line += " with no device to answer"
+    assert line in events
+
+
+def test_a_keepalive_of_zero_keeps_a_lost_links_connection_and_its_will() -> None:
+    wire = failures.Wire()
+    broker = wire.net.broker
+    peer = failures.Peer(wire, 4000)
+    peer.send(will_connect(clean=False, keepalive=0))
+    assert peer.read() == NO_SESSION
+    wire.net.stop(1 * S)
+    # No deadline: nothing ends the connection but a takeover or the test.
+    assert wire.net.quiet_until() is None
+    wire.net.arrive(3600 * S)
+    state = broker.session("c")
+    assert state is not None and state.connected
+    assert broker.find_message("c/status") is None
+    assert broker.disconnect("c")
+    assert broker.find_message("c/status", "offline") is not None
+
+
+def test_a_takeover_at_the_old_keepalives_deadline_publishes_its_will() -> None:
+    clock = [0]
+    broker = Broker(lambda: clock[0])
+    old = Wire(broker, will_connect(clean=False))
+    assert old.take() == [NO_SESSION]
+    # At the deadline, 15 s, before `poll` has expired it: the CONNECT comes first in the turn.
+    clock[0] = 15 * S
+    new = Wire(broker, will_connect(clean=False))
+    assert new.take() == [SESSION_PRESENT]
+    will = broker.find_message("c/status", "offline")
+    assert will is not None and will.at == Duration(15 * S) and will.connection_id == 1
+    assert old.closed
+
+
+def test_the_links_end_drops_a_connection_still_in_its_handshake() -> None:
+    wire = failures.Wire()
+    # A SYN from 4000, whose SYN-ACK the device never acknowledges.
+    peer = failures.Peer.__new__(failures.Peer)
+    peer.wire, peer.port, peer.destination, peer.seq, peer.ack = wire, 4000, 1883, 1, 0
+    peer.segment(0x02)
+    assert len(wire.net.ip._flows) == 1
+    wire.net.stop()
+    assert not wire.net.ip._flows
+    events = [e["event"] for e in wire.net.events if "event" in e]
+    line = "net: TCP 10.64.0.2:4000 → 203.0.113.153:1883 lost before the device answered"
+    assert line + " its SYN-ACK" in events
+    # A new stack's SYN from the same port opens a new connection.
+    wire.net.start(wire.now)
+    wire.open()
+    again = failures.Peer(wire, 4000)
+    again.send(KEEP)
+    assert again.read() == NO_SESSION
+
+
+def test_a_stale_close_leaves_the_new_connection_on_its_port_alone() -> None:
+    wire = failures.Wire()
+    broker = wire.net.broker
+    old = failures.Peer(wire, 4000)
+    old.send(KEEP)
+    assert old.read() == NO_SESSION
+    [stale] = broker._sessions
+    wire.net.stop()
+    wire.net.arrive(15 * S)  # the keepalive drops the old flow
+    assert not wire.net.ip._flows
+    wire.now = 20 * S
+    wire.net.start(wire.now)
+    wire.open()
+    new = failures.Peer(wire, 4000)
+    new.send(KEEP)
+    assert new.read() == SESSION_PRESENT
+    stale.close()  # the old connection's close, called again
+    assert len(wire.net.ip._flows) == 1
+    state = broker.session("c")
+    assert state is not None and state.connected
+
+
+def test_a_new_stacks_syn_from_the_old_port_resets_the_orphaned_connection() -> None:
+    wire = failures.Wire()
+    broker = wire.net.broker
+    old = failures.Peer(wire, 4000)
+    old.send(will_connect(clean=False))
+    assert old.read() == NO_SESSION
+    wire.now = 1 * S
+    wire.net.stop(wire.now)
+    wire.now = 5 * S
+    wire.net.start(wire.now)
+    wire.open()
+    # Back before the keepalive, from the same port: the challenge ACK's RST, collapsed, resets
+    # the old connection, whose Will goes as at any reset, and the SYN opens a new one.
+    new = failures.Peer(wire, 4000)
+    events = [e["event"] for e in wire.net.events if "event" in e]
+    line = "net: TCP 10.64.0.2:4000 → 203.0.113.153:1883 reset: the device opened a new"
+    assert line + " connection from its port" in events
+    will = broker.find_message("c/status", "offline")
+    assert will is not None and will.at == Duration(5 * S) and will.connection_id == 1
+    new.send(will_connect(clean=False))
+    assert new.read() == SESSION_PRESENT
