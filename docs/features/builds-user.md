@@ -43,7 +43,10 @@ the directory.
 
 **A PlatformIO build** for the board profile's chip needs `firmware.bin`, and then one of these.
 The bootloader's offset is the chip's: `0x1000` on the classic ESP32 (and the S2), `0x0` on the
-ESP32-S3, ESP32-C3 and ESP32-C6; the offsets below are the classic ESP32's.
+ESP32-S3, ESP32-C3 and ESP32-C6, `0x2000` on the ESP32-P4 and the ESP32-S31; the offsets below are
+the classic ESP32's. An ESP32-P4 build is for one silicon revision, rev ≥ 3 by default or rev < 3
+with `CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y`, which its image headers record; the esp32sim backend
+runs it on that revision, with that revision's ROM.
 
 - `firmware.factory.bin`, which pioarduino's builds have: the whole flash from `0x0`, with the
   bootloader at `0x1000`, the partition table at `0x8000`, the otadata at `0xe000` (in an Arduino

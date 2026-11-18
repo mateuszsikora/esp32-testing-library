@@ -38,9 +38,11 @@ without starting anything:
    with `CONFIG_SPI_FLASH_SIZE_OVERRIDE` (`cpu_start.c`), and `esp_flash_init_default_chip` in
    `esp_flash_spi_init.c` stops the application when the flash it detects is smaller, so the larger
    of the two is the one that must fit.
-2. **`runner_path()`** and **`rom_path(profile.chip)`** resolve the runner and the board chip's
-   ROM ELF ([Configuration](#configuration)). `load_app` before them takes `chip=profile.chip`, so
-   a build for another chip than the profile's is refused.
+2. **`runner_path()`** and **`rom_path(profile.chip, self.app)`** resolve the runner and the board
+   chip's ROM ELF ([Configuration](#configuration)): on the ESP32-P4, `rom_key` asks
+   `build.p4_rev3(app)` and takes `runtime.P4_REV0`, the rev < 3 ROM, for a build that is not for
+   rev ≥ 3, as the runner reads the same headers to pick the revision it runs. `load_app` before
+   them takes `chip=profile.chip`, so a build for another chip than the profile's is refused.
 3. **The clock, the console and the log.** A `HeldClock` (`esp32tl/backends/clock.py`, below);
    `console_output`, a `bytearray` that gets the bytes of every `console` message of the link
    until the link fails: after an error `BoardLink` reads on, but hands nothing more on;
@@ -306,7 +308,9 @@ request has a `role` (`wifi.station`, which `Wifi.station` asks with `role="stat
 interface's kind (`sd_card`); a gap skips the test with
 `esp32sim: {interface} on {chip}: {reason}`. `CHIP_GAPS` holds, for `esp32s3`, `esp32c3` and
 `esp32c6`, `sd_card` (esp32sim models no GP-SPI RX DMA there, #229 G2) and `wifi.station` (no
-virtual station, #229 G4). It reads the declaration through
+virtual station, #229 G4); for `esp32p4` and `esp32s31`, `uart` (no UART pin hook, #229 G6 and
+G7), `sd_card` (no SPI pin hook), `wifi` (no radio on the P4, no Ethernet relay on the S31, G7)
+and `bluetooth`. It reads the declaration through
 `capabilities.declared()` at each call, so a test can swap it. `set_up()` lists
 `the {source_kind} of {interface}` for every `Uart` with a source (`the replay of uart.gnss`, `the
 model of uart.gnss`) and `the tap of {interface}` for every tapped one, then `the level of {line}`
@@ -501,7 +505,8 @@ repository makes.
 | `HeldClock(step=STEP_NS)` | `esp32tl/backends/clock.py`: the link's `Hold`, `turn(now)`, `dumped(ack)`; `stop()`, `end(reason, at=None)`; the test's `now`, `wait(ns)`, `wait_until(condition, within_ns, description)`, `wait_for_event(condition, within_ns, description, latency_ns)`, `dump_flash()`, which returns the runner's `FlashDumpAck`, or `None` once the run has ended, and `check(step)`, which raises `RunEnded` (`the run ended {when} before {step}: {reason}`) once the run has ended |
 | `nanoseconds(value, what)`, `seconds(ns)` | `esp32tl/backends/clock.py`: a `Duration` of the board's time to nanoseconds, checked; nanoseconds shown as `12.5 s`, as `str(Duration(ns))` |
 | `listen()` | The listening socket and its path, or `BackendError` |
-| `runner_path()`, `rom_path(chip="esp32")` | The runner and `chip`'s ROM ELF, or `BackendError`; `esp32tl has no ROM for {chip}; the chips are esp32, esp32s3, esp32c3, esp32c6` for a chip `runtime.ROMS` does not have |
+| `runner_path()`, `rom_path(chip="esp32", app=None)` | The runner and the ROM ELF of `rom_key(chip, app)`, or `BackendError`; `esp32tl has no ROM for {chip}; the chips are esp32, esp32s3, esp32c3, esp32c6, esp32p4, esp32p4-rev0, esp32s31` for a key `runtime.ROMS` does not have |
+| `rom_key(chip, app=None)` | The key of `runtime.ROMS` for `app` on `chip`: `runtime.P4_REV0` for an `esp32p4` build that `build.p4_rev3` says is not for rev ≥ 3, `chip` otherwise; a `BuildError` reading the headers becomes `BackendError` |
 | `CHIP_GAPS` | What esp32sim does not model on a chip, by request: chip, then `<kind>` or `<kind>.<role>`, then the reason the test is skipped with; the chips' titles come from `boards.CHIPS`, and every chip there but `esp32` has an entry (`test_every_chip_but_the_classic_one_has_its_esp32sim_gaps_decided`) |
 | `load_app(app_path, *, build_dir=None, backend="esp32sim", chip="esp32")` | The checked `Build` of the selected directory (default `<app_path>/build`) for `chip`, the board profile's, from `esp32tl.build.load`, its `BuildError` raised as `BackendError`; `backend` chooses target/encryption error wording |
 | `profile_uart(profile, interface, *, clock, directory, asked=..., log=None, files=None)` | The `Uart` on the route the profile gives `interface` (`uart.gnss`), at its pins and baud; `BackendError` when the profile has no such route. The [`esp32tl` command](cli-user.md) makes its UARTs with it |
@@ -522,9 +527,9 @@ repository makes.
 |---|---|---|
 | `ESP32TL_RUNNER` | Path of the runner; unset or empty: checkout release build, otherwise verified user cache | `runner_path()`; executable with matching version and esp32sim revision |
 | `ESP32TL_ROM` | Path of the classic ESP32's ROM ELF; unset or empty: checkout ROM, otherwise verified user cache | `rom_path()`; pinned checksum required |
-| `ESP32TL_ROM_ESP32S3`, `ESP32TL_ROM_ESP32C3`, `ESP32TL_ROM_ESP32C6` | The same for the chip in its name | `rom_path(chip)`; the chip's pinned checksum required |
+| `ESP32TL_ROM_ESP32S3`, `ESP32TL_ROM_ESP32C3`, `ESP32TL_ROM_ESP32C6`, `ESP32TL_ROM_ESP32P4`, `ESP32TL_ROM_ESP32P4_REV0`, `ESP32TL_ROM_ESP32S31` | The same for the chip in its name; `…_ESP32P4_REV0` is the P4's rev < 3 ROM (`runtime.rom_variable`) | `rom_path(chip)`; the chip's pinned checksum required |
 | `ROOT` | `Path(__file__).resolve().parents[2]`: the checkout with an editable install, `site-packages` when installed from a wheel | the two defaults |
-| `ROM_RELEASE` | `"20241011"`, the esp-rom-elfs release `scripts/fetch-rom-elf` pins | `rom_path()` |
+| `ROM_RELEASE` | `runtime.ROM_RELEASE`, `"20260528"`, the esp-rom-elfs release `scripts/fetch-rom-elf` pins | `rom_path()` |
 | `HELD_MAX_SECONDS` | `86400`, emulated seconds, passed as `--max-seconds` | `Esp32Sim.power_on` |
 | `MAX_SECONDS` | `300`, emulated seconds: the default `--max-seconds` of the `esp32tl` command, whose clock runs free | `esp32tl/cli.py` |
 | `POWER_ON_UTC` | `esp32tl.net.ntp.DEFAULT_UTC`, `datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)`: the world's time at power-on unless the test gives one | `Esp32Sim.power_on` |
@@ -561,9 +566,9 @@ the first problem shows; the socket and the start come at `power_on()`, in the t
 | `no runner at {path}: run make setup in a checkout, or esp32tl runtime prepare` | `runner_path` | `ESP32TL_RUNNER` names no file; one it cannot run fails `runtime.identity` instead |
 | `no runner at {path}: run make build-runner in {ROOT}` | `runner_path` | No `ESP32TL_RUNNER`, and the checkout beside the package has not built `runner/target/release/esp32tl-runner`; `prepare` would refuse its install as unreleased |
 | `no rom at {path}: run make setup in a checkout, or esp32tl runtime prepare` | `rom_path` | The chip's ROM variable names no file |
-| `no rom at {path}: run make rom-elf in {ROOT}` | `rom_path` | No ROM variable, and the checkout beside the package has not fetched `.cache/esp-rom-elfs/20241011/<rom>` |
+| `no rom at {path}: run make rom-elf in {ROOT}` | `rom_path` | No ROM variable, and the checkout beside the package has not fetched `.cache/esp-rom-elfs/20260528/<rom>` |
 | `unreleased esp32tl: installed from {source}, not from release v{version}, ...` | `runner_path`, from `runtime.cached_file` | No `ESP32TL_RUNNER` and no checkout beside the package, and pip installed esp32tl from a git commit other than the release's tag, or from a source directory (`runtime.unreleased`), so the prepared release's runner is not taken ([an unreleased commit](runtime-user.md#test-an-unreleased-commit)) |
-| `runtime missing`, `invalid runtime manifest …` or `invalid checksum or missing file: {path}`, then `; set {variable} to the {rom} make rom-elf puts in a checkout's .cache/esp-rom-elfs/20241011/: esp32tl runtime prepare installs nothing for an unreleased esp32tl` | `rom_path`, from `runtime.cached_file` | No `ESP32TL_ROM` or `ESP32TL_ROM_<CHIP>` and no checkout, esp32tl is unreleased, and the cache lacks the ROM or its manifest does not match; `{variable}` is `runtime.rom_variable(chip)` |
+| `runtime missing`, `invalid runtime manifest …` or `invalid checksum or missing file: {path}`, then `; set {variable} to the {rom} make rom-elf puts in a checkout's .cache/esp-rom-elfs/20260528/: esp32tl runtime prepare installs nothing for an unreleased esp32tl` | `rom_path`, from `runtime.cached_file` | No `ESP32TL_ROM` or `ESP32TL_ROM_<CHIP>` and no checkout, esp32tl is unreleased, and the cache lacks the ROM or its manifest does not match; `{variable}` is `runtime.rom_variable(chip)` |
 | `cannot listen on {path}: {error.strerror}` | `listen`, from `Esp32Sim.power_on` | The socket cannot be bound |
 | `cannot start {command[0]}: {error.strerror}` | `Esp32Sim.power_on` | `OSError` from the start, for example `Exec format error` |
 | `the runner exited with code {code}; its output is in {self.dut.logfile}` | `Esp32Sim.close` | Exit code not 0; error at teardown, unless the call already failed on `RunEnded` |
@@ -782,11 +787,12 @@ Console input is a `ConsoleInput` link interface with `Wire(None, rx, 115200)`, 
 `console_pin("rx")`, GPIO 3 on the classic ESP32. Its pending writes retain the test clock
 timestamp until the next poll. UART0's RX pin is watched, its TX pin is not; output still arrives
 only through `console`. The normal UART warning and report paths apply. With a profile whose
-`console` is `usb-serial-jtag`, `ConsoleInput` has no wire and `usb=True`: `Interface.usb_console`
-is true, it watches no pin, and `BoardLink` sends its writes as `console_rx`, in chunks of at most
-512 KiB, which the runner refuses unless it has `--console-port usb`
+`console` is `usb-serial-jtag`, or on a chip whose `boards.Chip.uart_pins` is false (the ESP32-P4
+and the ESP32-S31), `ConsoleInput` has no wire and `pinless=True`: `Interface.pinless_console` is
+true, it watches no pin, and `BoardLink` sends its writes as `console_rx`, in chunks of at most
+512 KiB, which the runner refuses unless it has `--console-port usb` or runs such a chip
 ([protocol 5.23](../protocol.md#523-console_rx-ext-usb-console)). The link's report then has the
-line `USB-Serial/JTAG console: {n} bytes of console_rx lost with the board's supply off` from
+line `console without pins: {n} bytes of console_rx lost with the board's supply off` from
 `stats.console_rx_lost`.
 
 ## Virtual station networks

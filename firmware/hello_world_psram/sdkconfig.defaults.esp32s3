@@ -1,0 +1,2 @@
+# The ESP32-S3's devkit profile, esp32-s3-devkitc, is an N8R8 module: 8 MiB of octal PSRAM.
+CONFIG_SPIRAM_MODE_OCT=y

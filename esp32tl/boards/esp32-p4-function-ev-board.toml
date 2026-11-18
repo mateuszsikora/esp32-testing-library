@@ -1,0 +1,18 @@
+# The ESP32-P4 of ESP32-P4-Function-EV-Board: an ESP32-P4NRW32 with 32 MiB of in-package PSRAM,
+# and 16 MiB of flash on the board. It carries every validation image built for the ESP32-P4
+# (firmware/build.sh --chips), for either silicon revision. The console is UART0 on GPIO 37 (TX)
+# and 38 (RX), the board's USB-to-UART bridge; the runner takes it without its pins, which
+# esp32sim's P4 does not report (#229, G6), and runs no [uart.<role>] route either.
+# GPIO 34 to 38 are strapping pins.
+# flash_mb is the board's, and the esp32sim backend gives the runner that flash (docs/features/
+# board-profiles-user.md): a build for 16 MB or less runs here.
+name = "esp32-p4-function-ev-board"
+chip = "esp32p4"
+flash_mb = 16
+psram_mb = 32
+
+# firmware/gpio_echo's defaults on this chip: the line it reads, which the board pulls down, and
+# the line it drives.
+[lines.echo]
+in = { pin = 6, pull = "down" }
+out = 7

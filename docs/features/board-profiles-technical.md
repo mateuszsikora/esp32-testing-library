@@ -64,9 +64,9 @@ order of [Schema](#schema). File access, UTF-8 decoding and TOML parsing errors 
 | Key | Type | Required | Rule |
 |---|---|---|---|
 | `name` | string | yes | The file's name without `.toml` |
-| `chip` | string | yes | One of `CHIPS`, the chips the runner emulates: `esp32` (the classic chip), `esp32s3`, `esp32c3`, `esp32c6`. The chip decides the GPIOs, the UARTs and the console's pins below ([Chips](#chips)) |
+| `chip` | string | yes | One of `CHIPS`, the chips the runner emulates: `esp32` (the classic chip), `esp32s3`, `esp32c3`, `esp32c6`, `esp32p4`, `esp32s31`. The chip decides the GPIOs, the UARTs and the console's pins below ([Chips](#chips)) |
 | `console` | string | no | `"uart0"`, the default, or `"usb-serial-jtag"` (`boards.CONSOLES`): where the firmware's console is. `usb-serial-jtag` only on a chip whose `Chip.usb_serial_jtag` is true, the S3, C3 and C6; `BoardProfile.console` holds it |
-| `flash_mb`, `psram_mb` | integer | no | At least 0; absent is "not known", `None` in `BoardProfile`. The esp32sim backend gives the runner `psram_mb` as `--psram-mb` when it is set ([esp32sim-backend-technical.md](esp32sim-backend-technical.md#data-flow)), and the runner refuses a size the chip does not take (0 or 4 on the classic ESP32; 0, 2, 4 or 8 on the ESP32-S3; 0 on the ESP32-C3 and ESP32-C6). The esp32sim backend gives the runner `flash_mb` as `--flash-mb` and refuses at setup a `flash_mb` other than 1, 2, 4, 8 or 16, and a build whose image headers give more flash; without `flash_mb` it passes the headers' size ([esp32sim-backend-technical.md](esp32sim-backend-technical.md#data-flow)). The schema keeps any size from 0, for the serial backend, which reads neither key |
+| `flash_mb`, `psram_mb` | integer | no | At least 0; absent is "not known", `None` in `BoardProfile`. The esp32sim backend gives the runner `psram_mb` as `--psram-mb` when it is set ([esp32sim-backend-technical.md](esp32sim-backend-technical.md#data-flow)), and the runner refuses a size the chip does not take (0 or 4 on the classic ESP32; 0, 2, 4 or 8 on the ESP32-S3; 0, 16 or 32 on the ESP32-P4; 0 or 16 on the ESP32-S31; 0 on the ESP32-C3 and ESP32-C6). The esp32sim backend gives the runner `flash_mb` as `--flash-mb` and refuses at setup a `flash_mb` other than 1, 2, 4, 8 or 16, and a build whose image headers give more flash; without `flash_mb` it passes the headers' size ([esp32sim-backend-technical.md](esp32sim-backend-technical.md#data-flow)). The schema keeps any size from 0, for the serial backend, which reads neither key |
 | `[uart.<role>]` | table | no | One per UART route; keys below |
 | `[lines.<role>]` | table | no | One per set of GPIO lines; keys below |
 | `[sd_card]` | table | no | The board's SD card slot, wired for SPI mode; keys below |
@@ -208,8 +208,11 @@ and that controller, which `bt.tap(path)` asks for and writes as btsnoop
 ### Chips
 
 `CHIPS` maps each chip a profile may name to a `Chip`: `name`, `title` (in messages), `gpios`,
-`input_only`, `uarts`, `console_pins` and `usb_serial_jtag`, whether a profile's `console` may be
-`usb-serial-jtag`; `Chip.console_pin("tx")` and `("rx")` give UART0's pins.
+`input_only`, `uarts`, `console_pins`, `usb_serial_jtag`, whether a profile's `console` may be
+`usb-serial-jtag`, `usb_pins`, and `uart_pins`, whether esp32sim tells the board what the UARTs
+send and on which pins (true by default; false on the P4 and the S31, where the esp32sim backend
+takes the console without its pins and `CHIP_GAPS` skips a route); `Chip.console_pin("tx")` and
+`("rx")` give UART0's pins.
 Every pad the chip has counts, the flash's and the PSRAM's included, as on the classic ESP32.
 
 | `chip` | `gpios` | `input_only` | `uarts` | `console_pins` (TX, RX) | `usb_serial_jtag` | Source |
@@ -218,9 +221,13 @@ Every pad the chip has counts, the flash's and the PSRAM's included, as on the c
 | `esp32s3` | 0 to 48 without 22 to 25 | none | 3 | 43, 44 | yes | ESP32-S3 datasheet, section 2.3 |
 | `esp32c3` | 0 to 21 | none | 2 | 21, 20 | yes | ESP32-C3 datasheet, section 2.2 |
 | `esp32c6` | 0 to 30 | none | 2 | 16, 17 | yes | ESP32-C6 datasheet, section 2.3 |
+| `esp32p4` | 0 to 54 | none | 5 | 37, 38 | yes (24, 25) | ESP32-P4 datasheet, section 2.3; ESP-IDF v5.5.4 `SOC_GPIO_VALID_GPIO_MASK`, `U0TXD_GPIO_NUM`, `USB_USJ_INT_PHY_DM_GPIO_NUM` |
+| `esp32s31` | 0 to 61 without 29 and 41 | none | 4 | 58, 59 | yes (33, 34) | ESP-IDF v6.1 `soc/esp32s31`: `SOC_GPIO_VALID_GPIO_MASK`, `SOC_UART_HP_NUM`, `U0TXD_GPIO_NUM`, `USB_INT_PHY0_DM_GPIO_NUM` |
 
 The same pads are esp32sim's own pin tables at the pin (`esp-soc/src/pins.rs`, `ChipPins`), which
-the runner checks the link's `watch` against ([protocol 5.1](../protocol.md#51-hello)).
+the runner checks the link's `watch` against ([protocol 5.1](../protocol.md#51-hello)); esp-soc has
+no table for the P4 and the S31, whose pads the runner takes from the datasheet and ESP-IDF, as
+here.
 
 ## Interfaces
 
@@ -260,13 +267,13 @@ The ones `tests/test_boards.py` checks, verbatim:
 
 | Message | Cause |
 |---|---|
-| `no board profile named 'NAME'; the profiles are esp32-c3-devkitm, esp32-c6-devkitc, esp32-devkitc, esp32-s3-devkitc, gps-alarm-clock, lilygo-t-a7670g-r2, sd-data-logger` | `boards.profile` with another name |
+| `no board profile named 'NAME'; the profiles are esp32-c3-devkitm, esp32-c6-devkitc, esp32-devkitc, esp32-p4-function-ev-board, esp32-s3-devkitc, esp32-s31-module, gps-alarm-clock, lilygo-t-a7670g-r2, sd-data-logger` | `boards.profile` with another name |
 | `x.toml: <tomllib's message>`, as `x.toml: Invalid value (at end of document)` | Not TOML, or not readable |
 | `x.toml: 'utf-8' codec can't decode byte ...` | Invalid UTF-8; the decoder's message gives the byte and position |
 | `x.toml: missing chip`, `x.toml: unknown key pins` | A top-level key missing or unknown |
 | `x.toml: uart.gnss: missing baud`, `x.toml: lines.modem.ri: missing pin` | The same in a table |
 | `x.toml: name: 'y' is not the file's name, 'x'` | `name` differs from the file's name |
-| `x.toml: chip: 'esp32p4' is not one of esp32, esp32s3, esp32c3, esp32c6` | Another chip, or a value that is not a string (`['esp32c3']`, an inline table) |
+| `x.toml: chip: 'esp32h2' is not one of esp32, esp32s3, esp32c3, esp32c6, esp32p4, esp32s31` | Another chip, or a value that is not a string (`['esp32c3']`, an inline table) |
 | `x.toml: uart: is not a table`, `x.toml: sd_card: is not a table` | `uart`, `lines` or `sd_card`, or a role in them, is not a table |
 | `x.toml: sd_card: missing cs`, `x.toml: sd_card: unknown key cd` | A pin of the slot missing, or another key |
 | `x.toml: sd_card.cs: GPIO 36 is input only` | `sclk`, `mosi` or `cs` on an input-only pin, 34 to 39 on the classic ESP32 |

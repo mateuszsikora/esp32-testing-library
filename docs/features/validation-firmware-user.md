@@ -18,6 +18,7 @@ firmware/build.sh                # every ESP-IDF image, into firmware/<image>/bu
 firmware/build.sh nmea_reader    # only the images named
 firmware/build.sh --chips        # the images of the other chips, into firmware/<image>/build-<chip>/
 firmware/build.sh --chips gpio_echo@esp32c3   # only the ones named
+firmware/build.sh --chips --chip esp32p4      # only those of the chips named, comma-separated
 firmware/build-platformio.sh     # arduino_shell's environments, into firmware/arduino_shell/.pio/build/<env>/
 firmware/build-platformio.sh arduino_shell@esp32s3_usb   # only that environment
 ```
@@ -58,10 +59,13 @@ whatever `FIRMWARE_OUT` the shell exports, because the tests read the images the
 
 ## The images of the other chips
 
-`firmware/build.sh --chips` builds some of the same projects for the ESP32-S3, ESP32-C3 and
-ESP32-C6, which the runner also emulates ([runner](runner-user.md#chips)), each into
-`firmware/<image>/build-<chip>/`, in the same container and at the same ESP-IDF version. A test
-names one with its build directory and the chip's devkit profile:
+`firmware/build.sh --chips` builds some of the same projects for the ESP32-S3, ESP32-C3,
+ESP32-C6, ESP32-P4 and ESP32-S31, which the runner also emulates ([runner](runner-user.md#chips)),
+each into `firmware/<image>/build-<chip>/`. The S3's, C3's and C6's are built in the same container
+and at the same ESP-IDF version as the classic chip's; the P4's with ESP-IDF v5.5.4 and the S31's
+with v6.1 ([what it needs](#what-it-needs-docker)), which ESP-IDF builds for the S31 as a preview
+target (`idf.py --preview`). A test names one with its build directory and the chip's devkit
+profile:
 
 ```python
 @pytest.mark.app_path("../firmware/gpio_echo", build_dir="build-esp32c3")
@@ -76,14 +80,17 @@ names one with its build directory and the chip's devkit profile:
 | `nmea_reader` | the three | Nothing: UART1 on GPIO 5 (RX) and 4 (TX), the devkits' `[uart.gnss]` |
 | `nvs_reader` | the three | Nothing |
 | `http_request` | the three | Nothing |
-| `hello_world_psram` | `esp32s3` | ESP-IDF's `hello_world` with `firmware/hello_world_psram/sdkconfig.defaults`: `CONFIG_SPIRAM=y`, `CONFIG_SPIRAM_MODE_OCT=y`, the octal PSRAM of the S3 devkit's N8R8 module |
+| `hello_world_psram` | `esp32s3`, `esp32p4`, `esp32s31` | ESP-IDF's `hello_world` with `firmware/hello_world_psram/sdkconfig.defaults`, `CONFIG_SPIRAM=y`, and on the S3 `sdkconfig.defaults.esp32s3`, `CONFIG_SPIRAM_MODE_OCT=y`, the octal PSRAM of the S3 devkit's N8R8 module. On the P4 and the S31 the build names the PSRAM driver (`-DCOMPONENTS=main;esp_psram`), which `hello_world`'s minimal build leaves out from ESP-IDF v5.5 on |
 | `hello_world_8mb` | the three | Nothing: as on the classic ESP32, `hello_world` built for an 8 MB flash |
 | `gatt_server` | `esp32s3`, `esp32c3` | ESP-IDF's `examples/bluetooth/bluedroid/ble/gatt_server`, unmodified, with its own `sdkconfig.defaults`: a BLE GATT server that advertises as `ESP_GATTS_DEMO`. Not for the C6, whose BLE esp32sim runs only for ESP-IDF v5.5.x images |
-| `console_repl_usb` | the three | Not built for the classic ESP32, which has no USB-Serial/JTAG controller: `firmware/console_repl_usb`, `console_repl` with its console on the chip's USB-Serial/JTAG controller ([below](#console_repl_usb)) |
+| `console_repl_usb` | the three, `esp32p4`, `esp32s31` | Not built for the classic ESP32, which has no USB-Serial/JTAG controller: `firmware/console_repl_usb`, `console_repl` with its console on the chip's USB-Serial/JTAG controller ([below](#console_repl_usb)) |
+| `hello_world`, `console_repl`, `gpio_echo`, `nvs_reader` | `esp32p4`, `esp32s31` | As for the three; the P4's are built for chip revision v3.0 and later, ESP-IDF's default |
+| `hello_world_rev1` | `esp32p4` | ESP-IDF's `hello_world` with `firmware/hello_world_rev1/sdkconfig.defaults`: `CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y` and `CONFIG_ESP32P4_REV_MIN_100=y`, for P4 revisions below v3.0 (v0.x, v1.x), which the runner runs on esp32sim's rev < 3 model |
 
 The images that need what esp32sim does not model on these chips, deep sleep (`timer_wake`,
 `deep_sleep`, `persistence`), an SD card over SPI (`sdspi`, `sd_remount`) or Bluetooth Classic
-(`bt_spp_initiator`), are not built for them
+(`bt_spp_initiator`), are not built for them, nor, for the P4 and the S31, those that need a UART
+route (`nmea_reader`), Wi-Fi (`http_request`) or Bluetooth (`gatt_server`)
 ([issue #229](https://github.com/mateuszsikora/esp32-testing-library/issues/229)).
 `tests/test_chips.py` runs every one of these images.
 
@@ -94,7 +101,8 @@ The images that need what esp32sim does not model on these chips, deep sleep (`t
 `esp_console_new_repl_usb_serial_jtag` in place of `esp_console_new_repl_uart`: the console of a
 board without a USB-to-UART bridge. Its prompt is the same, `console_repl>`, and `help` answers
 `Print the summary of all registered commands`. `firmware/build.sh --chips` builds it for the
-ESP32-S3, ESP32-C3 and ESP32-C6, into `firmware/console_repl_usb/build-<chip>/`. A test runs it on a
+ESP32-S3, ESP32-C3, ESP32-C6, ESP32-P4 and ESP32-S31, into
+`firmware/console_repl_usb/build-<chip>/`. A test runs it on a
 profile with `console = "usb-serial-jtag"`
 ([board profiles](board-profiles-user.md#a-console-on-usb-serialjtag)):
 
@@ -105,7 +113,8 @@ profile with `console = "usb-serial-jtag"`
 
 From power-on its console holds the ROM's banner, the second-stage bootloader and the
 application; UART0 gets the ROM's banner alone. `tests/test_usb_console.py` runs it on the three
-chips, and on a real ESP32-S3 through the serial backend.
+chips, and on a real ESP32-S3 through the serial backend; `tests/test_chips.py` runs it on the P4
+and the S31.
 
 ## `modem_at`
 
@@ -489,14 +498,17 @@ and the ELF is `IMAGE.elf`, `sd_card.elf` for `sdspi` and `bt_spp_initiator_demo
 
 ## What it needs: Docker
 
-The build runs in `espressif/idf:v5.3.6`, pinned by digest. It needs Docker Desktop or a rootful
-Docker Engine whose daemon answers `docker info`:
+The build runs in `espressif/idf:v5.3.6`, pinned by digest, and the ESP32-P4's images in
+`espressif/idf:v5.5.4`, the ESP32-S31's in `espressif/idf:v6.1`, each pinned by digest too:
+`firmware/build.sh` starts one container for each version the images it builds need. It needs
+Docker Desktop or a rootful Docker Engine whose daemon answers `docker info`:
 
 - Under rootless Docker or Podman, the files the build writes belong to another uid.
 - With SELinux in enforcing mode, the container cannot read the repository.
 
-Neither is supported. The first build pulls the image, 7 GB once unpacked; on a machine that has
-it, building `hello_world` from scratch takes a couple of minutes.
+Neither is supported. The first build pulls the image, 7 GB once unpacked, and the first build of
+the P4's or the S31's images pulls theirs, about 8.5 GB each; on a machine that has it, building
+`hello_world` from scratch takes a couple of minutes.
 
 ## Build with a local ESP-IDF
 
@@ -510,7 +522,7 @@ That ESP-IDF need not be v5.3.6, so it is not for goldens: those come from the c
 only. The build says so on stderr, with the version `idf.py --version` reports and `$IDF_PATH`:
 
 ```text
-firmware/build.sh: IDF_LOCAL=1, ESP-IDF VERSION at IDF_PATH; not for goldens, which come from the container (v5.3.6)
+firmware/build.sh: IDF_LOCAL=1, ESP-IDF VERSION at IDF_PATH; not for goldens, which come from the containers (v5.3.6; v5.5.4 for the ESP32-P4, v6.1 for the ESP32-S31)
 ```
 
 `esp32tl-build.json` then records `"container": null`. Switching between a local and a container

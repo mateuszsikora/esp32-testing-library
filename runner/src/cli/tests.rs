@@ -347,6 +347,8 @@ fn every_chip_esp32sim_models_is_taken_in_any_case() {
         ("ESP32S3", &crate::chip::esp32s3::PROFILE),
         ("esp32c3", &crate::chip::esp32c3::PROFILE),
         ("Esp32C6", &crate::chip::esp32c6::PROFILE),
+        ("esp32p4", &crate::chip::esp32p4::PROFILE),
+        ("ESP32S31", &crate::chip::esp32s31::PROFILE),
     ] {
         let opts = parse_str(&format!(
             "--chip {name} --flash-at 0x0=b.bin --max-seconds 3"
@@ -359,15 +361,15 @@ fn every_chip_esp32sim_models_is_taken_in_any_case() {
 #[test]
 fn a_chip_the_runner_does_not_emulate_is_named_with_those_it_does() {
     assert_eq!(
-        parse_str("--chip ESP32P4 --flash-at 0x0=b.bin --max-seconds 3"),
+        parse_str("--chip ESP32H2 --flash-at 0x0=b.bin --max-seconds 3"),
         Err(Error::Usage(
-            "--chip esp32p4: not one of esp32, esp32s3, esp32c3, esp32c6".into()
+            "--chip esp32h2: not one of esp32, esp32s3, esp32c3, esp32c6, esp32p4, esp32s31".into()
         ))
     );
     assert_eq!(
         parse_str("--flash-at 0x0=b.bin --max-seconds 3"),
         Err(Error::Usage(
-            "--chip is required (esp32, esp32s3, esp32c3, esp32c6)".into()
+            "--chip is required (esp32, esp32s3, esp32c3, esp32c6, esp32p4, esp32s31)".into()
         ))
     );
 }
@@ -392,6 +394,42 @@ fn what_esp32sim_lacks_on_a_chip_is_a_usage_error() {
             "--chip esp32c6 --wifi-sta ssid=ap",
             "--wifi-sta: esp32c6 has no virtual station for a SoftAP in esp32sim",
         ),
+        (
+            "--chip esp32p4 --wifi ssid=ap",
+            "--wifi: esp32p4 has no Wi-Fi in esp32sim",
+        ),
+        (
+            "--chip esp32s31 --wifi ssid=ap",
+            "--wifi: esp32s31 has no Wi-Fi in esp32sim",
+        ),
+        (
+            "--chip esp32p4 --wifi-sta ssid=ap",
+            "--wifi-sta: esp32p4 has no virtual station for a SoftAP in esp32sim",
+        ),
+        (
+            "--chip esp32p4 --bt a.elf",
+            "--bt: esp32p4 has no VHCI hooks in esp32sim",
+        ),
+        (
+            "--chip esp32s31 --bt a.elf",
+            "--bt: esp32s31 has no VHCI hooks in esp32sim",
+        ),
+        (
+            "--chip esp32p4 --sd-spi sclk=1,mosi=2,miso=3,cs=4",
+            "--sd-spi: esp32p4 tells the board no SPI pins in esp32sim",
+        ),
+        (
+            "--chip esp32s31 --sd-spi sclk=1,mosi=2,miso=3,cs=4",
+            "--sd-spi: esp32s31 tells the board no SPI pins in esp32sim",
+        ),
+        (
+            "--chip esp32p4 --psram-mb 8",
+            "--psram-mb: the ESP32-P4 supports only 0, 16 or 32 MiB, got \"8\"",
+        ),
+        (
+            "--chip esp32s31 --psram-mb 8",
+            "--psram-mb: the ESP32-S31 supports only 0 or 16 MiB, got \"8\"",
+        ),
     ] {
         assert_eq!(
             parse_str(&format!("{args} {base}")),
@@ -404,6 +442,13 @@ fn what_esp32sim_lacks_on_a_chip_is_a_usage_error() {
     ))
     .unwrap();
     assert_eq!((opts.chip.name, opts.psram_mb), ("esp32s3", 8));
+    for chip in ["esp32p4", "esp32s31"] {
+        let opts = parse_str(&format!(
+            "--chip {chip} --psram-mb 16 --console-port usb {base}"
+        ))
+        .unwrap();
+        assert_eq!((opts.chip.name, opts.psram_mb), (chip, 16));
+    }
 }
 
 #[test]

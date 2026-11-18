@@ -215,8 +215,8 @@ Every wait is on the board's clock, and every limit a test states is part of wha
   the board's clock, `earliest` to `latest`: a stamp of `uptime` was taken between
   `zero.earliest + uptime` and `zero.latest + uptime`, so "taken after the stimulus at `t`" holds
   when `zero.earliest + uptime > t`, and "before" when `zero.latest + uptime < t`. The two are at
-  most a millisecond apart on the classic ESP32, two after a load while the counter counts, and 60
-  ns on the ESP32-S3, -C3 and -C6
+  most a millisecond apart on the classic ESP32, two after a load while the counter counts, 60
+  ns on the ESP32-S3, -C3 and -C6 and 65 ns on the ESP32-P4; on the ESP32-S31 the zero is not known
   ([boots](../features/pytest-plugin-user.md#resets-and-power-cycles)). For a record of an earlier
   boot, use `board.boots[n - 1].uptime_zero`, boot `n`'s. It is `None` while the zero is not known,
   before the counter starts and after it stops.

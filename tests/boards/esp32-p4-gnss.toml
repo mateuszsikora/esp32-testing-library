@@ -1,0 +1,10 @@
+# An ESP32-P4 board with a GNSS receiver on UART1, GPIO 4 (TX) and 5 (RX): a route that esp32sim's
+# ESP32-P4 cannot run, since it reports no UART pins.
+name = "esp32-p4-gnss"
+chip = "esp32p4"
+
+[uart.gnss]
+port = 1
+tx = 4
+rx = 5
+baud = 9600

@@ -1,0 +1,17 @@
+# An ESP32-S31 module as esp32sim's command line runs a bare one: a Winbond W25Q flash, here of 16
+# MiB, and the 16 MiB of in-package PSRAM of the ESP32-S31NRV16. It carries every validation image
+# built for the ESP32-S31 (firmware/build.sh --chips). The console is UART0 on GPIO 58 (TX) and 59
+# (RX); the runner takes it without its pins, which esp32sim's S31 does not report (#229, G7), and
+# runs no [uart.<role>] route either. GPIO 29 and 41 are not bonded.
+# flash_mb is the module's, and the esp32sim backend gives the runner that flash (docs/features/
+# board-profiles-user.md): a build for 16 MB or less runs here.
+name = "esp32-s31-module"
+chip = "esp32s31"
+flash_mb = 16
+psram_mb = 16
+
+# firmware/gpio_echo's defaults on this chip: the line it reads, which the board pulls down, and
+# the line it drives.
+[lines.echo]
+in = { pin = 6, pull = "down" }
+out = 7

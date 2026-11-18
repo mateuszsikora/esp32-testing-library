@@ -22,7 +22,8 @@ rules, `sd_fault`, `sd_clear` and `sd_op`, #131 `flash_dump` and `flash_dump_ack
 flash in a turn, #34 `hci_tx` and `hci_rx`, the guest's Bluetooth HCI with `--bt`, and #245
 `uptime`, where each boot's `esp_timer` counts zero on the socket's clock (5.24).
 `console_rx` and `stats.console_rx_lost` are the console on the chip's USB-Serial/JTAG controller,
-with `--console-port usb` (5.23).
+with `--console-port usb`, and since #233 on UART0 of the ESP32-P4 and the ESP32-S31, whose UARTs
+have no pins in esp32sim (5.23).
 
 ## 1. Transport
 
@@ -73,9 +74,12 @@ cycles = ceil(ns × CPU_HZ / 10⁹)           harness → runner
 `CPU_HZ` is the chip's `Soc::CPU_HZ`, the same constant `Machine::seconds` divides by
 (`esp-soc/src/machine.rs:169`): 240 000 000 on the classic chip (`esp32::periph::CPU_HZ`,
 `esp32/src/periph.rs:18`) and on the ESP32-S3 (`esp32s3/src/periph.rs:50`), 160 000 000 on the
-ESP32-C3 and the ESP32-C6 (`esp32c3/src/periph.rs:13`, `esp32c6/src/periph.rs:16`). At 240 MHz
-the fraction reduces to `ns = floor(cycles × 25 / 6)` and `cycles = ceil(ns × 6 / 25)`; at
-160 MHz to `ns = floor(cycles × 25 / 4)` and `cycles = ceil(ns × 4 / 25)`.
+ESP32-C3 and the ESP32-C6 (`esp32c3/src/periph.rs:13`, `esp32c6/src/periph.rs:16`), 360 000 000 on
+the ESP32-P4, both revisions (`esp32p4/src/periph.rs:18`), and 320 000 000 on the ESP32-S31
+(`esp32s31/src/periph.rs:26`). At 240 MHz the fraction reduces to `ns = floor(cycles × 25 / 6)`
+and `cycles = ceil(ns × 6 / 25)`; at 160 MHz to `ns = floor(cycles × 25 / 4)` and
+`cycles = ceil(ns × 4 / 25)`; at 360 MHz to `ns = floor(cycles × 25 / 9)`; at 320 MHz to
+`ns = floor(cycles × 25 / 8)`.
 Implementations compute in 128-bit integers or with the reduced fraction: `cycles × 10⁹`
 overflows 64 bits after 76 emulated seconds.
 
@@ -158,14 +162,14 @@ seen exactly the events up to the block point, however the emulator schedules it
 | runner → harness | `sd_op` *ext* | `t`, `fault`, `op`, `blocks`, `action`, `delay`, `written` | #107 |
 | runner → harness | `flash_dump_ack` *ext* | `t`, `error` | #131 |
 | runner → harness | `uptime` *ext* | `t`, `earliest`, `latest` | #245 |
-| runner → harness | `stats` *ext* | `t`, `end`, `resets`, `turns`, `uart`, `unrouted_rx_bytes`, `inputs_on_output`, `inputs_not_applied`, `rx_bytes_not_paced`; `wifi` with `--wifi` or `--wifi-sta`; under `--realtime` also `rt_resyncs` (M5); with `--console-port usb` also `console_rx_lost` | M1 |
+| runner → harness | `stats` *ext* | `t`, `end`, `resets`, `turns`, `uart`, `unrouted_rx_bytes`, `inputs_on_output`, `inputs_not_applied`, `rx_bytes_not_paced`; `wifi` with `--wifi` or `--wifi-sta`; under `--realtime` also `rt_resyncs` (M5); with `--console-port usb`, or on the ESP32-P4 and the ESP32-S31, also `console_rx_lost` | M1 |
 | harness → runner | `uart_rx` | `t`, `pin`, `baud`, `data` | M1 |
 | harness → runner | `gpio_in` | `t`, `levels` | M3 |
 | harness → runner | `release` | `t`, `pins` | M3 |
 | harness → runner | `adc` *ext* | `t`, `pin`, `volts` | M3 |
 | harness → runner | `eth_rx` *ext* | `t`, `data` | M7 |
 | harness → runner | `hci_rx` *ext* | `t`, `data` | #34 |
-| harness → runner | `console_rx` *ext* | `t`, `data` | USB console |
+| harness → runner | `console_rx` *ext* | `t`, `data` | USB console; UART0 of the P4 and the S31 (#233) |
 | runner → harness | `wifi_link` | `seq`, `t`, `ready` | v2 |
 | harness → runner | `wifi_ap` *ext* | `t`, `on` | M7 |
 | harness → runner | `power` *ext* | `t`, `on` | #105 |
@@ -214,8 +218,9 @@ harness that speaks both gives it, and without `--bt` `hci_rx` is a protocol err
 
 `console_rx` and `stats.console_rx_lost` (5.23) leave the version at 2 for the same reason: the
 runner reads `console_rx` only on a run started with `--console-port usb`, which only a harness
-that sends it gives it, and without the flag it is a protocol error, `console_rx without
---console-port usb`; `console_rx_lost` is a field added to `stats`, which a peer that does not know
+that sends it gives it, or on a chip whose UART0 has no pins, the P4 and the S31, which only such a
+harness runs; otherwise it is a protocol error, `console_rx without --console-port usb, on a UART0
+with pins`; `console_rx_lost` is a field added to `stats`, which a peer that does not know
 it ignores (section 2). The console's output keeps its message, `console` (5.7)
 ([decision](decisions/runner.md#the-usb-serialjtag-console-adds-console_rx-at-protocol-version-2)).
 
@@ -236,7 +241,7 @@ The first line is the runner's, the second the harness's.
 
 - `version`: 2. Both sides require equality; there is no negotiation.
 - `chip`: the chip the runner runs, its `--chip`: `esp32` (the classic chip), `esp32s3`,
-  `esp32c3` or `esp32c6`. The harness sends the chip of its board profile and the runner refuses
+  `esp32c3`, `esp32c6`, `esp32p4` (either revision) or `esp32s31`. The harness sends the chip of its board profile and the runner refuses
   another.
 - `clock`: what the times of `uart_tx` mean, in the vocabulary of the recording header (plan 4.3).
   `emulated-fifo-write`: emulated time, and a transmitted byte is stamped when the guest writes
@@ -320,6 +325,9 @@ of trusting the board profile; a mismatch is otherwise a silent frame error.
 `rx_pin` and `baud` are `null` until the firmware configures them; that is the valid initial
 state, not an error. A guest reset sends the reset routes again.
 
+On the ESP32-P4 and the ESP32-S31 esp32sim tells the runner no route (#229, G6 and G7): every port
+has no pins and `null` baud, so `uart_cfg` never comes, and neither does `uart_tx`.
+
 ### 5.4 `gpio_out` (M3)
 
 ```json
@@ -395,7 +403,8 @@ and the guest has run in between.
 ### 5.7 `console`
 
 Console input uses `uart_rx` on watched GPIO 3 (§5.10), not this output message; with
-`--console-port usb`, `console_rx` (5.23).
+`--console-port usb`, and on the ESP32-P4 and the ESP32-S31, `console_rx` (5.23), and there the
+console's bytes are stamped with the end of the slice they were written in.
 
 ```json
 {"type": "console", "t": 812345678, "data": "SGVsbG8gd29ybGQhCg=="}
@@ -490,8 +499,8 @@ in the queue counts in `inputs_not_applied` only), so `BoardLink` can tell input
 past the end of the run. `uart` has one entry per
 port that carried a watched route during the run, with the bytes each way and the drops by kind.
 `rt_resyncs`, only under `--realtime`, counts the times the run skipped a lag behind wall time
-(12.2). `console_rx_lost`, only with `--console-port usb`, counts the bytes of `console_rx` that
-came due while the board's supply was off (5.23). `BoardLink` puts the counts in the test report next to the matching engine's unseen requests.
+(12.2). `console_rx_lost`, only with `--console-port usb` or on the P4 and the S31, counts the bytes of
+`console_rx` that came due while the board's supply was off (5.23). `BoardLink` puts the counts in the test report next to the matching engine's unseen requests.
 
 `wifi` is there with `--wifi` or `--wifi-sta`, as in the second example, and counts the station's link over
 the whole run:
@@ -1033,7 +1042,7 @@ does not hold: the controller is the peer's.
 ```
 
 With `--console-port usb` the console is the chip's USB-Serial/JTAG controller, esp32sim's
-`UsbSerialJtag` (`esp-periph/src/usb_serial_jtag.rs`), on the ESP32-S3, ESP32-C3 and ESP32-C6; the
+`UsbSerialJtag` (`esp-periph/src/usb_serial_jtag.rs`), on the ESP32-S3, ESP32-C3, ESP32-C6, ESP32-P4 and ESP32-S31; the
 classic ESP32 has none, and the runner refuses the flag there before the run (exit code 2). The
 controller has no pins and no line rate, so its input is not `uart_rx`: `console_rx` carries the
 bytes a USB host sends the guest, the example's `help\n`. Its output is `console` (5.7).
@@ -1047,11 +1056,26 @@ is dropped. A chip reset, a power-on reset or a wake from deep sleep loses what 
 read: esp32sim makes its peripherals again (`Machine::reboot`), and the lost bytes are not counted
 in `console_rx_lost`. While the board's supply is off no USB device is there to
 take the bytes: the runner drops them and counts them in `stats.console_rx_lost` (5.9). Empty
-`data` changes nothing. `console_rx` on a run without `--console-port usb` is a protocol error,
-`console_rx without --console-port usb`.
+`data` changes nothing.
 
-`BoardLink` sends each output of the one interface that is the USB-Serial/JTAG console
-(`Interface.usb_console`) as `console_rx`, cut into messages of at most 512 KiB, as `uart_rx`.
+On the ESP32-P4 and the ESP32-S31 `console_rx` is also UART0's input with `--console-port uart0`,
+the default: esp32sim tells the board no UART pins on these chips, so `uart_rx` cannot reach UART0
+there, and the console's output is `console` (5.7) stamped with the end of the slice it was
+written in, as on USB. When the message comes due, the P4's runner hands `data` to esp32sim's
+`uart_input` (`esp32p4/src/soc.rs:259-265`), which puts into UART0's 128-byte RX FIFO what fits and
+releases the rest at UART0's baud rate; the S31's keeps it and puts one byte into the RX FIFO per
+character time, ten bits at UART0's baud (115200 until the guest sets one), while the FIFO has room
+and UART0 takes it, since esp32sim's own S31 `uart_input` drops what does not fit and refuses a
+byte while UART0's clock or receiver is off; a refused byte waits for the next character time.
+Nothing is dropped either way; a
+reset loses what UART0, or on the S31 the runner's queue, has not taken yet, uncounted, and bytes
+that come due with the supply off are counted in `stats.console_rx_lost`, which `stats` then has.
+
+`console_rx` on a run without `--console-port usb` on a chip whose UART0 has pins is a protocol
+error, `console_rx without --console-port usb, on a UART0 with pins`.
+
+`BoardLink` sends each output of the one interface that is the console without pins
+(`Interface.pinless_console`) as `console_rx`, cut into messages of at most 512 KiB, as `uart_rx`.
 
 ### 5.24 `uptime` *ext* (#245)
 
@@ -1080,6 +1104,8 @@ most one emulated millisecond apart while the chip runs (section 6.1), as it rea
 |---|---|---|---|
 | Classic ESP32 | TIMG0's LACT, ESP-IDF's only `esp_timer` implementation there (`CONFIG_ESP_TIMER_IMPL_TG0_LAC`, `esp_timer_impl_lac.c`) | whether it counts, and the count it was loaded with: esp32sim keeps the count itself private | the time between two boundaries, at most 1 ms; for a load while it counts, between three, at most 2 ms |
 | ESP32-S3, -C3, -C6 | SYSTIMER unit 0, `SYSTIMER_COUNTER_ESPTIMER` (`esp_timer_impl_systimer.c`) | the count, `unit[0]` of esp32sim's `Systimer` | under one 16 MHz tick: 14 bus cycles on the S3, 9 on the C3 and the C6, 60 ns at most with the rounding |
+| ESP32-P4 | the same, `periph.systimer.st`, which esp32sim ticks 2 for every 5 XTAL ticks (`SystimerP4`, `esp32p4/src/periph.rs`): 22.5 bus cycles a tick at 360 MHz | the count, rounded down to bus cycles | 23 bus cycles, 65 ns at most with the rounding |
+| ESP32-S31 | none: its SYSTIMER's rate is esp32sim's own state (`SystimerS31`'s private divider) | nothing | no `uptime` |
 
 **The classic chip.** The LACT counts while LACT_EN, bit 31 of LACTCONFIG, is set, from what
 LACTLOAD last loaded, at the APB clock divided by LACT_DIVIDER (ESP-IDF v5.5
@@ -1101,7 +1127,7 @@ before the one that saw it and the one after, less the time the new load takes. 
 LACT_DIVIDER or of the APB clock with the same load is no new load: it changes the rate, which
 ESP-IDF keeps at 2 counts a microsecond, not the zero.
 
-**The ESP32-S3, -C3 and -C6.** The runner reads unit 0's count while TIMER_UNIT0_WORK_EN, bit 30 of
+**The ESP32-S3, -C3, -C6 and -P4.** The runner reads unit 0's count while TIMER_UNIT0_WORK_EN, bit 30 of
 CONF, is set (`esp-periph/src/systimer.rs`): the counter read zero that many ticks before the
 boundary, less the part of a tick it has counted since its last, which esp32sim's clock tree keeps
 to itself. esp32sim restarts the SYSTIMER at every reset, as `reboot()` replaces the peripherals,

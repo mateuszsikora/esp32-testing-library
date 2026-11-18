@@ -23,8 +23,9 @@ in as `eth_rx`, a frame per output. With `--sd-spi`, the one interface that is t
 runner says the slot holds after each change (`sd_card_ack`). With `--bt`, the H4 packets the
 guest's Bluetooth host sends (`hci_tx`) go to the one interface that is its controller
 (`Interface.bluetooth`), a packet per call, and what it answers goes in as `hci_rx`, a packet per
-output. With `--console-port usb`, what the one interface that is the USB-Serial/JTAG console
-(`Interface.usb_console`) sends goes in as `console_rx`; it has no pins.
+output. With `--console-port usb`, and on a chip whose UARTs have no pins in esp32sim, what the
+one interface that is the console without pins (`Interface.pinless_console`) sends goes in as
+`console_rx`.
 
 The backend can also switch the board's supply and pulse the chip's EN pin (`board_input`): the
 message goes out in the harness's answer to the turn the link is held at, or to the first turn
@@ -168,10 +169,12 @@ class Interface:
         return False
 
     @property
-    def usb_console(self) -> bool:
-        """Whether the interface is the guest's console on its USB-Serial/JTAG controller, with
-        `--console-port usb`: it has no wire, the guest's output reaches the link's `console`, and
-        each output it returns goes in as `console_rx`, with no line rate."""
+    def pinless_console(self) -> bool:
+        """Whether the interface is the guest's console without pins: its USB-Serial/JTAG
+        controller, with `--console-port usb`, or UART0 on a chip whose UARTs have no pins in
+        esp32sim (the ESP32-P4 and the ESP32-S31). It has no wire, the guest's output reaches the
+        link's `console`, and each output it returns goes in as `console_rx`: the runner takes it
+        into the controller with no line rate, or into UART0 at its baud rate."""
         return False
 
     @property
@@ -703,7 +706,7 @@ class BoardLink:
             if interface.bluetooth:
                 inputs.append((interface, HciRx(t, data)))
                 continue
-            if interface.usb_console:
+            if interface.pinless_console:
                 inputs += [(interface, ConsoleRx(t, chunk)) for chunk in _chunks(data)]
                 continue
             wire = interface.wire
@@ -792,9 +795,9 @@ class BoardLink:
                 )
             return
         if isinstance(message, ConsoleRx):
-            if not interface.usb_console:
+            if not interface.pinless_console:
                 raise LinkError(
-                    f"{source} sent {message.TYPE}, and is not the USB-Serial/JTAG console"
+                    f"{source} sent {message.TYPE}, and is not the console without pins"
                 )
             return
         if isinstance(message, SdCardChange | SdFault | SdClear):
@@ -868,7 +871,7 @@ class BoardLink:
             )
             if stats.console_rx_lost is not None:
                 lines.append(
-                    f"  USB-Serial/JTAG console: {counted(stats.console_rx_lost, 'byte')} of"
+                    f"  console without pins: {counted(stats.console_rx_lost, 'byte')} of"
                     " console_rx lost with the board's supply off"
                 )
             if stats.wifi is not None:
