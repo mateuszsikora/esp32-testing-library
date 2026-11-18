@@ -36,18 +36,22 @@ settings, not settings applied by the workflow files:
 - Secret scanning, secret scanning push protection and Dependabot vulnerability alerts
   are enabled. Dependabot automatic security-update PRs remain disabled.
 - `main` requires a pull request, zero approving reviews, resolved review conversations,
-  and all 28 CI checks from the GitHub Actions app (app ID `15368`). These are the eleven
+  and all 30 CI checks from the GitHub Actions app (app ID `15368`). These are the thirteen
   `firmware / firmware (...)` checks, `runner-linux / runner`, `runner-macos / runner`,
   six `test-linux / test (...)` and six `test-macos / test (...)` checks, `determinism`,
   `lint` and `docs`, matching the job matrix below. Every firmware group is required on its own:
   a failed group fails the `firmware` job, the test jobs that need it are skipped, and GitHub
   counts a skipped required check as passed, so the test checks alone would not block a merge.
   The three `firmware / firmware (chips-K, chips, K/3)` checks were added on 17 November 2026,
-  after #236 introduced the chips groups. The `firmware / firmware (chips-p4, chips, 1/1)` and
-  `firmware / firmware (chips-s31, chips, 1/1)` checks, from #233, are not required yet:
-  TODO(owner): add them to branch protection, which makes 30 required checks. The
+  after #236 introduced the chips groups, and the `firmware / firmware (chips-p4, chips, 1/1)` and
+  `firmware / firmware (chips-s31, chips, 1/1)` checks on 18 November 2026, after #256 brought the
+  ESP32-P4 and ESP32-S31 groups to `main`, so that no open pull request waited for a check its
+  workflow does not run. The
   14 native-build and test context names were updated for the separate platform calls.
-  Strict status checks require the branch to be up to date with `main`. Protection applies
+  Strict status checks are off since 18 November 2026: a branch need not be up to date with
+  `main` to merge, since a pull request without conflicts otherwise had to merge `main` in and
+  run the whole CI again before it could land
+  ([decision](decisions/ci.md#a-pull-request-need-not-be-up-to-date-with-main-to-merge)). Protection applies
   to administrators too; force pushes and branch deletion are disabled. When renaming jobs
   or changing matrix entries, update the required check names in branch protection as well.
   GitHub accepts `success`, `skipped` and `neutral` check conclusions, so maintainers must
@@ -66,7 +70,7 @@ This audit checked configuration; it did not execute a test PR from an external 
 ## Jobs
 
 GitHub-hosted macOS runners have no Docker, so the validation firmware is built once, in the
-pinned ESP-IDF and PlatformIO containers in eleven parallel Linux jobs, and the runner crate once
+pinned ESP-IDF and PlatformIO containers in thirteen parallel Linux jobs, and the runner crate once
 per platform.
 The test jobs then run only the runner and Python: they build nothing. The table describes full
 CI; [version-only changes](#version-only-ci) use short Ubuntu jobs with the same context names.
@@ -165,7 +169,7 @@ entries. Both hosted systems use zstd for Actions cache compression. Native runn
 PlatformIO's tools stay in their `Linux-X64` cache and are never restored on macOS.
 The build workflow hash invalidates firmware and runner tarballs for this migration. Each firmware
 group has a separate path and key suffix; the matrix publishes the same base key regardless of
-which group finishes last. Both consumers restore and unpack all eleven explicit group paths using `.github/actions/restore-firmware/action.yml`.
+which group finishes last. Both consumers restore and unpack all thirteen explicit group paths using `.github/actions/restore-firmware/action.yml`.
 Exact restores and post-save verification stay unchanged; changing to artifacts is unnecessary.
 
 A cache entry unused for 7 days is evicted. A test job re-run on its own after that fails on the
@@ -272,7 +276,7 @@ The shared job in `test-platform.yml` runs six matrix entries per platform: thre
 versions and two shard pairs. There are still twelve test VMs in the complete workflow.
 
 For each platform, Python version and shard pair: sets up Python with pip's cache keyed on
-`pyproject.toml`, restores eleven firmware tarballs, the native runner tarball and the ROM ELF, unpacks the tarballs (the images land
+`pyproject.toml`, restores thirteen firmware tarballs, the native runner tarball and the ROM ELF, unpacks the tarballs (the images land
 in `firmware/<image>/build/`, `firmware/<image>/build-<chip>/`, `firmware/<image>/.pio/build/<env>/`
 and `examples/<name>/build/`, where the tests read them), and runs `esp32tl-runner --help` to check that the binary starts. It
 then runs `make PYTHON=<that Python> .venv/.installed rom-elf`, which is `make setup` without
@@ -466,9 +470,9 @@ classification job; the required `lint` job runs with `always()` and fails if cl
 CI compares PRs with their base SHA, pushes with the previous main SHA, and manual runs with
 `origin/main`. For an exact version bump, `lint` builds wheel/sdist and checks metadata with
 `twine check --strict`; `docs` still runs the documentation contract on PRs and manual runs.
-The eleven firmware jobs, two runner jobs and twelve test jobs retain their required context names,
+The thirteen firmware jobs, two runner jobs and twelve test jobs retain their required context names,
 but run a short explanatory step on Ubuntu without downloads, cache restores, native builds or
-pytest. Determinism is skipped. No macOS VM is allocated for this path and all 28 existing required
+pytest. Determinism is skipped. No macOS VM is allocated for this path and all 30 existing required
 checks remain configured. This avoids a branch-protection migration and does not fabricate statuses
 with the Checks API. A scheduling overhead remains; no fixed elapsed-time improvement is claimed
 until measured on GitHub.

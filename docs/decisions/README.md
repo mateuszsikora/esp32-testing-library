@@ -44,6 +44,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Prepare versions in a PR and build releases after merge](ci.md#prepare-versions-in-a-pr-and-build-releases-after-merge) | `ci.md` | decided (16 November 2026) |
 | [Verify exact version diffs before using lightweight CI](ci.md#verify-exact-version-diffs-before-using-lightweight-ci) | `ci.md` | decided (16 November 2026) |
 | [The chips' images build in three groups of their own](ci.md#the-chips-images-build-in-three-groups-of-their-own) | `ci.md` | decided (#236) |
+| [A pull request need not be up to date with main to merge](ci.md#a-pull-request-need-not-be-up-to-date-with-main-to-merge) | `ci.md` | decided (18 November 2026) |
 
 ## Documentation and the documentation check
 
