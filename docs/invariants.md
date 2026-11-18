@@ -1449,9 +1449,10 @@ that references to its number keep their meaning.
     at the loss. A client back with the same ID before then, connecting from another source port,
     takes the connection over (MQTT-3.1.4-2); with CleanSession=0 on both connections the old Will
     is discarded unsent, and with CleanSession=1 on either it is published at the takeover, as it is
-    when the CONNECT comes at the instant the old keepalive runs out. A SYN from the old source port
-    gets no answer while the old connection stands, and the Will goes at the keepalive expiry. A
-    device connection the link's end, a chip reset or a DHCP lease given up left open is dropped,
+    when the CONNECT comes at the instant the old keepalive runs out; a CONNECT after the expiry
+    finds the old connection closed and its Will published by the expiry. A SYN from the old source
+    port gets no answer while the old connection stands, and the Will goes at the keepalive expiry.
+    A device connection the link's end, a chip reset or a DHCP lease given up left open is dropped,
     with no FIN, when its service closes it, and so are, at once, one its service had closed and one
     still in its handshake, so a new stack's SYN from the same port then opens a new connection; the
     gone stack's SYNs still on the path never arrive, its data does; what its service writes beyond
