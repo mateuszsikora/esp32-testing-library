@@ -142,7 +142,7 @@ must do before `board.power_on()`: the backend passes the runner `--bt` with the
 the first `.elf` file in an ESP-IDF build directory, `firmware.elf` in a PlatformIO one
 ([runner](runner-user.md#give-the-guest-a-bluetooth-controller)), and the link carries every H4
 packet the firmware's Bluetooth host sends to the firmware's controller in the harness, on the
-test's clock, and the controller's packets back, 10 µs after the instant each was made. Without it
+test's clock, and the controller's packets back, 100 µs after the instant each was made. Without it
 the runner gets no `--bt`, and the link carries no Bluetooth. `board.power_off()` takes the
 controller off the air, as a device switched off, and `board.power_on()` puts it back; a reset of
 the chip, `board.reset()` or the firmware's own, restarts it. Neither tells the firmware's host

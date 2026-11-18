@@ -546,11 +546,16 @@ interface that puts the firmware's controller on the board's link is
     address, the four counts `packets_from_host`, `bytes_from_host`, `packets_to_host`,
     `bytes_to_host`, `unknown_commands()` as `(t, op_code, name)` and `devices()`, every other
     `Controller` on the link as `(name, address, present)`, `present` from `Link.present`, sorted by
-    address as an inquiry sorts them. `close()` closes the air. `LATENCY_NS` is 10 µs: a controller
-    answers a command within microseconds, and the host sleeps 10 ms between two VHCI polls when it
-    has nothing to read (protocol 5.22), so the answer is there for its next poll; at 0 every packet
-    would take a turn of its own. The spike measured 259 kbit/s of SPP with it; `bt_spp_initiator`
-    reports about 299 kbit/s at the pins `c99fb28` and `3bdb958` (`tests/test_bt_spp_initiator.py`).
+    address as an inquiry sorts them. `close()` closes the air. `LATENCY_NS` is 100 µs: of the order a
+    controller takes to answer a command, and the host sleeps 10 ms between two VHCI polls when it
+    has nothing to read, so the answer is due long before the host would poll again. The host reads
+    it at a later poll, behind the packets before it: at most one packet a poll, and none at the
+    poll after one (protocol 5.22). The latency is
+    also the longest slice the runner runs while nothing is unacknowledged (protocol 6.1), so it
+    sets how often a run with the controller stops: at 10 µs, 100 000 times per emulated second; at
+    0 every packet would take a turn of its own. The spike measured 259 kbit/s of SPP at 10 µs; `bt_spp_initiator`
+    reports about 299 kbit/s at the pins `c99fb28` and `3bdb958` (`tests/test_bt_spp_initiator.py`),
+    the same at 10 µs and at 100 µs (298.95 kbit/s at `357b0e5`).
     `tap(path)` makes `tapped`, a `Tap("bluetooth", directory / path)`; `receive` records each
     packet into it as `out` at `t`, and `poll` each packet it returns as `in` at its due time. The
     backend writes it as btsnoop ([run-report-technical.md](run-report-technical.md#the-hci-tap)).
@@ -576,7 +581,7 @@ interface that puts the firmware's controller on the board's link is
 | `GuestController(name, link, address=ADDRESS)` | `esp32tl/bluetooth/guest.py`: a `Controller`, BR/EDR only, pages 0 to 2, `acl_to_host` `ACL_LENGTH`; `chip_reset()`, `chip_off()`, `chip_on()` |
 | `ADDRESS`, `ACL_LENGTH`, `MAX_PAGE` | `esp32tl/bluetooth/guest.py`: `"24:6F:28:00:11:24"`; `491`, `HCI_MAX - 5`; `2` |
 | `Bluetooth(*, asked=..., log=None, address=ADDRESS, latency=LATENCY_NS, directory=None, files=None)` | `esp32tl/interfaces/bluetooth.py`: the `Interface` above; `use()`, `used`, `air`, `controller`, `address`; `tap(path)`, `tapped`, `directory` (the working directory unless given), `files`; `pairings()`, the guest's controller's; `supply(on)`, `chip_reset(t)`; `packets_from_host`, `bytes_from_host`, `packets_to_host`, `bytes_to_host`; `unknown_commands()`, `devices()`; `report()`, `properties()`; `close()` |
-| `LATENCY_NS`, `BluetoothError` | `esp32tl/interfaces/bluetooth.py`: `10_000`; a `RuntimeError`, what the controller sent that the link cannot carry |
+| `LATENCY_NS`, `BluetoothError` | `esp32tl/interfaces/bluetooth.py`: `100_000`; a `RuntimeError`, what the controller sent that the link cannot carry |
 | `Security` | Dataclass: one link's authentication on one side: `initiator`, `init_key`, `local_rand`, `peer_rand`, `link_key`, `pairing`, `challenge`, `peer_challenge`, `authenticated` |
 | `LmpInRand`, `LmpCombKey`, `LmpSres`, `LmpEncryptionModeReq`, `LmpSupervisionTimeout` | LMP packets Bumble does not define, registered with `lmp.Packet.subclass` |
 | `init_key(pin, in_rand, responder)`, `combination_key(init, initiator_rand, responder_rand, initiator, responder)`, `response(link_key, challenge, claimant)` | The keys and the response, above |
@@ -905,7 +910,7 @@ SABM for a DLC with no PN before it finds no DLC in Bumble 0.0.236's multiplexer
 frame; Bluedroid sends PN first. A reset the firmware makes itself (a panic, the watchdog,
 `esp_restart()`) reaches the controller only with the runner's `reset` message: a packet the harness
 sent in the turn before, due after the reset, is in the runner's queue already, and the new host
-reads it first, within the 10 µs of the latency. The firmware's controller leaves the air only at a
+reads it first, within the 100 µs of the latency. The firmware's controller leaves the air only at a
 chip reset, `board.reset()` included, and when the board's supply goes off: the runner sends nothing
 when the chip goes into a deep sleep, or when the firmware calls `esp_bt_controller_disable` or
 `esp_bt_controller_deinit`. Through a deep sleep, and after either call, the controller stays on the

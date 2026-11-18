@@ -16,7 +16,7 @@ import pytest
 from esp32tl import recording
 from esp32tl.backends.esp32sim import Esp32Sim
 from esp32tl.bluetooth.peer import BluetoothDevice, SppPeer
-from esp32tl.interfaces.bluetooth import Bluetooth
+from esp32tl.interfaces.bluetooth import LATENCY_NS, Bluetooth
 from esp32tl.interfaces.console import Console
 from esp32tl.report import board_time
 from esp32tl.sources.model import Model, Timed
@@ -257,12 +257,12 @@ def test_the_tap_writes_the_hci_both_ways_as_btsnoop(pytester: pytest.Pytester) 
     )
     assert header["devices"] == [{"name": NAME, "address": "00:00:00:00:5B:01"}]
     assert re.fullmatch("[0-9a-f]{40}", header["tools"]["esp32sim"])
-    # Bluedroid's first command is HCI_Reset, and its Command_Complete the first answer, 10 µs
-    # after it (LATENCY_NS).
+    # Bluedroid's first command is HCI_Reset, and its Command_Complete the first answer,
+    # LATENCY_NS after it.
     first, answer = hci.events[0], next(e for e in hci.events if e.dir == "in")
     assert (first.dir, first.data) == ("out", bytes.fromhex("01030c00"))
     assert answer.data[:2] == b"\x04\x0e" and answer.data[4:6] == bytes.fromhex("030c")
-    assert answer.t - first.t == 10_000
+    assert answer.t - first.t == LATENCY_NS
     # The firmware's PIN reached the controller (PIN_Code_Request_Reply), and the peer's name the
     # firmware.
     assert any(e.dir == "out" and e.data[1:3] == bytes.fromhex("0d04") for e in hci.events)

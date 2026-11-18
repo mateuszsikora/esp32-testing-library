@@ -821,7 +821,7 @@ def test_an_output_due_before_its_turn_fails_the_link() -> None:
     assert link.receive(Sync(2 * MS)) == [Stop()]
     assert link.error == (
         "bluetooth.poll raised BluetoothError: the guest's controller made an event at 0.001 s,"
-        " due at 0.00101 s, before the turn at 0.002 s: the link bounds every turn by the"
+        " due at 0.0011 s, before the turn at 0.002 s: the link bounds every turn by the"
         " interfaces' quiet_until and latency (protocol §6, rule 1, and §7)"
     )
     bt.close()
