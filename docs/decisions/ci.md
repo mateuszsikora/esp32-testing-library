@@ -15,11 +15,13 @@ self-hosted migration decision. A previous merged contribution does not permanen
 unattended CI execution. The read-only token and `pull_request` trigger remain unchanged.
 
 Public `main` protection requires PRs and all 25 existing CI checks, bound to the GitHub
-Actions app, with strict up-to-date checks (off since 18 November 2026,
-[below](#a-pull-request-need-not-be-up-to-date-with-main-to-merge)) and administrator enforcement. No approving
+Actions app, with strict up-to-date checks and administrator enforcement. No approving
 review is required, so a solo maintainer can merge their own PR after CI. Force pushes and
 deletion are disabled, and review conversations must be resolved. Repository settings and
-their verification date are recorded in [CI](../cicd.md#public-repository-settings).
+their verification date are recorded in [CI](../cicd.md#public-repository-settings). That was
+the state when the repository went public: since then the required checks have grown to 30, and
+strict checks are off since 18 November 2026
+([below](#a-pull-request-need-not-be-up-to-date-with-main-to-merge)).
 
 **Rejected:** approval only for first-time contributors, because one accepted contribution
 would remove the approval gate for subsequent fork runs. Requiring one approving review
@@ -709,9 +711,8 @@ Status: decided (18 November 2026)
 
 Branch protection on `main` no longer requires strict status checks. With them, a pull request
 without conflicts still could not merge once another landed before it: it had to merge `main` in
-and run the whole CI again for every pull request merged ahead
-of it. The squash merge applies the branch's diff to the `main` it lands on, and a conflict still
-blocks it.
+and run the whole CI again for every pull request merged ahead of it. The squash merge applies
+the branch's diff to the `main` it lands on, and a conflict still blocks it.
 
 **Rejected:** keeping strict checks, which made several ready pull requests on one day each wait
 for a full CI run after every merge. What it would catch, two pull requests that merge cleanly

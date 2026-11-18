@@ -44,16 +44,16 @@ settings, not settings applied by the workflow files:
   counts a skipped required check as passed, so the test checks alone would not block a merge.
   The three `firmware / firmware (chips-K, chips, K/3)` checks were added on 17 November 2026,
   after #236 introduced the chips groups, and the `firmware / firmware (chips-p4, chips, 1/1)` and
-  `firmware / firmware (chips-s31, chips, 1/1)` checks on 18 November 2026, after #256 brought the
-  ESP32-P4 and ESP32-S31 groups to `main`, so that no open pull request waited for a check its
-  workflow does not run. The
-  14 native-build and test context names were updated for the separate platform calls.
-  Strict status checks are off since 18 November 2026: a branch need not be up to date with
-  `main` to merge, since a pull request without conflicts otherwise had to merge `main` in and
-  run the whole CI again before it could land
-  ([decision](decisions/ci.md#a-pull-request-need-not-be-up-to-date-with-main-to-merge)). Protection applies
-  to administrators too; force pushes and branch deletion are disabled. When renaming jobs
-  or changing matrix entries, update the required check names in branch protection as well.
+  `firmware / firmware (chips-s31, chips, 1/1)` checks on 18 November 2026, after #256 brought
+  the ESP32-P4 and ESP32-S31 groups to `main`, so that no open pull request waited for a check
+  its workflow does not run. The 14 native-build and test context names were updated for the
+  separate platform calls. Strict status checks are off since 18 November 2026: a branch need
+  not be up to date with `main` to merge, since a pull request without conflicts otherwise had
+  to merge `main` in and run the whole CI again before it could land
+  ([decision](decisions/ci.md#a-pull-request-need-not-be-up-to-date-with-main-to-merge)).
+  Protection applies to administrators too; force pushes and branch deletion are disabled. When
+  renaming jobs or changing matrix entries, update the required check names in branch protection
+  as well.
   GitHub accepts `success`, `skipped` and `neutral` check conclusions, so maintainers must
   still review workflow changes that could skip checks.
 
@@ -435,8 +435,9 @@ and the `esp32tl-runner` package version in `runner/Cargo.lock`. All existing ve
 It does not choose a version from commit messages or change dependency versions.
 
 The workflow creates `build/release-VERSION` and opens a PR with a `build: prepare release VERSION`
-title. Merge that PR after its checks pass. Normal branch protection and the requirement to be
-up to date still apply. If other changes are added to the PR, full CI runs and the automatic
+title. Merge that PR after its checks pass. Normal branch protection applies; the PR need not
+be up to date with `main`, since `release-on-merge.yml` classifies the squash commit's own diff,
+against the `main` just before it (`github.event.before`). If other changes are added to the PR, full CI runs and the automatic
 release trigger will not accept the mixed change.
 
 Repository setup: **Settings → Actions → General → Workflow permissions → Allow GitHub Actions
