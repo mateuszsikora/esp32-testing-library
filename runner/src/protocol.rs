@@ -41,6 +41,12 @@ pub fn ns(cycles: u64) -> u64 {
     (cycles as u128 * NS_PER_S / cpu_hz()) as u64
 }
 
+/// Bus cycles to nanoseconds, rounded up: the latest time a span that ends at the cycle can be
+/// said to end at (protocol 5.24).
+pub fn ns_up(cycles: u64) -> u64 {
+    (cycles as u128 * NS_PER_S).div_ceil(cpu_hz()) as u64
+}
+
 /// Nanoseconds to bus cycles, rounded up (protocol §3): an input takes effect at the first cycle
 /// at or after its time.
 pub fn cycles(ns: u64) -> u64 {
@@ -559,6 +565,16 @@ pub fn sd_card_ack(t: u64, image: Option<&str>, error: Option<&str>) -> String {
 pub fn flash_dump_ack(t: u64, error: Option<&str>) -> String {
     let error = error.map_or("null".into(), |e| format!(r#""{}""#, escape(e)));
     format!(r#"{{"type":"flash_dump_ack","t":{t},"error":{error}}}"#)
+}
+
+/// Where the boot's uptime counter, the one `esp_timer_get_time()` reads, counted zero: no
+/// sooner than the first time, no later than the second; `null` for both when the runner no
+/// longer knows (5.24). Not an event: nothing answers it.
+pub fn uptime(t: u64, zero: Option<(u64, u64)>) -> String {
+    let (earliest, latest) = zero.map_or(("null".into(), "null".into()), |(e, l)| {
+        (e.to_string(), l.to_string())
+    });
+    format!(r#"{{"type":"uptime","t":{t},"earliest":{earliest},"latest":{latest}}}"#)
 }
 
 pub fn console(t: u64, data: &[u8]) -> String {

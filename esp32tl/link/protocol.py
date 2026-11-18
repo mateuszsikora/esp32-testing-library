@@ -175,6 +175,18 @@ class SdCardAck:
 
 
 @dataclass(frozen=True)
+class Uptime:
+    """Where the boot's uptime counter, the one `esp_timer_get_time()` reads, counted zero, as the
+    runner saw it at `t`: no sooner than `earliest`, no later than `latest`; both `None` when the
+    runner no longer knows (5.24). Not an event: nothing answers it."""
+
+    TYPE: ClassVar[str] = "uptime"
+    t: int
+    earliest: int | None
+    latest: int | None
+
+
+@dataclass(frozen=True)
 class FlashDumpAck:
     """The file of `--flash-out` holds the flash of the turn at `t`, unless `error` says why it
     does not (5.21). Not an event: the turn it answers is still going on."""
@@ -414,7 +426,7 @@ class Stop:
 
 Event = WifiLink | UartTx | UartCfg | GpioOut | Reset | EthTx | HciTx
 RunnerMessage = (
-    RunnerHello | Event | Sync | Console | Warn | SdCardAck | SdOp | FlashDumpAck | Stats
+    RunnerHello | Event | Sync | Console | Warn | SdCardAck | SdOp | FlashDumpAck | Uptime | Stats
 )
 Input = (
     UartRx
@@ -687,6 +699,15 @@ def _wifi_stats(value: Any) -> WifiStats | None:
     )
 
 
+def _uptime(f: Fields) -> Uptime:
+    earliest, latest = f.opt_integer("earliest"), f.opt_integer("latest")
+    if (earliest is None) != (latest is None):
+        raise ProtocolError("earliest and latest are both null or neither")
+    if earliest is not None and latest is not None and latest < earliest:
+        raise ProtocolError(f"latest is {latest}, before earliest {earliest}")
+    return Uptime(f.integer("t"), earliest, latest)
+
+
 def _sd_op(f: Fields) -> SdOp:
     blocks = f.pair("blocks")
     if blocks is None:
@@ -787,6 +808,7 @@ DECODERS: dict[Sender, dict[str, Callable[[Fields], Message]]] = {
             f.integer("t"), f.opt_string("image"), f.opt_string("error")
         ),
         "flash_dump_ack": lambda f: FlashDumpAck(f.integer("t"), f.opt_string("error")),
+        "uptime": _uptime,
         "stats": _stats,
     },
     "harness": {

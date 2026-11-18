@@ -401,3 +401,4 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The console port is a flag of its own, `--console-port uart0\|usb`](runner.md#the-console-port-is-a-flag-of-its-own---console-port-uart0usb) | `runner.md` | decided (#248) |
 | [The USB-Serial/JTAG console adds `console_rx` at protocol version 2](runner.md#the-usb-serialjtag-console-adds-console_rx-at-protocol-version-2) | `runner.md` | decided (#248) |
 | [The USB-Serial/JTAG console's bytes are stamped with the end of their slice](runner.md#the-usb-serialjtag-consoles-bytes-are-stamped-with-the-end-of-their-slice) | `runner.md` | decided (#248) |
+| [The runner reads the esp_timer counter's registers at slice boundaries](runner.md#the-runner-reads-the-esp_timer-counters-registers-at-slice-boundaries) | `runner.md` | decided (#245) |

@@ -95,6 +95,35 @@ def test_a_restart_keeps_ram_and_rtc_memory_and_board_reset_clears_them(
     assert "boot 3: POWERON_RESET (reset cause 1)" in board.report(run=True)
 
 
+def test_each_boot_s_uptime_zero_puts_the_firmware_s_uptime_on_the_board_s_clock(
+    board: Esp32Sim, console: Console
+) -> None:
+    board.power_on()
+    console.expect_exact("persistence: done")
+    board.reset()
+    console.expect_exact("persistence: done")
+    printed = console.lines(BOOT.decode())
+    boots = board.boots
+    assert [boot.cause for boot in boots] == [POWERON_RESET, SW_CPU_RESET, POWERON_RESET]
+    assert len(printed) == len(boots)
+    for line, boot in zip(printed, boots, strict=True):
+        zero = boot.uptime_zero
+        assert zero is not None, boot
+        # the classic chip's LACT, seen between two slice boundaries a millisecond apart at most
+        assert boot.at < zero.earliest <= zero.latest <= zero.earliest + ms(1)
+        uptime = ms(int(line[7]))
+        # printed in whole milliseconds rounded down, so up to 1 ms early, and the line ends a
+        # little after the firmware read its uptime: 1 ms more is room for both
+        assert zero.earliest + uptime <= line.at <= zero.latest + uptime + ms(2)
+        # the ROM, the bootloader and the application's start-up come before its counter's zero
+        assert line.at - (boot.at + uptime) > ms(10)
+    # what the documentation says of this image: its first boot's counter starts in the 49th
+    # millisecond after power-on
+    first = boots[0].uptime_zero
+    assert first is not None
+    assert ms(48) <= first.earliest and first.latest <= ms(49)
+
+
 @pytest.mark.requires_mtools
 def test_the_card_keeps_its_power_and_its_files_through_board_reset(
     board: Esp32Sim, console: Console, sd_card: SdCard

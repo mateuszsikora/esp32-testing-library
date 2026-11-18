@@ -204,6 +204,17 @@ watchdog off), and the watchdog counts through it, so a stage that resets before
 alarm ends the sleep in that reset
 ([decision](../decisions/runner.md#a-deep-sleep-runs-in-long-steps-of-the-rtc-to-just-short-of-its-alarm)).
 
+The peer also learns where each boot's `esp_timer` counts zero on the run's clock, without asking:
+the runner reads the counter `esp_timer_get_time()` reads at every slice boundary and sends
+`uptime`, with the earliest and the latest time the zero can have been. On the classic ESP32 the two
+are up to a millisecond apart, the slice in which ESP-IDF started the counter, some tens of
+milliseconds after the boot's `reset`, and up to two after a load while the counter counts; on the
+ESP32-S3, -C3 and -C6 they are 60 ns apart at most, around the boot's `reset` itself. A stamp the
+firmware took from its uptime then has a time on the run's clock. When the zero it sent no longer
+holds, because the counter stopped or counts from a zero that may lie before power-on, it sends
+`uptime` with neither. [The protocol](../protocol.md#524-uptime-ext-245) says what the runner reads
+on each chip.
+
 With `--flash-out PATH` what the firmware wrote can be read: the file holds the whole flash, as big
 as `--flash-mb` says, once the run has ended, however it ended short of a panic. A peer can also ask
 for it in a turn, with `flash_dump`, as often as it likes: the guest does not run, and the run's time

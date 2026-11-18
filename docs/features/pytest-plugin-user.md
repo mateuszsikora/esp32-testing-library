@@ -400,6 +400,45 @@ def test_the_count_survives_a_power_cut(board: Board):
   A boot is there once the board has run into it: right after `board.reset()`, or the
   `power_on()` that follows a `power_off()`, `board.boot` is still the one before, until the test
   lets the board run, for as little as `board.wait(ms(1))`.
+- `boot.uptime_zero` is where the boot's uptime counter, the one `esp_timer_get_time()` reads,
+  counted zero on the board's clock, an `UptimeZero` (`esp32tl.interfaces.board`) of two
+  `Duration`s, `earliest` and `latest`; `None` until the backend has seen the counter count, for a
+  firmware that never starts it, and again while the zero is not known: after the counter stopped,
+  or once it counts from a zero that may lie before power-on, as a load of more than the run has
+  lasted gives. A load while it counts, as ESP-IDF makes after a light sleep, gives the boot a new
+  `uptime_zero`. A stamp of `uptime` the firmware took from the counter, an `esp_timer_get_time()`
+  it sent, was taken between `earliest + uptime` and `latest + uptime` on the board's clock, the
+  clock of `board.now`, the console's lines and the run's log. On esp32sim the runner reads the
+  counter at every slice boundary ([protocol 5.24](../protocol.md#524-uptime-ext-245)). On the
+  classic ESP32 the zero is known to within a millisecond, the slice in which ESP-IDF started the
+  counter, after the ROM, the bootloader and the application's start-up, some tens of milliseconds
+  after `boot.at`: for `firmware/persistence`'s first boot, between 48 and 49 ms after power-on. A
+  load while it counts is known to within two milliseconds. On the ESP32-S3, -C3 and -C6 the zero is
+  known to within 60 ns, and `earliest ≤ boot.at ≤ latest`: esp32sim does not model the
+  application's reset of the counter, which counts from the reset; on the chip the zero comes at the
+  application's start, as on the classic ESP32. After a load while the counter counts, `uptime_zero`
+  is still the zero from before the load for up to two slices of the run, a millisecond each: a
+  stamp the firmware sent in them, put on the board's clock with it, is off by what the load
+  changed, for ESP-IDF's load after a light sleep, which makes up for the time asleep, by what the
+  making up got wrong. `boot.uptime_zero` takes no part in comparing two boots, and a `Boot` read
+  before the zero was seen keeps `None`: read `board.boot` or `board.boots` again.
+
+  ```python
+  from esp32tl.units import ms, seconds
+
+  line = board.wait_until(console.line(r"uptime_ms=(\d+)"), within=seconds(1))
+  zero = board.boot.uptime_zero
+  assert zero is not None
+  uptime = ms(int(line[1]))
+  assert zero.earliest + uptime <= line.at <= zero.latest + uptime + ms(2)
+  ```
+
+  The firmware printed its uptime in whole milliseconds, rounded down, so the stamp can be up to
+  1 ms early; the second millisecond is room for the time from its read of the counter to the end
+  of the line, which `line.at` is the time of. A stamp in microseconds, read just before the line,
+  needs less.
+
+  Serial skips it with `board.boots` (the backend does not see the chip's resets).
 - `board.next_boot(cause=None)` is a [described condition](#described-conditions), a
   `Condition[Boot | None]`, for the first boot after the call: of any cause, or of `cause` only,
   a reset cause as a number such as `POWERON_RESET` (`esp32tl.interfaces.board`). A boot of
@@ -439,6 +478,9 @@ def test_the_count_survives_a_power_cut(board: Board):
   test's report and every tap's recording go on from the first power-on through every boot. What
   the firmware counts from its own boot, `esp_timer_get_time()` or the ESP-IDF log's
   milliseconds, starts again at each one: `board.now - board.boot.at` is the board's time since.
+  `board.boot.at` is when the chip reset, not when its `esp_timer` counted zero; to put an
+  `esp_timer_get_time()` the firmware sent on the board's clock, add it to
+  `board.boot.uptime_zero`.
 
 What each kind of restart keeps, on esp32sim:
 

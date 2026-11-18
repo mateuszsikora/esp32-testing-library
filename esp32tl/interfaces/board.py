@@ -2,7 +2,7 @@
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from functools import cached_property
 from pathlib import Path
@@ -51,13 +51,27 @@ DEEPSLEEP_RESET = 5
 
 
 @dataclass(frozen=True)
+class UptimeZero:
+    """Where a boot's uptime counter, the one `esp_timer_get_time()` reads, counted zero on the
+    board's clock: no sooner than `earliest`, no later than `latest`. A stamp of `uptime` the
+    firmware took from it was taken at a board time between `earliest + uptime` and
+    `latest + uptime`."""
+
+    earliest: Duration
+    latest: Duration
+
+
+@dataclass(frozen=True)
 class Boot:
     """One boot of the chip: its `number`, 1 for the first, the board's time `at` which it
-    started, and the reset `cause` the ROM reports for it, which `reason` names."""
+    started, and the reset `cause` the ROM reports for it, which `reason` names. `uptime_zero`
+    is where its uptime counter counted zero, once the backend has seen it count; `None` until
+    then. It does not take part in comparing two boots."""
 
     number: int
     at: Duration
     cause: int
+    uptime_zero: UptimeZero | None = field(default=None, compare=False)
 
     @property
     def reason(self) -> str:

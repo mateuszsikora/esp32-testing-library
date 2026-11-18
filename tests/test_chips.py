@@ -17,7 +17,7 @@ from esp32tl.interfaces.console import Console
 from esp32tl.interfaces.gnss import Gnss
 from esp32tl.interfaces.lines import Lines
 from esp32tl.interfaces.wifi import Wifi
-from esp32tl.units import ms, seconds
+from esp32tl.units import Duration, ms, seconds
 
 # The chip, its devkit profile, and what ESP-IDF's hello_world says the chip is.
 CHIPS = [
@@ -48,6 +48,12 @@ def on_chip(chip: str, profile: str, banner: str) -> type:
             console.expect_exact("Restarting now.", timeout=12)
             console.expect_exact("Hello world!", timeout=2)
             assert [boot.cause for boot in board.boots] == [POWERON_RESET, 12]
+            # esp32sim's SYSTIMER counts from every reset, and does not model the application's
+            # reset of it: esp_timer counts from the boot's start, read to within a 16 MHz tick
+            for boot in board.boots:
+                zero = boot.uptime_zero
+                assert zero is not None, boot
+                assert zero.earliest <= boot.at <= zero.latest < zero.earliest + Duration(63)
             assert board.link.warnings == [] and board.link.error is None
 
         @image("console_repl")

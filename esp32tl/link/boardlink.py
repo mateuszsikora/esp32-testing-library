@@ -29,7 +29,9 @@ output. With `--console-port usb`, what the one interface that is the USB-Serial
 The backend can also switch the board's supply and pulse the chip's EN pin (`board_input`): the
 message goes out in the harness's answer to the turn the link is held at, or to the first turn
 before the run reaches it, before what the interfaces send. Every `reset` the
-runner sends is kept in `resets`, in order, and given to `on_reset`.
+runner sends is kept in `resets`, in order, and given to `on_reset`. Where each boot's uptime
+counter counted zero (`uptime`) is kept in `uptimes`, by boot number, the runner's last word on
+each boot.
 
 What the runner reports of the SD card's fault rules (`sd_op`) goes to the same interface, which
 alone may send `sd_fault` and `sd_clear`.
@@ -85,6 +87,7 @@ from esp32tl.link.protocol import (
     UartCfg,
     UartRx,
     UartTx,
+    Uptime,
     Wait,
     Warn,
     WifiAp,
@@ -337,6 +340,8 @@ class BoardLink:
         self.on_reset = on_reset
         # The chip's resets, as the runner reported them.
         self.resets: list[Reset] = []
+        # Where each boot's uptime counter counted zero, by boot number, as the runner last said.
+        self.uptimes: dict[int, Uptime] = {}
         # The board's own inputs for the next turn: its supply switched, its EN pulsed.
         self._board_inputs: list[Power | ChipReset] = []
         # What the run told and what the harness found, read once `run` has returned.
@@ -533,6 +538,9 @@ class BoardLink:
             if self.on_reset is not None:
                 with calling("the board", "on_reset"):
                     self.on_reset(message)
+        elif isinstance(message, Uptime):
+            # the boot running when the runner saw it: the one the last reset started
+            self.uptimes[len(self.resets) + 1] = message
         else:
             assert isinstance(message, Stats), message
         return []

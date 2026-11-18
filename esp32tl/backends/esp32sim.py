@@ -72,7 +72,7 @@ from esp32tl.build import Build, BuildError
 from esp32tl.flash import FlashSnapshot, Namespaces, Partition
 from esp32tl.interfaces import BoardOff, NeverHappened, RunEnded, SourceError
 from esp32tl.interfaces.bluetooth import TAP_SOURCE, Bluetooth
-from esp32tl.interfaces.board import DEEPSLEEP_RESET, POWERON_RESET, Board, Boot
+from esp32tl.interfaces.board import DEEPSLEEP_RESET, POWERON_RESET, Board, Boot, UptimeZero
 from esp32tl.interfaces.console import ConsoleInput, ConsoleLines
 from esp32tl.interfaces.gnss import Gnss
 from esp32tl.interfaces.lines import Lines
@@ -802,9 +802,21 @@ class Esp32Sim(Board):
         """The chip's boots, in order: the first at power-on, then one at each reset, whatever
         caused it."""
         self._on()
-        first = Boot(1, Duration(0), POWERON_RESET)
-        later = [Boot(n, Duration(r.t), r.cause) for n, r in enumerate(self.link.resets, start=2)]
-        return (first, *later)
+        starts = [(Duration(0), POWERON_RESET)] + [
+            (Duration(r.t), r.cause) for r in self.link.resets
+        ]
+        return tuple(
+            Boot(n, at, cause, self._uptime_zero(n))
+            for n, (at, cause) in enumerate(starts, start=1)
+        )
+
+    def _uptime_zero(self, boot: int) -> UptimeZero | None:
+        """Where boot number `boot`'s uptime counter counted zero, as the runner last said: `None`
+        before it said anything, and once it has said it no longer knows."""
+        uptime = self.link.uptimes.get(boot)
+        if uptime is None or uptime.earliest is None or uptime.latest is None:
+            return None
+        return UptimeZero(Duration(uptime.earliest), Duration(uptime.latest))
 
     def _reset(self, message: Reset) -> None:
         """The chip reset: into the run's log, from the link's thread."""

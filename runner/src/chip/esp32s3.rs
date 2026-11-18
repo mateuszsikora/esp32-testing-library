@@ -93,6 +93,13 @@ pub(crate) fn reset_console_rx(machine: &mut esp32s3::Machine) {
         .expect("U0RXD IO_MUX is mapped");
 }
 
+/// Bus cycles in one tick of the 16 MHz SYSTIMER, `ClockDomain::Systimer` of esp32sim's clock
+/// tree.
+const SYSTIMER_TICK: u64 = super::clock_divider(
+    &esp32s3::periph::Peripherals::CLOCKS,
+    emu_core::ClockDomain::Systimer,
+);
+
 impl Guest for esp32s3::Machine {
     fn cycles(&self) -> u64 {
         self.bus.cycles
@@ -166,6 +173,9 @@ impl Guest for esp32s3::Machine {
         self.bus.flush_ticks();
         SocBus::serial_input(&mut self.bus, data);
         self.bus.refresh_tick_budget();
+    }
+    fn uptime(&mut self) -> crate::session::Uptime {
+        super::systimer_uptime(&self.bus.periph.systimer, self.cycles(), SYSTIMER_TICK)
     }
     fn gpio_drive(&self) -> (u64, u64) {
         let gpio = &self.bus.periph.gpio;

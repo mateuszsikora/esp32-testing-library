@@ -195,7 +195,11 @@ cannot fail with this backend; it is there for another caller:
   `BoardOff: the board is off already: call board.power_on() to switch it on`.
 - `boots` is `Boot(1, Duration(0), 1)`, then one `Boot(n, Duration(reset.t), reset.cause)` per
   `reset` in `BoardLink.resets`, numbered from 2; `boot` is the last (`esp32tl/interfaces/board.py`,
-  which also names the causes, `RESET_REASONS`).
+  which also names the causes, `RESET_REASONS`). Each is built anew at every read, with its
+  `uptime_zero` from `BoardLink.uptimes`, which keeps the last `uptime` of each boot by number
+  (the boot after the `reset`s read before it, [protocol 5.24](../protocol.md#524-uptime-ext-245)):
+  `UptimeZero(Duration(earliest), Duration(latest))`, or `None` for a boot that has none yet and
+  for one whose last `uptime` has `null` for both.
 
 `_on()`, which `now`, `utc`, `boots` and every wait go through, asks only that the runner has
 started, so the test can wait on a board that is off: the runner idles the guest and still takes
@@ -482,7 +486,7 @@ repository makes.
 | `Esp32Sim.power_off()`, `Esp32Sim.reset()` | The supply off; a pulse of EN. Both at the held clock's `now`, sent with the turn the link is held at; `BoardOff` when the board is not in the state they need, `RunEnded` once the run has ended |
 | `Esp32Sim.flash()` | A `FlashSnapshot` of the runner's flash at the board's time now, or as the run left it; `BoardOff` before the first `power_on` |
 | `Esp32Sim.powered`, `Esp32Sim.started` | Whether the supply is on, from `power_on` to `power_off`; whether `power_on` has started the runner |
-| `Esp32Sim.boots`, `Esp32Sim.boot` | The chip's boots as `Boot`s, the first at 0 with cause 1 and one per `reset` the link has read; the last. `BoardOff` before the first `power_on` |
+| `Esp32Sim.boots`, `Esp32Sim.boot` | The chip's boots as `Boot`s, the first at 0 with cause 1 and one per `reset` the link has read, each with the `uptime_zero` of the link's last `uptime` for it; the last. `BoardOff` before the first `power_on` |
 | `Esp32Sim.wait(duration)`, `Esp32Sim.wait_until(condition, *, within)`, `Esp32Sim.wait_on_clock(condition, within, description)` | The test's waits, each a `Duration` of the board's time, logged as steps of the test |
 | `Esp32Sim.wait_for_wake(*, within)` | Runs the board to the chip's next boot, for at most `within`, and returns its `Boot`; `AssertionError` when that boot is not a wake from deep sleep, `NeverHappened` and `RunEnded` as `wait_until`'s, `BoardOff` before `power_on` and while the supply is off |
 | `Esp32Sim.now`, `Esp32Sim.utc` | The board's time since the first power-on, a `Duration`, through every reset and while the board is off; the world's time, a `datetime` in UTC |

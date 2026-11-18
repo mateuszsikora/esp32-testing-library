@@ -176,6 +176,49 @@ pub(crate) fn flash_without_trampoline<'a>(
     std::borrow::Cow::Owned(copy)
 }
 
+/// The bus cycles in one tick of `domain`, as a chip's clock tree divides them
+/// (`Peripherals::CLOCKS` of its `device_set!`). A pin without the domain fails the build where
+/// a constant asks for it.
+pub(crate) const fn clock_divider(
+    clocks: &[(emu_core::ClockDomain, u64)],
+    domain: emu_core::ClockDomain,
+) -> u64 {
+    let mut i = 0;
+    loop {
+        if clocks[i].0 as u8 == domain as u8 {
+            return clocks[i].1;
+        }
+        i += 1;
+    }
+}
+
+/// `Guest::uptime` on a chip whose `esp_timer` counts on SYSTIMER unit 0
+/// (`SYSTIMER_COUNTER_ESPTIMER` in ESP-IDF's `esp_timer_impl_systimer.c`), at `now`, with `tick`
+/// bus cycles to one of its 16 MHz ticks: the unit counts while TIMER_UNIT0_WORK_EN, bit 30 of
+/// CONF, is set (`esp-periph/src/systimer.rs`), and read zero `unit[0]` ticks before now, less
+/// the part of a tick it has counted since its last, which esp32sim's clock tree keeps to itself.
+pub(crate) fn systimer_uptime(
+    systimer: &esp_periph::Systimer,
+    now: u64,
+    tick: u64,
+) -> crate::session::Uptime {
+    use crate::session::Uptime;
+    if systimer.conf & 1 << 30 == 0 {
+        return Uptime::Stopped;
+    }
+    match systimer.unit[0]
+        .checked_mul(tick)
+        .and_then(|counted| now.checked_sub(counted))
+    {
+        Some(latest) => Uptime::Zero {
+            earliest: latest.saturating_sub(tick - 1),
+            latest,
+        },
+        // loaded with more than the run has lasted: a zero before power-on, which has no time
+        None => Uptime::BeforePowerOn,
+    }
+}
+
 /// The route of a UART the chip does not have: no pins, no baud.
 pub(crate) fn no_uart(port: usize) -> esp_soc::uart::UartRoute {
     esp_soc::uart::UartRoute::new(port, 0, None, None)

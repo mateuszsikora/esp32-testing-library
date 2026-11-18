@@ -146,6 +146,7 @@ dump in `runner/src/session/tests.rs` cover the code the others run.
 | Its RTC registers after `power_on_reset` | a new `ClassicRtc` | a new `RtcCntl`, keeping the board's analog inputs | the same | a new `LpSys` |
 | Deep sleep stepped through | yes | no: not modelled | no | no |
 | `flash()` without the trampoline | yes | yes | yes | no: `ble.original_flash` is private to esp32sim's C6 crate |
+| `uptime()` | TIMG0's LACTCONFIG and LACTLOAD through `Device::read` on `periph.timg[0]` (`chip::esp32::lact`): `Counting`, LACTLOAD's 64 bits and a tick of LACT_DIVIDER times `lact::apb_tick`, 3 or 6 bus cycles | `chip::systimer_uptime` on `periph.systimer`, 15 bus cycles a tick | the same, 10 a tick | the same, 10 a tick |
 
 The S3's bus defers device time (`tick_pending`, `flush_ticks`): its `Guest::run_until` calls
 `flush_ticks` after `run`, so that what the run loop reads at a slice boundary (routes, GPIO,
@@ -349,7 +350,8 @@ without, so `stats` has the field only with it
 `wifi_access_point`, `wifi_leave`, `wifi_drops` and `wifi_forget`, whose defaults are a chip
 without Wi-Fi: no frames, nothing taken, nothing attached, left at once, no drops, nothing to
 forget, and `flash`, for `--flash-out`, whose default is an empty slice and which reads `bus.flash`
-on the machine) and
+on the machine, and `uptime`, the counter `esp_timer` reads, whose default is a counter that never
+counts) and
 `Link` (the socket: `send`, `flush`, `idle`, `closing`, `recv`), so that its tests drive it with a
 scripted guest and a fake peer. `impl Guest for esp32::Machine` sets `max_cycles` and calls
 `run(u64::MAX)`, calls `reboot()` for `chip_reset`, reads `bus.periph.uart_route(port)` and
@@ -363,6 +365,28 @@ and runs nothing; `wifi_forget` detaches the access point (`StationLink::attach(
 The S3's, the C3's and the C6's `Guest` do the same on their own peripherals ([Chips](#chips)),
 on esp_periph's `Uart` directly, whose `host_input` and `int_raw` are the ones `ClassicUart`
 wraps.
+
+#### Where each boot's esp_timer starts
+
+`Session::boundary` calls `watch_uptime(now)` after `collect` and the boundary's routes, and it does
+nothing while the supply is off. It asks `Guest::uptime`, which answers a `session::Uptime`:
+`Stopped`; `Counting { load, tick }`, counting from `load` at `tick` bus cycles a count, where the
+count itself is not to be read; `Zero { earliest, latest }`, the bus cycles between which it read
+zero; or `BeforePowerOn`. `UptimeWatch` holds, for the boot that runs, `since`, the last boundary,
+the reset's cycle at first (`reset` sets it); `load`, the raw load the last boundary read the
+counter counting from, if it did; `reload`, a load seen while it counted, with the boundary before
+the one that saw it; and `sent`, what the boot's last `uptime` said, a `Sent`: `Nothing`,
+`Zero(earliest, latest)` or `Unknown`. Every boundary moves `since` to `now`. `Counting` after a
+boundary that did not read it counting places its start from `since`; with another `load` than the
+last boundary read it keeps `(since, load)` in `reload` and gives nothing; with the same `load` it
+places a `reload` of that load from its boundary, and gives nothing otherwise, whatever `tick` is.
+Placing gives `(from − load × tick, now − load × tick)`, or `None` when `load × tick` is more than
+`from`. `Zero` gives its two cycles unless they overlap a `Sent::Zero`; `Stopped` and
+`BeforePowerOn` give `None`, and drop `reload`. `None` goes out only to replace a `Sent::Zero`. What
+it gives goes on `pending` as `Item::Uptime { cycle: now, zero }`, and `process_pending` sends it as
+`protocol::uptime`, with no `seq`, its `earliest` through `protocol::ns` and its `latest` through
+`protocol::ns_up`, rounded up, and `null` for both when `zero` is `None`
+([protocol 5.24](../protocol.md#524-uptime-ext-245)).
 
 #### Received bytes
 
@@ -967,6 +991,15 @@ a guest that programs a byte between two dumps;
   without pins and takes nothing; `the_s3_has_the_psram_the_board_has` and
   `the_c3_and_the_c6_have_no_psram` the PSRAM sizes; `*_takes_a_byte_into_its_fifo` that a byte goes
   into the RX FIFO at once.
+- The uptime counter: in `runner/src/chip/tests.rs`,
+  `the_classic_lact_reads_as_counting_from_its_load_once_enabled_and_a_reset_stops_it` and
+  `the_s3_systimer_reads_zero_at_its_reset_and_where_it_is_loaded`, with the C3's and the C6's,
+  read it as `esp_timer_impl_early_init` sets it up, as a load moves it and after a reset; in
+  `runner/src/session/tests.rs`,
+  `a_counter_seen_counting_is_placed_between_the_boundary_before_and_the_one_that_saw_it` and
+  `a_counter_read_at_its_zero_is_sent_again_only_when_its_zero_moves` and
+  `a_load_that_counts_from_before_power_on_has_no_zero_on_the_classic_chip` check when `uptime`
+  goes out and what it says.
 - `runner/src/cli/tests.rs`: `cli::parse` only. `every_chip_esp32sim_models_is_taken_in_any_case`,
   `a_chip_the_runner_does_not_emulate_is_named_with_those_it_does`,
   `what_esp32sim_lacks_on_a_chip_is_a_usage_error` and `the_sd_card_s_pins_are_the_chip_s` check
