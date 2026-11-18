@@ -1451,13 +1451,16 @@ that references to its number keep their meaning.
     connections the old Will is discarded unsent, and with CleanSession=1 on either it is published
     at the takeover, as it is when the CONNECT comes at the instant the old keepalive runs out; a
     CONNECT after the expiry finds the old connection closed and its Will published by the expiry. A
-    SYN from the old source port resets the old connection, its Will going then, and opens a new
-    one. A device connection the link's end, a chip reset or a DHCP lease given up left open is
-    dropped, with no FIN, when its service closes it, and so are, at once, one its service had
-    closed and one still in its handshake, and what waited for its window is discarded; the gone
-    stack's SYNs still on the path never arrive, its data does; what its service writes beyond the
-    window is discarded and counted. A virtual station leaving the device's access point ends the
-    device's connections with bytes not acknowledged and leaves the rest as they were: what their
+    SYN from the old source port, its options parsed, resets the old connection, its Will going
+    then, and opens a new one. A device connection the link's end, a chip reset or a DHCP lease
+    given up left open is dropped, with no FIN, when its service closes it, and so are, at once, one
+    its service had closed and one still in its handshake, and what waited for its window is
+    discarded; after a chip reset behind the modem or the access point, or a lease given up, the
+    gone stack's SYNs still on the path never arrive, and its data does, where the link's end, and a
+    reset behind a virtual station, clear the path; what its service writes beyond the window is
+    discarded and counted. A virtual station leaving the device's access point drops the device's
+    connections still in their handshake, ends those with bytes or a FIN not acknowledged and those
+    whose FIN was acknowledged with no FIN back, and leaves the rest as they were: what their
     service writes or closes meanwhile reaches the device in order once the station is back with the
     same address, and a station back with another loses them. A stale close of an ended connection
     leaves the new one on its port alone. While the link is down, a bridged connection keeps its
@@ -1484,6 +1487,8 @@ that references to its number keep their meaning.
     `tests/test_net_station.py::test_a_station_back_with_another_address_loses_the_connections_on_the_old_one`,
     `tests/test_net_station.py::test_a_station_that_leaves_with_bytes_unacknowledged_ends_the_connection`,
     `tests/test_net_client.py::test_a_malformed_datagram_on_the_path_survives_a_reset`,
+    `tests/test_net_client.py::test_a_malformed_syn_leaves_the_orphaned_connection_and_its_will`,
+    `tests/test_net_station.py::test_a_station_that_leaves_after_the_services_fin_was_acknowledged_retires_it`,
     `tests/test_net_bridge.py::test_a_lost_link_leaves_the_stream_at_the_service_open_until_the_run_ends`,
     `tests/test_modem_model.py::test_the_keepalive_runs_out_with_the_call_ended`,
     `tests/test_mqtt_session.py::test_a_lost_link_publishes_the_will_at_the_keepalive_not_at_the_loss`,

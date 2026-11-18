@@ -528,12 +528,12 @@ nothing left to lose. The device's own flows stay, because a network does not kn
 end at a RST from the device's new stack, which comes in answer to what their service writes, or at
 the service's end, as the broker's keepalive expiry, which drops an orphaned flow at once; the
 link's end leaves them too. A SYN of the new stack, without ACK, from the same port to the same
-service falls on the old flow: when that flow is orphaned, `_tcp` drops it as `"renewed"`, logged
-`reset: the device opened a new connection from its port`, its service hearing `on_close` as at a
-RST, and takes the SYN as a new connection. That is what a challenge ACK (RFC 9293, 3.10.7.4) would
-come to: the new stack answers it with a RST, which resets the old connection, and sends its SYN
-again. A flow that is not orphaned takes only ACK, data and FIN, and drops such a SYN without an
-answer, as before.
+service falls on the old flow: when that flow is orphaned and the SYN's options parse (`_mss`),
+`_tcp` drops it as `"renewed"`, logged `reset: the device opened a new connection from its port`,
+its service hearing `on_close` as at a RST, and takes the SYN as a new connection. That is what a
+challenge ACK (RFC 9293, 3.10.7.4) would come to: the new stack answers it with a RST, which resets
+the old connection, and sends its SYN again. A flow that is not orphaned takes only ACK, data and
+FIN, and drops such a SYN without an answer, as before.
 
 `TcpConnection` keeps `received` in a `bytearray`, `established_at`, `closed_at` and `ended_at` as
 `Duration`s from `now()` at the callback, which is the segment's own time, `_end`, the kind, and
@@ -577,18 +577,19 @@ leaves: `_link_ended` calls `lose_link(orphan=False)` there, which loses the tes
 the device's still in their handshake, as `unanswered`, since their SYN-ACK is not sent again, and
 drops those with bytes or a FIN the device has not acknowledged, as `"gapped"`, logged `lost with
 what it had on its way when the link went`, since what was on the path or in the air is gone and
-nothing sends it again, and leaves the rest as they were. `Network` takes `carries`,
-`Internet._carries`: the network active and, behind a station, a lease. While it is false, `_flush`
-sends nothing on a flow that is not orphaned: what its service writes, and its FIN behind it, wait
-in `pending`, since this TCP sends nothing again, and `_station_changed` calls
-`Network.resume(lease.address)` when the station has a lease again, which flushes every flow from
-that address, so the bytes and the FIN reach the device in order, and drops as `lost` a flow from
-another, which the station no longer holds. Behind the access point, `Ethernet` calls
-`gave_up(address)`, `Internet._gave_up`, when a DHCP message of the device's (a DISCOVER, a REQUEST
-not acknowledged, a RELEASE or a DECLINE; not an INFORM, nor a type the server does not take) takes
-away an address it had acknowledged: `forget_device("the device gave its address up",
-address=address)` loses the test's flows to that address and orphans the device's, as lwIP drops a
-netif's connections when its address goes.
+nothing sends it again, drops those whose FIN the device acknowledged with no FIN back, as
+`abandoned`, since they wait for that FIN with no timer to give up, and leaves the rest as they
+were. `Network` takes `carries`, `Internet._carries`: the network active and, behind a station, a
+lease. While it is false, `_flush` sends nothing on a flow that is not orphaned: what its service
+writes, and its FIN behind it, wait in `pending`, since this TCP sends nothing again, and
+`_station_changed` calls `Network.resume(lease.address)` when the station has a lease again, which
+flushes every flow from that address, so the bytes and the FIN reach the device in order, and drops
+as `lost` a flow from another, which the station no longer holds. Behind the access point,
+`Ethernet` calls `gave_up(address)`, `Internet._gave_up`, when a DHCP message of the device's (a
+DISCOVER, a REQUEST not acknowledged, a RELEASE or a DECLINE; not an INFORM, nor a type the server
+does not take) takes away an address it had acknowledged: `forget_device("the device gave its
+address up", address=address)` loses the test's flows to that address and orphans the device's, as
+lwIP drops a netif's connections when its address goes.
 
 On an orphaned flow `_write` sends what the device's window has room for and discards the rest,
 counting it in `discarded`, since nothing will acknowledge what went: kept, it would pile up until
@@ -599,7 +600,8 @@ of `_up` the gone stack's SYNs still on the way up, from any address or from the
 (`Internet._forget_syns`, which parses each with `ipv4` and keeps what does not parse, or is a
 fragment): each would open a flow left in its handshake, which nothing ends. The rest of what that
 stack sent before still arrives, as at a service on the internet: data on a connection it held, its
-last PUBLISH among them.
+last PUBLISH among them. The link's end clears the path whole, and so does a reset behind a virtual
+station, whose `Station.stop` ends the link.
 
 `Internet.terminate(t)` calls `Ppp.terminate`, which sends an LCP Terminate-Request on an open link
 and changes nothing else, and returns the output for

@@ -313,7 +313,13 @@ class Network:
             if flow is not None:
                 self._drop(flow, "reset")
             return
-        if flags & SYN and not flags & ACK and flow is not None and flow.orphaned:
+        if (
+            flags & SYN
+            and not flags & ACK
+            and flow is not None
+            and flow.orphaned
+            and _mss(segment[20:header_length]) is not None
+        ):
             # A new stack's SYN on a tuple only a gone stack held: a challenge ACK (RFC 9293,
             # 3.10.7.4) would draw its RST, which resets the old connection, and its SYN again.
             self._drop(flow, "renewed")
@@ -497,9 +503,12 @@ class Network:
     def lose_link(self, *, orphan: bool = True) -> None:
         """The link ended. With `orphan`, the device's stack went with it: `forget_device`.
         Without, as when a virtual station leaves the device's access point, the device keeps
-        its connections: lose the test's, and drop only those of the device's still in their
-        handshake, whose SYN-ACK is not sent again. What the rest have to send waits for the
-        link (`carries`), their FIN behind it, and goes in `resume`."""
+        its connections: lose the test's, and drop those of the device's that this TCP cannot
+        finish, since it sends nothing again: one still in its handshake, whose SYN-ACK is not
+        sent again; one with bytes or a FIN the device has not acknowledged; and one whose FIN
+        was sent already, which waits for the device's FIN with no timer to give up. What the
+        rest have to send waits for the link (`carries`), their FIN behind it, and goes in
+        `resume`."""
         if orphan:
             self.forget_device()
             return
@@ -512,6 +521,8 @@ class Network:
                 # What it sent and the device has not acknowledged may be on the cleared path or
                 # in the air: nothing sends it again, and the stream would have a gap.
                 self._drop(flow, "gapped")
+            elif flow.fin_sent:
+                self._drop(flow, "abandoned")
 
     def reset(self) -> None:
         """Lose every TCP connection, the device's included; notify services once, MQTT Wills

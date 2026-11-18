@@ -441,3 +441,18 @@ def test_a_station_that_leaves_with_bytes_unacknowledged_ends_the_connection() -
     events = [e.get("event") for e in ap.net.events]
     line = "net: TCP 192.168.4.1:40000 → 192.168.4.2:7000 lost with what it had on its way"
     assert line + " when the link went" in events
+
+
+def test_a_station_that_leaves_after_the_services_fin_was_acknowledged_retires_it() -> None:
+    ap = SoftAP().up()
+    _, closes = station_service(ap)
+    ap.net.poll(ap.now)
+    ap.arp(HOST_IP, op=2)
+    closes[0]()
+    device_tcp(ap, 101, ISN + 2, ACK)  # the device acknowledges the FIN, and sends none of its own
+    key = ("192.168.4.1", 40000, "192.168.4.2", 7000)
+    flow = ap.net.ip._flows[key]
+    assert flow.fin_sent and flow.snd_una == flow.snd_nxt
+    ap.net._station_link(ap.now, False)
+    # Waiting for the device's FIN with no timer, it would take the tuple for good.
+    assert key not in ap.net.ip._flows

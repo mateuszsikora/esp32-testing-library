@@ -613,6 +613,24 @@ def test_a_malformed_datagram_on_the_path_survives_a_reset() -> None:
     bad = bytearray(34)
     bad[0], bad[9] = 0x4F, 6  # a 60-byte header in 34 bytes, TCP
     device.net.receive(device.now, device._wrap(bytes(bad)))
+    # With its length impossible, it keeps the guard word esp32sim's frames carry.
+    [(_, queued)] = device.net._up.queue
+    assert queued.startswith(bytes(bad))
     device.net.device_reset(device.now, "the device reset")
-    device.net.arrive(device.now + 200 * MS)  # the IP layer drops it, as before
-    assert not device.net.ip._flows
+    # Not a SYN that parses: it stays on the path, for the IP layer to drop, as before.
+    assert [datagram for _, datagram in device.net._up.queue] == [queued]
+    device.net.arrive(device.now + 200 * MS)
+    assert not device.net._up.queue and not device.net.ip._flows
+
+
+def test_a_malformed_syn_leaves_the_orphaned_connection_and_its_will() -> None:
+    device = Device("ppp").up()
+    service = Closing()
+    device.net.listen(7000, service)
+    device.send(40000, 7000, 100, 0, SYN)
+    device.send(40000, 7000, 101, ISN + 1, ACK)
+    device.net.device_reset(device.now, "the device reset")
+    [flow] = device.net.ip._flows.values()
+    # An option that does not parse: the SYN is refused before it could reset anything.
+    assert device.send(40000, 7000, 500, 0, SYN, options=bytes([2, 9, 0, 0])) == []
+    assert list(device.net.ip._flows.values()) == [flow] and flow.orphaned
