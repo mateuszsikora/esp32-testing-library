@@ -19,7 +19,8 @@ issue of its own, opened when an example needs an analog pin. Wall time under `-
 real device at the far end of a route (section 12), came with #28. #105 adds `power` and
 `chip_reset`, the board's supply and the chip's EN pin, on both sides, #107 the SD card's fault
 rules, `sd_fault`, `sd_clear` and `sd_op`, #131 `flash_dump` and `flash_dump_ack`, a read of the
-flash in a turn, and #34 `hci_tx` and `hci_rx`, the guest's Bluetooth HCI with `--bt`.
+flash in a turn, #34 `hci_tx` and `hci_rx`, the guest's Bluetooth HCI with `--bt`, and #245
+`uptime`, where each boot's `esp_timer` counts zero on the socket's clock (5.24).
 `console_rx` and `stats.console_rx_lost` are the console on the chip's USB-Serial/JTAG controller,
 with `--console-port usb` (5.23).
 
@@ -57,7 +58,8 @@ does not restart at a guest reset, a wake from deep sleep, a pulse of EN (`chip_
 board's supply coming back (`power`), and it runs on while the supply is off: the runner keeps the
 same machine, and neither `reboot()` nor its power-on reset (5.17) touches the bus cycle counter.
 What the firmware counts from its own boot, `esp_timer_get_time()` for one, starts again at every
-reset; the times on the socket do not.
+reset; the times on the socket do not. `uptime` (5.24) says where on the socket's clock the counter
+`esp_timer_get_time()` reads counted zero in each boot.
 
 The runner counts time in bus cycles, `bus.cycles()`. They run at a fixed reference independent
 of the momentary CPU clock (`tick` scales through `cpu_scale_half`, `esp32/src/bus.rs:642`), so
@@ -155,6 +157,7 @@ seen exactly the events up to the block point, however the emulator schedules it
 | runner → harness | `sd_card_ack` *ext* | `t`, `image`, `error` | #106 |
 | runner → harness | `sd_op` *ext* | `t`, `fault`, `op`, `blocks`, `action`, `delay`, `written` | #107 |
 | runner → harness | `flash_dump_ack` *ext* | `t`, `error` | #131 |
+| runner → harness | `uptime` *ext* | `t`, `earliest`, `latest` | #245 |
 | runner → harness | `stats` *ext* | `t`, `end`, `resets`, `turns`, `uart`, `unrouted_rx_bytes`, `inputs_on_output`, `inputs_not_applied`, `rx_bytes_not_paced`; `wifi` with `--wifi` or `--wifi-sta`; under `--realtime` also `rt_resyncs` (M5); with `--console-port usb` also `console_rx_lost` | M1 |
 | harness → runner | `uart_rx` | `t`, `pin`, `baud`, `data` | M1 |
 | harness → runner | `gpio_in` | `t`, `levels` | M3 |
@@ -200,6 +203,10 @@ the peer gave. The version originally stayed 1
 `flash_dump` and `flash_dump_ack` (5.21) originally left the version at 1: the runner sends the answer only
 to a peer that asked, and without `--flash-out` the message is a protocol error.
 
+`uptime` (5.24) left the version at 2. The runner sends it on every run, and a harness built before
+it refuses it as `no message type 'uptime' from the runner`; the harness and the runner come from
+one checkout.
+
 The Bluetooth messages (`hci_tx`, `hci_rx`, 5.22) pass only on a run started with `--bt`, and the
 version originally stayed 1, as with the Wi-Fi ones: the runner sends `hci_tx` only with `--bt`, which only a
 harness that speaks both gives it, and without `--bt` `hci_rx` is a protocol error
@@ -215,7 +222,7 @@ it ignores (section 2). The console's output keeps its message, `console` (5.7)
 **Events** are the runner messages that carry `seq`: `uart_tx`, `uart_cfg`, `gpio_out`, `reset`,
 `eth_tx`, `hci_tx` and `wifi_link`. They are what a peer may answer, so they set the block point (rule 1). `seq`
 is one counter over all seven, starting at 1 and growing by 1. `sync`, `console`, `warn`,
-`sd_card_ack`, `sd_op`, `flash_dump_ack` and `stats` carry no `seq` and ask for nothing.
+`sd_card_ack`, `sd_op`, `flash_dump_ack`, `uptime` and `stats` carry no `seq` and ask for nothing.
 
 ### 5.1 `hello`
 
@@ -1045,6 +1052,81 @@ take the bytes: the runner drops them and counts them in `stats.console_rx_lost`
 
 `BoardLink` sends each output of the one interface that is the USB-Serial/JTAG console
 (`Interface.usb_console`) as `console_rx`, cut into messages of at most 512 KiB, as `uart_rx`.
+
+### 5.24 `uptime` *ext* (#245)
+
+```json
+{"type": "uptime", "t": 49000000, "earliest": 48000000, "latest": 49000000}
+{"type": "uptime", "t": 1000000, "earliest": 0, "latest": 0}
+{"type": "uptime", "t": 3000000, "earliest": null, "latest": null}
+```
+
+Where the boot's uptime counter, the hardware counter ESP-IDF's `esp_timer_get_time()` reads,
+counted zero, on the socket's clock: no sooner than `earliest` and no later than `latest`, in
+nanoseconds. Unlike the other times (section 3), `earliest` is rounded down and `latest` up, so that
+the two hold the zero. Both are `null`, never one alone, when the runner no longer knows where the
+counter counts from: the zero it sent for the boot no longer holds, and it has no other to send. A
+stamp of `u` the firmware took from the counter was taken between `earliest + u` and `latest + u`.
+The message belongs to the boot that runs when it comes: after the run's `n`-th `reset` (5.5), boot
+`n + 1`. `t` is the slice boundary the runner saw it at. It is not an event: it carries no `seq`,
+sets no block point and nothing answers it. The first example is the classic chip's, the second the
+ESP32-S3's at power-on, the third a counter that stopped.
+
+The runner reads the counter's registers at every slice boundary while the board's supply is on, at
+most one emulated millisecond apart while the chip runs (section 6.1), as it reads the UART routes
+(5.3). It reads no guest memory, and what it reads changes nothing the guest sees.
+
+| Chip | The counter | What a boundary tells | `latest − earliest` |
+|---|---|---|---|
+| Classic ESP32 | TIMG0's LACT, ESP-IDF's only `esp_timer` implementation there (`CONFIG_ESP_TIMER_IMPL_TG0_LAC`, `esp_timer_impl_lac.c`) | whether it counts, and the count it was loaded with: esp32sim keeps the count itself private | the time between two boundaries, at most 1 ms; for a load while it counts, between three, at most 2 ms |
+| ESP32-S3, -C3, -C6 | SYSTIMER unit 0, `SYSTIMER_COUNTER_ESPTIMER` (`esp_timer_impl_systimer.c`) | the count, `unit[0]` of esp32sim's `Systimer` | under one 16 MHz tick: 14 bus cycles on the S3, 9 on the C3 and the C6, 60 ns at most with the rounding |
+
+**The classic chip.** The LACT counts while LACT_EN, bit 31 of LACTCONFIG, is set, from what
+LACTLOAD last loaded, at the APB clock divided by LACT_DIVIDER (ESP-IDF v5.5
+`components/soc/esp32/register/soc/timer_group_reg.h`). The APB clock is 80 MHz with the CPU on the
+PLL and 40 MHz otherwise, as esp32sim counts it (`Peripherals::apb_divider`, `esp32/src/periph.rs`).
+ESP-IDF's `esp_timer_impl_early_init` loads 0 and only then sets LACT_EN, at the start of the
+application, in its CORE init stage (`esp_timer_init_nonos`), after the ROM, the second-stage
+bootloader and the application's own start-up. The first boundary of the boot that sees it count
+sends `uptime`: `latest` is that boundary, `earliest` the boundary before it, which saw it stopped,
+or the reset that started the boot, both less the time the load it counts from takes at the divider
+and the APB clock, 0 for ESP-IDF. For `firmware/persistence` the first boot's counter starts between
+48 and 49 ms after power-on (`tests/test_power.py`).
+
+A load while it counts, as `esp_timer_impl_set` and `esp_timer_impl_advance` write after a light
+sleep without touching LACT_EN, is seen as a new LACTLOADLO and LACTLOADHI. The boundary that sees
+them may come between the guest's write of them and its write of LACTLOAD, which ESP-IDF makes in
+the same critical section, so the runner places the load one boundary later: between the boundary
+before the one that saw it and the one after, less the time the new load takes. A change of
+LACT_DIVIDER or of the APB clock with the same load is no new load: it changes the rate, which
+ESP-IDF keeps at 2 counts a microsecond, not the zero.
+
+**The ESP32-S3, -C3 and -C6.** The runner reads unit 0's count while TIMER_UNIT0_WORK_EN, bit 30 of
+CONF, is set (`esp-periph/src/systimer.rs`): the counter read zero that many ticks before the
+boundary, less the part of a tick it has counted since its last, which esp32sim's clock tree keeps
+to itself. esp32sim restarts the SYSTIMER at every reset, as `reboot()` replaces the peripherals,
+and does not model the application's own reset of it (`systimer_ll_reset_register` in
+`esp_timer_impl_early_init`, ESP-IDF v5.x), so on these chips the counter counts from the reset that
+started the boot: `earliest ≤` the `reset`'s `t` `≤ latest`, from the boot's first boundary on. On
+the chip itself the application's reset puts the zero at its early init, as on the classic chip.
+
+**When.** The runner sends `uptime` at the first boundary of a boot that sees the counter count, and
+again when the boot's counter starts anew or is loaded anew: on the classic chip, when a boundary
+sees it counting after one saw it stopped, and a boundary after one saw a new load; on the others,
+when a boundary reads a zero outside the one it sent. It sends `null` for both when a boundary finds
+that the zero it sent no longer holds and has none to put in its place: the counter stopped, or it
+counts from a zero that may lie before power-on, which has no time on the socket, as a load of more
+than the run has lasted gives. It sends `null` once, until it has a zero again. A firmware that
+never starts the counter gets no `uptime`: on the classic chip, one that does not use ESP-IDF's
+`esp_timer`. While the board's supply is off the chip has no counter; the next boot's `reset` starts
+again (5.17).
+
+On the classic chip the application can stamp with the counter before the boundary that reports it.
+At a start, what it sent in that slice comes before the `uptime` on the socket, by at most the
+slice, while the boot has no zero yet. After a load while the counter counts, what it sent in the
+next two slices comes before the new `uptime`, and until then the boot's zero is the one sent before
+the load: for ESP-IDF's `esp_timer_impl_advance` after a light sleep, which makes up for the time
+asleep, that is off by what the making up got wrong.
 
 ## 6. Rules
 

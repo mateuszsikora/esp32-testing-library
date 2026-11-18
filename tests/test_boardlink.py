@@ -39,6 +39,7 @@ from esp32tl.link.protocol import (
     UartRx,
     UartStats,
     UartTx,
+    Uptime,
     Wait,
     Warn,
     WifiAp,
@@ -1031,6 +1032,17 @@ def test_every_reset_is_kept_in_order_and_given_to_on_reset() -> None:
     link.receive(Sync(0))
     feed(link, Reset(1, 100, 12), Reset(2, 200, 1), Sync(200))
     assert link.resets == seen == [Reset(1, 100, 12), Reset(2, 200, 1)]
+
+
+def test_each_boot_s_uptime_zero_is_the_runner_s_last_word_on_the_boot_it_came_in() -> None:
+    link = started()
+    feed(link, Uptime(50, 0, 0), Uptime(60, 10, 10), Reset(1, 100, 12), Sync(100))
+    feed(link, Reset(2, 200, 1), Uptime(300, 250, 300), Sync(300))
+    # boot 2 never said where its counter started: the runner had not seen it count
+    assert link.uptimes == {1: Uptime(60, 10, 10), 3: Uptime(300, 250, 300)}
+    # the runner no longer knows where boot 3's counter counted zero
+    feed(link, Uptime(400, None, None), Sync(400))
+    assert link.uptimes[3] == Uptime(400, None, None)
 
 
 class Controller(Interface):

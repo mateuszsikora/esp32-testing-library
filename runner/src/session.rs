@@ -42,7 +42,9 @@
 //! against a scripted guest and a fake peer.
 use crate::cli;
 use crate::hci;
-use crate::protocol::{self, Incoming, Stats, Warn, WarnKind, WifiStats, char_ns, cycles, ns};
+use crate::protocol::{
+    self, Incoming, Stats, Warn, WarnKind, WifiStats, char_ns, cycles, ns, ns_up,
+};
 use crate::sd_card;
 use crate::socket_board::{Recorded, Shared};
 use crate::transport::{Link, LinkError};
@@ -165,6 +167,67 @@ pub trait Guest {
     /// in long steps, and stops short of the RTC timer's alarm, so that esp32sim's own rounds wake
     /// the chip at its tick. Does nothing otherwise.
     fn sleep_until(&mut self, _cycle: u64) {}
+    // The uptime counter: the default is a chip without one the runner can read.
+
+    /// The counter `esp_timer_get_time()` reads, as the chip has it now (protocol 5.24).
+    fn uptime(&mut self) -> Uptime {
+        Uptime::Stopped
+    }
+}
+
+/// What the chip's uptime counter, the one ESP-IDF's `esp_timer` reads, is doing at a slice
+/// boundary (protocol 5.24).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Uptime {
+    /// Not counting.
+    Stopped,
+    /// Counting, from `load`, the count it was last loaded with, at `tick` bus cycles a count:
+    /// what the runner reads tells it that the counter runs, not where it is now.
+    Counting { load: u64, tick: u64 },
+    /// Counting, and it read zero no sooner than `earliest` and no later than `latest`, bus
+    /// cycles: a count read between two of its ticks says where it is to within one.
+    Zero { earliest: u64, latest: u64 },
+    /// Counting, and it read zero before power-on, which no time on the socket names: it was
+    /// loaded with more than the run has lasted.
+    BeforePowerOn,
+}
+
+/// Where the uptime counter of the boot that is running started, as far as the slice boundaries
+/// have shown it (protocol 5.24).
+#[derive(Clone, Copy, Debug)]
+struct UptimeWatch {
+    /// The last boundary, the reset's cycle at first: a start or a load the next boundary sees
+    /// came after it.
+    since: u64,
+    /// The load the last boundary read the counter counting from, if it read it counting.
+    load: Option<u64>,
+    /// A load seen while the counter counted, and the boundary before the one that saw it: it
+    /// is placed at the next boundary, once the guest has surely written LACTLOAD.
+    reload: Option<(u64, u64)>,
+    /// What the boot's last `uptime` said.
+    sent: Sent,
+}
+
+/// What the boot's last `uptime` said.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Sent {
+    /// Nothing: no `uptime` in this boot yet.
+    Nothing,
+    /// Its counter read zero between these two cycles.
+    Zero(u64, u64),
+    /// Where its counter reads zero is no longer known: `earliest` and `latest` were `null`.
+    Unknown,
+}
+
+impl UptimeWatch {
+    fn new(cycle: u64) -> Self {
+        Self {
+            since: cycle,
+            load: None,
+            reload: None,
+            sent: Sent::Nothing,
+        }
+    }
 }
 
 pub struct Options<'a> {
@@ -261,6 +324,12 @@ enum Item {
         image: Option<String>,
         error: Option<String>,
     },
+    /// Where the uptime counter counted zero, seen at the slice boundary at `cycle`: no sooner
+    /// than the first cycle, no later than the second; `None` when that is no longer known.
+    Uptime {
+        cycle: u64,
+        zero: Option<(u64, u64)>,
+    },
 }
 
 impl Item {
@@ -274,7 +343,8 @@ impl Item {
             | Item::Eth { cycle, .. }
             | Item::Hci { cycle, .. }
             | Item::UsbConsole { cycle, .. }
-            | Item::SdCard { cycle, .. } => *cycle,
+            | Item::SdCard { cycle, .. }
+            | Item::Uptime { cycle, .. } => *cycle,
         }
     }
 }
@@ -381,6 +451,8 @@ pub struct Session<'a, G: Guest, L: Link> {
     station_state: Option<(bool, u64)>,
     /// The board's supply is off, as the peer last switched it (`power`).
     off: bool,
+    /// Where the uptime counter of this boot started (`uptime`).
+    uptime: UptimeWatch,
     /// Every `sd_fault` id the peer has given, queued rules' included: an id is used once.
     sd_ids: BTreeSet<u64>,
     /// Under `--realtime`, once pacing has started: this wall instant is this emulated time, in
@@ -417,6 +489,7 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
             eth: VecDeque::new(),
             station_state: None,
             off: false,
+            uptime: UptimeWatch::new(0),
             sd_ids: BTreeSet::new(),
             anchor: None,
             resyncs: 0,
@@ -543,6 +616,7 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
         self.collect();
         let mut routes = self.routes();
         self.pending.push_back(Item::Routes { cycle: now, routes });
+        self.watch_uptime(now);
         loop {
             loop {
                 self.process_pending(false)?;
@@ -722,6 +796,8 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
         );
         self.stats.resets += 1;
         self.pending.push_back(Item::Reset { cycle, cause });
+        // the reset stops the counter: the new boot's starts from it at the earliest
+        self.uptime = UptimeWatch::new(cycle);
         let routes = self.routes();
         self.pending.push_back(Item::Routes { cycle, routes });
         if self.watch != 0 {
@@ -775,6 +851,69 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
             let state = self.reset_gpio(cycle);
             self.pending.push_back(Item::Board(state));
         }
+    }
+
+    /// At the slice boundary at `now`, where the uptime counter of this boot counted zero, when
+    /// the boundary shows something new of it: `uptime` when the counter is first seen counting,
+    /// again when it starts anew, is loaded anew or reads a zero outside the one sent, and with
+    /// no zero when it stops or reads a zero before power-on after a zero was sent. While the
+    /// supply is off the chip has no counter.
+    fn watch_uptime(&mut self, now: u64) {
+        if self.off {
+            return;
+        }
+        let since = std::mem::replace(&mut self.uptime.since, now);
+        let read = self.guest.uptime();
+        let last_load = match read {
+            Uptime::Counting { load, .. } => self.uptime.load.replace(load),
+            _ => self.uptime.load.take(),
+        };
+        if !matches!(read, Uptime::Counting { .. }) {
+            self.uptime.reload = None;
+        }
+        let zero = match read {
+            Uptime::Counting { load, tick } => {
+                let from = match (last_load, self.uptime.reload) {
+                    // started after the last boundary, which read it stopped: LACT_EN comes
+                    // after the load, so the load the boundary reads is the one it counts from
+                    (None, _) => since,
+                    // loaded while it counted, after the boundary before the last: the last
+                    // may have read LACTLOADLO and LACTLOADHI before LACTLOAD took them, so
+                    // the load is placed now, when it has surely been taken
+                    (Some(last), Some((from, pending))) if last == load && pending == load => {
+                        self.uptime.reload = None;
+                        from
+                    }
+                    (Some(last), _) if last == load => return,
+                    (Some(_), _) => {
+                        self.uptime.reload = Some((since, load));
+                        return;
+                    }
+                };
+                // a count loaded with more than the run had lasted at `from` may count from
+                // before power-on, which has no time
+                let counted = load.saturating_mul(tick);
+                from.checked_sub(counted)
+                    .map(|earliest| (earliest, now - counted))
+            }
+            Uptime::Zero { earliest, latest } => {
+                // the same zero, read at another part of a tick: what was sent holds
+                if let Sent::Zero(e, l) = self.uptime.sent
+                    && earliest <= l
+                    && e <= latest
+                {
+                    return;
+                }
+                Some((earliest, latest))
+            }
+            Uptime::Stopped | Uptime::BeforePowerOn => None,
+        };
+        // no zero: one sent before no longer holds; nothing sent, or `null` sent, says so already
+        if zero.is_none() && !matches!(self.uptime.sent, Sent::Zero(..)) {
+            return;
+        }
+        self.uptime.sent = zero.map_or(Sent::Unknown, |(e, l)| Sent::Zero(e, l));
+        self.pending.push_back(Item::Uptime { cycle: now, zero });
     }
 
     fn watched(&self, pin: u8) -> bool {
@@ -923,6 +1062,13 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                     self.close_open()?;
                     let line = protocol::sd_card_ack(t, image.as_deref(), error.as_deref());
                     self.send(&line)?;
+                }
+                Item::Uptime { zero, .. } => {
+                    // not an event: nothing answers it
+                    self.close_open()?;
+                    // rounded outwards, so that the two still hold the zero
+                    let zero = zero.map(|(earliest, latest)| (ns(earliest), ns_up(latest)));
+                    self.send(&protocol::uptime(t, zero))?;
                 }
             }
         }

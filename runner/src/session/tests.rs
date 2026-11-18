@@ -70,6 +70,8 @@ enum Act {
     HciPoll,
     /// The guest writes these bytes to its USB-Serial/JTAG controller, which flushes them.
     UsbTx(Vec<u8>),
+    /// The uptime counter is now as given; a reset stops it.
+    Uptime(Uptime),
 }
 
 /// A guest that does what its script says at the cycles it says, and records UART bytes the way
@@ -118,6 +120,8 @@ struct FakeGuest {
     /// runner has not taken yet, and what the host gave it, with the cycle.
     usb: Option<Vec<u8>>,
     usb_in: Vec<(u64, Vec<u8>)>,
+    /// The uptime counter, as `Act::Uptime` last set it.
+    uptime: Uptime,
 }
 
 /// Why `FakeGuest` lost a received byte.
@@ -157,6 +161,7 @@ impl FakeGuest {
             skips: Vec::new(),
             usb: None,
             usb_in: Vec::new(),
+            uptime: Uptime::Stopped,
         }
     }
 
@@ -267,6 +272,7 @@ impl Guest for FakeGuest {
                     .as_mut()
                     .expect("a guest with --console-port usb")
                     .extend(data),
+                Act::Uptime(uptime) => self.uptime = uptime,
             }
         }
         self.now = end;
@@ -282,6 +288,7 @@ impl Guest for FakeGuest {
         self.routes = std::array::from_fn(|port| UartRoute::new(port, 0, None, None));
         self.fifo = Default::default();
         self.drive = (0, 0);
+        self.uptime = Uptime::Stopped;
         cause
     }
     fn power_on_reset(&mut self, _rom: &[u8]) -> u32 {
@@ -292,6 +299,7 @@ impl Guest for FakeGuest {
         self.routes = std::array::from_fn(|port| UartRoute::new(port, 0, None, None));
         self.fifo = Default::default();
         self.drive = (0, 0);
+        self.uptime = Uptime::Stopped;
         1
     }
     fn idle_until(&mut self, cycle: u64) {
@@ -344,6 +352,9 @@ impl Guest for FakeGuest {
     }
     fn flash(&self) -> Cow<'_, [u8]> {
         Cow::Borrowed(&self.flash)
+    }
+    fn uptime(&mut self) -> Uptime {
+        self.uptime
     }
     fn sleeps_through(&self) -> bool {
         self.steppable
@@ -1091,6 +1102,125 @@ fn a_reset_is_forwarded_with_its_cause_and_the_reset_routes() {
     assert_eq!(after_reset.get("rx_pin"), Some(&Json::Null));
     assert_eq!(r.stats.resets, 1);
     assert_eq!(num(r.peer.stats(), "resets"), 1);
+}
+
+/// The `uptime` messages of a run, as `t` and `(earliest, latest)`, `None` for `null`.
+fn uptimes(peer: &FakePeer) -> Vec<(u64, Option<(u64, u64)>)> {
+    peer.of("uptime")
+        .iter()
+        .map(|m| {
+            let zero = match (m.get("earliest"), m.get("latest")) {
+                (Some(Json::Null), Some(Json::Null)) => None,
+                _ => Some((num(m, "earliest"), num(m, "latest"))),
+            };
+            (num(m, "t"), zero)
+        })
+        .collect()
+}
+
+/// The classic chip's LACT counting from `load` at ESP-IDF's rate: 2 counts a microsecond, 120
+/// bus cycles a count at 240 MHz.
+fn lact(load: u64) -> Act {
+    Act::Uptime(Uptime::Counting { load, tick: 120 })
+}
+
+#[test]
+fn a_counter_seen_counting_is_placed_between_the_boundary_before_and_the_one_that_saw_it() {
+    // the classic chip's LACT: the runner sees that it counts, from what it was loaded with
+    let load = cycles(MS / 4) / 120;
+    let loaded = load * 120;
+    let at = |ms: u64| cycles(ms * MS);
+    let guest = FakeGuest::new(vec![
+        (cycles(2 * MS + MS / 2), lact(0)),
+        (at(4) + 5, Act::Reset(12)),
+        (cycles(6 * MS + MS / 3), lact(load)),
+        // stopped and started again in one boot: no zero, then a new start
+        (cycles(7 * MS + MS / 2), Act::Uptime(Uptime::Stopped)),
+        (cycles(8 * MS + MS / 2), lact(0)),
+        // loaded anew while it counts, as `esp_timer_impl_set` does after a light sleep: placed
+        // a boundary later, once LACTLOAD has surely taken it
+        (cycles(10 * MS + MS / 2), lact(load)),
+        // another rate and the same load: the APB clock or the divider changed, no new zero
+        (
+            cycles(13 * MS + MS / 2),
+            Act::Uptime(Uptime::Counting { load, tick: 240 }),
+        ),
+    ]);
+    let r = run(0.015, guest, FakePeer::new(&[], idle(None, None)));
+    assert!(matches!(r.end, End::MaxSeconds), "{:?}", r.end);
+    assert_eq!(
+        uptimes(&r.peer),
+        [
+            (ns(at(3)), Some((ns(at(2)), ns(at(3))))),
+            // from the reset at the earliest, which stopped it, less what the load counts
+            (ns(at(7)), Some((ns(at(6) - loaded), ns(at(7) - loaded)))),
+            (ns(at(8)), None),
+            (ns(at(9)), Some((ns(at(8)), ns(at(9))))),
+            (ns(at(12)), Some((ns(at(10) - loaded), ns(at(12) - loaded)))),
+        ]
+    );
+    // not an event: the stream's seq counts the others only
+    assert!(r.peer.of("uptime").iter().all(|m| m.get("seq").is_none()));
+}
+
+#[test]
+fn a_load_that_counts_from_before_power_on_has_no_zero_on_the_classic_chip() {
+    // loaded with 10 ms of counts 2.5 ms into the run: its zero is before power-on
+    let past_the_run = cycles(10 * MS) / 120;
+    let guest = FakeGuest::new(vec![
+        (cycles(MS + MS / 2), lact(0)),
+        (cycles(2 * MS + MS / 2), lact(past_the_run)),
+        // started from it after a stop: no zero, and nothing to say twice
+        (cycles(4 * MS + MS / 2), Act::Uptime(Uptime::Stopped)),
+        (cycles(5 * MS + MS / 2), lact(past_the_run)),
+    ]);
+    let r = run(0.007, guest, FakePeer::new(&[], idle(None, None)));
+    assert!(matches!(r.end, End::MaxSeconds), "{:?}", r.end);
+    let at = |ms: u64| ns(cycles(ms * MS));
+    assert_eq!(
+        uptimes(&r.peer),
+        [(at(2), Some((at(1), at(2)))), (at(4), None)]
+    );
+}
+
+#[test]
+fn a_counter_read_at_its_zero_is_sent_again_only_when_its_zero_moves() {
+    // a SYSTIMER: the runner reads where it counted zero, to within one of its ticks
+    let zero = |earliest: u64, latest: u64| Uptime::Zero { earliest, latest };
+    let first = (cycles(MS), cycles(MS) + 14);
+    let reloaded = (cycles(3 * MS) + 11, cycles(3 * MS) + 25);
+    let guest = FakeGuest::new(vec![
+        (cycles(MS) + 7, Act::Uptime(zero(first.0, first.1))),
+        // the same zero, read at another part of a tick
+        (
+            cycles(2 * MS + MS / 2),
+            Act::Uptime(zero(first.0 + 9, first.1 + 9)),
+        ),
+        // loaded anew
+        (
+            cycles(3 * MS + MS / 2),
+            Act::Uptime(zero(reloaded.0, reloaded.1)),
+        ),
+        // loaded past what the run has lasted: the zero sent no longer holds, once
+        (cycles(5 * MS + MS / 2), Act::Uptime(Uptime::BeforePowerOn)),
+        (cycles(6 * MS + MS / 2), Act::Uptime(Uptime::Stopped)),
+    ]);
+    let r = run(0.008, guest, FakePeer::new(&[], idle(None, None)));
+    assert!(matches!(r.end, End::MaxSeconds), "{:?}", r.end);
+    assert_eq!(
+        uptimes(&r.peer),
+        [
+            // `earliest` rounded down, `latest` up
+            (ns(cycles(2 * MS)), Some((ns(first.0), ns_up(first.1)))),
+            (
+                ns(cycles(4 * MS)),
+                Some((ns(reloaded.0), ns_up(reloaded.1)))
+            ),
+            (ns(cycles(6 * MS)), None),
+        ]
+    );
+    // 25 cycles past a whole millisecond is no whole nanosecond
+    assert_eq!(ns_up(reloaded.1), ns(reloaded.1) + 1);
 }
 
 #[test]

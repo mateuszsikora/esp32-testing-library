@@ -1152,3 +1152,33 @@ written in one slice would lose its start; no validation firmware comes near it.
 **Rejected:** a hook in esp32sim for each flushed packet, with its cycle, which would need an
 upstream change that no test needs yet; and draining `UsbSerialJtag::tx_out` from the runner,
 which `run` empties first.
+
+## The runner reads the esp_timer counter's registers at slice boundaries
+
+Status: decided (#245)
+
+Where a boot's `esp_timer` counts zero is what a test needs to put a stamp the firmware took with
+`esp_timer_get_time()` on the board's clock, and `reset`'s `t` is not it: between the two lie the
+ROM, the bootloader and the application's start-up. The runner reads the counter's registers at
+every slice boundary and sends `uptime` with the earliest and the latest the zero can have been
+([protocol 5.24](../protocol.md#524-uptime-ext-245)). It reads no guest memory, and nothing it reads
+changes what the guest sees. On the ESP32-S3, -C3 and -C6 it reads SYSTIMER unit 0's count, a
+public field of esp32sim's `Systimer`, and knows the zero to within a tick. On the classic ESP32
+esp32sim keeps the LACT's count private (`ClassicTimer::lact`, `esp32/src/timers.rs`): the runner
+sees that it counts and from what load, so the zero is known to within the slice in which it
+started, at most a millisecond. A load while it counts is placed a boundary later, within two: the
+boundary that sees the new LACTLOADLO and LACTLOADHI may come before the guest's LACTLOAD, a few
+instructions later in the same critical section (`esp_timer_impl_set`).
+
+**Rejected:** an esp32sim `Observer` with `Wants::MMIO`, to see the write that starts the LACT at its
+instruction: any observer turns off esp32sim's round batching and virtual quanta for the whole run
+(`esp-soc/src/machine.rs`, `run_unmodeled`), and observers cannot be removed. Writing LACTUPDATE
+from the runner to latch the count: the latch is the guest's, and an `esp_timer_get_time()` in the
+middle of its own update would read the runner's latch. Shorter slices until the counter starts:
+tens of thousands of boundaries per boot, for a bound that a millisecond already meets. Estimating
+the zero from what the firmware sends, the earliest arrival less the uptime it stamps: it is late
+by the stamp's delay, which is what this was to remove.
+
+**Postponed:** the classic chip's zero to within a tick, which needs esp32sim to expose the LACT's
+count, a read-only accessor on `ClassicTimer`. Asked of upstream only once a test needs better than
+a millisecond.

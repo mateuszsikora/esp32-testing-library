@@ -1705,6 +1705,25 @@ that references to its number keep their meaning.
      `the next boot (POWERON_RESET)`.
      `tests/test_power.py::test_next_boot_is_the_boot_after_it_of_its_cause_through_a_reset_and_a_power_cycle`,
      `tests/test_power.py::test_next_boot_names_an_unnamed_cause_and_refuses_one_that_is_not_a_number`
+- **257.** A boot's `uptime_zero` brackets where its `esp_timer` counted zero on the board's clock:
+     a stamp of `uptime` the firmware printed lies between `earliest + uptime` and
+     `latest + uptime`. On the classic ESP32 the zero comes after `boot.at` and `latest` is at most
+     1 ms after `earliest`, 2 ms for a load while the counter counts, which the runner places a
+     boundary later, once LACTLOAD has surely taken it; on the ESP32-S3, -C3 and -C6
+     `earliest ≤ boot.at ≤ latest`, within one SYSTIMER tick. The runner sends `uptime` once for
+     each start or new load of the counter, between the slice boundaries around it, with
+     `earliest` rounded down and `latest` up, and not for a new rate with the same load; once a
+     zero it sent no longer holds and it has none in its place (the counter stopped, or it counts
+     from a zero that may lie before power-on), it sends `null` for both, once, and `uptime_zero`
+     is `None`. Never as an event.
+     `tests/test_power.py::test_each_boot_s_uptime_zero_puts_the_firmware_s_uptime_on_the_board_s_clock`,
+     `tests/test_chips.py::TestOnESP32S3::test_hello_world_boots_and_restarts_through_the_rom` (and the C3's and C6's),
+     `runner/src/session/tests.rs::a_counter_seen_counting_is_placed_between_the_boundary_before_and_the_one_that_saw_it`,
+     `runner/src/session/tests.rs::a_counter_read_at_its_zero_is_sent_again_only_when_its_zero_moves`,
+     `runner/src/session/tests.rs::a_load_that_counts_from_before_power_on_has_no_zero_on_the_classic_chip`,
+     `runner/src/chip/tests.rs::the_classic_lact_reads_as_counting_from_its_load_once_enabled_and_a_reset_stops_it`,
+     `runner/src/chip/tests.rs::the_s3_systimer_reads_zero_at_its_reset_and_where_it_is_loaded`,
+     `tests/test_boardlink.py::test_each_boot_s_uptime_zero_is_the_runner_s_last_word_on_the_boot_it_came_in`
 
 ## Reading the flash
 

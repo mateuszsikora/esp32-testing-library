@@ -663,20 +663,22 @@ pulse, unknown/released outputs, starting/end boundaries, input filtering and in
 
 ## Shared board and FAT image API
 
-`esp32tl.interfaces.board.Board` is the abstract base of `Esp32Sim` and `Serial`, re-exported
-from `esp32tl` and, for existing imports, `esp32tl.pytest_plugin`. It declares the common clock,
-waiting, NVS, reporting and lifecycle API: `power_on`, `power_off`, `reset`, `powered`, `started`
-and `boots` are abstract, as are the waits, `wait`, `wait_until`, `wait_for_wake` and
-`wait_on_clock`, and `boot` is `boots[-1]`. `Boot(number, at, cause)` and its `reason`, from
+`esp32tl.interfaces.board.Board` is the abstract base of `Esp32Sim` and `Serial`, re-exported from
+`esp32tl` and, for existing imports, `esp32tl.pytest_plugin`. It declares the common clock, waiting,
+NVS, reporting and lifecycle API: `power_on`, `power_off`, `reset`, `powered`, `started` and `boots`
+are abstract, as are the waits, `wait`, `wait_until`, `wait_for_wake` and `wait_on_clock`, and
+`boot` is `boots[-1]`. `Boot(number, at, cause, uptime_zero=None)` and its `reason`, from
 `reset_reason(cause)` over `RESET_REASONS`, the classic chip's ROM names, are in the same module,
-with `POWERON_RESET = 1` and `DEEPSLEEP_RESET = 5`. `next_boot(cause=None)` is concrete, on
-`boots` alone: it checks `cause` (an `int`, not a `bool`, or `None`), takes `len(self.boots)` as
-its boundary, and returns a `Condition` whose `find` gives the first of `boots[start:]` with that
-cause, or any, and `None` before; its description is `the next boot`, or
-`the next boot ({reset_reason(cause)})`. A backend whose `boots` raises or skips, before
-`power_on` on esp32sim and always on serial, does so at the `next_boot()` call. Interface
-properties reuse each backend's existing UART/line/slot objects; `console` is a `cached_property`
-wrapping that backend's console buffers.
+with `POWERON_RESET = 1` and `DEEPSLEEP_RESET = 5`, and so is `UptimeZero(earliest, latest)`, two
+`Duration`s. `uptime_zero` is a `field(compare=False)`, so that a boot read before its zero came and
+one read after are equal, and `next_boot()` keeps returning the same boot. `next_boot(cause=None)`
+is concrete, on `boots` alone: it checks `cause` (an `int`, not a `bool`, or `None`), takes
+`len(self.boots)` as its boundary, and returns a `Condition` whose `find` gives the first of
+`boots[start:]` with that cause, or any, and `None` before; its description is `the next boot`, or
+`the next boot ({reset_reason(cause)})`. A backend whose `boots` raises or skips, before `power_on`
+on esp32sim and always on serial, does so at the `next_boot()` call. Interface properties reuse each
+backend's existing UART/line/slot objects; `console` is a `cached_property` wrapping that backend's
+console buffers.
 Fixture functions return the properties, preserving object identity and the console cursor.
 The `broker` fixture delegates to `modem.network().broker`, which selects a model source.
 `Board` has no broker property; tests selecting the service through the board explicitly call

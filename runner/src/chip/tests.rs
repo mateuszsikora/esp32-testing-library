@@ -179,3 +179,90 @@ macro_rules! receive_test {
 receive_test!(an_s3_uart_takes_a_byte_into_its_fifo, ::esp32s3::Machine);
 receive_test!(a_c3_uart_takes_a_byte_into_its_fifo, ::esp32c3::Machine);
 receive_test!(a_c6_uart_takes_a_byte_into_its_fifo, ::esp32c6::Machine);
+
+/// TIMG0's LACT on the classic chip's bus (`DR_REG_TIMERGROUP0_BASE`).
+const TIMG0: u32 = 0x3ff5_f000;
+
+#[test]
+fn the_classic_lact_reads_as_counting_from_its_load_once_enabled_and_a_reset_stops_it() {
+    use crate::session::Uptime;
+    let mut m = <::esp32::Machine as Target>::new(4 << 20);
+    assert_eq!(Guest::uptime(&mut m), Uptime::Stopped, "a new chip's");
+    // what `esp_timer_impl_early_init` writes, with a load of 5 instead of 0
+    m.bus.write32(TIMG0 + esp32::lact::LOAD_LO, 5).unwrap();
+    m.bus.write32(TIMG0 + 0x94, 1).unwrap();
+    m.bus
+        .write32(
+            TIMG0 + esp32::lact::CONFIG,
+            esp32::lact::EN | 1 << 30 | 20 << 13,
+        )
+        .unwrap();
+    // on the XTAL, before the ROM's switch to the PLL: APB at 40 MHz, 6 bus cycles a tick
+    assert_eq!(
+        Guest::uptime(&mut m),
+        Uptime::Counting {
+            load: 5,
+            tick: 20 * 6
+        }
+    );
+    Guest::chip_reset(&mut m);
+    assert_eq!(Guest::uptime(&mut m), Uptime::Stopped);
+}
+
+/// SYSTIMER unit 0 counts from every reset, and reads zero where it was loaded.
+macro_rules! systimer_uptime_test {
+    ($name:ident, $machine:ty, $base:expr, $tick:expr) => {
+        #[test]
+        fn $name() {
+            use crate::session::Uptime;
+            let mut m = <$machine as Target>::new(4 << 20);
+            // a count read between two ticks: the zero to within one
+            let at = |latest: u64| Uptime::Zero {
+                earliest: latest.saturating_sub($tick - 1),
+                latest,
+            };
+            assert_eq!(Guest::uptime(&mut m), at(0), "counting from power-on");
+            // a millisecond of the bus's time, a whole number of ticks
+            Bus::tick(&mut m.bus, (1000 * $tick) as u32);
+            let now = Guest::cycles(&m);
+            assert_eq!(now, 1000 * $tick);
+            assert_eq!(Guest::uptime(&mut m), at(0), "after 1000 ticks");
+            // UNIT0_LOAD_HI and _LO, then UNIT0_LOAD: 400 ticks now
+            m.bus.write32($base + 0x0c, 0).unwrap();
+            m.bus.write32($base + 0x10, 400).unwrap();
+            m.bus.write32($base + 0x5c, 1).unwrap();
+            assert_eq!(Guest::uptime(&mut m), at(now - 400 * $tick));
+            m.bus.write32($base + 0x10, 2000).unwrap();
+            m.bus.write32($base + 0x5c, 1).unwrap();
+            assert_eq!(
+                Guest::uptime(&mut m),
+                Uptime::BeforePowerOn,
+                "2000 ticks in 1000"
+            );
+            Guest::chip_reset(&mut m);
+            let reset = Guest::cycles(&m);
+            let Uptime::Zero { earliest, latest } = Guest::uptime(&mut m) else {
+                panic!("counting from the reset");
+            };
+            assert!(earliest <= reset && reset <= latest && latest - earliest < $tick);
+        }
+    };
+}
+systimer_uptime_test!(
+    the_s3_systimer_reads_zero_at_its_reset_and_where_it_is_loaded,
+    ::esp32s3::Machine,
+    0x6002_3000,
+    15
+);
+systimer_uptime_test!(
+    the_c3_systimer_reads_zero_at_its_reset_and_where_it_is_loaded,
+    ::esp32c3::Machine,
+    0x6002_3000,
+    10
+);
+systimer_uptime_test!(
+    the_c6_systimer_reads_zero_at_its_reset_and_where_it_is_loaded,
+    ::esp32c6::Machine,
+    0x6000_a000,
+    10
+);

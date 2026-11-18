@@ -117,6 +117,39 @@ pub(crate) mod rtc {
         }
     };
 }
+/// TIMG0's LACT, the counter ESP-IDF's `esp_timer` counts on with `CONFIG_ESP_TIMER_IMPL_TG0_LAC`,
+/// the classic chip's only implementation (`esp_timer_impl_lac.c`): its registers as offsets into
+/// the timer group (ESP-IDF v5.5 `components/soc/esp32/register/soc/timer_group_reg.h`), which
+/// esp32sim's `ClassicTimer` reads without side effects (`esp32/src/timers.rs`).
+pub(crate) mod lact {
+    /// LACTCONFIG: LACT_EN, bit 31, and LACT_DIVIDER, `[28:13]`.
+    pub const CONFIG: u32 = 0x70;
+    pub const EN: u32 = 1 << 31;
+    /// LACTLOADLO and LACTLOADHI: the count LACTLOAD loads.
+    pub const LOAD_LO: u32 = 0x8c;
+    pub const LOAD_HI: u32 = 0x90;
+    /// Bus cycles in one APB tick, the clock the LACT divides, as esp32sim has it
+    /// (`Peripherals::apb_divider`, `esp32/src/periph.rs`): 3 with the CPU on the PLL, for 80 MHz,
+    /// and 6 otherwise, for 40 MHz. RTC_CNTL_CLK_CONF is at 0x70 of its register RAM; SOC_CLK_SEL,
+    /// `[28:27]`, is 1 for the PLL.
+    pub fn apb_tick(rtc: &esp_periph::RegRam) -> u64 {
+        if (rtc.read(0x70) >> 27) & 3 == 1 {
+            3
+        } else {
+            6
+        }
+    }
+    /// The divider LACT_DIVIDER sets: 0 is 65536 and 1 is 2, as esp32sim counts it
+    /// (`Timer::divisor`, `esp-periph/src/timg.rs`).
+    pub fn divider(config: u32) -> u64 {
+        match (config >> 13) & 0xffff {
+            0 => 65536,
+            1 => 2,
+            d => u64::from(d),
+        }
+    }
+}
+
 /// How many RTC slow ticks before the alarm `sleep_until` stops: esp32sim's clock tree carries a
 /// phase between bus cycles and slow ticks that the runner cannot read, so the last ticks go
 /// through esp32sim's own idle rounds, which wake the chip at the tick its alarm is due.
@@ -295,6 +328,24 @@ impl Guest for esp32::Machine {
             let step = (stop - self.bus.cycles).min(SLEEP_STEP);
             let cpu = SocBus::cpu_cycles_for_bus(&self.bus, step);
             Bus::tick(&mut self.bus, cpu as u32);
+        }
+    }
+    fn uptime(&mut self) -> crate::session::Uptime {
+        use crate::session::Uptime;
+        use esp_periph::Device;
+        // esp32sim keeps the LACT's count to itself: what the registers say is whether it
+        // counts, and from what
+        let apb_tick = lact::apb_tick(&self.bus.periph.rtc.0.ram);
+        let timer = &mut self.bus.periph.timg[0];
+        let config = timer.read(lact::CONFIG);
+        if config & lact::EN == 0 {
+            return Uptime::Stopped;
+        }
+        let load =
+            u64::from(timer.read(lact::LOAD_HI)) << 32 | u64::from(timer.read(lact::LOAD_LO));
+        Uptime::Counting {
+            load,
+            tick: lact::divider(config) * apb_tick,
         }
     }
 }

@@ -43,6 +43,7 @@ from esp32tl.link.protocol import (
     UartRx,
     UartStats,
     UartTx,
+    Uptime,
     Wait,
     Warn,
     WifiAp,
@@ -81,6 +82,9 @@ EVERY_MESSAGE: list[tuple[Sender, Message]] = [
     ("runner", SdCardAck(2_600_000_000, None, "/tmp/b.img: the slot holds /tmp/card.img already")),
     ("runner", FlashDumpAck(2_700_000_000)),
     ("runner", FlashDumpAck(2_700_000_000, "/tmp/flash.bin: no space left on device")),
+    ("runner", Uptime(49_000_000, 48_000_000, 49_000_000)),
+    ("runner", Uptime(1_000_000, 0, 0)),
+    ("runner", Uptime(2_000_000, None, None)),
     ("runner", Warn(1_000_000_000, "frm_err", "baud", port=1, pin=5, baud=115200, nbytes=3)),
     ("runner", Warn(1_000_000_000, "a kind of a later version", "detail")),
     (
@@ -196,6 +200,16 @@ def test_a_runner_hello_of_another_version_decodes_on_its_version_alone() -> Non
         ("runner", b'{"type":"sync","t":-1}', "sync: t is -1, below 0"),
         ("runner", b'{"type":"sync","t":"0"}', "sync: t is not an integer: '0'"),
         ("runner", b'{"type":"reset","seq":0,"t":0,"cause":12}', "reset: seq is 0, below 1"),
+        (
+            "runner",
+            b'{"type":"uptime","t":0,"earliest":5,"latest":null}',
+            "uptime: earliest and latest are both null or neither",
+        ),
+        (
+            "runner",
+            b'{"type":"uptime","t":0,"earliest":5,"latest":4}',
+            "uptime: latest is 4, before earliest 5",
+        ),
         (
             "runner",
             b'{"type":"console","t":0,"data":"SGVsbG8"}',

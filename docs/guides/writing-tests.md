@@ -208,6 +208,18 @@ Every wait is on the board's clock, and every limit a test states is part of wha
 - Time a step from the instant the world changed, not from power-on: the GPS alarm clock works out
   when the receiver crosses the radius, waits until one fix before it, checks the old state, and
   only then starts the reaction deadline.
+- A time the device stamped itself, with `esp_timer_get_time()` or a clock made from it, counts from
+  its own boot's counter, not from the board's clock or from `board.boot.at`: between the reset and
+  the counter's zero lie the ROM, the bootloader and the application's start-up, some tens of
+  milliseconds on the classic ESP32. `board.boot.uptime_zero` is where the counter counted zero on
+  the board's clock, `earliest` to `latest`: a stamp of `uptime` was taken between
+  `zero.earliest + uptime` and `zero.latest + uptime`, so "taken after the stimulus at `t`" holds
+  when `zero.earliest + uptime > t`, and "before" when `zero.latest + uptime < t`. The two are at
+  most a millisecond apart on the classic ESP32, two after a load while the counter counts, and 60
+  ns on the ESP32-S3, -C3 and -C6
+  ([boots](../features/pytest-plugin-user.md#resets-and-power-cycles)). For a record of an earlier
+  boot, use `board.boots[n - 1].uptime_zero`, boot `n`'s. It is `None` while the zero is not known,
+  before the counter starts and after it stops.
 
 The board's time and the wall clock are apart. A test also has a wall-time timeout, 600 s unless
 pytest-timeout's options set another, which says only that something is stuck
