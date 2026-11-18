@@ -71,8 +71,8 @@ be one the run replays from or another tap writes. On serial `board.bluetooth` s
 - In the btsnoop file each packet is `sent` (host to controller) or `received` (controller to
   host), and its time is the board's since power-on, to the microsecond: Wireshark shows it as a
   time after 1970-01-01 00:00:00 UTC. A packet reaches the controller at the instant the host
-  wrote it to the VHCI, and an answer is queued for the host 100 µs after the controller made it, which reads it at a
-  later poll of the VHCI.
+  wrote it to the VHCI, and an answer is queued for the host 100 µs after the controller made it;
+  the host reads it at a later poll of the VHCI.
 - The header has `interface: bluetooth`, `source: model:bluetooth`, the board's `clock`, and a
   field of its own, `devices`: the devices the test made on the air, as `{"name": ..., "address":
   ...}`, so that a reader can tell whom a packet names by its address.
