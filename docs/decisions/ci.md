@@ -707,7 +707,7 @@ ccache would hit more, every image of a group being for one target.
 
 ## A pull request need not be up to date with main to merge
 
-Status: decided (18 November 2026)
+Status: decided (#264)
 
 Branch protection on `main` no longer requires strict status checks. With them, a pull request
 without conflicts still could not merge once another landed before it: it had to merge `main` in
@@ -716,4 +716,9 @@ the branch's diff to the `main` it lands on, and a conflict still blocks it.
 
 **Rejected:** keeping strict checks, which made several ready pull requests on one day each wait
 for a full CI run after every merge. What it would catch, two pull requests that merge cleanly
-but break together, is caught by CI on `main` after the merge, where it is fixed forward.
+but break together, is caught by CI on `main` after the merge, where it is fixed forward. A
+release pull request is the exception: its squash commit changes the three version files alone,
+so CI on `main` runs the version-only jobs for it, which test no code
+([CI](../cicd.md#version-only-ci)). The code it lands on passed full CI on `main` when it merged,
+and the version beside that code is what the runtime release workflow's smoke test checks before
+the release is published.
