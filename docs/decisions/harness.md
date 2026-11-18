@@ -152,7 +152,9 @@ for it, so the
 runner's last lines are on the queue before the backend's teardown goes on, as they nearly always
 were with the busy loop. pytest-embedded's listener, stopped right after the dut, can still miss
 them, as it could before. The forwarder costs about 0.3 s of CPU at each `power_on`, to import the
-`esp32tl` package it lives in.
+`esp32tl` package it lives in; a `SIGTERM` in that time would end it before its handler is in place
+and without the last read, so it sets a `ready` event once the handler is there, and
+`RunnerPopen.close` waits up to `EXIT_SECONDS` for that before the signal.
 
 **Rejected:** a `SIGTERM` handler that wakes the sleep through a `threading.Event`, because
 `Event.set` takes the event's lock, which the interrupted `Event.wait` may hold: the forwarder would

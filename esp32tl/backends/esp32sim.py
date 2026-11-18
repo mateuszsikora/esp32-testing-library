@@ -56,7 +56,9 @@ import threading
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from multiprocessing import get_context
 from multiprocessing.context import SpawnProcess
+from multiprocessing.synchronize import Event as ProcessEvent
 from pathlib import Path
 from types import MappingProxyType
 from typing import NoReturn, TypeVar
@@ -392,14 +394,15 @@ def route_wire(profile: BoardProfile, interface: str) -> Wire:
     return Wire(tx=route.tx, rx=route.rx, baud=route.baud)
 
 
-def _forward_log(msg_queue: MessageQueue, logfile: str) -> None:
+def _forward_log(msg_queue: MessageQueue, logfile: str, ready: ProcessEvent | None = None) -> None:
     """The body of `LogForwarder`: puts what the runner adds to `logfile` on `msg_queue`, and
     sleeps `LOG_POLL_SECONDS` whenever there is nothing new, never putting an empty read. After
     `SIGTERM`, within `LOG_POLL_SECONDS`, it reads the file once more, puts what it finds, and
     returns, even if something still writes to the file. The handler only sets a flag: one that
     took a lock could find it held by the interrupted code and wait for ever. The file is read in
     binary, as pytest-embedded's forwarder reads it: a UTF-8 sequence may straddle the end of what
-    has been written so far."""
+    has been written so far. `ready` is set once the handler is in place: a `SIGTERM` before that
+    would end the process without the last read."""
     stopping = False
 
     def stop(_signum: int, _frame: object) -> None:
@@ -407,6 +410,8 @@ def _forward_log(msg_queue: MessageQueue, logfile: str) -> None:
         stopping = True
 
     signal.signal(signal.SIGTERM, stop)
+    if ready is not None:
+        ready.set()
 
     def put(data: bytes) -> bool:
         try:
@@ -430,10 +435,12 @@ def _forward_log(msg_queue: MessageQueue, logfile: str) -> None:
 
 class LogForwarder(SpawnProcess):
     """The process that copies the runner's log file to `msg_queue`, in place of pytest-embedded's
-    `_PopenRedirectProcess`, which reads the file in a loop without a pause."""
+    `_PopenRedirectProcess`, which reads the file in a loop without a pause. `ready` is set once
+    its `SIGTERM` handler is in place, after it has imported `esp32tl`."""
 
     def __init__(self, msg_queue: MessageQueue, logfile: str) -> None:
-        super().__init__(target=_forward_log, args=(msg_queue, logfile), daemon=True)
+        self.ready = get_context("spawn").Event()
+        super().__init__(target=_forward_log, args=(msg_queue, logfile, self.ready), daemon=True)
 
 
 class RunnerPopen(DuplicateStdoutPopen):
@@ -455,10 +462,14 @@ class RunnerPopen(DuplicateStdoutPopen):
             raise
 
     def close(self) -> None:
-        """Sends the forwarder `SIGTERM` and closes the log, as `DuplicateStdoutPopen.close` does,
-        then waits up to `EXIT_SECONDS` for the forwarder to end, so that the runner's last lines
-        are on `msg_queue` before the backend's teardown goes on."""
+        """Waits up to `EXIT_SECONDS` for the forwarder to be ready, so that a runner that ended
+        while it was still starting does not lose its last lines; sends it `SIGTERM` and closes the
+        log, as `DuplicateStdoutPopen.close` does; then waits up to `EXIT_SECONDS` for it to end,
+        so that the runner's last lines are on `msg_queue` before the backend's teardown goes on.
+        A forwarder that is no longer alive is not waited for."""
         forwarder = self._p
+        if isinstance(forwarder, LogForwarder) and forwarder.is_alive():
+            forwarder.ready.wait(EXIT_SECONDS)
         super().close()  # type: ignore[no-untyped-call]
         if forwarder is not None:
             forwarder.join(EXIT_SECONDS)

@@ -147,7 +147,8 @@ or `POWER_ON_UTC`, for `Esp32Sim.utc` and the GNSS receiver's dates, and logs
 3. **`RunnerPopen(msg_queue, command, meta)`** is `DuplicateStdoutPopen` with three changes: if
    the process cannot start (`OSError`), it closes the log file the parent opened before the fork,
    which nothing else would close; its forwarder (`REDIRECT_CLS`) is `LogForwarder`; and its
-   `close` waits up to `EXIT_SECONDS` for the forwarder to end.
+   `close` waits up to `EXIT_SECONDS` for the forwarder to be ready, then up to `EXIT_SECONDS`
+   for it to end.
    `DuplicateStdoutPopen` writes the runner's stdout and stderr into one log file
    (`popen-<uuid>.log` in the test's log directory), and starts the forwarder, a process (`spawn`)
    that reads that file and puts what it reads on `msg_queue`. pytest-embedded's own forwarder,
@@ -161,7 +162,10 @@ or `POWER_ON_UTC`, for `Esp32Sim.utc` and the GNSS receiver's dates, and logs
    writes to the file. It reads the file in binary, as
    pytest-embedded's does. The process starts by importing `esp32tl.backends.esp32sim`, and with it
    the `esp32tl` package, about 0.3 s of CPU more than pytest-embedded's forwarder at each
-   `power_on`; a `SIGTERM` before its handler is in place ends it without the last read.
+   `power_on`. A `SIGTERM` before its handler is in place would end it without the last read, so
+   it sets its `ready` event once the handler is in place, and `RunnerPopen.close` waits for that
+   before the signal, unless the forwarder is no longer alive: a runner that ends while the
+   forwarder is still starting keeps its last lines.
    pytest-embedded's listener
    process takes it off the queue, prints it to stdout and appends it to `dut.log`
    (`dut.logfile`). If the start fails, the socket and its directory are removed before the
@@ -533,8 +537,8 @@ repository makes.
 | `runner_command(runner, rom, app, max_seconds, link, *, held=False, flash_mb=None, psram_mb=None, sd_card=None, extra_flash=(), wifi=None, bluetooth=None, realtime=False, flash_out=None)` | The runner's argument list; with `flash_mb`, `--flash-mb` of that size; with `psram_mb`, `--psram-mb` of that size; with an `SdCard` holding a card, the runner's card on its pins; with a `Wifi` holding an access point, `--wifi` and `--wifi-nearby`; with a `Bluetooth` the test used, `--bt` and the application's ELF; with `realtime`, `--realtime`; with `flash_out`, `--flash-out` |
 | `Esp32Sim.wifi` | The chip's `Wifi`, on the link from construction |
 | `Esp32Sim.bluetooth` | The chip's `Bluetooth`, on the link from construction; the first look asks `_asked` for `Request("bluetooth", source="model")`, which refuses after power-on, then checks `app.elf`, then calls `Bluetooth.use()`, which asks again |
-| `RunnerPopen(msg_queue, cmd, meta)` | `DuplicateStdoutPopen` with `LogForwarder` as its forwarder, whose `close` waits up to `EXIT_SECONDS` for it, and that closes its log when the start fails |
-| `LogForwarder(msg_queue, logfile)` | A `spawn` process, daemon, running `_forward_log`: puts what the runner adds to `logfile` on `msg_queue`, sleeping `LOG_POLL_SECONDS` when there is nothing new; after `SIGTERM`, within `LOG_POLL_SECONDS`, it reads the file once more, puts what it finds and ends; it ends at once when `put` fails |
+| `RunnerPopen(msg_queue, cmd, meta)` | `DuplicateStdoutPopen` with `LogForwarder` as its forwarder, whose `close` waits up to `EXIT_SECONDS` for it to be ready, sends it `SIGTERM` and waits up to `EXIT_SECONDS` for it to end, and that closes its log when the start fails |
+| `LogForwarder(msg_queue, logfile)` | A `spawn` process, daemon, running `_forward_log`: puts what the runner adds to `logfile` on `msg_queue`, sleeping `LOG_POLL_SECONDS` when there is nothing new; after `SIGTERM`, within `LOG_POLL_SECONDS`, it reads the file once more, puts what it finds and ends; it ends at once when `put` fails. `ready`, a `spawn` event, is set once its `SIGTERM` handler is in place |
 | `refuse(reason)` | Raises `SourceError(reason)`: `Esp32Sim`'s `skip` outside pytest |
 | `ended_while_waiting(error)` | Whether `error`'s chain holds a `RunEnded` |
 | `last_output(log)` | The end of the runner's log, whole lines without colour codes |
@@ -555,7 +559,7 @@ repository makes.
 | `WAKE_LATENCY_NS` | `1_000_000`, 1 emulated millisecond: how soon after the chip's reset `wait_for_wake` takes a turn | `Esp32Sim.wait_for_wake` |
 | `LAST_OUTPUT_BYTES` | `2048` | `last_output` |
 | `LOG_POLL_SECONDS` | `0.02`, wall seconds: how long `LogForwarder` sleeps when the runner's log has nothing new, and so how long after `SIGTERM` it may still take | `LogForwarder` |
-| `EXIT_SECONDS` | `5`, wall seconds: for the runner's exit after `stop` at teardown, for its `hello`, then for its exit after `SIGTERM`, for each join of the link thread, and for the log's forwarder | `close`, `_mark_end_of_run`, `_close_link`, `RunnerPopen.close` |
+| `EXIT_SECONDS` | `5`, wall seconds: for the runner's exit after `stop` at teardown, for its `hello`, then for its exit after `SIGTERM`, for each join of the link thread, and for the log's forwarder to be ready and to end | `close`, `_mark_end_of_run`, `_close_link`, `RunnerPopen.close` |
 | `SUN_PATH_MAX` | `104`, the longest Unix socket path on macOS with its NUL; Linux takes 108 | `listen` |
 
 The backend always passes `--rom`: the runner's own lookup prefers the newest release under

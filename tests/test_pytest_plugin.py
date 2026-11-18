@@ -1812,10 +1812,12 @@ def test_the_log_forwarder_waits_on_an_empty_read_and_reads_once_more_on_sigterm
 def test_closing_the_runner_popen_waits_until_its_last_lines_are_on_the_queue(
     tmp_path: Path,
 ) -> None:
-    """`RunnerPopen.close` sends the forwarder `SIGTERM` and waits for it: a line added to the log
-    after the runner exited, as the backend's own `esp32tl: the runner exited with code N` is, is
-    on the queue when `close` returns."""
+    """`RunnerPopen.close` waits for the forwarder to be ready, sends it `SIGTERM` and waits for it
+    to end: what the runner wrote and a line added to the log after it exited, as the backend's own
+    `esp32tl: the runner exited with code N` is, are on the queue when `close` returns, even when
+    `close` comes while the forwarder is still starting."""
     from multiprocessing import get_context
+    from queue import Empty
 
     queue = get_context("spawn").Queue()
     popen = esp32sim.RunnerPopen(
@@ -1823,13 +1825,17 @@ def test_closing_the_runner_popen_waits_until_its_last_lines_are_on_the_queue(
     )
     try:
         assert popen.wait(timeout=30) == 0
-        # the forwarder is in its loop, past installing its handler, once it has put this
-        assert queue.get(timeout=30) == b"ready\n"
+        # no wait for the forwarder: it usually takes longer to start than this process to exit
+        assert popen._p is not None
         with open(popen._logfile, "ab") as log:
             log.write(b"esp32tl: the runner exited with code 0\n")
         popen.close()
-        assert queue.get(timeout=0.1) == b"esp32tl: the runner exited with code 0\n"
-        assert popen._p is not None and popen._p.exitcode == 0
+        put = b""
+        with contextlib.suppress(Empty):
+            while True:
+                put += queue.get(timeout=0.1)
+        assert put == b"ready\nesp32tl: the runner exited with code 0\n"
+        assert popen._p.exitcode == 0
     finally:
         if popen.stdin is not None:
             popen.stdin.close()
