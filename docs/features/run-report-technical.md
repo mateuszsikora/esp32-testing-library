@@ -191,8 +191,8 @@ and `sd_card`, `{"image": path or null, "changes": [{"t_ns": t, "image": path or
 `SdCard.held`, or null
 on a profile without a slot. `faults` is `SdCard.properties()`, per rule `{"id": n, "call": text,
 "t_ns": t, "cleared_t_ns": t or null, "operations": [{"t_ns": t, "op": "read" or "write" or "erase",
-"blocks": [first, last], "action": "error" or "delay", "delay_ns": ns or null, "written": bool},
-...]}`.
+"blocks": [first, last], "action": "error" or "delay" or "observe", "delay_ns": ns or null,
+"written": bool}, ...]}`, `delay_ns` null but for a delay.
 
 `RunLog.line(t, name, level, direction="out")` records firmware GPIO output by default.
 `Lines.inputs` calls it with `direction="in"` when a model's pending GPIO response is due and

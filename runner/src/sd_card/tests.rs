@@ -831,18 +831,40 @@ fn exchange(card: &mut SdCard) -> Vec<Vec<u8>> {
     out
 }
 
+/// A card as `card(units)` makes it, on an image the test can read whole afterwards.
+fn shared_card(units: u64) -> (SdCard, Rc<RefCell<Vec<u8>>>) {
+    let mut image = vec![0; (units * UNIT) as usize];
+    for (n, block) in image.chunks_mut(BLOCK).enumerate() {
+        block[..8].copy_from_slice(&(n as u64).to_be_bytes());
+    }
+    let image = Rc::new(RefCell::new(image));
+    let store = Box::new(SharedStore(image.clone()));
+    (SdCard::new(WIRING, store).unwrap(), image)
+}
+
 #[test]
 fn a_rule_that_observes_changes_nothing_and_reports_what_it_meets() {
-    let mut plain = card(2);
+    let (mut plain, plain_image) = shared_card(2);
     init(&mut plain);
     let without = exchange(&mut plain);
-    let mut card = card(2);
+    let (mut card, image) = shared_card(2);
     init(&mut card);
     card.install(rule(1, Op::Write, Action::Observe, None, None));
     card.install(rule(2, Op::Read, Action::Observe, Some((3, 10)), None));
     card.install(rule(3, Op::Erase, Action::Observe, None, Some(1)));
-    // the same answers, byte for byte and at the same cycles, so the same image
+    // the same answers, byte for byte and at the same cycles, and the same image, whole
     assert_eq!(exchange(&mut card), without);
+    assert!(
+        *image.borrow() == *plain_image.borrow(),
+        "the images differ"
+    );
+    let block = |n: usize| image.borrow()[n * BLOCK..(n + 1) * BLOCK].to_vec();
+    assert_eq!(
+        (block(5), block(6)),
+        (vec![0; BLOCK], vec![0; BLOCK]),
+        "erased"
+    );
+    assert_eq!(block(10), vec![0x10; BLOCK], "written");
     let met: Vec<_> = card
         .take_faulted()
         .into_iter()

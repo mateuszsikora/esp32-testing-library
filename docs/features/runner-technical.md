@@ -1171,8 +1171,8 @@ a guest that programs a byte between two dumps;
   power cut that ends a busy time and a delayed read and leaves the rules; rules that stay through a
   change of card, while the delay goes with the card;
   `a_rule_that_observes_changes_nothing_and_reports_what_it_meets`, the same exchange of writes,
-  reads and an erase with and without rules that observe, byte for byte at the same cycles, and what
-  they met; and `every_rule_that_observes_an_operation_reports_it_beside_the_one_that_acts`, a write
+  reads and an erase with and without rules that observe, byte for byte at the same cycles, the
+  two images whole, and what they met; and `every_rule_that_observes_an_operation_reports_it_beside_the_one_that_acts`, a write
   met by two rules that observe and one that fails it, each with its own report in the order given,
   an observer given after the error that does not take the write away from it, counts spent per
   rule, and a delay under an observer.
