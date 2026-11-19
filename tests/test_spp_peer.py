@@ -19,6 +19,7 @@ from bumble.host import Host
 from bumble.keys import MemoryKeyStore
 from bumble.pairing import PairingConfig, PairingDelegate
 from bumble.transport.common import AsyncPipeSink
+from conftest import CountingList
 
 from esp32tl.bluetooth.air import Air, AirError
 from esp32tl.bluetooth.controller import INQUIRY_UNIT_S, Controller
@@ -4119,3 +4120,45 @@ def test_written_lines_refuse_what_is_not_bytes(
     peer = SppPeer(air, name="peer", pin="1234", source=Echo())
     with pytest.raises(error, match=re.escape(message)):
         call(peer)
+
+
+# A long wait on a busy channel: as many writes as polls, one poll after each. A poll that looked
+# again at everything since the condition was made would read N * (N + 1) / 2 records, 50 M.
+N = 10_000
+
+
+def test_a_next_write_poll_reads_only_the_events_since_the_last_one(air: Air) -> None:
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo(delay=0))
+    dlc = air.run(Initiator(air).session(), within=seconds(10))
+    air.call(lambda: dlc.write(b"before"))
+    peer.events = history = CountingList[ChannelEvent](peer.events)
+    alarm = peer.next_write(b"ALARM")
+    # What the device writes, as the peer records it, without the air for each of N writes.
+    for _ in range(N):
+        history.append(ChannelEvent(seconds(0), "out", b"temp 21.5\r"))
+        assert alarm() is None
+    assert history.reads == N
+    air.call(lambda: dlc.write(b"ALARM\r"))
+    found = alarm()
+    assert found is not None and found.data == b"ALARM\r"
+    assert alarm() is found and history.reads == N + 2
+    assert peer.next_write(b"before")() is None
+
+
+def test_a_next_written_line_poll_reads_only_the_lines_since_the_last_one(air: Air) -> None:
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo(delay=0))
+    dlc = air.run(Initiator(air).session(), within=seconds(10))
+    # The lines the peer cuts at a carriage return, which the condition scans.
+    peer.written_lines()
+    peer._lines[b"\r"].lines = lines = CountingList[WrittenLine]()
+    alarm = peer.next_written_line(b"ALARM")
+    for _ in range(N):
+        # What the device writes, as the peer records it, without the air for each of N writes.
+        peer.events.append(ChannelEvent(seconds(0), "out", b"temp 21.5\r"))
+        assert alarm() is None
+    assert len(lines) == N and lines.reads == N
+    air.call(lambda: dlc.write(b"ALA"))
+    assert alarm() is None
+    air.call(lambda: dlc.write(b"RM\r"))
+    assert alarm() == WrittenLine(seconds(0), b"ALARM", 0, True)
+    assert alarm() is alarm() and lines.reads == N + 3

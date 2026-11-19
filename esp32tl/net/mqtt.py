@@ -10,7 +10,7 @@ from dataclasses import dataclass, field, replace
 from enum import IntEnum
 from typing import Literal, TypeVar
 
-from esp32tl.interfaces.condition import Condition
+from esp32tl.interfaces.condition import Condition, FirstFrom
 from esp32tl.units import Duration
 
 TEST_CLIENT = "(test)"
@@ -231,24 +231,32 @@ def matches(pattern: str, topic: str) -> bool:
     return len(p) == len(t)
 
 
-def _matching(
-    history: list[Record], topic: str, wanted: bytes | None, start: int
-) -> Iterator[Record]:
-    """The records from `start` on this topic filter, with this payload if one is wanted."""
-    for record in history[start:]:
-        if matches(topic, record.topic) and (wanted is None or record.payload == wanted):
-            yield record
+def _wants(topic: str, wanted: bytes | None) -> Callable[[Message | Delivery], bool]:
+    """Whether a record is on this topic filter, with this payload if one is wanted."""
+    return lambda record: (
+        matches(topic, record.topic) and (wanted is None or record.payload == wanted)
+    )
 
 
-def _first(history: list[Record], topic: str, wanted: bytes | None, start: int) -> Record | None:
-    return next(_matching(history, topic, wanted, start), None)
+def _wants_message(
+    topic: str, wanted: bytes | None, will: bool | None
+) -> Callable[[Message], bool]:
+    """`_wants` over the messages: only Wills when `will` is True, only the rest when False."""
+    on_topic = _wants(topic, wanted)
+    return lambda message: on_topic(message) and (will is None or message.will is will)
+
+
+def _first(history: list[Record], topic: str, wanted: bytes | None) -> Record | None:
+    """The first record of `history` on this topic filter, with this payload if one is wanted."""
+    return next(filter(_wants(topic, wanted), history), None)
 
 
 def _messages(
     history: list[Message], topic: str, wanted: bytes | None, start: int, will: bool | None
 ) -> Iterator[Message]:
-    """`_matching` over the messages: only Wills when `will` is True, only the rest when False."""
-    return (m for m in _matching(history, topic, wanted, start) if will is None or m.will is will)
+    """The messages from `start` that `_wants_message` keeps, read by index, without a copy."""
+    keep = _wants_message(topic, wanted, will)
+    return filter(keep, map(history.__getitem__, range(start, len(history))))
 
 
 def _will_check(will: bool | None) -> None:
@@ -411,7 +419,7 @@ class Broker:
             + (f" saying {wanted!r}" if wanted is not None else "")
         )
         return Condition(
-            lambda: next(_messages(self.messages, topic, wanted, start, will), None),
+            FirstFrom(lambda: self.messages, start, _wants_message(topic, wanted, will)),
             description,
             "MQTT",
         )
@@ -466,14 +474,16 @@ class Broker:
         description = f"the next MQTT delivery on {topic!r}" + (
             f" saying {wanted!r}" if wanted is not None else ""
         )
-        return Condition(lambda: _first(self.deliveries, topic, wanted, start), description, "MQTT")
+        return Condition(
+            FirstFrom(lambda: self.deliveries, start, _wants(topic, wanted)), description, "MQTT"
+        )
 
     def find_delivery(
         self, topic: str = "#", payload: bytes | str | None = None
     ) -> Delivery | None:
         """Return the first match in the delivery history now, or None; consume nothing."""
         wanted = payload.encode() if isinstance(payload, str) else payload
-        return _first(self.deliveries, topic, wanted, 0)
+        return _first(self.deliveries, topic, wanted)
 
     def subscribed(self, topic: str) -> Callable[[], bool]:
         """A live condition: an active client currently subscribes to exactly `topic`."""
@@ -511,19 +521,13 @@ class Broker:
     def next_subscribe(self, filter: str | None = None) -> Callable[[], SubscribeRequest | None]:
         """A non-consuming condition for the first SUBSCRIBE recorded after this call; with
         `filter`, the first that names exactly that topic filter. UNSUBSCRIBE never matches."""
-        start = len(self.subscribe_requests)
-
-        def find() -> SubscribeRequest | None:
-            return next(
-                (
-                    request
-                    for request in self.subscribe_requests[start:]
-                    if request.kind == "SUBSCRIBE"
-                    and (filter is None or filter in request.topic_filters)
-                ),
-                None,
-            )
-
+        find = FirstFrom(
+            lambda: self.subscribe_requests,
+            len(self.subscribe_requests),
+            lambda request: (
+                request.kind == "SUBSCRIBE" and (filter is None or filter in request.topic_filters)
+            ),
+        )
         description = "the next MQTT SUBSCRIBE" + (f" to {filter!r}" if filter is not None else "")
         return Condition(find, description, "MQTT")
 

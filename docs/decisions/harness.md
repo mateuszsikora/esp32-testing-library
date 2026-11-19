@@ -4765,3 +4765,40 @@ firmware run on without a controller, which an ESP-IDF example takes as a failed
 test would pass on a firmware doing something other than in production. Also rejected: an exact
 time for the call, from an esp32sim observer, because one that stops at a PC asks for every
 instruction and runs the guest single-stepped; the slice's end bounds the call to a millisecond.
+
+## History conditions scan from where their last poll ended
+
+Status: decided (#262)
+
+A "next …" condition over an append-only history, `board.next_boot`, MQTT's `next_message`,
+`next_delivery` and `next_subscribe`, HTTP's `next_request`, and `SppPeer.next_write` and
+`next_written_line`, used to scan `history[start:]`, a copy of everything since the condition was
+made, at every poll. A wait polls at every turn of the link and at least every 100 emulated ms, so
+a long wait on a busy history cost time quadratic in its records: one poll of `_messages` over
+5 000 records that do not match took 1.8 ms (M2 Pro, Python 3.14), and a wait of an emulated hour
+with a message a second about 65 M record checks, some 24 s of the test's CPU. Now each takes as
+its `find` a `FirstFrom` of `esp32tl/interfaces/condition.py`, which reads by index from where its
+last poll ended and, once it has a match, only the match: a poll reads the records appended since
+the last one. `next_boot` still pays for `Esp32Sim.boots`, which builds every boot at each read;
+boots are few, and a cheaper `boots` is a change of the backend, not of the condition. Records are
+only appended, so a record it refused never matches later. `next_data`'s search for `until`
+likewise starts `len(until) - 1` bytes before where the last one ended. The documented semantics
+stay: the boundary is append order, polling never moves it, and the condition consumes nothing and
+returns the same record at every later poll.
+
+`FirstFrom` keeps the index of the match, not the record, and reads it again at each poll: `boots`
+is built anew at every read, and a `Boot` gains its `uptime_zero`, which takes no part in comparing
+boots, after the boot has begun, so a kept record would never show it.
+
+**Rejected:** a cursor that moves past a match, as `LineCondition`'s does, because that consumes:
+the same condition asked again would find the next record, and the MQTT, HTTP and SPP conditions say
+it finds the same one. Also rejected: an index per topic filter in the broker, or per path in the
+HTTP server, because it adds state to every service for every filter a test arms, while a poll that
+reads only the new records already costs as much as what the firmware sent since the last poll, not
+as much as the wait has lasted. Also rejected: tests that bound the time of a long wait, because
+their margin depends on the runner; the tests count the records a poll reads with `CountingList` of
+`tests/conftest.py`, the same on every machine.
+
+**Postponed:** exporting `FirstFrom` from `esp32tl` for a test's own conditions over a history: the
+public API grows only with a test that needs it, and `condition(find, description)` with a `find`
+of the test's takes any history meanwhile.

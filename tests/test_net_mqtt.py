@@ -1,8 +1,17 @@
 """MQTT wire dialogue, independent of MQTT packet builders in the implementation."""
 
 import pytest
+from conftest import CountingList
 
-from esp32tl.net.mqtt import TEST_CLIENT, Broker, RequestedFilter, SubscribeRequest, matches
+from esp32tl.net.mqtt import (
+    TEST_CLIENT,
+    Broker,
+    Delivery,
+    Message,
+    RequestedFilter,
+    SubscribeRequest,
+    matches,
+)
 from esp32tl.units import Duration
 
 CONNECT = b"\x10\x0d\x00\x04MQTT\x04\x02\x00\x0a\x00\x01c"
@@ -733,3 +742,58 @@ def test_a_malformed_subscribe_or_unsubscribe_is_refused_whole(
     assert [request.kind for request in broker.subscribe_requests] == ["SUBSCRIBE"]
     state = broker.session("c")
     assert state is not None and state.subscriptions == subscriptions
+
+
+# A long wait on a busy history: as many records as polls, one poll after each. A poll that looked
+# again at everything since the condition was made would read N * (N + 1) / 2 records, 50 M.
+N = 10_000
+
+
+def test_a_next_message_poll_reads_only_the_messages_since_the_last_one() -> None:
+    broker = Broker(lambda: 0)
+    broker.messages = history = CountingList[Message]()
+    alarm = broker.next_message("dev/+/alarm", will=False)
+    for n in range(N):
+        broker.publish(f"dev/{n}/telemetry", "21.5")
+        assert alarm() is None
+    assert history.reads == N
+    broker.publish("dev/7/alarm", "fire")
+    found = alarm()
+    assert found is not None and found.payload == b"fire"
+    # Found, the condition reads only its record again, at every later poll.
+    for _ in range(N):
+        broker.publish("dev/8/alarm", "later")
+        assert alarm() is found
+    assert history.reads == 2 * N + 1
+    assert broker.next_message("dev/8/alarm")() is None
+
+
+def test_a_next_delivery_poll_reads_only_the_deliveries_since_the_last_one() -> None:
+    broker = Broker(lambda: 0)
+    broker.deliveries = history = CountingList[Delivery]()
+    broker.accept(("10.64.0.2", 4000), lambda data: None, lambda: None).on_data(CONNECT + SUBSCRIBE)
+    alarm = broker.next_delivery("a/alarm", "fire")
+    for n in range(N):
+        broker.publish("a/alarm" if n % 2 else "a/telemetry", "21.5")
+        assert alarm() is None
+    assert history.reads == N
+    broker.publish("a/alarm", "fire")
+    delivery = history[-1]
+    assert alarm() is delivery and alarm() is delivery
+    assert history.reads == N + 1 + 2
+
+
+def test_a_next_subscribe_poll_reads_only_the_requests_since_the_last_one() -> None:
+    broker = Broker(lambda: 0)
+    broker.subscribe_requests = history = CountingList[SubscribeRequest]()
+    session = broker.accept(("10.64.0.2", 4000), lambda data: None, lambda: None)
+    session.on_data(CONNECT)
+    to_b = broker.next_subscribe("b")
+    for _ in range(N):
+        session.on_data(SUBSCRIBE)
+        assert to_b() is None
+    assert history.reads == N
+    session.on_data(b"\x82\x06\x00\x02\x00\x01b\x00")
+    request = history[-1]
+    assert to_b() is request and to_b() is request
+    assert history.reads == N + 1 + 2

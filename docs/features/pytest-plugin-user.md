@@ -383,9 +383,14 @@ end = board.wait_until(trip_end(broker, "car-1"), within=minutes(3))
 - It is a frozen `esp32tl.Condition`, generic in what `find` returns, for annotating helpers.
   The conditions of the network's services, of TLS, of `lines.output(...).is_on` and
   `.is_off`, and `board.next_boot()` are the same type.
-- What it checks is up to `find`: it consumes nothing, and remembers nothing between calls.
-  Capture a boundary, as `start` above, when the condition makes it, so that a message already
-  received does not satisfy it.
+- What it checks is up to `find`: the condition itself keeps nothing and consumes nothing; `find`
+  may keep what it likes, as the package's own do. Capture a boundary, as `start` above, when the
+  condition makes it, so that a message already received does not satisfy it. A wait on esp32sim
+  calls `find` at every turn of the link, at least every 100 ms of the board's time, so a `find`
+  that reads the whole history since `start` at each call costs, over a long wait on a busy
+  history, time that grows with the square of its records. The package's own `next_*` conditions
+  look at each poll only at what came since their last poll; `board.next_boot()` too, though
+  reading `board.boots` on esp32sim builds every boot so far.
 - `find` that is not callable, a `description` that is not non-empty text, or an empty
   `service` raises `TypeError` at once, as
   `condition: description is '', not text naming the event`.

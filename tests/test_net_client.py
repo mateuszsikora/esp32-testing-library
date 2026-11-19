@@ -119,6 +119,17 @@ class Device:
         return [e.get("event") for e in self.net.events]
 
 
+class SearchedBytes(bytearray):
+    """`received` that counts in `searched` the bytes its `find`s have looked through."""
+
+    searched = 0
+
+    def find(self, sub: object, start: object = None, *args: object) -> int:
+        assert isinstance(start, int)
+        self.searched += len(self) - start
+        return super().find(sub, start, *args)  # type: ignore[arg-type]
+
+
 def mss(value: int) -> bytes:
     return struct.pack(">BBH", 2, 4, value)
 
@@ -634,3 +645,22 @@ def test_a_malformed_syn_leaves_the_orphaned_connection_and_its_will() -> None:
     # An option that does not parse: the SYN is refused before it could reset anything.
     assert device.send(40000, 7000, 500, 0, SYN, options=bytes([2, 9, 0, 0])) == []
     assert list(device.net.ip._flows.values()) == [flow] and flow.orphaned
+
+
+def test_a_next_data_poll_searches_only_the_bytes_since_the_last_one(device: Device) -> None:
+    # A long stream without the `until`, one poll after each chunk: a search from `start` at
+    # every poll would look through N * (N + 1) / 2 chunks, 50 M of them.
+    n, chunk = 10_000, b"temp 21.5\r"
+    connection = device.net.connect(80)
+    device.poll()
+    device.send(80, 49152, 1000, ISN + 1, SYN | ACK)
+    connection._received = received = SearchedBytes()
+    line = connection.next_data(until=b"\r\n")
+    for _ in range(n):
+        connection.on_data(chunk)
+        assert line() is None
+    # Each poll looks through its chunk, and the byte before it, where a split `until` begins.
+    assert received.searched <= n * (len(chunk) + 1)
+    connection.on_data(b"\nnext")
+    assert line() == chunk * n + b"\n" and line() == chunk * n + b"\n"
+    assert received.searched <= (n + 3) * (len(chunk) + 1)

@@ -2,7 +2,7 @@
 `repr` is its description, which a wait names in `NeverHappened` and in the run report; and it
 refuses to be read as a boolean, so `assert broker.next_message(topic)` cannot pass unasked."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Generic, TypeVar
 
@@ -52,3 +52,39 @@ def condition(
     as `a trip/end from the device did not happen within 180 s`, and `bool()` of it raises
     `TypeError`, before and after a match."""
     return Condition(find, description, service)
+
+
+class FirstFrom(Generic[T]):
+    """The `find` of a "next …" condition over an append-only history: called, the first record of
+    `history()` from index `start` that `wanted` accepts, or `None` while there is none.
+
+    A call looks only at the records appended since the last call ended, by index, without copying
+    the history: a record it has looked at and refused stays refused, since records are only
+    appended. Once it has found one it looks no further, and every later call returns the record at
+    that index, read again from `history()`, so the condition consumes nothing and its boundary,
+    `start`, never moves. `history` is called at each call: it may bring the history up to date
+    first, or build it anew, as long as what it holds up to its old end does not change."""
+
+    __slots__ = ("_found", "_history", "_scanned", "_wanted")
+
+    def __init__(
+        self, history: Callable[[], Sequence[T]], start: int, wanted: Callable[[T], bool]
+    ) -> None:
+        self._history = history
+        self._wanted = wanted
+        # How far the calls have looked, and the index of the match, once there is one.
+        self._scanned = start
+        self._found: int | None = None
+
+    def __call__(self) -> T | None:
+        history = self._history()
+        if self._found is not None:
+            return history[self._found]
+        wanted = self._wanted
+        for index in range(self._scanned, len(history)):
+            record = history[index]
+            if wanted(record):
+                self._found = index
+                return record
+        self._scanned = max(self._scanned, len(history))
+        return None

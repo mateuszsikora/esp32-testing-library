@@ -3,8 +3,9 @@
 from collections.abc import Callable
 
 import pytest
+from conftest import CountingList
 
-from esp32tl.net.http import HttpServer
+from esp32tl.net.http import HttpRequest, HttpServer
 
 
 class Client:
@@ -250,3 +251,20 @@ def test_a_status_without_content_ends_with_its_head(server: HttpServer, status:
         "Connection: close",
         'ETag: "1"',
     ]
+
+
+def test_a_next_request_poll_reads_only_the_requests_since_the_last_one(
+    server: HttpServer,
+) -> None:
+    # As many requests as polls: rescanning from the boundary would read 50 M of them.
+    n = 10_000
+    server.requests = history = CountingList[HttpRequest]()
+    posted = server.next_request("/log", method="POST")
+    for _ in range(n):
+        Client(server).send(b"GET /log HTTP/1.1\r\n\r\n")
+        assert posted() is None
+    assert history.reads == n
+    Client(server).send(b"POST /log HTTP/1.1\r\nContent-Length: 0\r\n\r\n")
+    request = history[-1]
+    assert posted() is request and posted() is request
+    assert history.reads == n + 1 + 2

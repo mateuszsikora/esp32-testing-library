@@ -2238,3 +2238,19 @@ clones, and rejection of serial distributed execution before accessing hardware.
   `tests/test_bt_spp_initiator.py::test_a_test_that_gives_the_board_no_bluetooth_fails_naming_board_bluetooth`,
   `tests/test_chips.py::TestOnESP32S3::test_without_bt_the_controller_s_start_ends_the_run_naming_board_bluetooth`,
   `tests/test_chips.py::TestOnESP32C3::test_without_bt_the_controller_s_start_ends_the_run_naming_board_bluetooth`
+
+## History conditions
+
+- **266.** A "next …" condition over an append-only history reads, at each poll, only the records
+  appended since its last poll, and after its match only the match: a poll after each of 10 000
+  records reads each of them once. The boundary is still the history's length when it was made,
+  polling never moves it, and every later poll returns the same record.
+  `tests/test_condition.py::test_first_from_reads_each_record_once_and_keeps_its_match`,
+  `tests/test_condition.py::test_next_boot_reads_only_the_boots_since_the_last_poll`,
+  `tests/test_net_mqtt.py::test_a_next_message_poll_reads_only_the_messages_since_the_last_one`,
+  `tests/test_net_mqtt.py::test_a_next_delivery_poll_reads_only_the_deliveries_since_the_last_one`,
+  `tests/test_net_mqtt.py::test_a_next_subscribe_poll_reads_only_the_requests_since_the_last_one`,
+  `tests/test_net_http.py::test_a_next_request_poll_reads_only_the_requests_since_the_last_one`,
+  `tests/test_spp_peer.py::test_a_next_write_poll_reads_only_the_events_since_the_last_one`,
+  `tests/test_spp_peer.py::test_a_next_written_line_poll_reads_only_the_lines_since_the_last_one`,
+  `tests/test_net_client.py::test_a_next_data_poll_searches_only_the_bytes_since_the_last_one`
