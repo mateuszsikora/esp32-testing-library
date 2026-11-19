@@ -494,9 +494,10 @@ contents, pull requests and Actions.
 
 The PR's `pull_request` runs of **CI** and **Runtime release** start in `action_required`, and
 the required checks wait with them. This is GitHub's rule for a PR opened or updated with
-`GITHUB_TOKEN`, not the fork approval policy above, and it applies whether or not the PR comes
-from a fork: such runs wait until a user with write access selects **Approve workflows to run**
+`GITHUB_TOKEN`, not the fork approval policy above: such runs wait until a user with write access
+selects **Approve workflows to run**
 ([GitHub's `GITHUB_TOKEN` documentation](https://docs.github.com/en/actions/concepts/security/github_token)).
+It holds for a branch of this repository too: #272, from `build/release-0.2.0`, waited so.
 The workflow's last step, **Approve the pull request's workflow runs**, waits up to two minutes
 until both runs exist for the PR's head commit, then approves every `pull_request` run of that
 commit in `action_required` (`POST /repos/{owner}/{repo}/actions/runs/{run_id}/approve`, with the
