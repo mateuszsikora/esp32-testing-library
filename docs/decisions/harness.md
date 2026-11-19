@@ -4825,3 +4825,43 @@ their margin depends on the runner; the tests count the records a poll reads wit
 **Postponed:** exporting `FirstFrom` from `esp32tl` for a test's own conditions over a history: the
 public API grows only with a test that needs it, and `condition(find, description)` with a `find`
 of the test's takes any history meanwhile.
+
+## A real receiver's capture or raw NMEA log is converted to the emulated clock, not modelled
+
+Status: decided (#263)
+
+A test plays what a real GNSS receiver sent by converting it into a recording on the emulated
+clock and replaying that with `gnss.replay(path)`. `esp32tl recording retime IN OUT`
+(`recording.retime`) converts a recording on the wall clock, such as `gnss.tap` writes beside
+`gnss.real`. It keeps the `in` events at their times from the first of them, puts the first at 1 s
+(`--start`), drops the `out` events and adds a `converted` field to the header.
+`esp32tl recording nmea IN OUT` (`recording.from_nmea`) turns a raw NMEA log, which has no times,
+into a recording. It
+sends one event an epoch, an epoch a period apart (`--period`, 1 s), and checks every checksum, the
+times of the RMC and GGA sentences against the period, and each epoch's bytes against the route's
+baud. Both live in `esp32tl/recording.py`, the format's module, and write version 1 of the format,
+which a header field of its own does not change. A replay of either is a pure stream with nothing
+to answer: the timing of a receiver's answers to the firmware's commands is lost, and a stream of
+NMEA sentences has none anyway. The committed example is `recordings/gnss-neo-m8n.nmea`, gpsd's
+`test/daemon/neo-m8n.log` (BSD-2-Clause), a u-blox NEO-M8N at rest, converted to
+`recordings/gnss-neo-m8n.jsonl`.
+
+An NMEA log epoch starts at an RMC or a GGA with a new time, and also at a second sentence of one
+address. That second rule is there because a cold start sends RMC and GGA without a time, and
+the time alone would make those epochs one.
+
+**Rejected:** replaying a wall-clock recording on the emulated clock as it is, because the clock
+field is there to stop times on one clock being read as times on the other
+([invariant 31](../invariants.md#recordings-and-replay)); the conversion says it was made, in the
+header. Also rejected: keeping the `out` events, because a recording with requests answers the
+firmware's commands by matching, and a capture's commands then go unmatched or match what the
+receiver sent unprompted. Also rejected: an epoch's sentences timed one by one at the route's baud,
+because the replay already sends an event's bytes back to back at the route's baud from its time.
+Also rejected: taking the period from the log's own times, because a log that skips epochs then
+gets the wrong rate where it should be refused.
+
+**Postponed:** noise in the GNSS model, `stand_still(jitter=…)` or a cold-start phase, seeded so
+that two runs send the same bytes. A model of a receiver's noise is a guess where a capture is
+the device's own output. A converted capture covers a speed of a few tenths of a knot at rest and
+the epochs of a cold start without a fix. If a model ever does it, the converted recordings are
+what to compare it with.

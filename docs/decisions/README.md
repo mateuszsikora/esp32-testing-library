@@ -351,6 +351,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [A lost link leaves the device's connections half-open until their keepalive](harness.md#a-lost-link-leaves-the-devices-connections-half-open-until-their-keepalive) | `harness.md` | decided (#244) |
 | [A firmware that starts its Bluetooth controller without board.bluetooth ends the run](harness.md#a-firmware-that-starts-its-bluetooth-controller-without-boardbluetooth-ends-the-run) | `harness.md` | decided (#259) |
 | [History conditions scan from where their last poll ended](harness.md#history-conditions-scan-from-where-their-last-poll-ended) | `harness.md` | decided (#262) |
+| [A real receiver's capture or raw NMEA log is converted to the emulated clock, not modelled](harness.md#a-real-receivers-capture-or-raw-nmea-log-is-converted-to-the-emulated-clock-not-modelled) | `harness.md` | decided (#263) |
 
 ## The runner crate and esp32sim
 

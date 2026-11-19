@@ -1,6 +1,7 @@
 """The `esp32tl` command's `run` and `replay`: the arguments they refuse, in this process, and runs
 of the validation images through the real runner, in a subprocess of their own. The runs need
-`make firmware` (hello_world, nmea_reader, gpio_echo)."""
+`make firmware` (hello_world, nmea_reader, gpio_echo). `recording retime` and `recording nmea`, in
+this process: tests/test_real_source.py replays what `retime` made of a capture."""
 
 import json
 import os
@@ -14,7 +15,7 @@ from pathlib import Path
 import pytest
 from test_pytest_plugin import fake_build
 
-from esp32tl import __version__, cli, runtime
+from esp32tl import __version__, cli, recording, runtime
 
 ROOT = Path(__file__).resolve().parent.parent
 HELLO_WORLD = ROOT / "firmware" / "hello_world"
@@ -33,9 +34,13 @@ sys.exit(cli.main(sys.argv[1:]))
 
 
 def esp32tl(
-    *args: str, patch: str = "", env: dict[str, str] | None = None
+    *args: str,
+    patch: str = "",
+    env: dict[str, str] | None = None,
+    apps: tuple[Path, ...] = (HELLO_WORLD, NMEA_READER, GPIO_ECHO),
 ) -> subprocess.Popen[str]:
-    for app in (HELLO_WORLD, NMEA_READER, GPIO_ECHO):
+    """`esp32tl ARGS` in a subprocess, from the repository's root, once `apps` are built."""
+    for app in apps:
         if not (app / "build" / "esp32tl-built").is_file():
             pytest.fail(f"{app}/build holds no finished build: run make firmware", pytrace=False)
     return subprocess.Popen(
@@ -72,15 +77,16 @@ def finished(process: subprocess.Popen[str]) -> tuple[int, str, str]:
     return process.returncode, out, err
 
 
-def test_the_help_names_run_and_replay(
+def test_the_help_names_run_replay_and_recording(
     capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # argparse wraps the help to the terminal's width.
     monkeypatch.setenv("COLUMNS", "80")
     assert cli.main([]) == 0
     out = capsys.readouterr().out
-    assert "run       run an app on the emulator, its console on stdout" in out
-    assert "replay    run an app with a recording replayed into one of its board's" in out
+    assert "run        run an app on the emulator, its console on stdout" in out
+    assert "replay     run an app with a recording replayed into one of its board's" in out
+    assert "recording  convert what a real device sent into a recording the emulator" in out
 
 
 @pytest.mark.parametrize(
@@ -374,3 +380,125 @@ def test_run_gives_the_chip_the_profile_s_psram(tmp_path: Path, profile: str, ps
     )
     (args,) = [line for line in err.splitlines() if line.startswith("fake runner: ")]
     assert args.endswith(f" --psram-mb {psram}"), err
+
+
+NEO_M8N = ROOT / "recordings" / "gnss-neo-m8n"
+
+
+def log_line(start: str) -> int:
+    """The number of the committed log's first line that starts with `start`."""
+    lines = NEO_M8N.with_suffix(".nmea").read_text().splitlines()
+    return next(n for n, line in enumerate(lines, start=1) if line.startswith(start))
+
+
+def test_recording_nmea_writes_the_committed_recording_of_the_committed_log(
+    tmp_path: Path,
+) -> None:
+    out = tmp_path / "out.jsonl"
+    assert cli.main(["recording", "nmea", str(NEO_M8N.with_suffix(".nmea")), str(out)]) == 0
+    assert out.read_text() == NEO_M8N.with_suffix(".jsonl").read_text()
+
+
+def test_recording_nmea_takes_the_route_s_baud_the_period_the_start_and_the_end(
+    tmp_path: Path,
+) -> None:
+    log = tmp_path / "log.nmea"
+    log.write_text("$GNRMC,120000.00,V,,,,,,,,,,N*60\r\n$GNRMC,120000.20,V,,,,,,,,,,N*62\r\n")
+    out = tmp_path / "out.jsonl"
+    args = ["--board", "lilygo-t-a7670g-r2", "--interface", "modem", "--period", "0.2"]
+    assert (
+        cli.main(["recording", "nmea", str(log), str(out), *args, "--start", "0", "--end", "loop"])
+        == 0
+    )
+    made = recording.read(out)
+    assert [event.t for event in made.events] == [0, 200_000_000]
+    assert (made.header.board, made.header.interface, made.header.end) == (
+        "lilygo-t-a7670g-r2",
+        "uart.modem",
+        "loop",
+    )
+    assert made.header.extra["converted"] == {
+        "from": "nmea",
+        "baud": 115200,
+        "period_ns": 200_000_000,
+        "start_ns": 0,
+    }
+
+
+def test_recording_retime_writes_the_capture_on_the_emulated_clock(tmp_path: Path) -> None:
+    header = recording.Header(
+        "esp32-devkitc", "uart.gnss", "real", recording.WALL, "2026-11-19T10:00:00Z"
+    )
+    captured = tmp_path / "capture.jsonl"
+    recording.write(
+        captured,
+        recording.Recording(
+            header,
+            (
+                recording.Event(5_000, "out", b"AT", recording.WALL),
+                recording.Event(9_000, "in", b"$GP", recording.WALL),
+            ),
+        ),
+    )
+    out = tmp_path / "out.jsonl"
+    assert cli.main(["recording", "retime", str(captured), str(out), "--start", "2.5"]) == 0
+    made = recording.read(out)
+    assert made.events == (recording.Event(2_500_000_000, "in", b"$GP", recording.EMULATED),)
+    assert made.header.end == "hold"
+    assert cli.main(["recording", "retime", str(captured), str(out), "--end", "loop"]) == 0
+    assert recording.read(out).header.end == "loop"
+
+
+@pytest.mark.parametrize(
+    ("args", "message"),
+    [
+        (
+            ["retime", str(RECORDING), "out.jsonl"],
+            "esp32tl: the recording is on the emulated-fifo-write clock already: a replay takes"
+            " it as it is\n",
+        ),
+        (
+            ["retime", "recordings/none.jsonl", "out.jsonl"],
+            "esp32tl: recordings/none.jsonl: [Errno 2] No such file or directory:"
+            " 'recordings/none.jsonl'\n",
+        ),
+        (
+            ["nmea", str(RECORDING), "out.jsonl"],
+            f'esp32tl: {RECORDING}:1: \'{{"esp32tl_recording": 1, "board": "esp32\''
+            " is not an NMEA sentence: a sentence starts with $\n",
+        ),
+        (
+            ["nmea", str(NEO_M8N.with_suffix(".nmea")), "out.jsonl", "--interface", "modem"],
+            "esp32tl: the board profile esp32-devkitc has no uart.modem; its interfaces are"
+            " console, uart.gnss, sd_card, wifi, bluetooth\n",
+        ),
+        (
+            ["nmea", str(NEO_M8N.with_suffix(".nmea")), "out.jsonl", "--period", "0.5"],
+            f"esp32tl: {NEO_M8N.with_suffix('.nmea')}:{log_line('$GNRMC,171927.00,')}: time"
+            f" 171927.00 is 1 s after 171926.00 on line {log_line('$GNRMC,171926.00,')}, not one"
+            " period of 0.5 s: the log skips epochs, or the receiver sends at another rate\n",
+        ),
+    ],
+)
+def test_a_conversion_refused_exits_2_and_writes_nothing(
+    args: list[str],
+    message: str,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(ROOT)
+    args = [arg if arg != "out.jsonl" else str(tmp_path / arg) for arg in args]
+    assert cli.main(["recording", *args]) == 2
+    assert capsys.readouterr().err == message
+    assert not (tmp_path / "out.jsonl").exists()
+
+
+@pytest.mark.parametrize("start", ["-1", "inf", "soon"])
+def test_start_is_a_number_from_0(start: str, capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        cli.main(["recording", "retime", "in", "out", "--start", start])
+    assert exit_info.value.code == 2
+    assert (
+        f"argument --start: {start!r} is not a number of seconds from 0" in capsys.readouterr().err
+    )

@@ -38,6 +38,38 @@ def test_reports_a_fix(board):
   `board.uart("modem").replay(path)`; `gnss` is `board.uart("gnss")`.
 - It returns the replay; its `sent` attribute counts the events the run has been given so far.
 
+## Replaying what a real receiver sent
+
+A recording of a real receiver replays the same way, once it is on the emulated clock. That gives
+the firmware the receiver's own behaviour: a speed of a few tenths of a knot and a position that
+wanders while it stands still, the epochs of a cold start without a fix, which the
+[GNSS model](models-user.md#the-gnss-receiver) does not send. Two ways in, both converted by
+`esp32tl recording` ([the command](cli-user.md#converting-what-a-real-device-sent)):
+
+- A raw NMEA log, saved by a serial terminal or a vendor tool: `esp32tl recording nmea log.nmea
+  log.jsonl`. Each epoch is one event, an epoch a second apart (`--period` for another rate),
+  the first at 1 s; a malformed log is refused with its line.
+- A capture made in a test with a [real source](real-source-user.md): `gnss.real(port)` and
+  `gnss.tap("capture.jsonl")` on a run paced to wall time, then `esp32tl recording retime
+  capture.jsonl capture-emulated.jsonl`. The device's bytes keep their spacing, the first at 1 s,
+  and what the firmware sent the device is left out.
+
+```python
+def test_reports_a_real_receiver_s_fix(board, gnss, console):
+    gnss.replay("../recordings/gnss-neo-m8n.jsonl")
+    board.power_on()
+    console.expect_exact("fix acquired lat=44.069011 lon=-121.314246", timeout=30)
+```
+
+`recordings/gnss-neo-m8n.jsonl` is a u-blox NEO-M8N at rest, converted from the log beside it
+([the GNSS recordings](validation-firmware-user.md#the-gnss-recordings)). Its first event, at 1 s,
+is the end of the epoch the log came in on; the first fix comes at 2 s, then one a second, 23 in
+all. The conversion's rules and refusals are in the
+[recording format](../recording-format.md#converting-what-a-real-device-sent). Each converted
+replay is a stream: nothing in it answers the firmware's commands. A firmware that configures its
+receiver (PMTK, UBX) gets the [matching engine](matching-user.md)'s fallback answers, as with any
+stream given a `protocol`, or nothing.
+
 ## What a replay does
 
 - Each unprompted event goes into the ESP32 on the route's RX pin at the route's baud, from the
@@ -82,7 +114,7 @@ here raises `ReplayError`, `{path}` being the path as the test gave it:
 | Message | Cause |
 |---|---|
 | `{path} is a recording of {interface}, not of uart.gnss` | The header's `interface` is another one |
-| `{path} has times on the wall clock, and uart.gnss runs on the emulated-fifo-write clock: replaying it would compare times across clocks` | The recording was made on a real board or device. `{clocks}` lists every clock it uses, `emulated-fifo-write and wall` for one with a clock switch. A run with a [real source](real-source-user.md) on another route is on the wall clock from that call on, and takes such a recording and refuses an emulated one |
+| `{path} has times on the wall clock, and uart.gnss runs on the emulated-fifo-write clock: replaying it would compare times across clocks` | The recording was made on a real board or device; `esp32tl recording retime` puts it on the emulated clock ([above](#replaying-what-a-real-receiver-sent)). `{clocks}` lists every clock it uses, `emulated-fifo-write and wall` for one with a clock switch. A run with a [real source](real-source-user.md) on another route is on the wall clock from that call on, and takes such a recording and refuses an emulated one |
 
 Malformed request framing also raises `ReplayError`, prefixed with `{path}:`, including
 `the recording ends with an incomplete request`. A nonempty loop of duration zero raises
@@ -137,4 +169,5 @@ went in as a recording, tap the route ([taps](run-report-user.md#tapping-a-route
 - [Replay: how it works](replay-technical.md)
 - [Recording format](../recording-format.md)
 - [pytest plugin](pytest-plugin-user.md): the `gnss` fixture
-- [Validation firmware](validation-firmware-user.md): `nmea_reader` and the generated GNSS recordings
+- [Validation firmware](validation-firmware-user.md): `nmea_reader` and the committed GNSS
+  recordings

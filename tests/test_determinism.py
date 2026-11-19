@@ -37,7 +37,8 @@ WARSAW = Position(52.229677, 21.012233)
 FIX = r"^fix(?: acquired)? lat=\S+ lon=\S+$"
 
 
-@pytest.mark.parametrize("recording", ["gnss-generated-1", "gnss-generated-2"])
+# gnss-neo-m8n, a real receiver's log converted, has its first fix at 2 s.
+@pytest.mark.parametrize("recording", ["gnss-generated-1", "gnss-generated-2", "gnss-neo-m8n"])
 def test_a_replay(
     recording: str, board: Esp32Sim, gnss: Gnss, console: Console, tmp_path: Path
 ) -> None:
@@ -47,7 +48,7 @@ def test_a_replay(
     console.expect_exact("fix acquired")
     board.wait(seconds(20))
     write_console(tmp_path, console)
-    # One sentence a second from 1 s, and the run ends past 21 s.
+    # One fix a second from the first, and the run ends 20 s past it.
     assert len(console.lines(FIX)) == 21
 
 

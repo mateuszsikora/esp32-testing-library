@@ -150,7 +150,11 @@ A `uart_tx` a `RateBound` source refuses still reaches the tap and the run's log
   again that reached the reading thread only after the first turn after the hold, and the firmware's
   fix less than the bound and 10 ms after the stamp of the answer's line ending: on the board's
   clock, from the stamp, since on a busy host the device's own thread is slow to say the answer.
-  `modem_at` and the device talking both ways on `lilygo-t-a7670g-r2`.
+  `modem_at` and the device talking both ways on `lilygo-t-a7670g-r2`. A capture, three epochs
+  each said until `nmea_reader` prints its fix, tapped, retimed by `esp32tl recording retime` and
+  replayed twice by `esp32tl replay` on the emulated clock: the same console both times, with the
+  fixes the capture's run printed
+  (`test_a_capture_converted_replays_on_the_emulated_clock_the_same_every_run`).
 - `test_a_receiver_on_a_usb_adapter` is the validation with real hardware, and runs only with
   `ESP32TL_REAL_GNSS_PORT` set ([testing](../guides/testing.md#real-device-checks)).
 

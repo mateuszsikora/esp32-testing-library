@@ -9,7 +9,9 @@ replayed into one of them. Unlike a test's run, which moves only while the test 
 board's clock, the command's runs free: there is no test body to wait for, so the run goes as fast
 as the emulator does until `--max-seconds`, and the console goes to stdout only. Tests run through pytest ([pytest plugin](pytest-plugin-user.md)).
 There is no `python -m esp32tl`, and no `esp32tl record` yet. Nor does the command take a
-[real source](real-source-user.md): its runs are on the emulated clock.
+[real source](real-source-user.md): its runs are on the emulated clock. `esp32tl recording`
+converts what a real device sent into a recording such a run replays
+([below](#converting-what-a-real-device-sent)).
 For Python tests, the package also exports `Board`: `from esp32tl import Board` annotates the
 `board` fixture and exposes its interface properties; see the
 [pytest API](pytest-plugin-user.md#one-board-and-its-interfaces). It exports `condition` and
@@ -83,6 +85,43 @@ source modification is performed. The target, encryption, missing-file and recor
 remain in force. This CLI option is independent of
 pytest-embedded's raw `pytest --build-dir`, which remains refused for board tests.
 
+## Converting what a real device sent
+
+```sh
+esp32tl recording nmea recordings/gnss-neo-m8n.nmea recordings/gnss-neo-m8n.jsonl
+```
+
+turns a raw NMEA log, a receiver's sentences one a line as a serial terminal saves them, into a
+recording on the emulated clock: one event an epoch, an epoch a second apart, the first at 1 s.
+`esp32tl replay` and `gnss.replay(path)` then play it the same way every run. The NEO-M8N log in
+`recordings/` gives `recordings/gnss-neo-m8n.jsonl` byte for byte.
+
+```sh
+esp32tl recording retime capture.jsonl capture-emulated.jsonl
+```
+
+puts a recording on the wall clock, such as `gnss.tap(path)` writes beside `gnss.real(port)`
+([real source](real-source-user.md#recording-what-crosses-the-route)), on the emulated clock: its
+`in` events at their times from the first, which goes in at 1 s, and none of its `out` events.
+What each conversion does, and refuses, is in the
+[recording format](../recording-format.md#converting-what-a-real-device-sent).
+
+| Option | Conversions | Default | Accepts |
+|---|---|---|---|
+| `IN`, `OUT` | both | none, required | the file to convert and the recording to write, relative to the working directory or absolute; `OUT` is written only once the conversion has succeeded, over a file already there |
+| `--start S` | both | `1` | the emulated time of the first event, a finite number of seconds from 0 |
+| `--board BOARD` | `nmea` | `esp32-devkitc` | the board profile the recording is for, the header's `board` |
+| `--interface INTERFACE` | `nmea` | `uart.gnss` | a UART route of the profile, or its role alone, `gnss`: the header's `interface`, and the baud each epoch must fit in a period at |
+| `--period S` | `nmea` | `1` | the receiver's time between two epochs, a finite number of seconds above 0: `0.1` for a receiver at 10 Hz |
+| `--end {hold,loop}` | both | `hold` for `nmea`, the original's for `retime` | the header's `end`: `loop` repeats the recording after its last event |
+
+A conversion that succeeds prints nothing and exits 0. One refused prints `esp32tl: {message}` and
+exits 2 without writing `OUT`. The message is the `RecordingError` of reading `IN` or of the
+conversion: for a log, `{IN}:{line}: {what}`, as in
+`esp32tl: log.nmea:1: '$GPRMC,120001.00,A,5213.7806,N,02100.734' has no checksum: a sentence ends with * and two hex digits`.
+`--board` and `--interface` fail as in `esp32tl replay`
+([exit codes](#exit-codes)), and `OUT` that cannot be written gives the `OSError`'s text.
+
 ## What it prints
 
 stdout is the firmware's console, UART0, as the runner prints it; on a profile whose `console`
@@ -125,10 +164,10 @@ as two signals, which would kill it.
 
 | Code | When | What stderr shows last |
 |---|---|---|
-| 0 | the run reached `--max-seconds` | the report, `(max_seconds)` |
+| 0 | the run reached `--max-seconds`; `esp32tl recording` wrote its recording | the report, `(max_seconds)`; nothing for `recording` |
 | 1 | the harness found the link wrong, and the runner exited 0 | `esp32tl: error: {reason}` |
 | 1 | an unhandled exception while parsing build metadata, such as invalid JSON in `flasher_args.json` | Python traceback ending with the parser exception, such as `json.decoder.JSONDecodeError` |
-| 2 | the run could not start: see below; or a usage error from argparse | `esp32tl: {message}`, or argparse's usage and error |
+| 2 | the run could not start: see below; `esp32tl recording` refused its input ([converting](#converting-what-a-real-device-sent)); or a usage error from argparse | `esp32tl: {message}`, or argparse's usage and error |
 | 130 | Ctrl-C | the report, `(signal)`; `the runner never connected` when it came before the runner connected; nothing when it came before the runner started |
 | any other | the runner's own exit code, when it is not 0 ([how a run ends](runner-user.md#how-a-run-ends)); 128 + N when a signal N killed it | the runner's last line, then the report |
 
@@ -171,21 +210,25 @@ Test unmodified ESP32 firmware through its wires.
 
 positional arguments:
   COMMAND
-    run       run an app on the emulator, its console on stdout
-    replay    run an app with a recording replayed into one of its board's
-              interfaces
+    runtime    prepare the downloaded runtime
+    run        run an app on the emulator, its console on stdout
+    replay     run an app with a recording replayed into one of its board's
+               interfaces
+    recording  convert what a real device sent into a recording the emulator
+               replays
 
 options:
-  -h, --help  show this help message and exit
-  --version   show program's version number and exit
+  -h, --help   show this help message and exit
+  --version    show program's version number and exit
 ```
 
-`esp32tl run -h` and `esp32tl replay -h` print each command's options. Any other argument is an
-error from argparse, with exit code 2:
+`esp32tl run -h`, `esp32tl replay -h`, `esp32tl recording -h`, `esp32tl recording retime -h` and
+`esp32tl recording nmea -h` print each command's options. Any other argument is an error from
+argparse, with exit code 2:
 
 ```
 usage: esp32tl [-h] [--version] COMMAND ...
-esp32tl: error: argument COMMAND: invalid choice: 'foo' (choose from 'run', 'replay')
+esp32tl: error: argument COMMAND: invalid choice: 'foo' (choose from 'runtime', 'run', 'replay', 'recording')
 ```
 
 ## See also

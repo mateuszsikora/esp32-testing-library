@@ -16,7 +16,7 @@ import re
 import struct
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from functools import cached_property
 from pathlib import Path
 from types import MappingProxyType
@@ -479,3 +479,303 @@ def read_btsnoop(path: str | os.PathLike[str]) -> Recording:
     except (OSError, UnicodeDecodeError) as error:
         raise RecordingError(str(error), file=str(sidecar(path))) from None
     return loads_btsnoop(data, header, os.fspath(path))
+
+
+# Converting what a real device sent into a recording a run on the emulated clock replays: `retime`
+# a recording on the wall clock, `from_nmea` a raw NMEA log. The first event goes in at `START_NS`
+# unless asked otherwise: after nmea_reader has configured its UART, as the generated recordings.
+START_NS = 1_000_000_000
+# The header's field a conversion adds, saying what the recording was converted from.
+CONVERTED = "converted"
+NS_PER_S = 1_000_000_000
+
+
+def retime(recording: Recording, *, start_ns: int = START_NS, end: str | None = None) -> Recording:
+    """`recording`, on the wall clock, as a recording on the emulated clock that a replay takes:
+    its `in` events at their times from the first of them, which goes in at `start_ns`, and none
+    of its `out` events, so that it is a stream with nothing to answer. The header is the
+    original's on the emulated clock, its `end` `end` when given, with a `converted` field of what
+    the conversion did."""
+    _time(start_ns)
+    header = recording.header
+    clocks = sorted({line.clock for line in recording.lines} | {header.clock})
+    if clocks == [EMULATED]:
+        raise RecordingError(
+            f"the recording is on the {EMULATED} clock already: a replay takes it as it is"
+        )
+    if clocks != [WALL]:
+        raise RecordingError(
+            f"the recording has times on the {' and '.join(clocks)} clock: retime converts one"
+            f" on the {WALL} clock alone"
+        )
+    ins = [event for event in recording.events if event.dir == "in"]
+    if not ins:
+        raise RecordingError("the recording has no in event: nothing to replay")
+    first = ins[0].t
+    converted = {
+        "from": WALL,
+        "first_t": first,
+        "start_ns": start_ns,
+        "dropped_out": len(recording.events) - len(ins),
+    }
+    retimed = Header(
+        board=header.board,
+        interface=header.interface,
+        source=header.source,
+        clock=EMULATED,
+        created=header.created,
+        end=header.end if end is None else end,
+        app_sha256=header.app_sha256,
+        tools=header.tools,
+        extra={**header.extra, CONVERTED: converted},
+    )
+    return Recording(
+        retimed, tuple(Event(e.t - first + start_ns, "in", e.data, EMULATED) for e in ins)
+    )
+
+
+# A line of a raw NMEA log: `$` and printable ASCII; after the `$`, the body, which holds no `$`,
+# `!` or `*`, then `*` and the checksum, two hex digits, the XOR of the body's characters.
+NMEA_SENTENCE = re.compile(rb"\$[\x20-\x7e]*")
+NMEA_CHECKSUM = re.compile(rb"([^$!*]*)\*([0-9A-Fa-f]{2})")
+# The sentences whose time tells the epochs apart, by their address without its talker: GPRMC,
+# GNRMC and BDRMC are all RMC. A proprietary sentence, whose address starts with P, is none of
+# them, Garmin's PGRMC among them.
+NMEA_TIMED = ("RMC", "GGA")
+# What a Windows editor may put before the first line: UTF-8's byte order mark.
+BOM = b"\xef\xbb\xbf"
+# hhmmss, then fractions of a second if any.
+NMEA_TIME = re.compile(r"([01]\d|2[0-3])([0-5]\d)([0-5]\d)(?:\.(\d{1,9}))?")
+SECONDS_PER_DAY = 86_400
+# The bits a character takes on a UART at 8N1: a start bit, eight data bits, a stop bit.
+BITS_PER_CHARACTER = 10
+
+
+@dataclass
+class _Epoch:
+    """One epoch of a raw NMEA log: its sentences, from `line` on. `timed` says it has an RMC or
+    a GGA, which only the sentences before the first of them lack; `addresses` are those RMC's
+    and GGA's, and `time` their time in nanoseconds of the day, `None` when they have none, as in
+    a cold start."""
+
+    line: int
+    sentences: list[bytes] = field(default_factory=list)
+    timed: bool = False
+    addresses: set[str] = field(default_factory=set)
+    time: int | None = None
+
+
+def from_nmea(
+    log: str | bytes,
+    *,
+    board: str,
+    interface: str,
+    baud: int,
+    period_ns: int = NS_PER_S,
+    start_ns: int = START_NS,
+    created: str | None = None,
+    source: str = "real",
+    end: str = "hold",
+    name: str = "<nmea>",
+) -> Recording:
+    """The raw NMEA log `log`, a receiver's sentences one a line, as a recording on the emulated
+    clock of `interface` on `board`, whose errors name `name` as the file and the line at fault.
+
+    An epoch is the sentences from one RMC or GGA to the next with another time, or the next of an
+    address the epoch has already: an RMC and a GGA of one time are one epoch, and so are the
+    sentences without a time after them. Sentences before the first RMC or GGA are the end of an
+    epoch the log came in on, an epoch of their own. Epoch k is one event at
+    `start_ns + k * period_ns`, its sentences back to back, each ended by `\\r\\n`. The times of two
+    epochs that both have one are as many periods apart as the epochs are; an epoch that does not
+    fit in its period at `baud` is refused. `created` is the first RMC's date and time when not
+    given, the time of the conversion when no RMC has a date."""
+    _time(start_ns)
+    if not isinstance(period_ns, int) or isinstance(period_ns, bool) or period_ns <= 0:
+        raise RecordingError(f"period_ns: {period_ns!r} is not a time in nanoseconds above 0")
+    if not isinstance(baud, int) or isinstance(baud, bool) or baud <= 0:
+        raise RecordingError(f"baud: {baud!r} is not a baud rate above 0")
+    data = log.encode("utf-8") if isinstance(log, str) else log
+    epochs: list[_Epoch] = []
+    first_rmc: str | None = None
+    # The latest epoch with a time: its time in nanoseconds of the day, as the log says it, its
+    # line and its index.
+    timed: tuple[int, str, int, int] | None = None
+    for number, raw in enumerate(data.split(b"\n"), start=1):
+        # Spaces, tabs and the line ending after the sentence, and a byte order mark before the
+        # first, are no part of it.
+        line = raw.rstrip(b" \t\r")
+        if number == 1:
+            line = line.removeprefix(BOM)
+        if not line.strip() or line.startswith(b"#"):
+            continue
+        try:
+            address, fields = _nmea_sentence(line)
+            text = _nmea_time(fields[1]) if _nmea_timed(address) and len(fields) > 1 else None
+        except RecordingError as error:
+            raise RecordingError(error.what, line=number, file=name) from None
+        if text is not None:
+            t = _nmea_ns(text) if text else None
+            epoch = epochs[-1] if epochs else None
+            if epoch is None or not epoch.timed or epoch.time != t or address in epoch.addresses:
+                # The first RMC or GGA, after nothing or after the end of an epoch the log came in
+                # on, or another time, or a second sentence of one address: a new epoch.
+                epoch = _Epoch(number, timed=True, time=t)
+                epochs.append(epoch)
+                if t is not None:
+                    if timed is not None:
+                        _nmea_step(timed, t, text, len(epochs) - 1, period_ns, number, name)
+                    timed = (t, text, number, len(epochs) - 1)
+            epoch.addresses.add(address)
+            if first_rmc is None and address[2:] == "RMC":
+                first_rmc = _nmea_created(fields)
+        elif not epochs:
+            epochs.append(_Epoch(number))
+        epochs[-1].sentences.append(line + b"\r\n")
+    if not epochs:
+        raise RecordingError("no NMEA sentence: nothing to replay", file=name)
+    if not any(epoch.timed for epoch in epochs):
+        raise RecordingError(
+            f"no {' or '.join(NMEA_TIMED)} sentence: the epochs cannot be told apart", file=name
+        )
+    for epoch in epochs:
+        size = sum(len(sentence) for sentence in epoch.sentences)
+        takes = size * BITS_PER_CHARACTER * NS_PER_S // baud
+        if takes > period_ns:
+            raise RecordingError(
+                f"the epoch from this line is {size} bytes, {_seconds(takes)} s at {baud} baud,"
+                f" longer than its period of {_seconds(period_ns)} s",
+                line=epoch.line,
+                file=name,
+            )
+    header = Header(
+        board=board,
+        interface=interface,
+        source=source,
+        clock=EMULATED,
+        created=created or first_rmc or _now(),
+        end=end,
+        extra={
+            CONVERTED: {
+                "from": "nmea",
+                "baud": baud,
+                "period_ns": period_ns,
+                "start_ns": start_ns,
+            }
+        },
+    )
+    return Recording(
+        header,
+        tuple(
+            Event(start_ns + k * period_ns, "in", b"".join(epoch.sentences), EMULATED)
+            for k, epoch in enumerate(epochs)
+        ),
+    )
+
+
+def read_nmea(path: str | os.PathLike[str], **options: Any) -> Recording:
+    """The raw NMEA log in the file at `path` as a recording, `options` those of `from_nmea`."""
+    try:
+        data = Path(path).read_bytes()
+    except OSError as error:
+        raise RecordingError(str(error), file=os.fspath(path)) from None
+    return from_nmea(data, name=os.fspath(path), **options)
+
+
+def _nmea_sentence(line: bytes) -> tuple[str, list[str]]:
+    """The address and the fields of the sentence `line`, its checksum checked."""
+    # The line's first 40 bytes as Python writes bytes, a byte outside printable ASCII as \xb5.
+    shown = repr(line[:40])[1:]
+    if not line.startswith(b"$"):
+        raise RecordingError(f"{shown} is not an NMEA sentence: a sentence starts with $")
+    if not NMEA_SENTENCE.fullmatch(line):
+        raise RecordingError(f"{shown} is not an NMEA sentence: a sentence is printable ASCII")
+    match = NMEA_CHECKSUM.fullmatch(line[1:])
+    if match is None:
+        raise RecordingError(f"{shown} has no checksum: a sentence ends with * and two hex digits")
+    body, checksum = match.group(1), int(match.group(2), 16)
+    actual = 0
+    for character in body:
+        actual ^= character
+    if actual != checksum:
+        raise RecordingError(
+            f"{shown}: checksum {checksum:02X}, and the sentence's is {actual:02X}"
+        )
+    fields = body.decode("ascii").split(",")
+    return fields[0], fields
+
+
+def _nmea_timed(address: str) -> bool:
+    """Whether the sentence of `address` is an RMC or a GGA, of any talker."""
+    return len(address) == 5 and not address.startswith("P") and address[2:] in NMEA_TIMED
+
+
+def _nmea_time(text: str) -> str:
+    """`text`, the time field of an RMC or a GGA, when it is one or empty."""
+    if text and not NMEA_TIME.fullmatch(text):
+        raise RecordingError(f"time {text!r} is not hhmmss or hhmmss.ss")
+    return text
+
+
+def _nmea_ns(text: str) -> int:
+    """The time of the day `text` (hhmmss.ss), in nanoseconds."""
+    match = NMEA_TIME.fullmatch(text)
+    assert match is not None
+    hours, minutes, seconds, fraction = match.groups()
+    whole = (int(hours) * 60 + int(minutes)) * 60 + int(seconds)
+    return whole * NS_PER_S + int((fraction or "").ljust(9, "0"))
+
+
+def _nmea_step(
+    timed: tuple[int, str, int, int],
+    t: int,
+    text: str,
+    index: int,
+    period: int,
+    line: int,
+    name: str,
+) -> None:
+    """Refuses the time `t` (`text`) of epoch `index`, on `line`, unless it is as many periods
+    after the latest time, `timed`, as the epochs are apart. A time just after midnight is after
+    one just before it."""
+    before, before_text, before_line, before_index = timed
+    since = t - before
+    if since < -SECONDS_PER_DAY * NS_PER_S // 2:
+        since += SECONDS_PER_DAY * NS_PER_S
+    periods = index - before_index
+    if since <= 0:
+        raise RecordingError(
+            f"time {text} is not after {before_text}, the time on line {before_line}:"
+            " the log goes back",
+            line=line,
+            file=name,
+        )
+    if since != periods * period:
+        what = "one period" if periods == 1 else f"{periods} periods"
+        raise RecordingError(
+            f"time {text} is {_seconds(since)} s after {before_text} on line {before_line}, not"
+            f" {what} of {_seconds(period)} s: the log skips epochs, or the receiver sends at"
+            " another rate",
+            line=line,
+            file=name,
+        )
+
+
+def _nmea_created(fields: list[str]) -> str | None:
+    """The date and time of the RMC `fields` as a header's `created`, `None` without both."""
+    if len(fields) < 10 or len(fields[1]) < 6 or not re.fullmatch(r"\d{6}", fields[9]):
+        return None
+    day, month, year = fields[9][:2], fields[9][2:4], int(fields[9][4:])
+    # NMEA 0183 gives the year in two digits; GPS began in 1980.
+    year += 1900 if year >= 80 else 2000
+    text = f"{year}-{month}-{day}T{fields[1][:2]}:{fields[1][2:4]}:{fields[1][4:6]}Z"
+    return text if _utc(text) else None
+
+
+def _seconds(ns: int) -> str:
+    """`ns` nanoseconds as seconds, without trailing zeros: `1`, `0.2`, `1.05`."""
+    whole, fraction = divmod(ns, NS_PER_S)
+    return f"{whole}.{fraction:09d}".rstrip("0").rstrip(".")
+
+
+def _now() -> str:
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")

@@ -113,6 +113,40 @@ def test_only_well_formed_fixes_count_and_an_epoch_prints_once(
     ]
 
 
+def test_a_real_receiver_s_log_converted_gives_its_fixes(
+    board: Esp32Sim, gnss: Gnss, console: Console
+) -> None:
+    """recordings/gnss-neo-m8n.jsonl is what `esp32tl recording nmea` made of a u-blox NEO-M8N's
+    log at rest: its fixes are the log's RMC positions, a few centimetres apart, one a second."""
+    expected = log_fixes(RECORDINGS / "gnss-neo-m8n.nmea")
+    assert len(expected) == 23
+    assert expected[:2] == [
+        "fix acquired lat=44.069011 lon=-121.314246",
+        "fix lat=44.069010 lon=-121.314246",
+    ]
+    gnss.replay("../recordings/gnss-neo-m8n.jsonl")
+    board.power_on()
+    assert [next_fix(console) for _ in expected] == expected
+    # The log's first event, the end of an epoch, came at 1 s, its first fix at 2 s; every epoch
+    # fit in its second at 9600 baud.
+    assert board.link.warnings == []
+
+
+def log_fixes(path: Path) -> list[str]:
+    """The fix lines a raw NMEA log should print: one per RMC with a fix, of a time not printed
+    before. In the logs here an epoch's RMC comes before its GGA."""
+    lines: list[str] = []
+    times: set[str] = set()
+    for text in path.read_text(encoding="ascii").splitlines():
+        fields = text.partition("*")[0].split(",")
+        if not fields[0].endswith("RMC") or fields[2] != "A" or fields[1] in times:
+            continue
+        times.add(fields[1])
+        position = f"lat={degrees(fields[3], fields[4], 2)} lon={degrees(fields[5], fields[6], 3)}"
+        lines.append(f"{'fix' if lines else 'fix acquired'} {position}")
+    return lines
+
+
 def next_fix(console: Console) -> str:
     """The next fix line on the console."""
     match: re.Match[bytes] = console.expect(FIX)

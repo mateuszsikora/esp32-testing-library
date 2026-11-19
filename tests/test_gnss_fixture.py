@@ -186,7 +186,7 @@ def test_reports_a_fix_fails_on_a_changed_recording(pytester: pytest.Pytester) -
     result = pytester.runpytest_subprocess(
         "-p", "no:cacheprovider", "tests", "-k", "test_reports_a_fix"
     )
-    result.assert_outcomes(failed=1, deselected=4)
+    result.assert_outcomes(failed=1, deselected=5)
     # The recording reached the firmware, which printed what the changed sentence says.
     result.stdout.fnmatch_lines(["*fix acquired lat=52.229843 lon=21.012233*"])
 
@@ -210,7 +210,7 @@ def test_reports_a_fix_fails_on_a_baud_mismatch(pytester: pytest.Pytester) -> No
     result = pytester.runpytest_subprocess(
         "-p", "no:cacheprovider", "tests", "-k", "test_reports_a_fix"
     )
-    result.assert_outcomes(failed=1, deselected=4)
+    result.assert_outcomes(failed=1, deselected=5)
     # Not silence: the run ends on the first frame errors, at the turn after the first sentence at
     # 1 s, and the expect with it, long before its 30 s of the board's time.
     result.stdout.fnmatch_lines(

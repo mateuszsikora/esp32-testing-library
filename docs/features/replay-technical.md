@@ -91,7 +91,12 @@ link with `uart.gnss sent bytes stamped {t} ns in the turn at {now} ns: ...`.
 - `tests/test_nmea_reader.py`, the first milestone's tests: the fixes of both generated recordings,
   ten emulated seconds in under ten wall seconds with `board.now` just past 10 s on a runner on the
   emulated clock, and the sentences `nmea_reader` must ignore, all through `gnss.replay` before
-  `board.power_on()`.
+  `board.power_on()`; and the 23 fixes of `recordings/gnss-neo-m8n.jsonl`, a real receiver's log
+  converted, worked out from the log's RMC sentences.
+- `tests/test_real_source.py::test_a_capture_converted_replays_on_the_emulated_clock_the_same_every_run`:
+  a run with a real source on a pseudo-terminal, tapped, its tap retimed by `esp32tl recording
+  retime`, and two runs of `esp32tl replay` of it, which print the same console and the fixes the
+  capture's run printed.
 - `tests/test_boardlink.py::test_a_frame_error_fails_the_run_at_once`: a `frm_err` warning is the
   link's error, with the interface's name and both bauds, or the pin alone, and calls `on_error`
   at once; `test_other_warnings_fail_nothing`: the other kinds fail nothing.
