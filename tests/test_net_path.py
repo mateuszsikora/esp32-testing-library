@@ -12,6 +12,7 @@ from test_net_ppp import control, frame, unframe
 from esp32tl.link.boardlink import Output
 from esp32tl.net import LATENCY_NS, Internet
 from esp32tl.net.ethernet import GATEWAY_MAC
+from esp32tl.net.ntp import NtpExchange
 from esp32tl.units import Duration, kbit_s, mbit_s, ms
 
 MS = 1_000_000
@@ -54,6 +55,8 @@ def test_a_stated_rtt_is_exact_from_the_request_to_the_answers_stamp() -> None:
     assert net.quiet_until() == up
     assert net.poll(up) == []
     assert net.ntp.requests == 1
+    # The request is recorded when it reaches the server, not when the link carried it.
+    assert net.ntp.exchanges == [NtpExchange(Duration(up), answered=True)]
     assert net.quiet_until() == t + 200 * MS
     # Handed over within the latency before its stamp, like every answer; stamped the same.
     assert net.poll(t + 199 * MS - 1) == []

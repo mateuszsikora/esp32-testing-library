@@ -113,6 +113,7 @@ from esp32tl.net.client import TcpConnection as TcpConnection
 from esp32tl.net.dhcp import Dhcp as Dhcp
 from esp32tl.net.dhcp import Lease as Lease
 from esp32tl.net.dns import Dns as Dns
+from esp32tl.net.dns import DnsQuestion as DnsQuestion
 from esp32tl.net.ethernet import Ethernet as Ethernet
 from esp32tl.net.http import HttpRequest as HttpRequest
 from esp32tl.net.http import HttpServer as HttpServer
@@ -139,6 +140,7 @@ from esp32tl.net.mqtt import RequestedFilter as RequestedFilter
 from esp32tl.net.mqtt import SessionState as SessionState
 from esp32tl.net.mqtt import SubscribeRequest as SubscribeRequest
 from esp32tl.net.ntp import Ntp as Ntp
+from esp32tl.net.ntp import NtpExchange as NtpExchange
 from esp32tl.net.ppp import Ppp as Ppp
 from esp32tl.net.station import HostLease as HostLease
 from esp32tl.net.station import Station as Station
@@ -215,6 +217,7 @@ __all__ = [
     "DiscoveredService",
     "Discovery",
     "Dns",
+    "DnsQuestion",
     "Ethernet",
     "FaultedOperation",
     "FlashFile",
@@ -258,6 +261,7 @@ __all__ = [
     "NotReachable",
     "Notification",
     "Ntp",
+    "NtpExchange",
     "OtaData",
     "OtaEntry",
     "OutputLine",

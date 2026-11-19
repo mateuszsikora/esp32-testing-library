@@ -205,11 +205,12 @@ The names say which is which, on every service of the network: a condition that 
 happens after the call that makes it is `next_*` (`next_message`, `next_connection`,
 `next_connection_attempt`, `next_end`, `next_delivery`, `next_subscribe`, HTTP's
 `next_request`, DHCP's `next_lease`, TLS's `next_handshake_started` and
-`next_handshake_completed`, a TCP connection's `next_data`); `find_*` reads the history now and
-returns a record or `None`; a plural attribute (`messages`, `clients`, `connection_ends`,
-`subscribe_requests`, `leases`) is the history itself; and a condition named for a state
-(`subscribed`, TLS's `handshake_started` and `handshake_completed`, a TCP connection's
-`established`, `closed`, `refused` and `reset`) is true while that state holds, or once it has.
+`next_handshake_completed`, NTP's `next_exchange`, DNS's `next_question`, a TCP connection's
+`next_data`); `find_*` reads the history now and returns a record or `None`; a plural attribute
+(`messages`, `clients`, `connection_ends`, `subscribe_requests`, `leases`, NTP's `exchanges`, DNS's
+`questions`) is the history itself; and a condition named for a state (`subscribed`, TLS's
+`handshake_started` and `handshake_completed`, a TCP connection's `established`, `closed`,
+`refused` and `reset`) is true while that state holds, or once it has.
 
 All MQTT conditions have timeout representations such as `the next MQTT message on 'a/+' saying
 b'new'`, `the next MQTT client connection`, `the next MQTT connection attempt`, `the next MQTT
@@ -1041,13 +1042,13 @@ Behind the modem, PPP gives the device `10.64.0.2` and DNS `10.64.0.1`; the peer
 Behind the access point, DHCP gives the same addresses ([above](#addresses-behind-the-access-point)).
 Every destination IP answers, so TCP and UDP dispatch by destination port, regardless of the
 address. DNS on UDP 53 answers every IN A query with `10.64.0.1`; other query types receive an empty answer.
-`network.dns.asked` records queried names. NTP on UDP 123 tells `board.power_on(utc=...)` plus
-elapsed emulated time; `network.ntp.requests` counts replies. The default UTC is the board's.
-`network.ntp.go_silent()` stops answering new requests; `network.ntp.resume()` answers new
-requests again using the current world time. Both work before power-on and during a run,
-without advancing time. Silence does not count as a reply, queue requests for later, or cancel
-replies already scheduled for delivery. Transitions appear as `ntp: silent` and `ntp: resumed`
-in the network transcript; repeating either call in the same state adds no event.
+NTP on UDP 123 tells `board.power_on(utc=...)` plus elapsed emulated time. The default UTC is the
+board's. `network.ntp.go_silent()` stops answering new requests; `network.ntp.resume()` answers
+new requests again using the current world time. Both work before power-on and during a run,
+without advancing time. Silence does not queue requests for later or cancel replies already
+scheduled for delivery. Transitions appear as `ntp: silent` and `ntp: resumed` in the network
+transcript; repeating either call in the same state adds no event. What the device asked either
+service, and when, is [below](#when-the-device-asked-for-the-time-and-for-a-name).
 
 PPP honors the device's negotiated maximum receive unit (MRU), default 1500 bytes, for the whole
 outgoing IPv4 packet. TCP segmentation also respects the peer's MSS and receive window. The
@@ -1178,6 +1179,62 @@ refuses a renegotiation with a `no_renegotiation` warning. A handshake that fail
 Why the server is the harness's own: [the decision](../decisions/harness.md#the-harnesss-tls-server-draws-every-random-value-from-a-seed). `pppos_client` validates
 plain MQTT; [the position tracker](examples-user.md#position-tracker-over-a-cellular-modem)
 validates firmware PPP, NTP and MQTT over TLS, with its broker CA provisioned through NVS.
+
+### When the device asked for the time and for a name
+
+Both services keep what the device asked, in the order it came, with the board's time it reached
+them: when it came off the path up ([path](#give-the-network-a-round-trip-and-a-rate)), which
+without a path is when the link carried it. A request still on its way up when the link ends reaches
+neither service and is not recorded.
+
+| Attribute or method | What it holds |
+|---|---|
+| `network.ntp.exchanges` | Every NTP v3 or v4 client request, each an `NtpExchange` with `at` (a `Duration`) and `answered`, `False` for one that came while the server was silent; `True` says the server answered, not that the answer reached the device, which the end of the link can drop on the path |
+| `network.ntp.requests` | How many of `exchanges` were answered |
+| `network.ntp.next_exchange(*, answered=None)` | The first request recorded after the call; with `answered=True` or `False`, the first answered or the first not |
+| `network.dns.questions` | Every question the server parsed, each a `DnsQuestion` with `at` (a `Duration`), `name` and `qtype` (1 for A, 28 for AAAA); every one is answered |
+| `network.dns.asked` | The names of `questions`, in order |
+| `network.dns.next_question(name=None)` | The first question recorded after the call; with `name`, the first for exactly that name |
+
+Datagrams that are not an NTP client request or a DNS query with one question are neither
+answered nor recorded. `name` is compared exactly, with the case the device sent and no final dot;
+a `name` that is not text raises `TypeError("dns: name takes text or None")`. The conditions
+follow the [`next_*` rules](#history-next-events-and-current-state): their boundary is the end of
+the history at the call, polling never moves it, and each returns the same record once it has one.
+They time out as `the next NTP request`, `the next answered NTP request`, `the next unanswered NTP
+request`, `the next DNS question` and `the next DNS question for 'time.test'`; `bool()` of one
+raises `TypeError("call the NTP condition with (), or pass it to board.wait_until")`, or the same
+with `DNS`. `answered` other than `True`, `False` or `None` raises
+`TypeError("ntp: answered takes True, False or None")`.
+
+A firmware's SNTP client retries on its own schedule and resolves its server's name again once its
+DNS cache expires; the answers here have a TTL of 60 s. The position tracker's
+`test_retries_ntp_further_apart_and_resolves_its_name_again` checks both while the time server is
+down. ESP-IDF's lwIP waits 15 s for an answer and then retries after an interval that starts at 15 s
+and doubles, so its requests come 30, 45 and 75 s apart; it asks for `time.test` before the first,
+the third and the fourth, the second still having the answer of the first:
+
+```python
+from itertools import pairwise
+
+network.ntp.go_silent()
+board.power_on(utc=WORLD)
+board.wait(seconds(160))
+sent = [e.at for e in network.ntp.exchanges]
+assert not any(e.answered for e in network.ntp.exchanges)
+assert [b - a for a, b in pairwise(sent)] == [
+    about(seconds(30), within=JITTER),
+    about(seconds(45), within=JITTER),
+    about(seconds(75), within=JITTER),
+]
+assert [q.name for q in network.dns.questions] == ["time.test"] * 3
+
+answered = network.ntp.next_exchange(answered=True)
+network.ntp.resume()
+board.wait_until(answered, within=seconds(150))
+```
+
+The times are the board's, so they are the same in every run of the same firmware and test.
 
 ## Bridge a port to a real service
 

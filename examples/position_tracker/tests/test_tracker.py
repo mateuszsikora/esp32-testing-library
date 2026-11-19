@@ -2,6 +2,7 @@
 
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from itertools import pairwise
 
 import pytest
 from tracker_support import (
@@ -210,9 +211,11 @@ def test_waits_for_ntp_and_connects_when_it_returns(board: Board) -> None:
     configure_tracker(board, trusted_ca=tls.ca.ca_pem)
     network.ntp.go_silent()
     board.gnss.fix(at=WARSAW)
+    resolved = network.dns.next_question("time.test")
     board.power_on(utc=WORLD)
-    board.wait_until(lambda: "time.test" in network.dns.asked, within=STARTUP)
+    board.wait_until(resolved, within=STARTUP)
     board.wait(NTP_OUTAGE)
+    assert network.ntp.exchanges and not any(e.answered for e in network.ntp.exchanges)
     assert BROKER_HOST not in network.dns.asked
     assert not tls.handshake_started()
     assert not network.broker.clients
@@ -225,6 +228,36 @@ def test_waits_for_ntp_and_connects_when_it_returns(board: Board) -> None:
     assert report.position == WARSAW
     expected = WORLD + timedelta(seconds=report.received_at.seconds)
     assert abs(report.utc - expected) < UTC_TOLERANCE
+
+
+def test_retries_ntp_further_apart_and_resolves_its_name_again(board: Board) -> None:
+    network, tls = serve_broker(board)
+    reports = Reports(network.broker)
+    configure_tracker(board, trusted_ca=tls.ca.ca_pem)
+    network.ntp.go_silent()
+    board.power_on(utc=WORLD)
+    board.wait(seconds(160))
+    unanswered = network.ntp.exchanges
+    assert not any(e.answered for e in unanswered)
+    # lwIP waits 15 s for an answer, then retries after an interval that starts at 15 s and doubles.
+    sent = [e.at for e in unanswered]
+    assert [b - a for a, b in pairwise(sent)] == [
+        about(seconds(30), within=JITTER),
+        about(seconds(45), within=JITTER),
+        about(seconds(75), within=JITTER),
+    ]
+    # The name's answer lives 60 s: the retry at 30 s uses it, the later ones resolve it again.
+    questions = network.dns.questions
+    assert [q.name for q in questions] == ["time.test"] * 3
+    resolving = [sent[0], sent[2], sent[3]]
+    assert all(q.at <= at < q.at + JITTER for q, at in zip(questions, resolving, strict=True))
+
+    answered = network.ntp.next_exchange(answered=True)
+    network.ntp.resume()
+    exchange = board.wait_until(answered, within=seconds(150))
+    report = board.wait_until(reports.when_received(), within=STARTUP)
+    assert exchange.at < report.received_at
+    assert network.ntp.requests == 1
 
 
 def test_missing_configuration_does_not_connect(board: Board) -> None:

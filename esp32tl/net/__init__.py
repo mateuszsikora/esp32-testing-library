@@ -96,7 +96,7 @@ class Internet:
         self._datagram: int | None = None  # the size of the IPv4 datagram the link is sending
         self.events: list[dict[str, object]] = []
         self.ip = Network(self._downlink, self.log, mtu=self._mtu, carries=self._carries)
-        self.dns = Dns("10.64.0.1", self.log)
+        self.dns = Dns("10.64.0.1", self.now, self.log)
         self.ntp = Ntp(self.now, world, self.log)
         self.ip.udp.update({53: self.dns, 123: self.ntp})
         self.broker = Broker(self.now, self.log)

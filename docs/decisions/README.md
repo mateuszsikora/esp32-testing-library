@@ -357,6 +357,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Extended advertising, LE Audio, the coded PHY and several connections wait](harness.md#extended-advertising-le-audio-the-coded-phy-and-several-connections-wait) | `harness.md` | postponed (#234) |
 | [An escape is a mode change, not a modem command](harness.md#an-escape-is-a-mode-change-not-a-modem-command) | `harness.md` | decided (#276) |
 | [The broker keeps how each connection ended in connection_ends, not on MqttClient](harness.md#the-broker-keeps-how-each-connection-ended-in-connection_ends-not-on-mqttclient) | `harness.md` | decided (#274) |
+| [NTP and DNS keep a history of what the device asked, with board times](harness.md#ntp-and-dns-keep-a-history-of-what-the-device-asked-with-board-times) | `harness.md` | decided (#273) |
 
 ## The runner crate and esp32sim
 
