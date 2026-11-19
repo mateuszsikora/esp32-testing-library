@@ -55,11 +55,14 @@ silent; an AT-only model still works without PPP. The network's broker is `modem
 | `next_connection()` | Condition returning the first accepted MQTT CONNECT recorded **after this method call** |
 | `find_connection()` | Immediate history query returning the first accepted CONNECT, or `None`, even if that connection has closed |
 | `next_connection_attempt()` | Condition returning the first accepted or rejected CONNECT outcome recorded **after this method call** |
+| `next_end(client_id=None)` | Condition returning the first connection end recorded **after this method call**; with `client_id`, the first of a connection with that client ID ([how each connection ended](#how-each-connection-ended)) |
+| `ended(connection_id)` | Immediate query returning how that connection ended, a `ConnectionEnd`, or `None` while it has not |
 | `next_subscribe(filter=None)` | Condition returning the first SUBSCRIBE recorded **after this method call**; with `filter`, the first naming exactly that topic filter ([every SUBSCRIBE and UNSUBSCRIBE](#every-subscribe-and-unsubscribe)) |
 | `connection_policy` | Callable receiving `Connect` and returning `ConnackCode`; `None` (default) accepts supported requests |
 | `publish(topic, payload, retain=False, qos=0)` | Publish from the test at the board's current time; bytes or UTF-8 text, QoS 0 or 1. The message's `client` is `TEST_CLIENT` |
 | `messages`, `clients`, `retained` | Message history, accepted-client history and currently retained messages |
 | `connection_attempts` | CONNECT outcome history, including accepted and rejected attempts |
+| `connection_ends` | How and when each accepted connection ended, each a `ConnectionEnd`, in the order they ended |
 | `subscribe_requests` | Every SUBSCRIBE and UNSUBSCRIBE received, each a `SubscribeRequest` |
 | `puback` | Policy for new incoming QoS 1 exchanges: `"immediate"` (default), `"hold"`, or a nonnegative `Duration` |
 | `pending` | Tuple of pending `Publication` handles, grouped by connection, then first receipt |
@@ -113,6 +116,13 @@ advance time. They include all history, including closed connections, test publi
 Wills. The public `messages` and `clients` lists expose all records in append order; treat them
 as read-only histories. Network resets do not clear them. Payload decoding and application
 schema assertions belong in consumer code, as in the position tracker's `Reports` adapter.
+
+Four of them answer four questions about connections. `clients` is every connection the broker
+accepted, each a `MqttClient`, closed ones included. `connection_attempts` is every CONNECT's
+outcome, accepted or rejected, so it holds what `clients` does and the refusals besides.
+`next_connection()` is the next accepted connection from now on, for a wait before an action;
+`find_connection()` is the first accepted one ever, `clients[0]`, and not the latest. How each of
+them ended is in `connection_ends` ([how each connection ended](#how-each-connection-ended)).
 
 ### Every message since a point
 
@@ -193,23 +203,24 @@ a previously true condition false.
 
 The names say which is which, on every service of the network: a condition that sees only what
 happens after the call that makes it is `next_*` (`next_message`, `next_connection`,
-`next_connection_attempt`, `next_delivery`, `next_subscribe`, HTTP's `next_request`, DHCP's
-`next_lease`, TLS's `next_handshake_started` and `next_handshake_completed`, a TCP connection's
-`next_data`); `find_*` reads the history now and returns a record or `None`; a plural attribute
-(`messages`, `clients`, `subscribe_requests`, `leases`) is the history itself; and a condition
-named for a state (`subscribed`, TLS's `handshake_started` and `handshake_completed`, a TCP
-connection's `established`, `closed`, `refused` and `reset`) is true while that state holds, or
-once it has.
+`next_connection_attempt`, `next_end`, `next_delivery`, `next_subscribe`, HTTP's
+`next_request`, DHCP's `next_lease`, TLS's `next_handshake_started` and
+`next_handshake_completed`, a TCP connection's `next_data`); `find_*` reads the history now and
+returns a record or `None`; a plural attribute (`messages`, `clients`, `connection_ends`,
+`subscribe_requests`, `leases`) is the history itself; and a condition named for a state
+(`subscribed`, TLS's `handshake_started` and `handshake_completed`, a TCP connection's
+`established`, `closed`, `refused` and `reset`) is true while that state holds, or once it has.
 
 All MQTT conditions have timeout representations such as `the next MQTT message on 'a/+' saying
-b'new'`, `the next MQTT client connection`, `the next MQTT connection attempt`,
-`the next MQTT delivery on 'a/+' saying b'new'`, `the next MQTT SUBSCRIBE to 'a/#'` and
-`an active MQTT subscription to 'a/#'`. Call a condition with `()` or pass it to
-`board.wait_until`. Boolean coercion of any MQTT condition, including those from `next_message`,
-`next_connection`, `next_connection_attempt`, `next_delivery`, `next_subscribe` and `subscribed`,
-raises `TypeError("call the MQTT condition with (), or pass it to board.wait_until")`, before and
-after a match, so an unevaluated `assert broker.next_connection()` fails. Use
-`assert broker.find_connection() is not None` to inspect past connections.
+b'new'`, `the next MQTT client connection`, `the next MQTT connection attempt`, `the next MQTT
+connection end of 'logger-1'`, `the next MQTT delivery on 'a/+' saying b'new'`, `the next MQTT
+SUBSCRIBE to 'a/#'` and `an active MQTT subscription to 'a/#'`. Call a condition with `()` or pass
+it to `board.wait_until`. Boolean coercion of any MQTT condition, including those from
+`next_message`, `next_connection`, `next_connection_attempt`, `next_end`, `next_delivery`,
+`next_subscribe` and `subscribed`, raises `TypeError("call the MQTT condition with (), or pass it
+to board.wait_until")`, before and after a match, so an unevaluated `assert
+broker.next_connection()` fails. Use `assert broker.find_connection() is not None` to inspect past
+connections.
 
 Subscriptions support `+` and final `#`, including empty levels. Wildcards beginning with `+`
 or `#` do not match `$` topics. QoS 0 and 1, PUBACK, retained delivery, empty retained-message
@@ -224,6 +235,49 @@ A CONNECT with an empty client ID and `CleanSession=1` receives a generated ID s
 per-broker counter and skip IDs already in its accepted-client history, so anonymous clients
 remain independent and repeated test runs assign the same IDs. An empty ID with
 `CleanSession=0` receives CONNACK return code 2 (`Identifier rejected`) and is disconnected.
+
+### How each connection ended
+
+`broker.connection_ends` gets one `ConnectionEnd` for each accepted connection when it ends:
+`at` (`Duration`, the board's time), `client_id`, `connection_id` (the one of its `MqttClient`),
+`by` and `will_sent`, whether the broker published the connection's Will then. `by` is one of:
+
+| `by` | The connection ended by | Its Will, if it set one |
+|---|---|---|
+| `"disconnect"` | the client's DISCONNECT; the log has `mqtt: <id> sent DISCONNECT` | never |
+| `"keepalive"` | 1.5 times its keepalive with no packet from the client; `mqtt: <id> keepalive expired` | sent |
+| `"takeover"` | a CONNECT with the same client ID on another connection; `mqtt: <id> (connection <new>) took over connection <old>` | sent, unless both keep the session and the old keepalive has not run out ([a lost link](#a-lost-link-and-the-will)) |
+| `"closed"` | its stream closing under it: the device's FIN or RST, `ip.reset`, the TLS layer under it closing | sent |
+| `"malformed"` | a packet the broker could not take; `mqtt: malformed or unsupported packet, closing`, or no line for a remaining length over 1 MiB or encoded in more than four bytes | sent |
+| `"test"` | `broker.disconnect(client_id)`; `mqtt: <id> disconnected by the test` | sent |
+
+A connection never accepted, a rejected CONNECT or a stream that broke before its CONNECT, has no
+end in this history: its outcome is in `connection_attempts`, or nowhere. A lost link ends nothing
+by itself, so a device that loses its power or its call ends as `"keepalive"`, 1.5 times its
+keepalive after its last packet, with its Will sent ([a lost link](#a-lost-link-and-the-will)).
+`broker.ended(connection_id)` returns one connection's end, or `None` while it is open, and
+`broker.next_end(client_id=None)` waits for the next one, of that client ID when given. A test can
+then ask whether the device said goodbye before its link went, with no MQTT packets to parse:
+
+```python
+from esp32tl.units import seconds
+
+client = board.wait_until(broker.next_connection(), within=seconds(60))
+ended = broker.next_end(client.client_id)
+modem.drop_call()
+end = board.wait_until(ended, within=seconds(120))
+assert end.by != "disconnect"  # It sent no DISCONNECT first.
+assert broker.ended(client.connection_id) is end
+```
+
+Which end it is then depends on the firmware: one that does not connect again within 1.5 times
+its keepalive ends as `"keepalive"`, its Will sent; one that dials again and connects with the
+same client ID before then ends as `"takeover"`, with no Will when both connections keep the
+session.
+
+The condition's timeout description is `the next MQTT connection end`, with ` of 'logger-1'` when
+it names a client ID. A connection the broker closes, by any of these, also closes its stream: the
+device's FIN or RST that follows adds no second end.
 
 ### Every SUBSCRIBE and UNSUBSCRIBE
 
@@ -943,7 +997,9 @@ broker's end of each connection the device opened stays open and silent,
 `broker.session(...).connected` stays true, and the keepalive expiry closes it and publishes the
 Will, when the client set one, with the log lines `mqtt: session-client keepalive expired` and `net:
 TCP 10.64.0.2:<port> → 10.64.0.1:1883 closed by its service with no device to answer`: no stack on
-the device holds the connection any more, so the broker's end goes with no FIN. A connection whose
+the device holds the connection any more, so the broker's end goes with no FIN. Its end in
+`broker.connection_ends` says `by="keepalive"`, at that instant, with `will_sent` true when the
+client set a Will ([how each connection ended](#how-each-connection-ended)). A connection whose
 handshake the link's end cut short, before the device's ACK, goes at the link's end, `lost before
 the device answered its SYN-ACK`, since no CONNECT, and so no keepalive, came on it. The broker's
 deadlines run while the link is down, the board off included. What it writes in the meantime, a

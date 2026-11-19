@@ -825,6 +825,48 @@ def test_the_keepalive_runs_out_with_the_call_ended(tmp_path: Path, loss: str) -
     assert list(model.poll(15 * NS_PER_S)) == [] and model.quiet_until() is None
 
 
+def mqtt_with_a_will(tmp_path: Path, now: list[int]) -> tuple[ModemRoute, Modem, Internet, Peer]:
+    """A dialled modem whose network's broker has accepted client ID c, keepalive 10 s, at 0,
+    with a Will of `gone` on a/b: it expires at 15 s."""
+    modem, _, _ = route(tmp_path, now)
+    network = modem.network()
+    model = modem.modem_model()
+    assert b"CONNECT" in reply(model, "ATD*99#")
+    peer = Peer(PppWire(network), 4000)
+    peer.send(b"\x10\x18\0\x04MQTT\x04\x2e\0\x0a\0\x01c\0\x03a/b\0\x04gone")
+    assert peer.read().startswith(b"\x20\x02")
+    return modem, model, network, peer
+
+
+def test_a_dropped_call_ends_the_mqtt_connection_at_its_keepalive_with_the_will(
+    tmp_path: Path,
+) -> None:
+    modem, model, network, _ = mqtt_with_a_will(tmp_path, [0])
+    broker = network.broker
+    ended = broker.next_end("c")
+    modem.drop_call()
+    assert not model.data_mode and ended() is None
+    model.arrive(15 * NS_PER_S)
+    end = ended()
+    assert end is not None
+    assert (end.at, end.by, end.will_sent) == (Duration(15 * NS_PER_S), "keepalive", True)
+    assert broker.ended(end.connection_id) is end
+    assert [m.at for m in broker.messages if m.will] == [end.at]
+
+
+def test_a_disconnect_ends_the_mqtt_connection_at_once_with_no_will(tmp_path: Path) -> None:
+    now = [0]
+    _, _, network, peer = mqtt_with_a_will(tmp_path, now)
+    ended = network.broker.next_end("c")
+    peer.wire.now = now[0] = NS_PER_S
+    peer.send(b"\xe0\0")
+    end = ended()
+    assert end is not None
+    assert (end.at, end.by, end.will_sent) == (Duration(NS_PER_S), "disconnect", False)
+    assert any(e.get("event") == "mqtt: c sent DISCONNECT" for e in network.events)
+    assert not any(m.will for m in network.broker.messages)
+
+
 @pytest.mark.parametrize("deadline", ["puback", "keepalive"])
 def test_a_broker_deadline_at_the_escapes_instant_runs_before_it(
     tmp_path: Path, deadline: str

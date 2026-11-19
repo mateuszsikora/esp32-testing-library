@@ -129,6 +129,7 @@ from esp32tl.net.mqtt import Broker as Broker
 from esp32tl.net.mqtt import ConnackCode as ConnackCode
 from esp32tl.net.mqtt import Connect as Connect
 from esp32tl.net.mqtt import ConnectionAttempt as ConnectionAttempt
+from esp32tl.net.mqtt import ConnectionEnd as ConnectionEnd
 from esp32tl.net.mqtt import Delivery as Delivery
 from esp32tl.net.mqtt import Mark as Mark
 from esp32tl.net.mqtt import Message as Message
@@ -202,6 +203,7 @@ __all__ = [
     "Connect",
     "Connection",
     "ConnectionAttempt",
+    "ConnectionEnd",
     "ConnectionEnded",
     "Console",
     "ConsoleLine",
