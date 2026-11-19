@@ -21,7 +21,8 @@
 //! - 1: the emulator stopped for any other reason; without `--board` a second line gives the stop
 //!   with its fields, with it the end line does;
 //! - 3: a protocol error by the peer;
-//! - 4: the peer is gone, or never answered the connection.
+//! - 4: the peer is gone, or never answered the connection; with `--parent-fd`, also the process
+//!   that started the runner (see [`parent`]).
 //!
 //! With `--bt ELF` the guest's Bluetooth controller is the peer's: esp32sim's VHCI hooks, over the
 //! symbols of `ELF`, hand the guest's H4 packets to the [`hci::Forwarder`], and the run loop sends
@@ -47,6 +48,7 @@
 mod chip;
 mod cli;
 mod hci;
+mod parent;
 mod protocol;
 mod sd_card;
 mod session;
@@ -199,6 +201,13 @@ fn run_with_board<T: Target>(
     rom: &[u8],
 ) -> ExitCode {
     let signal = Arc::new(AtomicBool::new(false));
+    // Before the connection: a parent that ends meanwhile ends the run at the handshake.
+    let parent_gone = Arc::new(AtomicBool::new(false));
+    if let Some(fd) = opts.parent_fd
+        && let Err(message) = parent::watch(fd, parent_gone.clone(), signal.clone())
+    {
+        return fail(&message);
+    }
     let link = match board {
         cli::Board::Socket(path) => transport::SocketLink::unix(path, signal.clone()),
         cli::Board::Tcp(address) => {
@@ -237,6 +246,7 @@ fn run_with_board<T: Target>(
             uart0_stream: opts.console_port == cli::ConsolePort::Uart0 && !opts.chip.uart_pins,
             peer_timeout: opts.peer_timeout,
             signal: &signal,
+            parent_gone: opts.parent_fd.map(|_| &*parent_gone),
             wifi: opts.wifi.as_ref(),
             rom,
             card: card.clone(),

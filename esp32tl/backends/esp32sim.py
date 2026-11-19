@@ -24,7 +24,10 @@ whose controller is on the air of the test's devices once the test asks for it w
 runner then has `--bt` and the application's ELF. The backend also owns the end of the run
 (§9), before the dut is torn down: `stop` at the turn the test left the run at, `SIGTERM` for a
 runner that is not there, the link read to end of file, the runner waited for, `SIGKILL` only as a
-last resort. Then it writes the recordings of the routes the test tapped.
+last resort. Then it writes the recordings of the routes the test tapped. The runner also gets the
+read end of a pipe whose write end only this process holds (`--parent-fd`): a pytest that dies
+without its teardown, `SIGKILL` among the ways, closes it, and the runner ends the run at once. Its
+log forwarder, `LogForwarder`, watches its parent's pid for the same end.
 
 The runner starts once, at the first `power_on()`, and runs to teardown. `reset()` pulses the
 chip's EN pin and `power_off()` switches the board's supply off, until the next `power_on()`; they
@@ -47,6 +50,8 @@ to)`. The run stays on the test's clock.
 """
 
 import contextlib
+import multiprocessing.connection
+import multiprocessing.managers
 import os
 import shutil
 import signal
@@ -310,6 +315,7 @@ def runner_command(
     realtime: bool = False,
     flash_out: Path | None = None,
     console: str = boards.UART0,
+    parent_fd: int | None = None,
 ) -> list[str]:
     """The runner's command line: every flash file of the build at its offset, its board the socket
     at `link`. A `held` run is on the test's clock: its console also goes on the link, and the
@@ -325,7 +331,9 @@ def runner_command(
     far end of a route. `flash_out` is the file the runner writes the whole flash to when the link
     asks, and at the end of the run. `console` is the board profile's: `usb-serial-jtag` makes the
     chip's USB-Serial/JTAG controller the console, on stdout and on the link, in place of UART0
-    (`--console-port usb`)."""
+    (`--console-port usb`). `parent_fd` is the descriptor, inherited by the runner, of the read end
+    of a pipe whose write end the backend holds: the runner ends the run once it reads end of file
+    on it, when the backend's process has ended (`--parent-fd`, protocol §9)."""
     command = [
         *(str(runner), "--chip", app.chip, "--rom", str(rom)),
         *("--max-seconds", str(max_seconds)),
@@ -356,6 +364,8 @@ def runner_command(
         command.append("--realtime")
     if flash_out is not None:
         command += ["--flash-out", str(flash_out)]
+    if parent_fd is not None:
+        command += ["--parent-fd", str(parent_fd)]
     return command
 
 
@@ -394,7 +404,12 @@ def route_wire(profile: BoardProfile, interface: str) -> Wire:
     return Wire(tx=route.tx, rx=route.rx, baud=route.baud)
 
 
-def _forward_log(msg_queue: MessageQueue, logfile: str, ready: ProcessEvent | None = None) -> None:
+def _forward_log(
+    msg_queue: MessageQueue,
+    logfile: str,
+    ready: ProcessEvent | None = None,
+    parent: int | None = None,
+) -> None:
     """The body of `LogForwarder`: puts what the runner adds to `logfile` on `msg_queue`, and
     sleeps `LOG_POLL_SECONDS` whenever there is nothing new, never putting an empty read. After
     `SIGTERM`, within `LOG_POLL_SECONDS`, it reads the file once more, puts what it finds, and
@@ -402,8 +417,14 @@ def _forward_log(msg_queue: MessageQueue, logfile: str, ready: ProcessEvent | No
     took a lock could find it held by the interrupted code and wait for ever. The file is read in
     binary, as pytest-embedded's forwarder reads it: a UTF-8 sequence may straddle the end of what
     has been written so far. `ready` is set once the handler is in place: a `SIGTERM` before that
-    would end the process without the last read."""
+    would end the process without the last read.
+
+    `parent` is the pid of the process that started it, pytest's. A read that finds nothing new
+    also compares it with `os.getppid()`: once they differ the parent has died without its
+    teardown, and nobody will send `SIGTERM`. The forwarder then reads the file once more, puts what
+    it finds, ends the `MessageQueueManager` that holds `msg_queue` (`end_manager`) and returns."""
     stopping = False
+    orphaned = False
 
     def stop(_signum: int, _frame: object) -> None:
         nonlocal stopping
@@ -426,21 +447,48 @@ def _forward_log(msg_queue: MessageQueue, logfile: str, ready: ProcessEvent | No
             if data:
                 if not put(data):
                     return
+            elif parent is not None and os.getppid() != parent:
+                orphaned = True
+                break
             else:
                 time.sleep(LOG_POLL_SECONDS)
         data = log.read()
         if data:
             put(data)
+    if orphaned:
+        end_manager(msg_queue)
+
+
+def end_manager(msg_queue: MessageQueue) -> None:
+    """Asks the server process of the `MessageQueueManager` that `msg_queue` is a proxy of to shut
+    down, as `BaseManager.shutdown` does in the process that started it. pytest-embedded starts one
+    for the session (its `_mp_manager` fixture) and shuts it down at the end of the session; a
+    pytest that died before then leaves it, and the dut's listener blocked on its queue, for good.
+    The proxy's `_token` and `_authkey` are where `multiprocessing` keeps the server's address and
+    key; without them, or without a server to answer, this does nothing."""
+    token = getattr(msg_queue, "_token", None)
+    authkey = getattr(msg_queue, "_authkey", None)
+    if token is None:
+        return
+    with contextlib.suppress(Exception):
+        connection = multiprocessing.connection.Client(token.address, authkey=authkey)
+        try:
+            multiprocessing.managers.dispatch(connection, None, "shutdown")  # type: ignore[attr-defined]
+        finally:
+            connection.close()
 
 
 class LogForwarder(SpawnProcess):
     """The process that copies the runner's log file to `msg_queue`, in place of pytest-embedded's
     `_PopenRedirectProcess`, which reads the file in a loop without a pause. `ready` is set once
-    its `SIGTERM` handler is in place, after it has imported `esp32tl`."""
+    its `SIGTERM` handler is in place, after it has imported `esp32tl`. It ends by itself when the
+    process that made it dies (`_forward_log`)."""
 
     def __init__(self, msg_queue: MessageQueue, logfile: str) -> None:
         self.ready = get_context("spawn").Event()
-        super().__init__(target=_forward_log, args=(msg_queue, logfile, self.ready), daemon=True)
+        super().__init__(
+            target=_forward_log, args=(msg_queue, logfile, self.ready, os.getpid()), daemon=True
+        )
 
 
 class RunnerPopen(DuplicateStdoutPopen):
@@ -452,9 +500,11 @@ class RunnerPopen(DuplicateStdoutPopen):
     # constructor (`DuplicateStdoutPopen.__init__` starts it, `close` terminates it)
     REDIRECT_CLS = LogForwarder  # type: ignore[assignment]
 
-    def __init__(self, msg_queue: MessageQueue, cmd: list[str], meta: Meta) -> None:
+    def __init__(
+        self, msg_queue: MessageQueue, cmd: list[str], meta: Meta, pass_fds: tuple[int, ...] = ()
+    ) -> None:
         try:
-            super().__init__(msg_queue, cmd, meta)
+            super().__init__(msg_queue, cmd, meta, pass_fds=pass_fds)
         except OSError:
             log = getattr(self, "_fw", None)
             if log is not None:
@@ -612,6 +662,8 @@ class Esp32Sim(Board):
             on_reset=self._reset,
         )
         self.process: RunnerPopen | None = None
+        # The write end of the runner's --parent-fd pipe, from power-on until the runner exits.
+        self._parent: int | None = None
         self._exited = threading.Event()
         # One SIGTERM at most: a second one kills the runner, with 128 + 15 (protocol §9).
         self._terminated = False
@@ -967,28 +1019,44 @@ class Esp32Sim(Board):
         self._conn: socket.socket | None = None
         # Beside the socket, and gone with it: the whole flash, written once for every run.
         self._flash_out = self._socket.parent / "flash.bin"
-        command = runner_command(
-            self._runner,
-            self._rom,
-            self.app,
-            HELD_MAX_SECONDS,
-            self._socket,
-            held=True,
-            flash_mb=self.flash_mb,
-            psram_mb=self.profile.psram_mb,
-            sd_card=self._sd_card,
-            extra_flash=tuple(self._nvs.values()),
-            wifi=self._wifi,
-            bluetooth=self._bluetooth,
-            realtime=self.clock == recording.WALL,
-            flash_out=self._flash_out,
-            console=self.profile.console,
-        )
+        # The runner reads end of file on its end once this process has ended, however it ended:
+        # the kernel closes the write end, which no other process holds (os.pipe's ends are not
+        # inherited), and the run ends at once (protocol §9).
+        end_of_parent, self._parent = os.pipe()
         try:
-            process = RunnerPopen(self._msg_queue, command, self._meta)
-        except OSError as error:
+            command = runner_command(
+                self._runner,
+                self._rom,
+                self.app,
+                HELD_MAX_SECONDS,
+                self._socket,
+                held=True,
+                flash_mb=self.flash_mb,
+                psram_mb=self.profile.psram_mb,
+                sd_card=self._sd_card,
+                extra_flash=tuple(self._nvs.values()),
+                wifi=self._wifi,
+                bluetooth=self._bluetooth,
+                realtime=self.clock == recording.WALL,
+                flash_out=self._flash_out,
+                console=self.profile.console,
+                parent_fd=end_of_parent,
+            )
+            try:
+                process = RunnerPopen(
+                    self._msg_queue, command, self._meta, pass_fds=(end_of_parent,)
+                )
+            except OSError as error:
+                raise BackendError(f"cannot start {command[0]}: {error.strerror}") from error
+        except BaseException:
+            # whatever failed, the board keeps no runner, and `close` lets go of nothing: the write
+            # end, which a runner that did start before the failure reads end of file on, and the
+            # link's socket and directory go here
+            self._close_parent()
             self._close_link()
-            raise BackendError(f"cannot start {command[0]}: {error.strerror}") from error
+            raise
+        finally:
+            os.close(end_of_parent)
         self.process = process
         self._supply = True
         self._utc = POWER_ON_UTC if utc is None else utc.astimezone(UTC)
@@ -1270,6 +1338,8 @@ class Esp32Sim(Board):
         if killed:
             self.process.kill()
             self._exited.wait()
+        # only now: a runner that read end of file on it would end the run as the peer gone
+        self._close_parent()
         self._close_link()
         self._waiter.join()
         # The runner and waiter have finished writing. The asynchronous log forwarder can
@@ -1495,6 +1565,12 @@ class Esp32Sim(Board):
                 "tap": str(self._console.tapped.path),
             }
         return properties
+
+    def _close_parent(self) -> None:
+        """Closes the write end of the runner's `--parent-fd` pipe, once."""
+        if self._parent is not None:
+            os.close(self._parent)
+            self._parent = None
 
     def _close_link(self) -> None:
         """Closes the socket, once the runner is gone and the link read to its end."""

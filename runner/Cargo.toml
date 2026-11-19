@@ -38,6 +38,9 @@ emu-core = { git = "https://github.com/mikroverk/esp32sim", rev = "357b0e542dfe9
 # SIGTERM and SIGINT end a run with `stats` (docs/protocol.md, section 9); std
 # has no way to handle a signal.
 signal-hook = { version = "0.4.5", default-features = false }
+# `fstat` of --parent-fd's descriptor before it is taken; std stats only what it owns. Already
+# in the lock file, through signal-hook.
+libc = "0.2.191"
 
 # What tests run. Dependencies take their profile from here, not from esp32sim's
 # workspace, so this copies upstream's release profile: the emulator's speed

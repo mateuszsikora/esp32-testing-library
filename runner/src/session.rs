@@ -253,8 +253,11 @@ pub struct Options<'a> {
     pub uart0_stream: bool,
     /// `--peer-timeout`; `None` waits for ever.
     pub peer_timeout: Option<Duration>,
-    /// Set by `SIGTERM` and `SIGINT`.
+    /// Set by `SIGTERM` and `SIGINT`, and by the end of `--parent-fd`.
     pub signal: &'a AtomicBool,
+    /// `--parent-fd`: set, before `signal`, when the process that started the runner has ended,
+    /// which makes the run's end that of a peer gone ([`crate::parent`]).
+    pub parent_gone: Option<&'a AtomicBool>,
     /// `--wifi`: the access point is on the air from power-on, and the station's frames go to
     /// the peer.
     pub wifi: Option<&'a cli::Wifi>,
@@ -521,6 +524,21 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
         let end = match self.drive() {
             Err(end) => end,
             Ok(never) => match never {},
+        };
+        // the flag `signal` was set for the parent's end: nobody is left to read `stats`. The
+        // run loop and the socket read `signal` relaxed; this acquire load of it is what makes
+        // `parent::watch`'s store of `parent_gone`, made before its store of `signal`, visible.
+        let end = match end {
+            End::Signal
+                if self.opts.signal.load(Ordering::Acquire)
+                    && self
+                        .opts
+                        .parent_gone
+                        .is_some_and(|g| g.load(Ordering::Relaxed)) =>
+            {
+                End::PeerGone(crate::parent::GONE.into())
+            }
+            end => end,
         };
         // before `stats`: a peer that has them finds the file in place
         if let Some(path) = self.opts.flash_out {

@@ -124,7 +124,7 @@ or `POWER_ON_UTC`, for `Esp32Sim.utc` and the GNSS receiver's dates, and logs
    is `SUN_PATH_MAX` (104) bytes or longer, and listens with a backlog of 1. It binds before the
    runner starts, because the runner connects once (protocol §1).
 2. **`runner_command(runner, rom, app, HELD_MAX_SECONDS, link, held=True, flash_mb=self.flash_mb, psram_mb=profile.psram_mb)`** builds
-   `[runner, "--chip", app.chip, "--rom", rom, "--max-seconds", "86400", "--console", "both", "--peer-timeout", "0", "--board", "socket:<link>", "--flash-at", "0x1000=<path>", ..., "--flash-mb", "<flash_mb>", "--psram-mb", "<psram_mb>", "--flash-out", "<beside the link>/flash.bin"]`,
+   `[runner, "--chip", app.chip, "--rom", rom, "--max-seconds", "86400", "--console", "both", "--peer-timeout", "0", "--board", "socket:<link>", "--flash-at", "0x1000=<path>", ..., "--flash-mb", "<flash_mb>", "--psram-mb", "<psram_mb>", "--flash-out", "<beside the link>/flash.bin", "--parent-fd", "<fd>"]`,
    one `--flash-at {offset:#x}={path}` per entry of `app.flash_files`, in their order: an ESP-IDF
    build's sorted by offset, as `IdfApp` sorts them, a PlatformIO build's `firmware.factory.bin` at
    `0x0`, or `bootloader.bin`, `partitions.bin` and `firmware.bin`; the paths are absolute. `--psram-mb` is the board profile's `psram_mb`, `0` on
@@ -142,36 +142,49 @@ or `POWER_ON_UTC`, for `Esp32Sim.utc` and the GNSS receiver's dates, and logs
    `--console-port usb` comes right after `--console both --peer-timeout 0`, before `--board`; a
    profile whose console is UART0 adds nothing. Without `held`, as the [`esp32tl` command](cli-user.md) calls
    it, the `--console` and `--peer-timeout` pairs are left out, and so is the card; the command
-   passes its profile's `psram_mb` and `console` too. The runner's options are in
+   passes its profile's `psram_mb` and `console` too, and no `parent_fd`. `parent_fd=` adds
+   `--parent-fd <fd>` last: `power_on` makes a pipe with `os.pipe()` first, keeps its write end
+   in `Esp32Sim._parent` and passes the read end's number. The runner's options are in
    [runner-user.md](runner-user.md).
-3. **`RunnerPopen(msg_queue, command, meta)`** is `DuplicateStdoutPopen` with three changes: if
-   the process cannot start (`OSError`), it closes the log file the parent opened before the fork,
-   which nothing else would close; its forwarder (`REDIRECT_CLS`) is `LogForwarder`; and its
-   `close` waits up to `EXIT_SECONDS` for the forwarder to be ready, then up to `EXIT_SECONDS`
-   for it to end.
-   `DuplicateStdoutPopen` writes the runner's stdout and stderr into one log file
-   (`popen-<uuid>.log` in the test's log directory), and starts the forwarder, a process (`spawn`)
-   that reads that file and puts what it reads on `msg_queue`. pytest-embedded's own forwarder,
-   `_PopenRedirectProcess`, reads it again at once when there is nothing new, and every empty read is
-   a call to the manager process that holds `msg_queue`, so the two of them keep a CPU each busy for
-   the whole run. `LogForwarder` sleeps `LOG_POLL_SECONDS` when a read finds nothing and never puts
-   an empty read, so the runner's lines reach the queue up to 20 ms after they are written. Its
-   `SIGTERM` handler only sets a flag, because a handler that took a lock could find it held by the
-   code it interrupted and wait for ever; the sleep runs to its end, and within `LOG_POLL_SECONDS`
-   the forwarder reads the file once more, puts what it finds and ends, even if something still
-   writes to the file. It reads the file in binary, as
+3. **`RunnerPopen(msg_queue, command, meta, pass_fds=(fd,))`** starts the runner with the
+   pipe's read end open at the same number, as `--parent-fd` says, and `power_on` closes its own
+   copy of the read end right after, whether the start succeeded or not; anything that fails from
+   the pipe's making to the start, `runner_command` included, closes the write end too, and the
+   socket with its directory. `os.pipe` makes both ends non-inheritable, so no other process this
+   one starts gets the write end, and when pytest ends, however it ends, the kernel closes the last
+   one and the runner reads end of file
+   ([runner](runner-user.md#ended-with-the-process-that-started-it)). `RunnerPopen` is
+   `DuplicateStdoutPopen` with three changes: if the process cannot start (`OSError`), it closes the
+   log file the parent opened before the fork, which nothing else would close; its forwarder
+   (`REDIRECT_CLS`) is `LogForwarder`; and its `close` waits up to `EXIT_SECONDS` for the forwarder
+   to be ready, then up to `EXIT_SECONDS` for it to end. `DuplicateStdoutPopen` writes the runner's
+   stdout and stderr into one log file (`popen-<uuid>.log` in the test's log directory), and starts
+   the forwarder, a process (`spawn`) that reads that file and puts what it reads on `msg_queue`.
+   pytest-embedded's own forwarder, `_PopenRedirectProcess`, reads it again at once when there is
+   nothing new, and every empty read is a call to the manager process that holds `msg_queue`, so the
+   two of them keep a CPU each busy for the whole run. `LogForwarder` sleeps `LOG_POLL_SECONDS` when
+   a read finds nothing and never puts an empty read, so the runner's lines reach the queue up to 20
+   ms after they are written. Its `SIGTERM` handler only sets a flag, because a handler that took a
+   lock could find it held by the code it interrupted and wait for ever; the sleep runs to its end,
+   and within `LOG_POLL_SECONDS` the forwarder reads the file once more, puts what it finds and
+   ends, even if something still writes to the file. It reads the file in binary, as
    pytest-embedded's does. The process starts by importing `esp32tl.backends.esp32sim`, and with it
    the `esp32tl` package, about 0.3 s of CPU more than pytest-embedded's forwarder at each
-   `power_on`. A `SIGTERM` before its handler is in place would end it without the last read, so
-   it sets its `ready` event once the handler is in place, and `RunnerPopen.close` waits for that
+   `power_on`. A `SIGTERM` before its handler is in place would end it without the last read, so it
+   sets its `ready` event once the handler is in place, and `RunnerPopen.close` waits for that
    before the signal, in waits of 0.05 s that end as soon as the forwarder is no longer alive, so
    one that died while starting costs no `EXIT_SECONDS`: a runner that ends while the forwarder is
-   still starting keeps its last lines.
-   pytest-embedded's listener
-   process takes it off the queue, prints it to stdout and appends it to `dut.log`
-   (`dut.logfile`). If the start fails, the socket and its directory are removed before the
-   `BackendError`. `Esp32Sim.process` is `None` until it is set here, and `started` says whether
-   it is; `powered` says whether it is and the supply, `_supply`, set here, is on.
+   still starting keeps its last lines. `LogForwarder` passes `_forward_log` its parent's pid,
+   `os.getpid()` in the process that makes it, and a read that finds nothing new compares it with
+   `os.getppid()`: when they differ, pytest has died without its teardown and nobody will send
+   `SIGTERM`, so the forwarder reads the file once more, puts what it finds, calls `end_manager` and
+   returns, within `LOG_POLL_SECONDS` of pytest's death once the runner's log stops growing. It does
+   not wait for the runner: lines the runner writes after that read, its last `end` line among them,
+   stay in `popen-*.log` only. pytest-embedded's listener process takes it off the queue, prints it
+   to stdout and appends it to `dut.log` (`dut.logfile`). If the start fails, the socket and its
+   directory are removed before the `BackendError`. `Esp32Sim.process` is `None` until it is set
+   here, and `started` says whether it is; `powered` says whether it is and the supply, `_supply`,
+   set here, is on.
 4. A daemon thread runs **`_serve_link`**: `accept()` with a 0.05 s timeout, in a loop that reads
    `_exited` before each attempt and gives up after a timeout that began with the runner already
    gone, so a runner that connected and then exited is still accepted, and one that exits without
@@ -379,7 +392,9 @@ cut at its start, rather than dropped. A log it cannot read gives
    test's wall-time timeout broke into a wait.
 3. Joins the link thread, then waits for `_exited`, both within `EXIT_SECONDS` of the signal. If
    the runner has not exited, `kill()` (`SIGKILL`) and waits for `_exited` without a timeout. It
-   waits on `_exited` rather than on the waiter thread, which also waits for the link.
+   waits on `_exited` rather than on the waiter thread, which also waits for the link. Only then
+   `_close_parent()` closes the write end of the `--parent-fd` pipe: a runner still running when
+   it closed would end the run as the peer gone, exit code 4, without `stats`.
 4. `_close_link()`: joins the link thread for up to `EXIT_SECONDS`; if it still reads (a process
    other than the runner holds the socket), `shutdown(SHUT_RDWR)` ends the read and the thread is
    joined. Then closes the connection and the listener and removes the socket's directory. Then
@@ -535,11 +550,12 @@ repository makes.
 | `route_wire(profile, interface)` | The `Wire` of that route, or the same `BackendError`; `Esp32Sim` makes its `Uart`s and its `Gnss` on it |
 | `RUNNER_FLASH_MB` | `(1, 2, 4, 8, 16)`: the flash sizes, in MB, the runner's `--flash-mb` takes |
 | `runner_flash_mb(profile, app)` | The flash the runner gives the chip, in MB: `profile.flash_mb`, else the largest size the build's image headers give, else `None`; `BackendError` for a `flash_mb` outside `RUNNER_FLASH_MB`, a header that gives more than 16, whatever the profile, or a header that gives more than `flash_mb`. The constructor and the [`esp32tl` command](cli-user.md) call it before anything starts |
-| `runner_command(runner, rom, app, max_seconds, link, *, held=False, flash_mb=None, psram_mb=None, sd_card=None, extra_flash=(), wifi=None, bluetooth=None, realtime=False, flash_out=None)` | The runner's argument list; with `flash_mb`, `--flash-mb` of that size; with `psram_mb`, `--psram-mb` of that size; with an `SdCard` holding a card, the runner's card on its pins; with a `Wifi` holding an access point, `--wifi` and `--wifi-nearby`; with a `Bluetooth` the test used, `--bt` and the application's ELF; with `realtime`, `--realtime`; with `flash_out`, `--flash-out` |
+| `runner_command(runner, rom, app, max_seconds, link, *, held=False, flash_mb=None, psram_mb=None, sd_card=None, extra_flash=(), wifi=None, bluetooth=None, realtime=False, flash_out=None, console="uart0", parent_fd=None)` | The runner's argument list; with `flash_mb`, `--flash-mb` of that size; with `psram_mb`, `--psram-mb` of that size; with an `SdCard` holding a card, the runner's card on its pins; with a `Wifi` holding an access point, `--wifi` and `--wifi-nearby`; with a `Bluetooth` the test used, `--bt` and the application's ELF; with `realtime`, `--realtime`; with `flash_out`, `--flash-out`; with `console="usb-serial-jtag"`, `--console-port usb`; with `parent_fd`, `--parent-fd`, last |
 | `Esp32Sim.wifi` | The chip's `Wifi`, on the link from construction |
 | `Esp32Sim.bluetooth` | The chip's `Bluetooth`, on the link from construction; the first look asks `_asked` for `Request("bluetooth", source="model")`, which refuses after power-on, then checks `app.elf`, then calls `Bluetooth.use()`, which asks again |
-| `RunnerPopen(msg_queue, cmd, meta)` | `DuplicateStdoutPopen` with `LogForwarder` as its forwarder, whose `close` waits up to `EXIT_SECONDS` for it to be ready, sends it `SIGTERM` and waits up to `EXIT_SECONDS` for it to end, and that closes its log when the start fails |
-| `LogForwarder(msg_queue, logfile)` | A `spawn` process, daemon, running `_forward_log`: puts what the runner adds to `logfile` on `msg_queue`, sleeping `LOG_POLL_SECONDS` when there is nothing new; after `SIGTERM`, within `LOG_POLL_SECONDS`, it reads the file once more, puts what it finds and ends; it ends at once when `put` fails. `ready`, a `spawn` event, is set once its `SIGTERM` handler is in place |
+| `RunnerPopen(msg_queue, cmd, meta, pass_fds=())` | `DuplicateStdoutPopen`, given `pass_fds` for the runner's `--parent-fd`, with `LogForwarder` as its forwarder, whose `close` waits up to `EXIT_SECONDS` for it to be ready, sends it `SIGTERM` and waits up to `EXIT_SECONDS` for it to end, and that closes its log when the start fails |
+| `LogForwarder(msg_queue, logfile)` | A `spawn` process, daemon, running `_forward_log`: puts what the runner adds to `logfile` on `msg_queue`, sleeping `LOG_POLL_SECONDS` when there is nothing new; after `SIGTERM`, within `LOG_POLL_SECONDS`, it reads the file once more, puts what it finds and ends; it ends at once when `put` fails. `ready`, a `spawn` event, is set once its `SIGTERM` handler is in place. When its parent is no longer the process that made it, at a read that finds nothing new, it reads once more, puts what it finds, calls `end_manager(msg_queue)` and ends |
+| `end_manager(msg_queue)` | Asks the server process of the `multiprocessing` manager `msg_queue` is a proxy of to shut down, through the address and key in the proxy's `_token` and `_authkey`, with `multiprocessing.managers.dispatch(connection, None, "shutdown")`, as `BaseManager.shutdown` does; does nothing for a queue that is no proxy, or a server that does not answer |
 | `refuse(reason)` | Raises `SourceError(reason)`: `Esp32Sim`'s `skip` outside pytest |
 | `ended_while_waiting(error)` | Whether `error`'s chain holds a `RunEnded` |
 | `last_output(log)` | The end of the runner's log, whole lines without colour codes |
@@ -565,10 +581,11 @@ repository makes.
 
 The backend always passes `--rom`: the runner's own lookup prefers the newest release under
 `~/.espressif` instead of the pinned one. `--peer-timeout 0` lets the runner wait in a held turn
-for as long as the test body runs. A runner left behind by a harness that died sees the socket
-close and exits with code 4 (protocol §9), so `HELD_MAX_SECONDS` is there only because the flag is
-required. The comment on `MAX_SECONDS` records that hello_world runs 12 emulated seconds in 0.3 s
-of wall time on an M2 Pro, and that an image that never idles runs slower.
+for as long as the test body runs. A runner left behind by a harness that died reads end of file on
+`--parent-fd` and exits with code 4 (protocol §9, [below](#what-a-killed-session-leaves)), so
+`HELD_MAX_SECONDS` is there only because the flag is required. The comment on `MAX_SECONDS` records
+that hello_world runs 12 emulated seconds in 0.3 s of wall time on an M2 Pro, and that an image that
+never idles runs slower.
 
 ## Failure modes
 
@@ -631,7 +648,47 @@ runner-specific messages above. `Esp32Sim.app_sha256` is that hash, `None` when 
 both backends; a build without one returns `None`, and read failures raise `OSError` (tap writing
 catches those).
 
+## What a killed session leaves
+
+pytest killed without its teardown (`SIGKILL`, an out-of-memory kill, a CI job cancelled after its
+grace period, a crashed xdist worker) runs no `Esp32Sim.close` and no fixture's teardown. What its
+processes then do:
+
+| Process | Started by | After pytest's death |
+|---|---|---|
+| `esp32tl-runner` | `Esp32Sim.power_on` | Reads end of file on `--parent-fd`, ends the run within a slice and exits 4, after `esp32tl-runner: end: the peer at socket:… is gone: end of file on --parent-fd: the process that started the runner has ended`, the last line of its `popen-*.log` |
+| `LogForwarder` | `RunnerPopen` | Finds `os.getppid()` changed at its next empty read, within `LOG_POLL_SECONDS`, puts what is left, calls `end_manager` and exits 0 |
+| `MessageQueueManager`'s server (`spawn`, or the platform's default start method) | pytest-embedded's session fixture `_mp_manager` (`pytest_embedded/plugin.py:728`), which shuts it down only at the end of the session | Shut down by `end_manager`; it watches nothing of its own (`multiprocessing.managers.Server.serve_forever` waits on its stop event), so without a forwarder to ask it would stay for good |
+| the dut's listener, `_listen` (`spawn`) | pytest-embedded's `_listener` fixture (`pytest_embedded/plugin.py:807`), a process `_listener_gn` makes (`pytest_embedded/dut_factory.py:109`) | Blocked in `msg_queue.get()`; once the manager is gone the call raises `EOFError` and the process ends with its traceback (`Process SpawnProcess-2:` … `EOFError`) |
+| Python's `multiprocessing.resource_tracker` | the first `spawn` process of the session | Ends at end of file on its pipe, once every process holding its write end, the ones above, has ended, after it removes the session's `spawn` semaphores (pytest-embedded's `_stdout_lock`, the forwarder's `ready` among them) with `UserWarning: resource_tracker: There appear to be N leaked semaphore objects to clean up at shutdown` (6 in the run below) |
+
+The listener's traceback and the tracker's warning go to the stderr they inherited from pytest: the
+terminal with `-s`, and pytest's capture file, which nobody reads any more, otherwise.
+
+On an M2 Pro (macOS 26, Python 3.14) all five were gone 0.16 wall seconds after `kill -9` of
+pytest, in a test waiting `board.wait(seconds(3600))` on `console_repl` at its prompt; without
+`--parent-fd` the runner ran on at 99 % of a core. Left on disk are the socket's directory,
+`esp32tl-*` under the system's temporary directory with `link.sock` and `flash.bin`, which
+`_close_link` would have removed, the test's pytest-embedded log directory, and pytest's own
+temporary directories. A process the test started itself is the test's: it ends with pytest only if
+it watches for that. A child pytest forks while a board is on holds a copy of the write end and
+keeps the runner running for as long as it lives. A board whose run ends without a forwarder, one
+with pytest-embedded's own (`REDIRECT_CLS` set back), leaves the manager and the listener for good.
+
 ## Tests
+
+`tests/test_killed_session.py` checks the pieces without a runner: that `power_on` passes the
+pipe's read end as `--parent-fd` and in `pass_fds`, and that a start that fails leaves neither end
+open, nor does a failure before the start (`runner_command` raising), which also removes the
+link's directory; that `_forward_log`, told a parent pid that is not its parent's, puts what is
+left without a sleep and calls `end_manager` with its queue; that `end_manager` shuts down the
+server process of a `BaseManager` from one of its proxies, and leaves a queue that is no proxy
+alone. Then `test_a_killed_pytest_leaves_no_runner_forwarder_or_manager` runs a pytester session on
+`console_repl` (`make firmware`) that powers the board on, waits for the prompt, writes the pids of
+the runner, the forwarder, the manager, the listener and the resource tracker, and waits an emulated
+hour; one wall second into the wait the outer test sends the inner pytest `SIGKILL`, and asserts
+that every one of those processes is gone, by `ps` (a zombie counting as gone), within 5 wall
+seconds, killing those left before it fails.
 
 `tests/test_real_source.py` covers the run with a real source
 ([real-source-technical.md](real-source-technical.md#tests)), and `tests/test_http_request.py` a run
