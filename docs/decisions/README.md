@@ -45,6 +45,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Verify exact version diffs before using lightweight CI](ci.md#verify-exact-version-diffs-before-using-lightweight-ci) | `ci.md` | decided (16 November 2026) |
 | [The chips' images build in three groups of their own](ci.md#the-chips-images-build-in-three-groups-of-their-own) | `ci.md` | decided (#236) |
 | [A pull request need not be up to date with main to merge](ci.md#a-pull-request-need-not-be-up-to-date-with-main-to-merge) | `ci.md` | decided (#264) |
+| [A run whose only failures are jobs no runner took is re-run automatically](ci.md#a-run-whose-only-failures-are-jobs-no-runner-took-is-re-run-automatically) | `ci.md` | decided (19 November 2026) |
 
 ## Documentation and the documentation check
 

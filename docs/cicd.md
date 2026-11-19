@@ -344,6 +344,51 @@ It builds nothing and needs nothing from the other jobs. What the check enforces
 a pre-commit hook, is in [guides/documentation.md](guides/documentation.md#the-check).
 The public repository requires this check on pull requests through `main` branch protection.
 
+## Re-running jobs no runner took
+
+A hosted job that no runner takes is cancelled with zero steps, after 15 to 30 minutes in the
+queue, with the annotation `The job was not acquired by Runner of type hosted even after multiple
+attempts`. Its run fails. So far only `macos-15` jobs have, in `CI`, `Runtime release` and
+`Release merged version`, next to the notice `Due to capacity constraints, jobs targeting macOS
+arm64 runners may experience longer queue times.` The run of release 0.2.0 (#272) needed four
+attempts before its macOS job got a runner.
+
+`.github/workflows/rerun-unacquired.yml` (`Re-run unacquired jobs`) runs on `workflow_run` when a
+run of `CI`, `Runtime release` or `Release merged version` completes. Its job `rerun` starts only
+when that run's conclusion is `failure` and its attempt is below 5, so a run gets at most four
+automatic re-runs. A job no runner took costs queue time but no runner minutes; the cap ends the
+chain when macOS runners stay away for hours.
+
+It lists the attempt's jobs whose conclusion is `failure`, `cancelled` or `timed_out`. One of them
+counts as no runner took it when it is `cancelled`, ran no step and has no runner name. It does not
+read the annotation: a job that ran could write that text itself, and a job with no step could
+not. Then:
+
+- If no job counts, it prints `No job of attempt <n> failed for want of a runner; not re-running.`
+  and stops.
+- If another job failed too, it prints the notice `<k> job(s) of run <id> failed on their own; not
+  re-running the <m> no runner took.` and stops: a real failure is not retried along with them.
+  Re-run the failed jobs by hand once the failure is fixed or understood.
+- Otherwise it calls `rerun-failed-jobs`, which re-runs the failed and cancelled jobs and the jobs
+  that need them, as "Re-run failed jobs" does. Jobs that succeeded are not repeated: in `Release
+  merged version` the tag is not pushed again.
+
+For a `pull_request` run, and a `workflow_dispatch` run on a branch other than `main`, it first
+checks that the run is the newest of its workflow and event on its branch from the same head
+repository. Those CI runs share a concurrency group that cancels the run in progress, so a re-run
+of an older run would cancel the newer one. It stops with `Run <newer id> is newer than run <id> on
+this branch; not re-running.` when a newer run exists, and with `No run from <owner/repo> among the
+branch's 100 newest; not re-running <id>.` when none of the branch's 100 newest runs comes from that
+repository. The head repository tells apart forks whose branches share a name; two pull requests
+from one fork's branch would still count as one.
+
+The workflow's token has `actions: write`, to read the jobs and start the re-run. It checks nothing
+out; the triggering run's id, attempt, event, branch and head repository reach its script through
+the environment only, since a fork chooses its branch name. TODO(owner): whether the completion of
+a re-run started with `GITHUB_TOKEN` triggers `workflow_run` again. Until that is seen on `main`,
+only the first automatic re-run is certain; `workflow_run` runs only the workflow file on the
+default branch, so a branch cannot test it.
+
 ## See also
 
 - [decisions/ci.md](decisions/ci.md): why CI is built this way.
@@ -499,9 +544,11 @@ GitHub App secret. See [GitHub's token behavior](https://docs.github.com/en/acti
 and [reusable workflow permissions](https://docs.github.com/en/actions/reference/workflows-and-actions/reusing-workflow-configurations).
 
 The classification and tag jobs each have a five-minute timeout (classification is read-only;
-only the tag job can write contents); the reusable release call permits its draft job to write contents too. Runs are
-serialized per merged SHA. If native tests fail after tagging, rerun failed jobs in **Release merged
-version**. Do not move the tag to fix source code: merge a new fix and prepare a higher version.
+only the tag job can write contents); the reusable release call permits its draft job to write
+contents too. Runs are serialized per merged SHA. If native tests fail after tagging, rerun failed
+jobs in **Release merged version**; a run whose only failures are jobs no runner took re-runs them
+itself ([above](#re-running-jobs-no-runner-took)). Do not move the tag to fix source code: merge a
+new fix and prepare a higher version.
 An existing draft is not overwritten; inspect it before retrying a failed draft creation.
 
 ## Runtime releases

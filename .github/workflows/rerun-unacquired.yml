@@ -1,0 +1,81 @@
+# Re-runs a failed run of CI, Runtime release or Release merged version whose jobs failed only
+# because no hosted runner took them. GitHub then cancels the queued job with zero steps, no
+# runner, and the annotation "The job was not acquired by Runner of type hosted even after
+# multiple attempts"; so far only macos-15 (ARM64) jobs have. A run with any other failure is left
+# alone, so that a real failure is not retried along with it. docs/cicd.md, "Re-running jobs no
+# runner took".
+#
+# Nothing is checked out: the event's fields, a fork's branch name among them, reach the script
+# only through the environment.
+name: Re-run unacquired jobs
+
+on:
+  workflow_run:
+    workflows: [CI, Runtime release, Release merged version]
+    types: [completed]
+
+permissions:
+  actions: write
+
+jobs:
+  rerun:
+    # At most four automatic re-runs: a job no runner took costs queue time, not minutes, and the
+    # cap ends the chain when macOS runners stay away for hours.
+    if: github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.run_attempt < 5
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Re-run the jobs no runner took
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          WORKFLOW_ID: ${{ github.event.workflow_run.workflow_id }}
+          EVENT: ${{ github.event.workflow_run.event }}
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
+        run: |
+          set -euo pipefail
+
+          # CI runs of one pull request, or dispatched on one branch other than main, share a
+          # concurrency group that cancels the run in progress: re-running an older run would
+          # cancel the newer one. Runs from forks share branch names, hence the head repository.
+          if [ "$EVENT" = pull_request ] || { [ "$EVENT" = workflow_dispatch ] && [ "$BRANCH" != main ]; }; then
+            newest=$(gh api -X GET "repos/$REPO/actions/workflows/$WORKFLOW_ID/runs" \
+              -f branch="$BRANCH" -f event="$EVENT" -F per_page=100 |
+              jq -r --arg repo "$HEAD_REPO" \
+                '[.workflow_runs[] | select(.head_repository.full_name == $repo)][0].id')
+            if [ "$newest" = null ]; then
+              echo "No run from $HEAD_REPO among the branch's 100 newest; not re-running $RUN_ID."
+              exit 0
+            fi
+            if [ "$newest" != "$RUN_ID" ]; then
+              echo "Run $newest is newer than run $RUN_ID on this branch; not re-running."
+              exit 0
+            fi
+          fi
+
+          # A job no runner took ran no step, so it cannot have written anything itself.
+          gh api --paginate "repos/$REPO/actions/runs/$RUN_ID/attempts/$ATTEMPT/jobs" |
+            jq -s '[.[].jobs[]
+              | select(.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out")
+              | {name, conclusion, unacquired: (.conclusion == "cancelled" and (.steps | length) == 0
+                  and (.runner_name // "") == "")}]' >"$RUNNER_TEMP/failed.json"
+          jq -r '.[] | if .unacquired then "No runner took: \(.name)"
+            else "Failed on its own (\(.conclusion)): \(.name)" end' "$RUNNER_TEMP/failed.json"
+          unacquired=$(jq '[.[] | select(.unacquired)] | length' "$RUNNER_TEMP/failed.json")
+          other=$(jq '[.[] | select(.unacquired | not)] | length' "$RUNNER_TEMP/failed.json")
+
+          if [ "$unacquired" -eq 0 ]; then
+            echo "No job of attempt $ATTEMPT failed for want of a runner; not re-running."
+            exit 0
+          fi
+          if [ "$other" -ne 0 ]; then
+            echo "::notice::$other job(s) of run $RUN_ID failed on their own; not re-running the $unacquired no runner took."
+            exit 0
+          fi
+
+          # Re-runs the failed and cancelled jobs and the jobs that depend on them.
+          gh api -X POST "repos/$REPO/actions/runs/$RUN_ID/rerun-failed-jobs"
+          echo "Re-running the failed jobs of run $RUN_ID (attempt $ATTEMPT)."
