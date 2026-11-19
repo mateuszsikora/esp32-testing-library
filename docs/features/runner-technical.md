@@ -299,19 +299,30 @@ due, which pass them to the card in the slot, or keep them while it is empty. `S
 the rules back from the card that goes, and `Slot::insert` hands them to the next one, with the
 slot's clock: the rules are the test's, and stay until spent or cleared. A delayed read and a busy
 time are the card's own, and go with it. A `Fault` is the rule's `id`, `op` (`Op::Read`, `Op::Write`, `Op::Erase`), `action`
-(`Action::Error`, or `Action::Delay(ns)`), `blocks` (`Option<(first, last)>`) and `count`
-(`Option<u64>`, operations left). `install` appends it to `faults`; `clear` removes the ones with
-those ids, or all.
+(`Action::Error`, `Action::Delay(ns)` or `Action::Observe`), `blocks` (`Option<(first, last)>`) and
+`count` (`Option<u64>`, operations left). `install` appends it to `faults`; `clear` removes the ones
+with those ids, or all.
 
-`SdCard::fault(op, lo, hi)` is asked when an operation starts and returns the rule it meets: the
-last one in `faults` (`rposition`) with that `op` whose `blocks` overlap `lo..=hi`. It counts the operation down, removes the rule when its count
-reaches 0, and adds to `stats.faults`. The operations and where they ask:
+`SdCard::meet(op, lo, hi)` is asked when an operation starts and returns the rules it meets
+(`Met`): of the rules in `faults` with that `op` whose `blocks` overlap `lo..=hi`, the last one
+whose action is not `Observe` (`rposition`), and every one whose action is `Observe`, each as its
+`id` and action, in their order in `faults`, which is the order the peer gave them. It counts the
+operation down in each, removes a rule when its count reaches 0, adds to `stats.faults` when a
+rule that fails or delays met it and to `stats.observed` when one or more that observe did.
+`Met::action` is the action of the rule that fails or delays, if any: what the card does. An
+`Observe` rule never takes an operation away from a rule that fails or delays it, whichever was
+given last, and changes nothing the card sends or when: the bytes and the image are those of the
+card without it (`a_rule_that_observes_changes_nothing_and_reports_what_it_meets`). The operations
+and where they ask:
 
 | Operation | Where | With `Error` | With `Delay(ns)` |
 |---|---|---|---|
 | Read | `start_read(lba)`: CMD17, CMD18's first block, and `next_block` for each next one, which `exchange` does not call for a byte of a command, so that a CMD12 begins no block and meets no rule | queues `0xff`, then the error token `0x04` (`ERROR_ECC`), and ends the read (`Phase::Command`) | sets `access = (now + cycles(ns), lba)`; `next_block` reads and queues the block once `now` has reached it, and `out` stays empty, so MISO reads 0xff, until then |
 | Write | `block_in`, after the CRC and range checks | data response `0x0d`, the image not written | the block is written, then `busy_until = now + cycles(ns)` if it was accepted |
 | Erase | CMD38, over `lo..=hi` | none: the protocol refuses it | the range is erased, then `busy_until` as for a write |
+
+With `Observe` alone, or no rule, each goes on as the card always does: the read queues its block,
+the write and the erase go to the image.
 
 `exchange` checks `busy_until` when `out` is empty: while `now` is before it, it returns `0x00`
 (`BUSY`) and drops the byte that came in, so a command sent meanwhile is not heard; once `now` has
@@ -332,11 +343,13 @@ the read's start, and the driver misses it: it polls 0xff until its read timeout
 looks at every byte sees the token at once.
 
 Each operation a rule met is a `Faulted` (`cycle`, `fault`, `op`, `blocks`, `action`, `written`)
-in `faulted`; `SocketBoard::spi_transfer_pins` takes them after the transaction (`take_faulted`)
-and pushes each into the `Recorder`'s log as `Recorded::Sd`, after whatever the guest did before
-it, and the session sends it as `sd_op`, not an event (`process_pending`, after `close_open`).
-`written` is whether the image changed: `true` for a write accepted and an erase carried out
-under a delay, `false` for a read, a failed write and a write or erase the image refused.
+in `faulted`, one for each rule in `Met`, in its order, once the outcome is known (`report`);
+`SocketBoard::spi_transfer_pins` takes them after the transaction (`take_faulted`) and pushes each
+into the `Recorder`'s log as `Recorded::Sd`, after whatever the guest did before it, and the session
+sends it as `sd_op`, not an event (`process_pending`, after `close_open`). `written` is whether the
+image changed: `true` for a write accepted and an erase carried out, delayed or observed, `false`
+for a read, a failed write and a write or erase the image refused. A rule that observes a write
+another rule fails gets `false`, as that one does.
 
 `Slot` holds the wiring, the card (`Option<SdCard>`) and the image's name as the run gave it.
 `insert(image, store)` refuses a slot that holds a card (`the slot holds {held} already`) and a
@@ -854,8 +867,10 @@ The command line and the usage text: [runner-user.md](runner-user.md#run-an-imag
     {seconds:.6} s: {image}: {error}`, as the peer's `sd_card` comes due
   - `esp32tl-runner: SD card: {commands} commands, {read} blocks read, {written} blocks
     written`, with `, {errors} image errors` when there were any, `, {faults} operations faulted`
-    when a fault rule met any (`Stats::faults`), and `; while it ran, cards put in: {inserted}, taken
-    out: {removed}` when the peer changed the card, before the stop or end line
+    when a rule that fails or delays met any (`Stats::faults`), `, {observed} operations
+    observed` when a rule that observes met any (`Stats::observed`), and `; while it ran, cards put
+    in: {inserted}, taken out: {removed}` when the peer changed the card, before the stop or end
+    line
   - `esp32tl-runner: stop: {VARIANT} at {seconds:.6} s ({wall:.1} s wall, {reboots} resets)`
   - `esp32tl-runner: the emulator stopped before --max-seconds: {stop:?}`
   - with `--board`, instead of the last two: `esp32tl-runner: end: {cause} at {seconds:.6} s
@@ -1196,9 +1211,17 @@ a guest that programs a byte between two dumps;
   a rule on any block of its range; the rule given last first, and rules cleared by id and all; a
   clear that leaves a read and a write under way their delay; each next block of a CMD18 delayed
   from where the host clocks on for it; a chip reset in a CMD18, whose CMD0 meets no rule; a
-  power cut that ends a busy time and a delayed read and leaves the rules; rules that stay through a change of card, while the delay goes with the card.
+  power cut that ends a busy time and a delayed read and leaves the rules; rules that stay through a
+  change of card, while the delay goes with the card;
+  `a_rule_that_observes_changes_nothing_and_reports_what_it_meets`, the same exchange of writes,
+  reads and an erase with and without rules that observe, byte for byte at the same cycles, the
+  two images whole, and what they met; and
+  `every_rule_that_observes_an_operation_reports_it_beside_the_one_that_acts`, a write met by two
+  rules that observe and one that fails it, each with its own report in the order given, an
+  observer given after the error that does not take the write away from it, counts spent per rule,
+  and a delay under an observer.
 - `runner/src/protocol/tests.rs` also parses `sd_fault` and `sd_clear`, refuses each `sd_fault`
-  5.20 does not allow with its message, and writes `sd_op` for an error and a delay.
+  5.20 does not allow with its message, and writes `sd_op` for an error, a delay and an observe.
 - `runner/src/socket_board/tests.rs`: what `SocketBoard` records: every UART byte, and only the
   GPIO changes of watched pins, enable-only changes included; and the peer's levels and releases
   it hands the chip, in order, with `input_levels` after them; and, with a card in the slot, the

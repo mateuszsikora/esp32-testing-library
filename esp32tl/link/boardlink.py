@@ -182,7 +182,7 @@ class Interface:
         """Whether the interface is the SD card slot: it has no wire, its `inputs` may change the
         card in it (`sd_card`), and `card_changed` gets what the runner says the slot holds after
         each change (`sd_card_ack`). Its `inputs` may also be fault rules for the card (`sd_fault`,
-        `sd_clear`), and `sd_op` gets what they did."""
+        `sd_clear`), and `sd_op` gets each operation they met."""
         return False
 
     @property
@@ -240,7 +240,7 @@ class Interface:
         changes in the order written, and the pins whose output driver is enabled after them."""
 
     def sd_op(self, message: SdOp) -> None:
-        """One of the interface's SD fault rules applied to a block operation (`sd_op`)."""
+        """One of the interface's SD fault rules met a block operation (`sd_op`)."""
 
     def card_changed(self, t: int, image: str | None, error: str | None) -> None:
         """The runner applied the slot's next `sd_card` at `t`, in the order they were sent: the

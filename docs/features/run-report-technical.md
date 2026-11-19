@@ -155,6 +155,8 @@ sd_card: a card holding {image}
     {at}  {op} of block {block} failed, not written
     {at}  {op} of block {block} delayed {delay}, {written|not written}
     {at}  erase of blocks {first} to {last} delayed {delay}, {written|not written}
+    {at}  {op} of block {block} observed, {written|not written}
+    {at}  erase of blocks {first} to {last} observed, {written|not written}
 the run on the board's clock, {kept}:
   {seconds}.{nanoseconds:09d} s  {who}  {text}
 ```
@@ -169,8 +171,9 @@ while the board was on (`SdCard.changes`), at its time, then the one it refused
 reach (`SdCard.not_reached`), at the time the test made it, with `not reached: ` before it. Then
 `SdCard.report()`: one `fault` line per rule the test gave, cleared and spent ones too, in order, and
 under it one line per operation the rule met (`FaultedOperation.__str__`). `{call}` is the call in
-the test's words, as `sd_card.fail('write', count=1)` or
-`sd_card.delay('read', seconds(0.02), blocks=range(0, 4))`; `{at}`, `{cleared}` and `{delay}` are
+the test's words, as `sd_card.fail('write', count=1)`,
+`sd_card.delay('read', seconds(0.02), blocks=range(0, 4))` or `sd_card.observe('write')`;
+`{at}`, `{cleared}` and `{delay}` are
 `Duration`s as `str` shows them, as `2.5 s` or `3.0681844 s`, and `{n} operation(s)` is `1 operation`
 or `2 operations`. `{kept}` is `{n} entries` (`1 entry`), every entry of the run,
 the steps included; when the `deque` has dropped some,
@@ -188,8 +191,8 @@ and `sd_card`, `{"image": path or null, "changes": [{"t_ns": t, "image": path or
 `SdCard.held`, or null
 on a profile without a slot. `faults` is `SdCard.properties()`, per rule `{"id": n, "call": text,
 "t_ns": t, "cleared_t_ns": t or null, "operations": [{"t_ns": t, "op": "read" or "write" or "erase",
-"blocks": [first, last], "action": "error" or "delay", "delay_ns": ns or null, "written": bool},
-...]}`.
+"blocks": [first, last], "action": "error" or "delay" or "observe", "delay_ns": ns or null,
+"written": bool}, ...]}`, `delay_ns` null but for a delay.
 
 `RunLog.line(t, name, level, direction="out")` records firmware GPIO output by default.
 `Lines.inputs` calls it with `direction="in"` when a model's pending GPIO response is due and

@@ -307,12 +307,13 @@ MTOOLS_SKIP_CHECK=1 mtype -i card.img ::foo.txt
   SD mode, and the guest has to initialise it again. It can change with the board's supply off
   as well. Without `--board` the card stays in from power-on to the end of the run.
 - With `--board`, the peer can make the card fail reads and writes, or take longer over reads,
-  writes and erases, from an instant it chooses, on chosen blocks, for so many operations or until
-  it clears the rule, and hears back what each rule did
+  writes and erases, or only watch them, from an instant it chooses, on chosen blocks, for so many
+  operations or until it clears the rule, and hears back what each rule did
   ([protocol 5.20](../protocol.md#520-sd_fault-sd_clear-and-sd_op-ext-107)). Delays are on the
   emulated clock: the guest polls the card for them as it would a slow card, and its own timeouts
-  run on the same clock. Without `--board` the card always answers at once. The harness's way to
-  give the rules is `sd_card.fail` and `sd_card.delay`
+  run on the same clock. A rule that only watches changes nothing the guest sees. Without `--board`
+  the card always answers at once. The harness's way to give the rules is `sd_card.fail`,
+  `sd_card.delay` and `sd_card.observe`
   ([pytest plugin](pytest-plugin-user.md#making-the-card-fail-or-slow-down)).
 
 What the card does and does not model is in
@@ -515,7 +516,8 @@ instead. Everything the runner says goes to stderr, on lines that start with
 - `esp32tl-runner: SD card: N commands, R blocks read, W blocks written` at the end of a run with
   `--sd-spi`, just before the line that ends it, counting every card the slot held; with
   `, E image errors` added when reads, writes or erases of an image file failed, `, F operations
-  faulted` when the peer's fault rules failed or delayed any, and
+  faulted` when the peer's fault rules failed or delayed any, `, B operations observed` when its
+  rules that only watch met any, and
   `; while it ran, cards put in: I, taken out: O` when the peer changed the card. Each such failure also prints
   `esp32tl-runner: SD card: reading block N: ERROR` (or `writing block N`, or
   `erasing blocks LO to HI`) when it happens, and the guest gets the error a card reports for it.

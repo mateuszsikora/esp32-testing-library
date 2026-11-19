@@ -36,7 +36,7 @@ SD_DELAY_MAX = 10_000_000_000
 SD_COUNT_MAX = 2**63 - 1
 # What an `sd_fault` applies to and what it does (5.20).
 SD_OPS = ("read", "write", "erase")
-SD_ACTIONS = ("error", "delay")
+SD_ACTIONS = ("error", "delay", "observe")
 
 Sender = Literal["runner", "harness"]
 
@@ -149,9 +149,9 @@ class HciTx:
 
 @dataclass(frozen=True)
 class SdOp:
-    """A block operation of the SD card that the harness's rule `fault` applied to, at `t`
-    (5.20): its first and last block, the rule's `action` and `delay`, and whether the card wrote
-    the image. Not an event: it has no `seq`."""
+    """A block operation of the SD card that the harness's rule `fault` met, at `t` (5.20): its
+    first and last block, the rule's `action` and `delay`, and whether the card wrote the image.
+    Not an event: it has no `seq`."""
 
     TYPE: ClassVar[str] = "sd_op"
     t: int
@@ -733,6 +733,9 @@ def _sd_fault(f: Fields) -> SdFault:
             raise ProtocolError("an erase cannot fail, only be delayed")
         if delay is not None:
             raise ProtocolError("an error takes no delay")
+    elif action == "observe":
+        if delay is not None:
+            raise ProtocolError("an observe takes no delay")
     elif delay is None:
         raise ProtocolError("a delay takes delay")
     elif not 1 <= delay <= SD_DELAY_MAX:

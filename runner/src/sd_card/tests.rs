@@ -789,6 +789,165 @@ fn the_rule_given_last_applies_and_cleared_rules_apply_no_more() {
     assert!(card.take_faulted().is_empty());
 }
 
+/// Every byte the card answers to a fixed exchange from `init` on, at fixed bus cycles: a write,
+/// a multiple block write, reads of the blocks written, a multiple block read and an erase.
+fn exchange(card: &mut SdCard) -> Vec<Vec<u8>> {
+    let mut out = Vec::new();
+    let mut send = |card: &mut SdCard, cycle: u64, tx: &[u8]| {
+        card.advance(cycle);
+        out.push(xfer(card, tx));
+    };
+    let with = |index, arg| {
+        let mut tx = frame(index, arg).to_vec();
+        tx.resize(16, 0xff);
+        tx
+    };
+    let block = |token: u8, fill: u8| {
+        let data = [fill; BLOCK];
+        let mut tx = vec![token];
+        tx.extend(data);
+        tx.extend(crc16(&data).to_be_bytes());
+        tx.extend([0xff; 4]);
+        tx
+    };
+    send(card, MS, &with(24, 3));
+    send(card, MS, &block(START_BLOCK, 0x33));
+    send(card, 2 * MS, &with(25, 10));
+    send(card, 2 * MS, &block(START_MULTI_WRITE, 0x10));
+    send(card, 2 * MS, &block(START_MULTI_WRITE, 0x11));
+    send(card, 2 * MS, &[STOP_TRAN, 0xff, 0xff, 0xff]);
+    for (n, lba) in [3, 10, 11].into_iter().enumerate() {
+        send(card, (3 + n as u64) * MS, &with(17, lba));
+        send(card, (3 + n as u64) * MS, &[0xff; BLOCK + 8]);
+    }
+    send(card, 7 * MS, &with(18, 2));
+    send(card, 7 * MS, &[0xff; 2 * (BLOCK + 4) + 8]);
+    send(card, 7 * MS, &with(12, 0));
+    send(card, 8 * MS, &with(32, 5));
+    send(card, 8 * MS, &with(33, 6));
+    send(card, 8 * MS, &with(38, 0));
+    send(card, 9 * MS, &with(17, 5));
+    send(card, 9 * MS, &[0xff; BLOCK + 8]);
+    out
+}
+
+/// A card as `card(units)` makes it, on an image the test can read whole afterwards.
+fn shared_card(units: u64) -> (SdCard, Rc<RefCell<Vec<u8>>>) {
+    let mut image = vec![0; (units * UNIT) as usize];
+    for (n, block) in image.chunks_mut(BLOCK).enumerate() {
+        block[..8].copy_from_slice(&(n as u64).to_be_bytes());
+    }
+    let image = Rc::new(RefCell::new(image));
+    let store = Box::new(SharedStore(image.clone()));
+    (SdCard::new(WIRING, store).unwrap(), image)
+}
+
+#[test]
+fn a_rule_that_observes_changes_nothing_and_reports_what_it_meets() {
+    let (mut plain, plain_image) = shared_card(2);
+    init(&mut plain);
+    let without = exchange(&mut plain);
+    let (mut card, image) = shared_card(2);
+    init(&mut card);
+    card.install(rule(1, Op::Write, Action::Observe, None, None));
+    card.install(rule(2, Op::Read, Action::Observe, Some((3, 10)), None));
+    card.install(rule(3, Op::Erase, Action::Observe, None, Some(1)));
+    // the same answers, byte for byte and at the same cycles, and the same image, whole
+    assert_eq!(exchange(&mut card), without);
+    assert!(
+        *image.borrow() == *plain_image.borrow(),
+        "the images differ"
+    );
+    let block = |n: usize| image.borrow()[n * BLOCK..(n + 1) * BLOCK].to_vec();
+    assert_eq!(
+        (block(5), block(6)),
+        (vec![0; BLOCK], vec![0; BLOCK]),
+        "erased"
+    );
+    assert_eq!(block(10), vec![0x10; BLOCK], "written");
+    let met: Vec<_> = card
+        .take_faulted()
+        .into_iter()
+        .map(|f| (f.cycle, f.fault, f.op, f.blocks, f.action, f.written))
+        .collect();
+    let observe = Action::Observe;
+    assert_eq!(
+        met,
+        [
+            (MS, 1, Op::Write, (3, 3), observe, true),
+            (2 * MS, 1, Op::Write, (10, 10), observe, true),
+            (2 * MS, 1, Op::Write, (11, 11), observe, true),
+            (3 * MS, 2, Op::Read, (3, 3), observe, false),
+            (4 * MS, 2, Op::Read, (10, 10), observe, false),
+            // blocks 2 and 11 are out of its range; the CMD18's 3 and 4 are in it
+            (7 * MS, 2, Op::Read, (3, 3), observe, false),
+            (7 * MS, 2, Op::Read, (4, 4), observe, false),
+            (8 * MS, 3, Op::Erase, (5, 6), observe, true),
+            (9 * MS, 2, Op::Read, (5, 5), observe, false),
+        ]
+    );
+    assert_eq!((card.stats.faults, card.stats.observed), (0, 9));
+    assert_eq!(
+        plain.stats,
+        Stats {
+            observed: 0,
+            ..card.stats
+        }
+    );
+}
+
+#[test]
+fn every_rule_that_observes_an_operation_reports_it_beside_the_one_that_acts() {
+    let mut card = card(2);
+    init(&mut card);
+    card.install(rule(1, Op::Write, Action::Observe, None, Some(2)));
+    card.install(rule(2, Op::Write, Action::Error, Some((3, 3)), Some(1)));
+    // given after the error: it does not take the write away from it
+    card.install(rule(3, Op::Write, Action::Observe, Some((3, 3)), None));
+    let data = [0x44; BLOCK];
+    let write = |card: &mut SdCard, lba| {
+        command(card, 24, lba, 10);
+        write_block(card, START_BLOCK, &data, crc16(&data))
+    };
+    assert_eq!(write(&mut card, 3), DATA_WRITE_ERROR);
+    let met = |card: &mut SdCard| -> Vec<_> {
+        card.take_faulted()
+            .into_iter()
+            .map(|f| (f.fault, f.action, f.written))
+            .collect()
+    };
+    assert_eq!(
+        met(&mut card),
+        [
+            (1, Action::Observe, false),
+            (2, Action::Error, false),
+            (3, Action::Observe, false),
+        ],
+        "each rule its own, in the order given; the observers see the write fail"
+    );
+    assert_eq!(write(&mut card, 3), DATA_ACCEPTED, "the error is spent");
+    assert_eq!(
+        met(&mut card),
+        [(1, Action::Observe, true), (3, Action::Observe, true)]
+    );
+    // the first observer is spent, the other is on block 3 only
+    assert_eq!(write(&mut card, 4), DATA_ACCEPTED);
+    assert!(card.take_faulted().is_empty());
+    assert_eq!((card.stats.faults, card.stats.observed), (1, 2));
+    // a delay applies under an observer as without it
+    card.install(rule(4, Op::Write, Action::Delay(1_000_000), None, Some(1)));
+    card.install(rule(5, Op::Write, Action::Observe, None, None));
+    assert_eq!(write(&mut card, 5), DATA_ACCEPTED);
+    assert_eq!(xfer(&mut card, &[0xff; 2]), [BUSY; 2]);
+    assert_eq!(
+        met(&mut card),
+        [
+            (4, Action::Delay(1_000_000), true),
+            (5, Action::Observe, true)
+        ]
+    );
+}
+
 #[test]
 fn a_power_cut_ends_a_delay_and_leaves_the_rules() {
     let mut card = card(2);

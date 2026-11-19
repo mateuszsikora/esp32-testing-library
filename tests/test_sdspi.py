@@ -6,6 +6,7 @@ mtools. Also what the card's fault rules do to the example, and what a test that
 """
 
 import itertools
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -203,6 +204,78 @@ def test_read_delays_hold_each_read_on_the_board_s_clock(
         f"  fault 1: sd_card.delay('read', seconds(0.02)) at 0 s; {len(reads)} operations"
         in board.report().splitlines()
     )
+
+
+def test_a_rule_that_observes_changes_nothing_the_firmware_sees(
+    tmp_path: Path, pytester: pytest.Pytester
+) -> None:
+    """The example run twice on the same image, without rules and with a rule that observes
+    each kind of operation: the same console at the same times and the same image, and the
+    writes the rules saw cover every block the example changed."""
+    if not (SDSPI / "build" / "esp32tl-built").is_file():
+        pytest.fail(f"{SDSPI}/build holds no finished build: run make firmware", pytrace=False)
+    source = fat_image(tmp_path / "card.img", {"foo.txt": b"from the test\n"})
+    out = tmp_path / "out"
+    out.mkdir()
+    pytester.makepyfile(
+        test_observe=f"""
+        import json
+        import shutil
+
+        import pytest
+
+        from esp32tl.units import seconds
+
+        pytestmark = pytest.mark.app_path({str(SDSPI)!r})
+
+        @pytest.mark.parametrize("observed", [False, True], ids=["without", "with"])
+        def test_the_example(board, sd_card, console, tmp_path, observed):
+            image = shutil.copyfile({str(source)!r}, tmp_path / "card.img")
+            sd_card.insert(image)
+            ops = ("read", "write", "erase") if observed else ()
+            rules = {{op: sd_card.observe(op) for op in ops}}
+            board.power_on()
+            # the example is done in about 0.1 s; a fixed instant, for both runs
+            board.wait(seconds(1))
+            console.expect_exact("example: Card unmounted", timeout=0)
+            name = "with" if observed else "without"
+            shutil.copyfile(image, {str(out)!r} + f"/{{name}}.img")
+            result = {{
+                "console": [[line.at.ns, line.text] for line in console.lines()],
+                "hits": {{
+                    op: [[h.at.ns, h.blocks.start, len(h.blocks), h.action, h.written]
+                         for h in rule.hits]
+                    for op, rule in rules.items()
+                }},
+                "faulted": len(sd_card.faulted),
+            }}
+            with open({str(out)!r} + f"/{{name}}.json", "w") as file:
+                json.dump(result, file)
+        """
+    )
+    result = pytester.runpytest_subprocess("-p", "no:cacheprovider", "-rA")
+    result.assert_outcomes(passed=2)
+    without, observed = (
+        json.loads((out / f"{name}.json").read_text()) for name in ("without", "with")
+    )
+    assert observed["console"] == without["console"]
+    assert (out / "with.img").read_bytes() == (out / "without.img").read_bytes()
+    assert (without["hits"], without["faulted"]) == ({}, 0)
+
+    hits = observed["hits"]
+    assert all(action == "observe" for op in hits.values() for *_, action, _ in op)
+    assert hits["read"] and not any(written for *_, written in hits["read"])
+    writes = hits["write"]
+    assert writes and all(written and n == 1 for _, _, n, _, written in writes)
+    before, after = source.read_bytes(), (out / "with.img").read_bytes()
+    changed = {
+        n
+        for n in range(len(before) // 512)
+        if before[n * 512 : (n + 1) * 512] != after[n * 512 : (n + 1) * 512]
+    }
+    # a FAT update may write a block as it was; every block that changed was written
+    assert changed and changed <= {block for _, block, *_ in writes}
+    assert observed["faulted"] == sum(len(op) for op in hits.values())
 
 
 def test_a_read_slower_than_the_driver_s_timeout_fails_the_mount_on_the_board_s_clock(

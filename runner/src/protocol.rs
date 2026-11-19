@@ -316,9 +316,11 @@ fn sd_fault<'a>(field: &impl Fn(&'static str) -> Field<'a>) -> Result<Fault, Str
             ));
         }
         ("delay", None) => return Err("sd_fault: a delay takes \"delay\"".into()),
+        ("observe", None) => Action::Observe,
+        ("observe", Some(_)) => return Err("sd_fault: an observe takes no \"delay\"".into()),
         (action, _) => {
             return Err(format!(
-                "sd_fault: \"action\" {action:?} is not error or delay"
+                "sd_fault: \"action\" {action:?} is not error, delay or observe"
             ));
         }
     };
@@ -538,6 +540,7 @@ pub fn sd_op(t: u64, f: &Faulted) -> String {
     let (action, delay) = match f.action {
         Action::Error => ("error", "null".to_string()),
         Action::Delay(ns) => ("delay", ns.to_string()),
+        Action::Observe => ("observe", "null".to_string()),
     };
     format!(
         r#"{{"type":"sd_op","t":{t},"fault":{},"op":"{}","blocks":[{},{}],"action":"{action}","delay":{delay},"written":{}}}"#,

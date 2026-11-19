@@ -6,8 +6,9 @@ test puts a card in before power-on, and may take it out and put one in while th
 The image builder and reader use mtools; external image paths remain supported.
 
 The test can also make the card fail or slow down at block level, from the board's current
-instant on: `sd_card.fail("write")`, `sd_card.delay("read", ms(50))`. The rules go to the runner on
-the link (`sd_fault`, `sd_clear`), and what they did comes back (`sd_op`) as `FaultedOperation`s.
+instant on: `sd_card.fail("write")`, `sd_card.delay("read", ms(50))`, or only watch what the
+firmware does with it: `sd_card.observe("write")`. The rules go to the runner on the link
+(`sd_fault`, `sd_clear`), and what they met comes back (`sd_op`) as `FaultedOperation`s.
 """
 
 import errno
@@ -70,6 +71,8 @@ MAX_DELAY = Duration(SD_DELAY_MAX)
 
 ReadOrWrite = Literal["read", "write"]
 Operation = Literal["read", "write", "erase"]
+# What a rule does to the operations it meets.
+Action = Literal["error", "delay", "observe"]
 
 
 def _mtools(command: str, *args: str) -> bytes:
@@ -272,16 +275,17 @@ class CardChange:
 
 @dataclass(frozen=True)
 class FaultedOperation:
-    """A block operation of the card that one of the test's rules applied to: `fault`, at `at`
-    on the board's clock, the `op` on `blocks` (one block for a read or a write), and what the
-    rule did, `action` "error" or "delay" with its `delay`. `written` says whether the card wrote
-    the image: never for a failed write, always for a delayed write or erase it carried out."""
+    """A block operation of the card that one of the test's rules met: `fault`, at `at` on the
+    board's clock, the `op` on `blocks` (one block for a read or a write), and what the rule did,
+    `action` "error", "delay" with its `delay`, or "observe", nothing. `written` says whether the
+    card wrote the image: never for a read or a failed write, always for a write or erase it
+    carried out."""
 
     at: Duration
     fault: "CardFault"
     op: Operation
     blocks: range
-    action: Literal["error", "delay"]
+    action: Action
     delay: Duration | None
     written: bool
 
@@ -291,15 +295,18 @@ class FaultedOperation:
             if len(self.blocks) == 1
             else f"blocks {self.blocks.start} to {self.blocks[-1]}"
         )
-        what = "failed" if self.delay is None else f"delayed {self.delay}"
+        if self.action == "delay":
+            what = f"delayed {self.delay}"
+        else:
+            what = "failed" if self.action == "error" else "observed"
         return f"{self.op} of {blocks} {what}, {'written' if self.written else 'not written'}"
 
 
 class CardFault:
     """A rule the test gave the card, from `at` on the board's clock: what `op`s it applies to,
-    on which `blocks` (`None`: any), what it does (`action` "error", or "delay" by `delay`), and
-    to how many (`count`; `None`: every one until cleared). `hits` are the operations it applied
-    to so far, as the link has brought them."""
+    on which `blocks` (`None`: any), what it does (`action` "error", "delay" by `delay`, or
+    "observe", nothing), and to how many (`count`; `None`: every one until cleared). `hits` are
+    the operations it met so far, as the link has brought them."""
 
     def __init__(
         self,
@@ -307,6 +314,7 @@ class CardFault:
         id: int,
         at: Duration,
         op: Operation,
+        action: Action,
         delay: Duration | None,
         count: int | None,
         blocks: range | None,
@@ -316,16 +324,13 @@ class CardFault:
         self.id = id
         self.at = at
         self.op = op
+        self.action = action
         self.delay = delay
         self.count = count
         self.blocks = blocks
         self.call = call
         self.cleared_at: Duration | None = None
         self._hits: list[FaultedOperation] = []
-
-    @property
-    def action(self) -> Literal["error", "delay"]:
-        return "error" if self.delay is None else "delay"
 
     @property
     def hits(self) -> tuple[FaultedOperation, ...]:
@@ -578,7 +583,7 @@ class SdCard(Interface):
         with its stop command does not reach the block after its last."""
         if op not in ("read", "write"):
             raise ValueError(f"sd_card.fail: op {op!r} is not 'read' or 'write'")
-        return self._give("sd_card.fail", repr(op), op, None, count, blocks)
+        return self._give("sd_card.fail", repr(op), op, "error", None, count, blocks)
 
     def delay(
         self,
@@ -599,7 +604,23 @@ class SdCard(Interface):
             raise TypeError(f"sd_card.delay: by is {by!r}, not a Duration")
         if not Duration(1) <= by <= MAX_DELAY:
             raise ValueError(f"sd_card.delay: a delay of {by}; one is 1 ns to {MAX_DELAY}")
-        return self._give("sd_card.delay", f"{op!r}, {by!r}", op, by, count, blocks)
+        return self._give("sd_card.delay", f"{op!r}, {by!r}", op, "delay", by, count, blocks)
+
+    def observe(
+        self,
+        op: Operation,
+        *,
+        count: int | None = None,
+        blocks: int | range | None = None,
+    ) -> CardFault:
+        """Watches the card's reads, writes or erases from the board's current instant on,
+        changing nothing: the firmware sees the card, its answers and their timing as without the
+        rule, and the rule's `hits` list the operations, with whether the card wrote the image.
+        A rule that fails or delays the same operation does so as without this one, which records
+        it too. `count` and `blocks` as for `delay`."""
+        if op not in ("read", "write", "erase"):
+            raise ValueError(f"sd_card.observe: op {op!r} is not 'read', 'write' or 'erase'")
+        return self._give("sd_card.observe", repr(op), op, "observe", None, count, blocks)
 
     def clear_faults(self) -> None:
         """Removes every rule from the board's current instant on."""
@@ -613,7 +634,8 @@ class SdCard(Interface):
 
     @property
     def faulted(self) -> tuple[FaultedOperation, ...]:
-        """The operations the rules applied to, in the order of the board's time."""
+        """The operations the rules met, in the order of the board's time: one per rule an
+        operation met, in the order the test gave them."""
         with self._lock:
             return tuple(self._faulted)
 
@@ -622,6 +644,7 @@ class SdCard(Interface):
         what: str,
         arguments: str,
         op: Operation,
+        action: Action,
         delay: Duration | None,
         count: int | None,
         blocks: int | range | None,
@@ -644,7 +667,7 @@ class SdCard(Interface):
         now = self._now()
         with self._lock:
             fault = CardFault(
-                self, len(self._faults) + 1, Duration(now), op, delay, count, span, call
+                self, len(self._faults) + 1, Duration(now), op, action, delay, count, span, call
             )
             self._faults[fault.id] = fault
             self._pending.append(
@@ -652,7 +675,7 @@ class SdCard(Interface):
                     now,
                     fault.id,
                     op,
-                    fault.action,
+                    action,
                     None if delay is None else delay.ns,
                     count,
                     None if span is None else (span.start, span[-1]),
@@ -724,15 +747,22 @@ class SdCard(Interface):
 
     def sd_op(self, message: SdOp) -> None:
         with self._lock:
-            fault = self._faults[message.fault]
+            fault = self._faults.get(message.fault)
+            what = f"the runner says rule {message.fault} met a {message.op} as {message.action}"
+            if fault is None:
+                raise LinkError(f"{self.name}: {what}; the test gave no rule {message.fault}")
+            # The report and the hits say what the test's rule does, so the runner must agree.
+            delay = None if fault.delay is None else fault.delay.ns
+            if (message.op, message.action, message.delay) != (fault.op, fault.action, delay):
+                raise LinkError(f"{self.name}: {what}; the test gave it as {fault.call}")
             first, last = message.blocks
             done = FaultedOperation(
                 Duration(message.t),
                 fault,
-                message.op,  # type: ignore[arg-type]
+                fault.op,
                 range(first, last + 1),
-                message.action,  # type: ignore[arg-type]
-                None if message.delay is None else Duration(message.delay),
+                fault.action,
+                fault.delay,
                 message.written,
             )
             fault._hits.append(done)

@@ -344,6 +344,11 @@ fn report_card(card: Option<&sd_card::Shared>) {
     } else {
         String::new()
     };
+    let observed = if s.observed > 0 {
+        format!(", {} operations observed", s.observed)
+    } else {
+        String::new()
+    };
     let changes = if slot.inserted + slot.removed > 0 {
         format!(
             "; while it ran, cards put in: {}, taken out: {}",
@@ -353,7 +358,7 @@ fn report_card(card: Option<&sd_card::Shared>) {
         String::new()
     };
     eprintln!(
-        "esp32tl-runner: SD card: {} commands, {} blocks read, {} blocks written{errors}{faults}{changes}",
+        "esp32tl-runner: SD card: {} commands, {} blocks read, {} blocks written{errors}{faults}{observed}{changes}",
         s.commands, s.blocks_read, s.blocks_written
     );
 }

@@ -226,11 +226,14 @@ that references to its number keep their meaning.
 - **152.** The SD card's fault rules reach the runner in the link's next turn, at the board's
     instant the test gave them, before power-on at `t = 0`; only the slot sends `sd_fault` and
     `sd_clear`; each `sd_op` goes to the rule it names, which is spent once its count is reached,
-    and a spent rule is not cleared. A rule needs a card and a run that has not ended, and one the
-    card cannot take (an op the method does not take, a delay that is not a `Duration` of 1 ns to
-    10 s, a count outside 1 to 2**63 - 1, blocks the card does not have) is refused at the call.
+    and a spent rule is not cleared; one that names no rule the test gave, or whose `op`, `action`
+    or `delay` is not its rule's, fails the link. A rule needs a card and a run that has not ended,
+    and one the card cannot take (an op the method does not take, a delay that is not a `Duration`
+    of 1 ns to 10 s, a count outside 1 to 2**63 - 1, blocks the card does not have) is refused at
+    the call.
     `tests/test_sd_faults.py::test_rules_go_out_in_the_next_turn_at_the_instant_the_test_gave_them`,
     `tests/test_sd_faults.py::test_what_a_rule_did_reaches_the_rule_and_the_slot`,
+    `tests/test_sd_faults.py::test_an_sd_op_that_is_not_what_its_rule_does_fails_the_link`,
     `tests/test_sd_faults.py::test_a_rule_the_card_cannot_take_is_refused_at_the_call`,
     `tests/test_sd_faults.py::test_only_the_card_sends_sd_fault_and_sd_op_needs_a_card`,
     `tests/test_sd_faults.py::test_a_spent_rule_is_not_cleared`,
@@ -383,11 +386,12 @@ that references to its number keep their meaning.
      `tests/test_boardlink.py::test_hci_rx_from_an_interface_that_is_not_the_controller_fails_the_link`
 
 - **154.** Without a fault rule the SD card answers at once, as it always has. A rule applies to the
-     operations that start once it is in place, at most one per operation, the one given last
-     first; each block of a multiple block read or write is one operation, and a block a CMD12
-     or a chip reset's CMD0 ends before it begins is none. A failed read sends the
-     error token `0x04` and nothing more of the read; a failed write is answered `0x0d` and leaves
-     its block on the image as it was. A cleared or spent rule applies no more.
+     operations that start once it is in place, at most one that fails or delays per operation,
+     the one given last first (a rule that observes is beside it: invariant 264); each block of a
+     multiple block read or write is one operation, and a block a CMD12 or a chip reset's CMD0 ends
+     before it begins is none. A failed read sends the error token `0x04` and nothing more of the
+     read; a failed write is answered `0x0d` and leaves its block on the image as it was. A cleared
+     or spent rule applies no more.
      `runner/src/sd_card/tests.rs::without_a_rule_nothing_is_faulted_and_the_card_never_waits`,
      `runner/src/sd_card/tests.rs::a_failed_read_is_an_ecc_error_token_and_a_failed_write_leaves_the_block`,
      `runner/src/sd_card/tests.rs::each_block_of_a_multiple_block_read_is_one_operation`,
@@ -416,6 +420,16 @@ that references to its number keep their meaning.
      `tests/test_sd_remount.py::test_a_fault_rule_stays_through_a_change_of_card_until_it_is_cleared`,
      `tests/test_sdspi.py::test_fault_rules_are_the_test_s_and_outlast_a_power_cycle`,
      `tests/test_sdspi.py::test_fault_rules_outlast_a_reset_of_the_chip`
+- **264.** A rule that observes changes nothing the guest sees: the card's bytes, their bus cycles
+     and the image are those of the card without it, and a firmware run with and without it
+     prints the same console at the same times and leaves the same image. An operation meets
+     every rule that observes it as well as the one that fails or delays it, whichever was given
+     last; each reports it with its own `sd_op`, in the order given, and counts it against its own
+     `count`. The writes it reports cover every block the run changed.
+     `runner/src/sd_card/tests.rs::a_rule_that_observes_changes_nothing_and_reports_what_it_meets`,
+     `runner/src/sd_card/tests.rs::every_rule_that_observes_an_operation_reports_it_beside_the_one_that_acts`,
+     `tests/test_sd_faults.py::test_a_rule_that_observes_goes_out_without_a_delay_and_says_what_it_met`,
+     `tests/test_sdspi.py::test_a_rule_that_observes_changes_nothing_the_firmware_sees`
 - **217.** A deep sleep is one slice to its wake: neither the next millisecond nor `latency` ends a
   slice in it, the runner moves the RTC through it in long steps to short of its alarm, and the wake
   still comes in esp32sim's first idle round at or after the alarm's tick, through a `reset` at its
