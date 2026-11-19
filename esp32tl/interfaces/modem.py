@@ -7,13 +7,21 @@ from pathlib import Path
 from esp32tl.boards import LineRoute
 from esp32tl.boards.capabilities import Request
 from esp32tl.interfaces import SourceError
+from esp32tl.interfaces.condition import Condition, FirstFrom
 from esp32tl.interfaces.lines import Lines
 from esp32tl.interfaces.uart import Uart
 from esp32tl.link.boardlink import Wire
 from esp32tl.net import Internet
 from esp32tl.net.ntp import DEFAULT_UTC
 from esp32tl.report import RunLog, board_time
-from esp32tl.sources.model.modem import LATENCY_NS, NO_OFFSET, ModemCommand, ModemRestart
+from esp32tl.sources.model.modem import (
+    LATENCY_NS,
+    NO_OFFSET,
+    Mode,
+    ModeChange,
+    ModemCommand,
+    ModemRestart,
+)
 from esp32tl.sources.model.modem import Modem as ModemModel
 from esp32tl.units import Duration
 
@@ -163,6 +171,34 @@ class Modem(Uart):
     def restarts(self) -> tuple[ModemRestart, ...]:
         """Each time a run of the selected model ended, with what ended it."""
         return self.modem_model().restarts
+
+    @property
+    def mode_changes(self) -> tuple[ModeChange, ...]:
+        """Each dial the selected model answered, and each return to command mode, oldest first."""
+        return self.modem_model().mode_changes
+
+    def next_mode_change(self, mode: Mode | None = None) -> Condition[ModeChange | None]:
+        """A described condition for the first mode change after this call, or the first into
+        `mode`, `"command"` or `"data"`: a change into the other mode does not satisfy it, and a
+        later one into `mode` still can. A dial refused with `NO CARRIER` is a change into
+        command mode. The boundary is the changes there are now, `mode_changes` at this call; the
+        condition consumes nothing, and returns the same change each time it is asked."""
+        if mode not in (None, "command", "data"):
+            raise ValueError(
+                f"modem.next_mode_change: mode is {mode!r}, not 'command', 'data' or None"
+            )
+        model = self.modem_model()
+        find = FirstFrom(
+            lambda: model.mode_changes,
+            len(model.mode_changes),
+            lambda change: mode is None or change.mode == mode,
+        )
+        description = (
+            "the modem's next mode change"
+            if mode is None
+            else f"the modem's next change to {mode} mode"
+        )
+        return Condition(find, description)
 
     @property
     def commands(self) -> list[ModemCommand]:

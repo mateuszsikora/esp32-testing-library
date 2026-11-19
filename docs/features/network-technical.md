@@ -570,7 +570,7 @@ counts over 10 000 chunks.
 
 ## Lifecycle and observability
 
-Modem dial resets and starts PPP. Supply, registration, functionality or power loss clears its
+Modem dial resets and starts PPP. Supply, registration or power loss clears its
 queued data and ends the link: `Internet.stop` and the PPP peer's `ended` callback, at a
 Terminate-Request or a `Station` losing its lease, call `_link_ended`, which calls
 `Network.lose_link()` and clears both directions of the path. The test's flows are lost, as

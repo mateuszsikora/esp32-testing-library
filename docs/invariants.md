@@ -1078,6 +1078,18 @@ that references to its number keep their meaning.
 - **180.** A command stuck to bytes left on the command line is lost whole, with no answer and no
     entry in the history, on a hung modem and a healthy one; the next newline clears the line.
     `tests/test_modem_model.py::test_a_command_stuck_to_ppp_bytes_is_lost_whole`
+- **276.** `modem.mode_changes` holds every dial the modem answered, into data mode on `CONNECT`
+    and into command mode on `NO CARRIER`, stamped as the dial's command, and every end of data
+    mode with its cause: an escape that took effect, `drop_call`, `hang`, `lose_registration` or a
+    restart, at the restart's instant. An escape within the guard time, and a loss or a start in
+    command mode, add none; `+++` is never in `commands`. `next_mode_change` finds the first entry
+    after its call, into its mode when given, and returns the same one at every poll.
+    `tests/test_modem_model.py::test_each_dial_is_a_mode_change_stamped_as_its_command_with_its_result`,
+    `tests/test_modem_model.py::test_an_escape_is_a_mode_change_only_once_it_takes_effect`,
+    `tests/test_modem_model.py::test_the_test_s_calls_that_end_data_mode_say_why`,
+    `tests/test_modem_model.py::test_a_pwrkey_restart_ends_data_mode_at_the_restart_s_instant`,
+    `tests/test_modem_model.py::test_a_reset_restart_and_a_loss_in_command_mode`,
+    `tests/test_modem_model.py::test_the_next_mode_change_is_a_condition_from_this_call`
 
 ## Flash contents
 

@@ -149,6 +149,7 @@ from esp32tl.sources.model import ReactiveModel as ReactiveModel
 from esp32tl.sources.model import Timed as Timed
 from esp32tl.sources.model.gnss import GnssReceiver as GnssReceiver
 from esp32tl.sources.model.gnss import ModelError as ModelError
+from esp32tl.sources.model.modem import ModeChange as ModeChange
 from esp32tl.sources.model.modem import Modem as ModemModel
 from esp32tl.sources.model.modem import ModemCommand as ModemCommand
 from esp32tl.sources.model.modem import ModemRestart as ModemRestart
@@ -240,6 +241,7 @@ __all__ = [
     "Lines",
     "Mark",
     "Message",
+    "ModeChange",
     "Model",
     "ModelError",
     "Modem",
